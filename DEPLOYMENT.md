@@ -53,6 +53,8 @@ docker image prune -f
 
 For this standalone deployment, the API container synchronizes the checked-in Prisma schema with `prisma db push` without accepting destructive changes. The repository's historical migration chain is not safe for a fresh database because later migrations reference objects missing from the initial migration. Keep `RUN_DB_MIGRATIONS=false` and `RUN_DB_PUSH=true` until that chain is rebuilt and tested. The container still fails fast if PostgreSQL is unavailable or schema synchronization fails.
 
+On the first bootstrap only, if Prisma reports warnings about adding unique constraints and the database is confirmed to be new/empty, temporarily set `RUN_DB_PUSH_ACCEPT_DATA_LOSS=true`, start the stack once, confirm the health endpoint, then set it back to `false` and recreate the API container. Never enable this on a database containing important data without taking a backup and reviewing the Prisma warning.
+
 ## Backup
 
 Create a database backup before schema changes or upgrades:

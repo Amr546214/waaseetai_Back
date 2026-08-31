@@ -36,7 +36,12 @@ elif [ "${RUN_DB_PUSH:-true}" = "true" ]; then
   # accepting destructive changes. Set RUN_DB_MIGRATIONS=true only after the
   # migration history has been repaired and verified.
   echo "🔄 Synchronizing Prisma schema for standalone deployment..."
-  npx prisma db push
+  if [ "${RUN_DB_PUSH_ACCEPT_DATA_LOSS:-false}" = "true" ]; then
+    echo "⚠️ Explicitly enabled: accepting Prisma schema diff warnings for bootstrap."
+    npx prisma db push --accept-data-loss
+  else
+    npx prisma db push
+  fi
   echo "✅ Prisma schema synchronized successfully."
 else
   echo "ℹ️ Database schema synchronization disabled."
