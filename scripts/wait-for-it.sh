@@ -142,14 +142,10 @@ WAITFORIT_STRICT=${WAITFORIT_STRICT:-0}
 WAITFORIT_CHILD=${WAITFORIT_CHILD:-0}
 WAITFORIT_QUIET=${WAITFORIT_QUIET:-0}
 
-# Check if timeout is from busybox
+# BusyBox versions differ: modern Alpine uses `timeout SECS PROG` and does
+# not accept the legacy `-t` option. The POSIX-compatible invocation also
+# works with GNU coreutils, so keep the flag empty for both environments.
 WAITFORIT_BUSYTIMEFLAG=""
-if timeout --help 2>&1 | grep -q -i busybox; then
-    WAITFORIT_BUSYTIMEFLAG="-t"
-    if timeout --help 2>&1 | grep -q -i 'busybox v1.21'; then
-        WAITFORIT_BUSYTIMEFLAG=""
-    fi
-fi
 
 if [[ $WAITFORIT_CHILD -gt 0 ]]; then
     wait_for
