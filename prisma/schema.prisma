@@ -1,0 +1,1765 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+//account type
+enum AccountType {
+  CLIENT_COMPANY
+  CLIENT_INDIVIDUAL
+  PROVIDER_COMPANY
+  PROVIDER_INDIVIDUAL
+  MARKETING_BROKER
+  EMPLOYEE
+  ADMIN
+  SUPER_ADMIN
+}
+
+// KYC and Moderation for account status
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  SUSPENDED_REVIEW
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum UserRole {
+  CLIENT
+  PROVIDER
+  AFFILIATE
+  ADMIN
+  SUPER_ADMIN
+}
+
+// user proffile
+model User {
+  id          String      @id @default(uuid())
+  accountType AccountType
+  status      UserStatus  @default(PENDING_VERIFICATION)
+
+  roles      UserRole[] @default([CLIENT])
+  activeRole UserRole   @default(CLIENT)
+  isBanned   Boolean    @default(false)
+
+  firstName        String
+  lastName         String
+  email            String  @unique
+  phoneCountryCode String? @default("+966")
+  phoneNumber      String? @unique
+  password         String?
+  avatarUrl        String?
+
+  authProvider String  @default("local") // "local" or "google"
+  googleId     String? @unique
+
+  agreedToTerms Boolean @default(false)
+
+  // Profile & Levels Tracking
+  profileCompletionPercent Int    @default(0)
+  currentLevel             String @default("مستكشف - المستوى 1")
+  pointsToNextLevel        Int    @default(100)
+  currentPoints            Int    @default(0)
+
+  // Identity (بيانات الهوية)
+  idNumber               String?
+  idExpiryDate           DateTime?
+  idDocumentUrl          String?
+  commercialRegistration String?
+  vatCertificateUrl      String?
+
+  // Contact (بيانات التواصل)
+  alternativePhone String?
+  address          String?
+  city             String?
+  region           String?
+
+  // Banking (البيانات البنكية)
+  ibanNumber        String?
+  bankName          String?
+  accountHolderName String?
+
+  // Real-time tracking & Financial Metrics
+  lastActiveAt           DateTime? @default(now())
+  walletBalance          Decimal   @default(0.00) @db.Decimal(12, 2)
+  totalGmvAmount         Decimal   @default(0.00) @db.Decimal(12, 2)
+  completedProjectsCount Int       @default(0)
+  ratingAverage          Float?    @default(0.0)
+  tierLevel              String?   @default("Bronze") // Bronze, Silver, Gold
+
+  // AI Fraud & Risk System
+  aiRiskScore       Int       @default(10) // 0 to 100
+  aiRiskLevel       RiskLevel @default(LOW) // LOW, MEDIUM, HIGH
+  aiSuspiciousNotes String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  otps             OtpVerification[]
+  clientProfile    ClientProfile?
+  providerProfile  ProviderProfile?
+  affiliateProfile AffiliateProfile?
+  referredBy       Referral?         @relation("ReferredUser")
+
+  clientProjects   Project[]         @relation("ClientProjects")
+  providerProjects Project[]         @relation("ProviderProjects")
+  savedProjects    SavedProject[]    @relation("ProviderSavedProjects")
+  proposals        Proposal[]
+  projectProposals ProjectProposal[]
+
+  modificationRequests ProfileModificationRequest[]
+
+  providerServices      ServiceCatalog[]       @relation("ProviderServices")
+  marketplaceFavorites  MarketplaceFavorite[]
+  reviewsWritten        Review[]               @relation("ReviewClient")
+  reviewsReceived       Review[]               @relation("ReviewProvider")
+  specialtyTestSessions SpecialtyTestSession[]
+  gamification          ProviderGamification?
+  pointTransactions     PointTransaction[]
+  walletTransactions    WalletTransaction[]
+  accountAuditLogs      AccountAuditLog[]
+  notifications         Notification[]
+  sessions              UserSession[]
+  clientConversations   Conversation[]         @relation("ClientConversations")
+  providerConversations Conversation[]         @relation("ProviderConversations")
+  sentMessages          Message[]
+
+  clientContracts   Contract[] @relation("ClientContracts")
+  providerContracts Contract[] @relation("ProviderContracts")
+
+  @@index([accountType, status])
+  @@index([aiRiskScore])
+  @@index([lastActiveAt])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model UserSession {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash    String    @unique
+  ipAddress    String?
+  userAgent    String?   @db.Text
+  device       String?
+  browser      String?
+  os           String?
+  lastActiveAt DateTime  @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([userId, revokedAt, lastActiveAt])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+enum ChangeRequestStatus {
+  PENDING_AI_REVIEW
+  PENDING_HUMAN_APPROVAL
+  APPROVED_AND_APPLIED
+  REJECTED
+  WITHDRAWN
+}
+
+enum SensitiveFieldType {
+  IBAN
+  NATIONAL_ID
+  PHONE_NUMBER
+  EMAIL
+}
+
+model ProfileChangeRequest {
+  id                 String           @id @default(uuid())
+  requestNumber      String           @unique
+  affiliateProfileId String
+  affiliateProfile   AffiliateProfile @relation(fields: [affiliateProfileId], references: [id], onDelete: Cascade)
+
+  fieldType      SensitiveFieldType
+  fieldLabel     String
+  currentValue   String?            @db.Text
+  requestedValue String             @db.Text
+
+  status ChangeRequestStatus @default(PENDING_AI_REVIEW)
+
+  aiRecommendation  String? @db.Text
+  aiConfidenceScore Int?
+
+  rejectionReason String?   @db.Text
+  reviewedBy      String?
+  appliedAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("profile_change_requests")
+}
+
+model ProfileModificationRequest {
+  id         String @id @default(uuid())
+  providerId String
+  provider   User   @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  fieldName      String // e.g., 'IBAN', 'NATIONAL_ID', 'PHONE_NUMBER', 'EMAIL'
+  fieldLabel     String
+  currentValue   String?
+  requestedValue String
+
+  category      String    @default("PROFILE")
+  requiresOtp   Boolean   @default(false)
+  otpVerifiedAt DateTime?
+  appliedAt     DateTime?
+  metadata      Json?
+
+  status ModificationStatus @default(IN_AI_REVIEW)
+
+  // AI Audit fields
+  aiConfidence     Float? // e.g., 95.0
+  aiRecommendation String?        @db.Text
+  aiAuditStatus    AIAuditResult? // PASSED, NEEDS_HUMAN_REVIEW, REJECTED
+
+  reviewedByAdmin Boolean @default(false)
+  rejectionReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([providerId])
+  @@index([status])
+  @@map("profile_modification_requests")
+}
+
+enum ModificationStatus {
+  PENDING_OTP
+  IN_AI_REVIEW
+  PENDING_HUMAN_REVIEW
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum AIAuditResult {
+  PASSED
+  NEEDS_HUMAN_REVIEW
+  FLAGGED
+}
+
+// client profile for company and individual
+model ClientProfile {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  companyName String?
+  crNumber    String?
+  companySize String?
+  website     String?
+  bio         String?
+
+  // Step 1: Details
+  idNumber String? // National ID / Iqama (10 digits)
+  dob      DateTime? // Date of Birth
+  country  String?   @default("السعودية")
+  city     String?
+  industry String? // Occupation/Industry
+  address  String?   @db.Text
+
+  // Step 2: Verification / KYC
+  isNafathVerified Boolean   @default(false)
+  frontIdUrl       String? // ID Front document URL / Storage path
+  backIdUrl        String? // ID Back document URL / Storage path
+  kycStatus        KYCStatus @default(UNVERIFIED)
+
+  // Step 3: Bank / Wallet
+  paymentType   String? // 'bank' | 'wallet'
+  bankName      String?
+  accountHolder String?
+  iban          String?
+
+  // Step 4: Supporting Docs
+  supportingDocsUrl String?
+  notes             String? @db.Text
+
+  // Step 5: Agreements
+  accurateAgreed Boolean @default(false)
+  termsAgreed    Boolean @default(false)
+  privacyAgreed  Boolean @default(false)
+
+  isProfileComplete Boolean         @default(false)
+  clientRequests    ClientRequest[]
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @default(now()) @updatedAt
+
+  @@map("client_profiles")
+}
+
+enum KYCStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum AvailabilityStatus {
+  AVAILABLE
+  BUSY
+  OFFLINE
+}
+
+model ProviderProfile {
+  id                   String             @id @default(uuid())
+  userId               String             @unique
+  user                 User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyName          String?
+  headline             String?
+  bio                  String?
+  hourlyRate           Float?
+  yearsOfExperience    Int?
+  location             String?
+  city                 String?
+  country              String?
+  availabilityStatus   AvailabilityStatus @default(AVAILABLE)
+  completionPercentage Int                @default(0)
+  githubUrl            String?
+  linkedinUrl          String?
+  twitterUrl           String?
+  websiteUrl           String?
+  languages            String[]           @default([])
+  preferences          Json?
+  mainSpecialty        String?
+  subSpecialties       String[]           @default([])
+
+  rating     Float   @default(5.0)
+  isVerified Boolean @default(false)
+
+  skills                   Skill[]
+  portfolioItems           PortfolioItem[]
+  educations               Education[]
+  certificates             Certificate[]
+  assessments              ProviderSkillAssessment[]
+  accreditationSubmissions AccreditationSubmission[]
+  accreditationSamples     AccreditationSample[]
+  providerSpecialties      ProviderSpecialty[]
+  assessmentAttempts       AssessmentAttempt[]
+
+  // Step 1: Details
+  idNumber String? // National ID / Iqama (10 digits)
+  dob      DateTime? // Date of Birth
+  industry String? // Occupation/Industry
+  address  String?   @db.Text
+
+  // Step 2: Verification / KYC
+  isNafathVerified Boolean   @default(false)
+  frontIdUrl       String? // ID Front document URL
+  backIdUrl        String? // ID Back document URL
+  certUrls         String[]  @default([])
+  kycStatus        KYCStatus @default(UNVERIFIED)
+
+  // Step 3: Bank / Wallet
+  paymentType   String? // 'bank' | 'wallet'
+  bankName      String?
+  accountHolder String?
+  iban          String?
+
+  // Step 4: Supporting Docs
+  supportingDocsUrl String?
+  notes             String? @db.Text
+
+  // Step 5: Agreements
+  accurateAgreed Boolean @default(false)
+  termsAgreed    Boolean @default(false)
+  privacyAgreed  Boolean @default(false)
+
+  isProfileSetupComplete Boolean @default(false)
+
+  // Initial Onboarding Test
+  setupTestScore         Float?
+  setupTestStatus        String    @default("PENDING") // PENDING, PASSED, FAILED, BANNED
+  setupTestBannedUntil   DateTime?
+  setupTestCheatAttempts Int       @default(0)
+
+  @@map("provider_profiles")
+}
+
+model Skill {
+  id               String            @id @default(uuid())
+  name             String            @unique
+  category         String?
+  //   providerProfiles ProviderProfile[]
+  providerProfiles ProviderProfile[]
+
+  @@map("skills")
+}
+
+model PortfolioItem {
+  id                String           @id @default(uuid())
+  providerProfileId String
+  providerProfile   ProviderProfile  @relation(fields: [providerProfileId], references: [id], onDelete: Cascade)
+  title             String
+  description       String?
+  coverImage        String?
+  projectUrl        String?
+  completionDate    DateTime?
+  tags              String[]
+  serviceCatalogs   ServiceCatalog[]
+
+  @@index([providerProfileId])
+  @@map("portfolio_items")
+}
+
+model Education {
+  id                String          @id @default(uuid())
+  providerProfileId String
+  providerProfile   ProviderProfile @relation(fields: [providerProfileId], references: [id], onDelete: Cascade)
+  degree            String
+  institution       String
+  startDate         DateTime?
+  endDate           DateTime?
+  description       String?
+
+  @@map("educations")
+}
+
+model ProviderGamification {
+  id         String @id @default(uuid())
+  providerId String @unique
+  provider   User   @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  points            Int   @default(0)
+  completedProjects Int   @default(0)
+  avgRating         Float @default(0.0)
+  currentLevelIndex Int   @default(1) // 1 to 15
+  currentCommission Float @default(15.0) // 15% down to 10%
+
+  updatedAt DateTime @updatedAt
+
+  @@map("provider_gamification")
+}
+
+model Review {
+  id         String          @id @default(uuid())
+  providerId String
+  provider   User            @relation("ReviewProvider", fields: [providerId], references: [id], onDelete: Cascade)
+  clientId   String?
+  client     User?           @relation("ReviewClient", fields: [clientId], references: [id], onDelete: SetNull)
+  projectId  String?
+  project    Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  serviceId  String?
+  service    ServiceCatalog? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  rating     Float
+  comment    String?
+  createdAt  DateTime        @default(now())
+
+  @@index([providerId])
+  @@index([serviceId])
+  @@index([projectId])
+  @@map("reviews")
+}
+
+model PointTransaction {
+  id         String @id @default(uuid())
+  providerId String
+  provider   User   @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  amount      Int // Positive for gain (+20), Negative for loss (-25)
+  reason      String // e.g. "PROJECT_COMPLETED", "EARLY_DELIVERY", "LATE_DELIVERY"
+  description String // e.g. "إكمال مشروع بنجاح #PRJ-102"
+
+  createdAt DateTime @default(now())
+
+  @@index([providerId])
+  @@map("point_transactions")
+}
+
+model GamificationRule {
+  id          String   @id @default(uuid())
+  code        String   @unique // e.g. "GAIN_PROJECT_COMPLETE", "LOSS_LATE_DELIVERY"
+  type        RuleType // GAIN or LOSS
+  label       String // e.g. "إكمال مشروع بنجاح"
+  points      Int // e.g. 20 or -25
+  description String?
+
+  @@map("gamification_rules")
+}
+
+enum RuleType {
+  GAIN
+  LOSS
+}
+
+model AccountAuditLog {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  category   LogCategory // ROLE_ADDITION, PROFILE_COMPLETION, SECURITY_CHANGE, SYSTEM_AUDIT
+  title      String // e.g. "وسيط تسويقي", "مقدم خدمة فرد"
+  actionText String // e.g. "إضافة حساب جديد - قناة، موقع ويب"
+
+  status      LogStatus @default(IN_REVIEW)
+  statusText  String? // e.g. "مراجعة الذكاء", "متوقع الرد خلال 24 ساعة", "مرفوض - يمكن إعادة تقديم"
+  canResubmit Boolean   @default(false)
+
+  metaData   Json? // Additional contextual payloads if needed
+  eventType  String? // Stable machine event code
+  source     String? // USER, AI, ADMIN, SYSTEM
+  severity   String?  @default("INFO") // INFO, WARNING, CRITICAL
+  summary    String?  @db.Text
+  beforeData Json?
+  afterData  Json?
+  context    Json?
+  requestId  String?
+  sessionId  String?
+  ipAddress  String?
+  device     String?
+  actorLabel String?
+  occurredAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([category])
+  @@index([status])
+  @@index([userId, occurredAt])
+  @@index([eventType])
+  @@index([source])
+  @@index([requestId])
+  @@index([sessionId])
+  @@map("account_audit_logs")
+}
+
+enum LogCategory {
+  ROLE_ADDITION
+  PROFILE_COMPLETION
+  SECURITY_CHANGE
+  SYSTEM_AUDIT
+}
+
+enum LogStatus {
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
+model Certificate {
+  id                String          @id @default(uuid())
+  providerProfileId String
+  providerProfile   ProviderProfile @relation(fields: [providerProfileId], references: [id], onDelete: Cascade)
+  name              String
+  issuer            String
+  issueDate         DateTime?
+  credentialUrl     String?
+
+  @@map("certificates")
+}
+
+// otb verification for user
+model OtpVerification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  code      String
+  type      OtpType
+  expiresAt DateTime
+  context   Json?
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@map("otp_verifications")
+}
+
+enum OtpType {
+  EMAIL
+  PHONE
+}
+
+enum ProjectStatus {
+  DRAFT
+  PENDING_SIGNATURE
+  PENDING_REVIEW
+  OPEN
+  IN_PROGRESS
+  AWAITING_DELIVERY
+  PENDING_APPROVAL
+  COMPLETED
+  DISPUTED
+}
+
+enum ProposalStatus {
+  PENDING
+  DRAFT
+  PENDING_SIGNATURE
+  IN_AI_REVIEW
+  SUBMITTED
+  UNDER_NEGOTIATION
+  ACCEPTED
+  REJECTED
+  CANCELLED
+}
+
+enum EscrowStatus {
+  HELD
+  RELEASED
+  REFUNDED
+}
+
+model Project {
+  id          String @id @default(uuid())
+  title       String
+  description String
+
+  specialty      String
+  subSpecialties String[]
+
+  ndaType  String @default("standard")
+  ipRights String @default("client")
+
+  provLevel        String?
+  provRating       Float?
+  provLang         String?
+  provLocation     String?
+  customConditions String?
+
+  requirements String[]
+  outputs      String?
+  deliveryDays Int
+
+  budgetType       String  @default("range")
+  budgetMin        Float?
+  budgetMax        Float?
+  budgetFixed      Float?
+  budgetHourly     Float?
+  allowNegotiation Boolean @default(true)
+
+  splitMilestones Boolean @default(false)
+  milestones      Json?
+
+  attachments    String[]
+  proposalsCount Int      @default(0)
+
+  status ProjectStatus @default(OPEN)
+
+  clientId String
+  client   User   @relation("ClientProjects", fields: [clientId], references: [id], onDelete: Cascade)
+
+  providerId String?
+  provider   User?   @relation("ProviderProjects", fields: [providerId], references: [id])
+
+  serviceCatalogId String?
+  serviceCatalog   ServiceCatalog? @relation(fields: [serviceCatalogId], references: [id], onDelete: SetNull)
+
+  proposals        Proposal[]
+  projectProposals ProjectProposal[]
+  savedBy          SavedProject[]
+  escrow           Escrow?
+  contract         Contract?
+  conversations    Conversation[]
+  reviews          Review[]
+
+  aiAnalysis Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([providerId, status])
+  @@index([serviceCatalogId])
+  @@index([clientId, status])
+  @@index([status, createdAt])
+  @@map("projects")
+}
+
+model SavedProject {
+  id         String   @id @default(uuid())
+  providerId String
+  provider   User     @relation("ProviderSavedProjects", fields: [providerId], references: [id], onDelete: Cascade)
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([providerId, projectId])
+  @@map("saved_projects")
+}
+
+model Proposal {
+  id String @id @default(uuid())
+
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  clientRequestId String?
+  clientRequest   ClientRequest? @relation(fields: [clientRequestId], references: [id], onDelete: Cascade)
+
+  providerId String
+  provider   User   @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  price        Float
+  deliveryDays Int
+  aiMatchScore Float?
+  status       ProposalStatus
+
+  coverLetter String? @db.Text
+  workPlan    String? @db.Text
+
+  aiFairPriceMin Float?
+  aiFairPriceMax Float?
+  aiPriceTag     String?
+
+  attachments ProposalAttachment[]
+  createdAt   DateTime             @default(now())
+
+  @@index([providerId, status, createdAt])
+  @@index([projectId, status])
+  @@index([clientRequestId, status])
+  @@map("proposals")
+}
+
+model ProposalAttachment {
+  id         String   @id @default(uuid())
+  proposalId String
+  proposal   Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  fileName   String
+  fileUrl    String
+  fileType   String
+}
+
+model Escrow {
+  id String @id @default(uuid())
+
+  projectId String  @unique
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  amount           Float
+  status           EscrowStatus
+  paymentMethod    String?
+  paymentReference String?
+  fundedAt         DateTime?
+  releasedAmount   Float        @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("escrows")
+}
+
+model ServiceCatalog {
+  id         String @id @default(uuid())
+  providerId String
+  provider   User   @relation("ProviderServices", fields: [providerId], references: [id], onDelete: Cascade)
+
+  title        String
+  description  String     @db.Text
+  specialtyId  String?
+  specialty    Specialty? @relation(fields: [specialtyId], references: [id])
+  subSpecialty String?
+
+  portfolioItemId String?
+  portfolioItem   PortfolioItem? @relation(fields: [portfolioItemId], references: [id])
+
+  accreditationSampleId String?
+  accreditationSample   AccreditationSample? @relation(fields: [accreditationSampleId], references: [id])
+
+  gallery String[] @default([])
+
+  totalAmount Decimal @db.Decimal(10, 2)
+  totalDays   Int
+
+  // Status Tracking
+  status             ModelStatus @default(PENDING_APPROVAL)
+  aiScore            Int?
+  aiClarityScore     Int?
+  aiFeasibilityScore Int?
+  aiReviewSummary    String?     @db.Text
+  aiReviewDetails    Json?
+  approvedAt         DateTime?
+
+  aiAuditScore         Float?
+  aiAuditFeedback      Json?
+  aiAuditReport        Json?
+  auditRejectionReason String? @db.Text
+
+  viewsCount         Int       @default(0)
+  salesCount         Int       @default(0)
+  isFeatured         Boolean   @default(false)
+  discountPercentage Int?
+  offerEndsAt        DateTime?
+
+  stages    ServiceStage[]
+  projects  Project[]
+  reviews   Review[]
+  favorites MarketplaceFavorite[]
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+
+  @@index([providerId])
+  @@index([status])
+  @@index([specialtyId])
+  @@index([accreditationSampleId])
+  @@map("service_catalogs")
+}
+
+model MarketplaceFavorite {
+  id        String         @id @default(uuid())
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   ServiceCatalog @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  createdAt DateTime       @default(now())
+
+  @@unique([userId, serviceId])
+  @@index([serviceId])
+  @@map("marketplace_favorites")
+}
+
+enum ModelStatus {
+  DRAFT
+  PENDING_SIGNATURE
+  PENDING_APPROVAL
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  PUBLISHED
+  ARCHIVED
+}
+
+enum ServiceStatus {
+  DRAFT
+  PENDING_SIGNATURE
+  PENDING_APPROVAL
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  PUBLISHED
+  ARCHIVED
+}
+
+model ServiceStage {
+  id        String         @id @default(uuid())
+  serviceId String
+  service   ServiceCatalog @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  stepOrder      Int
+  title          String
+  description    String? @db.Text
+  deliveryDays   Int
+  percentage     Float
+  computedAmount Decimal @db.Decimal(10, 2)
+
+  @@index([serviceId])
+  @@map("service_stages")
+}
+
+// ==========================================
+// Specialty Management & Verification Wizard
+// ==========================================
+
+enum SpecialtyVerificationStatus {
+  PENDING_PROOF
+  PENDING_AUDIT
+  PENDING_TEST
+  UNDER_AI_REVIEW
+  TEST_REQUIRED
+  APPROVED
+  REJECTED
+  LOCKED_OUT
+}
+
+model Category {
+  id          String   @id @default(uuid())
+  slug        String   @unique
+  name        String? // Kept for backward compatibility
+  nameAr      String
+  nameEn      String?
+  icon        String?
+  description String?  @db.Text
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  specialties Specialty[]
+
+  @@map("categories")
+}
+
+model Specialty {
+  id         String   @id @default(uuid())
+  slug       String   @unique
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  name        String? // Kept for backward compatibility
+  nameAr      String
+  nameEn      String?
+  icon        String?
+  description String? @db.Text
+  isActive    Boolean @default(true)
+  sortOrder   Int     @default(0)
+  isCustom    Boolean @default(false)
+
+  providerSpecialties      ProviderSpecialty[]
+  serviceCatalogs          ServiceCatalog[]
+  tests                    SpecialtyTest[]
+  assessments              ProviderSkillAssessment[]
+  accreditationSubmissions AccreditationSubmission[]
+  questions                Question[]
+  assessmentAttempts       AssessmentAttempt[]
+  clientRequests           ClientRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([categoryId])
+  @@map("specialties")
+}
+
+model ProviderSpecialty {
+  id                String          @id @default(uuid())
+  providerProfileId String
+  providerProfile   ProviderProfile @relation(fields: [providerProfileId], references: [id], onDelete: Cascade)
+  specialtyId       String
+  specialty         Specialty       @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
+
+  // Assessment Status
+  hasTakenAssessment Boolean   @default(false)
+  latestScore        Float? // Score percentage (0 - 100)
+  isPassed           Boolean   @default(false) // True if score > 25
+  passedAt           DateTime?
+
+  subSpecialties String[]
+  status         SpecialtyVerificationStatus @default(PENDING_PROOF)
+  isActive       Boolean                     @default(true)
+
+  // High-precision AI Audit metrics
+  aiScore              Float?
+  feasibilityScore     Float?
+  clarityScore         Float?
+  ownershipCredibility Float?
+  quizScore            Float?
+  badgeGrantedAt       DateTime?
+  lockoutUntil         DateTime?
+
+  // JSON structural feedback { summary: string, strengths: string[], warnings: string[], corrections: string[] }
+  aiFeedback    Json?
+  legalSignedAt DateTime?
+
+  workSamples          WorkSample[]
+  accreditationSamples AccreditationSample[]
+  testSubmissions      TestSubmission[]
+  testSessions         SpecialtyTestSession[]
+  aiAuditLogs          AiAuditLog[]
+  assessmentAttempts   AssessmentAttempt[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([providerProfileId, specialtyId])
+  @@index([providerProfileId, status])
+  @@index([specialtyId])
+  @@map("provider_specialties")
+}
+
+model Question {
+  id                 String    @id @default(uuid())
+  specialtyId        String
+  specialty          Specialty @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
+  subSpecialtyTag    String?
+  text               String
+  options            Json
+  correctOptionIndex Int
+  explanation        String?
+  isActive           Boolean   @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([specialtyId, isActive])
+  @@map("questions")
+}
+
+model WorkSample {
+  id                  String            @id @default(uuid())
+  providerSpecialtyId String
+  providerSpecialty   ProviderSpecialty @relation(fields: [providerSpecialtyId], references: [id], onDelete: Cascade)
+
+  title           String   @db.VarChar(150)
+  description     String?  @db.Text
+  technologies    String[] @default([])
+  publicSampleUrl String
+  mimeType        String   @default("application/octet-stream")
+  fileBytes       Int      @default(0)
+  watermarkLabel  String   @default("وسيط AI") @db.VarChar(50)
+
+  proofs    ProofAttachment[]
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @default(now()) @updatedAt
+
+  @@index([providerSpecialtyId])
+  @@map("work_samples")
+}
+
+model ProofAttachment {
+  id           String     @id @default(uuid())
+  workSampleId String
+  workSample   WorkSample @relation(fields: [workSampleId], references: [id], onDelete: Cascade)
+
+  fileName       String  @db.VarChar(255)
+  fileUrl        String
+  mimeType       String  @default("application/octet-stream")
+  fileBytes      Int     @default(0)
+  isConfidential Boolean @default(true)
+  watermarkLabel String  @default("وسيط AI") @db.VarChar(50)
+
+  createdAt DateTime @default(now())
+
+  @@index([workSampleId])
+  @@map("proof_attachments")
+}
+
+model AiAuditLog {
+  id                  String            @id @default(uuid())
+  providerSpecialtyId String
+  providerSpecialty   ProviderSpecialty @relation(fields: [providerSpecialtyId], references: [id], onDelete: Cascade)
+
+  modelVersion     String
+  promptTokens     Int    @default(0)
+  completionTokens Int    @default(0)
+  totalTokens      Int    @default(0)
+  latencyMs        Int    @default(0)
+
+  rawRequest       Json
+  rawResponse      Json
+  evaluationResult String
+  errorMessage     String? @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@index([providerSpecialtyId, createdAt])
+  @@map("ai_audit_logs")
+}
+
+model SpecialtyTest {
+  id           String    @id @default(uuid())
+  specialtyId  String
+  specialty    Specialty @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
+  title        String
+  durationMins Int       @default(15)
+  passScore    Float     @default(25.0)
+  questions    Json
+
+  submissions TestSubmission[]
+
+  @@index([specialtyId])
+  @@map("specialty_tests")
+}
+
+model TestSubmission {
+  id                  String            @id @default(uuid())
+  providerSpecialtyId String
+  providerSpecialty   ProviderSpecialty @relation(fields: [providerSpecialtyId], references: [id], onDelete: Cascade)
+  testId              String
+  test                SpecialtyTest     @relation(fields: [testId], references: [id], onDelete: Cascade)
+
+  score       Float
+  passed      Boolean
+  submittedAt DateTime @default(now())
+
+  @@index([providerSpecialtyId])
+  @@index([testId])
+  @@map("test_submissions")
+}
+
+enum TestSessionStatus {
+  IN_PROGRESS
+  COMPLETED
+  TIMED_OUT
+  INVALIDATED
+}
+
+model SpecialtyTestSession {
+  id                  String            @id @default(uuid())
+  userId              String
+  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  providerSpecialtyId String
+  providerSpecialty   ProviderSpecialty @relation(fields: [providerSpecialtyId], references: [id], onDelete: Cascade)
+
+  status          TestSessionStatus @default(IN_PROGRESS)
+  totalQuestions  Int               @default(20)
+  correctAnswers  Int               @default(0)
+  scorePercentage Float             @default(0.0)
+  passed          Boolean           @default(false)
+
+  antiCheatViolations Int   @default(0)
+  violationEvents     Json?
+
+  questionsPayload Json
+  startedAt        DateTime  @default(now())
+  completedAt      DateTime?
+  expiresAt        DateTime
+
+  submissions TestQuestionSubmission[]
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+
+  @@index([userId])
+  @@index([providerSpecialtyId, status])
+  @@map("specialty_test_sessions")
+}
+
+model TestQuestionSubmission {
+  id        String               @id @default(uuid())
+  sessionId String
+  session   SpecialtyTestSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  questionId      String
+  subSpecialtyTag String
+  selectedIndex   Int
+  isCorrect       Boolean @default(false)
+  timeTakenSec    Int?    @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([sessionId])
+  @@map("test_question_submissions")
+}
+
+model ProjectProposal {
+  id         String  @id @default(uuid())
+  projectId  String
+  project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  providerId String
+  provider   User    @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  title          String         @db.VarChar(80)
+  message        String         @db.Text
+  advantages     String[]       @default([])
+  outputs        String?        @db.Text
+  portfolioIds   String[]       @default([])
+  totalPrice     Float
+  deliveryDays   Int
+  status         ProposalStatus @default(DRAFT)
+  aiMatchScore   Float?
+  aiQualityTag   String?
+  aiPriceTag     String?
+  aiFeedback     Json?
+  agreedToTerms  Boolean        @default(false)
+  agreedToEscrow Boolean        @default(false)
+
+  milestones ProposalMilestone[]
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  @@unique([projectId, providerId])
+  @@index([projectId, status])
+  @@index([providerId])
+  @@map("project_proposals")
+}
+
+model ProposalMilestone {
+  id          String          @id @default(uuid())
+  proposalId  String
+  proposal    ProjectProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  stepOrder   Int
+  title       String          @db.VarChar(100)
+  description String          @db.Text
+  days        Int
+  percentage  Float
+  amount      Float
+
+  @@index([proposalId])
+  @@map("proposal_milestones")
+}
+
+enum NotificationCategory {
+  ALL
+  OFFERS
+  PROJECTS
+  FINANCIAL
+  AI
+}
+
+model Notification {
+  id         String               @id @default(uuid())
+  userId     String
+  user       User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title      String               @db.VarChar(150)
+  message    String               @db.Text
+  type       String               @default("GENERAL")
+  category   NotificationCategory @default(ALL)
+  actionUrl  String?
+  actionText String?
+  isRead     Boolean              @default(false)
+  metadata   Json?
+  createdAt  DateTime             @default(now())
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  AUDIO
+  FILE
+  SYSTEM
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+}
+
+model Conversation {
+  id         String  @id @default(uuid())
+  projectId  String  @map("project_id")
+  offerId    String? @map("offer_id")
+  clientId   String  @map("client_id")
+  providerId String  @map("provider_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  client   User      @relation("ClientConversations", fields: [clientId], references: [id])
+  provider User      @relation("ProviderConversations", fields: [providerId], references: [id])
+  messages Message[]
+
+  @@unique([projectId, providerId])
+  @@map("conversations")
+}
+
+model Message {
+  id             String @id @default(uuid())
+  conversationId String @map("conversation_id")
+  senderId       String @map("sender_id")
+
+  type    MessageType   @default(TEXT)
+  content String?       @db.Text
+  status  MessageStatus @default(SENT)
+
+  // Attachments metadata (Images, Audio, Docs)
+  fileUrl       String? @map("file_url")
+  fileName      String? @map("file_name")
+  fileSize      Int?    @map("file_size")
+  audioDuration Int?    @map("audio_duration")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id])
+
+  @@map("messages")
+}
+
+// ==========================================
+// Marketing Broker / Affiliate Architecture
+// ==========================================
+
+model AffiliateProfile {
+  id                       String  @id @default(uuid())
+  userId                   String  @unique
+  user                     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  referralSlug             String? @unique // e.g. "khalid2026"
+  currentLevel             String  @default("مساعد") // "مساعد", "موصل"
+  commissionRatePercentage Float   @default(5.0)
+
+  notifyOnNewReferral   Boolean @default(true)
+  sharePerformanceStats Boolean @default(false)
+
+  // Marketing Profile Tab
+  avatarUrl         String?
+  bio               String?                  @db.Text
+  marketingChannels AffiliateChannelHandle[]
+
+  // Bank & KYC Tab
+  bankName          String?
+  accountHolderName String?
+  iban              String?
+  swiftCode         String?
+  identityVerified  Boolean @default(false)
+  kycDocumentUrl    String?
+
+  // Commission Preferences
+  payoutMethod        String? @default("BANK_TRANSFER") // BANK_TRANSFER, PAYONEER, etc.
+  minimumPayoutAmount Float   @default(100.0)
+
+  // System Calculated
+  completionPercentage Int @default(0)
+
+  referrals             Referral[]
+  commissionLogs        CommissionLog[]
+  channelMetrics        AffiliateChannelMetric[]
+  customLinks           ReferralCustomLink[]
+  profileChangeRequests ProfileChangeRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("affiliate_profiles")
+}
+
+model AffiliateChannelHandle {
+  id                 String           @id @default(uuid())
+  affiliateProfileId String
+  affiliateProfile   AffiliateProfile @relation(fields: [affiliateProfileId], references: [id], onDelete: Cascade)
+  platform           String // e.g. "TWITTER", "INSTAGRAM", "TIKTOK", "LINKEDIN"
+  handle             String // e.g. "@khalid.markets"
+  url                String?
+  createdAt          DateTime         @default(now())
+
+  @@map("affiliate_channel_handles")
+}
+
+enum ReferralStatus {
+  PENDING
+  QUALIFIED
+  CONVERTED
+}
+
+enum SourceChannel {
+  TIKTOK
+  X_TWITTER
+  INSTAGRAM
+  LINKEDIN
+  OTHER
+}
+
+model Referral {
+  id          String           @id @default(uuid())
+  affiliateId String
+  affiliate   AffiliateProfile @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+
+  referredUserId String @unique // The user who signed up
+  referredUser   User   @relation("ReferredUser", fields: [referredUserId], references: [id], onDelete: Cascade)
+
+  status        ReferralStatus @default(PENDING)
+  sourceChannel SourceChannel  @default(OTHER)
+
+  commissionLogs CommissionLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([affiliateId, status])
+  @@map("referrals")
+}
+
+enum CommissionType {
+  NEW_CLIENT_REQUEST
+  FIRST_PROJECT_COMPLETED
+  SUBSCRIPTION
+}
+
+enum CommissionStatus {
+  PENDING
+  APPROVED
+  PAID
+}
+
+model CommissionLog {
+  id          String           @id @default(uuid())
+  affiliateId String
+  affiliate   AffiliateProfile @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+
+  referralId String?
+  referral   Referral? @relation(fields: [referralId], references: [id], onDelete: SetNull)
+
+  type     CommissionType
+  amount   Float
+  currency String           @default("SAR")
+  status   CommissionStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([affiliateId, status])
+  @@map("commission_logs")
+}
+
+model AffiliateChannelMetric {
+  id          String           @id @default(uuid())
+  affiliateId String
+  affiliate   AffiliateProfile @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+
+  channel              SourceChannel
+  visitors             Int           @default(0)
+  clients              Int           @default(0)
+  conversionPercentage Float         @default(0.0)
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([affiliateId, channel])
+  @@map("affiliate_channel_metrics")
+}
+
+model ReferralCustomLink {
+  id          String           @id @default(uuid())
+  affiliateId String
+  affiliate   AffiliateProfile @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  channelName String
+  utmSource   String
+  customSlug  String?
+  createdAt   DateTime         @default(now())
+
+  @@index([affiliateId])
+  @@map("referral_custom_links")
+}
+
+model ProviderSkillAssessment {
+  id                String          @id @default(uuid())
+  providerProfileId String
+  providerProfile   ProviderProfile @relation(fields: [providerProfileId], references: [id], onDelete: Cascade)
+  specialtyId       String
+  specialty         Specialty       @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
+  score             Float
+  passed            Boolean
+  completedAt       DateTime        @default(now())
+
+  @@unique([providerProfileId, specialtyId])
+  @@map("provider_skill_assessments")
+}
+
+enum ContractStatus {
+  PENDING_CLIENT_SIGNATURE
+  PENDING_PAYMENT
+  PENDING_PROVIDER_SIGNATURE
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  DISPUTED
+}
+
+model Contract {
+  id         String  @id @default(uuid())
+  projectId  String  @unique
+  project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  clientId   String
+  client     User    @relation("ClientContracts", fields: [clientId], references: [id])
+  providerId String
+  provider   User    @relation("ProviderContracts", fields: [providerId], references: [id])
+  offerId    String?
+
+  price        Float
+  durationDays Int
+  phasesCount  Int   @default(1)
+
+  terms  Json? // Array of agreed terms or a summary text
+  status ContractStatus @default(PENDING_PAYMENT)
+
+  clientSignedAt        DateTime?
+  providerSignedAt      DateTime?
+  clientSignatureHash   String?
+  providerSignatureHash String?
+  termsVersion          Int            @default(1)
+  signedAt              DateTime?
+  stages                ProjectStage[]
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  @@map("contracts")
+}
+
+enum ProjectStageStatus {
+  PENDING
+  IN_PROGRESS
+  SUBMITTED
+  REVISION_REQUESTED
+  APPROVED
+}
+
+enum StageDeliveryStatus {
+  SUBMITTED
+  REVISION_REQUESTED
+  APPROVED
+}
+
+model ProjectStage {
+  id          String             @id @default(uuid())
+  contractId  String
+  contract    Contract           @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  stepOrder   Int
+  title       String
+  description String?            @db.Text
+  days        Int
+  percentage  Float
+  amount      Float
+  status      ProjectStageStatus @default(PENDING)
+  startedAt   DateTime?
+  approvedAt  DateTime?
+  deliveries  StageDelivery[]
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@unique([contractId, stepOrder])
+  @@index([contractId, status])
+  @@map("project_stages")
+}
+
+model StageDelivery {
+  id          String              @id @default(uuid())
+  stageId     String
+  stage       ProjectStage        @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  providerId  String
+  note        String              @db.Text
+  files       String[]            @default([])
+  status      StageDeliveryStatus @default(SUBMITTED)
+  reviewNote  String?             @db.Text
+  submittedAt DateTime            @default(now())
+  reviewedAt  DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([stageId, submittedAt])
+  @@map("stage_deliveries")
+}
+
+enum ProofFileType {
+  PROOF_DOCUMENT
+  WORK_SAMPLE
+}
+
+enum AccreditationStatus {
+  PENDING_AI_AUDIT
+  AI_VERIFIED
+  REJECTED
+  MANUAL_REVIEW
+}
+
+model AccreditationSample {
+  id                  String            @id @default(uuid())
+  providerProfileId   String
+  providerProfile     ProviderProfile   @relation(fields: [providerProfileId], references: [id], onDelete: Cascade)
+  providerSpecialtyId String
+  providerSpecialty   ProviderSpecialty @relation(fields: [providerSpecialtyId], references: [id], onDelete: Cascade)
+
+  title            String // e.g. "نظام إدارة المخزون بنظام Microservices"
+  description      String   @db.Text
+  projectUrl       String?
+  githubUrl        String?
+  technologiesUsed String[]
+  attachments      String[] // URLs to screenshots, PDFs, designs, or code archives
+
+  // AI Audit & Verification Attributes
+  status            AccreditationStatus @default(PENDING_AI_AUDIT) // PENDING_AI_AUDIT, AI_VERIFIED, REJECTED, MANUAL_REVIEW
+  aiScore           Float? // e.g. 92.5%
+  aiQualityRating   String? // EXCELLENT, ACCEPTABLE, POOR
+  aiFeedbackAr      String?             @db.Text
+  aiStrengths       String[]
+  aiRecommendations String[]
+  aiAuditedAt       DateTime?
+
+  // Analytics & Usage
+  viewsCount      Int    @default(0)
+  rating          Float? @default(0.0)
+  reviewsCount    Int    @default(0)
+  offersGenerated Int    @default(0)
+  offersAccepted  Int    @default(0)
+
+  serviceCatalogs ServiceCatalog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([providerProfileId])
+  @@index([providerSpecialtyId])
+  @@map("accreditation_samples")
+}
+
+model AccreditationSubmission {
+  id                  String              @id @default(uuid())
+  providerProfileId   String
+  providerProfile     ProviderProfile     @relation(fields: [providerProfileId], references: [id], onDelete: Cascade)
+  providerSpecialtyId String
+  specialty           Specialty           @relation(fields: [providerSpecialtyId], references: [id], onDelete: Cascade)
+  status              AccreditationStatus @default(PENDING_AI_AUDIT)
+  overallAiScore      Float? // 0 to 100
+  aiDecisionSummary   String?             @db.Text
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  proofFiles  AccreditationProofFile[]
+  aiAuditLogs AiAccreditationAuditLog[]
+
+  @@map("provider_accreditation_submissions")
+}
+
+model AccreditationProofFile {
+  id                        String                  @id @default(uuid())
+  accreditationSubmissionId String
+  submission                AccreditationSubmission @relation(fields: [accreditationSubmissionId], references: [id], onDelete: Cascade)
+
+  fileType ProofFileType // PROOF_DOCUMENT (إثبات ملكية) or WORK_SAMPLE (نموذج عمل)
+  fileUrl  String
+  fileName String
+  fileSize Int?
+
+  // Stored AI Vision Evaluation Per Image
+  aiAuthenticityScore    Float? // Real score from GPT-4o Vision
+  aiDetectedQualityScore Float? // Quality rating
+  aiTechnicalAnalysis    Json? // Breakdown (extracted stack, visual polish, copyright checks)
+
+  createdAt DateTime @default(now())
+
+  @@map("provider_accreditation_proofs")
+}
+
+model AiAccreditationAuditLog {
+  id                        String                  @id @default(uuid())
+  accreditationSubmissionId String
+  submission                AccreditationSubmission @relation(fields: [accreditationSubmissionId], references: [id], onDelete: Cascade)
+
+  promptTokensUsed     Int?
+  completionTokensUsed Int?
+  rawAiResponse        Json
+  evaluatedAt          DateTime @default(now())
+
+  @@map("provider_accreditation_audit_logs")
+}
+
+model AssessmentAttempt {
+  id                  String            @id @default(uuid())
+  providerSpecialtyId String
+  providerSpecialty   ProviderSpecialty @relation(fields: [providerSpecialtyId], references: [id], onDelete: Cascade)
+  providerProfileId   String
+  providerProfile     ProviderProfile   @relation(fields: [providerProfileId], references: [id], onDelete: Cascade)
+  specialtyId         String
+  specialty           Specialty         @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
+
+  subSpecialtiesSnapshot Json? // Array of chosen sub-specialties
+  analyzedAssetsSnapshot Json? // Metadata of analyzed portfolio files
+
+  questionsPayload Json // Full array of 20 questions (with answer keys)
+  submittedAnswers Json? // Submitted answers map
+
+  totalQuestions Int      @default(20)
+  score          Float? // Percentage (e.g. 85.0%)
+  isPassed       Boolean  @default(false)
+  feedbackAr     String?  @db.Text
+  strengths      String[]
+  weaknesses     String[]
+
+  status           AssessmentStatus @default(IN_PROGRESS)
+  timeLimitMinutes Int              @default(15)
+  startedAt        DateTime         @default(now())
+  completedAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([providerSpecialtyId])
+  @@index([providerProfileId])
+  @@map("assessment_attempts")
+}
+
+enum AssessmentStatus {
+  IN_PROGRESS
+  STREAMING
+  COMPLETED
+  FAILED
+  EXPIRED
+  CANCELLED
+}
+
+enum BudgetType {
+  FIXED
+  RANGE
+  HOURLY
+}
+
+enum ProviderTypePreference {
+  INDIVIDUAL
+  COMPANY
+  ACCREDITED_ONLY
+  ANY
+}
+
+enum RequestStatus {
+  DRAFT
+  PENDING_SIGNATURE
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model ClientRequest {
+  id              String        @id @default(uuid())
+  clientProfileId String
+  clientProfile   ClientProfile @relation(fields: [clientProfileId], references: [id], onDelete: Cascade)
+  specialtyId     String
+  specialty       Specialty     @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
+
+  title          String
+  description    String   @db.Text
+  subSpecialties String[]
+  requiredSkills String[]
+
+  // Budget & Timeline
+  budgetType           BudgetType @default(FIXED) // FIXED, RANGE, HOURLY
+  minBudget            Float?
+  maxBudget            Float?
+  expectedDurationDays Int?
+
+  // Conditions & Requirements
+  preferredProviderType ProviderTypePreference @default(ANY) // INDIVIDUAL, COMPANY, ACCREDITED_ONLY, ANY
+  requiresNda           Boolean                @default(false)
+  attachments           String[]
+  outputs               String?                @db.Text
+  customConditions      String?                @db.Text
+  ipRights              String                 @default("client")
+  providerPreferences   Json?
+  allowNegotiation      Boolean                @default(true)
+  splitMilestones       Boolean                @default(false)
+  milestones            Json?
+
+  // AI Matching & System Attributes
+  aiAnalyzedSummary  String?       @db.Text
+  aiComplexityRating String? // LOW, MEDIUM, HIGH, COMPLEX
+  status             RequestStatus @default(OPEN) // DRAFT, OPEN, IN_PROGRESS, COMPLETED, CANCELLED
+  proposalsCount     Int           @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  proposals Proposal[]
+
+  @@index([clientProfileId])
+  @@index([specialtyId])
+  @@index([status])
+  @@map("client_requests")
+}
+
+model WalletTransaction {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type          String // 'DEPOSIT', 'ESCROW_LOCK', 'ESCROW_RELEASE', 'REFUND'
+  amount        Float
+  currency      String   @default("SAR")
+  status        String   @default("COMPLETED") // 'PENDING', 'COMPLETED', 'FAILED'
+  paymentMethod String? // 'MOYASAR_CARD', 'MOYASAR_APPLEPAY', 'BANK_TRANSFER'
+  referenceId   String?  @unique // Moyasar payment id or bank ref; globally idempotent
+  description   String?
+  metadata      Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@map("wallet_transactions")
+}

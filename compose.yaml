@@ -1,0 +1,54 @@
+name: waseetai-backend
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-waseetai_db}
+      POSTGRES_USER: ${POSTGRES_USER:-waseetai_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - waseetai_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-waseetai_app} -d ${POSTGRES_DB:-waseetai_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [waseetai]
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      PORT: 5009
+      NODE_ENV: production
+      RUN_DB_MIGRATIONS: ${RUN_DB_MIGRATIONS:-true}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-waseetai_app}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-waseetai_db}?schema=public
+    ports:
+      # The existing VPS uses 5008/5009 for other Waseet backends.
+      # Change VPS_API_PORT if 5010 is occupied by another service.
+      - "${VPS_API_PORT:-5010}:5009"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:5009/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [waseetai]
+
+networks:
+  waseetai:
+    driver: bridge
+
+volumes:
+  waseetai_postgres_data:
