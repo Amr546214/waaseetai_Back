@@ -29,7 +29,8 @@ services:
       DB_PORT: 5432
       PORT: 5009
       NODE_ENV: production
-      RUN_DB_MIGRATIONS: ${RUN_DB_MIGRATIONS:-true}
+      RUN_DB_MIGRATIONS: ${RUN_DB_MIGRATIONS:-false}
+      RUN_DB_PUSH: ${RUN_DB_PUSH:-true}
       DATABASE_URL: postgresql://${POSTGRES_USER:-waseetai_app}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-waseetai_db}?schema=public
     ports:
       # The existing VPS uses 5008/5009 for other Waseet backends.

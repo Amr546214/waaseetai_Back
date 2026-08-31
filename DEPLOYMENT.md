@@ -51,7 +51,7 @@ docker compose up -d --build
 docker image prune -f
 ```
 
-The API container applies committed Prisma migrations during startup. It fails fast if PostgreSQL is unavailable or migrations fail.
+For this standalone deployment, the API container synchronizes the checked-in Prisma schema with `prisma db push` without accepting destructive changes. The repository's historical migration chain is not safe for a fresh database because later migrations reference objects missing from the initial migration. Keep `RUN_DB_MIGRATIONS=false` and `RUN_DB_PUSH=true` until that chain is rebuilt and tested. The container still fails fast if PostgreSQL is unavailable or schema synchronization fails.
 
 ## Backup
 

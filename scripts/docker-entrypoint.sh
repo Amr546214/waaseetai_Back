@@ -25,12 +25,21 @@ echo "🔄 Generating Prisma Client..."
 npx prisma generate
 echo "✅ Prisma Client generated successfully."
 
-if [ "${RUN_DB_MIGRATIONS:-true}" = "true" ]; then
+if [ "${RUN_DB_MIGRATIONS:-false}" = "true" ]; then
   echo "🔄 Applying Prisma migrations..."
   npx prisma migrate deploy
   echo "✅ Database migrations applied successfully."
+elif [ "${RUN_DB_PUSH:-true}" = "true" ]; then
+  # This standalone database currently has a legacy migration chain whose
+  # early migration does not create every model used by later migrations.
+  # Push the checked-in Prisma schema for a new/isolated deployment without
+  # accepting destructive changes. Set RUN_DB_MIGRATIONS=true only after the
+  # migration history has been repaired and verified.
+  echo "🔄 Synchronizing Prisma schema for standalone deployment..."
+  npx prisma db push
+  echo "✅ Prisma schema synchronized successfully."
 else
-  echo "ℹ️ Database migrations disabled by RUN_DB_MIGRATIONS."
+  echo "ℹ️ Database schema synchronization disabled."
 fi
 
 echo "🚀 Launching application process..."
