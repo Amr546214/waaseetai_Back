@@ -42,6 +42,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint
 
 COPY package*.json ./
 COPY prisma ./prisma/
+COPY prisma.config.ts ./prisma.config.ts
 RUN npm ci --omit=dev
 
 COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma

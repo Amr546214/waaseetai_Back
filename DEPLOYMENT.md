@@ -21,7 +21,7 @@ cd waseetai-backend
 cp .env.production.example .env
 ```
 
-Edit `.env` and replace every placeholder. In particular, use long random values for `POSTGRES_PASSWORD`, `JWT_SECRET`, and `OTP_SECRET`, and configure the real frontend domain in `FRONTEND_URL` and `CORS_ORIGINS`.
+Edit `.env` and replace every placeholder. In particular, use a long URL-safe random value (letters and numbers only) for `POSTGRES_PASSWORD`, long random values for `JWT_SECRET` and `OTP_SECRET`, and configure the real frontend domain in `FRONTEND_URL` and `CORS_ORIGINS`. Compose builds the internal database URL using the `postgres` service name; do not use `localhost` in the container URL.
 
 Then start the stack:
 
