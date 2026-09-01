@@ -31,6 +31,16 @@ docker compose ps
 docker compose logs -f api
 ```
 
+## Create the first admin user
+
+Set `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` in `.env`, then run:
+
+```bash
+docker compose exec api npm run db:seed
+```
+
+The seed is safe to run more than once: it updates the same admin by email instead of creating duplicates. Do not put a real password in `prisma/seed.ts`; keep it only in the VPS `.env` file.
+
 Check the service:
 
 ```bash
