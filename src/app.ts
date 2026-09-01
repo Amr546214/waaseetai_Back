@@ -18,6 +18,7 @@ import providerRouter from './routes/provider.routes';
 import proposalRouter from './routes/proposal.routes';
 import chatRouter from './routes/chat.routes';
 import aiReviewRouter from './modules/ai-review/ai-review.routes';
+import cartCheckoutRouter from './routes/cart-checkout.routes';
 
 import providerProfileRoutes from './routes/provider-profile.routes';
 import specialtyRoutes from './routes/specialty.routes';
@@ -163,6 +164,7 @@ mountApiRoute('/marketplace', marketplaceRouter);
 mountApiRoute('/notifications', notificationsRouter);
 mountApiRoute('/marketer-overview', marketerOverviewRouter);
 mountApiRoute('/marketer/profile', marketerProfileRouter);
+mountApiRoute('/', cartCheckoutRouter);
 
 import clientFinanceRoutes from './routes/client-finance.routes';
 

@@ -51,7 +51,8 @@ function routeParameters(path: string) {
 function operationFor(method: string, path: string) {
 	const tag = path.split('/').filter(Boolean)[1] || 'system';
 	const requestSchema = requestSchemaFor(path, method);
-	const successStatus = method === 'post' && /\/auth\/register$|\/projects$|\/projects\/[^/]+\/proposals$|\/client\/requests$|\/portfolio$|\/ref-links\/custom$|\/channels$/.test(path) ? '201' : '200';
+	const successStatus = method === 'post' && /\/auth\/register$|\/projects$|\/projects\/[^/]+\/proposals$|\/client\/requests$|\/portfolio$|\/ref-links\/custom$|\/channels$|\/cart\/items$|\/checkout\/order$/.test(path) ? '201' : '200';
+	const responseSchema = responseSchemaFor(path, method);
 	const operation: Record<string, unknown> = {
 		tags: [tag],
 		operationId: `${method}_${path.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'root'}`,
@@ -60,7 +61,7 @@ function operationFor(method: string, path: string) {
 		responses: {
 			[successStatus]: {
 				description: 'Successful response',
-				content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiSuccess' } } }
+				content: { 'application/json': { schema: responseSchema ? { allOf: [{ $ref: '#/components/schemas/ApiSuccess' }, { type: 'object', properties: { data: { $ref: `#/components/schemas/${responseSchema}` } } }] } : { $ref: '#/components/schemas/ApiSuccess' } } }
 			},
 			'400': { description: 'Validation or business error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } },
 			'401': { description: 'Authentication required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } },
@@ -99,6 +100,19 @@ function operationFor(method: string, path: string) {
 	return operation;
 }
 
+function responseSchemaFor(path: string, method: string): string | undefined {
+	if (path === '/api/cart' && method === 'get') return 'CartResponse';
+	if (/^\/api\/cart\/items(?:\/[^/]+)?$/.test(path) || path === '/api/cart/sync') return 'CartResponse';
+	if (path === '/api/checkout/coupon/validate' && method === 'post') return 'CouponValidationResponse';
+	if (path === '/api/checkout/order' && method === 'post') return 'OrderResponse';
+	if (/^\/api\/checkout\/order\/[^/]+$/.test(path) && method === 'get') return 'OrderResponse';
+	if (path === '/api/checkout/payment/methods' && method === 'get') return 'PaymentMethodsResponse';
+	if (path === '/api/checkout/payment/init' && method === 'post') return 'PaymentInitResponse';
+	if (path === '/api/checkout/payment/confirm' && method === 'post') return 'PaymentConfirmResponse';
+	if (path === '/api/checkout/payment/resend-otp' && method === 'post') return 'PaymentInitResponse';
+	return undefined;
+}
+
 function requestSchemaFor(path: string, method: string) {
 		const definitions: Array<{ match: RegExp; methods?: string[]; name: string; example: Record<string, unknown>; required?: boolean }> = [
 			{ match: /\/auth\/login$/, name: 'LoginRequest', example: { email: 'client@example.com', password: 'Password123' }, required: true },
@@ -135,6 +149,14 @@ function requestSchemaFor(path: string, method: string) {
 			{ match: /\/provider\/profile\/contact$/, methods: ['put'], name: 'ContactInfoRequest', example: { email: 'provider@example.com', phoneNumber: '501234567', city: 'الرياض' }, required: true },
 			{ match: /\/provider\/profile\/banking$/, methods: ['put'], name: 'BankingInfoRequest', example: { paymentMethod: 'bank', bankName: 'البنك الأهلي', ibanNumber: 'SA0000000000000000000000' }, required: true },
 			{ match: /\/admin\/users\/[^/]+\/status$/, methods: ['patch'], name: 'UserStatusRequest', example: { status: 'ACTIVE' }, required: true }
+			,{ match: /\/cart\/items$/, methods: ['post'], name: 'AddCartItemRequest', example: { modelId: '31d7c925-cbc2-4b31-91eb-f8db9cf704f9', packageId: 'basic', savedForLater: false }, required: true }
+			,{ match: /\/cart\/items\/[^/]+$/, methods: ['put'], name: 'UpdateCartItemRequest', example: { packageId: 'basic', savedForLater: true }, required: true }
+			,{ match: /\/cart\/sync$/, methods: ['post'], name: 'CartSyncRequest', example: { items: [{ modelId: '31d7c925-cbc2-4b31-91eb-f8db9cf704f9', packageId: 'basic', savedForLater: false }] }, required: true }
+			,{ match: /\/checkout\/coupon\/validate$/, methods: ['post'], name: 'CouponValidationRequest', example: { code: 'WASEET10', items: [{ modelId: '31d7c925-cbc2-4b31-91eb-f8db9cf704f9', totalAmount: 4500 }] }, required: true }
+			,{ match: /\/checkout\/order$/, methods: ['post'], name: 'CheckoutOrderRequest', example: { items: [{ modelId: '31d7c925-cbc2-4b31-91eb-f8db9cf704f9', packageId: 'basic' }], couponCode: 'WASEET10' }, required: true }
+			,{ match: /\/checkout\/payment\/init$/, methods: ['post'], name: 'PaymentInitRequest', example: { orderId: '00000000-0000-0000-0000-000000000000', paymentMethod: 'moyasar' }, required: true }
+			,{ match: /\/checkout\/payment\/confirm$/, methods: ['post'], name: 'PaymentConfirmRequest', example: { orderId: '00000000-0000-0000-0000-000000000000', otpCode: '123456' }, required: true }
+			,{ match: /\/checkout\/payment\/resend-otp$/, methods: ['post'], name: 'ResendPaymentOtpRequest', example: { orderId: '00000000-0000-0000-0000-000000000000' }, required: true }
 		];
 		const definition = definitions.find((item) => item.match.test(path) && (!item.methods || item.methods.includes(method)));
 		return definition || { name: 'GenericObject', example: {}, required: false };
@@ -203,8 +225,26 @@ export function createOpenApiDocument(app: Application) {
 			securitySchemes: {
 				bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }
 			},
-			schemas: {
+				schemas: {
 				GenericObject: { type: 'object', description: 'Request payload for an endpoint without a dedicated DTO.', additionalProperties: true },
+				AddCartItemRequest: { type: 'object', required: ['modelId'], properties: { modelId: { type: 'string', format: 'uuid' }, packageId: { type: 'string', example: 'basic' }, savedForLater: { type: 'boolean', default: false } } },
+				UpdateCartItemRequest: { type: 'object', minProperties: 1, properties: { packageId: { type: 'string', example: 'basic' }, savedForLater: { type: 'boolean' } } },
+				CartSyncRequest: { type: 'object', required: ['items'], properties: { items: { type: 'array', maxItems: 50, items: { $ref: '#/components/schemas/AddCartItemRequest' } } } },
+				CouponValidationRequest: { type: 'object', required: ['code', 'items'], properties: { code: { type: 'string', example: 'WASEET10' }, items: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'object', required: ['modelId', 'totalAmount'], properties: { modelId: { type: 'string', format: 'uuid' }, totalAmount: { type: 'number', minimum: 0, example: 4500 } } } } } },
+				CheckoutOrderRequest: { type: 'object', required: ['items'], properties: { items: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'object', required: ['modelId'], properties: { modelId: { type: 'string', format: 'uuid' }, packageId: { type: 'string', example: 'basic' } } } }, couponCode: { type: 'string', nullable: true, example: 'WASEET10' } } },
+				ProviderSnapshot: { type: 'object', required: ['id', 'name', 'initials', 'isVerified'], properties: { id: { type: 'string' }, name: { type: 'string' }, initials: { type: 'string' }, isVerified: { type: 'boolean' } } },
+				CartItemResponse: { type: 'object', properties: { id: { type: 'string' }, modelId: { type: 'string' }, title: { type: 'string' }, category: { type: 'string' }, categorySlug: { type: 'string' }, specializationSlug: { type: 'string' }, totalAmount: { type: 'number' }, totalDays: { type: 'integer' }, aiScore: { type: 'integer' }, level: { type: 'string' }, provider: { $ref: '#/components/schemas/ProviderSnapshot' }, packageName: { type: 'string' }, addedAt: { type: 'string', format: 'date-time' }, savedForLater: { type: 'boolean' } } },
+				CartResponse: { type: 'object', required: ['id', 'items'], properties: { id: { type: 'string' }, items: { type: 'array', items: { $ref: '#/components/schemas/CartItemResponse' } } } },
+				OrderItemResponse: { type: 'object', properties: { id: { type: 'string' }, modelId: { type: 'string' }, title: { type: 'string' }, provider: { $ref: '#/components/schemas/ProviderSnapshot' }, packageName: { type: 'string' }, price: { type: 'number' }, deliveryDays: { type: 'integer' }, aiScore: { type: 'integer' } } },
+				CouponValidationResponse: { type: 'object', properties: { code: { type: 'string', example: 'WASEET10' }, discountType: { type: 'string', enum: ['percentage', 'fixed'] }, discountValue: { type: 'number', example: 10 }, discountAmount: { type: 'number', example: 450 } } },
+				OrderResponse: { type: 'object', properties: { id: { type: 'string' }, orderId: { type: 'string' }, orderNumber: { type: 'string', example: 'WS-2026-000001' }, status: { type: 'string', example: 'pending_payment' }, items: { type: 'array', items: { $ref: '#/components/schemas/OrderItemResponse' } }, subtotal: { type: 'number', example: 4500 }, discount: { type: 'number', example: 450 }, total: { type: 'number', example: 4050 }, couponCode: { type: 'string', nullable: true }, createdAt: { type: 'string', format: 'date-time' } } },
+				PaymentInitRequest: { type: 'object', required: ['orderId', 'paymentMethod'], properties: { orderId: { type: 'string', format: 'uuid' }, paymentMethod: { type: 'string', enum: ['card', 'moyasar', 'wallet'] } } },
+				PaymentConfirmRequest: { type: 'object', required: ['orderId', 'otpCode'], properties: { orderId: { type: 'string', format: 'uuid' }, otpCode: { type: 'string', pattern: '^\\d{6}$', example: '123456' } } },
+				ResendPaymentOtpRequest: { type: 'object', required: ['orderId'], properties: { orderId: { type: 'string', format: 'uuid' } } },
+				PaymentInitResponse: { type: 'object', properties: { paymentReference: { type: 'string', example: 'PAY-ABC123' }, otpSentTo: { type: 'string', example: 'mo••••@example.com', description: 'OTP is always sent to the registered email address.' }, expiresAt: { type: 'string', format: 'date-time' } } },
+				PaymentConfirmResponse: { type: 'object', properties: { orderId: { type: 'string' }, orderNumber: { type: 'string', example: 'WS-2026-000001' }, status: { type: 'string', example: 'paid' }, total: { type: 'number', example: 4050 }, projectIds: { type: 'array', items: { type: 'string' } } } },
+				PaymentMethod: { type: 'object', required: ['id', 'name', 'available'], properties: { id: { type: 'string', example: 'card' }, name: { type: 'string', example: 'بطاقة بنكية' }, available: { type: 'boolean' }, balance: { type: 'number' }, badge: { type: 'string', example: 'قريباً' } } },
+				PaymentMethodsResponse: { type: 'array', items: { $ref: '#/components/schemas/PaymentMethod' } },
 				EmptyRequest: { type: 'object', additionalProperties: false },
 				UploadRequest: { type: 'object', description: 'Multipart payload. The required file field depends on the upload endpoint.', properties: { file: { type: 'string', format: 'binary' }, files: { type: 'array', items: { type: 'string', format: 'binary' } }, attachments: { type: 'array', items: { type: 'string', format: 'binary' } }, providerSpecialtyId: { type: 'string' }, title: { type: 'string' }, description: { type: 'string' }, technologiesUsed: { type: 'string', description: 'JSON array or comma-separated list' }, projectUrl: { type: 'string', format: 'uri' }, githubUrl: { type: 'string', format: 'uri' } } },
 				AiRecommendationRequest: { type: 'object', properties: { query: { type: 'string' }, category: { type: 'string' }, subSpecialty: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 10 } } },

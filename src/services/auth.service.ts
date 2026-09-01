@@ -90,7 +90,7 @@ export class AuthService {
 	 */
 	public async verifyOtp(input: VerifyOtpInput, sessionContext: SessionContext = {}) {
 		// 1. Fetch the active OTP
-		const otp = await authRepository.findValidOtp(input.userId, input.code);
+		const otp = await authRepository.findValidOtp(input.userId, input.code, OtpType.EMAIL);
 
 		if (!otp) {
 			throw new AppError('رمز التحقق غير صحيح', 400);

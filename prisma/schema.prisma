@@ -137,6 +137,9 @@ model User {
   providerConversations Conversation[]         @relation("ProviderConversations")
   sentMessages          Message[]
 
+  cart                 Cart?
+  orders               Order[]
+
   clientContracts   Contract[] @relation("ClientContracts")
   providerContracts Contract[] @relation("ProviderContracts")
 
@@ -801,6 +804,8 @@ model ServiceCatalog {
   projects  Project[]
   reviews   Review[]
   favorites MarketplaceFavorite[]
+  cartItems CartItem[]
+  orderItems OrderItem[]
   createdAt DateTime              @default(now())
   updatedAt DateTime              @updatedAt
 
@@ -809,6 +814,102 @@ model ServiceCatalog {
   @@index([specialtyId])
   @@index([accreditationSampleId])
   @@map("service_catalogs")
+}
+
+model Cart {
+  id        String     @id @default(uuid())
+  userId    String     @unique
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     CartItem[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@map("carts")
+}
+
+model CartItem {
+  id            String         @id @default(uuid())
+  cartId        String
+  cart          Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  serviceId     String
+  service       ServiceCatalog @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  packageId     String         @default("basic")
+  packageName   String         @default("الباقة الأساسية")
+  savedForLater Boolean        @default(false)
+  addedAt       DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@unique([cartId, serviceId])
+  @@index([serviceId])
+  @@map("cart_items")
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  PROCESSING
+  COMPLETED
+  CANCELLED
+}
+
+model Coupon {
+  id              String      @id @default(uuid())
+  code            String      @unique
+  discountType    String      @default("percentage")
+  discountValue  Float
+  active          Boolean     @default(true)
+  expiresAt       DateTime?
+  maxUses         Int?
+  usedCount       Int         @default(0)
+  orders          Order[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@map("coupons")
+}
+
+model Order {
+  id           String      @id @default(uuid())
+  orderNumber  String      @unique
+  userId       String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status       OrderStatus @default(PENDING_PAYMENT)
+  subtotal     Float
+  discount     Float       @default(0)
+  total        Float
+  couponId     String?
+  coupon       Coupon?     @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  couponCode   String?
+  items        OrderItem[]
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@map("orders")
+}
+
+model OrderItem {
+  id           String         @id @default(uuid())
+  orderId      String
+  order        Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  serviceId    String?
+  service      ServiceCatalog? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  modelId      String
+  title        String
+  providerId   String
+  providerName String
+  initials     String
+  isVerified   Boolean
+  packageId    String         @default("basic")
+  packageName  String         @default("الباقة الأساسية")
+  price        Float
+  deliveryDays Int
+  aiScore      Int            @default(0)
+
+  @@index([orderId])
+  @@index([modelId])
+  @@map("order_items")
 }
 
 model MarketplaceFavorite {
