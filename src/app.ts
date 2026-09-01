@@ -59,8 +59,12 @@ app.use(
 const defaultAllowedOrigins = [
 	'https://dev.waseetai.com',
 	'https://waseetai.com',
-	'http://localhost:3000', // Local frontend dev
-	'http://localhost:4200'  // Angular frontend dev
+	'http://localhost:3000',
+	'http://localhost:4200',
+	'http://127.0.0.1:4200',
+	'http://127.0.0.1:49538',
+	'http://localhost:5009',
+	'https://api.waseetai.com'
 ];
 const configuredOrigins = (process.env.CORS_ORIGINS || process.env.FRONTEND_URL || '')
 	.split(',')
@@ -235,7 +239,7 @@ const httpServer = createServer(app);
 export const io = initSocketServer(httpServer, allowedOrigins);
 
 if (process.env.NODE_ENV !== 'test') {
-		httpServer.listen(Number(PORT), '0.0.0.0', () => {
+	httpServer.listen(Number(PORT), '0.0.0.0', () => {
 		logger.info(`🚀 Server is running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
 		logger.info(`👉 http://localhost:${PORT}/api`);
 	});
