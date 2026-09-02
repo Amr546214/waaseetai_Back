@@ -27,7 +27,7 @@ export async function syncCart(req: Request, res: Response, next: NextFunction) 
 }
 
 export async function validateCoupon(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = couponValidationSchema.safeParse(req.body); if (!parsed.success) throw new AppError('بيانات الكوبون غير صحيحة', 400); res.json({ success: true, data: await cartCheckoutService.validateCoupon(parsed.data) }); } catch (error) { next(error); }
+  try { const parsed = couponValidationSchema.safeParse(req.body); if (!parsed.success) throw new AppError('بيانات الكوبون غير صحيحة', 400); res.json({ success: true, data: await cartCheckoutService.validateCoupon(userId(req)!, parsed.data) }); } catch (error) { next(error); }
 }
 
 export async function createOrder(req: Request, res: Response, next: NextFunction) {

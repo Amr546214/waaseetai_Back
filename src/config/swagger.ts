@@ -51,7 +51,7 @@ function routeParameters(path: string) {
 function operationFor(method: string, path: string) {
 	const tag = path.split('/').filter(Boolean)[1] || 'system';
 	const requestSchema = requestSchemaFor(path, method);
-	const successStatus = method === 'post' && /\/auth\/register$|\/projects$|\/projects\/[^/]+\/proposals$|\/client\/requests$|\/portfolio$|\/ref-links\/custom$|\/channels$|\/cart\/items$|\/checkout\/order$/.test(path) ? '201' : '200';
+	const successStatus = method === 'post' && /\/auth\/register$|\/projects$|\/projects\/[^/]+\/proposals$|\/client\/requests$|\/portfolio$|\/ref-links\/custom$|\/channels$|\/cart\/items$|\/checkout\/order$|\/provider\/coupons$/.test(path) ? '201' : '200';
 	const responseSchema = responseSchemaFor(path, method);
 	const operation: Record<string, unknown> = {
 		tags: [tag],
@@ -66,6 +66,7 @@ function operationFor(method: string, path: string) {
 			'400': { description: 'Validation or business error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } },
 			'401': { description: 'Authentication required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } },
 			'404': { description: 'Resource not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } },
+			'409': { description: 'Conflict, such as a duplicate coupon code', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } },
 			'500': { description: 'Internal server error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } }
 		},
 		security: [{ bearerAuth: [] }]
@@ -86,7 +87,7 @@ function operationFor(method: string, path: string) {
 			required: requestSchema.required,
 			content: isMultipart ? {
 				'multipart/form-data': {
-					schema: { $ref: '#/components/schemas/UploadRequest' }
+					schema: { $ref: `#/components/schemas/${path === '/api/auth/onboarding/upload' ? 'OnboardingUploadRequest' : 'UploadRequest'}` }
 				}
 			} : {
 				'application/json': {
@@ -97,6 +98,14 @@ function operationFor(method: string, path: string) {
 		};
 	}
 
+	if (method === 'get' && (path === '/api/admin/disputes' || path === '/api/admin/withdrawals')) {
+		(operation.parameters as unknown[]).push(
+			{ name: 'status', in: 'query', required: false, schema: { type: 'string' }, description: 'Filter by status.' },
+			{ name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 1, default: 1 } },
+			{ name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } }
+		);
+	}
+
 	return operation;
 }
 
@@ -104,8 +113,17 @@ function responseSchemaFor(path: string, method: string): string | undefined {
 	if (path === '/api/cart' && method === 'get') return 'CartResponse';
 	if (/^\/api\/cart\/items(?:\/[^/]+)?$/.test(path) || path === '/api/cart/sync') return 'CartResponse';
 	if (path === '/api/checkout/coupon/validate' && method === 'post') return 'CouponValidationResponse';
+	if (path === '/api/provider/coupons' && method === 'get') return 'ProviderCouponListResponse';
+	if (/^\/api\/provider\/coupons(?:\/[^/]+)?$/.test(path) && ['get', 'post', 'put', 'delete'].includes(method)) return 'ProviderCouponResponse';
 	if (path === '/api/checkout/order' && method === 'post') return 'OrderResponse';
 	if (/^\/api\/checkout\/order\/[^/]+$/.test(path) && method === 'get') return 'OrderResponse';
+	if (path.startsWith('/api/admin/disputes') && method === 'get') return path.endsWith('/disputes') ? 'DisputeListResponse' : 'DisputeResponse';
+	if (path.startsWith('/api/admin/withdrawals') && method === 'get') return path.endsWith('/withdrawals') ? 'WithdrawalListResponse' : 'WithdrawalResponse';
+	if (/^\/api\/admin\/disputes\/[^/]+\/resolve$/.test(path) && method === 'post') return 'DisputeResponse';
+	if (/^\/api\/admin\/withdrawals\/[^/]+\/(approve|reject)$/.test(path) && method === 'post') return 'WithdrawalResponse';
+	if (/^\/api\/(client|provider)\/requests\/[^/]+\/(disputes|rate)$/.test(path) && method === 'post') return path.endsWith('/rate') ? 'RatingResponse' : 'DisputeResponse';
+	if (path === '/api/auth/onboarding/status' && method === 'get') return 'OnboardingStatusResponse';
+	if (path === '/api/auth/onboarding/upload' && method === 'post') return 'OnboardingStatusResponse';
 	if (path === '/api/checkout/payment/methods' && method === 'get') return 'PaymentMethodsResponse';
 	if (path === '/api/checkout/payment/init' && method === 'post') return 'PaymentInitResponse';
 	if (path === '/api/checkout/payment/confirm' && method === 'post') return 'PaymentConfirmResponse';
@@ -157,6 +175,14 @@ function requestSchemaFor(path: string, method: string) {
 			,{ match: /\/checkout\/payment\/init$/, methods: ['post'], name: 'PaymentInitRequest', example: { orderId: '00000000-0000-0000-0000-000000000000', paymentMethod: 'moyasar' }, required: true }
 			,{ match: /\/checkout\/payment\/confirm$/, methods: ['post'], name: 'PaymentConfirmRequest', example: { orderId: '00000000-0000-0000-0000-000000000000', otpCode: '123456' }, required: true }
 			,{ match: /\/checkout\/payment\/resend-otp$/, methods: ['post'], name: 'ResendPaymentOtpRequest', example: { orderId: '00000000-0000-0000-0000-000000000000' }, required: true }
+			,{ match: /\/provider\/coupons$/, methods: ['post'], name: 'CreateCouponRequest', example: { code: 'DESIGN20', discountType: 'percentage', discountValue: 20, serviceIds: ['31d7c925-cbc2-4b31-91eb-f8db9cf704f9'], maxUses: 100, maxUsesPerUser: 1, minimumAmount: 200, expiresAt: '2026-09-30T23:59:59.000Z' }, required: true }
+			,{ match: /\/provider\/coupons\/[^/]+$/, methods: ['put'], name: 'UpdateCouponRequest', example: { discountValue: 15, active: true, maxUses: 200 }, required: true }
+			,{ match: /\/admin\/disputes\/[^/]+\/resolve$/, methods: ['post'], name: 'ResolveDisputeRequest', example: { action: 'resolve', resolution: 'REFUND_CLIENT', resolutionNote: 'تمت مراجعة الأدلة واعتماد الاسترداد' }, required: true }
+			,{ match: /\/(client|provider)\/requests\/[^/]+\/disputes$/, methods: ['post'], name: 'CreateDisputeRequest', example: { reason: 'عدم تسليم المتطلبات', description: 'تفاصيل النزاع والأضرار الناتجة عنه', evidence: ['https://res.cloudinary.com/example/evidence.pdf'] }, required: true }
+			,{ match: /\/(client|provider)\/requests\/[^/]+\/rate$/, methods: ['post'], name: 'CreateRatingRequest', example: { rating: 5, comment: 'تجربة ممتازة' }, required: true }
+			,{ match: /\/admin\/withdrawals\/[^/]+\/approve$/, methods: ['post'], name: 'ApproveWithdrawalRequest', example: { adminNote: 'تمت مراجعة البيانات البنكية' }, required: false }
+			,{ match: /\/admin\/withdrawals\/[^/]+\/reject$/, methods: ['post'], name: 'RejectWithdrawalRequest', example: { rejectionReason: 'البيانات البنكية غير مكتملة' }, required: true }
+			,{ match: /\/auth\/onboarding\/upload$/, methods: ['post'], name: 'OnboardingUploadRequest', example: { documentType: 'national_id' }, required: true }
 		];
 		const definition = definitions.find((item) => item.match.test(path) && (!item.methods || item.methods.includes(method)));
 		return definition || { name: 'GenericObject', example: {}, required: false };
@@ -218,6 +244,7 @@ export function createOpenApiDocument(app: Application) {
 			{ name: 'profiles', description: 'User profiles' },
 			{ name: 'marketplace', description: 'Marketplace services and discovery' },
 			{ name: 'projects', description: 'Projects and requests' },
+			{ name: 'provider', description: 'Provider tools and management' },
 			{ name: 'system', description: 'System endpoints' }
 		],
 		paths,
@@ -236,8 +263,25 @@ export function createOpenApiDocument(app: Application) {
 				CartItemResponse: { type: 'object', properties: { id: { type: 'string' }, modelId: { type: 'string' }, title: { type: 'string' }, category: { type: 'string' }, categorySlug: { type: 'string' }, specializationSlug: { type: 'string' }, totalAmount: { type: 'number' }, totalDays: { type: 'integer' }, aiScore: { type: 'integer' }, level: { type: 'string' }, provider: { $ref: '#/components/schemas/ProviderSnapshot' }, packageName: { type: 'string' }, addedAt: { type: 'string', format: 'date-time' }, savedForLater: { type: 'boolean' } } },
 				CartResponse: { type: 'object', required: ['id', 'items'], properties: { id: { type: 'string' }, items: { type: 'array', items: { $ref: '#/components/schemas/CartItemResponse' } } } },
 				OrderItemResponse: { type: 'object', properties: { id: { type: 'string' }, modelId: { type: 'string' }, title: { type: 'string' }, provider: { $ref: '#/components/schemas/ProviderSnapshot' }, packageName: { type: 'string' }, price: { type: 'number' }, deliveryDays: { type: 'integer' }, aiScore: { type: 'integer' } } },
-				CouponValidationResponse: { type: 'object', properties: { code: { type: 'string', example: 'WASEET10' }, discountType: { type: 'string', enum: ['percentage', 'fixed'] }, discountValue: { type: 'number', example: 10 }, discountAmount: { type: 'number', example: 450 } } },
+				CouponValidationResponse: { type: 'object', properties: { code: { type: 'string', example: 'DESIGN20' }, discountType: { type: 'string', enum: ['percentage', 'fixed'] }, discountValue: { type: 'number', example: 20 }, discountAmount: { type: 'number', example: 450 } } },
+				CreateCouponRequest: { type: 'object', required: ['code', 'discountType', 'discountValue', 'serviceIds'], properties: { code: { type: 'string', minLength: 3, maxLength: 50, pattern: '^[a-zA-Z0-9_-]+$', example: 'DESIGN20' }, discountType: { type: 'string', enum: ['percentage', 'fixed'] }, discountValue: { type: 'number', exclusiveMinimum: 0, example: 20, description: 'Percentage must be at most 100; fixed values are in SAR.' }, serviceIds: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'string', format: 'uuid' } }, minimumAmount: { type: 'number', minimum: 0, nullable: true }, maxDiscount: { type: 'number', exclusiveMinimum: 0, nullable: true }, maxUses: { type: 'integer', minimum: 1, nullable: true }, maxUsesPerUser: { type: 'integer', minimum: 1, default: 1 }, startAt: { type: 'string', format: 'date-time' }, expiresAt: { type: 'string', format: 'date-time', nullable: true } } },
+				UpdateCouponRequest: { type: 'object', minProperties: 1, properties: { code: { type: 'string', minLength: 3, maxLength: 50, pattern: '^[a-zA-Z0-9_-]+$' }, discountType: { type: 'string', enum: ['percentage', 'fixed'] }, discountValue: { type: 'number', exclusiveMinimum: 0, maximum: 100 }, serviceIds: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'string', format: 'uuid' } }, minimumAmount: { type: 'number', minimum: 0, nullable: true }, maxDiscount: { type: 'number', exclusiveMinimum: 0, nullable: true }, maxUses: { type: 'integer', minimum: 1, nullable: true }, maxUsesPerUser: { type: 'integer', minimum: 1 }, startAt: { type: 'string', format: 'date-time' }, expiresAt: { type: 'string', format: 'date-time', nullable: true }, active: { type: 'boolean' } } },
+				ProviderCouponResponse: { type: 'object', properties: { id: { type: 'string', format: 'uuid' }, code: { type: 'string', example: 'DESIGN20' }, discountType: { type: 'string', enum: ['percentage', 'fixed'] }, discountValue: { type: 'number' }, minimumAmount: { type: 'number', nullable: true }, maxDiscount: { type: 'number', nullable: true }, maxUses: { type: 'integer', nullable: true }, usedCount: { type: 'integer' }, maxUsesPerUser: { type: 'integer' }, active: { type: 'boolean' }, startAt: { type: 'string', format: 'date-time' }, expiresAt: { type: 'string', format: 'date-time', nullable: true }, serviceIds: { type: 'array', items: { type: 'string', format: 'uuid' } }, createdAt: { type: 'string', format: 'date-time' }, updatedAt: { type: 'string', format: 'date-time' } } },
+				ProviderCouponListResponse: { type: 'array', items: { $ref: '#/components/schemas/ProviderCouponResponse' } },
 				OrderResponse: { type: 'object', properties: { id: { type: 'string' }, orderId: { type: 'string' }, orderNumber: { type: 'string', example: 'WS-2026-000001' }, status: { type: 'string', example: 'pending_payment' }, items: { type: 'array', items: { $ref: '#/components/schemas/OrderItemResponse' } }, subtotal: { type: 'number', example: 4500 }, discount: { type: 'number', example: 450 }, total: { type: 'number', example: 4050 }, couponCode: { type: 'string', nullable: true }, createdAt: { type: 'string', format: 'date-time' } } },
+				CreateDisputeRequest: { type: 'object', required: ['reason', 'description'], properties: { reason: { type: 'string', minLength: 2, maxLength: 120 }, description: { type: 'string', minLength: 10, maxLength: 10000 }, evidence: { type: 'array', maxItems: 10, items: { type: 'string', format: 'uri' } } } },
+				ResolveDisputeRequest: { type: 'object', required: ['action', 'resolution'], properties: { action: { type: 'string', enum: ['resolve', 'reject'] }, resolution: { type: 'string' }, resolutionNote: { type: 'string' } } },
+				DisputeResponse: { type: 'object', properties: { id: { type: 'string' }, requestId: { type: 'string', nullable: true }, projectId: { type: 'string', nullable: true }, status: { type: 'string', enum: ['OPEN', 'UNDER_REVIEW', 'RESOLVED', 'REJECTED'] }, reason: { type: 'string' }, description: { type: 'string' }, evidence: { type: 'array', items: { type: 'string', format: 'uri' } }, resolution: { type: 'string', nullable: true }, resolutionNote: { type: 'string', nullable: true }, createdAt: { type: 'string', format: 'date-time' }, resolvedAt: { type: 'string', format: 'date-time', nullable: true } } },
+				DisputeListResponse: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/DisputeResponse' } }, pagination: { $ref: '#/components/schemas/Pagination' } } },
+				CreateRatingRequest: { type: 'object', required: ['rating'], properties: { rating: { type: 'number', minimum: 1, maximum: 5 }, comment: { type: 'string', maxLength: 2000 } } },
+				RatingResponse: { type: 'object', properties: { id: { type: 'string' }, clientRequestId: { type: 'string' }, providerId: { type: 'string' }, clientId: { type: 'string', nullable: true }, rating: { type: 'number' }, comment: { type: 'string', nullable: true }, createdAt: { type: 'string', format: 'date-time' } } },
+				ApproveWithdrawalRequest: { type: 'object', properties: { adminNote: { type: 'string', maxLength: 2000 } } },
+				RejectWithdrawalRequest: { type: 'object', required: ['rejectionReason'], properties: { rejectionReason: { type: 'string', minLength: 2, maxLength: 2000 } } },
+				WithdrawalResponse: { type: 'object', properties: { id: { type: 'string' }, userId: { type: 'string' }, amount: { type: 'number' }, currency: { type: 'string', example: 'SAR' }, method: { type: 'string' }, status: { type: 'string', enum: ['PENDING', 'APPROVED', 'REJECTED', 'COMPLETED'] }, rejectionReason: { type: 'string', nullable: true }, createdAt: { type: 'string', format: 'date-time' } } },
+				WithdrawalListResponse: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/WithdrawalResponse' } }, pagination: { $ref: '#/components/schemas/Pagination' } } },
+				OnboardingStatusResponse: { type: 'object', properties: { id: { type: 'string', nullable: true }, userId: { type: 'string' }, documentUrl: { type: 'string', nullable: true }, documentName: { type: 'string', nullable: true }, documentType: { type: 'string', nullable: true }, status: { type: 'string', enum: ['PENDING', 'APPROVED', 'REJECTED'] }, rejectionReason: { type: 'string', nullable: true }, reviewedAt: { type: 'string', format: 'date-time', nullable: true } } },
+				OnboardingUploadRequest: { type: 'object', required: ['file'], properties: { file: { type: 'string', format: 'binary' }, documentType: { type: 'string', enum: ['national_id', 'commercial_registration', 'other'], default: 'national_id' } } },
+				Pagination: { type: 'object', properties: { page: { type: 'integer' }, limit: { type: 'integer' }, total: { type: 'integer' }, pages: { type: 'integer' } } },
 				PaymentInitRequest: { type: 'object', required: ['orderId', 'paymentMethod'], properties: { orderId: { type: 'string', format: 'uuid' }, paymentMethod: { type: 'string', enum: ['card', 'moyasar', 'wallet'] } } },
 				PaymentConfirmRequest: { type: 'object', required: ['orderId', 'otpCode'], properties: { orderId: { type: 'string', format: 'uuid' }, otpCode: { type: 'string', pattern: '^\\d{6}$', example: '123456' } } },
 				ResendPaymentOtpRequest: { type: 'object', required: ['orderId'], properties: { orderId: { type: 'string', format: 'uuid' } } },
@@ -246,7 +290,7 @@ export function createOpenApiDocument(app: Application) {
 				PaymentMethod: { type: 'object', required: ['id', 'name', 'available'], properties: { id: { type: 'string', example: 'card' }, name: { type: 'string', example: 'بطاقة بنكية' }, available: { type: 'boolean' }, balance: { type: 'number' }, badge: { type: 'string', example: 'قريباً' } } },
 				PaymentMethodsResponse: { type: 'array', items: { $ref: '#/components/schemas/PaymentMethod' } },
 				EmptyRequest: { type: 'object', additionalProperties: false },
-				UploadRequest: { type: 'object', description: 'Multipart payload. The required file field depends on the upload endpoint.', properties: { file: { type: 'string', format: 'binary' }, files: { type: 'array', items: { type: 'string', format: 'binary' } }, attachments: { type: 'array', items: { type: 'string', format: 'binary' } }, providerSpecialtyId: { type: 'string' }, title: { type: 'string' }, description: { type: 'string' }, technologiesUsed: { type: 'string', description: 'JSON array or comma-separated list' }, projectUrl: { type: 'string', format: 'uri' }, githubUrl: { type: 'string', format: 'uri' } } },
+				UploadRequest: { type: 'object', description: 'Multipart payload. The required file field depends on the upload endpoint.', properties: { file: { type: 'string', format: 'binary' }, files: { type: 'array', items: { type: 'string', format: 'binary' } }, attachments: { type: 'array', items: { type: 'string', format: 'binary' } }, providerSpecialtyId: { type: 'string' }, documentType: { type: 'string', enum: ['national_id', 'commercial_registration', 'other'] }, title: { type: 'string' }, description: { type: 'string' }, technologiesUsed: { type: 'string', description: 'JSON array or comma-separated list' }, projectUrl: { type: 'string', format: 'uri' }, githubUrl: { type: 'string', format: 'uri' } } },
 				AiRecommendationRequest: { type: 'object', properties: { query: { type: 'string' }, category: { type: 'string' }, subSpecialty: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 10 } } },
 				FavoriteRequest: { type: 'object', required: ['favorite'], properties: { favorite: { type: 'boolean' } } },
 				ServiceRequest: { type: 'object', required: ['mode'], properties: { mode: { type: 'string', enum: ['order', 'negotiation'] }, message: { type: 'string', maxLength: 3000 } } },

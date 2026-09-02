@@ -5,8 +5,8 @@
 	"main": "dist/app.js",
 	"scripts": {
 		"prisma:generate": "npx prisma generate",
-		"prisma:deploy": "npx prisma db push --accept-data-loss",
-		"prestart": "npx prisma generate && npx prisma db push --accept-data-loss",
+		"prisma:deploy": "npx prisma migrate deploy",
+		"prestart": "npx prisma generate && npx prisma migrate deploy",
 		"start": "nodemon src/app.ts",
 		"build": "tsc",
 		"start:prod": "node dist/app.js",

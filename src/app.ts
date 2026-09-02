@@ -186,6 +186,8 @@ import adminSpecialtiesRouter from './routes/admin-specialties.routes';
 import adminUsersRouter from './routes/admin-users.routes';
 import aiAssessmentRoutes from './routes/ai-assessment.routes';
 import accountManagementRoutes from './routes/account-management.routes';
+import adminDisputesRoutes from './routes/admin-disputes.routes';
+import adminWithdrawalsRoutes from './routes/admin-withdrawals.routes';
 
 // Support BOTH prefixed and unprefixed paths.
 // - app.use('/api', apiRouter) handles local development where frontend calls http://localhost:5009/api
@@ -198,6 +200,10 @@ mountAppRoute('/api/admin/specialties', adminSpecialtiesRouter);
 mountAppRoute('/admin/specialties', adminSpecialtiesRouter);
 mountAppRoute('/api/admin/users', adminUsersRouter);
 mountAppRoute('/admin/users', adminUsersRouter);
+mountAppRoute('/api/admin/disputes', adminDisputesRoutes);
+mountAppRoute('/admin/disputes', adminDisputesRoutes);
+mountAppRoute('/api/admin/withdrawals', adminWithdrawalsRoutes);
+mountAppRoute('/admin/withdrawals', adminWithdrawalsRoutes);
 mountAppRoute('/api', apiRouter);
 mountAppRoute('/', apiRouter);
 

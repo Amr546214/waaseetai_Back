@@ -101,18 +101,24 @@ export class CartCheckoutService {
     return this.getCart(userId);
   }
 
-  private async calculateCoupon(code: string, modelIds: string[]) {
-    const coupon = await prisma.coupon.findFirst({ where: { code: code.toUpperCase(), active: true } });
-    if (!coupon || (coupon.expiresAt && coupon.expiresAt < new Date()) || (coupon.maxUses !== null && coupon.usedCount >= coupon.maxUses)) throw new AppError('كوبون غير صالح', 400);
+  private async calculateCoupon(code: string, modelIds: string[], userId?: string) {
+    const coupon = await prisma.coupon.findFirst({ where: { code: code.toUpperCase(), active: true }, include: { services: { select: { serviceId: true } } } });
+    const now = new Date();
+    if (!coupon || coupon.startAt > now || (coupon.expiresAt && coupon.expiresAt < now) || (coupon.maxUses !== null && coupon.usedCount >= coupon.maxUses)) throw new AppError('كوبون غير صالح', 400);
+    if (userId && (await prisma.couponRedemption.count({ where: { couponId: coupon.id, userId } })) >= coupon.maxUsesPerUser) throw new AppError('لقد استعملت هذا الكوبون من قبل', 400);
     const services = await prisma.serviceCatalog.findMany({ where: { id: { in: modelIds }, ...serviceWhere }, select: { id: true, totalAmount: true } });
     if (services.length !== modelIds.length) throw new AppError('كوبون غير صالح', 400);
-    const subtotal = services.reduce((sum, service) => sum + Number(service.totalAmount), 0);
-    const discountAmount = coupon.discountType === 'percentage' ? Number((subtotal * coupon.discountValue / 100).toFixed(2)) : Math.min(subtotal, coupon.discountValue);
-    return { coupon, subtotal, discountAmount };
+    const eligibleIds = new Set(coupon.services.map(item => item.serviceId));
+    const eligibleServices = coupon.services.length ? services.filter(service => eligibleIds.has(service.id)) : services;
+    const subtotal = eligibleServices.reduce((sum, service) => sum + Number(service.totalAmount), 0);
+    if (!subtotal || (coupon.minimumAmount !== null && subtotal < coupon.minimumAmount)) throw new AppError('الخدمات لا تستوفي شروط الكوبون', 400);
+    let discountAmount = coupon.discountType === 'percentage' ? subtotal * coupon.discountValue / 100 : Math.min(subtotal, coupon.discountValue);
+    if (coupon.maxDiscount !== null) discountAmount = Math.min(discountAmount, coupon.maxDiscount);
+    return { coupon, subtotal, discountAmount: Number(discountAmount.toFixed(2)) };
   }
 
-  async validateCoupon(input: { code: string; items: Array<{ modelId: string; totalAmount: number }> }) {
-    const result = await this.calculateCoupon(input.code, input.items.map(item => item.modelId));
+  async validateCoupon(userId: string, input: { code: string; items: Array<{ modelId: string; totalAmount: number }> }) {
+    const result = await this.calculateCoupon(input.code, input.items.map(item => item.modelId), userId);
     return { code: result.coupon.code, discountType: result.coupon.discountType, discountValue: result.coupon.discountValue, discountAmount: result.discountAmount };
   }
 
@@ -123,12 +129,12 @@ export class CartCheckoutService {
     if (services.length !== ids.length) throw new AppError('إحدى الخدمات غير موجودة أو غير متاحة للطلب', 400);
     const byId = new Map(services.map(service => [service.id, service]));
     const subtotal = services.reduce((sum, service) => sum + Number(service.totalAmount), 0);
-    let discount = 0; let couponId: string | undefined; let couponCode: string | undefined;
-    if (input.couponCode) { const calculated = await this.calculateCoupon(input.couponCode, ids); discount = calculated.discountAmount; couponId = calculated.coupon.id; couponCode = calculated.coupon.code; }
+    let discount = 0; let couponId: string | undefined; let couponCode: string | undefined; let couponDiscountType: string | undefined; let couponDiscountValue: number | undefined;
+    if (input.couponCode) { const calculated = await this.calculateCoupon(input.couponCode, ids, userId); discount = calculated.discountAmount; couponId = calculated.coupon.id; couponCode = calculated.coupon.code; couponDiscountType = calculated.coupon.discountType; couponDiscountValue = calculated.coupon.discountValue; }
     const order = await prisma.$transaction(async tx => {
       const count = await tx.order.count();
       const orderNumber = `WS-${new Date().getFullYear()}-${String(count + 1).padStart(6, '0')}`;
-      const created = await tx.order.create({ data: { userId, orderNumber, status: OrderStatus.PENDING_PAYMENT, subtotal, discount, total: Number((subtotal - discount).toFixed(2)), couponId, couponCode, items: { create: input.items.map(item => { const service: any = byId.get(item.modelId)!; const provider = service.provider; return { serviceId: service.id, modelId: service.id, title: service.title, providerId: provider.id, providerName: personName(provider), initials: initials(provider), isVerified: Boolean(provider.providerProfile?.isVerified), packageId: item.packageId || 'basic', packageName: 'الباقة الأساسية', price: Number(service.totalAmount), deliveryDays: service.totalDays, aiScore: service.aiScore || 0 }; }) } }, include: { items: true } });
+      const created = await tx.order.create({ data: { userId, orderNumber, status: OrderStatus.PENDING_PAYMENT, subtotal, discount, total: Number((subtotal - discount).toFixed(2)), couponId, couponCode, couponDiscountType, couponDiscountValue, items: { create: input.items.map(item => { const service: any = byId.get(item.modelId)!; const provider = service.provider; return { serviceId: service.id, modelId: service.id, title: service.title, providerId: provider.id, providerName: personName(provider), initials: initials(provider), isVerified: Boolean(provider.providerProfile?.isVerified), packageId: item.packageId || 'basic', packageName: 'الباقة الأساسية', price: Number(service.totalAmount), deliveryDays: service.totalDays, aiScore: service.aiScore || 0 }; }) } }, include: { items: true } });
       return created;
     });
     return { id: order.id, orderId: order.id, orderNumber: order.orderNumber, status: 'pending_payment', items: order.items.map(item => this.formatOrderItem(item)), subtotal: order.subtotal, discount: order.discount, total: order.total, couponCode: order.couponCode, createdAt: order.createdAt.toISOString() };
@@ -203,6 +209,18 @@ export class CartCheckoutService {
         const debited = await tx.user.updateMany({ where: { id: userId, walletBalance: { gte: order.total } }, data: { walletBalance: { decrement: order.total } } });
         if (debited.count !== 1) throw new AppError('رصيد المحفظة غير كافٍ', 400);
         await tx.walletTransaction.create({ data: { userId, type: 'ORDER_PAYMENT', amount: -order.total, currency: 'SAR', status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: context.paymentReference, description: `دفع الطلب ${order.orderNumber}`, metadata: { orderId: order.id } } });
+      }
+      if (order.couponId) {
+        const coupon = await tx.coupon.findUnique({ where: { id: order.couponId } });
+        const now = new Date();
+        if (!coupon || !coupon.active || coupon.startAt > now || (coupon.expiresAt && coupon.expiresAt < now)) throw new AppError('الكوبون لم يعد صالحا', 400);
+        if (coupon.maxUses !== null) {
+          const updated = await tx.coupon.updateMany({ where: { id: coupon.id, usedCount: { lt: coupon.maxUses } }, data: { usedCount: { increment: 1 } } });
+          if (updated.count !== 1) throw new AppError('انتهت استعمالات الكوبون', 400);
+        }
+        const userUses = await tx.couponRedemption.count({ where: { couponId: coupon.id, userId } });
+        if (userUses >= coupon.maxUsesPerUser) throw new AppError('لقد استعملت هذا الكوبون من قبل', 400);
+        await tx.couponRedemption.create({ data: { couponId: coupon.id, userId, orderId: order.id, amount: order.discount } });
       }
       const projects = await Promise.all(order.items.map(item => tx.project.create({ data: { title: item.title, description: `طلب خدمة: ${item.title}`, specialty: 'Marketplace', subSpecialties: [], requirements: [], attachments: [], deliveryDays: item.deliveryDays, budgetType: 'fixed', budgetFixed: item.price, status: ProjectStatus.IN_PROGRESS, clientId: userId, providerId: item.providerId, serviceCatalogId: item.serviceId } })));
       await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.PAID } });

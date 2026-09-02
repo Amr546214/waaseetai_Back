@@ -5,6 +5,9 @@ import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.
 import providerProfileRouter from './provider-profile.routes';
 import marketplaceServiceRouter from './marketplace-service.routes';
 import { exploreRequestsController } from '../controllers/explore-requests.controller';
+import { openProviderDispute } from '../controllers/dispute.controller';
+import { rateAsProvider } from '../controllers/rating.controller';
+import { createCoupon, deactivateCoupon, getCoupon, listCoupons, updateCoupon } from '../controllers/provider-coupon.controller';
 
 const router = Router();
 const providerOnly = authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
@@ -14,6 +17,12 @@ router.use('/profile', providerProfileRouter);
 
 // Mount marketplace services routes
 router.use('/services', marketplaceServiceRouter);
+
+router.post('/coupons', authenticate, requireActiveUser, providerOnly, createCoupon);
+router.get('/coupons', authenticate, requireActiveUser, providerOnly, listCoupons);
+router.get('/coupons/:id', authenticate, requireActiveUser, providerOnly, getCoupon);
+router.put('/coupons/:id', authenticate, requireActiveUser, providerOnly, updateCoupon);
+router.delete('/coupons/:id', authenticate, requireActiveUser, providerOnly, deactivateCoupon);
 
 // Endpoint for Provider Dashboard Overview Statistics
 router.get(
@@ -77,6 +86,9 @@ router.post(
   requireActiveUser,
   exploreRequestsController.toggleSave
 );
+
+router.post('/requests/:id/disputes', authenticate, requireActiveUser, providerOnly, openProviderDispute);
+router.post('/requests/:id/rate', authenticate, requireActiveUser, providerOnly, rateAsProvider);
 
 import accreditationAiRoutes from './accreditation-ai.routes';
 import aiMatchingRoutes from './ai-matching.routes';

@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { clientRequestsController } from '../controllers/client-requests.controller';
 import { memoryUpload } from '../utils/cloudinary-storage';
+import { openClientDispute } from '../controllers/dispute.controller';
+import { rateAsClient } from '../controllers/rating.controller';
 
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
@@ -58,5 +60,7 @@ router.post('/:id/contract/sign', authenticate, requireActiveUser, clientRequest
 
 // Verify OTP & deposit escrow
 router.post('/:id/escrow/deposit', authenticate, requireActiveUser, clientRequestsController.depositEscrow);
+router.post('/:id/disputes', authenticate, requireActiveUser, openClientDispute);
+router.post('/:id/rate', authenticate, requireActiveUser, rateAsClient);
 
 export default router;

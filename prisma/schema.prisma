@@ -123,6 +123,8 @@ model User {
   modificationRequests ProfileModificationRequest[]
 
   providerServices      ServiceCatalog[]       @relation("ProviderServices")
+  couponsCreated        Coupon[]               @relation("ProviderCoupons")
+  couponRedemptions     CouponRedemption[]
   marketplaceFavorites  MarketplaceFavorite[]
   reviewsWritten        Review[]               @relation("ReviewClient")
   reviewsReceived       Review[]               @relation("ReviewProvider")
@@ -139,6 +141,12 @@ model User {
 
   cart                 Cart?
   orders               Order[]
+  onboarding           ClientOnboarding?
+  disputesOpened       Dispute[] @relation("DisputesOpenedBy")
+  disputesAgainst      Dispute[] @relation("DisputesAgainstUser")
+  disputesResolved     Dispute[] @relation("DisputesResolvedBy")
+  withdrawals          Withdrawal[] @relation("WithdrawalUser")
+  reviewedWithdrawals  Withdrawal[] @relation("WithdrawalReviewer")
 
   clientContracts   Contract[] @relation("ClientContracts")
   providerContracts Contract[] @relation("ProviderContracts")
@@ -462,6 +470,8 @@ model Review {
   project    Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
   serviceId  String?
   service    ServiceCatalog? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  clientRequestId String?
+  clientRequest   ClientRequest? @relation(fields: [clientRequestId], references: [id], onDelete: SetNull)
   rating     Float
   comment    String?
   createdAt  DateTime        @default(now())
@@ -469,6 +479,7 @@ model Review {
   @@index([providerId])
   @@index([serviceId])
   @@index([projectId])
+  @@index([clientRequestId])
   @@map("reviews")
 }
 
@@ -672,6 +683,7 @@ model Project {
   contract         Contract?
   conversations    Conversation[]
   reviews          Review[]
+  disputes         Dispute[]
 
   aiAnalysis Json?
 
@@ -806,6 +818,7 @@ model ServiceCatalog {
   favorites MarketplaceFavorite[]
   cartItems CartItem[]
   orderItems OrderItem[]
+  couponServices CouponService[]
   createdAt DateTime              @default(now())
   updatedAt DateTime              @updatedAt
 
@@ -854,18 +867,37 @@ enum OrderStatus {
 
 model Coupon {
   id              String      @id @default(uuid())
+  providerId      String?
+  provider        User?       @relation("ProviderCoupons", fields: [providerId], references: [id], onDelete: SetNull)
   code            String      @unique
   discountType    String      @default("percentage")
   discountValue  Float
+  minimumAmount   Float?
+  maxDiscount     Float?
+  maxUsesPerUser  Int         @default(1)
+  startAt         DateTime    @default(now())
   active          Boolean     @default(true)
   expiresAt       DateTime?
   maxUses         Int?
   usedCount       Int         @default(0)
   orders          Order[]
+  services        CouponService[]
+  redemptions     CouponRedemption[]
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 
   @@map("coupons")
+}
+
+model CouponService {
+  couponId  String
+  serviceId String
+  coupon    Coupon         @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  service   ServiceCatalog @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@id([couponId, serviceId])
+  @@index([serviceId])
+  @@map("coupon_services")
 }
 
 model Order {
@@ -880,13 +912,33 @@ model Order {
   couponId     String?
   coupon       Coupon?     @relation(fields: [couponId], references: [id], onDelete: SetNull)
   couponCode   String?
+  couponDiscountType  String?
+  couponDiscountValue Float?
   items        OrderItem[]
+  couponRedemption CouponRedemption?
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 
   @@index([userId, createdAt])
   @@index([status])
   @@map("orders")
+}
+
+model CouponRedemption {
+  id        String   @id @default(uuid())
+  couponId  String
+  userId    String
+  orderId   String   @unique
+  amount    Float
+  createdAt DateTime @default(now())
+
+  coupon Coupon @relation(fields: [couponId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([couponId, userId, orderId])
+  @@index([couponId, userId])
+  @@map("coupon_redemptions")
 }
 
 model OrderItem {
@@ -1799,6 +1851,95 @@ enum RequestStatus {
   CANCELLED
 }
 
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  REJECTED
+}
+
+model Dispute {
+  id             String        @id @default(uuid())
+  requestId      String?
+  request        ClientRequest? @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  projectId      String?
+  project        Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  openedById     String
+  openedBy       User          @relation("DisputesOpenedBy", fields: [openedById], references: [id], onDelete: Cascade)
+  againstUserId  String?
+  againstUser    User?         @relation("DisputesAgainstUser", fields: [againstUserId], references: [id], onDelete: SetNull)
+  resolvedById   String?
+  resolvedBy     User?         @relation("DisputesResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  status         DisputeStatus @default(OPEN)
+  reason         String
+  description    String        @db.Text
+  evidence       String[]      @default([])
+  resolution     String?
+  resolutionNote String?       @db.Text
+  resolvedAt     DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([status, createdAt])
+  @@index([requestId])
+  @@index([projectId])
+  @@index([openedById])
+  @@map("disputes")
+}
+
+enum WithdrawalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
+model Withdrawal {
+  id             String           @id @default(uuid())
+  userId         String
+  user           User             @relation("WithdrawalUser", fields: [userId], references: [id], onDelete: Cascade)
+  amount         Float
+  currency       String           @default("SAR")
+  method         String
+  accountName    String?
+  accountNumber  String?
+  iban           String?
+  status         WithdrawalStatus @default(PENDING)
+  reviewedById   String?
+  reviewedBy     User?            @relation("WithdrawalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  rejectionReason String?
+  adminNote      String?
+  referenceId    String?          @unique
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([status, createdAt])
+  @@index([userId, createdAt])
+  @@map("withdrawals")
+}
+
+enum OnboardingStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model ClientOnboarding {
+  id             String           @id @default(uuid())
+  userId         String           @unique
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentUrl    String
+  documentName   String
+  documentType   String
+  status         OnboardingStatus @default(PENDING)
+  rejectionReason String?
+  reviewedAt     DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@map("client_onboarding")
+}
+
 model ClientRequest {
   id              String        @id @default(uuid())
   clientProfileId String
@@ -1839,6 +1980,8 @@ model ClientRequest {
   updatedAt DateTime @updatedAt
 
   proposals Proposal[]
+  reviews   Review[]
+  disputes  Dispute[]
 
   @@index([clientProfileId])
   @@index([specialtyId])
