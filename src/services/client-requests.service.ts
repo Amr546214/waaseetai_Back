@@ -559,6 +559,15 @@ Return JSON schema:
 			? await prisma.escrow.findMany({ where: { projectId: { in: allProjectIds } } })
 			: [];
 		const escrowMap = new Map(escrowRecords.map(e => [e.projectId, e]));
+		// Workspace data is contract-backed. Expose the contract id explicitly
+		// so clients do not have to guess which id to use for the workspace.
+		const contracts = allProjectIds.length > 0
+			? await prisma.contract.findMany({
+				where: { projectId: { in: allProjectIds }, OR: [{ clientId: userId }, { providerId: userId }] },
+				select: { id: true, projectId: true }
+			})
+			: [];
+		const workspaceMap = new Map(contracts.map(contract => [contract.projectId, contract.id]));
 
 		const activeItems: any[] = [];
 
@@ -595,6 +604,8 @@ Return JSON schema:
 
 			activeItems.push({
 				id: item.id,
+				projectId: item.id,
+				workspaceId: workspaceMap.get(item.id) || null,
 				title: item.title,
 				status: item.status === 'PENDING_SIGNATURE' ? 'wait' : (daysLeft < 0 ? 'late' : 'run'),
 				rawStatus: item.status,
@@ -663,6 +674,8 @@ Return JSON schema:
 
 			activeItems.push({
 				id: p.id,
+				projectId: p.id,
+				workspaceId: p.contract?.id || workspaceMap.get(p.id) || null,
 				title: p.title,
 				status: displayStatus,
 				rawStatus: p.status,
