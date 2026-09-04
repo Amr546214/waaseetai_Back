@@ -74,15 +74,12 @@ export class SetupTestGateway {
         cleanToken = cleanToken.slice(1, -1);
     }
     try {
-      const decoded = jwt.verify(cleanToken, process.env.JWT_SECRET || 'fallback_secret') as any;
+      const jwtSecret = process.env.JWT_SECRET;
+      if (!jwtSecret) return null;
+      const decoded = jwt.verify(cleanToken, jwtSecret) as any;
       return decoded?.userId || decoded?.id || null;
     } catch {
-      try {
-        const decoded = jwt.decode(cleanToken) as any;
-        return decoded?.userId || decoded?.id || null;
-      } catch {
-        return null;
-      }
+      return null;
     }
   }
 

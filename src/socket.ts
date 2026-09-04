@@ -11,6 +11,7 @@ import { registerAiAssistantGateway } from './sockets/ai-assistant.gateway';
 import { registerAccreditationAiGateway } from './sockets/accreditation-ai.gateway';
 import { registerAssessmentGateway } from './sockets/assessment.gateway';
 import { registerSetupTestGateway } from './sockets/setup-test.gateway';
+import { sessionService } from './services/session.service';
 
 const openai = new OpenAI({
 	apiKey: process.env.OPENAI_API_KEY,
@@ -33,6 +34,25 @@ export const initSocketServer = (httpServer: HttpServer, allowedOrigins: string[
 
 	// Dedicated /assessments Namespace
 	const assessmentsNs = io.of('/assessments');
+	assessmentsNs.use(async (socket, next) => {
+		try {
+			const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.replace('Bearer ', '');
+			const jwtSecret = process.env.JWT_SECRET;
+			if (!token || !jwtSecret) return next(new Error('Authentication required'));
+			const decoded = jwt.verify(token, jwtSecret) as { userId?: string; id?: string; exp?: number };
+			const userId = decoded.userId || decoded.id;
+			if (!userId) return next(new Error('Invalid authentication token'));
+			const session = await sessionService.validateOrRegister(userId, token, {
+				ipAddress: socket.handshake.address,
+				userAgent: socket.handshake.headers['user-agent']
+			}, decoded.exp ? new Date(decoded.exp * 1000) : undefined);
+			if (!session) return next(new Error('Session is revoked or expired'));
+			(socket as any).userId = userId;
+			next();
+		} catch {
+			next(new Error('Invalid authentication token'));
+		}
+	});
 	assessmentsNs.on('connection', (socket) => {
 		console.log('🔗 Client connected to /assessments WebSocket namespace:', socket.id);
 		registerAssessmentGateway(socket, io);

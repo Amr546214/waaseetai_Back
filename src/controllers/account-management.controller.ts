@@ -28,7 +28,9 @@ export class AccountManagementController {
 
       res.cookie('waseet_token', result.token, {
         maxAge: 7 * 24 * 60 * 60 * 1000,
-        httpOnly: false,
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
         path: '/'
       });
 
@@ -52,7 +54,9 @@ export class AccountManagementController {
 
       res.cookie('waseet_token', result.token, {
         maxAge: 7 * 24 * 60 * 60 * 1000,
-        httpOnly: false,
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
         path: '/'
       });
 

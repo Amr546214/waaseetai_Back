@@ -4,10 +4,10 @@ import { assessmentGeneratorService } from '../services/assessment-generator.ser
 import { TestSessionStatus } from '@prisma/client';
 
 export async function startDynamicSession(req: Request, res: Response): Promise<void> {
-  const providerSpecialtyId = req.body.providerSpecialtyId;
-  const userId = (req as any).user?.id || 'demo-user-id';
+  const providerSpecialtyId = String(req.body.providerSpecialtyId || '');
+  const userId = req.user?.id;
 
-  if (!providerSpecialtyId) {
+  if (!providerSpecialtyId || !userId) {
     res.status(400).json({ success: false, message: 'providerSpecialtyId is required.' });
     return;
   }

@@ -47,8 +47,9 @@ export async function notifyAndEmailQuizResult(sessionId: string): Promise<void>
     const spec = session.providerSpecialty;
     const providerProfile = spec.providerProfile as any;
     const user = providerProfile?.user || {};
-    const userId = user?.id || session.userId || 'demo-user';
-    const email = user?.email || 'provider-demo@waseet.ai';
+    const userId = user?.id || session.userId;
+    if (!userId || !user?.email) return;
+    const email = user.email;
     const providerName = user?.name || user?.username || user?.firstName || email.split('@')[0] || 'مقدم الخدمة المتميز';
     const specialtyName = spec.specialty?.nameAr || spec.specialty?.name || 'التخصص المهني';
     const subSpecialties = Array.isArray(spec.subSpecialties) ? (spec.subSpecialties as string[]) : [];
@@ -208,7 +209,12 @@ function generateFallback20Questions(specialtyName: string, subSpecialties: stri
  */
 export async function initSpecialtyQuiz(req: Request, res: Response): Promise<void> {
   const providerSpecialtyId = String(req.params.id);
-  const userId = (req as any).user?.id || 'demo-user-id';
+  const userId = req.user?.id;
+
+  if (!userId) {
+    res.status(401).json({ success: false, message: 'غير مصرح لك بالوصول.' });
+    return;
+  }
 
   try {
     const providerSpecialty = await prisma.providerSpecialty.findUnique({
@@ -377,9 +383,10 @@ export async function initSpecialtyQuiz(req: Request, res: Response): Promise<vo
  */
 export async function submitSpecialtyQuiz(req: Request, res: Response): Promise<void> {
   const providerSpecialtyId = String(req.params.id);
+  const userId = req.user?.id;
   const { sessionId, answers, isTimeout } = req.body;
 
-  if (!sessionId) {
+  if (!sessionId || !userId) {
     res.status(400).json({ success: false, message: 'sessionId is required in submission payload.' });
     return;
   }
@@ -394,6 +401,11 @@ export async function submitSpecialtyQuiz(req: Request, res: Response): Promise<
 
     if (!session) {
       res.status(404).json({ success: false, message: 'سجل الاختبار غير موجود في النظام.' });
+      return;
+    }
+
+    if (session.providerSpecialtyId !== providerSpecialtyId || session.userId !== userId) {
+      res.status(403).json({ success: false, message: 'غير مصرح لك بإرسال نتائج هذا الاختبار.' });
       return;
     }
 

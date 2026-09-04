@@ -44,10 +44,10 @@ export class AiAssessmentService {
   /**
    * 1. Dynamic Question Generation (POST /api/assessments/generate)
    */
-  async generateAssessment(providerSpecialtyId: string, currentUserId?: string): Promise<GenerateAssessmentResponse> {
+  async generateAssessment(providerSpecialtyId: string, currentUserId: string): Promise<GenerateAssessmentResponse> {
     // 1. Fetch provider specialty details with specialty, category, and work samples
-    const providerSpecialty = await prisma.providerSpecialty.findUnique({
-      where: { id: providerSpecialtyId },
+    const providerSpecialty = await prisma.providerSpecialty.findFirst({
+      where: { id: providerSpecialtyId, providerProfile: { userId: currentUserId } },
       include: {
         specialty: {
           include: { category: true }
@@ -202,7 +202,7 @@ ${previousQuestionTexts.length > 0 ? previousQuestionTexts.map((t, idx) => `${id
   /**
    * 2. Submission & AI Evaluation (POST /api/assessments/:attemptId/submit)
    */
-  async submitAssessment(attemptId: string, submittedAnswers: Record<string, string>): Promise<SubmitAssessmentResponse> {
+  async submitAssessment(attemptId: string, submittedAnswers: Record<string, string>, currentUserId?: string): Promise<SubmitAssessmentResponse> {
     const attempt = await prisma.assessmentAttempt.findUnique({
       where: { id: attemptId },
       include: {
@@ -215,7 +215,7 @@ ${previousQuestionTexts.length > 0 ? previousQuestionTexts.map((t, idx) => `${id
       }
     });
 
-    if (!attempt) {
+    if (!attempt || !currentUserId || attempt.providerSpecialty.providerProfile.userId !== currentUserId) {
       throw new Error(`Assessment attempt '${attemptId}' was not found.`);
     }
 
@@ -384,20 +384,29 @@ ${previousQuestionTexts.length > 0 ? previousQuestionTexts.map((t, idx) => `${id
   /**
    * 3. Get Attempt Status / Details (GET /api/assessments/:attemptId/status)
    */
-  async getAttemptStatus(attemptId: string) {
+  async getAttemptStatus(attemptId: string, currentUserId?: string) {
     const attempt = await prisma.assessmentAttempt.findUnique({
       where: { id: attemptId },
       include: {
         specialty: { select: { id: true, nameAr: true, nameEn: true } },
-        providerSpecialty: { select: { id: true, status: true, isPassed: true, latestScore: true } }
+        providerSpecialty: {
+          select: {
+            id: true,
+            status: true,
+            isPassed: true,
+            latestScore: true,
+            providerProfile: { select: { userId: true } }
+          }
+        }
       }
     });
 
-    if (!attempt) {
+    if (!attempt || !currentUserId || attempt.providerSpecialty?.providerProfile.userId !== currentUserId) {
       throw new Error(`Assessment attempt '${attemptId}' not found.`);
     }
 
-    return attempt;
+    const { providerProfile: _providerProfile, ...safeProviderSpecialty } = attempt.providerSpecialty;
+    return { ...attempt, providerSpecialty: safeProviderSpecialty };
   }
 
   /**

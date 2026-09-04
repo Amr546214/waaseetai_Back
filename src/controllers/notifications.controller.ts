@@ -21,7 +21,10 @@ export class NotificationsController {
 			if (!id || id === 'undefined') {
 				return res.status(400).json({ success: false, error: 'Notification ID is required' }) as any;
 			}
-			const notification = await notificationService.markAsRead(id);
+			if (!userId) {
+				return res.status(401).json({ success: false, error: 'Unauthorized' }) as any;
+			}
+			const notification = await notificationService.markAsRead(id, userId);
 			return res.status(200).json({ success: true, data: notification }) as any;
 		} catch (error: any) {
 			console.error('[NotificationsController] Error marking notification as read:', error);

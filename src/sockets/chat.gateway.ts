@@ -71,6 +71,15 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 		this.io = io;
 		this.handleConnection(socket);
 
+		const isConversationParticipant = async (conversationId: string): Promise<boolean> => {
+			const userId = (socket as any).userId as string | undefined;
+			if (!userId || !conversationId) return false;
+			return Boolean(await prisma.conversation.findFirst({
+				where: { id: conversationId, OR: [{ clientId: userId }, { providerId: userId }] },
+				select: { id: true }
+			}));
+		};
+
 		socket.on('disconnect', () => {
 			this.handleDisconnect(socket);
 		});
@@ -216,39 +225,43 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 		});
 
 		// 5. WebRTC Video Call Signaling Events (Scoped strictly to conversation room)
-		socket.on('call_user', (data: { conversationId: string; callerId: string; callerName: string; offer: any; isVideo?: boolean }) => {
-			if (!data?.conversationId) return;
+		socket.on('call_user', async (data: { conversationId: string; callerId: string; callerName: string; offer: any; isVideo?: boolean }) => {
+			if (!data?.conversationId || !(await isConversationParticipant(data.conversationId))) return;
 			const roomName = `conversation_${data.conversationId}`;
-			console.log(`📹 [VideoCall] Call initiated by ${data.callerName} in room ${roomName}`);
-			socket.to(roomName).emit('incoming_call', data);
+			const userId = (socket as any).userId as string;
+			console.log(`📹 [VideoCall] Call initiated by ${userId} in room ${roomName}`);
+			socket.to(roomName).emit('incoming_call', { ...data, callerId: userId });
 		});
 
 		// Fallback for direct user call signaling
-		socket.on('call_direct_user', (data: { recipientId: string; callerId: string; callerName: string; offer: any; conversationId?: string; isVideo?: boolean }) => {
+		socket.on('call_direct_user', async (data: { recipientId: string; callerId: string; callerName: string; offer: any; conversationId?: string; isVideo?: boolean }) => {
 			if (!data?.recipientId) return;
+			if (data.conversationId && !(await isConversationParticipant(data.conversationId))) return;
+			const userId = (socket as any).userId as string | undefined;
+			if (!userId) return;
 			if (io) {
-				io.to(`user_${data.recipientId}`).emit('incoming_call', data);
+				io.to(`user_${data.recipientId}`).emit('incoming_call', { ...data, callerId: userId });
 			}
 		});
 
-		socket.on('answer_call', (data: { conversationId: string; answer: any; responderId: string }) => {
-			if (!data?.conversationId) return;
+		socket.on('answer_call', async (data: { conversationId: string; answer: any; responderId: string }) => {
+			if (!data?.conversationId || !(await isConversationParticipant(data.conversationId))) return;
 			const roomName = `conversation_${data.conversationId}`;
 			console.log(`📹 [VideoCall] Call answered in room ${roomName}`);
-			socket.to(roomName).emit('call_accepted', data);
+			socket.to(roomName).emit('call_accepted', { ...data, responderId: (socket as any).userId });
 		});
 
-		socket.on('ice_candidate', (data: { conversationId: string; candidate: any; senderId: string }) => {
-			if (!data?.conversationId) return;
+		socket.on('ice_candidate', async (data: { conversationId: string; candidate: any; senderId: string }) => {
+			if (!data?.conversationId || !(await isConversationParticipant(data.conversationId))) return;
 			const roomName = `conversation_${data.conversationId}`;
-			socket.to(roomName).emit('ice_candidate', data);
+			socket.to(roomName).emit('ice_candidate', { ...data, senderId: (socket as any).userId });
 		});
 
-		socket.on('end_call', (data: { conversationId: string; senderId: string }) => {
-			if (!data?.conversationId) return;
+		socket.on('end_call', async (data: { conversationId: string; senderId: string }) => {
+			if (!data?.conversationId || !(await isConversationParticipant(data.conversationId))) return;
 			const roomName = `conversation_${data.conversationId}`;
 			console.log(`📹 [VideoCall] Call ended in room ${roomName}`);
-			socket.to(roomName).emit('call_ended', data);
+			socket.to(roomName).emit('call_ended', { ...data, senderId: (socket as any).userId });
 		});
 	}
 }

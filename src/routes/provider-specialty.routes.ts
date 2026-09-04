@@ -4,14 +4,24 @@ import { prisma } from '../config/db';
 import { evaluateSpecialtyWithAI } from '../controllers/specialty-ai.controller';
 import { initSpecialtyQuiz, submitSpecialtyQuiz, getSpecialtyQuizStatus } from '../controllers/quiz.controller';
 import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
+import { AccountType } from '@prisma/client';
+import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { requireOwnedProviderSpecialtyFromBody, requireOwnedProviderSpecialtyFromParam } from '../utils/provider-specialty-access';
 
 const router = Router();
 
 const upload = memoryUpload({ fileSize: 15 * 1024 * 1024, files: 30 });
+const providerAuth = [
+  authenticate,
+  requireActiveUser,
+  authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY)
+] as const;
 
 router.post(
   '/submit-proof',
+  ...providerAuth,
   upload.any(),
+  requireOwnedProviderSpecialtyFromBody,
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const providerSpecialtyId = String(req.body.providerSpecialtyId || '');
@@ -118,13 +128,13 @@ router.post(
   }
 );
 
-router.post('/:id/ai-evaluate', evaluateSpecialtyWithAI);
+router.post('/:id/ai-evaluate', ...providerAuth, requireOwnedProviderSpecialtyFromParam, evaluateSpecialtyWithAI);
 
-router.post('/:id/quiz/init', initSpecialtyQuiz);
-router.post('/:id/quiz/submit', submitSpecialtyQuiz);
-router.get('/:id/quiz/status', getSpecialtyQuizStatus);
+router.post('/:id/quiz/init', ...providerAuth, requireOwnedProviderSpecialtyFromParam, initSpecialtyQuiz);
+router.post('/:id/quiz/submit', ...providerAuth, requireOwnedProviderSpecialtyFromParam, submitSpecialtyQuiz);
+router.get('/:id/quiz/status', ...providerAuth, requireOwnedProviderSpecialtyFromParam, getSpecialtyQuizStatus);
 
-router.get('/:id/status', async (req: Request, res: Response): Promise<void> => {
+router.get('/:id/status', ...providerAuth, requireOwnedProviderSpecialtyFromParam, async (req: Request, res: Response): Promise<void> => {
   try {
     const providerSpecialtyId = String(req.params.id);
 

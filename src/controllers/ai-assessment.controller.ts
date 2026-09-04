@@ -9,6 +9,11 @@ export async function generateAssessmentController(req: Request, res: Response):
     const providerSpecialtyId = req.body.providerSpecialtyId || req.body.specialtyId || req.params.providerSpecialtyId;
     const userId = (req as any).user?.id;
 
+    if (!userId) {
+      res.status(401).json({ success: false, message: 'غير مصرح لك بالوصول.' });
+      return;
+    }
+
     if (!providerSpecialtyId) {
       res.status(400).json({
         success: false,
@@ -49,7 +54,7 @@ export async function submitAssessmentController(req: Request, res: Response): P
       return;
     }
 
-    const result = await aiAssessmentService.submitAssessment(String(attemptId), submittedAnswers);
+    const result = await aiAssessmentService.submitAssessment(String(attemptId), submittedAnswers, req.user?.id);
 
     res.status(200).json({
       success: true,
@@ -78,7 +83,7 @@ export async function getAttemptStatusController(req: Request, res: Response): P
       return;
     }
 
-    const result = await aiAssessmentService.getAttemptStatus(String(attemptId));
+    const result = await aiAssessmentService.getAttemptStatus(String(attemptId), req.user?.id);
     res.status(200).json({
       success: true,
       data: result

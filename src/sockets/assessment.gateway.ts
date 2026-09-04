@@ -30,23 +30,24 @@ export class AssessmentGateway {
     }) => {
       console.log(`[AssessmentGateway] Client ${socket.id} started assessment stream:`, payload);
 
-      const specId = payload.specialtyId || 'demo-specialty-id';
-      const providerSpecId = payload.providerSpecialtyId || 'demo-provider-spec-id';
-      let profileId = payload.providerProfileId;
-
-      // Try resolving providerProfileId if missing
-      if (!profileId && providerSpecId && providerSpecId !== 'demo-provider-spec-id') {
-        const ps = await prisma.providerSpecialty.findUnique({
-          where: { id: providerSpecId },
-          select: { providerProfileId: true }
-        });
-        if (ps) profileId = ps.providerProfileId;
+      const userId = (socket as any).userId as string | undefined;
+      const providerSpecId = payload.providerSpecialtyId;
+      if (!userId || !providerSpecId) {
+        socket.emit('assessment_error', { message: 'بيانات المصادقة والتخصص مطلوبة.' });
+        return;
       }
 
-      if (!profileId) {
-        const firstProfile = await prisma.providerProfile.findFirst();
-        profileId = firstProfile?.id || 'demo-profile-uuid';
+      const providerSpecialty = await prisma.providerSpecialty.findFirst({
+        where: { id: providerSpecId, providerProfile: { userId } },
+        select: { id: true, specialtyId: true, providerProfileId: true, subSpecialties: true }
+      });
+      if (!providerSpecialty) {
+        socket.emit('assessment_error', { message: 'التخصص غير موجود أو لا تملك صلاحية الوصول إليه.' });
+        return;
       }
+
+      const specId = providerSpecialty.specialtyId;
+      const profileId = providerSpecialty.providerProfileId;
 
       try {
         // 1. Analyze specialty, sub-specialties, and portfolio files to generate 20 questions
@@ -64,23 +65,21 @@ export class AssessmentGateway {
         // 2. Create AssessmentAttempt in database with status STREAMING
         let attemptId = `attempt-${Date.now()}`;
         try {
-          if (providerSpecId !== 'demo-provider-spec-id' && profileId !== 'demo-profile-uuid') {
-            const attemptRecord = await prisma.assessmentAttempt.create({
-              data: {
-                providerSpecialtyId: providerSpecId,
-                providerProfileId: profileId,
-                specialtyId: specId,
-                subSpecialtiesSnapshot: subSpecialtiesSnapshot as any,
-                analyzedAssetsSnapshot: analyzedAssetsSnapshot as any,
-                questionsPayload: questions as any,
-                totalQuestions: 20,
-                status: AssessmentStatus.STREAMING,
-                timeLimitMinutes: 15,
-                startedAt: new Date()
-              }
-            });
-            attemptId = attemptRecord.id;
-          }
+          const attemptRecord = await prisma.assessmentAttempt.create({
+            data: {
+              providerSpecialtyId: providerSpecId,
+              providerProfileId: profileId,
+              specialtyId: specId,
+              subSpecialtiesSnapshot: subSpecialtiesSnapshot as any,
+              analyzedAssetsSnapshot: analyzedAssetsSnapshot as any,
+              questionsPayload: questions as any,
+              totalQuestions: 20,
+              status: AssessmentStatus.STREAMING,
+              timeLimitMinutes: 15,
+              startedAt: new Date()
+            }
+          });
+          attemptId = attemptRecord.id;
         } catch (dbErr) {
           console.warn('[AssessmentGateway] DB record creation fallback to in-memory attemptId:', dbErr);
         }

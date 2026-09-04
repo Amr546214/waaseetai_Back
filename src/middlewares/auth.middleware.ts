@@ -4,6 +4,7 @@ import { AccountType, UserRole, UserStatus } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 import { prisma } from '../config/db';
 import { sessionService } from '../services/session.service';
+import { getAuthCookie } from '../utils/request-cookie';
 
 // Express Request interface is extended via src/types/express.d.ts
 
@@ -17,8 +18,8 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.split(' ')[1];
-    } else if (req.cookies) {
-      token = req.cookies.waseet_token || req.cookies.token || req.cookies.access_token || null;
+    } else {
+      token = getAuthCookie(req) || null;
     }
 
     if (!token) {
@@ -114,7 +115,8 @@ export const authorize = (...allowedAccountTypes: AccountType[]) => {
       if (type === AccountType.MARKETING_BROKER && userRoles.has(UserRole.AFFILIATE)) return true;
       if ((type === AccountType.PROVIDER_INDIVIDUAL || type === AccountType.PROVIDER_COMPANY) && userRoles.has(UserRole.PROVIDER)) return true;
       if ((type === AccountType.CLIENT_INDIVIDUAL || type === AccountType.CLIENT_COMPANY) && userRoles.has(UserRole.CLIENT)) return true;
-      if ((type === AccountType.ADMIN || type === AccountType.SUPER_ADMIN) && (userRoles.has(UserRole.ADMIN) || userRoles.has(UserRole.SUPER_ADMIN))) return true;
+      if (type === AccountType.SUPER_ADMIN && userRoles.has(UserRole.SUPER_ADMIN)) return true;
+      if (type === AccountType.ADMIN && (userRoles.has(UserRole.ADMIN) || userRoles.has(UserRole.SUPER_ADMIN))) return true;
       return false;
     });
 

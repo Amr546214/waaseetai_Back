@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from '../services/auth.service';
 import { sessionService } from '../services/session.service';
+import { getAuthCookie } from '../utils/request-cookie';
 import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput } from '../routes/auth/auth.schema';
 
 export class AuthController {
@@ -124,7 +125,7 @@ export class AuthController {
 			const authHeader = req.headers.authorization;
 			const token = authHeader && authHeader.startsWith('Bearer ')
 				? authHeader.split(' ')[1]
-				: req.cookies?.waseet_token || req.cookies?.token;
+				: getAuthCookie(req);
 
 			if (token && req.user) {
 				await sessionService.logout(req.user.userId, token, {

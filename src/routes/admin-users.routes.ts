@@ -1,12 +1,12 @@
 import { Router } from 'express';
 import { AdminUsersController } from '../controllers/admin-users.controller';
-import { authenticate, authorize } from '../middlewares/auth.middleware';
+import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import { AccountType } from '@prisma/client';
 
 const router = Router();
 
 // Protect all admin-user routes
-router.use(authenticate);
+router.use(authenticate, requireActiveUser);
 router.use(authorize(AccountType.SUPER_ADMIN, AccountType.ADMIN));
 
 router.get('/stats', AdminUsersController.getStats);

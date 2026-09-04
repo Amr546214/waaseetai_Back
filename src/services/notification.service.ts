@@ -2,6 +2,7 @@ import { NotificationCategory, Notification } from '@prisma/client';
 import { mailTransporter, getOtpEmailTemplate } from '../utils/mail.transporter';
 import { prisma } from '../config/db';
 import { getIO } from '../socket';
+import { AppError } from '../utils/app-error';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -153,9 +154,12 @@ export class NotificationService {
 	 * Mark a single notification as read.
 	 * Emits a real-time `notification_read` event to the owning user.
 	 */
-	public async markAsRead(notificationId: string): Promise<NotificationDto> {
+	public async markAsRead(notificationId: string, userId: string): Promise<NotificationDto> {
+		const notification = await prisma.notification.findFirst({ where: { id: notificationId, userId } });
+		if (!notification) throw new AppError('الإشعار غير موجود', 404);
+
 		const updated = await prisma.notification.update({
-			where: { id: notificationId },
+			where: { id: notification.id },
 			data: { isRead: true },
 		});
 

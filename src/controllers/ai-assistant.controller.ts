@@ -19,7 +19,9 @@ export const assistantChat = async (req: Request, res: Response): Promise<void> 
 			const token = authHeader.split(' ')[1];
 			try {
 				const jwt = require('jsonwebtoken');
-				const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret');
+					const jwtSecret = process.env.JWT_SECRET;
+					if (!jwtSecret) throw new Error('JWT_SECRET is not configured');
+					const decoded = jwt.verify(token, jwtSecret);
 				userId = decoded.userId || decoded.id;
 			} catch (err) {
 				// Ignore invalid token, treat as guest
@@ -184,7 +186,9 @@ export const analyzeProjectForProvider = async (req: Request, res: Response): Pr
 			if (authHeader && authHeader.startsWith('Bearer ')) {
 				try {
 					const jwt = require('jsonwebtoken');
-					const decoded = jwt.verify(authHeader.split(' ')[1], process.env.JWT_SECRET || 'fallback_secret');
+						const jwtSecret = process.env.JWT_SECRET;
+						if (!jwtSecret) throw new Error('JWT_SECRET is not configured');
+						const decoded = jwt.verify(authHeader.split(' ')[1], jwtSecret);
 					userId = decoded.userId || decoded.id;
 				} catch (e) {}
 			}
@@ -348,4 +352,3 @@ export const analyzeProjectForProvider = async (req: Request, res: Response): Pr
 		res.status(500).json({ success: false, message: 'Failed to analyze project fit', error: error.message });
 	}
 };
-
