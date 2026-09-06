@@ -71,9 +71,18 @@ export class WithdrawalService {
     const item = await prisma.withdrawal.findUnique({ where: { id } });
     if (!item) throw new AppError('طلب السحب غير موجود', 404);
     if (item.status !== WithdrawalStatus.PENDING) throw new AppError('طلب السحب تمت معالجته مسبقاً', 409);
+    const wallet = await providerFinanceService.getWallet(item.userId);
+    const availableBalance = wallet.summary.availableBalance;
+    const alreadyWithdrawn = await prisma.withdrawal.aggregate({
+      where: { userId: item.userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.COMPLETED] } },
+      _sum: { amount: true },
+    });
+    const withdrawnAmount = alreadyWithdrawn._sum.amount || 0;
+    const withdrawableBalance = availableBalance - withdrawnAmount;
+    if (item.amount > withdrawableBalance) {
+      throw new AppError(`رصيد المزود غير كافٍ لتنفيذ السحب (المتاح: ${withdrawableBalance} ريال)`, 400);
+    }
     return prisma.$transaction(async tx => {
-      const debited = await tx.user.updateMany({ where: { id: item.userId, walletBalance: { gte: item.amount } }, data: { walletBalance: { decrement: item.amount } } });
-      if (debited.count !== 1) throw new AppError('رصيد المستخدم غير كافٍ لتنفيذ السحب', 400);
       await tx.walletTransaction.create({ data: { userId: item.userId, type: 'WITHDRAWAL', amount: -item.amount, currency: item.currency, status: 'COMPLETED', paymentMethod: item.method, referenceId: item.referenceId, description: `اعتماد طلب السحب ${item.id}`, metadata: { withdrawalId: item.id } } });
       return tx.withdrawal.update({ where: { id }, data: { status: WithdrawalStatus.APPROVED, reviewedById: adminId, adminNote: input.adminNote } });
     });
