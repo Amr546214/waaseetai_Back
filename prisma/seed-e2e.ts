@@ -102,9 +102,18 @@ async function main() {
     },
   });
 
-  // --- Service Catalog ---
+  // --- Cleanup old non-UUID E2E service (if exists from previous seed runs) ---
+  const oldService = await prisma.serviceCatalog.findUnique({ where: { id: 'e2e-service-0001' } });
+  if (oldService) {
+    await prisma.serviceStage.deleteMany({ where: { serviceId: 'e2e-service-0001' } });
+    await prisma.serviceCatalog.delete({ where: { id: 'e2e-service-0001' } });
+    console.log('Deleted old non-UUID E2E service: e2e-service-0001\n');
+  }
+
+  // --- Service Catalog (valid UUID required by cart validation) ---
+  const E2E_SERVICE_ID = '11111111-1111-4111-8111-111111111111';
   const service = await prisma.serviceCatalog.upsert({
-    where: { id: 'e2e-service-0001' },
+    where: { id: E2E_SERVICE_ID },
     update: {
       providerId: provider.id,
       title: 'خدمة اختبار E2E',
@@ -115,7 +124,7 @@ async function main() {
       approvedAt: new Date(),
     },
     create: {
-      id: 'e2e-service-0001',
+      id: E2E_SERVICE_ID,
       providerId: provider.id,
       title: 'خدمة اختبار E2E',
       description: 'خدمة تجريبية لاختبار checkout workspace lifecycle',
