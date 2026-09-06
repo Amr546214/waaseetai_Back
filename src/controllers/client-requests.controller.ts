@@ -118,6 +118,23 @@ export class ClientRequestsController {
     }
   }
 
+  // GET /api/client/my-requests/completed-projects
+  public async getCompletedProjects(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId || req.user!.id;
+      const page = parseInt(req.query.page as string) || 1;
+      const limit = parseInt(req.query.limit as string) || 10;
+      const result = await clientRequestsService.getCompletedProjects(userId, page, limit);
+      res.status(200).json({
+        success: true,
+        message: 'تم جلب المشاريع المنتهية بنجاح',
+        data: result
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   // GET /api/client/requests/active-projects/:id
   public async getActiveProjectTracking(req: Request, res: Response, next: NextFunction) {
     try {

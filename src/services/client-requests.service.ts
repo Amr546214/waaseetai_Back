@@ -713,6 +713,76 @@ Return JSON schema:
 	}
 
 	/**
+	 * GET /api/client/my-requests/completed-projects
+	 */
+	public async getCompletedProjects(userId: string, page: number = 1, limit: number = 10) {
+		const skip = (page - 1) * limit;
+		const completedStatuses = ['COMPLETED', 'CANCELLED', 'DISPUTED'];
+
+		const [total, contracts] = await Promise.all([
+			prisma.contract.count({
+				where: { clientId: userId, status: { in: completedStatuses as any } }
+			}),
+			prisma.contract.findMany({
+				where: { clientId: userId, status: { in: completedStatuses as any } },
+				include: {
+					project: { include: { escrow: true, serviceCatalog: { select: { id: true, title: true } } } },
+					provider: { select: { id: true, firstName: true, lastName: true, providerProfile: { select: { companyName: true } } } },
+				},
+				orderBy: { updatedAt: 'desc' },
+				skip,
+				take: limit,
+			})
+		]);
+
+		const projectIds = contracts.map(c => c.projectId);
+		const reviews = projectIds.length > 0
+			? await prisma.review.findMany({ where: { projectId: { in: projectIds }, clientId: userId } })
+			: [];
+		const reviewMap = new Map(reviews.map(r => [r.projectId, r]));
+
+		const items = contracts.map(c => {
+			const providerName = c.provider?.providerProfile?.companyName ||
+				[c.provider?.firstName, c.provider?.lastName].filter(Boolean).join(' ') || 'مقدم خدمة';
+			const escrow = c.project?.escrow;
+			const totalPrice = escrow ? Number(escrow.amount) : c.price;
+			const releasedAmount = escrow ? Number(escrow.releasedAmount || 0) : 0;
+			const review = reviewMap.get(c.projectId);
+			return {
+				id: c.id,
+				projectId: c.projectId,
+				title: c.project?.title || 'مشروع',
+				status: c.status,
+				rawStatus: c.project?.status || c.status,
+				provider: {
+					id: c.providerId,
+					name: providerName,
+					initials: providerName.split(' ').map((n: string) => n[0] || '').join('').substring(0, 2) || 'مـ',
+				},
+				contractReference: `CT-${c.id.substring(0, 4).toUpperCase()}`,
+				totalPrice,
+				releasedAmount,
+				heldAmount: Math.max(0, totalPrice - releasedAmount),
+				completedAt: c.updatedAt.toISOString(),
+				category: c.project?.serviceCatalog?.title || c.project?.specialty || 'Marketplace',
+				canRate: c.status === 'COMPLETED' && !review,
+				hasRated: !!review,
+				rating: review?.rating || null,
+			};
+		});
+
+		return {
+			items,
+			pagination: {
+				page,
+				limit,
+				total,
+				totalPages: Math.ceil(total / limit),
+			},
+		};
+	}
+
+	/**
 	 * GET /api/client/requests/active-projects/:id
 	 */
 	public async getActiveProjectTracking(userId: string, requestId: string) {
