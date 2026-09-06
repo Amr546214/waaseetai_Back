@@ -1,9 +1,56 @@
 import { WithdrawalStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
-import { RejectWithdrawalInput, ResolveWithdrawalInput } from '../dtos/withdrawal.dto';
+import { CreateWithdrawalInput, RejectWithdrawalInput, ResolveWithdrawalInput } from '../dtos/withdrawal.dto';
+import { providerFinanceService } from './provider-finance.service';
 
 export class WithdrawalService {
+  async createForProvider(userId: string, input: CreateWithdrawalInput) {
+    const wallet = await providerFinanceService.getWallet(userId);
+    const availableBalance = wallet.summary.availableBalance;
+    if (input.amount > availableBalance) {
+      throw new AppError(`المبلغ المطلوب يتجاوز رصيدك المتاح (${availableBalance} ريال)`, 400);
+    }
+    const pendingWithdrawals = await prisma.withdrawal.aggregate({
+      where: { userId, status: WithdrawalStatus.PENDING },
+      _sum: { amount: true },
+    });
+    const pendingAmount = pendingWithdrawals._sum.amount || 0;
+    if (input.amount > availableBalance - pendingAmount) {
+      throw new AppError(`المبلغ المطلوب يتجاوز رصيدك الصافي بعد طلبات السحب المعلقة (${availableBalance - pendingAmount} ريال)`, 400);
+    }
+    return prisma.withdrawal.create({
+      data: {
+        userId,
+        amount: input.amount,
+        method: input.method,
+        accountName: input.accountName || null,
+        accountNumber: input.accountNumber || null,
+        iban: input.iban || null,
+        status: WithdrawalStatus.PENDING,
+      },
+    });
+  }
+
+  async listForUser(userId: string, status?: WithdrawalStatus, page = 1, limit = 10) {
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(100, Math.max(1, limit));
+    const where = { userId, ...(status ? { status } : {}) };
+    const [items, total] = await Promise.all([
+      prisma.withdrawal.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (safePage - 1) * safeLimit,
+        take: safeLimit,
+      }),
+      prisma.withdrawal.count({ where }),
+    ]);
+    return {
+      items,
+      pagination: { page: safePage, limit: safeLimit, total, totalPages: Math.ceil(total / safeLimit) },
+    };
+  }
+
   async list(status?: WithdrawalStatus, page = 1, limit = 20) {
     const safePage = Math.max(1, page); const safeLimit = Math.min(100, Math.max(1, limit));
     const where = status ? { status } : {};
