@@ -51,7 +51,33 @@ export class ProjectProgressService {
         provider: { select: { id: true, firstName: true, lastName: true } }
       }
     });
-    if (!contract) throw new AppError('المشروع غير موجود أو لا تملك صلاحية الوصول إليه', 404);
+    if (!contract) {
+      // No contract yet (e.g. PENDING_SIGNATURE before contract creation).
+      // Fall back to a Project lookup so the client can still open the workspace
+      // and see the pre-contract state. Ownership is still enforced via clientId.
+      const project = await prisma.project.findFirst({
+        where: { id: key, clientId: userId },
+        include: {
+          escrow: true,
+          proposals: { where: { status: 'ACCEPTED' }, include: { provider: { select: { id: true, firstName: true, lastName: true } } }, orderBy: { createdAt: 'desc' }, take: 1 }
+        }
+      });
+      if (!project) throw new AppError('المشروع غير موجود أو لا تملك صلاحية الوصول إليه', 404);
+      const acceptedProp = project.proposals?.[0] || null;
+      const providerUser = acceptedProp?.provider || null;
+      const providerName = providerUser ? `${providerUser.firstName || ''} ${providerUser.lastName || ''}`.trim() : 'مقدم الخدمة';
+      return {
+        id: null, projectId: project.id, role: 'client', conversationId: null,
+        title: project.title, clientName: providerName, clientInitial: providerName.charAt(0) || 'م',
+        contractRef: `CT-${project.id.slice(0, 6).toUpperCase()}`,
+        price: acceptedProp ? Number(acceptedProp.price || 0) : 0, durationDays: project.deliveryDays || 0,
+        daysLeft: project.deliveryDays || 0, progress: 0,
+        escrowTotal: project.escrow?.amount || 0, escrowHeld: project.escrow?.amount || 0, escrowReleased: 0,
+        status: 'PENDING_SIGNATURE', statusLabel: 'بانتظار توقيع العقد',
+        stages: [], deliveries: [], edits: [], messages: [], files: [],
+        aiInsights: { confidence: 0, earlyDays: 0, matchPercentage: null, riskLevel: 'غير محسوبة', riskLevelKey: 'unknown', healthRating: 'بانتظار بيانات كافية', bullets: [] }
+      };
+    }
     await this.ensureStages(contract.id);
     const persisted = await prisma.projectStage.findMany({ where: { contractId: contract.id }, orderBy: { stepOrder: 'asc' }, include: { deliveries: { orderBy: { submittedAt: 'asc' } } } });
     const role = contract.providerId === userId ? 'provider' : 'client';
