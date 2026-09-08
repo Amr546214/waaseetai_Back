@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { OrderStatus, OtpType, ProjectStatus } from '@prisma/client';
+import { ContractStatus, EscrowStatus, OrderStatus, OtpType, ProjectStageStatus, ProjectStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
@@ -204,6 +204,11 @@ export class CartCheckoutService {
       throw new AppError('رمز التحقق غير صحيح', 400);
     }
     const context = otp.context as any;
+    // Fetch ServiceStage templates for all ordered services (read-only, safe outside transaction)
+    const serviceIds = order.items.map(item => item.serviceId).filter((id): id is string => Boolean(id));
+    const allServiceStages = serviceIds.length > 0
+      ? await prisma.serviceStage.findMany({ where: { serviceId: { in: serviceIds } }, orderBy: { stepOrder: 'asc' } })
+      : [];
     const projectIds = await prisma.$transaction(async tx => {
       if (context.paymentMethod === 'wallet') {
         const debited = await tx.user.updateMany({ where: { id: userId, walletBalance: { gte: order.total } }, data: { walletBalance: { decrement: order.total } } });
@@ -222,10 +227,33 @@ export class CartCheckoutService {
         if (userUses >= coupon.maxUsesPerUser) throw new AppError('لقد استعملت هذا الكوبون من قبل', 400);
         await tx.couponRedemption.create({ data: { couponId: coupon.id, userId, orderId: order.id, amount: order.discount } });
       }
-      const projects = await Promise.all(order.items.map(item => tx.project.create({ data: { title: item.title, description: `طلب خدمة: ${item.title}`, specialty: 'Marketplace', subSpecialties: [], requirements: [], attachments: [], deliveryDays: item.deliveryDays, budgetType: 'fixed', budgetFixed: item.price, status: ProjectStatus.IN_PROGRESS, clientId: userId, providerId: item.providerId, serviceCatalogId: item.serviceId } })));
+      const createdProjectIds: string[] = [];
+      for (const item of order.items) {
+        const project = await tx.project.create({ data: { title: item.title, description: `طلب خدمة: ${item.title}`, specialty: 'Marketplace', subSpecialties: [], requirements: [], attachments: [], deliveryDays: item.deliveryDays, budgetType: 'fixed', budgetFixed: item.price, status: ProjectStatus.IN_PROGRESS, clientId: userId, providerId: item.providerId, serviceCatalogId: item.serviceId } });
+
+        const stages = allServiceStages.filter(s => s.serviceId === item.serviceId);
+        const phasesCount = stages.length || 1;
+
+        const contract = await tx.contract.create({ data: { projectId: project.id, clientId: userId, providerId: item.providerId, price: item.price, durationDays: item.deliveryDays, phasesCount, status: ContractStatus.ACTIVE, signedAt: new Date() } });
+
+        await tx.escrow.create({ data: { projectId: project.id, amount: item.price, status: EscrowStatus.HELD, paymentMethod: context.paymentMethod?.toUpperCase() || null, paymentReference: context.paymentReference || null, fundedAt: new Date() } });
+
+        if (stages.length > 0) {
+          await tx.projectStage.createMany({ data: stages.map((stage, index) => ({
+            contractId: contract.id, stepOrder: stage.stepOrder, title: stage.title, description: stage.description,
+            days: stage.deliveryDays, percentage: stage.percentage, amount: Number(stage.computedAmount),
+            status: index === 0 ? ProjectStageStatus.IN_PROGRESS : ProjectStageStatus.PENDING,
+            startedAt: index === 0 ? new Date() : null
+          })) });
+        } else {
+          await tx.projectStage.create({ data: { contractId: contract.id, stepOrder: 1, title: 'المرحلة الأولى', description: 'تسليم المشروع النهائي', days: item.deliveryDays, percentage: 100, amount: item.price, status: ProjectStageStatus.IN_PROGRESS, startedAt: new Date() } });
+        }
+
+        createdProjectIds.push(project.id);
+      }
       await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.PAID } });
       await tx.otpVerification.delete({ where: { id: otp.id } });
-      return projects.map(project => project.id);
+      return createdProjectIds;
     });
     return { orderId: order.id, orderNumber: order.orderNumber, status: 'paid', total: order.total, projectIds };
   }

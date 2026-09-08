@@ -1,6 +1,8 @@
 import { prisma } from '../config/db';
 import { logger } from '../config/logger';
 import OpenAI from 'openai';
+import { AccreditationStatus } from '@prisma/client';
+import { AppError } from '../utils/app-error';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || 'dummy_key',
@@ -344,6 +346,123 @@ export class AccreditationAiService {
       verdict: 'APPROVED',
       rationaleAr: `تم التحقق السريع بنجاح لتخصص ${specialtyName}`
     };
+  }
+
+  // ===== Admin: Accreditation Review =====
+
+  async listAllSamples(status?: AccreditationStatus, page = 1, limit = 10) {
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(100, Math.max(1, limit));
+    const where = status ? { status } : {};
+    const [items, total] = await Promise.all([
+      prisma.accreditationSample.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (safePage - 1) * safeLimit,
+        take: safeLimit,
+        include: {
+          providerProfile: {
+            select: {
+              id: true,
+              userId: true,
+              user: { select: { id: true, firstName: true, lastName: true, email: true, phoneNumber: true, accountType: true, status: true } },
+            },
+          },
+          providerSpecialty: {
+            select: {
+              id: true,
+              status: true,
+              isPassed: true,
+              specialty: { select: { id: true, name: true, nameAr: true, nameEn: true } },
+            },
+          },
+        },
+      }),
+      prisma.accreditationSample.count({ where }),
+    ]);
+    return {
+      items,
+      pagination: { page: safePage, limit: safeLimit, total, totalPages: Math.ceil(total / safeLimit) },
+    };
+  }
+
+  async getSampleByIdAdmin(id: string) {
+    const sample = await prisma.accreditationSample.findUnique({
+      where: { id },
+      include: {
+        providerProfile: {
+          select: {
+            id: true,
+            userId: true,
+            user: { select: { id: true, firstName: true, lastName: true, email: true, phoneNumber: true, accountType: true, status: true } },
+          },
+        },
+        providerSpecialty: {
+          select: {
+            id: true,
+            status: true,
+            isPassed: true,
+            aiScore: true,
+            ownershipCredibility: true,
+            badgeGrantedAt: true,
+            specialty: { select: { id: true, name: true, nameAr: true, nameEn: true, icon: true } },
+          },
+        },
+      },
+    });
+    if (!sample) throw new AppError('نموذج الاعتماد غير موجود', 404);
+    return sample;
+  }
+
+  async adminApproveSample(id: string) {
+    const sample = await prisma.accreditationSample.findUnique({ where: { id } });
+    if (!sample) throw new AppError('نموذج الاعتماد غير موجود', 404);
+    if (sample.status === AccreditationStatus.AI_VERIFIED) throw new AppError('تم اعتماد هذا النموذج مسبقاً', 409);
+
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.accreditationSample.update({
+        where: { id },
+        data: { status: AccreditationStatus.AI_VERIFIED, aiAuditedAt: sample.aiAuditedAt || new Date() },
+      });
+
+      await tx.providerSpecialty.updateMany({
+        where: { id: sample.providerSpecialtyId },
+        data: {
+          status: 'APPROVED',
+          isPassed: true,
+          badgeGrantedAt: new Date(),
+          ...(sample.aiScore != null ? { aiScore: sample.aiScore, ownershipCredibility: Math.max(0, sample.aiScore) } : {}),
+        },
+      });
+
+      return updated;
+    });
+  }
+
+  async adminRejectSample(id: string, rejectionReason: string) {
+    const sample = await prisma.accreditationSample.findUnique({ where: { id } });
+    if (!sample) throw new AppError('نموذج الاعتماد غير موجود', 404);
+    if (sample.status === AccreditationStatus.REJECTED) throw new AppError('تم رفض هذا النموذج مسبقاً', 409);
+
+    const adminNote = `\n[مراجعة الإدارة] سبب الرفض: ${rejectionReason}`;
+    const existingFeedback = sample.aiFeedbackAr || '';
+
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.accreditationSample.update({
+        where: { id },
+        data: {
+          status: AccreditationStatus.REJECTED,
+          aiFeedbackAr: existingFeedback + adminNote,
+        },
+      });
+
+      await tx.providerSpecialty.updateMany({
+        where: { id: sample.providerSpecialtyId, status: { not: 'APPROVED' } },
+        data: { status: 'REJECTED' },
+      });
+
+      return updated;
+    });
   }
 }
 

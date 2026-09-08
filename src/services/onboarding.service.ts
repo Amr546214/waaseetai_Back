@@ -1,6 +1,7 @@
-import { OnboardingStatus } from '@prisma/client';
+import { OnboardingStatus, KYCStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
+import { RejectOnboardingInput } from '../dtos/onboarding.dto';
 
 export class OnboardingService {
   async saveUpload(userId: string, input: { documentType: string; documentUrl: string; documentName: string }) {
@@ -12,6 +13,106 @@ export class OnboardingService {
   async getStatus(userId: string) {
     const record = await prisma.clientOnboarding.findUnique({ where: { userId } });
     return record || { userId, status: OnboardingStatus.PENDING, documentUrl: null, documentName: null, documentType: null, rejectionReason: null, reviewedAt: null };
+  }
+
+  async listOnboarding(status?: OnboardingStatus, page = 1, limit = 10) {
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(100, Math.max(1, limit));
+    const where = status ? { status } : {};
+    const [items, total] = await Promise.all([
+      prisma.clientOnboarding.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (safePage - 1) * safeLimit,
+        take: safeLimit,
+        include: {
+          user: { select: { id: true, firstName: true, lastName: true, email: true, phoneNumber: true, accountType: true, status: true } },
+        },
+      }),
+      prisma.clientOnboarding.count({ where }),
+    ]);
+    const enrichedItems = await Promise.all(items.map(async (item) => {
+      const clientProfile = await prisma.clientProfile.findUnique({
+        where: { userId: item.userId },
+        select: { kycStatus: true },
+      });
+      return { ...item, clientProfileKycStatus: clientProfile?.kycStatus || null };
+    }));
+    return {
+      items: enrichedItems,
+      pagination: { page: safePage, limit: safeLimit, total, totalPages: Math.ceil(total / safeLimit) },
+    };
+  }
+
+  async getOnboarding(id: string) {
+    const item = await prisma.clientOnboarding.findUnique({
+      where: { id },
+      include: { user: { select: { id: true, firstName: true, lastName: true, email: true, phoneNumber: true, accountType: true, status: true } } },
+    });
+    if (!item) throw new AppError('سجل التحقق غير موجود', 404);
+    const clientProfile = await prisma.clientProfile.findUnique({
+      where: { userId: item.userId },
+      select: { kycStatus: true, idNumber: true, frontIdUrl: true, backIdUrl: true, isNafathVerified: true },
+    });
+    return { ...item, clientProfile };
+  }
+
+  async approveOnboarding(id: string) {
+    const item = await prisma.clientOnboarding.findUnique({ where: { id } });
+    if (!item) throw new AppError('سجل التحقق غير موجود', 404);
+    if (item.status !== OnboardingStatus.PENDING) throw new AppError('تمت معالجة هذا الطلب مسبقاً', 409);
+    const [updated] = await Promise.all([
+      prisma.clientOnboarding.update({ where: { id }, data: { status: OnboardingStatus.APPROVED, reviewedAt: new Date() } }),
+      prisma.clientProfile.updateMany({ where: { userId: item.userId }, data: { kycStatus: KYCStatus.VERIFIED } }),
+    ]);
+    return updated;
+  }
+
+  async rejectOnboarding(id: string, input: RejectOnboardingInput) {
+    const item = await prisma.clientOnboarding.findUnique({ where: { id } });
+    if (!item) throw new AppError('سجل التحقق غير موجود', 404);
+    if (item.status !== OnboardingStatus.PENDING) throw new AppError('تمت معالجة هذا الطلب مسبقاً', 409);
+    const [updated] = await Promise.all([
+      prisma.clientOnboarding.update({ where: { id }, data: { status: OnboardingStatus.REJECTED, rejectionReason: input.rejectionReason, reviewedAt: new Date() } }),
+      prisma.clientProfile.updateMany({ where: { userId: item.userId }, data: { kycStatus: KYCStatus.REJECTED } }),
+    ]);
+    return updated;
+  }
+
+  async listProviderKyc(status?: KYCStatus, page = 1, limit = 10) {
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(100, Math.max(1, limit));
+    const where = status ? { kycStatus: status } : {};
+    const [items, total] = await Promise.all([
+      prisma.providerProfile.findMany({
+        where,
+        orderBy: { id: 'desc' },
+        skip: (safePage - 1) * safeLimit,
+        take: safeLimit,
+        include: {
+          user: { select: { id: true, firstName: true, lastName: true, email: true, phoneNumber: true, accountType: true, status: true } },
+        },
+      }),
+      prisma.providerProfile.count({ where }),
+    ]);
+    return {
+      items,
+      pagination: { page: safePage, limit: safeLimit, total, totalPages: Math.ceil(total / safeLimit) },
+    };
+  }
+
+  async approveProviderKyc(userId: string) {
+    const profile = await prisma.providerProfile.findUnique({ where: { userId } });
+    if (!profile) throw new AppError('ملف المزود غير موجود', 404);
+    if (profile.kycStatus === KYCStatus.VERIFIED) throw new AppError('تم التحقق من هذا المزود مسبقاً', 409);
+    return prisma.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.VERIFIED, isVerified: true, notes: null } });
+  }
+
+  async rejectProviderKyc(userId: string, input: RejectOnboardingInput) {
+    const profile = await prisma.providerProfile.findUnique({ where: { userId } });
+    if (!profile) throw new AppError('ملف المزود غير موجود', 404);
+    if (profile.kycStatus === KYCStatus.REJECTED) throw new AppError('تم رفض هذا المزود مسبقاً', 409);
+    return prisma.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.REJECTED, isVerified: false, notes: `سبب الرفض: ${input.rejectionReason}` } });
   }
 }
 

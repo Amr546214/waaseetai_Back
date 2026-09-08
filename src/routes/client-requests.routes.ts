@@ -43,6 +43,9 @@ router.get('/my-requests', authenticate, requireActiveUser, clientRequestsContro
 // Active projects list endpoint
 router.get('/active-projects', authenticate, requireActiveUser, clientRequestsController.getActiveProjects);
 
+// Completed/archived projects list endpoint
+router.get('/completed-projects', authenticate, requireActiveUser, clientRequestsController.getCompletedProjects);
+
 // Active project tracking details
 router.get('/active-projects/:id', authenticate, requireActiveUser, clientRequestsController.getActiveProjectTracking);
 

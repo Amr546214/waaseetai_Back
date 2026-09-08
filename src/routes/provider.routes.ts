@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getProviderStatistics, getProviderOffers, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, getProviderWallet, getProviderTransactions } from '../controllers/provider.controller';
+import { submitWithdrawal, listMyWithdrawals } from '../controllers/withdrawal.controller';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import providerProfileRouter from './provider-profile.routes';
@@ -36,6 +37,8 @@ router.post('/projects/:id/stages/:stageId/deliveries', authenticate, requireAct
 
 router.get('/finance/wallet', authenticate, requireActiveUser, getProviderWallet);
 router.get('/finance/transactions', authenticate, requireActiveUser, getProviderTransactions);
+router.post('/finance/withdrawals', authenticate, requireActiveUser, providerOnly, submitWithdrawal);
+router.get('/finance/withdrawals', authenticate, requireActiveUser, listMyWithdrawals);
 
 // Endpoint for Provider Submitted Offers tracking and AI analysis
 router.get(

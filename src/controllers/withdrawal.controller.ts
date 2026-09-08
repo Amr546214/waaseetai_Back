@@ -1,10 +1,30 @@
 import { Request, Response, NextFunction } from 'express';
 import { WithdrawalStatus } from '@prisma/client';
-import { rejectWithdrawalSchema, resolveWithdrawalSchema } from '../dtos/withdrawal.dto';
+import { createWithdrawalSchema, rejectWithdrawalSchema, resolveWithdrawalSchema } from '../dtos/withdrawal.dto';
 import { AppError } from '../utils/app-error';
 import { withdrawalService } from '../services/withdrawal.service';
 
 const adminId = (req: Request) => req.user!.id;
+const userId = (req: Request) => req.user!.userId || req.user!.id;
+
+export async function submitWithdrawal(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = createWithdrawalSchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError(parsed.error.issues.map(i => i.message).join(', '), 400);
+    const data = await withdrawalService.createForProvider(userId(req), parsed.data);
+    res.status(201).json({ success: true, message: 'تم تقديم طلب السحب بنجاح', data });
+  } catch (error) { next(error); }
+}
+
+export async function listMyWithdrawals(req: Request, res: Response, next: NextFunction) {
+  try {
+    const rawStatus = req.query.status ? String(req.query.status).toUpperCase() : undefined;
+    const status = rawStatus && Object.values(WithdrawalStatus).includes(rawStatus as WithdrawalStatus) ? rawStatus as WithdrawalStatus : undefined;
+    if (rawStatus && !status) throw new AppError('حالة طلب السحب غير صحيحة', 400);
+    const data = await withdrawalService.listForUser(userId(req), status, Number(req.query.page) || 1, Number(req.query.limit) || 10);
+    res.json({ success: true, message: 'تم جلب سجل السحب بنجاح', data });
+  } catch (error) { next(error); }
+}
 
 export async function listWithdrawals(req: Request, res: Response, next: NextFunction) {
   try { const rawStatus = req.query.status ? String(req.query.status).toUpperCase() : undefined; const status = rawStatus && Object.values(WithdrawalStatus).includes(rawStatus as WithdrawalStatus) ? rawStatus as WithdrawalStatus : undefined; if (rawStatus && !status) throw new AppError('حالة طلب السحب غير صحيحة', 400); res.json({ success: true, data: await withdrawalService.list(status, Number(req.query.page) || 1, Number(req.query.limit) || 20) }); } catch (error) { next(error); }
