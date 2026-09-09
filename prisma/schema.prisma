@@ -1411,6 +1411,9 @@ model Message {
   fileSize      Int?    @map("file_size")
   audioDuration Int?    @map("audio_duration")
 
+  // Discussion context (project/stage/delivery reference, like WhatsApp reply preview)
+  context Json?
+
   createdAt DateTime @default(now()) @map("created_at")
 
   // Relations

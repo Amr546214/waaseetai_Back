@@ -26,7 +26,8 @@ export const sendMessageSchema = z.object({
   fileName: z.string().optional(),
   fileSize: z.number().optional(),
   audioDuration: z.number().optional(),
-  duration: z.number().optional()
+  duration: z.number().optional(),
+  context: z.any().optional()
 });
 
 export const joinRoomSchema = z.object({

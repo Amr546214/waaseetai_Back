@@ -331,7 +331,7 @@ class ChatService {
    * Persist a new message in database and update conversation timestamp
    */
   async sendMessage(senderId: string, data: SendMessageDto) {
-    const { conversationId, content, type, fileUrl, fileName, fileSize, audioDuration, duration } = data;
+    const { conversationId, content, type, fileUrl, fileName, fileSize, audioDuration, duration, context } = data;
 
     const conversation = await prisma.conversation.findUnique({
       where: { id: conversationId }
@@ -341,22 +341,45 @@ class ChatService {
       throw new AppError('المحادثة غير موجودة أو غير مصرح لك بالإرسال فيها', 403);
     }
 
-    const newMsg = await prisma.message.create({
-      data: {
-        conversationId,
-        senderId,
-        type: (type as MessageType) || MessageType.TEXT,
-        content: content || null,
-        fileUrl: fileUrl || null,
-        fileName: fileName || null,
-        fileSize: fileSize ? Number(fileSize) : null,
-        audioDuration: (audioDuration ?? duration) ? Number(audioDuration ?? duration) : null,
-        status: MessageStatus.SENT
-      },
-      include: {
-        sender: { select: { id: true, firstName: true, lastName: true, avatarUrl: true } }
+    const messageData: any = {
+      conversationId,
+      senderId,
+      type: (type as MessageType) || MessageType.TEXT,
+      content: content || null,
+      fileUrl: fileUrl || null,
+      fileName: fileName || null,
+      fileSize: fileSize ? Number(fileSize) : null,
+      audioDuration: (audioDuration ?? duration) ? Number(audioDuration ?? duration) : null,
+      status: MessageStatus.SENT
+    };
+
+    // Attach discussion context if provided (requires migration 20260903120000)
+    if (context && typeof context === 'object') {
+      messageData.context = context;
+    }
+
+    let newMsg;
+    try {
+      newMsg = await prisma.message.create({
+        data: messageData,
+        include: {
+          sender: { select: { id: true, firstName: true, lastName: true, avatarUrl: true } }
+        }
+      });
+    } catch (err: any) {
+      // If the context column doesn't exist yet (migration not run), retry without it
+      if (context && err && typeof err.message === 'string' && err.message.includes('context')) {
+        delete messageData.context;
+        newMsg = await prisma.message.create({
+          data: messageData,
+          include: {
+            sender: { select: { id: true, firstName: true, lastName: true, avatarUrl: true } }
+          }
+        });
+      } else {
+        throw err;
       }
-    });
+    }
 
     // Touch conversation updatedAt timestamp
     await prisma.conversation.update({
@@ -414,6 +437,7 @@ class ChatService {
       fileSize: msg.fileSize,
       audioDuration: msg.audioDuration,
       status: msg.status,
+      context: (msg as any).context || null,
       time: timeStr,
       createdAt: msg.createdAt,
       dateGroup: 'اليوم'
