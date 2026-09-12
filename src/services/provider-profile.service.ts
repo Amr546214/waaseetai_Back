@@ -200,7 +200,7 @@ export class ProviderProfileService {
 		const publishedServicesCount = publishedServices.length;
 
 		const reviews = await prisma.review.findMany({
-			where: { providerId },
+			where: { providerId, reviewerRole: 'CLIENT' },
 			orderBy: { createdAt: 'desc' },
 			take: 20,
 			include: {
@@ -208,7 +208,7 @@ export class ProviderProfileService {
 				project: { select: { title: true } }
 			}
 		});
-		const reviewsCount = await prisma.review.count({ where: { providerId } });
+		const reviewsCount = await prisma.review.count({ where: { providerId, reviewerRole: 'CLIENT' } });
 
 		const gamification = await prisma.providerGamification.findUnique({
 			where: { providerId }

@@ -32,7 +32,7 @@ class GamificationService {
     const totalPoints = pointsSum._sum.amount || 0; // STRICTLY 0 FOR NEW USERS
 
     const ratingAggregate = await prisma.review.aggregate({
-      where: { providerId },
+      where: { providerId, reviewerRole: 'CLIENT' },
       _avg: { rating: true }
     });
     const avgRating = Number(ratingAggregate._avg.rating || 0);

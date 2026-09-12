@@ -3,7 +3,7 @@ import { authenticate, requireActiveUser } from '../middlewares/auth.middleware'
 import { clientRequestsController } from '../controllers/client-requests.controller';
 import { memoryUpload } from '../utils/cloudinary-storage';
 import { openClientDispute } from '../controllers/dispute.controller';
-import { rateAsClient } from '../controllers/rating.controller';
+import { rateAsClient, rateStage } from '../controllers/rating.controller';
 
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
@@ -51,6 +51,7 @@ router.get('/active-projects/:id', authenticate, requireActiveUser, clientReques
 
 router.get('/:id/workspace', authenticate, requireActiveUser, clientRequestsController.getProjectWorkspace);
 router.post('/:id/stages/:stageId/review', authenticate, requireActiveUser, clientRequestsController.reviewStageDelivery);
+router.post('/:id/stages/:stageId/rating', authenticate, requireActiveUser, rateStage);
 
 // Request details by ID
 router.get('/:id', authenticate, requireActiveUser, clientRequestsController.getRequestDetails);

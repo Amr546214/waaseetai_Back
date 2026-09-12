@@ -379,7 +379,9 @@ export const submitStageDelivery = async (req: Request, res: Response, next: Nex
 	try {
 		const providerId = (req as any).user?.id;
 		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		console.log('[submitStageDelivery] received body:', JSON.stringify({ note: req.body?.note?.slice(0, 50), files: req.body?.files, filesCount: Array.isArray(req.body?.files) ? req.body.files.length : 0 }));
 		const data = await projectProgressService.submitDelivery(providerId, req.params.id as string, req.params.stageId as string, req.body?.note, req.body?.files);
+		console.log('[submitStageDelivery] created delivery files:', JSON.stringify((data as any)?.files));
 		res.status(201).json({ success: true, message: 'تم إرسال المرحلة للعميل للمراجعة', data });
 	} catch (error) { next(error); }
 };

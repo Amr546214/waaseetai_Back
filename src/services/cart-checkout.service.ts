@@ -6,6 +6,16 @@ import { notificationService } from './notification.service';
 
 const serviceWhere = { status: { in: ['PUBLISHED', 'APPROVED'] as any } };
 
+/**
+ * DEV/TEST ONLY — Allows wallet checkout to proceed even when balance is insufficient.
+ * Honored regardless of NODE_ENV (since dev backend may use NODE_ENV=production).
+ * To enable: set ALLOW_TEST_CHECKOUT_WITHOUT_BALANCE=true in .env
+ * To disable: set to false or remove the flag. NEVER commit this as true.
+ */
+function isTestCheckoutBypassEnabled(): boolean {
+  return process.env.ALLOW_TEST_CHECKOUT_WITHOUT_BALANCE === 'true';
+}
+
 function personName(user: { firstName: string; lastName: string }) {
   return `${user.firstName} ${user.lastName}`.trim();
 }
@@ -149,10 +159,12 @@ export class CartCheckoutService {
   async getPaymentMethods(userId: string) {
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { walletBalance: true } });
     if (!user) throw new AppError('المستخدم غير موجود', 404);
+    const balance = Number(user.walletBalance);
+    console.debug(`[Checkout] getPaymentMethods userId=${userId} walletBalance=${balance}`);
     return [
       { id: 'card', name: 'بطاقة بنكية', available: true },
       { id: 'moyasar', name: 'ميسر', available: true },
-      { id: 'wallet', name: 'المحفظة', available: true, balance: Number(user.walletBalance) },
+      { id: 'wallet', name: 'المحفظة', available: true, balance },
       { id: 'stc_pay', name: 'STC Pay', available: false, badge: 'قريباً' },
       { id: 'apple_pay', name: 'Apple Pay', available: false, badge: 'قريباً' }
     ];
@@ -168,7 +180,13 @@ export class CartCheckoutService {
     const order = await prisma.order.findFirst({ where: { id: orderId, userId }, include: { user: { select: { email: true, phoneNumber: true, walletBalance: true } } } });
     if (!order) throw new AppError('الطلب غير موجود', 404);
     if (order.status !== OrderStatus.PENDING_PAYMENT) throw new AppError('الطلب لا ينتظر الدفع', 400);
-    if (paymentMethod === 'wallet' && Number(order.user.walletBalance) < order.total) throw new AppError('رصيد المحفظة غير كافٍ', 400);
+    if (paymentMethod === 'wallet' && Number(order.user.walletBalance) < order.total) {
+      if (isTestCheckoutBypassEnabled()) {
+        console.warn(`[TEST CHECKOUT BYPASS] initPayment — wallet balance insufficient but proceeding. userId=${userId} orderId=${orderId} balance=${Number(order.user.walletBalance)} total=${order.total}`);
+      } else {
+        throw new AppError('رصيد المحفظة غير كافٍ', 400);
+      }
+    }
 
     const paymentReference = `PAY-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
     const code = crypto.randomInt(100000, 999999).toString();
@@ -195,7 +213,7 @@ export class CartCheckoutService {
   }
 
   async confirmPayment(userId: string, orderId: string, otpCode: string) {
-    const order = await prisma.order.findFirst({ where: { id: orderId, userId }, include: { items: true } });
+    const order = await prisma.order.findFirst({ where: { id: orderId, userId }, include: { items: true, user: { select: { walletBalance: true } } } });
     if (!order) throw new AppError('الطلب غير موجود', 404);
     if (order.status !== OrderStatus.PENDING_PAYMENT) throw new AppError('الطلب مدفوع مسبقاً أو غير قابل للدفع', 400);
     const otp = await this.getPaymentOtp(userId, orderId);
@@ -211,9 +229,17 @@ export class CartCheckoutService {
       : [];
     const projectIds = await prisma.$transaction(async tx => {
       if (context.paymentMethod === 'wallet') {
-        const debited = await tx.user.updateMany({ where: { id: userId, walletBalance: { gte: order.total } }, data: { walletBalance: { decrement: order.total } } });
-        if (debited.count !== 1) throw new AppError('رصيد المحفظة غير كافٍ', 400);
-        await tx.walletTransaction.create({ data: { userId, type: 'ORDER_PAYMENT', amount: -order.total, currency: 'SAR', status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: context.paymentReference, description: `دفع الطلب ${order.orderNumber}`, metadata: { orderId: order.id } } });
+        const walletBalance = Number(order.user.walletBalance);
+        const bypass = isTestCheckoutBypassEnabled() && walletBalance < order.total;
+        if (bypass) {
+          console.warn(`[TEST CHECKOUT BYPASS] confirmPayment — purchase completed without enough wallet balance. userId=${userId} orderId=${order.id} balance=${walletBalance} total=${order.total}`);
+          // Skip wallet deduction in bypass mode; record a TEST_WALLET_BYPASS transaction for audit.
+          await tx.walletTransaction.create({ data: { userId, type: 'ORDER_PAYMENT', amount: -order.total, currency: 'SAR', status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: context.paymentReference, description: `[TEST BYPASS] دفع الطلب ${order.orderNumber} (تجاوز رصيد المحفظة لأغراض الاختبار)`, metadata: { orderId: order.id, testBypass: true } } });
+        } else {
+          const debited = await tx.user.updateMany({ where: { id: userId, walletBalance: { gte: order.total } }, data: { walletBalance: { decrement: order.total } } });
+          if (debited.count !== 1) throw new AppError('رصيد المحفظة غير كافٍ', 400);
+          await tx.walletTransaction.create({ data: { userId, type: 'ORDER_PAYMENT', amount: -order.total, currency: 'SAR', status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: context.paymentReference, description: `دفع الطلب ${order.orderNumber}`, metadata: { orderId: order.id } } });
+        }
       }
       if (order.couponId) {
         const coupon = await tx.coupon.findUnique({ where: { id: order.couponId } });

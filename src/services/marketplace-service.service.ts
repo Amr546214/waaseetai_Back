@@ -673,7 +673,7 @@ export class MarketplaceService {
 		}
 		gallery = [...new Set(gallery)];
 		const [reviewStats, updatedViews] = await Promise.all([
-			prisma.review.aggregate({ where: { serviceId: s.id }, _count: { _all: true }, _avg: { rating: true } }),
+			prisma.review.aggregate({ where: { serviceId: s.id, reviewerRole: 'CLIENT' }, _count: { _all: true }, _avg: { rating: true } }),
 			prisma.serviceCatalog.update({ where: { id: s.id }, data: { viewsCount: { increment: 1 } }, select: { viewsCount: true } })
 		]);
 		const reviewsCount = reviewStats._count._all;

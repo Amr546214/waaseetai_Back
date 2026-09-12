@@ -19,6 +19,28 @@ const nameFromUrl = (url: string) => {
   catch { return url.split('/').pop() || 'ملف مرفق'; }
 };
 
+// Normalize a single file entry from StageDelivery.files (String[]).
+// Entries can be: (a) JSON-stringified objects {name,url,type,size}, or (b) plain URL strings (legacy).
+// Always returns { name, url, type?, size? }.
+const normalizeFileEntry = (entry: string): { name: string; url: string; type?: string; size?: number } => {
+  if (typeof entry !== 'string') return { name: 'ملف مرفق', url: '' };
+  const trimmed = entry.trim();
+  // Try parsing as JSON object first
+  if (trimmed.startsWith('{')) {
+    try {
+      const obj = JSON.parse(trimmed);
+      return {
+        name: obj.name || obj.fileName || (obj.url ? nameFromUrl(obj.url) : 'ملف مرفق'),
+        url: obj.url || obj.fileUrl || obj.file_url || '',
+        type: obj.type || obj.mimeType || undefined,
+        size: typeof obj.size === 'number' ? obj.size : undefined
+      };
+    } catch { /* fall through to URL handling */ }
+  }
+  // Legacy: plain URL string
+  return { name: nameFromUrl(trimmed), url: trimmed };
+};
+
 export class ProjectProgressService {
   private async ensureStages(contractId: string) {
     const found = await prisma.projectStage.findMany({ where: { contractId }, orderBy: { stepOrder: 'asc' } });
@@ -79,7 +101,11 @@ export class ProjectProgressService {
       };
     }
     await this.ensureStages(contract.id);
-    const persisted = await prisma.projectStage.findMany({ where: { contractId: contract.id }, orderBy: { stepOrder: 'asc' }, include: { deliveries: { orderBy: { submittedAt: 'asc' } } } });
+    // Stage reviews are always written by the client. When the provider calls this endpoint,
+    // userId is the provider's id, so filtering by clientId: userId would return empty.
+    // Resolve the actual reviewer id (the contract's client) so both sides see the rating.
+    const reviewerId = contract.providerId === userId ? contract.clientId : userId;
+    const persisted = await prisma.projectStage.findMany({ where: { contractId: contract.id }, orderBy: { stepOrder: 'asc' }, include: { deliveries: { orderBy: { submittedAt: 'asc' } }, stageReviews: { where: { clientId: reviewerId } } } });
     const role = contract.providerId === userId ? 'provider' : 'client';
     const other = role === 'provider' ? contract.client : contract.provider;
     const otherName = `${other.firstName || (role === 'provider' ? 'العميل' : 'مقدم الخدمة')} ${other.lastName || ''}`.trim();
@@ -95,17 +121,21 @@ export class ProjectProgressService {
     const released = contract.project.escrow?.releasedAmount || 0;
     const stages = persisted.map(stage => {
       const [status, statusText] = stageLabels[stage.status];
+      const stageReview = (stage as any).stageReviews?.[0] || null;
       return {
         id: stage.id, stageNumber: stage.stepOrder, title: stage.title, description: stage.description,
         amount: stage.amount, percentage: stage.percentage, days: stage.days,
         isDone: stage.status === ProjectStageStatus.APPROVED,
         isWait: stage.status === ProjectStageStatus.IN_PROGRESS || stage.status === ProjectStageStatus.SUBMITTED || stage.status === ProjectStageStatus.REVISION_REQUESTED,
         status, statusText, completedDate: stage.approvedAt, roundsCount: stage.deliveries.length,
+        hasClientRating: !!stageReview,
+        clientRating: stageReview?.rating || null,
+        clientRatingComment: stageReview?.comment || null,
         threads: stage.deliveries.map((delivery, index) => ({
           id: delivery.id, author: role === 'provider' ? 'أنت' : `${contract.provider.firstName || 'مقدم الخدمة'} ${contract.provider.lastName || ''}`.trim(),
           authorInitial: contract.provider.firstName?.charAt(0) || 'م', isMe: role === 'provider', tag: `التسليم ${index + 1}`,
           isRedo: index > 0, date: delivery.submittedAt, note: delivery.note,
-          files: delivery.files.map(url => ({ name: nameFromUrl(url), url })), reviewNote: delivery.reviewNote, deliveryStatus: delivery.status
+          files: delivery.files.map(url => normalizeFileEntry(url)), reviewNote: delivery.reviewNote, deliveryStatus: delivery.status
         }))
       };
     });
@@ -113,7 +143,7 @@ export class ProjectProgressService {
       const [status, statusText] = deliveryLabels[delivery.status];
       return { id: delivery.id, stageId: stage.id, stageTitle: stage.title, stageNumber: stage.stepOrder,
         title: stage.title, status, statusText, submittedAt: delivery.submittedAt, roundText: `التسليم ${index + 1}`,
-        summary: delivery.note, reviewNote: delivery.reviewNote, files: delivery.files.map(url => ({ name: nameFromUrl(url), url })) };
+        summary: delivery.note, reviewNote: delivery.reviewNote, files: delivery.files.map(url => normalizeFileEntry(url)) };
     }));
     const messages = (conversation?.messages || []).map(message => ({
       id: message.id, senderName: message.senderId === userId ? 'أنت' : `${message.sender.firstName || otherName} ${message.sender.lastName || ''}`.trim(),
@@ -122,6 +152,26 @@ export class ProjectProgressService {
     }));
     const progress = Math.min(100, Math.round(persisted.filter(s => s.status === ProjectStageStatus.APPROVED).reduce((sum, s) => sum + s.percentage, 0)));
     const elapsed = Math.max(0, Math.floor((Date.now() - (contract.signedAt || contract.createdAt).getTime()) / 86400000));
+    // Provider → Client final rating status (for provider-side read-only display).
+    // A final project rating by the provider has stageId = null and is written by the provider.
+    let providerClientRating: { hasRated: boolean; rating: number | null; comment: string | null; ratedAt: string | null } = {
+      hasRated: false, rating: null, comment: null, ratedAt: null
+    };
+    if (role === 'provider') {
+      const existingReview = await prisma.review.findFirst({
+        where: { providerId: userId, projectId: contract.projectId, stageId: null, clientId: contract.clientId, reviewerRole: 'PROVIDER' },
+        select: { rating: true, comment: true, createdAt: true }
+      });
+      if (existingReview) {
+        providerClientRating = {
+          hasRated: true,
+          rating: existingReview.rating,
+          comment: existingReview.comment || null,
+          ratedAt: existingReview.createdAt ? existingReview.createdAt.toISOString() : null
+        };
+      }
+    }
+
     return {
       id: contract.id, projectId: contract.projectId, role, conversationId: conversation?.id || null,
       title: contract.project.title, clientName: otherName, clientInitial: otherName.charAt(0) || 'ع', contractRef: `CT-${contract.id.slice(0, 6).toUpperCase()}`,
@@ -131,21 +181,40 @@ export class ProjectProgressService {
       stages, deliveries,
       edits: deliveries.filter(d => d.status === 'notes').map(d => ({ id: d.id, stageId: d.stageId, stageTitle: d.stageTitle, title: `ملاحظات على ${d.stageTitle}`, clientNotes: d.reviewNote || '', status: 'waiting', statusText: 'بانتظار إعادة التسليم', createdAt: d.submittedAt })),
       messages,
-      files: persisted.filter(s => s.deliveries.some(d => d.files.length)).map(s => ({ groupTitle: s.title, isDone: s.status === ProjectStageStatus.APPROVED, files: s.deliveries.flatMap(d => d.files.map(url => ({ name: nameFromUrl(url), size: '', url }))) })),
+      files: persisted.filter(s => s.deliveries.some(d => d.files.length)).map(s => ({ groupTitle: s.title, isDone: s.status === ProjectStageStatus.APPROVED, files: s.deliveries.flatMap(d => d.files.map(url => normalizeFileEntry(url))) })),
+      providerClientRating,
       aiInsights: { confidence: 0, earlyDays: 0, matchPercentage: null, riskLevel: 'غير محسوبة', riskLevelKey: 'unknown', healthRating: 'بانتظار بيانات كافية', bullets: [] }
     };
   }
 
-  async submitDelivery(providerId: string, key: string, stageId: string, note: string, files: string[]) {
+  async submitDelivery(providerId: string, key: string, stageId: string, note: string, files: any[]) {
     if (!note?.trim() || note.trim().length < 10) throw new AppError('أضف وصفاً واضحاً للتسليم (10 أحرف على الأقل)', 400);
     const contract = await prisma.contract.findFirst({ where: { OR: [{ id: key }, { projectId: key }], providerId } });
     if (!contract || contract.status !== ContractStatus.ACTIVE) throw new AppError('العقد غير نشط أو لا تملك صلاحية التسليم', 403);
     await this.ensureStages(contract.id);
     const stage = await prisma.projectStage.findFirst({ where: { id: stageId, contractId: contract.id } });
     if (!stage || (stage.status !== ProjectStageStatus.IN_PROGRESS && stage.status !== ProjectStageStatus.REVISION_REQUESTED)) throw new AppError('هذه المرحلة غير متاحة للتسليم حالياً', 409);
-    const safeFiles = Array.isArray(files) ? files.filter(v => typeof v === 'string' && v.trim()).slice(0, 10) : [];
+    // Accept both file objects ({name,url,type,size}) and plain URL strings.
+    // Serialize each entry to a JSON string for storage in String[] column.
+    const safeFiles: string[] = Array.isArray(files)
+      ? files
+          .filter(v => v != null)
+          .map(v => {
+            if (typeof v === 'string') return v.trim() ? v.trim() : null;
+            if (typeof v === 'object') {
+              const url = v.url || v.fileUrl || v.file_url || '';
+              if (!url) return null;
+              return JSON.stringify({ name: v.name || v.fileName || nameFromUrl(url), url, type: v.type || v.mimeType || '', size: typeof v.size === 'number' ? v.size : 0 });
+            }
+            return null;
+          })
+          .filter((v): v is string => v !== null)
+          .slice(0, 10)
+      : [];
+    console.log('[submitDelivery] safeFiles count:', safeFiles.length, 'sample:', safeFiles.slice(0, 2));
     return prisma.$transaction(async tx => {
       const delivery = await tx.stageDelivery.create({ data: { stageId, providerId, note: note.trim(), files: safeFiles } });
+      console.log('[submitDelivery] created delivery id:', delivery.id, 'files:', JSON.stringify(delivery.files));
       await tx.projectStage.update({ where: { id: stageId }, data: { status: ProjectStageStatus.SUBMITTED } });
       await tx.project.update({ where: { id: contract.projectId }, data: { status: ProjectStatus.AWAITING_DELIVERY } });
       await tx.notification.create({ data: { userId: contract.clientId, title: 'تسليم جديد بانتظار مراجعتك', message: `تم تسليم مرحلة: ${stage.title}`, type: 'STAGE_DELIVERY', category: 'PROJECTS', actionUrl: `/client-overview/projects/${contract.projectId}`, metadata: { projectId: contract.projectId, stageId, deliveryId: delivery.id } } });

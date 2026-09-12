@@ -472,6 +472,9 @@ model Review {
   service    ServiceCatalog? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
   clientRequestId String?
   clientRequest   ClientRequest? @relation(fields: [clientRequestId], references: [id], onDelete: SetNull)
+  stageId    String?
+  stage      ProjectStage?   @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  reviewerRole String        @default("CLIENT")
   rating     Float
   comment    String?
   createdAt  DateTime        @default(now())
@@ -480,6 +483,7 @@ model Review {
   @@index([serviceId])
   @@index([projectId])
   @@index([clientRequestId])
+  @@index([stageId])
   @@map("reviews")
 }
 
@@ -1659,6 +1663,7 @@ model ProjectStage {
   startedAt   DateTime?
   approvedAt  DateTime?
   deliveries  StageDelivery[]
+  stageReviews Review[]
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
 

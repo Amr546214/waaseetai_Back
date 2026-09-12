@@ -737,7 +737,7 @@ Return JSON schema:
 
 		const projectIds = contracts.map(c => c.projectId);
 		const reviews = projectIds.length > 0
-			? await prisma.review.findMany({ where: { projectId: { in: projectIds }, clientId: userId } })
+			? await prisma.review.findMany({ where: { projectId: { in: projectIds }, clientId: userId, reviewerRole: 'CLIENT' } })
 			: [];
 		const reviewMap = new Map(reviews.map(r => [r.projectId, r]));
 
@@ -768,6 +768,8 @@ Return JSON schema:
 				canRate: c.status === 'COMPLETED' && !review,
 				hasRated: !!review,
 				rating: review?.rating || null,
+				ratingComment: review?.comment || null,
+				ratedAt: review?.createdAt ? review.createdAt.toISOString() : null,
 			};
 		});
 
