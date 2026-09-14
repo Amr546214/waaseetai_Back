@@ -39,7 +39,11 @@ export class ProposalController {
         projectId,
         currentTitle,
         currentMessage,
-        advantages
+        advantages,
+        {
+          actorUserId: req.user?.userId || req.user?.id,
+          primaryEntity: { type: 'PROJECT', id: projectId },
+        }
       );
 
       res.status(200).json({

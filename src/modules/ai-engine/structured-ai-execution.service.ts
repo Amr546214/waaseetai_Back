@@ -177,14 +177,11 @@ export class StructuredAiExecutionService {
     registration: AiCapabilityRegistration,
     renderedPrompt: AiRenderedPrompt
   ): void {
-    if (
-      registration.capability !== renderedPrompt.capability ||
-      registration.operation !== renderedPrompt.operation
-    ) {
+    if (registration.capability !== renderedPrompt.capability) {
       throw createAiEngineError(
         'openai',
         'AI_CONFIG_INVALID',
-        `Capability registration ${registration.capability}:${registration.operation} references prompt ${renderedPrompt.promptId}@${renderedPrompt.promptVersion} with mismatched capability or operation.`
+        `Capability registration ${registration.capability}:${registration.operation} references prompt ${renderedPrompt.promptId}@${renderedPrompt.promptVersion} with mismatched capability.`
       );
     }
   }

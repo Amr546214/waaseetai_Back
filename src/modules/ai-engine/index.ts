@@ -19,5 +19,6 @@ export * from './ai-observability.types';
 export * from './capability-registry.types';
 export * from './capability-registry';
 export * from './structured-ai-execution.service';
+export * from './capabilities';
 
 export { aiExecutionService as aiEngine } from './ai-execution.service';

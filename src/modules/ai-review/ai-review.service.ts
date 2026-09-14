@@ -1,7 +1,32 @@
 import { OpenAI } from 'openai';
 import { logger } from '../../config/logger';
-import { SYSTEM_PROMPT } from './ai-analyzer.prompt';
+import { structuredAiExecutionService } from '../ai-engine';
+import type {
+  AiEngineErrorPayload,
+  ProjectModelAnalysisAiOutput,
+  SuggestedMilestonesAiOutput,
+} from '../ai-engine';
+import { AppError } from '../../utils/app-error';
 import { CompleteProjectDataDto, AiReviewResponse, EnhanceDescriptionDto, SuggestTextDto, SuggestMilestonesDto, SuggestedMilestone } from './ai-review.dto';
+
+const getAiFailureStatusCode = (error: AiEngineErrorPayload): number => {
+  if (error.code === 'AI_PROVIDER_RATE_LIMITED') return 429;
+  if (
+    error.code === 'AI_RESPONSE_VALIDATION_FAILED' ||
+    error.code === 'AI_PROVIDER_BAD_RESPONSE'
+  ) return 502;
+
+  return error.statusCode && error.statusCode >= 400 && error.statusCode < 500
+    ? error.statusCode
+    : 503;
+};
+
+const createAiFailureAppError = (
+  message: string,
+  error: AiEngineErrorPayload
+): AppError => {
+  return new AppError(message, getAiFailureStatusCode(error), [error]);
+};
 
 export class AiReviewService {
   private openai: OpenAI | null = null;
@@ -85,183 +110,63 @@ export class AiReviewService {
   }
 
   /**
-   * Generate intelligent milestone schedule based on project title and description using gpt-4o-mini JSON mode
+   * Generate intelligent milestone schedule through the shared structured AI Engine.
    */
-  async suggestMilestones(dto: SuggestMilestonesDto): Promise<SuggestedMilestone[]> {
-    const title = dto.title || 'مشروع جديد';
-    const description = dto.description || '';
+  async suggestMilestones(
+    dto: SuggestMilestonesDto,
+    actorUserId?: string
+  ): Promise<SuggestedMilestone[]> {
+    const result = await structuredAiExecutionService.execute<
+      SuggestMilestonesDto,
+      SuggestedMilestonesAiOutput
+    >({
+      capability: 'project_intelligence',
+      operation: 'suggest_milestones',
+      input: {
+        title: dto.title || '',
+        description: dto.description || '',
+        totalAmount: dto.totalAmount,
+      },
+      locale: 'ar',
+      ...(actorUserId && { auditContext: { actorUserId } }),
+    });
 
-    if (this.openai) {
-      try {
-        const response = await this.openai.chat.completions.create({
-          model: 'gpt-4o-mini',
-          response_format: { type: 'json_object' },
-          messages: [
-            {
-              role: 'system',
-              content: 'You are Waseet AI Project Manager and Financial Strategist. Given the project title and description, generate a realistic, structured list of 3 to 4 sequential milestones for this project in professional Arabic. Each milestone must have: "title" (string), "description" (string deliverables explanation), "estimatedDays" (integer between 2 and 15), and "percentage" (integer percentage of total payment). The sum of all "percentage" values MUST equal exactly 100. Return strictly a JSON object with a single root key "milestones" containing an array of these milestone objects.'
-            },
-            {
-              role: 'user',
-              content: `Project Title: "${title}"\nProject Description: "${description}"\nGenerate optimal operational milestones and payment percentages.`
-            }
-          ],
-          temperature: 0.5,
-          max_tokens: 800
-        });
-
-        const rawContent = response.choices[0]?.message?.content;
-        if (rawContent) {
-          const parsed = JSON.parse(rawContent);
-          if (Array.isArray(parsed.milestones) && parsed.milestones.length > 0) {
-            let milestones: SuggestedMilestone[] = parsed.milestones.map((m: any, idx: number) => ({
-              title: m.title || `المرحلة ${idx + 1}`,
-              description: m.description || 'إنجاز المخرجات المطلوبة لهذه المرحلة',
-              estimatedDays: Number(m.estimatedDays) || 4,
-              percentage: Number(m.percentage) || Math.round(100 / parsed.milestones.length)
-            }));
-
-            // Ensure exact 100% sum
-            const totalPerc = milestones.reduce((sum, m) => sum + (m.percentage || 0), 0);
-            if (totalPerc !== 100 && milestones.length > 0) {
-              const diff = 100 - totalPerc;
-              milestones[milestones.length - 1].percentage = (milestones[milestones.length - 1].percentage || 0) + diff;
-            }
-
-            return milestones;
-          }
-        }
-      } catch (error) {
-        logger.error(`OpenAI suggestMilestones error: ${error}`);
-      }
+    if (!result.success) {
+      throw createAiFailureAppError(
+        'AI milestone suggestion failed. No simulated milestones were returned.',
+        result.error
+      );
     }
 
-    // Dynamic smart fallback matching project domain
-    const text = (title + ' ' + description).toLowerCase();
-    const isDev = text.includes('تطبيق') || text.includes('برمج') || text.includes('تطوير') || text.includes('موقع') || text.includes('ويب') || text.includes('نظام') || text.includes('ذكاء');
-    const isDesign = text.includes('هوية') || text.includes('شعار') || text.includes('تصميم') || text.includes('جرافيك') || text.includes('موشن') || text.includes('فيديو');
-
-    if (isDev) {
-      return [
-        { title: 'التحليل الهندسي وتجهيز البنية التحتية', description: 'تحليل المتطلبات الفنية، إعداد خطة قاعدة البيانات، وتجهيز واجهات الاستخدام التجريبية', estimatedDays: 4, percentage: 25 },
-        { title: 'البرمجة الفعلية وتطوير الوظائف الأساسية', description: 'بناء المنظومة البرمجية للربط والتنفيذ ودمج الميزات الحيوية المطلوبة', estimatedDays: 10, percentage: 50 },
-        { title: 'الاختبار الشامل والنشر والتشغيل', description: 'فحص الجودة والأداء والتوافقية، تسليم الكود المصدري، مع ضمان تشغيل أولي', estimatedDays: 4, percentage: 25 }
-      ];
-    } else if (isDesign) {
-      return [
-        { title: 'دراسة التوجه البصري وتصميم المقترحات الأولية', description: 'تحليل الهوية واقتراح خيارات مبتكرة ومتعددة للتصميم للمناقشة', estimatedDays: 4, percentage: 35 },
-        { title: 'تطوير الخيار المعتمد وإعداد الملحقات الفنية', description: 'تجهيز كافة التصاميم التطبيقية وتحديث الألوان والخطوط بناءً على الملاحظات', estimatedDays: 5, percentage: 40 },
-        { title: 'تسليم حزمة الملفات الأصلية ودليل الاستخدام', description: 'تجهيز وتصدير جميع ملفات المصدر بالصيغ المفتوحة والطباعية مع إرشادات الهوية', estimatedDays: 3, percentage: 25 }
-      ];
-    } else {
-      return [
-        { title: 'التخطيط الاستراتيجي واعتماد خطة العمل', description: 'اجتماع التنسيق الأولي، صياغة خطة العمل التفصيلية واعتماد خارطة المخرجات', estimatedDays: 3, percentage: 30 },
-        { title: 'التنفيذ المنهجي وعرض المسودة الرئيسية', description: 'العمل التأسيسي المتكامل وتجهيز مخرجات الخدمة الرئيسية لمراجعة العميل', estimatedDays: 6, percentage: 45 },
-        { title: 'المراجعات النهائية والتسليم الختامي للملفات', description: 'تطبيق التعديلات المطلوبة وتسليم كافة المخرجات الأصلية مع ضمان دعم ما بعد الخدمة', estimatedDays: 3, percentage: 25 }
-      ];
-    }
+    return result.data.milestones;
   }
 
   /**
-   * Perform comprehensive AI strategic audit on steps 1-4 using gpt-4o with response_format json_object
+   * Perform comprehensive AI strategic audit on steps 1-4 through the shared structured AI Engine.
    */
-  async analyzeProjectModel(data: CompleteProjectDataDto): Promise<AiReviewResponse> {
-    if (this.openai) {
-      try {
-        const payloadJson = JSON.stringify(data, null, 2);
-        const response = await this.openai.chat.completions.create({
-          model: 'gpt-4o',
-          response_format: { type: 'json_object' },
-          messages: [
-            {
-              role: 'system',
-              content: SYSTEM_PROMPT
-            },
-            {
-              role: 'user',
-              content: `Please evaluate this proposed project business model:\n${payloadJson}`
-            }
-          ],
-          temperature: 0.5,
-          max_tokens: 1500
-        });
+  async analyzeProjectModel(
+    data: CompleteProjectDataDto,
+    actorUserId?: string
+  ): Promise<AiReviewResponse> {
+    const result = await structuredAiExecutionService.execute<
+      CompleteProjectDataDto,
+      ProjectModelAnalysisAiOutput
+    >({
+      capability: 'project_intelligence',
+      operation: 'analyze_project_model',
+      input: data,
+      locale: 'ar',
+      ...(actorUserId && { auditContext: { actorUserId } }),
+    });
 
-        const rawContent = response.choices[0]?.message?.content;
-        if (rawContent) {
-          const parsed = JSON.parse(rawContent) as AiReviewResponse;
-          
-          // Ensure milestone percentages default correctly if missing
-          if (parsed.suggestedMilestones && parsed.suggestedMilestones.length > 0) {
-            const count = parsed.suggestedMilestones.length;
-            parsed.suggestedMilestones = parsed.suggestedMilestones.map((m, idx) => ({
-              ...m,
-              percentage: m.percentage || Math.round(100 / count)
-            }));
-            // fix rounding on last item
-            const sum = parsed.suggestedMilestones.reduce((acc, c) => acc + (c.percentage || 0), 0);
-            if (sum !== 100 && parsed.suggestedMilestones[count - 1]) {
-              parsed.suggestedMilestones[count - 1].percentage! += (100 - sum);
-            }
-          }
-          
-          return parsed;
-        }
-      } catch (error) {
-        logger.error(`OpenAI analyzeProjectModel error: ${error}`);
-      }
+    if (!result.success) {
+      throw createAiFailureAppError(
+        'AI project model analysis failed. No simulated analysis was returned.',
+        result.error
+      );
     }
 
-    // Comprehensive Fallback Simulation for testing without OpenAI API Key or offline mode
-    return this.getFallbackAnalysis(data);
+    return result.data;
   }
 
-  private getFallbackAnalysis(data: CompleteProjectDataDto): AiReviewResponse {
-    const title = data.title || 'المشروع المقترح';
-    const total = data.totalAmount || 4500;
-    const stagesCount = data.stages?.length || 2;
-
-    return {
-      clarityScore: 92,
-      feasibilityScore: 89,
-      marketFitRating: 'High',
-      executiveSummary: `يعرض مشروع "${title}" هيكلية عمل واضحة وتوزيعاً جيداً للمسؤوليات. يظهر التحليل الذكي أن هذا النموذج يتمتع بقابلية تسويقية عالية (Market Fit: High) ومستوى توافق ممتاز مع رغبات العملاء المؤسسيين والأفراد على حد سواء.`,
-      strengths: [
-        'وضوح نطاق العمل وتقليل الغموض في تسلسل المخرجات النهائية.',
-        'تقسيم المراحل المالية يعزز الثقة المتبادلة ويتماشى مع معايير الضمان في وسيط AI.',
-        'تناسب التسعير المقترح مع متوسط قيمة الطلبات المماثلة في القطاع الحالي.'
-      ],
-      gapsAndRisks: [
-        'عدم تفصيل عدد جولات التعديلات المجانية بوضوح في وصف كل مرحلة.',
-        stagesCount < 3 ? 'يُستحسن إضافة مرحلة ابتدائية للتحليل والتخطيط التمهيدي قبل البدء بالتنفيذ الفعلي.' : 'قد يتطلب تسليم الملفات النهائية وقتاً أطول للتحقق والاعتماد النهائي.'
-      ],
-      recommendedImprovements: [
-        'تحديد الحد الأقصى للمراجعات المسموح بها في المرحلة قبل النهائية لتجنب تمدد المشروع (Scope Creep).',
-        'تضمين وثيقة تسليم رسمية أو دليل استخدام مبسط ضمن مخرجات المرحلة الأخيرة لزيادة القيمة المتفوقة للعرض.'
-      ],
-      suggestedMilestones: [
-        {
-          title: 'التحليل التمهيدي وتحديد المتطلبات الفنية',
-          estimatedDays: 3,
-          description: 'اجتماع مناقشة النขاق وتقديم وثيقة خارطة الطريق والتصميم الأولي',
-          percentage: 25
-        },
-        {
-          title: 'التنفيذ الفعلي وتطوير النماذج الرئيسية',
-          estimatedDays: 7,
-          description: 'بناء وتجهيز المخرجات الأساسية للمشروع وتقديم النسخة التجريبية للمراجعة',
-          percentage: 45
-        },
-        {
-          title: 'التعديلات النهائية وتسليم حزمة التشغيل',
-          estimatedDays: 4,
-          description: 'اعتماد المراجعة النهائية وتسليم ملفات المصدر كاملة مع ضمان دعم فني لمدة شهر',
-          percentage: 30
-        }
-      ],
-      suggestedPricingStrategy: {
-        recommendedRange: `${Math.round(total * 0.95)} - ${Math.round(total * 1.15)} ريال`,
-        reasoning: 'يعتبر هذا النطاق السعري مثالياً لضمان الربحية التنافسية وفي نفس الوقت جذب أصحاب المشاريع ذوي الميزانيات المرتفعة الذين يبحثون عن مخرجات متكاملة ومراحل تسليم موصلة.'
-      }
-    };
-  }
 }

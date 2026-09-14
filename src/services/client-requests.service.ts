@@ -2,9 +2,14 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { BudgetType, ContractStatus, ProposalStatus, ProviderTypePreference, RequestStatus } from '@prisma/client';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
-import OpenAI from 'openai';
 import { CreateClientRequestDto, ClientRequestAiSuggestDto } from '../dtos/create-client-request.dto';
 import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
+import { structuredAiExecutionService } from '../modules/ai-engine';
+import type {
+	AiEngineErrorPayload,
+	ClientRequestSuggestionsAiOutput,
+	ClientRequestSuggestionsPromptInput
+} from '../modules/ai-engine';
 import {
 	mailTransporter,
 	getOtpEmailTemplate,
@@ -31,15 +36,26 @@ const ESCROW_FEE_VAT = 0.07;       // 7% VAT
 const ESCROW_FEE_PLATFORM = 0.05;  // 5% platform commission
 const ESCROW_FEE_INSURANCE = 0.01; // 1% dispute insurance
 
+const getAiFailureStatusCode = (error: AiEngineErrorPayload): number => {
+	if (error.code === 'AI_PROVIDER_RATE_LIMITED') return 429;
+	if (
+		error.code === 'AI_RESPONSE_VALIDATION_FAILED' ||
+		error.code === 'AI_PROVIDER_BAD_RESPONSE'
+	) return 502;
+
+	return error.statusCode && error.statusCode >= 400 && error.statusCode < 500
+		? error.statusCode
+		: 503;
+};
+
+const createAiFailureAppError = (
+	message: string,
+	error: AiEngineErrorPayload
+): AppError => {
+	return new AppError(message, getAiFailureStatusCode(error), [error]);
+};
+
 export class ClientRequestsService {
-	private openai: OpenAI | null = null;
-
-	constructor() {
-		if (process.env.OPENAI_API_KEY) {
-			this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-		}
-	}
-
 	/**
 	 * GET /api/client/requests/meta
 	 * Returns available categories, specialties, and sub-specialty tags with provider counts.
@@ -99,10 +115,9 @@ export class ClientRequestsService {
 
 	/**
 	 * POST /api/client/requests/ai-suggest
-	 * OpenAI GPT-4o analysis for project description, sub-specialties, budget & history-based suggestion
+	 * Shared AI Engine analysis for project description, sub-specialties, budget & history-based suggestion.
 	 */
 	public async generateAiSuggest(clientId: string, payload: ClientRequestAiSuggestDto) {
-		// 1. Check past history of client requests to provide personalized suggestion ("وسيط AI - اقتراح لك")
 		const pastRequests = await prisma.clientRequest.findMany({
 			where: {
 				clientProfile: { userId: clientId }
@@ -112,106 +127,38 @@ export class ClientRequestsService {
 			include: { specialty: true }
 		});
 
-		const pastSpecialtyNames = pastRequests.map((r: any) => r.specialty.nameAr || r.specialty.name);
+		const pastSpecialtyNames = pastRequests
+			.map((r: any) => r.specialty?.nameAr || r.specialty?.name)
+			.filter((name: unknown): name is string => typeof name === 'string' && name.length > 0);
 		const favoriteCategory = pastSpecialtyNames.length > 0 ? pastSpecialtyNames[0] : null;
 
-		const draftTitle = payload.title?.trim() || '';
-		const draftDesc = payload.description?.trim() || '';
-		const targetSpec = payload.specialtyName || 'تقنية المعلومات';
-
-		// Algorithmic Fallback response
-		const generateFallback = () => {
-			let recommendedMin = 2500;
-			let recommendedMax = 7500;
-			if (draftDesc.length > 200 || draftTitle.includes('منصة') || draftTitle.includes('تطبيق')) {
-				recommendedMin = 5000;
-				recommendedMax = 15000;
-			}
-
-			return {
-				suggestedTitle: draftTitle.length >= 5
-					? `مشروع ${draftTitle} - تنفيذ متكامل وفق أفضل المعايير`
-					: `تطوير وتنفيذ مشروع ${targetSpec} متكامل`,
-				suggestedDescription: draftDesc.length >= 20
-					? `${draftDesc}\n\n[المخرجات والشروط المتوقعة]:\n- تسليم الكود المصدري كاملاً والتوثيق المباشر.\n- الالتزام التام بالتصميم التفاعلي والأمن السيبراني.\n- دعم فني وضمان بعد التسليم لمدة 30 يوماً.`
-					: `نبحث عن مقدم خدمة خبير ومطوّر محترف لتنفيذ مشروع ${targetSpec} عالي الجودة. يتضمن العمل تصميم الواجهات، البرمجة الخلفية، الاختبار الشامل والتسليم النهائي في الوقت المحدد.`,
-				suggestedSubSpecialties: payload.subSpecialties && payload.subSpecialties.length > 0
-					? payload.subSpecialties
-					: ['تطوير ويب', 'تطبيقات موبايل', 'واجهات برمجية APIs', 'قواعد بيانات'],
-				recommendedMinBudget: recommendedMin,
-				recommendedMaxBudget: recommendedMax,
-				suggestedDurationDays: 14,
-				complexityRating: recommendedMin > 5000 ? 'HIGH' : 'MEDIUM',
-				personalizedNote: favoriteCategory
-					? `بناءً على طلباتك السابقة في مجال (${favoriteCategory})، يُفضل تحديد متطلبات التوثيق والدعم الأمني مبكراً.`
-					: 'اقتراح وسيط AI محسّن لرفع نسبة المطابقة مع أفضل المطورين إلى 95%.',
-				aiMatchScoreEstimate: 94
-			};
+		const input: ClientRequestSuggestionsPromptInput = {
+			draftTitle: payload.title?.trim() || '',
+			draftDescription: payload.description?.trim() || '',
+			targetSpecialty: payload.specialtyName || 'Information Technology',
+			selectedSubSpecialties: payload.subSpecialties || [],
+			favoriteCategory
 		};
 
-		if (!this.openai) {
-			return generateFallback();
+		const result = await structuredAiExecutionService.execute<
+			ClientRequestSuggestionsPromptInput,
+			ClientRequestSuggestionsAiOutput
+		>({
+			capability: 'project_intelligence',
+			operation: 'client_request_suggestions',
+			input,
+			locale: 'ar',
+			auditContext: { actorUserId: clientId },
+		});
+
+		if (!result.success) {
+			throw createAiFailureAppError(
+				'AI client request suggestions failed. No simulated suggestions were returned.',
+				result.error
+			);
 		}
 
-		try {
-			const systemPrompt = `You are Waseet AI (وسيط AI), the ultimate AI Matchmaker for top technical & creative projects in Saudi Arabia.
-Your job is to analyze the client's draft project request, refine the Arabic text into a high-precision RFP, suggest optimal sub-specialties, estimate SAR budget ranges, and calculate an AI match readiness score.
-Return ONLY raw JSON with no Markdown wrapping.`;
-
-			const userPrompt = `
-Analyze this Client Request Draft:
-- Draft Title: ${draftTitle || 'Unspecified'}
-- Draft Description: ${draftDesc || 'Unspecified'}
-- Target Specialty: ${targetSpec}
-- Selected Sub-Specialties: ${JSON.stringify(payload.subSpecialties || [])}
-- Client Past History Specialty Context: ${favoriteCategory || 'New Client'}
-
-Return JSON schema:
-{
-  "suggestedTitle": "Professional Arabic Title (max 80 chars)",
-  "suggestedDescription": "Comprehensive Arabic Technical Description with clear scope and expectations",
-  "suggestedSubSpecialties": ["3 to 5 relevant Arabic sub-specialty tags"],
-  "recommendedMinBudget": number (SAR minimum),
-  "recommendedMaxBudget": number (SAR maximum),
-  "suggestedDurationDays": number (days),
-  "complexityRating": "LOW" | "MEDIUM" | "HIGH" | "COMPLEX",
-  "personalizedNote": "Arabic advice personalized for client request based on market standards",
-  "aiMatchScoreEstimate": number between 85 and 98
-}
-`;
-
-			const completion = await this.openai.chat.completions.create({
-				model: 'gpt-4o',
-				messages: [
-					{ role: 'system', content: systemPrompt },
-					{ role: 'user', content: userPrompt }
-				],
-				response_format: { type: 'json_object' },
-				temperature: 0.7,
-				max_tokens: 1200
-			});
-
-			const content = completion.choices[0]?.message?.content;
-			if (!content) return generateFallback();
-
-			const parsed = JSON.parse(content);
-			return {
-				suggestedTitle: parsed.suggestedTitle || generateFallback().suggestedTitle,
-				suggestedDescription: parsed.suggestedDescription || generateFallback().suggestedDescription,
-				suggestedSubSpecialties: Array.isArray(parsed.suggestedSubSpecialties) && parsed.suggestedSubSpecialties.length > 0
-					? parsed.suggestedSubSpecialties
-					: generateFallback().suggestedSubSpecialties,
-				recommendedMinBudget: Number(parsed.recommendedMinBudget) || generateFallback().recommendedMinBudget,
-				recommendedMaxBudget: Number(parsed.recommendedMaxBudget) || generateFallback().recommendedMaxBudget,
-				suggestedDurationDays: Number(parsed.suggestedDurationDays) || generateFallback().suggestedDurationDays,
-				complexityRating: ['LOW', 'MEDIUM', 'HIGH', 'COMPLEX'].includes(parsed.complexityRating) ? parsed.complexityRating : 'MEDIUM',
-				personalizedNote: parsed.personalizedNote || generateFallback().personalizedNote,
-				aiMatchScoreEstimate: Number(parsed.aiMatchScoreEstimate) || 94
-			};
-		} catch (err) {
-			console.error('[ClientRequestsService] OpenAI call error, using fallback:', err);
-			return generateFallback();
-		}
+		return result.data;
 	}
 
 	/**

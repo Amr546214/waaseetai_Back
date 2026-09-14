@@ -61,7 +61,7 @@ export class AiReviewController {
         title: dto.title || '',
         description: dto.description || '',
         totalAmount: dto.totalAmount
-      });
+      }, req.user?.userId || req.user?.id);
 
       res.status(200).json({
         success: true,
@@ -77,7 +77,10 @@ export class AiReviewController {
     try {
       const payload: CompleteProjectDataDto = req.body;
 
-      const analysis = await this.service.analyzeProjectModel(payload || {});
+      const analysis = await this.service.analyzeProjectModel(
+        payload || {},
+        req.user?.userId || req.user?.id
+      );
 
       res.status(200).json({
         success: true,

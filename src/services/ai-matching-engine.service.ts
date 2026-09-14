@@ -1,19 +1,13 @@
 import { prisma } from '../config/db';
 import { ProjectStatus, SpecialtyVerificationStatus } from '@prisma/client';
 import { logger } from '../config/logger';
-import OpenAI from 'openai';
+import { structuredAiExecutionService } from '../modules/ai-engine';
 import {
-  AI_MATCHING_ENGINE_SYSTEM_PROMPT,
-  buildAiMatchingUserPrompt,
   ProviderContextPayload,
-  CandidateProjectPayload
-} from '../prompts/ai-matching.prompt';
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  timeout: 15 * 1000,
-  maxRetries: 2,
-});
+  CandidateProjectPayload,
+  ProviderProjectRankingAiOutput,
+  RankProviderProjectMatchesPromptInput,
+} from '../modules/ai-engine';
 
 export interface AiMatchingProjectItem {
   id: string;
@@ -102,7 +96,7 @@ export class AiMatchingEngineService {
         return [];
       }
 
-      // Compile Provider Context Payload for OpenAI
+      // Compile Provider Context Payload for the shared AI Engine
       const skillsList = (providerProfile?.skills || []).map(s => s.name);
       const specialtiesList = providerSpecialties.map(ps => ({
         name: ps.specialty?.nameAr || ps.specialty?.name || 'تخصص عام',
@@ -212,7 +206,7 @@ export class AiMatchingEngineService {
         return [];
       }
 
-      // Format candidate projects for OpenAI
+      // Format candidate projects for the shared AI Engine
       const candidatesPayload: CandidateProjectPayload[] = openProjects.map(p => ({
         id: p.id,
         title: p.title,
@@ -225,164 +219,65 @@ export class AiMatchingEngineService {
         requiredLevel: p.provLevel || 'الكل'
       }));
 
-      // 3. Perform OpenAI GPT evaluation if API key exists
-      if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim() !== '') {
-        try {
-          const userPrompt = buildAiMatchingUserPrompt(providerContext, candidatesPayload);
-          const completion = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: [
-              { role: 'system', content: AI_MATCHING_ENGINE_SYSTEM_PROMPT },
-              { role: 'user', content: userPrompt }
-            ],
-            response_format: { type: 'json_object' },
-            temperature: 0.2,
-            max_tokens: 800
-          });
+      // 3. Perform structured AI evaluation through the shared AI Engine
+      const aiResult = await structuredAiExecutionService.execute<
+        RankProviderProjectMatchesPromptInput,
+        ProviderProjectRankingAiOutput
+      >({
+        capability: 'matching',
+        operation: 'rank_provider_project_matches',
+        input: {
+          provider: providerContext,
+          candidates: candidatesPayload,
+        },
+        locale: 'ar',
+        auditContext: {
+          actorUserId: providerId,
+          primaryEntity: { type: 'PROVIDER', id: providerId },
+        },
+      });
 
-          const rawContent = completion.choices[0]?.message?.content;
-          if (rawContent) {
-            const parsed = JSON.parse(rawContent);
-            if (Array.isArray(parsed.matches) && parsed.matches.length > 0) {
-              const matchedResults: AiMatchingProjectItem[] = [];
-
-              for (const m of parsed.matches) {
-                const targetProj = openProjects.find(p => p.id === m.projectId);
-                if (targetProj) {
-                  const clientName = targetProj.client
-                    ? `${targetProj.client.firstName || ''} ${targetProj.client.lastName || ''}`.trim()
-                    : 'عميل Waseet AI';
-
-                  matchedResults.push({
-                    id: targetProj.id,
-                    title: targetProj.title,
-                    category: targetProj.specialty || 'خدمة تخصصية',
-                    specialty: targetProj.specialty || 'تطوير وتصميم',
-                    budget: Number(targetProj.budgetFixed || targetProj.budgetMax || targetProj.budgetMin || 2500),
-                    aiMatchScore: Math.min(99, Math.max(82, Math.round(m.aiMatchScore || 92))),
-                    matchReasons: Array.isArray(m.matchReasons) ? m.matchReasons : ['متوافق مع تخصصك واختباراتك'],
-                    aiAnalysis: m.aiAnalysis || 'تم تحليل وتنسيق العرض بواسطة الذكاء الاصطناعي بناءً على مهاراتك وتقييماتك.',
-                    createdAt: targetProj.createdAt,
-                    deliveryDays: targetProj.deliveryDays || 7,
-                    clientName: clientName || 'عميل موثوق'
-                  });
-                }
-              }
-
-              if (matchedResults.length > 0) {
-                logger.info(`[AiMatchingEngineService] OpenAI successfully evaluated top ${matchedResults.length} real matches for provider ${providerId}`);
-                return matchedResults.slice(0, 3);
-              }
-            }
-          }
-        } catch (openAiError: any) {
-          logger.warn(`[AiMatchingEngineService] OpenAI API execution failed or timed out (${openAiError.message}). Falling back to multi-factor rule engine.`);
-        }
+      if (!aiResult.success) {
+        logger.warn(
+          `[AiMatchingEngineService] AI matching unavailable for provider ${providerId}; returning no AI-ranked matches. code=${aiResult.error.code}`
+        );
+        return [];
       }
 
-      // 4. Fallback Rule-Based Multi-Factor Scoring Engine (if OpenAI key missing or failed)
-      return this.computeFallbackTop3Matches(providerContext, openProjects);
+      const matchedResults: AiMatchingProjectItem[] = [];
+      const seenProjectIds = new Set<string>();
+
+      for (const match of aiResult.data.matches) {
+        if (seenProjectIds.has(match.projectId)) continue;
+        const targetProj = openProjects.find(project => project.id === match.projectId);
+        if (!targetProj) continue;
+
+        seenProjectIds.add(match.projectId);
+        const clientName = targetProj.client
+          ? `${targetProj.client.firstName || ''} ${targetProj.client.lastName || ''}`.trim()
+          : 'Waseet AI client';
+
+        matchedResults.push({
+          id: targetProj.id,
+          title: targetProj.title,
+          category: targetProj.specialty || 'Specialized service',
+          specialty: targetProj.specialty || 'Development and design',
+          budget: Number(targetProj.budgetFixed || targetProj.budgetMax || targetProj.budgetMin || 0),
+          aiMatchScore: match.aiMatchScore,
+          matchReasons: match.matchReasons,
+          aiAnalysis: match.aiAnalysis,
+          createdAt: targetProj.createdAt,
+          deliveryDays: targetProj.deliveryDays || undefined,
+          clientName: clientName || 'Verified client'
+        });
+      }
+
+      return matchedResults.slice(0, 3);
     } catch (error: any) {
       logger.error(`[AiMatchingEngineService] Error matching projects: ${error.message}`, error);
       return [];
     }
   }
-
-  /**
-   * Deterministic Multi-Factor Rule Engine for scoring and picking top 3 matches
-   */
-  private computeFallbackTop3Matches(
-    provider: ProviderContextPayload,
-    candidates: any[]
-  ): AiMatchingProjectItem[] {
-    const providerSkillsSet = new Set<string>();
-    provider.skills.forEach(s => providerSkillsSet.add(s.toLowerCase()));
-    provider.specialties.forEach(spec => {
-      providerSkillsSet.add(spec.name.toLowerCase());
-      spec.subSpecialties.forEach(sub => providerSkillsSet.add(sub.toLowerCase()));
-    });
-
-    const passedTestsSet = new Set<string>();
-    provider.testsPassed.filter(t => t.passed).forEach(t => passedTestsSet.add(t.specialtyName.toLowerCase()));
-
-    const scoredList = candidates.map(proj => {
-      const projSpecialty = (proj.specialty || '').toLowerCase();
-      const projRequirements = (proj.requirements || []).map((r: string) => r.toLowerCase());
-      const projSubSpecialties = (proj.subSpecialties || []).map((s: string) => s.toLowerCase());
-
-      const reasons: string[] = [];
-
-      // 1. Specialty & Skill Match Score (40%)
-      let skillScore = 75;
-      if (providerSkillsSet.has(projSpecialty) || projSpecialty.includes('تطوير') || projSpecialty.includes('تصميم')) {
-        skillScore += 15;
-        reasons.push(`متطابق تماماً مع تخصصك: ${proj.specialty}`);
-      }
-
-      let matchedSkills = 0;
-      [...projRequirements, ...projSubSpecialties].forEach(req => {
-        if (providerSkillsSet.has(req)) matchedSkills++;
-      });
-
-      if (matchedSkills > 0) {
-        skillScore += Math.min(10, matchedSkills * 4);
-        reasons.push(`تطابق المهارات التقنية المطلوبة (${matchedSkills} مهارة)`);
-      }
-
-      // 2. Test & Quiz Performance (25%)
-      let testScore = 70;
-      if (passedTestsSet.has(projSpecialty) || provider.testsPassed.some(t => t.score >= 80)) {
-        testScore = 95;
-        reasons.push('اجتياز اختبارات وتقييمات المهارة بنجاح عالية');
-      } else if (provider.specialties.some(s => s.isPassed)) {
-        testScore = 88;
-        reasons.push('تخصص معتمد باختبار محضر');
-      }
-
-      // 3. Portfolio & Accreditation (20%)
-      let portfolioScore = 75 + Math.min(20, provider.portfolioCount * 4 + provider.accreditationCount * 5);
-      if (provider.accreditationCount > 0) {
-        reasons.push('ملف أعمال ومعرض نماذج موثق بالذكاء');
-      }
-
-      // 4. Rating & Level (15%)
-      let ratingScore = Math.min(100, Math.round(provider.rating * 19));
-
-      const totalScore = Math.round(
-        (skillScore * 0.40) +
-        (testScore * 0.25) +
-        (portfolioScore * 0.20) +
-        (ratingScore * 0.15)
-      );
-
-      const clampedScore = Math.max(84, Math.min(98, totalScore));
-      if (reasons.length === 0) {
-        reasons.push('عرض مناسب ومطابق لخبراتك ومستواك المهني');
-      }
-
-      const clientName = proj.client
-        ? `${proj.client.firstName || ''} ${proj.client.lastName || ''}`.trim()
-        : 'عميل Waseet AI';
-
-      return {
-        id: proj.id,
-        title: proj.title,
-        category: proj.specialty || 'خدمة تخصصية',
-        specialty: proj.specialty || 'تطوير وتصميم',
-        budget: Number(proj.budgetFixed || proj.budgetMax || proj.budgetMin || 2000),
-        aiMatchScore: clampedScore,
-        matchReasons: Array.from(new Set(reasons)),
-        aiAnalysis: `تم ترشيح هذا المشروع بواسطة محرك الذكاء الاصطناعي بناءً على مطابقة مهاراتك (${provider.skills.slice(0, 3).join(', ')}) واختباراتك المعتمدة.`,
-        createdAt: proj.createdAt || new Date(),
-        deliveryDays: proj.deliveryDays || 7,
-        clientName: clientName || 'عميل موثوق'
-      };
-    });
-
-    scoredList.sort((a, b) => b.aiMatchScore - a.aiMatchScore);
-    return scoredList.slice(0, 3);
-  }
-
 }
 
 export const aiMatchingEngineService = new AiMatchingEngineService();
