@@ -15,6 +15,7 @@
 		"db:studio": "npx prisma studio",
 		"db:seed": "tsx prisma/seed.ts",
 		"db:seed:e2e": "tsx prisma/seed-e2e.ts",
+		"seed:taxonomy": "tsx prisma/seed-marketplace-taxonomy.ts",
 		"audit:existing": "npx -y tsx scripts/audit-existing-models.ts"
 	},
 	"keywords": [],
