@@ -1208,6 +1208,41 @@ model AiAuditLog {
   @@map("ai_audit_logs")
 }
 
+model AiExecutionAuditLog {
+  id                 String   @id @default(uuid())
+  executionId        String   @unique
+  capability         String
+  operation          String
+  provider           String
+  model              String
+  modelPurpose       String
+  promptId           String?
+  promptVersion      String?
+  schemaId           String?
+  schemaVersion      String?
+  success            Boolean
+  attempts           Int      @default(0)
+  latencyMs          Int      @default(0)
+  promptTokens       Int?
+  completionTokens   Int?
+  totalTokens        Int?
+  errorCode          String?
+  providerStatusCode Int?
+  failurePolicy      String?
+  fallbackType       String?
+  actorUserId        String?
+  primaryEntityType  String?
+  primaryEntityId    String?
+  relatedEntityRefs  Json?
+  redactionVersion   String   @default("v1")
+  createdAt          DateTime @default(now())
+
+  @@index([capability, operation, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([primaryEntityType, primaryEntityId, createdAt])
+  @@map("ai_execution_audit_logs")
+}
+
 model SpecialtyTest {
   id           String    @id @default(uuid())
   specialtyId  String

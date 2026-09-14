@@ -11,6 +11,7 @@ import {
   AiSchemaId,
   AiSchemaVersion,
 } from './schema-registry.types';
+import { AiFailurePolicy } from './ai-failure-policy.types';
 
 export interface AiCapabilityRegistration {
   capability: AiCapability;
@@ -20,6 +21,7 @@ export interface AiCapabilityRegistration {
   schemaId: AiSchemaId;
   schemaVersion: AiSchemaVersion;
   purpose: AiModelPurpose;
+  failurePolicy: AiFailurePolicy;
   timeoutMs?: number;
   retryPolicy?: Partial<AiRetryPolicy>;
   temperature?: number;

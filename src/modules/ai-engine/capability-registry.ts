@@ -5,6 +5,7 @@ import {
   AiCapabilityRegistration,
   AiCapabilityRegistry,
 } from './capability-registry.types';
+import { isAiFailurePolicy } from './ai-failure-policy.types';
 
 const getCapabilityKey = (capability: AiCapability, operation: string): string => {
   return `${capability}:${operation}`;
@@ -44,8 +45,17 @@ export class InMemoryAiCapabilityRegistry implements AiCapabilityRegistry {
     assertNonEmpty(registration.promptVersion, 'prompt version');
     assertNonEmpty(registration.schemaId, 'schema id');
     assertNonEmpty(registration.schemaVersion, 'schema version');
+    assertNonEmpty(registration.failurePolicy, 'failure policy');
     assertPositiveInteger(registration.timeoutMs, 'timeoutMs');
     assertPositiveInteger(registration.maxTokens, 'maxTokens');
+
+    if (!isAiFailurePolicy(registration.failurePolicy)) {
+      throw createAiEngineError(
+        AI_PROVIDER_OPENAI,
+        'AI_CONFIG_INVALID',
+        `Invalid failure policy ${String(registration.failurePolicy)}.`
+      );
+    }
 
     const capabilityKey = getCapabilityKey(
       registration.capability,

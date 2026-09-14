@@ -2,7 +2,6 @@ import { aiExecutionService } from './ai-execution.service';
 import { createAiEngineError } from './ai-engine.errors';
 import {
   AiCapability,
-  AiExecutionMetadata,
   AiExecutionResult,
   AiProvider,
 } from './ai-engine.types';
@@ -17,35 +16,29 @@ import { AiSchemaDefinition } from './schema-registry.types';
 import { aiCapabilityRegistry } from './capability-registry';
 import { AiCapabilityRegistration } from './capability-registry.types';
 import { validateAiResponse } from './ai-response-validator';
+import {
+  AI_AUDIT_REDACTION_VERSION,
+} from './ai-audit-privacy';
+import {
+  AiExecutionAuditContext,
+  AiExecutionAuditSink,
+} from './ai-execution-audit.types';
+import {
+  logAiAuditFailure,
+  PrismaAiExecutionAuditSink,
+} from './ai-execution-audit.sink';
+import { AiExecutionFallbackType } from './ai-failure-policy.types';
 
 export interface AiStructuredExecutionRequest<TInput = unknown> {
   capability: AiCapability;
   operation: string;
   input: TInput;
   locale?: AiPromptLocale;
+  auditContext?: AiExecutionAuditContext;
+  fallbackType?: AiExecutionFallbackType;
 }
 
 export type AiStructuredExecutionResult<TData> = AiExecutionResult<TData>;
-
-interface AiStructuredRawResponseEvent {
-  executionId: string;
-  provider: AiProvider;
-  capability: AiCapability;
-  operation: string;
-  promptId: string;
-  promptVersion: string;
-  schemaId: string;
-  schemaVersion: string;
-  rawContent: string;
-  rawResponse: unknown;
-  metadata?: AiExecutionMetadata;
-}
-
-interface AiStructuredExecutionInternalOptions {
-  onRawResponse?: (
-    event: AiStructuredRawResponseEvent
-  ) => void | Promise<void>;
-}
 
 const textContentFromPrompt = (
   content: AiPromptContent,
@@ -71,22 +64,25 @@ const textContentFromPrompt = (
 };
 
 export class StructuredAiExecutionService {
+  constructor(
+    private readonly auditSink: AiExecutionAuditSink = new PrismaAiExecutionAuditSink()
+  ) {}
+
   async execute<TInput, TData>(
     request: AiStructuredExecutionRequest<TInput>
   ): Promise<AiStructuredExecutionResult<TData>> {
-    return this.executeWithInternalHooks<TInput, TData>(request);
+    return this.executeWithAudit<TInput, TData>(request);
   }
 
-  protected async executeWithInternalHooks<TInput, TData>(
-    request: AiStructuredExecutionRequest<TInput>,
-    internalOptions: AiStructuredExecutionInternalOptions = {}
+  protected async executeWithAudit<TInput, TData>(
+    request: AiStructuredExecutionRequest<TInput>
   ): Promise<AiStructuredExecutionResult<TData>> {
     const registration = aiCapabilityRegistry.get(
       request.capability,
       request.operation
     );
 
-    return aiExecutionService.execute<TData>({
+    const result = await aiExecutionService.execute<TData>({
       capability: registration.capability,
       operation: registration.operation,
       purpose: registration.purpose,
@@ -126,19 +122,6 @@ export class StructuredAiExecutionService {
 
         const rawContent = rawResponse.choices[0]?.message?.content ?? '';
 
-        await internalOptions.onRawResponse?.({
-          executionId: context.executionId,
-          provider: context.provider,
-          capability: context.capability,
-          operation: context.operation,
-          promptId: renderedPrompt.promptId,
-          promptVersion: renderedPrompt.promptVersion,
-          schemaId: schema.id,
-          schemaVersion: schema.version,
-          rawContent,
-          rawResponse,
-        });
-
         return {
           data: validateAiResponse<TData>({
             rawContent,
@@ -149,6 +132,45 @@ export class StructuredAiExecutionService {
         };
       },
     });
+
+    await this.recordAuditBestEffort(request, registration, result);
+
+    return result;
+  }
+
+  private async recordAuditBestEffort<TInput, TData>(
+    request: AiStructuredExecutionRequest<TInput>,
+    registration: AiCapabilityRegistration,
+    result: AiStructuredExecutionResult<TData>
+  ): Promise<void> {
+    const event = {
+      executionId: result.metadata.executionId,
+      capability: result.metadata.capability,
+      operation: result.metadata.operation,
+      provider: result.metadata.provider,
+      model: result.metadata.model,
+      modelPurpose: registration.purpose,
+      promptId: registration.promptId,
+      promptVersion: registration.promptVersion,
+      schemaId: registration.schemaId,
+      schemaVersion: registration.schemaVersion,
+      success: result.success,
+      attempts: result.metadata.attempts,
+      latencyMs: result.metadata.latencyMs,
+      tokenUsage: result.metadata.tokenUsage,
+      errorCode: result.success ? undefined : result.error.code,
+      providerStatusCode: result.success ? undefined : result.error.statusCode,
+      failurePolicy: registration.failurePolicy,
+      fallbackType: request.fallbackType,
+      auditContext: request.auditContext,
+      redactionVersion: AI_AUDIT_REDACTION_VERSION,
+    };
+
+    try {
+      await this.auditSink.record(event);
+    } catch (error) {
+      logAiAuditFailure(event, error);
+    }
   }
 
   private assertRegistrationMatchesRenderedPrompt(
