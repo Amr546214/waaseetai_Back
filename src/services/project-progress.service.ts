@@ -3,6 +3,8 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
 import { emailService } from './email.service';
+import { projectOperationsAiService } from './project-operations-ai.service';
+import { projectOperationsContextService } from './project-operations-context.service';
 
 const PROJECT_COMPLETION_POINTS = 50;
 
@@ -68,7 +70,23 @@ export class ProjectProgressService {
     const contract = await prisma.contract.findFirst({
       where: { OR: [{ projectId: key }, { id: key }], AND: [{ OR: [{ providerId: userId }, { clientId: userId }] }] },
       include: {
-        project: { include: { escrow: true, conversations: { include: { messages: { orderBy: { createdAt: 'asc' }, include: { sender: { select: { id: true, firstName: true, lastName: true } } } } } } } },
+        project: {
+          include: {
+            escrow: true,
+            disputes: { select: { status: true } },
+            reviews: { select: { reviewerRole: true, rating: true, stageId: true } },
+            conversations: {
+              include: {
+                messages: {
+                  orderBy: { createdAt: 'asc' },
+                  include: {
+                    sender: { select: { id: true, firstName: true, lastName: true } }
+                  }
+                }
+              }
+            }
+          }
+        },
         client: { select: { id: true, firstName: true, lastName: true } },
         provider: { select: { id: true, firstName: true, lastName: true } }
       }
@@ -97,7 +115,7 @@ export class ProjectProgressService {
         escrowTotal: project.escrow?.amount || 0, escrowHeld: project.escrow?.amount || 0, escrowReleased: 0,
         status: 'PENDING_SIGNATURE', statusLabel: 'بانتظار توقيع العقد',
         stages: [], deliveries: [], edits: [], messages: [], files: [],
-        aiInsights: { confidence: 0, earlyDays: 0, matchPercentage: null, riskLevel: 'غير محسوبة', riskLevelKey: 'unknown', healthRating: 'بانتظار بيانات كافية', bullets: [] }
+        aiInsights: projectOperationsContextService.createNeutralAiInsights()
       };
     }
     await this.ensureStages(contract.id);
@@ -172,7 +190,7 @@ export class ProjectProgressService {
       }
     }
 
-    return {
+    const workspace = {
       id: contract.id, projectId: contract.projectId, role, conversationId: conversation?.id || null,
       title: contract.project.title, clientName: otherName, clientInitial: otherName.charAt(0) || 'ع', contractRef: `CT-${contract.id.slice(0, 6).toUpperCase()}`,
       price: contract.price, durationDays: contract.durationDays, daysLeft: Math.max(0, contract.durationDays - elapsed), progress,
@@ -183,8 +201,33 @@ export class ProjectProgressService {
       messages,
       files: persisted.filter(s => s.deliveries.some(d => d.files.length)).map(s => ({ groupTitle: s.title, isDone: s.status === ProjectStageStatus.APPROVED, files: s.deliveries.flatMap(d => d.files.map(url => normalizeFileEntry(url))) })),
       providerClientRating,
-      aiInsights: { confidence: 0, earlyDays: 0, matchPercentage: null, riskLevel: 'غير محسوبة', riskLevelKey: 'unknown', healthRating: 'بانتظار بيانات كافية', bullets: [] }
+      aiInsights: projectOperationsContextService.createNeutralAiInsights()
     };
+
+    const projectOperationsContext =
+      projectOperationsContextService.buildProjectHealthContext({
+        actorRole: role,
+        contract,
+        stages: persisted,
+        progressPercent: progress,
+      });
+
+    if (projectOperationsContext) {
+      const healthAnalysis = await projectOperationsAiService.analyzeProjectHealth(
+        projectOperationsContext,
+        userId
+      );
+
+      if (healthAnalysis) {
+        workspace.aiInsights =
+          projectOperationsContextService.applyProjectHealthAnalysis(
+            workspace.aiInsights,
+            healthAnalysis
+          );
+      }
+    }
+
+    return workspace;
   }
 
   async submitDelivery(providerId: string, key: string, stageId: string, note: string, files: any[]) {

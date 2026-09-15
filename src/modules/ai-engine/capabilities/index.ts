@@ -7,3 +7,6 @@ export * from './matching.capabilities';
 export * from './proposals.prompts';
 export * from './proposals.schemas';
 export * from './proposals.capabilities';
+export * from './project-operations.prompts';
+export * from './project-operations.schemas';
+export * from './project-operations.capabilities';
