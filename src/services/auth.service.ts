@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { OtpType, UserStatus } from '@prisma/client';
 import { authRepository } from '../repositories/auth.repository';
-import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput } from '../routes/auth/auth.schema';
+import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput } from '../routes/auth/auth.schema';
 import { OAuth2Client } from 'google-auth-library';
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -14,6 +14,11 @@ import { prisma } from '../config/db';
 import { generateReferralSlug } from '../utils/slug.util';
 import { sessionService, SessionContext } from './session.service';
 import { accountAuditLogService } from './account-logs.service';
+
+const RESET_OTP_MAX_ATTEMPTS = 5;
+const RESET_OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+const RESET_GENERIC_MESSAGE = 'إذا كان البريد الإلكتروني مسجلاً لدينا، فسيتم إرسال رمز إعادة تعيين كلمة المرور إليه';
+const RESET_INVALID_CODE_MESSAGE = 'رمز التحقق غير صحيح أو منتهي الصلاحية';
 
 export class AuthService {
 	/**
@@ -83,6 +88,97 @@ export class AuthService {
 		});
 
 		return true;
+	}
+
+	/**
+	 * Request a password-reset code by email.
+	 * Always resolves to the same generic message regardless of whether the
+	 * email is registered, so the endpoint can't be used to enumerate accounts.
+	 */
+	public async forgotPassword(input: ForgotPasswordInput) {
+		const user = await authRepository.findByEmail(input.email);
+
+		// Unknown email, or an OAuth-only account with no local password:
+		// silently no-op but still return the generic success message.
+		if (!user || !user.password) {
+			return { message: RESET_GENERIC_MESSAGE };
+		}
+
+		const otpCode = crypto.randomInt(100000, 999999).toString();
+		const expiresAt = new Date(Date.now() + RESET_OTP_EXPIRY_MS);
+
+		await authRepository.deletePasswordResetOtps(user.id);
+		await authRepository.createPasswordResetOtp(user.id, otpCode, expiresAt);
+
+		if (process.env.NODE_ENV === 'development') {
+			logger.info(`[DEV OTP LOGGER] Password reset code for ${user.email}: ${otpCode}`);
+		}
+
+		try {
+			await notificationService.sendPasswordResetEmail(user.email, user.firstName, otpCode);
+		} catch (err: any) {
+			logger.error('Failed to send password reset email', err);
+			// Keep the response generic even if delivery failed — avoids leaking
+			// account existence and matches the rest of the reset flow's behavior.
+		}
+
+		return { message: RESET_GENERIC_MESSAGE };
+	}
+
+	/**
+	 * Validate a password-reset code without consuming it.
+	 * Used by the frontend to move from the code step to the new-password step.
+	 */
+	public async verifyResetCode(input: VerifyResetCodeInput) {
+		await this.checkResetOtp(input.email, input.code);
+		return { valid: true };
+	}
+
+	/**
+	 * Complete the reset: re-validate the code, then set the new password.
+	 */
+	public async resetPassword(input: ResetPasswordInput) {
+		const { user, otp } = await this.checkResetOtp(input.email, input.code);
+
+		const hashedPassword = await bcrypt.hash(input.newPassword, 12);
+		await authRepository.updatePassword(user.id, hashedPassword);
+		await authRepository.deletePasswordResetOtps(user.id);
+
+		return { message: 'تم تغيير كلمة المرور بنجاح' };
+	}
+
+	/**
+	 * Shared lookup/validation for the reset OTP, used by both verifyResetCode
+	 * and resetPassword so the code is always re-checked server-side (never
+	 * trusted from earlier client state), and can never be confused with an
+	 * activation OTP since it is looked up by its PASSWORD_RESET context.
+	 */
+	private async checkResetOtp(email: string, code: string) {
+		const user = await authRepository.findByEmail(email);
+		if (!user) {
+			throw new AppError(RESET_INVALID_CODE_MESSAGE, 400);
+		}
+
+		const otp = await authRepository.findLatestPasswordResetOtp(user.id);
+		if (!otp) {
+			throw new AppError(RESET_INVALID_CODE_MESSAGE, 400);
+		}
+
+		if (otp.attempts >= RESET_OTP_MAX_ATTEMPTS) {
+			await authRepository.deletePasswordResetOtps(user.id);
+			throw new AppError('تم تجاوز عدد المحاولات المسموح به، يرجى طلب رمز جديد', 429);
+		}
+
+		if (otp.expiresAt < new Date()) {
+			throw new AppError('رمز التحقق انتهت صلاحيته، يرجى طلب رمز جديد', 400);
+		}
+
+		if (otp.code !== code) {
+			await authRepository.incrementOtpAttempts(otp.id);
+			throw new AppError(RESET_INVALID_CODE_MESSAGE, 400);
+		}
+
+		return { user, otp };
 	}
 
 	/**

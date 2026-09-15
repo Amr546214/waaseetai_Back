@@ -133,6 +133,71 @@ export class AuthRepository {
       }
     });
   }
+
+  /**
+   * Create a password-reset OTP record. Uses the shared OtpVerification table,
+   * scoped via context.purpose so it can never be confused with an EMAIL
+   * activation OTP (findValidOtp/findValidResetOtp filter on this explicitly).
+   */
+  public async createPasswordResetOtp(userId: string, code: string, expiresAt: Date) {
+    return prisma.otpVerification.create({
+      data: {
+        userId,
+        code,
+        type: OtpType.EMAIL,
+        expiresAt,
+        context: { purpose: 'PASSWORD_RESET' }
+      }
+    });
+  }
+
+  /**
+   * Find the most recent password-reset OTP for a user (valid or expired —
+   * callers check expiresAt/attempts themselves so they can return the right message).
+   */
+  public async findLatestPasswordResetOtp(userId: string) {
+    return prisma.otpVerification.findFirst({
+      where: {
+        userId,
+        type: OtpType.EMAIL,
+        context: { path: ['purpose'], equals: 'PASSWORD_RESET' }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+  }
+
+  /**
+   * Delete all password-reset OTPs for a user (leaves activation OTPs untouched).
+   */
+  public async deletePasswordResetOtps(userId: string) {
+    return prisma.otpVerification.deleteMany({
+      where: {
+        userId,
+        type: OtpType.EMAIL,
+        context: { path: ['purpose'], equals: 'PASSWORD_RESET' }
+      }
+    });
+  }
+
+  /**
+   * Increment the attempt counter on a specific OTP record.
+   */
+  public async incrementOtpAttempts(otpId: string) {
+    return prisma.otpVerification.update({
+      where: { id: otpId },
+      data: { attempts: { increment: 1 } }
+    });
+  }
+
+  /**
+   * Update a user's password hash.
+   */
+  public async updatePassword(userId: string, hashedPassword: string) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: { password: hashedPassword }
+    });
+  }
 }
 
 export const authRepository = new AuthRepository();

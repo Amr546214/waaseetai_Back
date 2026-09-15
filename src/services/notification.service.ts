@@ -1,5 +1,5 @@
 import { NotificationCategory, Notification } from '@prisma/client';
-import { mailTransporter, getOtpEmailTemplate } from '../utils/mail.transporter';
+import { mailTransporter, getOtpEmailTemplate, getPasswordResetEmailTemplate } from '../utils/mail.transporter';
 import { prisma } from '../config/db';
 import { getIO } from '../socket';
 import { AppError } from '../utils/app-error';
@@ -107,6 +107,30 @@ export class NotificationService {
 			console.log(`[NotificationService] OTP email sent to ${email}`);
 		} catch (error) {
 			console.error(`[NotificationService] Failed to send OTP email to ${email}:`, error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Send a password-reset code via email. Uses its own subject/template
+	 * (distinct from the account-activation OTP email) so the two flows never
+	 * share wording.
+	 */
+	public async sendPasswordResetEmail(email: string, firstName: string, code: string): Promise<void> {
+		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
+		const emailSubject = process.env.RESET_PASSWORD_EMAIL_SUBJECT ?? 'رمز إعادة تعيين كلمة المرور - Waseet AI';
+		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
+
+		try {
+			await mailTransporter.sendMail({
+				from: `"${senderName}" <${from}>`,
+				to: email,
+				subject: emailSubject,
+				html: getPasswordResetEmailTemplate(firstName, code),
+			});
+			console.log(`[NotificationService] Password reset email sent to ${email}`);
+		} catch (error) {
+			console.error(`[NotificationService] Failed to send password reset email to ${email}:`, error);
 			throw error;
 		}
 	}

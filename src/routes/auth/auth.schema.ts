@@ -50,6 +50,37 @@ export const loginSchema = z.object({
 
 export type LoginInput = z.infer<typeof loginSchema>['body'];
 
+export const forgotPasswordSchema = z.object({
+  body: z.object({
+    email: z.string().email('صيغة البريد الإلكتروني غير صحيحة')
+  })
+});
+
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>['body'];
+
+export const verifyResetCodeSchema = z.object({
+  body: z.object({
+    email: z.string().email('صيغة البريد الإلكتروني غير صحيحة'),
+    code: z.string().regex(/^\d{6}$/, 'رمز التحقق يجب أن يكون 6 أرقام')
+  })
+});
+
+export type VerifyResetCodeInput = z.infer<typeof verifyResetCodeSchema>['body'];
+
+export const resetPasswordSchema = z.object({
+  body: z.object({
+    email: z.string().email('صيغة البريد الإلكتروني غير صحيحة'),
+    code: z.string().regex(/^\d{6}$/, 'رمز التحقق يجب أن يكون 6 أرقام'),
+    newPassword: z
+      .string()
+      .min(8, 'كلمة المرور يجب أن لا تقل عن 8 أحرف')
+      .regex(/[A-Z]/, 'كلمة المرور يجب أن تحتوي على حرف كبير واحد على الأقل')
+      .regex(/[0-9]/, 'كلمة المرور يجب أن تحتوي على رقم واحد على الأقل')
+  })
+});
+
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>['body'];
+
 export const googleAuthSchema = z.object({
   body: z.object({
     idToken: z.string().min(1, 'Token is required'),

@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { authService } from '../services/auth.service';
 import { sessionService } from '../services/session.service';
 import { getAuthCookie } from '../utils/request-cookie';
-import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput } from '../routes/auth/auth.schema';
+import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput } from '../routes/auth/auth.schema';
 
 export class AuthController {
 	/**
@@ -55,6 +55,57 @@ export class AuthController {
 			res.status(200).json({
 				success: true,
 				message: 'تم إعادة إرسال رمز التحقق بنجاح'
+			});
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	/**
+	 * Request a password-reset code by email
+	 */
+	public async forgotPassword(req: Request, res: Response, next: NextFunction) {
+		try {
+			const input: ForgotPasswordInput = req.body;
+			const result = await authService.forgotPassword(input);
+
+			res.status(200).json({
+				success: true,
+				message: result.message
+			});
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	/**
+	 * Verify a password-reset code (without consuming it)
+	 */
+	public async verifyResetCode(req: Request, res: Response, next: NextFunction) {
+		try {
+			const input: VerifyResetCodeInput = req.body;
+			await authService.verifyResetCode(input);
+
+			res.status(200).json({
+				success: true,
+				message: 'تم التحقق من الرمز بنجاح'
+			});
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	/**
+	 * Reset the password using a verified code
+	 */
+	public async resetPassword(req: Request, res: Response, next: NextFunction) {
+		try {
+			const input: ResetPasswordInput = req.body;
+			const result = await authService.resetPassword(input);
+
+			res.status(200).json({
+				success: true,
+				message: result.message
 			});
 		} catch (error) {
 			next(error);
