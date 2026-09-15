@@ -10,3 +10,6 @@ export * from './proposals.capabilities';
 export * from './project-operations.prompts';
 export * from './project-operations.schemas';
 export * from './project-operations.capabilities';
+export * from './amendments.prompts';
+export * from './amendments.schemas';
+export * from './amendments.capabilities';
