@@ -64,19 +64,4 @@ router.post(
 router.post('/onboarding/upload', authenticate, requireActiveUser, authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), onboardingUpload.single('file'), uploadOnboardingDocument);
 router.get('/onboarding/status', authenticate, requireActiveUser, authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), getOnboardingStatus);
 
-// ==========================================
-// TESTING PROTECTED ROUTE
-// ==========================================
-router.get(
-  '/protected-test',
-  authenticate,
-  (req, res) => {
-    res.status(200).json({
-      success: true,
-      message: 'تم التحقق من الحماية بنجاح',
-      user: req.user
-    });
-  }
-);
-
 export default router;
