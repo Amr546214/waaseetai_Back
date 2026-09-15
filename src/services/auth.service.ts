@@ -98,9 +98,15 @@ export class AuthService {
 	public async forgotPassword(input: ForgotPasswordInput) {
 		const user = await authRepository.findByEmail(input.email);
 
-		// Unknown email, or an OAuth-only account with no local password:
-		// silently no-op but still return the generic success message.
-		if (!user || !user.password) {
+		// Unknown email: silently no-op but still return the generic success
+		// message, so the endpoint can't be used to enumerate accounts.
+		//
+		// A Google/OAuth-only account (user.password is null) is intentionally
+		// NOT skipped here — resetPassword() sets/overwrites the password field
+		// regardless of authProvider, letting these accounts gain a local
+		// password via the same OTP flow. This never touches authProvider or
+		// googleId, so Google login keeps working unchanged afterwards.
+		if (!user) {
 			return { message: RESET_GENERIC_MESSAGE };
 		}
 
