@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { dashboardService } from '../services/dashboard.service';
+import { financeReportAiService } from '../services/finance-report-ai.service';
 
 export class DashboardController {
   /**
@@ -19,6 +20,25 @@ export class DashboardController {
       });
     } catch (error) {
       // Pass errors to the global error handler safely
+      next(error);
+    }
+  }
+
+  public async analyzeFinanceReport(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { id: userId, accountType } = req.user!;
+
+      const data = await financeReportAiService.analyzeFinancialReport(
+        userId,
+        accountType
+      );
+
+      res.status(200).json({
+        success: true,
+        message: 'AI financial report insights completed successfully.',
+        data
+      });
+    } catch (error) {
       next(error);
     }
   }

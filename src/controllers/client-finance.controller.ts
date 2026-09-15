@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { clientFinanceService } from '../services/client-finance.service';
+import { invoiceAiService } from '../services/invoice-ai.service';
 
 export const getClientInvoices = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -16,6 +17,22 @@ export const getClientInvoice = async (req: Request, res: Response, next: NextFu
     if (!clientId) return res.status(401).json({ success: false, message: 'غير مصرح' });
     const data = await clientFinanceService.getInvoice(clientId, String(req.params.id || ''));
     return res.status(200).json({ success: true, data });
+  } catch (error) { next(error); }
+};
+
+export const analyzeClientInvoice = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const clientId = (req as any).user?.id;
+    if (!clientId) return res.status(401).json({ success: false, message: 'ØºÙŠØ± Ù…ØµØ±Ø­' });
+    const data = await invoiceAiService.analyzeInvoiceConsistency(
+      clientId,
+      String(req.params.id || '')
+    );
+    return res.status(200).json({
+      success: true,
+      message: 'AI invoice consistency analysis completed successfully.',
+      data
+    });
   } catch (error) { next(error); }
 };
 

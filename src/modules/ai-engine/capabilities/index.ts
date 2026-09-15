@@ -13,3 +13,6 @@ export * from './project-operations.capabilities';
 export * from './amendments.prompts';
 export * from './amendments.schemas';
 export * from './amendments.capabilities';
+export * from './finance.prompts';
+export * from './finance.schemas';
+export * from './finance.capabilities';

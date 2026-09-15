@@ -12,4 +12,11 @@ router.get(
   dashboardController.getStats.bind(dashboardController)
 );
 
+router.post(
+  '/finance/ai-insights',
+  authenticate,
+  requireActiveUser,
+  dashboardController.analyzeFinanceReport.bind(dashboardController)
+);
+
 export default router;

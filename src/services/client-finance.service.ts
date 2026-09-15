@@ -44,6 +44,16 @@ const buildInvoice = (contract: any, stage: any, delivery: any) => {
   };
 };
 
+export type ClientFinanceInvoice = ReturnType<typeof buildInvoice>;
+
+export interface ClientFinanceInvoiceAnalysisSource {
+  invoice: ClientFinanceInvoice;
+  sourceState: {
+    stageStatus: string;
+    deliveryStatus: string;
+  };
+}
+
 export class ClientFinanceService {
   /** Returns invoices derived from real contracted stage deliveries for the authenticated client. */
   async getInvoices(clientId: string) {
@@ -84,7 +94,10 @@ export class ClientFinanceService {
   }
 
   /** Returns one real invoice and enforces ownership through the contract's client. */
-  async getInvoice(clientId: string, deliveryId: string) {
+  async getInvoiceAnalysisSource(
+    clientId: string,
+    deliveryId: string
+  ): Promise<ClientFinanceInvoiceAnalysisSource> {
     const delivery = await prisma.stageDelivery.findFirst({
       where: { id: deliveryId, stage: { contract: { clientId } } },
       include: {
@@ -101,7 +114,17 @@ export class ClientFinanceService {
       }
     });
     if (!delivery) throw new AppError('الفاتورة غير موجودة أو لا تملك صلاحية الوصول إليها', 404);
-    return buildInvoice(delivery.stage.contract, delivery.stage, delivery);
+    return {
+      invoice: buildInvoice(delivery.stage.contract, delivery.stage, delivery),
+      sourceState: {
+        stageStatus: delivery.stage.status,
+        deliveryStatus: delivery.status,
+      },
+    };
+  }
+
+  async getInvoice(clientId: string, deliveryId: string) {
+    return (await this.getInvoiceAnalysisSource(clientId, deliveryId)).invoice;
   }
 
   /**
