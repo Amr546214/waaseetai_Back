@@ -2015,3 +2015,13 @@ model WalletTransaction {
   @@index([userId, createdAt])
   @@map("wallet_transactions")
 }
+
+model NewsletterSubscriber {
+  id             String    @id @default(uuid())
+  email          String    @unique
+  subscribedAt   DateTime  @default(now())
+  unsubscribedAt DateTime?
+  source         String?
+
+  @@map("newsletter_subscribers")
+}

@@ -167,6 +167,7 @@ mountApiRoute('/marketer/profile', marketerProfileRouter);
 mountApiRoute('/', cartCheckoutRouter);
 
 import clientFinanceRoutes from './routes/client-finance.routes';
+import newsletterRoutes from './routes/newsletter.routes';
 
 mountAppRoute('/api/provider/profile', providerProfileRoutes);
 mountAppRoute('/api/specialties', specialtyRoutes);
@@ -181,6 +182,8 @@ mountAppRoute('/api/client/my-requests', clientRequestsRoutes);
 mountAppRoute('/client/my-requests', clientRequestsRoutes);
 mountAppRoute('/api/client/finance', clientFinanceRoutes);
 mountAppRoute('/client/finance', clientFinanceRoutes);
+mountAppRoute('/api/newsletter', newsletterRoutes);
+mountAppRoute('/newsletter', newsletterRoutes);
 
 import adminSpecialtiesRouter from './routes/admin-specialties.routes';
 import adminUsersRouter from './routes/admin-users.routes';
