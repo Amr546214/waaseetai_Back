@@ -16,3 +16,6 @@ export * from './amendments.capabilities';
 export * from './finance.prompts';
 export * from './finance.schemas';
 export * from './finance.capabilities';
+export * from './disputes.prompts';
+export * from './disputes.schemas';
+export * from './disputes.capabilities';
