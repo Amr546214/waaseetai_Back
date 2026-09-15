@@ -4,13 +4,19 @@ import { AppError } from '../utils/app-error';
 import { CreateDisputeInput, ResolveDisputeInput } from '../dtos/dispute.dto';
 
 export class DisputeService {
-  private async requestForActor(requestId: string, userId: string, actor: 'client' | 'provider') {
+  private async requestForActor(
+    requestId: string,
+    userId: string,
+    actor: 'client' | 'provider',
+    allowedStatuses: RequestStatus[] = [RequestStatus.COMPLETED, RequestStatus.IN_PROGRESS],
+    statusErrorMessage = 'لا يمكن فتح نزاع على هذا الطلب حالياً'
+  ) {
     const request = await prisma.clientRequest.findUnique({
       where: { id: requestId },
       include: { clientProfile: { select: { userId: true } }, proposals: { where: { providerId: userId }, select: { id: true, status: true, providerId: true } } }
     });
     if (!request) throw new AppError('الطلب غير موجود', 404);
-    if (request.status !== RequestStatus.COMPLETED && request.status !== RequestStatus.IN_PROGRESS) throw new AppError('لا يمكن فتح نزاع على هذا الطلب حالياً', 400);
+    if (!allowedStatuses.includes(request.status)) throw new AppError(statusErrorMessage, 400);
     if (actor === 'client' && request.clientProfile.userId !== userId) throw new AppError('لا تملك صلاحية هذا الطلب', 403);
     if (actor === 'provider' && !request.proposals.some(proposal => proposal.status === 'ACCEPTED')) throw new AppError('لا تملك صلاحية هذا الطلب', 403);
     const accepted = await prisma.proposal.findFirst({ where: { clientRequestId: requestId, status: 'ACCEPTED' }, select: { providerId: true } });
@@ -25,6 +31,11 @@ export class DisputeService {
       data: { requestId, openedById: userId, againstUserId, reason: input.reason, description: input.description, evidence: input.evidence || [], status: DisputeStatus.OPEN },
       include: { request: { select: { id: true, title: true } } }
     });
+  }
+
+  async cancelByProvider(requestId: string, providerId: string) {
+    await this.requestForActor(requestId, providerId, 'provider', [RequestStatus.IN_PROGRESS], 'لا يمكن إلغاء هذا الطلب في حالته الحالية');
+    return prisma.clientRequest.update({ where: { id: requestId }, data: { status: RequestStatus.CANCELLED } });
   }
 
   async listForAdmin(status?: DisputeStatus, page = 1, limit = 20) {

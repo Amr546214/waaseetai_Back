@@ -25,3 +25,7 @@ export async function openClientDispute(req: Request, res: Response, next: NextF
 export async function openProviderDispute(req: Request, res: Response, next: NextFunction) {
   try { const parsed = createDisputeSchema.safeParse(req.body); if (!parsed.success) throw new AppError('بيانات النزاع غير صحيحة', 400); res.status(201).json({ success: true, data: await disputeService.createForRequest(String(req.params.id), actorId(req), 'provider', parsed.data) }); } catch (error) { next(error); }
 }
+
+export async function cancelProviderRequest(req: Request, res: Response, next: NextFunction) {
+  try { res.json({ success: true, data: await disputeService.cancelByProvider(String(req.params.id), actorId(req)) }); } catch (error) { next(error); }
+}

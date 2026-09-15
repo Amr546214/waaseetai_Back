@@ -6,7 +6,7 @@ import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.
 import providerProfileRouter from './provider-profile.routes';
 import marketplaceServiceRouter from './marketplace-service.routes';
 import { exploreRequestsController } from '../controllers/explore-requests.controller';
-import { openProviderDispute } from '../controllers/dispute.controller';
+import { openProviderDispute, cancelProviderRequest } from '../controllers/dispute.controller';
 import { rateAsProvider } from '../controllers/rating.controller';
 import { createCoupon, deactivateCoupon, getCoupon, listCoupons, updateCoupon } from '../controllers/provider-coupon.controller';
 
@@ -92,6 +92,7 @@ router.post(
 
 router.post('/requests/:id/disputes', authenticate, requireActiveUser, providerOnly, openProviderDispute);
 router.post('/requests/:id/rate', authenticate, requireActiveUser, providerOnly, rateAsProvider);
+router.post('/requests/:id/cancel', authenticate, requireActiveUser, providerOnly, cancelProviderRequest);
 
 import accreditationAiRoutes from './accreditation-ai.routes';
 import aiMatchingRoutes from './ai-matching.routes';
