@@ -1,5 +1,18 @@
 import rateLimit from 'express-rate-limit';
+import dotenv from 'dotenv';
 import { AppError } from '../utils/app-error';
+
+dotenv.config();
+
+// Parses a positive-integer env override, falling back to a safe default for
+// anything missing/invalid so this can never be accidentally disabled (e.g. via 0 or NaN).
+const positiveIntEnv = (value: string | undefined, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const AUTH_RATE_LIMIT_WINDOW_MS = positiveIntEnv(process.env.AUTH_RATE_LIMIT_WINDOW_MS, 60 * 60 * 1000); // default: 1 hour
+const AUTH_RATE_LIMIT_MAX = positiveIntEnv(process.env.AUTH_RATE_LIMIT_MAX, 10); // default: 10 attempts per window
 
 // Standard rate limiter for API endpoints
 export const apiLimiter = rateLimit({
@@ -12,10 +25,12 @@ export const apiLimiter = rateLimit({
   }
 });
 
-// Stricter rate limiter for sensitive Auth endpoints (Login, Register, OTP)
+// Stricter rate limiter for sensitive Auth endpoints (Login, Register, OTP).
+// Configurable via AUTH_RATE_LIMIT_WINDOW_MS / AUTH_RATE_LIMIT_MAX for dev/QA testing;
+// defaults stay at the production-safe 10 attempts/hour if those env vars are unset.
 export const authLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10, // Limit each IP to 10 auth requests per hour
+  windowMs: AUTH_RATE_LIMIT_WINDOW_MS,
+  max: AUTH_RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
   handler: (req, res, next) => {
