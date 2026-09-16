@@ -1,8 +1,15 @@
 import { prisma } from '../config/db';
 import { CreateProjectDto } from '../dtos/project.dto';
-import { ProjectStatus } from '@prisma/client';
+import { AccountType, ProjectStatus, SpecialtyVerificationStatus, UserRole } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
+
+interface ProjectSummaryActor {
+  userId: string;
+  accountType?: AccountType;
+  activeRole?: UserRole;
+  roles?: UserRole[];
+}
 
 export class ProjectService {
   /**
@@ -124,11 +131,135 @@ export class ProjectService {
     }
   }
 
+  private createProjectAccessError(): AppError {
+    return new AppError('المشروع غير موجود أو لا تملك صلاحية الوصول إليه', 404);
+  }
+
+  private normalizeSpecialty(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+
+    const normalized = value.trim().toLowerCase();
+    return normalized.length > 0 ? normalized : null;
+  }
+
+  private isProviderLikeActor(actor: ProjectSummaryActor): boolean {
+    if (
+      actor.accountType === AccountType.PROVIDER_COMPANY ||
+      actor.accountType === AccountType.PROVIDER_INDIVIDUAL ||
+      actor.accountType === AccountType.MARKETING_BROKER
+    ) {
+      return true;
+    }
+
+    const roles = new Set<UserRole>(actor.roles || []);
+    if (actor.activeRole) roles.add(actor.activeRole);
+
+    return roles.has(UserRole.PROVIDER) || roles.has(UserRole.AFFILIATE);
+  }
+
+  private async providerCanSeeOpenProject(
+    providerId: string,
+    projectSpecialty: string | null
+  ): Promise<boolean> {
+    const normalizedProjectSpecialty = this.normalizeSpecialty(projectSpecialty);
+    if (!normalizedProjectSpecialty) return false;
+
+    const providerProfile = await prisma.providerProfile.findUnique({
+      where: { userId: providerId },
+      include: {
+        providerSpecialties: {
+          where: {
+            isActive: true,
+            status: SpecialtyVerificationStatus.APPROVED,
+          },
+          include: { specialty: true },
+        },
+      },
+    });
+
+    const providerSpecialties = providerProfile?.providerSpecialties || [];
+    const providerSpecialtyIds = providerSpecialties
+      .map(providerSpecialty => providerSpecialty.specialtyId)
+      .filter(Boolean);
+
+    if (providerSpecialtyIds.length === 0) return false;
+
+    const providerKeywords = new Set(
+      providerSpecialties
+        .flatMap(providerSpecialty => [
+          providerSpecialty.specialty?.nameAr,
+          providerSpecialty.specialty?.name,
+          providerSpecialty.specialty?.nameEn,
+          ...(providerSpecialty.subSpecialties || []),
+        ])
+        .map(value => this.normalizeSpecialty(value))
+        .filter((value): value is string => Boolean(value))
+    );
+
+    return providerKeywords.has(normalizedProjectSpecialty);
+  }
+
+  private async assertCanAccessProjectSummary(
+    projectId: string,
+    actor: ProjectSummaryActor
+  ): Promise<void> {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: {
+        id: true,
+        status: true,
+        specialty: true,
+        clientId: true,
+        providerId: true,
+        contract: {
+          select: {
+            clientId: true,
+            providerId: true,
+          },
+        },
+        projectProposals: {
+          where: { providerId: actor.userId },
+          select: { id: true },
+          take: 1,
+        },
+        proposals: {
+          where: { providerId: actor.userId },
+          select: { id: true },
+          take: 1,
+        },
+      },
+    });
+
+    if (!project) {
+      throw this.createProjectAccessError();
+    }
+
+    if (project.clientId === actor.userId) return;
+    if (project.providerId === actor.userId) return;
+    if (
+      project.contract?.clientId === actor.userId ||
+      project.contract?.providerId === actor.userId
+    ) return;
+    if (project.projectProposals.length > 0 || project.proposals.length > 0) return;
+
+    if (
+      project.status === ProjectStatus.OPEN &&
+      this.isProviderLikeActor(actor) &&
+      await this.providerCanSeeOpenProject(actor.userId, project.specialty)
+    ) {
+      return;
+    }
+
+    throw this.createProjectAccessError();
+  }
+
   /**
    * Fetch summarized project parameters required for rendering the proposal application wizard summary bar
    */
-  public async getProjectSummary(projectId: string) {
+  public async getProjectSummary(projectId: string, actor: ProjectSummaryActor) {
     try {
+      await this.assertCanAccessProjectSummary(projectId, actor);
+
       const project = await prisma.project.findUnique({
         where: { id: projectId },
         select: {
@@ -172,7 +303,7 @@ export class ProjectService {
       });
 
       if (!project) {
-        throw new AppError('المشروع غير موجود في النظام', 404);
+        throw this.createProjectAccessError();
       }
 
       const totalProposalsCount = (project._count?.projectProposals ?? 0) + (project._count?.proposals ?? 0);

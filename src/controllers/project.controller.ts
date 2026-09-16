@@ -39,7 +39,13 @@ export class ProjectController {
   public async getSummary(req: Request, res: Response, next: NextFunction) {
     try {
       const id = req.params.id as string;
-      const summary = await projectService.getProjectSummary(id);
+      const user = req.user!;
+      const summary = await projectService.getProjectSummary(id, {
+        userId: user.userId || user.id,
+        accountType: user.accountType,
+        activeRole: user.activeRole,
+        roles: user.roles
+      });
 
       res.status(200).json({
         success: true,

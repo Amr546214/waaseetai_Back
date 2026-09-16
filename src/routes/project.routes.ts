@@ -23,6 +23,7 @@ router.get(
 router.get(
   '/:id/summary',
   authenticate,
+  requireActiveUser,
   projectController.getSummary
 );
 
@@ -30,6 +31,7 @@ router.get(
 router.get(
   '/:id',
   authenticate,
+  requireActiveUser,
   projectController.getSummary
 );
 
