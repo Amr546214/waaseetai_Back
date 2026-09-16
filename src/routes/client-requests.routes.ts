@@ -30,7 +30,7 @@ const router = Router();
 router.get('/meta', clientRequestsController.getMeta);
 
 // AI suggestion endpoint
-router.post('/ai-suggest', authenticate, aiLimiter, clientRequestsController.aiSuggest);
+router.post('/ai-suggest', authenticate, requireActiveUser, aiLimiter, clientRequestsController.aiSuggest);
 
 // Multi-part file upload endpoint for attachments
 router.post('/upload', authenticate, upload.array('attachments', 5), clientRequestsController.uploadAttachments);
