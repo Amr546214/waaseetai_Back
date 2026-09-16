@@ -36,7 +36,7 @@
 - Profile improvement, bio generation, and public provider `aiMetrics` migration.
 - Marketplace AI migration.
 - Full automated evaluation/test framework.
-- Full central rate-limit wiring across all AI endpoints.
+- Capability-specific, distributed, per-user, and embedded-workflow AI rate limiting.
 
 ## Deployment Cautions
 
@@ -49,6 +49,10 @@
 - `OPTIONAL_AI` workflows must not fabricate model output when AI fails.
 - `FAIL_CLOSED` endpoints should surface standardized AI failure behavior and should not return fake analysis.
 - Generic audit should contain metadata and entity references only, not prompts, model responses, or sensitive payload.
+- Seven explicit AI endpoints use the existing `aiLimiter`, but the limiter is IP-based and in-memory. Capability-specific tiers are not enforced, and embedded AI workflows are not individually rate-limited.
+- Timed-out OpenAI attempts receive an AbortSignal cancellation request before retrying. This is best-effort and does not guarantee provider-side processing or billing stops.
+- Automated integration tests and live-provider evaluations have not been executed as part of this documentation package.
+- The AI audit Prisma migration has not been deployed by these verification steps.
 
 ## Final Safe Windows Commands
 

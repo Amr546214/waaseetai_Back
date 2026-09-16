@@ -19,6 +19,16 @@ This is a static evaluation artifact. It does not call OpenAI, add a test runner
 4. Fixture-based semantic checks: use normal, edge, and adversarial fixtures for each operation.
 5. Optional live-provider smoke checks: run manually only in a controlled environment with non-PII data.
 
+## Access And Middleware Checks
+
+Required static or mocked-route checks:
+
+- Proposal AI suggestions reject unauthenticated, inactive, wrong-account-type, nonexistent-project, and inaccessible-project requests before project details enter AI context.
+- Project details and summaries reject unauthenticated, inactive, nonexistent-project, and inaccessible-project requests before summary data is fetched.
+- Client request AI suggestions reject inactive users before AI execution and retain the existing AI limiter.
+- The seven explicit AI endpoints are covered by the existing route-level `aiLimiter`: client request suggestions, proposal suggestions, amendment analysis, invoice analysis, finance dashboard insights, provider matching, and admin dispute analysis.
+- Rate-limit assertions should expect the current middleware behavior only: IP-based, in-memory limiting with HTTP 429 when exceeded. Do not claim capability-tier, per-user, distributed, or embedded-workflow limiting.
+
 ## Operation Matrix
 
 | Operation | Normal fixture | Edge fixture | Adversarial fixture | Structural assertions | Authority assertions | Failure behavior |
@@ -57,6 +67,7 @@ Expected assertions:
 - `OPTIONAL_AI` workflows continue without fabricated AI values.
 - `FAIL_CLOSED` endpoints surface the AI failure and do not return fake analysis.
 - Audit metadata keeps execution and failure details without raw prompts or raw responses.
+- Timeout evaluations should assert that timeout classification is preserved and an AbortSignal cancellation request is made before retry. They must not assert that provider-side processing or billing definitely stops.
 
 ## Arabic And English Behavior Matrix
 

@@ -10,7 +10,7 @@ The AI Engine centralizes structured backend AI work behind shared infrastructur
 - Schema registry: schema files register strict Zod output contracts with explicit versions.
 - Capability registry: capability files bind capability, operation, prompt version, schema version, model purpose, failure policy, temperature, and token limits.
 - Structured executor: `structured-ai-execution.service.ts` renders prompts, calls the shared execution service, validates JSON with Zod, and records audit events.
-- Normalized failures: `ai-execution.service.ts` converts missing config, provider errors, timeouts, rate limits, invalid JSON, and schema validation failures into normalized failed AI results where applicable.
+- Normalized failures: `ai-execution.service.ts` converts missing config, provider errors, timeouts, rate limits, invalid JSON, and schema validation failures into normalized failed AI results where applicable. Timed-out OpenAI attempts receive an `AbortSignal` cancellation request before retrying, but abort does not guarantee provider-side processing or billing stops.
 - Audit and observability: `AiExecutionAuditLog` records metadata such as execution ID, capability, operation, model, prompt/schema versions, latency, attempts, token usage, success/failure, error code, failure policy, redaction version, and bounded entity references.
 - Privacy and redaction: generic audit intentionally does not persist raw prompts, raw model responses, or sensitive business payloads.
 - Capability services: production services build sanitized, bounded context, call the structured executor, and keep AI advisory.
@@ -60,6 +60,15 @@ AI output must not become an authoritative business decision unless deterministi
 | `profile_intelligence.sensitive_change_review` | `standard_json` | `OPTIONAL_AI` | Embedded provider/marketer sensitive-change human-review enrichment | Yes, advisory labels only when validated | Human admin remains authoritative; AI cannot approve, reject, apply, verify identity, suspend, or mutate profile fields. |
 
 Only the operations above are registered Day 1 through Day 10. Do not document or call unregistered operations as production capabilities.
+
+## Post-Day-10 Guards
+
+- Proposal AI suggestions require authentication, active-user status, provider-like account type, and project-level access before project context is loaded or AI executes.
+- Project details and project summaries require authentication, active-user status, and project-level access before full summary data is fetched.
+- Client request AI suggestions require authentication and active-user status before the AI limiter and controller execute.
+- Seven explicit AI endpoints use the existing `aiLimiter`: client request suggestions, proposal suggestions, amendment analysis, invoice analysis, finance dashboard insights, provider matching, and admin dispute analysis.
+- `aiLimiter` remains IP-based and in-memory. Capability-specific tiers are not enforced, and embedded AI workflows are not individually rate-limited.
+- Provider/project matching keeps the `OPTIONAL_AI` empty-result behavior for AI execution failures, but database, registry, programming, and unexpected runtime failures propagate instead of being converted into empty results.
 
 ## Adding A Capability Safely
 
