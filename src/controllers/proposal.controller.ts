@@ -34,14 +34,15 @@ export class ProposalController {
   public async aiSuggest(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { projectId, currentTitle, currentMessage, advantages }: AiSuggestRequestDto = req.body;
+      const actorUserId = req.user!.userId || req.user!.id;
 
       const suggestions = await aiProposalService.evaluateAndSuggestProposal(
         projectId,
+        actorUserId,
         currentTitle,
         currentMessage,
         advantages,
         {
-          actorUserId: req.user?.userId || req.user?.id,
           primaryEntity: { type: 'PROJECT', id: projectId },
         }
       );

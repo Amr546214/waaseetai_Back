@@ -1,6 +1,7 @@
 import { prisma } from '../utils/prisma.client';
 import { AppError } from '../utils/app-error';
 import { logger } from '../config/logger';
+import { ProjectStatus, SpecialtyVerificationStatus } from '@prisma/client';
 import { structuredAiExecutionService } from '../modules/ai-engine';
 import type {
   AiAuditEntityRef,
@@ -61,6 +62,7 @@ class AiProposalService {
    */
   public async evaluateAndSuggestProposal(
     projectId: string,
+    actorUserId: string,
     currentTitle?: string,
     currentMessage?: string,
     advantages: string[] = [],
@@ -71,7 +73,12 @@ class AiProposalService {
       currentTitle,
       currentMessage,
       advantages,
-      options
+      {
+        ...options,
+        actorUserId,
+      },
+      'proposal_feedback',
+      actorUserId
     );
 
     if (!result.success) {
@@ -123,8 +130,13 @@ class AiProposalService {
     currentMessage?: string,
     advantages: string[] = [],
     options: ProposalEvaluationOptions = {},
-    operation: ProposalFeedbackOperation = 'proposal_feedback'
+    operation: ProposalFeedbackOperation = 'proposal_feedback',
+    accessActorUserId?: string
   ) {
+    if (accessActorUserId) {
+      await this.assertCanAccessProjectForAiSuggestion(projectId, accessActorUserId);
+    }
+
     const project = await prisma.project.findUnique({
       where: { id: projectId },
       select: {
@@ -140,7 +152,7 @@ class AiProposalService {
     });
 
     if (!project) {
-      throw new AppError('المشروع المحدد غير موجود في قاعدة البيانات', 404);
+      throw this.createProjectAccessError();
     }
 
     const defaultMin = Number(project.budgetMin ?? project.budgetFixed ?? 3000);
@@ -176,6 +188,110 @@ class AiProposalService {
         primaryEntity: options.primaryEntity ?? { type: 'PROJECT', id: projectId },
       },
     });
+  }
+
+  private createProjectAccessError(): AppError {
+    return new AppError('المشروع غير موجود أو لا تملك صلاحية الوصول إليه', 404);
+  }
+
+  private normalizeSpecialty(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+
+    const normalized = value.trim().toLowerCase();
+    return normalized.length > 0 ? normalized : null;
+  }
+
+  private async providerCanSeeOpenProject(
+    providerId: string,
+    projectSpecialty: string | null
+  ): Promise<boolean> {
+    const normalizedProjectSpecialty = this.normalizeSpecialty(projectSpecialty);
+    if (!normalizedProjectSpecialty) return false;
+
+    const providerProfile = await prisma.providerProfile.findUnique({
+      where: { userId: providerId },
+      include: {
+        providerSpecialties: {
+          where: {
+            isActive: true,
+            status: SpecialtyVerificationStatus.APPROVED,
+          },
+          include: { specialty: true },
+        },
+      },
+    });
+
+    const providerSpecialties = providerProfile?.providerSpecialties || [];
+    const providerSpecialtyIds = providerSpecialties
+      .map(providerSpecialty => providerSpecialty.specialtyId)
+      .filter(Boolean);
+
+    if (providerSpecialtyIds.length === 0) return false;
+
+    const providerKeywords = new Set(
+      providerSpecialties
+        .flatMap(providerSpecialty => [
+          providerSpecialty.specialty?.nameAr,
+          providerSpecialty.specialty?.name,
+          providerSpecialty.specialty?.nameEn,
+          ...(providerSpecialty.subSpecialties || []),
+        ])
+        .map(value => this.normalizeSpecialty(value))
+        .filter((value): value is string => Boolean(value))
+    );
+
+    return providerKeywords.has(normalizedProjectSpecialty);
+  }
+
+  private async assertCanAccessProjectForAiSuggestion(
+    projectId: string,
+    actorUserId: string
+  ): Promise<void> {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: {
+        id: true,
+        status: true,
+        specialty: true,
+        providerId: true,
+        contract: {
+          select: {
+            providerId: true,
+          },
+        },
+        projectProposals: {
+          where: { providerId: actorUserId },
+          select: { id: true },
+          take: 1,
+        },
+        proposals: {
+          where: { providerId: actorUserId },
+          select: { id: true },
+          take: 1,
+        },
+      },
+    });
+
+    if (!project) {
+      throw this.createProjectAccessError();
+    }
+
+    if (project.providerId === actorUserId || project.contract?.providerId === actorUserId) {
+      return;
+    }
+
+    if (project.projectProposals.length > 0 || project.proposals.length > 0) {
+      return;
+    }
+
+    if (
+      project.status === ProjectStatus.OPEN &&
+      await this.providerCanSeeOpenProject(actorUserId, project.specialty)
+    ) {
+      return;
+    }
+
+    throw this.createProjectAccessError();
   }
 }
 
