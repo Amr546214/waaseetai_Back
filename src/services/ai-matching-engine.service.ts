@@ -28,7 +28,6 @@ export class AiMatchingEngineService {
    * Main function to get the TOP 3 AI-matched projects for a given provider
    */
   async getTop3MatchingProjects(providerId: string): Promise<AiMatchingProjectItem[]> {
-    try {
       // 1. Gather comprehensive Provider Profile data from Prisma
       const [
         user,
@@ -273,10 +272,6 @@ export class AiMatchingEngineService {
       }
 
       return matchedResults.slice(0, 3);
-    } catch (error: any) {
-      logger.error(`[AiMatchingEngineService] Error matching projects: ${error.message}`, error);
-      return [];
-    }
   }
 }
 
