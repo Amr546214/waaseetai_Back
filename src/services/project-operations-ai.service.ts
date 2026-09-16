@@ -5,10 +5,16 @@ import type {
   ProjectOperationsContext,
 } from '../modules/ai-engine';
 
+export interface ProjectOperationsAuditRefs {
+  actorUserId?: string;
+  projectId: string;
+  contractId?: string;
+}
+
 export class ProjectOperationsAiService {
   async analyzeProjectHealth(
     context: ProjectOperationsContext,
-    actorUserId?: string
+    auditRefs: ProjectOperationsAuditRefs
   ): Promise<ProjectHealthAnalysisAiOutput | null> {
     const result = await structuredAiExecutionService.execute<
       ProjectOperationsContext,
@@ -19,14 +25,17 @@ export class ProjectOperationsAiService {
       input: context,
       locale: 'ar',
       auditContext: {
-        ...(actorUserId && { actorUserId }),
-        primaryEntity: { type: 'PROJECT', id: context.project.id },
+        ...(auditRefs.actorUserId && { actorUserId: auditRefs.actorUserId }),
+        primaryEntity: { type: 'PROJECT', id: auditRefs.projectId },
+        ...(auditRefs.contractId && {
+          relatedEntities: [{ type: 'CONTRACT', id: auditRefs.contractId }],
+        }),
       },
     });
 
     if (!result.success) {
       logger.warn(
-        `[ProjectOperationsAiService] Optional project health analysis skipped for project ${context.project.id}. code=${result.error.code}`
+        `[ProjectOperationsAiService] Optional project health analysis skipped for project ${auditRefs.projectId}. code=${result.error.code}`
       );
       return null;
     }

@@ -215,7 +215,11 @@ export class ProjectProgressService {
     if (projectOperationsContext) {
       const healthAnalysis = await projectOperationsAiService.analyzeProjectHealth(
         projectOperationsContext,
-        userId
+        {
+          actorUserId: userId,
+          projectId: contract.projectId,
+          contractId: contract.id,
+        }
       );
 
       if (healthAnalysis) {

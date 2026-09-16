@@ -1,6 +1,6 @@
 import { aiPromptRegistry } from '../prompt-registry';
 
-export const PROJECT_OPERATIONS_PROMPT_VERSION = '2026-09-14.v1';
+export const PROJECT_OPERATIONS_PROMPT_VERSION = '2026-09-16.v1';
 
 export const PROJECT_OPERATIONS_PROMPT_IDS = {
   projectHealthAnalysis: 'project-operations.project-health-analysis',
@@ -23,7 +23,6 @@ export interface ProjectOperationsStageSignal {
 
 export interface ProjectOperationsContext {
   project: {
-    id: string;
     title: string;
     descriptionExcerpt: string | null;
     status: string;
@@ -37,7 +36,6 @@ export interface ProjectOperationsContext {
     role: 'client' | 'provider';
   };
   contract: {
-    id: string;
     status: string;
     signedAt: string | null;
     durationDays: number;

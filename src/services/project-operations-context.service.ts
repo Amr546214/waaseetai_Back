@@ -206,7 +206,6 @@ export class ProjectOperationsContextService {
 
     return {
       project: {
-        id: contract.project.id,
         title: contract.project.title,
         descriptionExcerpt: capDescription(contract.project.description),
         status: contract.project.status,
@@ -218,7 +217,6 @@ export class ProjectOperationsContextService {
       },
       actor: { role: actorRole },
       contract: {
-        id: contract.id,
         status: contract.status,
         signedAt: toIso(contract.signedAt),
         durationDays: contract.durationDays,
