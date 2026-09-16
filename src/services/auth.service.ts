@@ -340,12 +340,14 @@ export class AuthService {
 				throw new AppError('يرجى تحديد نوع الحساب للمتابعة بالتسجيل عن طريق جوجل', 400);
 			}
 			const accountType = input.accountType;
+			const roles = getInitialRolesForAccountType(accountType);
 
-			// Create User & the matching role profile row together, atomically —
-			// same createMissingRoleProfiles helper as email/password registration
-			// (auth.repository.ts) so the two signup paths can't diverge on which
-			// profile row a given accountType gets (e.g. a Google PROVIDER signup
-			// previously ended up with no ProviderProfile row at all).
+			// Create User & a matching profile row for every owned role together,
+			// atomically — same createMissingRoleProfiles helper as email/password
+			// registration (auth.repository.ts) so the two signup paths can't
+			// diverge on which profile rows a given accountType gets (e.g. a
+			// Google PROVIDER signup previously ended up with no ProviderProfile
+			// row at all).
 			user = await prisma.$transaction(async (tx) => {
 				const created = await tx.user.create({
 					data: {
@@ -355,7 +357,7 @@ export class AuthService {
 						accountType,
 						// Initialize roles/activeRole from the chosen accountType, same as
 						// the email/password registration path (auth.repository.ts).
-						roles: getInitialRolesForAccountType(accountType),
+						roles,
 						activeRole: getRoleFromAccountType(accountType),
 						status: UserStatus.ACTIVE,
 						authProvider: 'google',
@@ -364,7 +366,7 @@ export class AuthService {
 					}
 				});
 
-				await createMissingRoleProfiles(tx, created.id, accountType, {
+				await createMissingRoleProfiles(tx, created.id, roles, {
 					firstName: created.firstName,
 					lastName: created.lastName
 				});

@@ -34,61 +34,69 @@ export function getInitialRolesForAccountType(accountType: AccountType): UserRol
   return [primaryRole, UserRole.CLIENT];
 }
 
+export interface CreateMissingRoleProfilesResult {
+  clientCreated: boolean;
+  providerCreated: boolean;
+  affiliateCreated: boolean;
+}
+
 /**
- * Create whichever role-specific profile row a given accountType requires for
- * a user, skipping it if one already exists. This is the single source of
- * truth for "which profile row(s) does this accountType need" — used by both
- * email/password registration (authRepository.createUserWithProfile) and
- * Google sign-up (authService.googleAuth) so the two signup paths can't
- * diverge on this again.
+ * Ensure every role in `roles` has its matching profile row for this user,
+ * creating whichever bare row(s) are missing and leaving existing ones
+ * untouched. This is the single source of truth for "which profile row(s)
+ * should this user have" — used by email/password registration
+ * (authRepository.createUserWithProfile), Google sign-up
+ * (authService.googleAuth), addAccountType, the self-healing path in
+ * getAvailableAccountTypes, and the scripts/backfill-role-profiles.ts script,
+ * so none of them can diverge on this again.
  *
- * Only ONE profile is created, matching the concrete accountType — same
- * one-profile-per-granted-role convention as addAccountType() above. The
- * implicit extra CLIENT role that getInitialRolesForAccountType() adds for
- * providers/brokers does NOT get its own ClientProfile row here, matching
- * today's actual behavior: neither the original email/password registration
- * nor the self-healing in getAvailableAccountTypes ever created one for that
- * implicit role either, and dashboard/provider-profile code never requires a
- * ClientProfile row to exist in order to work as a CLIENT.
+ * Idempotent and safe to call repeatedly / concurrently with itself: each
+ * profile is checked with a findUnique before creating it, so calling this
+ * again with roles that already have a row is a no-op for those roles.
  *
- * MARKETING_BROKER creates only an AffiliateProfile — NOT a ProviderProfile.
- * Email/password registration used to also create a ProviderProfile for
- * brokers (a copy/paste artifact of grouping MARKETING_BROKER into the same
- * branch as PROVIDER_* in the old inline logic); nothing in the app reads a
- * broker's providerProfile (marketer-overview.service.ts only reads
- * affiliateProfile), so that was a legacy bug, not an intentional "brokers
- * are also providers" feature, and is not reproduced here.
+ * MARKETING_BROKER/AFFILIATE never implies a ProviderProfile — nothing in the
+ * app reads a broker's providerProfile (marketer-overview.service.ts only
+ * reads affiliateProfile), so a caller must pass UserRole.PROVIDER explicitly
+ * if a user is genuinely both a provider and an affiliate.
  */
 export async function createMissingRoleProfiles(
   tx: Prisma.TransactionClient,
   userId: string,
-  accountType: AccountType,
+  roles: UserRole[],
   identity: { firstName: string; lastName: string }
-): Promise<void> {
-  if (accountType === AccountType.CLIENT_COMPANY || accountType === AccountType.CLIENT_INDIVIDUAL) {
+): Promise<CreateMissingRoleProfilesResult> {
+  const result: CreateMissingRoleProfilesResult = {
+    clientCreated: false,
+    providerCreated: false,
+    affiliateCreated: false
+  };
+
+  if (roles.includes(UserRole.CLIENT)) {
     const existing = await tx.clientProfile.findUnique({ where: { userId } });
     if (!existing) {
       await tx.clientProfile.create({ data: { userId } });
+      result.clientCreated = true;
     }
-    return;
   }
 
-  if (accountType === AccountType.PROVIDER_COMPANY || accountType === AccountType.PROVIDER_INDIVIDUAL) {
+  if (roles.includes(UserRole.PROVIDER)) {
     const existing = await tx.providerProfile.findUnique({ where: { userId } });
     if (!existing) {
       await tx.providerProfile.create({ data: { userId } });
+      result.providerCreated = true;
     }
-    return;
   }
 
-  if (accountType === AccountType.MARKETING_BROKER) {
+  if (roles.includes(UserRole.AFFILIATE)) {
     const existing = await tx.affiliateProfile.findUnique({ where: { userId } });
     if (!existing) {
       const slug = generateReferralSlug(`${identity.firstName} ${identity.lastName}`, userId);
       await tx.affiliateProfile.create({ data: { userId, referralSlug: slug } });
+      result.affiliateCreated = true;
     }
-    return;
   }
+
+  return result;
 }
 
 export class AccountManagementService {
@@ -100,6 +108,8 @@ export class AccountManagementService {
       where: { id: userId },
       select: {
         id: true,
+        firstName: true,
+        lastName: true,
         roles: true,
         activeRole: true,
         accountType: true,
@@ -127,6 +137,15 @@ export class AccountManagementService {
         }
       });
     }
+
+    // Self-healing also covers profile rows: an older signup path (or a
+    // partial/failed transaction) may have left this user owning a role with
+    // no matching profile row. Idempotent — a no-op for roles that already
+    // have their profile.
+    await createMissingRoleProfiles(prisma, userId, userRoles, {
+      firstName: user.firstName,
+      lastName: user.lastName
+    });
 
     const allRoles: { role: UserRole; label: string; color: string; description: string }[] = [
       {
@@ -194,6 +213,17 @@ export class AccountManagementService {
 
     // Transaction to create profile, update user roles, and log audit
     await prisma.$transaction(async (tx) => {
+      // Defensive backfill: ensure any OTHER role this user already owns
+      // (currentRoles never includes targetRole here — checked above) has its
+      // profile row too, in case an older signup path left a gap. The
+      // newly-added targetRole itself keeps its own richer, metadata-aware
+      // creation below (profileMetadata only applies to the role being
+      // deliberately added right now, not to a defensive backfill).
+      await createMissingRoleProfiles(tx, user.id, currentRoles, {
+        firstName: user.firstName,
+        lastName: user.lastName
+      });
+
       if (targetRole === UserRole.PROVIDER) {
         if (!user.providerProfile) {
           await tx.providerProfile.create({

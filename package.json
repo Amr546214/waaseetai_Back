@@ -16,7 +16,8 @@
 		"db:seed": "tsx prisma/seed.ts",
 		"db:seed:e2e": "tsx prisma/seed-e2e.ts",
 		"seed:taxonomy": "tsx prisma/seed-marketplace-taxonomy.ts",
-		"audit:existing": "npx -y tsx scripts/audit-existing-models.ts"
+		"audit:existing": "npx -y tsx scripts/audit-existing-models.ts",
+		"backfill:role-profiles": "tsx scripts/backfill-role-profiles.ts"
 	},
 	"keywords": [],
 	"author": "",

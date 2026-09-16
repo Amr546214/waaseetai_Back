@@ -28,6 +28,8 @@ export class AuthRepository {
    * Create User and their corresponding Profile in a Transaction
    */
   public async createUserWithProfile(data: RegisterInput, hashedPassword: string) {
+    const roles = getInitialRolesForAccountType(data.accountType);
+
     return prisma.$transaction(async (tx) => {
       // 1. Create User
       const user = await tx.user.create({
@@ -37,7 +39,7 @@ export class AuthRepository {
           // time, instead of leaving the schema defaults (roles: [CLIENT],
           // activeRole: CLIENT) for every account type and relying on the
           // lazy self-healing in account-management.service.ts to fix it later.
-          roles: getInitialRolesForAccountType(data.accountType),
+          roles,
           activeRole: getRoleFromAccountType(data.accountType),
           firstName: data.firstName,
           lastName: data.lastName,
@@ -49,9 +51,10 @@ export class AuthRepository {
         }
       });
 
-      // 2. Create the matching role profile row (shared with googleAuth's
-      // new-user path via createMissingRoleProfiles, so they can't diverge).
-      await createMissingRoleProfiles(tx, user.id, data.accountType, {
+      // 2. Create a matching profile row for every owned role (shared with
+      // googleAuth's new-user path via createMissingRoleProfiles, so they
+      // can't diverge).
+      await createMissingRoleProfiles(tx, user.id, roles, {
         firstName: user.firstName,
         lastName: user.lastName
       });
