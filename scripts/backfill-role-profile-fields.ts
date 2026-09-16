@@ -245,8 +245,25 @@ async function main() {
         // completionPercentage: only computed/written while still at the
         // untouched default (0); otherwise treated as already independently
         // set and preserved.
-        const mergedForScore = { ...user, ...cp };
-        const proposedCompletion = computeClientCompletionScore(mergedForScore);
+        //
+        // Built explicitly rather than a plain `{...user, ...cp}` spread:
+        // ClientProfile.firstName/lastName/avatarUrl are new Phase 3A columns
+        // that start out null on every existing row, so spreading `cp` after
+        // `user` would let those nulls silently shadow User's valid legacy
+        // identity values right before scoring — undercounting completion for
+        // every user on the very first run. Each of the three is asserted
+        // explicitly here (ClientProfile's value if set, else User's) so no
+        // future nullable overlapping field can reintroduce this by accident,
+        // regardless of spread order. Every other field keeps the same
+        // {...user, ...cp} merge/precedence as before — unchanged.
+        const effectiveClientScoringData = {
+          ...user,
+          ...cp,
+          firstName: cp.firstName || user.firstName,
+          lastName: cp.lastName || user.lastName,
+          avatarUrl: cp.avatarUrl || user.avatarUrl
+        };
+        const proposedCompletion = computeClientCompletionScore(effectiveClientScoringData);
         const existingUserPercent = user.profileCompletionPercent;
         const differsFromUser = proposedCompletion !== existingUserPercent;
         console.log(`[INFO] ${label} CLIENT completion — existing User.profileCompletionPercent=${existingUserPercent}, proposed ClientProfile.completionPercentage=${proposedCompletion}${differsFromUser ? ' (differs)' : ' (matches)'}`);
