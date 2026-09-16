@@ -99,6 +99,7 @@ export interface AiProviderExecutionContext {
   executionId: string;
   provider: AiProvider;
   client: OpenAI;
+  signal: AbortSignal;
   capability: AiCapability;
   operation: string;
   purpose: AiModelPurpose;

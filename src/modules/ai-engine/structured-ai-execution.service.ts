@@ -102,23 +102,26 @@ export class StructuredAiExecutionService {
 
         this.assertRegistrationMatchesRenderedPrompt(registration, renderedPrompt);
 
-        const rawResponse = await context.client.chat.completions.create({
-          model: context.model,
-          messages: [
-            { role: 'system', content: renderedPrompt.system },
-            {
-              role: 'user',
-              content: textContentFromPrompt(renderedPrompt.user, context.provider),
-            },
-          ],
-          response_format: { type: 'json_object' },
-          ...(registration.temperature !== undefined && {
-            temperature: registration.temperature,
-          }),
-          ...(registration.maxTokens !== undefined && {
-            max_tokens: registration.maxTokens,
-          }),
-        });
+        const rawResponse = await context.client.chat.completions.create(
+          {
+            model: context.model,
+            messages: [
+              { role: 'system', content: renderedPrompt.system },
+              {
+                role: 'user',
+                content: textContentFromPrompt(renderedPrompt.user, context.provider),
+              },
+            ],
+            response_format: { type: 'json_object' },
+            ...(registration.temperature !== undefined && {
+              temperature: registration.temperature,
+            }),
+            ...(registration.maxTokens !== undefined && {
+              max_tokens: registration.maxTokens,
+            }),
+          },
+          { signal: context.signal }
+        );
 
         const rawContent = rawResponse.choices[0]?.message?.content ?? '';
 

@@ -65,22 +65,32 @@ const extractTokenUsage = <TData>(
 };
 
 const withTimeout = async <TData>(
-  promise: Promise<TData>,
+  run: (signal: AbortSignal) => Promise<TData>,
   timeoutMs: number,
   timeoutMessage: string
 ): Promise<TData> => {
+  const abortController = new AbortController();
+  const timeoutError = new Error(timeoutMessage);
+  timeoutError.name = 'AiProviderTimeoutError';
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutHandle = setTimeout(() => {
-      const timeoutError = new Error(timeoutMessage);
-      timeoutError.name = 'AiProviderTimeoutError';
+      timedOut = true;
+      abortController.abort(timeoutError);
       reject(timeoutError);
     }, timeoutMs);
   });
 
   try {
-    return await Promise.race([promise, timeoutPromise]);
+    return await Promise.race([
+      Promise.resolve().then(() => run(abortController.signal)),
+      timeoutPromise,
+    ]);
+  } catch (error) {
+    if (timedOut) throw timeoutError;
+    throw error;
   } finally {
     if (timeoutHandle) clearTimeout(timeoutHandle);
   }
@@ -157,17 +167,19 @@ export class AiExecutionService {
 
       try {
         const providerResult = await withTimeout(
-          request.execute({
-            executionId,
-            provider: config.provider,
-            client: openai,
-            capability: policy.capability,
-            operation: policy.operation,
-            purpose: policy.purpose,
-            model: policy.model,
-            timeoutMs: policy.timeoutMs,
-            attempt,
-          }),
+          signal =>
+            request.execute({
+              executionId,
+              provider: config.provider,
+              client: openai,
+              signal,
+              capability: policy.capability,
+              operation: policy.operation,
+              purpose: policy.purpose,
+              model: policy.model,
+              timeoutMs: policy.timeoutMs,
+              attempt,
+            }),
           policy.timeoutMs,
           `AI provider timed out after ${policy.timeoutMs}ms`
         );
