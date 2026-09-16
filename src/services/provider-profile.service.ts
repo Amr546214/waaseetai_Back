@@ -1,10 +1,12 @@
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
+import { ModificationStatus } from '@prisma/client';
 import OpenAI from 'openai';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { notificationService } from './notification.service';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
+import { profileIntelligenceAiService } from './profile-intelligence-ai.service';
 
 const aiCache = new Map<string, { metrics: any, expiresAt: number }>();
 
@@ -550,9 +552,9 @@ export class ProviderProfileService {
 				currentValue: this.toAuditValue(currentValue),
 				requestedValue: this.toAuditValue(requestedValue),
 				status: 'APPROVED',
-				aiAuditStatus: 'PASSED',
-				aiConfidence: 100,
-				aiRecommendation: 'تحديث عادي تم تطبيقه فورًا وتسجيله في سجل التدقيق.',
+				aiAuditStatus: null,
+				aiConfidence: null,
+				aiRecommendation: null,
 				reviewedByAdmin: false,
 				appliedAt: new Date(),
 				metadata: { applicationMode: 'IMMEDIATE' }
@@ -717,7 +719,7 @@ export class ProviderProfileService {
 
 	async verifySensitiveChange(providerId: string, requestId: string, code: string, auditContext?: AuditContext) {
 		const request = await prisma.profileModificationRequest.findFirst({ where: { id: requestId, providerId } });
-		if (!request || request.status !== 'PENDING_OTP') throw new Error('REQUEST_NOT_PENDING_OTP');
+		if (!request || request.status !== ModificationStatus.PENDING_OTP) throw new Error('REQUEST_NOT_PENDING_OTP');
 
 		const otp = await prisma.otpVerification.findFirst({
 			where: { userId: providerId, code, type: 'EMAIL', expiresAt: { gt: new Date() } },
@@ -736,39 +738,65 @@ export class ProviderProfileService {
 			await this.applySensitivePayload(providerId, request.category, metadata.changes || {});
 		}
 
-		const updated = await prisma.profileModificationRequest.update({
+		let updated = await prisma.profileModificationRequest.update({
 			where: { id: request.id },
 			data: {
 				otpVerifiedAt: new Date(),
-				status: needsReview ? 'PENDING_HUMAN_REVIEW' : 'APPROVED',
-				aiAuditStatus: needsReview ? 'NEEDS_HUMAN_REVIEW' : 'PASSED',
-				aiConfidence: needsReview ? 90 : 100,
-				aiRecommendation: needsReview
-					? 'تم تأكيد هوية صاحب الحساب عبر البريد، والطلب جاهز للمراجعة البشرية.'
-					: 'تم تأكيد هوية صاحب الحساب عبر البريد وتطبيق التغيير تلقائيًا.',
+				status: needsReview ? ModificationStatus.PENDING_HUMAN_REVIEW : ModificationStatus.APPROVED,
+				aiAuditStatus: null,
+				aiConfidence: null,
+				aiRecommendation: null,
 				appliedAt: needsReview ? null : new Date()
 			}
 		});
-		await accountAuditLogService.record({ userId: providerId, eventType: 'AI_REVIEW_COMPLETED', category: 'PROFILE_COMPLETION', title: request.fieldLabel, summary: needsReview ? 'اجتاز الطلب التحقق الآلي وأُحيل إلى مراجع بشري' : 'اجتاز الطلب التحقق الآلي وتم تطبيقه', source: 'AI', status: needsReview ? 'IN_REVIEW' : 'APPROVED', statusText: updated.aiRecommendation || undefined, requestId, details: { aiAuditStatus: updated.aiAuditStatus, aiConfidence: updated.aiConfidence }, context: auditContext });
+		await accountAuditLogService.record({ userId: providerId, eventType: needsReview ? 'SENSITIVE_CHANGE_READY_FOR_HUMAN_REVIEW' : 'SENSITIVE_CHANGE_APPLIED_AFTER_OTP', category: 'PROFILE_COMPLETION', title: request.fieldLabel, summary: needsReview ? 'Email OTP was verified and the sensitive change is ready for human review.' : 'Email OTP was verified and the deterministic contact change was applied.', source: 'SYSTEM', status: needsReview ? 'IN_REVIEW' : 'APPROVED', requestId, details: { verificationMethod: 'EMAIL_OTP', requiresHumanReview: needsReview }, context: auditContext });
+		if (needsReview) {
+			const aiUpdated =
+				await profileIntelligenceAiService.enrichProviderModificationRequest(
+					request.id,
+					providerId
+				);
+			if (aiUpdated) updated = aiUpdated;
+		}
 		return updated;
 	}
 
 	async reviewSensitiveChange(requestId: string, approved: boolean, rejectionReason?: string, auditContext?: AuditContext) {
 		const request = await prisma.profileModificationRequest.findUnique({ where: { id: requestId } });
 		if (!request || request.status !== 'PENDING_HUMAN_REVIEW') throw new Error('REQUEST_NOT_PENDING_REVIEW');
-		const metadata = (request.metadata || {}) as any;
-		if (approved) await this.applySensitivePayload(request.providerId, request.category, metadata.changes || {});
+		let changeApplied = false;
+		if (approved) {
+			const hasMetadata = request.metadata !== null && request.metadata !== undefined;
+			if (hasMetadata) {
+				if (!this.isPlainRecord(request.metadata)) throw new Error('INVALID_MODIFICATION_METADATA');
+				const metadata = request.metadata;
+				if (!Object.prototype.hasOwnProperty.call(metadata, 'changes')) throw new Error('INVALID_MODIFICATION_METADATA');
+				if (!this.isPlainRecord(metadata.changes)) throw new Error('INVALID_MODIFICATION_METADATA');
+				await this.applySensitivePayload(request.providerId, request.category, metadata.changes);
+				changeApplied = true;
+			} else if (this.isSensitiveModificationField(request.fieldName)) {
+				await this.applyLegacyModificationRequest(request.providerId, request.fieldName, request.requestedValue);
+				changeApplied = true;
+			}
+		}
 		const updated = await prisma.profileModificationRequest.update({
 			where: { id: request.id },
 			data: {
 				status: approved ? 'APPROVED' : 'REJECTED',
 				reviewedByAdmin: true,
 				rejectionReason: approved ? null : (rejectionReason || 'لم يستوفِ الطلب متطلبات التحقق'),
-				appliedAt: approved ? new Date() : null
+				appliedAt: approved && changeApplied ? new Date() : null
 			}
 		});
-		await accountAuditLogService.record({ userId: request.providerId, eventType: 'HUMAN_REVIEW_COMPLETED', category: 'PROFILE_COMPLETION', title: request.fieldLabel, summary: approved ? 'اعتمد المراجع البشري طلب التعديل وتم تطبيقه' : 'رفض المراجع البشري طلب التعديل', source: 'ADMIN', severity: approved ? 'INFO' : 'WARNING', status: approved ? 'APPROVED' : 'REJECTED', statusText: updated.rejectionReason || undefined, requestId, context: auditContext });
+		const auditSummary = approved
+			? (changeApplied ? 'اعتمد المراجع البشري طلب التعديل وتم تطبيقه' : 'Human reviewer approved the request; no supported profile field mutation was applied.')
+			: 'رفض المراجع البشري طلب التعديل';
+		await accountAuditLogService.record({ userId: request.providerId, eventType: 'HUMAN_REVIEW_COMPLETED', category: 'PROFILE_COMPLETION', title: request.fieldLabel, summary: auditSummary, source: 'ADMIN', severity: approved ? 'INFO' : 'WARNING', status: approved ? 'APPROVED' : 'REJECTED', statusText: updated.rejectionReason || undefined, requestId, context: auditContext });
 		return updated;
+	}
+
+	private isPlainRecord(value: unknown): value is Record<string, unknown> {
+		return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 	}
 
 	async getPendingSensitiveReviews() {
@@ -777,6 +805,42 @@ export class ProviderProfileService {
 			include: { provider: { select: { firstName: true, lastName: true, email: true } } },
 			orderBy: { createdAt: 'asc' }
 		});
+	}
+
+	private async applyLegacyModificationRequest(providerId: string, fieldName: string, requestedValue: unknown) {
+		const normalizedFieldName = this.normalizeModificationField(fieldName);
+		const value = String(requestedValue ?? '');
+
+		if (normalizedFieldName === 'EMAIL') {
+			await prisma.user.update({
+				where: { id: providerId },
+				data: { email: value.trim().toLowerCase() }
+			});
+			return;
+		}
+
+		if (normalizedFieldName === 'PHONE_NUMBER') {
+			await prisma.user.update({
+				where: { id: providerId },
+				data: { phoneNumber: value }
+			});
+			return;
+		}
+
+		if (normalizedFieldName === 'IBAN') {
+			await prisma.user.update({
+				where: { id: providerId },
+				data: { ibanNumber: value }
+			});
+			return;
+		}
+
+		if (normalizedFieldName === 'NATIONAL_ID') {
+			await prisma.user.update({
+				where: { id: providerId },
+				data: { idNumber: value }
+			});
+		}
 	}
 
 	private async applySensitivePayload(providerId: string, category: string, changes: Record<string, unknown>) {
@@ -800,6 +864,24 @@ export class ProviderProfileService {
 	private maskEmail(email: string) {
 		const [name, domain] = email.split('@');
 		return `${name.slice(0, 2)}${'*'.repeat(Math.max(2, name.length - 2))}@${domain}`;
+	}
+
+	private normalizeModificationField(fieldName: string) {
+		return String(fieldName || '').trim().toUpperCase();
+	}
+
+	private isSensitiveModificationField(fieldName: string) {
+		return ['EMAIL', 'PHONE_NUMBER', 'IBAN', 'NATIONAL_ID'].includes(
+			this.normalizeModificationField(fieldName)
+		);
+	}
+
+	private legacyCategoryForField(fieldName: string) {
+		const normalized = this.normalizeModificationField(fieldName);
+		if (normalized === 'EMAIL' || normalized === 'PHONE_NUMBER') return 'CONTACT';
+		if (normalized === 'IBAN') return 'BANKING';
+		if (normalized === 'NATIONAL_ID') return 'DOCUMENTS';
+		return 'PROFILE';
 	}
 
 	async getModificationRequests(providerId: string, status?: string) {
@@ -838,51 +920,41 @@ export class ProviderProfileService {
 	async createModificationRequest(providerId: string, data: { fieldName: string, fieldLabel: string, requestedValue: string }) {
 		// Determine current value
 		let currentValue = null;
+		const fieldName = this.normalizeModificationField(data.fieldName);
+		const isSensitiveField = this.isSensitiveModificationField(fieldName);
 		const user = await prisma.user.findUnique({ where: { id: providerId }, include: { providerProfile: true } });
 
 		if (user) {
-			if (['EMAIL', 'PHONE_NUMBER', 'IBAN', 'NATIONAL_ID'].includes(data.fieldName)) {
-				if (data.fieldName === 'EMAIL') currentValue = user.email;
-				if (data.fieldName === 'PHONE_NUMBER') currentValue = user.phoneNumber;
-				if (data.fieldName === 'IBAN') currentValue = user.ibanNumber;
-				if (data.fieldName === 'NATIONAL_ID') currentValue = user.idNumber;
+			if (isSensitiveField) {
+				if (fieldName === 'EMAIL') currentValue = user.email;
+				if (fieldName === 'PHONE_NUMBER') currentValue = user.phoneNumber;
+				if (fieldName === 'IBAN') currentValue = user.ibanNumber;
+				if (fieldName === 'NATIONAL_ID') currentValue = user.idNumber;
 			}
 		}
-
-		// Mock AI check
-		const aiConfidence = 85 + Math.random() * 10;
-		const aiAuditStatus = aiConfidence > 92 ? 'PASSED' : 'NEEDS_HUMAN_REVIEW';
-		const status = aiAuditStatus === 'PASSED' ? 'APPROVED' : 'PENDING_HUMAN_REVIEW';
-
-		let aiRecommendation = '';
-		if (aiAuditStatus === 'PASSED') aiRecommendation = 'تحقق الذكاء من تطابق المعلومات مع المعايير المطلوبة.';
-		else aiRecommendation = 'يتطلب مراجعة بشرية للتحقق من المرفقات.';
 
 		const request = await prisma.profileModificationRequest.create({
 			data: {
 				providerId,
-				fieldName: data.fieldName,
+				category: this.legacyCategoryForField(fieldName),
+				fieldName: fieldName || data.fieldName,
 				fieldLabel: data.fieldLabel,
 				currentValue,
 				requestedValue: data.requestedValue,
-				status,
-				aiConfidence,
-				aiAuditStatus,
-				aiRecommendation,
+				status: ModificationStatus.PENDING_HUMAN_REVIEW,
+				aiConfidence: null,
+				aiAuditStatus: null,
+				aiRecommendation: null,
 			}
 		});
 
-		// Automatically apply if approved
-		if (status === 'APPROVED' && user) {
-			const updateData: any = {};
-			if (data.fieldName === 'EMAIL') updateData.email = data.requestedValue;
-			if (data.fieldName === 'PHONE_NUMBER') updateData.phoneNumber = data.requestedValue;
-			if (data.fieldName === 'IBAN') updateData.ibanNumber = data.requestedValue;
-			if (data.fieldName === 'NATIONAL_ID') updateData.idNumber = data.requestedValue;
-
-			if (Object.keys(updateData).length > 0) {
-				await prisma.user.update({ where: { id: providerId }, data: updateData });
-			}
+		if (isSensitiveField) {
+			const aiUpdated =
+				await profileIntelligenceAiService.enrichProviderModificationRequest(
+					request.id,
+					providerId
+				);
+			return aiUpdated ?? request;
 		}
 
 		return request;

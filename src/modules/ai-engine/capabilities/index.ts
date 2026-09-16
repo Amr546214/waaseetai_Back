@@ -19,3 +19,6 @@ export * from './finance.capabilities';
 export * from './disputes.prompts';
 export * from './disputes.schemas';
 export * from './disputes.capabilities';
+export * from './profile-intelligence.prompts';
+export * from './profile-intelligence.schemas';
+export * from './profile-intelligence.capabilities';

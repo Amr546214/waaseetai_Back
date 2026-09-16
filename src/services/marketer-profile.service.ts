@@ -1,6 +1,8 @@
 import { prisma } from '../config/db';
 import { SensitiveFieldType, ChangeRequestStatus } from '@prisma/client';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
+import crypto from 'crypto';
+import { profileIntelligenceAiService } from './profile-intelligence-ai.service';
 
 export class MarketerProfileService {
   
@@ -83,9 +85,9 @@ export class MarketerProfileService {
     // Check if IBAN is being updated and is different from current
     if (data.iban && data.iban !== profile.iban) {
       isPendingRequest = true;
-      requestId = `REQ-${Math.floor(1000 + Math.random() * 9000)}`;
+      requestId = `REQ-${crypto.randomInt(1000, 10000)}`;
 
-      await prisma.profileChangeRequest.create({
+      const request = await prisma.profileChangeRequest.create({
         data: {
           requestNumber: requestId,
           affiliateProfileId: profile.id,
@@ -93,11 +95,15 @@ export class MarketerProfileService {
           fieldLabel: 'رقم الحساب البنكي IBAN',
           currentValue: profile.iban || '',
           requestedValue: data.iban,
-          status: ChangeRequestStatus.PENDING_AI_REVIEW,
-          aiRecommendation: 'يتحقق الذكاء من تطابق اسم صاحب الحساب الجديد مع الهوية ومن سلامة صيغة IBAN قبل رفعه للمراجع البشري',
-          aiConfidenceScore: 95
+          status: ChangeRequestStatus.PENDING_HUMAN_APPROVAL,
+          aiRecommendation: null,
+          aiConfidenceScore: null
         }
       });
+      await profileIntelligenceAiService.enrichAffiliateProfileChangeRequest(
+        request.id,
+        userId
+      );
       
       // Remove sensitive fields from direct update
       delete data.iban;
