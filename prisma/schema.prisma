@@ -280,6 +280,17 @@ model ClientProfile {
   website     String?
   bio         String?
 
+  // Phase 3A: independent per-role display/progression fields (additive only —
+  // see Phase 3 audit). Not yet backfilled or read/written by the app; User's
+  // equivalent columns remain the source of truth until Phase 3B/3C/3D.
+  firstName            String?
+  lastName             String?
+  avatarUrl            String?
+  currentLevel         String? @default("مستكشف - المستوى 1")
+  currentPoints        Int     @default(0)
+  pointsToNextLevel    Int?    @default(100)
+  completionPercentage Int     @default(0)
+
   // Step 1: Details
   idNumber String? // National ID / Iqama (10 digits)
   dob      DateTime? // Date of Birth
@@ -352,6 +363,14 @@ model ProviderProfile {
   preferences          Json?
   mainSpecialty        String?
   subSpecialties       String[]           @default([])
+
+  // Phase 3A: independent per-role display fields (additive only). Level/
+  // points/completion intentionally NOT duplicated here — provider gamification
+  // continues to use the existing ProviderGamification.points/currentLevelIndex
+  // and this model's own completionPercentage above.
+  firstName String?
+  lastName  String?
+  avatarUrl String?
 
   rating     Float   @default(5.0)
   isVerified Boolean @default(false)
@@ -1441,6 +1460,14 @@ model AffiliateProfile {
 
   notifyOnNewReferral   Boolean @default(true)
   sharePerformanceStats Boolean @default(false)
+
+  // Phase 3A: independent per-role display fields (additive only). No new
+  // avatarUrl/currentLevel/completionPercentage/points here — this model
+  // already has its own independent avatarUrl, currentLevel and
+  // completionPercentage above; affiliate points remain out of scope (no
+  // points-based progress concept exists for this role today).
+  firstName String?
+  lastName  String?
 
   // Marketing Profile Tab
   avatarUrl         String?
