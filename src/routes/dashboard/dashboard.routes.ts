@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { dashboardController } from '../../controllers/dashboard.controller';
 import { authenticate, requireActiveUser } from '../../middlewares/auth.middleware';
+import { aiLimiter } from '../../middlewares/rate-limit.middleware';
 
 const router = Router();
 
@@ -16,6 +17,7 @@ router.post(
   '/finance/ai-insights',
   authenticate,
   requireActiveUser,
+  aiLimiter,
   dashboardController.analyzeFinanceReport.bind(dashboardController)
 );
 

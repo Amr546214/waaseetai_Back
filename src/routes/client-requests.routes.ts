@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
+import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { clientRequestsController } from '../controllers/client-requests.controller';
 import { memoryUpload } from '../utils/cloudinary-storage';
 import { openClientDispute } from '../controllers/dispute.controller';
@@ -29,7 +30,7 @@ const router = Router();
 router.get('/meta', clientRequestsController.getMeta);
 
 // AI suggestion endpoint
-router.post('/ai-suggest', authenticate, clientRequestsController.aiSuggest);
+router.post('/ai-suggest', authenticate, aiLimiter, clientRequestsController.aiSuggest);
 
 // Multi-part file upload endpoint for attachments
 router.post('/upload', authenticate, upload.array('attachments', 5), clientRequestsController.uploadAttachments);

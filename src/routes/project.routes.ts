@@ -3,6 +3,7 @@ import { projectController } from '../controllers/project.controller';
 import { proposalController } from '../controllers/proposal.controller';
 import { projectAmendmentsController } from '../controllers/project-amendments.controller';
 import { authenticate, requireActiveUser, authorize } from '../middlewares/auth.middleware';
+import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { validateDto } from '../middlewares/validate-dto.middleware';
 import { createProposalSchema } from '../dtos/create-proposal.dto';
 import { createProjectSchema } from '../dtos/project.dto';
@@ -46,6 +47,7 @@ router.post(
     AccountType.PROVIDER_COMPANY,
     AccountType.PROVIDER_INDIVIDUAL
   ),
+  aiLimiter,
   validateDto(amendmentAnalysisSchema),
   projectAmendmentsController.analyzeAmendmentImpact
 );

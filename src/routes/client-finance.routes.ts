@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
+import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { analyzeClientInvoice, getClientInvoice, getClientInvoices, getClientWallet, initiateDeposit, verifyDeposit } from '../controllers/client-finance.controller';
 
 const router = Router();
@@ -11,7 +12,7 @@ router.use(requireActiveUser);
 router.get('/wallet', getClientWallet);
 router.get('/invoices', getClientInvoices);
 router.get('/invoices/:id', getClientInvoice);
-router.post('/invoices/:id/ai-analysis', analyzeClientInvoice);
+router.post('/invoices/:id/ai-analysis', aiLimiter, analyzeClientInvoice);
 router.post('/deposit/init', initiateDeposit);
 router.post('/deposit/verify', verifyDeposit);
 

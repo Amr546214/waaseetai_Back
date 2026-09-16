@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { getTopMatchingProjects } from '../controllers/ai-matching.controller';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
+import { aiLimiter } from '../middlewares/rate-limit.middleware';
 
 const router = Router();
 
@@ -9,6 +10,7 @@ router.get(
   '/ai-matching-projects',
   authenticate,
   requireActiveUser,
+  aiLimiter,
   getTopMatchingProjects
 );
 
