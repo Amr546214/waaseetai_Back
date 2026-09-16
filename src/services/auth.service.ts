@@ -14,6 +14,7 @@ import { prisma } from '../config/db';
 import { generateReferralSlug } from '../utils/slug.util';
 import { sessionService, SessionContext } from './session.service';
 import { accountAuditLogService } from './account-logs.service';
+import { getRoleFromAccountType, getInitialRolesForAccountType, createMissingRoleProfiles } from './account-management.service';
 
 const RESET_OTP_MAX_ATTEMPTS = 5;
 const RESET_OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
@@ -248,7 +249,9 @@ export class AuthService {
 				firstName: updatedUser.firstName,
 				lastName: updatedUser.lastName,
 				email: updatedUser.email,
-				accountType: updatedUser.accountType
+				accountType: updatedUser.accountType,
+				activeRole: updatedUser.activeRole,
+				roles: updatedUser.roles
 			}
 		};
 	}
@@ -308,7 +311,9 @@ export class AuthService {
 				firstName: user.firstName,
 				lastName: user.lastName,
 				email: user.email,
-				accountType: user.accountType
+				accountType: user.accountType,
+				activeRole: user.activeRole,
+				roles: user.roles
 			}
 		};
 	}
@@ -334,31 +339,38 @@ export class AuthService {
 			if (!input.accountType) {
 				throw new AppError('يرجى تحديد نوع الحساب للمتابعة بالتسجيل عن طريق جوجل', 400);
 			}
+			const accountType = input.accountType;
 
-			// Create User & Profile directly
-			user = await prisma.user.create({
-				data: {
-					email: email,
-					firstName: payload.given_name || 'Google',
-					lastName: payload.family_name || 'User',
-					accountType: input.accountType,
-					status: UserStatus.ACTIVE,
-					authProvider: 'google',
-					googleId: payload.sub,
-					avatarUrl: payload.picture,
-				}
-			});
-
-			if (user.accountType === 'MARKETING_BROKER') {
-				const fullName = `${user.firstName} ${user.lastName}`;
-				const slug = generateReferralSlug(fullName, user.id);
-				await prisma.affiliateProfile.create({
+			// Create User & the matching role profile row together, atomically —
+			// same createMissingRoleProfiles helper as email/password registration
+			// (auth.repository.ts) so the two signup paths can't diverge on which
+			// profile row a given accountType gets (e.g. a Google PROVIDER signup
+			// previously ended up with no ProviderProfile row at all).
+			user = await prisma.$transaction(async (tx) => {
+				const created = await tx.user.create({
 					data: {
-						userId: user.id,
-						referralSlug: slug
+						email: email,
+						firstName: payload.given_name || 'Google',
+						lastName: payload.family_name || 'User',
+						accountType,
+						// Initialize roles/activeRole from the chosen accountType, same as
+						// the email/password registration path (auth.repository.ts).
+						roles: getInitialRolesForAccountType(accountType),
+						activeRole: getRoleFromAccountType(accountType),
+						status: UserStatus.ACTIVE,
+						authProvider: 'google',
+						googleId: payload.sub,
+						avatarUrl: payload.picture,
 					}
 				});
-			}
+
+				await createMissingRoleProfiles(tx, created.id, accountType, {
+					firstName: created.firstName,
+					lastName: created.lastName
+				});
+
+				return created;
+			});
 		} else {
 			if (!user.googleId) {
 				user = await prisma.user.update({
@@ -395,7 +407,9 @@ export class AuthService {
 				firstName: user.firstName,
 				lastName: user.lastName,
 				email: user.email,
-				accountType: user.accountType
+				accountType: user.accountType,
+				activeRole: user.activeRole,
+				roles: user.roles
 			}
 		};
 	}

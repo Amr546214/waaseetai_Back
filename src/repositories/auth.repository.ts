@@ -1,6 +1,7 @@
-import { AccountType, OtpType, UserStatus, PrismaClient } from '@prisma/client';
+import { OtpType, UserStatus, PrismaClient } from '@prisma/client';
 import { prisma } from '../config/db';
 import { RegisterInput } from '../routes/auth/auth.schema';
+import { getRoleFromAccountType, getInitialRolesForAccountType, createMissingRoleProfiles } from '../services/account-management.service';
 
 export class AuthRepository {
   /**
@@ -32,6 +33,12 @@ export class AuthRepository {
       const user = await tx.user.create({
         data: {
           accountType: data.accountType,
+          // Initialize roles/activeRole from the chosen accountType at creation
+          // time, instead of leaving the schema defaults (roles: [CLIENT],
+          // activeRole: CLIENT) for every account type and relying on the
+          // lazy self-healing in account-management.service.ts to fix it later.
+          roles: getInitialRolesForAccountType(data.accountType),
+          activeRole: getRoleFromAccountType(data.accountType),
           firstName: data.firstName,
           lastName: data.lastName,
           email: data.email,
@@ -42,27 +49,12 @@ export class AuthRepository {
         }
       });
 
-      // 2. Create appropriate Profile
-      if (
-        data.accountType === AccountType.CLIENT_COMPANY ||
-        data.accountType === AccountType.CLIENT_INDIVIDUAL
-      ) {
-        await tx.clientProfile.create({
-          data: {
-            userId: user.id
-          }
-        });
-      } else if (
-        data.accountType === AccountType.PROVIDER_COMPANY ||
-        data.accountType === AccountType.PROVIDER_INDIVIDUAL ||
-        data.accountType === AccountType.MARKETING_BROKER
-      ) {
-        await tx.providerProfile.create({
-          data: {
-            userId: user.id
-          }
-        });
-      }
+      // 2. Create the matching role profile row (shared with googleAuth's
+      // new-user path via createMissingRoleProfiles, so they can't diverge).
+      await createMissingRoleProfiles(tx, user.id, data.accountType, {
+        firstName: user.firstName,
+        lastName: user.lastName
+      });
 
       return user;
     });
@@ -125,6 +117,8 @@ export class AuthRepository {
         password: true,
         status: true,
         accountType: true,
+        activeRole: true,
+        roles: true,
         firstName: true,
         lastName: true,
         email: true,

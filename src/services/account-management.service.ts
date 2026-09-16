@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken';
-import { UserRole, AccountType } from '@prisma/client';
+import { UserRole, AccountType, Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { generateReferralSlug } from '../utils/slug.util';
@@ -16,6 +16,79 @@ export function getRoleFromAccountType(accountType: AccountType): UserRole {
     return UserRole.AFFILIATE;
   }
   return UserRole.CLIENT;
+}
+
+/**
+ * Derive the initial `roles` array a brand-new user should be created with,
+ * based on their chosen accountType. Mirrors the self-healing merge already
+ * done in getAvailableAccountTypes (primaryRole + the schema's default
+ * `roles: [CLIENT]`) so a freshly created row matches what that lazy repair
+ * would have produced anyway — providers and affiliates also get an implicit
+ * CLIENT role, consistent with existing behavior.
+ */
+export function getInitialRolesForAccountType(accountType: AccountType): UserRole[] {
+  const primaryRole = getRoleFromAccountType(accountType);
+  if (primaryRole === UserRole.CLIENT) {
+    return [UserRole.CLIENT];
+  }
+  return [primaryRole, UserRole.CLIENT];
+}
+
+/**
+ * Create whichever role-specific profile row a given accountType requires for
+ * a user, skipping it if one already exists. This is the single source of
+ * truth for "which profile row(s) does this accountType need" — used by both
+ * email/password registration (authRepository.createUserWithProfile) and
+ * Google sign-up (authService.googleAuth) so the two signup paths can't
+ * diverge on this again.
+ *
+ * Only ONE profile is created, matching the concrete accountType — same
+ * one-profile-per-granted-role convention as addAccountType() above. The
+ * implicit extra CLIENT role that getInitialRolesForAccountType() adds for
+ * providers/brokers does NOT get its own ClientProfile row here, matching
+ * today's actual behavior: neither the original email/password registration
+ * nor the self-healing in getAvailableAccountTypes ever created one for that
+ * implicit role either, and dashboard/provider-profile code never requires a
+ * ClientProfile row to exist in order to work as a CLIENT.
+ *
+ * MARKETING_BROKER creates only an AffiliateProfile — NOT a ProviderProfile.
+ * Email/password registration used to also create a ProviderProfile for
+ * brokers (a copy/paste artifact of grouping MARKETING_BROKER into the same
+ * branch as PROVIDER_* in the old inline logic); nothing in the app reads a
+ * broker's providerProfile (marketer-overview.service.ts only reads
+ * affiliateProfile), so that was a legacy bug, not an intentional "brokers
+ * are also providers" feature, and is not reproduced here.
+ */
+export async function createMissingRoleProfiles(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  accountType: AccountType,
+  identity: { firstName: string; lastName: string }
+): Promise<void> {
+  if (accountType === AccountType.CLIENT_COMPANY || accountType === AccountType.CLIENT_INDIVIDUAL) {
+    const existing = await tx.clientProfile.findUnique({ where: { userId } });
+    if (!existing) {
+      await tx.clientProfile.create({ data: { userId } });
+    }
+    return;
+  }
+
+  if (accountType === AccountType.PROVIDER_COMPANY || accountType === AccountType.PROVIDER_INDIVIDUAL) {
+    const existing = await tx.providerProfile.findUnique({ where: { userId } });
+    if (!existing) {
+      await tx.providerProfile.create({ data: { userId } });
+    }
+    return;
+  }
+
+  if (accountType === AccountType.MARKETING_BROKER) {
+    const existing = await tx.affiliateProfile.findUnique({ where: { userId } });
+    if (!existing) {
+      const slug = generateReferralSlug(`${identity.firstName} ${identity.lastName}`, userId);
+      await tx.affiliateProfile.create({ data: { userId, referralSlug: slug } });
+    }
+    return;
+  }
 }
 
 export class AccountManagementService {

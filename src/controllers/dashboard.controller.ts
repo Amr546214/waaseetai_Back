@@ -8,9 +8,9 @@ export class DashboardController {
   public async getStats(req: Request, res: Response, next: NextFunction) {
     try {
       // user is guaranteed to be set by the requireAuth/authenticate middleware
-      const { id: userId, accountType } = req.user!;
+      const { id: userId, accountType, activeRole } = req.user!;
 
-      const stats = await dashboardService.getStats(userId, accountType);
+      const stats = await dashboardService.getStats(userId, activeRole, accountType);
 
       res.status(200).json({
         success: true,

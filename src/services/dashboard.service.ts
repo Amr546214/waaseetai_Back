@@ -1,7 +1,8 @@
 import { prisma } from '../config/db';
-import { AccountType } from '@prisma/client';
+import { AccountType, UserRole } from '@prisma/client';
 import { DashboardStatsPayload } from '../types/dashboard.types';
 import { AppError } from '../utils/app-error';
+import { getRoleFromAccountType } from './account-management.service';
 
 export class DashboardService {
   /**
@@ -329,15 +330,32 @@ export class DashboardService {
   }
 
   /**
-   * Main entry point to get statistics based on user role.
+   * Main entry point to get statistics based on the user's currently active
+   * role — NOT their original signup accountType. A MARKETING_BROKER account
+   * that has switched activeRole to CLIENT must get client stats, not a 501,
+   * since accountType only reflects how the identity first registered while
+   * activeRole reflects which account they're using right now.
+   *
+   * accountType is only used as a fallback for legacy rows where activeRole
+   * hasn't been populated yet (should be rare after registration/login now
+   * always sets it — see auth.service.ts).
    */
-  public async getStats(userId: string, accountType: AccountType): Promise<any> {
-    if (accountType === 'CLIENT_COMPANY' || accountType === 'CLIENT_INDIVIDUAL') {
+  public async getStats(userId: string, activeRole?: UserRole, accountType?: AccountType): Promise<any> {
+    const role = activeRole || (accountType ? getRoleFromAccountType(accountType) : undefined);
+
+    if (role === UserRole.CLIENT) {
       return this.getClientStats(userId);
     }
-    
-    if (accountType === 'PROVIDER_COMPANY' || accountType === 'PROVIDER_INDIVIDUAL') {
+
+    if (role === UserRole.PROVIDER) {
       return this.getProviderStats(userId);
+    }
+
+    if (role === UserRole.AFFILIATE) {
+      // The affiliate/marketing-broker dashboard has its own dedicated
+      // endpoints (GET /marketer-overview/summary, /channel-performance,
+      // /commissions, /ai-insights) — this generic endpoint doesn't serve it.
+      throw new AppError('إحصائيات الوسيط التسويقي متاحة عبر نقاط /marketer-overview الخاصة بها', 400);
     }
 
     throw new AppError('Statistics not implemented for this account type yet', 501);
