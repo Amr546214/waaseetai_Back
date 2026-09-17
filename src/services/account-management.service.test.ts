@@ -336,6 +336,58 @@ test('initializeRoleState (AFFILIATE): repeat call does not overwrite existing d
   assert.equal(affiliateCreateSpy.mock.callCount(), 0);
 });
 
+// ============================================================================
+// Phase 3D.5A — Affiliate progression regression tests.
+//
+// Phase 3D.5's audit concluded Affiliate progression ("مساعد"/"موصل") is
+// scaffolded but not implemented anywhere in the codebase — no writer for
+// AffiliateProfile.currentLevel exists at all, before or after Phase 3D.4.
+// BUSINESS DECISION: do not implement automatic promotion, do not invent a
+// threshold. These tests exist only to lock in the CURRENT behavior so a
+// future change cannot silently start writing/overwriting currentLevel.
+//
+// The fake `tx.affiliateProfile` below deliberately has no `update` method
+// at all (only `findUnique`/`create`) — if initializeRoleState ever tried to
+// call `.update()` on an existing row, these tests would fail with a
+// TypeError, which is itself proof no update path is exercised.
+// ============================================================================
+
+test('initializeRoleState (AFFILIATE): first creation does NOT explicitly set currentLevel — the schema default remains solely responsible for the initial "مساعد" value', async (t) => {
+  const { initializeRoleState } = await loadCanonicalInitializer(t);
+  const { tx, affiliateCreateSpy } = createFakeTx(t);
+  await initializeRoleState(tx, 'user-1', UserRole.AFFILIATE, identity);
+
+  assert.equal(affiliateCreateSpy.mock.callCount(), 1);
+  const data = affiliateCreateSpy.mock.calls[0].arguments[0].data;
+  assert.equal('currentLevel' in data, false);
+});
+
+test('initializeRoleState (AFFILIATE): re-running for an existing profile at the default "مساعد" level never updates or overwrites currentLevel', async (t) => {
+  const { initializeRoleState } = await loadCanonicalInitializer(t);
+  const { tx, affiliateCreateSpy, getAffiliateProfile } = createFakeTx(t, {
+    affiliateProfile: { id: 'affiliate-1', currentLevel: 'مساعد', completionPercentage: 45 }
+  });
+
+  const created = await initializeRoleState(tx, 'user-1', UserRole.AFFILIATE, identity);
+
+  assert.equal(created, false);
+  assert.equal(affiliateCreateSpy.mock.callCount(), 0);
+  assert.equal(getAffiliateProfile().currentLevel, 'مساعد');
+});
+
+test('initializeRoleState (AFFILIATE): an existing currentLevel="موصل" remains untouched by repeated initialization', async (t) => {
+  const { initializeRoleState } = await loadCanonicalInitializer(t);
+  const { tx, affiliateCreateSpy, getAffiliateProfile } = createFakeTx(t, {
+    affiliateProfile: { id: 'affiliate-1', currentLevel: 'موصل', completionPercentage: 90 }
+  });
+
+  const created = await initializeRoleState(tx, 'user-1', UserRole.AFFILIATE, identity);
+
+  assert.equal(created, false);
+  assert.equal(affiliateCreateSpy.mock.callCount(), 0);
+  assert.equal(getAffiliateProfile().currentLevel, 'موصل');
+});
+
 // --- createMissingRoleProfiles (thin per-role loop) ---------------------------
 
 test('createMissingRoleProfiles: creates all three role rows + ProviderGamification for a user missing all of them', async (t) => {

@@ -9,9 +9,10 @@ import assert from 'node:assert/strict';
 // via the extracted computeAffiliateCompletion. Exercised here via the
 // public getSummary(), the simplest caller of the private helper.
 
-function createMockPrisma(t: TestContext, opts: { existingAffiliate?: any } = {}) {
+function createMockPrisma(t: TestContext, opts: { existingAffiliate?: any; successfulReferrals?: number } = {}) {
   let affiliateState: any = opts.existingAffiliate ?? null;
   const userFixture = { firstName: 'Amr', lastName: 'Okasha', avatarUrl: null, email: 'amr@example.com' };
+  const referrals = Array.from({ length: opts.successfulReferrals ?? 0 }, (_, i) => ({ id: `referral-${i}` }));
 
   const affiliateCreateSpy = t.mock.fn((args: any) => { affiliateState = { id: 'affiliate-1', ...args.data }; return affiliateState; });
 
@@ -21,7 +22,7 @@ function createMockPrisma(t: TestContext, opts: { existingAffiliate?: any } = {}
 
   const prismaMock: any = {
     affiliateProfile: {
-      findUnique: async () => (affiliateState ? { ...affiliateState, referrals: [], commissionLogs: [], channelMetrics: [] } : null)
+      findUnique: async () => (affiliateState ? { ...affiliateState, referrals, commissionLogs: [], channelMetrics: [] } : null)
     },
     user: { findUnique: async () => userFixture },
     $transaction: async (fn: any) => fn(tx)
@@ -64,4 +65,86 @@ test('getSummary: repeat call with an existing AffiliateProfile never re-initial
   await marketerOverviewService.getSummary('user-1');
 
   assert.equal(affiliateCreateSpy.mock.callCount(), 0);
+});
+
+// ============================================================================
+// Phase 3D.5A — Affiliate progression regression tests.
+//
+// Phase 3D.5's audit concluded no writer for AffiliateProfile.currentLevel
+// exists anywhere, and getSummary()'s tier/threshold/progress math has been
+// byte-for-byte unchanged since the very first commit. BUSINESS DECISION: do
+// not implement automatic "مساعد" -> "موصل" promotion, do not invent a
+// threshold. These tests lock in the CURRENT (non-promoting) behavior of
+// getSummary() exactly as it exists today, so a future change cannot
+// silently alter it.
+// ============================================================================
+
+test('getSummary (currentLevel="مساعد"): tier/threshold/progress math matches the existing, unmodified formula', async (t) => {
+  const { marketerOverviewService } = await loadService(t, {
+    existingAffiliate: { id: 'affiliate-1', currentLevel: 'مساعد', completionPercentage: 45 },
+    successfulReferrals: 3
+  });
+
+  const summary = await marketerOverviewService.getSummary('user-1');
+
+  assert.equal(summary.tier, 'مساعد');
+  assert.equal(summary.nextTierThreshold, 10);
+  assert.equal(summary.successfulReferrals, 3);
+  // progressPercentage = successfulReferrals / nextTierThreshold * 100 = 3/10*100 = 30.
+  assert.equal(summary.progressPercentage, 30);
+});
+
+test('getSummary (currentLevel="مساعد"): progressPercentage caps at 100 even when successfulReferrals exceeds the threshold', async (t) => {
+  const { marketerOverviewService } = await loadService(t, {
+    existingAffiliate: { id: 'affiliate-1', currentLevel: 'مساعد', completionPercentage: 45 },
+    successfulReferrals: 25
+  });
+
+  const summary = await marketerOverviewService.getSummary('user-1');
+
+  assert.equal(summary.nextTierThreshold, 10);
+  assert.equal(summary.progressPercentage, 100);
+});
+
+test('getSummary (currentLevel="موصل"): tier/threshold/progress math matches the existing, unmodified formula', async (t) => {
+  const { marketerOverviewService } = await loadService(t, {
+    existingAffiliate: { id: 'affiliate-1', currentLevel: 'موصل', completionPercentage: 90 },
+    successfulReferrals: 10
+  });
+
+  const summary = await marketerOverviewService.getSummary('user-1');
+
+  assert.equal(summary.tier, 'موصل');
+  assert.equal(summary.nextTierThreshold, 50);
+  assert.equal(summary.successfulReferrals, 10);
+  // progressPercentage = successfulReferrals / nextTierThreshold * 100 = 10/50*100 = 20.
+  assert.equal(summary.progressPercentage, 20);
+});
+
+test('getSummary (currentLevel="موصل"): progressPercentage caps at 100 even when successfulReferrals exceeds the threshold', async (t) => {
+  const { marketerOverviewService } = await loadService(t, {
+    existingAffiliate: { id: 'affiliate-1', currentLevel: 'موصل', completionPercentage: 90 },
+    successfulReferrals: 75
+  });
+
+  const summary = await marketerOverviewService.getSummary('user-1');
+
+  assert.equal(summary.nextTierThreshold, 50);
+  assert.equal(summary.progressPercentage, 100);
+});
+
+test('getSummary: never transitions currentLevel from "مساعد" to "موصل" regardless of successfulReferrals reaching/exceeding the displayed threshold', async (t) => {
+  const { marketerOverviewService, affiliateCreateSpy, getAffiliateState } = await loadService(t, {
+    existingAffiliate: { id: 'affiliate-1', currentLevel: 'مساعد', completionPercentage: 45 },
+    successfulReferrals: 10 // exactly meets the "مساعد" -> "موصل" nextTierThreshold
+  });
+
+  const summary = await marketerOverviewService.getSummary('user-1');
+
+  // tier is still reported as "مساعد" — reaching the threshold never promotes.
+  assert.equal(summary.tier, 'مساعد');
+  // No write of any kind was attempted (only `.create` exists on the fake
+  // model, and it was never called — an `.update` attempt would have thrown).
+  assert.equal(affiliateCreateSpy.mock.callCount(), 0);
+  assert.equal(getAffiliateState().currentLevel, 'مساعد');
 });
