@@ -3,6 +3,9 @@ import { ContractStatus, EscrowStatus, OrderStatus, OtpType, ProjectStageStatus,
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
+import { resolveProviderDisplayIdentity } from '../utils/provider-display';
+import { resolveProviderProgression } from '../utils/role-display-resolver';
+import { LEVEL_MATRIX } from '../utils/progression-calculators';
 
 const serviceWhere = { status: { in: ['PUBLISHED', 'APPROVED'] as any } };
 
@@ -16,18 +19,67 @@ function isTestCheckoutBypassEnabled(): boolean {
   return process.env.ALLOW_TEST_CHECKOUT_WITHOUT_BALANCE === 'true';
 }
 
-function personName(user: { firstName: string; lastName: string }) {
-  return `${user.firstName} ${user.lastName}`.trim();
-}
-
 function initials(user: { firstName: string; lastName: string }) {
   return `${user.firstName?.[0] || ''}${user.lastName?.[0] || ''}`.toUpperCase();
 }
 
+// Phase 3E.2: the exact Prisma select shared by the live cart (formatCartItem)
+// and the NEW-order snapshot (createOrder) for a service's provider —
+// ProviderProfile's own display columns (Phase 3A/3D.1 source of truth) and
+// ProviderGamification.currentLevelIndex (Phase 3D.3A source of truth),
+// alongside the legacy User columns kept only as an explicit fallback. A
+// single JOIN nested in the same serviceCatalog query both callers already
+// run — no extra query per row. `avatarUrl` is deliberately NOT selected:
+// neither the cart nor the order response currently exposes a provider
+// avatar, so adding it would be an unrelated response-shape change.
 const serviceInclude = {
-  provider: { select: { id: true, firstName: true, lastName: true, currentLevel: true, providerProfile: { select: { isVerified: true } } } },
+  provider: {
+    select: {
+      id: true, firstName: true, lastName: true, currentLevel: true,
+      providerProfile: { select: { firstName: true, lastName: true, isVerified: true } },
+      gamification: { select: { points: true, currentLevelIndex: true } }
+    }
+  },
   specialty: { select: { name: true, nameAr: true, slug: true } }
 } as const;
+
+/**
+ * Phase 3E.2: resolves a cart item's / new order's provider name/initials/
+ * level from the canonical Provider-specific sources — ProviderProfile
+ * display columns (User fallback only if null/empty) and
+ * ProviderGamification.currentLevelIndex via the same resolveProviderProgression
+ * helper the rest of the app already uses (Phase 3C/3D.3A/3E.1) — never a new
+ * formula, never a second identity resolver. `level` is unused by
+ * createOrder's snapshot (OrderItem never persisted a level field before
+ * this phase, and none is being added now) — it's only consumed by the live
+ * cart.
+ */
+function resolveProviderCardFields(provider: {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  currentLevel: string | null;
+  providerProfile: { firstName: string | null; lastName: string | null; isVerified: boolean } | null;
+  gamification: { points: number; currentLevelIndex: number } | null;
+}) {
+  const identity = resolveProviderDisplayIdentity({ providerProfile: provider.providerProfile || {}, user: provider });
+  const level = resolveProviderProgression(provider.gamification, {
+    firstName: '',
+    lastName: '',
+    avatarUrl: null,
+    profileCompletionPercent: 0,
+    currentLevel: provider.currentLevel || LEVEL_MATRIX[0].title,
+    currentPoints: 0,
+    pointsToNextLevel: 0
+  }).currentLevel;
+
+  return {
+    name: identity.fullName,
+    initials: initials({ firstName: identity.firstName, lastName: identity.lastName }),
+    isVerified: Boolean(provider.providerProfile?.isVerified),
+    level
+  };
+}
 
 export class CartCheckoutService {
   private paymentOtpContext(orderId: string, paymentReference: string, paymentMethod: string) {
@@ -50,6 +102,7 @@ export class CartCheckoutService {
   private formatCartItem(item: any) {
     const service = item.service;
     const provider = service.provider;
+    const providerCard = resolveProviderCardFields(provider);
     return {
       id: item.id,
       modelId: service.id,
@@ -60,8 +113,8 @@ export class CartCheckoutService {
       totalAmount: Number(service.totalAmount),
       totalDays: service.totalDays,
       aiScore: service.aiScore || 0,
-      level: provider.currentLevel || 'مستكشف - المستوى 1',
-      provider: { id: provider.id, name: personName(provider), initials: initials(provider), isVerified: Boolean(provider.providerProfile?.isVerified) },
+      level: providerCard.level,
+      provider: { id: provider.id, name: providerCard.name, initials: providerCard.initials, isVerified: providerCard.isVerified },
       packageName: item.packageName,
       addedAt: item.addedAt.toISOString(),
       savedForLater: item.savedForLater
@@ -144,7 +197,13 @@ export class CartCheckoutService {
     const order = await prisma.$transaction(async tx => {
       const count = await tx.order.count();
       const orderNumber = `WS-${new Date().getFullYear()}-${String(count + 1).padStart(6, '0')}`;
-      const created = await tx.order.create({ data: { userId, orderNumber, status: OrderStatus.PENDING_PAYMENT, subtotal, discount, total: Number((subtotal - discount).toFixed(2)), couponId, couponCode, couponDiscountType, couponDiscountValue, items: { create: input.items.map(item => { const service: any = byId.get(item.modelId)!; const provider = service.provider; return { serviceId: service.id, modelId: service.id, title: service.title, providerId: provider.id, providerName: personName(provider), initials: initials(provider), isVerified: Boolean(provider.providerProfile?.isVerified), packageId: item.packageId || 'basic', packageName: 'الباقة الأساسية', price: Number(service.totalAmount), deliveryDays: service.totalDays, aiScore: service.aiScore || 0 }; }) } }, include: { items: true } });
+      // Phase 3E.2: providerName/initials are a deliberate, permanent
+      // snapshot into OrderItem at creation time (unchanged semantics) — only
+      // the SOURCE is fixed here, from the canonical ProviderProfile identity
+      // instead of the raw shared User columns. Once written, this row is
+      // never re-resolved live; a future ProviderProfile name change does not
+      // alter an already-created order.
+      const created = await tx.order.create({ data: { userId, orderNumber, status: OrderStatus.PENDING_PAYMENT, subtotal, discount, total: Number((subtotal - discount).toFixed(2)), couponId, couponCode, couponDiscountType, couponDiscountValue, items: { create: input.items.map(item => { const service: any = byId.get(item.modelId)!; const provider = service.provider; const providerCard = resolveProviderCardFields(provider); return { serviceId: service.id, modelId: service.id, title: service.title, providerId: provider.id, providerName: providerCard.name, initials: providerCard.initials, isVerified: providerCard.isVerified, packageId: item.packageId || 'basic', packageName: 'الباقة الأساسية', price: Number(service.totalAmount), deliveryDays: service.totalDays, aiScore: service.aiScore || 0 }; }) } }, include: { items: true } });
       return created;
     });
     return { id: order.id, orderId: order.id, orderNumber: order.orderNumber, status: 'pending_payment', items: order.items.map(item => this.formatOrderItem(item)), subtotal: order.subtotal, discount: order.discount, total: order.total, couponCode: order.couponCode, createdAt: order.createdAt.toISOString() };
