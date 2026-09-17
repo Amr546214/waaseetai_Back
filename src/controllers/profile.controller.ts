@@ -3,8 +3,30 @@ import { profileService } from '../services/profile.service';
 import { AppError } from '../utils/app-error';
 import { updateProfileSchema } from '../dtos/profile.dto';
 
+/**
+ * Phase 3D.1 final review: activeRole is guaranteed by auth.middleware.ts —
+ * User.activeRole is a NOT NULL DB column with a schema default, always
+ * selected and assigned onto req.user on every authenticated request. If it
+ * is ever missing despite that guarantee (a bug, or some future auth path
+ * that doesn't go through the normal middleware), fail safely instead of
+ * silently guessing CLIENT as the write target — an ambiguous display-field
+ * write target must never be defaulted.
+ *
+ * A plain function, not a class method: ProfileController's methods are
+ * registered as detached references in profile.routes.ts
+ * (`profileController.updateProfile`, no `.bind`), so a `this.something()`
+ * helper would find `this` undefined at call time and throw.
+ */
+function requireActiveRole(req: Request) {
+  const activeRole = req.user?.activeRole;
+  if (!activeRole) {
+    throw new AppError('تعذر تحديد الدور النشط لحسابك، يرجى إعادة تسجيل الدخول', 401);
+  }
+  return activeRole;
+}
+
 export class ProfileController {
-  
+
   public async getProfile(req: Request, res: Response, next: NextFunction) {
     try {
       if (!req.user) {
@@ -28,8 +50,11 @@ export class ProfileController {
         throw new AppError('غير مصرح لك بالوصول', 401);
       }
 
+      // Phase 3D.1: target role is the caller's CURRENTLY ACTIVE role, not
+      // their original signup accountType.
+      const activeRole = requireActiveRole(req);
       const validatedData = updateProfileSchema.parse(req.body);
-      const result = await profileService.updateProfile(req.user.userId, req.user.accountType, validatedData);
+      const result = await profileService.updateProfile(req.user.userId, activeRole, validatedData);
 
       res.status(200).json({
         success: true,
@@ -48,7 +73,8 @@ export class ProfileController {
       }
 
       const tabName = req.params.tabName as string;
-      const result = await profileService.updateTab(req.user.userId, tabName, req.body);
+      const activeRole = requireActiveRole(req);
+      const result = await profileService.updateTab(req.user.userId, tabName, req.body, activeRole);
 
       res.status(200).json({
         success: true,

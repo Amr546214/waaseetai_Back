@@ -1,4 +1,4 @@
-import { AccountType, UserRole, UserStatus } from '@prisma/client';
+import { Prisma, UserRole, UserStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { UpdateProfileDto } from '../dtos/profile.dto';
@@ -83,9 +83,18 @@ export class ProfileService {
   }
 
   /**
-   * Update User fields and nested profile metadata using $transaction
+   * Update User fields and nested profile metadata using $transaction.
+   *
+   * Phase 3D.1: firstName/lastName/avatarUrl are role-specific display
+   * fields — they are written to whichever profile matches the caller's
+   * CURRENTLY ACTIVE role (ClientProfile/ProviderProfile/AffiliateProfile),
+   * never to the legacy User row, so editing one persona's name/avatar can
+   * never change another persona's. The target is chosen by `activeRole`
+   * (same source Phase 3C's reads already use), NOT by accountType — the
+   * original signup type never determines where a display edit lands.
+   * phoneNumber remains on User: it is identity-level, not role-specific.
    */
-  public async updateProfile(userId: string, accountType: AccountType, dto: UpdateProfileDto) {
+  public async updateProfile(userId: string, activeRole: UserRole, dto: UpdateProfileDto) {
     const {
       firstName,
       lastName,
@@ -95,14 +104,17 @@ export class ProfileService {
     } = dto;
 	const storedAvatarUrl = avatarUrl === undefined ? undefined : await storeDataUriIfNeeded(avatarUrl, `waseetai/users/${userId}/avatar`, 'avatar');
 
+    const displayFields: Record<string, unknown> = {};
+    if (firstName !== undefined) displayFields.firstName = firstName;
+    if (lastName !== undefined) displayFields.lastName = lastName;
+    if (avatarUrl !== undefined) displayFields.avatarUrl = storedAvatarUrl;
+
     return await prisma.$transaction(async (tx) => {
-      // 1. Update Core User fields if provided
+      // 1. Update Core User fields if provided (identity-level only —
+      // firstName/lastName/avatarUrl are handled in step 2 below).
       const userUpdateData: any = {};
-      if (firstName !== undefined) userUpdateData.firstName = firstName;
-      if (lastName !== undefined) userUpdateData.lastName = lastName;
       if (phoneNumber !== undefined) userUpdateData.phoneNumber = phoneNumber;
-      if (avatarUrl !== undefined) userUpdateData.avatarUrl = storedAvatarUrl;
-      
+
       // Upgrade status if currently pending
       const currentUser = await tx.user.findUnique({ where: { id: userId } });
       if (currentUser?.status === UserStatus.PENDING_VERIFICATION) {
@@ -117,27 +129,68 @@ export class ProfileService {
         });
       }
 
-      // 2. Update Profile data
+      // 2. Update the active role's profile data, merged with any display
+      // fields from this same request. Each branch strips fields that don't
+      // exist on that model — same pragmatic pattern already used for the
+      // PROVIDER branch below, extended to AFFILIATE.
       let profileResult = null;
-      if (Object.keys(profileData).length > 0) {
-        if (accountType === AccountType.CLIENT_COMPANY || accountType === AccountType.CLIENT_INDIVIDUAL) {
+      const hasProfileData = Object.keys(profileData).length > 0;
+      const hasDisplayFields = Object.keys(displayFields).length > 0;
+      if (hasProfileData || hasDisplayFields) {
+        if (activeRole === UserRole.CLIENT) {
+          const clientData = { ...(profileData as any), ...displayFields };
           profileResult = await tx.clientProfile.upsert({
             where: { userId },
-            create: { userId, ...(profileData as any) },
-            update: profileData as any
+            create: { userId, ...clientData },
+            update: clientData
           });
-        } else {
-          // Clean undefined/incompatible properties for Provider
-          const providerData: any = { ...profileData };
+        } else if (activeRole === UserRole.AFFILIATE) {
+          // AffiliateProfile only has `bio` in common with the fields this
+          // endpoint's DTO can carry — strip the rest (company/provider-only
+          // fields) exactly like the PROVIDER branch already strips its own
+          // incompatible fields below, so an AFFILIATE-active submission
+          // can't throw on an unknown-column error.
+          const affiliateData: any = { ...(profileData as any) };
+          delete affiliateData.companyName;
+          delete affiliateData.companySize;
+          delete affiliateData.industry;
+          delete affiliateData.website;
+          delete affiliateData.skills;
+          delete affiliateData.hourlyRate;
+          delete affiliateData.yearsOfExperience;
+          delete affiliateData.headline;
+          delete affiliateData.location;
+          delete affiliateData.city;
+          delete affiliateData.country;
+          delete affiliateData.githubUrl;
+          delete affiliateData.linkedinUrl;
+          delete affiliateData.websiteUrl;
+          Object.assign(affiliateData, displayFields);
+
+          profileResult = await tx.affiliateProfile.upsert({
+            where: { userId },
+            create: { userId, ...affiliateData },
+            update: affiliateData
+          });
+        } else if (activeRole === UserRole.PROVIDER) {
+          // Clean undefined/incompatible properties for Provider.
+          const providerData: any = { ...(profileData as any) };
           delete providerData.companySize;
           delete providerData.industry;
           delete providerData.website;
+          Object.assign(providerData, displayFields);
 
           profileResult = await tx.providerProfile.upsert({
             where: { userId },
-            create: { userId, ...(providerData as any) },
-            update: providerData as any
+            create: { userId, ...providerData },
+            update: providerData
           });
+        } else {
+          // ADMIN/SUPER_ADMIN or any future role have no role-specific
+          // profile concept today — never silently fall through and treat
+          // an unsupported role as PROVIDER (or any other profile). Fail
+          // safely instead of guessing a write target.
+          throw new AppError(`تحديث الملف الشخصي غير مدعوم لهذا الدور: ${activeRole}`, 400);
         }
       }
 
@@ -149,16 +202,51 @@ export class ProfileService {
   }
 
   /**
-   * Update Profile by Tab Name with moderation flow
+   * Update Profile by Tab Name with moderation flow.
+   *
+   * Phase 3D.1: the 'basics'/'contact' branch used to write the ENTIRE
+   * request body (minus email/phoneNumber) straight onto User, completely
+   * unvalidated — any Prisma User column name in the body would be written.
+   * Replaced with an explicit allowlist of the real identity-level User
+   * columns this tab may legitimately touch (matching updateContactSchema's
+   * fields — src/dtos/profile-tab.dto.ts — the only real schema whose fields
+   * map onto genuine User columns beyond email/phoneNumber, which were
+   * already special-cased). Everything else in the body is silently dropped.
+   * firstName/lastName/avatarUrl are pulled out separately and routed to the
+   * caller's active-role profile via upsertActiveRoleDisplayFields, same
+   * target as updateProfile()/getProfile() — never to User.
    */
-  public async updateTab(userId: string, tabName: string, data: any) {
+  public async updateTab(userId: string, tabName: string, data: any, activeRole: UserRole) {
     if (tabName === 'basics' || tabName === 'contact') {
-      const { email, phoneNumber, ...safeData } = data;
-      
-      // Update safe data immediately
-      await prisma.user.update({
-        where: { id: userId },
-        data: safeData
+      const { email, phoneNumber, firstName, lastName, avatarUrl, ...rest } = data;
+
+      // Re-verified against the current User model (prisma/schema.prisma):
+      // User has NO `country` column at all (only ClientProfile/
+      // ProviderProfile do) — updateContactSchema lists `country` but it does
+      // not correspond to a real User field, so it is deliberately excluded
+      // here. Including it would make prisma.user.update throw on an unknown
+      // argument the first time a caller sent it.
+      const ALLOWED_USER_FIELDS = ['alternativePhone', 'address', 'region', 'city'] as const;
+      const safeUserData: Record<string, unknown> = {};
+      for (const field of ALLOWED_USER_FIELDS) {
+        if (rest[field] !== undefined) safeUserData[field] = rest[field];
+      }
+
+      const displayFields: { firstName?: string; lastName?: string; avatarUrl?: string | null } = {};
+      if (firstName !== undefined) displayFields.firstName = firstName;
+      if (lastName !== undefined) displayFields.lastName = lastName;
+      if (avatarUrl !== undefined) {
+        displayFields.avatarUrl = avatarUrl === '' ? '' : await storeDataUriIfNeeded(avatarUrl, `waseetai/users/${userId}/avatar`, 'avatar');
+      }
+
+      // Both writes together, atomically — a partial failure must not leave
+      // the identity-level update applied without the display-field one (or
+      // vice versa).
+      await prisma.$transaction(async (tx) => {
+        if (Object.keys(safeUserData).length > 0) {
+          await tx.user.update({ where: { id: userId }, data: safeUserData });
+        }
+        await this.upsertActiveRoleDisplayFields(tx, userId, activeRole, displayFields);
       });
 
       // If sensitive data changed, trigger OTP/Moderation flow
@@ -195,6 +283,40 @@ export class ProfileService {
     }
 
     throw new AppError('تبويب غير معروف', 400);
+  }
+
+  /**
+   * Phase 3D.1: writes firstName/lastName/avatarUrl to whichever profile
+   * matches the caller's CURRENTLY ACTIVE role — never to User. Shared by
+   * updateTab() (display fields only) so it targets the same table the same
+   * way updateProfile()/getProfile() already do. All three fields exist on
+   * every one of ClientProfile/ProviderProfile/AffiliateProfile (Phase 3A),
+   * so no per-model field-stripping is needed here.
+   *
+   * Explicit role branching only — CLIENT/PROVIDER/AFFILIATE are the only
+   * roles with a profile-display concept today. ADMIN/SUPER_ADMIN or any
+   * future role must never silently fall through to one of these three
+   * tables; they fail safely instead (matches updateProfile()'s branching).
+   */
+  private async upsertActiveRoleDisplayFields(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    activeRole: UserRole,
+    fields: { firstName?: string; lastName?: string; avatarUrl?: string | null }
+  ) {
+    if (Object.keys(fields).length === 0) return null;
+
+    if (activeRole === UserRole.CLIENT) {
+      return tx.clientProfile.upsert({ where: { userId }, create: { userId, ...fields }, update: fields });
+    }
+    if (activeRole === UserRole.PROVIDER) {
+      return tx.providerProfile.upsert({ where: { userId }, create: { userId, ...fields }, update: fields });
+    }
+    if (activeRole === UserRole.AFFILIATE) {
+      return tx.affiliateProfile.upsert({ where: { userId }, create: { userId, ...fields }, update: fields });
+    }
+
+    throw new AppError(`تحديث الملف الشخصي غير مدعوم لهذا الدور: ${activeRole}`, 400);
   }
 
   /**

@@ -386,6 +386,29 @@ export class ProviderProfileService {
 		};
 	}
 
+	/**
+	 * Phase 3D.1: firstName/lastName/avatarUrl are written directly onto this
+	 * ProviderProfile row's own display columns (Phase 3A) — never nested
+	 * onto the legacy User row anymore. The previous `user: { update: {...} }`
+	 * here mutated the shared User.firstName/lastName/avatarUrl, which would
+	 * have silently changed the same identity's visible CLIENT/AFFILIATE name
+	 * too, since User is the shared identity, not a role-specific profile.
+	 *
+	 * Authorization note (inspected, not changed): this route
+	 * (`PUT /provider/profile/basic-info`) is only gated by
+	 * `authenticate, requireActiveUser` (src/routes/provider-profile.routes.ts:22) —
+	 * there is no `authorize(...)` or PROVIDER-ownership check on this router
+	 * at all. That means any authenticated, active user who already has a
+	 * ProviderProfile row (e.g. a multi-role account, regardless of their
+	 * current activeRole) can call this today, and a user with no
+	 * ProviderProfile row gets a Prisma "record not found" error from the
+	 * `.update()` below rather than a clean 403/404. This is a pre-existing
+	 * gap, not something this Phase 3D.1 change touches: adding an
+	 * activeRole===PROVIDER check (or a role-ownership check) here would be a
+	 * real API-contract change for existing multi-role callers, so it is left
+	 * alone per the Phase 3D.1 scope and reported separately rather than
+	 * silently added.
+	 */
 	async updateBasicInfo(userId: string, data: any, auditContext?: AuditContext) {
 		const firstName = String(data.firstName || '').trim();
 		const lastName = String(data.lastName || '').trim();
@@ -416,15 +439,11 @@ export class ProviderProfileService {
 				websiteUrl: data.websiteUrl,
 				...(Array.isArray(data.languages) && { languages: data.languages }),
 				...(data.preferences && { preferences: data.preferences }),
-				...(data.firstName || data.lastName || data.avatarUrl !== undefined ? {
-					user: {
-						update: {
-							firstName,
-							lastName,
-							...(data.avatarUrl !== undefined && { avatarUrl }),
-						}
-					}
-				} : {})
+				// firstName/lastName are required/validated above, so they're
+				// always present here; avatarUrl stays optional.
+				firstName,
+				lastName,
+				...(data.avatarUrl !== undefined && { avatarUrl })
 			},
 			include: {
 				user: {
@@ -452,8 +471,19 @@ export class ProviderProfileService {
 
 	private calculateProfileCompletion(profile: any) {
 		let score = 0;
-		if (profile.user?.avatarUrl) score += 10;
-		if (profile.user?.firstName && profile.user?.lastName && profile.headline && profile.mainSpecialty) score += 15;
+		// Phase 3D.1: prefer this ProviderProfile row's OWN firstName/lastName/
+		// avatarUrl (Phase 3A columns) now that updateBasicInfo writes them
+		// here instead of onto the legacy User row — falling back to the
+		// legacy User value only for a provider who hasn't set these on their
+		// own profile yet, so no one's existing score drops as a result of
+		// this change. Not a formula/weights redesign — same fields, same
+		// points, only the two factors' data SOURCE changed to match the new
+		// write target.
+		const avatarUrl = profile.avatarUrl || profile.user?.avatarUrl;
+		const firstName = profile.firstName || profile.user?.firstName;
+		const lastName = profile.lastName || profile.user?.lastName;
+		if (avatarUrl) score += 10;
+		if (firstName && lastName && profile.headline && profile.mainSpecialty) score += 15;
 		if (profile.bio?.length >= 50) score += 15;
 		if (profile.skills?.length) score += 10;
 		if (profile.portfolioItems?.length || profile.websiteUrl) score += 10;
