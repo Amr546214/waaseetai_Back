@@ -58,11 +58,9 @@ export class PrismaAiExecutionAuditSink implements AiExecutionAuditSink {
 
 export const logAiAuditFailure = (
   event: AiExecutionAuditEvent,
-  error: unknown
+  _error: unknown
 ): void => {
-  const reason = error instanceof Error ? error.message : String(error);
-
   logger.warn(
-    `[AiExecutionAuditSink] executionId=${event.executionId} capability=${event.capability} operation=${event.operation} audit_persistence_failed=${reason}`
+    `[AiExecutionAuditSink] executionId=${event.executionId} capability=${event.capability} operation=${event.operation} audit_persistence_failed`
   );
 };
