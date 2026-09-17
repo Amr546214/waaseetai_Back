@@ -1,7 +1,7 @@
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
-import { OtpType, UserStatus, User as PrismaUser } from '@prisma/client';
+import { OtpType, UserStatus, UserRole, User as PrismaUser } from '@prisma/client';
 import { authRepository } from '../repositories/auth.repository';
 import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput } from '../routes/auth/auth.schema';
 import { OAuth2Client } from 'google-auth-library';
@@ -11,10 +11,9 @@ import { AppError } from '../utils/app-error';
 import { logger } from '../config/logger';
 import { notificationService } from './notification.service';
 import { prisma } from '../config/db';
-import { generateReferralSlug } from '../utils/slug.util';
 import { sessionService, SessionContext } from './session.service';
 import { accountAuditLogService } from './account-logs.service';
-import { getRoleFromAccountType, getInitialRolesForAccountType, createMissingRoleProfiles } from './account-management.service';
+import { getRoleFromAccountType, getInitialRolesForAccountType, createMissingRoleProfiles, initializeRoleState } from './account-management.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 
 /**
@@ -245,22 +244,21 @@ export class AuthService {
 		const updatedUser = await authRepository.updateUserStatus(input.userId, UserStatus.ACTIVE);
 		await authRepository.deleteUserOtps(input.userId);
 
-		// If user is a MARKETING_BROKER, auto-create their AffiliateProfile
+		// If user is a MARKETING_BROKER, ensure their AffiliateProfile exists.
+		// This is normally a dead branch — registration already creates it via
+		// createMissingRoleProfiles (getInitialRolesForAccountType includes
+		// AFFILIATE for MARKETING_BROKER) — but kept as a defensive fallback for
+		// an older/partial signup. Phase 3D.4: routed through the same
+		// canonical initializer (own existence check, seeded display fields,
+		// real initial completion) instead of a bare divergent create, so it
+		// can never again produce a row shaped differently from every other
+		// creation path. updatedUser already carries every scalar field
+		// (a bare prisma.user.update() result, no select), so it can be passed
+		// directly as the identity.
 		if (updatedUser.accountType === 'MARKETING_BROKER') {
-			const existingAffiliate = await prisma.affiliateProfile.findUnique({
-				where: { userId: updatedUser.id }
+			await prisma.$transaction(async (tx) => {
+				await initializeRoleState(tx, updatedUser.id, UserRole.AFFILIATE, updatedUser);
 			});
-
-			if (!existingAffiliate) {
-				const fullName = `${updatedUser.firstName} ${updatedUser.lastName}`;
-				const slug = generateReferralSlug(fullName, updatedUser.id);
-				await prisma.affiliateProfile.create({
-					data: {
-						userId: updatedUser.id,
-						referralSlug: slug
-					}
-				});
-			}
 		}
 
 		// 4. Generate JWT Access Token
@@ -417,9 +415,22 @@ export class AuthService {
 					}
 				});
 
+				// Phase 3D.4: full identity so Google signups (which legitimately
+				// have an avatarUrl already, unlike email/password signups) get an
+				// accurate initial completion score seeded from real state — not a
+				// new formula, same calculators email/password registration uses.
 				await createMissingRoleProfiles(tx, created.id, roles, {
 					firstName: created.firstName,
-					lastName: created.lastName
+					lastName: created.lastName,
+					avatarUrl: created.avatarUrl,
+					email: created.email,
+					phoneNumber: created.phoneNumber,
+					idNumber: created.idNumber,
+					idExpiryDate: created.idExpiryDate,
+					ibanNumber: created.ibanNumber,
+					bankName: created.bankName,
+					accountHolderName: created.accountHolderName,
+					idDocumentUrl: created.idDocumentUrl
 				});
 
 				return created;

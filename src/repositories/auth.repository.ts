@@ -53,10 +53,22 @@ export class AuthRepository {
 
       // 2. Create a matching profile row for every owned role (shared with
       // googleAuth's new-user path via createMissingRoleProfiles, so they
-      // can't diverge).
+      // can't diverge). Phase 3D.4: passes the full identity so seeded
+      // display fields and initial completion are calculated from the same
+      // real state everywhere — banking/KYC fields are null for a brand-new
+      // registration, which the calculators already treat as "not scored".
       await createMissingRoleProfiles(tx, user.id, roles, {
         firstName: user.firstName,
-        lastName: user.lastName
+        lastName: user.lastName,
+        avatarUrl: user.avatarUrl,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        idNumber: user.idNumber,
+        idExpiryDate: user.idExpiryDate,
+        ibanNumber: user.ibanNumber,
+        bankName: user.bankName,
+        accountHolderName: user.accountHolderName,
+        idDocumentUrl: user.idDocumentUrl
       });
 
       return user;

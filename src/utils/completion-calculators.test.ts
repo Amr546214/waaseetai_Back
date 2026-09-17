@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeClientCompletion, computeProviderCompletion } from './completion-calculators';
+import { computeClientCompletion, computeProviderCompletion, computeAffiliateCompletion } from './completion-calculators';
 
 // Phase 3D.2A: these are pure functions (no Prisma, no dotenv, no DB, no
 // service imports with side effects), so these tests run with zero mocking
@@ -199,5 +199,100 @@ test('computeProviderCompletion: legacy User fallback still works when ProviderP
 
 test('computeProviderCompletion: empty fixture -> 0, capped/never negative', () => {
   const score = computeProviderCompletion({ providerProfile: {}, user: {} });
+  assert.equal(score, 0);
+});
+
+// ============================================================================
+// AFFILIATE calculator — Phase 3D.4 verbatim extraction of
+// marketer-profile.service.ts's (former, now-delegating) private
+// recalculateCompletion — identical fields, identical weights (avatar 15 +
+// bio 15 + >=1 channel 20 + IBAN 20 + basic identity 30 = 100 max), identical
+// null/empty semantics. These tests prove the extracted pure calculator
+// produces the exact same scores the previous inline service implementation
+// did, for every individual factor and the full combination.
+// ============================================================================
+
+test('computeAffiliateCompletion: empty/minimal state -> 0 (exact old zero-score behavior)', () => {
+  const score = computeAffiliateCompletion({
+    user: {},
+    affiliateProfile: {},
+    marketingChannelsCount: 0
+  });
+  assert.equal(score, 0);
+});
+
+test('computeAffiliateCompletion: avatar factor = 15 (from AffiliateProfile.avatarUrl)', () => {
+  const score = computeAffiliateCompletion({
+    user: {},
+    affiliateProfile: { avatarUrl: 'https://example.com/a.png' },
+    marketingChannelsCount: 0
+  });
+  assert.equal(score, 15);
+});
+
+test('computeAffiliateCompletion: avatar factor = 15 also satisfied via legacy User.avatarUrl fallback', () => {
+  const score = computeAffiliateCompletion({
+    user: { avatarUrl: 'https://legacy.example/a.png' },
+    affiliateProfile: { avatarUrl: null },
+    marketingChannelsCount: 0
+  });
+  assert.equal(score, 15);
+});
+
+test('computeAffiliateCompletion: bio factor = 15 (whitespace-only bio does not count, matching trim().length > 0)', () => {
+  const withBio = computeAffiliateCompletion({ user: {}, affiliateProfile: { bio: 'مرحباً بكم' }, marketingChannelsCount: 0 });
+  assert.equal(withBio, 15);
+
+  const whitespaceOnly = computeAffiliateCompletion({ user: {}, affiliateProfile: { bio: '   ' }, marketingChannelsCount: 0 });
+  assert.equal(whitespaceOnly, 0);
+});
+
+test('computeAffiliateCompletion: marketing channel factor = 20 (>=1 channel, count itself is not scored)', () => {
+  const oneChannel = computeAffiliateCompletion({ user: {}, affiliateProfile: {}, marketingChannelsCount: 1 });
+  assert.equal(oneChannel, 20);
+
+  const manyChannels = computeAffiliateCompletion({ user: {}, affiliateProfile: {}, marketingChannelsCount: 5 });
+  assert.equal(manyChannels, 20);
+});
+
+test('computeAffiliateCompletion: IBAN factor = 20 (whitespace-only IBAN does not count)', () => {
+  const withIban = computeAffiliateCompletion({ user: {}, affiliateProfile: { iban: 'SA0000000000000000000011' }, marketingChannelsCount: 0 });
+  assert.equal(withIban, 20);
+
+  const whitespaceOnly = computeAffiliateCompletion({ user: {}, affiliateProfile: { iban: '  ' }, marketingChannelsCount: 0 });
+  assert.equal(whitespaceOnly, 0);
+});
+
+test('computeAffiliateCompletion: basic identity factor = 30 (requires firstName AND lastName AND email together)', () => {
+  const full = computeAffiliateCompletion({
+    user: { firstName: 'Amr', lastName: 'Okasha', email: 'amr@example.com' },
+    affiliateProfile: {},
+    marketingChannelsCount: 0
+  });
+  assert.equal(full, 30);
+
+  const missingEmail = computeAffiliateCompletion({
+    user: { firstName: 'Amr', lastName: 'Okasha', email: null },
+    affiliateProfile: {},
+    marketingChannelsCount: 0
+  });
+  assert.equal(missingEmail, 0);
+});
+
+test('computeAffiliateCompletion: full score = 100 when every factor is satisfied', () => {
+  const score = computeAffiliateCompletion({
+    user: { firstName: 'Amr', lastName: 'Okasha', email: 'amr@example.com', avatarUrl: null },
+    affiliateProfile: { avatarUrl: 'https://example.com/a.png', bio: 'bio', iban: 'SA0000000000000000000011' },
+    marketingChannelsCount: 2
+  });
+  assert.equal(score, 100);
+});
+
+test('computeAffiliateCompletion: null/empty semantics preserved exactly (undefined/null fields never throw, never falsely score)', () => {
+  const score = computeAffiliateCompletion({
+    user: { firstName: undefined, lastName: null, email: undefined, avatarUrl: null },
+    affiliateProfile: { avatarUrl: undefined, bio: null, iban: undefined },
+    marketingChannelsCount: 0
+  });
   assert.equal(score, 0);
 });

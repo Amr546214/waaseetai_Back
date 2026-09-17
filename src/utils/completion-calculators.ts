@@ -151,3 +151,55 @@ export function computeProviderCompletion(input: ProviderCompletionInput): numbe
   if (user.idDocumentUrl) score += 10;
   return Math.min(100, score);
 }
+
+export interface AffiliateCompletionInput {
+  user: {
+    firstName?: string | null;
+    lastName?: string | null;
+    email?: string | null;
+    avatarUrl?: string | null;
+  };
+  affiliateProfile: {
+    avatarUrl?: string | null;
+    bio?: string | null;
+    iban?: string | null;
+  };
+  marketingChannelsCount: number;
+}
+
+/**
+ * Phase 3D.4: verbatim extraction of marketer-profile.service.ts's (private)
+ * recalculateCompletion — identical fields, identical weights (avatar 15 +
+ * bio 15 + >=1 marketing channel 20 + IBAN 20 + basic identity 30 = 100 max),
+ * identical null/empty semantics. Extracted so role-creation initialization
+ * (account-management.service.ts) can compute the exact same score from
+ * already-known/fetched state without importing MarketerProfileService (a
+ * DB-querying service class) — not a formula redesign.
+ *
+ * marketingChannelsCount replaces the original's
+ * `profile.marketingChannels.length` — callers pass the count they already
+ * have (0 at role creation, or `marketingChannels.length` when recalculating
+ * an existing profile).
+ */
+export function computeAffiliateCompletion(input: AffiliateCompletionInput): number {
+  const { user, affiliateProfile, marketingChannelsCount } = input;
+
+  let percentage = 0;
+
+  // Avatar (+15%)
+  if (affiliateProfile.avatarUrl || user.avatarUrl) percentage += 15;
+
+  // Bio (+15%)
+  if (affiliateProfile.bio && affiliateProfile.bio.trim().length > 0) percentage += 15;
+
+  // At least 1 Channel (+20%)
+  if (marketingChannelsCount > 0) percentage += 20;
+
+  // IBAN (+20%)
+  if (affiliateProfile.iban && affiliateProfile.iban.trim().length > 0) percentage += 20;
+
+  // User basic info (+30%)
+  if (user.firstName && user.lastName && user.email) percentage += 30;
+
+  return Math.min(100, percentage);
+}

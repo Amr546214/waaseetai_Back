@@ -1,6 +1,7 @@
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
-import { BudgetType, ContractStatus, ProposalStatus, ProviderTypePreference, RequestStatus } from '@prisma/client';
+import { BudgetType, ContractStatus, ProposalStatus, ProviderTypePreference, RequestStatus, UserRole } from '@prisma/client';
+import { initializeRoleState } from './account-management.service';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import OpenAI from 'openai';
 import { CreateClientRequestDto, ClientRequestAiSuggestDto } from '../dtos/create-client-request.dto';
@@ -225,12 +226,30 @@ Return JSON schema:
 		});
 
 		if (!clientProfile) {
-			clientProfile = await prisma.clientProfile.create({
-				data: {
-					userId,
-					isProfileComplete: true
+			// Phase 3D.4: routed through the same canonical role-state initializer
+			// every other role-creation path uses — seeds display fields and
+			// computes a real initial completionPercentage instead of a bare
+			// `{ userId }` row. `isProfileComplete: true` is a SEPARATE, pre-
+			// existing concept from completionPercentage (this endpoint's own
+			// business rule: submitting a request implies the client's profile is
+			// "complete enough" to transact) and is preserved exactly via
+			// extraFields, unchanged from before this phase.
+			const user = await prisma.user.findUnique({
+				where: { id: userId },
+				select: {
+					firstName: true, lastName: true, avatarUrl: true, email: true, phoneNumber: true,
+					idNumber: true, idExpiryDate: true, ibanNumber: true, bankName: true,
+					accountHolderName: true, idDocumentUrl: true
 				}
 			});
+			if (!user) throw new AppError('حساب المستخدم غير موجود', 404);
+
+			await prisma.$transaction(async (tx) => {
+				await initializeRoleState(tx, userId, UserRole.CLIENT, user, { isProfileComplete: true });
+			});
+
+			clientProfile = await prisma.clientProfile.findUnique({ where: { userId } });
+			if (!clientProfile) throw new AppError('تعذر تهيئة الملف الشخصي للعميل', 500);
 		}
 
 		// 2. Resolve Specialty ID

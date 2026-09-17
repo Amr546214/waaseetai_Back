@@ -5,6 +5,8 @@ import { AppError } from '../utils/app-error';
 import { generateReferralSlug } from '../utils/slug.util';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
+import { computeClientCompletion, computeProviderCompletion, computeAffiliateCompletion } from '../utils/completion-calculators';
+import { deriveProviderProgression } from '../utils/progression-calculators';
 
 /**
  * Helper to derive primary UserRole from AccountType enum
@@ -42,18 +44,163 @@ export interface CreateMissingRoleProfilesResult {
 }
 
 /**
- * Ensure every role in `roles` has its matching profile row for this user,
- * creating whichever bare row(s) are missing and leaving existing ones
- * untouched. This is the single source of truth for "which profile row(s)
- * should this user have" — used by email/password registration
- * (authRepository.createUserWithProfile), Google sign-up
- * (authService.googleAuth), addAccountType, the self-healing path in
- * getAvailableAccountTypes, and the scripts/backfill-role-profiles.ts script,
- * so none of them can diverge on this again.
+ * Phase 3D.4: the shared User identity fields every role-completion
+ * calculator needs, in one shape every role-creation/self-healing call site
+ * can build from whatever User row it already has in scope (a freshly
+ * created row, a `findUnique` result, etc.) — never a new DB read of its own.
+ * Banking/KYC fields are legitimately null for most callers (e.g. brand-new
+ * registrations); the calculators already treat null/missing as "not
+ * scored", so this never invents data.
+ */
+export interface RoleInitializationIdentity {
+  firstName: string;
+  lastName: string;
+  avatarUrl?: string | null;
+  email?: string | null;
+  phoneNumber?: string | null;
+  idNumber?: string | null;
+  idExpiryDate?: unknown;
+  ibanNumber?: string | null;
+  bankName?: string | null;
+  accountHolderName?: string | null;
+  idDocumentUrl?: string | null;
+}
+
+/**
+ * Phase 3D.4: the single canonical place a role-specific profile row — and,
+ * for PROVIDER, its ProviderGamification row — is created with correct
+ * initial state instead of a bare `{ userId }` row. On first creation only:
  *
- * Idempotent and safe to call repeatedly / concurrently with itself: each
- * profile is checked with a findUnique before creating it, so calling this
- * again with roles that already have a row is a no-op for those roles.
+ *  - seeds firstName/lastName/avatarUrl from the shared User identity (never
+ *    re-synced afterward — that's Phase 3D.1's job to keep independent)
+ *  - computes a REAL initial completionPercentage from that exact seeded
+ *    state, using the exact existing Phase 3D.2 pure calculators (no new
+ *    formula) — so a profile that already legitimately has a name/avatar
+ *    never sits at an incorrect 0% until the first manual edit
+ *  - for PROVIDER, ensures a correct zero-state ProviderGamification row via
+ *    the exact existing Phase 3D.3A pure calculator (no hardcoded
+ *    index/commission, no PointTransaction)
+ *
+ * Idempotent: does nothing for a role whose profile row already exists —
+ * independent/existing display, completion and progression data is NEVER
+ * reset. ProviderProfile and ProviderGamification existence are checked and
+ * repaired INDEPENDENTLY of each other, so a pre-3D.4 provider that already
+ * has a ProviderProfile row but no ProviderGamification row gets only the
+ * missing gamification row created (never touching the existing profile),
+ * and an existing ProviderGamification row is never reset.
+ *
+ * `extraFields` lets a caller supply additional, already-Prisma-shaped
+ * role-profile columns on top of the seeded display fields (e.g.
+ * addAccountType's richer companyName/headline/bio metadata, or
+ * client-requests.service.ts's `isProfileComplete: true`) — this function
+ * has no knowledge of any request DTO's own field names; that translation
+ * stays entirely in the caller, so no formula or mapping is duplicated here.
+ *
+ * This is used by every role-creation/self-healing site in the app:
+ * email/password + Google registration (via createMissingRoleProfiles
+ * below), addAccountType, the self-healing path in getAvailableAccountTypes,
+ * the MARKETING_BROKER OTP-verification fallback, and the three previously-
+ * independent scattered self-heals (provider-profile.service.ts#getProfile,
+ * client-requests.service.ts#createRequest, marketer-overview.service.ts).
+ */
+export async function initializeRoleState(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  role: UserRole,
+  identity: RoleInitializationIdentity,
+  extraFields?: Record<string, unknown>
+): Promise<boolean> {
+  if (role === UserRole.CLIENT) {
+    const existing = await tx.clientProfile.findUnique({ where: { userId } });
+    if (existing) return false;
+
+    const seeded = {
+      firstName: identity.firstName,
+      lastName: identity.lastName,
+      avatarUrl: identity.avatarUrl ?? null,
+      ...extraFields
+    };
+    const completionPercentage = computeClientCompletion({ user: identity, clientProfile: seeded });
+    await tx.clientProfile.create({ data: { userId, ...seeded, completionPercentage } });
+    return true;
+  }
+
+  if (role === UserRole.PROVIDER) {
+    let created = false;
+
+    const existingProfile = await tx.providerProfile.findUnique({ where: { userId } });
+    if (!existingProfile) {
+      const seeded = {
+        firstName: identity.firstName,
+        lastName: identity.lastName,
+        avatarUrl: identity.avatarUrl ?? null,
+        ...extraFields
+      };
+      const completionPercentage = computeProviderCompletion({ providerProfile: seeded, user: identity });
+      await tx.providerProfile.create({ data: { userId, ...seeded, completionPercentage } });
+      created = true;
+    }
+
+    // Independent of ProviderProfile existence: a pre-3D.4 provider may
+    // already have a ProviderProfile row but no ProviderGamification row
+    // (the only writers before this phase were project completion / a
+    // rating / GET /gamification/level-details — all lazy, none at creation
+    // time). Never reset an existing ProviderGamification row's real
+    // points/completedProjects/avgRating/currentLevelIndex/currentCommission.
+    const existingGamification = await tx.providerGamification.findUnique({ where: { providerId: userId } });
+    if (!existingGamification) {
+      const progression = deriveProviderProgression({ points: 0, completedProjects: 0, avgRating: 0 });
+      await tx.providerGamification.create({
+        data: {
+          providerId: userId,
+          points: 0,
+          completedProjects: 0,
+          avgRating: 0,
+          currentLevelIndex: progression.currentLevelIndex,
+          currentCommission: progression.currentCommission
+        }
+      });
+      created = true;
+    }
+
+    return created;
+  }
+
+  if (role === UserRole.AFFILIATE) {
+    const existing = await tx.affiliateProfile.findUnique({ where: { userId } });
+    if (existing) return false;
+
+    const referralSlug = generateReferralSlug(`${identity.firstName} ${identity.lastName}`, userId);
+    const seeded = {
+      firstName: identity.firstName,
+      lastName: identity.lastName,
+      avatarUrl: identity.avatarUrl ?? null,
+      ...extraFields
+    };
+    // Zero marketing channels at creation — always true for a brand-new row,
+    // never a DB read of its own.
+    const completionPercentage = computeAffiliateCompletion({
+      user: identity,
+      affiliateProfile: seeded,
+      marketingChannelsCount: 0
+    });
+    await tx.affiliateProfile.create({ data: { userId, referralSlug, ...seeded, completionPercentage } });
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Ensure every role in `roles` has its matching profile row (+ for PROVIDER,
+ * its ProviderGamification row) for this user, via initializeRoleState — a
+ * thin per-role loop, kept as its own export since every existing call site
+ * (email/password registration, Google sign-up, addAccountType's defensive
+ * backfill, getAvailableAccountTypes, scripts/backfill-role-profiles.ts)
+ * already calls it with a role list rather than one role at a time.
+ *
+ * Idempotent and safe to call repeatedly / concurrently with itself — see
+ * initializeRoleState's own idempotency guarantees.
  *
  * MARKETING_BROKER/AFFILIATE never implies a ProviderProfile — nothing in the
  * app reads a broker's providerProfile (marketer-overview.service.ts only
@@ -64,7 +211,7 @@ export async function createMissingRoleProfiles(
   tx: Prisma.TransactionClient,
   userId: string,
   roles: UserRole[],
-  identity: { firstName: string; lastName: string }
+  identity: RoleInitializationIdentity
 ): Promise<CreateMissingRoleProfilesResult> {
   const result: CreateMissingRoleProfilesResult = {
     clientCreated: false,
@@ -73,28 +220,13 @@ export async function createMissingRoleProfiles(
   };
 
   if (roles.includes(UserRole.CLIENT)) {
-    const existing = await tx.clientProfile.findUnique({ where: { userId } });
-    if (!existing) {
-      await tx.clientProfile.create({ data: { userId } });
-      result.clientCreated = true;
-    }
+    result.clientCreated = await initializeRoleState(tx, userId, UserRole.CLIENT, identity);
   }
-
   if (roles.includes(UserRole.PROVIDER)) {
-    const existing = await tx.providerProfile.findUnique({ where: { userId } });
-    if (!existing) {
-      await tx.providerProfile.create({ data: { userId } });
-      result.providerCreated = true;
-    }
+    result.providerCreated = await initializeRoleState(tx, userId, UserRole.PROVIDER, identity);
   }
-
   if (roles.includes(UserRole.AFFILIATE)) {
-    const existing = await tx.affiliateProfile.findUnique({ where: { userId } });
-    if (!existing) {
-      const slug = generateReferralSlug(`${identity.firstName} ${identity.lastName}`, userId);
-      await tx.affiliateProfile.create({ data: { userId, referralSlug: slug } });
-      result.affiliateCreated = true;
-    }
+    result.affiliateCreated = await initializeRoleState(tx, userId, UserRole.AFFILIATE, identity);
   }
 
   return result;
@@ -111,12 +243,22 @@ export class AccountManagementService {
         id: true,
         firstName: true,
         lastName: true,
+        avatarUrl: true,
+        email: true,
+        phoneNumber: true,
+        idNumber: true,
+        idExpiryDate: true,
+        ibanNumber: true,
+        bankName: true,
+        accountHolderName: true,
+        idDocumentUrl: true,
         roles: true,
         activeRole: true,
         accountType: true,
         clientProfile: { select: { id: true } },
         providerProfile: { select: { id: true } },
-        affiliateProfile: { select: { id: true } }
+        affiliateProfile: { select: { id: true } },
+        gamification: { select: { id: true } }
       }
     });
 
@@ -129,24 +271,44 @@ export class AccountManagementService {
     let activeRole: UserRole = user.activeRole || primaryRole;
 
     // Self-healing check: If DB roles/activeRole was out of sync due to default schema values, persist correct values
-    if (!user.roles || !user.roles.includes(primaryRole) || user.activeRole !== activeRole) {
-      await prisma.user.update({
-        where: { id: userId },
-        data: {
-          roles: userRoles,
-          activeRole: activeRole
+    const needsRoleUpdate = !user.roles || !user.roles.includes(primaryRole) || user.activeRole !== activeRole;
+
+    // Self-healing also covers profile rows (+ for PROVIDER, its
+    // ProviderGamification row): an older signup path (or a partial/failed
+    // transaction) may have left this user owning a role with no matching
+    // profile/progression row.
+    const missingClient = userRoles.includes(UserRole.CLIENT) && !user.clientProfile;
+    const missingProvider = userRoles.includes(UserRole.PROVIDER) && (!user.providerProfile || !user.gamification);
+    const missingAffiliate = userRoles.includes(UserRole.AFFILIATE) && !user.affiliateProfile;
+
+    // Phase 3D.4: both repairs used to be two separate, non-transactional
+    // statements — a crash between them could leave User.roles claiming a
+    // role with no matching profile row. Now atomic together, and skipped
+    // entirely (no transaction opened at all) when nothing actually needs
+    // repairing, which is the common case for every already-consistent user.
+    if (needsRoleUpdate || missingClient || missingProvider || missingAffiliate) {
+      await prisma.$transaction(async (tx) => {
+        if (needsRoleUpdate) {
+          await tx.user.update({
+            where: { id: userId },
+            data: { roles: userRoles, activeRole: activeRole }
+          });
         }
+        await createMissingRoleProfiles(tx, userId, userRoles, {
+          firstName: user.firstName,
+          lastName: user.lastName,
+          avatarUrl: user.avatarUrl,
+          email: user.email,
+          phoneNumber: user.phoneNumber,
+          idNumber: user.idNumber,
+          idExpiryDate: user.idExpiryDate,
+          ibanNumber: user.ibanNumber,
+          bankName: user.bankName,
+          accountHolderName: user.accountHolderName,
+          idDocumentUrl: user.idDocumentUrl
+        });
       });
     }
-
-    // Self-healing also covers profile rows: an older signup path (or a
-    // partial/failed transaction) may have left this user owning a role with
-    // no matching profile row. Idempotent — a no-op for roles that already
-    // have their profile.
-    await createMissingRoleProfiles(prisma, userId, userRoles, {
-      firstName: user.firstName,
-      lastName: user.lastName
-    });
 
     const allRoles: { role: UserRole; label: string; color: string; description: string }[] = [
       {
@@ -220,44 +382,46 @@ export class AccountManagementService {
       // newly-added targetRole itself keeps its own richer, metadata-aware
       // creation below (profileMetadata only applies to the role being
       // deliberately added right now, not to a defensive backfill).
-      await createMissingRoleProfiles(tx, user.id, currentRoles, {
+      const identity: RoleInitializationIdentity = {
         firstName: user.firstName,
-        lastName: user.lastName
-      });
+        lastName: user.lastName,
+        avatarUrl: user.avatarUrl,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        idNumber: user.idNumber,
+        idExpiryDate: user.idExpiryDate,
+        ibanNumber: user.ibanNumber,
+        bankName: user.bankName,
+        accountHolderName: user.accountHolderName,
+        idDocumentUrl: user.idDocumentUrl
+      };
 
+      await createMissingRoleProfiles(tx, user.id, currentRoles, identity);
+
+      // The newly-added targetRole itself keeps its own richer, metadata-aware
+      // creation (profileMetadata only applies to the role being deliberately
+      // added right now, not to the defensive backfill above) — routed
+      // through the same canonical initializer as everywhere else so it gets
+      // the same seeded display fields, real initial completion and (for
+      // PROVIDER) ProviderGamification guarantees, without duplicating any
+      // formula. extraFields carries addAccountType's own DTO-shaped
+      // metadata field names (coName/specMain/portfolioBio/specExp) — mapped
+      // to Prisma column names here, exactly as this function already did.
       if (targetRole === UserRole.PROVIDER) {
-        if (!user.providerProfile) {
-          await tx.providerProfile.create({
-            data: {
-              userId: user.id,
-              companyName: profileMetadata?.coName || null,
-              headline: profileMetadata?.specMain || 'مقدم خدمة',
-              bio: profileMetadata?.portfolioBio || null,
-              yearsOfExperience: profileMetadata?.specExp ? parseInt(profileMetadata.specExp, 10) || 1 : 1
-            }
-          });
-        }
+        await initializeRoleState(tx, user.id, UserRole.PROVIDER, identity, {
+          companyName: profileMetadata?.coName || null,
+          headline: profileMetadata?.specMain || 'مقدم خدمة',
+          bio: profileMetadata?.portfolioBio || null,
+          yearsOfExperience: profileMetadata?.specExp ? parseInt(profileMetadata.specExp, 10) || 1 : 1
+        });
       } else if (targetRole === UserRole.CLIENT) {
-        if (!user.clientProfile) {
-          await tx.clientProfile.create({
-            data: {
-              userId: user.id,
-              companyName: profileMetadata?.coName || null,
-              crNumber: profileMetadata?.coCrn || null,
-              bio: profileMetadata?.portfolioBio || null
-            }
-          });
-        }
+        await initializeRoleState(tx, user.id, UserRole.CLIENT, identity, {
+          companyName: profileMetadata?.coName || null,
+          crNumber: profileMetadata?.coCrn || null,
+          bio: profileMetadata?.portfolioBio || null
+        });
       } else if (targetRole === UserRole.AFFILIATE) {
-        if (!user.affiliateProfile) {
-          const slug = generateReferralSlug(`${user.firstName} ${user.lastName}`, user.id);
-          await tx.affiliateProfile.create({
-            data: {
-              userId: user.id,
-              referralSlug: slug
-            }
-          });
-        }
+        await initializeRoleState(tx, user.id, UserRole.AFFILIATE, identity);
       }
 
       await tx.user.update({

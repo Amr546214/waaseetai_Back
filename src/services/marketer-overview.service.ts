@@ -1,41 +1,40 @@
-import { SourceChannel, CommissionStatus } from '@prisma/client';
+import { SourceChannel, CommissionStatus, UserRole } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 import { prisma } from '../config/db';
 import { generateReferralSlug } from '../utils/slug.util';
+import { initializeRoleState } from './account-management.service';
 
 export class MarketerOverviewService {
   /**
    * Helper: Get or Create Affiliate Profile
    */
   private async getOrCreateProfile(userId: string) {
-    let affiliate = await prisma.affiliateProfile.findUnique({
-      where: { userId },
-      include: {
-        referrals: {
-          where: { status: 'CONVERTED' },
-        },
-        commissionLogs: {
-          where: { status: 'APPROVED' },
-        },
-        channelMetrics: true,
-      },
-    });
+    const affiliateInclude = {
+      referrals: { where: { status: 'CONVERTED' as const } },
+      commissionLogs: { where: { status: 'APPROVED' as const } },
+      channelMetrics: true,
+    };
+
+    let affiliate = await prisma.affiliateProfile.findUnique({ where: { userId }, include: affiliateInclude });
 
     if (!affiliate) {
-      const user = await prisma.user.findUnique({ where: { id: userId } });
-      const fullName = user ? `${user.firstName} ${user.lastName}` : '';
-      const generatedSlug = generateReferralSlug(fullName, userId);
-      affiliate = await prisma.affiliateProfile.create({
-        data: {
-          userId,
-          referralSlug: generatedSlug,
-        },
-        include: {
-          referrals: { where: { status: 'CONVERTED' } },
-          commissionLogs: { where: { status: 'APPROVED' } },
-          channelMetrics: true,
-        }
+      // Phase 3D.4: routed through the same canonical role-state initializer
+      // every other role-creation path uses (same referralSlug generation
+      // semantics as before — full name + userId), instead of a bare
+      // divergent create — seeds display fields and computes a real initial
+      // completionPercentage from the exact existing Affiliate formula.
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { firstName: true, lastName: true, avatarUrl: true, email: true }
       });
+      if (!user) throw new AppError('حساب المستخدم غير موجود', 404);
+
+      await prisma.$transaction(async (tx) => {
+        await initializeRoleState(tx, userId, UserRole.AFFILIATE, user);
+      });
+
+      affiliate = await prisma.affiliateProfile.findUnique({ where: { userId }, include: affiliateInclude });
+      if (!affiliate) throw new AppError('تعذر تهيئة ملف الوسيط التسويقي', 500);
     }
 
     return affiliate;

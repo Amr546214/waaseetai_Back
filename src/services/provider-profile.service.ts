@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import OpenAI from 'openai';
@@ -10,6 +10,7 @@ import { LEVEL_MATRIX } from './gamification.service';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { computeProviderCompletion } from '../utils/completion-calculators';
 import { logger } from '../config/logger';
+import { initializeRoleState } from './account-management.service';
 
 const aiCache = new Map<string, { metrics: any, expiresAt: number }>();
 
@@ -34,44 +35,47 @@ export class ProviderProfileService {
     return { changedAt: new Date() };
   }
 	async getProfile(userId: string) {
-		let profile = await prisma.providerProfile.findUnique({
-			where: { userId },
-			include: {
-				user: {
-					select: {
-						firstName: true, lastName: true, email: true, avatarUrl: true,
-						phoneNumber: true, alternativePhone: true,
-						accountHolderName: true, ibanNumber: true, bankName: true,
-						idDocumentUrl: true, commercialRegistration: true, vatCertificateUrl: true
-					}
-				},
-				skills: true,
-				portfolioItems: true,
-				educations: true,
-				certificates: true,
+		const profileInclude = {
+			user: {
+				select: {
+					firstName: true, lastName: true, email: true, avatarUrl: true,
+					phoneNumber: true, alternativePhone: true,
+					accountHolderName: true, ibanNumber: true, bankName: true,
+					idDocumentUrl: true, commercialRegistration: true, vatCertificateUrl: true
+				}
 			},
-		});
+			skills: true,
+			portfolioItems: true,
+			educations: true,
+			certificates: true,
+		} as const;
+
+		let profile = await prisma.providerProfile.findUnique({ where: { userId }, include: profileInclude });
 
 		if (!profile) {
-			profile = await prisma.providerProfile.create({
-				data: {
-					userId,
-				},
-				include: {
-					user: {
-						select: {
-							firstName: true, lastName: true, email: true, avatarUrl: true,
-							phoneNumber: true, alternativePhone: true,
-							accountHolderName: true, ibanNumber: true, bankName: true,
-							idDocumentUrl: true, commercialRegistration: true, vatCertificateUrl: true
-						}
-					},
-					skills: true,
-					portfolioItems: true,
-					educations: true,
-					certificates: true,
-				},
+			// Phase 3D.4: routed through the same canonical role-state
+			// initializer every other role-creation path uses, instead of a bare
+			// `{ userId }` create — seeds display fields, computes a real initial
+			// completionPercentage, and ensures a correct zero-state
+			// ProviderGamification row all at once. No-op/never resets anything
+			// if another request already created the row in the meantime (the
+			// initializer's own existence check handles that race safely).
+			const user = await prisma.user.findUnique({
+				where: { id: userId },
+				select: {
+					firstName: true, lastName: true, avatarUrl: true, email: true, phoneNumber: true,
+					idNumber: true, idExpiryDate: true, ibanNumber: true, bankName: true,
+					accountHolderName: true, idDocumentUrl: true
+				}
 			});
+			if (!user) throw new Error('User not found');
+
+			await prisma.$transaction(async (tx) => {
+				await initializeRoleState(tx, userId, UserRole.PROVIDER, user);
+			});
+
+			profile = await prisma.providerProfile.findUnique({ where: { userId }, include: profileInclude });
+			if (!profile) throw new Error('Failed to initialize provider profile');
 		}
 
 		if (profile?.user?.ibanNumber) {

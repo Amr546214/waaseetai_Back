@@ -889,3 +889,69 @@ test('regression: no ClientProfile/AffiliateProfile writes from any sensitive-ch
   assert.equal(clientUpsertSpy.mock.callCount(), 0);
   assert.equal(affiliateUpsertSpy.mock.callCount(), 0);
 });
+
+// ============================================================================
+// Phase 3D.4 — getProfile()'s scattered self-heal, consolidated. A missing
+// ProviderProfile row is now routed through the same canonical role-state
+// initializer (account-management.service.ts#initializeRoleState) instead of
+// a bare `{ userId }` create — seeding display fields, computing a real
+// initial completion, and creating a ProviderGamification row, all inside
+// one small transaction. Never resets anything if the row already exists.
+// ============================================================================
+
+function createGetProfileSelfHealMockPrisma(t: TestContext) {
+  let providerProfileState: any = null;
+  let gamificationState: any = null;
+  const userFixture = {
+    firstName: 'Amr', lastName: 'Okasha', avatarUrl: 'https://example.com/a.png', email: 'amr@example.com',
+    phoneNumber: '0500000000', idNumber: null, idExpiryDate: null, ibanNumber: null, bankName: null,
+    accountHolderName: null, idDocumentUrl: null
+  };
+
+  const providerCreateSpy = t.mock.fn((args: any) => {
+    providerProfileState = { id: 'pp-1', skills: [], portfolioItems: [], educations: [], certificates: [], ...args.data };
+    return providerProfileState;
+  });
+  const gamificationCreateSpy = t.mock.fn((args: any) => { gamificationState = { id: 'gam-1', ...args.data }; return gamificationState; });
+
+  const tx = {
+    providerProfile: { findUnique: async () => providerProfileState, create: providerCreateSpy },
+    providerGamification: { findUnique: async () => gamificationState, create: gamificationCreateSpy }
+  };
+
+  const prismaMock = {
+    providerProfile: {
+      findUnique: async () => (providerProfileState ? { ...providerProfileState, user: userFixture } : null)
+    },
+    user: { findUnique: async () => userFixture },
+    $transaction: async (fn: any) => fn(tx)
+  };
+
+  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  t.mock.module('./account-logs.service', { namedExports: { accountAuditLogService: { record: async () => ({}) } } });
+
+  return { providerCreateSpy, gamificationCreateSpy, getProviderProfileState: () => providerProfileState };
+}
+
+async function loadServiceForGetProfileSelfHeal(t: TestContext) {
+  const mocks = createGetProfileSelfHealMockPrisma(t);
+  const moduleUrl = `./provider-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { providerProfileService } = await import(moduleUrl);
+  return { providerProfileService, ...mocks };
+}
+
+test('getProfile: a missing ProviderProfile is routed through the canonical initializer — seeds display, computes real completion, creates ProviderGamification', async (t) => {
+  const { providerProfileService, providerCreateSpy, gamificationCreateSpy } = await loadServiceForGetProfileSelfHeal(t);
+
+  const profile = await providerProfileService.getProfile('user-1');
+
+  assert.equal(providerCreateSpy.mock.callCount(), 1);
+  const data = providerCreateSpy.mock.calls[0].arguments[0].data;
+  assert.equal(data.firstName, 'Amr');
+  assert.equal(data.lastName, 'Okasha');
+  assert.equal(data.avatarUrl, 'https://example.com/a.png');
+  assert.equal(typeof data.completionPercentage, 'number');
+
+  assert.equal(gamificationCreateSpy.mock.callCount(), 1);
+  assert.equal(profile.firstName, 'Amr');
+});

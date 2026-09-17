@@ -1,6 +1,7 @@
 import { prisma } from '../config/db';
 import { SensitiveFieldType, ChangeRequestStatus } from '@prisma/client';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
+import { computeAffiliateCompletion } from '../utils/completion-calculators';
 
 export class MarketerProfileService {
   
@@ -134,24 +135,16 @@ export class MarketerProfileService {
 
     if (!profile) return;
 
-    let percentage = 0;
-
-    // Avatar (+15%)
-    if (profile.avatarUrl || profile.user.avatarUrl) percentage += 15;
-    
-    // Bio (+15%)
-    if (profile.bio && profile.bio.trim().length > 0) percentage += 15;
-    
-    // At least 1 Channel (+20%)
-    if (profile.marketingChannels && profile.marketingChannels.length > 0) percentage += 20;
-    
-    // IBAN (+20%)
-    if (profile.iban && profile.iban.trim().length > 0) percentage += 20;
-    
-    // User basic info (+30%)
-    if (profile.user.firstName && profile.user.lastName && profile.user.email) percentage += 30;
-
-    if (percentage > 100) percentage = 100;
+    // Phase 3D.4: delegates to the shared pure calculator (src/utils/
+    // completion-calculators.ts) so role-creation initialization
+    // (account-management.service.ts) can compute the exact same score
+    // without depending on this DB-querying service. Behavior-preserving
+    // extraction only — same fields, same weights, same null/empty semantics.
+    const percentage = computeAffiliateCompletion({
+      user: profile.user,
+      affiliateProfile: profile,
+      marketingChannelsCount: profile.marketingChannels?.length || 0
+    });
 
     await prisma.affiliateProfile.update({
       where: { userId },
