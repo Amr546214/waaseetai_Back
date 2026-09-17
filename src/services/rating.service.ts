@@ -1,6 +1,7 @@
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { CreateRatingInput } from '../dtos/rating.dto';
+import { deriveProviderProgression } from '../utils/progression-calculators';
 
 export class RatingService {
   async rateRequest(requestId: string, userId: string, actor: 'client' | 'provider', input: CreateRatingInput) {
@@ -69,8 +70,32 @@ export class RatingService {
       });
       // Aggregate provider rating only from CLIENT → PROVIDER reviews (not provider → client).
       const aggregate = await tx.review.aggregate({ where: { providerId, reviewerRole: 'CLIENT' }, _avg: { rating: true } });
-      await tx.user.update({ where: { id: providerId }, data: { ratingAverage: aggregate._avg.rating || 0 } });
-      await tx.providerGamification.updateMany({ where: { providerId }, data: { avgRating: aggregate._avg.rating || 0 } });
+      const avgRating = Number(aggregate._avg.rating || 0);
+      await tx.user.update({ where: { id: providerId }, data: { ratingAverage: avgRating } });
+
+      // Phase 3D.3A: avgRating is one of the three LEVEL_MATRIX qualification
+      // gates (see progression-calculators.ts), so a rating change alone can
+      // move a provider's level even though no new points were awarded here.
+      // points/completedProjects are re-read from their own authoritative
+      // sources (not assumed unchanged) so this write never regresses them,
+      // then the same pure helper used by reviewDelivery/getLevelDetails
+      // derives the level/commission to persist alongside avgRating.
+      const [pointsAggregate, completedProjects] = await Promise.all([
+        tx.pointTransaction.aggregate({ where: { providerId }, _sum: { amount: true } }),
+        tx.project.count({ where: { providerId, status: 'COMPLETED' } })
+      ]);
+      const totalPoints = pointsAggregate._sum.amount || 0;
+      const progression = deriveProviderProgression({ points: totalPoints, completedProjects, avgRating });
+      await tx.providerGamification.updateMany({
+        where: { providerId },
+        data: {
+          points: totalPoints,
+          completedProjects,
+          avgRating,
+          currentLevelIndex: progression.currentLevelIndex,
+          currentCommission: progression.currentCommission
+        }
+      });
       return created;
     });
     return review;

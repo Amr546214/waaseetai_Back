@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
 import { emailService } from './email.service';
+import { deriveProviderProgression } from '../utils/progression-calculators';
 
 const PROJECT_COMPLETION_POINTS = 50;
 
@@ -272,17 +273,39 @@ export class ProjectProgressService {
               description: `إكمال مشروع بنجاح: ${contract.project.title} (${contract.id})`
             }
           });
-          const [pointsAggregate, completedProjects] = await Promise.all([
+          // Phase 3D.3A: avgRating is sourced the same way getLevelDetails()
+          // already does — a live Review aggregate (CLIENT -> PROVIDER
+          // reviews only) — not the ProviderGamification cache, which would
+          // be a stale read of the very row this same block is about to
+          // write. All three reads run inside this same transaction, so they
+          // see this transaction's own already-committed PointTransaction.
+          const [pointsAggregate, completedProjects, ratingAggregate] = await Promise.all([
             tx.pointTransaction.aggregate({ where: { providerId: contract.providerId }, _sum: { amount: true } }),
-            tx.project.count({ where: { providerId: contract.providerId, status: ProjectStatus.COMPLETED } })
+            tx.project.count({ where: { providerId: contract.providerId, status: ProjectStatus.COMPLETED } }),
+            tx.review.aggregate({ where: { providerId: contract.providerId, reviewerRole: 'CLIENT' }, _avg: { rating: true } })
           ]);
           const totalPoints = pointsAggregate._sum.amount || 0;
+          const avgRating = Number(ratingAggregate._avg.rating || 0);
+          const progression = deriveProviderProgression({ points: totalPoints, completedProjects, avgRating });
           await Promise.all([
             tx.user.update({ where: { id: contract.providerId }, data: { currentPoints: totalPoints } }),
             tx.providerGamification.upsert({
               where: { providerId: contract.providerId },
-              update: { points: totalPoints, completedProjects },
-              create: { providerId: contract.providerId, points: totalPoints, completedProjects }
+              update: {
+                points: totalPoints,
+                completedProjects,
+                avgRating,
+                currentLevelIndex: progression.currentLevelIndex,
+                currentCommission: progression.currentCommission
+              },
+              create: {
+                providerId: contract.providerId,
+                points: totalPoints,
+                completedProjects,
+                avgRating,
+                currentLevelIndex: progression.currentLevelIndex,
+                currentCommission: progression.currentCommission
+              }
             }),
             tx.gamificationRule.upsert({
               where: { code: 'GAIN_PROJECT_COMPLETE' },

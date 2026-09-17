@@ -1,22 +1,11 @@
 import { prisma } from '../config/db';
+import { LEVEL_MATRIX, deriveProviderProgression } from '../utils/progression-calculators';
 
-export const LEVEL_MATRIX = [
-  { index: 1, title: 'زائر', reqPoints: 0, reqProjects: 0, reqRating: 0.0, commission: 15.0 },
-  { index: 2, title: 'مستكشف', reqPoints: 50, reqProjects: 2, reqRating: 3.5, commission: 15.0 },
-  { index: 3, title: 'باحث', reqPoints: 150, reqProjects: 5, reqRating: 3.8, commission: 15.0 },
-  { index: 4, title: 'عميل', reqPoints: 300, reqProjects: 9, reqRating: 4.0, commission: 15.0 },
-  { index: 5, title: 'داعم', reqPoints: 501, reqProjects: 13, reqRating: 4.1, commission: 14.5 },
-  { index: 6, title: 'ناشط', reqPoints: 751, reqProjects: 20, reqRating: 4.2, commission: 14.0 },
-  { index: 7, title: 'فعال', reqPoints: 1101, reqProjects: 30, reqRating: 4.3, commission: 13.5 },
-  { index: 8, title: 'راعي', reqPoints: 1501, reqProjects: 42, reqRating: 4.4, commission: 13.0 },
-  { index: 9, title: 'سفير', reqPoints: 2001, reqProjects: 55, reqRating: 4.5, commission: 12.5 },
-  { index: 10, title: 'استراتيجي', reqPoints: 2601, reqProjects: 70, reqRating: 4.6, commission: 12.0 },
-  { index: 11, title: 'أساسي', reqPoints: 3301, reqProjects: 85, reqRating: 4.7, commission: 11.5 },
-  { index: 12, title: 'مالك', reqPoints: 4101, reqProjects: 100, reqRating: 4.8, commission: 11.0 },
-  { index: 13, title: 'مؤسس', reqPoints: 5001, reqProjects: 115, reqRating: 4.85, commission: 10.5 },
-  { index: 14, title: 'دائم', reqPoints: 6001, reqProjects: 130, reqRating: 4.9, commission: 10.25 },
-  { index: 15, title: 'مؤسسي', reqPoints: 7201, reqProjects: 150, reqRating: 4.9, commission: 10.0 }
-];
+// Phase 3D.3A: LEVEL_MATRIX now lives in progression-calculators.ts (a pure
+// module with no Prisma/DB imports) — re-exported here unchanged so existing
+// importers of `LEVEL_MATRIX from '../services/gamification.service'`
+// (role-display-resolver.ts, provider-profile.service.ts) need no changes.
+export { LEVEL_MATRIX };
 
 class GamificationService {
   async getLevelDetails(providerId: string) {
@@ -60,33 +49,44 @@ class GamificationService {
     const gainRules = rules.filter(r => r.type === 'GAIN').map(r => ({ label: r.label, points: `+${r.points} نقطة` }));
     const lossRules = rules.filter(r => r.type === 'LOSS').map(r => ({ label: r.label, points: `${r.points} نقطة` }));
 
-    // Sync Gamification table (Optional cache)
+    const points = totalPoints;
+
+    // 2. DYNAMIC LEVEL & GAP CALCULATOR ENGINE
+    // Phase 3D.3A: delegates the 3-dimensional level qualification (points
+    // AND completedProjects AND avgRating, all inclusive >=) to the shared
+    // pure helper also used by reviewDelivery/rateRequest, so this endpoint's
+    // computed level can never again disagree with what those mutation paths
+    // persist. Same LEVEL_MATRIX, same semantics — behavior-preserving.
+    const progression = deriveProviderProgression({ points, completedProjects, avgRating });
+    const currentLevel = LEVEL_MATRIX.find(level => level.index === progression.currentLevelIndex) || LEVEL_MATRIX[0];
+
+    // Sync Gamification table (Optional cache) — now also persists
+    // currentLevelIndex/currentCommission (previously frozen at their
+    // creation-time defaults forever), so this endpoint's returned level and
+    // the persisted ProviderGamification row agree after every call.
     let gamification = await prisma.providerGamification.upsert({
       where: { providerId },
-      update: { points: totalPoints, completedProjects, avgRating },
+      update: {
+        points: totalPoints,
+        completedProjects,
+        avgRating,
+        currentLevelIndex: progression.currentLevelIndex,
+        currentCommission: progression.currentCommission
+      },
       create: {
         providerId,
         points: totalPoints,
         completedProjects,
         avgRating,
-        currentLevelIndex: 1,
-        currentCommission: 15.0
+        currentLevelIndex: progression.currentLevelIndex,
+        currentCommission: progression.currentCommission
       }
     });
 
-    const points = totalPoints;
-
-    // 2. DYNAMIC LEVEL & GAP CALCULATOR ENGINE
-    let currentLevel = LEVEL_MATRIX[0];
-    for (let i = LEVEL_MATRIX.length - 1; i >= 0; i--) {
-      const level = LEVEL_MATRIX[i];
-      if (points >= level.reqPoints && completedProjects >= level.reqProjects && avgRating >= level.reqRating) {
-        currentLevel = level;
-        break;
-      }
-    }
-
-    const nextLevelIndex = Math.min(currentLevel.index + 1, 15);
+    // Matrix-derived max index (no hardcoded literal) — mirrors the same
+    // pattern progression-calculators.ts uses.
+    const maxLevelIndex = LEVEL_MATRIX[LEVEL_MATRIX.length - 1].index;
+    const nextLevelIndex = Math.min(currentLevel.index + 1, maxLevelIndex);
     const nextLevel = LEVEL_MATRIX.find(l => l.index === nextLevelIndex)!;
 
     const pointsGap = Math.max(0, nextLevel.reqPoints - points);
