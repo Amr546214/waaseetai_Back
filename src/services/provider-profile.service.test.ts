@@ -55,6 +55,9 @@ async function loadProviderProfileServiceWithFixture(t: TestContext) {
     return { ...providerProfileState, user: baseUser };
   });
   const userUpdateSpy = t.mock.fn((args: any) => ({ ...baseUser, ...args.data }));
+  const clientUpsertSpy = t.mock.fn((args: any) => ({ ...args.create, ...args.update }));
+  const clientUpdateSpy = t.mock.fn((args: any) => ({ ...args.data }));
+  const affiliateUpsertSpy = t.mock.fn((args: any) => ({ ...args.create, ...args.update }));
 
   t.mock.module('../config/db', {
     namedExports: {
@@ -67,6 +70,10 @@ async function loadProviderProfileServiceWithFixture(t: TestContext) {
         user: {
           update: async (args: any) => userUpdateSpy(args)
         },
+        // Never touched by updateBasicInfo — only present here so the
+        // role-isolation regression test below can assert callCount() === 0.
+        clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy },
+        affiliateProfile: { upsert: affiliateUpsertSpy },
         profileModificationRequest: {
           create: async () => ({})
         },
@@ -89,7 +96,10 @@ async function loadProviderProfileServiceWithFixture(t: TestContext) {
 
   const moduleUrl = `./provider-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { providerProfileService } = await import(moduleUrl);
-  return { providerProfileService, providerProfileUpdateSpy, userUpdateSpy, getProviderProfileState: () => providerProfileState };
+  return {
+    providerProfileService, providerProfileUpdateSpy, userUpdateSpy, clientUpsertSpy, clientUpdateSpy, affiliateUpsertSpy,
+    getProviderProfileState: () => providerProfileState
+  };
 }
 
 test('updateBasicInfo: firstName/lastName/avatarUrl are written to ProviderProfile, never to the legacy User row', async (t) => {
@@ -146,10 +156,185 @@ test('updateBasicInfo: legacy User.firstName/lastName/avatarUrl remain exactly a
   assert.equal(baseUser.lastName, 'LegacyLast');
   assert.equal(baseUser.avatarUrl, 'https://legacy.example/avatar.png');
 
-  // Out of scope for Phase 3D.1 (explicitly preserved): the completion-percent
-  // mirror to User.profileCompletionPercent still fires — this is a
-  // completion-value write, not a display-field write, and 3D.1 must not
-  // touch it.
-  const completionCall = userUpdateSpy.mock.calls.find((c: any) => 'profileCompletionPercent' in c.arguments[0].data);
+  // Phase 3D.2A follow-up: the completion-percent mirror to
+  // User.profileCompletionPercent has been removed (see the dedicated tests
+  // below) — prisma.user.update is no longer called by updateBasicInfo at
+  // all, for any reason.
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+// ============================================================================
+// Phase 3D.2A follow-up — updateBasicInfo() completion writes, mirror removed.
+//
+// Runtime source of truth for PROVIDER completion is
+// ProviderProfile.completionPercentage, computed via the shared, extracted
+// computeProviderCompletion() calculator (behavior-preserving — same
+// weights/fields as before extraction). The User.profileCompletionPercent
+// mirror write has now been REMOVED: the re-audit (triggered by fixing
+// getPublicProfile()'s `??`-based resolution order below) found no
+// remaining production consumer that still requires it — getPublicProfile
+// was the only one, and it no longer prefers the User value. Phase 3D.1's
+// display-field isolation tests above (lines ~95-160) already cover
+// firstName/lastName/avatarUrl targeting ProviderProfile only, and continue
+// to pass unchanged.
+// ============================================================================
+
+test('updateBasicInfo: real ProviderProfile completion is recalculated via the shared calculator (not a stale/hardcoded value)', async (t) => {
+  const { providerProfileService, providerProfileUpdateSpy } = await loadProviderProfileServiceWithFixture(t);
+
+  await providerProfileService.updateBasicInfo('user-1', {
+    firstName: 'Okasha',
+    lastName: 'Expert',
+    avatarUrl: 'https://new.example/provider-avatar.png',
+    headline: 'Senior Consultant',
+    mainSpecialty: 'دعم فني',
+    bio: 'x'.repeat(60),
+    country: 'SA',
+    city: 'Riyadh'
+  });
+
+  const completionCall = providerProfileUpdateSpy.mock.calls.find((c: any) => 'completionPercentage' in c.arguments[0].data);
   assert.notEqual(completionCall, undefined);
+  assert.equal(typeof completionCall.arguments[0].data.completionPercentage, 'number');
+  assert.equal(completionCall.arguments[0].data.completionPercentage > 0, true);
+});
+
+test('updateBasicInfo: ProviderProfile.completionPercentage (the runtime source of truth) reflects the new score', async (t) => {
+  const { providerProfileService, getProviderProfileState } = await loadProviderProfileServiceWithFixture(t);
+
+  await providerProfileService.updateBasicInfo('user-1', {
+    firstName: 'Okasha',
+    lastName: 'Expert',
+    headline: 'Senior Consultant',
+    mainSpecialty: 'دعم فني'
+  });
+
+  assert.equal(typeof getProviderProfileState().completionPercentage, 'number');
+  assert.equal(getProviderProfileState().completionPercentage > 0, true);
+});
+
+test('updateBasicInfo: does NOT write User.profileCompletionPercent (mirror removed after re-audit confirmed no remaining consumer)', async (t) => {
+  const { providerProfileService, userUpdateSpy } = await loadProviderProfileServiceWithFixture(t);
+
+  await providerProfileService.updateBasicInfo('user-1', {
+    firstName: 'Okasha',
+    lastName: 'Expert',
+    headline: 'Senior Consultant',
+    mainSpecialty: 'دعم فني'
+  });
+
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+test('role isolation: updateBasicInfo (PROVIDER) never touches ClientProfile/AffiliateProfile', async (t) => {
+  const { providerProfileService, clientUpsertSpy, clientUpdateSpy, affiliateUpsertSpy } = await loadProviderProfileServiceWithFixture(t);
+
+  await providerProfileService.updateBasicInfo('user-1', {
+    firstName: 'Okasha',
+    lastName: 'Expert',
+    headline: 'Senior Consultant',
+    mainSpecialty: 'دعم فني'
+  });
+
+  assert.equal(clientUpsertSpy.mock.callCount(), 0);
+  assert.equal(clientUpdateSpy.mock.callCount(), 0);
+  assert.equal(affiliateUpsertSpy.mock.callCount(), 0);
+});
+
+// ============================================================================
+// Phase 3D.2A follow-up — getPublicProfile() completion resolution order.
+//
+// Previously: `profile.user?.profileCompletionPercent || profile.completionPercentage || 0`
+// wrongly preferred the legacy User value AND treated a real 0 as falsy.
+// Now: `profile.completionPercentage ?? profile.user?.profileCompletionPercent ?? 0`
+// — ProviderProfile wins, with nullish (not falsy) checks so a genuine 0 is
+// never masked. These tests exercise getPublicProfile() end-to-end against a
+// minimal mocked prisma client (no completed projects/reviews, so
+// generateAiMetrics() takes its zero-projects short-circuit and never
+// constructs/calls OpenAI).
+// ============================================================================
+
+function createPublicProfileMockPrisma(t: TestContext, opts: { providerCompletion: number | null | undefined; legacyUserCompletion: number }) {
+  const profileFixture: any = {
+    userId: 'user-1',
+    isVerified: false,
+    location: null,
+    city: 'Riyadh',
+    rating: 5.0,
+    headline: 'Senior Consultant',
+    bio: 'bio',
+    yearsOfExperience: 3,
+    completionPercentage: opts.providerCompletion,
+    githubUrl: null,
+    linkedinUrl: null,
+    websiteUrl: null,
+    skills: [],
+    portfolioItems: [],
+    providerSpecialties: [],
+    user: {
+      firstName: 'Okasha',
+      lastName: 'Expert',
+      email: 'provider@example.com',
+      avatarUrl: null,
+      phoneNumber: '0500000000',
+      createdAt: new Date('2024-01-01'),
+      currentLevel: 'مستكشف - المستوى 1',
+      ratingAverage: 0,
+      profileCompletionPercent: opts.legacyUserCompletion
+    }
+  };
+
+  const prismaMock = {
+    providerProfile: { findUnique: async () => ({ ...profileFixture }) },
+    project: { count: async () => 0 },
+    serviceCatalog: { findMany: async () => [] },
+    review: { findMany: async () => [], count: async () => 0 },
+    providerGamification: { findUnique: async () => null }
+  };
+
+  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  t.mock.module('./account-logs.service', { namedExports: { accountAuditLogService: { record: async () => ({}) } } });
+}
+
+async function loadServiceForPublicProfile(t: TestContext, opts: { providerCompletion: number | null | undefined; legacyUserCompletion: number }) {
+  createPublicProfileMockPrisma(t, opts);
+  const moduleUrl = `./provider-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { providerProfileService } = await import(moduleUrl);
+  return providerProfileService;
+}
+
+test('getPublicProfile: ProviderProfile.completionPercentage (65) wins over legacy User.profileCompletionPercent (100)', async (t) => {
+  const providerProfileService = await loadServiceForPublicProfile(t, { providerCompletion: 65, legacyUserCompletion: 100 });
+
+  const result = await providerProfileService.getPublicProfile('user-1');
+
+  assert.equal(result.header.levelInfo.completionPercentage, 65);
+});
+
+test('getPublicProfile: ProviderProfile.completionPercentage = 0 is NOT replaced by legacy User.profileCompletionPercent = 100', async (t) => {
+  const providerProfileService = await loadServiceForPublicProfile(t, { providerCompletion: 0, legacyUserCompletion: 100 });
+
+  const result = await providerProfileService.getPublicProfile('user-1');
+
+  assert.equal(result.header.levelInfo.completionPercentage, 0);
+});
+
+test('getPublicProfile: falls back to legacy User.profileCompletionPercent only when ProviderProfile.completionPercentage is genuinely null/undefined', async (t) => {
+  // ProviderProfile.completionPercentage is `Int @default(0)` (non-nullable)
+  // in the real schema, so this state cannot occur once a row exists — this
+  // test exercises the defensive `??` fallback branch itself, not a reachable
+  // production state.
+  const providerProfileService = await loadServiceForPublicProfile(t, { providerCompletion: undefined, legacyUserCompletion: 100 });
+
+  const result = await providerProfileService.getPublicProfile('user-1');
+
+  assert.equal(result.header.levelInfo.completionPercentage, 100);
+});
+
+test('getPublicProfile: falls back to 0 when both ProviderProfile and legacy User completion are missing', async (t) => {
+  const providerProfileService = await loadServiceForPublicProfile(t, { providerCompletion: undefined, legacyUserCompletion: undefined as any });
+
+  const result = await providerProfileService.getPublicProfile('user-1');
+
+  assert.equal(result.header.levelInfo.completionPercentage, 0);
 });

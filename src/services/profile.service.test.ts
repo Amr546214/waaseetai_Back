@@ -111,6 +111,12 @@ test('getProfile (PROVIDER) with no ProviderProfile row does not crash and falls
 function createDisplayWriteMockPrisma(t: TestContext, userFixture: any) {
   const userUpdateSpy = t.mock.fn((args: any) => ({ ...userFixture, ...args.data }));
   const clientUpsertSpy = t.mock.fn((args: any) => ({ ...args.create, ...args.update }));
+  // Phase 3D.2A: updateProfile()/updateTab() now follow a CLIENT upsert with
+  // a completionPercentage recalculation write — this mock must support that
+  // second call (a plain pass-through no-op) so these pre-existing Phase
+  // 3D.1 display-write tests keep exercising the real CLIENT code path
+  // instead of crashing on an unmocked method.
+  const clientUpdateSpy = t.mock.fn((args: any) => ({ ...args.data }));
   const providerUpsertSpy = t.mock.fn((args: any) => ({ ...args.create, ...args.update }));
   const affiliateUpsertSpy = t.mock.fn((args: any) => ({ ...args.create, ...args.update }));
 
@@ -119,7 +125,7 @@ function createDisplayWriteMockPrisma(t: TestContext, userFixture: any) {
       findUnique: async () => userFixture,
       update: userUpdateSpy
     },
-    clientProfile: { upsert: clientUpsertSpy },
+    clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy },
     providerProfile: { upsert: providerUpsertSpy },
     affiliateProfile: { upsert: affiliateUpsertSpy }
   };
@@ -372,4 +378,112 @@ test('updateTab: `country` is dropped, not written to User (User has no country 
   const data = userUpdateSpy.mock.calls[0].arguments[0].data;
   assert.equal(data.city, 'Jeddah');
   assert.equal('country' in data, false);
+});
+
+// ============================================================================
+// Phase 3D.2A — CLIENT completion writes for updateProfile()/updateTab().
+//
+// A completion-relevant CLIENT mutation must recalculate
+// ClientProfile.completionPercentage from the FINAL post-write state, using
+// the shared historical CLIENT calculator. It must never fire for
+// PROVIDER/AFFILIATE, and must never write User.profileCompletionPercent.
+// ============================================================================
+
+function createCompletionMockPrisma(t: TestContext, userFixture: any) {
+  let clientProfileState: any = { userId: 'user-1', firstName: null, lastName: null, avatarUrl: null, bio: null, companyName: null, idNumber: null, bankName: null, completionPercentage: 0 };
+  let providerProfileState: any = { userId: 'user-1', completionPercentage: 0 };
+  let affiliateProfileState: any = { userId: 'user-1', completionPercentage: 0 };
+
+  const userUpdateSpy = t.mock.fn((args: any) => ({ ...userFixture, ...args.data }));
+  const clientUpsertSpy = t.mock.fn((args: any) => { clientProfileState = { ...clientProfileState, ...args.update }; return { ...clientProfileState }; });
+  const clientUpdateSpy = t.mock.fn((args: any) => { clientProfileState = { ...clientProfileState, ...args.data }; return { ...clientProfileState }; });
+  const providerUpsertSpy = t.mock.fn((args: any) => { providerProfileState = { ...providerProfileState, ...args.update }; return { ...providerProfileState }; });
+  const providerUpdateSpy = t.mock.fn((args: any) => { providerProfileState = { ...providerProfileState, ...args.data }; return { ...providerProfileState }; });
+  const affiliateUpsertSpy = t.mock.fn((args: any) => { affiliateProfileState = { ...affiliateProfileState, ...args.update }; return { ...affiliateProfileState }; });
+
+  const tx = {
+    user: { findUnique: async () => ({ ...userFixture }), update: userUpdateSpy },
+    clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy },
+    providerProfile: { upsert: providerUpsertSpy, update: providerUpdateSpy },
+    affiliateProfile: { upsert: affiliateUpsertSpy }
+  };
+
+  t.mock.module('../config/db', {
+    namedExports: { prisma: { ...tx, $transaction: async (fn: any) => fn(tx) } }
+  });
+
+  return { userUpdateSpy, clientUpsertSpy, clientUpdateSpy, providerUpsertSpy, providerUpdateSpy, affiliateUpsertSpy };
+}
+
+async function loadProfileServiceForCompletion(t: TestContext, userFixture: any) {
+  const spies = createCompletionMockPrisma(t, userFixture);
+  const moduleUrl = `./profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { profileService } = await import(moduleUrl);
+  return { profileService, ...spies };
+}
+
+test('updateProfile (CLIENT): recalculates ClientProfile.completionPercentage from the final state', async (t) => {
+  const { profileService, clientUpdateSpy } = await loadProfileServiceForCompletion(t, { id: 'user-1', status: 'ACTIVE', phoneNumber: '0500000000' });
+
+  await profileService.updateProfile('user-1', 'CLIENT', {
+    firstName: 'Amr',
+    lastName: 'Okasha',
+    bio: 'a bio',
+    companyName: 'Acme'
+  } as any);
+
+  const completionCall = clientUpdateSpy.mock.calls.find((c: any) => 'completionPercentage' in c.arguments[0].data);
+  assert.notEqual(completionCall, undefined);
+  assert.equal(typeof completionCall.arguments[0].data.completionPercentage, 'number');
+  assert.equal(completionCall.arguments[0].data.completionPercentage > 0, true);
+});
+
+test('updateTab (CLIENT, basics): a display-field mutation recalculates ClientProfile.completionPercentage', async (t) => {
+  const { profileService, clientUpdateSpy } = await loadProfileServiceForCompletion(t, { id: 'user-1', status: 'ACTIVE', phoneNumber: '0500000000' });
+
+  await profileService.updateTab('user-1', 'basics', { firstName: 'Amr', lastName: 'Okasha' }, 'CLIENT');
+
+  const completionCall = clientUpdateSpy.mock.calls.find((c: any) => 'completionPercentage' in c.arguments[0].data);
+  assert.notEqual(completionCall, undefined);
+  assert.equal(typeof completionCall.arguments[0].data.completionPercentage, 'number');
+});
+
+test('updateProfile/updateTab (CLIENT): neither writes User.profileCompletionPercent', async (t) => {
+  const { profileService, userUpdateSpy } = await loadProfileServiceForCompletion(t, { id: 'user-1', status: 'ACTIVE', phoneNumber: '0500000000' });
+
+  await profileService.updateProfile('user-1', 'CLIENT', { firstName: 'Amr', lastName: 'Okasha' } as any);
+  await profileService.updateTab('user-1', 'basics', { firstName: 'Amr' }, 'CLIENT');
+
+  for (const call of userUpdateSpy.mock.calls) {
+    assert.equal('profileCompletionPercent' in call.arguments[0].data, false);
+  }
+});
+
+test('updateProfile (PROVIDER/AFFILIATE): completion recalculation never fires for non-CLIENT roles, and CLIENT/other role completion rows stay untouched', async (t) => {
+  const { profileService, clientUpdateSpy, providerUpdateSpy } = await loadProfileServiceForCompletion(t, { id: 'user-1', status: 'ACTIVE' });
+
+  await profileService.updateProfile('user-1', 'PROVIDER', { firstName: 'Okasha', lastName: 'Expert' } as any);
+  await profileService.updateProfile('user-1', 'AFFILIATE', { firstName: 'Aff', lastName: 'Iliate' } as any);
+
+  assert.equal(clientUpdateSpy.mock.callCount(), 0);
+  // PROVIDER completion is out of scope for profile.service.ts in 3D.2A —
+  // its .update() spy (completionPercentage write) must never fire from here.
+  assert.equal(providerUpdateSpy.mock.callCount(), 0);
+});
+
+// ============================================================================
+// Phase 3D.2A — role isolation regression: a CLIENT-active completion write
+// must never touch Provider/Affiliate completion rows, and vice versa.
+// ============================================================================
+
+test('role isolation: CLIENT completion write never changes Provider/Affiliate completion rows', async (t) => {
+  const { profileService, clientUpdateSpy, providerUpsertSpy, providerUpdateSpy, affiliateUpsertSpy } =
+    await loadProfileServiceForCompletion(t, { id: 'user-1', status: 'ACTIVE', phoneNumber: '0500000000' });
+
+  await profileService.updateProfile('user-1', 'CLIENT', { firstName: 'Amr', lastName: 'Okasha' } as any);
+
+  assert.equal(clientUpdateSpy.mock.callCount() > 0, true);
+  assert.equal(providerUpsertSpy.mock.callCount(), 0);
+  assert.equal(providerUpdateSpy.mock.callCount(), 0);
+  assert.equal(affiliateUpsertSpy.mock.callCount(), 0);
 });

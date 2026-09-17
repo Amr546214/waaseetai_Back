@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
+import { computeClientCompletion } from '../utils/completion-calculators';
 
 export class ClientProfileController {
   
@@ -74,16 +75,29 @@ export class ClientProfileController {
         isProfileComplete: true
       };
 
-      const result = await prisma.clientProfile.upsert({
+      // Phase 3D.2A: recalculate ClientProfile.completionPercentage from the
+      // FINAL state (this upsert's own return value, plus the current User
+      // row) after this mutation — the historical CLIENT formula, unchanged.
+      // isProfileComplete (set above, in clientData) is a separate existing
+      // boolean, left exactly as it was. Never writes User.profileCompletionPercent.
+      const [result, currentUser] = await prisma.$transaction([
+        prisma.clientProfile.upsert({
+          where: { userId },
+          create: clientData,
+          update: clientData
+        }),
+        prisma.user.findUnique({ where: { id: userId } })
+      ]);
+      const completion = computeClientCompletion({ user: currentUser || {}, clientProfile: result });
+      const finalResult = await prisma.clientProfile.update({
         where: { userId },
-        create: clientData,
-        update: clientData
+        data: { completionPercentage: completion }
       });
 
       res.status(200).json({
         success: true,
         message: 'تم حفظ البيانات بنجاح',
-        data: result
+        data: finalResult
       });
     } catch (error) {
       next(error);

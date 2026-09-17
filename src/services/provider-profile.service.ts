@@ -7,6 +7,7 @@ import { notificationService } from './notification.service';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
 import { LEVEL_MATRIX } from './gamification.service';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
+import { computeProviderCompletion } from '../utils/completion-calculators';
 
 const aiCache = new Map<string, { metrics: any, expiresAt: number }>();
 
@@ -356,7 +357,15 @@ export class ProviderProfileService {
 				levelInfo: {
 					levelName: levelName,
 					points,
-					completionPercentage: profile.user?.profileCompletionPercent || profile.completionPercentage || 0,
+					// Phase 3D.2A follow-up: ProviderProfile.completionPercentage is the
+					// Phase 3 source of truth — it must win even when it is genuinely 0,
+					// which `||` would have wrongly treated as "unset" and replaced with
+					// the legacy User value. `??` only falls back on null/undefined, so a
+					// real 0% completion is never masked by a stale/higher legacy number.
+					// ProviderProfile.completionPercentage is `Int @default(0)` (never
+					// null once the row exists, and getPublicProfile already throws above
+					// if there's no row), so the legacy fallback here is defensive only.
+					completionPercentage: profile.completionPercentage ?? profile.user?.profileCompletionPercent ?? 0,
 					missingHint: 'استكمل بيانات ملفك الشخصي لرفع مستوى مصداقيتك'
 				}
 			},
@@ -459,10 +468,13 @@ export class ProviderProfileService {
 
 		const result = await this.getProfile(userId);
 		const completion = this.calculateProfileCompletion(result);
-		await prisma.$transaction([
-			prisma.providerProfile.update({ where: { userId }, data: { completionPercentage: completion } }),
-			prisma.user.update({ where: { id: userId }, data: { profileCompletionPercent: completion } })
-		]);
+		// Phase 3D.2A follow-up: the legacy User.profileCompletionPercent mirror
+		// write is removed. The re-audit found its only real reader was
+		// getPublicProfile()'s levelInfo.completionPercentage fallback, which now
+		// reads ProviderProfile.completionPercentage first (see the `??` fix
+		// above) — so nothing left in src/ depends on this mirror being kept in
+		// sync. ProviderProfile.completionPercentage is now the sole write target.
+		await prisma.providerProfile.update({ where: { userId }, data: { completionPercentage: completion } });
 		result.completionPercentage = completion;
 		await this.logAppliedChange(userId, 'PROFILE', 'الملف المهني', before, data);
 		await accountAuditLogService.record({ userId, eventType: 'PROFILE_UPDATED', category: 'PROFILE_COMPLETION', title: 'تحديث الملف المهني', summary: 'تم حفظ تعديلات الملف المهني مباشرة', source: 'USER', status: 'COMPLETED', before, after: data, context: auditContext });
@@ -470,28 +482,13 @@ export class ProviderProfileService {
 	}
 
 	private calculateProfileCompletion(profile: any) {
-		let score = 0;
-		// Phase 3D.1: prefer this ProviderProfile row's OWN firstName/lastName/
-		// avatarUrl (Phase 3A columns) now that updateBasicInfo writes them
-		// here instead of onto the legacy User row — falling back to the
-		// legacy User value only for a provider who hasn't set these on their
-		// own profile yet, so no one's existing score drops as a result of
-		// this change. Not a formula/weights redesign — same fields, same
-		// points, only the two factors' data SOURCE changed to match the new
-		// write target.
-		const avatarUrl = profile.avatarUrl || profile.user?.avatarUrl;
-		const firstName = profile.firstName || profile.user?.firstName;
-		const lastName = profile.lastName || profile.user?.lastName;
-		if (avatarUrl) score += 10;
-		if (firstName && lastName && profile.headline && profile.mainSpecialty) score += 15;
-		if (profile.bio?.length >= 50) score += 15;
-		if (profile.skills?.length) score += 10;
-		if (profile.portfolioItems?.length || profile.websiteUrl) score += 10;
-		if (profile.user?.email && profile.user?.phoneNumber) score += 10;
-		if (profile.country && profile.city) score += 10;
-		if (profile.user?.ibanNumber) score += 10;
-		if (profile.user?.idDocumentUrl) score += 10;
-		return Math.min(100, score);
+		// Phase 3D.2A: delegates to the shared pure calculator (src/utils/
+		// completion-calculators.ts) so provider-profile.controller.ts's
+		// saveSetupData can reuse the exact same formula without duplicating
+		// it. Behavior-preserving extraction only — same fields, same
+		// weights, same Phase 3D.1 ProviderProfile-first/User-fallback
+		// sourcing for firstName/lastName/avatarUrl.
+		return computeProviderCompletion({ providerProfile: profile, user: profile.user || {} });
 	}
 
 	async getChangeRequests(userId: string, tabName: string) {

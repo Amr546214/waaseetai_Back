@@ -3,6 +3,7 @@ import { providerProfileService } from '../services/provider-profile.service';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { sessionService } from '../services/session.service';
+import { computeProviderCompletion } from '../utils/completion-calculators';
 
 const auditContext = (req: Request) => ({ sessionId: req.user?.sessionId, ipAddress: req.ip, device: req.get('user-agent')?.slice(0, 120) });
 
@@ -155,16 +156,30 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			}
 		}
 
-		// Activate the user
-		await prisma.user.update({
-			where: { id: userId },
-			data: { status: 'ACTIVE', profileCompletionPercent: 100 }
+		// Phase 3D.2A: recalculate ProviderProfile.completionPercentage from the
+		// FINAL state — after the upsert above AND any portfolio items just
+		// created, since portfolioItems.length is a scored factor. Re-fetches
+		// with the relations the formula needs (skills/portfolioItems) rather
+		// than trusting `result`, which has neither (no `include` was used on
+		// the upsert above). No more User.profileCompletionPercent=100
+		// hardcode; `status: 'ACTIVE'` (identity/activation behavior) is
+		// preserved unchanged.
+		const finalProfile = await prisma.providerProfile.findUnique({
+			where: { userId },
+			include: { skills: true, portfolioItems: true }
 		});
+		const currentUser = await prisma.user.findUnique({ where: { id: userId } });
+		const completion = computeProviderCompletion({ providerProfile: finalProfile || result, user: currentUser || {} });
+
+		const [updatedResult] = await prisma.$transaction([
+			prisma.providerProfile.update({ where: { userId }, data: { completionPercentage: completion } }),
+			prisma.user.update({ where: { id: userId }, data: { status: 'ACTIVE' } })
+		]);
 
 		res.status(200).json({
 			success: true,
 			message: 'تم حفظ البيانات بنجاح',
-			data: result
+			data: updatedResult
 		});
 	} catch (error) {
 		console.error('Error saving provider setup data:', error);

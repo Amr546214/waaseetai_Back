@@ -1,0 +1,116 @@
+import { test, TestContext } from 'node:test';
+import assert from 'node:assert/strict';
+
+// Phase 3D.2A: client-profile.controller.ts#saveSetupData() must recalculate
+// ClientProfile.completionPercentage from the FINAL post-write state after
+// its upsert, using the shared CLIENT calculator, and must never write
+// User.profileCompletionPercent. isProfileComplete (a separate pre-existing
+// boolean) must remain exactly as it was.
+
+function createMockRes() {
+  const res: any = { statusCode: null, body: null };
+  res.status = (code: number) => { res.statusCode = code; return res; };
+  res.json = (body: any) => { res.body = body; return res; };
+  return res;
+}
+
+function createSetupDataMockPrisma(t: TestContext) {
+  let clientProfileState: any = {
+    userId: 'user-1',
+    firstName: null,
+    lastName: null,
+    avatarUrl: null,
+    bio: null,
+    companyName: null,
+    idNumber: null,
+    bankName: null,
+    isProfileComplete: false,
+    completionPercentage: 0
+  };
+  const userFixture = {
+    id: 'user-1',
+    firstName: 'Amr',
+    lastName: 'Okasha',
+    phoneNumber: '0500000000',
+    avatarUrl: 'https://example.com/a.png',
+    idNumber: null,
+    ibanNumber: null,
+    bankName: null,
+    accountHolderName: null
+  };
+
+  const clientUpdateSpy = t.mock.fn((args: any) => {
+    clientProfileState = { ...clientProfileState, ...args.data };
+    return { ...clientProfileState };
+  });
+
+  const prismaMock = {
+    clientProfile: {
+      upsert: t.mock.fn((args: any) => {
+        clientProfileState = { ...clientProfileState, ...args.update };
+        return { ...clientProfileState };
+      }),
+      update: clientUpdateSpy
+    },
+    user: {
+      findUnique: async () => ({ ...userFixture })
+    },
+    $transaction: async (ops: any) => Promise.all(ops)
+  };
+
+  return { prismaMock, clientUpdateSpy, getClientProfileState: () => clientProfileState };
+}
+
+async function loadControllerWithFixture(t: TestContext) {
+  const mocks = createSetupDataMockPrisma(t);
+  t.mock.module('../config/db', { namedExports: { prisma: mocks.prismaMock } });
+  const moduleUrl = `./client-profile.controller.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { clientProfileController } = await import(moduleUrl);
+  return { clientProfileController, ...mocks };
+}
+
+test('client saveSetupData: recalculates ClientProfile.completionPercentage after the mutation, from the final state', async (t) => {
+  const { clientProfileController, clientUpdateSpy } = await loadControllerWithFixture(t);
+
+  const req: any = {
+    user: { userId: 'user-1' },
+    body: {
+      details: { idNumber: '1234567890', dob: null, country: 'SA', city: 'Riyadh', occupation: 'Tech', address: '123 St' },
+      identity: {},
+      bank: { paymentType: 'BANK', bankName: 'Al Rajhi', accountHolder: 'Amr Okasha', iban: 'SA00000000000000000000AA' },
+      documents: {},
+      agreements: { accurate: true, terms: true, privacy: true }
+    }
+  };
+  const res = createMockRes();
+
+  await clientProfileController.saveSetupData(req, res, () => {});
+
+  assert.equal(res.statusCode, 200);
+  const completionCall = clientUpdateSpy.mock.calls.find((c: any) => 'completionPercentage' in c.arguments[0].data);
+  assert.notEqual(completionCall, undefined);
+  assert.equal(typeof completionCall.arguments[0].data.completionPercentage, 'number');
+  assert.equal(completionCall.arguments[0].data.completionPercentage > 0, true);
+});
+
+test('client saveSetupData: isProfileComplete is preserved and completion write never touches User', async (t) => {
+  const { clientProfileController, prismaMock } = await loadControllerWithFixture(t);
+  const userUpdateSpy = (prismaMock.user as any).update;
+  assert.equal(userUpdateSpy, undefined); // prismaMock.user has no update method at all — proves saveSetupData cannot call it
+
+  const req: any = {
+    user: { userId: 'user-1' },
+    body: {
+      details: { idNumber: '1234567890' },
+      identity: {},
+      bank: {},
+      documents: {},
+      agreements: {}
+    }
+  };
+  const res = createMockRes();
+
+  await clientProfileController.saveSetupData(req, res, () => {});
+
+  assert.equal(res.body.data.isProfileComplete, true);
+});

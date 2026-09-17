@@ -4,6 +4,7 @@ import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { UpdateProfileDto } from '../dtos/profile.dto';
 import { AppError } from '../utils/app-error';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
+import { computeClientCompletion } from '../utils/completion-calculators';
 
 export class ProfileService {
   /**
@@ -144,6 +145,20 @@ export class ProfileService {
             create: { userId, ...clientData },
             update: clientData
           });
+
+          // Phase 3D.2A: recalculate ClientProfile.completionPercentage from
+          // the FINAL post-write state (the upsert's own return value already
+          // reflects every field just written, plus whatever already existed
+          // on the row) — never from the partial `clientData` being sent in
+          // this request, which would wrongly score already-set fields this
+          // request didn't touch as "missing". Scoped to CLIENT only — never
+          // written for PROVIDER/AFFILIATE updates, and never mirrored to
+          // User.profileCompletionPercent.
+          const clientCompletion = computeClientCompletion({ user: updatedUser || {}, clientProfile: profileResult });
+          profileResult = await tx.clientProfile.update({
+            where: { userId },
+            data: { completionPercentage: clientCompletion }
+          });
         } else if (activeRole === UserRole.AFFILIATE) {
           // AffiliateProfile only has `bio` in common with the fields this
           // endpoint's DTO can carry — strip the rest (company/provider-only
@@ -246,7 +261,20 @@ export class ProfileService {
         if (Object.keys(safeUserData).length > 0) {
           await tx.user.update({ where: { id: userId }, data: safeUserData });
         }
-        await this.upsertActiveRoleDisplayFields(tx, userId, activeRole, displayFields);
+        const displayResult = await this.upsertActiveRoleDisplayFields(tx, userId, activeRole, displayFields);
+
+        // Phase 3D.2A: firstName/lastName/avatarUrl are the ONLY fields this
+        // tab can write that the CLIENT completion formula reads (the
+        // allowlisted identity fields above — alternativePhone/address/
+        // region/city — aren't formula inputs), so only recalculate when a
+        // display field actually changed for a CLIENT-active caller,
+        // computed from the FINAL post-write state. Never for PROVIDER/
+        // AFFILIATE, never mirrored to User.
+        if (activeRole === UserRole.CLIENT && displayResult) {
+          const finalUser = await tx.user.findUnique({ where: { id: userId } });
+          const clientCompletion = computeClientCompletion({ user: finalUser || {}, clientProfile: displayResult as any });
+          await tx.clientProfile.update({ where: { userId }, data: { completionPercentage: clientCompletion } });
+        }
       });
 
       // If sensitive data changed, trigger OTP/Moderation flow
