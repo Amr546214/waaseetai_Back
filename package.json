@@ -9,6 +9,8 @@
 		"prestart": "npx prisma generate && npx prisma migrate deploy",
 		"start": "nodemon src/app.ts",
 		"build": "tsc",
+		"typecheck:tests": "tsc -p tsconfig.test.json --noEmit",
+		"test:ai-engine:authorization": "tsx --require ./tests/ai-engine/test-bootstrap.cjs --test --test-concurrency=1 tests/ai-engine/authorization.test.ts",
 		"start:prod": "node dist/app.js",
 		"db:migrate": "npx prisma migrate dev",
 		"prisma:migrate:deploy": "npx prisma migrate deploy",
