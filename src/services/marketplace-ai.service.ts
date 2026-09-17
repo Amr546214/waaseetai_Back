@@ -1,5 +1,8 @@
 import OpenAI from 'openai';
 import { prisma } from '../config/db';
+import { resolveProviderDisplayIdentity } from '../utils/provider-display';
+import { resolveProviderProgression } from '../utils/role-display-resolver';
+import { LEVEL_MATRIX } from '../utils/progression-calculators';
 
 export interface AiRecommendationResult {
 	recommendations: any[];
@@ -37,7 +40,16 @@ export class MarketplaceAiService {
 			where,
 			include: {
 				provider: {
-					select: { id: true, firstName: true, lastName: true, avatarUrl: true, email: true, currentLevel: true, providerProfile: { select: { isVerified: true } } }
+					// Phase 3E.1: ProviderProfile display columns + persisted
+					// ProviderGamification.currentLevelIndex are the canonical
+					// sources (see formatModelForClient below) — currentLevel is
+					// kept only as resolveProviderProgression's own explicit
+					// fallback for a provider with no ProviderGamification row.
+					select: {
+						id: true, firstName: true, lastName: true, avatarUrl: true, email: true, currentLevel: true,
+						providerProfile: { select: { firstName: true, lastName: true, avatarUrl: true, isVerified: true } },
+						gamification: { select: { points: true, currentLevelIndex: true } }
+					}
 				},
 				specialty: { include: { category: true } },
 				stages: true,
@@ -167,10 +179,23 @@ Return ONLY valid JSON without markdown formatting or code fences.
 	 * Helper to format Prisma ServiceCatalog model into rich client-facing object
 	 */
 	private formatModelForClient(m: any, matchScore: number, recommendationReason: string) {
-		const providerName = (m.provider?.firstName || m.provider?.lastName)
-			? `${m.provider.firstName || ''} ${m.provider.lastName || ''}`.trim()
-			: (m.provider?.email ? m.provider.email.split('@')[0] : 'مزود معتمد');
-		const avatarInitials = providerName.substring(0, 2);
+		// Phase 3E.1: display formatting only — the AI ranking prompt
+		// (modelsSummary, above) never receives provider name/level at all,
+		// so none of this participates in recommendation selection/scoring.
+		const identity = resolveProviderDisplayIdentity({
+			providerProfile: m.provider?.providerProfile || {},
+			user: m.provider || {}
+		});
+		const providerName = identity.fullName || (m.provider?.email ? m.provider.email.split('@')[0] : 'مزود معتمد');
+		const providerLevel = resolveProviderProgression(m.provider?.gamification, {
+			firstName: '',
+			lastName: '',
+			avatarUrl: null,
+			profileCompletionPercent: 0,
+			currentLevel: m.provider?.currentLevel || LEVEL_MATRIX[0].title,
+			currentPoints: 0,
+			pointsToNextLevel: 0
+		}).currentLevel;
 
 		let coverImage: string | null = (m as any).coverImage || null;
 		if (!coverImage && m.portfolioItem?.coverImage) {
@@ -199,15 +224,15 @@ Return ONLY valid JSON without markdown formatting or code fences.
 			reviewsCount,
 			isVerified: Boolean(m.provider?.providerProfile?.isVerified),
 			isFeatured: matchScore >= 92,
-			level: m.provider?.currentLevel || '',
+			level: providerLevel || '',
 			levelBg: matchScore >= 94 ? 'rgba(123,47,190,.7)' : 'rgba(43,212,199,.6)',
 			levelColor: matchScore >= 94 ? '#C084FC' : '#2BD4C7',
 			coverImage: coverImage,
 			provider: {
 				id: m.provider?.id || 'prov-id',
 				name: providerName,
-				avatar: m.provider?.avatarUrl,
-				initials: avatarInitials
+				avatar: identity.avatarUrl,
+				initials: providerName.substring(0, 2)
 			},
 			stages: m.stages || [],
 			aiRecommendationReason: recommendationReason,

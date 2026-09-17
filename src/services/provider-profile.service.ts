@@ -11,6 +11,7 @@ import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { computeProviderCompletion } from '../utils/completion-calculators';
 import { logger } from '../config/logger';
 import { initializeRoleState } from './account-management.service';
+import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 
 const aiCache = new Map<string, { metrics: any, expiresAt: number }>();
 
@@ -345,10 +346,19 @@ export class ProviderProfileService {
 		const averageTestScore = testsCount > 0 ? Math.round(totalScore / testsCount) : 0;
 		const codeMatchingIndex = codeSamplesCount > 0 ? Number((totalCodeScore / codeSamplesCount).toFixed(1)) : 0;
 
+		// Phase 3E.1: public Provider identity must come from ProviderProfile's
+		// own Phase 3A/3D.1 display columns first — this endpoint had been
+		// silently reading the shared legacy User columns instead ever since
+		// those columns were introduced, so a provider who set a
+		// Provider-specific name/avatar via updateBasicInfo never saw it
+		// reflected on their own public profile page. User is now only a
+		// fallback for a null/empty ProviderProfile value, never the default.
+		const displayIdentity = resolveProviderDisplayIdentity({ providerProfile: profile, user: profile.user || {} });
+
 		return {
 			header: {
-				fullName: `${profile.user?.firstName || ''} ${profile.user?.lastName || ''}`.trim() || 'مزود خدمة',
-				avatarUrl: profile.user?.avatarUrl || null,
+				fullName: displayIdentity.fullName || 'مزود خدمة',
+				avatarUrl: displayIdentity.avatarUrl,
 				memberSince,
 				isVerified: profile.isVerified || false,
 				location: profile.location || profile.city || 'غير محدد',
@@ -376,7 +386,7 @@ export class ProviderProfileService {
 				}
 			},
 			basicInfo: {
-				fullName: `${profile.user?.firstName || ''} ${profile.user?.lastName || ''}`.trim() || 'مزود خدمة',
+				fullName: displayIdentity.fullName || 'مزود خدمة',
 				headline: profile.headline || '',
 				yearsOfExperience: profile.yearsOfExperience ? `${profile.yearsOfExperience} سنوات` : '',
 				satisfactionRate: `${clientRating}%`,

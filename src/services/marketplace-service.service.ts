@@ -1,8 +1,74 @@
 import { prisma } from '../config/db';
 import { marketplaceAiService } from './marketplace-ai.service';
 import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
+import { resolveProviderDisplayIdentity } from '../utils/provider-display';
+import { resolveProviderProgression } from '../utils/role-display-resolver';
+import { LEVEL_MATRIX } from '../utils/progression-calculators';
+
+// Phase 3E.1: the exact Prisma select shape shared by getMarketplaceModels
+// and getMarketplaceModelById for a service's provider — includes
+// ProviderProfile's own display columns (Phase 3A/3D.1 source of truth) and
+// ProviderGamification's persisted currentLevelIndex (Phase 3D.3A source of
+// truth), alongside the legacy User columns kept only as an explicit
+// fallback. This is a single JOIN nested in the same serviceCatalog query
+// both callers already run — no extra query per row.
+const marketplaceProviderSelect = {
+	id: true,
+	firstName: true,
+	lastName: true,
+	avatarUrl: true,
+	email: true,
+	currentLevel: true,
+	providerProfile: { select: { firstName: true, lastName: true, avatarUrl: true, isVerified: true } },
+	gamification: { select: { points: true, currentLevelIndex: true } }
+} as const;
+
+type MarketplaceProviderRow = {
+	id: string;
+	firstName: string | null;
+	lastName: string | null;
+	avatarUrl: string | null;
+	email: string | null;
+	currentLevel: string | null;
+	providerProfile: { firstName: string | null; lastName: string | null; avatarUrl: string | null; isVerified: boolean } | null;
+	gamification: { points: number; currentLevelIndex: number } | null;
+};
 
 export class MarketplaceService {
+	/**
+	 * Phase 3E.1: resolves a marketplace/detail card's provider name/avatar/
+	 * level from the canonical Provider-specific sources — ProviderProfile
+	 * display columns (User fallback only if null/empty) and
+	 * ProviderGamification.currentLevelIndex via the same resolveProviderProgression
+	 * helper the rest of the app already uses (Phase 3C/3D.3A) — never a new
+	 * formula. `User.currentLevel` is used ONLY as the explicit compatibility
+	 * fallback resolveProviderProgression itself falls back to when a
+	 * provider genuinely has no ProviderGamification row at all.
+	 */
+	private resolveProviderCardFields(provider: MarketplaceProviderRow) {
+		const identity = resolveProviderDisplayIdentity({
+			providerProfile: provider.providerProfile || {},
+			user: provider
+		});
+		const providerName = identity.fullName || (provider.email ? provider.email.split('@')[0] : 'مزود معتمد');
+		const level = resolveProviderProgression(provider.gamification, {
+			firstName: '',
+			lastName: '',
+			avatarUrl: null,
+			profileCompletionPercent: 0,
+			currentLevel: provider.currentLevel || LEVEL_MATRIX[0].title,
+			currentPoints: 0,
+			pointsToNextLevel: 0
+		}).currentLevel;
+
+		return {
+			name: providerName,
+			avatar: identity.avatarUrl,
+			initials: providerName.substring(0, 2),
+			level
+		};
+	}
+
 	/**
 	 * Fetches the provider's active skills and portfolio items to populate the creation wizard.
 	 */
@@ -490,12 +556,31 @@ export class MarketplaceService {
 			whereClause.reviews = { some: { rating: { gte: parsedMinRating } } };
 		}
 
+		// Phase 3E.1 Part 4: `level` values are the SAME canonical LEVEL_MATRIX
+		// titles resolveProviderCardFields() now returns in every listing/detail
+		// response (see below) — never the legacy, never-written User.currentLevel.
+		// Requested titles are mapped back to their LEVEL_MATRIX indices and
+		// filtered against the persisted ProviderGamification.currentLevelIndex
+		// (reliable since Phase 3D.3A/3D.4), entirely inside this single
+		// whereClause — both findMany and count() below use the identical
+		// whereClause, so pagination/total stay correct with no in-memory
+		// post-filtering. A provider with genuinely no ProviderGamification row
+		// displays as LEVEL_MATRIX[0] ("زائر") via resolveProviderProgression's
+		// own fallback (see resolveProviderCardFields) — so if the lowest level
+		// is among the requested titles, providers with no gamification row
+		// are included too, to stay consistent with what the display shows.
 		if (typeof level === 'string' && level.trim()) {
-			const levels = level.split(',').map((item: string) => item.trim()).filter(Boolean);
-			if (levels.length) {
-				whereClause.provider = {
-					currentLevel: { in: levels }
-				};
+			const requestedTitles = level.split(',').map((item: string) => item.trim()).filter(Boolean);
+			if (requestedTitles.length) {
+				// An unrecognized title (matchedIndices stays empty) correctly
+				// matches zero providers via `in: []`, same fail-closed behavior
+				// the old `currentLevel: { in: levels }` had for any value no
+				// provider actually held.
+				const matchedIndices = LEVEL_MATRIX.filter(l => requestedTitles.includes(l.title)).map(l => l.index);
+				const baseLevelIndex = LEVEL_MATRIX[0].index;
+				whereClause.provider = matchedIndices.includes(baseLevelIndex)
+					? { OR: [{ gamification: { currentLevelIndex: { in: matchedIndices } } }, { gamification: null }] }
+					: { gamification: { currentLevelIndex: { in: matchedIndices } } };
 			}
 		}
 
@@ -529,7 +614,7 @@ export class MarketplaceService {
 				where: whereClause,
 				include: {
 					provider: {
-						select: { id: true, firstName: true, lastName: true, avatarUrl: true, email: true, currentLevel: true, providerProfile: { select: { isVerified: true } } }
+						select: marketplaceProviderSelect
 					},
 					specialty: {
 						include: { category: true }
@@ -547,10 +632,7 @@ export class MarketplaceService {
 		]);
 
 		const formattedModels = dbModels.map((s: any) => {
-			const providerName = (s.provider.firstName || s.provider.lastName)
-				? `${s.provider.firstName || ''} ${s.provider.lastName || ''}`.trim()
-				: (s.provider.email ? s.provider.email.split('@')[0] : 'مزود معتمد');
-			const avatarInitials = providerName.substring(0, 2);
+			const providerCard = this.resolveProviderCardFields(s.provider);
 
 			const categoryTitle = s.specialty?.category?.nameAr || 'غير محدد';
 			const categorySlug = s.specialty?.category?.slug || 'unknown';
@@ -601,14 +683,14 @@ export class MarketplaceService {
 				isFeatured: s.isFeatured && Boolean(s.discountPercentage) && Boolean(s.offerEndsAt && s.offerEndsAt > new Date()),
 				discountPercentage: s.discountPercentage,
 				offerEndsAt: s.offerEndsAt,
-				level: s.provider.currentLevel || '',
+				level: providerCard.level || '',
 				levelBg: 'rgba(43,212,199,.6)',
 				levelColor: '#2BD4C7',
 				provider: {
 					id: s.provider.id,
-					name: providerName,
-					avatar: s.provider.avatarUrl,
-					initials: avatarInitials
+					name: providerCard.name,
+					avatar: providerCard.avatar,
+					initials: providerCard.initials
 				},
 				stages: s.stages || [],
 				tags: parsedTags,
@@ -632,7 +714,7 @@ export class MarketplaceService {
 			where: { id },
 			include: {
 				provider: {
-					select: { id: true, firstName: true, lastName: true, avatarUrl: true, email: true, currentLevel: true, providerProfile: { select: { isVerified: true } } }
+					select: marketplaceProviderSelect
 				},
 				specialty: { include: { category: true } },
 				stages: true,
@@ -650,10 +732,7 @@ export class MarketplaceService {
 			throw new Error('الخدمة غير متوفرة أو غير منشورة');
 		}
 
-		const providerName = (s.provider.firstName || s.provider.lastName)
-			? `${s.provider.firstName || ''} ${s.provider.lastName || ''}`.trim()
-			: (s.provider.email ? s.provider.email.split('@')[0] : 'مزود معتمد');
-		const avatarInitials = providerName.substring(0, 2);
+		const providerCard = this.resolveProviderCardFields(s.provider);
 
 		let parsedTags: string[] = [s.specialty?.nameAr, s.subSpecialty].filter((tag): tag is string => Boolean(tag));
 		const rawTags = (s as any).tags;
@@ -701,14 +780,14 @@ export class MarketplaceService {
 			isFeatured: s.isFeatured && Boolean(s.discountPercentage) && Boolean(s.offerEndsAt && s.offerEndsAt > new Date()),
 			discountPercentage: s.discountPercentage,
 			offerEndsAt: s.offerEndsAt,
-			level: s.provider.currentLevel || '',
+			level: providerCard.level || '',
 			levelBg: 'rgba(43,212,199,.6)',
 			levelColor: '#2BD4C7',
 			provider: {
 				id: s.provider.id,
-				name: providerName,
-				avatar: s.provider.avatarUrl,
-				initials: avatarInitials
+				name: providerCard.name,
+				avatar: providerCard.avatar,
+				initials: providerCard.initials
 			},
 			stages: s.stages || [],
 			tags: parsedTags,

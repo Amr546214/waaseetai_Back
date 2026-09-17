@@ -254,7 +254,16 @@ test('role isolation: updateBasicInfo (PROVIDER) never touches ClientProfile/Aff
 // constructs/calls OpenAI).
 // ============================================================================
 
-function createPublicProfileMockPrisma(t: TestContext, opts: { providerCompletion: number | null | undefined; legacyUserCompletion: number }) {
+function createPublicProfileMockPrisma(t: TestContext, opts: {
+  providerCompletion: number | null | undefined;
+  legacyUserCompletion: number;
+  providerFirstName?: string | null;
+  providerLastName?: string | null;
+  providerAvatarUrl?: string | null;
+  userFirstName?: string | null;
+  userLastName?: string | null;
+  userAvatarUrl?: string | null;
+}) {
   const profileFixture: any = {
     userId: 'user-1',
     isVerified: false,
@@ -265,6 +274,9 @@ function createPublicProfileMockPrisma(t: TestContext, opts: { providerCompletio
     bio: 'bio',
     yearsOfExperience: 3,
     completionPercentage: opts.providerCompletion,
+    firstName: opts.providerFirstName ?? null,
+    lastName: opts.providerLastName ?? null,
+    avatarUrl: opts.providerAvatarUrl ?? null,
     githubUrl: null,
     linkedinUrl: null,
     websiteUrl: null,
@@ -272,10 +284,10 @@ function createPublicProfileMockPrisma(t: TestContext, opts: { providerCompletio
     portfolioItems: [],
     providerSpecialties: [],
     user: {
-      firstName: 'Okasha',
-      lastName: 'Expert',
+      firstName: opts.userFirstName ?? 'Okasha',
+      lastName: opts.userLastName ?? 'Expert',
       email: 'provider@example.com',
-      avatarUrl: null,
+      avatarUrl: opts.userAvatarUrl ?? null,
       phoneNumber: '0500000000',
       createdAt: new Date('2024-01-01'),
       currentLevel: 'مستكشف - المستوى 1',
@@ -284,23 +296,39 @@ function createPublicProfileMockPrisma(t: TestContext, opts: { providerCompletio
     }
   };
 
+  const clientProfileSpy = t.mock.fn();
+  const affiliateProfileSpy = t.mock.fn();
+
   const prismaMock = {
     providerProfile: { findUnique: async () => ({ ...profileFixture }) },
     project: { count: async () => 0 },
     serviceCatalog: { findMany: async () => [] },
     review: { findMany: async () => [], count: async () => 0 },
-    providerGamification: { findUnique: async () => null }
+    providerGamification: { findUnique: async () => null },
+    // Never touched by getPublicProfile — present only so cross-role
+    // isolation tests can assert callCount() === 0.
+    clientProfile: { findUnique: clientProfileSpy, update: clientProfileSpy },
+    affiliateProfile: { findUnique: affiliateProfileSpy, update: affiliateProfileSpy }
   };
 
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   t.mock.module('./account-logs.service', { namedExports: { accountAuditLogService: { record: async () => ({}) } } });
+
+  return { clientProfileSpy, affiliateProfileSpy };
 }
 
-async function loadServiceForPublicProfile(t: TestContext, opts: { providerCompletion: number | null | undefined; legacyUserCompletion: number }) {
+async function loadServiceForPublicProfile(t: TestContext, opts: Parameters<typeof createPublicProfileMockPrisma>[1]) {
   createPublicProfileMockPrisma(t, opts);
   const moduleUrl = `./provider-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { providerProfileService } = await import(moduleUrl);
   return providerProfileService;
+}
+
+async function loadServiceForPublicProfileWithSpies(t: TestContext, opts: Parameters<typeof createPublicProfileMockPrisma>[1]) {
+  const spies = createPublicProfileMockPrisma(t, opts);
+  const moduleUrl = `./provider-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { providerProfileService } = await import(moduleUrl);
+  return { providerProfileService, ...spies };
 }
 
 test('getPublicProfile: ProviderProfile.completionPercentage (65) wins over legacy User.profileCompletionPercent (100)', async (t) => {
@@ -337,6 +365,86 @@ test('getPublicProfile: falls back to 0 when both ProviderProfile and legacy Use
   const result = await providerProfileService.getPublicProfile('user-1');
 
   assert.equal(result.header.levelInfo.completionPercentage, 0);
+});
+
+// ============================================================================
+// Phase 3E.1 — getPublicProfile() Provider display identity fix.
+//
+// header.fullName/avatarUrl and basicInfo.fullName previously read the raw,
+// shared User.firstName/lastName/avatarUrl even when ProviderProfile had its
+// own independent Phase 3A/3D.1 display columns — meaning a provider who set
+// a Provider-specific name/avatar via updateBasicInfo never saw it reflected
+// on their own public profile page. Now ProviderProfile wins, User is only a
+// fallback for a null/empty value.
+// ============================================================================
+
+test('getPublicProfile: ProviderProfile display identity wins over legacy User identity', async (t) => {
+  const providerProfileService = await loadServiceForPublicProfile(t, {
+    providerCompletion: 65,
+    legacyUserCompletion: 100,
+    providerFirstName: 'Provider',
+    providerLastName: 'Persona',
+    providerAvatarUrl: 'https://provider.example/avatar.png',
+    userFirstName: 'Legacy',
+    userLastName: 'Name',
+    userAvatarUrl: 'https://legacy.example/avatar.png'
+  });
+
+  const result = await providerProfileService.getPublicProfile('user-1');
+
+  assert.equal(result.header.fullName, 'Provider Persona');
+  assert.equal(result.header.avatarUrl, 'https://provider.example/avatar.png');
+  assert.equal(result.basicInfo.fullName, 'Provider Persona');
+});
+
+test('getPublicProfile: falls back to legacy User identity when ProviderProfile display fields are missing', async (t) => {
+  const providerProfileService = await loadServiceForPublicProfile(t, {
+    providerCompletion: 65,
+    legacyUserCompletion: 100,
+    providerFirstName: null,
+    providerLastName: null,
+    providerAvatarUrl: null,
+    userFirstName: 'Legacy',
+    userLastName: 'Name',
+    userAvatarUrl: 'https://legacy.example/avatar.png'
+  });
+
+  const result = await providerProfileService.getPublicProfile('user-1');
+
+  assert.equal(result.header.fullName, 'Legacy Name');
+  assert.equal(result.header.avatarUrl, 'https://legacy.example/avatar.png');
+  assert.equal(result.basicInfo.fullName, 'Legacy Name');
+});
+
+test('getPublicProfile: returns the Provider-specific name regardless of any viewer-activeRole assumption (endpoint takes only a providerId, never a viewer role)', async (t) => {
+  const providerProfileService = await loadServiceForPublicProfile(t, {
+    providerCompletion: 65,
+    legacyUserCompletion: 100,
+    providerFirstName: 'Provider',
+    providerLastName: 'Persona',
+    providerAvatarUrl: 'https://provider.example/avatar.png'
+  });
+
+  // getPublicProfile's signature takes only a providerId — there is no
+  // viewer/activeRole parameter for it to depend on at all, so calling it
+  // identically always resolves the SAME target provider's identity.
+  const result = await providerProfileService.getPublicProfile('user-1');
+
+  assert.equal(result.header.fullName, 'Provider Persona');
+});
+
+test('getPublicProfile: never reads or mutates ClientProfile/AffiliateProfile state', async (t) => {
+  const { providerProfileService, clientProfileSpy, affiliateProfileSpy } = await loadServiceForPublicProfileWithSpies(t, {
+    providerCompletion: 65,
+    legacyUserCompletion: 100,
+    providerFirstName: 'Provider',
+    providerLastName: 'Persona'
+  });
+
+  await providerProfileService.getPublicProfile('user-1');
+
+  assert.equal(clientProfileSpy.mock.callCount(), 0);
+  assert.equal(affiliateProfileSpy.mock.callCount(), 0);
 });
 
 // ============================================================================
