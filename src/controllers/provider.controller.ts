@@ -7,6 +7,7 @@ import { providerOverviewService } from '../services/provider-overview.service';
 import { accreditationService } from '../services/accreditation.service';
 import { projectProgressService } from '../services/project-progress.service';
 import { providerFinanceService } from '../services/provider-finance.service';
+import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 
 export const getProviderStatistics = async (req: Request, res: Response, next: NextFunction) => {
 	try {
@@ -25,6 +26,7 @@ export const getProviderStatistics = async (req: Request, res: Response, next: N
 			pendingClientApprovalCount,
 			wallet,
 			providerProfile,
+			gamification,
 			latestActivity,
 			aiMatchingProjects
 		] = await Promise.all([
@@ -56,6 +58,11 @@ export const getProviderStatistics = async (req: Request, res: Response, next: N
 					}
 				}
 			}),
+			// provider progression (Phase 3C source of truth for currentPoints/currentLevel — see gamification.service.ts LEVEL_MATRIX)
+			prisma.providerGamification.findUnique({
+				where: { providerId },
+				select: { points: true, currentLevelIndex: true }
+			}),
 			// latest projects & proposals (top 4 combined activity)
 			providerOverviewService.getLatestProviderActivity(providerId),
 			// intelligent AI semantic matching projects (top 4 matches with AI match score)
@@ -67,16 +74,30 @@ export const getProviderStatistics = async (req: Request, res: Response, next: N
 		const totalEscrowAmount = wallet.summary.escrowBalance;
 		
 		const providerRating = providerProfile?.rating && providerProfile.rating !== 5.0 ? providerProfile.rating : 0;
-		const humanRating = providerProfile?.rating && providerProfile.rating !== 5.0 ? providerProfile.rating : 0; 
+		const humanRating = providerProfile?.rating && providerProfile.rating !== 5.0 ? providerProfile.rating : 0;
 		const aiRating = 0; // Strict DB Mode: No mock AI rating
-		const profileCompletionPercent = providerProfile?.user?.profileCompletionPercent || 0;
 		const profileSetupCompleted = providerProfile?.isProfileSetupComplete === true;
 		const setupTestCompleted = providerProfile?.setupTestStatus === 'COMPLETED';
 		const hasApprovedSpecialties = (providerProfile?.providerSpecialties?.length || 0) > 0;
-		const currentLevel = providerProfile?.user?.currentLevel || 'مستكشف - المستوى 1';
-		const currentPoints = providerProfile?.user?.currentPoints || 0;
-		const firstName = providerProfile?.user?.firstName || 'مقدم';
-		const lastName = providerProfile?.user?.lastName || 'الخدمة';
+
+		// Phase 3C: name/avatar/completion come from ProviderProfile, and
+		// currentPoints/currentLevel from the provider's own gamification system
+		// (ProviderGamification + LEVEL_MATRIX) — never from the legacy User
+		// columns unless the provider genuinely has neither row yet.
+		const { firstName, lastName, profileCompletionPercent, currentLevel, currentPoints } = resolveActiveRoleDisplayFields({
+			activeRole: 'PROVIDER',
+			legacy: {
+				firstName: providerProfile?.user?.firstName || 'مقدم',
+				lastName: providerProfile?.user?.lastName || 'الخدمة',
+				avatarUrl: providerProfile?.user?.avatarUrl ?? null,
+				profileCompletionPercent: providerProfile?.user?.profileCompletionPercent || 0,
+				currentLevel: providerProfile?.user?.currentLevel || 'مستكشف - المستوى 1',
+				currentPoints: providerProfile?.user?.currentPoints || 0,
+				pointsToNextLevel: providerProfile?.user?.pointsToNextLevel || 100
+			},
+			providerProfile,
+			providerGamification: gamification
+		});
 
 		// Count only eligible, specialty-approved matches created in the past 48 hours.
 		const newOffersCount = hasApprovedSpecialties

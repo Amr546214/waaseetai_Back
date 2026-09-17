@@ -5,6 +5,8 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { notificationService } from './notification.service';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
+import { LEVEL_MATRIX } from './gamification.service';
+import { resolveProviderProgression } from '../utils/role-display-resolver';
 
 const aiCache = new Map<string, { metrics: any, expiresAt: number }>();
 
@@ -221,8 +223,28 @@ export class ProviderProfileService {
 		const clientRating = baseRating <= 5 ? Math.round((baseRating / 5) * 100) : baseRating;
 
 		const points = gamification?.points || 0;
-		const levelNumber = gamification?.currentLevelIndex || 1;
-		const levelName = profile.user?.currentLevel || `المستوى ${levelNumber}`;
+		// Phase 3C bug fix: derive the level title via the same pure, already-tested
+		// resolveProviderProgression() used by the dashboard/auth resolvers, instead
+		// of the previous inline lookup here. That inline logic defaulted a missing
+		// ProviderGamification.currentLevelIndex to 1 BEFORE checking any fallback,
+		// so LEVEL_MATRIX index 1 ("زائر") always matched and profile.user.currentLevel
+		// was never actually reached — even when the provider had no
+		// ProviderGamification row at all. resolveProviderProgression checks for a
+		// missing gamification row FIRST and only falls back to the passed-in legacy
+		// currentLevel in that case; LEVEL_MATRIX.find(...) || LEVEL_MATRIX[0] is its
+		// own safe fallback when a gamification row exists but currentLevelIndex
+		// doesn't match any entry. Only `.currentLevel` is taken from the result —
+		// `points` above is left completely untouched, scoping this fix to the
+		// level-name derivation only.
+		const levelName = resolveProviderProgression(gamification, {
+			firstName: '',
+			lastName: '',
+			avatarUrl: null,
+			profileCompletionPercent: 0,
+			currentLevel: profile.user?.currentLevel || LEVEL_MATRIX[0].title,
+			currentPoints: 0,
+			pointsToNextLevel: 0
+		}).currentLevel;
 
 		const formatter = new Intl.DateTimeFormat('ar-EG', { month: 'long', year: 'numeric' });
 		const memberSince = profile.user?.createdAt ? formatter.format(profile.user.createdAt) : '2024';

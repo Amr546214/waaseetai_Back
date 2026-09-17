@@ -3,6 +3,7 @@ import { AccountType, UserRole } from '@prisma/client';
 import { DashboardStatsPayload } from '../types/dashboard.types';
 import { AppError } from '../utils/app-error';
 import { getRoleFromAccountType } from './account-management.service';
+import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 
 export class DashboardService {
   /**
@@ -110,15 +111,41 @@ export class DashboardService {
         createdAt: p.createdAt
       }));
 
-      // Fetch User profile metrics
+      // Fetch User profile metrics. This endpoint is only reached for
+      // activeRole === CLIENT (see getStats below), so the display/progression
+      // fields resolve from ClientProfile, falling back to the legacy User
+      // columns when the role-specific value is missing (Phase 3C).
       const user = await prisma.user.findUnique({
         where: { id: userId },
         select: {
+          activeRole: true,
           profileCompletionPercent: true,
           currentLevel: true,
           pointsToNextLevel: true,
-          currentPoints: true
+          currentPoints: true,
+          clientProfile: {
+            select: {
+              currentLevel: true,
+              currentPoints: true,
+              pointsToNextLevel: true,
+              completionPercentage: true
+            }
+          }
         }
+      });
+
+      const clientDisplayFields = resolveActiveRoleDisplayFields({
+        activeRole: user?.activeRole ?? UserRole.CLIENT,
+        legacy: {
+          firstName: '',
+          lastName: '',
+          avatarUrl: null,
+          profileCompletionPercent: user?.profileCompletionPercent ?? 0,
+          currentLevel: user?.currentLevel ?? 'مستكشف - المستوى 1',
+          currentPoints: user?.currentPoints ?? 0,
+          pointsToNextLevel: user?.pointsToNextLevel ?? 100
+        },
+        clientProfile: user?.clientProfile
       });
 
       // 7. Active Contract (Find real active contract for this client, if any)
@@ -170,10 +197,10 @@ export class DashboardService {
           totalSpent,
           aiRating: 0,
           humanRating: 0,
-          profileCompletionPercent: user?.profileCompletionPercent || 0,
-          currentLevel: user?.currentLevel || 'مستكشف - المستوى 1',
-          pointsToNextLevel: user?.pointsToNextLevel || 100,
-          currentPoints: user?.currentPoints || 0
+          profileCompletionPercent: clientDisplayFields.profileCompletionPercent,
+          currentLevel: clientDisplayFields.currentLevel,
+          pointsToNextLevel: clientDisplayFields.pointsToNextLevel,
+          currentPoints: clientDisplayFields.currentPoints
         },
         topSteps: {
           step1_escrowRequiredCount: 0,
@@ -212,6 +239,7 @@ export class DashboardService {
         pendingOffersCount,
         monthlyEarningsAgg,
         user,
+        gamification,
         aiMatchingProjectsRaw,
         latestProposalsData
       ] = await Promise.all([
@@ -232,7 +260,8 @@ export class DashboardService {
           },
           _sum: { budgetFixed: true, budgetMax: true }
         }),
-        // 4. User details for profile completion level
+        // 4. User details for profile completion level (legacy fallback only —
+        // see resolveActiveRoleDisplayFields below for the actual source)
         prisma.user.findUnique({
           where: { id: userId },
           select: {
@@ -241,6 +270,12 @@ export class DashboardService {
             pointsToNextLevel: true,
             currentPoints: true
           }
+        }),
+        // 4b. Provider progression (Phase 3C source of truth for
+        // currentPoints/currentLevel/pointsToNextLevel — see gamification.service.ts LEVEL_MATRIX)
+        prisma.providerGamification.findUnique({
+          where: { providerId: userId },
+          select: { points: true, currentLevelIndex: true }
         }),
         // 5. AI Matching Projects (Open projects matching provider skills)
         providerSkills.length > 0 
@@ -274,6 +309,26 @@ export class DashboardService {
       ]);
 
       const monthlyEarnings = (monthlyEarningsAgg._sum.budgetFixed || 0) + (monthlyEarningsAgg._sum.budgetMax || 0);
+
+      // Phase 3C: profileCompletionPercent comes from ProviderProfile, and
+      // currentPoints/currentLevel/pointsToNextLevel come from the provider's
+      // own gamification system (ProviderGamification + LEVEL_MATRIX) — never
+      // from ClientProfile and never from the legacy User columns unless the
+      // provider genuinely has no ProviderProfile/ProviderGamification row yet.
+      const providerDisplayFields = resolveActiveRoleDisplayFields({
+        activeRole: UserRole.PROVIDER,
+        legacy: {
+          firstName: '',
+          lastName: '',
+          avatarUrl: null,
+          profileCompletionPercent: user?.profileCompletionPercent ?? 0,
+          currentLevel: user?.currentLevel ?? '',
+          currentPoints: user?.currentPoints ?? 0,
+          pointsToNextLevel: user?.pointsToNextLevel ?? 0
+        },
+        providerProfile,
+        providerGamification: gamification
+      });
 
       // Map AI Matching Projects
       const aiMatchingProjects = aiMatchingProjectsRaw.map((p) => {
@@ -310,10 +365,10 @@ export class DashboardService {
           aiRating: 0,
           humanRating: 0,
           providerRating,
-          profileCompletionPercent: user?.profileCompletionPercent || 0,
-          currentLevel: user?.currentLevel || '',
-          pointsToNextLevel: user?.pointsToNextLevel || 0,
-          currentPoints: user?.currentPoints || 0
+          profileCompletionPercent: providerDisplayFields.profileCompletionPercent,
+          currentLevel: providerDisplayFields.currentLevel,
+          pointsToNextLevel: providerDisplayFields.pointsToNextLevel,
+          currentPoints: providerDisplayFields.currentPoints
         },
         topSteps: {
           step1_escrowRequiredCount: 0,

@@ -4,6 +4,7 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { generateReferralSlug } from '../utils/slug.util';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
+import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 
 /**
  * Helper to derive primary UserRole from AccountType enum
@@ -357,12 +358,48 @@ export class AccountManagementService {
 
     await accountAuditLogService.record({ userId, eventType: 'ROLE_SWITCHED', category: 'SYSTEM_AUDIT', title: 'تبديل الحساب النشط', summary: `تم الانتقال إلى دور ${targetRole}`, source: 'USER', status: 'COMPLETED', after: { activeRole: targetRole }, context: auditContext });
 
+    // Phase 3C: the switched-to role's own profile (+ ProviderGamification for
+    // PROVIDER) is the source of truth for the response's display/progression
+    // fields — a role switch must hand back a user shape that already reflects
+    // the NEW activeRole, not the role that was just left. Only fetch the one
+    // relation the target role actually needs.
+    const relationSelect: Record<string, boolean> = {};
+    if (targetRole === UserRole.CLIENT) relationSelect.clientProfile = true;
+    if (targetRole === UserRole.PROVIDER) { relationSelect.providerProfile = true; relationSelect.gamification = true; }
+    if (targetRole === UserRole.AFFILIATE) relationSelect.affiliateProfile = true;
+
+    const roleRelations = Object.keys(relationSelect).length > 0
+      ? await prisma.user.findUnique({ where: { id: userId }, select: relationSelect as any })
+      : null;
+
+    const displayFields = resolveActiveRoleDisplayFields({
+      activeRole: targetRole,
+      legacy: {
+        firstName: updatedUser.firstName,
+        lastName: updatedUser.lastName,
+        avatarUrl: updatedUser.avatarUrl,
+        profileCompletionPercent: updatedUser.profileCompletionPercent,
+        currentLevel: updatedUser.currentLevel,
+        currentPoints: updatedUser.currentPoints,
+        pointsToNextLevel: updatedUser.pointsToNextLevel
+      },
+      clientProfile: (roleRelations as any)?.clientProfile,
+      providerProfile: (roleRelations as any)?.providerProfile,
+      providerGamification: (roleRelations as any)?.gamification,
+      affiliateProfile: (roleRelations as any)?.affiliateProfile
+    });
+
     return {
       token,
       user: {
         id: updatedUser.id,
-        firstName: updatedUser.firstName,
-        lastName: updatedUser.lastName,
+        firstName: displayFields.firstName,
+        lastName: displayFields.lastName,
+        avatarUrl: displayFields.avatarUrl,
+        profileCompletionPercent: displayFields.profileCompletionPercent,
+        currentLevel: displayFields.currentLevel,
+        currentPoints: displayFields.currentPoints,
+        pointsToNextLevel: displayFields.pointsToNextLevel,
         email: updatedUser.email,
         accountType: updatedUser.accountType,
         activeRole: targetRole,

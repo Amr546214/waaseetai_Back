@@ -1,26 +1,40 @@
-import { AccountType, UserStatus } from '@prisma/client';
+import { AccountType, UserRole, UserStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { UpdateProfileDto } from '../dtos/profile.dto';
 import { AppError } from '../utils/app-error';
+import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 
 export class ProfileService {
   /**
-   * Fetch a user's full integrated profile
+   * Fetch a user's full integrated profile.
+   *
+   * Phase 3C: read-only. Display/progression fields (firstName, lastName,
+   * avatarUrl, profileCompletionPercent, currentLevel, currentPoints,
+   * pointsToNextLevel) are resolved from the user's CURRENTLY ACTIVE role
+   * profile via resolveActiveRoleDisplayFields, falling back to the legacy
+   * User columns when the role-specific value/profile is missing. This used
+   * to branch on accountType.includes('CLIENT') (wrong for AFFILIATE users,
+   * and wrong for any multi-role user whose activeRole differs from their
+   * original signup accountType) and to write a freshly recalculated
+   * profileCompletionPercent back to the User row as a side effect of this
+   * GET — both are fixed here; this method no longer performs any writes.
    */
   public async getProfile(userId: string) {
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: {
         clientProfile: true,
-        providerProfile: true
+        providerProfile: true,
+        affiliateProfile: true,
+        gamification: true
       }
     });
 
     if (!user) {
       throw new AppError('تعذر العثور على حساب المستخدم', 404);
     }
-    
+
     // Fetch last 3 change requests for the historical trace
     // const latestHistory = await prisma.profileChangeRequest.findMany({
     //   where: { userId },
@@ -28,46 +42,41 @@ export class ProfileService {
     //   take: 3
     // });
     const latestHistory: any[] = [];
-    
+
     // Format output
     const { password, ...safeUser } = user;
-    const profile = user.accountType.includes('CLIENT') ? user.clientProfile : user.providerProfile;
-    
-    // Dynamic Score Calculation
-    const mergedData = { ...safeUser, ...profile } as any;
-    // for (const req of latestHistory) {
-    //   if (req.status === 'PENDING') {
-    //     Object.assign(mergedData, req.requestedChanges);
-    //   }
-    // }
 
-    let score = 0;
-    const baseFields = ['firstName', 'lastName', 'phoneNumber', 'avatarUrl'];
-    baseFields.forEach(f => { if (mergedData[f]) score += 7.5; });
+    // Role-specific tab data (companyName, bio, KYC fields, etc.) still comes
+    // from whichever profile matches the CURRENTLY ACTIVE role — not
+    // accountType, which only reflects how the identity first registered.
+    const roleProfile =
+      user.activeRole === UserRole.CLIENT ? user.clientProfile :
+      user.activeRole === UserRole.PROVIDER ? user.providerProfile :
+      user.activeRole === UserRole.AFFILIATE ? user.affiliateProfile :
+      null;
 
-    const metaFields = ['bio', 'companyName', 'companySize', 'industry', 'website'];
-    metaFields.forEach(f => { if (mergedData[f]) score += 6.0; });
-
-    const kycFields = ['idNumber', 'idExpiryDate'];
-    kycFields.forEach(f => { if (mergedData[f]) score += 10.0; });
-
-    const bankingFields = ['ibanNumber', 'bankName', 'accountHolderName'];
-    bankingFields.forEach(f => { if (mergedData[f]) score += (20 / 3); });
-
-    const finalScore = Math.min(100, Math.round(score));
-
-    if (safeUser.profileCompletionPercent !== finalScore) {
-      await prisma.user.update({
-        where: { id: userId },
-        data: { profileCompletionPercent: finalScore }
-      });
-      safeUser.profileCompletionPercent = finalScore;
-    }
+    const resolvedDisplayFields = resolveActiveRoleDisplayFields({
+      activeRole: user.activeRole,
+      legacy: {
+        firstName: user.firstName,
+        lastName: user.lastName,
+        avatarUrl: user.avatarUrl,
+        profileCompletionPercent: user.profileCompletionPercent,
+        currentLevel: user.currentLevel,
+        currentPoints: user.currentPoints,
+        pointsToNextLevel: user.pointsToNextLevel
+      },
+      clientProfile: user.clientProfile,
+      providerProfile: user.providerProfile,
+      providerGamification: user.gamification,
+      affiliateProfile: user.affiliateProfile
+    });
 
     return {
       currentProfileData: {
         ...safeUser,
-        ...profile
+        ...roleProfile,
+        ...resolvedDisplayFields
       },
       latestHistory
     };

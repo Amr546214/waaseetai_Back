@@ -110,7 +110,12 @@ export class AuthRepository {
   }
 
   /**
-   * Find a user specifically by email for login
+   * Find a user specifically by email for login.
+   *
+   * Phase 3C: also fetches the (small) display-name slice of each role profile
+   * so callers can resolve firstName/lastName from the user's CURRENTLY ACTIVE
+   * role via resolveActiveRoleDisplayFields, instead of always returning the
+   * legacy User.firstName/lastName regardless of which role is active.
    */
   public async findByEmail(email: string) {
     return prisma.user.findUnique({
@@ -124,9 +129,13 @@ export class AuthRepository {
         roles: true,
         firstName: true,
         lastName: true,
+        avatarUrl: true,
         email: true,
         googleId: true,
-        authProvider: true
+        authProvider: true,
+        clientProfile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+        providerProfile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+        affiliateProfile: { select: { firstName: true, lastName: true, avatarUrl: true } }
       }
     });
   }

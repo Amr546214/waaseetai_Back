@@ -9,6 +9,7 @@
 		"prestart": "npx prisma generate && npx prisma migrate deploy",
 		"start": "nodemon src/app.ts",
 		"build": "tsc",
+		"test": "tsx --test --experimental-test-module-mocks src/**/*.test.ts",
 		"start:prod": "node dist/app.js",
 		"db:migrate": "npx prisma migrate dev",
 		"prisma:migrate:deploy": "npx prisma migrate deploy",

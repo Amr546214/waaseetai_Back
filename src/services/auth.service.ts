@@ -1,7 +1,7 @@
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
-import { OtpType, UserStatus } from '@prisma/client';
+import { OtpType, UserStatus, User as PrismaUser } from '@prisma/client';
 import { authRepository } from '../repositories/auth.repository';
 import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput } from '../routes/auth/auth.schema';
 import { OAuth2Client } from 'google-auth-library';
@@ -15,6 +15,43 @@ import { generateReferralSlug } from '../utils/slug.util';
 import { sessionService, SessionContext } from './session.service';
 import { accountAuditLogService } from './account-logs.service';
 import { getRoleFromAccountType, getInitialRolesForAccountType, createMissingRoleProfiles } from './account-management.service';
+import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
+
+/**
+ * Phase 3C: resolves firstName/lastName for an auth response from the user's
+ * CURRENTLY ACTIVE role profile (falling back to the legacy User columns when
+ * the role-specific value/profile is missing), instead of always returning
+ * User.firstName/lastName regardless of which role is active. Only these two
+ * fields are touched — login/register responses don't expose avatarUrl or the
+ * progression fields today, so this intentionally doesn't add new response
+ * fields, only fixes the existing ones.
+ */
+function resolveAuthDisplayName(
+  user: { activeRole: import('@prisma/client').UserRole; firstName: string; lastName: string },
+  roleRelations: {
+    clientProfile?: { firstName: string | null; lastName: string | null } | null;
+    providerProfile?: { firstName: string | null; lastName: string | null } | null;
+    affiliateProfile?: { firstName: string | null; lastName: string | null } | null;
+  }
+) {
+  const legacy = {
+    firstName: user.firstName,
+    lastName: user.lastName,
+    avatarUrl: null,
+    profileCompletionPercent: 0,
+    currentLevel: '',
+    currentPoints: 0,
+    pointsToNextLevel: 0
+  };
+  const resolved = resolveActiveRoleDisplayFields({
+    activeRole: user.activeRole,
+    legacy,
+    clientProfile: roleRelations.clientProfile as any,
+    providerProfile: roleRelations.providerProfile as any,
+    affiliateProfile: roleRelations.affiliateProfile as any
+  });
+  return { firstName: resolved.firstName, lastName: resolved.lastName };
+}
 
 const RESET_OTP_MAX_ATTEMPTS = 5;
 const RESET_OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
@@ -303,13 +340,19 @@ export class AuthService {
 		);
 		await sessionService.register(user.id, token, sessionContext);
 
+		const { firstName, lastName } = resolveAuthDisplayName(user, {
+			clientProfile: user.clientProfile,
+			providerProfile: user.providerProfile,
+			affiliateProfile: user.affiliateProfile
+		});
+
 		return {
 			verified: true,
 			token,
 			user: {
 				id: user.id,
-				firstName: user.firstName,
-				lastName: user.lastName,
+				firstName,
+				lastName,
 				email: user.email,
 				accountType: user.accountType,
 				activeRole: user.activeRole,
@@ -333,7 +376,15 @@ export class AuthService {
 		}
 
 		const email = payload.email!;
-		let user = await authRepository.findByEmail(email);
+		const existingUser = await authRepository.findByEmail(email);
+		// Captured before any prisma.user.update() below, which returns a bare
+		// scalar User (no relations) and would otherwise silently drop these.
+		const roleRelations = {
+			clientProfile: existingUser?.clientProfile,
+			providerProfile: existingUser?.providerProfile,
+			affiliateProfile: existingUser?.affiliateProfile
+		};
+		let user: Pick<PrismaUser, 'id' | 'email' | 'accountType' | 'activeRole' | 'roles' | 'status' | 'googleId' | 'firstName' | 'lastName'> | null = existingUser;
 
 		if (!user) {
 			if (!input.accountType) {
@@ -402,12 +453,14 @@ export class AuthService {
 		);
 		await sessionService.register(user.id, token, sessionContext);
 
+		const { firstName, lastName } = resolveAuthDisplayName(user, roleRelations);
+
 		return {
 			token,
 			user: {
 				id: user.id,
-				firstName: user.firstName,
-				lastName: user.lastName,
+				firstName,
+				lastName,
 				email: user.email,
 				accountType: user.accountType,
 				activeRole: user.activeRole,
