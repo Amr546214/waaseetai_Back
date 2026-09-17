@@ -338,3 +338,554 @@ test('getPublicProfile: falls back to 0 when both ProviderProfile and legacy Use
 
   assert.equal(result.header.levelInfo.completionPercentage, 0);
 });
+
+// ============================================================================
+// Phase 3D.2B — skills and portfolio completion mutation coverage.
+//
+// updateSkills/addPortfolioItem/deletePortfolioItem previously left
+// ProviderProfile.completionPercentage stale after changing exactly the two
+// factors computeProviderCompletion() reads from those mutations: skills
+// count and portfolio-items count. updatePortfolioItem is deliberately
+// excluded — it only edits an existing item's own fields, never the count or
+// websiteUrl, so the formula cannot change from that call.
+// ============================================================================
+
+function createSkillsPortfolioMockPrisma(t: TestContext) {
+  let providerProfileState: any = {
+    id: 'pp-1',
+    userId: 'user-1',
+    firstName: 'Okasha',
+    lastName: 'Expert',
+    avatarUrl: null,
+    headline: 'Senior Consultant',
+    mainSpecialty: 'دعم فني',
+    bio: 'x'.repeat(60),
+    country: 'SA',
+    city: 'Riyadh',
+    websiteUrl: null,
+    skills: [] as any[],
+    portfolioItems: [] as any[],
+    completionPercentage: 0
+  };
+  const userFixture = {
+    id: 'user-1',
+    email: 'provider@example.com',
+    phoneNumber: '0500000000',
+    firstName: 'Legacy',
+    lastName: 'Name',
+    avatarUrl: null,
+    ibanNumber: 'SA0000000000000000000011',
+    idDocumentUrl: 'https://cdn.example/id.pdf'
+  };
+
+  const skillsByName = new Map<string, { id: string; name: string }>();
+  let skillSeq = 0;
+  let portfolioSeq = 0;
+
+  const userUpdateSpy = t.mock.fn((args: any) => ({ ...userFixture, ...args.data }));
+  const providerProfileUpdateSpy = t.mock.fn((args: any) => {
+    const { skills, ...rest } = args.data;
+    providerProfileState = { ...providerProfileState, ...rest };
+    // `skills: { set: [{id}, ...] }` is a Prisma relation instruction, not a
+    // plain array — resolve it back to real skill objects (by id) so
+    // providerProfileState.skills.length behaves exactly like a real re-read.
+    if (skills?.set) {
+      const byId = new Map([...skillsByName.values()].map(s => [s.id, s]));
+      providerProfileState.skills = skills.set.map((ref: { id: string }) => byId.get(ref.id)).filter(Boolean);
+    }
+    return { ...providerProfileState };
+  });
+  const clientUpsertSpy = t.mock.fn((args: any) => ({ ...args.create, ...args.update }));
+  const affiliateUpsertSpy = t.mock.fn((args: any) => ({ ...args.create, ...args.update }));
+
+  const prismaMock = {
+    providerProfile: {
+      findUnique: async () => ({ ...providerProfileState, user: { ...userFixture } }),
+      update: providerProfileUpdateSpy
+    },
+    skill: {
+      upsert: t.mock.fn(async (args: any) => {
+        const name = args.where.name;
+        if (!skillsByName.has(name)) skillsByName.set(name, { id: `skill-${++skillSeq}`, name });
+        return skillsByName.get(name)!;
+      })
+    },
+    portfolioItem: {
+      create: t.mock.fn(async (args: any) => {
+        const item = { id: `item-${++portfolioSeq}`, ...args.data };
+        providerProfileState.portfolioItems = [...providerProfileState.portfolioItems, item];
+        return item;
+      }),
+      findFirst: async (args: any) =>
+        providerProfileState.portfolioItems.find((i: any) => i.id === args.where.id && i.providerProfileId === args.where.providerProfileId) || null,
+      update: t.mock.fn(async (args: any) => {
+        providerProfileState.portfolioItems = providerProfileState.portfolioItems.map((i: any) =>
+          i.id === args.where.id ? { ...i, ...args.data } : i
+        );
+        return providerProfileState.portfolioItems.find((i: any) => i.id === args.where.id);
+      }),
+      deleteMany: t.mock.fn(async (args: any) => {
+        const before = providerProfileState.portfolioItems.length;
+        providerProfileState.portfolioItems = providerProfileState.portfolioItems.filter(
+          (i: any) => !(i.id === args.where.id && i.providerProfileId === args.where.providerProfileId)
+        );
+        return { count: before - providerProfileState.portfolioItems.length };
+      })
+    },
+    user: { update: userUpdateSpy },
+    clientProfile: { upsert: clientUpsertSpy },
+    affiliateProfile: { upsert: affiliateUpsertSpy }
+  };
+
+  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  t.mock.module('./account-logs.service', { namedExports: { accountAuditLogService: { record: async () => ({}) } } });
+
+  return {
+    userUpdateSpy, providerProfileUpdateSpy, clientUpsertSpy, affiliateUpsertSpy,
+    getProviderProfileState: () => providerProfileState
+  };
+}
+
+async function loadServiceForSkillsPortfolio(t: TestContext) {
+  const mocks = createSkillsPortfolioMockPrisma(t);
+  const moduleUrl = `./provider-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { providerProfileService } = await import(moduleUrl);
+  return { providerProfileService, ...mocks };
+}
+
+test('updateSkills: 0 -> >=1 skills recalculates completion (skills factor now scored)', async (t) => {
+  const { providerProfileService, getProviderProfileState } = await loadServiceForSkillsPortfolio(t);
+
+  const before = getProviderProfileState().completionPercentage;
+  await providerProfileService.updateSkills('user-1', ['Node.js', 'React']);
+
+  assert.equal(getProviderProfileState().skills.length, 2);
+  assert.equal(getProviderProfileState().completionPercentage > before, true);
+});
+
+test('updateSkills: writes ProviderProfile.completionPercentage', async (t) => {
+  const { providerProfileService, providerProfileUpdateSpy } = await loadServiceForSkillsPortfolio(t);
+
+  await providerProfileService.updateSkills('user-1', ['Node.js']);
+
+  const completionCall = providerProfileUpdateSpy.mock.calls.find((c: any) => 'completionPercentage' in c.arguments[0].data);
+  assert.notEqual(completionCall, undefined);
+  assert.equal(typeof completionCall.arguments[0].data.completionPercentage, 'number');
+});
+
+test('updateSkills: never writes User.profileCompletionPercent', async (t) => {
+  const { providerProfileService, userUpdateSpy } = await loadServiceForSkillsPortfolio(t);
+
+  await providerProfileService.updateSkills('user-1', ['Node.js']);
+
+  for (const call of userUpdateSpy.mock.calls) {
+    assert.equal('profileCompletionPercent' in call.arguments[0].data, false);
+  }
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+test('addPortfolioItem: 0 -> 1 portfolio items recalculates completion', async (t) => {
+  const { providerProfileService, getProviderProfileState } = await loadServiceForSkillsPortfolio(t);
+
+  const before = getProviderProfileState().completionPercentage;
+  assert.equal(getProviderProfileState().portfolioItems.length, 0);
+
+  await providerProfileService.addPortfolioItem('user-1', { title: 'Project A', description: 'desc' });
+
+  assert.equal(getProviderProfileState().portfolioItems.length, 1);
+  assert.equal(getProviderProfileState().completionPercentage > before, true);
+});
+
+test('deletePortfolioItem: 1 -> 0 portfolio items recalculates completion', async (t) => {
+  const { providerProfileService, getProviderProfileState } = await loadServiceForSkillsPortfolio(t);
+
+  const created = await providerProfileService.addPortfolioItem('user-1', { title: 'Project A', description: 'desc' });
+  const afterAdd = getProviderProfileState().completionPercentage;
+
+  await providerProfileService.deletePortfolioItem('user-1', created.id);
+
+  assert.equal(getProviderProfileState().portfolioItems.length, 0);
+  assert.equal(getProviderProfileState().completionPercentage < afterAdd, true);
+});
+
+test('deletePortfolioItem: websiteUrl still satisfies the portfolio factor when count drops to 0', async (t) => {
+  const { providerProfileService, getProviderProfileState } = await loadServiceForSkillsPortfolio(t);
+  getProviderProfileState().websiteUrl = 'https://provider.example';
+
+  const created = await providerProfileService.addPortfolioItem('user-1', { title: 'Project A', description: 'desc' });
+  const afterAdd = getProviderProfileState().completionPercentage;
+
+  await providerProfileService.deletePortfolioItem('user-1', created.id);
+
+  // portfolioItems.length > 0 OR websiteUrl -> the factor stays satisfied via
+  // websiteUrl alone, so the score must NOT drop even though the count did.
+  assert.equal(getProviderProfileState().completionPercentage, afterAdd);
+});
+
+test('updatePortfolioItem: does not perform any completion recomputation (no scored factor can change)', async (t) => {
+  const { providerProfileService, providerProfileUpdateSpy, getProviderProfileState } = await loadServiceForSkillsPortfolio(t);
+
+  const created = await providerProfileService.addPortfolioItem('user-1', { title: 'Project A', description: 'desc' });
+  providerProfileUpdateSpy.mock.resetCalls();
+
+  await providerProfileService.updatePortfolioItem('user-1', created.id, { title: 'Renamed Project', description: 'new desc' });
+
+  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
+  assert.equal(completionCalls.length, 0);
+  assert.equal(getProviderProfileState().portfolioItems[0].title, 'Renamed Project');
+});
+
+test('role isolation (skills/portfolio): never touches ClientProfile/AffiliateProfile, and User.profileCompletionPercent is never written', async (t) => {
+  const { providerProfileService, clientUpsertSpy, affiliateUpsertSpy, userUpdateSpy } = await loadServiceForSkillsPortfolio(t);
+
+  await providerProfileService.updateSkills('user-1', ['Node.js']);
+  const item = await providerProfileService.addPortfolioItem('user-1', { title: 'A', description: 'd' });
+  await providerProfileService.deletePortfolioItem('user-1', item.id);
+
+  assert.equal(clientUpsertSpy.mock.callCount(), 0);
+  assert.equal(affiliateUpsertSpy.mock.callCount(), 0);
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+// ============================================================================
+// Phase 3D.2B — sensitive BANKING/DOCUMENTS/CONTACT completion coverage.
+//
+// The real commit point for BANKING/DOCUMENTS is applySensitivePayload(),
+// reached via reviewSensitiveChange() (admin-approved) since both categories
+// require human review (sensitiveConfig). CONTACT does not require review, so
+// its commit point is verifySensitiveChange() itself. Recompute must trigger
+// only when the FINAL committed updateData actually contains the one field
+// each category's formula factor reads (ibanNumber / idDocumentUrl) — never
+// merely because of `category`, and never for CONTACT.
+// ============================================================================
+
+function createSensitiveFlowMockPrisma(t: TestContext, opts: { throwOnRecompute?: boolean } = {}) {
+  let userState: any = {
+    id: 'user-1',
+    email: 'provider@example.com',
+    phoneNumber: '0500000000',
+    alternativePhone: null,
+    firstName: 'Okasha',
+    lastName: 'Expert',
+    avatarUrl: null,
+    accountHolderName: null,
+    ibanNumber: null,
+    bankName: null,
+    idDocumentUrl: null,
+    idNumber: null
+  };
+  let providerProfileState: any = {
+    id: 'pp-1',
+    userId: 'user-1',
+    firstName: 'Okasha',
+    lastName: 'Expert',
+    avatarUrl: null,
+    headline: 'Senior Consultant',
+    mainSpecialty: 'دعم فني',
+    bio: 'x'.repeat(60),
+    country: 'SA',
+    city: 'Riyadh',
+    websiteUrl: null,
+    skills: [{ id: 's1', name: 'Node.js' }],
+    portfolioItems: [],
+    completionPercentage: 0,
+    certUrls: [] as string[]
+  };
+  const requestsById: Record<string, any> = {};
+  const otpsById: Record<string, any> = {};
+  let requestSeq = 0;
+  let otpSeq = 0;
+  const callOrder: string[] = [];
+
+  const userUpdateSpy = t.mock.fn((args: any) => {
+    callOrder.push('user.update');
+    userState = { ...userState, ...args.data };
+    return { ...userState };
+  });
+  const providerProfileUpdateSpy = t.mock.fn((args: any) => {
+    if ('completionPercentage' in args.data) callOrder.push('providerProfile.update:completion');
+    providerProfileState = { ...providerProfileState, ...args.data };
+    return { ...providerProfileState };
+  });
+  const loggerErrorSpy = t.mock.fn();
+  const clientUpsertSpy = t.mock.fn();
+  const affiliateUpsertSpy = t.mock.fn();
+
+  const prismaMock = {
+    user: {
+      findUnique: async (args: any) => {
+        if (args?.where?.email) return userState.email === args.where.email ? { ...userState } : null;
+        if (args?.where?.phoneNumber) return userState.phoneNumber === args.where.phoneNumber ? { ...userState } : null;
+        return { ...userState, providerProfile: providerProfileState };
+      },
+      update: userUpdateSpy
+    },
+    providerProfile: {
+      findUnique: async () => {
+        if (opts.throwOnRecompute) throw new Error('simulated DB failure during completion recompute');
+        return { ...providerProfileState, user: { ...userState } };
+      },
+      update: providerProfileUpdateSpy
+    },
+    clientProfile: { upsert: clientUpsertSpy },
+    affiliateProfile: { upsert: affiliateUpsertSpy },
+    profileModificationRequest: {
+      create: async (args: any) => {
+        const id = `req-${++requestSeq}`;
+        const record = { id, ...args.data };
+        requestsById[id] = record;
+        return record;
+      },
+      findFirst: async (args: any) => {
+        const record = requestsById[args.where.id];
+        if (!record) return null;
+        if (args.where.providerId && record.providerId !== args.where.providerId) return null;
+        if (args.where.status && record.status !== args.where.status) return null;
+        return record;
+      },
+      findUnique: async (args: any) => requestsById[args.where.id] || null,
+      update: async (args: any) => {
+        requestsById[args.where.id] = { ...requestsById[args.where.id], ...args.data };
+        return requestsById[args.where.id];
+      },
+      delete: async (args: any) => { const r = requestsById[args.where.id]; delete requestsById[args.where.id]; return r; }
+    },
+    otpVerification: {
+      deleteMany: async () => ({ count: 0 }),
+      create: async (args: any) => {
+        const id = `otp-${++otpSeq}`;
+        const record = { id, ...args.data };
+        otpsById[id] = record;
+        return record;
+      },
+      findFirst: async (args: any) =>
+        Object.values(otpsById).find((o: any) => o.userId === args.where.userId && o.code === args.where.code && o.type === args.where.type) || null,
+      delete: async (args: any) => { delete otpsById[args.where.id]; return {}; }
+    },
+    accountAuditLog: { create: async () => ({}) },
+    $transaction: async (ops: any) => Promise.all(ops)
+  };
+
+  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  t.mock.module('./account-logs.service', { namedExports: { accountAuditLogService: { record: async () => ({}) } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  t.mock.module('../config/logger', { namedExports: { logger: { error: loggerErrorSpy, info: () => {}, warn: () => {} } } });
+
+  return {
+    userUpdateSpy, providerProfileUpdateSpy, loggerErrorSpy, callOrder, clientUpsertSpy, affiliateUpsertSpy,
+    getUserState: () => userState,
+    getProviderProfileState: () => providerProfileState,
+    getLastOtpCode: () => (Object.values(otpsById).slice(-1)[0] as any)?.code as string | undefined
+  };
+}
+
+async function loadServiceForSensitiveFlow(t: TestContext, opts: { throwOnRecompute?: boolean } = {}) {
+  const mocks = createSensitiveFlowMockPrisma(t, opts);
+  const moduleUrl = `./provider-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { providerProfileService } = await import(moduleUrl);
+  return { providerProfileService, ...mocks };
+}
+
+test('initiateSensitiveChange (BANKING): does not recalculate completion at initiation time', async (t) => {
+  const { providerProfileService, providerProfileUpdateSpy } = await loadServiceForSensitiveFlow(t);
+
+  await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
+    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA0000000000000000000011'
+  });
+
+  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
+  assert.equal(completionCalls.length, 0);
+});
+
+test('verifySensitiveChange (BANKING, pending human review): does not recalculate before admin approval', async (t) => {
+  const { providerProfileService, providerProfileUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+
+  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
+    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA0000000000000000000011'
+  });
+  const verified = await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
+
+  assert.equal(verified.status, 'PENDING_HUMAN_REVIEW');
+  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
+  assert.equal(completionCalls.length, 0);
+});
+
+test('reviewSensitiveChange (BANKING, approved): recalculates completion after ibanNumber actually commits', async (t) => {
+  const { providerProfileService, providerProfileUpdateSpy, userUpdateSpy, callOrder, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+
+  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
+    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA0000000000000000000011'
+  });
+  await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
+  await providerProfileService.reviewSensitiveChange(initiated.requestId, true);
+
+  const ibanCommit = userUpdateSpy.mock.calls.find((c: any) => 'ibanNumber' in c.arguments[0].data);
+  assert.notEqual(ibanCommit, undefined);
+  assert.equal(ibanCommit.arguments[0].data.ibanNumber, 'SA0000000000000000000011');
+
+  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
+  assert.equal(completionCalls.length, 1);
+  // The sensitive User write must commit before the completion recompute reads it.
+  assert.equal(callOrder.indexOf('user.update') < callOrder.indexOf('providerProfile.update:completion'), true);
+});
+
+test('reviewSensitiveChange (BANKING, approved) with a masked ibanNumber stripped from the payload: does NOT recalculate', async (t) => {
+  const { providerProfileService, providerProfileUpdateSpy, userUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+
+  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
+    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: '************1234'
+  });
+  await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
+  await providerProfileService.reviewSensitiveChange(initiated.requestId, true);
+
+  // The masked value must have been stripped before commit (applySensitivePayload's
+  // existing masked-value guard), so ibanNumber must not even be in the final write.
+  const ibanCommit = userUpdateSpy.mock.calls.find((c: any) => 'ibanNumber' in c.arguments[0].data);
+  assert.equal(ibanCommit, undefined);
+
+  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
+  assert.equal(completionCalls.length, 0);
+});
+
+test('reviewSensitiveChange (DOCUMENTS, approved): recalculates completion after idDocumentUrl actually commits', async (t) => {
+  const { providerProfileService, providerProfileUpdateSpy, userUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+
+  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', {
+    idDocumentUrl: 'https://cdn.example/id.pdf'
+  });
+  await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
+  await providerProfileService.reviewSensitiveChange(initiated.requestId, true);
+
+  const docCommit = userUpdateSpy.mock.calls.find((c: any) => 'idDocumentUrl' in c.arguments[0].data);
+  assert.notEqual(docCommit, undefined);
+
+  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
+  assert.equal(completionCalls.length, 1);
+});
+
+test('verifySensitiveChange (CONTACT, applied immediately since it needs no review): does NOT trigger provider completion recalculation', async (t) => {
+  const { providerProfileService, providerProfileUpdateSpy, userUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+
+  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', {
+    email: 'new@example.com', phoneNumber: '0511111111', alternativePhone: '0522222222'
+  });
+  const verified = await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
+
+  assert.equal(verified.status, 'APPROVED');
+  const emailCommit = userUpdateSpy.mock.calls.find((c: any) => 'email' in c.arguments[0].data);
+  assert.notEqual(emailCommit, undefined);
+
+  // Approved 3D.2B scope decision: CONTACT never triggers this recompute,
+  // even though email/phoneNumber are themselves formula inputs elsewhere —
+  // only the BANKING/ibanNumber and DOCUMENTS/idDocumentUrl commit points do.
+  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
+  assert.equal(completionCalls.length, 0);
+});
+
+test('reviewSensitiveChange (BANKING, approved): a completion-recompute failure is logged and does not fail the already-successful sensitive change', async (t) => {
+  const { providerProfileService, userUpdateSpy, loggerErrorSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t, { throwOnRecompute: true });
+
+  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
+    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA0000000000000000000011'
+  });
+  await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
+  const reviewed = await providerProfileService.reviewSensitiveChange(initiated.requestId, true);
+
+  // The sensitive change itself must still succeed...
+  assert.equal(reviewed.status, 'APPROVED');
+  const ibanCommit = userUpdateSpy.mock.calls.find((c: any) => 'ibanNumber' in c.arguments[0].data);
+  assert.notEqual(ibanCommit, undefined);
+  // ...and the recompute failure must be logged, not silently swallowed and
+  // not left as an empty catch.
+  assert.equal(loggerErrorSpy.mock.callCount() > 0, true);
+  const loggedError = loggerErrorSpy.mock.calls[0].arguments;
+  assert.match(String(loggedError[0]), /provider completion/i);
+  // No IBAN/document values leaked into the log line itself.
+  assert.doesNotMatch(String(loggedError[0]), /SA0000000000000000000011/);
+});
+
+test('createModificationRequest (IBAN, approved): commits User.ibanNumber first, then recalculates provider completion', async (t) => {
+  const originalRandom = Math.random;
+  Math.random = () => 0.9; // 85 + 9 = 94 > 92 -> APPROVED
+  t.after(() => { Math.random = originalRandom; });
+
+  const { providerProfileService, userUpdateSpy, providerProfileUpdateSpy, callOrder } = await loadServiceForSensitiveFlow(t);
+
+  const request = await providerProfileService.createModificationRequest('user-1', {
+    fieldName: 'IBAN', fieldLabel: 'IBAN', requestedValue: 'SA0000000000000000000099'
+  });
+
+  assert.equal(request.status, 'APPROVED');
+  const ibanCommit = userUpdateSpy.mock.calls.find((c: any) => 'ibanNumber' in c.arguments[0].data);
+  assert.notEqual(ibanCommit, undefined);
+  assert.equal(ibanCommit.arguments[0].data.ibanNumber, 'SA0000000000000000000099');
+
+  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
+  assert.equal(completionCalls.length, 1);
+  assert.equal(callOrder.indexOf('user.update') < callOrder.indexOf('providerProfile.update:completion'), true);
+});
+
+test('createModificationRequest (IBAN, not approved): does not commit or recalculate', async (t) => {
+  const originalRandom = Math.random;
+  Math.random = () => 0; // 85 <= 92 -> PENDING_HUMAN_REVIEW
+  t.after(() => { Math.random = originalRandom; });
+
+  const { providerProfileService, userUpdateSpy, providerProfileUpdateSpy } = await loadServiceForSensitiveFlow(t);
+
+  const request = await providerProfileService.createModificationRequest('user-1', {
+    fieldName: 'IBAN', fieldLabel: 'IBAN', requestedValue: 'SA0000000000000000000099'
+  });
+
+  assert.equal(request.status, 'PENDING_HUMAN_REVIEW');
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
+  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
+  assert.equal(completionCalls.length, 0);
+});
+
+test('createModificationRequest (EMAIL, approved): commits email but does not trigger provider completion recalculation', async (t) => {
+  const originalRandom = Math.random;
+  Math.random = () => 0.9;
+  t.after(() => { Math.random = originalRandom; });
+
+  const { providerProfileService, userUpdateSpy, providerProfileUpdateSpy } = await loadServiceForSensitiveFlow(t);
+
+  const request = await providerProfileService.createModificationRequest('user-1', {
+    fieldName: 'EMAIL', fieldLabel: 'Email', requestedValue: 'new@example.com'
+  });
+
+  assert.equal(request.status, 'APPROVED');
+  const emailCommit = userUpdateSpy.mock.calls.find((c: any) => 'email' in c.arguments[0].data);
+  assert.notEqual(emailCommit, undefined);
+  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
+  assert.equal(completionCalls.length, 0);
+});
+
+test('createModificationRequest (IBAN, approved): a completion-recompute failure is logged and does not undo the approved IBAN change', async (t) => {
+  const originalRandom = Math.random;
+  Math.random = () => 0.9;
+  t.after(() => { Math.random = originalRandom; });
+
+  const { providerProfileService, userUpdateSpy, loggerErrorSpy } = await loadServiceForSensitiveFlow(t, { throwOnRecompute: true });
+
+  const request = await providerProfileService.createModificationRequest('user-1', {
+    fieldName: 'IBAN', fieldLabel: 'IBAN', requestedValue: 'SA0000000000000000000099'
+  });
+
+  assert.equal(request.status, 'APPROVED');
+  const ibanCommit = userUpdateSpy.mock.calls.find((c: any) => 'ibanNumber' in c.arguments[0].data);
+  assert.notEqual(ibanCommit, undefined);
+  assert.equal(loggerErrorSpy.mock.callCount() > 0, true);
+});
+
+test('regression: no ClientProfile/AffiliateProfile writes from any sensitive-change path', async (t) => {
+  const { providerProfileService, clientUpsertSpy, affiliateUpsertSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+
+  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
+    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA0000000000000000000011'
+  });
+  await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
+  await providerProfileService.reviewSensitiveChange(initiated.requestId, true);
+
+  assert.equal(clientUpsertSpy.mock.callCount(), 0);
+  assert.equal(affiliateUpsertSpy.mock.callCount(), 0);
+});

@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import OpenAI from 'openai';
@@ -8,6 +9,7 @@ import { accountAuditLogService, AuditContext } from './account-logs.service';
 import { LEVEL_MATRIX } from './gamification.service';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { computeProviderCompletion } from '../utils/completion-calculators';
+import { logger } from '../config/logger';
 
 const aiCache = new Map<string, { metrics: any, expiresAt: number }>();
 
@@ -491,6 +493,47 @@ export class ProviderProfileService {
 		return computeProviderCompletion({ providerProfile: profile, user: profile.user || {} });
 	}
 
+	/**
+	 * Phase 3D.2B: the shared I/O recompute path for provider-completion
+	 * mutation sites that don't already have the full final ProviderProfile
+	 * state in hand (portfolio add/delete, sensitive BANKING/DOCUMENTS
+	 * applies, the legacy IBAN auto-apply path). updateSkills() already
+	 * re-fetches everything it needs via getProfile() for its own response,
+	 * so it computes inline via calculateProfileCompletion() instead of
+	 * calling this and paying for a second, redundant read.
+	 *
+	 * Fetches exactly the fields computeProviderCompletion() reads, writes
+	 * ONLY ProviderProfile.completionPercentage (never the legacy
+	 * User.profileCompletionPercent mirror, never Client/AffiliateProfile),
+	 * and has no other side effects. Accepts an optional transaction client
+	 * so a caller already inside a $transaction can reuse it instead of
+	 * opening a second connection; returns null (no-op) if the given userId
+	 * has no ProviderProfile row at all — defensive against the pre-existing,
+	 * separately-tracked authorization gap where some of these routes don't
+	 * verify the caller is actually a provider.
+	 */
+	private async recalculateProviderCompletion(providerId: string, tx?: Prisma.TransactionClient) {
+		const client = tx ?? prisma;
+		const profile = await client.providerProfile.findUnique({
+			where: { userId: providerId },
+			include: {
+				skills: true,
+				portfolioItems: true,
+				user: {
+					select: {
+						firstName: true, lastName: true, avatarUrl: true,
+						email: true, phoneNumber: true, ibanNumber: true, idDocumentUrl: true
+					}
+				}
+			}
+		});
+		if (!profile) return null;
+
+		const completion = computeProviderCompletion({ providerProfile: profile, user: profile.user || {} });
+		await client.providerProfile.update({ where: { userId: providerId }, data: { completionPercentage: completion } });
+		return completion;
+	}
+
 	async getChangeRequests(userId: string, tabName: string) {
 		const categoryMap: Record<string, string> = { contact: 'CONTACT', banking: 'BANKING', docs: 'DOCUMENTS', profile: 'PROFILE' };
 		const category = categoryMap[tabName];
@@ -537,7 +580,15 @@ export class ProviderProfileService {
 			}
 		});
 
-		return this.getProfile(userId);
+		// Phase 3D.2B: getProfile() below already re-fetches the FINAL state
+		// (skills/portfolioItems/user) for the response — reuse it to compute
+		// completion instead of a second, redundant DB round trip via
+		// recalculateProviderCompletion(). Never writes User.profileCompletionPercent.
+		const result = await this.getProfile(userId);
+		const completion = this.calculateProfileCompletion(result);
+		await prisma.providerProfile.update({ where: { userId }, data: { completionPercentage: completion } });
+		result.completionPercentage = completion;
+		return result;
 	}
 
 	async addPortfolioItem(userId: string, data: any) {
@@ -545,7 +596,7 @@ export class ProviderProfileService {
 		if (!profile) throw new Error("Profile not found");
 
 		const coverImage = await storeDataUriIfNeeded(data.coverImage, `waseetai/providers/${userId}/portfolio`, 'cover');
-		return prisma.portfolioItem.create({
+		const item = await prisma.portfolioItem.create({
 			data: {
 				providerProfileId: profile.id,
 				title: data.title,
@@ -556,6 +607,15 @@ export class ProviderProfileService {
 				tags: data.tags || [],
 			}
 		});
+
+		// Phase 3D.2B: a new portfolio item can cross the formula's 0 -> 1
+		// count threshold (portfolioItems.length > 0 OR websiteUrl -> +10).
+		// Recomputed immediately after the create succeeds — not wrapped in a
+		// transaction with it, since the recompute is a derived, idempotent
+		// re-read of the final state and doesn't need atomicity with the
+		// create to stay correct.
+		await this.recalculateProviderCompletion(userId);
+		return item;
 	}
 
 	async updatePortfolioItem(userId: string, itemId: string, data: any) {
@@ -566,6 +626,11 @@ export class ProviderProfileService {
 		if (!ownedItem) throw new Error('Portfolio item not found or unauthorized');
 
 		const coverImage = await storeDataUriIfNeeded(data.coverImage, `waseetai/providers/${userId}/portfolio`, `cover-${itemId}`);
+		// Phase 3D.2B: no completion recompute here, deliberately — this only
+		// edits an existing item's own fields (title/description/coverImage/
+		// projectUrl/completionDate/tags), none of which the formula reads;
+		// the portfolio count and websiteUrl (the only two scored factors
+		// portfolio data can affect) are both unchanged by this call.
 		return prisma.portfolioItem.update({
 			where: { id: itemId },
 			data: {
@@ -584,6 +649,11 @@ export class ProviderProfileService {
 		if (!profile) throw new Error('Profile not found');
 		const result = await prisma.portfolioItem.deleteMany({ where: { id: itemId, providerProfileId: profile.id } });
 		if (result.count !== 1) throw new Error('Portfolio item not found or unauthorized');
+
+		// Phase 3D.2B: a delete can cross the formula's 1 -> 0 count threshold
+		// (see addPortfolioItem above for why this isn't wrapped in a shared
+		// transaction with the delete).
+		await this.recalculateProviderCompletion(userId);
 		return result;
 	}
 
@@ -844,6 +914,31 @@ export class ProviderProfileService {
 				data: { certUrls: certificateUrl ? [certificateUrl] : [] }
 			});
 		}
+
+		// Phase 3D.2B: this is the real commit point for BANKING/DOCUMENTS
+		// sensitive changes (reached via reviewSensitiveChange for these two
+		// categories, since both require human review — see sensitiveConfig).
+		// Trigger recompute only when the FINAL committed updateData actually
+		// contains the one field each category's formula factor reads — never
+		// merely because of `category`, since e.g. a BANKING change can omit
+		// ibanNumber entirely, or have it stripped just above when it was a
+		// masked/redisplayed value. CONTACT is never scored, so it can never
+		// trigger this. The sensitive User update above has already committed
+		// by this point; a completion-recompute failure here must never be
+		// allowed to look like the sensitive change itself failed, so it's
+		// deliberately best-effort and logged, not rethrown, using the
+		// project's existing winston logger (never the raw changes/updateData,
+		// which could hold IBAN/document values).
+		const scoredFieldCommitted =
+			(category === 'BANKING' && 'ibanNumber' in updateData) ||
+			(category === 'DOCUMENTS' && 'idDocumentUrl' in updateData);
+		if (scoredFieldCommitted) {
+			try {
+				await this.recalculateProviderCompletion(providerId);
+			} catch (error) {
+				logger.error(`[ProviderProfileService] Failed to recalculate provider completion after an applied sensitive ${category} change (userId=${providerId})`, error);
+			}
+		}
 	}
 
 	private maskEmail(email: string) {
@@ -931,6 +1026,21 @@ export class ProviderProfileService {
 
 			if (Object.keys(updateData).length > 0) {
 				await prisma.user.update({ where: { id: providerId }, data: updateData });
+
+				// Phase 3D.2B: this legacy auto-apply flow is a second,
+				// independent commit path for User.ibanNumber (separate from
+				// applySensitivePayload above) — the only field here the
+				// provider formula scores. Same best-effort discipline: the
+				// User write above has already committed, so a recompute
+				// failure is logged and swallowed, never allowed to turn this
+				// already-successful approval into a failure.
+				if ('ibanNumber' in updateData) {
+					try {
+						await this.recalculateProviderCompletion(providerId);
+					} catch (error) {
+						logger.error(`[ProviderProfileService] Failed to recalculate provider completion after an approved legacy IBAN modification request (userId=${providerId})`, error);
+					}
+				}
 			}
 		}
 
