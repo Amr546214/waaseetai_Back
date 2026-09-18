@@ -1,11 +1,25 @@
 import { z } from 'zod';
 import { AccountType } from '@prisma/client';
 
+// The only account types a public, unauthenticated signup request (email/
+// password registration or a brand-new Google sign-up) may ever request.
+// ADMIN, SUPER_ADMIN and EMPLOYEE are internal/operator account types
+// provisioned out-of-band and must never be reachable from a public request
+// body — both registerSchema and googleAuthSchema validate against this
+// restricted enum instead of the full Prisma AccountType.
+export const PublicAccountTypeEnum = z.enum([
+  AccountType.CLIENT_INDIVIDUAL,
+  AccountType.CLIENT_COMPANY,
+  AccountType.PROVIDER_INDIVIDUAL,
+  AccountType.PROVIDER_COMPANY,
+  AccountType.MARKETING_BROKER
+], {
+  message: 'نوع الحساب غير صالح'
+});
+
 export const registerSchema = z.object({
   body: z.object({
-    accountType: z.nativeEnum(AccountType, {
-      message: 'نوع الحساب غير صالح'
-    }),
+    accountType: PublicAccountTypeEnum,
     firstName: z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل'),
     lastName: z.string().min(2, 'اسم العائلة يجب أن يكون حرفين على الأقل'),
     email: z.string().email('صيغة البريد الإلكتروني غير صحيحة'),
@@ -84,7 +98,7 @@ export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>['body'];
 export const googleAuthSchema = z.object({
   body: z.object({
     idToken: z.string().min(1, 'Token is required'),
-    accountType: z.nativeEnum(AccountType).optional()
+    accountType: PublicAccountTypeEnum.optional()
   })
 });
 

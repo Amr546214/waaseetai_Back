@@ -11,6 +11,18 @@ import { deriveProviderProgression } from '../utils/progression-calculators';
 /**
  * Helper to derive primary UserRole from AccountType enum
  */
+/**
+ * Roles a user may ever acquire through a self-service request (addAccountType
+ * / switchActiveRole). ADMIN and SUPER_ADMIN are deliberately excluded — those
+ * are internal/operator roles provisioned out-of-band, never through a
+ * request an authenticated user's own client can send. This is the
+ * service-layer half of a defense-in-depth pair whose first layer is the Zod
+ * `SelfServiceUserRoleEnum` in account-management.dto.ts: the DTO stops a
+ * malformed request at the edge, this stops it even if some other internal
+ * caller ever invokes addAccountType directly with an unchecked role.
+ */
+const SELF_SERVICE_ROLES: ReadonlySet<UserRole> = new Set([UserRole.CLIENT, UserRole.PROVIDER, UserRole.AFFILIATE]);
+
 export function getRoleFromAccountType(accountType: AccountType): UserRole {
   if (accountType === 'PROVIDER_INDIVIDUAL' || accountType === 'PROVIDER_COMPANY') {
     return UserRole.PROVIDER;
@@ -352,6 +364,10 @@ export class AccountManagementService {
     profileMetadata?: Record<string, any>,
     auditContext?: AuditContext
   ) {
+    if (!SELF_SERVICE_ROLES.has(targetRole)) {
+      throw new AppError('الدور المطلوب غير متاح للإضافة الذاتية', 403);
+    }
+
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: {

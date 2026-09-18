@@ -574,6 +574,50 @@ test('addAccountType: a role-initialization failure prevents User.roles from bei
 });
 
 // ============================================================================
+// P0-1 remediation — addAccountType() service-level allowlist (defense in
+// depth layer 2, behind the Zod SelfServiceUserRoleEnum at the DTO layer).
+// A CLIENT/PROVIDER/AFFILIATE caller must never be able to self-escalate to
+// ADMIN/SUPER_ADMIN by calling addAccountType directly with a privileged
+// targetRole, regardless of what already validated the request body upstream.
+// ============================================================================
+
+test('addAccountType: a CLIENT caller cannot add ADMIN — rejected before any write', async (t) => {
+  const { accountManagementService, userUpdateSpy, auditLogCreateSpy } = await loadServiceForAddAccountType(t, { existingRoles: ['CLIENT'], accountType: 'CLIENT_INDIVIDUAL' });
+
+  await assert.rejects(() => accountManagementService.addAccountType('user-1', 'ADMIN' as any), /الدور المطلوب غير متاح للإضافة الذاتية/);
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
+  assert.equal(auditLogCreateSpy.mock.callCount(), 0);
+});
+
+test('addAccountType: a CLIENT caller cannot add SUPER_ADMIN — rejected before any write', async (t) => {
+  const { accountManagementService, userUpdateSpy } = await loadServiceForAddAccountType(t, { existingRoles: ['CLIENT'], accountType: 'CLIENT_INDIVIDUAL' });
+
+  await assert.rejects(() => accountManagementService.addAccountType('user-1', 'SUPER_ADMIN' as any));
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+test('addAccountType: a PROVIDER caller cannot add ADMIN — rejected before any write', async (t) => {
+  const { accountManagementService, userUpdateSpy } = await loadServiceForAddAccountType(t, { existingRoles: ['PROVIDER'], accountType: 'PROVIDER_INDIVIDUAL' });
+
+  await assert.rejects(() => accountManagementService.addAccountType('user-1', 'ADMIN' as any));
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+test('addAccountType: an AFFILIATE caller cannot add SUPER_ADMIN — rejected before any write', async (t) => {
+  const { accountManagementService, userUpdateSpy } = await loadServiceForAddAccountType(t, { existingRoles: ['AFFILIATE'], accountType: 'MARKETING_BROKER' });
+
+  await assert.rejects(() => accountManagementService.addAccountType('user-1', 'SUPER_ADMIN' as any));
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+test('addAccountType: legitimate self-service roles (CLIENT/PROVIDER/AFFILIATE) are unaffected by the new allowlist check', async (t) => {
+  const { accountManagementService } = await loadServiceForAddAccountType(t, { existingRoles: ['CLIENT'], accountType: 'CLIENT_INDIVIDUAL' });
+
+  const result = await accountManagementService.addAccountType('user-1', 'AFFILIATE');
+  assert.equal(result.user.roles.includes('AFFILIATE'), true);
+});
+
+// ============================================================================
 // Phase 3D.4 — getAvailableAccountTypes() atomicity fix. Previously,
 // User.roles repair and profile-row repair were two separate, non-
 // transactional statements — a crash between them could leave User.roles

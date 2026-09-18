@@ -13,6 +13,21 @@ const documentUpload = memoryUpload({
 	allowedMimeTypes: new Set(['application/pdf', 'image/jpeg', 'image/png'])
 });
 
+// Route classification for this router (see P0-2 remediation):
+//  - PUBLIC: GET /public/:providerId — unauthenticated, intentionally public.
+//  - AUTHENTICATED IDENTITY-LEVEL (any role): session listing/revocation and
+//    password change are generic account-security features that happen to be
+//    mounted here; they scope purely by req.user.id and have no equivalent
+//    route elsewhere, so they stay open to any authenticated active role.
+//  - PROVIDER-ONLY: every route that reads/writes ProviderProfile,
+//    ProfileModificationRequest (schema-scoped to `providerId`), or the
+//    provider's own public-preview — having a ProviderProfile row must not
+//    itself grant PROVIDER authority, so these require the caller to already
+//    hold PROVIDER in roles[]/activeRole via the legitimate add-account-type/
+//    registration provisioning flow.
+//  - ADMIN-ONLY: sensitive-change review — already gated, unchanged.
+const requireProvider = authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
+
 // Public read-only profile endpoints must remain outside the authenticated
 // middleware. Private preview (/public without an id) is still protected by
 // the middleware below because it resolves the current user's profile.
@@ -21,7 +36,7 @@ router.get('/public/:providerId', providerProfileController.getPublicProfile);
 // Ensure all routes are authenticated
 router.use(authenticate, requireActiveUser);
 
-router.post('/documents/upload', documentUpload.single('file'), async (req, res, next) => {
+router.post('/documents/upload', requireProvider, documentUpload.single('file'), async (req, res, next) => {
 	try {
 	if (!req.file) return res.status(400).json({ success: false, message: 'A PDF, JPG or PNG file is required' });
 	const stored = await uploadMulterFile(req.file, `waseetai/providers/${req.user!.id}/documents`);
@@ -29,28 +44,30 @@ router.post('/documents/upload', documentUpload.single('file'), async (req, res,
 	} catch (error) { next(error); }
 });
 
-router.get('/me', providerProfileController.getProfile);
+router.get('/me', requireProvider, providerProfileController.getProfile);
+// Identity-level: session management and password change apply to any
+// authenticated role, not just PROVIDER — no authorize() gate here.
 router.get('/sessions', providerProfileController.getActiveSessions);
 router.delete('/sessions/:id', authLimiter, providerProfileController.revokeSession);
 router.put('/password', authLimiter, providerProfileController.changePassword);
-router.get('/setup', providerProfileController.getSetupData);
-router.post('/setup', providerProfileController.saveSetupData);
-router.get('/public', providerProfileController.getPublicProfile);
-router.get('/requests', providerProfileController.getModificationRequests);
-router.post('/requests', providerProfileController.createModificationRequest);
-router.post('/requests/:id/cancel', providerProfileController.cancelModificationRequest);
+router.get('/setup', requireProvider, providerProfileController.getSetupData);
+router.post('/setup', requireProvider, providerProfileController.saveSetupData);
+router.get('/public', requireProvider, providerProfileController.getPublicProfile);
+router.get('/requests', requireProvider, providerProfileController.getModificationRequests);
+router.post('/requests', requireProvider, providerProfileController.createModificationRequest);
+router.post('/requests/:id/cancel', requireProvider, providerProfileController.cancelModificationRequest);
 router.post('/requests/:id/review', authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN), providerProfileController.reviewSensitiveChange);
 router.get('/admin/pending-reviews', authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN), providerProfileController.getPendingSensitiveReviews);
-router.get('/requests/:tabName', providerProfileController.getChangeRequests);
-router.post('/sensitive-change', providerProfileController.initiateSensitiveChange);
-router.post('/sensitive-change/verify', providerProfileController.verifySensitiveChange);
-router.put('/basic-info', providerProfileController.updateBasicInfo);
-router.put('/contact', providerProfileController.updateContactInfo);
-router.put('/banking', providerProfileController.updateBankingInfo);
-router.put('/docs', providerProfileController.updateDocsInfo);
-router.put('/skills', providerProfileController.updateSkills);
-router.post('/portfolio', providerProfileController.addPortfolioItem);
-router.put('/portfolio/:id', providerProfileController.updatePortfolioItem);
-router.delete('/portfolio/:id', providerProfileController.deletePortfolioItem);
+router.get('/requests/:tabName', requireProvider, providerProfileController.getChangeRequests);
+router.post('/sensitive-change', requireProvider, providerProfileController.initiateSensitiveChange);
+router.post('/sensitive-change/verify', requireProvider, providerProfileController.verifySensitiveChange);
+router.put('/basic-info', requireProvider, providerProfileController.updateBasicInfo);
+router.put('/contact', requireProvider, providerProfileController.updateContactInfo);
+router.put('/banking', requireProvider, providerProfileController.updateBankingInfo);
+router.put('/docs', requireProvider, providerProfileController.updateDocsInfo);
+router.put('/skills', requireProvider, providerProfileController.updateSkills);
+router.post('/portfolio', requireProvider, providerProfileController.addPortfolioItem);
+router.put('/portfolio/:id', requireProvider, providerProfileController.updatePortfolioItem);
+router.delete('/portfolio/:id', requireProvider, providerProfileController.deletePortfolioItem);
 
 export default router;
