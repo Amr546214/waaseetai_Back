@@ -44,29 +44,39 @@ dotenv.config();
 // Initialize Express app
 const app = express();
 
-// Trust the local reverse proxy only, by its actual identity (loopback),
-// not a blind hop count. Confirmed topology (DEV, /etc/nginx/sites-available/
+// Trust the local reverse proxy only, by its actual verified identity, not a
+// blind hop count. Confirmed topology (DEV, /etc/nginx/sites-available/
 // dev.waseetai.com): a single host-level nginx terminates TLS and does
 // `proxy_pass http://127.0.0.1:5009` for /api/, appending the real client IP
-// via `X-Forwarded-For: $proxy_add_x_forwarded_for` — exactly one hop, and
-// that hop always connects from 127.0.0.1/::1.
+// via `X-Forwarded-For: $proxy_add_x_forwarded_for` — exactly one hop.
 //
-// 'loopback' (Express's built-in preset for 127.0.0.1/8, ::1/128) trusts
-// X-Forwarded-For only when the immediate TCP peer is that local nginx.
-// A bare numeric hop count (`trust proxy: 1`) was deliberately NOT used
-// here: this container's port is also published directly to the host
-// (0.0.0.0:5009, a separate pre-existing exposure, out of scope for this
-// fix), so a request that bypasses nginx entirely could hand Express a
-// self-forged X-Forwarded-For header. A hop-count setting would trust that
-// forged header just as readily as a real one; the loopback identity check
-// does not, since a direct caller's socket address is never 127.0.0.1.
+// That hop does NOT arrive at Express as 127.0.0.1: this app runs inside a
+// Docker container with the port published (`-p 5009:5009`), so nginx's
+// connection is rewritten by Docker's port-publishing NAT to arrive from the
+// bridge network's gateway address instead (confirmed via `docker network
+// inspect waseetai-network`: subnet 172.23.0.0/16, gateway 172.23.0.1) — an
+// initial 'loopback' setting was deployed and verified NOT to match this
+// address (real external requests still logged the flat gateway IP), so it
+// was corrected to 'uniquelocal', Express's built-in preset for private/
+// RFC1918 ranges (10/8, 172.16/12, 192.168/16, 127/8, and their IPv6
+// equivalents). 172.23.0.1 falls within 172.16.0.0/12, so this correctly
+// trusts the real proxy hop without hardcoding a specific gateway IP that
+// could silently go stale if the Docker network is ever recreated with a
+// different subnet. A bare numeric hop count (`trust proxy: 1`) was
+// deliberately NOT used either: this container's port is also published
+// directly to the host (0.0.0.0:5009, a separate pre-existing exposure, out
+// of scope for this fix), so a request that bypasses nginx entirely could
+// hand Express a self-forged X-Forwarded-For header — a hop-count setting
+// would trust that forged header just as readily as a real one, whereas a
+// direct caller's real public IP is never itself a private/RFC1918 address.
 //
 // Without this, req.ip (and therefore express-rate-limit's per-client
 // bucketing) fell back to the raw socket address for every request, which
-// behind this proxy is always 127.0.0.1 — collapsing every real visitor
-// into one shared rate-limit bucket. That is what produced the 429 on
-// GET /api/marketer/profile during active multi-user DEV testing.
-app.set('trust proxy', 'loopback');
+// behind this proxy is always the same Docker gateway address — collapsing
+// every real visitor into one shared rate-limit bucket. That is what
+// produced the 429 on GET /api/marketer/profile during active multi-user
+// DEV testing.
+app.set('trust proxy', 'uniquelocal');
 
 // ==========================================
 // 1. SECURITY & MIDDLEWARES
