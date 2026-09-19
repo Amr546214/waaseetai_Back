@@ -36,3 +36,23 @@ test('CreateIdentityRequestSchema: rejects an empty payload (no field to change)
   const result = CreateIdentityRequestSchema.safeParse({});
   assert.equal(result.success, false);
 });
+
+test('CreateIdentityRequestSchema: accepts firstName alone', () => {
+  const result = CreateIdentityRequestSchema.safeParse({ firstName: 'Amr' });
+  assert.equal(result.success, true);
+});
+
+test('CreateIdentityRequestSchema: accepts lastName alone', () => {
+  const result = CreateIdentityRequestSchema.safeParse({ lastName: 'Okasha' });
+  assert.equal(result.success, true);
+});
+
+test('CreateIdentityRequestSchema: accepts firstName/lastName together with nationalId/phoneNumber', () => {
+  const result = CreateIdentityRequestSchema.safeParse({ firstName: 'Amr', lastName: 'Okasha', nationalId: '2000000000', phoneNumber: '0511111111' });
+  assert.equal(result.success, true);
+});
+
+test('CreateIdentityRequestSchema: still rejects email even alongside firstName/lastName', () => {
+  const result = CreateIdentityRequestSchema.safeParse({ firstName: 'Amr', email: 'new@example.com' });
+  assert.equal(result.success, false);
+});

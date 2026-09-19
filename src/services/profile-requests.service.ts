@@ -74,6 +74,8 @@ export async function createGovernedFieldRequests(
 // even a caller that bypasses the DTO (e.g. an internal call) cannot express
 // an EMAIL change through this function at all.
 export interface IdentityChangeInput {
+	firstName?: string;
+	lastName?: string;
 	nationalId?: string;
 	phoneNumber?: string;
 }
@@ -104,13 +106,18 @@ export class ProfileRequestsService {
 	}
 
 	/**
-	 * Governed identity-field change requests — NATIONAL_ID/PHONE_NUMBER/EMAIL
-	 * are User columns (confirmed via marketer-profile.service.ts#getProfile's
-	 * own `user: { select: { email, phoneNumber, idNumber } }` and the basics
-	 * tab template reading `profile()?.user?.*`), not AffiliateProfile columns
-	 * — unlike IBAN/banking, which live on AffiliateProfile itself. The
-	 * request row's owner is still the caller's AffiliateProfile (the model is
-	 * scoped to affiliateProfileId), same as every other ProfileChangeRequest.
+	 * Governed identity-field change requests — FIRST_NAME/LAST_NAME/
+	 * NATIONAL_ID/PHONE_NUMBER/EMAIL are all User columns (confirmed via
+	 * marketer-profile.service.ts#getProfile's own `user: { select: {
+	 * firstName, lastName, email, phoneNumber, idNumber } }` and the basics
+	 * tab template reading `profile()?.user?.*`), not AffiliateProfile
+	 * columns — unlike IBAN/banking, which live on AffiliateProfile itself.
+	 * Note AffiliateProfile has its OWN separate firstName/lastName columns
+	 * (the Phase 3A per-role display identity used by this same page's
+	 * "الملف التسويقي" tab/avatar) — those are a distinct concept and are
+	 * never read or written by this basics-tab flow. The request row's owner
+	 * is still the caller's AffiliateProfile (the model is scoped to
+	 * affiliateProfileId), same as every other ProfileChangeRequest.
 	 *
 	 * Never writes the real User row — only ever creates ProfileChangeRequest
 	 * rows via the shared createGovernedFieldRequests helper, so the same
@@ -126,6 +133,8 @@ export class ProfileRequestsService {
 			if (!user) throw new AppError('حساب المستخدم غير موجود', 404);
 
 			const candidates: FieldChangeCandidate[] = [
+				{ fieldType: SensitiveFieldType.FIRST_NAME, fieldLabel: 'الاسم الأول', currentValue: user.firstName, requestedValue: changes.firstName },
+				{ fieldType: SensitiveFieldType.LAST_NAME, fieldLabel: 'اسم العائلة', currentValue: user.lastName, requestedValue: changes.lastName },
 				{ fieldType: SensitiveFieldType.NATIONAL_ID, fieldLabel: 'رقم الهوية الوطنية', currentValue: user.idNumber, requestedValue: changes.nationalId },
 				{ fieldType: SensitiveFieldType.PHONE_NUMBER, fieldLabel: 'رقم الجوال', currentValue: user.phoneNumber, requestedValue: changes.phoneNumber }
 			];

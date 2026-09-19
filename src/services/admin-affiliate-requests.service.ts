@@ -112,9 +112,10 @@ export class AdminAffiliateRequestsService {
 	/**
 	 * fieldType -> real column mapping, verified against the current schema
 	 * and the exact source each field is read from in marketer-profile.
-	 * service.ts#getProfile: EMAIL/PHONE_NUMBER/NATIONAL_ID are User columns,
-	 * IBAN/BANK_NAME/ACCOUNT_HOLDER_NAME/SWIFT_CODE are AffiliateProfile
-	 * columns. Runs inside the caller's transaction so a failure here rolls
+	 * service.ts#getProfile: EMAIL/PHONE_NUMBER/NATIONAL_ID/FIRST_NAME/
+	 * LAST_NAME are all User columns, IBAN/BANK_NAME/ACCOUNT_HOLDER_NAME/
+	 * SWIFT_CODE are AffiliateProfile columns. Runs inside the caller's
+	 * transaction so a failure here rolls
 	 * back the whole approval — the request can never be marked APPROVED
 	 * without the real field actually changing.
 	 *
@@ -135,6 +136,12 @@ export class AdminAffiliateRequestsService {
 		switch (fieldType) {
 			case SensitiveFieldType.EMAIL:
 				throw new AppError('تعديل البريد الإلكتروني يتطلب مسارًا منفصلاً للتحقق من ملكية البريد الجديد، ولا يمكن اعتماده عبر نظام طلبات التعديل الحالي', 409);
+			case SensitiveFieldType.FIRST_NAME:
+				await tx.user.update({ where: { id: profile.userId }, data: { firstName: requestedValue } });
+				return;
+			case SensitiveFieldType.LAST_NAME:
+				await tx.user.update({ where: { id: profile.userId }, data: { lastName: requestedValue } });
+				return;
 			case SensitiveFieldType.PHONE_NUMBER:
 				await tx.user.update({ where: { id: profile.userId }, data: { phoneNumber: requestedValue } });
 				return;

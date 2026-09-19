@@ -78,6 +78,45 @@ test('approve: an EMAIL request is refused — the request itself stays PENDING 
 	assert.equal(getRequest().appliedAt, undefined);
 });
 
+test('approve: FIRST_NAME request applies to User.firstName and marks APPROVED_AND_APPLIED', async (t) => {
+	const { adminAffiliateRequestsService, userUpdateSpy, affiliateUpdateSpy, notifySpy } = await loadService(t, {
+		request: { id: 'req-fn', affiliateProfileId: 'aff-1', fieldType: 'FIRST_NAME', fieldLabel: 'الاسم الأول', requestedValue: 'NewFirst', currentValue: 'OldFirst', status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-FN' }
+	});
+
+	const result = await adminAffiliateRequestsService.approve('req-fn', 'admin-1');
+
+	assert.equal(userUpdateSpy.mock.callCount(), 1);
+	assert.equal(userUpdateSpy.mock.calls[0].arguments[0].data.firstName, 'NewFirst');
+	assert.equal(affiliateUpdateSpy.mock.callCount(), 0);
+	assert.equal(result.status, 'APPROVED_AND_APPLIED');
+	assert.equal(notifySpy.mock.callCount(), 1);
+});
+
+test('approve: LAST_NAME request applies to User.lastName and marks APPROVED_AND_APPLIED', async (t) => {
+	const { adminAffiliateRequestsService, userUpdateSpy, affiliateUpdateSpy } = await loadService(t, {
+		request: { id: 'req-ln', affiliateProfileId: 'aff-1', fieldType: 'LAST_NAME', fieldLabel: 'اسم العائلة', requestedValue: 'NewLast', currentValue: 'OldLast', status: 'PENDING_HUMAN_APPROVAL', requestNumber: 'REQ-LN' }
+	});
+
+	const result = await adminAffiliateRequestsService.approve('req-ln', 'admin-1');
+
+	assert.equal(userUpdateSpy.mock.callCount(), 1);
+	assert.equal(userUpdateSpy.mock.calls[0].arguments[0].data.lastName, 'NewLast');
+	assert.equal(affiliateUpdateSpy.mock.callCount(), 0);
+	assert.equal(result.status, 'APPROVED_AND_APPLIED');
+});
+
+test('reject: a FIRST_NAME request rejection does not modify User.firstName and persists the rejection reason', async (t) => {
+	const { adminAffiliateRequestsService, userUpdateSpy } = await loadService(t, {
+		request: { id: 'req-fn', affiliateProfileId: 'aff-1', fieldType: 'FIRST_NAME', fieldLabel: 'الاسم الأول', requestedValue: 'NewFirst', currentValue: 'OldFirst', status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-FN' }
+	});
+
+	const result = await adminAffiliateRequestsService.reject('req-fn', 'admin-1', 'الاسم لا يطابق الهوية');
+
+	assert.equal(userUpdateSpy.mock.callCount(), 0);
+	assert.equal(result.status, 'REJECTED');
+	assert.equal(result.rejectionReason, 'الاسم لا يطابق الهوية');
+});
+
 test('approve: PHONE_NUMBER request applies to User.phoneNumber', async (t) => {
 	const { adminAffiliateRequestsService, userUpdateSpy } = await loadService(t, {
 		request: { id: 'req-2', affiliateProfileId: 'aff-1', fieldType: 'PHONE_NUMBER', fieldLabel: 'رقم الجوال', requestedValue: '0511111111', currentValue: '0500000000', status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-2' }

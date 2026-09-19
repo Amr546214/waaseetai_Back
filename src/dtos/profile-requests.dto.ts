@@ -16,10 +16,13 @@ import { z } from 'zod';
 // out of scope for this task. `.strict()` below means a client sending
 // `email` gets a validation error rather than having it silently dropped.
 export const CreateIdentityRequestSchema = z.object({
+  firstName: z.string().trim().min(1).max(50).optional(),
+  lastName: z.string().trim().min(1).max(50).optional(),
   nationalId: z.string().trim().min(1).max(20).optional(),
   phoneNumber: z.string().trim().min(1).max(20).optional()
-}).strict().refine(data => data.nationalId !== undefined || data.phoneNumber !== undefined, {
-  message: 'يجب تحديد حقل واحد على الأقل لتعديله'
-});
+}).strict().refine(
+  data => data.firstName !== undefined || data.lastName !== undefined || data.nationalId !== undefined || data.phoneNumber !== undefined,
+  { message: 'يجب تحديد حقل واحد على الأقل لتعديله' }
+);
 
 export type CreateIdentityRequestDto = z.infer<typeof CreateIdentityRequestSchema>;

@@ -14,7 +14,7 @@ function createMockPrisma(t: TestContext, opts: {
 	existingRequests?: any[];
 } = {}) {
 	const profile = opts.profile ?? { id: 'aff-1', userId: 'user-1' };
-	const user = opts.user ?? { id: 'user-1', idNumber: '1000000000', phoneNumber: '0500000000', email: 'old@example.com' };
+	const user = opts.user ?? { id: 'user-1', firstName: 'OldFirst', lastName: 'OldLast', idNumber: '1000000000', phoneNumber: '0500000000', email: 'old@example.com' };
 	const requests: any[] = opts.existingRequests ? [...opts.existingRequests] : [];
 
 	const createSpy = t.mock.fn((args: any) => {
@@ -80,6 +80,83 @@ test('createIdentityRequests: creates a PHONE_NUMBER request when phone actually
 	assert.equal(created.length, 1);
 	assert.equal(created[0].fieldType, 'PHONE_NUMBER');
 	assert.equal(created[0].requestedValue, '0511111111');
+});
+
+test('createIdentityRequests: creates a FIRST_NAME request when firstName actually changes', async (t) => {
+	const { profileRequestsService } = await loadService(t);
+	const created = await profileRequestsService.createIdentityRequests('user-1', { firstName: 'NewFirst' });
+
+	assert.equal(created.length, 1);
+	assert.equal(created[0].fieldType, 'FIRST_NAME');
+	assert.equal(created[0].fieldLabel, 'الاسم الأول');
+	assert.equal(created[0].currentValue, 'OldFirst');
+	assert.equal(created[0].requestedValue, 'NewFirst');
+	assert.equal(created[0].status, 'PENDING_AI_REVIEW');
+});
+
+test('createIdentityRequests: creates a LAST_NAME request when lastName actually changes', async (t) => {
+	const { profileRequestsService } = await loadService(t);
+	const created = await profileRequestsService.createIdentityRequests('user-1', { lastName: 'NewLast' });
+
+	assert.equal(created.length, 1);
+	assert.equal(created[0].fieldType, 'LAST_NAME');
+	assert.equal(created[0].fieldLabel, 'اسم العائلة');
+	assert.equal(created[0].currentValue, 'OldLast');
+	assert.equal(created[0].requestedValue, 'NewLast');
+});
+
+test('createIdentityRequests: unchanged firstName/lastName are skipped (no rows created) when submitted alongside a real phone change', async (t) => {
+	const { profileRequestsService } = await loadService(t);
+	const created = await profileRequestsService.createIdentityRequests('user-1', {
+		firstName: 'OldFirst',
+		lastName: 'OldLast',
+		phoneNumber: '0511111111'
+	});
+
+	assert.equal(created.length, 1);
+	assert.equal(created[0].fieldType, 'PHONE_NUMBER');
+});
+
+test('createIdentityRequests: submitting the exact current firstName/lastName alone creates no request and rejects', async (t) => {
+	const { profileRequestsService } = await loadService(t);
+	await assert.rejects(
+		() => profileRequestsService.createIdentityRequests('user-1', { firstName: 'OldFirst', lastName: 'OldLast' }),
+		/لم يتم إجراء أي تغيير/
+	);
+});
+
+test('createIdentityRequests: a duplicate pending FIRST_NAME request is rejected (409) and nothing new is created', async (t) => {
+	const { profileRequestsService, requests } = await loadService(t, {
+		existingRequests: [{ id: 'r1', affiliateProfileId: 'aff-1', fieldType: 'FIRST_NAME', status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-1' }]
+	});
+
+	await assert.rejects(
+		() => profileRequestsService.createIdentityRequests('user-1', { firstName: 'NewFirst' }),
+		(error: any) => error.statusCode === 409
+	);
+	assert.equal(requests.length, 1);
+});
+
+test('createIdentityRequests: a duplicate pending LAST_NAME request is rejected (409) and nothing new is created', async (t) => {
+	const { profileRequestsService, requests } = await loadService(t, {
+		existingRequests: [{ id: 'r1', affiliateProfileId: 'aff-1', fieldType: 'LAST_NAME', status: 'PENDING_HUMAN_APPROVAL', requestNumber: 'REQ-1' }]
+	});
+
+	await assert.rejects(
+		() => profileRequestsService.createIdentityRequests('user-1', { lastName: 'NewLast' }),
+		(error: any) => error.statusCode === 409
+	);
+	assert.equal(requests.length, 1);
+});
+
+test('createIdentityRequests: creating a FIRST_NAME/LAST_NAME request never touches the real User row', async (t) => {
+	const { profileRequestsService, user } = await loadService(t);
+	await profileRequestsService.createIdentityRequests('user-1', { firstName: 'NewFirst', lastName: 'NewLast' });
+
+	// The mock user object itself is never mutated by request creation (no
+	// tx.user.update call exists anywhere in createIdentityRequests).
+	assert.equal(user.firstName, 'OldFirst');
+	assert.equal(user.lastName, 'OldLast');
 });
 
 test('createIdentityRequests: EMAIL is not a real input of this function anymore — defense in depth even if a caller bypasses the DTO', async (t) => {
@@ -148,4 +225,16 @@ test('getRequests: returns newly-created requests for this affiliate (marketer r
 	assert.equal(summary.pendingAiCount, 2);
 	const fieldTypes = summary.items.map((r: any) => r.fieldType).sort();
 	assert.deepEqual(fieldTypes, ['NATIONAL_ID', 'PHONE_NUMBER']);
+});
+
+test('getRequests: name change requests (FIRST_NAME/LAST_NAME) appear in marketer request history', async (t) => {
+	const { profileRequestsService } = await loadService(t);
+	await profileRequestsService.createIdentityRequests('user-1', { firstName: 'NewFirst', lastName: 'NewLast' });
+
+	const summary = await profileRequestsService.getRequests('user-1');
+	assert.equal(summary.totalRequests, 2);
+	const fieldTypes = summary.items.map((r: any) => r.fieldType).sort();
+	assert.deepEqual(fieldTypes, ['FIRST_NAME', 'LAST_NAME']);
+	const labels = summary.items.map((r: any) => r.fieldLabel).sort();
+	assert.deepEqual(labels, ['اسم العائلة', 'الاسم الأول']);
 });

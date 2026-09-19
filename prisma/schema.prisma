@@ -194,6 +194,8 @@ enum SensitiveFieldType {
   BANK_NAME
   ACCOUNT_HOLDER_NAME
   SWIFT_CODE
+  FIRST_NAME
+  LAST_NAME
 }
 
 model ProfileChangeRequest {
