@@ -1,7 +1,8 @@
 import { prisma } from '../config/db';
-import { SensitiveFieldType, ChangeRequestStatus } from '@prisma/client';
+import { SensitiveFieldType } from '@prisma/client';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { computeAffiliateCompletion } from '../utils/completion-calculators';
+import { createGovernedFieldRequests, FieldChangeCandidate } from './profile-requests.service';
 
 export class MarketerProfileService {
   
@@ -74,54 +75,38 @@ export class MarketerProfileService {
     return { success: true };
   }
 
+  /**
+   * ALL banking fields are governed — this page's own "gov-bar" copy says
+   * editing "الحساب البنكي والمستندات" creates a request an AI checks and a
+   * human approves, but previously only IBAN actually went through
+   * ProfileChangeRequest while bankName/accountHolderName/swiftCode were
+   * applied immediately (a real gap between the UI's promise and the code).
+   * None of the four fields are written directly anymore — every changed
+   * field becomes its own governed ProfileChangeRequest via the shared
+   * createGovernedFieldRequests helper (same duplicate-pending and
+   * unchanged-value rules as the identity-fields flow), and the real
+   * AffiliateProfile row is only ever touched later, by an admin approval.
+   */
   public async updateBankInfo(userId: string, data: { bankName?: string; accountHolderName?: string; iban?: string; swiftCode?: string }) {
-    const profile = await prisma.affiliateProfile.findUnique({ where: { userId } });
-    if (!profile) throw new Error('Affiliate profile not found');
+    return prisma.$transaction(async (tx) => {
+      const profile = await tx.affiliateProfile.findUnique({ where: { userId } });
+      if (!profile) throw new Error('Affiliate profile not found');
 
-    let isPendingRequest = false;
-    let requestId = undefined;
+      const candidates: FieldChangeCandidate[] = [
+        { fieldType: SensitiveFieldType.IBAN, fieldLabel: 'رقم الحساب البنكي IBAN', currentValue: profile.iban, requestedValue: data.iban },
+        { fieldType: SensitiveFieldType.BANK_NAME, fieldLabel: 'اسم البنك', currentValue: profile.bankName, requestedValue: data.bankName },
+        { fieldType: SensitiveFieldType.ACCOUNT_HOLDER_NAME, fieldLabel: 'اسم صاحب الحساب', currentValue: profile.accountHolderName, requestedValue: data.accountHolderName },
+        { fieldType: SensitiveFieldType.SWIFT_CODE, fieldLabel: 'رمز السويفت', currentValue: profile.swiftCode, requestedValue: data.swiftCode }
+      ];
 
-    // Check if IBAN is being updated and is different from current
-    if (data.iban && data.iban !== profile.iban) {
-      isPendingRequest = true;
-      requestId = `REQ-${Math.floor(1000 + Math.random() * 9000)}`;
+      const created = await createGovernedFieldRequests(tx, profile.id, candidates);
 
-      await prisma.profileChangeRequest.create({
-        data: {
-          requestNumber: requestId,
-          affiliateProfileId: profile.id,
-          fieldType: SensitiveFieldType.IBAN,
-          fieldLabel: 'رقم الحساب البنكي IBAN',
-          currentValue: profile.iban || '',
-          requestedValue: data.iban,
-          status: ChangeRequestStatus.PENDING_AI_REVIEW,
-          aiRecommendation: 'يتحقق الذكاء من تطابق اسم صاحب الحساب الجديد مع الهوية ومن سلامة صيغة IBAN قبل رفعه للمراجع البشري',
-          aiConfidenceScore: 95
-        }
-      });
-      
-      // Remove sensitive fields from direct update
-      delete data.iban;
-    }
-
-    // Direct update for non-sensitive or unchanged fields
-    const updated = await prisma.affiliateProfile.update({
-      where: { userId },
-      data: {
-        bankName: data.bankName,
-        accountHolderName: data.accountHolderName,
-        swiftCode: data.swiftCode
-      }
+      return {
+        success: true,
+        isPendingRequest: true,
+        requests: created
+      };
     });
-
-    await this.recalculateCompletion(userId);
-
-    return {
-      success: true,
-      isPendingRequest,
-      requestId,
-      data: updated
-    };
   }
 
   private async recalculateCompletion(userId: string) {

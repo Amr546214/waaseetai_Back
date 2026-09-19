@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { marketerProfileController } from '../controllers/marketer-profile.controller';
 import { profileRequestsController } from '../controllers/profile-requests.controller';
 import { authenticate, authorize } from '../middlewares/auth.middleware';
+import { validateDto } from '../middlewares/validate-dto.middleware';
+import { CreateIdentityRequestSchema } from '../dtos/profile-requests.dto';
 
 const router = Router();
 
@@ -17,6 +19,7 @@ router.patch('/bank-info', marketerProfileController.updateBankInfo);
 
 // Change Requests
 router.get('/requests', profileRequestsController.getRequests);
+router.post('/requests', validateDto(CreateIdentityRequestSchema), profileRequestsController.createRequests);
 router.post('/requests/:id/withdraw', profileRequestsController.withdrawRequest);
 
 export default router;

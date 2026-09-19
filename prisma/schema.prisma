@@ -191,6 +191,9 @@ enum SensitiveFieldType {
   NATIONAL_ID
   PHONE_NUMBER
   EMAIL
+  BANK_NAME
+  ACCOUNT_HOLDER_NAME
+  SWIFT_CODE
 }
 
 model ProfileChangeRequest {
