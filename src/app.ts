@@ -44,6 +44,30 @@ dotenv.config();
 // Initialize Express app
 const app = express();
 
+// Trust the local reverse proxy only, by its actual identity (loopback),
+// not a blind hop count. Confirmed topology (DEV, /etc/nginx/sites-available/
+// dev.waseetai.com): a single host-level nginx terminates TLS and does
+// `proxy_pass http://127.0.0.1:5009` for /api/, appending the real client IP
+// via `X-Forwarded-For: $proxy_add_x_forwarded_for` — exactly one hop, and
+// that hop always connects from 127.0.0.1/::1.
+//
+// 'loopback' (Express's built-in preset for 127.0.0.1/8, ::1/128) trusts
+// X-Forwarded-For only when the immediate TCP peer is that local nginx.
+// A bare numeric hop count (`trust proxy: 1`) was deliberately NOT used
+// here: this container's port is also published directly to the host
+// (0.0.0.0:5009, a separate pre-existing exposure, out of scope for this
+// fix), so a request that bypasses nginx entirely could hand Express a
+// self-forged X-Forwarded-For header. A hop-count setting would trust that
+// forged header just as readily as a real one; the loopback identity check
+// does not, since a direct caller's socket address is never 127.0.0.1.
+//
+// Without this, req.ip (and therefore express-rate-limit's per-client
+// bucketing) fell back to the raw socket address for every request, which
+// behind this proxy is always 127.0.0.1 — collapsing every real visitor
+// into one shared rate-limit bucket. That is what produced the 429 on
+// GET /api/marketer/profile during active multi-user DEV testing.
+app.set('trust proxy', 'loopback');
+
 // ==========================================
 // 1. SECURITY & MIDDLEWARES
 // ==========================================
