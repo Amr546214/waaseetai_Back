@@ -1,7 +1,61 @@
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { CreateConversationDto, SendMessageDto } from '../dtos/chat.dto';
-import { MessageType, MessageStatus } from '@prisma/client';
+import { MessageType, MessageStatus, UserRole } from '@prisma/client';
+
+/**
+ * Single source of truth for CLIENT/PROVIDER chat role isolation.
+ *
+ * Conversation has no role column — a user's role IN a given conversation is
+ * whichever fixed column (clientId/providerId) matches their User.id. This
+ * maps the user's CURRENT activeRole to the one column that role is allowed
+ * to touch. AFFILIATE (and anything else) deliberately returns null: there is
+ * no AFFILIATE participation concept on Conversation yet — see the follow-up
+ * architecture task instead of inventing a mapping here.
+ *
+ * activeRole must always come from a trusted, DB-resolved source, never from
+ * a frontend-supplied body/query param:
+ * - HTTP callers pass req.user.activeRole (the authenticate middleware
+ *   re-reads this from the DB on every request).
+ * - Socket.IO callers must call resolveActiveRole() below per-event, since a
+ *   long-lived socket connection can outlive a role switch made elsewhere.
+ */
+export function conversationRoleFilter(
+  userId: string,
+  activeRole: UserRole | string | null | undefined
+): { clientId: string } | { providerId: string } | null {
+  if (activeRole === UserRole.CLIENT) return { clientId: userId };
+  if (activeRole === UserRole.PROVIDER) return { providerId: userId };
+  return null;
+}
+
+/**
+ * Resolves a user's CURRENT activeRole directly from the database. Used by
+ * Socket.IO handlers, which only learn a userId from the JWT at connect time
+ * and must never trust a cached/stale role for the lifetime of the socket.
+ */
+export async function resolveActiveRole(userId: string): Promise<UserRole | null> {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { activeRole: true } });
+  return user?.activeRole ?? null;
+}
+
+/**
+ * Authorizes that `userId`, acting as `activeRole`, is a participant of
+ * `conversationId`. This is the ONE place CLIENT/PROVIDER conversation access
+ * is decided — every read/write path and every Socket.IO handler must go
+ * through this (or conversationRoleFilter for listing) instead of an
+ * OR-across-both-columns check, which is exactly the role-isolation bug this
+ * closes.
+ */
+export async function authorizeConversationForRole(
+  conversationId: string,
+  userId: string,
+  activeRole: UserRole | string | null | undefined
+): Promise<{ id: string } | null> {
+  const roleFilter = conversationRoleFilter(userId, activeRole);
+  if (!roleFilter) return null;
+  return prisma.conversation.findFirst({ where: { id: conversationId, ...roleFilter }, select: { id: true } });
+}
 
 class ChatService {
   /**
@@ -13,7 +67,7 @@ class ChatService {
     // Fetch user account type
     const currentUser = await prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, accountType: true, firstName: true, lastName: true }
+      select: { id: true, accountType: true, activeRole: true, firstName: true, lastName: true }
     });
 
     if (!currentUser) {
@@ -82,8 +136,17 @@ class ChatService {
       }
     }
 
-    const isClientAccountType = currentUser.accountType === 'CLIENT_INDIVIDUAL' || currentUser.accountType === 'CLIENT_COMPANY';
-    if (isClientAccountType) {
+    // Use the user's CURRENT activeRole, not the immutable accountType — a
+    // multi-role user's accountType may say CLIENT while they are actively
+    // negotiating as PROVIDER (or vice versa), and initiating a conversation
+    // must reflect who they are acting as right now, not their original type.
+    // Fall back to accountType only if activeRole is unset (should not
+    // happen for an authenticated user, but keeps this from throwing on a
+    // stale/legacy record).
+    const isActingAsClient = currentUser.activeRole
+      ? currentUser.activeRole === UserRole.CLIENT
+      : (currentUser.accountType === 'CLIENT_INDIVIDUAL' || currentUser.accountType === 'CLIENT_COMPANY');
+    if (isActingAsClient) {
       clientId = currentUser.id;
       if (!providerId && project?.providerId) {
         providerId = project.providerId;
@@ -98,7 +161,7 @@ class ChatService {
     }
 
     if (data.negotiationPayload) {
-      if (!isClientAccountType || currentUser.id !== targetClientId || !offerId) {
+      if (!isActingAsClient || currentUser.id !== targetClientId || !offerId) {
         throw new AppError('لا يمكن بدء التفاوض دون عرض صالح يملكه هذا المشروع', 403);
       }
       const [canonicalOffer, legacyOffer] = await Promise.all([
@@ -230,14 +293,15 @@ class ChatService {
   /**
    * Fetch list of all active conversations for an authenticated user
    */
-  async getConversations(userId: string) {
+  async getConversations(userId: string, activeRole: UserRole | string | null | undefined) {
+    const roleFilter = conversationRoleFilter(userId, activeRole);
+    // AFFILIATE (or any role with no CLIENT/PROVIDER chat mapping) sees an
+    // empty inbox rather than falling back to "every conversation this user
+    // is part of" — that fallback is exactly the role-isolation bug.
+    if (!roleFilter) return [];
+
     const conversations = await prisma.conversation.findMany({
-      where: {
-        OR: [
-          { clientId: userId },
-          { providerId: userId }
-        ]
-      },
+      where: roleFilter,
       orderBy: { updatedAt: 'desc' },
       include: {
         project: {
@@ -282,13 +346,8 @@ class ChatService {
   /**
    * Get paginated message history for a specific conversation
    */
-  async getMessages(conversationId: string, userId: string, page: number = 1, limit: number = 20) {
-    const conversation = await prisma.conversation.findFirst({
-      where: {
-        id: conversationId,
-        OR: [{ clientId: userId }, { providerId: userId }]
-      }
-    });
+  async getMessages(conversationId: string, userId: string, page: number = 1, limit: number = 20, activeRole?: UserRole | string | null) {
+    const conversation = await authorizeConversationForRole(conversationId, userId, activeRole);
 
     if (!conversation) {
       throw new AppError('المحادثة غير موجودة أو غير مصرح بالوصول', 403);
@@ -330,14 +389,23 @@ class ChatService {
   /**
    * Persist a new message in database and update conversation timestamp
    */
-  async sendMessage(senderId: string, data: SendMessageDto) {
+  async sendMessage(senderId: string, data: SendMessageDto, activeRole: UserRole | string | null | undefined) {
     const { conversationId, content, type, fileUrl, fileName, fileSize, audioDuration, duration, context } = data;
 
     const conversation = await prisma.conversation.findUnique({
       where: { id: conversationId }
     });
 
-    if (!conversation || (conversation.clientId !== senderId && conversation.providerId !== senderId)) {
+    if (!conversation) {
+      throw new AppError('المحادثة غير موجودة أو غير مصرح لك بالإرسال فيها', 403);
+    }
+
+    const roleFilter = conversationRoleFilter(senderId, activeRole);
+    const isAuthorized = Boolean(roleFilter && (
+      ('clientId' in roleFilter && conversation.clientId === roleFilter.clientId) ||
+      ('providerId' in roleFilter && conversation.providerId === roleFilter.providerId)
+    ));
+    if (!isAuthorized) {
       throw new AppError('المحادثة غير موجودة أو غير مصرح لك بالإرسال فيها', 403);
     }
 
@@ -387,11 +455,18 @@ class ChatService {
       data: { updatedAt: new Date() }
     });
 
-    const recipientId = conversation.clientId === senderId ? conversation.providerId : conversation.clientId;
+    const recipientIsClient = conversation.clientId !== senderId;
+    const recipientId = recipientIsClient ? conversation.clientId : conversation.providerId;
+    // The recipient's role IN THIS conversation — used by the Socket.IO
+    // gateway to avoid pushing a "conversation_list_update" (which carries
+    // message content) into the recipient's dashboard while they're actively
+    // using a different role than the one this conversation belongs to.
+    const recipientRole: UserRole = recipientIsClient ? UserRole.CLIENT : UserRole.PROVIDER;
 
     return {
       message: this.formatMessage(newMsg, senderId),
       recipientId,
+      recipientRole,
       conversationId
     };
   }
@@ -399,11 +474,8 @@ class ChatService {
   /**
    * Mark all unread messages as read in a conversation
    */
-  async markAsRead(conversationId: string, userId: string) {
-    const conversation = await prisma.conversation.findFirst({
-      where: { id: conversationId, OR: [{ clientId: userId }, { providerId: userId }] },
-      select: { id: true }
-    });
+  async markAsRead(conversationId: string, userId: string, activeRole: UserRole | string | null | undefined) {
+    const conversation = await authorizeConversationForRole(conversationId, userId, activeRole);
     if (!conversation) throw new AppError('المحادثة غير موجودة أو غير مصرح بالوصول', 403);
     await prisma.message.updateMany({
       where: {
@@ -429,7 +501,10 @@ class ChatService {
       sender: isMe ? 'me' : 'other',
       senderId: msg.senderId,
       senderName: msg.sender ? `${msg.sender.firstName} ${msg.sender.lastName}` : 'وسيط AI',
-      senderInitials: isMe ? 'أن' : initials,
+      // Always the real sender's initials (already computed above from the
+      // included sender relation) — this used to hardcode a placeholder for
+      // isMe, showing a name unrelated to whoever is actually logged in.
+      senderInitials: initials,
       type: msg.type,
       text: msg.content || '',
       fileUrl: msg.fileUrl,

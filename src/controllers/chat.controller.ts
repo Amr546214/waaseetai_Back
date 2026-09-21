@@ -29,7 +29,11 @@ export class ChatController {
   public async getConversations(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = (req.user as any).userId || (req.user as any).id;
-      const conversations = await chatService.getConversations(userId);
+      // activeRole is read from the authenticated request (re-resolved from
+      // the DB on every request by the `authenticate` middleware) — never
+      // from a body/query param — so this can't be spoofed by the frontend.
+      const activeRole = (req.user as any).activeRole;
+      const conversations = await chatService.getConversations(userId, activeRole);
 
       res.status(200).json({
         success: true,
@@ -47,11 +51,12 @@ export class ChatController {
   public async getMessages(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = (req.user as any).userId || (req.user as any).id;
+      const activeRole = (req.user as any).activeRole;
       const conversationId = req.params.id as string;
       const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
       const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 20;
 
-      const messagesData = await chatService.getMessages(conversationId, userId, page, limit);
+      const messagesData = await chatService.getMessages(conversationId, userId, page, limit, activeRole);
 
       res.status(200).json({
         success: true,

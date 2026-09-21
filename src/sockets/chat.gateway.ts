@@ -1,6 +1,6 @@
 import { Socket, Server as SocketIOServer } from 'socket.io';
 import jwt from 'jsonwebtoken';
-import { chatService } from '../services/chat.service';
+import { chatService, authorizeConversationForRole, resolveActiveRole } from '../services/chat.service';
 import { prisma } from '../config/db';
 import { JoinRoomDto, SendMessageDto } from '../dtos/chat.dto';
 
@@ -71,13 +71,15 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 		this.io = io;
 		this.handleConnection(socket);
 
+		// Role-aware participant check shared by every conversation-scoped socket
+		// event (join, send, typing, read receipts, calls). activeRole is always
+		// resolved fresh from the DB here rather than cached at connect time,
+		// since a long-lived socket can outlive a role switch made elsewhere.
 		const isConversationParticipant = async (conversationId: string): Promise<boolean> => {
 			const userId = (socket as any).userId as string | undefined;
 			if (!userId || !conversationId) return false;
-			return Boolean(await prisma.conversation.findFirst({
-				where: { id: conversationId, OR: [{ clientId: userId }, { providerId: userId }] },
-				select: { id: true }
-			}));
+			const activeRole = await resolveActiveRole(userId);
+			return Boolean(await authorizeConversationForRole(conversationId, userId, activeRole));
 		};
 
 		socket.on('disconnect', () => {
@@ -102,11 +104,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 					socket.emit('chat_error', { message: 'يجب تسجيل الدخول لفتح المحادثة' });
 					return;
 				}
-				const conversation = await prisma.conversation.findFirst({
-					where: { id: data.conversationId, OR: [{ clientId: authenticatedUserId }, { providerId: authenticatedUserId }] },
-					select: { id: true }
-				});
-				if (!conversation) {
+				if (!(await isConversationParticipant(data.conversationId))) {
 					socket.emit('chat_error', { message: 'غير مصرح لك بالوصول إلى هذه المحادثة' });
 					return;
 				}
@@ -147,8 +145,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 				if (!senderId) throw new Error('يجب تسجيل الدخول لإرسال الرسائل');
 				if (!data?.conversationId) return;
 
+				// Resolved fresh from the DB — never trust a role the client claims.
+				const senderActiveRole = await resolveActiveRole(senderId);
+
 				// Persist message via Prisma
-				const result = await chatService.sendMessage(senderId, data);
+				const result = await chatService.sendMessage(senderId, data, senderActiveRole);
 				const roomName = `conversation_${data.conversationId}`;
 
 				// Push notification in database for offline/unread alert
@@ -175,10 +176,18 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 				if (io) {
 					io.to(roomName).emit('new_message', msgPayload);
 					if (result.recipientId) {
-						io.to(`user_${result.recipientId}`).emit('conversation_list_update', {
-							conversationId: data.conversationId,
-							lastMsg: msgPayload
-						});
+						// conversation_list_update carries the message content — only
+						// deliver it to the recipient's personal room if this
+						// conversation actually belongs to the role they are CURRENTLY
+						// using. Otherwise a message from their other role would
+						// incorrectly surface in their currently active dashboard.
+						const recipientActiveRole = await resolveActiveRole(result.recipientId);
+						if (recipientActiveRole === result.recipientRole) {
+							io.to(`user_${result.recipientId}`).emit('conversation_list_update', {
+								conversationId: data.conversationId,
+								lastMsg: msgPayload
+							});
+						}
 					}
 				} else {
 					socket.to(roomName).emit('new_message', msgPayload);
@@ -195,8 +204,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 			if (!data?.conversationId) return;
 			const authenticatedUserId = (socket as any).userId as string | undefined;
 			if (!authenticatedUserId) return;
-			const allowed = await prisma.conversation.count({ where: { id: data.conversationId, OR: [{ clientId: authenticatedUserId }, { providerId: authenticatedUserId }] } });
-			if (!allowed) return;
+			if (!(await isConversationParticipant(data.conversationId))) return;
 			const roomName = `conversation_${data.conversationId}`;
 			socket.to(roomName).emit('typing_indicator', {
 				conversationId: data.conversationId,
@@ -211,9 +219,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 			try {
 				const authenticatedUserId = (socket as any).userId as string | undefined;
 				if (!data?.conversationId || !authenticatedUserId) return;
-				const allowed = await prisma.conversation.count({ where: { id: data.conversationId, OR: [{ clientId: authenticatedUserId }, { providerId: authenticatedUserId }] } });
-				if (!allowed) return;
-				await chatService.markAsRead(data.conversationId, authenticatedUserId);
+				const activeRole = await resolveActiveRole(authenticatedUserId);
+				if (!(await authorizeConversationForRole(data.conversationId, authenticatedUserId, activeRole))) return;
+				await chatService.markAsRead(data.conversationId, authenticatedUserId, activeRole);
 				const roomName = `conversation_${data.conversationId}`;
 				socket.to(roomName).emit('messages_read', {
 					conversationId: data.conversationId,
