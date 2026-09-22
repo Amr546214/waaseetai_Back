@@ -1,28 +1,25 @@
 import { prisma } from '../config/db';
-import { SpecialtyVerificationStatus } from '@prisma/client';
 
 export class ExploreRequestsService {
   public async getExploreRequests(providerId: string, filters: { category?: string; tab?: string; sortBy?: string; search?: string }) {
-    
-    // Only specialties approved through the dedicated specialties workflow grant
-    // access to matching projects. The initial profile-setup selection lives on
-    // ProviderProfile.mainSpecialty/subSpecialties and is intentionally ignored.
+
+    // Browsing OPEN requests is NOT gated by specialty verification status.
+    // Any authenticated, active Provider may see all OPEN requests by default
+    // ("كل التخصصات" — matches the original P-PR-002 design). The provider's
+    // own specialties (regardless of PENDING_PROOF/UNDER_AI_REVIEW/REJECTED/
+    // APPROVED status) are only used to power the optional specialty filter
+    // and the match/recommendation scoring below — never to hide requests.
     const providerProfile = await prisma.providerProfile.findUnique({
       where: { userId: providerId },
       include: {
         providerSpecialties: {
           where: {
-            isActive: true,
-            status: SpecialtyVerificationStatus.APPROVED
+            isActive: true
           },
           include: { specialty: true }
         }
       }
     });
-
-    const providerSpecialtyIds = (providerProfile?.providerSpecialties || [])
-      .map(ps => ps.specialtyId)
-      .filter(Boolean);
 
     const providerSpecialtyNames = (providerProfile?.providerSpecialties || []).flatMap(ps => [
       ps.specialty?.nameAr,
@@ -34,16 +31,6 @@ export class ExploreRequestsService {
     const providerKeywords = Array.from(new Set([
       ...providerSpecialtyNames
     ])).map(k => k.toLowerCase().trim()).filter(k => k.length > 0);
-
-    const hasApprovedSpecialties = providerSpecialtyIds.length > 0;
-
-    if (!hasApprovedSpecialties) {
-      return {
-        counts: { all: 0, notApplied: 0, applied: 0, saved: 0 },
-        providerSpecialties: [],
-        projects: []
-      };
-    }
 
     // 2. Fetch active projects & client requests from DB
     const [clientRequests, legacyProjects] = await Promise.all([
@@ -84,35 +71,27 @@ export class ExploreRequestsService {
       const subSpecs = cr.subSpecialties || [];
       const reqSkills = cr.requiredSkills || [];
 
-      // Prefer the canonical id. The specialties wizard currently stores the
-      // selected leaf specialties in ProviderSpecialty.subSpecialties, so an
-      // exact normalized name match is also valid (never a fuzzy/skill match).
-      const normalizedProjectSpecialty = projectSpecialty.trim().toLowerCase();
-      const isSpecialtyMatched = Boolean(
-        (cr.specialtyId && providerSpecialtyIds.includes(cr.specialtyId)) ||
-        (normalizedProjectSpecialty && providerKeywords.includes(normalizedProjectSpecialty))
-      );
-
-      if (isSpecialtyMatched) {
-        unifiedList.push({
-          id: cr.id,
-          title: cr.title,
-          specialty: projectSpecialty || 'عام',
-          category: projectSpecialty || 'عام',
-          subSpecialties: subSpecs,
-          requirements: reqSkills,
-          description: cr.description,
-          budgetMin: cr.minBudget || 0,
-          budgetMax: cr.maxBudget || 0,
-          durationDays: cr.expectedDurationDays || 14,
-          proposalsCount: cr.proposalsCount || cr.proposals.length,
-          clientType: cr.preferredProviderType === 'COMPANY' ? 'شركة' : 'فرد',
-          createdAt: cr.createdAt,
-          hasApplied,
-          isSaved,
-          isClientRequest: true
-        });
-      }
+      // Every OPEN client request is browsable regardless of specialty match —
+      // see explore-requests investigation. providerKeywords is only consulted
+      // later for the optional category filter and match-score/recommendation.
+      unifiedList.push({
+        id: cr.id,
+        title: cr.title,
+        specialty: projectSpecialty || 'عام',
+        category: projectSpecialty || 'عام',
+        subSpecialties: subSpecs,
+        requirements: reqSkills,
+        description: cr.description,
+        budgetMin: cr.minBudget || 0,
+        budgetMax: cr.maxBudget || 0,
+        durationDays: cr.expectedDurationDays || 14,
+        proposalsCount: cr.proposalsCount || cr.proposals.length,
+        clientType: cr.preferredProviderType === 'COMPANY' ? 'شركة' : 'فرد',
+        createdAt: cr.createdAt,
+        hasApplied,
+        isSaved,
+        isClientRequest: true
+      });
     }
 
     // Process Legacy Projects (Only for projects not created as ClientRequest)
@@ -127,34 +106,25 @@ export class ExploreRequestsService {
       const subSpecs = p.subSpecialties || [];
       const reqs = p.requirements || [];
 
-      // Legacy Project rows have no specialtyId. Keep them only when their main
-      // specialty name exactly matches an approved specialty or sub-specialty.
-      const normalizedProjectSpecialty = projectSpecialty.trim().toLowerCase();
-      const isSpecialtyMatched = Boolean(
-        normalizedProjectSpecialty && providerKeywords.includes(normalizedProjectSpecialty)
-      );
-
-      if (isSpecialtyMatched) {
-        const isCompany = p.client && p.client.accountType && p.client.accountType.includes('COMPANY');
-        unifiedList.push({
-          id: p.id,
-          title: p.title,
-          specialty: projectSpecialty || 'عام',
-          category: projectSpecialty || 'عام',
-          subSpecialties: subSpecs,
-          requirements: reqs,
-          description: p.description,
-          budgetMin: p.budgetMin || 0,
-          budgetMax: p.budgetMax || 0,
-          durationDays: p.deliveryDays || 14,
-          proposalsCount: p.proposalsCount || (p.proposals.length + ((p as any).projectProposals ? (p as any).projectProposals.length : 0)),
-          clientType: isCompany ? 'شركة' : 'فرد',
-          createdAt: p.createdAt,
-          hasApplied,
-          isSaved,
-          isClientRequest: false
-        });
-      }
+      const isCompany = p.client && p.client.accountType && p.client.accountType.includes('COMPANY');
+      unifiedList.push({
+        id: p.id,
+        title: p.title,
+        specialty: projectSpecialty || 'عام',
+        category: projectSpecialty || 'عام',
+        subSpecialties: subSpecs,
+        requirements: reqs,
+        description: p.description,
+        budgetMin: p.budgetMin || 0,
+        budgetMax: p.budgetMax || 0,
+        durationDays: p.deliveryDays || 14,
+        proposalsCount: p.proposalsCount || (p.proposals.length + ((p as any).projectProposals ? (p as any).projectProposals.length : 0)),
+        clientType: isCompany ? 'شركة' : 'فرد',
+        createdAt: p.createdAt,
+        hasApplied,
+        isSaved,
+        isClientRequest: false
+      });
     }
 
     // 3. Filter by Selected Category Filter (if specified and not 'ALL')
