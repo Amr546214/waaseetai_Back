@@ -46,6 +46,12 @@ router.get('/active-projects', authenticate, requireActiveUser, clientRequestsCo
 // Completed/archived projects list endpoint
 router.get('/completed-projects', authenticate, requireActiveUser, clientRequestsController.getCompletedProjects);
 
+// Pending-review deliveries list (stages with a real submitted delivery
+// awaiting this client's decision). MUST be registered before the generic
+// GET /:id route below, or Express would treat "pending-deliveries" as an
+// :id value and route it to getRequestDetails instead.
+router.get('/pending-deliveries', authenticate, requireActiveUser, clientRequestsController.getPendingReviewDeliveries);
+
 // Active project tracking details
 router.get('/active-projects/:id', authenticate, requireActiveUser, clientRequestsController.getActiveProjectTracking);
 

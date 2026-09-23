@@ -188,6 +188,51 @@ export class ProjectProgressService {
     };
   }
 
+  // Stages awaiting THIS client's review decision, across all of their active
+  // contracts. "Reviewable" is defined identically to reviewDelivery()'s own
+  // guard below (stage.status === SUBMITTED AND the latest delivery for that
+  // stage is itself still SUBMITTED) so this list can never show an item that
+  // the real approve/revision endpoint would then reject as stale.
+  async getPendingReviewDeliveries(clientId: string) {
+    const stages = await prisma.projectStage.findMany({
+      where: {
+        status: ProjectStageStatus.SUBMITTED,
+        contract: { clientId, status: ContractStatus.ACTIVE }
+      },
+      orderBy: [{ contract: { updatedAt: 'desc' } }, { stepOrder: 'asc' }],
+      include: {
+        contract: {
+          select: {
+            id: true,
+            projectId: true,
+            project: { select: { title: true } },
+            provider: { select: { firstName: true, lastName: true } }
+          }
+        },
+        deliveries: { orderBy: { submittedAt: 'desc' }, take: 1 }
+      }
+    });
+
+    return stages
+      .filter(stage => stage.deliveries[0]?.status === StageDeliveryStatus.SUBMITTED)
+      .map(stage => {
+        const delivery = stage.deliveries[0];
+        const provider = stage.contract.provider;
+        return {
+          projectId: stage.contract.projectId,
+          projectTitle: stage.contract.project.title,
+          stageId: stage.id,
+          stageNumber: stage.stepOrder,
+          stageTitle: stage.title,
+          amount: stage.amount,
+          submittedAt: delivery.submittedAt,
+          providerName: `${provider.firstName || 'مقدم الخدمة'} ${provider.lastName || ''}`.trim(),
+          filesCount: delivery.files.length,
+          contractRef: `CT-${stage.contract.id.slice(0, 6).toUpperCase()}`
+        };
+      });
+  }
+
   async submitDelivery(providerId: string, key: string, stageId: string, note: string, files: any[]) {
     if (!note?.trim() || note.trim().length < 10) throw new AppError('أضف وصفاً واضحاً للتسليم (10 أحرف على الأقل)', 400);
     const contract = await prisma.contract.findFirst({ where: { OR: [{ id: key }, { projectId: key }], providerId } });

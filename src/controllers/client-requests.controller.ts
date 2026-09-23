@@ -158,6 +158,15 @@ export class ClientRequestsController {
     } catch (error) { next(error); }
   }
 
+  // GET /api/client/my-requests/pending-deliveries
+  public async getPendingReviewDeliveries(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId || req.user!.id;
+      const data = await projectProgressService.getPendingReviewDeliveries(userId);
+      res.status(200).json({ success: true, data });
+    } catch (error) { next(error); }
+  }
+
   public async reviewStageDelivery(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.userId || req.user!.id;
