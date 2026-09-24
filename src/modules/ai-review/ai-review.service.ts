@@ -1,7 +1,138 @@
 import { OpenAI } from 'openai';
 import { logger } from '../../config/logger';
+import { AppError } from '../../utils/app-error';
+import { geminiClient } from '../../services/ai/gemini/gemini.client';
 import { SYSTEM_PROMPT } from './ai-analyzer.prompt';
 import { CompleteProjectDataDto, AiReviewResponse, EnhanceDescriptionDto, SuggestTextDto, SuggestMilestonesDto, SuggestedMilestone } from './ai-review.dto';
+
+// ── F1a: suggestMilestones / analyzeProjectModel — migrated to the shared
+// Gemini foundation (Batch: F1+F2 streaming). enhanceDescription/suggestText
+// below remain on OpenAI: they are the confirmed-dead HTTP twins of the live
+// socket implementation (ai-review.gateway.ts, migrated separately) and are
+// intentionally out of scope for this batch — see the Batch report's
+// DEAD_HTTP_TWIN_CONFIRMED section.
+
+interface GeminiMilestonesPayload {
+  milestones: {
+    title: string;
+    description: string;
+    estimatedDays: number;
+    percentage: number;
+  }[];
+}
+
+const MILESTONES_SCHEMA = {
+  type: 'object',
+  properties: {
+    milestones: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          description: { type: 'string' },
+          estimatedDays: { type: 'number', description: 'integer between 2 and 15' },
+          percentage: { type: 'number', description: 'integer percentage of total payment' }
+        },
+        required: ['title', 'description', 'estimatedDays', 'percentage']
+      }
+    }
+  },
+  required: ['milestones']
+};
+
+// Rejects anything that doesn't genuinely satisfy the milestones contract —
+// an empty list, a non-array, or any malformed entry are all invalid, never
+// silently patched with a fabricated milestone.
+function isValidMilestonesPayload(value: unknown): value is GeminiMilestonesPayload {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  if (!Array.isArray(v.milestones) || v.milestones.length === 0) return false;
+  return v.milestones.every((m) => {
+    if (!m || typeof m !== 'object') return false;
+    const entry = m as Record<string, unknown>;
+    return (
+      typeof entry.title === 'string' && entry.title.trim().length > 0 &&
+      typeof entry.description === 'string' && entry.description.trim().length > 0 &&
+      typeof entry.estimatedDays === 'number' && Number.isFinite(entry.estimatedDays) && entry.estimatedDays > 0 &&
+      typeof entry.percentage === 'number' && Number.isFinite(entry.percentage) && entry.percentage >= 0 && entry.percentage <= 100
+    );
+  });
+}
+
+const AI_REVIEW_RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    clarityScore: { type: 'number', description: '0 to 100' },
+    feasibilityScore: { type: 'number', description: '0 to 100' },
+    marketFitRating: { type: 'string', enum: ['High', 'Medium', 'Low'] },
+    executiveSummary: { type: 'string' },
+    strengths: { type: 'array', items: { type: 'string' } },
+    gapsAndRisks: { type: 'array', items: { type: 'string' } },
+    recommendedImprovements: { type: 'array', items: { type: 'string' } },
+    suggestedMilestones: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          estimatedDays: { type: 'number' },
+          description: { type: 'string' },
+          percentage: { type: 'number' }
+        },
+        required: ['title', 'estimatedDays', 'description']
+      }
+    },
+    suggestedPricingStrategy: {
+      type: 'object',
+      properties: {
+        recommendedRange: { type: 'string' },
+        reasoning: { type: 'string' }
+      },
+      required: ['recommendedRange', 'reasoning']
+    }
+  },
+  required: ['clarityScore', 'feasibilityScore', 'marketFitRating', 'executiveSummary', 'strengths', 'gapsAndRisks', 'recommendedImprovements', 'suggestedMilestones', 'suggestedPricingStrategy']
+};
+
+// Rejects anything that doesn't genuinely satisfy the AiReviewResponse
+// contract — out-of-range scores, an unrecognized market-fit rating, empty
+// string arrays, or a malformed milestone/pricing shape are all invalid,
+// never silently patched into a passable-looking result.
+function isValidAiReviewResponse(value: unknown): value is AiReviewResponse {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+
+  if (typeof v.clarityScore !== 'number' || !Number.isFinite(v.clarityScore) || v.clarityScore < 0 || v.clarityScore > 100) return false;
+  if (typeof v.feasibilityScore !== 'number' || !Number.isFinite(v.feasibilityScore) || v.feasibilityScore < 0 || v.feasibilityScore > 100) return false;
+  if (v.marketFitRating !== 'High' && v.marketFitRating !== 'Medium' && v.marketFitRating !== 'Low') return false;
+  if (typeof v.executiveSummary !== 'string' || v.executiveSummary.trim().length === 0) return false;
+
+  const stringArrayNonEmpty = (arr: unknown): boolean =>
+    Array.isArray(arr) && arr.length > 0 && arr.every((s) => typeof s === 'string' && s.trim().length > 0);
+  if (!stringArrayNonEmpty(v.strengths)) return false;
+  if (!stringArrayNonEmpty(v.gapsAndRisks)) return false;
+  if (!stringArrayNonEmpty(v.recommendedImprovements)) return false;
+
+  if (!Array.isArray(v.suggestedMilestones) || v.suggestedMilestones.length === 0) return false;
+  const milestonesValid = v.suggestedMilestones.every((m) => {
+    if (!m || typeof m !== 'object') return false;
+    const entry = m as Record<string, unknown>;
+    return (
+      typeof entry.title === 'string' && entry.title.trim().length > 0 &&
+      typeof entry.description === 'string' && entry.description.trim().length > 0 &&
+      typeof entry.estimatedDays === 'number' && Number.isFinite(entry.estimatedDays) && entry.estimatedDays > 0
+    );
+  });
+  if (!milestonesValid) return false;
+
+  const pricing = v.suggestedPricingStrategy as Record<string, unknown> | undefined;
+  if (!pricing || typeof pricing !== 'object') return false;
+  if (typeof pricing.recommendedRange !== 'string' || pricing.recommendedRange.trim().length === 0) return false;
+  if (typeof pricing.reasoning !== 'string' || pricing.reasoning.trim().length === 0) return false;
+
+  return true;
+}
 
 export class AiReviewService {
   private openai: OpenAI | null = null;
@@ -9,18 +140,20 @@ export class AiReviewService {
   constructor() {
     if (process.env.OPENAI_API_KEY) {
       this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-      logger.info('🧠 OpenAI Client Initialized in AiReviewService');
+      logger.info('🧠 OpenAI Client Initialized in AiReviewService (dead HTTP twins only — see Batch report)');
     } else {
       logger.warn('⚠️ OPENAI_API_KEY missing in environment variables. AiReviewService will use intelligent simulations.');
     }
   }
 
   /**
-   * Refine and professionalize project description in Step 1 using gpt-4o-mini
+   * DEAD HTTP TWIN — confirmed unused by the frontend (the live path is the
+   * socket implementation in ai-review.gateway.ts, migrated to Gemini
+   * separately). Left on OpenAI intentionally; out of scope for this batch.
    */
   async enhanceDescription(dto: EnhanceDescriptionDto): Promise<string> {
     const { title, description } = dto;
-    
+
     if (this.openai) {
       try {
         const response = await this.openai.chat.completions.create({
@@ -50,7 +183,9 @@ export class AiReviewService {
   }
 
   /**
-   * Generate a starting draft description based on project title in Step 1 using gpt-4o-mini
+   * DEAD HTTP TWIN — confirmed unused by the frontend (the live path is the
+   * socket implementation in ai-review.gateway.ts, migrated to Gemini
+   * separately). Left on OpenAI intentionally; out of scope for this batch.
    */
   async suggestText(dto: SuggestTextDto): Promise<string> {
     const { title } = dto;
@@ -85,183 +220,85 @@ export class AiReviewService {
   }
 
   /**
-   * Generate intelligent milestone schedule based on project title and description using gpt-4o-mini JSON mode
+   * F1a — Generate intelligent milestone schedule via the shared Gemini
+   * foundation. Honest failure: no dynamic-domain-keyword fallback anymore.
    */
   async suggestMilestones(dto: SuggestMilestonesDto): Promise<SuggestedMilestone[]> {
     const title = dto.title || 'مشروع جديد';
     const description = dto.description || '';
 
-    if (this.openai) {
-      try {
-        const response = await this.openai.chat.completions.create({
-          model: 'gpt-4o-mini',
-          response_format: { type: 'json_object' },
-          messages: [
-            {
-              role: 'system',
-              content: 'You are Waseet AI Project Manager and Financial Strategist. Given the project title and description, generate a realistic, structured list of 3 to 4 sequential milestones for this project in professional Arabic. Each milestone must have: "title" (string), "description" (string deliverables explanation), "estimatedDays" (integer between 2 and 15), and "percentage" (integer percentage of total payment). The sum of all "percentage" values MUST equal exactly 100. Return strictly a JSON object with a single root key "milestones" containing an array of these milestone objects.'
-            },
-            {
-              role: 'user',
-              content: `Project Title: "${title}"\nProject Description: "${description}"\nGenerate optimal operational milestones and payment percentages.`
-            }
-          ],
-          temperature: 0.5,
-          max_tokens: 800
-        });
+    const systemPrompt = 'You are Waseet AI Project Manager and Financial Strategist. Given the project title and description, generate a realistic, structured list of 3 to 4 sequential milestones for this project in professional Arabic. Each milestone must have: "title" (string), "description" (string deliverables explanation), "estimatedDays" (integer between 2 and 15), and "percentage" (integer percentage of total payment). The sum of all "percentage" values MUST equal exactly 100. Return strictly a JSON object with a single root key "milestones" containing an array of these milestone objects.';
+    const userPrompt = `Project Title: "${title}"\nProject Description: "${description}"\nGenerate optimal operational milestones and payment percentages.`;
 
-        const rawContent = response.choices[0]?.message?.content;
-        if (rawContent) {
-          const parsed = JSON.parse(rawContent);
-          if (Array.isArray(parsed.milestones) && parsed.milestones.length > 0) {
-            let milestones: SuggestedMilestone[] = parsed.milestones.map((m: any, idx: number) => ({
-              title: m.title || `المرحلة ${idx + 1}`,
-              description: m.description || 'إنجاز المخرجات المطلوبة لهذه المرحلة',
-              estimatedDays: Number(m.estimatedDays) || 4,
-              percentage: Number(m.percentage) || Math.round(100 / parsed.milestones.length)
-            }));
+    try {
+      const result = await geminiClient.generateStructured<GeminiMilestonesPayload>(userPrompt, {
+        systemInstruction: systemPrompt,
+        responseSchema: MILESTONES_SCHEMA,
+        validate: isValidMilestonesPayload,
+        temperature: 0.5,
+        maxOutputTokens: 800
+      });
 
-            // Ensure exact 100% sum
-            const totalPerc = milestones.reduce((sum, m) => sum + (m.percentage || 0), 0);
-            if (totalPerc !== 100 && milestones.length > 0) {
-              const diff = 100 - totalPerc;
-              milestones[milestones.length - 1].percentage = (milestones[milestones.length - 1].percentage || 0) + diff;
-            }
+      const milestones: SuggestedMilestone[] = result.data.milestones.map((m) => ({
+        title: m.title,
+        description: m.description,
+        estimatedDays: m.estimatedDays,
+        percentage: m.percentage
+      }));
 
-            return milestones;
-          }
-        }
-      } catch (error) {
-        logger.error(`OpenAI suggestMilestones error: ${error}`);
+      // Preserve the pre-existing exact-100% normalization business rule.
+      const totalPerc = milestones.reduce((sum, m) => sum + (m.percentage || 0), 0);
+      if (totalPerc !== 100 && milestones.length > 0) {
+        const diff = 100 - totalPerc;
+        milestones[milestones.length - 1].percentage = (milestones[milestones.length - 1].percentage || 0) + diff;
       }
-    }
 
-    // Dynamic smart fallback matching project domain
-    const text = (title + ' ' + description).toLowerCase();
-    const isDev = text.includes('تطبيق') || text.includes('برمج') || text.includes('تطوير') || text.includes('موقع') || text.includes('ويب') || text.includes('نظام') || text.includes('ذكاء');
-    const isDesign = text.includes('هوية') || text.includes('شعار') || text.includes('تصميم') || text.includes('جرافيك') || text.includes('موشن') || text.includes('فيديو');
-
-    if (isDev) {
-      return [
-        { title: 'التحليل الهندسي وتجهيز البنية التحتية', description: 'تحليل المتطلبات الفنية، إعداد خطة قاعدة البيانات، وتجهيز واجهات الاستخدام التجريبية', estimatedDays: 4, percentage: 25 },
-        { title: 'البرمجة الفعلية وتطوير الوظائف الأساسية', description: 'بناء المنظومة البرمجية للربط والتنفيذ ودمج الميزات الحيوية المطلوبة', estimatedDays: 10, percentage: 50 },
-        { title: 'الاختبار الشامل والنشر والتشغيل', description: 'فحص الجودة والأداء والتوافقية، تسليم الكود المصدري، مع ضمان تشغيل أولي', estimatedDays: 4, percentage: 25 }
-      ];
-    } else if (isDesign) {
-      return [
-        { title: 'دراسة التوجه البصري وتصميم المقترحات الأولية', description: 'تحليل الهوية واقتراح خيارات مبتكرة ومتعددة للتصميم للمناقشة', estimatedDays: 4, percentage: 35 },
-        { title: 'تطوير الخيار المعتمد وإعداد الملحقات الفنية', description: 'تجهيز كافة التصاميم التطبيقية وتحديث الألوان والخطوط بناءً على الملاحظات', estimatedDays: 5, percentage: 40 },
-        { title: 'تسليم حزمة الملفات الأصلية ودليل الاستخدام', description: 'تجهيز وتصدير جميع ملفات المصدر بالصيغ المفتوحة والطباعية مع إرشادات الهوية', estimatedDays: 3, percentage: 25 }
-      ];
-    } else {
-      return [
-        { title: 'التخطيط الاستراتيجي واعتماد خطة العمل', description: 'اجتماع التنسيق الأولي، صياغة خطة العمل التفصيلية واعتماد خارطة المخرجات', estimatedDays: 3, percentage: 30 },
-        { title: 'التنفيذ المنهجي وعرض المسودة الرئيسية', description: 'العمل التأسيسي المتكامل وتجهيز مخرجات الخدمة الرئيسية لمراجعة العميل', estimatedDays: 6, percentage: 45 },
-        { title: 'المراجعات النهائية والتسليم الختامي للملفات', description: 'تطبيق التعديلات المطلوبة وتسليم كافة المخرجات الأصلية مع ضمان دعم ما بعد الخدمة', estimatedDays: 3, percentage: 25 }
-      ];
+      return milestones;
+    } catch (error) {
+      logger.error(`Gemini suggestMilestones error: ${error}`);
+      // Honest failure — no domain-keyword-matched canned milestone set.
+      throw new AppError('تعذر اقتراح مراحل المشروع عبر الذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.', 503);
     }
   }
 
   /**
-   * Perform comprehensive AI strategic audit on steps 1-4 using gpt-4o with response_format json_object
+   * F1a — Perform comprehensive AI strategic audit via the shared Gemini
+   * foundation. Honest failure: no fabricated clarity/feasibility scores or
+   * canned strengths/risks/pricing.
    */
   async analyzeProjectModel(data: CompleteProjectDataDto): Promise<AiReviewResponse> {
-    if (this.openai) {
-      try {
-        const payloadJson = JSON.stringify(data, null, 2);
-        const response = await this.openai.chat.completions.create({
-          model: 'gpt-4o',
-          response_format: { type: 'json_object' },
-          messages: [
-            {
-              role: 'system',
-              content: SYSTEM_PROMPT
-            },
-            {
-              role: 'user',
-              content: `Please evaluate this proposed project business model:\n${payloadJson}`
-            }
-          ],
-          temperature: 0.5,
-          max_tokens: 1500
-        });
+    const payloadJson = JSON.stringify(data, null, 2);
+    const userPrompt = `Please evaluate this proposed project business model:\n${payloadJson}`;
 
-        const rawContent = response.choices[0]?.message?.content;
-        if (rawContent) {
-          const parsed = JSON.parse(rawContent) as AiReviewResponse;
-          
-          // Ensure milestone percentages default correctly if missing
-          if (parsed.suggestedMilestones && parsed.suggestedMilestones.length > 0) {
-            const count = parsed.suggestedMilestones.length;
-            parsed.suggestedMilestones = parsed.suggestedMilestones.map((m, idx) => ({
-              ...m,
-              percentage: m.percentage || Math.round(100 / count)
-            }));
-            // fix rounding on last item
-            const sum = parsed.suggestedMilestones.reduce((acc, c) => acc + (c.percentage || 0), 0);
-            if (sum !== 100 && parsed.suggestedMilestones[count - 1]) {
-              parsed.suggestedMilestones[count - 1].percentage! += (100 - sum);
-            }
-          }
-          
-          return parsed;
+    try {
+      const result = await geminiClient.generateStructured<AiReviewResponse>(userPrompt, {
+        systemInstruction: SYSTEM_PROMPT,
+        responseSchema: AI_REVIEW_RESPONSE_SCHEMA,
+        validate: isValidAiReviewResponse,
+        temperature: 0.5,
+        maxOutputTokens: 1500
+      });
+
+      const parsed = result.data;
+
+      // Preserve the pre-existing milestone-percentage normalization rule.
+      if (parsed.suggestedMilestones && parsed.suggestedMilestones.length > 0) {
+        const count = parsed.suggestedMilestones.length;
+        parsed.suggestedMilestones = parsed.suggestedMilestones.map((m) => ({
+          ...m,
+          percentage: m.percentage || Math.round(100 / count)
+        }));
+        const sum = parsed.suggestedMilestones.reduce((acc, c) => acc + (c.percentage || 0), 0);
+        if (sum !== 100 && parsed.suggestedMilestones[count - 1]) {
+          parsed.suggestedMilestones[count - 1].percentage! += (100 - sum);
         }
-      } catch (error) {
-        logger.error(`OpenAI analyzeProjectModel error: ${error}`);
       }
+
+      return parsed;
+    } catch (error) {
+      logger.error(`Gemini analyzeProjectModel error: ${error}`);
+      // Honest failure — no fabricated scores/strengths/risks/pricing.
+      throw new AppError('تعذر تقييم نموذج المشروع عبر الذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.', 503);
     }
-
-    // Comprehensive Fallback Simulation for testing without OpenAI API Key or offline mode
-    return this.getFallbackAnalysis(data);
-  }
-
-  private getFallbackAnalysis(data: CompleteProjectDataDto): AiReviewResponse {
-    const title = data.title || 'المشروع المقترح';
-    const total = data.totalAmount || 4500;
-    const stagesCount = data.stages?.length || 2;
-
-    return {
-      clarityScore: 92,
-      feasibilityScore: 89,
-      marketFitRating: 'High',
-      executiveSummary: `يعرض مشروع "${title}" هيكلية عمل واضحة وتوزيعاً جيداً للمسؤوليات. يظهر التحليل الذكي أن هذا النموذج يتمتع بقابلية تسويقية عالية (Market Fit: High) ومستوى توافق ممتاز مع رغبات العملاء المؤسسيين والأفراد على حد سواء.`,
-      strengths: [
-        'وضوح نطاق العمل وتقليل الغموض في تسلسل المخرجات النهائية.',
-        'تقسيم المراحل المالية يعزز الثقة المتبادلة ويتماشى مع معايير الضمان في وسيط AI.',
-        'تناسب التسعير المقترح مع متوسط قيمة الطلبات المماثلة في القطاع الحالي.'
-      ],
-      gapsAndRisks: [
-        'عدم تفصيل عدد جولات التعديلات المجانية بوضوح في وصف كل مرحلة.',
-        stagesCount < 3 ? 'يُستحسن إضافة مرحلة ابتدائية للتحليل والتخطيط التمهيدي قبل البدء بالتنفيذ الفعلي.' : 'قد يتطلب تسليم الملفات النهائية وقتاً أطول للتحقق والاعتماد النهائي.'
-      ],
-      recommendedImprovements: [
-        'تحديد الحد الأقصى للمراجعات المسموح بها في المرحلة قبل النهائية لتجنب تمدد المشروع (Scope Creep).',
-        'تضمين وثيقة تسليم رسمية أو دليل استخدام مبسط ضمن مخرجات المرحلة الأخيرة لزيادة القيمة المتفوقة للعرض.'
-      ],
-      suggestedMilestones: [
-        {
-          title: 'التحليل التمهيدي وتحديد المتطلبات الفنية',
-          estimatedDays: 3,
-          description: 'اجتماع مناقشة النขاق وتقديم وثيقة خارطة الطريق والتصميم الأولي',
-          percentage: 25
-        },
-        {
-          title: 'التنفيذ الفعلي وتطوير النماذج الرئيسية',
-          estimatedDays: 7,
-          description: 'بناء وتجهيز المخرجات الأساسية للمشروع وتقديم النسخة التجريبية للمراجعة',
-          percentage: 45
-        },
-        {
-          title: 'التعديلات النهائية وتسليم حزمة التشغيل',
-          estimatedDays: 4,
-          description: 'اعتماد المراجعة النهائية وتسليم ملفات المصدر كاملة مع ضمان دعم فني لمدة شهر',
-          percentage: 30
-        }
-      ],
-      suggestedPricingStrategy: {
-        recommendedRange: `${Math.round(total * 0.95)} - ${Math.round(total * 1.15)} ريال`,
-        reasoning: 'يعتبر هذا النطاق السعري مثالياً لضمان الربحية التنافسية وفي نفس الوقت جذب أصحاب المشاريع ذوي الميزانيات المرتفعة الذين يبحثون عن مخرجات متكاملة ومراحل تسليم موصلة.'
-      }
-    };
   }
 }
