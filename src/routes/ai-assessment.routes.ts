@@ -6,6 +6,7 @@ import {
 } from '../controllers/ai-assessment.controller';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { authorize } from '../middlewares/auth.middleware';
+import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { AccountType } from '@prisma/client';
 
 const router = Router();
@@ -18,10 +19,10 @@ router.use(
 );
 
 // Dynamic Question Generation
-router.post('/generate', generateAssessmentController);
+router.post('/generate', aiLimiter, generateAssessmentController);
 
 // Assessment Submission & AI Evaluation
-router.post('/:attemptId/submit', submitAssessmentController);
+router.post('/:attemptId/submit', aiLimiter, submitAssessmentController);
 
 // Assessment Attempt Status
 router.get('/:attemptId/status', getAttemptStatusController);

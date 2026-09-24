@@ -1,17 +1,21 @@
-import { PrismaClient } from '@prisma/client';
 import { prisma } from '../config/db';
-import OpenAI from 'openai';
+import { geminiClient } from './ai/gemini/gemini.client';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || 'dummy_key_for_build',
-  timeout: 60 * 1000,
-});
+// Shared 20-question generation engine — used by BOTH F12 (ai-assessment
+// REST, as its primary path and legacy-compat HTTP fallback) and F14
+// (assessment.gateway.ts socket flow, the primary live path). Consolidating
+// on this single engine is what makes F12 and F14 "the same conceptual
+// assessment" rather than two independently-drifting implementations —
+// see the Batch report's caller graph.
 
 export interface GeneratedOption {
   id: string; // 'a', 'b', 'c', 'd'
   text: string;
 }
 
+// Canonical application-owned question schema for the whole assessment
+// pipeline (F12 + F14 both converge on this shape — F12's own previous
+// `GeneratedQuestion` duplicate interface has been removed in favor of it).
 export interface AssessmentQuestion {
   id: number | string;
   textAr: string;
@@ -23,6 +27,8 @@ export interface AssessmentQuestion {
   assessmentArea?: string;
 }
 
+export type AssessmentGenerationSource = 'GEMINI' | 'STATIC_FALLBACK';
+
 export interface AnalyzePortfolioAndSpecialtyInput {
   providerSpecialtyId: string;
   specialtyId: string;
@@ -31,16 +37,94 @@ export interface AnalyzePortfolioAndSpecialtyInput {
   categoryName?: string;
   specialtyName?: string;
   providerProfileId?: string;
+  signal?: AbortSignal;
+}
+
+const VALID_OPTION_IDS = new Set(['a', 'b', 'c', 'd']);
+const VALID_DIFFICULTIES = new Set(['FUNDAMENTAL', 'PRACTICAL', 'SENIOR_SYSTEM_DESIGN']);
+
+const QUESTIONS_SCHEMA = {
+  type: 'object',
+  properties: {
+    questions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'number' },
+          textAr: { type: 'string' },
+          options: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { id: { type: 'string', enum: ['a', 'b', 'c', 'd'] }, text: { type: 'string' } },
+              required: ['id', 'text']
+            }
+          },
+          correctAnswer: { type: 'string', enum: ['a', 'b', 'c', 'd'] },
+          explanation: { type: 'string' },
+          assessmentArea: { type: 'string' },
+          timeLimitSeconds: { type: 'number' }
+        },
+        required: ['id', 'textAr', 'options', 'correctAnswer', 'explanation']
+      }
+    }
+  },
+  required: ['questions']
+};
+
+const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+
+// Rejects anything that doesn't genuinely satisfy the question contract —
+// wrong option count/ids, an invalid correctAnswer, or missing text are all
+// invalid, never silently patched with a placeholder ("خيار أ", a hardcoded
+// correctAnswer of 'b', etc. — the previous implementation did exactly
+// this, which is removed).
+function isValidQuestionsPayload(value: unknown): value is { questions: AssessmentQuestion[] } {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  if (!Array.isArray(v.questions) || v.questions.length < 10) return false;
+
+  return v.questions.every((q) => {
+    if (!q || typeof q !== 'object') return false;
+    const entry = q as Record<string, unknown>;
+    if (!isNonEmptyString(entry.textAr)) return false;
+    if (!isNonEmptyString(entry.correctAnswer) || !VALID_OPTION_IDS.has(entry.correctAnswer.toLowerCase())) return false;
+    if (!isNonEmptyString(entry.explanation)) return false;
+    if (!Array.isArray(entry.options) || entry.options.length !== 4) return false;
+
+    const seenOptionIds = new Set<string>();
+    const optionsValid = entry.options.every((opt) => {
+      if (!opt || typeof opt !== 'object') return false;
+      const o = opt as Record<string, unknown>;
+      if (typeof o.id !== 'string' || !VALID_OPTION_IDS.has(o.id.toLowerCase())) return false;
+      if (seenOptionIds.has(o.id.toLowerCase())) return false; // duplicate option id
+      seenOptionIds.add(o.id.toLowerCase());
+      return isNonEmptyString(o.text);
+    });
+    if (!optionsValid) return false;
+    // The declared correct answer must actually reference one of the 4 options.
+    if (!seenOptionIds.has((entry.correctAnswer as string).toLowerCase())) return false;
+
+    if (entry.difficulty !== undefined && !VALID_DIFFICULTIES.has(entry.difficulty as string)) return false;
+
+    return true;
+  });
 }
 
 export class AiAssessmentAnalyzerService {
   /**
-   * Generates 20 practical, multimodal portfolio-aware questions via GPT-4o
+   * Generates 20 practical, portfolio-aware questions via the shared Gemini
+   * foundation. On any provider failure, invalid/malformed output, or fewer
+   * than 20 validated questions, falls back to a genuine deterministic
+   * static question bank (generateFallback20Questions) — never a
+   * partially-patched, half-fabricated "success".
    */
   async generate20Questions(input: AnalyzePortfolioAndSpecialtyInput): Promise<{
     questions: AssessmentQuestion[];
     subSpecialtiesSnapshot: string[];
     analyzedAssetsSnapshot: any[];
+    generationSource: AssessmentGenerationSource;
   }> {
     let specialtyNameAr = input.specialtyName || 'التخصص الفني';
     let categoryNameAr = input.categoryName || 'المجال الفني';
@@ -115,7 +199,6 @@ export class AiAssessmentAnalyzerService {
       ? JSON.stringify(portfolioItemsMeta.slice(0, 5)).slice(0, 12_000)
       : (safePortfolioFileNames.length > 0 ? safePortfolioFileNames.join(', ') : 'معرض أعمال محفوظ ومحمِي بعلامة وسيط AI');
 
-    // Build Multimodal GPT-4o System Prompt
     const systemPrompt = `أنت كبير مهندسي ومقيمي الاعتماد التقني بمنصة "وسيط AI".
 وظيفتك بناء تقييم تقني فائق الدقة مكون من 20 سؤالاً باللغة العربية (MCQs) لقياس كفاءة مقدم الخدمة.
 
@@ -130,27 +213,7 @@ export class AiAssessmentAnalyzerService {
 - خيار محدد كإجابة صحيحة ("correctAnswer": "a" | "b" | "c" | "d").
 - شرح دقيق ومعيار مهني واضح لسبب صحة الخيار ("explanation").
 - ربط الأسئلة بوضوح بالتخصص الرئيسي، التخصصات الفرعية، وطبيعة أعمال المشاريع المرفوعة.
-- الحقل "assessmentArea" يجب أن يطابق حرفياً اسم الوحدة المحدد أعلاه لكل مجموعة من خمسة أسئلة.
-
-قم بإرجاع النتيجة بتنسيق JSON حصراً:
-{
-  "questions": [
-    {
-      "id": 1,
-      "textAr": "نص السؤال...",
-      "options": [
-        { "id": "a", "text": "الخيار الأول" },
-        { "id": "b", "text": "الخيار الثاني" },
-        { "id": "c", "text": "الخيار الثالث" },
-        { "id": "d", "text": "الخيار الرابع" }
-      ],
-      "correctAnswer": "b",
-      "explanation": "التعليل الفني...",
-	  "assessmentArea": "التخصص الرئيسي",
-      "timeLimitSeconds": 45
-    }
-  ]
-}`;
+- الحقل "assessmentArea" يجب أن يطابق حرفياً اسم الوحدة المحدد أعلاه لكل مجموعة من خمسة أسئلة.`;
 
     const userPrompt = `القسم الرئيسي: ${categoryNameAr}
 التخصص: ${specialtyNameAr}
@@ -160,51 +223,39 @@ export class AiAssessmentAnalyzerService {
 قم بتوليد 20 سؤالاً وفق توزيع 5+5+5+5 الإلزامي، مع تخصيص أسئلة نموذج العمل من البيانات المرفقة، وجعل آخر خمسة أسئلة مهنية لاختبار قدرة مقدم الخدمة على إقناع العميل وكسب الصفقة.`;
 
     let questions: AssessmentQuestion[] = [];
+    let generationSource: AssessmentGenerationSource = 'STATIC_FALLBACK';
 
-    if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'dummy_key_for_build') {
-      try {
-        const response = await openai.chat.completions.create({
-          model: 'gpt-4o',
-          temperature: 0.3,
-          response_format: { type: 'json_object' },
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ]
-        });
+    try {
+      const result = await geminiClient.generateStructured<{ questions: AssessmentQuestion[] }>(userPrompt, {
+        systemInstruction: systemPrompt,
+        responseSchema: QUESTIONS_SCHEMA,
+        validate: isValidQuestionsPayload,
+        temperature: 0.3,
+        maxOutputTokens: 4000,
+        signal: input.signal
+      });
 
-        const content = response.choices[0].message?.content || '{}';
-        const parsed = JSON.parse(content);
-        if (parsed?.questions && Array.isArray(parsed.questions) && parsed.questions.length >= 10) {
-          questions = parsed.questions.slice(0, 20).map((q: any, idx: number) => ({
-            id: q.id || idx + 1,
-            textAr: q.textAr || q.text || `سؤال تقني في ${specialtyNameAr}`,
-            options: Array.isArray(q.options) ? q.options : [
-              { id: 'a', text: 'خيار أ' },
-              { id: 'b', text: 'خيار ب' },
-              { id: 'c', text: 'خيار ج' },
-              { id: 'd', text: 'خيار د' }
-            ],
-            correctAnswer: q.correctAnswer || 'b',
-            explanation: q.explanation || 'تم اعتماد الخيار التزاماً بأحدث المعايير البرمجية.',
-            timeLimitSeconds: q.timeLimitSeconds || 45,
-            assessmentArea: this.getAssessmentArea(idx)
-          }));
-        }
-      } catch (err) {
-        console.warn('[AiAssessmentAnalyzerService] OpenAI generation failed, producing high-caliber fallback set:', err);
-      }
+      questions = result.data.questions.slice(0, 20).map((q, idx) => ({
+        ...q,
+        timeLimitSeconds: q.timeLimitSeconds || 45,
+        assessmentArea: this.getAssessmentArea(idx)
+      }));
+      generationSource = 'GEMINI';
+    } catch (err) {
+      console.warn('[AiAssessmentAnalyzerService] Gemini generation failed, producing high-caliber static fallback set:', (err as any)?.code || (err as Error)?.message);
     }
 
-    // Fallback 20 question generator if OpenAI unavailable or returned partial set
+    // Honest static fallback if Gemini unavailable, invalid, or returned fewer than 20 usable questions.
     if (!questions || questions.length < 20) {
       questions = this.generateFallback20Questions(specialtyNameAr, subSpecs, portfolioItemsMeta);
+      generationSource = 'STATIC_FALLBACK';
     }
 
     return {
       questions,
       subSpecialtiesSnapshot: subSpecs,
-      analyzedAssetsSnapshot: portfolioItemsMeta
+      analyzedAssetsSnapshot: portfolioItemsMeta,
+      generationSource
     };
   }
 
@@ -215,7 +266,12 @@ export class AiAssessmentAnalyzerService {
     return 'مهارات العميل والصفقات';
   }
 
-  private generateFallback20Questions(specialtyName: string, subSpecs: string[], portfolioItems: any[]): AssessmentQuestion[] {
+  /**
+   * STATIC FALLBACK — a genuine deterministic product feature, not
+   * AI-generated content. Callers must label results built from this as
+   * `generationSource: 'STATIC_FALLBACK'`, never as Gemini output.
+   */
+  generateFallback20Questions(specialtyName: string, subSpecs: string[], portfolioItems: any[]): AssessmentQuestion[] {
     const subs = subSpecs.length > 0 ? subSpecs : [specialtyName, 'هندسة البرمجيات', 'الأمان والسرعة'];
     const scenarios = [
       {

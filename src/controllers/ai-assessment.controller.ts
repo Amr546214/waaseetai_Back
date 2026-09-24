@@ -24,9 +24,16 @@ export async function generateAssessmentController(req: Request, res: Response):
 
     const result = await aiAssessmentService.generateAssessment(String(providerSpecialtyId), userId);
 
+    // Honest, provider-agnostic message that never names a specific AI
+    // engine and never claims AI generation when the static fallback bank
+    // was actually used.
+    const message = result.generationSource === 'GEMINI'
+      ? 'تم توليد أسئلة التقييم الفني بنجاح عبر الذكاء الاصطناعي.'
+      : 'تعذر توليد أسئلة مخصصة عبر الذكاء الاصطناعي حالياً، تم استخدام نموذج تقييم قياسي بديل.';
+
     res.status(201).json({
       success: true,
-      message: 'تم توليد أسئلة التقييم الفني بنجاح عبر محرك OpenAI.',
+      message,
       data: result
     });
   } catch (error: any) {

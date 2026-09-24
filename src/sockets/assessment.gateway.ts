@@ -2,12 +2,47 @@ import { Socket, Server as SocketIOServer } from 'socket.io';
 import { prisma } from '../config/db';
 import { AssessmentStatus, SpecialtyVerificationStatus } from '@prisma/client';
 import { aiAssessmentAnalyzerService, AssessmentQuestion } from '../services/ai-assessment-analyzer.service';
-import OpenAI from 'openai';
+import { geminiClient } from '../services/ai/gemini/gemini.client';
+import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || 'dummy_key_for_build',
-  timeout: 45 * 1000,
-});
+// F14 — live primary assessment socket flow, migrated to the shared Gemini
+// foundation via the same `aiAssessmentAnalyzerService` F12 uses (canonical
+// schema convergence — see the Batch report's caller graph).
+//
+// Security fixes this batch (Batch: F12+F13+F14 assessment pipeline):
+// 1. `submit_answer`/`submit_assessment` previously fetched the attempt by
+//    `attemptId` alone, with NO check that the calling socket's user
+//    actually owns that attempt — any authenticated socket that learned or
+//    guessed another user's attemptId could submit answers on their behalf
+//    and affect their real ProviderSpecialty status/score. Fixed: the DB
+//    lookup now filters on `providerSpecialty.providerProfile.userId`.
+// 2. Zero rate limiting existed on any of these events. Fixed: reuses the
+//    shared `socket-ai-rate-limit.ts` from the F1/F2 batch — no new limiter.
+// 3. `start_assessment` already required `socket.userId` — preserved
+//    unchanged. See the Batch report for a separate, critical finding: the
+//    real frontend caller (anti-cheat.service.ts) never actually supplied a
+//    token for this socket connection, meaning `socket.userId` likely never
+//    populated for real users — fixed on the frontend side (see report).
+
+const FEEDBACK_SCHEMA = {
+  type: 'object',
+  properties: {
+    feedbackAr: { type: 'string' },
+    strengths: { type: 'array', items: { type: 'string' } },
+    weaknesses: { type: 'array', items: { type: 'string' } }
+  },
+  required: ['feedbackAr', 'strengths', 'weaknesses']
+};
+
+function isValidFeedback(value: unknown): value is { feedbackAr: string; strengths: string[]; weaknesses: string[] } {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.feedbackAr === 'string' && v.feedbackAr.trim().length > 0 &&
+    Array.isArray(v.strengths) && v.strengths.every((s) => typeof s === 'string') &&
+    Array.isArray(v.weaknesses) && v.weaknesses.every((s) => typeof s === 'string')
+  );
+}
 
 export class AssessmentGateway {
   private io: SocketIOServer | null = null;
@@ -37,6 +72,11 @@ export class AssessmentGateway {
         return;
       }
 
+      if (isSocketAiRateLimited(userId)) {
+        socket.emit('assessment_error', { message: SOCKET_AI_RATE_LIMIT_MESSAGE });
+        return;
+      }
+
       const providerSpecialty = await prisma.providerSpecialty.findFirst({
         where: { id: providerSpecId, providerProfile: { userId } },
         select: { id: true, specialtyId: true, providerProfileId: true, subSpecialties: true }
@@ -49,9 +89,13 @@ export class AssessmentGateway {
       const specId = providerSpecialty.specialtyId;
       const profileId = providerSpecialty.providerProfileId;
 
+      const abortController = new AbortController();
+      const onDisconnect = () => abortController.abort();
+      socket.once('disconnect', onDisconnect);
+
       try {
         // 1. Analyze specialty, sub-specialties, and portfolio files to generate 20 questions
-        const { questions, subSpecialtiesSnapshot, analyzedAssetsSnapshot } = 
+        const { questions, subSpecialtiesSnapshot, analyzedAssetsSnapshot, generationSource } =
           await aiAssessmentAnalyzerService.generate20Questions({
             providerSpecialtyId: providerSpecId,
             specialtyId: specId,
@@ -59,7 +103,8 @@ export class AssessmentGateway {
             portfolioFileUrls: payload.portfolioFileUrls,
             categoryName: payload.categoryName,
             specialtyName: payload.specialtyName,
-            providerProfileId: profileId
+            providerProfileId: profileId,
+            signal: abortController.signal
           });
 
         // 2. Create AssessmentAttempt in database with status STREAMING
@@ -71,7 +116,7 @@ export class AssessmentGateway {
               providerProfileId: profileId,
               specialtyId: specId,
               subSpecialtiesSnapshot: subSpecialtiesSnapshot as any,
-              analyzedAssetsSnapshot: analyzedAssetsSnapshot as any,
+              analyzedAssetsSnapshot: { items: analyzedAssetsSnapshot, generationSource } as any,
               questionsPayload: questions as any,
               totalQuestions: 20,
               status: AssessmentStatus.STREAMING,
@@ -86,7 +131,9 @@ export class AssessmentGateway {
 
         socket.join(`assessment_${attemptId}`);
 
-        // 3. Stream 20 questions one by one (STRIPPING correctAnswer & explanation)
+        // 3. Stream 20 questions one by one (STRIPPING correctAnswer & explanation).
+        // This reveals already-fully-generated questions progressively for UX
+        // pacing — it never claims Gemini is generating each one live.
         for (let i = 0; i < questions.length; i++) {
           const rawQ = questions[i];
 
@@ -130,7 +177,10 @@ export class AssessmentGateway {
           attemptId,
           totalQuestions: questions.length,
           timeLimitMinutes: 15,
-          message: '✓ تم اكتمال بث أسئلة الاختبار الـ 20 بنجاح عبر محرك الذكاء الاصطناعي.'
+          generationSource,
+          message: generationSource === 'GEMINI'
+            ? '✓ تم اكتمال بث أسئلة الاختبار الـ 20 بنجاح عبر الذكاء الاصطناعي.'
+            : '✓ تعذر توليد أسئلة مخصصة عبر الذكاء الاصطناعي، تم استخدام نموذج تقييم قياسي بديل.'
         };
 
         socket.emit('assessment_ready', readyPayload);
@@ -138,8 +188,10 @@ export class AssessmentGateway {
           this.io.to(`assessment_${attemptId}`).emit('assessment_ready', readyPayload);
         }
       } catch (err: any) {
-        console.error('[AssessmentGateway] Start assessment error:', err);
+        console.error('[AssessmentGateway] Start assessment error:', err?.code || err);
         socket.emit('assessment_error', { message: 'حدث خطأ أثناء بث أسئلة التقييم الفني عبر الذكاء الاصطناعي.' });
+      } finally {
+        socket.off('disconnect', onDisconnect);
       }
     });
 
@@ -160,20 +212,36 @@ export class AssessmentGateway {
     const { attemptId, answers } = payload;
     console.log(`[AssessmentGateway] Evaluating submission for attempt ${attemptId}:`, answers);
 
+    const userId = (socket as any).userId as string | undefined;
+    if (!userId) {
+      socket.emit('assessment_error', { message: 'يجب تسجيل الدخول لتسليم نتائج التقييم.' });
+      return;
+    }
+
     if (!attemptId) {
       socket.emit('assessment_error', { message: 'معرف محاولة التقييم attemptId مفقود.' });
       return;
     }
 
+    if (isSocketAiRateLimited(userId)) {
+      socket.emit('assessment_error', { message: SOCKET_AI_RATE_LIMIT_MESSAGE });
+      return;
+    }
+
+    const abortController = new AbortController();
+    const onDisconnect = () => abortController.abort();
+    socket.once('disconnect', onDisconnect);
+
     try {
       let questionsPayload: AssessmentQuestion[] = [];
       let providerSpecialtyId = '';
-      let providerProfileId = '';
 
-      // 1. Fetch attempt record from database
-      if (attemptId.includes('-') && !attemptId.startsWith('attempt-')) {
-        const dbAttempt = await prisma.assessmentAttempt.findUnique({
-          where: { id: attemptId },
+      // 1. Fetch attempt record from database — filtered by ownership, so a
+      // socket can never submit answers for an attempt it doesn't own.
+      const isRealDbAttempt = attemptId.includes('-') && !attemptId.startsWith('attempt-');
+      if (isRealDbAttempt) {
+        const dbAttempt = await prisma.assessmentAttempt.findFirst({
+          where: { id: attemptId, providerSpecialty: { providerProfile: { userId } } },
           include: {
             providerSpecialty: {
               include: { specialty: true }
@@ -181,16 +249,20 @@ export class AssessmentGateway {
           }
         });
 
-        if (dbAttempt) {
-          questionsPayload = (dbAttempt.questionsPayload as unknown as AssessmentQuestion[]) || [];
-          providerSpecialtyId = dbAttempt.providerSpecialtyId;
-          providerProfileId = dbAttempt.providerProfileId;
+        if (!dbAttempt) {
+          socket.emit('assessment_error', { message: 'محاولة التقييم غير موجودة أو لا تملك صلاحية الوصول إليها.' });
+          return;
         }
+
+        questionsPayload = (dbAttempt.questionsPayload as unknown as AssessmentQuestion[]) || [];
+        providerSpecialtyId = dbAttempt.providerSpecialtyId;
       }
 
-      // If in-memory or DB missing, generate standard fallback key
+      // If in-memory or DB missing (the attempt was created without a DB
+      // record — see the attemptId fallback above), score against the same
+      // static bank used elsewhere, honestly.
       if (!questionsPayload || questionsPayload.length === 0) {
-        questionsPayload = aiAssessmentAnalyzerService['generateFallback20Questions']('التخصص الفني', ['تطوير الأنظمة'], []);
+        questionsPayload = aiAssessmentAnalyzerService.generateFallback20Questions('التخصص الفني', ['تطوير الأنظمة'], []);
       }
 
       // 2. Score Calculation
@@ -208,60 +280,50 @@ export class AssessmentGateway {
       const scorePercentage = parseFloat(((correctCount / totalQuestions) * 100).toFixed(1));
       const isPassed = scorePercentage > 25.0;
 
-      // 3. AI Feedback Synthesis via GPT-4o
+      // 3. AI Feedback Synthesis via the shared Gemini foundation. Honest
+      // failure: the deterministic real-outcome feedback below (already
+      // derived from the actual score) is used as-is on any Gemini error.
       let feedbackAr = isPassed
         ? `ممتاز جداً! حققت نتيجة استثنائية بنسبة ${scorePercentage}% وأظهرت كفاءة هندسية عالية وتوافقاً تاماً مع معايير الجودة في المنصة.`
         : `لم تتجاوز الحد الأدنى المطلوب للاجتياز (25%)، نتيجتك: ${scorePercentage}%. يمكنك مراجعة المحاور التقنية وإعادة التقييم.`;
-      
+
       let strengths: string[] = isPassed
         ? ['فهم متعمق لبنية الأنظمة وأفضل معايير الأمان.', 'قدرة عالية على حل مشاكل الأداء وتأمين الجلسات.', 'استيعاب دقيق لأنماط التصميم والبرمجة النظيفة.']
         : ['مبادرة جيدة واطلاع عام على الأساسيات الفنية.'];
-      
+
       let weaknesses: string[] = isPassed
         ? []
         : ['الحاجة لتطوير المعرفة العملية في الحالات الحدية لمعالجة الأخطاء.', 'تسرع في اختيار بعض حلول المعاملات المالية المتزامنة.'];
 
-      if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'dummy_key_for_build') {
-        try {
-          const aiRes = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            temperature: 0.3,
-            response_format: { type: 'json_object' },
-            messages: [
-              { role: 'system', content: 'أنت المحلل الذكي لتجارب تقييم التخصصات في منصة وسيط AI.' },
-              {
-                role: 'user',
-                content: `قم بتحليل نتيجة اختبار 20 سؤالاً:
+      try {
+        const feedbackPrompt = `قم بتحليل نتيجة اختبار 20 سؤالاً:
 درجة المتقدم: ${scorePercentage}% (${correctCount}/${totalQuestions})
 حالة الاجتياز: ${isPassed ? 'ناجح' : 'لم يجتز'}
 الأسئلة والإجابات: ${JSON.stringify(questionsPayload.slice(0, 8).map(q => ({
-                  question: q.textAr,
-                  userAnswer: answers[String(q.id)],
-                  correctAnswer: q.correctAnswer
-                })))}
+          question: q.textAr,
+          userAnswer: answers[String(q.id)],
+          correctAnswer: q.correctAnswer
+        })))}`;
 
-أرجع JSON يحتوي على:
-{
-  "feedbackAr": "تحليل تقييمي دقيق ومحفز في 2-3 جمل باللغة العربية",
-  "strengths": ["نقطة قوة 1", "نقطة قوة 2", "نقطة قوة 3"],
-  "weaknesses": ["نقطة تحسين 1", "نقطة تحسين 2"]
-}`
-              }
-            ]
-          });
+        const result = await geminiClient.generateStructured<{ feedbackAr: string; strengths: string[]; weaknesses: string[] }>(feedbackPrompt, {
+          systemInstruction: 'أنت المحلل الذكي لتجارب تقييم التخصصات في منصة وسيط AI.',
+          responseSchema: FEEDBACK_SCHEMA,
+          validate: isValidFeedback,
+          temperature: 0.3,
+          maxOutputTokens: 500,
+          signal: abortController.signal
+        });
 
-          const parsed = JSON.parse(aiRes.choices[0].message?.content || '{}');
-          if (parsed.feedbackAr) feedbackAr = parsed.feedbackAr;
-          if (Array.isArray(parsed.strengths)) strengths = parsed.strengths;
-          if (Array.isArray(parsed.weaknesses)) weaknesses = parsed.weaknesses;
-        } catch (aiErr) {
-          console.warn('[AssessmentGateway] AI feedback synthesis fallback:', aiErr);
-        }
+        feedbackAr = result.data.feedbackAr;
+        strengths = result.data.strengths;
+        weaknesses = result.data.weaknesses;
+      } catch (aiErr: any) {
+        console.warn('[AssessmentGateway] Gemini feedback synthesis unavailable, using deterministic real-outcome feedback:', aiErr?.code || aiErr?.message);
       }
 
       // 4. Update Database Transactionally
       const completedAt = new Date();
-      if (attemptId.includes('-') && !attemptId.startsWith('attempt-')) {
+      if (isRealDbAttempt) {
         try {
           await prisma.$transaction(async (tx) => {
             await tx.assessmentAttempt.update({
@@ -311,7 +373,7 @@ export class AssessmentGateway {
         strengths,
         weaknesses,
         completedAt: completedAt.toISOString(),
-        message: isPassed 
+        message: isPassed
           ? '🎉 مبروك! اجتزت التقييم بنجاح وتم منحك شارة اعتماد الجدارة المهنية!'
           : 'لم تتجاوز الحد الأدنى المطلوب للاجتياز (25%). يمكنك المحاولة مجدداً لاحقاً.'
       };
@@ -323,6 +385,8 @@ export class AssessmentGateway {
     } catch (err: any) {
       console.error('[AssessmentGateway] Evaluation submission error:', err);
       socket.emit('assessment_error', { message: 'فشل معالجة التقييم النهائي عبر الـ WebSocket.' });
+    } finally {
+      socket.off('disconnect', onDisconnect);
     }
   }
 }
