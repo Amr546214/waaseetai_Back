@@ -53,6 +53,22 @@ export interface GenerateStructuredOptions<T> extends GenerateTextOptions {
   validate?: (value: unknown) => boolean;
 }
 
+/** A single image to attach to a Vision request. `data` is raw bytes — this
+ *  layer owns the base64 encoding so callers never have to think about the
+ *  wire format Gemini expects. Callers own fetching/validating the image
+ *  itself (see src/utils/remote-image-fetch.ts) — this layer only accepts
+ *  already-prepared bytes, never a URL, so it never performs its own
+ *  outbound fetch. */
+export interface GeminiImageInput {
+  mimeType: string;
+  data: Buffer;
+}
+
+export interface GenerateStructuredWithImageOptions<T> extends GenerateStructuredOptions<T> {
+  /** One or more images to attach alongside the text prompt. */
+  images: GeminiImageInput[];
+}
+
 export type GenerateStreamOptions = GenerateTextOptions;
 
 /**
@@ -165,37 +181,88 @@ export class GeminiClient {
         },
       });
 
-      const rawText = response.text;
-      if (!rawText || !rawText.trim()) {
-        throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'Gemini returned an empty structured response');
-      }
-
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(rawText);
-      } catch (parseError) {
-        throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'Gemini returned malformed JSON', parseError);
-      }
-
-      if (options.validate) {
-        let isValid: boolean;
-        try {
-          isValid = options.validate(parsed);
-        } catch (validationError) {
-          throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'Gemini response failed application validation', validationError);
-        }
-        if (!isValid) {
-          throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'Gemini response failed application validation');
-        }
-      }
-
-      return { data: parsed as T, usage: extractUsage(response.usageMetadata) };
+      const parsed = this.parseAndValidateStructuredResponse<T>(response.text, options.validate);
+      return { data: parsed, usage: extractUsage(response.usageMetadata) };
     } catch (error) {
       logger.debug(`[GeminiClient] generateStructured failed: ${(error as Error)?.message}`);
       throw normalizeGeminiError(error);
     } finally {
       clear();
     }
+  }
+
+  /**
+   * Vision variant of generateStructured(): attaches one or more images
+   * alongside the text prompt. The image bytes must already be fetched and
+   * validated by the caller (see src/utils/remote-image-fetch.ts) — this
+   * method never fetches a URL itself, so it carries no SSRF surface of its
+   * own. Everything else (model selection, JSON parsing, validation, error
+   * normalization, usage extraction) is identical to generateStructured().
+   */
+  async generateStructuredWithImage<T>(prompt: string, options: GenerateStructuredWithImageOptions<T>): Promise<GeminiStructuredResult<T>> {
+    const { signal, clear } = buildTimeoutSignal(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, options.signal);
+
+    try {
+      if (!options.images || options.images.length === 0) {
+        throw new GeminiProviderError(GeminiErrorCode.UNKNOWN_PROVIDER_ERROR, 'generateStructuredWithImage requires at least one image');
+      }
+
+      const client = await this.getSdkClient();
+      const model = options.model || geminiModelConfig.visionModel;
+
+      const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [{ text: prompt }];
+      for (const image of options.images) {
+        parts.push({ inlineData: { mimeType: image.mimeType, data: image.data.toString('base64') } });
+      }
+
+      const response = await client.models.generateContent({
+        model,
+        contents: parts as never,
+        config: {
+          systemInstruction: options.systemInstruction,
+          temperature: options.temperature,
+          maxOutputTokens: options.maxOutputTokens,
+          responseMimeType: 'application/json',
+          responseSchema: options.responseSchema as never,
+          abortSignal: signal,
+        },
+      });
+
+      const parsed = this.parseAndValidateStructuredResponse<T>(response.text, options.validate);
+      return { data: parsed, usage: extractUsage(response.usageMetadata) };
+    } catch (error) {
+      logger.debug(`[GeminiClient] generateStructuredWithImage failed: ${(error as Error)?.message}`);
+      throw normalizeGeminiError(error);
+    } finally {
+      clear();
+    }
+  }
+
+  private parseAndValidateStructuredResponse<T>(rawText: string | undefined, validate?: (value: unknown) => boolean): T {
+    if (!rawText || !rawText.trim()) {
+      throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'Gemini returned an empty structured response');
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch (parseError) {
+      throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'Gemini returned malformed JSON', parseError);
+    }
+
+    if (validate) {
+      let isValid: boolean;
+      try {
+        isValid = validate(parsed);
+      } catch (validationError) {
+        throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'Gemini response failed application validation', validationError);
+      }
+      if (!isValid) {
+        throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'Gemini response failed application validation');
+      }
+    }
+
+    return parsed as T;
   }
 
   async *generateStream(prompt: string, options: GenerateStreamOptions = {}): GeminiTextStream {

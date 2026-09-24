@@ -6,6 +6,7 @@ import { initSpecialtyQuiz, submitSpecialtyQuiz, getSpecialtyQuizStatus } from '
 import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { requireOwnedProviderSpecialtyFromBody, requireOwnedProviderSpecialtyFromParam } from '../utils/provider-specialty-access';
 
 const router = Router();
@@ -128,7 +129,7 @@ router.post(
   }
 );
 
-router.post('/:id/ai-evaluate', ...providerAuth, requireOwnedProviderSpecialtyFromParam, evaluateSpecialtyWithAI);
+router.post('/:id/ai-evaluate', ...providerAuth, requireOwnedProviderSpecialtyFromParam, aiLimiter, evaluateSpecialtyWithAI);
 
 router.post('/:id/quiz/init', ...providerAuth, requireOwnedProviderSpecialtyFromParam, initSpecialtyQuiz);
 router.post('/:id/quiz/submit', ...providerAuth, requireOwnedProviderSpecialtyFromParam, submitSpecialtyQuiz);

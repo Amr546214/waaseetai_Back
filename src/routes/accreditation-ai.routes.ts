@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { accreditationAiService } from '../services/accreditation-ai.service';
 import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
 
@@ -23,7 +24,7 @@ const upload = memoryUpload({ fileSize: 15 * 1024 * 1024, files: 10, allowedMime
  * Primary Endpoint: POST /api/provider/accreditation/submit or /api/accreditation/submit
  * Submits work sample for technical accreditation & runs OpenAI GPT-4o evaluation
  */
-router.post('/submit', upload.array('files', 10), async (req: Request, res: Response, next) => {
+router.post('/submit', aiLimiter, upload.array('files', 10), async (req: Request, res: Response, next) => {
   try {
     const user = req.user!;
     let { providerSpecialtyId, title, description, technologiesUsed, projectUrl, githubUrl, attachments } = req.body;

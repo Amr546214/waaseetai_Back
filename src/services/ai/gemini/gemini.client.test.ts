@@ -329,3 +329,207 @@ test('generateStream: rejects with NOT_CONFIGURED before making any SDK call whe
     restoreEnv();
   }
 });
+
+// ── generateStructuredWithImage (Vision) ────────────────────────────────
+
+test('generateStructuredWithImage: a successful call sends the text prompt and correctly base64-encoded image parts to the SDK layer', async () => {
+  let capturedArgs: any;
+  const { geminiClient, restoreEnv } = await loadClient({
+    generateContent: async (args: any) => {
+      capturedArgs = args;
+      return { text: '{"score": 88}', usageMetadata: usageMetadataFixture() };
+    }
+  }, 'test-key');
+  try {
+    const imageBytes = Buffer.from('fake-png-bytes');
+    const result = await geminiClient.generateStructuredWithImage<{ score: number }>('evaluate this image', {
+      responseSchema: { type: 'object', properties: { score: { type: 'number' } } },
+      images: [{ mimeType: 'image/png', data: imageBytes }]
+    });
+
+    assert.deepEqual(result.data, { score: 88 });
+    assert.deepEqual(result.usage, { promptTokens: 12, completionTokens: 34, totalTokens: 46 });
+
+    assert.deepEqual(capturedArgs.contents, [
+      { text: 'evaluate this image' },
+      { inlineData: { mimeType: 'image/png', data: imageBytes.toString('base64') } }
+    ]);
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('generateStructuredWithImage: attaches multiple images in order, each independently base64-encoded', async () => {
+  let capturedArgs: any;
+  const { geminiClient, restoreEnv } = await loadClient({
+    generateContent: async (args: any) => {
+      capturedArgs = args;
+      return { text: '{"score": 90}', usageMetadata: usageMetadataFixture() };
+    }
+  }, 'test-key');
+  try {
+    const imageA = Buffer.from('image-a-bytes');
+    const imageB = Buffer.from('image-b-bytes');
+    await geminiClient.generateStructuredWithImage('evaluate', {
+      responseSchema: { type: 'object' },
+      images: [
+        { mimeType: 'image/png', data: imageA },
+        { mimeType: 'image/jpeg', data: imageB }
+      ]
+    });
+
+    assert.deepEqual(capturedArgs.contents, [
+      { text: 'evaluate' },
+      { inlineData: { mimeType: 'image/png', data: imageA.toString('base64') } },
+      { inlineData: { mimeType: 'image/jpeg', data: imageB.toString('base64') } }
+    ]);
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('generateStructuredWithImage: rejects with a normalized error (no images provided) without calling the SDK', async () => {
+  let called = false;
+  const { geminiClient, restoreEnv } = await loadClient({
+    generateContent: async () => { called = true; return { text: '{}' }; }
+  }, 'test-key');
+  try {
+    await assert.rejects(
+      () => geminiClient.generateStructuredWithImage('evaluate', { responseSchema: { type: 'object' }, images: [] }),
+      (err: any) => { assert.equal(err.name, 'GeminiProviderError'); return true; }
+    );
+    assert.equal(called, false);
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('generateStructuredWithImage: rejects with NOT_CONFIGURED when GEMINI_API_KEY is missing', async () => {
+  const { geminiClient, restoreEnv } = await loadClient({}, undefined);
+  const { GeminiErrorCode } = await import('./gemini.errors.ts');
+  try {
+    await assert.rejects(
+      () => geminiClient.generateStructuredWithImage('evaluate', {
+        responseSchema: { type: 'object' },
+        images: [{ mimeType: 'image/png', data: Buffer.from('x') }]
+      }),
+      (err: any) => { assert.equal(err.code, GeminiErrorCode.NOT_CONFIGURED); return true; }
+    );
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('generateStructuredWithImage: a malformed JSON response is rejected as INVALID_RESPONSE', async () => {
+  const { geminiClient, restoreEnv } = await loadClient({
+    generateContent: async () => ({ text: 'not valid json {{{', usageMetadata: usageMetadataFixture() })
+  }, 'test-key');
+  const { GeminiErrorCode } = await import('./gemini.errors.ts');
+  try {
+    await assert.rejects(
+      () => geminiClient.generateStructuredWithImage('evaluate', {
+        responseSchema: { type: 'object' },
+        images: [{ mimeType: 'image/png', data: Buffer.from('x') }]
+      }),
+      (err: any) => { assert.equal(err.code, GeminiErrorCode.INVALID_RESPONSE); return true; }
+    );
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('generateStructuredWithImage: caller validation rejecting the parsed response surfaces as INVALID_RESPONSE', async () => {
+  const { geminiClient, restoreEnv } = await loadClient({
+    generateContent: async () => ({ text: '{"score": -5}', usageMetadata: usageMetadataFixture() })
+  }, 'test-key');
+  const { GeminiErrorCode } = await import('./gemini.errors.ts');
+  try {
+    await assert.rejects(
+      () => geminiClient.generateStructuredWithImage('evaluate', {
+        responseSchema: { type: 'object' },
+        validate: (value: any) => typeof value?.score === 'number' && value.score >= 0,
+        images: [{ mimeType: 'image/png', data: Buffer.from('x') }]
+      }),
+      (err: any) => { assert.equal(err.code, GeminiErrorCode.INVALID_RESPONSE); return true; }
+    );
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('generateStructuredWithImage: normalizes a 503 SDK error to PROVIDER_UNAVAILABLE (provider unavailable)', async () => {
+  const { geminiClient, restoreEnv } = await loadClient({
+    generateContent: async () => { const e: any = new Error('overloaded'); e.status = 503; throw e; }
+  }, 'test-key');
+  const { GeminiErrorCode } = await import('./gemini.errors.ts');
+  try {
+    await assert.rejects(
+      () => geminiClient.generateStructuredWithImage('evaluate', {
+        responseSchema: { type: 'object' },
+        images: [{ mimeType: 'image/png', data: Buffer.from('x') }]
+      }),
+      (err: any) => { assert.equal(err.code, GeminiErrorCode.PROVIDER_UNAVAILABLE); return true; }
+    );
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('generateStructuredWithImage: an AbortError (timeout) is normalized to TIMEOUT', async () => {
+  const { geminiClient, restoreEnv } = await loadClient({
+    generateContent: async () => { const e: any = new Error('aborted'); e.name = 'AbortError'; throw e; }
+  }, 'test-key');
+  const { GeminiErrorCode } = await import('./gemini.errors.ts');
+  try {
+    await assert.rejects(
+      () => geminiClient.generateStructuredWithImage('evaluate', {
+        responseSchema: { type: 'object' },
+        images: [{ mimeType: 'image/png', data: Buffer.from('x') }]
+      }),
+      (err: any) => { assert.equal(err.code, GeminiErrorCode.TIMEOUT); return true; }
+    );
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('generateStructuredWithImage: an externally aborted signal propagates as TIMEOUT', async () => {
+  const { geminiClient, restoreEnv } = await loadClient({
+    generateContent: async (_args: any, _config?: any) => {
+      // Simulate the SDK honoring the abort signal mid-call.
+      const e: any = new Error('aborted');
+      e.name = 'AbortError';
+      throw e;
+    }
+  }, 'test-key');
+  const { GeminiErrorCode } = await import('./gemini.errors.ts');
+  try {
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      () => geminiClient.generateStructuredWithImage('evaluate', {
+        responseSchema: { type: 'object' },
+        images: [{ mimeType: 'image/png', data: Buffer.from('x') }],
+        signal: controller.signal
+      }),
+      (err: any) => { assert.equal(err.code, GeminiErrorCode.TIMEOUT); return true; }
+    );
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('generateStructuredWithImage: real usage metadata is extracted and returned unmodified', async () => {
+  const { geminiClient, restoreEnv } = await loadClient({
+    generateContent: async () => ({ text: '{"score": 77}', usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 50, totalTokenCount: 150 } })
+  }, 'test-key');
+  try {
+    const result = await geminiClient.generateStructuredWithImage('evaluate', {
+      responseSchema: { type: 'object' },
+      images: [{ mimeType: 'image/jpeg', data: Buffer.from('x') }]
+    });
+    assert.deepEqual(result.usage, { promptTokens: 100, completionTokens: 50, totalTokens: 150 });
+  } finally {
+    restoreEnv();
+  }
+});

@@ -1,12 +1,29 @@
 import { prisma } from '../config/db';
 import { logger } from '../config/logger';
-import OpenAI from 'openai';
 import { AccreditationStatus } from '@prisma/client';
 import { AppError } from '../utils/app-error';
+import { geminiClient, GeminiImageInput } from './ai/gemini/gemini.client';
+import { fetchRemoteImage } from '../utils/remote-image-fetch';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || 'dummy_key',
-});
+// F10 — Accreditation Sample AI Evaluation, migrated to the shared Gemini
+// Vision foundation.
+//
+// Fallback decision: the previous implementation's failure path
+// (`generateManualReviewEvaluation` — score 0, status MANUAL_REVIEW, an
+// honest Arabic message saying the automated check couldn't complete) was
+// ALREADY the correct, honest behavior and is preserved unchanged. What
+// needed fixing was the *success* path: the old OpenAI response parser
+// silently replaced a missing/malformed `aiScore` with a hardcoded `85`,
+// and missing `strengths`/`recommendations` with hardcoded positive-sounding
+// arrays ("التزام ممتاز بالبنية المعمارية", …) — meaning a malformed or
+// partial provider response could still look like a confident real
+// evaluation. That silent patching is removed: a real validator now either
+// accepts the full parsed response or the call is treated as failed and
+// routed through the existing, already-honest manual-review path — never a
+// partially-fabricated "success".
+
+const ALLOWED_ACCREDITATION_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const MAX_VISION_IMAGES = 4;
 
 export interface SubmitAccreditationSampleDto {
   userId: string;
@@ -17,6 +34,37 @@ export interface SubmitAccreditationSampleDto {
   projectUrl?: string;
   githubUrl?: string;
   attachments: string[];
+}
+
+const ACCREDITATION_EVALUATION_SCHEMA = {
+  type: 'object',
+  properties: {
+    aiScore: { type: 'number', description: '0 to 100' },
+    status: { type: 'string', enum: ['AI_VERIFIED', 'REJECTED'] },
+    aiQualityRating: { type: 'string', enum: ['EXCELLENT', 'ACCEPTABLE', 'POOR'] },
+    feedbackAr: { type: 'string' },
+    strengths: { type: 'array', items: { type: 'string' } },
+    recommendations: { type: 'array', items: { type: 'string' } }
+  },
+  required: ['aiScore', 'status', 'aiQualityRating', 'feedbackAr', 'strengths', 'recommendations']
+};
+
+// Rejects anything that doesn't genuinely satisfy the application contract.
+// This replaces the previous silent-patching behavior (a missing/invalid
+// aiScore became a hardcoded 85; missing strengths/recommendations became
+// hardcoded positive-sounding text) — a malformed response is now always
+// treated as a real failure, routed through the existing honest
+// manual-review path, never disguised as a passable evaluation.
+function isValidAccreditationEvaluation(value: unknown): value is AccreditationEvaluationResult {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.aiScore !== 'number' || !Number.isFinite(v.aiScore) || v.aiScore < 0 || v.aiScore > 100) return false;
+  if (v.status !== 'AI_VERIFIED' && v.status !== 'REJECTED') return false;
+  if (v.aiQualityRating !== 'EXCELLENT' && v.aiQualityRating !== 'ACCEPTABLE' && v.aiQualityRating !== 'POOR') return false;
+  if (typeof v.feedbackAr !== 'string' || v.feedbackAr.trim().length === 0) return false;
+  if (!Array.isArray(v.strengths) || !v.strengths.every((s) => typeof s === 'string')) return false;
+  if (!Array.isArray(v.recommendations) || !v.recommendations.every((s) => typeof s === 'string')) return false;
+  return true;
 }
 
 export interface AccreditationEvaluationResult {
@@ -78,13 +126,13 @@ export class AccreditationAiService {
     const specialtyName = providerSpecialty.specialty.nameAr || providerSpecialty.specialty.nameEn || providerSpecialty.specialty.name || 'تخصص عام';
     const categoryName = providerSpecialty.specialty.category?.nameAr || 'عام';
 
-    // 3. OpenAI GPT-4o Evaluation Pipeline
+    // 3. Gemini Vision Evaluation Pipeline
     let evalResult: AccreditationEvaluationResult;
 
     let evaluationCompleted = false;
-    if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'dummy_key') {
+    if (geminiClient.isConfigured()) {
       try {
-        evalResult = await this.callOpenAiGpt4oVision({
+        evalResult = await this.callGeminiVisionEvaluation({
           specialtyName,
           categoryName,
           title,
@@ -96,11 +144,11 @@ export class AccreditationAiService {
         });
         evaluationCompleted = true;
       } catch (err: any) {
-        logger.error(`[AccreditationAiService] OpenAI API Error, routing to manual review: ${err.message}`);
+        logger.error(`[AccreditationAiService] Gemini API error, routing to manual review: ${err?.code || err?.message}`);
         evalResult = this.generateManualReviewEvaluation(specialtyName);
       }
     } else {
-      logger.info(`[AccreditationAiService] OPENAI_API_KEY not configured. Routing to manual review.`);
+      logger.info(`[AccreditationAiService] GEMINI_API_KEY not configured. Routing to manual review.`);
       evalResult = this.generateManualReviewEvaluation(specialtyName);
     }
 
@@ -168,9 +216,9 @@ export class AccreditationAiService {
   }
 
   /**
-   * GPT-4o Multimodal Ingestion Pipeline
+   * Gemini Vision Multimodal Ingestion Pipeline
    */
-  private async callOpenAiGpt4oVision(params: {
+  private async callGeminiVisionEvaluation(params: {
     specialtyName: string;
     categoryName: string;
     title: string;
@@ -208,44 +256,35 @@ export class AccreditationAiService {
   "recommendations": ["توصية تحسين 1", "توصية تحسين 2"]
 }`;
 
-    const userContentList: any[] = [
-      {
-        type: 'text',
-        text: `الرجاء فحص نموذج العمل المرفق ومدى استحقاقه للاعتماد الفني.`
-      }
-    ];
+    const userPrompt = 'الرجاء فحص نموذج العمل المرفق ومدى استحقاقه للاعتماد الفني.';
 
-    // Inject Image Attachments into GPT-4o Vision API
+    // Best-effort image collection — an individual attachment that fails to
+    // fetch is skipped with a server-side log, never fails the whole
+    // evaluation (the text description still carries real signal).
+    const images: GeminiImageInput[] = [];
     for (const fileUrl of attachments) {
-      if (typeof fileUrl === 'string' && (fileUrl.startsWith('http') || fileUrl.startsWith('data:image'))) {
-        userContentList.push({
-          type: 'image_url',
-          image_url: { url: fileUrl }
-        });
+      if (images.length >= MAX_VISION_IMAGES) break;
+      if (typeof fileUrl !== 'string' || !(fileUrl.startsWith('http://') || fileUrl.startsWith('https://'))) continue;
+      try {
+        const fetched = await fetchRemoteImage(fileUrl, { allowedMimeTypes: ALLOWED_ACCREDITATION_IMAGE_MIME_TYPES });
+        images.push(fetched);
+      } catch (imageError: any) {
+        logger.warn(`[AccreditationAiService] Skipping unfetchable attachment image: ${imageError?.code || imageError?.message}`);
       }
     }
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContentList }
-      ],
-      response_format: { type: 'json_object' },
-      max_tokens: 1200,
-    });
-
-    const rawResponse = response.choices[0].message.content || '{}';
-    const json = JSON.parse(rawResponse);
-
-    return {
-      aiScore: typeof json.aiScore === 'number' ? json.aiScore : 85,
-      status: json.status === 'AI_VERIFIED' || json.aiScore >= 75 ? 'AI_VERIFIED' : 'REJECTED',
-      aiQualityRating: json.aiQualityRating || (json.aiScore >= 85 ? 'EXCELLENT' : 'ACCEPTABLE'),
-      feedbackAr: json.feedbackAr || json.feedback || 'تم فحص نموذج العمل المرفق وتبيّن الالتزام بالمعايير الفنية المطلوب إثباتها.',
-      strengths: Array.isArray(json.strengths) ? json.strengths : ['التزام ممتاز بالبنية المعمارية', 'تطبيق معايير برمجية عالية'],
-      recommendations: Array.isArray(json.recommendations) ? json.recommendations : ['إضافة المزيد من الاختبارات E2E', 'توسيع التوثيق']
+    const requestOptions = {
+      systemInstruction: systemPrompt,
+      responseSchema: ACCREDITATION_EVALUATION_SCHEMA,
+      validate: isValidAccreditationEvaluation,
+      maxOutputTokens: 1200
     };
+
+    const result = images.length > 0
+      ? await geminiClient.generateStructuredWithImage<AccreditationEvaluationResult>(userPrompt, { ...requestOptions, images })
+      : await geminiClient.generateStructured<AccreditationEvaluationResult>(userPrompt, requestOptions);
+
+    return result.data;
   }
 
   /**
