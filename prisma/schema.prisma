@@ -151,6 +151,10 @@ model User {
   clientContracts   Contract[] @relation("ClientContracts")
   providerContracts Contract[] @relation("ProviderContracts")
 
+  clientProjectAmendments    ProjectAmendment[] @relation("ClientProjectAmendments")
+  providerProjectAmendments  ProjectAmendment[] @relation("ProviderProjectAmendments")
+  requestedProjectAmendments ProjectAmendment[] @relation("RequestedProjectAmendments")
+
   @@index([accountType, status])
   @@index([aiRiskScore])
   @@index([lastActiveAt])
@@ -712,6 +716,7 @@ model Project {
   conversations    Conversation[]
   reviews          Review[]
   disputes         Dispute[]
+  amendments       ProjectAmendment[]
 
   aiAnalysis Json?
 
@@ -1661,10 +1666,71 @@ model Contract {
   termsVersion          Int            @default(1)
   signedAt              DateTime?
   stages                ProjectStage[]
+  amendments            ProjectAmendment[]
   createdAt             DateTime       @default(now())
   updatedAt             DateTime       @updatedAt
 
   @@map("contracts")
+}
+
+enum AmendmentRequesterRole {
+  CLIENT
+  PROVIDER
+}
+
+enum AmendmentType {
+  SCOPE
+  BUDGET
+  DURATION
+  MIXED
+}
+
+enum AmendmentStatus {
+  PENDING_OTHER_PARTY
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+// A requested change (scope, budget, and/or duration) to an already-active
+// Project/Contract, raised by either the client or the provider and awaiting
+// the OTHER party's decision. This is a real approval record only — it never
+// mutates Contract.price, Escrow, or ProjectStage amounts by itself; any
+// downstream financial/schedule effect is a separate, explicit action.
+model ProjectAmendment {
+  id String @id @default(uuid())
+
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  clientId   String
+  client     User @relation("ClientProjectAmendments", fields: [clientId], references: [id])
+  providerId String
+  provider   User @relation("ProviderProjectAmendments", fields: [providerId], references: [id])
+
+  requestedById   String
+  requestedBy     User                   @relation("RequestedProjectAmendments", fields: [requestedById], references: [id])
+  requestedByRole AmendmentRequesterRole
+
+  type        AmendmentType
+  title       String
+  description String?       @db.Text
+
+  budgetDelta       Float?
+  durationDeltaDays Int?
+
+  status AmendmentStatus @default(PENDING_OTHER_PARTY)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  respondedAt DateTime?
+
+  @@index([clientId, status])
+  @@index([providerId, status])
+  @@index([contractId])
+  @@map("project_amendments")
 }
 
 enum ProjectStageStatus {
