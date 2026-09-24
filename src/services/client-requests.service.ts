@@ -3,7 +3,7 @@ import { AppError } from '../utils/app-error';
 import { BudgetType, ContractStatus, ProposalStatus, ProviderTypePreference, RequestStatus, UserRole } from '@prisma/client';
 import { initializeRoleState } from './account-management.service';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
-import OpenAI from 'openai';
+import { geminiClient } from './ai/gemini/gemini.client';
 import { CreateClientRequestDto, ClientRequestAiSuggestDto } from '../dtos/create-client-request.dto';
 import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
 import {
@@ -32,15 +32,60 @@ const ESCROW_FEE_VAT = 0.07;       // 7% VAT
 const ESCROW_FEE_PLATFORM = 0.05;  // 5% platform commission
 const ESCROW_FEE_INSURANCE = 0.01; // 1% dispute insurance
 
+export interface ClientRequestAiSuggestion {
+	suggestedTitle: string;
+	suggestedDescription: string;
+	suggestedSubSpecialties: string[];
+	recommendedMinBudget: number;
+	recommendedMaxBudget: number;
+	suggestedDurationDays: number;
+	complexityRating: 'LOW' | 'MEDIUM' | 'HIGH' | 'COMPLEX';
+	personalizedNote: string;
+	aiMatchScoreEstimate: number;
+}
+
+const COMPLEXITY_RATINGS = ['LOW', 'MEDIUM', 'HIGH', 'COMPLEX'] as const;
+
+const CLIENT_REQUEST_AI_SUGGEST_SCHEMA = {
+	type: 'object',
+	properties: {
+		suggestedTitle: { type: 'string', description: 'Professional Arabic Title (max 80 chars)' },
+		suggestedDescription: { type: 'string', description: 'Comprehensive Arabic Technical Description with clear scope and expectations' },
+		suggestedSubSpecialties: { type: 'array', items: { type: 'string' }, description: '3 to 5 relevant Arabic sub-specialty tags' },
+		recommendedMinBudget: { type: 'number', description: 'SAR minimum' },
+		recommendedMaxBudget: { type: 'number', description: 'SAR maximum' },
+		suggestedDurationDays: { type: 'number', description: 'days' },
+		complexityRating: { type: 'string', enum: [...COMPLEXITY_RATINGS] },
+		personalizedNote: { type: 'string', description: 'Arabic advice personalized for client request based on market standards' },
+		aiMatchScoreEstimate: { type: 'number', description: 'number between 85 and 98' }
+	},
+	required: ['suggestedTitle', 'suggestedDescription', 'suggestedSubSpecialties', 'recommendedMinBudget', 'recommendedMaxBudget', 'suggestedDurationDays', 'complexityRating', 'personalizedNote', 'aiMatchScoreEstimate']
+};
+
+// Rejects anything that doesn't genuinely satisfy the application contract —
+// wrong types, an empty sub-specialty list, an unrecognized complexity
+// rating, or an out-of-range match score are all treated as invalid, never
+// silently replaced with a fabricated value (including the previous
+// hardcoded `94` guard, which is gone entirely, not just relocated here).
+function isValidClientRequestSuggestion(value: unknown): value is ClientRequestAiSuggestion {
+	if (!value || typeof value !== 'object') return false;
+	const v = value as Record<string, unknown>;
+
+	if (typeof v.suggestedTitle !== 'string' || v.suggestedTitle.trim().length === 0) return false;
+	if (typeof v.suggestedDescription !== 'string' || v.suggestedDescription.trim().length === 0) return false;
+	if (!Array.isArray(v.suggestedSubSpecialties) || v.suggestedSubSpecialties.length === 0) return false;
+	if (!v.suggestedSubSpecialties.every((s) => typeof s === 'string' && s.trim().length > 0)) return false;
+	if (typeof v.recommendedMinBudget !== 'number' || !Number.isFinite(v.recommendedMinBudget) || v.recommendedMinBudget <= 0) return false;
+	if (typeof v.recommendedMaxBudget !== 'number' || !Number.isFinite(v.recommendedMaxBudget) || v.recommendedMaxBudget < v.recommendedMinBudget) return false;
+	if (typeof v.suggestedDurationDays !== 'number' || !Number.isFinite(v.suggestedDurationDays) || v.suggestedDurationDays <= 0) return false;
+	if (typeof v.complexityRating !== 'string' || !(COMPLEXITY_RATINGS as readonly string[]).includes(v.complexityRating)) return false;
+	if (typeof v.personalizedNote !== 'string' || v.personalizedNote.trim().length === 0) return false;
+	if (typeof v.aiMatchScoreEstimate !== 'number' || !Number.isFinite(v.aiMatchScoreEstimate) || v.aiMatchScoreEstimate < 0 || v.aiMatchScoreEstimate > 100) return false;
+
+	return true;
+}
+
 export class ClientRequestsService {
-	private openai: OpenAI | null = null;
-
-	constructor() {
-		if (process.env.OPENAI_API_KEY) {
-			this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-		}
-	}
-
 	/**
 	 * GET /api/client/requests/meta
 	 * Returns available categories, specialties, and sub-specialty tags with provider counts.
@@ -100,9 +145,9 @@ export class ClientRequestsService {
 
 	/**
 	 * POST /api/client/requests/ai-suggest
-	 * OpenAI GPT-4o analysis for project description, sub-specialties, budget & history-based suggestion
+	 * Gemini analysis for project description, sub-specialties, budget & history-based suggestion
 	 */
-	public async generateAiSuggest(clientId: string, payload: ClientRequestAiSuggestDto) {
+	public async generateAiSuggest(clientId: string, payload: ClientRequestAiSuggestDto): Promise<ClientRequestAiSuggestion> {
 		// 1. Check past history of client requests to provide personalized suggestion ("وسيط AI - اقتراح لك")
 		const pastRequests = await prisma.clientRequest.findMany({
 			where: {
@@ -120,46 +165,11 @@ export class ClientRequestsService {
 		const draftDesc = payload.description?.trim() || '';
 		const targetSpec = payload.specialtyName || 'تقنية المعلومات';
 
-		// Algorithmic Fallback response
-		const generateFallback = () => {
-			let recommendedMin = 2500;
-			let recommendedMax = 7500;
-			if (draftDesc.length > 200 || draftTitle.includes('منصة') || draftTitle.includes('تطبيق')) {
-				recommendedMin = 5000;
-				recommendedMax = 15000;
-			}
-
-			return {
-				suggestedTitle: draftTitle.length >= 5
-					? `مشروع ${draftTitle} - تنفيذ متكامل وفق أفضل المعايير`
-					: `تطوير وتنفيذ مشروع ${targetSpec} متكامل`,
-				suggestedDescription: draftDesc.length >= 20
-					? `${draftDesc}\n\n[المخرجات والشروط المتوقعة]:\n- تسليم الكود المصدري كاملاً والتوثيق المباشر.\n- الالتزام التام بالتصميم التفاعلي والأمن السيبراني.\n- دعم فني وضمان بعد التسليم لمدة 30 يوماً.`
-					: `نبحث عن مقدم خدمة خبير ومطوّر محترف لتنفيذ مشروع ${targetSpec} عالي الجودة. يتضمن العمل تصميم الواجهات، البرمجة الخلفية، الاختبار الشامل والتسليم النهائي في الوقت المحدد.`,
-				suggestedSubSpecialties: payload.subSpecialties && payload.subSpecialties.length > 0
-					? payload.subSpecialties
-					: ['تطوير ويب', 'تطبيقات موبايل', 'واجهات برمجية APIs', 'قواعد بيانات'],
-				recommendedMinBudget: recommendedMin,
-				recommendedMaxBudget: recommendedMax,
-				suggestedDurationDays: 14,
-				complexityRating: recommendedMin > 5000 ? 'HIGH' : 'MEDIUM',
-				personalizedNote: favoriteCategory
-					? `بناءً على طلباتك السابقة في مجال (${favoriteCategory})، يُفضل تحديد متطلبات التوثيق والدعم الأمني مبكراً.`
-					: 'اقتراح وسيط AI محسّن لرفع نسبة المطابقة مع أفضل المطورين إلى 95%.',
-				aiMatchScoreEstimate: 94
-			};
-		};
-
-		if (!this.openai) {
-			return generateFallback();
-		}
-
-		try {
-			const systemPrompt = `You are Waseet AI (وسيط AI), the ultimate AI Matchmaker for top technical & creative projects in Saudi Arabia.
+		const systemPrompt = `You are Waseet AI (وسيط AI), the ultimate AI Matchmaker for top technical & creative projects in Saudi Arabia.
 Your job is to analyze the client's draft project request, refine the Arabic text into a high-precision RFP, suggest optimal sub-specialties, estimate SAR budget ranges, and calculate an AI match readiness score.
 Return ONLY raw JSON with no Markdown wrapping.`;
 
-			const userPrompt = `
+		const userPrompt = `
 Analyze this Client Request Draft:
 - Draft Title: ${draftTitle || 'Unspecified'}
 - Draft Description: ${draftDesc || 'Unspecified'}
@@ -181,37 +191,21 @@ Return JSON schema:
 }
 `;
 
-			const completion = await this.openai.chat.completions.create({
-				model: 'gpt-4o',
-				messages: [
-					{ role: 'system', content: systemPrompt },
-					{ role: 'user', content: userPrompt }
-				],
-				response_format: { type: 'json_object' },
+		try {
+			const result = await geminiClient.generateStructured<ClientRequestAiSuggestion>(userPrompt, {
+				systemInstruction: systemPrompt,
+				responseSchema: CLIENT_REQUEST_AI_SUGGEST_SCHEMA,
+				validate: isValidClientRequestSuggestion,
 				temperature: 0.7,
-				max_tokens: 1200
+				maxOutputTokens: 1200
 			});
 
-			const content = completion.choices[0]?.message?.content;
-			if (!content) return generateFallback();
-
-			const parsed = JSON.parse(content);
-			return {
-				suggestedTitle: parsed.suggestedTitle || generateFallback().suggestedTitle,
-				suggestedDescription: parsed.suggestedDescription || generateFallback().suggestedDescription,
-				suggestedSubSpecialties: Array.isArray(parsed.suggestedSubSpecialties) && parsed.suggestedSubSpecialties.length > 0
-					? parsed.suggestedSubSpecialties
-					: generateFallback().suggestedSubSpecialties,
-				recommendedMinBudget: Number(parsed.recommendedMinBudget) || generateFallback().recommendedMinBudget,
-				recommendedMaxBudget: Number(parsed.recommendedMaxBudget) || generateFallback().recommendedMaxBudget,
-				suggestedDurationDays: Number(parsed.suggestedDurationDays) || generateFallback().suggestedDurationDays,
-				complexityRating: ['LOW', 'MEDIUM', 'HIGH', 'COMPLEX'].includes(parsed.complexityRating) ? parsed.complexityRating : 'MEDIUM',
-				personalizedNote: parsed.personalizedNote || generateFallback().personalizedNote,
-				aiMatchScoreEstimate: Number(parsed.aiMatchScoreEstimate) || 94
-			};
-		} catch (err) {
-			console.error('[ClientRequestsService] OpenAI call error, using fallback:', err);
-			return generateFallback();
+			return result.data;
+		} catch (error) {
+			// Honest failure — no algorithmic fallback, no hardcoded
+			// aiMatchScoreEstimate. The caller receives a normal application
+			// error instead of a fabricated "successful" suggestion.
+			throw new AppError('تعذر توليد اقتراح ذكي لطلبك حالياً، يرجى المحاولة لاحقاً.', 503);
 		}
 	}
 

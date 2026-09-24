@@ -64,3 +64,32 @@ test('authorize: an unauthenticated request (no req.user) is rejected with 401',
   assert.notEqual(nextArg, undefined);
   assert.equal(nextArg.statusCode, 401);
 });
+
+// Batch A / F7 security fix: client-requests.routes.ts's POST /ai-suggest now
+// gates on authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL)
+// (previously it had no role restriction at all — any authenticated user,
+// including providers, could call it). These tests exercise that exact
+// middleware call, mirroring the PROVIDER_* coverage above.
+
+const requireClient = authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL);
+
+test('authorize(CLIENT_*): a PROVIDER-only user (accountType + roles + activeRole all PROVIDER) is rejected', () => {
+  const result = run(requireClient, { accountType: AccountType.PROVIDER_INDIVIDUAL, activeRole: 'PROVIDER', roles: ['PROVIDER'] });
+  assert.notEqual(result, undefined);
+  assert.equal(result.statusCode, 403);
+});
+
+test('authorize(CLIENT_*): a user whose accountType is CLIENT_INDIVIDUAL is allowed (direct match)', () => {
+  const result = run(requireClient, { accountType: AccountType.CLIENT_INDIVIDUAL, activeRole: 'CLIENT', roles: ['CLIENT'] });
+  assert.equal(result, undefined);
+});
+
+test('authorize(CLIENT_*): a user whose accountType is CLIENT_COMPANY is allowed (direct match)', () => {
+  const result = run(requireClient, { accountType: AccountType.CLIENT_COMPANY, activeRole: 'CLIENT', roles: ['CLIENT'] });
+  assert.equal(result, undefined);
+});
+
+test('authorize(CLIENT_*): a multi-role user whose activeRole is CLIENT is allowed even though their signup accountType/roles[] are PROVIDER-based', () => {
+  const result = run(requireClient, { accountType: AccountType.PROVIDER_INDIVIDUAL, activeRole: 'CLIENT', roles: ['PROVIDER'] });
+  assert.equal(result, undefined);
+});
