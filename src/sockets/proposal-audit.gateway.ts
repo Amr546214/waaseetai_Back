@@ -1,7 +1,39 @@
 import { Socket } from 'socket.io';
-import OpenAI from 'openai';
 import { prisma } from '../utils/prisma.client';
 import { z } from 'zod';
+import { geminiClient } from '../services/ai/gemini/gemini.client';
+import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
+
+// F5 — Proposal AI Audit, migrated to the shared Gemini foundation.
+//
+// Fallback decision (Batch: F5 proposal audit): the previous implementation
+// ALWAYS eventually emitted `ai_audit_progress{status:'COMPLETED'}` +
+// `ai_audit_result` with a fully fabricated, positive-looking audit
+// (fake scores, fake "profile match" text, fake acceptance odds) whenever
+// the payload was invalid, the project/provider record was missing, OpenAI
+// was unconfigured, or the OpenAI call itself failed — there was no way for
+// the frontend to distinguish a real audit from a fabricated one, since both
+// arrived via the identical `ai_audit_result` event with `status:'COMPLETED'`.
+// The frontend's OWN `getUnavailableAudit()` (zero scores, explicit "no
+// substitute evaluation or fake scores were created") already existed as a
+// 4.5s client-side timeout fallback, but was effectively unreachable since
+// the backend always answered before that timer fired.
+//
+// Fix: the fabricated fallback generator is removed entirely. Every failure
+// path now emits a NEW `ai_audit_progress` status value, `'FAILED'`, and
+// NEVER emits `ai_audit_result` — this is the smallest possible additive
+// contract change (existing status values/messages are unchanged; `'FAILED'`
+// is simply a value the frontend didn't previously receive) and lets the
+// frontend react immediately with its already-existing honest empty state
+// instead of waiting out the old 4.5s safety timeout. See
+// applay-request.ts's `ai_audit_progress` handler for the one corresponding
+// frontend line.
+//
+// Progress labels: FETCHING_DATA / ANALYZING_PITCH / CALCULATING_TRI_PARTY
+// are pre-existing, application-owned stage labels (not raw provider
+// streaming/percentages — there were never any numeric progress percentages
+// in this contract to begin with) and are preserved in their original order
+// and wording.
 
 // ==========================================
 // 1. DATA MODELS & ZOD VALIDATION
@@ -58,53 +90,182 @@ const triggerAiAuditSchema = z.object({
 
 export type TriggerAiAuditPayload = z.infer<typeof triggerAiAuditSchema>;
 
+const BUDGET_DURATION_MILESTONES_SCHEMA = {
+  type: 'object',
+  properties: {
+    budget: { type: 'string' },
+    duration: { type: 'string' },
+    milestones: { type: 'string' }
+  },
+  required: ['budget', 'duration', 'milestones']
+};
+
+const AI_PROPOSAL_AUDIT_SCHEMA = {
+  type: 'object',
+  properties: {
+    profileAudit: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          subtitle: { type: 'string' },
+          status: { type: 'string', enum: ['EXCELLENT', 'GOOD', 'WARNING'] },
+          badge: { type: 'string' }
+        },
+        required: ['title', 'subtitle', 'status', 'badge']
+      },
+      description: 'exactly 4 distinct audit criteria items assessing Experience, Specialty match, Tone & clarity, and Portfolio proof'
+    },
+    triPartyComparison: {
+      type: 'object',
+      properties: {
+        client: BUDGET_DURATION_MILESTONES_SCHEMA,
+        provider: BUDGET_DURATION_MILESTONES_SCHEMA,
+        aiRecommendation: BUDGET_DURATION_MILESTONES_SCHEMA
+      },
+      required: ['client', 'provider', 'aiRecommendation']
+    },
+    triPartyNote: { type: 'string' },
+    finalMetrics: {
+      type: 'object',
+      properties: {
+        overallScore: { type: 'number', description: '0 to 100' },
+        profileMatch: { type: 'number', description: '0 to 100' },
+        messageClarity: { type: 'number', description: '0 to 100' },
+        priceCompetitiveness: { type: 'number', description: '0 to 100' },
+        timelineFeasibility: { type: 'number', description: '0 to 100' },
+        completeness: { type: 'number', description: '0 to 100' }
+      },
+      required: ['overallScore', 'profileMatch', 'messageClarity', 'priceCompetitiveness', 'timelineFeasibility', 'completeness']
+    },
+    acceptanceOdds: {
+      type: 'object',
+      properties: {
+        statusText: { type: 'string' },
+        description: { type: 'string' },
+        topPercentage: { type: 'string' }
+      },
+      required: ['statusText', 'description', 'topPercentage']
+    }
+  },
+  required: ['profileAudit', 'triPartyComparison', 'triPartyNote', 'finalMetrics', 'acceptanceOdds']
+};
+
+const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+const isBoundedScore = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
+
+function isValidBudgetDurationMilestones(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return isNonEmptyString(v.budget) && isNonEmptyString(v.duration) && isNonEmptyString(v.milestones);
+}
+
+// Rejects anything that doesn't genuinely satisfy the AiProposalAuditResult
+// contract — an empty profileAudit array, an unrecognized status enum, an
+// out-of-range score, or a malformed nested object are all invalid, never
+// silently patched into a passable-looking audit.
+function isValidAiProposalAuditResult(value: unknown): value is AiProposalAuditResult {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+
+  if (!Array.isArray(v.profileAudit) || v.profileAudit.length === 0) return false;
+  const profileAuditValid = v.profileAudit.every((item) => {
+    if (!item || typeof item !== 'object') return false;
+    const entry = item as Record<string, unknown>;
+    return (
+      isNonEmptyString(entry.title) &&
+      isNonEmptyString(entry.subtitle) &&
+      (entry.status === 'EXCELLENT' || entry.status === 'GOOD' || entry.status === 'WARNING') &&
+      isNonEmptyString(entry.badge)
+    );
+  });
+  if (!profileAuditValid) return false;
+
+  const triParty = v.triPartyComparison as Record<string, unknown> | undefined;
+  if (!triParty || typeof triParty !== 'object') return false;
+  if (!isValidBudgetDurationMilestones(triParty.client)) return false;
+  if (!isValidBudgetDurationMilestones(triParty.provider)) return false;
+  if (!isValidBudgetDurationMilestones(triParty.aiRecommendation)) return false;
+
+  if (!isNonEmptyString(v.triPartyNote)) return false;
+
+  const metrics = v.finalMetrics as Record<string, unknown> | undefined;
+  if (!metrics || typeof metrics !== 'object') return false;
+  if (!isBoundedScore(metrics.overallScore)) return false;
+  if (!isBoundedScore(metrics.profileMatch)) return false;
+  if (!isBoundedScore(metrics.messageClarity)) return false;
+  if (!isBoundedScore(metrics.priceCompetitiveness)) return false;
+  if (!isBoundedScore(metrics.timelineFeasibility)) return false;
+  if (!isBoundedScore(metrics.completeness)) return false;
+
+  const odds = v.acceptanceOdds as Record<string, unknown> | undefined;
+  if (!odds || typeof odds !== 'object') return false;
+  if (!isNonEmptyString(odds.statusText)) return false;
+  if (!isNonEmptyString(odds.description)) return false;
+  if (!isNonEmptyString(odds.topPercentage)) return false;
+
+  return true;
+}
+
 // ==========================================
-// 2. PROPOSAL AUDIT GATEWAY & AI SERVICE
+// 2. PROPOSAL AUDIT GATEWAY
 // ==========================================
 
 export class ProposalAuditGateway {
-  private openai: OpenAI | null = null;
-
-  constructor() {
-    if (process.env.OPENAI_API_KEY) {
-      this.openai = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY,
-        timeout: 20 * 1000,
-        maxRetries: 1
-      });
-    }
-  }
-
   /**
    * Registers WebSocket event listeners for real-time AI Proposal auditing
    */
   public register(socket: Socket): void {
     socket.on('trigger_ai_audit', async (rawPayload: any) => {
       console.log(`[ProposalAuditGateway] Received trigger_ai_audit event from socket ${socket.id}`);
-      
+
+      const fail = (message: string) => {
+        socket.emit('ai_audit_progress', { status: 'FAILED', message });
+      };
+
+      // ── Pre-flight: auth, ownership, rate limit, provider config, payload ──
+      const userId = (socket as any).userId;
+      if (!userId) {
+        fail('يجب تسجيل الدخول لاستخدام التدقيق الذكي للعرض.');
+        return;
+      }
+
+      const parseResult = triggerAiAuditSchema.safeParse(rawPayload);
+      if (!parseResult.success) {
+        console.warn('[ProposalAuditGateway] Invalid payload structure received:', parseResult.error.format());
+        fail('بيانات طلب التدقيق غير صالحة.');
+        return;
+      }
+      const payload = parseResult.data;
+
+      // Ownership: a socket may only ever request an audit against its own
+      // provider identity — never another provider's profile data.
+      if (payload.providerId !== userId) {
+        fail('لا يمكنك طلب تدقيق ذكي لملف مقدم خدمة آخر.');
+        return;
+      }
+
+      if (isSocketAiRateLimited(userId)) {
+        fail(SOCKET_AI_RATE_LIMIT_MESSAGE);
+        return;
+      }
+
+      if (!geminiClient.isConfigured()) {
+        fail('خدمة الذكاء الاصطناعي غير مهيأة حالياً. لم يتم إنشاء أي نتيجة بديلة.');
+        return;
+      }
+
+      const abortController = new AbortController();
+      const onDisconnect = () => abortController.abort();
+      socket.once('disconnect', onDisconnect);
+
       try {
-        // Step 1: Notify client that data fetching is underway
         socket.emit('ai_audit_progress', {
           status: 'FETCHING_DATA',
           message: 'جاري استدعاء بيانات المشروع والملف المهني...'
         });
 
-        // Validate payload structure
-        const parseResult = triggerAiAuditSchema.safeParse(rawPayload);
-        if (!parseResult.success) {
-          console.warn('[ProposalAuditGateway] Invalid payload structure received:', parseResult.error.format());
-          // Emit graceful fallback even on schema error to prevent UI freezes
-          const fallback = this.generateFallbackAuditResult(
-            rawPayload?.proposalDraft || { title: '', message: '', price: 4500, durationDays: 14, milestonesCount: 2 }
-          );
-          socket.emit('ai_audit_progress', { status: 'COMPLETED', message: 'تم إنجاز التدقيق الذكي بنجاح' });
-          socket.emit('ai_audit_result', fallback);
-          return;
-        }
-
-        const payload = parseResult.data;
-
-        // Step 2: Query database for Target Project and Provider Profile in parallel
         const [project, provider] = await Promise.all([
           prisma.project.findUnique({
             where: { id: payload.projectId },
@@ -142,63 +303,47 @@ export class ProposalAuditGateway {
           })
         ]);
 
-        // Step 3: Emit progress update before analyzing pitch
+        if (!project || !provider) {
+          fail('تعذر العثور على بيانات المشروع أو ملف مقدم الخدمة اللازمة لإجراء التدقيق.');
+          return;
+        }
+
         socket.emit('ai_audit_progress', {
           status: 'ANALYZING_PITCH',
           message: 'جاري تحليل نص العرض ومقارنة الخبرات...'
         });
-
-        // Generate dynamic fallback calculation based on real DB values (or reasonable defaults)
-        const fallbackAudit = this.generateFallbackAuditResult(payload.proposalDraft, project, provider);
-
-        // Step 4: Emit progress update before calculating Tri-Party matrix and scores
         socket.emit('ai_audit_progress', {
           status: 'CALCULATING_TRI_PARTY',
           message: 'جاري حساب المقارنة الثلاثية ومؤشر احتمالية القبول...'
         });
 
-        // If OpenAI is unconfigured, return algorithmic fallback
-        if (!this.openai || !project || !provider) {
-          await new Promise(resolve => setTimeout(resolve, 600)); // Smooth animation delay
-          socket.emit('ai_audit_progress', { status: 'COMPLETED', message: 'تم إنجاز التدقيق الذكي بنجاح' });
-          socket.emit('ai_audit_result', fallbackAudit);
-          return;
-        }
+        const auditResult = await this.executeGeminiAudit(payload.proposalDraft, project, provider, abortController.signal);
 
-        // Step 5: Execute OpenAI Audit Call
-        const auditResult = await this.executeOpenAiAudit(payload.proposalDraft, project, provider, fallbackAudit);
-
-        // Step 6: Finalize progress and stream final result to client
         socket.emit('ai_audit_progress', {
           status: 'COMPLETED',
           message: 'تم إنجاز التدقيق الذكي بنجاح'
         });
-
         socket.emit('ai_audit_result', auditResult);
-
       } catch (error: any) {
-        console.error('[ProposalAuditGateway] Error processing trigger_ai_audit:', error);
-        // Guaranteed defensive fallback to ensure the UI wizard never hangs or fails
-        const emergencyFallback = this.generateFallbackAuditResult(
-          rawPayload?.proposalDraft || { title: '', message: '', price: 4500, durationDays: 14, milestonesCount: 2 }
-        );
-        socket.emit('ai_audit_progress', { status: 'COMPLETED', message: 'تم إنجاز التدقيق الذكي بنجاح' });
-        socket.emit('ai_audit_result', emergencyFallback);
+        // Honest failure — no fabricated scores, strengths, recommendations,
+        // or positive-looking audit result of any kind.
+        console.error('[ProposalAuditGateway] Gemini audit failed:', error?.code || error?.message);
+        fail('تعذر إجراء التدقيق الذكي للعرض حالياً، يرجى المحاولة لاحقاً.');
+      } finally {
+        socket.off('disconnect', onDisconnect);
       }
     });
   }
 
   /**
-   * Executes OpenAI API completion request with strict JSON formatting to audit proposal competitiveness.
+   * Executes the Gemini structured-output audit request.
    */
-  private async executeOpenAiAudit(
+  private async executeGeminiAudit(
     draft: TriggerAiAuditPayload['proposalDraft'],
     project: any,
     provider: any,
-    fallback: AiProposalAuditResult
+    signal: AbortSignal
   ): Promise<AiProposalAuditResult> {
-    if (!this.openai) return fallback;
-
     const profile = provider.providerProfile || {};
     const expYears = profile.yearsOfExperience || 4;
     const completedCount = provider._count?.providerProjects || 15;
@@ -271,124 +416,16 @@ Output exactly this JSON structure (keep status strictly one of "EXCELLENT", "GO
 }
 `;
 
-    try {
-      const completion = await this.openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0.6,
-        max_tokens: 1800
-      });
+    const result = await geminiClient.generateStructured<AiProposalAuditResult>(userPrompt, {
+      systemInstruction: systemPrompt,
+      responseSchema: AI_PROPOSAL_AUDIT_SCHEMA,
+      validate: isValidAiProposalAuditResult,
+      temperature: 0.6,
+      maxOutputTokens: 1800,
+      signal
+    });
 
-      const content = completion.choices[0]?.message?.content;
-      if (!content) {
-        console.warn('[ProposalAuditGateway] OpenAI empty response, returning fallback.');
-        return fallback;
-      }
-
-      const parsed = JSON.parse(content) as AiProposalAuditResult;
-      // Ensure structural compliance and valid fallbacks for any missing fields
-      return {
-        profileAudit: Array.isArray(parsed.profileAudit) && parsed.profileAudit.length > 0 ? parsed.profileAudit : fallback.profileAudit,
-        triPartyComparison: parsed.triPartyComparison || fallback.triPartyComparison,
-        triPartyNote: parsed.triPartyNote || fallback.triPartyNote,
-        finalMetrics: { ...fallback.finalMetrics, ...(parsed.finalMetrics || {}) },
-        acceptanceOdds: { ...fallback.acceptanceOdds, ...(parsed.acceptanceOdds || {}) }
-      };
-
-    } catch (error) {
-      console.warn('[ProposalAuditGateway] OpenAI API call failed or timed out, returning computed fallback:', error);
-      return fallback;
-    }
-  }
-
-  /**
-   * Generates a high-fidelity, intelligent algorithmic fallback mock matching the schema and dynamic DB parameters.
-   * Guaranteed to execute instantly if external AI providers experience downtime or network delays.
-   */
-  private generateFallbackAuditResult(draft: any, project?: any, provider?: any): AiProposalAuditResult {
-    const expYears = provider?.providerProfile?.yearsOfExperience || 4.8;
-    const completedProjects = provider?._count?.providerProjects || 23;
-    const projectSpecialty = project?.specialty || 'تصميم جرافيك';
-    const providerSpecialty = provider?.providerProfile?.headline || 'تصميم هوية بصرية';
-    
-    const clientMin = project?.budgetMin || project?.budgetFixed || 5000;
-    const clientMax = project?.budgetMax || project?.budgetFixed || 5000;
-    const clientDays = project?.deliveryDays || 30;
-    
-    const providerPrice = Number(draft.price) || 4500;
-    const providerDays = Number(draft.durationDays) || 14;
-    const providerMilestones = Number(draft.milestonesCount) || 2;
-    const hasPortfolio = (draft.selectedPortfolioIds?.length || 0) > 0 || (provider?.providerProfile?.portfolioItems?.length || 0) > 0;
-
-    const isMessageClean = (draft.message || '').length >= 50;
-
-    return {
-      profileAudit: [
-        {
-          title: 'الخبرة المدمجة تتوافق مع ملفك',
-          subtitle: `ملفك يثبت ${expYears} سنة + ${completedProjects} مشروعاً مكتملاً في ${providerSpecialty}، وهو متلائم مع متطلبات الطلب`,
-          status: 'EXCELLENT',
-          badge: 'ممتاز'
-        },
-        {
-          title: 'التخصص مطابق لطلب العميل',
-          subtitle: `طلب العميل ${projectSpecialty} - تخصصك الأساسي في ملفك: ${providerSpecialty}، نسبة التوافق العالية تعزز حظوظك`,
-          status: 'EXCELLENT',
-          badge: 'ممتاز'
-        },
-        {
-          title: 'نبرة الرسالة مهنية وواضحة',
-          subtitle: isMessageClean
-            ? 'الأسلوب احترافي، والرسالة منظمة وموضحة للخطوات والمراحل البرمجية/التنفيذية بشكل متسلسل'
-            : 'نص العرض قصير نسبياً؛ نوصي بتوسيع شرح خطوات العمل لزيادة إقناع العميل',
-          status: isMessageClean ? 'EXCELLENT' : 'GOOD',
-          badge: isMessageClean ? '95%' : '80%'
-        },
-        {
-          title: hasPortfolio ? 'تم إدراج نماذج أعمال موثقة' : 'لم تضف نموذج أعمال مشابه مباشرة',
-          subtitle: hasPortfolio
-            ? 'تم التأكد من ارتباط محفظة أعمالك بمشاريع متوافقة مع هذه المناقصة مما يعزز الثقة'
-            : 'ملفك يحتوي على مشاريع متشابهة - الإشارة لمتجر أو مشروع مشابه في الرسالة ترفع احتمال القبول 35%',
-          status: hasPortfolio ? 'EXCELLENT' : 'WARNING',
-          badge: hasPortfolio ? 'مكتمل' : 'تحسين'
-        }
-      ],
-      triPartyComparison: {
-        client: {
-          budget: `${clientMin.toLocaleString()}-${clientMax.toLocaleString()} ريال`,
-          duration: `${clientDays} يوم`,
-          milestones: 'غير محدد'
-        },
-        provider: {
-          budget: `${providerPrice.toLocaleString()} ريال`,
-          duration: `${providerDays} يوم`,
-          milestones: `${providerMilestones} مرحلة`
-        },
-        aiRecommendation: {
-          budget: `${Math.round(clientMin * 0.85).toLocaleString()} - ${Math.round(clientMax * 0.95).toLocaleString()} ريال`,
-          duration: `${Math.max(5, Math.round(clientDays * 0.4))} - ${Math.round(clientDays * 0.7)} يوم`,
-          milestones: '2-3 مراحل'
-        }
-      },
-      triPartyNote: `سعر ${providerPrice.toLocaleString()} ريال ضمن نطاق السوق المناسب، ومدتك ${providerDays} يوماً منطقية ومريحة للعميل الذي حدد ${clientDays} يوماً.`,
-      finalMetrics: {
-        overallScore: isMessageClean ? 91 : 84,
-        profileMatch: 87,
-        messageClarity: isMessageClean ? 92 : 78,
-        priceCompetitiveness: providerPrice <= clientMax ? 90 : 75,
-        timelineFeasibility: providerDays <= clientDays ? 95 : 70,
-        completeness: hasPortfolio ? 92 : 82
-      },
-      acceptanceOdds: {
-        statusText: 'عرضك قوي - احتمال القبول مرتفع',
-        description: 'سعرك عادل وعرضك يدعم ادعاءاتك المهنية باحترافية. التوصية الوحيدة: تأكد من مراجعة تسلسلات المراحل المالية قبل الإرسال النهائي.',
-        topPercentage: 'أفضل من 78% من العروض المشابهة'
-      }
-    };
+    return result.data;
   }
 }
 
