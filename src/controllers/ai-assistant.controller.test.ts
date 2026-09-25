@@ -2,13 +2,10 @@ import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { GeminiErrorCode, GeminiProviderError } from '../services/ai/gemini/gemini.errors';
 
-// ai-assistant.controller.ts's module scope eagerly does
-// `new OpenAI({ apiKey: process.env.OPENAI_API_KEY, ... })` for the
-// unrelated, still-OpenAI-backed F8 (assistantChat) — same established
-// pattern as client-requests.service.test.ts for the same reason. This has
-// no effect on the F3 tests below, which mock geminiClient directly and
-// never construct a real OpenAI client call.
-process.env.OPENAI_API_KEY = 'test-key';
+// F8 security follow-up batch: the dead REST `assistantChat` twin (which
+// used to live in this file, duplicating the live avatar-chat socket path)
+// has been removed entirely — see the Gemini migration report's REST twin
+// disposition. This file now only tests F3 (analyzeProjectForProvider).
 
 // F3 (analyzeProjectForProvider) — Batch A migration to the shared Gemini
 // foundation. Plain req/res/next mocks, no supertest/HTTP server, matching

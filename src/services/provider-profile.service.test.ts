@@ -1,14 +1,15 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { GeminiErrorCode, GeminiProviderError } from './ai/gemini/gemini.errors';
 
 // provider-profile.service.ts transitively imports notification.service.ts ->
-// ../socket, which constructs `new OpenAI({ apiKey: process.env.OPENAI_API_KEY })`
-// eagerly at module load. Since '../config/db' (and its dotenv.config() call)
-// is fully mocked below and never actually runs, OPENAI_API_KEY is otherwise
-// unset in this test process — set a dummy value so that unrelated,
-// module-level construction doesn't throw. No OpenAI call is ever made by
-// updateBasicInfo() itself. Same established pattern as
-// account-management.service.test.ts's JWT_SECRET line, for the same reason.
+// ../socket -> avatar-chat.gateway.ts -> openai-tts.client.ts, which
+// constructs `new OpenAI({ apiKey: process.env.OPENAI_API_KEY })` eagerly at
+// module load (F8-TTS, intentionally not migrated to Gemini this batch — see
+// the migration report). Since '../config/db' is fully mocked below and
+// never actually runs, OPENAI_API_KEY is otherwise unset in this test
+// process — set a dummy value so that unrelated, module-level construction
+// doesn't throw. No OpenAI call is ever made by anything in this file.
 process.env.OPENAI_API_KEY = 'test-key';
 
 // Phase 3D.1: updateBasicInfo() used to write firstName/lastName/avatarUrl
@@ -1062,4 +1063,199 @@ test('getProfile: a missing ProviderProfile is routed through the canonical init
 
   assert.equal(gamificationCreateSpy.mock.callCount(), 1);
   assert.equal(profile.firstName, 'Amr');
+});
+
+// ============================================================================
+// F16 (security follow-up batch) — generateAiMetrics()'s 8 qualitative
+// fields, migrated to the shared Gemini foundation. These tests use a
+// non-zero completedProjectsCount so the zero-projects short-circuit above
+// is bypassed and the real Gemini branch executes. averageTestScore/
+// codeMatchingIndex are separately confirmed to remain pure DB arithmetic,
+// never sent to or returned by Gemini.
+// ============================================================================
+
+const VALID_AI_METRICS = {
+  executionQuality: 88, onTimeDelivery: 90, communication: 85, clientSatisfaction: 92,
+  onTimeCompletionRate: 87, repeatClientRate: 60, highRatingServicesRate: 75, conflictFreeDeliveryRate: 95
+};
+
+function createAiMetricsMockPrisma(t: TestContext, opts: {
+  completedProjectsCount?: number;
+  reviewsCount?: number;
+  providerSpecialties?: any[];
+} = {}) {
+  const profileFixture: any = {
+    userId: 'user-1',
+    isVerified: false,
+    location: null,
+    city: 'Riyadh',
+    rating: 5.0,
+    headline: 'Senior Consultant',
+    bio: 'bio',
+    yearsOfExperience: 3,
+    completionPercentage: 80,
+    firstName: null,
+    lastName: null,
+    avatarUrl: null,
+    githubUrl: null,
+    linkedinUrl: null,
+    websiteUrl: null,
+    skills: [{ name: 'React' }],
+    portfolioItems: [],
+    providerSpecialties: opts.providerSpecialties ?? [],
+    user: {
+      firstName: 'Okasha', lastName: 'Expert', email: 'provider@example.com', avatarUrl: null,
+      phoneNumber: '0500000000', createdAt: new Date('2024-01-01'), currentLevel: 'مستكشف - المستوى 1',
+      ratingAverage: 4.8, profileCompletionPercent: 80
+    }
+  };
+
+  const prismaMock: any = {
+    providerProfile: { findUnique: async () => ({ ...profileFixture }) },
+    project: { count: async () => opts.completedProjectsCount ?? 3 },
+    serviceCatalog: { findMany: async () => [] },
+    review: { findMany: async () => [], count: async () => opts.reviewsCount ?? 5 },
+    providerGamification: { findUnique: async () => ({ avgRating: 4.8 }) }
+  };
+  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+}
+
+async function loadServiceForAiMetrics(t: TestContext, opts: {
+  completedProjectsCount?: number;
+  reviewsCount?: number;
+  generateStructured?: (prompt: string, options: any) => Promise<any>;
+} = {}) {
+  createAiMetricsMockPrisma(t, opts);
+  const geminiClientMock = {
+    isConfigured: () => true,
+    generateStructured: opts.generateStructured ?? (async (_prompt: string, options: any) => {
+      assert.equal(options.validate(VALID_AI_METRICS), true, 'the real validator must accept a well-formed 8-key metrics payload');
+      return { data: VALID_AI_METRICS, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+    })
+  };
+  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: geminiClientMock } });
+
+  const moduleUrl = `./provider-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { providerProfileService } = await import(moduleUrl);
+  return providerProfileService;
+}
+
+test('getPublicProfile (aiMetrics): a real validated Gemini success is returned as-is for all 8 fields', async (t) => {
+  const service = await loadServiceForAiMetrics(t, {});
+
+  const result = await service.getPublicProfile('user-1');
+
+  assert.deepEqual(result.aiMetrics, {
+    ...VALID_AI_METRICS,
+    averageTestScore: 0,
+    codeMatchingIndex: 0
+  });
+});
+
+test('getPublicProfile (aiMetrics): a malformed Gemini response (out-of-range score) is rejected by the real validator and falls back to honest zeros, never a fabricated positive score', async (t) => {
+  const service = await loadServiceForAiMetrics(t, {
+    generateStructured: async (_prompt, options) => {
+      const malformed = { ...VALID_AI_METRICS, executionQuality: 150 };
+      assert.equal(options.validate(malformed), false);
+      throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
+    }
+  });
+
+  const result = await service.getPublicProfile('user-1');
+
+  assert.equal(result.aiMetrics.executionQuality, 0);
+  assert.equal(result.aiMetrics.communication, 0);
+});
+
+test('getPublicProfile (aiMetrics): a response missing a required key is rejected by the validator', async (t) => {
+  const service = await loadServiceForAiMetrics(t, {
+    generateStructured: async (_prompt, options) => {
+      const { conflictFreeDeliveryRate, ...missingKey } = VALID_AI_METRICS;
+      assert.equal(options.validate(missingKey), false);
+      throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
+    }
+  });
+
+  const result = await service.getPublicProfile('user-1');
+
+  assert.deepEqual(result.aiMetrics.executionQuality, 0);
+});
+
+test('getPublicProfile (aiMetrics): Gemini provider unavailable falls back to the honest all-zero state, never fabricated metrics', async (t) => {
+  const service = await loadServiceForAiMetrics(t, {
+    generateStructured: async () => { throw new GeminiProviderError(GeminiErrorCode.PROVIDER_UNAVAILABLE, 'unavailable'); }
+  });
+
+  const result = await service.getPublicProfile('user-1');
+
+  assert.equal(result.aiMetrics.executionQuality, 0);
+  assert.equal(result.aiMetrics.onTimeDelivery, 0);
+});
+
+test('getPublicProfile (aiMetrics): a Gemini timeout falls back to the same honest all-zero state', async (t) => {
+  const service = await loadServiceForAiMetrics(t, {
+    generateStructured: async () => { throw new GeminiProviderError(GeminiErrorCode.TIMEOUT, 'timed out'); }
+  });
+
+  const result = await service.getPublicProfile('user-1');
+
+  assert.equal(result.aiMetrics.communication, 0);
+});
+
+test('getPublicProfile (aiMetrics): zero completed projects AND zero reviews short-circuits to honest zeros without ever calling Gemini', async (t) => {
+  let called = false;
+  const service = await loadServiceForAiMetrics(t, {
+    completedProjectsCount: 0,
+    reviewsCount: 0,
+    generateStructured: async () => { called = true; throw new Error('should never be called'); }
+  });
+
+  const result = await service.getPublicProfile('user-1');
+
+  assert.equal(called, false);
+  assert.deepEqual(result.aiMetrics, { ...ZERO_AI_METRICS_FOR_TEST, averageTestScore: 0, codeMatchingIndex: 0 });
+});
+
+const ZERO_AI_METRICS_FOR_TEST = {
+  executionQuality: 0, onTimeDelivery: 0, communication: 0, clientSatisfaction: 0,
+  onTimeCompletionRate: 0, repeatClientRate: 0, highRatingServicesRate: 0, conflictFreeDeliveryRate: 0
+};
+
+test('getPublicProfile (aiMetrics): averageTestScore/codeMatchingIndex are pure DB arithmetic — never sent to Gemini, never overwritten by its response', async (t) => {
+  let capturedPrompt = '';
+  const specialty = {
+    id: 'spec-1', subSpecialties: [], latestScore: 90, quizScore: null, isPassed: true, aiScore: null,
+    specialty: { nameAr: 'تطوير الويب', name: 'Web', iconName: 'code' },
+    status: 'APPROVED', hasTakenAssessment: true, passedAt: new Date(),
+    assessmentAttempts: [],
+    accreditationSamples: [{ id: 'sample-1', title: 'Sample', description: '', technologiesUsed: [], attachments: [], aiScore: 80, aiQualityRating: 'GOOD', aiFeedbackAr: '' }]
+  };
+  const service = await loadServiceForAiMetrics(t, {
+    providerSpecialties: [specialty],
+    generateStructured: async (prompt: string, options: any) => {
+      capturedPrompt = prompt;
+      return { data: VALID_AI_METRICS, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+    }
+  });
+
+  const result = await service.getPublicProfile('user-1');
+
+  assert.equal(result.aiMetrics.averageTestScore, 90, 'averageTestScore must be the real average of latestScore, computed in application code');
+  assert.equal(result.aiMetrics.codeMatchingIndex, 80, 'codeMatchingIndex must be the real average of sample.aiScore, computed in application code');
+  assert.ok(!capturedPrompt.includes('averageTestScore'), 'the Gemini prompt must never even mention these deterministic fields');
+});
+
+test('getPublicProfile (aiMetrics): Gemini prompt data minimization — never includes email, phone, or auth data', async (t) => {
+  let capturedPrompt = '';
+  const service = await loadServiceForAiMetrics(t, {
+    generateStructured: async (prompt: string) => {
+      capturedPrompt = prompt;
+      return { data: VALID_AI_METRICS, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+    }
+  });
+
+  await service.getPublicProfile('user-1');
+
+  assert.ok(!capturedPrompt.includes('provider@example.com'), 'email must never be sent to Gemini');
+  assert.ok(!capturedPrompt.includes('0500000000'), 'phone number must never be sent to Gemini');
 });

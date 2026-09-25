@@ -4,7 +4,7 @@ import { authenticate, requireActiveUser } from '../middlewares/auth.middleware'
 import { authorize } from '../middlewares/auth.middleware';
 import { AccountType } from '@prisma/client';
 import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
-import { authLimiter } from '../middlewares/rate-limit.middleware';
+import { authLimiter, aiLimiter } from '../middlewares/rate-limit.middleware';
 
 const router = Router();
 const documentUpload = memoryUpload({
@@ -31,7 +31,11 @@ const requireProvider = authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.P
 // Public read-only profile endpoints must remain outside the authenticated
 // middleware. Private preview (/public without an id) is still protected by
 // the middleware below because it resolves the current user's profile.
-router.get('/public/:providerId', providerProfileController.getPublicProfile);
+// aiLimiter (security follow-up): this endpoint triggers a real Gemini call
+// (generateAiMetrics) on a cache miss and has zero authentication, so it
+// must carry the same AI-cost rate limit every other AI-triggering public
+// endpoint does (see F6's marketplace/ai-recommendations).
+router.get('/public/:providerId', aiLimiter, providerProfileController.getPublicProfile);
 
 // Ensure all routes are authenticated
 router.use(authenticate, requireActiveUser);

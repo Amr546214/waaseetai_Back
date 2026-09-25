@@ -157,7 +157,6 @@ function requestSchemaFor(path: string, method: string) {
 			{ match: /\/client\/finance\/deposit\/verify$/, methods: ['post'], name: 'DepositVerifyRequest', example: { paymentId: 'payment-id', amount: 1000, paymentMethod: 'card' }, required: true },
 			{ match: /\/marketer-overview\/ref-links\/custom$/, methods: ['post'], name: 'CustomReferralLinkRequest', example: { name: 'حملة رمضان', targetUrl: 'https://waseetai.com/marketplace' } },
 			{ match: /\/marketer\/profile\/channels$/, methods: ['post'], name: 'MarketingChannelRequest', example: { platform: 'linkedin', url: 'https://linkedin.com/in/example' } },
-			{ match: /\/assistant\/chat$/, methods: ['post'], name: 'AssistantChatRequest', example: { message: 'ساعدني في تحسين هذا الطلب', currentRoute: '/dashboard' }, required: true },
 			{ match: /\/ai-review\/enhance-description$/, methods: ['post'], name: 'AiEnhanceDescriptionRequest', example: { title: 'نموذج خدمة', description: 'وصف الخدمة المراد تقييمها' }, required: true },
 			{ match: /\/ai-review\/suggest-text$/, methods: ['post'], name: 'AiSuggestTextRequest', example: { title: 'تطوير تطبيق جوال' }, required: true },
 			{ match: /\/ai-review\/suggest-milestones$/, methods: ['post'], name: 'AiSuggestMilestonesRequest', example: { title: 'تطوير تطبيق جوال', description: 'تطبيق لإدارة العملاء', totalAmount: 5000 }, required: true },

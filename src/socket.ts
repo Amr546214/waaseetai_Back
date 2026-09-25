@@ -1,7 +1,5 @@
 import { Server as SocketIOServer } from 'socket.io';
 import { Server as HttpServer } from 'http';
-import { prisma } from './config/db';
-import OpenAI from 'openai';
 import jwt from 'jsonwebtoken';
 import { registerProposalAuditGateway } from './sockets/proposal-audit.gateway';
 import { registerChatGateway } from './sockets/chat.gateway';
@@ -11,13 +9,8 @@ import { registerAiAssistantGateway } from './sockets/ai-assistant.gateway';
 import { registerAccreditationAiGateway } from './sockets/accreditation-ai.gateway';
 import { registerAssessmentGateway } from './sockets/assessment.gateway';
 import { registerSetupTestGateway } from './sockets/setup-test.gateway';
+import { registerAvatarChatGateway } from './sockets/avatar-chat.gateway';
 import { sessionService } from './services/session.service';
-
-const openai = new OpenAI({
-	apiKey: process.env.OPENAI_API_KEY,
-	timeout: 15 * 1000,
-	maxRetries: 0,
-});
 
 export let ioInstance: SocketIOServer | null = null;
 export const getIO = (): SocketIOServer | null => ioInstance;
@@ -135,108 +128,8 @@ export const initSocketServer = (httpServer: HttpServer, allowedOrigins: string[
 		// Register Profile Setup Test Gateway
 		registerSetupTestGateway(socket, io);
 
-		socket.on('ai_chat', async (data) => {
-			const { message, token, currentRoute } = data;
-			let userId = (socket as any).userId || null;
-
-			if (token && !userId && process.env.JWT_SECRET) {
-				try {
-					const decoded = jwt.verify(token, process.env.JWT_SECRET) as any;
-					userId = decoded.userId || decoded.id;
-				} catch (err) {
-					// ignore invalid token
-				}
-			}
-
-			let systemPrompt = '';
-			let fallbackText = 'مرحباً بك في وسيط AI! أنا مساعدك الذكي، كيف يمكنني خدمتك اليوم؟';
-			const commonPrompt = `You are the Waseet AI 3D guide. Break your response into chronological segments inside speechTimeline.
-        Assign 'bodyLanguagePose' from ["WELCOME_OPEN", "ANALYTICAL_THINKING", "INSTRUCTIVE_DIRECTING", "CELEBRATORY_JUMP", "EMPATHETIC_SOFT"].
-        Set 'excitementLevel' and 'gestureFrequency' (0.0 to 1.0) to control the dynamic kinetic engine.`;
-
-			if (userId) {
-				const user = await prisma.user.findUnique({ where: { id: userId } });
-				if (user) {
-					fallbackText = `مرحباً ${user.firstName}، كيف يمكنني مساعدتك اليوم؟`;
-					systemPrompt = `أنت مساعد الذكاء الاصطناعي "وسيط AI". \nالمستخدم الحالي مسجل الدخول واسمه: ${user.firstName} ${user.lastName}. \nنوع حسابه: ${user.accountType}.\nيجب أن ترحب به باسمه.\nكن ودوداً، احترافياً، وقدم إجابات مختصرة ومباشرة تتناسب مع كونه ${user.accountType === 'CLIENT_INDIVIDUAL' || user.accountType === 'CLIENT_COMPANY' ? 'طالب خدمة' : 'مقدم خدمة'}.\n\n${commonPrompt}`;
-				}
-			} else {
-				systemPrompt = `أنت مساعد الذكاء الاصطناعي "وسيط AI". \nالمستخدم الحالي هو زائر غير مسجل (Guest).\nمهمتك هي شرح دور منصة وسيط AI بوضوح (منصة عمل حر تضمن حقوق الطرفين).\nشجعه على التسجيل بطريقة مرحبة، احترافية، ومبسطة جداً.\nاستخدم لغة عربية فصحى ومبسطة، وإجابات قصيرة ومباشرة.\n\n${commonPrompt}`;
-			}
-
-			let textResponse = fallbackText;
-			let speechTimeline = [{ textSegment: fallbackText, animationCue: 'GREETING' }];
-			let audioBase64 = null;
-
-			try {
-				const chatCompletion = await openai.chat.completions.create({
-					model: "gpt-4o-mini",
-					messages: [
-						{ role: "system", content: systemPrompt },
-						{ role: "user", content: message || "مرحباً" }
-					],
-					response_format: {
-						type: "json_schema",
-						json_schema: {
-							name: "speech_timeline_response",
-							strict: true,
-							schema: {
-								type: "object",
-								properties: {
-									fullResponse: { type: "string" },
-									speechTimeline: {
-										type: "array",
-										items: {
-											type: "object",
-											properties: {
-												textSegment: { type: "string" },
-												excitementLevel: { type: "number" },
-												gestureFrequency: { type: "number" },
-												bodyLanguagePose: { type: "string", enum: ["WELCOME_OPEN", "ANALYTICAL_THINKING", "INSTRUCTIVE_DIRECTING", "CELEBRATORY_JUMP", "EMPATHETIC_SOFT"] }
-											},
-											required: ["textSegment", "excitementLevel", "gestureFrequency", "bodyLanguagePose"],
-											additionalProperties: false
-										}
-									}
-								},
-								required: ["fullResponse", "speechTimeline"],
-								additionalProperties: false
-							}
-						}
-					},
-					max_tokens: 300,
-					temperature: 0.7,
-				});
-
-				if (chatCompletion.choices[0].message.content) {
-					const parsed = JSON.parse(chatCompletion.choices[0].message.content);
-					textResponse = parsed.fullResponse;
-					speechTimeline = parsed.speechTimeline;
-				}
-
-				const mp3Response = await openai.audio.speech.create({
-					model: "tts-1-hd",
-					voice: "onyx",
-					response_format: "mp3",
-					input: textResponse,
-				});
-
-				const buffer = Buffer.from(await mp3Response.arrayBuffer());
-				audioBase64 = buffer.toString('base64');
-			} catch (aiError: any) {
-				console.warn('⚠️ OpenAI API Error in WebSocket. Falling back to text-only.', aiError.message);
-			}
-
-			// Emit response back to the single connected socket
-			socket.emit('ai_chat_response', {
-				success: true,
-				data: {
-					text: textResponse,
-					speechTimeline: speechTimeline,
-					audioBase64: audioBase64,
-				}
-			});
-		});
+		// Register 3D Avatar Assistant Chat Gateway (F8-TEXT, Gemini-migrated)
+		registerAvatarChatGateway(socket);
 
 		socket.on('disconnect', () => {
 			console.log('🔌 Client disconnected:', socket.id);
