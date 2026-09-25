@@ -15,6 +15,69 @@ export interface DynamicQuizPayload {
   questions: DynamicQuizQuestion[];
 }
 
+export const DYNAMIC_QUIZ_QUESTION_COUNT = 20;
+
+const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+
+function isValidDynamicQuizQuestion(value: unknown): value is DynamicQuizQuestion {
+  if (!value || typeof value !== 'object') return false;
+  const q = value as Record<string, unknown>;
+  if (!isNonEmptyString(q.id)) return false;
+  if (!isNonEmptyString(q.subSpecialtyTag)) return false;
+  if (!isNonEmptyString(q.text)) return false;
+  if (!Array.isArray(q.options) || q.options.length !== 4 || !q.options.every(isNonEmptyString)) return false;
+  if (typeof q.correctOptionIndex !== 'number' || !Number.isInteger(q.correctOptionIndex) || q.correctOptionIndex < 0 || q.correctOptionIndex > 3) return false;
+  if (!isNonEmptyString(q.explanation)) return false;
+  return true;
+}
+
+// Rejects anything that doesn't genuinely satisfy the AI-17 specialty-quiz
+// contract — wrong question count, a malformed question, an out-of-range
+// correct answer, or duplicate ids are all invalid. Never trusted directly:
+// the DB payload this validates against is only ever overwritten by the
+// caller after this returns true (see quiz.controller.ts's background
+// Gemini refinement).
+export function isValidDynamicQuizQuestions(value: unknown): value is DynamicQuizQuestion[] {
+  if (!Array.isArray(value) || value.length !== DYNAMIC_QUIZ_QUESTION_COUNT) return false;
+  if (!value.every(isValidDynamicQuizQuestion)) return false;
+  const ids = new Set((value as DynamicQuizQuestion[]).map((q) => q.id));
+  return ids.size === value.length;
+}
+
+export interface DynamicQuizGenerationResult {
+  questions: DynamicQuizQuestion[];
+}
+
+export const DYNAMIC_QUIZ_RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    questions: {
+      type: 'array',
+      description: `قائمة من ${DYNAMIC_QUIZ_QUESTION_COUNT} سؤال اختيار من متعدد`,
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          subSpecialtyTag: { type: 'string' },
+          text: { type: 'string' },
+          options: { type: 'array', items: { type: 'string' } },
+          correctOptionIndex: { type: 'number' },
+          explanation: { type: 'string' }
+        },
+        required: ['id', 'subSpecialtyTag', 'text', 'options', 'correctOptionIndex', 'explanation']
+      }
+    }
+  },
+  required: ['questions']
+};
+
+function isValidDynamicQuizGenerationResult(value: unknown): value is DynamicQuizGenerationResult {
+  if (!value || typeof value !== 'object') return false;
+  return isValidDynamicQuizQuestions((value as Record<string, unknown>).questions);
+}
+
+export { isValidDynamicQuizGenerationResult };
+
 export const DYNAMIC_QUIZ_SYSTEM_PROMPT = `You are the Lead Chief Examiner and Technical Skill Assessor at Waseet AI (وسيط AI), the premier AI-powered service mediation and professional networking platform in the Middle East.
 
 YOUR CORE RESPONSIBILITY:

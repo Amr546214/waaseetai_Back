@@ -1,14 +1,17 @@
 import { Socket, Server as SocketIOServer } from 'socket.io';
 import { prisma } from '../config/db';
-import OpenAI from 'openai';
 import jwt from 'jsonwebtoken';
-import { DYNAMIC_QUIZ_SYSTEM_PROMPT } from '../prompts/quiz.prompt';
+import { geminiClient } from '../services/ai/gemini/gemini.client';
+import { buildSetupTestSystemPrompt, isValidSetupTestQuizPayload, SETUP_TEST_QUESTION_COUNT, SETUP_TEST_RESPONSE_SCHEMA, SetupTestQuizPayload } from '../prompts/setup-test.prompt';
+import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || 'dummy_key_for_build',
-  timeout: 30 * 1000,
-  maxRetries: 1,
-});
+// AI-16 — provider onboarding "setup test" question generation, migrated to
+// the shared Gemini foundation (previously called OpenAI gpt-4o-mini
+// directly, with no rate limiting, no disconnect cancellation, and no
+// validation of the returned question shape beyond "is it a non-empty
+// array"). The static fallback below is unchanged and kept as the honest
+// DETERMINISTIC/STATIC_FALLBACK path when Gemini is unavailable or its
+// output fails validation.
 
 function generateSetupTestFallbackQuestions(mainSpec: string, subSpecs: string[]): any[] {
   const subs = subSpecs && subSpecs.length > 0 ? subSpecs : [mainSpec || 'البرمجة والتقنية'];
@@ -94,8 +97,21 @@ export class SetupTestGateway {
           return;
         }
 
+        if (isSocketAiRateLimited(userId)) {
+          socket.emit('setup_test:error', { message: SOCKET_AI_RATE_LIMIT_MESSAGE });
+          return;
+        }
+
+        // Registered before the DB lookup so a disconnect during either the
+        // lookup or the Gemini call itself is honored — not just a
+        // disconnect that happens to land after both have already started.
+        const abortController = new AbortController();
+        const onDisconnect = () => abortController.abort();
+        socket.once('disconnect', onDisconnect);
+
         const profile = await prisma.providerProfile.findUnique({ where: { userId } });
         if (!profile) {
+          socket.off('disconnect', onDisconnect);
           socket.emit('setup_test:error', { message: 'الملف الشخصي لمقدم الخدمة غير موجود.' });
           return;
         }
@@ -110,39 +126,32 @@ export class SetupTestGateway {
         socket.emit('setup_test:generating', { message: 'جاري إنشاء الاختبار المخصص لك بناءً على تخصصاتك باستخدام الذكاء الاصطناعي...' });
 
         const mainSpec = profile.mainSpecialty || profile.industry || 'البرمجة والتقنية';
-        const subSpecs = Array.isArray(profile.subSpecialties) && profile.subSpecialties.length > 0 
-          ? profile.subSpecialties 
+        const subSpecs = Array.isArray(profile.subSpecialties) && profile.subSpecialties.length > 0
+          ? profile.subSpecialties
           : [mainSpec];
 
         let questions: any[] = [];
-
-        if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'dummy_key_for_build') {
-          try {
-            const promptUser = `يرجى إنشاء 15 سؤال اختيار من متعدد تقني لمقدم خدمة في التخصص الرئيسي "${mainSpec}" والتخصصات الفرعية [${subSpecs.join(', ')}].`;
-            const completion = await openai.chat.completions.create({
-              model: 'gpt-4o-mini',
-              messages: [
-                { role: 'system', content: DYNAMIC_QUIZ_SYSTEM_PROMPT },
-                { role: 'user', content: promptUser }
-              ],
-              response_format: { type: "json_object" },
-              temperature: 0.5,
-            });
-            
-            const resultRaw = completion.choices[0].message.content || '{"questions": []}';
-            const parsed = JSON.parse(resultRaw);
-            if (parsed.questions && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
-              questions = parsed.questions;
-            }
-          } catch (aiErr) {
-            console.warn('[SetupTestGateway] OpenAI generation failed or timed out, falling back to dynamic generator:', aiErr);
-          }
+        try {
+          const promptUser = `يرجى إنشاء ${SETUP_TEST_QUESTION_COUNT} سؤال اختيار من متعدد تقني لمقدم خدمة في التخصص الرئيسي "${mainSpec}" والتخصصات الفرعية [${subSpecs.join(', ')}].`;
+          const result = await geminiClient.generateStructured<SetupTestQuizPayload>(promptUser, {
+            systemInstruction: buildSetupTestSystemPrompt(),
+            responseSchema: SETUP_TEST_RESPONSE_SCHEMA,
+            validate: isValidSetupTestQuizPayload,
+            temperature: 0.5,
+            timeoutMs: 30_000,
+            signal: abortController.signal
+          });
+          questions = result.data.questions;
+        } catch (aiErr: any) {
+          console.warn('[SetupTestGateway] Gemini generation failed, falling back to static question bank:', aiErr?.code || aiErr?.message);
         }
+        socket.off('disconnect', onDisconnect);
 
+        // Honest STATIC_FALLBACK — never a fabricated/relabeled AI result.
         if (!questions || questions.length === 0) {
           questions = generateSetupTestFallbackQuestions(mainSpec, subSpecs);
         }
-        
+
         this.testSessions.set(userId, {
             questions,
             currentQIndex: 0,
@@ -151,7 +160,7 @@ export class SetupTestGateway {
         });
 
         socket.emit('setup_test:ready', { totalQuestions: questions.length });
-        
+
       } catch (err: any) {
         console.error('[SetupTestGateway Init Error]:', err);
         socket.emit('setup_test:error', { message: 'حدث خطأ أثناء إنشاء أسئلة الاختبار.' });

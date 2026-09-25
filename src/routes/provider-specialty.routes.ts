@@ -131,7 +131,7 @@ router.post(
 
 router.post('/:id/ai-evaluate', ...providerAuth, requireOwnedProviderSpecialtyFromParam, aiLimiter, evaluateSpecialtyWithAI);
 
-router.post('/:id/quiz/init', ...providerAuth, requireOwnedProviderSpecialtyFromParam, initSpecialtyQuiz);
+router.post('/:id/quiz/init', ...providerAuth, requireOwnedProviderSpecialtyFromParam, aiLimiter, initSpecialtyQuiz);
 router.post('/:id/quiz/submit', ...providerAuth, requireOwnedProviderSpecialtyFromParam, submitSpecialtyQuiz);
 router.get('/:id/quiz/status', ...providerAuth, requireOwnedProviderSpecialtyFromParam, getSpecialtyQuizStatus);
 

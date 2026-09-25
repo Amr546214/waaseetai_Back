@@ -2,26 +2,11 @@ import { prisma } from '../config/db';
 import { getIO } from '../socket';
 import { emailService } from './email.service';
 import { notificationService } from './notification.service';
-import OpenAI from 'openai';
+import { geminiClient } from './ai/gemini/gemini.client';
 import { logger } from '../config/logger';
-import { AI_AUDITOR_PROMPT } from './ai-audit.prompt';
+import { AI_AUDIT_RESPONSE_SCHEMA, AI_AUDITOR_PROMPT, AiAuditReport, isValidAiAuditReport } from './ai-audit.prompt';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  timeout: 25 * 1000,
-  maxRetries: 1,
-});
-
-export interface AiAuditReport {
-  overallScore: number;
-  clarityScore: number;
-  feasibilityScore: number;
-  isApproved: boolean;
-  decisionSummary: string;
-  strengths: string[];
-  criticalGaps: string[];
-  improvementSuggestions: string[];
-}
+export type { AiAuditReport };
 
 export class AiAuditService {
   /**
@@ -32,7 +17,7 @@ export class AiAuditService {
   }
 
   /**
-   * Triggers the AI Audit asynchronously using OpenAI gpt-4o for a newly submitted Business Model
+   * Triggers the AI Audit asynchronously using Gemini for a newly submitted Business Model
    */
   async auditProjectModel(serviceId: string, providerIdInput?: string): Promise<void> {
     // Run asynchronously to allow instant API response while AI evaluates in background
@@ -42,11 +27,11 @@ export class AiAuditService {
   }
 
   /**
-   * Synchronously executes the OpenAI audit pipeline for batch or CLI evaluation
+   * Synchronously executes the Gemini audit pipeline for batch or CLI evaluation
    */
   async executeAuditSync(serviceId: string, providerIdInput?: string): Promise<any> {
     try {
-      logger.info(`[AiAuditService] Starting automated OpenAI audit for model ${serviceId}`);
+      logger.info(`[AiAuditService] Starting automated Gemini audit for model ${serviceId}`);
       
       const service = await prisma.serviceCatalog.findUnique({
         where: { id: serviceId },
@@ -90,39 +75,29 @@ export class AiAuditService {
 	      };
 	      let auditCompleted = false;
 
-      if (process.env.OPENAI_API_KEY) {
-        try {
-          const completion = await openai.chat.completions.create({
-            model: "gpt-4o",
-            messages: [
-              { role: "system", content: AI_AUDITOR_PROMPT },
-              { role: "user", content: `Please stringently evaluate the following Business Model submission:\n${userPayload}` }
-            ],
-            response_format: { type: "json_object" },
+      // AI-18 — migrated to the shared Gemini foundation. The previous
+      // OpenAI path silently defaulted a missing/malformed score to 85 and
+      // still marked the audit "completed" — a fabricated success.
+      // isValidAiAuditReport now rejects any malformed shape before it can
+      // reach auditResult, so a bad response routes to the same honest
+      // manual-review default as "provider unavailable" below.
+      try {
+        const result = await geminiClient.generateStructured<AiAuditReport>(
+          `Please stringently evaluate the following Business Model submission:\n${userPayload}`,
+          {
+            systemInstruction: AI_AUDITOR_PROMPT,
+            responseSchema: AI_AUDIT_RESPONSE_SCHEMA,
+            validate: isValidAiAuditReport,
             temperature: 0.2,
-            max_tokens: 800
-          });
-
-          if (completion.choices[0]?.message?.content) {
-            const parsed = JSON.parse(completion.choices[0].message.content);
-	            auditResult = {
-              overallScore: typeof parsed.overallScore === 'number' ? parsed.overallScore : Number(parsed.overallScore) || 85,
-              clarityScore: typeof parsed.clarityScore === 'number' ? parsed.clarityScore : Number(parsed.clarityScore) || 85,
-              feasibilityScore: typeof parsed.feasibilityScore === 'number' ? parsed.feasibilityScore : Number(parsed.feasibilityScore) || 85,
-              isApproved: Boolean(parsed.isApproved !== undefined ? parsed.isApproved : (Number(parsed.overallScore) >= 70)),
-              decisionSummary: parsed.decisionSummary || parsed.reviewSummary || auditResult.decisionSummary,
-              strengths: Array.isArray(parsed.strengths) ? parsed.strengths : auditResult.strengths,
-              criticalGaps: Array.isArray(parsed.criticalGaps) ? parsed.criticalGaps : [],
-              improvementSuggestions: Array.isArray(parsed.improvementSuggestions) ? parsed.improvementSuggestions : (Array.isArray(parsed.recommendations) ? parsed.recommendations : auditResult.improvementSuggestions)
-	            };
-	            auditCompleted = true;
-            logger.info(`[AiAuditService] OpenAI GPT-4o evaluation completed with score: ${auditResult.overallScore}, isApproved: ${auditResult.isApproved}`);
+            maxOutputTokens: 800,
+            timeoutMs: 25_000
           }
-        } catch (aiError: any) {
-          logger.warn(`[AiAuditService] OpenAI API error during audit, using fallback evaluation: ${aiError.message}`);
-        }
-      } else {
-        logger.info(`[AiAuditService] Using simulated AI Audit engine (No OPENAI_API_KEY).`);
+        );
+        auditResult = result.data;
+        auditCompleted = true;
+        logger.info(`[AiAuditService] Gemini evaluation completed with score: ${auditResult.overallScore}, isApproved: ${auditResult.isApproved}`);
+      } catch (aiError: any) {
+        logger.warn(`[AiAuditService] Gemini error during audit, using honest manual-review fallback: ${aiError?.code || aiError?.message}`);
       }
 
 	      // The audit is advisory: publishing is immediate and an AI result must never hide the model.

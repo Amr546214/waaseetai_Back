@@ -1,22 +1,15 @@
 import { Request, Response } from 'express';
 import { SpecialtyVerificationStatus, TestSessionStatus } from '@prisma/client';
 import { prisma } from '../config/db';
-import OpenAI from 'openai';
-import { DYNAMIC_QUIZ_SYSTEM_PROMPT, DynamicQuizPayload, DynamicQuizQuestion } from '../prompts/quiz.prompt';
+import { DYNAMIC_QUIZ_QUESTION_COUNT, DYNAMIC_QUIZ_RESPONSE_SCHEMA, DYNAMIC_QUIZ_SYSTEM_PROMPT, DynamicQuizGenerationResult, DynamicQuizPayload, DynamicQuizQuestion, isValidDynamicQuizGenerationResult } from '../prompts/quiz.prompt';
+import { geminiClient } from '../services/ai/gemini/gemini.client';
 import { ioInstance } from '../socket';
 import { notificationService } from '../services/notification.service';
 import { emailService } from '../services/email.service';
 import { assessmentService } from '../services/assessment.service';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || 'dummy_key_for_build',
-  timeout: 45 * 1000,
-  maxRetries: 1,
-});
-
 const QUIZ_DURATION_MINUTES = 30;
 const PASSING_THRESHOLD_PERCENT = 25.0;
-const MODEL_VERSION = 'gpt-4o-2024-08-06';
 
 /**
  * Orchestrator helper to emit real-time in-app notification & send Nodemailer email with full quiz results
@@ -345,32 +338,41 @@ export async function initSpecialtyQuiz(req: Request, res: Response): Promise<vo
       }
     });
 
-    if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'dummy_key_for_build') {
-      openai.chat.completions.create({
-        model: MODEL_VERSION,
+    // AI-17 background refinement — migrated to the shared Gemini foundation.
+    // Fire-and-forget by design (the HTTP response above already returned
+    // the DB/static-fallback questions so the client isn't blocked): if a
+    // real, fully-validated 20-question Gemini result lands before the
+    // client requests the question stream, it silently replaces the
+    // session's questionsPayload; otherwise the already-persisted DB/static
+    // questions stand unchanged. A malformed or missing GEMINI_API_KEY
+    // result is rejected by isValidDynamicQuizGenerationResult and never
+    // reaches the database — this was previously trusted directly with no
+    // shape validation at all.
+    geminiClient.generateStructured<DynamicQuizGenerationResult>(
+      `Please generate the ${DYNAMIC_QUIZ_QUESTION_COUNT}-question technical quiz for:\nPrimary Specialty Domain: "${providerSpecialty.specialty.nameAr || providerSpecialty.specialty.name}"\nSelected Sub-Specialties: [${providerSpecialty.subSpecialties.join(', ')}]\nRemember: Strictly generate ${DYNAMIC_QUIZ_QUESTION_COUNT} questions in professional Arabic evenly distributed across these exact sub-specialties.`,
+      {
+        systemInstruction: DYNAMIC_QUIZ_SYSTEM_PROMPT,
+        responseSchema: DYNAMIC_QUIZ_RESPONSE_SCHEMA,
+        validate: isValidDynamicQuizGenerationResult,
         temperature: 0.25,
-        max_tokens: 4500,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: DYNAMIC_QUIZ_SYSTEM_PROMPT },
-          {
-            role: 'user',
-            content: `Please generate the 20-question technical quiz for:\nPrimary Specialty Domain: "${providerSpecialty.specialty.nameAr || providerSpecialty.specialty.name}"\nSelected Sub-Specialties: [${providerSpecialty.subSpecialties.join(', ')}]\nRemember: Strictly generate 20 questions in professional Arabic evenly distributed across these exact sub-specialties.`
-          }
-        ]
-      }).then(async (aiRes) => {
-        const rawContent = aiRes.choices[0].message?.content || '{}';
-        const aiPayload = JSON.parse(rawContent) as DynamicQuizPayload;
-        if (aiPayload.questions && aiPayload.questions.length === 20) {
-          await prisma.specialtyTestSession.update({
-            where: { id: createdSession.id },
-            data: { questionsPayload: aiPayload as any }
-          });
-        }
-      }).catch(err => {
-        console.warn('[Quiz AI Background Refinement Notice]: Using instant balanced questions.', err.message);
+        maxOutputTokens: 4500,
+        timeoutMs: 45_000
+      }
+    ).then(async (result) => {
+      const aiPayload: DynamicQuizPayload = {
+        specialtyName: quizPayload.specialtyName,
+        totalQuestions: DYNAMIC_QUIZ_QUESTION_COUNT,
+        durationMins: QUIZ_DURATION_MINUTES,
+        passThresholdPercent: PASSING_THRESHOLD_PERCENT,
+        questions: result.data.questions
+      };
+      await prisma.specialtyTestSession.update({
+        where: { id: createdSession.id },
+        data: { questionsPayload: aiPayload as any }
       });
-    }
+    }).catch((err: any) => {
+      console.warn('[Quiz AI Background Refinement Notice]: Using instant balanced questions.', err?.code || err?.message);
+    });
   } catch (error: any) {
     console.error('[Quiz Controller Init Error]:', error);
     res.status(500).json({ success: false, message: 'حدث خطأ غير متوقع أثناء إعداد الاختبار الفوري.', error: error?.message });
