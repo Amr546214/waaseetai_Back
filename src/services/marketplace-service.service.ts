@@ -806,7 +806,10 @@ export class MarketplaceService {
 	}
 
 	/**
-	 * AI Match Recommendations for clients / searchers powered by OpenAI
+	 * AI Match Recommendations for clients / searchers, powered by Gemini with
+	 * an honestly-labeled deterministic DB-ranking fallback (see
+	 * generationSource — never presented as AI-generated unless Gemini
+	 * actually produced it).
 	 */
 	async getAiRecommendations(body: any) {
 		const { query, category, subSpecialty, limit } = body || {};
@@ -816,7 +819,8 @@ export class MarketplaceService {
 			data: {
 				recommendations: aiResult.recommendations,
 				matchSummary: aiResult.bannerInsight,
-				smartSearchTags: aiResult.smartSearchTags
+				smartSearchTags: aiResult.smartSearchTags,
+				generationSource: aiResult.generationSource
 			}
 		};
 	}

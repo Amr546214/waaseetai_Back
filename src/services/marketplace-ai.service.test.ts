@@ -1,5 +1,6 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { GeminiErrorCode, GeminiProviderError } from './ai/gemini/gemini.errors';
 
 // Phase 3E.1: formatModelForClient() previously built provider name/avatar
 // from raw User columns and "level" from the stale, never-written
@@ -8,13 +9,13 @@ import assert from 'node:assert/strict';
 // via the same resolveProviderProgression helper the rest of the app
 // already uses — display formatting only, never the AI ranking prompt.
 //
-// Leaving OPENAI_API_KEY unset forces the service's constructor to leave
-// `this.openai = null`, so generateAiRecommendations() takes its existing
-// "Robust Algorithmic Heuristic Fallback" branch — which never calls
-// OpenAI at all — while still exercising the exact same formatModelForClient()
-// this phase changed. This lets these tests prove the display fix without
-// mocking the OpenAI client, and without touching the (unchanged) AI branch.
-delete process.env.OPENAI_API_KEY;
+// F6 Gemini migration (security follow-up batch): `geminiClient` is always
+// mocked (never the real module), and isConfigured() defaults to false so
+// generateAiRecommendations() takes its existing "honest deterministic
+// fallback" branch — which never calls Gemini at all — for every test that
+// doesn't explicitly opt into the Gemini branch. This lets the display
+// tests keep working unchanged, and lets the Gemini-branch tests below
+// override isConfigured/generateStructured per test.
 
 function makeDbModel(overrides: any = {}) {
   return {
@@ -58,8 +59,18 @@ function createMockPrisma(t: TestContext, dbModels: any[]) {
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
 }
 
-async function loadService(t: TestContext, dbModels: any[]) {
+async function loadService(t: TestContext, dbModels: any[], opts: {
+  isConfigured?: boolean;
+  generateStructured?: (prompt: string, options: any) => Promise<any>;
+} = {}) {
   createMockPrisma(t, dbModels);
+
+  const geminiClientMock = {
+    isConfigured: () => opts.isConfigured ?? false,
+    generateStructured: opts.generateStructured ?? (async () => { throw new Error('generateStructured not stubbed for this test'); })
+  };
+  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: geminiClientMock } });
+
   const moduleUrl = `./marketplace-ai.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { MarketplaceAiService } = await import(moduleUrl);
   return new MarketplaceAiService();
@@ -128,4 +139,98 @@ test('AI ranking payload (modelsSummary) is unaffected: it never includes provid
   assert.equal(result.recommendations[0].aiScore, 50);
   assert.equal(result.recommendations[1].id, 'm2');
   assert.equal(result.recommendations[1].aiScore, 90);
+});
+
+test('generateAiRecommendations: no Gemini call at all when GEMINI_API_KEY is not configured — honest DETERMINISTIC fallback', async (t) => {
+  const service = await loadService(t, [makeDbModel()], { isConfigured: false });
+
+  const result = await service.generateAiRecommendations({});
+
+  assert.equal(result.generationSource, 'DETERMINISTIC');
+});
+
+test('generateAiRecommendations: a real validated Gemini success is honestly labeled GEMINI and uses the AI-selected id/score/reason', async (t) => {
+  const model = makeDbModel({ id: 'm1' });
+  const service = await loadService(t, [model], {
+    isConfigured: true,
+    generateStructured: async (_prompt, options) => {
+      const payload = {
+        bannerInsight: 'اختيارات مخصصة لك',
+        smartSearchTags: ['تصميم', 'تطوير'],
+        recommendations: [{ id: 'm1', aiMatchPercentage: 95, aiRecommendationReason: 'تطابق ممتاز مع بحثك' }]
+      };
+      assert.equal(options.validate(payload), true, 'the real validator must accept a well-formed, non-hallucinated payload');
+      return { data: payload, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+    }
+  });
+
+  const result = await service.generateAiRecommendations({});
+
+  assert.equal(result.generationSource, 'GEMINI');
+  assert.equal(result.recommendations.length, 1);
+  assert.equal(result.recommendations[0].id, 'm1');
+  assert.equal(result.recommendations[0].aiScore, 95);
+  assert.equal(result.recommendations[0].aiRecommendationReason, 'تطابق ممتاز مع بحثك');
+});
+
+test('generateAiRecommendations: a hallucinated model id (not among the supplied candidates) is rejected by the validator, falling back honestly', async (t) => {
+  const model = makeDbModel({ id: 'm1' });
+  const service = await loadService(t, [model], {
+    isConfigured: true,
+    generateStructured: async (_prompt, options) => {
+      const hallucinated = {
+        bannerInsight: 'x',
+        smartSearchTags: ['x'],
+        recommendations: [{ id: 'model-that-does-not-exist', aiMatchPercentage: 95, aiRecommendationReason: 'x' }]
+      };
+      assert.equal(options.validate(hallucinated), false, 'the validator must reject an id outside the candidate set');
+      throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
+    }
+  });
+
+  const result = await service.generateAiRecommendations({});
+
+  assert.equal(result.generationSource, 'DETERMINISTIC');
+  assert.equal(result.recommendations[0].id, 'm1');
+});
+
+test('generateAiRecommendations: malformed Gemini output (missing required fields) falls back honestly', async (t) => {
+  const service = await loadService(t, [makeDbModel({ id: 'm1' })], {
+    isConfigured: true,
+    generateStructured: async () => { throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'malformed JSON'); }
+  });
+
+  const result = await service.generateAiRecommendations({});
+
+  assert.equal(result.generationSource, 'DETERMINISTIC');
+});
+
+test('generateAiRecommendations: Gemini provider unavailable/timeout falls back honestly, never throwing to the caller', async (t) => {
+  const service = await loadService(t, [makeDbModel({ id: 'm1' })], {
+    isConfigured: true,
+    generateStructured: async () => { throw new GeminiProviderError(GeminiErrorCode.TIMEOUT, 'timed out'); }
+  });
+
+  const result = await service.generateAiRecommendations({});
+
+  assert.equal(result.generationSource, 'DETERMINISTIC');
+  assert.equal(result.recommendations.length, 1);
+});
+
+test('generateAiRecommendations: deterministic fallback result count respects the requested limit', async (t) => {
+  const models = [makeDbModel({ id: 'm1' }), makeDbModel({ id: 'm2' }), makeDbModel({ id: 'm3' })];
+  const service = await loadService(t, models, { isConfigured: false });
+
+  const result = await service.generateAiRecommendations({ limit: 2 });
+
+  assert.equal(result.recommendations.length, 2);
+});
+
+test('generateAiRecommendations: no result at all (empty DB) is honestly DETERMINISTIC, never fabricated', async (t) => {
+  const service = await loadService(t, [], { isConfigured: true });
+
+  const result = await service.generateAiRecommendations({});
+
+  assert.equal(result.generationSource, 'DETERMINISTIC');
+  assert.deepEqual(result.recommendations, []);
 });

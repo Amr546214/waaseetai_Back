@@ -1,5 +1,20 @@
 import { prisma } from '../config/db';
 
+// F15b (security follow-up batch): this list's "aiMatchScore"/"aiNote"/
+// "aiPriceEval" fields are, and always have been, a 100%-deterministic
+// keyword/heuristic scoring engine — there is no Gemini/OpenAI call
+// anywhere in this file. It is intentionally NOT migrated to Gemini: this
+// endpoint scores every filtered/sorted OPEN request on every request
+// (unbounded candidate count, live search/sort/pagination), which is a
+// fundamentally different shape from the "rank top-N from a bounded
+// candidate set" pattern the shared Gemini matching engine
+// (ai-matching-engine.service.ts, i.e. F15) was designed for — running an
+// arbitrarily large, frequently-refreshed list through a per-request Gemini
+// call would be slow, costly, and non-deterministic across reloads. The
+// field names are kept as-is (also used by the persisted Proposal.aiMatchScore
+// column elsewhere — out of scope here, no Prisma schema changes) but the
+// wording below no longer claims generative AI produced the ranking.
+
 export class ExploreRequestsService {
   public async getExploreRequests(providerId: string, filters: { category?: string; tab?: string; sortBy?: string; search?: string }) {
 
@@ -214,12 +229,13 @@ export class ExploreRequestsService {
         aiDurationEval = 'جدول زمني مريح ومرن للتنفيذ';
       }
 
-      // Strategic AI Note
+      // Strategic match note — deterministic wording only; never attributed
+      // to generative AI (see the file-level note above).
       let aiNote = '';
       if (item.proposalsCount <= 1) {
         aiNote = `العميل (${item.clientType}) والمنافسة منخفضة جداً في هذا المشروع (${item.proposalsCount ? 'عرض واحد فقط' : 'لا توجد عروض'}). التوافق عالي، ننصح بتقديم العرض فوراً.`;
       } else if (aiMatchScore >= 88) {
-        aiNote = `الذكاء الاصطناعي يبرز هذا الطلب كأفضل توافق مع تخصصك (${aiMatchScore}%)! خبرتك تعطيك أفضلية كبرى رغم وجود ${item.proposalsCount} عروض منافسة.`;
+        aiNote = `نظام المطابقة في وسيط يبرز هذا الطلب كأفضل توافق مع تخصصك (${aiMatchScore}%)! خبرتك تعطيك أفضلية كبرى رغم وجود ${item.proposalsCount} عروض منافسة.`;
       } else {
         aiNote = `فرصة جيدة لبناء سمعة ممتازة مع عميل (${item.clientType}). احرص على تضمين نماذج سابقة وتفصيل خطوات العمل لكسب العرض.`;
       }
@@ -248,6 +264,7 @@ export class ExploreRequestsService {
         aiSuggestedDuration,
         aiDurationEval,
         aiNote,
+        generationSource: 'DETERMINISTIC' as const,
         hasApplied: item.hasApplied,
         isSaved: item.isSaved,
         createdAt: item.createdAt

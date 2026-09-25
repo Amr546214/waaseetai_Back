@@ -1,7 +1,7 @@
 import { prisma } from '../config/db';
 import { ProjectStatus, SpecialtyVerificationStatus } from '@prisma/client';
 import { logger } from '../config/logger';
-import OpenAI from 'openai';
+import { geminiClient } from './ai/gemini/gemini.client';
 import {
   AI_MATCHING_ENGINE_SYSTEM_PROMPT,
   buildAiMatchingUserPrompt,
@@ -9,11 +9,7 @@ import {
   CandidateProjectPayload
 } from '../prompts/ai-matching.prompt';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  timeout: 15 * 1000,
-  maxRetries: 2,
-});
+export type AiMatchingGenerationSource = 'GEMINI' | 'DETERMINISTIC';
 
 export interface AiMatchingProjectItem {
   id: string;
@@ -27,6 +23,64 @@ export interface AiMatchingProjectItem {
   createdAt: Date | string;
   deliveryDays?: number;
   clientName?: string;
+  generationSource: AiMatchingGenerationSource;
+}
+
+interface GeminiMatchItem {
+  projectId: string;
+  aiMatchScore: number;
+  matchReasons: string[];
+  aiAnalysis: string;
+}
+
+interface GeminiMatchingResponse {
+  matches: GeminiMatchItem[];
+}
+
+const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+
+const MATCHING_RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    matches: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string' },
+          aiMatchScore: { type: 'number', description: 'integer between 82 and 99' },
+          matchReasons: { type: 'array', items: { type: 'string' } },
+          aiAnalysis: { type: 'string' }
+        },
+        required: ['projectId', 'aiMatchScore', 'matchReasons', 'aiAnalysis']
+      }
+    }
+  },
+  required: ['matches']
+};
+
+// Rejects malformed/hallucinated Gemini output. Every projectId must
+// correspond to a project actually supplied in the candidate set — Gemini
+// must never be able to invent a project that wasn't offered to it.
+function buildMatchingValidator(candidateIds: Set<string>) {
+  return function isValidMatchingResponse(value: unknown): value is GeminiMatchingResponse {
+    if (!value || typeof value !== 'object') return false;
+    const v = value as Record<string, unknown>;
+    if (!Array.isArray(v.matches) || v.matches.length === 0) return false;
+
+    const seenIds = new Set<string>();
+    return v.matches.every((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const m = item as Record<string, unknown>;
+      if (!isNonEmptyString(m.projectId) || !candidateIds.has(m.projectId)) return false;
+      if (seenIds.has(m.projectId)) return false; // duplicate id
+      seenIds.add(m.projectId);
+      if (typeof m.aiMatchScore !== 'number' || !Number.isFinite(m.aiMatchScore) || m.aiMatchScore < 0 || m.aiMatchScore > 100) return false;
+      if (!Array.isArray(m.matchReasons) || m.matchReasons.length === 0 || !m.matchReasons.every((r) => isNonEmptyString(r))) return false;
+      if (!isNonEmptyString(m.aiAnalysis)) return false;
+      return true;
+    });
+  };
 }
 
 export class AiMatchingEngineService {
@@ -225,62 +279,57 @@ export class AiMatchingEngineService {
         requiredLevel: p.provLevel || 'الكل'
       }));
 
-      // 3. Perform OpenAI GPT evaluation if API key exists
-      if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim() !== '') {
+      // 3. Perform Gemini evaluation if configured
+      if (geminiClient.isConfigured()) {
         try {
+          const candidateIds = new Set(openProjects.map(p => p.id));
           const userPrompt = buildAiMatchingUserPrompt(providerContext, candidatesPayload);
-          const completion = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: [
-              { role: 'system', content: AI_MATCHING_ENGINE_SYSTEM_PROMPT },
-              { role: 'user', content: userPrompt }
-            ],
-            response_format: { type: 'json_object' },
+
+          const result = await geminiClient.generateStructured<GeminiMatchingResponse>(userPrompt, {
+            systemInstruction: AI_MATCHING_ENGINE_SYSTEM_PROMPT,
+            responseSchema: MATCHING_RESPONSE_SCHEMA,
+            validate: buildMatchingValidator(candidateIds),
             temperature: 0.2,
-            max_tokens: 800
+            maxOutputTokens: 800
           });
 
-          const rawContent = completion.choices[0]?.message?.content;
-          if (rawContent) {
-            const parsed = JSON.parse(rawContent);
-            if (Array.isArray(parsed.matches) && parsed.matches.length > 0) {
-              const matchedResults: AiMatchingProjectItem[] = [];
+          const projectsById = new Map(openProjects.map(p => [p.id, p]));
+          const matchedResults: AiMatchingProjectItem[] = result.data.matches
+            .map((m): AiMatchingProjectItem | null => {
+              const targetProj = projectsById.get(m.projectId);
+              if (!targetProj) return null;
 
-              for (const m of parsed.matches) {
-                const targetProj = openProjects.find(p => p.id === m.projectId);
-                if (targetProj) {
-                  const clientName = targetProj.client
-                    ? `${targetProj.client.firstName || ''} ${targetProj.client.lastName || ''}`.trim()
-                    : 'عميل Waseet AI';
+              const clientName = targetProj.client
+                ? `${targetProj.client.firstName || ''} ${targetProj.client.lastName || ''}`.trim()
+                : 'عميل Waseet AI';
 
-                  matchedResults.push({
-                    id: targetProj.id,
-                    title: targetProj.title,
-                    category: targetProj.specialty || 'خدمة تخصصية',
-                    specialty: targetProj.specialty || 'تطوير وتصميم',
-                    budget: Number(targetProj.budgetFixed || targetProj.budgetMax || targetProj.budgetMin || 2500),
-                    aiMatchScore: Math.min(99, Math.max(82, Math.round(m.aiMatchScore || 92))),
-                    matchReasons: Array.isArray(m.matchReasons) ? m.matchReasons : ['متوافق مع تخصصك واختباراتك'],
-                    aiAnalysis: m.aiAnalysis || 'تم تحليل وتنسيق العرض بواسطة الذكاء الاصطناعي بناءً على مهاراتك وتقييماتك.',
-                    createdAt: targetProj.createdAt,
-                    deliveryDays: targetProj.deliveryDays || 7,
-                    clientName: clientName || 'عميل موثوق'
-                  });
-                }
-              }
+              return {
+                id: targetProj.id,
+                title: targetProj.title,
+                category: targetProj.specialty || 'خدمة تخصصية',
+                specialty: targetProj.specialty || 'تطوير وتصميم',
+                budget: Number(targetProj.budgetFixed || targetProj.budgetMax || targetProj.budgetMin || 2500),
+                aiMatchScore: Math.min(99, Math.max(82, Math.round(m.aiMatchScore))),
+                matchReasons: m.matchReasons,
+                aiAnalysis: m.aiAnalysis,
+                createdAt: targetProj.createdAt,
+                deliveryDays: targetProj.deliveryDays || 7,
+                clientName: clientName || 'عميل موثوق',
+                generationSource: 'GEMINI'
+              };
+            })
+            .filter((m): m is AiMatchingProjectItem => m !== null);
 
-              if (matchedResults.length > 0) {
-                logger.info(`[AiMatchingEngineService] OpenAI successfully evaluated top ${matchedResults.length} real matches for provider ${providerId}`);
-                return matchedResults.slice(0, 3);
-              }
-            }
+          if (matchedResults.length > 0) {
+            logger.info(`[AiMatchingEngineService] Gemini successfully evaluated top ${matchedResults.length} real matches for provider ${providerId}`);
+            return matchedResults.slice(0, 3);
           }
-        } catch (openAiError: any) {
-          logger.warn(`[AiMatchingEngineService] OpenAI API execution failed or timed out (${openAiError.message}). Falling back to multi-factor rule engine.`);
+        } catch (geminiError: any) {
+          logger.warn(`[AiMatchingEngineService] Gemini execution failed or timed out (${geminiError.message}). Falling back to multi-factor rule engine.`);
         }
       }
 
-      // 4. Fallback Rule-Based Multi-Factor Scoring Engine (if OpenAI key missing or failed)
+      // 4. Fallback Rule-Based Multi-Factor Scoring Engine (if Gemini is not configured or fails)
       return this.computeFallbackTop3Matches(providerContext, openProjects);
     } catch (error: any) {
       logger.error(`[AiMatchingEngineService] Error matching projects: ${error.message}`, error);
@@ -372,10 +421,13 @@ export class AiMatchingEngineService {
         budget: Number(proj.budgetFixed || proj.budgetMax || proj.budgetMin || 2000),
         aiMatchScore: clampedScore,
         matchReasons: Array.from(new Set(reasons)),
-        aiAnalysis: `تم ترشيح هذا المشروع بواسطة محرك الذكاء الاصطناعي بناءً على مطابقة مهاراتك (${provider.skills.slice(0, 3).join(', ')}) واختباراتك المعتمدة.`,
+        // Honest label — this is the deterministic rule engine, not a Gemini
+        // analysis, so it must never claim to be AI-generated.
+        aiAnalysis: `تم ترشيح هذا المشروع بمعايير المطابقة الآلية بناءً على تخصصاتك (${provider.skills.slice(0, 3).join(', ')}) واختباراتك المعتمدة.`,
         createdAt: proj.createdAt || new Date(),
         deliveryDays: proj.deliveryDays || 7,
-        clientName: clientName || 'عميل موثوق'
+        clientName: clientName || 'عميل موثوق',
+        generationSource: 'DETERMINISTIC' as const
       };
     });
 
