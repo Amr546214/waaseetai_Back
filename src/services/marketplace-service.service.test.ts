@@ -276,3 +276,24 @@ test('getMarketplaceModels: no ClientProfile/AffiliateProfile data participates 
   // to read them would have thrown.
   assert.equal(result.models[0].provider.name, 'Provider Persona');
 });
+
+// --- Removed fake AI audit ---------------------------------------------------
+
+// Final AI cleanup batch: auditServiceWithAI() previously simulated an "AI
+// audit" with a fake `let score = 95` plus a fabricated 800ms latency and no
+// real analysis at all. Removed entirely along with its controller/route.
+// This guards against it silently reappearing.
+test('MarketplaceService: the removed fake auditServiceWithAI method must never reappear', async (t) => {
+  const { marketplaceService } = await loadService(t, []);
+  assert.equal((marketplaceService as any).auditServiceWithAI, undefined);
+});
+
+// Final AI cleanup batch: getCenterData() (behind the dead GET /center route,
+// zero frontend caller) fabricated a fake aiAnalysis feed, hardcoded
+// aiScore/aiClarityScore/aiFeasibilityScore fallbacks (85/88/85), and a
+// hardcoded `rating: 4.8` on every service. Removed entirely along with its
+// controller method and route.
+test('MarketplaceService: the removed dead getCenterData method (fake aiAnalysis/rating) must never reappear', async (t) => {
+  const { marketplaceService } = await loadService(t, []);
+  assert.equal((marketplaceService as any).getCenterData, undefined);
+});

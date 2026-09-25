@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { AiReviewService } from './ai-review.service';
-import { CompleteProjectDataDto, EnhanceDescriptionDto, SuggestTextDto, SuggestMilestonesDto } from './ai-review.dto';
+import { CompleteProjectDataDto, SuggestMilestonesDto } from './ai-review.dto';
 import { AppError } from '../../utils/app-error';
 
 export class AiReviewController {
@@ -9,46 +9,6 @@ export class AiReviewController {
   constructor() {
     this.service = new AiReviewService();
   }
-
-  enhanceDescription = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const dto: EnhanceDescriptionDto = req.body;
-      if (!dto.description && !dto.title) {
-        return next(new AppError('Title or description is required for enhancement', 400));
-      }
-
-      const enhancedText = await this.service.enhanceDescription({
-        title: dto.title || '',
-        description: dto.description || ''
-      });
-
-      res.status(200).json({
-        success: true,
-        message: 'Description enhanced successfully',
-        data: { text: enhancedText }
-      });
-    } catch (error) {
-      next(error);
-    }
-  };
-
-  suggestText = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const dto: SuggestTextDto = req.body;
-
-      const suggestion = await this.service.suggestText({
-        title: dto.title || ''
-      });
-
-      res.status(200).json({
-        success: true,
-        message: 'Text suggested successfully',
-        data: { text: suggestion }
-      });
-    } catch (error) {
-      next(error);
-    }
-  };
 
   suggestMilestones = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {

@@ -16,16 +16,6 @@ export class MarketplaceServiceController {
 		}
 	}
 
-	async auditWithAI(req: Request, res: Response) {
-		try {
-			// In a real application, ensure the user is authenticated here.
-			const result = await marketplaceService.auditServiceWithAI(req.body);
-			res.status(200).json(result);
-		} catch (error: any) {
-			res.status(400).json({ error: error.message });
-		}
-	}
-
 	async createService(req: Request, res: Response) {
 		try {
 			const userId = (req as any).user.id;
@@ -70,16 +60,6 @@ export class MarketplaceServiceController {
 			return res.status(200).json({ success: true, data: updated }) as any;
 		} catch (error: any) {
 			return res.status(400).json({ success: false, error: error.message }) as any;
-		}
-	}
-
-	async getCenter(req: Request, res: Response) {
-		try {
-			const userId = (req as any).user.id;
-			const data = await marketplaceService.getCenterData(userId, req.query);
-			res.status(200).json({ success: true, data });
-		} catch (error: any) {
-			res.status(400).json({ success: false, error: error.message });
 		}
 	}
 

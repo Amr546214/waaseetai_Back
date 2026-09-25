@@ -2,12 +2,11 @@ import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { GeminiErrorCode, GeminiProviderError } from '../../services/ai/gemini/gemini.errors';
 
-// ai-review.service.ts's constructor eagerly does
-// `new OpenAI({ apiKey: process.env.OPENAI_API_KEY })` for the dead HTTP
-// twins (enhanceDescription/suggestText), which stay on OpenAI in this
-// batch — same established pattern as other test files in this codebase for
-// the same reason. Has no effect on the F1a (Gemini) tests below.
-process.env.OPENAI_API_KEY = 'test-key';
+// Final AI cleanup batch: the dead HTTP twins (enhanceDescription/
+// suggestText) and the OpenAI client ai-review.service.ts only ever
+// constructed for their sake have been removed entirely — this file now
+// only tests the two live, Gemini-backed methods (suggestMilestones,
+// analyzeProjectModel).
 
 async function loadService(t: TestContext, opts: {
   generateStructured?: (prompt: string, options: any) => Promise<any>;
@@ -173,4 +172,13 @@ test('analyzeProjectModel: a malformed Gemini response (unrecognized marketFitRa
     () => service.analyzeProjectModel({ title: 'مشروع', description: 'وصف' }),
     (err: any) => { assert.equal(err.statusCode, 503); return true; }
   );
+});
+
+// ── removed dead HTTP twins ──────────────────────────────────────────────
+
+test('AiReviewService: the removed dead HTTP twins (enhanceDescription/suggestText) and their OpenAI client must never reappear', async (t) => {
+  const service = await loadService(t, {});
+  assert.equal((service as any).enhanceDescription, undefined);
+  assert.equal((service as any).suggestText, undefined);
+  assert.equal((service as any).openai, undefined);
 });

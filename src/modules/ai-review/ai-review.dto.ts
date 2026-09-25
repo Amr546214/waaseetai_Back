@@ -1,12 +1,3 @@
-export interface EnhanceDescriptionDto {
-  title: string;
-  description: string;
-}
-
-export interface SuggestTextDto {
-  title: string;
-}
-
 export interface SuggestMilestonesDto {
   title: string;
   description?: string;

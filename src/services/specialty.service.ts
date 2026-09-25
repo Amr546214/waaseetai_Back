@@ -278,48 +278,6 @@ class SpecialtyService {
     });
   }
 
-  async executeAiAudit(providerSpecialtyId: string) {
-    const scores = {
-      aiScore: 89.5,
-      feasibilityScore: 92.0,
-      clarityScore: 86.0,
-      ownershipCredibility: 91.0,
-    };
-
-    const aiFeedback = {
-      summary: 'تم التحقق من النماذج بنجاح عبر محرك Waseet AI. أظهر التدقيق الذكي تناغماً عالياً بين الأصول المرفوعة والتخصصات الدقيقة المختارة، مع ثبوت أصالة العمل من خلال الإثباتات السرية الداعمة.',
-      strengths: [
-        'جودة عالية في بنية التصميم وهندسة الملفات المرفوعة.',
-        'تطابق كامل بين الوصف الفني والمخرجات البصرية المقدمة.',
-        'موثوقية مؤكدة من خلال لقطات وبيانات التحقق الخلفية.'
-      ],
-      warnings: [
-        'يُفضل تضمين روابط حية (Live Demos) للمشاريع المستقبلية لتعزيز سرعة التدقيق.'
-      ],
-      corrections: []
-    };
-
-    const updated = await prisma.providerSpecialty.update({
-      where: { id: providerSpecialtyId },
-      data: {
-        aiScore: scores.aiScore,
-        feasibilityScore: scores.feasibilityScore,
-        clarityScore: scores.clarityScore,
-        ownershipCredibility: scores.ownershipCredibility,
-        aiFeedback: aiFeedback as any,
-        legalSignedAt: new Date(),
-        status: SpecialtyVerificationStatus.TEST_REQUIRED
-      }
-    });
-
-    return {
-      id: updated.id,
-      status: updated.status,
-      scores,
-      feedback: aiFeedback
-    };
-  }
-
   async getSpecialtyTest(specialtyId: string) {
     let test = await prisma.specialtyTest.findFirst({
       where: { specialtyId }

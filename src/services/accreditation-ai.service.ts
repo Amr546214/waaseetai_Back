@@ -372,21 +372,6 @@ export class AccreditationAiService {
     };
   }
 
-  /**
-   * Helper method for WebSocket Gateway compatibility
-   */
-  async processProofImage(proofFileId: string, specialtyName: string, onProgress: (progress: number) => void) {
-    onProgress(20);
-    onProgress(60);
-    onProgress(100);
-    return {
-      authenticityScore: 92,
-      qualityScore: 90,
-      verdict: 'APPROVED',
-      rationaleAr: `تم التحقق السريع بنجاح لتخصص ${specialtyName}`
-    };
-  }
-
   // ===== Admin: Accreditation Review =====
 
   async listAllSamples(status?: AccreditationStatus, page = 1, limit = 10) {

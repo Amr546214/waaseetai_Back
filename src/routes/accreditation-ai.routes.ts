@@ -22,7 +22,7 @@ const upload = memoryUpload({ fileSize: 15 * 1024 * 1024, files: 10, allowedMime
 
 /**
  * Primary Endpoint: POST /api/provider/accreditation/submit or /api/accreditation/submit
- * Submits work sample for technical accreditation & runs OpenAI GPT-4o evaluation
+ * Submits work sample for technical accreditation & runs a Gemini-backed evaluation
  */
 router.post('/submit', aiLimiter, upload.array('files', 10), async (req: Request, res: Response, next) => {
   try {

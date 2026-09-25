@@ -73,16 +73,6 @@ class SpecialtyController {
     }
   }
 
-  async audit(req: Request, res: Response) {
-    try {
-      const { providerSpecialtyId } = req.body;
-      const result = await specialtyService.executeAiAudit(providerSpecialtyId);
-      res.json({ success: true, data: result });
-    } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
-    }
-  }
-
   async getTest(req: Request, res: Response) {
     try {
       const { specialtyId } = req.params;

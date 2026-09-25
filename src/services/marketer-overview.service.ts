@@ -121,7 +121,13 @@ export class MarketerOverviewService {
   }
 
   /**
-   * 4. AI Insights Engine
+   * 4. Deterministic performance-insights engine — rule-based tips computed
+   * directly from the affiliate's real channel/referral data (no AI provider
+   * call). Kept as "AI Insights" in the route/method name for API
+   * compatibility with the frontend, but the frontend-facing label and
+   * fabricated "92% accuracy" badge that used to describe it as AI-driven
+   * timing/content analysis were removed (final AI cleanup batch) since no
+   * such analysis is actually performed.
    */
   async getAiInsights(userId: string) {
     const affiliate = await this.getOrCreateProfile(userId);

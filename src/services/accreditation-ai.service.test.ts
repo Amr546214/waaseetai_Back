@@ -219,3 +219,13 @@ test('evaluateAccreditationSample: throws when the specialty has not passed its 
   await assert.rejects(() => accreditationAiService.evaluateAccreditationSample(BASE_DTO));
   assert.equal(called, false);
 });
+
+// Final AI cleanup batch (F11): the dead proof-image socket handler this
+// service used to back (`processProofImage`, hardcoding
+// `authenticityScore: 92, qualityScore: 90, verdict: 'APPROVED'` on every
+// call with zero real evaluation) has been removed entirely, along with its
+// socket gateway. This guards against it silently reappearing.
+test('accreditationAiService: the removed fake processProofImage method (hardcoded 92/90/APPROVED) must never reappear', async (t) => {
+  const { accreditationAiService } = await loadService(t, {});
+  assert.equal((accreditationAiService as any).processProofImage, undefined);
+});

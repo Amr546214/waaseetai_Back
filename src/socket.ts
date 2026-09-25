@@ -6,7 +6,6 @@ import { registerChatGateway } from './sockets/chat.gateway';
 import { registerAiReviewGateway } from './sockets/ai-review.gateway';
 import { registerQuizSocketGateway } from './sockets/quiz.socket';
 import { registerAiAssistantGateway } from './sockets/ai-assistant.gateway';
-import { registerAccreditationAiGateway } from './sockets/accreditation-ai.gateway';
 import { registerAssessmentGateway } from './sockets/assessment.gateway';
 import { registerSetupTestGateway } from './sockets/setup-test.gateway';
 import { registerAvatarChatGateway } from './sockets/avatar-chat.gateway';
@@ -118,9 +117,6 @@ export const initSocketServer = (httpServer: HttpServer, allowedOrigins: string[
 
 		// Register Real-Time AI Assistant Gateway (Create Request description generator/refiner)
 		registerAiAssistantGateway(socket);
-
-		// Register Accreditation AI Gateway (Step 2: AI Vision proof review)
-		registerAccreditationAiGateway(socket);
 
 		// Register Real-Time AI Assessment & Multimodal 20-Question Streaming Gateway
 		registerAssessmentGateway(socket, io);

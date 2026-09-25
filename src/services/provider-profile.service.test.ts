@@ -483,7 +483,7 @@ function createSkillsPortfolioMockPrisma(t: TestContext) {
     firstName: 'Legacy',
     lastName: 'Name',
     avatarUrl: null,
-    ibanNumber: 'SA0000000000000000000011',
+    ibanNumber: 'SA5300000000000000000099',
     idDocumentUrl: 'https://cdn.example/id.pdf'
   };
 
@@ -795,11 +795,38 @@ async function loadServiceForSensitiveFlow(t: TestContext, opts: { throwOnRecomp
   return { providerProfileService, ...mocks };
 }
 
+// Security cleanup (A): the mod-97 IBAN checksum validator existed but its
+// call was commented out. It is now enabled for the modern BANKING flow — a
+// masked resubmission ("************1234", stripped later in
+// applySensitivePayload) is exempt, since it was never meant to be a real
+// IBAN value and rejecting it would break the legitimate "leave this field
+// unchanged" edit-form flow.
+test('initiateSensitiveChange (BANKING): rejects an IBAN that fails the mod-97 checksum', async (t) => {
+  const { providerProfileService } = await loadServiceForSensitiveFlow(t);
+
+  await assert.rejects(
+    () => providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
+      accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA0000000000000000000011'
+    }),
+    /INVALID_IBAN/
+  );
+});
+
+test('initiateSensitiveChange (BANKING): a masked ibanNumber ("************1234") is exempt from checksum validation', async (t) => {
+  const { providerProfileService } = await loadServiceForSensitiveFlow(t);
+
+  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
+    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: '************1234'
+  });
+
+  assert.ok(initiated.requestId);
+});
+
 test('initiateSensitiveChange (BANKING): does not recalculate completion at initiation time', async (t) => {
   const { providerProfileService, providerProfileUpdateSpy } = await loadServiceForSensitiveFlow(t);
 
   await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
-    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA0000000000000000000011'
+    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA5300000000000000000099'
   });
 
   const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
@@ -810,7 +837,7 @@ test('verifySensitiveChange (BANKING, pending human review): does not recalculat
   const { providerProfileService, providerProfileUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
 
   const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
-    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA0000000000000000000011'
+    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA5300000000000000000099'
   });
   const verified = await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
 
@@ -823,14 +850,14 @@ test('reviewSensitiveChange (BANKING, approved): recalculates completion after i
   const { providerProfileService, providerProfileUpdateSpy, userUpdateSpy, callOrder, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
 
   const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
-    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA0000000000000000000011'
+    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA5300000000000000000099'
   });
   await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
   await providerProfileService.reviewSensitiveChange(initiated.requestId, true);
 
   const ibanCommit = userUpdateSpy.mock.calls.find((c: any) => 'ibanNumber' in c.arguments[0].data);
   assert.notEqual(ibanCommit, undefined);
-  assert.equal(ibanCommit.arguments[0].data.ibanNumber, 'SA0000000000000000000011');
+  assert.equal(ibanCommit.arguments[0].data.ibanNumber, 'SA5300000000000000000099');
 
   const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
   assert.equal(completionCalls.length, 1);
@@ -895,7 +922,7 @@ test('reviewSensitiveChange (BANKING, approved): a completion-recompute failure 
   const { providerProfileService, userUpdateSpy, loggerErrorSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t, { throwOnRecompute: true });
 
   const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
-    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA0000000000000000000011'
+    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA5300000000000000000099'
   });
   await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
   const reviewed = await providerProfileService.reviewSensitiveChange(initiated.requestId, true);
@@ -910,7 +937,7 @@ test('reviewSensitiveChange (BANKING, approved): a completion-recompute failure 
   const loggedError = loggerErrorSpy.mock.calls[0].arguments;
   assert.match(String(loggedError[0]), /provider completion/i);
   // No IBAN/document values leaked into the log line itself.
-  assert.doesNotMatch(String(loggedError[0]), /SA0000000000000000000011/);
+  assert.doesNotMatch(String(loggedError[0]), /SA5300000000000000000099/);
 });
 
 // ============================================================================
@@ -1105,7 +1132,7 @@ test('reviewSensitiveChange: the legacy shape (category "PROFILE") and the moder
     fieldName: 'IBAN', fieldLabel: 'IBAN', requestedValue: VALID_TEST_IBAN
   });
   const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
-    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA0000000000000000000011'
+    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA5300000000000000000099'
   });
   await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
 
@@ -1115,14 +1142,14 @@ test('reviewSensitiveChange: the legacy shape (category "PROFILE") and the moder
   const ibanCommits = userUpdateSpy.mock.calls.filter((c: any) => 'ibanNumber' in c.arguments[0].data);
   assert.equal(ibanCommits.length, 2);
   assert.equal(ibanCommits[0].arguments[0].data.ibanNumber, VALID_TEST_IBAN);
-  assert.equal(ibanCommits[1].arguments[0].data.ibanNumber, 'SA0000000000000000000011');
+  assert.equal(ibanCommits[1].arguments[0].data.ibanNumber, 'SA5300000000000000000099');
 });
 
 test('regression: no ClientProfile/AffiliateProfile writes from any sensitive-change path', async (t) => {
   const { providerProfileService, clientUpsertSpy, affiliateUpsertSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
 
   const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
-    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA0000000000000000000011'
+    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA5300000000000000000099'
   });
   await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
   await providerProfileService.reviewSensitiveChange(initiated.requestId, true);

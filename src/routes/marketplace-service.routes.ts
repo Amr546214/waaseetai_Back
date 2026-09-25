@@ -20,9 +20,7 @@ router.use(
 
 // All routes here should be mounted under /api/provider/services
 router.get('/my-market-models', controller.getMyMarketModels.bind(controller));
-router.get('/center', controller.getCenter.bind(controller));
 router.get('/pre-data', controller.getPreData.bind(controller));
-router.post('/ai-audit', controller.auditWithAI.bind(controller));
 router.post('/upload-gallery', galleryUpload.array('attachments', 5), async (req, res, next) => {
 	try {
 		const files = (req.files as Express.Multer.File[]) || [];

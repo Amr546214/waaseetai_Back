@@ -92,39 +92,6 @@ export class MarketplaceService {
 	}
 
 	/**
-	 * Simulates an AI audit for the provided service data.
-	 */
-	async auditServiceWithAI(data: any) {
-		// In production, this would call OpenAI via Structured Outputs.
-		// Simulating a smart audit based on market standards.
-
-		let score = 95;
-		let feedback = [];
-
-		if (data.totalDays > 30) {
-			score -= 10;
-			feedback.push({ type: 'warning', message: 'Delivery time is higher than average for this specialty.' });
-		}
-
-		if (!data.portfolioItemId) {
-			score -= 15;
-			feedback.push({ type: 'improvement', message: 'Attaching a portfolio item increases credibility and acceptance rate by 35%.' });
-		}
-
-		// Simulate latency
-		await new Promise(resolve => setTimeout(resolve, 800));
-
-		return {
-			score: Math.max(0, score),
-			feedback,
-			marketComparison: {
-				priceRange: { min: 4200, max: 4800 },
-				daysRange: { min: 10, max: 18 }
-			}
-		};
-	}
-
-	/**
 	 * Creates a new ServiceCatalog and its related ServiceStages within a Prisma transaction.
 	 */
 	async createService(userId: string, data: any) {
@@ -397,109 +364,14 @@ export class MarketplaceService {
 		});
 	}
 
-	/**
-	 * Fetches the center dashboard data: KPIs, specialties breakdown, and filtered/sorted list of services.
-	 */
-	async getCenterData(userId: string, query: any) {
-		const { specialtyId, search, sortBy, status } = query;
-
-		// 1. Stats Aggregation
-		const services = await prisma.serviceCatalog.findMany({
-			where: { providerId: userId },
-			select: {
-				status: true,
-				viewsCount: true,
-				aiAuditScore: true,
-				salesCount: true
-			}
-		});
-
-		const approvedModelsCount = services.filter(s => s.status === 'APPROVED' || s.status === 'PUBLISHED').length;
-		const totalMonthlyViews = services.reduce((sum, s) => sum + s.viewsCount, 0);
-
-		// Average AI score for published models
-		const publishedWithScore = services.filter(s => (s.status === 'APPROVED' || s.status === 'PUBLISHED') && (s.aiAuditScore != null || (s as any).aiScore != null));
-		const avgAiScore = publishedWithScore.length > 0
-			? Math.round(publishedWithScore.reduce((sum, s) => sum + ((s as any).aiScore || s.aiAuditScore || 0), 0) / publishedWithScore.length)
-			: 0;
-
-		const incomingOffersCount = services.reduce((sum, s) => sum + s.salesCount, 0); // Reusing salesCount as proxy for offers
-
-		// 2. Base Query for Filtered Services
-		const whereClause: any = { providerId: userId };
-
-		if (specialtyId && specialtyId !== 'all') {
-			whereClause.specialtyId = specialtyId;
-		}
-
-		if (search) {
-			whereClause.title = { contains: search, mode: 'insensitive' };
-		}
-
-		if (status) {
-			whereClause.status = status;
-		}
-
-		let orderByClause: any = { createdAt: 'desc' };
-		if (sortBy === 'views') {
-			orderByClause = { viewsCount: 'desc' };
-		} else if (sortBy === 'aiScore') {
-			orderByClause = { aiAuditScore: 'desc' };
-		}
-
-		const filteredServices = await prisma.serviceCatalog.findMany({
-			where: whereClause,
-			orderBy: orderByClause,
-			include: {
-				specialty: true
-			}
-		});
-
-		// Dummy array of specialties for UI filter tabs (Could be aggregated dynamically)
-		const specialties = [
-			{ id: 'all', name: 'الكل', count: services.length },
-			{ id: 'design', name: 'تصميم جرافيك', count: services.filter(s => s.status === 'APPROVED').length },
-			{ id: 'web', name: 'تطوير ويب', count: 0 },
-			{ id: 'content', name: 'كتابة محتوى', count: 0 }
-		];
-
-		// Format output
-		const formattedServices = filteredServices.map(s => {
-			// Mock some AI feedback for visual completeness based on score
-			const aiAnalysis = [];
-			aiAnalysis.push({ text: 'تحليل الذكاء الاصطناعي', type: 'info' });
-			if (s.aiAuditScore && s.aiAuditScore >= 90) {
-				aiAnalysis.push({ text: 'إكتمال متطلبات النموذج', type: 'success' });
-			} else {
-				aiAnalysis.push({ text: 'ينصح بإضافة أمثلة أكثر', type: 'warning' });
-			}
-
-			return {
-				id: s.id,
-				title: s.title,
-				category: s.specialty?.name || 'عام',
-				status: s.status,
-				aiScore: (s as any).aiScore || s.aiAuditScore || 85,
-				aiClarityScore: (s as any).aiClarityScore || 88,
-				aiFeasibilityScore: (s as any).aiFeasibilityScore || 85,
-				aiReviewSummary: (s as any).aiReviewSummary || '',
-				aiAnalysis,
-				rating: 4.8, // Mock rating
-				viewsCount: s.viewsCount
-			};
-		});
-
-		return {
-			stats: {
-				approvedModelsCount,
-				totalMonthlyViews,
-				avgAiScore,
-				incomingOffersCount
-			},
-			specialties,
-			services: formattedServices
-		};
-	}
+	// Final AI cleanup batch: getCenterData() (backing the GET /center route)
+	// fabricated a fake aiAnalysis feed, a hardcoded aiScore/aiClarityScore/
+	// aiFeasibilityScore fallback (85/88/85) regardless of the real value, and
+	// a hardcoded `rating: 4.8` on every service — with zero frontend caller
+	// (the real "مركز النماذج" page, center.ts, reads real accreditation
+	// sample data instead; the frontend's own getCenterData() wrapper had no
+	// callers anywhere). Removed entirely along with its controller/route/
+	// frontend wrapper.
 
 	/**
 	 * Fetches published models strictly for the Marketplace with filtering & pagination

@@ -1868,9 +1868,13 @@ model AccreditationProofFile {
   fileName String
   fileSize Int?
 
-  // Stored AI Vision Evaluation Per Image
-  aiAuthenticityScore    Float? // Real score from GPT-4o Vision
-  aiDetectedQualityScore Float? // Quality rating
+  // Stored AI Vision Evaluation Per Image — currently unused/dead columns
+  // (no code in src/ reads or writes them; the live accreditation evaluation
+  // path persists its Gemini-backed result on AccreditationSample instead,
+  // see aiScore/aiQualityRating/aiFeedbackAr below). Kept as-is per the
+  // no-schema-migration constraint.
+  aiAuthenticityScore    Float?
+  aiDetectedQualityScore Float?
   aiTechnicalAnalysis    Json? // Breakdown (extracted stack, visual polish, copyright checks)
 
   createdAt DateTime @default(now())

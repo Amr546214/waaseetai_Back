@@ -804,7 +804,14 @@ Average Rating: ${reviewsCount > 0 ? (gamification?.avgRating || profile.rating 
 			normalized.ibanNumber = String(normalized.ibanNumber || '').replace(/\s/g, '').toUpperCase();
 			if (String(normalized.accountHolderName).length < 3) throw new Error('INVALID_ACCOUNT_HOLDER');
 			if (!normalized.bankName) throw new Error('INVALID_BANK_NAME');
-			//   if (!this.isValidIban(String(normalized.ibanNumber))) throw new Error('INVALID_IBAN');
+			// Security cleanup: the checksum validator existed but was never
+			// enabled. A masked resubmission (e.g. "************1234", sent back
+			// unchanged by the edit form) is intentionally exempt — it's stripped
+			// later in applySensitivePayload and was never meant to be a real
+			// IBAN value — checksum-validating it would reject a legitimate
+			// "leave this field unchanged" resubmission.
+			const isMaskedValue = String(normalized.ibanNumber).includes('*');
+			if (!isMaskedValue && !this.isValidIban(String(normalized.ibanNumber))) throw new Error('INVALID_IBAN');
 		}
 		if (category === 'DOCUMENTS') {
 			if (!normalized.idDocumentUrl) throw new Error('ID_DOCUMENT_REQUIRED');

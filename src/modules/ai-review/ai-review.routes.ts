@@ -14,12 +14,6 @@ router.use(
   aiLimiter
 );
 
-// POST /api/ai-review/enhance-description
-router.post('/enhance-description', controller.enhanceDescription);
-
-// POST /api/ai-review/suggest-text
-router.post('/suggest-text', controller.suggestText);
-
 // POST /api/ai-review/suggest-milestones
 router.post('/suggest-milestones', controller.suggestMilestones);
 

@@ -4,7 +4,7 @@ import { authenticate, requireActiveUser } from '../middlewares/auth.middleware'
 
 const router = Router();
 
-// GET /api/provider/ai-matching-projects -> Top 3 matching projects powered by OpenAI
+// GET /api/provider/ai-matching-projects -> Top 3 matching projects powered by Gemini
 router.get(
   '/ai-matching-projects',
   authenticate,
