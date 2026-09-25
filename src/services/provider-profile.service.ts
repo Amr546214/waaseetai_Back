@@ -927,7 +927,17 @@ Average Rating: ${reviewsCount > 0 ? (gamification?.avgRating || profile.rating 
 		const request = await prisma.profileModificationRequest.findUnique({ where: { id: requestId } });
 		if (!request || request.status !== 'PENDING_HUMAN_REVIEW') throw new Error('REQUEST_NOT_PENDING_REVIEW');
 		const metadata = (request.metadata || {}) as any;
-		if (approved) await this.applySensitivePayload(request.providerId, request.category, metadata.changes || {});
+		if (approved) {
+			// `category` distinguishes the modern OTP-verified request shape
+			// (CONTACT/BANKING/DOCUMENTS, metadata.changes) from the legacy
+			// createModificationRequest() shape (Prisma's own schema default,
+			// "PROFILE" — never explicitly set by that path).
+			if (request.category === 'PROFILE') {
+				await this.applyLegacyFieldModification(request.providerId, request.fieldName, request.requestedValue);
+			} else {
+				await this.applySensitivePayload(request.providerId, request.category, metadata.changes || {});
+			}
+		}
 		const updated = await prisma.profileModificationRequest.update({
 			where: { id: request.id },
 			data: {
@@ -1030,72 +1040,107 @@ Average Rating: ${reviewsCount > 0 ? (gamification?.avgRating || profile.rating 
 		};
 	}
 
-	async createModificationRequest(providerId: string, data: { fieldName: string, fieldLabel: string, requestedValue: string }) {
-		// Determine current value
-		let currentValue = null;
-		const user = await prisma.user.findUnique({ where: { id: providerId }, include: { providerProfile: true } });
+	// Security follow-up (see the dedicated security batch report): this
+	// legacy request path previously computed a fake `aiConfidence` via
+	// `85 + Math.random() * 10` and auto-APPROVED — immediately mutating
+	// User.email/phoneNumber/ibanNumber/idNumber — whenever that random
+	// roll exceeded 92, with zero real identity/ownership verification.
+	// It has no live frontend caller (superseded by the OTP-verified
+	// initiateSensitiveChange/verifySensitiveChange flow for EMAIL,
+	// PHONE_NUMBER, and IBAN — see sensitiveConfig), so it is retained only
+	// for backward compatibility with any existing PENDING_HUMAN_REVIEW
+	// rows and made to always require genuine human review: it never
+	// auto-approves and never mutates User data itself. The actual
+	// mutation now only happens via reviewSensitiveChange() (admin-only,
+	// see applyLegacyFieldModification below) — the same real-approval
+	// gate BANKING/DOCUMENTS sensitive changes already use.
+	private static readonly LEGACY_MODIFICATION_FIELDS = ['EMAIL', 'PHONE_NUMBER', 'IBAN', 'NATIONAL_ID'] as const;
 
-		if (user) {
-			if (['EMAIL', 'PHONE_NUMBER', 'IBAN', 'NATIONAL_ID'].includes(data.fieldName)) {
-				if (data.fieldName === 'EMAIL') currentValue = user.email;
-				if (data.fieldName === 'PHONE_NUMBER') currentValue = user.phoneNumber;
-				if (data.fieldName === 'IBAN') currentValue = user.ibanNumber;
-				if (data.fieldName === 'NATIONAL_ID') currentValue = user.idNumber;
-			}
+	async createModificationRequest(providerId: string, data: { fieldName: string, fieldLabel: string, requestedValue: string }) {
+		if (!(ProviderProfileService.LEGACY_MODIFICATION_FIELDS as readonly string[]).includes(data.fieldName)) {
+			throw new Error(`Unsupported fieldName: ${data.fieldName}`);
+		}
+		const requestedValue = String(data.requestedValue || '').trim();
+		if (!requestedValue) throw new Error('requestedValue is required');
+
+		// Deterministic format validation only — NOT ownership/identity
+		// verification. Reuses the exact same rules already applied to the
+		// live sensitive-change flow (see normalizeAndValidateSensitiveChanges/
+		// isValidIban) rather than inventing new ones. NATIONAL_ID has no
+		// established format validator anywhere in this codebase, so none is
+		// added here — documented as a known limitation, not silently assumed.
+		if (data.fieldName === 'EMAIL' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requestedValue)) {
+			throw new Error('INVALID_EMAIL');
+		}
+		if (data.fieldName === 'PHONE_NUMBER' && !/^\+?\d{8,15}$/.test(requestedValue)) {
+			throw new Error('INVALID_PHONE');
+		}
+		if (data.fieldName === 'IBAN' && !this.isValidIban(requestedValue.replace(/\s/g, '').toUpperCase())) {
+			throw new Error('INVALID_IBAN');
 		}
 
-		// Mock AI check
-		const aiConfidence = 85 + Math.random() * 10;
-		const aiAuditStatus = aiConfidence > 92 ? 'PASSED' : 'NEEDS_HUMAN_REVIEW';
-		const status = aiAuditStatus === 'PASSED' ? 'APPROVED' : 'PENDING_HUMAN_REVIEW';
+		// Determine current value
+		let currentValue = null;
+		const user = await prisma.user.findUnique({ where: { id: providerId } });
+		if (!user) throw new Error('User not found');
 
-		let aiRecommendation = '';
-		if (aiAuditStatus === 'PASSED') aiRecommendation = 'تحقق الذكاء من تطابق المعلومات مع المعايير المطلوبة.';
-		else aiRecommendation = 'يتطلب مراجعة بشرية للتحقق من المرفقات.';
+		if (data.fieldName === 'EMAIL') currentValue = user.email;
+		if (data.fieldName === 'PHONE_NUMBER') currentValue = user.phoneNumber;
+		if (data.fieldName === 'IBAN') currentValue = user.ibanNumber;
+		if (data.fieldName === 'NATIONAL_ID') currentValue = user.idNumber;
 
-		const request = await prisma.profileModificationRequest.create({
+		// Honest state: no AI evaluation happens here at all, so the AI
+		// audit fields are left genuinely null rather than fabricated —
+		// never a substitute for real verification. Status is always
+		// PENDING_HUMAN_REVIEW; only a real admin action (reviewSensitiveChange)
+		// can ever apply this change.
+		return prisma.profileModificationRequest.create({
 			data: {
 				providerId,
+				// Explicit, not relied on as an implicit Prisma schema default —
+				// this is exactly what reviewSensitiveChange() checks for to
+				// route this request through applyLegacyFieldModification()
+				// instead of the modern CONTACT/BANKING/DOCUMENTS apply path.
+				category: 'PROFILE',
 				fieldName: data.fieldName,
 				fieldLabel: data.fieldLabel,
 				currentValue,
-				requestedValue: data.requestedValue,
-				status,
-				aiConfidence,
-				aiAuditStatus,
-				aiRecommendation,
+				requestedValue,
+				status: 'PENDING_HUMAN_REVIEW'
 			}
 		});
+	}
 
-		// Automatically apply if approved
-		if (status === 'APPROVED' && user) {
-			const updateData: any = {};
-			if (data.fieldName === 'EMAIL') updateData.email = data.requestedValue;
-			if (data.fieldName === 'PHONE_NUMBER') updateData.phoneNumber = data.requestedValue;
-			if (data.fieldName === 'IBAN') updateData.ibanNumber = data.requestedValue;
-			if (data.fieldName === 'NATIONAL_ID') updateData.idNumber = data.requestedValue;
+	/**
+	 * Applies an admin-approved legacy modification request (see
+	 * createModificationRequest above) — the counterpart to
+	 * applySensitivePayload() for the pre-OTP request shape (no `category`/
+	 * `metadata.changes`). Only ever called from reviewSensitiveChange()
+	 * after a real admin has approved the request; never invoked on
+	 * creation.
+	 */
+	private async applyLegacyFieldModification(providerId: string, fieldName: string, requestedValue: string): Promise<void> {
+		const updateData: Record<string, unknown> = {};
+		if (fieldName === 'EMAIL') updateData.email = requestedValue;
+		if (fieldName === 'PHONE_NUMBER') updateData.phoneNumber = requestedValue;
+		if (fieldName === 'IBAN') updateData.ibanNumber = requestedValue;
+		if (fieldName === 'NATIONAL_ID') updateData.idNumber = requestedValue;
+		if (Object.keys(updateData).length === 0) return;
 
-			if (Object.keys(updateData).length > 0) {
-				await prisma.user.update({ where: { id: providerId }, data: updateData });
+		await prisma.user.update({ where: { id: providerId }, data: updateData });
 
-				// Phase 3D.2B: this legacy auto-apply flow is a second,
-				// independent commit path for User.ibanNumber (separate from
-				// applySensitivePayload above) — the only field here the
-				// provider formula scores. Same best-effort discipline: the
-				// User write above has already committed, so a recompute
-				// failure is logged and swallowed, never allowed to turn this
-				// already-successful approval into a failure.
-				if ('ibanNumber' in updateData) {
-					try {
-						await this.recalculateProviderCompletion(providerId);
-					} catch (error) {
-						logger.error(`[ProviderProfileService] Failed to recalculate provider completion after an approved legacy IBAN modification request (userId=${providerId})`, error);
-					}
-				}
+		// Phase 3D.2B (preserved): IBAN is the only field here the provider
+		// completion formula scores. The User write above has already
+		// committed, so a recompute failure is logged and swallowed, never
+		// allowed to turn this already-successful admin approval into a
+		// failure.
+		if ('ibanNumber' in updateData) {
+			try {
+				await this.recalculateProviderCompletion(providerId);
+			} catch (error) {
+				logger.error(`[ProviderProfileService] Failed to recalculate provider completion after an approved legacy IBAN modification request (userId=${providerId})`, error);
 			}
 		}
-
-		return request;
 	}
 
 	async cancelModificationRequest(requestId: string, providerId: string) {
