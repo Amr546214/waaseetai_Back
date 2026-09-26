@@ -154,7 +154,10 @@ export class AiReviewService {
         responseSchema: MILESTONES_SCHEMA,
         validate: isValidMilestonesPayload,
         temperature: 0.5,
-        maxOutputTokens: 800
+        // Live-Gemini testing found 800 truncated this array-of-3-to-4
+        // objects response once gemini-flash-latest's variable
+        // reasoning-token overhead is accounted for. Raised with headroom.
+        maxOutputTokens: 1400
       });
 
       const milestones: SuggestedMilestone[] = result.data.milestones.map((m) => ({

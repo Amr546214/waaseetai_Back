@@ -89,6 +89,21 @@ test('setup_test:init — a real validated Gemini result of exactly 15 questions
   assert.equal(readyEvent!.payload.totalQuestions, SETUP_TEST_QUESTION_COUNT);
 });
 
+test('setup_test:init — passes an explicit, defined positive maxOutputTokens (previously unbounded)', async (t) => {
+  const { register } = await loadGateway(t, {
+    generateStructured: async (_prompt, options) => {
+      assert.equal(typeof options.maxOutputTokens, 'number');
+      assert.ok(Number.isFinite(options.maxOutputTokens) && options.maxOutputTokens > 0, 'maxOutputTokens must be a defined positive number');
+      const valid = { questions: validQuestions() };
+      return { data: valid, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+    }
+  });
+  const { socket, handlers } = createMockSocket();
+  register(socket);
+
+  await handlers['setup_test:init']({ token: signToken({ userId: 'user-1' }) });
+});
+
 // ── auth failures ──────────────────────────────────────────────────────────
 
 test('setup_test:init — an invalid/expired token is rejected with an honest error, never a fake test', async (t) => {

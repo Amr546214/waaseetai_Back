@@ -139,7 +139,12 @@ export const analyzeProjectForProvider = async (req: Request, res: Response): Pr
 					systemInstruction: systemPrompt,
 					responseSchema: PROJECT_ANALYSIS_SCHEMA,
 					validate: isValidProjectAnalysis,
-					temperature: 0.7
+					temperature: 0.7,
+					// Previously unbounded (no maxOutputTokens at all). Sized for the
+					// real 7-field contract above (a short summary/rationale per
+					// field plus a 3-item strategy array), with headroom for
+					// gemini-flash-latest's variable reasoning-token overhead.
+					maxOutputTokens: 2048
 				}
 			);
 			analysis = result.data;

@@ -629,7 +629,12 @@ export class ProjectProgressService {
         responseSchema: DELIVERY_AI_REVIEW_SCHEMA,
         validate: isValidDeliveryAiReviewContent,
         temperature: 0.3,
-        maxOutputTokens: 700,
+        // Live-Gemini testing found 700 truncated this 4-field response
+        // (a bounded summary plus 3 bounded string arrays — see the schema/
+        // validator above) before it reached the honest validator, once
+        // gemini-flash-latest's variable reasoning-token overhead is
+        // accounted for. Raised with headroom for the full contract.
+        maxOutputTokens: 2000,
         timeoutMs: 25 * 1000
       });
       content = result.data;

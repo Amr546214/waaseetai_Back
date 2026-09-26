@@ -96,6 +96,24 @@ test('analyzeProjectForProvider: a real validated Gemini success is returned as-
   assert.deepEqual(updateSpy.mock.calls[0].arguments[0], { where: { id: 'project-1' }, data: { aiAnalysis: analysis } });
 });
 
+test('analyzeProjectForProvider: passes an explicit, defined positive maxOutputTokens (previously unbounded)', async (t) => {
+  const analysis = validAnalysisFixture();
+  const { analyzeProjectForProvider } = await loadController(t, {
+    generateStructured: async (_prompt, options) => {
+      assert.equal(typeof options.maxOutputTokens, 'number');
+      assert.ok(Number.isFinite(options.maxOutputTokens) && options.maxOutputTokens > 0, 'maxOutputTokens must be a defined positive number');
+      return { data: analysis, usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 } };
+    }
+  });
+
+  const req: any = { params: { projectId: 'project-1' }, user: { userId: 'provider-1' } };
+  const res = createMockRes();
+
+  await analyzeProjectForProvider(req, res);
+
+  assert.equal(res.statusCode, 200);
+});
+
 test('analyzeProjectForProvider: Gemini unavailable returns an honest 503 with no fabricated data, and never writes aiAnalysis', async (t) => {
   const { analyzeProjectForProvider, updateSpy } = await loadController(t, {
     generateStructured: async () => {

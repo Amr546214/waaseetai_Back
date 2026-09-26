@@ -66,6 +66,20 @@ test('suggestMilestones: percentages not summing to exactly 100 are corrected on
   assert.equal(result[1].percentage, 60);
 });
 
+test('suggestMilestones: passes an explicit, non-truncating maxOutputTokens (live-Gemini truncation regression)', async (t) => {
+  const fixture = validMilestonesFixture();
+  const service = await loadService(t, {
+    generateStructured: async (_prompt, options) => {
+      assert.equal(typeof options.maxOutputTokens, 'number');
+      assert.ok(options.maxOutputTokens > 0, 'maxOutputTokens must be a defined positive number');
+      assert.ok(options.maxOutputTokens >= 1400, 'must retain enough headroom to avoid the observed live truncation at 800');
+      return { data: fixture, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+    }
+  });
+
+  await service.suggestMilestones({ title: 'مشروع', description: 'وصف' });
+});
+
 test('suggestMilestones: Gemini unavailable throws an AppError(503) instead of a domain-keyword-matched fallback', async (t) => {
   const service = await loadService(t, {
     generateStructured: async () => { throw new GeminiProviderError(GeminiErrorCode.PROVIDER_UNAVAILABLE, 'unavailable'); }

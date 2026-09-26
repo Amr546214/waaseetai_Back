@@ -234,7 +234,12 @@ export class AiAssessmentService {
         responseSchema: FEEDBACK_SCHEMA,
         validate: isValidFeedback,
         temperature: 0.3,
-        maxOutputTokens: 500
+        // Live-Gemini testing found 500 truncated this feedbackAr +
+        // strengths[] + weaknesses[] response once gemini-flash-latest's
+        // variable reasoning-token overhead is accounted for. Raised with
+        // headroom (kept in sync with the socket twin in
+        // sockets/assessment.gateway.ts).
+        maxOutputTokens: 1000
       });
 
       feedbackAr = result.data.feedbackAr;

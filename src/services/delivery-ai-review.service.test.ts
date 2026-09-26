@@ -237,6 +237,19 @@ test('getDeliveryAiReview: client-supplied extra fields cannot inject fake requi
   await service.getDeliveryAiReview('client-1', 'contract-1', 'stage-1');
 });
 
+test('getDeliveryAiReview: passes an explicit, non-truncating maxOutputTokens (live-Gemini truncation regression)', async t => {
+  const review = validReviewFixture();
+  const { service } = await loadService(t, {
+    generateStructured: async (_prompt: string, options: any) => {
+      assert.equal(typeof options.maxOutputTokens, 'number');
+      assert.ok(options.maxOutputTokens > 0, 'maxOutputTokens must be a defined positive number');
+      assert.ok(options.maxOutputTokens >= 2000, 'must retain enough headroom to avoid the observed live truncation at 700');
+      return { data: review };
+    },
+  });
+  await service.getDeliveryAiReview('client-1', 'contract-1', 'stage-1');
+});
+
 test('getDeliveryAiReview: file entries reach the prompt as metadata only, never claiming inspected content', async t => {
   const review = validReviewFixture();
   const { service } = await loadService(t, {

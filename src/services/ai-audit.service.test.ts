@@ -89,6 +89,28 @@ test('executeAuditSync: a real validated Gemini audit is persisted with its real
   assert.equal(updateSpy.mock.calls[0].arguments[0].data.status, 'PUBLISHED');
 });
 
+// ── safety: Gemini's verdict is advisory only, never gates the transition ──
+
+test('executeAuditSync: a real Gemini REJECTION (isApproved:false, low score) still publishes — the status transition never reads isApproved', async (t) => {
+  const rejected = validAuditFixture({ overallScore: 15, isApproved: false, decisionSummary: 'رفض حقيقي من Gemini' });
+  const { aiAuditService, updateSpy } = await loadService(t, {
+    generateStructured: async (_prompt, options) => {
+      assert.equal(options.validate(rejected), true, 'the real validator must accept a well-formed rejection too');
+      return { data: rejected, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+    }
+  });
+
+  const result = await aiAuditService.executeAuditSync('service-1', 'provider-1');
+
+  // A negative Gemini verdict, by itself, cannot change the authoritative
+  // publish status — only the existing app-level workflow (always-publish,
+  // advisory-only audit) decides that, exactly as it does for an approval.
+  assert.equal(result.status, 'PUBLISHED');
+  assert.equal(result.auditResult.isApproved, false);
+  assert.equal(updateSpy.mock.calls[0].arguments[0].data.status, 'PUBLISHED');
+  assert.equal(updateSpy.mock.calls[0].arguments[0].data.aiScore, 15);
+});
+
 // ── Gemini failure / malformed output → honest manual-review default, never a fabricated score ──
 
 test('executeAuditSync: Gemini unavailable persists the honest zero-score manual-review default, never a fake score, but still publishes (advisory-only audit)', async (t) => {

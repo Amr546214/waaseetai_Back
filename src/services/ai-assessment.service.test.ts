@@ -167,6 +167,21 @@ test('submitAssessment: Gemini feedback failure falls back to the deterministic 
   assert.match(result.feedbackAr, /ممتاز/);
 });
 
+test('submitAssessment: passes an explicit, non-truncating maxOutputTokens (live-Gemini truncation regression)', async (t) => {
+  const feedback = { feedbackAr: 'ملاحظة حقيقية', strengths: ['قوة'], weaknesses: [] };
+  const { aiAssessmentService } = await loadService(t, {
+    attempt: attemptFixture(),
+    generateStructured: async (_prompt, options) => {
+      assert.equal(typeof options.maxOutputTokens, 'number');
+      assert.ok(options.maxOutputTokens > 0, 'maxOutputTokens must be a defined positive number');
+      assert.ok(options.maxOutputTokens >= 1000, 'must retain enough headroom to avoid the observed live truncation at 500');
+      return { data: feedback, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+    }
+  });
+
+  await aiAssessmentService.submitAssessment('attempt-1', { '1': 'b', '2': 'b', '3': 'b', '4': 'b' }, 'user-1');
+});
+
 test('submitAssessment: throws when the attempt does not belong to the calling user', async (t) => {
   const { aiAssessmentService } = await loadService(t, { attempt: attemptFixture({ providerSpecialty: { ...attemptFixture().providerSpecialty, providerProfile: { userId: 'someone-else' } } }) });
 

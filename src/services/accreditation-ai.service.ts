@@ -115,6 +115,15 @@ export class AccreditationAiService {
       throw new Error('التخصص غير مرتبط بحساب مقدم الخدمة');
     }
 
+    // Safety re-audit: this `isPassed` check is the deterministic
+    // credential gate — it is a real quiz-score outcome from
+    // ai-assessment.service.ts/assessment.gateway.ts, never derived from
+    // Gemini's own judgment. It is what actually stands between a single
+    // Gemini vision call below and a binding ProviderSpecialty credential:
+    // no accreditation sample (and therefore no possible AI_VERIFIED
+    // upgrade) can be evaluated for a specialty that hasn't already
+    // deterministically passed. See the "credential auto-grant boundary"
+    // tests in accreditation-ai.service.test.ts.
     if (!providerSpecialty.isActive || !providerSpecialty.isPassed) {
       throw new Error('يجب اجتياز الاختبار الفني قبل رفع نموذج الاعتماد');
     }

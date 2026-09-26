@@ -118,6 +118,21 @@ test('ai:generate_description: validation success followed by a successful order
   assert.equal(complete.payload.status, 'success');
 });
 
+test('ai:generate_description: the title-validation stage passes an explicit, non-truncating maxOutputTokens (live-Gemini truncation regression)', async (t) => {
+  const register = await loadGateway(t, {
+    generateStructured: async (_prompt, options) => {
+      assert.equal(typeof options.maxOutputTokens, 'number');
+      assert.ok(options.maxOutputTokens > 0, 'maxOutputTokens must be a defined positive number');
+      assert.ok(options.maxOutputTokens >= 500, 'must retain enough headroom to avoid the observed live truncation at 250');
+      return { data: VALID_VALIDATION, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+    }
+  });
+  const { socket, handlers } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['ai:generate_description'](VALID_PAYLOAD);
+});
+
 // ── validation rejection behavior ─────────────────────────────────────────
 
 test('ai:generate_description: a validation result that fails isMeaningful/isAligned/confidence rejects before streaming, with no chunks emitted', async (t) => {

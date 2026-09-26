@@ -120,6 +120,48 @@ test('evaluateSpecialtyWithAI: a genuine validated success with a fetchable imag
   assert.equal(auditLogArgs.totalTokens, 800);
 });
 
+// ── safety re-audit: credential auto-grant boundary ─────────────────────────
+//
+// evaluateSpecialtyWithAI is the FIRST of two required stages — even a
+// perfect Gemini score only ever writes SpecialtyVerificationStatus.
+// TEST_REQUIRED (never APPROVED), so a single Gemini call can grant
+// eligibility for the real, deterministic assessment quiz
+// (ai-assessment.service.ts / assessment.gateway.ts, scored by real answer
+// matching) but never the binding APPROVED/isPassed credential itself.
+
+test('evaluateSpecialtyWithAI: even a maximal Gemini score only ever grants TEST_REQUIRED eligibility, never the binding APPROVED credential by itself (requirement 1)', async (t) => {
+  const perfectEvaluation = validEvaluationFixture({ aiScore: 100, feasibilityScore: 100, clarityScore: 100, ownershipCredibility: 100, isEligibleForTesting: true });
+  const { evaluateSpecialtyWithAI, updateSpy } = await loadController(t, {
+    generateStructuredWithImage: async () => ({ data: perfectEvaluation, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } })
+  });
+
+  const req: any = { params: { id: 'spec-1' } };
+  const res = createMockRes();
+  await evaluateSpecialtyWithAI(req, res);
+
+  const scoreWriteCall = updateSpy.mock.calls[1].arguments[0];
+  assert.equal(scoreWriteCall.data.status, 'TEST_REQUIRED');
+  assert.notEqual(scoreWriteCall.data.status, 'APPROVED');
+  assert.equal('isPassed' in scoreWriteCall.data, false, 'this stage never writes the isPassed credential field');
+});
+
+test('evaluateSpecialtyWithAI: a below-threshold Gemini result sets REJECTED only — no lockout, no isPassed downgrade, no unrelated punitive action (requirement 2)', async (t) => {
+  const failing = validEvaluationFixture({ aiScore: 30, ownershipCredibility: 20, isEligibleForTesting: false });
+  const { evaluateSpecialtyWithAI, updateSpy } = await loadController(t, {
+    generateStructuredWithImage: async () => ({ data: failing, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } })
+  });
+
+  const req: any = { params: { id: 'spec-1' } };
+  const res = createMockRes();
+  await evaluateSpecialtyWithAI(req, res);
+
+  assert.equal(res.statusCode, 200);
+  const scoreWriteCall = updateSpy.mock.calls[1].arguments[0];
+  assert.equal(scoreWriteCall.data.status, 'REJECTED');
+  assert.equal('lockoutUntil' in scoreWriteCall.data, false, 'a single failed vision evaluation must never itself lock the account out — only the separate quiz-attempt anti-cheat path (quiz.controller.ts/quiz.socket.ts) can do that');
+  assert.equal('isPassed' in scoreWriteCall.data, false);
+});
+
 test('evaluateSpecialtyWithAI: an unfetchable image is skipped (best-effort) and evaluation proceeds text-only', async (t) => {
   const evaluation = validEvaluationFixture();
   let structuredCalled = false;

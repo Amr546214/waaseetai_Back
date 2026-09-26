@@ -179,6 +179,16 @@ Confidential Supporting Proof count: ${sample.proofs.length}`);
     const isCredibilityPassed = evalResult.ownershipCredibility >= OWNERSHIP_CREDIBILITY_THRESHOLD;
     const finalApproved = isAiScorePassed && isCredibilityPassed;
 
+    // Safety re-audit: a passing Gemini vision score here only ever unlocks
+    // TEST_REQUIRED (eligibility to attempt the real, deterministic
+    // assessment quiz in ai-assessment.service.ts/assessment.gateway.ts,
+    // scored by actual answer matching) — never APPROVED/isPassed directly.
+    // A failing score only sets REJECTED (resubmittable) with no lockout or
+    // other punitive write; account-level lockout is a wholly separate,
+    // unrelated mechanism (quiz.controller.ts/quiz.socket.ts anti-cheat).
+    // So a single Gemini call here can neither grant the binding credential
+    // nor punish the provider beyond this one evaluation. See the
+    // "credential auto-grant boundary" tests in specialty-ai.controller.test.ts.
     const targetStatus: SpecialtyVerificationStatus = finalApproved
       ? SpecialtyVerificationStatus.TEST_REQUIRED
       : SpecialtyVerificationStatus.REJECTED;

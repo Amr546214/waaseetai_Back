@@ -202,7 +202,10 @@ export class AiAssistantGateway {
       responseSchema: TITLE_VALIDATION_SCHEMA,
       validate: isValidTitleValidationResult,
       temperature: 0,
-      maxOutputTokens: 250,
+      // Live-Gemini testing found 250 truncated this small 4-field response
+      // — gemini-flash-latest's variable reasoning-token overhead alone can
+      // exceed that for even a single short sentence. Raised with headroom.
+      maxOutputTokens: 500,
       signal
     });
 

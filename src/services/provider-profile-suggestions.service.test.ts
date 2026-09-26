@@ -69,6 +69,14 @@ test('bio: insufficient input rejected before generation', async t => {
   assert.equal(x.prompts.length, 0);
 });
 
+// Live Gemini testing found maxOutputTokens:400 truncated bio JSON mid-string
+// on gemini-flash-latest; bumped to 800 for reasoning-token headroom.
+test('bio: production call site uses a bounded, non-truncating maxOutputTokens', async t => {
+  const x = await load(t);
+  await x.service.suggestBio('authenticated-provider', { jobTitle: 'مطور' } as any);
+  assert.equal(x.prompts[0].options.maxOutputTokens, 800);
+});
+
 for (const method of ['suggestBio', 'suggestSkills'] as const) {
   test(`${method}: unavailable Gemini gives honest 503, zero writes`, async t => {
     const x = await load(t, { unavailable: true });

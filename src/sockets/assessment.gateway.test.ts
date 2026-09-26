@@ -286,6 +286,29 @@ test('submit_answer: a genuinely owned attempt with a real validated Gemini feed
   assert.equal(updateSpy.mock.calls.some((c: any) => c.arguments[0].data?.feedbackAr === 'ملاحظة حقيقية'), true);
 });
 
+test('submit_answer: passes an explicit, non-truncating maxOutputTokens (live-Gemini truncation regression)', async (t) => {
+  const attempt = {
+    id: 'db-attempt-uuid-1',
+    providerSpecialtyId: 'spec-1',
+    questionsPayload: Array.from({ length: 4 }, (_, i) => validQuestion(i + 1)),
+    providerSpecialty: { specialty: { nameAr: 'تطوير الويب' } }
+  };
+  const feedback = { feedbackAr: 'ملاحظة حقيقية', strengths: ['قوة'], weaknesses: [] };
+  const { register } = await loadGateway(t, {
+    attempt,
+    generateStructured: async (_prompt, options) => {
+      assert.equal(typeof options.maxOutputTokens, 'number');
+      assert.ok(options.maxOutputTokens > 0, 'maxOutputTokens must be a defined positive number');
+      assert.ok(options.maxOutputTokens >= 1000, 'must retain enough headroom to avoid the observed live truncation at 500');
+      return { data: feedback, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+    }
+  });
+  const { socket, handlers } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['submit_answer']({ attemptId: 'db-attempt-uuid-1', answers: { '1': 'b', '2': 'b', '3': 'b', '4': 'b' } });
+});
+
 test('submit_answer: Gemini feedback failure still completes with the deterministic real-outcome feedback, never blocking completion', async (t) => {
   const attempt = {
     id: 'db-attempt-uuid-1',

@@ -138,6 +138,12 @@ export class SetupTestGateway {
             responseSchema: SETUP_TEST_RESPONSE_SCHEMA,
             validate: isValidSetupTestQuizPayload,
             temperature: 0.5,
+            // Previously unbounded (no maxOutputTokens at all). Sized for the
+            // real contract: exactly 15 questions, each with 4 options plus
+            // an explanation (see setup-test.prompt.ts), which is a
+            // genuinely large structured payload — headroom included for
+            // gemini-flash-latest's variable reasoning-token overhead.
+            maxOutputTokens: 6000,
             timeoutMs: 30_000,
             signal: abortController.signal
           });

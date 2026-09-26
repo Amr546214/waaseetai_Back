@@ -1311,6 +1311,22 @@ test('getPublicProfile (aiMetrics): a real validated Gemini success is returned 
   });
 });
 
+// Live Gemini testing found maxOutputTokens:300 truncated this 8-field
+// metrics JSON on gemini-flash-latest; bumped to 600 for headroom.
+test('getPublicProfile (aiMetrics): production call site uses a bounded, non-truncating maxOutputTokens', async (t) => {
+  let capturedMaxOutputTokens: number | undefined;
+  const service = await loadServiceForAiMetrics(t, {
+    generateStructured: async (_prompt, options) => {
+      capturedMaxOutputTokens = options.maxOutputTokens;
+      return { data: VALID_AI_METRICS, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+    }
+  });
+
+  await service.getPublicProfile('user-1');
+
+  assert.equal(capturedMaxOutputTokens, 600);
+});
+
 test('getPublicProfile (aiMetrics): a malformed Gemini response (out-of-range score) is rejected by the real validator and falls back to honest zeros, never a fabricated positive score', async (t) => {
   const service = await loadServiceForAiMetrics(t, {
     generateStructured: async (_prompt, options) => {
