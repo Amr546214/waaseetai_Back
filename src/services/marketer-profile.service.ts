@@ -3,9 +3,26 @@ import { SensitiveFieldType } from '@prisma/client';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { computeAffiliateCompletion } from '../utils/completion-calculators';
 import { createGovernedFieldRequests, FieldChangeCandidate } from './profile-requests.service';
+import { AppError } from '../utils/app-error';
+
+// Explicit public-safe shape (Implementation Batch 3, Part A). Never the
+// full AffiliateProfile row — bank/IBAN/KYC/email/phone/commission-rate
+// fields must never reach this response. Built from a `select`, not
+// `include`, so a future schema field is never accidentally exposed by
+// default.
+export interface MarketerPublicProfile {
+  id: string;
+  name: string | null;
+  avatarUrl: string | null;
+  bio: string | null;
+  level: string;
+  identityVerified: boolean;
+  channels: { platform: string; handle: string; url: string | null }[];
+  channelMetrics: { channel: string; visitors: number; clients: number; conversionPercentage: number }[] | null;
+}
 
 export class MarketerProfileService {
-  
+
   public async getProfile(userId: string) {
     const profile = await prisma.affiliateProfile.findUnique({
       where: { userId },
@@ -30,6 +47,68 @@ export class MarketerProfileService {
     }
 
     return profile;
+  }
+
+  /**
+   * Public read — no auth. Never reuse getProfile's `include` here: this
+   * must stay an explicit `select` allowlist so bank/IBAN document/email/
+   * phone/commissionRatePercentage/payoutMethod fields can never leak, even
+   * if new columns are added to AffiliateProfile later. `identityVerified`
+   * is a plain boolean status flag (not the KYC document itself), so it is
+   * safe to expose — the real, honest replacement for the old fake
+   * `isVerified: true` badge the frontend used to hardcode. `id` is the marketer's
+   * User id (same convention as the provider public-profile precedent,
+   * provider-profile.service.ts:getPublicProfile, which looks up by
+   * `userId`, not the profile's own internal id).
+   * Channel performance numbers (visitors/clients/conversionPercentage) are
+   * only returned when the marketer has opted in via the existing
+   * `sharePerformanceStats` flag — otherwise `channelMetrics` is `null`
+   * (opted-out), never a fabricated `[]` implying "zero traffic".
+   */
+  public async getPublicProfile(userId: string): Promise<MarketerPublicProfile> {
+    const profile = await prisma.affiliateProfile.findUnique({
+      where: { userId },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        avatarUrl: true,
+        bio: true,
+        currentLevel: true,
+        identityVerified: true,
+        sharePerformanceStats: true,
+        user: { select: { firstName: true, lastName: true, avatarUrl: true } },
+        marketingChannels: { select: { platform: true, handle: true, url: true } },
+      },
+    });
+
+    if (!profile) {
+      throw new AppError('الملف الشخصي غير موجود', 404);
+    }
+
+    const firstName = profile.firstName || profile.user.firstName || '';
+    const lastName = profile.lastName || profile.user.lastName || '';
+    const name = `${firstName} ${lastName}`.trim();
+
+    let channelMetrics: MarketerPublicProfile['channelMetrics'] = null;
+    if (profile.sharePerformanceStats) {
+      const metrics = await prisma.affiliateChannelMetric.findMany({
+        where: { affiliateId: profile.id },
+        select: { channel: true, visitors: true, clients: true, conversionPercentage: true },
+      });
+      channelMetrics = metrics;
+    }
+
+    return {
+      id: userId,
+      name: name || null,
+      avatarUrl: profile.avatarUrl || profile.user.avatarUrl || null,
+      bio: profile.bio || null,
+      identityVerified: profile.identityVerified,
+      level: profile.currentLevel,
+      channels: profile.marketingChannels,
+      channelMetrics,
+    };
   }
 
   public async updateMarketingInfo(userId: string, data: { avatarUrl?: string; bio?: string }) {

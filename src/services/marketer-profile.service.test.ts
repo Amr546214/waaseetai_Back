@@ -106,3 +106,144 @@ test('updateBankInfo: a duplicate pending IBAN request blocks resubmission with 
 	);
 	assert.equal(requests.length, 1);
 });
+
+// Implementation Batch 3, Part A — public marketer profile. These tests
+// prove the response is an explicit allowlist (never bank/IBAN/KYC/email/
+// phone/commissionRatePercentage), that channelMetrics is only present when
+// the marketer opted in via sharePerformanceStats, and that no real DB
+// write ever happens on this read path.
+
+function publicProfileFixture(overrides: Record<string, any> = {}) {
+	return {
+		id: 'aff-1',
+		firstName: 'خالد',
+		lastName: 'الغامدي',
+		avatarUrl: 'https://cdn.example.com/avatar.png',
+		bio: 'سيرة ذاتية حقيقية',
+		currentLevel: 'مساعد',
+		identityVerified: true,
+		sharePerformanceStats: false,
+		user: { firstName: 'Khalid', lastName: 'Ghamdi', avatarUrl: null },
+		marketingChannels: [{ platform: 'INSTAGRAM', handle: '@khalid', url: 'https://instagram.com/khalid' }],
+		...overrides,
+	};
+}
+
+async function loadServiceWithPublicProfileMock(t: TestContext, opts: {
+	profile?: any;
+	channelMetrics?: any[];
+}) {
+	const findUniqueSpy = t.mock.fn(async () => (opts.profile === undefined ? publicProfileFixture() : opts.profile));
+	const channelMetricFindManySpy = t.mock.fn(async () => opts.channelMetrics ?? []);
+	// Deliberately no `update`/`create` on either model — any attempted
+	// write would throw, proving this is a pure read.
+	const prismaMock: any = {
+		affiliateProfile: { findUnique: findUniqueSpy },
+		affiliateChannelMetric: { findMany: channelMetricFindManySpy },
+	};
+	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+
+	const moduleUrl = `./marketer-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { marketerProfileService } = await import(moduleUrl);
+	return { marketerProfileService, findUniqueSpy, channelMetricFindManySpy };
+}
+
+test('getPublicProfile: returns only the explicit allowlisted fields for a real marketer', async (t) => {
+	const { marketerProfileService } = await loadServiceWithPublicProfileMock(t, {});
+
+	const result = await marketerProfileService.getPublicProfile('user-1');
+
+	assert.deepEqual(Object.keys(result).sort(), ['avatarUrl', 'bio', 'channelMetrics', 'channels', 'id', 'identityVerified', 'level', 'name'].sort());
+	assert.equal(result.name, 'خالد الغامدي');
+	assert.equal(result.bio, 'سيرة ذاتية حقيقية');
+	assert.equal(result.level, 'مساعد');
+	assert.equal(result.identityVerified, true);
+	assert.deepEqual(result.channels, [{ platform: 'INSTAGRAM', handle: '@khalid', url: 'https://instagram.com/khalid' }]);
+});
+
+test('getPublicProfile: never exposes bank/IBAN/KYC/email/phone/commission fields even if present on the underlying row', async (t) => {
+	const { marketerProfileService } = await loadServiceWithPublicProfileMock(t, {
+		profile: publicProfileFixture({
+			iban: 'SA0311000000000000000001',
+			bankName: 'بنك الرياض',
+			accountHolderName: 'Khalid',
+			swiftCode: 'RIBLSARI',
+			identityVerified: true,
+			kycDocumentUrl: 'https://cdn.example.com/id.pdf',
+			commissionRatePercentage: 12,
+			payoutMethod: 'BANK_TRANSFER',
+			user: { firstName: 'Khalid', lastName: 'Ghamdi', avatarUrl: null, email: 'khalid@example.com', phoneNumber: '+966500000000' },
+		}),
+	});
+
+	const result: any = await marketerProfileService.getPublicProfile('user-1');
+	const serialized = JSON.stringify(result);
+
+	for (const forbidden of ['SA0311000000000000000001', 'بنك الرياض', 'RIBLSARI', 'kycDocumentUrl', 'khalid@example.com', '+966500000000', 'commissionRatePercentage', 'iban', 'payoutMethod']) {
+		assert.equal(serialized.includes(forbidden), false, `leaked forbidden field/value: ${forbidden}`);
+	}
+});
+
+test('getPublicProfile: throws a real 404 for a marketer that does not exist, without querying channel metrics', async (t) => {
+	const { marketerProfileService, channelMetricFindManySpy } = await loadServiceWithPublicProfileMock(t, { profile: null });
+
+	await assert.rejects(() => marketerProfileService.getPublicProfile('missing-user'), (error: any) => {
+		assert.equal(error.statusCode, 404);
+		return true;
+	});
+	assert.equal(channelMetricFindManySpy.mock.callCount(), 0);
+});
+
+test('getPublicProfile: channelMetrics is null (not an empty array) when the marketer has not opted in to sharePerformanceStats', async (t) => {
+	const { marketerProfileService, channelMetricFindManySpy } = await loadServiceWithPublicProfileMock(t, {
+		profile: publicProfileFixture({ sharePerformanceStats: false }),
+	});
+
+	const result = await marketerProfileService.getPublicProfile('user-1');
+
+	assert.equal(result.channelMetrics, null);
+	assert.equal(channelMetricFindManySpy.mock.callCount(), 0);
+});
+
+test('getPublicProfile: returns real channelMetrics when the marketer opted in via sharePerformanceStats', async (t) => {
+	const realMetrics = [{ channel: 'INSTAGRAM', visitors: 340, clients: 12, conversionPercentage: 3.5 }];
+	const { marketerProfileService } = await loadServiceWithPublicProfileMock(t, {
+		profile: publicProfileFixture({ sharePerformanceStats: true }),
+		channelMetrics: realMetrics,
+	});
+
+	const result = await marketerProfileService.getPublicProfile('user-1');
+
+	assert.deepEqual(result.channelMetrics, realMetrics);
+});
+
+test('getPublicProfile: falls back to the legacy User name/avatar only when the affiliate-specific fields are empty', async (t) => {
+	const { marketerProfileService } = await loadServiceWithPublicProfileMock(t, {
+		profile: publicProfileFixture({ firstName: null, lastName: null, avatarUrl: null, user: { firstName: 'Khalid', lastName: 'Ghamdi', avatarUrl: 'https://cdn.example.com/legacy.png' } }),
+	});
+
+	const result = await marketerProfileService.getPublicProfile('user-1');
+
+	assert.equal(result.name, 'Khalid Ghamdi');
+	assert.equal(result.avatarUrl, 'https://cdn.example.com/legacy.png');
+});
+
+test('getPublicProfile: performs zero DB writes on the read path', async (t) => {
+	const findUniqueSpy = t.mock.fn(async () => publicProfileFixture({ sharePerformanceStats: true }));
+	const channelMetricFindManySpy = t.mock.fn(async () => []);
+	const prismaMock: any = {
+		affiliateProfile: { findUnique: findUniqueSpy },
+		affiliateChannelMetric: { findMany: channelMetricFindManySpy },
+	};
+	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+	const moduleUrl = `./marketer-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { marketerProfileService } = await import(moduleUrl);
+
+	await marketerProfileService.getPublicProfile('user-1');
+
+	// No update/create function exists on either mocked model at all — if
+	// the code under test ever tried to write, it would throw "not a
+	// function" and this test would fail.
+	assert.equal(findUniqueSpy.mock.callCount(), 1);
+	assert.equal(channelMetricFindManySpy.mock.callCount(), 1);
+});

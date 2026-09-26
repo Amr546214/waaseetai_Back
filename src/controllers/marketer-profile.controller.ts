@@ -17,6 +17,21 @@ export class MarketerProfileController {
     }
   }
 
+  // Public, unauthenticated — see marketer-profile.routes.ts for why this
+  // must be registered before the router's authenticate/authorize guards.
+  public async getPublicProfile(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id || '');
+      if (!id) {
+        return res.status(400).json({ success: false, message: 'معرف غير صالح' });
+      }
+      const profile = await marketerProfileService.getPublicProfile(id);
+      res.status(200).json({ success: true, data: profile });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public async updateMarketingInfo(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.id;

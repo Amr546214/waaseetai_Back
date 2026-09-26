@@ -3,9 +3,16 @@ import { marketerProfileController } from '../controllers/marketer-profile.contr
 import { profileRequestsController } from '../controllers/profile-requests.controller';
 import { authenticate, authorize } from '../middlewares/auth.middleware';
 import { validateDto } from '../middlewares/validate-dto.middleware';
+import { apiLimiter } from '../middlewares/rate-limit.middleware';
 import { CreateIdentityRequestSchema } from '../dtos/profile-requests.dto';
 
 const router = Router();
+
+// Public, unauthenticated — must be registered before the authenticate/
+// authorize guards below (same pattern as provider-profile.routes.ts's
+// `/public/:providerId`). No Gemini call here, so the plain apiLimiter is
+// used rather than aiLimiter (which is reserved for AI-cost-bearing routes).
+router.get('/public/:id', apiLimiter, marketerProfileController.getPublicProfile);
 
 // Protect all routes and restrict to MARKETING_BROKER
 router.use(authenticate);

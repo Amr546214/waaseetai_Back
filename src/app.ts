@@ -229,6 +229,8 @@ import adminWithdrawalsRoutes from './routes/admin-withdrawals.routes';
 import adminOnboardingRoutes from './routes/admin-onboarding.routes';
 import adminAccreditationRoutes from './routes/admin-accreditation.routes';
 import adminAffiliateRequestsRoutes from './routes/admin-affiliate-requests.routes';
+import adminBrokersRoutes from './routes/admin-brokers.routes';
+import adminSecurityRoutes from './routes/admin-security.routes';
 
 // Support BOTH prefixed and unprefixed paths.
 // - app.use('/api', apiRouter) handles local development where frontend calls http://localhost:5009/api
@@ -251,6 +253,10 @@ mountAppRoute('/api/admin/onboarding', adminOnboardingRoutes);
 mountAppRoute('/admin/onboarding', adminOnboardingRoutes);
 mountAppRoute('/api/admin/accreditation', adminAccreditationRoutes);
 mountAppRoute('/admin/accreditation', adminAccreditationRoutes);
+mountAppRoute('/api/admin/brokers', adminBrokersRoutes);
+mountAppRoute('/admin/brokers', adminBrokersRoutes);
+mountAppRoute('/api/admin/security', adminSecurityRoutes);
+mountAppRoute('/admin/security', adminSecurityRoutes);
 mountAppRoute('/api', apiRouter);
 mountAppRoute('/', apiRouter);
 
