@@ -1,9 +1,29 @@
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { providerProfileService } from '../services/provider-profile.service';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { sessionService } from '../services/session.service';
 import { computeProviderCompletion } from '../utils/completion-calculators';
+
+import { providerBioSuggestSchema, providerSkillsSuggestSchema, setupSkillsSchema } from '../dtos/provider-profile-suggest.dto';
+
+export const suggestBio = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const input = providerBioSuggestSchema.safeParse(req.body ?? {});
+    if (!input.success) return res.status(400).json({ success: false, message: 'بيانات الاقتراح غير صالحة' });
+    res.json({ success: true, data: await providerProfileService.suggestBio(req.user.id, input.data) });
+  } catch (error) { next(error); }
+};
+
+export const suggestSkills = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const input = providerSkillsSuggestSchema.safeParse(req.body ?? {});
+    if (!input.success) return res.status(400).json({ success: false, message: 'بيانات الاقتراح غير صالحة' });
+    res.json({ success: true, data: await providerProfileService.suggestSkills(req.user.id, input.data) });
+  } catch (error) { next(error); }
+};
 
 const auditContext = (req: Request) => ({ sessionId: req.user?.sessionId, ipAddress: req.ip, device: req.get('user-agent')?.slice(0, 120) });
 
@@ -59,7 +79,8 @@ export const getSetupData = async (req: Request, res: Response) => {
 		if (!userId) return res.status(401).json({ message: 'Unauthorized' });
 
 		const profile = await prisma.providerProfile.findUnique({
-			where: { userId }
+			where: { userId },
+			include: { skills: { select: { name: true } } }
 		});
 
 		res.status(200).json({ success: true, data: profile || {} });
@@ -75,6 +96,18 @@ export const saveSetupData = async (req: Request, res: Response) => {
 
 		const payload = req.body;
 		const { details, identity, bank, documents, agreements, specialties, portfolio } = payload;
+		// Only the explicit ordinary save connects accepted skill names. Resolve
+		// every name before any writes/uploads; never upsert taxonomy rows.
+		let skillConnections: { id: string }[] | undefined;
+		if (payload.skills !== undefined) {
+			const parsed = setupSkillsSchema.safeParse(payload.skills);
+			if (!parsed.success) return res.status(400).json({ message: 'قائمة المهارات غير صالحة' });
+			const names = [...new Set(parsed.data)];
+			const rows = await prisma.skill.findMany({ where: { name: { in: names } }, select: { id: true, name: true } });
+			if (rows.length !== names.length) return res.status(400).json({ message: 'اختر مهارات موجودة في دليل المهارات؛ لم يتم حفظ البيانات.' });
+			skillConnections = rows.map(({ id }) => ({ id }));
+		}
+
 		const [frontIdUrl, backIdUrl, supportingDocsUrl] = await Promise.all([
 			storeDataUriIfNeeded(identity?.frontId, `waseetai/providers/${userId}/identity`, 'front-id'),
 			storeDataUriIfNeeded(identity?.backId, `waseetai/providers/${userId}/identity`, 'back-id'),
@@ -123,7 +156,8 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			termsAgreed: agreements?.terms,
 			privacyAgreed: agreements?.privacy,
 
-			isProfileSetupComplete: true
+			isProfileSetupComplete: true,
+			...(skillConnections !== undefined && { skills: { connect: skillConnections } })
 		};
 
 		const result = await prisma.providerProfile.upsert({
