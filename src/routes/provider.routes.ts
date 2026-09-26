@@ -1,8 +1,9 @@
 import { Router } from 'express';
-import { getProviderStatistics, getProviderOffers, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, getProviderWallet, getProviderTransactions } from '../controllers/provider.controller';
+import { getProviderStatistics, getProviderOffers, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, getDeliveryAiReview, getProjectHealthAnalysis, getProviderWallet, getProviderTransactions, getCompanyDeliveries } from '../controllers/provider.controller';
 import { submitWithdrawal, listMyWithdrawals } from '../controllers/withdrawal.controller';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import providerProfileRouter from './provider-profile.routes';
 import marketplaceServiceRouter from './marketplace-service.routes';
 import { exploreRequestsController } from '../controllers/explore-requests.controller';
@@ -25,15 +26,34 @@ router.get('/coupons/:id', authenticate, requireActiveUser, providerOnly, getCou
 router.put('/coupons/:id', authenticate, requireActiveUser, providerOnly, updateCoupon);
 router.delete('/coupons/:id', authenticate, requireActiveUser, providerOnly, deactivateCoupon);
 
-// Endpoint for Provider Dashboard Overview Statistics
+// Endpoint for Provider Dashboard Overview Statistics. Internally calls
+// providerOverviewService.getAiMatchingProjects -> aiMatchingEngineService
+// .getTop3MatchingProjects, a real Gemini call — needs aiLimiter like every
+// other Gemini-triggering route (Batch 6 gap fix; this route was missing it).
 router.get(
   '/statistics',
   authenticate,
   requireActiveUser,
+  aiLimiter,
   getProviderStatistics
 );
 
 router.post('/projects/:id/stages/:stageId/deliveries', authenticate, requireActiveUser, submitStageDelivery);
+// Advisory-only Gemini review of the provider's own stage delivery —
+// read-only, no DB write, never approves/rejects it. AI-rate-limited like
+// every other Gemini-triggering HTTP route. Ownership (must be this
+// contract's own provider) is enforced inside the shared service method.
+router.post('/projects/:id/stages/:stageId/ai-review', authenticate, requireActiveUser, aiLimiter, getDeliveryAiReview);
+
+// Batch 8 — advisory-only Gemini project health analysis. Read-only, no DB
+// write, never changes any status. Ownership (must be this contract's own
+// client or provider) is enforced inside the shared service method.
+router.post('/projects/:id/health', authenticate, requireActiveUser, aiLimiter, getProjectHealthAnalysis);
+
+// Real deliveries list replacing team-deliveries.ts's fully hardcoded
+// fictional "company deliveries" data (Batch 7). Deterministic — no
+// Gemini call, so no aiLimiter needed (same rationale as /projects/active).
+router.get('/company/deliveries', authenticate, requireActiveUser, providerOnly, getCompanyDeliveries);
 
 router.get('/finance/wallet', authenticate, requireActiveUser, getProviderWallet);
 router.get('/finance/transactions', authenticate, requireActiveUser, getProviderTransactions);
@@ -95,7 +115,6 @@ router.post('/requests/:id/rate', authenticate, requireActiveUser, providerOnly,
 router.post('/requests/:id/cancel', authenticate, requireActiveUser, providerOnly, cancelProviderRequest);
 
 import accreditationAiRoutes from './accreditation-ai.routes';
-import aiMatchingRoutes from './ai-matching.routes';
 
 // Accreditation Routing
 router.get(
@@ -117,7 +136,11 @@ router.get(
 // Mount full accreditation submission & AI evaluation routes
 router.use('/accreditation', accreditationAiRoutes);
 
-// Mount AI Matching engine routes
-router.use('/', aiMatchingRoutes);
+// Batch 8: the standalone `GET /ai-matching-projects` route (ai-matching.
+// routes.ts/ai-matching.controller.ts) was removed here — confirmed zero
+// real frontend callers (only a dead, never-invoked provider-api.service.ts
+// method pointed at it) and confirmed to call the exact same
+// aiMatchingEngineService.getTop3MatchingProjects() already live and wired
+// through /statistics above. The underlying service is untouched.
 
 export default router;

@@ -3,10 +3,16 @@ import assert from 'node:assert/strict';
 import { GeminiErrorCode, GeminiProviderError } from './ai/gemini/gemini.errors';
 
 // F15 Gemini migration (security follow-up batch): the shared matching
-// engine behind BOTH the standalone /provider/ai-matching-projects route
-// and the provider dashboard's "aiMatchingProjects" widget (see
-// provider-overview.service.ts#getAiMatchingProjects). `prisma` and
-// `geminiClient` are fully mocked; no real DB/network call happens.
+// engine behind the provider dashboard's "aiMatchingProjects" widget (see
+// provider-overview.service.ts#getAiMatchingProjects, consumed via
+// GET /provider/statistics). `prisma` and `geminiClient` are fully mocked;
+// no real DB/network call happens.
+//
+// Batch 8: the standalone duplicate route (`GET /provider/ai-matching-
+// projects`, ai-matching.routes.ts/ai-matching.controller.ts) that called
+// this exact same service method with zero real frontend caller has been
+// removed — this service itself is untouched and still fully live via
+// /provider/statistics above.
 
 function baseProviderSpecialty(overrides: any = {}) {
   return {

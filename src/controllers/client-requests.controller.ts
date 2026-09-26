@@ -175,6 +175,45 @@ export class ClientRequestsController {
     } catch (error) { next(error); }
   }
 
+  // POST /api/client/requests/:id/stages/:stageId/ai-review
+  // Advisory-only — never approves/rejects the delivery, never touches
+  // status or escrow. On any Gemini failure this returns an honest 502, not
+  // a fabricated review; the manual approve/revision workflow above
+  // (reviewStageDelivery) is completely unaffected either way.
+  public async getDeliveryAiReview(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId || req.user!.id;
+      const data = await projectProgressService.getDeliveryAiReview(userId, req.params.id as string, req.params.stageId as string);
+      res.status(200).json({ success: true, data });
+    } catch (error: any) {
+      if (error instanceof AppError) return next(error);
+      console.error('[DeliveryAiReview] Failed:', error?.code || error?.message);
+      res.status(502).json({
+        success: false,
+        message: 'تعذر إنشاء المراجعة الاستشارية بالذكاء الاصطناعي حالياً. يمكنك متابعة مراجعة التسليم واتخاذ القرار يدوياً كالمعتاد.'
+      });
+    }
+  }
+
+  // Batch 8 — advisory-only Gemini project health analysis (Contract
+  // Monitoring / Project Health / Predictive Delay Risk / Predictive
+  // Dispute Risk — one real feature). Read-only, never
+  // approves/rejects/releases funds/changes status.
+  public async getProjectHealthAnalysis(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId || req.user!.id;
+      const data = await projectProgressService.getProjectHealthAnalysis(userId, req.params.id as string);
+      res.status(200).json({ success: true, data });
+    } catch (error: any) {
+      if (error instanceof AppError) return next(error);
+      console.error('[ProjectHealthAnalysis] Failed:', error?.code || error?.message);
+      res.status(502).json({
+        success: false,
+        message: 'تعذر إجراء تحليل صحة المشروع بالذكاء الاصطناعي حالياً. يمكنك متابعة المشروع كالمعتاد.'
+      });
+    }
+  }
+
   // GET /api/client/requests/:id or GET /api/client/my-requests/:id
   public async getRequestDetails(req: Request, res: Response, next: NextFunction) {
     try {

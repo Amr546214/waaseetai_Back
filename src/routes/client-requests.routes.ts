@@ -68,6 +68,17 @@ router.get('/active-projects/:id', authenticate, requireActiveUser, clientReques
 
 router.get('/:id/workspace', authenticate, requireActiveUser, clientRequestsController.getProjectWorkspace);
 router.post('/:id/stages/:stageId/review', authenticate, requireActiveUser, clientRequestsController.reviewStageDelivery);
+// Advisory-only Gemini review of a stage delivery — read-only, no DB write,
+// never approves/rejects the delivery. AI-rate-limited like every other
+// Gemini-triggering HTTP route in this codebase. Ownership (must be this
+// contract's own client) is enforced inside the service, matching the
+// existing /review route's own pattern above.
+router.post('/:id/stages/:stageId/ai-review', authenticate, requireActiveUser, aiLimiter, clientRequestsController.getDeliveryAiReview);
+
+// Batch 8 — advisory-only Gemini project health analysis. Read-only, no DB
+// write, never changes any status. Ownership (must be this contract's own
+// client or provider) is enforced inside the shared service method.
+router.post('/:id/health', authenticate, requireActiveUser, aiLimiter, clientRequestsController.getProjectHealthAnalysis);
 router.post('/:id/stages/:stageId/rating', authenticate, requireActiveUser, rateStage);
 
 // Request details by ID

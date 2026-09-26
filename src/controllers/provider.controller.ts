@@ -2,12 +2,14 @@ import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/db';
 import { ProjectStatus, ProposalStatus, EscrowStatus, ContractStatus, Project } from '@prisma/client';
 import { createHash } from 'crypto';
+import { AppError } from '../utils/app-error';
 import { proposalService } from '../services/proposal.service';
 import { providerOverviewService } from '../services/provider-overview.service';
 import { accreditationService } from '../services/accreditation.service';
 import { projectProgressService } from '../services/project-progress.service';
 import { providerFinanceService } from '../services/provider-finance.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
+import { providerDeliveriesService } from '../services/provider-deliveries.service';
 
 export const getProviderStatistics = async (req: Request, res: Response, next: NextFunction) => {
 	try {
@@ -407,6 +409,48 @@ export const submitStageDelivery = async (req: Request, res: Response, next: Nex
 	} catch (error) { next(error); }
 };
 
+// POST /api/provider/projects/:id/stages/:stageId/ai-review
+// Advisory-only — same read-only review a client can request for the same
+// delivery, never approves/rejects it and never touches status or escrow.
+// On any Gemini failure this returns an honest 502, not a fabricated
+// review; submitStageDelivery above is completely unaffected either way.
+export const getDeliveryAiReview = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		const data = await projectProgressService.getDeliveryAiReview(providerId, req.params.id as string, req.params.stageId as string);
+		res.status(200).json({ success: true, data });
+	} catch (error: any) {
+		if (error instanceof AppError) return next(error);
+		console.error('[DeliveryAiReview] Failed:', error?.code || error?.message);
+		res.status(502).json({
+			success: false,
+			message: 'تعذر إنشاء المراجعة الاستشارية بالذكاء الاصطناعي حالياً. يمكنك متابعة مراجعة التسليم واتخاذ القرار يدوياً كالمعتاد.'
+		});
+	}
+};
+
+// Batch 8 — advisory-only Gemini project health analysis (Contract
+// Monitoring / Project Health / Predictive Delay Risk / Predictive Dispute
+// Risk — one real feature). Read-only, never approves/rejects/releases
+// funds/changes status. Same honest-unavailable-on-failure pattern as
+// getDeliveryAiReview above.
+export const getProjectHealthAnalysis = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		const data = await projectProgressService.getProjectHealthAnalysis(providerId, req.params.id as string);
+		res.status(200).json({ success: true, data });
+	} catch (error: any) {
+		if (error instanceof AppError) return next(error);
+		console.error('[ProjectHealthAnalysis] Failed:', error?.code || error?.message);
+		res.status(502).json({
+			success: false,
+			message: 'تعذر إجراء تحليل صحة المشروع بالذكاء الاصطناعي حالياً. يمكنك متابعة المشروع كالمعتاد.'
+		});
+	}
+};
+
 export const getProviderWallet = async (req: Request, res: Response, next: NextFunction) => {
 	try {
 		const providerId = (req as any).user?.id;
@@ -575,6 +619,24 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 			success: true,
 			data: archivedList
 		});
+	} catch (error) {
+		next(error);
+	}
+};
+
+// Implementation Batch 7 — real replacement for team-deliveries.ts's
+// fully hardcoded "company deliveries" list. See provider-deliveries.
+// service.ts for why this returns the provider's own real StageDelivery
+// rows rather than a fabricated per-team-member breakdown.
+export const getCompanyDeliveries = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) {
+			return res.status(401).json({ success: false, message: 'غير مصرح' });
+		}
+
+		const deliveries = await providerDeliveriesService.getCompanyDeliveries(providerId);
+		res.status(200).json({ success: true, data: deliveries });
 	} catch (error) {
 		next(error);
 	}
