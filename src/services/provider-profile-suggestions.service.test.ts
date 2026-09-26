@@ -1,12 +1,14 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { providerBioSuggestSchema, providerSkillsSuggestSchema } from '../dtos/provider-profile-suggest.dto';
+import { GeminiProviderError, GeminiErrorCode } from './ai/gemini/gemini.errors';
 
 // No real client, DB, notification/socket side effects, or provider calls.
-async function load(t: TestContext, opts: { profile?: any; rows?: any[]; output?: any; unavailable?: boolean } = {}) {
+async function load(t: TestContext, opts: { profile?: any; rows?: any[]; output?: any; unavailable?: boolean; geminiError?: unknown } = {}) {
   const reads: any[] = [];
   const prompts: { prompt: string; options: any }[] = [];
   let writes = 0;
+  const logs: { level: string; args: any[] }[] = [];
   const denyWrite = () => { writes++; throw new Error('Suggestion attempted DB write'); };
   const table = (reads: any) => new Proxy(reads, { get: (obj, key) => key in obj ? obj[key] : denyWrite });
   const prisma = new Proxy({
@@ -19,9 +21,19 @@ async function load(t: TestContext, opts: { profile?: any; rows?: any[]; output?
   }, { get: (obj: any, key) => key in obj ? obj[key] : denyWrite });
   t.mock.module('../config/db', { namedExports: { prisma } });
   t.mock.module('./notification.service', { namedExports: { notificationService: {} } });
+  t.mock.module('../config/logger', {
+    namedExports: {
+      logger: {
+        warn: (...args: any[]) => logs.push({ level: 'warn', args }),
+        debug: (...args: any[]) => logs.push({ level: 'debug', args }),
+        info: () => {}, error: () => {},
+      },
+    },
+  });
   t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: {
     generateStructured: async (prompt: string, options: any) => {
       prompts.push({ prompt, options });
+      if (opts.geminiError !== undefined) throw opts.geminiError;
       if (opts.unavailable) throw new Error('Gemini unavailable');
       const data = opts.output ?? { suggestedBio: 'أقدم خدمات تطوير المواقع باستخدام المهارات المذكورة.' };
       if (!options.validate(data)) throw new Error('INVALID_RESPONSE');
@@ -29,7 +41,7 @@ async function load(t: TestContext, opts: { profile?: any; rows?: any[]; output?
     }
   } } });
   const { providerProfileService: service } = await import(`./provider-profile.service.ts?fixture=${Date.now()}-${Math.random()}`);
-  return { service, reads, prompts, writes: () => writes };
+  return { service, reads, prompts, writes: () => writes, logs };
 }
 
 test('bio: server reads authenticated identity, DB context wins, only allowlisted self-reported fields reach Gemini; zero writes', async t => {
@@ -64,6 +76,49 @@ for (const method of ['suggestBio', 'suggestSkills'] as const) {
     assert.equal(x.writes(), 0);
   });
 }
+
+// Real live-Gemini testing found suggestBio/suggestSkills used a bare
+// `catch {}` that silently discarded the real GeminiErrorCode before
+// returning the same generic 503 — impossible to distinguish a rate-limit
+// from a provider outage from malformed output in application logs. These
+// tests prove the classification now reaches the log (for ops/debugging
+// only), while the public HTTP contract (always a plain 503, same Arabic
+// message, never a fabricated result) stays exactly as before.
+for (const method of ['suggestBio', 'suggestSkills'] as const) {
+  for (const [code, cause] of [
+    [GeminiErrorCode.RATE_LIMITED, { status: 429 }],
+    [GeminiErrorCode.TIMEOUT, { name: 'AbortError' }],
+    [GeminiErrorCode.PROVIDER_UNAVAILABLE, { status: 503 }],
+    [GeminiErrorCode.NOT_CONFIGURED, undefined],
+    [GeminiErrorCode.INVALID_RESPONSE, undefined],
+  ] as const) {
+    test(`${method}: a real ${code} error is classified in the log, never silently discarded, and still surfaces as an honest 503`, async t => {
+      const x = await load(t, { geminiError: new GeminiProviderError(code, 'sanitized internal message', cause) });
+      await assert.rejects(x.service[method]('p', {}), (e: any) => e.statusCode === 503 && /تعذر إنشاء اقتراح/.test(e.message));
+      assert.equal(x.writes(), 0, 'no DB write on failure');
+
+      const allLogText = x.logs.map(l => `${l.level}:${l.args.map(String).join(' ')}`).join('\n');
+      assert.match(allLogText, new RegExp(code), `the real ${code} classification must reach the log, not be discarded`);
+    });
+  }
+}
+
+test('suggestBio: no secret, raw provider response, or SDK cause object is ever logged on failure', async t => {
+  const secretLookingCause = { apiKey: 'AIzaSy-fake-should-never-be-logged', status: 429, rawResponse: { candidates: ['do not log me'] } };
+  const x = await load(t, { geminiError: new GeminiProviderError(GeminiErrorCode.RATE_LIMITED, 'Gemini rate limit exceeded', secretLookingCause) });
+  await assert.rejects(x.service.suggestBio('p', {}));
+  const allLogText = x.logs.map(l => `${l.level}:${l.args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}`).join('\n');
+  assert.equal(allLogText.includes('AIzaSy'), false, 'no API key must ever be logged');
+  assert.equal(allLogText.includes('do not log me'), false, 'no raw provider/SDK response content must ever be logged');
+  assert.equal(allLogText.includes('rawResponse'), false, 'the raw error.cause object must never be logged, only the sanitized code');
+});
+
+test('suggestSkills: a non-GeminiProviderError (defensive double-validation failure) is still classified honestly, not silently discarded', async t => {
+  const x = await load(t, { output: { suggestedSkills: ['unknown-skill-not-in-taxonomy'] } });
+  await assert.rejects(x.service.suggestSkills('p', {}), (e: any) => e.statusCode === 503);
+  const allLogText = x.logs.map(l => l.args.map(String).join(' ')).join('\n');
+  assert.match(allLogText, /APPLICATION_VALIDATION_ERROR|suggestSkills failed/);
+});
 
 for (const output of [null, [], {}, { suggestedBio: 12 }, { suggestedBio: '   ' }, { suggestedBio: 'أ'.repeat(501) }, { suggestedBio: 'نص', extra: true },
   { suggestedBio: 'لدي 10 سنوات خبرة' }, { suggestedBio: 'أتممت ١٠ مشاريع' }, { suggestedBio: 'حاصل على شهادة معتمدة' },

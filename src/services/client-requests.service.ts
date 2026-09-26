@@ -57,7 +57,7 @@ const CLIENT_REQUEST_AI_SUGGEST_SCHEMA = {
 		suggestedDurationDays: { type: 'number', description: 'days' },
 		complexityRating: { type: 'string', enum: [...COMPLEXITY_RATINGS] },
 		personalizedNote: { type: 'string', description: 'Arabic advice personalized for client request based on market standards' },
-		aiMatchScoreEstimate: { type: 'number', description: 'number between 85 and 98' }
+		aiMatchScoreEstimate: { type: 'number', description: 'Honest match-readiness score from 0 to 100 based only on how complete, specific, and clear the draft actually is. Low scores (including well below 50) are correct and expected for a vague, incomplete, or unclear draft. Never bias toward a high score.' }
 	},
 	required: ['suggestedTitle', 'suggestedDescription', 'suggestedSubSpecialties', 'recommendedMinBudget', 'recommendedMaxBudget', 'suggestedDurationDays', 'complexityRating', 'personalizedNote', 'aiMatchScoreEstimate']
 };
@@ -67,6 +67,10 @@ const CLIENT_REQUEST_AI_SUGGEST_SCHEMA = {
 // rating, or an out-of-range match score are all treated as invalid, never
 // silently replaced with a fabricated value (including the previous
 // hardcoded `94` guard, which is gone entirely, not just relocated here).
+// This validator already accepted the full honest 0-100 range; only the
+// prompt/schema description above used to instruct Gemini to bias toward
+// 85-98 regardless of actual draft quality — fixed to allow (and expect)
+// low scores for a vague/incomplete draft, never biased toward a high one.
 function isValidClientRequestSuggestion(value: unknown): value is ClientRequestAiSuggestion {
 	if (!value || typeof value !== 'object') return false;
 	const v = value as Record<string, unknown>;
@@ -187,7 +191,7 @@ Return JSON schema:
   "suggestedDurationDays": number (days),
   "complexityRating": "LOW" | "MEDIUM" | "HIGH" | "COMPLEX",
   "personalizedNote": "Arabic advice personalized for client request based on market standards",
-  "aiMatchScoreEstimate": number between 85 and 98
+  "aiMatchScoreEstimate": honest number from 0 to 100 reflecting how complete and clear this specific draft actually is — a vague or incomplete draft must receive a low score (even below 50); do not default to a high score
 }
 `;
 

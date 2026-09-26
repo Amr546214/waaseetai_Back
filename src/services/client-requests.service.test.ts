@@ -142,6 +142,80 @@ test('generateAiSuggest: Gemini unavailable throws an AppError(503) with no aiMa
   );
 });
 
+// Real live-Gemini testing found the prompt/schema instructed Gemini to
+// always return "a number between 85 and 98" for aiMatchScoreEstimate,
+// regardless of how vague/incomplete the actual draft was — an artificially
+// positive-biased score. The validator itself already accepted the full
+// honest 0-100 range; only the prompt text was fixed. These tests prove low
+// scores are genuinely accepted end-to-end and the biased instruction is
+// gone from what actually reaches Gemini.
+for (const lowScore of [0, 25, 50]) {
+  test(`generateAiSuggest: an honest low aiMatchScoreEstimate (${lowScore}) for a vague/incomplete draft is accepted as-is, never rejected or replaced`, async (t) => {
+    const suggestion = validSuggestionFixture({ aiMatchScoreEstimate: lowScore });
+    const service = await loadServiceForAiSuggest(t, {
+      generateStructured: async (_prompt, options) => {
+        assert.equal(options.validate(suggestion), true, `the real validator must accept a low, honest score of ${lowScore}`);
+        return { data: suggestion, usage: { promptTokens: 5, completionTokens: 5, totalTokens: 10 } };
+      }
+    });
+    const result = await service.generateAiSuggest('client-1', { title: 'x' } as any);
+    assert.equal(result.aiMatchScoreEstimate, lowScore);
+  });
+}
+
+for (const highScore of [91, 100]) {
+  test(`generateAiSuggest: a legitimate high aiMatchScoreEstimate (${highScore}) for a complete draft is still accepted`, async (t) => {
+    const suggestion = validSuggestionFixture({ aiMatchScoreEstimate: highScore });
+    const service = await loadServiceForAiSuggest(t, {
+      generateStructured: async (_prompt, options) => {
+        assert.equal(options.validate(suggestion), true);
+        return { data: suggestion, usage: { promptTokens: 5, completionTokens: 5, totalTokens: 10 } };
+      }
+    });
+    const result = await service.generateAiSuggest('client-1', { title: 'x' } as any);
+    assert.equal(result.aiMatchScoreEstimate, highScore);
+  });
+}
+
+test('generateAiSuggest: the prompt sent to Gemini no longer instructs a narrow 85-98 biased range', async (t) => {
+  const suggestion = validSuggestionFixture();
+  let capturedPrompt = '';
+  const service = await loadServiceForAiSuggest(t, {
+    generateStructured: async (prompt, options) => {
+      capturedPrompt = prompt;
+      return { data: suggestion, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+    }
+  });
+  await service.generateAiSuggest('client-1', { title: 'x' } as any);
+  assert.doesNotMatch(capturedPrompt, /85 and 98|85-98/);
+  assert.match(capturedPrompt, /0 to 100/);
+});
+
+test('generateAiSuggest: the response schema description no longer biases toward a high score', async (t) => {
+  const service = await loadServiceForAiSuggest(t, {
+    generateStructured: async (_prompt, options) => {
+      const description = options.responseSchema?.properties?.aiMatchScoreEstimate?.description ?? '';
+      assert.doesNotMatch(description, /85 and 98|85-98/);
+      assert.match(description, /0 to 100/);
+      return { data: validSuggestionFixture(), usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+    }
+  });
+  await service.generateAiSuggest('client-1', { title: 'x' } as any);
+});
+
+for (const badScore of [-1, 101, 150]) {
+  test(`generateAiSuggest: an out-of-range score (${badScore}) is still rejected by the real validator`, async (t) => {
+    const malformed = validSuggestionFixture({ aiMatchScoreEstimate: badScore });
+    const service = await loadServiceForAiSuggest(t, {
+      generateStructured: async (_prompt, options) => {
+        if (!options.validate(malformed)) throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
+        return { data: malformed };
+      }
+    });
+    await assert.rejects(() => service.generateAiSuggest('client-1', {} as any), (err: any) => err.statusCode === 503);
+  });
+}
+
 test('generateAiSuggest: a malformed Gemini response (including a fabricated-looking aiMatchScoreEstimate: 94) is rejected by the real validator instead of being trusted', async (t) => {
   // 94 alone isn't invalid, but pairing it with clearly malformed fields
   // (empty title, empty sub-specialties) proves the validator inspects the

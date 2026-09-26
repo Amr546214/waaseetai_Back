@@ -3,6 +3,7 @@ import { Prisma, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { geminiClient } from './ai/gemini/gemini.client';
+import { GeminiProviderError } from './ai/gemini/gemini.errors';
 import { AppError } from '../utils/app-error';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
@@ -262,6 +263,20 @@ Average Rating: ${reviewsCount > 0 ? (gamification?.avgRating || profile.rating 
 		};
 	}
 
+	// Real live-Gemini testing found that suggestBio/suggestSkills silently
+	// discarded the actual GeminiErrorCode (bare `catch {}`, no logging at
+	// all) before returning a generic 503 — impossible to tell a real
+	// provider outage/rate-limit apart from malformed output in application
+	// logs. This preserves that classification for logging only, without
+	// changing the public HTTP contract (still always a plain honest 503,
+	// same Arabic message, never a raw provider error/key/prompt reaches the
+	// caller) and without fabricating any fallback bio/skills result.
+	private handleAiSuggestionError(error: unknown, operation: string): never {
+		const code = error instanceof GeminiProviderError ? error.code : 'APPLICATION_VALIDATION_ERROR';
+		logger.warn(`[ProviderProfileService] ${operation} failed: ${code}`);
+		throw new AppError('تعذر إنشاء اقتراح بالذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.', 503);
+	}
+
 	async suggestBio(userId: string, input: ProviderBioSuggestDto): Promise<ProviderBioSuggestion> {
 		const context = await this.suggestionContext(userId, input);
 		try {
@@ -272,8 +287,8 @@ Average Rating: ${reviewsCount > 0 ? (gamification?.avgRating || profile.rating 
 			});
 			if (!isValidProviderBioSuggestion(result.data)) throw new Error('Invalid bio');
 			return { suggestedBio: result.data.suggestedBio.trim() };
-		} catch {
-			throw new AppError('تعذر إنشاء اقتراح بالذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.', 503);
+		} catch (error) {
+			this.handleAiSuggestionError(error, 'suggestBio');
 		}
 	}
 
@@ -300,8 +315,8 @@ Average Rating: ${reviewsCount > 0 ? (gamification?.avgRating || profile.rating 
 			});
 			if (!validate(result.data)) throw new Error('Invalid skills');
 			return { suggestedSkills: result.data.suggestedSkills.map(s => candidates.get(skillKey(s))!) };
-		} catch {
-			throw new AppError('تعذر إنشاء اقتراح بالذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.', 503);
+		} catch (error) {
+			this.handleAiSuggestionError(error, 'suggestSkills');
 		}
 	}
 
