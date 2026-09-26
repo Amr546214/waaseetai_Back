@@ -2,6 +2,64 @@ import { DisputeStatus, RequestStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { CreateDisputeInput, ResolveDisputeInput } from '../dtos/dispute.dto';
+import { geminiClient } from './ai/gemini/gemini.client';
+
+// Advisory-only dispute summary — never a verdict. Human admin resolution
+// via resolve() above remains the sole authority on status/fault/money;
+// this call performs zero DB writes and cannot influence that decision.
+export interface DisputeAiSummary {
+  caseSummary: string;
+  timelineSummary: string;
+  evidenceSummary: string[];
+  evidenceGaps: string[];
+  suggestedQuestions: string[];
+}
+
+const MAX_TEXT_FIELD_LENGTH = 900;
+const MAX_ARRAY_ITEM_LENGTH = 300;
+const MAX_ARRAY_ITEMS = 8;
+
+const DISPUTE_AI_SUMMARY_SCHEMA = {
+  type: 'object',
+  properties: {
+    caseSummary: { type: 'string', description: 'ملخص محايد لموضوع النزاع بالاعتماد فقط على البيانات المرفقة، بدون تحديد المذنب أو الفائز.' },
+    timelineSummary: { type: 'string', description: 'ملخص التسلسل الزمني للطلب/المشروع والمراحل المرتبطة به حتى فتح النزاع.' },
+    evidenceSummary: { type: 'array', items: { type: 'string' }, description: 'وصف موجز لكل دليل مرفق كمرجع فقط دون الادعاء بفحص محتواه.' },
+    evidenceGaps: { type: 'array', items: { type: 'string' }, description: 'نقاط أو معلومات ناقصة قد يحتاجها المراجع البشري لاتخاذ قرار.' },
+    suggestedQuestions: { type: 'array', items: { type: 'string' }, description: 'أسئلة مقترحة يمكن للمراجع البشري طرحها على الطرفين.' },
+  },
+  required: ['caseSummary', 'timelineSummary', 'evidenceSummary', 'evidenceGaps', 'suggestedQuestions'],
+};
+
+const DISPUTE_AI_SUMMARY_SYSTEM_PROMPT = `أنت مساعد يلخّص نزاعاً لمراجع بشري (إداري) في منصة وسيط AI. دورك استشاري بحت.
+ممنوع تماماً: تحديد الطرف المذنب أو الفائز، إصدار حكم أو قرار نهائي، اقتراح نسبة مسؤولية أو خطأ (fault percentage)، التوصية بحل معين أو بالإفراج عن أموال أو استرداد مبلغ، أو التعبير عن أي "ثقة بالإدانة".
+القرار النهائي في كل نزاع يعود حصرياً للمراجع البشري (إداري/مشرف عام) عبر مسار الموافقة اليدوي القائم؛ أنت لا تشارك في اتخاذه إطلاقاً.
+روابط الأدلة المرفقة هنا هي مراجع فقط — لم يتم فتح أو فحص محتواها فعلياً، فلا تدّعِ أنك اطّلعت على محتوى أي ملف أو رابط؛ صِفها فقط كمرجع مرفق من طرف معيّن.
+استخدم فقط المعلومات المذكورة صراحة أدناه. إن كانت معلومة غير متوفرة، اذكر ذلك بصراحة في evidenceGaps بدل افتراضها أو اختراعها.
+أجب بالعربية الفصحى الواضحة والمختصرة.`;
+
+function isNonEmptyBoundedString(value: unknown, maxLength: number): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength;
+}
+
+function isBoundedStringArray(value: unknown): value is string[] {
+  if (!Array.isArray(value) || value.length > MAX_ARRAY_ITEMS) return false;
+  return value.every((item) => typeof item === 'string' && item.length <= MAX_ARRAY_ITEM_LENGTH);
+}
+
+const FORBIDDEN_SUMMARY_KEYS = ['winner', 'loser', 'verdict', 'faultPercentage', 'recommendedResolution', 'releaseFunds', 'refundAmount', 'confidence', 'confidenceOfGuilt'];
+
+function isValidDisputeAiSummary(value: unknown): value is DisputeAiSummary {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  if (FORBIDDEN_SUMMARY_KEYS.some((key) => key in v)) return false;
+  if (!isNonEmptyBoundedString(v.caseSummary, MAX_TEXT_FIELD_LENGTH)) return false;
+  if (!isNonEmptyBoundedString(v.timelineSummary, MAX_TEXT_FIELD_LENGTH)) return false;
+  if (!isBoundedStringArray(v.evidenceSummary)) return false;
+  if (!isBoundedStringArray(v.evidenceGaps)) return false;
+  if (!isBoundedStringArray(v.suggestedQuestions)) return false;
+  return true;
+}
 
 export class DisputeService {
   private async requestForActor(
@@ -59,6 +117,99 @@ export class DisputeService {
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
     if (dispute.status !== DisputeStatus.OPEN && dispute.status !== DisputeStatus.UNDER_REVIEW) throw new AppError('تمت معالجة النزاع مسبقاً', 409);
     return prisma.dispute.update({ where: { id }, data: { status: input.action === 'resolve' ? DisputeStatus.RESOLVED : DisputeStatus.REJECTED, resolution: input.resolution, resolutionNote: input.resolutionNote, resolvedById: adminId, resolvedAt: new Date() } });
+  }
+
+  /**
+   * Advisory-only Gemini summary of a dispute for the human admin reviewer.
+   * Read-only: zero DB writes, never touches status/resolution/escrow. The
+   * admin's resolve() above remains the only path that can change anything.
+   */
+  async generateAiSummary(id: string): Promise<DisputeAiSummary> {
+    const dispute = await prisma.dispute.findUnique({
+      where: { id },
+      include: {
+        request: { select: { title: true, description: true } },
+        project: {
+          select: {
+            title: true,
+            description: true,
+            contract: {
+              select: {
+                stages: {
+                  orderBy: { stepOrder: 'asc' },
+                  select: {
+                    stepOrder: true,
+                    title: true,
+                    description: true,
+                    status: true,
+                    deliveries: {
+                      orderBy: { submittedAt: 'desc' },
+                      take: 1,
+                      select: { note: true, status: true, submittedAt: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        openedBy: { select: { firstName: true, lastName: true } },
+        againstUser: { select: { firstName: true, lastName: true } },
+      },
+    });
+    if (!dispute) throw new AppError('النزاع غير موجود', 404);
+
+    const cap = (text: string | null | undefined, max = 2000) => (text ? text.slice(0, max) : 'غير متوفر');
+
+    const promptLines: string[] = [
+      `سبب النزاع: ${cap(dispute.reason, 500)}`,
+      `وصف النزاع: ${cap(dispute.description)}`,
+      `الطرف الذي فتح النزاع: ${dispute.openedBy ? `${dispute.openedBy.firstName} ${dispute.openedBy.lastName}` : 'غير معروف'}`,
+      `الطرف الآخر: ${dispute.againstUser ? `${dispute.againstUser.firstName} ${dispute.againstUser.lastName}` : 'غير معروف'}`,
+      `تاريخ فتح النزاع: ${dispute.createdAt.toISOString()}`,
+    ];
+
+    const title = dispute.project?.title || dispute.request?.title;
+    const description = dispute.project?.description || dispute.request?.description;
+    if (title) promptLines.push(`عنوان الطلب/المشروع: ${cap(title, 300)}`);
+    if (description) promptLines.push(`وصف الطلب/المشروع: ${cap(description)}`);
+
+    const stages = dispute.project?.contract?.stages || [];
+    if (stages.length > 0) {
+      promptLines.push('مراحل المشروع (بالترتيب):');
+      for (const stage of stages) {
+        const latestDelivery = stage.deliveries[0];
+        promptLines.push(
+          `- المرحلة ${stage.stepOrder}: "${cap(stage.title, 200)}" — الوصف الموعود: ${cap(stage.description, 400)} — الحالة: ${stage.status}` +
+            (latestDelivery ? ` — آخر تسليم مُرسَل (${latestDelivery.status}): ${cap(latestDelivery.note, 400)}` : ' — لا يوجد تسليم مُرسَل بعد'),
+        );
+      }
+    } else {
+      promptLines.push('لا توجد بيانات مراحل مشروع مرتبطة بهذا النزاع.');
+    }
+
+    if (dispute.evidence && dispute.evidence.length > 0) {
+      promptLines.push(
+        `روابط أدلة مرفقة (مراجع فقط، لم يتم فتح أو فحص محتواها): ${dispute.evidence.slice(0, 10).map((url) => cap(url, 300)).join(' | ')}`,
+      );
+    } else {
+      promptLines.push('لا توجد أدلة مرفقة على هذا النزاع.');
+    }
+
+    try {
+      const result = await geminiClient.generateStructured<DisputeAiSummary>(promptLines.join('\n'), {
+        systemInstruction: DISPUTE_AI_SUMMARY_SYSTEM_PROMPT,
+        responseSchema: DISPUTE_AI_SUMMARY_SCHEMA,
+        validate: isValidDisputeAiSummary,
+        temperature: 0.3,
+        maxOutputTokens: 900,
+        timeoutMs: 25 * 1000,
+      });
+      return result.data;
+    } catch (error: any) {
+      console.error('[DisputeService] AI summary generation failed:', error?.code || error?.message);
+      throw error;
+    }
   }
 }
 

@@ -18,6 +18,24 @@ export async function resolveDispute(req: Request, res: Response, next: NextFunc
   try { const parsed = resolveDisputeSchema.safeParse(req.body); if (!parsed.success) throw new AppError('بيانات حل النزاع غير صحيحة', 400); res.json({ success: true, data: await disputeService.resolve(String(req.params.id), actorId(req), parsed.data) }); } catch (error) { next(error); }
 }
 
+// Advisory-only — never resolves/rejects the dispute, never touches status
+// or money. On any Gemini failure this returns an honest 502, not a
+// fabricated summary; the manual resolve/reject workflow above is
+// completely unaffected either way.
+export async function getDisputeAiSummary(req: Request, res: Response, next: NextFunction) {
+  try {
+    const data = await disputeService.generateAiSummary(String(req.params.id));
+    res.json({ success: true, data });
+  } catch (error: any) {
+    if (error instanceof AppError) return next(error);
+    console.error('[DisputeAiSummary] Failed:', error?.code || error?.message);
+    res.status(502).json({
+      success: false,
+      message: 'تعذر إنشاء ملخص الذكاء الاصطناعي لهذا النزاع حالياً. يمكنك متابعة المراجعة واتخاذ القرار يدوياً كالمعتاد.',
+    });
+  }
+}
+
 export async function openClientDispute(req: Request, res: Response, next: NextFunction) {
   try { const parsed = createDisputeSchema.safeParse(req.body); if (!parsed.success) throw new AppError('بيانات النزاع غير صحيحة', 400); res.status(201).json({ success: true, data: await disputeService.createForRequest(String(req.params.id), actorId(req), 'client', parsed.data) }); } catch (error) { next(error); }
 }
