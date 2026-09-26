@@ -17,6 +17,15 @@ export interface DashboardStatsPayload {
     pointsToNextLevel: number;
     currentPoints: number;
   };
+  // Batch 7: deterministic aggregate of the client's own proposals' real,
+  // already-Gemini-computed `aiPriceTag` field (see ai-proposal.service.ts)
+  // — never a new Gemini call, never a fabricated percentage. null when the
+  // client has zero proposals with AI price-fairness data yet.
+  priceFairnessInsight?: {
+    fairPricePercentage: number;
+    evaluatedOffersCount: number;
+    summaryText: string;
+  } | null;
   topSteps: {
     step1_escrowRequiredCount: number;
     step2_pendingApprovalCount: number;

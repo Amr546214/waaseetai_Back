@@ -148,7 +148,32 @@ export class DashboardService {
         clientProfile: user?.clientProfile
       });
 
-      // 7. Active Contract (Find real active contract for this client, if any)
+      // 7. Price-fairness AI insight (Batch 7) — a deterministic aggregate
+      // of the client's own proposals' real, already-Gemini-computed
+      // aiPriceTag field (see ai-proposal.service.ts / proposal.service.ts
+      // createProposal). This is NOT a new Gemini call: it summarizes AI
+      // output that already exists on Proposal rows. Replaces a previously
+      // fully-hardcoded static "96%" AI Insights card that had zero backend
+      // behind it at all.
+      const proposalsWithPriceTag = await prisma.proposal.findMany({
+        where: {
+          project: { clientId: userId },
+          aiPriceTag: { not: null }
+        },
+        select: { aiPriceTag: true }
+      });
+      let priceFairnessInsight: DashboardStatsPayload['priceFairnessInsight'] = null;
+      if (proposalsWithPriceTag.length > 0) {
+        const fairCount = proposalsWithPriceTag.filter((p) => p.aiPriceTag === 'FAIR').length;
+        const fairPricePercentage = Math.round((fairCount / proposalsWithPriceTag.length) * 100);
+        priceFairnessInsight = {
+          fairPricePercentage,
+          evaluatedOffersCount: proposalsWithPriceTag.length,
+          summaryText: `${fairPricePercentage}% من عروضك المقيَّمة بالذكاء الاصطناعي ضمن النطاق العادل لأسعار السوق`
+        };
+      }
+
+      // 8. Active Contract (Find real active contract for this client, if any)
       const activeContractEntity = await prisma.contract.findFirst({
         where: {
           clientId: userId,
@@ -202,6 +227,7 @@ export class DashboardService {
           pointsToNextLevel: clientDisplayFields.pointsToNextLevel,
           currentPoints: clientDisplayFields.currentPoints
         },
+        priceFairnessInsight,
         topSteps: {
           step1_escrowRequiredCount: 0,
           step2_pendingApprovalCount: 0,
