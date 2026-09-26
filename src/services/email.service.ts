@@ -336,7 +336,7 @@ export class EmailService {
         <div class="container">
           <div class="header"><h2>وسيط AI - مركز النماذج والخدمات</h2></div>
           <h3>أهلاً ${firstName} 👋</h3>
-          <p>تم الانتهاء من فحص وتدقيق نموذج العمل الخاص بك: <strong>${modelTitle}</strong> عبر محرك الذكاء الاصطناعي GPT-4o.</p>
+          <p>تم الانتهاء من فحص وتدقيق نموذج العمل الخاص بك: <strong>${modelTitle}</strong> عبر نظام الذكاء الاصطناعي في وسيط.</p>
           <div class="badge">${isApproved ? 'معتمد ومعروض في السوق 🟢' : 'يحتاج إلى تعديل 🔴'} - تقييم الذكاء: ${score}%</div>
           <p><strong>الملخص والتوجيهات:</strong><br/>${feedback}</p>
           <p>يمكنك التوجه إلى لوحة التحكم لمعرفة المزيد من التفاصيل وإدارة النماذج والخدمات الخاصة بك.</p>

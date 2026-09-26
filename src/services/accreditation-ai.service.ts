@@ -78,7 +78,8 @@ export interface AccreditationEvaluationResult {
 
 export class AccreditationAiService {
   /**
-   * Main OpenAI GPT-4o Multimodal Evaluation Engine for Accreditation Samples
+   * Main Gemini multimodal evaluation engine for accreditation samples
+   * (migrated off OpenAI GPT-4o; this comment previously went stale).
    */
   async evaluateAccreditationSample(dto: SubmitAccreditationSampleDto) {
     const { userId, providerSpecialtyId, title, description, technologiesUsed, projectUrl, githubUrl, attachments } = dto;
