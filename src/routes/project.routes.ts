@@ -3,6 +3,7 @@ import { projectController } from '../controllers/project.controller';
 import { proposalController } from '../controllers/proposal.controller';
 import { authenticate, requireActiveUser, authorize } from '../middlewares/auth.middleware';
 import { validateDto } from '../middlewares/validate-dto.middleware';
+import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { createProposalSchema } from '../dtos/create-proposal.dto';
 import { createProjectSchema } from '../dtos/project.dto';
 import { AccountType } from '@prisma/client';
@@ -31,12 +32,16 @@ router.get(
   projectController.getSummary
 );
 
-// Submit a proposal for an open project
+// Submit a proposal for an open project. createProposal runs a real Gemini
+// call before creating the proposal (ai-proposal.service.ts#
+// evaluateAndSuggestProposal) — needs aiLimiter like every other
+// Gemini-triggering route (Batch 6 gap fix; this route was missing it).
 router.post(
   '/:id/proposals',
   authenticate,
   requireActiveUser,
   authorize(AccountType.PROVIDER_COMPANY, AccountType.PROVIDER_INDIVIDUAL, AccountType.MARKETING_BROKER),
+  aiLimiter,
   validateDto(createProposalSchema),
   proposalController.createProposal
 );

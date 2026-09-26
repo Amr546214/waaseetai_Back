@@ -1,8 +1,15 @@
 import { Router } from 'express';
 import { authenticate } from '../middlewares/auth.middleware';
+import { apiLimiter } from '../middlewares/rate-limit.middleware';
 import { clientProfileController } from '../controllers/client-profile.controller';
 
 const router = Router();
+
+// Public, unauthenticated — must be registered before the authenticate
+// guard below (same pattern as marketer-profile.routes.ts's `/public/:id`
+// and provider-profile.routes.ts's `/public/:providerId`). No Gemini call
+// here, so apiLimiter is used rather than aiLimiter.
+router.get('/public/:id', apiLimiter, clientProfileController.getPublicProfile);
 
 // Protect all routes below
 router.use(authenticate);

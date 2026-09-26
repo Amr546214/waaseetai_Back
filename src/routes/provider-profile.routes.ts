@@ -54,9 +54,15 @@ router.get('/me', requireProvider, providerProfileController.getProfile);
 router.get('/sessions', providerProfileController.getActiveSessions);
 router.delete('/sessions/:id', authLimiter, providerProfileController.revokeSession);
 router.put('/password', authLimiter, providerProfileController.changePassword);
+router.post('/suggest-bio', requireProvider, aiLimiter, providerProfileController.suggestBio);
+router.post('/suggest-skills', requireProvider, aiLimiter, providerProfileController.suggestSkills);
 router.get('/setup', requireProvider, providerProfileController.getSetupData);
 router.post('/setup', requireProvider, providerProfileController.saveSetupData);
-router.get('/public', requireProvider, providerProfileController.getPublicProfile);
+// Self-preview variant of the same getPublicProfile handler as the public
+// `/public/:providerId` route above — it hits the identical generateAiMetrics
+// Gemini call on a cache miss, so it needs the same aiLimiter (Batch 6 gap
+// fix; this route was missing it while its sibling already had it).
+router.get('/public', requireProvider, aiLimiter, providerProfileController.getPublicProfile);
 router.get('/requests', requireProvider, providerProfileController.getModificationRequests);
 router.post('/requests', requireProvider, providerProfileController.createModificationRequest);
 router.post('/requests/:id/cancel', requireProvider, providerProfileController.cancelModificationRequest);

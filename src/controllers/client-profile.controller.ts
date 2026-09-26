@@ -2,9 +2,26 @@ import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { computeClientCompletion } from '../utils/completion-calculators';
+import { clientProfileService } from '../services/client-profile.service';
 
 export class ClientProfileController {
-  
+
+  // Public, unauthenticated — GET /api/client/profile/public/:id. Advisory-
+  // free, real-data-only profile (see client-profile.service.ts). Same
+  // shape of handler as marketer-profile.controller.ts's getPublicProfile.
+  public async getPublicProfile(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id || '');
+      if (!id) {
+        return res.status(400).json({ success: false, message: 'معرف غير صالح' });
+      }
+      const profile = await clientProfileService.getPublicProfile(id);
+      res.status(200).json({ success: true, data: profile });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   // A) GET /api/client/profile/setup
   public async getSetupData(req: Request, res: Response, next: NextFunction) {
     try {
