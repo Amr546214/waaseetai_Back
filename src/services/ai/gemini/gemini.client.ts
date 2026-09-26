@@ -2,6 +2,7 @@ import type { GoogleGenAI } from '@google/genai' with { 'resolution-mode': 'impo
 import { logger } from '../../../config/logger';
 import { geminiModelConfig } from '../../../config/ai/gemini.config';
 import { GeminiErrorCode, GeminiProviderError, normalizeGeminiError } from './gemini.errors';
+import { GeminiKeyPool } from './gemini-key-pool';
 
 // Shared Gemini integration foundation. This module owns SDK
 // initialization, config detection, model selection, and the three generic
@@ -102,57 +103,44 @@ function buildTimeoutSignal(timeoutMs: number, externalSignal?: AbortSignal): { 
 }
 
 export class GeminiClient {
-  private sdkClient: GoogleGenAI | null = null;
+  // Owns key selection, round-robin distribution, and quota/rate-limit
+  // failover across one or more configured Gemini API keys (GEMINI_API_KEYS,
+  // falling back to the legacy single GEMINI_API_KEY). See
+  // gemini-key-pool.ts. This remains the ONLY place in the codebase that
+  // talks to the pool — every feature service still only ever sees
+  // GeminiClient's public methods below, unchanged.
+  private keyPool = new GeminiKeyPool();
 
-  /** True only when GEMINI_API_KEY is present — never throws. */
+  /** True only when at least one Gemini API key is configured — never throws. */
   isConfigured(): boolean {
-    return !!process.env.GEMINI_API_KEY;
-  }
-
-  // Loaded lazily via dynamic import (never a static top-level import of
-  // '@google/genai') so: (1) app startup never touches the SDK at all when
-  // no Gemini feature is active yet, and (2) this resolves the package's
-  // ESM build consistently, matching how Node's module-mocking test hooks
-  // resolve it — the package ships separate CJS and ESM builds behind
-  // conditional exports, and a statically-imported (require()-compiled)
-  // reference would silently resolve to the *other*, unmocked build in
-  // tests.
-  private async getSdkClient(): Promise<GoogleGenAI> {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new GeminiProviderError(GeminiErrorCode.NOT_CONFIGURED, 'GEMINI_API_KEY is not configured');
-    }
-    if (!this.sdkClient) {
-      const { GoogleGenAI } = await import('@google/genai');
-      this.sdkClient = new GoogleGenAI({ apiKey });
-    }
-    return this.sdkClient;
+    return this.keyPool.isConfigured();
   }
 
   async generateText(prompt: string, options: GenerateTextOptions = {}): Promise<GeminiTextResult> {
     const { signal, clear } = buildTimeoutSignal(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, options.signal);
 
     try {
-      const client = await this.getSdkClient();
       const model = options.model || geminiModelConfig.textModel;
 
-      const response = await client.models.generateContent({
-        model,
-        contents: prompt,
-        config: {
-          systemInstruction: options.systemInstruction,
-          temperature: options.temperature,
-          maxOutputTokens: options.maxOutputTokens,
-          abortSignal: signal,
-        },
+      return await this.keyPool.execute(async (client) => {
+        const response = await client.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            systemInstruction: options.systemInstruction,
+            temperature: options.temperature,
+            maxOutputTokens: options.maxOutputTokens,
+            abortSignal: signal,
+          },
+        });
+
+        const text = response.text;
+        if (!text || !text.trim()) {
+          throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'Gemini returned an empty response');
+        }
+
+        return { text, usage: extractUsage(response.usageMetadata) };
       });
-
-      const text = response.text;
-      if (!text || !text.trim()) {
-        throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'Gemini returned an empty response');
-      }
-
-      return { text, usage: extractUsage(response.usageMetadata) };
     } catch (error) {
       logger.debug(`[GeminiClient] generateText failed: ${(error as Error)?.message}`);
       throw normalizeGeminiError(error);
@@ -165,24 +153,25 @@ export class GeminiClient {
     const { signal, clear } = buildTimeoutSignal(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, options.signal);
 
     try {
-      const client = await this.getSdkClient();
       const model = options.model || geminiModelConfig.textModel;
 
-      const response = await client.models.generateContent({
-        model,
-        contents: prompt,
-        config: {
-          systemInstruction: options.systemInstruction,
-          temperature: options.temperature,
-          maxOutputTokens: options.maxOutputTokens,
-          responseMimeType: 'application/json',
-          responseSchema: options.responseSchema as never,
-          abortSignal: signal,
-        },
-      });
+      return await this.keyPool.execute(async (client) => {
+        const response = await client.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            systemInstruction: options.systemInstruction,
+            temperature: options.temperature,
+            maxOutputTokens: options.maxOutputTokens,
+            responseMimeType: 'application/json',
+            responseSchema: options.responseSchema as never,
+            abortSignal: signal,
+          },
+        });
 
-      const parsed = this.parseAndValidateStructuredResponse<T>(response.text, options.validate);
-      return { data: parsed, usage: extractUsage(response.usageMetadata) };
+        const parsed = this.parseAndValidateStructuredResponse<T>(response.text, options.validate);
+        return { data: parsed, usage: extractUsage(response.usageMetadata) };
+      });
     } catch (error) {
       logger.debug(`[GeminiClient] generateStructured failed: ${(error as Error)?.message}`);
       throw normalizeGeminiError(error);
@@ -207,29 +196,29 @@ export class GeminiClient {
         throw new GeminiProviderError(GeminiErrorCode.UNKNOWN_PROVIDER_ERROR, 'generateStructuredWithImage requires at least one image');
       }
 
-      const client = await this.getSdkClient();
       const model = options.model || geminiModelConfig.visionModel;
-
       const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [{ text: prompt }];
       for (const image of options.images) {
         parts.push({ inlineData: { mimeType: image.mimeType, data: image.data.toString('base64') } });
       }
 
-      const response = await client.models.generateContent({
-        model,
-        contents: parts as never,
-        config: {
-          systemInstruction: options.systemInstruction,
-          temperature: options.temperature,
-          maxOutputTokens: options.maxOutputTokens,
-          responseMimeType: 'application/json',
-          responseSchema: options.responseSchema as never,
-          abortSignal: signal,
-        },
-      });
+      return await this.keyPool.execute(async (client) => {
+        const response = await client.models.generateContent({
+          model,
+          contents: parts as never,
+          config: {
+            systemInstruction: options.systemInstruction,
+            temperature: options.temperature,
+            maxOutputTokens: options.maxOutputTokens,
+            responseMimeType: 'application/json',
+            responseSchema: options.responseSchema as never,
+            abortSignal: signal,
+          },
+        });
 
-      const parsed = this.parseAndValidateStructuredResponse<T>(response.text, options.validate);
-      return { data: parsed, usage: extractUsage(response.usageMetadata) };
+        const parsed = this.parseAndValidateStructuredResponse<T>(response.text, options.validate);
+        return { data: parsed, usage: extractUsage(response.usageMetadata) };
+      });
     } catch (error) {
       logger.debug(`[GeminiClient] generateStructuredWithImage failed: ${(error as Error)?.message}`);
       throw normalizeGeminiError(error);
@@ -270,19 +259,26 @@ export class GeminiClient {
     let lastUsage: GeminiUsage = EMPTY_USAGE;
 
     try {
-      const client = await this.getSdkClient();
       const model = options.model || geminiModelConfig.streamingModel;
 
-      const stream = await client.models.generateContentStream({
-        model,
-        contents: prompt,
-        config: {
-          systemInstruction: options.systemInstruction,
-          temperature: options.temperature,
-          maxOutputTokens: options.maxOutputTokens,
-          abortSignal: signal,
-        },
-      });
+      // Key rotation only covers establishing the stream itself. Once
+      // chunks have started flowing, a mid-stream failure is propagated
+      // as-is (never silently retried on another key) — restarting a
+      // partially-consumed stream on a different key could duplicate or
+      // corrupt output the caller may have already relayed onward (e.g. to
+      // a live socket).
+      const stream = await this.keyPool.execute((client) =>
+        client.models.generateContentStream({
+          model,
+          contents: prompt,
+          config: {
+            systemInstruction: options.systemInstruction,
+            temperature: options.temperature,
+            maxOutputTokens: options.maxOutputTokens,
+            abortSignal: signal,
+          },
+        })
+      );
 
       for await (const chunk of stream) {
         if (chunk.usageMetadata) lastUsage = extractUsage(chunk.usageMetadata);

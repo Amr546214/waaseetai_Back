@@ -519,6 +519,78 @@ test('generateStructuredWithImage: an externally aborted signal propagates as TI
   }
 });
 
+// ── multi-key pool integration (GeminiClient delegates to GeminiKeyPool) ──
+// The pool's own unit behavior (round-robin order, cooldown, bounded retry,
+// parsing) is covered exhaustively in gemini-key-pool.test.ts. These tests
+// only prove GeminiClient actually wires real calls through the pool.
+
+async function loadClientMultiKey(behavior: MockModelsBehavior, apiKeysCsv: string | undefined) {
+  behaviorHolder.current = behavior;
+  const originalApiKeys = process.env.GEMINI_API_KEYS;
+  const originalApiKey = process.env.GEMINI_API_KEY;
+  if (apiKeysCsv === undefined) delete process.env.GEMINI_API_KEYS; else process.env.GEMINI_API_KEYS = apiKeysCsv;
+  delete process.env.GEMINI_API_KEY;
+
+  const moduleUrl = `./gemini.client.ts?fixture=${Date.now()}-${Math.random()}`;
+  const mod = await import(moduleUrl);
+
+  return {
+    geminiClient: mod.geminiClient as import('./gemini.client').GeminiClient,
+    restoreEnv: () => {
+      if (originalApiKeys === undefined) delete process.env.GEMINI_API_KEYS; else process.env.GEMINI_API_KEYS = originalApiKeys;
+      if (originalApiKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = originalApiKey;
+    },
+  };
+}
+
+test('GEMINI_API_KEYS: generateText succeeds via GeminiClient when multiple keys are configured', async () => {
+  const { geminiClient, restoreEnv } = await loadClientMultiKey({
+    generateContent: async () => ({ text: 'multi-key response', usageMetadata: usageMetadataFixture() }),
+  }, 'key1,key2,key3');
+  try {
+    assert.equal(geminiClient.isConfigured(), true);
+    const result = await geminiClient.generateText('hello');
+    assert.equal(result.text, 'multi-key response');
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('GEMINI_API_KEYS: a rate-limited attempt fails over to another key transparently, generateText still succeeds', async () => {
+  let callCount = 0;
+  const { geminiClient, restoreEnv } = await loadClientMultiKey({
+    generateContent: async () => {
+      callCount++;
+      if (callCount === 1) { const e: any = new Error('quota exceeded'); e.status = 429; throw e; }
+      return { text: 'recovered after failover', usageMetadata: usageMetadataFixture() };
+    },
+  }, 'key1,key2');
+  try {
+    const result = await geminiClient.generateText('hello');
+    assert.equal(result.text, 'recovered after failover');
+    assert.equal(callCount, 2, 'exactly one retry should have happened, transparent to the caller');
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('GEMINI_API_KEYS: a non-quota error still surfaces as before, without any hidden retry', async () => {
+  let callCount = 0;
+  const { geminiClient, restoreEnv } = await loadClientMultiKey({
+    generateContent: async () => { callCount++; const e: any = new Error('bad key'); e.status = 401; throw e; },
+  }, 'key1,key2');
+  const { GeminiErrorCode } = await import('./gemini.errors.ts');
+  try {
+    await assert.rejects(
+      () => geminiClient.generateText('hello'),
+      (err: any) => { assert.equal(err.code, GeminiErrorCode.AUTHENTICATION_ERROR); return true; }
+    );
+    assert.equal(callCount, 1);
+  } finally {
+    restoreEnv();
+  }
+});
+
 test('generateStructuredWithImage: real usage metadata is extracted and returned unmodified', async () => {
   const { geminiClient, restoreEnv } = await loadClient({
     generateContent: async () => ({ text: '{"score": 77}', usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 50, totalTokenCount: 150 } })
