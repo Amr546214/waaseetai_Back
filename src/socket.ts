@@ -9,6 +9,7 @@ import { registerAiAssistantGateway } from './sockets/ai-assistant.gateway';
 import { registerAssessmentGateway } from './sockets/assessment.gateway';
 import { registerSetupTestGateway } from './sockets/setup-test.gateway';
 import { registerAvatarChatGateway } from './sockets/avatar-chat.gateway';
+import { registerHelpAssistantChatGateway } from './sockets/help-assistant-chat.gateway';
 import { sessionService } from './services/session.service';
 
 export let ioInstance: SocketIOServer | null = null;
@@ -126,6 +127,9 @@ export const initSocketServer = (httpServer: HttpServer, allowedOrigins: string[
 
 		// Register 3D Avatar Assistant Chat Gateway (F8-TEXT, Gemini-migrated)
 		registerAvatarChatGateway(socket);
+
+		// Register Help AI Assistant Gateway (general product Q&A, soft-auth, Gemini-grounded)
+		registerHelpAssistantChatGateway(socket);
 
 		socket.on('disconnect', () => {
 			console.log('🔌 Client disconnected:', socket.id);
