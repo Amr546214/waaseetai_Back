@@ -49,13 +49,28 @@ async function loadGateway(t: TestContext, opts: {
   providerSpecialty?: any;
   attempt?: any;
   createSpy?: any;
+  updateSpy?: any;
+  updateManySpy?: any;
+  claimExistingAttempt?: any;
+  queryRawSpy?: any;
   generate20Questions?: (input: any) => Promise<any>;
   generateStructured?: (prompt: string, options: any) => Promise<any>;
 }) {
   const createSpy = opts.createSpy ?? t.mock.fn(async (args: any) => ({ id: 'attempt-abc-123', ...args.data }));
-  const updateSpy = t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
+  const updateSpy = opts.updateSpy ?? t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
+  // Batch 3D-1: the atomic claim uses updateMany, conditioned on the
+  // attempt's current status matching the submittable list. Defaults to a
+  // successful claim (count: 1); tests simulating a lost race pass their own
+  // spy that returns { count: 0 }.
+  const updateManySpy = opts.updateManySpy ?? t.mock.fn(async () => ({ count: 1 }));
+  // Batch 3D-2: the generation claim reserves the AssessmentAttempt row
+  // (tx.assessmentAttempt.create) inside the same locked transaction that
+  // checks for an existing active attempt (tx.assessmentAttempt.findFirst).
+  const claimFindFirstSpy = t.mock.fn(async () => (opts.claimExistingAttempt !== undefined ? opts.claimExistingAttempt : null));
+  const queryRawSpy = opts.queryRawSpy ?? t.mock.fn(async () => []);
   const tx = {
-    assessmentAttempt: { update: updateSpy },
+    $queryRaw: queryRawSpy,
+    assessmentAttempt: { update: updateSpy, create: createSpy, findFirst: claimFindFirstSpy },
     providerSpecialty: { update: updateSpy }
   };
   const prismaMock: any = {
@@ -63,6 +78,7 @@ async function loadGateway(t: TestContext, opts: {
     assessmentAttempt: {
       create: createSpy,
       update: updateSpy,
+      updateMany: updateManySpy,
       findFirst: async () => (opts.attempt === undefined ? null : opts.attempt)
     },
     $transaction: async (fn: any) => fn(tx)
@@ -87,7 +103,24 @@ async function loadGateway(t: TestContext, opts: {
 
   const moduleUrl = `./assessment.gateway.ts?fixture=${Date.now()}-${Math.random()}`;
   const mod = await import(moduleUrl);
-  return { register: mod.registerAssessmentGateway as (socket: any) => void, createSpy, updateSpy };
+  return { register: mod.registerAssessmentGateway as (socket: any) => void, createSpy, updateSpy, updateManySpy, claimFindFirstSpy, queryRawSpy };
+}
+
+// Batch 3D-1: a full, "submittable" attempt fixture — real DB submission
+// authority checks now require status/startedAt/timeLimitMinutes to be
+// present, in addition to the pre-existing ownership/questionsPayload shape.
+function submittableAttemptFixture(overrides: Partial<any> = {}) {
+  return {
+    id: 'db-attempt-uuid-1',
+    providerSpecialtyId: 'spec-1',
+    totalQuestions: 4,
+    status: 'IN_PROGRESS',
+    startedAt: new Date(),
+    timeLimitMinutes: 15,
+    questionsPayload: Array.from({ length: 4 }, (_, i) => validQuestion(i + 1)),
+    providerSpecialty: { specialty: { nameAr: 'تطوير الويب' } },
+    ...overrides
+  };
 }
 
 const START_PAYLOAD = { providerSpecialtyId: 'spec-1', specialtyId: 'specialty-1' };
@@ -118,8 +151,8 @@ test('start_assessment: a providerSpecialty not owned by the caller is rejected'
 
 // ── successful ordered flow ────────────────────────────────────────────────
 
-test('start_assessment: a real validated Gemini generation streams all 20 questions in order then assessment_ready with generationSource GEMINI', async (t) => {
-  const { register, createSpy } = await loadGateway(t, {});
+test('start_assessment: a real validated Gemini generation reserves the attempt before Gemini runs, streams all 20 questions in order, then assessment_ready with generationSource GEMINI', async (t) => {
+  const { register, createSpy, updateSpy } = await loadGateway(t, {});
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
 
@@ -133,8 +166,15 @@ test('start_assessment: a real validated Gemini generation streams all 20 questi
   assert.ok(ready);
   assert.equal(ready!.payload.generationSource, 'GEMINI');
 
-  const createArgs = createSpy.mock.calls[0].arguments[0].data;
-  assert.equal(createArgs.analyzedAssetsSnapshot.generationSource, 'GEMINI');
+  // The reservation (Batch 3D-2) is created BEFORE Gemini, with an empty
+  // placeholder payload — the real data only lands via the follow-up update.
+  const reserveArgs = createSpy.mock.calls[0].arguments[0].data;
+  assert.equal(reserveArgs.status, 'STREAMING');
+  assert.deepEqual(reserveArgs.questionsPayload, []);
+
+  const persistCall = updateSpy.mock.calls.find((c: any) => c.arguments[0].data?.analyzedAssetsSnapshot);
+  assert.ok(persistCall, 'the real generated data must be persisted via an update after Gemini succeeds');
+  assert.equal(persistCall.arguments[0].data.analyzedAssetsSnapshot.generationSource, 'GEMINI');
 });
 
 test('start_assessment: a static-fallback generation is honestly reported in assessment_ready', async (t) => {
@@ -154,6 +194,82 @@ test('start_assessment: a static-fallback generation is honestly reported in ass
   const ready = emitted.find((e) => e.event === 'assessment_ready');
   assert.equal(ready!.payload.generationSource, 'STATIC_FALLBACK');
   assert.doesNotMatch(ready!.payload.message, /عبر الذكاء الاصطناعي بنجاح/);
+});
+
+// ── Batch 3D-2: assessment generation integrity (duplicate generation) ───
+
+test('start_assessment: the active-attempt lookup only matches IN_PROGRESS/STREAMING — a COMPLETED historical attempt can never block a new legitimate assessment', async (t) => {
+  const { register, claimFindFirstSpy } = await loadGateway(t, {});
+  const { socket, handlers } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['start_assessment'](START_PAYLOAD);
+
+  const claimWhere = claimFindFirstSpy.mock.calls[0].arguments[0].where;
+  assert.deepEqual(claimWhere.status.in, ['IN_PROGRESS', 'STREAMING']);
+  assert.equal(claimWhere.status.in.includes('COMPLETED'), false);
+});
+
+test('start_assessment: an existing active attempt with real questions already generated (e.g. the REST twin finished first) is replayed — no second Gemini call, no second attempt row', async (t) => {
+  let geminiCalled = false;
+  const { register, createSpy } = await loadGateway(t, {
+    claimExistingAttempt: {
+      id: 'rest-owned-attempt-1',
+      questionsPayload: Array.from({ length: 20 }, (_, i) => validQuestion(i + 1)),
+      analyzedAssetsSnapshot: { generationSource: 'GEMINI' }
+    },
+    generate20Questions: async () => { geminiCalled = true; throw new Error('must not be called'); }
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['start_assessment'](START_PAYLOAD);
+
+  assert.equal(geminiCalled, false, 'replaying an already-generated attempt must never spend a second Gemini call');
+  assert.equal(createSpy.mock.calls.length, 0, 'no second AssessmentAttempt row may be created');
+  const streamed = emitted.filter((e) => e.event === 'question_streamed');
+  assert.equal(streamed.length, 20);
+  assert.ok(streamed.every((e) => e.payload.attemptId === 'rest-owned-attempt-1'));
+  const ready = emitted.find((e) => e.event === 'assessment_ready');
+  assert.ok(ready);
+  assert.equal(ready!.payload.attemptId, 'rest-owned-attempt-1');
+  assert.equal(ready!.payload.generationSource, 'GEMINI');
+});
+
+test('start_assessment: an existing active attempt still generating (no questions yet) is rejected — no Gemini call, no second attempt row', async (t) => {
+  let geminiCalled = false;
+  const { register, createSpy } = await loadGateway(t, {
+    claimExistingAttempt: { id: 'rest-owned-attempt-1', questionsPayload: [], analyzedAssetsSnapshot: null },
+    generate20Questions: async () => { geminiCalled = true; throw new Error('must not be called'); }
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['start_assessment'](START_PAYLOAD);
+
+  assert.equal(geminiCalled, false);
+  assert.equal(createSpy.mock.calls.length, 0);
+  assert.equal(emitted.filter((e) => e.event === 'question_streamed').length, 0);
+  assert.equal(emitted.filter((e) => e.event === 'assessment_ready').length, 0);
+  assert.equal(emitted[emitted.length - 1].event, 'assessment_error');
+});
+
+test('start_assessment: a persist failure after a successful claim releases the reservation to CANCELLED, so a retry is never permanently blocked', async (t) => {
+  const updateCalls: any[] = [];
+  const failingUpdateSpy = async (args: any) => {
+    updateCalls.push(args);
+    if (updateCalls.length === 1) throw new Error('DB write failed');
+    return { id: args.where.id, ...args.data };
+  };
+  const { register } = await loadGateway(t, { updateSpy: failingUpdateSpy });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['start_assessment'](START_PAYLOAD);
+
+  assert.equal(emitted[emitted.length - 1].event, 'assessment_error');
+  const cancelCall = updateCalls.find((c: any) => c.data.status === 'CANCELLED');
+  assert.ok(cancelCall, 'the reservation must be released to CANCELLED, not left stuck in STREAMING, so a retry can claim a fresh attempt');
 });
 
 // ── rate limiting ────────────────────────────────────────────────────────
@@ -222,6 +338,7 @@ test('submit_answer: an attempt not owned by the calling user is rejected, never
   const completeEvents = emitted.filter((e) => e.event === 'evaluation_complete');
   assert.equal(completeEvents.length, 0);
   assert.equal(emitted[emitted.length - 1].event, 'assessment_error');
+  assert.equal(emitted[emitted.length - 1].payload.code, 'NOT_FOUND', 'Batch 3D-3: structured code lets the frontend classify this as a terminal, non-retryable failure');
 });
 
 test('submit_answer: an unauthenticated socket is rejected', async (t) => {
@@ -232,15 +349,11 @@ test('submit_answer: an unauthenticated socket is rejected', async (t) => {
   await handlers['submit_answer']({ attemptId: 'real-db-attempt-uuid-123', answers: {} });
 
   assert.equal(emitted[0].event, 'assessment_error');
+  assert.equal(emitted[0].payload.code, 'AUTH_REQUIRED');
 });
 
 test('submit_answer: a user issuing more than 30 submissions within the window is rate-limited', async (t) => {
-  const attempt = {
-    id: 'db-attempt-uuid-1',
-    providerSpecialtyId: 'spec-1',
-    questionsPayload: Array.from({ length: 4 }, (_, i) => validQuestion(i + 1)),
-    providerSpecialty: { specialty: {} }
-  };
+  const attempt = submittableAttemptFixture({ providerSpecialty: { specialty: {} } });
   const { register } = await loadGateway(t, { attempt });
   const uniqueUserId = `rate-limit-submit-${Date.now()}-${Math.random()}`;
   const { socket, handlers, emitted } = createMockSocket({ userId: uniqueUserId });
@@ -260,12 +373,7 @@ test('submit_answer: a user issuing more than 30 submissions within the window i
 // ── successful ordered submission flow + real Gemini feedback ────────────
 
 test('submit_answer: a genuinely owned attempt with a real validated Gemini feedback success emits evaluation_complete with real feedback', async (t) => {
-  const attempt = {
-    id: 'db-attempt-uuid-1',
-    providerSpecialtyId: 'spec-1',
-    questionsPayload: Array.from({ length: 4 }, (_, i) => validQuestion(i + 1)),
-    providerSpecialty: { specialty: { nameAr: 'تطوير الويب' } }
-  };
+  const attempt = submittableAttemptFixture();
   const feedback = { feedbackAr: 'ملاحظة حقيقية', strengths: ['قوة'], weaknesses: [] };
   const { register, updateSpy } = await loadGateway(t, {
     attempt,
@@ -287,12 +395,7 @@ test('submit_answer: a genuinely owned attempt with a real validated Gemini feed
 });
 
 test('submit_answer: passes an explicit, non-truncating maxOutputTokens (live-Gemini truncation regression)', async (t) => {
-  const attempt = {
-    id: 'db-attempt-uuid-1',
-    providerSpecialtyId: 'spec-1',
-    questionsPayload: Array.from({ length: 4 }, (_, i) => validQuestion(i + 1)),
-    providerSpecialty: { specialty: { nameAr: 'تطوير الويب' } }
-  };
+  const attempt = submittableAttemptFixture();
   const feedback = { feedbackAr: 'ملاحظة حقيقية', strengths: ['قوة'], weaknesses: [] };
   const { register } = await loadGateway(t, {
     attempt,
@@ -310,12 +413,7 @@ test('submit_answer: passes an explicit, non-truncating maxOutputTokens (live-Ge
 });
 
 test('submit_answer: Gemini feedback failure still completes with the deterministic real-outcome feedback, never blocking completion', async (t) => {
-  const attempt = {
-    id: 'db-attempt-uuid-1',
-    providerSpecialtyId: 'spec-1',
-    questionsPayload: Array.from({ length: 4 }, (_, i) => validQuestion(i + 1)),
-    providerSpecialty: { specialty: {} }
-  };
+  const attempt = submittableAttemptFixture({ providerSpecialty: { specialty: {} } });
   const { register } = await loadGateway(t, {
     attempt,
     generateStructured: async () => { throw new Error('unavailable'); }
@@ -328,4 +426,115 @@ test('submit_answer: Gemini feedback failure still completes with the determinis
   const complete = emitted.find((e) => e.event === 'evaluation_complete');
   assert.ok(complete, 'completion must still occur — a Gemini feedback failure is not the same as a submission failure');
   assert.equal(complete!.payload.isPassed, true);
+});
+
+// ── Batch 3D-1: assessment submission integrity ─────────────────────────
+
+test('submit_answer: a COMPLETED attempt cannot be re-scored through the socket — rejected before any Gemini call', async (t) => {
+  let geminiCalled = false;
+  const attempt = submittableAttemptFixture({ status: 'COMPLETED', score: 100, isPassed: true });
+  const { register } = await loadGateway(t, {
+    attempt,
+    generateStructured: async () => { geminiCalled = true; throw new Error('must not be called'); }
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['submit_answer']({ attemptId: 'db-attempt-uuid-1', answers: { '1': 'b', '2': 'b', '3': 'b', '4': 'b' } });
+
+  assert.equal(geminiCalled, false);
+  const completeEvents = emitted.filter((e) => e.event === 'evaluation_complete');
+  assert.equal(completeEvents.length, 0, 'an already-COMPLETED attempt must never be re-scored/re-emitted');
+  assert.equal(emitted[emitted.length - 1].event, 'assessment_error');
+  assert.equal(emitted[emitted.length - 1].payload.code, 'ALREADY_FINALIZED', 'Batch 3D-3: a terminal outcome must never be classified as a retryable transport failure');
+});
+
+test('submit_answer: an already-EXPIRED attempt cannot be scored through the socket — rejected before any Gemini call', async (t) => {
+  let geminiCalled = false;
+  const attempt = submittableAttemptFixture({ status: 'EXPIRED' });
+  const { register } = await loadGateway(t, {
+    attempt,
+    generateStructured: async () => { geminiCalled = true; throw new Error('must not be called'); }
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['submit_answer']({ attemptId: 'db-attempt-uuid-1', answers: { '1': 'b' } });
+
+  assert.equal(geminiCalled, false);
+  assert.equal(emitted.filter((e) => e.event === 'evaluation_complete').length, 0);
+  assert.equal(emitted[emitted.length - 1].event, 'assessment_error');
+  assert.equal(emitted[emitted.length - 1].payload.code, 'ALREADY_FINALIZED');
+});
+
+test('submit_answer: a late submission (elapsed past the 15+1 minute grace period) performs no Gemini call and grants no specialty result', async (t) => {
+  let geminiCalled = false;
+  const attempt = submittableAttemptFixture({ startedAt: new Date(Date.now() - 20 * 60 * 1000) });
+  const { register, updateManySpy } = await loadGateway(t, {
+    attempt,
+    generateStructured: async () => { geminiCalled = true; throw new Error('must not be called'); }
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['submit_answer']({ attemptId: 'db-attempt-uuid-1', answers: { '1': 'b' } });
+
+  assert.equal(geminiCalled, false, 'an expired attempt must never trigger a Gemini feedback call');
+  const complete = emitted.find((e) => e.event === 'evaluation_complete');
+  assert.ok(complete, 'an expired result is still reported honestly to the client');
+  assert.equal(complete!.payload.status, 'EXPIRED');
+  assert.equal(complete!.payload.isPassed, false);
+  const claimArgs = updateManySpy.mock.calls[0].arguments[0];
+  assert.equal(claimArgs.data.status, 'EXPIRED');
+});
+
+test('submit_answer: losing the atomic claim to a concurrent submission (e.g. the REST twin) rejects safely, calls no Gemini, and never overwrites the winner', async (t) => {
+  let geminiCalled = false;
+  const attempt = submittableAttemptFixture();
+  const { register } = await loadGateway(t, {
+    attempt,
+    updateManySpy: t.mock.fn(async () => ({ count: 0 })), // simulates the REST twin having already claimed this attempt
+    generateStructured: async () => { geminiCalled = true; throw new Error('must not be called'); }
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['submit_answer']({ attemptId: 'db-attempt-uuid-1', answers: { '1': 'b', '2': 'b', '3': 'b', '4': 'b' } });
+
+  assert.equal(geminiCalled, false, 'the losing side of a race must never spend a Gemini call');
+  assert.equal(emitted.filter((e) => e.event === 'evaluation_complete').length, 0, 'the loser must never emit its own finalization');
+  assert.equal(emitted[emitted.length - 1].event, 'assessment_error');
+  assert.equal(emitted[emitted.length - 1].payload.code, 'ALREADY_FINALIZED', 'Batch 3D-3: a lost race must never look like a retryable transport failure to the frontend');
+});
+
+test('submit_answer: the winning claim persists exactly once — ProviderSpecialty outcome applied a single time', async (t) => {
+  const attempt = submittableAttemptFixture();
+  const feedback = { feedbackAr: 'ملاحظة حقيقية', strengths: ['قوة'], weaknesses: [] };
+  const { register, updateSpy, updateManySpy } = await loadGateway(t, {
+    attempt,
+    generateStructured: async () => ({ data: feedback, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } })
+  });
+  const { socket, handlers } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['submit_answer']({ attemptId: 'db-attempt-uuid-1', answers: { '1': 'b', '2': 'b', '3': 'b', '4': 'b' } });
+
+  assert.equal(updateManySpy.mock.calls.length, 1, 'exactly one atomic claim attempt');
+  const providerSpecialtyUpdates = updateSpy.mock.calls.filter((c: any) => c.arguments[0].data?.hasTakenAssessment !== undefined);
+  assert.equal(providerSpecialtyUpdates.length, 1, 'ProviderSpecialty outcome must be applied at most once');
+});
+
+test('submit_answer: a genuine unexpected processing exception (not a business rejection) is reported with the retryable SUBMISSION_FAILED code', async (t) => {
+  const attempt = submittableAttemptFixture();
+  const { register } = await loadGateway(t, {
+    attempt,
+    updateManySpy: async () => { throw new Error('DB connection dropped mid-write'); }
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['submit_answer']({ attemptId: 'db-attempt-uuid-1', answers: { '1': 'b', '2': 'b', '3': 'b', '4': 'b' } });
+
+  assert.equal(emitted[emitted.length - 1].event, 'assessment_error');
+  assert.equal(emitted[emitted.length - 1].payload.code, 'SUBMISSION_FAILED', 'Batch 3D-3: this is the one code the frontend treats as a genuine, retryable transport/processing failure');
 });

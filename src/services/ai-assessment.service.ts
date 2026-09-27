@@ -37,6 +37,17 @@ export interface SubmitAssessmentResponse {
   completedAt: Date;
 }
 
+// Batch 3D-1 — assessment submission integrity. `submitAssessment` (REST) and
+// `assessment.gateway.ts::handleSubmission` (socket) are two independent
+// transports that can both be invoked for the same attemptId essentially in
+// parallel (specialties.ts fires both on every submit). Only an attempt still
+// in one of these statuses may be finalized; the finalizing write below is an
+// atomic `updateMany` conditioned on this same list at write time (not just
+// at the initial read), so a concurrent finalization can never be overwritten
+// — whichever request's updateMany matches zero rows lost the race and must
+// not proceed to score/Gemini/ProviderSpecialty work.
+const SUBMITTABLE_STATUSES: AssessmentStatus[] = [AssessmentStatus.IN_PROGRESS, AssessmentStatus.STREAMING];
+
 const FEEDBACK_SCHEMA = {
   type: 'object',
   properties: {
@@ -55,6 +66,84 @@ function isValidFeedback(value: unknown): value is { feedbackAr: string; strengt
     Array.isArray(v.strengths) && v.strengths.every((s) => typeof s === 'string') &&
     Array.isArray(v.weaknesses) && v.weaknesses.every((s) => typeof s === 'string')
   );
+}
+
+// Strip correctAnswer/explanation before sending to the frontend — shared by
+// both the fresh-generation path and the claim-reuse path below.
+function sanitizeQuestions(questions: AssessmentQuestion[]): Omit<AssessmentQuestion, 'correctAnswer' | 'explanation'>[] {
+  return questions.map(q => ({
+    id: q.id,
+    textAr: q.textAr,
+    options: q.options.map(opt => ({ id: opt.id, text: opt.text })),
+    assessmentArea: q.assessmentArea
+  }));
+}
+
+interface GenerationClaim {
+  claimed: boolean;
+  attemptId: string;
+  existingQuestionsPayload?: unknown;
+  existingGenerationSource?: 'GEMINI' | 'STATIC_FALLBACK';
+}
+
+// Batch 3D-2 — generation concurrency. The socket (`assessment.gateway.ts`
+// start_assessment) and REST (`generateAssessment` below) generation paths
+// are two independent transports the frontend fires for the same
+// providerSpecialtyId, racing whenever Gemini's ~20-question generation
+// exceeds the frontend's 3.5s fallback timer (specialties.ts). Neither path
+// previously checked for an existing active attempt before spending a Gemini
+// call, so both could generate concurrently and create two AssessmentAttempt
+// rows for one specialty. A plain findFirst-then-create is not
+// concurrency-safe (the read and the write are not one atomic operation).
+//
+// Fix: lock the parent ProviderSpecialty row (`SELECT ... FOR UPDATE` on its
+// existing primary key — no schema change) for the duration of a single
+// transaction that checks for an active attempt and, if none exists, reserves
+// a new placeholder row (status STREAMING, empty questionsPayload — a valid
+// value for this required Json column) BEFORE Gemini is ever called. Callers
+// must have already verified ownership of `providerSpecialtyId` before
+// calling this (same as the pre-existing per-transport ownership checks) —
+// this function does not re-check ownership itself, only serializes
+// concurrent generation attempts for an already-authorized specialty.
+async function claimAssessmentGeneration(
+  providerSpecialtyId: string,
+  providerProfileId: string,
+  specialtyId: string
+): Promise<GenerationClaim> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM provider_specialties WHERE id = ${providerSpecialtyId} FOR UPDATE`;
+
+    const existing = await tx.assessmentAttempt.findFirst({
+      where: { providerSpecialtyId, status: { in: SUBMITTABLE_STATUSES } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, questionsPayload: true, analyzedAssetsSnapshot: true }
+    });
+
+    if (existing) {
+      const snapshot = existing.analyzedAssetsSnapshot as { generationSource?: 'GEMINI' | 'STATIC_FALLBACK' } | null;
+      return {
+        claimed: false,
+        attemptId: existing.id,
+        existingQuestionsPayload: existing.questionsPayload,
+        existingGenerationSource: snapshot?.generationSource
+      };
+    }
+
+    const reserved = await tx.assessmentAttempt.create({
+      data: {
+        providerSpecialtyId,
+        providerProfileId,
+        specialtyId,
+        questionsPayload: [],
+        totalQuestions: 20,
+        status: AssessmentStatus.STREAMING,
+        timeLimitMinutes: 15,
+        startedAt: new Date()
+      }
+    });
+
+    return { claimed: true, attemptId: reserved.id };
+  });
 }
 
 export class AiAssessmentService {
@@ -92,43 +181,67 @@ export class AiAssessmentService {
     const categoryName = specialty.category?.nameAr || '';
     const subSpecialties = providerSpecialty.subSpecialties || [];
 
-    const { questions: generatedQuestions, subSpecialtiesSnapshot, analyzedAssetsSnapshot, generationSource } =
-      await aiAssessmentAnalyzerService.generate20Questions({
-        providerSpecialtyId,
-        specialtyId: providerSpecialty.specialtyId,
-        subSpecialties,
-        categoryName,
-        specialtyName: specialtyNameAr,
-        providerProfileId: providerSpecialty.providerProfileId
-      });
+    // 2. Claim generation for this specialty BEFORE calling Gemini. If the
+    // socket twin (or a duplicate REST retry) already owns an active attempt,
+    // reuse its real result instead of spending a second Gemini call.
+    const claim = await claimAssessmentGeneration(providerSpecialtyId, providerSpecialty.providerProfileId, providerSpecialty.specialtyId);
 
-    // 2. Store Attempt in Database — real snapshot metadata (including the
-    // honest generation source) is persisted, not discarded.
-    const attempt = await prisma.assessmentAttempt.create({
-      data: {
-        providerSpecialtyId,
-        providerProfileId: providerSpecialty.providerProfileId,
-        specialtyId: providerSpecialty.specialtyId,
-        subSpecialtiesSnapshot: subSpecialtiesSnapshot as any,
-        analyzedAssetsSnapshot: { items: analyzedAssetsSnapshot, generationSource } as any,
-        questionsPayload: generatedQuestions as any,
-        status: AssessmentStatus.IN_PROGRESS,
-        timeLimitMinutes: 15,
-        startedAt: new Date()
+    if (!claim.claimed) {
+      const existingQuestions = (claim.existingQuestionsPayload as AssessmentQuestion[]) || [];
+      if (existingQuestions.length > 0) {
+        return {
+          attemptId: claim.attemptId,
+          questions: sanitizeQuestions(existingQuestions),
+          timeLimitMinutes: 15,
+          generationSource: claim.existingGenerationSource || 'GEMINI'
+        };
       }
-    });
 
-    // 3. Strip correctAnswer/explanation before sending to frontend
-    const sanitizedQuestions = generatedQuestions.map(q => ({
-      id: q.id,
-      textAr: q.textAr,
-      options: q.options.map(opt => ({ id: opt.id, text: opt.text })),
-      assessmentArea: q.assessmentArea
-    }));
+      const inProgressError: any = new Error('Assessment generation is already in progress for this specialty.');
+      inProgressError.code = 'GENERATION_IN_PROGRESS';
+      throw inProgressError;
+    }
+
+    // 3. Generate — only the claim winner reaches this point.
+    let generatedQuestions: AssessmentQuestion[];
+    let subSpecialtiesSnapshot: string[];
+    let analyzedAssetsSnapshot: any[];
+    let generationSource: 'GEMINI' | 'STATIC_FALLBACK';
+    try {
+      ({ questions: generatedQuestions, subSpecialtiesSnapshot, analyzedAssetsSnapshot, generationSource } =
+        await aiAssessmentAnalyzerService.generate20Questions({
+          providerSpecialtyId,
+          specialtyId: providerSpecialty.specialtyId,
+          subSpecialties,
+          categoryName,
+          specialtyName: specialtyNameAr,
+          providerProfileId: providerSpecialty.providerProfileId
+        }));
+
+      // 4. Fill in the reserved attempt with the real snapshot metadata
+      // (including the honest generation source) — never discarded.
+      await prisma.assessmentAttempt.update({
+        where: { id: claim.attemptId },
+        data: {
+          subSpecialtiesSnapshot: subSpecialtiesSnapshot as any,
+          analyzedAssetsSnapshot: { items: analyzedAssetsSnapshot, generationSource } as any,
+          questionsPayload: generatedQuestions as any,
+          status: AssessmentStatus.IN_PROGRESS
+        }
+      });
+    } catch (err) {
+      // Release the reservation so a retry is never permanently blocked by a
+      // stuck STREAMING row (Batch 3D-2 failure-recovery requirement).
+      await prisma.assessmentAttempt.update({
+        where: { id: claim.attemptId },
+        data: { status: AssessmentStatus.CANCELLED }
+      }).catch(() => {});
+      throw err;
+    }
 
     return {
-      attemptId: attempt.id,
-      questions: sanitizedQuestions,
+      attemptId: claim.attemptId,
+      questions: sanitizeQuestions(generatedQuestions),
       timeLimitMinutes: 15,
       generationSource
     };
@@ -154,7 +267,7 @@ export class AiAssessmentService {
       throw new Error(`Assessment attempt '${attemptId}' was not found.`);
     }
 
-    if (attempt.status !== AssessmentStatus.IN_PROGRESS) {
+    if (!SUBMITTABLE_STATUSES.includes(attempt.status)) {
       throw new Error(`Assessment attempt '${attemptId}' is already ${attempt.status}.`);
     }
 
@@ -164,14 +277,21 @@ export class AiAssessmentService {
     const isExpired = elapsedMinutes > (attempt.timeLimitMinutes + 1);
 
     if (isExpired) {
-      await prisma.assessmentAttempt.update({
-        where: { id: attemptId },
+      // Atomic claim: only matches if the attempt is still submittable at
+      // write time, not merely at the read above — closes the race window
+      // against a concurrent socket/REST finalization (Batch 3D-1).
+      const expiredClaim = await prisma.assessmentAttempt.updateMany({
+        where: { id: attemptId, status: { in: SUBMITTABLE_STATUSES } },
         data: {
           status: AssessmentStatus.EXPIRED,
           completedAt: now,
           submittedAnswers: submittedAnswers as any
         }
       });
+
+      if (expiredClaim.count === 0) {
+        throw new Error(`Assessment attempt '${attemptId}' was already finalized by a concurrent submission.`);
+      }
 
       return {
         attemptId,
@@ -200,6 +320,26 @@ export class AiAssessmentService {
 
     const scorePercentage = parseFloat(((correctCount / totalQuestions) * 100).toFixed(1));
     const isPassed = scorePercentage > 25.0;
+
+    // Claim the attempt BEFORE calling Gemini (Batch 3D-1): a losing
+    // concurrent request (the socket twin, or a duplicate REST retry) must
+    // never spend a Gemini call or overwrite the winner's result. Same
+    // atomic-updateMany pattern as the expiry branch above.
+    const completedAt = new Date();
+    const claim = await prisma.assessmentAttempt.updateMany({
+      where: { id: attemptId, status: { in: SUBMITTABLE_STATUSES } },
+      data: {
+        submittedAnswers: submittedAnswers as any,
+        score: scorePercentage,
+        isPassed,
+        status: isPassed ? AssessmentStatus.COMPLETED : AssessmentStatus.FAILED,
+        completedAt
+      }
+    });
+
+    if (claim.count === 0) {
+      throw new Error(`Assessment attempt '${attemptId}' was already finalized by a concurrent submission.`);
+    }
 
     // 3. AI Feedback Generation via the shared Gemini foundation. Honest
     // failure: on any Gemini error or malformed output, the pre-computed
@@ -249,21 +389,14 @@ export class AiAssessmentService {
       console.warn('[AiAssessmentService] Gemini feedback generation unavailable, using deterministic real-outcome feedback:', (err as any)?.code || (err as Error)?.message);
     }
 
-    // 4. Update Database Transactionally
-    const completedAt = new Date();
+    // 4. Persist feedback + ProviderSpecialty outcome. The claim above
+    // already won this attempt exclusively (score/status/completedAt are
+    // already committed), so this transaction only adds the feedback text
+    // and the downstream ProviderSpecialty/tier effects.
     await prisma.$transaction(async (tx) => {
       await tx.assessmentAttempt.update({
         where: { id: attemptId },
-        data: {
-          submittedAnswers: submittedAnswers as any,
-          score: scorePercentage,
-          isPassed,
-          feedbackAr,
-          strengths,
-          weaknesses,
-          status: isPassed ? AssessmentStatus.COMPLETED : AssessmentStatus.FAILED,
-          completedAt
-        }
+        data: { feedbackAr, strengths, weaknesses }
       });
 
       await tx.providerSpecialty.update({

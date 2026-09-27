@@ -40,6 +40,10 @@ export async function generateAssessmentController(req: Request, res: Response):
     console.error('[AiAssessmentController] generate error:', error);
     res.status(500).json({
       success: false,
+      // `code` is only ever a fixed, hardcoded marker this codebase sets
+      // itself (e.g. GENERATION_IN_PROGRESS) — never a raw provider/Gemini
+      // error — so it is safe to forward as-is (Batch 3D-2).
+      ...(error?.code ? { code: error.code } : {}),
       message: error?.message || 'حدث خطأ أثناء توليد أسئلة التقييم الفني.'
     });
   }

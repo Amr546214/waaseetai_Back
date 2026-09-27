@@ -44,6 +44,96 @@ function isValidFeedback(value: unknown): value is { feedbackAr: string; strengt
   );
 }
 
+// Batch 3D-1 — assessment submission integrity. This socket path and the REST
+// twin (ai-assessment.service.ts::submitAssessment) are two independent
+// transports the frontend fires essentially in parallel for the same
+// attemptId (specialties.ts). Only an attempt still in one of these statuses
+// may be finalized; the finalizing write below is an atomic `updateMany`
+// conditioned on this same list at write time (not just at the initial
+// read), so a concurrent finalization on either transport can never be
+// overwritten — whichever request's updateMany matches zero rows lost the
+// race and must not proceed to score/Gemini/ProviderSpecialty work. Kept in
+// sync with the identical list + expiry semantics in ai-assessment.service.ts.
+const SUBMITTABLE_STATUSES: AssessmentStatus[] = [AssessmentStatus.IN_PROGRESS, AssessmentStatus.STREAMING];
+const ALREADY_FINALIZED_MESSAGE = 'تم تسليم وتقييم محاولة التقييم هذه مسبقاً.';
+const GENERATION_IN_PROGRESS_MESSAGE = 'التقييم قيد التوليد بالفعل، يرجى الانتظار.';
+
+// Batch 3D-3 — structured error codes for handleSubmission's assessment_error
+// emissions only (start_assessment/generation is untouched — out of scope).
+// The frontend's submission-transport consolidation needs to distinguish a
+// genuine retryable transport/processing failure (SUBMISSION_FAILED) from a
+// terminal business outcome (everything else) without parsing the
+// human-readable Arabic message. This is additive — `message` is unchanged
+// on every emission, `code` is a new field alongside it.
+const SUBMIT_ERROR_CODES = {
+  AUTH_REQUIRED: 'AUTH_REQUIRED',
+  INVALID_REQUEST: 'INVALID_REQUEST',
+  RATE_LIMITED: 'RATE_LIMITED',
+  NOT_FOUND: 'NOT_FOUND',
+  ALREADY_FINALIZED: 'ALREADY_FINALIZED',
+  SUBMISSION_FAILED: 'SUBMISSION_FAILED'
+} as const;
+
+interface GenerationClaim {
+  claimed: boolean;
+  attemptId: string;
+  existingQuestionsPayload?: unknown;
+  existingGenerationSource?: 'GEMINI' | 'STATIC_FALLBACK';
+}
+
+// Batch 3D-2 — generation concurrency. This socket path (`start_assessment`)
+// and the REST twin (ai-assessment.service.ts::generateAssessment) are two
+// independent transports the frontend fires for the same providerSpecialtyId,
+// racing whenever Gemini's ~20-question generation exceeds the frontend's
+// 3.5s fallback timer (specialties.ts). Neither path previously checked for
+// an existing active attempt before spending a Gemini call. Fix: lock the
+// parent ProviderSpecialty row (`SELECT ... FOR UPDATE` on its existing
+// primary key — no schema change) for one transaction that checks for an
+// active attempt and, if none exists, reserves a new placeholder row (status
+// STREAMING, empty questionsPayload) BEFORE Gemini is called. Kept in sync
+// with the identical function in ai-assessment.service.ts. Callers must
+// already have verified ownership of providerSpecialtyId.
+async function claimAssessmentGeneration(
+  providerSpecialtyId: string,
+  providerProfileId: string,
+  specialtyId: string
+): Promise<GenerationClaim> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM provider_specialties WHERE id = ${providerSpecialtyId} FOR UPDATE`;
+
+    const existing = await tx.assessmentAttempt.findFirst({
+      where: { providerSpecialtyId, status: { in: SUBMITTABLE_STATUSES } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, questionsPayload: true, analyzedAssetsSnapshot: true }
+    });
+
+    if (existing) {
+      const snapshot = existing.analyzedAssetsSnapshot as { generationSource?: 'GEMINI' | 'STATIC_FALLBACK' } | null;
+      return {
+        claimed: false,
+        attemptId: existing.id,
+        existingQuestionsPayload: existing.questionsPayload,
+        existingGenerationSource: snapshot?.generationSource
+      };
+    }
+
+    const reserved = await tx.assessmentAttempt.create({
+      data: {
+        providerSpecialtyId,
+        providerProfileId,
+        specialtyId,
+        questionsPayload: [],
+        totalQuestions: 20,
+        status: AssessmentStatus.STREAMING,
+        timeLimitMinutes: 15,
+        startedAt: new Date()
+      }
+    });
+
+    return { claimed: true, attemptId: reserved.id };
+  });
+}
+
 export class AssessmentGateway {
   private io: SocketIOServer | null = null;
 
@@ -89,9 +179,63 @@ export class AssessmentGateway {
       const specId = providerSpecialty.specialtyId;
       const profileId = providerSpecialty.providerProfileId;
 
+      // Claim generation for this specialty BEFORE calling Gemini (Batch
+      // 3D-2). If the REST twin (or a duplicate socket retry) already owns
+      // an active attempt, reuse its real result instead of spending a
+      // second Gemini call. A claim failure (e.g. DB unavailable) degrades
+      // to the pre-existing unprotected in-memory mode — same resilience
+      // characteristic as before this batch, just without duplicate-safety.
+      let claim: GenerationClaim | null = null;
+      try {
+        claim = await claimAssessmentGeneration(providerSpecId, profileId, specId);
+      } catch (claimErr) {
+        console.warn('[AssessmentGateway] Generation claim failed, falling back to unprotected in-memory generation:', claimErr);
+      }
+
+      if (claim && !claim.claimed) {
+        const existingQuestions = (claim.existingQuestionsPayload as AssessmentQuestion[]) || [];
+        if (existingQuestions.length === 0) {
+          // Generation is genuinely in flight elsewhere for this specialty —
+          // no real questions exist yet to replay.
+          socket.emit('assessment_error', { message: GENERATION_IN_PROGRESS_MESSAGE });
+          return;
+        }
+
+        // Generation already finished elsewhere — replay the real,
+        // already-generated questions to this caller instead of regenerating.
+        for (let i = 0; i < existingQuestions.length; i++) {
+          const rawQ = existingQuestions[i];
+          const sanitizedQuestion = {
+            id: rawQ.id,
+            textAr: rawQ.textAr,
+            options: rawQ.options.map(opt => ({ id: opt.id, text: opt.text })),
+            timeLimitSeconds: rawQ.timeLimitSeconds || 45,
+            difficulty: rawQ.assessmentArea || rawQ.difficulty || (i < 5 ? 'التخصص الرئيسي' : (i < 10 ? 'التخصص الفرعي' : (i < 15 ? 'نموذج العمل والتقنيات' : 'مهارات العميل والصفقات')))
+          };
+          socket.emit('question_streamed', {
+            attemptId: claim.attemptId,
+            questionIndex: i + 1,
+            totalQuestions: existingQuestions.length,
+            question: sanitizedQuestion
+          });
+        }
+
+        socket.emit('assessment_ready', {
+          attemptId: claim.attemptId,
+          totalQuestions: existingQuestions.length,
+          timeLimitMinutes: 15,
+          generationSource: claim.existingGenerationSource || 'GEMINI',
+          message: '✓ تم اكتمال بث أسئلة الاختبار الـ 20 بنجاح عبر الذكاء الاصطناعي.'
+        });
+        return;
+      }
+
       const abortController = new AbortController();
       const onDisconnect = () => abortController.abort();
       socket.once('disconnect', onDisconnect);
+
+      // A real reserved row exists only when the claim above succeeded.
+      const attemptId = claim?.claimed ? claim.attemptId : `attempt-${Date.now()}`;
 
       try {
         // 1. Analyze specialty, sub-specialties, and portfolio files to generate 20 questions
@@ -107,26 +251,31 @@ export class AssessmentGateway {
             signal: abortController.signal
           });
 
-        // 2. Create AssessmentAttempt in database with status STREAMING
-        let attemptId = `attempt-${Date.now()}`;
-        try {
-          const attemptRecord = await prisma.assessmentAttempt.create({
-            data: {
-              providerSpecialtyId: providerSpecId,
-              providerProfileId: profileId,
-              specialtyId: specId,
-              subSpecialtiesSnapshot: subSpecialtiesSnapshot as any,
-              analyzedAssetsSnapshot: { items: analyzedAssetsSnapshot, generationSource } as any,
-              questionsPayload: questions as any,
-              totalQuestions: 20,
-              status: AssessmentStatus.STREAMING,
-              timeLimitMinutes: 15,
-              startedAt: new Date()
-            }
-          });
-          attemptId = attemptRecord.id;
-        } catch (dbErr) {
-          console.warn('[AssessmentGateway] DB record creation fallback to in-memory attemptId:', dbErr);
+        // 2. Fill in the reserved AssessmentAttempt with the real generated
+        // data. The row itself was already created (status STREAMING) by the
+        // claim above, before Gemini ran.
+        if (claim?.claimed) {
+          try {
+            await prisma.assessmentAttempt.update({
+              where: { id: attemptId },
+              data: {
+                subSpecialtiesSnapshot: subSpecialtiesSnapshot as any,
+                analyzedAssetsSnapshot: { items: analyzedAssetsSnapshot, generationSource } as any,
+                questionsPayload: questions as any
+              }
+            });
+          } catch (persistErr) {
+            // The reservation is now stuck with no real data — release it
+            // (Batch 3D-2 failure-recovery requirement) rather than leaving a
+            // permanently-active row that blocks every future retry for this
+            // specialty, and report a real error instead of silently
+            // streaming unpersisted questions from a claimed-but-orphaned row.
+            await prisma.assessmentAttempt.update({
+              where: { id: attemptId },
+              data: { status: AssessmentStatus.CANCELLED }
+            }).catch(() => {});
+            throw persistErr;
+          }
         }
 
         socket.join(`assessment_${attemptId}`);
@@ -189,6 +338,15 @@ export class AssessmentGateway {
         }
       } catch (err: any) {
         console.error('[AssessmentGateway] Start assessment error:', err?.code || err);
+        if (claim?.claimed) {
+          // Release the reservation on any failure so a retry is never
+          // permanently blocked by a stuck STREAMING row (Batch 3D-2). A
+          // no-op if the persist-error branch above already released it.
+          await prisma.assessmentAttempt.update({
+            where: { id: attemptId },
+            data: { status: AssessmentStatus.CANCELLED }
+          }).catch(() => {});
+        }
         socket.emit('assessment_error', { message: 'حدث خطأ أثناء بث أسئلة التقييم الفني عبر الذكاء الاصطناعي.' });
       } finally {
         socket.off('disconnect', onDisconnect);
@@ -214,17 +372,17 @@ export class AssessmentGateway {
 
     const userId = (socket as any).userId as string | undefined;
     if (!userId) {
-      socket.emit('assessment_error', { message: 'يجب تسجيل الدخول لتسليم نتائج التقييم.' });
+      socket.emit('assessment_error', { message: 'يجب تسجيل الدخول لتسليم نتائج التقييم.', code: SUBMIT_ERROR_CODES.AUTH_REQUIRED });
       return;
     }
 
     if (!attemptId) {
-      socket.emit('assessment_error', { message: 'معرف محاولة التقييم attemptId مفقود.' });
+      socket.emit('assessment_error', { message: 'معرف محاولة التقييم attemptId مفقود.', code: SUBMIT_ERROR_CODES.INVALID_REQUEST });
       return;
     }
 
     if (isSocketAiRateLimited(userId)) {
-      socket.emit('assessment_error', { message: SOCKET_AI_RATE_LIMIT_MESSAGE });
+      socket.emit('assessment_error', { message: SOCKET_AI_RATE_LIMIT_MESSAGE, code: SUBMIT_ERROR_CODES.RATE_LIMITED });
       return;
     }
 
@@ -250,7 +408,53 @@ export class AssessmentGateway {
         });
 
         if (!dbAttempt) {
-          socket.emit('assessment_error', { message: 'محاولة التقييم غير موجودة أو لا تملك صلاحية الوصول إليها.' });
+          socket.emit('assessment_error', { message: 'محاولة التقييم غير موجودة أو لا تملك صلاحية الوصول إليها.', code: SUBMIT_ERROR_CODES.NOT_FOUND });
+          return;
+        }
+
+        // The attempt may already have been finalized by the REST twin (or a
+        // duplicate socket retry) before this handler ran — never re-score
+        // or overwrite a terminal outcome (Batch 3D-1).
+        if (!SUBMITTABLE_STATUSES.includes(dbAttempt.status)) {
+          socket.emit('assessment_error', { message: ALREADY_FINALIZED_MESSAGE, code: SUBMIT_ERROR_CODES.ALREADY_FINALIZED });
+          return;
+        }
+
+        // Same expiry semantics as the REST twin: 15-minute limit + 1-minute
+        // grace period, read from the same attempt row.
+        const submissionTime = new Date();
+        const elapsedMinutes = (submissionTime.getTime() - new Date(dbAttempt.startedAt).getTime()) / (1000 * 60);
+        const isExpired = elapsedMinutes > (dbAttempt.timeLimitMinutes + 1);
+
+        if (isExpired) {
+          const expiredClaim = await prisma.assessmentAttempt.updateMany({
+            where: { id: attemptId, status: { in: SUBMITTABLE_STATUSES } },
+            data: {
+              status: AssessmentStatus.EXPIRED,
+              completedAt: submissionTime,
+              submittedAnswers: answers as any
+            }
+          });
+
+          if (expiredClaim.count === 0) {
+            socket.emit('assessment_error', { message: ALREADY_FINALIZED_MESSAGE, code: SUBMIT_ERROR_CODES.ALREADY_FINALIZED });
+            return;
+          }
+
+          socket.emit('evaluation_complete', {
+            attemptId,
+            score: 0,
+            scorePercentage: 0,
+            correctAnswers: 0,
+            totalQuestions: dbAttempt.totalQuestions || 20,
+            isPassed: false,
+            status: 'EXPIRED',
+            feedbackAr: 'انتهت المهلة الزمنية للاختبار (15 دقيقة) قبل تسليم الإجابات.',
+            strengths: [],
+            weaknesses: ['تجاوز الوقت المخصص للاختبار.'],
+            completedAt: submissionTime.toISOString(),
+            message: 'انتهت المهلة الزمنية للاختبار (15 دقيقة) قبل تسليم الإجابات.'
+          });
           return;
         }
 
@@ -279,6 +483,30 @@ export class AssessmentGateway {
 
       const scorePercentage = parseFloat(((correctCount / totalQuestions) * 100).toFixed(1));
       const isPassed = scorePercentage > 25.0;
+
+      // Claim the attempt BEFORE calling Gemini (Batch 3D-1): a losing
+      // concurrent request (the REST twin, or a duplicate socket retry) must
+      // never spend a Gemini call or overwrite the winner's result. Same
+      // atomic-updateMany pattern as the expiry branch above; a no-op for the
+      // in-memory-fallback case (no DB row exists to protect).
+      const completedAt = new Date();
+      if (isRealDbAttempt) {
+        const claim = await prisma.assessmentAttempt.updateMany({
+          where: { id: attemptId, status: { in: SUBMITTABLE_STATUSES } },
+          data: {
+            submittedAnswers: answers as any,
+            score: scorePercentage,
+            isPassed,
+            status: isPassed ? AssessmentStatus.COMPLETED : AssessmentStatus.FAILED,
+            completedAt
+          }
+        });
+
+        if (claim.count === 0) {
+          socket.emit('assessment_error', { message: ALREADY_FINALIZED_MESSAGE, code: SUBMIT_ERROR_CODES.ALREADY_FINALIZED });
+          return;
+        }
+      }
 
       // 3. AI Feedback Synthesis via the shared Gemini foundation. Honest
       // failure: the deterministic real-outcome feedback below (already
@@ -326,23 +554,16 @@ export class AssessmentGateway {
         console.warn('[AssessmentGateway] Gemini feedback synthesis unavailable, using deterministic real-outcome feedback:', aiErr?.code || aiErr?.message);
       }
 
-      // 4. Update Database Transactionally
-      const completedAt = new Date();
+      // 4. Persist feedback + ProviderSpecialty outcome. The claim above
+      // already won this attempt exclusively (score/status/completedAt are
+      // already committed), so this transaction only adds the feedback text
+      // and the downstream ProviderSpecialty effect.
       if (isRealDbAttempt) {
         try {
           await prisma.$transaction(async (tx) => {
             await tx.assessmentAttempt.update({
               where: { id: attemptId },
-              data: {
-                submittedAnswers: answers as any,
-                score: scorePercentage,
-                isPassed,
-                feedbackAr,
-                strengths,
-                weaknesses,
-                status: isPassed ? AssessmentStatus.COMPLETED : AssessmentStatus.FAILED,
-                completedAt
-              }
+              data: { feedbackAr, strengths, weaknesses }
             });
 
             if (providerSpecialtyId) {
@@ -389,7 +610,7 @@ export class AssessmentGateway {
       }
     } catch (err: any) {
       console.error('[AssessmentGateway] Evaluation submission error:', err);
-      socket.emit('assessment_error', { message: 'فشل معالجة التقييم النهائي عبر الـ WebSocket.' });
+      socket.emit('assessment_error', { message: 'فشل معالجة التقييم النهائي عبر الـ WebSocket.', code: SUBMIT_ERROR_CODES.SUBMISSION_FAILED });
     } finally {
       socket.off('disconnect', onDisconnect);
     }
