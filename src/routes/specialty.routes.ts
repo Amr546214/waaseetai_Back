@@ -19,7 +19,5 @@ router.get('/public', specialtyController.getPublicSpecialties);
 
 router.post('/provider/specialties/step1-select', ...providerAuth, specialtyController.selectSpecialty);
 router.post('/provider/specialties/step2-upload', ...providerAuth, upload.any(), requireOwnedProviderSpecialtyFromBody, specialtyController.uploadSamples);
-router.get('/provider/specialties/step4-test/:specialtyId', ...providerAuth, specialtyController.getTest);
-router.post('/provider/specialties/step4-submit', ...providerAuth, requireOwnedProviderSpecialtyFromBody, specialtyController.submitTest);
 
 export default router;

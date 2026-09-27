@@ -73,25 +73,6 @@ class SpecialtyController {
     }
   }
 
-  async getTest(req: Request, res: Response) {
-    try {
-      const { specialtyId } = req.params;
-      const result = await specialtyService.getSpecialtyTest(specialtyId as string);
-      res.json({ success: true, data: result });
-    } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
-    }
-  }
-
-  async submitTest(req: Request, res: Response) {
-    try {
-      const { providerSpecialtyId, testId, answers } = req.body;
-      const result = await specialtyService.submitTest(providerSpecialtyId, testId, answers);
-      res.json({ success: true, data: result });
-    } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
-    }
-  }
 }
 
 export const specialtyController = new SpecialtyController();
