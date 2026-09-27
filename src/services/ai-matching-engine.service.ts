@@ -94,9 +94,7 @@ export class AiMatchingEngineService {
         user,
         providerProfile,
         providerSpecialties,
-        testSessions,
         skillAssessments,
-        assessmentAttempts,
         accreditationSamples
       ] = await Promise.all([
         prisma.user.findUnique({
@@ -130,17 +128,8 @@ export class AiMatchingEngineService {
             workSamples: true
           }
         }),
-        prisma.specialtyTestSession.findMany({
-          where: { userId: providerId, passed: true },
-          include: { providerSpecialty: { include: { specialty: true } } },
-          take: 10
-        }),
         prisma.providerSkillAssessment.findMany({
           where: { providerProfile: { userId: providerId } },
-          include: { specialty: true }
-        }),
-        prisma.assessmentAttempt.findMany({
-          where: { providerProfile: { userId: providerId }, isPassed: true },
           include: { specialty: true }
         }),
         prisma.accreditationSample.findMany({
@@ -166,15 +155,22 @@ export class AiMatchingEngineService {
         aiScore: ps.aiScore || undefined
       }));
 
-      // Combine tests and quizzes passed
+      // Combine tests and quizzes passed. Batch 4E: derived directly from
+      // providerSpecialties (already fetched above, filtered to APPROVED)
+      // instead of separately querying SpecialtyTestSession/AssessmentAttempt.
+      // The canonical submission flow (ai-assessment.service.ts) writes
+      // latestScore/isPassed/status atomically together, so an APPROVED row
+      // here is guaranteed to already carry the current derived score —
+      // no separate historical query is needed for a current-qualification
+      // signal.
       const testsPassedList: { specialtyName: string; score: number; passed: boolean }[] = [];
-      
-      testSessions.forEach(ts => {
-        const specName = ts.providerSpecialty?.specialty?.nameAr || ts.providerSpecialty?.specialty?.name || 'اختبار التخصص';
+
+      providerSpecialties.filter(ps => ps.isPassed).forEach(ps => {
+        const specName = ps.specialty?.nameAr || ps.specialty?.name || 'اختبار التخصص';
         testsPassedList.push({
           specialtyName: specName,
-          score: ts.scorePercentage,
-          passed: ts.passed
+          score: ps.latestScore || ps.quizScore || 80,
+          passed: ps.isPassed
         });
       });
 
@@ -183,14 +179,6 @@ export class AiMatchingEngineService {
           specialtyName: sa.specialty?.nameAr || sa.specialty?.name || 'تقييم مهارات',
           score: sa.score,
           passed: sa.passed
-        });
-      });
-
-      assessmentAttempts.forEach(aa => {
-        testsPassedList.push({
-          specialtyName: aa.specialty?.nameAr || aa.specialty?.name || 'اختبار مهارات',
-          score: aa.score || 80,
-          passed: aa.isPassed
         });
       });
 

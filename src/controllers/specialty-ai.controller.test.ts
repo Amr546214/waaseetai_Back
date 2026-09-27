@@ -158,7 +158,7 @@ test('evaluateSpecialtyWithAI: a below-threshold Gemini result sets REJECTED onl
   assert.equal(res.statusCode, 200);
   const scoreWriteCall = updateSpy.mock.calls[1].arguments[0];
   assert.equal(scoreWriteCall.data.status, 'REJECTED');
-  assert.equal('lockoutUntil' in scoreWriteCall.data, false, 'a single failed vision evaluation must never itself lock the account out — only the separate quiz-attempt anti-cheat path (quiz.controller.ts/quiz.socket.ts) can do that');
+  assert.equal('lockoutUntil' in scoreWriteCall.data, false, 'a single failed vision evaluation must never itself lock the account out — that was only ever the separate, now-removed legacy quiz-attempt anti-cheat path (quiz.controller.ts/quiz.socket.ts, removed in Batch 4D)');
   assert.equal('isPassed' in scoreWriteCall.data, false);
 });
 

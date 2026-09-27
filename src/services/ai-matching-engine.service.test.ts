@@ -53,9 +53,7 @@ function createMockPrisma(t: TestContext, opts: {
     user: { findUnique: async () => ({ id: 'provider-1', firstName: 'مقدم', lastName: 'خدمة', currentLevel: 'محترف', currentPoints: 100, profileCompletionPercent: 100, completedProjectsCount: 5, ratingAverage: 4.8 }) },
     providerProfile: { findUnique: async () => ({ skills: [], portfolioItems: [], rating: 4.8, headline: null, bio: null }) },
     providerSpecialty: { findMany: async () => (opts.providerSpecialties === undefined ? [baseProviderSpecialty()] : opts.providerSpecialties) },
-    specialtyTestSession: { findMany: async () => [] },
     providerSkillAssessment: { findMany: async () => [] },
-    assessmentAttempt: { findMany: async () => [] },
     accreditationSample: { findMany: async () => [] },
     project: { findMany: async () => (opts.openProjects === undefined ? [baseProject()] : opts.openProjects) }
   };
@@ -215,6 +213,60 @@ test('getTop3MatchingProjects: deterministic fallback ranks and returns at most 
   result.forEach((item: any) => assert.equal(item.generationSource, 'DETERMINISTIC'));
 });
 
+// Batch 4E: the matching engine's SpecialtyTestSession/AssessmentAttempt
+// direct reads were removed as duplicates of ProviderSpecialty-derived
+// qualification state (latestScore/isPassed, written atomically together by
+// the canonical ai-assessment.service.ts submission flow). These tests prove
+// the replacement: matching runs without either model on the mocked prisma
+// client at all, and the current ProviderSpecialty fields — not a legacy
+// session table — are what drive the deterministic score.
+test('getTop3MatchingProjects: matching runs with no specialtyTestSession/assessmentAttempt models on the mocked prisma client at all', async (t) => {
+  // createMockPrisma() (used by every test in this file) no longer defines
+  // prisma.specialtyTestSession or prisma.assessmentAttempt. If the service
+  // still queried either, this would throw synchronously ("Cannot read
+  // properties of undefined") instead of returning a result.
+  const service = await loadService(t, {
+    providerSpecialties: [baseProviderSpecialty({ isPassed: true, latestScore: 95 })],
+    openProjects: [baseProject({ specialty: 'تطوير الويب' })]
+  });
+
+  const result = await service.getTop3MatchingProjects('provider-1');
+
+  assert.equal(result.length, 1);
+});
+
+test('getTop3MatchingProjects: a currently-approved ProviderSpecialty (isPassed + latestScore) scores higher than an unapproved one — sourced directly, no legacy session table involved', async (t) => {
+  let passedScore = 0;
+  let unpassedScore = 0;
+
+  await t.test('passed', async (st) => {
+    const service = await loadService(st, {
+      providerSpecialties: [baseProviderSpecialty({ isPassed: true, latestScore: 95 })],
+      openProjects: [baseProject({ specialty: 'تطوير الويب' })],
+      isConfigured: false
+    });
+    const result = await service.getTop3MatchingProjects('provider-1');
+    assert.equal(result.length, 1);
+    passedScore = result[0].aiMatchScore;
+  });
+
+  await t.test('unpassed', async (st) => {
+    const service = await loadService(st, {
+      providerSpecialties: [baseProviderSpecialty({ isPassed: false, latestScore: null })],
+      openProjects: [baseProject({ specialty: 'تطوير الويب' })],
+      isConfigured: false
+    });
+    const result = await service.getTop3MatchingProjects('provider-1');
+    assert.equal(result.length, 1);
+    unpassedScore = result[0].aiMatchScore;
+  });
+
+  assert.ok(
+    passedScore > unpassedScore,
+    'an approved/passed specialty must score higher than an unapproved one'
+  );
+});
+
 test('DB failure during candidate gathering is handled honestly (empty result, never a crash or fabricated match)', async (t) => {
   t.mock.module('../config/db', {
     namedExports: {
@@ -222,9 +274,7 @@ test('DB failure during candidate gathering is handled honestly (empty result, n
         user: { findUnique: async () => { throw new Error('DB connection lost'); } },
         providerProfile: { findUnique: async () => null },
         providerSpecialty: { findMany: async () => [baseProviderSpecialty()] },
-        specialtyTestSession: { findMany: async () => [] },
         providerSkillAssessment: { findMany: async () => [] },
-        assessmentAttempt: { findMany: async () => [] },
         accreditationSample: { findMany: async () => [] },
         project: { findMany: async () => [baseProject()] }
       }
