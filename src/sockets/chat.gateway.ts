@@ -164,7 +164,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 							title: 'رسالة تفاوض جديدة',
 							message: notificationText,
 							type: 'CHAT',
-							actionUrl: `/dashboard/messages?conversationId=${data.conversationId}`
+							// The notification's recipient can be either a client or a
+							// provider (this gateway is shared), so a single static
+							// actionUrl can never be correct for both dashboard sections.
+							// The frontend resolves the real destination itself from
+							// metadata.conversationId, scoped to whichever dashboard it
+							// is currently rendering the notification in.
+							metadata: { conversationId: data.conversationId }
 						}
 					}).catch(e => console.error('[ChatGateway] Notification creation err:', e));
 				}

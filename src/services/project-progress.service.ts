@@ -525,7 +525,9 @@ export class ProjectProgressService {
           message: isProjectCompleted ? `وافق العميل على التسليم النهائي لمشروع «${contract.project.title}». تمت إضافة ${PROJECT_COMPLETION_POINTS} نقطة إلى رصيدك.` : decision === 'approve' ? `اعتمد العميل مرحلة: ${stage.title}` : note!.trim(),
           type: isProjectCompleted ? 'PROJECT_COMPLETION_REWARD' : 'STAGE_REVIEW',
           category: 'PROJECTS',
-          actionUrl: `/provider-overview/projects/${contract.projectId}/progress`,
+          // The real route is projects/active/progress/:id (there is no
+          // projects/:id/progress route in the provider router).
+          actionUrl: `/provider-overview/projects/active/progress/${contract.projectId}`,
           actionText: isProjectCompleted ? 'عرض المشروع والنقاط' : 'عرض المشروع',
           metadata: { projectId: contract.projectId, contractId: contract.id, stageId, decision, ...(isProjectCompleted ? { pointsAwarded: PROJECT_COMPLETION_POINTS } : {}) }
         }

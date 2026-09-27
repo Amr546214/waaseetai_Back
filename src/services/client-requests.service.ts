@@ -419,8 +419,11 @@ Return JSON schema:
 					message: `تم نشر طلب جديد يتوافق مع تخصصك (${clientRequest.specialty.nameAr || clientRequest.specialty.name}). قدم عرضك الآن!`,
 					type: 'PROJECT_MATCH',
 					category: 'PROJECTS' as const,
-					actionUrl: `/provider-overview/projects/${clientRequest.id}`,
-					actionText: 'عرض التفاصيل وتقديم عرض'
+					// The apply wizard lives at explore-requests/:id/apply, not a
+					// /projects/:id route (which does not exist for a ClientRequest).
+					actionUrl: `/provider-overview/explore-requests/${clientRequest.id}/apply`,
+					actionText: 'عرض التفاصيل وتقديم عرض',
+					metadata: { clientRequestId: clientRequest.id }
 				}));
 
 				await prisma.notification.createMany({
@@ -1560,8 +1563,12 @@ Return JSON schema:
 						message: `قام العميل (${clientName}) بإيداع قيمة المشروع بالضمان. يرجى توقيع العقد للبدء.`,
 						type: 'OFFER_ACCEPTED',
 						category: 'OFFERS',
-						actionUrl: `/provider-overview/projects/${requestId}/contract`,
-						actionText: 'عرض وتوقيع العقد'
+						// sign-contract resolves its offer via OffersService.getOfferById,
+						// which matches on the Proposal id (offerId) — not requestId/
+						// projectId, and there is no /projects/:id/contract route.
+						actionUrl: `/provider-overview/offers/${offerId}/sign-contract`,
+						actionText: 'عرض وتوقيع العقد',
+						metadata: { offerId, requestId }
 					}
 				});
 			}
