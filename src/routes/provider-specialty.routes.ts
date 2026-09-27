@@ -2,7 +2,6 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { SpecialtyVerificationStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { evaluateSpecialtyWithAI } from '../controllers/specialty-ai.controller';
-import { submitSpecialtyQuiz } from '../controllers/quiz.controller';
 import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
@@ -130,8 +129,6 @@ router.post(
 );
 
 router.post('/:id/ai-evaluate', ...providerAuth, requireOwnedProviderSpecialtyFromParam, aiLimiter, evaluateSpecialtyWithAI);
-
-router.post('/:id/quiz/submit', ...providerAuth, requireOwnedProviderSpecialtyFromParam, submitSpecialtyQuiz);
 
 router.get('/:id/status', ...providerAuth, requireOwnedProviderSpecialtyFromParam, async (req: Request, res: Response): Promise<void> => {
   try {

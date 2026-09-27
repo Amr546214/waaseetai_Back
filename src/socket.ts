@@ -4,7 +4,6 @@ import jwt from 'jsonwebtoken';
 import { registerProposalAuditGateway } from './sockets/proposal-audit.gateway';
 import { registerChatGateway } from './sockets/chat.gateway';
 import { registerAiReviewGateway } from './sockets/ai-review.gateway';
-import { registerQuizSocketGateway } from './sockets/quiz.socket';
 import { registerAiAssistantGateway } from './sockets/ai-assistant.gateway';
 import { registerAssessmentGateway } from './sockets/assessment.gateway';
 import { registerSetupTestGateway } from './sockets/setup-test.gateway';
@@ -112,9 +111,6 @@ export const initSocketServer = (httpServer: HttpServer, allowedOrigins: string[
 
 		// Register Real-Time AI Review & Text Streaming Gateway
 		registerAiReviewGateway(socket);
-
-		// Register Real-Time Specialty Verification Quiz & Anti-Cheat Gateway
-		registerQuizSocketGateway(socket, io);
 
 		// Register Real-Time AI Assistant Gateway (Create Request description generator/refiner)
 		registerAiAssistantGateway(socket);
