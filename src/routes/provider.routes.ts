@@ -30,10 +30,17 @@ router.delete('/coupons/:id', authenticate, requireActiveUser, providerOnly, dea
 // providerOverviewService.getAiMatchingProjects -> aiMatchingEngineService
 // .getTop3MatchingProjects, a real Gemini call — needs aiLimiter like every
 // other Gemini-triggering route (Batch 6 gap fix; this route was missing it).
+//
+// Phase 3 Batch 2B: confirmed via a full frontend trace that every real
+// caller (the shared dashboard sidebar, gated on effectiveRole()===PROVIDER,
+// and the provider overview page itself) is provider-only — no other role's
+// dashboard ever calls this endpoint. The data itself is also inherently
+// provider-specific (queries keyed by providerId). Restricted accordingly.
 router.get(
   '/statistics',
   authenticate,
   requireActiveUser,
+  providerOnly,
   aiLimiter,
   getProviderStatistics
 );

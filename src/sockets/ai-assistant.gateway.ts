@@ -1,4 +1,6 @@
 import { Socket } from 'socket.io';
+import { AccountType } from '@prisma/client';
+import { prisma } from '../config/db';
 import { geminiClient } from '../services/ai/gemini/gemini.client';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
 import {
@@ -59,10 +61,11 @@ function isValidTitleValidationResult(value: unknown): value is TitleValidationR
 // limiter (see socket-ai-rate-limit.ts) — no new framework, just applying
 // the existing pattern to the handler that was missing it.
 //
-// Remaining limitation (documented, not fixed here): no account-type/role
-// restriction exists (any authenticated user — client or provider — can
-// call this). This mirrors ai-review.gateway.ts's same documented gap and
-// was judged out of scope for "smallest reusable protection" in this batch.
+// Phase 3 Batch 2A fix: the only current UI caller of this event is the
+// client-facing "Create Request" page (client-overview/create-request,
+// guarded by clientGuard) — confirmed by tracing every emit site in the
+// frontend. The handler now enforces that same role at the socket layer
+// instead of accepting any authenticated account type.
 export class AiAssistantGateway {
   /**
    * Register Socket.IO listeners for real-time description generation and refinement
@@ -76,6 +79,16 @@ export class AiAssistantGateway {
         socket.emit('ai:description_error', {
           code: 'UNAUTHENTICATED',
           message: 'يجب تسجيل الدخول لاستخدام مولّد الوصف الذكي.'
+        });
+        return;
+      }
+
+      const requester = await prisma.user.findUnique({ where: { id: userId }, select: { accountType: true } });
+      const isClient = requester?.accountType === AccountType.CLIENT_INDIVIDUAL || requester?.accountType === AccountType.CLIENT_COMPANY;
+      if (!isClient) {
+        socket.emit('ai:description_error', {
+          code: 'FORBIDDEN_ROLE',
+          message: 'هذه الميزة متاحة فقط لحسابات العملاء.'
         });
         return;
       }

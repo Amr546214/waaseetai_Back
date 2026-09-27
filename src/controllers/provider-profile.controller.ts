@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { AppError } from '../utils/app-error';
 import { providerProfileService } from '../services/provider-profile.service';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
@@ -233,7 +234,8 @@ export const getPublicProfile = async (req: Request, res: Response) => {
 		res.json({ success: true, data: publicProfile });
 	} catch (error: any) {
 		console.error('Error fetching public profile:', error);
-		res.status(500).json({ success: false, message: error.message || 'Internal server error' });
+		const statusCode = error instanceof AppError ? error.statusCode : 500;
+		res.status(statusCode).json({ success: false, message: error.message || 'Internal server error' });
 	}
 };
 

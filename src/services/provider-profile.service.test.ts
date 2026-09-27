@@ -325,6 +325,25 @@ async function loadServiceForPublicProfile(t: TestContext, opts: Parameters<type
   return providerProfileService;
 }
 
+// Phase 3 Batch 2A — F28: getPublicProfile used to throw a plain Error on a
+// missing provider, which the controller's catch block turned into a 500.
+// It must now throw the project's real AppError(404) contract.
+test('getPublicProfile: an unknown provider throws AppError with statusCode 404 (not a plain Error / 500)', async (t) => {
+  t.mock.module('../config/db', { namedExports: { prisma: { providerProfile: { findUnique: async () => null } } } });
+  t.mock.module('./account-logs.service', { namedExports: { accountAuditLogService: { record: async () => ({}) } } });
+  const moduleUrl = `./provider-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { providerProfileService } = await import(moduleUrl);
+
+  await assert.rejects(
+    () => providerProfileService.getPublicProfile('nonexistent-provider'),
+    (err: any) => {
+      assert.equal(err.statusCode, 404);
+      assert.equal(err.message, 'Provider not found');
+      return true;
+    }
+  );
+});
+
 async function loadServiceForPublicProfileWithSpies(t: TestContext, opts: Parameters<typeof createPublicProfileMockPrisma>[1]) {
   const spies = createPublicProfileMockPrisma(t, opts);
   const moduleUrl = `./provider-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;

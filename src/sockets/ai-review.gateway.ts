@@ -1,4 +1,6 @@
 import { Socket } from 'socket.io';
+import { AccountType } from '@prisma/client';
+import { prisma } from '../config/db';
 import { geminiClient } from '../services/ai/gemini/gemini.client';
 import { isMeaningfulProjectTitle } from '../utils/title-validator';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
@@ -13,13 +15,13 @@ import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/so
 // so previously an authenticated user could emit these events in a tight
 // loop with zero throttling. See socket-ai-rate-limit.ts.
 //
-// Remaining limitation (documented, not fixed here): this event has no
-// account-type/role restriction — any authenticated user, not just
-// providers, can trigger it. The HTTP twin of this feature (ai-review
-// module's own routes) IS provider-restricted. Closing that gap would
-// require a DB lookup per socket event (sockets only carry userId, not
-// accountType/roles) and was judged out of scope for "smallest reusable
-// protection" in this batch — flagged for a future pass.
+// Phase 3 Batch 2A fix: the only current UI callers of both events are the
+// provider-facing "New Project" wizard (business-models/new-project, under
+// the providerGuard-protected provider-overview shell) via
+// new-project.service.ts — confirmed by tracing every emit site in the
+// frontend. Both handlers now enforce that same role at the socket layer,
+// matching the HTTP twin (ai-review module's own routes), which was already
+// provider-restricted.
 
 export class AiReviewGateway {
 	public register(socket: Socket): void {
@@ -30,6 +32,13 @@ export class AiReviewGateway {
 			const userId = (socket as any).userId;
 			if (!userId) {
 				socket.emit('ai_text_stream_end', { mode, message: '⚠️ يجب تسجيل الدخول لاستخدام المساعد الذكي' });
+				return;
+			}
+
+			const requester = await prisma.user.findUnique({ where: { id: userId }, select: { accountType: true } });
+			const isProvider = requester?.accountType === AccountType.PROVIDER_INDIVIDUAL || requester?.accountType === AccountType.PROVIDER_COMPANY;
+			if (!isProvider) {
+				socket.emit('ai_text_stream_end', { mode, message: '⚠️ هذه الميزة متاحة فقط لحسابات مقدمي الخدمة' });
 				return;
 			}
 
@@ -101,6 +110,14 @@ export class AiReviewGateway {
 				socket.emit('ai_text_stream_end', { mode, message: '⚠️ يجب تسجيل الدخول لاستخدام المساعد الذكي' });
 				return;
 			}
+
+			const requester = await prisma.user.findUnique({ where: { id: userId }, select: { accountType: true } });
+			const isProvider = requester?.accountType === AccountType.PROVIDER_INDIVIDUAL || requester?.accountType === AccountType.PROVIDER_COMPANY;
+			if (!isProvider) {
+				socket.emit('ai_text_stream_end', { mode, message: '⚠️ هذه الميزة متاحة فقط لحسابات مقدمي الخدمة' });
+				return;
+			}
+
 			const title = payload.title?.trim() || '';
 			const description = payload.description?.trim() || '';
 

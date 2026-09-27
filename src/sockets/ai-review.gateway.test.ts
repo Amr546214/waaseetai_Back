@@ -56,6 +56,11 @@ function fakeStream(chunks: string[], opts: { throwAfter?: number; error?: Error
 async function loadGateway(t: TestContext, opts: {
   isConfigured?: boolean;
   generateStream?: (prompt: string, options: any) => AsyncGenerator<string, any, void>;
+  // Defaults to a PROVIDER account — the only current real UI caller of
+  // both events (New Project wizard, guarded by providerGuard) — so every
+  // pre-existing test above (all using userId: 'user-1') keeps passing
+  // unchanged under the new Phase 3 Batch 2A role check.
+  accountType?: string | null;
 }) {
   const generateStreamSpy = opts.generateStream ?? (() => fakeStream(['حصة']));
   const geminiClientMock = {
@@ -63,6 +68,11 @@ async function loadGateway(t: TestContext, opts: {
     generateStream: generateStreamSpy
   };
   t.mock.module('../services/ai/gemini/gemini.client', { namedExports: { geminiClient: geminiClientMock } });
+
+  const accountType = opts.accountType === undefined ? 'PROVIDER_INDIVIDUAL' : opts.accountType;
+  t.mock.module('../config/db', {
+    namedExports: { prisma: { user: { findUnique: async () => (accountType === null ? null : { accountType }) } } }
+  });
 
   const moduleUrl = `./ai-review.gateway.ts?fixture=${Date.now()}-${Math.random()}`;
   const mod = await import(moduleUrl);
@@ -83,6 +93,64 @@ test('stream_ai_suggest_text: an unauthenticated socket (no userId) is rejected 
   assert.equal(emitted.length, 1);
   assert.equal(emitted[0].event, 'ai_text_stream_end');
   assert.match(emitted[0].payload.message, /تسجيل الدخول/);
+});
+
+// ── Phase 3 Batch 2A: role authorization — both events' only real UI caller
+// is the PROVIDER-facing New Project wizard (confirmed by tracing every
+// frontend emit site of stream_ai_suggest_text / stream_ai_enhance_description) ──
+
+test('stream_ai_suggest_text: a PROVIDER_INDIVIDUAL account (the intended role) is accepted and reaches Gemini', async (t) => {
+  const register = await loadGateway(t, { accountType: 'PROVIDER_INDIVIDUAL' });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['stream_ai_suggest_text']({ title: 'تطوير متجر إلكتروني متكامل' });
+
+  assert.ok(emitted.some((e) => e.event === 'ai_text_stream_chunk'), 'the intended role must reach the normal streaming success path');
+});
+
+test('stream_ai_suggest_text: a CLIENT_INDIVIDUAL account (unintended role) is rejected without calling Gemini', async (t) => {
+  let called = false;
+  const register = await loadGateway(t, {
+    accountType: 'CLIENT_INDIVIDUAL',
+    generateStream: () => { called = true; return fakeStream(['x']); }
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-2' });
+  register(socket);
+
+  await handlers['stream_ai_suggest_text']({ title: 'تطوير متجر إلكتروني متكامل' });
+
+  assert.equal(called, false, 'Gemini must never be invoked for an unauthorized role');
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0].event, 'ai_text_stream_end');
+  assert.match(emitted[0].payload.message, /مقدمي الخدمة/);
+});
+
+test('stream_ai_enhance_description: a PROVIDER_COMPANY account (the intended role) is accepted and reaches Gemini', async (t) => {
+  const register = await loadGateway(t, { accountType: 'PROVIDER_COMPANY' });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-3' });
+  register(socket);
+
+  await handlers['stream_ai_enhance_description']({ title: 'تطوير متجر إلكتروني متكامل', description: 'وصف مبدئي' });
+
+  assert.ok(emitted.some((e) => e.event === 'ai_text_stream_chunk'));
+});
+
+test('stream_ai_enhance_description: a CLIENT_COMPANY account (unintended role) is rejected without calling Gemini', async (t) => {
+  let called = false;
+  const register = await loadGateway(t, {
+    accountType: 'CLIENT_COMPANY',
+    generateStream: () => { called = true; return fakeStream(['x']); }
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-4' });
+  register(socket);
+
+  await handlers['stream_ai_enhance_description']({ title: 'تطوير متجر إلكتروني متكامل', description: 'وصف مبدئي' });
+
+  assert.equal(called, false);
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0].event, 'ai_text_stream_end');
+  assert.match(emitted[0].payload.message, /مقدمي الخدمة/);
 });
 
 // ── successful multiple-chunk stream + ordering + completion-only-on-success ──
@@ -213,6 +281,11 @@ test('stream_ai_suggest_text: a socket disconnect aborts the in-flight Gemini st
   // Abort before the handler even starts consuming — proves the same signal
   // wired into generateStream() is the one the disconnect handler aborts.
   const handlerPromise = handlers['stream_ai_suggest_text']({ title: 'تطوير متجر إلكتروني متكامل' });
+  // Phase 3 Batch 2A added an async role-check (a DB lookup) before the
+  // disconnect handler gets registered — let that one microtask resolve so
+  // the abort-controller registration (still fully synchronous after it)
+  // has actually happened before we fire the disconnect trigger below.
+  await Promise.resolve();
   triggerDisconnect();
   await handlerPromise;
 

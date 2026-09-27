@@ -56,6 +56,11 @@ async function loadGateway(t: TestContext, opts: {
   isConfigured?: boolean;
   generateStructured?: (prompt: string, options: any) => Promise<any>;
   generateStream?: (prompt: string, options: any) => AsyncGenerator<string, any, void>;
+  // Defaults to a CLIENT account — the only current real UI caller of this
+  // event (create-request page, guarded by clientGuard) — so every
+  // pre-existing test above (all using userId: 'user-1') keeps passing
+  // unchanged under the new Phase 3 Batch 2A role check.
+  accountType?: string | null;
 }) {
   const geminiClientMock = {
     isConfigured: () => opts.isConfigured ?? true,
@@ -66,6 +71,11 @@ async function loadGateway(t: TestContext, opts: {
     generateStream: opts.generateStream ?? (() => fakeStream(['وصف ', 'احترافي']))
   };
   t.mock.module('../services/ai/gemini/gemini.client', { namedExports: { geminiClient: geminiClientMock } });
+
+  const accountType = opts.accountType === undefined ? 'CLIENT_INDIVIDUAL' : opts.accountType;
+  t.mock.module('../config/db', {
+    namedExports: { prisma: { user: { findUnique: async () => (accountType === null ? null : { accountType }) } } }
+  });
 
   const moduleUrl = `./ai-assistant.gateway.ts?fixture=${Date.now()}-${Math.random()}`;
   const mod = await import(moduleUrl);
@@ -90,6 +100,47 @@ test('ai:generate_description: an unauthenticated socket (no userId) is rejected
   assert.equal(emitted.length, 1);
   assert.equal(emitted[0].event, 'ai:description_error');
   assert.equal(emitted[0].payload.code, 'UNAUTHENTICATED');
+});
+
+// ── Phase 3 Batch 2A: role authorization — this feature's only real UI
+// caller is the CLIENT-facing Create Request page (confirmed by tracing
+// every frontend emit site of ai:generate_description) ────────────────────
+
+test('ai:generate_description: a CLIENT_INDIVIDUAL account (the intended role) is accepted and reaches Gemini', async (t) => {
+  const register = await loadGateway(t, { accountType: 'CLIENT_INDIVIDUAL' });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['ai:generate_description'](VALID_PAYLOAD);
+
+  assert.ok(emitted.some((e) => e.event === 'ai:description_complete'), 'the intended role must reach the normal success path');
+});
+
+test('ai:generate_description: a PROVIDER_INDIVIDUAL account (unintended role) is rejected without calling Gemini', async (t) => {
+  let called = false;
+  const register = await loadGateway(t, {
+    accountType: 'PROVIDER_INDIVIDUAL',
+    generateStructured: async () => { called = true; throw new Error('should never be called'); }
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-2' });
+  register(socket);
+
+  await handlers['ai:generate_description'](VALID_PAYLOAD);
+
+  assert.equal(called, false, 'Gemini must never be invoked for an unauthorized role');
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0].event, 'ai:description_error');
+  assert.equal(emitted[0].payload.code, 'FORBIDDEN_ROLE');
+});
+
+test('ai:generate_description: a CLIENT_COMPANY account is also accepted (both client account types are the intended role)', async (t) => {
+  const register = await loadGateway(t, { accountType: 'CLIENT_COMPANY' });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-3' });
+  register(socket);
+
+  await handlers['ai:generate_description'](VALID_PAYLOAD);
+
+  assert.ok(emitted.some((e) => e.event === 'ai:description_complete'));
 });
 
 // ── validation success → stream success (two-stage happy path) ───────────
@@ -294,6 +345,11 @@ test('ai:generate_description: a socket disconnect aborts the in-flight Gemini g
   register(socket);
 
   const handlerPromise = handlers['ai:generate_description'](VALID_PAYLOAD);
+  // Phase 3 Batch 2A added an async role-check (a DB lookup) before the
+  // disconnect handler gets registered — let that one microtask resolve so
+  // the abort-controller registration (still fully synchronous after it)
+  // has actually happened before we fire the disconnect trigger below.
+  await Promise.resolve();
   triggerDisconnect();
   await handlerPromise;
 

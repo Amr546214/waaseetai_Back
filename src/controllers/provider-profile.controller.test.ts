@@ -162,3 +162,51 @@ test('provider saveSetupData: preserves existing User.status = ACTIVE write', as
   const statusCall = userUpdateSpy.mock.calls.find((c: any) => c.arguments[0].data.status === 'ACTIVE');
   assert.notEqual(statusCall, undefined);
 });
+
+// Phase 3 Batch 2A — F28: this catch block used to hardcode res.status(500)
+// regardless of the thrown error's real statusCode. It must now honor
+// AppError(404) for an unknown provider, and must not regress any other
+// error's real status. The service itself is mocked directly here (its own
+// AppError(404) behavior is proven separately in
+// provider-profile.service.test.ts) — this test isolates the controller's
+// error-handling contract only.
+test('getPublicProfile: an unknown provider (public route) responds with the real 404, not a hardcoded 500', async (t) => {
+  const { AppError } = await import('../utils/app-error');
+  t.mock.module('../services/provider-profile.service', {
+    namedExports: {
+      providerProfileService: {
+        getPublicProfile: async () => { throw new AppError('Provider not found', 404); }
+      }
+    }
+  });
+  const moduleUrl = `./provider-profile.controller.ts?fixture=${Date.now()}-${Math.random()}`;
+  const controller = await import(moduleUrl);
+
+  const req: any = { params: { providerId: 'nonexistent-provider' }, user: undefined };
+  const res = createMockRes();
+
+  await controller.getPublicProfile(req, res);
+
+  assert.equal(res.statusCode, 404);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.message, 'Provider not found');
+});
+
+test('getPublicProfile: an unrelated non-AppError failure still responds with 500 (no regression)', async (t) => {
+  t.mock.module('../services/provider-profile.service', {
+    namedExports: {
+      providerProfileService: {
+        getPublicProfile: async () => { throw new Error('unexpected DB failure'); }
+      }
+    }
+  });
+  const moduleUrl = `./provider-profile.controller.ts?fixture=${Date.now()}-${Math.random()}`;
+  const controller = await import(moduleUrl);
+
+  const req: any = { params: { providerId: 'some-provider' }, user: undefined };
+  const res = createMockRes();
+
+  await controller.getPublicProfile(req, res);
+
+  assert.equal(res.statusCode, 500);
+});

@@ -37,6 +37,10 @@ export class AiReviewController {
     try {
       const payload: CompleteProjectDataDto = req.body;
 
+      if (!payload?.title && !payload?.description) {
+        return next(new AppError('Title or description is required to analyze the project model', 400));
+      }
+
       const analysis = await this.service.analyzeProjectModel(payload || {});
 
       res.status(200).json({

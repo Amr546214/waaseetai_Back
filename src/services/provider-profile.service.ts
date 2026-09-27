@@ -361,7 +361,7 @@ Average Rating: ${reviewsCount > 0 ? (gamification?.avgRating || profile.rating 
 		});
 
 		if (!profile) {
-			throw new Error('Provider not found');
+			throw new AppError('Provider not found', 404);
 		}
 
 		const completedProjectsCount = await prisma.project.count({

@@ -15,7 +15,23 @@ function readRoute(relativePath: string): string {
 
 test('proposal.routes.ts: POST /ai-suggest (ai-proposal.service.ts) carries aiLimiter', () => {
   const source = readRoute('proposal.routes.ts');
-  assert.ok(source.includes("router.post(\n  '/ai-suggest',\n  authenticate,\n  aiLimiter,"));
+  const start = source.indexOf("router.post(\n  '/ai-suggest',");
+  assert.notEqual(start, -1);
+  const registration = source.slice(start, source.indexOf(');', start));
+  assert.match(registration, /aiLimiter/);
+});
+
+// Phase 3 Batch 2B: confirmed via a full frontend trace that the only real
+// caller of /ai-suggest is the provider-only apply-to-request wizard —
+// MARKETING_BROKER (authorized on the sibling POST /projects/:id/proposals)
+// was proven to have zero current frontend path to this route and is
+// deliberately not included.
+test('proposal.routes.ts: POST /ai-suggest is restricted to PROVIDER_INDIVIDUAL/PROVIDER_COMPANY only', () => {
+  const source = readRoute('proposal.routes.ts');
+  const start = source.indexOf("router.post(\n  '/ai-suggest',");
+  const registration = source.slice(start, source.indexOf(');', start));
+  assert.match(registration, /authorize\(AccountType\.PROVIDER_INDIVIDUAL,\s*AccountType\.PROVIDER_COMPANY\)/);
+  assert.doesNotMatch(registration, /MARKETING_BROKER/);
 });
 
 test('project.routes.ts: POST /:id/proposals (createProposal -> evaluateAndSuggestProposal) carries aiLimiter', () => {
@@ -32,6 +48,17 @@ test('provider.routes.ts: GET /statistics (getAiMatchingProjects -> aiMatchingEn
   assert.notEqual(start, -1);
   const registration = source.slice(start, source.indexOf(');', start));
   assert.match(registration, /aiLimiter/);
+});
+
+// Phase 3 Batch 2B: confirmed via a full frontend trace (shared dashboard
+// sidebar gated on effectiveRole()===PROVIDER, plus the provider overview
+// page itself) that /statistics is provider-only — no other role's
+// dashboard ever calls it, and the data is inherently provider-specific.
+test('provider.routes.ts: GET /statistics is restricted to PROVIDER_INDIVIDUAL/PROVIDER_COMPANY only (providerOnly)', () => {
+  const source = readRoute('provider.routes.ts');
+  const start = source.indexOf("router.get(\n  '/statistics',");
+  const registration = source.slice(start, source.indexOf(');', start));
+  assert.match(registration, /providerOnly/);
 });
 
 test('provider-profile.routes.ts: both /public/:providerId and self-preview /public carry aiLimiter', () => {
