@@ -128,7 +128,6 @@ model User {
   marketplaceFavorites  MarketplaceFavorite[]
   reviewsWritten        Review[]               @relation("ReviewClient")
   reviewsReceived       Review[]               @relation("ReviewProvider")
-  specialtyTestSessions SpecialtyTestSession[]
   gamification          ProviderGamification?
   pointTransactions     PointTransaction[]
   walletTransactions    WalletTransaction[]
@@ -1098,7 +1097,6 @@ model Specialty {
 
   providerSpecialties      ProviderSpecialty[]
   serviceCatalogs          ServiceCatalog[]
-  tests                    SpecialtyTest[]
   assessments              ProviderSkillAssessment[]
   accreditationSubmissions AccreditationSubmission[]
   questions                Question[]
@@ -1144,8 +1142,6 @@ model ProviderSpecialty {
 
   workSamples          WorkSample[]
   accreditationSamples AccreditationSample[]
-  testSubmissions      TestSubmission[]
-  testSessions         SpecialtyTestSession[]
   aiAuditLogs          AiAuditLog[]
   assessmentAttempts   AssessmentAttempt[]
 
@@ -1235,91 +1231,6 @@ model AiAuditLog {
 
   @@index([providerSpecialtyId, createdAt])
   @@map("ai_audit_logs")
-}
-
-model SpecialtyTest {
-  id           String    @id @default(uuid())
-  specialtyId  String
-  specialty    Specialty @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
-  title        String
-  durationMins Int       @default(15)
-  passScore    Float     @default(25.0)
-  questions    Json
-
-  submissions TestSubmission[]
-
-  @@index([specialtyId])
-  @@map("specialty_tests")
-}
-
-model TestSubmission {
-  id                  String            @id @default(uuid())
-  providerSpecialtyId String
-  providerSpecialty   ProviderSpecialty @relation(fields: [providerSpecialtyId], references: [id], onDelete: Cascade)
-  testId              String
-  test                SpecialtyTest     @relation(fields: [testId], references: [id], onDelete: Cascade)
-
-  score       Float
-  passed      Boolean
-  submittedAt DateTime @default(now())
-
-  @@index([providerSpecialtyId])
-  @@index([testId])
-  @@map("test_submissions")
-}
-
-enum TestSessionStatus {
-  IN_PROGRESS
-  COMPLETED
-  TIMED_OUT
-  INVALIDATED
-}
-
-model SpecialtyTestSession {
-  id                  String            @id @default(uuid())
-  userId              String
-  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  providerSpecialtyId String
-  providerSpecialty   ProviderSpecialty @relation(fields: [providerSpecialtyId], references: [id], onDelete: Cascade)
-
-  status          TestSessionStatus @default(IN_PROGRESS)
-  totalQuestions  Int               @default(20)
-  correctAnswers  Int               @default(0)
-  scorePercentage Float             @default(0.0)
-  passed          Boolean           @default(false)
-
-  antiCheatViolations Int   @default(0)
-  violationEvents     Json?
-
-  questionsPayload Json
-  startedAt        DateTime  @default(now())
-  completedAt      DateTime?
-  expiresAt        DateTime
-
-  submissions TestQuestionSubmission[]
-  createdAt   DateTime                 @default(now())
-  updatedAt   DateTime                 @updatedAt
-
-  @@index([userId])
-  @@index([providerSpecialtyId, status])
-  @@map("specialty_test_sessions")
-}
-
-model TestQuestionSubmission {
-  id        String               @id @default(uuid())
-  sessionId String
-  session   SpecialtyTestSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-
-  questionId      String
-  subSpecialtyTag String
-  selectedIndex   Int
-  isCorrect       Boolean @default(false)
-  timeTakenSec    Int?    @default(0)
-
-  createdAt DateTime @default(now())
-
-  @@index([sessionId])
-  @@map("test_question_submissions")
 }
 
 model ProjectProposal {
