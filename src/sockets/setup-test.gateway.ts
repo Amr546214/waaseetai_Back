@@ -253,9 +253,13 @@ export class SetupTestGateway {
                         });
                     }
                     
+                    // This is an onboarding calibration test, not a pass/fail
+                    // gate — no code path anywhere restricts a provider based
+                    // on its outcome, so it must never claim a `passed`
+                    // verdict that doesn't actually exist. setupTestStatus
+                    // becomes COMPLETED regardless of score (unchanged).
                     socket.emit('setup_test:result', {
                         score: percentage,
-                        passed: true,
                         total: session.questions.length,
                         correct: session.score,
                         message: 'تم الانتهاء من الاختبار بنجاح وتم تسجيل نتيجتك لتصنيف مستواك.'

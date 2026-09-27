@@ -272,3 +272,51 @@ test('setup_test:init — a socket disconnect aborts the in-flight Gemini genera
   // Falls back to the static bank instead of hanging or crashing.
   assert.equal(emitted.find((e) => e.event === 'setup_test:ready')!.payload.totalQuestions, 15);
 });
+
+// ── Phase 3 fix: F21 — this is an onboarding calibration test, not a
+// pass/fail gate (proven by a full audit of every consumer of
+// setupTestStatus/setupTestScore/passed — nothing in the product blocks any
+// action on it). `setup_test:result` must never claim a `passed` verdict. ──
+
+async function completeSetupTest(handlers: Record<string, (...args: any[]) => any>, token: string, selectedIndex: number) {
+  for (let i = 0; i < SETUP_TEST_QUESTION_COUNT; i++) {
+    await handlers['setup_test:answer']({ token, questionId: `q${i + 1}`, selectedIndex });
+  }
+}
+
+test('setup_test:answer completion — a perfect score never exposes a misleading `passed` field', async (t) => {
+  const { register } = await loadGateway(t, {});
+  const { socket, handlers, emitted } = createMockSocket();
+  register(socket);
+  const token = signToken({ userId: 'user-1' });
+
+  await handlers['setup_test:init']({ token });
+  await completeSetupTest(handlers, token, 1); // correctOptionIndex is 1 for every fixture question
+
+  const resultEvent = emitted.find((e) => e.event === 'setup_test:result');
+  assert.ok(resultEvent, 'a result event must be emitted on completion');
+  assert.equal('passed' in resultEvent!.payload, false, 'the result payload must never include a passed field');
+  assert.equal(resultEvent!.payload.score, 100);
+  assert.equal(resultEvent!.payload.correct, SETUP_TEST_QUESTION_COUNT);
+  assert.equal(resultEvent!.payload.total, SETUP_TEST_QUESTION_COUNT);
+});
+
+test('setup_test:answer completion — a zero score still becomes setupTestStatus COMPLETED (never gated), and still has no `passed` field', async (t) => {
+  const { register, updateSpy } = await loadGateway(t, {});
+  const { socket, handlers, emitted } = createMockSocket();
+  register(socket);
+  const token = signToken({ userId: 'user-1' });
+
+  await handlers['setup_test:init']({ token });
+  await completeSetupTest(handlers, token, 0); // 0 never matches correctOptionIndex 1 — every answer is wrong
+
+  const resultEvent = emitted.find((e) => e.event === 'setup_test:result');
+  assert.ok(resultEvent);
+  assert.equal('passed' in resultEvent!.payload, false);
+  assert.equal(resultEvent!.payload.score, 0);
+  assert.equal(resultEvent!.payload.correct, 0);
+
+  const completionCall = updateSpy.mock.calls.find((c: any) => c.arguments[0].data.setupTestStatus === 'COMPLETED');
+  assert.ok(completionCall, 'setupTestStatus must become COMPLETED on completion regardless of score');
+  assert.equal(completionCall.arguments[0].data.setupTestScore, 0);
+});

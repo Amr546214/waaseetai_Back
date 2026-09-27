@@ -79,7 +79,11 @@ async function loadService(t: TestContext, opts: {
   return { accreditationAiService, accreditationCreateSpy, providerSpecialtyUpdateSpy };
 }
 
-test('evaluateAccreditationSample: a genuine validated AI_VERIFIED success persists the real score and upgrades the ProviderSpecialty', async (t) => {
+test('evaluateAccreditationSample: a genuine validated AI_VERIFIED score labels the sample but NEVER autonomously upgrades ProviderSpecialty (Phase 3 authority fix)', async (t) => {
+  // AI_VERIFIED on the sample now means "AI recommends approval, pending
+  // final confirmation" only — a single Gemini score must never itself
+  // grant the binding credential. The upgrade only happens later, through
+  // an explicit adminApproveSample call (see the dedicated test below).
   const evaluation = validEvaluationFixture();
   let capturedImages: any;
   const { accreditationAiService, accreditationCreateSpy, providerSpecialtyUpdateSpy } = await loadService(t, {
@@ -99,7 +103,7 @@ test('evaluateAccreditationSample: a genuine validated AI_VERIFIED success persi
   const createArgs = accreditationCreateSpy.mock.calls[0].arguments[0].data;
   assert.equal(createArgs.aiScore, 88);
   assert.equal(createArgs.status, 'AI_VERIFIED');
-  assert.equal(providerSpecialtyUpdateSpy.mock.callCount(), 1, 'ProviderSpecialty is only upgraded when AI_VERIFIED');
+  assert.equal(providerSpecialtyUpdateSpy.mock.callCount(), 0, 'a qualifying AI score must never, by itself, upgrade ProviderSpecialty — no badge, no isPassed, no APPROVED status');
 });
 
 test('evaluateAccreditationSample: a genuine validated but below-threshold score is REJECTED honestly, without upgrading ProviderSpecialty', async (t) => {
@@ -284,6 +288,105 @@ test('adminApproveSample/adminRejectSample: the existing manual/deterministic au
   await accreditationAiService.adminRejectSample('sample-1', 'سبب حقيقي للرفض');
   assert.equal(sampleUpdateSpy.mock.calls[1].arguments[0].data.status, 'REJECTED');
   assert.equal(specialtyUpdateManySpy.mock.calls[1].arguments[0].data.status, 'REJECTED');
+});
+
+// ── Phase 3 authority fix: F15 -> F16 explicit-confirmation workflow ──
+
+test('adminApproveSample: an AI_VERIFIED sample whose ProviderSpecialty is NOT yet approved can still be explicitly approved by an admin, and badgeGrantedAt is populated', async (t) => {
+  const sampleUpdateSpy = t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
+  const specialtyUpdateManySpy = t.mock.fn(async () => ({ count: 1 }));
+  const tx = {
+    accreditationSample: { update: sampleUpdateSpy },
+    providerSpecialty: { updateMany: specialtyUpdateManySpy }
+  };
+  const prismaMock: any = {
+    accreditationSample: {
+      // The sample already carries the AI's own AI_VERIFIED label (a real
+      // score >= 75 was recorded by evaluateAccreditationSample), but the
+      // linked specialty has genuinely never been approved yet.
+      findUnique: async () => ({
+        id: 'sample-1', status: 'AI_VERIFIED', providerSpecialtyId: 'spec-1', aiScore: 88, aiFeedbackAr: 'ملاحظة',
+        providerSpecialty: { status: 'TEST_REQUIRED' }
+      })
+    },
+    $transaction: async (fn: any) => fn(tx)
+  };
+  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: { isConfigured: () => true } } });
+  t.mock.module('../utils/remote-image-fetch', { namedExports: { fetchRemoteImage: async () => { throw new Error('must never be called by admin actions'); } } });
+
+  const moduleUrl = `./accreditation-ai.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { accreditationAiService } = await import(moduleUrl);
+
+  await accreditationAiService.adminApproveSample('sample-1');
+
+  assert.equal(specialtyUpdateManySpy.mock.callCount(), 1, 'the explicit admin action is what performs the real upgrade');
+  assert.equal(specialtyUpdateManySpy.mock.calls[0].arguments[0].data.status, 'APPROVED');
+  assert.equal(specialtyUpdateManySpy.mock.calls[0].arguments[0].data.isPassed, true);
+  assert.ok(specialtyUpdateManySpy.mock.calls[0].arguments[0].data.badgeGrantedAt instanceof Date, 'badgeGrantedAt is populated by the existing logic');
+});
+
+test('adminApproveSample: a second approval attempt is rejected based on the REAL ProviderSpecialty approval state, not the sample\'s own AI_VERIFIED label', async (t) => {
+  const sampleUpdateSpy = t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
+  const specialtyUpdateManySpy = t.mock.fn(async () => ({ count: 1 }));
+  const tx = {
+    accreditationSample: { update: sampleUpdateSpy },
+    providerSpecialty: { updateMany: specialtyUpdateManySpy }
+  };
+  const prismaMock: any = {
+    accreditationSample: {
+      // The specialty was already approved (e.g. by a prior admin action on
+      // a different sample) — this must block re-approval even though this
+      // particular sample's own status is still just AI_VERIFIED.
+      findUnique: async () => ({
+        id: 'sample-2', status: 'AI_VERIFIED', providerSpecialtyId: 'spec-1', aiScore: 90, aiFeedbackAr: 'ملاحظة',
+        providerSpecialty: { status: 'APPROVED' }
+      })
+    },
+    $transaction: async (fn: any) => fn(tx)
+  };
+  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: { isConfigured: () => true } } });
+  t.mock.module('../utils/remote-image-fetch', { namedExports: { fetchRemoteImage: async () => { throw new Error('must never be called by admin actions'); } } });
+
+  const moduleUrl = `./accreditation-ai.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { accreditationAiService } = await import(moduleUrl);
+
+  await assert.rejects(
+    () => accreditationAiService.adminApproveSample('sample-2'),
+    (err: any) => { assert.equal(err.statusCode, 409); return true; }
+  );
+  assert.equal(sampleUpdateSpy.mock.callCount(), 0, 'no write should happen once the real specialty state already reflects approval');
+  assert.equal(specialtyUpdateManySpy.mock.callCount(), 0);
+});
+
+test('adminRejectSample: rejecting one sample never downgrades a ProviderSpecialty that a different sample already had approved', async (t) => {
+  const sampleUpdateSpy = t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
+  const specialtyUpdateManySpy = t.mock.fn(async (args: any) => ({ count: args.where.status?.not === 'APPROVED' ? 0 : 1 }));
+  const tx = {
+    accreditationSample: { update: sampleUpdateSpy },
+    providerSpecialty: { updateMany: specialtyUpdateManySpy }
+  };
+  const prismaMock: any = {
+    accreditationSample: {
+      findUnique: async () => ({ id: 'sample-3', status: 'MANUAL_REVIEW', providerSpecialtyId: 'spec-1', aiFeedbackAr: '' })
+    },
+    $transaction: async (fn: any) => fn(tx)
+  };
+  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: { isConfigured: () => true } } });
+  t.mock.module('../utils/remote-image-fetch', { namedExports: { fetchRemoteImage: async () => { throw new Error('must never be called by admin actions'); } } });
+
+  const moduleUrl = `./accreditation-ai.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { accreditationAiService } = await import(moduleUrl);
+
+  await accreditationAiService.adminRejectSample('sample-3', 'سبب حقيقي للرفض');
+
+  assert.equal(sampleUpdateSpy.mock.calls[0].arguments[0].data.status, 'REJECTED');
+  // The updateMany call itself already scopes to status:{not:'APPROVED'} —
+  // asserting the exact where-clause here proves this reject path can never
+  // touch an already-approved specialty, regardless of which sample it came from.
+  assert.deepEqual(specialtyUpdateManySpy.mock.calls[0].arguments[0].where, { id: 'spec-1', status: { not: 'APPROVED' } });
 });
 
 // Final AI cleanup batch (F11): the dead proof-image socket handler this

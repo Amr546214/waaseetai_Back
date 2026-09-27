@@ -1,5 +1,6 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { Prisma } from '@prisma/client';
 
 // Regression coverage for the Explore Requests visibility fix: this task
 // explicitly must NOT add a new APPROVED-specialty restriction on proposal
@@ -25,7 +26,7 @@ function baseProposalPayload(overrides: any = {}) {
   };
 }
 
-function createProposalMockPrisma(t: TestContext, opts: { existingProposal?: any } = {}) {
+function createProposalMockPrisma(t: TestContext, opts: { existingProposal?: any; aiEvaluationError?: unknown } = {}) {
   const projectFixture = {
     id: 'project-1',
     clientId: 'client-1',
@@ -35,18 +36,18 @@ function createProposalMockPrisma(t: TestContext, opts: { existingProposal?: any
     budgetMax: 1500
   };
 
+  const projectProposalCreateSpy = t.mock.fn(async (args: any) => ({
+    id: 'proposal-1',
+    ...args.data,
+    provider: { id: 'provider-1', firstName: 'مزود', lastName: 'خدمة', providerProfile: null }
+  }));
+
   // Intentionally has NO `providerSpecialty` key at all: if createProposal
   // ever starts consulting ProviderSpecialty (a new approval gate), this
   // mock throws on the missing property and the "no specialty gate" test
   // below fails loudly instead of silently passing.
   const txStub = {
-    projectProposal: {
-      create: async (args: any) => ({
-        id: 'proposal-1',
-        ...args.data,
-        provider: { id: 'provider-1', firstName: 'مزود', lastName: 'خدمة', providerProfile: null }
-      })
-    },
+    projectProposal: { create: projectProposalCreateSpy },
     proposal: { create: async () => ({}) },
     clientRequest: { update: async () => ({}) },
     project: { update: async () => ({}) },
@@ -65,27 +66,29 @@ function createProposalMockPrisma(t: TestContext, opts: { existingProposal?: any
   t.mock.module('./ai-proposal.service', {
     namedExports: {
       aiProposalService: {
-        evaluateAndSuggestProposal: async () => ({
-          qualityScore: 80,
-          qualityTag: 'جيد',
-          priceAudit: { priceTag: 'مناسب' }
-        })
+        evaluateAndSuggestProposal: opts.aiEvaluationError !== undefined
+          ? async () => { throw opts.aiEvaluationError; }
+          : async () => ({
+            qualityScore: 80,
+            qualityTag: 'جيد',
+            priceAudit: { priceTag: 'مناسب' }
+          })
       }
     }
   });
 
-  return prismaMock;
+  return { prismaMock, projectProposalCreateSpy };
 }
 
 async function loadService(t: TestContext, opts?: Parameters<typeof createProposalMockPrisma>[1]) {
-  createProposalMockPrisma(t, opts);
+  const { projectProposalCreateSpy } = createProposalMockPrisma(t, opts);
   const moduleUrl = `./proposal.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { proposalService } = await import(moduleUrl);
-  return proposalService;
+  return { service: proposalService, projectProposalCreateSpy };
 }
 
 test('createProposal: a duplicate proposal from the same provider is still rejected (existing restriction remains enforced)', async (t) => {
-  const service = await loadService(t, { existingProposal: { id: 'existing-proposal' } });
+  const { service } = await loadService(t, { existingProposal: { id: 'existing-proposal' } });
 
   await assert.rejects(
     () => service.createProposal('project-1', 'provider-1', baseProposalPayload()),
@@ -97,7 +100,7 @@ test('createProposal: a duplicate proposal from the same provider is still rejec
 });
 
 test('createProposal: milestone percentages not summing to 100% are still rejected (existing validation remains intact)', async (t) => {
-  const service = await loadService(t);
+  const { service } = await loadService(t);
   const payload = baseProposalPayload({
     milestones: [{ stepOrder: 1, title: 'مرحلة أولى', description: 'وصف كافٍ لهذه المرحلة', days: 5, percentage: 60, amount: 600 }]
   });
@@ -112,7 +115,52 @@ test('createProposal: milestone percentages not summing to 100% are still reject
 });
 
 test('createProposal: succeeds for a provider with no ProviderSpecialty record at all — submission is not gated by specialty approval', async (t) => {
-  const service = await loadService(t);
+  const { service } = await loadService(t);
   const result = await service.createProposal('project-1', 'provider-1', baseProposalPayload());
   assert.equal(result.id, 'proposal-1');
+});
+
+// ── Phase 3 fix: F27 — AI evaluation failure must never block a real
+// proposal submission (honest fail-open, no fabricated AI fields) ──
+
+test('createProposal: a Gemini/AI evaluation failure still creates the proposal successfully with status SUBMITTED', async (t) => {
+  const { service, projectProposalCreateSpy } = await loadService(t, { aiEvaluationError: new Error('Gemini unavailable') });
+
+  const result = await service.createProposal('project-1', 'provider-1', baseProposalPayload());
+
+  assert.equal(result.id, 'proposal-1');
+  assert.equal(projectProposalCreateSpy.mock.callCount(), 1);
+  assert.equal(projectProposalCreateSpy.mock.calls[0].arguments[0].data.status, 'SUBMITTED');
+});
+
+test('createProposal: on AI evaluation failure, aiMatchScore/aiQualityTag/aiPriceTag/aiFeedback are honestly null — never a fabricated score', async (t) => {
+  const { service, projectProposalCreateSpy } = await loadService(t, { aiEvaluationError: new Error('Gemini unavailable') });
+
+  await service.createProposal('project-1', 'provider-1', baseProposalPayload());
+
+  const data = projectProposalCreateSpy.mock.calls[0].arguments[0].data;
+  assert.equal(data.aiMatchScore, null);
+  assert.equal(data.aiQualityTag, null);
+  assert.equal(data.aiPriceTag, null);
+  assert.equal(data.aiFeedback, Prisma.DbNull);
+});
+
+test('createProposal: raw provider errors are never propagated to the caller on AI failure — submission still resolves normally', async (t) => {
+  const { GeminiProviderError, GeminiErrorCode } = await import('./ai/gemini/gemini.errors');
+  const { service } = await loadService(t, { aiEvaluationError: new GeminiProviderError(GeminiErrorCode.PROVIDER_UNAVAILABLE, 'raw provider detail that must never leak') });
+
+  const result = await service.createProposal('project-1', 'provider-1', baseProposalPayload());
+  assert.equal(result.id, 'proposal-1');
+});
+
+test('createProposal: a successful AI evaluation still populates the real aiMatchScore/aiQualityTag/aiPriceTag/aiFeedback exactly as before (unchanged happy path)', async (t) => {
+  const { service, projectProposalCreateSpy } = await loadService(t);
+
+  await service.createProposal('project-1', 'provider-1', baseProposalPayload());
+
+  const data = projectProposalCreateSpy.mock.calls[0].arguments[0].data;
+  assert.equal(data.aiQualityTag, 'جيد');
+  assert.equal(data.aiPriceTag, 'مناسب');
+  assert.equal(typeof data.aiMatchScore, 'number');
+  assert.ok(data.aiFeedback && typeof data.aiFeedback === 'object');
 });

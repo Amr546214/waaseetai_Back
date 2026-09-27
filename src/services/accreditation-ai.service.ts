@@ -167,9 +167,14 @@ export class AccreditationAiService {
     const finalStatus = evaluationCompleted ? (finalScore >= 75 ? 'AI_VERIFIED' : 'REJECTED') : 'MANUAL_REVIEW';
     const finalQuality = evaluationCompleted ? (finalScore >= 85 ? 'EXCELLENT' : (finalScore >= 75 ? 'ACCEPTABLE' : 'POOR')) : 'POOR';
 
-    // 4. Save DB Transaction
+    // 4. Save DB Transaction.
+    // AI_VERIFIED here means "AI recommends approval, pending final
+    // confirmation" — it is a label on the sample only. A single Gemini
+    // score must never itself grant a binding ProviderSpecialty credential;
+    // the actual upgrade (status/isPassed/badgeGrantedAt) happens only
+    // through the existing explicit admin action (adminApproveSample below),
+    // exactly like a sample that came back REJECTED/MANUAL_REVIEW.
     const accreditationSample = await prisma.$transaction(async (tx) => {
-      // Create AccreditationSample
       const sample = await tx.accreditationSample.create({
         data: {
           providerProfileId: providerProfile.id,
@@ -189,21 +194,6 @@ export class AccreditationAiService {
           aiAuditedAt: new Date(),
         }
       });
-
-      // If AI_VERIFIED, upgrade ProviderSpecialty credentials and status
-      if (finalStatus === 'AI_VERIFIED') {
-        await tx.providerSpecialty.update({
-          where: { id: providerSpecialty.id },
-          data: {
-            status: 'APPROVED',
-            isPassed: true,
-            passedAt: new Date(),
-            badgeGrantedAt: new Date(),
-            aiScore: finalScore,
-            ownershipCredibility: Math.max(providerSpecialty.ownershipCredibility || 0, finalScore),
-          }
-        });
-      }
 
       return sample;
     });
@@ -449,9 +439,16 @@ export class AccreditationAiService {
   }
 
   async adminApproveSample(id: string) {
-    const sample = await prisma.accreditationSample.findUnique({ where: { id } });
+    const sample = await prisma.accreditationSample.findUnique({
+      where: { id },
+      include: { providerSpecialty: { select: { status: true } } }
+    });
     if (!sample) throw new AppError('نموذج الاعتماد غير موجود', 404);
-    if (sample.status === AccreditationStatus.AI_VERIFIED) throw new AppError('تم اعتماد هذا النموذج مسبقاً', 409);
+    // The real "already done" condition is whether the linked specialty has
+    // actually been granted the credential — not whether the sample itself
+    // is labeled AI_VERIFIED, which (post-fix) only ever means "AI
+    // recommends approval", never "approval already granted".
+    if (sample.providerSpecialty?.status === 'APPROVED') throw new AppError('تم اعتماد هذا النموذج مسبقاً', 409);
 
     return prisma.$transaction(async (tx) => {
       const updated = await tx.accreditationSample.update({

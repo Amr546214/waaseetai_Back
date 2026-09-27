@@ -4,6 +4,8 @@ import { AccountType, Prisma, ProposalStatus } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 import { aiProposalService } from './ai-proposal.service';
 import { getIO } from '../socket';
+import { GeminiProviderError } from './ai/gemini/gemini.errors';
+import { logger } from '../config/logger';
 
 export interface GetProviderOffersFiltersDto {
 	status?: string;
@@ -165,23 +167,39 @@ export class ProposalService {
 			throw new AppError(`إجمالي نسب دفعات المراحل يجب أن يساوي 100% (المجموع الحالي: ${totalPct}%)`, 400);
 		}
 
-		// 4. Run instant AI Quality & Match Evaluation before creation
-		const aiEvaluation = await aiProposalService.evaluateAndSuggestProposal(
-			projectId,
-			data.title,
-			data.message,
-			data.advantages
-		);
+		// 4. Run instant AI Quality & Match Evaluation before creation.
+		// Proposal submission is a real business action and must not depend on
+		// Gemini's availability — a provider/model failure here is logged
+		// (sanitized) and the submission proceeds with honest null AI fields,
+		// never a fabricated score/tag/feedback.
+		let aiMatchScore: number | null = null;
+		let aiQualityTag: string | null = null;
+		let aiPriceTag: string | null = null;
+		let aiFeedback: Prisma.InputJsonValue | Prisma.NullTypes.DbNull = Prisma.DbNull;
+		try {
+			const aiEvaluation = await aiProposalService.evaluateAndSuggestProposal(
+				projectId,
+				data.title,
+				data.message,
+				data.advantages
+			);
 
-		// Calculate match score based on budget closeness and AI quality score
-		let aiMatchScore = aiEvaluation.qualityScore;
-		const minB = project?.budgetMin || clientRequest?.minBudget;
-		const maxB = project?.budgetMax || clientRequest?.maxBudget;
-		if (minB && maxB) {
-			const mid = (minB + maxB) / 2;
-			const deviation = Math.abs(data.totalPrice - mid) / mid;
-			const budgetFactor = Math.max(0, 100 - deviation * 100);
-			aiMatchScore = Math.round((aiEvaluation.qualityScore * 0.6) + (budgetFactor * 0.4));
+			// Calculate match score based on budget closeness and AI quality score
+			aiMatchScore = aiEvaluation.qualityScore;
+			const minB = project?.budgetMin || clientRequest?.minBudget;
+			const maxB = project?.budgetMax || clientRequest?.maxBudget;
+			if (minB && maxB) {
+				const mid = (minB + maxB) / 2;
+				const deviation = Math.abs(data.totalPrice - mid) / mid;
+				const budgetFactor = Math.max(0, 100 - deviation * 100);
+				aiMatchScore = Math.round((aiEvaluation.qualityScore * 0.6) + (budgetFactor * 0.4));
+			}
+			aiQualityTag = aiEvaluation.qualityTag;
+			aiPriceTag = aiEvaluation.priceAudit?.priceTag || 'مناسب';
+			aiFeedback = JSON.parse(JSON.stringify(aiEvaluation));
+		} catch (error) {
+			const code = error instanceof GeminiProviderError ? error.code : 'APPLICATION_VALIDATION_ERROR';
+			logger.warn(`[ProposalService] AI evaluation unavailable for proposal on project ${projectId}: ${code}`);
 		}
 
 		// 5. Transactional execution saving ProjectProposal & ProposalMilestone entries
@@ -199,9 +217,9 @@ export class ProposalService {
 					deliveryDays: data.deliveryDays,
 					status: ProposalStatus.SUBMITTED,
 					aiMatchScore: aiMatchScore,
-					aiQualityTag: aiEvaluation.qualityTag,
-					aiPriceTag: aiEvaluation.priceAudit?.priceTag || 'مناسب',
-					aiFeedback: JSON.parse(JSON.stringify(aiEvaluation)),
+					aiQualityTag: aiQualityTag,
+					aiPriceTag: aiPriceTag,
+					aiFeedback: aiFeedback,
 					agreedToTerms: data.agreedToTerms,
 					agreedToEscrow: data.agreedToEscrow,
 					milestones: {
@@ -247,7 +265,7 @@ export class ProposalService {
 						coverLetter: data.message,
 						workPlan: data.outputs || '',
 						aiMatchScore: aiMatchScore,
-						aiPriceTag: aiEvaluation.priceAudit?.priceTag || 'مناسب',
+						aiPriceTag: aiPriceTag,
 						status: ProposalStatus.SUBMITTED
 					}
 				});
