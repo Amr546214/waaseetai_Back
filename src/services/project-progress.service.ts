@@ -1,4 +1,4 @@
-import { AmendmentStatus, ContractStatus, EscrowStatus, ProjectStageStatus, ProjectStatus, RequestStatus, StageDeliveryStatus } from '@prisma/client';
+import { AmendmentStatus, ContractStatus, EscrowStatus, LogCategory, LogStatus, ProjectStageStatus, ProjectStatus, RequestStatus, StageDeliveryStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
@@ -443,17 +443,75 @@ export class ProjectProgressService {
     const result = await prisma.$transaction(async tx => {
       let isProjectCompleted = false;
       if (decision === 'revision') {
+        // Guarded the same way the approve path below is: an unconditional
+        // update-by-id here would let a request that raced past the
+        // outside-transaction pre-read above silently revert a stage a
+        // concurrent 'approve' had already moved to APPROVED (and already
+        // released escrow for) back to REVISION_REQUESTED. The WHERE clause
+        // is re-evaluated against the latest committed row once Postgres
+        // grants this UPDATE its lock, so the loser of any race correctly
+        // sees the already-transitioned status and matches zero rows.
+        const revisionTransition = await tx.projectStage.updateMany({
+          where: { id: stage.id, status: ProjectStageStatus.SUBMITTED },
+          data: { status: ProjectStageStatus.REVISION_REQUESTED }
+        });
+        if (revisionTransition.count !== 1) throw new AppError('لا يوجد تسليم جديد بانتظار المراجعة لهذه المرحلة', 409);
         await tx.stageDelivery.update({ where: { id: delivery.id }, data: { status: StageDeliveryStatus.REVISION_REQUESTED, reviewNote: note!.trim(), reviewedAt: new Date() } });
-        await tx.projectStage.update({ where: { id: stage.id }, data: { status: ProjectStageStatus.REVISION_REQUESTED } });
         await tx.project.update({ where: { id: contract.projectId }, data: { status: ProjectStatus.IN_PROGRESS } });
       } else {
+        // The DB-enforced gate for the whole approve path, and the fix for
+        // the double-release race: only the request that actually flips
+        // SUBMITTED -> APPROVED here is allowed to touch the delivery record
+        // or release escrow. Two concurrent approvals for the same stage
+        // both start from the same outside-transaction pre-read, but only
+        // one of their UPDATEs can win the row lock; the other's WHERE
+        // clause is re-checked against the now-APPROVED row once unblocked
+        // and matches zero rows, so it stops here with no side effects at
+        // all — never touching StageDelivery or Escrow.
+        const stageTransition = await tx.projectStage.updateMany({
+          where: { id: stage.id, status: ProjectStageStatus.SUBMITTED },
+          data: { status: ProjectStageStatus.APPROVED, approvedAt: new Date() }
+        });
+        if (stageTransition.count !== 1) throw new AppError('لا يوجد تسليم جديد بانتظار المراجعة لهذه المرحلة', 409);
         await tx.stageDelivery.update({ where: { id: delivery.id }, data: { status: StageDeliveryStatus.APPROVED, reviewNote: note?.trim() || null, reviewedAt: new Date() } });
-        await tx.projectStage.update({ where: { id: stage.id }, data: { status: ProjectStageStatus.APPROVED, approvedAt: new Date() } });
         const next = await tx.projectStage.findFirst({ where: { contractId: contract.id, stepOrder: { gt: stage.stepOrder } }, orderBy: { stepOrder: 'asc' } });
         if (next) {
           await tx.projectStage.update({ where: { id: next.id }, data: { status: ProjectStageStatus.IN_PROGRESS, startedAt: new Date() } });
           await tx.project.update({ where: { id: contract.projectId }, data: { status: ProjectStatus.IN_PROGRESS } });
           await tx.escrow.updateMany({ where: { projectId: contract.projectId }, data: { releasedAmount: { increment: stage.amount } } });
+          // Durable audit trail for the fund release itself — the stage/
+          // delivery status transitions above record WHAT happened, this
+          // records the financial event specifically, in the same shape
+          // paypal-finance.service.ts's creditWalletForCapture() already
+          // uses for deposit-side release events. Written against the
+          // provider (the party whose computed balance just moved), with
+          // the approving client and full project/contract/stage context
+          // in metaData for correlation. Same transaction as the escrow
+          // mutation above, so both commit or roll back together.
+          await tx.accountAuditLog.create({
+            data: {
+              userId: contract.providerId,
+              category: LogCategory.SYSTEM_AUDIT,
+              title: 'إفراج دفعة مرحلة',
+              actionText: `اعتماد العميل لمرحلة "${stage.title}" وإفراج ${stage.amount} دولار من ضمان المشروع`,
+              status: LogStatus.COMPLETED,
+              statusText: 'مكتمل بنجاح',
+              summary: `اعتمد العميل تسليم المرحلة "${stage.title}" في المشروع «${contract.project.title}»، وتم إفراج ${stage.amount} دولار من الضمان لصالح مقدم الخدمة.`,
+              source: 'USER',
+              eventType: 'STAGE_FUND_RELEASED',
+              severity: 'INFO',
+              metaData: {
+                projectId: contract.projectId,
+                contractId: contract.id,
+                stageId: stage.id,
+                stageTitle: stage.title,
+                releasedAmount: stage.amount,
+                currency: 'USD',
+                isFinalStage: false,
+                approvedByClientId: contract.clientId
+              }
+            }
+          });
         } else {
           isProjectCompleted = true;
           const completed = await tx.contract.updateMany({
@@ -463,6 +521,33 @@ export class ProjectProgressService {
           if (completed.count !== 1) throw new AppError('تم اعتماد المشروع النهائي مسبقاً', 409);
           await tx.project.update({ where: { id: contract.projectId }, data: { status: ProjectStatus.COMPLETED, providerId: contract.providerId } });
           await tx.escrow.updateMany({ where: { projectId: contract.projectId }, data: { status: EscrowStatus.RELEASED, releasedAmount: contract.price } });
+          // Same durable audit-trail entry as the intermediate-stage branch
+          // above, for the final stage's release — still the same
+          // transaction as the contract-completion/escrow mutations.
+          await tx.accountAuditLog.create({
+            data: {
+              userId: contract.providerId,
+              category: LogCategory.SYSTEM_AUDIT,
+              title: 'إفراج دفعة مرحلة',
+              actionText: `اعتماد العميل للمرحلة النهائية "${stage.title}" وإفراج ${stage.amount} دولار من ضمان المشروع`,
+              status: LogStatus.COMPLETED,
+              statusText: 'مكتمل بنجاح',
+              summary: `اعتمد العميل التسليم النهائي «${stage.title}» لمشروع «${contract.project.title}»، وتم إفراج ${stage.amount} دولار من الضمان لصالح مقدم الخدمة، وأُغلق العقد.`,
+              source: 'USER',
+              eventType: 'STAGE_FUND_RELEASED',
+              severity: 'INFO',
+              metaData: {
+                projectId: contract.projectId,
+                contractId: contract.id,
+                stageId: stage.id,
+                stageTitle: stage.title,
+                releasedAmount: stage.amount,
+                currency: 'USD',
+                isFinalStage: true,
+                approvedByClientId: contract.clientId
+              }
+            }
+          });
           await tx.clientRequest.updateMany({
             where: { proposals: { some: { projectId: contract.projectId } } },
             data: { status: RequestStatus.COMPLETED }

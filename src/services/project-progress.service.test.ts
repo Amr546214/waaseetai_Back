@@ -16,6 +16,13 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
   avgRating?: number | null;
   seedPointTransactions?: number[];
   nextStage?: any;
+  // Simulates the exact DB-level race window Batch 1's stage-approval fix
+  // protects: the OUTER pre-check (prisma.projectStage.findFirst) always
+  // sees SUBMITTED (as it would mid-race, since it runs before either
+  // transaction starts), but a concurrent/already-committed transaction has
+  // already flipped the row to APPROVED by the time the IN-TRANSACTION
+  // conditional updateMany runs.
+  dbStageAlreadyApproved?: boolean;
 } = {}) {
   const contract = {
     id: 'contract-1',
@@ -31,6 +38,8 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
     id: 'stage-1',
     contractId: 'contract-1',
     stepOrder: 1,
+    title: 'المرحلة الأولى',
+    amount: 100,
     status: 'SUBMITTED',
     deliveries: [{ id: 'delivery-1', status: 'SUBMITTED' }]
   };
@@ -66,10 +75,18 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
   const escrowUpdateManySpy = t.mock.fn(async () => ({ count: 1 }));
   const clientRequestUpdateManySpy = t.mock.fn(async () => ({ count: 1 }));
   const projectUpdateSpy = t.mock.fn(async () => ({}));
+  const stageDeliveryUpdateSpy = t.mock.fn(async () => ({}));
+  const accountAuditLogCreateSpy = t.mock.fn(async () => ({ id: 'audit-1' }));
+  const projectStageUpdateManySpy = t.mock.fn(async () => (opts.dbStageAlreadyApproved ? { count: 0 } : { count: 1 }));
 
   const tx = {
-    stageDelivery: { update: t.mock.fn(async () => ({})) },
+    stageDelivery: { update: stageDeliveryUpdateSpy },
     projectStage: {
+      // The current-stage SUBMITTED -> APPROVED/REVISION_REQUESTED
+      // transition (Batch 1's race fix) — conditional, via updateMany.
+      updateMany: projectStageUpdateManySpy,
+      // Only used for the NEXT stage's SUBMITTED -> IN_PROGRESS transition
+      // (a different row, unconditional — unaffected by this fix).
       update: t.mock.fn(async () => ({})),
       findFirst: async () => opts.nextStage ?? null
     },
@@ -80,6 +97,7 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
     escrow: { updateMany: escrowUpdateManySpy },
     clientRequest: { updateMany: clientRequestUpdateManySpy },
     contract: { updateMany: contractUpdateManySpy },
+    accountAuditLog: { create: accountAuditLogCreateSpy },
     pointTransaction: {
       create: pointTransactionCreateSpy,
       aggregate: async () => ({ _sum: { amount: pointTransactions.reduce((sum, p) => sum + p.amount, 0) } })
@@ -106,6 +124,7 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
   return {
     pointTransactionCreateSpy, userUpdateSpy, gamificationUpsertSpy, gamificationRuleUpsertSpy,
     contractUpdateManySpy, escrowUpdateManySpy, clientRequestUpdateManySpy, projectUpdateSpy,
+    stageDeliveryUpdateSpy, accountAuditLogCreateSpy, projectStageUpdateManySpy,
     getPointTransactions: () => pointTransactions,
     getUserState: () => userState,
     getGamificationState: () => gamificationState
@@ -221,6 +240,133 @@ test('reviewDelivery: financial/project/escrow writes remain behaviorally unchan
   assert.equal(clientRequestUpdateManySpy.mock.calls[0].arguments[0].data.status, 'COMPLETED');
   const projectCompletionCall = projectUpdateSpy.mock.calls.find((c: any) => c.arguments[0].data.status === 'COMPLETED');
   assert.notEqual(projectCompletionCall, undefined);
+});
+
+// ============================================================================
+// Financial Safety Batch 1, item 1 — intermediate ProjectStage approval race
+// (double-increment of Escrow.releasedAmount) + item 4 — stage-release
+// audit trail.
+// ============================================================================
+
+test('reviewDelivery (intermediate stage, approve): releases stage.amount exactly once', async (t) => {
+  const nextStage = { id: 'stage-2' };
+  const { projectProgressService, escrowUpdateManySpy, contractUpdateManySpy, projectStageUpdateManySpy } =
+    await loadProjectProgressServiceWithFixture(t, { nextStage });
+
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+
+  // The intermediate path releases via increment, never touches Contract
+  // completion, and the conditional stage transition ran exactly once.
+  assert.equal(projectStageUpdateManySpy.mock.callCount(), 1);
+  assert.deepEqual(projectStageUpdateManySpy.mock.calls[0].arguments[0].where, { id: 'stage-1', status: 'SUBMITTED' });
+  assert.equal(escrowUpdateManySpy.mock.callCount(), 1);
+  assert.deepEqual(escrowUpdateManySpy.mock.calls[0].arguments[0].data, { releasedAmount: { increment: 100 } });
+  assert.equal(contractUpdateManySpy.mock.callCount(), 0);
+});
+
+test('reviewDelivery (intermediate stage, approve): an already-approved stage cannot release again — the conditional updateMany matches zero rows and no financial write happens', async (t) => {
+  const nextStage = { id: 'stage-2' };
+  const { projectProgressService, escrowUpdateManySpy, stageDeliveryUpdateSpy, accountAuditLogCreateSpy, projectStageUpdateManySpy } =
+    await loadProjectProgressServiceWithFixture(t, { nextStage, dbStageAlreadyApproved: true });
+
+  await assert.rejects(
+    () => projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve'),
+    /لا يوجد تسليم جديد بانتظار المراجعة/
+  );
+
+  // The guard ran (and lost), but nothing downstream of it ever executed:
+  // no StageDelivery transition, no escrow release, no audit entry. This is
+  // the atomicity property from item 4 in miniature — everything after the
+  // failed conditional update is provably never reached.
+  assert.equal(projectStageUpdateManySpy.mock.callCount(), 1);
+  assert.equal(stageDeliveryUpdateSpy.mock.callCount(), 0);
+  assert.equal(escrowUpdateManySpy.mock.callCount(), 0);
+  assert.equal(accountAuditLogCreateSpy.mock.callCount(), 0);
+});
+
+test('reviewDelivery (intermediate stage, approve): two concurrent approval requests for the same stage — only the one that wins the conditional transition releases escrow, the other gets the conflict error with zero side effects', async (t) => {
+  // A mocked $transaction cannot reproduce Postgres's actual row-lock/
+  // re-evaluate-on-unblock behavior, so this proves the CODE-LEVEL contract
+  // that behavior depends on: whichever call's projectStage.updateMany sees
+  // status still SUBMITTED proceeds and releases exactly once; whichever
+  // call sees it already APPROVED (simulating having lost the real DB race)
+  // takes zero further action. Two DISTINCT loaded instances simulate the
+  // two requests, one already-won and one already-lost, run concurrently
+  // via Promise.allSettled — proving the "loser" path in isolation cannot
+  // itself cause a second release, which is the actual invariant at risk.
+  const nextStage = { id: 'stage-2' };
+  // t.mock.module() can only mock a given path once per TestContext, so the
+  // two independently-loaded module instances each need their own
+  // sub-TestContext (node:test's mock tracker is per-context) — run as two
+  // concurrent subtests rather than two loads under the same `t`.
+  let winner: Awaited<ReturnType<typeof loadProjectProgressServiceWithFixture>>;
+  let loser: Awaited<ReturnType<typeof loadProjectProgressServiceWithFixture>>;
+  let winnerResult: PromiseSettledResult<unknown>;
+  let loserResult: PromiseSettledResult<unknown>;
+
+  await Promise.all([
+    t.test('winner', async (t2) => {
+      winner = await loadProjectProgressServiceWithFixture(t2, { nextStage, dbStageAlreadyApproved: false });
+      [winnerResult] = await Promise.allSettled([winner.projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve')]);
+    }),
+    t.test('loser', async (t2) => {
+      loser = await loadProjectProgressServiceWithFixture(t2, { nextStage, dbStageAlreadyApproved: true });
+      [loserResult] = await Promise.allSettled([loser.projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve')]);
+    })
+  ]);
+
+  assert.equal(winnerResult!.status, 'fulfilled');
+  assert.equal(loserResult!.status, 'rejected');
+  assert.equal(winner!.escrowUpdateManySpy.mock.callCount(), 1);
+  assert.equal(loser!.escrowUpdateManySpy.mock.callCount(), 0);
+  assert.equal(winner!.accountAuditLogCreateSpy.mock.callCount(), 1);
+  assert.equal(loser!.accountAuditLogCreateSpy.mock.callCount(), 0);
+});
+
+test('reviewDelivery (intermediate stage, approve): writes a durable AccountAuditLog entry correlating project/contract/stage/amount/approving client, in the same transaction as the escrow release', async (t) => {
+  const nextStage = { id: 'stage-2' };
+  const { projectProgressService, accountAuditLogCreateSpy } = await loadProjectProgressServiceWithFixture(t, { nextStage });
+
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+
+  assert.equal(accountAuditLogCreateSpy.mock.callCount(), 1);
+  const entry = accountAuditLogCreateSpy.mock.calls[0].arguments[0].data;
+  assert.equal(entry.userId, 'provider-1');
+  assert.equal(entry.eventType, 'STAGE_FUND_RELEASED');
+  assert.equal(entry.category, 'SYSTEM_AUDIT');
+  assert.equal(entry.metaData.projectId, 'project-1');
+  assert.equal(entry.metaData.contractId, 'contract-1');
+  assert.equal(entry.metaData.stageId, 'stage-1');
+  assert.equal(entry.metaData.releasedAmount, 100);
+  assert.equal(entry.metaData.currency, 'USD');
+  assert.equal(entry.metaData.isFinalStage, false);
+  assert.equal(entry.metaData.approvedByClientId, 'client-1');
+});
+
+test('reviewDelivery (final stage, approve): the existing contract-completion protection is unweakened by the stage-level fix, and also writes a final-stage audit entry', async (t) => {
+  const { projectProgressService, contractUpdateManySpy, escrowUpdateManySpy, accountAuditLogCreateSpy, projectStageUpdateManySpy } =
+    await loadProjectProgressServiceWithFixture(t); // no nextStage -> final-stage branch, as every pre-existing test in this file already exercises
+
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+
+  assert.equal(projectStageUpdateManySpy.mock.callCount(), 1);
+  assert.equal(contractUpdateManySpy.mock.callCount(), 1);
+  assert.equal(escrowUpdateManySpy.mock.callCount(), 1);
+  assert.equal(escrowUpdateManySpy.mock.calls[0].arguments[0].data.status, 'RELEASED');
+  assert.equal(accountAuditLogCreateSpy.mock.callCount(), 1);
+  assert.equal(accountAuditLogCreateSpy.mock.calls[0].arguments[0].data.metaData.isFinalStage, true);
+});
+
+test('reviewDelivery (intermediate stage, revision): an already-approved stage cannot be reverted to REVISION_REQUESTED by a racing revision request either — same conditional guard applied to both decision branches', async (t) => {
+  const { projectProgressService, projectStageUpdateManySpy, escrowUpdateManySpy } =
+    await loadProjectProgressServiceWithFixture(t, { dbStageAlreadyApproved: true });
+
+  await assert.rejects(
+    () => projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'revision', 'يرجى تعديل التصميم من فضلك'),
+    /لا يوجد تسليم جديد بانتظار المراجعة/
+  );
+  assert.equal(projectStageUpdateManySpy.mock.callCount(), 1);
+  assert.equal(escrowUpdateManySpy.mock.callCount(), 0);
 });
 
 test('regression: revision decision does not touch points/gamification at all', async (t) => {

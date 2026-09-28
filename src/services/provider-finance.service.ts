@@ -1,8 +1,16 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 
 export class ProviderFinanceService {
-  async getWallet(providerId: string) {
-    const escrows = await prisma.escrow.findMany({
+  /**
+   * `client` defaults to the global singleton so every existing caller is
+   * unaffected — but withdrawal.service.ts's createForProvider() passes its
+   * own `tx` here so the released-earnings read participates in the SAME
+   * serializable transaction as its pending-withdrawal read and its
+   * Withdrawal insert, rather than reading a snapshot from outside it.
+   */
+  async getWallet(providerId: string, client: Prisma.TransactionClient | typeof prisma = prisma) {
+    const escrows = await client.escrow.findMany({
       where: { project: { providerId } },
       include: {
         project: {

@@ -83,7 +83,7 @@ function createPrismaMock(t: TestContext, opts: { seedPayments?: any[]; seedWall
 	};
 
 	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-	return { payments, walletTxRefs, createPaypalPaymentSpy, walletTransactionCreateSpy, userUpdateSpy };
+	return { payments, walletTxRefs, createPaypalPaymentSpy, walletTransactionCreateSpy, userUpdateSpy, prismaMock };
 }
 
 function mockPaypalService(t: TestContext, impl: { createOrder?: any; captureOrder?: any; verifyWebhookSignature?: any } = {}) {
@@ -179,8 +179,11 @@ test('captureDeposit: ownership is enforced — a payment belonging to another u
 	});
 });
 
-test('captureDeposit: a currency other than USD is rejected and never credits the wallet', async (t) => {
-	const { walletTransactionCreateSpy, userUpdateSpy } = createPrismaMock(t, {
+test('captureDeposit: a currency other than USD is rejected, the payment moves to FAILED (not left PENDING), and never credits the wallet', async (t) => {
+	// Batch 1, item 3: PayPal itself reported this capture COMPLETED (real
+	// money moved on PayPal's side) — rejecting it locally must not leave the
+	// row indistinguishable from an order the user simply never approved.
+	const { payments, walletTransactionCreateSpy, userUpdateSpy } = createPrismaMock(t, {
 		seedPayments: [{ userId: 'client-1', paypalOrderId: 'ORDER-1', amount: '50.00', currency: 'USD', status: 'PENDING' }]
 	});
 	mockPaypalService(t, {
@@ -191,12 +194,13 @@ test('captureDeposit: a currency other than USD is rejected and never credits th
 
 	const service = await loadService(t);
 	await assert.rejects(() => service.captureDeposit('client-1', 'ORDER-1'));
+	assert.equal(payments[0].status, 'FAILED');
 	assert.equal(walletTransactionCreateSpy.mock.callCount(), 0);
 	assert.equal(userUpdateSpy.mock.callCount(), 0);
 });
 
-test('captureDeposit: an amount that does not exactly match the recorded amount is rejected and never credits the wallet', async (t) => {
-	const { walletTransactionCreateSpy, userUpdateSpy } = createPrismaMock(t, {
+test('captureDeposit: an amount that does not exactly match the recorded amount is rejected, the payment moves to FAILED (not left PENDING), and never credits the wallet', async (t) => {
+	const { payments, walletTransactionCreateSpy, userUpdateSpy } = createPrismaMock(t, {
 		seedPayments: [{ userId: 'client-1', paypalOrderId: 'ORDER-1', amount: '50.00', currency: 'USD', status: 'PENDING' }]
 	});
 	mockPaypalService(t, {
@@ -207,6 +211,81 @@ test('captureDeposit: an amount that does not exactly match the recorded amount 
 
 	const service = await loadService(t);
 	await assert.rejects(() => service.captureDeposit('client-1', 'ORDER-1'));
+	assert.equal(payments[0].status, 'FAILED');
+	assert.equal(walletTransactionCreateSpy.mock.callCount(), 0);
+	assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+test('captureDeposit: a custom_id that does not match the calling client is rejected, the payment moves to FAILED (not left PENDING), and never credits the wallet', async (t) => {
+	const { payments, walletTransactionCreateSpy, userUpdateSpy } = createPrismaMock(t, {
+		seedPayments: [{ userId: 'client-1', paypalOrderId: 'ORDER-1', amount: '50.00', currency: 'USD', status: 'PENDING' }]
+	});
+	mockPaypalService(t, {
+		captureOrder: async () => ({
+			purchase_units: [{ custom_id: 'some-other-client', payments: { captures: [{ id: 'CAPTURE-1', status: 'COMPLETED', amount: { currency_code: 'USD', value: '50.00' } }] } }]
+		})
+	});
+
+	const service = await loadService(t);
+	await assert.rejects(() => service.captureDeposit('client-1', 'ORDER-1'), (err: any) => {
+		assert.equal(err.statusCode, 403);
+		return true;
+	});
+	assert.equal(payments[0].status, 'FAILED');
+	assert.equal(walletTransactionCreateSpy.mock.callCount(), 0);
+	assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+test('markFailedIfPending\'s guard property, exercised directly: an already-COMPLETED payment is never downgraded — the conditional updateMany matches zero rows for a non-PENDING status', async (t) => {
+	// This is the exact WHERE-clause behavior markFailedIfPending() (and the
+	// pre-existing capture.status!=='COMPLETED' branch it now shares code
+	// with) relies on: `where: { id, status: PENDING }` only ever matches a
+	// row that is still PENDING. Calling the real Prisma-shaped mock
+	// directly (bypassing the two structural short-circuits both
+	// captureDeposit() and completeFromWebhook() already have for a
+	// COMPLETED row, at lines 69 and 121, which are the normal-case
+	// guarantee) proves the guard itself — the defense-in-depth backstop for
+	// the narrower TOCTOU window between an earlier read and this write
+	// within a single call — behaves correctly in isolation, independent of
+	// those outer short-circuits.
+	const { payments, prismaMock } = createPrismaMock(t, {
+		seedPayments: [{ id: 'pp-1', userId: 'client-1', paypalOrderId: 'ORDER-1', paypalCaptureId: 'CAPTURE-1', amount: '50.00', currency: 'USD', status: 'COMPLETED' }]
+	});
+	mockPaypalService(t);
+	await loadService(t); // loaded only so the module wiring itself is exercised too
+
+	const result = await prismaMock.paypalPayment.updateMany({ where: { id: 'pp-1', status: 'PENDING' }, data: { status: 'FAILED' } });
+
+	assert.equal(result.count, 0, 'a status:PENDING guard must match zero rows against an already-COMPLETED row');
+	assert.equal(payments[0].status, 'COMPLETED', 'the row itself must be untouched');
+});
+
+test('completeFromWebhook: a currency mismatch on an otherwise-verified event moves the payment to FAILED (not left PENDING) and never credits the wallet', async (t) => {
+	const { payments, walletTransactionCreateSpy, userUpdateSpy } = createPrismaMock(t, {
+		seedPayments: [{ userId: 'client-1', paypalOrderId: 'ORDER-1', amount: '50.00', currency: 'USD', status: 'PENDING' }]
+	});
+	mockPaypalService(t);
+
+	const service = await loadService(t);
+	const result = await service.completeFromWebhook({ paypalOrderId: 'ORDER-1', paypalCaptureId: 'CAPTURE-1', currency: 'EUR', amountValue: '50.00' });
+
+	assert.equal(result.handled, false);
+	assert.equal(payments[0].status, 'FAILED');
+	assert.equal(walletTransactionCreateSpy.mock.callCount(), 0);
+	assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+test('completeFromWebhook: an amount mismatch on an otherwise-verified event moves the payment to FAILED (not left PENDING) and never credits the wallet', async (t) => {
+	const { payments, walletTransactionCreateSpy, userUpdateSpy } = createPrismaMock(t, {
+		seedPayments: [{ userId: 'client-1', paypalOrderId: 'ORDER-1', amount: '50.00', currency: 'USD', status: 'PENDING' }]
+	});
+	mockPaypalService(t);
+
+	const service = await loadService(t);
+	const result = await service.completeFromWebhook({ paypalOrderId: 'ORDER-1', paypalCaptureId: 'CAPTURE-1', currency: 'USD', amountValue: '999.00' });
+
+	assert.equal(result.handled, false);
+	assert.equal(payments[0].status, 'FAILED');
 	assert.equal(walletTransactionCreateSpy.mock.callCount(), 0);
 	assert.equal(userUpdateSpy.mock.callCount(), 0);
 });

@@ -80,24 +80,31 @@ export class PaypalFinanceService {
 		const purchaseUnit = captureResponse.purchase_units?.[0];
 
 		if (!capture || capture.status !== 'COMPLETED') {
-			await prisma.paypalPayment.updateMany({
-				where: { id: payment.id, status: PaypalPaymentStatus.PENDING },
-				data: { status: PaypalPaymentStatus.FAILED }
-			});
+			await this.markFailedIfPending(payment.id);
 			throw new AppError('لم تكتمل عملية الدفع عبر PayPal', 402);
 		}
 
+		// From here down, PayPal itself reports the capture as COMPLETED — real
+		// money moved on PayPal's side. Each of the next three checks is us
+		// rejecting that capture for a reason PayPal doesn't know about, so
+		// each must ALSO transition the row to FAILED before throwing —
+		// otherwise a genuinely-captured payment sits at PENDING forever,
+		// indistinguishable from an order the user simply never approved (see
+		// markFailedIfPending()'s own comment for why this is conditional).
 		if (purchaseUnit?.custom_id && purchaseUnit.custom_id !== clientId) {
+			await this.markFailedIfPending(payment.id);
 			throw new AppError('طلب الدفع لا يخص هذا المستخدم', 403);
 		}
 
 		if (!capture.amount || capture.amount.currency_code !== 'USD') {
+			await this.markFailedIfPending(payment.id);
 			throw new AppError('عملة عملية الدفع لا تطابق الدولار الأمريكي', 400);
 		}
 
 		// Exact decimal comparison — never a floating-point equality check.
 		const capturedAmount = new Prisma.Decimal(capture.amount.value);
 		if (!capturedAmount.equals(payment.amount)) {
+			await this.markFailedIfPending(payment.id);
 			throw new AppError('مبلغ الدفع لا يطابق المبلغ المسجل لهذا الطلب', 400);
 		}
 
@@ -128,11 +135,18 @@ export class PaypalFinanceService {
 			return { handled: false as const };
 		}
 
+		// Same reasoning as captureDeposit()'s equivalent checks: PayPal has
+		// already told us this capture COMPLETED, so a currency/amount
+		// mismatch here is us rejecting real captured money for a reason
+		// PayPal doesn't know about — the row must move to FAILED, not stay
+		// silently PENDING forever, indistinguishable from an abandoned order.
 		if (params.currency !== 'USD') {
+			await this.markFailedIfPending(payment.id);
 			return { handled: false as const };
 		}
 		const capturedAmount = new Prisma.Decimal(params.amountValue);
 		if (!capturedAmount.equals(payment.amount)) {
+			await this.markFailedIfPending(payment.id);
 			return { handled: false as const };
 		}
 
@@ -144,6 +158,22 @@ export class PaypalFinanceService {
 	async denyFromWebhook(paypalOrderId: string) {
 		await prisma.paypalPayment.updateMany({
 			where: { paypalOrderId, status: PaypalPaymentStatus.PENDING },
+			data: { status: PaypalPaymentStatus.FAILED }
+		});
+	}
+
+	/**
+	 * Conditionally transitions a payment PENDING -> FAILED. The `status:
+	 * PENDING` guard in the WHERE clause is what makes this safe to call from
+	 * a validation-rejection branch that might be racing a legitimate
+	 * concurrent credit: if the payment was already moved to COMPLETED by the
+	 * other path (capture endpoint or webhook, whichever wins the race) before
+	 * this runs, the update matches zero rows and does nothing — an
+	 * already-COMPLETED payment can never be downgraded back to FAILED.
+	 */
+	private async markFailedIfPending(paymentId: string): Promise<void> {
+		await prisma.paypalPayment.updateMany({
+			where: { id: paymentId, status: PaypalPaymentStatus.PENDING },
 			data: { status: PaypalPaymentStatus.FAILED }
 		});
 	}

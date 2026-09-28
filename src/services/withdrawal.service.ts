@@ -1,38 +1,83 @@
-import { WithdrawalStatus } from '@prisma/client';
+import { Prisma, WithdrawalStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { CreateWithdrawalInput, RejectWithdrawalInput, ResolveWithdrawalInput } from '../dtos/withdrawal.dto';
 import { providerFinanceService } from './provider-finance.service';
 
+// Postgres's code for a SERIALIZABLE transaction that lost a genuine
+// read/write conflict to a concurrent transaction (Postgres 40001, surfaced
+// by Prisma as P2034 — "Transaction failed due to a write conflict or a
+// deadlock. Please retry your transaction"). Losing this is not a real
+// failure, it's Postgres asking the loser of a race to re-run against the
+// now-current state, so it's retried rather than surfaced to the caller.
+const SERIALIZATION_CONFLICT_CODE = 'P2034';
+const MAX_SERIALIZATION_RETRIES = 3;
+
 export class WithdrawalService {
+  /**
+   * Provider balance is COMPUTED from Escrow.releasedAmount, not a stored
+   * field — so unlike depositEscrow()'s/PayPal's conditional-decrement
+   * pattern, there is no single row to atomically guard here. Instead the
+   * whole read-check-create sequence (released earnings, existing pending
+   * withdrawals, and the new Withdrawal insert) runs as ONE SERIALIZABLE
+   * transaction. Under plain READ COMMITTED (Prisma's default), two
+   * concurrent calls for the same provider could both read the same "not
+   * yet reserved" pending-withdrawal sum and both succeed, together
+   * exceeding what was actually released — a plain $transaction wrapper
+   * alone does not prevent this, since each transaction would still see its
+   * own consistent-but-stale snapshot. SERIALIZABLE makes Postgres itself
+   * detect the read (withdrawal.aggregate) / write (withdrawal.create)
+   * conflict between the two and abort one of them with P2034; that loser
+   * is retried here, re-reading the now-current state, rather than treated
+   * as an error.
+   */
   async createForProvider(userId: string, input: CreateWithdrawalInput) {
-    const wallet = await providerFinanceService.getWallet(userId);
-    const availableBalance = wallet.summary.availableBalance;
-    if (input.amount > availableBalance) {
-      throw new AppError(`المبلغ المطلوب يتجاوز رصيدك المتاح (${availableBalance} $)`, 400);
+    for (let attempt = 1; attempt <= MAX_SERIALIZATION_RETRIES; attempt++) {
+      try {
+        return await prisma.$transaction(async tx => {
+          // Reads via `tx`, not the global `prisma` — the released-earnings
+          // computation must be part of the same serializable snapshot as
+          // the pending-withdrawal read and the insert below, not a read
+          // taken from outside the transaction.
+          const wallet = await providerFinanceService.getWallet(userId, tx);
+          const availableBalance = wallet.summary.availableBalance;
+          if (input.amount > availableBalance) {
+            throw new AppError(`المبلغ المطلوب يتجاوز رصيدك المتاح (${availableBalance} $)`, 400);
+          }
+          const pendingWithdrawals = await tx.withdrawal.aggregate({
+            where: { userId, status: WithdrawalStatus.PENDING },
+            _sum: { amount: true },
+          });
+          const pendingAmount = pendingWithdrawals._sum.amount || 0;
+          const withdrawable = availableBalance - pendingAmount;
+          if (input.amount > withdrawable) {
+            throw new AppError(`المبلغ المطلوب يتجاوز رصيدك الصافي بعد طلبات السحب المعلقة (${withdrawable} $)`, 400);
+          }
+          return tx.withdrawal.create({
+            data: {
+              userId,
+              amount: input.amount,
+              currency: 'USD', // new withdrawal requests are USD — never rely on the
+              // schema's historical 'SAR' default. Existing rows keep whatever
+              // currency they were created with; this only affects new creates.
+              method: input.method,
+              accountName: input.accountName || null,
+              accountNumber: input.accountNumber || null,
+              iban: input.iban || null,
+              status: WithdrawalStatus.PENDING,
+            },
+          });
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      } catch (error) {
+        const isSerializationConflict = error instanceof Prisma.PrismaClientKnownRequestError && error.code === SERIALIZATION_CONFLICT_CODE;
+        if (isSerializationConflict && attempt < MAX_SERIALIZATION_RETRIES) continue;
+        throw error;
+      }
     }
-    const pendingWithdrawals = await prisma.withdrawal.aggregate({
-      where: { userId, status: WithdrawalStatus.PENDING },
-      _sum: { amount: true },
-    });
-    const pendingAmount = pendingWithdrawals._sum.amount || 0;
-    if (input.amount > availableBalance - pendingAmount) {
-      throw new AppError(`المبلغ المطلوب يتجاوز رصيدك الصافي بعد طلبات السحب المعلقة (${availableBalance - pendingAmount} $)`, 400);
-    }
-    return prisma.withdrawal.create({
-      data: {
-        userId,
-        amount: input.amount,
-        currency: 'USD', // new withdrawal requests are USD — never rely on the
-        // schema's historical 'SAR' default. Existing rows keep whatever
-        // currency they were created with; this only affects new creates.
-        method: input.method,
-        accountName: input.accountName || null,
-        accountNumber: input.accountNumber || null,
-        iban: input.iban || null,
-        status: WithdrawalStatus.PENDING,
-      },
-    });
+    // Unreachable in practice — the loop above always returns or throws on
+    // its final attempt — kept only to satisfy TypeScript's control-flow
+    // analysis without an unsafe non-null assertion.
+    throw new AppError('تعذر إنشاء طلب السحب بعد عدة محاولات متزامنة، حاول مرة أخرى', 409);
   }
 
   async listForUser(userId: string, status?: WithdrawalStatus, page = 1, limit = 10) {
