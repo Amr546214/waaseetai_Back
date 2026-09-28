@@ -1,0 +1,143 @@
+import { test, TestContext } from 'node:test';
+import assert from 'node:assert/strict';
+
+function mockDeps(
+	t: TestContext,
+	opts: {
+		verifyWebhookSignature?: any;
+		completeFromWebhook?: any;
+		denyFromWebhook?: any;
+	} = {}
+) {
+	const completeFromWebhookSpy = t.mock.fn(opts.completeFromWebhook || (async () => ({ handled: true, alreadyCompleted: false })));
+	const denyFromWebhookSpy = t.mock.fn(opts.denyFromWebhook || (async () => undefined));
+
+	t.mock.module('../services/paypal.service', {
+		namedExports: {
+			paypalService: {
+				verifyWebhookSignature: opts.verifyWebhookSignature || (async () => true)
+			}
+		}
+	});
+	t.mock.module('../services/paypal-finance.service', {
+		namedExports: {
+			paypalFinanceService: {
+				completeFromWebhook: completeFromWebhookSpy,
+				denyFromWebhook: denyFromWebhookSpy
+			}
+		}
+	});
+
+	return { completeFromWebhookSpy, denyFromWebhookSpy };
+}
+
+function makeReqRes(body: any, headers: Record<string, string> = {}) {
+	const defaultHeaders: Record<string, string> = {
+		'paypal-transmission-id': 't1',
+		'paypal-transmission-time': '2026-01-01T00:00:00Z',
+		'paypal-cert-url': 'https://api.paypal.com/cert',
+		'paypal-auth-algo': 'SHA256withRSA',
+		'paypal-transmission-sig': 'sig',
+		...headers
+	};
+
+	const req: any = {
+		body,
+		header: (name: string) => defaultHeaders[name.toLowerCase()]
+	};
+
+	let statusCode = 0;
+	let jsonBody: any = null;
+	const res: any = {
+		status(code: number) {
+			statusCode = code;
+			return this;
+		},
+		json(body: any) {
+			jsonBody = body;
+			return this;
+		}
+	};
+
+	return { req, res, getStatus: () => statusCode, getJson: () => jsonBody };
+}
+
+async function loadController(t: TestContext) {
+	const moduleUrl = `./paypal-webhook.controller.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { handlePaypalWebhook } = await import(moduleUrl);
+	return handlePaypalWebhook;
+}
+
+test('webhook: an invalid signature is rejected with no financial side effects', async (t) => {
+	const { completeFromWebhookSpy, denyFromWebhookSpy } = mockDeps(t, { verifyWebhookSignature: async () => false });
+	const handler = await loadController(t);
+
+	const { req, res, getStatus } = makeReqRes({ event_type: 'PAYMENT.CAPTURE.COMPLETED', resource: {} });
+	await handler(req, res, () => {});
+
+	assert.equal(getStatus(), 400);
+	assert.equal(completeFromWebhookSpy.mock.callCount(), 0);
+	assert.equal(denyFromWebhookSpy.mock.callCount(), 0);
+});
+
+test('webhook: missing signature headers are rejected with no financial side effects', async (t) => {
+	const { completeFromWebhookSpy } = mockDeps(t);
+	const handler = await loadController(t);
+
+	const { req, res, getStatus } = makeReqRes({ event_type: 'PAYMENT.CAPTURE.COMPLETED', resource: {} }, { 'paypal-transmission-sig': '' });
+	await handler(req, res, () => {});
+
+	assert.equal(getStatus(), 400);
+	assert.equal(completeFromWebhookSpy.mock.callCount(), 0);
+});
+
+test('webhook: an unsupported/unsubscribed event type is acknowledged without any side effects', async (t) => {
+	const { completeFromWebhookSpy, denyFromWebhookSpy } = mockDeps(t);
+	const handler = await loadController(t);
+
+	const { req, res, getStatus } = makeReqRes({ event_type: 'PAYMENT.CAPTURE.REFUNDED', resource: {} });
+	await handler(req, res, () => {});
+
+	assert.equal(getStatus(), 200);
+	assert.equal(completeFromWebhookSpy.mock.callCount(), 0);
+	assert.equal(denyFromWebhookSpy.mock.callCount(), 0);
+});
+
+test('webhook: PAYMENT.CAPTURE.COMPLETED with a verified signature correlates order/capture/amount to the finance service', async (t) => {
+	const { completeFromWebhookSpy } = mockDeps(t);
+	const handler = await loadController(t);
+
+	const { req, res, getStatus } = makeReqRes({
+		event_type: 'PAYMENT.CAPTURE.COMPLETED',
+		resource: {
+			id: 'CAPTURE-1',
+			amount: { currency_code: 'USD', value: '50.00' },
+			supplementary_data: { related_ids: { order_id: 'ORDER-1' } }
+		}
+	});
+	await handler(req, res, () => {});
+
+	assert.equal(getStatus(), 200);
+	assert.equal(completeFromWebhookSpy.mock.callCount(), 1);
+	assert.deepEqual(completeFromWebhookSpy.mock.calls[0].arguments[0], {
+		paypalOrderId: 'ORDER-1',
+		paypalCaptureId: 'CAPTURE-1',
+		currency: 'USD',
+		amountValue: '50.00'
+	});
+});
+
+test('webhook: PAYMENT.CAPTURE.DENIED with a verified signature marks the payment failed and never credits', async (t) => {
+	const { denyFromWebhookSpy } = mockDeps(t);
+	const handler = await loadController(t);
+
+	const { req, res, getStatus } = makeReqRes({
+		event_type: 'PAYMENT.CAPTURE.DENIED',
+		resource: { id: 'CAPTURE-1', supplementary_data: { related_ids: { order_id: 'ORDER-1' } } }
+	});
+	await handler(req, res, () => {});
+
+	assert.equal(getStatus(), 200);
+	assert.equal(denyFromWebhookSpy.mock.callCount(), 1);
+	assert.equal(denyFromWebhookSpy.mock.calls[0].arguments[0], 'ORDER-1');
+});

@@ -77,7 +77,7 @@ export class ClientFinanceService {
         averageVerificationScore: invoices.length
           ? Math.round(invoices.reduce((sum, invoice) => sum + invoice.verificationScore, 0) / invoices.length)
           : 0,
-        currency: 'SAR'
+        currency: 'USD' // contract/stage pricing pipeline is now USD-semantic
       },
       invoices
     };
@@ -159,7 +159,7 @@ export class ClientFinanceService {
         id: `escrow-${p.escrow!.id}`,
         type: 'ESCROW_LOCK',
         amount: p.escrow!.amount,
-        currency: 'SAR',
+        currency: 'USD', // active escrow pricing is now USD-semantic (not a stored WalletTransaction row)
         status: p.escrow!.status === 'HELD' ? 'HELD' : 'COMPLETED',
         paymentMethod: p.escrow!.paymentMethod || 'محفظة وسيط AI',
         referenceId: p.escrow!.paymentReference || p.id,
@@ -192,7 +192,12 @@ export class ClientFinanceService {
         escrowBalance,
         totalDeposited: totalDeposited || availableBalance,
         activeProjectsCount: clientProjects.filter(p => p.status === 'IN_PROGRESS' || p.status === 'OPEN').length,
-        currency: 'SAR'
+        // Canonical available wallet balance (PayPal) and active escrow/pricing
+        // are both USD-semantic now. Each individual transaction below keeps
+        // and exposes its OWN stored currency (tx.currency, line ~174) — this
+        // top-level field only describes the two summary aggregates, never
+        // relabels historical per-transaction rows.
+        currency: 'USD'
       },
       transactions: allTransactions
     };

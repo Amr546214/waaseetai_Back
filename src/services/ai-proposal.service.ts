@@ -122,7 +122,7 @@ Analyze the following project parameters and the provider's proposal draft.
 - Description: ${project.description}
 - Requirements: ${JSON.stringify(project.requirements)}
 - Target Delivery Days: ${project.deliveryDays}
-- Target Budget Range (SAR): ${defaultMin} - ${defaultMax}
+- Target Budget Range (USD): ${defaultMin} - ${defaultMax}
 
 [Provider's Current Proposal Draft]
 - Title: ${currentTitle || '(Not provided yet)'}
@@ -136,8 +136,8 @@ Generate a strict JSON response with this exact schema:
   "qualityScore": Integer from 0 to 100 assessing completeness and professional rigor of current proposal draft (or suggested one if draft was empty),
   "qualityTag": one of "POOR", "MEDIUM", "GOOD", "EXCELLENT",
   "priceAudit": {
-    "recommendedMin": number (suggested fair minimum price in SAR),
-    "recommendedMax": number (suggested fair maximum price in SAR),
+    "recommendedMin": number (suggested fair minimum price in USD),
+    "recommendedMax": number (suggested fair maximum price in USD),
     "priceTag": one of "UNDERPRICED", "FAIR", "OVERPRICED",
     "justification": "Clear professional explanation in Arabic justifying why this price range is appropriate"
   },

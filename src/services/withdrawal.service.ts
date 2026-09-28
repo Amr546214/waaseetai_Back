@@ -9,7 +9,7 @@ export class WithdrawalService {
     const wallet = await providerFinanceService.getWallet(userId);
     const availableBalance = wallet.summary.availableBalance;
     if (input.amount > availableBalance) {
-      throw new AppError(`المبلغ المطلوب يتجاوز رصيدك المتاح (${availableBalance} ريال)`, 400);
+      throw new AppError(`المبلغ المطلوب يتجاوز رصيدك المتاح (${availableBalance} $)`, 400);
     }
     const pendingWithdrawals = await prisma.withdrawal.aggregate({
       where: { userId, status: WithdrawalStatus.PENDING },
@@ -17,12 +17,15 @@ export class WithdrawalService {
     });
     const pendingAmount = pendingWithdrawals._sum.amount || 0;
     if (input.amount > availableBalance - pendingAmount) {
-      throw new AppError(`المبلغ المطلوب يتجاوز رصيدك الصافي بعد طلبات السحب المعلقة (${availableBalance - pendingAmount} ريال)`, 400);
+      throw new AppError(`المبلغ المطلوب يتجاوز رصيدك الصافي بعد طلبات السحب المعلقة (${availableBalance - pendingAmount} $)`, 400);
     }
     return prisma.withdrawal.create({
       data: {
         userId,
         amount: input.amount,
+        currency: 'USD', // new withdrawal requests are USD — never rely on the
+        // schema's historical 'SAR' default. Existing rows keep whatever
+        // currency they were created with; this only affects new creates.
         method: input.method,
         accountName: input.accountName || null,
         accountNumber: input.accountNumber || null,
@@ -80,7 +83,7 @@ export class WithdrawalService {
     const withdrawnAmount = alreadyWithdrawn._sum.amount || 0;
     const withdrawableBalance = availableBalance - withdrawnAmount;
     if (item.amount > withdrawableBalance) {
-      throw new AppError(`رصيد المزود غير كافٍ لتنفيذ السحب (المتاح: ${withdrawableBalance} ريال)`, 400);
+      throw new AppError(`رصيد المزود غير كافٍ لتنفيذ السحب (المتاح: ${withdrawableBalance} $)`, 400);
     }
     return prisma.$transaction(async tx => {
       await tx.walletTransaction.create({ data: { userId: item.userId, type: 'WITHDRAWAL', amount: -item.amount, currency: item.currency, status: 'COMPLETED', paymentMethod: item.method, referenceId: item.referenceId, description: `اعتماد طلب السحب ${item.id}`, metadata: { withdrawalId: item.id } } });

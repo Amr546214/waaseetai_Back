@@ -108,7 +108,7 @@ export const analyzeProjectForProvider = async (req: Request, res: Response): Pr
 		const totalProposals = (project as any).proposalsCount || (project.proposals?.length || 0) + (project.projectProposals?.length || 0);
 		const isCompany = project.client?.accountType?.includes('COMPANY');
 		const clientTypeStr = isCompany ? 'شركة' : 'فرد';
-		const budgetStr = project.budgetMin && project.budgetMax ? `${project.budgetMin} - ${project.budgetMax} ريال` : (project.budgetMin ? `${project.budgetMin} ريال` : 'غير محدد');
+		const budgetStr = project.budgetMin && project.budgetMax ? `${project.budgetMin} - ${project.budgetMax} $` : (project.budgetMin ? `${project.budgetMin} $` : 'غير محدد');
 
 		const systemPrompt = `
           أنت "وسيط AI"، خبير التحليلات الذكي ومستشار تقديم العروض في منصة وسيط للخدمات الذكية.

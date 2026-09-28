@@ -348,7 +348,7 @@ export const getDepositConfirmationTemplate = (projectName: string, amount: numb
             <p class="desc">أهلاً بك،<br>تم تأكيد استلام الدفعة وإيداعها في حساب الضمان الآمن الخاص بمنصة وسيط الذكاء الاصطناعي للمشروع التالي:</p>
             
             <div class="info-box">
-              <h3>${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ر.س</h3>
+              <h3>${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $</h3>
               <p>مشروع: ${projectName}</p>
             </div>
             
@@ -466,7 +466,7 @@ export const getProviderContractSignatureTemplate = (projectName: string, client
             <p class="desc">أهلاً بك،<br>لقد تم قبول عرضك وإيداع قيمة المشروع في حساب الضمان الآمن الخاص بمنصة وسيط الذكاء الاصطناعي.</p>
             
             <div class="info-box">
-              <h3>${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ر.س</h3>
+              <h3>${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $</h3>
               <p>مشروع: ${projectName}</p>
             </div>
             

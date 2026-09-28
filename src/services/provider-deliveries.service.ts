@@ -59,7 +59,7 @@ class ProviderDeliveriesService {
         statusLabel: STATUS_LABELS[delivery.status] || delivery.status,
         submittedAt: delivery.submittedAt,
         contractRef: `CT-${contract.id.substring(0, 6).toUpperCase()}`,
-        amountLabel: `${stage.amount.toLocaleString('en-US')} ريال`,
+        amountLabel: `${stage.amount.toLocaleString('en-US')} $`,
         files: delivery.files,
         note: delivery.note
       };

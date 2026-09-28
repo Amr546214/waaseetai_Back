@@ -38,7 +38,7 @@ export class ProviderFinanceService {
         type: 'credit' as const,
         category: 'STAGE_RELEASE' as const,
         amount: stage.amount,
-        currency: 'SAR',
+        currency: 'USD',
         title: 'إفراج دفعة مرحلة',
         description: `${stage.title} · ${escrow.project.title}`,
         projectId: escrow.project.id,
@@ -58,7 +58,7 @@ export class ProviderFinanceService {
         type: 'credit' as const,
         category: 'ESCROW_RELEASE' as const,
         amount: residual,
-        currency: 'SAR',
+        currency: 'USD',
         title: 'إفراج ضمان المشروع',
         description: escrow.project.title,
         projectId: escrow.project.id,
@@ -82,7 +82,7 @@ export class ProviderFinanceService {
         releasedTransactionsCount: transactions.length,
         fundedProjectsCount: escrows.filter(escrow => (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).length,
         completedProjectsCount: escrows.filter(escrow => escrow.project.status === 'COMPLETED').length,
-        currency: 'SAR'
+        currency: 'USD' // active escrow/contract pricing pipeline is now USD-semantic
       },
       transactions,
       escrows: escrows.filter(escrow => (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).map(escrow => ({
@@ -110,7 +110,7 @@ export class ProviderFinanceService {
       type: 'hold' as const,
       category: 'ESCROW_FUNDED' as const,
       amount: escrow.project.contract?.price || escrow.amount,
-      currency: 'SAR' as const,
+      currency: 'USD' as const,
       title: 'تمويل ضمان المشروع',
       description: escrow.project.title,
       projectId: escrow.project.id,

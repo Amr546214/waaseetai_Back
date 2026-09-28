@@ -131,6 +131,7 @@ model User {
   gamification          ProviderGamification?
   pointTransactions     PointTransaction[]
   walletTransactions    WalletTransaction[]
+  paypalPayments        PaypalPayment[]
   accountAuditLogs      AccountAuditLog[]
   notifications         Notification[]
   sessions              UserSession[]
@@ -2027,6 +2028,33 @@ model WalletTransaction {
 
   @@index([userId, createdAt])
   @@map("wallet_transactions")
+}
+
+// PayPal Sandbox wallet-deposit integration (separate gateway from Moyasar).
+// One row per PayPal order, created PENDING at order-create time so the
+// authenticated capture endpoint and the webhook can both converge on the
+// same record instead of trusting either path alone.
+enum PaypalPaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+model PaypalPayment {
+  id              String              @id @default(uuid())
+  userId          String
+  user            User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reference       String              @unique // internal deposit reference (UUID), mirrors WalletTransaction convention
+  paypalOrderId   String              @unique
+  paypalCaptureId String?             @unique // set only once capture succeeds; globally idempotent
+  amount          Decimal             @db.Decimal(12, 2) // USD, exact decimal — no float comparisons for money
+  currency        String              @default("USD")
+  status          PaypalPaymentStatus @default(PENDING)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([userId, createdAt])
+  @@map("paypal_payments")
 }
 
 model NewsletterSubscriber {

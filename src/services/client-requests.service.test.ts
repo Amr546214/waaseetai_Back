@@ -1,5 +1,7 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { GeminiErrorCode, GeminiProviderError } from './ai/gemini/gemini.errors';
 
 // Phase 3D.4: createRequest()'s ClientProfile self-heal used to create a bare
@@ -234,4 +236,36 @@ test('generateAiSuggest: a malformed Gemini response (including a fabricated-loo
     () => service.generateAiSuggest('client-1', {} as any),
     (err: any) => { assert.equal(err.statusCode, 503); return true; }
   );
+});
+
+// ── USD-canonical wallet transition: signContract()'s escrow-funding
+// arithmetic must be BYTE-FOR-BYTE unchanged (only the currency label
+// changed, no conversion). signContract() itself is a large, deeply-nested
+// transactional function (OTP verification, signature hashing, contract/
+// proposal lookups, emails) — mirroring the codebase's own established
+// static-source-check approach (e.g. admin-affiliate-requests.routes.test.ts)
+// rather than a fragile full mock, since the arithmetic and the currency
+// literal are both directly verifiable in source without booting the flow.
+
+const clientRequestsSource = fs.readFileSync(path.join(__dirname, 'client-requests.service.ts'), 'utf8');
+
+test('signContract: the escrow fee percentages (VAT 7%, insurance 1%, platform 5%) are unchanged by the USD transition', () => {
+  assert.match(clientRequestsSource, /const ESCROW_FEE_VAT = 0\.07;/);
+  assert.match(clientRequestsSource, /const ESCROW_FEE_INSURANCE = 0\.01;/);
+  assert.match(clientRequestsSource, /const ESCROW_FEE_PLATFORM = 0\.05;/);
+});
+
+test('signContract: the escrow amount formula (price * (1 + VAT + insurance + platform)) is unchanged', () => {
+  assert.match(
+    clientRequestsSource,
+    /const rawEscrowAmount = contractBeforePayment\.price \* \(1 \+ ESCROW_FEE_VAT \+ ESCROW_FEE_INSURANCE \+ ESCROW_FEE_PLATFORM\);/
+  );
+});
+
+test('signContract: the escrow-lock WalletTransaction it creates is explicitly USD (not the schema\'s historical SAR default)', () => {
+  const escrowLockBlock = clientRequestsSource.slice(
+    clientRequestsSource.indexOf("type: 'ESCROW_LOCK'"),
+    clientRequestsSource.indexOf("type: 'ESCROW_LOCK'") + 200
+  );
+  assert.match(escrowLockBlock, /currency: 'USD'/);
 });

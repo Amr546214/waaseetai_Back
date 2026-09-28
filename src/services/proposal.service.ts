@@ -411,8 +411,8 @@ export class ProposalService {
 			projectTitle,
 			title: projectTitle,
 			offeredPrice: priceVal,
-			price: `${priceVal.toLocaleString('en-US')} ريال`,
-			currency: 'SAR',
+			price: `${priceVal.toLocaleString('en-US')} $`,
+			currency: 'USD', // active proposal pricing is now USD-semantic
 			status: statusEnum,
 			statusKey,
 			statusText,

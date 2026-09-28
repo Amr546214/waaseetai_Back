@@ -365,7 +365,7 @@ Analyze the following parameters and output the exact JSON structure:
 - Specialty: ${project.specialty || 'تصميم وتطوير'}
 - Requirements: ${JSON.stringify(project.requirements || [])}
 - Client Target Duration: ${project.deliveryDays || 30} days
-- Client Target Budget: ${budgetClientMin} - ${budgetClientMax} SAR
+- Client Target Budget: ${budgetClientMin} - ${budgetClientMax} USD
 
 [Provider Profile Specs]
 - Name: ${provider.firstName} ${provider.lastName}
@@ -378,7 +378,7 @@ Analyze the following parameters and output the exact JSON structure:
 [Submitted Proposal Draft]
 - Title: ${draft.title}
 - Pitch Message: ${draft.message}
-- Proposed Price: ${draft.price} SAR
+- Proposed Price: ${draft.price} USD
 - Proposed Duration: ${draft.durationDays} days
 - Milestones Count: ${draft.milestonesCount}
 - Attached Portfolio IDs Count: ${(draft.selectedPortfolioIds || []).length}
@@ -395,9 +395,9 @@ Output exactly this JSON structure (keep status strictly one of "EXCELLENT", "GO
     ... (provide exactly 4 distinct audit criteria items assessing Experience, Specialty match, Tone & clarity, and Portfolio proof)
   ],
   "triPartyComparison": {
-    "client": { "budget": "string in SAR (e.g. 5,000-5,000 ريال)", "duration": "string in days (e.g. 30 يوم)", "milestones": "string (e.g. غير محدد)" },
-    "provider": { "budget": "string in SAR", "duration": "string in days", "milestones": "string (e.g. 2 مرحلة)" },
-    "aiRecommendation": { "budget": "string market recommended range in SAR", "duration": "string recommended duration range", "milestones": "string recommended milestones count" }
+    "client": { "budget": "string in USD (e.g. $5,000-$5,000)", "duration": "string in days (e.g. 30 يوم)", "milestones": "string (e.g. غير محدد)" },
+    "provider": { "budget": "string in USD", "duration": "string in days", "milestones": "string (e.g. 2 مرحلة)" },
+    "aiRecommendation": { "budget": "string market recommended range in USD", "duration": "string recommended duration range", "milestones": "string recommended milestones count" }
   },
   "triPartyNote": "Concise Arabic sentence explaining how provider's price and duration compare to client constraints and market rates.",
   "finalMetrics": {

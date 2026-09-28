@@ -263,3 +263,66 @@ test('createOrder: falls back to legacy User identity when ProviderProfile displ
 
   assert.equal(getCreatedItemData().providerName, 'Amr Okasha');
 });
+
+// --- Wallet payment method temporarily disabled (USD-canonical wallet) -----
+// order.total remains SAR-priced; User.walletBalance is now USD-canonical.
+// Paying an order out of the wallet would silently debit a USD-labeled
+// balance for a SAR-priced amount with no conversion, so this one payment
+// method is rejected at the very first validation step — 'card'/'moyasar'
+// (a direct, non-wallet SAR charge) are untouched and still work.
+
+test('initPayment: the "wallet" payment method is rejected before any DB lookup', async (t) => {
+  const orderFindFirstSpy = t.mock.fn(async () => {
+    throw new Error('should not be reached — method validation must reject first');
+  });
+  t.mock.module('../config/db', { namedExports: { prisma: { order: { findFirst: orderFindFirstSpy } } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+
+  const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { cartCheckoutService } = await import(moduleUrl);
+
+  await assert.rejects(() => cartCheckoutService.initPayment('user-1', 'order-1', 'wallet'), /طريقة الدفع غير متاحة/);
+  assert.equal(orderFindFirstSpy.mock.callCount(), 0);
+});
+
+test('initPayment: "card" and "moyasar" remain accepted (only "wallet" is disabled)', async (t) => {
+  // Order lookup returning null throws a *different*, later error — proving
+  // these methods pass the method-validation gate that rejects "wallet".
+  const orderFindFirstSpy = t.mock.fn(async () => null);
+  t.mock.module('../config/db', { namedExports: { prisma: { order: { findFirst: orderFindFirstSpy } } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+
+  const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { cartCheckoutService } = await import(moduleUrl);
+
+  await assert.rejects(() => cartCheckoutService.initPayment('user-1', 'order-1', 'card'), /الطلب غير موجود/);
+  assert.equal(orderFindFirstSpy.mock.callCount(), 1);
+});
+
+test('getPaymentMethods: "wallet" is advertised unavailable, so the UI never offers a method initPayment rejects', async (t) => {
+  t.mock.module('../config/db', {
+    namedExports: { prisma: { user: { findUnique: async () => ({ walletBalance: 250 }) } } }
+  });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+
+  const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { cartCheckoutService } = await import(moduleUrl);
+
+  const methods = await cartCheckoutService.getPaymentMethods('user-1');
+  const wallet = methods.find((m: any) => m.id === 'wallet');
+
+  // The advertised contract must agree with initPayment()'s gate.
+  assert.equal(wallet.available, false);
+  assert.equal(wallet.badge, 'قريباً');
+  // Balance is still exposed for display — disabling the method must not hide
+  // the amount the user actually holds.
+  assert.equal(wallet.balance, 250);
+
+  // Regression guard: card/Moyasar direct payment stays advertised.
+  assert.equal(methods.find((m: any) => m.id === 'card').available, true);
+  assert.equal(methods.find((m: any) => m.id === 'moyasar').available, true);
+
+  // Every advertised-available method must be one initPayment() accepts.
+  const advertised = methods.filter((m: any) => m.available).map((m: any) => m.id);
+  assert.deepEqual(advertised.sort(), ['card', 'moyasar']);
+});

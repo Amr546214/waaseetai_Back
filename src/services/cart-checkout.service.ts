@@ -223,7 +223,13 @@ export class CartCheckoutService {
     return [
       { id: 'card', name: 'بطاقة بنكية', available: true },
       { id: 'moyasar', name: 'ميسر', available: true },
-      { id: 'wallet', name: 'المحفظة', available: true, balance },
+      // Advertised as unavailable to match initPayment(), which rejects
+      // 'wallet' outright: order.total is SAR-priced while User.walletBalance
+      // is now USD-canonical. Offering it here while rejecting it there let a
+      // user pick "المحفظة" and only then hit "طريقة الدفع غير متاحة".
+      // `balance` is still returned so the UI can display the wallet amount
+      // without allowing it as a payment source.
+      { id: 'wallet', name: 'المحفظة', available: false, badge: 'قريباً', balance },
       { id: 'stc_pay', name: 'STC Pay', available: false, badge: 'قريباً' },
       { id: 'apple_pay', name: 'Apple Pay', available: false, badge: 'قريباً' }
     ];
@@ -235,7 +241,15 @@ export class CartCheckoutService {
   }
 
   async initPayment(userId: string, orderId: string, paymentMethod: string) {
-    if (!['card', 'moyasar', 'wallet'].includes(paymentMethod)) throw new AppError('طريقة الدفع غير متاحة', 400);
+    // 'wallet' TEMPORARILY DISABLED: this path debits User.walletBalance
+    // (now USD-canonical) for order.total, which remains SAR-priced —
+    // paying for a SAR-priced order out of a USD balance without any
+    // conversion. 'card'/'moyasar' (a direct, non-wallet Moyasar SAR charge)
+    // are unaffected and remain available. See paypal-finance.service.ts /
+    // the USD-canonical-wallet report for the full context; this is not a
+    // rewrite of checkout, just excluding one payment method until the
+    // wallet-vs-order-currency conflict is resolved.
+    if (!['card', 'moyasar'].includes(paymentMethod)) throw new AppError('طريقة الدفع غير متاحة', 400);
     const order = await prisma.order.findFirst({ where: { id: orderId, userId }, include: { user: { select: { email: true, phoneNumber: true, walletBalance: true } } } });
     if (!order) throw new AppError('الطلب غير موجود', 404);
     if (order.status !== OrderStatus.PENDING_PAYMENT) throw new AppError('الطلب لا ينتظر الدفع', 400);

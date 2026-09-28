@@ -203,20 +203,20 @@ export class ExploreRequestsService {
       if (minB > 0 && maxB > 0) {
         const avgBudget = (minB + maxB) / 2;
         if (avgBudget < 1500) {
-          aiSuggestedBudget = `${Math.round(minB * 1.1)} - ${Math.round(maxB * 1.25)} ريال`;
+          aiSuggestedBudget = `${Math.round(minB * 1.1)} - ${Math.round(maxB * 1.25)} $`;
           aiPriceEval = 'أقل قليلاً من التقدير - يمكنك طلب تفاوض';
         } else if (avgBudget <= 8000) {
-          aiSuggestedBudget = `${minB} - ${maxB} ريال`;
+          aiSuggestedBudget = `${minB} - ${maxB} $`;
           aiPriceEval = 'ميزانية عادلة ومطابقة للمواصفات';
         } else {
-          aiSuggestedBudget = `${Math.round(minB * 0.95)} - ${maxB} ريال`;
+          aiSuggestedBudget = `${Math.round(minB * 0.95)} - ${maxB} $`;
           aiPriceEval = 'ميزانية سخية وممتازة - فرصة كبرى';
         }
       } else if (minB > 0) {
-        aiSuggestedBudget = `${minB} ريال فأكثر`;
+        aiSuggestedBudget = `${minB} $ فأكثر`;
         aiPriceEval = 'سعر أساسي مناسب للمنافسة';
       } else {
-        aiSuggestedBudget = '1,500 - 4,000 ريال';
+        aiSuggestedBudget = '1,500 - 4,000 $';
         aiPriceEval = 'ميزانية تقديرية مفتوحة حسب الجهد';
       }
 

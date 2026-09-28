@@ -360,7 +360,7 @@ export const getActiveProjects = async (req: Request, res: Response, next: NextF
 				providerInitial: clientName.charAt(0) || 'ع',
 				providerAvatarColor: color,
 				currentStage: c.status === 'PENDING_PAYMENT' ? 'بانتظار إيداع الضمان للبدء' : (currentStage?.title || 'بانتظار بدء المرحلة التالية'),
-				escrowAmount: `${Math.max(0, c.price - (project.escrow?.releasedAmount || 0)).toLocaleString('en-US')} ريال`,
+				escrowAmount: `${Math.max(0, c.price - (project.escrow?.releasedAmount || 0)).toLocaleString('en-US')} $`,
 				rawPrice: Math.max(0, c.price - (project.escrow?.releasedAmount || 0)),
 				escrowLabel: c.status === 'PENDING_PAYMENT' ? 'بانتظار الإيداع' : 'مستحق لي',
 				contractRef: `CT-${c.id.slice(0, 6).toUpperCase()}`,
@@ -561,7 +561,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				displayId,
 				title: p.title,
 				clientName: clientName || 'عميل وسيط AI',
-				value: `${c.price.toLocaleString()} ريال`,
+				value: `${c.price.toLocaleString()} $`,
 				date: status === 'done' ? `أُغلق ${dateFormatted}` : (status === 'cancel' ? `ملغى ${dateFormatted}` : `مؤرشف ${dateFormatted}`),
 				status,
 				icon: status === 'done' ? 'check' : (status === 'cancel' ? 'list' : 'doc')
@@ -585,7 +585,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				displayId,
 				title: p.title,
 				clientName: clientName || 'عميل وسيط AI',
-				value: `${budgetVal.toLocaleString()} ريال`,
+				value: `${budgetVal.toLocaleString()} $`,
 				date: status === 'done' ? `أُغلق ${dateFormatted}` : `مؤرشف ${dateFormatted}`,
 				status,
 				icon: status === 'done' ? 'check' : 'doc'
@@ -608,7 +608,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				displayId,
 				title: prop.project.title,
 				clientName: clientName || 'عميل وسيط AI',
-				value: `${(prop.totalPrice || projectBudget).toLocaleString()} ريال`,
+				value: `${(prop.totalPrice || projectBudget).toLocaleString()} $`,
 				date: `ملغى قبل التعاقد (${dateFormatted})`,
 				status: 'cancel',
 				icon: 'list'

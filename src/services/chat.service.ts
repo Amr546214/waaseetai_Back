@@ -532,9 +532,9 @@ class ChatService {
 
     let projectBudget = 'غير محدد';
     if (conv.project?.budgetMin && conv.project?.budgetMax) {
-      projectBudget = `${conv.project.budgetMin.toLocaleString()} - ${conv.project.budgetMax.toLocaleString()} ريال`;
+      projectBudget = `${conv.project.budgetMin.toLocaleString()} - ${conv.project.budgetMax.toLocaleString()} $`;
     } else if (conv.project?.budgetFixed) {
-      projectBudget = `${conv.project.budgetFixed.toLocaleString()} ريال`;
+      projectBudget = `${conv.project.budgetFixed.toLocaleString()} $`;
     }
 
     const rawMessages = conv.messages || [];

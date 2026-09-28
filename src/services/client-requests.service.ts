@@ -52,8 +52,8 @@ const CLIENT_REQUEST_AI_SUGGEST_SCHEMA = {
 		suggestedTitle: { type: 'string', description: 'Professional Arabic Title (max 80 chars)' },
 		suggestedDescription: { type: 'string', description: 'Comprehensive Arabic Technical Description with clear scope and expectations' },
 		suggestedSubSpecialties: { type: 'array', items: { type: 'string' }, description: '3 to 5 relevant Arabic sub-specialty tags' },
-		recommendedMinBudget: { type: 'number', description: 'SAR minimum' },
-		recommendedMaxBudget: { type: 'number', description: 'SAR maximum' },
+		recommendedMinBudget: { type: 'number', description: 'USD minimum' },
+		recommendedMaxBudget: { type: 'number', description: 'USD maximum' },
 		suggestedDurationDays: { type: 'number', description: 'days' },
 		complexityRating: { type: 'string', enum: [...COMPLEXITY_RATINGS] },
 		personalizedNote: { type: 'string', description: 'Arabic advice personalized for client request based on market standards' },
@@ -170,7 +170,7 @@ export class ClientRequestsService {
 		const targetSpec = payload.specialtyName || 'تقنية المعلومات';
 
 		const systemPrompt = `You are Waseet AI (وسيط AI), the ultimate AI Matchmaker for top technical & creative projects in Saudi Arabia.
-Your job is to analyze the client's draft project request, refine the Arabic text into a high-precision RFP, suggest optimal sub-specialties, estimate SAR budget ranges, and calculate an AI match readiness score.
+Your job is to analyze the client's draft project request, refine the Arabic text into a high-precision RFP, suggest optimal sub-specialties, estimate USD budget ranges, and calculate an AI match readiness score.
 Return ONLY raw JSON with no Markdown wrapping.`;
 
 		const userPrompt = `
@@ -186,8 +186,8 @@ Return JSON schema:
   "suggestedTitle": "Professional Arabic Title (max 80 chars)",
   "suggestedDescription": "Comprehensive Arabic Technical Description with clear scope and expectations",
   "suggestedSubSpecialties": ["3 to 5 relevant Arabic sub-specialty tags"],
-  "recommendedMinBudget": number (SAR minimum),
-  "recommendedMaxBudget": number (SAR maximum),
+  "recommendedMinBudget": number (USD minimum),
+  "recommendedMaxBudget": number (USD maximum),
   "suggestedDurationDays": number (days),
   "complexityRating": "LOW" | "MEDIUM" | "HIGH" | "COMPLEX",
   "personalizedNote": "Arabic advice personalized for client request based on market standards",
@@ -347,7 +347,7 @@ Return JSON schema:
 				splitMilestones: dto.splitMilestones === true,
 				milestones: dto.splitMilestones ? (dto.milestones || []) : [],
 				status: RequestStatus.OPEN,
-				aiAnalyzedSummary: `طلب مشروع "${dto.title}" في تخصص ${resolvedSpecialty.nameAr || resolvedSpecialty.name}. الميزانية المقدرة: ${minB || 0} - ${maxB || 0} ريال.`,
+				aiAnalyzedSummary: `طلب مشروع "${dto.title}" في تخصص ${resolvedSpecialty.nameAr || resolvedSpecialty.name}. الميزانية المقدرة: ${minB || 0} - ${maxB || 0} $.`,
 				aiComplexityRating: 'LOW'
 			},
 			include: {
@@ -721,7 +721,7 @@ Return JSON schema:
 
 		const kpis = [
 			{ icon: 'list', value: activeItems.length, label: 'مشاريع نشطة' },
-			{ icon: 'lock', value: totalHeld, label: 'محتجز بالضمان ريال' },
+			{ icon: 'lock', value: totalHeld, label: 'محتجز بالضمان $' },
 			{ icon: 'clock', value: awaitingReviewCount, label: 'بانتظار مراجعتك' },
 			{ icon: 'ai', value: overdueCount > 0 ? `${overdueCount} متأخر` : 'جيد', label: 'الحالة العامة' },
 		];
@@ -1149,7 +1149,7 @@ Return JSON schema:
 				type: request.budgetType,
 				min: request.minBudget,
 				max: request.maxBudget,
-				currency: 'SAR'
+				currency: 'USD' // active client-request budget pricing is now USD-semantic
 			},
 			category: {
 				id: request.specialty?.category?.id || null,
@@ -1478,7 +1478,7 @@ Return JSON schema:
 					userId,
 					type: 'ESCROW_LOCK',
 					amount: txEscrowAmount,
-					currency: 'SAR',
+					currency: 'USD', // active contract/escrow pricing pipeline is now USD-semantic
 					status: 'COMPLETED',
 					paymentMethod: 'WALLET',
 					referenceId: escrowReference,

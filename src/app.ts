@@ -127,7 +127,16 @@ app.use(
 app.use(apiLimiter);
 
 // Request Parsing
-app.use(express.json({ limit: '10mb' }));
+// `verify` captures the exact raw bytes alongside the normal parsed req.body,
+// for every JSON request, at no extra cost to existing routes — needed so
+// the PayPal webhook handler can check its signature against the bytes as
+// sent (re-serializing the parsed object would not reliably match).
+app.use(express.json({
+	limit: '10mb',
+	verify: (req: Request, _res: Response, buf: Buffer) => {
+		req.rawBody = buf;
+	}
+}));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ==========================================
@@ -203,6 +212,7 @@ mountApiRoute('/', cartCheckoutRouter);
 import clientFinanceRoutes from './routes/client-finance.routes';
 import clientReportsRoutes from './routes/client-reports.routes';
 import newsletterRoutes from './routes/newsletter.routes';
+import paypalWebhookRoutes from './routes/paypal-webhook.routes';
 
 mountAppRoute('/api/provider/profile', providerProfileRoutes);
 mountAppRoute('/api/specialties', specialtyRoutes);
@@ -222,6 +232,12 @@ mountAppRoute('/api/client/reports', clientReportsRoutes);
 mountAppRoute('/client/reports', clientReportsRoutes);
 mountAppRoute('/api/newsletter', newsletterRoutes);
 mountAppRoute('/newsletter', newsletterRoutes);
+
+// PayPal Sandbox webhook — public (see routes/paypal-webhook.routes.ts).
+// External LIVE/Sandbox webhook URL for DEV, once configured in the PayPal
+// Dashboard: https://dev.waseetai.com/api/payments/paypal/webhook
+mountAppRoute('/api/payments/paypal', paypalWebhookRoutes);
+mountAppRoute('/payments/paypal', paypalWebhookRoutes);
 
 import adminSpecialtiesRouter from './routes/admin-specialties.routes';
 import adminUsersRouter from './routes/admin-users.routes';
