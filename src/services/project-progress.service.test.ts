@@ -191,7 +191,7 @@ test('reviewDelivery: ProviderGamification persists points, completedProjects, a
   assert.equal(state.avgRating, 3.5);
   // Level 2 requires points>=50, completedProjects>=2, avgRating>=3.5 — all exactly met.
   assert.equal(state.currentLevelIndex, 2);
-  assert.equal(state.currentCommission, 15.0);
+  assert.equal(state.currentCommission, 4.8);
 });
 
 test('reviewDelivery: the existing User.currentPoints compatibility mirror is unchanged (still written, still from the ledger total)', async (t) => {

@@ -12,8 +12,8 @@ import { deriveProviderProgression, LEVEL_MATRIX } from './progression-calculato
 test('0 points / 0 projects / 0 rating -> level 1', () => {
   const result = deriveProviderProgression({ points: 0, completedProjects: 0, avgRating: 0 });
   assert.equal(result.currentLevelIndex, 1);
-  assert.equal(result.currentLevelTitle, 'زائر');
-  assert.equal(result.currentCommission, 15.0);
+  assert.equal(result.currentLevelTitle, 'مبتدئ');
+  assert.equal(result.currentCommission, 5.0);
 });
 
 test('exact level-2 threshold on all 3 dimensions qualifies (inclusive >=)', () => {
@@ -24,7 +24,7 @@ test('exact level-2 threshold on all 3 dimensions qualifies (inclusive >=)', () 
     avgRating: level2.reqRating
   });
   assert.equal(result.currentLevelIndex, 2);
-  assert.equal(result.currentLevelTitle, 'مستكشف');
+  assert.equal(result.currentLevelTitle, 'منجز');
 });
 
 test('points threshold met but completedProjects threshold not met -> falls back to previous level', () => {
@@ -67,7 +67,7 @@ test('exact later-level threshold (level 7) qualifies', () => {
     avgRating: level7.reqRating
   });
   assert.equal(result.currentLevelIndex, 7);
-  assert.equal(result.currentLevelTitle, 'فعال');
+  assert.equal(result.currentLevelTitle, 'أخصائي');
 });
 
 test('max level -> pointsToNextLevel is 0', () => {
@@ -95,7 +95,7 @@ test('values above max -> resolves to max level, not an out-of-bounds index', ()
 test('negative points/projects/rating safely normalize to 0 instead of crashing or going negative', () => {
   const result = deriveProviderProgression({ points: -50, completedProjects: -3, avgRating: -1 });
   assert.equal(result.currentLevelIndex, 1);
-  assert.equal(result.currentLevelTitle, 'زائر');
+  assert.equal(result.currentLevelTitle, 'مبتدئ');
   assert.equal(result.pointsToNextLevel, LEVEL_MATRIX[1].reqPoints);
 });
 

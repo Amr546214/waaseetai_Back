@@ -84,13 +84,13 @@ test('getCart: live cart uses Provider-derived initials, not legacy User initial
 test('getCart: level uses canonical ProviderGamification progression, not legacy User.currentLevel', async (t) => {
   const provider = makeProvider({
     currentLevel: 'مستكشف - المستوى 1', // stale — must not be what's shown
-    gamification: { points: 150, currentLevelIndex: 3 } // LEVEL_MATRIX[2] = 'باحث'
+    gamification: { points: 150, currentLevelIndex: 3 } // LEVEL_MATRIX[2] = 'منفذ'
   });
   const { cartCheckoutService } = await loadServiceForCart(t, makeService({ provider }));
 
   const cart = await cartCheckoutService.getCart('user-1');
 
-  assert.equal(cart.items[0].level, 'باحث');
+  assert.equal(cart.items[0].level, 'منفذ');
 });
 
 test('getCart: partial ProviderProfile identity falls back field-by-field to User (firstName from Provider, lastName from User)', async (t) => {
@@ -108,13 +108,13 @@ test('getCart: partial ProviderProfile identity falls back field-by-field to Use
 test('getCart: an existing ProviderGamification row always wins over a disagreeing legacy User.currentLevel', async (t) => {
   const provider = makeProvider({
     currentLevel: 'مستكشف - المستوى 1', // deliberately disagreeing legacy value
-    gamification: { points: 0, currentLevelIndex: 1 } // LEVEL_MATRIX[0] = 'زائر'
+    gamification: { points: 0, currentLevelIndex: 1 } // LEVEL_MATRIX[0] = 'مبتدئ'
   });
   const { cartCheckoutService } = await loadServiceForCart(t, makeService({ provider }));
 
   const cart = await cartCheckoutService.getCart('user-1');
 
-  assert.equal(cart.items[0].level, 'زائر');
+  assert.equal(cart.items[0].level, 'مبتدئ');
 });
 
 test('getCart: missing ProviderGamification preserves the existing legacy-fallback compatibility behavior', async (t) => {

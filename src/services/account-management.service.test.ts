@@ -97,7 +97,7 @@ test('switchActiveRole CLIENT -> PROVIDER returns the NEW role\'s display/progre
   assert.equal(result.user.profileCompletionPercent, 80);
   // Provider progression must come from ProviderGamification/LEVEL_MATRIX,
   // never from the legacy User columns.
-  assert.equal(result.user.currentLevel, 'مستكشف');
+  assert.equal(result.user.currentLevel, 'منجز');
   assert.equal(result.user.currentPoints, 50);
   assert.notEqual(result.user.firstName, legacyUser.firstName);
 });
@@ -245,7 +245,7 @@ test('initializeRoleState (PROVIDER): ProviderGamification row is created immedi
   assert.equal(data.currentLevelIndex, expected.currentLevelIndex);
   assert.equal(data.currentCommission, expected.currentCommission);
   assert.equal(data.currentLevelIndex, 1);
-  assert.equal(data.currentCommission, 15.0);
+  assert.equal(data.currentCommission, 5.0);
 });
 
 test('initializeRoleState (PROVIDER): never creates a PointTransaction for initialization', async (t) => {
@@ -518,7 +518,7 @@ test('addAccountType: PROVIDER initialization creates the profile AND its Provid
   assert.equal(data.yearsOfExperience, 3);
   const gamData = gamificationCreateSpy.mock.calls[0].arguments[0].data;
   assert.equal(gamData.currentLevelIndex, 1);
-  assert.equal(gamData.currentCommission, 15.0);
+  assert.equal(gamData.currentCommission, 5.0);
 });
 
 test('addAccountType: AFFILIATE initialization seeds display + completion and generates a referralSlug', async (t) => {

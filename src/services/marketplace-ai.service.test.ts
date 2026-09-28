@@ -101,13 +101,13 @@ test('formatModelForClient: falls back to legacy User identity when ProviderProf
 test('formatModelForClient: returns the canonical ProviderGamification-derived level, not legacy User.currentLevel', async (t) => {
   const provider = makeProvider({
     currentLevel: 'مستكشف - المستوى 1', // stale, must not be what's shown
-    gamification: { points: 150, currentLevelIndex: 3 } // 'باحث'
+    gamification: { points: 150, currentLevelIndex: 3 } // 'منفذ'
   });
   const service = await loadService(t, [makeDbModel({ provider })]);
 
   const result = await service.generateAiRecommendations({});
 
-  assert.equal(result.recommendations[0].level, 'باحث');
+  assert.equal(result.recommendations[0].level, 'منفذ');
 });
 
 test('formatModelForClient: legacy User.currentLevel is used ONLY as the explicit fallback when ProviderGamification is genuinely absent', async (t) => {

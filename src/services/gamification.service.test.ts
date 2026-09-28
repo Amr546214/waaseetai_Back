@@ -68,8 +68,8 @@ test('getLevelDetails: the persisted currentCommission equals the returned quali
 
   const result = await gamificationService.getLevelDetails('provider-1');
 
-  assert.equal(result.currentStats.commissionRate, 14.0);
-  assert.equal(getGamificationState().currentCommission, 14.0);
+  assert.equal(result.currentStats.commissionRate, 4.0);
+  assert.equal(getGamificationState().currentCommission, 4.0);
   assert.equal(result.currentStats.commissionRate, getGamificationState().currentCommission);
 });
 

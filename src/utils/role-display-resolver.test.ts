@@ -21,7 +21,7 @@ test('CLIENT active role resolves display/progression fields from ClientProfile'
       lastName: 'Name',
       avatarUrl: 'https://client.example/avatar.png',
       completionPercentage: 60,
-      currentLevel: 'باحث',
+      currentLevel: 'منفذ',
       currentPoints: 200,
       pointsToNextLevel: 100
     }
@@ -32,7 +32,7 @@ test('CLIENT active role resolves display/progression fields from ClientProfile'
     lastName: 'Name',
     avatarUrl: 'https://client.example/avatar.png',
     profileCompletionPercent: 60,
-    currentLevel: 'باحث',
+    currentLevel: 'منفذ',
     currentPoints: 200,
     pointsToNextLevel: 100
   });
@@ -48,7 +48,7 @@ test('PROVIDER active role resolves name/avatar/completion from ProviderProfile 
       avatarUrl: 'https://provider.example/avatar.png',
       completionPercentage: 80
     },
-    // 50 points is exactly the level-2 ("مستكشف") threshold in LEVEL_MATRIX.
+    // 50 points is exactly the level-2 ("منجز") threshold in LEVEL_MATRIX.
     providerGamification: { points: 50, currentLevelIndex: 2 }
   });
 
@@ -58,7 +58,7 @@ test('PROVIDER active role resolves name/avatar/completion from ProviderProfile 
   assert.equal(result.profileCompletionPercent, 80);
   // currentLevel must come from LEVEL_MATRIX[index].title, not ClientProfile
   // and not the legacy User.currentLevel string.
-  assert.equal(result.currentLevel, 'مستكشف');
+  assert.equal(result.currentLevel, 'منجز');
   assert.equal(result.currentPoints, 50);
   // Level 3 ("باحث") requires 150 points -> gap is 100.
   assert.equal(result.pointsToNextLevel, 100);
@@ -96,7 +96,7 @@ test('same underlying profiles resolve to different values when activeRole switc
       lastName: 'Persona',
       avatarUrl: 'https://client.example/avatar.png',
       completionPercentage: 60,
-      currentLevel: 'باحث',
+      currentLevel: 'منفذ',
       currentPoints: 200,
       pointsToNextLevel: 100
     },
@@ -157,7 +157,7 @@ test('a missing role profile (undefined/null) does not crash and falls back to l
 // Phase 3C bug fix: provider-profile.service.ts's getPublicProfile() previously
 // derived its levelName inline, defaulting a missing
 // ProviderGamification.currentLevelIndex to 1 BEFORE checking any fallback — so
-// LEVEL_MATRIX index 1 ("زائر") always matched and profile.user.currentLevel was
+// LEVEL_MATRIX index 1 ("مبتدئ") always matched and profile.user.currentLevel was
 // never actually reached. getPublicProfile now delegates to
 // resolveProviderProgression (this file) for that derivation instead, so these
 // tests pin down the exact two scenarios the bug report described, directly
@@ -167,21 +167,21 @@ test('resolveProviderProgression: a completely missing ProviderGamification row 
   const result = resolveProviderProgression(null, { ...legacy, currentLevel: 'مستوى قديم مخصص' });
 
   assert.equal(result.currentLevel, 'مستوى قديم مخصص');
-  // The old bug always produced 'زائر' (LEVEL_MATRIX index 1's title) here,
+  // The old bug always produced 'مبتدئ' (LEVEL_MATRIX index 1's title) here,
   // regardless of the legacy value — confirm that never happens now.
-  assert.notEqual(result.currentLevel, 'زائر');
+  assert.notEqual(result.currentLevel, 'مبتدئ');
 });
 
 test('resolveProviderProgression: an existing ProviderGamification row derives currentLevel from LEVEL_MATRIX, ignoring the legacy value', () => {
-  // 50 points / currentLevelIndex 2 -> LEVEL_MATRIX[1] ("مستكشف").
+  // 50 points / currentLevelIndex 2 -> LEVEL_MATRIX[1] ("منجز").
   const result = resolveProviderProgression({ points: 50, currentLevelIndex: 2 }, { ...legacy, currentLevel: 'يجب تجاهل هذه القيمة' });
 
-  assert.equal(result.currentLevel, 'مستكشف');
+  assert.equal(result.currentLevel, 'منجز');
   assert.notEqual(result.currentLevel, legacy.currentLevel);
 });
 
-test('resolveProviderProgression: a currentLevelIndex with no matching LEVEL_MATRIX entry falls back to LEVEL_MATRIX[0] ("زائر"), not a crash', () => {
+test('resolveProviderProgression: a currentLevelIndex with no matching LEVEL_MATRIX entry falls back to LEVEL_MATRIX[0] ("مبتدئ"), not a crash', () => {
   const result = resolveProviderProgression({ points: 0, currentLevelIndex: 999 }, legacy);
 
-  assert.equal(result.currentLevel, 'زائر');
+  assert.equal(result.currentLevel, 'مبتدئ');
 });

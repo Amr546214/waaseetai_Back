@@ -148,22 +148,22 @@ test('getMarketplaceModelById: uses ProviderProfile name/avatar over legacy User
 test('getMarketplaceModels: level uses canonical ProviderGamification progression, not legacy User.currentLevel', async (t) => {
   const provider = makeProvider({
     currentLevel: 'مستكشف - المستوى 1', // stale legacy value — must NOT be what's shown
-    gamification: { points: 150, currentLevelIndex: 3 } // LEVEL_MATRIX[2] = 'باحث'
+    gamification: { points: 150, currentLevelIndex: 3 } // LEVEL_MATRIX[2] = 'منفذ'
   });
   const { marketplaceService } = await loadService(t, [makeService({ provider })]);
 
   const result = await marketplaceService.getMarketplaceModels({});
 
-  assert.equal(result.models[0].level, 'باحث');
+  assert.equal(result.models[0].level, 'منفذ');
 });
 
 test('getMarketplaceModelById: level uses canonical ProviderGamification progression', async (t) => {
-  const provider = makeProvider({ gamification: { points: 751, currentLevelIndex: 6 } }); // 'ناشط'
+  const provider = makeProvider({ gamification: { points: 751, currentLevelIndex: 6 } }); // 'متمكن'
   const { marketplaceService } = await loadService(t, [makeService({ id: 'service-1', provider })]);
 
   const result = await marketplaceService.getMarketplaceModelById('service-1');
 
-  assert.equal(result.level, 'ناشط');
+  assert.equal(result.level, 'متمكن');
 });
 
 test('getMarketplaceModels: legacy User.currentLevel is used ONLY as the explicit fallback when ProviderGamification is genuinely absent', async (t) => {
@@ -180,27 +180,27 @@ test('getMarketplaceModels: legacy User.currentLevel is used ONLY as the explici
 test('getMarketplaceModels: an existing ProviderGamification row always overrides legacy User.currentLevel, even if they disagree', async (t) => {
   const provider = makeProvider({
     currentLevel: 'مستكشف - المستوى 1', // deliberately stale/disagreeing legacy value
-    gamification: { points: 0, currentLevelIndex: 1 } // LEVEL_MATRIX[0] = 'زائر'
+    gamification: { points: 0, currentLevelIndex: 1 } // LEVEL_MATRIX[0] = 'مبتدئ'
   });
   const { marketplaceService } = await loadService(t, [makeService({ provider })]);
 
   const result = await marketplaceService.getMarketplaceModels({});
 
-  assert.equal(result.models[0].level, 'زائر');
+  assert.equal(result.models[0].level, 'مبتدئ');
 });
 
 // --- Level filter (Part 4) -------------------------------------------------
 
 test('getMarketplaceModels (level filter): filters by the canonical ProviderGamification-derived level, not legacy User.currentLevel', async (t) => {
-  const levelOneProvider = makeProvider({ id: 'p1', gamification: { points: 0, currentLevelIndex: 1 } }); // 'زائر'
-  const levelThreeProvider = makeProvider({ id: 'p2', gamification: { points: 150, currentLevelIndex: 3 } }); // 'باحث'
+  const levelOneProvider = makeProvider({ id: 'p1', gamification: { points: 0, currentLevelIndex: 1 } }); // 'مبتدئ'
+  const levelThreeProvider = makeProvider({ id: 'p2', gamification: { points: 150, currentLevelIndex: 3 } }); // 'منفذ'
   const services = [
     makeService({ id: 's1', provider: levelOneProvider }),
     makeService({ id: 's2', provider: levelThreeProvider })
   ];
   const { marketplaceService } = await loadService(t, services);
 
-  const result = await marketplaceService.getMarketplaceModels({ level: 'باحث' });
+  const result = await marketplaceService.getMarketplaceModels({ level: 'منفذ' });
 
   assert.equal(result.models.length, 1);
   assert.equal(result.models[0].id, 's2');
@@ -216,8 +216,8 @@ test('getMarketplaceModels (level filter): different requested levels produce di
   ];
   const { marketplaceService } = await loadService(t, services);
 
-  const zaerResult = await marketplaceService.getMarketplaceModels({ level: 'زائر' });
-  const baaithResult = await marketplaceService.getMarketplaceModels({ level: 'باحث' });
+  const zaerResult = await marketplaceService.getMarketplaceModels({ level: 'مبتدئ' });
+  const baaithResult = await marketplaceService.getMarketplaceModels({ level: 'منفذ' });
 
   assert.equal(zaerResult.models.map((m: any) => m.id).join(','), 's1');
   assert.equal(baaithResult.models.map((m: any) => m.id).join(','), 's2');
@@ -227,7 +227,7 @@ test('getMarketplaceModels (level filter): a provider with no ProviderGamificati
   const noGamificationProvider = makeProvider({ id: 'p1', currentLevel: 'أي شيء', gamification: null });
   const { marketplaceService } = await loadService(t, [makeService({ id: 's1', provider: noGamificationProvider })]);
 
-  const result = await marketplaceService.getMarketplaceModels({ level: 'زائر' });
+  const result = await marketplaceService.getMarketplaceModels({ level: 'مبتدئ' });
 
   assert.equal(result.models.length, 1);
   assert.equal(result.models[0].id, 's1');
@@ -242,7 +242,7 @@ test('getMarketplaceModels (level filter): pagination and total remain correct �
 
   const { marketplaceService } = await loadService(t, services);
 
-  const result = await marketplaceService.getMarketplaceModels({ level: 'باحث', page: 1, limit: 2 });
+  const result = await marketplaceService.getMarketplaceModels({ level: 'منفذ', page: 1, limit: 2 });
 
   // Total reflects the FULL filtered count (5), not just the page size —
   // proving count() and findMany() were filtered identically at the DB

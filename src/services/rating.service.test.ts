@@ -86,7 +86,7 @@ test('rateRequest: can promote a provider when a rating change makes all 3 thres
   await ratingService.rateRequest('contract-1', 'client-1', 'client', { rating: 4, comment: 'جيد جداً' });
 
   assert.equal(getGamificationState().currentLevelIndex, 2);
-  assert.equal(getGamificationState().currentCommission, 15.0);
+  assert.equal(getGamificationState().currentCommission, 4.8);
 });
 
 test('rateRequest: a dropped authoritative rating results in the correct lower qualified level', async (t) => {
@@ -113,7 +113,7 @@ test('rateRequest: ProviderGamification writes points/completedProjects/avgRatin
   assert.equal(state.avgRating, 4.6);
   // Level 6 requires points>=751, completedProjects>=20, avgRating>=4.2 — all met.
   assert.equal(state.currentLevelIndex, 6);
-  assert.equal(state.currentCommission, 14.0);
+  assert.equal(state.currentCommission, 4.0);
 });
 
 test('rateRequest: never writes User.currentLevel/currentPoints/pointsToNextLevel', async (t) => {
