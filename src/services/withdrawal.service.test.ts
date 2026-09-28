@@ -201,6 +201,173 @@ test('createForProvider: a serialization-conflict error (P2034) is retried, not 
 	assert.equal(createSpy.mock.callCount(), 1, 'only the successful retry actually creates a row');
 });
 
+// ============================================================================
+// Financial Safety Batch 2A — the confirmed Prisma 7 driver-adapter
+// (@prisma/adapter-pg) error shape for the SAME real-DEV-Postgres-verified
+// conflict as the P2034 test above: a DriverAdapterError whose cause.kind is
+// 'TransactionWriteConflict', which the pre-Batch-2A retry check did not
+// recognize at all. Real DriverAdapterError instances are constructed below
+// (not duck-typed plain objects), matching isRetryableTransactionConflict's
+// own predicate tests.
+// ============================================================================
+
+test('createForProvider: a DriverAdapterError (cause.kind = TransactionWriteConflict) is retried, not surfaced to the caller, as long as the retried attempt is itself valid', async (t) => {
+	const { DriverAdapterError } = await import('@prisma/driver-adapter-utils');
+	let attempts = 0;
+	const withdrawals: any[] = [];
+	const aggregateSpy = t.mock.fn(async () => ({ _sum: { amount: 0 } }));
+	const createSpy = t.mock.fn(async (args: any) => {
+		const row = { id: 'withdrawal-1', status: 'PENDING', ...args.data };
+		withdrawals.push(row);
+		return row;
+	});
+	const tx = { withdrawal: { aggregate: aggregateSpy, create: createSpy } };
+	const transactionSpy = t.mock.fn(async (fn: any) => {
+		attempts += 1;
+		if (attempts === 1) {
+			throw new DriverAdapterError({ kind: 'TransactionWriteConflict' });
+		}
+		return fn(tx);
+	});
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	t.mock.module('./provider-finance.service', {
+		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
+	});
+	const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { withdrawalService } = await import(moduleUrl);
+
+	const result = await withdrawalService.createForProvider('provider-1', { amount: 200, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+
+	assert.equal(result.amount, 200);
+	assert.equal(transactionSpy.mock.callCount(), 2, 'the first (conflicted) attempt is retried exactly once here, succeeding on the second');
+	assert.equal(createSpy.mock.callCount(), 1, 'only the successful retry actually creates a row');
+});
+
+test('createForProvider: an UNRELATED DriverAdapterError is never retried — it propagates immediately on the first attempt', async (t) => {
+	const { DriverAdapterError } = await import('@prisma/driver-adapter-utils');
+	let attempts = 0;
+	const transactionSpy = t.mock.fn(async () => {
+		attempts += 1;
+		throw new DriverAdapterError({ kind: 'DatabaseNotReachable' });
+	});
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	t.mock.module('./provider-finance.service', {
+		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
+	});
+	const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { withdrawalService } = await import(moduleUrl);
+
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 200, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		(err: any) => { assert.equal(err.cause?.kind ?? err.constructor?.name, 'DatabaseNotReachable'); return true; }
+	);
+	assert.equal(attempts, 1, 'an unrecognized conflict shape must never be retried — it propagates on the very first attempt');
+});
+
+test('createForProvider: on retry, released earnings AND pending withdrawals are re-read fresh — never reusing the first attempt\'s stale values', async (t) => {
+	// A real Postgres SERIALIZABLE conflict is detected at COMMIT time — the
+	// callback's queries (getWallet, aggregate, and even create()) already
+	// ran to completion inside the doomed transaction before Postgres
+	// aborts it. This mock reflects that: attempt 1's `fn(tx)` genuinely
+	// runs (reading a stale pendingSum of 0), and only AFTER it resolves
+	// does the wrapper simulate the commit-time conflict — exactly what
+	// Batch 1's real-DEV-Postgres testing observed. The retry then must
+	// re-read everything fresh, seeing the now-current pendingSum of 450.
+	const { DriverAdapterError } = await import('@prisma/driver-adapter-utils');
+	let transactionAttempt = 0;
+	let walletCallCount = 0;
+	const aggregateSpy = t.mock.fn(async () => ({ _sum: { amount: transactionAttempt === 1 ? 0 : 450 } }));
+	const createSpy = t.mock.fn(async (args: any) => ({ id: 'withdrawal-1', status: 'PENDING', ...args.data }));
+	const tx = { withdrawal: { aggregate: aggregateSpy, create: createSpy } };
+	const transactionSpy = t.mock.fn(async (fn: any) => {
+		transactionAttempt += 1;
+		const attemptNumber = transactionAttempt;
+		const result = await fn(tx);
+		if (attemptNumber === 1) {
+			// Simulates Postgres aborting THIS transaction at commit — the
+			// callback's own create() above did run and returned a value,
+			// but none of it actually persisted; the whole transaction rolls
+			// back and $transaction() surfaces the conflict instead of
+			// resolving with that value.
+			throw new DriverAdapterError({ kind: 'TransactionWriteConflict' });
+		}
+		return result;
+	});
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	t.mock.module('./provider-finance.service', {
+		namedExports: {
+			providerFinanceService: {
+				getWallet: async () => { walletCallCount += 1; return { summary: { availableBalance: 500, currency: 'USD' } }; }
+			}
+		}
+	});
+	const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { withdrawalService } = await import(moduleUrl);
+
+	// 500 available, 450 now pending (only visible on retry) -> only 50 left,
+	// so a 200 request must correctly fail with the BUSINESS error — proving
+	// this is genuinely re-validated on retry, not a stale-balance re-insert.
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 200, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		/يتجاوز رصيدك الصافي/
+	);
+	assert.equal(walletCallCount, 2, 'getWallet() (released earnings) is called again on the retried attempt, not reused from the first');
+	assert.equal(aggregateSpy.mock.callCount(), 2, 'the pending-withdrawals aggregate is re-run on the retry too, not reused from the doomed first attempt');
+	assert.equal(createSpy.mock.callCount(), 1, 'the doomed first attempt DID call create() (matching real Postgres, which only detects the conflict at commit) — but that attempt never actually committed, and the retry correctly refuses to create a second row once it sees the true, now-insufficient balance');
+});
+
+test('createForProvider: if the retry observes insufficient balance, the caller gets the existing clean business error — never the raw technical conflict', async (t) => {
+	const { DriverAdapterError } = await import('@prisma/driver-adapter-utils');
+	let attempts = 0;
+	const aggregateSpy = t.mock.fn(async () => ({ _sum: { amount: 480 } }));
+	const createSpy = t.mock.fn(async (args: any) => ({ id: 'withdrawal-1', status: 'PENDING', ...args.data }));
+	const tx = { withdrawal: { aggregate: aggregateSpy, create: createSpy } };
+	const transactionSpy = t.mock.fn(async (fn: any) => {
+		attempts += 1;
+		if (attempts === 1) throw new DriverAdapterError({ kind: 'TransactionWriteConflict' });
+		return fn(tx);
+	});
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	t.mock.module('./provider-finance.service', {
+		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
+	});
+	const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { withdrawalService } = await import(moduleUrl);
+
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		(err: any) => {
+			// The Arabic business AppError, never the raw DriverAdapterError.
+			assert.match(err.message, /يتجاوز رصيدك الصافي بعد طلبات السحب المعلقة/);
+			assert.equal(err.statusCode, 400);
+			return true;
+		}
+	);
+	assert.equal(createSpy.mock.callCount(), 0);
+});
+
+test('createForProvider: retry is bounded — if every attempt conflicts, the final conflict error propagates instead of retrying forever', async (t) => {
+	const { DriverAdapterError } = await import('@prisma/driver-adapter-utils');
+	let attempts = 0;
+	const transactionSpy = t.mock.fn(async () => {
+		attempts += 1;
+		throw new DriverAdapterError({ kind: 'TransactionWriteConflict' });
+	});
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	t.mock.module('./provider-finance.service', {
+		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
+	});
+	const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { withdrawalService } = await import(moduleUrl);
+
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 200, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		(err: any) => { assert.equal(err.cause?.kind, 'TransactionWriteConflict'); return true; }
+	);
+	// Bounded at MAX_SERIALIZATION_RETRIES (3) — not infinite.
+	assert.equal(attempts, 3, 'exactly 3 attempts are made, all conflicting, before the conflict is finally surfaced to the caller');
+});
+
 test('reject: a rejected withdrawal does not permanently consume available earnings — a subsequent full-amount request succeeds once the first is REJECTED', async (t) => {
 	// reject() only flips Withdrawal.status; it never touched any balance
 	// field to begin with (approve() doesn't either — see

@@ -3,14 +3,8 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { CreateWithdrawalInput, RejectWithdrawalInput, ResolveWithdrawalInput } from '../dtos/withdrawal.dto';
 import { providerFinanceService } from './provider-finance.service';
+import { isRetryableTransactionConflict } from '../utils/prisma-retry.util';
 
-// Postgres's code for a SERIALIZABLE transaction that lost a genuine
-// read/write conflict to a concurrent transaction (Postgres 40001, surfaced
-// by Prisma as P2034 — "Transaction failed due to a write conflict or a
-// deadlock. Please retry your transaction"). Losing this is not a real
-// failure, it's Postgres asking the loser of a race to re-run against the
-// now-current state, so it's retried rather than surfaced to the caller.
-const SERIALIZATION_CONFLICT_CODE = 'P2034';
 const MAX_SERIALIZATION_RETRIES = 3;
 
 export class WithdrawalService {
@@ -27,9 +21,11 @@ export class WithdrawalService {
    * alone does not prevent this, since each transaction would still see its
    * own consistent-but-stale snapshot. SERIALIZABLE makes Postgres itself
    * detect the read (withdrawal.aggregate) / write (withdrawal.create)
-   * conflict between the two and abort one of them with P2034; that loser
-   * is retried here, re-reading the now-current state, rather than treated
-   * as an error.
+   * conflict between the two and abort one of them; that loser is retried
+   * here, re-reading the now-current state, rather than treated as an
+   * error — see isRetryableTransactionConflict() for exactly which error
+   * shapes this project's Prisma 7 driver-adapter runtime can raise for
+   * that conflict, and why both are checked, not just the classic P2034.
    */
   async createForProvider(userId: string, input: CreateWithdrawalInput) {
     for (let attempt = 1; attempt <= MAX_SERIALIZATION_RETRIES; attempt++) {
@@ -69,8 +65,11 @@ export class WithdrawalService {
           });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       } catch (error) {
-        const isSerializationConflict = error instanceof Prisma.PrismaClientKnownRequestError && error.code === SERIALIZATION_CONFLICT_CODE;
-        if (isSerializationConflict && attempt < MAX_SERIALIZATION_RETRIES) continue;
+        // Bounded retry, and ONLY for a recognized transaction-conflict
+        // shape (see isRetryableTransactionConflict) — every other error,
+        // including the plain AppError validation-rejection thrown inside
+        // the transaction above, propagates immediately and unmodified.
+        if (isRetryableTransactionConflict(error) && attempt < MAX_SERIALIZATION_RETRIES) continue;
         throw error;
       }
     }
