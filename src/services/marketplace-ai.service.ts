@@ -263,8 +263,11 @@ Select the top ${safeLimit} most relevant models and return JSON with this EXACT
 			isVerified: Boolean(m.provider?.providerProfile?.isVerified),
 			isFeatured: matchScore >= 92,
 			level: providerLevel || '',
-			levelBg: matchScore >= 94 ? 'rgba(123,47,190,.7)' : 'rgba(43,212,199,.6)',
-			levelColor: matchScore >= 94 ? '#C084FC' : '#2BD4C7',
+			// The badge shows the provider's tier, so it stays in the provider/brand
+			// colour family. Purple is reserved exclusively for AI surfaces (brand
+			// rule #2/#8) — the AI match is already surfaced by its own badge.
+			levelBg: matchScore >= 94 ? 'rgba(43,127,255,.7)' : 'rgba(43,212,199,.6)',
+			levelColor: matchScore >= 94 ? '#5DA0FF' : '#2BD4C7',
 			coverImage: coverImage,
 			provider: {
 				id: m.provider?.id || 'prov-id',
