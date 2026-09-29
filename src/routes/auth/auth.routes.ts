@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authController } from '../../controllers/auth.controller';
 import { validateRequest } from '../../middlewares/validation.middleware';
-import { registerSchema, verifyOtpSchema, loginSchema, resendOtpSchema, googleAuthSchema, forgotPasswordSchema, verifyResetCodeSchema, resetPasswordSchema } from './auth.schema';
+import { registerSchema, verifyOtpSchema, loginSchema, resendOtpSchema, googleAuthSchema, forgotPasswordSchema, verifyResetCodeSchema, resetPasswordSchema, verifyLoginOtpSchema, resendLoginOtpSchema } from './auth.schema';
 import { authLimiter } from '../../middlewares/rate-limit.middleware';
 import { authenticate, authorize, requireActiveUser } from '../../middlewares/auth.middleware';
 import { AccountType } from '@prisma/client';
@@ -74,6 +74,20 @@ router.post(
   authLimiter,
   validateRequest(googleAuthSchema),
   authController.googleAuth
+);
+
+router.post(
+  '/login/verify-otp',
+  authLimiter,
+  validateRequest(verifyLoginOtpSchema),
+  authController.verifyLoginOtp
+);
+
+router.post(
+  '/login/resend-otp',
+  authLimiter,
+  validateRequest(resendLoginOtpSchema),
+  authController.resendLoginOtp
 );
 
 router.post(

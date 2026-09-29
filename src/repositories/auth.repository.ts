@@ -27,7 +27,7 @@ export class AuthRepository {
   /**
    * Create User and their corresponding Profile in a Transaction
    */
-  public async createUserWithProfile(data: RegisterInput, hashedPassword: string) {
+  public async createUserWithProfile(data: RegisterInput, hashedPassword: string | null, googleIdentity?: { sub: string; picture?: string }) {
     const roles = getInitialRolesForAccountType(data.accountType);
 
     return prisma.$transaction(async (tx) => {
@@ -47,7 +47,16 @@ export class AuthRepository {
           phoneCountryCode: data.phoneCountryCode,
           phoneNumber: data.phoneNumber,
           password: hashedPassword,
-          agreedToTerms: data.agreedToTerms as boolean
+          ...(googleIdentity ? {
+            authProvider: 'google',
+            googleId: googleIdentity.sub,
+            avatarUrl: googleIdentity.picture
+          } : {}),
+          agreedToTerms: data.agreedToTerms as boolean,
+          // Mandatory phone OTP on login applies to every account created from
+          // here on — existing accounts keep the schema default (false) until
+          // an opt-in flow exists for them.
+          phoneOtpEnabled: true
         }
       });
 
@@ -145,6 +154,36 @@ export class AuthRepository {
         email: true,
         googleId: true,
         authProvider: true,
+        phoneNumber: true,
+        phoneCountryCode: true,
+        phoneOtpEnabled: true,
+        clientProfile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+        providerProfile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+        affiliateProfile: { select: { firstName: true, lastName: true, avatarUrl: true } }
+      }
+    });
+  }
+
+  /**
+   * Find a user by id with the same shape as findByEmail, for the login-time
+   * phone OTP verify/resend endpoints (which only have a userId from the
+   * initial login response, not an email).
+   */
+  public async findByIdForSession(id: string) {
+    return prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        status: true,
+        accountType: true,
+        activeRole: true,
+        roles: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phoneNumber: true,
+        phoneCountryCode: true,
+        phoneOtpEnabled: true,
         clientProfile: { select: { firstName: true, lastName: true, avatarUrl: true } },
         providerProfile: { select: { firstName: true, lastName: true, avatarUrl: true } },
         affiliateProfile: { select: { firstName: true, lastName: true, avatarUrl: true } }
@@ -194,6 +233,29 @@ export class AuthRepository {
         type: OtpType.EMAIL,
         context: { path: ['purpose'], equals: 'PASSWORD_RESET' }
       }
+    });
+  }
+
+  /**
+   * Find the most recent OTP of a given type for a user, regardless of the
+   * code entered — used where the caller needs to compare the code itself
+   * and increment attempts on a mismatch (mirrors findLatestPasswordResetOtp,
+   * generalized to any OtpType instead of the EMAIL/PASSWORD_RESET context).
+   */
+  public async findLatestOtp(userId: string, type: OtpType) {
+    return prisma.otpVerification.findFirst({
+      where: { userId, type },
+      orderBy: { createdAt: 'desc' }
+    });
+  }
+
+  /**
+   * Delete all PHONE-type OTPs for a user (leaves EMAIL activation/reset OTPs
+   * untouched).
+   */
+  public async deletePhoneOtps(userId: string) {
+    return prisma.otpVerification.deleteMany({
+      where: { userId, type: OtpType.PHONE }
     });
   }
 

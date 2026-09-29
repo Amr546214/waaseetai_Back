@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { authService } from '../services/auth.service';
 import { sessionService } from '../services/session.service';
 import { getAuthCookie } from '../utils/request-cookie';
-import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput } from '../routes/auth/auth.schema';
+import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput, VerifyLoginOtpInput, ResendLoginOtpInput } from '../routes/auth/auth.schema';
 
 export class AuthController {
 	/**
@@ -126,6 +126,7 @@ export class AuthController {
 					message: result.message,
 					data: {
 						verified: false,
+						phoneOtpRequired: result.phoneOtpRequired,
 						userId: result.userId
 					}
 				});
@@ -147,6 +148,41 @@ export class AuthController {
 	}
 
 	/**
+	 * Verify the login-time phone OTP and issue the session
+	 */
+	public async verifyLoginOtp(req: Request, res: Response, next: NextFunction) {
+		try {
+			const input: VerifyLoginOtpInput = req.body;
+			const result = await authService.verifyLoginOtp(input, { ipAddress: req.ip, userAgent: req.get('user-agent') });
+
+			res.status(200).json({
+				success: true,
+				message: 'تم تسجيل الدخول بنجاح',
+				data: result
+			});
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	/**
+	 * Resend the login-time phone OTP
+	 */
+	public async resendLoginOtp(req: Request, res: Response, next: NextFunction) {
+		try {
+			const { userId }: ResendLoginOtpInput = req.body;
+			await authService.resendLoginOtp(userId);
+
+			res.status(200).json({
+				success: true,
+				message: 'تم إعادة إرسال رمز التحقق بنجاح'
+			});
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	/**
 	 * Handle Google login/registration
 	 */
 	public async googleAuth(req: Request, res: Response, next: NextFunction) {
@@ -156,12 +192,8 @@ export class AuthController {
 
 			res.status(200).json({
 				success: true,
-				message: 'تم تسجيل الدخول بواسطة جوجل بنجاح',
-				data: {
-					verified: true,
-					token: result.token,
-					user: result.user
-				}
+				message: result.verified ? 'تم تسجيل الدخول بواسطة جوجل بنجاح' : 'يرجى استكمال خطوات التسجيل والتحقق',
+				data: result
 			});
 		} catch (error) {
 			next(error);

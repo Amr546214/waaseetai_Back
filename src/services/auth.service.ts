@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { OtpType, UserStatus, UserRole, User as PrismaUser } from '@prisma/client';
 import { authRepository } from '../repositories/auth.repository';
-import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput } from '../routes/auth/auth.schema';
+import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput, VerifyLoginOtpInput } from '../routes/auth/auth.schema';
 import { OAuth2Client } from 'google-auth-library';
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -13,7 +13,7 @@ import { notificationService } from './notification.service';
 import { prisma } from '../config/db';
 import { sessionService, SessionContext } from './session.service';
 import { accountAuditLogService } from './account-logs.service';
-import { getRoleFromAccountType, getInitialRolesForAccountType, createMissingRoleProfiles, initializeRoleState } from './account-management.service';
+import { initializeRoleState } from './account-management.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 
 /**
@@ -57,23 +57,64 @@ const RESET_OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 const RESET_GENERIC_MESSAGE = 'إذا كان البريد الإلكتروني مسجلاً لدينا، فسيتم إرسال رمز إعادة تعيين كلمة المرور إليه';
 const RESET_INVALID_CODE_MESSAGE = 'رمز التحقق غير صحيح أو منتهي الصلاحية';
 
+const LOGIN_OTP_MAX_ATTEMPTS = 5;
+const LOGIN_OTP_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
+const LOGIN_OTP_INVALID_MESSAGE = 'رمز التحقق غير صحيح أو منتهي الصلاحية';
+
 export class AuthService {
+	private async verifyGoogleIdentity(idToken: string) {
+		const ticket = await googleClient.verifyIdToken({ idToken, audience: process.env.GOOGLE_CLIENT_ID });
+		const payload = ticket.getPayload();
+		if (!payload?.sub || !payload.email || !payload.email_verified) {
+			throw new AppError('تعذر التحقق من حساب جوجل', 401);
+		}
+		return payload;
+	}
+
+	/**
+	 * Generate a fresh login-time PHONE OTP for a user, replacing any previous
+	 * one, and dispatch it via SMS. Shared by loginUser, googleAuth and
+	 * resendLoginOtp so the challenge is issued identically regardless of
+	 * which login path triggered it.
+	 */
+	private async issuePhoneOtpChallenge(userId: string, phoneNumber: string | null, phoneCountryCode: string | null) {
+		const otpCode = crypto.randomInt(100000, 999999).toString();
+		const expiresAt = new Date(Date.now() + LOGIN_OTP_EXPIRY_MS);
+
+		await authRepository.deletePhoneOtps(userId);
+		await authRepository.createOtp(userId, otpCode, OtpType.PHONE, expiresAt);
+
+		if (process.env.NODE_ENV === 'development') {
+			logger.info(`[DEV OTP LOGGER] Login phone OTP for user ${userId}: ${otpCode}`);
+		}
+
+		const fullPhone = `${phoneCountryCode || ''}${phoneNumber || ''}`;
+		notificationService.sendSmsOtp(fullPhone, otpCode).catch((err: any) => {
+			logger.error('Failed to send login phone OTP SMS', err);
+		});
+	}
+
 	/**
 	 * Register a new user
 	 */
 	public async registerUser(input: RegisterInput) {
+		const googleIdentity = input.googleIdToken ? await this.verifyGoogleIdentity(input.googleIdToken) : undefined;
+		if (googleIdentity && googleIdentity.email !== input.email) {
+			throw new AppError('البريد الإلكتروني لا يطابق حساب جوجل المختار', 400);
+		}
 		// 1. Check for duplicates (email or phone)
 		const existingUser = await authRepository.findByEmailOrPhone(input.email, input.phoneNumber);
 		if (existingUser) {
-			throw new AppError('البريد الإلكتروني أو رقم الجوال مسجل مسبقاً', 400);
+			throw new AppError('البريد الإلكتروني أو رقم الجوال مسجل بالفعل، يرجى تسجيل الدخول', 409);
 		}
 
 		// 2. Hash Password
 		const saltRounds = 12;
-		const hashedPassword = await bcrypt.hash(input.password, saltRounds);
+		if (!input.password && !googleIdentity) throw new AppError('كلمة المرور مطلوبة', 400);
+		const hashedPassword = input.password ? await bcrypt.hash(input.password, saltRounds) : null;
 
 		// 3. Create User & Profile via Repository Transaction
-		const user = await authRepository.createUserWithProfile(input, hashedPassword);
+		const user = await authRepository.createUserWithProfile(input, hashedPassword, googleIdentity);
 
 		// 4. Generate 6-digit OTP
 		const otpCode = crypto.randomInt(100000, 999999).toString();
@@ -314,6 +355,7 @@ export class AuthService {
 
 			return {
 				verified: false,
+				phoneOtpRequired: false,
 				userId: user.id,
 				message: 'يرجى تفعيل حسابك أولاً'
 			};
@@ -321,6 +363,16 @@ export class AuthService {
 
 		if (user.status === UserStatus.SUSPENDED) {
 			throw new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403);
+		}
+
+		if (user.phoneOtpEnabled) {
+			await this.issuePhoneOtpChallenge(user.id, user.phoneNumber, user.phoneCountryCode);
+			return {
+				verified: false,
+				phoneOtpRequired: true,
+				userId: user.id,
+				message: 'يرجى إدخال رمز التحقق المرسل إلى جوالك'
+			};
 		}
 
 		// Generate JWT Access Token
@@ -363,18 +415,36 @@ export class AuthService {
 	 * Google Auth Login / Register
 	 */
 	public async googleAuth(input: GoogleAuthInput, sessionContext: SessionContext = {}) {
-		const ticket = await googleClient.verifyIdToken({
-			idToken: input.idToken,
-			audience: process.env.GOOGLE_CLIENT_ID,
-		});
-		
-		const payload = ticket.getPayload();
-		if (!payload) {
-			throw new AppError('Google token invalid', 401);
-		}
-
+		const payload = await this.verifyGoogleIdentity(input.idToken);
 		const email = payload.email!;
 		const existingUser = await authRepository.findByEmail(email);
+		// Older clients identify registration by supplying an account type.
+		const intent = input.intent ?? (input.accountType ? 'register' : 'login');
+		if (intent === 'register') {
+			if (existingUser) {
+				throw new AppError('هذا الحساب موجود بالفعل، يرجى تسجيل الدخول', 409);
+			}
+			// Only return verified identity fields. No user, session or access token
+			// is created until /register receives the completed form and consent.
+			return {
+				verified: false,
+				registrationRequired: true,
+				googleProfile: {
+					email,
+					firstName: payload.given_name || '',
+					lastName: payload.family_name || ''
+				}
+			};
+		}
+		if (!existingUser) {
+			throw new AppError('لا يوجد حساب بهذا البريد الإلكتروني، يرجى إنشاء حساب أولاً', 404);
+		}
+		if (existingUser.status === UserStatus.SUSPENDED) {
+			throw new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403);
+		}
+		if (existingUser.googleId && existingUser.googleId !== payload.sub) {
+			throw new AppError('حساب جوجل لا يطابق الحساب المرتبط', 401);
+		}
 		// Captured before any prisma.user.update() below, which returns a bare
 		// scalar User (no relations) and would otherwise silently drop these.
 		const roleRelations = {
@@ -382,76 +452,31 @@ export class AuthService {
 			providerProfile: existingUser?.providerProfile,
 			affiliateProfile: existingUser?.affiliateProfile
 		};
-		let user: Pick<PrismaUser, 'id' | 'email' | 'accountType' | 'activeRole' | 'roles' | 'status' | 'googleId' | 'firstName' | 'lastName'> | null = existingUser;
+		let user: Pick<PrismaUser, 'id' | 'email' | 'accountType' | 'activeRole' | 'roles' | 'status' | 'googleId' | 'firstName' | 'lastName' | 'phoneNumber' | 'phoneCountryCode' | 'phoneOtpEnabled'> | null = existingUser;
 
-		if (!user) {
-			if (!input.accountType) {
-				throw new AppError('يرجى تحديد نوع الحساب للمتابعة بالتسجيل عن طريق جوجل', 400);
-			}
-			const accountType = input.accountType;
-			const roles = getInitialRolesForAccountType(accountType);
-
-			// Create User & a matching profile row for every owned role together,
-			// atomically — same createMissingRoleProfiles helper as email/password
-			// registration (auth.repository.ts) so the two signup paths can't
-			// diverge on which profile rows a given accountType gets (e.g. a
-			// Google PROVIDER signup previously ended up with no ProviderProfile
-			// row at all).
-			user = await prisma.$transaction(async (tx) => {
-				const created = await tx.user.create({
-					data: {
-						email: email,
-						firstName: payload.given_name || 'Google',
-						lastName: payload.family_name || 'User',
-						accountType,
-						// Initialize roles/activeRole from the chosen accountType, same as
-						// the email/password registration path (auth.repository.ts).
-						roles,
-						activeRole: getRoleFromAccountType(accountType),
-						status: UserStatus.ACTIVE,
-						authProvider: 'google',
-						googleId: payload.sub,
-						avatarUrl: payload.picture,
-					}
-				});
-
-				// Phase 3D.4: full identity so Google signups (which legitimately
-				// have an avatarUrl already, unlike email/password signups) get an
-				// accurate initial completion score seeded from real state — not a
-				// new formula, same calculators email/password registration uses.
-				await createMissingRoleProfiles(tx, created.id, roles, {
-					firstName: created.firstName,
-					lastName: created.lastName,
-					avatarUrl: created.avatarUrl,
-					email: created.email,
-					phoneNumber: created.phoneNumber,
-					idNumber: created.idNumber,
-					idExpiryDate: created.idExpiryDate,
-					ibanNumber: created.ibanNumber,
-					bankName: created.bankName,
-					accountHolderName: created.accountHolderName,
-					idDocumentUrl: created.idDocumentUrl
-				});
-
-				return created;
+		if (!user.googleId) {
+			user = await prisma.user.update({
+				where: { id: user.id },
+				data: { googleId: payload.sub, authProvider: 'google' }
 			});
-		} else {
-			if (!user.googleId) {
-				user = await prisma.user.update({
-					where: { id: user.id },
-					data: { googleId: payload.sub, authProvider: 'google' }
-				});
-			}
-			if (user.status === UserStatus.PENDING_VERIFICATION) {
-				user = await prisma.user.update({
-					where: { id: user.id },
-					data: { status: UserStatus.ACTIVE }
-				});
-			}
+		}
+		if (user.status === UserStatus.PENDING_VERIFICATION) {
+			await this.resendOtp(user.id);
+			return { verified: false, phoneOtpRequired: false, userId: user.id };
 		}
 
 		if (user.status === UserStatus.SUSPENDED) {
 			throw new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403);
+		}
+
+		if (user.phoneOtpEnabled) {
+			await this.issuePhoneOtpChallenge(user.id, user.phoneNumber, user.phoneCountryCode);
+			return {
+				verified: false,
+				phoneOtpRequired: true,
+				userId: user.id,
+				message: 'يرجى إدخال رمز التحقق المرسل إلى جوالك'
+			};
 		}
 
 		const jwtSecret = process.env.JWT_SECRET;
@@ -467,6 +492,7 @@ export class AuthService {
 		const { firstName, lastName } = resolveAuthDisplayName(user, roleRelations);
 
 		return {
+			verified: true,
 			token,
 			user: {
 				id: user.id,
@@ -478,6 +504,88 @@ export class AuthService {
 				roles: user.roles
 			}
 		};
+	}
+
+	/**
+	 * Verify the login-time PHONE OTP (issued by loginUser/googleAuth when
+	 * phoneOtpEnabled is set) and, on success, issue the session exactly like
+	 * a normal login. Distinct from verifyOtp() above, which activates a
+	 * PENDING_VERIFICATION account's EMAIL OTP and has different side effects
+	 * (flips UserStatus, initializes affiliate profiles, etc.) that must never
+	 * run again on an already-ACTIVE user.
+	 */
+	public async verifyLoginOtp(input: VerifyLoginOtpInput, sessionContext: SessionContext = {}) {
+		const user = await authRepository.findByIdForSession(input.userId);
+		if (!user || !user.phoneOtpEnabled || user.status !== UserStatus.ACTIVE) {
+			throw new AppError(LOGIN_OTP_INVALID_MESSAGE, 400);
+		}
+
+		const otp = await authRepository.findLatestOtp(user.id, OtpType.PHONE);
+		if (!otp) {
+			throw new AppError(LOGIN_OTP_INVALID_MESSAGE, 400);
+		}
+
+		if (otp.attempts >= LOGIN_OTP_MAX_ATTEMPTS) {
+			await authRepository.deletePhoneOtps(user.id);
+			throw new AppError('تم تجاوز عدد المحاولات المسموح به، يرجى طلب رمز جديد', 429);
+		}
+
+		if (otp.expiresAt < new Date()) {
+			throw new AppError('رمز التحقق انتهت صلاحيته، يرجى طلب رمز جديد', 400);
+		}
+
+		if (otp.code !== input.code) {
+			await authRepository.incrementOtpAttempts(otp.id);
+			throw new AppError(LOGIN_OTP_INVALID_MESSAGE, 400);
+		}
+
+		await authRepository.deletePhoneOtps(user.id);
+
+		const jwtSecret = process.env.JWT_SECRET;
+		if (!jwtSecret) {
+			throw new AppError('خطأ في إعدادات الخادم: مفتاح التشفير JWT_SECRET غير معرّف', 500);
+		}
+		const token = jwt.sign(
+			{ userId: user.id, accountType: user.accountType },
+			jwtSecret,
+			{ expiresIn: '7d' }
+		);
+		await sessionService.register(user.id, token, sessionContext);
+
+		const { firstName, lastName } = resolveAuthDisplayName(user, {
+			clientProfile: user.clientProfile,
+			providerProfile: user.providerProfile,
+			affiliateProfile: user.affiliateProfile
+		});
+
+		return {
+			verified: true,
+			token,
+			user: {
+				id: user.id,
+				firstName,
+				lastName,
+				email: user.email,
+				accountType: user.accountType,
+				activeRole: user.activeRole,
+				roles: user.roles
+			}
+		};
+	}
+
+	/**
+	 * Resend the login-time PHONE OTP. Deliberately separate from resendOtp()
+	 * above, which only ever targets PENDING_VERIFICATION accounts (it errors
+	 * out on an ACTIVE user) — this one requires ACTIVE + phoneOtpEnabled.
+	 */
+	public async resendLoginOtp(userId: string) {
+		const user = await authRepository.findByIdForSession(userId);
+		if (!user || !user.phoneOtpEnabled || user.status !== UserStatus.ACTIVE) {
+			throw new AppError('طلب غير صالح', 400);
+		}
+
+		await this.issuePhoneOtpChallenge(user.id, user.phoneNumber, user.phoneCountryCode);
+		return true;
 	}
 }
 

@@ -29,10 +29,13 @@ export const registerSchema = z.object({
       .string()
       .min(8, 'كلمة المرور يجب أن لا تقل عن 8 أحرف')
       .regex(/[A-Z]/, 'كلمة المرور يجب أن تحتوي على حرف كبير واحد على الأقل')
-      .regex(/[0-9]/, 'كلمة المرور يجب أن تحتوي على رقم واحد على الأقل'),
+      .regex(/[0-9]/, 'كلمة المرور يجب أن تحتوي على رقم واحد على الأقل').optional(),
+    googleIdToken: z.string().min(1).optional(),
     agreedToTerms: z.literal(true, {
       message: 'يجب الموافقة على الشروط والأحكام'
     })
+  }).refine(data => !!data.password || !!data.googleIdToken, {
+    message: 'كلمة المرور مطلوبة', path: ['password']
   })
 });
 
@@ -54,6 +57,26 @@ export const resendOtpSchema = z.object({
 });
 
 export type ResendOtpInput = z.infer<typeof resendOtpSchema>['body'];
+
+// Login-time phone OTP (distinct from verifyOtpSchema/resendOtpSchema above,
+// which activate a PENDING_VERIFICATION account's email OTP). These verify/
+// resend an already-ACTIVE user's mandatory phone OTP challenge instead.
+export const verifyLoginOtpSchema = z.object({
+  body: z.object({
+    userId: z.string().uuid('معرف المستخدم غير صالح'),
+    code: z.string().regex(/^\d{6}$/, 'رمز التحقق يجب أن يكون 6 أرقام')
+  })
+});
+
+export type VerifyLoginOtpInput = z.infer<typeof verifyLoginOtpSchema>['body'];
+
+export const resendLoginOtpSchema = z.object({
+  body: z.object({
+    userId: z.string().uuid('معرف المستخدم غير صالح')
+  })
+});
+
+export type ResendLoginOtpInput = z.infer<typeof resendLoginOtpSchema>['body'];
 
 export const loginSchema = z.object({
   body: z.object({
@@ -98,6 +121,7 @@ export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>['body'];
 export const googleAuthSchema = z.object({
   body: z.object({
     idToken: z.string().min(1, 'Token is required'),
+    intent: z.enum(['login', 'register']).optional(),
     accountType: PublicAccountTypeEnum.optional()
   })
 });
