@@ -3,7 +3,12 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { isRetryableTransactionConflict } from '../utils/prisma-retry.util';
 import { deriveSenderBatchId } from '../utils/payout-attempt.util';
-import { paypalService, type CreatePayoutParams, type PaypalPayoutCreateResult } from './paypal.service';
+import {
+	paypalService,
+	type CreatePayoutParams,
+	type PaypalPayoutCreateResult,
+	type PaypalPayoutItemResult
+} from './paypal.service';
 import { logger } from '../config/logger';
 
 // Same bound as withdrawal.service.ts's SERIALIZABLE retry loop — kept
@@ -20,6 +25,73 @@ const MAX_SERIALIZATION_RETRIES = 3;
 const PAYOUT_RECIPIENT_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SUPPORTED_PAYOUT_METHOD = 'paypal';
 const SUPPORTED_PAYOUT_CURRENCY = 'USD';
+const SUPPORTED_PAYOUT_PROVIDER = 'PAYPAL';
+
+// Payout P3-C: PayPal's documented Payouts idempotency guarantee for a given
+// sender_batch_id is bounded to roughly the last 30 days — recoverPayoutBySenderBatch()
+// itself has no timestamp context (see its own doc comment) and relies
+// entirely on ITS caller to enforce this. This is that caller. Measured
+// against the durable PayoutAttempt.createdAt ONLY — never
+// Withdrawal.updatedAt, never any request-supplied timestamp. Boundary rule
+// (deliberately conservative, chosen and documented per this task's own
+// instruction): age >= 30 days => do NOT resubmit. An attempt created
+// exactly 30 days ago is treated as already outside the safe window, not
+// inside it — the safe side of an ambiguous boundary.
+const SENDER_BATCH_RECOVERY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Payout P3-C: the outcome of one reconcilePayoutAttempt() call. Every
+ * member is a RESULT, never a thrown exception, except for a genuinely
+ * missing attemptId/withdrawal (a caller error, not a reconciliation
+ * finding) — see reconcilePayoutAttempt()'s own doc comment.
+ *
+ *  - COMPLETED / FAILED / REVERSED: a real (or already-idempotent) terminal
+ *    local state, backed by authoritative PayPal item-level evidence.
+ *  - STILL_PROCESSING: PayPal itself reports the item is still in flight
+ *    (PENDING) — no local transition of any kind.
+ *  - ACTION_REQUIRED: PayPal reports UNCLAIMED — the recipient, not this
+ *    system, must act next; provider notification is explicitly out of
+ *    P3-C's scope.
+ *  - ADMIN_REVIEW: ONHOLD, BLOCKED, any local-validation ineligibility, any
+ *    identifier contradiction/correlation failure, or any other anomaly
+ *    that must never be resolved automatically.
+ *  - RECOVERY_WINDOW_EXPIRED: a PENDING attempt with no payoutBatchId whose
+ *    createdAt is already outside PayPal's documented safe resubmission
+ *    window — recovery is deliberately never attempted.
+ *  - UNKNOWN: the PayPal transport itself could not prove anything (see
+ *    paypal.service.ts's own UNKNOWN semantics) — never treated as failure
+ *    or success.
+ */
+export type ReconciliationOutcome =
+	| 'COMPLETED'
+	| 'FAILED'
+	| 'REVERSED'
+	| 'STILL_PROCESSING'
+	| 'ACTION_REQUIRED'
+	| 'ADMIN_REVIEW'
+	| 'RECOVERY_WINDOW_EXPIRED'
+	| 'UNKNOWN';
+
+/** Never exposes recipient email, raw PayPal body, debug_id, access token, or arbitrary PayPal reason text — `message` is always one of this file's own fixed, pre-written strings. */
+export interface ReconcilePayoutAttemptResult {
+	outcome: ReconciliationOutcome;
+	attemptId: string;
+	withdrawalId: string;
+	message: string;
+	/**
+	 * Post-adversarial-review addition: the PayoutAttempt's ACTUAL local
+	 * status at the moment this result is returned (after any real
+	 * transition this call itself performed — otherwise unchanged from
+	 * before the call). Exists specifically so an outcome like
+	 * STILL_PROCESSING can never be misread as "the DB row is in
+	 * PROCESSING" when it may genuinely still be PENDING (a PayPal item
+	 * report of PENDING/UNCLAIMED/ONHOLD/BLOCKED never promotes PENDING to
+	 * PROCESSING — only initializeSendPayout()/markAttemptAccepted() may
+	 * ever do that). A caller that needs to know the true local state must
+	 * read this field, never infer it from `outcome` alone.
+	 */
+	localStatus: PayoutAttemptStatus;
+}
 
 export type SendPayoutResult =
   | { outcome: 'ACCEPTED'; withdrawalId: string; payoutAttemptId: string; payoutBatchId: string; message: string }
@@ -449,10 +521,22 @@ export class PayoutService {
 
 			if (transition.count === 1) {
 				const attempt = await tx.payoutAttempt.findUniqueOrThrow({ where: { id: attemptId } });
-				await tx.withdrawal.updateMany({
+				// Payout P3-C hardening: verified, not left unchecked as before —
+				// see markAttemptReversed()'s identical pattern/reasoning. P3-C now
+				// calls this primitive based on external PayPal truth, so a silent
+				// half-transition (PayoutAttempt FAILED while its Withdrawal stays
+				// PROCESSING, never reopened to APPROVED) is no longer an
+				// acceptable pre-existing quirk — it would strand the withdrawal
+				// unable to ever be sent again. If the Withdrawal cannot transition,
+				// the WHOLE transaction rolls back, including the PayoutAttempt
+				// write above.
+				const withdrawalTransition = await tx.withdrawal.updateMany({
 					where: { id: attempt.withdrawalId, status: WithdrawalStatus.PROCESSING },
 					data: { status: WithdrawalStatus.APPROVED }
 				});
+				if (withdrawalTransition.count !== 1) {
+					throw new AppError('تعذر تسجيل فشل التحويل — حالة طلب السحب لا تتطابق مع حالة المحاولة (تعارض في البيانات يتطلب مراجعة يدوية)', 409);
+				}
 				return attempt;
 			}
 
@@ -502,10 +586,20 @@ export class PayoutService {
 
 			if (transition.count === 1) {
 				const attempt = await tx.payoutAttempt.findUniqueOrThrow({ where: { id: attemptId } });
-				await tx.withdrawal.updateMany({
+				// Payout P3-C hardening: verified, not left unchecked as before —
+				// see markAttemptReversed()'s identical pattern/reasoning. P3-C now
+				// calls this primitive based on external PayPal truth, so a silent
+				// half-transition (PayoutAttempt COMPLETED while its Withdrawal
+				// never reaches COMPLETED) is no longer an acceptable pre-existing
+				// quirk. If the Withdrawal cannot transition, the WHOLE transaction
+				// rolls back, including the PayoutAttempt write above.
+				const withdrawalTransition = await tx.withdrawal.updateMany({
 					where: { id: attempt.withdrawalId, status: WithdrawalStatus.PROCESSING },
 					data: { status: WithdrawalStatus.COMPLETED }
 				});
+				if (withdrawalTransition.count !== 1) {
+					throw new AppError('تعذر تسجيل اكتمال التحويل — حالة طلب السحب لا تتطابق مع حالة المحاولة (تعارض في البيانات يتطلب مراجعة يدوية)', 409);
+				}
 				return attempt;
 			}
 
@@ -625,6 +719,398 @@ export class PayoutService {
 			}
 			throw new AppError(`لا يمكن تسجيل استرجاع التحويل — حالة المحاولة الحالية (${current.status}) لم تكن مكتملة`, 409);
 		});
+	}
+
+	/**
+	 * Payout P3-C: sets PayoutAttempt.payoutItemId ONLY when it is currently
+	 * null. Never overwrites an existing value, even with the identical
+	 * value's own write path (that's the idempotent no-op case below, not a
+	 * write at all). Respects the column's own @unique DB constraint —
+	 * genuinely never lets two different attempts end up racing to claim the
+	 * SAME payoutItemId (classified CONFLICT, never silently resolved).
+	 * Never creates a new attempt, never touches `status`.
+	 *
+	 * Real-PostgreSQL concurrency (adversarially re-verified, not just
+	 * mock-tested): no explicit isolationLevel is set here, matching every
+	 * other single-row conditional-update primitive in this class
+	 * (markAttemptAccepted/Completed/DefinitelyFailed/Reversed) — this is
+	 * safe, not an oversight. A single `UPDATE ... WHERE id = $1 AND
+	 * "payoutItemId" IS NULL` is atomic under Postgres regardless of
+	 * isolation level: row-level locking during the UPDATE itself guarantees
+	 * two concurrent writers targeting the SAME row can never both match —
+	 * whichever executes second re-evaluates its WHERE clause against the
+	 * now-committed row and correctly sees `payoutItemId` no longer NULL
+	 * (count 0). The follow-up `findUnique` inside the same transaction, run
+	 * under Postgres's default READ COMMITTED, takes a fresh per-statement
+	 * snapshot, so it correctly observes the winner's just-committed value —
+	 * never a stale read. For two DIFFERENT attempts racing to claim the
+	 * SAME payoutItemId value (a different scenario — different rows, so no
+	 * row-level lock serializes them against each other), the column's own
+	 * @unique index is Postgres's actual enforcement mechanism, surfaced
+	 * here as the caught P2002 below. SERIALIZABLE is deliberately NOT used
+	 * — it exists elsewhere in this file only where a multi-row aggregate
+	 * read (balance computation) needs snapshot isolation, which does not
+	 * apply to this single-row conditional write.
+	 */
+	private async persistPayoutItemId(attemptId: string, payoutItemId: string): Promise<'SET' | 'ALREADY_SET_SAME' | 'CONFLICT'> {
+		try {
+			return await prisma.$transaction(async tx => {
+				const result = await tx.payoutAttempt.updateMany({
+					where: { id: attemptId, payoutItemId: null },
+					data: { payoutItemId }
+				});
+				if (result.count === 1) return 'SET';
+
+				const current = await tx.payoutAttempt.findUnique({ where: { id: attemptId }, select: { payoutItemId: true } });
+				if (!current) throw new AppError('محاولة التحويل غير موجودة', 404);
+				if (current.payoutItemId === payoutItemId) return 'ALREADY_SET_SAME';
+				// A different payoutItemId is already durably recorded — never
+				// overwritten, never silently resolved.
+				return 'CONFLICT';
+			});
+		} catch (error) {
+			// A genuinely concurrent racer claiming the SAME payoutItemId first
+			// can surface as the column's own @unique constraint violation
+			// instead of our conditional WHERE simply matching zero rows —
+			// classified the same way: CONFLICT, never retried/overwritten.
+			if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return 'CONFLICT';
+			throw error;
+		}
+	}
+
+	/**
+	 * Payout P3-C: sets PayoutAttempt.payoutBatchId ONLY when it is currently
+	 * null — the safe persistence primitive for a payoutBatchId recovered via
+	 * recoverPayoutBySenderBatch(). Deliberately does NOT touch `status` at
+	 * all (see reconcilePayoutAttempt()'s own STEP 8/9 comment: identity
+	 * recovery must never, by itself, promote PENDING -> PROCESSING — that
+	 * would misuse markAttemptAccepted()'s own semantics for a fact
+	 * recovery never actually established).
+	 */
+	private async persistRecoveredPayoutBatchId(attemptId: string, payoutBatchId: string): Promise<'SET' | 'ALREADY_SET_SAME' | 'CONFLICT'> {
+		try {
+			return await prisma.$transaction(async tx => {
+				const result = await tx.payoutAttempt.updateMany({
+					where: { id: attemptId, payoutBatchId: null },
+					data: { payoutBatchId }
+				});
+				if (result.count === 1) return 'SET';
+
+				const current = await tx.payoutAttempt.findUnique({ where: { id: attemptId }, select: { payoutBatchId: true } });
+				if (!current) throw new AppError('محاولة التحويل غير موجودة', 404);
+				if (current.payoutBatchId === payoutBatchId) return 'ALREADY_SET_SAME';
+				return 'CONFLICT';
+			});
+		} catch (error) {
+			if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return 'CONFLICT';
+			throw error;
+		}
+	}
+
+	/**
+	 * Payout P3-C — CORE SAFETY RULE: exact item correlation, and ONLY exact
+	 * item correlation, using the strongest identifier available:
+	 *
+	 *  - If PayoutAttempt.payoutItemId is already known: require EXACTLY ONE
+	 *    returned item whose payoutItemId matches it AND whose own
+	 *    payoutBatchId matches the attempt's payoutBatchId (defense in depth
+	 *    — paypal.service.ts's own getPayoutBatch() already refuses to
+	 *    return a FOUND result with any item/batch id contradiction, but
+	 *    this is never trusted silently across the module boundary).
+	 *  - Otherwise: require EXACTLY ONE returned item whose senderItemId
+	 *    equals PayoutAttempt.id (the owner decision established back in
+	 *    P2-C: sender_item_id IS the PayoutAttempt's own id).
+	 *
+	 * Zero matches or MORE than one match are BOTH treated as "cannot prove
+	 * correlation" — null. Never items[0]. Never "only item in the array."
+	 * Never matched by batch id alone, transaction status, or array
+	 * position. Absence of proof is absence of proof, not a fallback
+	 * opportunity.
+	 */
+	private correlatePayoutItem(
+		attempt: { id: string; payoutItemId: string | null; payoutBatchId: string | null },
+		items: PaypalPayoutItemResult[]
+	): PaypalPayoutItemResult | null {
+		if (attempt.payoutItemId) {
+			const matches = items.filter(item => item.payoutItemId === attempt.payoutItemId && item.payoutBatchId === attempt.payoutBatchId);
+			return matches.length === 1 ? matches[0] : null;
+		}
+		const matches = items.filter(item => item.senderItemId === attempt.id);
+		return matches.length === 1 ? matches[0] : null;
+	}
+
+	/**
+	 * Payout P3-C: the ONE reconciliation entry point. Loads a PayoutAttempt
+	 * and its Withdrawal, validates local integrity, resolves a
+	 * payoutBatchId (recovering it via senderBatchId if genuinely missing
+	 * and safely within PayPal's documented window), calls
+	 * getPayoutBatch(), correlates the EXACT item belonging to this attempt,
+	 * and maps that item's transaction_status to the local state machine —
+	 * calling ONLY the existing, now-atomically-hardened
+	 * markAttemptCompleted()/markAttemptDefinitelyFailed()/
+	 * markAttemptReversed() primitives, never inventing a new write path.
+	 *
+	 * CORE SAFETY RULE: a financial state transition happens ONLY when the
+	 * exact PayPal item belonging to this exact attempt has been proven via
+	 * correlatePayoutItem() above. If correlation cannot be proven — for any
+	 * reason — this returns ADMIN_REVIEW and makes ZERO financial state
+	 * changes. The same applies to every ambiguous/unproven PayPal transport
+	 * outcome (UNKNOWN) and every local-validation failure.
+	 *
+	 * Only a genuinely missing attemptId is a thrown 404 (a caller error,
+	 * not a reconciliation finding) — every other outcome, including every
+	 * local-validation failure, is a returned ReconcilePayoutAttemptResult.
+	 *
+	 * NEVER, anywhere in this method: creates a WalletTransaction, debits or
+	 * credits provider balance, creates or mutates an Escrow, creates a new
+	 * Withdrawal, creates a new PayoutAttempt, or calls sendPayout()/
+	 * initializeSendPayout(). This method records external truth only.
+	 */
+	async reconcilePayoutAttempt(attemptId: string): Promise<ReconcilePayoutAttemptResult> {
+		const attempt = await prisma.payoutAttempt.findUnique({ where: { id: attemptId } });
+		if (!attempt) throw new AppError('محاولة التحويل غير موجودة', 404);
+
+		const withdrawal = await prisma.withdrawal.findUnique({ where: { id: attempt.withdrawalId } });
+		if (!withdrawal) throw new AppError('طلب السحب غير موجود', 404);
+
+		const withdrawalId = withdrawal.id;
+		// Post-adversarial-review: adminReview() (and every other return point
+		// below) always reports the ATTEMPT'S OWN current status via
+		// localStatus, defaulting to its status as read at the top of this
+		// call — accurate for every early return, since none of them mutate
+		// anything before returning.
+		const adminReview = (message: string, localStatus: PayoutAttemptStatus = attempt.status): ReconcilePayoutAttemptResult =>
+			({ outcome: 'ADMIN_REVIEW', attemptId, withdrawalId, message, localStatus });
+
+		// ── Local integrity validation — BEFORE any PayPal call ──
+		if (attempt.provider !== SUPPORTED_PAYOUT_PROVIDER) {
+			return adminReview('مزود الدفع لهذه المحاولة غير مدعوم للمطابقة التلقائية');
+		}
+		if (!attempt.senderBatchId) {
+			return adminReview('لا يوجد معرف دفعة مرسل (senderBatchId) لهذه المحاولة');
+		}
+		if (withdrawal.method !== SUPPORTED_PAYOUT_METHOD) {
+			return adminReview('طلب السحب ليس عبر PayPal — لا يمكن مطابقته تلقائياً');
+		}
+		if (withdrawal.currency !== SUPPORTED_PAYOUT_CURRENCY) {
+			return adminReview('عملة طلب السحب غير مدعومة لمطابقة تحويلات PayPal');
+		}
+		if (!withdrawal.paypalEmail || !PAYOUT_RECIPIENT_EMAIL_PATTERN.test(withdrawal.paypalEmail)) {
+			return adminReview('لا يوجد بريد PayPal صالح مسجل لهذا الطلب');
+		}
+		if (typeof withdrawal.amount !== 'number' || !Number.isFinite(withdrawal.amount) || withdrawal.amount <= 0) {
+			return adminReview('مبلغ طلب السحب غير صالح للمطابقة');
+		}
+
+		// ── Local terminal-state guards — never resurrected by reconciliation ──
+		// Deliberately short-circuit with ZERO PayPal call: these two states
+		// are already financially terminal LOCALLY, and this method's own
+		// terminal-guard invariant (never resurrect FAILED/REVERSED) makes any
+		// fresh PayPal check pointless — there is no transition it could ever
+		// justify from here. The message is explicit that no fresh check
+		// occurred, so this is never mistaken for a freshly-confirmed result.
+		if (attempt.status === PayoutAttemptStatus.FAILED) {
+			return { outcome: 'FAILED', attemptId, withdrawalId, message: 'محاولة التحويل فاشلة بالفعل محلياً — لم يتم إجراء تحقق جديد لدى PayPal', localStatus: attempt.status };
+		}
+		if (attempt.status === PayoutAttemptStatus.REVERSED) {
+			return { outcome: 'REVERSED', attemptId, withdrawalId, message: 'تم استرجاع هذا التحويل بالفعل محلياً — لم يتم إجراء تحقق جديد لدى PayPal', localStatus: attempt.status };
+		}
+		// Remaining eligible states: PENDING, PROCESSING, COMPLETED (COMPLETED
+		// must still flow through below — it's the ONLY state a later
+		// RETURNED/REFUNDED/REVERSED report can legitimately transition out of).
+
+		let payoutBatchId = attempt.payoutBatchId;
+
+		// ── STEP 8: missing payoutBatchId recovery ──
+		if (!payoutBatchId) {
+			if (attempt.status !== PayoutAttemptStatus.PENDING) {
+				// PROCESSING/COMPLETED without a payoutBatchId should be
+				// unreachable under normal operation (markAttemptAccepted()/
+				// markAttemptCompleted() both always set it) — a genuine
+				// data-integrity anomaly, not a case recovery was ever
+				// designed for.
+				return adminReview('حالة غير متسقة: محاولة غير معلّقة بدون معرف دفعة PayPal');
+			}
+
+			const ageMs = Date.now() - attempt.createdAt.getTime();
+			// Post-adversarial-review: a NEGATIVE age (attempt.createdAt in the
+			// future — clock skew or corrupted data) must never silently be
+			// treated as "safely within the window" merely because it fails the
+			// `>= 30 days` check. A future-dated createdAt is itself a
+			// data-integrity anomaly and is conservatively treated the same as
+			// an anomaly requiring manual review — zero PayPal recovery POST.
+			if (ageMs < 0) {
+				return adminReview('انحراف زمني: تاريخ إنشاء المحاولة في المستقبل — تعارض في البيانات يتطلب مراجعة يدوية قبل أي محاولة استرجاع');
+			}
+			if (ageMs >= SENDER_BATCH_RECOVERY_WINDOW_MS) {
+				return { outcome: 'RECOVERY_WINDOW_EXPIRED', attemptId, withdrawalId, message: 'تجاوزت المحاولة النافذة الزمنية الآمنة لإعادة إرسال طلب التحويل — تتطلب مراجعة يدوية', localStatus: attempt.status };
+			}
+
+			const recovery = await paypalService.recoverPayoutBySenderBatch({
+				senderBatchId: attempt.senderBatchId,
+				senderItemId: attempt.id,
+				recipientEmail: withdrawal.paypalEmail,
+				amount: withdrawal.amount
+			});
+
+			if (recovery.outcome === 'UNKNOWN') {
+				return { outcome: 'UNKNOWN', attemptId, withdrawalId, message: 'تعذر التحقق من حالة التحويل لدى PayPal — لم يتغير أي شيء', localStatus: attempt.status };
+			}
+
+			// RECOVERED is identity ONLY — never treated as acceptance/success.
+			// Persisted via the dedicated, status-untouching primitive, never
+			// markAttemptAccepted().
+			const persisted = await this.persistRecoveredPayoutBatchId(attempt.id, recovery.payoutBatchId);
+			if (persisted === 'CONFLICT') {
+				return adminReview('تعارض في معرف دفعة PayPal المسترجع مع قيمة مختلفة مسجلة مسبقاً — يتطلب مراجعة يدوية');
+			}
+			payoutBatchId = recovery.payoutBatchId;
+		}
+
+		// ── GET the batch and correlate the EXACT item ──
+		const batchResult = await paypalService.getPayoutBatch(payoutBatchId);
+		if (batchResult.outcome === 'UNKNOWN') {
+			return { outcome: 'UNKNOWN', attemptId, withdrawalId, message: 'تعذر الحصول على حالة دفعة التحويل من PayPal — لم يتغير أي شيء', localStatus: attempt.status };
+		}
+
+		const item = this.correlatePayoutItem(
+			{ id: attempt.id, payoutItemId: attempt.payoutItemId, payoutBatchId },
+			batchResult.batch.items
+		);
+		if (!item) {
+			return adminReview('تعذر إثبات مطابقة دقيقة لعنصر التحويل الخاص بهذه المحاولة — يتطلب مراجعة يدوية');
+		}
+
+		// Persist a newly-discovered payoutItemId as soon as correlation is
+		// proven, regardless of the item's own transaction_status — future
+		// reconciliation runs (and P3-D's webhook correlation) benefit from
+		// the strongest identifier being durably recorded as early as safely
+		// possible.
+		if (item.payoutItemId && !attempt.payoutItemId) {
+			const persisted = await this.persistPayoutItemId(attempt.id, item.payoutItemId);
+			if (persisted === 'CONFLICT') {
+				return adminReview('تعارض في معرف عنصر التحويل (payoutItemId) مع قيمة مختلفة مسجلة مسبقاً — يتطلب مراجعة يدوية');
+			}
+		}
+
+		// ── STEP 7 guard, post-adversarial-review hardening: a COMPLETED
+		// attempt may ONLY ever move to REVERSED (via RETURNED/REFUNDED/
+		// REVERSED) or stay COMPLETED (SUCCESS is idempotent). Every other
+		// signal — FAILED/PENDING/UNCLAIMED/ONHOLD/BLOCKED/unknown — is a
+		// genuine CONTRADICTION (PayPal is reporting something inconsistent
+		// with a payout this system durably recorded as already succeeded),
+		// NOT a normal "ignore and report clean" case. The DB was already
+		// safe (no primitive is ever called for these), but the REPORTED
+		// result must not mask that contradiction behind a plain COMPLETED —
+		// it goes through the SAME adminReview() path as every other anomaly,
+		// with localStatus correctly showing COMPLETED (the true, unchanged
+		// DB state) alongside the ADMIN_REVIEW outcome that flags the
+		// contradiction itself.
+		const isReversalClass = item.transactionStatus === 'RETURNED' || item.transactionStatus === 'REFUNDED' || item.transactionStatus === 'REVERSED';
+		if (attempt.status === PayoutAttemptStatus.COMPLETED && item.transactionStatus !== 'SUCCESS' && !isReversalClass) {
+			return adminReview(
+				'تناقض: المحاولة مكتملة بالفعل محلياً لكن PayPal أبلغت عن حالة غير حاسمة أو متعارضة لنفس العنصر — لم يتم أي تغيير ويتطلب مراجعة يدوية',
+				PayoutAttemptStatus.COMPLETED
+			);
+		}
+
+		// ── STEP 6: status mapping for the EXACT correlated item only ──
+		switch (item.transactionStatus) {
+			case 'PENDING':
+				// Do NOT blindly promote PENDING -> PROCESSING merely because a
+				// GET succeeded — only initializeSendPayout()/markAttemptAccepted()
+				// may ever establish PROCESSING. localStatus reports the
+				// attempt's REAL unchanged status (PENDING or PROCESSING,
+				// whichever it already was) — STILL_PROCESSING must never be
+				// misread as "the DB row is in PROCESSING."
+				return { outcome: 'STILL_PROCESSING', attemptId, withdrawalId, message: 'التحويل ما زال قيد المعالجة لدى PayPal', localStatus: attempt.status };
+
+			case 'SUCCESS':
+				return this.applyReconciliationCompletion(attempt.id, item.payoutItemId, withdrawalId, attempt.status);
+
+			case 'FAILED':
+				return this.applyReconciliationFailure(attempt.id, withdrawalId, attempt.status);
+
+			case 'UNCLAIMED':
+				return { outcome: 'ACTION_REQUIRED', attemptId, withdrawalId, message: 'بانتظار استلام المستفيد للتحويل — لم يتغير أي شيء محلياً', localStatus: attempt.status };
+
+			case 'ONHOLD':
+				return adminReview('التحويل قيد المراجعة من قبل PayPal — يتطلب مراجعة يدوية');
+
+			case 'BLOCKED':
+				// Conservative first cut, per explicit instruction: never
+				// automatically reopen the Withdrawal here unless officially-
+				// verified semantics prove funds definitely never moved — that
+				// proof does not exist in this project yet.
+				return adminReview('التحويل محظور من قبل PayPal — يتطلب مراجعة يدوية قبل أي إجراء');
+
+			case 'RETURNED':
+			case 'REFUNDED':
+			case 'REVERSED':
+				return this.applyReconciliationReversal(attempt.id, attempt.status, withdrawalId, item.transactionStatus);
+
+			default:
+				// Unknown/missing transaction status — ZERO financial state
+				// changes, never guessed.
+				return { outcome: 'UNKNOWN', attemptId, withdrawalId, message: 'حالة عنصر التحويل من PayPal غير معروفة — لم يتغير أي شيء', localStatus: attempt.status };
+		}
+	}
+
+	/** SUCCESS mapping: markAttemptCompleted() already handles idempotency and terminal-guard rejection on its own; anomalies are surfaced as ADMIN_REVIEW, never an uncaught exception from reconcilePayoutAttempt(). */
+	private async applyReconciliationCompletion(attemptId: string, payoutItemId: string | undefined, withdrawalId: string, statusBeforeThisCall: PayoutAttemptStatus): Promise<ReconcilePayoutAttemptResult> {
+		try {
+			await this.markAttemptCompleted(attemptId, { payoutItemId });
+			return { outcome: 'COMPLETED', attemptId, withdrawalId, message: 'تم تأكيد اكتمال التحويل من PayPal', localStatus: PayoutAttemptStatus.COMPLETED };
+		} catch (error) {
+			if (error instanceof AppError) {
+				// The transition never committed (see markAttemptCompleted()'s
+				// own atomicity guard) — localStatus is whatever it was BEFORE
+				// this call, never falsely reported as COMPLETED.
+				return { outcome: 'ADMIN_REVIEW', attemptId, withdrawalId, message: 'تعذر تسجيل اكتمال التحويل محلياً — يتطلب مراجعة يدوية', localStatus: statusBeforeThisCall };
+			}
+			throw error;
+		}
+	}
+
+	/** FAILED mapping: only ever reached for the documented "payment failed / funds not deducted" semantic — markAttemptDefinitelyFailed() re-opens the Withdrawal to APPROVED as usual. */
+	private async applyReconciliationFailure(attemptId: string, withdrawalId: string, statusBeforeThisCall: PayoutAttemptStatus): Promise<ReconcilePayoutAttemptResult> {
+		try {
+			await this.markAttemptDefinitelyFailed(attemptId, 'PayPal: FAILED (funds not deducted)');
+			return { outcome: 'FAILED', attemptId, withdrawalId, message: 'فشل التحويل لدى PayPal ولم يتم خصم أي مبلغ', localStatus: PayoutAttemptStatus.FAILED };
+		} catch (error) {
+			if (error instanceof AppError) {
+				return { outcome: 'ADMIN_REVIEW', attemptId, withdrawalId, message: 'تعذر تسجيل فشل التحويل محلياً — يتطلب مراجعة يدوية', localStatus: statusBeforeThisCall };
+			}
+			throw error;
+		}
+	}
+
+	/**
+	 * RETURNED/REFUNDED/REVERSED mapping: financially safe ONLY when the
+	 * local attempt is already COMPLETED (money genuinely moved once,
+	 * durably recorded). If PayPal reports a reversal-class status while the
+	 * local attempt is still PENDING/PROCESSING, this NEVER manufactures an
+	 * intermediate SUCCESS to justify calling markAttemptReversed() — that
+	 * would let a PROCESSING attempt skip straight to REVERSED without ever
+	 * having durably recorded the success in between, corrupting the
+	 * attempt's own history. Instead: ADMIN_REVIEW, zero transition.
+	 */
+	private async applyReconciliationReversal(attemptId: string, currentStatus: PayoutAttemptStatus, withdrawalId: string, paypalTerminalStatus: string): Promise<ReconcilePayoutAttemptResult> {
+		if (currentStatus !== PayoutAttemptStatus.COMPLETED) {
+			return {
+				outcome: 'ADMIN_REVIEW', attemptId, withdrawalId, localStatus: currentStatus,
+				message: 'أبلغت PayPal عن استرجاع للتحويل لكن المحاولة المحلية لم تكن مكتملة بعد — يتطلب مراجعة يدوية ولن يتم تسجيل نجاح وهمي'
+			};
+		}
+		try {
+			await this.markAttemptReversed(attemptId, paypalTerminalStatus);
+			return { outcome: 'REVERSED', attemptId, withdrawalId, message: 'تم استرجاع التحويل من قبل PayPal بعد اكتماله سابقاً', localStatus: PayoutAttemptStatus.REVERSED };
+		} catch (error) {
+			if (error instanceof AppError) {
+				return { outcome: 'ADMIN_REVIEW', attemptId, withdrawalId, message: 'تعذر تسجيل استرجاع التحويل محلياً — يتطلب مراجعة يدوية', localStatus: PayoutAttemptStatus.COMPLETED };
+			}
+			throw error;
+		}
 	}
 }
 
