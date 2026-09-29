@@ -4,6 +4,7 @@ import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { LEVEL_MATRIX } from '../utils/progression-calculators';
+import { findActiveServicePurchases } from '../utils/active-purchase.util';
 
 // Phase 3E.1: the exact Prisma select shape shared by getMarketplaceModels
 // and getMarketplaceModelById for a service's provider — includes
@@ -785,6 +786,23 @@ export class MarketplaceService {
 			await prisma.marketplaceFavorite.deleteMany({ where: { userId, serviceId } });
 		}
 		return { serviceId, favorite };
+	}
+
+	/**
+	 * Phase 4 — read-back for duplicate-purchase prevention on the offer page.
+	 * Same definition of "active purchase" the checkout gates enforce
+	 * (utils/active-purchase.util.ts#findActiveServicePurchases): a contract-backed
+	 * project for this service that has not reached a terminal contract state.
+	 */
+	async getMyPurchaseStatus(userId: string, serviceId: string) {
+		const [active] = await findActiveServicePurchases(prisma, userId, [serviceId]);
+		return {
+			serviceId,
+			active: Boolean(active),
+			projectId: active?.id || null,
+			projectStatus: active?.status || null,
+			contractStatus: active?.contract?.status || null
+		};
 	}
 
 	async requestMarketplaceService(userId: string, serviceId: string, data: any) {

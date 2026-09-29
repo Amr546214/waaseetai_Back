@@ -1200,7 +1200,26 @@ Return JSON schema:
 			: await prisma.projectProposal.findFirst({ where: { id: offerId, projectId: requestId }, include: { milestones: true } });
 
 		if (!legacy && !canonical) throw new AppError('العرض المحدد غير موجود أو لا يتبع هذا الطلب', 404);
+		if (legacy?.status === ProposalStatus.CANCELLED || canonical?.status === ProposalStatus.CANCELLED) {
+			throw new AppError('هذا العرض مسحوب ولا يمكن اختياره', 409);
+		}
 		const providerId = canonical?.providerId || legacy!.providerId;
+
+		// Phase 4 — once the client has signed + funded escrow (contract moved
+		// past PENDING_CLIENT_SIGNATURE, escrow HELD), the selection is frozen.
+		// Previously the upsert below would silently reset a funded contract back
+		// to PENDING_CLIENT_SIGNATURE (possibly for a different provider) while
+		// the client's money stayed HELD against it — and the follow-up deposit
+		// then collided on the same ESCROW-<contractId> reference, stranding the
+		// funds. Advisory pre-check here; the authoritative, race-safe gate is
+		// the conditional updateMany inside the transaction below.
+		const [existingContract, heldEscrow] = await Promise.all([
+			prisma.contract.findUnique({ where: { projectId: requestId }, select: { id: true, status: true } }),
+			prisma.escrow.findUnique({ where: { projectId: requestId }, select: { status: true } })
+		]);
+		if ((existingContract && existingContract.status !== ContractStatus.PENDING_CLIENT_SIGNATURE) || heldEscrow?.status === 'HELD') {
+			throw new AppError('تم توقيع العقد وتمويل الضمان لهذا الطلب، ولا يمكن تغيير العرض المختار', 409);
+		}
 		const price = Number(canonical?.totalPrice ?? legacy?.price ?? 0);
 		const durationDays = canonical?.deliveryDays ?? legacy?.deliveryDays ?? 0;
 		if (price <= 0 || durationDays <= 0) throw new AppError('بيانات العرض المالية أو الزمنية غير صالحة', 422);
@@ -1215,6 +1234,24 @@ Return JSON schema:
 		};
 
 		const contract = await prisma.$transaction(async tx => {
+			// Authoritative gate (row lock on the contract / request rows): only a
+			// contract still awaiting the client's signature may be re-pointed, and
+			// the request itself must still be in a selectable state. A concurrent
+			// depositEscrow() that already moved the contract forward makes this
+			// match zero rows and the whole selection rolls back untouched.
+			const requestGate = await tx.clientRequest.updateMany({
+				where: { id: requestId, status: { in: [RequestStatus.OPEN, RequestStatus.PENDING_SIGNATURE] } },
+				data: { status: RequestStatus.PENDING_SIGNATURE }
+			});
+			if (requestGate.count !== 1) throw new AppError('لا يمكن اختيار عرض لهذا الطلب في حالته الحالية', 409);
+			const lockedContract = await tx.contract.findUnique({ where: { projectId: requestId }, select: { id: true } });
+			if (lockedContract) {
+				const reopenable = await tx.contract.updateMany({
+					where: { id: lockedContract.id, status: ContractStatus.PENDING_CLIENT_SIGNATURE, clientSignedAt: null },
+					data: { status: ContractStatus.PENDING_CLIENT_SIGNATURE }
+				});
+				if (reopenable.count !== 1) throw new AppError('تم توقيع العقد وتمويل الضمان لهذا الطلب، ولا يمكن تغيير العرض المختار', 409);
+			}
 			await tx.proposal.updateMany({
 				where: { clientRequestId: requestId, providerId },
 				data: { status: ProposalStatus.PENDING_SIGNATURE }
@@ -1332,7 +1369,21 @@ Return JSON schema:
 			where: { projectId: requestId, clientId: userId, status: ContractStatus.PENDING_CLIENT_SIGNATURE }
 		});
 		if (!contractBeforePayment) throw new AppError('العقد غير جاهز لتوقيع العميل أو تم توقيعه مسبقاً', 409);
-		if (offerId !== contractBeforePayment.offerId) throw new AppError('العرض لا يطابق العقد المختار', 409);
+		// Phase 4 — selectOffer() stores the CANONICAL ProjectProposal id on
+		// Contract.offerId whenever one exists, while the client UI (request
+		// details → contract → deposit) carries the legacy Proposal mirror id
+		// (the only proposal ids GET /client/my-requests/:id returns). The old
+		// strict equality therefore rejected every normal deposit with 409.
+		// Accept either id, but only when it is the mirror of the SAME provider's
+		// offer on THIS request that the contract was frozen for — the exact
+		// rule signContract() above already applies.
+		if (offerId !== contractBeforePayment.offerId) {
+			const mirroredOffer = await prisma.proposal.findFirst({
+				where: { id: offerId, clientRequestId: requestId, providerId: contractBeforePayment.providerId, status: ProposalStatus.PENDING_SIGNATURE },
+				select: { id: true }
+			});
+			if (!mirroredOffer) throw new AppError('العرض لا يطابق العقد المختار', 409);
+		}
 
 		// 1. Verify OTP
 		const otpRecord = await prisma.otpVerification.findFirst({
@@ -1365,6 +1416,30 @@ Return JSON schema:
 		const { bidAmount, providerUserId, providerEmail, escrowAmount, projectName, clientName, userEmail } = await prisma.$transaction(async (tx) => {
 			// a. Mark OTP as used
 			await tx.otpVerification.delete({ where: { id: otpRecord.id } });
+
+			// a2. Authoritative contract transition (Phase 4). Guarded on the exact
+			// commercial snapshot read above (status, provider, price, terms
+			// version), so a concurrent selectOffer() re-pointing the contract, or a
+			// second deposit racing this one, matches zero rows and rolls back the
+			// whole transaction BEFORE any wallet debit / escrow write below.
+			const signatureHash = createHash('sha256')
+				.update(`${contractBeforePayment.id}:${userId}:${otpRecord.id}:${contractBeforePayment.termsVersion}`)
+				.digest('hex');
+			const clientSigned = await tx.contract.updateMany({
+				where: {
+					id: contractBeforePayment.id,
+					status: ContractStatus.PENDING_CLIENT_SIGNATURE,
+					providerId: contractBeforePayment.providerId,
+					price: contractBeforePayment.price,
+					termsVersion: contractBeforePayment.termsVersion
+				},
+				data: {
+					clientSignedAt: new Date(),
+					clientSignatureHash: signatureHash,
+					status: ContractStatus.PENDING_PROVIDER_SIGNATURE
+				}
+			});
+			if (clientSigned.count !== 1) throw new AppError('تغيّر العقد أو تم توقيعه وتمويله مسبقاً — لم يتم خصم أي مبلغ', 409);
 
 			// b. Accept Proposal and Update Project Status
 			const proposal = await tx.proposal.findFirst({
@@ -1506,17 +1581,8 @@ Return JSON schema:
 				}
 			});
 
-			const signatureHash = createHash('sha256')
-				.update(`${contractBeforePayment.id}:${userId}:${otpRecord.id}:${contractBeforePayment.termsVersion}`)
-				.digest('hex');
-			await tx.contract.update({
-				where: { id: contractBeforePayment.id },
-				data: {
-					clientSignedAt: new Date(),
-					clientSignatureHash: signatureHash,
-					status: ContractStatus.PENDING_PROVIDER_SIGNATURE
-				}
-			});
+			// (Contract client-signature transition already applied, guarded, at
+			// step a2 above.)
 
 			const user = await tx.user.findUnique({ where: { id: userId } });
 			const req = await tx.clientRequest.findUnique({ where: { id: requestId } }) || await tx.project.findUnique({ where: { id: requestId } });
@@ -1564,11 +1630,14 @@ Return JSON schema:
 						type: 'OFFER_ACCEPTED',
 						category: 'OFFERS',
 						// sign-contract resolves its offer via OffersService.getOfferById,
-						// which matches on the Proposal id (offerId) — not requestId/
-						// projectId, and there is no /projects/:id/contract route.
-						actionUrl: `/provider-overview/offers/${offerId}/sign-contract`,
+						// which searches GET /provider/offers — a list of CANONICAL
+						// ProjectProposal ids. Phase 4: use the contract's frozen
+						// canonical offer id (falls back to the submitted id only for a
+						// legacy-only proposal), not the client-side legacy mirror id,
+						// which that list never contains.
+						actionUrl: `/provider-overview/offers/${contractBeforePayment.offerId || offerId}/sign-contract`,
 						actionText: 'عرض وتوقيع العقد',
-						metadata: { offerId, requestId }
+						metadata: { offerId: contractBeforePayment.offerId || offerId, requestId }
 					}
 				});
 			}

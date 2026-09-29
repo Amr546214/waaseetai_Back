@@ -4,6 +4,7 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
+import { DUPLICATE_PURCHASE_MESSAGE, findActiveServicePurchases } from '../utils/active-purchase.util';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { LEVEL_MATRIX } from '../utils/progression-calculators';
 
@@ -168,6 +169,8 @@ export class CartCheckoutService {
   async addItem(userId: string, input: { modelId: string; packageId?: string; savedForLater?: boolean }) {
     const service = await prisma.serviceCatalog.findFirst({ where: { id: input.modelId, ...serviceWhere } });
     if (!service) throw new AppError('الخدمة غير موجودة أو غير متاحة للطلب', 404);
+    if (service.providerId === userId) throw new AppError('لا يمكنك شراء خدمتك الخاصة', 400);
+    if ((await findActiveServicePurchases(prisma, userId, [service.id])).length) throw new AppError(DUPLICATE_PURCHASE_MESSAGE, 409);
     const cart = await prisma.cart.upsert({ where: { userId }, create: { userId }, update: {} });
     await prisma.cartItem.upsert({
       where: { cartId_serviceId: { cartId: cart.id, serviceId: service.id } },
@@ -211,7 +214,9 @@ export class CartCheckoutService {
     const services = await prisma.serviceCatalog.findMany({ where: { id: { in: modelIds }, ...serviceWhere }, select: { id: true, totalAmount: true } });
     if (services.length !== modelIds.length) throw new AppError('كوبون غير صالح', 400);
     const eligibleIds = new Set(coupon.services.map(item => item.serviceId));
-    const eligibleServices = coupon.services.length ? services.filter(service => eligibleIds.has(service.id)) : services;
+    const excludedIds = new Set(coupon.excludedServiceIds ?? []);
+    const inScopeServices = coupon.services.length ? services.filter(service => eligibleIds.has(service.id)) : services;
+    const eligibleServices = excludedIds.size ? inScopeServices.filter(service => !excludedIds.has(service.id)) : inScopeServices;
     const subtotal = eligibleServices.reduce((sum, service) => sum + Number(service.totalAmount), 0);
     if (!subtotal || (coupon.minimumAmount !== null && subtotal < coupon.minimumAmount)) throw new AppError('الخدمات لا تستوفي شروط الكوبون', 400);
     let discountAmount = coupon.discountType === 'percentage' ? subtotal * coupon.discountValue / 100 : Math.min(subtotal, coupon.discountValue);
@@ -229,6 +234,11 @@ export class CartCheckoutService {
     if (new Set(ids).size !== ids.length) throw new AppError('لا يمكن تكرار الخدمة داخل الطلب', 400);
     const services = await prisma.serviceCatalog.findMany({ where: { id: { in: ids }, ...serviceWhere }, include: serviceInclude });
     if (services.length !== ids.length) throw new AppError('إحدى الخدمات غير موجودة أو غير متاحة للطلب', 400);
+    if (services.some(service => service.providerId === userId)) throw new AppError('لا يمكنك شراء خدمتك الخاصة', 400);
+    // Phase 4 — advisory duplicate-purchase gate at order creation (the
+    // authoritative, race-safe one is inside confirmPayment()'s transaction).
+    const alreadyActive = await findActiveServicePurchases(prisma, userId, ids);
+    if (alreadyActive.length) throw new AppError(DUPLICATE_PURCHASE_MESSAGE, 409, alreadyActive.map(p => ({ serviceId: p.serviceCatalogId, projectId: p.id })));
     const byId = new Map(services.map(service => [service.id, service]));
     const subtotal = services.reduce((sum, service) => sum + Number(service.totalAmount), 0);
     let discount = 0; let couponId: string | undefined; let couponCode: string | undefined; let couponDiscountType: string | undefined; let couponDiscountValue: number | undefined;
@@ -343,6 +353,13 @@ export class CartCheckoutService {
       ? await prisma.serviceStage.findMany({ where: { serviceId: { in: serviceIds } }, orderBy: { stepOrder: 'asc' } })
       : [];
     const projectIds = await prisma.$transaction(async tx => {
+      // Phase 4 — authoritative order transition FIRST (row lock on the
+      // order): a second concurrent confirm for the same order blocks here,
+      // then re-evaluates against the committed PAID row and matches zero rows
+      // — before any debit. Replaces the former unconditional
+      // order.update(PAID) at the end of this transaction.
+      const orderGate = await tx.order.updateMany({ where: { id: order.id, userId, status: OrderStatus.PENDING_PAYMENT }, data: { status: OrderStatus.PAID } });
+      if (orderGate.count !== 1) throw new AppError('تم تأكيد دفع هذا الطلب بالفعل من جلسة أخرى', 409);
       // Wallet-only internal purchasing — the ONE authoritative, race-safe
       // gate (never trust initPayment()'s earlier advisory check, and never
       // trust the frontend): a conditional updateMany guarded on
@@ -361,6 +378,15 @@ export class CartCheckoutService {
           shortfall: Math.max(0, Math.round((order.total - available) * 100) / 100)
         }]);
       }
+      // Phase 4 — authoritative duplicate-purchase gate. Placed AFTER the
+      // wallet debit on purpose: that guarded UPDATE takes this user's row
+      // lock, so two different orders for the same service confirmed
+      // concurrently by the same client are serialized here, and the second
+      // one's (READ COMMITTED, fresh-snapshot) query sees the first one's
+      // committed contract-backed project. Throwing rolls back the debit, the
+      // order transition and everything else — nothing is charged.
+      const duplicate = await findActiveServicePurchases(tx, userId, serviceIds);
+      if (duplicate.length) throw new AppError(DUPLICATE_PURCHASE_MESSAGE, 409, duplicate.map(p => ({ serviceId: p.serviceCatalogId, projectId: p.id })));
       try {
         await tx.walletTransaction.create({ data: { userId, type: 'ORDER_PAYMENT', amount: -order.total, currency: 'USD', status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: context.paymentReference, description: `دفع الطلب ${order.orderNumber}`, metadata: { orderId: order.id } } });
       } catch (error) {
@@ -412,7 +438,11 @@ export class CartCheckoutService {
 
         createdProjectIds.push(project.id);
       }
-      await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.PAID } });
+      // (Order PENDING_PAYMENT -> PAID already applied, guarded, at the top
+      // of this transaction.) Phase 4: purchased services leave the server
+      // cart in the same transaction, so the cart can't be re-checked-out
+      // into a second purchase if the frontend's best-effort clearCart() fails.
+      if (serviceIds.length) await tx.cartItem.deleteMany({ where: { cart: { userId }, serviceId: { in: serviceIds } } });
       await tx.otpVerification.delete({ where: { id: otp.id } });
       return createdProjectIds;
     });

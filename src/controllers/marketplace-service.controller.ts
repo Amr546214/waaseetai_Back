@@ -118,6 +118,15 @@ export class MarketplaceServiceController {
 		}
 	}
 
+	async getMyPurchaseStatus(req: Request, res: Response) {
+		try {
+			const data = await marketplaceService.getMyPurchaseStatus(req.user!.id, req.params.id as string);
+			return res.status(200).json({ success: true, data }) as any;
+		} catch (error: any) {
+			return res.status(400).json({ success: false, error: error.message }) as any;
+		}
+	}
+
 	async requestService(req: Request, res: Response) {
 		try {
 			const data = await marketplaceService.requestMarketplaceService(req.user!.id, req.params.id as string, req.body);

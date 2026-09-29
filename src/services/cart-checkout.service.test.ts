@@ -175,6 +175,7 @@ function createOrderMockPrisma(t: TestContext, service: any) {
 
   const prismaMock: any = {
     serviceCatalog: { findMany: async () => [service] },
+    project: { findMany: async () => [] },
     $transaction: async (fn: any) => fn(tx)
   };
 
@@ -345,7 +346,7 @@ test('initPayment: an insufficient balance is rejected with a 402 and exact requ
 
 // --- confirmPayment(): the authoritative wallet debit -----------------------
 
-function createConfirmMockPrisma(t: TestContext, opts: { order: any; walletBalance: number; services?: any[] }) {
+function createConfirmMockPrisma(t: TestContext, opts: { order: any; walletBalance: number; services?: any[]; activePurchases?: any[] }) {
   const users: any[] = [{ id: 'user-1', walletBalance: opts.walletBalance }];
   const walletTransactions: any[] = [];
   let orderUpdated: any = null;
@@ -361,11 +362,17 @@ function createConfirmMockPrisma(t: TestContext, opts: { order: any; walletBalan
     walletTransaction: { create: t.mock.fn(async (args: any) => { walletTransactions.push(args.data); return args.data; }) },
     coupon: { findUnique: async () => null, updateMany: async () => ({ count: 0 }) },
     couponRedemption: { count: async () => 0, create: async () => ({}) },
-    project: { create: async (args: any) => ({ id: `project-${args.data.title}`, ...args.data }) },
     contract: { create: async (args: any) => ({ id: 'contract-1', ...args.data }) },
     escrow: { create: t.mock.fn(async (args: any) => args.data) },
     projectStage: { create: async () => ({}), createMany: async () => ({}) },
-    order: { update: async (args: any) => { orderUpdated = args.data; return args.data; } },
+    order: {
+      updateMany: t.mock.fn(async (args: any) => {
+        if (orderUpdated || args.where.status !== 'PENDING_PAYMENT' || opts.order.status !== 'PENDING_PAYMENT') return { count: 0 };
+        orderUpdated = args.data; return { count: 1 };
+      })
+    },
+    project: { create: async (args: any) => ({ id: `project-${args.data.title}`, ...args.data }), findMany: t.mock.fn(async () => opts.activePurchases || []) },
+    cartItem: { deleteMany: t.mock.fn(async () => ({ count: 1 })) },
     otpVerification: { delete: async () => ({}) }
   };
 
@@ -376,7 +383,18 @@ function createConfirmMockPrisma(t: TestContext, opts: { order: any; walletBalan
       update: async () => ({})
     },
     serviceStage: { findMany: async () => opts.services || [] },
-    $transaction: async (fn: any) => fn(tx)
+    // Rollback-on-throw for the order transition + wallet state, mirroring a
+    // real ROLLBACK (the order PENDING_PAYMENT -> PAID gate now runs first in
+    // the transaction, so a later failure must undo it, as Postgres would).
+    $transaction: async (fn: any) => {
+      const orderSnapshot = orderUpdated;
+      const usersSnapshot = users.map(u => ({ ...u }));
+      try { return await fn(tx); } catch (error) {
+        orderUpdated = orderSnapshot;
+        users.length = 0; users.push(...usersSnapshot);
+        throw error;
+      }
+    }
   };
 
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
@@ -385,7 +403,7 @@ function createConfirmMockPrisma(t: TestContext, opts: { order: any; walletBalan
   return { users, walletTransactions, tx, getOrderUpdated: () => orderUpdated };
 }
 
-async function loadServiceForConfirm(t: TestContext, opts: { order: any; walletBalance: number; services?: any[] }) {
+async function loadServiceForConfirm(t: TestContext, opts: { order: any; walletBalance: number; services?: any[]; activePurchases?: any[] }) {
   const mocks = createConfirmMockPrisma(t, opts);
   const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { cartCheckoutService } = await import(moduleUrl);
@@ -449,11 +467,12 @@ test('confirmPayment: two concurrent confirmations for the same user against a b
     walletTransaction: { create: t.mock.fn(async (args: any) => { walletTransactions.push(args.data); return args.data; }) },
     coupon: { findUnique: async () => null, updateMany: async () => ({ count: 0 }) },
     couponRedemption: { count: async () => 0, create: async () => ({}) },
-    project: { create: async (args: any) => ({ id: `project-${args.data.title}`, ...args.data }) },
+    project: { create: async (args: any) => ({ id: `project-${args.data.title}`, ...args.data }), findMany: async () => [] },
     contract: { create: async (args: any) => ({ id: 'contract-1', ...args.data }) },
     escrow: { create: t.mock.fn(async (args: any) => args.data) },
     projectStage: { create: async () => ({}), createMany: async () => ({}) },
-    order: { update: async (args: any) => args.data },
+    order: { updateMany: async () => ({ count: 1 }) },
+    cartItem: { deleteMany: async () => ({ count: 0 }) },
     otpVerification: { delete: async () => ({}) }
   };
   const ordersById: Record<string, any> = { 'order-A': orderA, 'order-B': orderB };
@@ -532,11 +551,16 @@ test('confirmPayment: two concurrent confirmations for the SAME order (same paym
     walletTransaction: { create: createWalletTransaction },
     coupon: { findUnique: async () => null, updateMany: async () => ({ count: 0 }) },
     couponRedemption: { count: async () => 0, create: async () => ({}) },
-    project: { create: async (args: any) => ({ id: `project-${Math.random()}`, ...args.data }) },
+    project: { create: async (args: any) => ({ id: `project-${Math.random()}`, ...args.data }), findMany: async () => [] },
     contract: { create: async (args: any) => ({ id: `contract-${Math.random()}`, ...args.data }) },
     escrow: { create: t.mock.fn(async (args: any) => { escrows.push(args.data); return args.data; }) },
     projectStage: { create: async () => ({}), createMany: async () => ({}) },
-    order: { update: async (args: any) => { Object.assign(order, args.data); return order; } },
+    // Phase 4: the order transition is now the first, guarded statement.
+    order: { updateMany: async (args: any) => {
+      if (order.status !== args.where.status) return { count: 0 };
+      Object.assign(order, args.data); return { count: 1 };
+    } },
+    cartItem: { deleteMany: async () => ({ count: 0 }) },
     otpVerification: { delete: async () => ({}) }
   };
 
@@ -617,4 +641,96 @@ test('confirmPayment: two concurrent confirmations for the SAME order (same paym
   assert.equal(walletTransactions.length, 1, 'exactly one WalletTransaction persists');
   assert.equal(escrows.length, 1, 'exactly one Project/Contract/Escrow set persists — the loser\'s own set was rolled back');
   assert.equal(order.status, 'PAID', 'the order ends PAID exactly once');
+});
+
+// --- Phase 4: duplicate-purchase prevention ----------------------------------
+// "After buying a marketplace project I went back and bought it again while it
+// was still under execution." A client with a contract-backed, non-terminal
+// project for a service must not be able to add/order/pay for it again.
+
+const ACTIVE_PURCHASE = { id: 'project-existing', serviceCatalogId: 'service-1', title: 'Service', status: 'IN_PROGRESS', contract: { status: 'ACTIVE' } };
+
+test('Phase 4 confirmPayment: an existing active purchase of the same service rejects 409 — wallet NOT debited, no escrow, order NOT marked PAID', async (t) => {
+  const order = makeOrderForConfirm();
+  const { cartCheckoutService, users, walletTransactions, tx, getOrderUpdated } = await loadServiceForConfirm(t, { order, walletBalance: 250, activePurchases: [ACTIVE_PURCHASE] });
+
+  const error: any = await cartCheckoutService.confirmPayment('user-1', 'order-1', '111111').catch((e: any) => e);
+
+  assert.equal(error.statusCode, 409);
+  assert.match(String(error.message), /قيد التنفيذ/);
+  assert.equal(users[0].walletBalance, 250, 'the in-transaction debit is rolled back');
+  assert.equal(walletTransactions.length, 0);
+  assert.equal(tx.escrow.create.mock.callCount(), 0);
+  assert.equal(getOrderUpdated(), null, 'order transition rolled back');
+  // The gate queries exactly this client + these services + non-terminal contracts.
+  const where = tx.project.findMany.mock.calls[0].arguments[0].where;
+  assert.equal(where.clientId, 'user-1');
+  assert.deepEqual(where.serviceCatalogId, { in: ['service-1'] });
+  assert.deepEqual(where.contract.status.in.sort(), ['ACTIVE', 'DISPUTED', 'PENDING_CLIENT_SIGNATURE', 'PENDING_PAYMENT', 'PENDING_PROVIDER_SIGNATURE'].sort());
+});
+
+test('Phase 4 confirmPayment: a successful purchase removes the purchased services from the server cart in the same transaction', async (t) => {
+  const order = makeOrderForConfirm();
+  const { cartCheckoutService, tx } = await loadServiceForConfirm(t, { order, walletBalance: 250 });
+
+  await cartCheckoutService.confirmPayment('user-1', 'order-1', '111111');
+
+  assert.equal(tx.cartItem.deleteMany.mock.callCount(), 1);
+  assert.deepEqual(tx.cartItem.deleteMany.mock.calls[0].arguments[0].where, { cart: { userId: 'user-1' }, serviceId: { in: ['service-1'] } });
+  assert.equal(tx.order.updateMany.mock.callCount(), 1, 'order moved to PAID exactly once, via the guarded transition');
+});
+
+test('Phase 4 confirmPayment: an order that is no longer PENDING_PAYMENT is rejected 409 at the in-transaction gate before any debit', async (t) => {
+  const order = makeOrderForConfirm();
+  const { cartCheckoutService, users, tx } = await loadServiceForConfirm(t, { order, walletBalance: 250 });
+  // Simulate a concurrent confirmation that already committed PAID after the
+  // outside-transaction pre-read.
+  tx.order.updateMany = t.mock.fn(async () => ({ count: 0 }));
+
+  const error: any = await cartCheckoutService.confirmPayment('user-1', 'order-1', '111111').catch((e: any) => e);
+
+  assert.equal(error.statusCode, 409);
+  assert.equal(tx.user.updateMany.mock.callCount(), 0, 'no debit attempted');
+  assert.equal(users[0].walletBalance, 250);
+});
+
+test('Phase 4 createOrder: an existing active purchase of the same service rejects 409 before any order row is created', async (t) => {
+  const service = makeService({ id: 'service-1', provider: makeProvider({ id: 'provider-9' }) });
+  const orderCreateSpy = t.mock.fn(async () => { throw new Error('must not be reached'); });
+  t.mock.module('../config/db', { namedExports: { prisma: {
+    serviceCatalog: { findMany: async () => [service] },
+    project: { findMany: async () => [ACTIVE_PURCHASE] },
+    $transaction: async (fn: any) => fn({ order: { count: async () => 0, create: orderCreateSpy } })
+  } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  const { cartCheckoutService } = await import(`./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`);
+
+  const error: any = await cartCheckoutService.createOrder('user-1', { items: [{ modelId: 'service-1' }] }).catch((e: any) => e);
+
+  assert.equal(error.statusCode, 409);
+  assert.deepEqual(error.errors, [{ serviceId: 'service-1', projectId: 'project-existing' }]);
+  assert.equal(orderCreateSpy.mock.callCount(), 0);
+});
+
+test('Phase 4 addItem: an existing active purchase rejects 409 and the cart is not touched; own service rejected 400', async (t) => {
+  const cartUpsert = t.mock.fn(async () => ({ id: 'cart-1', items: [] }));
+  let active: any[] = [ACTIVE_PURCHASE];
+  let service: any = { id: 'service-1', providerId: 'provider-9' };
+  t.mock.module('../config/db', { namedExports: { prisma: {
+    serviceCatalog: { findFirst: async () => service },
+    project: { findMany: async () => active },
+    cart: { upsert: cartUpsert },
+    cartItem: { upsert: async () => ({}) }
+  } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  const { cartCheckoutService } = await import(`./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`);
+
+  const dup: any = await cartCheckoutService.addItem('user-1', { modelId: 'service-1' }).catch((e: any) => e);
+  assert.equal(dup.statusCode, 409);
+  assert.equal(cartUpsert.mock.callCount(), 0);
+
+  active = []; service = { id: 'service-1', providerId: 'user-1' };
+  const own: any = await cartCheckoutService.addItem('user-1', { modelId: 'service-1' }).catch((e: any) => e);
+  assert.equal(own.statusCode, 400);
+  assert.equal(cartUpsert.mock.callCount(), 0);
 });

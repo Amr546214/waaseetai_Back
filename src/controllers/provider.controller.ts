@@ -273,8 +273,11 @@ export const getPassedSpecialties = async (req: Request, res: Response, next: Ne
 				.update(`${pendingContract.id}:${providerId}:${pendingContract.termsVersion}:${signedAt.toISOString()}`)
 				.digest('hex');
 			const contract = await prisma.$transaction(async tx => {
-				const updated = await tx.contract.update({
-					where: { id: pendingContract.id },
+				// Phase 4 — conditional transition (row-locked): a second concurrent
+				// signature, or a contract that left PENDING_PROVIDER_SIGNATURE in the
+				// meantime, matches zero rows and nothing below is written.
+				const transitioned = await tx.contract.updateMany({
+					where: { id: pendingContract.id, providerId, status: ContractStatus.PENDING_PROVIDER_SIGNATURE },
 					data: {
 						providerSignedAt: signedAt,
 						providerSignatureHash: signatureHash,
@@ -282,6 +285,10 @@ export const getPassedSpecialties = async (req: Request, res: Response, next: Ne
 						signedAt
 					}
 				});
+				if (transitioned.count !== 1) throw new AppError('تم توقيع هذا العقد مسبقاً أو تغيّرت حالته', 409);
+				const escrowStillHeld = await tx.escrow.count({ where: { projectId: targetProjectId, status: EscrowStatus.HELD } });
+				if (escrowStillHeld !== 1) throw new AppError('لا يمكن بدء المشروع قبل تأكيد تمويل الضمان', 409);
+				const updated = await tx.contract.findUniqueOrThrow({ where: { id: pendingContract.id } });
 				await tx.projectProposal.updateMany({ where: { projectId: targetProjectId, providerId }, data: { status: ProposalStatus.ACCEPTED } });
 				await tx.proposal.updateMany({ where: { OR: [{ projectId: targetProjectId }, { clientRequestId: targetProjectId }], providerId }, data: { status: ProposalStatus.ACCEPTED } });
 				await tx.project.updateMany({ where: { id: targetProjectId }, data: { status: ProjectStatus.IN_PROGRESS, providerId } });

@@ -417,9 +417,23 @@ export class ProjectProgressService {
       : [];
     console.log('[submitDelivery] safeFiles count:', safeFiles.length, 'sample:', safeFiles.slice(0, 2));
     return prisma.$transaction(async tx => {
+      // Phase 4 — conditional, row-locked transition taken BEFORE the delivery
+      // row is written: a double-click / concurrent second submit (or a stage
+      // that left IN_PROGRESS/REVISION_REQUESTED meanwhile) matches zero rows
+      // and creates no duplicate StageDelivery. Also re-checks the contract is
+      // still ACTIVE inside the same transaction.
+      const submitted = await tx.projectStage.updateMany({
+        where: {
+          id: stageId,
+          contractId: contract.id,
+          status: { in: [ProjectStageStatus.IN_PROGRESS, ProjectStageStatus.REVISION_REQUESTED] },
+          contract: { status: ContractStatus.ACTIVE }
+        },
+        data: { status: ProjectStageStatus.SUBMITTED }
+      });
+      if (submitted.count !== 1) throw new AppError('هذه المرحلة غير متاحة للتسليم حالياً', 409);
       const delivery = await tx.stageDelivery.create({ data: { stageId, providerId, note: note.trim(), files: safeFiles } });
       console.log('[submitDelivery] created delivery id:', delivery.id, 'files:', JSON.stringify(delivery.files));
-      await tx.projectStage.update({ where: { id: stageId }, data: { status: ProjectStageStatus.SUBMITTED } });
       await tx.project.update({ where: { id: contract.projectId }, data: { status: ProjectStatus.AWAITING_DELIVERY } });
       await tx.notification.create({ data: { userId: contract.clientId, title: 'تسليم جديد بانتظار مراجعتك', message: `تم تسليم مرحلة: ${stage.title}`, type: 'STAGE_DELIVERY', category: 'PROJECTS', actionUrl: `/client-overview/projects/${contract.projectId}`, metadata: { projectId: contract.projectId, stageId, deliveryId: delivery.id } } });
       return delivery;

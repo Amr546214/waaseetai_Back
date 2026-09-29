@@ -131,9 +131,23 @@ export class ProposalService {
 			}
 		}
 
-		const projectStatus = (project?.status || clientRequest?.status) as string;
-		if (projectStatus !== 'OPEN' && projectStatus !== 'IN_PROGRESS' && projectStatus !== 'PUBLISHED' && projectStatus !== 'UNDER_BIDDING') {
+		// Phase 4 — offers are only accepted while the request is genuinely open
+		// for bidding. IN_PROGRESS used to be accepted too, but in this lifecycle
+		// IN_PROGRESS means "both parties signed, escrow funded" (provider
+		// signContract / marketplace checkout) — letting new offers land on an
+		// already-contracted project (reachable by direct API call even though
+		// explore-requests only lists OPEN) re-opened comparison on a running
+		// project. Both mirrored records must agree the request is OPEN.
+		// ('PUBLISHED'/'UNDER_BIDDING' are not values of either status enum and
+		// were dead branches.)
+		if (project && project.status !== 'OPEN') {
 			throw new AppError('هذا المشروع غير متاح حالياً لاستقبال عروض جديدة', 422);
+		}
+		if (clientRequest && clientRequest.status !== 'OPEN') {
+			throw new AppError('هذا المشروع غير متاح حالياً لاستقبال عروض جديدة', 422);
+		}
+		if (targetClientId === providerId) {
+			throw new AppError('لا يمكنك تقديم عرض على طلبك الخاص', 403);
 		}
 
 		// 2. Check duplicate submission constraint across both ProjectProposal and Proposal tables
