@@ -21,6 +21,17 @@ import assert from 'node:assert/strict';
 // invariant, and never over-commits when a "concurrent" request has already
 // reserved part of the balance.
 
+// Matches a row's status against either a plain value (`status: 'PENDING'`)
+// or a Prisma `{ in: [...] }` filter — both shapes are used across this
+// file's real queries (createForProvider()'s outstanding-withdrawals
+// aggregate now uses `in`; approve()'s/reject()'s conditional updateMany
+// still uses a plain value).
+function statusMatches(rowStatus: string, whereStatus: any): boolean {
+	if (whereStatus === undefined) return true;
+	if (whereStatus && typeof whereStatus === 'object' && 'in' in whereStatus) return whereStatus.in.includes(rowStatus);
+	return rowStatus === whereStatus;
+}
+
 function createWithdrawalMockPrisma(t: TestContext, opts: {
 	availableBalance?: number;
 	seedWithdrawals?: { userId: string; amount: number; status: string }[];
@@ -30,7 +41,7 @@ function createWithdrawalMockPrisma(t: TestContext, opts: {
 
 	const aggregateSpy = t.mock.fn(async (args: any) => {
 		const sum = withdrawals
-			.filter(w => w.userId === args.where.userId && (args.where.status === undefined || w.status === args.where.status))
+			.filter(w => w.userId === args.where.userId && statusMatches(w.status, args.where.status))
 			.reduce((s, w) => s + w.amount, 0);
 		return { _sum: { amount: sum || null } };
 	});
@@ -40,7 +51,35 @@ function createWithdrawalMockPrisma(t: TestContext, opts: {
 		return row;
 	});
 
-	const tx = { withdrawal: { aggregate: aggregateSpy, create: createSpy } };
+	// updateMany/findUniqueOrThrow — used by approve()'s and reject()'s own
+	// conditional-transition transactions (both now wrap their PENDING ->
+	// APPROVED/REJECTED write in prisma.$transaction), sharing the SAME
+	// `withdrawals` array as everything else in this mock so a test can
+	// exercise the real reject() alongside the real createForProvider().
+	const updateManySpy = t.mock.fn(async (args: any) => {
+		const matches = withdrawals.filter(w => w.id === args.where.id && w.status === args.where.status);
+		matches.forEach(w => Object.assign(w, args.data));
+		return { count: matches.length };
+	});
+	const findUniqueOrThrowSpy = t.mock.fn(async (args: any) => {
+		const row = withdrawals.find(w => w.id === args.where.id);
+		if (!row) throw new Error('not found (test mock)');
+		return row;
+	});
+	// approve()'s WalletTransaction write — added so a test can exercise the
+	// real createForProvider() -> approve() pipeline end-to-end and observe
+	// exactly which referenceId the debit actually received.
+	const walletTransactions: any[] = [];
+	const walletTransactionCreateSpy = t.mock.fn(async (args: any) => {
+		const wt = { id: `wt-${walletTransactions.length + 1}`, ...args.data };
+		walletTransactions.push(wt);
+		return wt;
+	});
+
+	const tx = {
+		withdrawal: { aggregate: aggregateSpy, create: createSpy, updateMany: updateManySpy, findUniqueOrThrow: findUniqueOrThrowSpy },
+		walletTransaction: { create: walletTransactionCreateSpy }
+	};
 	const transactionSpy = t.mock.fn(async (fn: any) => fn(tx));
 
 	// Flat (non-transaction) access, sharing the SAME withdrawals array —
@@ -67,7 +106,7 @@ function createWithdrawalMockPrisma(t: TestContext, opts: {
 		namedExports: { providerFinanceService: { getWallet: getWalletSpy } }
 	});
 
-	return { createSpy, aggregateSpy, transactionSpy, getWalletSpy, withdrawals };
+	return { createSpy, aggregateSpy, transactionSpy, getWalletSpy, withdrawals, walletTransactions, walletTransactionCreateSpy };
 }
 
 async function loadService(t: TestContext, opts?: Parameters<typeof createWithdrawalMockPrisma>[1]) {
@@ -366,6 +405,781 @@ test('createForProvider: retry is bounded — if every attempt conflicts, the fi
 	);
 	// Bounded at MAX_SERIALIZATION_RETRIES (3) — not infinite.
 	assert.equal(attempts, 3, 'exactly 3 attempts are made, all conflicting, before the conflict is finally surfaced to the caller');
+});
+
+// ============================================================================
+// createForProvider() — request-hygiene / outstanding-withdrawal-reservation
+// fix (financial invariant audit). The eligibility aggregate used to sum
+// only PENDING withdrawals, so the instant an existing request moved to
+// APPROVED/PROCESSING/COMPLETED it silently stopped reserving any balance,
+// letting a provider pile up new PENDING requests that could never actually
+// be approved. It now sums every NON-REJECTED status — PENDING, APPROVED,
+// PROCESSING, COMPLETED — against availableBalance. REJECTED never reserves.
+// ============================================================================
+
+test('A. createForProvider: availableBalance 100, create 80 then create 30 -> the second creation is rejected', async (t) => {
+	const { withdrawalService } = await loadService(t, { availableBalance: 100 });
+	await withdrawalService.createForProvider('provider-1', { amount: 80, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 30, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		(err: any) => { assert.equal(err.statusCode, 400); return true; }
+	);
+});
+
+test('B. createForProvider: availableBalance 100, existing APPROVED 80, create 30 -> rejected', async (t) => {
+	const { withdrawalService } = await loadService(t, { availableBalance: 100, seedWithdrawals: [{ userId: 'provider-1', amount: 80, status: 'APPROVED' }] });
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 30, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		(err: any) => { assert.equal(err.statusCode, 400); return true; }
+	);
+});
+
+test('C. createForProvider: availableBalance 100, existing PROCESSING 80, create 30 -> rejected', async (t) => {
+	const { withdrawalService } = await loadService(t, { availableBalance: 100, seedWithdrawals: [{ userId: 'provider-1', amount: 80, status: 'PROCESSING' }] });
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 30, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		(err: any) => { assert.equal(err.statusCode, 400); return true; }
+	);
+});
+
+test('D. createForProvider: availableBalance 100, existing COMPLETED 80, create 30 -> rejected', async (t) => {
+	const { withdrawalService } = await loadService(t, { availableBalance: 100, seedWithdrawals: [{ userId: 'provider-1', amount: 80, status: 'COMPLETED' }] });
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 30, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		(err: any) => { assert.equal(err.statusCode, 400); return true; }
+	);
+});
+
+test('E. createForProvider: availableBalance 100, existing REJECTED 80, create 30 -> allowed (REJECTED never reserves balance)', async (t) => {
+	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 100, seedWithdrawals: [{ userId: 'provider-1', amount: 80, status: 'REJECTED' }] });
+	const result = await withdrawalService.createForProvider('provider-1', { amount: 30, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	assert.equal(result.amount, 30);
+	assert.equal(createSpy.mock.callCount(), 1);
+});
+
+test('F. createForProvider: availableBalance 100, existing APPROVED 60 + existing PENDING 40 (outstanding already = 100), any positive new withdrawal is rejected', async (t) => {
+	const { withdrawalService } = await loadService(t, {
+		availableBalance: 100,
+		seedWithdrawals: [
+			{ userId: 'provider-1', amount: 60, status: 'APPROVED' },
+			{ userId: 'provider-1', amount: 40, status: 'PENDING' }
+		]
+	});
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 1, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		(err: any) => { assert.equal(err.statusCode, 400); return true; }
+	);
+});
+
+test('G. createForProvider: availableBalance 100, existing APPROVED 60 + existing REJECTED 40, create 40 -> allowed (only the APPROVED 60 reserves; REJECTED 40 is excluded)', async (t) => {
+	const { withdrawalService, createSpy } = await loadService(t, {
+		availableBalance: 100,
+		seedWithdrawals: [
+			{ userId: 'provider-1', amount: 60, status: 'APPROVED' },
+			{ userId: 'provider-1', amount: 40, status: 'REJECTED' }
+		]
+	});
+	const result = await withdrawalService.createForProvider('provider-1', { amount: 40, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	assert.equal(result.amount, 40);
+	assert.equal(createSpy.mock.callCount(), 1);
+});
+
+test('H. createForProvider: existing outstanding total + new amount exactly equals availableBalance -> allowed (inclusive boundary)', async (t) => {
+	const { withdrawalService, createSpy } = await loadService(t, {
+		availableBalance: 100,
+		seedWithdrawals: [{ userId: 'provider-1', amount: 70, status: 'PENDING' }]
+	});
+	const result = await withdrawalService.createForProvider('provider-1', { amount: 30, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	assert.equal(result.amount, 30);
+	assert.equal(createSpy.mock.callCount(), 1);
+});
+
+test('createForProvider: the outstanding-withdrawals aggregate explicitly includes PENDING, APPROVED, PROCESSING, COMPLETED and excludes REJECTED', async (t) => {
+	const { withdrawalService, aggregateSpy } = await loadService(t, { availableBalance: 500 });
+	await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+
+	assert.equal(aggregateSpy.mock.callCount(), 1);
+	const statusFilter = aggregateSpy.mock.calls[0].arguments[0].where.status;
+	assert.ok(statusFilter && Array.isArray(statusFilter.in), 'must be an `in` filter, not a single-status equality check');
+	const included = [...statusFilter.in].sort();
+	assert.deepEqual(included, ['APPROVED', 'COMPLETED', 'PENDING', 'PROCESSING']);
+	assert.ok(!statusFilter.in.includes('REJECTED'), 'REJECTED must never be included — it never reserves balance');
+});
+
+// I. SERIALIZABLE retry for P2034/DriverAdapterError conflicts remains
+// correct with the widened aggregate: already exercised and reverified
+// green above by the pre-existing 'a serialization-conflict error (P2034)
+// is retried...' and 'a DriverAdapterError (cause.kind =
+// TransactionWriteConflict) is retried...' tests, which are unaffected by
+// this fix's query shape change (they never seed a non-PENDING row).
+
+test('J. createForProvider: on retry, the WIDENED outstanding-total aggregate is recalculated from fresh state — a competing withdrawal that became APPROVED between attempts is correctly seen (not just re-reading stale PENDING data)', async (t) => {
+	const { DriverAdapterError } = await import('@prisma/driver-adapter-utils');
+	let transactionAttempt = 0;
+	// availableBalance 100; a competing withdrawal (60, APPROVED) exists only
+	// from the SECOND attempt onward — modeling it having committed between
+	// our attempt 1 and attempt 2, exactly like Batch 2A's own precedent.
+	const aggregateSpy = t.mock.fn(async () => ({ _sum: { amount: transactionAttempt === 1 ? 0 : 60 } }));
+	const createSpy = t.mock.fn(async (args: any) => ({ id: 'withdrawal-1', status: 'PENDING', ...args.data }));
+	const tx = { withdrawal: { aggregate: aggregateSpy, create: createSpy } };
+	const transactionSpy = t.mock.fn(async (fn: any) => {
+		transactionAttempt += 1;
+		const attemptNumber = transactionAttempt;
+		const result = await fn(tx);
+		if (attemptNumber === 1) {
+			throw new DriverAdapterError({ kind: 'TransactionWriteConflict' });
+		}
+		return result;
+	});
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	t.mock.module('./provider-finance.service', {
+		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 100, currency: 'USD' } }) } }
+	});
+	const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { withdrawalService } = await import(moduleUrl);
+
+	// 100 available, 60 now outstanding (only visible on retry) -> only 40
+	// left, so a 50 request must correctly fail with the BUSINESS error,
+	// proving the retry re-reads the widened aggregate rather than reusing
+	// attempt 1's stale (PENDING-only, zero) view.
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 50, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		/يتجاوز رصيدك الصافي/
+	);
+	assert.equal(aggregateSpy.mock.callCount(), 2, 'the outstanding-total aggregate is re-run on the retried attempt, not reused from the doomed first attempt');
+	assert.equal(createSpy.mock.callCount(), 1, 'the doomed first attempt DID call create() (matching real Postgres, which only detects the conflict at commit) — but the retry correctly refuses once it sees the true, now-insufficient balance');
+});
+
+// ============================================================================
+// createForProvider() / approve() — WalletTransaction.referenceId
+// defense-in-depth (financial invariant audit follow-up). Withdrawal.referenceId
+// used to be left null forever (nothing populated it), so
+// WalletTransaction.referenceId's existing @unique constraint provided zero
+// real protection — Postgres permits unlimited NULLs in a unique column.
+// createForProvider() now generates a real Withdrawal.id up front and
+// derives a deterministic, namespaced referenceId from it
+// (deriveWithdrawalReferenceId); approve() is UNCHANGED — it already passed
+// `item.referenceId` through to WalletTransaction.referenceId, so it now
+// simply forwards a real value instead of always-null.
+// ============================================================================
+
+test('A. createForProvider: a newly-created Withdrawal has a non-null, deterministic referenceId', async (t) => {
+	const { withdrawalService } = await loadService(t, { availableBalance: 500 });
+	const result = await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	assert.ok(result.referenceId, 'referenceId must be non-null for a newly-created withdrawal');
+	assert.equal(typeof result.referenceId, 'string');
+});
+
+test('B. createForProvider: the referenceId is derived from the withdrawal\'s own id and follows the "withdrawal-{id}" namespace convention', async (t) => {
+	const { deriveWithdrawalReferenceId } = await import('../utils/withdrawal-reference.util');
+	const { withdrawalService } = await loadService(t, { availableBalance: 500 });
+	const result = await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	assert.equal(result.referenceId, deriveWithdrawalReferenceId(result.id));
+	assert.match(result.referenceId, /^withdrawal-/);
+	assert.ok(result.referenceId.includes(result.id), 'the reference must embed the withdrawal\'s own id');
+});
+
+test('C. approve(): the WalletTransaction it creates uses EXACTLY the same referenceId the withdrawal was created with — no second, independent reference is generated', async (t) => {
+	const { withdrawalService, walletTransactions } = await loadService(t, { availableBalance: 500 });
+	const created = await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	assert.ok(created.referenceId);
+
+	await withdrawalService.approve(created.id, 'admin-1', { adminNote: 'ok' });
+
+	assert.equal(walletTransactions.length, 1);
+	assert.equal(walletTransactions[0].referenceId, created.referenceId, 'approve() must forward the withdrawal\'s own referenceId unchanged, never mint a new one');
+});
+
+test('D. createForProvider: two different withdrawals receive two different referenceIds', async (t) => {
+	const { withdrawalService } = await loadService(t, { availableBalance: 500 });
+	const first = await withdrawalService.createForProvider('provider-1', { amount: 50, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	const second = await withdrawalService.createForProvider('provider-1', { amount: 50, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	assert.notEqual(first.id, second.id);
+	assert.notEqual(first.referenceId, second.referenceId);
+});
+
+test('E/F. createForProvider: on a SERIALIZABLE retry, the SAME id/referenceId pair is reused across every attempt of one logical creation call — never a fresh id per attempt, and never more than one row ever persists', async (t) => {
+	const { DriverAdapterError } = await import('@prisma/driver-adapter-utils');
+	const { deriveWithdrawalReferenceId } = await import('../utils/withdrawal-reference.util');
+	let attempts = 0;
+	const seenIds: string[] = [];
+	const aggregateSpy = t.mock.fn(async () => ({ _sum: { amount: 0 } }));
+	const createSpy = t.mock.fn(async (args: any) => {
+		seenIds.push(args.data.id);
+		return { status: 'PENDING', ...args.data };
+	});
+	const tx = { withdrawal: { aggregate: aggregateSpy, create: createSpy } };
+	const transactionSpy = t.mock.fn(async (fn: any) => {
+		attempts += 1;
+		if (attempts === 1) throw new DriverAdapterError({ kind: 'TransactionWriteConflict' });
+		return fn(tx);
+	});
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	t.mock.module('./provider-finance.service', {
+		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
+	});
+	const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { withdrawalService } = await import(moduleUrl);
+
+	const result = await withdrawalService.createForProvider('provider-1', { amount: 200, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+
+	assert.equal(transactionSpy.mock.callCount(), 2, 'the first (conflicted) attempt is retried exactly once, succeeding on the second');
+	assert.equal(createSpy.mock.callCount(), 1, 'the doomed first attempt never even reached create() here (it conflicted before running), so only the successful attempt generated a row at all');
+	assert.equal(result.referenceId, deriveWithdrawalReferenceId(result.id));
+	assert.equal(new Set(seenIds).size, 1, 'no more than one logical withdrawal id/referenceId was ever used for this one successfully-created withdrawal');
+});
+
+// ============================================================================
+// approve() — TWO races closed here, both from the Payout P1 audit:
+//
+// 1. Same-withdrawal TOCTOU (fixed previously): the unconditional
+//    tx.withdrawal.update() is a conditional updateMany({where: {id,
+//    status: PENDING}}), count === 1 required before the WalletTransaction
+//    is ever written.
+//
+// 2. Same-provider balance overspend (fixed in THIS batch): the wallet
+//    balance read and the "already withdrawn" aggregate used to run OUTSIDE
+//    any transaction. Two different PENDING withdrawals for the SAME
+//    provider could each independently pass the balance check before either
+//    committed, together over-approving. Both reads now run INSIDE the same
+//    SERIALIZABLE transaction as the conditional status transition, wrapped
+//    in the same bounded-retry loop (reusing isRetryableTransactionConflict,
+//    not a weaker P2034-only check) as createForProvider().
+//
+// The mock below supports BOTH races: `simulateConcurrentWinner`/
+// `opponentAction` model the same-row TOCTOU exactly as before (findUnique's
+// own callback mutates the "real" row immediately after returning a stale
+// snapshot); `otherWithdrawals` + `simulateSerializableConflict` model the
+// balance race, letting the transaction callback run to FULL completion
+// (including its writes) before a genuine commit-time conflict is raised —
+// the same Batch 2A lesson already proven in createForProvider()'s own tests.
+// ============================================================================
+
+function createApproveMockPrisma(t: TestContext, opts: {
+	initialStatus?: string;
+	simulateConcurrentWinner?: boolean;
+	opponentAction?: 'APPROVED' | 'REJECTED';
+	availableBalance?: number;
+	otherWithdrawals?: any[];
+	failAfterTransition?: boolean;
+	failAfterRejectTransition?: boolean;
+	// Simulates a genuine PostgreSQL SERIALIZABLE conflict detected at
+	// COMMIT time, for `conflictOnAttempts` of the attempts (1-indexed,
+	// e.g. 1 = only the first attempt conflicts then the retry succeeds; 3 =
+	// every attempt within MAX_SERIALIZATION_RETRIES conflicts, exhausting
+	// the bounded retry). Optionally marks `otherWithdrawals[0]` APPROVED
+	// the moment the conflict fires, modeling "we conflicted because a
+	// competing approval for this provider's OTHER withdrawal just
+	// committed" — so the retry's fresh balance read correctly reflects it.
+	simulateSerializableConflict?: { kind: 'P2034' | 'DriverAdapterError'; conflictOnAttempts: number; competingApprovalCommits?: boolean };
+} = {}) {
+	const row: any = {
+		id: 'wd-1', userId: 'provider-1', amount: 200, currency: 'USD', method: 'bank_transfer',
+		referenceId: 'ref-1', status: opts.initialStatus ?? 'PENDING'
+	};
+	const withdrawals: any[] = [row, ...(opts.otherWithdrawals ?? [])];
+	const walletTransactions: any[] = [];
+	let opponentFired = false;
+	let attemptCount = 0;
+
+	const findUniqueSpy = t.mock.fn(async (args: any) => {
+		const target = withdrawals.find(w => w.id === args.where.id);
+		if (!target) return null;
+		const snapshot = { ...target };
+		if (target.id === row.id) {
+			if (opts.simulateConcurrentWinner) {
+				// A concurrent admin's approve() reads AFTER us but commits its
+				// whole transaction (conditional update + WalletTransaction)
+				// BEFORE our own transaction runs — the real row is now
+				// APPROVED, even though the snapshot we return still says PENDING.
+				row.status = 'APPROVED';
+			}
+			if (opts.opponentAction && !opponentFired) {
+				// Generalized version of the same interleaving, used for the
+				// approve()-vs-reject() mutual-exclusion tests: an opposing
+				// decision (the OTHER method) reads first but fully commits its
+				// own real side effects before our transaction's conditional
+				// update runs. Fires once, mirroring a single opposing call.
+				opponentFired = true;
+				row.status = opts.opponentAction;
+				if (opts.opponentAction === 'APPROVED') {
+					walletTransactions.push({ id: `wt-${walletTransactions.length + 1}`, userId: row.userId, type: 'WITHDRAWAL', amount: -row.amount, currency: row.currency, status: 'COMPLETED' });
+				}
+			}
+		}
+		return snapshot;
+	});
+	const aggregateSpy = t.mock.fn(async (args: any) => {
+		const statuses: string[] = args.where?.status?.in ?? [];
+		const sum = withdrawals
+			.filter(w => w.userId === args.where.userId && statuses.includes(w.status))
+			.reduce((s, w) => s + w.amount, 0);
+		return { _sum: { amount: sum || 0 } };
+	});
+	const updateManySpy = t.mock.fn(async (args: any) => {
+		const target = withdrawals.find(w => w.id === args.where.id);
+		if (!target || target.status !== args.where.status) return { count: 0 };
+		Object.assign(target, args.data);
+		return { count: 1 };
+	});
+	const findUniqueOrThrowSpy = t.mock.fn(async (args: any) => {
+		const target = withdrawals.find(w => w.id === args.where.id);
+		if (!target) throw new Error('not found (test mock)');
+		if (opts.failAfterRejectTransition && target.status === 'REJECTED') {
+			throw new Error('simulated failure after reject\'s conditional transition already succeeded');
+		}
+		return { ...target };
+	});
+	const walletTransactionCreateSpy = t.mock.fn(async (args: any) => {
+		if (opts.failAfterTransition) throw new Error('simulated failure after the conditional transition succeeded');
+		const wt = { id: `wt-${walletTransactions.length + 1}`, ...args.data };
+		walletTransactions.push(wt);
+		return wt;
+	});
+	const getWalletSpy = t.mock.fn(async (_userId: string, _client?: unknown) => ({
+		summary: { availableBalance: opts.availableBalance ?? 1000, currency: 'USD' }
+	}));
+
+	const tx = {
+		withdrawal: { aggregate: aggregateSpy, updateMany: updateManySpy, findUniqueOrThrow: findUniqueOrThrowSpy },
+		walletTransaction: { create: walletTransactionCreateSpy }
+	};
+	const transactionSpy = t.mock.fn(async (fn: any) => {
+		attemptCount += 1;
+		const thisAttempt = attemptCount;
+		// Models real Postgres commit-time behavior: the callback (including
+		// any writes it makes) runs to FULL completion before we ever decide
+		// the transaction failed — a genuine SERIALIZABLE conflict is
+		// detected at COMMIT, never before the callback runs.
+		//
+		// Restoring is done via Object.assign onto the SAME objects (never by
+		// swapping in fresh copies) — this preserves object identity, so a
+		// test's own held reference (e.g. `row`, which IS withdrawals[0])
+		// correctly reflects the rolled-back state too, not a stale mutated
+		// object left behind by a swapped-out array.
+		const withdrawalsSnapshot = withdrawals.map(w => ({ ...w }));
+		const walletSnapshot = [...walletTransactions];
+		const restore = () => {
+			withdrawals.forEach((w, i) => Object.assign(w, withdrawalsSnapshot[i]));
+			walletTransactions.length = 0; walletTransactions.push(...walletSnapshot);
+		};
+		// Genuine failures from fn(tx) itself (a business AppError, or any
+		// other real error) are caught and rolled back HERE, separately from
+		// the conflict-simulation branch below — so that branch's own
+		// deliberate restore()+override is never re-clobbered by a second,
+		// blanket restore() catching its own throw.
+		let result: unknown;
+		try {
+			result = await fn(tx);
+		} catch (error) {
+			restore();
+			throw error;
+		}
+
+		const conflictSpec = opts.simulateSerializableConflict;
+		if (conflictSpec && thisAttempt <= conflictSpec.conflictOnAttempts) {
+			// Roll back everything the (doomed) callback just did...
+			restore();
+			if (conflictSpec.competingApprovalCommits && withdrawals[1]) {
+				// ...except the COMPETING transaction's own commit, which
+				// really did land first — this is what the retry's fresh
+				// balance read must see.
+				withdrawals[1].status = 'APPROVED';
+			}
+			if (conflictSpec.kind === 'P2034') {
+				const { Prisma } = await import('@prisma/client');
+				throw new Prisma.PrismaClientKnownRequestError('Transaction failed due to a write conflict or a deadlock. Please retry your transaction', { code: 'P2034', clientVersion: 'test' });
+			}
+			const { DriverAdapterError } = await import('@prisma/driver-adapter-utils');
+			throw new DriverAdapterError({ kind: 'TransactionWriteConflict' });
+		}
+		return result;
+	});
+
+	t.mock.module('../config/db', {
+		namedExports: { prisma: { $transaction: transactionSpy, withdrawal: { findUnique: findUniqueSpy } } }
+	});
+	t.mock.module('./provider-finance.service', {
+		namedExports: { providerFinanceService: { getWallet: getWalletSpy } }
+	});
+
+	return { row, withdrawals, walletTransactions, findUniqueSpy, aggregateSpy, updateManySpy, findUniqueOrThrowSpy, walletTransactionCreateSpy, getWalletSpy, transactionSpy };
+}
+
+async function loadApproveService(t: TestContext, opts?: Parameters<typeof createApproveMockPrisma>[1]) {
+	const mocks = createApproveMockPrisma(t, opts);
+	const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { withdrawalService } = await import(moduleUrl);
+	return { withdrawalService, ...mocks };
+}
+
+test('A. approve: a normal PENDING withdrawal transitions to APPROVED exactly once, with exactly one WalletTransaction debit, and the balance check runs INSIDE the transaction (via tx)', async (t) => {
+	const { withdrawalService, updateManySpy, walletTransactionCreateSpy, walletTransactions, getWalletSpy, aggregateSpy, transactionSpy } = await loadApproveService(t);
+
+	const result = await withdrawalService.approve('wd-1', 'admin-1', { adminNote: 'ok' });
+
+	assert.equal(result.status, 'APPROVED');
+	assert.equal(updateManySpy.mock.callCount(), 1);
+	assert.equal(walletTransactionCreateSpy.mock.callCount(), 1);
+	assert.equal(walletTransactions.length, 1);
+	assert.equal(walletTransactions[0].amount, -200);
+	assert.equal(updateManySpy.mock.calls[0].arguments[0].where.status, 'PENDING');
+	// The balance eligibility read is part of the SAME transaction as the
+	// conditional update — the fix's core claim — not a read taken before it.
+	assert.equal(transactionSpy.mock.callCount(), 1);
+	assert.notEqual(getWalletSpy.mock.calls[0].arguments[1], undefined, 'getWallet() must be called with the tx client, not the global prisma client');
+	assert.equal(aggregateSpy.mock.callCount(), 1, 'the "already withdrawn" aggregate ran via tx.withdrawal.aggregate, inside the transaction');
+});
+
+test('B. approve: two different PENDING withdrawals for the SAME provider, combined amount WITHIN balance — both succeed, exactly two legitimate WalletTransactions exist', async (t) => {
+	// Real independent approve() calls, run sequentially (this mock has no
+	// genuine thread-level concurrency), sharing ONE underlying withdrawals
+	// array + walletTransactions array — mirroring createForProvider()'s own
+	// "two concurrent requests" test precedent. availableBalance 500; two
+	// withdrawals of 200 each = 400 combined, within balance.
+	const withdrawals = [
+		{ id: 'wd-1', userId: 'provider-1', amount: 200, currency: 'USD', method: 'bank_transfer', referenceId: 'ref-1', status: 'PENDING' },
+		{ id: 'wd-2', userId: 'provider-1', amount: 200, currency: 'USD', method: 'bank_transfer', referenceId: 'ref-2', status: 'PENDING' }
+	];
+	const walletTransactions: any[] = [];
+
+	async function loadFor(t2: TestContext, withdrawalId: string) {
+		const findUniqueSpy = t2.mock.fn(async (args: any) => { const w = withdrawals.find(x => x.id === args.where.id); return w ? { ...w } : null; });
+		const aggregateSpy = t2.mock.fn(async (args: any) => {
+			const statuses: string[] = args.where?.status?.in ?? [];
+			const sum = withdrawals.filter(w => w.userId === args.where.userId && statuses.includes(w.status)).reduce((s, w) => s + w.amount, 0);
+			return { _sum: { amount: sum || 0 } };
+		});
+		const updateManySpy = t2.mock.fn(async (args: any) => {
+			const target = withdrawals.find(w => w.id === args.where.id);
+			if (!target || target.status !== args.where.status) return { count: 0 };
+			Object.assign(target, args.data);
+			return { count: 1 };
+		});
+		const findUniqueOrThrowSpy = t2.mock.fn(async (args: any) => {
+			const target = withdrawals.find(w => w.id === args.where.id);
+			if (!target) throw new Error('not found');
+			return { ...target };
+		});
+		const walletTransactionCreateSpy = t2.mock.fn(async (args: any) => { const wt = { id: `wt-${walletTransactions.length + 1}`, ...args.data }; walletTransactions.push(wt); return wt; });
+		const getWalletSpy = t2.mock.fn(async () => ({ summary: { availableBalance: 500, currency: 'USD' } }));
+		const tx = { withdrawal: { aggregate: aggregateSpy, updateMany: updateManySpy, findUniqueOrThrow: findUniqueOrThrowSpy }, walletTransaction: { create: walletTransactionCreateSpy } };
+		const transactionSpy = t2.mock.fn(async (fn: any) => fn(tx));
+		t2.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, withdrawal: { findUnique: findUniqueSpy } } } });
+		t2.mock.module('./provider-finance.service', { namedExports: { providerFinanceService: { getWallet: getWalletSpy } } });
+		const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
+		const { withdrawalService } = await import(moduleUrl);
+		return { withdrawalService, updateManySpy };
+	}
+
+	await t.test('approve wd-1', async (t2) => { const { withdrawalService } = await loadFor(t2, 'wd-1'); await withdrawalService.approve('wd-1', 'admin-1', { adminNote: 'ok' }); });
+	await t.test('approve wd-2', async (t2) => { const { withdrawalService } = await loadFor(t2, 'wd-2'); await withdrawalService.approve('wd-2', 'admin-1', { adminNote: 'ok' }); });
+
+	assert.equal(withdrawals[0].status, 'APPROVED');
+	assert.equal(withdrawals[1].status, 'APPROVED');
+	assert.equal(walletTransactions.length, 2, 'both legitimate approvals must each record their own debit');
+	assert.equal(walletTransactions.reduce((s, wt) => s + wt.amount, 0), -400);
+});
+
+test('C. approve: two different PENDING withdrawals for the SAME provider, combined amount EXCEEDS balance — exactly one succeeds, the other fails cleanly, total approved never exceeds the available balance, exactly one WalletTransaction exists', async (t) => {
+	// availableBalance 300; two withdrawals of 200 each = 400 combined,
+	// EXCEEDS balance. Whichever commits first legitimately takes the
+	// balance; the second's own fresh in-transaction aggregate read must
+	// then see it and cleanly refuse — never a raw DB error.
+	const withdrawals = [
+		{ id: 'wd-1', userId: 'provider-1', amount: 200, currency: 'USD', method: 'bank_transfer', referenceId: 'ref-1', status: 'PENDING' },
+		{ id: 'wd-2', userId: 'provider-1', amount: 200, currency: 'USD', method: 'bank_transfer', referenceId: 'ref-2', status: 'PENDING' }
+	];
+	const walletTransactions: any[] = [];
+
+	async function loadFor(t2: TestContext) {
+		const findUniqueSpy = t2.mock.fn(async (args: any) => { const w = withdrawals.find(x => x.id === args.where.id); return w ? { ...w } : null; });
+		const aggregateSpy = t2.mock.fn(async (args: any) => {
+			const statuses: string[] = args.where?.status?.in ?? [];
+			const sum = withdrawals.filter(w => w.userId === args.where.userId && statuses.includes(w.status)).reduce((s, w) => s + w.amount, 0);
+			return { _sum: { amount: sum || 0 } };
+		});
+		const updateManySpy = t2.mock.fn(async (args: any) => {
+			const target = withdrawals.find(w => w.id === args.where.id);
+			if (!target || target.status !== args.where.status) return { count: 0 };
+			Object.assign(target, args.data);
+			return { count: 1 };
+		});
+		const findUniqueOrThrowSpy = t2.mock.fn(async (args: any) => {
+			const target = withdrawals.find(w => w.id === args.where.id);
+			if (!target) throw new Error('not found');
+			return { ...target };
+		});
+		const walletTransactionCreateSpy = t2.mock.fn(async (args: any) => { const wt = { id: `wt-${walletTransactions.length + 1}`, ...args.data }; walletTransactions.push(wt); return wt; });
+		const getWalletSpy = t2.mock.fn(async () => ({ summary: { availableBalance: 300, currency: 'USD' } }));
+		const tx = { withdrawal: { aggregate: aggregateSpy, updateMany: updateManySpy, findUniqueOrThrow: findUniqueOrThrowSpy }, walletTransaction: { create: walletTransactionCreateSpy } };
+		const transactionSpy = t2.mock.fn(async (fn: any) => fn(tx));
+		t2.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, withdrawal: { findUnique: findUniqueSpy } } } });
+		t2.mock.module('./provider-finance.service', { namedExports: { providerFinanceService: { getWallet: getWalletSpy } } });
+		const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
+		const { withdrawalService } = await import(moduleUrl);
+		return { withdrawalService };
+	}
+
+	let secondRejected = false;
+	await t.test('approve wd-1 (commits first, legitimately takes the balance)', async (t2) => {
+		const { withdrawalService } = await loadFor(t2);
+		await withdrawalService.approve('wd-1', 'admin-1', { adminNote: 'ok' });
+	});
+	await t.test('approve wd-2 (its own fresh in-transaction read now sees wd-1 already APPROVED)', async (t2) => {
+		const { withdrawalService } = await loadFor(t2);
+		try {
+			await withdrawalService.approve('wd-2', 'admin-1', { adminNote: 'ok' });
+		} catch (err: any) {
+			secondRejected = true;
+			assert.equal(err.statusCode, 400, 'a clean insufficient-balance business error, not a raw DB conflict');
+			assert.equal(err.code, undefined);
+		}
+	});
+
+	assert.equal(secondRejected, true);
+	assert.equal(withdrawals[0].status, 'APPROVED');
+	assert.equal(withdrawals[1].status, 'PENDING', 'the second withdrawal must never be approved once it would overspend the balance');
+	assert.equal(walletTransactions.length, 1, 'exactly one approval WalletTransaction exists');
+	const totalApproved = withdrawals.filter(w => w.status === 'APPROVED').reduce((s, w) => s + w.amount, 0);
+	assert.ok(totalApproved <= 300, 'total approved amount must never exceed the provider\'s available balance');
+});
+
+test('D. approve: a second/concurrent approval of the SAME withdrawal that loses the race (row already APPROVED by write time) gets a clean conflict error, never a raw DB error, and writes NO second WalletTransaction', async (t) => {
+	const { withdrawalService, walletTransactionCreateSpy, updateManySpy } = await loadApproveService(t, { simulateConcurrentWinner: true });
+
+	await assert.rejects(
+		() => withdrawalService.approve('wd-1', 'admin-2', { adminNote: 'too late' }),
+		(err: any) => {
+			// Clean, pre-existing Arabic business error — no leaked Prisma/DB
+			// error shape (no `.code`, no constraint name, etc.).
+			assert.equal(err.statusCode, 409);
+			assert.match(err.message, /تمت معالجته مسبقاً/);
+			assert.equal(err.code, undefined);
+			return true;
+		}
+	);
+	// The conditional update DID run (and correctly matched zero rows) — this
+	// proves the race was caught at the write, not merely by luck.
+	assert.equal(updateManySpy.mock.callCount(), 1);
+	assert.equal(walletTransactionCreateSpy.mock.callCount(), 0, 'the loser must never write a WalletTransaction debit');
+});
+
+test('E1. approve() vs reject() (same withdrawal): approve wins — final status APPROVED, reject() loses cleanly, exactly one approval WalletTransaction exists', async (t) => {
+	const { withdrawalService, row, walletTransactions, updateManySpy } = await loadApproveService(t, { opponentAction: 'APPROVED' });
+
+	await assert.rejects(
+		() => withdrawalService.reject('wd-1', 'admin-2', { rejectionReason: 'too late, already approved' }),
+		(err: any) => { assert.equal(err.statusCode, 409); return true; }
+	);
+
+	assert.equal(row.status, 'APPROVED');
+	assert.equal(walletTransactions.length, 1, 'exactly the winning approve()\'s debit — reject() must never add or remove any WalletTransaction');
+	assert.equal(walletTransactions[0].amount, -200);
+	assert.equal(updateManySpy.mock.callCount(), 1, 'reject()\'s own conditional update ran and correctly matched zero rows');
+});
+
+test('E2. approve() vs reject() (same withdrawal): reject wins — final status REJECTED, approve() loses cleanly, zero approval WalletTransactions exist', async (t) => {
+	const { withdrawalService, row, walletTransactions, walletTransactionCreateSpy, updateManySpy } = await loadApproveService(t, { opponentAction: 'REJECTED' });
+
+	await assert.rejects(
+		() => withdrawalService.approve('wd-1', 'admin-2', { adminNote: 'too late, already rejected' }),
+		(err: any) => { assert.equal(err.statusCode, 409); return true; }
+	);
+
+	assert.equal(row.status, 'REJECTED');
+	assert.equal(walletTransactions.length, 0, 'the losing approve() must never write a debit for a withdrawal that was actually rejected');
+	assert.equal(walletTransactionCreateSpy.mock.callCount(), 0);
+	assert.equal(updateManySpy.mock.callCount(), 1, 'approve()\'s own conditional update ran and correctly matched zero rows');
+});
+
+test('F. approve: a P2034/DriverAdapterError serialization conflict is retried transparently, succeeding on the retried attempt, using the existing bounded retry policy', async (t) => {
+	for (const kind of ['P2034', 'DriverAdapterError'] as const) {
+		await t.test(kind, async (t2) => {
+			const { withdrawalService, transactionSpy, walletTransactions } = await loadApproveService(t2, {
+				simulateSerializableConflict: { kind, conflictOnAttempts: 1 }
+			});
+			const result = await withdrawalService.approve('wd-1', 'admin-1', { adminNote: 'ok' });
+			assert.equal(result.status, 'APPROVED');
+			assert.equal(transactionSpy.mock.callCount(), 2, 'the first (conflicted) attempt is retried exactly once here, succeeding on the second');
+			assert.equal(walletTransactions.length, 1, 'only the successful retry actually wrote a debit');
+		});
+	}
+});
+
+test('G. approve: after a retry, the balance is recalculated fresh from the newly committed state — never reusing the doomed first attempt\'s stale reads', async (t) => {
+	// wd-1 (200) vs a competing wd-2 (200) for the SAME provider, balance 300.
+	// Attempt 1 conflicts at commit; the SAME conflict models the competing
+	// approval of wd-2 having actually landed first. The retry's fresh
+	// aggregate read must see wd-2 as APPROVED and correctly refuse wd-1 —
+	// proving the retry re-reads rather than reusing attempt 1's stale view.
+	const { withdrawalService, aggregateSpy, walletTransactions } = await loadApproveService(t, {
+		availableBalance: 300,
+		otherWithdrawals: [{ id: 'wd-2', userId: 'provider-1', amount: 200, currency: 'USD', method: 'bank_transfer', referenceId: 'ref-2', status: 'PENDING' }],
+		simulateSerializableConflict: { kind: 'DriverAdapterError', conflictOnAttempts: 1, competingApprovalCommits: true }
+	});
+
+	await assert.rejects(
+		() => withdrawalService.approve('wd-1', 'admin-1', { adminNote: 'ok' }),
+		(err: any) => { assert.equal(err.statusCode, 400); assert.equal(err.code, undefined); return true; }
+	);
+	assert.equal(aggregateSpy.mock.callCount(), 2, 'the aggregate is re-run on the retried attempt, not reused from the doomed first attempt');
+	assert.equal(walletTransactions.length, 0, 'wd-1 must never be approved once the retry\'s fresh read shows the balance is already spoken for');
+});
+
+test('H. approve: the SERIALIZABLE retry is bounded — if every attempt conflicts, a clean application-level error propagates rather than retrying forever or leaking raw DB internals', async (t) => {
+	const { withdrawalService, transactionSpy } = await loadApproveService(t, {
+		simulateSerializableConflict: { kind: 'DriverAdapterError', conflictOnAttempts: 3 }
+	});
+
+	await assert.rejects(
+		() => withdrawalService.approve('wd-1', 'admin-1', { adminNote: 'ok' }),
+		(err: any) => {
+			// The raw DriverAdapterError itself propagates (matching
+			// createForProvider()'s own exhausted-retry precedent) — it is
+			// already a structured, typed error, not a leaked SQL string or
+			// stack trace, and callers upstream already handle it generically.
+			assert.equal(err.cause?.kind, 'TransactionWriteConflict');
+			return true;
+		}
+	);
+	// Bounded at MAX_SERIALIZATION_RETRIES (3) — not infinite.
+	assert.equal(transactionSpy.mock.callCount(), 3, 'exactly 3 attempts are made, all conflicting, before the conflict is finally surfaced to the caller');
+});
+
+test('I. approve: if the WalletTransaction write fails AFTER the conditional transition already succeeded, the whole transaction rolls back — the withdrawal is not left APPROVED', async (t) => {
+	const { withdrawalService, row, walletTransactions } = await loadApproveService(t, { failAfterTransition: true });
+
+	await assert.rejects(() => withdrawalService.approve('wd-1', 'admin-1', { adminNote: 'ok' }));
+
+	assert.equal(row.status, 'PENDING', 'the conditional transition must be rolled back along with everything else in the transaction');
+	assert.equal(walletTransactions.length, 0);
+});
+
+test('approve: an already non-PENDING withdrawal (checked before any transaction attempt) is rejected and never reaches $transaction at all', async (t) => {
+	const { withdrawalService, transactionSpy } = await loadApproveService(t, { initialStatus: 'REJECTED' });
+
+	await assert.rejects(
+		() => withdrawalService.approve('wd-1', 'admin-1', { adminNote: 'x' }),
+		(err: any) => { assert.equal(err.statusCode, 409); return true; }
+	);
+	assert.equal(transactionSpy.mock.callCount(), 0, 'existing authorization/validation behavior is preserved: an already-resolved request is rejected before any transaction starts');
+});
+
+test('approve: insufficient withdrawable balance (existing validation, preserved) is rejected — now correctly evaluated INSIDE the transaction, on the first attempt, with no retry (a plain AppError is not a retryable conflict)', async (t) => {
+	const { withdrawalService, transactionSpy } = await loadApproveService(t, { availableBalance: 100 });
+	// row.amount is 200 > withdrawableBalance (100) -> must fail the existing check.
+	await assert.rejects(
+		() => withdrawalService.approve('wd-1', 'admin-1', { adminNote: 'x' }),
+		(err: any) => { assert.equal(err.statusCode, 400); assert.equal(err.code, undefined); return true; }
+	);
+	assert.equal(transactionSpy.mock.callCount(), 1, 'the balance check now runs inside the transaction, so exactly one attempt is made — a business AppError is never retried');
+});
+
+test('approve: a non-existent withdrawal id is rejected with 404 (existing validation, preserved)', async (t) => {
+	const { withdrawalService } = await loadApproveService(t);
+	await assert.rejects(
+		() => withdrawalService.approve('does-not-exist', 'admin-1', { adminNote: 'x' }),
+		(err: any) => { assert.equal(err.statusCode, 404); return true; }
+	);
+});
+
+// ============================================================================
+// reject() — the same TOCTOU race, now closed the same way as approve():
+// the unconditional tx.withdrawal.update() is replaced with a conditional
+// updateMany({where: {id, status: PENDING}}), count === 1 required, and the
+// whole transaction rolls back on a losing race. reject() has no related
+// audit/side-effect write beyond the transition itself, so there is nothing
+// to sequence after it (unlike approve()'s WalletTransaction).
+//
+// Because approve() and reject() both gate their conditional write on the
+// identical `status: PENDING` predicate for the same row, they are also
+// mutually exclusive of EACH OTHER — tests further below exercise exactly
+// that (an approve()-vs-reject() race), reusing the same opponentAction
+// interleaving technique as the approve()-vs-approve() test above.
+// ============================================================================
+
+test('A. reject: a normal PENDING withdrawal transitions to REJECTED exactly once', async (t) => {
+	const { withdrawalService, updateManySpy, row } = await loadApproveService(t);
+
+	const result = await withdrawalService.reject('wd-1', 'admin-1', { rejectionReason: 'بيانات الحساب غير صحيحة' });
+
+	assert.equal(result.status, 'REJECTED');
+	assert.equal(row.status, 'REJECTED');
+	assert.equal(updateManySpy.mock.callCount(), 1);
+	assert.equal(updateManySpy.mock.calls[0].arguments[0].where.status, 'PENDING');
+	assert.equal(updateManySpy.mock.calls[0].arguments[0].data.rejectionReason, 'بيانات الحساب غير صحيحة');
+});
+
+test('B. reject: a second/concurrent reject() that loses the race (row already REJECTED by write time) gets a clean 409, no raw DB error, and no duplicate side effect', async (t) => {
+	const { withdrawalService, updateManySpy } = await loadApproveService(t, { opponentAction: 'REJECTED' });
+
+	await assert.rejects(
+		() => withdrawalService.reject('wd-1', 'admin-2', { rejectionReason: 'too late' }),
+		(err: any) => {
+			assert.equal(err.statusCode, 409);
+			assert.match(err.message, /تمت معالجته مسبقاً/);
+			assert.equal(err.code, undefined);
+			return true;
+		}
+	);
+	// The conditional update DID run and correctly matched zero rows — the
+	// race was caught at the write, not merely by luck of read ordering.
+	assert.equal(updateManySpy.mock.callCount(), 1);
+});
+
+test('C. approve() vs reject(): approve wins — final status APPROVED, reject() loses cleanly, exactly one approval WalletTransaction exists', async (t) => {
+	const { withdrawalService, row, walletTransactions, updateManySpy } = await loadApproveService(t, { opponentAction: 'APPROVED' });
+
+	await assert.rejects(
+		() => withdrawalService.reject('wd-1', 'admin-2', { rejectionReason: 'too late, already approved' }),
+		(err: any) => { assert.equal(err.statusCode, 409); return true; }
+	);
+
+	assert.equal(row.status, 'APPROVED');
+	assert.equal(walletTransactions.length, 1, 'exactly the winning approve()\'s debit — reject() must never add or remove any WalletTransaction');
+	assert.equal(walletTransactions[0].amount, -200);
+	assert.equal(updateManySpy.mock.callCount(), 1, 'reject()\'s own conditional update ran and correctly matched zero rows');
+});
+
+test('D. approve() vs reject(): reject wins — final status REJECTED, approve() loses cleanly, zero approval WalletTransactions exist', async (t) => {
+	const { withdrawalService, row, walletTransactions, walletTransactionCreateSpy, updateManySpy } = await loadApproveService(t, { opponentAction: 'REJECTED' });
+
+	await assert.rejects(
+		() => withdrawalService.approve('wd-1', 'admin-2', { adminNote: 'too late, already rejected' }),
+		(err: any) => { assert.equal(err.statusCode, 409); return true; }
+	);
+
+	assert.equal(row.status, 'REJECTED');
+	assert.equal(walletTransactions.length, 0, 'the losing approve() must never write a debit for a withdrawal that was actually rejected');
+	assert.equal(walletTransactionCreateSpy.mock.callCount(), 0);
+	assert.equal(updateManySpy.mock.callCount(), 1, 'approve()\'s own conditional update ran and correctly matched zero rows');
+});
+
+test('E. reject: a failure occurring after the conditional transition already succeeded rolls back the whole transaction — the withdrawal is restored to PENDING, no side effect survives', async (t) => {
+	const { withdrawalService, row } = await loadApproveService(t, { failAfterRejectTransition: true });
+
+	await assert.rejects(() => withdrawalService.reject('wd-1', 'admin-1', { rejectionReason: 'x' }));
+
+	assert.equal(row.status, 'PENDING', 'the conditional transition must be rolled back along with everything else in the transaction');
+});
+
+test('reject: an already non-PENDING withdrawal is rejected and never reaches $transaction at all (existing validation, preserved)', async (t) => {
+	const { withdrawalService, transactionSpy } = await loadApproveService(t, { initialStatus: 'APPROVED' });
+
+	await assert.rejects(
+		() => withdrawalService.reject('wd-1', 'admin-1', { rejectionReason: 'x' }),
+		(err: any) => { assert.equal(err.statusCode, 409); return true; }
+	);
+	assert.equal(transactionSpy.mock.callCount(), 0);
+});
+
+test('reject: a non-existent withdrawal id is rejected with 404 (existing validation, preserved)', async (t) => {
+	const { withdrawalService } = await loadApproveService(t);
+	await assert.rejects(
+		() => withdrawalService.reject('does-not-exist', 'admin-1', { rejectionReason: 'x' }),
+		(err: any) => { assert.equal(err.statusCode, 404); return true; }
+	);
 });
 
 test('reject: a rejected withdrawal does not permanently consume available earnings — a subsequent full-amount request succeeds once the first is REJECTED', async (t) => {

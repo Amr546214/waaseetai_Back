@@ -4,7 +4,22 @@
 // Get a free hosted Postgres database in seconds: `npx create-db`
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  // partialIndexes: required for PayoutAttempt's active_attempt_unique
+  // constraint below (a genuine PostgreSQL partial unique index — "at most
+  // one PENDING/PROCESSING PayoutAttempt per Withdrawal" — enforced by
+  // Postgres itself, not application logic). Confirmed empirically against
+  // this exact installed Prisma 7.8.0 (both a minimal model and this whole
+  // schema) before adding it here: `prisma validate` accepts it, and a
+  // `prisma migrate diff` between this schema with/without the flag alone
+  // (no partial index used) renders an EMPTY migration — enabling the flag
+  // has zero effect on anything else in this schema. Prisma/prisma,
+  // @prisma/client and @prisma/adapter-pg are pinned to the exact resolved
+  // 7.8.0 (not a caret range) specifically because this is a preview
+  // feature — its shape is not covered by Prisma's stable-API semver
+  // guarantee, so an unpinned minor/patch bump could silently change how
+  // this syntax parses or what SQL it renders.
+  previewFeatures = ["partialIndexes"]
 }
 
 datasource db {
@@ -1912,6 +1927,12 @@ model Dispute {
 enum WithdrawalStatus {
   PENDING
   APPROVED
+  // Payout P1: an active PayoutAttempt exists for this withdrawal and it
+  // must remain reserved. Deliberately NO separate FAILED value — a failed
+  // PayoutAttempt reverts the Withdrawal to APPROVED (indistinguishable
+  // from "never attempted yet", which is the correct, minimal semantics;
+  // the PayoutAttempt rows themselves carry the failure history).
+  PROCESSING
   REJECTED
   COMPLETED
 }
@@ -1935,9 +1956,96 @@ model Withdrawal {
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
+  // Payout P1: the destination snapshot for payout purposes IS this row's
+  // own accountName/accountNumber/iban above, captured once at creation and
+  // never re-read live from the provider's profile — every PayoutAttempt
+  // for this withdrawal shares that single, immutable destination.
+  payoutAttempts PayoutAttempt[]
+
   @@index([status, createdAt])
   @@index([userId, createdAt])
   @@map("withdrawals")
+}
+
+enum PayoutAttemptStatus {
+  // Durable local row exists; the external payout call has not yet been
+  // confirmed accepted by the provider — it may not have been sent yet, may
+  // be in flight, or may have failed with an unknown outcome. P1 never
+  // moves a row past this state itself (no external call exists yet); P2/P3
+  // will drive PENDING -> PROCESSING/FAILED/COMPLETED using the primitives
+  // this batch provides.
+  PENDING
+  // Provider has synchronously acknowledged/accepted the payout; awaiting a
+  // terminal outcome (webhook or reconciliation).
+  PROCESSING
+  // Authoritative success — from a verified webhook or a reconciliation
+  // lookup, never merely because an admin approved the withdrawal.
+  COMPLETED
+  // Authoritative failure — a definite synchronous rejection, a verified
+  // webhook failure, or a reconciliation lookup confirming the attempt
+  // never reached the provider. Terminal for this attempt; a retry is a
+  // NEW PayoutAttempt row with the next attemptNumber, never a status
+  // change on this one.
+  FAILED
+}
+
+model PayoutAttempt {
+  id           String @id @default(uuid())
+
+  withdrawalId String
+  withdrawal   Withdrawal @relation(fields: [withdrawalId], references: [id], onDelete: Cascade)
+
+  // 'PAYPAL' today; a plain string (not an enum) so a second payout
+  // provider never needs a schema migration to add, only a new value.
+  provider     String
+
+  // 1, 2, 3... — every attempt ever made for this withdrawal, active or
+  // terminal, claims a distinct ordinal forever. Allocated inside the same
+  // SERIALIZABLE transaction that creates the row; @@unique below (not
+  // count()+1 alone) is the actual concurrency backstop.
+  attemptNumber Int
+
+  // Our own idempotency key, generated deterministically from
+  // (withdrawalId, attemptNumber) and stored BEFORE any future external
+  // call — see prisma-retry.util.ts-adjacent payout-attempt.util.ts. Stable
+  // across an HTTP retry of the SAME attempt; different for a genuinely new
+  // one. No secret material involved.
+  senderBatchId String @unique
+
+  // The provider's own references, populated once known (never before the
+  // call, unlike senderBatchId above).
+  payoutBatchId String?
+  payoutItemId  String? @unique // the eventual webhook correlation key
+
+  status        PayoutAttemptStatus @default(PENDING)
+  failureReason String?
+  // Sanitized last-known API/webhook response for reconciliation — P2/P3's
+  // responsibility to ensure nothing secret (tokens, full headers) is ever
+  // written here; P1 only defines the column.
+  rawResponse   Json?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  // Query-performance indexes ONLY — deliberately NOT the uniqueness
+  // backstop (see active_attempt_unique below). A future reader must never
+  // mistake this for enforcing "at most one active attempt."
+  @@index([withdrawalId, status])
+  @@index([status, createdAt])
+
+  // Attempt-history integrity: no two attempts for the same withdrawal ever
+  // share an ordinal, active or terminal.
+  @@unique([withdrawalId, attemptNumber])
+
+  // THE hard DB backstop: at most one PENDING/PROCESSING PayoutAttempt can
+  // ever exist per withdrawal, enforced by Postgres itself via a genuine
+  // partial unique index (requires previewFeatures = ["partialIndexes"]
+  // above). A second concurrent attempt's INSERT fails atomically here,
+  // regardless of what any application-level pre-check believed.
+  @@unique([withdrawalId], where: raw("status IN ('PENDING','PROCESSING')"), map: "active_attempt_unique")
+
+  @@map("payout_attempts")
 }
 
 enum OnboardingStatus {
