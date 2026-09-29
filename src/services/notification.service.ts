@@ -137,20 +137,34 @@ export class NotificationService {
 
 	/**
 	 * Send an OTP verification code via SMS.
-	 * TODO: integrate an SMS gateway (e.g. Twilio, Unifonic).
+	 *
+	 * No real gateway account exists yet, so with SMS_ENABLED unset/false this
+	 * logs the code instead of sending it — the login-time phone OTP flow
+	 * (auth.service.ts) can still be tested end-to-end locally/in staging.
+	 * Once a provider account exists: set SMS_ENABLED=true, SMS_PROVIDER to a
+	 * case below, install its SDK, and implement the matching send*() method.
 	 */
 	public async sendSmsOtp(phoneNumber: string, code: string): Promise<void> {
 		const smsEnabled = process.env.SMS_ENABLED === 'true';
-		const smsProvider = process.env.SMS_PROVIDER || 'twilio';
-		const smsSenderId = process.env.SMS_SENDER_ID || 'WaseetAI';
+		const smsProvider = process.env.SMS_PROVIDER || 'dev';
 
 		if (!smsEnabled) {
-			console.warn(`[NotificationService] SMS disabled. OTP for ${phoneNumber} was NOT sent.`);
+			console.log(`[NotificationService][SMS:DEV] OTP for ${phoneNumber}: ${code}`);
 			return;
 		}
 
-		// Placeholder — wire up a real SMS provider here
-		console.warn(`[NotificationService] SMS gateway (${smsProvider}) not implemented. OTP for ${phoneNumber} was NOT sent.`);
+		switch (smsProvider) {
+			case 'twilio':
+				await this.sendSmsViaTwilio(phoneNumber, code);
+				break;
+			default:
+				console.warn(`[NotificationService] Unknown SMS_PROVIDER "${smsProvider}". OTP for ${phoneNumber} was NOT sent.`);
+		}
+	}
+
+	/** Not wired up yet — install the `twilio` SDK and implement this once a Twilio account/credentials exist. */
+	private async sendSmsViaTwilio(phoneNumber: string, code: string): Promise<void> {
+		console.warn(`[NotificationService] SMS_PROVIDER=twilio is set but sendSmsViaTwilio() isn't implemented yet. OTP for ${phoneNumber} was NOT sent.`);
 	}
 
 	/**
@@ -247,3 +261,26 @@ export class NotificationService {
 }
 
 export const notificationService = new NotificationService();
+
+// ─── Preferences ──────────────────────────────────────────────────────────────
+// One row per user, shared across every role (see schema.prisma's
+// NotificationPreference doc comment). A PATCH merges into the existing
+// JSON object rather than replacing it wholesale.
+
+export const notificationPreferenceService = {
+	async getPreferences(userId: string): Promise<Record<string, boolean>> {
+		const row = await prisma.notificationPreference.findUnique({ where: { userId } });
+		return (row?.settings as Record<string, boolean>) || {};
+	},
+
+	async updatePreferences(userId: string, patch: Record<string, boolean>): Promise<Record<string, boolean>> {
+		const existing = await prisma.notificationPreference.findUnique({ where: { userId } });
+		const merged = { ...(existing?.settings as Record<string, boolean> | undefined), ...patch };
+		const row = await prisma.notificationPreference.upsert({
+			where: { userId },
+			create: { userId, settings: merged },
+			update: { settings: merged },
+		});
+		return row.settings as Record<string, boolean>;
+	},
+};

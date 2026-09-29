@@ -10,6 +10,14 @@ export async function listDisputes(req: Request, res: Response, next: NextFuncti
   try { const rawStatus = req.query.status ? String(req.query.status).toUpperCase() : undefined; const status = rawStatus && Object.values(DisputeStatus).includes(rawStatus as DisputeStatus) ? rawStatus as DisputeStatus : undefined; if (rawStatus && !status) throw new AppError('حالة النزاع غير صحيحة', 400); const data = await disputeService.listForAdmin(status, Number(req.query.page) || 1, Number(req.query.limit) || 20); res.json({ success: true, data }); } catch (error) { next(error); }
 }
 
+export async function listMyDisputes(req: Request, res: Response, next: NextFunction) {
+  try { const rawStatus = req.query.status ? String(req.query.status).toUpperCase() : undefined; const status = rawStatus && Object.values(DisputeStatus).includes(rawStatus as DisputeStatus) ? rawStatus as DisputeStatus : undefined; if (rawStatus && !status) throw new AppError('حالة النزاع غير صحيحة', 400); const data = await disputeService.listForUser(actorId(req), status, Number(req.query.page) || 1, Number(req.query.limit) || 20); res.json({ success: true, data }); } catch (error) { next(error); }
+}
+
+export async function getMyDispute(req: Request, res: Response, next: NextFunction) {
+  try { res.json({ success: true, data: await disputeService.getForUser(String(req.params.id), actorId(req)) }); } catch (error) { next(error); }
+}
+
 export async function getDispute(req: Request, res: Response, next: NextFunction) {
   try { res.json({ success: true, data: await disputeService.getForAdmin(String(req.params.id)) }); } catch (error) { next(error); }
 }

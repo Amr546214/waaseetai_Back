@@ -1,4 +1,4 @@
-import { DisputeStatus, RequestStatus } from '@prisma/client';
+import { ContractStatus, DisputeStatus, EscrowStatus, RequestStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { CreateDisputeInput, ResolveDisputeInput } from '../dtos/dispute.dto';
@@ -93,6 +93,19 @@ export class DisputeService {
 
   async cancelByProvider(requestId: string, providerId: string) {
     await this.requestForActor(requestId, providerId, 'provider', [RequestStatus.IN_PROGRESS], 'لا يمكن إلغاء هذا الطلب في حالته الحالية');
+    // Phase 4 — this used to flip ONLY ClientRequest.status to CANCELLED,
+    // leaving the Contract ACTIVE, the Project IN_PROGRESS and the client's
+    // Escrow HELD (funds stranded, related records contradicting each other).
+    // A funded, signed engagement has no safe unilateral cancel+refund path
+    // yet (no CANCELLED ProjectStatus, no escrow-refund flow), so it must go
+    // through a dispute / admin resolution instead of silently diverging.
+    const [activeContract, heldEscrow] = await Promise.all([
+      prisma.contract.findFirst({ where: { projectId: requestId, status: { in: [ContractStatus.ACTIVE, ContractStatus.PENDING_PROVIDER_SIGNATURE, ContractStatus.DISPUTED] } }, select: { id: true } }),
+      prisma.escrow.findFirst({ where: { projectId: requestId, status: EscrowStatus.HELD }, select: { id: true } })
+    ]);
+    if (activeContract || heldEscrow) {
+      throw new AppError('لا يمكن إلغاء مشروع مموَّل بعقد نشط من طرف واحد — افتح نزاعاً ليتم الفصل وإعادة المبلغ المحتجز عبر الإدارة', 409);
+    }
     return prisma.clientRequest.update({ where: { id: requestId }, data: { status: RequestStatus.CANCELLED } });
   }
 
@@ -104,6 +117,26 @@ export class DisputeService {
       prisma.dispute.count({ where })
     ]);
     return { items, pagination: { page: safePage, limit: safeLimit, total, pages: Math.ceil(total / safeLimit) } };
+  }
+
+  // A user is a party to a dispute if they opened it or it was opened
+  // against them — same two columns admin's listForAdmin()/getForAdmin()
+  // already expose, just scoped down to "my own" instead of "everyone's".
+  async listForUser(userId: string, status?: DisputeStatus, page = 1, limit = 20) {
+    const safePage = Math.max(1, page); const safeLimit = Math.min(100, Math.max(1, limit));
+    const where = { OR: [{ openedById: userId }, { againstUserId: userId }], ...(status ? { status } : {}) };
+    const [items, total] = await Promise.all([
+      prisma.dispute.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { request: { select: { id: true, title: true } }, openedBy: { select: { id: true, firstName: true, lastName: true } }, againstUser: { select: { id: true, firstName: true, lastName: true } } } }),
+      prisma.dispute.count({ where })
+    ]);
+    return { items, pagination: { page: safePage, limit: safeLimit, total, pages: Math.ceil(total / safeLimit) } };
+  }
+
+  async getForUser(id: string, userId: string) {
+    const dispute = await prisma.dispute.findUnique({ where: { id }, include: { request: true, project: true, openedBy: { select: { id: true, firstName: true, lastName: true } }, againstUser: { select: { id: true, firstName: true, lastName: true } }, resolvedBy: { select: { id: true, firstName: true, lastName: true } } } });
+    if (!dispute) throw new AppError('النزاع غير موجود', 404);
+    if (dispute.openedById !== userId && dispute.againstUserId !== userId) throw new AppError('لا تملك صلاحية الوصول لهذا النزاع', 403);
+    return dispute;
   }
 
   async getForAdmin(id: string) {

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
-import { notificationService } from '../services/notification.service';
+import { notificationService, notificationPreferenceService } from '../services/notification.service';
+import { updateNotificationPreferencesSchema } from '../dtos/notification-preferences.dto';
 
 export class NotificationsController {
 	async getNotifications(req: Request, res: Response) {
@@ -39,6 +40,32 @@ export class NotificationsController {
 			return res.status(200).json({ success: true, message: 'تم تعليم كل الإشعارات كمقروءة بنجاح' }) as any;
 		} catch (error: any) {
 			console.error('[NotificationsController] Error marking all as read:', error);
+			return res.status(500).json({ success: false, error: error.message }) as any;
+		}
+	}
+
+	async getPreferences(req: Request, res: Response) {
+		try {
+			const userId = (req as any).user?.id;
+			const settings = await notificationPreferenceService.getPreferences(userId);
+			return res.status(200).json({ success: true, data: { settings } }) as any;
+		} catch (error: any) {
+			console.error('[NotificationsController] Error getting preferences:', error);
+			return res.status(500).json({ success: false, error: error.message }) as any;
+		}
+	}
+
+	async updatePreferences(req: Request, res: Response) {
+		try {
+			const userId = (req as any).user?.id;
+			const parsed = updateNotificationPreferencesSchema.safeParse(req.body);
+			if (!parsed.success) {
+				return res.status(400).json({ success: false, message: parsed.error.issues.map(i => i.message).join(', ') }) as any;
+			}
+			const settings = await notificationPreferenceService.updatePreferences(userId, parsed.data.settings);
+			return res.status(200).json({ success: true, data: { settings } }) as any;
+		} catch (error: any) {
+			console.error('[NotificationsController] Error updating preferences:', error);
 			return res.status(500).json({ success: false, error: error.message }) as any;
 		}
 	}
