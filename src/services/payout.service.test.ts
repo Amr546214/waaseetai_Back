@@ -376,6 +376,193 @@ test('N. initializeSendPayout: the attemptNumber-race retry is bounded — if ev
 	assert.equal(attempts, 3, 'bounded at MAX_SERIALIZATION_RETRIES (3), matching withdrawal.service.ts\'s own precedent');
 });
 
+// ============================================================================
+// classifyInitializationConflict() P2002 metadata-shape fix (Payout P1.1) —
+// a real DEV Postgres concurrency run confirmed that with this project's
+// exact Prisma 7.8.0 + @prisma/adapter-pg combination, a driver-adapter-
+// surfaced P2002 does NOT populate `meta.target` at all; the tests above
+// (K, L, M, N) only ever exercised the ORIGINALLY-ASSUMED `meta.target`
+// shape. The tests below specifically exercise the CONFIRMED real shape —
+// `meta.driverAdapterError.cause.constraint.fields` (plus the constraint
+// NAME parsed from `cause.originalMessage`) — using the exact JSON
+// structure captured verbatim from that real run, reproduced here as a
+// literal fixture rather than a hand-wavy approximation.
+// ============================================================================
+
+function realAdapterPgP2002(constraintName: string, fields: string[]) {
+	return new (require('@prisma/client').Prisma.PrismaClientKnownRequestError)(
+		`Unique constraint failed on the constraint: \`${constraintName}\``,
+		{
+			code: 'P2002', clientVersion: 'test',
+			meta: {
+				modelName: 'PayoutAttempt',
+				driverAdapterError: {
+					name: 'DriverAdapterError',
+					cause: {
+						originalCode: '23505',
+						originalMessage: `duplicate key value violates unique constraint "${constraintName}"`,
+						kind: 'UniqueConstraintViolation',
+						constraint: { fields: fields.map(f => `"${f}"`) }
+					}
+				}
+			}
+		}
+	);
+}
+
+test('P1.1-A. initializeSendPayout: the ORIGINAL meta.target P2002 shape still classifies correctly (regression guard for the fix below)', async (t) => {
+	const { Prisma } = await import('@prisma/client');
+	const { tx, payoutAttempts } = makeHappyTx();
+	tx.payoutAttempt.create = async () => {
+		throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+			code: 'P2002', clientVersion: 'test', meta: { target: ['active_attempt_unique'] }
+		});
+	};
+	const transactionSpy = t.mock.fn(async (fn: any) => fn(tx));
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	const moduleUrl = `./payout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { payoutService } = await import(moduleUrl);
+
+	await assert.rejects(() => payoutService.initializeSendPayout('wd-1'), (err: any) => { assert.equal(err.statusCode, 409); return true; });
+	assert.equal(transactionSpy.mock.callCount(), 1);
+	assert.equal(payoutAttempts.length, 0);
+});
+
+test('P1.1-B. initializeSendPayout: the CONFIRMED real adapter-pg P2002 shape (meta.driverAdapterError.cause.constraint.fields) on active_attempt_unique is classified as a clean 409, never surfaced raw', async (t) => {
+	const { tx, payoutAttempts } = makeHappyTx();
+	tx.payoutAttempt.create = async () => { throw realAdapterPgP2002('active_attempt_unique', ['withdrawalId']); };
+	const transactionSpy = t.mock.fn(async (fn: any) => fn(tx));
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	const moduleUrl = `./payout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { payoutService } = await import(moduleUrl);
+
+	await assert.rejects(() => payoutService.initializeSendPayout('wd-1'), (err: any) => {
+		assert.equal(err.statusCode, 409);
+		assert.notEqual(err.constructor?.name, 'PrismaClientKnownRequestError', 'must be converted to the clean AppError, not surfaced raw — this is the exact leak the real DEV run observed before this fix');
+		return true;
+	});
+	assert.equal(transactionSpy.mock.callCount(), 1, 'a genuine active-attempt conflict must not be blindly retried');
+	assert.equal(payoutAttempts.length, 0);
+});
+
+test('P1.1-C. initializeSendPayout: the CONFIRMED real adapter-pg P2002 shape on the attemptNumber-race constraints IS retried, succeeding once the retry allocates a fresh number', async (t) => {
+	let attempts = 0;
+	const { tx } = makeHappyTx();
+	const realCreate = tx.payoutAttempt.create;
+	tx.payoutAttempt.create = async (args: any) => {
+		attempts += 1;
+		if (attempts === 1) throw realAdapterPgP2002('payout_attempts_senderBatchId_key', ['senderBatchId']);
+		return realCreate(args);
+	};
+	const transactionSpy = t.mock.fn(async (fn: any) => fn(tx));
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	const moduleUrl = `./payout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { payoutService } = await import(moduleUrl);
+
+	const attempt = await payoutService.initializeSendPayout('wd-1');
+	assert.equal(attempt.attemptNumber, 1);
+	assert.equal(transactionSpy.mock.callCount(), 2, 'the whole transaction is retried, exactly matching the target-shape precedent (test L)');
+});
+
+test('P1.1-D. initializeSendPayout: the CONFIRMED real adapter-pg P2002 shape on the withdrawalId+attemptNumber composite constraint is ALSO classified as the attemptNumber race, matching the intended state-machine semantics', async (t) => {
+	let attempts = 0;
+	const { tx } = makeHappyTx();
+	const realCreate = tx.payoutAttempt.create;
+	tx.payoutAttempt.create = async (args: any) => {
+		attempts += 1;
+		if (attempts === 1) throw realAdapterPgP2002('payout_attempts_withdrawalId_attemptNumber_key', ['withdrawalId', 'attemptNumber']);
+		return realCreate(args);
+	};
+	const transactionSpy = t.mock.fn(async (fn: any) => fn(tx));
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	const moduleUrl = `./payout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { payoutService } = await import(moduleUrl);
+
+	const attempt = await payoutService.initializeSendPayout('wd-1');
+	assert.equal(attempt.attemptNumber, 1);
+	assert.equal(transactionSpy.mock.callCount(), 2);
+});
+
+test('P1.1-E. initializeSendPayout: a P2002 on an UNRELATED constraint, in the real adapter-pg shape, remains unclassified and propagates raw — never guessed, never retried', async (t) => {
+	let attempts = 0;
+	const { tx } = makeHappyTx();
+	tx.payoutAttempt.create = async () => {
+		attempts += 1;
+		throw realAdapterPgP2002('some_other_unrelated_constraint', ['someOtherColumn']);
+	};
+	const transactionSpy = t.mock.fn(async (fn: any) => fn(tx));
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	const moduleUrl = `./payout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { payoutService } = await import(moduleUrl);
+
+	await assert.rejects(() => payoutService.initializeSendPayout('wd-1'), (err: any) => { assert.equal(err.code, 'P2002'); return true; });
+	assert.equal(attempts, 1, 'an unrelated constraint must never be blindly retried, in either metadata shape');
+});
+
+test('P1.1-F. initializeSendPayout: a P2002 with malformed/missing metadata (no target, no driverAdapterError) remains unclassified and propagates raw', async (t) => {
+	const { Prisma } = await import('@prisma/client');
+	const { tx } = makeHappyTx();
+	tx.payoutAttempt.create = async () => {
+		throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' });
+	};
+	const transactionSpy = t.mock.fn(async (fn: any) => fn(tx));
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	const moduleUrl = `./payout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { payoutService } = await import(moduleUrl);
+
+	await assert.rejects(() => payoutService.initializeSendPayout('wd-1'), (err: any) => { assert.equal(err.code, 'P2002'); return true; });
+});
+
+test('P1.1-F2. initializeSendPayout: a P2002 whose driverAdapterError.cause is present but has neither a parseable originalMessage nor a constraint.fields array remains unclassified and propagates raw', async (t) => {
+	const { Prisma } = await import('@prisma/client');
+	const { tx } = makeHappyTx();
+	tx.payoutAttempt.create = async () => {
+		throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+			code: 'P2002', clientVersion: 'test',
+			meta: { modelName: 'PayoutAttempt', driverAdapterError: { name: 'DriverAdapterError', cause: { originalCode: '23505', kind: 'UniqueConstraintViolation' } } }
+		});
+	};
+	const transactionSpy = t.mock.fn(async (fn: any) => fn(tx));
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	const moduleUrl = `./payout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { payoutService } = await import(moduleUrl);
+
+	await assert.rejects(() => payoutService.initializeSendPayout('wd-1'), (err: any) => { assert.equal(err.code, 'P2002'); return true; });
+});
+
+test('P1.1-G. initializeSendPayout: a non-P2002 PrismaClientKnownRequestError is never classified/retried by classifyInitializationConflict — only isRetryableTransactionConflict\'s own genuine-conflict check applies', async (t) => {
+	const { Prisma } = await import('@prisma/client');
+	let attempts = 0;
+	const { tx } = makeHappyTx();
+	tx.payoutAttempt.create = async () => {
+		attempts += 1;
+		throw new Prisma.PrismaClientKnownRequestError('Foreign key constraint failed', { code: 'P2003', clientVersion: 'test', meta: { field_name: 'withdrawalId' } });
+	};
+	const transactionSpy = t.mock.fn(async (fn: any) => fn(tx));
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	const moduleUrl = `./payout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { payoutService } = await import(moduleUrl);
+
+	await assert.rejects(() => payoutService.initializeSendPayout('wd-1'), (err: any) => { assert.equal(err.code, 'P2003'); return true; });
+	assert.equal(attempts, 1, 'a P2003 must never be retried by either the transaction-conflict check or the P2002 classifier');
+});
+
+test('P1.1-H. initializeSendPayout: the attemptNumber-race retry via the real adapter-pg shape is bounded — exhausted retries surface the final P2002 raw rather than looping forever', async (t) => {
+	let attempts = 0;
+	const { tx } = makeHappyTx();
+	tx.payoutAttempt.create = async () => {
+		attempts += 1;
+		throw realAdapterPgP2002('payout_attempts_senderBatchId_key', ['senderBatchId']);
+	};
+	const transactionSpy = t.mock.fn(async (fn: any) => fn(tx));
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	const moduleUrl = `./payout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { payoutService } = await import(moduleUrl);
+
+	await assert.rejects(() => payoutService.initializeSendPayout('wd-1'), (err: any) => { assert.equal(err.code, 'P2002'); return true; });
+	assert.equal(attempts, 3, 'bounded at MAX_SERIALIZATION_RETRIES (3), matching the target-shape precedent (test N)');
+});
+
 test('O. initializeSendPayout: two concurrent initializations correctly serialize — the second (retried) attempt observes the first\'s already-created attempt and is rejected as an active-attempt conflict', async (t) => {
 	// Two independently-loaded instances sharing one underlying withdrawal +
 	// attempts array — the same "loser retried against now-current state"

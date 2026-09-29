@@ -38,34 +38,89 @@ const ATTEMPT_NUMBER_RACE_CONSTRAINTS = new Set([
 type InitializationConflict = 'ACTIVE_ATTEMPT_EXISTS' | 'ATTEMPT_NUMBER_RACE' | null;
 
 /**
+ * Extracts every string that could identify the violated constraint/index
+ * or column(s) from a P2002's metadata, across the TWO shapes now confirmed
+ * (Payout P1.1 follow-up — see classifyInitializationConflict()'s own
+ * comment for the empirical finding that prompted this):
+ *
+ *  1. The "standard" documented Prisma shape: `error.meta.target`, a bare
+ *     string or an array of strings (index name and/or column names,
+ *     depending on Prisma version/connector).
+ *
+ *  2. The shape CONFIRMED on a real DEV Postgres run with this project's
+ *     exact Prisma 7.8.0 + @prisma/adapter-pg combination: `meta.target` is
+ *     `undefined` for a driver-adapter-surfaced unique violation; the
+ *     identification lives instead at `meta.driverAdapterError.cause`. Two
+ *     independent signals are pulled from there:
+ *       - the constraint/index NAME, parsed out of Postgres's own stable,
+ *         long-documented error wording — `duplicate key value violates
+ *         unique constraint "<name>"` — confirmed verbatim in the real
+ *         error observed for both `active_attempt_unique` and
+ *         `payout_attempts_senderBatchId_key`. This is the precise signal:
+ *         once extracted, it matches the SAME known-constraint-name checks
+ *         below exactly like `meta.target` already did for shape 1.
+ *       - `cause.constraint.fields`, the raw column-name array (Postgres
+ *         quotes each entry, e.g. `'"senderBatchId"'`; quotes are stripped)
+ *         — a secondary fallback signal, feeding the SAME pre-existing
+ *         field-name heuristic already used for shape 1's field-array case.
+ *
+ * Both shapes' candidates are pooled together; nothing here decides
+ * classification — that stays entirely in classifyInitializationConflict(),
+ * unchanged. If neither shape yields a recognizable candidate (a malformed/
+ * missing meta, or a P2002 unrelated to this transaction's own known
+ * constraints), this simply returns an empty array, and the caller's
+ * existing safe fallback (never guess, never blindly retry) applies exactly
+ * as before.
+ */
+function extractConflictCandidates(error: Prisma.PrismaClientKnownRequestError): string[] {
+	const candidates: string[] = [];
+
+	const target = (error.meta as { target?: unknown } | undefined)?.target;
+	if (typeof target === 'string') candidates.push(target);
+	else if (Array.isArray(target)) candidates.push(...target.filter((t): t is string => typeof t === 'string'));
+
+	const driverCause = (error.meta as { driverAdapterError?: { cause?: unknown } } | undefined)?.driverAdapterError?.cause;
+	if (driverCause && typeof driverCause === 'object') {
+		const cause = driverCause as { originalMessage?: unknown; constraint?: { fields?: unknown } };
+		if (typeof cause.originalMessage === 'string') {
+			const nameMatch = cause.originalMessage.match(/unique constraint "([^"]+)"/);
+			if (nameMatch) candidates.push(nameMatch[1]);
+		}
+		if (cause.constraint && typeof cause.constraint === 'object' && Array.isArray(cause.constraint.fields)) {
+			candidates.push(...cause.constraint.fields
+				.filter((f): f is string => typeof f === 'string')
+				.map(f => f.replace(/^"|"$/g, '')));
+		}
+	}
+
+	return candidates;
+}
+
+/**
  * Classifies a P2002 raised during initializeSendPayout() by inspecting
  * Prisma's own error metadata for the violated constraint/index name.
  *
- * HONEST LIMITATION, stated plainly rather than assumed away: this project
- * cannot exercise a real P2002 from this exact schema without a live
- * PostgreSQL connection, which this task is not permitted to make. Prisma's
- * `PrismaClientKnownRequestError.meta` shape for a Postgres unique
- * violation is documented to carry the violated constraint identification,
- * but its EXACT representation (a bare string, a single-element array, or a
- * field-name array) has not been empirically re-verified against this
- * specific schema+driver-adapter combination the way isRetryableTransactionConflict's
- * shapes were in Batch 2A. This function is therefore deliberately
- * conservative: it checks every representation it reasonably expects
- * `meta.target` to take, and if NONE of them clearly match either known
- * constraint, it returns `null` — meaning "not classified" — and the
- * caller MUST treat that as an unknown error and propagate it unmodified,
- * never silently retry or silently convert it to a business error. See the
- * P1 final report's "Limitations" section for the concrete follow-up this
- * implies once a real DEV concurrency test (§12 of the design) can observe
- * the actual shape.
+ * EMPIRICAL FINDING (Payout P1.1 — supersedes the original "honest
+ * limitation" this comment used to document): a real DEV Postgres
+ * concurrency run surfaced a genuine P2002 from two concurrent
+ * initializeSendPayout() calls, and confirmed that with this project's
+ * exact Prisma 7.8.0 + @prisma/adapter-pg combination, `error.meta.target`
+ * is NOT populated at all — the violated-constraint identification instead
+ * lives under `error.meta.driverAdapterError.cause` (see
+ * extractConflictCandidates() above for exactly how both this shape and the
+ * originally-assumed `meta.target` shape are read). This function's own
+ * classification logic is UNCHANGED by that fix — it still only recognizes
+ * the specific known constraint names/field-name patterns below and returns
+ * `null` (unclassified) for everything else; only the SOURCE the candidate
+ * strings are pulled from was corrected. The caller still MUST treat a
+ * `null` result as an unknown error and propagate it unmodified, never
+ * silently retry or silently convert it to a business error — that safe
+ * fallback is deliberately preserved, not weakened, by this fix.
  */
 function classifyInitializationConflict(error: unknown): InitializationConflict {
 	if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') return null;
 
-	const target = (error.meta as { target?: unknown } | undefined)?.target;
-	const candidates: string[] = [];
-	if (typeof target === 'string') candidates.push(target);
-	else if (Array.isArray(target)) candidates.push(...target.filter((t): t is string => typeof t === 'string'));
+	const candidates = extractConflictCandidates(error);
 
 	if (candidates.includes(ACTIVE_ATTEMPT_CONSTRAINT)) return 'ACTIVE_ATTEMPT_EXISTS';
 	if (candidates.some(c => ATTEMPT_NUMBER_RACE_CONSTRAINTS.has(c))) return 'ATTEMPT_NUMBER_RACE';
