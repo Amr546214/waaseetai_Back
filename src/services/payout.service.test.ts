@@ -22,10 +22,19 @@ function statusMatches(rowStatus: string, whereStatus: any): boolean {
 }
 
 function createPayoutMockPrisma(t: TestContext, opts: {
-	withdrawal?: { id: string; status: string };
+	withdrawal?: { id: string; status: string; method?: string; amount?: number; currency?: string; paypalEmail?: string | null };
 	payoutAttempts?: any[];
+	createPayoutResult?: any;
+	createPayoutImpl?: (params: any) => Promise<any>;
 } = {}) {
-	const withdrawals: any[] = [{ id: 'wd-1', status: 'APPROVED', ...opts.withdrawal }];
+	// Payout P2-C default: a fully valid, ready-to-send PayPal withdrawal —
+	// existing tests only ever override id/status, so this keeps them exactly
+	// as they were (they never read/assert on these new fields) while new
+	// sendPayout() tests get a realistic row to override piecemeal.
+	const withdrawals: any[] = [{
+		id: 'wd-1', status: 'APPROVED', method: 'paypal', amount: 100, currency: 'USD',
+		paypalEmail: 'provider@paypal-sandbox.example', ...opts.withdrawal
+	}];
 	const payoutAttempts: any[] = (opts.payoutAttempts || []).map(a => ({ ...a }));
 	let nextAttemptId = 1;
 
@@ -81,11 +90,34 @@ function createPayoutMockPrisma(t: TestContext, opts: {
 		}
 	});
 
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	// Payout P2-C: sendPayout()'s own FLAT (non-transactional) pre-check read
+	// — a separate spy from tx.withdrawal.findUnique above, since real Prisma
+	// exposes both the top-level client and per-transaction client as
+	// distinct objects, and sendPayout() deliberately reads via the
+	// top-level client for this side-effect-free validation (see
+	// payout.service.ts's own comment on why that's safe).
+	const findUniqueWithdrawalFlat = t.mock.fn(async (args: any) => withdrawals.find(w => w.id === args.where.id) ?? null);
+
+	// Payout P2-C: paypalService.createPayout() — mocked at the module
+	// boundary, never a real network call. Defaults to a realistic ACCEPTED
+	// response so tests that don't care about the PayPal leg (e.g. plain
+	// initializeSendPayout() tests, which never call sendPayout() at all)
+	// are unaffected; sendPayout()-specific tests override via
+	// createPayoutResult/createPayoutImpl.
+	const createPayoutSpy = t.mock.fn(
+		opts.createPayoutImpl ||
+		(async () => opts.createPayoutResult || { outcome: 'ACCEPTED', payoutBatchId: 'PB-DEFAULT', batchStatus: 'PENDING', safeResponse: {} })
+	);
+
+	t.mock.module('../config/db', {
+		namedExports: { prisma: { $transaction: transactionSpy, withdrawal: { findUnique: findUniqueWithdrawalFlat } } }
+	});
+	t.mock.module('./paypal.service', { namedExports: { paypalService: { createPayout: createPayoutSpy } } });
 
 	return {
 		findUniqueWithdrawal, findFirstAttempt, countAttempt, createAttempt, updateManyWithdrawal, updateManyAttempt,
-		findUniqueOrThrowAttempt, findUniqueAttempt, transactionSpy, withdrawals, payoutAttempts
+		findUniqueOrThrowAttempt, findUniqueAttempt, transactionSpy, withdrawals, payoutAttempts,
+		findUniqueWithdrawalFlat, createPayoutSpy
 	};
 }
 
@@ -725,4 +757,301 @@ test('Y. markAttemptCompleted / markAttemptDefinitelyFailed: a non-existent atte
 test('Z. markAttemptDefinitelyFailed: a non-existent attempt id is rejected with 404', async (t) => {
 	const { payoutService } = await loadService(t);
 	await assert.rejects(() => payoutService.markAttemptDefinitelyFailed('does-not-exist', 'x'), (err: any) => { assert.equal(err.statusCode, 404); return true; });
+});
+
+// ============================================================================
+// Payout P2-C — sendPayout() orchestration.
+//
+// Every test below uses the default withdrawal fixture from
+// createPayoutMockPrisma (id: 'wd-1', status: APPROVED, method: 'paypal',
+// amount: 100, currency: 'USD', paypalEmail: 'provider@paypal-sandbox.
+// example') unless it explicitly overrides a field via opts.withdrawal.
+// ============================================================================
+
+test('1/26. sendPayout: a valid APPROVED PayPal withdrawal durably initializes a PayoutAttempt (via the real, unchanged initializeSendPayout) BEFORE any PayPal call', async (t) => {
+	const callOrder: string[] = [];
+	const { payoutService, createAttempt, createPayoutSpy, payoutAttempts } = await loadService(t, {
+		createPayoutImpl: async () => { callOrder.push('createPayout'); return { outcome: 'ACCEPTED', payoutBatchId: 'PB-1', batchStatus: 'PENDING', safeResponse: {} }; }
+	});
+	createAttempt.mock.mockImplementation(async (args: any) => {
+		callOrder.push('createAttempt');
+		const row = { id: 'attempt-1', createdAt: new Date(), updatedAt: new Date(), completedAt: null, payoutBatchId: null, payoutItemId: null, failureReason: null, rawResponse: null, ...args.data };
+		payoutAttempts.push(row);
+		return row;
+	});
+
+	await payoutService.sendPayout('wd-1');
+
+	assert.deepEqual(callOrder, ['createAttempt', 'createPayout'], 'the durable PayoutAttempt row must be created BEFORE any PayPal call');
+	assert.equal(createPayoutSpy.mock.callCount(), 1);
+});
+
+test('2-5. sendPayout: PayPal receives Withdrawal.paypalEmail (never User.email/ProviderProfile) and the DB amount, with senderBatchId/senderItemId sourced from the PayoutAttempt', async (t) => {
+	const { payoutService, createPayoutSpy } = await loadService(t, {
+		withdrawal: { id: 'wd-1', status: 'APPROVED', paypalEmail: 'exact-db-value@paypal-sandbox.example', amount: 250 }
+	});
+
+	await payoutService.sendPayout('wd-1');
+
+	assert.equal(createPayoutSpy.mock.callCount(), 1);
+	const params = createPayoutSpy.mock.calls[0].arguments[0];
+	assert.equal(params.recipientEmail, 'exact-db-value@paypal-sandbox.example', 'recipient must be Withdrawal.paypalEmail exactly');
+	assert.equal(params.amount, 250, 'amount must be Withdrawal.amount exactly');
+	assert.equal(params.senderBatchId, 'wd-wd-1-a1', 'senderBatchId must come from the PayoutAttempt just created');
+	assert.equal(params.senderItemId, 'attempt-1', 'senderItemId must be the PayoutAttempt id');
+	// Structural proof, not just absence-of-call: the params object has no
+	// possible source for User.email or a live ProviderProfile lookup at
+	// all — sendPayout() takes only a withdrawalId, and CreatePayoutParams
+	// itself has no such field.
+	assert.deepEqual(Object.keys(params).sort(), ['amount', 'recipientEmail', 'senderBatchId', 'senderItemId']);
+});
+
+test('6-8. sendPayout: ACCEPTED calls markAttemptAccepted exactly once, leaves the attempt PROCESSING, and does NOT complete the Withdrawal', async (t) => {
+	const { payoutService, withdrawals, payoutAttempts, updateManyAttempt } = await loadService(t, {
+		createPayoutResult: { outcome: 'ACCEPTED', payoutBatchId: 'PB-REAL-1', batchStatus: 'PENDING', safeResponse: {} }
+	});
+
+	const result = await payoutService.sendPayout('wd-1');
+
+	assert.equal(result.outcome, 'ACCEPTED');
+	assert.equal(updateManyAttempt.mock.callCount(), 1, 'markAttemptAccepted (the only caller of payoutAttempt.updateMany besides markAttemptDefinitelyFailed/markAttemptCompleted) must fire exactly once');
+	assert.equal(payoutAttempts[0].status, 'PROCESSING');
+	assert.equal(payoutAttempts[0].payoutBatchId, 'PB-REAL-1');
+	assert.equal(withdrawals[0].status, 'PROCESSING', 'Withdrawal must NOT be marked COMPLETED — a create-payout acceptance is not authoritative completion');
+});
+
+test('9-13. sendPayout: UNKNOWN leaves the state machine completely untouched — no markAttemptAccepted/markAttemptDefinitelyFailed/markAttemptCompleted, attempt stays PENDING, Withdrawal stays PROCESSING', async (t) => {
+	const { payoutService, withdrawals, payoutAttempts, updateManyAttempt } = await loadService(t, {
+		createPayoutResult: { outcome: 'UNKNOWN', reason: 'انتهت المهلة' }
+	});
+
+	const result = await payoutService.sendPayout('wd-1');
+
+	assert.equal(result.outcome, 'UNKNOWN');
+	// updateManyAttempt is the ONLY write path shared by markAttemptAccepted,
+	// markAttemptDefinitelyFailed, and markAttemptCompleted — asserting it
+	// was never called at all proves none of the three ran, in one shot.
+	assert.equal(updateManyAttempt.mock.callCount(), 0, 'no state-mutating mark* method may run for an UNKNOWN outcome');
+	assert.equal(payoutAttempts[0].status, 'PENDING');
+	assert.equal(withdrawals[0].status, 'PROCESSING');
+	// The raw PayPal reason must never leak into the response.
+	assert.equal(JSON.stringify(result).includes('انتهت المهلة'), false);
+});
+
+test('14. sendPayout: an unexpected throw from createPayout() (contract violation) is treated exactly like UNKNOWN — no state change, no crash propagated', async (t) => {
+	const { payoutService, withdrawals, payoutAttempts, updateManyAttempt } = await loadService(t, {
+		createPayoutImpl: async () => { throw new Error('unexpected: PaypalService broke its own result contract'); }
+	});
+
+	const result = await payoutService.sendPayout('wd-1');
+
+	assert.equal(result.outcome, 'UNKNOWN');
+	assert.equal(updateManyAttempt.mock.callCount(), 0);
+	assert.equal(payoutAttempts[0].status, 'PENDING');
+	assert.equal(withdrawals[0].status, 'PROCESSING');
+});
+
+test('15. sendPayout: a repeated admin click while an attempt is already active does NOT call PayPal a second time — the existing P1 active-attempt guard rejects it first', async (t) => {
+	const { payoutService, createPayoutSpy } = await loadService(t);
+
+	const first = await payoutService.sendPayout('wd-1');
+	assert.equal(first.outcome, 'ACCEPTED');
+	assert.equal(createPayoutSpy.mock.callCount(), 1);
+
+	await assert.rejects(() => payoutService.sendPayout('wd-1'), (err: any) => {
+		assert.equal(err.statusCode, 409);
+		return true;
+	});
+	assert.equal(createPayoutSpy.mock.callCount(), 1, 'PayPal must not be called a second time');
+});
+
+test('15b. sendPayout: a repeated admin click while the FIRST attempt is still PENDING (createPayout in flight/UNKNOWN) also does not call PayPal a second time', async (t) => {
+	const { payoutService, createPayoutSpy } = await loadService(t, {
+		createPayoutResult: { outcome: 'UNKNOWN', reason: 'x' }
+	});
+
+	const first = await payoutService.sendPayout('wd-1');
+	assert.equal(first.outcome, 'UNKNOWN');
+	assert.equal(createPayoutSpy.mock.callCount(), 1);
+
+	await assert.rejects(() => payoutService.sendPayout('wd-1'), (err: any) => {
+		assert.equal(err.statusCode, 409);
+		return true;
+	});
+	assert.equal(createPayoutSpy.mock.callCount(), 1, 'a PENDING active attempt must block a second send exactly like a PROCESSING one');
+});
+
+// ============================================================================
+// Local validation BEFORE initializeSendPayout() — a locally-invalid
+// withdrawal must be rejected with NO PayoutAttempt created and the
+// Withdrawal left exactly as it was (still APPROVED), never flipped to
+// PROCESSING for a condition that can never change.
+// ============================================================================
+
+test('16. sendPayout: a non-PayPal withdrawal (method != paypal) is rejected before any external call, Withdrawal stays APPROVED, no PayoutAttempt created', async (t) => {
+	const { payoutService, withdrawals, createAttempt, transactionSpy, createPayoutSpy } = await loadService(t, {
+		withdrawal: { id: 'wd-1', status: 'APPROVED', method: 'bank_transfer' }
+	});
+
+	await assert.rejects(() => payoutService.sendPayout('wd-1'), (err: any) => { assert.equal(err.statusCode, 400); return true; });
+
+	assert.equal(withdrawals[0].status, 'APPROVED', 'must remain APPROVED — untouched');
+	assert.equal(createAttempt.mock.callCount(), 0);
+	assert.equal(transactionSpy.mock.callCount(), 0, 'initializeSendPayout must never even be invoked');
+	assert.equal(createPayoutSpy.mock.callCount(), 0);
+});
+
+test('17. sendPayout: a missing Withdrawal.paypalEmail is rejected before any external call, Withdrawal stays APPROVED, no PayoutAttempt created', async (t) => {
+	const { payoutService, withdrawals, createAttempt, createPayoutSpy } = await loadService(t, {
+		withdrawal: { id: 'wd-1', status: 'APPROVED', paypalEmail: null }
+	});
+
+	await assert.rejects(() => payoutService.sendPayout('wd-1'), (err: any) => { assert.equal(err.statusCode, 400); return true; });
+
+	assert.equal(withdrawals[0].status, 'APPROVED');
+	assert.equal(createAttempt.mock.callCount(), 0);
+	assert.equal(createPayoutSpy.mock.callCount(), 0);
+});
+
+test('18. sendPayout: a malformed Withdrawal.paypalEmail is rejected before any external call, Withdrawal stays APPROVED, no PayoutAttempt created', async (t) => {
+	const { payoutService, withdrawals, createAttempt, createPayoutSpy } = await loadService(t, {
+		withdrawal: { id: 'wd-1', status: 'APPROVED', paypalEmail: 'not-an-email' }
+	});
+
+	await assert.rejects(() => payoutService.sendPayout('wd-1'), (err: any) => { assert.equal(err.statusCode, 400); return true; });
+
+	assert.equal(withdrawals[0].status, 'APPROVED');
+	assert.equal(createAttempt.mock.callCount(), 0);
+	assert.equal(createPayoutSpy.mock.callCount(), 0);
+});
+
+test('19. sendPayout: a zero/negative Withdrawal.amount is rejected before any external call, Withdrawal stays APPROVED, no PayoutAttempt created', async (t) => {
+	const { payoutService: svcZero, withdrawals: wZero, createPayoutSpy: spyZero } = await loadService(t, {
+		withdrawal: { id: 'wd-1', status: 'APPROVED', amount: 0 }
+	});
+	await assert.rejects(() => svcZero.sendPayout('wd-1'), (err: any) => { assert.equal(err.statusCode, 400); return true; });
+	assert.equal(wZero[0].status, 'APPROVED');
+	assert.equal(spyZero.mock.callCount(), 0);
+});
+
+test('19b. sendPayout: a negative Withdrawal.amount is rejected before any external call', async (t) => {
+	const { payoutService, withdrawals, createPayoutSpy } = await loadService(t, {
+		withdrawal: { id: 'wd-1', status: 'APPROVED', amount: -50 }
+	});
+	await assert.rejects(() => payoutService.sendPayout('wd-1'), (err: any) => { assert.equal(err.statusCode, 400); return true; });
+	assert.equal(withdrawals[0].status, 'APPROVED');
+	assert.equal(createPayoutSpy.mock.callCount(), 0);
+});
+
+test('sendPayout: a non-USD Withdrawal.currency is rejected before any external call, Withdrawal stays APPROVED, no PayoutAttempt created', async (t) => {
+	const { payoutService, withdrawals, createAttempt, createPayoutSpy } = await loadService(t, {
+		withdrawal: { id: 'wd-1', status: 'APPROVED', currency: 'SAR' }
+	});
+
+	await assert.rejects(() => payoutService.sendPayout('wd-1'), (err: any) => { assert.equal(err.statusCode, 400); return true; });
+
+	assert.equal(withdrawals[0].status, 'APPROVED');
+	assert.equal(createAttempt.mock.callCount(), 0);
+	assert.equal(createPayoutSpy.mock.callCount(), 0);
+});
+
+test('sendPayout: a non-existent withdrawal id is rejected with 404 before any external call', async (t) => {
+	const { payoutService, createPayoutSpy } = await loadService(t);
+	await assert.rejects(() => payoutService.sendPayout('does-not-exist'), (err: any) => { assert.equal(err.statusCode, 404); return true; });
+	assert.equal(createPayoutSpy.mock.callCount(), 0);
+});
+
+// ============================================================================
+// 20-21. Request-body trust boundary — sendPayout() takes ONLY a
+// withdrawalId, so there is structurally no parameter through which a
+// caller could ever override amount/recipient. (The controller-level proof
+// that req.body is never even read lives in
+// withdrawal.controller.test.ts — this confirms the service itself has no
+// such parameter to exploit even if a caller somehow reached it directly.)
+// ============================================================================
+
+test('20-21. sendPayout: the method signature accepts only a withdrawalId — amount/recipient can only ever come from the DB row, never from a caller-supplied value', async (t) => {
+	const { payoutService, createPayoutSpy } = await loadService(t, {
+		withdrawal: { id: 'wd-1', status: 'APPROVED', amount: 77, paypalEmail: 'db-owned@paypal-sandbox.example' }
+	});
+
+	// Calling with extra arguments (as any caller who bypassed TypeScript
+	// might attempt) has no effect — sendPayout(withdrawalId) simply never
+	// declares a second parameter to read them from.
+	await (payoutService.sendPayout as any)('wd-1', { amount: 999999, recipientEmail: 'attacker@evil.example' });
+
+	const params = createPayoutSpy.mock.calls[0].arguments[0];
+	assert.equal(params.amount, 77);
+	assert.equal(params.recipientEmail, 'db-owned@paypal-sandbox.example');
+});
+
+// ============================================================================
+// 25. Future DEFINITELY_REJECTED compatibility.
+// ============================================================================
+
+test('25. sendPayout: a (currently unreachable in real P2-B) DEFINITELY_REJECTED result maps ONLY to markAttemptDefinitelyFailed — never markAttemptAccepted/markAttemptCompleted, and Withdrawal reverts to APPROVED', async (t) => {
+	const { payoutService, withdrawals, payoutAttempts } = await loadService(t, {
+		createPayoutResult: { outcome: 'DEFINITELY_REJECTED', reason: 'حساب PayPal غير صالح' }
+	});
+
+	const result = await payoutService.sendPayout('wd-1');
+
+	assert.equal(result.outcome, 'DEFINITELY_REJECTED');
+	assert.equal(payoutAttempts[0].status, 'FAILED');
+	assert.equal(payoutAttempts[0].failureReason, 'حساب PayPal غير صالح');
+	assert.equal(withdrawals[0].status, 'APPROVED', 'markAttemptDefinitelyFailed reverts Withdrawal PROCESSING -> APPROVED, allowing a legitimate future retry');
+});
+
+// ============================================================================
+// Step 13 — ACCEPTED-then-local-DB-failure. The single most safety-critical
+// scenario in this batch: PayPal has DEFINITELY accepted the payout, but our
+// own markAttemptAccepted() write fails. Must never retry PayPal, never
+// create a new attempt, never mark the attempt FAILED, never reopen the
+// Withdrawal to APPROVED.
+// ============================================================================
+
+test('13/Step 13. sendPayout: markAttemptAccepted() failing AFTER PayPal ACCEPTED never retries PayPal, never creates a new attempt, never marks FAILED, never reopens the Withdrawal — durable state is preserved for P3 reconciliation', async (t) => {
+	const { payoutService, withdrawals, payoutAttempts, createAttempt, createPayoutSpy, updateManyAttempt } = await loadService(t, {
+		createPayoutResult: { outcome: 'ACCEPTED', payoutBatchId: 'PB-CRITICAL-1', batchStatus: 'PENDING', safeResponse: {} }
+	});
+
+	// Simulate markAttemptAccepted()'s own updateMany throwing a genuine DB
+	// error — modeling a real Postgres connection failure at exactly the
+	// moment we try to record PayPal's acceptance.
+	updateManyAttempt.mock.mockImplementation(async () => { throw new Error('connection terminated unexpectedly (simulated DB failure)'); });
+
+	await assert.rejects(() => payoutService.sendPayout('wd-1'), (err: any) => {
+		assert.equal(err.statusCode, 500);
+		return true;
+	});
+
+	assert.equal(createPayoutSpy.mock.callCount(), 1, 'PayPal must NEVER be called a second time after this failure');
+	assert.equal(createAttempt.mock.callCount(), 1, 'no new PayoutAttempt may ever be created as a result of this failure');
+	assert.equal(payoutAttempts[0].status, 'PENDING', 'the attempt must NOT be marked FAILED — it did not fail, PayPal accepted it');
+	assert.equal(payoutAttempts[0].payoutBatchId, null, 'payoutBatchId could not be persisted — this is the exact, explicitly-flagged P3 reconciliation requirement (senderBatchId below remains the durable recovery key)');
+	assert.equal(payoutAttempts[0].senderBatchId, 'wd-wd-1-a1', 'senderBatchId (committed BEFORE the PayPal call) remains durably available for P3 to look this batch up against PayPal directly, even though payoutBatchId itself was lost locally');
+	assert.equal(withdrawals[0].status, 'PROCESSING', 'the Withdrawal must NOT return to APPROVED — that would let a re-click fire a second real PayPal payout for money that may already be in flight');
+
+	// A second admin click after this failure must ALSO be blocked by the
+	// existing P1 active-attempt guard (the attempt is still PENDING/active) —
+	// proving there is no accidental reopening even on a subsequent request.
+	await assert.rejects(() => payoutService.sendPayout('wd-1'), (err: any) => { assert.equal(err.statusCode, 409); return true; });
+	assert.equal(createPayoutSpy.mock.callCount(), 1, 'still exactly one PayPal call after the follow-up admin click');
+});
+
+// ============================================================================
+// 26. No PayPal call before durable PayoutAttempt creation — a second,
+// independent proof (beyond test 1's call-order check) using a hard failure
+// injected INTO initializeSendPayout()'s own transaction, confirming
+// createPayout() is never reached at all when the durable reservation itself
+// never commits.
+// ============================================================================
+
+test('26. sendPayout: if initializeSendPayout() itself fails (e.g. the withdrawal is no longer APPROVED), createPayout() is never called at all', async (t) => {
+	const { payoutService, createPayoutSpy } = await loadService(t, {
+		withdrawal: { id: 'wd-1', status: 'PENDING' } // not APPROVED -> initializeSendPayout() rejects with 409
+	});
+
+	await assert.rejects(() => payoutService.sendPayout('wd-1'), (err: any) => { assert.equal(err.statusCode, 409); return true; });
+	assert.equal(createPayoutSpy.mock.callCount(), 0);
 });

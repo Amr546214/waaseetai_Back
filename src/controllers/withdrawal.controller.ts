@@ -3,6 +3,7 @@ import { WithdrawalStatus } from '@prisma/client';
 import { createWithdrawalSchema, rejectWithdrawalSchema, resolveWithdrawalSchema } from '../dtos/withdrawal.dto';
 import { AppError } from '../utils/app-error';
 import { withdrawalService } from '../services/withdrawal.service';
+import { payoutService } from '../services/payout.service';
 
 const adminId = (req: Request) => req.user!.id;
 const userId = (req: Request) => req.user!.userId || req.user!.id;
@@ -40,4 +41,13 @@ export async function approveWithdrawal(req: Request, res: Response, next: NextF
 
 export async function rejectWithdrawal(req: Request, res: Response, next: NextFunction) {
   try { const parsed = rejectWithdrawalSchema.safeParse(req.body); if (!parsed.success) throw new AppError('سبب رفض السحب مطلوب', 400); res.json({ success: true, data: await withdrawalService.reject(String(req.params.id), adminId(req), parsed.data) }); } catch (error) { next(error); }
+}
+
+// Payout P2-C: deliberately takes NO request body at all — every financial
+// field (amount, recipient, senderBatchId, senderItemId) is sourced
+// exclusively from trusted DB state inside payoutService.sendPayout(),
+// never from anything a caller could submit. The only input is the
+// withdrawal id in the URL, exactly like approve()/reject() above.
+export async function sendWithdrawalPayout(req: Request, res: Response, next: NextFunction) {
+  try { res.json({ success: true, data: await payoutService.sendPayout(String(req.params.id)) }); } catch (error) { next(error); }
 }
