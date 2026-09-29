@@ -211,6 +211,8 @@ mountApiRoute('/', cartCheckoutRouter);
 
 import clientFinanceRoutes from './routes/client-finance.routes';
 import clientReportsRoutes from './routes/client-reports.routes';
+import clientDisputesRoutes from './routes/client-disputes.routes';
+import clientTicketsRoutes from './routes/client-tickets.routes';
 import newsletterRoutes from './routes/newsletter.routes';
 import paypalWebhookRoutes from './routes/paypal-webhook.routes';
 
@@ -230,6 +232,10 @@ mountAppRoute('/api/client/finance', clientFinanceRoutes);
 mountAppRoute('/client/finance', clientFinanceRoutes);
 mountAppRoute('/api/client/reports', clientReportsRoutes);
 mountAppRoute('/client/reports', clientReportsRoutes);
+mountAppRoute('/api/client/disputes', clientDisputesRoutes);
+mountAppRoute('/client/disputes', clientDisputesRoutes);
+mountAppRoute('/api/client/tickets', clientTicketsRoutes);
+mountAppRoute('/client/tickets', clientTicketsRoutes);
 mountAppRoute('/api/newsletter', newsletterRoutes);
 mountAppRoute('/newsletter', newsletterRoutes);
 

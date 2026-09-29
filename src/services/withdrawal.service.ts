@@ -1,13 +1,44 @@
 import { randomUUID } from 'crypto';
-import { Prisma, WithdrawalStatus } from '@prisma/client';
+import { Prisma, WithdrawalStatus, CommissionStatus, AccountType, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
-import { CreateWithdrawalInput, RejectWithdrawalInput, ResolveWithdrawalInput } from '../dtos/withdrawal.dto';
+import { CreateWithdrawalInput, CreateMarketerWithdrawalInput, RejectWithdrawalInput, ResolveWithdrawalInput } from '../dtos/withdrawal.dto';
 import { providerFinanceService } from './provider-finance.service';
 import { isRetryableTransactionConflict } from '../utils/prisma-retry.util';
 import { deriveWithdrawalReferenceId } from '../utils/withdrawal-reference.util';
 
 const MAX_SERIALIZATION_RETRIES = 3;
+
+/**
+ * Release-blocker fix (marketer withdrawal approval): the Withdrawal table is
+ * shared by provider-earnings withdrawals (createForProvider) and
+ * affiliate-commission withdrawals (createForMarketer), and the schema has
+ * NO per-row source/ledger discriminator. The ledger a withdrawal must be
+ * checked against at approval time is therefore resolved from the owning
+ * user's identity, mirroring exactly the role-equivalence rules
+ * authorize() uses to gate the two creation endpoints:
+ *  - a user who is NOT a provider but HAS an AffiliateProfile can only ever
+ *    have reached createForMarketer() -> AFFILIATE_COMMISSION ledger
+ *    (SUM of APPROVED CommissionLog rows — the authoritative commission
+ *    balance the marketer dashboard/createForMarketer() already use);
+ *  - every other user (any provider, including a provider who also holds
+ *    the AFFILIATE role) -> PROVIDER_EARNINGS ledger, i.e. the pre-existing
+ *    provider wallet check, completely unchanged.
+ * A user who is both provider and affiliate is ambiguous without a schema
+ * discriminator, so createForMarketer() refuses to create commission
+ * withdrawals for such users (fail closed) — no commission withdrawal can
+ * therefore ever be approved against the provider wallet.
+ */
+type ApprovalLedger =
+  | { kind: 'PROVIDER_EARNINGS' }
+  | { kind: 'AFFILIATE_COMMISSION'; affiliateId: string };
+
+function isProviderIdentity(user: { accountType: AccountType; roles: UserRole[] | null; activeRole: UserRole | null }): boolean {
+  return user.accountType === AccountType.PROVIDER_INDIVIDUAL
+    || user.accountType === AccountType.PROVIDER_COMPANY
+    || (user.roles ?? []).includes(UserRole.PROVIDER)
+    || user.activeRole === UserRole.PROVIDER;
+}
 
 export class WithdrawalService {
   /**
@@ -159,6 +190,94 @@ export class WithdrawalService {
     throw new AppError('تعذر إنشاء طلب السحب بعد عدة محاولات متزامنة، حاول مرة أخرى', 409);
   }
 
+  /**
+   * Marketer/affiliate withdrawal — same "single SERIALIZABLE transaction
+   * covers the balance read, the outstanding-withdrawals read, and the
+   * insert" invariant as createForProvider() above, and for the identical
+   * reason: without it, two concurrent requests for the same affiliate
+   * could each read the same not-yet-reserved outstanding sum and together
+   * withdraw more than their real available commission balance.
+   *
+   * Available balance here is SUM(CommissionLog.amount) where status is
+   * APPROVED for this affiliate — the same total the summary/dashboard
+   * ("رصيد قابل للسحب") already shows — not an escrow-derived figure like
+   * the provider wallet, since affiliates never hold project escrow.
+   *
+   * The bank destination (iban/accountHolderName/bankName) is never taken
+   * from the request — it is snapshotted here from the affiliate's own
+   * AffiliateProfile, exactly like createForProvider()'s PayPal-email
+   * snapshot, so a later profile edit can never retroactively change where
+   * an already-created withdrawal is paid.
+   */
+  async createForMarketer(userId: string, input: CreateMarketerWithdrawalInput) {
+    const affiliate = await prisma.affiliateProfile.findUnique({
+      where: { userId },
+      select: { id: true, iban: true, bankName: true, accountHolderName: true, minimumPayoutAmount: true }
+    });
+    if (!affiliate) throw new AppError('ملف الوسيط التسويقي غير موجود', 404);
+    // Fail closed for a user who is ALSO a provider: approve() cannot tell a
+    // commission withdrawal from a provider-earnings withdrawal for such a
+    // user without a per-row ledger discriminator (not in the schema), so it
+    // would check the provider wallet — see ApprovalLedger above.
+    const owner = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { accountType: true, roles: true, activeRole: true }
+    });
+    if (owner && isProviderIdentity(owner)) {
+      throw new AppError('سحب العمولات غير متاح حاليًا للحسابات التي تجمع بين دور الوسيط ودور مقدم الخدمة، يرجى التواصل مع الدعم', 409);
+    }
+    if (!affiliate.iban) {
+      throw new AppError('يجب إضافة رقم الحساب البنكي (IBAN) من الملف الشخصي قبل تقديم طلب سحب', 400);
+    }
+    if (input.amount < affiliate.minimumPayoutAmount) {
+      throw new AppError(`الحد الأدنى لطلب السحب ${affiliate.minimumPayoutAmount} ريال`, 400);
+    }
+
+    const withdrawalId = randomUUID();
+    const referenceId = deriveWithdrawalReferenceId(withdrawalId);
+
+    for (let attempt = 1; attempt <= MAX_SERIALIZATION_RETRIES; attempt++) {
+      try {
+        return await prisma.$transaction(async tx => {
+          const approvedCommissions = await tx.commissionLog.aggregate({
+            where: { affiliateId: affiliate.id, status: CommissionStatus.APPROVED },
+            _sum: { amount: true },
+          });
+          const availableBalance = approvedCommissions._sum.amount || 0;
+          if (input.amount > availableBalance) {
+            throw new AppError(`المبلغ المطلوب يتجاوز رصيدك المتاح (${availableBalance} ريال)`, 400);
+          }
+          const outstandingWithdrawals = await tx.withdrawal.aggregate({
+            where: { userId, status: { in: [WithdrawalStatus.PENDING, WithdrawalStatus.APPROVED, WithdrawalStatus.PROCESSING, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
+            _sum: { amount: true },
+          });
+          const outstandingAmount = outstandingWithdrawals._sum.amount || 0;
+          const withdrawable = availableBalance - outstandingAmount;
+          if (input.amount > withdrawable) {
+            throw new AppError(`المبلغ المطلوب يتجاوز رصيدك الصافي بعد طلبات السحب المعلقة (${withdrawable} ريال)`, 400);
+          }
+          return tx.withdrawal.create({
+            data: {
+              id: withdrawalId,
+              referenceId,
+              userId,
+              amount: input.amount,
+              currency: 'SAR',
+              method: 'bank_transfer',
+              accountName: affiliate.accountHolderName,
+              iban: affiliate.iban,
+              status: WithdrawalStatus.PENDING,
+            },
+          });
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      } catch (error) {
+        if (isRetryableTransactionConflict(error) && attempt < MAX_SERIALIZATION_RETRIES) continue;
+        throw error;
+      }
+    }
+    throw new AppError('تعذر إنشاء طلب السحب بعد عدة محاولات متزامنة، حاول مرة أخرى', 409);
+  }
+
   async listForUser(userId: string, status?: WithdrawalStatus, page = 1, limit = 10) {
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(100, Math.max(1, limit));
@@ -191,7 +310,43 @@ export class WithdrawalService {
   async get(id: string) {
     const item = await prisma.withdrawal.findUnique({ where: { id }, include: { user: { select: { id: true, firstName: true, lastName: true, email: true, accountType: true, walletBalance: true, ibanNumber: true, bankName: true } }, reviewedBy: { select: { id: true, firstName: true, lastName: true } } } });
     if (!item) throw new AppError('طلب السحب غير موجود', 404);
-    return item;
+    // Release-blocker fix (admin withdrawal detail): the frontend used to
+    // fabricate an "available balance" from a deterministic hash of the
+    // withdrawal's own id — never real data. Compute the actual authoritative
+    // balance for this withdrawal's ledger (same resolveApprovalLedger() and
+    // same withdrawable-balance arithmetic approve() itself will use), so the
+    // admin sees a real, non-invented figure instead of a fabricated one.
+    const availableBalance = await this.getWithdrawableBalanceForDisplay(item.userId);
+    return { ...item, availableBalance };
+  }
+
+  /**
+   * Read-only display helper for get() above — deliberately NOT shared with
+   * approve()'s own transactional balance check (which runs inside a
+   * SERIALIZABLE transaction and is the actual authorization decision).
+   * This duplicates the same arithmetic on a plain (non-transactional) read
+   * purely to show an accurate number to an admin browsing the detail page;
+   * it has no bearing on whether a withdrawal is actually approved.
+   */
+  private async getWithdrawableBalanceForDisplay(userId: string): Promise<number> {
+    const ledger = await this.resolveApprovalLedger(userId);
+    if (ledger.kind === 'AFFILIATE_COMMISSION') {
+      const approvedCommissions = await prisma.commissionLog.aggregate({
+        where: { affiliateId: ledger.affiliateId, status: CommissionStatus.APPROVED },
+        _sum: { amount: true },
+      });
+      const alreadyWithdrawn = await prisma.withdrawal.aggregate({
+        where: { userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.PROCESSING, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
+        _sum: { amount: true },
+      });
+      return (approvedCommissions._sum.amount || 0) - (alreadyWithdrawn._sum.amount || 0);
+    }
+    const wallet = await providerFinanceService.getWallet(userId);
+    const alreadyWithdrawn = await prisma.withdrawal.aggregate({
+      where: { userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
+      _sum: { amount: true },
+    });
+    return wallet.summary.availableBalance - (alreadyWithdrawn._sum.amount || 0);
   }
 
   /**
@@ -241,9 +396,35 @@ export class WithdrawalService {
     if (!item) throw new AppError('طلب السحب غير موجود', 404);
     if (item.status !== WithdrawalStatus.PENDING) throw new AppError('طلب السحب تمت معالجته مسبقاً', 409);
 
+    const ledger = await this.resolveApprovalLedger(item.userId);
+
     for (let attempt = 1; attempt <= MAX_SERIALIZATION_RETRIES; attempt++) {
       try {
         return await prisma.$transaction(async tx => {
+          if (ledger.kind === 'AFFILIATE_COMMISSION') {
+            // Marketer/affiliate commission withdrawal: the authoritative
+            // balance is SUM(APPROVED CommissionLog.amount) for this
+            // affiliate — the same source createForMarketer() validated
+            // against — minus every already-approved/in-flight/paid/reversed
+            // withdrawal of this user. Read via `tx` inside the same
+            // SERIALIZABLE snapshot as the conditional transition below, so
+            // two concurrent approvals of two different withdrawals for the
+            // same marketer cannot together exceed the commission balance.
+            // PENDING/REJECTED rows never consume balance here.
+            const approvedCommissions = await tx.commissionLog.aggregate({
+              where: { affiliateId: ledger.affiliateId, status: CommissionStatus.APPROVED },
+              _sum: { amount: true },
+            });
+            const commissionBalance = approvedCommissions._sum.amount || 0;
+            const alreadyWithdrawn = await tx.withdrawal.aggregate({
+              where: { userId: item.userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.PROCESSING, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
+              _sum: { amount: true },
+            });
+            const withdrawableCommission = commissionBalance - (alreadyWithdrawn._sum.amount || 0);
+            if (item.amount > withdrawableCommission) {
+              throw new AppError(`رصيد عمولات الوسيط غير كافٍ لتنفيذ السحب (المتاح: ${withdrawableCommission} ${item.currency})`, 400);
+            }
+          } else {
           // Reads via `tx`, not the global `prisma` — the balance
           // eligibility check must be part of the SAME serializable
           // snapshot as the conditional status transition below, not a
@@ -258,6 +439,7 @@ export class WithdrawalService {
           const withdrawableBalance = availableBalance - withdrawnAmount;
           if (item.amount > withdrawableBalance) {
             throw new AppError(`رصيد المزود غير كافٍ لتنفيذ السحب (المتاح: ${withdrawableBalance} $)`, 400);
+          }
           }
 
           // CRITICAL: guards the TOCTOU race identified in the Payout P1
@@ -302,6 +484,18 @@ export class WithdrawalService {
     // its final attempt — kept only to satisfy TypeScript's control-flow
     // analysis without an unsafe non-null assertion.
     throw new AppError('تعذر اعتماد طلب السحب بعد عدة محاولات متزامنة، حاول مرة أخرى', 409);
+  }
+
+  /** See ApprovalLedger at the top of this file. */
+  private async resolveApprovalLedger(userId: string): Promise<ApprovalLedger> {
+    const owner = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { accountType: true, roles: true, activeRole: true, affiliateProfile: { select: { id: true } } }
+    });
+    if (owner?.affiliateProfile && !isProviderIdentity(owner)) {
+      return { kind: 'AFFILIATE_COMMISSION', affiliateId: owner.affiliateProfile.id };
+    }
+    return { kind: 'PROVIDER_EARNINGS' };
   }
 
   async reject(id: string, adminId: string, input: RejectWithdrawalInput) {

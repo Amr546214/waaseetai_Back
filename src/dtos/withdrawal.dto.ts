@@ -26,6 +26,16 @@ export const createWithdrawalSchema = z.object({
   }
 });
 
+// Marketer/affiliate withdrawal — destination is NEVER taken from the
+// request body. It is resolved server-side, at creation time, from the
+// authenticated affiliate's own AffiliateProfile (bankName/accountHolderName/
+// iban), the same "immutable snapshot from a trusted profile" pattern
+// createForProvider() already uses for a PayPal destination. The only real
+// input here is the amount.
+export const createMarketerWithdrawalSchema = z.object({
+  amount: z.number().positive('المبلغ يجب أن يكون أكبر من صفر'),
+});
+
 export const resolveWithdrawalSchema = z.object({
   adminNote: z.string().trim().max(2000).optional()
 });
@@ -35,5 +45,6 @@ export const rejectWithdrawalSchema = z.object({
 });
 
 export type CreateWithdrawalInput = z.infer<typeof createWithdrawalSchema>;
+export type CreateMarketerWithdrawalInput = z.infer<typeof createMarketerWithdrawalSchema>;
 export type ResolveWithdrawalInput = z.infer<typeof resolveWithdrawalSchema>;
 export type RejectWithdrawalInput = z.infer<typeof rejectWithdrawalSchema>;

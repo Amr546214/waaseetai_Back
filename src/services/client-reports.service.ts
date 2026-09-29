@@ -70,7 +70,9 @@ export class ClientReportsService {
 			}),
 			prisma.walletTransaction.findMany({
 				where: { userId, ...(since ? { createdAt: { gte: since } } : {}) },
-				select: { id: true, type: true, amount: true, status: true, description: true, createdAt: true },
+				// currency: each WalletTransaction keeps its OWN stored currency (historical
+				// Moyasar rows are SAR, PayPal rows USD) — exposed so the UI never relabels it.
+				select: { id: true, type: true, amount: true, currency: true, status: true, description: true, createdAt: true },
 				orderBy: { createdAt: 'desc' },
 				take: 50
 			}),

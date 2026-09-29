@@ -7,6 +7,15 @@ import assert from 'node:assert/strict';
 // payoutService itself (not the DB) so the exact arguments the controller
 // passes can be asserted directly, independent of the service's own
 // internal behavior (which payout.service.test.ts already covers).
+//
+// Release gate (Payout P3-D excluded from this release — see
+// utils/payout-automation.util.ts): the controller now short-circuits with
+// a 503 BEFORE calling payoutService.sendPayout() at all, unless
+// PAYOUT_AUTOMATION_ENABLED='true'. The three pre-existing pass-through
+// tests below are exercising the real service-call behavior, so they
+// explicitly enable the flag for their own duration; a dedicated test
+// further down covers the disabled (default) gate itself.
+process.env.PAYOUT_AUTOMATION_ENABLED = 'true';
 
 function createMockRes() {
   const res: any = { statusCode: null, body: null };
@@ -79,4 +88,45 @@ test('sendWithdrawalPayout: a thrown AppError from the service (e.g. local valid
 	assert.notEqual(passedError, null);
 	assert.equal(passedError.statusCode, 400);
 	assert.equal(res.body, null, 'no response should be sent when the service throws');
+});
+
+test('sendWithdrawalPayout: release gate — PAYOUT_AUTOMATION_ENABLED unset (default) returns 503 and never calls payoutService.sendPayout', async (t) => {
+	const previous = process.env.PAYOUT_AUTOMATION_ENABLED;
+	delete process.env.PAYOUT_AUTOMATION_ENABLED;
+	t.after(() => {
+		if (previous === undefined) delete process.env.PAYOUT_AUTOMATION_ENABLED;
+		else process.env.PAYOUT_AUTOMATION_ENABLED = previous;
+	});
+
+	const { sendWithdrawalPayout, sendPayoutSpy } = await loadController(t, async (id: string) => ({
+		outcome: 'ACCEPTED', withdrawalId: id, payoutAttemptId: 'attempt-1', message: 'ok'
+	}));
+
+	const req: any = { params: { id: 'wd-1' }, body: {} };
+	const res = createMockRes();
+	let passedError: any = null;
+	await sendWithdrawalPayout(req, res, (err: any) => { passedError = err; });
+
+	assert.equal(passedError, null, 'the gate responds directly, it does not call next()');
+	assert.equal(sendPayoutSpy.mock.callCount(), 0, 'payoutService.sendPayout must never be called while the gate is closed');
+	assert.equal(res.statusCode, 503);
+	assert.equal(res.body.success, false);
+});
+
+test('sendWithdrawalPayout: release gate — PAYOUT_AUTOMATION_ENABLED="false" also returns 503 (only the literal string "true" opens the gate)', async (t) => {
+	const previous = process.env.PAYOUT_AUTOMATION_ENABLED;
+	process.env.PAYOUT_AUTOMATION_ENABLED = 'false';
+	t.after(() => {
+		if (previous === undefined) delete process.env.PAYOUT_AUTOMATION_ENABLED;
+		else process.env.PAYOUT_AUTOMATION_ENABLED = previous;
+	});
+
+	const { sendWithdrawalPayout, sendPayoutSpy } = await loadController(t, async (id: string) => ({ outcome: 'ACCEPTED', withdrawalId: id }));
+
+	const req: any = { params: { id: 'wd-1' }, body: {} };
+	const res = createMockRes();
+	await sendWithdrawalPayout(req, res, () => {});
+
+	assert.equal(sendPayoutSpy.mock.callCount(), 0);
+	assert.equal(res.statusCode, 503);
 });

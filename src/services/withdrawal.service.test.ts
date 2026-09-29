@@ -106,7 +106,11 @@ function createWithdrawalMockPrisma(t: TestContext, opts: {
 	const prismaMock: any = {
 		$transaction: transactionSpy,
 		withdrawal: { findUnique: findUniqueSpy, update: updateSpy },
-		providerProfile: { findUnique: providerProfileFindUniqueSpy }
+		providerProfile: { findUnique: providerProfileFindUniqueSpy },
+		// Release-blocker fix: approve() resolves the ledger from the owner's
+		// identity. Every fixture in this file is a plain provider (no
+		// AffiliateProfile) -> provider-wallet ledger, i.e. unchanged behavior.
+		user: { findUnique: t.mock.fn(async () => ({ accountType: 'PROVIDER_INDIVIDUAL', roles: ['PROVIDER'], activeRole: 'PROVIDER', affiliateProfile: null })) }
 	};
 	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
 
@@ -969,7 +973,12 @@ function createApproveMockPrisma(t: TestContext, opts: {
 	});
 
 	t.mock.module('../config/db', {
-		namedExports: { prisma: { $transaction: transactionSpy, withdrawal: { findUnique: findUniqueSpy } } }
+		namedExports: { prisma: {
+			$transaction: transactionSpy,
+			withdrawal: { findUnique: findUniqueSpy },
+			// Release-blocker fix: plain provider owner -> provider-wallet ledger (unchanged behavior).
+			user: { findUnique: t.mock.fn(async () => ({ accountType: 'PROVIDER_INDIVIDUAL', roles: ['PROVIDER'], activeRole: 'PROVIDER', affiliateProfile: null })) }
+		} }
 	});
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: getWalletSpy } }
@@ -1037,7 +1046,7 @@ test('B. approve: two different PENDING withdrawals for the SAME provider, combi
 		const getWalletSpy = t2.mock.fn(async () => ({ summary: { availableBalance: 500, currency: 'USD' } }));
 		const tx = { withdrawal: { aggregate: aggregateSpy, updateMany: updateManySpy, findUniqueOrThrow: findUniqueOrThrowSpy }, walletTransaction: { create: walletTransactionCreateSpy } };
 		const transactionSpy = t2.mock.fn(async (fn: any) => fn(tx));
-		t2.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, withdrawal: { findUnique: findUniqueSpy } } } });
+		t2.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, withdrawal: { findUnique: findUniqueSpy }, user: { findUnique: t2.mock.fn(async () => ({ accountType: 'PROVIDER_INDIVIDUAL', roles: ['PROVIDER'], activeRole: 'PROVIDER', affiliateProfile: null })) } } } });
 		t2.mock.module('./provider-finance.service', { namedExports: { providerFinanceService: { getWallet: getWalletSpy } } });
 		const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
 		const { withdrawalService } = await import(moduleUrl);
@@ -1086,7 +1095,7 @@ test('C. approve: two different PENDING withdrawals for the SAME provider, combi
 		const getWalletSpy = t2.mock.fn(async () => ({ summary: { availableBalance: 300, currency: 'USD' } }));
 		const tx = { withdrawal: { aggregate: aggregateSpy, updateMany: updateManySpy, findUniqueOrThrow: findUniqueOrThrowSpy }, walletTransaction: { create: walletTransactionCreateSpy } };
 		const transactionSpy = t2.mock.fn(async (fn: any) => fn(tx));
-		t2.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, withdrawal: { findUnique: findUniqueSpy } } } });
+		t2.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, withdrawal: { findUnique: findUniqueSpy }, user: { findUnique: t2.mock.fn(async () => ({ accountType: 'PROVIDER_INDIVIDUAL', roles: ['PROVIDER'], activeRole: 'PROVIDER', affiliateProfile: null })) } } } });
 		t2.mock.module('./provider-finance.service', { namedExports: { providerFinanceService: { getWallet: getWalletSpy } } });
 		const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
 		const { withdrawalService } = await import(moduleUrl);

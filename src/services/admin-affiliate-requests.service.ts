@@ -2,6 +2,7 @@ import { prisma } from '../config/db';
 import { ChangeRequestStatus, SensitiveFieldType, Prisma } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
+import { isValidIban } from '../utils/iban.util';
 
 const PENDING_STATUSES: ChangeRequestStatus[] = [ChangeRequestStatus.PENDING_AI_REVIEW, ChangeRequestStatus.PENDING_HUMAN_APPROVAL];
 
@@ -149,6 +150,13 @@ export class AdminAffiliateRequestsService {
 				await tx.user.update({ where: { id: profile.userId }, data: { idNumber: requestedValue } });
 				return;
 			case SensitiveFieldType.IBAN:
+				// Defense-in-depth (Phase 3 item 1): the submission path
+				// (marketer-profile.dto.ts's updateBankInfoSchema) already
+				// rejects a malformed IBAN before a request is even created,
+				// but this is the actual final write — never persist a bad
+				// value here either, matching provider-profile.service.ts's
+				// own submission+apply-time double check for its IBAN field.
+				if (!isValidIban(requestedValue)) throw new AppError('رقم IBAN غير صحيح، تعذر تطبيق التعديل', 400);
 				await tx.affiliateProfile.update({ where: { id: profile.id }, data: { iban: requestedValue } });
 				return;
 			case SensitiveFieldType.BANK_NAME:

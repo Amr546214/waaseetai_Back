@@ -136,13 +136,32 @@ test('approve: NATIONAL_ID request applies to User.idNumber', async (t) => {
 });
 
 test('approve: IBAN request applies to AffiliateProfile.iban, never touches User', async (t) => {
+	// A real, mod-97-checksum-valid Saudi IBAN — required since Phase 3 added
+	// real IBAN validation (utils/iban.util.ts) to the approval path itself
+	// (admin-affiliate-requests.service.ts's applyFieldChange, IBAN case).
+	// The previous placeholder ('SA03110000...0001') was well-formed but
+	// failed the checksum, which is exactly what that validation is supposed
+	// to catch — this is a test-fixture fix, not a validation weakening.
+	const VALID_IBAN = 'SA5503000000608010167519';
 	const { adminAffiliateRequestsService, affiliateUpdateSpy, userUpdateSpy } = await loadService(t, {
-		request: { id: 'req-4', affiliateProfileId: 'aff-1', fieldType: 'IBAN', fieldLabel: 'IBAN', requestedValue: 'SA0311000000000000000001', currentValue: null, status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-4' }
+		request: { id: 'req-4', affiliateProfileId: 'aff-1', fieldType: 'IBAN', fieldLabel: 'IBAN', requestedValue: VALID_IBAN, currentValue: null, status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-4' }
 	});
 
 	await adminAffiliateRequestsService.approve('req-4', 'admin-1');
-	assert.equal(affiliateUpdateSpy.mock.calls[0].arguments[0].data.iban, 'SA0311000000000000000001');
+	assert.equal(affiliateUpdateSpy.mock.calls[0].arguments[0].data.iban, VALID_IBAN);
 	assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+test('approve: IBAN request with an invalid checksum is rejected, AffiliateProfile.iban is never written', async (t) => {
+	// Regression guard for the exact bug the fixture fix above uncovered —
+	// makes explicit that a checksum-invalid IBAN must be rejected at
+	// approval time, not silently accepted.
+	const { adminAffiliateRequestsService, affiliateUpdateSpy } = await loadService(t, {
+		request: { id: 'req-4b', affiliateProfileId: 'aff-1', fieldType: 'IBAN', fieldLabel: 'IBAN', requestedValue: 'SA0311000000000000000001', currentValue: null, status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-4B' }
+	});
+
+	await assert.rejects(() => adminAffiliateRequestsService.approve('req-4b', 'admin-1'));
+	assert.equal(affiliateUpdateSpy.mock.callCount(), 0);
 });
 
 test('approve: BANK_NAME request applies to AffiliateProfile.bankName', async (t) => {

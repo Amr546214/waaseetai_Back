@@ -1,9 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import { WithdrawalStatus } from '@prisma/client';
-import { createWithdrawalSchema, rejectWithdrawalSchema, resolveWithdrawalSchema } from '../dtos/withdrawal.dto';
+import { createWithdrawalSchema, createMarketerWithdrawalSchema, rejectWithdrawalSchema, resolveWithdrawalSchema } from '../dtos/withdrawal.dto';
 import { AppError } from '../utils/app-error';
 import { withdrawalService } from '../services/withdrawal.service';
 import { payoutService } from '../services/payout.service';
+import { isPayoutAutomationEnabled } from '../utils/payout-automation.util';
 
 const adminId = (req: Request) => req.user!.id;
 const userId = (req: Request) => req.user!.userId || req.user!.id;
@@ -13,6 +14,15 @@ export async function submitWithdrawal(req: Request, res: Response, next: NextFu
     const parsed = createWithdrawalSchema.safeParse(req.body);
     if (!parsed.success) throw new AppError(parsed.error.issues.map(i => i.message).join(', '), 400);
     const data = await withdrawalService.createForProvider(userId(req), parsed.data);
+    res.status(201).json({ success: true, message: 'تم تقديم طلب السحب بنجاح', data });
+  } catch (error) { next(error); }
+}
+
+export async function submitMarketerWithdrawal(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = createMarketerWithdrawalSchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError(parsed.error.issues.map(i => i.message).join(', '), 400);
+    const data = await withdrawalService.createForMarketer(userId(req), parsed.data);
     res.status(201).json({ success: true, message: 'تم تقديم طلب السحب بنجاح', data });
   } catch (error) { next(error); }
 }
@@ -49,5 +59,11 @@ export async function rejectWithdrawal(req: Request, res: Response, next: NextFu
 // never from anything a caller could submit. The only input is the
 // withdrawal id in the URL, exactly like approve()/reject() above.
 export async function sendWithdrawalPayout(req: Request, res: Response, next: NextFunction) {
+  // Payout P3-D is excluded from this release — its tables have no migration
+  // yet (see utils/payout-automation.util.ts). Gate before calling
+  // payoutService.sendPayout(), which would otherwise hit a missing table.
+  if (!isPayoutAutomationEnabled()) {
+    return res.status(503).json({ success: false, message: 'إرسال التحويل الآلي عبر PayPal غير متاح حاليًا في هذا الإصدار' });
+  }
   try { res.json({ success: true, data: await payoutService.sendPayout(String(req.params.id)) }); } catch (error) { next(error); }
 }
