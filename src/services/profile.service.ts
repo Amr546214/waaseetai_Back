@@ -180,6 +180,12 @@ export class ProfileService {
           delete affiliateData.githubUrl;
           delete affiliateData.linkedinUrl;
           delete affiliateData.websiteUrl;
+          // Payout P2-A: paypalPayoutEmail is PROVIDER-only (see
+          // ProviderProfile.paypalPayoutEmail) — AffiliateProfile has no such
+          // column, so this must be stripped exactly like the other
+          // provider-only fields above, or an AFFILIATE-active submission
+          // that includes it (even '') would throw an unknown-column error.
+          delete affiliateData.paypalPayoutEmail;
           Object.assign(affiliateData, displayFields);
 
           profileResult = await tx.affiliateProfile.upsert({

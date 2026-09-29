@@ -35,6 +35,7 @@ function statusMatches(rowStatus: string, whereStatus: any): boolean {
 function createWithdrawalMockPrisma(t: TestContext, opts: {
 	availableBalance?: number;
 	seedWithdrawals?: { userId: string; amount: number; status: string }[];
+	providerProfile?: { paypalPayoutEmail?: string | null } | null;
 } = {}) {
 	const withdrawals: any[] = (opts.seedWithdrawals || []).map((w, i) => ({ id: `seed-${i}`, ...w }));
 	let nextId = withdrawals.length + 1;
@@ -93,9 +94,19 @@ function createWithdrawalMockPrisma(t: TestContext, opts: {
 		return row;
 	});
 
+	// Payout P2-A: createForProvider()'s PayPal-destination lookup — a flat
+	// (non-transaction) read, resolved once per call before the retry loop.
+	// `opts.providerProfile === undefined` (the default) means "no
+	// ProviderProfile row at all" (findUnique resolves null), matching a
+	// provider who never configured any PayPal destination.
+	const providerProfileFindUniqueSpy = t.mock.fn(async (_args: any) =>
+		opts.providerProfile === undefined ? null : opts.providerProfile
+	);
+
 	const prismaMock: any = {
 		$transaction: transactionSpy,
-		withdrawal: { findUnique: findUniqueSpy, update: updateSpy }
+		withdrawal: { findUnique: findUniqueSpy, update: updateSpy },
+		providerProfile: { findUnique: providerProfileFindUniqueSpy }
 	};
 	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
 
@@ -106,7 +117,7 @@ function createWithdrawalMockPrisma(t: TestContext, opts: {
 		namedExports: { providerFinanceService: { getWallet: getWalletSpy } }
 	});
 
-	return { createSpy, aggregateSpy, transactionSpy, getWalletSpy, withdrawals, walletTransactions, walletTransactionCreateSpy };
+	return { createSpy, aggregateSpy, transactionSpy, getWalletSpy, withdrawals, walletTransactions, walletTransactionCreateSpy, providerProfileFindUniqueSpy };
 }
 
 async function loadService(t: TestContext, opts?: Parameters<typeof createWithdrawalMockPrisma>[1]) {
@@ -627,6 +638,155 @@ test('E/F. createForProvider: on a SERIALIZABLE retry, the SAME id/referenceId p
 	assert.equal(createSpy.mock.callCount(), 1, 'the doomed first attempt never even reached create() here (it conflicted before running), so only the successful attempt generated a row at all');
 	assert.equal(result.referenceId, deriveWithdrawalReferenceId(result.id));
 	assert.equal(new Set(seenIds).size, 1, 'no more than one logical withdrawal id/referenceId was ever used for this one successfully-created withdrawal');
+});
+
+// ============================================================================
+// createForProvider() — Payout P2-A: PayPal destination snapshot. The
+// destination is resolved ONCE from the authenticated provider's own
+// ProviderProfile.paypalPayoutEmail (never the request body, never
+// User.email), then copied onto Withdrawal.paypalEmail at creation time.
+// Changing ProviderProfile.paypalPayoutEmail afterward must never alter an
+// already-created Withdrawal's snapshot — the mock's providerProfile fixture
+// is read once per call and never mutates the created row retroactively,
+// which is exactly what a real, separate DB row would do too.
+// ============================================================================
+
+test('E. createForProvider: a PayPal withdrawal snapshots ProviderProfile.paypalPayoutEmail onto Withdrawal.paypalEmail', async (t) => {
+	const { withdrawalService, createSpy } = await loadService(t, {
+		availableBalance: 500,
+		providerProfile: { paypalPayoutEmail: 'provider@paypal-sandbox.example' }
+	});
+
+	const result = await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' } as any);
+
+	assert.equal(result.paypalEmail, 'provider@paypal-sandbox.example');
+	assert.equal(createSpy.mock.calls[0].arguments[0].data.paypalEmail, 'provider@paypal-sandbox.example');
+});
+
+test('F. createForProvider: a caller-supplied paypalEmail in the request is silently ignored — the destination always comes from ProviderProfile, never the caller', async (t) => {
+	const { withdrawalService } = await loadService(t, {
+		availableBalance: 500,
+		providerProfile: { paypalPayoutEmail: 'real-provider@paypal-sandbox.example' }
+	});
+
+	// Simulates a caller/attacker who somehow got an extra field into the
+	// object reaching the service (e.g. bypassing the DTO in a hypothetical
+	// future caller) — createForProvider() itself must never read it.
+	const result = await withdrawalService.createForProvider('provider-1', {
+		amount: 100, method: 'paypal', paypalEmail: 'attacker@evil.example'
+	} as any);
+
+	assert.equal(result.paypalEmail, 'real-provider@paypal-sandbox.example', 'the snapshot must come from ProviderProfile, never from anything on the input object');
+});
+
+test('G. createForProvider: a PayPal withdrawal is rejected cleanly BEFORE any row is created when the provider has no configured PayPal destination', async (t) => {
+	const { withdrawalService, createSpy, transactionSpy } = await loadService(t, { availableBalance: 500 }); // no providerProfile fixture -> findUnique resolves null
+
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' } as any),
+		(err: any) => { assert.equal(err.statusCode, 400); return true; }
+	);
+	assert.equal(createSpy.mock.callCount(), 0);
+	assert.equal(transactionSpy.mock.callCount(), 0, 'the destination check happens before the transaction/retry loop even starts');
+});
+
+test('G2. createForProvider: a PayPal withdrawal is rejected cleanly when ProviderProfile.paypalPayoutEmail is an empty string (the DTO\'s own "cleared" representation)', async (t) => {
+	const { withdrawalService, createSpy } = await loadService(t, {
+		availableBalance: 500,
+		providerProfile: { paypalPayoutEmail: '' }
+	});
+
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' } as any),
+		(err: any) => { assert.equal(err.statusCode, 400); return true; }
+	);
+	assert.equal(createSpy.mock.callCount(), 0);
+});
+
+test('H. createForProvider: a PayPal withdrawal does NOT require an IBAN or account number', async (t) => {
+	const { withdrawalService } = await loadService(t, {
+		availableBalance: 500,
+		providerProfile: { paypalPayoutEmail: 'provider@paypal-sandbox.example' }
+	});
+
+	// No iban/accountNumber supplied at all — must succeed for method: 'paypal'.
+	const result = await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' } as any);
+	assert.equal(result.status, 'PENDING');
+	assert.equal(result.accountNumber, null);
+	assert.equal(result.iban, null);
+});
+
+// I. Requirement "existing bank withdrawal still requires its existing
+// destination requirements (preserved)" — this has always been enforced at
+// the DTO layer (createWithdrawalSchema's superRefine), never inside
+// WithdrawalService itself; the service has never re-validated iban/
+// accountNumber presence, relying entirely on the controller-level DTO
+// parse having already happened. Asserting this at the service layer would
+// test behavior the service never owned, so this is asserted directly
+// against the DTO, which is the actual, and unchanged, source of that rule.
+test('I. createWithdrawalSchema: a bank_transfer request still requires IBAN or account number (existing behavior preserved)', async () => {
+	const { createWithdrawalSchema } = await import('../dtos/withdrawal.dto');
+
+	const result = createWithdrawalSchema.safeParse({ amount: 100, method: 'bank_transfer' });
+	assert.equal(result.success, false);
+
+	const withIban = createWithdrawalSchema.safeParse({ amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	assert.equal(withIban.success, true);
+});
+
+// Final pre-commit review follow-up: the DTO trust-boundary claim ("Zod's
+// default non-strict parsing silently drops any key this schema doesn't
+// declare") was previously only asserted in a comment and manually verified
+// ad hoc — this pins it down as a real regression test against the actual
+// schema, independent of and in addition to F's service-level proof that
+// createForProvider() itself ignores a paypalEmail on its input object.
+test('createWithdrawalSchema: a caller-supplied paypalEmail is stripped at the DTO trust boundary', async () => {
+	const { createWithdrawalSchema } = await import('../dtos/withdrawal.dto');
+
+	const result = createWithdrawalSchema.safeParse({
+		amount: 100,
+		method: 'paypal',
+		paypalEmail: 'attacker@evil.example'
+	} as any);
+
+	assert.equal(result.success, true);
+	if (result.success) {
+		assert.equal('paypalEmail' in result.data, false);
+	}
+});
+
+test('J. createForProvider: a bank_transfer withdrawal leaves Withdrawal.paypalEmail null, even with a ProviderProfile.paypalPayoutEmail on file', async (t) => {
+	const { withdrawalService } = await loadService(t, {
+		availableBalance: 500,
+		providerProfile: { paypalPayoutEmail: 'provider@paypal-sandbox.example' }
+	});
+
+	const result = await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	assert.equal(result.paypalEmail, null);
+});
+
+test('K. createForProvider: changing ProviderProfile.paypalPayoutEmail AFTER a withdrawal is created does not alter that withdrawal\'s already-snapshotted destination', async (t) => {
+	const { withdrawalService, providerProfileFindUniqueSpy } = await loadService(t, {
+		availableBalance: 500,
+		providerProfile: { paypalPayoutEmail: 'original@paypal-sandbox.example' }
+	});
+
+	const first = await withdrawalService.createForProvider('provider-1', { amount: 50, method: 'paypal' } as any);
+	assert.equal(first.paypalEmail, 'original@paypal-sandbox.example');
+
+	// Simulate the provider updating their profile afterward — the mock's
+	// own fixture changes, exactly like a real, separate ProviderProfile row
+	// being updated in place.
+	providerProfileFindUniqueSpy.mock.mockImplementation(async () => ({ paypalPayoutEmail: 'changed-later@paypal-sandbox.example' }));
+
+	// The ALREADY-CREATED withdrawal's snapshot must be completely unaffected.
+	assert.equal(first.paypalEmail, 'original@paypal-sandbox.example');
+
+	// And a NEW withdrawal created now correctly picks up the NEW value —
+	// proving the snapshot is genuinely per-creation-time, not a live pointer.
+	const second = await withdrawalService.createForProvider('provider-1', { amount: 50, method: 'paypal' } as any);
+	assert.equal(second.paypalEmail, 'changed-later@paypal-sandbox.example');
+	assert.equal(first.paypalEmail, 'original@paypal-sandbox.example', 'the first withdrawal must still show its original snapshot');
 });
 
 // ============================================================================

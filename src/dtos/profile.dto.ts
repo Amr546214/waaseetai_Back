@@ -23,6 +23,18 @@ import { z } from 'zod';export const updateProfileSchema = z.object({
 	githubUrl: z.string().url('الرابط غير صحيح').optional().nullable().or(z.literal('')),
 	linkedinUrl: z.string().url('الرابط غير صحيح').optional().nullable().or(z.literal('')),
 	websiteUrl: z.string().url('الرابط غير صحيح').optional().nullable().or(z.literal('')),
+
+	// Payout P2-A: the provider's own confirmed PayPal payout destination —
+	// never auto-populated from the account's login email (a separate,
+	// deliberate owner decision — see ProviderProfile.paypalPayoutEmail's own
+	// schema comment). Trimmed and lowercased before the email-format check,
+	// matching how PayPal itself treats recipient addresses case-insensitively
+	// and guarding against stray whitespace from copy/paste. An empty string
+	// is accepted (consistent with githubUrl/linkedinUrl/websiteUrl above) and
+	// is treated as "no destination configured" everywhere this field is later
+	// read (a falsy check), exactly like those other optional fields already
+	// behave when cleared.
+	paypalPayoutEmail: z.string().trim().toLowerCase().email('بريد PayPal غير صحيح').optional().nullable().or(z.literal('')),
 });
 
 export type UpdateProfileDto = z.infer<typeof updateProfileSchema>;

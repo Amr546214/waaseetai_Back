@@ -428,6 +428,18 @@ model ProviderProfile {
   accountHolder String?
   iban          String?
 
+  // Payout P2-A: the provider's confirmed PayPal payout destination —
+  // entirely separate from bankName/accountHolder/iban above, and from
+  // User.email (the login identity). A provider may hold BOTH a bank
+  // destination and a PayPal destination simultaneously; Withdrawal.method
+  // selects which one a given withdrawal request uses. Deliberately never
+  // read as a fallback from User.email anywhere in the codebase — the owner
+  // decision behind this field is that a login email must never be assumed
+  // to be a correct PayPal-linked address. Editing this field later must
+  // NEVER retroactively change the destination already snapshotted onto an
+  // existing Withdrawal.paypalEmail (see that field's own comment).
+  paypalPayoutEmail String?
+
   // Step 4: Supporting Docs
   supportingDocsUrl String?
   notes             String? @db.Text
@@ -1947,6 +1959,16 @@ model Withdrawal {
   accountName    String?
   accountNumber  String?
   iban           String?
+
+  // Payout P2-A: the IMMUTABLE PayPal destination snapshot — populated once,
+  // at creation time, by copying ProviderProfile.paypalPayoutEmail (never
+  // User.email) for a withdrawal whose method is 'paypal'. Null for every
+  // non-PayPal (e.g. bank_transfer) withdrawal. This snapshot is what any
+  // future payout execution reads — the live ProviderProfile.paypalPayoutEmail
+  // is deliberately NEVER re-read after this row is created, so a provider
+  // changing their PayPal address later can never retroactively alter where
+  // an already-created withdrawal will be paid out.
+  paypalEmail    String?
   status         WithdrawalStatus @default(PENDING)
   reviewedById   String?
   reviewedBy     User?            @relation("WithdrawalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)

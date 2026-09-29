@@ -42,6 +42,31 @@ export class WithdrawalService {
    * only status that never reserves balance.
    */
   async createForProvider(userId: string, input: CreateWithdrawalInput) {
+    // Payout P2-A: for a PayPal withdrawal, the destination is resolved
+    // ONCE, here, from the authenticated provider's own ProviderProfile —
+    // NEVER from the request body (createWithdrawalSchema declares no
+    // `paypalEmail` field at all, so nothing a caller sends could reach this
+    // point anyway) and NEVER from User.email (the login identity is a
+    // deliberately separate, unrelated concept from a confirmed PayPal
+    // payout address — an explicit owner decision). This read happens
+    // BEFORE the retry loop, exactly like the id/referenceId generation
+    // below: it is not part of the balance/outstanding-amount invariant the
+    // retry loop protects, so there is no reason to re-read it on a
+    // SERIALIZABLE retry. An empty-string paypalPayoutEmail (the DTO's own
+    // "cleared" representation) is falsy and correctly rejected here exactly
+    // like a missing one — no separate empty-string branch is needed.
+    let paypalEmail: string | null = null;
+    if (input.method === 'paypal') {
+      const providerProfile = await prisma.providerProfile.findUnique({
+        where: { userId },
+        select: { paypalPayoutEmail: true }
+      });
+      if (!providerProfile?.paypalPayoutEmail) {
+        throw new AppError('يجب إضافة بريد PayPal لاستلام الأرباح من إعدادات ملفك الشخصي قبل تقديم طلب سحب عبر PayPal', 400);
+      }
+      paypalEmail = providerProfile.paypalPayoutEmail;
+    }
+
     // Generated ONCE per call, outside the retry loop — every retry attempt
     // of THIS creation call reuses the identical id/referenceId pair. Only
     // one attempt's INSERT can ever actually commit (Postgres rolls back
@@ -100,6 +125,10 @@ export class WithdrawalService {
               accountName: input.accountName || null,
               accountNumber: input.accountNumber || null,
               iban: input.iban || null,
+              // The IMMUTABLE destination snapshot — resolved once, above,
+              // outside this transaction/retry loop. Always null for a
+              // non-PayPal withdrawal.
+              paypalEmail,
               status: WithdrawalStatus.PENDING,
             },
           });

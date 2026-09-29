@@ -224,6 +224,49 @@ test('updateProfile (AFFILIATE active): display fields go to AffiliateProfile on
   assert.equal(userUpdateSpy.mock.callCount(), 0);
 });
 
+// ============================================================================
+// Payout P2-A — ProviderProfile.paypalPayoutEmail via updateProfile().
+// ============================================================================
+
+test('A. updateProfile (PROVIDER active): a valid paypalPayoutEmail is saved to ProviderProfile', async (t) => {
+  const { profileService, providerUpsertSpy } = await loadProfileServiceForUpdate(t, activeUser);
+
+  await profileService.updateProfile('user-1', 'PROVIDER', {
+    paypalPayoutEmail: 'provider@paypal-sandbox.example'
+  } as any);
+
+  assert.equal(providerUpsertSpy.mock.callCount(), 1);
+  const providerCall = providerUpsertSpy.mock.calls[0].arguments[0];
+  assert.equal(providerCall.update.paypalPayoutEmail, 'provider@paypal-sandbox.example');
+});
+
+test('D. updateProfile (PROVIDER active): omitting paypalPayoutEmail never falls back to User.email', async (t) => {
+  const userWithEmail = { ...activeUser, email: 'login@example.com' };
+  const { profileService, providerUpsertSpy } = await loadProfileServiceForUpdate(t, userWithEmail);
+
+  await profileService.updateProfile('user-1', 'PROVIDER', {
+    firstName: 'Okasha'
+  } as any);
+
+  assert.equal(providerUpsertSpy.mock.callCount(), 1);
+  const providerCall = providerUpsertSpy.mock.calls[0].arguments[0];
+  assert.equal('paypalPayoutEmail' in providerCall.update, false);
+  assert.equal('paypalPayoutEmail' in providerCall.create, false);
+});
+
+test('updateProfile (AFFILIATE active): paypalPayoutEmail is stripped, not sent to AffiliateProfile', async (t) => {
+  const { profileService, affiliateUpsertSpy } = await loadProfileServiceForUpdate(t, activeUser);
+
+  await profileService.updateProfile('user-1', 'AFFILIATE', {
+    firstName: 'Affiliate',
+    paypalPayoutEmail: 'someone@example.com'
+  } as any);
+
+  assert.equal(affiliateUpsertSpy.mock.callCount(), 1);
+  const affiliateCall = affiliateUpsertSpy.mock.calls[0].arguments[0];
+  assert.equal('paypalPayoutEmail' in affiliateCall.update, false);
+});
+
 test('updateProfile: legitimate identity-level behavior (phoneNumber, pending->active status) is preserved', async (t) => {
   const pendingUser = { id: 'user-1', status: 'PENDING_VERIFICATION' };
   const { profileService, userUpdateSpy, clientUpsertSpy } = await loadProfileServiceForUpdate(t, pendingUser);
