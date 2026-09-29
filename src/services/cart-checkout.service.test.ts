@@ -1,5 +1,6 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { Prisma } from '@prisma/client';
 
 // Phase 3E.2: getCart()/formatCartItem() and createOrder()'s NEW OrderItem
 // snapshot previously built provider name/initials from the raw, shared User
@@ -264,42 +265,15 @@ test('createOrder: falls back to legacy User identity when ProviderProfile displ
   assert.equal(getCreatedItemData().providerName, 'Amr Okasha');
 });
 
-// --- Wallet payment method temporarily disabled (USD-canonical wallet) -----
-// order.total remains SAR-priced; User.walletBalance is now USD-canonical.
-// Paying an order out of the wallet would silently debit a USD-labeled
-// balance for a SAR-priced amount with no conversion, so this one payment
-// method is rejected at the very first validation step — 'card'/'moyasar'
-// (a direct, non-wallet SAR charge) are untouched and still work.
+// --- Wallet-only internal purchasing (USD-canonical) ------------------------
+// WaseetAI Wallet is the ONLY accepted internal payment method. PayPal/
+// Moyasar/card/STC Pay/Apple Pay are wallet TOP-UP rails only — never a
+// direct checkout payment method. Enforced at the SERVICE layer (not just
+// the controller's zod schema) so a raw request to this endpoint using any
+// other value is rejected regardless of frontend behavior. order.total is
+// treated as USD for active purchasing — no SAR->USD conversion anywhere.
 
-test('initPayment: the "wallet" payment method is rejected before any DB lookup', async (t) => {
-  const orderFindFirstSpy = t.mock.fn(async () => {
-    throw new Error('should not be reached — method validation must reject first');
-  });
-  t.mock.module('../config/db', { namedExports: { prisma: { order: { findFirst: orderFindFirstSpy } } } });
-  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
-
-  const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
-  const { cartCheckoutService } = await import(moduleUrl);
-
-  await assert.rejects(() => cartCheckoutService.initPayment('user-1', 'order-1', 'wallet'), /طريقة الدفع غير متاحة/);
-  assert.equal(orderFindFirstSpy.mock.callCount(), 0);
-});
-
-test('initPayment: "card" and "moyasar" remain accepted (only "wallet" is disabled)', async (t) => {
-  // Order lookup returning null throws a *different*, later error — proving
-  // these methods pass the method-validation gate that rejects "wallet".
-  const orderFindFirstSpy = t.mock.fn(async () => null);
-  t.mock.module('../config/db', { namedExports: { prisma: { order: { findFirst: orderFindFirstSpy } } } });
-  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
-
-  const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
-  const { cartCheckoutService } = await import(moduleUrl);
-
-  await assert.rejects(() => cartCheckoutService.initPayment('user-1', 'order-1', 'card'), /الطلب غير موجود/);
-  assert.equal(orderFindFirstSpy.mock.callCount(), 1);
-});
-
-test('getPaymentMethods: "wallet" is advertised unavailable, so the UI never offers a method initPayment rejects', async (t) => {
+test('getPaymentMethods: wallet is the ONLY method offered, with the balance exposed', async (t) => {
   t.mock.module('../config/db', {
     namedExports: { prisma: { user: { findUnique: async () => ({ walletBalance: 250 }) } } }
   });
@@ -309,20 +283,338 @@ test('getPaymentMethods: "wallet" is advertised unavailable, so the UI never off
   const { cartCheckoutService } = await import(moduleUrl);
 
   const methods = await cartCheckoutService.getPaymentMethods('user-1');
-  const wallet = methods.find((m: any) => m.id === 'wallet');
 
-  // The advertised contract must agree with initPayment()'s gate.
-  assert.equal(wallet.available, false);
-  assert.equal(wallet.badge, 'قريباً');
-  // Balance is still exposed for display — disabling the method must not hide
-  // the amount the user actually holds.
-  assert.equal(wallet.balance, 250);
+  assert.deepEqual(methods.map((m: any) => m.id), ['wallet'], 'no card/moyasar/stc_pay/apple_pay option may ever be advertised');
+  assert.equal(methods[0].available, true);
+  assert.equal(methods[0].balance, 250);
+});
 
-  // Regression guard: card/Moyasar direct payment stays advertised.
-  assert.equal(methods.find((m: any) => m.id === 'card').available, true);
-  assert.equal(methods.find((m: any) => m.id === 'moyasar').available, true);
+for (const rejected of ['card', 'moyasar', 'stc_pay', 'apple_pay', 'paypal', 'bank', 'cash', '']) {
+  test(`initPayment: "${rejected || '(empty string)'}" is rejected before any DB lookup — wallet is the only accepted method`, async (t) => {
+    const orderFindFirstSpy = t.mock.fn(async () => {
+      throw new Error('should not be reached — method validation must reject first');
+    });
+    t.mock.module('../config/db', { namedExports: { prisma: { order: { findFirst: orderFindFirstSpy } } } });
+    t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
 
-  // Every advertised-available method must be one initPayment() accepts.
-  const advertised = methods.filter((m: any) => m.available).map((m: any) => m.id);
-  assert.deepEqual(advertised.sort(), ['card', 'moyasar']);
+    const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+    const { cartCheckoutService } = await import(moduleUrl);
+
+    await assert.rejects(() => cartCheckoutService.initPayment('user-1', 'order-1', rejected), /طريقة الدفع غير متاحة/);
+    assert.equal(orderFindFirstSpy.mock.callCount(), 0, 'a rejected method must never reach the database at all');
+  });
+}
+
+test('initPayment: "wallet" with a sufficient balance proceeds past the method gate and sends an OTP', async (t) => {
+  const order = { id: 'order-1', status: 'PENDING_PAYMENT', total: 100, user: { email: 'client@example.com', phoneNumber: null, walletBalance: 250 } };
+  t.mock.module('../config/db', {
+    namedExports: {
+      prisma: {
+        order: { findFirst: async () => order },
+        otpVerification: { deleteMany: async () => ({ count: 0 }), create: async () => ({}) }
+      }
+    }
+  });
+  const sendEmailOtpSpy = t.mock.fn(async () => {});
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: sendEmailOtpSpy } } });
+
+  const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { cartCheckoutService } = await import(moduleUrl);
+
+  const result = await cartCheckoutService.initPayment('user-1', 'order-1', 'wallet');
+
+  assert.ok(result.paymentReference);
+  assert.equal(sendEmailOtpSpy.mock.callCount(), 1);
+});
+
+test('initPayment: an insufficient balance is rejected with a 402 and exact required/available/shortfall — no OTP sent', async (t) => {
+  const order = { id: 'order-1', status: 'PENDING_PAYMENT', total: 120, user: { email: 'client@example.com', phoneNumber: null, walletBalance: 80 } };
+  t.mock.module('../config/db', { namedExports: { prisma: { order: { findFirst: async () => order } } } });
+  const sendEmailOtpSpy = t.mock.fn(async () => {});
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: sendEmailOtpSpy } } });
+
+  const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { cartCheckoutService } = await import(moduleUrl);
+
+  const error: any = await cartCheckoutService.initPayment('user-1', 'order-1', 'wallet').catch((e: any) => e);
+
+  assert.equal(error.statusCode, 402);
+  assert.deepEqual(error.errors, [{ required: 120, available: 80, shortfall: 40 }]);
+  assert.equal(sendEmailOtpSpy.mock.callCount(), 0, 'no OTP is sent when the pre-check already knows the balance is insufficient');
+});
+
+// --- confirmPayment(): the authoritative wallet debit -----------------------
+
+function createConfirmMockPrisma(t: TestContext, opts: { order: any; walletBalance: number; services?: any[] }) {
+  const users: any[] = [{ id: 'user-1', walletBalance: opts.walletBalance }];
+  const walletTransactions: any[] = [];
+  let orderUpdated: any = null;
+
+  const updateManyUser = t.mock.fn(async (args: any) => {
+    const matches = users.filter(u => u.id === args.where.id && u.walletBalance >= args.where.walletBalance.gte);
+    matches.forEach(u => { u.walletBalance -= args.data.walletBalance.decrement; });
+    return { count: matches.length };
+  });
+
+  const tx = {
+    user: { updateMany: updateManyUser, findUnique: async (args: any) => users.find(u => u.id === args.where.id) ?? null },
+    walletTransaction: { create: t.mock.fn(async (args: any) => { walletTransactions.push(args.data); return args.data; }) },
+    coupon: { findUnique: async () => null, updateMany: async () => ({ count: 0 }) },
+    couponRedemption: { count: async () => 0, create: async () => ({}) },
+    project: { create: async (args: any) => ({ id: `project-${args.data.title}`, ...args.data }) },
+    contract: { create: async (args: any) => ({ id: 'contract-1', ...args.data }) },
+    escrow: { create: t.mock.fn(async (args: any) => args.data) },
+    projectStage: { create: async () => ({}), createMany: async () => ({}) },
+    order: { update: async (args: any) => { orderUpdated = args.data; return args.data; } },
+    otpVerification: { delete: async () => ({}) }
+  };
+
+  const prismaMock: any = {
+    order: { findFirst: async () => opts.order },
+    otpVerification: {
+      findMany: async () => [{ id: 'otp-1', code: '111111', expiresAt: new Date(Date.now() + 60_000), context: { purpose: 'checkout_payment', orderId: opts.order.id, paymentReference: 'PAY-ABC123', paymentMethod: 'wallet' } }],
+      update: async () => ({})
+    },
+    serviceStage: { findMany: async () => opts.services || [] },
+    $transaction: async (fn: any) => fn(tx)
+  };
+
+  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+
+  return { users, walletTransactions, tx, getOrderUpdated: () => orderUpdated };
+}
+
+async function loadServiceForConfirm(t: TestContext, opts: { order: any; walletBalance: number; services?: any[] }) {
+  const mocks = createConfirmMockPrisma(t, opts);
+  const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { cartCheckoutService } = await import(moduleUrl);
+  return { cartCheckoutService, ...mocks };
+}
+
+function makeOrderForConfirm(overrides: any = {}) {
+  return {
+    id: 'order-1', orderNumber: 'WS-2026-000001', status: 'PENDING_PAYMENT', total: 100, discount: 0, couponId: null,
+    items: [{ id: 'item-1', serviceId: 'service-1', providerId: 'provider-1', title: 'Service', price: 100, deliveryDays: 5, aiScore: 0 }],
+    ...overrides
+  };
+}
+
+test('confirmPayment: sufficient balance — wallet debited exactly once, WalletTransaction is USD, escrow is WALLET, project/contract/stage created, order marked PAID', async (t) => {
+  const order = makeOrderForConfirm();
+  const { cartCheckoutService, users, walletTransactions, tx } = await loadServiceForConfirm(t, { order, walletBalance: 250 });
+
+  const result = await cartCheckoutService.confirmPayment('user-1', 'order-1', '111111');
+
+  assert.equal(users[0].walletBalance, 150, 'debited exactly the order total, exactly once');
+  assert.equal(tx.user.updateMany.mock.callCount(), 1);
+  assert.equal(walletTransactions.length, 1);
+  assert.equal(walletTransactions[0].type, 'ORDER_PAYMENT');
+  assert.equal(walletTransactions[0].amount, -100);
+  assert.equal(walletTransactions[0].currency, 'USD', 'active purchasing is treated as USD, never SAR');
+  assert.equal(walletTransactions[0].paymentMethod, 'WALLET');
+  assert.equal(tx.escrow.create.mock.callCount(), 1);
+  assert.equal(tx.escrow.create.mock.calls[0].arguments[0].data.paymentMethod, 'WALLET');
+  assert.equal(result.status, 'paid');
+  assert.equal(result.projectIds.length, 1);
+});
+
+test('confirmPayment: insufficient balance rejects with 402 + required/available/shortfall BEFORE any Project/Contract/Escrow/Order-paid row is created', async (t) => {
+  const order = makeOrderForConfirm({ total: 120 });
+  const { cartCheckoutService, users, walletTransactions, tx, getOrderUpdated } = await loadServiceForConfirm(t, { order, walletBalance: 80 });
+
+  const error: any = await cartCheckoutService.confirmPayment('user-1', 'order-1', '111111').catch((e: any) => e);
+
+  assert.equal(error.statusCode, 402);
+  assert.deepEqual(error.errors, [{ required: 120, available: 80, shortfall: 40 }]);
+  assert.equal(users[0].walletBalance, 80, 'never debited');
+  assert.equal(walletTransactions.length, 0);
+  assert.equal(tx.escrow.create.mock.callCount(), 0, 'no paid resource of any kind is created before a successful debit');
+  assert.equal(getOrderUpdated(), null, 'order never marked PAID');
+});
+
+test('confirmPayment: two concurrent confirmations for the same user against a balance that can fund only one — exactly one succeeds, the other is rejected 402, no overspend', async (t) => {
+  const orderA = makeOrderForConfirm({ id: 'order-A', total: 80 });
+  const orderB = makeOrderForConfirm({ id: 'order-B', total: 80 });
+  const users: any[] = [{ id: 'user-1', walletBalance: 100 }];
+  const walletTransactions: any[] = [];
+
+  const updateManyUser = t.mock.fn(async (args: any) => {
+    const matches = users.filter(u => u.id === args.where.id && u.walletBalance >= args.where.walletBalance.gte);
+    matches.forEach(u => { u.walletBalance -= args.data.walletBalance.decrement; });
+    return { count: matches.length };
+  });
+  const tx = {
+    user: { updateMany: updateManyUser, findUnique: async (args: any) => users.find(u => u.id === args.where.id) ?? null },
+    walletTransaction: { create: t.mock.fn(async (args: any) => { walletTransactions.push(args.data); return args.data; }) },
+    coupon: { findUnique: async () => null, updateMany: async () => ({ count: 0 }) },
+    couponRedemption: { count: async () => 0, create: async () => ({}) },
+    project: { create: async (args: any) => ({ id: `project-${args.data.title}`, ...args.data }) },
+    contract: { create: async (args: any) => ({ id: 'contract-1', ...args.data }) },
+    escrow: { create: t.mock.fn(async (args: any) => args.data) },
+    projectStage: { create: async () => ({}), createMany: async () => ({}) },
+    order: { update: async (args: any) => args.data },
+    otpVerification: { delete: async () => ({}) }
+  };
+  const ordersById: Record<string, any> = { 'order-A': orderA, 'order-B': orderB };
+  // getPaymentOtp() filters this array client-side by context.orderId, so
+  // returning BOTH orders' OTP rows from the same findMany call lets each
+  // concurrent confirmPayment() call find its own — no shared mutable state
+  // needed between the two concurrent calls.
+  const otpRows = ['order-A', 'order-B'].map(orderId => ({
+    id: `otp-${orderId}`, code: '111111', expiresAt: new Date(Date.now() + 60_000),
+    context: { purpose: 'checkout_payment', orderId, paymentReference: `PAY-${orderId}`, paymentMethod: 'wallet' }
+  }));
+  const prismaMock: any = {
+    order: { findFirst: async (args: any) => ordersById[args.where.id] || null },
+    otpVerification: { findMany: async () => otpRows, update: async () => ({}) },
+    serviceStage: { findMany: async () => [] },
+    $transaction: async (fn: any) => fn(tx)
+  };
+  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+
+  const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { cartCheckoutService } = await import(moduleUrl);
+
+  const confirmOne = (orderId: string) => cartCheckoutService.confirmPayment('user-1', orderId, '111111').catch((e: any) => e);
+
+  const [resultA, resultB] = await Promise.all([confirmOne('order-A'), confirmOne('order-B')]);
+  const results = [resultA, resultB];
+  const succeeded = results.filter(r => r && r.status === 'paid');
+  const failed = results.filter(r => r instanceof Error);
+
+  assert.equal(succeeded.length, 1, 'exactly one of the two concurrent purchases succeeds');
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].statusCode, 402);
+  assert.equal(users[0].walletBalance, 20, 'only ONE debit of 80 ever applied — no overspend to a negative/over-committed balance');
+  assert.equal(walletTransactions.length, 1);
+});
+
+// Fix 2 (post-safety-review hardening): the SAME order, confirmed twice
+// concurrently, sharing the SAME OTP-derived paymentReference — a scenario
+// the review explicitly flagged as untested by the test above (which only
+// covers two DIFFERENT orders). The wallet balance here is deliberately
+// large enough that BOTH debits would individually satisfy the `gte` guard
+// (300 covers two 100 debits) — proving the real backstop is
+// WalletTransaction.referenceId's own unique constraint, not the balance
+// guard. This mock implements genuine snapshot/rollback-on-throw semantics
+// (mirroring payout.service.test.ts's own established transactionSpy
+// pattern) — required for this specific test to be trustworthy, since a
+// non-rolling-back mock would let the loser's already-applied debit survive
+// even though real Postgres would undo it.
+test('confirmPayment: two concurrent confirmations for the SAME order (same paymentReference) — exactly one debit, one WalletTransaction, one Project/Contract/Escrow set persist; the loser gets a clean 409, never a raw DB error', async (t) => {
+  const order = makeOrderForConfirm({ id: 'order-1', total: 100, status: 'PENDING_PAYMENT' });
+  const users: any[] = [{ id: 'user-1', walletBalance: 300 }];
+  const walletTransactions: any[] = [];
+  const escrows: any[] = [];
+  const orders: any[] = [order];
+
+  const updateManyUser = t.mock.fn(async (args: any) => {
+    const matches = users.filter(u => u.id === args.where.id && u.walletBalance >= args.where.walletBalance.gte);
+    matches.forEach(u => { u.walletBalance -= args.data.walletBalance.decrement; });
+    return { count: matches.length };
+  });
+
+  const createWalletTransaction = t.mock.fn(async (args: any) => {
+    if (walletTransactions.some(w => w.referenceId === args.data.referenceId)) {
+      throw new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields: (`referenceId`)',
+        { code: 'P2002', clientVersion: 'test', meta: { target: ['referenceId'] } }
+      );
+    }
+    walletTransactions.push(args.data);
+    return args.data;
+  });
+
+  const tx = {
+    user: { updateMany: updateManyUser, findUnique: async (args: any) => users.find(u => u.id === args.where.id) ?? null },
+    walletTransaction: { create: createWalletTransaction },
+    coupon: { findUnique: async () => null, updateMany: async () => ({ count: 0 }) },
+    couponRedemption: { count: async () => 0, create: async () => ({}) },
+    project: { create: async (args: any) => ({ id: `project-${Math.random()}`, ...args.data }) },
+    contract: { create: async (args: any) => ({ id: `contract-${Math.random()}`, ...args.data }) },
+    escrow: { create: t.mock.fn(async (args: any) => { escrows.push(args.data); return args.data; }) },
+    projectStage: { create: async () => ({}), createMany: async () => ({}) },
+    order: { update: async (args: any) => { Object.assign(order, args.data); return order; } },
+    otpVerification: { delete: async () => ({}) }
+  };
+
+  // Real-Postgres-accurate transaction simulation, two parts:
+  //
+  // 1. A FIFO mutex modeling the row-level lock the real debit's
+  //    `UPDATE ... WHERE id=$1` takes on the User row for the transaction's
+  //    ENTIRE duration (released only at commit/rollback, never earlier) —
+  //    without this, two concurrent mock transactions can freely interleave
+  //    their individual statements (e.g. both debits landing before either
+  //    reaches walletTransaction.create()), which is NOT how Postgres
+  //    actually serializes concurrent writers to the same row and would
+  //    make this test's outcome an artifact of JS microtask scheduling
+  //    rather than a faithful model.
+  // 2. Snapshot/restore-on-throw (rollback) — undoes everything the losing
+  //    transaction did, including its own already-applied debit, exactly
+  //    like a real ROLLBACK.
+  let lockTail: Promise<void> = Promise.resolve();
+  const transactionMock = async (fn: any) => {
+    const previous = lockTail;
+    let release!: () => void;
+    lockTail = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+
+    const usersSnapshot = users.map(u => ({ ...u }));
+    const walletTransactionsSnapshot = walletTransactions.map(w => ({ ...w }));
+    const escrowsSnapshot = escrows.map(e => ({ ...e }));
+    const orderSnapshot = { ...order };
+    try {
+      return await fn(tx);
+    } catch (error) {
+      users.length = 0; users.push(...usersSnapshot);
+      walletTransactions.length = 0; walletTransactions.push(...walletTransactionsSnapshot);
+      escrows.length = 0; escrows.push(...escrowsSnapshot);
+      Object.assign(order, orderSnapshot);
+      throw error;
+    } finally {
+      release();
+    }
+  };
+
+  // Same shared OTP row for both concurrent calls — same paymentReference,
+  // exactly as a real double-click/duplicate-submission would share the one
+  // OTP context created by the single preceding initPayment() call.
+  const sharedOtp = { id: 'otp-shared', code: '111111', expiresAt: new Date(Date.now() + 60_000), context: { purpose: 'checkout_payment', orderId: 'order-1', paymentReference: 'PAY-SHARED', paymentMethod: 'wallet' } };
+
+  const prismaMock: any = {
+    order: { findFirst: async () => order },
+    otpVerification: { findMany: async () => [sharedOtp], delete: async () => ({}), update: async () => ({}) },
+    serviceStage: { findMany: async () => [] },
+    $transaction: transactionMock
+  };
+  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+
+  const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { cartCheckoutService } = await import(moduleUrl);
+
+  const confirmOnce = () => cartCheckoutService.confirmPayment('user-1', 'order-1', '111111').catch((e: any) => e);
+  const [resultA, resultB] = await Promise.all([confirmOnce(), confirmOnce()]);
+  const results = [resultA, resultB];
+
+  const succeeded = results.filter(r => r && r.status === 'paid');
+  const failed = results.filter(r => r instanceof Error);
+
+  assert.equal(succeeded.length, 1, 'exactly one purchase succeeds');
+  assert.equal(failed.length, 1, 'exactly one is rejected');
+
+  // The losing request's error must be the clean, narrow business-conflict
+  // AppError — never the raw PrismaClientKnownRequestError, never a generic
+  // unclassified 500.
+  assert.equal(failed[0].statusCode, 409);
+  assert.equal(failed[0].constructor?.name, 'AppError', 'the raw Prisma P2002 must never be surfaced directly');
+  assert.doesNotMatch(String(failed[0].message), /Prisma|P2002|constraint|referenceId/i, 'no internal DB detail leaks into the business-facing message');
+
+  // The financial invariants this test exists to prove:
+  assert.equal(users[0].walletBalance, 200, 'exactly ONE debit of 100 persists — the loser\'s own debit was rolled back, not merely uncounted');
+  assert.equal(walletTransactions.length, 1, 'exactly one WalletTransaction persists');
+  assert.equal(escrows.length, 1, 'exactly one Project/Contract/Escrow set persists — the loser\'s own set was rolled back');
+  assert.equal(order.status, 'PAID', 'the order ends PAID exactly once');
 });

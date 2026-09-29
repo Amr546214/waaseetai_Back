@@ -44,7 +44,14 @@ export async function getPaymentMethods(req: Request, res: Response, next: NextF
 
 export async function initPayment(req: Request, res: Response, next: NextFunction) {
   try {
-    const parsed = z.object({ orderId: z.string().uuid(), paymentMethod: z.enum(['card', 'moyasar', 'wallet']) }).safeParse(req.body);
+    // Wallet-only internal purchasing: 'wallet' is the ONLY accepted value —
+    // a raw request supplying 'card'/'moyasar'/'stc_pay'/'apple_pay'/'paypal'/
+    // any other value fails this zod schema before reaching the service at
+    // all (defense in depth alongside cartCheckoutService.initPayment()'s own
+    // independent check). PayPal/Moyasar/card remain wallet TOP-UP rails only
+    // (see paypal-finance.service.ts / client-finance.service.ts) — never a
+    // direct checkout payment method.
+    const parsed = z.object({ orderId: z.string().uuid(), paymentMethod: z.literal('wallet') }).safeParse(req.body);
     if (!parsed.success) throw new AppError('بيانات تهيئة الدفع غير صحيحة', 400);
     res.json({ success: true, data: await cartCheckoutService.initPayment(userId(req)!, parsed.data.orderId, parsed.data.paymentMethod) });
   } catch (error) { next(error); }

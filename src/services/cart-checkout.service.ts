@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { ContractStatus, EscrowStatus, OrderStatus, OtpType, ProjectStageStatus, ProjectStatus } from '@prisma/client';
+import { ContractStatus, EscrowStatus, OrderStatus, OtpType, ProjectStageStatus, ProjectStatus, Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
@@ -9,14 +9,53 @@ import { LEVEL_MATRIX } from '../utils/progression-calculators';
 
 const serviceWhere = { status: { in: ['PUBLISHED', 'APPROVED'] as any } };
 
+// Prisma's default (unmapped) constraint name for `WalletTransaction.referenceId
+// @unique` — `<@@map table>_<field>_key`. Same dual-shape extraction technique
+// already empirically validated for this project's exact Prisma+adapter-pg
+// combination in payout.service.ts's extractConflictCandidates() (P1.1) —
+// duplicated narrowly here rather than imported, to keep the payout and
+// checkout domains independent, per this codebase's established separation.
+const WALLET_TRANSACTION_REFERENCE_CONSTRAINT = 'wallet_transactions_referenceId_key';
+
+function extractP2002Candidates(error: Prisma.PrismaClientKnownRequestError): string[] {
+  const candidates: string[] = [];
+
+  const target = (error.meta as { target?: unknown } | undefined)?.target;
+  if (typeof target === 'string') candidates.push(target);
+  else if (Array.isArray(target)) candidates.push(...target.filter((t): t is string => typeof t === 'string'));
+
+  const driverCause = (error.meta as { driverAdapterError?: { cause?: unknown } } | undefined)?.driverAdapterError?.cause;
+  if (driverCause && typeof driverCause === 'object') {
+    const cause = driverCause as { originalMessage?: unknown; constraint?: { fields?: unknown } };
+    if (typeof cause.originalMessage === 'string') {
+      const nameMatch = cause.originalMessage.match(/unique constraint "([^"]+)"/);
+      if (nameMatch) candidates.push(nameMatch[1]);
+    }
+    if (cause.constraint && typeof cause.constraint === 'object' && Array.isArray(cause.constraint.fields)) {
+      candidates.push(...cause.constraint.fields
+        .filter((f): f is string => typeof f === 'string')
+        .map(f => f.replace(/^"|"$/g, '')));
+    }
+  }
+
+  return candidates;
+}
+
 /**
- * DEV/TEST ONLY — Allows wallet checkout to proceed even when balance is insufficient.
- * Honored regardless of NODE_ENV (since dev backend may use NODE_ENV=production).
- * To enable: set ALLOW_TEST_CHECKOUT_WITHOUT_BALANCE=true in .env
- * To disable: set to false or remove the flag. NEVER commit this as true.
+ * Narrow classification ONLY: true iff this P2002 specifically violated
+ * WalletTransaction.referenceId's own unique constraint — the exact,
+ * expected signature of a genuine concurrent same-order confirmPayment()
+ * race (both requests share the same OTP-derived paymentReference; the
+ * loser's own walletTransaction.create() collides with the winner's
+ * already-committed row). Any OTHER P2002 (a different constraint, or an
+ * unrecognized shape) returns false and is NEVER treated as this race —
+ * it propagates unmodified, exactly as before this change, so an unrelated
+ * data-integrity conflict is never silently masked as "already paid."
  */
-function isTestCheckoutBypassEnabled(): boolean {
-  return process.env.ALLOW_TEST_CHECKOUT_WITHOUT_BALANCE === 'true';
+function isDuplicatePaymentReferenceConflict(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') return false;
+  const candidates = extractP2002Candidates(error);
+  return candidates.includes(WALLET_TRANSACTION_REFERENCE_CONSTRAINT) || candidates.includes('referenceId');
 }
 
 function initials(user: { firstName: string; lastName: string }) {
@@ -215,23 +254,20 @@ export class CartCheckoutService {
     return { id: order.id, orderId: order.id, orderNumber: order.orderNumber, status: order.status.toLowerCase(), items: order.items.map(item => this.formatOrderItem(item)), subtotal: order.subtotal, discount: order.discount, total: order.total, couponCode: order.couponCode, createdAt: order.createdAt.toISOString() };
   }
 
+  /**
+   * Wallet-only internal purchasing: the WaseetAI Wallet (USD-canonical) is
+   * the sole accepted internal payment method. PayPal/Moyasar/card/STC Pay/
+   * Apple Pay are wallet TOP-UP rails only (paypal-finance.service.ts /
+   * client-finance.service.ts) — never offered here as a direct checkout
+   * payment method. This contract is enforced again, independently, by
+   * initPayment()/confirmPayment() below (never trust the frontend alone).
+   */
   async getPaymentMethods(userId: string) {
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { walletBalance: true } });
     if (!user) throw new AppError('المستخدم غير موجود', 404);
     const balance = Number(user.walletBalance);
-    console.debug(`[Checkout] getPaymentMethods userId=${userId} walletBalance=${balance}`);
     return [
-      { id: 'card', name: 'بطاقة بنكية', available: true },
-      { id: 'moyasar', name: 'ميسر', available: true },
-      // Advertised as unavailable to match initPayment(), which rejects
-      // 'wallet' outright: order.total is SAR-priced while User.walletBalance
-      // is now USD-canonical. Offering it here while rejecting it there let a
-      // user pick "المحفظة" and only then hit "طريقة الدفع غير متاحة".
-      // `balance` is still returned so the UI can display the wallet amount
-      // without allowing it as a payment source.
-      { id: 'wallet', name: 'المحفظة', available: false, badge: 'قريباً', balance },
-      { id: 'stc_pay', name: 'STC Pay', available: false, badge: 'قريباً' },
-      { id: 'apple_pay', name: 'Apple Pay', available: false, badge: 'قريباً' }
+      { id: 'wallet', name: 'المحفظة', available: true, balance }
     ];
   }
 
@@ -241,24 +277,30 @@ export class CartCheckoutService {
   }
 
   async initPayment(userId: string, orderId: string, paymentMethod: string) {
-    // 'wallet' TEMPORARILY DISABLED: this path debits User.walletBalance
-    // (now USD-canonical) for order.total, which remains SAR-priced —
-    // paying for a SAR-priced order out of a USD balance without any
-    // conversion. 'card'/'moyasar' (a direct, non-wallet Moyasar SAR charge)
-    // are unaffected and remain available. See paypal-finance.service.ts /
-    // the USD-canonical-wallet report for the full context; this is not a
-    // rewrite of checkout, just excluding one payment method until the
-    // wallet-vs-order-currency conflict is resolved.
-    if (!['card', 'moyasar'].includes(paymentMethod)) throw new AppError('طريقة الدفع غير متاحة', 400);
+    // Wallet-only internal purchasing (see getPaymentMethods()'s own doc
+    // comment) — enforced here independently of the controller's zod schema:
+    // a raw request bypassing the DTO must still be rejected. Marketplace
+    // order pricing (order.total) is treated as USD for active purchasing
+    // per the current business decision — no SAR->USD conversion is
+    // performed anywhere in this method, the numeric value is unchanged.
+    if (paymentMethod !== 'wallet') throw new AppError('طريقة الدفع غير متاحة — المحفظة هي وسيلة الدفع الوحيدة المتاحة', 400);
     const order = await prisma.order.findFirst({ where: { id: orderId, userId }, include: { user: { select: { email: true, phoneNumber: true, walletBalance: true } } } });
     if (!order) throw new AppError('الطلب غير موجود', 404);
     if (order.status !== OrderStatus.PENDING_PAYMENT) throw new AppError('الطلب لا ينتظر الدفع', 400);
-    if (paymentMethod === 'wallet' && Number(order.user.walletBalance) < order.total) {
-      if (isTestCheckoutBypassEnabled()) {
-        console.warn(`[TEST CHECKOUT BYPASS] initPayment — wallet balance insufficient but proceeding. userId=${userId} orderId=${orderId} balance=${Number(order.user.walletBalance)} total=${order.total}`);
-      } else {
-        throw new AppError('رصيد المحفظة غير كافٍ', 400);
-      }
+    // Advisory pre-check only (spares an unnecessary OTP email) — NOT the
+    // authoritative gate. The real, race-safe guard is confirmPayment()'s
+    // own guarded updateMany debit below; balance can still legitimately
+    // change between this read and that debit. Same 402 + required/
+    // available/shortfall shape as client-requests.service.ts's
+    // depositEscrow() — the established wallet-insufficient-balance contract
+    // the frontend already knows how to render.
+    const available = Number(order.user.walletBalance);
+    if (available < order.total) {
+      throw new AppError('رصيد المحفظة غير كافٍ', 402, [{
+        required: order.total,
+        available,
+        shortfall: Math.max(0, Math.round((order.total - available) * 100) / 100)
+      }]);
     }
 
     const paymentReference = `PAY-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
@@ -286,7 +328,7 @@ export class CartCheckoutService {
   }
 
   async confirmPayment(userId: string, orderId: string, otpCode: string) {
-    const order = await prisma.order.findFirst({ where: { id: orderId, userId }, include: { items: true, user: { select: { walletBalance: true } } } });
+    const order = await prisma.order.findFirst({ where: { id: orderId, userId }, include: { items: true } });
     if (!order) throw new AppError('الطلب غير موجود', 404);
     if (order.status !== OrderStatus.PENDING_PAYMENT) throw new AppError('الطلب مدفوع مسبقاً أو غير قابل للدفع', 400);
     const otp = await this.getPaymentOtp(userId, orderId);
@@ -301,18 +343,38 @@ export class CartCheckoutService {
       ? await prisma.serviceStage.findMany({ where: { serviceId: { in: serviceIds } }, orderBy: { stepOrder: 'asc' } })
       : [];
     const projectIds = await prisma.$transaction(async tx => {
-      if (context.paymentMethod === 'wallet') {
-        const walletBalance = Number(order.user.walletBalance);
-        const bypass = isTestCheckoutBypassEnabled() && walletBalance < order.total;
-        if (bypass) {
-          console.warn(`[TEST CHECKOUT BYPASS] confirmPayment — purchase completed without enough wallet balance. userId=${userId} orderId=${order.id} balance=${walletBalance} total=${order.total}`);
-          // Skip wallet deduction in bypass mode; record a TEST_WALLET_BYPASS transaction for audit.
-          await tx.walletTransaction.create({ data: { userId, type: 'ORDER_PAYMENT', amount: -order.total, currency: 'SAR', status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: context.paymentReference, description: `[TEST BYPASS] دفع الطلب ${order.orderNumber} (تجاوز رصيد المحفظة لأغراض الاختبار)`, metadata: { orderId: order.id, testBypass: true } } });
-        } else {
-          const debited = await tx.user.updateMany({ where: { id: userId, walletBalance: { gte: order.total } }, data: { walletBalance: { decrement: order.total } } });
-          if (debited.count !== 1) throw new AppError('رصيد المحفظة غير كافٍ', 400);
-          await tx.walletTransaction.create({ data: { userId, type: 'ORDER_PAYMENT', amount: -order.total, currency: 'SAR', status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: context.paymentReference, description: `دفع الطلب ${order.orderNumber}`, metadata: { orderId: order.id } } });
+      // Wallet-only internal purchasing — the ONE authoritative, race-safe
+      // gate (never trust initPayment()'s earlier advisory check, and never
+      // trust the frontend): a conditional updateMany guarded on
+      // walletBalance >= order.total, inside the SAME transaction as every
+      // resource this payment creates below. count !== 1 means the balance
+      // dropped since initPayment() (e.g. a concurrent purchase) — nothing
+      // created, whole transaction rolls back. Mirrors
+      // client-requests.service.ts's depositEscrow() debit exactly.
+      const debited = await tx.user.updateMany({ where: { id: userId, walletBalance: { gte: order.total } }, data: { walletBalance: { decrement: order.total } } });
+      if (debited.count !== 1) {
+        const wallet = await tx.user.findUnique({ where: { id: userId }, select: { walletBalance: true } });
+        const available = Number(wallet?.walletBalance || 0);
+        throw new AppError('رصيد المحفظة غير كافٍ', 402, [{
+          required: order.total,
+          available,
+          shortfall: Math.max(0, Math.round((order.total - available) * 100) / 100)
+        }]);
+      }
+      try {
+        await tx.walletTransaction.create({ data: { userId, type: 'ORDER_PAYMENT', amount: -order.total, currency: 'USD', status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: context.paymentReference, description: `دفع الطلب ${order.orderNumber}`, metadata: { orderId: order.id } } });
+      } catch (error) {
+        if (isDuplicatePaymentReferenceConflict(error)) {
+          // A concurrent confirmPayment() for this SAME order (sharing the
+          // same OTP-derived paymentReference) already committed its own
+          // WalletTransaction first. This transaction's own debit above is
+          // rolled back along with everything else — never a raw DB error,
+          // never a generic 500, never a retry, never a fresh
+          // paymentReference, never a second debit, never reopening the
+          // (already-PAID) order.
+          throw new AppError('تم تأكيد دفع هذا الطلب بالفعل من جلسة أخرى', 409);
         }
+        throw error;
       }
       if (order.couponId) {
         const coupon = await tx.coupon.findUnique({ where: { id: order.couponId } });
@@ -335,7 +397,7 @@ export class CartCheckoutService {
 
         const contract = await tx.contract.create({ data: { projectId: project.id, clientId: userId, providerId: item.providerId, price: item.price, durationDays: item.deliveryDays, phasesCount, status: ContractStatus.ACTIVE, signedAt: new Date() } });
 
-        await tx.escrow.create({ data: { projectId: project.id, amount: item.price, status: EscrowStatus.HELD, paymentMethod: context.paymentMethod?.toUpperCase() || null, paymentReference: context.paymentReference || null, fundedAt: new Date() } });
+        await tx.escrow.create({ data: { projectId: project.id, amount: item.price, status: EscrowStatus.HELD, paymentMethod: 'WALLET', paymentReference: context.paymentReference || null, fundedAt: new Date() } });
 
         if (stages.length > 0) {
           await tx.projectStage.createMany({ data: stages.map((stage, index) => ({
