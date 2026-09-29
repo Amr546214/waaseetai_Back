@@ -85,6 +85,168 @@ const SIMPLE_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // UNKNOWN, never guessed into either bucket.
 const ACCEPTED_PAYOUT_BATCH_STATUSES = new Set(['PENDING', 'PROCESSING']);
 
+// ============================================================================
+// Payout P3-B — GET-by-batch-id transport (getPayoutBatch()) + idempotent
+// senderBatchId resubmission/recovery transport (recoverPayoutBySenderBatch()).
+// Both are TRANSPORT ONLY: neither makes any DB call, neither decides
+// financial completion, neither retries automatically. Shares only
+// getAccessTokenForPayout()/getBaseUrl()/assertConfigured() with P2-B's
+// createPayout() — the deposit/order flow above remains completely untouched.
+// ============================================================================
+
+// SANDBOX CHARACTERIZATION ITEM: this project's confirmed official PayPal
+// contract does not establish payout_batch_id's complete character set or
+// length, so this pattern is a deliberately conservative, defensively
+// strict guess — NOT verified against an authoritative PayPal ID-format
+// spec (none is bundled in this project). Restricting to a plain
+// alphanumeric charset can only ever cause an overly-cautious rejection of
+// a real id this project hasn't seen the shape of yet (a safe, visible
+// UNKNOWN/thrown-validation-error), never an injection/path-traversal risk
+// — the asymmetry that justifies keeping this strict rather than loosening
+// it on speculation. It is safer for P3-B to return UNKNOWN for an
+// unfamiliar legitimate id than to accept unsafe path material. Do NOT
+// loosen this pattern without empirical Sandbox evidence of real
+// payout_batch_id values; revisit only once that evidence exists.
+const PAYOUT_BATCH_ID_PATTERN = /^[A-Za-z0-9]{1,64}$/;
+
+// The full documented PayPal Payouts ITEM transaction-status set (STEP 7 of
+// the confirmed official contract). getPayoutBatch() recognizes ONLY these —
+// anything else (missing, unrecognized, malformed) is left undefined in the
+// returned typed result, NEVER guessed into SUCCESS/FAILED/any other value.
+const KNOWN_ITEM_TRANSACTION_STATUSES = new Set([
+  'SUCCESS', 'FAILED', 'PENDING', 'UNCLAIMED', 'RETURNED', 'ONHOLD', 'BLOCKED', 'REFUNDED', 'REVERSED'
+]);
+
+export interface PaypalPayoutItemResult {
+  payoutItemId?: string;
+  payoutBatchId: string;
+  /** The item's own sender_item_id, if present in PayPal's response — lets a future caller correlate this item back to a specific PayoutAttempt.id. */
+  senderItemId?: string;
+  /** Normalized (trim+uppercase), and ONLY if it matches KNOWN_ITEM_TRANSACTION_STATUSES — undefined if missing/unrecognized. This transport layer never maps an unknown value to any financial state. */
+  transactionStatus?: string;
+}
+
+export interface PaypalGetPayoutBatchResult {
+  payoutBatchId: string;
+  /**
+   * Informational only. P3-B (and any future caller) must NEVER treat this
+   * as authoritative evidence of financial completion — including a value
+   * of "SUCCESS" — per the owner decision that only ITEM-level
+   * transactionStatus is the financial-reconciliation input. Normalized
+   * (trim+uppercase) if present and non-empty, else undefined; no allowlist
+   * filtering is applied here since nothing safety-relevant depends on its
+   * exact value.
+   */
+  batchStatus?: string;
+  senderBatchId?: string;
+  items: PaypalPayoutItemResult[];
+}
+
+export type PaypalGetPayoutBatchOutcome =
+  | { outcome: 'FOUND'; batch: PaypalGetPayoutBatchResult }
+  | { outcome: 'UNKNOWN'; reason: string };
+
+export interface RecoverPayoutBySenderBatchParams {
+  /** Reused verbatim — never generated/derived here. Must be the EXACT senderBatchId already used for the original createPayout() attempt. */
+  senderBatchId: string;
+  senderItemId: string;
+  recipientEmail: string;
+  amount: number;
+}
+
+/**
+ * Post-review semantic clarification (financial-safety-critical — read
+ * before using this type anywhere): `{ outcome: 'RECOVERED', payoutBatchId }`
+ * means ONLY "we have safely obtained the PayPal payout_batch_id
+ * corresponding to this same sender_batch_id recovery operation." It NEVER
+ * means, and must never be treated by any caller as meaning:
+ *   - the payout succeeded or completed
+ *   - the recipient received funds
+ *   - the item's transaction_status is SUCCESS (or any other specific value)
+ *   - Withdrawal should become COMPLETED
+ *   - PayoutAttempt should become COMPLETED
+ * Both ways RECOVERED can be produced — a fresh 2xx acceptance, or a
+ * structurally-proven duplicate-response HATEOAS link — recover IDENTITY
+ * ONLY. A future P3-C MUST still call getPayoutBatch(payoutBatchId) and
+ * inspect the specific item's transaction_status before making any
+ * financial-state decision; recoverPayoutBySenderBatch() itself never
+ * inspects or reports item-level status at all.
+ */
+export type PaypalRecoverPayoutResult =
+  | { outcome: 'RECOVERED'; payoutBatchId: string }
+  | { outcome: 'UNKNOWN'; reason: string };
+
+/**
+ * Payout P3-B recovery transport: extracts the original payout's
+ * payoutBatchId from a PayPal duplicate-sender_batch_id error response's
+ * HATEOAS `links` array — and ONLY from there. This function NEVER fetches
+ * or follows any URL; a candidate href is treated purely as a string to
+ * parse and validate, never dereferenced (see recoverPayoutBySenderBatch()'s
+ * own SSRF-safety comment and this project's STEP 13 security review).
+ *
+ * Deliberately conservative, per explicit instruction: the exact real
+ * Sandbox shape of PayPal's duplicate-sender_batch_id response (its HTTP
+ * status, error `name`, `details[].issue`, and HATEOAS `rel` value) has NOT
+ * been empirically characterized against a real Sandbox call in this
+ * project, and no authoritative local spec exists to confirm it. This
+ * parser therefore trusts NOTHING about the response body's free-text
+ * fields (`name`, `message`, `details`) — only a structurally well-formed
+ * link whose origin matches OUR OWN already-configured, trusted PayPal base
+ * URL, and whose path matches the exact known payouts-batch resource shape
+ * (`/v1/payments/payouts/{id}`), can ever produce a recovered id. Any link
+ * with an unexpected origin, an unexpected path, or an `{id}` segment that
+ * fails the same strict validation getPayoutBatch() itself requires, is
+ * ignored — no `rel` value is required (its real value is unverified), only
+ * the origin+path+id are ever trusted. Absence of such a link means NO
+ * recovery — never guessed from anything else in the response.
+ */
+function extractOriginalPayoutBatchIdFromDuplicateResponse(data: any, trustedBaseUrl: string): string | null {
+  const links = Array.isArray(data?.links) ? data.links : [];
+
+  let trustedOrigin: string;
+  try {
+    trustedOrigin = new URL(trustedBaseUrl).origin;
+  } catch {
+    return null;
+  }
+
+  for (const link of links) {
+    const href = link?.href;
+    if (typeof href !== 'string' || !href) continue;
+
+    let parsed: URL;
+    try {
+      parsed = new URL(href);
+    } catch {
+      continue; // malformed href — never partially trusted.
+    }
+
+    // The ONE hard SSRF-relevant boundary: only our own already-configured,
+    // trusted PayPal API origin is ever accepted — exactly the same
+    // sandbox/live selection this service already makes for every other
+    // call. A link pointing anywhere else (including a convincing-looking
+    // lookalike domain) is rejected outright, unconditionally.
+    if (parsed.origin !== trustedOrigin) continue;
+
+    // Exact expected resource path shape only — /v1/payments/payouts/{id} —
+    // with nothing else after the id (no unexpected sub-resource/traversal).
+    const match = parsed.pathname.match(/^\/v1\/payments\/payouts\/([^/]+)\/?$/);
+    if (!match) continue;
+
+    let candidateId: string;
+    try {
+      candidateId = decodeURIComponent(match[1]);
+    } catch {
+      continue;
+    }
+    if (PAYOUT_BATCH_ID_PATTERN.test(candidateId)) {
+      return candidateId;
+    }
+  }
+
+  return null;
+}
+
 export interface CreatePayoutParams {
   /** PayoutAttempt-derived idempotency key — reused verbatim, never generated here. */
   senderBatchId: string;
@@ -456,6 +618,300 @@ export class PaypalService {
     } finally {
       // Guaranteed cleanup on every path above: success, transport error,
       // or any exception thrown while parsing/classifying the response.
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Payout P3-B: GET /v1/payments/payouts/{payoutBatchId} — a single,
+   * non-retrying read of a payout batch's latest known state. TRANSPORT
+   * ONLY: makes no DB call, and never decides financial completion from
+   * `batch_status` (including a `batch_status` of "SUCCESS") — only
+   * ITEM-level `transaction_status` is ever meaningful for that, and even
+   * that decision belongs to a future P3-C, not to this method. 404, any
+   * other 4xx, 5xx, timeout, network failure, and a malformed/missing
+   * `payout_batch_id` in an otherwise-2xx body are ALL classified UNKNOWN —
+   * none of them is ever interpreted as payout failure or success.
+   *
+   * Shares the SAME bounded (15s), isolated OAuth acquisition and its own
+   * independent 15s request timeout as createPayout() — see
+   * getAccessTokenForPayout()'s own comment; getAccessToken() (the shared
+   * deposit/order path) remains completely untouched.
+   *
+   * payoutBatchId is validated against PAYOUT_BATCH_ID_PATTERN before any
+   * HTTP call (preventing path injection/traversal) and additionally
+   * percent-encoded when embedded in the URL, matching this file's existing
+   * getOrder()/captureOrder() precedent.
+   */
+  public async getPayoutBatch(payoutBatchId: string): Promise<PaypalGetPayoutBatchOutcome> {
+    this.assertConfigured();
+    if (!payoutBatchId || !PAYOUT_BATCH_ID_PATTERN.test(payoutBatchId)) {
+      throw new Error('getPayoutBatch: payoutBatchId is invalid');
+    }
+
+    let accessToken: string;
+    try {
+      accessToken = await this.getAccessTokenForPayout();
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        return { outcome: 'UNKNOWN', reason: `انتهت مهلة الحصول على رمز الوصول من PayPal (${PAYOUT_CREATE_TIMEOUT_MS / 1000} ثانية)` };
+      }
+      return { outcome: 'UNKNOWN', reason: error instanceof Error ? error.message : 'تعذر الحصول على رمز الوصول من PayPal' };
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PAYOUT_CREATE_TIMEOUT_MS);
+
+    try {
+      let response: Response;
+      try {
+        response = await fetch(`${this.getBaseUrl()}/v1/payments/payouts/${encodeURIComponent(payoutBatchId)}`, {
+          method: 'GET',
+          signal: controller.signal,
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+      } catch (error: any) {
+        if (error?.name === 'AbortError') {
+          return { outcome: 'UNKNOWN', reason: `انتهت مهلة الاستعلام عن حالة التحويل من PayPal (${PAYOUT_CREATE_TIMEOUT_MS / 1000} ثانية)` };
+        }
+        return { outcome: 'UNKNOWN', reason: 'تعذر الاتصال ببوابة PayPal للاستعلام عن حالة التحويل' };
+      }
+
+      const text = await response.text();
+      let data: any = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = null; // unparseable body — handled by the shape check below, never assumed to mean anything.
+      }
+
+      if (!response.ok) {
+        // 404/4xx/5xx — never interpreted as payout failure or success.
+        return { outcome: 'UNKNOWN', reason: `استجابة غير ناجحة من PayPal عند الاستعلام عن حالة التحويل (${response.status})` };
+      }
+
+      const responseBatchId = data?.batch_header?.payout_batch_id;
+      if (typeof responseBatchId !== 'string' || !responseBatchId) {
+        // 2xx but missing the one field everything else anchors to —
+        // malformed, conservatively UNKNOWN.
+        return { outcome: 'UNKNOWN', reason: 'استجابة ناجحة من PayPal دون هوية دفعة تحويل صالحة' };
+      }
+      if (responseBatchId !== payoutBatchId) {
+        // Post-review hardening (identifier-consistency): the batch id
+        // PayPal's response actually describes does not match the id we
+        // explicitly requested. A response this inconsistent must never be
+        // treated as a clean, trustworthy answer for the batch we asked
+        // about — conservatively UNKNOWN rather than silently returned as
+        // if it were the batch the caller queried for.
+        return { outcome: 'UNKNOWN', reason: 'استجابة PayPal لا تطابق هوية دفعة التحويل المطلوبة' };
+      }
+
+      const rawBatchStatus = data?.batch_header?.batch_status;
+      const batchStatus = typeof rawBatchStatus === 'string' && rawBatchStatus.trim() ? rawBatchStatus.trim().toUpperCase() : undefined;
+      // Post-review field-shape audit: this project's confirmed official
+      // PayPal contract (see the P3-B task's own "OFFICIAL PAYPAL CONTRACT
+      // CONFIRMED" list) documents payout_batch_id/batch_status under
+      // batch_header, and payout_item_id/payout_batch_id/transaction_status
+      // as flat ITEM-level fields — it does NOT document
+      // batch_header.sender_batch_header being echoed back on a GET
+      // response at all. That prior nested read was pure speculation with
+      // zero documented support (not even pattern-consistent with any
+      // sibling confirmed field), so it has been removed rather than kept
+      // as a guess. senderBatchId is intentionally always undefined until a
+      // real, Sandbox-observed response confirms where (or whether) PayPal
+      // actually echoes it back on this endpoint — conservative undefined
+      // is preferable to speculative parsing.
+      const senderBatchId: string | undefined = undefined;
+
+      const rawItems = Array.isArray(data?.items) ? data.items : [];
+      const items: PaypalPayoutItemResult[] = [];
+      for (const item of rawItems) {
+        const itemBatchIdRaw = item?.payout_batch_id;
+        if (typeof itemBatchIdRaw === 'string' && itemBatchIdRaw && itemBatchIdRaw !== responseBatchId) {
+          // Post-review hardening (identifier-consistency): an item whose
+          // OWN payout_batch_id contradicts the batch-level id must never be
+          // silently normalized into the batch's id — that would make a
+          // genuinely inconsistent PayPal response look like a clean,
+          // trustworthy reconciliation result. The whole response is
+          // conservatively UNKNOWN instead.
+          return { outcome: 'UNKNOWN', reason: 'تناقض في هوية دفعة التحويل بين مستوى الدفعة والعنصر' };
+        }
+
+        const rawStatus = item?.transaction_status;
+        const normalizedStatus = typeof rawStatus === 'string' ? rawStatus.trim().toUpperCase() : undefined;
+        // Post-review field-shape audit: the confirmed official contract
+        // does not document a nested `payout_item` sub-object on a GET
+        // response item at all — that prior nested-first guess
+        // (payout_item.sender_item_id) had zero documented support and has
+        // been removed. Only a single, flat `sender_item_id` read remains,
+        // kept ONLY because it is at least pattern-consistent with the
+        // OTHER confirmed item-level fields (payout_item_id/payout_batch_id/
+        // transaction_status, all flat per the official contract) — still
+        // explicitly unverified against a real captured response, and
+        // marked here as a Sandbox characterization item, not a fact.
+        const senderItemId = typeof item?.sender_item_id === 'string' ? item.sender_item_id : undefined;
+
+        // Every item is preserved regardless of whether its status is
+        // recognized — an unknown/missing transactionStatus must never
+        // cause the item's other trusted identifiers (payoutItemId/
+        // senderItemId) to be dropped; P3-C may still need them for
+        // investigation/correlation.
+        items.push({
+          payoutItemId: typeof item?.payout_item_id === 'string' ? item.payout_item_id : undefined,
+          payoutBatchId: responseBatchId,
+          senderItemId,
+          // ONLY a documented, recognized value — never guessed into any
+          // financial state when missing/unrecognized.
+          transactionStatus: normalizedStatus && KNOWN_ITEM_TRANSACTION_STATUSES.has(normalizedStatus) ? normalizedStatus : undefined
+        });
+      }
+
+      return {
+        outcome: 'FOUND',
+        batch: { payoutBatchId: responseBatchId, batchStatus, senderBatchId, items }
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Payout P3-B recovery transport: performs the ONE idempotent
+   * re-submission PayPal's own documented contract explicitly supports —
+   * re-POSTing /v1/payments/payouts with the EXACT SAME sender_batch_id,
+   * sender_item_id, receiver, amount, and USD as the original attempt.
+   * Intended ONLY for the specific case where a PayoutAttempt is PENDING,
+   * its senderBatchId already exists, but payoutBatchId was never
+   * persisted (the accepted-then-local-DB-failure scenario P2-C's own
+   * review already analyzed) — never for a fresh, never-attempted payout
+   * (that is createPayout()'s job).
+   *
+   * Idempotency/trust boundary: every field is reused VERBATIM from the
+   * caller's params — this method never generates, derives, or falls back
+   * to a replacement id of any kind, and performs exactly ONE HTTP attempt
+   * (no internal retry loop; PayPal's own documented same-sender_batch_id
+   * safety is what makes even a FUTURE, separate re-invocation of this same
+   * method safe — this method itself does not loop).
+   *
+   * 30-DAY WINDOW: PayPal's idempotency guarantee for a given
+   * sender_batch_id is documented as bounded to roughly the last 30 days.
+   * This method has NO trusted timestamp context of its own (its params
+   * are exactly senderBatchId/senderItemId/recipientEmail/amount, per this
+   * task's own explicit scope) and therefore CANNOT enforce that window
+   * itself. The future P3-C caller MUST gate any call to this method using
+   * the durable PayoutAttempt.createdAt (or another already-trusted
+   * timestamp) before invoking it — this method must never be assumed
+   * safe to call unconditionally, no matter how old the original attempt.
+   *
+   * Duplicate-response handling: see
+   * extractOriginalPayoutBatchIdFromDuplicateResponse()'s own extensive
+   * comment. A non-2xx response is NEVER classified as a recoverable
+   * duplicate merely because of its status code, error `name`, or any
+   * free-text field — recovery only ever succeeds via a structurally safe,
+   * origin-and-path-validated HATEOAS link. No DEFINITELY_FAILED outcome
+   * exists here: this method returns UNKNOWN whenever it cannot prove
+   * recovery, never a definite failure classification.
+   *
+   * SEMANTIC BOUNDARY (see PaypalRecoverPayoutResult's own doc comment for
+   * the full statement): a RECOVERED result means IDENTITY ONLY — it is
+   * never evidence of success, completion, or any specific item status.
+   * The caller must still call getPayoutBatch() afterward.
+   */
+  public async recoverPayoutBySenderBatch(params: RecoverPayoutBySenderBatchParams): Promise<PaypalRecoverPayoutResult> {
+    this.assertConfigured();
+
+    assertNonEmpty(params.senderBatchId, 'senderBatchId');
+    assertNonEmpty(params.senderItemId, 'senderItemId');
+    if (!params.recipientEmail || !SIMPLE_EMAIL_PATTERN.test(params.recipientEmail.trim())) {
+      throw new Error('recoverPayoutBySenderBatch: recipientEmail is invalid');
+    }
+    const normalizedAmount = normalizePayoutAmount(params.amount);
+
+    let accessToken: string;
+    try {
+      accessToken = await this.getAccessTokenForPayout();
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        return { outcome: 'UNKNOWN', reason: `انتهت مهلة الحصول على رمز الوصول من PayPal (${PAYOUT_CREATE_TIMEOUT_MS / 1000} ثانية)` };
+      }
+      return { outcome: 'UNKNOWN', reason: error instanceof Error ? error.message : 'تعذر الحصول على رمز الوصول من PayPal' };
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PAYOUT_CREATE_TIMEOUT_MS);
+
+    try {
+      let response: Response;
+      try {
+        response = await fetch(`${this.getBaseUrl()}/v1/payments/payouts`, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            sender_batch_header: {
+              sender_batch_id: params.senderBatchId,
+              recipient_type: 'EMAIL'
+            },
+            items: [
+              {
+                recipient_type: 'EMAIL',
+                receiver: params.recipientEmail,
+                amount: { value: normalizedAmount, currency: 'USD' },
+                sender_item_id: params.senderItemId
+              }
+            ]
+          })
+        });
+      } catch (error: any) {
+        // Timeout and any other transport-level failure — both UNKNOWN, no
+        // automatic second attempt from within this method.
+        if (error?.name === 'AbortError') {
+          return { outcome: 'UNKNOWN', reason: `انتهت مهلة إعادة محاولة الاسترجاع من PayPal (${PAYOUT_CREATE_TIMEOUT_MS / 1000} ثانية)` };
+        }
+        return { outcome: 'UNKNOWN', reason: 'تعذر الاتصال ببوابة PayPal لمحاولة الاسترجاع' };
+      }
+
+      const text = await response.text();
+      let data: any = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = null;
+      }
+
+      if (response.ok) {
+        // A 2xx here means PayPal treated this as (or equivalently to) a
+        // fresh acceptance — structurally identical to createPayout()'s own
+        // ACCEPTED shape check.
+        const payoutBatchId = data?.batch_header?.payout_batch_id;
+        if (typeof payoutBatchId === 'string' && payoutBatchId) {
+          return { outcome: 'RECOVERED', payoutBatchId };
+        }
+        return { outcome: 'UNKNOWN', reason: 'استجابة ناجحة من PayPal دون هوية دفعة تحويل صالحة' };
+      }
+
+      // 5xx (or any other unexpected non-4xx status) — unconditionally
+      // UNKNOWN, per this method's own explicit scope: a duplicate-batch
+      // identification is only ever plausible on a 4xx client-error
+      // response (PayPal rejecting the request as a duplicate), never on a
+      // server error. No link-extraction attempt is made here at all —
+      // even a coincidentally present `links` array on a 5xx is not trusted.
+      if (!(response.status >= 400 && response.status < 500)) {
+        return { outcome: 'UNKNOWN', reason: `خطأ من خادم PayPal أثناء محاولة الاسترجاع (${response.status})` };
+      }
+
+      // 4xx: the ONLY status range that may ever produce RECOVERED — and
+      // only via a narrow, structurally-safe HATEOAS link extraction. Never
+      // based on status code, error name, message, or details[].issue alone.
+      const recoveredBatchId = extractOriginalPayoutBatchIdFromDuplicateResponse(data, this.getBaseUrl());
+      if (recoveredBatchId) {
+        return { outcome: 'RECOVERED', payoutBatchId: recoveredBatchId };
+      }
+      return { outcome: 'UNKNOWN', reason: `استجابة 4xx من PayPal دون رابط أصلي موثوق لاسترجاع هوية التحويل (${response.status})` };
+    } finally {
       clearTimeout(timer);
     }
   }
