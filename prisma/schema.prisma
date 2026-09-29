@@ -75,6 +75,10 @@ model User {
   email            String  @unique
   phoneCountryCode String? @default("+966")
   phoneNumber      String? @unique
+  // Gates the mandatory phone OTP challenge on login (see auth.service.ts
+  // loginUser/googleAuth). Defaults to false so existing accounts are
+  // unaffected; set true explicitly for every account created going forward.
+  phoneOtpEnabled  Boolean @default(false)
   password         String?
   avatarUrl        String?
 
@@ -120,6 +124,11 @@ model User {
   aiRiskLevel       RiskLevel @default(LOW) // LOW, MEDIUM, HIGH
   aiSuspiciousNotes String?   @db.Text
 
+  // Phase 7 — company-wide monthly cap (SAR) on total marketing discounts
+  // (coupons + special offers), set by the PROVIDER_COMPANY account owner.
+  // null = no cap configured. Only meaningful for PROVIDER_COMPANY users.
+  marketingMonthlySpendCap Float?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -137,31 +146,33 @@ model User {
 
   modificationRequests ProfileModificationRequest[]
 
-  providerServices      ServiceCatalog[]       @relation("ProviderServices")
-  couponsCreated        Coupon[]               @relation("ProviderCoupons")
-  couponRedemptions     CouponRedemption[]
-  marketplaceFavorites  MarketplaceFavorite[]
-  reviewsWritten        Review[]               @relation("ReviewClient")
-  reviewsReceived       Review[]               @relation("ReviewProvider")
-  gamification          ProviderGamification?
-  pointTransactions     PointTransaction[]
-  walletTransactions    WalletTransaction[]
-  paypalPayments        PaypalPayment[]
-  accountAuditLogs      AccountAuditLog[]
-  notifications         Notification[]
-  sessions              UserSession[]
-  clientConversations   Conversation[]         @relation("ClientConversations")
-  providerConversations Conversation[]         @relation("ProviderConversations")
-  sentMessages          Message[]
+  providerServices        ServiceCatalog[]         @relation("ProviderServices")
+  couponsCreated          Coupon[]                 @relation("ProviderCoupons")
+  couponRedemptions       CouponRedemption[]
+  specialOffersCreated    SpecialOffer[]           @relation("ProviderSpecialOffers")
+  specialOfferRedemptions SpecialOfferRedemption[]
+  marketplaceFavorites    MarketplaceFavorite[]
+  reviewsWritten          Review[]                 @relation("ReviewClient")
+  reviewsReceived         Review[]                 @relation("ReviewProvider")
+  gamification            ProviderGamification?
+  pointTransactions       PointTransaction[]
+  walletTransactions      WalletTransaction[]
+  paypalPayments          PaypalPayment[]
+  accountAuditLogs        AccountAuditLog[]
+  notifications           Notification[]
+  sessions                UserSession[]
+  clientConversations     Conversation[]           @relation("ClientConversations")
+  providerConversations   Conversation[]           @relation("ProviderConversations")
+  sentMessages            Message[]
 
-  cart                 Cart?
-  orders               Order[]
-  onboarding           ClientOnboarding?
-  disputesOpened       Dispute[] @relation("DisputesOpenedBy")
-  disputesAgainst      Dispute[] @relation("DisputesAgainstUser")
-  disputesResolved     Dispute[] @relation("DisputesResolvedBy")
-  withdrawals          Withdrawal[] @relation("WithdrawalUser")
-  reviewedWithdrawals  Withdrawal[] @relation("WithdrawalReviewer")
+  cart                Cart?
+  orders              Order[]
+  onboarding          ClientOnboarding?
+  disputesOpened      Dispute[]         @relation("DisputesOpenedBy")
+  disputesAgainst     Dispute[]         @relation("DisputesAgainstUser")
+  disputesResolved    Dispute[]         @relation("DisputesResolvedBy")
+  withdrawals         Withdrawal[]      @relation("WithdrawalUser")
+  reviewedWithdrawals Withdrawal[]      @relation("WithdrawalReviewer")
 
   clientContracts   Contract[] @relation("ClientContracts")
   providerContracts Contract[] @relation("ProviderContracts")
@@ -169,6 +180,15 @@ model User {
   clientProjectAmendments    ProjectAmendment[] @relation("ClientProjectAmendments")
   providerProjectAmendments  ProjectAmendment[] @relation("ProviderProjectAmendments")
   requestedProjectAmendments ProjectAmendment[] @relation("RequestedProjectAmendments")
+
+  // Company team members (Phase 4) — records owned/managed by a
+  // PROVIDER_COMPANY account; team members have no login of their own.
+  companyTeamMembers CompanyTeamMember[] @relation("CompanyTeamMembers")
+
+  notificationPreference NotificationPreference?
+
+  supportTickets        SupportTicket[]        @relation("SupportTicketOwner")
+  supportTicketMessages SupportTicketMessage[]  @relation("SupportTicketMessageSender")
 
   @@index([accountType, status])
   @@index([aiRiskScore])
@@ -516,23 +536,23 @@ model ProviderGamification {
 }
 
 model Review {
-  id         String          @id @default(uuid())
-  providerId String
-  provider   User            @relation("ReviewProvider", fields: [providerId], references: [id], onDelete: Cascade)
-  clientId   String?
-  client     User?           @relation("ReviewClient", fields: [clientId], references: [id], onDelete: SetNull)
-  projectId  String?
-  project    Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  serviceId  String?
-  service    ServiceCatalog? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  id              String          @id @default(uuid())
+  providerId      String
+  provider        User            @relation("ReviewProvider", fields: [providerId], references: [id], onDelete: Cascade)
+  clientId        String?
+  client          User?           @relation("ReviewClient", fields: [clientId], references: [id], onDelete: SetNull)
+  projectId       String?
+  project         Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  serviceId       String?
+  service         ServiceCatalog? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
   clientRequestId String?
-  clientRequest   ClientRequest? @relation(fields: [clientRequestId], references: [id], onDelete: SetNull)
-  stageId    String?
-  stage      ProjectStage?   @relation(fields: [stageId], references: [id], onDelete: SetNull)
-  reviewerRole String        @default("CLIENT")
-  rating     Float
-  comment    String?
-  createdAt  DateTime        @default(now())
+  clientRequest   ClientRequest?  @relation(fields: [clientRequestId], references: [id], onDelete: SetNull)
+  stageId         String?
+  stage           ProjectStage?   @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  reviewerRole    String          @default("CLIENT")
+  rating          Float
+  comment         String?
+  createdAt       DateTime        @default(now())
 
   @@index([providerId])
   @@index([serviceId])
@@ -872,15 +892,19 @@ model ServiceCatalog {
   discountPercentage Int?
   offerEndsAt        DateTime?
 
-  stages    ServiceStage[]
-  projects  Project[]
-  reviews   Review[]
-  favorites MarketplaceFavorite[]
-  cartItems CartItem[]
-  orderItems OrderItem[]
-  couponServices CouponService[]
-  createdAt DateTime              @default(now())
-  updatedAt DateTime              @updatedAt
+  stages                     ServiceStage[]
+  projects                   Project[]
+  reviews                    Review[]
+  favorites                  MarketplaceFavorite[]
+  cartItems                  CartItem[]
+  orderItems                 OrderItem[]
+  couponServices             CouponService[]
+  // Phase 6 — special offers referencing this service in each role.
+  specialOffersAsPrimary     SpecialOffer[]        @relation("SpecialOfferPrimaryService")
+  specialOffersAsBeneficiary SpecialOffer[]        @relation("SpecialOfferBeneficiaryService")
+  specialOffersAsTarget      SpecialOffer[]        @relation("SpecialOfferTargetService")
+  createdAt                  DateTime              @default(now())
+  updatedAt                  DateTime              @updatedAt
 
   @@index([providerId])
   @@index([status])
@@ -925,27 +949,66 @@ enum OrderStatus {
   CANCELLED
 }
 
-model Coupon {
-  id              String      @id @default(uuid())
-  providerId      String?
-  provider        User?       @relation("ProviderCoupons", fields: [providerId], references: [id], onDelete: SetNull)
-  code            String      @unique
-  discountType    String      @default("percentage")
-  discountValue  Float
-  minimumAmount   Float?
-  maxDiscount     Float?
-  maxUsesPerUser  Int         @default(1)
-  startAt         DateTime    @default(now())
-  active          Boolean     @default(true)
-  expiresAt       DateTime?
-  maxUses         Int?
-  usedCount       Int         @default(0)
-  orders          Order[]
-  services        CouponService[]
-  redemptions     CouponRedemption[]
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+enum ApprovalStatus {
+  NONE
+  PENDING
+  APPROVED
+  REJECTED
+}
 
+model Coupon {
+  id             String    @id @default(uuid())
+  providerId     String?
+  provider       User?     @relation("ProviderCoupons", fields: [providerId], references: [id], onDelete: SetNull)
+  code           String    @unique
+  discountType   String    @default("percentage")
+  discountValue  Float
+  minimumAmount  Float?
+  maxDiscount    Float?
+  maxUsesPerUser Int       @default(1)
+  startAt        DateTime  @default(now())
+  active         Boolean   @default(true)
+  expiresAt      DateTime?
+  maxUses        Int?
+  usedCount      Int       @default(0)
+
+  // Phase 5 — services excluded even when they'd otherwise be in scope
+  // (either explicitly listed via CouponService, or implicitly "all
+  // services" when CouponService is empty). Postgres array scalar,
+  // matching this schema's existing String[] convention (see e.g.
+  // ProviderProfile.languages/subSpecialties) rather than introducing a
+  // second join table alongside CouponService.
+  excludedServiceIds String[] @default([])
+
+  // Internal-only note — never surfaced on the customer-facing coupon
+  // validation/checkout responses (cart-checkout.service.ts only ever
+  // returns a hand-picked subset of fields, never the raw row).
+  internalNote String? @db.Text
+
+  // Company team attribution (Phase 4's CompanyTeamMember). Both nullable —
+  // meaningless for PROVIDER_INDIVIDUAL coupons, and optional even for
+  // PROVIDER_COMPANY ones. onDelete: SetNull so removing a team member never
+  // cascades into deleting coupons they were assigned to/created under.
+  assignedToTeamMemberId String?
+  assignedToTeamMember   CompanyTeamMember? @relation("CouponAssignedTeamMember", fields: [assignedToTeamMemberId], references: [id], onDelete: SetNull)
+  createdByTeamMemberId  String?
+  createdByTeamMember    CompanyTeamMember? @relation("CouponCreatedByTeamMember", fields: [createdByTeamMemberId], references: [id], onDelete: SetNull)
+
+  // Company approval workflow. NONE for individual coupons (always
+  // effectively approved — see provider-coupon.service.ts) and for legacy
+  // rows created before this workflow existed.
+  approvalStatus  ApprovalStatus @default(NONE)
+  rejectionReason String?
+
+  orders      Order[]
+  services    CouponService[]
+  redemptions CouponRedemption[]
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([assignedToTeamMemberId])
+  @@index([createdByTeamMemberId])
+  @@index([providerId, approvalStatus])
   @@map("coupons")
 }
 
@@ -961,23 +1024,24 @@ model CouponService {
 }
 
 model Order {
-  id           String      @id @default(uuid())
-  orderNumber  String      @unique
-  userId       String
-  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  status       OrderStatus @default(PENDING_PAYMENT)
-  subtotal     Float
-  discount     Float       @default(0)
-  total        Float
-  couponId     String?
-  coupon       Coupon?     @relation(fields: [couponId], references: [id], onDelete: SetNull)
-  couponCode   String?
-  couponDiscountType  String?
-  couponDiscountValue Float?
-  items        OrderItem[]
-  couponRedemption CouponRedemption?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  id                      String                   @id @default(uuid())
+  orderNumber             String                   @unique
+  userId                  String
+  user                    User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status                  OrderStatus              @default(PENDING_PAYMENT)
+  subtotal                Float
+  discount                Float                    @default(0)
+  total                   Float
+  couponId                String?
+  coupon                  Coupon?                  @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  couponCode              String?
+  couponDiscountType      String?
+  couponDiscountValue     Float?
+  items                   OrderItem[]
+  couponRedemption        CouponRedemption?
+  specialOfferRedemptions SpecialOfferRedemption[]
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
 
   @@index([userId, createdAt])
   @@index([status])
@@ -1001,10 +1065,91 @@ model CouponRedemption {
   @@map("coupon_redemptions")
 }
 
+// Phase 6 — special offers. Unlike Coupon, applied automatically (no
+// customer-entered code). Two shapes, enforced at the application layer
+// (special-offer.dto.ts + provider-special-offer.service.ts), not via a DB
+// check constraint (this schema has none anywhere):
+//   BUNDLE          — ordering primaryService (X) unlocks discountValue% on
+//                     beneficiaryService (Y) within validityDays of the
+//                     customer's first X order. Requires primary+beneficiary.
+//   DIRECT_DISCOUNT — straight discountValue% badge on targetService.
+enum SpecialOfferType {
+  BUNDLE
+  DIRECT_DISCOUNT
+}
+
+model SpecialOffer {
+  id         String           @id @default(uuid())
+  providerId String
+  provider   User             @relation("ProviderSpecialOffers", fields: [providerId], references: [id], onDelete: Cascade)
+  type       SpecialOfferType
+  name       String
+
+  primaryServiceId     String?
+  primaryService       ServiceCatalog? @relation("SpecialOfferPrimaryService", fields: [primaryServiceId], references: [id], onDelete: SetNull)
+  beneficiaryServiceId String?
+  beneficiaryService   ServiceCatalog? @relation("SpecialOfferBeneficiaryService", fields: [beneficiaryServiceId], references: [id], onDelete: SetNull)
+  targetServiceId      String?
+  targetService        ServiceCatalog? @relation("SpecialOfferTargetService", fields: [targetServiceId], references: [id], onDelete: SetNull)
+
+  // Percentage (1–100), same Float convention as Coupon.discountValue.
+  discountValue   Float
+  validityDays    Int?
+  startAt         DateTime  @default(now())
+  expiresAt       DateTime?
+  badgeText       String
+  customerMessage String?   @db.Text
+  internalNote    String?   @db.Text
+  active          Boolean   @default(true)
+  usedCount       Int       @default(0)
+
+  assignedToTeamMemberId String?
+  assignedToTeamMember   CompanyTeamMember? @relation("SpecialOfferAssignedTeamMember", fields: [assignedToTeamMemberId], references: [id], onDelete: SetNull)
+  createdByTeamMemberId  String?
+  createdByTeamMember    CompanyTeamMember? @relation("SpecialOfferCreatedByTeamMember", fields: [createdByTeamMemberId], references: [id], onDelete: SetNull)
+
+  approvalStatus  ApprovalStatus @default(NONE)
+  rejectionReason String?
+
+  redemptions SpecialOfferRedemption[]
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+
+  @@index([providerId, approvalStatus])
+  @@index([primaryServiceId])
+  @@index([beneficiaryServiceId])
+  @@index([targetServiceId])
+  @@index([assignedToTeamMemberId])
+  @@index([createdByTeamMemberId])
+  @@map("special_offers")
+}
+
+// Mirrors CouponRedemption, except orderId is NOT globally unique: one
+// order may legitimately redeem several different offers (e.g. a bundle
+// on one item and a direct discount on another), so uniqueness is per
+// (offer, user, order) only.
+model SpecialOfferRedemption {
+  id        String   @id @default(uuid())
+  offerId   String
+  userId    String
+  orderId   String
+  amount    Float
+  createdAt DateTime @default(now())
+
+  offer SpecialOffer @relation(fields: [offerId], references: [id])
+  user  User         @relation(fields: [userId], references: [id])
+  order Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([offerId, userId, orderId])
+  @@index([offerId, userId])
+  @@index([orderId])
+  @@map("special_offer_redemptions")
+}
+
 model OrderItem {
-  id           String         @id @default(uuid())
+  id           String          @id @default(uuid())
   orderId      String
-  order        Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order        Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
   serviceId    String?
   service      ServiceCatalog? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
   modelId      String
@@ -1013,11 +1158,11 @@ model OrderItem {
   providerName String
   initials     String
   isVerified   Boolean
-  packageId    String         @default("basic")
-  packageName  String         @default("الباقة الأساسية")
+  packageId    String          @default("basic")
+  packageName  String          @default("الباقة الأساسية")
   price        Float
   deliveryDays Int
-  aiScore      Int            @default(0)
+  aiScore      Int             @default(0)
 
   @@index([orderId])
   @@index([modelId])
@@ -1334,6 +1479,76 @@ model Notification {
   @@map("notifications")
 }
 
+// One row per user, shared across every role/dashboard (client, provider,
+// marketer/affiliate). `settings` is a flat string→boolean map so each
+// role's page can read/write only the keys it cares about (e.g. client's
+// "newOffer"/"walletActivity", provider's "orders_offers_new"/"finance_wallet",
+// marketer's "marketer_new_referral") without needing a separate model or
+// migration per role. A PATCH merges into the existing object rather than
+// replacing it, so one role's save can never wipe out another role's keys
+// on a multi-role account.
+model NotificationPreference {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  settings  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("notification_preferences")
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  AWAITING_CUSTOMER
+  RESOLVED
+  CLOSED
+}
+
+// A support ticket raised by a client or provider (role-agnostic — same
+// model for both, scoped by userId, following the same "own disputes"
+// pattern as Dispute.openedById). description holds the original complaint;
+// SupportTicketMessage holds the reply thread, seeded with that same text
+// as the first message so the detail page's thread always starts somewhere.
+model SupportTicket {
+  id             String              @id @default(uuid())
+  ticketNumber   String              @unique
+  userId         String
+  user           User                @relation("SupportTicketOwner", fields: [userId], references: [id], onDelete: Cascade)
+  subject        String
+  category       String
+  priority       String              @default("عادية")
+  description    String              @db.Text
+  relatedOrder   String?
+  relatedProject String?
+  relatedMember  String?
+  ccEmail        String?
+  status         SupportTicketStatus @default(OPEN)
+  resolvedAt     DateTime?
+  closedAt       DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  messages SupportTicketMessage[]
+
+  @@index([userId, status])
+  @@map("support_tickets")
+}
+
+model SupportTicketMessage {
+  id        String        @id @default(uuid())
+  ticketId  String
+  ticket    SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  senderId  String
+  sender    User          @relation("SupportTicketMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  body      String        @db.Text
+  createdAt DateTime      @default(now())
+
+  @@index([ticketId, createdAt])
+  @@map("support_ticket_messages")
+}
+
 enum MessageType {
   TEXT
   IMAGE
@@ -1602,12 +1817,12 @@ model Contract {
   providerSignedAt      DateTime?
   clientSignatureHash   String?
   providerSignatureHash String?
-  termsVersion          Int            @default(1)
+  termsVersion          Int                @default(1)
   signedAt              DateTime?
   stages                ProjectStage[]
   amendments            ProjectAmendment[]
-  createdAt             DateTime       @default(now())
-  updatedAt             DateTime       @updatedAt
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
 
   @@map("contracts")
 }
@@ -1645,9 +1860,9 @@ model ProjectAmendment {
   contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
 
   clientId   String
-  client     User @relation("ClientProjectAmendments", fields: [clientId], references: [id])
+  client     User   @relation("ClientProjectAmendments", fields: [clientId], references: [id])
   providerId String
-  provider   User @relation("ProviderProjectAmendments", fields: [providerId], references: [id])
+  provider   User   @relation("ProviderProjectAmendments", fields: [providerId], references: [id])
 
   requestedById   String
   requestedBy     User                   @relation("RequestedProjectAmendments", fields: [requestedById], references: [id])
@@ -1687,22 +1902,22 @@ enum StageDeliveryStatus {
 }
 
 model ProjectStage {
-  id          String             @id @default(uuid())
-  contractId  String
-  contract    Contract           @relation(fields: [contractId], references: [id], onDelete: Cascade)
-  stepOrder   Int
-  title       String
-  description String?            @db.Text
-  days        Int
-  percentage  Float
-  amount      Float
-  status      ProjectStageStatus @default(PENDING)
-  startedAt   DateTime?
-  approvedAt  DateTime?
-  deliveries  StageDelivery[]
+  id           String             @id @default(uuid())
+  contractId   String
+  contract     Contract           @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  stepOrder    Int
+  title        String
+  description  String?            @db.Text
+  days         Int
+  percentage   Float
+  amount       Float
+  status       ProjectStageStatus @default(PENDING)
+  startedAt    DateTime?
+  approvedAt   DateTime?
+  deliveries   StageDelivery[]
   stageReviews Review[]
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
 
   @@unique([contractId, stepOrder])
   @@index([contractId, status])
@@ -1908,26 +2123,26 @@ enum DisputeStatus {
 }
 
 model Dispute {
-  id             String        @id @default(uuid())
+  id             String         @id @default(uuid())
   requestId      String?
   request        ClientRequest? @relation(fields: [requestId], references: [id], onDelete: Cascade)
   projectId      String?
-  project        Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project        Project?       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   openedById     String
-  openedBy       User          @relation("DisputesOpenedBy", fields: [openedById], references: [id], onDelete: Cascade)
+  openedBy       User           @relation("DisputesOpenedBy", fields: [openedById], references: [id], onDelete: Cascade)
   againstUserId  String?
-  againstUser    User?         @relation("DisputesAgainstUser", fields: [againstUserId], references: [id], onDelete: SetNull)
+  againstUser    User?          @relation("DisputesAgainstUser", fields: [againstUserId], references: [id], onDelete: SetNull)
   resolvedById   String?
-  resolvedBy     User?         @relation("DisputesResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
-  status         DisputeStatus @default(OPEN)
+  resolvedBy     User?          @relation("DisputesResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  status         DisputeStatus  @default(OPEN)
   reason         String
-  description    String        @db.Text
-  evidence       String[]      @default([])
+  description    String         @db.Text
+  evidence       String[]       @default([])
   resolution     String?
-  resolutionNote String?       @db.Text
+  resolutionNote String?        @db.Text
   resolvedAt     DateTime?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 
   @@index([status, createdAt])
   @@index([requestId])
@@ -1960,15 +2175,15 @@ enum WithdrawalStatus {
 }
 
 model Withdrawal {
-  id             String           @id @default(uuid())
-  userId         String
-  user           User             @relation("WithdrawalUser", fields: [userId], references: [id], onDelete: Cascade)
-  amount         Float
-  currency       String           @default("SAR")
-  method         String
-  accountName    String?
-  accountNumber  String?
-  iban           String?
+  id            String  @id @default(uuid())
+  userId        String
+  user          User    @relation("WithdrawalUser", fields: [userId], references: [id], onDelete: Cascade)
+  amount        Float
+  currency      String  @default("SAR")
+  method        String
+  accountName   String?
+  accountNumber String?
+  iban          String?
 
   // Payout P2-A: the IMMUTABLE PayPal destination snapshot — populated once,
   // at creation time, by copying ProviderProfile.paypalPayoutEmail (never
@@ -1978,15 +2193,15 @@ model Withdrawal {
   // is deliberately NEVER re-read after this row is created, so a provider
   // changing their PayPal address later can never retroactively alter where
   // an already-created withdrawal will be paid out.
-  paypalEmail    String?
-  status         WithdrawalStatus @default(PENDING)
-  reviewedById   String?
-  reviewedBy     User?            @relation("WithdrawalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  paypalEmail     String?
+  status          WithdrawalStatus @default(PENDING)
+  reviewedById    String?
+  reviewedBy      User?            @relation("WithdrawalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   rejectionReason String?
-  adminNote      String?
-  referenceId    String?          @unique
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  adminNote       String?
+  referenceId     String?          @unique
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
   // Payout P1: the destination snapshot for payout purposes IS this row's
   // own accountName/accountNumber/iban above, captured once at creation and
@@ -2044,14 +2259,14 @@ enum PayoutAttemptStatus {
 }
 
 model PayoutAttempt {
-  id           String @id @default(uuid())
+  id String @id @default(uuid())
 
   withdrawalId String
   withdrawal   Withdrawal @relation(fields: [withdrawalId], references: [id], onDelete: Cascade)
 
   // 'PAYPAL' today; a plain string (not an enum) so a second payout
   // provider never needs a schema migration to add, only a new value.
-  provider     String
+  provider String
 
   // 1, 2, 3... — every attempt ever made for this withdrawal, active or
   // terminal, claims a distinct ordinal forever. Allocated inside the same
@@ -2094,7 +2309,7 @@ model PayoutAttempt {
   // Sanitized last-known API/webhook response for reconciliation — P2/P3's
   // responsibility to ensure nothing secret (tokens, full headers) is ever
   // written here; P1 only defines the column.
-  rawResponse   Json?
+  rawResponse Json?
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -2106,16 +2321,9 @@ model PayoutAttempt {
   // (P3-D's responsibility); this is schema only.
   webhookEvents PaypalWebhookEvent[]
 
-  // Query-performance indexes ONLY — deliberately NOT the uniqueness
-  // backstop (see active_attempt_unique below). A future reader must never
-  // mistake this for enforcing "at most one active attempt."
-  @@index([withdrawalId, status])
-  @@index([status, createdAt])
-
   // Attempt-history integrity: no two attempts for the same withdrawal ever
   // share an ordinal, active or terminal.
   @@unique([withdrawalId, attemptNumber])
-
   // THE hard DB backstop: at most one PENDING/PROCESSING PayoutAttempt can
   // ever exist per withdrawal, enforced by Postgres itself via a genuine
   // partial unique index (requires previewFeatures = ["partialIndexes"]
@@ -2129,7 +2337,11 @@ model PayoutAttempt {
   // is what prevents the ordinary send-payout path from ever treating a
   // reversed withdrawal as eligible (it is no longer APPROVED).
   @@unique([withdrawalId], where: raw("status IN ('PENDING','PROCESSING')"), map: "active_attempt_unique")
-
+  // Query-performance indexes ONLY — deliberately NOT the uniqueness
+  // backstop (see active_attempt_unique below). A future reader must never
+  // mistake this for enforcing "at most one active attempt."
+  @@index([withdrawalId, status])
+  @@index([status, createdAt])
   @@map("payout_attempts")
 }
 
@@ -2190,6 +2402,21 @@ model PaypalWebhookEvent {
   processedAt DateTime?
   createdAt   DateTime  @default(now())
 
+  // Payout P3-D concurrency-review addition (the ONLY schema change that
+  // review's final verdict required): the compare-and-swap "freshness
+  // token" a stale-event reclaim uses to distinguish "another request is
+  // actively processing this RECEIVED/FAILED row right now" from "the
+  // worker that claimed it crashed and abandoned it" — see
+  // payout-webhook.service.ts's claim/reclaim algorithm for the full
+  // reasoning. Deliberately NOT relied upon via Prisma's implicit
+  // auto-bump-on-any-update behavior (unverifiable in this project without
+  // a live DB call, which is outside this task's scope) — every write that
+  // needs a fresh token sets this column EXPLICITLY in its own `data`,
+  // making freshness fully deterministic and unit-testable at the
+  // application level instead of depending on unconfirmed ORM/engine
+  // internals.
+  updatedAt DateTime @updatedAt
+
   @@index([payoutAttemptId])
   @@index([status, createdAt])
   @@map("paypal_webhook_events")
@@ -2208,17 +2435,17 @@ enum OnboardingStatus {
 }
 
 model ClientOnboarding {
-  id             String           @id @default(uuid())
-  userId         String           @unique
-  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  documentUrl    String
-  documentName   String
-  documentType   String
-  status         OnboardingStatus @default(PENDING)
+  id              String           @id @default(uuid())
+  userId          String           @unique
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentUrl     String
+  documentName    String
+  documentType    String
+  status          OnboardingStatus @default(PENDING)
   rejectionReason String?
-  reviewedAt     DateTime?
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  reviewedAt      DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
   @@map("client_onboarding")
 }
@@ -2326,4 +2553,47 @@ model NewsletterSubscriber {
   source         String?
 
   @@map("newsletter_subscribers")
+}
+
+// ─── Company team members ─────────────────────────────────────────────
+// Real team roster for PROVIDER_COMPANY accounts. Each row is owned and
+// managed by the company account (companyOwnerId). Deliberately NOT an
+// auth identity: team members have no password/session/JWT of their own.
+
+enum TeamMemberType {
+  PROVIDER
+  EMPLOYEE
+}
+
+enum TeamMemberStatus {
+  ACTIVE
+  PENDING
+  INACTIVE
+}
+
+model CompanyTeamMember {
+  id             String           @id @default(uuid())
+  companyOwnerId String
+  companyOwner   User             @relation("CompanyTeamMembers", fields: [companyOwnerId], references: [id], onDelete: Cascade)
+  name           String
+  email          String
+  phone          String?
+  jobTitle       String
+  memberType     TeamMemberType
+  status         TeamMemberStatus @default(PENDING)
+  avatarUrl      String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  // Phase 5 — coupons assigned to / attributed to this team member.
+  assignedCoupons Coupon[] @relation("CouponAssignedTeamMember")
+  createdCoupons  Coupon[] @relation("CouponCreatedByTeamMember")
+
+  // Phase 6 — special offers assigned to / attributed to this team member.
+  assignedSpecialOffers SpecialOffer[] @relation("SpecialOfferAssignedTeamMember")
+  createdSpecialOffers  SpecialOffer[] @relation("SpecialOfferCreatedByTeamMember")
+
+  @@unique([companyOwnerId, email])
+  @@index([companyOwnerId, memberType, status])
+  @@map("company_team_members")
 }

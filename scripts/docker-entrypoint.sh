@@ -29,12 +29,14 @@ if [ "${RUN_DB_MIGRATIONS:-false}" = "true" ]; then
   echo "🔄 Applying Prisma migrations..."
   npx prisma migrate deploy
   echo "✅ Database migrations applied successfully."
-elif [ "${RUN_DB_PUSH:-true}" = "true" ]; then
-  # This standalone database currently has a legacy migration chain whose
-  # early migration does not create every model used by later migrations.
-  # Push the checked-in Prisma schema for a new/isolated deployment without
-  # accepting destructive changes. Set RUN_DB_MIGRATIONS=true only after the
-  # migration history has been repaired and verified.
+elif [ "${RUN_DB_PUSH:-false}" = "true" ]; then
+  # Release invariant: automatic schema mutation on container start is
+  # fail-closed by default. RUN_DB_MIGRATIONS and RUN_DB_PUSH both default
+  # to false — a plain `docker compose up` never touches the database
+  # schema. Set RUN_DB_PUSH=true explicitly only for a fresh/isolated
+  # standalone database with no real migration history yet; set
+  # RUN_DB_MIGRATIONS=true instead once the migration history is the
+  # source of truth for that database.
   echo "🔄 Synchronizing Prisma schema for standalone deployment..."
   if [ "${RUN_DB_PUSH_ACCEPT_DATA_LOSS:-false}" = "true" ]; then
     echo "⚠️ Explicitly enabled: accepting Prisma schema diff warnings for bootstrap."

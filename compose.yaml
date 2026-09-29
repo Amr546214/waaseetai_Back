@@ -30,7 +30,7 @@ services:
       PORT: 5009
       NODE_ENV: production
       RUN_DB_MIGRATIONS: ${RUN_DB_MIGRATIONS:-false}
-      RUN_DB_PUSH: ${RUN_DB_PUSH:-true}
+      RUN_DB_PUSH: ${RUN_DB_PUSH:-false}
       RUN_DB_PUSH_ACCEPT_DATA_LOSS: ${RUN_DB_PUSH_ACCEPT_DATA_LOSS:-false}
       DATABASE_URL: postgresql://${POSTGRES_USER:-waseetai_app}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-waseetai_db}?schema=public
     ports:

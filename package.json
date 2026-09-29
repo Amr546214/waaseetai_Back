@@ -6,7 +6,7 @@
 	"scripts": {
 		"prisma:generate": "npx prisma generate",
 		"prisma:deploy": "npx prisma migrate deploy",
-		"prestart": "npx prisma generate && npx prisma migrate deploy",
+		"prestart": "bash scripts/prestart.sh",
 		"start": "nodemon src/app.ts",
 		"build": "tsc",
 		"test": "tsx --test --experimental-test-module-mocks $(find src -name '*.test.ts')",
