@@ -461,6 +461,14 @@ test('D. createForProvider: availableBalance 100, existing COMPLETED 80, create 
 	);
 });
 
+test('D2. Payout P3-A: createForProvider: availableBalance 100, existing REVERSED 80, create 30 -> rejected — a reversed payout must NOT free its earnings for a second withdrawal', async (t) => {
+	const { withdrawalService } = await loadService(t, { availableBalance: 100, seedWithdrawals: [{ userId: 'provider-1', amount: 80, status: 'REVERSED' }] });
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 30, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		(err: any) => { assert.equal(err.statusCode, 400); return true; }
+	);
+});
+
 test('E. createForProvider: availableBalance 100, existing REJECTED 80, create 30 -> allowed (REJECTED never reserves balance)', async (t) => {
 	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 100, seedWithdrawals: [{ userId: 'provider-1', amount: 80, status: 'REJECTED' }] });
 	const result = await withdrawalService.createForProvider('provider-1', { amount: 30, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
@@ -505,7 +513,7 @@ test('H. createForProvider: existing outstanding total + new amount exactly equa
 	assert.equal(createSpy.mock.callCount(), 1);
 });
 
-test('createForProvider: the outstanding-withdrawals aggregate explicitly includes PENDING, APPROVED, PROCESSING, COMPLETED and excludes REJECTED', async (t) => {
+test('createForProvider: the outstanding-withdrawals aggregate explicitly includes PENDING, APPROVED, PROCESSING, COMPLETED, REVERSED and excludes REJECTED', async (t) => {
 	const { withdrawalService, aggregateSpy } = await loadService(t, { availableBalance: 500 });
 	await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
 
@@ -513,7 +521,11 @@ test('createForProvider: the outstanding-withdrawals aggregate explicitly includ
 	const statusFilter = aggregateSpy.mock.calls[0].arguments[0].where.status;
 	assert.ok(statusFilter && Array.isArray(statusFilter.in), 'must be an `in` filter, not a single-status equality check');
 	const included = [...statusFilter.in].sort();
-	assert.deepEqual(included, ['APPROVED', 'COMPLETED', 'PENDING', 'PROCESSING']);
+	// Payout P3-A hardening: REVERSED (a COMPLETED payout PayPal later took
+	// back) must reserve its earnings exactly like COMPLETED does — a
+	// reversal must never behave like REJECTED and silently free the same
+	// earnings for a second withdrawal.
+	assert.deepEqual(included, ['APPROVED', 'COMPLETED', 'PENDING', 'PROCESSING', 'REVERSED']);
 	assert.ok(!statusFilter.in.includes('REJECTED'), 'REJECTED must never be included — it never reserves balance');
 });
 
@@ -1165,6 +1177,24 @@ test('F. approve: a P2034/DriverAdapterError serialization conflict is retried t
 			assert.equal(walletTransactions.length, 1, 'only the successful retry actually wrote a debit');
 		});
 	}
+});
+
+test('Payout P3-A: approve: a REVERSED withdrawal reserves its earnings — approving a DIFFERENT withdrawal that would exceed the remaining balance is rejected', async (t) => {
+	// wd-1 (200, PENDING, being approved) vs an already-REVERSED wd-2 (100)
+	// for the SAME provider, availableBalance 250. The REVERSED 100 must
+	// still count as outstanding, leaving only 150 withdrawable — wd-1's 200
+	// must be rejected, exactly as it would be if wd-2 were still COMPLETED
+	// (never as if wd-2 were REJECTED, which would free the full 250).
+	const { withdrawalService, walletTransactions } = await loadApproveService(t, {
+		availableBalance: 250,
+		otherWithdrawals: [{ id: 'wd-2', userId: 'provider-1', amount: 100, currency: 'USD', method: 'bank_transfer', referenceId: 'ref-2', status: 'REVERSED' }]
+	});
+
+	await assert.rejects(
+		() => withdrawalService.approve('wd-1', 'admin-1', { adminNote: 'ok' }),
+		(err: any) => { assert.equal(err.statusCode, 400); return true; }
+	);
+	assert.equal(walletTransactions.length, 0, 'no debit may occur for an approval that would exceed the balance once REVERSED earnings stay reserved');
 });
 
 test('G. approve: after a retry, the balance is recalculated fresh from the newly committed state — never reusing the doomed first attempt\'s stale reads', async (t) => {

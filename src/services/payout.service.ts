@@ -460,8 +460,10 @@ export class PayoutService {
 			// Read the current state to distinguish a safe no-op from a real error.
 			const current = await tx.payoutAttempt.findUnique({ where: { id: attemptId } });
 			if (!current) throw new AppError('محاولة التحويل غير موجودة', 404);
-			// Already FAILED (duplicate) or already COMPLETED (must never be
-			// downgraded) — both are safe no-ops; return the row unchanged.
+			// Already FAILED (duplicate), already COMPLETED, or (Payout P3-A)
+			// already REVERSED — all three must never be downgraded to FAILED by
+			// this method; every one is a safe no-op, returning the row
+			// unchanged.
 			return current;
 		});
 	}
@@ -513,8 +515,115 @@ export class PayoutService {
 				// Duplicate completion — safe no-op.
 				return current;
 			}
-			// current.status === FAILED — do not resurrect it.
+			// current.status === FAILED, or (Payout P3-A) REVERSED — neither may
+			// ever be resurrected into COMPLETED by this method. REVERSED in
+			// particular must stay reachable ONLY via markAttemptReversed()'s own
+			// COMPLETED -> REVERSED transition below — never re-completed here.
 			throw new AppError('لا يمكن تعليم محاولة تحويل فاشلة كمكتملة — يجب أن تبدأ محاولة جديدة', 409);
+		});
+	}
+
+	/**
+	 * Payout P3-A: COMPLETED -> REVERSED, and Withdrawal COMPLETED ->
+	 * REVERSED, atomically. The ONE deliberate, narrow exception to every
+	 * other primitive's rule that COMPLETED is permanently final —
+	 * markAttemptCompleted()'s and markAttemptDefinitelyFailed()'s own
+	 * guards above are completely untouched and still refuse this in every
+	 * other direction; no other primitive may ever move a row out of
+	 * COMPLETED.
+	 *
+	 * Represents PayPal reporting, AFTER a payout already succeeded, that
+	 * the money was subsequently returned/refunded/reversed — see
+	 * WithdrawalStatus.REVERSED/PayoutAttemptStatus.REVERSED/
+	 * PayoutAttempt.paypalTerminalStatus's own schema comments for the full
+	 * reasoning. This is fundamentally NOT the same fact as
+	 * markAttemptDefinitelyFailed()'s FAILED (money never left at all): that
+	 * safely reopens the Withdrawal to APPROVED because a retry is a
+	 * legitimate next step; a reversal must NEVER do that, because real
+	 * money already moved once and an automatic reopen risks a genuine
+	 * second real payout for funds that may or may not have actually been
+	 * recovered.
+	 *
+	 * STATE RECORDING ONLY, per this batch's explicit scope: this method
+	 * performs no wallet/balance accounting whatsoever — it does not credit,
+	 * debit, or otherwise adjust anything beyond PayoutAttempt.status/
+	 * paypalTerminalStatus and Withdrawal.status. How (or whether) a
+	 * provider's balance is ever adjusted for returned money is a decision
+	 * for a later phase, not invented here. It also never creates a new
+	 * PayoutAttempt and never calls initializeSendPayout() — a reversal is
+	 * recorded against the EXISTING attempt that actually completed, never
+	 * a fresh one.
+	 *
+	 * Idempotency: a duplicate reversal call (attempt already REVERSED, AND
+	 * its Withdrawal already REVERSED too) is a safe no-op, mirroring
+	 * markAttemptCompleted()'s/markAttemptDefinitelyFailed()'s own
+	 * established duplicate-call conventions. PENDING/PROCESSING/FAILED are
+	 * never valid sources for this transition — reachable ONLY from
+	 * COMPLETED, since a reversal is only a meaningful concept for a payout
+	 * that actually succeeded first.
+	 *
+	 * Atomicity (financial-invariant hardening): unlike
+	 * markAttemptCompleted()/markAttemptDefinitelyFailed() above — which
+	 * both leave their own Withdrawal-side conditional update unverified,
+	 * an established (if imperfect) pre-existing pattern this method
+	 * deliberately does NOT copy here — this NEW primitive explicitly
+	 * verifies the Withdrawal transition's own result count. If the
+	 * PayoutAttempt genuinely was COMPLETED but its Withdrawal was NOT (a
+	 * real data-integrity anomaly, since markAttemptCompleted() always
+	 * moves both together), this throws and the WHOLE transaction rolls
+	 * back — the PayoutAttempt's COMPLETED -> REVERSED write above is
+	 * undone with it. After this method successfully returns, both
+	 * PayoutAttempt.status === REVERSED and Withdrawal.status === REVERSED
+	 * are guaranteed true together, or neither transition ever committed.
+	 */
+	async markAttemptReversed(attemptId: string, paypalTerminalStatus: string) {
+		return prisma.$transaction(async tx => {
+			const transition = await tx.payoutAttempt.updateMany({
+				where: { id: attemptId, status: PayoutAttemptStatus.COMPLETED },
+				data: { status: PayoutAttemptStatus.REVERSED, paypalTerminalStatus }
+			});
+
+			if (transition.count === 1) {
+				const attempt = await tx.payoutAttempt.findUniqueOrThrow({ where: { id: attemptId } });
+				const withdrawalTransition = await tx.withdrawal.updateMany({
+					where: { id: attempt.withdrawalId, status: WithdrawalStatus.COMPLETED },
+					data: { status: WithdrawalStatus.REVERSED }
+				});
+				if (withdrawalTransition.count !== 1) {
+					// The PayoutAttempt really was COMPLETED, but its own
+					// Withdrawal was not — this should be unreachable under
+					// normal operation (markAttemptCompleted() always moves both
+					// together), so this is a genuine data-integrity anomaly, not
+					// a business-as-usual conflict. Throwing here rolls back the
+					// ENTIRE transaction, including the PayoutAttempt update
+					// above — it must never be left REVERSED by itself while its
+					// Withdrawal stays COMPLETED (or anything else).
+					throw new AppError('تعذر تسجيل استرجاع التحويل — حالة طلب السحب لا تتطابق مع حالة المحاولة (تعارض في البيانات يتطلب مراجعة يدوية)', 409);
+				}
+				return attempt;
+			}
+
+			// count === 0: either already REVERSED (a safe no-op — e.g. a
+			// redelivered webhook reporting the same reversal twice) or never
+			// reached COMPLETED at all (PENDING/PROCESSING/FAILED), which is a
+			// genuine caller error — a reversal is only meaningful for a payout
+			// that actually succeeded.
+			const current = await tx.payoutAttempt.findUnique({ where: { id: attemptId } });
+			if (!current) throw new AppError('محاولة التحويل غير موجودة', 404);
+			if (current.status === PayoutAttemptStatus.REVERSED) {
+				// A duplicate reversal signal is ONLY a valid no-op if the
+				// Withdrawal already agrees — REVERSED attempt + a Withdrawal
+				// that is NOT REVERSED is itself the same data-integrity anomaly
+				// as above (just discovered via the idempotent-call path instead
+				// of the first-call path), and must never be silently accepted
+				// as a successful no-op.
+				const withdrawal = await tx.withdrawal.findUnique({ where: { id: current.withdrawalId } });
+				if (withdrawal?.status !== WithdrawalStatus.REVERSED) {
+					throw new AppError('حالة غير متسقة: محاولة التحويل مسجّلة كمسترجعة لكن طلب السحب ليس كذلك — يتطلب مراجعة يدوية', 409);
+				}
+				return current;
+			}
+			throw new AppError(`لا يمكن تسجيل استرجاع التحويل — حالة المحاولة الحالية (${current.status}) لم تكن مكتملة`, 409);
 		});
 	}
 }

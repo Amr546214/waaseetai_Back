@@ -1947,6 +1947,16 @@ enum WithdrawalStatus {
   PROCESSING
   REJECTED
   COMPLETED
+  // Payout P3-A: PayPal reported, AFTER this withdrawal already reached
+  // COMPLETED, that the money was subsequently returned/refunded/reversed
+  // (see PayoutAttemptStatus.REVERSED and PayoutAttempt.paypalTerminalStatus
+  // for the full reasoning). Deliberately NOT the same as a failed payout
+  // reverting to APPROVED: real money already moved once here, so this must
+  // never be silently reopened for another automatic payout attempt — only
+  // PayoutService.markAttemptReversed() may ever write this value, and only
+  // FROM COMPLETED. Requires explicit admin/manual review (a future phase's
+  // responsibility, not decided by this state alone).
+  REVERSED
 }
 
 model Withdrawal {
@@ -2009,6 +2019,28 @@ enum PayoutAttemptStatus {
   // NEW PayoutAttempt row with the next attemptNumber, never a status
   // change on this one.
   FAILED
+  // Payout P3-A: reachable ONLY from COMPLETED, via
+  // PayoutService.markAttemptReversed() — the ONE explicit, deliberately
+  // narrow exception to every other primitive's rule that COMPLETED is
+  // permanently final. Represents PayPal reporting, AFTER a payout already
+  // succeeded (PayoutAttemptStatus.COMPLETED), that the money was
+  // subsequently returned/refunded/reversed. This is intentionally a SINGLE
+  // local umbrella state for all three of PayPal's own distinct terminal-
+  // after-success item statuses (RETURNED / REFUNDED / REVERSED) — the
+  // financial mechanics differ between them, but from this local state
+  // machine's perspective the consequence is identical: the payout that
+  // once looked complete no longer safely is, and must never be
+  // automatically retried or have its Withdrawal reopened to APPROVED. The
+  // EXACT PayPal status that triggered this is preserved separately, never
+  // collapsed away, in PayoutAttempt.paypalTerminalStatus below — NOT the
+  // same semantic class as failureReason (which means "this payment never
+  // succeeded at all"), so it must never be written there.
+  //
+  // Explicitly NOT part of the "active attempt" set (active_attempt_unique
+  // below still only covers PENDING/PROCESSING) — a reversed attempt is not
+  // "in flight," it is terminal; it simply must not be confused with, or
+  // silently treated the same as, PayoutAttemptStatus.FAILED.
+  REVERSED
 }
 
 model PayoutAttempt {
@@ -2041,6 +2073,24 @@ model PayoutAttempt {
 
   status        PayoutAttemptStatus @default(PENDING)
   failureReason String?
+
+  // Payout P3-A: the EXACT PayPal item status that caused a REVERSED
+  // transition (e.g. "RETURNED" | "REFUNDED" | "REVERSED") — populated
+  // ONLY by PayoutService.markAttemptReversed(), never trusted from
+  // arbitrary caller/request input, and never written by any other
+  // primitive. Deliberately a SEPARATE field from failureReason above:
+  // failureReason means "PayPal never completed this payment" (the
+  // FAILED semantic class); this field means "PayPal DID complete it, and
+  // a later event reported it reversed" — a fundamentally different
+  // semantic class that failureReason must not be overloaded to also
+  // carry. A plain string (not an enum), matching this model's own
+  // `provider` field's precedent, so a future PayPal status this project
+  // hasn't seen yet never needs a migration to record — but the only
+  // values this codebase currently intends to ever write here are
+  // "RETURNED", "REFUNDED", or "REVERSED" (enforced by whichever future
+  // P3-D code path actually populates it, not by this column itself).
+  paypalTerminalStatus String?
+
   // Sanitized last-known API/webhook response for reconciliation — P2/P3's
   // responsibility to ensure nothing secret (tokens, full headers) is ever
   // written here; P1 only defines the column.
@@ -2049,6 +2099,12 @@ model PayoutAttempt {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   completedAt DateTime?
+
+  // Payout P3-A: every durably-recorded PayPal webhook event this
+  // PayoutAttempt has been correlated to, once known — see
+  // PaypalWebhookEvent's own comment. No processing logic exists yet
+  // (P3-D's responsibility); this is schema only.
+  webhookEvents PaypalWebhookEvent[]
 
   // Query-performance indexes ONLY — deliberately NOT the uniqueness
   // backstop (see active_attempt_unique below). A future reader must never
@@ -2065,9 +2121,84 @@ model PayoutAttempt {
   // partial unique index (requires previewFeatures = ["partialIndexes"]
   // above). A second concurrent attempt's INSERT fails atomically here,
   // regardless of what any application-level pre-check believed.
+  //
+  // Payout P3-A: deliberately left EXACTLY as-is — REVERSED is intentionally
+  // NOT added to this set. A reversed attempt is terminal, not "in flight,"
+  // and must never be treated as an active attempt that blocks a new one at
+  // this layer; the Withdrawal's own REVERSED status (see WithdrawalStatus)
+  // is what prevents the ordinary send-payout path from ever treating a
+  // reversed withdrawal as eligible (it is no longer APPROVED).
   @@unique([withdrawalId], where: raw("status IN ('PENDING','PROCESSING')"), map: "active_attempt_unique")
 
   @@map("payout_attempts")
+}
+
+// Payout P3-A: durable PayPal webhook-event deduplication — added ahead of
+// P3-D's actual webhook processing, schema only, no processing code exists
+// yet. paypalEventId's uniqueness is THE primary dedup key; paypalCreateTime
+// is only an ordering HINT for distinguishing a genuinely later event from a
+// redelivered older one, never a substitute for that uniqueness guarantee
+// (do not assume it alone provides a perfect total ordering).
+//
+// CRITICAL design note for whoever implements P3-D: claiming an event here
+// (inserting/updating this row) and applying its corresponding
+// PayoutAttempt/Withdrawal state transition MUST happen inside the SAME
+// database transaction. If dedup-claiming were a separate, independent step
+// from the financial state transition, a crash between "event marked
+// PROCESSED" and "PayoutAttempt/Withdrawal actually updated" could silently
+// lose a real PayPal event forever (the dedup key would then incorrectly
+// make every future redelivery of the same event a no-op, even though the
+// financial transition never actually happened). The `status` field below
+// exists specifically so that failure mode is representable and
+// recoverable: a row stuck at RECEIVED (never reached PROCESSED) is a clear,
+// queryable signal that something needs manual/automatic re-processing —
+// never a silently-lost event.
+model PaypalWebhookEvent {
+  id String @id @default(uuid())
+
+  // PayPal's own globally-unique event identifier.
+  paypalEventId String @unique
+
+  eventType    String
+  resourceType String?
+
+  // PayPal's own reported event creation time, if present — see this
+  // model's own top comment: an ordering HINT only, not a dedup key.
+  paypalCreateTime DateTime?
+
+  // Correlates this event to the PayoutAttempt it concerns, once known.
+  // Optional because the correlating identifier (payoutBatchId/
+  // payoutItemId/senderBatchId, whichever the event actually carries) might
+  // not always be resolvable at the moment the event is first durably
+  // recorded — never dropping the event for that reason is the whole point
+  // of this table.
+  payoutAttemptId String?
+  payoutAttempt   PayoutAttempt? @relation(fields: [payoutAttemptId], references: [id], onDelete: SetNull)
+
+  // Crash-safety (see this model's own top comment): RECEIVED (durably
+  // claimed, not yet applied) -> PROCESSED (the corresponding financial
+  // state transition committed, in the SAME transaction as this status
+  // write) or FAILED (a genuine anomaly during processing — never silently
+  // dropped, always visible for investigation).
+  status PaypalWebhookEventStatus @default(RECEIVED)
+
+  // Sanitized — never the raw request body with any secret/PII beyond what
+  // PayPal's own event payload already exposes; enforcing that is P3-D's
+  // responsibility, this column only defines the shape.
+  rawEvent Json?
+
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([payoutAttemptId])
+  @@index([status, createdAt])
+  @@map("paypal_webhook_events")
+}
+
+enum PaypalWebhookEventStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
 }
 
 enum OnboardingStatus {

@@ -37,9 +37,20 @@ export class WithdrawalService {
    * correctly reject it later, so no money was ever overpaid, but the
    * provider could pile up requests already provably unfundable). The
    * canonical creation invariant is now: SUM(amount) over every
-   * NON-REJECTED status (PENDING, APPROVED, PROCESSING, COMPLETED) + the
-   * new request's amount must not exceed availableBalance — REJECTED is the
-   * only status that never reserves balance.
+   * NON-RELEASING status (PENDING, APPROVED, PROCESSING, COMPLETED,
+   * REVERSED) + the new request's amount must not exceed availableBalance —
+   * REJECTED is the only status that ever releases its reservation.
+   *
+   * Payout P3-A hardening: REVERSED (a COMPLETED payout that PayPal later
+   * reported RETURNED/REFUNDED/REVERSED) is deliberately included here, NOT
+   * treated like REJECTED. A reversal means PayPal took the money back
+   * AFTER this withdrawal's earnings were already once paid out — those
+   * earnings must stay reserved/blocked from being withdrawn again until an
+   * explicit future financial-resolution workflow (not this batch) decides
+   * what to do with them. Silently freeing that reservation (as REJECTED
+   * correctly does, since a rejected withdrawal genuinely never took any
+   * money) would let the SAME underlying earnings be withdrawn a second
+   * time — this fix exists specifically to prevent that.
    */
   async createForProvider(userId: string, input: CreateWithdrawalInput) {
     // Payout P2-A: for a PayPal withdrawal, the destination is resolved
@@ -91,7 +102,7 @@ export class WithdrawalService {
             throw new AppError(`المبلغ المطلوب يتجاوز رصيدك المتاح (${availableBalance} $)`, 400);
           }
           const outstandingWithdrawals = await tx.withdrawal.aggregate({
-            where: { userId, status: { in: [WithdrawalStatus.PENDING, WithdrawalStatus.APPROVED, WithdrawalStatus.PROCESSING, WithdrawalStatus.COMPLETED] } },
+            where: { userId, status: { in: [WithdrawalStatus.PENDING, WithdrawalStatus.APPROVED, WithdrawalStatus.PROCESSING, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
             _sum: { amount: true },
           });
           const outstandingAmount = outstandingWithdrawals._sum.amount || 0;
@@ -199,9 +210,9 @@ export class WithdrawalService {
    * balance check: the wallet read, the "already withdrawn" aggregate, AND
    * the conditional status transition now all run inside ONE SERIALIZABLE
    * transaction. Two concurrent approve() calls for the same provider both
-   * read the withdrawal table's {APPROVED,COMPLETED} aggregate for that
-   * userId, and each is about to WRITE a row into that same set — a genuine
-   * read/write dependency Postgres's serializable snapshot isolation
+   * read the withdrawal table's {APPROVED,COMPLETED,REVERSED} aggregate for
+   * that userId, and each is about to WRITE a row into that same set — a
+   * genuine read/write dependency Postgres's serializable snapshot isolation
    * detects and aborts one side of, exactly like createForProvider()'s own
    * concurrent-create protection. The loser is retried here (bounded, via
    * the same isRetryableTransactionConflict() classifier as Batch 2A/
@@ -210,6 +221,14 @@ export class WithdrawalService {
    * the wallet balance and the withdrawn aggregate fresh, now seeing the
    * winner's committed APPROVED row — so a retry that would overspend fails
    * with the same clean AppError, not a raw technical conflict.
+   *
+   * Payout P3-A hardening: REVERSED is included in this aggregate for the
+   * exact same reason as createForProvider()'s own equivalent fix above —
+   * a REVERSED withdrawal's earnings were already paid out once and then
+   * taken back by PayPal; they must remain reserved against being approved
+   * a second time via some OTHER withdrawal for the same provider, not
+   * freed the way a REJECTED withdrawal's never-paid earnings correctly
+   * are.
    *
    * Two different providers never conflict here: SERIALIZABLE/SSI in
    * Postgres detects conflicts based on actual overlapping read/write sets,
@@ -232,7 +251,7 @@ export class WithdrawalService {
           const wallet = await providerFinanceService.getWallet(item.userId, tx);
           const availableBalance = wallet.summary.availableBalance;
           const alreadyWithdrawn = await tx.withdrawal.aggregate({
-            where: { userId: item.userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.COMPLETED] } },
+            where: { userId: item.userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
             _sum: { amount: true },
           });
           const withdrawnAmount = alreadyWithdrawn._sum.amount || 0;

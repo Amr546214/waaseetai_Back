@@ -760,6 +760,236 @@ test('Z. markAttemptDefinitelyFailed: a non-existent attempt id is rejected with
 });
 
 // ============================================================================
+// Payout P3-A — markAttemptReversed(): COMPLETED -> REVERSED, and
+// Withdrawal COMPLETED -> REVERSED. STATE RECORDING ONLY — no wallet/balance
+// accounting, no new PayoutAttempt, no reopening to APPROVED.
+// ============================================================================
+
+function loadCompletedAttempt(t: TestContext, overrides: { withdrawalStatus?: string; attemptStatus?: string } = {}) {
+	return loadService(t, {
+		withdrawal: { id: 'wd-1', status: overrides.withdrawalStatus ?? 'COMPLETED' },
+		payoutAttempts: [{
+			id: 'attempt-1', withdrawalId: 'wd-1', attemptNumber: 1,
+			status: overrides.attemptStatus ?? 'COMPLETED',
+			senderBatchId: 'wd-wd-1-a1', provider: 'PAYPAL', payoutBatchId: 'PB-1'
+		}]
+	});
+}
+
+test('AA1. markAttemptReversed: a COMPLETED attempt + COMPLETED withdrawal -> RETURNED reverses both', async (t) => {
+	const { payoutService, payoutAttempts, withdrawals } = await loadCompletedAttempt(t);
+
+	const result = await payoutService.markAttemptReversed('attempt-1', 'RETURNED');
+
+	assert.equal(result.status, 'REVERSED');
+	assert.equal(payoutAttempts[0].status, 'REVERSED');
+	assert.equal(withdrawals[0].status, 'REVERSED');
+});
+
+test('AA2. markAttemptReversed: same for REFUNDED', async (t) => {
+	const { payoutService, payoutAttempts, withdrawals } = await loadCompletedAttempt(t);
+	await payoutService.markAttemptReversed('attempt-1', 'REFUNDED');
+	assert.equal(payoutAttempts[0].status, 'REVERSED');
+	assert.equal(withdrawals[0].status, 'REVERSED');
+});
+
+test('AA3. markAttemptReversed: same for REVERSED (PayPal item status literally named REVERSED)', async (t) => {
+	const { payoutService, payoutAttempts, withdrawals } = await loadCompletedAttempt(t);
+	await payoutService.markAttemptReversed('attempt-1', 'REVERSED');
+	assert.equal(payoutAttempts[0].status, 'REVERSED');
+	assert.equal(withdrawals[0].status, 'REVERSED');
+});
+
+test('AA4. markAttemptReversed: the exact external PayPal terminal status is persisted verbatim, distinct from failureReason', async (t) => {
+	const { payoutService, payoutAttempts } = await loadCompletedAttempt(t);
+	await payoutService.markAttemptReversed('attempt-1', 'RETURNED');
+	assert.equal(payoutAttempts[0].paypalTerminalStatus, 'RETURNED');
+	assert.equal(payoutAttempts[0].failureReason, undefined, 'must never be written to failureReason — a different semantic class');
+});
+
+test('AA5. markAttemptReversed: a repeated call with the SAME reversal is idempotent — safe no-op, no error, no double mutation', async (t) => {
+	const { payoutService, payoutAttempts, withdrawals } = await loadCompletedAttempt(t);
+
+	const first = await payoutService.markAttemptReversed('attempt-1', 'RETURNED');
+	const second = await payoutService.markAttemptReversed('attempt-1', 'RETURNED');
+
+	assert.equal(first.status, 'REVERSED');
+	assert.equal(second.status, 'REVERSED');
+	assert.equal(payoutAttempts[0].status, 'REVERSED');
+	assert.equal(withdrawals[0].status, 'REVERSED');
+});
+
+test('AA6. markAttemptReversed: two concurrent calls for the same attempt cannot corrupt state — exactly one performs the real transition, the other observes it as already-reversed', async (t) => {
+	const { payoutService, payoutAttempts, withdrawals } = await loadCompletedAttempt(t);
+
+	const [a, b] = await Promise.all([
+		payoutService.markAttemptReversed('attempt-1', 'RETURNED'),
+		payoutService.markAttemptReversed('attempt-1', 'RETURNED')
+	]);
+
+	assert.equal(a.status, 'REVERSED');
+	assert.equal(b.status, 'REVERSED');
+	assert.equal(payoutAttempts.length, 1, 'no duplicate row, no corruption');
+	assert.equal(payoutAttempts[0].status, 'REVERSED');
+	assert.equal(withdrawals[0].status, 'REVERSED');
+});
+
+// ============================================================================
+// Financial-invariant hardening — atomicity of markAttemptReversed().
+// After a successful return, BOTH PayoutAttempt=REVERSED and
+// Withdrawal=REVERSED must be true, or neither transition committed.
+// ============================================================================
+
+test('AA6b. markAttemptReversed: if the Withdrawal cannot transition from COMPLETED (data-integrity anomaly), the WHOLE transaction rolls back — the PayoutAttempt is NOT left REVERSED by itself', async (t) => {
+	// A deliberately inconsistent fixture: the PayoutAttempt genuinely is
+	// COMPLETED, but its Withdrawal is NOT (simulating an anomaly that should
+	// never occur under normal operation, since markAttemptCompleted() always
+	// moves both together) — proves the Withdrawal-side conditional update's
+	// result count is actually checked, not silently ignored.
+	const { payoutService, payoutAttempts, withdrawals } = await loadCompletedAttempt(t, { withdrawalStatus: 'PROCESSING' });
+
+	await assert.rejects(() => payoutService.markAttemptReversed('attempt-1', 'RETURNED'), (err: any) => { assert.equal(err.statusCode, 409); return true; });
+
+	assert.equal(payoutAttempts[0].status, 'COMPLETED', 'must be rolled back to COMPLETED — never left REVERSED by itself');
+	assert.equal(payoutAttempts[0].paypalTerminalStatus, undefined, 'the paypalTerminalStatus write must also be rolled back');
+	assert.equal(withdrawals[0].status, 'PROCESSING', 'unchanged — no half-transition');
+});
+
+test('AA6c. markAttemptReversed: an attempt already REVERSED while its Withdrawal is NOT REVERSED is rejected as a data-integrity anomaly, never silently accepted as an idempotent success', async (t) => {
+	// Simulates discovering the same anomaly via the idempotent-call path:
+	// the attempt row already reads REVERSED (perhaps from a prior run before
+	// this hardening existed), but its Withdrawal was never actually moved.
+	const { payoutService, payoutAttempts, withdrawals } = await loadCompletedAttempt(t, { attemptStatus: 'REVERSED', withdrawalStatus: 'COMPLETED' });
+
+	await assert.rejects(() => payoutService.markAttemptReversed('attempt-1', 'RETURNED'), (err: any) => { assert.equal(err.statusCode, 409); return true; });
+
+	assert.equal(payoutAttempts[0].status, 'REVERSED', 'unchanged');
+	assert.equal(withdrawals[0].status, 'COMPLETED', 'unchanged — the anomaly is surfaced, never silently patched over');
+});
+
+test('AA7. markAttemptReversed: a PENDING attempt cannot become REVERSED', async (t) => {
+	const { payoutService, payoutAttempts } = await loadCompletedAttempt(t, { attemptStatus: 'PENDING', withdrawalStatus: 'PROCESSING' });
+	await assert.rejects(() => payoutService.markAttemptReversed('attempt-1', 'RETURNED'), (err: any) => { assert.equal(err.statusCode, 409); return true; });
+	assert.equal(payoutAttempts[0].status, 'PENDING', 'unchanged');
+});
+
+test('AA8. markAttemptReversed: a PROCESSING attempt cannot become REVERSED', async (t) => {
+	const { payoutService, payoutAttempts } = await loadCompletedAttempt(t, { attemptStatus: 'PROCESSING', withdrawalStatus: 'PROCESSING' });
+	await assert.rejects(() => payoutService.markAttemptReversed('attempt-1', 'RETURNED'), (err: any) => { assert.equal(err.statusCode, 409); return true; });
+	assert.equal(payoutAttempts[0].status, 'PROCESSING', 'unchanged');
+});
+
+test('AA9. markAttemptReversed: a FAILED attempt cannot become REVERSED', async (t) => {
+	const { payoutService, payoutAttempts, withdrawals } = await loadCompletedAttempt(t, { attemptStatus: 'FAILED', withdrawalStatus: 'APPROVED' });
+	await assert.rejects(() => payoutService.markAttemptReversed('attempt-1', 'RETURNED'), (err: any) => { assert.equal(err.statusCode, 409); return true; });
+	assert.equal(payoutAttempts[0].status, 'FAILED', 'unchanged');
+	assert.equal(withdrawals[0].status, 'APPROVED', 'unchanged');
+});
+
+test('AA10. markAttemptReversed: the Withdrawal NEVER becomes APPROVED as a result of a reversal', async (t) => {
+	const { payoutService, withdrawals } = await loadCompletedAttempt(t);
+	await payoutService.markAttemptReversed('attempt-1', 'RETURNED');
+	assert.notEqual(withdrawals[0].status, 'APPROVED');
+	assert.equal(withdrawals[0].status, 'REVERSED');
+});
+
+test('AA11. markAttemptReversed: no WalletTransaction is touched — the mock tx has no walletTransaction model at all, so any such access would throw', async (t) => {
+	const { payoutService } = await loadCompletedAttempt(t);
+	// If markAttemptReversed() ever referenced tx.walletTransaction, this call
+	// would throw (undefined has no .create), since this file's mock tx
+	// object (payout.service.ts never needs a wallet model) declares none.
+	await assert.doesNotReject(() => payoutService.markAttemptReversed('attempt-1', 'RETURNED'));
+});
+
+test('AA12. markAttemptReversed: no new PayoutAttempt is ever created', async (t) => {
+	const { payoutService, createAttempt } = await loadCompletedAttempt(t);
+	await payoutService.markAttemptReversed('attempt-1', 'RETURNED');
+	assert.equal(createAttempt.mock.callCount(), 0);
+});
+
+test('AA17. markAttemptReversed then markAttemptCompleted: a REVERSED attempt can never be re-completed', async (t) => {
+	const { payoutService, payoutAttempts } = await loadCompletedAttempt(t);
+	await payoutService.markAttemptReversed('attempt-1', 'RETURNED');
+
+	await assert.rejects(() => payoutService.markAttemptCompleted('attempt-1'), (err: any) => { assert.equal(err.statusCode, 409); return true; });
+	assert.equal(payoutAttempts[0].status, 'REVERSED', 'must remain REVERSED — never resurrected to COMPLETED');
+});
+
+test('AA18. markAttemptReversed then markAttemptDefinitelyFailed: a REVERSED attempt is a safe no-op, never downgraded to FAILED', async (t) => {
+	const { payoutService, payoutAttempts, withdrawals } = await loadCompletedAttempt(t);
+	await payoutService.markAttemptReversed('attempt-1', 'RETURNED');
+
+	const result = await payoutService.markAttemptDefinitelyFailed('attempt-1', 'should not apply');
+	assert.equal(result.status, 'REVERSED', 'no-op — returned unchanged');
+	assert.equal(payoutAttempts[0].status, 'REVERSED', 'must remain REVERSED — never downgraded to FAILED');
+	assert.equal(withdrawals[0].status, 'REVERSED', 'Withdrawal must not be touched by this no-op either');
+});
+
+test('AA19. active-attempt logic remains PENDING/PROCESSING only: a withdrawal with a prior REVERSED attempt does not block a new send-payout initialization', async (t) => {
+	// Isolates initializeSendPayout()'s own fast-path active-attempt check —
+	// the Withdrawal's own status is set back to APPROVED purely to reach
+	// that check in isolation, mirroring the existing precedent test E
+	// ("a prior FAILED attempt does not block a new one").
+	const { payoutService, payoutAttempts } = await loadService(t, {
+		withdrawal: { id: 'wd-1', status: 'APPROVED' },
+		payoutAttempts: [{ id: 'attempt-1', withdrawalId: 'wd-1', attemptNumber: 1, status: 'REVERSED', senderBatchId: 'wd-wd-1-a1', provider: 'PAYPAL' }]
+	});
+
+	const attempt = await payoutService.initializeSendPayout('wd-1');
+	assert.equal(attempt.attemptNumber, 2);
+	assert.equal(payoutAttempts.length, 2);
+});
+
+test('AA13-16. regression: existing markAttemptCompleted/markAttemptDefinitelyFailed FAILED<->COMPLETED guards are unaffected by REVERSED', async (t) => {
+	// COMPLETED cannot become FAILED (item 15) and FAILED cannot become
+	// COMPLETED (item 16) are already covered by pre-existing tests U and X
+	// above, which pass unchanged in this same run — this test only adds the
+	// one NEW combination those didn't cover: a FAILED attempt, when handed
+	// to markAttemptReversed() (not markAttemptCompleted/markAttemptDefinitelyFailed),
+	// must also be rejected, reusing AA9 above. No separate assertion needed
+	// here beyond confirming both pre-existing primitives still exist and are
+	// callable with an unrelated (PENDING) fixture, proving no regression in
+	// their exported shape.
+	const { payoutService } = await loadService(t);
+	assert.equal(typeof payoutService.markAttemptCompleted, 'function');
+	assert.equal(typeof payoutService.markAttemptDefinitelyFailed, 'function');
+	assert.equal(typeof payoutService.markAttemptReversed, 'function');
+});
+
+// ============================================================================
+// 20-22. Schema-level static assertions — no runtime processing code exists
+// yet (P3-D's responsibility); these confirm the P3-A schema additions
+// themselves, matching this codebase's established static-source-check
+// convention (see admin-withdrawals.routes.test.ts) for facts that cannot be
+// exercised by any service-level test yet.
+// ============================================================================
+
+test('20. schema: PaypalWebhookEvent.paypalEventId is durably unique — the primary webhook dedup key', () => {
+	const fs = require('node:fs');
+	const path = require('node:path');
+	const schema = fs.readFileSync(path.join(__dirname, '../../prisma/schema.prisma'), 'utf8');
+	assert.match(schema, /model PaypalWebhookEvent \{[\s\S]*?paypalEventId\s+String\s+@unique/);
+});
+
+test('21. schema: PaypalWebhookEvent has a crash-safe lifecycle status (RECEIVED/PROCESSED/FAILED) defaulting to RECEIVED', () => {
+	const fs = require('node:fs');
+	const path = require('node:path');
+	const schema = fs.readFileSync(path.join(__dirname, '../../prisma/schema.prisma'), 'utf8');
+	assert.match(schema, /model PaypalWebhookEvent \{[\s\S]*?status\s+PaypalWebhookEventStatus\s+@default\(RECEIVED\)/);
+	assert.match(schema, /enum PaypalWebhookEventStatus \{\s*RECEIVED\s*PROCESSED\s*FAILED\s*\}/);
+});
+
+test('22. schema: PayoutAttempt.payoutItemId uniqueness is preserved unchanged — no duplicate field was added for the same purpose', () => {
+	const fs = require('node:fs');
+	const path = require('node:path');
+	const schema = fs.readFileSync(path.join(__dirname, '../../prisma/schema.prisma'), 'utf8');
+	assert.match(schema, /model PayoutAttempt \{[\s\S]*?payoutItemId\s+String\?\s+@unique/);
+	// Exactly one occurrence of the field across the whole schema.
+	const occurrences = (schema.match(/payoutItemId\s+String\?\s+@unique/g) || []).length;
+	assert.equal(occurrences, 1);
+});
+
+// ============================================================================
 // Payout P2-C — sendPayout() orchestration.
 //
 // Every test below uses the default withdrawal fixture from
