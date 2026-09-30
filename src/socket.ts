@@ -7,7 +7,6 @@ import { registerAiReviewGateway } from './sockets/ai-review.gateway';
 import { registerAiAssistantGateway } from './sockets/ai-assistant.gateway';
 import { registerAssessmentGateway } from './sockets/assessment.gateway';
 import { registerSetupTestGateway } from './sockets/setup-test.gateway';
-import { registerAvatarChatGateway } from './sockets/avatar-chat.gateway';
 import { registerHelpAssistantChatGateway } from './sockets/help-assistant-chat.gateway';
 import { sessionService } from './services/session.service';
 
@@ -121,10 +120,12 @@ export const initSocketServer = (httpServer: HttpServer, allowedOrigins: string[
 		// Register Profile Setup Test Gateway
 		registerSetupTestGateway(socket, io);
 
-		// Register 3D Avatar Assistant Chat Gateway (F8-TEXT, Gemini-migrated)
-		registerAvatarChatGateway(socket);
+		// The legacy guest-reachable `ai_chat` avatar gateway (Gemini + OpenAI TTS)
+		// was removed: the dashboard assistant (Bebo avatar) uses only the
+		// authenticated help:* gateway below.
 
-		// Register Help AI Assistant Gateway (general product Q&A, soft-auth, Gemini-grounded)
+		// Register Help AI Assistant Gateway (WaseetAI help stream; every
+		// help:ask is re-authenticated — user + session — in the gateway)
 		registerHelpAssistantChatGateway(socket);
 
 		socket.on('disconnect', () => {
