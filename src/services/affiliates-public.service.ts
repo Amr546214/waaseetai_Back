@@ -52,6 +52,27 @@ export class AffiliatesPublicService {
   }
 
   /**
+   * Backs GET /api/affiliates/referral-status — tells the frontend (which
+   * cannot read the httpOnly waseet_ref_code cookie itself) whether a valid
+   * referral-cookie attribution currently exists, using only safe public
+   * display data. `cookieSlug` is the raw waseet_ref_code cookie value (or
+   * undefined when absent); reuses resolveByCode()'s exact lookup (by
+   * referralSlug OR raw id, same PUBLIC_AFFILIATE_SELECT shape) rather than
+   * duplicating the query. Never throws and never distinguishes "no cookie"
+   * from "stale/invalid cookie" — both are just `{ active: false }`, so the
+   * controller can always respond 200.
+   */
+  async getReferralStatus(cookieSlug: string | undefined): Promise<{ active: boolean; referralSlug?: string | null; displayName?: string }> {
+    const trimmed = cookieSlug?.trim();
+    if (!trimmed) return { active: false };
+
+    const affiliate = await this.resolveByCode(trimmed);
+    if (!affiliate) return { active: false };
+
+    return { active: true, referralSlug: affiliate.referralSlug, displayName: affiliate.displayName };
+  }
+
+  /**
    * Case-insensitive partial match on firstName/lastName. An empty or
    * too-short query returns an empty array, never an error — this backs a
    * live search-as-you-type autocomplete.

@@ -114,31 +114,28 @@ export class AuthService {
 	 * this same registerUser()/createUserWithProfile() flow rather than
 	 * creating a user anywhere else), so the two can never diverge.
 	 *
-	 * Resolution order:
-	 *   1. `affiliateIdentifier` (explicit, registration-time entry) — looked
-	 *      up by AffiliateProfile.referralSlug, falling back to a raw
-	 *      affiliate `id` (UUID) in case someone shares that instead.
-	 *   2. Else `refCookieSlug` (the waseet_ref_code cookie from an earlier
-	 *      /ref/:slug click) — looked up by referralSlug only.
+	 * Resolution order (First-Touch, per P-LG-012: "أول وسيط موثق... يمتلك
+	 * هذه العلاقة بشكل دائم" — the referral-link cookie represents a
+	 * genuinely earlier touchpoint than a same-session manual entry, and a
+	 * valid cookie attribution must never be overridden by manual input):
+	 *   1. `refCookieSlug` (the waseet_ref_code cookie from an earlier
+	 *      /ref/:slug click) — looked up by AffiliateProfile.referralSlug or
+	 *      raw `id`. If it resolves to a real affiliate that also passes the
+	 *      self-referral guard below, that affiliate is used UNCONDITIONALLY
+	 *      — `affiliateIdentifier` is not even consulted.
+	 *   2. Else (no cookie, or the cookie is stale/invalid/deleted/
+	 *      self-referring) — fall back to `affiliateIdentifier` (explicit,
+	 *      registration-time entry or search-autocomplete selection), same
+	 *      lookup + guard.
 	 *   3. Else no attribution.
 	 *
-	 * PRECEDENCE TENSION (explicitly flagged, implemented per explicit
-	 * product instruction): when BOTH are present and valid, the explicit
-	 * `affiliateIdentifier` wins over the cookie — even though the cookie
-	 * may represent an earlier, more "First-Touch"-faithful click than the
-	 * identifier typed/selected at the actual moment of signup. P-LG-012
-	 * itself states First-Touch, lifetime attribution ("أول وسيط موثق...
-	 * يمتلك هذه العلاقة بشكل دائم"). This one conditional
-	 * (`affiliateIdentifier?.trim() || refCookieSlug?.trim()`) is kept
-	 * deliberately isolated and well-commented so the precedence is
-	 * trivially reversible if this tension is resolved differently later.
-	 *
-	 * An invalid/unknown code NEVER blocks registration — attribution is
-	 * silently skipped. A resolved self-referral (affiliate.userId ===
-	 * newUserId) is also skipped — defense-in-depth only, since the
-	 * registering user has no id yet at the moment they'd pick a code, so
-	 * this can't happen via the normal UI today, but guards any future reuse
-	 * of this function.
+	 * An invalid/unknown code — on EITHER path — NEVER blocks registration;
+	 * attribution is silently skipped and falls through to the next step (or
+	 * to no attribution). A resolved self-referral (affiliate.userId ===
+	 * newUserId) is also skipped on either path — defense-in-depth only,
+	 * since the registering user has no id yet at the moment they'd pick a
+	 * code, so this can't happen via the normal UI today, but guards any
+	 * future reuse of this function.
 	 *
 	 * The Referral row is created via a GUARDED insert relying on
 	 * Referral.referredUserId's own @unique DB constraint: a P2002 here means
@@ -147,15 +144,29 @@ export class AuthService {
 	 * error, never a silent overwrite of the existing (first) attribution.
 	 */
 	private async resolveReferralAttribution(newUserId: string, context: ReferralAttributionContext = {}): Promise<void> {
-		const candidateSlugOrId = context.affiliateIdentifier?.trim() || context.refCookieSlug?.trim();
-		if (!candidateSlugOrId) return;
+		const findValidAffiliate = async (slugOrId: string) => {
+			const affiliate = await prisma.affiliateProfile.findFirst({
+				where: { OR: [{ referralSlug: slugOrId }, { id: slugOrId }] },
+				select: { id: true, userId: true }
+			});
+			if (!affiliate || affiliate.userId === newUserId) return null;
+			return affiliate;
+		};
 
-		const affiliate = await prisma.affiliateProfile.findFirst({
-			where: { OR: [{ referralSlug: candidateSlugOrId }, { id: candidateSlugOrId }] },
-			select: { id: true, userId: true }
-		});
+		let affiliate: { id: string; userId: string } | null = null;
+
+		const cookieSlug = context.refCookieSlug?.trim();
+		if (cookieSlug) {
+			affiliate = await findValidAffiliate(cookieSlug);
+		}
+
+		if (!affiliate) {
+			const explicitSlugOrId = context.affiliateIdentifier?.trim();
+			if (!explicitSlugOrId) return;
+			affiliate = await findValidAffiliate(explicitSlugOrId);
+		}
+
 		if (!affiliate) return;
-		if (affiliate.userId === newUserId) return;
 
 		try {
 			await prisma.referral.create({

@@ -465,8 +465,8 @@ test('registerUser: an already-attributed user\'s attribution can never be silen
   assert.equal(getReferrals()[0].affiliateId, 'affiliate-1'); // first attribution wins, never overwritten
 });
 
-test('registerUser: precedence — an explicit affiliateIdentifier wins over the waseet_ref_code cookie when both are present and valid (flagged First-Touch tension, implemented per explicit product instruction)', async (t) => {
-  const { authService, referralCreateSpy } = await loadAuthServiceForRegister(t, {
+test('registerUser: precedence (First-Touch fix) — a valid waseet_ref_code cookie wins over a different, also-valid explicit affiliateIdentifier', async (t) => {
+  const { authService, referralCreateSpy, affiliateFindFirstSpy } = await loadAuthServiceForRegister(t, {
     affiliates: [
       { id: 'affiliate-cookie', userId: 'affiliate-user-cookie', referralSlug: 'cookie-code' },
       { id: 'affiliate-explicit', userId: 'affiliate-user-explicit', referralSlug: 'explicit-code' }
@@ -474,6 +474,29 @@ test('registerUser: precedence — an explicit affiliateIdentifier wins over the
   });
 
   await authService.registerUser({ ...REGISTER_BASE_INPUT, affiliateIdentifier: 'explicit-code' }, { refCookieSlug: 'cookie-code' });
+
+  assert.equal(referralCreateSpy.mock.callCount(), 1);
+  assert.equal(referralCreateSpy.mock.calls[0].arguments[0].data.affiliateId, 'affiliate-cookie');
+  // The cookie resolves unconditionally — affiliateIdentifier must not even
+  // be looked up once the cookie has already resolved to a valid affiliate.
+  assert.equal(affiliateFindFirstSpy.mock.callCount(), 1);
+});
+
+test('registerUser: an invalid/stale waseet_ref_code cookie with NO explicit identifier — no attribution created, registration still succeeds', async (t) => {
+  const { authService, referralCreateSpy } = await loadAuthServiceForRegister(t, { affiliates: [] });
+
+  const result = await authService.registerUser({ ...REGISTER_BASE_INPUT }, { refCookieSlug: 'stale-cookie' });
+
+  assert.equal(typeof result.userId, 'string');
+  assert.equal(referralCreateSpy.mock.callCount(), 0);
+});
+
+test('registerUser: an invalid/stale cookie does NOT permanently block a valid explicit affiliateIdentifier — falls through to the explicit fallback', async (t) => {
+  const { authService, referralCreateSpy } = await loadAuthServiceForRegister(t, {
+    affiliates: [{ id: 'affiliate-explicit', userId: 'affiliate-user-explicit', referralSlug: 'explicit-code' }]
+  });
+
+  await authService.registerUser({ ...REGISTER_BASE_INPUT, affiliateIdentifier: 'explicit-code' }, { refCookieSlug: 'stale-cookie' });
 
   assert.equal(referralCreateSpy.mock.callCount(), 1);
   assert.equal(referralCreateSpy.mock.calls[0].arguments[0].data.affiliateId, 'affiliate-explicit');
@@ -488,6 +511,33 @@ test('registerUser: an empty/whitespace-only affiliateIdentifier is treated as "
 
   assert.equal(referralCreateSpy.mock.callCount(), 1);
   assert.equal(referralCreateSpy.mock.calls[0].arguments[0].data.affiliateId, 'affiliate-cookie');
+});
+
+test('registerUser: self-referral guard in the COOKIE path — a cookie resolving to the registering user\'s own affiliate profile is skipped (falls through, no explicit identifier given)', async (t) => {
+  const { authService, referralCreateSpy } = await loadAuthServiceForRegister(t, {
+    affiliates: [{ id: 'affiliate-self', userId: 'user-1', referralSlug: 'self-cookie' }],
+    createUserId: 'user-1'
+  });
+
+  const result = await authService.registerUser({ ...REGISTER_BASE_INPUT }, { refCookieSlug: 'self-cookie' });
+
+  assert.equal(typeof result.userId, 'string');
+  assert.equal(referralCreateSpy.mock.callCount(), 0);
+});
+
+test('registerUser: self-referral guard in the COOKIE path also falls through to a valid, different explicit affiliateIdentifier', async (t) => {
+  const { authService, referralCreateSpy } = await loadAuthServiceForRegister(t, {
+    affiliates: [
+      { id: 'affiliate-self', userId: 'user-1', referralSlug: 'self-cookie' },
+      { id: 'affiliate-explicit', userId: 'affiliate-user-explicit', referralSlug: 'explicit-code' }
+    ],
+    createUserId: 'user-1'
+  });
+
+  await authService.registerUser({ ...REGISTER_BASE_INPUT, affiliateIdentifier: 'explicit-code' }, { refCookieSlug: 'self-cookie' });
+
+  assert.equal(referralCreateSpy.mock.callCount(), 1);
+  assert.equal(referralCreateSpy.mock.calls[0].arguments[0].data.affiliateId, 'affiliate-explicit');
 });
 
 test('registerUser (Google sign-up path — googleIdToken set): uses the SAME resolveReferralAttribution helper and precedence as the email/password path', async (t) => {

@@ -13,10 +13,10 @@ export class AuthController {
 			// Body is pre-validated by Zod middleware
 			const input: RegisterInput = req.body;
 			// waseet_ref_code is set by ref.controller.ts::handleReferralClick()
-			// when a visitor followed an affiliate's /ref/:slug link. Only ever
-			// used as a fallback when the registration form itself didn't supply
-			// an explicit affiliateIdentifier — see
-			// auth.service.ts::resolveReferralAttribution() for the exact
+			// when a visitor followed an affiliate's /ref/:slug link. Per
+			// First-Touch (P-LG-012), a valid cookie attribution wins even when
+			// the registration form ALSO supplied an explicit affiliateIdentifier
+			// — see auth.service.ts::resolveReferralAttribution() for the exact
 			// precedence rule.
 			//
 			// This codebase has no cookie-parser middleware registered (app.ts

@@ -16,5 +16,6 @@ const router = Router();
 
 router.get('/resolve', apiLimiter, affiliatesPublicController.resolve);
 router.get('/search', apiLimiter, affiliatesPublicController.search);
+router.get('/referral-status', apiLimiter, affiliatesPublicController.referralStatus);
 
 export default router;

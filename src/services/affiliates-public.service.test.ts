@@ -139,6 +139,58 @@ test('search: every result excludes email/phone/bank/IBAN/KYC/wallet/commission 
   }
 });
 
+// ---------------------------------------------------------------------------
+// getReferralStatus (GET /api/affiliates/referral-status) — the frontend
+// cannot read the httpOnly waseet_ref_code cookie itself, so it asks the
+// backend whether a valid attribution currently exists via that cookie.
+// Reuses resolveByCode() internally rather than duplicating the query.
+// ---------------------------------------------------------------------------
+
+test('getReferralStatus: a valid cookie value resolves — returns { active: true, referralSlug, displayName }', async (t) => {
+  const { affiliatesPublicService } = await loadService(t, [AFFILIATE_FIXTURE]);
+
+  const result = await affiliatesPublicService.getReferralStatus('khalid2026');
+
+  assert.deepEqual(result, { active: true, referralSlug: 'khalid2026', displayName: 'خالد العتيبي' });
+});
+
+test('getReferralStatus: an unknown/stale cookie value — returns { active: false }, never throws', async (t) => {
+  const { affiliatesPublicService } = await loadService(t, [AFFILIATE_FIXTURE]);
+
+  const result = await affiliatesPublicService.getReferralStatus('does-not-exist');
+
+  assert.deepEqual(result, { active: false });
+});
+
+test('getReferralStatus: an absent cookie (undefined) — returns { active: false } without querying the DB', async (t) => {
+  const { affiliatesPublicService, findFirstSpy } = await loadService(t, [AFFILIATE_FIXTURE]);
+
+  const result = await affiliatesPublicService.getReferralStatus(undefined);
+
+  assert.deepEqual(result, { active: false });
+  assert.equal(findFirstSpy.mock.callCount(), 0);
+});
+
+test('getReferralStatus: an empty/whitespace-only cookie value — returns { active: false } without querying the DB', async (t) => {
+  const { affiliatesPublicService, findFirstSpy } = await loadService(t, [AFFILIATE_FIXTURE]);
+
+  const result = await affiliatesPublicService.getReferralStatus('   ');
+
+  assert.deepEqual(result, { active: false });
+  assert.equal(findFirstSpy.mock.callCount(), 0);
+});
+
+test('getReferralStatus: response never contains email/phone/bank/IBAN/KYC/wallet/commission fields, even when active', async (t) => {
+  const { affiliatesPublicService } = await loadService(t, [AFFILIATE_FIXTURE]);
+
+  const result: any = await affiliatesPublicService.getReferralStatus('khalid2026');
+
+  for (const forbiddenField of ['email', 'phone', 'phoneNumber', 'iban', 'bankName', 'kycDocumentUrl', 'minimumPayoutAmount', 'commissionLogs', 'walletBalance', 'id']) {
+    assert.equal(forbiddenField in result, false, `must not expose ${forbiddenField}`);
+  }
+  assert.deepEqual(Object.keys(result).sort(), ['active', 'displayName', 'referralSlug']);
+});
+
 test('resolveByCode / search: displayName falls back sensibly when firstName/lastName are both null', async (t) => {
   const nameless = { id: 'affiliate-2', referralSlug: 'anon-code', firstName: null, lastName: null };
   const { affiliatesPublicService } = await loadService(t, [nameless]);
