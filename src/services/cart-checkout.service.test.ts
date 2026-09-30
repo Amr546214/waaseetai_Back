@@ -734,3 +734,117 @@ test('Phase 4 addItem: an existing active purchase rejects 409 and the cart is n
   assert.equal(own.statusCode, 400);
   assert.equal(cartUpsert.mock.callCount(), 0);
 });
+
+// --- Test gap #1: COMPLETED/CANCELLED must not block a re-purchase ---------
+// Every duplicate-purchase test above uses an empty activePurchases fixture
+// for the "success" path, which is indistinguishable from "there was never
+// any purchase". These tests make the terminal-status exclusion explicit at
+// the SERVICE level (see active-purchase.util.test.ts for the equivalent
+// coverage directly on findActiveServicePurchases) by simulating the real
+// Postgres-side filter (contract.status IN [...ACTIVE_PURCHASE_CONTRACT_STATUSES])
+// findActiveServicePurchases relies on, instead of an unfiltered stub.
+
+test('Phase 4 addItem: a COMPLETED contract for the same service does not block re-purchase', async (t) => {
+  const cartUpsert = t.mock.fn(async () => ({ id: 'cart-1', items: [] }));
+  const completedProject = { ...ACTIVE_PURCHASE, contract: { status: 'COMPLETED' } };
+  t.mock.module('../config/db', { namedExports: { prisma: {
+    serviceCatalog: { findFirst: async () => ({ id: 'service-1', providerId: 'provider-9' }) },
+    // Simulates the real DB-side filter: only rows whose contract.status is
+    // in the given list are ever returned — COMPLETED is not in that list.
+    project: { findMany: async (args: any) => [completedProject].filter(p => args.where.contract.status.in.includes(p.contract.status)) },
+    cart: { upsert: cartUpsert },
+    cartItem: { upsert: async () => ({}) }
+  } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  const { cartCheckoutService } = await import(`./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`);
+
+  const cart = await cartCheckoutService.addItem('user-1', { modelId: 'service-1' });
+
+  // addItem() upserts the cart itself and then calls getCart() (which
+  // upserts again internally) to build its response — the exact count is an
+  // implementation detail; what matters here is it was reached at all
+  // (never short-circuited by a 409, unlike the rejected-path test above).
+  assert.ok(cartUpsert.mock.callCount() > 0, 'a COMPLETED-only history does not block the cart upsert');
+  assert.deepEqual(cart.items, []);
+});
+
+for (const terminalStatus of ['COMPLETED', 'CANCELLED']) {
+  test(`Phase 4 createOrder: a ${terminalStatus} contract for the same service does not block re-purchase`, async (t) => {
+    const service = makeService({ id: 'service-1', provider: makeProvider({ id: 'provider-9' }) });
+    const terminalProject = { ...ACTIVE_PURCHASE, contract: { status: terminalStatus } };
+    const orderCreateSpy = t.mock.fn(async (args: any) => ({
+      id: 'order-1', orderNumber: 'WS-2026-000001', subtotal: args.data.subtotal, discount: args.data.discount, total: args.data.total,
+      couponCode: null, createdAt: new Date('2024-01-01T00:00:00Z'), items: [{ id: 'orderitem-1', ...args.data.items.create[0] }]
+    }));
+    t.mock.module('../config/db', { namedExports: { prisma: {
+      serviceCatalog: { findMany: async () => [service] },
+      project: { findMany: async (args: any) => [terminalProject].filter(p => args.where.contract.status.in.includes(p.contract.status)) },
+      $transaction: async (fn: any) => fn({ order: { count: async () => 0, create: orderCreateSpy } })
+    } } });
+    t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+    const { cartCheckoutService } = await import(`./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`);
+
+    const order = await cartCheckoutService.createOrder('user-1', { items: [{ modelId: 'service-1' }] });
+
+    assert.equal(orderCreateSpy.mock.callCount(), 1, `a ${terminalStatus}-only history does not block a new order`);
+    assert.equal(order.id, 'order-1');
+  });
+}
+
+test('Phase 4 confirmPayment: a COMPLETED contract for the same service does not block re-purchase (wallet debited, project/contract/escrow created, order PAID)', async (t) => {
+  const order = makeOrderForConfirm();
+  const completedProject = { ...ACTIVE_PURCHASE, contract: { status: 'COMPLETED' } };
+  const { cartCheckoutService, users, walletTransactions, tx } = await loadServiceForConfirm(t, { order, walletBalance: 250, activePurchases: [completedProject] });
+  // Override the generic mock's unfiltered project.findMany with one that
+  // honors the real where-clause, so this test actually exercises the
+  // terminal-status exclusion rather than relying on the fixture being empty.
+  tx.project.findMany = t.mock.fn(async (args: any) => [completedProject].filter((p: any) => args.where.contract.status.in.includes(p.contract.status)));
+
+  const result = await cartCheckoutService.confirmPayment('user-1', 'order-1', '111111');
+
+  assert.equal(result.status, 'paid');
+  assert.equal(users[0].walletBalance, 150, 'debited normally — a COMPLETED history is not a block');
+  assert.equal(walletTransactions.length, 1);
+  assert.equal(tx.escrow.create.mock.callCount(), 1);
+});
+
+// --- Test gap #2: a cart item that was fine when added becomes blocked -----
+// once an active contract exists by the time checkout is attempted. Note
+// createOrder() never reads the persisted CartItem row for its duplicate
+// check — it re-evaluates findActiveServicePurchases fresh on every call —
+// so "the item sat stale in the cart" and "the item was just added this
+// second" are handled by the exact same code path. The existing test above
+// ('Phase 4 createOrder: an existing active purchase ... rejects 409 before
+// any order row is created') already covers that code path; this variant
+// makes the specific "added-while-free, blocked-later" timeline explicit.
+test('Phase 4 (stale cart item): a service added to the cart before any active contract existed becomes blocked at createOrder() once the contract goes active', async (t) => {
+  let projectRows: any[] = []; // nothing active yet when the item is added to the cart
+  const cartUpsert = t.mock.fn(async () => ({ id: 'cart-1', items: [] }));
+  const service = makeService({ id: 'service-1', provider: makeProvider({ id: 'provider-9' }) });
+  const orderCreateSpy = t.mock.fn(async () => { throw new Error('must not be reached'); });
+  t.mock.module('../config/db', { namedExports: { prisma: {
+    serviceCatalog: { findFirst: async () => ({ id: 'service-1', providerId: 'provider-9' }), findMany: async () => [service] },
+    project: { findMany: async () => projectRows },
+    cart: { upsert: cartUpsert },
+    cartItem: { upsert: async () => ({}) },
+    $transaction: async (fn: any) => fn({ order: { count: async () => 0, create: orderCreateSpy } })
+  } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  const { cartCheckoutService } = await import(`./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`);
+
+  // Step 1: adding to the cart succeeds — nothing active yet.
+  await cartCheckoutService.addItem('user-1', { modelId: 'service-1' });
+  assert.ok(cartUpsert.mock.callCount() > 0, 'the cart upsert was reached — addItem was not blocked');
+
+  // Step 2: a contract for this exact service becomes active in the
+  // meantime (e.g. purchased via another tab/session) — the cart item
+  // itself is untouched/stale.
+  projectRows = [ACTIVE_PURCHASE];
+
+  // Step 3: checkout is attempted with the now-stale cart item.
+  const error: any = await cartCheckoutService.createOrder('user-1', { items: [{ modelId: 'service-1' }] }).catch((e: any) => e);
+
+  assert.equal(error.statusCode, 409);
+  assert.deepEqual(error.errors, [{ serviceId: 'service-1', projectId: 'project-existing' }]);
+  assert.equal(orderCreateSpy.mock.callCount(), 0, 'the stale cart item must not reach order creation');
+});
