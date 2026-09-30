@@ -1,260 +1,326 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { WaseetAiError, WaseetAiErrorCode } from '../services/ai/waseet-ai/waseet-ai.errors';
 
-// Implementation Batch 2, Part A — Help AI Assistant gateway. No real
-// Socket.IO server is used — a plain mock socket captures registered
-// handlers/emitted events (same convention as ai-review.gateway.test.ts).
-// `geminiClient` is mocked via t.mock.module; no real network call happens.
+// Help AI Assistant / dashboard Avatar gateway, now backed by WaseetAI
+// (AI-21). No real Socket.IO server and NO network: a plain mock socket
+// captures handlers/emits, and `waseetAiClient` and the auth resolver are
+// replaced via t.mock.module. (The legacy `help:audio` OpenAI TTS path was
+// removed; voice is served by POST /api/help-assistant/tts.)
 
-function createMockSocket(opts: { userId?: string; id?: string } = {}) {
+const SECRET_MARKER = ['never', 'leak', 'marker'].join('-');
+
+function createMockSocket(opts: { id?: string } = {}) {
 	const handlers: Record<string, (...args: any[]) => any> = {};
 	const onceHandlers: Record<string, Array<(...args: any[]) => any>> = {};
 	const emitted: Array<{ event: string; payload: any }> = [];
-
 	const socket: any = {
-		id: opts.id ?? 'socket-test-1',
-		userId: opts.userId,
+		id: opts.id ?? `socket-${Math.random()}`,
+		connected: true,
+		handshake: { auth: {}, headers: {} },
 		on: (event: string, handler: (...args: any[]) => any) => { handlers[event] = handler; },
-		once: (event: string, handler: (...args: any[]) => any) => {
-			(onceHandlers[event] ||= []).push(handler);
-		},
+		once: (event: string, handler: (...args: any[]) => any) => { (onceHandlers[event] ||= []).push(handler); },
 		off: (event: string, handler?: (...args: any[]) => any) => {
 			if (!onceHandlers[event]) return;
 			onceHandlers[event] = handler ? onceHandlers[event].filter((h) => h !== handler) : [];
 		},
 		emit: (event: string, payload?: any) => { emitted.push({ event, payload }); },
 	};
-
 	return {
 		socket,
 		handlers,
 		emitted,
-		triggerDisconnect: () => { (onceHandlers['disconnect'] || []).forEach((h) => h()); },
+		events: () => emitted.map((e) => e.event),
+		triggerDisconnect: () => { socket.connected = false; (onceHandlers['disconnect'] || []).forEach((h) => h()); },
 	};
 }
 
-function fakeStream(chunks: string[], opts: { throwAfter?: number; error?: Error; checkSignal?: AbortSignal } = {}) {
+type StreamEvt = { type: 'started' } | { type: 'delta'; chunk: string } | { type: 'citations'; citations: any[] } | { type: 'completed' };
+
+function fakeStream(events: StreamEvt[], opts: { failAt?: number; error?: unknown; signal?: AbortSignal; pauseAt?: number; pause?: Promise<void> } = {}) {
 	return (async function* () {
-		for (let i = 0; i < chunks.length; i++) {
-			if (opts.checkSignal?.aborted) {
-				const abortError: any = new Error('aborted');
-				abortError.name = 'AbortError';
-				throw abortError;
-			}
-			if (opts.throwAfter !== undefined && i === opts.throwAfter) {
-				throw opts.error || new Error('stream failed');
-			}
-			yield chunks[i];
+		for (let i = 0; i < events.length; i++) {
+			if (opts.pauseAt === i && opts.pause) await opts.pause;
+			if (opts.signal?.aborted) throw new WaseetAiError(WaseetAiErrorCode.TIMEOUT, 'cancelled');
+			if (opts.failAt === i) throw opts.error ?? new WaseetAiError(WaseetAiErrorCode.PROVIDER_UNAVAILABLE, 'down');
+			yield events[i];
 		}
-		return { promptTokens: 1, completionTokens: 1, totalTokens: 2 };
 	})();
 }
 
-async function loadGateway(t: TestContext, opts: {
-	isConfigured?: boolean;
-	generateStream?: (prompt: string, options: any) => AsyncGenerator<string, any, void>;
-}) {
-	const generateStreamSpy = opts.generateStream ?? (() => fakeStream(['رد ']));
-	const geminiClientMock = {
-		isConfigured: () => opts.isConfigured ?? true,
-		generateStream: generateStreamSpy,
-	};
-	t.mock.module('../services/ai/gemini/gemini.client', { namedExports: { geminiClient: geminiClientMock } });
+const OK_STREAM: StreamEvt[] = [{ type: 'started' }, { type: 'delta', chunk: 'الضمان ' }, { type: 'delta', chunk: 'يحمي ' }, { type: 'delta', chunk: 'الطرفين.' }, { type: 'completed' }];
 
-	const moduleUrl = `./help-assistant-chat.gateway.ts?fixture=${Date.now()}-${Math.random()}`;
-	const mod = await import(moduleUrl);
-	return mod.registerHelpAssistantChatGateway as (socket: any) => void;
+async function loadGateway(t: TestContext, opts: {
+	auth?: any;
+	configured?: boolean;
+	stream?: (body: any, options: any) => AsyncGenerator<any, void, void>;
+} = {}) {
+	const calls = { stream: [] as Array<{ body: any; options: any }> };
+	const mocks: Array<{ restore: () => void }> = [];
+	mocks.push(t.mock.module('./help-assistant-auth', {
+		namedExports: { resolveHelpAssistantUser: async () => opts.auth ?? { ok: true, userId: `u-${Math.random()}`, role: 'client' } },
+	}));
+	mocks.push(t.mock.module('../services/ai/waseet-ai/waseet-ai.client', {
+		namedExports: {
+			waseetAiClient: {
+				isConfigured: () => opts.configured ?? true,
+				streamHelpChat: (body: any, options: any) => {
+					calls.stream.push({ body, options });
+					return (opts.stream ?? (() => fakeStream(OK_STREAM)))(body, options);
+				},
+			},
+		},
+	}));
+	const mod = await import(`./help-assistant-chat.gateway.ts?fixture=${Date.now()}-${Math.random()}`);
+	const restore = () => mocks.forEach((m) => m.restore());
+	return { register: mod.registerHelpAssistantChatGateway as (socket: any) => void, calls, mod, restore };
 }
 
-test('help:ask: an empty question is rejected without calling Gemini', async (t) => {
-	let called = false;
-	const register = await loadGateway(t, { generateStream: () => { called = true; return fakeStream([]); } });
-	const { socket, handlers, emitted } = createMockSocket({ userId: `user-${Date.now()}` });
-	register(socket);
+// ── auth ────────────────────────────────────────────────────────────────
 
-	await handlers['help:ask']({ question: '   ' });
-
-	assert.equal(called, false);
-	assert.equal(emitted.length, 1);
-	assert.equal(emitted[0].event, 'help:error');
+test('help:ask: an unauthenticated socket (dashboard Avatar without a session) is rejected, WaseetAI never called', async (t) => {
+	const { register, calls } = await loadGateway(t, { auth: { ok: false, reason: 'UNAUTHENTICATED' } });
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'كيف يعمل الضمان؟', clientRequestId: 'r1' });
+	assert.equal(calls.stream.length, 0);
+	assert.deepEqual(s.events(), ['help:error']);
+	assert.equal(s.emitted[0].payload.code, 'AUTH_REQUIRED');
+	assert.equal(s.emitted[0].payload.clientRequestId, 'r1');
 });
 
-test('help:ask: an oversized question is rejected without calling Gemini', async (t) => {
-	let called = false;
-	const register = await loadGateway(t, { generateStream: () => { called = true; return fakeStream([]); } });
-	const { socket, handlers, emitted } = createMockSocket({ userId: `user-${Date.now()}` });
-	register(socket);
-
-	await handlers['help:ask']({ question: 'س'.repeat(600) });
-
-	assert.equal(called, false);
-	assert.equal(emitted[0].event, 'help:error');
-	assert.match(emitted[0].payload.message, /طويل جداً/);
+test('help:ask: a suspended/pending account is rejected with FORBIDDEN', async (t) => {
+	const { register, calls } = await loadGateway(t, { auth: { ok: false, reason: 'FORBIDDEN' } });
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'سؤال' });
+	assert.equal(calls.stream.length, 0);
+	assert.equal(s.emitted[0].payload.code, 'FORBIDDEN');
 });
 
-test('help:ask: a guest (no userId) still gets a real Gemini answer — soft-auth, never rejected', async (t) => {
-	const register = await loadGateway(t, { generateStream: () => fakeStream(['أهلاً ', 'بك']) });
-	const { socket, handlers, emitted } = createMockSocket({ userId: undefined, id: `guest-${Date.now()}-${Math.random()}` });
-	register(socket);
+test('help:ask: an authenticated request streams start → multiple chunks → complete, echoing clientRequestId', async (t) => {
+	const { register, calls } = await loadGateway(t);
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'كيف يعمل الضمان؟', clientRequestId: 'req-1' });
 
-	await handlers['help:ask']({ question: 'كيف يعمل حساب الضمان؟' });
-
-	const events = emitted.map((e) => e.event);
-	assert.deepEqual(events, ['help:answer_start', 'help:answer_chunk', 'help:answer_chunk', 'help:answer_complete']);
+	assert.deepEqual(s.events(), ['help:answer_start', 'help:answer_chunk', 'help:answer_chunk', 'help:answer_chunk', 'help:answer_complete']);
+	assert.deepEqual(s.emitted.filter((e) => e.event === 'help:answer_chunk').map((e) => e.payload.chunk), ['الضمان ', 'يحمي ', 'الطرفين.']);
+	for (const e of s.emitted) assert.equal(e.payload.clientRequestId, 'req-1');
+	assert.equal(calls.stream.length, 1);
 });
 
-test('help:ask: an authenticated user gets a real Gemini answer', async (t) => {
-	const register = await loadGateway(t, { generateStream: () => fakeStream(['إجابة حقيقية']) });
-	const { socket, handlers, emitted } = createMockSocket({ userId: `user-${Date.now()}-${Math.random()}` });
-	register(socket);
-
-	await handlers['help:ask']({ question: 'كيف تعمل النزاعات؟' });
-
-	assert.equal(emitted[0].event, 'help:answer_start');
-	assert.equal(emitted[emitted.length - 1].event, 'help:answer_complete');
+test('help:ask: a stream without an explicit started event still emits answer_start before the first chunk', async (t) => {
+	const { register } = await loadGateway(t, { stream: () => fakeStream([{ type: 'delta', chunk: 'أ' }, { type: 'completed' }]) });
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'سؤال' });
+	assert.deepEqual(s.events(), ['help:answer_start', 'help:answer_chunk', 'help:answer_complete']);
 });
 
-test('help:ask: chunks are emitted in order and never carry a raw provider object', async (t) => {
-	const register = await loadGateway(t, { generateStream: () => fakeStream(['جزء1 ', 'جزء2 ', 'جزء3']) });
-	const { socket, handlers, emitted } = createMockSocket({ userId: `user-${Date.now()}-${Math.random()}` });
-	register(socket);
-
-	await handlers['help:ask']({ question: 'ما هي عمولة الوسيط؟' });
-
-	const chunks = emitted.filter((e) => e.event === 'help:answer_chunk').map((e) => e.payload.chunk);
-	assert.deepEqual(chunks, ['جزء1 ', 'جزء2 ', 'جزء3']);
-	for (const c of chunks) assert.equal(typeof c, 'string');
-});
-
-test('help:ask: an empty Gemini stream is treated as an honest failure, not a blank success', async (t) => {
-	const register = await loadGateway(t, { generateStream: () => fakeStream([]) });
-	const { socket, handlers, emitted } = createMockSocket({ userId: `user-${Date.now()}-${Math.random()}` });
-	register(socket);
-
-	await handlers['help:ask']({ question: 'سؤال عام عن المنصة' });
-
-	const last = emitted[emitted.length - 1];
-	assert.equal(last.event, 'help:error');
-	assert.equal(last.payload.humanSupportFallback, true);
-});
-
-test('help:ask: Gemini not configured returns an honest unavailable message with a human-support fallback flag', async (t) => {
-	const register = await loadGateway(t, { isConfigured: false });
-	const { socket, handlers, emitted } = createMockSocket({ userId: `user-${Date.now()}-${Math.random()}` });
-	register(socket);
-
-	await handlers['help:ask']({ question: 'سؤال عام' });
-
-	assert.equal(emitted.length, 1);
-	assert.equal(emitted[0].event, 'help:error');
-	assert.equal(emitted[0].payload.humanSupportFallback, true);
-});
-
-test('help:ask: a mid-stream Gemini failure emits an honest error, never a fabricated answer', async (t) => {
-	const register = await loadGateway(t, {
-		generateStream: () => fakeStream(['جزء ناقص', 'جزء ثانٍ'], { throwAfter: 1, error: new Error('provider crashed') }),
+test('help:ask: citations are relayed as plain {docId,title}', async (t) => {
+	const { register } = await loadGateway(t, {
+		stream: () => fakeStream([{ type: 'started' }, { type: 'citations', citations: [{ docId: 'd1', title: 'سياسة الضمان', extra: 'x' }] }, { type: 'delta', chunk: 'نص' }, { type: 'completed' }]),
 	});
-	const { socket, handlers, emitted } = createMockSocket({ userId: `user-${Date.now()}-${Math.random()}` });
-	register(socket);
-
-	await handlers['help:ask']({ question: 'سؤال عن الحساب' });
-
-	const last = emitted[emitted.length - 1];
-	assert.equal(last.event, 'help:error');
-	assert.equal(last.payload.humanSupportFallback, true);
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'سؤال' });
+	const c = s.emitted.find((e) => e.event === 'help:citations');
+	assert.deepEqual(c?.payload.citations, [{ docId: 'd1', title: 'سياسة الضمان' }]);
 });
 
-test('help:ask: rate limit blocks a request past the threshold, keyed by userId', async (t) => {
-	const register = await loadGateway(t, { generateStream: () => fakeStream(['رد']) });
-	const uid = `rl-user-${Date.now()}-${Math.random()}`;
-	const { socket, handlers } = createMockSocket({ userId: uid });
-	register(socket);
+// ── role + payload minimisation ─────────────────────────────────────────
 
-	let lastEmitted: any;
+test('help:ask: every dashboard role uses the same real engine; role is never sent upstream nor taken from the payload', async (t) => {
+	for (const role of ['client', 'provider', 'marketer', 'admin']) {
+		const { register, calls, restore } = await loadGateway(t, { auth: { ok: true, userId: `u-${role}-${Math.random()}`, role } });
+		const s = createMockSocket();
+		register(s.socket);
+		await s.handlers['help:ask']({ question: 'كيف أبدأ؟', role: 'admin', userId: 'spoofed', accountType: 'SUPER_ADMIN' });
+		assert.equal(s.events().at(-1), 'help:answer_complete', `role ${role} served`);
+		assert.deepEqual(Object.keys(calls.stream[0].body), ['question'], 'only the question goes upstream');
+		assert.equal(calls.stream[0].body.question, 'كيف أبدأ؟');
+		restore();
+	}
+});
+
+test('help:ask: legacy {question,answer} history is converted to the upstream-validated {role,content} shape and bounded', async (t) => {
+	const { register, calls } = await loadGateway(t);
+	const s = createMockSocket();
+	register(s.socket);
+	const history = [
+		...Array.from({ length: 5 }, (_, i) => ({ question: `س${i}`, answer: `ج${i}` })),
+		{ question: 'ط'.repeat(5000), answer: 'x' },
+		{ bogus: true },
+	];
+	await s.handlers['help:ask']({ question: 'سؤال أخير', history });
+	const sent = calls.stream[0].body.history;
+	// last 3 raw items → only the one valid turn (س4/ج4) survives; oversized + bogus dropped
+	assert.deepEqual(sent, [{ role: 'user', content: 'س4' }, { role: 'assistant', content: 'ج4' }]);
+	for (const m of sent) assert.ok(m.role === 'user' || m.role === 'assistant');
+});
+
+// ── failures ────────────────────────────────────────────────────────────
+
+test('help:ask: upstream in-stream help:error (no approved answer) → truthful NO_ANSWER with human fallback, no fabricated text', async (t) => {
+	const { register } = await loadGateway(t, {
+		stream: () => fakeStream([{ type: 'started' }, { type: 'completed' }], { failAt: 1, error: new WaseetAiError(WaseetAiErrorCode.STREAM_ERROR, 'x', { humanSupportFallback: true }) }),
+	});
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'سؤال خارج قاعدة المعرفة' });
+	assert.deepEqual(s.events(), ['help:answer_start', 'help:error']);
+	const err = s.emitted[1].payload;
+	assert.equal(err.code, 'NO_ANSWER');
+	assert.equal(err.humanSupportFallback, true);
+	assert.equal(s.emitted.some((e) => e.event === 'help:answer_chunk'), false);
+});
+
+test('help:ask: an upstream failure mid-stream emits an honest error after the partial chunks (never complete)', async (t) => {
+	const { register } = await loadGateway(t, { stream: () => fakeStream(OK_STREAM, { failAt: 2 }) });
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'سؤال' });
+	assert.deepEqual(s.events(), ['help:answer_start', 'help:answer_chunk', 'help:error']);
+	assert.equal(s.emitted.at(-1)!.payload.code, 'UNAVAILABLE');
+	assert.equal(s.events().includes('help:answer_complete'), false);
+});
+
+test('help:ask: a malformed upstream event (INVALID_RESPONSE from the client) → UNAVAILABLE error', async (t) => {
+	const { register } = await loadGateway(t, {
+		stream: () => fakeStream(OK_STREAM, { failAt: 1, error: new WaseetAiError(WaseetAiErrorCode.INVALID_RESPONSE, 'malformed') }),
+	});
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'سؤال' });
+	assert.equal(s.emitted.at(-1)!.event, 'help:error');
+	assert.equal(s.emitted.at(-1)!.payload.code, 'UNAVAILABLE');
+});
+
+test('help:ask: an upstream timeout → TIMEOUT error code', async (t) => {
+	const { register } = await loadGateway(t, {
+		stream: () => fakeStream(OK_STREAM, { failAt: 0, error: new WaseetAiError(WaseetAiErrorCode.TIMEOUT, 'timeout') }),
+	});
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'سؤال' });
+	assert.equal(s.emitted.at(-1)!.payload.code, 'TIMEOUT');
+});
+
+test('help:ask: an empty "completed" stream is an honest failure, not a blank success', async (t) => {
+	const { register } = await loadGateway(t, { stream: () => fakeStream([{ type: 'started' }, { type: 'completed' }]) });
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'سؤال' });
+	assert.equal(s.emitted.at(-1)!.event, 'help:error');
+});
+
+test('help:ask: WaseetAI not configured → honest unavailable message, no call', async (t) => {
+	const { register, calls } = await loadGateway(t, { configured: false });
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'سؤال' });
+	assert.equal(calls.stream.length, 0);
+	assert.equal(s.emitted[0].payload.code, 'NOT_CONFIGURED');
+	assert.equal(s.emitted[0].payload.humanSupportFallback, true);
+});
+
+test('help:ask: empty and oversized questions are rejected without calling WaseetAI', async (t) => {
+	const { register, calls } = await loadGateway(t);
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: '   ' });
+	await s.handlers['help:ask']({ question: 'س'.repeat(600) });
+	assert.equal(calls.stream.length, 0);
+	assert.deepEqual(s.emitted.map((e) => e.payload.code), ['INVALID_INPUT', 'INVALID_INPUT']);
+});
+
+test('help:ask: rate limit applies per verified user id', async (t) => {
+	const userId = `rl-${Math.random()}`;
+	const { register } = await loadGateway(t, { auth: { ok: true, userId, role: 'provider' } });
+	let last: any;
 	for (let i = 0; i < 31; i++) {
-		const { socket: s, handlers: h, emitted: e } = createMockSocket({ userId: uid });
-		register(s);
-		await h['help:ask']({ question: `سؤال رقم ${i}` });
-		lastEmitted = e;
+		const s = createMockSocket();
+		register(s.socket);
+		await s.handlers['help:ask']({ question: `سؤال ${i}` });
+		last = s.emitted.at(-1);
 	}
-
-	const last = lastEmitted[lastEmitted.length - 1];
 	assert.equal(last.event, 'help:error');
-	assert.match(last.payload.message, /تجاوز الحد المسموح/);
+	assert.equal(last.payload.code, 'RATE_LIMITED');
 });
 
-test('help:ask: two different guest sockets are rate-limited independently, keyed by socket.id', async (t) => {
-	const register = await loadGateway(t, { generateStream: () => fakeStream(['رد']) });
-	const guestA = createMockSocket({ userId: undefined, id: `guest-a-${Date.now()}-${Math.random()}` });
-	const guestB = createMockSocket({ userId: undefined, id: `guest-b-${Date.now()}-${Math.random()}` });
-	register(guestA.socket);
-	register(guestB.socket);
+// ── cancellation ────────────────────────────────────────────────────────
 
-	for (let i = 0; i < 30; i++) {
-		await guestA.handlers['help:ask']({ question: `سؤال ${i}` });
-	}
-	guestA.emitted.length = 0;
-
-	await guestB.handlers['help:ask']({ question: 'سؤال جديد' });
-
-	assert.equal(guestB.emitted[guestB.emitted.length - 1].event, 'help:answer_complete');
-});
-
-test('help:ask: a socket disconnect aborts the in-flight Gemini stream', async (t) => {
-	let capturedSignal: AbortSignal | undefined;
-	const register = await loadGateway(t, {
-		generateStream: (_prompt, options) => {
-			capturedSignal = options.signal;
-			return fakeStream(['a', 'b', 'c'], { checkSignal: options.signal });
-		},
+test('help:ask: a socket disconnect aborts the in-flight upstream stream and emits nothing further', async (t) => {
+	let release!: () => void;
+	const pause = new Promise<void>((r) => { release = r; });
+	let captured: AbortSignal | undefined;
+	const { register } = await loadGateway(t, {
+		stream: (_b, options) => { captured = options.signal; return fakeStream(OK_STREAM, { signal: options.signal, pauseAt: 2, pause }); },
 	});
-	const { socket, handlers, emitted, triggerDisconnect } = createMockSocket({ userId: `user-${Date.now()}-${Math.random()}` });
-	register(socket);
-
-	const handlerPromise = handlers['help:ask']({ question: 'سؤال طويل يحتاج وقتاً' });
-	triggerDisconnect();
-	await handlerPromise;
-
-	assert.ok(capturedSignal, 'a signal must be passed to generateStream');
-	assert.equal(capturedSignal!.aborted, true);
-	assert.equal(emitted[emitted.length - 1].event, 'help:error');
+	const s = createMockSocket();
+	register(s.socket);
+	const p = s.handlers['help:ask']({ question: 'سؤال طويل' });
+	await new Promise((r) => setImmediate(r));
+	s.triggerDisconnect();
+	release();
+	await p;
+	assert.equal(captured?.aborted, true);
+	assert.equal(s.events().includes('help:error'), false);
+	assert.equal(s.events().includes('help:answer_complete'), false);
 });
 
-test('help:ask: the system prompt grounds Gemini in the curated Waseet knowledge and forbids inventing capabilities', async (t) => {
-	let capturedSystemInstruction = '';
-	const register = await loadGateway(t, {
-		generateStream: (_prompt, options) => {
-			capturedSystemInstruction = options.systemInstruction;
-			return fakeStream(['رد']);
-		},
+test('help:cancel with the matching clientRequestId aborts the stream; a mismatched id is ignored', async (t) => {
+	let release!: () => void;
+	const pause = new Promise<void>((r) => { release = r; });
+	let captured: AbortSignal | undefined;
+	const { register } = await loadGateway(t, {
+		stream: (_b, options) => { captured = options.signal; return fakeStream(OK_STREAM, { signal: options.signal, pauseAt: 2, pause }); },
 	});
-	const { socket, handlers } = createMockSocket({ userId: `user-${Date.now()}-${Math.random()}` });
-	register(socket);
-
-	await handlers['help:ask']({ question: 'كيف يعمل حساب الضمان؟' });
-
-	assert.match(capturedSystemInstruction, /لا تخترع أي ميزة/);
-	assert.match(capturedSystemInstruction, /حساب الضمان المالي/);
-	assert.match(capturedSystemInstruction, /لا تدّعِ أبداً أن الذكاء الاصطناعي يفصل في النزاعات/);
+	const s = createMockSocket();
+	register(s.socket);
+	const p = s.handlers['help:ask']({ question: 'سؤال', clientRequestId: 'keep' });
+	await new Promise((r) => setImmediate(r));
+	s.handlers['help:cancel']({ clientRequestId: 'other' });
+	assert.equal(captured?.aborted, false);
+	s.handlers['help:cancel']({ clientRequestId: 'keep' });
+	release();
+	await p;
+	assert.equal(captured?.aborted, true);
+	assert.equal(s.events().includes('help:answer_complete'), false);
 });
 
-test('help:ask: an oversized/malformed history is bounded rather than accepted as-is', async (t) => {
-	let capturedPrompt = '';
-	const register = await loadGateway(t, {
-		generateStream: (prompt) => {
-			capturedPrompt = prompt;
-			return fakeStream(['رد']);
-		},
-	});
-	const { socket, handlers } = createMockSocket({ userId: `user-${Date.now()}-${Math.random()}` });
-	register(socket);
+// ── no credential / raw error leakage ───────────────────────────────────
 
-	const hugeHistory = Array.from({ length: 50 }, (_, i) => ({ question: `سؤال ${i}`, answer: 'ط'.repeat(5000) }));
-	await handlers['help:ask']({ question: 'سؤال أخير', history: hugeHistory });
+test('help:ask: emitted payloads never contain upstream error text, causes or credentials', async (t) => {
+	const upstream = new WaseetAiError(WaseetAiErrorCode.AUTHENTICATION_ERROR, `Bearer ${SECRET_MARKER}`, { status: 401, cause: new Error(SECRET_MARKER) });
+	const { register } = await loadGateway(t, { stream: () => fakeStream(OK_STREAM, { failAt: 0, error: upstream }) });
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'سؤال' });
+	const serialized = JSON.stringify(s.emitted);
+	assert.equal(serialized.includes(SECRET_MARKER), false);
+	assert.equal(serialized.includes('Bearer'), false);
+	assert.deepEqual(Object.keys(s.emitted.at(-1)!.payload).sort(), ['clientRequestId', 'code', 'humanSupportFallback', 'message']);
+});
 
-	// Only the last MAX_HISTORY_TURNS (3) survive, and each oversized answer
-	// (5000 chars) is dropped entirely by sanitizeHistory rather than
-	// truncated-but-included, since it exceeds MAX_HISTORY_FIELD_LENGTH.
-	assert.equal(capturedPrompt.includes('ط'.repeat(5000)), false);
-	assert.match(capturedPrompt, /السؤال الحالي: سؤال أخير/);
+test('help:ask: a malicious clientRequestId is replaced by a server id', async (t) => {
+	const { register } = await loadGateway(t);
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'سؤال', clientRequestId: '<script>alert(1)</script>' });
+	const id = s.emitted[0].payload.clientRequestId;
+	assert.match(id, /^[0-9a-f-]{36}$/);
+});
+
+// ── legacy socket voice removed ─────────────────────────────────────────
+
+test('help:ask: no socket audio path — a client-sent speak flag is ignored and no help:audio* event is ever emitted', async (t) => {
+	const { register, calls } = await loadGateway(t);
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'سؤال', speak: true, clientRequestId: 'v1' });
+	assert.equal(s.events().at(-1), 'help:answer_complete');
+	assert.equal(s.events().some((e) => e.startsWith('help:audio')), false);
+	assert.equal('speak' in calls.stream[0].body, false);
 });
