@@ -1409,3 +1409,99 @@ test('reject: a rejected withdrawal does not permanently consume available earni
 	assert.equal(second.status, 'PENDING');
 	assert.equal(second.amount, 400);
 });
+
+// ============================================================================
+// createForMarketer — P-LG-012 withdrawal-minimum floor (300), enforced via
+// Math.max(affiliate.minimumPayoutAmount, 300) regardless of any
+// lower per-affiliate custom minimumPayoutAmount value. A higher custom
+// value is still respected (Math.max never lowers it).
+// ============================================================================
+
+function createMarketerWithdrawalMockPrisma(t: TestContext, opts: {
+	minimumPayoutAmount?: number;
+	availableCommissions?: number;
+	iban?: string | null;
+	isProvider?: boolean;
+} = {}) {
+	const affiliate = {
+		id: 'affiliate-1',
+		iban: opts.iban === undefined ? 'SA0000000000000000000000' : opts.iban,
+		bankName: 'Test Bank',
+		accountHolderName: 'Test Affiliate',
+		minimumPayoutAmount: opts.minimumPayoutAmount ?? 300
+	};
+	const withdrawals: any[] = [];
+	const createSpy = t.mock.fn(async (args: any) => {
+		const row = { id: `withdrawal-${withdrawals.length + 1}`, status: 'PENDING', ...args.data };
+		withdrawals.push(row);
+		return row;
+	});
+	const commissionAggregateSpy = t.mock.fn(async () => ({ _sum: { amount: opts.availableCommissions ?? 10000 } }));
+	const withdrawalAggregateSpy = t.mock.fn(async () => ({ _sum: { amount: 0 } }));
+
+	const tx = {
+		commissionLog: { aggregate: commissionAggregateSpy },
+		withdrawal: { aggregate: withdrawalAggregateSpy, create: createSpy }
+	};
+
+	const prismaMock: any = {
+		affiliateProfile: { findUnique: t.mock.fn(async () => affiliate) },
+		user: { findUnique: t.mock.fn(async () => ({ accountType: opts.isProvider ? 'PROVIDER_INDIVIDUAL' : 'MARKETING_BROKER', roles: opts.isProvider ? ['PROVIDER'] : ['AFFILIATE'], activeRole: opts.isProvider ? 'PROVIDER' : 'AFFILIATE' })) },
+		$transaction: t.mock.fn(async (fn: any) => fn(tx))
+	};
+	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+
+	return { createSpy, commissionAggregateSpy };
+}
+
+async function loadServiceForMarketer(t: TestContext, opts?: Parameters<typeof createMarketerWithdrawalMockPrisma>[1]) {
+	const mocks = createMarketerWithdrawalMockPrisma(t, opts);
+	const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { withdrawalService } = await import(moduleUrl);
+	return { withdrawalService, ...mocks };
+}
+
+test('createForMarketer: an amount below the 300 floor is rejected even though it exceeds the affiliate\'s own lower custom minimumPayoutAmount', async (t) => {
+	const { withdrawalService, createSpy } = await loadServiceForMarketer(t, { minimumPayoutAmount: 100 });
+
+	// 150 clears the affiliate's own custom minimum (100) but not the new
+	// P-LG-012 floor (300) — must now be rejected where it previously would
+	// have succeeded.
+	await assert.rejects(
+		() => withdrawalService.createForMarketer('user-1', { amount: 150 }),
+		(err: any) => { assert.equal(err.statusCode, 400); assert.match(err.message, /300/); return true; }
+	);
+	assert.equal(createSpy.mock.callCount(), 0);
+});
+
+test('createForMarketer: an amount that meets the 300 floor succeeds (custom minimum lower than 300)', async (t) => {
+	const { withdrawalService, createSpy } = await loadServiceForMarketer(t, { minimumPayoutAmount: 100 });
+
+	const result = await withdrawalService.createForMarketer('user-1', { amount: 300 });
+
+	assert.equal(result.amount, 300);
+	assert.equal(createSpy.mock.callCount(), 1);
+});
+
+test('createForMarketer: a higher custom minimumPayoutAmount is still respected — Math.max never LOWERS the effective floor', async (t) => {
+	const { withdrawalService, createSpy } = await loadServiceForMarketer(t, { minimumPayoutAmount: 500 });
+
+	await assert.rejects(
+		() => withdrawalService.createForMarketer('user-1', { amount: 400 }),
+		(err: any) => { assert.equal(err.statusCode, 400); assert.match(err.message, /500/); return true; }
+	);
+	assert.equal(createSpy.mock.callCount(), 0);
+
+	const result = await withdrawalService.createForMarketer('user-1', { amount: 500 });
+	assert.equal(result.amount, 500);
+});
+
+test('createForMarketer: the default minimumPayoutAmount (300, per the updated schema default) enforces exactly 300 as the floor', async (t) => {
+	const { withdrawalService, createSpy } = await loadServiceForMarketer(t, { minimumPayoutAmount: 300 });
+
+	await assert.rejects(() => withdrawalService.createForMarketer('user-1', { amount: 299.99 }));
+	assert.equal(createSpy.mock.callCount(), 0);
+
+	const result = await withdrawalService.createForMarketer('user-1', { amount: 300 });
+	assert.equal(result.amount, 300);
+});

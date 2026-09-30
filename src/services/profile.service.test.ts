@@ -38,6 +38,7 @@ const baseUser = {
 
 async function loadProfileServiceWithFixture(t: TestContext, userFixture: any) {
   const updateSpy = t.mock.fn();
+  const findUniqueSpy = t.mock.fn(async (_args: any) => userFixture);
   t.mock.module('../config/db', {
     // See account-management.service.test.ts for why this must be
     // `namedExports`, not `exports` — Node 22.23.2's mock.module() silently
@@ -45,7 +46,7 @@ async function loadProfileServiceWithFixture(t: TestContext, userFixture: any) {
     namedExports: {
       prisma: {
         user: {
-          findUnique: async () => userFixture,
+          findUnique: findUniqueSpy,
           update: updateSpy
         }
       }
@@ -55,7 +56,7 @@ async function loadProfileServiceWithFixture(t: TestContext, userFixture: any) {
   // node's ESM cache would otherwise keep serving the first test's instance.
   const moduleUrl = `./profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { profileService } = await import(moduleUrl);
-  return { profileService, updateSpy };
+  return { profileService, updateSpy, findUniqueSpy };
 }
 
 test('getProfile (CLIENT) resolves role-specific fields and never writes to the DB', async (t) => {
@@ -93,6 +94,69 @@ test('getProfile (PROVIDER) with no ProviderProfile row does not crash and falls
   assert.equal(result.currentProfileData.profileCompletionPercent, baseUser.profileCompletionPercent);
   assert.equal(result.currentProfileData.currentLevel, baseUser.currentLevel);
   assert.equal(updateSpy.mock.callCount(), 0);
+});
+
+// ============================================================================
+// Deployment-safety regression coverage (P-LG-012 affiliate commission
+// engine rollout). AffiliateProfile.level exists in prisma/schema.prisma but
+// its migration has NOT been applied to DEV/LIVE. getProfile()'s
+// `include: { affiliateProfile: true }` previously fetched ALL of
+// AffiliateProfile's default scalars — this would have requested the
+// not-yet-existing `level` column and 500'd this endpoint for every
+// AFFILIATE-active user. `roleProfile` is spread wholesale into the API
+// response, so the fix must preserve every OTHER existing field.
+// ============================================================================
+
+test('getProfile (AFFILIATE): the affiliateProfile relation is select-restricted, never requests `level`, and still resolves role-specific fields from a pre-migration-shaped fixture', async (t) => {
+  const affiliateUserFixture = {
+    ...baseUser,
+    activeRole: 'AFFILIATE',
+    accountType: 'MARKETING_BROKER',
+    clientProfile: null,
+    providerProfile: null,
+    gamification: null,
+    // Shaped exactly like the CURRENT (pre-migration) DB row would actually
+    // look — every existing AffiliateProfile scalar present, `level` absent.
+    affiliateProfile: {
+      id: 'aff-1',
+      userId: 'user-1',
+      referralSlug: 'khalid-1',
+      currentLevel: 'مساعد',
+      commissionRatePercentage: 5,
+      notifyOnNewReferral: true,
+      sharePerformanceStats: false,
+      firstName: 'خالد',
+      lastName: 'الغامدي',
+      avatarUrl: 'https://cdn.example.com/avatar.png',
+      bio: null,
+      bankName: null,
+      accountHolderName: null,
+      iban: null,
+      swiftCode: null,
+      identityVerified: false,
+      kycDocumentUrl: null,
+      payoutMethod: 'BANK_TRANSFER',
+      minimumPayoutAmount: 300,
+      completionPercentage: 45,
+      createdAt: new Date('2026-01-01'),
+      updatedAt: new Date('2026-01-01')
+    }
+  };
+  const { profileService, updateSpy, findUniqueSpy } = await loadProfileServiceWithFixture(t, affiliateUserFixture);
+
+  const result = await profileService.getProfile('user-1');
+
+  assert.equal(result.currentProfileData.firstName, 'خالد');
+  assert.equal(result.currentProfileData.lastName, 'الغامدي');
+  assert.equal(result.currentProfileData.referralSlug, 'khalid-1');
+  assert.equal('level' in result.currentProfileData, false);
+  assert.equal(updateSpy.mock.callCount(), 0);
+
+  assert.equal(findUniqueSpy.mock.callCount(), 1);
+  const args = findUniqueSpy.mock.calls[0].arguments[0];
+  const affiliateInclude = args.include.affiliateProfile;
+  assert.ok(affiliateInclude.select, 'affiliateProfile must be select-restricted, not a bare `true`');
+  assert.equal('level' in affiliateInclude.select, false);
 });
 
 // ============================================================================
@@ -222,6 +286,28 @@ test('updateProfile (AFFILIATE active): display fields go to AffiliateProfile on
   assert.equal(clientUpsertSpy.mock.callCount(), 0);
   assert.equal(providerUpsertSpy.mock.callCount(), 0);
   assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+// Deployment-safety regression coverage (P-LG-012 affiliate commission
+// engine rollout). AffiliateProfile.level exists in prisma/schema.prisma but
+// its migration has NOT been applied to DEV/LIVE. This upsert's return value
+// (`profileResult`) is forwarded as-is into the API response, so it
+// previously had no `select` at all (full default selection) — this would
+// have requested the not-yet-existing `level` column and 500'd this
+// AFFILIATE-active profile update.
+test('updateProfile (AFFILIATE active): the upsert selects AffiliateProfile scalars explicitly and never requests `level`', async (t) => {
+  const { profileService, affiliateUpsertSpy } = await loadProfileServiceForUpdate(t, activeUser);
+
+  await profileService.updateProfile('user-1', 'AFFILIATE', { firstName: 'Affiliate', lastName: 'Persona' });
+
+  assert.equal(affiliateUpsertSpy.mock.callCount(), 1);
+  const args = affiliateUpsertSpy.mock.calls[0].arguments[0];
+  assert.ok(args.select, 'must pass an explicit select');
+  assert.equal('level' in args.select, false);
+  // The full pre-existing scalar shape must still be present (response-shape
+  // preservation) — spot-check a representative field.
+  assert.equal(args.select.id, true);
+  assert.equal(args.select.completionPercentage, true);
 });
 
 // ============================================================================

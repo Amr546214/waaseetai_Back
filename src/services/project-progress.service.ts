@@ -5,6 +5,7 @@ import { notificationService } from './notification.service';
 import { emailService } from './email.service';
 import { deriveProviderProgression } from '../utils/progression-calculators';
 import { geminiClient } from './ai/gemini/gemini.client';
+import { createCommissionsForStageReleaseEvent } from './affiliate-commission.service';
 
 const PROJECT_COMPLETION_POINTS = 50;
 
@@ -526,6 +527,21 @@ export class ProjectProgressService {
               }
             }
           });
+          // P-LG-012 affiliate commission hook — additive, same transaction
+          // as the escrow release above (a commission is created atomically
+          // with the fund release it's based on, never separately). A
+          // complete no-op unless AFFILIATE_COMMISSION_ENGINE_ENABLED is
+          // explicitly set to 'true' — see affiliate-commission-engine.util.ts
+          // for the currency-gate reasoning behind why that stays off by
+          // default. Uses stage.amount (not contract.price) as the
+          // commissionable base — the same figure this same audit log's own
+          // metaData.releasedAmount above already uses for "the amount
+          // released at this specific step".
+          await createCommissionsForStageReleaseEvent(tx, {
+            contract: { id: contract.id, projectId: contract.projectId, clientId: contract.clientId, providerId: contract.providerId },
+            stageId: stage.id,
+            releasedAmount: stage.amount
+          });
         } else {
           isProjectCompleted = true;
           const completed = await tx.contract.updateMany({
@@ -561,6 +577,20 @@ export class ProjectProgressService {
                 approvedByClientId: contract.clientId
               }
             }
+          });
+          // P-LG-012 affiliate commission hook — same additive, same-
+          // transaction pattern as the intermediate-stage branch above. Uses
+          // stage.amount (the final stage's own slice of contract.price,
+          // matching this branch's own audit-log metaData.releasedAmount
+          // just above) rather than contract.price directly — contract.price
+          // is the cumulative total already reflected via the escrow update's
+          // `releasedAmount: contract.price` (a direct set, not an
+          // increment), not the incremental amount released at this specific
+          // final step.
+          await createCommissionsForStageReleaseEvent(tx, {
+            contract: { id: contract.id, projectId: contract.projectId, clientId: contract.clientId, providerId: contract.providerId },
+            stageId: stage.id,
+            releasedAmount: stage.amount
           });
           await tx.clientRequest.updateMany({
             where: { proposals: { some: { projectId: contract.projectId } } },

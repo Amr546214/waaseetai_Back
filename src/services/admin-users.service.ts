@@ -1,5 +1,6 @@
 import { prisma } from '../config/db';
 import { AccountType, UserStatus, RiskLevel, Prisma } from '@prisma/client';
+import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
 
 export interface GetUsersQueryParams {
   page?: number;
@@ -311,7 +312,14 @@ export class AdminUsersService {
               accreditationSubmissions: true
             }
           },
-          affiliateProfile: true
+          // Deployment-safety fix: `u.affiliateProfile` is forwarded as-is
+          // into this endpoint's response below, so the full pre-existing
+          // scalar shape is preserved via AFFILIATE_PROFILE_SAFE_SCALAR_SELECT
+          // — only the new, not-yet-migrated `level` column is excluded. A
+          // bare `true` here previously fetched AffiliateProfile's full
+          // default scalar set (including `level`), which would 500 this
+          // admin users list.
+          affiliateProfile: { select: AFFILIATE_PROFILE_SAFE_SCALAR_SELECT }
         }
       })
     ]);

@@ -31,6 +31,16 @@ export const registerSchema = z.object({
       .regex(/[A-Z]/, 'كلمة المرور يجب أن تحتوي على حرف كبير واحد على الأقل')
       .regex(/[0-9]/, 'كلمة المرور يجب أن تحتوي على رقم واحد على الأقل').optional(),
     googleIdToken: z.string().min(1).optional(),
+    // Optional explicit affiliate selection at registration time — either a
+    // manually-typed referral code/slug OR the value picked via the
+    // search-autocomplete (GET /api/affiliates/search). Both are just the
+    // affiliate's AffiliateProfile.referralSlug string, per the existing
+    // convention established by marketer-overview.service.ts::getRefLinks()
+    // — no second identifier type is introduced. When present, this takes
+    // precedence over the waseet_ref_code cookie (see
+    // auth.service.ts::resolveReferralAttribution() for the exact
+    // precedence rule and the First-Touch tension it's flagged against).
+    affiliateIdentifier: z.string().optional(),
     agreedToTerms: z.literal(true, {
       message: 'يجب الموافقة على الشروط والأحكام'
     })
@@ -122,7 +132,14 @@ export const googleAuthSchema = z.object({
   body: z.object({
     idToken: z.string().min(1, 'Token is required'),
     intent: z.enum(['login', 'register']).optional(),
-    accountType: PublicAccountTypeEnum.optional()
+    accountType: PublicAccountTypeEnum.optional(),
+    // Same optional explicit affiliate selection as registerSchema above —
+    // see that field's comment for the full precedence rule. Note: actual
+    // account creation for a Google sign-up happens via POST /register
+    // (with googleIdToken set), not via this endpoint's 'register' intent
+    // (which only verifies identity and returns googleProfile) — this field
+    // is threaded through here defensively for symmetry/future use.
+    affiliateIdentifier: z.string().optional()
   })
 });
 

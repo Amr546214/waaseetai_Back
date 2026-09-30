@@ -1,7 +1,7 @@
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
-import { OtpType, UserStatus, UserRole, User as PrismaUser } from '@prisma/client';
+import { OtpType, UserStatus, UserRole, ReferralStatus, User as PrismaUser } from '@prisma/client';
 import { authRepository } from '../repositories/auth.repository';
 import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput, VerifyLoginOtpInput } from '../routes/auth/auth.schema';
 import { OAuth2Client } from 'google-auth-library';
@@ -61,6 +61,19 @@ const LOGIN_OTP_MAX_ATTEMPTS = 5;
 const LOGIN_OTP_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
 const LOGIN_OTP_INVALID_MESSAGE = 'رمز التحقق غير صحيح أو منتهي الصلاحية';
 
+export interface ReferralAttributionContext {
+	// Explicit affiliate selection made at registration time — either a
+	// manually-typed referral code/slug, or the value picked via the
+	// search-autocomplete (GET /api/affiliates/search). Both are just the
+	// affiliate's AffiliateProfile.referralSlug string; a bare affiliate
+	// `id` (UUID) is also accepted as a fallback, in case someone shares
+	// that instead of the slug.
+	affiliateIdentifier?: string;
+	// The waseet_ref_code cookie set by ref.controller.ts::handleReferralClick()
+	// when this user earlier followed an affiliate's /ref/:slug link.
+	refCookieSlug?: string;
+}
+
 export class AuthService {
 	private async verifyGoogleIdentity(idToken: string) {
 		const ticket = await googleClient.verifyIdToken({ idToken, audience: process.env.GOOGLE_CLIENT_ID });
@@ -95,9 +108,69 @@ export class AuthService {
 	}
 
 	/**
+	 * Referral attribution (Marketing Affiliate/referral system, P-LG-012).
+	 * Shared by BOTH the email/password registration path and the Google
+	 * sign-up path (which — see googleAuth() below — actually funnels through
+	 * this same registerUser()/createUserWithProfile() flow rather than
+	 * creating a user anywhere else), so the two can never diverge.
+	 *
+	 * Resolution order:
+	 *   1. `affiliateIdentifier` (explicit, registration-time entry) — looked
+	 *      up by AffiliateProfile.referralSlug, falling back to a raw
+	 *      affiliate `id` (UUID) in case someone shares that instead.
+	 *   2. Else `refCookieSlug` (the waseet_ref_code cookie from an earlier
+	 *      /ref/:slug click) — looked up by referralSlug only.
+	 *   3. Else no attribution.
+	 *
+	 * PRECEDENCE TENSION (explicitly flagged, implemented per explicit
+	 * product instruction): when BOTH are present and valid, the explicit
+	 * `affiliateIdentifier` wins over the cookie — even though the cookie
+	 * may represent an earlier, more "First-Touch"-faithful click than the
+	 * identifier typed/selected at the actual moment of signup. P-LG-012
+	 * itself states First-Touch, lifetime attribution ("أول وسيط موثق...
+	 * يمتلك هذه العلاقة بشكل دائم"). This one conditional
+	 * (`affiliateIdentifier?.trim() || refCookieSlug?.trim()`) is kept
+	 * deliberately isolated and well-commented so the precedence is
+	 * trivially reversible if this tension is resolved differently later.
+	 *
+	 * An invalid/unknown code NEVER blocks registration — attribution is
+	 * silently skipped. A resolved self-referral (affiliate.userId ===
+	 * newUserId) is also skipped — defense-in-depth only, since the
+	 * registering user has no id yet at the moment they'd pick a code, so
+	 * this can't happen via the normal UI today, but guards any future reuse
+	 * of this function.
+	 *
+	 * The Referral row is created via a GUARDED insert relying on
+	 * Referral.referredUserId's own @unique DB constraint: a P2002 here means
+	 * this user was already attributed (a retried/duplicate call), and is
+	 * treated as an already-processed no-op, never a fatal registration
+	 * error, never a silent overwrite of the existing (first) attribution.
+	 */
+	private async resolveReferralAttribution(newUserId: string, context: ReferralAttributionContext = {}): Promise<void> {
+		const candidateSlugOrId = context.affiliateIdentifier?.trim() || context.refCookieSlug?.trim();
+		if (!candidateSlugOrId) return;
+
+		const affiliate = await prisma.affiliateProfile.findFirst({
+			where: { OR: [{ referralSlug: candidateSlugOrId }, { id: candidateSlugOrId }] },
+			select: { id: true, userId: true }
+		});
+		if (!affiliate) return;
+		if (affiliate.userId === newUserId) return;
+
+		try {
+			await prisma.referral.create({
+				data: { affiliateId: affiliate.id, referredUserId: newUserId, status: ReferralStatus.PENDING }
+			});
+		} catch (error: any) {
+			if (error?.code === 'P2002') return;
+			throw error;
+		}
+	}
+
+	/**
 	 * Register a new user
 	 */
-	public async registerUser(input: RegisterInput) {
+	public async registerUser(input: RegisterInput, referralContext: Pick<ReferralAttributionContext, 'refCookieSlug'> = {}) {
 		const googleIdentity = input.googleIdToken ? await this.verifyGoogleIdentity(input.googleIdToken) : undefined;
 		if (googleIdentity && googleIdentity.email !== input.email) {
 			throw new AppError('البريد الإلكتروني لا يطابق حساب جوجل المختار', 400);
@@ -115,6 +188,20 @@ export class AuthService {
 
 		// 3. Create User & Profile via Repository Transaction
 		const user = await authRepository.createUserWithProfile(input, hashedPassword, googleIdentity);
+
+		// 3b. Referral attribution (P-LG-012) — deliberately its OWN small step
+		// AFTER createUserWithProfile()'s transaction has already committed,
+		// rather than folded into it: attribution success/failure must never
+		// roll back account creation, and an invalid/unknown code must never
+		// fail registration (see resolveReferralAttribution()'s own doc
+		// comment for the full precedence/guard rules). Covers BOTH the plain
+		// email/password path and the Google sign-up path — a Google sign-up
+		// also arrives here (with googleIdentity set above) since there is no
+		// separate user-creation call site for it (see googleAuth() below).
+		await this.resolveReferralAttribution(user.id, {
+			affiliateIdentifier: input.affiliateIdentifier,
+			refCookieSlug: referralContext.refCookieSlug
+		});
 
 		// 4. Generate 6-digit OTP
 		const otpCode = crypto.randomInt(100000, 999999).toString();
@@ -413,8 +500,20 @@ export class AuthService {
 
 	/**
 	 * Google Auth Login / Register
+	 *
+	 * Referral attribution note: `referralContext` is accepted here for
+	 * symmetry with registerUser() (same shared resolveReferralAttribution()
+	 * helper, same precedence rule), but this method's 'register' intent
+	 * branch below never actually creates a user — it only verifies identity
+	 * and hands back `googleProfile` for the client to then call POST
+	 * /register with `googleIdToken` set, which is where the account (and any
+	 * referral attribution) is actually created. There is therefore no new
+	 * user id available at any point in THIS method to attribute against;
+	 * `referralContext` is currently unused here for that reason, kept only
+	 * so a future change that creates a user directly in this flow doesn't
+	 * also need to thread a new parameter through the controller/schema.
 	 */
-	public async googleAuth(input: GoogleAuthInput, sessionContext: SessionContext = {}) {
+	public async googleAuth(input: GoogleAuthInput, sessionContext: SessionContext = {}, _referralContext: Pick<ReferralAttributionContext, 'refCookieSlug'> = {}) {
 		const payload = await this.verifyGoogleIdentity(input.idToken);
 		const email = payload.email!;
 		const existingUser = await authRepository.findByEmail(email);

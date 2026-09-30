@@ -61,6 +61,24 @@ export class MarketerOverviewController {
     }
   }
 
+  public async getReferrals(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.id;
+      const page = parseInt(req.query.page as string) || 1;
+      const limit = parseInt(req.query.limit as string) || 20;
+
+      const data = await marketerOverviewService.getReferredUsers(userId, page, limit);
+
+      res.status(200).json({
+        success: true,
+        data: data.items,
+        pagination: data.pagination,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public async getRefLinks(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.id;

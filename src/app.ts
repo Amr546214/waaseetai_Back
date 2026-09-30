@@ -34,6 +34,7 @@ import notificationsRouter from './routes/notifications.routes';
 import marketerOverviewRouter from './routes/marketer-overview.routes';
 import marketerProfileRouter from './routes/marketer-profile.routes';
 import refRouter from './routes/ref.routes';
+import affiliatesPublicRouter from './routes/affiliates-public.routes';
 import accreditationAiRoutes from './routes/accreditation-ai.routes';
 import swaggerUi from 'swagger-ui-express';
 import { createOpenApiDocument } from './config/swagger';
@@ -287,6 +288,13 @@ mountAppRoute('/', apiRouter);
 
 // Add public redirect route
 mountAppRoute('/ref', refRouter);
+
+// Public, unauthenticated affiliate resolve/search (used during
+// registration, before an account exists) — dual-mounted per this file's
+// established prefixed/unprefixed convention (see mountAppRoute's own
+// comment above).
+mountAppRoute('/api/affiliates', affiliatesPublicRouter);
+mountAppRoute('/affiliates', affiliatesPublicRouter);
 
 // ==========================================
 // 3.1 API DOCUMENTATION

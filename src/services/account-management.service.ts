@@ -179,7 +179,12 @@ export async function initializeRoleState(
   }
 
   if (role === UserRole.AFFILIATE) {
-    const existing = await tx.affiliateProfile.findUnique({ where: { userId } });
+    // Explicit select — deployment-safety fix; only used as an existence
+    // check. AffiliateProfile.level exists in the Prisma schema but its
+    // migration has not been applied to DEV/LIVE yet, so default selection
+    // here would 500 every role-creation/self-healing path that reaches this
+    // branch (registration, addAccountType, getAvailableAccountTypes, etc.).
+    const existing = await tx.affiliateProfile.findUnique({ where: { userId }, select: { id: true } });
     if (existing) return false;
 
     const referralSlug = generateReferralSlug(`${identity.firstName} ${identity.lastName}`, userId);
@@ -196,7 +201,8 @@ export async function initializeRoleState(
       affiliateProfile: seeded,
       marketingChannelsCount: 0
     });
-    await tx.affiliateProfile.create({ data: { userId, referralSlug, ...seeded, completionPercentage } });
+    // Explicit select — deployment-safety fix; return value unused.
+    await tx.affiliateProfile.create({ data: { userId, referralSlug, ...seeded, completionPercentage }, select: { id: true } });
     return true;
   }
 
@@ -368,13 +374,15 @@ export class AccountManagementService {
       throw new AppError('الدور المطلوب غير متاح للإضافة الذاتية', 403);
     }
 
+    // Deployment-safety fix: this query's `clientProfile`/`providerProfile`/
+    // `affiliateProfile` relations were never actually read anywhere in this
+    // method (verified — only user's own scalar fields below are used), so
+    // the unused `include` is dropped entirely rather than converted to a
+    // select. It previously fetched AffiliateProfile's full default scalar
+    // set (including the not-yet-migrated `level` column) for no reason,
+    // which would 500 this add-account-type path.
     const user = await prisma.user.findUnique({
-      where: { id: userId },
-      include: {
-        clientProfile: true,
-        providerProfile: true,
-        affiliateProfile: true
-      }
+      where: { id: userId }
     });
 
     if (!user) {
@@ -543,10 +551,21 @@ export class AccountManagementService {
     // fields — a role switch must hand back a user shape that already reflects
     // the NEW activeRole, not the role that was just left. Only fetch the one
     // relation the target role actually needs.
-    const relationSelect: Record<string, boolean> = {};
+    const relationSelect: Record<string, unknown> = {};
     if (targetRole === UserRole.CLIENT) relationSelect.clientProfile = true;
     if (targetRole === UserRole.PROVIDER) { relationSelect.providerProfile = true; relationSelect.gamification = true; }
-    if (targetRole === UserRole.AFFILIATE) relationSelect.affiliateProfile = true;
+    // Deployment-safety fix: a bare `true` for a relation inside `select`
+    // still fetches ALL of that related model's default scalars (select
+    // only restricts the PARENT model — it doesn't cascade unless the
+    // relation itself is given a nested select/select-object). AffiliateProfile
+    // gained a `level` column whose migration has not been applied to
+    // DEV/LIVE yet, so this would 500 a role switch to AFFILIATE. Only the
+    // fields resolveActiveRoleDisplayFields() actually reads are selected.
+    if (targetRole === UserRole.AFFILIATE) {
+      relationSelect.affiliateProfile = {
+        select: { firstName: true, lastName: true, avatarUrl: true, currentLevel: true, completionPercentage: true }
+      };
+    }
 
     const roleRelations = Object.keys(relationSelect).length > 0
       ? await prisma.user.findUnique({ where: { id: userId }, select: relationSelect as any })

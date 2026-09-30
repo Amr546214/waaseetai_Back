@@ -229,8 +229,14 @@ export class WithdrawalService {
     if (!affiliate.iban) {
       throw new AppError('يجب إضافة رقم الحساب البنكي (IBAN) من الملف الشخصي قبل تقديم طلب سحب', 400);
     }
-    if (input.amount < affiliate.minimumPayoutAmount) {
-      throw new AppError(`الحد الأدنى لطلب السحب ${affiliate.minimumPayoutAmount} ريال`, 400);
+    // P-LG-012 states a 300 withdrawal-minimum floor. This respects any
+    // existing per-affiliate custom minimumPayoutAmount value (which may be
+    // set higher than 300) while enforcing 300 as an absolute floor for
+    // everyone — touches no historical AffiliateProfile data, only this
+    // validation check.
+    const effectiveMinimumPayout = Math.max(affiliate.minimumPayoutAmount, 300);
+    if (input.amount < effectiveMinimumPayout) {
+      throw new AppError(`الحد الأدنى لطلب السحب ${effectiveMinimumPayout} ريال`, 400);
     }
 
     const withdrawalId = randomUUID();

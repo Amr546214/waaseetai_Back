@@ -14,6 +14,11 @@ router.get('/channel-performance', marketerOverviewController.getChannelPerforma
 router.get('/commissions', marketerOverviewController.getCommissions);
 router.get('/ai-insights', marketerOverviewController.getAiInsights);
 
+// Referred users (paginated) — strictly scoped to req.user.id's own
+// AffiliateProfile inside the service (getOrCreateProfile()); never accepts
+// another affiliate's id.
+router.get('/referrals', marketerOverviewController.getReferrals);
+
 // Referral links
 router.get('/ref-links', marketerOverviewController.getRefLinks);
 router.post('/ref-links/custom', marketerOverviewController.createCustomLink);

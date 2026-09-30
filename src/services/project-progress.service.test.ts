@@ -23,6 +23,13 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
   // already flipped the row to APPROVED by the time the IN-TRANSACTION
   // conditional updateMany runs.
   dbStageAlreadyApproved?: boolean;
+  // P-LG-012 affiliate commission engine fixtures — all default to "nothing
+  // qualifies" (no active dispute, no matching referral) so every
+  // pre-existing test above, which never sets these, exercises zero
+  // commission-engine reads/writes even when the flag happens to be on.
+  disputeActive?: boolean;
+  referrals?: any[];
+  commissionCreateImpl?: (args: any) => any;
 } = {}) {
   const contract = {
     id: 'contract-1',
@@ -79,6 +86,19 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
   const accountAuditLogCreateSpy = t.mock.fn(async () => ({ id: 'audit-1' }));
   const projectStageUpdateManySpy = t.mock.fn(async () => (opts.dbStageAlreadyApproved ? { count: 0 } : { count: 1 }));
 
+  // P-LG-012 affiliate commission engine mocks — only ever reached when
+  // AFFILIATE_COMMISSION_ENGINE_ENABLED === 'true' (createCommissionsForStageReleaseEvent
+  // returns before touching any of these otherwise).
+  const disputeFindFirstSpy = t.mock.fn(async () => (opts.disputeActive ? { id: 'dispute-1' } : null));
+  const referralFindManySpy = t.mock.fn(async () => opts.referrals ?? []);
+  const commissionLogs: any[] = [];
+  const commissionLogCreateSpy = t.mock.fn(async (args: any) => {
+    if (opts.commissionCreateImpl) return opts.commissionCreateImpl(args);
+    const row = { id: `commission-${commissionLogs.length + 1}`, ...args.data };
+    commissionLogs.push(row);
+    return row;
+  });
+
   const tx = {
     stageDelivery: { update: stageDeliveryUpdateSpy },
     projectStage: {
@@ -108,7 +128,10 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
     user: { update: userUpdateSpy },
     providerGamification: { upsert: gamificationUpsertSpy },
     gamificationRule: { upsert: gamificationRuleUpsertSpy },
-    notification: { create: async () => ({ id: 'notif-1' }) }
+    notification: { create: async () => ({ id: 'notif-1' }) },
+    dispute: { findFirst: disputeFindFirstSpy },
+    referral: { findMany: referralFindManySpy },
+    commissionLog: { create: commissionLogCreateSpy }
   };
 
   const prismaMock = {
@@ -125,9 +148,11 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
     pointTransactionCreateSpy, userUpdateSpy, gamificationUpsertSpy, gamificationRuleUpsertSpy,
     contractUpdateManySpy, escrowUpdateManySpy, clientRequestUpdateManySpy, projectUpdateSpy,
     stageDeliveryUpdateSpy, accountAuditLogCreateSpy, projectStageUpdateManySpy,
+    disputeFindFirstSpy, referralFindManySpy, commissionLogCreateSpy,
     getPointTransactions: () => pointTransactions,
     getUserState: () => userState,
-    getGamificationState: () => gamificationState
+    getGamificationState: () => gamificationState,
+    getCommissionLogs: () => commissionLogs
   };
 }
 
@@ -561,4 +586,177 @@ test('getPendingReviewDeliveries: the Prisma query requests only the newest deli
   // metadata that would silently go stale for a multi-delivery stage.
   assert.deepEqual(result[0].submittedAt, new Date('2026-01-01T00:00:00Z'));
   assert.equal(result[0].filesCount, 2);
+});
+
+// ============================================================================
+// P-LG-012 affiliate commission engine — hook wired into reviewDelivery()'s
+// approve path, at both the intermediate-stage and final-stage escrow
+// release points, inside the SAME transaction. Gated behind
+// AFFILIATE_COMMISSION_ENGINE_ENABLED (default OFF — see
+// affiliate-commission-engine.util.ts for the USD-vs-SAR currency-gate
+// reasoning this default protects).
+// ============================================================================
+
+function withCommissionEngineFlag(t: TestContext, value: 'true' | undefined) {
+  const previous = process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED;
+  if (value === undefined) delete process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED;
+  else process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED = value;
+  t.after(() => {
+    if (previous === undefined) delete process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED;
+    else process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED = previous;
+  });
+}
+
+function referralFixture(overrides: any = {}) {
+  return {
+    id: 'referral-1',
+    referredUserId: 'client-1',
+    affiliate: { id: 'affiliate-1', level: 3, userId: 'affiliate-user-1' },
+    ...overrides
+  };
+}
+
+test('commission engine (flag disabled, the default): reviewDelivery never reads or writes anything commission-related', async (t) => {
+  withCommissionEngineFlag(t, undefined);
+  const { projectProgressService, disputeFindFirstSpy, referralFindManySpy, commissionLogCreateSpy } =
+    await loadProjectProgressServiceWithFixture(t, { referrals: [referralFixture()] });
+
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+
+  assert.equal(disputeFindFirstSpy.mock.callCount(), 0);
+  assert.equal(referralFindManySpy.mock.callCount(), 0);
+  assert.equal(commissionLogCreateSpy.mock.callCount(), 0);
+});
+
+test('commission engine (flag explicitly "false"): still a complete no-op — only the literal string \'true\' opens the gate', async (t) => {
+  withCommissionEngineFlag(t, undefined);
+  process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED = 'false';
+  const { projectProgressService, commissionLogCreateSpy } =
+    await loadProjectProgressServiceWithFixture(t, { referrals: [referralFixture()] });
+
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+
+  assert.equal(commissionLogCreateSpy.mock.callCount(), 0);
+});
+
+test('commission engine (flag enabled, final stage): creates exactly one APPROVED, USD CommissionLog for the referred client, computed from stage.amount and the affiliate\'s level percentage', async (t) => {
+  withCommissionEngineFlag(t, 'true');
+  const { projectProgressService, commissionLogCreateSpy, getCommissionLogs } =
+    await loadProjectProgressServiceWithFixture(t, { referrals: [referralFixture({ affiliate: { id: 'affiliate-1', level: 3, userId: 'affiliate-user-1' } })] });
+
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+
+  assert.equal(commissionLogCreateSpy.mock.callCount(), 1);
+  const data = getCommissionLogs()[0];
+  assert.equal(data.affiliateId, 'affiliate-1');
+  assert.equal(data.referralId, 'referral-1');
+  assert.equal(data.referredUserId, 'client-1');
+  assert.equal(data.type, 'STAGE_RELEASE');
+  assert.equal(data.currency, 'USD'); // never SAR — see the currency-gate reasoning
+  assert.equal(data.status, 'APPROVED');
+  assert.equal(data.baseAmount, 100); // this fixture's final-stage stage.amount
+  assert.equal(data.appliedPercentage, 1.5); // level 3 = 'موصل' = 1.50% per P-LG-012
+  assert.equal(data.level, 3);
+  assert.equal(data.amount, 1.5); // 100 * 1.5%
+  assert.equal(data.sourceProjectId, 'project-1');
+  assert.equal(data.sourceStageId, 'stage-1');
+});
+
+test('commission engine (flag enabled, intermediate stage): uses stage.amount as the base, not contract.price', async (t) => {
+  withCommissionEngineFlag(t, 'true');
+  const nextStage = { id: 'stage-2' };
+  const { projectProgressService, getCommissionLogs } =
+    await loadProjectProgressServiceWithFixture(t, { nextStage, referrals: [referralFixture({ affiliate: { id: 'affiliate-1', level: 1, userId: 'affiliate-user-1' } })] });
+
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+
+  const data = getCommissionLogs()[0];
+  assert.equal(data.baseAmount, 100); // stage.amount, not contract.price (1000)
+  assert.equal(data.appliedPercentage, 1.0); // level 1 = 'مسوق' = 1.00%
+  assert.equal(data.amount, 1);
+});
+
+test('commission engine (flag enabled, no matching referral): zero CommissionLog rows created', async (t) => {
+  withCommissionEngineFlag(t, 'true');
+  const { projectProgressService, referralFindManySpy, commissionLogCreateSpy } =
+    await loadProjectProgressServiceWithFixture(t, { referrals: [] });
+
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+
+  assert.equal(referralFindManySpy.mock.callCount(), 1);
+  // Looks up both the client and provider side generically, per P-LG-012's
+  // referred-role-agnostic trigger.
+  assert.deepEqual(referralFindManySpy.mock.calls[0].arguments[0].where.referredUserId.in, ['client-1', 'provider-1']);
+  assert.equal(commissionLogCreateSpy.mock.callCount(), 0);
+});
+
+test('commission engine (flag enabled, disputed project): skips commission creation entirely — never even reads Referral', async (t) => {
+  withCommissionEngineFlag(t, 'true');
+  const { projectProgressService, disputeFindFirstSpy, referralFindManySpy, commissionLogCreateSpy } =
+    await loadProjectProgressServiceWithFixture(t, { disputeActive: true, referrals: [referralFixture()] });
+
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+
+  assert.equal(disputeFindFirstSpy.mock.callCount(), 1);
+  assert.equal(referralFindManySpy.mock.callCount(), 0);
+  assert.equal(commissionLogCreateSpy.mock.callCount(), 0);
+});
+
+test('commission engine (flag enabled, self-referral defense-in-depth): an affiliate somehow attributed to themselves never gets a commission', async (t) => {
+  withCommissionEngineFlag(t, 'true');
+  const selfReferral = referralFixture({ affiliate: { id: 'affiliate-1', level: 5, userId: 'client-1' } }); // affiliate.userId === referredUserId
+  const { projectProgressService, commissionLogCreateSpy } =
+    await loadProjectProgressServiceWithFixture(t, { referrals: [selfReferral] });
+
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+
+  assert.equal(commissionLogCreateSpy.mock.callCount(), 0);
+});
+
+test('commission engine (flag enabled, duplicate/retried release event): a P2002 on the exactly-once dedup constraint is swallowed as a safe no-op, never a fatal error', async (t) => {
+  withCommissionEngineFlag(t, 'true');
+  const { Prisma } = await import('@prisma/client');
+  const duplicateError = new Prisma.PrismaClientKnownRequestError(
+    'duplicate key value violates unique constraint "commission_logs_affiliateId_referralId_type_sourceStageId_key"',
+    { code: 'P2002', clientVersion: 'test', meta: { target: ['commission_logs_affiliateId_referralId_type_sourceStageId_key'] } }
+  );
+  const { projectProgressService, commissionLogCreateSpy } = await loadProjectProgressServiceWithFixture(t, {
+    referrals: [referralFixture()],
+    commissionCreateImpl: () => { throw duplicateError; }
+  });
+
+  // Must resolve successfully (the duplicate is a safe no-op), not reject.
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+
+  assert.equal(commissionLogCreateSpy.mock.callCount(), 1);
+});
+
+test('commission engine (flag enabled, an UNRELATED P2002): propagates unmodified, never silently swallowed as "already processed"', async (t) => {
+  withCommissionEngineFlag(t, 'true');
+  const { Prisma } = await import('@prisma/client');
+  const unrelatedError = new Prisma.PrismaClientKnownRequestError(
+    'duplicate key value violates unique constraint "some_other_unrelated_constraint"',
+    { code: 'P2002', clientVersion: 'test', meta: { target: ['some_other_unrelated_constraint'] } }
+  );
+  const { projectProgressService } = await loadProjectProgressServiceWithFixture(t, {
+    referrals: [referralFixture()],
+    commissionCreateImpl: () => { throw unrelatedError; }
+  });
+
+  await assert.rejects(() => projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve'));
+});
+
+test('commission engine (flag enabled, two referrals on the same release — client AND provider both attributed): creates one independent CommissionLog per referral', async (t) => {
+  withCommissionEngineFlag(t, 'true');
+  const clientReferral = referralFixture({ id: 'referral-client', referredUserId: 'client-1', affiliate: { id: 'affiliate-a', level: 1, userId: 'aff-user-a' } });
+  const providerReferral = referralFixture({ id: 'referral-provider', referredUserId: 'provider-1', affiliate: { id: 'affiliate-b', level: 2, userId: 'aff-user-b' } });
+  const { projectProgressService, commissionLogCreateSpy, getCommissionLogs } =
+    await loadProjectProgressServiceWithFixture(t, { referrals: [clientReferral, providerReferral] });
+
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+
+  assert.equal(commissionLogCreateSpy.mock.callCount(), 2);
+  const logs = getCommissionLogs();
+  assert.equal(logs.find((l: any) => l.affiliateId === 'affiliate-a')?.referredUserId, 'client-1');
+  assert.equal(logs.find((l: any) => l.affiliateId === 'affiliate-b')?.referredUserId, 'provider-1');
 });

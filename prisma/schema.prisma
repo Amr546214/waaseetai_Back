@@ -1648,7 +1648,20 @@ model AffiliateProfile {
 
   // Commission Preferences
   payoutMethod        String? @default("BANK_TRANSFER") // BANK_TRANSFER, PAYONEER, etc.
-  minimumPayoutAmount Float   @default(100.0)
+  // P-LG-012: withdrawal minimum floor is 300 (see withdrawal.service.ts's
+  // Math.max(affiliate.minimumPayoutAmount, 300) enforcement). This default
+  // only affects newly-created rows going forward — Prisma defaults apply at
+  // insert time only, so existing AffiliateProfile rows keep their current
+  // value (still enforced against the 300 floor at withdrawal time).
+  minimumPayoutAmount Float   @default(300.0)
+
+  // P-LG-012 (مسودة مرجعية حاكمة): single-tier direct-referral affiliate
+  // performance level, 1-15, manually set — see
+  // src/config/affiliate-levels.config.ts for the static level->percentage
+  // table. Deliberately NO automatic promotion/recalculation logic:
+  // P-LG-012 does not specify numeric thresholds (points/clients/revenue)
+  // for progression between levels, so none is invented here.
+  level Int @default(1)
 
   // System Calculated
   completionPercentage Int @default(0)
@@ -1715,6 +1728,13 @@ enum CommissionType {
   NEW_CLIENT_REQUEST
   FIRST_PROJECT_COMPLETED
   SUBSCRIPTION
+  // P-LG-012's real qualifying trigger: a stage escrow release (intermediate
+  // or final) or an equivalently settled/approved financial transaction.
+  // One commission per DISTINCT release event per referral+affiliate — see
+  // sourceStageId below and the @@unique constraint, NOT one-time per
+  // referral (P-LG-012: "تستحق فقط عند إفراج مرحلة أو استقرار معاملة مالية
+  // معتمدة").
+  STAGE_RELEASE
 }
 
 enum CommissionStatus {
@@ -1731,6 +1751,24 @@ model CommissionLog {
   referralId String?
   referral   Referral? @relation(fields: [referralId], references: [id], onDelete: SetNull)
 
+  // Durable snapshot of which referred user's activity caused this
+  // commission. Never null once written, never changes — unlike referralId
+  // above (onDelete: SetNull), so "which user caused this" survives even if
+  // the Referral row itself is ever deleted.
+  referredUserId String
+
+  // Identifies which specific release event produced this commission, so
+  // the source transaction is identifiable after the fact. sourceStageId is
+  // also part of the exactly-once dedup key below.
+  sourceProjectId String?
+  sourceStageId   String?
+
+  // Durable snapshots taken AT CREATION TIME — never recomputed later, even
+  // if the affiliate's level/percentage subsequently changes.
+  baseAmount        Float // the released amount BEFORE the percentage was applied
+  appliedPercentage Float // the exact percentage used (from AFFILIATE_LEVEL_RATES)
+  level             Int // the affiliate's AffiliateProfile.level at creation time
+
   type     CommissionType
   amount   Float
   currency String           @default("SAR")
@@ -1740,6 +1778,13 @@ model CommissionLog {
   updatedAt DateTime @updatedAt
 
   @@index([affiliateId, status])
+  // Exactly-once guard: at most one commission per affiliate+referral+type
+  // for the SAME release event (sourceStageId). A project has multiple
+  // stages, each independently releasing funds and each independently
+  // qualifying per P-LG-012 — this is deliberately NOT
+  // @@unique([referralId, affiliateId, type]) alone, which would wrongly
+  // collapse every stage of the same project into a single one-time payout.
+  @@unique([affiliateId, referralId, type, sourceStageId])
   @@map("commission_logs")
 }
 

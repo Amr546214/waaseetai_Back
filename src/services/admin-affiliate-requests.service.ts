@@ -131,7 +131,10 @@ export class AdminAffiliateRequestsService {
 	 * touched.
 	 */
 	private async applyFieldChange(tx: Prisma.TransactionClient, affiliateProfileId: string, fieldType: SensitiveFieldType, requestedValue: string) {
-		const profile = await tx.affiliateProfile.findUnique({ where: { id: affiliateProfileId } });
+		// Explicit select — deployment-safety fix; only `id`/`userId` are read
+		// below. AffiliateProfile.level exists in the Prisma schema but its
+		// migration has not been applied to DEV/LIVE yet.
+		const profile = await tx.affiliateProfile.findUnique({ where: { id: affiliateProfileId }, select: { id: true, userId: true } });
 		if (!profile) throw new AppError('ملف الوسيط التسويقي المرتبط بالطلب غير موجود', 404);
 
 		switch (fieldType) {
@@ -157,16 +160,18 @@ export class AdminAffiliateRequestsService {
 				// value here either, matching provider-profile.service.ts's
 				// own submission+apply-time double check for its IBAN field.
 				if (!isValidIban(requestedValue)) throw new AppError('رقم IBAN غير صحيح، تعذر تطبيق التعديل', 400);
-				await tx.affiliateProfile.update({ where: { id: profile.id }, data: { iban: requestedValue } });
+				// Explicit select on each of these 4 updates — deployment-safety
+				// fix; return values are unused.
+				await tx.affiliateProfile.update({ where: { id: profile.id }, data: { iban: requestedValue }, select: { id: true } });
 				return;
 			case SensitiveFieldType.BANK_NAME:
-				await tx.affiliateProfile.update({ where: { id: profile.id }, data: { bankName: requestedValue } });
+				await tx.affiliateProfile.update({ where: { id: profile.id }, data: { bankName: requestedValue }, select: { id: true } });
 				return;
 			case SensitiveFieldType.ACCOUNT_HOLDER_NAME:
-				await tx.affiliateProfile.update({ where: { id: profile.id }, data: { accountHolderName: requestedValue } });
+				await tx.affiliateProfile.update({ where: { id: profile.id }, data: { accountHolderName: requestedValue }, select: { id: true } });
 				return;
 			case SensitiveFieldType.SWIFT_CODE:
-				await tx.affiliateProfile.update({ where: { id: profile.id }, data: { swiftCode: requestedValue } });
+				await tx.affiliateProfile.update({ where: { id: profile.id }, data: { swiftCode: requestedValue }, select: { id: true } });
 				return;
 			default:
 				throw new AppError(`نوع حقل غير مدعوم للتطبيق: ${fieldType}`, 400);

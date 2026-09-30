@@ -20,6 +20,11 @@ function createMockPrisma(t: TestContext, opts: {
 	const userUpdateSpy = t.mock.fn((args: any) => ({ id: args.where.id, ...args.data }));
 	const affiliateUpdateSpy = t.mock.fn((args: any) => ({ ...profile, ...args.data }));
 	const notifySpy = t.mock.fn(async () => ({}));
+	// Deployment-safety regression coverage: applyFieldChange()'s
+	// AffiliateProfile lookup must explicitly select only { id, userId } —
+	// never the default full selection, which would request the
+	// not-yet-migrated AffiliateProfile.level column.
+	const affiliateFindUniqueSpy = t.mock.fn(async (_args: any) => profile);
 
 	const tx = {
 		profileChangeRequest: {
@@ -29,7 +34,7 @@ function createMockPrisma(t: TestContext, opts: {
 				return { ...request, affiliateProfile: { userId: profile.userId } };
 			}
 		},
-		affiliateProfile: { findUnique: async () => profile, update: affiliateUpdateSpy },
+		affiliateProfile: { findUnique: affiliateFindUniqueSpy, update: affiliateUpdateSpy },
 		user: { update: userUpdateSpy }
 	};
 
@@ -38,7 +43,7 @@ function createMockPrisma(t: TestContext, opts: {
 	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
 	t.mock.module('./notification.service', { namedExports: { notificationService: { createAndEmit: notifySpy } } });
 
-	return { userUpdateSpy, affiliateUpdateSpy, notifySpy, getRequest: () => request };
+	return { userUpdateSpy, affiliateUpdateSpy, notifySpy, affiliateFindUniqueSpy, getRequest: () => request };
 }
 
 async function loadService(t: TestContext, opts?: Parameters<typeof createMockPrisma>[1]) {
@@ -270,4 +275,46 @@ test('listRequests: an explicit status filter is honored', async (t) => {
 
 	await adminAffiliateRequestsService.listRequests('REJECTED');
 	assert.equal(capturedWhere.status, 'REJECTED');
+});
+
+// ============================================================================
+// Deployment-safety regression coverage (P-LG-012 affiliate commission
+// engine rollout). AffiliateProfile.level exists in prisma/schema.prisma but
+// its migration has NOT been applied to DEV/LIVE. applyFieldChange()'s
+// findUnique() previously had no select at all, and each of its 4
+// AffiliateProfile.update() calls (IBAN/BANK_NAME/ACCOUNT_HOLDER_NAME/
+// SWIFT_CODE) had no select either — both would have requested/returned the
+// not-yet-existing `level` column and 500'd this admin approval flow. The
+// `profile` fixture used throughout this file is already shaped exactly
+// like the CURRENT (pre-migration) DB row (no `level` field), so the
+// existing passing tests above already prove no hidden dependency on it.
+// ============================================================================
+
+test('approve (IBAN): the AffiliateProfile lookup selects only { id, userId }, never `level`', async (t) => {
+	// A real, mod-97-checksum-valid Saudi IBAN (see the existing IBAN test
+	// above for why a well-formed-but-invalid-checksum placeholder fails).
+	const VALID_IBAN = 'SA5503000000608010167519';
+	const { adminAffiliateRequestsService, affiliateFindUniqueSpy } = await loadService(t, {
+		request: { id: 'req-2', affiliateProfileId: 'aff-1', fieldType: 'IBAN', fieldLabel: 'رقم الحساب البنكي IBAN', requestedValue: VALID_IBAN, currentValue: null, status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-2' }
+	});
+
+	await adminAffiliateRequestsService.approve('req-2', 'admin-1');
+
+	assert.equal(affiliateFindUniqueSpy.mock.callCount(), 1);
+	const args = affiliateFindUniqueSpy.mock.calls[0].arguments[0];
+	assert.deepEqual(args.select, { id: true, userId: true });
+	assert.equal('level' in args.select, false);
+});
+
+test('approve (BANK_NAME): the AffiliateProfile.update() return value is select-restricted to { id: true }, never `level`', async (t) => {
+	const { adminAffiliateRequestsService, affiliateUpdateSpy } = await loadService(t, {
+		request: { id: 'req-3', affiliateProfileId: 'aff-1', fieldType: 'BANK_NAME', fieldLabel: 'اسم البنك', requestedValue: 'بنك الرياض', currentValue: null, status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-3' }
+	});
+
+	await adminAffiliateRequestsService.approve('req-3', 'admin-1');
+
+	assert.equal(affiliateUpdateSpy.mock.callCount(), 1);
+	const args = affiliateUpdateSpy.mock.calls[0].arguments[0];
+	assert.deepEqual(args.select, { id: true });
+	assert.equal('level' in args.select, false);
 });

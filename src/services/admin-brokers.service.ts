@@ -73,13 +73,26 @@ export class AdminBrokersService {
     }
     const where = { user: userWhere };
 
+    // Explicit select at the top level — deployment-safety fix.
+    // AffiliateProfile.level exists in the Prisma schema but its migration
+    // has not been applied to DEV/LIVE yet; the previous top-level `include`
+    // did NOT restrict AffiliateProfile's own scalars (only the nested
+    // relations here were already select-restricted), so it would have
+    // requested `level` and 500'd this admin brokers list. Only the scalars
+    // the map() below actually reads (userId/firstName/lastName/
+    // referralSlug/currentLevel) are added.
     const [rows, total] = await Promise.all([
       prisma.affiliateProfile.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
-        include: {
+        select: {
+          userId: true,
+          firstName: true,
+          lastName: true,
+          referralSlug: true,
+          currentLevel: true,
           user: { select: { id: true, firstName: true, lastName: true, email: true, status: true, createdAt: true } },
           referrals: { select: { status: true } },
           commissionLogs: { select: { status: true, amount: true } },
@@ -110,9 +123,18 @@ export class AdminBrokersService {
   }
 
   async getBrokerDetail(userId: string) {
+    // Explicit select at the top level — deployment-safety fix, same class
+    // of bug as listBrokers() above. `id` is included because it's used
+    // below to scope the separate commissionLog.findMany() query.
     const affiliate = await prisma.affiliateProfile.findUnique({
       where: { userId },
-      include: {
+      select: {
+        id: true,
+        userId: true,
+        firstName: true,
+        lastName: true,
+        referralSlug: true,
+        currentLevel: true,
         user: { select: { id: true, firstName: true, lastName: true, email: true, status: true, createdAt: true } },
         referrals: { select: { status: true } },
         commissionLogs: { select: { status: true, amount: true } },

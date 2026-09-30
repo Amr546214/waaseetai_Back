@@ -5,6 +5,7 @@ import { UpdateProfileDto } from '../dtos/profile.dto';
 import { AppError } from '../utils/app-error';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { computeClientCompletion } from '../utils/completion-calculators';
+import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
 
 export class ProfileService {
   /**
@@ -22,12 +23,21 @@ export class ProfileService {
    * GET — both are fixed here; this method no longer performs any writes.
    */
   public async getProfile(userId: string) {
+    // Deployment-safety fix: `affiliateProfile` is narrowed to an explicit
+    // nested select (a bare `true` inside `include` fetches ALL of
+    // AffiliateProfile's default scalars, which would now include the
+    // not-yet-migrated `level` column and 500 this endpoint for every
+    // AFFILIATE-active user). `roleProfile` below is spread wholesale into
+    // the API response (`...roleProfile`), so the full pre-existing scalar
+    // shape is preserved via AFFILIATE_PROFILE_SAFE_SCALAR_SELECT — only
+    // `level` is excluded. clientProfile/providerProfile/gamification are
+    // untouched (different models, no schema/DB mismatch).
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: {
         clientProfile: true,
         providerProfile: true,
-        affiliateProfile: true,
+        affiliateProfile: { select: AFFILIATE_PROFILE_SAFE_SCALAR_SELECT },
         gamification: true
       }
     });
@@ -188,10 +198,17 @@ export class ProfileService {
           delete affiliateData.paypalPayoutEmail;
           Object.assign(affiliateData, displayFields);
 
+          // Explicit select — deployment-safety fix. `profileResult` is
+          // forwarded as-is into this method's return value, which the
+          // controller returns directly as the API response's `data.profile`
+          // — so the full pre-existing scalar shape is preserved via
+          // AFFILIATE_PROFILE_SAFE_SCALAR_SELECT (everything except the new,
+          // not-yet-migrated `level` column).
           profileResult = await tx.affiliateProfile.upsert({
             where: { userId },
             create: { userId, ...affiliateData },
-            update: affiliateData
+            update: affiliateData,
+            select: AFFILIATE_PROFILE_SAFE_SCALAR_SELECT
           });
         } else if (activeRole === UserRole.PROVIDER) {
           // Clean undefined/incompatible properties for Provider.
@@ -347,7 +364,13 @@ export class ProfileService {
       return tx.providerProfile.upsert({ where: { userId }, create: { userId, ...fields }, update: fields });
     }
     if (activeRole === UserRole.AFFILIATE) {
-      return tx.affiliateProfile.upsert({ where: { userId }, create: { userId, ...fields }, update: fields });
+      // Explicit select — deployment-safety fix. Unlike the CLIENT branch
+      // above (whose return value updateTab() reads for completion
+      // recalculation), this AFFILIATE branch's return value is never read
+      // by any caller (updateTab() only inspects it for `activeRole ===
+      // CLIENT`), so a minimal select is safe here without any response-shape
+      // change.
+      return tx.affiliateProfile.upsert({ where: { userId }, create: { userId, ...fields }, update: fields, select: { id: true } });
     }
 
     throw new AppError(`تحديث الملف الشخصي غير مدعوم لهذا الدور: ${activeRole}`, 400);

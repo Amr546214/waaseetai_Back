@@ -82,7 +82,11 @@ export interface IdentityChangeInput {
 
 export class ProfileRequestsService {
 	public async getRequests(userId: string) {
-		const profile = await prisma.affiliateProfile.findUnique({ where: { userId } });
+		// Explicit select — deployment-safety fix; only `id` is used below.
+		// AffiliateProfile.level exists in the Prisma schema but its migration
+		// has not been applied to DEV/LIVE yet, so default selection here
+		// would 500 this profile-change-requests page.
+		const profile = await prisma.affiliateProfile.findUnique({ where: { userId }, select: { id: true } });
 		if (!profile) throw new Error('Affiliate profile not found');
 
 		const requests = await prisma.profileChangeRequest.findMany({
@@ -126,7 +130,8 @@ export class ProfileRequestsService {
 	 */
 	public async createIdentityRequests(userId: string, changes: IdentityChangeInput) {
 		return prisma.$transaction(async (tx) => {
-			const profile = await tx.affiliateProfile.findUnique({ where: { userId } });
+			// Explicit select — deployment-safety fix; only `id` is used below.
+			const profile = await tx.affiliateProfile.findUnique({ where: { userId }, select: { id: true } });
 			if (!profile) throw new AppError('ملف الوسيط التسويقي غير موجود', 404);
 
 			const user = await tx.user.findUnique({ where: { id: userId } });
@@ -144,7 +149,8 @@ export class ProfileRequestsService {
 	}
 
 	public async withdrawRequest(userId: string, requestId: string) {
-		const profile = await prisma.affiliateProfile.findUnique({ where: { userId } });
+		// Explicit select — deployment-safety fix; only `id` is used below.
+		const profile = await prisma.affiliateProfile.findUnique({ where: { userId }, select: { id: true } });
 		if (!profile) throw new Error('Affiliate profile not found');
 
 		const req = await prisma.profileChangeRequest.findUnique({

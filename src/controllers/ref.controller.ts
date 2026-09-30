@@ -7,8 +7,14 @@ export class RefController {
       const slug = req.params.slug as string;
       const utm_source = req.query.utm_source as string;
 
+      // Explicit select — only `id` is used below (channel-metric upsert +
+      // existence check). Deployment-safety: AffiliateProfile.level exists in
+      // the Prisma schema but its migration has not been applied to DEV/LIVE
+      // yet, so default/full selection here would 500 this public, unauth
+      // referral-click endpoint. See src/utils/affiliate-profile-safe-select.util.ts.
       const affiliate = await prisma.affiliateProfile.findUnique({
         where: { referralSlug: slug },
+        select: { id: true },
       });
 
       if (affiliate) {

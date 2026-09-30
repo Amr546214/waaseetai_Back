@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from '../services/auth.service';
 import { sessionService } from '../services/session.service';
-import { getAuthCookie } from '../utils/request-cookie';
+import { getAuthCookie, getRequestCookie } from '../utils/request-cookie';
 import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput, VerifyLoginOtpInput, ResendLoginOtpInput } from '../routes/auth/auth.schema';
 
 export class AuthController {
@@ -12,8 +12,22 @@ export class AuthController {
 		try {
 			// Body is pre-validated by Zod middleware
 			const input: RegisterInput = req.body;
+			// waseet_ref_code is set by ref.controller.ts::handleReferralClick()
+			// when a visitor followed an affiliate's /ref/:slug link. Only ever
+			// used as a fallback when the registration form itself didn't supply
+			// an explicit affiliateIdentifier — see
+			// auth.service.ts::resolveReferralAttribution() for the exact
+			// precedence rule.
+			//
+			// This codebase has no cookie-parser middleware registered (app.ts
+			// never calls app.use(cookieParser())), so req.cookies is always
+			// undefined here — the same reason logout()/getAuthCookie() above
+			// read raw cookies via request-cookie.ts's manual header parser
+			// instead. Reused here rather than adding req.cookies, which would
+			// silently read nothing.
+			const refCookieSlug = getRequestCookie(req, 'waseet_ref_code');
 
-			const result = await authService.registerUser(input);
+			const result = await authService.registerUser(input, { refCookieSlug });
 
 			res.status(201).json({
 				success: true,
@@ -188,7 +202,14 @@ export class AuthController {
 	public async googleAuth(req: Request, res: Response, next: NextFunction) {
 		try {
 			const input: GoogleAuthInput = req.body;
-			const result = await authService.googleAuth(input, { ipAddress: req.ip, userAgent: req.get('user-agent') });
+			// See register()'s identical read above (including the note on why
+			// req.cookies can't be used) — threaded through for symmetry/future
+			// use (actual Google-driven account creation currently happens via
+			// POST /register with googleIdToken set, not via this endpoint's
+			// 'register' intent branch, which never creates a user — see
+			// auth.service.ts::googleAuth()'s comment).
+			const refCookieSlug = getRequestCookie(req, 'waseet_ref_code');
+			const result = await authService.googleAuth(input, { ipAddress: req.ip, userAgent: req.get('user-agent') }, { refCookieSlug });
 
 			res.status(200).json({
 				success: true,

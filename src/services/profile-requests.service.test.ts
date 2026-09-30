@@ -13,7 +13,7 @@ function createMockPrisma(t: TestContext, opts: {
 	user?: any;
 	existingRequests?: any[];
 } = {}) {
-	const profile = opts.profile ?? { id: 'aff-1', userId: 'user-1' };
+	const profile = 'profile' in opts ? opts.profile : { id: 'aff-1', userId: 'user-1' };
 	const user = opts.user ?? { id: 'user-1', firstName: 'OldFirst', lastName: 'OldLast', idNumber: '1000000000', phoneNumber: '0500000000', email: 'old@example.com' };
 	const requests: any[] = opts.existingRequests ? [...opts.existingRequests] : [];
 
@@ -30,15 +30,23 @@ function createMockPrisma(t: TestContext, opts: {
 			args.where.status.in.includes(r.status)
 		) || null;
 
+	// Deployment-safety regression coverage: every AffiliateProfile lookup in
+	// this file must explicitly `select: { id: true }` — never the default
+	// full selection, which would request the not-yet-migrated
+	// AffiliateProfile.level column (its migration has not been applied to
+	// DEV/LIVE yet).
+	const txAffiliateFindUniqueSpy = t.mock.fn(async (_args: any) => profile);
+	const affiliateFindUniqueSpy = t.mock.fn(async (_args: any) => profile);
+
 	const tx = {
-		affiliateProfile: { findUnique: async () => profile },
+		affiliateProfile: { findUnique: txAffiliateFindUniqueSpy },
 		user: { findUnique: async () => user },
 		profileChangeRequest: { findFirst: findFirstPending, create: createSpy }
 	};
 
 	const prismaMock: any = {
 		$transaction: async (fn: any) => fn(tx),
-		affiliateProfile: { findUnique: async () => profile },
+		affiliateProfile: { findUnique: affiliateFindUniqueSpy },
 		profileChangeRequest: {
 			findMany: async (args: any) => requests.filter(r => r.affiliateProfileId === args.where.affiliateProfileId),
 			findUnique: async (args: any) => requests.find(r => r.requestNumber === args.where.requestNumber) || null,
@@ -51,7 +59,7 @@ function createMockPrisma(t: TestContext, opts: {
 	};
 
 	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-	return { createSpy, requests, profile, user };
+	return { createSpy, requests, profile, user, txAffiliateFindUniqueSpy, affiliateFindUniqueSpy };
 }
 
 async function loadService(t: TestContext, opts?: Parameters<typeof createMockPrisma>[1]) {
@@ -237,4 +245,59 @@ test('getRequests: name change requests (FIRST_NAME/LAST_NAME) appear in markete
 	assert.deepEqual(fieldTypes, ['FIRST_NAME', 'LAST_NAME']);
 	const labels = summary.items.map((r: any) => r.fieldLabel).sort();
 	assert.deepEqual(labels, ['اسم العائلة', 'الاسم الأول']);
+});
+
+// ============================================================================
+// Deployment-safety regression coverage (P-LG-012 affiliate commission
+// engine rollout). AffiliateProfile.level exists in prisma/schema.prisma but
+// its migration has NOT been applied to DEV/LIVE. Every AffiliateProfile
+// lookup in this file previously had no `select` at all (full default
+// selection), which would have requested the not-yet-existing `level`
+// column and 500'd this profile-change-requests page. The `profile` fixture
+// used throughout this file (`{ id: 'aff-1', userId: 'user-1' }`) is already
+// shaped exactly like the CURRENT (pre-migration) DB row would actually look
+// — no `level` field at all — so every passing test above already proves
+// these functions don't secretly depend on it. These tests additionally
+// assert the actual `select` shape sent to Prisma.
+// ============================================================================
+
+test('getRequests: the AffiliateProfile lookup selects only { id: true }, never `level`', async (t) => {
+	const { profileRequestsService, affiliateFindUniqueSpy } = await loadService(t);
+
+	await profileRequestsService.getRequests('user-1');
+
+	assert.equal(affiliateFindUniqueSpy.mock.callCount(), 1);
+	const args = affiliateFindUniqueSpy.mock.calls[0].arguments[0];
+	assert.deepEqual(args.select, { id: true });
+	assert.equal('level' in args.select, false);
+});
+
+test('getRequests: throws when no affiliate profile exists for this user', async (t) => {
+	const { profileRequestsService } = await loadService(t, { profile: null });
+	await assert.rejects(() => profileRequestsService.getRequests('missing-user'));
+});
+
+test('createIdentityRequests: the (tx) AffiliateProfile lookup selects only { id: true }, never `level`', async (t) => {
+	const { profileRequestsService, txAffiliateFindUniqueSpy } = await loadService(t);
+
+	await profileRequestsService.createIdentityRequests('user-1', { nationalId: '2000000000' });
+
+	assert.equal(txAffiliateFindUniqueSpy.mock.callCount(), 1);
+	const args = txAffiliateFindUniqueSpy.mock.calls[0].arguments[0];
+	assert.deepEqual(args.select, { id: true });
+	assert.equal('level' in args.select, false);
+});
+
+test('withdrawRequest: the AffiliateProfile lookup selects only { id: true }, never `level`, and still withdraws correctly', async (t) => {
+	const { profileRequestsService, affiliateFindUniqueSpy } = await loadService(t, {
+		existingRequests: [{ id: 'r1', requestNumber: 'REQ-1', affiliateProfileId: 'aff-1', status: 'PENDING_AI_REVIEW' }]
+	});
+
+	const updated = await profileRequestsService.withdrawRequest('user-1', 'REQ-1');
+
+	assert.equal(updated.status, 'WITHDRAWN');
+	assert.equal(affiliateFindUniqueSpy.mock.callCount(), 1);
+	const args = affiliateFindUniqueSpy.mock.calls[0].arguments[0];
+	assert.deepEqual(args.select, { id: true });
+	assert.equal('level' in args.select, false);
 });

@@ -141,16 +141,24 @@ function createFakeTx(t: TestContext, seed: {
   const providerCreateSpy = t.mock.fn((args: any) => { providerProfile = { id: 'provider-1', ...args.data }; return providerProfile; });
   const gamificationCreateSpy = t.mock.fn((args: any) => { providerGamification = { id: 'gam-1', ...args.data }; return providerGamification; });
   const affiliateCreateSpy = t.mock.fn((args: any) => { affiliateProfile = { id: 'affiliate-1', ...args.data }; return affiliateProfile; });
+  // Deployment-safety regression coverage: initializeRoleState()'s AFFILIATE
+  // existence check must explicitly `select` only `{ id: true }` — never the
+  // default full selection, which would request the not-yet-migrated
+  // AffiliateProfile.level column. The mock deliberately returns a row
+  // shaped exactly like the CURRENT (pre-migration) DB would (no `level`
+  // field at all), so a hidden dependency on it would also surface as a
+  // regular assertion failure, not just a select-shape check.
+  const affiliateFindUniqueSpy = t.mock.fn(async (_args: any) => affiliateProfile);
 
   const tx: any = {
     clientProfile: { findUnique: async () => clientProfile, create: clientCreateSpy },
     providerProfile: { findUnique: async () => providerProfile, create: providerCreateSpy },
     providerGamification: { findUnique: async () => providerGamification, create: gamificationCreateSpy },
-    affiliateProfile: { findUnique: async () => affiliateProfile, create: affiliateCreateSpy }
+    affiliateProfile: { findUnique: affiliateFindUniqueSpy, create: affiliateCreateSpy }
   };
 
   return {
-    tx, clientCreateSpy, providerCreateSpy, gamificationCreateSpy, affiliateCreateSpy,
+    tx, clientCreateSpy, providerCreateSpy, gamificationCreateSpy, affiliateCreateSpy, affiliateFindUniqueSpy,
     getClientProfile: () => clientProfile, getProviderProfile: () => providerProfile,
     getProviderGamification: () => providerGamification, getAffiliateProfile: () => affiliateProfile
   };
@@ -334,6 +342,30 @@ test('initializeRoleState (AFFILIATE): repeat call does not overwrite existing d
 
   assert.equal(created, false);
   assert.equal(affiliateCreateSpy.mock.callCount(), 0);
+});
+
+// Deployment-safety regression (P-LG-012): AffiliateProfile.level exists in
+// the Prisma schema but its migration has not been applied to DEV/LIVE yet.
+// The existence check below MUST explicitly select only `{ id: true }` —
+// never the default full selection (which would 500 every registration/
+// addAccountType/getAvailableAccountTypes call that reaches this branch
+// against a DB that doesn't have the `level` column yet).
+test('initializeRoleState (AFFILIATE): the existing-profile existence check selects ONLY { id: true } — never the default full row, never `level`', async (t) => {
+  const { initializeRoleState } = await loadCanonicalInitializer(t);
+  const { tx, affiliateFindUniqueSpy } = createFakeTx(t, {
+    // Shaped exactly like the CURRENT (pre-migration) DB row would actually
+    // look — no `level` field at all.
+    affiliateProfile: { id: 'affiliate-1', firstName: 'Independent', currentLevel: 'موصل', completionPercentage: 90 }
+  });
+
+  const created = await initializeRoleState(tx, 'user-1', UserRole.AFFILIATE, identity);
+
+  assert.equal(created, false);
+  assert.equal(affiliateFindUniqueSpy.mock.callCount(), 1);
+  const args = affiliateFindUniqueSpy.mock.calls[0].arguments[0];
+  assert.deepEqual(args.select, { id: true });
+  assert.equal('level' in (args.select || {}), false);
+  assert.equal(args.include, undefined);
 });
 
 // ============================================================================

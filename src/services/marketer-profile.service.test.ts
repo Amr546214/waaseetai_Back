@@ -247,3 +247,129 @@ test('getPublicProfile: performs zero DB writes on the read path', async (t) => 
 	assert.equal(findUniqueSpy.mock.callCount(), 1);
 	assert.equal(channelMetricFindManySpy.mock.callCount(), 1);
 });
+
+// ============================================================================
+// Deployment-safety regression coverage (P-LG-012 affiliate commission
+// engine rollout). AffiliateProfile.level exists in prisma/schema.prisma but
+// its migration has NOT been applied to DEV/LIVE. getProfile() previously
+// used a bare `include` (which does not restrict AffiliateProfile's own
+// scalars), and addChannel() previously called findUnique with no select at
+// all — both would have requested the not-yet-existing `level` column and
+// 500'd the marketer's own profile page / channel-add flow.
+// ============================================================================
+
+function fullProfileFixture(overrides: Record<string, any> = {}) {
+	// Shaped exactly like the CURRENT (pre-migration) DB row would actually
+	// look — every existing AffiliateProfile scalar present, `level` absent.
+	return {
+		id: 'aff-1',
+		userId: 'user-1',
+		referralSlug: 'khalid-1',
+		currentLevel: 'مساعد',
+		commissionRatePercentage: 5,
+		notifyOnNewReferral: true,
+		sharePerformanceStats: false,
+		firstName: 'خالد',
+		lastName: 'الغامدي',
+		avatarUrl: null,
+		bio: null,
+		bankName: null,
+		accountHolderName: null,
+		iban: null,
+		swiftCode: null,
+		identityVerified: false,
+		kycDocumentUrl: null,
+		payoutMethod: 'BANK_TRANSFER',
+		minimumPayoutAmount: 300,
+		completionPercentage: 45,
+		createdAt: new Date('2026-01-01T00:00:00Z'),
+		updatedAt: new Date('2026-01-01T00:00:00Z'),
+		user: { firstName: 'Khalid', lastName: 'Ghamdi', email: 'khalid@example.com', phoneNumber: null, phoneCountryCode: null, idNumber: null, avatarUrl: null },
+		marketingChannels: [],
+		...overrides,
+	};
+}
+
+test('getProfile: selects AffiliateProfile scalars explicitly (never a bare `include`) and never requests `level`', async (t) => {
+	const findUniqueSpy = t.mock.fn(async () => fullProfileFixture());
+	const prismaMock: any = { affiliateProfile: { findUnique: findUniqueSpy } };
+	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+	const moduleUrl = `./marketer-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { marketerProfileService } = await import(moduleUrl);
+
+	await marketerProfileService.getProfile('user-1');
+
+	assert.equal(findUniqueSpy.mock.callCount(), 1);
+	const args = findUniqueSpy.mock.calls[0].arguments[0];
+	assert.ok(args.select, 'must pass an explicit select');
+	assert.equal('level' in args.select, false);
+	// The nested `user` select (already safe/pre-existing) and
+	// `marketingChannels` relation must still be present — same response
+	// shape as before this fix.
+	assert.ok(args.select.user);
+	assert.equal(args.select.marketingChannels, true);
+});
+
+test('getProfile: returns the profile built from a fixture row shaped exactly like the pre-migration DB (no `level` field present at all)', async (t) => {
+	const prismaMock: any = { affiliateProfile: { findUnique: async () => fullProfileFixture() } };
+	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+	const moduleUrl = `./marketer-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { marketerProfileService } = await import(moduleUrl);
+
+	const profile = await marketerProfileService.getProfile('user-1');
+
+	assert.equal(profile.id, 'aff-1');
+	assert.equal(profile.referralSlug, 'khalid-1');
+	assert.equal(profile.currentLevel, 'مساعد');
+	assert.equal('level' in profile, false);
+});
+
+test('getProfile: throws when the profile does not exist', async (t) => {
+	const prismaMock: any = { affiliateProfile: { findUnique: async () => null } };
+	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+	const moduleUrl = `./marketer-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { marketerProfileService } = await import(moduleUrl);
+
+	await assert.rejects(() => marketerProfileService.getProfile('missing-user'));
+});
+
+test('addChannel: the profile lookup selects only { id: true } and never `level`, and still creates the channel correctly', async (t) => {
+	const findUniqueSpy = t.mock.fn(async () => ({ id: 'aff-1' }));
+	const createSpy = t.mock.fn((args: any) => ({ id: 'channel-1', ...args.data }));
+	const prismaMock: any = {
+		affiliateProfile: { findUnique: findUniqueSpy, update: t.mock.fn(async () => ({ id: 'aff-1' })) },
+		affiliateChannelHandle: { create: createSpy },
+	};
+	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+	const moduleUrl = `./marketer-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { marketerProfileService } = await import(moduleUrl);
+
+	// recalculateCompletion() runs after the create — give it a minimal
+	// profile + user fixture so it doesn't throw.
+	prismaMock.affiliateProfile.findUnique = t.mock.fn(async (args: any) => {
+		findUniqueSpy(args);
+		return args.select?.id !== undefined && Object.keys(args.select).length === 1
+			? { id: 'aff-1' }
+			: { avatarUrl: null, bio: null, iban: null, marketingChannels: [], user: { firstName: 'Khalid', lastName: 'Ghamdi', email: 'k@example.com', avatarUrl: null } };
+	});
+
+	const channel = await marketerProfileService.addChannel('user-1', { platform: 'INSTAGRAM', handle: '@khalid' });
+
+	assert.equal(channel.platform, 'INSTAGRAM');
+	assert.equal(createSpy.mock.calls[0].arguments[0].data.affiliateProfileId, 'aff-1');
+	// First call is addChannel()'s own lookup (the one under test); the
+	// second is recalculateCompletion()'s separate, already-narrow lookup.
+	assert.equal(findUniqueSpy.mock.callCount(), 2);
+	const args = findUniqueSpy.mock.calls[0].arguments[0];
+	assert.deepEqual(args.select, { id: true });
+	assert.equal('level' in args.select, false);
+});
+
+test('addChannel: throws when no affiliate profile exists for this user', async (t) => {
+	const prismaMock: any = { affiliateProfile: { findUnique: async () => null } };
+	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+	const moduleUrl = `./marketer-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
+	const { marketerProfileService } = await import(moduleUrl);
+
+	await assert.rejects(() => marketerProfileService.addChannel('user-1', { platform: 'INSTAGRAM', handle: '@khalid' }));
+});

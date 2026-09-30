@@ -163,3 +163,43 @@ test('getBrokerDetail and listBrokers perform zero DB writes', async (t) => {
 	// No update/create/delete method exists on either mocked model at all —
 	// if the code under test ever tried to write, it would throw.
 });
+
+// ============================================================================
+// Deployment-safety regression coverage (P-LG-012 affiliate commission
+// engine rollout). AffiliateProfile.level exists in prisma/schema.prisma but
+// its migration has NOT been applied to DEV/LIVE. listBrokers()/
+// getBrokerDetail() previously used a bare top-level `include` (which does
+// not restrict AffiliateProfile's own scalars, only the nested relations
+// were already select-restricted) — this would have requested the
+// not-yet-existing `level` column and 500'd this admin page. affiliateFixture()
+// above is already shaped exactly like the CURRENT (pre-migration) DB row
+// would actually look (no `level` field), so every passing test above
+// already proves no hidden dependency on it.
+// ============================================================================
+
+test('listBrokers: uses an explicit top-level `select` (never a bare `include`) and never requests `level`', async (t) => {
+	const { adminBrokersService, findManySpy } = await loadService(t, {});
+
+	await adminBrokersService.listBrokers({ page: 1, limit: 20 });
+
+	assert.equal(findManySpy.mock.callCount(), 1);
+	const args = findManySpy.mock.calls[0].arguments[0];
+	assert.equal(args.include, undefined, 'must use `select`, not a bare top-level `include`');
+	assert.ok(args.select, 'must pass an explicit select');
+	assert.equal('level' in args.select, false);
+});
+
+test('getBrokerDetail: uses an explicit top-level `select` (never a bare `include`) and never requests `level`', async (t) => {
+	const { adminBrokersService, findUniqueSpy } = await loadService(t, {});
+
+	await adminBrokersService.getBrokerDetail('user-1');
+
+	assert.equal(findUniqueSpy.mock.callCount(), 1);
+	const args = findUniqueSpy.mock.calls[0].arguments[0];
+	assert.equal(args.include, undefined, 'must use `select`, not a bare top-level `include`');
+	assert.ok(args.select, 'must pass an explicit select');
+	assert.equal('level' in args.select, false);
+	// `id` must still be selected — getBrokerDetail() uses it to scope the
+	// separate commissionLog.findMany() query.
+	assert.equal(args.select.id, true);
+});

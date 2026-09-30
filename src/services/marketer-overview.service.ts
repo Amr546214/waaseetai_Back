@@ -9,13 +9,31 @@ export class MarketerOverviewService {
    * Helper: Get or Create Affiliate Profile
    */
   private async getOrCreateProfile(userId: string) {
-    const affiliateInclude = {
-      referrals: { where: { status: 'CONVERTED' as const } },
-      commissionLogs: { where: { status: 'APPROVED' as const } },
-      channelMetrics: true,
+    // Explicit select — deployment-safety fix. AffiliateProfile.level exists
+    // in the Prisma schema but its migration has not been applied to
+    // DEV/LIVE yet; the previous `include` here did NOT restrict the parent
+    // model's own scalars (include only adds relations on top of a full
+    // default select), so it would have requested `level` and 500'd this
+    // dashboard-summary path. Only the AffiliateProfile scalars this class
+    // actually reads downstream are selected — `level` is deliberately
+    // excluded (see src/utils/affiliate-profile-safe-select.util.ts). The
+    // nested relations are likewise restricted to exactly the fields read
+    // from them below (referrals: only `.length` is used; commissionLogs:
+    // only `.amount` is summed; channelMetrics: `.channel`/`.visitors`/
+    // `.conversionPercentage`), so the new CommissionLog scalars can never
+    // leak through this nested relation either.
+    const affiliateSelect = {
+      id: true,
+      currentLevel: true,
+      referralSlug: true,
+      notifyOnNewReferral: true,
+      sharePerformanceStats: true,
+      referrals: { where: { status: 'CONVERTED' as const }, select: { id: true } },
+      commissionLogs: { where: { status: 'APPROVED' as const }, select: { amount: true } },
+      channelMetrics: { select: { channel: true, visitors: true, conversionPercentage: true } },
     };
 
-    let affiliate = await prisma.affiliateProfile.findUnique({ where: { userId }, include: affiliateInclude });
+    let affiliate = await prisma.affiliateProfile.findUnique({ where: { userId }, select: affiliateSelect });
 
     if (!affiliate) {
       // Phase 3D.4: routed through the same canonical role-state initializer
@@ -33,7 +51,7 @@ export class MarketerOverviewService {
         await initializeRoleState(tx, userId, UserRole.AFFILIATE, user);
       });
 
-      affiliate = await prisma.affiliateProfile.findUnique({ where: { userId }, include: affiliateInclude });
+      affiliate = await prisma.affiliateProfile.findUnique({ where: { userId }, select: affiliateSelect });
       if (!affiliate) throw new AppError('تعذر تهيئة ملف الوسيط التسويقي', 500);
     }
 
@@ -98,13 +116,26 @@ export class MarketerOverviewService {
   async getRecentCommissions(userId: string, limit = 5) {
     const affiliate = await this.getOrCreateProfile(userId);
 
+    // Explicit select — deployment-safety fix. CommissionLog gained 6 new
+    // scalars (referredUserId/sourceProjectId/sourceStageId/baseAmount/
+    // appliedPercentage/level) for the P-LG-012 engine, whose migration has
+    // not been applied to DEV/LIVE yet; the previous `include` fetched every
+    // scalar by default and would 500 this dashboard path. Only the fields
+    // the map() below actually reads are selected (matches the same pattern
+    // already used safely in admin-brokers.service.ts's getBrokerDetail()).
     const commissions = await prisma.commissionLog.findMany({
       where: { affiliateId: affiliate.id },
       orderBy: { createdAt: 'desc' },
       take: limit,
-      include: {
+      select: {
+        id: true,
+        type: true,
+        amount: true,
+        currency: true,
+        status: true,
+        createdAt: true,
         referral: {
-          include: { referredUser: true },
+          select: { referredUser: { select: { id: true } } },
         },
       },
     });
@@ -154,39 +185,112 @@ export class MarketerOverviewService {
   }
 
   /**
+   * 4b. Get this affiliate's own referred users, paginated. Strictly scoped
+   * to the calling affiliate's OWN AffiliateProfile (resolved from userId via
+   * getOrCreateProfile(), exactly like every other method in this class) —
+   * never accepts or looks up another affiliate's id, so there is no way for
+   * a caller to query another affiliate's referrals through this method.
+   *
+   * Per-referred-user fields (P-LG-012/PII-safety): display name is
+   * firstName/lastName ONLY, never email/phone. "Total commission earned"
+   * counts only CommissionLog rows with status APPROVED or PAID for that
+   * specific referral — PENDING is deliberately excluded from this
+   * caller-facing "earned" total since it has not yet cleared to an
+   * available/payable state (mirrors createForMarketer()'s own withdrawable
+   * balance, which likewise only sums APPROVED commissions).
+   */
+  async getReferredUsers(userId: string, page = 1, limit = 20) {
+    const affiliate = await this.getOrCreateProfile(userId);
+    const safePage = Number.isInteger(page) && page > 0 ? page : 1;
+    const safeLimit = Number.isInteger(limit) && limit > 0 && limit <= 100 ? limit : 20;
+    const skip = (safePage - 1) * safeLimit;
+
+    const [referrals, total] = await Promise.all([
+      prisma.referral.findMany({
+        where: { affiliateId: affiliate.id },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: safeLimit,
+        include: {
+          referredUser: { select: { firstName: true, lastName: true } },
+          commissionLogs: {
+            where: { status: { in: [CommissionStatus.APPROVED, CommissionStatus.PAID] } },
+            select: { amount: true }
+          }
+        }
+      }),
+      prisma.referral.count({ where: { affiliateId: affiliate.id } })
+    ]);
+
+    return {
+      items: referrals.map(r => ({
+        referralId: r.id,
+        displayName: `${r.referredUser.firstName || ''} ${r.referredUser.lastName || ''}`.trim() || 'مستخدم وسيط',
+        status: r.status,
+        joinedAt: r.createdAt,
+        totalCommissionEarned: r.commissionLogs.reduce((sum, log) => sum + log.amount, 0)
+      })),
+      pagination: {
+        page: safePage,
+        limit: safeLimit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / safeLimit))
+      }
+    };
+  }
+
+  /**
    * 5. Get Referral Links & Settings
    */
   async getRefLinks(userId: string) {
-    let affiliate = await this.getOrCreateProfile(userId);
-    
-    if (!affiliate.referralSlug) {
+    const affiliate = await this.getOrCreateProfile(userId);
+
+    // Only these 4 fields are needed for the rest of this method — pulled
+    // into their own narrower, reassignable variables instead of reassigning
+    // `affiliate` itself (which carries getOrCreateProfile()'s wider
+    // referrals/commissionLogs/channelMetrics shape).
+    let { id: affiliateId, referralSlug, notifyOnNewReferral, sharePerformanceStats } = affiliate;
+
+    if (!referralSlug) {
       const user = await prisma.user.findUnique({ where: { id: userId } });
       const fullName = user ? `${user.firstName} ${user.lastName}` : '';
       const slug = generateReferralSlug(fullName, userId);
-      
-      affiliate = await prisma.affiliateProfile.update({
-        where: { id: affiliate.id },
+
+      // Explicit select — deployment-safety fix (see getOrCreateProfile's
+      // comment above for the same class of bug). Only referralSlug/id/
+      // notifyOnNewReferral/sharePerformanceStats are read from `affiliate`
+      // for the rest of this method — the referrals/commissionLogs/
+      // channelMetrics relations that used to be `include`d here were never
+      // actually used after this reassignment, so they're dropped entirely
+      // rather than converted to a nested select.
+      const updated = await prisma.affiliateProfile.update({
+        where: { id: affiliateId },
         data: { referralSlug: slug },
-        include: {
-          referrals: { where: { status: 'CONVERTED' } },
-          commissionLogs: { where: { status: 'APPROVED' } },
-          channelMetrics: true,
+        select: {
+          id: true,
+          referralSlug: true,
+          notifyOnNewReferral: true,
+          sharePerformanceStats: true,
         }
       });
+      affiliateId = updated.id;
+      referralSlug = updated.referralSlug;
+      notifyOnNewReferral = updated.notifyOnNewReferral;
+      sharePerformanceStats = updated.sharePerformanceStats;
     }
 
     const customLinks = await prisma.referralCustomLink.findMany({
-      where: { affiliateId: affiliate.id },
+      where: { affiliateId },
       orderBy: { createdAt: 'desc' },
     });
 
     return {
-      primarySlug: affiliate.referralSlug,
-      primaryLink: `https://waseet.ai/ref/${affiliate.referralSlug}`,
+      primarySlug: referralSlug,
+      primaryLink: `https://waseet.ai/ref/${referralSlug}`,
       customLinks,
       settings: {
-        notifyOnNewReferral: affiliate.notifyOnNewReferral,
-        sharePerformanceStats: affiliate.sharePerformanceStats,
+        notifyOnNewReferral,
+        sharePerformanceStats,
       }
     };
   }
@@ -215,12 +319,15 @@ export class MarketerOverviewService {
   async updateSettings(userId: string, data: { notifyOnNewReferral?: boolean; sharePerformanceStats?: boolean }) {
     const affiliate = await this.getOrCreateProfile(userId);
     
+    // Explicit select — deployment-safety fix; only these two fields are
+    // read from the return value below.
     const updated = await prisma.affiliateProfile.update({
       where: { id: affiliate.id },
       data: {
         ...(data.notifyOnNewReferral !== undefined && { notifyOnNewReferral: data.notifyOnNewReferral }),
         ...(data.sharePerformanceStats !== undefined && { sharePerformanceStats: data.sharePerformanceStats }),
-      }
+      },
+      select: { notifyOnNewReferral: true, sharePerformanceStats: true }
     });
     
     return {
