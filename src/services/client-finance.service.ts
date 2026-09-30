@@ -284,7 +284,7 @@ export class ClientFinanceService {
     try {
       await prisma.$transaction(async tx => {
       // A. Create WalletTransaction
-      await tx.walletTransaction.create({
+      const walletTransaction = await tx.walletTransaction.create({
         data: {
           userId: clientId,
           type: 'DEPOSIT',
@@ -335,8 +335,12 @@ export class ClientFinanceService {
           message: `أُضيف مبلغ ${verifiedAmount.toLocaleString('en-US')} ريال إلى رصيد محفظتك، يمكنك الآن استخدامه لتمويل المشاريع.`,
           type: 'FINANCIAL',
           category: 'FINANCIAL',
-          actionUrl: '/dashboard/clients-overview/finance/wallet',
-          actionText: 'عرض المحفظة'
+          // Real route is /client-overview/finance/wallet — the old
+          // /dashboard/clients-overview/... path never existed in this
+          // app's router.
+          actionUrl: '/client-overview/finance/wallet',
+          actionText: 'عرض المحفظة',
+          metadata: { transactionId: walletTransaction.id }
         }
       });
       });

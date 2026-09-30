@@ -309,7 +309,8 @@ export class ProposalService {
 					title: 'تم استلام عرض جديد',
 					message: `تم استلام عرض جديد على مشروعك "${targetTitle}" من قبل ${providerName}`,
 					type: 'NEW_PROPOSAL',
-					actionUrl: `/client-overview/my-requests/${projectId}`
+					actionUrl: `/client-overview/my-requests/${projectId}`,
+					metadata: { requestId: projectId, offerId: created.id }
 				}
 			});
 

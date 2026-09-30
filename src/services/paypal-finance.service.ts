@@ -198,7 +198,7 @@ export class PaypalFinanceService {
 
 		try {
 			await prisma.$transaction(async tx => {
-				await tx.walletTransaction.create({
+				const walletTransaction = await tx.walletTransaction.create({
 					data: {
 						userId: payment.userId,
 						type: 'DEPOSIT',
@@ -244,8 +244,14 @@ export class PaypalFinanceService {
 						message: `أُضيف مبلغ ${verifiedAmount.toFixed(2)} دولار إلى رصيد محفظتك عبر PayPal، يمكنك الآن استخدامه لتمويل المشاريع.`,
 						type: 'FINANCIAL',
 						category: 'FINANCIAL',
-						actionUrl: '/dashboard/clients-overview/finance/wallet',
-						actionText: 'عرض المحفظة'
+						// This service is client-only (initiateDeposit/captureDeposit
+						// both take a clientId) — the real route is
+						// /client-overview/finance/wallet, not the old
+						// /dashboard/clients-overview/... path (never existed in
+						// this app's router).
+						actionUrl: '/client-overview/finance/wallet',
+						actionText: 'عرض المحفظة',
+						metadata: { transactionId: walletTransaction.id }
 					}
 				});
 			});
