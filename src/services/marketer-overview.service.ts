@@ -71,20 +71,11 @@ export class MarketerOverviewService {
     const totalVisitors = affiliate.channelMetrics.reduce((acc, metric) => acc + metric.visitors, 0);
     const overallConversionRate = totalVisitors > 0 ? (successfulReferrals / totalVisitors) * 100 : 0;
 
-    let nextTierThreshold = 10;
-    if (affiliate.currentLevel === 'موصل') nextTierThreshold = 50;
-    
-    let progressPercentage = (successfulReferrals / nextTierThreshold) * 100;
-    if (progressPercentage > 100) progressPercentage = 100;
-    if (successfulReferrals === 0) progressPercentage = 0;
-
     return {
       tier: affiliate.currentLevel,
       successfulReferrals,
       totalCommissions,
       overallConversionRate: parseFloat(overallConversionRate.toFixed(2)),
-      nextTierThreshold,
-      progressPercentage: parseFloat(progressPercentage.toFixed(2)),
     };
   }
 

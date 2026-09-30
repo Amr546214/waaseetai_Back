@@ -41,7 +41,14 @@ function createMockPrisma(t: TestContext, opts: {
   // selection, which would request the not-yet-migrated
   // AffiliateProfile.level column.
   const affiliateFindUniqueSpy = t.mock.fn(async (_args: any) =>
-    (affiliateState ? { ...affiliateState, referrals, commissionLogs: [], channelMetrics: [] } : null)
+    (affiliateState
+      ? {
+          ...affiliateState,
+          referrals,
+          commissionLogs: affiliateState.commissionLogs ?? [],
+          channelMetrics: affiliateState.channelMetrics ?? [],
+        }
+      : null)
   );
   const commissionLogFindManySpy = t.mock.fn(async (_args: any) => commissionLogRows);
 
@@ -105,15 +112,22 @@ test('getSummary: repeat call with an existing AffiliateProfile never re-initial
 // Phase 3D.5A — Affiliate progression regression tests.
 //
 // Phase 3D.5's audit concluded no writer for AffiliateProfile.currentLevel
-// exists anywhere, and getSummary()'s tier/threshold/progress math has been
-// byte-for-byte unchanged since the very first commit. BUSINESS DECISION: do
-// not implement automatic "مساعد" -> "موصل" promotion, do not invent a
-// threshold. These tests lock in the CURRENT (non-promoting) behavior of
-// getSummary() exactly as it exists today, so a future change cannot
-// silently alter it.
+// exists anywhere, and getSummary()'s old tier/threshold/progress math had
+// been byte-for-byte unchanged since the very first commit. BUSINESS
+// DECISION: do not implement automatic "مساعد" -> "موصل" promotion, do not
+// invent a threshold.
+//
+// Follow-up audit (fabricated-numbers cleanup): the `nextTierThreshold`
+// (hardcoded 10/50) and `progressPercentage` fields computed from it had no
+// basis anywhere — no policy (P-LG-012 included) defines numeric
+// level-progression thresholds. They powered a fabricated frontend claim
+// ("N more referrals promotes you") and have been removed from getSummary()
+// entirely, with no replacement formula. These tests now lock in that they
+// are gone, and that `tier` (the real, manually-set stored level) still never
+// silently transitions.
 // ============================================================================
 
-test('getSummary (currentLevel="مساعد"): tier/threshold/progress math matches the existing, unmodified formula', async (t) => {
+test('getSummary: does not compute or return nextTierThreshold/progressPercentage — no fabricated formula, no placeholder', async (t) => {
   const { marketerOverviewService } = await loadService(t, {
     existingAffiliate: { id: 'affiliate-1', currentLevel: 'مساعد', completionPercentage: 45 },
     successfulReferrals: 3
@@ -121,61 +135,44 @@ test('getSummary (currentLevel="مساعد"): tier/threshold/progress math match
 
   const summary = await marketerOverviewService.getSummary('user-1');
 
+  assert.equal('nextTierThreshold' in summary, false);
+  assert.equal('progressPercentage' in summary, false);
+  // The real fields remain correctly computed.
   assert.equal(summary.tier, 'مساعد');
-  assert.equal(summary.nextTierThreshold, 10);
   assert.equal(summary.successfulReferrals, 3);
-  // progressPercentage = successfulReferrals / nextTierThreshold * 100 = 3/10*100 = 30.
-  assert.equal(summary.progressPercentage, 30);
 });
 
-test('getSummary (currentLevel="مساعد"): progressPercentage caps at 100 even when successfulReferrals exceeds the threshold', async (t) => {
+test('getSummary: totalCommissions and overallConversionRate remain correctly computed from real data (unaffected by the fabricated-fields removal)', async (t) => {
   const { marketerOverviewService } = await loadService(t, {
-    existingAffiliate: { id: 'affiliate-1', currentLevel: 'مساعد', completionPercentage: 45 },
-    successfulReferrals: 25
+    existingAffiliate: {
+      id: 'affiliate-1',
+      currentLevel: 'مساعد',
+      completionPercentage: 45,
+      commissionLogs: [{ amount: 100 }, { amount: 50 }],
+      channelMetrics: [{ channel: 'X', visitors: 20, conversionPercentage: 15 }],
+    },
+    successfulReferrals: 4
   });
 
   const summary = await marketerOverviewService.getSummary('user-1');
 
-  assert.equal(summary.nextTierThreshold, 10);
-  assert.equal(summary.progressPercentage, 100);
+  // totalCommissions = sum of CommissionLog.amount = 100 + 50 = 150.
+  assert.equal(summary.totalCommissions, 150);
+  // overallConversionRate = successfulReferrals / totalVisitors * 100 = 4/20*100 = 20.
+  assert.equal(summary.overallConversionRate, 20);
+  assert.equal('nextTierThreshold' in summary, false);
+  assert.equal('progressPercentage' in summary, false);
 });
 
-test('getSummary (currentLevel="موصل"): tier/threshold/progress math matches the existing, unmodified formula', async (t) => {
-  const { marketerOverviewService } = await loadService(t, {
-    existingAffiliate: { id: 'affiliate-1', currentLevel: 'موصل', completionPercentage: 90 },
+test('getSummary: never transitions currentLevel from "مساعد" to "موصل" regardless of successfulReferrals', async (t) => {
+  const { marketerOverviewService, affiliateCreateSpy, getAffiliateState } = await loadService(t, {
+    existingAffiliate: { id: 'affiliate-1', currentLevel: 'مساعد', completionPercentage: 45 },
     successfulReferrals: 10
   });
 
   const summary = await marketerOverviewService.getSummary('user-1');
 
-  assert.equal(summary.tier, 'موصل');
-  assert.equal(summary.nextTierThreshold, 50);
-  assert.equal(summary.successfulReferrals, 10);
-  // progressPercentage = successfulReferrals / nextTierThreshold * 100 = 10/50*100 = 20.
-  assert.equal(summary.progressPercentage, 20);
-});
-
-test('getSummary (currentLevel="موصل"): progressPercentage caps at 100 even when successfulReferrals exceeds the threshold', async (t) => {
-  const { marketerOverviewService } = await loadService(t, {
-    existingAffiliate: { id: 'affiliate-1', currentLevel: 'موصل', completionPercentage: 90 },
-    successfulReferrals: 75
-  });
-
-  const summary = await marketerOverviewService.getSummary('user-1');
-
-  assert.equal(summary.nextTierThreshold, 50);
-  assert.equal(summary.progressPercentage, 100);
-});
-
-test('getSummary: never transitions currentLevel from "مساعد" to "موصل" regardless of successfulReferrals reaching/exceeding the displayed threshold', async (t) => {
-  const { marketerOverviewService, affiliateCreateSpy, getAffiliateState } = await loadService(t, {
-    existingAffiliate: { id: 'affiliate-1', currentLevel: 'مساعد', completionPercentage: 45 },
-    successfulReferrals: 10 // exactly meets the "مساعد" -> "موصل" nextTierThreshold
-  });
-
-  const summary = await marketerOverviewService.getSummary('user-1');
-
-  // tier is still reported as "مساعد" — reaching the threshold never promotes.
+  // tier is still reported as "مساعد" — no automatic promotion exists.
   assert.equal(summary.tier, 'مساعد');
   // No write of any kind was attempted (only `.create` exists on the fake
   // model, and it was never called — an `.update` attempt would have thrown).
