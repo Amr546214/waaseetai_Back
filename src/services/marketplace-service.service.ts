@@ -1,3 +1,4 @@
+import { AccountType } from '@prisma/client';
 import { prisma } from '../config/db';
 import { marketplaceAiService } from './marketplace-ai.service';
 import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
@@ -5,6 +6,17 @@ import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { LEVEL_MATRIX } from '../utils/progression-calculators';
 import { findActiveServicePurchases } from '../utils/active-purchase.util';
+
+// Batch 4 — the minimal shape getMarketplaceModels/getMarketplaceModelById
+// need from req.user to read back the requesting Client's own
+// active-purchase eligibility. Deliberately narrower than the full
+// Express.Request['user'] type so tests can pass a plain literal.
+export interface RequestingUser {
+	id: string;
+	accountType: AccountType;
+}
+
+const CLIENT_ACCOUNT_TYPES: AccountType[] = [AccountType.CLIENT_INDIVIDUAL, AccountType.CLIENT_COMPANY];
 
 // Phase 3E.1: the exact Prisma select shape shared by getMarketplaceModels
 // and getMarketplaceModelById for a service's provider — includes
@@ -377,7 +389,7 @@ export class MarketplaceService {
 	/**
 	 * Fetches published models strictly for the Marketplace with filtering & pagination
 	 */
-	async getMarketplaceModels(query: any) {
+	async getMarketplaceModels(query: any, requestingUser?: RequestingUser) {
 		const { category, cat, specialization, sub, specialtyId, search, featuredOnly, sort, page = 1, limit = 20,
 			minPrice, maxPrice, minRating, maxDays, level } = query || {};
 		const activeCat = category || cat;
@@ -504,6 +516,17 @@ export class MarketplaceService {
 			prisma.serviceCatalog.count({ where: whereClause })
 		]);
 
+		// Batch 4 — ONE batched lookup for every service id on this page, never
+		// one request per card (findActiveServicePurchases already accepts an
+		// array). Only computed for an authenticated Client — a guest, or any
+		// other authenticated role, gets no `eligibility` field at all,
+		// identical to the pre-Batch-4 response shape.
+		let activeByServiceId = new Map<string, { id: string }>();
+		if (requestingUser && CLIENT_ACCOUNT_TYPES.includes(requestingUser.accountType)) {
+			const activePurchases = await findActiveServicePurchases(prisma, requestingUser.id, dbModels.map((s: any) => s.id));
+			activeByServiceId = new Map(activePurchases.filter(p => p.serviceCatalogId).map(p => [p.serviceCatalogId as string, { id: p.id }]));
+		}
+
 		const formattedModels = dbModels.map((s: any) => {
 			const providerCard = this.resolveProviderCardFields(s.provider);
 
@@ -567,7 +590,10 @@ export class MarketplaceService {
 				},
 				stages: s.stages || [],
 				tags: parsedTags,
-				gallery
+				gallery,
+				...(requestingUser && CLIENT_ACCOUNT_TYPES.includes(requestingUser.accountType)
+					? { eligibility: { hasActivePurchase: activeByServiceId.has(s.id), activeProjectId: activeByServiceId.get(s.id)?.id ?? null } }
+					: {})
 			};
 		});
 
@@ -582,7 +608,7 @@ export class MarketplaceService {
 	/**
 	 * Get a single published model by ID
 	 */
-	async getMarketplaceModelById(id: string) {
+	async getMarketplaceModelById(id: string, requestingUser?: RequestingUser) {
 		const s = await prisma.serviceCatalog.findUnique({
 			where: { id },
 			include: {
@@ -631,6 +657,15 @@ export class MarketplaceService {
 		const reviewsCount = reviewStats._count._all;
 		const rating = reviewStats._avg.rating ? Number(reviewStats._avg.rating.toFixed(1)) : 0;
 
+		// Batch 4 — single lookup (one service id), acceptable for a detail
+		// endpoint per findActiveServicePurchases' own batched contract. Only
+		// computed for an authenticated Client, same rule as the listing.
+		let eligibility: { hasActivePurchase: boolean; activeProjectId: string | null } | undefined;
+		if (requestingUser && CLIENT_ACCOUNT_TYPES.includes(requestingUser.accountType)) {
+			const [active] = await findActiveServicePurchases(prisma, requestingUser.id, [s.id]);
+			eligibility = { hasActivePurchase: Boolean(active), activeProjectId: active?.id ?? null };
+		}
+
 		return {
 			id: s.id,
 			title: s.title,
@@ -665,6 +700,7 @@ export class MarketplaceService {
 			stages: s.stages || [],
 			tags: parsedTags,
 			gallery,
+			...(eligibility ? { eligibility } : {}),
 			reviews: s.reviews.map(review => ({
 				id: review.id,
 				rating: review.rating,

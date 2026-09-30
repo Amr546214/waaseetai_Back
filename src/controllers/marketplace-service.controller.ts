@@ -65,7 +65,10 @@ export class MarketplaceServiceController {
 
 	async getMarketplaceModels(req: Request, res: Response) {
 		try {
-			const models = await marketplaceService.getMarketplaceModels(req.query);
+			// optionalAuthenticate (see marketplace.routes.ts) — req.user is only
+			// set when a real, valid session belongs to the request; undefined for
+			// guests, preserving the exact prior public response for them.
+			const models = await marketplaceService.getMarketplaceModels(req.query, req.user);
 			res.status(200).json({ success: true, data: models });
 		} catch (error: any) {
 			res.status(400).json({ success: false, error: error.message });
@@ -74,7 +77,7 @@ export class MarketplaceServiceController {
 
 	async getMarketplaceModelById(req: Request, res: Response) {
 		try {
-			const model = await marketplaceService.getMarketplaceModelById(req.params.id as string);
+			const model = await marketplaceService.getMarketplaceModelById(req.params.id as string, req.user);
 			res.status(200).json({ success: true, data: model });
 		} catch (error: any) {
 			res.status(404).json({ success: false, error: error.message });

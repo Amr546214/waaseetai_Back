@@ -75,7 +75,7 @@ function matchesProviderFilter(provider: any, whereProvider: any): boolean {
   return true;
 }
 
-function createMockPrisma(t: TestContext, services: any[]) {
+function createMockPrisma(t: TestContext, services: any[], projects: any[] = []) {
   const findManySpy = t.mock.fn(async (args: any) => {
     const matched = services.filter(s => matchesProviderFilter(s.provider, args.where?.provider));
     const skip = args.skip || 0;
@@ -84,6 +84,19 @@ function createMockPrisma(t: TestContext, services: any[]) {
   });
   const countSpy = t.mock.fn(async (args: any) => services.filter(s => matchesProviderFilter(s.provider, args.where?.provider)).length);
 
+  // Batch 4 — realistic enough simulation of findActiveServicePurchases'
+  // own where-shape (clientId + serviceCatalogId.in + contract.status.in) to
+  // exercise the REAL, unmodified helper (active-purchase.util.ts) against
+  // this mock, rather than re-implementing its rules in the test itself.
+  const projectFindManySpy = t.mock.fn(async (args: any) => {
+    const w = args.where || {};
+    return projects.filter((p: any) =>
+      p.clientId === w.clientId &&
+      Boolean(w.serviceCatalogId?.in?.includes(p.serviceCatalogId)) &&
+      Boolean(p.contract && w.contract?.status?.in?.includes(p.contract.status))
+    );
+  });
+
   const prismaMock: any = {
     serviceCatalog: {
       findMany: findManySpy,
@@ -91,17 +104,18 @@ function createMockPrisma(t: TestContext, services: any[]) {
       findUnique: async (args: any) => services.find(s => s.id === args.where.id) || null,
       update: async (args: any) => ({ viewsCount: 1 })
     },
+    project: { findMany: projectFindManySpy },
     review: { aggregate: async () => ({ _count: { _all: 0 }, _avg: { rating: null } }) }
   };
 
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   t.mock.module('./marketplace-ai.service', { namedExports: { marketplaceAiService: {} } });
 
-  return { findManySpy, countSpy };
+  return { findManySpy, countSpy, projectFindManySpy };
 }
 
-async function loadService(t: TestContext, services: any[]) {
-  const mocks = createMockPrisma(t, services);
+async function loadService(t: TestContext, services: any[], projects: any[] = []) {
+  const mocks = createMockPrisma(t, services, projects);
   const moduleUrl = `./marketplace-service.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { MarketplaceService } = await import(moduleUrl);
   return { marketplaceService: new MarketplaceService(), ...mocks };
@@ -296,4 +310,132 @@ test('MarketplaceService: the removed fake auditServiceWithAI method must never 
 test('MarketplaceService: the removed dead getCenterData method (fake aiAnalysis/rating) must never reappear', async (t) => {
   const { marketplaceService } = await loadService(t, []);
   assert.equal((marketplaceService as any).getCenterData, undefined);
+});
+
+// --- Batch 4: marketplace active-purchase eligibility -----------------------
+// getMarketplaceModels()/getMarketplaceModelById() now optionally accept the
+// requesting user (populated only via the new optionalAuthenticate middleware
+// for a real, valid session — undefined for guests) and read back that
+// Client's own active-purchase eligibility through the SAME, unmodified
+// findActiveServicePurchases() helper cart-checkout.service.ts's write-path
+// guard already uses — never a redefinition of "active".
+
+test('1) unauthenticated listing never computes or leaks eligibility, and never even queries for it', async (t) => {
+  const { marketplaceService, projectFindManySpy } = await loadService(
+    t,
+    [makeService({ id: 'svc-1', provider: makeProvider() })],
+    [{ id: 'proj-1', clientId: 'client-1', serviceCatalogId: 'svc-1', status: 'IN_PROGRESS', contract: { status: 'ACTIVE' } }]
+  );
+
+  const result = await marketplaceService.getMarketplaceModels({}); // no requestingUser — a guest
+
+  assert.equal(result.models[0].eligibility, undefined);
+  assert.equal(projectFindManySpy.mock.callCount(), 0);
+});
+
+test('2) an authenticated Client with no active purchase receives purchasable eligibility', async (t) => {
+  const { marketplaceService } = await loadService(t, [makeService({ id: 'svc-1', provider: makeProvider() })], []);
+
+  const result = await marketplaceService.getMarketplaceModels({}, { id: 'client-1', accountType: 'CLIENT_INDIVIDUAL' });
+
+  assert.deepEqual(result.models[0].eligibility, { hasActivePurchase: false, activeProjectId: null });
+});
+
+test('3) an authenticated Client with an active purchase receives the correct eligibility, with the real project id', async (t) => {
+  const { marketplaceService } = await loadService(
+    t,
+    [makeService({ id: 'svc-1', provider: makeProvider() })],
+    [{ id: 'proj-1', clientId: 'client-1', serviceCatalogId: 'svc-1', status: 'IN_PROGRESS', contract: { status: 'ACTIVE' } }]
+  );
+
+  const result = await marketplaceService.getMarketplaceModels({}, { id: 'client-1', accountType: 'CLIENT_INDIVIDUAL' });
+
+  assert.deepEqual(result.models[0].eligibility, { hasActivePurchase: true, activeProjectId: 'proj-1' });
+});
+
+test('4) a different Client does not inherit another Client\'s eligibility', async (t) => {
+  const { marketplaceService } = await loadService(
+    t,
+    [makeService({ id: 'svc-1', provider: makeProvider() })],
+    [{ id: 'proj-1', clientId: 'client-1', serviceCatalogId: 'svc-1', status: 'IN_PROGRESS', contract: { status: 'ACTIVE' } }]
+  );
+
+  const result = await marketplaceService.getMarketplaceModels({}, { id: 'client-2', accountType: 'CLIENT_INDIVIDUAL' });
+
+  assert.deepEqual(result.models[0].eligibility, { hasActivePurchase: false, activeProjectId: null });
+});
+
+test('5) a completed/cancelled historical purchase follows the existing helper\'s own rules — never blocks re-purchase', async (t) => {
+  const { marketplaceService } = await loadService(
+    t,
+    [makeService({ id: 'svc-1', provider: makeProvider() })],
+    [{ id: 'proj-old', clientId: 'client-1', serviceCatalogId: 'svc-1', status: 'COMPLETED', contract: { status: 'COMPLETED' } }]
+  );
+
+  const result = await marketplaceService.getMarketplaceModels({}, { id: 'client-1', accountType: 'CLIENT_INDIVIDUAL' });
+
+  assert.deepEqual(result.models[0].eligibility, { hasActivePurchase: false, activeProjectId: null });
+});
+
+test('6) listing eligibility for N services on one page is ONE batched lookup, never N requests', async (t) => {
+  const { marketplaceService, projectFindManySpy } = await loadService(
+    t,
+    [makeService({ id: 'svc-1', provider: makeProvider() }), makeService({ id: 'svc-2', provider: makeProvider() }), makeService({ id: 'svc-3', provider: makeProvider() })],
+    [{ id: 'proj-1', clientId: 'client-1', serviceCatalogId: 'svc-2', status: 'IN_PROGRESS', contract: { status: 'ACTIVE' } }]
+  );
+
+  const result = await marketplaceService.getMarketplaceModels({}, { id: 'client-1', accountType: 'CLIENT_INDIVIDUAL' });
+
+  assert.equal(projectFindManySpy.mock.callCount(), 1);
+  assert.equal(result.models.find((m: any) => m.id === 'svc-2').eligibility.hasActivePurchase, true);
+  assert.equal(result.models.find((m: any) => m.id === 'svc-1').eligibility.hasActivePurchase, false);
+  assert.equal(result.models.find((m: any) => m.id === 'svc-3').eligibility.hasActivePurchase, false);
+});
+
+test('a non-Client authenticated role (e.g. Provider) never gets eligibility computed either', async (t) => {
+  const { marketplaceService, projectFindManySpy } = await loadService(t, [makeService({ id: 'svc-1', provider: makeProvider() })], []);
+
+  const result = await marketplaceService.getMarketplaceModels({}, { id: 'provider-1', accountType: 'PROVIDER_INDIVIDUAL' });
+
+  assert.equal(result.models[0].eligibility, undefined);
+  assert.equal(projectFindManySpy.mock.callCount(), 0);
+});
+
+test('7) the detail endpoint (getMarketplaceModelById) returns eligibility consistent with the listing, via one single lookup', async (t) => {
+  const { marketplaceService, projectFindManySpy } = await loadService(
+    t,
+    [makeService({ id: 'svc-1', provider: makeProvider() })],
+    [{ id: 'proj-1', clientId: 'client-1', serviceCatalogId: 'svc-1', status: 'IN_PROGRESS', contract: { status: 'ACTIVE' } }]
+  );
+
+  const result = await marketplaceService.getMarketplaceModelById('svc-1', { id: 'client-1', accountType: 'CLIENT_INDIVIDUAL' });
+
+  assert.deepEqual(result.eligibility, { hasActivePurchase: true, activeProjectId: 'proj-1' });
+  assert.equal(projectFindManySpy.mock.callCount(), 1);
+});
+
+test('the detail endpoint omits eligibility entirely for a guest (no requestingUser)', async (t) => {
+  const { marketplaceService } = await loadService(t, [makeService({ id: 'svc-1', provider: makeProvider() })], []);
+
+  const result = await marketplaceService.getMarketplaceModelById('svc-1');
+
+  assert.equal(result.eligibility, undefined);
+});
+
+test('9) the eligibility read path never calls any write/mutation method — the mock Prisma client exposes no wallet/escrow/contract mutation at all', async (t) => {
+  // createMockPrisma only ever defines serviceCatalog.{findMany,count,
+  // findUnique,update(viewsCount)}, project.findMany, and review.aggregate —
+  // no walletTransaction/escrow/contract create-or-update method exists on
+  // the mock at all. If getMarketplaceModels/getMarketplaceModelById (or the
+  // eligibility helper they call) ever attempted one, this test would throw
+  // "is not a function" rather than silently succeeding.
+  const { marketplaceService } = await loadService(
+    t,
+    [makeService({ id: 'svc-1', provider: makeProvider() })],
+    [{ id: 'proj-1', clientId: 'client-1', serviceCatalogId: 'svc-1', status: 'IN_PROGRESS', contract: { status: 'ACTIVE' } }]
+  );
+
+  await marketplaceService.getMarketplaceModels({}, { id: 'client-1', accountType: 'CLIENT_INDIVIDUAL' });
+  await marketplaceService.getMarketplaceModelById('svc-1', { id: 'client-1', accountType: 'CLIENT_INDIVIDUAL' });
+  // Reaching here without throwing is the assertion.
 });
