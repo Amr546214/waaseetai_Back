@@ -58,8 +58,13 @@ export class RefController {
         });
       }
 
-      // Redirect visitor seamlessly to the registration page
-      res.redirect(302, '/register');
+      // Redirect visitor seamlessly to the registration page — this MUST
+      // match the Angular router's actual registration path exactly.
+      // /register does not exist at the app's root; the register component
+      // is mounted at /auth/register (nested under the 'auth' layout route
+      // in app.routes.ts). A bare /register previously landed real referral
+      // clicks on the frontend's 404 page.
+      res.redirect(302, '/auth/register');
     } catch (error) {
       next(error);
     }

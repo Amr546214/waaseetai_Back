@@ -56,7 +56,7 @@ test('handleReferralClick: the AffiliateProfile lookup selects only { id: true }
   assert.equal(args.include, undefined);
 });
 
-test('handleReferralClick: a real affiliate (fixture shaped like the pre-migration DB, no `level` field) sets the cookie and redirects to /register', async (t) => {
+test('handleReferralClick: a real affiliate (fixture shaped like the pre-migration DB, no `level` field) sets the cookie and redirects to /auth/register', async (t) => {
   const { refController } = await loadController(t, { affiliate: { id: 'affiliate-1' } });
   const req: any = { params: { slug: 'khalid-1' }, query: {} };
   const res = createMockRes();
@@ -66,10 +66,10 @@ test('handleReferralClick: a real affiliate (fixture shaped like the pre-migrati
   assert.equal(res.cookieCalls.length, 1);
   assert.equal(res.cookieCalls[0].name, 'waseet_ref_code');
   assert.equal(res.cookieCalls[0].value, 'khalid-1');
-  assert.deepEqual(res.redirected, { code: 302, url: '/register' });
+  assert.deepEqual(res.redirected, { code: 302, url: '/auth/register' });
 });
 
-test('handleReferralClick: an unknown slug never sets a cookie but still redirects to /register (never blocks registration)', async (t) => {
+test('handleReferralClick: an unknown slug never sets a cookie but still redirects to /auth/register (never blocks registration)', async (t) => {
   const { refController } = await loadController(t, { affiliate: null });
   const req: any = { params: { slug: 'unknown-slug' }, query: {} };
   const res = createMockRes();
@@ -77,7 +77,38 @@ test('handleReferralClick: an unknown slug never sets a cookie but still redirec
   await refController.handleReferralClick(req, res, () => { throw new Error('next() should not be called on success'); });
 
   assert.equal(res.cookieCalls.length, 0);
-  assert.deepEqual(res.redirected, { code: 302, url: '/register' });
+  assert.deepEqual(res.redirected, { code: 302, url: '/auth/register' });
+});
+
+// Regression guard: the Angular register component is mounted at
+// /auth/register (nested under the 'auth' layout route), never at a bare
+// /register — that path previously sent real referral clicks to the
+// frontend's 404 page. These two tests exist specifically so a future
+// accidental revert to the bare path is caught immediately, independent of
+// the general redirect-destination assertions above.
+test('handleReferralClick: valid slug — redirect Location is exactly /auth/register, never the old bare /register', async (t) => {
+  const { refController } = await loadController(t, { affiliate: { id: 'affiliate-1' } });
+  const req: any = { params: { slug: 'khalid-1' }, query: {} };
+  const res = createMockRes();
+
+  await refController.handleReferralClick(req, res, () => { throw new Error('next() should not be called on success'); });
+
+  assert.equal(res.redirected.code, 302);
+  assert.equal(res.redirected.url, '/auth/register');
+  assert.notEqual(res.redirected.url, '/register');
+});
+
+test('handleReferralClick: invalid slug — redirect Location is exactly /auth/register, never the old bare /register, and no cookie is set', async (t) => {
+  const { refController } = await loadController(t, { affiliate: null });
+  const req: any = { params: { slug: 'definitely-invalid-slug' }, query: {} };
+  const res = createMockRes();
+
+  await refController.handleReferralClick(req, res, () => { throw new Error('next() should not be called on success'); });
+
+  assert.equal(res.redirected.code, 302);
+  assert.equal(res.redirected.url, '/auth/register');
+  assert.notEqual(res.redirected.url, '/register');
+  assert.equal(res.cookieCalls.length, 0);
 });
 
 test('handleReferralClick: with a utm_source, bumps the channel metric using only affiliate.id from the narrowed select', async (t) => {
