@@ -112,7 +112,7 @@ export const getOtpEmailTemplate = (code: string) => {
           </div>
           <div class="content">
             <h2 class="title">تأكيد الإجراء بكود OTP</h2>
-            <p class="desc">أهلاً بك في منصة وسيط الذكاء الاصطناعي.<br>يرجى استخدام رمز التحقق التالي لإتمام عمليتك بأمان:</p>
+            <p class="desc">أهلاً بك في وسيط AI.<br>يرجى استخدام رمز التحقق التالي لإتمام عمليتك بأمان:</p>
             
             <div class="code-box">
               ${code}
