@@ -228,7 +228,7 @@ export class ProjectProgressService {
     const contract = await prisma.contract.findFirst({
       where: { OR: [{ projectId: key }, { id: key }], AND: [{ OR: [{ providerId: userId }, { clientId: userId }] }] },
       include: {
-        project: { include: { escrow: true, conversations: { include: { messages: { orderBy: { createdAt: 'asc' }, include: { sender: { select: { id: true, firstName: true, lastName: true } } } } } } } },
+        project: { include: { escrow: true, conversations: { include: { messages: { orderBy: { createdAt: 'asc' }, include: { sender: { select: { id: true, firstName: true, lastName: true } } } } } }, assignedEmployee: { select: { id: true, name: true, jobTitle: true } } } },
         client: { select: { id: true, firstName: true, lastName: true } },
         provider: { select: { id: true, firstName: true, lastName: true } }
       }
@@ -241,7 +241,8 @@ export class ProjectProgressService {
         where: { id: key, clientId: userId },
         include: {
           escrow: true,
-          proposals: { where: { status: 'ACCEPTED' }, include: { provider: { select: { id: true, firstName: true, lastName: true } } }, orderBy: { createdAt: 'desc' }, take: 1 }
+          proposals: { where: { status: 'ACCEPTED' }, include: { provider: { select: { id: true, firstName: true, lastName: true } } }, orderBy: { createdAt: 'desc' }, take: 1 },
+          assignedEmployee: { select: { id: true, name: true, jobTitle: true } }
         }
       });
       if (!project) throw new AppError('المشروع غير موجود أو لا تملك صلاحية الوصول إليه', 404);
@@ -256,6 +257,7 @@ export class ProjectProgressService {
         daysLeft: project.deliveryDays || 0, progress: 0,
         escrowTotal: project.escrow?.amount || 0, escrowHeld: project.escrow?.amount || 0, escrowReleased: 0,
         status: 'PENDING_SIGNATURE', statusLabel: 'بانتظار توقيع العقد',
+        employee: project.assignedEmployee ? { id: project.assignedEmployee.id, name: project.assignedEmployee.name, jobTitle: project.assignedEmployee.jobTitle } : null,
         stages: [], deliveries: [], edits: [], messages: [], files: [],
         aiInsights: { confidence: 0, earlyDays: 0, matchPercentage: null, riskLevel: 'غير محسوبة', riskLevelKey: 'unknown', healthRating: 'بانتظار بيانات كافية', bullets: [] }
       };
@@ -338,6 +340,7 @@ export class ProjectProgressService {
       price: contract.price, durationDays: contract.durationDays, daysLeft: Math.max(0, contract.durationDays - elapsed), progress,
       escrowTotal: contract.project.escrow?.amount || contract.price, escrowHeld: Math.max(0, (contract.project.escrow?.amount || contract.price) - released), escrowReleased: released,
       status: contract.status, statusLabel: contract.status === ContractStatus.COMPLETED ? 'مكتمل' : contract.status === ContractStatus.ACTIVE ? 'مشروع نشط' : 'بانتظار بدء المشروع',
+      employee: contract.project.assignedEmployee ? { id: contract.project.assignedEmployee.id, name: contract.project.assignedEmployee.name, jobTitle: contract.project.assignedEmployee.jobTitle } : null,
       stages, deliveries,
       edits: deliveries.filter(d => d.status === 'notes').map(d => ({ id: d.id, stageId: d.stageId, stageTitle: d.stageTitle, title: `ملاحظات على ${d.stageTitle}`, clientNotes: d.reviewNote || '', status: 'waiting', statusText: 'بانتظار إعادة التسليم', createdAt: d.submittedAt })),
       messages,

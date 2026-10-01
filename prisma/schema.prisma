@@ -755,6 +755,16 @@ model Project {
   serviceCatalogId String?
   serviceCatalog   ServiceCatalog? @relation(fields: [serviceCatalogId], references: [id], onDelete: SetNull)
 
+  // Batch 6 — the Client Company employee internally responsible for
+  // monitoring/following up on this project (never a Provider execution
+  // team member). Nullable: most projects have no assignment, and existing
+  // rows get NULL with zero fabricated backfill. SetNull so deleting a
+  // CompanyTeamMember never deletes or breaks a Project, mirroring the
+  // exact precedent already established by Coupon.assignedToTeamMemberId /
+  // SpecialOffer.assignedToTeamMemberId.
+  assignedEmployeeId String?
+  assignedEmployee   CompanyTeamMember? @relation("ProjectAssignedEmployee", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+
   proposals        Proposal[]
   projectProposals ProjectProposal[]
   savedBy          SavedProject[]
@@ -774,6 +784,7 @@ model Project {
   @@index([serviceCatalogId])
   @@index([clientId, status])
   @@index([status, createdAt])
+  @@index([assignedEmployeeId])
   @@map("projects")
 }
 
@@ -2637,6 +2648,10 @@ model CompanyTeamMember {
   // Phase 6 — special offers assigned to / attributed to this team member.
   assignedSpecialOffers SpecialOffer[] @relation("SpecialOfferAssignedTeamMember")
   createdSpecialOffers  SpecialOffer[] @relation("SpecialOfferCreatedByTeamMember")
+
+  // Batch 6 — Projects (Client Company side only in practice) this member
+  // is the current responsible employee for. See Project.assignedEmployeeId.
+  assignedProjects Project[] @relation("ProjectAssignedEmployee")
 
   @@unique([companyOwnerId, email])
   @@index([companyOwnerId, memberType, status])

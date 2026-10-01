@@ -105,10 +105,14 @@ export class ClientRequestsController {
   }
 
   // GET /api/client/requests/active-projects
+  // Batch 6 — optional ?employeeId=<id> scopes the list to one of the
+  // CALLER's OWN company employees; validated server-side in the service
+  // (never trusts the query param as a cross-company discovery oracle).
   public async getActiveProjects(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.userId || req.user!.id;
-      const result = await clientRequestsService.getActiveProjects(userId);
+      const employeeId = typeof req.query.employeeId === 'string' ? req.query.employeeId : undefined;
+      const result = await clientRequestsService.getActiveProjects(userId, employeeId);
       res.status(200).json({
         success: true,
         data: result

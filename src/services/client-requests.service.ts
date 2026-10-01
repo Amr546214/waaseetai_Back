@@ -528,7 +528,18 @@ Return JSON schema:
 		};
 	}
 
-	public async getActiveProjects(userId: string) {
+	public async getActiveProjects(userId: string, employeeId?: string) {
+		// Batch 6 — ?employeeId must belong to the CALLER's own roster, or it
+		// is rejected outright (never silently ignored, never usable to probe
+		// another company's employee ids).
+		if (employeeId) {
+			const ownEmployee = await prisma.companyTeamMember.findFirst({
+				where: { id: employeeId, companyOwnerId: userId },
+				select: { id: true }
+			});
+			if (!ownEmployee) throw new AppError('الموظف المحدد غير موجود ضمن فريق شركتك', 400);
+		}
+
 		const clientProfile = await prisma.clientProfile.findUnique({
 			where: { userId }
 		});
@@ -589,6 +600,18 @@ Return JSON schema:
 			})
 			: [];
 		const workspaceMap = new Map(contracts.map(contract => [contract.projectId, contract.id]));
+		// Batch 6 — one batched lookup (same pattern as escrowRecords/contracts
+		// above) for the real responsible-employee field, covering BOTH
+		// Project-primary AND ClientRequest-primary items uniformly via the
+		// shared id (ClientRequest.id === the mirrored Project.id). Never a
+		// per-row query.
+		const employeeRecords = allProjectIds.length > 0
+			? await prisma.project.findMany({
+				where: { id: { in: allProjectIds }, assignedEmployeeId: { not: null } },
+				select: { id: true, assignedEmployee: { select: { id: true, name: true, jobTitle: true } } }
+			})
+			: [];
+		const employeeMap = new Map(employeeRecords.map(p => [p.id, p.assignedEmployee]));
 
 		const activeItems: any[] = [];
 
@@ -634,6 +657,7 @@ Return JSON schema:
 				provider,
 				contract: `CT-${item.id.substring(0, 4).toUpperCase()}`,
 				heldAmount,
+				employee: employeeMap.get(item.id) || null,
 				nextStep: item.status === 'PENDING_SIGNATURE' ? 'استكمال توقيع العقد من الطرفين' : 'التسليم النهائي للمشروع، قيد العمل لدى مقدم الخدمة',
 				completedStages: 0,
 				stagesCount: 1,
@@ -704,6 +728,7 @@ Return JSON schema:
 				provider,
 				contract: `CT-${p.id.substring(0, 4).toUpperCase()}`,
 				heldAmount,
+				employee: employeeMap.get(p.id) || null,
 				nextStep,
 				completedStages,
 				stagesCount: milestones.length || 1,
@@ -713,15 +738,23 @@ Return JSON schema:
 			});
 		}
 
+		// Batch 6 — the already-ownership-validated employee filter is applied
+		// here, scoping both the list AND the KPIs below to that employee's
+		// projects only. Still fully bounded by this client's own
+		// clientId/clientProfileId scoping above — never a cross-client leak.
+		const filteredItems = employeeId
+			? activeItems.filter(item => item.employee?.id === employeeId)
+			: activeItems;
+
 		// Compute KPIs from real data
 		const totalHeld = escrowRecords
 			.filter(e => e.status === 'HELD')
 			.reduce((acc, e) => acc + Math.max(0, Number(e.amount) - Number(e.releasedAmount || 0)), 0);
-		const awaitingReviewCount = activeItems.filter(i => i.status === 'wait').length;
-		const overdueCount = activeItems.filter(i => i.status === 'late').length;
+		const awaitingReviewCount = filteredItems.filter(i => i.status === 'wait').length;
+		const overdueCount = filteredItems.filter(i => i.status === 'late').length;
 
 		const kpis = [
-			{ icon: 'list', value: activeItems.length, label: 'مشاريع نشطة' },
+			{ icon: 'list', value: filteredItems.length, label: 'مشاريع نشطة' },
 			{ icon: 'lock', value: totalHeld, label: 'محتجز بالضمان $' },
 			{ icon: 'clock', value: awaitingReviewCount, label: 'بانتظار مراجعتك' },
 			{ icon: 'ai', value: overdueCount > 0 ? `${overdueCount} متأخر` : 'جيد', label: 'الحالة العامة' },
@@ -729,7 +762,7 @@ Return JSON schema:
 
 		return {
 			kpis,
-			projects: activeItems
+			projects: filteredItems
 		};
 	}
 
