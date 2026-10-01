@@ -3,9 +3,38 @@ import { AccountType, UserRole } from '@prisma/client';
 import { DashboardStatsPayload } from '../types/dashboard.types';
 import { AppError } from '../utils/app-error';
 import { getRoleFromAccountType } from './account-management.service';
-import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
+import { resolveActiveRoleDisplayFields, resolveProviderProgression } from '../utils/role-display-resolver';
 
 export class DashboardService {
+  /**
+   * Batch 5 — resolves a proposal's provider's REAL gamification level for
+   * the Client dashboard "latest offers" card, reusing the exact same
+   * resolveProviderProgression() resolver (and PROVIDER_LEVEL_MATRIX via it)
+   * that marketplace-service.service.ts#resolveProviderCardFields already
+   * uses — never a second taxonomy, never derived from proposal index,
+   * rating, AI score, or the unrelated accreditation `badge` field.
+   *
+   * Unlike the marketplace resolver (which defaults an ultimate fallback to
+   * the lowest matrix title so a catalog card always shows *something*),
+   * this returns null when the provider genuinely has neither a
+   * ProviderGamification row nor a legacy currentLevel value — the
+   * dashboard must not fabricate a level that doesn't exist.
+   */
+  private resolveLatestProposalProviderLevel(
+    provider: { currentLevel: string | null; gamification: { points: number; currentLevelIndex: number } | null }
+  ): string | null {
+    const resolved = resolveProviderProgression(provider.gamification, {
+      firstName: '',
+      lastName: '',
+      avatarUrl: null,
+      profileCompletionPercent: 0,
+      currentLevel: provider.currentLevel || '',
+      currentPoints: 0,
+      pointsToNextLevel: 0
+    }).currentLevel;
+    return resolved && resolved.trim() ? resolved : null;
+  }
+
   /**
    * Retrieves dashboard statistics tailored for a Client.
    */
@@ -80,6 +109,9 @@ export class DashboardService {
       }));
 
       // 6. Latest Proposals (Top 3 recent proposals received for client's projects)
+      // Batch 5: provider.currentLevel + provider.gamification are included in
+      // this same query (one JOIN) so each proposal's real level can be
+      // resolved below without an N+1 per-proposal lookup.
       const latestProposalsData = await prisma.proposal.findMany({
         where: {
           project: {
@@ -93,7 +125,9 @@ export class DashboardService {
           provider: {
             select: {
               firstName: true,
-              lastName: true
+              lastName: true,
+              currentLevel: true,
+              gamification: { select: { points: true, currentLevelIndex: true } }
             }
           }
         }
@@ -107,6 +141,7 @@ export class DashboardService {
         deliveryDays: p.deliveryDays,
         aiMatchScore: p.aiMatchScore,
         providerName: `${p.provider.firstName} ${p.provider.lastName}`,
+        providerLevel: this.resolveLatestProposalProviderLevel(p.provider),
         status: p.status,
         createdAt: p.createdAt
       }));

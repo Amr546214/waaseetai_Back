@@ -6,6 +6,7 @@ import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { geminiClient } from './ai/gemini/gemini.client';
 import { CreateClientRequestDto, ClientRequestAiSuggestDto } from '../dtos/create-client-request.dto';
 import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
+import { resolveProviderProgression } from '../utils/role-display-resolver';
 import {
 	mailTransporter,
 	getOtpEmailTemplate,
@@ -1032,6 +1033,8 @@ Return JSON schema:
 								firstName: true,
 								lastName: true,
 								avatarUrl: true,
+								currentLevel: true,
+								gamification: { select: { points: true, currentLevelIndex: true } },
 								providerProfile: {
 									select: {
 										headline: true,
@@ -1099,6 +1102,26 @@ Return JSON schema:
 			const rawRating = Number(profile?.rating || 0);
 			const isAccredited = profile?.isVerified === true;
 
+			// Batch 5 (truthfulness pass) — the REAL gamification progression
+			// level, via the same resolveProviderProgression()/
+			// PROVIDER_LEVEL_MATRIX source marketplace and the dashboard already
+			// use. Previously this response had no real level at all, and the
+			// frontend was reading the accreditation `badge` field below into a
+			// variable named providerLevel — a different concept entirely
+			// (verification status, not progression). null when the provider
+			// genuinely has neither a ProviderGamification row nor a legacy
+			// currentLevel value.
+			const resolvedLevel = resolveProviderProgression(providerUser.gamification, {
+				firstName: '',
+				lastName: '',
+				avatarUrl: null,
+				profileCompletionPercent: 0,
+				currentLevel: providerUser.currentLevel || '',
+				currentPoints: 0,
+				pointsToNextLevel: 0
+			}).currentLevel;
+			const providerLevel = resolvedLevel && resolvedLevel.trim() ? resolvedLevel : null;
+
 			// Merge milestones from ProjectProposal if available
 			const realMilestones = milestonesMap.get(prop.providerId) || [];
 
@@ -1120,7 +1143,14 @@ Return JSON schema:
 					headline: profile?.headline || request.specialty?.nameAr || 'مختص',
 					completedProjects: completedCountMap.get(prop.providerId) || 0,
 					rating: rawRating,
+					// Accreditation/verification status (ProviderProfile.isVerified) —
+					// deliberately a separate concept from providerLevel below, never
+					// used to derive it. Left exactly as-is: no other consumer of
+					// this endpoint relies on it, so it is kept available rather than
+					// removed (not a broad API redesign).
 					badge: isAccredited ? 'معتمد' : 'محترف',
+					// Real gamification progression level — see resolvedLevel above.
+					providerLevel,
 					avatarUrl: providerUser.avatarUrl || null
 				},
 				attachments: (prop.attachments || []).map((a: any) => ({
