@@ -1,5 +1,40 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { WaseetAiClient, type FetchLike } from '../services/ai/waseet-ai/waseet-ai.client';
+
+// WaseetAI integration (AI-01): generate mode streams from WaseetAI
+// /v1/ai/project-description/stream. The REAL WaseetAiClient (SSE parsing,
+// status mapping, timeout) runs against a mocked fetch that returns SSE
+// frames — zero real WaseetAI/Gemini calls. Gemini is still mocked for the
+// title-validation stage and refine mode. Dummy test token only.
+const TEST_TOKEN = 'unit-test-dummy-token-0000';
+const UPSTREAM_SECRET_TEXT = 'UPSTREAM-INTERNAL-DETAIL-should-never-leak';
+const enc = new TextEncoder();
+const frame = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+function sseResponse(frames: string[], opts: { errorAfter?: number; hangAfter?: boolean; signal?: AbortSignal | null } = {}): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      frames.forEach((f, i) => {
+        if (opts.errorAfter === i) return;
+        if (opts.errorAfter !== undefined && i > opts.errorAfter) return;
+        controller.enqueue(enc.encode(f));
+      });
+      if (opts.errorAfter !== undefined) { controller.error(new TypeError('socket hang up')); return; }
+      if (opts.hangAfter) {
+        if (opts.signal?.aborted) { const e = new Error('aborted'); e.name = 'AbortError'; controller.error(e); return; }
+        opts.signal?.addEventListener('abort', () => { const e = new Error('aborted'); e.name = 'AbortError'; controller.error(e); });
+        return;
+      }
+      controller.close();
+    }
+  });
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+}
+const okStream = (chunks: string[]) => sseResponse([
+  frame('generation.started', { status: 'started' }),
+  ...chunks.map((chunk) => frame('text.delta', { chunk })),
+  frame('generation.completed', { status: 'completed' })
+]);
 
 // F2 (ai:generate_description) — Batch: F1+F2 streaming migration to the
 // shared Gemini foundation. Same plain-mock-socket convention as
@@ -61,7 +96,23 @@ async function loadGateway(t: TestContext, opts: {
   // pre-existing test above (all using userId: 'user-1') keeps passing
   // unchanged under the new Phase 3 Batch 2A role check.
   accountType?: string | null;
+  waseetFetch?: FetchLike;
+  waseetConfigured?: boolean;
+  waseetTimeoutMs?: number;
 }) {
+  const waseetCalls: Array<{ url: string; body: any; headers: Record<string, string> }> = [];
+  const waseetFetch: FetchLike = opts.waseetFetch ?? (async () => okStream(['وصف ', 'احترافي']));
+  const realClient = new WaseetAiClient(async (url, init) => {
+    waseetCalls.push({ url, body: JSON.parse(String(init.body)), headers: init.headers as Record<string, string> });
+    return waseetFetch(url, init);
+  }, () => ({
+    baseUrl: 'https://waseet-ai.test',
+    bearerToken: opts.waseetConfigured === false ? undefined : TEST_TOKEN,
+    restTimeoutMs: 1000,
+    streamTimeoutMs: opts.waseetTimeoutMs ?? 1000
+  }));
+  t.mock.module('../services/ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: realClient } });
+
   const geminiClientMock = {
     isConfigured: () => opts.isConfigured ?? true,
     generateStructured: opts.generateStructured ?? (async (_prompt: string, options: any) => {
@@ -79,7 +130,8 @@ async function loadGateway(t: TestContext, opts: {
 
   const moduleUrl = `./ai-assistant.gateway.ts?fixture=${Date.now()}-${Math.random()}`;
   const mod = await import(moduleUrl);
-  return mod.registerAiAssistantGateway as (socket: any) => void;
+  const register = mod.registerAiAssistantGateway as (socket: any) => void;
+  return Object.assign(register, { waseetCalls });
 }
 
 const VALID_PAYLOAD = { projectTitle: 'تطوير متجر إلكتروني متكامل', specialtyName: 'تطوير الويب', subSpecialties: ['React'] };
@@ -146,7 +198,7 @@ test('ai:generate_description: a CLIENT_COMPANY account is also accepted (both c
 // ── validation success → stream success (two-stage happy path) ───────────
 
 test('ai:generate_description: validation success followed by a successful ordered stream emits the full expected event sequence', async (t) => {
-  const register = await loadGateway(t, { generateStream: () => fakeStream(['الوصف ', 'الكامل ', 'للمشروع']) });
+  const register = await loadGateway(t, { waseetFetch: async () => okStream(['الوصف ', 'الكامل ', 'للمشروع']) });
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
 
@@ -193,7 +245,7 @@ test('ai:generate_description: a validation result that fails isMeaningful/isAli
       data: { isMeaningful: false, isAligned: true, confidence: 40, reasonAr: 'العنوان غير مفهوم' },
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 }
     }),
-    generateStream: () => { streamCalled = true; return fakeStream(['x']); }
+    waseetFetch: async () => { streamCalled = true; return okStream(['x']); }
   });
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
@@ -230,7 +282,7 @@ test('ai:generate_description: the validation stage throwing surfaces as the sam
   let streamCalled = false;
   const register = await loadGateway(t, {
     generateStructured: async () => { throw new Error('Gemini unavailable'); },
-    generateStream: () => { streamCalled = true; return fakeStream(['x']); }
+    waseetFetch: async () => { streamCalled = true; return okStream(['x']); }
   });
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
@@ -249,7 +301,7 @@ test('ai:generate_description: the validation stage throwing surfaces as the sam
 
 test('ai:generate_description: a mid-stream generation failure never emits description_complete, only the honest error', async (t) => {
   const register = await loadGateway(t, {
-    generateStream: () => fakeStream(['جزء أول ', 'جزء لن يصل'], { throwAfter: 1, error: new Error('stream died') })
+    waseetFetch: async () => sseResponse([frame('text.delta', { chunk: 'جزء أول ' }), frame('text.delta', { chunk: 'جزء لن يصل' })], { errorAfter: 1 })
   });
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
@@ -265,7 +317,7 @@ test('ai:generate_description: a mid-stream generation failure never emits descr
 });
 
 test('ai:generate_description: an empty (zero-chunk) stream after successful validation is treated as a failure, not silent success', async (t) => {
-  const register = await loadGateway(t, { generateStream: () => fakeStream([]) });
+  const register = await loadGateway(t, { waseetFetch: async () => okStream([]) });
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
 
@@ -333,12 +385,12 @@ test('ai:generate_description: a vague title is rejected before calling Gemini a
 
 // ── disconnect cancellation ──────────────────────────────────────────────
 
-test('ai:generate_description: a socket disconnect aborts the in-flight Gemini generation stream', async (t) => {
+test('ai:generate_description: a socket disconnect aborts the in-flight WaseetAI generation stream', async (t) => {
   let capturedSignal: AbortSignal | undefined;
   const register = await loadGateway(t, {
-    generateStream: (_prompt, options) => {
-      capturedSignal = options.signal;
-      return fakeStream(['a', 'b', 'c'], { checkSignal: options.signal });
+    waseetFetch: async (_url, init) => {
+      capturedSignal = init.signal ?? undefined;
+      return sseResponse([frame('text.delta', { chunk: 'a' })], { hangAfter: true, signal: init.signal });
     }
   });
   const { socket, handlers, emitted, triggerDisconnect } = createMockSocket({ userId: 'user-1' });
@@ -353,8 +405,142 @@ test('ai:generate_description: a socket disconnect aborts the in-flight Gemini g
   triggerDisconnect();
   await handlerPromise;
 
-  assert.ok(capturedSignal, 'a signal must be passed to generateStream');
+  assert.ok(capturedSignal, 'a signal must be passed to the WaseetAI stream');
   assert.equal(capturedSignal!.aborted, true);
   const last = emitted[emitted.length - 1];
   assert.equal(last.event, 'ai:description_error');
+});
+
+// ── WaseetAI AI-01 contract / adapter tests ─────────────────────────────────
+
+test('AI-01: request mapping — generate mode POSTs the documented /v1/ai/project-description/stream body', async (t) => {
+  const register = await loadGateway(t, {});
+  const { socket, handlers } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['ai:generate_description'](VALID_PAYLOAD);
+
+  assert.equal(register.waseetCalls.length, 1);
+  assert.equal(register.waseetCalls[0].url, 'https://waseet-ai.test/v1/ai/project-description/stream');
+  assert.deepEqual(register.waseetCalls[0].body, { title: 'تطوير متجر إلكتروني متكامل', category: 'تطوير الويب — React', language: 'ar' });
+  assert.equal(register.waseetCalls[0].headers.Accept, 'text/event-stream');
+});
+
+test('AI-01: streaming chunks are relayed in order as plain strings and completion emits ai:description_complete with the full text', async (t) => {
+  const register = await loadGateway(t, {
+    waseetFetch: async () => sseResponse([
+      frame('generation.started', { status: 'started' }),
+      frame('text.delta', { chunk: '## نطاق ' }),
+      frame('text.delta', { chunk: 'العمل' }),
+      frame('generation.completed', { status: 'completed' })
+    ])
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['ai:generate_description'](VALID_PAYLOAD);
+
+  const chunks = emitted.filter((e) => e.event === 'ai:description_chunk');
+  assert.deepEqual(chunks.map((c) => c.payload), [{ chunk: '## نطاق ', mode: 'generate' }, { chunk: 'العمل', mode: 'generate' }]);
+  const last = emitted[emitted.length - 1];
+  assert.equal(last.event, 'ai:description_complete');
+  assert.equal(last.payload.fullText, '## نطاق العمل');
+});
+
+for (const [label, status] of [['4xx', 400], ['401', 401], ['5xx', 503]] as const) {
+  test(`AI-01: upstream ${label} → honest AI_GENERATION_FAILED, no chunks, no upstream text leaked`, async (t) => {
+    const register = await loadGateway(t, {
+      waseetFetch: async () => new Response(JSON.stringify({ error: UPSTREAM_SECRET_TEXT }), { status })
+    });
+    const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+    register(socket);
+
+    await handlers['ai:generate_description'](VALID_PAYLOAD);
+
+    assert.equal(emitted.filter((e) => e.event === 'ai:description_chunk').length, 0);
+    assert.equal(emitted.filter((e) => e.event === 'ai:description_complete').length, 0);
+    const last = emitted[emitted.length - 1];
+    assert.equal(last.event, 'ai:description_error');
+    assert.equal(last.payload.code, 'AI_GENERATION_FAILED');
+    assert.ok(!JSON.stringify(emitted).includes(UPSTREAM_SECRET_TEXT));
+  });
+}
+
+test('AI-01: timeout → honest AI_GENERATION_FAILED (no partial "success")', async (t) => {
+  const register = await loadGateway(t, {
+    waseetTimeoutMs: 20,
+    waseetFetch: async (_url, init) => sseResponse([frame('text.delta', { chunk: 'جزء' })], { hangAfter: true, signal: init.signal })
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['ai:generate_description'](VALID_PAYLOAD);
+
+  assert.equal(emitted.filter((e) => e.event === 'ai:description_complete').length, 0);
+  assert.equal(emitted[emitted.length - 1].payload.code, 'AI_GENERATION_FAILED');
+});
+
+for (const [label, frames] of [
+  ['malformed text event (no string chunk)', [frame('text.delta', { notChunk: 1 }), frame('generation.completed', {})]],
+  ['stream ends without a completion event', [frame('text.delta', { chunk: 'نص بدون اكتمال' })]],
+  ['in-stream error event', [frame('text.delta', { chunk: 'جزء' }), frame('generation.failed', { message: UPSTREAM_SECRET_TEXT })]]
+] as const) {
+  test(`AI-01: ${label} → honest AI_GENERATION_FAILED, never ai:description_complete`, async (t) => {
+    const register = await loadGateway(t, { waseetFetch: async () => sseResponse([...frames]) });
+    const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+    register(socket);
+
+    await handlers['ai:generate_description'](VALID_PAYLOAD);
+
+    assert.equal(emitted.filter((e) => e.event === 'ai:description_complete').length, 0);
+    assert.equal(emitted[emitted.length - 1].payload.code, 'AI_GENERATION_FAILED');
+    assert.ok(!JSON.stringify(emitted).includes(UPSTREAM_SECRET_TEXT));
+  });
+}
+
+test('AI-01: WaseetAI not configured → AI_NOT_CONFIGURED before any AI call', async (t) => {
+  let validateCalled = false;
+  const register = await loadGateway(t, {
+    waseetConfigured: false,
+    generateStructured: async () => { validateCalled = true; throw new Error('should never be called'); }
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['ai:generate_description'](VALID_PAYLOAD);
+
+  assert.equal(validateCalled, false);
+  assert.equal(register.waseetCalls.length, 0);
+  assert.deepEqual(emitted.map((e) => e.payload.code), ['AI_NOT_CONFIGURED']);
+});
+
+test('AI-01: the WaseetAI credential is never emitted to the browser socket', async (t) => {
+  const register = await loadGateway(t, {});
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['ai:generate_description'](VALID_PAYLOAD);
+
+  assert.equal(register.waseetCalls[0].headers.Authorization, `Bearer ${TEST_TOKEN}`, 'backend→WaseetAI hop only');
+  const wire = JSON.stringify(emitted);
+  assert.ok(!wire.includes(TEST_TOKEN));
+  assert.ok(!wire.includes('waseet-ai.test'), 'the upstream URL is never exposed either');
+});
+
+test('refine mode (existing draft) stays on Gemini — the documented WaseetAI body has no draft field — and never calls WaseetAI', async (t) => {
+  let geminiPrompt = '';
+  const register = await loadGateway(t, {
+    generateStream: (prompt) => { geminiPrompt = prompt; return fakeStream(['نص ', 'محسن']); }
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['ai:generate_description']({ ...VALID_PAYLOAD, existingDescription: 'مسودة وصف موجودة للمشروع' });
+
+  assert.equal(register.waseetCalls.length, 0);
+  assert.match(geminiPrompt, /مسودة وصف موجودة للمشروع/);
+  const last = emitted[emitted.length - 1];
+  assert.equal(last.event, 'ai:description_complete');
+  assert.equal(last.payload.mode, 'refine');
+  assert.equal(last.payload.fullText, 'نص محسن');
 });

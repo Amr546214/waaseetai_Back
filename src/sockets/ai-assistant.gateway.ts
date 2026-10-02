@@ -2,13 +2,11 @@ import { Socket } from 'socket.io';
 import { AccountType } from '@prisma/client';
 import { prisma } from '../config/db';
 import { geminiClient } from '../services/ai/gemini/gemini.client';
+import { waseetAiClient, type WaseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
+import { normalizeWaseetAiError } from '../services/ai/waseet-ai/waseet-ai.errors';
+import { buildProjectDescriptionRequest } from '../services/ai/waseet-ai/waseet-ai.adapters';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
-import {
-  AI_DESCRIPTION_GENerate_SYSTEM_PROMPT,
-  AI_DESCRIPTION_REFINE_SYSTEM_PROMPT,
-  buildGenerateUserPrompt,
-  buildRefineUserPrompt
-} from '../prompts/ai-prompts';
+import { AI_DESCRIPTION_REFINE_SYSTEM_PROMPT, buildRefineUserPrompt } from '../prompts/ai-prompts';
 
 export interface GenerateDescriptionDto {
   projectTitle: string;
@@ -66,7 +64,24 @@ function isValidTitleValidationResult(value: unknown): value is TitleValidationR
 // guarded by clientGuard) — confirmed by tracing every emit site in the
 // frontend. The handler now enforces that same role at the socket layer
 // instead of accepting any authenticated account type.
+//
+// WaseetAI integration (AI-01): generate-from-scratch mode now streams from
+// WaseetAI POST /v1/ai/project-description/stream (documented v1.0.0 SSE
+// contract) via the shared WaseetAiClient, bridged to the SAME Socket.IO
+// events the Create Request page already listens to (ai:description_chunk /
+// ai:description_complete / ai:description_error) — the same SSE→socket
+// relay pattern as help-assistant-chat.gateway.ts. The browser never sees
+// the WaseetAI URL, credential or raw SSE frames.
+//
+// Not moved to WaseetAI (documented-contract gaps, reported):
+//  - refine mode: the documented body {title, category, language,
+//    modelTier} has no field for the user's existing draft, so refining it
+//    through WaseetAI would silently discard the draft. Stays on Gemini.
+//  - the title/specialty validation pre-check: WaseetAI documents no
+//    equivalent endpoint. Stays on Gemini.
 export class AiAssistantGateway {
+  constructor(private readonly waseetAi: WaseetAiClient = waseetAiClient) {}
+
   /**
    * Register Socket.IO listeners for real-time description generation and refinement
    */
@@ -116,18 +131,21 @@ export class AiAssistantGateway {
         return;
       }
 
-      if (!geminiClient.isConfigured()) {
-        console.error('[AiAssistantGateway] AI generation rejected: GEMINI_API_KEY is not configured.');
+      // Determine Scenario A (Generation from Scratch) vs Scenario B (Refining Existing Draft)
+      const mode: 'generate' | 'refine' = draft.length > 5 ? 'refine' : 'generate';
+
+      // Gemini runs the validation pre-check (both modes) and refine mode;
+      // WaseetAI runs generate mode.
+      if (!geminiClient.isConfigured() || (mode === 'generate' && !this.waseetAi.isConfigured())) {
+        console.error(`[AiAssistantGateway] AI generation rejected: AI provider not configured (mode=${mode}).`);
         socket.emit('ai:description_error', {
           code: 'AI_NOT_CONFIGURED',
           message: 'خدمة الذكاء الاصطناعي غير مهيأة حالياً. لم يتم إنشاء أي نص بديل.'
         });
         return;
       }
-
-      // Determine Scenario A (Generation from Scratch) vs Scenario B (Refining Existing Draft)
-      const mode: 'generate' | 'refine' = draft.length > 5 ? 'refine' : 'generate';
       let fullStreamedText = '';
+      let stage: 'validation' | 'generation' = 'validation';
 
       socket.emit('ai:description_validation_start', { mode, title });
 
@@ -151,24 +169,36 @@ export class AiAssistantGateway {
           message: 'تم فهم العنوان والتأكد من توافقه مع التخصصات المختارة.'
         });
         socket.emit('ai:description_start', { mode, title });
+        stage = 'generation';
 
-        const systemPrompt = mode === 'generate' ? AI_DESCRIPTION_GENerate_SYSTEM_PROMPT : AI_DESCRIPTION_REFINE_SYSTEM_PROMPT;
-        const userPrompt = mode === 'generate'
-          ? buildGenerateUserPrompt(title, specialty, subSpecialties)
-          : buildRefineUserPrompt(title, draft, specialty, subSpecialties);
+        if (mode === 'generate') {
+          // AI-01 → WaseetAI SSE, relayed chunk-by-chunk to the socket.
+          const request = buildProjectDescriptionRequest({ title, specialty, subSpecialties });
+          const stream = this.waseetAi.streamProjectDescription(request, { signal: abortController.signal, timeoutMs: 45 * 1000 });
+          for await (const evt of stream) {
+            if (abortController.signal.aborted) break;
+            if (evt.type === 'delta') {
+              fullStreamedText += evt.chunk;
+              // Only the plain string chunk — never a raw upstream object.
+              socket.emit('ai:description_chunk', { chunk: evt.chunk, mode });
+            } else if (evt.type === 'completed') break;
+          }
+          if (abortController.signal.aborted) throw new Error('aborted');
+        } else {
+          // Refine mode (Gemini) — see the class comment for why.
+          const stream = geminiClient.generateStream(buildRefineUserPrompt(title, draft, specialty, subSpecialties), {
+            systemInstruction: AI_DESCRIPTION_REFINE_SYSTEM_PROMPT,
+            temperature: 0.75,
+            maxOutputTokens: 1200,
+            timeoutMs: 45 * 1000,
+            signal: abortController.signal
+          });
 
-        const stream = geminiClient.generateStream(userPrompt, {
-          systemInstruction: systemPrompt,
-          temperature: 0.75,
-          maxOutputTokens: 1200,
-          timeoutMs: 45 * 1000,
-          signal: abortController.signal
-        });
-
-        for await (const chunk of stream) {
-          if (chunk) {
-            fullStreamedText += chunk;
-            socket.emit('ai:description_chunk', { chunk, mode });
+          for await (const chunk of stream) {
+            if (chunk) {
+              fullStreamedText += chunk;
+              socket.emit('ai:description_chunk', { chunk, mode });
+            }
           }
         }
 
@@ -182,7 +212,13 @@ export class AiAssistantGateway {
           return;
         }
       } catch (error: any) {
-        console.error('[AiAssistantGateway] Gemini generation failed:', error?.code || error?.message);
+        if (mode === 'generate' && stage === 'generation') {
+          // Code/status/requestId only — never upstream text or the token.
+          const e = normalizeWaseetAiError(error);
+          console.error(`[AiAssistantGateway] WaseetAI generation failed code=${e.code} status=${e.status ?? '-'} requestId=${e.requestId ?? '-'}`);
+        } else {
+          console.error('[AiAssistantGateway] Gemini generation failed:', error?.code || error?.message);
+        }
       } finally {
         socket.off('disconnect', onDisconnect);
       }

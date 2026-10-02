@@ -38,6 +38,11 @@ import type {
 // streaming is the first live feature wired to this client
 // (sockets/help-assistant-chat.gateway.ts); its SSE framing was probed live
 // — see the event-name notes above postStream's mapping.
+// Also live through this client (request/response mapping in
+// waseet-ai.adapters.ts, existing Angular contracts unchanged):
+//  - AI-01 project description stream (generate mode) — ai-assistant.gateway.ts
+//  - AI-03 milestones, AI-04 project analysis — modules/ai-review/ai-review.service.ts
+//  - TTS — services/ai/help-assistant-tts.ts
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
