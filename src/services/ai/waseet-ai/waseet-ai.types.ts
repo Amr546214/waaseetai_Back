@@ -225,7 +225,7 @@ export interface ProposalSuggestResponse {
   qualityScore: number;
   qualityTag: string;
   priceAudit?: { recommendedMin: number; recommendedMax: number; priceTag: string; justification: string };
-  suggestedAdvantages: string[];
+  suggestedAdvantages?: string[];
 }
 
 /** POST /v1/ai/profile/performance-summary — computed from the counts sent. */

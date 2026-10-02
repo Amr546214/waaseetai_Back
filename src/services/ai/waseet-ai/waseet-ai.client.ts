@@ -235,7 +235,7 @@ export class WaseetAiClient {
   suggestProposal(body: ProposalSuggestRequest, opts?: WaseetAiCallOptions): Promise<ProposalSuggestResponse> {
     return this.postJson('/v1/ai/proposals/suggest', body, opts, (d) =>
       isObject(d) && typeof d.suggestedTitle === 'string' && typeof d.suggestedMessage === 'string' &&
-      typeof d.qualityScore === 'number' && typeof d.qualityTag === 'string' && Array.isArray(d.suggestedAdvantages),
+      typeof d.qualityScore === 'number' && typeof d.qualityTag === 'string' && (d.suggestedAdvantages == null || Array.isArray(d.suggestedAdvantages)),
     );
   }
 
