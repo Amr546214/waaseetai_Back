@@ -193,3 +193,26 @@ test('DTOs reject identity injection, unsupported facts, invalid types and overs
     }
   }
 });
+
+// ── AI Cleanup Batch 4 — Gemini reliability ─────────────────────────────
+// suggestSkills was 300: the sibling 8-number aiMetrics schema truncated
+// live at 300 and the bio at 400 on gemini-flash-latest (reasoning tokens
+// share maxOutputTokens). Raised to the bio call's proven 800.
+test('skills: production call site uses the raised, non-truncating maxOutputTokens (800)', async t => {
+  const x = await load(t, { output: { suggestedSkills: ['CSS'] } });
+  const result = await x.service.suggestSkills('authenticated-provider', { jobTitle: 'مطور' } as any);
+  assert.deepEqual(result, { suggestedSkills: ['CSS'] });
+  assert.equal(x.prompts[0].options.maxOutputTokens, 800);
+  assert.ok(x.prompts[0].options.maxOutputTokens > 300, 'must never regress to the truncating 300');
+});
+
+for (const [label, detail, code] of [
+  ['truncated (MAX_TOKENS)', 'TRUNCATED', GeminiErrorCode.INVALID_RESPONSE],
+  ['503 retry exhaustion', 'UPSTREAM_UNAVAILABLE', GeminiErrorCode.PROVIDER_UNAVAILABLE],
+] as const) {
+  test(`skills: ${label} gives the honest 503 with no fabricated skills, zero writes`, async t => {
+    const x = await load(t, { geminiError: new GeminiProviderError(code, 'sanitized', undefined, { detail }) });
+    await assert.rejects(x.service.suggestSkills('p', {}), (e: any) => e.statusCode === 503 && !('suggestedSkills' in e));
+    assert.equal(x.writes(), 0);
+  });
+}

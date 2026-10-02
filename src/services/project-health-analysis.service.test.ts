@@ -239,3 +239,32 @@ test('getProjectHealthAnalysis: Gemini schema never exposes a field for earlyDay
   const result = await service.getProjectHealthAnalysis('client-1', 'contract-1');
   assert.equal(result.matchPercentage, null);
 });
+
+// ── AI Cleanup Batch 4 — Gemini reliability ─────────────────────────────
+
+// Was 500: below even the validator-allowed visible answer (healthRating
+// ≤400 chars + 5 bullets ≤240 chars, Arabic) before reasoning tokens.
+test('getProjectHealthAnalysis: production call site uses the raised, non-truncating maxOutputTokens (1500) within the unchanged 25s timeout', async t => {
+  let captured: any;
+  const { service } = await loadService(t, {
+    generateStructured: async (_prompt: string, options: any) => { captured = options; return { data: validHealthFixture() }; },
+  });
+  await service.getProjectHealthAnalysis('client-1', 'contract-1');
+  assert.equal(captured.maxOutputTokens, 1500);
+  assert.ok(captured.maxOutputTokens > 500, 'must never regress to the truncating 500');
+  assert.equal(captured.timeoutMs, 25 * 1000, 'the whole-operation timeout budget is unchanged');
+});
+
+for (const label of ['truncated (MAX_TOKENS) structured response', '503 retry exhaustion'] as const) {
+  test(`getProjectHealthAnalysis: ${label} surfaces the honest error — no fabricated score/bullets`, async t => {
+    const { GeminiProviderError, GeminiErrorCode } = await import('./ai/gemini/gemini.errors.ts');
+    const thrown = label === '503 retry exhaustion'
+      ? new GeminiProviderError(GeminiErrorCode.PROVIDER_UNAVAILABLE, 'Gemini service is currently unavailable', undefined, { detail: 'UPSTREAM_UNAVAILABLE', retryable: true, httpStatus: 503 })
+      : new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'Gemini structured response was truncated at the output token limit', undefined, { detail: 'TRUNCATED' });
+    const { service } = await loadService(t, { generateStructured: async () => { throw thrown; } });
+    await assert.rejects(service.getProjectHealthAnalysis('client-1', 'contract-1'), (e: any) => {
+      assert.equal(e, thrown, 'the real Gemini error propagates unchanged to the controller (honest 502)');
+      return true;
+    });
+  });
+}

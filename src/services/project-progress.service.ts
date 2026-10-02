@@ -883,7 +883,15 @@ export class ProjectProgressService {
         responseSchema: PROJECT_HEALTH_SCHEMA,
         validate: isValidProjectHealthContent,
         temperature: 0.3,
-        maxOutputTokens: 500,
+        // Was 500 — below even the validator-allowed visible answer
+        // (healthRating ≤400 chars + up to 5 Arabic bullets ≤240 chars each
+        // ≈ 1,600 Arabic chars ≈ 650–700 tokens plus JSON keys), before
+        // gemini-flash-latest's reasoning tokens, which count against this
+        // same limit. Same-shaped calls in this codebase (assessment feedback
+        // truncated live at 500, delivery review at 700) confirm the pattern.
+        // A truncated response is now rejected explicitly by GeminiClient
+        // (finishReason MAX_TOKENS) and still surfaces as the honest 502.
+        maxOutputTokens: 1500,
         timeoutMs: 25 * 1000
       });
       content = result.data;

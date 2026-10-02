@@ -174,7 +174,14 @@ Select the top ${safeLimit} most relevant models and return JSON with this EXACT
 					responseSchema: RECOMMENDATION_RESPONSE_SCHEMA,
 					validate: buildRecommendationValidator(candidateIds),
 					temperature: 0.5,
-					maxOutputTokens: 800
+					// Was 800. Visible output for the frontend's limit=5 is ≈550
+					// tokens (5 × [id + score + one Arabic rationale] + banner +
+					// tags) and up to ≈1,100 at the server cap of 10, before
+					// gemini-flash-latest's reasoning tokens (which share this
+					// limit). DEV logs showed recurring "malformed JSON" fallbacks;
+					// under responseSchema constrained decoding that is the
+					// signature of MAX_TOKENS truncation.
+					maxOutputTokens: 1600
 				});
 
 				const modelsById = new Map(dbModels.map(m => [m.id, m]));

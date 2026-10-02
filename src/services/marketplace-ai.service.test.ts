@@ -234,3 +234,36 @@ test('generateAiRecommendations: no result at all (empty DB) is honestly DETERMI
   assert.equal(result.generationSource, 'DETERMINISTIC');
   assert.deepEqual(result.recommendations, []);
 });
+
+// ── AI Cleanup Batch 4 — Gemini reliability ─────────────────────────────
+// Was 800: visible output for limit=5 is ≈550 tokens (≈1,100 at the server
+// cap of 10) before reasoning tokens; DEV logs showed recurring malformed-
+// JSON (truncation) fallbacks.
+test('generateAiRecommendations: production call site uses the raised, non-truncating maxOutputTokens (1600)', async (t) => {
+  let captured: any;
+  const service = await loadService(t, [makeDbModel({ id: 'm1' })], {
+    isConfigured: true,
+    generateStructured: async (_prompt, options) => {
+      captured = options;
+      return { data: { bannerInsight: 'x', smartSearchTags: ['x'], recommendations: [{ id: 'm1', aiMatchPercentage: 90, aiRecommendationReason: 'سبب' }] } };
+    }
+  });
+  await service.generateAiRecommendations({ limit: 5 });
+  assert.equal(captured.maxOutputTokens, 1600);
+  assert.ok(captured.maxOutputTokens > 800, 'must never regress to the truncating 800');
+});
+
+for (const [label, makeError] of [
+  ['truncated (MAX_TOKENS) response', () => new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'Gemini structured response was truncated at the output token limit', undefined, { detail: 'TRUNCATED' })],
+  ['503 retry exhaustion', () => new GeminiProviderError(GeminiErrorCode.PROVIDER_UNAVAILABLE, 'Gemini service is currently unavailable', undefined, { detail: 'UPSTREAM_UNAVAILABLE', retryable: true, httpStatus: 503 })],
+] as const) {
+  test(`generateAiRecommendations: ${label} falls back to the honestly-labeled DETERMINISTIC ranking, never a GEMINI-labeled/fabricated result`, async (t) => {
+    const model = makeDbModel({ id: 'm1' });
+    const service = await loadService(t, [model], { isConfigured: true, generateStructured: async () => { throw makeError(); } });
+    const result = await service.generateAiRecommendations({ limit: 5 });
+    assert.equal(result.generationSource, 'DETERMINISTIC');
+    assert.equal(result.recommendations.length, 1);
+    assert.equal(result.recommendations[0].id, 'm1', 'only real DB rows, never an invented model');
+    assert.equal(result.recommendations[0].aiScore, model.aiScore ?? model.aiAuditScore ?? 0, 'score is the stored DB value, never an AI-looking invented percentage');
+  });
+}

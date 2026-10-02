@@ -605,3 +605,439 @@ test('generateStructuredWithImage: real usage metadata is extracted and returned
     restoreEnv();
   }
 });
+
+// ═════════════════════════════════════════════════════════════════════════
+// AI Cleanup Batch 4 — Gemini reliability: bounded transient retry,
+// truncation/finishReason detection, failure-detail classification.
+// All SDK calls are mocked; no real Gemini request is ever made.
+// ═════════════════════════════════════════════════════════════════════════
+
+// Fresh GeminiClient instance with a FAST retry policy (tiny fixed backoff,
+// no minimum-window gate) so retry behavior can be asserted deterministically
+// without slow sleeps. Production defaults are asserted separately below.
+async function loadFastRetryClient(
+  behavior: MockModelsBehavior,
+  opts: { apiKey?: string; apiKeysCsv?: string; retryPolicy?: Record<string, unknown> } = {}
+) {
+  behaviorHolder.current = behavior;
+  const originalApiKey = process.env.GEMINI_API_KEY;
+  const originalApiKeys = process.env.GEMINI_API_KEYS;
+  if (opts.apiKeysCsv !== undefined) { process.env.GEMINI_API_KEYS = opts.apiKeysCsv; delete process.env.GEMINI_API_KEY; }
+  else { delete process.env.GEMINI_API_KEYS; process.env.GEMINI_API_KEY = opts.apiKey ?? 'test-key'; }
+
+  const mod = await import(`./gemini.client.ts?fixture=${Date.now()}-${Math.random()}`);
+  const { GeminiErrorCode } = await import('./gemini.errors.ts');
+  const client = new mod.GeminiClient({ retryPolicy: { backoffMs: [5, 5], minAttemptWindowMs: 0, ...opts.retryPolicy } }) as import('./gemini.client').GeminiClient;
+  return {
+    client,
+    mod,
+    GeminiErrorCode,
+    restoreEnv: () => {
+      if (originalApiKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = originalApiKey;
+      if (originalApiKeys === undefined) delete process.env.GEMINI_API_KEYS; else process.env.GEMINI_API_KEYS = originalApiKeys;
+    },
+  };
+}
+
+const httpError = (status: number, message = 'upstream error body') => Object.assign(new Error(message), { status });
+const structuredOpts = { responseSchema: { type: 'object' }, validate: (v: any) => typeof v?.score === 'number' };
+
+test('retry policy: production defaults are small and bounded (3 attempts, fixed sub-2s backoff)', async () => {
+  const mod = await import(`./gemini.client.ts?fixture=${Date.now()}-${Math.random()}`);
+  const p = mod.DEFAULT_GEMINI_RETRY_POLICY;
+  assert.equal(p.maxAttempts, 3);
+  assert.deepEqual(p.backoffMs, [750, 1500]);
+  assert.ok(p.minAttemptWindowMs > 0);
+  assert.ok(p.maxRetryAfterMs <= 5_000);
+});
+
+test('retry: success on the first attempt makes exactly one SDK call', async () => {
+  let calls = 0;
+  const { client, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => { calls++; return { text: '{"score": 1}', candidates: [{ finishReason: 'STOP' }] }; },
+  });
+  try {
+    const result = await client.generateStructured('x', structuredOpts);
+    assert.deepEqual(result.data, { score: 1 });
+    assert.equal(calls, 1);
+  } finally { restoreEnv(); }
+});
+
+for (const status of [503, 502]) {
+  test(`retry: HTTP ${status} then success is retried once and returns the real result`, async () => {
+    let calls = 0;
+    const { client, restoreEnv } = await loadFastRetryClient({
+      generateContent: async () => { calls++; if (calls === 1) throw httpError(status); return { text: '{"score": 42}' }; },
+    });
+    try {
+      const result = await client.generateStructured('x', structuredOpts);
+      assert.deepEqual(result.data, { score: 42 });
+      assert.equal(calls, 2);
+    } finally { restoreEnv(); }
+  });
+}
+
+test('retry: repeated 503 exhausts after exactly maxAttempts and throws the honest PROVIDER_UNAVAILABLE — no fabricated data', async () => {
+  let calls = 0;
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => { calls++; throw httpError(503, '{"error":{"code":503,"message":"The model is overloaded"}}'); },
+  });
+  try {
+    await assert.rejects(() => client.generateStructured('x', structuredOpts), (err: any) => {
+      assert.equal(err.name, 'GeminiProviderError');
+      assert.equal(err.code, GeminiErrorCode.PROVIDER_UNAVAILABLE);
+      assert.equal(err.detail, 'UPSTREAM_UNAVAILABLE');
+      assert.equal(err.httpStatus, 503);
+      assert.equal('data' in err, false, 'an error, never a result-shaped object');
+      assert.equal(err.message.includes('overloaded'), false, 'raw upstream body never reaches the message');
+      return true;
+    });
+    assert.equal(calls, 3, 'bounded: exactly maxAttempts, never more');
+  } finally { restoreEnv(); }
+});
+
+test('retry: a transient network failure (fetch failed / ECONNRESET) then success is retried', async () => {
+  let calls = 0;
+  const { client, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => {
+      calls++;
+      if (calls === 1) throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } });
+      return { text: 'recovered' };
+    },
+  });
+  try {
+    const result = await client.generateText('x');
+    assert.equal(result.text, 'recovered');
+    assert.equal(calls, 2);
+  } finally { restoreEnv(); }
+});
+
+test('retry: a persistent network/config failure (ENOTFOUND) is NOT retried', async () => {
+  let calls = 0;
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => { calls++; throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }); },
+  });
+  try {
+    await assert.rejects(() => client.generateText('x'), (err: any) => { assert.equal(err.code, GeminiErrorCode.UNKNOWN_PROVIDER_ERROR); return true; });
+    assert.equal(calls, 1);
+  } finally { restoreEnv(); }
+});
+
+test('retry: a timeout (AbortError) is NOT retried — the operation budget is already spent', async () => {
+  let calls = 0;
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => { calls++; throw Object.assign(new Error('aborted'), { name: 'AbortError' }); },
+  });
+  try {
+    await assert.rejects(() => client.generateStructured('x', structuredOpts), (err: any) => { assert.equal(err.code, GeminiErrorCode.TIMEOUT); return true; });
+    assert.equal(calls, 1);
+  } finally { restoreEnv(); }
+});
+
+for (const status of [400, 404, 422]) {
+  test(`retry: a permanent HTTP ${status} is NOT retried`, async () => {
+    let calls = 0;
+    const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+      generateContent: async () => { calls++; throw httpError(status); },
+    });
+    try {
+      await assert.rejects(() => client.generateText('x'), (err: any) => {
+        assert.equal(err.code, GeminiErrorCode.UNKNOWN_PROVIDER_ERROR);
+        assert.equal(err.detail, 'INVALID_REQUEST');
+        return true;
+      });
+      assert.equal(calls, 1);
+    } finally { restoreEnv(); }
+  });
+}
+
+for (const status of [500, 504]) {
+  test(`retry: HTTP ${status} is classified PROVIDER_UNAVAILABLE but NOT retried (often request-caused per Google docs)`, async () => {
+    let calls = 0;
+    const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+      generateContent: async () => { calls++; throw httpError(status); },
+    });
+    try {
+      await assert.rejects(() => client.generateText('x'), (err: any) => {
+        assert.equal(err.code, GeminiErrorCode.PROVIDER_UNAVAILABLE);
+        assert.equal(err.detail, 'UPSTREAM_ERROR');
+        return true;
+      });
+      assert.equal(calls, 1);
+    } finally { restoreEnv(); }
+  });
+}
+
+for (const [label, makeErr] of [
+  ['401', () => httpError(401)],
+  ['403', () => httpError(403)],
+  ['400 API_KEY_INVALID', () => httpError(400, '{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}')],
+] as const) {
+  test(`retry: an auth/config failure (${label}) is NOT retried, on single and multi-key pools`, async () => {
+    for (const keys of [{ apiKey: 'k1' }, { apiKeysCsv: 'k1,k2,k3' }]) {
+      let calls = 0;
+      const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+        generateContent: async () => { calls++; throw makeErr(); },
+      }, keys);
+      try {
+        await assert.rejects(() => client.generateText('x'), (err: any) => {
+          assert.equal(err.code, GeminiErrorCode.AUTHENTICATION_ERROR);
+          assert.equal(err.message.includes('API key not valid'), false);
+          return true;
+        });
+        assert.equal(calls, 1);
+      } finally { restoreEnv(); }
+    }
+  });
+}
+
+test('429 (preserved): single key → RATE_LIMITED after one call; the transient-retry loop never re-runs it', async () => {
+  let calls = 0;
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => { calls++; throw httpError(429); },
+  });
+  try {
+    await assert.rejects(() => client.generateText('x'), (err: any) => { assert.equal(err.code, GeminiErrorCode.RATE_LIMITED); return true; });
+    assert.equal(calls, 1);
+  } finally { restoreEnv(); }
+});
+
+test('429 (preserved): multi-key failover still rotates exactly once per key, then fails honestly', async () => {
+  let calls = 0;
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => { calls++; throw httpError(429); },
+  }, { apiKeysCsv: 'k1,k2,k3' });
+  try {
+    await assert.rejects(() => client.generateText('x'), (err: any) => { assert.equal(err.code, GeminiErrorCode.RATE_LIMITED); return true; });
+    assert.equal(calls, 3, 'one attempt per key, no extra transient retries on top');
+  } finally { restoreEnv(); }
+});
+
+test('retry budget: no retry is started when the remaining timeout cannot fit backoff + a real attempt', async () => {
+  let calls = 0;
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => { calls++; throw httpError(503); },
+  }, { retryPolicy: { backoffMs: [750, 1500], minAttemptWindowMs: 2_000 } });
+  try {
+    await assert.rejects(() => client.generateText('x', { timeoutMs: 1_000 }), (err: any) => { assert.equal(err.code, GeminiErrorCode.PROVIDER_UNAVAILABLE); return true; });
+    assert.equal(calls, 1, 'the caller-visible timeout still bounds the whole operation');
+  } finally { restoreEnv(); }
+});
+
+test('retry budget: a server retryDelay hint longer than maxRetryAfterMs is honored by NOT retrying (no invented shorter wait)', async () => {
+  let calls = 0;
+  const { client, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => { calls++; throw httpError(503, '{"error":{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"30s"}]}}'); },
+  });
+  try {
+    await assert.rejects(() => client.generateText('x'));
+    assert.equal(calls, 1);
+  } finally { restoreEnv(); }
+});
+
+test('retry budget: a short server retryDelay hint is used as the backoff', async () => {
+  let calls = 0;
+  const started = Date.now();
+  const { client, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => { calls++; if (calls === 1) throw httpError(503, '{"retryDelay":"0.2s"}'); return { text: 'ok' }; },
+  });
+  try {
+    const result = await client.generateText('x');
+    assert.equal(result.text, 'ok');
+    assert.equal(calls, 2);
+    assert.ok(Date.now() - started >= 180, 'waited for the provider-supplied delay, not the 5ms test backoff');
+  } finally { restoreEnv(); }
+});
+
+test('retry: caller cancellation during backoff stops immediately as TIMEOUT, no further attempt', async () => {
+  let calls = 0;
+  const controller = new AbortController();
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => { calls++; setTimeout(() => controller.abort(), 10); throw httpError(503); },
+  }, { retryPolicy: { backoffMs: [500, 500] } });
+  try {
+    await assert.rejects(() => client.generateText('x', { signal: controller.signal }), (err: any) => { assert.equal(err.code, GeminiErrorCode.TIMEOUT); return true; });
+    assert.equal(calls, 1);
+  } finally { restoreEnv(); }
+});
+
+test('retry: generateStructuredWithImage retries 503 then succeeds with the real result', async () => {
+  let calls = 0;
+  const { client, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => { calls++; if (calls === 1) throw httpError(503); return { text: '{"score": 7}' }; },
+  });
+  try {
+    const result = await client.generateStructuredWithImage('x', { ...structuredOpts, images: [{ mimeType: 'image/png', data: Buffer.from('x') }] });
+    assert.deepEqual(result.data, { score: 7 });
+    assert.equal(calls, 2);
+  } finally { restoreEnv(); }
+});
+
+test('retry: generateStream retries 503 on stream ESTABLISHMENT only, then streams the real chunks', async () => {
+  let calls = 0;
+  const { client, restoreEnv } = await loadFastRetryClient({
+    generateContentStream: async () => {
+      calls++;
+      if (calls === 1) throw httpError(503);
+      return (async function* () { yield { text: 'a' }; yield { text: 'b' }; })();
+    },
+  });
+  try {
+    const chunks: string[] = [];
+    for await (const c of client.generateStream('x')) chunks.push(c);
+    assert.deepEqual(chunks, ['a', 'b']);
+    assert.equal(calls, 2);
+  } finally { restoreEnv(); }
+});
+
+test('retry: a mid-stream 503 (after chunks were yielded) is NEVER retried', async () => {
+  let calls = 0;
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContentStream: async () => {
+      calls++;
+      return (async function* () { yield { text: 'partial' }; throw httpError(503); })();
+    },
+  });
+  try {
+    const chunks: string[] = [];
+    await assert.rejects(async () => { for await (const c of client.generateStream('x')) chunks.push(c); },
+      (err: any) => { assert.equal(err.code, GeminiErrorCode.PROVIDER_UNAVAILABLE); return true; });
+    assert.deepEqual(chunks, ['partial']);
+    assert.equal(calls, 1);
+  } finally { restoreEnv(); }
+});
+
+// ── structured JSON robustness ───────────────────────────────────────────
+
+test('structured: valid JSON with finishReason STOP parses correctly', async () => {
+  const { client, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => ({ text: '{"score": 88}', candidates: [{ finishReason: 'STOP' }] }),
+  });
+  try {
+    assert.deepEqual((await client.generateStructured('x', structuredOpts)).data, { score: 88 });
+  } finally { restoreEnv(); }
+});
+
+test('structured: truncated JSON (finishReason MAX_TOKENS) is rejected explicitly as TRUNCATED and NOT retried', async () => {
+  let calls = 0;
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => {
+      calls++;
+      return { text: '{"score": 88, "bullets": ["المرحلة', candidates: [{ finishReason: 'MAX_TOKENS' }], usageMetadata: { thoughtsTokenCount: 470, candidatesTokenCount: 30 } };
+    },
+  });
+  try {
+    await assert.rejects(() => client.generateStructured('x', { ...structuredOpts, maxOutputTokens: 500 }), (err: any) => {
+      assert.equal(err.code, GeminiErrorCode.INVALID_RESPONSE);
+      assert.equal(err.detail, 'TRUNCATED');
+      assert.equal(err.retryable, false);
+      return true;
+    });
+    assert.equal(calls, 1);
+  } finally { restoreEnv(); }
+});
+
+test('structured: MAX_TOKENS is rejected even if the cut-off text happens to parse — a partial object is never accepted', async () => {
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => ({ text: '{"score": 1}', candidates: [{ finishReason: 'MAX_TOKENS' }] }),
+  });
+  try {
+    await assert.rejects(() => client.generateStructured('x', structuredOpts), (err: any) => {
+      assert.equal(err.code, GeminiErrorCode.INVALID_RESPONSE);
+      assert.equal(err.detail, 'TRUNCATED');
+      return true;
+    });
+  } finally { restoreEnv(); }
+});
+
+test('structured: truncated JSON WITHOUT a finishReason is still caught as MALFORMED_JSON, never a partial object', async () => {
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => ({ text: '{"score": 88, "label": "GO' }),
+  });
+  try {
+    await assert.rejects(() => client.generateStructured('x', structuredOpts), (err: any) => {
+      assert.equal(err.code, GeminiErrorCode.INVALID_RESPONSE);
+      assert.equal(err.detail, 'MALFORMED_JSON');
+      return true;
+    });
+  } finally { restoreEnv(); }
+});
+
+test('structured: a safety/other early stop (finishReason SAFETY) is rejected as INCOMPLETE', async () => {
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => ({ text: '', candidates: [{ finishReason: 'SAFETY' }] }),
+  });
+  try {
+    await assert.rejects(() => client.generateStructured('x', structuredOpts), (err: any) => {
+      assert.equal(err.code, GeminiErrorCode.INVALID_RESPONSE);
+      assert.equal(err.detail, 'INCOMPLETE');
+      assert.match(err.message, /finishReason=SAFETY/);
+      return true;
+    });
+  } finally { restoreEnv(); }
+});
+
+test('structured: malformed JSON is INVALID_RESPONSE/MALFORMED_JSON and NOT retried', async () => {
+  let calls = 0;
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => { calls++; return { text: 'not json {{{', candidates: [{ finishReason: 'STOP' }] }; },
+  });
+  try {
+    await assert.rejects(() => client.generateStructured('x', structuredOpts), (err: any) => {
+      assert.equal(err.code, GeminiErrorCode.INVALID_RESPONSE);
+      assert.equal(err.detail, 'MALFORMED_JSON');
+      return true;
+    });
+    assert.equal(calls, 1);
+  } finally { restoreEnv(); }
+});
+
+test('structured: markdown-fenced JSON is NOT silently stripped (responseSchema mode never fences) — rejected honestly', async () => {
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => ({ text: '```json\n{"score": 5}\n```' }),
+  });
+  try {
+    await assert.rejects(() => client.generateStructured('x', structuredOpts), (err: any) => {
+      assert.equal(err.code, GeminiErrorCode.INVALID_RESPONSE);
+      assert.equal(err.detail, 'MALFORMED_JSON');
+      return true;
+    });
+  } finally { restoreEnv(); }
+});
+
+test('structured: empty response is INVALID_RESPONSE/EMPTY_RESPONSE', async () => {
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => ({ text: '   ', candidates: [{ finishReason: 'STOP' }] }),
+  });
+  try {
+    await assert.rejects(() => client.generateStructured('x', structuredOpts), (err: any) => {
+      assert.equal(err.code, GeminiErrorCode.INVALID_RESPONSE);
+      assert.equal(err.detail, 'EMPTY_RESPONSE');
+      return true;
+    });
+  } finally { restoreEnv(); }
+});
+
+test('structured: schema-invalid (valid JSON, wrong shape) is INVALID_RESPONSE/SCHEMA_INVALID — no fields are invented', async () => {
+  const { client, GeminiErrorCode, restoreEnv } = await loadFastRetryClient({
+    generateContent: async () => ({ text: '{"label": "no score here"}', candidates: [{ finishReason: 'STOP' }] }),
+  });
+  try {
+    await assert.rejects(() => client.generateStructured('x', structuredOpts), (err: any) => {
+      assert.equal(err.code, GeminiErrorCode.INVALID_RESPONSE);
+      assert.equal(err.detail, 'SCHEMA_INVALID');
+      return true;
+    });
+  } finally { restoreEnv(); }
+});
+
+test('structured: the configured maxOutputTokens is passed through to the SDK unchanged', async () => {
+  let seen: any;
+  const { client, restoreEnv } = await loadFastRetryClient({
+    generateContent: async (req: any) => { seen = req.config.maxOutputTokens; return { text: '{"score": 1}' }; },
+  });
+  try {
+    await client.generateStructured('x', { ...structuredOpts, maxOutputTokens: 1500 });
+    assert.equal(seen, 1500);
+  } finally { restoreEnv(); }
+});
