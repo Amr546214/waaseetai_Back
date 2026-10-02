@@ -98,9 +98,14 @@ export class AiAssistantGateway {
         return;
       }
 
-      const requester = await prisma.user.findUnique({ where: { id: userId }, select: { accountType: true } });
-      const isClient = requester?.accountType === AccountType.CLIENT_INDIVIDUAL || requester?.accountType === AccountType.CLIENT_COMPANY;
-      if (!isClient) {
+      const requester = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { activeRole: true, accountType: true }
+      });
+      const isAdminAccount =
+        requester?.accountType === AccountType.ADMIN ||
+        requester?.accountType === AccountType.SUPER_ADMIN;
+      if (!requester || isAdminAccount || requester.activeRole !== 'CLIENT') {
         socket.emit('ai:description_error', {
           code: 'FORBIDDEN_ROLE',
           message: 'هذه الميزة متاحة فقط لحسابات العملاء.'

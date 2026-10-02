@@ -91,10 +91,9 @@ async function loadGateway(t: TestContext, opts: {
   isConfigured?: boolean;
   generateStructured?: (prompt: string, options: any) => Promise<any>;
   generateStream?: (prompt: string, options: any) => AsyncGenerator<string, any, void>;
-  // Defaults to a CLIENT account — the only current real UI caller of this
-  // event (create-request page, guarded by clientGuard) — so every
-  // pre-existing test above (all using userId: 'user-1') keeps passing
-  // unchanged under the new Phase 3 Batch 2A role check.
+  // Defaults to the current CLIENT role. Socket authorization must follow
+  // the user's fresh activeRole, not the base accountType.
+  activeRole?: string | null;
   accountType?: string | null;
   waseetFetch?: FetchLike;
   waseetConfigured?: boolean;
@@ -123,9 +122,19 @@ async function loadGateway(t: TestContext, opts: {
   };
   t.mock.module('../services/ai/gemini/gemini.client', { namedExports: { geminiClient: geminiClientMock } });
 
+  const activeRole = opts.activeRole === undefined ? 'CLIENT' : opts.activeRole;
   const accountType = opts.accountType === undefined ? 'CLIENT_INDIVIDUAL' : opts.accountType;
   t.mock.module('../config/db', {
-    namedExports: { prisma: { user: { findUnique: async () => (accountType === null ? null : { accountType }) } } }
+    namedExports: {
+      prisma: {
+        user: {
+          findUnique: async () =>
+            activeRole === null || accountType === null
+              ? null
+              : { activeRole, accountType }
+        }
+      }
+    }
   });
 
   const moduleUrl = `./ai-assistant.gateway.ts?fixture=${Date.now()}-${Math.random()}`;
@@ -158,8 +167,8 @@ test('ai:generate_description: an unauthenticated socket (no userId) is rejected
 // caller is the CLIENT-facing Create Request page (confirmed by tracing
 // every frontend emit site of ai:generate_description) ────────────────────
 
-test('ai:generate_description: a CLIENT_INDIVIDUAL account (the intended role) is accepted and reaches Gemini', async (t) => {
-  const register = await loadGateway(t, { accountType: 'CLIENT_INDIVIDUAL' });
+test('ai:generate_description: current CLIENT activeRole is accepted and reaches Gemini', async (t) => {
+  const register = await loadGateway(t, { activeRole: 'CLIENT' });
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
 
@@ -168,10 +177,10 @@ test('ai:generate_description: a CLIENT_INDIVIDUAL account (the intended role) i
   assert.ok(emitted.some((e) => e.event === 'ai:description_complete'), 'the intended role must reach the normal success path');
 });
 
-test('ai:generate_description: a PROVIDER_INDIVIDUAL account (unintended role) is rejected without calling Gemini', async (t) => {
+test('ai:generate_description: current PROVIDER activeRole is rejected without calling Gemini', async (t) => {
   let called = false;
   const register = await loadGateway(t, {
-    accountType: 'PROVIDER_INDIVIDUAL',
+    activeRole: 'PROVIDER',
     generateStructured: async () => { called = true; throw new Error('should never be called'); }
   });
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-2' });
@@ -185,8 +194,26 @@ test('ai:generate_description: a PROVIDER_INDIVIDUAL account (unintended role) i
   assert.equal(emitted[0].payload.code, 'FORBIDDEN_ROLE');
 });
 
-test('ai:generate_description: a CLIENT_COMPANY account is also accepted (both client account types are the intended role)', async (t) => {
-  const register = await loadGateway(t, { accountType: 'CLIENT_COMPANY' });
+test('ai:generate_description: an ADMIN account with default CLIENT activeRole is rejected', async (t) => {
+  let called = false;
+  const register = await loadGateway(t, {
+    activeRole: 'CLIENT',
+    accountType: 'ADMIN',
+    generateStructured: async () => { called = true; throw new Error('should never be called'); }
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'admin-1' });
+  register(socket);
+
+  await handlers['ai:generate_description'](VALID_PAYLOAD);
+
+  assert.equal(called, false);
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0].event, 'ai:description_error');
+  assert.equal(emitted[0].payload.code, 'FORBIDDEN_ROLE');
+});
+
+test('ai:generate_description: switching a multi-role user back to CLIENT is accepted', async (t) => {
+  const register = await loadGateway(t, { activeRole: 'CLIENT' });
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-3' });
   register(socket);
 
