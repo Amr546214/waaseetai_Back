@@ -30,7 +30,8 @@ STRICT RULE: Select and rank the BEST matching projects (up to 3 projects) from 
 export interface ProviderContextPayload {
   name: string;
   level: string;
-  rating: number;
+  /** null when the provider genuinely has no rating yet — never a default. */
+  rating: number | null;
   completedProjects: number;
   headline?: string;
   bio?: string;
@@ -44,7 +45,8 @@ export interface ProviderContextPayload {
   }[];
   testsPassed: {
     specialtyName: string;
-    score: number;
+    /** null when no real score is stored — never an invented default. */
+    score: number | null;
     passed: boolean;
   }[];
   portfolioCount: number;
@@ -58,8 +60,9 @@ export interface CandidateProjectPayload {
   specialty: string;
   subSpecialties: string[];
   requirements: string[];
-  budget: number;
-  deliveryDays?: number;
+  /** null when the project has no budget set — never an invented default. */
+  budget: number | null;
+  deliveryDays?: number | null;
   requiredLevel?: string;
 }
 

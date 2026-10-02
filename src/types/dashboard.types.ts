@@ -43,7 +43,7 @@ export interface DashboardStatsPayload {
     title: string;
     budget: number;
     specialty: string;
-    aiMatchScore: number;
+    aiMatchScore: number | null;
     createdAt: Date;
   }>;
   latestProposals: Array<{

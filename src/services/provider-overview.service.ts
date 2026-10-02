@@ -19,8 +19,10 @@ export interface AiMatchingProjectItem {
   title: string;
   category: string;
   specialty: string;
-  budget: number;
-  aiMatchScore: number;
+  budget: number | null;
+  // Batch 5: null for the deterministic fallback (never a percentage) —
+  // see ai-matching-engine.service.ts#AiMatchingProjectItem.
+  aiMatchScore: number | null;
   matchReasons: string[];
   createdAt: Date | string;
   deliveryDays?: number;

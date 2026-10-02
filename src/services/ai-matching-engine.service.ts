@@ -16,8 +16,18 @@ export interface AiMatchingProjectItem {
   title: string;
   category: string;
   specialty: string;
-  budget: number;
-  aiMatchScore: number;
+  /** null when the project genuinely has no budget set — never an invented default. */
+  budget: number | null;
+  /**
+   * AI Cleanup Batch 5 — score semantics:
+   *  - GEMINI: Gemini's own validated 0–100 compatibility score for this
+   *    provider/project pair (the prompt asks for 82–99; the value is shown
+   *    exactly as returned, rounded — never clamped/inflated in code).
+   *  - DETERMINISTIC: always null. The rule-engine fallback only ORDERS
+   *    candidates; its internal heuristic is not a compatibility percentage
+   *    and is never exposed as one.
+   */
+  aiMatchScore: number | null;
   matchReasons: string[];
   aiAnalysis?: string;
   createdAt: Date | string;
@@ -37,6 +47,15 @@ interface GeminiMatchingResponse {
   matches: GeminiMatchItem[];
 }
 
+/** See the justification at the generateStructured call site below. */
+export const MATCHING_MAX_OUTPUT_TOKENS = 1600;
+
+/** The project's real budget, or null — never an invented default amount. */
+function realBudget(p: { budgetFixed?: number | null; budgetMax?: number | null; budgetMin?: number | null }): number | null {
+  const value = Number(p.budgetFixed || p.budgetMax || p.budgetMin || 0);
+  return value > 0 ? value : null;
+}
+
 const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
 
 const MATCHING_RESPONSE_SCHEMA = {
@@ -44,6 +63,8 @@ const MATCHING_RESPONSE_SCHEMA = {
   properties: {
     matches: {
       type: 'array',
+      // Bounds the answer to the 3 matches actually used (see slice below).
+      maxItems: '3',
       items: {
         type: 'object',
         properties: {
@@ -150,7 +171,7 @@ export class AiMatchingEngineService {
       const specialtiesList = providerSpecialties.map(ps => ({
         name: ps.specialty?.nameAr || ps.specialty?.name || 'تخصص عام',
         subSpecialties: ps.subSpecialties || [],
-        quizScore: ps.latestScore || ps.quizScore || undefined,
+        quizScore: ps.latestScore ?? ps.quizScore ?? undefined,
         isPassed: ps.isPassed || false,
         aiScore: ps.aiScore || undefined
       }));
@@ -163,13 +184,15 @@ export class AiMatchingEngineService {
       // here is guaranteed to already carry the current derived score —
       // no separate historical query is needed for a current-qualification
       // signal.
-      const testsPassedList: { specialtyName: string; score: number; passed: boolean }[] = [];
+      const testsPassedList: { specialtyName: string; score: number | null; passed: boolean }[] = [];
 
       providerSpecialties.filter(ps => ps.isPassed).forEach(ps => {
         const specName = ps.specialty?.nameAr || ps.specialty?.name || 'اختبار التخصص';
         testsPassedList.push({
           specialtyName: specName,
-          score: ps.latestScore || ps.quizScore || 80,
+          // Batch 5: was `|| 80` — an invented test score fed to Gemini and
+          // to the fallback's ">= 80" check. null when no real score exists.
+          score: ps.latestScore ?? ps.quizScore ?? null,
           passed: ps.isPassed
         });
       });
@@ -185,7 +208,9 @@ export class AiMatchingEngineService {
       const providerContext: ProviderContextPayload = {
         name: `${user?.firstName || 'مقدم'} ${user?.lastName || 'خدمة'}`.trim(),
         level: user?.currentLevel || 'مستكشف - المستوى 1',
-        rating: providerProfile?.rating || user?.ratingAverage || 5.0,
+        // Batch 5: was `|| 5.0` — an invented perfect rating for unrated
+        // providers. null when the provider genuinely has no rating yet.
+        rating: providerProfile?.rating || user?.ratingAverage || null,
         completedProjects: user?.completedProjectsCount || 0,
         headline: providerProfile?.headline || undefined,
         bio: providerProfile?.bio || undefined,
@@ -262,8 +287,9 @@ export class AiMatchingEngineService {
         specialty: p.specialty || 'تطوير وبرمجة',
         subSpecialties: p.subSpecialties || [],
         requirements: p.requirements || [],
-        budget: Number(p.budgetFixed || p.budgetMax || p.budgetMin || 1500),
-        deliveryDays: p.deliveryDays || 7,
+        // Batch 5: no invented 1500 budget / 7-day defaults in the AI input.
+        budget: realBudget(p),
+        deliveryDays: p.deliveryDays || null,
         requiredLevel: p.provLevel || 'الكل'
       }));
 
@@ -278,7 +304,18 @@ export class AiMatchingEngineService {
             responseSchema: MATCHING_RESPONSE_SCHEMA,
             validate: buildMatchingValidator(candidateIds),
             temperature: 0.2,
-            maxOutputTokens: 800
+            // AI Cleanup Batch 5 — was 800. A minimal valid answer is 3 ×
+            // [UUID projectId + score + 2–3 Arabic reasons + one Arabic
+            // analysis paragraph] ≈ 400–600 visible tokens — the same range
+            // as marketplace-ai's limit=5 output (≈550), which Batch 4 found
+            // truncating at this same 800 in DEV logs. gemini-flash-latest's
+            // reasoning tokens share this limit, and this prompt is larger
+            // (full provider profile + up to 20 candidates). 1600 matches the
+            // closest-shaped call (marketplace-ai top-N selection). The
+            // schema's maxItems also bounds the answer to 3 matches. A
+            // truncated (MAX_TOKENS) answer is still rejected by GeminiClient
+            // and falls back below, never partially accepted.
+            maxOutputTokens: MATCHING_MAX_OUTPUT_TOKENS
           });
 
           const projectsById = new Map(openProjects.map(p => [p.id, p]));
@@ -296,12 +333,15 @@ export class AiMatchingEngineService {
                 title: targetProj.title,
                 category: targetProj.specialty || 'خدمة تخصصية',
                 specialty: targetProj.specialty || 'تطوير وتصميم',
-                budget: Number(targetProj.budgetFixed || targetProj.budgetMax || targetProj.budgetMin || 2500),
-                aiMatchScore: Math.min(99, Math.max(82, Math.round(m.aiMatchScore))),
+                budget: realBudget(targetProj),
+                // Batch 5: the validated (0–100) Gemini score, rounded only.
+                // Previously clamped to [82, 99], which silently inflated any
+                // lower real AI score to 82.
+                aiMatchScore: Math.round(m.aiMatchScore),
                 matchReasons: m.matchReasons,
                 aiAnalysis: m.aiAnalysis,
                 createdAt: targetProj.createdAt,
-                deliveryDays: targetProj.deliveryDays || 7,
+                deliveryDays: targetProj.deliveryDays || undefined,
                 clientName: clientName || 'عميل موثوق',
                 generationSource: 'GEMINI'
               };
@@ -310,6 +350,8 @@ export class AiMatchingEngineService {
 
           if (matchedResults.length > 0) {
             logger.info(`[AiMatchingEngineService] Gemini successfully evaluated top ${matchedResults.length} real matches for provider ${providerId}`);
+            // Order = Gemini's own ranked order (the prompt asks it to rank);
+            // not re-sorted here.
             return matchedResults.slice(0, 3);
           }
         } catch (geminiError: any) {
@@ -368,7 +410,7 @@ export class AiMatchingEngineService {
 
       // 2. Test & Quiz Performance (25%)
       let testScore = 70;
-      if (passedTestsSet.has(projSpecialty) || provider.testsPassed.some(t => t.score >= 80)) {
+      if (passedTestsSet.has(projSpecialty) || provider.testsPassed.some(t => t.score !== null && t.score >= 80)) {
         testScore = 95;
         reasons.push('اجتياز اختبارات وتقييمات المهارة بنجاح عالية');
       } else if (provider.specialties.some(s => s.isPassed)) {
@@ -382,8 +424,8 @@ export class AiMatchingEngineService {
         reasons.push('ملف أعمال ومعرض نماذج موثق بالذكاء');
       }
 
-      // 4. Rating & Level (15%)
-      let ratingScore = Math.min(100, Math.round(provider.rating * 19));
+      // 4. Rating & Level (15%) — 0 contribution when genuinely unrated.
+      let ratingScore = provider.rating === null ? 0 : Math.min(100, Math.round(provider.rating * 19));
 
       const totalScore = Math.round(
         (skillScore * 0.40) +
@@ -401,26 +443,31 @@ export class AiMatchingEngineService {
         ? `${proj.client.firstName || ''} ${proj.client.lastName || ''}`.trim()
         : 'عميل Waseet AI';
 
-      return {
+      const item: AiMatchingProjectItem = {
         id: proj.id,
         title: proj.title,
         category: proj.specialty || 'خدمة تخصصية',
         specialty: proj.specialty || 'تطوير وتصميم',
-        budget: Number(proj.budgetFixed || proj.budgetMax || proj.budgetMin || 2000),
-        aiMatchScore: clampedScore,
+        budget: realBudget(proj),
+        // Batch 5: never exposed as a percentage — see AiMatchingProjectItem.
+        aiMatchScore: null,
         matchReasons: Array.from(new Set(reasons)),
         // Honest label — this is the deterministic rule engine, not a Gemini
         // analysis, so it must never claim to be AI-generated.
         aiAnalysis: `تم ترشيح هذا المشروع بمعايير المطابقة الآلية بناءً على تخصصاتك (${provider.skills.slice(0, 3).join(', ')}) واختباراتك المعتمدة.`,
         createdAt: proj.createdAt || new Date(),
-        deliveryDays: proj.deliveryDays || 7,
+        deliveryDays: proj.deliveryDays || undefined,
         clientName: clientName || 'عميل موثوق',
-        generationSource: 'DETERMINISTIC' as const
+        generationSource: 'DETERMINISTIC'
       };
+      return { item, ruleScore: clampedScore };
     });
 
-    scoredList.sort((a, b) => b.aiMatchScore - a.aiMatchScore);
-    return scoredList.slice(0, 3);
+    // Ordering is unchanged from before Batch 5: internal rule score desc;
+    // Array.prototype.sort is stable, so ties keep the candidate query's
+    // createdAt-desc (newest first) order.
+    scoredList.sort((a, b) => b.ruleScore - a.ruleScore);
+    return scoredList.slice(0, 3).map(s => s.item);
   }
 
 }

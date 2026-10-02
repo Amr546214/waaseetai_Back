@@ -193,8 +193,9 @@ test('getTop3MatchingProjects: duplicate projectIds in Gemini output are rejecte
   assert.equal(result[0].generationSource, 'DETERMINISTIC');
 });
 
-test('getTop3MatchingProjects: deterministic fallback ranks and returns at most 3, sorted by score descending', async (t) => {
+test('getTop3MatchingProjects: deterministic fallback returns at most 3, ties keep the candidate query\'s newest-first order, and exposes NO percentage', async (t) => {
   const service = await loadService(t, {
+    // Candidate query is createdAt desc; equal rule scores must keep it.
     openProjects: [
       baseProject({ id: 'proj-1', specialty: 'تطوير الويب' }),
       baseProject({ id: 'proj-2', specialty: 'تطوير الويب' }),
@@ -206,11 +207,111 @@ test('getTop3MatchingProjects: deterministic fallback ranks and returns at most 
 
   const result = await service.getTop3MatchingProjects('provider-1');
 
-  assert.equal(result.length, 3);
-  for (let i = 0; i < result.length - 1; i++) {
-    assert.ok(result[i].aiMatchScore >= result[i + 1].aiMatchScore);
-  }
-  result.forEach((item: any) => assert.equal(item.generationSource, 'DETERMINISTIC'));
+  assert.deepEqual(result.map((r: any) => r.id), ['proj-1', 'proj-2', 'proj-3']);
+  result.forEach((item: any) => {
+    assert.equal(item.generationSource, 'DETERMINISTIC');
+    assert.equal(item.aiMatchScore, null, 'the rule engine never exposes its heuristic as a percentage');
+  });
+});
+
+// ── AI Cleanup Batch 5 ──────────────────────────────────────────────────
+test('Batch 5: deterministic fallback still ranks a candidate whose requirements overlap the provider skills first (real ordering preserved)', async (t) => {
+  // Provider has a real skill ('Angular') that only proj-skill requires;
+  // proj-new is newer (first in the createdAt-desc candidate query).
+  const prismaMock: any = {
+    user: { findUnique: async () => ({ id: 'provider-1', firstName: 'م', lastName: 'خ', completedProjectsCount: 0, ratingAverage: null }) },
+    providerProfile: { findUnique: async () => ({ skills: [{ name: 'Angular' }], portfolioItems: [], rating: 4.8, headline: null, bio: null }) },
+    providerSpecialty: { findMany: async () => [baseProviderSpecialty()] },
+    providerSkillAssessment: { findMany: async () => [] },
+    accreditationSample: { findMany: async () => [] },
+    project: { findMany: async () => [
+      baseProject({ id: 'proj-new', specialty: 'تطوير الويب', requirements: [] }),
+      baseProject({ id: 'proj-skill', specialty: 'تطوير الويب', requirements: ['angular'] })
+    ] }
+  };
+  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: { isConfigured: () => false, generateStructured: async () => { throw new Error('no'); } } } });
+  const { AiMatchingEngineService } = await import(`./ai-matching-engine.service.ts?fixture=${Date.now()}-${Math.random()}`);
+  const result = await new AiMatchingEngineService().getTop3MatchingProjects('provider-1');
+
+  assert.deepEqual(result.map((r: any) => r.id), ['proj-skill', 'proj-new']);
+  result.forEach((r: any) => assert.equal(r.aiMatchScore, null));
+});
+
+test('Batch 5: a real Gemini score is shown exactly as returned (rounded) — never clamped up to 82', async (t) => {
+  const service = await loadService(t, {
+    openProjects: [baseProject({ id: 'proj-1' }), baseProject({ id: 'proj-2' })],
+    isConfigured: true,
+    generateStructured: async () => ({
+      data: { matches: [
+        { projectId: 'proj-2', aiMatchScore: 64.6, matchReasons: ['سبب'], aiAnalysis: 'تحليل' },
+        { projectId: 'proj-1', aiMatchScore: 91, matchReasons: ['سبب'], aiAnalysis: 'تحليل' }
+      ] }
+    })
+  });
+
+  const result = await service.getTop3MatchingProjects('provider-1');
+
+  assert.deepEqual(result.map((r: any) => [r.id, r.aiMatchScore, r.generationSource]), [
+    ['proj-2', 65, 'GEMINI'],
+    ['proj-1', 91, 'GEMINI']
+  ], 'Gemini\'s own ranked order and its real (unclamped) scores are preserved');
+});
+
+test('Batch 5: production call site uses the raised, non-truncating maxOutputTokens (1600) and bounds the answer to 3 matches', async (t) => {
+  let captured: any;
+  const service = await loadService(t, {
+    isConfigured: true,
+    generateStructured: async (_prompt, options) => {
+      captured = options;
+      return { data: { matches: [{ projectId: 'proj-1', aiMatchScore: 90, matchReasons: ['x'], aiAnalysis: 'x' }] } };
+    }
+  });
+
+  await service.getTop3MatchingProjects('provider-1');
+
+  assert.equal(captured.maxOutputTokens, 1600);
+  assert.ok(captured.maxOutputTokens > 800, 'must never regress to the truncating 800');
+  assert.equal(captured.responseSchema.properties.matches.maxItems, '3');
+});
+
+for (const [label, makeError] of [
+  ['truncated (MAX_TOKENS) response', () => new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'Gemini structured response was truncated at the output token limit', undefined, { detail: 'TRUNCATED' })],
+  ['503 retry exhaustion', () => new GeminiProviderError(GeminiErrorCode.PROVIDER_UNAVAILABLE, 'Gemini service is currently unavailable', undefined, { detail: 'UPSTREAM_UNAVAILABLE', retryable: true, httpStatus: 503 })],
+] as const) {
+  test(`Batch 5: ${label} falls back to the honest DETERMINISTIC list — no GEMINI label and no fabricated percentage`, async (t) => {
+    const service = await loadService(t, {
+      openProjects: [baseProject({ id: 'proj-1' })],
+      isConfigured: true,
+      generateStructured: async () => { throw makeError(); }
+    });
+
+    const result = await service.getTop3MatchingProjects('provider-1');
+
+    assert.equal(result.length, 1);
+    assert.equal(result[0].id, 'proj-1', 'only real candidate rows, never an invented project');
+    assert.equal(result[0].generationSource, 'DETERMINISTIC');
+    assert.equal(result[0].aiMatchScore, null);
+  });
+}
+
+test('Batch 5: no invented budget/duration/rating/test-score defaults in the result or the AI input', async (t) => {
+  let prompt = '';
+  const service = await loadService(t, {
+    providerSpecialties: [baseProviderSpecialty({ isPassed: true, latestScore: null, quizScore: null })],
+    openProjects: [baseProject({ id: 'proj-1', budgetFixed: null, budgetMax: null, budgetMin: null, deliveryDays: null })],
+    isConfigured: true,
+    generateStructured: async (p) => { prompt = p; throw new GeminiProviderError(GeminiErrorCode.TIMEOUT, 'timed out'); }
+  });
+
+  const result = await service.getTop3MatchingProjects('provider-1');
+
+  assert.equal(result[0].budget, null, 'no invented 2000/2500 budget');
+  assert.equal(result[0].deliveryDays, undefined, 'no invented 7-day duration');
+  const payload = JSON.parse(prompt);
+  assert.equal(payload.candidateProjects[0].budget, null, 'no invented 1500 budget sent to Gemini');
+  assert.equal(payload.candidateProjects[0].deliveryDays, null);
+  assert.equal(payload.providerProfile.testsPassed[0].score, null, 'no invented test score of 80 sent to Gemini');
 });
 
 // Batch 4E: the matching engine's SpecialtyTestSession/AssessmentAttempt
@@ -235,9 +336,13 @@ test('getTop3MatchingProjects: matching runs with no specialtyTestSession/assess
   assert.equal(result.length, 1);
 });
 
-test('getTop3MatchingProjects: a currently-approved ProviderSpecialty (isPassed + latestScore) scores higher than an unapproved one — sourced directly, no legacy session table involved', async (t) => {
-  let passedScore = 0;
-  let unpassedScore = 0;
+test('getTop3MatchingProjects: a currently-approved ProviderSpecialty (isPassed + latestScore) drives the deterministic result — sourced directly, no legacy session table involved', async (t) => {
+  // Batch 5: the fallback no longer exposes a numeric score, so the
+  // ProviderSpecialty-derived signal is asserted through the real match
+  // reason it produces instead of a percentage comparison.
+  const TEST_REASON = 'اجتياز اختبارات وتقييمات المهارة بنجاح عالية';
+  let passedReasons: string[] = [];
+  let unpassedReasons: string[] = [];
 
   await t.test('passed', async (st) => {
     const service = await loadService(st, {
@@ -247,7 +352,7 @@ test('getTop3MatchingProjects: a currently-approved ProviderSpecialty (isPassed 
     });
     const result = await service.getTop3MatchingProjects('provider-1');
     assert.equal(result.length, 1);
-    passedScore = result[0].aiMatchScore;
+    passedReasons = result[0].matchReasons;
   });
 
   await t.test('unpassed', async (st) => {
@@ -258,13 +363,11 @@ test('getTop3MatchingProjects: a currently-approved ProviderSpecialty (isPassed 
     });
     const result = await service.getTop3MatchingProjects('provider-1');
     assert.equal(result.length, 1);
-    unpassedScore = result[0].aiMatchScore;
+    unpassedReasons = result[0].matchReasons;
   });
 
-  assert.ok(
-    passedScore > unpassedScore,
-    'an approved/passed specialty must score higher than an unapproved one'
-  );
+  assert.ok(passedReasons.includes(TEST_REASON), 'a passed specialty with a real score is credited');
+  assert.ok(!unpassedReasons.includes(TEST_REASON), 'an unpassed specialty is not');
 });
 
 test('DB failure during candidate gathering is handled honestly (empty result, never a crash or fabricated match)', async (t) => {

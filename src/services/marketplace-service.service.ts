@@ -478,7 +478,10 @@ export class MarketplaceService {
 		// Sorting
 		let orderBy: any = { createdAt: 'desc' };
 		if (sort === 'ai' || sort === 'score') {
-			orderBy = { aiScore: 'desc' };
+			// Batch 5: aiScore is nullable (Int?). A bare `desc` puts NULLs FIRST
+			// on PostgreSQL, so unscored models used to lead the "AI" sort.
+			// Unscored models now sort last; ties break newest-first, then id.
+			orderBy = [{ aiScore: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }, { id: 'asc' }];
 		} else if (sort === 'rating') {
 			orderBy = [{ reviews: { _count: 'desc' } }, { createdAt: 'desc' }];
 		} else if (sort === 'price_asc') {

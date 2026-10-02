@@ -439,3 +439,24 @@ test('9) the eligibility read path never calls any write/mutation method — the
   await marketplaceService.getMarketplaceModelById('svc-1', { id: 'client-1', accountType: 'CLIENT_INDIVIDUAL' });
   // Reaching here without throwing is the assertion.
 });
+
+// ── AI Cleanup Batch 5 — AI-score ordering ───────────────────────────────
+for (const sort of ['ai', 'score']) {
+  test(`getMarketplaceModels: sort=${sort} orders by the real aiScore desc with unscored (NULL) models LAST and a deterministic tie-break`, async (t) => {
+    const { marketplaceService, findManySpy } = await loadService(t, [makeService({ provider: makeProvider() })]);
+
+    await marketplaceService.getMarketplaceModels({ sort });
+
+    assert.deepEqual(findManySpy.mock.calls[0].arguments[0].orderBy, [
+      { aiScore: { sort: 'desc', nulls: 'last' } },
+      { createdAt: 'desc' },
+      { id: 'asc' }
+    ]);
+  });
+}
+
+test('getMarketplaceModels: default ordering is unchanged (createdAt desc)', async (t) => {
+  const { marketplaceService, findManySpy } = await loadService(t, [makeService({ provider: makeProvider() })]);
+  await marketplaceService.getMarketplaceModels({});
+  assert.deepEqual(findManySpy.mock.calls[0].arguments[0].orderBy, { createdAt: 'desc' });
+});

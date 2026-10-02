@@ -14,6 +14,20 @@ import { prisma } from '../config/db';
 // field names are kept as-is (also used by the persisted Proposal.aiMatchScore
 // column elsewhere — out of scope here, no Prisma schema changes) but the
 // wording below no longer claims generative AI produced the ranking.
+//
+// AI Cleanup Batch 5: the per-card percentage was removed entirely. It was
+// fabricated — a fixed 82/85/86/88 base plus `hash(request.id) % 10` (or
+// `% 4`), i.e. a number derived from the request's ID characters, not from
+// any real match. `aiMatchScore` is now always null (no percentage is
+// shown). What remains is the REAL part of that heuristic: a specialty-
+// relevance tier computed from the provider's own specialties vs the
+// request's requirements/category, used only for the default "MATCH" sort
+// (tier desc → requirement-overlap ratio desc → newest first) and exposed as
+// `specialtyRelevance` so the UI can say what it actually is.
+
+export type ExploreSpecialtyRelevance = 'REQUIREMENTS' | 'SPECIALTY' | 'NONE';
+
+const RELEVANCE_RANK: Record<ExploreSpecialtyRelevance, number> = { REQUIREMENTS: 2, SPECIALTY: 1, NONE: 0 };
 
 export class ExploreRequestsService {
   public async getExploreRequests(providerId: string, filters: { category?: string; tab?: string; sortBy?: string; search?: string }) {
@@ -173,26 +187,24 @@ export class ExploreRequestsService {
       else notAppliedCount++;
       if (item.isSaved) savedCount++;
 
-      // AI Match Score Calculation based on Provider Keyword Overlap
-      let aiMatchScore = 85;
+      // Specialty relevance (real, deterministic): overlap between the
+      // provider's own specialty keywords and this request's requirements /
+      // category. No percentage, no ID hash.
       const reqLower = item.requirements || [];
       const categoryLower = (item.category || '').toLowerCase();
-      
+
       let matchedCount = 0;
       if (providerKeywords.length > 0) {
         matchedCount = reqLower.filter((r: string) => providerKeywords.some(pk => pk.includes(r) || r.includes(pk))).length;
       }
 
-      const hashValue = item.id.split('').reduce((acc: number, char: string) => acc + char.charCodeAt(0), 0);
-      const deterministicOffset = (hashValue % 10);
-
+      let specialtyRelevance: ExploreSpecialtyRelevance = 'NONE';
       if (matchedCount > 0) {
-        aiMatchScore = Math.min(99, 88 + Math.round((matchedCount / Math.max(reqLower.length, 1)) * 8) + (hashValue % 4));
-      } else if (providerKeywords.some(pk => categoryLower.includes(pk) || pk.includes(categoryLower))) {
-        aiMatchScore = Math.min(96, 86 + deterministicOffset);
-      } else {
-        aiMatchScore = 82 + deterministicOffset;
+        specialtyRelevance = 'REQUIREMENTS';
+      } else if (categoryLower && providerKeywords.some(pk => categoryLower.includes(pk) || pk.includes(categoryLower))) {
+        specialtyRelevance = 'SPECIALTY';
       }
+      const requirementOverlap = matchedCount / Math.max(reqLower.length, 1);
 
       // Financial appraisal
       let aiSuggestedBudget = 'غير محدد';
@@ -229,13 +241,15 @@ export class ExploreRequestsService {
         aiDurationEval = 'جدول زمني مريح ومرن للتنفيذ';
       }
 
-      // Strategic match note — deterministic wording only; never attributed
-      // to generative AI (see the file-level note above).
+      // Strategic note — deterministic wording only; never attributed to
+      // generative AI and never quoting a percentage (see file-level note).
+      // Only states what was actually checked: competition size and
+      // specialty overlap.
       let aiNote = '';
       if (item.proposalsCount <= 1) {
-        aiNote = `العميل (${item.clientType}) والمنافسة منخفضة جداً في هذا المشروع (${item.proposalsCount ? 'عرض واحد فقط' : 'لا توجد عروض'}). التوافق عالي، ننصح بتقديم العرض فوراً.`;
-      } else if (aiMatchScore >= 88) {
-        aiNote = `نظام المطابقة في وسيط يبرز هذا الطلب كأفضل توافق مع تخصصك (${aiMatchScore}%)! خبرتك تعطيك أفضلية كبرى رغم وجود ${item.proposalsCount} عروض منافسة.`;
+        aiNote = `العميل (${item.clientType}) والمنافسة منخفضة في هذا المشروع (${item.proposalsCount ? 'عرض واحد فقط' : 'لا توجد عروض'}).`;
+      } else if (specialtyRelevance === 'REQUIREMENTS') {
+        aiNote = `متطلبات هذا الطلب تتقاطع مع تخصصاتك المسجلة، رغم وجود ${item.proposalsCount} عروض منافسة.`;
       } else {
         aiNote = `فرصة جيدة لبناء سمعة ممتازة مع عميل (${item.clientType}). احرص على تضمين نماذج سابقة وتفصيل خطوات العمل لكسب العرض.`;
       }
@@ -258,7 +272,10 @@ export class ExploreRequestsService {
         proposalsCount: item.proposalsCount,
         clientType: item.clientType,
         createdAtFormatted,
-        aiMatchScore,
+        // Batch 5: no real match percentage exists for this list — always null.
+        aiMatchScore: null,
+        specialtyRelevance,
+        requirementOverlap,
         aiSuggestedBudget,
         aiPriceEval,
         aiSuggestedDuration,
@@ -288,8 +305,14 @@ export class ExploreRequestsService {
     } else if (filters.sortBy === 'CLOSING_SOON' || filters.sortBy === 'CLOSING') {
       processedProjects.sort((a, b) => a.durationDays - b.durationDays);
     } else {
-      // Default 'MATCH'
-      processedProjects.sort((a, b) => b.aiMatchScore - a.aiMatchScore);
+      // Default 'MATCH' — specialty relevance tier desc, then requirement
+      // overlap ratio desc, then newest first, then id (fully deterministic).
+      processedProjects.sort((a, b) =>
+        (RELEVANCE_RANK[b.specialtyRelevance] - RELEVANCE_RANK[a.specialtyRelevance]) ||
+        (b.requirementOverlap - a.requirementOverlap) ||
+        (b.createdAt.getTime() - a.createdAt.getTime()) ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+      );
     }
 
     return {

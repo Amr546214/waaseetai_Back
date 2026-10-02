@@ -398,7 +398,11 @@ export class DashboardService {
           title: p.title,
           budget: p.budgetFixed || p.budgetMax || 0,
           specialty: p.specialty,
-          aiMatchScore: 0, // Placeholder until semantic AI service is integrated
+          // Batch 5: was a hardcoded 0 placeholder. This list is a plain
+          // specialty filter ordered createdAt desc — no score exists, so
+          // none is reported. (The provider dashboard UI reads the real
+          // matching widget from GET /provider/statistics instead.)
+          aiMatchScore: null,
           createdAt: p.createdAt
         };
       });

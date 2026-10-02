@@ -209,7 +209,11 @@ Select the top ${safeLimit} most relevant models and return JSON with this EXACT
 		const topRanked = dbModels.slice(0, safeLimit).map((m) => {
 			const matchScore = m.aiScore ?? m.aiAuditScore ?? 0;
 			const reason = query ? `نتيجة مطابقة لعبارة البحث "${query}".` : 'متاح ضمن أعلى النماذج مشاهدة.';
-			return this.formatModelForClient(m, matchScore, reason);
+			// Batch 5: aiMatchPercentage is null here. The stored aiScore is the
+			// model's own AI quality/audit score, not a match against this
+			// search, so it stays in `aiScore` only and is never relabeled as
+			// a match percentage.
+			return this.formatModelForClient(m, matchScore, reason, null);
 		});
 
 		return {
@@ -223,7 +227,7 @@ Select the top ${safeLimit} most relevant models and return JSON with this EXACT
 	/**
 	 * Helper to format Prisma ServiceCatalog model into rich client-facing object
 	 */
-	private formatModelForClient(m: any, matchScore: number, recommendationReason: string) {
+	private formatModelForClient(m: any, matchScore: number, recommendationReason: string, matchPercentage: number | null = matchScore) {
 		// Phase 3E.1: display formatting only — the AI ranking prompt
 		// (modelsSummary, above) never receives provider name/level at all,
 		// so none of this participates in recommendation selection/scoring.
@@ -284,7 +288,7 @@ Select the top ${safeLimit} most relevant models and return JSON with this EXACT
 			},
 			stages: m.stages || [],
 			aiRecommendationReason: recommendationReason,
-			aiMatchPercentage: matchScore
+			aiMatchPercentage: matchPercentage
 		};
 	}
 }

@@ -267,3 +267,27 @@ for (const [label, makeError] of [
     assert.equal(result.recommendations[0].aiScore, model.aiScore ?? model.aiAuditScore ?? 0, 'score is the stored DB value, never an AI-looking invented percentage');
   });
 }
+
+// ── AI Cleanup Batch 5 — score semantics ─────────────────────────────────
+test('Batch 5: deterministic fallback never relabels the stored AI quality score as a match percentage', async (t) => {
+  const model = makeDbModel({ id: 'm1', aiScore: 88 });
+  const service = await loadService(t, [model], { isConfigured: false });
+
+  const result = await service.generateAiRecommendations({ limit: 5 });
+
+  assert.equal(result.generationSource, 'DETERMINISTIC');
+  assert.equal(result.recommendations[0].aiMatchPercentage, null, 'no match percentage exists without a real Gemini result');
+  assert.equal(result.recommendations[0].aiScore, 88, 'the real stored quality score is preserved as-is');
+});
+
+test('Batch 5: a genuine Gemini recommendation keeps its real match percentage', async (t) => {
+  const service = await loadService(t, [makeDbModel({ id: 'm1' })], {
+    isConfigured: true,
+    generateStructured: async () => ({ data: { bannerInsight: 'x', smartSearchTags: ['x'], recommendations: [{ id: 'm1', aiMatchPercentage: 73, aiRecommendationReason: 'سبب' }] } })
+  });
+
+  const result = await service.generateAiRecommendations({ limit: 5 });
+
+  assert.equal(result.generationSource, 'GEMINI');
+  assert.equal(result.recommendations[0].aiMatchPercentage, 73);
+});
