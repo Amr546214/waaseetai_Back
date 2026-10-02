@@ -42,7 +42,7 @@ function proposalFixture(overrides: Partial<{ id: string; providerId: string; pr
   };
 }
 
-async function loadService(t: TestContext, opts: { proposals?: ReturnType<typeof proposalFixture>[] } = {}) {
+async function loadService(t: TestContext, opts: { proposals?: ReturnType<typeof proposalFixture>[]; projectProposals?: any[] } = {}) {
   const clientRequestFindFirstArgs: any[] = [];
   const prismaMock: any = {
     clientRequest: {
@@ -69,7 +69,7 @@ async function loadService(t: TestContext, opts: { proposals?: ReturnType<typeof
         };
       },
     },
-    projectProposal: { findMany: async () => [] },
+    projectProposal: { findMany: async () => opts.projectProposals ?? [] },
     project: { groupBy: async () => [] },
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
@@ -171,4 +171,33 @@ test('9) existing proposal/provider fields remain unchanged alongside the new pr
   assert.equal(proposal.provider.id, 'provider-9');
   assert.equal(proposal.provider.name, 'سارة علي');
   assert.ok('badge' in proposal.provider);
+});
+
+test('10) the stored WaseetAI proposal-quality review is exposed as aiQualityTag / aiQualitySummary (and nothing about price fairness)', async t => {
+  const { service } = await loadService(t, {
+    proposals: [proposalFixture()],
+    projectProposals: [{ providerId: 'provider-1', milestones: [], aiQualityTag: 'Strong', aiPriceTag: null, aiFeedback: { source: 'WASEET_AI', summary: '  عرض قوي بخطة واضحة.  ', fairPrice: 'x' } }],
+  });
+  const p = (await service.getRequestDetails('client-1', 'req-1')).proposals[0];
+  assert.equal(p.aiQualityTag, 'Strong');
+  assert.equal(p.aiQualitySummary, 'عرض قوي بخطة واضحة.');
+  assert.equal(p.aiPriceTag, null);
+  assert.equal('aiFeedback' in p, false, 'the raw stored feedback JSON is never passed through');
+});
+
+test('11) a legacy (pre-WaseetAI) stored feedback is not surfaced as a quality summary', async t => {
+  const { service } = await loadService(t, {
+    proposals: [proposalFixture()],
+    projectProposals: [{ providerId: 'provider-1', milestones: [], aiQualityTag: 'Good', aiFeedback: { summary: 'نص قديم من محرك سابق' } }],
+  });
+  const p = (await service.getRequestDetails('client-1', 'req-1')).proposals[0];
+  assert.equal(p.aiQualityTag, 'Good');
+  assert.equal(p.aiQualitySummary, null);
+});
+
+test('12) no stored review -> null quality fields, never invented', async t => {
+  const { service } = await loadService(t, { proposals: [proposalFixture()] });
+  const p = (await service.getRequestDetails('client-1', 'req-1')).proposals[0];
+  assert.equal(p.aiQualityTag, null);
+  assert.equal(p.aiQualitySummary, null);
 });

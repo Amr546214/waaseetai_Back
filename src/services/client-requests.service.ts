@@ -1067,8 +1067,18 @@ export class ClientRequestsService {
 
 		// Build a providerId → milestones lookup for merging
 		const milestonesMap = new Map<string, any[]>();
+		// providerId → the WaseetAI proposal-quality review stored at creation
+		// (ProjectProposal.aiQualityTag / aiFeedback.summary). It judges the
+		// proposal's own plan/price/days only — never project fit or price
+		// fairness — so it is exposed under quality-specific names.
+		const qualityMap = new Map<string, { tag: string | null; summary: string | null }>();
 		for (const pp of projectProposals) {
 			milestonesMap.set(pp.providerId, pp.milestones || []);
+			const fb = pp.aiFeedback as { source?: unknown; summary?: unknown } | null;
+			qualityMap.set(pp.providerId, {
+				tag: pp.aiQualityTag || null,
+				summary: fb && fb.source === 'WASEET_AI' && typeof fb.summary === 'string' && fb.summary.trim() ? fb.summary.trim() : null,
+			});
 		}
 
 		// تنسيق المرفقات النظيفة
@@ -1137,6 +1147,8 @@ export class ClientRequestsService {
 				aiFairPriceMin: prop.aiFairPriceMin || null,
 				aiFairPriceMax: prop.aiFairPriceMax || null,
 				aiPriceTag: prop.aiPriceTag || null,
+				aiQualityTag: qualityMap.get(prop.providerId)?.tag ?? null,
+				aiQualitySummary: qualityMap.get(prop.providerId)?.summary ?? null,
 				createdAt: prop.createdAt,
 				provider: {
 					id: providerUser.id,

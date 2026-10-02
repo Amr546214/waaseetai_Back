@@ -48,7 +48,14 @@ const ZERO_AI_METRICS: ProviderAiPerformanceMetrics = {
 
 const AI_METRIC_KEYS: (keyof ProviderAiPerformanceMetrics)[] = ['executionQuality', 'onTimeDelivery', 'communication', 'clientSatisfaction', 'onTimeCompletionRate', 'repeatClientRate', 'highRatingServicesRate', 'conflictFreeDeliveryRate'];
 
-export const BIO_SUGGESTION_UNAVAILABLE_MESSAGE = 'اقتراح النبذة التعريفية بالذكاء الاصطناعي متوقف مؤقتاً حتى تتمكن خدمة WaseetAI من استقبال تفاصيل ملفك الشخصي. يمكنك كتابة نبذتك يدوياً.';
+// Bio stays disabled by evidence (6 live samples, 2026-10-02): WaseetAI now
+// accepts and uses the provider's real data (specialties, yearsOfExperience,
+// currentBio) and always returns 3 options, BUT the Markdown layout differs
+// per call (`### الخيار…` vs `**الخيار…**`; quoted, blockquoted or bare body),
+// the text names a competitor platform and appends tips. There is no stable
+// structure to split safely, so nothing is parsed by guesswork. Needs a
+// single-bio response from the service (docs/waseetai-vendor-blockers.md §2.7).
+export const BIO_SUGGESTION_UNAVAILABLE_MESSAGE = 'اقتراح النبذة التعريفية بالذكاء الاصطناعي متوقف مؤقتاً حتى تعيد الخدمة نبذة واحدة جاهزة للاستخدام. يمكنك كتابة نبذتك يدوياً.';
 
 // Batch 4: suggestion-only contracts. No profile-save methods are reused here.
 export interface ProviderBioSuggestion { suggestedBio: string; }
