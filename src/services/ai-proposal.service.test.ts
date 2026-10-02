@@ -85,6 +85,33 @@ test('missing projectId or fully empty draft is a 400 without calling WaseetAI',
   assert.equal(svc.calls.length, 0);
 });
 
+test('title and message are both required: each missing/blank case is a clear 400 and WaseetAI is never called', async (t) => {
+  const svc = await load(t);
+  const cases: Array<[string, string, RegExp]> = [
+    ['', 'نص العرض', /عنوان العرض/],
+    ['   ', 'نص العرض', /عنوان العرض/],
+    ['عنوان العرض', '', /نص العرض/],
+    ['عنوان العرض', '  ', /نص العرض/],
+    ['', '', /العنوان ونصه معًا|ونصه معًا/]
+  ];
+  for (const [title, message, expected] of cases) {
+    await assert.rejects(
+      () => svc.evaluateAndSuggestProposal('p1', title, message),
+      (err: any) => err.statusCode === 400 && expected.test(err.message)
+    );
+  }
+  assert.equal(svc.calls.length, 0);
+});
+
+test('a title plus a message still reaches WaseetAI (successful path unchanged)', async (t) => {
+  const svc = await load(t);
+  const result = await svc.evaluateAndSuggestProposal('p1', 'عنوان', 'رسالة');
+  assert.equal(svc.calls.length, 1);
+  assert.equal(svc.calls[0].currentTitle, 'عنوان');
+  assert.equal(svc.calls[0].currentMessage, 'رسالة');
+  assert.ok(result.suggestedTitle);
+});
+
 test('route keeps authenticate + provider authorize + aiLimiter + validation; controller passes through the service result', () => {
   const route = readFileSync(new URL('../routes/proposal.routes.ts', import.meta.url), 'utf8');
   const idx = route.indexOf("'/ai-suggest'");
