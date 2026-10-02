@@ -158,8 +158,7 @@ class SpecialtyService {
         },
         _count: {
           select: {
-            providerSpecialties: { where: { isActive: true } },
-            tests: true
+            providerSpecialties: { where: { isActive: true } }
           }
         }
       }
