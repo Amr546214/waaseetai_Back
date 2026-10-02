@@ -133,7 +133,7 @@ Works except `priceAudit` (identical range for any project). **Change needed:** 
 `{}` returns a fixed 5-question platform-knowledge quiz. We now run the provider setup test through `assessments/stream` + `submit` (per-specialty), so this endpoint is only relevant if you want a separate *platform* onboarding quiz; if so, please document its option ids and grading.
 
 ### 2.11b Not blocked by the service but needing a product decision on our side — avatar
-`POST /v1/ai/avatar/chat {"message"}` → `{text, audio:{mimeType:"audio/mp3", base64Audio}}` is documented and our client has `avatarChat`. We have no avatar chat screen or persona (the old `ai_chat` gateway was removed on purpose); the in-app assistant ("Bebo") uses `help/chat` + TTS. Needs: where it appears, persona/tone, cost limits.
+`POST /v1/ai/avatar/chat {"message"}` → `{text, audio:{mimeType:"audio/mp3", base64Audio}}` is documented and our client has `avatarChat`. We have no avatar chat screen or persona (the old `ai_chat` gateway was removed on purpose); the in-app assistant ("Bebo") is deferred to a separate track (§4). Needs: where it appears, persona/tone, cost limits.
 
 ### 2.11c Description AI pre-check (title / specialty consistency) — needs a new endpoint
 No endpoint validates a project title against the chosen specialty. We keep only our deterministic check. **Change needed:** e.g. `POST /v1/ai/request-title-check {title, specialty, subSpecialties[]}` → `{isMeaningful, isAligned, reasonAr}` (or document an existing endpoint that does this).
@@ -160,7 +160,7 @@ Verified: `POST /v1/ai/assessments/stream` `{"providerSpecialtyId","specialtyNam
 
 ---
 
-## 4. Help assistant — knowledge base empty
+## 4. Help assistant — knowledge base empty (DEFERRED: separate track, not reviewed or tested in this round)
 
 `help/chat` and `help/stream` with `"كيف يعمل الضمان في المنصة؟"`, `"ما هي رسوم المنصة؟"`, `"ما هي شروط الدفع الآمن Escrow؟"`, `"escrow terms"` all return
 `event: help:answer_start {"status":"started","citationsCount":0}` then
