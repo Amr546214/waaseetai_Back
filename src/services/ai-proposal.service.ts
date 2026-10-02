@@ -95,7 +95,11 @@ class AiProposalService {
     const title = typeof currentTitle === 'string' ? currentTitle.trim() : '';
     const message = typeof currentMessage === 'string' ? currentMessage.trim() : '';
     if (!id) throw new AppError('معرف المشروع (projectId) مطلوب', 400);
-    if (!title && !message) throw new AppError('اكتب عنوان العرض أو نصه أولاً ليتم تحليله', 400);
+    // WaseetAI rejects an empty currentTitle (and the message is what it improves), so both are
+    // required here — a clear 400 for the user instead of an upstream VALIDATION_ERROR turned into a 503.
+    if (!title && !message) throw new AppError('اكتب عنوان العرض ونصه معًا ليتمكن الذكاء الاصطناعي من تحسينهما', 400);
+    if (!title) throw new AppError('اكتب عنوان العرض أولاً، فالاقتراح يحتاج العنوان والنص معًا', 400);
+    if (!message) throw new AppError('اكتب نص العرض أولاً، فالاقتراح يحتاج العنوان والنص معًا', 400);
 
     let raw;
     try {
