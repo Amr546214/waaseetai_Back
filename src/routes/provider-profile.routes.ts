@@ -31,7 +31,7 @@ const requireProvider = authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.P
 // Public read-only profile endpoints must remain outside the authenticated
 // middleware. Private preview (/public without an id) is still protected by
 // the middleware below because it resolves the current user's profile.
-// aiLimiter (security follow-up): this endpoint triggers a real Gemini call
+// aiLimiter (security follow-up): this endpoint triggers a real WaseetAI call
 // (generateAiMetrics) on a cache miss and has zero authentication, so it
 // must carry the same AI-cost rate limit every other AI-triggering public
 // endpoint does (see F6's marketplace/ai-recommendations).
@@ -60,7 +60,7 @@ router.get('/setup', requireProvider, providerProfileController.getSetupData);
 router.post('/setup', requireProvider, providerProfileController.saveSetupData);
 // Self-preview variant of the same getPublicProfile handler as the public
 // `/public/:providerId` route above — it hits the identical generateAiMetrics
-// Gemini call on a cache miss, so it needs the same aiLimiter (Batch 6 gap
+// WaseetAI call on a cache miss, so it needs the same aiLimiter (Batch 6 gap
 // fix; this route was missing it while its sibling already had it).
 router.get('/public', requireProvider, aiLimiter, providerProfileController.getPublicProfile);
 router.get('/requests', requireProvider, providerProfileController.getModificationRequests);

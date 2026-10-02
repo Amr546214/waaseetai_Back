@@ -1,323 +1,306 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { WaseetAiError, WaseetAiErrorCode } from '../services/ai/waseet-ai/waseet-ai.errors';
+import type { WaseetAiStreamEvent } from '../services/ai/waseet-ai/waseet-ai.types';
 
-// F1b (stream_ai_suggest_text / stream_ai_enhance_description) — Batch:
-// F1+F2 streaming migration to the shared Gemini foundation. No real
-// Socket.IO server is used — a plain mock socket captures registered
-// handlers/emitted events, matching this project's established
-// req/res-mock convention for controller tests (see
-// profile.controller.test.ts) applied to the socket transport.
-// `geminiClient` is mocked via t.mock.module; no real network call happens.
+// stream_ai_suggest_text / stream_ai_enhance_description — WaseetAI only.
+// No real Socket.IO server and no network: a plain mock socket captures
+// handlers/emitted events and `waseetAiClient` is mocked.
 
 function createMockSocket(opts: { userId?: string } = {}) {
   const handlers: Record<string, (...args: any[]) => any> = {};
   const onceHandlers: Record<string, Array<(...args: any[]) => any>> = {};
   const emitted: Array<{ event: string; payload: any }> = [];
-
   const socket: any = {
     id: 'socket-test-1',
     userId: opts.userId,
     on: (event: string, handler: (...args: any[]) => any) => { handlers[event] = handler; },
-    once: (event: string, handler: (...args: any[]) => any) => {
-      (onceHandlers[event] ||= []).push(handler);
-    },
+    once: (event: string, handler: (...args: any[]) => any) => { (onceHandlers[event] ||= []).push(handler); },
     off: (event: string, handler?: (...args: any[]) => any) => {
       if (!onceHandlers[event]) return;
       onceHandlers[event] = handler ? onceHandlers[event].filter((h) => h !== handler) : [];
     },
     emit: (event: string, payload: any) => { emitted.push({ event, payload }); }
   };
-
-  return {
-    socket,
-    handlers,
-    emitted,
-    triggerDisconnect: () => { (onceHandlers['disconnect'] || []).forEach((h) => h()); }
-  };
+  return { socket, handlers, emitted, triggerDisconnect: () => { (onceHandlers['disconnect'] || []).forEach((h) => h()); }, onceHandlers };
 }
 
-function fakeStream(chunks: string[], opts: { throwAfter?: number; error?: Error; checkSignal?: AbortSignal } = {}) {
+const delta = (chunk: string): WaseetAiStreamEvent => ({ type: 'delta', chunk });
+
+function fakeStream(events: WaseetAiStreamEvent[], opts: { throwAfter?: number; error?: Error } = {}) {
   return (async function* () {
-    for (let i = 0; i < chunks.length; i++) {
-      if (opts.checkSignal?.aborted) {
-        const abortError: any = new Error('aborted');
-        abortError.name = 'AbortError';
-        throw abortError;
-      }
-      if (opts.throwAfter !== undefined && i === opts.throwAfter) {
-        throw opts.error || new Error('stream failed');
-      }
-      yield chunks[i];
+    for (let i = 0; i < events.length; i++) {
+      if (opts.throwAfter !== undefined && i === opts.throwAfter) throw opts.error ?? new Error('stream failed');
+      yield events[i];
     }
-    return { promptTokens: 1, completionTokens: 1, totalTokens: 2 };
   })();
 }
+const okEvents = (chunks: string[]): WaseetAiStreamEvent[] => [{ type: 'started' }, ...chunks.map(delta), { type: 'completed' }];
+
+interface Call { method: string; body: any; opts: any }
 
 async function loadGateway(t: TestContext, opts: {
   isConfigured?: boolean;
-  generateStream?: (prompt: string, options: any) => AsyncGenerator<string, any, void>;
-  // Defaults to a PROVIDER account — the only current real UI caller of
-  // both events (New Project wizard, guarded by providerGuard) — so every
-  // pre-existing test above (all using userId: 'user-1') keeps passing
-  // unchanged under the new Phase 3 Batch 2A role check.
+  stream?: (call: Call) => AsyncGenerator<WaseetAiStreamEvent, void, void>;
   accountType?: string | null;
-}) {
-  const generateStreamSpy = opts.generateStream ?? (() => fakeStream(['حصة']));
-  const geminiClientMock = {
-    isConfigured: () => opts.isConfigured ?? true,
-    generateStream: generateStreamSpy
+} = {}) {
+  const calls: Call[] = [];
+  const make = (method: string) => (body: any, o: any) => {
+    const call = { method, body, opts: o };
+    calls.push(call);
+    return (opts.stream ?? (() => fakeStream(okEvents(['حصة ', 'ثانية']))))(call);
   };
-  t.mock.module('../services/ai/gemini/gemini.client', { namedExports: { geminiClient: geminiClientMock } });
-
+  const clientMock = {
+    isConfigured: () => opts.isConfigured ?? true,
+    streamTextSuggestion: make('streamTextSuggestion'),
+    streamTextEnhancement: make('streamTextEnhancement')
+  };
+  t.mock.module('../services/ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: clientMock } });
   const accountType = opts.accountType === undefined ? 'PROVIDER_INDIVIDUAL' : opts.accountType;
   t.mock.module('../config/db', {
     namedExports: { prisma: { user: { findUnique: async () => (accountType === null ? null : { accountType }) } } }
   });
-
-  const moduleUrl = `./ai-review.gateway.ts?fixture=${Date.now()}-${Math.random()}`;
-  const mod = await import(moduleUrl);
-  return mod.registerAiReviewGateway as (socket: any) => void;
+  const mod = await import(`./ai-review.gateway.ts?fixture=${Date.now()}-${Math.random()}`);
+  const register = mod.registerAiReviewGateway as (socket: any) => void;
+  return Object.assign(register, { calls });
 }
 
-// ── auth ─────────────────────────────────────────────────────────────────
+const TITLE = 'تطوير متجر إلكتروني متكامل';
 
-test('stream_ai_suggest_text: an unauthenticated socket (no userId) is rejected without calling Gemini', async (t) => {
-  let called = false;
-  const register = await loadGateway(t, { generateStream: () => { called = true; return fakeStream([]); } });
+// ── auth / role ──────────────────────────────────────────────────────────
+
+test('suggest: unauthenticated socket is rejected without calling WaseetAI', async (t) => {
+  const register = await loadGateway(t);
   const { socket, handlers, emitted } = createMockSocket({ userId: undefined });
   register(socket);
-
-  await handlers['stream_ai_suggest_text']({ title: 'تطوير متجر إلكتروني متكامل' });
-
-  assert.equal(called, false);
+  await handlers['stream_ai_suggest_text']({ title: TITLE });
+  assert.equal(register.calls.length, 0);
   assert.equal(emitted.length, 1);
   assert.equal(emitted[0].event, 'ai_text_stream_end');
   assert.match(emitted[0].payload.message, /تسجيل الدخول/);
 });
 
-// ── Phase 3 Batch 2A: role authorization — both events' only real UI caller
-// is the PROVIDER-facing New Project wizard (confirmed by tracing every
-// frontend emit site of stream_ai_suggest_text / stream_ai_enhance_description) ──
-
-test('stream_ai_suggest_text: a PROVIDER_INDIVIDUAL account (the intended role) is accepted and reaches Gemini', async (t) => {
-  const register = await loadGateway(t, { accountType: 'PROVIDER_INDIVIDUAL' });
-  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+test('enhance: unauthenticated socket is rejected without calling WaseetAI', async (t) => {
+  const register = await loadGateway(t);
+  const { socket, handlers, emitted } = createMockSocket({ userId: undefined });
   register(socket);
-
-  await handlers['stream_ai_suggest_text']({ title: 'تطوير متجر إلكتروني متكامل' });
-
-  assert.ok(emitted.some((e) => e.event === 'ai_text_stream_chunk'), 'the intended role must reach the normal streaming success path');
+  await handlers['stream_ai_enhance_description']({ description: 'وصف مبدئي' });
+  assert.equal(register.calls.length, 0);
+  assert.match(emitted[0].payload.message, /تسجيل الدخول/);
 });
 
-test('stream_ai_suggest_text: a CLIENT_INDIVIDUAL account (unintended role) is rejected without calling Gemini', async (t) => {
-  let called = false;
-  const register = await loadGateway(t, {
-    accountType: 'CLIENT_INDIVIDUAL',
-    generateStream: () => { called = true; return fakeStream(['x']); }
+for (const accountType of ['CLIENT_INDIVIDUAL', 'CLIENT_COMPANY', null]) {
+  test(`both events: account ${accountType} (not a provider) is rejected without calling WaseetAI`, async (t) => {
+    const register = await loadGateway(t, { accountType });
+    const { socket, handlers, emitted } = createMockSocket({ userId: 'user-2' });
+    register(socket);
+    await handlers['stream_ai_suggest_text']({ title: TITLE });
+    await handlers['stream_ai_enhance_description']({ description: 'وصف مبدئي' });
+    assert.equal(register.calls.length, 0);
+    assert.equal(emitted.length, 2);
+    for (const e of emitted) assert.match(e.payload.message, /مقدمي الخدمة/);
   });
-  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-2' });
+}
+
+for (const accountType of ['PROVIDER_INDIVIDUAL', 'PROVIDER_COMPANY']) {
+  test(`both events: ${accountType} reaches WaseetAI`, async (t) => {
+    const register = await loadGateway(t, { accountType });
+    const { socket, handlers } = createMockSocket({ userId: 'user-1' });
+    register(socket);
+    await handlers['stream_ai_suggest_text']({ title: TITLE });
+    await handlers['stream_ai_enhance_description']({ description: 'وصف مبدئي' });
+    assert.deepEqual(register.calls.map((c) => c.method), ['streamTextSuggestion', 'streamTextEnhancement']);
+  });
+}
+
+// ── validation ───────────────────────────────────────────────────────────
+
+test('suggest: a vague title is rejected before calling WaseetAI', async (t) => {
+  const register = await loadGateway(t);
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
-
-  await handlers['stream_ai_suggest_text']({ title: 'تطوير متجر إلكتروني متكامل' });
-
-  assert.equal(called, false, 'Gemini must never be invoked for an unauthorized role');
+  await handlers['stream_ai_suggest_text']({ title: 'aaaaaaaa' });
+  assert.equal(register.calls.length, 0);
   assert.equal(emitted.length, 1);
   assert.equal(emitted[0].event, 'ai_text_stream_end');
-  assert.match(emitted[0].payload.message, /مقدمي الخدمة/);
 });
 
-test('stream_ai_enhance_description: a PROVIDER_COMPANY account (the intended role) is accepted and reaches Gemini', async (t) => {
-  const register = await loadGateway(t, { accountType: 'PROVIDER_COMPANY' });
-  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-3' });
+test('enhance: empty description is rejected (title alone is not sent) without calling WaseetAI', async (t) => {
+  const register = await loadGateway(t);
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
-
-  await handlers['stream_ai_enhance_description']({ title: 'تطوير متجر إلكتروني متكامل', description: 'وصف مبدئي' });
-
-  assert.ok(emitted.some((e) => e.event === 'ai_text_stream_chunk'));
-});
-
-test('stream_ai_enhance_description: a CLIENT_COMPANY account (unintended role) is rejected without calling Gemini', async (t) => {
-  let called = false;
-  const register = await loadGateway(t, {
-    accountType: 'CLIENT_COMPANY',
-    generateStream: () => { called = true; return fakeStream(['x']); }
-  });
-  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-4' });
-  register(socket);
-
-  await handlers['stream_ai_enhance_description']({ title: 'تطوير متجر إلكتروني متكامل', description: 'وصف مبدئي' });
-
-  assert.equal(called, false);
+  await handlers['stream_ai_enhance_description']({ title: TITLE, description: '   ' });
+  assert.equal(register.calls.length, 0);
   assert.equal(emitted.length, 1);
+  assert.match(emitted[0].payload.message, /وصف/);
+});
+
+test('enhance: a vague title still fails the deterministic check', async (t) => {
+  const register = await loadGateway(t);
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+  await handlers['stream_ai_enhance_description']({ title: 'aaaaaaaa', description: 'وصف مبدئي' });
+  assert.equal(register.calls.length, 0);
   assert.equal(emitted[0].event, 'ai_text_stream_end');
-  assert.match(emitted[0].payload.message, /مقدمي الخدمة/);
 });
 
-// ── successful multiple-chunk stream + ordering + completion-only-on-success ──
+test('both events: the 31st request within the window is rate-limited without calling WaseetAI', async (t) => {
+  const register = await loadGateway(t);
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'rate-limit-user' });
+  register(socket);
+  for (let i = 0; i < 30; i++) await handlers['stream_ai_suggest_text']({ title: TITLE });
+  assert.equal(register.calls.length, 30);
+  emitted.length = 0;
+  await handlers['stream_ai_suggest_text']({ title: TITLE });
+  await handlers['stream_ai_enhance_description']({ description: 'وصف مبدئي' });
+  assert.equal(register.calls.length, 30);
+  assert.equal(emitted.length, 2);
+  for (const e of emitted) assert.match(e.payload.message, /تجاوز الحد/);
+});
 
-test('stream_ai_suggest_text: a real validated Gemini stream emits chunks in order then a single success end event', async (t) => {
-  const register = await loadGateway(t, { generateStream: () => fakeStream(['أهلاً ', 'وسهلاً ', 'بكم']) });
+// ── success mapping ──────────────────────────────────────────────────────
+
+test('suggest: sends ONLY { title } and relays deltas in order on the existing events', async (t) => {
+  const register = await loadGateway(t, { stream: () => fakeStream(okEvents(['أهلاً ', 'وسهلاً ', 'بكم'])) });
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
+  await handlers['stream_ai_suggest_text']({ title: `  ${TITLE}  `, description: 'extra', specialty: 'x' });
 
-  await handlers['stream_ai_suggest_text']({ title: 'تطوير متجر إلكتروني متكامل' });
-
-  const events = emitted.map((e) => e.event);
-  assert.deepEqual(events, ['ai_text_stream_start', 'ai_text_stream_chunk', 'ai_text_stream_chunk', 'ai_text_stream_chunk', 'ai_text_stream_end']);
-  const chunks = emitted.filter((e) => e.event === 'ai_text_stream_chunk').map((e) => e.payload.chunk);
-  assert.deepEqual(chunks, ['أهلاً ', 'وسهلاً ', 'بكم']);
-  const end = emitted[emitted.length - 1];
-  assert.match(end.payload.message, /اكتمل/);
+  assert.deepEqual(register.calls[0].body, { title: TITLE });
+  assert.deepEqual(emitted.map((e) => e.event), ['ai_text_stream_start', 'ai_text_stream_chunk', 'ai_text_stream_chunk', 'ai_text_stream_chunk', 'ai_text_stream_end']);
+  assert.deepEqual(emitted.filter((e) => e.event === 'ai_text_stream_chunk').map((e) => e.payload.chunk), ['أهلاً ', 'وسهلاً ', 'بكم']);
+  assert.ok(emitted.every((e) => e.payload.mode === 'suggest'));
+  assert.match(emitted[4].payload.message, /اكتمل/);
 });
 
-// ── stream failure / timeout / provider failure — honest end, no fake fallback ──
+test('enhance: sends ONLY { description } (title is not forwarded) with mode improve', async (t) => {
+  const register = await loadGateway(t);
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+  await handlers['stream_ai_enhance_description']({ title: TITLE, description: '  وصف مبدئي  ' });
 
-test('stream_ai_suggest_text: Gemini throwing immediately produces an honest failure end event with zero chunks emitted', async (t) => {
+  assert.equal(register.calls[0].method, 'streamTextEnhancement');
+  assert.deepEqual(register.calls[0].body, { description: 'وصف مبدئي' });
+  assert.ok(emitted.every((e) => e.payload.mode === 'improve'));
+  assert.equal(emitted[emitted.length - 1].event, 'ai_text_stream_end');
+  assert.match(emitted[emitted.length - 1].payload.message, /تم تحسين/);
+});
+
+test('streaming is real: each delta is emitted before the next one is requested', async (t) => {
+  const seen: string[] = [];
+  let emittedAtSecondPull = -1;
   const register = await loadGateway(t, {
-    generateStream: () => fakeStream([], { throwAfter: 0, error: new Error('provider unavailable') })
+    stream: () => (async function* () {
+      yield delta('أول');
+      emittedAtSecondPull = seen.length;
+      yield delta('ثاني');
+      yield { type: 'completed' } as WaseetAiStreamEvent;
+    })()
+  });
+  const { socket, handlers } = createMockSocket({ userId: 'user-1' });
+  const origEmit = socket.emit;
+  socket.emit = (e: string, p: any) => { if (e === 'ai_text_stream_chunk') seen.push(p.chunk); origEmit(e, p); };
+  register(socket);
+  await handlers['stream_ai_suggest_text']({ title: TITLE });
+  assert.equal(emittedAtSecondPull, 1, 'first chunk must already be on the socket when the second is pulled');
+});
+
+// ── failures ─────────────────────────────────────────────────────────────
+
+test('suggest: upstream failure before any chunk -> honest ai_text_stream_end, no chunk, no upstream text', async (t) => {
+  const SECRET = 'UPSTREAM-SECRET-DETAIL';
+  const register = await loadGateway(t, {
+    stream: () => fakeStream([delta('x')], { throwAfter: 0, error: new WaseetAiError(WaseetAiErrorCode.PROVIDER_UNAVAILABLE, SECRET, { status: 502 }) })
   });
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
-
-  await handlers['stream_ai_suggest_text']({ title: 'تطوير متجر إلكتروني متكامل' });
-
-  const chunkEvents = emitted.filter((e) => e.event === 'ai_text_stream_chunk');
-  assert.equal(chunkEvents.length, 0, 'no fake/canned text may ever be emitted as chunks on failure');
-  const end = emitted[emitted.length - 1];
-  assert.equal(end.event, 'ai_text_stream_end');
-  assert.match(end.payload.message, /تعذر/);
+  await handlers['stream_ai_suggest_text']({ title: TITLE });
+  assert.ok(!emitted.some((e) => e.event === 'ai_text_stream_chunk'));
+  const last = emitted[emitted.length - 1];
+  assert.equal(last.event, 'ai_text_stream_end');
+  assert.match(last.payload.message, /تعذر/);
+  assert.ok(!JSON.stringify(emitted).includes(SECRET));
 });
 
-test('stream_ai_suggest_text: a mid-stream failure (simulating a timeout) still yields already-sent chunks but ends honestly, not with a success message', async (t) => {
+test('enhance: mid-stream failure ends with the failure message, never the success message', async (t) => {
   const register = await loadGateway(t, {
-    generateStream: () => fakeStream(['جزء أول ', 'جزء لن يصل'], { throwAfter: 1, error: new Error('timeout') })
+    stream: () => fakeStream(okEvents(['جزء أول ', 'x']), { throwAfter: 2, error: new Error('boom') })
   });
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
-
-  await handlers['stream_ai_suggest_text']({ title: 'تطوير متجر إلكتروني متكامل' });
-
-  const chunkEvents = emitted.filter((e) => e.event === 'ai_text_stream_chunk');
-  assert.equal(chunkEvents.length, 1);
-  const end = emitted[emitted.length - 1];
-  assert.equal(end.event, 'ai_text_stream_end');
-  assert.match(end.payload.message, /تعذر/, 'must never claim success after a mid-stream failure');
+  await handlers['stream_ai_enhance_description']({ description: 'وصف مبدئي' });
+  const last = emitted[emitted.length - 1];
+  assert.equal(last.event, 'ai_text_stream_end');
+  assert.match(last.payload.message, /تعذر/);
+  assert.doesNotMatch(last.payload.message, /تم تحسين/);
 });
 
-test('stream_ai_suggest_text: an empty (zero-chunk) Gemini stream is treated as a failure, never a silent success', async (t) => {
-  const register = await loadGateway(t, { generateStream: () => fakeStream([]) });
+test('timeout maps to the timeout message', async (t) => {
+  const register = await loadGateway(t, {
+    stream: () => fakeStream([delta('x')], { throwAfter: 0, error: new WaseetAiError(WaseetAiErrorCode.TIMEOUT, 'timeout') })
+  });
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
-
-  await handlers['stream_ai_suggest_text']({ title: 'تطوير متجر إلكتروني متكامل' });
-
-  const end = emitted[emitted.length - 1];
-  assert.equal(end.event, 'ai_text_stream_end');
-  assert.match(end.payload.message, /تعذر/);
+  await handlers['stream_ai_suggest_text']({ title: TITLE });
+  assert.match(emitted[emitted.length - 1].payload.message, /مهلة/);
 });
 
-// ── not configured ───────────────────────────────────────────────────────
-
-test('stream_ai_suggest_text: Gemini not configured emits an honest "not configured" end event without starting a stream', async (t) => {
-  let called = false;
-  const register = await loadGateway(t, { isConfigured: false, generateStream: () => { called = true; return fakeStream([]); } });
+test('a stream that completes with no text is a failure, not a silent success', async (t) => {
+  const register = await loadGateway(t, { stream: () => fakeStream([{ type: 'started' }, { type: 'completed' }]) });
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
+  await handlers['stream_ai_suggest_text']({ title: TITLE });
+  assert.match(emitted[emitted.length - 1].payload.message, /تعذر/);
+});
 
-  await handlers['stream_ai_suggest_text']({ title: 'تطوير متجر إلكتروني متكامل' });
+test('a stream that ends without a completed event is a failure', async (t) => {
+  const register = await loadGateway(t, { stream: () => fakeStream([delta('نص')]) });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+  await handlers['stream_ai_enhance_description']({ description: 'وصف مبدئي' });
+  assert.match(emitted[emitted.length - 1].payload.message, /تعذر/);
+});
 
-  assert.equal(called, false);
+test('WaseetAI not configured -> honest message before any call', async (t) => {
+  const register = await loadGateway(t, { isConfigured: false });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+  await handlers['stream_ai_suggest_text']({ title: TITLE });
+  assert.equal(register.calls.length, 0);
   assert.equal(emitted.length, 1);
-  assert.equal(emitted[0].event, 'ai_text_stream_end');
   assert.match(emitted[0].payload.message, /غير مهيأة/);
 });
 
-// ── rate limiting ────────────────────────────────────────────────────────
+// ── abort ────────────────────────────────────────────────────────────────
 
-test('stream_ai_suggest_text: a user issuing more than 30 requests within the window is rate-limited on the next one', async (t) => {
-  const register = await loadGateway(t, { generateStream: () => fakeStream(['ok']) });
-  const { socket, handlers, emitted } = createMockSocket({ userId: `rate-limit-user-${Date.now()}-${Math.random()}` });
-  register(socket);
-
-  for (let i = 0; i < 30; i++) {
-    await handlers['stream_ai_suggest_text']({ title: 'تطوير متجر إلكتروني متكامل' });
-  }
-  emitted.length = 0;
-
-  await handlers['stream_ai_suggest_text']({ title: 'تطوير متجر إلكتروني متكامل' });
-
-  assert.equal(emitted.length, 1);
-  assert.equal(emitted[0].event, 'ai_text_stream_end');
-  assert.match(emitted[0].payload.message, /تجاوز الحد المسموح/);
-});
-
-// ── invalid title (existing deterministic validator, unaffected by migration) ──
-
-test('stream_ai_suggest_text: a non-meaningful title is rejected before ever calling Gemini', async (t) => {
-  let called = false;
-  const register = await loadGateway(t, { generateStream: () => { called = true; return fakeStream([]); } });
-  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
-  register(socket);
-
-  await handlers['stream_ai_suggest_text']({ title: 'اا' });
-
-  assert.equal(called, false);
-  assert.equal(emitted[0].event, 'ai_text_stream_end');
-});
-
-// ── disconnect cancellation ──────────────────────────────────────────────
-
-test('stream_ai_suggest_text: a socket disconnect aborts the in-flight Gemini stream', async (t) => {
-  let capturedSignal: AbortSignal | undefined;
+test('socket disconnect aborts the in-flight upstream stream and emits nothing further', async (t) => {
+  let signal: AbortSignal | undefined;
   const register = await loadGateway(t, {
-    generateStream: (_prompt, options) => {
-      capturedSignal = options.signal;
-      return fakeStream(['a', 'b', 'c'], { checkSignal: options.signal });
+    stream: (call) => {
+      signal = call.opts.signal;
+      return (async function* () {
+        yield delta('أول');
+        await new Promise<void>((resolve) => signal!.addEventListener('abort', () => resolve()));
+        const e: any = new Error('aborted'); e.name = 'AbortError'; throw e;
+      })();
     }
   });
-  const { socket, handlers, emitted, triggerDisconnect } = createMockSocket({ userId: 'user-1' });
+  const { socket, handlers, emitted, triggerDisconnect, onceHandlers } = createMockSocket({ userId: 'user-1' });
   register(socket);
-
-  // Abort before the handler even starts consuming — proves the same signal
-  // wired into generateStream() is the one the disconnect handler aborts.
-  const handlerPromise = handlers['stream_ai_suggest_text']({ title: 'تطوير متجر إلكتروني متكامل' });
-  // Phase 3 Batch 2A added an async role-check (a DB lookup) before the
-  // disconnect handler gets registered — let that one microtask resolve so
-  // the abort-controller registration (still fully synchronous after it)
-  // has actually happened before we fire the disconnect trigger below.
-  await Promise.resolve();
+  const running = handlers['stream_ai_suggest_text']({ title: TITLE });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(signal?.aborted, false);
   triggerDisconnect();
-  await handlerPromise;
-
-  assert.ok(capturedSignal, 'a signal must be passed to generateStream');
-  assert.equal(capturedSignal!.aborted, true);
-  const end = emitted[emitted.length - 1];
-  assert.equal(end.event, 'ai_text_stream_end');
-  assert.match(end.payload.message, /تعذر/);
+  await running;
+  assert.equal(signal?.aborted, true);
+  assert.deepEqual(emitted.map((e) => e.event), ['ai_text_stream_start', 'ai_text_stream_chunk']);
+  assert.equal((onceHandlers['disconnect'] || []).length, 0, 'disconnect listener is cleaned up');
 });
 
-// ── enhance-description event (same contract, different event name) ──────
+// ── static ───────────────────────────────────────────────────────────────
 
-test('stream_ai_enhance_description: a real validated Gemini stream completes successfully with the "improve" mode preserved', async (t) => {
-  const register = await loadGateway(t, { generateStream: () => fakeStream(['نص ', 'محسّن']) });
-  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
-  register(socket);
-
-  await handlers['stream_ai_enhance_description']({ title: 'تطوير متجر إلكتروني متكامل', description: 'وصف مبدئي' });
-
-  const events = emitted.map((e) => e.event);
-  assert.deepEqual(events, ['ai_text_stream_start', 'ai_text_stream_chunk', 'ai_text_stream_chunk', 'ai_text_stream_end']);
-  assert.ok(events.every((_, i) => emitted[i].payload.mode === 'improve'));
-});
-
-test('stream_ai_enhance_description: missing both title and description is rejected before calling Gemini', async (t) => {
-  let called = false;
-  const register = await loadGateway(t, { generateStream: () => { called = true; return fakeStream([]); } });
-  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
-  register(socket);
-
-  await handlers['stream_ai_enhance_description']({ title: '', description: '' });
-
-  assert.equal(called, false);
-  assert.equal(emitted[0].event, 'ai_text_stream_end');
+test('the gateway has no direct-Gemini dependency', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('./ai-review.gateway.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /gemini\.client|geminiClient|generateStructured|generateStream/);
 });

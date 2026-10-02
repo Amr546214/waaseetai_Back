@@ -3,7 +3,9 @@ import { AppError } from '../utils/app-error';
 import { BudgetType, ContractStatus, ProposalStatus, ProviderTypePreference, RequestStatus, UserRole } from '@prisma/client';
 import { initializeRoleState } from './account-management.service';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
-import { geminiClient } from './ai/gemini/gemini.client';
+import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
+import { normalizeWaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
+import type { RequestDraftResponse } from './ai/waseet-ai/waseet-ai.types';
 import { CreateClientRequestDto, ClientRequestAiSuggestDto } from '../dtos/create-client-request.dto';
 import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
@@ -33,61 +35,63 @@ const ESCROW_FEE_VAT = 0.07;       // 7% VAT
 const ESCROW_FEE_PLATFORM = 0.05;  // 5% platform commission
 const ESCROW_FEE_INSURANCE = 0.01; // 1% dispute insurance
 
+// Shape consumed by the Angular create-request page. Every field except the
+// two texts is nullable: a value WaseetAI did not return (or returned in an
+// unusable type) is null, never invented or defaulted.
 export interface ClientRequestAiSuggestion {
-	suggestedTitle: string;
-	suggestedDescription: string;
-	suggestedSubSpecialties: string[];
-	recommendedMinBudget: number;
-	recommendedMaxBudget: number;
-	suggestedDurationDays: number;
-	complexityRating: 'LOW' | 'MEDIUM' | 'HIGH' | 'COMPLEX';
-	personalizedNote: string;
-	aiMatchScoreEstimate: number;
+	suggestedTitle: string | null;
+	suggestedDescription: string | null;
+	suggestedSubSpecialties: string[] | null;
+	recommendedMinBudget: number | null;
+	recommendedMaxBudget: number | null;
+	suggestedDurationDays: number | null;
+	complexityRating: string | null;
+	personalizedNote: string | null;
+	aiMatchScoreEstimate: number | null;
 }
 
-const COMPLEXITY_RATINGS = ['LOW', 'MEDIUM', 'HIGH', 'COMPLEX'] as const;
+// The client wizard works in USD (platform wallet/budgets are USD-canonical).
+const CLIENT_REQUEST_AI_CURRENCY = 'USD';
 
-const CLIENT_REQUEST_AI_SUGGEST_SCHEMA = {
-	type: 'object',
-	properties: {
-		suggestedTitle: { type: 'string', description: 'Professional Arabic Title (max 80 chars)' },
-		suggestedDescription: { type: 'string', description: 'Comprehensive Arabic Technical Description with clear scope and expectations' },
-		suggestedSubSpecialties: { type: 'array', items: { type: 'string' }, description: '3 to 5 relevant Arabic sub-specialty tags' },
-		recommendedMinBudget: { type: 'number', description: 'USD minimum' },
-		recommendedMaxBudget: { type: 'number', description: 'USD maximum' },
-		suggestedDurationDays: { type: 'number', description: 'days' },
-		complexityRating: { type: 'string', enum: [...COMPLEXITY_RATINGS] },
-		personalizedNote: { type: 'string', description: 'Arabic advice personalized for client request based on market standards' },
-		aiMatchScoreEstimate: { type: 'number', description: 'Honest match-readiness score from 0 to 100 based only on how complete, specific, and clear the draft actually is. Low scores (including well below 50) are correct and expected for a vague, incomplete, or unclear draft. Never bias toward a high score.' }
-	},
-	required: ['suggestedTitle', 'suggestedDescription', 'suggestedSubSpecialties', 'recommendedMinBudget', 'recommendedMaxBudget', 'suggestedDurationDays', 'complexityRating', 'personalizedNote', 'aiMatchScoreEstimate']
-};
+const nonEmptyString = (v: unknown): string | null => (typeof v === 'string' && v.trim().length > 0 ? v.trim() : null);
+const positiveNumber = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
 
-// Rejects anything that doesn't genuinely satisfy the application contract —
-// wrong types, an empty sub-specialty list, an unrecognized complexity
-// rating, or an out-of-range match score are all treated as invalid, never
-// silently replaced with a fabricated value (including the previous
-// hardcoded `94` guard, which is gone entirely, not just relocated here).
-// This validator already accepted the full honest 0-100 range; only the
-// prompt/schema description above used to instruct Gemini to bias toward
-// 85-98 regardless of actual draft quality — fixed to allow (and expect)
-// low scores for a vague/incomplete draft, never biased toward a high one.
-function isValidClientRequestSuggestion(value: unknown): value is ClientRequestAiSuggestion {
-	if (!value || typeof value !== 'object') return false;
-	const v = value as Record<string, unknown>;
+/**
+ * Maps the verified WaseetAI request-draft response onto the app contract.
+ * Field-by-field and honest: unusable values become null (no defaults, no
+ * 94-style placeholder score). Returns null when the response carries neither
+ * a title nor a description (nothing useful to show).
+ */
+export function mapRequestDraftToSuggestion(raw: Partial<RequestDraftResponse> | null | undefined): ClientRequestAiSuggestion | null {
+	if (!raw || typeof raw !== 'object') return null;
 
-	if (typeof v.suggestedTitle !== 'string' || v.suggestedTitle.trim().length === 0) return false;
-	if (typeof v.suggestedDescription !== 'string' || v.suggestedDescription.trim().length === 0) return false;
-	if (!Array.isArray(v.suggestedSubSpecialties) || v.suggestedSubSpecialties.length === 0) return false;
-	if (!v.suggestedSubSpecialties.every((s) => typeof s === 'string' && s.trim().length > 0)) return false;
-	if (typeof v.recommendedMinBudget !== 'number' || !Number.isFinite(v.recommendedMinBudget) || v.recommendedMinBudget <= 0) return false;
-	if (typeof v.recommendedMaxBudget !== 'number' || !Number.isFinite(v.recommendedMaxBudget) || v.recommendedMaxBudget < v.recommendedMinBudget) return false;
-	if (typeof v.suggestedDurationDays !== 'number' || !Number.isFinite(v.suggestedDurationDays) || v.suggestedDurationDays <= 0) return false;
-	if (typeof v.complexityRating !== 'string' || !(COMPLEXITY_RATINGS as readonly string[]).includes(v.complexityRating)) return false;
-	if (typeof v.personalizedNote !== 'string' || v.personalizedNote.trim().length === 0) return false;
-	if (typeof v.aiMatchScoreEstimate !== 'number' || !Number.isFinite(v.aiMatchScoreEstimate) || v.aiMatchScoreEstimate < 0 || v.aiMatchScoreEstimate > 100) return false;
+	const subs = Array.isArray(raw.suggestedSubSpecialties)
+		? raw.suggestedSubSpecialties.map(nonEmptyString).filter((x): x is string => x !== null)
+		: [];
 
-	return true;
+	let min = positiveNumber(raw.recommendedMinBudget);
+	let max = positiveNumber(raw.recommendedMaxBudget);
+	if (min !== null && max !== null && max < min) { min = null; max = null; }
+
+	const score = typeof raw.aiMatchScoreEstimate === 'number' && Number.isFinite(raw.aiMatchScoreEstimate)
+		&& raw.aiMatchScoreEstimate >= 0 && raw.aiMatchScoreEstimate <= 100
+		? raw.aiMatchScoreEstimate
+		: null;
+
+	const suggestion: ClientRequestAiSuggestion = {
+		suggestedTitle: nonEmptyString(raw.suggestedTitle),
+		suggestedDescription: nonEmptyString(raw.suggestedDescription),
+		suggestedSubSpecialties: subs.length > 0 ? subs : null,
+		recommendedMinBudget: min,
+		recommendedMaxBudget: max,
+		suggestedDurationDays: positiveNumber(raw.suggestedDurationDays),
+		complexityRating: nonEmptyString(raw.complexityRating),
+		personalizedNote: nonEmptyString(raw.personalizedNote),
+		aiMatchScoreEstimate: score
+	};
+
+	if (suggestion.suggestedTitle === null && suggestion.suggestedDescription === null) return null;
+	return suggestion;
 }
 
 export class ClientRequestsService {
@@ -149,69 +153,33 @@ export class ClientRequestsService {
 	}
 
 	/**
-	 * POST /api/client/requests/ai-suggest
-	 * Gemini analysis for project description, sub-specialties, budget & history-based suggestion
+	 * POST /api/client/my-requests/ai-suggest
+	 * WaseetAI request-draft (POST /v1/ai/request-draft). Only the verified
+	 * request fields {title, description, specialtyName, currency} are sent:
+	 * the selected sub-specialties and the client's past-request history have
+	 * no field in that contract and are NOT sent.
 	 */
-	public async generateAiSuggest(clientId: string, payload: ClientRequestAiSuggestDto): Promise<ClientRequestAiSuggestion> {
-		// 1. Check past history of client requests to provide personalized suggestion ("وسيط AI - اقتراح لك")
-		const pastRequests = await prisma.clientRequest.findMany({
-			where: {
-				clientProfile: { userId: clientId }
-			},
-			take: 3,
-			orderBy: { createdAt: 'desc' },
-			include: { specialty: true }
-		});
+	public async generateAiSuggest(_clientId: string, payload: ClientRequestAiSuggestDto): Promise<ClientRequestAiSuggestion> {
+		const title = payload.title?.trim() || undefined;
+		const description = payload.description?.trim() || undefined;
+		const specialtyName = payload.specialtyName?.trim() || undefined;
 
-		const pastSpecialtyNames = pastRequests.map((r: any) => r.specialty.nameAr || r.specialty.name);
-		const favoriteCategory = pastSpecialtyNames.length > 0 ? pastSpecialtyNames[0] : null;
+		const unavailable = () => new AppError('تعذر توليد اقتراح ذكي لطلبك حالياً، يرجى المحاولة لاحقاً.', 503);
 
-		const draftTitle = payload.title?.trim() || '';
-		const draftDesc = payload.description?.trim() || '';
-		const targetSpec = payload.specialtyName || 'تقنية المعلومات';
-
-		const systemPrompt = `You are Waseet AI (وسيط AI), the ultimate AI Matchmaker for top technical & creative projects in Saudi Arabia.
-Your job is to analyze the client's draft project request, refine the Arabic text into a high-precision RFP, suggest optimal sub-specialties, estimate USD budget ranges, and calculate an AI match readiness score.
-Return ONLY raw JSON with no Markdown wrapping.`;
-
-		const userPrompt = `
-Analyze this Client Request Draft:
-- Draft Title: ${draftTitle || 'Unspecified'}
-- Draft Description: ${draftDesc || 'Unspecified'}
-- Target Specialty: ${targetSpec}
-- Selected Sub-Specialties: ${JSON.stringify(payload.subSpecialties || [])}
-- Client Past History Specialty Context: ${favoriteCategory || 'New Client'}
-
-Return JSON schema:
-{
-  "suggestedTitle": "Professional Arabic Title (max 80 chars)",
-  "suggestedDescription": "Comprehensive Arabic Technical Description with clear scope and expectations",
-  "suggestedSubSpecialties": ["3 to 5 relevant Arabic sub-specialty tags"],
-  "recommendedMinBudget": number (USD minimum),
-  "recommendedMaxBudget": number (USD maximum),
-  "suggestedDurationDays": number (days),
-  "complexityRating": "LOW" | "MEDIUM" | "HIGH" | "COMPLEX",
-  "personalizedNote": "Arabic advice personalized for client request based on market standards",
-  "aiMatchScoreEstimate": honest number from 0 to 100 reflecting how complete and clear this specific draft actually is — a vague or incomplete draft must receive a low score (even below 50); do not default to a high score
-}
-`;
-
+		let draft: RequestDraftResponse;
 		try {
-			const result = await geminiClient.generateStructured<ClientRequestAiSuggestion>(userPrompt, {
-				systemInstruction: systemPrompt,
-				responseSchema: CLIENT_REQUEST_AI_SUGGEST_SCHEMA,
-				validate: isValidClientRequestSuggestion,
-				temperature: 0.7,
-				maxOutputTokens: 1200
-			});
-
-			return result.data;
+			draft = await waseetAiClient.requestDraft({ title, description, specialtyName, currency: CLIENT_REQUEST_AI_CURRENCY });
 		} catch (error) {
-			// Honest failure — no algorithmic fallback, no hardcoded
-			// aiMatchScoreEstimate. The caller receives a normal application
-			// error instead of a fabricated "successful" suggestion.
-			throw new AppError('تعذر توليد اقتراح ذكي لطلبك حالياً، يرجى المحاولة لاحقاً.', 503);
+			// Honest failure: code/status only are logged, upstream text is never
+			// forwarded, and no fabricated suggestion is returned.
+			const e = normalizeWaseetAiError(error);
+			console.error(`[ClientRequests] WaseetAI request-draft failed code=${e.code} status=${e.status ?? '-'} requestId=${e.requestId ?? '-'}`);
+			throw unavailable();
 		}
+
+		const suggestion = mapRequestDraftToSuggestion(draft);
+		if (!suggestion) throw unavailable();
+		return suggestion;
 	}
 
 	/**

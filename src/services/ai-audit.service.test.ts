@@ -1,224 +1,189 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { GeminiErrorCode, GeminiProviderError } from './ai/gemini/gemini.errors';
+import { readFileSync } from 'node:fs';
 
-// AI-18 (executeAuditSync, behind the admin-only POST /business-models/re-audit-all)
-// — OpenAI migration batch. The previous OpenAI path silently defaulted a
-// missing/malformed score to 85 via `Number(parsed.overallScore) || 85` and
-// still marked the audit "completed" — a fabricated success. isValidAiAuditReport
-// now rejects any malformed shape before it can reach the persisted result,
-// routing it to the same honest manual-review default used for "provider
-// unavailable". `prisma`, `geminiClient`, `getIO`, `emailService`, and
-// `notificationService` are all mocked; no real DB/network call ever happens.
+const VERDICT = { isApproved: true, score: 87.6, summary: 'ملخص', strengths: ['a'], issues: ['b'], recommendations: ['c'] };
 
-function serviceCatalogFixture(overrides: Partial<any> = {}) {
+function makeModel(over: any = {}) {
   return {
-    id: 'service-1',
-    providerId: 'provider-1',
-    title: 'خدمة تصميم هوية بصرية',
-    description: 'وصف حقيقي وكامل للخدمة المعروضة',
-    totalAmount: 5000,
-    totalDays: 10,
-    approvedAt: null,
-    stages: [
-      { title: 'مرحلة 1', description: 'وصف', deliveryDays: 5, percentage: 50, computedAmount: 2500 },
-      { title: 'مرحلة 2', description: 'وصف', deliveryDays: 5, percentage: 50, computedAmount: 2500 }
-    ],
-    provider: { email: 'provider@example.com', firstName: 'أحمد' },
-    ...overrides
+    id: 'svc-1', title: 'T', description: 'D', totalAmount: '150.50', totalDays: 14, subSpecialty: null,
+    specialty: { nameAr: 'تطوير المواقع' },
+    stages: [{ stepOrder: 1, title: 'تحليل', deliveryDays: 4, percentage: 30 }, { stepOrder: 2, title: 'تنفيذ', deliveryDays: 10, percentage: 70 }],
+    ...over,
   };
 }
 
-function validAuditFixture(overrides: Partial<any> = {}) {
-  return {
-    overallScore: 82,
-    clarityScore: 85,
-    feasibilityScore: 80,
-    isApproved: true,
-    decisionSummary: 'تقييم حقيقي من Gemini',
-    strengths: ['قوة 1'],
-    criticalGaps: [],
-    improvementSuggestions: ['تحسين 1'],
-    ...overrides
-  };
-}
-
-async function loadService(t: TestContext, opts: {
-  service?: any;
-  generateStructured?: (prompt: string, options: any) => Promise<any>;
-}) {
-  const updateSpy = t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
-  const prismaMock: any = {
+async function load(t: TestContext, opts: { model?: any; audit?: (b: any) => Promise<any>; configured?: boolean; list?: any[]; counts?: number[] } = {}) {
+  const calls: any[] = [];
+  const updates: any[] = [];
+  const models = new Map<string, any>();
+  const prisma = {
     serviceCatalog: {
-      findUnique: async () => (opts.service === undefined ? serviceCatalogFixture() : opts.service),
-      update: updateSpy
-    }
+      findUnique: async () => ('model' in opts ? opts.model : makeModel()),
+      update: async (a: any) => { updates.push(a); return {}; },
+      findMany: async () => opts.list ?? [],
+      count: async () => (opts.counts ?? [0, 0]).shift() ?? 0,
+    },
   };
-  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-
-  const geminiClientMock = {
-    generateStructured: opts.generateStructured ?? (async (_prompt: string, options: any) => {
-      const valid = validAuditFixture();
-      assert.equal(options.validate(valid), true, 'the real validator must accept a well-formed audit report');
-      return { data: valid, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-    })
-  };
-  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: geminiClientMock } });
-
-  t.mock.module('../socket', { namedExports: { getIO: () => null } });
-  t.mock.module('./email.service', { namedExports: { emailService: { sendModelApprovalEmail: async () => undefined } } });
-  const notifySpy = t.mock.fn(async () => ({ id: 'notif-1' }));
-  t.mock.module('./notification.service', { namedExports: { notificationService: { createAndEmitNotification: notifySpy } } });
-
-  const moduleUrl = `./ai-audit.service.ts?fixture=${Date.now()}-${Math.random()}`;
-  const { aiAuditService } = await import(moduleUrl);
-  return { aiAuditService, updateSpy, notifySpy };
+  void models;
+  t.mock.module('../config/db', { namedExports: { prisma } });
+  t.mock.module('./ai/waseet-ai/waseet-ai.client', {
+    namedExports: {
+      waseetAiClient: {
+        isConfigured: () => opts.configured !== false,
+        auditBusinessModel: async (b: any) => { calls.push(b); return opts.audit ? opts.audit(b) : VERDICT; },
+      },
+    },
+  });
+  const mod = await import(`./ai-audit.service.ts?fixture=${Date.now()}-${Math.random()}`);
+  return { svc: mod.aiAuditService as import('./ai-audit.service').AiAuditService, calls, updates, t };
 }
 
-// ── real validated Gemini success ───────────────────────────────────────
-
-test('executeAuditSync: a real validated Gemini audit is persisted with its real score, and the model still publishes', async (t) => {
-  const { aiAuditService, updateSpy } = await loadService(t, {});
-
-  const result = await aiAuditService.executeAuditSync('service-1', 'provider-1');
-
-  assert.equal(result.status, 'PUBLISHED');
-  assert.equal(result.auditResult.overallScore, 82);
-  assert.equal(updateSpy.mock.callCount(), 1);
-  assert.equal(updateSpy.mock.calls[0].arguments[0].data.aiScore, 82);
-  assert.equal(updateSpy.mock.calls[0].arguments[0].data.status, 'PUBLISHED');
+test('sends DB category, title, number amount and stages block; no currency', async (t) => {
+  const { svc, calls } = await load(t);
+  await svc.executeAuditSync('svc-1');
+  assert.equal(calls.length, 1);
+  const b = calls[0];
+  assert.equal(b.category, 'تطوير المواقع');
+  assert.equal(b.title, 'T');
+  assert.deepEqual(b.pricing, { amount: 150.5 });
+  assert.equal(typeof b.pricing.amount, 'number');
+  assert.deepEqual(Object.keys(b).sort(), ['category', 'description', 'pricing', 'title']);
+  assert.match(b.description, /^D\n/);
+  assert.match(b.description, /14 يوم/);
+  assert.match(b.description, /1\. تحليل \(4 يوم، 30%\)/);
+  assert.match(b.description, /2\. تنفيذ \(10 يوم، 70%\)/);
 });
 
-// ── safety: Gemini's verdict is advisory only, never gates the transition ──
+test('sub-specialty is appended to the category', async (t) => {
+  const { svc, calls } = await load(t, { model: makeModel({ subSpecialty: 'متاجر' }) });
+  await svc.executeAuditSync('svc-1');
+  assert.equal(calls[0].category, 'تطوير المواقع - متاجر');
+});
 
-test('executeAuditSync: a real Gemini REJECTION (isApproved:false, low score) still publishes — the status transition never reads isApproved', async (t) => {
-  const rejected = validAuditFixture({ overallScore: 15, isApproved: false, decisionSummary: 'رفض حقيقي من Gemini' });
-  const { aiAuditService, updateSpy } = await loadService(t, {
-    generateStructured: async (_prompt, options) => {
-      assert.equal(options.validate(rejected), true, 'the real validator must accept a well-formed rejection too');
-      return { data: rejected, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-    }
+test('persists advisory fields only; never status/approvedAt/auditRejectionReason; clarity/feasibility untouched', async (t) => {
+  const { svc, updates } = await load(t);
+  const r = await svc.executeAuditSync('svc-1');
+  assert.deepEqual(r, { outcome: 'audited', serviceId: 'svc-1', score: 87.6, isApproved: true });
+  assert.equal(updates.length, 1);
+  const d = updates[0].data;
+  assert.deepEqual(Object.keys(d).sort(), ['aiAuditFeedback', 'aiAuditReport', 'aiAuditScore', 'aiReviewDetails', 'aiReviewSummary', 'aiScore']);
+  for (const k of ['status', 'approvedAt', 'auditRejectionReason', 'aiClarityScore', 'aiFeasibilityScore']) assert.ok(!(k in d), k);
+  assert.equal(d.aiScore, 88);
+  assert.equal(d.aiAuditScore, 87.6);
+  assert.equal(d.aiReviewSummary, 'ملخص');
+  assert.deepEqual(d.aiReviewDetails, { source: 'WASEET_AI', strengths: ['a'], issues: ['b'], recommendations: ['c'] });
+  assert.deepEqual(d.aiAuditReport, { source: 'WASEET_AI', isApproved: true, score: 87.6, summary: 'ملخص', strengths: ['a'], issues: ['b'], recommendations: ['c'] });
+  assert.deepEqual(d.aiAuditFeedback, { summary: 'ملخص', recommendations: ['c'] });
+});
+
+test('isApproved=false is still advisory (no status/rejection write)', async (t) => {
+  const { svc, updates } = await load(t, { audit: async () => ({ ...VERDICT, isApproved: false, score: 10 }) });
+  await svc.executeAuditSync('svc-1');
+  assert.ok(!('status' in updates[0].data) && !('auditRejectionReason' in updates[0].data));
+});
+
+test('no specialty -> skipped, no call, no write', async (t) => {
+  const { svc, calls, updates } = await load(t, { model: makeModel({ specialty: null }) });
+  const r = await svc.executeAuditSync('svc-1');
+  assert.deepEqual(r, { outcome: 'skipped', serviceId: 'svc-1', reason: 'NO_CATEGORY' });
+  assert.equal(calls.length, 0);
+  assert.equal(updates.length, 0);
+});
+
+test('upstream failure throws 503 with normalized code and writes nothing (no upstream text)', async (t) => {
+  const { svc, updates } = await load(t, { audit: async () => { throw new Error('secret upstream text'); } });
+  await assert.rejects(() => svc.executeAuditSync('svc-1'), (e: any) => {
+    assert.equal(e.statusCode, 503);
+    assert.equal(e.code, 'UNKNOWN_PROVIDER_ERROR');
+    assert.ok(!/secret/.test(e.message));
+    return true;
   });
-
-  const result = await aiAuditService.executeAuditSync('service-1', 'provider-1');
-
-  // A negative Gemini verdict, by itself, cannot change the authoritative
-  // publish status — only the existing app-level workflow (always-publish,
-  // advisory-only audit) decides that, exactly as it does for an approval.
-  assert.equal(result.status, 'PUBLISHED');
-  assert.equal(result.auditResult.isApproved, false);
-  assert.equal(updateSpy.mock.calls[0].arguments[0].data.status, 'PUBLISHED');
-  assert.equal(updateSpy.mock.calls[0].arguments[0].data.aiScore, 15);
+  assert.equal(updates.length, 0);
 });
 
-// ── Gemini failure / malformed output → honest manual-review default, never a fabricated score ──
-
-test('executeAuditSync: Gemini unavailable persists the honest zero-score manual-review default, never a fake score, but still publishes (advisory-only audit)', async (t) => {
-  const { aiAuditService, updateSpy } = await loadService(t, {
-    generateStructured: async () => { throw new GeminiProviderError(GeminiErrorCode.PROVIDER_UNAVAILABLE, 'unavailable'); }
+const BAD_RESPONSES: Record<string, any> = {
+  null: null, 'score string': { ...VERDICT, score: 'x' }, 'score>100': { ...VERDICT, score: 101 },
+  'isApproved string': { ...VERDICT, isApproved: 'yes' }, 'issues missing': { ...VERDICT, issues: undefined },
+};
+for (const [name, bad] of Object.entries(BAD_RESPONSES)) {
+  test(`invalid response (${name}) throws 503 INVALID_RESPONSE and writes nothing`, async (t) => {
+    const { svc, updates } = await load(t, { audit: async () => bad });
+    await assert.rejects(() => svc.executeAuditSync('svc-1'), (e: any) => e.statusCode === 503 && e.code === 'INVALID_RESPONSE');
+    assert.equal(updates.length, 0);
   });
+}
 
-  const result = await aiAuditService.executeAuditSync('service-1', 'provider-1');
-
-  assert.equal(result.auditResult.overallScore, 0);
-  assert.equal(result.auditResult.isApproved, false);
-  assert.equal(updateSpy.mock.calls[0].arguments[0].data.aiScore, 0);
+test('missing model -> 404, no call', async (t) => {
+  const { svc, calls } = await load(t, { model: null });
+  await assert.rejects(() => svc.executeAuditSync('x'), (e: any) => e.statusCode === 404);
+  assert.equal(calls.length, 0);
 });
 
-test('executeAuditSync: Gemini not configured persists the same honest zero-score default', async (t) => {
-  const { aiAuditService } = await loadService(t, {
-    generateStructured: async () => { throw new GeminiProviderError(GeminiErrorCode.NOT_CONFIGURED, 'GEMINI_API_KEY is not configured'); }
+test('creation hooks never throw and do not block', async (t) => {
+  const { svc } = await load(t, { audit: async () => { throw new Error('boom'); } });
+  await svc.auditProjectModel('svc-1');
+  await svc.triggerAuditAndPublish('svc-1', 'p');
+  await new Promise((r) => setTimeout(r, 20));
+});
+
+async function loadController(t: TestContext, opts: any) {
+  const ctx = await load(t, opts);
+  const execs: string[] = [];
+  const results: Record<string, any> = opts.results ?? {};
+  t.mock.module('../services/ai-audit.service', {
+    namedExports: {
+      aiAuditService: {
+        executeAuditSync: async (id: string) => {
+          execs.push(id);
+          const r = results[id] ?? { outcome: 'audited' };
+          if (r === 'throw') throw Object.assign(new Error('upstream detail'), { code: 'TIMEOUT' });
+          return r;
+        },
+      },
+    },
   });
+  const { MarketplaceServiceController } = await import(`../controllers/marketplace-service.controller.ts?fixture=${Date.now()}-${Math.random()}`) as any;
+  const res: any = { statusCode: 200, body: undefined, status(c: number) { this.statusCode = c; return this; }, json(b: any) { this.body = b; return this; } };
+  return { ctrl: new MarketplaceServiceController(), res, execs };
+}
 
-  const result = await aiAuditService.executeAuditSync('service-1', 'provider-1');
-
-  assert.equal(result.auditResult.overallScore, 0);
-});
-
-test('executeAuditSync: a Gemini timeout persists the same honest zero-score default', async (t) => {
-  const { aiAuditService } = await loadService(t, {
-    generateStructured: async () => { throw new GeminiProviderError(GeminiErrorCode.TIMEOUT, 'timed out'); }
+test('re-audit-all: counts audited/failed/skipped/remaining, no upstream text', async (t) => {
+  const { ctrl, res, execs } = await loadController(t, {
+    list: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+    counts: [10, 2],
+    results: { b: 'throw', c: { outcome: 'skipped', reason: 'NO_CATEGORY' } },
   });
-
-  const result = await aiAuditService.executeAuditSync('service-1', 'provider-1');
-
-  assert.equal(result.auditResult.overallScore, 0);
+  await ctrl.reAuditAllPendingModels({} as any, res);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, { success: true, audited: 1, failed: 1, skipped: 3, remaining: 8 });
+  assert.deepEqual(execs, ['a', 'b', 'c']);
+  assert.ok(!JSON.stringify(res.body).includes('upstream'));
 });
 
-test('executeAuditSync: a malformed Gemini response (missing overallScore) is rejected by the validator instead of defaulting to a fabricated 85', async (t) => {
-  const { aiAuditService, updateSpy } = await loadService(t, {
-    generateStructured: async (_prompt, options) => {
-      const malformed = { ...validAuditFixture(), overallScore: undefined };
-      assert.equal(options.validate(malformed), false, 'the validator must reject a missing overallScore');
-      throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
-    }
-  });
-
-  const result = await aiAuditService.executeAuditSync('service-1', 'provider-1');
-
-  assert.equal(result.auditResult.overallScore, 0, 'must never silently fall back to the old fabricated 85');
-  assert.equal(updateSpy.mock.calls[0].arguments[0].data.aiScore, 0);
+test('re-audit-all: batch is capped at 25 and statuses are PENDING_APPROVAL/UNDER_REVIEW/DRAFT', async (t) => {
+  const src = readFileSync(new URL('../controllers/marketplace-service.controller.ts', import.meta.url), 'utf8');
+  assert.match(src, /RE_AUDIT_BATCH_SIZE = 25/);
+  assert.match(src, /\['PENDING_APPROVAL', 'UNDER_REVIEW', 'DRAFT'\]/);
+  assert.match(src, /take: RE_AUDIT_BATCH_SIZE/);
 });
 
-test('executeAuditSync: a malformed Gemini response (out-of-range clarityScore) is rejected by the validator', async (t) => {
-  const { aiAuditService } = await loadService(t, {
-    generateStructured: async (_prompt, options) => {
-      const malformed = validAuditFixture({ clarityScore: 250 });
-      assert.equal(options.validate(malformed), false, 'the validator must reject an out-of-range score');
-      throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
-    }
-  });
-
-  const result = await aiAuditService.executeAuditSync('service-1', 'provider-1');
-
-  assert.equal(result.auditResult.overallScore, 0);
+test('re-audit-all: not configured -> 503 AI_FEATURE_UNAVAILABLE, nothing read', async (t) => {
+  const { ctrl, res, execs } = await loadController(t, { configured: false, list: [{ id: 'a' }] });
+  await ctrl.reAuditAllPendingModels({} as any, res);
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.body.code, 'AI_FEATURE_UNAVAILABLE');
+  assert.equal(execs.length, 0);
 });
 
-test('executeAuditSync: a malformed Gemini response (isApproved not boolean) is rejected by the validator', async (t) => {
-  const { aiAuditService } = await loadService(t, {
-    generateStructured: async (_prompt, options) => {
-      const malformed = { ...validAuditFixture(), isApproved: 'yes' };
-      assert.equal(options.validate(malformed), false, 'the validator must reject a non-boolean isApproved');
-      throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
-    }
-  });
-
-  const result = await aiAuditService.executeAuditSync('service-1', 'provider-1');
-
-  assert.equal(result.auditResult.overallScore, 0);
+test('route auth/limiter unchanged', () => {
+  const src = readFileSync(new URL('../routes/business-models.routes.ts', import.meta.url), 'utf8');
+  assert.match(src, /router\.post\('\/re-audit-all', authenticate, requireActiveUser, authorize\(AccountType\.SUPER_ADMIN, AccountType\.ADMIN\), aiLimiter, controller\.reAuditAllPendingModels/);
 });
 
-// ── DB safety: validated once, persisted once ─────────────────────────────
-
-test('executeAuditSync: the DB is written exactly once, only after the audit outcome (real or honest-default) is fully resolved', async (t) => {
-  const { updateSpy, aiAuditService } = await loadService(t, {});
-
-  await aiAuditService.executeAuditSync('service-1', 'provider-1');
-
-  assert.equal(updateSpy.mock.callCount(), 1);
-});
-
-test('executeAuditSync: a missing ServiceCatalog record is a safe no-op, never calls Gemini', async (t) => {
-  let called = false;
-  const { aiAuditService, updateSpy } = await loadService(t, {
-    service: null,
-    generateStructured: async () => { called = true; throw new Error('should never be called'); }
-  });
-
-  const result = await aiAuditService.executeAuditSync('missing-service', 'provider-1');
-
-  assert.equal(result, null);
-  assert.equal(called, false);
-  assert.equal(updateSpy.mock.callCount(), 0);
-});
-
-// ── admin re-audit-all trigger surface ─────────────────────────────────────
-
-test('AiAuditService: the admin re-audit-all route only ever calls executeAuditSync directly (triggerAuditAndPublish/auditProjectModel have zero callers)', async (t) => {
-  const { aiAuditService } = await loadService(t, {});
-  // Documents current reachability: both wrapper methods still exist for
-  // backward compatibility but nothing in this codebase calls them anymore.
-  assert.equal(typeof aiAuditService.triggerAuditAndPublish, 'function');
-  assert.equal(typeof aiAuditService.auditProjectModel, 'function');
-  assert.equal(typeof aiAuditService.executeAuditSync, 'function');
+test('no Gemini reference in audit service/controller', () => {
+  for (const f of ['./ai-audit.service.ts', '../controllers/marketplace-service.controller.ts']) {
+    const src = readFileSync(new URL(f, import.meta.url), 'utf8');
+    assert.doesNotMatch(src, /gemini/i);
+  }
 });

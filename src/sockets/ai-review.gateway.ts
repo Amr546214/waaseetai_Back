@@ -1,11 +1,23 @@
 import { Socket } from 'socket.io';
 import { AccountType } from '@prisma/client';
 import { prisma } from '../config/db';
-import { geminiClient } from '../services/ai/gemini/gemini.client';
+import { logger } from '../config/logger';
+import { waseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
+import { WaseetAiErrorCode, normalizeWaseetAiError } from '../services/ai/waseet-ai/waseet-ai.errors';
+import type { WaseetAiStreamEvent } from '../services/ai/waseet-ai/waseet-ai.types';
 import { isMeaningfulProjectTitle } from '../utils/title-validator';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
 
-// F1b — live streaming migrated to the shared Gemini foundation.
+// AI text streaming (suggest / enhance) runs exclusively through WaseetAI:
+//   stream_ai_suggest_text        -> waseetAiClient.streamTextSuggestion({ title })
+//   stream_ai_enhance_description -> waseetAiClient.streamTextEnhancement({ description })
+// Deltas are relayed as they arrive to the events the Angular client already
+// listens to (ai_text_stream_start / ai_text_stream_chunk / ai_text_stream_end).
+// The upstream requests accept ONLY `title` / `description`; the enhance
+// event's optional `title` (Angular still sends it) is used for the local
+// meaningful-title check but is NOT sent upstream. A disconnect aborts the
+// upstream stream. Failures are reported honestly (no canned text, no
+// fallback); upstream text and credentials are never forwarded.
 //
 // Security note (Batch: F1+F2 streaming, section 7 review): this gateway
 // already gated both events on `(socket as any).userId` (set from the JWT at
@@ -22,6 +34,77 @@ import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/so
 // frontend. Both handlers now enforce that same role at the socket layer,
 // matching the HTTP twin (ai-review module's own routes), which was already
 // provider-restricted.
+
+const STREAM_TIMEOUT_MS = 45 * 1000;
+const MAX_TITLE_LENGTH = 200;
+const MAX_DESCRIPTION_LENGTH = 5000;
+
+export const AI_REVIEW_MESSAGES = {
+	SUGGEST_DONE: '✨ اكتمل توليد المقترح الذكي بنجاح',
+	ENHANCE_DONE: '🚀 تم تحسين الوصف باحترافية فائقة',
+	SUGGEST_FAILED: 'تعذر توليد النص عبر الذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.',
+	ENHANCE_FAILED: 'تعذر تحسين النص عبر الذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.',
+	NOT_CONFIGURED: 'خدمة الذكاء الاصطناعي غير مهيأة حالياً. لم يتم إنشاء أي نص بديل.',
+	TIMEOUT: 'انتهت مهلة انتظار خدمة الذكاء الاصطناعي، يرجى المحاولة مرة أخرى.',
+	NEED_DESCRIPTION: '⚠️ يرجى كتابة وصف مبدئي ليتم تحسينه',
+	TOO_LONG: '⚠️ النص طويل جداً، يرجى اختصاره',
+} as const;
+
+async function relayTextStream(
+	socket: Socket,
+	mode: 'suggest' | 'improve',
+	open: (opts: { signal: AbortSignal; timeoutMs: number }) => AsyncGenerator<WaseetAiStreamEvent, void, void>,
+	messages: { done: string; failed: string },
+): Promise<void> {
+	if (!waseetAiClient.isConfigured()) {
+		socket.emit('ai_text_stream_end', { mode, message: AI_REVIEW_MESSAGES.NOT_CONFIGURED });
+		return;
+	}
+
+	socket.emit('ai_text_stream_start', { mode });
+
+	const abortController = new AbortController();
+	const onDisconnect = () => abortController.abort();
+	socket.once('disconnect', onDisconnect);
+
+	try {
+		let emittedAny = false;
+		let completed = false;
+		for await (const evt of open({ signal: abortController.signal, timeoutMs: STREAM_TIMEOUT_MS })) {
+			if (abortController.signal.aborted) break;
+			if (evt.type === 'delta') {
+				if (!evt.chunk) continue;
+				emittedAny = true;
+				// Relayed immediately; only the plain string chunk, never a raw upstream object.
+				socket.emit('ai_text_stream_chunk', { chunk: evt.chunk, mode });
+			} else if (evt.type === 'completed') {
+				completed = true;
+				break;
+			}
+		}
+
+		// Client went away: nobody is listening, emit nothing more.
+		if (abortController.signal.aborted) return;
+
+		if (!completed || !emittedAny) {
+			logger.warn(`[AiReviewGateway] ${mode} stream ended without usable content`);
+			socket.emit('ai_text_stream_end', { mode, message: messages.failed });
+			return;
+		}
+		socket.emit('ai_text_stream_end', { mode, message: messages.done });
+	} catch (error) {
+		if (abortController.signal.aborted) return;
+		const e = normalizeWaseetAiError(error);
+		logger.warn(`[AiReviewGateway] ${mode} stream failed code=${e.code} status=${e.status ?? '-'} requestId=${e.requestId ?? '-'}`);
+		const message =
+			e.code === WaseetAiErrorCode.TIMEOUT ? AI_REVIEW_MESSAGES.TIMEOUT
+			: e.code === WaseetAiErrorCode.NOT_CONFIGURED ? AI_REVIEW_MESSAGES.NOT_CONFIGURED
+			: messages.failed;
+		socket.emit('ai_text_stream_end', { mode, message });
+	} finally {
+		socket.off('disconnect', onDisconnect);
+	}
+}
 
 export class AiReviewGateway {
 	public register(socket: Socket): void {
@@ -56,53 +139,22 @@ export class AiReviewGateway {
 				return;
 			}
 
-			if (!geminiClient.isConfigured()) {
-				socket.emit('ai_text_stream_end', { mode, message: 'خدمة الذكاء الاصطناعي غير مهيأة حالياً. لم يتم إنشاء أي نص بديل.' });
+			const title = payload.title.trim();
+			if (title.length > MAX_TITLE_LENGTH) {
+				socket.emit('ai_text_stream_end', { mode, message: AI_REVIEW_MESSAGES.TOO_LONG });
 				return;
 			}
 
-			socket.emit('ai_text_stream_start', { mode });
-
-			const title = payload.title.trim();
-			const abortController = new AbortController();
-			const onDisconnect = () => abortController.abort();
-			socket.once('disconnect', onDisconnect);
-
-			try {
-				const stream = geminiClient.generateStream(
-					`Generate a professional project description for: "${title}"`,
-					{
-						systemInstruction: 'You are Waseet AI creative strategy advisor. Generate an impressive, professional, and comprehensive proposal description in Arabic for a service provider based solely on the service title provided. Mention scope, deliverables, quality assurance, and workflow in clear structured paragraphs or bullet points. Respond directly without introductory chatter.',
-						temperature: 0.75,
-						maxOutputTokens: 600,
-						timeoutMs: 30 * 1000,
-						signal: abortController.signal
-					}
-				);
-
-				let emittedAny = false;
-				for await (const chunk of stream) {
-					if (!chunk) continue;
-					emittedAny = true;
-					socket.emit('ai_text_stream_chunk', { chunk, mode });
-				}
-
-				if (!emittedAny) {
-					throw new Error('Gemini stream produced no content');
-				}
-
-				socket.emit('ai_text_stream_end', { mode, message: '✨ اكتمل توليد المقترح الذكي بنجاح' });
-			} catch (error: any) {
-				console.error('[AiReviewGateway] Gemini streaming error on suggest:', error?.code || error?.message);
-				// Honest failure — no word-by-word canned-text simulation.
-				socket.emit('ai_text_stream_end', { mode, message: 'تعذر توليد النص عبر الذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.' });
-			} finally {
-				socket.off('disconnect', onDisconnect);
-			}
+			await relayTextStream(
+				socket,
+				mode,
+				(opts) => waseetAiClient.streamTextSuggestion({ title }, opts),
+				{ done: AI_REVIEW_MESSAGES.SUGGEST_DONE, failed: AI_REVIEW_MESSAGES.SUGGEST_FAILED },
+			);
 		});
 
 		// Event 2: Real-time description enhancement stream
-		socket.on('stream_ai_enhance_description', async (payload: { title?: string; description: string }) => {
+		socket.on('stream_ai_enhance_description', async (payload: { title?: string; description?: string }) => {
 			console.log(`[AiReviewGateway] stream_ai_enhance_description from socket ${socket.id}`);
 			const mode = 'improve';
 			const userId = (socket as any).userId;
@@ -118,8 +170,8 @@ export class AiReviewGateway {
 				return;
 			}
 
-			const title = payload.title?.trim() || '';
-			const description = payload.description?.trim() || '';
+			const title = payload?.title?.trim() || '';
+			const description = payload?.description?.trim() || '';
 
 			if (title) {
 				const validation = isMeaningfulProjectTitle(title);
@@ -132,8 +184,14 @@ export class AiReviewGateway {
 				}
 			}
 
-			if (!description && !title) {
-				socket.emit('ai_text_stream_end', { mode, message: '⚠️ يرجى إضافة اسم المشروع أو وصف مبدئي للتحسين' });
+			// The enhance endpoint needs the description itself; a title alone
+			// cannot be enhanced (and is never sent upstream).
+			if (!description) {
+				socket.emit('ai_text_stream_end', { mode, message: AI_REVIEW_MESSAGES.NEED_DESCRIPTION });
+				return;
+			}
+			if (description.length > MAX_DESCRIPTION_LENGTH) {
+				socket.emit('ai_text_stream_end', { mode, message: AI_REVIEW_MESSAGES.TOO_LONG });
 				return;
 			}
 
@@ -142,48 +200,12 @@ export class AiReviewGateway {
 				return;
 			}
 
-			if (!geminiClient.isConfigured()) {
-				socket.emit('ai_text_stream_end', { mode, message: 'خدمة الذكاء الاصطناعي غير مهيأة حالياً. لم يتم إنشاء أي نص بديل.' });
-				return;
-			}
-
-			socket.emit('ai_text_stream_start', { mode });
-
-			const abortController = new AbortController();
-			const onDisconnect = () => abortController.abort();
-			socket.once('disconnect', onDisconnect);
-
-			try {
-				const stream = geminiClient.generateStream(
-					`Project Title: ${title || 'مشروع عام'}\nCurrent Draft Description: ${description}`,
-					{
-						systemInstruction: 'You are an expert copywriter and product marketing strategist for Waseet AI platform. Rewrite and drastically improve the user submitted service description into a high-converting, persuasive, professional, and structured Arabic project proposal description. Use clear formatting, bullets, and strong professional industry vocabulary.',
-						temperature: 0.7,
-						maxOutputTokens: 650,
-						timeoutMs: 30 * 1000,
-						signal: abortController.signal
-					}
-				);
-
-				let emittedAny = false;
-				for await (const chunk of stream) {
-					if (!chunk) continue;
-					emittedAny = true;
-					socket.emit('ai_text_stream_chunk', { chunk, mode });
-				}
-
-				if (!emittedAny) {
-					throw new Error('Gemini stream produced no content');
-				}
-
-				socket.emit('ai_text_stream_end', { mode, message: '🚀 تم تحسين الوصف باحترافية فائقة' });
-			} catch (error: any) {
-				console.error('[AiReviewGateway] Gemini streaming error on enhance:', error?.code || error?.message);
-				// Honest failure — no word-by-word canned-text simulation.
-				socket.emit('ai_text_stream_end', { mode, message: 'تعذر تحسين النص عبر الذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.' });
-			} finally {
-				socket.off('disconnect', onDisconnect);
-			}
+			await relayTextStream(
+				socket,
+				mode,
+				(opts) => waseetAiClient.streamTextEnhancement({ description }, opts),
+				{ done: AI_REVIEW_MESSAGES.ENHANCE_DONE, failed: AI_REVIEW_MESSAGES.ENHANCE_FAILED },
+			);
 		});
 	}
 }

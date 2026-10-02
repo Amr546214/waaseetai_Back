@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { aiAssessmentService } from '../services/ai-assessment.service';
+import { aiAssessmentService, ASSESSMENT_GENERATION_FAILED_CODE, ASSESSMENT_GRADING_FAILED_CODE } from '../services/ai-assessment.service';
 
 /**
  * POST /api/assessments/generate
@@ -24,12 +24,7 @@ export async function generateAssessmentController(req: Request, res: Response):
 
     const result = await aiAssessmentService.generateAssessment(String(providerSpecialtyId), userId);
 
-    // Honest, provider-agnostic message that never names a specific AI
-    // engine and never claims AI generation when the static fallback bank
-    // was actually used.
-    const message = result.generationSource === 'GEMINI'
-      ? 'تم توليد أسئلة التقييم الفني بنجاح عبر الذكاء الاصطناعي.'
-      : 'تعذر توليد أسئلة مخصصة عبر الذكاء الاصطناعي حالياً، تم استخدام نموذج تقييم قياسي بديل.';
+    const message = 'تم توليد أسئلة التقييم الفني بنجاح عبر خدمة الذكاء الاصطناعي.';
 
     res.status(201).json({
       success: true,
@@ -38,10 +33,10 @@ export async function generateAssessmentController(req: Request, res: Response):
     });
   } catch (error: any) {
     console.error('[AiAssessmentController] generate error:', error);
-    res.status(500).json({
+    res.status(error?.code === ASSESSMENT_GENERATION_FAILED_CODE ? 503 : 500).json({
       success: false,
       // `code` is only ever a fixed, hardcoded marker this codebase sets
-      // itself (e.g. GENERATION_IN_PROGRESS) — never a raw provider/Gemini
+      // itself (e.g. GENERATION_IN_PROGRESS) — never a raw provider
       // error — so it is safe to forward as-is (Batch 3D-2).
       ...(error?.code ? { code: error.code } : {}),
       message: error?.message || 'حدث خطأ أثناء توليد أسئلة التقييم الفني.'
@@ -71,13 +66,14 @@ export async function submitAssessmentController(req: Request, res: Response): P
       success: true,
       message: result.isPassed
         ? '✓ مبروك! لقد اجتزت التقييم الفني بنجاح وتم اعتماد التخصص!'
-        : 'لم تتجاوز نسبة الاجتياز المطلوبة (25%). يُمكنك المراجعة وإعادة المحاولة.',
+        : 'لم تحقق الحد الأدنى المطلوب للاجتياز. يُمكنك المراجعة وإعادة المحاولة.',
       data: result
     });
   } catch (error: any) {
     console.error('[AiAssessmentController] submit error:', error);
-    res.status(500).json({
+    res.status(error?.code === ASSESSMENT_GRADING_FAILED_CODE ? 503 : 500).json({
       success: false,
+      ...(error?.code === ASSESSMENT_GRADING_FAILED_CODE ? { code: error.code } : {}),
       message: error?.message || 'حدث خطأ أثناء معالجة وتسليم نتائج التقييم.'
     });
   }

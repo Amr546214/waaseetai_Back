@@ -11,8 +11,23 @@ import type {
   DisputeSummaryRequest,
   DisputeSummaryResponse,
   HelpChatRequest,
+  AssessmentStreamRequest,
+  BusinessModelAuditRequest,
+  BusinessModelAuditResponse,
+  EnrichProposalRequest,
+  EnrichProposalResponse,
   MilestonesRequest,
   MilestonesResponse,
+  PerformanceSummaryRequest,
+  PerformanceSummaryResponse,
+  ProfileSkillsRequest,
+  ProfileSkillsResponse,
+  ProposalSuggestRequest,
+  ProposalSuggestResponse,
+  RequestDraftRequest,
+  RequestDraftResponse,
+  TextEnhanceStreamRequest,
+  TextSuggestStreamRequest,
   ProjectAnalysisRequest,
   ProjectAnalysisResponse,
   ProjectDescriptionStreamRequest,
@@ -53,31 +68,26 @@ export interface WaseetAiCallOptions {
   requestId?: string;
 }
 
-/** Matrix endpoints whose contract is NOT documented with a worked example.
+/** Matrix endpoints whose contract is NOT verified. (Moved out once verified
+ *  live on 2026-10-02: AI-02, AI-05, AI-10, AI-16, AI-17 skills, AI2-07,
+ *  AI2-10 — see the typed methods below.) Several remaining ones were probed
+ *  and are unusable as-is: they take only opaque ids, the service cannot see
+ *  Waseet's data, and some answer with constant sample data.
  *  Calling them throws CONTRACT_UNVERIFIED until verified live. */
 export const UNVERIFIED_ENDPOINTS = {
-  'AI-02': '/v1/ai/request-draft',
-  'AI-05': '/v1/ai/text/suggest/stream',
   'AI-06': '/v1/ai/portfolio-review',
   'AI-07': '/v1/ai/accreditation-review',
   'AI-09': '/v1/ai/onboarding-quizzes',
-  'AI-10': '/v1/ai/proposals/suggest',
   'AI-11': '/v1/ai/proposals/audit/stream',
-  'AI-12': '/v1/ai/proposals/enrich',
   'AI-13': '/v1/ai/matching/projects-for-provider',
   'AI-14': '/v1/ai/project-fit',
   'AI-15': '/v1/ai/marketplace/recommendations',
-  'AI-16': '/v1/ai/profile/performance-summary',
   'AI-17-bio': '/v1/ai/profile/bio',
-  'AI-17-skills': '/v1/ai/profile/skills',
   'AI-18': '/v1/ai/project-health',
   'AI-19': '/v1/ai/delivery-review',
   'AI-21-stream': '/v1/ai/help/stream',
   'AI2-01': '/v1/ai/business-models/re-audit',
-  'AI2-02': '/v1/ai/business-models/audit',
   'AI2-06': '/v1/ai/assessments/:id/status',
-  'AI2-07': '/v1/ai/assessments/stream',
-  'AI2-10': '/v1/ai/text/enhance/stream',
 } as const;
 export type UnverifiedEndpointId = keyof typeof UNVERIFIED_ENDPOINTS;
 
@@ -210,6 +220,71 @@ export class WaseetAiClient {
     return extractTtsWav(data) as Buffer;
   }
 
+  // ── Verified live 2026-10-02 (synthetic data) ──────────────────────
+
+  /** AI-02 — POST /v1/ai/request-draft */
+  requestDraft(body: RequestDraftRequest, opts?: WaseetAiCallOptions): Promise<RequestDraftResponse> {
+    return this.postJson('/v1/ai/request-draft', body, opts, (d) =>
+      isObject(d) && typeof d.suggestedTitle === 'string' && typeof d.suggestedDescription === 'string' &&
+      Array.isArray(d.suggestedSubSpecialties) && typeof d.recommendedMinBudget === 'number' &&
+      typeof d.recommendedMaxBudget === 'number' && typeof d.suggestedDurationDays === 'number',
+    );
+  }
+
+  /** AI-10 — POST /v1/ai/proposals/suggest */
+  suggestProposal(body: ProposalSuggestRequest, opts?: WaseetAiCallOptions): Promise<ProposalSuggestResponse> {
+    return this.postJson('/v1/ai/proposals/suggest', body, opts, (d) =>
+      isObject(d) && typeof d.suggestedTitle === 'string' && typeof d.suggestedMessage === 'string' &&
+      typeof d.qualityScore === 'number' && typeof d.qualityTag === 'string' && Array.isArray(d.suggestedAdvantages),
+    );
+  }
+
+  /** AI-16 — POST /v1/ai/profile/performance-summary */
+  summarizePerformance(body: PerformanceSummaryRequest, opts?: WaseetAiCallOptions): Promise<PerformanceSummaryResponse> {
+    const keys = ['executionQuality', 'onTimeDelivery', 'communication', 'clientSatisfaction', 'onTimeCompletionRate', 'repeatClientRate', 'highRatingServicesRate', 'conflictFreeDeliveryRate'];
+    return this.postJson('/v1/ai/profile/performance-summary', body, opts, (d) => isObject(d) && keys.every((k) => typeof d[k] === 'number'));
+  }
+
+  /** AI-17 — POST /v1/ai/profile/skills */
+  suggestSkills(body: ProfileSkillsRequest, opts?: WaseetAiCallOptions): Promise<ProfileSkillsResponse> {
+    return this.postJson('/v1/ai/profile/skills', body, opts, (d) =>
+      isObject(d) && Array.isArray(d.suggestedSkills) && d.suggestedSkills.every((x: unknown) => typeof x === 'string'),
+    );
+  }
+
+  /** AI-05 — POST /v1/ai/text/suggest/stream (SSE) */
+  streamTextSuggestion(body: TextSuggestStreamRequest, opts?: WaseetAiCallOptions): AsyncGenerator<WaseetAiStreamEvent, void, void> {
+    return this.postStream('/v1/ai/text/suggest/stream', body, opts);
+  }
+
+  /** AI2-10 — POST /v1/ai/text/enhance/stream (SSE) */
+  streamTextEnhancement(body: TextEnhanceStreamRequest, opts?: WaseetAiCallOptions): AsyncGenerator<WaseetAiStreamEvent, void, void> {
+    return this.postStream('/v1/ai/text/enhance/stream', body, opts);
+  }
+
+  /** AI2-07 — POST /v1/ai/assessments/stream (SSE: question + assessment_ready) */
+  streamAssessmentQuestions(body: AssessmentStreamRequest, opts?: WaseetAiCallOptions): AsyncGenerator<WaseetAiStreamEvent, void, void> {
+    return this.postStream('/v1/ai/assessments/stream', body, opts);
+  }
+
+  /** AI2-02 — POST /v1/ai/business-models/audit (advisory verdict) */
+  auditBusinessModel(body: BusinessModelAuditRequest, opts?: WaseetAiCallOptions): Promise<BusinessModelAuditResponse> {
+    return this.postJson('/v1/ai/business-models/audit', body, opts, (d) =>
+      isObject(d) && typeof d.isApproved === 'boolean' && typeof d.score === 'number' && d.score >= 0 && d.score <= 100 &&
+      typeof d.summary === 'string' && d.summary.trim().length > 0 &&
+      Array.isArray(d.strengths) && Array.isArray(d.issues) && Array.isArray(d.recommendations) &&
+      [d.strengths, d.issues, d.recommendations].every((a: unknown[]) => a.every((x) => typeof x === 'string')),
+    );
+  }
+
+  /** AI-12 — POST /v1/ai/proposals/enrich */
+  enrichProposal(body: EnrichProposalRequest, opts?: WaseetAiCallOptions): Promise<EnrichProposalResponse> {
+    return this.postJson('/v1/ai/proposals/enrich', body, opts, (d) =>
+      isObject(d) && typeof d.id === 'string' && typeof d.aiMatchScore === 'number' && typeof d.aiQualityTag === 'string' &&
+      typeof d.aiPriceTag === 'string' && isObject(d.aiFeedback) && typeof d.aiFeedback.summary === 'string',
+    );
+  }
+
   // ── Documented SSE endpoints ──────────────────────────────────────────
 
   /** AI-01 — POST /v1/ai/project-description/stream */
@@ -332,6 +407,32 @@ export class WaseetAiClient {
             throw new WaseetAiError(WaseetAiErrorCode.INVALID_RESPONSE, 'WaseetAI sent a malformed text event', { requestId });
           }
           if (data.chunk.length > 0) yield { type: 'delta', chunk: data.chunk };
+        } else if (name === 'question.streamed') {
+          const q = isObject(data.question) ? data.question : null;
+          if (
+            typeof data.attemptId !== 'string' || !q || typeof q.id !== 'number' || typeof q.textAr !== 'string' ||
+            !Array.isArray(q.options) || !q.options.every((o: unknown) => isObject(o) && typeof o.id === 'string' && typeof o.text === 'string')
+          ) {
+            throw new WaseetAiError(WaseetAiErrorCode.INVALID_RESPONSE, 'WaseetAI sent a malformed question event', { requestId });
+          }
+          yield {
+            type: 'question',
+            attemptId: data.attemptId,
+            question: { id: q.id, textAr: q.textAr, options: (q.options as Array<{ id: string; text: string }>).map((o) => ({ id: o.id, text: o.text })) },
+          };
+        } else if (name === 'assessment.ready') {
+          if (typeof data.attemptId !== 'string' || typeof data.totalQuestions !== 'number' || typeof data.timeLimitMinutes !== 'number') {
+            throw new WaseetAiError(WaseetAiErrorCode.INVALID_RESPONSE, 'WaseetAI sent a malformed assessment.ready event', { requestId });
+          }
+          completed = true;
+          yield {
+            type: 'assessment_ready',
+            attemptId: data.attemptId,
+            totalQuestions: data.totalQuestions,
+            timeLimitMinutes: data.timeLimitMinutes,
+            ...(typeof data.generationSource === 'string' ? { generationSource: data.generationSource } : {}),
+          };
+          yield { type: 'completed' };
         } else if (CITATION_EVENTS.has(name)) {
           const raw = Array.isArray(evt.data) ? evt.data : Array.isArray(data.citations) ? data.citations : [];
           const citations: WaseetAiCitation[] = raw

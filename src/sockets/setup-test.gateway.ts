@@ -1,80 +1,29 @@
 import { Socket, Server as SocketIOServer } from 'socket.io';
-import { prisma } from '../config/db';
 import jwt from 'jsonwebtoken';
-import { geminiClient } from '../services/ai/gemini/gemini.client';
-import { buildSetupTestSystemPrompt, isValidSetupTestQuizPayload, SETUP_TEST_QUESTION_COUNT, SETUP_TEST_RESPONSE_SCHEMA, SetupTestQuizPayload } from '../prompts/setup-test.prompt';
-import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
+import { aiFeatureUnavailablePayload } from '../services/ai/ai-feature-unavailable';
 
-// AI-16 — provider onboarding "setup test" question generation, migrated to
-// the shared Gemini foundation (previously called OpenAI gpt-4o-mini
-// directly, with no rate limiting, no disconnect cancellation, and no
-// validation of the returned question shape beyond "is it a non-empty
-// array"). The static fallback below is unchanged and kept as the honest
-// DETERMINISTIC/STATIC_FALLBACK path when Gemini is unavailable or its
-// output fails validation.
+// Provider onboarding "setup test" is DISABLED.
+//
+// The UI presents this test as an AI assessment ("AI يقيم مستواك المهني"), and
+// its result was used to classify the provider's level. All AI must run
+// exclusively through the WaseetAI service, and WaseetAI's onboarding quiz is
+// a fixed generic platform quiz with no per-specialty input. The old static
+// question bank was only 5 generic questions repeated with a fake
+// "[تخصص: ...]" tag, so keeping it would present fabricated, specialty-tagged
+// questions as a personalised assessment. Therefore the whole quiz is paused:
+// no questions are generated, no score is written and no setup-test status
+// is changed (the profile and any previously stored score stay untouched).
+// The frontend already shows `setup_test:error` messages in an error modal.
 
-function generateSetupTestFallbackQuestions(mainSpec: string, subSpecs: string[]): any[] {
-  const subs = subSpecs && subSpecs.length > 0 ? subSpecs : [mainSpec || 'البرمجة والتقنية'];
-  const questions: any[] = [];
-  
-  const pool = [
-    {
-      q: 'عند العمل على مشروع ذو متطلبات متغيرة بسرعة، أي منهجية تطوير برمجية تُفضل لضمان المرونة والتواصل المستمر مع العملاء؟',
-      options: ['منهجية الشلال (Waterfall)', 'منهجية الرشيقة (Agile/Scrum)', 'التطوير بدون توثيق', 'التطوير الفردي المباشر'],
-      correctOptionIndex: 1,
-      explanation: 'منهجية Agile تسمح بالتسليم التدريجي والاستجابة السريعة للتغيرات.'
-    },
-    {
-      q: 'كيف تضمن حماية بيانات العميل الحساسة أثناء تنفيذ الخدمات التقنية والمستندات الرسمية؟',
-      options: ['حفظها في مجلدات عامة مفتوحة', 'استخدام التشفير القوي واتفاقية عدم الإفصاح (NDA)', 'مشاركتها مع زملائك في منصات أخرى', 'تخزينها في روابط حرة بدون كلمة مرور'],
-      correctOptionIndex: 1,
-      explanation: 'التشفير وتوقيع اتفاقيات السرية تشكل الأساس المهني لحماية بيانات المستفيدين.'
-    },
-    {
-      q: 'في حالة اختلاف وجهات النظر مع العميل حول تسليمات معينة في ختام المشروع، ما التصرف الأمثل؟',
-      options: ['إلغاء المشروع وإغلاق التواصل', 'مراجعة نطاق العمل المحدد بالاتفاق واستخدام الوساطة الرسمية على منصة وسيط AI', 'تسليم أي طلبات إضافية مجاناً دائماً', 'رفع شكوى قبل التحدث مع العميل'],
-      correctOptionIndex: 1,
-      explanation: 'الرجوع لنطاق العمل المعتمد والتواصل المهني يحفظ حقوق الطرفين.'
-    },
-    {
-      q: 'ما أفضل ممارسة لضمان أداء عالي واستجابة سريعة للواجهات والتطبيقات؟',
-      options: ['تحميل جميع الموارد دفعة واحدة في الصفحة الأولى', 'استخدام التخزين المؤقت (Caching) والضغط والتحميل الكسول (Lazy Loading)', 'إلغاء نظام الفهرسة لقواعد البيانات', 'زيادة استخدام البرمجيات الكبيرة دون ضغط'],
-      correctOptionIndex: 1,
-      explanation: 'التحميل الكسول والتخزين المؤقت يقللان زمن الاستجابة واستهلاك النطاق الترددي.'
-    },
-    {
-      q: 'ما أهمية إجراء اختبارات التغطية (Unit Testing & Integration Testing) قبل تسليم المشروع للمشتري؟',
-      options: ['زيادة التكلفة على العميل فقط', 'كشف الثغرات والأخطاء مبكراً وضمان استقرار النظام', 'إبطاء عملية التطوير دون فائدة', 'تلبية متطلبات التصميم الفني فقط'],
-      correctOptionIndex: 1,
-      explanation: 'الاختبارات الأوتوماتيكية تضمن عدم حدوث انكسار في الميزات الحالية واستقرار النظام.'
-    }
-  ];
-
-  for (let i = 0; i < 15; i++) {
-    const sub = subs[i % subs.length];
-    const item = pool[i % pool.length];
-    questions.push({
-      id: `q${i + 1}`,
-      subSpecialtyTag: sub,
-      text: `[تخصص: ${sub}] ${item.q}`,
-      options: item.options,
-      correctOptionIndex: item.correctOptionIndex,
-      explanation: item.explanation
-    });
-  }
-
-  return questions;
-}
+export const SETUP_TEST_UNAVAILABLE_MESSAGE =
+  'اختبار تحديد المستوى الذكي متوقف مؤقتاً حتى يكتمل ربطه بخدمة WaseetAI. يمكنك متابعة إكمال ملفك الشخصي بشكل طبيعي.';
 
 export class SetupTestGateway {
-  private io: SocketIOServer | null = null;
-  private testSessions = new Map<string, any>();
-
   private getUserIdFromToken(token?: string): string | null {
     if (!token) return null;
     let cleanToken = token;
     if (cleanToken.startsWith('"') && cleanToken.endsWith('"')) {
-        cleanToken = cleanToken.slice(1, -1);
+      cleanToken = cleanToken.slice(1, -1);
     }
     try {
       const jwtSecret = process.env.JWT_SECRET;
@@ -86,197 +35,22 @@ export class SetupTestGateway {
     }
   }
 
-  public register(socket: Socket, io?: SocketIOServer): void {
-    if (io) this.io = io;
-
+  public register(socket: Socket, _io?: SocketIOServer): void {
     socket.on('setup_test:init', async (payload: { token: string }) => {
-      try {
-        const userId = this.getUserIdFromToken(payload?.token);
-        if (!userId) {
-          socket.emit('setup_test:error', { message: 'رمز الحساب غير صالح أو منتهي الصلاحية.' });
-          return;
-        }
-
-        if (isSocketAiRateLimited(userId)) {
-          socket.emit('setup_test:error', { message: SOCKET_AI_RATE_LIMIT_MESSAGE });
-          return;
-        }
-
-        // Registered before the DB lookup so a disconnect during either the
-        // lookup or the Gemini call itself is honored — not just a
-        // disconnect that happens to land after both have already started.
-        const abortController = new AbortController();
-        const onDisconnect = () => abortController.abort();
-        socket.once('disconnect', onDisconnect);
-
-        const profile = await prisma.providerProfile.findUnique({ where: { userId } });
-        if (!profile) {
-          socket.off('disconnect', onDisconnect);
-          socket.emit('setup_test:error', { message: 'الملف الشخصي لمقدم الخدمة غير موجود.' });
-          return;
-        }
-
-        if (profile.setupTestStatus === 'BANNED' || profile.setupTestBannedUntil) {
-           await prisma.providerProfile.update({
-             where: { id: profile.id },
-             data: { setupTestStatus: 'PENDING', setupTestBannedUntil: null, setupTestCheatAttempts: 0 }
-           });
-        }
-
-        socket.emit('setup_test:generating', { message: 'جاري إنشاء الاختبار المخصص لك بناءً على تخصصاتك باستخدام الذكاء الاصطناعي...' });
-
-        const mainSpec = profile.mainSpecialty || profile.industry || 'البرمجة والتقنية';
-        const subSpecs = Array.isArray(profile.subSpecialties) && profile.subSpecialties.length > 0
-          ? profile.subSpecialties
-          : [mainSpec];
-
-        let questions: any[] = [];
-        try {
-          const promptUser = `يرجى إنشاء ${SETUP_TEST_QUESTION_COUNT} سؤال اختيار من متعدد تقني لمقدم خدمة في التخصص الرئيسي "${mainSpec}" والتخصصات الفرعية [${subSpecs.join(', ')}].`;
-          const result = await geminiClient.generateStructured<SetupTestQuizPayload>(promptUser, {
-            systemInstruction: buildSetupTestSystemPrompt(),
-            responseSchema: SETUP_TEST_RESPONSE_SCHEMA,
-            validate: isValidSetupTestQuizPayload,
-            temperature: 0.5,
-            // Previously unbounded (no maxOutputTokens at all). Sized for the
-            // real contract: exactly 15 questions, each with 4 options plus
-            // an explanation (see setup-test.prompt.ts), which is a
-            // genuinely large structured payload — headroom included for
-            // gemini-flash-latest's variable reasoning-token overhead.
-            maxOutputTokens: 6000,
-            timeoutMs: 30_000,
-            signal: abortController.signal
-          });
-          questions = result.data.questions;
-        } catch (aiErr: any) {
-          console.warn('[SetupTestGateway] Gemini generation failed, falling back to static question bank:', aiErr?.code || aiErr?.message);
-        }
-        socket.off('disconnect', onDisconnect);
-
-        // Honest STATIC_FALLBACK — never a fabricated/relabeled AI result.
-        if (!questions || questions.length === 0) {
-          questions = generateSetupTestFallbackQuestions(mainSpec, subSpecs);
-        }
-
-        this.testSessions.set(userId, {
-            questions,
-            currentQIndex: 0,
-            score: 0,
-            answers: []
-        });
-
-        socket.emit('setup_test:ready', { totalQuestions: questions.length });
-
-      } catch (err: any) {
-        console.error('[SetupTestGateway Init Error]:', err);
-        socket.emit('setup_test:error', { message: 'حدث خطأ أثناء إنشاء أسئلة الاختبار.' });
+      const userId = this.getUserIdFromToken(payload?.token);
+      if (!userId) {
+        socket.emit('setup_test:error', { message: 'رمز الحساب غير صالح أو منتهي الصلاحية.' });
+        return;
       }
+      socket.emit('setup_test:error', aiFeatureUnavailablePayload(SETUP_TEST_UNAVAILABLE_MESSAGE));
     });
 
-    socket.on('setup_test:get_question', async (payload: { token: string }) => {
-        try {
-            const userId = this.getUserIdFromToken(payload?.token);
-            if (!userId) {
-                console.warn('[SetupTestGateway] get_question failed: userId could not be parsed from token');
-                return;
-            }
-            
-            const session = this.testSessions.get(userId);
-            if (!session) {
-                console.warn(`[SetupTestGateway] get_question failed: no active test session for user ${userId}`);
-                return;
-            }
-            
-            if (session.currentQIndex < session.questions.length) {
-                const q = session.questions[session.currentQIndex];
-                socket.emit('setup_test:question', {
-                    id: q.id || `q${session.currentQIndex + 1}`,
-                    text: q.text || q.question || q.q || 'سؤال غير محدد',
-                    options: q.options || [],
-                    index: session.currentQIndex,
-                    total: session.questions.length
-                });
-            }
-        } catch(e) {
-          console.error('[SetupTestGateway get_question Error]:', e);
-        }
-    });
-
-    socket.on('setup_test:answer', async (payload: { token: string, questionId: string, selectedIndex: number }) => {
-        try {
-            const userId = this.getUserIdFromToken(payload?.token);
-            if (!userId) {
-                console.warn('[SetupTestGateway] answer failed: userId could not be parsed');
-                return;
-            }
-            
-            const session = this.testSessions.get(userId);
-            if (!session) {
-                console.warn(`[SetupTestGateway] answer failed: no active test session for user ${userId}`);
-                return;
-            }
-            
-            const q = session.questions[session.currentQIndex];
-            if (q && (q.id === payload.questionId || `q${session.currentQIndex + 1}` === payload.questionId)) {
-                const isCorrect = q.correctOptionIndex === payload.selectedIndex;
-                if (isCorrect) session.score++;
-                
-                session.answers.push({
-                    questionId: payload.questionId,
-                    selectedIndex: payload.selectedIndex,
-                    isCorrect
-                });
-                
-                session.currentQIndex++;
-                
-                if (session.currentQIndex < session.questions.length) {
-                    const nextQ = session.questions[session.currentQIndex];
-                    socket.emit('setup_test:question', {
-                        id: nextQ.id || `q${session.currentQIndex + 1}`,
-                        text: nextQ.text || nextQ.question || nextQ.q || 'سؤال غير محدد',
-                        options: nextQ.options || [],
-                        index: session.currentQIndex,
-                        total: session.questions.length
-                    });
-                } else {
-                    // Finish test
-                    const percentage = (session.score / session.questions.length) * 100;
-                    
-                    const profile = await prisma.providerProfile.findUnique({ where: { userId } });
-                    if (profile) {
-                        await prisma.providerProfile.update({
-                            where: { id: profile.id },
-                            data: {
-                                setupTestScore: percentage,
-                                setupTestStatus: 'COMPLETED'
-                            }
-                        });
-                    }
-                    
-                    // This is an onboarding calibration test, not a pass/fail
-                    // gate — no code path anywhere restricts a provider based
-                    // on its outcome, so it must never claim a `passed`
-                    // verdict that doesn't actually exist. setupTestStatus
-                    // becomes COMPLETED regardless of score (unchanged).
-                    socket.emit('setup_test:result', {
-                        score: percentage,
-                        total: session.questions.length,
-                        correct: session.score,
-                        message: 'تم الانتهاء من الاختبار بنجاح وتم تسجيل نتيجتك لتصنيف مستواك.'
-                    });
-                    
-                    this.testSessions.delete(userId);
-                }
-            }
-        } catch(e) {
-          console.error('[SetupTestGateway answer Error]:', e);
-        }
-    });
-
-    socket.on('setup_test:anti_cheat', async (payload: { token: string, type: string }) => {
-        // Anti-cheat ban is currently disabled for testing purposes
-        console.log(`[AntiCheat Info]: event received for testing (${payload?.type})`);
-    });
+    // Without a generated quiz there is never an active session, so question /
+    // answer requests have nothing to serve. Anti-cheat events stay accepted
+    // (no-op) so older clients do not break.
+    socket.on('setup_test:get_question', () => undefined);
+    socket.on('setup_test:answer', () => undefined);
+    socket.on('setup_test:anti_cheat', () => undefined);
   }
 }
 

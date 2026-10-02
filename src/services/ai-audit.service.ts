@@ -1,214 +1,111 @@
 import { prisma } from '../config/db';
-import { getIO } from '../socket';
-import { emailService } from './email.service';
-import { notificationService } from './notification.service';
-import { geminiClient } from './ai/gemini/gemini.client';
 import { logger } from '../config/logger';
-import { AI_AUDIT_RESPONSE_SCHEMA, AI_AUDITOR_PROMPT, AiAuditReport, isValidAiAuditReport } from './ai-audit.prompt';
+import { AppError } from '../utils/app-error';
+import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
+import { normalizeWaseetAiError, WaseetAiErrorCode } from './ai/waseet-ai/waseet-ai.errors';
 
-export type { AiAuditReport };
+// Business-model (ServiceCatalog) AI audit — served exclusively by WaseetAI
+// (waseetAiClient.auditBusinessModel). The verdict is ADVISORY ONLY: it is
+// stored in the ai* fields and NEVER changes status / approvedAt /
+// auditRejectionReason, never approves/rejects/publishes a model, and sends
+// no notification, e-mail or socket event. A failed or invalid call writes
+// nothing (no zero-score default).
+//
+// The service needs the real category: without it valid listings are wrongly
+// rejected, so a model without a specialty is SKIPPED (no call, no write).
+// Currency is not sent (not verified). aiClarityScore / aiFeasibilityScore are
+// not provided by the service and are left untouched (NULL).
+
+export const AI_AUDIT_UNAVAILABLE_MESSAGE =
+  'تعذر إكمال التدقيق الذكي لنموذج العمل حالياً. لم يتم تغيير النموذج ويبقى ضمن مسار المراجعة الإدارية.';
+
+export type AiAuditOutcome =
+  | { outcome: 'audited'; serviceId: string; score: number; isApproved: boolean }
+  | { outcome: 'skipped'; serviceId: string; reason: 'NO_CATEGORY' };
+
+const unavailable = (code: string): AppError =>
+  Object.assign(new AppError(AI_AUDIT_UNAVAILABLE_MESSAGE, 503), { code });
+
+const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
 
 export class AiAuditService {
-  /**
-   * Alias for backward compatibility with existing controllers/services
-   */
-  async triggerAuditAndPublish(serviceId: string, providerId: string): Promise<void> {
-    return this.auditProjectModel(serviceId, providerId);
+  /** Kept for existing callers: fire-and-forget, never throws. */
+  async triggerAuditAndPublish(serviceId: string, _providerId: string): Promise<void> {
+    return this.auditProjectModel(serviceId);
   }
 
-  /**
-   * Triggers the AI Audit asynchronously using Gemini for a newly submitted Business Model
-   */
-  async auditProjectModel(serviceId: string, providerIdInput?: string): Promise<void> {
-    // Run asynchronously to allow instant API response while AI evaluates in background
-    setTimeout(async () => {
-      await this.executeAuditSync(serviceId, providerIdInput);
-    }, 1500); // 1.5 seconds delay to demonstrate real background audit workflow
+  /** Non-blocking creation hook: starts the advisory audit in the background
+   *  and returns immediately. Never throws, never blocks creation. */
+  async auditProjectModel(serviceId: string, _providerIdInput?: string): Promise<void> {
+    void this.executeAuditSync(serviceId).catch((error) => {
+      logger.warn(`[AiAuditService] background audit skipped for ${serviceId}: ${(error as { code?: string })?.code || 'error'}`);
+    });
   }
 
-  /**
-   * Synchronously executes the Gemini audit pipeline for batch or CLI evaluation
-   */
-  async executeAuditSync(serviceId: string, providerIdInput?: string): Promise<any> {
-    try {
-      logger.info(`[AiAuditService] Starting automated Gemini audit for model ${serviceId}`);
-      
-      const service = await prisma.serviceCatalog.findUnique({
-        where: { id: serviceId },
-        include: {
-          stages: true,
-          provider: true,
-        }
-      });
+  async executeAuditSync(serviceId: string, _providerIdInput?: string): Promise<AiAuditOutcome> {
+    const service = await prisma.serviceCatalog.findUnique({
+      where: { id: serviceId },
+      include: { specialty: true, stages: { orderBy: { stepOrder: 'asc' } } },
+    });
+    if (!service) throw new AppError('نموذج العمل غير موجود', 404);
 
-      if (!service) {
-        logger.error(`[AiAuditService] ServiceCatalog ${serviceId} not found.`);
-        return null;
-      }
-
-      const providerId = providerIdInput || service.providerId;
-
-      const userPayload = JSON.stringify({
-        title: service.title,
-        description: service.description,
-        totalAmount: Number(service.totalAmount),
-        totalDays: service.totalDays,
-        stages: service.stages.map(s => ({
-          title: s.title,
-          description: s.description,
-          days: s.deliveryDays,
-          percentage: s.percentage,
-          amount: Number(s.computedAmount)
-        }))
-      }, null, 2);
-
-	      // A failed or unavailable external audit must never publish a model automatically.
-	      let auditResult: AiAuditReport = {
-	        overallScore: 0,
-	        clarityScore: 0,
-	        feasibilityScore: 0,
-	        isApproved: false,
-	        decisionSummary: "تعذر إكمال التدقيق الآلي. بقي النموذج قيد المراجعة ولم يتم نشره تلقائياً.",
-	        strengths: [],
-	        criticalGaps: ["التدقيق الآلي غير متاح حالياً"],
-	        improvementSuggestions: ["انتظار إعادة التدقيق أو المراجعة الإدارية"]
-	      };
-	      let auditCompleted = false;
-
-      // AI-18 — migrated to the shared Gemini foundation. The previous
-      // OpenAI path silently defaulted a missing/malformed score to 85 and
-      // still marked the audit "completed" — a fabricated success.
-      // isValidAiAuditReport now rejects any malformed shape before it can
-      // reach auditResult, so a bad response routes to the same honest
-      // manual-review default as "provider unavailable" below.
-      try {
-        const result = await geminiClient.generateStructured<AiAuditReport>(
-          `Please stringently evaluate the following Business Model submission:\n${userPayload}`,
-          {
-            systemInstruction: AI_AUDITOR_PROMPT,
-            responseSchema: AI_AUDIT_RESPONSE_SCHEMA,
-            validate: isValidAiAuditReport,
-            temperature: 0.2,
-            maxOutputTokens: 800,
-            timeoutMs: 25_000
-          }
-        );
-        auditResult = result.data;
-        auditCompleted = true;
-        logger.info(`[AiAuditService] Gemini evaluation completed with score: ${auditResult.overallScore}, isApproved: ${auditResult.isApproved}`);
-      } catch (aiError: any) {
-        logger.warn(`[AiAuditService] Gemini error during audit, using honest manual-review fallback: ${aiError?.code || aiError?.message}`);
-      }
-
-	      // The audit is advisory: publishing is immediate and an AI result must never hide the model.
-	      // Safety re-audit (verified against every consumer of this result —
-	      // see ai-audit.service.test.ts): `nextStatus` is a fixed literal,
-	      // never derived from `auditResult.isApproved` or from whether the
-	      // Gemini call succeeded at all — both the true and false branches
-	      // above, and the try/catch failure path, feed the exact same
-	      // `nextStatus`. Elsewhere in src/, `auditResult.isApproved`/
-	      // `overallScore` are read only for display (email subject/badge
-	      // color in email.service.ts, and read-only "matchRate"/
-	      // "recommendation" text in marketplace-service.service.ts) — never
-	      // to gate a status transition. So Gemini's verdict can neither
-	      // publish nor block publishing here: it is genuinely advisory-only,
-	      // already satisfying the "never the sole cause of a binding
-	      // transition" requirement without further change.
-	      const nextStatus = 'PUBLISHED';
-
-      // Update model in database
-      const updatedModel = await prisma.serviceCatalog.update({
-        where: { id: serviceId },
-        data: {
-          status: nextStatus as any,
-          aiScore: auditResult.overallScore,
-          aiClarityScore: auditResult.clarityScore,
-          aiFeasibilityScore: auditResult.feasibilityScore,
-          aiReviewSummary: auditResult.decisionSummary,
-          aiReviewDetails: { recommendations: auditResult.improvementSuggestions, fullAudit: auditResult } as any,
-          aiAuditReport: auditResult as any,
-          auditRejectionReason: auditResult.isApproved ? null : auditResult.decisionSummary,
-          approvedAt: service.approvedAt || new Date(),
-          aiAuditScore: auditResult.overallScore,
-          aiAuditFeedback: { recommendations: auditResult.improvementSuggestions, summary: auditResult.decisionSummary } as any,
-        }
-      });
-
-      logger.info(`[AiAuditService] Model ${serviceId} updated to status ${nextStatus}`);
-
-      // Notification title & message as required
-	      const notifTitle = `🎉 تم نشر نموذج العمل`;
-	      const notifMsg = auditCompleted
-	        ? `نُشر نموذج "${service.title}" في السوق، وتم إرفاق التقييم الاستشاري بنتيجة ${auditResult.overallScore}%.`
-	        : `نُشر نموذج "${service.title}" مباشرة، وتعذر إكمال التقييم الاستشاري.`;
-
-      // Save notification in database & emit real-time WebSocket alert
-      const notification = await notificationService.createAndEmitNotification({
-        userId: providerId,
-        title: notifTitle,
-        message: notifMsg,
-        category: 'AI',
-	        type: "MODEL_APPROVED",
-        actionUrl: "/provider-overview/business-models/center",
-        actionText: "عرض التقرير ›",
-        metadata: {
-          serviceId: service.id,
-          status: nextStatus,
-          aiScore: auditResult.overallScore,
-          decisionSummary: auditResult.decisionSummary,
-          aiAuditReport: auditResult
-        } as any
-      });
-
-      // Real-time WebSocket emission
-      const io = getIO();
-      if (io) {
-        logger.info(`[AiAuditService] Emitting real-time notification & status update to provider ${providerId}`);
-        const rooms = [`user_${providerId}`, `project_owner_${providerId}`, providerId];
-        rooms.forEach(room => {
-          io.to(room).emit('notification:new', notification);
-          io.to(room).emit('model:status_updated', {
-            serviceId: service.id,
-            id: service.id,
-            status: nextStatus,
-            aiScore: auditResult.overallScore,
-            aiClarityScore: auditResult.clarityScore,
-            aiFeasibilityScore: auditResult.feasibilityScore,
-            aiReviewSummary: auditResult.decisionSummary,
-            aiAuditReport: auditResult,
-            auditRejectionReason: auditResult.isApproved ? null : auditResult.decisionSummary,
-            notification
-          });
-          // Also emit previous legacy event name for full safety
-          io.to(room).emit('model_status_update', {
-            serviceId: service.id,
-            status: nextStatus,
-            aiScore: auditResult.overallScore,
-            aiReviewSummary: auditResult.decisionSummary,
-            notification
-          });
-        });
-        // Broadcast general event if needed
-        io.emit('model:status_updated_broadcast', { serviceId: service.id, status: nextStatus });
-      }
-
-      // Email dispatch
-      if (service.provider && service.provider.email && service.provider.firstName) {
-        await emailService.sendModelApprovalEmail(
-          service.provider.email,
-          service.provider.firstName,
-          service.title,
-          auditResult.overallScore,
-          auditResult.isApproved,
-          `${auditResult.decisionSummary}\n\nنصائح التحسين:\n- ${auditResult.improvementSuggestions.join('\n- ')}`
-        );
-      }
-
-      return { serviceId, status: nextStatus, auditResult };
-    } catch (err: any) {
-      logger.error(`[AiAuditService] Fatal error during automated audit: ${err.message}`, err);
-      return null;
+    const specialtyName = service.specialty?.nameAr?.trim();
+    if (!specialtyName) {
+      logger.info(`[AiAuditService] model ${serviceId} has no category; AI audit skipped.`);
+      return { outcome: 'skipped', serviceId, reason: 'NO_CATEGORY' };
     }
+    const subSpecialty = service.subSpecialty?.trim();
+    const category = subSpecialty ? `${specialtyName} - ${subSpecialty}` : specialtyName;
+
+    const stageLines = (service.stages ?? []).map(
+      (s) => `${s.stepOrder}. ${s.title} (${s.deliveryDays} يوم، ${s.percentage}%)`,
+    );
+    const description = [
+      service.description ?? '',
+      '',
+      '--- تفاصيل النموذج ---',
+      `إجمالي المدة: ${service.totalDays} يوم`,
+      ...(stageLines.length ? ['المراحل:', ...stageLines] : []),
+    ].join('\n');
+
+    let verdict;
+    try {
+      verdict = await waseetAiClient.auditBusinessModel({
+        title: service.title,
+        description,
+        category,
+        pricing: { amount: Number(service.totalAmount) },
+      });
+    } catch (error) {
+      const e = normalizeWaseetAiError(error);
+      logger.warn(`[AiAuditService] WaseetAI audit failed code=${e.code} status=${e.status ?? '-'} requestId=${e.requestId ?? '-'}`);
+      throw unavailable(e.code);
+    }
+
+    const score = verdict?.score;
+    if (
+      !verdict || typeof verdict.isApproved !== 'boolean' || typeof score !== 'number' || !Number.isFinite(score) ||
+      score < 0 || score > 100 || typeof verdict.summary !== 'string' ||
+      !isStringArray(verdict.strengths) || !isStringArray(verdict.issues) || !isStringArray(verdict.recommendations)
+    ) {
+      logger.warn(`[AiAuditService] WaseetAI audit returned an invalid response for ${serviceId}`);
+      throw unavailable(WaseetAiErrorCode.INVALID_RESPONSE);
+    }
+
+    const { isApproved, summary, strengths, issues, recommendations } = verdict;
+    // ADVISORY fields only — status / approvedAt / auditRejectionReason are never written.
+    await prisma.serviceCatalog.update({
+      where: { id: serviceId },
+      data: {
+        aiScore: Math.round(score),
+        aiReviewSummary: summary,
+        aiReviewDetails: { source: 'WASEET_AI', strengths, issues, recommendations } as any,
+        aiAuditReport: { source: 'WASEET_AI', isApproved, score, summary, strengths, issues, recommendations } as any,
+        aiAuditScore: score,
+        aiAuditFeedback: { summary, recommendations } as any,
+      },
+    });
+    return { outcome: 'audited', serviceId, score, isApproved };
   }
 }
 

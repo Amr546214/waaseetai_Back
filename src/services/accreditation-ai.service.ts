@@ -2,28 +2,19 @@ import { prisma } from '../config/db';
 import { logger } from '../config/logger';
 import { AccreditationStatus } from '@prisma/client';
 import { AppError } from '../utils/app-error';
-import { geminiClient, GeminiImageInput } from './ai/gemini/gemini.client';
-import { fetchRemoteImage } from '../utils/remote-image-fetch';
+import { aiFeatureUnavailablePayload } from './ai/ai-feature-unavailable';
 
-// F10 — Accreditation Sample AI Evaluation, migrated to the shared Gemini
-// Vision foundation.
-//
-// Fallback decision: the previous implementation's failure path
-// (`generateManualReviewEvaluation` — score 0, status MANUAL_REVIEW, an
-// honest Arabic message saying the automated check couldn't complete) was
-// ALREADY the correct, honest behavior and is preserved unchanged. What
-// needed fixing was the *success* path: the old OpenAI response parser
-// silently replaced a missing/malformed `aiScore` with a hardcoded `85`,
-// and missing `strengths`/`recommendations` with hardcoded positive-sounding
-// arrays ("التزام ممتاز بالبنية المعمارية", …) — meaning a malformed or
-// partial provider response could still look like a confident real
-// evaluation. That silent patching is removed: a real validator now either
-// accepts the full parsed response or the call is treated as failed and
-// routed through the existing, already-honest manual-review path — never a
-// partially-fabricated "success".
+// Accreditation sample submission. The AI evaluation of samples is DISABLED:
+// all AI must run exclusively through the WaseetAI service, and no documented
+// contract exists for sample evaluation. Submitting a sample still works: it
+// is stored with status MANUAL_REVIEW and NO AI fields (no score, rating,
+// feedback or audit timestamp), so it waits for the existing human/admin
+// approval path. A sample can never become AI_VERIFIED through submission,
+// and no ProviderSpecialty credential is granted here. Previously stored AI
+// results on older samples remain readable unchanged.
 
-const ALLOWED_ACCREDITATION_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
-const MAX_VISION_IMAGES = 4;
+export const ACCREDITATION_AI_UNAVAILABLE_MESSAGE =
+  'الفحص الذكي لنماذج الاعتماد متوقف مؤقتاً حتى يكتمل ربطه بخدمة WaseetAI. تم استلام نموذجك وتحويله للمراجعة اليدوية من فريق الاعتماد.';
 
 export interface SubmitAccreditationSampleDto {
   userId: string;
@@ -36,55 +27,14 @@ export interface SubmitAccreditationSampleDto {
   attachments: string[];
 }
 
-const ACCREDITATION_EVALUATION_SCHEMA = {
-  type: 'object',
-  properties: {
-    aiScore: { type: 'number', description: '0 to 100' },
-    status: { type: 'string', enum: ['AI_VERIFIED', 'REJECTED'] },
-    aiQualityRating: { type: 'string', enum: ['EXCELLENT', 'ACCEPTABLE', 'POOR'] },
-    feedbackAr: { type: 'string' },
-    strengths: { type: 'array', items: { type: 'string' } },
-    recommendations: { type: 'array', items: { type: 'string' } }
-  },
-  required: ['aiScore', 'status', 'aiQualityRating', 'feedbackAr', 'strengths', 'recommendations']
-};
-
-// Rejects anything that doesn't genuinely satisfy the application contract.
-// This replaces the previous silent-patching behavior (a missing/invalid
-// aiScore became a hardcoded 85; missing strengths/recommendations became
-// hardcoded positive-sounding text) — a malformed response is now always
-// treated as a real failure, routed through the existing honest
-// manual-review path, never disguised as a passable evaluation.
-function isValidAccreditationEvaluation(value: unknown): value is AccreditationEvaluationResult {
-  if (!value || typeof value !== 'object') return false;
-  const v = value as Record<string, unknown>;
-  if (typeof v.aiScore !== 'number' || !Number.isFinite(v.aiScore) || v.aiScore < 0 || v.aiScore > 100) return false;
-  if (v.status !== 'AI_VERIFIED' && v.status !== 'REJECTED') return false;
-  if (v.aiQualityRating !== 'EXCELLENT' && v.aiQualityRating !== 'ACCEPTABLE' && v.aiQualityRating !== 'POOR') return false;
-  if (typeof v.feedbackAr !== 'string' || v.feedbackAr.trim().length === 0) return false;
-  if (!Array.isArray(v.strengths) || !v.strengths.every((s) => typeof s === 'string')) return false;
-  if (!Array.isArray(v.recommendations) || !v.recommendations.every((s) => typeof s === 'string')) return false;
-  return true;
-}
-
-export interface AccreditationEvaluationResult {
-  aiScore: number;
-  status: 'AI_VERIFIED' | 'REJECTED' | 'MANUAL_REVIEW';
-  aiQualityRating: 'EXCELLENT' | 'ACCEPTABLE' | 'POOR';
-  feedbackAr: string;
-  strengths: string[];
-  recommendations: string[];
-}
-
 export class AccreditationAiService {
   /**
-   * Main Gemini multimodal evaluation engine for accreditation samples
-   * (migrated off OpenAI GPT-4o; this comment previously went stale).
+   * Stores an accreditation sample for human review. No AI evaluation runs.
    */
-  async evaluateAccreditationSample(dto: SubmitAccreditationSampleDto) {
+  async submitAccreditationSample(dto: SubmitAccreditationSampleDto) {
     const { userId, providerSpecialtyId, title, description, technologiesUsed, projectUrl, githubUrl, attachments } = dto;
 
-    logger.info(`[AccreditationAiService] Starting evaluation for user ${userId}, specialty ${providerSpecialtyId}`);
+    logger.info(`[AccreditationAiService] Storing sample for manual review, user ${userId}, specialty ${providerSpecialtyId}`);
 
     // 1. Resolve Provider Profile
     const providerProfile = await prisma.providerProfile.findUnique({
@@ -115,15 +65,8 @@ export class AccreditationAiService {
       throw new Error('التخصص غير مرتبط بحساب مقدم الخدمة');
     }
 
-    // Safety re-audit: this `isPassed` check is the deterministic
-    // credential gate — it is a real quiz-score outcome from
-    // ai-assessment.service.ts/assessment.gateway.ts, never derived from
-    // Gemini's own judgment. It is what actually stands between a single
-    // Gemini vision call below and a binding ProviderSpecialty credential:
-    // no accreditation sample (and therefore no possible AI_VERIFIED
-    // upgrade) can be evaluated for a specialty that hasn't already
-    // deterministically passed. See the "credential auto-grant boundary"
-    // tests in accreditation-ai.service.test.ts.
+    // Deterministic credential gate: `isPassed` is a real quiz-score outcome;
+    // samples can only be submitted for a specialty that already passed.
     if (!providerSpecialty.isActive || !providerSpecialty.isPassed) {
       throw new Error('يجب اجتياز الاختبار الفني قبل رفع نموذج الاعتماد');
     }
@@ -134,170 +77,31 @@ export class AccreditationAiService {
     }
 
     const specialtyName = providerSpecialty.specialty.nameAr || providerSpecialty.specialty.nameEn || providerSpecialty.specialty.name || 'تخصص عام';
-    const categoryName = providerSpecialty.specialty.category?.nameAr || 'عام';
 
-    // 3. Gemini Vision Evaluation Pipeline
-    let evalResult: AccreditationEvaluationResult;
-
-    let evaluationCompleted = false;
-    if (geminiClient.isConfigured()) {
-      try {
-        evalResult = await this.callGeminiVisionEvaluation({
-          specialtyName,
-          categoryName,
-          title,
-          description,
-          technologiesUsed,
-          projectUrl,
-          githubUrl,
-          attachments
-        });
-        evaluationCompleted = true;
-      } catch (err: any) {
-        logger.error(`[AccreditationAiService] Gemini API error, routing to manual review: ${err?.code || err?.message}`);
-        evalResult = this.generateManualReviewEvaluation(specialtyName);
+    const accreditationSample = await prisma.accreditationSample.create({
+      data: {
+        providerProfileId: providerProfile.id,
+        providerSpecialtyId: providerSpecialty.id,
+        title,
+        description,
+        projectUrl: projectUrl || null,
+        githubUrl: githubUrl || null,
+        technologiesUsed: technologiesUsed || [],
+        attachments: attachments || [],
+        status: AccreditationStatus.MANUAL_REVIEW
       }
-    } else {
-      logger.info(`[AccreditationAiService] GEMINI_API_KEY not configured. Routing to manual review.`);
-      evalResult = this.generateManualReviewEvaluation(specialtyName);
-    }
-
-    // Determine status & quality rating based on score rules
-    const finalScore = Math.round(evalResult.aiScore * 10) / 10;
-    const finalStatus = evaluationCompleted ? (finalScore >= 75 ? 'AI_VERIFIED' : 'REJECTED') : 'MANUAL_REVIEW';
-    const finalQuality = evaluationCompleted ? (finalScore >= 85 ? 'EXCELLENT' : (finalScore >= 75 ? 'ACCEPTABLE' : 'POOR')) : 'POOR';
-
-    // 4. Save DB Transaction.
-    // AI_VERIFIED here means "AI recommends approval, pending final
-    // confirmation" — it is a label on the sample only. A single Gemini
-    // score must never itself grant a binding ProviderSpecialty credential;
-    // the actual upgrade (status/isPassed/badgeGrantedAt) happens only
-    // through the existing explicit admin action (adminApproveSample below),
-    // exactly like a sample that came back REJECTED/MANUAL_REVIEW.
-    const accreditationSample = await prisma.$transaction(async (tx) => {
-      const sample = await tx.accreditationSample.create({
-        data: {
-          providerProfileId: providerProfile.id,
-          providerSpecialtyId: providerSpecialty.id,
-          title,
-          description,
-          projectUrl: projectUrl || null,
-          githubUrl: githubUrl || null,
-          technologiesUsed: technologiesUsed || [],
-          attachments: attachments || [],
-          status: finalStatus,
-          aiScore: finalScore,
-          aiQualityRating: finalQuality,
-          aiFeedbackAr: evalResult.feedbackAr,
-          aiStrengths: evalResult.strengths,
-          aiRecommendations: evalResult.recommendations,
-          aiAuditedAt: new Date(),
-        }
-      });
-
-      return sample;
     });
 
-    logger.info(`[AccreditationAiService] AccreditationSample created with ID ${accreditationSample.id}, score: ${finalScore}, status: ${finalStatus}`);
+    logger.info(`[AccreditationAiService] AccreditationSample ${accreditationSample.id} stored for manual review (AI evaluation paused)`);
 
     return {
       sample: accreditationSample,
-      evaluation: {
-        aiScore: finalScore,
-        status: finalStatus,
-        aiQualityRating: finalQuality,
-        feedbackAr: evalResult.feedbackAr,
-        strengths: evalResult.strengths,
-        recommendations: evalResult.recommendations,
+      evaluation: null,
+      aiEvaluation: {
+        available: false,
         specialtyName,
-        auditedAt: accreditationSample.aiAuditedAt
+        ...aiFeatureUnavailablePayload(ACCREDITATION_AI_UNAVAILABLE_MESSAGE)
       }
-    };
-  }
-
-  /**
-   * Gemini Vision Multimodal Ingestion Pipeline
-   */
-  private async callGeminiVisionEvaluation(params: {
-    specialtyName: string;
-    categoryName: string;
-    title: string;
-    description: string;
-    technologiesUsed: string[];
-    projectUrl?: string;
-    githubUrl?: string;
-    attachments: string[];
-  }): Promise<AccreditationEvaluationResult> {
-    const { specialtyName, categoryName, title, description, technologiesUsed, projectUrl, githubUrl, attachments } = params;
-
-    const systemPrompt = `أنت الخبير الفني الرئيسي لمراجعة نماذج الاعتماد (Senior Technical Lead Auditor) في مجال "${specialtyName}" (قسم: ${categoryName}).
-مهمتك هي إجراء فحص تقني دقيق وشامل لنموذج العمل المرفق لتقييم عمقه الفني، صحة التنفيذ، التناسق المعماري، وجودة حل المشكلات.
-
-قم بتحليل البيانات التالية:
-- عنوان المشروع: ${title}
-- وصف المشروع: ${description}
-- التقنيات المستخدمة: ${technologiesUsed.join(', ')}
-- رابط المشروع المباشر: ${projectUrl || 'غير متاح'}
-- رابط GitHub: ${githubUrl || 'غير متاح'}
-- عدد المرفقات المرفوعة: ${attachments.length}
-
-معايير التقييم:
-1. جودة البنية البرمجية والتصميم والتنفيذ التقني (0-100).
-2. مصداقية النموذج وتطابقه مع التقنيات المسجلة والتخصص.
-3. اكتمال الوثائق والمرفقات الفنية.
-
-يجب أن تعيد الناتج بصيغة JSON صارمة باللغة العربية كالتالي:
-{
-  "aiScore": 88.0,
-  "status": "AI_VERIFIED", // إذا كان aiScore >= 75% اختر AI_VERIFIED وإلا REJECTED
-  "aiQualityRating": "EXCELLENT", // EXCELLENT (>=85), ACCEPTABLE (>=75), POOR (<75)
-  "feedbackAr": "نص التقييم والتغذية الراجعة التفصيلية باللغة العربية...",
-  "strengths": ["نقاط القوة 1", "نقاط القوة 2"],
-  "recommendations": ["توصية تحسين 1", "توصية تحسين 2"]
-}`;
-
-    const userPrompt = 'الرجاء فحص نموذج العمل المرفق ومدى استحقاقه للاعتماد الفني.';
-
-    // Best-effort image collection — an individual attachment that fails to
-    // fetch is skipped with a server-side log, never fails the whole
-    // evaluation (the text description still carries real signal).
-    const images: GeminiImageInput[] = [];
-    for (const fileUrl of attachments) {
-      if (images.length >= MAX_VISION_IMAGES) break;
-      if (typeof fileUrl !== 'string' || !(fileUrl.startsWith('http://') || fileUrl.startsWith('https://'))) continue;
-      try {
-        const fetched = await fetchRemoteImage(fileUrl, { allowedMimeTypes: ALLOWED_ACCREDITATION_IMAGE_MIME_TYPES });
-        images.push(fetched);
-      } catch (imageError: any) {
-        logger.warn(`[AccreditationAiService] Skipping unfetchable attachment image: ${imageError?.code || imageError?.message}`);
-      }
-    }
-
-    const requestOptions = {
-      systemInstruction: systemPrompt,
-      responseSchema: ACCREDITATION_EVALUATION_SCHEMA,
-      validate: isValidAccreditationEvaluation,
-      maxOutputTokens: 1200
-    };
-
-    const result = images.length > 0
-      ? await geminiClient.generateStructuredWithImage<AccreditationEvaluationResult>(userPrompt, { ...requestOptions, images })
-      : await geminiClient.generateStructured<AccreditationEvaluationResult>(userPrompt, requestOptions);
-
-    return result.data;
-  }
-
-  /**
-   * Dynamic fallback evaluation calculation if OpenAI key is unconfigured or encounters an error
-   */
-  private generateManualReviewEvaluation(specialtyName: string): AccreditationEvaluationResult {
-    return {
-      aiScore: 0,
-      status: 'MANUAL_REVIEW',
-      aiQualityRating: 'POOR',
-      feedbackAr: `تعذر إكمال الفحص الآلي لتخصص ${specialtyName}. تم تحويل النموذج إلى المراجعة اليدوية دون منحه اعتماداً تلقائياً.`,
-      strengths: [],
-      recommendations: ['بانتظار مراجعة فريق الاعتماد للمرفقات وإثبات الملكية']
     };
   }
 
@@ -446,7 +250,7 @@ export class AccreditationAiService {
     if (!sample) throw new AppError('نموذج الاعتماد غير موجود', 404);
     // The real "already done" condition is whether the linked specialty has
     // actually been granted the credential — not whether the sample itself
-    // is labeled AI_VERIFIED, which (post-fix) only ever means "AI
+    // is labeled AI_VERIFIED, which only ever means "AI
     // recommends approval", never "approval already granted".
     if (sample.providerSpecialty?.status === 'APPROVED') throw new AppError('تم اعتماد هذا النموذج مسبقاً', 409);
 

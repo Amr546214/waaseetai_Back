@@ -6,14 +6,9 @@ import { AccountType } from '@prisma/client';
 
 const router = Router();
 
-// Batch 7 security fix: this route calls Gemini (a real cost-bearing call —
-// see ai-assistant.controller.ts) and was missing both aiLimiter (every
-// other Gemini-triggering HTTP route in the codebase carries one) and any
-// role restriction. The only real callers are the provider "Explore
-// Requests" and "Apply to Request" pages (deep project-fit analysis is a
-// provider-side bidding tool), so the narrowest correct authorization is
-// providerOnly, matching how every other provider-only Gemini route in
-// provider.routes.ts is gated.
+// The handler is currently disabled (503 AI_FEATURE_UNAVAILABLE; no WaseetAI
+// contract yet) but keeps provider-only authorization and aiLimiter so the
+// route is correctly gated once re-enabled.
 const providerOnly = authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
 
 router.use(authenticate, requireActiveUser, providerOnly, aiLimiter);

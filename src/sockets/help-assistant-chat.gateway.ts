@@ -88,7 +88,13 @@ function mapFailure(error: unknown): { code: HelpErrorCode; message: string } {
 	const e = normalizeWaseetAiError(error);
 	switch (e.code) {
 		case WaseetAiErrorCode.STREAM_ERROR:
-			return { code: 'NO_ANSWER', message: HELP_MESSAGES.NO_ANSWER };
+			// Only an explicit upstream human_support_fallback flag means "no
+			// approved policy answers this" (knowledge-base gap). Any other
+			// in-stream error is a service failure and must not be reported to
+			// the user as a missing policy.
+			return e.humanSupportFallback === true
+				? { code: 'NO_ANSWER', message: HELP_MESSAGES.NO_ANSWER }
+				: { code: 'UNAVAILABLE', message: HELP_MESSAGES.UNAVAILABLE };
 		case WaseetAiErrorCode.TIMEOUT:
 			return { code: 'TIMEOUT', message: HELP_MESSAGES.TIMEOUT };
 		case WaseetAiErrorCode.NOT_CONFIGURED:

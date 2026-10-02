@@ -22,7 +22,7 @@ const upload = memoryUpload({ fileSize: 15 * 1024 * 1024, files: 10, allowedMime
 
 /**
  * Primary Endpoint: POST /api/provider/accreditation/submit or /api/accreditation/submit
- * Submits work sample for technical accreditation & runs a Gemini-backed evaluation
+ * Submits work sample for technical accreditation & stores it for human review (AI evaluation is paused until WaseetAI supports it)
  */
 router.post('/submit', aiLimiter, upload.array('files', 10), async (req: Request, res: Response, next) => {
   try {
@@ -81,7 +81,7 @@ router.post('/submit', aiLimiter, upload.array('files', 10), async (req: Request
       parsedAttachments.push(...uploaded.map(file => file.url));
     }
 
-    const result = await accreditationAiService.evaluateAccreditationSample({
+    const result = await accreditationAiService.submitAccreditationSample({
       userId: user.id,
       providerSpecialtyId,
       title,
@@ -94,7 +94,7 @@ router.post('/submit', aiLimiter, upload.array('files', 10), async (req: Request
 
     res.status(200).json({
       success: true,
-      message: 'تم فحص نموذج الاعتماد الفني بالذكاء الاصطناعي بنجاح',
+      message: result.aiEvaluation.message,
       data: result
     });
   } catch (error) {

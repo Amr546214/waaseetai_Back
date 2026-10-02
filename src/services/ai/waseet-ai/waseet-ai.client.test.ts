@@ -364,3 +364,93 @@ test('synthesizeSpeech: parses the live-observed envelope (data.audio.base64Audi
   assert.ok(calls[0].url.endsWith('/v1/ai/tts/synthesize'));
   assert.deepEqual(Object.keys(JSON.parse(String(calls[0].init.body))), ['text', 'dialect', 'voice', 'model', 'speakingRate', 'mimeType']);
 });
+
+// ── contracts verified live 2026-10-02 (mocked here, shapes taken from the live responses) ──
+
+const frame = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+
+test('requestDraft: POSTs /v1/ai/request-draft and validates the verified response shape', async () => {
+  const calls: Recorded[] = [];
+  const draft = { suggestedTitle: 't', suggestedDescription: 'd', suggestedSubSpecialties: ['a'], recommendedMinBudget: 600, recommendedMaxBudget: 1800, suggestedDurationDays: 25, complexityRating: 'Medium', personalizedNote: 'n', aiMatchScoreEstimate: 90 };
+  const client = new WaseetAiClient(jsonFetch(200, { success: true, data: draft }, calls), config());
+  assert.deepEqual(await client.requestDraft({ title: 'x', description: 'y', specialtyName: 'z', currency: 'USD' }), draft);
+  assert.equal(calls[0].url, 'https://waseet-ai.test/v1/ai/request-draft');
+});
+
+test('requestDraft: a response missing the budget range is INVALID_RESPONSE', async () => {
+  const client = new WaseetAiClient(jsonFetch(200, { success: true, data: { suggestedTitle: 't', suggestedDescription: 'd', suggestedSubSpecialties: [] } }), config());
+  await assert.rejects(() => client.requestDraft({}), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
+});
+
+test('suggestSkills / summarizePerformance / suggestProposal validate their verified shapes', async () => {
+  const skills = new WaseetAiClient(jsonFetch(200, { success: true, data: { suggestedSkills: ['React'] } }), config());
+  assert.deepEqual((await skills.suggestSkills({ providerId: 'p', specialtyName: 's' })).suggestedSkills, ['React']);
+  const bad = new WaseetAiClient(jsonFetch(200, { success: true, data: { suggestedSkills: [1] } }), config());
+  await assert.rejects(() => bad.suggestSkills({ providerId: 'p', specialtyName: 's' }), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
+
+  const perf = { executionQuality: 93, onTimeDelivery: 93, communication: 98, clientSatisfaction: 93, onTimeCompletionRate: 93, repeatClientRate: 42, highRatingServicesRate: 93, conflictFreeDeliveryRate: 100 };
+  const p = new WaseetAiClient(jsonFetch(200, { success: true, data: perf }), config());
+  assert.deepEqual(await p.summarizePerformance({ providerId: 'p', totalProjectsCompleted: 1, onTimeProjectsCount: 1, repeatClientsCount: 0, totalClientsCount: 1, fiveStarReviewsCount: 1, totalReviewsCount: 1, disputedProjectsCount: 0 }), perf);
+  const pBad = new WaseetAiClient(jsonFetch(200, { success: true, data: { ...perf, communication: 'x' } }), config());
+  await assert.rejects(() => pBad.summarizePerformance({} as any), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
+
+  const prop = new WaseetAiClient(jsonFetch(200, { success: true, data: { suggestedTitle: 't', suggestedMessage: 'm', qualityScore: 95, qualityTag: 'Excellent', suggestedAdvantages: ['a'] } }), config());
+  assert.equal((await prop.suggestProposal({ projectId: 'p', currentTitle: 't', currentMessage: 'm' })).qualityScore, 95);
+});
+
+test('text suggest/enhance streams relay text.delta chunks and require generation.completed', async () => {
+  const calls: Recorded[] = [];
+  const ok = new WaseetAiClient(sseFetch([frame('text.delta', { chunk: 'أ' }), frame('text.delta', { chunk: 'ب' }), frame('generation.completed', { status: 'completed' })], calls), config());
+  const evs = await collect(ok.streamTextEnhancement({ description: 'نص' }));
+  assert.deepEqual(evs.filter((e) => e.type === 'delta').map((e: any) => e.chunk), ['أ', 'ب']);
+  assert.equal(calls[0].url, 'https://waseet-ai.test/v1/ai/text/enhance/stream');
+
+  const noEnd = new WaseetAiClient(sseFetch([frame('text.delta', { chunk: 'أ' })]), config());
+  await assert.rejects(() => collect(noEnd.streamTextSuggestion({ title: 'عنوان' })), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
+});
+
+test('streamAssessmentQuestions maps question.streamed/assessment.ready and never exposes an answer key', async () => {
+  const q = (id: number) => frame('question.streamed', { attemptId: 'att-1', question: { id, textAr: `س${id}`, options: [{ id: 'a', text: 'x' }, { id: 'b', text: 'y' }] } });
+  const client = new WaseetAiClient(sseFetch([q(1), q(2), frame('assessment.ready', { attemptId: 'att-1', totalQuestions: 2, timeLimitMinutes: 15, generationSource: 'GEMINI' })]), config());
+  const evs = await collect(client.streamAssessmentQuestions({ providerSpecialtyId: 'ps', specialtyName: 'تصميم', questionCount: 2 }));
+  assert.deepEqual(evs.map((e) => e.type), ['question', 'question', 'assessment_ready', 'completed']);
+  assert.ok(!JSON.stringify(evs).includes('correct'));
+  assert.deepEqual((evs[2] as any).totalQuestions, 2);
+});
+
+test('streamAssessmentQuestions: a malformed question event fails loudly', async () => {
+  const client = new WaseetAiClient(sseFetch([frame('question.streamed', { attemptId: 'att-1', question: { id: 'x' } })]), config());
+  await assert.rejects(() => collect(client.streamAssessmentQuestions({ providerSpecialtyId: 'ps' })), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
+});
+
+test('matrix endpoints probed as unusable stay CONTRACT_UNVERIFIED and never touch the network', async () => {
+  let called = false;
+  const client = new WaseetAiClient((async () => { called = true; throw new Error('no'); }) as any, config());
+  for (const id of ['AI-13', 'AI-14', 'AI-15', 'AI-18', 'AI-19', 'AI-11'] as const) {
+    await assert.rejects(() => client.callUnverified(id), (e: any) => e.code === WaseetAiErrorCode.CONTRACT_UNVERIFIED);
+  }
+  assert.equal(called, false);
+});
+
+test('auditBusinessModel: POSTs the verified body and validates the advisory verdict shape', async () => {
+  const calls: Recorded[] = [];
+  const verdict = { isApproved: true, score: 88, summary: 'جيد', strengths: ['أ'], issues: [], recommendations: ['ب'] };
+  const client = new WaseetAiClient(jsonFetch(200, { success: true, data: verdict }, calls), config());
+  const out = await client.auditBusinessModel({ title: 't', description: 'd', category: 'التصميم', pricing: { amount: 120 } });
+  assert.deepEqual(out, verdict);
+  assert.equal(calls[0].url, 'https://waseet-ai.test/v1/ai/business-models/audit');
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)).pricing, { amount: 120 });
+  const bad = new WaseetAiClient(jsonFetch(200, { success: true, data: { ...verdict, score: 150 } }), config());
+  await assert.rejects(() => bad.auditBusinessModel({ title: 't', description: 'd', category: 'c', pricing: { amount: 1 } }), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
+});
+
+test('enrichProposal: POSTs milestones and validates the verified response', async () => {
+  const calls: Recorded[] = [];
+  const data = { id: 'prop-1', aiMatchScore: 88, aiQualityTag: 'Strong', aiPriceTag: 'Optimal', aiFeedback: { summary: 'ملخص' } };
+  const client = new WaseetAiClient(jsonFetch(200, { success: true, data }, calls), config());
+  const ms = [{ stepOrder: 1, title: 'أ', description: 'ب', days: 7, percentage: 100, amount: 500 }];
+  assert.deepEqual(await client.enrichProposal({ projectId: 'p', title: 't', message: 'm', totalPrice: 500, deliveryDays: 7, milestones: ms }), data);
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)).milestones, ms);
+  const bad = new WaseetAiClient(jsonFetch(200, { success: true, data: { ...data, aiFeedback: {} } }), config());
+  await assert.rejects(() => bad.enrichProposal({ projectId: 'p', title: 't', message: 'm', totalPrice: 1, deliveryDays: 1 }), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
+});

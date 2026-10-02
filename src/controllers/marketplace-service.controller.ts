@@ -1,9 +1,16 @@
 import { Request, Response } from 'express';
 import { MarketplaceService } from '../services/marketplace-service.service';
 import { aiAuditService } from '../services/ai-audit.service';
+import { aiFeatureUnavailablePayload } from '../services/ai/ai-feature-unavailable';
+import { waseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
+import { normalizeWaseetAiError, WaseetAiError, WaseetAiErrorCode } from '../services/ai/waseet-ai/waseet-ai.errors';
+import { logger } from '../config/logger';
 import { prisma } from '../config/db';
 
 const marketplaceService = new MarketplaceService();
+
+const RE_AUDIT_STATUSES = ['PENDING_APPROVAL', 'UNDER_REVIEW', 'DRAFT'];
+const RE_AUDIT_BATCH_SIZE = 25;
 
 export class MarketplaceServiceController {
 	async getPreData(req: Request, res: Response) {
@@ -168,26 +175,40 @@ export class MarketplaceServiceController {
 	}
 
 	async reAuditAllPendingModels(req: Request, res: Response) {
+		// Advisory WaseetAI audit of not-yet-audited models still in review/draft.
+		// Sequential, capped per call; never changes status or publishes anything.
 		try {
-			const pendingModels = await prisma.serviceCatalog.findMany({
-				where: {
-					status: { in: ['PENDING_APPROVAL', 'UNDER_REVIEW', 'DRAFT'] as any }
-				}
-			});
-
-			console.log(`[ReAudit] Found ${pendingModels.length} pending models to re-audit.`);
-
-			for (const model of pendingModels) {
-				await aiAuditService.executeAuditSync(model.id, model.providerId);
+			if (!waseetAiClient.isConfigured()) {
+				const e = normalizeWaseetAiError(new WaseetAiError(WaseetAiErrorCode.NOT_CONFIGURED, 'WaseetAI is not configured'));
+				logger.warn(`[ReAudit] WaseetAI unavailable code=${e.code}`);
+				return res.status(503).json({ success: false, ...aiFeatureUnavailablePayload() }) as any;
 			}
+			const base = { status: { in: RE_AUDIT_STATUSES as any }, aiAuditScore: null };
+			const withCategory = { ...base, specialtyId: { not: null } };
+			const [batch, totalWithCategory, skipped] = await Promise.all([
+				prisma.serviceCatalog.findMany({ where: withCategory, select: { id: true }, orderBy: { createdAt: 'asc' }, take: RE_AUDIT_BATCH_SIZE }),
+				prisma.serviceCatalog.count({ where: withCategory }),
+				prisma.serviceCatalog.count({ where: { ...base, specialtyId: null } }),
+			]);
 
-			return res.status(200).json({
-				success: true,
-				count: pendingModels.length,
-				message: `Successfully triggered AI audit for ${pendingModels.length} pending models.`
-			}) as any;
+			let audited = 0;
+			let failed = 0;
+			let skippedNow = 0;
+			for (const m of batch) {
+				try {
+					const r = await aiAuditService.executeAuditSync(m.id);
+					if (r.outcome === 'audited') audited++; else skippedNow++;
+				} catch (err) {
+					failed++;
+					logger.warn(`[ReAudit] model ${m.id} audit failed code=${(err as { code?: string })?.code || 'error'}`);
+				}
+			}
+			// Failed models stay un-audited and are counted in `remaining` for a later retry.
+			const remaining = Math.max(0, totalWithCategory - audited - skippedNow);
+			return res.status(200).json({ success: true, audited, failed, skipped: skipped + skippedNow, remaining }) as any;
 		} catch (error: any) {
-			return res.status(500).json({ success: false, error: error.message }) as any;
+			logger.error(`[ReAudit] unexpected failure: ${error?.message}`);
+			return res.status(500).json({ success: false, error: 'تعذر تنفيذ إعادة التدقيق' }) as any;
 		}
 	}
 

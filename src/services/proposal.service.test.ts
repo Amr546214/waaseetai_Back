@@ -26,7 +26,7 @@ function baseProposalPayload(overrides: any = {}) {
   };
 }
 
-function createProposalMockPrisma(t: TestContext, opts: { existingProposal?: any; aiEvaluationError?: unknown } = {}) {
+function createProposalMockPrisma(t: TestContext, opts: { existingProposal?: any; aiEvaluationError?: unknown; evalCalls?: any[] } = {}) {
   const projectFixture = {
     id: 'project-1',
     clientId: 'client-1',
@@ -66,13 +66,13 @@ function createProposalMockPrisma(t: TestContext, opts: { existingProposal?: any
   t.mock.module('./ai-proposal.service', {
     namedExports: {
       aiProposalService: {
-        evaluateAndSuggestProposal: opts.aiEvaluationError !== undefined
+        evaluate: opts.aiEvaluationError !== undefined
           ? async () => { throw opts.aiEvaluationError; }
-          : async () => ({
+          : async (input: any) => { opts.evalCalls?.push(input); return {
             qualityScore: 80,
             qualityTag: 'جيد',
-            priceAudit: { priceTag: 'مناسب' }
-          })
+            summary: 'ملخص التقييم'
+          }; }
       }
     }
   });
@@ -124,7 +124,7 @@ test('createProposal: succeeds for a provider with no ProviderSpecialty record a
 // proposal submission (honest fail-open, no fabricated AI fields) ──
 
 test('createProposal: a Gemini/AI evaluation failure still creates the proposal successfully with status SUBMITTED', async (t) => {
-  const { service, projectProposalCreateSpy } = await loadService(t, { aiEvaluationError: new Error('Gemini unavailable') });
+  const { service, projectProposalCreateSpy } = await loadService(t, { aiEvaluationError: new Error('AI unavailable') });
 
   const result = await service.createProposal('project-1', 'provider-1', baseProposalPayload());
 
@@ -134,7 +134,7 @@ test('createProposal: a Gemini/AI evaluation failure still creates the proposal 
 });
 
 test('createProposal: on AI evaluation failure, aiMatchScore/aiQualityTag/aiPriceTag/aiFeedback are honestly null — never a fabricated score', async (t) => {
-  const { service, projectProposalCreateSpy } = await loadService(t, { aiEvaluationError: new Error('Gemini unavailable') });
+  const { service, projectProposalCreateSpy } = await loadService(t, { aiEvaluationError: new Error('AI unavailable') });
 
   await service.createProposal('project-1', 'provider-1', baseProposalPayload());
 
@@ -146,8 +146,8 @@ test('createProposal: on AI evaluation failure, aiMatchScore/aiQualityTag/aiPric
 });
 
 test('createProposal: raw provider errors are never propagated to the caller on AI failure — submission still resolves normally', async (t) => {
-  const { GeminiProviderError, GeminiErrorCode } = await import('./ai/gemini/gemini.errors');
-  const { service } = await loadService(t, { aiEvaluationError: new GeminiProviderError(GeminiErrorCode.PROVIDER_UNAVAILABLE, 'raw provider detail that must never leak') });
+  const { WaseetAiError, WaseetAiErrorCode } = await import('./ai/waseet-ai/waseet-ai.errors');
+  const { service } = await loadService(t, { aiEvaluationError: new WaseetAiError(WaseetAiErrorCode.PROVIDER_UNAVAILABLE, 'raw provider detail that must never leak') });
 
   const result = await service.createProposal('project-1', 'provider-1', baseProposalPayload());
   assert.equal(result.id, 'proposal-1');
@@ -160,7 +160,30 @@ test('createProposal: a successful AI evaluation still populates the real aiMatc
 
   const data = projectProposalCreateSpy.mock.calls[0].arguments[0].data;
   assert.equal(data.aiQualityTag, 'جيد');
-  assert.equal(data.aiPriceTag, 'مناسب');
+  assert.equal(data.aiPriceTag, null, 'no price tag: the WaseetAI priceAudit is ungrounded and dropped');
   assert.equal(typeof data.aiMatchScore, 'number');
   assert.ok(data.aiFeedback && typeof data.aiFeedback === 'object');
+});
+
+test('createProposal: evaluates with the real fields + milestones; stored match formula unchanged; feedback = {source, summary}; aiPriceTag null', async (t) => {
+  const evalCalls: any[] = [];
+  const { service, projectProposalCreateSpy } = await loadService(t, { evalCalls });
+  await service.createProposal('project-1', 'provider-1', baseProposalPayload());
+  assert.deepEqual(evalCalls, [{
+    projectId: 'project-1', title: 'عرض تجريبي احترافي',
+    message: 'وصف تفصيلي لعرضي يوضح خبرتي ومنهجيتي في العمل على هذا المشروع بشكل كامل.',
+    totalPrice: 1000, deliveryDays: 5, milestones: VALID_MILESTONES
+  }]);
+  const data = projectProposalCreateSpy.mock.calls[0].arguments[0].data;
+  // budget 500-1500 -> mid 1000, price 1000 -> budgetFactor 100 -> 0.6*80 + 0.4*100 = 88
+  assert.equal(data.aiMatchScore, 88);
+  assert.equal(data.aiQualityTag, 'جيد');
+  assert.equal(data.aiPriceTag, null);
+  assert.deepEqual(data.aiFeedback, { source: 'WASEET_AI', summary: 'ملخص التقييم' });
+});
+
+test('proposal.service.ts has no direct-Gemini dependency', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('./proposal.service.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /gemini\.client|geminiClient|generateStructured|generateStream/);
 });

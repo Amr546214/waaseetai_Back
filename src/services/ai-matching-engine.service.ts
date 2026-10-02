@@ -1,15 +1,10 @@
 import { prisma } from '../config/db';
 import { ProjectStatus, SpecialtyVerificationStatus } from '@prisma/client';
 import { logger } from '../config/logger';
-import { geminiClient } from './ai/gemini/gemini.client';
-import {
-  AI_MATCHING_ENGINE_SYSTEM_PROMPT,
-  buildAiMatchingUserPrompt,
-  ProviderContextPayload,
-  CandidateProjectPayload
-} from '../prompts/ai-matching.prompt';
+import type { ProviderContextPayload } from '../prompts/ai-matching.prompt';
 
-export type AiMatchingGenerationSource = 'GEMINI' | 'DETERMINISTIC';
+// Matching is a deterministic rule engine over stored data; no AI generation.
+export type AiMatchingGenerationSource = 'DETERMINISTIC';
 
 export interface AiMatchingProjectItem {
   id: string;
@@ -20,10 +15,7 @@ export interface AiMatchingProjectItem {
   budget: number | null;
   /**
    * AI Cleanup Batch 5 — score semantics:
-   *  - GEMINI: Gemini's own validated 0–100 compatibility score for this
-   *    provider/project pair (the prompt asks for 82–99; the value is shown
-   *    exactly as returned, rounded — never clamped/inflated in code).
-   *  - DETERMINISTIC: always null. The rule-engine fallback only ORDERS
+   *  - Always null. The rule-engine fallback only ORDERS
    *    candidates; its internal heuristic is not a compatibility percentage
    *    and is never exposed as one.
    */
@@ -36,77 +28,15 @@ export interface AiMatchingProjectItem {
   generationSource: AiMatchingGenerationSource;
 }
 
-interface GeminiMatchItem {
-  projectId: string;
-  aiMatchScore: number;
-  matchReasons: string[];
-  aiAnalysis: string;
-}
-
-interface GeminiMatchingResponse {
-  matches: GeminiMatchItem[];
-}
-
-/** See the justification at the generateStructured call site below. */
-export const MATCHING_MAX_OUTPUT_TOKENS = 1600;
-
 /** The project's real budget, or null — never an invented default amount. */
 function realBudget(p: { budgetFixed?: number | null; budgetMax?: number | null; budgetMin?: number | null }): number | null {
   const value = Number(p.budgetFixed || p.budgetMax || p.budgetMin || 0);
   return value > 0 ? value : null;
 }
 
-const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
-
-const MATCHING_RESPONSE_SCHEMA = {
-  type: 'object',
-  properties: {
-    matches: {
-      type: 'array',
-      // Bounds the answer to the 3 matches actually used (see slice below).
-      maxItems: '3',
-      items: {
-        type: 'object',
-        properties: {
-          projectId: { type: 'string' },
-          aiMatchScore: { type: 'number', description: 'integer between 82 and 99' },
-          matchReasons: { type: 'array', items: { type: 'string' } },
-          aiAnalysis: { type: 'string' }
-        },
-        required: ['projectId', 'aiMatchScore', 'matchReasons', 'aiAnalysis']
-      }
-    }
-  },
-  required: ['matches']
-};
-
-// Rejects malformed/hallucinated Gemini output. Every projectId must
-// correspond to a project actually supplied in the candidate set — Gemini
-// must never be able to invent a project that wasn't offered to it.
-function buildMatchingValidator(candidateIds: Set<string>) {
-  return function isValidMatchingResponse(value: unknown): value is GeminiMatchingResponse {
-    if (!value || typeof value !== 'object') return false;
-    const v = value as Record<string, unknown>;
-    if (!Array.isArray(v.matches) || v.matches.length === 0) return false;
-
-    const seenIds = new Set<string>();
-    return v.matches.every((item) => {
-      if (!item || typeof item !== 'object') return false;
-      const m = item as Record<string, unknown>;
-      if (!isNonEmptyString(m.projectId) || !candidateIds.has(m.projectId)) return false;
-      if (seenIds.has(m.projectId)) return false; // duplicate id
-      seenIds.add(m.projectId);
-      if (typeof m.aiMatchScore !== 'number' || !Number.isFinite(m.aiMatchScore) || m.aiMatchScore < 0 || m.aiMatchScore > 100) return false;
-      if (!Array.isArray(m.matchReasons) || m.matchReasons.length === 0 || !m.matchReasons.every((r) => isNonEmptyString(r))) return false;
-      if (!isNonEmptyString(m.aiAnalysis)) return false;
-      return true;
-    });
-  };
-}
-
 export class AiMatchingEngineService {
   /**
-   * Main function to get the TOP 3 AI-matched projects for a given provider
+   * Top 3 projects for a provider, ranked by the deterministic rule engine for a given provider
    */
   async getTop3MatchingProjects(providerId: string): Promise<AiMatchingProjectItem[]> {
     try {
@@ -166,7 +96,7 @@ export class AiMatchingEngineService {
         return [];
       }
 
-      // Compile Provider Context Payload for OpenAI
+      // Compile provider context for the rule engine
       const skillsList = (providerProfile?.skills || []).map(s => s.name);
       const specialtiesList = providerSpecialties.map(ps => ({
         name: ps.specialty?.nameAr || ps.specialty?.name || 'تخصص عام',
@@ -190,8 +120,7 @@ export class AiMatchingEngineService {
         const specName = ps.specialty?.nameAr || ps.specialty?.name || 'اختبار التخصص';
         testsPassedList.push({
           specialtyName: specName,
-          // Batch 5: was `|| 80` — an invented test score fed to Gemini and
-          // to the fallback's ">= 80" check. null when no real score exists.
+          // Batch 5: was `|| 80` — an invented test score. null when no real score exists.
           score: ps.latestScore ?? ps.quizScore ?? null,
           passed: ps.isPassed
         });
@@ -279,87 +208,7 @@ export class AiMatchingEngineService {
         return [];
       }
 
-      // Format candidate projects for OpenAI
-      const candidatesPayload: CandidateProjectPayload[] = openProjects.map(p => ({
-        id: p.id,
-        title: p.title,
-        description: p.description || p.title,
-        specialty: p.specialty || 'تطوير وبرمجة',
-        subSpecialties: p.subSpecialties || [],
-        requirements: p.requirements || [],
-        // Batch 5: no invented 1500 budget / 7-day defaults in the AI input.
-        budget: realBudget(p),
-        deliveryDays: p.deliveryDays || null,
-        requiredLevel: p.provLevel || 'الكل'
-      }));
-
-      // 3. Perform Gemini evaluation if configured
-      if (geminiClient.isConfigured()) {
-        try {
-          const candidateIds = new Set(openProjects.map(p => p.id));
-          const userPrompt = buildAiMatchingUserPrompt(providerContext, candidatesPayload);
-
-          const result = await geminiClient.generateStructured<GeminiMatchingResponse>(userPrompt, {
-            systemInstruction: AI_MATCHING_ENGINE_SYSTEM_PROMPT,
-            responseSchema: MATCHING_RESPONSE_SCHEMA,
-            validate: buildMatchingValidator(candidateIds),
-            temperature: 0.2,
-            // AI Cleanup Batch 5 — was 800. A minimal valid answer is 3 ×
-            // [UUID projectId + score + 2–3 Arabic reasons + one Arabic
-            // analysis paragraph] ≈ 400–600 visible tokens — the same range
-            // as marketplace-ai's limit=5 output (≈550), which Batch 4 found
-            // truncating at this same 800 in DEV logs. gemini-flash-latest's
-            // reasoning tokens share this limit, and this prompt is larger
-            // (full provider profile + up to 20 candidates). 1600 matches the
-            // closest-shaped call (marketplace-ai top-N selection). The
-            // schema's maxItems also bounds the answer to 3 matches. A
-            // truncated (MAX_TOKENS) answer is still rejected by GeminiClient
-            // and falls back below, never partially accepted.
-            maxOutputTokens: MATCHING_MAX_OUTPUT_TOKENS
-          });
-
-          const projectsById = new Map(openProjects.map(p => [p.id, p]));
-          const matchedResults: AiMatchingProjectItem[] = result.data.matches
-            .map((m): AiMatchingProjectItem | null => {
-              const targetProj = projectsById.get(m.projectId);
-              if (!targetProj) return null;
-
-              const clientName = targetProj.client
-                ? `${targetProj.client.firstName || ''} ${targetProj.client.lastName || ''}`.trim()
-                : 'عميل Waseet AI';
-
-              return {
-                id: targetProj.id,
-                title: targetProj.title,
-                category: targetProj.specialty || 'خدمة تخصصية',
-                specialty: targetProj.specialty || 'تطوير وتصميم',
-                budget: realBudget(targetProj),
-                // Batch 5: the validated (0–100) Gemini score, rounded only.
-                // Previously clamped to [82, 99], which silently inflated any
-                // lower real AI score to 82.
-                aiMatchScore: Math.round(m.aiMatchScore),
-                matchReasons: m.matchReasons,
-                aiAnalysis: m.aiAnalysis,
-                createdAt: targetProj.createdAt,
-                deliveryDays: targetProj.deliveryDays || undefined,
-                clientName: clientName || 'عميل موثوق',
-                generationSource: 'GEMINI'
-              };
-            })
-            .filter((m): m is AiMatchingProjectItem => m !== null);
-
-          if (matchedResults.length > 0) {
-            logger.info(`[AiMatchingEngineService] Gemini successfully evaluated top ${matchedResults.length} real matches for provider ${providerId}`);
-            // Order = Gemini's own ranked order (the prompt asks it to rank);
-            // not re-sorted here.
-            return matchedResults.slice(0, 3);
-          }
-        } catch (geminiError: any) {
-          logger.warn(`[AiMatchingEngineService] Gemini execution failed or timed out (${geminiError.message}). Falling back to multi-factor rule engine.`);
-        }
-      }
-
-      // 4. Fallback Rule-Based Multi-Factor Scoring Engine (if Gemini is not configured or fails)
+      // Deterministic multi-factor rule engine (no AI)
       return this.computeFallbackTop3Matches(providerContext, openProjects);
     } catch (error: any) {
       logger.error(`[AiMatchingEngineService] Error matching projects: ${error.message}`, error);
@@ -452,7 +301,7 @@ export class AiMatchingEngineService {
         // Batch 5: never exposed as a percentage — see AiMatchingProjectItem.
         aiMatchScore: null,
         matchReasons: Array.from(new Set(reasons)),
-        // Honest label — this is the deterministic rule engine, not a Gemini
+        // Honest label — this is the deterministic rule engine, not an AI
         // analysis, so it must never claim to be AI-generated.
         aiAnalysis: `تم ترشيح هذا المشروع بمعايير المطابقة الآلية بناءً على تخصصاتك (${provider.skills.slice(0, 3).join(', ')}) واختباراتك المعتمدة.`,
         createdAt: proj.createdAt || new Date(),

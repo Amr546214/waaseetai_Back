@@ -1,322 +1,50 @@
-import { test, TestContext } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import dotenv from 'dotenv';
+import { readFileSync } from 'node:fs';
 import jwt from 'jsonwebtoken';
+import { SetupTestGateway } from './setup-test.gateway';
 
-dotenv.config();
-import { GeminiErrorCode, GeminiProviderError } from '../services/ai/gemini/gemini.errors';
-import { SETUP_TEST_QUESTION_COUNT } from '../prompts/setup-test.prompt';
+// The onboarding setup test is disabled (it is presented as an AI assessment
+// and WaseetAI has no per-specialty quiz). It must never generate questions,
+// score anything, or touch the database.
 
-// AI-16 (setup_test:init) — OpenAI migration batch. Previously called
-// OpenAI gpt-4o-mini directly with no rate limiting, no disconnect
-// cancellation, and no validation of the returned question shape beyond
-// "is it a non-empty array". `prisma` and `geminiClient` are mocked; no
-// real DB/network call ever happens.
-
-function signToken(payload: Record<string, unknown>): string {
-  return jwt.sign(payload, process.env.JWT_SECRET!);
-}
-
-function createMockSocket(id = 'socket-test-1') {
+function setup() {
   const handlers: Record<string, (...args: any[]) => any> = {};
-  const onceHandlers: Record<string, Array<(...args: any[]) => any>> = {};
   const emitted: Array<{ event: string; payload: any }> = [];
-
   const socket: any = {
-    id,
-    on: (event: string, handler: (...args: any[]) => any) => { handlers[event] = handler; },
-    once: (event: string, handler: (...args: any[]) => any) => { (onceHandlers[event] ||= []).push(handler); },
-    off: (event: string, handler?: (...args: any[]) => any) => {
-      if (!onceHandlers[event]) return;
-      onceHandlers[event] = handler ? onceHandlers[event].filter((h) => h !== handler) : [];
-    },
+    id: 's1',
+    on: (event: string, h: any) => { handlers[event] = h; },
     emit: (event: string, payload: any) => { emitted.push({ event, payload }); }
   };
-
-  return { socket, handlers, emitted, triggerDisconnect: () => { (onceHandlers['disconnect'] || []).forEach((h) => h()); } };
+  new SetupTestGateway().register(socket);
+  return { handlers, emitted };
 }
 
-function validQuestions(count = SETUP_TEST_QUESTION_COUNT) {
-  return Array.from({ length: count }, (_, i) => ({
-    id: `q${i + 1}`,
-    subSpecialtyTag: 'تطوير الويب',
-    text: `سؤال رقم ${i + 1}؟`,
-    options: ['أ', 'ب', 'ج', 'د'],
-    correctOptionIndex: 1,
-    explanation: 'تفسير حقيقي'
-  }));
-}
-
-async function loadGateway(t: TestContext, opts: {
-  profile?: any;
-  generateStructured?: (prompt: string, options: any) => Promise<any>;
-} = {}) {
-  const updateSpy = t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
-  const defaultProfile = { id: 'profile-1', userId: 'user-1', mainSpecialty: 'تطوير الويب', industry: null, subSpecialties: ['Frontend'], setupTestStatus: 'PENDING', setupTestBannedUntil: null };
-  const prismaMock: any = {
-    providerProfile: {
-      findUnique: async () => (opts.profile === undefined ? defaultProfile : opts.profile),
-      update: updateSpy
-    }
-  };
-  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-
-  const geminiClientMock = {
-    generateStructured: opts.generateStructured ?? (async (_prompt: string, options: any) => {
-      const valid = { questions: validQuestions() };
-      assert.equal(options.validate(valid), true, 'the real validator must accept a well-formed 15-question payload');
-      return { data: valid, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-    })
-  };
-  t.mock.module('../services/ai/gemini/gemini.client', { namedExports: { geminiClient: geminiClientMock } });
-
-  const moduleUrl = `./setup-test.gateway.ts?fixture=${Date.now()}-${Math.random()}`;
-  const mod = await import(moduleUrl);
-  return { register: mod.registerSetupTestGateway as (socket: any) => void, updateSpy };
-}
-
-// ── authenticated success ─────────────────────────────────────────────────
-
-test('setup_test:init — a real validated Gemini result of exactly 15 questions is used', async (t) => {
-  const { register } = await loadGateway(t, {});
-  const { socket, handlers, emitted } = createMockSocket();
-  register(socket);
-
-  await handlers['setup_test:init']({ token: signToken({ userId: 'user-1' }) });
-
-  const readyEvent = emitted.find((e) => e.event === 'setup_test:ready');
-  assert.ok(readyEvent);
-  assert.equal(readyEvent!.payload.totalQuestions, SETUP_TEST_QUESTION_COUNT);
-});
-
-test('setup_test:init — passes an explicit, defined positive maxOutputTokens (previously unbounded)', async (t) => {
-  const { register } = await loadGateway(t, {
-    generateStructured: async (_prompt, options) => {
-      assert.equal(typeof options.maxOutputTokens, 'number');
-      assert.ok(Number.isFinite(options.maxOutputTokens) && options.maxOutputTokens > 0, 'maxOutputTokens must be a defined positive number');
-      const valid = { questions: validQuestions() };
-      return { data: valid, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-    }
-  });
-  const { socket, handlers } = createMockSocket();
-  register(socket);
-
-  await handlers['setup_test:init']({ token: signToken({ userId: 'user-1' }) });
-});
-
-// ── auth failures ──────────────────────────────────────────────────────────
-
-test('setup_test:init — an invalid/expired token is rejected with an honest error, never a fake test', async (t) => {
-  const { register } = await loadGateway(t, {});
-  const { socket, handlers, emitted } = createMockSocket();
-  register(socket);
-
-  await handlers['setup_test:init']({ token: 'not-a-real-jwt' });
-
-  assert.equal(emitted.length, 1);
-  assert.equal(emitted[0].event, 'setup_test:error');
-});
-
-test('setup_test:init — a missing provider profile is rejected honestly', async (t) => {
-  const { register } = await loadGateway(t, { profile: null });
-  const { socket, handlers, emitted } = createMockSocket();
-  register(socket);
-
-  await handlers['setup_test:init']({ token: signToken({ userId: 'user-1' }) });
-
-  assert.equal(emitted.length, 1);
-  assert.equal(emitted[0].event, 'setup_test:error');
-});
-
-// ── Gemini failure paths → honest STATIC_FALLBACK, never a fake AI result ──
-
-test('setup_test:init — Gemini unavailable falls back to the static 15-question bank, not an empty/fake test', async (t) => {
-  const { register } = await loadGateway(t, {
-    generateStructured: async () => { throw new GeminiProviderError(GeminiErrorCode.PROVIDER_UNAVAILABLE, 'unavailable'); }
-  });
-  const { socket, handlers, emitted } = createMockSocket();
-  register(socket);
-
-  await handlers['setup_test:init']({ token: signToken({ userId: 'user-1' }) });
-
-  const readyEvent = emitted.find((e) => e.event === 'setup_test:ready');
-  assert.ok(readyEvent);
-  assert.equal(readyEvent!.payload.totalQuestions, 15);
-});
-
-test('setup_test:init — Gemini not configured falls back to the static bank the same way', async (t) => {
-  const { register } = await loadGateway(t, {
-    generateStructured: async () => { throw new GeminiProviderError(GeminiErrorCode.NOT_CONFIGURED, 'GEMINI_API_KEY is not configured'); }
-  });
-  const { socket, handlers, emitted } = createMockSocket();
-  register(socket);
-
-  await handlers['setup_test:init']({ token: signToken({ userId: 'user-1' }) });
-
-  assert.equal(emitted.find((e) => e.event === 'setup_test:ready')!.payload.totalQuestions, 15);
-});
-
-test('setup_test:init — a Gemini timeout falls back to the static bank', async (t) => {
-  const { register } = await loadGateway(t, {
-    generateStructured: async () => { throw new GeminiProviderError(GeminiErrorCode.TIMEOUT, 'timed out'); }
-  });
-  const { socket, handlers, emitted } = createMockSocket();
-  register(socket);
-
-  await handlers['setup_test:init']({ token: signToken({ userId: 'user-1' }) });
-
-  assert.equal(emitted.find((e) => e.event === 'setup_test:ready')!.payload.totalQuestions, 15);
-});
-
-test('setup_test:init — a malformed Gemini result (wrong question count) is rejected by the validator and falls back honestly', async (t) => {
-  const { register } = await loadGateway(t, {
-    generateStructured: async (_prompt, options) => {
-      const malformed = { questions: validQuestions(5) };
-      assert.equal(options.validate(malformed), false, 'the validator must reject a wrong question count');
-      throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
-    }
-  });
-  const { socket, handlers, emitted } = createMockSocket();
-  register(socket);
-
-  await handlers['setup_test:init']({ token: signToken({ userId: 'user-1' }) });
-
-  assert.equal(emitted.find((e) => e.event === 'setup_test:ready')!.payload.totalQuestions, 15);
-});
-
-test('setup_test:init — a malformed Gemini result (duplicate question ids) is rejected by the validator', async (t) => {
-  const { register } = await loadGateway(t, {
-    generateStructured: async (_prompt, options) => {
-      const questions = validQuestions();
-      questions[1] = { ...questions[1], id: questions[0].id };
-      const malformed = { questions };
-      assert.equal(options.validate(malformed), false, 'the validator must reject duplicate ids');
-      throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
-    }
-  });
-  const { socket, handlers, emitted } = createMockSocket();
-  register(socket);
-
-  await handlers['setup_test:init']({ token: signToken({ userId: 'user-1' }) });
-
-  assert.equal(emitted.find((e) => e.event === 'setup_test:ready')!.payload.totalQuestions, 15);
-});
-
-test('setup_test:init — a malformed Gemini result (out-of-range correctOptionIndex) is rejected by the validator', async (t) => {
-  const { register } = await loadGateway(t, {
-    generateStructured: async (_prompt, options) => {
-      const questions = validQuestions();
-      questions[0] = { ...questions[0], correctOptionIndex: 7 };
-      const malformed = { questions };
-      assert.equal(options.validate(malformed), false, 'the validator must reject an out-of-range correctOptionIndex');
-      throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
-    }
-  });
-  const { socket, handlers, emitted } = createMockSocket();
-  register(socket);
-
-  await handlers['setup_test:init']({ token: signToken({ userId: 'user-1' }) });
-
-  assert.equal(emitted.find((e) => e.event === 'setup_test:ready')!.payload.totalQuestions, 15);
-});
-
-// ── rate limiting ──────────────────────────────────────────────────────────
-
-test('setup_test:init — more than 30 requests within the window is rate-limited on the next one', async (t) => {
-  const uniqueUserId = `rate-limit-user-${Date.now()}-${Math.random()}`;
-  const { register } = await loadGateway(t, {
-    profile: { id: 'profile-x', userId: uniqueUserId, mainSpecialty: 'تطوير الويب', industry: null, subSpecialties: ['Frontend'], setupTestStatus: 'PENDING', setupTestBannedUntil: null }
-  });
-  const { socket, handlers, emitted } = createMockSocket();
-  register(socket);
-  const token = signToken({ userId: uniqueUserId });
-
-  for (let i = 0; i < 30; i++) {
-    await handlers['setup_test:init']({ token });
-  }
-  emitted.length = 0;
-
+test('setup_test:init with a valid token emits setup_test:error with AI_FEATURE_UNAVAILABLE, no generating/ready events', async () => {
+  process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret';
+  const token = jwt.sign({ userId: 'user-1' }, process.env.JWT_SECRET);
+  const { handlers, emitted } = setup();
   await handlers['setup_test:init']({ token });
+  assert.deepEqual(emitted.map((e) => e.event), ['setup_test:error']);
+  assert.equal(emitted[0].payload.code, 'AI_FEATURE_UNAVAILABLE');
+  assert.equal(typeof emitted[0].payload.message, 'string');
+});
 
-  assert.equal(emitted.length, 1);
+test('setup_test:init with an invalid token is rejected as an auth error', async () => {
+  const { handlers, emitted } = setup();
+  await handlers['setup_test:init']({ token: 'bad' });
   assert.equal(emitted[0].event, 'setup_test:error');
+  assert.equal(emitted[0].payload.code, undefined);
 });
 
-// ── disconnect cancellation ────────────────────────────────────────────────
-
-test('setup_test:init — a socket disconnect aborts the in-flight Gemini generation', async (t) => {
-  let capturedSignal: AbortSignal | undefined;
-  const { register } = await loadGateway(t, {
-    generateStructured: (_prompt, options) => {
-      capturedSignal = options.signal;
-      return new Promise((_resolve, reject) => {
-        const rejectAborted = () => {
-          const err: any = new Error('aborted');
-          err.name = 'AbortError';
-          reject(err);
-        };
-        if (options.signal?.aborted) rejectAborted();
-        else options.signal?.addEventListener('abort', rejectAborted);
-      });
-    }
-  });
-  const { socket, handlers, emitted, triggerDisconnect } = createMockSocket();
-  register(socket);
-
-  const handlerPromise = handlers['setup_test:init']({ token: signToken({ userId: 'user-1' }) });
-  triggerDisconnect();
-  await handlerPromise;
-
-  assert.ok(capturedSignal, 'a signal must be passed to generateStructured');
-  assert.equal(capturedSignal!.aborted, true);
-  // Falls back to the static bank instead of hanging or crashing.
-  assert.equal(emitted.find((e) => e.event === 'setup_test:ready')!.payload.totalQuestions, 15);
+test('question/answer events serve nothing and emit nothing', async () => {
+  const { handlers, emitted } = setup();
+  await handlers['setup_test:get_question']({ token: 'x' });
+  await handlers['setup_test:answer']({ token: 'x', questionId: 'q1', selectedIndex: 1 });
+  assert.equal(emitted.length, 0);
 });
 
-// ── Phase 3 fix: F21 — this is an onboarding calibration test, not a
-// pass/fail gate (proven by a full audit of every consumer of
-// setupTestStatus/setupTestScore/passed — nothing in the product blocks any
-// action on it). `setup_test:result` must never claim a `passed` verdict. ──
-
-async function completeSetupTest(handlers: Record<string, (...args: any[]) => any>, token: string, selectedIndex: number) {
-  for (let i = 0; i < SETUP_TEST_QUESTION_COUNT; i++) {
-    await handlers['setup_test:answer']({ token, questionId: `q${i + 1}`, selectedIndex });
-  }
-}
-
-test('setup_test:answer completion — a perfect score never exposes a misleading `passed` field', async (t) => {
-  const { register } = await loadGateway(t, {});
-  const { socket, handlers, emitted } = createMockSocket();
-  register(socket);
-  const token = signToken({ userId: 'user-1' });
-
-  await handlers['setup_test:init']({ token });
-  await completeSetupTest(handlers, token, 1); // correctOptionIndex is 1 for every fixture question
-
-  const resultEvent = emitted.find((e) => e.event === 'setup_test:result');
-  assert.ok(resultEvent, 'a result event must be emitted on completion');
-  assert.equal('passed' in resultEvent!.payload, false, 'the result payload must never include a passed field');
-  assert.equal(resultEvent!.payload.score, 100);
-  assert.equal(resultEvent!.payload.correct, SETUP_TEST_QUESTION_COUNT);
-  assert.equal(resultEvent!.payload.total, SETUP_TEST_QUESTION_COUNT);
-});
-
-test('setup_test:answer completion — a zero score still becomes setupTestStatus COMPLETED (never gated), and still has no `passed` field', async (t) => {
-  const { register, updateSpy } = await loadGateway(t, {});
-  const { socket, handlers, emitted } = createMockSocket();
-  register(socket);
-  const token = signToken({ userId: 'user-1' });
-
-  await handlers['setup_test:init']({ token });
-  await completeSetupTest(handlers, token, 0); // 0 never matches correctOptionIndex 1 — every answer is wrong
-
-  const resultEvent = emitted.find((e) => e.event === 'setup_test:result');
-  assert.ok(resultEvent);
-  assert.equal('passed' in resultEvent!.payload, false);
-  assert.equal(resultEvent!.payload.score, 0);
-  assert.equal(resultEvent!.payload.correct, 0);
-
-  const completionCall = updateSpy.mock.calls.find((c: any) => c.arguments[0].data.setupTestStatus === 'COMPLETED');
-  assert.ok(completionCall, 'setupTestStatus must become COMPLETED on completion regardless of score');
-  assert.equal(completionCall.arguments[0].data.setupTestScore, 0);
+test('setup-test.gateway has no Gemini reference, no prisma and no static question bank', () => {
+  const src = readFileSync(new URL('./setup-test.gateway.ts', import.meta.url), 'utf8').replace(/\/\/.*$/gm, '');
+  assert.doesNotMatch(src, /gemini|prisma|generateStructured|correctOptionIndex/i);
 });

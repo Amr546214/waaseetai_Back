@@ -181,7 +181,7 @@ export class ClientRequestsController {
 
   // POST /api/client/requests/:id/stages/:stageId/ai-review
   // Advisory-only — never approves/rejects the delivery, never touches
-  // status or escrow. On any Gemini failure this returns an honest 502, not
+  // status or escrow. The AI review is currently disabled (503 AI_FEATURE_UNAVAILABLE via AppError); any other failure returns an honest 502, not
   // a fabricated review; the manual approve/revision workflow above
   // (reviewStageDelivery) is completely unaffected either way.
   public async getDeliveryAiReview(req: Request, res: Response, next: NextFunction) {
@@ -199,7 +199,7 @@ export class ClientRequestsController {
     }
   }
 
-  // Batch 8 — advisory-only Gemini project health analysis (Contract
+  // Batch 8 — advisory-only project health analysis (Contract
   // Monitoring / Project Health / Predictive Delay Risk / Predictive
   // Dispute Risk — one real feature). Read-only, never
   // approves/rejects/releases funds/changes status.

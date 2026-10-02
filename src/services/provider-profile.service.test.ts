@@ -1,6 +1,7 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { GeminiErrorCode, GeminiProviderError } from './ai/gemini/gemini.errors';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 // provider-profile.service.ts transitively imports notification.service.ts ->
 // ../socket -> avatar-chat.gateway.ts -> openai-tts.client.ts, which
@@ -1244,42 +1245,35 @@ test('getProfile: a missing ProviderProfile is routed through the canonical init
 });
 
 // ============================================================================
-// F16 (security follow-up batch) — generateAiMetrics()'s 8 qualitative
-// fields, migrated to the shared Gemini foundation. These tests use a
-// non-zero completedProjectsCount so the zero-projects short-circuit above
-// is bypassed and the real Gemini branch executes. averageTestScore/
-// codeMatchingIndex are separately confirmed to remain pure DB arithmetic,
-// never sent to or returned by Gemini.
+// AI performance metrics via WaseetAI summarizePerformance (no network:
+// the waseetAiClient module is mocked).
 // ============================================================================
 
 const VALID_AI_METRICS = {
   executionQuality: 88, onTimeDelivery: 90, communication: 85, clientSatisfaction: 92,
   onTimeCompletionRate: 87, repeatClientRate: 60, highRatingServicesRate: 75, conflictFreeDeliveryRate: 95
 };
+const DAY = 24 * 60 * 60 * 1000;
+const signed = new Date('2025-01-01T00:00:00Z');
+const stage = (days: number) => ({ status: 'APPROVED', approvedAt: new Date(signed.getTime() + days * DAY) });
+const proj = (id: string, clientId: string, days: number | null, duration = 10) => ({
+  id, clientId,
+  contract: days === null ? null : { signedAt: signed, durationDays: duration, stages: [stage(days / 2), stage(days)] }
+});
 
-function createAiMetricsMockPrisma(t: TestContext, opts: {
-  completedProjectsCount?: number;
+async function loadServiceForAiMetrics(t: TestContext, opts: {
+  projects?: any[];
   reviewsCount?: number;
+  fiveStar?: number;
+  disputes?: any[];
+  summarize?: (body: any) => Promise<any>;
   providerSpecialties?: any[];
 } = {}) {
+  const projects = opts.projects ?? [proj('p1', 'c1', 5)];
   const profileFixture: any = {
-    userId: 'user-1',
-    isVerified: false,
-    location: null,
-    city: 'Riyadh',
-    rating: 5.0,
-    headline: 'Senior Consultant',
-    bio: 'bio',
-    yearsOfExperience: 3,
-    completionPercentage: 80,
-    firstName: null,
-    lastName: null,
-    avatarUrl: null,
-    githubUrl: null,
-    linkedinUrl: null,
-    websiteUrl: null,
-    skills: [{ name: 'React' }],
-    portfolioItems: [],
+    userId: 'user-1', isVerified: false, location: null, city: 'Riyadh', rating: 5.0, headline: 'Senior Consultant',
+    bio: 'bio', yearsOfExperience: 3, completionPercentage: 80, firstName: null, lastName: null, avatarUrl: null,
+    githubUrl: null, linkedinUrl: null, websiteUrl: null, skills: [{ name: 'React' }], portfolioItems: [],
     providerSpecialties: opts.providerSpecialties ?? [],
     user: {
       firstName: 'Okasha', lastName: 'Expert', email: 'provider@example.com', avatarUrl: null,
@@ -1287,126 +1281,93 @@ function createAiMetricsMockPrisma(t: TestContext, opts: {
       ratingAverage: 4.8, profileCompletionPercent: 80
     }
   };
-
   const prismaMock: any = {
     providerProfile: { findUnique: async () => ({ ...profileFixture }) },
-    project: { count: async () => opts.completedProjectsCount ?? 3 },
+    project: { count: async () => projects.length, findMany: async () => projects },
     serviceCatalog: { findMany: async () => [] },
-    review: { findMany: async () => [], count: async () => opts.reviewsCount ?? 5 },
+    review: {
+      findMany: async () => [],
+      count: async (args: any) => args?.where?.rating ? (opts.fiveStar ?? 0) : (opts.reviewsCount ?? 5)
+    },
+    dispute: { findMany: async () => opts.disputes ?? [] },
     providerGamification: { findUnique: async () => ({ avgRating: 4.8 }) }
   };
+  const calls: any[] = [];
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  t.mock.module('./ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: {
+    summarizePerformance: async (body: any) => { calls.push(body); return (opts.summarize ?? (async () => VALID_AI_METRICS))(body); }
+  } } });
+  const { providerProfileService } = await import(`./provider-profile.service.ts?fixture=${Date.now()}-${Math.random()}`);
+  return { service: providerProfileService, calls };
 }
 
-async function loadServiceForAiMetrics(t: TestContext, opts: {
-  completedProjectsCount?: number;
-  reviewsCount?: number;
-  generateStructured?: (prompt: string, options: any) => Promise<any>;
-} = {}) {
-  createAiMetricsMockPrisma(t, opts);
-  const geminiClientMock = {
-    isConfigured: () => true,
-    generateStructured: opts.generateStructured ?? (async (_prompt: string, options: any) => {
-      assert.equal(options.validate(VALID_AI_METRICS), true, 'the real validator must accept a well-formed 8-key metrics payload');
-      return { data: VALID_AI_METRICS, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-    })
-  };
-  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: geminiClientMock } });
-
-  const moduleUrl = `./provider-profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
-  const { providerProfileService } = await import(moduleUrl);
-  return providerProfileService;
-}
-
-test('getPublicProfile (aiMetrics): a real validated Gemini success is returned as-is for all 8 fields', async (t) => {
-  const service = await loadServiceForAiMetrics(t, {});
-
-  const result = await service.getPublicProfile('user-1');
-
-  assert.deepEqual(result.aiMetrics, {
-    ...VALID_AI_METRICS,
-    averageTestScore: 0,
-    codeMatchingIndex: 0
+test('getPublicProfile (aiMetrics): WaseetAI success maps all 8 fields and counts are derived from real data', async (t) => {
+  const { service, calls } = await loadServiceForAiMetrics(t, {
+    projects: [proj('p1', 'c1', 5), proj('p2', 'c1', 20), proj('p3', 'c2', 8)],
+    reviewsCount: 4, fiveStar: 3, disputes: [{ projectId: 'p2' }, { projectId: 'p2' }]
   });
+  const result = await service.getPublicProfile('user-1');
+  assert.deepEqual(result.aiMetrics, { ...VALID_AI_METRICS, averageTestScore: 0, codeMatchingIndex: 0 });
+  assert.deepEqual(calls, [{
+    providerId: 'user-1', totalProjectsCompleted: 3, onTimeProjectsCount: 2, repeatClientsCount: 1,
+    totalClientsCount: 2, fiveStarReviewsCount: 3, totalReviewsCount: 4, disputedProjectsCount: 1
+  }]);
 });
 
-// Live Gemini testing found maxOutputTokens:300 truncated this 8-field
-// metrics JSON on gemini-flash-latest; bumped to 600 for headroom.
-test('getPublicProfile (aiMetrics): production call site uses a bounded, non-truncating maxOutputTokens', async (t) => {
-  let capturedMaxOutputTokens: number | undefined;
-  const service = await loadServiceForAiMetrics(t, {
-    generateStructured: async (_prompt, options) => {
-      capturedMaxOutputTokens = options.maxOutputTokens;
-      return { data: VALID_AI_METRICS, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-    }
-  });
+test('getPublicProfile (aiMetrics): upstream failure -> profile still returns, 8 metrics absent, DB-derived fields kept', async (t) => {
+  const { service } = await loadServiceForAiMetrics(t, { summarize: async () => { throw new Error('upstream down'); } });
+  const result = await service.getPublicProfile('user-1');
+  assert.deepEqual(result.aiMetrics, { averageTestScore: 0, codeMatchingIndex: 0 });
+  assert.equal(result.aiMetrics.executionQuality, undefined);
+});
 
+test('getPublicProfile (aiMetrics): malformed upstream payload is never surfaced', async (t) => {
+  const { service } = await loadServiceForAiMetrics(t, { summarize: async () => ({ ...VALID_AI_METRICS, communication: 'x' }) });
+  const result = await service.getPublicProfile('user-1');
+  assert.equal(result.aiMetrics.communication, undefined);
+});
+
+test('getPublicProfile (aiMetrics): on-time timing not derivable -> no guessed count, no upstream call, metrics absent', async (t) => {
+  const { service, calls } = await loadServiceForAiMetrics(t, { projects: [proj('p1', 'c1', 5), proj('p2', 'c2', null)] });
+  const result = await service.getPublicProfile('user-1');
+  assert.equal(calls.length, 0);
+  assert.equal(result.aiMetrics.executionQuality, undefined);
+});
+
+test('getPublicProfile (aiMetrics): a stage that is not approved makes timing non-derivable', async (t) => {
+  const p: any = proj('p1', 'c1', 5);
+  p.contract.stages[1] = { status: 'SUBMITTED', approvedAt: null };
+  const { service, calls } = await loadServiceForAiMetrics(t, { projects: [p] });
   await service.getPublicProfile('user-1');
-
-  assert.equal(capturedMaxOutputTokens, 600);
+  assert.equal(calls.length, 0);
 });
 
-test('getPublicProfile (aiMetrics): a malformed Gemini response (out-of-range score) is rejected by the real validator and falls back to honest zeros, never a fabricated positive score', async (t) => {
-  const service = await loadServiceForAiMetrics(t, {
-    generateStructured: async (_prompt, options) => {
-      const malformed = { ...VALID_AI_METRICS, executionQuality: 150 };
-      assert.equal(options.validate(malformed), false);
-      throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
-    }
-  });
-
-  const result = await service.getPublicProfile('user-1');
-
-  assert.equal(result.aiMetrics.executionQuality, 0);
-  assert.equal(result.aiMetrics.communication, 0);
+test('getPublicProfile (aiMetrics): a late project is not counted on time (boundary: exactly on deadline is on time)', async (t) => {
+  const { service, calls } = await loadServiceForAiMetrics(t, { projects: [proj('p1', 'c1', 10), proj('p2', 'c2', 10.5)] });
+  await service.getPublicProfile('user-1');
+  assert.equal(calls[0].onTimeProjectsCount, 1);
 });
 
-test('getPublicProfile (aiMetrics): a response missing a required key is rejected by the validator', async (t) => {
-  const service = await loadServiceForAiMetrics(t, {
-    generateStructured: async (_prompt, options) => {
-      const { conflictFreeDeliveryRate, ...missingKey } = VALID_AI_METRICS;
-      assert.equal(options.validate(missingKey), false);
-      throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
-    }
-  });
-
-  const result = await service.getPublicProfile('user-1');
-
-  assert.deepEqual(result.aiMetrics.executionQuality, 0);
+test('getPublicProfile (aiMetrics): successful results are cached per exact counts; failures are not cached', async (t) => {
+  const { service, calls } = await loadServiceForAiMetrics(t);
+  await service.getPublicProfile('user-1');
+  await service.getPublicProfile('user-1');
+  assert.equal(calls.length, 1);
 });
 
-test('getPublicProfile (aiMetrics): Gemini provider unavailable falls back to the honest all-zero state, never fabricated metrics', async (t) => {
-  const service = await loadServiceForAiMetrics(t, {
-    generateStructured: async () => { throw new GeminiProviderError(GeminiErrorCode.PROVIDER_UNAVAILABLE, 'unavailable'); }
-  });
-
-  const result = await service.getPublicProfile('user-1');
-
-  assert.equal(result.aiMetrics.executionQuality, 0);
-  assert.equal(result.aiMetrics.onTimeDelivery, 0);
+test('getPublicProfile (aiMetrics): a failed upstream call is not cached', async (t) => {
+  let n = 0;
+  const f = await loadServiceForAiMetrics(t, { summarize: async () => { if (n++ === 0) throw new Error('x'); return VALID_AI_METRICS; } });
+  const first = await f.service.getPublicProfile('user-1');
+  const second = await f.service.getPublicProfile('user-1');
+  assert.equal(first.aiMetrics.executionQuality, undefined);
+  assert.equal(second.aiMetrics.executionQuality, 88);
 });
 
-test('getPublicProfile (aiMetrics): a Gemini timeout falls back to the same honest all-zero state', async (t) => {
-  const service = await loadServiceForAiMetrics(t, {
-    generateStructured: async () => { throw new GeminiProviderError(GeminiErrorCode.TIMEOUT, 'timed out'); }
-  });
-
+test('getPublicProfile (aiMetrics): zero projects AND zero reviews short-circuits to honest zeros without calling WaseetAI', async (t) => {
+  const { service, calls } = await loadServiceForAiMetrics(t, { projects: [], reviewsCount: 0 });
   const result = await service.getPublicProfile('user-1');
-
-  assert.equal(result.aiMetrics.communication, 0);
-});
-
-test('getPublicProfile (aiMetrics): zero completed projects AND zero reviews short-circuits to honest zeros without ever calling Gemini', async (t) => {
-  let called = false;
-  const service = await loadServiceForAiMetrics(t, {
-    completedProjectsCount: 0,
-    reviewsCount: 0,
-    generateStructured: async () => { called = true; throw new Error('should never be called'); }
-  });
-
-  const result = await service.getPublicProfile('user-1');
-
-  assert.equal(called, false);
+  assert.equal(calls.length, 0);
   assert.deepEqual(result.aiMetrics, { ...ZERO_AI_METRICS_FOR_TEST, averageTestScore: 0, codeMatchingIndex: 0 });
 });
 
@@ -1415,8 +1376,7 @@ const ZERO_AI_METRICS_FOR_TEST = {
   onTimeCompletionRate: 0, repeatClientRate: 0, highRatingServicesRate: 0, conflictFreeDeliveryRate: 0
 };
 
-test('getPublicProfile (aiMetrics): averageTestScore/codeMatchingIndex are pure DB arithmetic — never sent to Gemini, never overwritten by its response', async (t) => {
-  let capturedPrompt = '';
+test('getPublicProfile (aiMetrics): averageTestScore/codeMatchingIndex stay DB arithmetic; request carries no PII', async (t) => {
   const specialty = {
     id: 'spec-1', subSpecialties: [], latestScore: 90, quizScore: null, isPassed: true, aiScore: null,
     specialty: { nameAr: 'تطوير الويب', name: 'Web', iconName: 'code' },
@@ -1424,32 +1384,16 @@ test('getPublicProfile (aiMetrics): averageTestScore/codeMatchingIndex are pure 
     assessmentAttempts: [],
     accreditationSamples: [{ id: 'sample-1', title: 'Sample', description: '', technologiesUsed: [], attachments: [], aiScore: 80, aiQualityRating: 'GOOD', aiFeedbackAr: '' }]
   };
-  const service = await loadServiceForAiMetrics(t, {
-    providerSpecialties: [specialty],
-    generateStructured: async (prompt: string, options: any) => {
-      capturedPrompt = prompt;
-      return { data: VALID_AI_METRICS, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-    }
-  });
-
+  const { service, calls } = await loadServiceForAiMetrics(t, { providerSpecialties: [specialty] });
   const result = await service.getPublicProfile('user-1');
-
-  assert.equal(result.aiMetrics.averageTestScore, 90, 'averageTestScore must be the real average of latestScore, computed in application code');
-  assert.equal(result.aiMetrics.codeMatchingIndex, 80, 'codeMatchingIndex must be the real average of sample.aiScore, computed in application code');
-  assert.ok(!capturedPrompt.includes('averageTestScore'), 'the Gemini prompt must never even mention these deterministic fields');
+  assert.equal(result.aiMetrics.averageTestScore, 90);
+  assert.equal(result.aiMetrics.codeMatchingIndex, 80);
+  const sent = JSON.stringify(calls[0]);
+  assert.ok(!sent.includes('provider@example.com') && !sent.includes('0500000000'));
 });
 
-test('getPublicProfile (aiMetrics): Gemini prompt data minimization — never includes email, phone, or auth data', async (t) => {
-  let capturedPrompt = '';
-  const service = await loadServiceForAiMetrics(t, {
-    generateStructured: async (prompt: string) => {
-      capturedPrompt = prompt;
-      return { data: VALID_AI_METRICS, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-    }
-  });
-
-  await service.getPublicProfile('user-1');
-
-  assert.ok(!capturedPrompt.includes('provider@example.com'), 'email must never be sent to Gemini');
-  assert.ok(!capturedPrompt.includes('0500000000'), 'phone number must never be sent to Gemini');
+test('static: touched provider-profile sources contain no direct Gemini usage', () => {
+  const dir = path.resolve(__dirname, '..');
+  const files = ['services/provider-profile.service.ts', 'controllers/provider-profile.controller.ts', 'routes/provider-profile.routes.ts'];
+  for (const f of files) assert.doesNotMatch(readFileSync(path.join(dir, f), 'utf8'), /gemini\.client|geminiClient|generateStructured|generateStream/, f);
 });
