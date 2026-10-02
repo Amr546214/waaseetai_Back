@@ -141,6 +141,7 @@ export class NotificationService {
 	 * No real gateway account exists yet, so with SMS_ENABLED unset/false this
 	 * logs the code instead of sending it — the login-time phone OTP flow
 	 * (auth.service.ts) can still be tested end-to-end locally/in staging.
+	 * In production (NODE_ENV=production) the code is never logged.
 	 * Once a provider account exists: set SMS_ENABLED=true, SMS_PROVIDER to a
 	 * case below, install its SDK, and implement the matching send*() method.
 	 */
@@ -149,7 +150,13 @@ export class NotificationService {
 		const smsProvider = process.env.SMS_PROVIDER || 'dev';
 
 		if (!smsEnabled) {
-			console.log(`[NotificationService][SMS:DEV] OTP for ${phoneNumber}: ${code}`);
+			// Never write the code itself to logs in production — anyone with
+			// access to container logs could otherwise log in as the user.
+			if (process.env.NODE_ENV === 'production') {
+				console.warn(`[NotificationService][SMS] SMS_ENABLED is not true; OTP for ${phoneNumber} was NOT sent.`);
+			} else {
+				console.log(`[NotificationService][SMS:DEV] OTP for ${phoneNumber}: ${code}`);
+			}
 			return;
 		}
 
