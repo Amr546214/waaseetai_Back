@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { MarketplaceService } from '../services/marketplace-service.service';
 import { aiAuditService } from '../services/ai-audit.service';
+import { aiFeatureUnavailablePayload, isAiFeatureUnavailableError } from '../services/ai/ai-feature-unavailable';
 import { prisma } from '../config/db';
 
 const marketplaceService = new MarketplaceService();
@@ -168,25 +169,15 @@ export class MarketplaceServiceController {
 	}
 
 	async reAuditAllPendingModels(req: Request, res: Response) {
+		// AI re-audit is paused (no WaseetAI contract): no model is read,
+		// changed, approved or rejected; models stay in the human review path.
 		try {
-			const pendingModels = await prisma.serviceCatalog.findMany({
-				where: {
-					status: { in: ['PENDING_APPROVAL', 'UNDER_REVIEW', 'DRAFT'] as any }
-				}
-			});
-
-			console.log(`[ReAudit] Found ${pendingModels.length} pending models to re-audit.`);
-
-			for (const model of pendingModels) {
-				await aiAuditService.executeAuditSync(model.id, model.providerId);
-			}
-
-			return res.status(200).json({
-				success: true,
-				count: pendingModels.length,
-				message: `Successfully triggered AI audit for ${pendingModels.length} pending models.`
-			}) as any;
+			await aiAuditService.executeAuditSync('*');
+			return res.status(200).json({ success: true }) as any;
 		} catch (error: any) {
+			if (isAiFeatureUnavailableError(error)) {
+				return res.status(503).json({ success: false, ...aiFeatureUnavailablePayload(error.message) }) as any;
+			}
 			return res.status(500).json({ success: false, error: error.message }) as any;
 		}
 	}

@@ -177,7 +177,109 @@ export interface TtsSynthesizeRequest {
  *  the raw upstream wire format. */
 export type WaseetAiStreamEvent =
   | { type: 'started'; citationsCount?: number }
+  | { type: 'question'; attemptId: string; question: WaseetAiStreamedQuestion }
+  | { type: 'assessment_ready'; attemptId: string; totalQuestions: number; timeLimitMinutes: number; generationSource?: string }
   | { type: 'delta'; chunk: string }
   | { type: 'citations'; citations: WaseetAiCitation[] }
   | { type: 'completed' }
   | { type: 'unknown'; event: string; data: unknown };
+
+// ── Contracts verified live on 2026-10-02 (synthetic data only) ─────────────
+// Sources: the vendor test lab (WaseetAI-Frontend/app.js) for request fields
+// and response rendering, the service's own VALIDATION_ERROR details for the
+// required fields, and one limited live call per endpoint for the response
+// shape. Optional request fields not listed here are NOT known; unknown
+// top-level keys are stripped upstream, so never send extras.
+
+/** POST /v1/ai/request-draft — every field optional; {} still answers. */
+export interface RequestDraftRequest {
+  title?: string;
+  description?: string;
+  specialtyName?: string;
+  currency?: string;
+}
+export interface RequestDraftResponse {
+  suggestedTitle: string;
+  suggestedDescription: string;
+  suggestedSubSpecialties: string[];
+  recommendedMinBudget: number;
+  recommendedMaxBudget: number;
+  suggestedDurationDays: number;
+  complexityRating: string;
+  personalizedNote: string;
+  aiMatchScoreEstimate: number;
+}
+
+/** POST /v1/ai/proposals/suggest — projectId is an opaque string; the service
+ *  has no access to Waseet's project data, so `priceAudit` is NOT grounded in
+ *  the real project budget and must not be shown as such. */
+export interface ProposalSuggestRequest {
+  projectId: string;
+  currentTitle: string;
+  currentMessage: string;
+  currency?: string;
+}
+export interface ProposalSuggestResponse {
+  suggestedTitle: string;
+  suggestedMessage: string;
+  qualityScore: number;
+  qualityTag: string;
+  priceAudit?: { recommendedMin: number; recommendedMax: number; priceTag: string; justification: string };
+  suggestedAdvantages: string[];
+}
+
+/** POST /v1/ai/profile/performance-summary — computed from the counts sent. */
+export interface PerformanceSummaryRequest {
+  providerId: string;
+  totalProjectsCompleted: number;
+  onTimeProjectsCount: number;
+  repeatClientsCount: number;
+  totalClientsCount: number;
+  fiveStarReviewsCount: number;
+  totalReviewsCount: number;
+  disputedProjectsCount: number;
+}
+export interface PerformanceSummaryResponse {
+  executionQuality: number;
+  onTimeDelivery: number;
+  communication: number;
+  clientSatisfaction: number;
+  onTimeCompletionRate: number;
+  repeatClientRate: number;
+  highRatingServicesRate: number;
+  conflictFreeDeliveryRate: number;
+}
+
+/** POST /v1/ai/profile/skills — specialtyName drives the output. */
+export interface ProfileSkillsRequest {
+  providerId: string;
+  specialtyName: string;
+}
+export interface ProfileSkillsResponse {
+  suggestedSkills: string[];
+}
+
+/** POST /v1/ai/text/suggest/stream (SSE text.delta / generation.completed). */
+export interface TextSuggestStreamRequest {
+  title: string;
+}
+/** POST /v1/ai/text/enhance/stream (SSE text.delta / generation.completed). */
+export interface TextEnhanceStreamRequest {
+  description: string;
+}
+
+/** POST /v1/ai/assessments/stream (SSE question.streamed x N, then
+ *  assessment.ready). specialtyName and questionCount are honoured (verified:
+ *  output changed with them); providerSpecialtyId is the only required field.
+ *  Answer keys are never sent; grading is POST /assessments/:attemptId/submit. */
+export interface AssessmentStreamRequest {
+  providerSpecialtyId: string;
+  specialtyName?: string;
+  questionCount?: number;
+  timeLimitMinutes?: number;
+}
+export interface WaseetAiStreamedQuestion {
+  id: number;
+  textAr: string;
+  options: Array<{ id: string; text: string }>;
+}

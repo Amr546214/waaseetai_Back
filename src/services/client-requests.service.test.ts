@@ -2,7 +2,7 @@ import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { GeminiErrorCode, GeminiProviderError } from './ai/gemini/gemini.errors';
+import { WaseetAiError, WaseetAiErrorCode } from './ai/waseet-ai/waseet-ai.errors';
 
 // Phase 3D.4: createRequest()'s ClientProfile self-heal used to create a bare
 // `{ userId, isProfileComplete: true }` row. It now routes through the same
@@ -72,170 +72,119 @@ test('createRequest: repeat call with an existing ClientProfile never re-initial
   assert.equal(clientCreateSpy.mock.callCount(), 0);
 });
 
-// ── F7: generateAiSuggest — Batch A migration to the shared Gemini
-// foundation. `prisma.clientRequest.findMany` and `geminiClient` are both
-// mocked; no real DB/network call ever happens.
+// ── generateAiSuggest — WaseetAI request-draft only (no Gemini). The
+// waseetAiClient module is mocked; no DB/network call ever happens.
 
-function validSuggestionFixture(overrides: Partial<any> = {}) {
+function draftFixture(overrides: Partial<any> = {}) {
   return {
     suggestedTitle: 'عنوان مقترح احترافي',
-    suggestedDescription: 'وصف تقني شامل حقيقي من Gemini',
+    suggestedDescription: 'وصف تقني شامل',
     suggestedSubSpecialties: ['تطوير ويب', 'واجهات برمجية APIs'],
     recommendedMinBudget: 4000,
     recommendedMaxBudget: 9000,
     suggestedDurationDays: 21,
     complexityRating: 'MEDIUM',
-    personalizedNote: 'ملاحظة شخصية حقيقية',
-    aiMatchScoreEstimate: 91,
+    personalizedNote: 'ملاحظة',
+    aiMatchScoreEstimate: 61,
     ...overrides
   };
 }
 
-async function loadServiceForAiSuggest(t: TestContext, opts: {
-  pastRequests?: any[];
-  generateStructured?: (prompt: string, options: any) => Promise<any>;
-}) {
-  const prismaMock: any = {
-    clientRequest: {
-      findMany: async () => (opts.pastRequests ?? [])
+async function loadServiceForAiSuggest(t: TestContext, opts: { requestDraft?: (body: any) => Promise<any> }) {
+  const calls: any[] = [];
+  const clientMock = {
+    requestDraft: async (body: any) => {
+      calls.push(body);
+      return (opts.requestDraft ?? (async () => draftFixture()))(body);
     }
   };
-  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-
-  const geminiClientMock = {
-    generateStructured: opts.generateStructured ?? (async () => { throw new Error('generateStructured not stubbed for this test'); })
-  };
-  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: geminiClientMock } });
-
-  const moduleUrl = `./client-requests.service.ts?fixture=${Date.now()}-${Math.random()}`;
-  const { clientRequestsService } = await import(moduleUrl);
-  return clientRequestsService;
+  t.mock.module('../config/db', { namedExports: { prisma: {} } });
+  t.mock.module('./ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: clientMock } });
+  const { clientRequestsService } = await import(`./client-requests.service.ts?fixture=${Date.now()}-${Math.random()}`);
+  return Object.assign(clientRequestsService, { calls });
 }
 
-test('generateAiSuggest: a real validated Gemini success is returned as-is', async (t) => {
-  const suggestion = validSuggestionFixture();
-  const service = await loadServiceForAiSuggest(t, {
-    generateStructured: async (_prompt, options) => {
-      assert.equal(options.validate(suggestion), true, 'the real validator must accept a well-formed suggestion');
-      return { data: suggestion, usage: { promptTokens: 5, completionTokens: 5, totalTokens: 10 } };
-    }
-  });
+test('generateAiSuggest: maps the WaseetAI response onto the app shape and sends only verified request fields', async (t) => {
+  const service = await loadServiceForAiSuggest(t, {});
+  const result = await service.generateAiSuggest('client-1', {
+    title: ' مسودة ', description: ' وصف مبدئي ', specialtyName: 'تطوير الويب', specialtyId: 'sp-1', subSpecialties: ['React']
+  } as any);
 
-  const result = await service.generateAiSuggest('client-1', { title: 'مسودة', description: 'وصف مبدئي' } as any);
-
-  assert.deepEqual(result, suggestion);
+  assert.deepEqual(service.calls, [{ title: 'مسودة', description: 'وصف مبدئي', specialtyName: 'تطوير الويب', currency: 'USD' }]);
+  assert.deepEqual(result, draftFixture());
 });
 
-test('generateAiSuggest: Gemini unavailable throws an AppError(503) with no aiMatchScoreEstimate:94 fallback', async (t) => {
-  const service = await loadServiceForAiSuggest(t, {
-    generateStructured: async () => { throw new GeminiProviderError(GeminiErrorCode.PROVIDER_UNAVAILABLE, 'unavailable'); }
-  });
+test('generateAiSuggest: an empty draft sends no title/description (undefined, not invented)', async (t) => {
+  const service = await loadServiceForAiSuggest(t, {});
+  await service.generateAiSuggest('client-1', {} as any);
+  assert.deepEqual(service.calls[0], { title: undefined, description: undefined, specialtyName: undefined, currency: 'USD' });
+});
 
+for (const score of [0, 25, 100]) {
+  test(`generateAiSuggest: the service's own aiMatchScoreEstimate (${score}) is passed through unchanged`, async (t) => {
+    const service = await loadServiceForAiSuggest(t, { requestDraft: async () => draftFixture({ aiMatchScoreEstimate: score }) });
+    const result = await service.generateAiSuggest('client-1', { title: 'x' } as any);
+    assert.equal(result.aiMatchScoreEstimate, score);
+  });
+}
+
+test('generateAiSuggest: unusable fields become null, never invented', async (t) => {
+  const service = await loadServiceForAiSuggest(t, {
+    requestDraft: async () => draftFixture({
+      suggestedSubSpecialties: [], recommendedMinBudget: 9000, recommendedMaxBudget: 4000, suggestedDurationDays: 0,
+      complexityRating: '', personalizedNote: '  ', aiMatchScoreEstimate: 150
+    })
+  });
+  const result = await service.generateAiSuggest('client-1', { title: 'x' } as any);
+  assert.equal(result.suggestedTitle, 'عنوان مقترح احترافي');
+  assert.equal(result.suggestedSubSpecialties, null);
+  assert.equal(result.recommendedMinBudget, null);
+  assert.equal(result.recommendedMaxBudget, null);
+  assert.equal(result.suggestedDurationDays, null);
+  assert.equal(result.complexityRating, null);
+  assert.equal(result.personalizedNote, null);
+  assert.equal(result.aiMatchScoreEstimate, null);
+});
+
+for (const bad of [-1, 100.5, 101, NaN, Infinity, '94' as any, null as any]) {
+  test(`generateAiSuggest: an out-of-range / non-numeric score (${String(bad)}) becomes null while the rest of the suggestion is kept`, async (t) => {
+    const service = await loadServiceForAiSuggest(t, { requestDraft: async () => draftFixture({ aiMatchScoreEstimate: bad }) });
+    const result = await service.generateAiSuggest('client-1', { title: 'x' } as any);
+    assert.equal(result.aiMatchScoreEstimate, null, 'never replaced by an invented placeholder such as 94');
+    assert.equal(result.suggestedTitle, 'عنوان مقترح احترافي');
+  });
+}
+
+test('generateAiSuggest: a missing score is null, never defaulted', async (t) => {
+  const service = await loadServiceForAiSuggest(t, { requestDraft: async () => { const d: any = draftFixture(); delete d.aiMatchScoreEstimate; return d; } });
+  const result = await service.generateAiSuggest('client-1', { title: 'x' } as any);
+  assert.equal(result.aiMatchScoreEstimate, null);
+});
+
+test('generateAiSuggest: a response with neither title nor description is a 503, not a suggestion', async (t) => {
+  const service = await loadServiceForAiSuggest(t, { requestDraft: async () => draftFixture({ suggestedTitle: '', suggestedDescription: '' }) });
+  await assert.rejects(() => service.generateAiSuggest('client-1', {} as any), (err: any) => err.statusCode === 503);
+});
+
+test('generateAiSuggest: upstream failure throws an honest AppError(503) without leaking upstream text or a fabricated suggestion', async (t) => {
+  const SECRET = 'UPSTREAM-SECRET-DETAIL';
+  const service = await loadServiceForAiSuggest(t, {
+    requestDraft: async () => { throw new WaseetAiError(WaseetAiErrorCode.PROVIDER_UNAVAILABLE, SECRET, { status: 502 }); }
+  });
   await assert.rejects(
     () => service.generateAiSuggest('client-1', {} as any),
     (err: any) => {
       assert.equal(err.statusCode, 503);
-      // The rejection carries no suggestion payload at all — no
-      // aiMatchScoreEstimate, no fabricated title/description of any kind.
+      assert.ok(!String(err.message).includes(SECRET));
       assert.equal('aiMatchScoreEstimate' in err, false);
-      assert.equal('suggestedTitle' in err, false);
       return true;
     }
   );
 });
 
-// Real live-Gemini testing found the prompt/schema instructed Gemini to
-// always return "a number between 85 and 98" for aiMatchScoreEstimate,
-// regardless of how vague/incomplete the actual draft was — an artificially
-// positive-biased score. The validator itself already accepted the full
-// honest 0-100 range; only the prompt text was fixed. These tests prove low
-// scores are genuinely accepted end-to-end and the biased instruction is
-// gone from what actually reaches Gemini.
-for (const lowScore of [0, 25, 50]) {
-  test(`generateAiSuggest: an honest low aiMatchScoreEstimate (${lowScore}) for a vague/incomplete draft is accepted as-is, never rejected or replaced`, async (t) => {
-    const suggestion = validSuggestionFixture({ aiMatchScoreEstimate: lowScore });
-    const service = await loadServiceForAiSuggest(t, {
-      generateStructured: async (_prompt, options) => {
-        assert.equal(options.validate(suggestion), true, `the real validator must accept a low, honest score of ${lowScore}`);
-        return { data: suggestion, usage: { promptTokens: 5, completionTokens: 5, totalTokens: 10 } };
-      }
-    });
-    const result = await service.generateAiSuggest('client-1', { title: 'x' } as any);
-    assert.equal(result.aiMatchScoreEstimate, lowScore);
-  });
-}
-
-for (const highScore of [91, 100]) {
-  test(`generateAiSuggest: a legitimate high aiMatchScoreEstimate (${highScore}) for a complete draft is still accepted`, async (t) => {
-    const suggestion = validSuggestionFixture({ aiMatchScoreEstimate: highScore });
-    const service = await loadServiceForAiSuggest(t, {
-      generateStructured: async (_prompt, options) => {
-        assert.equal(options.validate(suggestion), true);
-        return { data: suggestion, usage: { promptTokens: 5, completionTokens: 5, totalTokens: 10 } };
-      }
-    });
-    const result = await service.generateAiSuggest('client-1', { title: 'x' } as any);
-    assert.equal(result.aiMatchScoreEstimate, highScore);
-  });
-}
-
-test('generateAiSuggest: the prompt sent to Gemini no longer instructs a narrow 85-98 biased range', async (t) => {
-  const suggestion = validSuggestionFixture();
-  let capturedPrompt = '';
-  const service = await loadServiceForAiSuggest(t, {
-    generateStructured: async (prompt, options) => {
-      capturedPrompt = prompt;
-      return { data: suggestion, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-    }
-  });
-  await service.generateAiSuggest('client-1', { title: 'x' } as any);
-  assert.doesNotMatch(capturedPrompt, /85 and 98|85-98/);
-  assert.match(capturedPrompt, /0 to 100/);
-});
-
-test('generateAiSuggest: the response schema description no longer biases toward a high score', async (t) => {
-  const service = await loadServiceForAiSuggest(t, {
-    generateStructured: async (_prompt, options) => {
-      const description = options.responseSchema?.properties?.aiMatchScoreEstimate?.description ?? '';
-      assert.doesNotMatch(description, /85 and 98|85-98/);
-      assert.match(description, /0 to 100/);
-      return { data: validSuggestionFixture(), usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-    }
-  });
-  await service.generateAiSuggest('client-1', { title: 'x' } as any);
-});
-
-for (const badScore of [-1, 101, 150]) {
-  test(`generateAiSuggest: an out-of-range score (${badScore}) is still rejected by the real validator`, async (t) => {
-    const malformed = validSuggestionFixture({ aiMatchScoreEstimate: badScore });
-    const service = await loadServiceForAiSuggest(t, {
-      generateStructured: async (_prompt, options) => {
-        if (!options.validate(malformed)) throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
-        return { data: malformed };
-      }
-    });
-    await assert.rejects(() => service.generateAiSuggest('client-1', {} as any), (err: any) => err.statusCode === 503);
-  });
-}
-
-test('generateAiSuggest: a malformed Gemini response (including a fabricated-looking aiMatchScoreEstimate: 94) is rejected by the real validator instead of being trusted', async (t) => {
-  // 94 alone isn't invalid, but pairing it with clearly malformed fields
-  // (empty title, empty sub-specialties) proves the validator inspects the
-  // whole shape rather than special-casing any one field.
-  const malformed = { suggestedTitle: '', suggestedSubSpecialties: [], aiMatchScoreEstimate: 94 };
-  const service = await loadServiceForAiSuggest(t, {
-    generateStructured: async (_prompt, options) => {
-      if (!options.validate(malformed)) {
-        throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
-      }
-      return { data: malformed, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-    }
-  });
-
-  await assert.rejects(
-    () => service.generateAiSuggest('client-1', {} as any),
-    (err: any) => { assert.equal(err.statusCode, 503); return true; }
-  );
+test('client-requests.service.ts has no direct-Gemini dependency', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'client-requests.service.ts'), 'utf8');
+  assert.doesNotMatch(src, /gemini\.client|geminiClient|generateStructured|generateStream/);
 });
 
 // ── USD-canonical wallet transition: signContract()'s escrow-funding

@@ -176,6 +176,20 @@ test('help:ask: upstream in-stream help:error (no approved answer) → truthful 
 	assert.equal(s.emitted.some((e) => e.event === 'help:answer_chunk'), false);
 });
 
+test('help:ask: upstream in-stream error WITHOUT the human-support flag → UNAVAILABLE (service failure), never reported as a missing policy', async (t) => {
+	const { register } = await loadGateway(t, {
+		stream: () => fakeStream([{ type: 'started' }, { type: 'completed' }], { failAt: 1, error: new WaseetAiError(WaseetAiErrorCode.STREAM_ERROR, 'x', { humanSupportFallback: false }) }),
+	});
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'سؤال خارج قاعدة المعرفة' });
+	assert.deepEqual(s.events(), ['help:answer_start', 'help:error']);
+	const err = s.emitted[1].payload;
+	assert.equal(err.code, 'UNAVAILABLE');
+	assert.equal(err.humanSupportFallback, true);
+	assert.equal(s.emitted.some((e) => e.event === 'help:answer_chunk'), false);
+});
+
 test('help:ask: an upstream failure mid-stream emits an honest error after the partial chunks (never complete)', async (t) => {
 	const { register } = await loadGateway(t, { stream: () => fakeStream(OK_STREAM, { failAt: 2 }) });
 	const s = createMockSocket();

@@ -8,10 +8,10 @@ import { aiLimiter } from '../middlewares/rate-limit.middleware';
 
 const router = Router();
 
-// Trigger AI content refinement & market fair price evaluation. Real
-// Gemini call (ai-proposal.service.ts#evaluateAndSuggestProposal) — needs
-// the same aiLimiter every other Gemini-triggering route carries (Batch 6
-// gap fix; this route was missing it).
+// Trigger AI content refinement (title / message / advantages / quality).
+// Real WaseetAI call (ai-proposal.service.ts#evaluateAndSuggestProposal) —
+// needs the same aiLimiter every other AI-triggering route carries. No price
+// recommendation is returned (the service cannot see the project budget).
 //
 // Phase 3 Batch 2B: confirmed via a full frontend trace that the only real
 // caller is the apply-to-request wizard (explore-requests/:id/apply), which

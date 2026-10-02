@@ -27,7 +27,7 @@ export async function resolveDispute(req: Request, res: Response, next: NextFunc
 }
 
 // Advisory-only — never resolves/rejects the dispute, never touches status
-// or money. On any Gemini failure this returns an honest 502, not a
+// or money. On any WaseetAI failure this returns an honest 502, not a
 // fabricated summary; the manual resolve/reject workflow above is
 // completely unaffected either way.
 export async function getDisputeAiSummary(req: Request, res: Response, next: NextFunction) {

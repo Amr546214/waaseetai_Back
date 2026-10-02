@@ -70,8 +70,7 @@ function createProposalMockPrisma(t: TestContext, opts: { existingProposal?: any
           ? async () => { throw opts.aiEvaluationError; }
           : async () => ({
             qualityScore: 80,
-            qualityTag: 'جيد',
-            priceAudit: { priceTag: 'مناسب' }
+            qualityTag: 'جيد'
           })
       }
     }
@@ -124,7 +123,7 @@ test('createProposal: succeeds for a provider with no ProviderSpecialty record a
 // proposal submission (honest fail-open, no fabricated AI fields) ──
 
 test('createProposal: a Gemini/AI evaluation failure still creates the proposal successfully with status SUBMITTED', async (t) => {
-  const { service, projectProposalCreateSpy } = await loadService(t, { aiEvaluationError: new Error('Gemini unavailable') });
+  const { service, projectProposalCreateSpy } = await loadService(t, { aiEvaluationError: new Error('AI unavailable') });
 
   const result = await service.createProposal('project-1', 'provider-1', baseProposalPayload());
 
@@ -134,7 +133,7 @@ test('createProposal: a Gemini/AI evaluation failure still creates the proposal 
 });
 
 test('createProposal: on AI evaluation failure, aiMatchScore/aiQualityTag/aiPriceTag/aiFeedback are honestly null — never a fabricated score', async (t) => {
-  const { service, projectProposalCreateSpy } = await loadService(t, { aiEvaluationError: new Error('Gemini unavailable') });
+  const { service, projectProposalCreateSpy } = await loadService(t, { aiEvaluationError: new Error('AI unavailable') });
 
   await service.createProposal('project-1', 'provider-1', baseProposalPayload());
 
@@ -146,8 +145,8 @@ test('createProposal: on AI evaluation failure, aiMatchScore/aiQualityTag/aiPric
 });
 
 test('createProposal: raw provider errors are never propagated to the caller on AI failure — submission still resolves normally', async (t) => {
-  const { GeminiProviderError, GeminiErrorCode } = await import('./ai/gemini/gemini.errors');
-  const { service } = await loadService(t, { aiEvaluationError: new GeminiProviderError(GeminiErrorCode.PROVIDER_UNAVAILABLE, 'raw provider detail that must never leak') });
+  const { WaseetAiError, WaseetAiErrorCode } = await import('./ai/waseet-ai/waseet-ai.errors');
+  const { service } = await loadService(t, { aiEvaluationError: new WaseetAiError(WaseetAiErrorCode.PROVIDER_UNAVAILABLE, 'raw provider detail that must never leak') });
 
   const result = await service.createProposal('project-1', 'provider-1', baseProposalPayload());
   assert.equal(result.id, 'proposal-1');
@@ -160,7 +159,13 @@ test('createProposal: a successful AI evaluation still populates the real aiMatc
 
   const data = projectProposalCreateSpy.mock.calls[0].arguments[0].data;
   assert.equal(data.aiQualityTag, 'جيد');
-  assert.equal(data.aiPriceTag, 'مناسب');
+  assert.equal(data.aiPriceTag, null, 'no price tag: the WaseetAI priceAudit is ungrounded and dropped');
   assert.equal(typeof data.aiMatchScore, 'number');
   assert.ok(data.aiFeedback && typeof data.aiFeedback === 'object');
+});
+
+test('proposal.service.ts has no direct-Gemini dependency', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('./proposal.service.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /gemini\.client|geminiClient|generateStructured|generateStream/);
 });

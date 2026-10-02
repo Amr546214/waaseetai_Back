@@ -1,10 +1,10 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { GeminiErrorCode, GeminiProviderError } from './ai/gemini/gemini.errors';
+import { readFileSync } from 'node:fs';
 
-// F10 (evaluateAccreditationSample) — Batch: F9+F10 Vision migration to the
-// shared Gemini foundation. `prisma`, `geminiClient`, and `fetchRemoteImage`
-// are all mocked; no real DB/network call ever happens.
+// Accreditation sample submission. AI evaluation is disabled until WaseetAI
+// supports it: a submitted sample is stored for human review (MANUAL_REVIEW)
+// with no AI fields. `prisma` is mocked; no real DB/network call happens.
 
 function providerProfileFixture(overrides: Partial<any> = {}) {
   return { id: 'profile-1', userId: 'user-1', ...overrides };
@@ -22,18 +22,6 @@ function providerSpecialtyFixture(overrides: Partial<any> = {}) {
   };
 }
 
-function validEvaluationFixture(overrides: Partial<any> = {}) {
-  return {
-    aiScore: 88,
-    status: 'AI_VERIFIED',
-    aiQualityRating: 'EXCELLENT',
-    feedbackAr: 'تقييم حقيقي من Gemini',
-    strengths: ['قوة 1'],
-    recommendations: ['توصية 1'],
-    ...overrides
-  };
-}
-
 const BASE_DTO = {
   userId: 'user-1',
   providerSpecialtyId: 'spec-1',
@@ -43,221 +31,75 @@ const BASE_DTO = {
   attachments: ['https://cdn.example.com/proof1.png']
 };
 
-async function loadService(t: TestContext, opts: {
-  providerProfile?: any;
-  providerSpecialty?: any;
-  isConfigured?: boolean;
-  generateStructured?: (prompt: string, options: any) => Promise<any>;
-  generateStructuredWithImage?: (prompt: string, options: any) => Promise<any>;
-  fetchRemoteImage?: (url: string, options?: any) => Promise<any>;
-}) {
-  const accreditationCreateSpy = t.mock.fn(async (args: any) => ({ id: 'sample-1', aiAuditedAt: new Date('2026-01-01'), ...args.data }));
+async function loadService(t: TestContext, opts: { providerProfile?: any; providerSpecialty?: any }) {
+  const accreditationCreateSpy = t.mock.fn(async (args: any) => ({ id: 'sample-1', aiAuditedAt: null, ...args.data }));
   const providerSpecialtyUpdateSpy = t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
-  const tx = {
-    accreditationSample: { create: accreditationCreateSpy },
-    providerSpecialty: { update: providerSpecialtyUpdateSpy }
-  };
+  const providerSpecialtyUpdateManySpy = t.mock.fn(async () => ({ count: 1 }));
   const prismaMock: any = {
     providerProfile: { findUnique: async () => (opts.providerProfile === undefined ? providerProfileFixture() : opts.providerProfile) },
-    providerSpecialty: { findFirst: async () => (opts.providerSpecialty === undefined ? providerSpecialtyFixture() : opts.providerSpecialty) },
-    $transaction: async (fn: any) => fn(tx)
+    providerSpecialty: {
+      findFirst: async () => (opts.providerSpecialty === undefined ? providerSpecialtyFixture() : opts.providerSpecialty),
+      update: providerSpecialtyUpdateSpy,
+      updateMany: providerSpecialtyUpdateManySpy
+    },
+    accreditationSample: { create: accreditationCreateSpy },
+    $transaction: async () => { throw new Error('submission must not need a transaction'); }
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
 
-  const geminiClientMock = {
-    isConfigured: () => opts.isConfigured ?? true,
-    generateStructured: opts.generateStructured ?? (async () => { throw new Error('generateStructured not stubbed for this test'); }),
-    generateStructuredWithImage: opts.generateStructuredWithImage ?? (async () => { throw new Error('generateStructuredWithImage not stubbed for this test'); })
-  };
-  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: geminiClientMock } });
-
-  const fetchRemoteImageMock = opts.fetchRemoteImage ?? (async (url: string) => ({ mimeType: 'image/png', data: Buffer.from(`bytes-for-${url}`) }));
-  t.mock.module('../utils/remote-image-fetch', { namedExports: { fetchRemoteImage: fetchRemoteImageMock } });
-
   const moduleUrl = `./accreditation-ai.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { accreditationAiService } = await import(moduleUrl);
-  return { accreditationAiService, accreditationCreateSpy, providerSpecialtyUpdateSpy };
+  return { accreditationAiService, accreditationCreateSpy, providerSpecialtyUpdateSpy, providerSpecialtyUpdateManySpy };
 }
 
-test('evaluateAccreditationSample: a genuine validated AI_VERIFIED score labels the sample but NEVER autonomously upgrades ProviderSpecialty (Phase 3 authority fix)', async (t) => {
-  // AI_VERIFIED on the sample now means "AI recommends approval, pending
-  // final confirmation" only — a single Gemini score must never itself
-  // grant the binding credential. The upgrade only happens later, through
-  // an explicit adminApproveSample call (see the dedicated test below).
-  const evaluation = validEvaluationFixture();
-  let capturedImages: any;
-  const { accreditationAiService, accreditationCreateSpy, providerSpecialtyUpdateSpy } = await loadService(t, {
-    generateStructuredWithImage: async (_prompt, options) => {
-      capturedImages = options.images;
-      assert.equal(options.validate(evaluation), true, 'the real validator must accept a well-formed evaluation');
-      return { data: evaluation, usage: { promptTokens: 10, completionTokens: 10, totalTokens: 20 } };
-    }
-  });
+test('submitAccreditationSample: stores the sample as MANUAL_REVIEW with no AI fields, reports AI unavailable, never AI_VERIFIED, never upgrades the specialty', async (t) => {
+  const { accreditationAiService, accreditationCreateSpy, providerSpecialtyUpdateSpy, providerSpecialtyUpdateManySpy } = await loadService(t, {});
 
-  const result = await accreditationAiService.evaluateAccreditationSample(BASE_DTO);
+  const result = await accreditationAiService.submitAccreditationSample(BASE_DTO);
 
-  assert.equal(result.evaluation.aiScore, 88);
-  assert.equal(result.evaluation.status, 'AI_VERIFIED');
-  assert.equal(capturedImages.length, 1);
-
-  const createArgs = accreditationCreateSpy.mock.calls[0].arguments[0].data;
-  assert.equal(createArgs.aiScore, 88);
-  assert.equal(createArgs.status, 'AI_VERIFIED');
-  assert.equal(providerSpecialtyUpdateSpy.mock.callCount(), 0, 'a qualifying AI score must never, by itself, upgrade ProviderSpecialty — no badge, no isPassed, no APPROVED status');
-});
-
-test('evaluateAccreditationSample: a genuine validated but below-threshold score is REJECTED honestly, without upgrading ProviderSpecialty', async (t) => {
-  const evaluation = validEvaluationFixture({ aiScore: 60, status: 'REJECTED', aiQualityRating: 'POOR' });
-  const { accreditationAiService, accreditationCreateSpy, providerSpecialtyUpdateSpy } = await loadService(t, {
-    generateStructuredWithImage: async () => ({ data: evaluation, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } })
-  });
-
-  const result = await accreditationAiService.evaluateAccreditationSample(BASE_DTO);
-
-  assert.equal(result.evaluation.status, 'REJECTED');
-  assert.equal(accreditationCreateSpy.mock.calls[0].arguments[0].data.status, 'REJECTED');
+  assert.equal(accreditationCreateSpy.mock.callCount(), 1);
+  const data = accreditationCreateSpy.mock.calls[0].arguments[0].data;
+  assert.equal(data.status, 'MANUAL_REVIEW');
+  for (const key of ['aiScore', 'aiQualityRating', 'aiFeedbackAr', 'aiStrengths', 'aiRecommendations', 'aiAuditedAt']) {
+    assert.equal(key in data, false, `${key} must not be written`);
+  }
+  assert.equal(result.evaluation, null);
+  assert.equal(result.aiEvaluation.available, false);
+  assert.equal(result.aiEvaluation.code, 'AI_FEATURE_UNAVAILABLE');
   assert.equal(providerSpecialtyUpdateSpy.mock.callCount(), 0);
+  assert.equal(providerSpecialtyUpdateManySpy.mock.callCount(), 0);
 });
 
-test('evaluateAccreditationSample: an unfetchable attachment image is skipped (best-effort) and evaluation proceeds text-only', async (t) => {
-  const evaluation = validEvaluationFixture();
-  let withImageCalled = false;
-  let structuredCalled = false;
-  const { accreditationAiService } = await loadService(t, {
-    fetchRemoteImage: async () => { throw new Error('image fetch failed'); },
-    generateStructured: async () => { structuredCalled = true; return { data: evaluation, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } }; },
-    generateStructuredWithImage: async () => { withImageCalled = true; throw new Error('should never be called'); }
-  });
-
-  await accreditationAiService.evaluateAccreditationSample(BASE_DTO);
-
-  assert.equal(structuredCalled, true);
-  assert.equal(withImageCalled, false);
+test('submitAccreditationSample: throws when the provider profile does not exist, writing nothing', async (t) => {
+  const { accreditationAiService, accreditationCreateSpy } = await loadService(t, { providerProfile: null });
+  await assert.rejects(() => accreditationAiService.submitAccreditationSample(BASE_DTO), /Provider profile not found/);
+  assert.equal(accreditationCreateSpy.mock.callCount(), 0);
 });
 
-test('evaluateAccreditationSample: Gemini not configured routes to the existing honest manual-review path (score 0), never a fake positive score', async (t) => {
-  const { accreditationAiService, accreditationCreateSpy, providerSpecialtyUpdateSpy } = await loadService(t, { isConfigured: false });
-
-  const result = await accreditationAiService.evaluateAccreditationSample(BASE_DTO);
-
-  assert.equal(result.evaluation.status, 'MANUAL_REVIEW');
-  assert.equal(result.evaluation.aiScore, 0);
-  const createArgs = accreditationCreateSpy.mock.calls[0].arguments[0].data;
-  assert.equal(createArgs.status, 'MANUAL_REVIEW');
-  assert.equal(createArgs.aiScore, 0);
-  assert.equal(providerSpecialtyUpdateSpy.mock.callCount(), 0);
+test('submitAccreditationSample: throws when the specialty is not linked to this provider', async (t) => {
+  const { accreditationAiService, accreditationCreateSpy } = await loadService(t, { providerSpecialty: null });
+  await assert.rejects(() => accreditationAiService.submitAccreditationSample(BASE_DTO));
+  assert.equal(accreditationCreateSpy.mock.callCount(), 0);
 });
 
-test('evaluateAccreditationSample: Gemini throwing routes to the same honest manual-review path, never a fabricated evaluation', async (t) => {
-  const { accreditationAiService, accreditationCreateSpy } = await loadService(t, {
-    generateStructuredWithImage: async () => { throw new GeminiProviderError(GeminiErrorCode.PROVIDER_UNAVAILABLE, 'unavailable'); }
-  });
-
-  const result = await accreditationAiService.evaluateAccreditationSample(BASE_DTO);
-
-  assert.equal(result.evaluation.status, 'MANUAL_REVIEW');
-  assert.equal(result.evaluation.aiScore, 0);
-  assert.doesNotMatch(JSON.stringify(result), /التزام ممتاز بالبنية المعمارية|85/, 'the old silently-patched fallback values must never reappear');
-  assert.equal(accreditationCreateSpy.mock.callCount(), 1, 'the sample row is still recorded with the honest manual-review outcome');
+test('submitAccreditationSample: throws when the specialty has not passed its technical test yet', async (t) => {
+  const { accreditationAiService, accreditationCreateSpy } = await loadService(t, { providerSpecialty: providerSpecialtyFixture({ isPassed: false }) });
+  await assert.rejects(() => accreditationAiService.submitAccreditationSample(BASE_DTO));
+  assert.equal(accreditationCreateSpy.mock.callCount(), 0);
 });
 
-test('evaluateAccreditationSample: a malformed Gemini response (missing/invalid aiScore) is rejected by the real validator, not silently patched to 85', async (t) => {
-  const malformed = { status: 'AI_VERIFIED', aiQualityRating: 'EXCELLENT', feedbackAr: 'x', strengths: [], recommendations: [] }; // aiScore missing entirely
-  const { accreditationAiService } = await loadService(t, {
-    generateStructuredWithImage: async (_prompt, options) => {
-      if (!options.validate(malformed)) throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
-      return { data: malformed, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-    }
-  });
-
-  const result = await accreditationAiService.evaluateAccreditationSample(BASE_DTO);
-
-  assert.equal(result.evaluation.status, 'MANUAL_REVIEW');
-  assert.equal(result.evaluation.aiScore, 0);
+test('submitAccreditationSample: requires at least one piece of evidence', async (t) => {
+  const { accreditationAiService, accreditationCreateSpy } = await loadService(t, {});
+  await assert.rejects(() => accreditationAiService.submitAccreditationSample({ ...BASE_DTO, attachments: [] }));
+  assert.equal(accreditationCreateSpy.mock.callCount(), 0);
 });
 
-test('evaluateAccreditationSample: a malformed Gemini response (fabricated-looking hardcoded strengths) is still rejected when other fields are invalid', async (t) => {
-  const malformed = { aiScore: 999, status: 'AI_VERIFIED', aiQualityRating: 'EXCELLENT', feedbackAr: 'x', strengths: ['التزام ممتاز بالبنية المعمارية'], recommendations: [] };
-  const { accreditationAiService } = await loadService(t, {
-    generateStructuredWithImage: async (_prompt, options) => {
-      if (!options.validate(malformed)) throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
-      return { data: malformed, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-    }
-  });
-
-  const result = await accreditationAiService.evaluateAccreditationSample(BASE_DTO);
-  assert.equal(result.evaluation.status, 'MANUAL_REVIEW');
-});
-
-// ── ownership ──────────────────────────────────────────────────────────────
-
-test('evaluateAccreditationSample: throws when the provider profile does not exist, without ever calling Gemini', async (t) => {
-  let called = false;
-  const { accreditationAiService } = await loadService(t, {
-    providerProfile: null,
-    generateStructuredWithImage: async () => { called = true; throw new Error('should never be called'); }
-  });
-
-  await assert.rejects(() => accreditationAiService.evaluateAccreditationSample(BASE_DTO));
-  assert.equal(called, false);
-});
-
-test('evaluateAccreditationSample: throws when the specialty is not linked to this provider profile, without ever calling Gemini', async (t) => {
-  let called = false;
-  const { accreditationAiService } = await loadService(t, {
-    providerSpecialty: null,
-    generateStructuredWithImage: async () => { called = true; throw new Error('should never be called'); }
-  });
-
-  await assert.rejects(() => accreditationAiService.evaluateAccreditationSample(BASE_DTO));
-  assert.equal(called, false);
-});
-
-test('evaluateAccreditationSample: throws when the specialty has not passed its technical test yet, without ever calling Gemini', async (t) => {
-  let called = false;
-  const { accreditationAiService } = await loadService(t, {
-    providerSpecialty: providerSpecialtyFixture({ isPassed: false }),
-    generateStructuredWithImage: async () => { called = true; throw new Error('should never be called'); }
-  });
-
-  await assert.rejects(() => accreditationAiService.evaluateAccreditationSample(BASE_DTO));
-  assert.equal(called, false);
-});
-
-// ── safety re-audit: the AI_VERIFIED credential path never bypasses the
-// existing deterministic assessment-quiz gate, and a negative/failed
-// evaluation never triggers any punitive action beyond this one sample ──
-
-test('evaluateAccreditationSample: a positive Gemini result alone cannot grant the binding credential — isPassed must already be true via the existing deterministic quiz gate (requirement 1)', async (t) => {
-  // Same case as "throws when the specialty has not passed its technical
-  // test yet" above, framed explicitly as the credential-boundary proof:
-  // there is no path from a single successful Gemini call to isPassed/
-  // APPROVED without first clearing this pre-existing, unrelated
-  // (deterministic quiz-based) gate.
-  let geminiCalled = false;
-  const { accreditationAiService } = await loadService(t, {
-    providerSpecialty: providerSpecialtyFixture({ isPassed: false }),
-    generateStructuredWithImage: async () => { geminiCalled = true; return { data: validEvaluationFixture(), usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } }; }
-  });
-
-  await assert.rejects(() => accreditationAiService.evaluateAccreditationSample(BASE_DTO));
-  assert.equal(geminiCalled, false, 'Gemini must never even be called before the deterministic gate is cleared');
-});
-
-test('evaluateAccreditationSample: a negative Gemini result alone never touches ProviderSpecialty at all — no downgrade, no lockout, no unrelated punitive action (requirement 2)', async (t) => {
-  const rejected = validEvaluationFixture({ aiScore: 10, status: 'REJECTED', aiQualityRating: 'POOR' });
-  const { accreditationAiService, providerSpecialtyUpdateSpy } = await loadService(t, {
-    providerSpecialty: providerSpecialtyFixture({ isPassed: true, isActive: true }),
-    generateStructuredWithImage: async () => ({ data: rejected, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } })
-  });
-
-  const result = await accreditationAiService.evaluateAccreditationSample(BASE_DTO);
-
-  assert.equal(result.evaluation.status, 'REJECTED');
-  // The only DB write for a REJECTED sample is the AccreditationSample row
-  // itself (asserted elsewhere) — ProviderSpecialty (the provider's real
-  // credential/active-status record) is never written to on this branch.
-  assert.equal(providerSpecialtyUpdateSpy.mock.callCount(), 0, 'a rejected sample must never suspend, lock out, or otherwise punish the ProviderSpecialty');
+test('accreditation-ai service and routes have no Gemini reference and no AI_VERIFIED assignment on submit', () => {
+  const svc = readFileSync(new URL('./accreditation-ai.service.ts', import.meta.url), 'utf8').replace(/\/\/.*$/gm, '');
+  const routes = readFileSync(new URL('../routes/accreditation-ai.routes.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(svc, /gemini|remote-image-fetch|generateStructured/i);
+  assert.doesNotMatch(routes, /gemini/i);
+  assert.match(routes, /submitAccreditationSample/);
 });
 
 test('adminApproveSample/adminRejectSample: the existing manual/deterministic authority path remains intact and unchanged (requirement 3)', async (t) => {
@@ -274,8 +116,6 @@ test('adminApproveSample/adminRejectSample: the existing manual/deterministic au
     $transaction: async (fn: any) => fn(tx)
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: { isConfigured: () => true } } });
-  t.mock.module('../utils/remote-image-fetch', { namedExports: { fetchRemoteImage: async () => { throw new Error('must never be called by admin actions'); } } });
 
   const moduleUrl = `./accreditation-ai.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { accreditationAiService } = await import(moduleUrl);
@@ -312,8 +152,6 @@ test('adminApproveSample: an AI_VERIFIED sample whose ProviderSpecialty is NOT y
     $transaction: async (fn: any) => fn(tx)
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: { isConfigured: () => true } } });
-  t.mock.module('../utils/remote-image-fetch', { namedExports: { fetchRemoteImage: async () => { throw new Error('must never be called by admin actions'); } } });
 
   const moduleUrl = `./accreditation-ai.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { accreditationAiService } = await import(moduleUrl);
@@ -346,8 +184,6 @@ test('adminApproveSample: a second approval attempt is rejected based on the REA
     $transaction: async (fn: any) => fn(tx)
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: { isConfigured: () => true } } });
-  t.mock.module('../utils/remote-image-fetch', { namedExports: { fetchRemoteImage: async () => { throw new Error('must never be called by admin actions'); } } });
 
   const moduleUrl = `./accreditation-ai.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { accreditationAiService } = await import(moduleUrl);
@@ -374,8 +210,6 @@ test('adminRejectSample: rejecting one sample never downgrades a ProviderSpecial
     $transaction: async (fn: any) => fn(tx)
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: { isConfigured: () => true } } });
-  t.mock.module('../utils/remote-image-fetch', { namedExports: { fetchRemoteImage: async () => { throw new Error('must never be called by admin actions'); } } });
 
   const moduleUrl = `./accreditation-ai.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { accreditationAiService } = await import(moduleUrl);

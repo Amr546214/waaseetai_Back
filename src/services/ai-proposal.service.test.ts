@@ -1,134 +1,95 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { GeminiErrorCode, GeminiProviderError } from './ai/gemini/gemini.errors';
+import { readFileSync } from 'node:fs';
+import { WaseetAiError, WaseetAiErrorCode } from './ai/waseet-ai/waseet-ai.errors';
 
-// F4 (evaluateAndSuggestProposal) — Batch A migration to the shared Gemini
-// foundation, plus the recommendedAdvantages -> suggestedAdvantages field
-// rename. `prisma` (via ../utils/prisma.client) and `geminiClient` are both
-// mocked; no real DB/network call ever happens.
+// Proposal AI feedback — WaseetAI only (waseetAiClient mocked, no network).
 
-function projectFixture(overrides: Partial<any> = {}) {
-  return {
-    title: 'تطوير متجر إلكتروني',
-    description: 'وصف حقيقي للمشروع',
-    budgetMin: 3000,
-    budgetMax: 6000,
-    budgetFixed: null,
-    deliveryDays: 20,
-    requirements: ['React', 'Stripe'],
-    specialty: 'تطوير الويب',
-    ...overrides
-  };
+const upstream = (overrides: Partial<any> = {}) => ({
+  suggestedTitle: 'عرض مطور لتنفيذ المتجر',
+  suggestedMessage: 'رسالة عرض محسّنة',
+  qualityScore: 72,
+  qualityTag: 'GOOD',
+  priceAudit: { recommendedMin: 1, recommendedMax: 2, priceTag: 'FAIR', justification: 'ungrounded' },
+  suggestedAdvantages: ['خبرة', ' سرعة '],
+  ...overrides
+});
+
+async function load(t: TestContext, suggestProposal: (body: any) => Promise<any> = async () => upstream()) {
+  const calls: any[] = [];
+  t.mock.module('./ai/waseet-ai/waseet-ai.client', {
+    namedExports: { waseetAiClient: { suggestProposal: async (body: any) => { calls.push(body); return suggestProposal(body); } } }
+  });
+  const { aiProposalService } = await import(`./ai-proposal.service.ts?fixture=${Date.now()}-${Math.random()}`);
+  return Object.assign(aiProposalService, { calls });
 }
 
-function validFeedbackFixture(overrides: Partial<any> = {}) {
-  return {
-    suggestedTitle: 'عنوان مقترح احترافي',
-    suggestedMessage: 'رسالة عرض مقترحة حقيقية من Gemini تفوق 20 حرفاً بسهولة',
-    qualityScore: 87,
+test('maps title/message/quality/advantages and sends exactly the verified request fields', async (t) => {
+  const svc = await load(t);
+  const result = await svc.evaluateAndSuggestProposal(' proj-1 ', ' عنواني ', ' رسالتي ', ['ignored']);
+  assert.deepEqual(svc.calls, [{ projectId: 'proj-1', currentTitle: 'عنواني', currentMessage: 'رسالتي', currency: 'USD' }]);
+  assert.deepEqual(result, {
+    suggestedTitle: 'عرض مطور لتنفيذ المتجر',
+    suggestedMessage: 'رسالة عرض محسّنة',
+    qualityScore: 72,
     qualityTag: 'GOOD',
-    priceAudit: {
-      recommendedMin: 3200,
-      recommendedMax: 6200,
-      priceTag: 'FAIR',
-      justification: 'مبرر تسعير حقيقي'
-    },
-    suggestedAdvantages: ['ميزة 1', 'ميزة 2', 'ميزة 3'],
-    ...overrides
-  };
+    suggestedAdvantages: ['خبرة', 'سرعة']
+  });
+});
+
+test('priceAudit from the service is NEVER returned (not grounded in the real project budget)', async (t) => {
+  const svc = await load(t);
+  const result = await svc.evaluateAndSuggestProposal('p1', 't', 'm');
+  assert.equal('priceAudit' in result, false);
+  assert.doesNotMatch(JSON.stringify(result), /recommendedMin|priceTag|justification|ungrounded/);
+});
+
+test('missing suggestedAdvantages maps to an empty list (nothing invented)', async (t) => {
+  const svc = await load(t, async () => upstream({ suggestedAdvantages: undefined }));
+  const result = await svc.evaluateAndSuggestProposal('p1', 't', 'm');
+  assert.deepEqual(result.suggestedAdvantages, []);
+});
+
+test('upstream failure -> honest 503 without upstream text, no fabricated feedback', async (t) => {
+  const SECRET = 'UPSTREAM-SECRET-DETAIL';
+  const svc = await load(t, async () => { throw new WaseetAiError(WaseetAiErrorCode.PROVIDER_UNAVAILABLE, SECRET, { status: 502 }); });
+  await assert.rejects(
+    () => svc.evaluateAndSuggestProposal('p1', 't', 'm'),
+    (err: any) => err.statusCode === 503 && !String(err.message).includes(SECRET)
+  );
+});
+
+test('not configured -> 503', async (t) => {
+  const svc = await load(t, async () => { throw new WaseetAiError(WaseetAiErrorCode.NOT_CONFIGURED, 'x'); });
+  await assert.rejects(() => svc.evaluateAndSuggestProposal('p1', 't', 'm'), (err: any) => err.statusCode === 503);
+});
+
+for (const bad of [
+  { suggestedTitle: '' }, { suggestedMessage: '  ' }, { qualityScore: 'high' }, { qualityScore: NaN }, { qualityTag: '' }
+]) {
+  test(`unusable upstream response ${JSON.stringify(bad)} -> 503, not a half-empty suggestion`, async (t) => {
+    const svc = await load(t, async () => upstream(bad));
+    await assert.rejects(() => svc.evaluateAndSuggestProposal('p1', 't', 'm'), (err: any) => err.statusCode === 503);
+  });
 }
 
-async function loadService(t: TestContext, opts: {
-  project?: any;
-  generateStructured?: (prompt: string, options: any) => Promise<any>;
-}) {
-  const prismaMock: any = {
-    project: { findUnique: async () => (opts.project === undefined ? projectFixture() : opts.project) }
-  };
-  t.mock.module('../utils/prisma.client', { namedExports: { prisma: prismaMock } });
-
-  const geminiClientMock = {
-    generateStructured: opts.generateStructured ?? (async () => { throw new Error('generateStructured not stubbed for this test'); })
-  };
-  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: geminiClientMock } });
-
-  const moduleUrl = `./ai-proposal.service.ts?fixture=${Date.now()}-${Math.random()}`;
-  const mod = await import(moduleUrl);
-  return mod.aiProposalService;
-}
-
-test('evaluateAndSuggestProposal: a real validated Gemini success is returned with the canonical suggestedAdvantages field', async (t) => {
-  const feedback = validFeedbackFixture();
-  const service = await loadService(t, {
-    generateStructured: async (_prompt, options) => {
-      assert.equal(options.validate(feedback), true, 'the real validator must accept well-formed feedback');
-      return { data: feedback, usage: { promptTokens: 5, completionTokens: 5, totalTokens: 10 } };
-    }
-  });
-
-  const result = await service.evaluateAndSuggestProposal('project-1', 'عنوان حالي', 'رسالة حالية', ['ميزة موجودة']);
-
-  assert.equal(result.suggestedTitle, feedback.suggestedTitle);
-  assert.deepEqual(result.suggestedAdvantages, feedback.suggestedAdvantages);
-  assert.equal((result as any).recommendedAdvantages, undefined, 'the old field name must not exist on the response');
+test('missing projectId or fully empty draft is a 400 without calling WaseetAI', async (t) => {
+  const svc = await load(t);
+  await assert.rejects(() => svc.evaluateAndSuggestProposal('', 't', 'm'), (err: any) => err.statusCode === 400);
+  await assert.rejects(() => svc.evaluateAndSuggestProposal('p1', ' ', ' '), (err: any) => err.statusCode === 400);
+  assert.equal(svc.calls.length, 0);
 });
 
-test('evaluateAndSuggestProposal: suggestedTitle is clamped to 80 chars and suggestedAdvantages to 5 entries', async (t) => {
-  const longTitle = 'ا'.repeat(120);
-  const manyAdvantages = ['1', '2', '3', '4', '5', '6', '7'];
-  const feedback = validFeedbackFixture({ suggestedTitle: longTitle, suggestedAdvantages: manyAdvantages });
-  const service = await loadService(t, {
-    generateStructured: async () => ({ data: feedback, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } })
-  });
-
-  const result = await service.evaluateAndSuggestProposal('project-1');
-
-  assert.equal(result.suggestedTitle.length, 80);
-  assert.equal(result.suggestedAdvantages.length, 5);
+test('route keeps authenticate + provider authorize + aiLimiter + validation; controller passes through the service result', () => {
+  const route = readFileSync(new URL('../routes/proposal.routes.ts', import.meta.url), 'utf8');
+  const idx = route.indexOf("'/ai-suggest'");
+  const block = route.slice(idx, route.indexOf(');', idx));
+  for (const piece of ['authenticate', 'authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY)', 'aiLimiter', 'validateDto(aiSuggestRequestSchema)']) {
+    assert.ok(block.includes(piece), `route must keep ${piece}`);
+  }
 });
 
-test('evaluateAndSuggestProposal: Gemini unavailable throws an AppError(503) instead of returning fabricated data', async (t) => {
-  const service = await loadService(t, {
-    generateStructured: async () => { throw new GeminiProviderError(GeminiErrorCode.PROVIDER_UNAVAILABLE, 'unavailable'); }
-  });
-
-  await assert.rejects(
-    () => service.evaluateAndSuggestProposal('project-1', 'title', 'message', []),
-    (err: any) => {
-      assert.equal(err.statusCode, 503);
-      assert.equal(typeof err.message, 'string');
-      return true;
-    }
-  );
-});
-
-test('evaluateAndSuggestProposal: a malformed Gemini response is rejected by the real validator, never silently patched with fabricated data', async (t) => {
-  const malformed = { suggestedTitle: '', qualityScore: 999, suggestedAdvantages: [] };
-  const service = await loadService(t, {
-    generateStructured: async (_prompt, options) => {
-      if (!options.validate(malformed)) {
-        throw new GeminiProviderError(GeminiErrorCode.INVALID_RESPONSE, 'invalid');
-      }
-      return { data: malformed, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-    }
-  });
-
-  await assert.rejects(
-    () => service.evaluateAndSuggestProposal('project-1'),
-    (err: any) => { assert.equal(err.statusCode, 503); return true; }
-  );
-});
-
-test('evaluateAndSuggestProposal: throws a 404 AppError when the project does not exist, without calling Gemini', async (t) => {
-  let called = false;
-  const service = await loadService(t, {
-    project: null,
-    generateStructured: async () => { called = true; throw new Error('should never be called'); }
-  });
-
-  await assert.rejects(
-    () => service.evaluateAndSuggestProposal('missing-project'),
-    (err: any) => { assert.equal(err.statusCode, 404); return true; }
-  );
-  assert.equal(called, false);
+test('ai-proposal.service has no direct Gemini usage', () => {
+  const src = readFileSync(new URL('./ai-proposal.service.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /gemini\.client|geminiClient|generateStructured|generateStream/);
 });

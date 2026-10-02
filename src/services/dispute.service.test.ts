@@ -1,198 +1,142 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 
-// Implementation Batch 2, Part B — advisory-only dispute AI summary
-// (generateAiSummary). `prisma` (via ../config/db) and `geminiClient` are
-// both mocked; no real DB/network call ever happens. These tests prove the
-// feature is read-only (no update/create write path is ever exercised),
-// never resolves/rejects the dispute, and never lets a fabricated or
-// out-of-bounds Gemini response through.
+// Advisory-only dispute AI summary (generateAiSummary), served exclusively by
+// WaseetAI POST /v1/ai/disputes/summary. `prisma` (via ../config/db) and the
+// WaseetAI client are mocked; no real DB/network call ever happens. These
+// tests prove the feature is read-only, never resolves/rejects the dispute,
+// sends minimal data, never surfaces the upstream `recommendation`, and
+// never lets a malformed response through.
+
+const CLIENT_ID = 'user-client';
+const PROVIDER_ID = 'user-provider';
 
 function disputeFixture(overrides: Partial<any> = {}) {
   return {
     id: 'dispute-1',
+    openedById: CLIENT_ID,
     reason: 'التسليم غير مطابق للاتفاق',
     description: 'المقدم لم يسلم المرحلة الثانية في الموعد المتفق عليه',
-    evidence: ['https://cdn.example.com/evidence1.png'],
+    evidence: ['https://cdn.example.com/private-evidence1.png'],
     status: 'OPEN',
     createdAt: new Date('2026-01-01T10:00:00.000Z'),
-    request: { title: 'تصميم هوية بصرية', description: 'وصف حقيقي للطلب' },
+    request: { id: 'req-1', clientProfile: { userId: CLIENT_ID } },
     project: null,
-    openedBy: { firstName: 'محمد', lastName: 'العمري' },
-    againstUser: { firstName: 'خالد', lastName: 'الغامدي' },
     ...overrides,
   };
 }
 
-function validSummaryFixture(overrides: Partial<any> = {}) {
+function upstreamFixture(overrides: Partial<any> = {}) {
   return {
-    caseSummary: 'ملخص محايد لموضوع النزاع بناءً على البيانات المرفقة فقط.',
-    timelineSummary: 'تسلسل زمني موجز لمراحل الطلب حتى فتح النزاع.',
-    evidenceSummary: ['رابط دليل واحد مرفق من الطرف الذي فتح النزاع.'],
-    evidenceGaps: ['لا يوجد دليل واضح على تاريخ التسليم الفعلي.'],
-    suggestedQuestions: ['هل تم إرسال أي تواصل بخصوص التأخير؟'],
+    summary: 'ملخص محايد لموضوع النزاع.',
+    clientPerspective: 'وجهة نظر العميل.',
+    providerPerspective: 'وجهة نظر مقدم الخدمة.',
+    recommendation: 'تسوية مقترحة يجب ألا تصل إلى الأدمن.',
     ...overrides,
   };
 }
 
-async function loadService(t: TestContext, opts: {
-  dispute?: any;
-  generateStructured?: (prompt: string, options: any) => Promise<any>;
-}) {
+async function loadService(t: TestContext, opts: { dispute?: any; summarizeDispute?: (body: any) => Promise<any> }) {
   const findUniqueSpy = t.mock.fn(async () => (opts.dispute === undefined ? disputeFixture() : opts.dispute));
-  // Deliberately NO update/create functions on the mock — if the code under
-  // test ever tried to write, calling a missing method would throw and the
-  // test would fail loudly, proving generateAiSummary performs zero writes.
-  const prismaMock: any = {
-    dispute: { findUnique: findUniqueSpy },
-  };
+  // Deliberately NO update/create functions: any write attempt would throw.
+  const prismaMock: any = { dispute: { findUnique: findUniqueSpy } };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
 
-  const geminiClientMock = {
-    generateStructured: opts.generateStructured ?? (async () => { throw new Error('generateStructured not stubbed for this test'); }),
-  };
-  t.mock.module('./ai/gemini/gemini.client', { namedExports: { geminiClient: geminiClientMock } });
+  const summarizeSpy = t.mock.fn(opts.summarizeDispute ?? (async () => { throw new Error('summarizeDispute not stubbed for this test'); }));
+  t.mock.module('./ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: { summarizeDispute: summarizeSpy } } });
 
-  const moduleUrl = `./dispute.service.ts?fixture=${Date.now()}-${Math.random()}`;
-  const mod = await import(moduleUrl);
-  return { disputeService: mod.disputeService, findUniqueSpy };
+  const mod = await import(`./dispute.service.ts?fixture=${Date.now()}-${Math.random()}`);
+  return { disputeService: mod.disputeService, findUniqueSpy, summarizeSpy };
 }
 
-test('generateAiSummary: a genuine validated Gemini success is returned as-is, with zero DB writes', async (t) => {
-  const summary = validSummaryFixture();
-  const { disputeService, findUniqueSpy } = await loadService(t, {
-    generateStructured: async (prompt: string, options: any) => {
-      assert.equal(options.validate(summary), true, 'the real validator must accept well-formed advisory output');
-      assert.match(prompt, /التسليم غير مطابق للاتفاق/, 'the real dispute reason must reach the prompt');
-      return { data: summary, usage: { promptTokens: 10, completionTokens: 10, totalTokens: 20 } };
-    },
-  });
+test('generateAiSummary: returns only summary/clientPerspective/providerPerspective and drops recommendation', async (t) => {
+  const { disputeService, findUniqueSpy } = await loadService(t, { summarizeDispute: async () => upstreamFixture() });
 
   const result = await disputeService.generateAiSummary('dispute-1');
 
-  assert.deepEqual(result, summary);
-  assert.equal(findUniqueSpy.mock.calls.length, 1, 'reads the dispute exactly once');
-});
-
-test('generateAiSummary: evidence links are presented as unreviewed references, never claimed as fetched', async (t) => {
-  let capturedPrompt = '';
-  await (
-    await loadService(t, {
-      generateStructured: async (prompt: string, options: any) => {
-        capturedPrompt = prompt;
-        return { data: validSummaryFixture(), usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-      },
-    })
-  ).disputeService.generateAiSummary('dispute-1');
-
-  assert.match(capturedPrompt, /مراجع فقط، لم يتم فتح أو فحص محتواها/);
-});
-
-test('generateAiSummary: throws 404 for a dispute that does not exist, without ever calling Gemini', async (t) => {
-  let geminiCalled = false;
-  const { disputeService } = await loadService(t, {
-    dispute: null,
-    generateStructured: async () => {
-      geminiCalled = true;
-      throw new Error('should never be reached');
-    },
+  assert.deepEqual(result, {
+    summary: 'ملخص محايد لموضوع النزاع.',
+    clientPerspective: 'وجهة نظر العميل.',
+    providerPerspective: 'وجهة نظر مقدم الخدمة.',
   });
-
-  await assert.rejects(() => disputeService.generateAiSummary('missing-id'), (error: any) => {
-    assert.equal(error.statusCode, 404);
-    return true;
-  });
-  assert.equal(geminiCalled, false);
+  assert.equal('recommendation' in result, false);
+  assert.equal(findUniqueSpy.mock.calls.length, 1, 'reads the dispute exactly once, no writes');
 });
 
-test('generateAiSummary: propagates an honest error when Gemini is unavailable/fails (no fabricated summary)', async (t) => {
-  const { disputeService } = await loadService(t, {
-    generateStructured: async () => {
-      throw new Error('Gemini provider unavailable');
-    },
-  });
+test('generateAiSummary: a client-opened dispute puts the claim on the client side only', async (t) => {
+  const { disputeService, summarizeSpy } = await loadService(t, { summarizeDispute: async () => upstreamFixture() });
+  await disputeService.generateAiSummary('dispute-1');
 
-  await assert.rejects(() => disputeService.generateAiSummary('dispute-1'), /Gemini provider unavailable/);
+  const body = summarizeSpy.mock.calls[0].arguments[0];
+  assert.match(body.clientClaim, /التسليم غير مطابق للاتفاق/);
+  assert.match(body.providerClaim, /لا يوجد ادعاء مسجل/);
 });
 
-test('generateAiSummary: the real validator rejects output missing a required field', async (t) => {
-  const { disputeService } = await loadService(t, {
-    generateStructured: async (_prompt: string, options: any) => {
-      const malformed = validSummaryFixture({ evidenceGaps: undefined });
-      assert.equal(options.validate(malformed), false, 'must reject a response missing evidenceGaps');
-      throw new Error('INVALID_RESPONSE');
-    },
+test('generateAiSummary: a provider-opened dispute puts the claim on the provider side only', async (t) => {
+  const { disputeService, summarizeSpy } = await loadService(t, {
+    dispute: disputeFixture({ openedById: PROVIDER_ID }),
+    summarizeDispute: async () => upstreamFixture(),
   });
+  await disputeService.generateAiSummary('dispute-1');
 
-  await assert.rejects(() => disputeService.generateAiSummary('dispute-1'), /INVALID_RESPONSE/);
+  const body = summarizeSpy.mock.calls[0].arguments[0];
+  assert.match(body.providerClaim, /التسليم غير مطابق للاتفاق/);
+  assert.match(body.clientClaim, /لا يوجد ادعاء مسجل/);
 });
 
-test('generateAiSummary: the real validator rejects an oversized array (bounds enforced)', async (t) => {
-  const { disputeService } = await loadService(t, {
-    generateStructured: async (_prompt: string, options: any) => {
-      const tooMany = validSummaryFixture({ suggestedQuestions: Array.from({ length: 20 }, (_, i) => `سؤال ${i}`) });
-      assert.equal(options.validate(tooMany), false, 'must reject an array exceeding the max item count');
-      throw new Error('INVALID_RESPONSE');
-    },
-  });
-
-  await assert.rejects(() => disputeService.generateAiSummary('dispute-1'), /INVALID_RESPONSE/);
-});
-
-test('generateAiSummary: the real validator rejects any forbidden verdict/fault/money field, even if Gemini adds one', async (t) => {
-  const { disputeService } = await loadService(t, {
-    generateStructured: async (_prompt: string, options: any) => {
-      const withVerdict = { ...validSummaryFixture(), winner: 'client', faultPercentage: 80 };
-      assert.equal(options.validate(withVerdict), false, 'must reject any response carrying a verdict/fault/money field');
-      throw new Error('INVALID_RESPONSE');
-    },
-  });
-
-  await assert.rejects(() => disputeService.generateAiSummary('dispute-1'), /INVALID_RESPONSE/);
-});
-
-test('generateAiSummary: works with no project/stage data at all (only reason/description/evidence)', async (t) => {
-  const { disputeService } = await loadService(t, {
-    dispute: disputeFixture({ request: null, project: null, evidence: [] }),
-    generateStructured: async (prompt: string) => {
-      assert.match(prompt, /لا توجد أدلة مرفقة على هذا النزاع/);
-      return { data: validSummaryFixture(), usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
-    },
-  });
-
-  const result = await disputeService.generateAiSummary('dispute-1');
-  assert.ok(result.caseSummary);
-});
-
-test('generateAiSummary: includes project stage/delivery data in the prompt when present', async (t) => {
-  let capturedPrompt = '';
-  await (
-    await loadService(t, {
-      dispute: disputeFixture({
-        request: null,
-        project: {
-          title: 'مشروع تطوير',
-          description: 'وصف المشروع',
-          contract: {
-            stages: [
-              {
-                stepOrder: 1,
-                title: 'المرحلة الأولى',
-                description: 'تسليم التصميم الأولي',
-                status: 'APPROVED',
-                deliveries: [{ note: 'تم تسليم الملفات كاملة', status: 'APPROVED', submittedAt: new Date() }],
-              },
-            ],
-          },
+test('generateAiSummary: sends minimal data — no names, attachment URLs, stage descriptions or delivery notes', async (t) => {
+  const { disputeService, summarizeSpy } = await loadService(t, {
+    dispute: disputeFixture({
+      request: null,
+      project: {
+        id: 'proj-1',
+        contract: {
+          clientId: CLIENT_ID,
+          stages: [{ stepOrder: 1, title: 'المرحلة الأولى', description: 'وصف سري', status: 'APPROVED', deliveries: [{ note: 'ملاحظة تسليم سرية', status: 'APPROVED' }] }],
         },
-      }),
-      generateStructured: async (prompt: string) => {
-        capturedPrompt = prompt;
-        return { data: validSummaryFixture(), usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
       },
-    })
-  ).disputeService.generateAiSummary('dispute-1');
+    }),
+    summarizeDispute: async () => upstreamFixture(),
+  });
+  await disputeService.generateAiSummary('dispute-1');
 
-  assert.match(capturedPrompt, /المرحلة الأولى/);
-  assert.match(capturedPrompt, /تم تسليم الملفات كاملة/);
+  const body = summarizeSpy.mock.calls[0].arguments[0];
+  const sent = JSON.stringify(body);
+  assert.equal(body.projectId, 'proj-1');
+  assert.match(sent, /المرحلة الأولى/);
+  assert.doesNotMatch(sent, /cdn\.example\.com/);
+  assert.doesNotMatch(sent, /وصف سري|ملاحظة تسليم سرية/);
+  assert.match(body.evidenceList[0], /1 مرفق/);
+});
+
+test('generateAiSummary: throws 404 for a missing dispute without calling WaseetAI', async (t) => {
+  const { disputeService, summarizeSpy } = await loadService(t, { dispute: null });
+  await assert.rejects(() => disputeService.generateAiSummary('missing'), (e: any) => e.statusCode === 404);
+  assert.equal(summarizeSpy.mock.calls.length, 0);
+});
+
+test('generateAiSummary: refuses (422) when the client party cannot be determined, without calling WaseetAI', async (t) => {
+  const { disputeService, summarizeSpy } = await loadService(t, { dispute: disputeFixture({ request: null, project: null }) });
+  await assert.rejects(() => disputeService.generateAiSummary('dispute-1'), (e: any) => e.statusCode === 422);
+  assert.equal(summarizeSpy.mock.calls.length, 0);
+});
+
+test('generateAiSummary: propagates an honest error when WaseetAI fails (no fabricated summary)', async (t) => {
+  const { disputeService } = await loadService(t, { summarizeDispute: async () => { throw new Error('WaseetAI unavailable'); } });
+  await assert.rejects(() => disputeService.generateAiSummary('dispute-1'), /WaseetAI unavailable/);
+});
+
+test('generateAiSummary: rejects a response missing a required perspective', async (t) => {
+  const { disputeService } = await loadService(t, { summarizeDispute: async () => upstreamFixture({ providerPerspective: undefined }) });
+  await assert.rejects(() => disputeService.generateAiSummary('dispute-1'), (e: any) => e.code === 'INVALID_RESPONSE');
+});
+
+test('generateAiSummary: rejects an oversized field', async (t) => {
+  const { disputeService } = await loadService(t, { summarizeDispute: async () => upstreamFixture({ summary: 'x'.repeat(5000) }) });
+  await assert.rejects(() => disputeService.generateAiSummary('dispute-1'), (e: any) => e.code === 'INVALID_RESPONSE');
+});
+
+test('generateAiSummary: rejects any verdict/fault/money field in the response', async (t) => {
+  const { disputeService } = await loadService(t, { summarizeDispute: async () => upstreamFixture({ winner: 'client', faultPercentage: 80 }) });
+  await assert.rejects(() => disputeService.generateAiSummary('dispute-1'), (e: any) => e.code === 'INVALID_RESPONSE');
 });

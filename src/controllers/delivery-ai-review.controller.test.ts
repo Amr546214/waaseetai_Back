@@ -136,19 +136,19 @@ test('client controller: delivery/contract not found (service 404) is forwarded 
   assert.equal(error.statusCode, 404);
 });
 
-test('client controller: Gemini failure gives an honest 502, not a fabricated review; no error swallowing of the manual flow', async t => {
-  const x = await load(t, { failure: Object.assign(new Error('Gemini unavailable'), { code: 'PROVIDER_UNAVAILABLE' }) });
+test('client controller: AI failure gives an honest 502, not a fabricated review; no error swallowing of the manual flow', async t => {
+  const x = await load(t, { failure: Object.assign(new Error('AI unavailable'), { code: 'PROVIDER_UNAVAILABLE' }) });
   const req: any = { user: { id: 'authenticated-user' }, params: { id: 'contract-1', stageId: 'stage-1' } };
   let error: any;
   await x.clientController.clientRequestsController.getDeliveryAiReview(req, x.res, (e: any) => { error = e; });
-  assert.equal(error, undefined, 'a non-AppError Gemini failure must be handled here, not passed to next()');
+  assert.equal(error, undefined, 'a non-AppError AI failure must be handled here, not passed to next()');
   assert.equal(x.res.statusCode, 502);
   assert.equal(x.res.body.success, false);
   assert.match(x.res.body.message, /تعذر إنشاء المراجعة الاستشارية/);
 });
 
-test('provider controller: Gemini failure gives an honest 502 too', async t => {
-  const x = await load(t, { failure: Object.assign(new Error('Gemini unavailable'), { code: 'PROVIDER_UNAVAILABLE' }) });
+test('provider controller: AI failure gives an honest 502 too', async t => {
+  const x = await load(t, { failure: Object.assign(new Error('AI unavailable'), { code: 'PROVIDER_UNAVAILABLE' }) });
   const req: any = { user: { id: 'authenticated-user' }, params: { id: 'contract-1', stageId: 'stage-1' } };
   let error: any;
   await x.providerController.getDeliveryAiReview(req, x.res, (e: any) => { error = e; });
@@ -192,4 +192,19 @@ test('neither ai-review route registration mentions decision/status/escrow mutat
   for (const line of [aiReviewLine(clientSource), aiReviewLine(providerSource)]) {
     assert.doesNotMatch(line, /reviewDelivery|submitDelivery|escrow|Escrow/i);
   }
+});
+
+test('disabled AI feature: the unavailable AppError (503, AI_FEATURE_UNAVAILABLE) is forwarded to the global error handler by both controllers', async t => {
+  const { aiFeatureUnavailableError } = await import('../services/ai/ai-feature-unavailable');
+  const x = await load(t, { failure: aiFeatureUnavailableError() });
+  const req: any = { user: { id: 'authenticated-user' }, params: { id: 'contract-1', stageId: 'stage-1' } };
+  let clientError: any;
+  await x.clientController.clientRequestsController.getDeliveryAiReview(req, x.res, (e: any) => { clientError = e; });
+  assert.equal(clientError.statusCode, 503);
+  assert.equal(clientError.code, 'AI_FEATURE_UNAVAILABLE');
+  let providerError: any;
+  await x.providerController.getDeliveryAiReview(req, x.res, (e: any) => { providerError = e; });
+  assert.equal(providerError.statusCode, 503);
+  assert.equal(providerError.code, 'AI_FEATURE_UNAVAILABLE');
+  assert.equal(x.res.body, null, 'no fabricated body is written');
 });

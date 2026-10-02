@@ -6,7 +6,7 @@ import jwt from 'jsonwebtoken';
 import { AccountType, UserStatus } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 
-// Implementation Batch 8 — advisory-only Gemini project health analysis
+// Implementation Batch 8 — advisory-only project health analysis
 // controllers (client-requests.controller.ts#getProjectHealthAnalysis and
 // provider.controller.ts#getProjectHealthAnalysis). Both real controllers
 // are exercised behind the REAL authenticate/requireActiveUser middleware
@@ -150,19 +150,19 @@ test('client controller: project/contract not found (service 404) is forwarded a
   assert.equal(error.statusCode, 404);
 });
 
-test('client controller: Gemini failure gives an honest 502, not a fabricated health result', async t => {
-  const x = await load(t, { failure: Object.assign(new Error('Gemini unavailable'), { code: 'PROVIDER_UNAVAILABLE' }) });
+test('client controller: AI failure gives an honest 502, not a fabricated health result', async t => {
+  const x = await load(t, { failure: Object.assign(new Error('AI unavailable'), { code: 'PROVIDER_UNAVAILABLE' }) });
   const req: any = { user: { id: 'authenticated-user' }, params: { id: 'contract-1' } };
   let error: any;
   await x.clientController.clientRequestsController.getProjectHealthAnalysis(req, x.res, (e: any) => { error = e; });
-  assert.equal(error, undefined, 'a non-AppError Gemini failure must be handled here, not passed to next()');
+  assert.equal(error, undefined, 'a non-AppError AI failure must be handled here, not passed to next()');
   assert.equal(x.res.statusCode, 502);
   assert.equal(x.res.body.success, false);
   assert.match(x.res.body.message, /تعذر إجراء تحليل صحة المشروع/);
 });
 
-test('provider controller: Gemini failure gives an honest 502 too', async t => {
-  const x = await load(t, { failure: Object.assign(new Error('Gemini unavailable'), { code: 'PROVIDER_UNAVAILABLE' }) });
+test('provider controller: AI failure gives an honest 502 too', async t => {
+  const x = await load(t, { failure: Object.assign(new Error('AI unavailable'), { code: 'PROVIDER_UNAVAILABLE' }) });
   const req: any = { user: { id: 'authenticated-user' }, params: { id: 'contract-1' } };
   let error: any;
   await x.providerController.getProjectHealthAnalysis(req, x.res, (e: any) => { error = e; });
@@ -206,4 +206,19 @@ test('neither health-analysis route registration mentions decision/status/escrow
   for (const line of [healthLine(clientSource), healthLine(providerSource)]) {
     assert.doesNotMatch(line, /reviewDelivery|submitDelivery|escrow|Escrow|resolveDispute/i);
   }
+});
+
+test('disabled AI feature: the unavailable AppError (503, AI_FEATURE_UNAVAILABLE) is forwarded to the global error handler by both controllers', async t => {
+  const { aiFeatureUnavailableError } = await import('../services/ai/ai-feature-unavailable');
+  const x = await load(t, { failure: aiFeatureUnavailableError() });
+  const req: any = { user: { id: 'authenticated-user' }, params: { id: 'contract-1', stageId: 'stage-1' } };
+  let clientError: any;
+  await x.clientController.clientRequestsController.getProjectHealthAnalysis(req, x.res, (e: any) => { clientError = e; });
+  assert.equal(clientError.statusCode, 503);
+  assert.equal(clientError.code, 'AI_FEATURE_UNAVAILABLE');
+  let providerError: any;
+  await x.providerController.getProjectHealthAnalysis(req, x.res, (e: any) => { providerError = e; });
+  assert.equal(providerError.statusCode, 503);
+  assert.equal(providerError.code, 'AI_FEATURE_UNAVAILABLE');
+  assert.equal(x.res.body, null, 'no fabricated body is written');
 });

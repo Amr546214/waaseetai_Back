@@ -4,7 +4,7 @@ import { AccountType, Prisma, ProposalStatus } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 import { aiProposalService } from './ai-proposal.service';
 import { getIO } from '../socket';
-import { GeminiProviderError } from './ai/gemini/gemini.errors';
+import { WaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
 import { logger } from '../config/logger';
 
 export interface GetProviderOffersFiltersDto {
@@ -183,7 +183,7 @@ export class ProposalService {
 
 		// 4. Run instant AI Quality & Match Evaluation before creation.
 		// Proposal submission is a real business action and must not depend on
-		// Gemini's availability — a provider/model failure here is logged
+		// the AI service's availability — a provider/model failure here is logged
 		// (sanitized) and the submission proceeds with honest null AI fields,
 		// never a fabricated score/tag/feedback.
 		let aiMatchScore: number | null = null;
@@ -209,10 +209,12 @@ export class ProposalService {
 				aiMatchScore = Math.round((aiEvaluation.qualityScore * 0.6) + (budgetFactor * 0.4));
 			}
 			aiQualityTag = aiEvaluation.qualityTag;
-			aiPriceTag = aiEvaluation.priceAudit?.priceTag || 'مناسب';
+			// WaseetAI's priceAudit is not grounded in this project's real budget
+			// and is not used; no price tag is fabricated.
+			aiPriceTag = null;
 			aiFeedback = JSON.parse(JSON.stringify(aiEvaluation));
 		} catch (error) {
-			const code = error instanceof GeminiProviderError ? error.code : 'APPLICATION_VALIDATION_ERROR';
+			const code = error instanceof WaseetAiError ? error.code : 'APPLICATION_VALIDATION_ERROR';
 			logger.warn(`[ProposalService] AI evaluation unavailable for proposal on project ${projectId}: ${code}`);
 		}
 

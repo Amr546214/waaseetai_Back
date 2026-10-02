@@ -4,7 +4,7 @@ import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
 import { emailService } from './email.service';
 import { deriveProviderProgression } from '../utils/progression-calculators';
-import { geminiClient } from './ai/gemini/gemini.client';
+import { aiFeatureUnavailableError } from './ai/ai-feature-unavailable';
 import { createCommissionsForStageReleaseEvent } from './affiliate-commission.service';
 
 const PROJECT_COMPLETION_POINTS = 50;
@@ -58,69 +58,18 @@ export interface DeliveryAiReview {
     stageRequirements: boolean;
     // Always false in this v1 — file content is never fetched/inspected,
     // only filename/type/size metadata. Set exclusively by application
-    // code below; Gemini's output is never trusted for this field (the
-    // schema/validator don't even expose it to the model).
+    // code below.
     attachmentContent: boolean;
   };
 }
 
-const DELIVERY_AI_MAX_SUMMARY_LENGTH = 900;
-const DELIVERY_AI_MAX_ARRAY_ITEMS = 6;
-const DELIVERY_AI_MAX_ARRAY_ITEM_LENGTH = 300;
+export const DELIVERY_AI_REVIEW_UNAVAILABLE_MESSAGE =
+  'المراجعة الذكية للتسليم متوقفة مؤقتاً حتى يكتمل ربطها بخدمة WaseetAI. يمكنك متابعة مراجعة التسليم واتخاذ القرار يدوياً كالمعتاد.';
+export const PROJECT_HEALTH_UNAVAILABLE_MESSAGE =
+  'تحليل صحة المشروع الذكي متوقف مؤقتاً حتى يكتمل ربطه بخدمة WaseetAI. يمكنك متابعة المشروع بشكل طبيعي.';
 
-const DELIVERY_AI_REVIEW_SCHEMA = {
-  type: 'object',
-  properties: {
-    summary: { type: 'string', description: 'ملخص محايد وغير حاسم لمدى توافق التسليم مع متطلبات المرحلة، دون إصدار أي قرار قبول أو رفض.' },
-    alignedPoints: { type: 'array', items: { type: 'string' }, description: 'نقاط في التسليم تبدو متوافقة مع المتطلبات المذكورة صراحة.' },
-    potentialGaps: { type: 'array', items: { type: 'string' }, description: 'نقاط قد تكون غير متوافقة أو غير واضحة وتحتاج توضيحاً، دون الجزم بوجود خطأ.' },
-    questionsForReviewer: { type: 'array', items: { type: 'string' }, description: 'أسئلة مقترحة يمكن للمستخدم (العميل أو مقدم الخدمة) طرحها قبل اتخاذ قراره النهائي.' }
-  },
-  required: ['summary', 'alignedPoints', 'potentialGaps', 'questionsForReviewer']
-};
-
-const DELIVERY_AI_REVIEW_SYSTEM_PROMPT = `أنت مساعد استشاري يحلّل تسليم مرحلة عمل لمستخدم بشري (عميل أو مقدم خدمة) مسؤول عن اتخاذ القرار النهائي في منصة وسيط. دورك استشاري بحت ولا تملك أي صلاحية قرار.
-ممنوع تماماً: الموافقة على التسليم أو رفضه، إصدار حكم نهائي (verdict/pass/fail)، التوصية بالإفراج عن أي دفعة أو حجزها أو استرداد أي مبلغ، تحديد نسبة خطأ أو مسؤولية، أو التعبير عن "ثقة" بالقبول أو الرفض. القرار النهائي دائماً للمستخدم البشري عبر مسار القبول/طلب التعديل القائم فعلياً في المنصة؛ أنت لا تشارك في اتخاذه إطلاقاً ولا تلمّح إلى ما ينبغي فعله بالمال أو بحالة المشروع.
-أسماء ونوع وحجم الملفات المرفقة أدناه (إن وُجدت) بيانات وصفية فقط — لم يتم فتح أو فحص محتوى أي ملف فعلياً، فلا تدّعِ الاطلاع على محتوى أي مرفق مهما بدا اسمه دالاً على ذلك.
-استخدم فقط المعلومات المذكورة صراحة أدناه من بيانات المشروع والمرحلة ونص التسليم. إن كانت متطلبات المرحلة غير واضحة أو ناقصة، اذكر ذلك بصراحة كنقطة غامضة أو كسؤال بدل اختراع متطلبات غير مذكورة.
-أجب بالعربية الفصحى الواضحة والمختصرة، وقدّم تحليلاً متوازناً وغير حاسم.`;
-
-// Field names a genuinely advisory-only response must never contain — any of
-// these appearing means Gemini attempted to issue a binding decision, and
-// the whole response is rejected rather than sanitized.
-const FORBIDDEN_DELIVERY_DECISION_KEYS = [
-  'approved', 'rejected', 'pass', 'fail', 'verdict', 'decision', 'accept', 'reject',
-  'releaseFunds', 'releasePayment', 'refund', 'refundAmount', 'paymentRecommendation',
-  'faultPercentage', 'fraudScore', 'confidenceOfApproval', 'confidence', 'recommendedResolution',
-  'winner', 'loser', 'status', 'deliveryStatus', 'projectStatus'
-];
-
-function isNonEmptyBoundedDeliveryString(value: unknown, maxLength: number): value is string {
-  return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength;
-}
-
-function isBoundedDeliveryStringArray(value: unknown): value is string[] {
-  if (!Array.isArray(value) || value.length > DELIVERY_AI_MAX_ARRAY_ITEMS) return false;
-  return value.every(item => typeof item === 'string' && item.length <= DELIVERY_AI_MAX_ARRAY_ITEM_LENGTH);
-}
-
-// Only validates the 4 Gemini-generated fields — reviewedInputs is never
-// part of the schema Gemini answers, so there is nothing for this validator
-// to check or trust on that front; it is always assembled separately by
-// application code in getDeliveryAiReview() below.
-function isValidDeliveryAiReviewContent(value: unknown): value is Omit<DeliveryAiReview, 'reviewedInputs'> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const v = value as Record<string, unknown>;
-  if (Object.keys(v).length !== 4) return false;
-  if (FORBIDDEN_DELIVERY_DECISION_KEYS.some(key => key in v)) return false;
-  if (!isNonEmptyBoundedDeliveryString(v.summary, DELIVERY_AI_MAX_SUMMARY_LENGTH)) return false;
-  if (!isBoundedDeliveryStringArray(v.alignedPoints)) return false;
-  if (!isBoundedDeliveryStringArray(v.potentialGaps)) return false;
-  if (!isBoundedDeliveryStringArray(v.questionsForReviewer)) return false;
-  return true;
-}
-
-// Batch 8 — advisory-only Gemini project health analysis. Replaces the
+// Batch 8 — advisory-only project health analysis (currently DISABLED, see
+// getProjectHealthAnalysis below). Replaces the
 // permanent aiInsights placeholder (confidence:0/riskLevel:'غير محسوبة'/
 // bullets:[]) that getProjectProgress() has always returned. This single
 // capability covers Contract Monitoring, Project Health, Predictive Delay
@@ -135,7 +84,7 @@ export interface ProjectHealthAnalysis {
   riskLevelKey: 'LOW' | 'MEDIUM' | 'HIGH' | 'UNKNOWN';
   healthRating: string;
   bullets: string[];
-  // Real, deterministic (never Gemini-derived): positive = ahead of the
+  // Real, deterministic: positive = ahead of the
   // planned schedule, negative = behind. null only in the "not enough data
   // yet" short-circuit below.
   earlyDays: number | null;
@@ -143,62 +92,6 @@ export interface ProjectHealthAnalysis {
   // concept here) — always null. Preserved only so the existing frontend
   // aiInsights contract (and its "—" fallback rendering) needs no change.
   matchPercentage: null;
-}
-
-const PROJECT_HEALTH_MAX_TEXT_LENGTH = 400;
-const PROJECT_HEALTH_MAX_BULLETS = 5;
-const PROJECT_HEALTH_MAX_BULLET_LENGTH = 240;
-const PROJECT_HEALTH_RISK_KEYS = ['LOW', 'MEDIUM', 'HIGH'] as const;
-const PROJECT_HEALTH_RISK_LABELS: Record<string, string> = {
-  LOW: 'منخفضة', MEDIUM: 'متوسطة', HIGH: 'مرتفعة'
-};
-
-const PROJECT_HEALTH_SCHEMA = {
-  type: 'object',
-  properties: {
-    riskLevelKey: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'], description: 'تصنيف مستوى المخاطرة العام للمشروع بناءً على بيانات الجدولة والمراحل المذكورة فقط.' },
-    healthRating: { type: 'string', description: 'عبارة عربية قصيرة (جملة واحدة كحد أقصى) تلخّص الحالة العامة للمشروع، دون إصدار أي قرار أو توصية مالية أو تعاقدية.' },
-    confidence: { type: 'number', description: 'مستوى ثقة النموذج في هذا التقييم الاستشاري، رقم من 0 إلى 100.' },
-    bullets: { type: 'array', items: { type: 'string' }, description: 'حتى 5 ملاحظات موجزة توضح أسباب التقييم (مثل التزام الجدول، عدد طلبات التعديل، وجود نزاعات)، بصياغة وصفية غير حاسمة.' }
-  },
-  required: ['riskLevelKey', 'healthRating', 'confidence', 'bullets']
-};
-
-const PROJECT_HEALTH_SYSTEM_PROMPT = `أنت مساعد استشاري يحلّل الحالة العامة لمشروع نشط على منصة وسيط، بالاعتماد فقط على بيانات جدولة ومراحل وتسليمات حقيقية مذكورة أدناه. دورك استشاري بحت ولا تملك أي صلاحية قرار من أي نوع.
-ممنوع تماماً وبأي صياغة: الإفراج عن أي دفعة أو حجزها أو استردادها، إنهاء أو إلغاء العقد، الموافقة على أي تسليم أو رفضه، حل أي نزاع أو تحديد الطرف المسؤول عنه، تعليق أي حساب، أو تغيير حالة المشروع أو العقد أو الضمان المالي. اتخاذ أي من هذه القرارات يبقى دائماً للأطراف البشرية عبر المسارات القائمة فعلياً في المنصة؛ أنت لا تشارك فيها إطلاقاً ولا تلمّح إلى ما ينبغي فعله بالمال أو بحالة المشروع أو العقد.
-استخدم فقط الحقائق المذكورة صراحة أدناه. لا تخترع بيانات غير مذكورة (مثل أسماء أو تفاصيل غير واردة). إن كانت البيانات غير كافية لتقييم واضح، اذكر ذلك صراحة في الملاحظات بدل افتراض نتيجة إيجابية.
-أجب بالعربية الفصحى الواضحة والمختصرة.`;
-
-// Mirrors FORBIDDEN_DELIVERY_DECISION_KEYS above, expanded with the
-// contract/escrow/dispute/account-level actions this capability must also
-// never attempt (Batch 8 safety requirement).
-const FORBIDDEN_PROJECT_HEALTH_KEYS = [
-  'approved', 'rejected', 'pass', 'fail', 'verdict', 'decision', 'accept', 'reject',
-  'releaseFunds', 'releasePayment', 'refund', 'refundAmount', 'paymentRecommendation',
-  'faultPercentage', 'fraudScore', 'confidenceOfApproval', 'recommendedResolution',
-  'winner', 'loser', 'status', 'deliveryStatus', 'projectStatus', 'contractStatus',
-  'escrowStatus', 'terminate', 'terminateContract', 'cancelContract', 'suspend',
-  'suspendAccount', 'resolveDispute', 'disputeResolution', 'assignFault', 'faultAssignment'
-];
-
-interface ProjectHealthGeminiContent {
-  riskLevelKey: 'LOW' | 'MEDIUM' | 'HIGH';
-  healthRating: string;
-  confidence: number;
-  bullets: string[];
-}
-
-function isValidProjectHealthContent(value: unknown): value is ProjectHealthGeminiContent {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const v = value as Record<string, unknown>;
-  if (Object.keys(v).length !== 4) return false;
-  if (FORBIDDEN_PROJECT_HEALTH_KEYS.some(key => key in v)) return false;
-  if (typeof v.riskLevelKey !== 'string' || !(PROJECT_HEALTH_RISK_KEYS as readonly string[]).includes(v.riskLevelKey)) return false;
-  if (typeof v.healthRating !== 'string' || !v.healthRating.trim() || v.healthRating.length > PROJECT_HEALTH_MAX_TEXT_LENGTH) return false;
-  if (typeof v.confidence !== 'number' || !Number.isFinite(v.confidence) || v.confidence < 0 || v.confidence > 100) return false;
-  if (!Array.isArray(v.bullets) || v.bullets.length === 0 || v.bullets.length > PROJECT_HEALTH_MAX_BULLETS) return false;
-  if (!v.bullets.every(b => typeof b === 'string' && b.trim().length > 0 && b.length <= PROJECT_HEALTH_MAX_BULLET_LENGTH)) return false;
-  return true;
 }
 
 export class ProjectProgressService {
@@ -691,224 +584,21 @@ export class ProjectProgressService {
   }
 
   /**
-   * Batch 5 — advisory-only Gemini review of a single stage delivery, for
-   * whichever of the two real parties (the contract's client or its
-   * provider) is asking. Read-only: zero DB writes, and nothing here can
-   * approve/reject the delivery, change ProjectStage/Project status, or
-   * touch Escrow — reviewDelivery() above remains the only path that can do
-   * any of that. The client only ever sends the contract/project key and
-   * stageId; every fact in the prompt is fetched here from the DB.
+   * AI review of a stage delivery is DISABLED: all AI must run exclusively
+   * through WaseetAI and no documented contract exists for it. Throws the
+   * AI_FEATURE_UNAVAILABLE 503 without any database access or AI call; the
+   * manual approve / request-revision delivery workflow is unaffected.
    */
-  async getDeliveryAiReview(userId: string, key: string, stageId: string): Promise<DeliveryAiReview> {
-    const contract = await prisma.contract.findFirst({
-      where: { OR: [{ id: key }, { projectId: key }] },
-      select: {
-        id: true, clientId: true, providerId: true,
-        project: { select: { title: true, description: true, requirements: true } },
-        amendments: {
-          where: { status: AmendmentStatus.APPROVED },
-          orderBy: { respondedAt: 'desc' },
-          take: 5,
-          select: { type: true, title: true, description: true, budgetDelta: true, durationDeltaDays: true }
-        }
-      }
-    });
-    if (!contract) throw new AppError('العقد غير موجود', 404);
-    if (contract.clientId !== userId && contract.providerId !== userId) throw new AppError('لا تملك صلاحية الاطلاع على هذا التسليم', 403);
-
-    const stage = await prisma.projectStage.findFirst({
-      where: { id: stageId, contractId: contract.id },
-      include: { deliveries: { orderBy: { submittedAt: 'desc' }, take: 1 } }
-    });
-    if (!stage) throw new AppError('المرحلة غير موجودة', 404);
-    const delivery = stage.deliveries[0];
-    if (!delivery) throw new AppError('لا يوجد تسليم لهذه المرحلة بعد', 404);
-
-    const cap = (text: string | null | undefined, max = 1200) => (text && text.trim() ? text.trim().slice(0, max) : 'غير متوفر');
-
-    const promptLines: string[] = [
-      `عنوان المشروع: ${cap(contract.project.title, 300)}`,
-      `وصف المشروع: ${cap(contract.project.description)}`,
-    ];
-    if (contract.project.requirements?.length) {
-      promptLines.push(`متطلبات المشروع المعلنة: ${contract.project.requirements.slice(0, 15).map(r => cap(r, 200)).join(' | ')}`);
-    }
-    promptLines.push(
-      `عنوان المرحلة رقم ${stage.stepOrder}: ${cap(stage.title, 200)}`,
-      `وصف/متطلبات المرحلة: ${cap(stage.description)}`,
-      `نص التسليم المُرسَل من مقدم الخدمة: ${cap(delivery.note)}`,
-      `تاريخ الإرسال: ${delivery.submittedAt.toISOString()}`
-    );
-
-    const fileEntries = delivery.files.slice(0, 10).map(normalizeFileEntry);
-    if (fileEntries.length) {
-      promptLines.push(
-        `ملفات مرفقة (بيانات وصفية فقط — اسم/نوع، لم يُفحص المحتوى): ${fileEntries.map(f => `${cap(f.name, 150)}${f.type ? ` (${f.type})` : ''}`).join(' | ')}`
-      );
-    } else {
-      promptLines.push('لا توجد ملفات مرفقة مع هذا التسليم.');
-    }
-
-    if (contract.amendments.length) {
-      promptLines.push('تعديلات معتمدة على العقد (على مستوى العقد، وليست بالضرورة خاصة بهذه المرحلة تحديداً):');
-      for (const amendment of contract.amendments) {
-        promptLines.push(`- [${amendment.type}] ${cap(amendment.title, 150)}: ${cap(amendment.description, 300)}`);
-      }
-    }
-
-    let content: Omit<DeliveryAiReview, 'reviewedInputs'>;
-    try {
-      const result = await geminiClient.generateStructured<Omit<DeliveryAiReview, 'reviewedInputs'>>(promptLines.join('\n'), {
-        systemInstruction: DELIVERY_AI_REVIEW_SYSTEM_PROMPT,
-        responseSchema: DELIVERY_AI_REVIEW_SCHEMA,
-        validate: isValidDeliveryAiReviewContent,
-        temperature: 0.3,
-        // Live-Gemini testing found 700 truncated this 4-field response
-        // (a bounded summary plus 3 bounded string arrays — see the schema/
-        // validator above) before it reached the honest validator, once
-        // gemini-flash-latest's variable reasoning-token overhead is
-        // accounted for. Raised with headroom for the full contract.
-        maxOutputTokens: 2000,
-        timeoutMs: 25 * 1000
-      });
-      content = result.data;
-    } catch (error: any) {
-      console.error('[ProjectProgressService] Delivery AI review generation failed:', error?.code || error?.message);
-      throw error;
-    }
-
-    return {
-      ...content,
-      reviewedInputs: {
-        deliveryText: Boolean(delivery.note?.trim()),
-        stageRequirements: Boolean(stage.description?.trim() || contract.project.description?.trim() || contract.project.requirements?.length),
-        attachmentContent: false
-      }
-    };
+  async getDeliveryAiReview(_userId: string, _key: string, _stageId: string): Promise<DeliveryAiReview> {
+    throw aiFeatureUnavailableError(DELIVERY_AI_REVIEW_UNAVAILABLE_MESSAGE);
   }
 
   /**
-   * Batch 8 — advisory-only Gemini project health analysis, on demand, for
-   * whichever of the two real parties (the contract's client or its
-   * provider) is asking. Read-only: zero DB writes, and nothing here can
-   * change any status or touch escrow — see the forbidden-keys list and
-   * system prompt above. No client/provider names/emails are sent to
-   * Gemini, only project/stage titles and real numeric schedule signals.
+   * AI project health analysis is DISABLED (same reason as above): no
+   * database access, no AI call, no fabricated risk level or percentages.
    */
-  async getProjectHealthAnalysis(userId: string, key: string): Promise<ProjectHealthAnalysis> {
-    const contract = await prisma.contract.findFirst({
-      where: { OR: [{ id: key }, { projectId: key }] },
-      select: {
-        id: true, clientId: true, providerId: true, projectId: true,
-        durationDays: true, signedAt: true, createdAt: true,
-        project: { select: { title: true } },
-        amendments: { where: { status: AmendmentStatus.APPROVED }, select: { id: true } }
-      }
-    });
-    if (!contract) throw new AppError('العقد غير موجود', 404);
-    if (contract.clientId !== userId && contract.providerId !== userId) throw new AppError('لا تملك صلاحية الاطلاع على هذا المشروع', 403);
-
-    const stages = await prisma.projectStage.findMany({
-      where: { contractId: contract.id },
-      orderBy: { stepOrder: 'asc' },
-      select: { title: true, days: true, startedAt: true, status: true, deliveries: { select: { status: true } } }
-    });
-
-    // Nothing has started yet — genuinely nothing to analyze. Honest
-    // "not enough data" result, no Gemini call at all (mirrors the
-    // ZERO_AI_METRICS short-circuit pattern already used in
-    // provider-profile.service.ts::generateAiMetrics).
-    const hasAnyProgressSignal = stages.some(s => s.status !== ProjectStageStatus.PENDING || s.deliveries.length > 0);
-    if (!hasAnyProgressSignal) {
-      return {
-        confidence: 0, riskLevel: 'غير محسوبة', riskLevelKey: 'UNKNOWN',
-        healthRating: 'بانتظار بيانات كافية', bullets: [], earlyDays: null, matchPercentage: null
-      };
-    }
-
-    const disputes = await prisma.dispute.findMany({
-      where: { projectId: contract.projectId },
-      select: { status: true }
-    });
-
-    const totalStages = stages.length;
-    const completedStages = stages.filter(s => s.status === ProjectStageStatus.APPROVED).length;
-    const revisionRequestCount = stages.reduce(
-      (sum, s) => sum + s.deliveries.filter(d => d.status === StageDeliveryStatus.REVISION_REQUESTED).length, 0
-    );
-    const openDisputeCount = disputes.filter(d => d.status === 'OPEN' || d.status === 'UNDER_REVIEW').length;
-
-    const elapsedDays = Math.max(0, Math.floor((Date.now() - (contract.signedAt || contract.createdAt).getTime()) / 86400000));
-    const plannedTotalDays = Math.max(1, contract.durationDays);
-    const expectedProgressRatio = Math.min(1, elapsedDays / plannedTotalDays);
-    const actualProgressRatio = totalStages > 0 ? completedStages / totalStages : 0;
-    // Real, deterministic — positive = ahead of schedule, negative = behind.
-    // Never sent to Gemini as something to decide on; Gemini's schema does
-    // not even expose a field for it (see PROJECT_HEALTH_SCHEMA above).
-    const earlyDays = Math.round((actualProgressRatio - expectedProgressRatio) * plannedTotalDays);
-
-    const currentStage = stages.find(s => s.status === ProjectStageStatus.IN_PROGRESS);
-    let currentStageOverdueDays: number | null = null;
-    if (currentStage?.startedAt) {
-      const stageElapsed = Math.floor((Date.now() - currentStage.startedAt.getTime()) / 86400000);
-      currentStageOverdueDays = Math.max(0, stageElapsed - currentStage.days);
-    }
-
-    const cap = (text: string | null | undefined, max = 300) => (text && text.trim() ? text.trim().slice(0, max) : 'غير متوفر');
-
-    const promptLines: string[] = [
-      `عنوان المشروع: ${cap(contract.project.title, 200)}`,
-      `المدة الإجمالية المخطط لها: ${plannedTotalDays} يوم`,
-      `الوقت المنقضي منذ توقيع العقد: ${elapsedDays} يوم`,
-      `عدد المراحل الكلي: ${totalStages}، عدد المراحل المكتملة والمعتمدة: ${completedStages}`,
-      `عدد طلبات التعديل (إعادة تسليم) على كل المراحل حتى الآن: ${revisionRequestCount}`,
-      `عدد النزاعات المفتوحة أو قيد المراجعة على هذا المشروع: ${openDisputeCount}`,
-      `عدد التعديلات المعتمدة على العقد: ${contract.amendments.length}`
-    ];
-    if (currentStage) {
-      promptLines.push(`المرحلة الحالية قيد التنفيذ: "${cap(currentStage.title, 150)}"، المدة المخطط لها لهذه المرحلة ${currentStage.days} يوم.`);
-      promptLines.push(
-        currentStageOverdueDays && currentStageOverdueDays > 0
-          ? `هذه المرحلة تجاوزت مدتها المخطط لها بـ ${currentStageOverdueDays} يوم حتى الآن.`
-          : 'هذه المرحلة ضمن مدتها المخطط لها حتى الآن.'
-      );
-    } else {
-      promptLines.push('لا توجد مرحلة قيد التنفيذ حالياً.');
-    }
-
-    let content: ProjectHealthGeminiContent;
-    try {
-      const result = await geminiClient.generateStructured<ProjectHealthGeminiContent>(promptLines.join('\n'), {
-        systemInstruction: PROJECT_HEALTH_SYSTEM_PROMPT,
-        responseSchema: PROJECT_HEALTH_SCHEMA,
-        validate: isValidProjectHealthContent,
-        temperature: 0.3,
-        // Was 500 — below even the validator-allowed visible answer
-        // (healthRating ≤400 chars + up to 5 Arabic bullets ≤240 chars each
-        // ≈ 1,600 Arabic chars ≈ 650–700 tokens plus JSON keys), before
-        // gemini-flash-latest's reasoning tokens, which count against this
-        // same limit. Same-shaped calls in this codebase (assessment feedback
-        // truncated live at 500, delivery review at 700) confirm the pattern.
-        // A truncated response is now rejected explicitly by GeminiClient
-        // (finishReason MAX_TOKENS) and still surfaces as the honest 502.
-        maxOutputTokens: 1500,
-        timeoutMs: 25 * 1000
-      });
-      content = result.data;
-    } catch (error: any) {
-      console.error('[ProjectProgressService] Project health analysis generation failed:', error?.code || error?.message);
-      throw error;
-    }
-
-    return {
-      confidence: content.confidence,
-      riskLevel: PROJECT_HEALTH_RISK_LABELS[content.riskLevelKey] || 'غير محددة',
-      riskLevelKey: content.riskLevelKey,
-      healthRating: content.healthRating,
-      bullets: content.bullets,
-      earlyDays,
-      matchPercentage: null
-    };
+  async getProjectHealthAnalysis(_userId: string, _key: string): Promise<ProjectHealthAnalysis> {
+    throw aiFeatureUnavailableError(PROJECT_HEALTH_UNAVAILABLE_MESSAGE);
   }
 }
 
