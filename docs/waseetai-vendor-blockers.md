@@ -115,6 +115,19 @@ We will not parse this by guesswork.
 **Change needed:** return **one** plain-text bio (≤ a `maxLength` we send, e.g. 500) in `suggestedBio` with no headings, intro, tips or platform names; or a structured `suggestions:[string]` of exactly the requested count. Never mention other platforms; do not invent achievements, client counts or projects.
 **Acceptance:** 10 consecutive calls with different inputs return a single paragraph ≤ `maxLength`, contain only facts present in the input (years, specialties, current bio), and no markdown.
 
+**Re-verified 2026-10-02 (8 new synthetic samples: 8 different specialties, 0–15 years, with/without `currentBio`, from the dev container).**
+| Check | Result (8 samples) |
+|---|---|
+| Response shape | always `{suggestedBio: string}` — one long string, never a single bio |
+| Number of options | **3** in 8/8 |
+| Markdown (`**`, `###`, `>`, `---`) | 8/8 |
+| "Tips" section appended | 8/8 |
+| Names a competitor platform ("مستقل") — in the intro, tips or options | **5/8** (including a sample that asked only for a bio, with no platform given) |
+| Claims of achievements not in the input ("نجحت في تنفيذ…") | 2/8 |
+| Length | 1,065 – 1,860 characters (our field cap is 500) |
+Also: a probe of 20 candidate request keys (`maxLength`, `tone`, `format`, `count`, `platform`, `instructions`, `language`, `style`, …) found **none accepted**, so we cannot steer the output from our side; the only way to use it would be to parse free-form markdown and strip platform names/tips by guesswork, which can leave a competitor name or an invented claim in a user's public bio.
+**Decision:** feature stays OFF. `POST /api/provider/profile/suggest-bio` answers 503 (`AI_FEATURE_UNAVAILABLE`); manual bio editing is untouched. Cleaning on our side is not safe. The contract in this section (single plain-text bio, `maxLength`, no platform names, no invented facts, 10-call acceptance) is what we need from WaseetAI.
+
 ### 2.8 `POST /v1/ai/portfolio-review` — no sample content
 Accepted keys: `providerSpecialtyId` only. Response invents the portfolio (*"samples fit the programming specialty 'ps-1'"*).
 **Change needed:** `specialtyName` and `samples:[{title,description,technologies[],projectUrl,githubUrl,attachments:[{name,type}]}]`.
