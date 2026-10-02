@@ -353,8 +353,9 @@ export class AdminUsersService {
         last: formatRelativeTime(u.lastActiveAt),
         lastActiveAt: u.lastActiveAt,
         projects: u.completedProjectsCount || 0,
-        risk: (u.aiRiskLevel || 'LOW').toLowerCase(),
-        aiRiskScore: u.aiRiskScore || 10,
+        // AI Cleanup Batch 3: `risk` / `aiRiskScore` removed — they were
+        // fabricated fallbacks (aiRiskLevel || 'LOW', aiRiskScore || 10) over
+        // fields no code path ever writes. The frontend no longer reads them.
         aiSuspiciousNotes: u.aiSuspiciousNotes,
         av,
         avBg,
@@ -454,8 +455,10 @@ export class AdminUsersService {
       'Phone Number',
       'Account Type',
       'Status',
-      'Risk Level',
-      'Risk Score',
+      // AI Cleanup Batch 3: "Risk Level" / "Risk Score" columns removed.
+      // User.aiRiskLevel / aiRiskScore are never written by any code path —
+      // every row carried the schema defaults (LOW / 10), which read as a
+      // real risk assessment. No risk engine exists, so no column is emitted.
       'Total GMV (SAR)',
       'Completed Projects',
       'Rating Average',
@@ -479,8 +482,6 @@ export class AdminUsersService {
           phoneNumber: true,
           accountType: true,
           status: true,
-          aiRiskLevel: true,
-          aiRiskScore: true,
           totalGmvAmount: true,
           completedProjectsCount: true,
           ratingAverage: true,
@@ -504,8 +505,6 @@ export class AdminUsersService {
           `"${u.phoneNumber || ''}"`,
           `"${u.accountType}"`,
           `"${u.status}"`,
-          `"${u.aiRiskLevel}"`,
-          u.aiRiskScore,
           Number(u.totalGmvAmount || 0).toFixed(2),
           u.completedProjectsCount,
           u.ratingAverage || 0,
