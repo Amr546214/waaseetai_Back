@@ -426,8 +426,31 @@ test('streamAssessmentQuestions: a malformed question event fails loudly', async
 test('matrix endpoints probed as unusable stay CONTRACT_UNVERIFIED and never touch the network', async () => {
   let called = false;
   const client = new WaseetAiClient((async () => { called = true; throw new Error('no'); }) as any, config());
-  for (const id of ['AI-13', 'AI-14', 'AI-15', 'AI-18', 'AI-19', 'AI-11', 'AI-12'] as const) {
+  for (const id of ['AI-13', 'AI-14', 'AI-15', 'AI-18', 'AI-19', 'AI-11'] as const) {
     await assert.rejects(() => client.callUnverified(id), (e: any) => e.code === WaseetAiErrorCode.CONTRACT_UNVERIFIED);
   }
   assert.equal(called, false);
+});
+
+test('auditBusinessModel: POSTs the verified body and validates the advisory verdict shape', async () => {
+  const calls: Recorded[] = [];
+  const verdict = { isApproved: true, score: 88, summary: 'جيد', strengths: ['أ'], issues: [], recommendations: ['ب'] };
+  const client = new WaseetAiClient(jsonFetch(200, { success: true, data: verdict }, calls), config());
+  const out = await client.auditBusinessModel({ title: 't', description: 'd', category: 'التصميم', pricing: { amount: 120 } });
+  assert.deepEqual(out, verdict);
+  assert.equal(calls[0].url, 'https://waseet-ai.test/v1/ai/business-models/audit');
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)).pricing, { amount: 120 });
+  const bad = new WaseetAiClient(jsonFetch(200, { success: true, data: { ...verdict, score: 150 } }), config());
+  await assert.rejects(() => bad.auditBusinessModel({ title: 't', description: 'd', category: 'c', pricing: { amount: 1 } }), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
+});
+
+test('enrichProposal: POSTs milestones and validates the verified response', async () => {
+  const calls: Recorded[] = [];
+  const data = { id: 'prop-1', aiMatchScore: 88, aiQualityTag: 'Strong', aiPriceTag: 'Optimal', aiFeedback: { summary: 'ملخص' } };
+  const client = new WaseetAiClient(jsonFetch(200, { success: true, data }, calls), config());
+  const ms = [{ stepOrder: 1, title: 'أ', description: 'ب', days: 7, percentage: 100, amount: 500 }];
+  assert.deepEqual(await client.enrichProposal({ projectId: 'p', title: 't', message: 'm', totalPrice: 500, deliveryDays: 7, milestones: ms }), data);
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)).milestones, ms);
+  const bad = new WaseetAiClient(jsonFetch(200, { success: true, data: { ...data, aiFeedback: {} } }), config());
+  await assert.rejects(() => bad.enrichProposal({ projectId: 'p', title: 't', message: 'm', totalPrice: 1, deliveryDays: 1 }), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
 });

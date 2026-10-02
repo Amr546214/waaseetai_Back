@@ -12,6 +12,10 @@ import type {
   DisputeSummaryResponse,
   HelpChatRequest,
   AssessmentStreamRequest,
+  BusinessModelAuditRequest,
+  BusinessModelAuditResponse,
+  EnrichProposalRequest,
+  EnrichProposalResponse,
   MilestonesRequest,
   MilestonesResponse,
   PerformanceSummaryRequest,
@@ -75,7 +79,6 @@ export const UNVERIFIED_ENDPOINTS = {
   'AI-07': '/v1/ai/accreditation-review',
   'AI-09': '/v1/ai/onboarding-quizzes',
   'AI-11': '/v1/ai/proposals/audit/stream',
-  'AI-12': '/v1/ai/proposals/enrich',
   'AI-13': '/v1/ai/matching/projects-for-provider',
   'AI-14': '/v1/ai/project-fit',
   'AI-15': '/v1/ai/marketplace/recommendations',
@@ -84,7 +87,6 @@ export const UNVERIFIED_ENDPOINTS = {
   'AI-19': '/v1/ai/delivery-review',
   'AI-21-stream': '/v1/ai/help/stream',
   'AI2-01': '/v1/ai/business-models/re-audit',
-  'AI2-02': '/v1/ai/business-models/audit',
   'AI2-06': '/v1/ai/assessments/:id/status',
 } as const;
 export type UnverifiedEndpointId = keyof typeof UNVERIFIED_ENDPOINTS;
@@ -263,6 +265,24 @@ export class WaseetAiClient {
   /** AI2-07 — POST /v1/ai/assessments/stream (SSE: question + assessment_ready) */
   streamAssessmentQuestions(body: AssessmentStreamRequest, opts?: WaseetAiCallOptions): AsyncGenerator<WaseetAiStreamEvent, void, void> {
     return this.postStream('/v1/ai/assessments/stream', body, opts);
+  }
+
+  /** AI2-02 — POST /v1/ai/business-models/audit (advisory verdict) */
+  auditBusinessModel(body: BusinessModelAuditRequest, opts?: WaseetAiCallOptions): Promise<BusinessModelAuditResponse> {
+    return this.postJson('/v1/ai/business-models/audit', body, opts, (d) =>
+      isObject(d) && typeof d.isApproved === 'boolean' && typeof d.score === 'number' && d.score >= 0 && d.score <= 100 &&
+      typeof d.summary === 'string' && d.summary.trim().length > 0 &&
+      Array.isArray(d.strengths) && Array.isArray(d.issues) && Array.isArray(d.recommendations) &&
+      [d.strengths, d.issues, d.recommendations].every((a: unknown[]) => a.every((x) => typeof x === 'string')),
+    );
+  }
+
+  /** AI-12 — POST /v1/ai/proposals/enrich */
+  enrichProposal(body: EnrichProposalRequest, opts?: WaseetAiCallOptions): Promise<EnrichProposalResponse> {
+    return this.postJson('/v1/ai/proposals/enrich', body, opts, (d) =>
+      isObject(d) && typeof d.id === 'string' && typeof d.aiMatchScore === 'number' && typeof d.aiQualityTag === 'string' &&
+      typeof d.aiPriceTag === 'string' && isObject(d.aiFeedback) && typeof d.aiFeedback.summary === 'string',
+    );
   }
 
   // ── Documented SSE endpoints ──────────────────────────────────────────

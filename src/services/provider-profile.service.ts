@@ -265,7 +265,7 @@ export class ProviderProfileService {
 		}
 		if (!taxonomy.size) return { suggestedSkills: [] };
 		try {
-			const result = await waseetAiClient.suggestSkills({ providerId: userId, specialtyName });
+			const result = await waseetAiClient.suggestSkills({ providerId: userId, specialtyName, existingSkills: context.existingSkills });
 			const out: string[] = [];
 			const seen = new Set<string>();
 			for (const item of result.suggestedSkills) {

@@ -15,10 +15,15 @@ const upstream = (overrides: Partial<any> = {}) => ({
   ...overrides
 });
 
-async function load(t: TestContext, suggestProposal: (body: any) => Promise<any> = async () => upstream()) {
+const enriched = (o: any = {}) => ({ id: 'e1', aiMatchScore: 92, aiQualityTag: 'STRONG', aiPriceTag: 'FAIR', aiFeedback: { summary: ' ملخص ' }, ...o });
+
+async function load(t: TestContext, suggestProposal: (body: any) => Promise<any> = async () => upstream(), enrich: (body: any) => Promise<any> = async () => enriched()) {
   const calls: any[] = [];
   t.mock.module('./ai/waseet-ai/waseet-ai.client', {
-    namedExports: { waseetAiClient: { suggestProposal: async (body: any) => { calls.push(body); return suggestProposal(body); } } }
+    namedExports: { waseetAiClient: {
+      suggestProposal: async (body: any) => { calls.push(body); return suggestProposal(body); },
+      enrichProposal: async (body: any) => { calls.push(body); return enrich(body); }
+    } }
   });
   const { aiProposalService } = await import(`./ai-proposal.service.ts?fixture=${Date.now()}-${Math.random()}`);
   return Object.assign(aiProposalService, { calls });
@@ -93,3 +98,41 @@ test('ai-proposal.service has no direct Gemini usage', () => {
   const src = readFileSync(new URL('./ai-proposal.service.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /gemini\.client|geminiClient|generateStructured|generateStream/);
 });
+
+const ms = [{ stepOrder: 1, title: 'م1', description: 'وصف المرحلة', days: 3, percentage: 100, amount: 500 }];
+const input = (o: any = {}) => ({ projectId: ' p1 ', title: ' ع ', message: ' ر ', totalPrice: 500, deliveryDays: 3, milestones: ms, ...o });
+
+test('evaluate: sends real fields and milestones, drops price tag, maps score/tag/summary', async (t) => {
+  const svc = await load(t);
+  const r = await svc.evaluate(input());
+  assert.deepEqual(svc.calls, [{ projectId: 'p1', title: 'ع', message: 'ر', totalPrice: 500, deliveryDays: 3, milestones: ms }]);
+  assert.deepEqual(r, { qualityScore: 92, qualityTag: 'STRONG', summary: 'ملخص' });
+  assert.doesNotMatch(JSON.stringify(r), /FAIR|aiPriceTag/);
+});
+
+test('evaluate: milestones key omitted when there are none', async (t) => {
+  const svc = await load(t);
+  await svc.evaluate(input({ milestones: [] }));
+  assert.equal('milestones' in svc.calls[0], false);
+});
+
+test('evaluate: invalid input is a 400 without calling WaseetAI', async (t) => {
+  const svc = await load(t);
+  for (const bad of [{ title: ' ' }, { message: '' }, { projectId: '' }, { totalPrice: NaN }, { deliveryDays: Infinity }]) {
+    await assert.rejects(() => svc.evaluate(input(bad)), (e: any) => e.statusCode === 400);
+  }
+  assert.equal(svc.calls.length, 0);
+});
+
+test('evaluate: upstream failure -> 503 without upstream text', async (t) => {
+  const SECRET = 'UP-SECRET';
+  const svc = await load(t, undefined, async () => { throw new WaseetAiError(WaseetAiErrorCode.PROVIDER_UNAVAILABLE, SECRET, { status: 502 }); });
+  await assert.rejects(() => svc.evaluate(input()), (e: any) => e.statusCode === 503 && !String(e.message).includes(SECRET));
+});
+
+for (const bad of [{ aiMatchScore: 101 }, { aiMatchScore: -1 }, { aiMatchScore: NaN }, { aiMatchScore: '9' }, { aiQualityTag: '' }, { aiFeedback: {} }, { aiFeedback: undefined }]) {
+  test(`evaluate: unusable response ${JSON.stringify(bad)} -> 503`, async (t) => {
+    const svc = await load(t, undefined, async () => enriched(bad));
+    await assert.rejects(() => svc.evaluate(input()), (e: any) => e.statusCode === 503);
+  });
+}

@@ -1,193 +1,170 @@
 # WaseetAI — blocking issues per endpoint
 
-Prepared 2026-10-02 from live probes against the Cloud Run service using **synthetic data only**
-(no real users, projects or disputes). No credentials appear in this document.
-Every request below was sent with `Authorization: Bearer <redacted>`.
+Prepared 2026-10-02 (updated after a second round of probes) from live calls against the Cloud Run
+service using **synthetic data only** (no real users, projects or disputes). No credentials appear here;
+every request was sent with `Authorization: Bearer <redacted>`.
 
-Status legend: **WIRED** = integrated and working · **BLOCKED** = integrated nowhere because of the issue below.
+## How we discovered what each endpoint accepts
 
-Cross-cutting facts that apply to everything below:
+- Unknown top-level keys are silently stripped, so "trying" a field tells us nothing by itself.
+- Required fields come from `VALIDATION_ERROR` details.
+- **Optional schema keys**: we send candidate keys with a deliberately wrong type (`{"__probe":true}`); a key that
+  is in the schema is rejected with a validation error that names its path and expected type, a stripped key is
+  silently ignored. This costs no model call. The table below lists what that found ("accepted keys").
+  Keys that are not in the schema can never carry our data, whatever we send.
+- Where a key is accepted we then checked **behaviour**: does the answer change with the input, and does it
+  stay inside what we sent? Both are required before we wire anything.
 
-- Unknown top-level request keys are silently stripped, so we cannot "try" extra fields to discover optional ones. Every optional field must be documented.
-- Required fields are discoverable through `VALIDATION_ERROR` details (that is how we mapped most contracts). Optional fields are not.
-- Our backend only knows opaque ids to send (`projectId`, `providerId`, `stageId`). **WaseetAI does not have our data**, so any endpoint that takes only an id answers about a project/provider it has never seen.
+Status legend: **WIRED** = integrated · **PARTIAL** = integrated with some fields deliberately unused ·
+**BLOCKED** = cannot be integrated honestly with the current contract.
 
 ---
 
 ## 0. SECURITY — bearer token is public (release blocker)
 
 The tenant token is printed in the integration guide PDF **and** in the publicly hosted test lab
-(`https://waaseet-ai.web.app/app.js?v=17`, plain `"Authorization": "Bearer …"` literal).
-It is the same token our backend uses.
+(`https://waaseet-ai.web.app/app.js?v=17`, plain `"Authorization": "Bearer …"` literal). It is the same token
+our backend uses.
 
-Request:
+Needed from the service owner:
 1. Issue a new token and **revoke the old one immediately**.
-2. Remove the literal from the hosted lab and from the guide; load it from user input in the lab.
-3. Separate tokens per environment (dev / bank / prod) if possible.
+2. Remove the literal from the hosted lab and from the guide (read it from user input in the lab).
+3. Separate tokens per environment (dev / bank / prod).
 
 ---
 
-## 1. WIRED (for reference — verified request/response)
+## 1. WIRED / PARTIAL
 
-| Endpoint | Our use | Verified response keys |
+| Endpoint | Status | Notes |
 |---|---|---|
-| `POST /v1/ai/project-description/stream` | description generation | SSE `generation.started` → `text.delta{chunk}` → `generation.completed` |
-| `POST /v1/ai/text/enhance/stream` | refine an existing draft | same SSE events; request `{description}` |
-| `POST /v1/ai/text/suggest/stream` | text suggestion | same SSE events; request `{title}` |
-| `POST /v1/ai/milestones` | milestones | `{milestones:[{title,description,days,percentage,amount}]}` |
-| `POST /v1/ai/project-analysis` | project analysis | `{clarityScore,feasibilityScore,marketFitRating,executiveSummary,strengths,gapsAndRisks}` |
-| `POST /v1/ai/request-draft` | client request draft | `{suggestedTitle,suggestedDescription,suggestedSubSpecialties[],recommendedMinBudget,recommendedMaxBudget,suggestedDurationDays,complexityRating,personalizedNote,aiMatchScoreEstimate}` |
-| `POST /v1/ai/profile/skills` | skills | `{suggestedSkills:[…]}` |
-| `POST /v1/ai/profile/performance-summary` | public-profile metrics | 8 numeric fields, computed from the counts we send |
-| `POST /v1/ai/proposals/suggest` | proposal polishing | see §2.9 (price audit unusable) |
-| `POST /v1/ai/disputes/summary` | admin dispute summary | `{summary,clientPerspective,providerPerspective,recommendation}` (we discard `recommendation`) |
-| `POST /v1/ai/assessments/stream` + `/assessments` + `/assessments/:id/submit` | assessments | see §3 |
-| `POST /v1/ai/help/chat` | support assistant | see §4 |
-| `POST /v1/ai/tts/synthesize` | speech | WAV in `data.audio.base64Audio` |
+| `project-description/stream`, `text/enhance/stream` `{description}`, `text/suggest/stream` `{title}` | WIRED | SSE `text.delta{chunk}` → `generation.completed` |
+| `milestones`, `project-analysis`, `request-draft`, `tts/synthesize` | WIRED | |
+| `profile/skills` `{providerId, specialtyName, existingSkills[]}` | WIRED | output follows `specialtyName`; `existingSkills` honoured |
+| `profile/performance-summary` | WIRED | 8 numeric fields computed from the counts we send |
+| `proposals/suggest` | PARTIAL | `priceAudit` ignored (not tied to the real project budget) |
+| `proposals/enrich` `{projectId,title,message,totalPrice,deliveryDays,milestones[]}` | PARTIAL | verdict follows the proposal's own plan/price/days (92 strong, 88 strong+cheap, 10 empty); because the service cannot see the project, `aiMatchScore` is a **proposal-quality** score and `aiPriceTag` is not relative to the real budget → we use quality tag + summary and combine with our own budget factor |
+| `business-models/audit` `{title,description,category,pricing.amount}` | WIRED (advisory) | with the right `category` the verdict follows the data (88 approved; wrong category 75 flagged; vague listing 10). Without `category` it wrongly rejects valid listings |
+| `disputes/summary` | WIRED | we discard `recommendation` |
+| `assessments/stream`, `assessments`, `assessments/:id/submit` | WIRED | open questions in §3 |
+| `help/chat` | WIRED (transport) | knowledge base empty — §4 |
 
 ---
 
-## 2. BLOCKED endpoints
+## 2. BLOCKED endpoints — exact change required in WaseetAI
+
+For each endpoint: what we found, and **the change we need**. "Acceptance" is the check we will re-run.
 
 ### 2.1 `POST /v1/ai/matching/projects-for-provider` — constant sample data
-
-Request A: `{"providerId":"prov-expert-01","limit":3}`
-Request B: `{"providerId":"zzz-unknown-9","limit":3,"specialtyFilter":"تصميم جرافيك"}`
-
-Both returned the **identical** response (172 ms, no model call):
-
+Accepted keys: `providerId` (required), `limit`, `specialtyFilter`. Nothing else.
+Request A `{"providerId":"prov-expert-01","limit":3}` and request B `{"providerId":"zzz-unknown-9","limit":3,"specialtyFilter":"تصميم جرافيك"}` return the **identical** payload in 172 ms (no model call):
 ```json
-{"aiMatchingProjects":[
- {"projectId":"proj-verified-1","aiMatchScore":90,"matchReasons":["تطابق عالي مع الخبرات المعتمدة","سجل إنجاز ممتاز في نفس التخصص"],"generationSource":"GEMINI"},
- {"projectId":"proj-verified-2","aiMatchScore":88,"matchReasons":["…"],"generationSource":"GEMINI"},
- {"projectId":"proj-verified-3","aiMatchScore":86,"matchReasons":["…"],"generationSource":"GEMINI"}],
- "summary":{"aiRating":4.6}}
+{"aiMatchingProjects":[{"projectId":"proj-verified-1","aiMatchScore":90,"matchReasons":["تطابق عالي مع الخبرات المعتمدة","سجل إنجاز ممتاز في نفس التخصص"],"generationSource":"GEMINI"}, …"proj-verified-3"],"summary":{"aiRating":4.6}}
 ```
-
-Problem: fixed ids and scores, labelled `GEMINI`, ignoring `providerId`, `limit` and `specialtyFilter`. Showing this would be fabricated matching.
-Needed: accept candidates (our project summaries) in the request and rank those, returning scores/reasons for the ids we sent. Document the candidate schema and limits.
+**Change needed:** accept the candidate set and the provider profile and rank *those*:
+```json
+{"providerId":"u-123","provider":{"specialties":["تصميم الشعارات"],"skills":["Illustrator"],"yearsOfExperience":6,"level":"EXPERT","hourlyRate":25},
+ "candidates":[{"projectId":"<our uuid>","title":"…","description":"…","requirements":["…"],"budgetMin":300,"budgetMax":900,"deliveryDays":10,"category":"التصميم"}],
+ "limit":3}
+```
+Response must contain only ids from `candidates`, with `aiMatchScore` (0–100) and real `matchReasons` derived from the inputs; `generationSource` must say what actually produced it.
+**Acceptance:** two different candidate sets/providers give different rankings; every returned `projectId` is one we sent.
 
 ### 2.2 `POST /v1/ai/marketplace/recommendations` — constant sample data
-
-Requests `{"query":"تصميم شعار"}` and `{"query":"برمجة تطبيقات"}` returned the identical 5 items:
-
-```json
-{"items":[{"id":"srv-1001","title":"تصميم واجهات مستخدم متكاملة بنظام Design System حديث","generationSource":"GEMINI"}, … "srv-1005"]}
-```
-
-Problem: ids/titles do not exist in our catalog; output ignores `query`.
-Needed: accept our candidate services (`id,title,category,price…`) and return ranked ids from that list, or confirm this endpoint is only a demo.
+Accepted keys: `query` (required), `limit`, `category`. Requests `{"query":"تصميم شعار"}` and `{"query":"برمجة تطبيقات"}` return the same five items (`srv-1001`…`srv-1005`, labelled `GEMINI`).
+**Change needed:** accept `candidates:[{id,title,category,price,rating,deliveryDays,description}]` (our catalog slice) and return a ranking of those ids with a reason; or document the endpoint as demo-only.
+**Acceptance:** results change with `query`; ids are a subset of what we sent.
 
 ### 2.3 `POST /v1/ai/project-fit` — cannot see the project
+Accepted keys: `projectId` (required), `currency`, `providerSpecialty`, `providerRate`. No project content can be sent.
+`{"projectId":"zzz-unknown-7","providerSpecialty":"تصميم شعارات","providerRate":10}` → *"the project name 'zzz-unknown-7' is vague… depends entirely on the assumption it needs creative design"*; with `proj-101` it invents *"requirements focus on interactive UIs"*.
+**Change needed:** a `project` object: `{title, description, requirements[], budgetMin, budgetMax, deliveryDays, skills[], category}` (+ optional provider `skills[]`, `yearsOfExperience`, `level`).
+**Acceptance:** the summary cites facts present in what we sent and nothing else; changing `description` changes the verdict.
 
-Request: `{"projectId":"zzz-unknown-7","providerSpecialty":"تصميم شعارات","providerRate":10,"currency":"USD"}` (extra `title`/`description` keys are stripped).
-Response `matchSummary` (translated): *"the project name 'zzz-unknown-7' is vague and has no clear details… depends entirely on the assumption it needs creative design"*.
-With `projectId":"proj-101"` it answered as if it knew a React project ("requirements focus on building interactive UIs") — invented.
-Needed: fields for the project content (title, description, requirements, budget, deadline, skills) in the request.
-
-### 2.4 `POST /v1/ai/project-health` — no project data, identical context
-
-Requests `{"view":"client","projectId":"proj-101"}` and `{"view":"provider","projectId":"zzz-unknown-7"}` both return the same invented facts (*"single stage not completed, 7 days remaining"*): `{"confidence":65,"riskLevel":"Medium","riskLevelKey":"MEDIUM","healthRating":"Attention Needed","bullets":[…],"earlyDays":0,"matchPercentage":0}`.
-Needed: request fields for stages, deadlines, delivery status, revision/dispute counts (we compute these) — and a documented meaning for `earlyDays`/`matchPercentage` (always 0 here). This feature handles sensitive data: please confirm it is routed to the paid/sensitive project.
+### 2.4 `POST /v1/ai/project-health` — invents the stages
+Accepted keys: `view` (client|provider), `projectId` (required), `title`, `daysRemaining`.
+We can send a real title and days remaining, and the verdict does move with them (`daysRemaining:2` → High/Critical; `60` → Low/Good) — **but the bullets also assert facts we did not send**: *"the single stage is not completed (0%)"*, *"المرحلة الوحيدة"*. With `earlyDays:-5` / `matchPercentage:0|100` derived from an assumed duration.
+**Change needed:** accept the facts it reasons about: `stages:[{order,title,status,days,percentage}]`, `totalDays`, `daysElapsed`, `revisionCount`, `disputeCount`, `lastActivityDays`, and compute `earlyDays`/`matchPercentage` from them (document both fields). Never state stage/progress facts that were not provided.
+**Acceptance:** with 4 stages of which 2 approved, the output says so; with no stage data it says "no stage data" instead of inventing one. Please also confirm this endpoint is routed to the sensitive/paid project.
 
 ### 2.5 `POST /v1/ai/delivery-review` — no delivery data
+Accepted keys: `view`, `projectId`, `stageId` only. Output: *"scope and deliverables are generic default texts… no links or files attached"*.
+**Change needed:** `stage:{title,description,requirements[]}`, `delivery:{note,files:[{name,type,sizeBytes,url?}],submittedAt,revisionNumber}`, `project:{title,description}`. State clearly whether file *contents* are read (today the output claims no content).
+**Acceptance:** the review quotes the stage requirement and the delivery note we sent; unmet requirements are listed from our `requirements[]`. Same sensitive-routing question as §2.4.
 
-Request `{"view":"provider","projectId":"zzz-1","stageId":"zzz-s"}` → *"the inputs for scope and deliverables are generic default texts… no links or files attached"*.
-Needed: request fields for stage requirements, delivery note and file metadata. Same sensitive-data routing question as §2.4.
+### 2.6 `POST /v1/ai/proposals/audit/stream` — no project/provider data
+Accepted keys: `providerId`, `projectId` (required), `proposalMessage`. The `ai_audit_result` says *"offer message is very short ('عرض قياسي')"* and describes a provider profile it was never given.
+**Change needed:** accept `proposal:{title,message,totalPrice,deliveryDays,advantages[],milestones[]}`, `provider:{specialties[],skills[],yearsOfExperience,level,rating,completedProjects}`, `project:{title,description,requirements[],budgetMin,budgetMax,deliveryDays}`; document `ai_audit_result` (field names, score ranges, enums) and the progress events.
+**Acceptance:** each statement in `profileAudit` / `triPartyComparison` can be traced to a field we sent.
 
-### 2.6 `POST /v1/ai/proposals/enrich` — scores a proposal against an unknown project
+### 2.7 `POST /v1/ai/profile/bio` — output is a list of options
+Accepted keys now: `providerId` (required), `currentBio` (string), `specialties` (array), `yearsOfExperience` (number). With `{"specialties":["تصميم الشعارات"],"yearsOfExperience":6,"currentBio":"…"}` the text correctly uses "6 years / logo designer" — **the input side works**. The output is a Markdown list of 3 options (`### الخيار الأول…`) of varying format, which cannot be put in a single bio field (our limit is 500 characters).
+**Change needed:** return **one** plain-text bio (≤ the length we send), e.g. a request field `maxLength` (number) and `style`/`tone` (string) and `suggestedBio` = the final text only; or return `suggestions:[string]`.
+**Acceptance:** `suggestedBio` is a single paragraph, no headings/placeholders, ≤ `maxLength`.
 
-Request `{"projectId":"zzz-unknown-7","title":"عرض","message":"خبرة","totalPrice":100000,"deliveryDays":1}` → `{"id":"prop-…","aiMatchScore":10,"aiQualityTag":"Average","aiPriceTag":"High","aiFeedback":{"summary":"…"}}`.
-`aiMatchScore` / `aiPriceTag` claim a match/price judgement relative to a project the service has never seen.
-Needed: project context fields (budget range, requirements) or a documented statement that these scores are text-only; plus a stable id contract (what is `id`?).
+### 2.8 `POST /v1/ai/portfolio-review` — no sample content
+Accepted keys: `providerSpecialtyId` only. Response invents the portfolio (*"samples fit the programming specialty 'ps-1'"*).
+**Change needed:** `specialtyName` and `samples:[{title,description,technologies[],projectUrl,githubUrl,attachments:[{name,type}]}]`.
+**Acceptance:** feedback references the samples we sent by title.
 
-### 2.7 `POST /v1/ai/proposals/audit/stream` — no proposal content
+### 2.9 `POST /v1/ai/accreditation-review` — grades a repository it cannot open
+Accepted keys: `title` (required), `githubUrl`, `technologiesUsed[]`. (`description` and `projectUrl` are **not** in the schema.)
+With `{"title":"متجر إلكتروني بـReact","technologiesUsed":["React","Node.js","PostgreSQL"],"githubUrl":"https://github.com/example-test/shop"}` the result was `AI_VERIFIED`, score **88**, praising *"a clean decoupled architecture between React and Node/PostgreSQL"* — the repository does not exist. Without those fields: `REJECTED`, 15.
+**Change needed:** either actually fetch/inspect the URL and say what was inspected, or return an explicit `inspected:false` / `basis:"declared-fields-only"` and never grade code quality; accept `description` and `projectUrl`; accept attachment metadata/text extracts.
+**Acceptance:** an invalid/unreachable URL produces `inspected:false` and no code-quality claims.
 
-Request `{"providerId":"prov-expert-01","projectId":"proj-101"}` (the only required fields) → SSE `ai_audit_progress` ×4 then `ai_audit_result{profileAudit[],triPartyComparison…}` that quotes *"offer message is very short ('عرض قياسي')"* — invented proposal text.
-Needed: request fields for the proposal draft, provider profile summary and project summary; document the `ai_audit_result` schema (scores, enums).
+### 2.10 `POST /v1/ai/proposals/suggest` — price audit not tied to the project
+Works except `priceAudit` (identical range for any project). **Change needed:** accept `project:{budgetMin,budgetMax,title,requirements[]}`; compute `priceAudit` from it.
 
-### 2.8 `POST /v1/ai/profile/bio` — ignores the provider
+### 2.11 `POST /v1/ai/onboarding-quizzes` — fixed generic quiz
+`{}` returns a fixed 5-question platform-knowledge quiz (`attemptId:"onboard-…"`, options as plain strings, no ids). Our setup test is a per-specialty professional assessment.
+**Change needed:** confirm intent; if per-specialty: accept `specialtyName`, `questionCount`, and return the same `{id,text}` option shape as `assessments`, graded by `assessments/:id/submit` (confirm that `onboard-…` ids are accepted).
 
-Request `{"providerId":"prov-A"}` and `{"providerId":"prov-B-zzz"}` → both return a multi-option template with `[اكتب تخصصك هنا]` placeholders (`{"suggestedBio":"…"}`), no use of provider data.
-Needed: fields for specialty, experience, skills, headline; and a single bounded bio (not a list of options) in `suggestedBio`.
-
-### 2.9 `POST /v1/ai/proposals/suggest` — usable except the price audit
-
-Works (we use title/message/advantages/quality). But `priceAudit` (`{"recommendedMin":1500,"recommendedMax":3500,…}`) is the same regardless of project budget, so we discard it.
-Needed: project budget in the request if `priceAudit` is meant to be real.
-
-### 2.10 `POST /v1/ai/portfolio-review` and `POST /v1/ai/accreditation-review` — no sample content
-
-`portfolio-review` required field is only `providerSpecialtyId`; response said *"models are suitable for the programming specialty 'ps-1'"* — it invented the portfolio.
-`accreditation-review` required field is only `title`; response judged a logo sample as "not a programming work" with no description/links given.
-Needed: request schema for sample content (title, description, technologies, project/GitHub URLs, attachment metadata or text extracts) and the specialty name/category they should be judged against. Is image/file content supported? How should files be sent?
-
-### 2.11 `POST /v1/ai/business-models/audit` and `/re-audit` — missing category field
-
-Request `{"title":"باقة تصميم شعار","description":"تصميم شعار مع ثلاث مراجعات","pricing":{"amount":100,"currency":"USD"}}` (required: `title`, `description`, `pricing.amount`) →
-`{"isApproved":false,"score":65,"summary":"rejected… wrong category: classified under 'software services' while it is 'design & graphics'","issues":[…]}`.
-The service guessed a category because none can be sent, so it rejects valid services.
-Needed: category/specialty field(s), the full response schema, what `isApproved` means for us (advisory only), and the `re-audit` item schema (`items[].…`).
-
-### 2.12 `POST /v1/ai/onboarding-quizzes` — fixed generic quiz
-
-`{}` returns a fixed 5-question platform-knowledge quiz (`attemptId: "onboard-…"`, options as plain strings, no answer ids). Our onboarding test is a per-specialty professional assessment, so we cannot use it as is.
-Needed: confirm intent; if per-specialty, the request fields; document how to grade it (`/assessments/:id/submit` with `onboard-…` ids?).
-
-### 2.13 Endpoints we need that do not appear in the matrix
-
-- **Specialty evaluation by AI for a provider specialty** (work samples → scores) — we found no endpoint; is `portfolio-review` the intended one?
-- **Deep project analysis for a provider** — is `project-fit` the intended endpoint?
+### 2.12 Endpoints we need that do not appear in the matrix
+- AI evaluation of a provider's specialty from work samples (`portfolio-review` may be the intended one).
+- Deep per-project analysis for a provider (`project-fit` may be the intended one).
 
 ---
 
-## 3. Assessments — what we need confirmed (WIRED, with open questions)
+## 3. Assessments — open questions (WIRED)
 
-Verified live:
-`POST /v1/ai/assessments/stream` with `{"providerSpecialtyId":"ps-1","specialtyName":"تصميم الشعارات","questionCount":3,"timeLimitMinutes":15}` →
-`event: question.streamed` ×3 `{"attemptId":"att-…","question":{"id":1,"textAr":"…","options":[{"id":"a","text":"…"},…]}}`, then
-`event: assessment.ready {"attemptId":"att-…","totalQuestions":3,"timeLimitMinutes":15,"generationSource":"GEMINI"}`.
-`POST /v1/ai/assessments/att-…/submit {"submittedAnswers":{"1":"a","2":"a","3":"a"},"timeSpentSeconds":40}` →
-`{"attemptId":"att-…","score":33,"isPassed":false,"status":"COMPLETED","feedbackAr":"…","strengths":[…],"weaknesses":[…]}`.
+Verified: `POST /v1/ai/assessments/stream` `{"providerSpecialtyId","specialtyName","questionCount","timeLimitMinutes"}` →
+`question.streamed` ×N `{attemptId,question:{id,textAr,options:[{id,text}]}}` then `assessment.ready {attemptId,totalQuestions,timeLimitMinutes,generationSource}`;
+`POST /v1/ai/assessments/:id/submit {"submittedAnswers":{"1":"a",…},"timeSpentSeconds":40}` → `{score,isPassed,status,feedbackAr,strengths[],weaknesses[]}`.
 
-Open questions:
-1. **Pass threshold** behind `isPassed` (we saw 33 → false). Can we send our own threshold?
-2. Is a **second submit** for the same `attemptId` rejected, idempotent, or re-graded? (We retry after our own transient failures.)
-3. The "stream" delivered all questions in one burst (~3.8 s for 3 questions, all events at the same instant). Is incremental delivery planned?
-4. Can questions be **personalised** (provider portfolio, sub-specialties, category) — which request fields?
-5. Can the result include per-question correctness / `correctAnswers` and explanations (or must we not show them)?
-6. `createAssessment` response types `questions[].id` as string in the guide but the stream sends numbers — which is canonical?
+1. The **pass threshold** behind `isPassed` (33 → false). Can we send our own?
+2. Is a **second submit** for the same `attemptId` rejected, idempotent, or re-graded?
+3. The "stream" delivers all questions at the same instant after generation (~3.8 s for 3). Is incremental delivery planned?
+4. Can questions be **personalised** (portfolio, sub-specialties, category) — which fields?
+5. Can the result include per-question correctness / `correctAnswers`? (We show nothing we did not receive.)
+6. `questions[].id`: string in the guide, number in the stream.
 7. `generationSource` (we saw `"GEMINI"`): documented values and meaning.
 
 ---
 
-## 4. Help assistant — knowledge base is empty for every question we tried
+## 4. Help assistant — knowledge base empty
 
-`POST /v1/ai/help/chat` (and `/help/stream`) with `{"question":"كيف يعمل الضمان في المنصة؟"}`, `"ما هي رسوم المنصة؟"`, `"ما هي شروط الدفع الآمن Escrow؟"`, `"escrow terms"` all answered:
-
-```
-event: help:answer_start   data: {"status":"started","citationsCount":0}
-event: help:error          data: {"message":"لم يتم العثور على سياسة معتمدة للإجابة على هذا الاستفسار. يرجى مراجعة الدعم البشري.","human_support_fallback":true}
-```
-
-Needed: approved policy documents loaded (the guide's own example cites `docId: terms-escrow`), and the success-path event names confirmed (we infer `help:answer_chunk` / `help:citations` / `help:answer_complete`; the guide says `text.delta` / `citations` / `generation.completed`). Is `/help/stream` an alias of `/help/chat`?
+`help/chat` and `help/stream` with `"كيف يعمل الضمان في المنصة؟"`, `"ما هي رسوم المنصة؟"`, `"ما هي شروط الدفع الآمن Escrow؟"`, `"escrow terms"` all return
+`event: help:answer_start {"status":"started","citationsCount":0}` then
+`event: help:error {"message":"لم يتم العثور على سياسة معتمدة…","human_support_fallback":true}`.
+Needed: approved policy documents (the guide cites `docId: terms-escrow`), the confirmed success-path event names (we infer `help:answer_chunk` / `help:citations` / `help:answer_complete`; the guide says `text.delta` / `citations` / `generation.completed`), and whether `/help/stream` is an alias of `/help/chat`.
 
 ---
 
-## 5. Latency observations (synthetic data, single call each)
+## 5. Latency observations (synthetic data)
 
 | Endpoint | Observed |
 |---|---|
-| `project-description/stream` | first chunk after ~14 s |
+| `project-description/stream` | first chunk ~14 s |
 | `text/suggest/stream` | first chunk ~6.4 s, total ~10.7 s |
 | `text/enhance/stream` | first chunk ~1.5 s, total ~5.5 s |
 | `assessments/stream` (20 questions) | 10–17 s, all questions at once |
-| `project-fit` | ~7 s · `profile/skills` ~1–8 s · `request-draft` ~4.8 s · `proposals/suggest` ~6–8 s |
+| `project-fit` ~7 s · `profile/skills` 1–8 s · `request-draft` ~4.8 s · `proposals/suggest` 6–8 s · `proposals/enrich` 1.4–3 s | |
 
-Please share expected p95 so we can set client timeouts (currently 30 s REST / 45–90 s stream).
+Please share expected p95 so we can set client timeouts (now 30 s REST / 45–90 s stream).
 
 ---
 
-## 6. What we will do once a fix lands
+## 6. When a change lands
 
-For each endpoint above, the typed client method, adapter and tests are a small change — the only blocker is the contract/data access. Tell us when one is ready and we re-run the same probes (requests above) to verify before wiring.
+Tell us which endpoint; we re-run the probes above (including the "acceptance" check) before wiring. Typed
+client methods, adapters and tests for each are a small change — the blocker is the contract/data access.

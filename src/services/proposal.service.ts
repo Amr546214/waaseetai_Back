@@ -191,12 +191,23 @@ export class ProposalService {
 		let aiPriceTag: string | null = null;
 		let aiFeedback: Prisma.InputJsonValue | Prisma.NullTypes.DbNull = Prisma.DbNull;
 		try {
-			const aiEvaluation = await aiProposalService.evaluateAndSuggestProposal(
-				projectId,
-				data.title,
-				data.message,
-				data.advantages
-			);
+			const aiEvaluation = await aiProposalService.evaluate({
+					projectId,
+					title: data.title,
+					message: data.message,
+					totalPrice: data.totalPrice,
+					deliveryDays: data.deliveryDays,
+					milestones: data.milestones?.length
+						? data.milestones.map(m => ({
+							stepOrder: m.stepOrder,
+							title: m.title,
+							description: m.description,
+							days: m.days,
+							percentage: m.percentage,
+							amount: m.amount
+						}))
+						: undefined
+				});
 
 			// Calculate match score based on budget closeness and AI quality score
 			aiMatchScore = aiEvaluation.qualityScore;
@@ -212,7 +223,9 @@ export class ProposalService {
 			// WaseetAI's priceAudit is not grounded in this project's real budget
 			// and is not used; no price tag is fabricated.
 			aiPriceTag = null;
-			aiFeedback = JSON.parse(JSON.stringify(aiEvaluation));
+			// Only the verified summary is stored; qualityScore here is a
+				// proposal-quality score (WaseetAI cannot see the real project).
+				aiFeedback = { source: 'WASEET_AI', summary: aiEvaluation.summary };
 		} catch (error) {
 			const code = error instanceof WaseetAiError ? error.code : 'APPLICATION_VALIDATION_ERROR';
 			logger.warn(`[ProposalService] AI evaluation unavailable for proposal on project ${projectId}: ${code}`);

@@ -48,7 +48,7 @@ test('bio: disabled with AI_FEATURE_UNAVAILABLE 503 and a specific Arabic messag
 test('skills: sends providerId = authenticated user id and specialtyName from DB (category name); forged body ignored', async t => {
   const x = await load(t);
   const result = await x.service.suggestSkills('authenticated-provider', { mainSpecialty: 'FORGED' } as any);
-  assert.deepEqual(x.sent, [{ providerId: 'authenticated-provider', specialtyName: 'تطوير المواقع' }]);
+  assert.deepEqual(x.sent, [{ providerId: 'authenticated-provider', specialtyName: 'تطوير المواقع', existingSkills: ['HTML'] }]);
   assert.deepEqual(x.reads[0].where, { userId: 'authenticated-provider' });
   assert.deepEqual(result, { suggestedSkills: ['CSS', 'TypeScript'] });
   assert.equal(x.writes(), 0);

@@ -1,5 +1,6 @@
 import { AppError } from '../utils/app-error';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
+import type { EnrichProposalRequest } from './ai/waseet-ai/waseet-ai.types';
 import { normalizeWaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
 
 // Proposal AI feedback — served exclusively by WaseetAI
@@ -25,11 +26,65 @@ export interface AiProposalFeedback {
   suggestedAdvantages: string[];
 }
 
+export interface ProposalEvaluationInput {
+  projectId: string;
+  title: string;
+  message: string;
+  totalPrice: number;
+  deliveryDays: number;
+  milestones?: Array<{ stepOrder: number; title: string; description: string; days: number; percentage: number; amount: number }>;
+}
+
+// Evaluation of a SUBMITTED proposal (POST /v1/ai/proposals/enrich).
+// LIMITATION: WaseetAI cannot see Waseet's projects, so `qualityScore` is a
+// PROPOSAL-QUALITY score (not a match against the real project) and the
+// returned price tag is deliberately dropped (not relative to the real budget).
+export interface ProposalEvaluation {
+  qualityScore: number;
+  qualityTag: string;
+  summary: string;
+}
+
 const PROPOSAL_AI_CURRENCY = 'USD';
 
 const UNAVAILABLE_MESSAGE = 'تعذر تحليل العرض بالذكاء الاصطناعي حالياً. لم يتم تغيير عرضك، يمكنك المتابعة يدوياً.';
 
 class AiProposalService {
+  public async evaluate(input: ProposalEvaluationInput): Promise<ProposalEvaluation> {
+    const projectId = typeof input?.projectId === 'string' ? input.projectId.trim() : '';
+    const title = typeof input?.title === 'string' ? input.title.trim() : '';
+    const message = typeof input?.message === 'string' ? input.message.trim() : '';
+    if (!projectId) throw new AppError('معرف المشروع (projectId) مطلوب', 400);
+    if (!title || !message) throw new AppError('عنوان العرض ونصه مطلوبان للتحليل', 400);
+    if (!Number.isFinite(input.totalPrice) || !Number.isFinite(input.deliveryDays)) {
+      throw new AppError('سعر العرض ومدة التنفيذ يجب أن يكونا أرقاماً صحيحة', 400);
+    }
+    const body: EnrichProposalRequest = { projectId, title, message, totalPrice: input.totalPrice, deliveryDays: input.deliveryDays };
+    if (Array.isArray(input.milestones) && input.milestones.length > 0) {
+      body.milestones = input.milestones.map((m) => ({
+        stepOrder: m.stepOrder, title: m.title, description: m.description,
+        days: m.days, percentage: m.percentage, amount: m.amount
+      }));
+    }
+
+    let raw;
+    try {
+      raw = await waseetAiClient.enrichProposal(body);
+    } catch (error) {
+      const e = normalizeWaseetAiError(error);
+      console.error(`[AiProposal] WaseetAI proposal evaluation failed code=${e.code} status=${e.status ?? '-'} requestId=${e.requestId ?? '-'}`);
+      throw new AppError(UNAVAILABLE_MESSAGE, 503);
+    }
+
+    const qualityTag = typeof raw?.aiQualityTag === 'string' ? raw.aiQualityTag.trim() : '';
+    const summary = typeof raw?.aiFeedback?.summary === 'string' ? raw.aiFeedback.summary.trim() : '';
+    const score = raw?.aiMatchScore;
+    if (typeof score !== 'number' || !Number.isFinite(score) || score < 0 || score > 100 || !qualityTag || !summary) {
+      throw new AppError(UNAVAILABLE_MESSAGE, 503);
+    }
+    return { qualityScore: score, qualityTag, summary };
+  }
+
   public async evaluateAndSuggestProposal(
     projectId?: string,
     currentTitle?: string,

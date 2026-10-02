@@ -254,6 +254,8 @@ export interface PerformanceSummaryResponse {
 export interface ProfileSkillsRequest {
   providerId: string;
   specialtyName: string;
+  /** Verified 2026-10-02: accepted (array of strings); these are left out of the suggestions. */
+  existingSkills?: string[];
 }
 export interface ProfileSkillsResponse {
   suggestedSkills: string[];
@@ -282,4 +284,48 @@ export interface WaseetAiStreamedQuestion {
   id: number;
   textAr: string;
   options: Array<{ id: string; text: string }>;
+}
+
+/** POST /v1/ai/business-models/audit — required: title, description,
+ *  pricing.amount. `category` (string) is a schema key verified 2026-10-02:
+ *  without it the service guesses a category and wrongly rejects valid
+ *  listings; with it the verdict follows the data (matching category ->
+ *  approved/88, mismatching category -> flagged). Currency inside `pricing`
+ *  is NOT verified, so it is not sent. `isApproved` is advisory only. */
+export interface BusinessModelAuditRequest {
+  title: string;
+  description: string;
+  category: string;
+  pricing: { amount: number };
+}
+export interface BusinessModelAuditResponse {
+  isApproved: boolean;
+  score: number;
+  summary: string;
+  strengths: string[];
+  issues: string[];
+  recommendations: string[];
+}
+
+/** POST /v1/ai/proposals/enrich — verified request keys: projectId, title,
+ *  message, totalPrice, deliveryDays, milestones[{stepOrder,title,description,
+ *  days,percentage,amount}]. The service cannot see Waseet's projects, so the
+ *  verdict reflects the PROPOSAL's own content (plan, price vs. scope/days);
+ *  `aiMatchScore` behaves as a proposal-quality score (92 / 88 / 10 for
+ *  strong / strong+cheap / empty proposals), not a match against the real
+ *  project, and `aiPriceTag` is not relative to the real project budget. */
+export interface EnrichProposalRequest {
+  projectId: string;
+  title: string;
+  message: string;
+  totalPrice: number;
+  deliveryDays: number;
+  milestones?: Array<{ stepOrder: number; title: string; description: string; days: number; percentage: number; amount: number }>;
+}
+export interface EnrichProposalResponse {
+  id: string;
+  aiMatchScore: number;
+  aiQualityTag: string;
+  aiPriceTag: string;
+  aiFeedback: { summary: string };
 }
