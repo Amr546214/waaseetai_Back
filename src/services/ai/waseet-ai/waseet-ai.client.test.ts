@@ -398,6 +398,25 @@ test('suggestSkills / summarizePerformance / suggestProposal validate their veri
   assert.equal((await prop.suggestProposal({ projectId: 'p', currentTitle: 't', currentMessage: 'm' })).qualityScore, 95);
 });
 
+test('suggestProposal: suggestedAdvantages is optional, but a non-array value or a missing core field is still rejected', async () => {
+  const core = { suggestedTitle: 't', suggestedMessage: 'm', qualityScore: 80, qualityTag: 'Good' };
+  const body = { projectId: 'p', currentTitle: 't', currentMessage: 'm' };
+
+  const without = new WaseetAiClient(jsonFetch(200, { success: true, data: core }), config());
+  const res = await without.suggestProposal(body);
+  assert.equal(res.qualityScore, 80);
+  assert.equal(res.suggestedAdvantages, undefined);
+
+  const asNull = new WaseetAiClient(jsonFetch(200, { success: true, data: { ...core, suggestedAdvantages: null } }), config());
+  assert.equal((await asNull.suggestProposal(body)).qualityTag, 'Good');
+
+  const wrongType = new WaseetAiClient(jsonFetch(200, { success: true, data: { ...core, suggestedAdvantages: 'x' } }), config());
+  await assert.rejects(() => wrongType.suggestProposal(body), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
+
+  const noTag = new WaseetAiClient(jsonFetch(200, { success: true, data: { suggestedTitle: 't', suggestedMessage: 'm', qualityScore: 80 } }), config());
+  await assert.rejects(() => noTag.suggestProposal(body), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
+});
+
 test('text suggest/enhance streams relay text.delta chunks and require generation.completed', async () => {
   const calls: Recorded[] = [];
   const ok = new WaseetAiClient(sseFetch([frame('text.delta', { chunk: 'أ' }), frame('text.delta', { chunk: 'ب' }), frame('generation.completed', { status: 'completed' })], calls), config());
