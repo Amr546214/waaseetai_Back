@@ -69,6 +69,9 @@ Request A `{"providerId":"prov-expert-01","limit":3}` and request B `{"providerI
 Response must contain only ids from `candidates`, with `aiMatchScore` (0–100) and real `matchReasons` derived from the inputs; `generationSource` must say what actually produced it.
 **Acceptance:** two different candidate sets/providers give different rankings; every returned `projectId` is one we sent.
 
+**Re-verified 2026-10-02 (synthetic data, from the dev container).** Three calls: (M1) a designer provider with two of our candidate projects (`cand-A` logo design, `cand-B` Node.js API), (M2) a developer provider with the *same* candidates, (M3) `providerId` only. All three returned HTTP 200 with the identical payload `proj-verified-1:90, proj-verified-2:88` — ids that are not ours and scores that did not change with provider, specialties, skills or candidates. The extra `provider`/`candidates` keys are silently stripped, so today the endpoint cannot rank our projects at all.
+**Platform status:** matching stays on the deterministic rule engine (`generationSource: 'DETERMINISTIC'`, `aiMatchScore: null`) and the UI labels it "قواعد ثابتة (دون AI)". Nothing is wired to this endpoint, and no AI percentage is shown. We will wire it only after the acceptance check below passes.
+
 ### 2.2 `POST /v1/ai/marketplace/recommendations` — constant sample data
 Accepted keys: `query` (required), `limit`, `category`. Requests `{"query":"تصميم شعار"}` and `{"query":"برمجة تطبيقات"}` return the same five items (`srv-1001`…`srv-1005`, labelled `GEMINI`).
 **Change needed:** accept `candidates:[{id,title,category,price,rating,deliveryDays,description}]` (our catalog slice) and return a ranking of those ids with a reason; or document the endpoint as demo-only.
