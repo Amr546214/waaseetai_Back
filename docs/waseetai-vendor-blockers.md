@@ -45,7 +45,7 @@ Needed from the service owner:
 | `proposals/enrich` `{projectId,title,message,totalPrice,deliveryDays,milestones[]}` | PARTIAL | verdict follows the proposal's own plan/price/days (92 strong, 88 strong+cheap, 10 empty); because the service cannot see the project, `aiMatchScore` is a **proposal-quality** score and `aiPriceTag` is not relative to the real budget → we use quality tag + summary and combine with our own budget factor |
 | `business-models/audit` `{title,description,category,pricing.amount}` | WIRED (advisory) | with the right `category` the verdict follows the data (88 approved; wrong category 75 flagged; vague listing 10). Without `category` it wrongly rejects valid listings |
 | `disputes/summary` | WIRED | we discard `recommendation` |
-| `assessments/stream`, `assessments`, `assessments/:id/submit` | WIRED | open questions in §3 |
+| `assessments/stream`, `assessments`, `assessments/:id/submit` | WIRED | open questions in §3. Also drives the provider **setup test** (15 questions, graded once at the end; no per-question correctness, so the UI shows the score only) |
 | `help/chat` | WIRED (transport) | knowledge base empty — §4 |
 
 ---
@@ -96,10 +96,24 @@ Accepted keys: `providerId`, `projectId` (required), `proposalMessage`. The `ai_
 **Change needed:** accept `proposal:{title,message,totalPrice,deliveryDays,advantages[],milestones[]}`, `provider:{specialties[],skills[],yearsOfExperience,level,rating,completedProjects}`, `project:{title,description,requirements[],budgetMin,budgetMax,deliveryDays}`; document `ai_audit_result` (field names, score ranges, enums) and the progress events.
 **Acceptance:** each statement in `profileAudit` / `triPartyComparison` can be traced to a field we sent.
 
-### 2.7 `POST /v1/ai/profile/bio` — output is a list of options
-Accepted keys now: `providerId` (required), `currentBio` (string), `specialties` (array), `yearsOfExperience` (number). With `{"specialties":["تصميم الشعارات"],"yearsOfExperience":6,"currentBio":"…"}` the text correctly uses "6 years / logo designer" — **the input side works**. The output is a Markdown list of 3 options (`### الخيار الأول…`) of varying format, which cannot be put in a single bio field (our limit is 500 characters).
-**Change needed:** return **one** plain-text bio (≤ the length we send), e.g. a request field `maxLength` (number) and `style`/`tone` (string) and `suggestedBio` = the final text only; or return `suggestions:[string]`.
-**Acceptance:** `suggestedBio` is a single paragraph, no headings/placeholders, ≤ `maxLength`.
+### 2.7 `POST /v1/ai/profile/bio` — three options, but no stable format
+Accepted keys: `providerId` (required), `currentBio` (string), `specialties` (array), `yearsOfExperience` (number).
+**The input side works**: across 6 live samples (6 different specialties / years) every answer used the specialty and the exact years and contained no placeholders, and always offered **3 options**.
+**The output cannot be split safely.** Layout measured on the same 6 samples:
+
+| sample | option headings | body format |
+|---|---|---|
+| 0 | `**الخيار الأول (…):**` | inline `"…"` quotes |
+| 1 | `### الخيار الأول: …` + `---` separators | inline quotes |
+| 2 | `**الخيار الأول: …**` | `> "…"` blockquote |
+| 3 | `### الخيار …` + `---` | inline quotes |
+| 4 | `### الخيار …` | bare paragraphs with a bold title line, no quotes |
+| 5 | `### الخيار …` | inline quotes |
+
+Also: all 6 answers append a "tips" section (`**نصائح إضافية…**` or a bare paragraph) with no consistent marker; 4 of 6 name a competitor platform (`على منصة "مستقل"` in the intro and/or tips); and option text sometimes claims unprovable achievements ("نجحت في تنفيذ العديد من المشاريع").
+We will not parse this by guesswork.
+**Change needed:** return **one** plain-text bio (≤ a `maxLength` we send, e.g. 500) in `suggestedBio` with no headings, intro, tips or platform names; or a structured `suggestions:[string]` of exactly the requested count. Never mention other platforms; do not invent achievements, client counts or projects.
+**Acceptance:** 10 consecutive calls with different inputs return a single paragraph ≤ `maxLength`, contain only facts present in the input (years, specialties, current bio), and no markdown.
 
 ### 2.8 `POST /v1/ai/portfolio-review` — no sample content
 Accepted keys: `providerSpecialtyId` only. Response invents the portfolio (*"samples fit the programming specialty 'ps-1'"*).
@@ -115,9 +129,14 @@ With `{"title":"متجر إلكتروني بـReact","technologiesUsed":["React"
 ### 2.10 `POST /v1/ai/proposals/suggest` — price audit not tied to the project
 Works except `priceAudit` (identical range for any project). **Change needed:** accept `project:{budgetMin,budgetMax,title,requirements[]}`; compute `priceAudit` from it.
 
-### 2.11 `POST /v1/ai/onboarding-quizzes` — fixed generic quiz
-`{}` returns a fixed 5-question platform-knowledge quiz (`attemptId:"onboard-…"`, options as plain strings, no ids). Our setup test is a per-specialty professional assessment.
-**Change needed:** confirm intent; if per-specialty: accept `specialtyName`, `questionCount`, and return the same `{id,text}` option shape as `assessments`, graded by `assessments/:id/submit` (confirm that `onboard-…` ids are accepted).
+### 2.11 `POST /v1/ai/onboarding-quizzes` — not needed any more
+`{}` returns a fixed 5-question platform-knowledge quiz. We now run the provider setup test through `assessments/stream` + `submit` (per-specialty), so this endpoint is only relevant if you want a separate *platform* onboarding quiz; if so, please document its option ids and grading.
+
+### 2.11b Not blocked by the service but needing a product decision on our side — avatar
+`POST /v1/ai/avatar/chat {"message"}` → `{text, audio:{mimeType:"audio/mp3", base64Audio}}` is documented and our client has `avatarChat`. We have no avatar chat screen or persona (the old `ai_chat` gateway was removed on purpose); the in-app assistant ("Bebo") is deferred to a separate track (§4). Needs: where it appears, persona/tone, cost limits.
+
+### 2.11c Description AI pre-check (title / specialty consistency) — needs a new endpoint
+No endpoint validates a project title against the chosen specialty. We keep only our deterministic check. **Change needed:** e.g. `POST /v1/ai/request-title-check {title, specialty, subSpecialties[]}` → `{isMeaningful, isAligned, reasonAr}` (or document an existing endpoint that does this).
 
 ### 2.12 Endpoints we need that do not appear in the matrix
 - AI evaluation of a provider's specialty from work samples (`portfolio-review` may be the intended one).
@@ -141,7 +160,7 @@ Verified: `POST /v1/ai/assessments/stream` `{"providerSpecialtyId","specialtyNam
 
 ---
 
-## 4. Help assistant — knowledge base empty
+## 4. Help assistant — knowledge base empty (DEFERRED: separate track, not reviewed or tested in this round)
 
 `help/chat` and `help/stream` with `"كيف يعمل الضمان في المنصة؟"`, `"ما هي رسوم المنصة؟"`, `"ما هي شروط الدفع الآمن Escrow؟"`, `"escrow terms"` all return
 `event: help:answer_start {"status":"started","citationsCount":0}` then
