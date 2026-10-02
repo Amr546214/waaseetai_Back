@@ -1,16 +1,17 @@
 import { Socket } from 'socket.io';
 import { z } from 'zod';
-import { aiFeatureUnavailablePayload } from '../services/ai/ai-feature-unavailable';
+import { aiProposalService, type ProposalEvaluation, type ProposalEvaluationInput } from '../services/ai-proposal.service';
+import { AppError } from '../utils/app-error';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
 
-// Proposal AI Audit is DISABLED: all AI must run exclusively through the
-// WaseetAI service and no documented contract exists for proposal audits.
-// The gateway keeps its auth / payload / ownership / rate-limit checks and the
-// frontend contract (`ai_audit_progress` with status 'FAILED', never an
-// `ai_audit_result`), but makes no AI call and fabricates nothing. The FAILED
-// event additionally carries `code: AI_FEATURE_UNAVAILABLE`. The Angular
-// handler (applay-request.ts) shows its honest "unavailable" empty state on
-// FAILED, so the proposal can still be written and submitted normally.
+// Proposal quality review. The only AI input is WaseetAI `proposals/enrich`
+// (via aiProposalService.evaluate): a PROPOSAL-QUALITY score, tag and summary
+// computed from the proposal's own title, message, price and duration. The
+// service cannot see the project, so nothing here claims fit with the project,
+// a fair price/duration, or an acceptance probability — those fields of the
+// frontend contract are returned as "غير متاح" / "غير مدعوم" (or null).
+// On any failure only `ai_audit_progress` with status FAILED is emitted;
+// an `ai_audit_result` is never fabricated.
 
 // ==========================================
 // 1. DATA MODELS & ZOD VALIDATION
@@ -30,12 +31,14 @@ export interface TriPartyComparison {
 }
 
 export interface FinalMetrics {
+  /** WaseetAI proposal-quality score (0-100). */
   overallScore: number;
-  profileMatch: number;
-  messageClarity: number;
-  priceCompetitiveness: number;
-  timelineFeasibility: number;
-  completeness: number;
+  // Not produced by WaseetAI — always null.
+  profileMatch: number | null;
+  messageClarity: number | null;
+  priceCompetitiveness: number | null;
+  timelineFeasibility: number | null;
+  completeness: number | null;
 }
 
 export interface AcceptanceOdds {
@@ -71,10 +74,49 @@ export type TriggerAiAuditPayload = z.infer<typeof triggerAiAuditSchema>;
 // 2. PROPOSAL AUDIT GATEWAY
 // ==========================================
 
-const AI_AUDIT_UNAVAILABLE_MESSAGE =
-  'التدقيق الذكي للعرض متوقف مؤقتاً حتى يكتمل ربطه بخدمة WaseetAI. يمكنك متابعة كتابة عرضك وتقديمه بشكل طبيعي.';
+const UNSUPPORTED = 'غير مدعوم';
+const UNAVAILABLE = 'غير متاح';
+const QUALITY_SCOPE_NOTE =
+  'يقيّم هذا الفحص نص العرض وخطته وسعره كما كُتبت فقط. لا يقيس توافقه مع المشروع ولا عدالة السعر مقارنة بميزانية العميل.';
+const PROGRESS_MESSAGE = 'جاري مراجعة جودة العرض...';
+const GENERIC_FAILURE_MESSAGE = 'تعذر إكمال مراجعة جودة العرض حالياً. يمكنك متابعة كتابة عرضك وتقديمه بشكل طبيعي.';
+
+/** Maps a WaseetAI proposal evaluation to the frontend contract without inventing anything. */
+export function buildQualityAuditResult(
+  draft: TriggerAiAuditPayload['proposalDraft'],
+  evaluation: ProposalEvaluation
+): AiProposalAuditResult {
+  const score = evaluation.qualityScore;
+  return {
+    profileAudit: [{
+      title: 'مراجعة جودة العرض',
+      subtitle: evaluation.summary,
+      status: score >= 80 ? 'EXCELLENT' : score >= 50 ? 'GOOD' : 'WARNING',
+      badge: evaluation.qualityTag
+    }],
+    triPartyComparison: {
+      client: { budget: UNAVAILABLE, duration: UNAVAILABLE, milestones: UNAVAILABLE },
+      provider: { budget: `${draft.price} $`, duration: `${draft.durationDays} يوم`, milestones: `${draft.milestonesCount} مرحلة` },
+      aiRecommendation: { budget: UNSUPPORTED, duration: UNSUPPORTED, milestones: UNSUPPORTED }
+    },
+    triPartyNote: QUALITY_SCOPE_NOTE,
+    finalMetrics: {
+      overallScore: score,
+      profileMatch: null,
+      messageClarity: null,
+      priceCompetitiveness: null,
+      timelineFeasibility: null,
+      completeness: null
+    },
+    acceptanceOdds: { statusText: UNSUPPORTED, description: UNSUPPORTED, topPercentage: UNSUPPORTED }
+  };
+}
+
+type EvaluateFn = (input: ProposalEvaluationInput) => Promise<ProposalEvaluation>;
 
 export class ProposalAuditGateway {
+  constructor(private readonly evaluate: EvaluateFn = (input) => aiProposalService.evaluate(input)) {}
+
   /**
    * Registers WebSocket event listeners for real-time AI Proposal auditing
    */
@@ -113,11 +155,25 @@ export class ProposalAuditGateway {
         return;
       }
 
-      // No AI call is made: the feature is paused until linked to WaseetAI.
-      socket.emit('ai_audit_progress', {
-        status: 'FAILED',
-        ...aiFeatureUnavailablePayload(AI_AUDIT_UNAVAILABLE_MESSAGE)
-      });
+      socket.emit('ai_audit_progress', { status: 'IN_PROGRESS', message: PROGRESS_MESSAGE });
+
+      let evaluation: ProposalEvaluation;
+      try {
+        evaluation = await this.evaluate({
+          projectId: payload.projectId,
+          title: payload.proposalDraft.title,
+          message: payload.proposalDraft.message,
+          totalPrice: payload.proposalDraft.price,
+          deliveryDays: payload.proposalDraft.durationDays
+        });
+      } catch (error) {
+        // AppError messages are fixed, user-safe Arabic strings; anything else is generic.
+        fail(error instanceof AppError ? error.message : GENERIC_FAILURE_MESSAGE);
+        return;
+      }
+
+      socket.emit('ai_audit_result', buildQualityAuditResult(payload.proposalDraft, evaluation));
+      socket.emit('ai_audit_progress', { status: 'COMPLETED', message: 'اكتملت مراجعة جودة العرض' });
     });
   }
 }
