@@ -172,7 +172,7 @@ test('getProfile (AFFILIATE): the affiliateProfile relation is select-restricted
 // other role profiles) were not.
 // ============================================================================
 
-function createDisplayWriteMockPrisma(t: TestContext, userFixture: any) {
+function createDisplayWriteMockPrisma(t: TestContext, userFixture: any, existingClientProfile: any = null) {
   const userUpdateSpy = t.mock.fn((args: any) => ({ ...userFixture, ...args.data }));
   const clientUpsertSpy = t.mock.fn((args: any) => ({ ...args.create, ...args.update }));
   // Phase 3D.2A: updateProfile()/updateTab() now follow a CLIENT upsert with
@@ -189,7 +189,7 @@ function createDisplayWriteMockPrisma(t: TestContext, userFixture: any) {
       findUnique: async () => userFixture,
       update: userUpdateSpy
     },
-    clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy },
+    clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy, findUnique: async () => existingClientProfile },
     providerProfile: { upsert: providerUpsertSpy },
     affiliateProfile: { upsert: affiliateUpsertSpy }
   };
@@ -206,8 +206,8 @@ function createDisplayWriteMockPrisma(t: TestContext, userFixture: any) {
   return { userUpdateSpy, clientUpsertSpy, providerUpsertSpy, affiliateUpsertSpy };
 }
 
-async function loadProfileServiceForUpdate(t: TestContext, userFixture: any) {
-  const spies = createDisplayWriteMockPrisma(t, userFixture);
+async function loadProfileServiceForUpdate(t: TestContext, userFixture: any, existingClientProfile: any = null) {
+  const spies = createDisplayWriteMockPrisma(t, userFixture, existingClientProfile);
   const moduleUrl = `./profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { profileService } = await import(moduleUrl);
   return { profileService, ...spies };
@@ -629,6 +629,8 @@ test('updateTab banking (CLIENT + paypalPayoutEmail): saves only ClientProfile.p
   assert.equal(clientUpsertSpy.mock.callCount(), 1);
   const args = clientUpsertSpy.mock.calls[0].arguments[0];
   assert.equal(args.update.paypalPayoutEmail, 'pay@example.com');
+  assert.equal(args.update.paymentType, 'paypal');
+  assert.equal(args.create.paymentType, 'paypal');
   for (const k of ['iban', 'accountHolder', 'bankName']) {
     assert.equal(k in args.update, false);
     assert.equal(k in args.create, false);
@@ -659,4 +661,22 @@ test('getProfile (CLIENT) returns paypalPayoutEmail', async (t) => {
   const { profileService } = await loadProfileServiceWithFixture(t, fixture);
   const result = await profileService.getProfile('user-1');
   assert.equal(result.currentProfileData.paypalPayoutEmail, 'pay@example.com');
+});
+
+test('updateTab banking (CLIENT): clearing the PayPal email also clears paymentType=\'paypal\' (no paypal type with null email)', async (t) => {
+  const existing = { paymentType: 'paypal', paypalPayoutEmail: 'pay@example.com' };
+  const { profileService, clientUpsertSpy, userUpdateSpy } = await loadProfileServiceForUpdate(t, activeUser, existing);
+  for (const [i, cleared] of [null, ''].entries()) {
+    await profileService.updateTab('user-1', 'banking', { paypalPayoutEmail: cleared }, 'CLIENT');
+    const { update } = clientUpsertSpy.mock.calls[i].arguments[0];
+    assert.equal(update.paypalPayoutEmail, null);
+    assert.equal(update.paymentType, null);
+  }
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+test('updateTab banking (CLIENT): clearing the PayPal email keeps a legacy bank paymentType', async (t) => {
+  const { profileService, clientUpsertSpy } = await loadProfileServiceForUpdate(t, activeUser, { paymentType: 'bank', paypalPayoutEmail: null });
+  await profileService.updateTab('user-1', 'banking', { paypalPayoutEmail: null }, 'CLIENT');
+  assert.equal('paymentType' in clientUpsertSpy.mock.calls[0].arguments[0].update, false);
 });

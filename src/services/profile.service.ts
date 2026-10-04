@@ -326,10 +326,16 @@ export class ProfileService {
       if (!clear && !email) throw new AppError('بريد PayPal غير صحيح', 400);
 
       await prisma.$transaction(async (tx) => {
+        // Keep paymentType consistent with the email: 'paypal' when set; when
+        // cleared, drop a 'paypal' marker (a legacy 'bank'/'wallet' value stays).
+        const existing = await tx.clientProfile.findUnique({ where: { userId }, select: { paymentType: true } });
+        const paymentTypeUpdate = email
+          ? { paymentType: 'paypal' }
+          : existing?.paymentType === 'paypal' ? { paymentType: null } : {};
         const profile = await tx.clientProfile.upsert({
           where: { userId },
           create: { userId, paypalPayoutEmail: email, ...(email ? { paymentType: 'paypal' } : {}) },
-          update: { paypalPayoutEmail: email }
+          update: { paypalPayoutEmail: email, ...paymentTypeUpdate }
         });
         const user = await tx.user.findUnique({ where: { id: userId } });
         const completion = computeClientCompletion({ user: user || {}, clientProfile: profile as any });

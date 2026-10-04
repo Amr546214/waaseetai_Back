@@ -160,3 +160,14 @@ test('client saveSetupData: paymentType=paypal with a missing email is rejected'
   await clientProfileController.saveSetupData(paypalSetupReq({ paymentType: 'paypal' }), res, () => {});
   assert.equal(res.statusCode, 400);
 });
+
+test('client getSetupData (GET /client/profile/setup) returns paypalPayoutEmail', async (t) => {
+  const row = { userId: 'user-1', paymentType: 'paypal', paypalPayoutEmail: 'pay@example.com' };
+  t.mock.module('../config/db', { namedExports: { prisma: { clientProfile: { findUnique: async () => row } } } });
+  const { clientProfileController } = await import(`./client-profile.controller.ts?fixture=${Date.now()}-${Math.random()}`);
+  const res = createMockRes();
+  await clientProfileController.getSetupData({ user: { userId: 'user-1' } } as any, res, () => {});
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.data.paypalPayoutEmail, 'pay@example.com');
+  assert.equal(res.body.data.paymentType, 'paypal');
+});
