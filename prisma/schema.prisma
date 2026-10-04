@@ -350,10 +350,13 @@ model ClientProfile {
   kycStatus        KYCStatus @default(UNVERIFIED)
 
   // Step 3: Bank / Wallet
-  paymentType   String? // 'bank' | 'wallet'
+  paymentType   String? // 'bank' | 'wallet' | 'paypal'
   bankName      String?
   accountHolder String?
   iban          String?
+  // PayPal payout destination (platform is PayPal-only for now). Dedicated
+  // column — never stored in iban/accountHolder. Legacy bank columns are kept.
+  paypalPayoutEmail String?
 
   // Step 4: Supporting Docs
   supportingDocsUrl String?
