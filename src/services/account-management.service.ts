@@ -123,7 +123,11 @@ export async function initializeRoleState(
   extraFields?: Record<string, unknown>
 ): Promise<boolean> {
   if (role === UserRole.CLIENT) {
-    const existing = await tx.clientProfile.findUnique({ where: { userId } });
+    // Explicit select — deployment-safety fix (same reason as the AFFILIATE branch below): a default
+    // select reads every ClientProfile column, so a database that is missing a newer column (e.g.
+    // paypalPayoutEmail before its ALTER is applied) made EVERY add-account call 500, even though this
+    // is only an existence check.
+    const existing = await tx.clientProfile.findUnique({ where: { userId }, select: { id: true } });
     if (existing) return false;
 
     const seeded = {
@@ -133,7 +137,7 @@ export async function initializeRoleState(
       ...extraFields
     };
     const completionPercentage = computeClientCompletion({ user: identity, clientProfile: seeded });
-    await tx.clientProfile.create({ data: { userId, ...seeded, completionPercentage } });
+    await tx.clientProfile.create({ data: { userId, ...seeded, completionPercentage }, select: { id: true } });
     return true;
   }
 
@@ -393,7 +397,7 @@ export class AccountManagementService {
     const currentRoles: UserRole[] = Array.from(new Set([primaryRole, ...(user.roles || [])]));
 
     if (currentRoles.includes(targetRole)) {
-      throw new AppError('أنت تمتلك هذا الحساب بالفعل', 400);
+      throw new AppError('أنت تمتلك هذا الحساب بالفعل', 409);
     }
 
     const updatedRoles = Array.from(new Set([...currentRoles, targetRole]));
@@ -552,7 +556,14 @@ export class AccountManagementService {
     // the NEW activeRole, not the role that was just left. Only fetch the one
     // relation the target role actually needs.
     const relationSelect: Record<string, unknown> = {};
-    if (targetRole === UserRole.CLIENT) relationSelect.clientProfile = true;
+    // Explicit select (same deployment-safety reason as AFFILIATE below): only the fields
+    // resolveActiveRoleDisplayFields() reads, so a database missing a newer ClientProfile column
+    // (e.g. paypalPayoutEmail) can still switch to the CLIENT dashboard after add-account.
+    if (targetRole === UserRole.CLIENT) {
+      relationSelect.clientProfile = {
+        select: { firstName: true, lastName: true, avatarUrl: true, completionPercentage: true, currentLevel: true, currentPoints: true, pointsToNextLevel: true }
+      };
+    }
     if (targetRole === UserRole.PROVIDER) { relationSelect.providerProfile = true; relationSelect.gamification = true; }
     // Deployment-safety fix: a bare `true` for a relation inside `select`
     // still fetches ALL of that related model's default scalars (select

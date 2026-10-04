@@ -12,9 +12,25 @@ export const UserRoleEnum = z.enum(['CLIENT', 'PROVIDER', 'AFFILIATE', 'ADMIN', 
 // through a request a regular authenticated user can send.
 export const SelfServiceUserRoleEnum = z.enum(['CLIENT', 'PROVIDER', 'AFFILIATE']);
 
+// The wizard's optional answers. Only the shape/length is checked here (a wrong type or an oversize
+// value is a 400 with the field named, instead of reaching Prisma); unknown keys are still accepted.
+const metaText = (label: string, max: number) =>
+  z.string().max(max, `${label} يجب ألا يتجاوز ${max} حرفًا`);
+const ProfileMetadataSchema = z.object({
+  specMain: metaText('التخصص', 100).optional(),
+  specExp: metaText('سنوات الخبرة', 50).optional(),
+  portfolioBio: metaText('النبذة المهنية', 1000).optional(),
+  chType: metaText('قناة التسويق', 100).optional(),
+  chReach: metaText('عدد المتابعين', 100).optional(),
+  coName: metaText('اسم الشركة', 150).optional(),
+  coCrn: metaText('رقم السجل التجاري', 50).optional(),
+  coRole: metaText('المنصب', 100).optional(),
+  skills: z.array(z.string().max(60, 'المهارة يجب ألا تتجاوز 60 حرفًا')).max(50, 'عدد المهارات كبير جدًا').optional()
+}).passthrough();
+
 export const AddAccountTypeSchema = z.object({
   targetRole: SelfServiceUserRoleEnum,
-  profileMetadata: z.record(z.string(), z.any()).optional()
+  profileMetadata: ProfileMetadataSchema.optional()
 });
 
 export type AddAccountTypeDto = z.infer<typeof AddAccountTypeSchema>;
