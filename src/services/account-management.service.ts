@@ -556,7 +556,14 @@ export class AccountManagementService {
     // the NEW activeRole, not the role that was just left. Only fetch the one
     // relation the target role actually needs.
     const relationSelect: Record<string, unknown> = {};
-    if (targetRole === UserRole.CLIENT) relationSelect.clientProfile = true;
+    // Explicit select (same deployment-safety reason as AFFILIATE below): only the fields
+    // resolveActiveRoleDisplayFields() reads, so a database missing a newer ClientProfile column
+    // (e.g. paypalPayoutEmail) can still switch to the CLIENT dashboard after add-account.
+    if (targetRole === UserRole.CLIENT) {
+      relationSelect.clientProfile = {
+        select: { firstName: true, lastName: true, avatarUrl: true, completionPercentage: true, currentLevel: true, currentPoints: true, pointsToNextLevel: true }
+      };
+    }
     if (targetRole === UserRole.PROVIDER) { relationSelect.providerProfile = true; relationSelect.gamification = true; }
     // Deployment-safety fix: a bare `true` for a relation inside `select`
     // still fetches ALL of that related model's default scalars (select
