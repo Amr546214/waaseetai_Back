@@ -53,7 +53,20 @@ export class ProfileController {
       // Phase 3D.1: target role is the caller's CURRENTLY ACTIVE role, not
       // their original signup accountType.
       const activeRole = requireActiveRole(req);
-      const validatedData = updateProfileSchema.parse(req.body);
+      // safeParse: a ZodError here is a client mistake (400), not a server fault (500).
+      const parsed = updateProfileSchema.safeParse(req.body);
+      if (!parsed.success) {
+        const errors = parsed.error.issues.map((issue) => {
+          const field = issue.path.join('.');
+          return { path: field, field, message: issue.message, code: issue.code };
+        });
+        return void res.status(400).json({
+          success: false,
+          message: 'بيانات الملف الشخصي غير صحيحة، يرجى مراجعة الحقول المحددة',
+          errors,
+        });
+      }
+      const validatedData = parsed.data;
       const result = await profileService.updateProfile(req.user.userId, activeRole, validatedData);
 
       res.status(200).json({
