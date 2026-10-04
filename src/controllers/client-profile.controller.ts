@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
+import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
 import { computeClientCompletion } from '../utils/completion-calculators';
 import { clientProfileService } from '../services/client-profile.service';
 
@@ -47,14 +48,29 @@ export class ClientProfileController {
       const payload = req.body;
 
       // Extract specific group payloads
-      const { details, identity, bank, documents, agreements } = payload;
+      const { details, identity, documents, agreements } = payload;
+      const bank = payload.bank ?? {};
 
       // Basic server-side validations
       if (details.idNumber && !/^[12]\d{9}$/.test(details.idNumber)) {
         return res.status(400).json({ success: false, message: 'Invalid ID Number format.' });
       }
       
-      if (bank.iban && bank.iban.length !== 24) {
+      // PayPal payout (PayPal-only platform): optional in setup for backward
+      // compatibility, but when the client chooses PayPal (paymentType='paypal')
+      // or sends an email it must be a valid address. Bank fields are not
+      // required/validated on this path and PayPal is never mapped into them.
+      const rawPaypal = bank.paypalPayoutEmail ?? payload.paypalPayoutEmail;
+      const isPaypal = bank.paymentType === 'paypal' || (rawPaypal !== undefined && rawPaypal !== null && rawPaypal !== '');
+      let paypalPayoutEmail: string | null = null;
+      if (isPaypal) {
+        paypalPayoutEmail = parsePaypalPayoutEmail(rawPaypal);
+        if (!paypalPayoutEmail) {
+          return res.status(400).json({ success: false, message: 'بريد PayPal غير صحيح' });
+        }
+      }
+
+      if (!isPaypal && bank.iban && bank.iban.length !== 24) {
         return res.status(400).json({ success: false, message: 'IBAN must be exactly 24 characters.' });
       }
 
@@ -77,10 +93,10 @@ export class ClientProfileController {
         backIdUrl,
         kycStatus: 'PENDING' as any,
 
-        paymentType: bank.paymentType,
-        bankName: bank.bankName,
-        accountHolder: bank.accountHolder,
-        iban: bank.iban,
+        // PayPal path leaves bank columns untouched (undefined = not written).
+        ...(isPaypal
+          ? { paymentType: 'paypal', paypalPayoutEmail }
+          : { paymentType: bank.paymentType, bankName: bank.bankName, accountHolder: bank.accountHolder, iban: bank.iban }),
 
         supportingDocsUrl,
         notes: documents.notes,

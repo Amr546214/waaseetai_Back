@@ -114,3 +114,49 @@ test('client saveSetupData: isProfileComplete is preserved and completion write 
 
   assert.equal(res.body.data.isProfileComplete, true);
 });
+
+// ---- Client PayPal payout (setup) ----
+
+function paypalSetupReq(bank: any) {
+  return {
+    user: { userId: 'user-1' },
+    body: { details: { idNumber: '1234567890' }, identity: {}, bank, documents: {}, agreements: {} }
+  } as any;
+}
+
+test('client saveSetupData: valid PayPal email succeeds without bank fields and never maps into iban/accountHolder', async (t) => {
+  const { clientProfileController, getClientProfileState } = await loadControllerWithFixture(t);
+  const res = createMockRes();
+  await clientProfileController.saveSetupData(paypalSetupReq({ paymentType: 'paypal', paypalPayoutEmail: 'Pay@Example.com' }), res, () => {});
+
+  assert.equal(res.statusCode, 200);
+  const s = getClientProfileState();
+  assert.equal(s.paypalPayoutEmail, 'pay@example.com');
+  assert.equal(s.paymentType, 'paypal');
+  assert.equal(s.iban, undefined);
+  assert.equal(s.accountHolder, undefined);
+  assert.equal(s.bankName, null); // untouched fixture value
+});
+
+test('client saveSetupData: PayPal inferred from email alone (no paymentType)', async (t) => {
+  const { clientProfileController, getClientProfileState } = await loadControllerWithFixture(t);
+  const res = createMockRes();
+  await clientProfileController.saveSetupData(paypalSetupReq({ paypalPayoutEmail: 'a@b.co' }), res, () => {});
+  assert.equal(res.statusCode, 200);
+  assert.equal(getClientProfileState().paypalPayoutEmail, 'a@b.co');
+});
+
+test('client saveSetupData: invalid PayPal email is rejected with 400', async (t) => {
+  const { clientProfileController, clientUpdateSpy } = await loadControllerWithFixture(t);
+  const res = createMockRes();
+  await clientProfileController.saveSetupData(paypalSetupReq({ paymentType: 'paypal', paypalPayoutEmail: 'bad' }), res, () => {});
+  assert.equal(res.statusCode, 400);
+  assert.equal(clientUpdateSpy.mock.callCount(), 0);
+});
+
+test('client saveSetupData: paymentType=paypal with a missing email is rejected', async (t) => {
+  const { clientProfileController } = await loadControllerWithFixture(t);
+  const res = createMockRes();
+  await clientProfileController.saveSetupData(paypalSetupReq({ paymentType: 'paypal' }), res, () => {});
+  assert.equal(res.statusCode, 400);
+});

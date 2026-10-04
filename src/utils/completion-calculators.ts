@@ -21,6 +21,7 @@ export interface ClientCompletionInput {
     accountHolderName?: string | null;
   };
   clientProfile: {
+    paypalPayoutEmail?: string | null;
     firstName?: string | null;
     lastName?: string | null;
     avatarUrl?: string | null;
@@ -87,10 +88,15 @@ export function computeClientCompletion(input: ClientCompletionInput): number {
   if (idNumber) score += 10.0;
   if (user.idExpiryDate) score += 10.0; // only ever exists on User
 
-  // banking fields: +(20/3) each
-  if (user.ibanNumber) score += (20 / 3);
-  if (bankName) score += (20 / 3);
-  if (user.accountHolderName) score += (20 / 3);
+  // banking fields: +(20/3) each. A PayPal payout email is a full substitute
+  // for the bank trio (PayPal-only clients have no IBAN and must not be capped).
+  if (clientProfile.paypalPayoutEmail) {
+    score += 20;
+  } else {
+    if (user.ibanNumber) score += (20 / 3);
+    if (bankName) score += (20 / 3);
+    if (user.accountHolderName) score += (20 / 3);
+  }
 
   return Math.min(100, Math.round(score));
 }

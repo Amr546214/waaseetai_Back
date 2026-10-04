@@ -38,3 +38,14 @@ import { z } from 'zod';export const updateProfileSchema = z.object({
 });
 
 export type UpdateProfileDto = z.infer<typeof updateProfileSchema>;
+
+
+// Shared by the CLIENT PayPal paths (POST /client/profile/setup and
+// PUT /profiles/update/banking): a required, trimmed, lower-cased email.
+export const paypalPayoutEmailRequiredSchema = z.string().trim().toLowerCase().email('بريد PayPal غير صحيح');
+
+/** Returns the normalized email, or null when the value is not a valid email. */
+export function parsePaypalPayoutEmail(value: unknown): string | null {
+	const r = paypalPayoutEmailRequiredSchema.safeParse(value);
+	return r.success ? r.data : null;
+}

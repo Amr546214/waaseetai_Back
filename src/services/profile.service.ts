@@ -4,6 +4,7 @@ import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { UpdateProfileDto } from '../dtos/profile.dto';
 import { AppError } from '../utils/app-error';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
+import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
 import { computeClientCompletion } from '../utils/completion-calculators';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
 
@@ -312,6 +313,29 @@ export class ProfileService {
         // });
       }
       return { message: 'تم التحديث. التعديلات الحساسة تتطلب التحقق.' };
+    }
+
+    // CLIENT PayPal payout: saved directly (like the Provider PayPal email) to
+    // ClientProfile.paypalPayoutEmail only. It is a payout destination, not a
+    // bank/identity change, so it does not flip the account to
+    // PENDING_VERIFICATION and never touches the bank columns.
+    if (tabName === 'banking' && activeRole === UserRole.CLIENT && data && data.paypalPayoutEmail !== undefined) {
+      const raw = data.paypalPayoutEmail;
+      const clear = raw === null || raw === '';
+      const email = clear ? null : parsePaypalPayoutEmail(raw);
+      if (!clear && !email) throw new AppError('بريد PayPal غير صحيح', 400);
+
+      await prisma.$transaction(async (tx) => {
+        const profile = await tx.clientProfile.upsert({
+          where: { userId },
+          create: { userId, paypalPayoutEmail: email, ...(email ? { paymentType: 'paypal' } : {}) },
+          update: { paypalPayoutEmail: email }
+        });
+        const user = await tx.user.findUnique({ where: { id: userId } });
+        const completion = computeClientCompletion({ user: user || {}, clientProfile: profile as any });
+        await tx.clientProfile.update({ where: { userId }, data: { completionPercentage: completion } });
+      });
+      return { message: 'تم حفظ بريد PayPal بنجاح' };
     }
 
     if (tabName === 'identity' || tabName === 'banking') {

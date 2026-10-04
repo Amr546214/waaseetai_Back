@@ -616,3 +616,47 @@ test('role isolation: CLIENT completion write never changes Provider/Affiliate c
   assert.equal(providerUpdateSpy.mock.callCount(), 0);
   assert.equal(affiliateUpsertSpy.mock.callCount(), 0);
 });
+
+// ============================================================================
+// Client PayPal payout — PUT /profiles/update/banking + GET /profiles/me
+// ============================================================================
+
+test('updateTab banking (CLIENT + paypalPayoutEmail): saves only ClientProfile.paypalPayoutEmail, no bank fields, no PENDING_VERIFICATION', async (t) => {
+  const { profileService, userUpdateSpy, clientUpsertSpy, providerUpsertSpy } = await loadProfileServiceForUpdate(t, activeUser);
+
+  const result = await profileService.updateTab('user-1', 'banking', { paypalPayoutEmail: '  Pay@Example.COM ' }, 'CLIENT');
+
+  assert.equal(clientUpsertSpy.mock.callCount(), 1);
+  const args = clientUpsertSpy.mock.calls[0].arguments[0];
+  assert.equal(args.update.paypalPayoutEmail, 'pay@example.com');
+  for (const k of ['iban', 'accountHolder', 'bankName']) {
+    assert.equal(k in args.update, false);
+    assert.equal(k in args.create, false);
+  }
+  assert.equal(userUpdateSpy.mock.callCount(), 0); // status untouched
+  assert.equal(providerUpsertSpy.mock.callCount(), 0);
+  assert.match(result.message, /PayPal/);
+});
+
+test('updateTab banking (CLIENT): invalid PayPal email is rejected and nothing is written', async (t) => {
+  const { profileService, userUpdateSpy, clientUpsertSpy } = await loadProfileServiceForUpdate(t, activeUser);
+
+  await assert.rejects(() => profileService.updateTab('user-1', 'banking', { paypalPayoutEmail: 'not-an-email' }, 'CLIENT'), /PayPal/);
+  assert.equal(clientUpsertSpy.mock.callCount(), 0);
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+test('updateTab banking (CLIENT) without paypalPayoutEmail keeps the legacy PENDING_VERIFICATION behavior', async (t) => {
+  const { profileService, userUpdateSpy, clientUpsertSpy } = await loadProfileServiceForUpdate(t, activeUser);
+
+  await profileService.updateTab('user-1', 'banking', { iban: 'SA00' }, 'CLIENT');
+  assert.equal(clientUpsertSpy.mock.callCount(), 0);
+  assert.equal(userUpdateSpy.mock.calls[0].arguments[0].data.status, 'PENDING_VERIFICATION');
+});
+
+test('getProfile (CLIENT) returns paypalPayoutEmail', async (t) => {
+  const fixture = { ...baseUser, clientProfile: { ...baseUser.clientProfile, paypalPayoutEmail: 'pay@example.com' } };
+  const { profileService } = await loadProfileServiceWithFixture(t, fixture);
+  const result = await profileService.getProfile('user-1');
+  assert.equal(result.currentProfileData.paypalPayoutEmail, 'pay@example.com');
+});

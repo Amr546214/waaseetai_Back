@@ -296,3 +296,14 @@ test('computeAffiliateCompletion: null/empty semantics preserved exactly (undefi
   });
   assert.equal(score, 0);
 });
+
+test('computeClientCompletion: paypalPayoutEmail substitutes the whole banking section (no IBAN needed to reach 100)', () => {
+  const base = {
+    user: { firstName: 'A', lastName: 'B', phoneNumber: '1', avatarUrl: 'x', idNumber: '1', idExpiryDate: new Date() },
+    clientProfile: { bio: 'b', companyName: 'c', companySize: 's', industry: 'i', website: 'w' }
+  };
+  const without = computeClientCompletion(base as any);
+  const withPaypal = computeClientCompletion({ ...base, clientProfile: { ...base.clientProfile, paypalPayoutEmail: 'p@x.co' } } as any);
+  assert.equal(without, 80);
+  assert.equal(withPaypal, 100);
+});
