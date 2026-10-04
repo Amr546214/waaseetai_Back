@@ -7,8 +7,12 @@ Run everything **on the server itself**. Do NOT run from a laptop. Do not touch 
 ## 1. Code version
 ```
 cd <backend dev checkout> && git fetch && git checkout main && git pull
-git rev-parse --short HEAD        # must be 18ff50d (merge of PR #13)
+git merge-base --is-ancestor 18ff50d HEAD && echo "OK: includes backend PR #13"
+git rev-parse --short HEAD
 ```
+- The deployed code must **contain** merge commit `18ff50d` (backend PR #13). The command above must print the OK line.
+- If HEAD is newer only because of docs-only commits (e.g. this runbook's PR), that is fine.
+- If any newer commit carries unreviewed runtime changes, **stop and come back to us**.
 
 ## 2. Backup (before any change)
 ```
@@ -36,7 +40,7 @@ docker exec wasit-pg-dev psql -U <user> -d <db> -c \
 ```
 Expect one row: text / YES.
 
-## 6. Deploy backend dev from 18ff50d
+## 6. Deploy backend dev (code containing 18ff50d)
 Rebuild/restart the dev backend container from that commit (keep the previous image/container as rollback).
 `npx prisma generate` must run in the build so the client knows the new column.
 
@@ -74,7 +78,7 @@ Use a throwaway test client; setup writes KYC fields (idNumber etc.) on that acc
 4. `prisma migrate deploy` output.
 5. `prisma migrate status` output AFTER applying.
 6. Column check: `client_profiles.paypalPayoutEmail` exists, type `text`, nullable.
-7. Deployed backend dev commit / image / container (must be from `18ff50d`).
+7. Deployed backend dev commit / image / container (must contain `18ff50d`; give the exact HEAD).
 8. All curl results, especially: save PayPal; invalid email = 400; clear (null) makes `paypalPayoutEmail` AND `paymentType` null; `/profiles/me` returns `paypalPayoutEmail`; `/client/profile/setup` returns `paypalPayoutEmail` + `paymentType`; setup accepts `paymentType=paypal` + email and rejects missing/bad email.
 9. Rollback image/container ready (name).
 
