@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { accountManagementService } from '../services/account-management.service';
 import { AppError } from '../utils/app-error';
+import { logger } from '../config/logger';
 
 export class AccountManagementController {
   public async getAvailableAccountTypes(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -40,6 +41,12 @@ export class AccountManagementController {
         data: result
       });
     } catch (error) {
+      // Anything that is not an AppError (e.g. a Prisma/DB failure) used to surface as the English
+      // "Internal Server Error". Keep the details in the log, give the user an Arabic message.
+      if (!(error instanceof AppError)) {
+        logger.error('addAccountType failed:', error);
+        return next(new AppError('تعذر إرسال طلب إضافة الحساب. حاول مرة أخرى أو تواصل مع الدعم.', 500));
+      }
       next(error);
     }
   }

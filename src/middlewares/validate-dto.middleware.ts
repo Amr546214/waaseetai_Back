@@ -15,7 +15,9 @@ export const validateDto = (schema: ZodSchema) => {
       if (error instanceof ZodError) {
         const errors = error.issues.map(issue => ({
           field: issue.path.join('.'),
-          message: issue.message
+          path: issue.path.join('.'),
+          message: issue.message,
+          code: issue.code
         }));
         res.status(400).json({
           success: false,
