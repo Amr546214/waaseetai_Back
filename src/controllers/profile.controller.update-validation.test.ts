@@ -64,3 +64,23 @@ test('a real service failure is NOT turned into a 400: it goes to next() for the
   assert.equal(res.statusCode, null);
   assert.equal(nextErr.message, 'db down');
 });
+
+test('several wrong fields in one request are ALL reported, each with field/path/message/code', async (t) => {
+  t.mock.method(profileService, 'updateProfile', async () => ({}));
+  const res = createMockRes();
+  await controller.updateProfile(reqWith({ website: 'bad', linkedinUrl: 'bad', firstName: 1, hourlyRate: -5, skills: 'x' }), res, () => {});
+  assert.equal(res.statusCode, 400);
+  assert.deepEqual(res.body.errors.map((e: any) => e.field).sort(), ['firstName', 'hourlyRate', 'linkedinUrl', 'skills', 'website']);
+  for (const e of res.body.errors) for (const k of ['field', 'path', 'message', 'code']) assert.ok(e[k] !== undefined && e[k] !== '', `${e.field}.${k}`);
+});
+
+test('unknown / nested keys are stripped by the schema (200, not forwarded); a non-object body is a 400', async (t) => {
+  const update = t.mock.method(profileService, 'updateProfile', async () => ({}));
+  const res = createMockRes();
+  await controller.updateProfile(reqWith({ firstName: 'سارة', unknownKey: 1, nested: { a: 1 } }), res, () => {});
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(Object.keys(update.mock.calls[0].arguments[2] as object), ['firstName']);
+  const bad = createMockRes();
+  await controller.updateProfile(reqWith('str'), bad, () => {});
+  assert.equal(bad.statusCode, 400);
+});
