@@ -287,7 +287,7 @@ test('googleAuth: an explicit intent always wins over the legacy accountType-pre
 // ---------------------------------------------------------------------------
 
 function createRegisterMockPrisma(t: TestContext, opts: {
-  affiliates?: { id: string; userId: string; referralSlug: string }[];
+  affiliates?: { id: string; userId: string; referralSlug: string; status?: string }[];
   createUserId?: string;
 } = {}) {
   const affiliates = opts.affiliates ?? [];
@@ -298,6 +298,8 @@ function createRegisterMockPrisma(t: TestContext, opts: {
   const affiliateFindFirstSpy = t.mock.fn(async (args: any) => {
     const [bySlug, byId] = args.where.OR;
     const match = affiliates.find(a => a.referralSlug === bySlug.referralSlug || a.id === byId.id);
+    // mirrors the `user: { status }` relation filter: only an affiliate whose user is in that status is returned
+    if (match && args.where.user?.status && (match.status ?? 'ACTIVE') !== args.where.user.status) return null;
     return match ? { id: match.id, userId: match.userId } : null;
   });
   // Reproduces Referral.referredUserId's real @unique DB constraint: a
@@ -648,4 +650,50 @@ test('marketer register with an explicit affiliateIdentifier together with a coo
   await authService.registerUser({ ...MARKETER_INPUT, affiliateIdentifier: 'khalid2026' }, { refCookieSlug: 'khalid2026' });
   assert.equal(affiliateFindFirstSpy.mock.callCount(), 0);
   assert.equal(referralCreateSpy.mock.callCount(), 0);
+});
+
+// ---------------------------------------------------------------------------
+// resolveReferralAttribution only credits an ACTIVE affiliate (cookie or typed identifier alike).
+// ---------------------------------------------------------------------------
+const ACTIVE_AFFILIATE = { id: 'affiliate-1', userId: 'affiliate-user-1', referralSlug: 'khalid2026' };
+
+test('attribution: the affiliate lookup is restricted to ACTIVE users', async (t) => {
+  const { authService, affiliateFindFirstSpy } = await loadAuthServiceForRegister(t, { affiliates: [ACTIVE_AFFILIATE] });
+
+  await authService.registerUser({ ...REGISTER_BASE_INPUT }, { refCookieSlug: 'khalid2026' });
+
+  assert.deepEqual(affiliateFindFirstSpy.mock.calls[0].arguments[0].where.user, { status: 'ACTIVE' });
+});
+
+test('attribution: a cookie for a suspended affiliate is ignored — no Referral row', async (t) => {
+  for (const status of ['SUSPENDED', 'SUSPENDED_REVIEW', 'PENDING_VERIFICATION']) {
+    await t.test(status, async (st) => {
+      const { authService, referralCreateSpy } = await loadAuthServiceForRegister(st, { affiliates: [{ ...ACTIVE_AFFILIATE, status }] });
+      const result = await authService.registerUser({ ...REGISTER_BASE_INPUT }, { refCookieSlug: 'khalid2026' });
+      assert.equal(typeof result.userId, 'string'); // registration still succeeds
+      assert.equal(referralCreateSpy.mock.callCount(), 0);
+    });
+  }
+});
+
+test('attribution: a typed affiliateIdentifier of a suspended affiliate is ignored — no Referral row', async (t) => {
+  const { authService, referralCreateSpy } = await loadAuthServiceForRegister(t, { affiliates: [{ ...ACTIVE_AFFILIATE, status: 'SUSPENDED' }] });
+
+  await authService.registerUser({ ...REGISTER_BASE_INPUT, affiliateIdentifier: 'khalid2026' });
+
+  assert.equal(referralCreateSpy.mock.callCount(), 0);
+});
+
+test('attribution: a cookie for an inactive affiliate falls through to a valid ACTIVE typed identifier', async (t) => {
+  const { authService, referralCreateSpy } = await loadAuthServiceForRegister(t, {
+    affiliates: [
+      { id: 'affiliate-sus', userId: 'u-sus', referralSlug: 'sus-code', status: 'SUSPENDED' },
+      { id: 'affiliate-ok', userId: 'u-ok', referralSlug: 'ok-code' }
+    ]
+  });
+
+  await authService.registerUser({ ...REGISTER_BASE_INPUT, affiliateIdentifier: 'ok-code' }, { refCookieSlug: 'sus-code' });
+
+  assert.equal(referralCreateSpy.mock.callCount(), 1);
+  assert.equal(referralCreateSpy.mock.calls[0].arguments[0].data.affiliateId, 'affiliate-ok');
 });

@@ -1,3 +1,4 @@
+import { UserStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 
 // Public, PII-safe affiliate lookup — backs GET /api/affiliates/resolve and
@@ -6,46 +7,78 @@ import { prisma } from '../config/db';
 //
 // This is the ONLY select this file ever uses against AffiliateProfile —
 // deliberately never email/phone/bank/IBAN/KYC/wallet balance/commission
-// history/any other private field, regardless of what a caller asks for.
+// rate or history/payout fields/the numeric `level` (its migration is not applied everywhere), regardless of what a caller
+// asks for. Only ACTIVE affiliates are ever returned (a suspended/unverified account is invisible here).
 const PUBLIC_AFFILIATE_SELECT = {
   id: true,
   referralSlug: true,
   firstName: true,
-  lastName: true
+  lastName: true,
+  currentLevel: true,
+  identityVerified: true,
+  avatarUrl: true
 } as const;
+
+/** Only affiliates whose user account is ACTIVE can be found, resolved or credited with a referral. */
+const ACTIVE_AFFILIATE_ONLY = { user: { status: UserStatus.ACTIVE } } as const;
 
 export interface PublicAffiliateResult {
   id: string;
   referralSlug: string | null;
   displayName: string;
+  /** From AffiliateProfile.currentLevel (a label such as "مساعد"); never the numeric level. */
+  levelName: string | null;
+  /** AffiliateProfile.identityVerified. */
+  verified: boolean;
+  avatarUrl: string | null;
 }
 
 const MIN_SEARCH_QUERY_LENGTH = 2;
 const SEARCH_RESULT_LIMIT = 10;
 
-function toPublicShape(affiliate: { id: string; referralSlug: string | null; firstName: string | null; lastName: string | null }): PublicAffiliateResult {
+type PublicAffiliateRow = {
+  id: string;
+  referralSlug: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  currentLevel?: string | null;
+  identityVerified?: boolean | null;
+  avatarUrl?: string | null;
+};
+
+function toPublicShape(affiliate: PublicAffiliateRow): PublicAffiliateResult {
   const nameFromParts = `${affiliate.firstName || ''} ${affiliate.lastName || ''}`.trim();
   // Fallback chain when both name fields are null: the affiliate's own
   // referral slug (still not private), and only as a last resort a generic
   // Arabic label — never falls back to email/phone.
   const displayName = nameFromParts || affiliate.referralSlug || 'وسيط تسويقي';
-  return { id: affiliate.id, referralSlug: affiliate.referralSlug, displayName };
+  return {
+    id: affiliate.id,
+    referralSlug: affiliate.referralSlug,
+    displayName,
+    levelName: affiliate.currentLevel?.trim() || null,
+    verified: affiliate.identityVerified === true,
+    avatarUrl: affiliate.avatarUrl || null
+  };
 }
 
 export class AffiliatesPublicService {
   /**
-   * Resolves one affiliate by AffiliateProfile.referralSlug OR raw affiliate
+   * Resolves one ACTIVE affiliate by AffiliateProfile.referralSlug (case-insensitive) OR raw affiliate
    * `id`, per the existing convention established by
    * marketer-overview.service.ts::getRefLinks() — the same identifier used
    * for registration-time attribution (auth.service.ts's
    * resolveReferralAttribution()). Returns null (never throws) when not
-   * found — the controller maps that to a clean 404.
+   * found or not active — the controller maps that to a clean 404.
    */
   async resolveByCode(code: string): Promise<PublicAffiliateResult | null> {
     const trimmed = code.trim();
     if (!trimmed) return null;
     const affiliate = await prisma.affiliateProfile.findFirst({
-      where: { OR: [{ referralSlug: trimmed }, { id: trimmed }] },
+      where: {
+        OR: [{ referralSlug: { equals: trimmed, mode: 'insensitive' } }, { id: trimmed }],
+        ...ACTIVE_AFFILIATE_ONLY
+      },
       select: PUBLIC_AFFILIATE_SELECT
     });
     return affiliate ? toPublicShape(affiliate) : null;
@@ -73,25 +106,38 @@ export class AffiliatesPublicService {
   }
 
   /**
-   * Case-insensitive partial match on firstName/lastName. An empty or
-   * too-short query returns an empty array, never an error — this backs a
+   * Case-insensitive search over ACTIVE affiliates by name (first/last) or referralSlug. Every whitespace-separated
+   * word of the query must match the first name, last name or slug, so "amr okasha" finds "Amr Okasha". A full
+   * slug match is listed first. An empty or too-short query returns an empty array, never an error — this backs a
    * live search-as-you-type autocomplete.
    */
   async search(query: string): Promise<PublicAffiliateResult[]> {
     const trimmed = (query || '').trim();
     if (trimmed.length < MIN_SEARCH_QUERY_LENGTH) return [];
 
-    const affiliates = await prisma.affiliateProfile.findMany({
+    const exact = await prisma.affiliateProfile.findFirst({
+      where: { referralSlug: { equals: trimmed, mode: 'insensitive' }, ...ACTIVE_AFFILIATE_ONLY },
+      select: PUBLIC_AFFILIATE_SELECT
+    });
+
+    const words = trimmed.split(/\s+/).filter(Boolean);
+    const others = await prisma.affiliateProfile.findMany({
       where: {
-        OR: [
-          { firstName: { contains: trimmed, mode: 'insensitive' } },
-          { lastName: { contains: trimmed, mode: 'insensitive' } }
-        ]
+        AND: words.map(word => ({
+          OR: [
+            { firstName: { contains: word, mode: 'insensitive' } },
+            { lastName: { contains: word, mode: 'insensitive' } },
+            { referralSlug: { contains: word, mode: 'insensitive' } }
+          ]
+        })),
+        ...ACTIVE_AFFILIATE_ONLY,
+        ...(exact ? { id: { not: exact.id } } : {})
       },
       select: PUBLIC_AFFILIATE_SELECT,
-      take: SEARCH_RESULT_LIMIT
+      take: exact ? SEARCH_RESULT_LIMIT - 1 : SEARCH_RESULT_LIMIT
     });
-    return affiliates.map(toPublicShape);
+
+    return [...(exact ? [exact] : []), ...others].map(toPublicShape);
   }
 }
 
