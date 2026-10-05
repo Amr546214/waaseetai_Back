@@ -1,7 +1,7 @@
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
-import { OtpType, UserStatus, UserRole, ReferralStatus, User as PrismaUser } from '@prisma/client';
+import { OtpType, UserStatus, UserRole, ReferralStatus, AccountType, User as PrismaUser } from '@prisma/client';
 import { authRepository } from '../repositories/auth.repository';
 import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput, VerifyLoginOtpInput } from '../routes/auth/auth.schema';
 import { OAuth2Client } from 'google-auth-library';
@@ -215,10 +215,15 @@ export class AuthService {
 		// email/password path and the Google sign-up path — a Google sign-up
 		// also arrives here (with googleIdentity set above) since there is no
 		// separate user-creation call site for it (see googleAuth() below).
-		await this.resolveReferralAttribution(user.id, {
-			affiliateIdentifier: input.affiliateIdentifier,
-			refCookieSlug: referralContext.refCookieSlug
-		});
+		// A marketing broker (affiliate) is never referred by another affiliate: the referral cookie, the explicit
+		// affiliateIdentifier and any other referral source are ignored for that account type (email and Google sign-up
+		// both come through here). Clients and providers are attributed as before.
+		if (input.accountType !== AccountType.MARKETING_BROKER) {
+			await this.resolveReferralAttribution(user.id, {
+				affiliateIdentifier: input.affiliateIdentifier,
+				refCookieSlug: referralContext.refCookieSlug
+			});
+		}
 
 		// 4. Generate a 6-digit OTP (valid 10 minutes, as the email says) and store it
 		const otpCode = crypto.randomInt(100000, 999999).toString();
