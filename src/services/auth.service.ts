@@ -151,8 +151,10 @@ export class AuthService {
 	 */
 	private async resolveReferralAttribution(newUserId: string, context: ReferralAttributionContext = {}): Promise<void> {
 		const findValidAffiliate = async (slugOrId: string) => {
+			// Only an ACTIVE affiliate can be credited: a suspended/inactive one is ignored (no Referral row), whether it came
+			// from the cookie or the typed identifier.
 			const affiliate = await prisma.affiliateProfile.findFirst({
-				where: { OR: [{ referralSlug: slugOrId }, { id: slugOrId }] },
+				where: { OR: [{ referralSlug: slugOrId }, { id: slugOrId }], user: { status: UserStatus.ACTIVE } },
 				select: { id: true, userId: true }
 			});
 			if (!affiliate || affiliate.userId === newUserId) return null;
