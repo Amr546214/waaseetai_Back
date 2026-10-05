@@ -60,6 +60,7 @@ const RESET_INVALID_CODE_MESSAGE = 'رمز التحقق غير صحيح أو م�
 
 // Activation codes live 10 minutes (the email says 10): a late email must not carry an already-dead code.
 const EMAIL_OTP_EXPIRY_MS = 10 * 60 * 1000;
+const GOOGLE_TOKEN_INVALID_MESSAGE = 'تعذر التحقق من حساب جوجل، حاول تسجيل الدخول مرة أخرى';
 const SMS_LOGIN_DISABLED_MESSAGE = 'التحقق عبر الرسائل النصية غير مفعّل، سجّل الدخول بالبريد الإلكتروني وكلمة المرور';
 
 export interface ReferralAttributionContext {
@@ -77,7 +78,15 @@ export interface ReferralAttributionContext {
 
 export class AuthService {
 	private async verifyGoogleIdentity(idToken: string) {
-		const ticket = await googleClient.verifyIdToken({ idToken, audience: process.env.GOOGLE_CLIENT_ID });
+		let ticket;
+		try {
+			ticket = await googleClient.verifyIdToken({ idToken, audience: process.env.GOOGLE_CLIENT_ID });
+		} catch {
+			// A malformed / expired / wrong-audience token is the caller's problem, not a server error. Never log the token or the
+			// library's error text (it can echo parts of the token), and never return provider details.
+			logger.warn('[Auth] Google ID token verification failed.');
+			throw new AppError(GOOGLE_TOKEN_INVALID_MESSAGE, 401);
+		}
 		const payload = ticket.getPayload();
 		if (!payload?.sub || !payload.email || !payload.email_verified) {
 			throw new AppError('تعذر التحقق من حساب جوجل', 401);
