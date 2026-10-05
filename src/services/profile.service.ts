@@ -5,7 +5,8 @@ import { UpdateProfileDto } from '../dtos/profile.dto';
 import { AppError } from '../utils/app-error';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
-import { computeClientCompletion } from '../utils/completion-calculators';
+import { computeClientCompletion, computeClientMissingItems } from '../utils/completion-calculators';
+import { logger } from '../config/logger';
 import { providerProfileService } from './provider-profile.service';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
 
@@ -85,12 +86,33 @@ export class ProfileService {
       affiliateProfile: user.affiliateProfile
     });
 
+    const currentProfileData: Record<string, unknown> = {
+      ...safeUser,
+      ...roleProfile,
+      ...resolvedDisplayFields
+    };
+
+    // CLIENT: the completion is recomputed from the rows just read (so a stored value that predates the current formula is
+    // healed on the next read) and returned with what is still missing. The stored column is synced when it differs (best
+    // effort, never fails the read).
+    if (user.activeRole === UserRole.CLIENT && user.clientProfile) {
+      const input = { user, clientProfile: user.clientProfile };
+      const completion = computeClientCompletion(input);
+      const missingItems = computeClientMissingItems(input);
+      if (user.clientProfile.completionPercentage !== completion) {
+        try {
+          await prisma.clientProfile.update({ where: { userId }, data: { completionPercentage: completion }, select: { id: true } });
+        } catch (error) {
+          logger.error(`[ProfileService] Failed to sync stored client completion (userId=${userId})`, error);
+        }
+      }
+      currentProfileData.profileCompletionPercent = completion;
+      currentProfileData.completionPercentage = completion;
+      currentProfileData.missingItems = missingItems;
+    }
+
     return {
-      currentProfileData: {
-        ...safeUser,
-        ...roleProfile,
-        ...resolvedDisplayFields
-      },
+      currentProfileData,
       latestHistory
     };
   }

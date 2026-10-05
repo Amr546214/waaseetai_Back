@@ -2,7 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
-import { computeClientCompletion } from '../utils/completion-calculators';
+import { logger } from '../config/logger';
+import { computeClientCompletion, computeClientMissingItems } from '../utils/completion-calculators';
 import { clientProfileService } from '../services/client-profile.service';
 
 export class ClientProfileController {
@@ -28,13 +29,26 @@ export class ClientProfileController {
     try {
       const userId = req.user!.userId;
 
-      const profile = await prisma.clientProfile.findUnique({
-        where: { userId }
-      });
+      const [profile, user] = await Promise.all([
+        prisma.clientProfile.findUnique({ where: { userId } }),
+        prisma.user.findUnique({ where: { id: userId }, select: { firstName: true, lastName: true, avatarUrl: true, accountType: true, idNumber: true } })
+      ]);
+
+      // The wizard also needs to know how complete the profile is and what is missing (same rules as /profiles/me).
+      const input = { user: user || {}, clientProfile: profile || {} };
+      const completionPercentage = computeClientCompletion(input);
+      const missingItems = computeClientMissingItems(input);
+      if (profile && profile.completionPercentage !== completionPercentage) {
+        try {
+          await prisma.clientProfile.update({ where: { userId }, data: { completionPercentage }, select: { id: true } });
+        } catch (error) {
+          logger.error(`[ClientProfileController] Failed to sync stored client completion (userId=${userId})`, error);
+        }
+      }
 
       res.status(200).json({
         success: true,
-        data: profile || {}
+        data: { ...(profile || {}), completionPercentage, missingItems }
       });
     } catch (error) {
       next(error);

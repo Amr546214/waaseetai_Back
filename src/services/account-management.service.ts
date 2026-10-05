@@ -76,6 +76,8 @@ export interface RoleInitializationIdentity {
   bankName?: string | null;
   accountHolderName?: string | null;
   idDocumentUrl?: string | null;
+  /** Needed by the CLIENT completion formula (CLIENT_COMPANY scores the company fields). */
+  accountType?: string | null;
 }
 
 /**
@@ -327,7 +329,8 @@ export class AccountManagementService {
           ibanNumber: user.ibanNumber,
           bankName: user.bankName,
           accountHolderName: user.accountHolderName,
-          idDocumentUrl: user.idDocumentUrl
+          idDocumentUrl: user.idDocumentUrl,
+          accountType: user.accountType
         });
       });
     }
@@ -421,7 +424,8 @@ export class AccountManagementService {
         ibanNumber: user.ibanNumber,
         bankName: user.bankName,
         accountHolderName: user.accountHolderName,
-        idDocumentUrl: user.idDocumentUrl
+        idDocumentUrl: user.idDocumentUrl,
+        accountType: user.accountType
       };
 
       await createMissingRoleProfiles(tx, user.id, currentRoles, identity);

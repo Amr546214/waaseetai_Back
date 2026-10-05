@@ -50,8 +50,7 @@ test('createUserWithProfile: role initialization uses the full identity and comp
   const data = clientCreateSpy.mock.calls[0].arguments[0].data;
   assert.equal(data.firstName, 'Amr');
   assert.equal(data.lastName, 'Okasha');
-  // firstName + lastName + phoneNumber = 3 * 7.5 = 22.5 -> rounds to 23.
-  // avatarUrl is legitimately absent for an email/password signup (unlike
-  // Google, which provides one) — not scored, not an invented value.
-  assert.equal(data.completionPercentage, 23);
+  // Individual formula: firstName + lastName = 15 (the phone is no longer scored). avatarUrl is legitimately absent for an
+  // email/password signup (unlike Google, which provides one) — not scored, not an invented value.
+  assert.equal(data.completionPercentage, 15);
 });
