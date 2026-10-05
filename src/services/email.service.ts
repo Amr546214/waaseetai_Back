@@ -150,7 +150,7 @@ export class EmailService {
       const htmlContent = this.getOtpEmailTemplate(firstName, otpCode);
 
       if (!process.env.SMTP_USER) {
-        logger.warn(`Email not sent: SMTP_USER is not configured. OTP for ${to} is ${otpCode}`);
+        logger.warn('Email not sent: SMTP_USER is not configured.');
         return;
       }
 

@@ -38,14 +38,26 @@ test('sendSmsOtp: production + SMS disabled never prints the OTP code', async (t
   assert.ok(lines.every(l => !l.includes(CODE)), 'OTP code leaked to logs in production');
 });
 
-test('sendSmsOtp: non-production + SMS disabled still logs the code for local testing', async (t) => {
-  process.env.NODE_ENV = 'development';
+test('sendSmsOtp: SMS disabled never logs the code, in ANY environment (no clear-text OTP in logs)', async (t) => {
+  for (const env of ['development', 'production', 'test']) {
+    process.env.NODE_ENV = env;
+    delete process.env.SMS_ENABLED;
+    const lines = captureConsole(t);
+
+    await notificationService.sendSmsOtp(PHONE, CODE);
+
+    assert.ok(lines.every(l => !l.includes(CODE)), env);
+    assert.ok(lines.every(l => !l.includes(PHONE)), `${env}: the phone number is not logged either`);
+  }
+});
+
+test('isSmsAvailable: false unless SMS is enabled AND a real provider exists (the Twilio sender is still a stub)', () => {
   delete process.env.SMS_ENABLED;
-  const lines = captureConsole(t);
-
-  await notificationService.sendSmsOtp(PHONE, CODE);
-
-  assert.ok(lines.some(l => l.includes(CODE)));
+  assert.equal(notificationService.isSmsAvailable(), false);
+  process.env.SMS_ENABLED = 'true'; process.env.SMS_PROVIDER = 'twilio';
+  assert.equal(notificationService.isSmsAvailable(), false);
+  process.env.SMS_PROVIDER = 'dev';
+  assert.equal(notificationService.isSmsAvailable(), false);
 });
 
 test('sendSmsOtp: production + unknown provider does not print the code', async (t) => {

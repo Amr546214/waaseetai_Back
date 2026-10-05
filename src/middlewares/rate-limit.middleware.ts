@@ -1,6 +1,8 @@
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
+import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/app-error';
+import { formatWaitArabic, otpSendThrottle, otpThrottleMessage } from '../utils/otp-send-throttle';
 
 dotenv.config();
 
@@ -21,6 +23,18 @@ const AUTH_RATE_LIMIT_MAX = positiveIntEnv(process.env.AUTH_RATE_LIMIT_MAX, 10);
 const RATE_LIMIT_ENABLED = process.env.RATE_LIMIT_ENABLED !== 'false';
 const skipWhenRateLimitDisabled = () => !RATE_LIMIT_ENABLED;
 
+
+/**
+ * Builds the Arabic 429 with a `Retry-After` header (seconds) read from the limiter's reset time, so the app can show the
+ * real wait instead of guessing it from the message text.
+ */
+const rateLimited = (req: Request, res: Response, prefix: string): AppError => {
+  const resetTime = (req as Request & { rateLimit?: { resetTime?: Date } }).rateLimit?.resetTime;
+  const seconds = resetTime ? Math.max(1, Math.ceil((resetTime.getTime() - Date.now()) / 1000)) : 60;
+  res.setHeader('Retry-After', String(seconds));
+  return new AppError(`${prefix} ${formatWaitArabic(seconds)}`, 429, [{ code: 'RATE_LIMITED', retryAfterSeconds: seconds }]);
+};
+
 // Standard rate limiter for API endpoints
 export const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -29,7 +43,7 @@ export const apiLimiter = rateLimit({
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
   skip: skipWhenRateLimitDisabled,
   handler: (req, res, next) => {
-    next(new AppError('Too many requests from this IP, please try again after 15 minutes', 429));
+    next(rateLimited(req, res, 'طلبات كثيرة من هذا الجهاز، حاول مرة أخرى بعد'));
   }
 });
 
@@ -43,7 +57,7 @@ export const authLimiter = rateLimit({
   legacyHeaders: false,
   skip: skipWhenRateLimitDisabled,
   handler: (req, res, next) => {
-    next(new AppError('Too many authentication attempts, please try again after an hour', 429));
+    next(rateLimited(req, res, 'محاولات كثيرة، حاول مرة أخرى بعد'));
   }
 });
 
@@ -57,3 +71,22 @@ export const aiLimiter = rateLimit({
     next(new AppError('تم تجاوز الحد المسموح لطلبات الذكاء الاصطناعي، يرجى المحاولة لاحقاً', 429));
   }
 });
+
+/**
+ * Limiter for the endpoints that SEND a code by email (register, resend-otp, forgot-password): per recipient (1 per 60 s,
+ * 5 per hour) and per IP (30 per hour). Separate from `authLimiter`, so wrong passwords or verification attempts never block
+ * sending, and sending never blocks verifying. `recipient` picks what identifies the recipient in the request.
+ */
+export const otpSendLimiter = (recipient: (req: Request) => string | undefined) =>
+  (req: Request, res: Response, next: NextFunction) => {
+    if (!RATE_LIMIT_ENABLED) return next();
+    const key = recipient(req);
+    // Without a usable recipient the schema validation answers the 400 (this runs before it, so just let it through).
+    if (!key) return next();
+    const result = otpSendThrottle.consume(key, req.ip);
+    if (result.allowed) return next();
+    res.setHeader('Retry-After', String(result.retryAfterSeconds));
+    return next(new AppError(otpThrottleMessage(result.reason!, result.retryAfterSeconds), 429, [
+      { code: 'OTP_RATE_LIMITED', reason: result.reason, retryAfterSeconds: result.retryAfterSeconds }
+    ]));
+  };

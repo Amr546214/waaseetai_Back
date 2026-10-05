@@ -12,7 +12,13 @@ const smtpConfig = {
 };
 
 // Create transporter
-export const mailTransporter = nodemailer.createTransport(smtpConfig);
+// Bounded timeouts: a hanging SMTP connection must fail (and be reported as emailSent:false) instead of waiting minutes.
+export const mailTransporter = nodemailer.createTransport({
+  ...smtpConfig,
+  connectionTimeout: 10_000,
+  greetingTimeout: 10_000,
+  socketTimeout: 20_000,
+});
 
 // Waseet AI Verification Email Template
 export const getOtpEmailTemplate = (code: string) => {
