@@ -4,6 +4,7 @@ import { DashboardStatsPayload } from '../types/dashboard.types';
 import { AppError } from '../utils/app-error';
 import { getRoleFromAccountType } from './account-management.service';
 import { resolveActiveRoleDisplayFields, resolveProviderProgression } from '../utils/role-display-resolver';
+import { computeClientCompletion } from '../utils/completion-calculators';
 
 export class DashboardService {
   /**
@@ -158,12 +159,28 @@ export class DashboardService {
           currentLevel: true,
           pointsToNextLevel: true,
           currentPoints: true,
+          // Needed to recompute the client completion on read (same rules as GET /profiles/me).
+          firstName: true,
+          lastName: true,
+          avatarUrl: true,
+          accountType: true,
+          idNumber: true,
           clientProfile: {
             select: {
               currentLevel: true,
               currentPoints: true,
               pointsToNextLevel: true,
-              completionPercentage: true
+              completionPercentage: true,
+              firstName: true,
+              lastName: true,
+              avatarUrl: true,
+              bio: true,
+              industry: true,
+              idNumber: true,
+              companyName: true,
+              companySize: true,
+              website: true,
+              paypalPayoutEmail: true
             }
           }
         }
@@ -182,6 +199,9 @@ export class DashboardService {
         },
         clientProfile: user?.clientProfile
       });
+
+      // The completion shown on the dashboard is recomputed from the rows just read, so it always matches the profile page.
+      const clientProfileCompletion = user?.clientProfile ? computeClientCompletion({ user, clientProfile: user.clientProfile }) : null;
 
       // 7. Price-fairness AI insight (Batch 7) — a deterministic aggregate
       // of the client's own proposals' real, already-Gemini-computed
@@ -257,7 +277,7 @@ export class DashboardService {
           totalSpent,
           aiRating: 0,
           humanRating: 0,
-          profileCompletionPercent: clientDisplayFields.profileCompletionPercent,
+          profileCompletionPercent: clientProfileCompletion ?? clientDisplayFields.profileCompletionPercent,
           currentLevel: clientDisplayFields.currentLevel,
           pointsToNextLevel: clientDisplayFields.pointsToNextLevel,
           currentPoints: clientDisplayFields.currentPoints

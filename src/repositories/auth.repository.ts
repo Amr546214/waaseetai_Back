@@ -77,7 +77,8 @@ export class AuthRepository {
         ibanNumber: user.ibanNumber,
         bankName: user.bankName,
         accountHolderName: user.accountHolderName,
-        idDocumentUrl: user.idDocumentUrl
+        idDocumentUrl: user.idDocumentUrl,
+        accountType: user.accountType
       });
 
       return user;

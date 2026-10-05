@@ -161,13 +161,21 @@ test('client saveSetupData: paymentType=paypal with a missing email is rejected'
   assert.equal(res.statusCode, 400);
 });
 
-test('client getSetupData (GET /client/profile/setup) returns paypalPayoutEmail', async (t) => {
-  const row = { userId: 'user-1', paymentType: 'paypal', paypalPayoutEmail: 'pay@example.com' };
-  t.mock.module('../config/db', { namedExports: { prisma: { clientProfile: { findUnique: async () => row } } } });
+test('client getSetupData (GET /client/profile/setup) returns paypalPayoutEmail, the completion and what is missing', async (t) => {
+  const row = { userId: 'user-1', paymentType: 'paypal', paypalPayoutEmail: 'pay@example.com', completionPercentage: 0 };
+  const updateSpy = t.mock.fn((args: any) => ({ id: 'cp-1', ...args.data }));
+  t.mock.module('../config/db', { namedExports: { prisma: {
+    clientProfile: { findUnique: async () => row, update: updateSpy },
+    user: { findUnique: async () => ({ firstName: 'سارة', lastName: 'أحمد', avatarUrl: null, accountType: 'CLIENT_INDIVIDUAL', idNumber: null }) },
+  } } });
   const { clientProfileController } = await import(`./client-profile.controller.ts?fixture=${Date.now()}-${Math.random()}`);
   const res = createMockRes();
   await clientProfileController.getSetupData({ user: { userId: 'user-1' } } as any, res, () => {});
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.data.paypalPayoutEmail, 'pay@example.com');
   assert.equal(res.body.data.paymentType, 'paypal');
+  // name 15 + PayPal 20 = 35; the rest is listed as missing (individual rules, wizard items point at the setup page)
+  assert.equal(res.body.data.completionPercentage, 35);
+  assert.deepEqual(res.body.data.missingItems.map((i: any) => i.key), ['avatar', 'bio', 'industry', 'idNumber']);
+  assert.equal(updateSpy.mock.calls[0].arguments[0].data.completionPercentage, 35); // stale stored value is healed
 });

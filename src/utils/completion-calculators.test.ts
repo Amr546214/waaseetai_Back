@@ -1,147 +1,84 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeClientCompletion, computeProviderCompletion, computeAffiliateCompletion } from './completion-calculators';
+import { computeClientCompletion, computeClientMissingItems, computeProviderCompletion, computeAffiliateCompletion } from './completion-calculators';
 
 // Phase 3D.2A: these are pure functions (no Prisma, no dotenv, no DB, no
 // service imports with side effects), so these tests run with zero mocking
 // and never load db.ts.
 
 // ============================================================================
-// CLIENT calculator — verbatim historical formula (base 7.5x4, meta 6.0x5,
-// KYC 10.0x2, banking 20/3 x3 = 100 max).
+// CLIENT calculator — one formula per account type, each weighted to 100 over inputs the UI can fill.
+// INDIVIDUAL: avatar 15, name 15, bio 15, occupation(industry) 15, idNumber 20, PayPal 20.
+// COMPANY:    avatar 10, name 10, bio 10, companyName 10, companySize 10, industry 10, website 10, idNumber 10, PayPal 20.
+// Not scored any more: User.phoneNumber, User.idExpiryDate, IBAN / bank name / account holder.
 // ============================================================================
 
-test('computeClientCompletion: known fixture -> exact historical score', () => {
-  // base: firstName, lastName, phoneNumber, avatarUrl all set -> 4 * 7.5 = 30
-  // meta: bio, companyName set (2 of 5) -> 2 * 6.0 = 12
-  // KYC: idNumber set, idExpiryDate not -> 1 * 10.0 = 10
-  // banking: none set -> 0
-  // total = 52
-  const score = computeClientCompletion({
-    user: {
-      firstName: 'Amr',
-      lastName: 'Okasha',
-      phoneNumber: '0500000000',
-      avatarUrl: 'https://example.com/avatar.png',
-      idNumber: null,
-      idExpiryDate: null,
-      ibanNumber: null,
-      bankName: null,
-      accountHolderName: null
-    },
-    clientProfile: {
-      firstName: null,
-      lastName: null,
-      avatarUrl: null,
-      bio: 'A short bio',
-      companyName: 'Acme',
-      companySize: null,
-      industry: null,
-      website: null,
-      idNumber: '1234567890',
-      bankName: null
-    }
-  });
+const FULL_INDIVIDUAL = {
+  user: { firstName: 'سارة', lastName: 'أحمد', accountType: 'CLIENT_INDIVIDUAL' },
+  clientProfile: { avatarUrl: 'https://x/a.png', bio: 'نبذة', industry: 'مهندسة', idNumber: '1234567890', paypalPayoutEmail: 'pay@example.com' },
+};
+const FULL_COMPANY = {
+  user: { firstName: 'سارة', lastName: 'أحمد', accountType: 'CLIENT_COMPANY' },
+  clientProfile: { avatarUrl: 'https://x/a.png', bio: 'نبذة', companyName: 'شركة', companySize: '11-50', industry: 'تقنية', website: 'https://c.example', idNumber: '1234567890', paypalPayoutEmail: 'pay@example.com' },
+};
 
-  assert.equal(score, 52);
+test('client individual: a full profile is 100 with nothing missing; company fields are NOT counted', () => {
+  assert.equal(computeClientCompletion(FULL_INDIVIDUAL), 100);
+  assert.deepEqual(computeClientMissingItems(FULL_INDIVIDUAL), []);
+  // company fields on an individual add nothing and are never listed
+  const withCompanyFields = { ...FULL_INDIVIDUAL, clientProfile: { ...FULL_INDIVIDUAL.clientProfile, companyName: 'x', companySize: 'y', website: 'z' } };
+  assert.equal(computeClientCompletion(withCompanyFields), 100);
+  const noPaypal = { ...FULL_INDIVIDUAL, clientProfile: { ...FULL_INDIVIDUAL.clientProfile, paypalPayoutEmail: null } };
+  assert.equal(computeClientCompletion(noPaypal), 80);
+  assert.equal(computeClientMissingItems(noPaypal).some(i => /company|website|companySize/i.test(i.key)), false);
 });
 
-test('computeClientCompletion: full fixture -> capped at 100', () => {
-  const score = computeClientCompletion({
-    user: {
-      firstName: 'Amr',
-      lastName: 'Okasha',
-      phoneNumber: '0500000000',
-      avatarUrl: 'https://example.com/avatar.png',
-      idNumber: '1234567890',
-      idExpiryDate: '2030-01-01',
-      ibanNumber: 'SA0000000000000000000000',
-      bankName: 'Al Rajhi',
-      accountHolderName: 'Amr Okasha'
-    },
-    clientProfile: {
-      firstName: null,
-      lastName: null,
-      avatarUrl: null,
-      bio: 'bio',
-      companyName: 'Acme',
-      companySize: '10-50',
-      industry: 'Tech',
-      website: 'https://acme.example',
-      idNumber: null,
-      bankName: null
-    }
-  });
-
-  assert.equal(score, 100);
+test('client individual weights: 15/15/15/15/20/20', () => {
+  const items = computeClientMissingItems({ user: { accountType: 'CLIENT_INDIVIDUAL' }, clientProfile: {} });
+  assert.deepEqual(items.map(i => [i.key, i.points]), [['avatar', 15], ['name', 15], ['bio', 15], ['industry', 15], ['idNumber', 20], ['payout', 20]]);
+  assert.equal(items.reduce((n, i) => n + i.points, 0), 100);
 });
 
-test('computeClientCompletion: everything empty -> 0', () => {
-  const score = computeClientCompletion({
-    user: {},
-    clientProfile: {}
-  });
-  assert.equal(score, 0);
+test('client company: the company fields count and the weights add up to 100', () => {
+  assert.equal(computeClientCompletion(FULL_COMPANY), 100);
+  const items = computeClientMissingItems({ user: { accountType: 'CLIENT_COMPANY' }, clientProfile: {} });
+  assert.deepEqual(items.map(i => [i.key, i.points]), [['avatar', 10], ['name', 10], ['bio', 10], ['companyName', 10], ['companySize', 10], ['industry', 10], ['website', 10], ['idNumber', 10], ['payout', 20]]);
+  assert.equal(items.reduce((n, i) => n + i.points, 0), 100);
+  const noWebsite = { ...FULL_COMPANY, clientProfile: { ...FULL_COMPANY.clientProfile, website: '' } };
+  assert.equal(computeClientCompletion(noWebsite), 90);
+  assert.deepEqual(computeClientMissingItems(noWebsite).map(i => i.key), ['website']);
 });
 
-test('computeClientCompletion: null ClientProfile firstName/lastName/avatarUrl falls back to User', () => {
-  const score = computeClientCompletion({
-    user: { firstName: 'Amr', lastName: 'Okasha', avatarUrl: 'https://example.com/a.png' },
-    clientProfile: { firstName: null, lastName: null, avatarUrl: null }
-  });
-  // 3 base fields (firstName/lastName/avatarUrl) via User fallback = 3 * 7.5 = 22.5 -> rounds to 23
-  assert.equal(score, 23);
+test('client: an unknown / missing account type is scored as an individual', () => {
+  assert.equal(computeClientCompletion({ user: {}, clientProfile: FULL_INDIVIDUAL.clientProfile }), computeClientCompletion({ user: { accountType: 'CLIENT_INDIVIDUAL' }, clientProfile: FULL_INDIVIDUAL.clientProfile }));
+  assert.equal(computeClientCompletion({ user: { accountType: 'PROVIDER_INDIVIDUAL' }, clientProfile: {} }), 0);
 });
 
-test('computeClientCompletion: an already-set ClientProfile firstName/lastName/avatarUrl wins over User', () => {
-  const score = computeClientCompletion({
-    user: { firstName: 'Legacy', lastName: 'Name', avatarUrl: 'https://legacy.example/a.png' },
-    clientProfile: { firstName: 'Client', lastName: 'Persona', avatarUrl: 'https://client.example/a.png' }
+test('client: PayPal is the only payout item (+20); IBAN, bank name, account holder, phone and idExpiryDate earn nothing', () => {
+  const legacyOnly = computeClientCompletion({
+    user: { accountType: 'CLIENT_INDIVIDUAL', ibanNumber: 'SA0380000000608010167519', accountHolderName: 'سارة', bankName: 'Rajhi', phoneNumber: '0500000000', idExpiryDate: new Date() },
+    clientProfile: { bankName: 'Rajhi' },
   });
-  assert.equal(score, 23); // same weight either way — this proves ClientProfile's value is what's actually read
+  assert.equal(legacyOnly, 0);
+  const paypalOnly = computeClientCompletion({ user: { accountType: 'CLIENT_INDIVIDUAL' }, clientProfile: { paypalPayoutEmail: 'pay@example.com' } });
+  assert.equal(paypalOnly, 20);
+  assert.equal(computeClientCompletion({ user: { accountType: 'CLIENT_INDIVIDUAL' }, clientProfile: { paypalPayoutEmail: '   ' } }), 0);
 });
 
-test('computeClientCompletion: null ClientProfile.bankName falls back to User.bankName (null-shadow fix)', () => {
-  const withNullShadow = computeClientCompletion({
-    user: { bankName: 'Al Rajhi' },
-    clientProfile: { bankName: null } // Prisma returns explicit null, not undefined, once a row exists
-  });
-  const withNoClientProfileRow = computeClientCompletion({
-    user: { bankName: 'Al Rajhi' },
-    clientProfile: {}
-  });
-  // Both must credit the banking factor via User's value — a raw
-  // {...user, ...clientProfile} merge would score 0 for the first case,
-  // since explicit null would win over User's real value.
-  assert.equal(withNullShadow, Math.round(20 / 3));
-  assert.equal(withNoClientProfileRow, Math.round(20 / 3));
+test('client missing items point at pages that can fix them: wizard items -> setup, PayPal -> banking, never the inert identity tab', () => {
+  const items = computeClientMissingItems({ user: { accountType: 'CLIENT_INDIVIDUAL' }, clientProfile: {} });
+  const tab = Object.fromEntries(items.map(i => [i.key, i.tab]));
+  assert.deepEqual(tab, { avatar: 'profile', name: 'basics', bio: 'profile', industry: 'setup', idNumber: 'setup', payout: 'banking' });
+  assert.equal(items.every(i => i.status === 'missing' && i.hint.length > 0 && i.label.length > 0), true);
 });
 
-test('computeClientCompletion: null ClientProfile.idNumber falls back to User.idNumber (null-shadow fix)', () => {
-  const score = computeClientCompletion({
-    user: { idNumber: '1234567890' },
-    clientProfile: { idNumber: null }
-  });
-  assert.equal(score, 10);
+test('client: ClientProfile wins over User and a null ClientProfile value falls back to User (name, avatar, idNumber)', () => {
+  assert.equal(computeClientCompletion({ user: { firstName: 'U', lastName: 'U', avatarUrl: 'u', idNumber: '1', accountType: 'CLIENT_INDIVIDUAL' }, clientProfile: { firstName: null, lastName: null, avatarUrl: null, idNumber: null } }), 15 + 15 + 20);
+  assert.equal(computeClientCompletion({ user: { accountType: 'CLIENT_INDIVIDUAL' }, clientProfile: { firstName: 'C', lastName: 'C', avatarUrl: 'c', idNumber: '2' } }), 15 + 15 + 20);
 });
 
-test('computeClientCompletion: a set ClientProfile.bankName/idNumber wins over User (not just a fallback in one direction)', () => {
-  const score = computeClientCompletion({
-    user: { bankName: null, idNumber: null },
-    clientProfile: { bankName: 'Al Rajhi', idNumber: '1234567890' }
-  });
-  assert.equal(score, Math.round(10 + (20 / 3)));
-});
-
-test('computeClientCompletion: ibanNumber and accountHolderName always resolve from User (ClientProfile has no matching column names)', () => {
-  const score = computeClientCompletion({
-    user: { ibanNumber: 'SA00...', accountHolderName: 'Amr Okasha' },
-    // ClientProfile's own equivalents are named `iban`/`accountHolder` —
-    // irrelevant here since the calculator's input type doesn't even accept
-    // those keys, proving the formula never looks for them.
-    clientProfile: {}
-  });
-  assert.equal(score, Math.round((20 / 3) * 2));
+test('client: whitespace-only text does not count', () => {
+  assert.equal(computeClientCompletion({ user: { accountType: 'CLIENT_INDIVIDUAL' }, clientProfile: { bio: '   ', industry: ' ' } }), 0);
 });
 
 // ============================================================================
@@ -297,17 +234,6 @@ test('computeAffiliateCompletion: null/empty semantics preserved exactly (undefi
     marketingChannelsCount: 0
   });
   assert.equal(score, 0);
-});
-
-test('computeClientCompletion: paypalPayoutEmail substitutes the whole banking section (no IBAN needed to reach 100)', () => {
-  const base = {
-    user: { firstName: 'A', lastName: 'B', phoneNumber: '1', avatarUrl: 'x', idNumber: '1', idExpiryDate: new Date() },
-    clientProfile: { bio: 'b', companyName: 'c', companySize: 's', industry: 'i', website: 'w' }
-  };
-  const without = computeClientCompletion(base as any);
-  const withPaypal = computeClientCompletion({ ...base, clientProfile: { ...base.clientProfile, paypalPayoutEmail: 'p@x.co' } } as any);
-  assert.equal(without, 80);
-  assert.equal(withPaypal, 100);
 });
 
 // ============================================================================

@@ -8,13 +8,15 @@
 // function for provenance).
 
 export interface ClientCompletionInput {
-  /** Identity-level User fields the historical formula reads. */
   user: {
     firstName?: string | null;
     lastName?: string | null;
-    phoneNumber?: string | null;
     avatarUrl?: string | null;
+    /** CLIENT_COMPANY scores the company fields; every other account type is scored as an individual. */
+    accountType?: string | null;
     idNumber?: string | null;
+    // The legacy fields below are no longer scored (kept optional so existing callers keep compiling).
+    phoneNumber?: string | null;
     idExpiryDate?: unknown;
     ibanNumber?: string | null;
     bankName?: string | null;
@@ -35,70 +37,79 @@ export interface ClientCompletionInput {
   };
 }
 
+/** The profile page that can fix the item. 'setup' = the profile-setup wizard (the only place that collects it). */
+export type CompletionTab = 'profile' | 'contact' | 'payout' | 'docs' | 'basics' | 'banking' | 'setup';
+export type CompletionItemStatus = 'missing' | 'pending_review';
+export interface CompletionMissingItem {
+  key: string;
+  label: string;
+  points: number;
+  status: CompletionItemStatus;
+  tab: CompletionTab;
+  /** Short Arabic hint on what exactly is needed. */
+  hint: string;
+}
+
+interface CompletionRule<I> {
+  key: string;
+  label: string;
+  points: number;
+  tab: CompletionTab;
+  hint: string;
+  met: (i: I) => boolean;
+}
+
+const clientName = ({ user: u, clientProfile: p }: ClientCompletionInput) => !!((p.firstName || u.firstName) && (p.lastName || u.lastName));
+const clientAvatar = ({ user: u, clientProfile: p }: ClientCompletionInput) => !!(p.avatarUrl || u.avatarUrl);
+const clientIdNumber = ({ user: u, clientProfile: p }: ClientCompletionInput) => !!(p.idNumber || u.idNumber);
+const clientPaypal = ({ clientProfile: p }: ClientCompletionInput) => !!(p.paypalPayoutEmail && p.paypalPayoutEmail.trim());
+const filled = (v: string | null | undefined) => !!(v && v.trim());
+
+const AVATAR = (points: number): CompletionRule<ClientCompletionInput> => ({ key: 'avatar', label: 'الصورة الشخصية', points, tab: 'profile', hint: 'أضف صورة شخصية', met: clientAvatar });
+const NAME = (points: number): CompletionRule<ClientCompletionInput> => ({ key: 'name', label: 'الاسم الأول واسم العائلة', points, tab: 'basics', hint: 'أكمل الاسم الأول واسم العائلة', met: clientName });
+const BIO = (points: number, hint: string): CompletionRule<ClientCompletionInput> => ({ key: 'bio', label: 'النبذة التعريفية', points, tab: 'profile', hint, met: ({ clientProfile: p }) => filled(p.bio) });
+const ID_NUMBER = (points: number): CompletionRule<ClientCompletionInput> => ({ key: 'idNumber', label: 'رقم الهوية الوطنية', points, tab: 'setup', hint: 'أضف رقم الهوية من صفحة استكمال البيانات', met: clientIdNumber });
+const PAYPAL: CompletionRule<ClientCompletionInput> = { key: 'payout', label: 'حساب PayPal لاستلام المدفوعات', points: 20, tab: 'banking', hint: 'أضف بريد PayPal لاستلام المدفوعات', met: clientPaypal };
+
 /**
- * Verbatim historical CLIENT completion formula. Originally inline in
- * profile.service.ts#getProfile() (present since the project's very first
- * commit, confirmed via `git show <initial-commit>:src/services/profile.service.ts`),
- * later ported to scripts/backfill-role-profile-fields.ts's
- * computeClientCompletionScore() for the Phase 3B backfill. Same fields,
- * same weights (base 7.5 x4, meta 6.0 x5, KYC 10.0 x2, banking 20/3 x3 = 100
- * max), same rounding/cap. This is the Phase 3D.2A runtime source of truth
- * for ClientProfile.completionPercentage — not a new/invented formula.
- *
- * Only change from the original raw `{...user, ...clientProfile}` merge:
- * firstName/lastName/avatarUrl/bankName/idNumber use an explicit
- * ClientProfile-first, User-fallback resolution instead. A raw spread lets
- * ClientProfile's value win even when it's an explicit `null` (Prisma always
- * returns nullable scalar columns as null, never undefined, once a row
- * exists), silently shadowing a real legacy User value — the exact bug
- * already found and fixed for firstName/lastName/avatarUrl in the Phase 3B
- * backfill script (commit "fix: preserve client identity fields in
- * completion backfill"); bankName and idNumber have the identical exposure
- * (both columns exist, under the same name, on both User and ClientProfile)
- * and are fixed here the same way. ibanNumber and accountHolderName have no
- * risk — ClientProfile has no matching column names for those (it calls them
- * `iban`/`accountHolder`), so they always resolve to User's value, exactly
- * as the original formula always did.
+ * CLIENT_INDIVIDUAL: only what an individual can fill from the UI, weighted to 100 (15+15+15+15+20+20).
+ * The "current profession" is the wizard's occupation (stored in ClientProfile.industry); it is only collected by the wizard.
+ */
+const CLIENT_INDIVIDUAL_RULES: CompletionRule<ClientCompletionInput>[] = [
+  AVATAR(15), NAME(15), BIO(15, 'أضف نبذة تعريفية عن نفسك'),
+  { key: 'industry', label: 'المهنة الحالية', points: 15, tab: 'setup', hint: 'أضف مهنتك الحالية من صفحة استكمال البيانات', met: ({ clientProfile: p }) => filled(p.industry) },
+  ID_NUMBER(20), PAYPAL,
+];
+
+/** CLIENT_COMPANY: adds the company fields (10 each: 10+10+10+10+10+10+10+10+20 = 100). */
+const CLIENT_COMPANY_RULES: CompletionRule<ClientCompletionInput>[] = [
+  AVATAR(10), NAME(10), BIO(10, 'أضف نبذة تعريفية عن شركتك'),
+  { key: 'companyName', label: 'اسم الشركة', points: 10, tab: 'profile', hint: 'أضف اسم الشركة', met: ({ clientProfile: p }) => filled(p.companyName) },
+  { key: 'companySize', label: 'حجم الشركة', points: 10, tab: 'profile', hint: 'اختر حجم الشركة', met: ({ clientProfile: p }) => filled(p.companySize) },
+  { key: 'industry', label: 'مجال العمل', points: 10, tab: 'profile', hint: 'أضف مجال عمل الشركة', met: ({ clientProfile: p }) => filled(p.industry) },
+  { key: 'website', label: 'الموقع الإلكتروني', points: 10, tab: 'profile', hint: 'أضف الموقع الإلكتروني للشركة', met: ({ clientProfile: p }) => filled(p.website) },
+  ID_NUMBER(10), PAYPAL,
+];
+
+const clientRulesFor = (input: ClientCompletionInput) =>
+  input.user.accountType === 'CLIENT_COMPANY' ? CLIENT_COMPANY_RULES : CLIENT_INDIVIDUAL_RULES;
+
+/**
+ * Client completion, one formula per account type, each weighted to 100 over inputs the UI can actually fill.
+ * Removed from the score: User.phoneNumber (read-only, set at signup), User.idExpiryDate (no writer anywhere) and the bank
+ * trio (IBAN / bank name / account holder). PayPal is the only payout item (+20). The same rules produce the missing list,
+ * so the percentage and "what is missing" cannot disagree. ClientProfile-first, User-fallback for name/avatar/idNumber.
  */
 export function computeClientCompletion(input: ClientCompletionInput): number {
-  const { user, clientProfile } = input;
+  const score = clientRulesFor(input).reduce((sum, rule) => sum + (rule.met(input) ? rule.points : 0), 0);
+  return Math.min(100, score);
+}
 
-  const firstName = clientProfile.firstName || user.firstName;
-  const lastName = clientProfile.lastName || user.lastName;
-  const avatarUrl = clientProfile.avatarUrl || user.avatarUrl;
-  const bankName = clientProfile.bankName || user.bankName;
-  const idNumber = clientProfile.idNumber || user.idNumber;
-
-  let score = 0;
-
-  // base fields: +7.5 each
-  if (firstName) score += 7.5;
-  if (lastName) score += 7.5;
-  if (user.phoneNumber) score += 7.5; // identity-level, always from User
-  if (avatarUrl) score += 7.5;
-
-  // meta fields: +6.0 each (none of these exist on User, no ambiguity)
-  if (clientProfile.bio) score += 6.0;
-  if (clientProfile.companyName) score += 6.0;
-  if (clientProfile.companySize) score += 6.0;
-  if (clientProfile.industry) score += 6.0;
-  if (clientProfile.website) score += 6.0;
-
-  // KYC fields: +10.0 each
-  if (idNumber) score += 10.0;
-  if (user.idExpiryDate) score += 10.0; // only ever exists on User
-
-  // banking fields: +(20/3) each. A PayPal payout email is a full substitute
-  // for the bank trio (PayPal-only clients have no IBAN and must not be capped).
-  if (clientProfile.paypalPayoutEmail) {
-    score += 20;
-  } else {
-    if (user.ibanNumber) score += (20 / 3);
-    if (bankName) score += (20 / 3);
-    if (user.accountHolderName) score += (20 / 3);
-  }
-
-  return Math.min(100, Math.round(score));
+/** What is still needed to reach 100% for this client (nothing here is ever "pending review"). */
+export function computeClientMissingItems(input: ClientCompletionInput): CompletionMissingItem[] {
+  return clientRulesFor(input)
+    .filter(rule => !rule.met(input))
+    .map(rule => ({ key: rule.key, label: rule.label, points: rule.points, tab: rule.tab, status: 'missing' as const, hint: rule.hint }));
 }
 
 export interface ProviderCompletionInput {
@@ -127,19 +138,6 @@ export interface ProviderCompletionInput {
     ibanNumber?: string | null;
     idDocumentUrl?: string | null;
   };
-}
-
-/** The profile page that can fix the item (frontend tab ids of the provider edit page). */
-export type CompletionTab = 'profile' | 'contact' | 'payout' | 'docs';
-export type CompletionItemStatus = 'missing' | 'pending_review';
-export interface CompletionMissingItem {
-  key: string;
-  label: string;
-  points: number;
-  status: CompletionItemStatus;
-  tab: CompletionTab;
-  /** Short Arabic hint on what exactly is needed. */
-  hint: string;
 }
 
 interface ProviderCompletionRule {

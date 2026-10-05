@@ -38,6 +38,7 @@ const baseUser = {
 
 async function loadProfileServiceWithFixture(t: TestContext, userFixture: any) {
   const updateSpy = t.mock.fn();
+  const clientUpdateSpy = t.mock.fn((args: any) => ({ id: 'cp-1', ...args.data }));
   const findUniqueSpy = t.mock.fn(async (_args: any) => userFixture);
   t.mock.module('../config/db', {
     // See account-management.service.test.ts for why this must be
@@ -48,7 +49,8 @@ async function loadProfileServiceWithFixture(t: TestContext, userFixture: any) {
         user: {
           findUnique: findUniqueSpy,
           update: updateSpy
-        }
+        },
+        clientProfile: { update: clientUpdateSpy }
       }
     }
   });
@@ -56,24 +58,44 @@ async function loadProfileServiceWithFixture(t: TestContext, userFixture: any) {
   // node's ESM cache would otherwise keep serving the first test's instance.
   const moduleUrl = `./profile.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { profileService } = await import(moduleUrl);
-  return { profileService, updateSpy, findUniqueSpy };
+  return { profileService, updateSpy, findUniqueSpy, clientUpdateSpy };
 }
 
-test('getProfile (CLIENT) resolves role-specific fields and never writes to the DB', async (t) => {
-  const { profileService, updateSpy } = await loadProfileServiceWithFixture(t, baseUser);
+test('getProfile (CLIENT) resolves role-specific fields, recomputes the completion with its missing items, and never writes User', async (t) => {
+  const { profileService, updateSpy, clientUpdateSpy } = await loadProfileServiceWithFixture(t, { ...baseUser, accountType: 'CLIENT_INDIVIDUAL' });
 
   const result = await profileService.getProfile('user-1');
 
   assert.equal(result.currentProfileData.firstName, 'Client');
   assert.equal(result.currentProfileData.lastName, 'Persona');
   assert.equal(result.currentProfileData.avatarUrl, 'https://client.example/avatar.png');
-  assert.equal(result.currentProfileData.profileCompletionPercent, 60);
+  // individual: avatar 15 + name 15 = 30 (the stored 60 predates the formula; companyName is not scored for individuals)
+  assert.equal(result.currentProfileData.profileCompletionPercent, 30);
+  assert.equal(result.currentProfileData.completionPercentage, 30);
+  assert.deepEqual(result.currentProfileData.missingItems.map((i: any) => i.key), ['bio', 'industry', 'idNumber', 'payout']);
   assert.equal(result.currentProfileData.currentLevel, 'باحث');
   assert.equal(result.currentProfileData.currentPoints, 200);
   assert.equal(result.currentProfileData.pointsToNextLevel, 100);
 
-  // Read-side-effect removal (Phase 3C, problem #1): a GET must never mutate.
+  // The User row is never written by a GET; only the stored client completion is brought in sync.
   assert.equal(updateSpy.mock.callCount(), 0);
+  assert.equal(clientUpdateSpy.mock.callCount(), 1);
+  assert.equal(clientUpdateSpy.mock.calls[0].arguments[0].data.completionPercentage, 30);
+});
+
+test('getProfile (CLIENT_COMPANY) scores the company fields', async (t) => {
+  const company = { ...baseUser, accountType: 'CLIENT_COMPANY', clientProfile: { ...baseUser.clientProfile, companyName: 'Acme', companySize: '11-50', industry: 'IT', website: 'https://a.example', completionPercentage: 0 } };
+  const { profileService } = await loadProfileServiceWithFixture(t, company);
+  const result = await profileService.getProfile('user-1');
+  // avatar 10 + name 10 + companyName 10 + companySize 10 + industry 10 + website 10 = 60
+  assert.equal(result.currentProfileData.profileCompletionPercent, 60);
+  assert.deepEqual(result.currentProfileData.missingItems.map((i: any) => i.key), ['bio', 'idNumber', 'payout']);
+});
+
+test('getProfile (CLIENT): the stored value is not rewritten when it is already correct', async (t) => {
+  const { profileService, clientUpdateSpy } = await loadProfileServiceWithFixture(t, { ...baseUser, accountType: 'CLIENT_INDIVIDUAL', clientProfile: { ...baseUser.clientProfile, completionPercentage: 30 } });
+  await profileService.getProfile('user-1');
+  assert.equal(clientUpdateSpy.mock.callCount(), 0);
 });
 
 test('getProfile (PROVIDER) with no ProviderProfile row does not crash and falls back to legacy fields', async (t) => {
