@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/db';
+import { REFERRAL_COOKIE_NAME, referralCookieSetOptions } from '../utils/referral-cookie';
 
 export class RefController {
   public async handleReferralClick(req: Request, res: Response, next: NextFunction) {
@@ -50,12 +51,7 @@ export class RefController {
         }
 
         // Set secure HTTP-Only attribution cookie for 30 days
-        res.cookie('waseet_ref_code', slug, {
-          maxAge: 30 * 24 * 60 * 60 * 1000,
-          httpOnly: true,
-          secure: process.env.NODE_ENV === 'production',
-          sameSite: 'lax',
-        });
+        res.cookie(REFERRAL_COOKIE_NAME, slug, referralCookieSetOptions());
       }
 
       // Redirect visitor seamlessly to the registration page — this MUST
@@ -64,7 +60,9 @@ export class RefController {
       // is mounted at /auth/register (nested under the 'auth' layout route
       // in app.routes.ts). A bare /register previously landed real referral
       // clicks on the frontend's 404 page.
-      res.redirect(302, '/auth/register');
+      // `?ref=1` marks "this visit came through a real referral link": the registration page shows the referrer only
+      // with it (and clears any older referral cookie without it). An unknown slug sets no cookie and gets no marker.
+      res.redirect(302, affiliate ? '/auth/register?ref=1' : '/auth/register');
     } catch (error) {
       next(error);
     }

@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 // ALWAYS 200 (never 404/error) — the `active` boolean carries the result.
 
 function createMockRes() {
-  const res: any = { statusCode: null, body: null };
+  const res: any = { statusCode: null, body: null, clearCalls: [] as any[] };
+  res.clearCookie = (name: string, options: any) => { res.clearCalls.push({ name, options }); return res; };
   res.status = (code: number) => { res.statusCode = code; return res; };
   res.json = (body: any) => { res.body = body; return res; };
   return res;
@@ -100,4 +101,29 @@ test('referralStatus: an active response never contains email/phone/bank/IBAN/KY
   for (const forbiddenField of ['email', 'phone', 'phoneNumber', 'iban', 'bankName', 'kycDocumentUrl', 'id']) {
     assert.equal(forbiddenField in data, false, `must not expose ${forbiddenField}`);
   }
+});
+
+test('clearReferralCookie: removes waseet_ref_code with the SAME attributes it was set with (HttpOnly, Secure in production, SameSite=Lax, Path=/), always 200', async (t) => {
+  const { affiliatesPublicController } = await loadController(t, async () => ({ active: false }));
+  const res = createMockRes();
+  const previousEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    await affiliatesPublicController.clearReferralCookie({ headers: {} } as any, res, () => { throw new Error('next() should not be called'); });
+  } finally {
+    process.env.NODE_ENV = previousEnv;
+  }
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, { success: true, data: { cleared: true } });
+  assert.equal(res.clearCalls.length, 1);
+  assert.equal(res.clearCalls[0].name, 'waseet_ref_code');
+  assert.deepEqual(res.clearCalls[0].options, { httpOnly: true, secure: true, sameSite: 'lax', path: '/' });
+});
+
+test('clearReferralCookie: idempotent — with no cookie at all it is still a 200 no-op', async (t) => {
+  const { affiliatesPublicController } = await loadController(t, async () => ({ active: false }));
+  const res = createMockRes();
+  await affiliatesPublicController.clearReferralCookie({ headers: {} } as any, res, () => { throw new Error('next() should not be called'); });
+  assert.equal(res.statusCode, 200);
 });

@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { affiliatesPublicService } from '../services/affiliates-public.service';
 import { AppError } from '../utils/app-error';
 import { getRequestCookie } from '../utils/request-cookie';
+import { REFERRAL_COOKIE_NAME, referralCookieBaseOptions } from '../utils/referral-cookie';
 
 export class AffiliatesPublicController {
   public async resolve(req: Request, res: Response, next: NextFunction) {
@@ -41,6 +42,21 @@ export class AffiliatesPublicController {
       const data = await affiliatesPublicService.getReferralStatus(cookieSlug);
 
       res.status(200).json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/affiliates/referral-cookie/clear — the registration page opened WITHOUT a referral-link marker
+   * (?ref=1) calls this so an older visit's waseet_ref_code is removed (current-visit attribution): the page then shows
+   * no locked referrer and the registration cannot be attributed from the stale cookie. Idempotent, always 200,
+   * removes the cookie with the same attributes it was set with. Public (no auth) like the rest of this router.
+   */
+  public async clearReferralCookie(_req: Request, res: Response, next: NextFunction) {
+    try {
+      res.clearCookie(REFERRAL_COOKIE_NAME, referralCookieBaseOptions());
+      res.status(200).json({ success: true, data: { cleared: true } });
     } catch (error) {
       next(error);
     }
