@@ -3,6 +3,45 @@ import { mailTransporter, getOtpEmailTemplate, getPasswordResetEmailTemplate } f
 import { prisma } from '../config/db';
 import { getIO } from '../socket';
 import { AppError } from '../utils/app-error';
+import { logger } from '../config/logger';
+
+/** What the SMTP server said about one delivery (never contains the code). */
+export interface EmailDeliveryResult {
+	messageId: string | null;
+	accepted: string[];
+	rejected: string[];
+	response: string | null;
+}
+
+/** a***@example.com: enough to correlate a log line, not enough to expose the address. */
+export const maskEmail = (email: string): string => {
+	const [name = '', domain = ''] = String(email).split('@');
+	return `${name.slice(0, 1)}***@${domain}`;
+};
+
+const SMS_PROVIDER_IMPLEMENTED = false; // sendSmsViaTwilio() is a stub
+
+const asAddresses = (list: unknown): string[] => (Array.isArray(list) ? list.map(a => String((a as { address?: string })?.address ?? a)) : []);
+
+const logEmailDelivery = (kind: string, to: string, info: any): EmailDeliveryResult => {
+	const result: EmailDeliveryResult = {
+		messageId: info?.messageId ? String(info.messageId) : null,
+		accepted: asAddresses(info?.accepted).map(maskEmail),
+		rejected: asAddresses(info?.rejected).map(maskEmail),
+		response: info?.response ? String(info.response).slice(0, 200) : null,
+	};
+	// A recipient the server rejected is a failed delivery even though sendMail resolved.
+	const level = result.rejected.length || !result.accepted.length ? 'warn' : 'info';
+	logger[level](`[Email:${kind}] to=${maskEmail(to)} messageId=${result.messageId} accepted=${JSON.stringify(result.accepted)} rejected=${JSON.stringify(result.rejected)} response=${JSON.stringify(result.response)}`);
+	if (result.rejected.length || !result.accepted.length) throw Object.assign(new Error('SMTP rejected the recipient'), { deliveryResult: result });
+	return result;
+};
+
+const logEmailFailure = (kind: string, to: string, error: unknown) => {
+	const e = error as { code?: string; responseCode?: number; response?: string; message?: string };
+	logger.error(`[Email:${kind}] FAILED to=${maskEmail(to)} code=${e?.code ?? 'n/a'} responseCode=${e?.responseCode ?? 'n/a'} response=${JSON.stringify((e?.response ?? e?.message ?? '').toString().slice(0, 200))}`);
+};
+
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -92,21 +131,21 @@ export class NotificationService {
 	/**
 	 * Send an OTP verification code via email.
 	 */
-	public async sendEmailOtp(email: string, code: string): Promise<void> {
+	public async sendEmailOtp(email: string, code: string): Promise<EmailDeliveryResult> {
 		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
 		const emailSubject = process.env.OTP_EMAIL_SUBJECT ?? 'رمز التحقق لتفعيل حسابك - Waseet AI';
 		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
 
 		try {
-			await mailTransporter.sendMail({
+			const info = await mailTransporter.sendMail({
 				from: `"${senderName}" <${from}>`,
 				to: email,
 				subject: emailSubject,
 				html: getOtpEmailTemplate(code),
 			});
-			console.log(`[NotificationService] OTP email sent to ${email}`);
+			return logEmailDelivery('otp', email, info);
 		} catch (error) {
-			console.error(`[NotificationService] Failed to send OTP email to ${email}:`, error);
+			logEmailFailure('otp', email, error);
 			throw error;
 		}
 	}
@@ -116,23 +155,28 @@ export class NotificationService {
 	 * (distinct from the account-activation OTP email) so the two flows never
 	 * share wording.
 	 */
-	public async sendPasswordResetEmail(email: string, firstName: string, code: string): Promise<void> {
+	public async sendPasswordResetEmail(email: string, firstName: string, code: string): Promise<EmailDeliveryResult> {
 		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
 		const emailSubject = process.env.RESET_PASSWORD_EMAIL_SUBJECT ?? 'رمز إعادة تعيين كلمة المرور - Waseet AI';
 		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
 
 		try {
-			await mailTransporter.sendMail({
+			const info = await mailTransporter.sendMail({
 				from: `"${senderName}" <${from}>`,
 				to: email,
 				subject: emailSubject,
 				html: getPasswordResetEmailTemplate(firstName, code),
 			});
-			console.log(`[NotificationService] Password reset email sent to ${email}`);
+			return logEmailDelivery('password-reset', email, info);
 		} catch (error) {
-			console.error(`[NotificationService] Failed to send password reset email to ${email}:`, error);
+			logEmailFailure('password-reset', email, error);
 			throw error;
 		}
+	}
+
+	/** True only when a real SMS sender exists. Today the only provider code is a Twilio stub, so this is false. */
+	public isSmsAvailable(): boolean {
+		return process.env.SMS_ENABLED === 'true' && (process.env.SMS_PROVIDER || 'dev') === 'twilio' && SMS_PROVIDER_IMPLEMENTED;
 	}
 
 	/**
@@ -152,11 +196,7 @@ export class NotificationService {
 		if (!smsEnabled) {
 			// Never write the code itself to logs in production — anyone with
 			// access to container logs could otherwise log in as the user.
-			if (process.env.NODE_ENV === 'production') {
-				console.warn(`[NotificationService][SMS] SMS_ENABLED is not true; OTP for ${phoneNumber} was NOT sent.`);
-			} else {
-				console.log(`[NotificationService][SMS:DEV] OTP for ${phoneNumber}: ${code}`);
-			}
+			console.warn('[NotificationService][SMS] SMS is not enabled; no code was sent.');
 			return;
 		}
 
@@ -165,13 +205,13 @@ export class NotificationService {
 				await this.sendSmsViaTwilio(phoneNumber, code);
 				break;
 			default:
-				console.warn(`[NotificationService] Unknown SMS_PROVIDER "${smsProvider}". OTP for ${phoneNumber} was NOT sent.`);
+				console.warn(`[NotificationService] Unknown SMS_PROVIDER "${smsProvider}"; no code was sent.`);
 		}
 	}
 
 	/** Not wired up yet — install the `twilio` SDK and implement this once a Twilio account/credentials exist. */
 	private async sendSmsViaTwilio(phoneNumber: string, code: string): Promise<void> {
-		console.warn(`[NotificationService] SMS_PROVIDER=twilio is set but sendSmsViaTwilio() isn't implemented yet. OTP for ${phoneNumber} was NOT sent.`);
+		console.warn("[NotificationService] SMS_PROVIDER=twilio is set but sendSmsViaTwilio() isn't implemented yet; no code was sent.");
 	}
 
 	/**

@@ -31,7 +31,10 @@ export class AuthController {
 
 			res.status(201).json({
 				success: true,
-				message: 'تم التسجيل بنجاح، يرجى تفعيل الحساب',
+				// emailSent=false: the account exists but the code email did not go out; the app must say so and offer a resend.
+				message: result.emailSent
+					? 'تم التسجيل بنجاح، يرجى تفعيل الحساب'
+					: 'تم إنشاء الحساب لكن تعذر إرسال رمز التحقق إلى بريدك الآن. حاول إعادة الإرسال بعد قليل أو تواصل مع الدعم',
 				data: result
 			});
 		} catch (error) {
@@ -64,11 +67,17 @@ export class AuthController {
 	public async resendOtp(req: Request, res: Response, next: NextFunction) {
 		try {
 			const { userId } = req.body;
-			await authService.resendOtp(userId);
+			const { emailSent } = await authService.resendOtp(userId);
 
+			// success:false when the email did not go out, so an older app version that only reads `success` / `message`
+			// does not claim the code was sent.
 			res.status(200).json({
-				success: true,
-				message: 'تم إعادة إرسال رمز التحقق بنجاح'
+				success: emailSent,
+				emailSent,
+				message: emailSent
+					? 'تم إعادة إرسال رمز التحقق بنجاح'
+					: 'تعذر إرسال رمز التحقق، حاول مرة أخرى بعد قليل أو تواصل مع الدعم',
+				data: { emailSent }
 			});
 		} catch (error) {
 			next(error);
@@ -141,7 +150,10 @@ export class AuthController {
 					data: {
 						verified: false,
 						phoneOtpRequired: result.phoneOtpRequired,
-						userId: result.userId
+						userId: result.userId,
+						// Unverified account: whether the activation email really went out, and the wait when the send was throttled.
+						...('emailSent' in result ? { emailSent: result.emailSent } : {}),
+						...('retryAfterSeconds' in result ? { retryAfterSeconds: result.retryAfterSeconds } : {})
 					}
 				});
 				return;

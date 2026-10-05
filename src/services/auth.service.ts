@@ -15,6 +15,7 @@ import { sessionService, SessionContext } from './session.service';
 import { accountAuditLogService } from './account-logs.service';
 import { initializeRoleState } from './account-management.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
+import { otpSendThrottle, otpThrottleMessage } from '../utils/otp-send-throttle';
 
 /**
  * Phase 3C: resolves firstName/lastName for an auth response from the user's
@@ -59,6 +60,9 @@ const RESET_INVALID_CODE_MESSAGE = 'رمز التحقق غير صحيح أو م�
 
 const LOGIN_OTP_MAX_ATTEMPTS = 5;
 const LOGIN_OTP_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
+// Activation codes live 10 minutes (the email says 10): a late email must not carry an already-dead code.
+const EMAIL_OTP_EXPIRY_MS = 10 * 60 * 1000;
+const SMS_UNAVAILABLE_MESSAGE = 'التحقق عبر الرسائل النصية غير متاح حاليًا، يرجى التواصل مع الدعم لإكمال تسجيل الدخول';
 const LOGIN_OTP_INVALID_MESSAGE = 'رمز التحقق غير صحيح أو منتهي الصلاحية';
 
 export interface ReferralAttributionContext {
@@ -91,15 +95,17 @@ export class AuthService {
 	 * which login path triggered it.
 	 */
 	private async issuePhoneOtpChallenge(userId: string, phoneNumber: string | null, phoneCountryCode: string | null) {
+		// No SMS sender exists yet: never claim a code was sent to the phone (and never create one nobody can receive).
+		if (!notificationService.isSmsAvailable()) {
+			logger.warn(`[Auth] Phone OTP requested for user ${userId} but SMS delivery is not available.`);
+			throw new AppError(SMS_UNAVAILABLE_MESSAGE, 503);
+		}
+
 		const otpCode = crypto.randomInt(100000, 999999).toString();
 		const expiresAt = new Date(Date.now() + LOGIN_OTP_EXPIRY_MS);
 
 		await authRepository.deletePhoneOtps(userId);
 		await authRepository.createOtp(userId, otpCode, OtpType.PHONE, expiresAt);
-
-		if (process.env.NODE_ENV === 'development') {
-			logger.info(`[DEV OTP LOGGER] Login phone OTP for user ${userId}: ${otpCode}`);
-		}
 
 		const fullPhone = `${phoneCountryCode || ''}${phoneNumber || ''}`;
 		notificationService.sendSmsOtp(fullPhone, otpCode).catch((err: any) => {
@@ -214,33 +220,38 @@ export class AuthService {
 			refCookieSlug: referralContext.refCookieSlug
 		});
 
-		// 4. Generate 6-digit OTP
+		// 4. Generate a 6-digit OTP (valid 10 minutes, as the email says) and store it
 		const otpCode = crypto.randomInt(100000, 999999).toString();
-		const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes from now
-
-		// 5. Store OTP
+		const expiresAt = new Date(Date.now() + EMAIL_OTP_EXPIRY_MS);
 		await authRepository.createOtp(user.id, otpCode, OtpType.EMAIL, expiresAt);
 
-		// 6. Log OTP only for local testing/dev
-		if (process.env.NODE_ENV === 'development') {
-			logger.info(`[DEV OTP LOGGER] Verification Code for ${user.email}: ${otpCode}`);
-		}
-
-		// 7. Send actual OTP Email asynchronously
-		// We don't await this so it doesn't block the HTTP response
-		notificationService.sendEmailOtp(user.email, otpCode).catch((err: any) => {
-			logger.error('Failed to send registration OTP email', err);
-		});
+		// 5. Send it and WAIT for the SMTP result: the caller must be told when the email did not go out.
+		const emailSent = await this.sendActivationEmail(user.email, otpCode, 'register');
 
 		return {
-			userId: user.id
+			userId: user.id,
+			emailSent
 		};
+	}
+
+	/**
+	 * Sends an activation code and reports whether the SMTP server accepted it. Never throws: a failure is logged with the
+	 * server response by notificationService (never the code) and returned as `false`.
+	 */
+	private async sendActivationEmail(email: string, code: string, flow: string): Promise<boolean> {
+		try {
+			await notificationService.sendEmailOtp(email, code);
+			return true;
+		} catch {
+			logger.error(`[Auth] Activation email was NOT delivered (flow=${flow}).`);
+			return false;
+		}
 	}
 
 	/**
 	 * Resend OTP
 	 */
-	public async resendOtp(userId: string) {
+	public async resendOtp(userId: string): Promise<{ emailSent: boolean; reused: boolean }> {
 		const user = await authRepository.findById(userId);
 		if (!user) {
 			throw new AppError('المستخدم غير موجود', 404);
@@ -249,21 +260,22 @@ export class AuthService {
 			throw new AppError('الحساب مفعل مسبقاً', 400);
 		}
 
-		const otpCode = crypto.randomInt(100000, 999999).toString();
-		const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
-
-		await authRepository.deleteUserOtps(user.id);
-		await authRepository.createOtp(user.id, otpCode, OtpType.EMAIL, expiresAt);
-
-		if (process.env.NODE_ENV === 'development') {
-			logger.info(`[DEV OTP LOGGER] New Verification Code for ${user.email}: ${otpCode}`);
+		// A code that is still valid is RE-SENT as it is (not replaced): an older email that arrives late must not carry a
+		// dead code. A new one is created only when there is none or the last one has expired.
+		const existing = await authRepository.findLatestActivationOtp(user.id);
+		let otpCode: string;
+		let reused = false;
+		if (existing && existing.expiresAt > new Date()) {
+			otpCode = existing.code;
+			reused = true;
+		} else {
+			otpCode = crypto.randomInt(100000, 999999).toString();
+			await authRepository.deleteActivationOtps(user.id);
+			await authRepository.createOtp(user.id, otpCode, OtpType.EMAIL, new Date(Date.now() + EMAIL_OTP_EXPIRY_MS));
 		}
 
-		notificationService.sendEmailOtp(user.email, otpCode).catch((err: any) => {
-			logger.error('Failed to send resend OTP email', err);
-		});
-
-		return true;
+		const emailSent = await this.sendActivationEmail(user.email, otpCode, reused ? 'resend-same-code' : 'resend-new-code');
+		return { emailSent, reused };
 	}
 
 	/**
@@ -286,22 +298,23 @@ export class AuthService {
 			return { message: RESET_GENERIC_MESSAGE };
 		}
 
-		const otpCode = crypto.randomInt(100000, 999999).toString();
-		const expiresAt = new Date(Date.now() + RESET_OTP_EXPIRY_MS);
-
-		await authRepository.deletePasswordResetOtps(user.id);
-		await authRepository.createPasswordResetOtp(user.id, otpCode, expiresAt);
-
-		if (process.env.NODE_ENV === 'development') {
-			logger.info(`[DEV OTP LOGGER] Password reset code for ${user.email}: ${otpCode}`);
+		// A reset code that is still valid (and not locked by wrong attempts) is re-sent as it is, not replaced.
+		const existingReset = await authRepository.findLatestPasswordResetOtp(user.id);
+		let otpCode: string;
+		if (existingReset && existingReset.expiresAt > new Date() && existingReset.attempts < RESET_OTP_MAX_ATTEMPTS) {
+			otpCode = existingReset.code;
+		} else {
+			otpCode = crypto.randomInt(100000, 999999).toString();
+			await authRepository.deletePasswordResetOtps(user.id);
+			await authRepository.createPasswordResetOtp(user.id, otpCode, new Date(Date.now() + RESET_OTP_EXPIRY_MS));
 		}
 
 		try {
 			await notificationService.sendPasswordResetEmail(user.email, user.firstName, otpCode);
-		} catch (err: any) {
-			logger.error('Failed to send password reset email', err);
-			// Keep the response generic even if delivery failed — avoids leaking
-			// account existence and matches the rest of the reset flow's behavior.
+		} catch {
+			// The failure (with the SMTP response) is already logged by notificationService. The answer stays generic so the
+			// endpoint cannot be used to find out which emails are registered.
+			logger.error('[Auth] Password reset email was NOT delivered.');
 		}
 
 		return { message: RESET_GENERIC_MESSAGE };
@@ -433,6 +446,33 @@ export class AuthService {
 	/**
 	 * Login User
 	 */
+	/**
+	 * Login (password or Google) for an account that is not verified yet: send the activation code, subject to the OTP send
+	 * limits (per account and per IP, apart from the login limiter). The answer says whether the email really went out, and
+	 * when the send was throttled it says how long to wait (the previous code is still valid, so the user can use it).
+	 */
+	private async pendingVerificationResult(userId: string, ipAddress: string | undefined) {
+		const throttle = otpSendThrottle.consume(`user:${userId}`, ipAddress);
+		if (!throttle.allowed) {
+			return {
+				verified: false as const,
+				phoneOtpRequired: false,
+				userId,
+				emailSent: false,
+				retryAfterSeconds: throttle.retryAfterSeconds,
+				message: otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds)
+			};
+		}
+		const { emailSent } = await this.resendOtp(userId);
+		return {
+			verified: false as const,
+			phoneOtpRequired: false,
+			userId,
+			emailSent,
+			message: emailSent ? 'يرجى تفعيل حسابك أولاً' : 'يرجى تفعيل حسابك أولاً. تعذر إرسال رمز التحقق الآن، حاول مرة أخرى بعد قليل أو تواصل مع الدعم'
+		};
+	}
+
 	public async loginUser(input: LoginInput, sessionContext: SessionContext = {}) {
 		const user = await authRepository.findByEmail(input.email);
 
@@ -448,15 +488,7 @@ export class AuthService {
 		}
 
 		if (user.status === UserStatus.PENDING_VERIFICATION) {
-			// Automatically generate and dispatch a fresh OTP to their email
-			await this.resendOtp(user.id);
-
-			return {
-				verified: false,
-				phoneOtpRequired: false,
-				userId: user.id,
-				message: 'يرجى تفعيل حسابك أولاً'
-			};
+			return this.pendingVerificationResult(user.id, sessionContext.ipAddress);
 		}
 
 		if (user.status === UserStatus.SUSPENDED) {
@@ -571,8 +603,7 @@ export class AuthService {
 			});
 		}
 		if (user.status === UserStatus.PENDING_VERIFICATION) {
-			await this.resendOtp(user.id);
-			return { verified: false, phoneOtpRequired: false, userId: user.id };
+			return this.pendingVerificationResult(user.id, sessionContext.ipAddress);
 		}
 
 		if (user.status === UserStatus.SUSPENDED) {

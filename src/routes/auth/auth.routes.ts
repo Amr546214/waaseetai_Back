@@ -2,7 +2,11 @@ import { Router } from 'express';
 import { authController } from '../../controllers/auth.controller';
 import { validateRequest } from '../../middlewares/validation.middleware';
 import { registerSchema, verifyOtpSchema, loginSchema, resendOtpSchema, googleAuthSchema, forgotPasswordSchema, verifyResetCodeSchema, resetPasswordSchema, verifyLoginOtpSchema, resendLoginOtpSchema } from './auth.schema';
-import { authLimiter } from '../../middlewares/rate-limit.middleware';
+import { authLimiter, otpSendLimiter } from '../../middlewares/rate-limit.middleware';
+
+// Who is receiving the code, for the send limiter (sending is limited per recipient and per IP, apart from authLimiter).
+const byEmail = (req: { body?: { email?: unknown } }) => (typeof req.body?.email === 'string' ? req.body.email : undefined);
+const byUserId = (req: { body?: { userId?: unknown } }) => (typeof req.body?.userId === 'string' ? `user:${req.body.userId}` : undefined);
 import { authenticate, authorize, requireActiveUser } from '../../middlewares/auth.middleware';
 import { AccountType } from '@prisma/client';
 import { memoryUpload } from '../../utils/cloudinary-storage';
@@ -22,7 +26,7 @@ const router = Router();
 
 router.post(
   '/register',
-  authLimiter,
+  otpSendLimiter(byEmail),
   validateRequest(registerSchema),
   authController.register
 );
@@ -36,14 +40,14 @@ router.post(
 
 router.post(
   '/resend-otp',
-  authLimiter,
+  otpSendLimiter(byUserId),
   validateRequest(resendOtpSchema),
   authController.resendOtp
 );
 
 router.post(
   '/forgot-password',
-  authLimiter,
+  otpSendLimiter(byEmail),
   validateRequest(forgotPasswordSchema),
   authController.forgotPassword
 );

@@ -238,6 +238,27 @@ export class AuthRepository {
   }
 
   /**
+   * The latest ACTIVATION email OTP (no `context`, so never a password-reset code), valid or expired — the caller checks
+   * expiresAt. Used to re-send a still-valid code instead of replacing it.
+   */
+  public async findLatestActivationOtp(userId: string) {
+    const rows = await prisma.otpVerification.findMany({
+      where: { userId, type: OtpType.EMAIL },
+      orderBy: { createdAt: 'desc' },
+      take: 5
+    });
+    return rows.find(r => !(r.context as { purpose?: string } | null)?.purpose) ?? null;
+  }
+
+  /** Deletes only ACTIVATION email OTPs (leaves phone and password-reset codes alone). */
+  public async deleteActivationOtps(userId: string) {
+    const rows = await prisma.otpVerification.findMany({ where: { userId, type: OtpType.EMAIL }, select: { id: true, context: true } });
+    const ids = rows.filter(r => !(r.context as { purpose?: string } | null)?.purpose).map(r => r.id);
+    if (!ids.length) return { count: 0 };
+    return prisma.otpVerification.deleteMany({ where: { id: { in: ids } } });
+  }
+
+  /**
    * Find the most recent OTP of a given type for a user, regardless of the
    * code entered — used where the caller needs to compare the code itself
    * and increment attempts on a mismatch (mirrors findLatestPasswordResetOtp,
