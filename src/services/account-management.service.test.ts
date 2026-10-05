@@ -317,9 +317,8 @@ test('initializeRoleState (AFFILIATE): first creation seeds display, generates a
   assert.equal(data.avatarUrl, 'https://example.com/a.png');
   assert.equal(typeof data.referralSlug, 'string');
   assert.equal(data.referralSlug.length > 0, true);
-  // avatar(15) + basic identity firstName+lastName+email(30) = 45; zero
-  // marketing channels, no bio, no IBAN at creation.
-  assert.equal(data.completionPercentage, 45);
+  // avatar(20) only; names/email are no longer scored, and there are zero marketing channels, no bio, no IBAN at creation.
+  assert.equal(data.completionPercentage, 20);
 });
 
 test('initializeRoleState (AFFILIATE): does not touch currentLevel — preserves the existing schema default, introduces no affiliate points system', async (t) => {

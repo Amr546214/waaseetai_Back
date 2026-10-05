@@ -213,7 +213,7 @@ function createDisplayWriteMockPrisma(t: TestContext, userFixture: any, existing
     },
     clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy, findUnique: async () => existingClientProfile },
     providerProfile: { upsert: providerUpsertSpy, update: t.mock.fn((args: any) => ({ id: 'p1', ...args.data })), findUnique: async () => ({ userId: 'user-1', skills: [], portfolioItems: [], user: {} }) },
-    affiliateProfile: { upsert: affiliateUpsertSpy }
+    affiliateProfile: { upsert: affiliateUpsertSpy, update: t.mock.fn((args: any) => ({ id: 'a1', ...args.data })), findUnique: async () => ({ avatarUrl: null, bio: null, iban: null, marketingChannels: [], user: {} }) }
   };
 
   t.mock.module('../config/db', {
@@ -551,19 +551,24 @@ function createCompletionMockPrisma(t: TestContext, userFixture: any) {
   const providerUpsertSpy = t.mock.fn((args: any) => { providerProfileState = { ...providerProfileState, ...args.update }; return { ...providerProfileState }; });
   const providerUpdateSpy = t.mock.fn((args: any) => { providerProfileState = { ...providerProfileState, ...args.data }; return { ...providerProfileState }; });
   const affiliateUpsertSpy = t.mock.fn((args: any) => { affiliateProfileState = { ...affiliateProfileState, ...args.update }; return { ...affiliateProfileState }; });
+  const affiliateUpdateSpy = t.mock.fn((args: any) => { affiliateProfileState = { ...affiliateProfileState, ...args.data }; return { ...affiliateProfileState }; });
 
   const tx = {
     user: { findUnique: async () => ({ ...userFixture }), update: userUpdateSpy },
     clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy },
     providerProfile: { upsert: providerUpsertSpy, update: providerUpdateSpy, findUnique: async () => ({ userId: 'user-1', skills: [], portfolioItems: [], user: {} }) },
-    affiliateProfile: { upsert: affiliateUpsertSpy }
+    affiliateProfile: {
+      upsert: affiliateUpsertSpy,
+      update: affiliateUpdateSpy,
+      findUnique: async () => ({ avatarUrl: 'https://x/a.png', bio: null, iban: null, marketingChannels: [], user: {} })
+    }
   };
 
   t.mock.module('../config/db', {
     namedExports: { prisma: { ...tx, $transaction: async (fn: any) => fn(tx) } }
   });
 
-  return { userUpdateSpy, clientUpsertSpy, clientUpdateSpy, providerUpsertSpy, providerUpdateSpy, affiliateUpsertSpy };
+  return { userUpdateSpy, clientUpsertSpy, clientUpdateSpy, providerUpsertSpy, providerUpdateSpy, affiliateUpsertSpy, affiliateUpdateSpy };
 }
 
 async function loadProfileServiceForCompletion(t: TestContext, userFixture: any) {
@@ -610,17 +615,18 @@ test('updateProfile/updateTab (CLIENT): neither writes User.profileCompletionPer
   }
 });
 
-test('updateProfile (PROVIDER/AFFILIATE): completion recalculation never fires for non-CLIENT roles, and CLIENT/other role completion rows stay untouched', async (t) => {
-  const { profileService, clientUpdateSpy, providerUpdateSpy } = await loadProfileServiceForCompletion(t, { id: 'user-1', status: 'ACTIVE' });
+test('updateProfile (PROVIDER/AFFILIATE): each role recomputes only ITS OWN completion row; the client row is never touched', async (t) => {
+  const { profileService, clientUpdateSpy, providerUpdateSpy, affiliateUpdateSpy } = await loadProfileServiceForCompletion(t, { id: 'user-1', status: 'ACTIVE' });
 
   await profileService.updateProfile('user-1', 'PROVIDER', { firstName: 'Okasha', lastName: 'Expert' } as any);
   await profileService.updateProfile('user-1', 'AFFILIATE', { firstName: 'Aff', lastName: 'Iliate' } as any);
 
   assert.equal(clientUpdateSpy.mock.callCount(), 0);
-  // PROVIDER: saving through this endpoint (e.g. the PayPal payout email) now recomputes ProviderProfile.completionPercentage
-  // (one write for the PROVIDER call, none for the AFFILIATE call, none touching the client row).
+  // PROVIDER: one completion write (e.g. PayPal saved through this endpoint); AFFILIATE: one (avatar/bio are scored inputs).
   assert.equal(providerUpdateSpy.mock.callCount(), 1);
   assert.equal(typeof providerUpdateSpy.mock.calls[0].arguments[0].data.completionPercentage, 'number');
+  assert.equal(affiliateUpdateSpy.mock.callCount(), 1);
+  assert.equal(affiliateUpdateSpy.mock.calls[0].arguments[0].data.completionPercentage, 20); // the avatar on the profile row
 });
 
 // ============================================================================

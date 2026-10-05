@@ -3,6 +3,8 @@ import { ChangeRequestStatus, SensitiveFieldType, Prisma } from '@prisma/client'
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
 import { isValidIban } from '../utils/iban.util';
+import { marketerProfileService } from './marketer-profile.service';
+import { logger } from '../config/logger';
 
 const PENDING_STATUSES: ChangeRequestStatus[] = [ChangeRequestStatus.PENDING_AI_REVIEW, ChangeRequestStatus.PENDING_HUMAN_APPROVAL];
 
@@ -73,6 +75,14 @@ export class AdminAffiliateRequestsService {
 				throw new AppError('تعذر تطبيق التعديل: القيمة الجديدة مستخدمة بالفعل لحساب آخر', 409);
 			}
 			throw error;
+		}
+
+		// The approval just wrote a field the completion reads (the IBAN, or a name): bring the stored percentage up to date
+		// instead of leaving it stale until the marketer saves something else. Best effort: the approval itself is committed.
+		try {
+			await marketerProfileService.recalculateCompletion(applied.affiliateProfile.userId);
+		} catch (error) {
+			logger.error(`[AdminAffiliateRequestsService] Failed to recalculate completion after approving ${id}`, error);
 		}
 
 		await notificationService.createAndEmit({
