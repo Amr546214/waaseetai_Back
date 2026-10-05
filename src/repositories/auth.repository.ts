@@ -53,10 +53,8 @@ export class AuthRepository {
             avatarUrl: googleIdentity.picture
           } : {}),
           agreedToTerms: data.agreedToTerms as boolean,
-          // Mandatory phone OTP on login applies to every account created from
-          // here on — existing accounts keep the schema default (false) until
-          // an opt-in flow exists for them.
-          phoneOtpEnabled: true
+          // Authentication is email-only: no SMS login verification exists, so a new account never enables it.
+          phoneOtpEnabled: false
         }
       });
 

@@ -58,12 +58,9 @@ const RESET_OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 const RESET_GENERIC_MESSAGE = 'إذا كان البريد الإلكتروني مسجلاً لدينا، فسيتم إرسال رمز إعادة تعيين كلمة المرور إليه';
 const RESET_INVALID_CODE_MESSAGE = 'رمز التحقق غير صحيح أو منتهي الصلاحية';
 
-const LOGIN_OTP_MAX_ATTEMPTS = 5;
-const LOGIN_OTP_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
 // Activation codes live 10 minutes (the email says 10): a late email must not carry an already-dead code.
 const EMAIL_OTP_EXPIRY_MS = 10 * 60 * 1000;
-const SMS_UNAVAILABLE_MESSAGE = 'التحقق عبر الرسائل النصية غير متاح حاليًا، يرجى التواصل مع الدعم لإكمال تسجيل الدخول';
-const LOGIN_OTP_INVALID_MESSAGE = 'رمز التحقق غير صحيح أو منتهي الصلاحية';
+const SMS_LOGIN_DISABLED_MESSAGE = 'التحقق عبر الرسائل النصية غير مفعّل، سجّل الدخول بالبريد الإلكتروني وكلمة المرور';
 
 export interface ReferralAttributionContext {
 	// Explicit affiliate selection made at registration time — either a
@@ -86,31 +83,6 @@ export class AuthService {
 			throw new AppError('تعذر التحقق من حساب جوجل', 401);
 		}
 		return payload;
-	}
-
-	/**
-	 * Generate a fresh login-time PHONE OTP for a user, replacing any previous
-	 * one, and dispatch it via SMS. Shared by loginUser, googleAuth and
-	 * resendLoginOtp so the challenge is issued identically regardless of
-	 * which login path triggered it.
-	 */
-	private async issuePhoneOtpChallenge(userId: string, phoneNumber: string | null, phoneCountryCode: string | null) {
-		// No SMS sender exists yet: never claim a code was sent to the phone (and never create one nobody can receive).
-		if (!notificationService.isSmsAvailable()) {
-			logger.warn(`[Auth] Phone OTP requested for user ${userId} but SMS delivery is not available.`);
-			throw new AppError(SMS_UNAVAILABLE_MESSAGE, 503);
-		}
-
-		const otpCode = crypto.randomInt(100000, 999999).toString();
-		const expiresAt = new Date(Date.now() + LOGIN_OTP_EXPIRY_MS);
-
-		await authRepository.deletePhoneOtps(userId);
-		await authRepository.createOtp(userId, otpCode, OtpType.PHONE, expiresAt);
-
-		const fullPhone = `${phoneCountryCode || ''}${phoneNumber || ''}`;
-		notificationService.sendSmsOtp(fullPhone, otpCode).catch((err: any) => {
-			logger.error('Failed to send login phone OTP SMS', err);
-		});
 	}
 
 	/**
@@ -502,16 +474,8 @@ export class AuthService {
 			throw new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403);
 		}
 
-		if (user.phoneOtpEnabled) {
-			await this.issuePhoneOtpChallenge(user.id, user.phoneNumber, user.phoneCountryCode);
-			return {
-				verified: false,
-				phoneOtpRequired: true,
-				userId: user.id,
-				message: 'يرجى إدخال رمز التحقق المرسل إلى جوالك'
-			};
-		}
-
+		// Verification is email-only: `phoneOtpEnabled` is ignored (no SMS challenge, no SMS 503), so an account that still has
+		// the legacy flag logs in through the normal flow.
 		// Generate JWT Access Token
 		const jwtSecret = process.env.JWT_SECRET;
 		if (!jwtSecret) {
@@ -534,7 +498,7 @@ export class AuthService {
 		});
 
 		return {
-			verified: true,
+			verified: true as const,
 			token,
 			user: {
 				id: user.id,
@@ -617,16 +581,8 @@ export class AuthService {
 			throw new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403);
 		}
 
-		if (user.phoneOtpEnabled) {
-			await this.issuePhoneOtpChallenge(user.id, user.phoneNumber, user.phoneCountryCode);
-			return {
-				verified: false,
-				phoneOtpRequired: true,
-				userId: user.id,
-				message: 'يرجى إدخال رمز التحقق المرسل إلى جوالك'
-			};
-		}
-
+		// Verification is email-only: `phoneOtpEnabled` is ignored (no SMS challenge, no SMS 503), so an account that still has
+		// the legacy flag logs in through the normal flow.
 		const jwtSecret = process.env.JWT_SECRET;
 		if (!jwtSecret) throw new AppError('JWT_SECRET missing', 500);
 
@@ -640,7 +596,7 @@ export class AuthService {
 		const { firstName, lastName } = resolveAuthDisplayName(user, roleRelations);
 
 		return {
-			verified: true,
+			verified: true as const,
 			token,
 			user: {
 				id: user.id,
@@ -655,85 +611,16 @@ export class AuthService {
 	}
 
 	/**
-	 * Verify the login-time PHONE OTP (issued by loginUser/googleAuth when
-	 * phoneOtpEnabled is set) and, on success, issue the session exactly like
-	 * a normal login. Distinct from verifyOtp() above, which activates a
-	 * PENDING_VERIFICATION account's EMAIL OTP and has different side effects
-	 * (flips UserStatus, initializes affiliate profiles, etc.) that must never
-	 * run again on an already-ACTIVE user.
+	 * Login-time PHONE (SMS) verification is disabled: authentication is email-only and no SMS code is ever issued, sent or
+	 * accepted. The endpoint stays only to answer clearly instead of 404ing an old client.
 	 */
-	public async verifyLoginOtp(input: VerifyLoginOtpInput, sessionContext: SessionContext = {}) {
-		const user = await authRepository.findByIdForSession(input.userId);
-		if (!user || !user.phoneOtpEnabled || user.status !== UserStatus.ACTIVE) {
-			throw new AppError(LOGIN_OTP_INVALID_MESSAGE, 400);
-		}
-
-		const otp = await authRepository.findLatestOtp(user.id, OtpType.PHONE);
-		if (!otp) {
-			throw new AppError(LOGIN_OTP_INVALID_MESSAGE, 400);
-		}
-
-		if (otp.attempts >= LOGIN_OTP_MAX_ATTEMPTS) {
-			await authRepository.deletePhoneOtps(user.id);
-			throw new AppError('تم تجاوز عدد المحاولات المسموح به، يرجى طلب رمز جديد', 429);
-		}
-
-		if (otp.expiresAt < new Date()) {
-			throw new AppError('رمز التحقق انتهت صلاحيته، يرجى طلب رمز جديد', 400);
-		}
-
-		if (otp.code !== input.code) {
-			await authRepository.incrementOtpAttempts(otp.id);
-			throw new AppError(LOGIN_OTP_INVALID_MESSAGE, 400);
-		}
-
-		await authRepository.deletePhoneOtps(user.id);
-
-		const jwtSecret = process.env.JWT_SECRET;
-		if (!jwtSecret) {
-			throw new AppError('خطأ في إعدادات الخادم: مفتاح التشفير JWT_SECRET غير معرّف', 500);
-		}
-		const token = jwt.sign(
-			{ userId: user.id, accountType: user.accountType },
-			jwtSecret,
-			{ expiresIn: '7d' }
-		);
-		await sessionService.register(user.id, token, sessionContext);
-
-		const { firstName, lastName } = resolveAuthDisplayName(user, {
-			clientProfile: user.clientProfile,
-			providerProfile: user.providerProfile,
-			affiliateProfile: user.affiliateProfile
-		});
-
-		return {
-			verified: true,
-			token,
-			user: {
-				id: user.id,
-				firstName,
-				lastName,
-				email: user.email,
-				accountType: user.accountType,
-				activeRole: user.activeRole,
-				roles: user.roles
-			}
-		};
+	public async verifyLoginOtp(_input: VerifyLoginOtpInput, _sessionContext: SessionContext = {}): Promise<never> {
+		throw new AppError(SMS_LOGIN_DISABLED_MESSAGE, 400);
 	}
 
-	/**
-	 * Resend the login-time PHONE OTP. Deliberately separate from resendOtp()
-	 * above, which only ever targets PENDING_VERIFICATION accounts (it errors
-	 * out on an ACTIVE user) — this one requires ACTIVE + phoneOtpEnabled.
-	 */
-	public async resendLoginOtp(userId: string) {
-		const user = await authRepository.findByIdForSession(userId);
-		if (!user || !user.phoneOtpEnabled || user.status !== UserStatus.ACTIVE) {
-			throw new AppError('طلب غير صالح', 400);
-		}
-
-		await this.issuePhoneOtpChallenge(user.id, user.phoneNumber, user.phoneCountryCode);
-		return true;
+	/** See verifyLoginOtp(): SMS login verification is disabled, nothing is created or sent. */
+	public async resendLoginOtp(_userId: string): Promise<never> {
+		throw new AppError(SMS_LOGIN_DISABLED_MESSAGE, 400);
 	}
 }
 

@@ -54,3 +54,27 @@ test('createUserWithProfile: role initialization uses the full identity and comp
   // email/password signup (unlike Google, which provides one) — not scored, not an invented value.
   assert.equal(data.completionPercentage, 15);
 });
+
+test('createUserWithProfile: new accounts are created with phoneOtpEnabled=false for every account type (authentication is email-only)', async (t) => {
+  const { authRepository, userCreateSpy } = await loadRepo(t);
+
+  await authRepository.createUserWithProfile({
+    accountType: 'CLIENT_INDIVIDUAL', firstName: 'Amr', lastName: 'Okasha', email: 'amr@example.com',
+    phoneCountryCode: '+966', phoneNumber: '0500000000', agreedToTerms: true
+  } as any, 'hashed-password');
+
+  assert.equal(userCreateSpy.mock.calls[0].arguments[0].data.phoneOtpEnabled, false);
+});
+
+test('createUserWithProfile: a Google sign-up is also created with phoneOtpEnabled=false', async (t) => {
+  const { authRepository, userCreateSpy } = await loadRepo(t);
+
+  await authRepository.createUserWithProfile({
+    accountType: 'CLIENT_INDIVIDUAL', firstName: 'Amr', lastName: 'Okasha', email: 'amr@example.com',
+    phoneCountryCode: '+966', phoneNumber: '0500000001', agreedToTerms: true
+  } as any, null, { sub: 'g-sub', picture: 'https://img.test/a.png' });
+
+  const data = userCreateSpy.mock.calls[0].arguments[0].data;
+  assert.equal(data.phoneOtpEnabled, false);
+  assert.equal(data.authProvider, 'google');
+});
