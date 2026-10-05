@@ -6,6 +6,7 @@ import { AppError } from '../utils/app-error';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
 import { computeClientCompletion } from '../utils/completion-calculators';
+import { providerProfileService } from './provider-profile.service';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
 
 export class ProfileService {
@@ -224,6 +225,8 @@ export class ProfileService {
             create: { userId, ...providerData },
             update: providerData
           });
+          // PayPal (and the other scored fields) saved through this endpoint must move the stored percentage too.
+          await providerProfileService.recalculateProviderCompletion(userId, tx);
         } else {
           // ADMIN/SUPER_ADMIN or any future role have no role-specific
           // profile concept today — never silently fall through and treat

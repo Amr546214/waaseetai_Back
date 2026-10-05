@@ -114,6 +114,8 @@ export interface ProviderCompletionInput {
     websiteUrl?: string | null;
     country?: string | null;
     city?: string | null;
+    /** The provider's confirmed PayPal payout destination (replaces User.ibanNumber in the score). */
+    paypalPayoutEmail?: string | null;
   };
   user: {
     firstName?: string | null;
@@ -121,41 +123,89 @@ export interface ProviderCompletionInput {
     avatarUrl?: string | null;
     email?: string | null;
     phoneNumber?: string | null;
+    /** No longer scored (payouts are PayPal); kept in the type so existing callers still compile. */
     ibanNumber?: string | null;
     idDocumentUrl?: string | null;
   };
 }
 
+/** The profile page that can fix the item (frontend tab ids of the provider edit page). */
+export type CompletionTab = 'profile' | 'contact' | 'payout' | 'docs';
+export type CompletionItemStatus = 'missing' | 'pending_review';
+export interface CompletionMissingItem {
+  key: string;
+  label: string;
+  points: number;
+  status: CompletionItemStatus;
+  tab: CompletionTab;
+  /** Short Arabic hint on what exactly is needed. */
+  hint: string;
+}
+
+interface ProviderCompletionRule {
+  key: string;
+  label: string;
+  points: number;
+  tab: CompletionTab;
+  hint: string;
+  met: (i: ProviderCompletionInput) => boolean;
+}
+
 /**
- * Verbatim extraction of provider-profile.service.ts's (private)
- * calculateProfileCompletion — identical fields, identical weights (10+15+
- * 15+10+10+10+10+10+10 = 100 max). Extracted only so
- * provider-profile.controller.ts's saveSetupData (a different file, plain
- * functions, not a class method) can reuse the exact same calculation
- * without duplicating it — not a formula redesign.
+ * The provider formula as data: one rule per scoring input (10+15+15+10+10+10+10+10+10 = 100 max). computeProviderCompletion
+ * sums the met rules and computeProviderMissingItems lists the unmet ones, so the percentage and the "what is missing"
+ * list can never disagree.
  *
- * firstName/lastName/avatarUrl already prefer this ProviderProfile row's own
- * Phase 3A columns, falling back to the legacy User value (the Phase 3D.1
- * fix) — preserved here unchanged.
+ * firstName/lastName/avatarUrl prefer this ProviderProfile row's own columns, falling back to the legacy User value (the
+ * Phase 3D.1 fix). Payout: ProviderProfile.paypalPayoutEmail replaces User.ibanNumber (same 10 points) — providers are
+ * paid through PayPal and no provider screen writes an IBAN.
  */
+const PROVIDER_RULES: ProviderCompletionRule[] = [
+  { key: 'avatar', label: 'الصورة الشخصية', points: 10, tab: 'profile', hint: 'أضف صورة شخصية',
+    met: ({ providerProfile: p, user: u }) => !!(p.avatarUrl || u.avatarUrl) },
+  { key: 'identity', label: 'الاسم والمسمى المهني والتخصص الرئيسي', points: 15, tab: 'profile', hint: 'أكمل الاسم والمسمى المهني والتخصص الرئيسي',
+    met: ({ providerProfile: p, user: u }) => !!((p.firstName || u.firstName) && (p.lastName || u.lastName) && p.headline && p.mainSpecialty) },
+  { key: 'bio', label: 'الوصف المهني', points: 15, tab: 'profile', hint: 'اكتب وصفًا مهنيًا من 50 حرفًا على الأقل',
+    met: ({ providerProfile: p }) => !!(p.bio && p.bio.length >= 50) },
+  { key: 'skills', label: 'المهارات', points: 10, tab: 'profile', hint: 'أضف مهارة واحدة على الأقل',
+    met: ({ providerProfile: p }) => !!p.skills?.length },
+  { key: 'portfolio', label: 'معرض الأعمال', points: 10, tab: 'profile', hint: 'أضف رابط معرض أعمالك',
+    met: ({ providerProfile: p }) => !!(p.portfolioItems?.length || p.websiteUrl) },
+  { key: 'contact', label: 'البريد ورقم الجوال', points: 10, tab: 'contact', hint: 'أضف البريد الإلكتروني ورقم الجوال',
+    met: ({ user: u }) => !!(u.email && u.phoneNumber) },
+  { key: 'location', label: 'الدولة والمدينة', points: 10, tab: 'profile', hint: 'اختر الدولة والمدينة',
+    met: ({ providerProfile: p }) => !!(p.country && p.city) },
+  { key: 'payout', label: 'حساب PayPal لاستلام المدفوعات', points: 10, tab: 'payout', hint: 'أضف بريد PayPal لاستلام المدفوعات',
+    met: ({ providerProfile: p }) => !!(p.paypalPayoutEmail && p.paypalPayoutEmail.trim()) },
+  { key: 'idDocument', label: 'مستند إثبات الهوية', points: 10, tab: 'docs', hint: 'ارفع مستند إثبات الهوية',
+    met: ({ user: u }) => !!u.idDocumentUrl },
+];
+
 export function computeProviderCompletion(input: ProviderCompletionInput): number {
-  const { providerProfile: profile, user } = input;
-
-  const avatarUrl = profile.avatarUrl || user.avatarUrl;
-  const firstName = profile.firstName || user.firstName;
-  const lastName = profile.lastName || user.lastName;
-
-  let score = 0;
-  if (avatarUrl) score += 10;
-  if (firstName && lastName && profile.headline && profile.mainSpecialty) score += 15;
-  if (profile.bio && profile.bio.length >= 50) score += 15;
-  if (profile.skills?.length) score += 10;
-  if (profile.portfolioItems?.length || profile.websiteUrl) score += 10;
-  if (user.email && user.phoneNumber) score += 10;
-  if (profile.country && profile.city) score += 10;
-  if (user.ibanNumber) score += 10;
-  if (user.idDocumentUrl) score += 10;
+  const score = PROVIDER_RULES.reduce((sum, rule) => sum + (rule.met(input) ? rule.points : 0), 0);
   return Math.min(100, score);
+}
+
+/**
+ * What is still needed to reach 100%. An ID document whose request is waiting for the human review is returned with
+ * status 'pending_review' (the provider did their part; it is NOT missing), and does not count in the percentage until
+ * it is approved (User.idDocumentUrl is only written on approval).
+ */
+export function computeProviderMissingItems(input: ProviderCompletionInput, options: { pendingDocumentReview?: boolean } = {}): CompletionMissingItem[] {
+  const items: CompletionMissingItem[] = [];
+  for (const rule of PROVIDER_RULES) {
+    if (rule.met(input)) continue;
+    const pending = rule.key === 'idDocument' && !!options.pendingDocumentReview;
+    items.push({
+      key: rule.key,
+      label: rule.label,
+      points: rule.points,
+      tab: rule.tab,
+      status: pending ? 'pending_review' : 'missing',
+      hint: pending ? 'مستند الهوية قيد المراجعة' : rule.hint,
+    });
+  }
+  return items;
 }
 
 export interface AffiliateCompletionInput {

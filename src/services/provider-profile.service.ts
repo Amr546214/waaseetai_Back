@@ -11,7 +11,7 @@ import { notificationService } from './notification.service';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
 import { LEVEL_MATRIX } from './gamification.service';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
-import { computeProviderCompletion } from '../utils/completion-calculators';
+import { computeProviderCompletion, computeProviderMissingItems } from '../utils/completion-calculators';
 import { logger } from '../config/logger';
 import { initializeRoleState } from './account-management.service';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
@@ -128,6 +128,30 @@ export class ProviderProfileService {
 			profile = await prisma.providerProfile.findUnique({ where: { userId }, include: profileInclude });
 			if (!profile) throw new Error('Failed to initialize provider profile');
 		}
+
+		// Completion is computed from the rows just read (so GET always returns the true value, even for profiles whose stored
+		// number predates the PayPal formula), together with what is still missing. A pending ID-document review is reported
+		// as 'pending_review', not as missing. The stored percentage is brought in sync when it differs (best effort).
+		let pendingDocumentReview = false;
+		try {
+			pendingDocumentReview = (await prisma.profileModificationRequest.count({
+				where: { providerId: userId, category: 'DOCUMENTS', status: 'PENDING_HUMAN_REVIEW' as any }
+			})) > 0;
+		} catch (error) {
+			// Only affects how the ID item is labelled; never fail the profile read because of it.
+			logger.error(`[ProviderProfileService] Could not read pending document reviews (userId=${userId})`, error);
+		}
+		const completionInput = { providerProfile: profile, user: profile.user || {} };
+		const completionPercentage = computeProviderCompletion(completionInput);
+		const missingItems = computeProviderMissingItems(completionInput, { pendingDocumentReview });
+		if (profile.completionPercentage !== completionPercentage) {
+			try {
+				await prisma.providerProfile.update({ where: { userId }, data: { completionPercentage }, select: { id: true } });
+			} catch (error) {
+				logger.error(`[ProviderProfileService] Failed to sync stored completion (userId=${userId})`, error);
+			}
+		}
+		Object.assign(profile, { completionPercentage, missingItems });
 
 		if (profile?.user?.ibanNumber) {
 			const iban = profile.user.ibanNumber;
@@ -656,7 +680,7 @@ export class ProviderProfileService {
 	 * separately-tracked authorization gap where some of these routes don't
 	 * verify the caller is actually a provider.
 	 */
-	private async recalculateProviderCompletion(providerId: string, tx?: Prisma.TransactionClient) {
+	async recalculateProviderCompletion(providerId: string, tx?: Prisma.TransactionClient) {
 		const client = tx ?? prisma;
 		const profile = await client.providerProfile.findUnique({
 			where: { userId: providerId },
@@ -1092,7 +1116,8 @@ export class ProviderProfileService {
 		// which could hold IBAN/document values).
 		const scoredFieldCommitted =
 			(category === 'BANKING' && 'ibanNumber' in updateData) ||
-			(category === 'DOCUMENTS' && 'idDocumentUrl' in updateData);
+			(category === 'DOCUMENTS' && 'idDocumentUrl' in updateData) ||
+			(category === 'CONTACT' && ('email' in updateData || 'phoneNumber' in updateData));
 		if (scoredFieldCommitted) {
 			try {
 				await this.recalculateProviderCompletion(providerId);

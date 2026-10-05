@@ -190,7 +190,7 @@ function createDisplayWriteMockPrisma(t: TestContext, userFixture: any, existing
       update: userUpdateSpy
     },
     clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy, findUnique: async () => existingClientProfile },
-    providerProfile: { upsert: providerUpsertSpy },
+    providerProfile: { upsert: providerUpsertSpy, update: t.mock.fn((args: any) => ({ id: 'p1', ...args.data })), findUnique: async () => ({ userId: 'user-1', skills: [], portfolioItems: [], user: {} }) },
     affiliateProfile: { upsert: affiliateUpsertSpy }
   };
 
@@ -533,7 +533,7 @@ function createCompletionMockPrisma(t: TestContext, userFixture: any) {
   const tx = {
     user: { findUnique: async () => ({ ...userFixture }), update: userUpdateSpy },
     clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy },
-    providerProfile: { upsert: providerUpsertSpy, update: providerUpdateSpy },
+    providerProfile: { upsert: providerUpsertSpy, update: providerUpdateSpy, findUnique: async () => ({ userId: 'user-1', skills: [], portfolioItems: [], user: {} }) },
     affiliateProfile: { upsert: affiliateUpsertSpy }
   };
 
@@ -595,9 +595,10 @@ test('updateProfile (PROVIDER/AFFILIATE): completion recalculation never fires f
   await profileService.updateProfile('user-1', 'AFFILIATE', { firstName: 'Aff', lastName: 'Iliate' } as any);
 
   assert.equal(clientUpdateSpy.mock.callCount(), 0);
-  // PROVIDER completion is out of scope for profile.service.ts in 3D.2A —
-  // its .update() spy (completionPercentage write) must never fire from here.
-  assert.equal(providerUpdateSpy.mock.callCount(), 0);
+  // PROVIDER: saving through this endpoint (e.g. the PayPal payout email) now recomputes ProviderProfile.completionPercentage
+  // (one write for the PROVIDER call, none for the AFFILIATE call, none touching the client row).
+  assert.equal(providerUpdateSpy.mock.callCount(), 1);
+  assert.equal(typeof providerUpdateSpy.mock.calls[0].arguments[0].data.completionPercentage, 'number');
 });
 
 // ============================================================================

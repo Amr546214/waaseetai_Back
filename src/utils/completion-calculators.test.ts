@@ -162,7 +162,8 @@ test('computeProviderCompletion: known fixture -> exact score matching the pre-e
       portfolioItems: [],
       websiteUrl: null,
       country: 'SA',
-      city: 'Riyadh'
+      city: 'Riyadh',
+      paypalPayoutEmail: 'pay@example.com'
     },
     user: {
       firstName: 'Legacy',
@@ -175,7 +176,8 @@ test('computeProviderCompletion: known fixture -> exact score matching the pre-e
     }
   });
   // avatarUrl(10) + name+headline+mainSpecialty(15) + bio>=50(15) + skills(10)
-  // + country+city(10) + email+phone(10) + iban(10) + idDocumentUrl(10) = 90
+  // + country+city(10) + email+phone(10) + PayPal payout email(10, replaces the old IBAN factor; User.ibanNumber is no
+  // longer scored) + idDocumentUrl(10) = 90
   // (no portfolioItems and no websiteUrl -> that +10 factor doesn't fire)
   assert.equal(score, 90);
 });
@@ -306,4 +308,60 @@ test('computeClientCompletion: paypalPayoutEmail substitutes the whole banking s
   const withPaypal = computeClientCompletion({ ...base, clientProfile: { ...base.clientProfile, paypalPayoutEmail: 'p@x.co' } } as any);
   assert.equal(without, 80);
   assert.equal(withPaypal, 100);
+});
+
+// ============================================================================
+// Provider: PayPal replaces IBAN, missingItems, pending ID review
+// ============================================================================
+import { computeProviderMissingItems } from './completion-calculators';
+
+const FULL_PROVIDER = {
+  providerProfile: {
+    firstName: 'Okasha', lastName: 'Expert', avatarUrl: 'https://example.com/a.png', headline: 'Senior', mainSpecialty: 'دعم فني',
+    bio: 'x'.repeat(60), skills: ['a'], portfolioItems: [], websiteUrl: 'https://example.com', country: 'SA', city: 'Riyadh',
+    paypalPayoutEmail: 'pay@example.com',
+  },
+  user: { email: 'p@example.com', phoneNumber: '0500000000', idDocumentUrl: 'https://example.com/id.pdf' },
+};
+
+test('provider: the PayPal payout email earns the payment points (10) and User.ibanNumber earns nothing', () => {
+  const withPaypal = computeProviderCompletion({ ...FULL_PROVIDER, user: { ...FULL_PROVIDER.user, idDocumentUrl: null } });
+  assert.equal(withPaypal, 90); // everything except the ID document
+  const withIbanOnly = computeProviderCompletion({
+    providerProfile: { ...FULL_PROVIDER.providerProfile, paypalPayoutEmail: null },
+    user: { ...FULL_PROVIDER.user, ibanNumber: 'SA0380000000608010167519', idDocumentUrl: null },
+  });
+  assert.equal(withIbanOnly, 80); // the IBAN is ignored, the PayPal factor is missing
+  assert.equal(computeProviderCompletion({ ...FULL_PROVIDER, providerProfile: { ...FULL_PROVIDER.providerProfile, paypalPayoutEmail: '   ' } }), 90);
+});
+
+test('provider without PayPal: a "payout" item is missing (10 points, payout tab)', () => {
+  const items = computeProviderMissingItems({ ...FULL_PROVIDER, providerProfile: { ...FULL_PROVIDER.providerProfile, paypalPayoutEmail: null } });
+  assert.deepEqual(items.map(i => [i.key, i.points, i.status, i.tab]), [['payout', 10, 'missing', 'payout']]);
+});
+
+test('provider with a pending ID document review: reported as pending_review, not missing, and not counted yet', () => {
+  const input = { ...FULL_PROVIDER, user: { ...FULL_PROVIDER.user, idDocumentUrl: null } };
+  assert.equal(computeProviderCompletion(input), 90);
+  const items = computeProviderMissingItems(input, { pendingDocumentReview: true });
+  assert.deepEqual(items.map(i => [i.key, i.status, i.tab]), [['idDocument', 'pending_review', 'docs']]);
+  assert.match(items[0].hint, /قيد المراجعة/);
+  // without a pending request the same gap is plainly missing
+  assert.equal(computeProviderMissingItems(input)[0].status, 'missing');
+});
+
+test('full provider (PayPal + approved ID) reaches 100 with nothing missing', () => {
+  assert.equal(computeProviderCompletion(FULL_PROVIDER), 100);
+  assert.deepEqual(computeProviderMissingItems(FULL_PROVIDER), []);
+});
+
+test('provider missingItems: every scoring input is listed with its points and the tab that fixes it; points add up to 100 - score', () => {
+  const empty = { providerProfile: {}, user: {} };
+  const items = computeProviderMissingItems(empty);
+  assert.deepEqual(items.map(i => i.key), ['avatar', 'identity', 'bio', 'skills', 'portfolio', 'contact', 'location', 'payout', 'idDocument']);
+  assert.deepEqual(items.map(i => i.tab), ['profile', 'profile', 'profile', 'profile', 'profile', 'contact', 'profile', 'payout', 'docs']);
+  assert.equal(items.reduce((n, i) => n + i.points, 0), 100 - computeProviderCompletion(empty));
+  // a 49-character bio is still missing; 50 is enough
+  assert.equal(computeProviderMissingItems({ providerProfile: { ...FULL_PROVIDER.providerProfile, bio: 'x'.repeat(49) }, user: FULL_PROVIDER.user }).some(i => i.key === 'bio'), true);
+  assert.equal(computeProviderMissingItems({ providerProfile: { ...FULL_PROVIDER.providerProfile, bio: 'x'.repeat(50) }, user: FULL_PROVIDER.user }).some(i => i.key === 'bio'), false);
 });

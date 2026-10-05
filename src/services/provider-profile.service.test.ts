@@ -77,7 +77,8 @@ async function loadProviderProfileServiceWithFixture(t: TestContext) {
         clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy },
         affiliateProfile: { upsert: affiliateUpsertSpy },
         profileModificationRequest: {
-          create: async () => ({})
+          create: async () => ({}),
+          count: async () => 0
         },
         accountAuditLog: {
           create: async () => ({})
@@ -119,7 +120,8 @@ test('updateBasicInfo: firstName/lastName/avatarUrl are written to ProviderProfi
   // The main providerProfile.update call must carry the display fields
   // directly (not nested under `user`).
   assert.equal(providerProfileUpdateSpy.mock.callCount() >= 1, true);
-  const mainCall = providerProfileUpdateSpy.mock.calls[0].arguments[0];
+  // (getProfile may first sync the stored completionPercentage with its own update call, so pick the call carrying the fields.)
+  const mainCall = providerProfileUpdateSpy.mock.calls.map((c: any) => c.arguments[0]).find((a: any) => 'firstName' in a.data);
   assert.equal(mainCall.data.firstName, 'Okasha');
   assert.equal(mainCall.data.lastName, 'Expert');
   assert.equal(mainCall.data.avatarUrl, 'https://new.example/provider-avatar.png');
@@ -919,7 +921,7 @@ test('reviewSensitiveChange (DOCUMENTS, approved): recalculates completion after
   assert.equal(completionCalls.length, 1);
 });
 
-test('verifySensitiveChange (CONTACT, applied immediately since it needs no review): does NOT trigger provider completion recalculation', async (t) => {
+test('verifySensitiveChange (CONTACT, applied immediately since it needs no review): recomputes provider completion (email/phone are scored)', async (t) => {
   const { providerProfileService, providerProfileUpdateSpy, userUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
 
   const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', {
@@ -931,11 +933,10 @@ test('verifySensitiveChange (CONTACT, applied immediately since it needs no revi
   const emailCommit = userUpdateSpy.mock.calls.find((c: any) => 'email' in c.arguments[0].data);
   assert.notEqual(emailCommit, undefined);
 
-  // Approved 3D.2B scope decision: CONTACT never triggers this recompute,
-  // even though email/phoneNumber are themselves formula inputs elsewhere —
-  // only the BANKING/ibanNumber and DOCUMENTS/idDocumentUrl commit points do.
+  // Email/phone are completion inputs, so the CONTACT commit now recomputes the stored percentage (previously only the
+  // BANKING and DOCUMENTS commit points did).
   const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
-  assert.equal(completionCalls.length, 0);
+  assert.equal(completionCalls.length, 1);
 });
 
 test('reviewSensitiveChange (BANKING, approved): a completion-recompute failure is logged and does not fail the already-successful sensitive change', async (t) => {
