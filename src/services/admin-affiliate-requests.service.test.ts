@@ -38,12 +38,16 @@ function createMockPrisma(t: TestContext, opts: {
 		user: { update: userUpdateSpy }
 	};
 
+	// The completion recompute that follows an approval goes through marketerProfileService (mocked: it is the unit under
+	// test elsewhere, marketer-completion.test.ts).
+	const recomputeUpdateSpy = t.mock.fn(async (_userId: string) => undefined);
 	const prismaMock: any = { $transaction: async (fn: any) => fn(tx) };
 
 	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
 	t.mock.module('./notification.service', { namedExports: { notificationService: { createAndEmit: notifySpy } } });
+	t.mock.module('./marketer-profile.service', { namedExports: { marketerProfileService: { recalculateCompletion: recomputeUpdateSpy } } });
 
-	return { userUpdateSpy, affiliateUpdateSpy, notifySpy, affiliateFindUniqueSpy, getRequest: () => request };
+	return { userUpdateSpy, affiliateUpdateSpy, notifySpy, affiliateFindUniqueSpy, recomputeUpdateSpy, getRequest: () => request };
 }
 
 async function loadService(t: TestContext, opts?: Parameters<typeof createMockPrisma>[1]) {
@@ -317,4 +321,39 @@ test('approve (BANK_NAME): the AffiliateProfile.update() return value is select-
 	const args = affiliateUpdateSpy.mock.calls[0].arguments[0];
 	assert.deepEqual(args.select, { id: true });
 	assert.equal('level' in args.select, false);
+});
+
+test('approve: an IBAN approval recomputes the stored completion (no stale value after the human approval)', async (t) => {
+	const { adminAffiliateRequestsService, recomputeUpdateSpy } = await loadService(t, {
+		request: { id: 'req-9', affiliateProfileId: 'aff-1', fieldType: 'IBAN', fieldLabel: 'IBAN', requestedValue: 'SA5503000000608010167519', currentValue: null, status: 'PENDING_HUMAN_APPROVAL', requestNumber: 'REQ-9' }
+	});
+	await adminAffiliateRequestsService.approve('req-9', 'admin-1');
+	assert.equal(recomputeUpdateSpy.mock.callCount(), 1);
+	assert.equal(recomputeUpdateSpy.mock.calls[0].arguments[0], 'user-1'); // recomputed for the marketer whose IBAN was just applied
+});
+
+test('approve: a name approval also recomputes the stored completion', async (t) => {
+	const { adminAffiliateRequestsService, recomputeUpdateSpy } = await loadService(t, {
+		request: { id: 'req-10', affiliateProfileId: 'aff-1', fieldType: 'FIRST_NAME', fieldLabel: 'الاسم', requestedValue: 'Ali', currentValue: 'A', status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-10' }
+	});
+	await adminAffiliateRequestsService.approve('req-10', 'admin-1');
+	assert.equal(recomputeUpdateSpy.mock.callCount(), 1);
+});
+
+test('reject: a rejection never recomputes (nothing was applied)', async (t) => {
+	const { adminAffiliateRequestsService, recomputeUpdateSpy } = await loadService(t, {
+		request: { id: 'req-11', affiliateProfileId: 'aff-1', fieldType: 'IBAN', fieldLabel: 'IBAN', requestedValue: 'SA5503000000608010167519', currentValue: null, status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-11' }
+	});
+	await adminAffiliateRequestsService.reject('req-11', 'admin-1', 'غير مطابق');
+	assert.equal(recomputeUpdateSpy.mock.callCount(), 0);
+});
+
+test('approve: a failing recompute never undoes the committed approval', async (t) => {
+	const { adminAffiliateRequestsService, recomputeUpdateSpy, getRequest } = await loadService(t, {
+		request: { id: 'req-12', affiliateProfile: undefined, affiliateProfileId: 'aff-1', fieldType: 'LAST_NAME', fieldLabel: 'الاسم', requestedValue: 'B', currentValue: 'A', status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-12' }
+	});
+	recomputeUpdateSpy.mock.mockImplementation(() => { throw new Error('db down'); });
+	const result = await adminAffiliateRequestsService.approve('req-12', 'admin-1');
+	assert.equal(result.status, 'APPROVED_AND_APPLIED');
+	assert.equal(getRequest().status, 'APPROVED_AND_APPLIED');
 });

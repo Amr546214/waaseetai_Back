@@ -38,7 +38,7 @@ export interface ClientCompletionInput {
 }
 
 /** The profile page that can fix the item. 'setup' = the profile-setup wizard (the only place that collects it). */
-export type CompletionTab = 'profile' | 'contact' | 'payout' | 'docs' | 'basics' | 'banking' | 'setup';
+export type CompletionTab = 'profile' | 'contact' | 'payout' | 'docs' | 'basics' | 'banking' | 'setup' | 'bank';
 export type CompletionItemStatus = 'missing' | 'pending_review';
 export interface CompletionMissingItem {
   key: string;
@@ -208,52 +208,60 @@ export function computeProviderMissingItems(input: ProviderCompletionInput, opti
 
 export interface AffiliateCompletionInput {
   user: {
+    avatarUrl?: string | null;
+    // Names and email are no longer scored (set at signup, not completable from the UI); kept optional so callers compile.
     firstName?: string | null;
     lastName?: string | null;
     email?: string | null;
-    avatarUrl?: string | null;
   };
   affiliateProfile: {
     avatarUrl?: string | null;
     bio?: string | null;
+    /** The APPROVED IBAN (written only when an admin approves the request). */
     iban?: string | null;
   };
   marketingChannelsCount: number;
 }
 
+/** A marketing bio only counts from this many characters (the maximum is enforced on save). */
+export const AFFILIATE_BIO_MIN_LENGTH = 50;
+export const AFFILIATE_BIO_MAX_LENGTH = 500;
+
+const AFFILIATE_RULES: CompletionRule<AffiliateCompletionInput>[] = [
+  { key: 'avatar', label: 'الصورة الشخصية', points: 20, tab: 'profile', hint: 'أضف صورة شخصية',
+    met: ({ user: u, affiliateProfile: p }) => !!(p.avatarUrl || u.avatarUrl) },
+  { key: 'bio', label: 'الوصف التسويقي', points: 20, tab: 'profile', hint: `اكتب وصفًا تسويقيًا من ${AFFILIATE_BIO_MIN_LENGTH} حرفًا على الأقل`,
+    met: ({ affiliateProfile: p }) => !!(p.bio && p.bio.trim().length >= AFFILIATE_BIO_MIN_LENGTH) },
+  { key: 'channel', label: 'قناة تسويقية', points: 30, tab: 'profile', hint: 'أضف قناة تسويقية واحدة على الأقل',
+    met: ({ marketingChannelsCount }) => marketingChannelsCount > 0 },
+  { key: 'iban', label: 'الحساب البنكي (IBAN)', points: 30, tab: 'bank', hint: 'أضف رقم IBAN (يُفعَّل بعد اعتماد الطلب)',
+    met: ({ affiliateProfile: p }) => !!(p.iban && p.iban.trim().length > 0) },
+];
+
 /**
- * Phase 3D.4: verbatim extraction of marketer-profile.service.ts's (private)
- * recalculateCompletion — identical fields, identical weights (avatar 15 +
- * bio 15 + >=1 marketing channel 20 + IBAN 20 + basic identity 30 = 100 max),
- * identical null/empty semantics. Extracted so role-creation initialization
- * (account-management.service.ts) can compute the exact same score from
- * already-known/fetched state without importing MarketerProfileService (a
- * DB-querying service class) — not a formula redesign.
- *
- * marketingChannelsCount replaces the original's
- * `profile.marketingChannels.length` — callers pass the count they already
- * have (0 at role creation, or `marketingChannels.length` when recalculating
- * an existing profile).
+ * Marketer completion, weighted to 100 over what the marketer can do: avatar 20, bio 20 (>= 50 characters), at least one
+ * channel 30 (no verification needed yet), approved IBAN 30. Names and email are not scored. The IBAN only counts once an
+ * admin approves the request (that is when AffiliateProfile.iban is written); a pending request gives no points and is
+ * reported as 'pending_review' by computeAffiliateMissingItems.
  */
 export function computeAffiliateCompletion(input: AffiliateCompletionInput): number {
-  const { user, affiliateProfile, marketingChannelsCount } = input;
+  const score = AFFILIATE_RULES.reduce((sum, rule) => sum + (rule.met(input) ? rule.points : 0), 0);
+  return Math.min(100, score);
+}
 
-  let percentage = 0;
-
-  // Avatar (+15%)
-  if (affiliateProfile.avatarUrl || user.avatarUrl) percentage += 15;
-
-  // Bio (+15%)
-  if (affiliateProfile.bio && affiliateProfile.bio.trim().length > 0) percentage += 15;
-
-  // At least 1 Channel (+20%)
-  if (marketingChannelsCount > 0) percentage += 20;
-
-  // IBAN (+20%)
-  if (affiliateProfile.iban && affiliateProfile.iban.trim().length > 0) percentage += 20;
-
-  // User basic info (+30%)
-  if (user.firstName && user.lastName && user.email) percentage += 30;
-
-  return Math.min(100, percentage);
+export function computeAffiliateMissingItems(input: AffiliateCompletionInput, options: { pendingIbanReview?: boolean } = {}): CompletionMissingItem[] {
+  const items: CompletionMissingItem[] = [];
+  for (const rule of AFFILIATE_RULES) {
+    if (rule.met(input)) continue;
+    const pending = rule.key === 'iban' && !!options.pendingIbanReview;
+    items.push({
+      key: rule.key,
+      label: rule.label,
+      points: rule.points,
+      tab: rule.tab,
+      status: pending ? 'pending_review' : 'missing',
+      hint: pending ? 'طلب الحساب البنكي قيد المراجعة' : rule.hint,
+    });
+  }
+  return items;
 }

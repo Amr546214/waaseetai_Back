@@ -5,7 +5,7 @@ import { authenticate, authorize } from '../middlewares/auth.middleware';
 import { validateDto } from '../middlewares/validate-dto.middleware';
 import { apiLimiter } from '../middlewares/rate-limit.middleware';
 import { CreateIdentityRequestSchema } from '../dtos/profile-requests.dto';
-import { updateBankInfoSchema } from '../dtos/marketer-profile.dto';
+import { updateBankInfoSchema, updateMarketingInfoSchema, addChannelSchema } from '../dtos/marketer-profile.dto';
 
 const router = Router();
 
@@ -20,8 +20,8 @@ router.use(authenticate);
 router.use(authorize('MARKETING_BROKER'));
 
 router.get('/', marketerProfileController.getProfile);
-router.patch('/marketing-info', marketerProfileController.updateMarketingInfo);
-router.post('/channels', marketerProfileController.addChannel);
+router.patch('/marketing-info', validateDto(updateMarketingInfoSchema), marketerProfileController.updateMarketingInfo);
+router.post('/channels', validateDto(addChannelSchema), marketerProfileController.addChannel);
 router.delete('/channels/:id', marketerProfileController.removeChannel);
 router.patch('/bank-info', validateDto(updateBankInfoSchema), marketerProfileController.updateBankInfo);
 

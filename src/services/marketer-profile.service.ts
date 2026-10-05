@@ -1,7 +1,8 @@
 import { prisma } from '../config/db';
-import { SensitiveFieldType } from '@prisma/client';
+import { ChangeRequestStatus, Prisma, SensitiveFieldType } from '@prisma/client';
+import { logger } from '../config/logger';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
-import { computeAffiliateCompletion } from '../utils/completion-calculators';
+import { computeAffiliateCompletion, computeAffiliateMissingItems } from '../utils/completion-calculators';
 import { createGovernedFieldRequests, FieldChangeCandidate } from './profile-requests.service';
 import { AppError } from '../utils/app-error';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
@@ -56,7 +57,47 @@ export class MarketerProfileService {
       throw new Error('Affiliate profile not found');
     }
 
-    return profile;
+    // Completion is recomputed from the rows just read (so a stored value that predates the current formula, or one that
+    // went stale when an admin approved the IBAN, is healed on read) and returned with what is still missing. The stored
+    // column is synced when it differs (best effort, never fails the read).
+    const pendingIbanReview = await this.hasPendingIbanReview(profile.id);
+    const completionInput = {
+      user: profile.user,
+      affiliateProfile: profile,
+      marketingChannelsCount: profile.marketingChannels?.length || 0
+    };
+    const completionPercentage = computeAffiliateCompletion(completionInput);
+    const missingItems = computeAffiliateMissingItems(completionInput, { pendingIbanReview });
+    if (profile.completionPercentage !== completionPercentage) {
+      try {
+        await prisma.affiliateProfile.update({ where: { userId }, data: { completionPercentage }, select: { id: true } });
+      } catch (error) {
+        logger.error(`[MarketerProfileService] Failed to sync stored completion (userId=${userId})`, error);
+      }
+    }
+
+    // Bank state for the pages: 'approved' (an IBAN is on the profile), 'pending_review' (a request is waiting for review),
+    // or 'none'. bankChangePending is true when a change request is pending even though an approved IBAN already exists.
+    const bankStatus = profile.iban ? 'approved' : pendingIbanReview ? 'pending_review' : 'none';
+
+    return Object.assign(profile, { completionPercentage, missingItems, bankStatus, bankChangePending: pendingIbanReview });
+  }
+
+  /** True while an IBAN request is waiting for the AI/human review (a read failure falls back to false, never breaking the profile read). */
+  private async hasPendingIbanReview(affiliateProfileId: string): Promise<boolean> {
+    try {
+      const count = await prisma.profileChangeRequest.count({
+        where: {
+          affiliateProfileId,
+          fieldType: SensitiveFieldType.IBAN,
+          status: { in: [ChangeRequestStatus.PENDING_AI_REVIEW, ChangeRequestStatus.PENDING_HUMAN_APPROVAL] }
+        }
+      });
+      return count > 0;
+    } catch (error) {
+      logger.error(`[MarketerProfileService] Could not read pending IBAN requests (affiliateProfileId=${affiliateProfileId})`, error);
+      return false;
+    }
   }
 
   /**
@@ -209,31 +250,27 @@ export class MarketerProfileService {
     });
   }
 
-  private async recalculateCompletion(userId: string) {
-    // Explicit select — deployment-safety fix; this is a private helper
-    // whose return value is never forwarded to a caller (only used to
-    // compute `percentage` below), so only the exact fields
-    // computeAffiliateCompletion() reads are selected: avatarUrl/bio/iban
-    // from AffiliateProfile itself, the marketing-channels COUNT (not the
-    // rows), and firstName/lastName/email/avatarUrl from the related User.
-    const profile = await prisma.affiliateProfile.findUnique({
+  /**
+   * Recomputes and stores AffiliateProfile.completionPercentage. Called after every write that changes a scored input
+   * (avatar, bio, channel add/remove, an admin approving the IBAN or a name) and by the legacy AFFILIATE profile paths.
+   * Accepts a transaction client so a caller inside a $transaction recomputes from its own uncommitted writes.
+   */
+  public async recalculateCompletion(userId: string, tx?: Prisma.TransactionClient) {
+    const client = tx ?? prisma;
+    // Explicit select — deployment-safety fix; only the exact fields computeAffiliateCompletion() reads.
+    const profile = await client.affiliateProfile.findUnique({
       where: { userId },
       select: {
         avatarUrl: true,
         bio: true,
         iban: true,
         marketingChannels: { select: { id: true } },
-        user: { select: { firstName: true, lastName: true, email: true, avatarUrl: true } }
+        user: { select: { avatarUrl: true } }
       }
     });
 
     if (!profile) return;
 
-    // Phase 3D.4: delegates to the shared pure calculator (src/utils/
-    // completion-calculators.ts) so role-creation initialization
-    // (account-management.service.ts) can compute the exact same score
-    // without depending on this DB-querying service. Behavior-preserving
-    // extraction only — same fields, same weights, same null/empty semantics.
     const percentage = computeAffiliateCompletion({
       user: profile.user,
       affiliateProfile: profile,
@@ -241,7 +278,7 @@ export class MarketerProfileService {
     });
 
     // Explicit select — deployment-safety fix; return value unused.
-    await prisma.affiliateProfile.update({
+    await client.affiliateProfile.update({
       where: { userId },
       data: { completionPercentage: percentage },
       select: { id: true }

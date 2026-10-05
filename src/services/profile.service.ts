@@ -8,6 +8,7 @@ import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
 import { computeClientCompletion, computeClientMissingItems } from '../utils/completion-calculators';
 import { logger } from '../config/logger';
 import { providerProfileService } from './provider-profile.service';
+import { marketerProfileService } from './marketer-profile.service';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
 
 export class ProfileService {
@@ -234,6 +235,8 @@ export class ProfileService {
             update: affiliateData,
             select: AFFILIATE_PROFILE_SAFE_SCALAR_SELECT
           });
+          // avatar / bio written here are completion inputs: recompute from this transaction's own writes.
+          await marketerProfileService.recalculateCompletion(userId, tx);
         } else if (activeRole === UserRole.PROVIDER) {
           // Clean undefined/incompatible properties for Provider.
           const providerData: any = { ...(profileData as any) };
@@ -319,6 +322,10 @@ export class ProfileService {
         // display field actually changed for a CLIENT-active caller,
         // computed from the FINAL post-write state. Never for PROVIDER/
         // AFFILIATE, never mirrored to User.
+        // AFFILIATE: the avatar written by this tab is a completion input too.
+        if (activeRole === UserRole.AFFILIATE && displayResult) {
+          await marketerProfileService.recalculateCompletion(userId, tx);
+        }
         if (activeRole === UserRole.CLIENT && displayResult) {
           const finalUser = await tx.user.findUnique({ where: { id: userId } });
           const clientCompletion = computeClientCompletion({ user: finalUser || {}, clientProfile: displayResult as any });
