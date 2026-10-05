@@ -567,3 +567,85 @@ test('registerUser (Google sign-up path — googleIdToken set): uses the SAME re
   assert.equal(referralCreateSpy.mock.callCount(), 1);
   assert.equal(referralCreateSpy.mock.calls[0].arguments[0].data.affiliateId, 'affiliate-g');
 });
+
+// ---------------------------------------------------------------------------
+// A marketing broker (affiliate) is never referred: cookie, affiliateIdentifier and any other referral source are
+// ignored for MARKETING_BROKER (email and Google sign-up); clients and providers keep their attribution.
+// ---------------------------------------------------------------------------
+const AFFILIATES = [{ id: 'affiliate-1', userId: 'affiliate-user-1', referralSlug: 'khalid2026' }];
+const MARKETER_INPUT: any = { ...REGISTER_BASE_INPUT, accountType: 'MARKETING_BROKER' };
+
+function mockGoogleIdentity(t: TestContext) {
+  t.mock.module('google-auth-library', {
+    namedExports: {
+      OAuth2Client: class {
+        async verifyIdToken(_opts: any) {
+          return { getPayload: () => ({ sub: 'google-sub-m', email: 'new@example.com', email_verified: true }) };
+        }
+      }
+    }
+  });
+}
+
+test('marketer email register with a referral cookie: no referrer lookup and no referral record', async (t) => {
+  const { authService, affiliateFindFirstSpy, referralCreateSpy, getReferrals } = await loadAuthServiceForRegister(t, { affiliates: AFFILIATES });
+
+  const result = await authService.registerUser({ ...MARKETER_INPUT }, { refCookieSlug: 'khalid2026' });
+
+  assert.equal(typeof result.userId, 'string');
+  assert.equal(affiliateFindFirstSpy.mock.callCount(), 0);
+  assert.equal(referralCreateSpy.mock.callCount(), 0);
+  assert.equal(getReferrals().length, 0);
+});
+
+test('marketer Google register with a referral cookie: no referrer lookup and no referral record', async (t) => {
+  mockGoogleIdentity(t);
+  const { authService, affiliateFindFirstSpy, referralCreateSpy } = await loadAuthServiceForRegister(t, { affiliates: AFFILIATES });
+
+  await authService.registerUser({ ...MARKETER_INPUT, password: undefined, googleIdToken: 'valid-google-token' } as any, { refCookieSlug: 'khalid2026' });
+
+  assert.equal(affiliateFindFirstSpy.mock.callCount(), 0);
+  assert.equal(referralCreateSpy.mock.callCount(), 0);
+});
+
+test('client register with a referral cookie: the referral is created', async (t) => {
+  const { authService, referralCreateSpy } = await loadAuthServiceForRegister(t, { affiliates: AFFILIATES });
+
+  await authService.registerUser({ ...REGISTER_BASE_INPUT, accountType: 'CLIENT_INDIVIDUAL' }, { refCookieSlug: 'khalid2026' });
+
+  assert.equal(referralCreateSpy.mock.callCount(), 1);
+  assert.equal(referralCreateSpy.mock.calls[0].arguments[0].data.affiliateId, 'affiliate-1');
+});
+
+test('provider register with a referral cookie: the referral is created', async (t) => {
+  const { authService, referralCreateSpy } = await loadAuthServiceForRegister(t, { affiliates: AFFILIATES });
+
+  await authService.registerUser({ ...REGISTER_BASE_INPUT, accountType: 'PROVIDER_INDIVIDUAL' }, { refCookieSlug: 'khalid2026' });
+
+  assert.equal(referralCreateSpy.mock.callCount(), 1);
+  assert.equal(referralCreateSpy.mock.calls[0].arguments[0].data.affiliateId, 'affiliate-1');
+});
+
+test('client and provider register with an explicit affiliateIdentifier: the referral is created', async (t) => {
+  for (const accountType of ['CLIENT_INDIVIDUAL', 'CLIENT_COMPANY', 'PROVIDER_INDIVIDUAL', 'PROVIDER_COMPANY']) {
+    await t.test(accountType, async (st) => {
+      const { authService, referralCreateSpy } = await loadAuthServiceForRegister(st, { affiliates: AFFILIATES });
+      await authService.registerUser({ ...REGISTER_BASE_INPUT, accountType, affiliateIdentifier: 'khalid2026' });
+      assert.equal(referralCreateSpy.mock.callCount(), 1, accountType);
+    });
+  }
+});
+
+test('marketer register with an explicit affiliateIdentifier alone: ignored', async (t) => {
+  const { authService, affiliateFindFirstSpy, referralCreateSpy } = await loadAuthServiceForRegister(t, { affiliates: AFFILIATES });
+  await authService.registerUser({ ...MARKETER_INPUT, affiliateIdentifier: 'khalid2026' });
+  assert.equal(affiliateFindFirstSpy.mock.callCount(), 0);
+  assert.equal(referralCreateSpy.mock.callCount(), 0);
+});
+
+test('marketer register with an explicit affiliateIdentifier together with a cookie: both ignored', async (t) => {
+  const { authService, affiliateFindFirstSpy, referralCreateSpy } = await loadAuthServiceForRegister(t, { affiliates: AFFILIATES });
+  await authService.registerUser({ ...MARKETER_INPUT, affiliateIdentifier: 'khalid2026' }, { refCookieSlug: 'khalid2026' });
+  assert.equal(affiliateFindFirstSpy.mock.callCount(), 0);
+  assert.equal(referralCreateSpy.mock.callCount(), 0);
+});
