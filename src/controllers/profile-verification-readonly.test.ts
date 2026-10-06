@@ -16,29 +16,33 @@ function mockRes() {
 }
 
 type Writes = { providerUpsert: any[]; providerUpdate: any[]; providerUpdateMany: any[]; clientUpsert: any[]; clientUpdate: any[]; clientUpdateMany: any[]; userUpdate: any[] };
+// the prisma mock is a module-level singleton reading `cur`: services imported once (and cached) keep working across tests
+let cur: { w: Writes; o: { userStatus?: string; providerKyc?: string; clientKyc?: string } } = { w: null as any, o: {} };
+const prisma: any = {
+  skill: { findMany: async () => [] },
+  portfolioItem: { deleteMany: async () => ({}), createMany: async () => ({}) },
+  providerProfile: {
+    upsert: async (a: any) => { cur.w.providerUpsert.push(a); return { id: 'pp1', ...a.create }; },
+    findUnique: async () => ({ id: 'pp1', skills: [], portfolioItems: [], kycStatus: cur.o.providerKyc ?? 'VERIFIED' }),
+    update: async (a: any) => { cur.w.providerUpdate.push(a); return { id: 'pp1', ...a.data }; },
+    updateMany: async (a: any) => { cur.w.providerUpdateMany.push(a); return { count: 1 }; },
+  },
+  clientProfile: {
+    upsert: async (a: any) => { cur.w.clientUpsert.push(a); return { id: 'cp1', ...a.create }; },
+    update: async (a: any) => { cur.w.clientUpdate.push(a); return { id: 'cp1', ...a.data }; },
+    updateMany: async (a: any) => { cur.w.clientUpdateMany.push(a); return { count: 1 }; },
+    findUnique: async () => ({ id: 'cp1', kycStatus: cur.o.clientKyc ?? 'VERIFIED' }),
+  },
+  clientOnboarding: { findUnique: async () => null, create: async ({ data }: any) => data, update: async ({ data }: any) => data },
+  user: {
+    findUnique: async () => ({ id: 'u1', status: cur.o.userStatus ?? 'SUSPENDED_REVIEW' }),
+    update: async (a: any) => { cur.w.userUpdate.push(a); return { id: 'u1', ...a.data }; },
+  },
+  $transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops({})),
+};
 function mockDb(t: TestContext, o: { userStatus?: string; providerKyc?: string; clientKyc?: string } = {}) {
   const w: Writes = { providerUpsert: [], providerUpdate: [], providerUpdateMany: [], clientUpsert: [], clientUpdate: [], clientUpdateMany: [], userUpdate: [] };
-  const prisma: any = {
-    skill: { findMany: async () => [] },
-    portfolioItem: { deleteMany: async () => ({}), createMany: async () => ({}) },
-    providerProfile: {
-      upsert: async (a: any) => { w.providerUpsert.push(a); return { id: 'pp1', ...a.create }; },
-      findUnique: async () => ({ id: 'pp1', skills: [], portfolioItems: [], kycStatus: o.providerKyc ?? 'VERIFIED' }),
-      update: async (a: any) => { w.providerUpdate.push(a); return { id: 'pp1', ...a.data }; },
-      updateMany: async (a: any) => { w.providerUpdateMany.push(a); return { count: 1 }; },
-    },
-    clientProfile: {
-      upsert: async (a: any) => { w.clientUpsert.push(a); return { id: 'cp1', ...a.create }; },
-      update: async (a: any) => { w.clientUpdate.push(a); return { id: 'cp1', ...a.data }; },
-      updateMany: async (a: any) => { w.clientUpdateMany.push(a); return { count: 1 }; },
-      findUnique: async () => ({ id: 'cp1', kycStatus: o.clientKyc ?? 'VERIFIED' }),
-    },
-    user: {
-      findUnique: async () => ({ id: 'u1', status: o.userStatus ?? 'SUSPENDED_REVIEW' }),
-      update: async (a: any) => { w.userUpdate.push(a); return { id: 'u1', ...a.data }; },
-    },
-    $transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops({})),
-  };
+  cur = { w, o };
   t.mock.module('../config/db', { namedExports: { prisma } });
   t.mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
   t.mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (v: any) => v ?? null } });

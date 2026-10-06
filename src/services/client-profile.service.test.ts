@@ -28,6 +28,7 @@ function clientProfileFixture(overrides: Partial<any> = {}) {
     city: 'الرياض',
     country: 'السعودية',
     isNafathVerified: true,
+    kycStatus: 'VERIFIED',
     ...overrides,
   };
 }

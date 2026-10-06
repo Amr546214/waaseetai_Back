@@ -69,7 +69,7 @@ export class ClientProfileService {
       }),
       prisma.clientProfile.findUnique({
         where: { userId },
-        select: { firstName: true, lastName: true, avatarUrl: true, bio: true, city: true, country: true, isNafathVerified: true }
+        select: { firstName: true, lastName: true, avatarUrl: true, bio: true, city: true, country: true, kycStatus: true }
       })
     ]);
     if (!user || !clientProfile) throw new AppError('الملف الشخصي غير موجود', 404);
@@ -100,7 +100,8 @@ export class ClientProfileService {
       city: clientProfile.city || null,
       country: clientProfile.country || null,
       memberSince: user.createdAt.toISOString(),
-      isVerified: clientProfile.isNafathVerified,
+      // verified only by an approved KYC review (the old source, isNafathVerified, had no real verification behind it)
+      isVerified: clientProfile.kycStatus === 'VERIFIED',
       stats: {
         completedProjects,
         activeProjects,
