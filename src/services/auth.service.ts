@@ -17,6 +17,7 @@ import { initializeRoleState } from './account-management.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { otpSendThrottle, otpThrottleMessage } from '../utils/otp-send-throttle';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
+import { normalizeReferralIdentifier } from '../utils/referral-identifier';
 
 /**
  * Phase 3C: resolves firstName/lastName for an auth response from the user's
@@ -132,13 +133,23 @@ export class AuthService {
 	 * error, never a silent overwrite of the existing (first) attribution.
 	 */
 	private async resolveReferralAttribution(newUserId: string, context: ReferralAttributionContext = {}): Promise<void> {
-		const findValidAffiliate = async (slugOrId: string) => {
+		const findValidAffiliate = async (rawSlugOrId: string) => {
+			const slugOrId = normalizeReferralIdentifier(rawSlugOrId);
+			if (!slugOrId) return null;
 			// Only an ACTIVE affiliate can be credited: a suspended/inactive one is ignored (no Referral row), whether it came
 			// from the cookie or the typed identifier.
-			const affiliate = await prisma.affiliateProfile.findFirst({
-				where: { OR: [{ referralSlug: slugOrId }, { id: slugOrId }], user: { status: UserStatus.ACTIVE } },
+			const active = { user: { status: UserStatus.ACTIVE } };
+			let affiliate = await prisma.affiliateProfile.findFirst({
+				where: { OR: [{ referralSlug: slugOrId }, { id: slugOrId }], ...active },
 				select: { id: true, userId: true }
 			});
+			// A typed code may differ from the stored slug only by letter case: retry once, case-insensitively.
+			if (!affiliate) {
+				affiliate = await prisma.affiliateProfile.findFirst({
+					where: { OR: [{ referralSlug: { equals: slugOrId, mode: 'insensitive' } }, { id: slugOrId }], ...active },
+					select: { id: true, userId: true }
+				});
+			}
 			if (!affiliate || affiliate.userId === newUserId) return null;
 			return affiliate;
 		};
@@ -156,7 +167,10 @@ export class AuthService {
 			affiliate = await findValidAffiliate(explicitSlugOrId);
 		}
 
-		if (!affiliate) return;
+		if (!affiliate) {
+			logger.info('[Referral] not attributed: code did not resolve to an active marketer');
+			return;
+		}
 
 		try {
 			await prisma.referral.create({
@@ -164,7 +178,8 @@ export class AuthService {
 			});
 		} catch (error: any) {
 			if (error?.code === 'P2002') return;
-			throw error;
+			// The account already exists at this point: a failed attribution write is logged, never turned into a failed signup.
+			logger.warn(`[Referral] attribution write failed (code=${error?.code ?? 'unknown'}); registration continues`);
 		}
 	}
 
