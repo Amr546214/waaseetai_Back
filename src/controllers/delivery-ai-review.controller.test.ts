@@ -194,7 +194,7 @@ test('neither ai-review route registration mentions decision/status/escrow mutat
   }
 });
 
-test('disabled AI feature: the unavailable AppError (503, AI_FEATURE_UNAVAILABLE) is forwarded to the global error handler by both controllers', async t => {
+test('an AppError (e.g. 503) from the delivery review service is forwarded to the global error handler by both controllers', async t => {
   const { aiFeatureUnavailableError } = await import('../services/ai/ai-feature-unavailable');
   const x = await load(t, { failure: aiFeatureUnavailableError() });
   const req: any = { user: { id: 'authenticated-user' }, params: { id: 'contract-1', stageId: 'stage-1' } };
