@@ -1,6 +1,7 @@
-import { AccountType } from '@prisma/client';
+import { AccountType, Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { marketplaceAiService } from './marketplace-ai.service';
+import { aiAuditService } from './ai-audit.service';
 import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
@@ -222,6 +223,9 @@ export class MarketplaceService {
 			return service;
 		});
 
+		// BE-2(c): advisory WaseetAI audit in the background — never blocks publish, never changes status; a failure leaves aiScore null.
+		void aiAuditService.auditProjectModel(createdService.id);
+
 		return createdService;
 	}
 
@@ -337,6 +341,13 @@ export class MarketplaceService {
 						title,
 						description: fullDescription,
 						subSpecialty: typeof subSpecialty === 'string' ? subSpecialty.trim() || null : null,
+					// stale advisory verdict cleared: a failed re-audit must leave null, not the score of the previous content
+					aiScore: null,
+					aiReviewSummary: null,
+					aiReviewDetails: Prisma.DbNull,
+					aiAuditScore: null,
+					aiAuditFeedback: Prisma.DbNull,
+					aiAuditReport: Prisma.DbNull,
 					totalAmount: totalAmount > 0 ? totalAmount : existing.totalAmount,
 					totalDays: totalDays > 0 ? totalDays : existing.totalDays,
 					...(validSkillId && { specialty: { connect: { id: validSkillId } } }),
@@ -362,6 +373,9 @@ export class MarketplaceService {
 			});
 			return service;
 		});
+
+		// The content changed, so any previous verdict no longer describes it: re-audit in the background (advisory only).
+		void aiAuditService.auditProjectModel(updated.id);
 
 		return updated;
 	}
