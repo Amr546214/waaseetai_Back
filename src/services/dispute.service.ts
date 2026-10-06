@@ -16,6 +16,21 @@ export interface DisputeAiSummary {
 
 const MAX_TEXT_FIELD_LENGTH = 2000;
 
+/**
+ * Escrow amount still held for a project, using the same definition provider-finance.service.ts applies to the provider's
+ * escrow balance: (contract price, falling back to the escrow amount) − already released, never below 0, 2 decimals.
+ * null when the project has no escrow; 0 once the escrow is RELEASED or REFUNDED.
+ */
+export function heldEscrowAmount(
+  escrow: { amount: number; releasedAmount: number | null; status: string } | null | undefined,
+  contractPrice: number | null | undefined
+): number | null {
+  if (!escrow) return null;
+  if (escrow.status !== 'HELD') return 0;
+  const entitlement = contractPrice || escrow.amount;
+  return Math.round(Math.max(0, entitlement - (escrow.releasedAmount || 0)) * 100) / 100;
+}
+
 // WaseetAI also returns a `recommendation` (a proposed settlement). It is
 // deliberately never read, mapped, returned or logged: the human admin's
 // resolve() is the only path that decides anything about the dispute.
@@ -113,7 +128,16 @@ export class DisputeService {
     const dispute = await prisma.dispute.findUnique({ where: { id }, include: { request: true, project: true, openedBy: { select: { id: true, firstName: true, lastName: true } }, againstUser: { select: { id: true, firstName: true, lastName: true } }, resolvedBy: { select: { id: true, firstName: true, lastName: true } } } });
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
     if (dispute.openedById !== userId && dispute.againstUserId !== userId) throw new AppError('لا تملك صلاحية الوصول لهذا النزاع', 403);
-    return dispute;
+    // New read-only field `heldEscrowAmount`: the escrow amount still held for the dispute's project (null when there is no project/escrow).
+    let held: number | null = null;
+    if (dispute.projectId) {
+      const escrow = await prisma.escrow.findUnique({
+        where: { projectId: dispute.projectId },
+        select: { amount: true, releasedAmount: true, status: true, project: { select: { contract: { select: { price: true } } } } }
+      });
+      held = heldEscrowAmount(escrow, escrow?.project?.contract?.price);
+    }
+    return { ...dispute, heldEscrowAmount: held };
   }
 
   async getForAdmin(id: string) {

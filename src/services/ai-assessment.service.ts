@@ -1,6 +1,7 @@
 import { AssessmentStatus, Prisma, SpecialtyVerificationStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
+import { AppError } from '../utils/app-error';
 
 // AI assessments run exclusively through the external WaseetAI service:
 //  - generation: POST /v1/ai/assessments/stream (socket) or /v1/ai/assessments (REST)
@@ -278,6 +279,16 @@ function normalizeAnswers(raw: unknown): Record<string, string> {
   return out;
 }
 
+/**
+ * Provider tier from the number of PASSED specialties: >=5 TOP_RATED, >=3 EXPERT, otherwise PRO.
+ * (The previous `if (>=3) EXPERT else if (>=5) TOP_RATED` made TOP_RATED unreachable — the larger threshold must be tested first.)
+ */
+export function tierForVerifiedSpecialties(verifiedCount: number): 'PRO' | 'EXPERT' | 'TOP_RATED' {
+  if (verifiedCount >= 5) return 'TOP_RATED';
+  if (verifiedCount >= 3) return 'EXPERT';
+  return 'PRO';
+}
+
 async function applySpecialtyOutcome(
   tx: Prisma.TransactionClient,
   attempt: { providerSpecialtyId: string; providerProfileId: string; providerSpecialty?: { providerProfile?: { userId?: string } } | null },
@@ -304,9 +315,7 @@ async function applySpecialtyOutcome(
       where: { providerProfileId: attempt.providerProfileId, isPassed: true }
     });
 
-    let newTier = 'PRO';
-    if (verifiedCount >= 3) newTier = 'EXPERT';
-    else if (verifiedCount >= 5) newTier = 'TOP_RATED';
+    const newTier = tierForVerifiedSpecialties(verifiedCount);
 
     await tx.user.update({ where: { id: userId }, data: { tierLevel: newTier } }).catch(() => {});
   }
@@ -608,7 +617,8 @@ export class AiAssessmentService {
     });
 
     if (!attempt || !currentUserId || attempt.providerSpecialty?.providerProfile.userId !== currentUserId) {
-      throw new Error(`Assessment attempt '${attemptId}' not found.`);
+      // Missing, or not owned by the caller (never reveal which): a plain 404 — not a 500.
+      throw new AppError('محاولة التقييم غير موجودة', 404);
     }
 
     const { providerProfile: _providerProfile, ...safeProviderSpecialty } = attempt.providerSpecialty;

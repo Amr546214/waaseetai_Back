@@ -304,3 +304,55 @@ test('the gateway has no direct-Gemini dependency', async () => {
   const src = readFileSync(new URL('./ai-review.gateway.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /gemini\.client|geminiClient|generateStructured|generateStream/);
 });
+
+
+// ── BE-1: failures carry an explicit error flag + code; success is unchanged ──
+
+test('ai_text_stream_end: an upstream failure carries error:true and code FAILED', async (t) => {
+  const register = await loadGateway(t, {
+    stream: () => fakeStream([delta('x')], { throwAfter: 0, error: new WaseetAiError(WaseetAiErrorCode.PROVIDER_UNAVAILABLE, 'x', { status: 502 }) })
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+  await handlers['stream_ai_suggest_text']({ title: TITLE });
+  const last = emitted[emitted.length - 1];
+  assert.equal(last.event, 'ai_text_stream_end');
+  assert.equal(last.payload.error, true);
+  assert.equal(last.payload.code, 'FAILED');
+  assert.match(last.payload.message, /تعذر/);
+});
+
+test('ai_text_stream_end: a timeout carries code TIMEOUT', async (t) => {
+  const register = await loadGateway(t, {
+    stream: () => fakeStream([delta('x')], { throwAfter: 0, error: new WaseetAiError(WaseetAiErrorCode.TIMEOUT, 'timeout') })
+  });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+  await handlers['stream_ai_enhance_description']({ description: 'وصف مبدئي' });
+  const last = emitted[emitted.length - 1];
+  assert.equal(last.payload.error, true);
+  assert.equal(last.payload.code, 'TIMEOUT');
+});
+
+test('ai_text_stream_end: validation rejections (no description) are flagged INVALID_INPUT', async (t) => {
+  const register = await loadGateway(t, { stream: () => fakeStream(okEvents(['x'])) });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+  await handlers['stream_ai_enhance_description']({ description: '   ' });
+  const last = emitted[emitted.length - 1];
+  assert.equal(last.event, 'ai_text_stream_end');
+  assert.equal(last.payload.error, true);
+  assert.equal(last.payload.code, 'INVALID_INPUT');
+});
+
+test('ai_text_stream_end: a successful stream ends WITHOUT error/code (unchanged)', async (t) => {
+  const register = await loadGateway(t, { stream: () => fakeStream(okEvents(['جزء ', 'ثان'])) });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+  await handlers['stream_ai_suggest_text']({ title: TITLE });
+  const last = emitted[emitted.length - 1];
+  assert.equal(last.event, 'ai_text_stream_end');
+  assert.equal('error' in last.payload, false);
+  assert.equal('code' in last.payload, false);
+  assert.match(last.payload.message, /اكتمل/);
+});

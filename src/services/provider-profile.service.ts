@@ -15,6 +15,7 @@ import { computeProviderCompletion, computeProviderMissingItems } from '../utils
 import { logger } from '../config/logger';
 import { initializeRoleState } from './account-management.service';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
+import { buildAssessmentDetails, buildCompanySummary, withSpecialtyName } from './provider-public-profile.helpers';
 
 // Cached values are always a real validated WaseetAI result, keyed by the
 // provider plus the exact counts sent (so any change in real data busts it).
@@ -329,6 +330,7 @@ export class ProviderProfileService {
 						currentLevel: true,
 						ratingAverage: true,
 						profileCompletionPercent: true,
+						accountType: true,
 					}
 				},
 				skills: true,
@@ -359,9 +361,15 @@ export class ProviderProfileService {
 
 		const publishedServices = await prisma.serviceCatalog.findMany({
 			where: { providerId, status: { in: ['PUBLISHED', 'APPROVED'] } },
+			include: { specialty: { select: { nameAr: true, name: true } } },
 			orderBy: { createdAt: 'desc' }
 		});
 		const publishedServicesCount = publishedServices.length;
+
+		// Company accounts only: how many ACTIVE team members the company has (a number — never names, emails or documents).
+		const activeTeamMembersCount = profile.user?.accountType === 'PROVIDER_COMPANY'
+			? await prisma.companyTeamMember.count({ where: { companyOwnerId: providerId, status: 'ACTIVE' } })
+			: 0;
 
 		const reviews = await prisma.review.findMany({
 			where: { providerId, reviewerRole: 'CLIENT' },
@@ -430,15 +438,7 @@ export class ProviderProfileService {
 					feasibilityScore: ps.feasibilityScore || 0,
 					clarityScore: ps.clarityScore || 0
 				},
-				assessmentDetails: latestAttempt ? {
-					totalQuestions: latestAttempt.totalQuestions || 20,
-					timeTakenMinutes: latestAttempt.timeLimitMinutes || 12,
-					score: latestAttempt.score || ps.latestScore || 0,
-					feedbackAr: latestAttempt.feedbackAr || '',
-					strengths: latestAttempt.strengths || [],
-					weaknesses: latestAttempt.weaknesses || [],
-					completedAt: latestAttempt.completedAt || ps.passedAt || new Date()
-				} : null,
+				assessmentDetails: buildAssessmentDetails(latestAttempt, ps),
 					samples: (ps.accreditationSamples || []).map((sample: any) => ({
 					id: sample.id,
 					title: sample.title,
@@ -549,7 +549,8 @@ export class ProviderProfileService {
 			},
 			skills: profile.skills.map(s => s.name),
 			specialties: specialtiesFormatted,
-			services: publishedServices,
+			services: publishedServices.map(withSpecialtyName),
+			company: buildCompanySummary({ accountType: profile.user?.accountType, companyName: profile.companyName, activeTeamMembersCount }),
 			reviews: reviews,
 			portfolioItems: allPortfolioItems,
 			socialLinks: {

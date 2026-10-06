@@ -50,6 +50,23 @@ export const AI_REVIEW_MESSAGES = {
 	TOO_LONG: '⚠️ النص طويل جداً، يرجى اختصاره',
 } as const;
 
+/** Machine-readable reason carried by a FAILED `ai_text_stream_end` (a successful end has no `error`/`code`). */
+export const AI_TEXT_STREAM_ERROR_CODES = {
+	UNAUTHENTICATED: 'UNAUTHENTICATED',
+	FORBIDDEN: 'FORBIDDEN',
+	INVALID_INPUT: 'INVALID_INPUT',
+	RATE_LIMITED: 'RATE_LIMITED',
+	NOT_CONFIGURED: 'NOT_CONFIGURED',
+	TIMEOUT: 'TIMEOUT',
+	FAILED: 'FAILED',
+} as const;
+export type AiTextStreamErrorCode = (typeof AI_TEXT_STREAM_ERROR_CODES)[keyof typeof AI_TEXT_STREAM_ERROR_CODES];
+
+/** Ends the stream with an explicit failure (`error: true` + `code`) so the client can tell it from a normal end and keep the user's draft. */
+function emitStreamError(socket: Socket, mode: 'suggest' | 'improve', code: AiTextStreamErrorCode, message: string): void {
+	socket.emit('ai_text_stream_end', { mode, message, error: true, code });
+}
+
 async function relayTextStream(
 	socket: Socket,
 	mode: 'suggest' | 'improve',
@@ -57,7 +74,7 @@ async function relayTextStream(
 	messages: { done: string; failed: string },
 ): Promise<void> {
 	if (!waseetAiClient.isConfigured()) {
-		socket.emit('ai_text_stream_end', { mode, message: AI_REVIEW_MESSAGES.NOT_CONFIGURED });
+		emitStreamError(socket, mode, AI_TEXT_STREAM_ERROR_CODES.NOT_CONFIGURED, AI_REVIEW_MESSAGES.NOT_CONFIGURED);
 		return;
 	}
 
@@ -88,7 +105,7 @@ async function relayTextStream(
 
 		if (!completed || !emittedAny) {
 			logger.warn(`[AiReviewGateway] ${mode} stream ended without usable content`);
-			socket.emit('ai_text_stream_end', { mode, message: messages.failed });
+			emitStreamError(socket, mode, AI_TEXT_STREAM_ERROR_CODES.FAILED, messages.failed);
 			return;
 		}
 		socket.emit('ai_text_stream_end', { mode, message: messages.done });
@@ -96,11 +113,11 @@ async function relayTextStream(
 		if (abortController.signal.aborted) return;
 		const e = normalizeWaseetAiError(error);
 		logger.warn(`[AiReviewGateway] ${mode} stream failed code=${e.code} status=${e.status ?? '-'} requestId=${e.requestId ?? '-'}`);
-		const message =
-			e.code === WaseetAiErrorCode.TIMEOUT ? AI_REVIEW_MESSAGES.TIMEOUT
-			: e.code === WaseetAiErrorCode.NOT_CONFIGURED ? AI_REVIEW_MESSAGES.NOT_CONFIGURED
-			: messages.failed;
-		socket.emit('ai_text_stream_end', { mode, message });
+		const [code, message]: [AiTextStreamErrorCode, string] =
+			e.code === WaseetAiErrorCode.TIMEOUT ? [AI_TEXT_STREAM_ERROR_CODES.TIMEOUT, AI_REVIEW_MESSAGES.TIMEOUT]
+			: e.code === WaseetAiErrorCode.NOT_CONFIGURED ? [AI_TEXT_STREAM_ERROR_CODES.NOT_CONFIGURED, AI_REVIEW_MESSAGES.NOT_CONFIGURED]
+			: [AI_TEXT_STREAM_ERROR_CODES.FAILED, messages.failed];
+		emitStreamError(socket, mode, code, message);
 	} finally {
 		socket.off('disconnect', onDisconnect);
 	}
@@ -114,34 +131,31 @@ export class AiReviewGateway {
 			const mode = 'suggest';
 			const userId = (socket as any).userId;
 			if (!userId) {
-				socket.emit('ai_text_stream_end', { mode, message: '⚠️ يجب تسجيل الدخول لاستخدام المساعد الذكي' });
+				emitStreamError(socket, mode, AI_TEXT_STREAM_ERROR_CODES.UNAUTHENTICATED, '⚠️ يجب تسجيل الدخول لاستخدام المساعد الذكي');
 				return;
 			}
 
 			const requester = await prisma.user.findUnique({ where: { id: userId }, select: { accountType: true } });
 			const isProvider = requester?.accountType === AccountType.PROVIDER_INDIVIDUAL || requester?.accountType === AccountType.PROVIDER_COMPANY;
 			if (!isProvider) {
-				socket.emit('ai_text_stream_end', { mode, message: '⚠️ هذه الميزة متاحة فقط لحسابات مقدمي الخدمة' });
+				emitStreamError(socket, mode, AI_TEXT_STREAM_ERROR_CODES.FORBIDDEN, '⚠️ هذه الميزة متاحة فقط لحسابات مقدمي الخدمة');
 				return;
 			}
 
 			const validation = isMeaningfulProjectTitle(payload?.title);
 			if (!validation.valid) {
-				socket.emit('ai_text_stream_end', {
-					mode,
-					message: `⚠️ ${validation.reason || 'اسم المشروع غير مناسب لتوليد وصف ذكي'}`
-				});
+				emitStreamError(socket, mode, AI_TEXT_STREAM_ERROR_CODES.INVALID_INPUT, `⚠️ ${validation.reason || 'اسم المشروع غير مناسب لتوليد وصف ذكي'}`);
 				return;
 			}
 
 			if (isSocketAiRateLimited(userId)) {
-				socket.emit('ai_text_stream_end', { mode, message: SOCKET_AI_RATE_LIMIT_MESSAGE });
+				emitStreamError(socket, mode, AI_TEXT_STREAM_ERROR_CODES.RATE_LIMITED, SOCKET_AI_RATE_LIMIT_MESSAGE);
 				return;
 			}
 
 			const title = payload.title.trim();
 			if (title.length > MAX_TITLE_LENGTH) {
-				socket.emit('ai_text_stream_end', { mode, message: AI_REVIEW_MESSAGES.TOO_LONG });
+				emitStreamError(socket, mode, AI_TEXT_STREAM_ERROR_CODES.INVALID_INPUT, AI_REVIEW_MESSAGES.TOO_LONG);
 				return;
 			}
 
@@ -159,14 +173,14 @@ export class AiReviewGateway {
 			const mode = 'improve';
 			const userId = (socket as any).userId;
 			if (!userId) {
-				socket.emit('ai_text_stream_end', { mode, message: '⚠️ يجب تسجيل الدخول لاستخدام المساعد الذكي' });
+				emitStreamError(socket, mode, AI_TEXT_STREAM_ERROR_CODES.UNAUTHENTICATED, '⚠️ يجب تسجيل الدخول لاستخدام المساعد الذكي');
 				return;
 			}
 
 			const requester = await prisma.user.findUnique({ where: { id: userId }, select: { accountType: true } });
 			const isProvider = requester?.accountType === AccountType.PROVIDER_INDIVIDUAL || requester?.accountType === AccountType.PROVIDER_COMPANY;
 			if (!isProvider) {
-				socket.emit('ai_text_stream_end', { mode, message: '⚠️ هذه الميزة متاحة فقط لحسابات مقدمي الخدمة' });
+				emitStreamError(socket, mode, AI_TEXT_STREAM_ERROR_CODES.FORBIDDEN, '⚠️ هذه الميزة متاحة فقط لحسابات مقدمي الخدمة');
 				return;
 			}
 
@@ -176,10 +190,7 @@ export class AiReviewGateway {
 			if (title) {
 				const validation = isMeaningfulProjectTitle(title);
 				if (!validation.valid) {
-					socket.emit('ai_text_stream_end', {
-						mode,
-						message: `⚠️ ${validation.reason || 'اسم المشروع غير مناسب للتحسين الذكي'}`
-					});
+					emitStreamError(socket, mode, AI_TEXT_STREAM_ERROR_CODES.INVALID_INPUT, `⚠️ ${validation.reason || 'اسم المشروع غير مناسب للتحسين الذكي'}`);
 					return;
 				}
 			}
@@ -187,16 +198,16 @@ export class AiReviewGateway {
 			// The enhance endpoint needs the description itself; a title alone
 			// cannot be enhanced (and is never sent upstream).
 			if (!description) {
-				socket.emit('ai_text_stream_end', { mode, message: AI_REVIEW_MESSAGES.NEED_DESCRIPTION });
+				emitStreamError(socket, mode, AI_TEXT_STREAM_ERROR_CODES.INVALID_INPUT, AI_REVIEW_MESSAGES.NEED_DESCRIPTION);
 				return;
 			}
 			if (description.length > MAX_DESCRIPTION_LENGTH) {
-				socket.emit('ai_text_stream_end', { mode, message: AI_REVIEW_MESSAGES.TOO_LONG });
+				emitStreamError(socket, mode, AI_TEXT_STREAM_ERROR_CODES.INVALID_INPUT, AI_REVIEW_MESSAGES.TOO_LONG);
 				return;
 			}
 
 			if (isSocketAiRateLimited(userId)) {
-				socket.emit('ai_text_stream_end', { mode, message: SOCKET_AI_RATE_LIMIT_MESSAGE });
+				emitStreamError(socket, mode, AI_TEXT_STREAM_ERROR_CODES.RATE_LIMITED, SOCKET_AI_RATE_LIMIT_MESSAGE);
 				return;
 			}
 

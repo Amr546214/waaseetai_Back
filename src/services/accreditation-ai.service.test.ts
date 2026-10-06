@@ -232,3 +232,35 @@ test('accreditationAiService: the removed fake processProofImage method (hardcod
   const { accreditationAiService } = await loadService(t, {});
   assert.equal((accreditationAiService as any).processProofImage, undefined);
 });
+
+
+// ── BE-1: a human approval must not stamp aiAuditedAt ─────────────────────
+
+async function approveWith(t: TestContext, sample: any) {
+  const sampleUpdateSpy = t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
+  const tx = { accreditationSample: { update: sampleUpdateSpy }, providerSpecialty: { updateMany: t.mock.fn(async () => ({ count: 1 })) } };
+  const prismaMock: any = {
+    accreditationSample: { findUnique: async () => sample },
+    $transaction: async (fn: any) => fn(tx)
+  };
+  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  const { accreditationAiService } = await import(`./accreditation-ai.service.ts?fixture=${Date.now()}-${Math.random()}`);
+  await accreditationAiService.adminApproveSample(sample.id);
+  return sampleUpdateSpy.mock.calls[0].arguments[0].data;
+}
+
+test('adminApproveSample: a manually-reviewed sample (no AI score) is approved WITHOUT stamping aiAuditedAt', async (t) => {
+  const data = await approveWith(t, { id: 's1', status: 'MANUAL_REVIEW', providerSpecialtyId: 'sp', aiScore: null, aiAuditedAt: null, providerSpecialty: { status: 'PENDING_TEST' } });
+  assert.equal(data.status, 'AI_VERIFIED');
+  assert.equal('aiAuditedAt' in data, false);
+});
+
+test('adminApproveSample: aiAuditedAt is stamped only when a stored AI score exists', async (t) => {
+  const stamped = await approveWith(t, { id: 's2', status: 'PENDING_AI_AUDIT', providerSpecialtyId: 'sp', aiScore: 70, aiAuditedAt: null, providerSpecialty: { status: 'PENDING_TEST' } });
+  assert.ok(stamped.aiAuditedAt instanceof Date);
+});
+
+test('adminApproveSample: an existing aiAuditedAt is never overwritten', async (t) => {
+  const kept = await approveWith(t, { id: 's3', status: 'PENDING_AI_AUDIT', providerSpecialtyId: 'sp', aiScore: 70, aiAuditedAt: new Date('2026-01-01'), providerSpecialty: { status: 'PENDING_TEST' } });
+  assert.equal('aiAuditedAt' in kept, false);
+});

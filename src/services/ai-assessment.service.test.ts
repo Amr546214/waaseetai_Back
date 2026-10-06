@@ -437,6 +437,43 @@ test('getAttemptStatus: an attempt not owned by the user is not exposed', async 
   await assert.rejects(() => aiAssessmentService.getAttemptStatus('att-1', 'user-2'));
 });
 
+test('getAttemptStatus: a missing or foreign attempt is a 404 AppError (never a plain Error -> 500)', async () => {
+  const { aiAssessmentService } = await loadSvc();
+  resetState({ attempt: null });
+  await assert.rejects(() => aiAssessmentService.getAttemptStatus('att-x', 'user-1'), (e: any) => e?.name === 'Error' && e.statusCode === 404 && e.isOperational === true);
+  // owned by someone else -> the same 404 (does not reveal that it exists)
+  resetState({ attempt: attemptFixture() });
+  await assert.rejects(() => aiAssessmentService.getAttemptStatus('att-1', 'someone-else'), (e: any) => e.statusCode === 404);
+  // no authenticated user -> 404 as well
+  await assert.rejects(() => aiAssessmentService.getAttemptStatus('att-1', undefined), (e: any) => e.statusCode === 404);
+});
+
+test('tierForVerifiedSpecialties: >=5 TOP_RATED, 3-4 EXPERT, otherwise PRO (TOP_RATED is reachable)', async () => {
+  const { tierForVerifiedSpecialties } = await loadSvc();
+  assert.equal(tierForVerifiedSpecialties(0), 'PRO');
+  assert.equal(tierForVerifiedSpecialties(1), 'PRO');
+  assert.equal(tierForVerifiedSpecialties(2), 'PRO');
+  assert.equal(tierForVerifiedSpecialties(3), 'EXPERT');
+  assert.equal(tierForVerifiedSpecialties(4), 'EXPERT');
+  assert.equal(tierForVerifiedSpecialties(5), 'TOP_RATED');
+  assert.equal(tierForVerifiedSpecialties(9), 'TOP_RATED');
+});
+
+test('the status controller maps an AppError to its own status code and keeps 500 for unexpected errors', async () => {
+  const { getAttemptStatusController } = await import('../controllers/ai-assessment.controller.ts');
+  const run = async (attemptId: string, userId: string | undefined) => {
+    const out: any = {};
+    const res: any = { status: (c: number) => { out.status = c; return res; }, json: (b: any) => { out.body = b; return res; } };
+    await getAttemptStatusController({ params: { attemptId }, user: userId ? { id: userId } : undefined } as any, res);
+    return out;
+  };
+  resetState({ attempt: null });
+  const missing = await run('att-x', 'user-1');
+  assert.equal(missing.status, 404);
+  assert.equal(missing.body.success, false);
+  assert.match(missing.body.message, /غير موجودة/);
+});
+
 test('assessment files have no direct-Gemini reference and no kill switch', () => {
   for (const f of ['./ai-assessment.service.ts', '../controllers/ai-assessment.controller.ts', '../sockets/assessment.gateway.ts']) {
     const src = readFileSync(new URL(f, import.meta.url), 'utf8');
