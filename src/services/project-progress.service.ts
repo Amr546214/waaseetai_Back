@@ -5,6 +5,7 @@ import { notificationService } from './notification.service';
 import { emailService } from './email.service';
 import { deriveProviderProgression } from '../utils/progression-calculators';
 import { aiFeatureUnavailableError } from './ai/ai-feature-unavailable';
+import { projectHealthService, type ProjectHealthResult } from './ai-features/project-health.service';
 import { createCommissionsForStageReleaseEvent } from './affiliate-commission.service';
 
 const PROJECT_COMPLETION_POINTS = 50;
@@ -65,8 +66,6 @@ export interface DeliveryAiReview {
 
 export const DELIVERY_AI_REVIEW_UNAVAILABLE_MESSAGE =
   'المراجعة الذكية للتسليم متوقفة مؤقتاً حتى يكتمل ربطها بخدمة WaseetAI. يمكنك متابعة مراجعة التسليم واتخاذ القرار يدوياً كالمعتاد.';
-export const PROJECT_HEALTH_UNAVAILABLE_MESSAGE =
-  'تحليل صحة المشروع الذكي متوقف مؤقتاً حتى يكتمل ربطه بخدمة WaseetAI. يمكنك متابعة المشروع بشكل طبيعي.';
 
 // Batch 8 — advisory-only project health analysis (currently DISABLED, see
 // getProjectHealthAnalysis below). Replaces the
@@ -594,11 +593,11 @@ export class ProjectProgressService {
   }
 
   /**
-   * AI project health analysis is DISABLED (same reason as above): no
-   * database access, no AI call, no fabricated risk level or percentages.
+   * Advisory project health analysis through the internal LlmClient (see ai-features/project-health.service.ts): a real model
+   * answer grounded in the stage/schedule/revision/dispute fields sent, or an explicit 503. Read-only, no DB write.
    */
-  async getProjectHealthAnalysis(_userId: string, _key: string): Promise<ProjectHealthAnalysis> {
-    throw aiFeatureUnavailableError(PROJECT_HEALTH_UNAVAILABLE_MESSAGE);
+  async getProjectHealthAnalysis(userId: string, key: string): Promise<ProjectHealthResult> {
+    return projectHealthService.analyze(userId, key);
   }
 }
 
