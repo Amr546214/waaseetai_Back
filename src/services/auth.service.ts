@@ -16,6 +16,7 @@ import { accountAuditLogService } from './account-logs.service';
 import { initializeRoleState } from './account-management.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { otpSendThrottle, otpThrottleMessage } from '../utils/otp-send-throttle';
+import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 
 /**
  * Phase 3C: resolves firstName/lastName for an auth response from the user's
@@ -53,7 +54,7 @@ function resolveAuthDisplayName(
   return { firstName: resolved.firstName, lastName: resolved.lastName };
 }
 
-const RESET_OTP_MAX_ATTEMPTS = 5;
+const RESET_OTP_MAX_ATTEMPTS = OTP_MAX_ATTEMPTS;
 const RESET_OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 const RESET_GENERIC_MESSAGE = 'إذا كان البريد الإلكتروني مسجلاً لدينا، فسيتم إرسال رمز إعادة تعيين كلمة المرور إليه';
 const RESET_INVALID_CODE_MESSAGE = 'رمز التحقق غير صحيح أو منتهي الصلاحية';
@@ -211,7 +212,7 @@ export class AuthService {
 		// 4. Generate a 6-digit OTP (valid 10 minutes, as the email says) and store it
 		const otpCode = crypto.randomInt(100000, 999999).toString();
 		const expiresAt = new Date(Date.now() + EMAIL_OTP_EXPIRY_MS);
-		await authRepository.createOtp(user.id, otpCode, OtpType.EMAIL, expiresAt);
+		await authRepository.createOtp(user.id, otpCode, OtpType.EMAIL, expiresAt, OtpPurpose.ACTIVATION);
 
 		// 5. Send it and WAIT for the SMTP result: the caller must be told when the email did not go out.
 		const emailSent = await this.sendActivationEmail(user.email, otpCode, 'register');
@@ -253,13 +254,13 @@ export class AuthService {
 		const existing = await authRepository.findLatestActivationOtp(user.id);
 		let otpCode: string;
 		let reused = false;
-		if (existing && existing.expiresAt > new Date()) {
+		if (existing && existing.expiresAt > new Date() && existing.attempts < OTP_MAX_ATTEMPTS) {
 			otpCode = existing.code;
 			reused = true;
 		} else {
 			otpCode = crypto.randomInt(100000, 999999).toString();
 			await authRepository.deleteActivationOtps(user.id);
-			await authRepository.createOtp(user.id, otpCode, OtpType.EMAIL, new Date(Date.now() + EMAIL_OTP_EXPIRY_MS));
+			await authRepository.createOtp(user.id, otpCode, OtpType.EMAIL, new Date(Date.now() + EMAIL_OTP_EXPIRY_MS), OtpPurpose.ACTIVATION);
 		}
 
 		const emailSent = await this.sendActivationEmail(user.email, otpCode, reused ? 'resend-same-code' : 'resend-new-code');
@@ -326,6 +327,8 @@ export class AuthService {
 		const hashedPassword = await bcrypt.hash(input.newPassword, 12);
 		await authRepository.updatePassword(user.id, hashedPassword);
 		await authRepository.deletePasswordResetOtps(user.id);
+		// every existing session (any device, including a thief's) ends when the password is reset (AUD-FND-000034)
+		await sessionService.revokeAll(user.id, 'PASSWORD_RESET');
 
 		return { message: 'تم تغيير كلمة المرور بنجاح' };
 	}
@@ -349,7 +352,7 @@ export class AuthService {
 
 		if (otp.attempts >= RESET_OTP_MAX_ATTEMPTS) {
 			await authRepository.deletePasswordResetOtps(user.id);
-			throw new AppError('تم تجاوز عدد المحاولات المسموح به، يرجى طلب رمز جديد', 429);
+			throw new AppError(OTP_LOCKED_MESSAGE, 429);
 		}
 
 		if (otp.expiresAt < new Date()) {
@@ -358,6 +361,11 @@ export class AuthService {
 
 		if (otp.code !== code) {
 			await authRepository.incrementOtpAttempts(otp.id);
+			// the fifth wrong guess deletes the code at once (a new one must be requested)
+			if (otp.attempts + 1 >= RESET_OTP_MAX_ATTEMPTS) {
+				await authRepository.deletePasswordResetOtps(user.id);
+				throw new AppError(OTP_LOCKED_MESSAGE, 429);
+			}
 			throw new AppError(RESET_INVALID_CODE_MESSAGE, 400);
 		}
 
@@ -368,16 +376,33 @@ export class AuthService {
 	 * Verify OTP and issue JWT
 	 */
 	public async verifyOtp(input: VerifyOtpInput, sessionContext: SessionContext = {}) {
-		// 1. Fetch the active OTP
-		const otp = await authRepository.findValidOtp(input.userId, input.code, OtpType.EMAIL);
+		// 1. Fetch the latest ACTIVATION code only: a code issued for another purpose (password reset, sensitive change, checkout,
+		//    contract signature) or a legacy purpose-less one is never accepted here (AUD-FND-000031). An unknown user and a wrong
+		//    code share the same answer, so the endpoint cannot be used to find out which accounts exist.
+		const otp = await authRepository.findLatestActivationOtp(input.userId);
 
 		if (!otp) {
 			throw new AppError('رمز التحقق غير صحيح', 400);
 		}
 
+		if (otp.attempts >= OTP_MAX_ATTEMPTS) {
+			await authRepository.deleteActivationOtps(input.userId);
+			throw new AppError(OTP_LOCKED_MESSAGE, 429);
+		}
+
 		// 2. Check Expiration
 		if (otp.expiresAt < new Date()) {
 			throw new AppError('رمز التحقق انتهت صلاحيته، يرجى إعادة الإرسال', 400);
+		}
+
+		// 3. Compare; every wrong guess counts and the fifth deletes the code (AUD-FND-000030)
+		if (otp.code !== input.code) {
+			await authRepository.incrementOtpAttempts(otp.id);
+			if (otp.attempts + 1 >= OTP_MAX_ATTEMPTS) {
+				await authRepository.deleteActivationOtps(input.userId);
+				throw new AppError(OTP_LOCKED_MESSAGE, 429);
+			}
+			throw new AppError('رمز التحقق غير صحيح', 400);
 		}
 
 		// 3. Mark user as ACTIVE and delete OTPs

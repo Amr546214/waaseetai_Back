@@ -1,4 +1,5 @@
 import { OtpType, UserStatus, PrismaClient } from '@prisma/client';
+import { OtpPurpose, type OtpPurposeValue } from '../utils/otp-purpose';
 import { prisma } from '../config/db';
 import { RegisterInput } from '../routes/auth/auth.schema';
 import { getRoleFromAccountType, getInitialRolesForAccountType, createMissingRoleProfiles } from '../services/account-management.service';
@@ -84,28 +85,16 @@ export class AuthRepository {
   }
 
   /**
-   * Create an OTP record
+   * Create an OTP record. `purpose` is mandatory and stored in `context.purpose`: a verification path accepts only its own purpose.
    */
-  public async createOtp(userId: string, code: string, type: OtpType, expiresAt: Date) {
+  public async createOtp(userId: string, code: string, type: OtpType, expiresAt: Date, purpose: OtpPurposeValue) {
     return prisma.otpVerification.create({
       data: {
         userId,
         code,
         type,
-        expiresAt
-      }
-    });
-  }
-
-  /**
-   * Find a specific active OTP record
-   */
-  public async findValidOtp(userId: string, code: string, type?: OtpType) {
-    return prisma.otpVerification.findFirst({
-      where: {
-        userId,
-        code,
-        ...(type && { type })
+        expiresAt,
+        context: { purpose }
       }
     });
   }
@@ -193,7 +182,7 @@ export class AuthRepository {
   /**
    * Create a password-reset OTP record. Uses the shared OtpVerification table,
    * scoped via context.purpose so it can never be confused with an EMAIL
-   * activation OTP (findValidOtp/findValidResetOtp filter on this explicitly).
+   * activation OTP (every lookup filters on the purpose explicitly).
    */
   public async createPasswordResetOtp(userId: string, code: string, expiresAt: Date) {
     return prisma.otpVerification.create({
@@ -202,7 +191,7 @@ export class AuthRepository {
         code,
         type: OtpType.EMAIL,
         expiresAt,
-        context: { purpose: 'PASSWORD_RESET' }
+        context: { purpose: OtpPurpose.PASSWORD_RESET }
       }
     });
   }
@@ -216,7 +205,7 @@ export class AuthRepository {
       where: {
         userId,
         type: OtpType.EMAIL,
-        context: { path: ['purpose'], equals: 'PASSWORD_RESET' }
+        context: { path: ['purpose'], equals: OtpPurpose.PASSWORD_RESET }
       },
       orderBy: { createdAt: 'desc' }
     });
@@ -230,30 +219,27 @@ export class AuthRepository {
       where: {
         userId,
         type: OtpType.EMAIL,
-        context: { path: ['purpose'], equals: 'PASSWORD_RESET' }
+        context: { path: ['purpose'], equals: OtpPurpose.PASSWORD_RESET }
       }
     });
   }
 
   /**
-   * The latest ACTIVATION email OTP (no `context`, so never a password-reset code), valid or expired — the caller checks
-   * expiresAt. Used to re-send a still-valid code instead of replacing it.
+   * The latest ACTIVATION email OTP (purpose ACTIVATION only — never a password-reset, sensitive-change, checkout or legacy
+   * purpose-less code), valid or expired; the caller checks expiresAt/attempts.
    */
   public async findLatestActivationOtp(userId: string) {
-    const rows = await prisma.otpVerification.findMany({
-      where: { userId, type: OtpType.EMAIL },
-      orderBy: { createdAt: 'desc' },
-      take: 5
+    return prisma.otpVerification.findFirst({
+      where: { userId, type: OtpType.EMAIL, context: { path: ['purpose'], equals: OtpPurpose.ACTIVATION } },
+      orderBy: { createdAt: 'desc' }
     });
-    return rows.find(r => !(r.context as { purpose?: string } | null)?.purpose) ?? null;
   }
 
-  /** Deletes only ACTIVATION email OTPs (leaves phone and password-reset codes alone). */
+  /** Deletes only ACTIVATION email OTPs (leaves phone, password-reset and every other purpose alone). */
   public async deleteActivationOtps(userId: string) {
-    const rows = await prisma.otpVerification.findMany({ where: { userId, type: OtpType.EMAIL }, select: { id: true, context: true } });
-    const ids = rows.filter(r => !(r.context as { purpose?: string } | null)?.purpose).map(r => r.id);
-    if (!ids.length) return { count: 0 };
-    return prisma.otpVerification.deleteMany({ where: { id: { in: ids } } });
+    return prisma.otpVerification.deleteMany({
+      where: { userId, type: OtpType.EMAIL, context: { path: ['purpose'], equals: OtpPurpose.ACTIVATION } }
+    });
   }
 
   /**

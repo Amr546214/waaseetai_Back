@@ -789,8 +789,15 @@ function createSensitiveFlowMockPrisma(t: TestContext, opts: { throwOnRecompute?
         otpsById[id] = record;
         return record;
       },
-      findFirst: async (args: any) =>
-        Object.values(otpsById).find((o: any) => o.userId === args.where.userId && o.code === args.where.code && o.type === args.where.type) || null,
+      // the lookup is by purpose + requestId (the code is compared by the service); latest first
+      findFirst: async (args: any) => {
+        const wanted = (args.where.AND ?? []).map((c: any) => c.context.equals);
+        const matches = Object.values(otpsById).filter((o: any) => o.userId === args.where.userId && o.type === args.where.type
+          && o.context?.purpose === wanted[0] && o.context?.requestId === wanted[1]);
+        const found: any = matches[matches.length - 1];
+        return found ? { attempts: 0, ...found } : null;
+      },
+      update: async (args: any) => { const o: any = otpsById[args.where.id]; if (o) o.attempts = (o.attempts || 0) + 1; return o; },
       delete: async (args: any) => { delete otpsById[args.where.id]; return {}; }
     },
     accountAuditLog: { create: async () => ({}) },

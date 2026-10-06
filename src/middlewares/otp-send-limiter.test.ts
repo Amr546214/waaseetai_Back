@@ -48,7 +48,7 @@ test('other recipients and the verify limiter are not affected by a throttled re
   assert.equal(run(getLimiter(), reqFor('z@y.co')).passed, true);
 });
 
-test('route wiring: the three SEND endpoints use otpSendLimiter and NOT authLimiter; verify/login/reset keep authLimiter and never the send limiter', () => {
+test('route wiring: SEND endpoints use otpSendLimiter (after validation) and not authLimiter; verify/reset use otpVerifyLimiters (after validation); login/google keep authLimiter', () => {
   const src = fs.readFileSync(path.join(__dirname, '../routes/auth/auth.routes.ts'), 'utf8');
   const block = (route: string) => {
     const i = src.indexOf(`'${route}'`);
@@ -58,8 +58,14 @@ test('route wiring: the three SEND endpoints use otpSendLimiter and NOT authLimi
   for (const route of ['/register', '/resend-otp', '/forgot-password']) {
     assert.match(block(route), /otpSendLimiter\(/, route);
     assert.doesNotMatch(block(route), /authLimiter/, `${route} must not share the login limiter`);
+    assert.ok(block(route).indexOf('validateRequest(') < block(route).indexOf('otpSendLimiter('), `${route}: the limiter runs AFTER the schema validation`);
   }
-  for (const route of ['/verify-otp', '/verify-reset-code', '/reset-password', '/login', '/google', '/login/verify-otp']) {
+  for (const route of ['/verify-otp', '/verify-reset-code', '/reset-password']) {
+    assert.match(block(route), /otpVerifyLimiters\(/, route);
+    assert.doesNotMatch(block(route), /otpSendLimiter/, route);
+    assert.ok(block(route).indexOf('validateRequest(') < block(route).indexOf('otpVerifyLimiters('), `${route}: the limiter runs AFTER the schema validation`);
+  }
+  for (const route of ['/login', '/google', '/login/verify-otp']) {
     assert.match(block(route), /authLimiter/, route);
     assert.doesNotMatch(block(route), /otpSendLimiter/, route);
   }
