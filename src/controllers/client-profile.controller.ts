@@ -5,6 +5,7 @@ import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
 import { logger } from '../config/logger';
 import { computeClientCompletion, computeClientMissingItems } from '../utils/completion-calculators';
 import { clientProfileService } from '../services/client-profile.service';
+import { AppError } from '../utils/app-error';
 
 export class ClientProfileController {
 
@@ -105,7 +106,8 @@ export class ClientProfileController {
         
         frontIdUrl,
         backIdUrl,
-        kycStatus: 'PENDING' as any,
+        // isNafathVerified / kycStatus / isVerified are NEVER written from this request: they are read-only here and change only
+        // through a real verification integration or the admin KYC decision (onboarding.service). See the guarded update below.
 
         // PayPal path leaves bank columns untouched (undefined = not written).
         ...(isPaypal
@@ -135,6 +137,8 @@ export class ClientProfileController {
         }),
         prisma.user.findUnique({ where: { id: userId } })
       ]);
+      // submitting the wizard marks an UNVERIFIED/REJECTED profile as PENDING review; a VERIFIED one is never downgraded
+      await prisma.clientProfile.updateMany({ where: { userId, kycStatus: { in: ['UNVERIFIED', 'REJECTED'] } }, data: { kycStatus: 'PENDING' } });
       const completion = computeClientCompletion({ user: currentUser || {}, clientProfile: result });
       const finalResult = await prisma.clientProfile.update({
         where: { userId },
@@ -152,31 +156,11 @@ export class ClientProfileController {
   }
 
   // C) POST /api/client/profile/nafath-verify
-  public async nafathVerify(req: Request, res: Response, next: NextFunction) {
-    try {
-      const userId = req.user!.userId;
-
-      // Simulated NAFATH Verification logic here
-
-      await prisma.clientProfile.upsert({
-        where: { userId },
-        create: {
-          userId,
-          isNafathVerified: true,
-          kycStatus: 'PENDING' // Update depending on flow
-        },
-        update: {
-          isNafathVerified: true
-        }
-      });
-
-      res.status(200).json({
-        success: true,
-        message: 'تم التحقق بنجاح عبر بوابة نفاذ الوطنية'
-      });
-    } catch (error) {
-      next(error);
-    }
+  // DISABLED (AUD-FND-000024): there is no Nafath integration, and this endpoint used to set isNafathVerified=true for anyone who called
+  // it. It now answers honestly and writes nothing. The route stays so the feature is not deleted; it is re-enabled only together with a
+  // real Nafath verification.
+  public async nafathVerify(_req: Request, _res: Response, next: NextFunction) {
+    next(Object.assign(new AppError('التحقق عبر نفاذ غير متاح حاليًا', 503), { code: 'NAFATH_UNAVAILABLE' }));
   }
 }
 

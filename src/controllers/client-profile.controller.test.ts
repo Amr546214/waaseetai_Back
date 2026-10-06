@@ -50,7 +50,8 @@ function createSetupDataMockPrisma(t: TestContext) {
         clientProfileState = { ...clientProfileState, ...args.update };
         return { ...clientProfileState };
       }),
-      update: clientUpdateSpy
+      update: clientUpdateSpy,
+      updateMany: async () => ({ count: 0 })
     },
     user: {
       findUnique: async () => ({ ...userFixture })
