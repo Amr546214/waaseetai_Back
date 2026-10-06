@@ -74,14 +74,14 @@ test('completed projects: on-time only counts rows with an agreed duration; dura
 test('payments come from Escrow/WalletTransaction; dispute ratio = disputes / projects', async (t) => {
 	const { svc } = await load(t, {
 		released: 900, held: 300,
-		txs: [{ id: 't', type: 'ESCROW_RELEASE', amount: 900, currency: 'SAR', status: 'COMPLETED', description: null, createdAt: new Date() }],
+		txs: [{ id: 't', type: 'ESCROW_RELEASE', amount: 900, currency: 'USD', status: 'COMPLETED', description: null, createdAt: new Date() }],
 		projects: [{ id: 'a', status: 'COMPLETED', createdAt: new Date(), updatedAt: new Date(), contract: null }, { id: 'b', status: 'OPEN', createdAt: new Date(), updatedAt: new Date(), contract: null }],
 		disputes: [{ id: 'd', status: 'OPEN' }, { id: 'e', status: 'RESOLVED' }]
 	});
 	const r = await svc.getReports('u1', 'all');
 	assert.equal(r.payments.releasedTotal, 900);
 	assert.equal(r.payments.heldInEscrow, 300);
-	assert.equal(r.payments.transactions[0].currency, 'SAR');
+	assert.equal(r.payments.transactions[0].currency, 'USD');
 	assert.deepEqual(r.disputes.counts, { all: 2, open: 1, resolved: 1, rejected: 0 });
 	assert.equal(r.disputes.ratioPercent, 100);
 });

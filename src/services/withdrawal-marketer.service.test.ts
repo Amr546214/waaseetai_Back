@@ -29,7 +29,7 @@ function createMock(t: TestContext, opts: {
 	// before throwing, after the doomed attempt's writes were rolled back.
 	conflict?: { attempts: number; onConflict?: (withdrawals: any[]) => void };
 }) {
-	const withdrawals: any[] = (opts.withdrawals ?? []).map(w => ({ currency: 'SAR', method: 'bank_transfer', ...w }));
+	const withdrawals: any[] = (opts.withdrawals ?? []).map(w => ({ currency: 'USD', method: 'bank_transfer', ...w }));
 	const commissions = opts.commissions ?? [];
 	const walletTransactions: any[] = [];
 	let attempt = 0;
@@ -148,7 +148,7 @@ test('1. approve: a marketer (not a provider) withdrawal within APPROVED commiss
 	assert.equal(transactionSpy.mock.calls[0].arguments[1]?.isolationLevel, 'Serializable');
 	assert.equal(walletTransactions.length, 1);
 	assert.equal(walletTransactions[0].amount, -400);
-	assert.equal(walletTransactions[0].currency, 'SAR', 'the debit record keeps the withdrawal\'s own stored currency');
+	assert.equal(walletTransactions[0].currency, 'USD', 'the debit record keeps the withdrawal\'s own stored currency');
 	assert.equal(walletTransactions[0].referenceId, 'withdrawal-wd-1');
 	assert.equal(withdrawals[0].status, 'APPROVED');
 });
@@ -330,7 +330,7 @@ test('8. end-to-end: createForMarketer -> approve for a marketer who is not a pr
 		commissions: [{ affiliateId: 'aff-1', amount: 500, status: 'APPROVED' }]
 	});
 	const created = await withdrawalService.createForMarketer('marketer-1', { amount: 400 });
-	assert.equal(created.currency, 'SAR');
+	assert.equal(created.currency, 'USD');
 	assert.equal(created.method, 'bank_transfer');
 	const approved = await withdrawalService.approve(created.id, 'admin-1', {});
 	assert.equal(approved.status, 'APPROVED');
@@ -338,4 +338,32 @@ test('8. end-to-end: createForMarketer -> approve for a marketer who is not a pr
 	assert.equal(walletTransactions.length, 1);
 	await assert.rejects(withdrawalService.createForMarketer('marketer-1', { amount: 200 }), (e: any) => e.statusCode === 400);
 	assert.equal(withdrawals.length, 1);
+});
+
+// ── USD only: no riyal text / SAR anywhere in withdrawal messages or created rows ──────────────────
+const NO_RIYAL = (m: string) => !/ريال|SAR|ر\.س|﷼/.test(m);
+
+test('9. marketer withdrawal below the minimum: the message carries no riyal/SAR wording', async (t) => {
+	const { withdrawalService } = await load(t, { owner: MARKETER, providerWalletBalance: 0, commissions: [{ affiliateId: 'aff-1', amount: 500, status: 'APPROVED' }] });
+	await assert.rejects(withdrawalService.createForMarketer('marketer-1', { amount: 1 }), (e: any) => e.statusCode === 400 && NO_RIYAL(e.message));
+});
+
+test('10. marketer withdrawal above the available commission: the message uses $, never riyal/SAR', async (t) => {
+	const { withdrawalService } = await load(t, { owner: MARKETER, providerWalletBalance: 0, commissions: [{ affiliateId: 'aff-1', amount: 400, status: 'APPROVED' }] });
+	await assert.rejects(withdrawalService.createForMarketer('marketer-1', { amount: 450 }), (e: any) => e.statusCode === 400 && NO_RIYAL(e.message) && e.message.includes('$'));
+});
+
+test('11. marketer withdrawal above the net balance after pending requests: no riyal/SAR wording', async (t) => {
+	const { withdrawalService } = await load(t, {
+		owner: MARKETER, providerWalletBalance: 0,
+		commissions: [{ affiliateId: 'aff-1', amount: 500, status: 'APPROVED' }],
+		withdrawals: [{ id: 'w0', userId: 'marketer-1', amount: 400, status: 'PENDING' }]
+	});
+	await assert.rejects(withdrawalService.createForMarketer('marketer-1', { amount: 300 }), (e: any) => e.statusCode === 400 && NO_RIYAL(e.message));
+});
+
+test('12. created withdrawal rows carry currency USD explicitly (marketer path)', async (t) => {
+	const { withdrawalService, createSpy } = await load(t, { owner: MARKETER, providerWalletBalance: 0, commissions: [{ affiliateId: 'aff-1', amount: 500, status: 'APPROVED' }] });
+	await withdrawalService.createForMarketer('marketer-1', { amount: 400 });
+	assert.equal(createSpy.mock.calls[0].arguments[0].data.currency, 'USD');
 });

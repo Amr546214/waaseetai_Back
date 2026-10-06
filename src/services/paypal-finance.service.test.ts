@@ -324,7 +324,7 @@ test('captureDeposit: a successful capture credits the wallet exactly once', asy
 	assert.equal(payments[0].status, 'COMPLETED');
 });
 
-test('captureDeposit: the resulting WalletTransaction explicitly sets currency USD — never relies on the schema default (which is SAR)', async (t) => {
+test('captureDeposit: the resulting WalletTransaction explicitly sets currency USD — never relies on the database default', async (t) => {
 	const { walletTransactionCreateSpy } = createPrismaMock(t, {
 		seedPayments: [{ userId: 'client-1', paypalOrderId: 'ORDER-1', amount: '50.00', currency: 'USD', status: 'PENDING' }]
 	});

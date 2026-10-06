@@ -1214,7 +1214,7 @@ test('19b. sendPayout: a negative Withdrawal.amount is rejected before any exter
 
 test('sendPayout: a non-USD Withdrawal.currency is rejected before any external call, Withdrawal stays APPROVED, no PayoutAttempt created', async (t) => {
 	const { payoutService, withdrawals, createAttempt, createPayoutSpy } = await loadService(t, {
-		withdrawal: { id: 'wd-1', status: 'APPROVED', currency: 'SAR' }
+		withdrawal: { id: 'wd-1', status: 'APPROVED', currency: 'EUR' }
 	});
 
 	await assert.rejects(() => payoutService.sendPayout('wd-1'), (err: any) => { assert.equal(err.statusCode, 400); return true; });
@@ -1388,7 +1388,7 @@ test('reconcile 2. a non-paypal Withdrawal.method is rejected/conservative', asy
 });
 
 test('reconcile 3. a non-USD Withdrawal.currency is rejected/conservative', async (t) => {
-	const { payoutService, getPayoutBatchSpy } = await loadReconciliation(t, { withdrawal: { currency: 'SAR' } });
+	const { payoutService, getPayoutBatchSpy } = await loadReconciliation(t, { withdrawal: { currency: 'EUR' } });
 	const result = await payoutService.reconcilePayoutAttempt('attempt-1');
 	assert.equal(result.outcome, 'ADMIN_REVIEW');
 	assert.equal(getPayoutBatchSpy.mock.callCount(), 0);

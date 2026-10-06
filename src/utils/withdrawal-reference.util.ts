@@ -12,8 +12,8 @@
  *    different withdrawals.
  *  - namespaced ("withdrawal-" prefix) so it is visually and structurally
  *    distinguishable from other WalletTransaction.referenceId values this
- *    codebase already writes (e.g. paypal-finance.service.ts's/
- *    client-finance.service.ts's bare PayPal/Moyasar reference UUIDs, or
+ *    codebase already writes (e.g. paypal-finance.service.ts's
+ *    bare PayPal reference UUIDs, or
  *    cart-checkout.service.ts's order payment references) — this value is
  *    never sent to any external API, it exists purely as an internal,
  *    DB-enforced uniqueness key, so it needs no external format constraint.

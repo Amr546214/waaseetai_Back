@@ -160,9 +160,7 @@ export class WithdrawalService {
               referenceId,
               userId,
               amount: input.amount,
-              currency: 'USD', // new withdrawal requests are USD — never rely on the
-              // schema's historical 'SAR' default. Existing rows keep whatever
-              // currency they were created with; this only affects new creates.
+              currency: 'USD', // all withdrawals are USD — never rely on the database default.
               method: input.method,
               accountName: input.accountName || null,
               accountNumber: input.accountNumber || null,
@@ -236,7 +234,7 @@ export class WithdrawalService {
     // validation check.
     const effectiveMinimumPayout = Math.max(affiliate.minimumPayoutAmount, 300);
     if (input.amount < effectiveMinimumPayout) {
-      throw new AppError(`الحد الأدنى لطلب السحب ${effectiveMinimumPayout} ريال`, 400);
+      throw new AppError(`الحد الأدنى لطلب السحب ${effectiveMinimumPayout}`, 400); // numeric limit shown without a currency symbol: the USD value is pending the owner
     }
 
     const withdrawalId = randomUUID();
@@ -251,7 +249,7 @@ export class WithdrawalService {
           });
           const availableBalance = approvedCommissions._sum.amount || 0;
           if (input.amount > availableBalance) {
-            throw new AppError(`المبلغ المطلوب يتجاوز رصيدك المتاح (${availableBalance} ريال)`, 400);
+            throw new AppError(`المبلغ المطلوب يتجاوز رصيدك المتاح (${availableBalance} $)`, 400);
           }
           const outstandingWithdrawals = await tx.withdrawal.aggregate({
             where: { userId, status: { in: [WithdrawalStatus.PENDING, WithdrawalStatus.APPROVED, WithdrawalStatus.PROCESSING, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
@@ -260,7 +258,7 @@ export class WithdrawalService {
           const outstandingAmount = outstandingWithdrawals._sum.amount || 0;
           const withdrawable = availableBalance - outstandingAmount;
           if (input.amount > withdrawable) {
-            throw new AppError(`المبلغ المطلوب يتجاوز رصيدك الصافي بعد طلبات السحب المعلقة (${withdrawable} ريال)`, 400);
+            throw new AppError(`المبلغ المطلوب يتجاوز رصيدك الصافي بعد طلبات السحب المعلقة (${withdrawable} $)`, 400);
           }
           return tx.withdrawal.create({
             data: {
@@ -268,7 +266,7 @@ export class WithdrawalService {
               referenceId,
               userId,
               amount: input.amount,
-              currency: 'SAR',
+              currency: 'USD',
               method: 'bank_transfer',
               accountName: affiliate.accountHolderName,
               iban: affiliate.iban,

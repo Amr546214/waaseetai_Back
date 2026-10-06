@@ -357,7 +357,7 @@ test('getRecentCommissions: maps a fixture row shaped exactly like the pre-migra
     id: 'log-1',
     type: 'NEW_CLIENT_REQUEST',
     amount: 42,
-    currency: 'SAR',
+    currency: 'USD',
     status: 'APPROVED',
     createdAt: new Date('2026-01-01T00:00:00Z'),
     referral: { referredUser: { id: 'user-9' } }
@@ -375,7 +375,7 @@ test('getRecentCommissions: maps a fixture row shaped exactly like the pre-migra
   assert.equal(result[0].id, 'log-1');
   assert.equal(result[0].type, 'NEW_CLIENT_REQUEST');
   assert.equal(result[0].amount, 42);
-  assert.equal(result[0].currency, 'SAR');
+  assert.equal(result[0].currency, 'USD');
   assert.equal(result[0].status, 'APPROVED');
   assert.equal(result[0].source, 'إحالة عميل جديد');
 });

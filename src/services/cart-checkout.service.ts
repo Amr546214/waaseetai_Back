@@ -266,9 +266,8 @@ export class CartCheckoutService {
 
   /**
    * Wallet-only internal purchasing: the WaseetAI Wallet (USD-canonical) is
-   * the sole accepted internal payment method. PayPal/Moyasar/card/STC Pay/
-   * Apple Pay are wallet TOP-UP rails only (paypal-finance.service.ts /
-   * client-finance.service.ts) — never offered here as a direct checkout
+   * the sole accepted internal payment method. PayPal is the wallet TOP-UP rail only
+   * (paypal-finance.service.ts) — never offered here as a direct checkout
    * payment method. This contract is enforced again, independently, by
    * initPayment()/confirmPayment() below (never trust the frontend alone).
    */
@@ -291,7 +290,7 @@ export class CartCheckoutService {
     // comment) — enforced here independently of the controller's zod schema:
     // a raw request bypassing the DTO must still be rejected. Marketplace
     // order pricing (order.total) is treated as USD for active purchasing
-    // per the current business decision — no SAR->USD conversion is
+    // per the current business decision — no currency conversion is
     // performed anywhere in this method, the numeric value is unchanged.
     if (paymentMethod !== 'wallet') throw new AppError('طريقة الدفع غير متاحة — المحفظة هي وسيلة الدفع الوحيدة المتاحة', 400);
     const order = await prisma.order.findFirst({ where: { id: orderId, userId }, include: { user: { select: { email: true, phoneNumber: true, walletBalance: true } } } });

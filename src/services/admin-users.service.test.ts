@@ -57,7 +57,7 @@ const EXPECTED_HEADERS = [
 	'Phone Number',
 	'Account Type',
 	'Status',
-	'Total GMV (SAR)',
+	'Total GMV (USD)',
 	'Completed Projects',
 	'Rating Average',
 	'Tier Level',

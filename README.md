@@ -59,7 +59,7 @@ Routes  →  Controllers  →  Services  →  (Repositories, for a few domains) 
 | Logging | `winston` (application logs) + `morgan` (HTTP access logs) |
 | File storage | Cloudinary (uploads: avatars, documents, portfolio media) |
 | Email | Nodemailer over SMTP |
-| Payments | Moyasar (card / Apple Pay / STC Pay — Saudi payment gateway) |
+| Payments | PayPal (USD) — the only wallet deposit rail |
 | AI | OpenAI SDK |
 | API docs | `swagger-ui-express`, backed by a self-generated OpenAPI document |
 | Testing | Node.js built-in test runner (`node:test`) via `tsx` |
@@ -74,7 +74,7 @@ The following are implemented in the current codebase (not aspirational):
 - **Client request & proposal flow**: clients post service requests; providers submit proposals; AI-assisted proposal review and matching are available (see [AI-Related Functionality](#ai-related-functionality)).
 - **Projects, contracts & escrow**: project lifecycle from proposal acceptance through contract signing, staged deliveries, and escrow-backed payment release.
 - **Marketplace**: a service catalog with packages/pricing, shopping cart, checkout, coupons, and order history.
-- **Payments**: real integration with the Moyasar payment gateway for marketplace checkout.
+- **Payments**: wallet top-up through PayPal (USD); marketplace purchases are paid from the wallet. All amounts are USD.
 - **Provider tooling**: provider profile management, skills/portfolio, specialty verification, a points/level gamification system, provider-side finance (wallet, withdrawals) and coupons.
 - **Client tooling**: client profile and finance views, request management, dashboards.
 - **Disputes, ratings & reviews**: dispute lifecycle for projects, provider/client ratings.
@@ -188,7 +188,7 @@ All AI functionality requires a valid `OPENAI_API_KEY` (see [Environment Setup](
 - PostgreSQL (local install, or run via the provided Docker Compose setup)
 - A Cloudinary account (for file upload features) — optional if you're not exercising upload flows
 - An OpenAI API key — optional if you're not exercising AI features
-- A Moyasar test account — optional if you're not exercising checkout/payment flows
+- A PayPal sandbox account — optional if you're not exercising wallet top-up flows
 
 ## Installation
 
@@ -248,11 +248,8 @@ CORS_ORIGINS
 GOOGLE_CLIENT_ID
 ```
 
-**Payments (Moyasar)**
-```
-MOYASAR_PUBLISHABLE_KEY
-MOYASAR_SECRET_KEY
-```
+**Payments (PayPal)**
+See `PAYPAL_*` in `.env.example`.
 
 **AI (OpenAI)**
 ```

@@ -1,9 +1,10 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 // Regression guard for the USD-canonical transition: new withdrawal requests
 // must explicitly carry currency USD (never rely on the Withdrawal schema's
-// historical SAR default). Existing/historical Withdrawal rows are untouched
+// database default). Existing/historical Withdrawal rows are untouched
 // by this — DEV currently has zero withdrawal rows to begin with.
 //
 // Financial Safety Batch 1, item 2: createForProvider() now runs its whole
@@ -1504,4 +1505,11 @@ test('createForMarketer: the default minimumPayoutAmount (300, per the updated s
 
 	const result = await withdrawalService.createForMarketer('user-1', { amount: 300 });
 	assert.equal(result.amount, 300);
+});
+
+// ── USD only: the withdrawal service source carries no riyal/SAR wording and always passes currency USD ──
+test('withdrawal.service.ts has no riyal/SAR text and creates both provider and marketer rows with currency USD', () => {
+	const src = readFileSync(new URL('./withdrawal.service.ts', import.meta.url), 'utf8');
+	assert.doesNotMatch(src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, ''), /ريال|ر\.س|﷼|'SAR'|"SAR"/);
+	assert.equal((src.match(/currency: 'USD'/g) || []).length >= 2, true);
 });

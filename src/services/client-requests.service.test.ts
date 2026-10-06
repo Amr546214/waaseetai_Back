@@ -211,7 +211,7 @@ test('signContract: the escrow amount formula (price * (1 + VAT + insurance + pl
   );
 });
 
-test('signContract: the escrow-lock WalletTransaction it creates is explicitly USD (not the schema\'s historical SAR default)', () => {
+test('signContract: the escrow-lock WalletTransaction it creates is explicitly USD (never the database default)', () => {
   const escrowLockBlock = clientRequestsSource.slice(
     clientRequestsSource.indexOf("type: 'ESCROW_LOCK'"),
     clientRequestsSource.indexOf("type: 'ESCROW_LOCK'") + 200
