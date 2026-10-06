@@ -6,6 +6,7 @@ import { logger } from '../config/logger';
 import { computeClientCompletion, computeClientMissingItems } from '../utils/completion-calculators';
 import { clientProfileService } from '../services/client-profile.service';
 import { AppError } from '../utils/app-error';
+import { onboardingService } from '../services/onboarding.service';
 
 export class ClientProfileController {
 
@@ -137,8 +138,8 @@ export class ClientProfileController {
         }),
         prisma.user.findUnique({ where: { id: userId } })
       ]);
-      // submitting the wizard marks an UNVERIFIED/REJECTED profile as PENDING review; a VERIFIED one is never downgraded
-      await prisma.clientProfile.updateMany({ where: { userId, kycStatus: { in: ['UNVERIFIED', 'REJECTED'] } }, data: { kycStatus: 'PENDING' } });
+      // complete identity documents → a PENDING review record the admin can see (AUD-FND-000044); kycStatus follows it (never downgraded)
+      await onboardingService.submitSetupDocuments(userId, { idNumber: result.idNumber, frontIdUrl: result.frontIdUrl, backIdUrl: result.backIdUrl });
       const completion = computeClientCompletion({ user: currentUser || {}, clientProfile: result });
       const finalResult = await prisma.clientProfile.update({
         where: { userId },

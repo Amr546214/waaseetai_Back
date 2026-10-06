@@ -10,6 +10,34 @@ export class OnboardingService {
     return record;
   }
 
+  /**
+   * Called when the client setup wizard is submitted (AUD-FND-000044). When the identity documents are complete (idNumber + front + back)
+   * a ClientOnboarding row exists in PENDING so the submission shows up in the admin review list:
+   *  - no row            → created PENDING
+   *  - PENDING           → documents refreshed, no duplicate
+   *  - REJECTED          → back to PENDING (re-submission), rejection reason cleared
+   *  - APPROVED          → left untouched (an approved client is never pushed back to review)
+   * The profile's kycStatus moves UNVERIFIED/REJECTED → PENDING only together with the review row; VERIFIED is never downgraded.
+   * Incomplete documents create nothing and leave kycStatus alone.
+   */
+  async submitSetupDocuments(userId: string, docs: { idNumber?: string | null; frontIdUrl?: string | null; backIdUrl?: string | null }) {
+    if (!docs.idNumber || !docs.frontIdUrl || !docs.backIdUrl) return null;
+    const fields = { documentType: 'NATIONAL_ID', documentUrl: docs.frontIdUrl, documentName: 'الهوية الوطنية / الإقامة' };
+    const existing = await prisma.clientOnboarding.findUnique({ where: { userId } });
+    let record = existing;
+    if (!existing) {
+      record = await prisma.clientOnboarding.create({ data: { userId, ...fields, status: OnboardingStatus.PENDING } });
+    } else if (existing.status === OnboardingStatus.REJECTED) {
+      record = await prisma.clientOnboarding.update({ where: { userId }, data: { ...fields, status: OnboardingStatus.PENDING, rejectionReason: null, reviewedAt: null } });
+    } else if (existing.status === OnboardingStatus.PENDING) {
+      record = await prisma.clientOnboarding.update({ where: { userId }, data: fields });
+    }
+    if (!existing || existing.status !== OnboardingStatus.APPROVED) {
+      await prisma.clientProfile.updateMany({ where: { userId, kycStatus: { in: [KYCStatus.UNVERIFIED, KYCStatus.REJECTED] } }, data: { kycStatus: KYCStatus.PENDING } });
+    }
+    return record;
+  }
+
   async getStatus(userId: string) {
     const record = await prisma.clientOnboarding.findUnique({ where: { userId } });
     return record || { userId, status: OnboardingStatus.PENDING, documentUrl: null, documentName: null, documentType: null, rejectionReason: null, reviewedAt: null };
