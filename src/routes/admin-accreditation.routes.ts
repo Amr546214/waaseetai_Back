@@ -2,7 +2,8 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { AccountType, AccreditationStatus } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import { accreditationAiService } from '../services/accreditation-ai.service';
-import { rejectAccreditationSchema } from '../dtos/accreditation.dto';
+import { rejectAccreditationSchema, specialtyReviewDecisionSchema } from '../dtos/accreditation.dto';
+import { specialtyAdminReviewService } from '../services/specialty-admin-review.service';
 import { AppError } from '../utils/app-error';
 
 const router = Router();
@@ -38,6 +39,16 @@ router.post('/samples/:id/reject', async (req: Request, res: Response, next: Nex
     if (!parsed.success) throw new AppError('سبب الرفض مطلوب', 400);
     const data = await accreditationAiService.adminRejectSample(String(req.params.id), parsed.data.rejectionReason);
     res.json({ success: true, message: 'تم رفض نموذج الاعتماد', data });
+  } catch (error) { next(error); }
+});
+
+// BE-3(b): POST /api/admin/accreditation/specialties/:providerSpecialtyId/decision { decision: APPROVED|REJECTED, reason }
+router.post('/specialties/:providerSpecialtyId/decision', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = specialtyReviewDecisionSchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message || 'بيانات القرار غير صحيحة', 400);
+    const data = await specialtyAdminReviewService.decide(req.user!.id, String(req.params.providerSpecialtyId), parsed.data);
+    res.json({ success: true, message: parsed.data.decision === 'APPROVED' ? 'تم اعتماد التخصص' : 'تم رفض التخصص', data });
   } catch (error) { next(error); }
 });
 
