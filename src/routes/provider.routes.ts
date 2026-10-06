@@ -15,6 +15,7 @@ import companyTeamRouter from './company-team.routes';
 import specialOfferRouter from './provider-special-offer.routes';
 import marketingCenterRouter from './provider-marketing-center.routes';
 import { AppError } from '../utils/app-error';
+import { providerReportsController } from '../controllers/provider-reports.controller';
 
 const router = Router();
 const providerOnly = authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
@@ -31,6 +32,9 @@ const requireCompanyAccount = (req: Request, _res: Response, next: NextFunction)
   }
   next();
 };
+
+// BE-2(a): provider reports (incoming requests, projects, acceptance by specialty, payments, disputes) → GET /api/provider/reports
+router.get('/reports', authenticate, requireActiveUser, providerOnly, providerReportsController.getReports);
 
 // Mount profile routes
 router.use('/profile', providerProfileRouter);
