@@ -9,7 +9,7 @@ import { prisma } from '../config/db';
 
 const marketplaceService = new MarketplaceService();
 
-const RE_AUDIT_STATUSES = ['PENDING_APPROVAL', 'UNDER_REVIEW', 'DRAFT'];
+const RE_AUDIT_STATUSES = ['PENDING_APPROVAL', 'UNDER_REVIEW', 'DRAFT', 'PUBLISHED'];
 const RE_AUDIT_BATCH_SIZE = 25;
 
 export class MarketplaceServiceController {
@@ -175,7 +175,7 @@ export class MarketplaceServiceController {
 	}
 
 	async reAuditAllPendingModels(req: Request, res: Response) {
-		// Advisory WaseetAI audit of not-yet-audited models still in review/draft.
+		// Advisory WaseetAI audit of not-yet-audited models in review/draft/published (services are created PUBLISHED, so PUBLISHED must be included).
 		// Sequential, capped per call; never changes status or publishes anything.
 		try {
 			if (!waseetAiClient.isConfigured()) {

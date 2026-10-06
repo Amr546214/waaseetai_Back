@@ -161,10 +161,10 @@ test('re-audit-all: counts audited/failed/skipped/remaining, no upstream text', 
   assert.ok(!JSON.stringify(res.body).includes('upstream'));
 });
 
-test('re-audit-all: batch is capped at 25 and statuses are PENDING_APPROVAL/UNDER_REVIEW/DRAFT', async (t) => {
+test('re-audit-all: batch is capped at 25 and statuses include PUBLISHED (services are created PUBLISHED)', async (t) => {
   const src = readFileSync(new URL('../controllers/marketplace-service.controller.ts', import.meta.url), 'utf8');
   assert.match(src, /RE_AUDIT_BATCH_SIZE = 25/);
-  assert.match(src, /\['PENDING_APPROVAL', 'UNDER_REVIEW', 'DRAFT'\]/);
+  assert.match(src, /\['PENDING_APPROVAL', 'UNDER_REVIEW', 'DRAFT', 'PUBLISHED'\]/);
   assert.match(src, /take: RE_AUDIT_BATCH_SIZE/);
 });
 
@@ -186,4 +186,44 @@ test('no Gemini reference in audit service/controller', () => {
     const src = readFileSync(new URL(f, import.meta.url), 'utf8');
     assert.doesNotMatch(src, /gemini/i);
   }
+});
+
+// ── BE-2(c): advisory async audit on service create/update ──────────────────
+test('auditProjectModel returns immediately, audits in the background and never throws on vendor failure', async (t) => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const { svc, calls, updates } = await load(t, { audit: async () => { await gate; return VERDICT; } });
+  await svc.auditProjectModel('svc-1'); // resolves while the vendor call is still pending
+  assert.equal(updates.length, 0);
+  release();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(calls.length, 1);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].data.status, undefined); // advisory only
+});
+
+test('auditProjectModel: vendor failure leaves aiScore unwritten (null) and does not throw', async (t) => {
+  const { svc, updates } = await load(t, { audit: async () => { throw new Error('down'); } });
+  await assert.doesNotReject(svc.auditProjectModel('svc-1'));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(updates.length, 0);
+});
+
+test('auditProjectModel: a second trigger for the same model while one is running does not stack a vendor call', async (t) => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const { svc, calls } = await load(t, { audit: async () => { await gate; return VERDICT; } });
+  await svc.auditProjectModel('svc-1');
+  await svc.auditProjectModel('svc-1');
+  await new Promise((r) => setTimeout(r, 10));
+  release();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(calls.length, 1);
+});
+
+test('create/update of a service trigger the advisory audit; update clears the stale verdict first', () => {
+  const src = readFileSync(new URL('./marketplace-service.service.ts', import.meta.url), 'utf8');
+  assert.equal((src.match(/void aiAuditService\.auditProjectModel\(/g) || []).length, 2);
+  assert.match(src, /aiScore: null,[\s\S]*aiAuditReport: Prisma\.DbNull/);
+  assert.doesNotMatch(src, /aiAuditService\.executeAuditSync/); // never awaited inline
 });

@@ -37,10 +37,17 @@ export class AiAuditService {
   /** Non-blocking creation hook: starts the advisory audit in the background
    *  and returns immediately. Never throws, never blocks creation. */
   async auditProjectModel(serviceId: string, _providerIdInput?: string): Promise<void> {
-    void this.executeAuditSync(serviceId).catch((error) => {
-      logger.warn(`[AiAuditService] background audit skipped for ${serviceId}: ${(error as { code?: string })?.code || 'error'}`);
-    });
+    // one audit per model at a time: rapid repeated edits cannot stack vendor calls for the same model
+    if (this.inFlight.has(serviceId)) return;
+    this.inFlight.add(serviceId);
+    void this.executeAuditSync(serviceId)
+      .catch((error) => {
+        logger.warn(`[AiAuditService] background audit skipped for ${serviceId}: ${(error as { code?: string })?.code || 'error'}`);
+      })
+      .finally(() => this.inFlight.delete(serviceId));
   }
+
+  private readonly inFlight = new Set<string>();
 
   async executeAuditSync(serviceId: string, _providerIdInput?: string): Promise<AiAuditOutcome> {
     const service = await prisma.serviceCatalog.findUnique({
