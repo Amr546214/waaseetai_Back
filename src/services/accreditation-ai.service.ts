@@ -5,8 +5,8 @@ import { AppError } from '../utils/app-error';
 import { aiFeatureUnavailablePayload } from './ai/ai-feature-unavailable';
 
 // Accreditation sample submission. The AI evaluation of samples is DISABLED:
-// all AI must run exclusively through the WaseetAI service, and no documented
-// contract exists for sample evaluation. Submitting a sample still works: it
+// no documented WaseetAI contract exists for sample evaluation and it is not wired to the
+// internal LlmClient yet. Submitting a sample still works: it
 // is stored with status MANUAL_REVIEW and NO AI fields (no score, rating,
 // feedback or audit timestamp), so it waits for the existing human/admin
 // approval path. A sample can never become AI_VERIFIED through submission,

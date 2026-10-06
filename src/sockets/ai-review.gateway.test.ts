@@ -299,7 +299,7 @@ test('socket disconnect aborts the in-flight upstream stream and emits nothing f
 
 // ── static ───────────────────────────────────────────────────────────────
 
-test('the gateway has no direct-Gemini dependency', async () => {
+test('the gateway (WaseetAI-linked) has no internal LlmClient dependency', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('./ai-review.gateway.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /gemini\.client|geminiClient|generateStructured|generateStream/);

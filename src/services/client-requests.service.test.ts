@@ -182,7 +182,7 @@ test('generateAiSuggest: upstream failure throws an honest AppError(503) without
   );
 });
 
-test('client-requests.service.ts has no direct-Gemini dependency', () => {
+test('client-requests.service.ts (WaseetAI-linked) has no internal LlmClient dependency', () => {
   const src = fs.readFileSync(path.join(__dirname, 'client-requests.service.ts'), 'utf8');
   assert.doesNotMatch(src, /gemini\.client|geminiClient|generateStructured|generateStream/);
 });

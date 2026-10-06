@@ -8,7 +8,7 @@ import type { WaseetAiStreamEvent } from '../services/ai/waseet-ai/waseet-ai.typ
 import { isMeaningfulProjectTitle } from '../utils/title-validator';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
 
-// AI text streaming (suggest / enhance) runs exclusively through WaseetAI:
+// AI text streaming (suggest / enhance) is a WaseetAI-linked feature and stays on WaseetAI (it does not use the internal LlmClient):
 //   stream_ai_suggest_text        -> waseetAiClient.streamTextSuggestion({ title })
 //   stream_ai_enhance_description -> waseetAiClient.streamTextEnhancement({ description })
 // Deltas are relayed as they arrive to the events the Angular client already

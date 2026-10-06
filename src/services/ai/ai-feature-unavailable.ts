@@ -1,9 +1,9 @@
 import { AppError } from '../../utils/app-error';
 
 // Single source of truth for AI operations that are switched off because
-// WaseetAI has no documented contract for them yet. All AI runs exclusively
-// through the WaseetAI service; there is no direct-Gemini path and no
-// fallback. Only the AI operation is disabled — the surrounding normal
+// WaseetAI has no documented contract for them yet. WaseetAI-linked features stay on WaseetAI;
+// features built in-house run through the internal LlmClient (src/services/llm). A feature is never
+// served by a fabricated answer: it either returns a real model output or this 503. Only the AI operation is disabled — the surrounding normal
 // workflow, data and previous AI results are untouched.
 
 export const AI_FEATURE_UNAVAILABLE_CODE = 'AI_FEATURE_UNAVAILABLE';
