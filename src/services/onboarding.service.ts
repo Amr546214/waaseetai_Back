@@ -6,7 +6,8 @@ import { RejectOnboardingInput } from '../dtos/onboarding.dto';
 export class OnboardingService {
   async saveUpload(userId: string, input: { documentType: string; documentUrl: string; documentName: string }) {
     const record = await prisma.clientOnboarding.upsert({ where: { userId }, create: { userId, documentType: input.documentType, documentUrl: input.documentUrl, documentName: input.documentName, status: OnboardingStatus.PENDING }, update: { documentType: input.documentType, documentUrl: input.documentUrl, documentName: input.documentName, status: OnboardingStatus.PENDING, rejectionReason: null, reviewedAt: null } });
-    await prisma.user.update({ where: { id: userId }, data: { idDocumentUrl: input.documentUrl } });
+    // User.idDocumentUrl is NOT written here: it feeds the profile completion, which assumes an approved document. It is set when the
+    // reviewer approves this record (approveOnboarding), so an unreviewed upload never counts as a verified document.
     return record;
   }
 
@@ -92,6 +93,7 @@ export class OnboardingService {
     const [updated] = await Promise.all([
       prisma.clientOnboarding.update({ where: { id }, data: { status: OnboardingStatus.APPROVED, reviewedAt: new Date() } }),
       prisma.clientProfile.updateMany({ where: { userId: item.userId }, data: { kycStatus: KYCStatus.VERIFIED } }),
+      prisma.user.update({ where: { id: item.userId }, data: { idDocumentUrl: item.documentUrl } }),
     ]);
     return updated;
   }

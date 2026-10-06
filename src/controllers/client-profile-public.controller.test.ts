@@ -65,6 +65,6 @@ test('route wiring: client public profile is registered before the authenticate 
   const source = fs.readFileSync(path.join(__dirname, '../routes/client-profile.routes.ts'), 'utf8');
   const registration = "router.get('/public/:id', apiLimiter, clientProfileController.getPublicProfile);";
   assert.ok(source.includes(registration));
-  assert.ok(source.indexOf(registration) < source.indexOf('router.use(authenticate)'));
+  assert.ok(source.indexOf(registration) < source.indexOf('router.use(authenticate'));
   assert.doesNotMatch(registration, /aiLimiter/);
 });

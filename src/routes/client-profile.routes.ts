@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate } from '../middlewares/auth.middleware';
+import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { apiLimiter } from '../middlewares/rate-limit.middleware';
 import { clientProfileController } from '../controllers/client-profile.controller';
 
@@ -12,7 +12,7 @@ const router = Router();
 router.get('/public/:id', apiLimiter, clientProfileController.getPublicProfile);
 
 // Protect all routes below
-router.use(authenticate);
+router.use(authenticate, requireActiveUser);
 
 router.get('/setup', clientProfileController.getSetupData);
 router.post('/setup', clientProfileController.saveSetupData);

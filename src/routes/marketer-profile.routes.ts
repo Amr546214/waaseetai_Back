@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { marketerProfileController } from '../controllers/marketer-profile.controller';
 import { profileRequestsController } from '../controllers/profile-requests.controller';
-import { authenticate, authorize } from '../middlewares/auth.middleware';
+import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import { validateDto } from '../middlewares/validate-dto.middleware';
 import { apiLimiter } from '../middlewares/rate-limit.middleware';
 import { CreateIdentityRequestSchema } from '../dtos/profile-requests.dto';
@@ -16,7 +16,7 @@ const router = Router();
 router.get('/public/:id', apiLimiter, marketerProfileController.getPublicProfile);
 
 // Protect all routes and restrict to MARKETING_BROKER
-router.use(authenticate);
+router.use(authenticate, requireActiveUser);
 router.use(authorize('MARKETING_BROKER'));
 
 router.get('/', marketerProfileController.getProfile);

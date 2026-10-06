@@ -1,6 +1,8 @@
 import { v2 as cloudinary, UploadApiOptions, UploadApiResponse } from 'cloudinary';
 import multer from 'multer';
 import path from 'path';
+import { AppError } from './app-error';
+import { contentMatchesDeclaredType } from './file-signature';
 
 export type CloudinaryResourceType = 'image' | 'video' | 'raw';
 
@@ -51,8 +53,10 @@ function uploadStream(buffer: Buffer, options: UploadApiOptions): Promise<Upload
 }
 
 export async function uploadCloudFile(buffer: Buffer, options: UploadCloudFileOptions): Promise<StoredCloudFile> {
-	ensureConfigured();
 	const mimeType = options.mimeType || 'application/octet-stream';
+	// The declared type is client-controlled: for the types we can recognise (png/jpeg/gif/webp/pdf) the first bytes must agree with it.
+	if (!contentMatchesDeclaredType(buffer, mimeType)) throw new AppError('محتوى الملف لا يطابق نوعه المعلن. ارفع صورة أو ملف PDF صالحاً.', 400);
+	ensureConfigured();
 	const resourceType = options.resourceType || cloudinaryResourceType(mimeType);
 	const extension = path.extname(options.fileName).replace('.', '');
 	const baseName = path.basename(options.fileName, path.extname(options.fileName));
