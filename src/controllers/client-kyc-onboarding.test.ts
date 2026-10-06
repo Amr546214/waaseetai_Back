@@ -82,7 +82,7 @@ test('#44 incomplete documents (no back side) create nothing and leave kycStatus
 });
 
 test('#44 no id number → nothing created, kycStatus untouched', async (t) => {
-  const b = await submit(t, {}, { frontId: 'x', backId: 'y' }, '');
+  const b = await submit(t, {}, { frontId: 'data:image/png;base64,AAAA', backId: 'data:image/png;base64,AAAA' }, '');
   assert.equal(b.creates, 0);
   assert.equal(b.kyc, 'UNVERIFIED');
 });
