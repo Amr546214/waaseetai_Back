@@ -4,8 +4,8 @@ import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
 import { emailService } from './email.service';
 import { deriveProviderProgression } from '../utils/progression-calculators';
-import { aiFeatureUnavailableError } from './ai/ai-feature-unavailable';
 import { projectHealthService, type ProjectHealthResult } from './ai-features/project-health.service';
+import { deliveryReviewService, type DeliveryReviewResult } from './ai-features/delivery-review.service';
 import { createCommissionsForStageReleaseEvent } from './affiliate-commission.service';
 
 const PROJECT_COMPLETION_POINTS = 50;
@@ -64,8 +64,6 @@ export interface DeliveryAiReview {
   };
 }
 
-export const DELIVERY_AI_REVIEW_UNAVAILABLE_MESSAGE =
-  'المراجعة الذكية للتسليم متوقفة مؤقتاً حتى يكتمل ربطها بخدمة WaseetAI. يمكنك متابعة مراجعة التسليم واتخاذ القرار يدوياً كالمعتاد.';
 
 // Batch 8 — advisory-only project health analysis (currently DISABLED, see
 // getProjectHealthAnalysis below). Replaces the
@@ -583,13 +581,12 @@ export class ProjectProgressService {
   }
 
   /**
-   * AI review of a stage delivery is DISABLED: all AI must run exclusively
-   * through WaseetAI and no documented contract exists for it. Throws the
-   * AI_FEATURE_UNAVAILABLE 503 without any database access or AI call; the
-   * manual approve / request-revision delivery workflow is unaffected.
+   * Advisory review of a stage delivery through the internal LlmClient (see ai-features/delivery-review.service.ts). It never reads
+   * file contents (names + extensions only), never approves/rejects and never writes: the manual approve / request-revision
+   * workflow stays the sole authority. A real model answer grounded in the fields sent, or an explicit 503.
    */
-  async getDeliveryAiReview(_userId: string, _key: string, _stageId: string): Promise<DeliveryAiReview> {
-    throw aiFeatureUnavailableError(DELIVERY_AI_REVIEW_UNAVAILABLE_MESSAGE);
+  async getDeliveryAiReview(userId: string, key: string, stageId: string): Promise<DeliveryReviewResult> {
+    return deliveryReviewService.review(userId, key, stageId);
   }
 
   /**

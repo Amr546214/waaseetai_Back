@@ -419,7 +419,7 @@ export const submitStageDelivery = async (req: Request, res: Response, next: Nex
 // POST /api/provider/projects/:id/stages/:stageId/ai-review
 // Advisory-only — same read-only review a client can request for the same
 // delivery, never approves/rejects it and never touches status or escrow.
-// The AI review is currently disabled (503 AI_FEATURE_UNAVAILABLE via AppError); any other failure returns an honest 502, not a fabricated
+// The AI review runs through the internal LlmClient (AppError 503 when the model is unavailable); any other failure returns an honest 502, not a fabricated
 // review; submitStageDelivery above is completely unaffected either way.
 export const getDeliveryAiReview = async (req: Request, res: Response, next: NextFunction) => {
 	try {
