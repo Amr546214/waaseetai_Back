@@ -140,3 +140,39 @@ test('generateAiSummary: rejects any verdict/fault/money field in the response',
   const { disputeService } = await loadService(t, { summarizeDispute: async () => upstreamFixture({ winner: 'client', faultPercentage: 80 }) });
   await assert.rejects(() => disputeService.generateAiSummary('dispute-1'), (e: any) => e.code === 'INVALID_RESPONSE');
 });
+
+
+// ── BE-1: GET /provider|client/disputes/:id exposes heldEscrowAmount (read-only) ──
+
+test('heldEscrowAmount: the escrow balance still held, using the provider-finance definition', async (t) => {
+  t.mock.module('../config/db', { namedExports: { prisma: {} } });
+  const { heldEscrowAmount } = await import(`./dispute.service.ts?fixture=${Date.now()}-${Math.random()}`);
+  assert.equal(heldEscrowAmount(null, 100), null);
+  assert.equal(heldEscrowAmount(undefined, 100), null);
+  assert.equal(heldEscrowAmount({ amount: 113, releasedAmount: 40, status: 'HELD' }, 100), 60); // price 100 − released 40 (fees are not part of it)
+  assert.equal(heldEscrowAmount({ amount: 113, releasedAmount: 0, status: 'HELD' }, null), 113); // no contract price -> escrow amount
+  assert.equal(heldEscrowAmount({ amount: 113, releasedAmount: 130, status: 'HELD' }, 100), 0); // never negative
+  assert.equal(heldEscrowAmount({ amount: 113, releasedAmount: 100, status: 'RELEASED' }, 100), 0);
+  assert.equal(heldEscrowAmount({ amount: 113, releasedAmount: 0, status: 'REFUNDED' }, 100), 0);
+  assert.equal(heldEscrowAmount({ amount: 10, releasedAmount: 0.005, status: 'HELD' }, 33.333), 33.33); // 2 decimals
+});
+
+test('getForUser: adds heldEscrowAmount from the escrow of the dispute project; null without a project', async (t) => {
+  const escrowFind = t.mock.fn(async (_args: any) => ({ amount: 113, releasedAmount: 40, status: 'HELD', project: { contract: { price: 100 } } }));
+  let dispute: any = { id: 'd1', openedById: 'u1', againstUserId: 'u2', projectId: 'p1', status: 'OPEN' };
+  const prismaMock: any = { dispute: { findUnique: async () => dispute }, escrow: { findUnique: escrowFind } };
+  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  const { disputeService } = await import(`./dispute.service.ts?fixture=${Date.now()}-${Math.random()}`);
+
+  const withProject = await disputeService.getForUser('d1', 'u1');
+  assert.equal(withProject.heldEscrowAmount, 60);
+  assert.equal(withProject.id, 'd1');
+  assert.deepEqual(escrowFind.mock.calls[0].arguments[0].where, { projectId: 'p1' });
+
+  dispute = { ...dispute, projectId: null };
+  const without = await disputeService.getForUser('d1', 'u2');
+  assert.equal(without.heldEscrowAmount, null);
+  assert.equal(escrowFind.mock.callCount(), 1, 'no escrow lookup without a project');
+
+  await assert.rejects(() => disputeService.getForUser('d1', 'stranger'), (e: any) => e.statusCode === 403);
+});

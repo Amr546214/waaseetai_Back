@@ -257,7 +257,12 @@ export class AccreditationAiService {
     return prisma.$transaction(async (tx) => {
       const updated = await tx.accreditationSample.update({
         where: { id },
-        data: { status: AccreditationStatus.AI_VERIFIED, aiAuditedAt: sample.aiAuditedAt || new Date() },
+        // `aiAuditedAt` records WHEN AN AI AUDITED the sample. A human approval must not stamp it: it is only set here (once) when the
+        // sample already carries a stored AI score, and an existing value is never overwritten. The enum value is unchanged.
+        data: {
+          status: AccreditationStatus.AI_VERIFIED,
+          ...(sample.aiScore != null && !sample.aiAuditedAt ? { aiAuditedAt: new Date() } : {}),
+        },
       });
 
       await tx.providerSpecialty.updateMany({

@@ -1398,3 +1398,21 @@ test('static: touched provider-profile sources contain no direct Gemini usage', 
   const files = ['services/provider-profile.service.ts', 'controllers/provider-profile.controller.ts', 'routes/provider-profile.routes.ts'];
   for (const f of files) assert.doesNotMatch(readFileSync(path.join(dir, f), 'utf8'), /gemini\.client|geminiClient|generateStructured|generateStream/, f);
 });
+
+// ── BE-1: getPublicProfile wiring (source contract; the pure logic is unit-tested in provider-public-profile.helpers.test.ts) ──
+
+test('getPublicProfile: assessment card from the real attempt only, services carry specialtyName, company summary is count-only', () => {
+  const src = readFileSync(path.join(__dirname, 'provider-profile.service.ts'), 'utf8');
+  const method = src.slice(src.indexOf('async getPublicProfile'));
+  const pub = method.slice(0, method.indexOf('\n\t/**') > 0 ? method.indexOf('\n\t/**') : undefined);
+  assert.ok(pub.includes('buildAssessmentDetails(latestAttempt, ps)'));
+  assert.ok(!/totalQuestions:\s*latestAttempt\.totalQuestions\s*\|\|\s*20/.test(pub));
+  assert.ok(!/timeLimitMinutes\s*\|\|\s*12/.test(pub));
+  assert.ok(pub.includes('services: publishedServices.map(withSpecialtyName)'));
+  assert.ok(pub.includes("include: { specialty: { select: { nameAr: true, name: true } } }"));
+  assert.ok(pub.includes("companyTeamMember.count({ where: { companyOwnerId: providerId, status: 'ACTIVE' } })"));
+  assert.ok(pub.includes('buildCompanySummary('));
+  // nothing personal / documentary about the company leaves through the public endpoint
+  assert.ok(!/commercialRegistration|vatCertificateUrl|idDocumentUrl/.test(pub));
+  assert.ok(!/companyTeamMember\.findMany/.test(pub));
+});

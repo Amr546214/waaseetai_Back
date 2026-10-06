@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { AppError } from '../utils/app-error';
 import { aiAssessmentService, ASSESSMENT_GENERATION_FAILED_CODE, ASSESSMENT_GRADING_FAILED_CODE } from '../services/ai-assessment.service';
 
 /**
@@ -96,6 +97,10 @@ export async function getAttemptStatusController(req: Request, res: Response): P
       data: result
     });
   } catch (error: any) {
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({ success: false, message: error.message });
+      return;
+    }
     console.error('[AiAssessmentController] status error:', error);
     res.status(500).json({
       success: false,
