@@ -6,20 +6,14 @@ import { AccountType } from '@prisma/client';
 
 const router = Router();
 
-// The handler is currently disabled (503 AI_FEATURE_UNAVAILABLE; no WaseetAI
-// contract yet) but keeps provider-only authorization and aiLimiter so the
-// route is correctly gated once re-enabled.
+// Provider-only, aiLimiter. The handler answers through the internal LlmClient (503 when the model is unavailable).
 const providerOnly = authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
 
 router.use(authenticate, requireActiveUser, providerOnly, aiLimiter);
 
-router.get('/analyze-project/:projectId', async (req, res, next) => {
-  await analyzeProjectForProvider(req, res);
-});
+router.get('/analyze-project/:projectId', (req, res, next) => analyzeProjectForProvider(req, res, next));
 
-router.post('/analyze-project', async (req, res, next) => {
-  await analyzeProjectForProvider(req, res);
-});
+router.post('/analyze-project', (req, res, next) => analyzeProjectForProvider(req, res, next));
 
 export default router;
 

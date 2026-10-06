@@ -1,18 +1,20 @@
-import { Request, Response } from 'express';
-import { aiFeatureUnavailablePayload } from '../services/ai/ai-feature-unavailable';
+import { NextFunction, Request, Response } from 'express';
+import { projectFitService } from '../services/ai-features/project-fit.service';
+import { AppError } from '../utils/app-error';
 
-// Deep project-fit analysis for providers is switched off: all AI must run
-// exclusively through the WaseetAI service, and this operation is not wired to
-// it. No direct-model call, no fallback, no fabricated analysis, and no
-// database access/caching happens here; previously cached project analyses
-// stay as they are.
+// Feature #14 (project fit for a provider) is built in-house on the internal LlmClient: a real model answer grounded in the project
+// and provider fields that were sent, or an explicit 503 — never an invented analysis. Read-only: no database write.
 
-export const PROJECT_FIT_ANALYSIS_UNAVAILABLE_MESSAGE =
-  'التحليل الذكي لملاءمة المشروع متوقف مؤقتاً حتى يكتمل ربطه بخدمة WaseetAI. يمكنك متابعة استعراض المشاريع وتقديم عروضك بشكل طبيعي.';
-
-export const analyzeProjectForProvider = async (_req: Request, res: Response): Promise<void> => {
-  res.status(503).json({
-    success: false,
-    ...aiFeatureUnavailablePayload(PROJECT_FIT_ANALYSIS_UNAVAILABLE_MESSAGE),
-  });
+export const analyzeProjectForProvider = async (req: Request, res: Response, next?: NextFunction): Promise<void> => {
+  try {
+    const projectId = String(req.params?.projectId ?? req.body?.projectId ?? '').trim();
+    if (!projectId) throw new AppError('معرّف المشروع مطلوب', 400);
+    const userId = (req as any).user?.id;
+    const data = await projectFitService.analyze(userId, projectId);
+    res.status(200).json({ success: true, data });
+  } catch (error) {
+    if (next) return next(error);
+    const status = (error as any)?.statusCode ?? 500;
+    res.status(status).json({ success: false, message: (error as any)?.message, code: (error as any)?.code });
+  }
 };
