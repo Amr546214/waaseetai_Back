@@ -41,12 +41,19 @@ export const registerSchema = z.object({
     // auth.service.ts::resolveReferralAttribution() for the exact
     // precedence rule and the First-Touch tension it's flagged against).
     affiliateIdentifier: z.string().optional(),
+    // Accepted aliases of affiliateIdentifier: unknown keys are stripped silently by zod, so a differently named field
+    // would otherwise lose the referral without any error. They are folded into affiliateIdentifier below.
+    referralSlug: z.string().optional(),
+    referralCode: z.string().optional(),
     agreedToTerms: z.literal(true, {
       message: 'يجب الموافقة على الشروط والأحكام'
     })
   }).refine(data => !!data.password || !!data.googleIdToken, {
     message: 'كلمة المرور مطلوبة', path: ['password']
-  })
+  }).transform(({ referralSlug, referralCode, ...rest }) => ({
+    ...rest,
+    affiliateIdentifier: rest.affiliateIdentifier ?? referralSlug ?? referralCode
+  }))
 });
 
 export type RegisterInput = z.infer<typeof registerSchema>['body'];
