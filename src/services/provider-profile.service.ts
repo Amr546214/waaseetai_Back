@@ -912,7 +912,7 @@ export class ProviderProfileService {
 		return config;
 	}
 
-	private normalizeAndValidateSensitiveChanges(category: string, changes: Record<string, unknown>, providerId?: string) {
+	private normalizeAndValidateSensitiveChanges(category: string, changes: Record<string, unknown>, providerId?: string, keepsStoredIdDocument = false) {
 		const normalized = { ...changes };
 		if (category === 'CONTACT') {
 			normalized.email = String(normalized.email || '').trim().toLowerCase();
@@ -938,7 +938,10 @@ export class ProviderProfileService {
 			if (!isMaskedValue && !this.isValidIban(String(normalized.ibanNumber))) throw new Error('INVALID_IBAN');
 		}
 		if (category === 'DOCUMENTS') {
-			if (!normalized.idDocumentUrl) throw new Error('ID_DOCUMENT_REQUIRED');
+			// Omitting idDocumentUrl means "keep the stored one" (the client cannot see a stored private document, so it cannot resend it);
+			// sending it empty is still a removal and still refused.
+			const idOmitted = !Object.prototype.hasOwnProperty.call(normalized, 'idDocumentUrl');
+			if (!normalized.idDocumentUrl && !(idOmitted && keepsStoredIdDocument)) throw new Error('ID_DOCUMENT_REQUIRED');
 			for (const [key, value] of Object.entries(normalized)) {
 				if (value && !this.isSafeDocumentUrl(String(value), providerId)) throw new Error(`INVALID_DOCUMENT_URL:${key}`);
 			}
@@ -964,7 +967,9 @@ export class ProviderProfileService {
 	async initiateSensitiveChange(providerId: string, category: string, changes: Record<string, unknown>, auditContext?: AuditContext) {
 		const config = this.sensitiveConfig(category);
 		const filtered = Object.fromEntries(Object.entries(changes || {}).filter(([key]) => config.allowed.includes(key)));
-		const cleanChanges = this.normalizeAndValidateSensitiveChanges(category, filtered, providerId);
+		const idOmitted = category === 'DOCUMENTS' && !Object.prototype.hasOwnProperty.call(filtered, 'idDocumentUrl');
+		const keepsStoredIdDocument = idOmitted ? !!(await prisma.user.findUnique({ where: { id: providerId }, select: { idDocumentUrl: true } }))?.idDocumentUrl : false;
+		const cleanChanges = this.normalizeAndValidateSensitiveChanges(category, filtered, providerId, keepsStoredIdDocument);
 		if (!Object.keys(cleanChanges).length) throw new Error('No supported changes were provided');
 
 		const user = await prisma.user.findUnique({ where: { id: providerId }, include: { providerProfile: true } });

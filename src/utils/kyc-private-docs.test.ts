@@ -118,7 +118,8 @@ test('wiring: every KYC / proof upload path is private', () => {
 	assert.match(read('controllers/provider-profile.controller.ts'), /storeKycFileIfNeeded\(identity\?\.frontId/);
 	assert.match(read('controllers/provider-profile.controller.ts'), /storeKycFileIfNeeded\(url, `waseetai\/providers\/\$\{userId\}\/certificates`/);
 	assert.match(read('controllers/onboarding.controller.ts'), /uploadMulterFile\(req\.file, `waseetai\/clients\/\$\{req\.user!\.id\}\/onboarding`, undefined, true\)/);
-	assert.match(read('routes/provider-profile.routes.ts'), /documents`, undefined, true\)/);
+	assert.match(read('routes/provider-profile.routes.ts'), /documents`, undefined, !isPublic\)/);
+	assert.match(read('routes/provider-profile.routes.ts'), /req\.body\?\.visibility === 'public'/);
 	assert.match(read('controllers/specialty.controller.ts'), /\/proofs`, undefined, true\)/);
 	assert.match(read('routes/provider-specialty.routes.ts'), /isProof \? 'proofs' : 'samples'\}`, undefined, isProof\)/);
 	assert.match(read('routes/accreditation-ai.routes.ts'), /\/proofs`, undefined, true\)/);

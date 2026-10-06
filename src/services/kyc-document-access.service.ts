@@ -9,7 +9,7 @@ import { accountAuditLogService, AuditContext } from './account-logs.service';
 export const KYC_DOCUMENT_KEYS = [
 	'client_front_id', 'client_back_id', 'client_supporting_docs',
 	'provider_front_id', 'provider_back_id', 'provider_supporting_docs', 'provider_certificate',
-	'onboarding_document', 'user_id_document',
+	'onboarding_document', 'user_id_document', 'user_vat_certificate',
 	'specialty_proof', 'accreditation_proof'
 ] as const;
 export type KycDocumentKey = (typeof KYC_DOCUMENT_KEYS)[number];
@@ -57,9 +57,9 @@ async function resolve(input: KycAccessInput, target: string): Promise<Resolved>
 			if (!row) throw NOT_FOUND();
 			return { ownerUserId: row.userId, stored: row.documentUrl ?? null };
 		}
-		case 'user_id_document': {
-			const row = await prisma.user.findUnique({ where: { id: target }, select: { idDocumentUrl: true } });
-			return { ownerUserId: target, stored: row?.idDocumentUrl ?? null };
+		case 'user_id_document': case 'user_vat_certificate': {
+			const row = await prisma.user.findUnique({ where: { id: target }, select: { idDocumentUrl: true, vatCertificateUrl: true } });
+			return { ownerUserId: target, stored: (input.document === 'user_id_document' ? row?.idDocumentUrl : row?.vatCertificateUrl) ?? null };
 		}
 		case 'specialty_proof': {
 			if (!input.id) throw new AppError('معرّف الملف مطلوب', 400);

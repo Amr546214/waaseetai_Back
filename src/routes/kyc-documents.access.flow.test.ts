@@ -27,7 +27,7 @@ const db = {
 const audit: any[] = [];
 
 const prisma: any = {
-	user: { findUnique: async ({ where, select }: any) => (select?.idDocumentUrl ? { idDocumentUrl: null } : users[where.id] ?? null) },
+	user: { findUnique: async ({ where, select }: any) => (select?.idDocumentUrl || select?.vatCertificateUrl ? { idDocumentUrl: null, vatCertificateUrl: users[where.id]?.vat ? REF(where.id) : null } : users[where.id] ?? null) },
 	clientProfile: { findUnique: async ({ where }: any) => db.client[where.userId] ?? null },
 	providerProfile: { findUnique: async () => null },
 	clientOnboarding: { findUnique: async () => null },
@@ -115,6 +115,15 @@ test('an admin can open any user’s document, and the access is written to the 
 	assert.equal(audit[0].details.viewerUserId, '99999999-9999-4999-8999-999999999999');
 	assert.equal(audit[0].details.document, 'client_front_id');
 	assert.ok(!JSON.stringify(audit[0]).includes('private:'), 'the audit entry does not store the reference');
+});
+
+test('the VAT certificate of a user opens through user_vat_certificate (owner), never through another user', async () => {
+	reset();
+	users['11111111-1111-4111-8111-111111111111'].vat = true;
+	const r = await call('11111111-1111-4111-8111-111111111111', { document: 'user_vat_certificate' });
+	assert.equal(r.status, 200);
+	assert.equal(r.body.data.private, true);
+	assert.equal((await call('22222222-2222-4222-8222-222222222222', { document: 'user_vat_certificate', userId: '11111111-1111-4111-8111-111111111111' })).status, 403);
 });
 
 test('an admin must say whose document (userId), except for id-addressed documents', async () => {
