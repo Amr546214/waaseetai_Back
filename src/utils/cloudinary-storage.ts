@@ -4,6 +4,7 @@ import path from 'path';
 import { AppError } from './app-error';
 import { contentMatchesDeclaredType, looksLikeMarkup } from './file-signature';
 import { isOwnCloudinaryUrl, ownCloudinaryUrlProblem } from './cloudinary-url';
+import { buildPrivateRef, parsePrivateRef } from './kyc-private-ref';
 
 export type CloudinaryResourceType = 'image' | 'video' | 'raw';
 
@@ -14,6 +15,8 @@ export interface StoredCloudFile {
 	resourceType: CloudinaryResourceType;
 	mimeType: string;
 	bytes: number;
+	/** Set only for private uploads: the stored reference (private:<type>:<format>:<public_id>). `url` is NOT fetchable for those. */
+	privateRef?: string;
 }
 
 interface UploadCloudFileOptions {
@@ -23,6 +26,8 @@ interface UploadCloudFileOptions {
 	resourceType?: CloudinaryResourceType;
 	/** Hard ceiling for this upload (defaults to 15MB, the multer default). */
 	maxBytes?: number;
+	/** KYC / confidential assets: uploaded with type=authenticated, so the plain URL is not fetchable. */
+	private?: boolean;
 }
 
 export const DEFAULT_MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
@@ -75,6 +80,7 @@ export async function uploadCloudFile(buffer: Buffer, options: UploadCloudFileOp
 		use_filename: false,
 		unique_filename: true,
 		overwrite: false,
+		...(options.private ? { type: 'authenticated' as const } : {}),
 		...(resourceType === 'raw' && extension ? { format: extension } : {})
 	});
 
@@ -84,13 +90,14 @@ export async function uploadCloudFile(buffer: Buffer, options: UploadCloudFileOp
 		publicId: result.public_id,
 		resourceType,
 		mimeType,
-		bytes: result.bytes
+		bytes: result.bytes,
+		...(options.private ? { privateRef: buildPrivateRef({ resourceType, format: result.format || extension || null, publicId: result.public_id }) } : {})
 	};
 }
 
-export async function uploadMulterFile(file: Express.Multer.File, folder: string, maxBytes?: number): Promise<StoredCloudFile> {
+export async function uploadMulterFile(file: Express.Multer.File, folder: string, maxBytes?: number, isPrivate = false): Promise<StoredCloudFile> {
 	if (!file.buffer) throw new Error('The upload middleware must use memory storage');
-	return uploadCloudFile(file.buffer, { folder, fileName: file.originalname, mimeType: file.mimetype, maxBytes });
+	return uploadCloudFile(file.buffer, { folder, fileName: file.originalname, mimeType: file.mimetype, maxBytes, private: isPrivate });
 }
 
 export async function uploadDataUri(dataUri: string, options: Omit<UploadCloudFileOptions, 'mimeType'>): Promise<StoredCloudFile> {
@@ -99,6 +106,25 @@ export async function uploadDataUri(dataUri: string, options: Omit<UploadCloudFi
 	// Refuse oversized payloads from the base64 length BEFORE decoding them into memory.
 	if (Math.floor((match[2].length * 3) / 4) > (options.maxBytes ?? DEFAULT_MAX_UPLOAD_BYTES)) throw new AppError('حجم الملف يتجاوز الحد المسموح', 400);
 	return uploadCloudFile(Buffer.from(match[2], 'base64'), { ...options, mimeType: match[1] });
+}
+
+/**
+ * KYC / confidential files: a data: URI is uploaded PRIVATE and the stored private reference is returned (never a fetchable URL).
+ * Any other value (empty, or a previously stored value that assertKycFileValues already accepted) is returned unchanged.
+ */
+export async function storeKycFileIfNeeded(value: string | null | undefined, folder: string, fileName: string): Promise<string | null | undefined> {
+	if (!value?.startsWith('data:')) return value;
+	return (await uploadDataUri(value, { folder, fileName, private: true })).privateRef;
+}
+
+/** Short-lived (default 120s) inline-viewable link for a stored private reference. */
+export function createPrivateDownloadUrl(ref: string, ttlSeconds: number): { url: string; expiresAt: Date } | null {
+	const parsed = parsePrivateRef(ref);
+	if (!parsed) return null;
+	ensureConfigured();
+	const expiresAtSec = Math.floor(Date.now() / 1000) + ttlSeconds;
+	const url = cloudinary.utils.private_download_url(parsed.publicId, parsed.format || '', { resource_type: parsed.resourceType, type: 'authenticated', expires_at: expiresAtSec });
+	return { url, expiresAt: new Date(expiresAtSec * 1000) };
 }
 
 export async function storeDataUriIfNeeded(value: string | null | undefined, folder: string, fileName: string): Promise<string | null | undefined> {

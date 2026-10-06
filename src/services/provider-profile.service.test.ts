@@ -1,4 +1,7 @@
 import { test, TestContext } from 'node:test';
+
+// KYC document values must live inside our own Cloudinary account (or be an owned private reference).
+process.env.CLOUDINARY_CLOUD_NAME = 'testcloud';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -506,7 +509,7 @@ function createSkillsPortfolioMockPrisma(t: TestContext) {
     lastName: 'Name',
     avatarUrl: null,
     ibanNumber: 'SA5300000000000000000099',
-    idDocumentUrl: 'https://cdn.example/id.pdf'
+    idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id.pdf'
   };
 
   const skillsByName = new Map<string, { id: string; name: string }>();
@@ -916,7 +919,7 @@ test('reviewSensitiveChange (DOCUMENTS, approved): recalculates completion after
   const { providerProfileService, providerProfileUpdateSpy, userUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
 
   const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', {
-    idDocumentUrl: 'https://cdn.example/id.pdf'
+    idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id.pdf'
   });
   await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
   await providerProfileService.reviewSensitiveChange(initiated.requestId, true);

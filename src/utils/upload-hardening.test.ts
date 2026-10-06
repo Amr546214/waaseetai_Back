@@ -90,6 +90,6 @@ test('wiring: the three routes that had no allow-list now pass one', () => {
 });
 
 test('wiring: client and provider KYC fields are validated before anything is stored', () => {
-	assert.match(read('controllers/client-profile.controller.ts'), /assertKycFileValues\(\[identity\.frontId, identity\.backId, documents\.supportingDocs\]\)/);
+	assert.match(read('controllers/client-profile.controller.ts'), /assertKycFileValues\(\[identity\.frontId, identity\.backId, documents\.supportingDocs\], userId\)/);
 	assert.match(read('controllers/provider-profile.controller.ts'), /assertKycFileValues\(\[identity\?\.frontId, identity\?\.backId, documents\?\.supportingDocs/);
 });

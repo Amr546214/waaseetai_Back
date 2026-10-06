@@ -20,7 +20,7 @@ async function load(t: TestContext, accountType = AccountType.PROVIDER_INDIVIDUA
     $transaction: async (ops: any[]) => Promise.all(ops)
   } } });
   t.mock.module('../services/session.service', { namedExports: { sessionService: { validateOrRegister: async () => ({ id: 'session' }) } } });
-  t.mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (value: any) => value } });
+  t.mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (value: any) => value, storeKycFileIfNeeded: async (value: any) => value } });
   const service: any = {};
   for (const method of ['suggestBio', 'suggestSkills']) service[method] = async (...args: any[]) => {
     calls.push([method, ...args]);

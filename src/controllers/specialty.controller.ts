@@ -58,11 +58,11 @@ class SpecialtyController {
         const proofFiles = files.filter(f => f.fieldname === `proofFiles_${i}`);
         
         const publicUpload = publicFile ? await uploadMulterFile(publicFile, `waseetai/specialties/${providerSpecialtyId}/samples`) : null;
-        const privateUpload = proofFiles[0] ? await uploadMulterFile(proofFiles[0], `waseetai/specialties/${providerSpecialtyId}/proofs`) : null;
+        const privateUpload = proofFiles[0] ? await uploadMulterFile(proofFiles[0], `waseetai/specialties/${providerSpecialtyId}/proofs`, undefined, true) : null;
         samplesData.push({
           title,
           publicSampleUrl: publicUpload?.url || '',
-          privateProofUrl: privateUpload?.url || null
+          privateProofUrl: privateUpload?.privateRef || null
         });
       }
 

@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/app-error';
 import { providerProfileService } from '../services/provider-profile.service';
 import { prisma } from '../config/db';
-import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
+import { storeDataUriIfNeeded, storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { sanitizeText } from '../utils/sanitize-text';
 import { assertKycFileValues } from '../utils/kyc-value-guard';
 import { sessionService } from '../services/session.service';
@@ -111,14 +111,14 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			skillConnections = rows.map(({ id }) => ({ id }));
 		}
 
-		assertKycFileValues([identity?.frontId, identity?.backId, documents?.supportingDocs, ...(identity?.certs || [])]);
+		assertKycFileValues([identity?.frontId, identity?.backId, documents?.supportingDocs, ...(identity?.certs || [])], userId);
 		const [frontIdUrl, backIdUrl, supportingDocsUrl] = await Promise.all([
-			storeDataUriIfNeeded(identity?.frontId, `waseetai/providers/${userId}/identity`, 'front-id'),
-			storeDataUriIfNeeded(identity?.backId, `waseetai/providers/${userId}/identity`, 'back-id'),
-			storeDataUriIfNeeded(documents?.supportingDocs, `waseetai/providers/${userId}/documents`, 'supporting-document')
+			storeKycFileIfNeeded(identity?.frontId, `waseetai/providers/${userId}/identity`, 'front-id'),
+			storeKycFileIfNeeded(identity?.backId, `waseetai/providers/${userId}/identity`, 'back-id'),
+			storeKycFileIfNeeded(documents?.supportingDocs, `waseetai/providers/${userId}/documents`, 'supporting-document')
 		]);
 		const certUrls = await Promise.all((identity?.certs || []).map((url: string, index: number) =>
-			storeDataUriIfNeeded(url, `waseetai/providers/${userId}/certificates`, `certificate-${index + 1}`)
+			storeKycFileIfNeeded(url, `waseetai/providers/${userId}/certificates`, `certificate-${index + 1}`)
 		));
 
 		const providerData = {
@@ -142,9 +142,10 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			mainSpecialty: specialties?.mainSpec,
 			subSpecialties: specialties?.subSpecs || [],
 
-			frontIdUrl,
-			backIdUrl,
-			certUrls: certUrls.filter(Boolean) as string[],
+			// Empty/absent = "keep what is stored" (a stored private document is not visible to the client, so a re-save must not wipe it).
+			frontIdUrl: frontIdUrl || undefined,
+			backIdUrl: backIdUrl || undefined,
+			...(certUrls.filter(Boolean).length ? { certUrls: certUrls.filter(Boolean) as string[] } : {}),
 			// isNafathVerified / kycStatus / isVerified are NEVER written from this request (AUD-FND-000048): they are read-only here and
 			// change only through a real verification integration or the admin KYC decision (onboarding.service).
 
@@ -153,7 +154,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			accountHolder: bank?.accountHolder,
 			iban: bank?.iban,
 
-			supportingDocsUrl,
+			supportingDocsUrl: supportingDocsUrl || undefined,
 			notes: documents?.notes,
 
 			accurateAgreed: agreements?.accurate,

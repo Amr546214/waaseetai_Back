@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/db';
-import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
+import { storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { assertKycFileValues } from '../utils/kyc-value-guard';
 import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
 import { logger } from '../config/logger';
@@ -91,11 +91,11 @@ export class ClientProfileController {
         return res.status(400).json({ success: false, message: 'IBAN must be exactly 24 characters.' });
       }
 
-      assertKycFileValues([identity.frontId, identity.backId, documents.supportingDocs]);
+      assertKycFileValues([identity.frontId, identity.backId, documents.supportingDocs], userId);
       const [frontIdUrl, backIdUrl, supportingDocsUrl] = await Promise.all([
-        storeDataUriIfNeeded(identity.frontId, `waseetai/clients/${userId}/identity`, 'front-id'),
-        storeDataUriIfNeeded(identity.backId, `waseetai/clients/${userId}/identity`, 'back-id'),
-        storeDataUriIfNeeded(documents.supportingDocs, `waseetai/clients/${userId}/documents`, 'supporting-document')
+        storeKycFileIfNeeded(identity.frontId, `waseetai/clients/${userId}/identity`, 'front-id'),
+        storeKycFileIfNeeded(identity.backId, `waseetai/clients/${userId}/identity`, 'back-id'),
+        storeKycFileIfNeeded(documents.supportingDocs, `waseetai/clients/${userId}/documents`, 'supporting-document')
       ]);
 
       const clientData = {
@@ -107,8 +107,9 @@ export class ClientProfileController {
         industry: details.occupation,
         address: details.address,
         
-        frontIdUrl,
-        backIdUrl,
+        // Empty/absent = "keep what is stored": the client can no longer see a stored private document, so a re-save must not wipe it.
+        frontIdUrl: frontIdUrl || undefined,
+        backIdUrl: backIdUrl || undefined,
         // isNafathVerified / kycStatus / isVerified are NEVER written from this request: they are read-only here and change only
         // through a real verification integration or the admin KYC decision (onboarding.service). See the guarded update below.
 
@@ -117,7 +118,7 @@ export class ClientProfileController {
           ? { paymentType: 'paypal', paypalPayoutEmail }
           : { paymentType: bank.paymentType, bankName: bank.bankName, accountHolder: bank.accountHolder, iban: bank.iban }),
 
-        supportingDocsUrl,
+        supportingDocsUrl: supportingDocsUrl || undefined,
         notes: documents.notes,
 
         accurateAgreed: agreements.accurate,
