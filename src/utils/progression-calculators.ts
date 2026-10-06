@@ -60,25 +60,8 @@ export const REQUESTER_LEVEL_MATRIX = [
   { index: 15, title: 'مؤسسي', reqPoints: 7201, rate: 5.0 }
 ];
 
-// الوسيط التسويقي — commission INCREASES with the level. The brand doc gives
-// names and rates only (no point thresholds), so none are asserted here.
-export const BROKER_LEVEL_MATRIX = [
-  { index: 1, title: 'مسوّق', commission: 3.0 },
-  { index: 2, title: 'مساعد', commission: 4.0 },
-  { index: 3, title: 'موصل', commission: 5.0 },
-  { index: 4, title: 'منسّق', commission: 6.0 },
-  { index: 5, title: 'وسيط', commission: 7.0 },
-  { index: 6, title: 'ممثل', commission: 8.0 },
-  { index: 7, title: 'سفير', commission: 9.0 },
-  { index: 8, title: 'موجّه', commission: 10.0 },
-  { index: 9, title: 'حلقة وصل', commission: 11.0 },
-  { index: 10, title: 'جسر الوصل', commission: 12.0 },
-  { index: 11, title: 'ناقل حيوي', commission: 13.0 },
-  { index: 12, title: 'موصل استراتيجي', commission: 14.0 },
-  { index: 13, title: 'رابط استشاري', commission: 15.0 },
-  { index: 14, title: 'شريك تنفيذي', commission: 16.0 },
-  { index: 15, title: 'رابط مؤسسي', commission: 18.0 }
-];
+// (The unused broker matrix was removed: it was imported nowhere and disagreed with the binding fee table. The live broker rates are
+// AFFILIATE_LEVEL_RATES in config/affiliate-levels.config.ts.)
 
 // Every existing importer of LEVEL_MATRIX resolves a PROVIDER's level
 // (marketplace cards, provider profile, cart checkout, gamification), so the
