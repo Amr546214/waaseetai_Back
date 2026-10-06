@@ -1,10 +1,11 @@
 import { z } from 'zod';
+import { sanitizedText } from '../utils/sanitize-text';
 
 export const profileSetupSchema = z.object({
   // Preferences / Basic Info
   avatarUrl: z.string().url().optional().nullable(),
   phoneNumber: z.string().optional().nullable(),
-  bio: z.string().optional().nullable(),
+  bio: sanitizedText(z.string()).optional().nullable(),
   companyName: z.string().optional().nullable(),
   industry: z.string().optional().nullable(),
   skills: z.array(z.string()).optional().nullable(),

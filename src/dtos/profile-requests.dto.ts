@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { sanitizedText } from '../utils/sanitize-text';
 
 // The only fields a marketer/affiliate can request a governed change for via
 // this endpoint. Deliberately NOT a generic { fieldType, requestedValue }
@@ -16,8 +17,8 @@ import { z } from 'zod';
 // out of scope for this task. `.strict()` below means a client sending
 // `email` gets a validation error rather than having it silently dropped.
 export const CreateIdentityRequestSchema = z.object({
-  firstName: z.string().trim().min(1).max(50).optional(),
-  lastName: z.string().trim().min(1).max(50).optional(),
+  firstName: sanitizedText(z.string().trim().min(1).max(50)).optional(),
+  lastName: sanitizedText(z.string().trim().min(1).max(50)).optional(),
   nationalId: z.string().trim().min(1).max(20).optional(),
   phoneNumber: z.string().trim().min(1).max(20).optional()
 }).strict().refine(

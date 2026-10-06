@@ -2,6 +2,7 @@ import type { ProviderBioSuggestDto, ProviderSkillsSuggestDto } from '../dtos/pr
 import { Prisma, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
+import { sanitizeText } from '../utils/sanitize-text';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { aiFeatureUnavailableError } from './ai/ai-feature-unavailable';
 import { AppError } from '../utils/app-error';
@@ -594,10 +595,10 @@ export class ProviderProfileService {
 	 * silently added.
 	 */
 	async updateBasicInfo(userId: string, data: any, auditContext?: AuditContext) {
-		const firstName = String(data.firstName || '').trim();
-		const lastName = String(data.lastName || '').trim();
-		const headline = String(data.headline || '').trim();
-		const bio = String(data.bio || '').trim();
+		const firstName = sanitizeText(String(data.firstName || '')).trim();
+		const lastName = sanitizeText(String(data.lastName || '')).trim();
+		const headline = sanitizeText(String(data.headline || '')).trim();
+		const bio = sanitizeText(String(data.bio || '')).trim();
 		if (!firstName || !lastName || !headline || !String(data.mainSpecialty || '').trim()) throw new Error('REQUIRED_PROFILE_FIELDS');
 		if (firstName.length > 60 || lastName.length > 60 || headline.length > 100 || bio.length > 500) throw new Error('PROFILE_FIELD_TOO_LONG');
 		for (const key of ['githubUrl', 'linkedinUrl', 'websiteUrl']) {

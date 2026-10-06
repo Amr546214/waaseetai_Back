@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AccountType } from '@prisma/client';
+import { sanitizedText } from '../../utils/sanitize-text';
 
 // The only account types a public, unauthenticated signup request (email/
 // password registration or a brand-new Google sign-up) may ever request.
@@ -20,8 +21,8 @@ export const PublicAccountTypeEnum = z.enum([
 export const registerSchema = z.object({
   body: z.object({
     accountType: PublicAccountTypeEnum,
-    firstName: z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل'),
-    lastName: z.string().min(2, 'اسم العائلة يجب أن يكون حرفين على الأقل'),
+    firstName: sanitizedText(z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل')),
+    lastName: sanitizedText(z.string().min(2, 'اسم العائلة يجب أن يكون حرفين على الأقل')),
     email: z.string().email('صيغة البريد الإلكتروني غير صحيحة'),
     phoneCountryCode: z.string().default('+966'),
     phoneNumber: z.string().regex(/^\d+$/, 'رقم الجوال يجب أن يحتوي على أرقام فقط').min(9, 'رقم الجوال غير صحيح'),

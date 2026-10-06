@@ -1,8 +1,9 @@
 import { z } from 'zod';
+import { sanitizedText } from '../utils/sanitize-text';
 
 export const updateBasicsSchema = z.object({
-  firstName: z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل').optional(),
-  lastName: z.string().min(2, 'الاسم الأخير يجب أن يكون حرفين على الأقل').optional(),
+  firstName: sanitizedText(z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل')).optional(),
+  lastName: sanitizedText(z.string().min(2, 'الاسم الأخير يجب أن يكون حرفين على الأقل')).optional(),
   email: z.string().email('البريد الإلكتروني غير صحيح').optional(),
   phoneNumber: z.string().optional()
 });

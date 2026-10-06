@@ -3,6 +3,7 @@ import { AppError } from '../utils/app-error';
 import { providerProfileService } from '../services/provider-profile.service';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
+import { sanitizeText } from '../utils/sanitize-text';
 import { sessionService } from '../services/session.service';
 import { computeProviderCompletion } from '../utils/completion-calculators';
 
@@ -126,7 +127,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			city: details?.city,
 			industry: details?.occupation,
 			address: details?.address,
-			bio: details?.bio,
+			bio: typeof details?.bio === 'string' ? sanitizeText(details.bio) : details?.bio,
 			languages: details?.languages || [],
 			yearsOfExperience: details?.expYears ?
 				(details.expYears === 'أقل من سنة' ? 1 :

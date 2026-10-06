@@ -1,7 +1,10 @@
-import { z } from 'zod';export const updateProfileSchema = z.object({
+import { z } from 'zod';
+import { sanitizedText } from '../utils/sanitize-text';
+
+export const updateProfileSchema = z.object({
 	// Basic User fields
-	firstName: z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل').optional().nullable(),
-	lastName: z.string().min(2, 'الاسم الأخير يجب أن يكون حرفين على الأقل').optional().nullable(),
+	firstName: sanitizedText(z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل')).optional().nullable(),
+	lastName: sanitizedText(z.string().min(2, 'الاسم الأخير يجب أن يكون حرفين على الأقل')).optional().nullable(),
 	phoneNumber: z.string().optional().nullable(),
 	avatarUrl: z.string().optional().nullable().or(z.literal('')),
 
@@ -10,7 +13,7 @@ import { z } from 'zod';export const updateProfileSchema = z.object({
 	companySize: z.string().optional().nullable().or(z.literal('')),
 	industry: z.string().optional().nullable().or(z.literal('')),
 	website: z.string().url('رابط الموقع غير صحيح').or(z.literal('')).nullable().optional(),
-	bio: z.string().max(1000, 'النبذة يجب أن لا تتجاوز 1000 حرف').optional().nullable().or(z.literal('')),
+	bio: sanitizedText(z.string().max(1000, 'النبذة يجب أن لا تتجاوز 1000 حرف')).optional().nullable().or(z.literal('')),
 
 	// Provider Profile fields
 	skills: z.array(z.string()).optional().nullable(),

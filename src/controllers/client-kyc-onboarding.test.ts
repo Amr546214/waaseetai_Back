@@ -34,7 +34,7 @@ const prisma: any = {
     },
     findUnique: async () => ({ kycStatus: S.kyc, firstName: null, lastName: null, avatarUrl: null, bio: null, city: null, country: null, isNafathVerified: true, ...(publicKyc ? { kycStatus: publicKyc } : {}) }),
   },
-  user: { findUnique: async () => ({ id: 'u1', status: 'ACTIVE', firstName: 'a', lastName: 'b', avatarUrl: null, createdAt: new Date() }) },
+  user: { findUnique: async () => ({ id: 'u1', status: 'ACTIVE', firstName: 'a', lastName: 'b', avatarUrl: null, createdAt: new Date() }), update: async () => ({}) },
   project: { count: async () => 0 }, contract: { count: async () => 0 },
   review: { count: async () => 0, aggregate: async () => ({ _avg: { rating: null } }), findMany: async () => [] },
   $transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops({})),
