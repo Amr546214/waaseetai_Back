@@ -4,6 +4,7 @@ import { authenticate } from '../middlewares/auth.middleware';
 import { validateDto } from '../middlewares/validate-dto.middleware';
 import { createConversationSchema } from '../dtos/chat.dto';
 import { memoryUpload } from '../utils/cloudinary-storage';
+import { CHAT_UPLOAD_MIME_TYPES } from '../utils/upload-mime-types';
 
 const router = Router();
 
@@ -33,7 +34,7 @@ router.get(
 router.post(
   '/upload',
   authenticate,
-  memoryUpload({ fileSize: 25 * 1024 * 1024, files: 1 }).single('file'),
+  memoryUpload({ fileSize: 25 * 1024 * 1024, files: 1, allowedMimeTypes: CHAT_UPLOAD_MIME_TYPES }).single('file'),
   chatController.uploadAttachment
 );
 

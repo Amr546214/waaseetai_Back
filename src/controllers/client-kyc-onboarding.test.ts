@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 process.env.OPENAI_API_KEY = 'test-key';
 process.env.JWT_SECRET = 'test-secret';
+process.env.CLOUDINARY_CLOUD_NAME = 'testcloud'; // KYC fields accept only data: URIs or URLs inside our own Cloudinary account
 
 // AUD-FND-000044: submitting the client setup wizard with complete identity documents creates/refreshes a PENDING ClientOnboarding row
 // (what the admin review list reads); admin decisions flow back to kycStatus; the public client `isVerified` comes from kycStatus.
@@ -57,7 +58,7 @@ function reset(init: { onboarding?: Onb; kyc?: string } = {}) {
   S.onboarding = init.onboarding ?? null; S.kyc = init.kyc ?? 'UNVERIFIED'; S.creates = 0; S.updates = []; S.kycUpdates = []; adminKyc = []; publicKyc = '';
 }
 
-async function submit(_t: TestContext, init: { onboarding?: Onb; kyc?: string }, identity: any = { frontId: 'https://cdn/f.jpg', backId: 'https://cdn/b.jpg' }, idNumber = '1234567890') {
+async function submit(_t: TestContext, init: { onboarding?: Onb; kyc?: string }, identity: any = { frontId: 'https://res.cloudinary.com/testcloud/image/upload/f.jpg', backId: 'https://res.cloudinary.com/testcloud/image/upload/b.jpg' }, idNumber = '1234567890') {
   reset(init);
   const { ClientProfileController } = await load();
   const res: any = { statusCode: 0, body: null, status(c: number) { this.statusCode = c; return this; }, json(b: any) { this.body = b; return this; } };
@@ -70,18 +71,18 @@ test('#44 complete identity documents create a PENDING ClientOnboarding row and 
   const S = await submit(t, {});
   assert.equal(S.creates, 1);
   assert.equal(S.onboarding?.status, 'PENDING');
-  assert.equal(S.onboarding?.documentUrl, 'https://cdn/f.jpg');
+  assert.equal(S.onboarding?.documentUrl, 'https://res.cloudinary.com/testcloud/image/upload/f.jpg');
   assert.equal(S.kyc, 'PENDING');
 });
 
 test('#44 incomplete documents (no back side) create nothing and leave kycStatus alone', async (t) => {
-  const a = await submit(t, {}, { frontId: 'https://cdn/f.jpg' });
+  const a = await submit(t, {}, { frontId: 'https://res.cloudinary.com/testcloud/image/upload/f.jpg' });
   assert.equal(a.creates, 0);
   assert.equal(a.kyc, 'UNVERIFIED');
 });
 
 test('#44 no id number → nothing created, kycStatus untouched', async (t) => {
-  const b = await submit(t, {}, { frontId: 'x', backId: 'y' }, '');
+  const b = await submit(t, {}, { frontId: 'data:image/png;base64,AAAA', backId: 'data:image/png;base64,AAAA' }, '');
   assert.equal(b.creates, 0);
   assert.equal(b.kyc, 'UNVERIFIED');
 });
@@ -91,7 +92,7 @@ test('#44 re-submitting while PENDING does not duplicate the record (documents a
   const S = await submit(t, { onboarding: row, kyc: 'PENDING' });
   assert.equal(S.creates, 0);
   assert.equal(S.onboarding?.status, 'PENDING');
-  assert.equal(S.onboarding?.documentUrl, 'https://cdn/f.jpg');
+  assert.equal(S.onboarding?.documentUrl, 'https://res.cloudinary.com/testcloud/image/upload/f.jpg');
 });
 
 test('#44 an APPROVED client is never pushed back: the record and a VERIFIED kycStatus stay as they are', async (t) => {

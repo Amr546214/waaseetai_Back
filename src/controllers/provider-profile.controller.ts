@@ -4,6 +4,7 @@ import { providerProfileService } from '../services/provider-profile.service';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { sanitizeText } from '../utils/sanitize-text';
+import { assertKycFileValues } from '../utils/kyc-value-guard';
 import { sessionService } from '../services/session.service';
 import { computeProviderCompletion } from '../utils/completion-calculators';
 
@@ -110,6 +111,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			skillConnections = rows.map(({ id }) => ({ id }));
 		}
 
+		assertKycFileValues([identity?.frontId, identity?.backId, documents?.supportingDocs, ...(identity?.certs || [])]);
 		const [frontIdUrl, backIdUrl, supportingDocsUrl] = await Promise.all([
 			storeDataUriIfNeeded(identity?.frontId, `waseetai/providers/${userId}/identity`, 'front-id'),
 			storeDataUriIfNeeded(identity?.backId, `waseetai/providers/${userId}/identity`, 'back-id'),
