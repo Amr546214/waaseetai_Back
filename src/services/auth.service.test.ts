@@ -41,7 +41,7 @@ function createVerifyOtpMockPrisma(t: TestContext, opts: {
     affiliateProfile: { findUnique: async () => affiliateState, create: affiliateCreateSpy }
   };
 
-  const findValidOtpSpy = t.mock.fn(async () => ({ id: 'otp-1', expiresAt: new Date(Date.now() + 60_000) }));
+  const findValidOtpSpy = t.mock.fn(async () => ({ id: 'otp-1', code: '123456', attempts: 0, expiresAt: new Date(Date.now() + 60_000) }));
   const updateUserStatusSpy = t.mock.fn(async () => updatedUserFixture);
   const deleteUserOtpsSpy = t.mock.fn(async () => ({ count: 1 }));
   const sessionRegisterSpy = t.mock.fn(async () => ({}));
@@ -49,7 +49,7 @@ function createVerifyOtpMockPrisma(t: TestContext, opts: {
   t.mock.module('../repositories/auth.repository', {
     namedExports: {
       authRepository: {
-        findValidOtp: findValidOtpSpy,
+        findLatestActivationOtp: findValidOtpSpy,
         updateUserStatus: updateUserStatusSpy,
         deleteUserOtps: deleteUserOtpsSpy
       }

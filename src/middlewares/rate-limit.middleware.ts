@@ -1,4 +1,4 @@
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import dotenv from 'dotenv';
 import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/app-error';
@@ -90,3 +90,45 @@ export const otpSendLimiter = (recipient: (req: Request) => string | undefined) 
       { code: 'OTP_RATE_LIMITED', reason: result.reason, retryAfterSeconds: result.retryAfterSeconds }
     ]));
   };
+
+/** Lower-cased, trimmed identifier (email / user id) so differently-written forms of the same account share one bucket. */
+export const normalizeOtpIdentifier = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const v = value.trim().toLowerCase();
+  return v || undefined;
+};
+
+/** Bucket key of the OTP-verification limiter: the client address AND the normalised identifier. */
+export const otpVerifyKey = (ip: string | undefined, identifier: string | undefined): string => `${ipKeyGenerator(ip || '0.0.0.0')}|${identifier ?? '-'}`;
+
+/**
+ * Limiters for the endpoints that VERIFY a code (verify-otp, verify-reset-code, reset-password). Mounted AFTER the schema validation, so
+ * malformed requests never reach them, and keyed by IP + normalised identifier, so a third party cannot lock another user out by
+ * hammering that user's email/userId from a different address. Successful requests are not counted (`skipSuccessfulRequests`). A
+ * second, looser per-IP bucket stops one address from cycling through identifiers. The per-code attempt lock (5 guesses) is the
+ * real brute-force defence; these only bound the request volume.
+ */
+export const otpVerifyLimiters = (identifier: (req: Request) => unknown) => [
+  rateLimit({
+    windowMs: AUTH_RATE_LIMIT_WINDOW_MS,
+    max: AUTH_RATE_LIMIT_MAX,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: true,
+    skip: skipWhenRateLimitDisabled,
+    validate: { keyGeneratorIpFallback: false }, // the key is built with ipKeyGenerator() inside otpVerifyKey()
+    keyGenerator: (req) => otpVerifyKey(req.ip, normalizeOtpIdentifier(identifier(req))),
+    handler: (req, res, next) => { next(rateLimited(req, res, 'محاولات كثيرة، حاول مرة أخرى بعد')); }
+  }),
+  rateLimit({
+    windowMs: AUTH_RATE_LIMIT_WINDOW_MS,
+    max: AUTH_RATE_LIMIT_MAX * 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: true,
+    skip: skipWhenRateLimitDisabled,
+    validate: { keyGeneratorIpFallback: false },
+    keyGenerator: (req) => ipKeyGenerator(req.ip || '0.0.0.0'),
+    handler: (req, res, next) => { next(rateLimited(req, res, 'محاولات كثيرة، حاول مرة أخرى بعد')); }
+  })
+];

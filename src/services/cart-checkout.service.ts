@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { ContractStatus, EscrowStatus, OrderStatus, OtpType, ProjectStageStatus, ProjectStatus, Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
@@ -123,7 +124,7 @@ function resolveProviderCardFields(provider: {
 
 export class CartCheckoutService {
   private paymentOtpContext(orderId: string, paymentReference: string, paymentMethod: string) {
-    return { purpose: 'checkout_payment', orderId, paymentReference, paymentMethod };
+    return { purpose: OtpPurpose.CHECKOUT_PAYMENT, orderId, paymentReference, paymentMethod };
   }
 
   private maskEmail(email?: string | null) {
@@ -282,7 +283,7 @@ export class CartCheckoutService {
 
   private async getPaymentOtp(userId: string, orderId: string) {
     const records = await prisma.otpVerification.findMany({ where: { userId, type: OtpType.EMAIL }, orderBy: { createdAt: 'desc' }, take: 20 });
-    return records.find(record => (record.context as any)?.purpose === 'checkout_payment' && (record.context as any)?.orderId === orderId);
+    return records.find(record => (record.context as any)?.purpose === OtpPurpose.CHECKOUT_PAYMENT && (record.context as any)?.orderId === orderId);
   }
 
   async initPayment(userId: string, orderId: string, paymentMethod: string) {
@@ -341,8 +342,19 @@ export class CartCheckoutService {
     if (!order) throw new AppError('الطلب غير موجود', 404);
     if (order.status !== OrderStatus.PENDING_PAYMENT) throw new AppError('الطلب مدفوع مسبقاً أو غير قابل للدفع', 400);
     const otp = await this.getPaymentOtp(userId, orderId);
+    if (otp && otp.attempts >= OTP_MAX_ATTEMPTS) {
+      await prisma.otpVerification.delete({ where: { id: otp.id } });
+      throw new AppError(OTP_LOCKED_MESSAGE, 429);
+    }
     if (!otp || otp.expiresAt < new Date() || otp.code !== otpCode) {
-      if (otp) await prisma.otpVerification.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } });
+      if (otp) {
+        // every wrong guess counts and the fifth deletes the code (AUD-FND-000030)
+        if (otp.attempts + 1 >= OTP_MAX_ATTEMPTS) {
+          await prisma.otpVerification.delete({ where: { id: otp.id } });
+          throw new AppError(OTP_LOCKED_MESSAGE, 429);
+        }
+        await prisma.otpVerification.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } });
+      }
       throw new AppError('رمز التحقق غير صحيح', 400);
     }
     const context = otp.context as any;

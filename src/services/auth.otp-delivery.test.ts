@@ -90,7 +90,7 @@ test('resend: SMTP failure -> emailSent=false; success -> true', async (t) => {
 });
 
 test('resend with a still-valid code re-sends THE SAME code and does not replace or delete it', async (t) => {
-  const { sent, created, spies } = setup(t, { latestActivation: { code: '555111', expiresAt: new Date(Date.now() + 6 * MIN) } });
+  const { sent, created, spies } = setup(t, { latestActivation: { code: '555111', attempts: 0, expiresAt: new Date(Date.now() + 6 * MIN) } });
   const { authService } = await load();
   const result = await authService.resendOtp('user-1');
   assert.deepEqual(result, { emailSent: true, reused: true });
@@ -100,7 +100,7 @@ test('resend with a still-valid code re-sends THE SAME code and does not replace
 });
 
 test('resend after the code expired creates a NEW code (10 minutes), replacing only the old activation codes', async (t) => {
-  const { sent, created, spies } = setup(t, { latestActivation: { code: '555111', expiresAt: new Date(Date.now() - MIN) } });
+  const { sent, created, spies } = setup(t, { latestActivation: { code: '555111', attempts: 0, expiresAt: new Date(Date.now() - MIN) } });
   const { authService } = await load();
   const result = await authService.resendOtp('user-1');
   assert.equal(result.reused, false);

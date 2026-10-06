@@ -13,6 +13,8 @@ import { LEVEL_MATRIX } from './gamification.service';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { computeProviderCompletion, computeProviderMissingItems } from '../utils/completion-calculators';
 import { logger } from '../config/logger';
+import { OtpPurpose, OTP_MAX_ATTEMPTS } from '../utils/otp-purpose';
+import { sessionService } from './session.service';
 import { initializeRoleState } from './account-management.service';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 import { buildAssessmentDetails, buildCompanySummary, withSpecialtyName } from './provider-public-profile.helpers';
@@ -82,6 +84,8 @@ export class ProviderProfileService {
 
     const password = await bcrypt.hash(newPassword, 12);
     await prisma.user.update({ where: { id: userId }, data: { password } });
+    // other devices are signed out (AUD-FND-000034); the session that made the change stays
+    await sessionService.revokeAll(userId, 'PASSWORD_CHANGED', auditContext?.sessionId);
     await this.logAppliedChange(userId, 'SECURITY', 'تغيير كلمة المرور', 'قيمة محمية', 'قيمة محمية');
     await accountAuditLogService.record({ userId, eventType: 'PASSWORD_CHANGED', category: 'SECURITY_CHANGE', title: 'تغيير كلمة المرور', summary: 'تم تغيير كلمة مرور الحساب بنجاح', source: 'USER', severity: 'CRITICAL', context: auditContext });
     return { changedAt: new Date() };
@@ -991,16 +995,17 @@ export class ProviderProfileService {
 			}
 		});
 
-		await prisma.otpVerification.deleteMany({ where: { userId: providerId, type: 'EMAIL' } });
+		// only this purpose's previous codes are replaced (activation / reset / checkout codes of the same user are left alone)
+		await prisma.otpVerification.deleteMany({ where: { userId: providerId, type: 'EMAIL', context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } } });
 		const code = crypto.randomInt(100000, 1000000).toString();
 		await prisma.otpVerification.create({
-			data: { userId: providerId, code, type: 'EMAIL', expiresAt: new Date(Date.now() + 10 * 60 * 1000) }
+			data: { userId: providerId, code, type: 'EMAIL', expiresAt: new Date(Date.now() + 10 * 60 * 1000), context: { purpose: OtpPurpose.SENSITIVE_CHANGE, requestId: request.id } }
 		});
 		try {
 			await notificationService.sendEmailOtp(user.email, code);
 		} catch (error) {
 			await prisma.$transaction([
-				prisma.otpVerification.deleteMany({ where: { userId: providerId, type: 'EMAIL', code } }),
+				prisma.otpVerification.deleteMany({ where: { userId: providerId, type: 'EMAIL', code, context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } } }),
 				prisma.profileModificationRequest.delete({ where: { id: request.id } })
 			]);
 			throw new Error('OTP_EMAIL_DELIVERY_FAILED');
@@ -1014,10 +1019,25 @@ export class ProviderProfileService {
 		const request = await prisma.profileModificationRequest.findFirst({ where: { id: requestId, providerId } });
 		if (!request || request.status !== 'PENDING_OTP') throw new Error('REQUEST_NOT_PENDING_OTP');
 
+		// this request's SENSITIVE_CHANGE code only: any other purpose, or a legacy purpose-less code, never confirms a change
 		const otp = await prisma.otpVerification.findFirst({
-			where: { userId: providerId, code, type: 'EMAIL', expiresAt: { gt: new Date() } },
+			where: {
+				userId: providerId, type: 'EMAIL', expiresAt: { gt: new Date() },
+				AND: [
+					{ context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } },
+					{ context: { path: ['requestId'], equals: requestId } }
+				]
+			},
 			orderBy: { createdAt: 'desc' }
 		});
+		if (otp && (otp.attempts >= OTP_MAX_ATTEMPTS || otp.code !== code)) {
+			// every wrong guess counts; the fifth deletes the code (the request stays pending, a new code must be requested)
+			const attempts = otp.attempts + 1;
+			if (attempts >= OTP_MAX_ATTEMPTS) await prisma.otpVerification.delete({ where: { id: otp.id } });
+			else await prisma.otpVerification.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } });
+			await accountAuditLogService.record({ userId: providerId, eventType: 'OTP_VERIFICATION_REJECTED', category: 'SECURITY_CHANGE', title: 'تأكيد طلب تعديل حساس', summary: 'فشلت محاولة تأكيد الطلب لأن الرمز غير صحيح', source: 'USER', severity: 'WARNING', status: 'REJECTED', requestId });
+			throw new Error(attempts >= OTP_MAX_ATTEMPTS ? 'OTP_ATTEMPTS_EXCEEDED' : 'INVALID_OR_EXPIRED_OTP');
+		}
 		if (!otp) {
 			await accountAuditLogService.record({ userId: providerId, eventType: 'OTP_VERIFICATION_REJECTED', category: 'SECURITY_CHANGE', title: 'تأكيد طلب تعديل حساس', summary: 'فشلت محاولة تأكيد الطلب لأن الرمز غير صحيح أو منتهي', source: 'USER', severity: 'WARNING', status: 'REJECTED', requestId, context: auditContext });
 			throw new Error('INVALID_OR_EXPIRED_OTP');

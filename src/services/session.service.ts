@@ -49,6 +49,29 @@ class SessionService {
     await accountAuditLogService.record({ userId, eventType: 'SESSION_REVOKED', category: 'SECURITY_CHANGE', title: 'إنهاء جلسة دخول', summary: 'تم إنهاء وصول جهاز آخر إلى الحساب', source: 'USER', severity: 'WARNING', status: 'COMPLETED', requestId: sessionId, context: { sessionId: currentSessionId } });
   }
 
+  /**
+   * Ends EVERY active session of the account (optionally keeping one, e.g. the device that just changed the password). Used when the
+   * password is reset or changed (AUD-FND-000034). Revoked rows are rejected by validateOrRegister() on the next request.
+   */
+  async revokeAll(userId: string, reason: 'PASSWORD_RESET' | 'PASSWORD_CHANGED', exceptSessionId?: string) {
+    const result = await prisma.userSession.updateMany({
+      where: { userId, revokedAt: null, ...(exceptSessionId ? { id: { not: exceptSessionId } } : {}) },
+      data: { revokedAt: new Date() }
+    });
+    await accountAuditLogService.record({
+      userId,
+      eventType: 'SESSIONS_REVOKED_ALL',
+      category: 'SECURITY_CHANGE',
+      title: 'إنهاء جميع جلسات الدخول',
+      summary: reason === 'PASSWORD_RESET' ? 'تم إنهاء جميع جلسات الدخول بعد إعادة تعيين كلمة المرور' : 'تم إنهاء جلسات الدخول الأخرى بعد تغيير كلمة المرور',
+      source: 'SYSTEM',
+      severity: 'WARNING',
+      status: 'COMPLETED',
+      details: { revokedSessions: result.count, reason }
+    });
+    return result;
+  }
+
   async logout(userId: string, token: string, context?: SessionContext) {
     const hash = this.tokenHash(token);
     await prisma.userSession.updateMany({
