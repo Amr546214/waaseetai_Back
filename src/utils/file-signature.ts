@@ -36,3 +36,9 @@ export function contentMatchesDeclaredType(buf: Buffer, mimeType: string): boole
 	if (!expected) return true;
 	return detectFileKind(buf) === expected;
 }
+
+/** true when the content is markup (SVG / XML / HTML) rather than a binary document: it starts with "<" after optional BOM/whitespace. */
+export function looksLikeMarkup(buf: Buffer): boolean {
+	const head = buf.subarray(0, 512).toString('utf8').replace(/^\uFEFF/, '').trimStart().toLowerCase();
+	return head.startsWith('<svg') || head.startsWith('<?xml') || head.startsWith('<!doctype') || head.startsWith('<html') || head.startsWith('<script');
+}

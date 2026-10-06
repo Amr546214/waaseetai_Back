@@ -56,7 +56,7 @@ function mockDb(t: TestContext, o: { userStatus?: string; providerKyc?: string; 
 }
 
 const providerBody = (identityExtra: any = {}) => ({
-  details: { idNumber: '1234567890', occupation: 'مصمم', expYears: '3 الى 5 سنوات' }, identity: { frontId: 'a', backId: 'b', certs: [], ...identityExtra },
+  details: { idNumber: '1234567890', occupation: 'مصمم', expYears: '3 الى 5 سنوات' }, identity: { frontId: 'data:image/png;base64,AAAA', backId: 'data:image/png;base64,AAAA', certs: [], ...identityExtra },
   bank: {}, documents: {}, agreements: { accurate: true, terms: true, privacy: true }, specialties: {}, portfolio: null,
 });
 
@@ -106,7 +106,7 @@ test('#48 provider setup: a first submission moves UNVERIFIED/REJECTED to PENDIN
 test('#48 client setup: the body cannot set isNafathVerified/kycStatus/isVerified and an existing kycStatus is not overwritten', async (t) => {
   const w = mockDb(t);
   const { ClientProfileController } = await import(`./client-profile.controller.ts?f=${Date.now()}-${Math.random()}`);
-  const body: any = { details: { idNumber: '1234567890' }, identity: { frontId: 'a', backId: 'b', isNafathVerified: true, kycStatus: 'VERIFIED' }, documents: {}, agreements: {}, bank: {}, isNafathVerified: true, kycStatus: 'VERIFIED', isVerified: true };
+  const body: any = { details: { idNumber: '1234567890' }, identity: { frontId: 'data:image/png;base64,AAAA', backId: 'data:image/png;base64,AAAA', isNafathVerified: true, kycStatus: 'VERIFIED' }, documents: {}, agreements: {}, bank: {}, isNafathVerified: true, kycStatus: 'VERIFIED', isVerified: true };
   const res = mockRes();
   await new ClientProfileController().saveSetupData({ user: { userId: 'u1' }, body } as any, res, (e: any) => { throw e; });
   const up = w.clientUpsert[0];

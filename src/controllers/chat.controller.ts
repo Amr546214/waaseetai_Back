@@ -1,6 +1,15 @@
 import { Request, Response, NextFunction } from 'express';
 import { chatService } from '../services/chat.service';
 import { uploadDataUri, uploadMulterFile } from '../utils/cloudinary-storage';
+import { CHAT_UPLOAD_MIME_TYPES } from '../utils/upload-mime-types';
+import { AppError } from '../utils/app-error';
+
+// A base64 attachment carries its MIME type in the data: header; it must be one of the chat allow-list (same set as the multipart route).
+async function uploadDataUriChecked(fileData: string, userId: string, fileName?: string) {
+  const mime = /^data:([^;,]+)/.exec(fileData)?.[1]?.toLowerCase() ?? '';
+  if (!CHAT_UPLOAD_MIME_TYPES.has(mime)) throw new AppError('نوع الملف غير مسموح به', 400);
+  return uploadDataUri(fileData, { folder: `waseetai/chat/${userId}`, fileName: fileName || 'attachment', maxBytes: 25 * 1024 * 1024 });
+}
 
 export class ChatController {
   /**
@@ -76,9 +85,9 @@ export class ChatController {
       const { fileData, fileName, fileType, fileSize, audioDuration } = req.body;
       const userId = (req.user as any).userId || (req.user as any).id;
       const stored = req.file
-        ? await uploadMulterFile(req.file, `waseetai/chat/${userId}`)
+        ? await uploadMulterFile(req.file, `waseetai/chat/${userId}`, 25 * 1024 * 1024)
         : typeof fileData === 'string' && fileData.startsWith('data:')
-          ? await uploadDataUri(fileData, { folder: `waseetai/chat/${userId}`, fileName: fileName || 'attachment' })
+          ? await uploadDataUriChecked(fileData, userId, fileName)
           : null;
       if (!stored) throw new Error('A multipart file or Base64 data URI is required');
 

@@ -3,6 +3,7 @@ import { SpecialtyVerificationStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { evaluateSpecialtyWithAI } from '../controllers/specialty-ai.controller';
 import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
+import { SPECIALTY_UPLOAD_MIME_TYPES } from '../utils/upload-mime-types';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
@@ -10,7 +11,7 @@ import { requireOwnedProviderSpecialtyFromBody, requireOwnedProviderSpecialtyFro
 
 const router = Router();
 
-const upload = memoryUpload({ fileSize: 15 * 1024 * 1024, files: 30 });
+const upload = memoryUpload({ fileSize: 15 * 1024 * 1024, files: 30, allowedMimeTypes: SPECIALTY_UPLOAD_MIME_TYPES });
 const providerAuth = [
   authenticate,
   requireActiveUser,

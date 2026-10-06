@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
+import { assertKycFileValues } from '../utils/kyc-value-guard';
 import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
 import { logger } from '../config/logger';
 import { computeClientCompletion, computeClientMissingItems } from '../utils/completion-calculators';
@@ -90,6 +91,7 @@ export class ClientProfileController {
         return res.status(400).json({ success: false, message: 'IBAN must be exactly 24 characters.' });
       }
 
+      assertKycFileValues([identity.frontId, identity.backId, documents.supportingDocs]);
       const [frontIdUrl, backIdUrl, supportingDocsUrl] = await Promise.all([
         storeDataUriIfNeeded(identity.frontId, `waseetai/clients/${userId}/identity`, 'front-id'),
         storeDataUriIfNeeded(identity.backId, `waseetai/clients/${userId}/identity`, 'back-id'),

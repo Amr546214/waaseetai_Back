@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import { specialtyController } from '../controllers/specialty.controller';
 import { memoryUpload } from '../utils/cloudinary-storage';
+import { SPECIALTY_UPLOAD_MIME_TYPES } from '../utils/upload-mime-types';
 import { AccountType } from '@prisma/client';
 import { requireActiveUser, authenticate, authorize } from '../middlewares/auth.middleware';
 import { requireOwnedProviderSpecialtyFromBody } from '../utils/provider-specialty-access';
 
-const upload = memoryUpload({ files: 30 });
+const upload = memoryUpload({ files: 30, allowedMimeTypes: SPECIALTY_UPLOAD_MIME_TYPES });
 
 const router = Router();
 const providerAuth = [
