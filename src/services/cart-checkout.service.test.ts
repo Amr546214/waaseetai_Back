@@ -268,11 +268,11 @@ test('createOrder: falls back to legacy User identity when ProviderProfile displ
 
 // --- Wallet-only internal purchasing (USD-canonical) ------------------------
 // WaseetAI Wallet is the ONLY accepted internal payment method. PayPal/
-// Moyasar/card/STC Pay/Apple Pay are wallet TOP-UP rails only — never a
+// PayPal is the wallet TOP-UP rail only — never a
 // direct checkout payment method. Enforced at the SERVICE layer (not just
 // the controller's zod schema) so a raw request to this endpoint using any
 // other value is rejected regardless of frontend behavior. order.total is
-// treated as USD for active purchasing — no SAR->USD conversion anywhere.
+// treated as USD for active purchasing — no currency conversion anywhere.
 
 test('getPaymentMethods: wallet is the ONLY method offered, with the balance exposed', async (t) => {
   t.mock.module('../config/db', {
@@ -285,12 +285,12 @@ test('getPaymentMethods: wallet is the ONLY method offered, with the balance exp
 
   const methods = await cartCheckoutService.getPaymentMethods('user-1');
 
-  assert.deepEqual(methods.map((m: any) => m.id), ['wallet'], 'no card/moyasar/stc_pay/apple_pay option may ever be advertised');
+  assert.deepEqual(methods.map((m: any) => m.id), ['wallet'], 'no card/stc_pay/apple_pay option may ever be advertised');
   assert.equal(methods[0].available, true);
   assert.equal(methods[0].balance, 250);
 });
 
-for (const rejected of ['card', 'moyasar', 'stc_pay', 'apple_pay', 'paypal', 'bank', 'cash', '']) {
+for (const rejected of ['card', 'stc_pay', 'apple_pay', 'paypal', 'bank', 'cash', '']) {
   test(`initPayment: "${rejected || '(empty string)'}" is rejected before any DB lookup — wallet is the only accepted method`, async (t) => {
     const orderFindFirstSpy = t.mock.fn(async () => {
       throw new Error('should not be reached — method validation must reject first');
@@ -429,7 +429,7 @@ test('confirmPayment: sufficient balance — wallet debited exactly once, Wallet
   assert.equal(walletTransactions.length, 1);
   assert.equal(walletTransactions[0].type, 'ORDER_PAYMENT');
   assert.equal(walletTransactions[0].amount, -100);
-  assert.equal(walletTransactions[0].currency, 'USD', 'active purchasing is treated as USD, never SAR');
+  assert.equal(walletTransactions[0].currency, 'USD', 'active purchasing is USD');
   assert.equal(walletTransactions[0].paymentMethod, 'WALLET');
   assert.equal(tx.escrow.create.mock.callCount(), 1);
   assert.equal(tx.escrow.create.mock.calls[0].arguments[0].data.paymentMethod, 'WALLET');

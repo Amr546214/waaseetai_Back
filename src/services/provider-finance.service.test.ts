@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 // provider-finance.service.ts::getWallet() is purely computed from Escrow/
 // Contract/ProjectStage — it never reads/writes User.walletBalance at all.
 // Regression guard for the USD-canonical transition: only the currency
-// LABEL changes (SAR -> USD); the summation arithmetic must stay byte-for-
+// LABEL is USD; the summation arithmetic must stay byte-for-
 // byte identical, since the source amounts were never converted.
 
 function createEscrowMockPrisma(t: TestContext, escrows: any[]) {

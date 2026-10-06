@@ -104,7 +104,7 @@ export interface StageReleaseCommissionContext {
  * default): returns immediately after the flag check below — a complete
  * no-op, zero reads, zero writes, zero side effects, identical behavior to
  * before this function existed. See affiliate-commission-engine.util.ts for
- * why this stays off by default (the USD-vs-SAR currency gate).
+ * the flag convention.
  *
  * Dispute safety: if the project currently has an OPEN or UNDER_REVIEW
  * Dispute, this skips commission creation entirely for this release event.
@@ -159,11 +159,7 @@ export async function createCommissionsForStageReleaseEvent(
           referredUserId: referral.referredUserId,
           type: CommissionType.STAGE_RELEASE,
           amount,
-          // Explicit per-row currency, deliberately NOT relying on the
-          // CommissionLog schema's "SAR" default — see the CURRENCY GATE
-          // comment on isAffiliateCommissionEngineEnabled() for the full
-          // reasoning. This is the REAL transaction currency (USD), pending
-          // an explicit decision to introduce an approved FX mechanism.
+          // Explicit per-row currency (USD), never the database default.
           currency: 'USD',
           // The eligibility check for this release event (stage actually
           // released, project not currently disputed) has already run

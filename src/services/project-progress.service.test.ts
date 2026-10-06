@@ -593,7 +593,7 @@ test('getPendingReviewDeliveries: the Prisma query requests only the newest deli
 // approve path, at both the intermediate-stage and final-stage escrow
 // release points, inside the SAME transaction. Gated behind
 // AFFILIATE_COMMISSION_ENGINE_ENABLED (default OFF — see
-// affiliate-commission-engine.util.ts for the USD-vs-SAR currency-gate
+// affiliate-commission-engine.util.ts for the flag
 // reasoning this default protects).
 // ============================================================================
 
@@ -652,7 +652,7 @@ test('commission engine (flag enabled, final stage): creates exactly one APPROVE
   assert.equal(data.referralId, 'referral-1');
   assert.equal(data.referredUserId, 'client-1');
   assert.equal(data.type, 'STAGE_RELEASE');
-  assert.equal(data.currency, 'USD'); // never SAR — see the currency-gate reasoning
+  assert.equal(data.currency, 'USD'); // USD
   assert.equal(data.status, 'APPROVED');
   assert.equal(data.baseAmount, 100); // this fixture's final-stage stage.amount
   assert.equal(data.appliedPercentage, 1.5); // level 3 = 'موصل' = 1.50% per P-LG-012

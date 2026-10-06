@@ -1,5 +1,4 @@
-// Thin PayPal REST API client — mirrors moyasar.service.ts's shape (native
-// fetch, no SDK) but is a fully separate gateway implementation. Never logs
+// Thin PayPal REST API client (native fetch, no SDK). Never logs
 // the client secret, the Authorization header, or any OAuth access token.
 
 export interface PaypalAmount {

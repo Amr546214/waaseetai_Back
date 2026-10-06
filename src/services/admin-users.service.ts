@@ -459,7 +459,7 @@ export class AdminUsersService {
       // User.aiRiskLevel / aiRiskScore are never written by any code path —
       // every row carried the schema defaults (LOW / 10), which read as a
       // real risk assessment. No risk engine exists, so no column is emitted.
-      'Total GMV (SAR)',
+      'Total GMV (USD)',
       'Completed Projects',
       'Rating Average',
       'Tier Level',

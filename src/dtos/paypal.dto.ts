@@ -1,9 +1,7 @@
 import { z } from 'zod';
 
-// Same numeric bounds as the existing Moyasar wallet deposit (client-finance
-// service), now denominated in USD per this task's explicit PayPal-is-USD-only
-// decision. No FX conversion — this is a deliberate reuse of the existing
-// limit, not a derived/converted value.
+// PayPal is the only wallet deposit rail and is denominated in USD. The 50 / 100,000 bounds are the existing limits
+// (no conversion); the owner may set the final USD values.
 export const createPaypalOrderSchema = z.object({
   amount: z.number().finite().min(50, 'الحد الأدنى للإيداع عبر PayPal هو 50').max(100000, 'الحد الأقصى للإيداع عبر PayPal هو 100,000')
 });

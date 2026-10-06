@@ -134,8 +134,8 @@ test('getBrokerDetail: throws a real 404 for a broker that does not exist', asyn
 test('getBrokerDetail: returns real channels, channelMetrics, customLinks, and recentCommissions (with real referred-user name when present)', async (t) => {
 	const createdAt = new Date();
 	const recentCommissionRows = [
-		{ type: 'NEW_CLIENT_REQUEST', amount: 25, currency: 'SAR', status: 'APPROVED', createdAt, referral: { referredUser: { firstName: 'خالد', lastName: 'العتيبي' } } },
-		{ type: 'SUBSCRIPTION', amount: 10, currency: 'SAR', status: 'PENDING', createdAt, referral: null },
+		{ type: 'NEW_CLIENT_REQUEST', amount: 25, currency: 'USD', status: 'APPROVED', createdAt, referral: { referredUser: { firstName: 'خالد', lastName: 'العتيبي' } } },
+		{ type: 'SUBSCRIPTION', amount: 10, currency: 'USD', status: 'PENDING', createdAt, referral: null },
 	];
 	const { adminBrokersService } = await loadService(t, {
 		findUnique: affiliateFixture({

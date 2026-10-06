@@ -178,7 +178,7 @@ async function main() {
   console.log(`  Email:    ${clientEmail}`);
   console.log(`  Password: ${clientPassword}`);
   console.log(`  ID:       ${client.id}`);
-  console.log(`  Wallet:   10000 SAR\n`);
+  console.log(`  Wallet:   10000 USD\n`);
   console.log(`Provider:`);
   console.log(`  Email:    ${providerEmail}`);
   console.log(`  Password: ${providerPassword}`);
@@ -187,7 +187,7 @@ async function main() {
   console.log(`  ID:       ${service.id}`);
   console.log(`  Title:    ${service.title}`);
   console.log(`  Status:   APPROVED`);
-  console.log(`  Amount:   500 SAR`);
+  console.log(`  Amount:   500 USD`);
   console.log(`  Days:     7`);
   console.log(`  Stages:   3\n`);
   console.log(`Admin (existing):`);

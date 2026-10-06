@@ -5,9 +5,7 @@ import { LogCategory, LogStatus, Prisma, PaypalPaymentStatus } from '@prisma/cli
 import { randomUUID } from 'crypto';
 import { AppError } from '../utils/app-error';
 
-// Same numeric bounds as the existing Moyasar deposit flow, now in USD (see
-// dtos/paypal.dto.ts for the shared rationale — this is a deliberate reuse
-// of the existing limit, not a converted value).
+// USD deposit bounds: see dtos/paypal.dto.ts.
 const MIN_DEPOSIT_USD = 50;
 const MAX_DEPOSIT_USD = 100000;
 
@@ -183,8 +181,8 @@ export class PaypalFinanceService {
 	 * WalletTransaction.referenceId's DB-level unique constraint (not just the
 	 * pre-check) as the real idempotency guarantee — a concurrent duplicate
 	 * insert for the same PayPal capture ID fails atomically (P2002) and is
-	 * treated as "already credited", exactly mirroring the existing Moyasar
-	 * deposit flow's own race handling.
+	 * treated as "already credited", and
+	 * the unique referenceId makes the credit exactly-once.
 	 */
 	private async creditWalletForCapture(payment: { id: string; userId: string }, captureId: string, verifiedAmount: Prisma.Decimal) {
 		const existing = await prisma.walletTransaction.findFirst({ where: { referenceId: captureId } });
