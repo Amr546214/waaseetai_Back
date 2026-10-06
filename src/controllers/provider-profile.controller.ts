@@ -142,8 +142,8 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			frontIdUrl,
 			backIdUrl,
 			certUrls: certUrls.filter(Boolean) as string[],
-			isNafathVerified: identity?.isNafathVerified,
-			kycStatus: 'PENDING' as any,
+			// isNafathVerified / kycStatus / isVerified are NEVER written from this request (AUD-FND-000048): they are read-only here and
+			// change only through a real verification integration or the admin KYC decision (onboarding.service).
 
 			paymentType: bank?.paymentType,
 			bankName: bank?.bankName,
@@ -197,8 +197,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		// with the relations the formula needs (skills/portfolioItems) rather
 		// than trusting `result`, which has neither (no `include` was used on
 		// the upsert above). No more User.profileCompletionPercent=100
-		// hardcode; `status: 'ACTIVE'` (identity/activation behavior) is
-		// preserved unchanged.
+		// hardcode.
 		const finalProfile = await prisma.providerProfile.findUnique({
 			where: { userId },
 			include: { skills: true, portfolioItems: true }
@@ -206,9 +205,11 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		const currentUser = await prisma.user.findUnique({ where: { id: userId } });
 		const completion = computeProviderCompletion({ providerProfile: finalProfile || result, user: currentUser || {} });
 
+		// User.status is NOT touched by the setup wizard (AUD-FND-000036): it changes only through OTP activation or an admin decision.
 		const [updatedResult] = await prisma.$transaction([
 			prisma.providerProfile.update({ where: { userId }, data: { completionPercentage: completion } }),
-			prisma.user.update({ where: { id: userId }, data: { status: 'ACTIVE' } })
+			// submitting the wizard marks an UNVERIFIED/REJECTED profile as PENDING review; a VERIFIED one is never downgraded
+			prisma.providerProfile.updateMany({ where: { userId, kycStatus: { in: ['UNVERIFIED', 'REJECTED'] } }, data: { kycStatus: 'PENDING' } })
 		]);
 
 		res.status(200).json({

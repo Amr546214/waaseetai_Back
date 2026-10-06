@@ -13,7 +13,8 @@ async function load(t: TestContext, accountType = AccountType.PROVIDER_INDIVIDUA
     providerProfile: {
       findUnique: async () => ({ id: 'profile', skills: [], portfolioItems: [] }),
       upsert: async (args: any) => { saves.push(args); return { id: 'profile' }; },
-      update: async () => ({})
+      update: async () => ({}),
+      updateMany: async () => ({ count: 0 })
     },
     skill: { findMany: async () => opts.skills ?? [{ id: 'real-css-id', name: 'CSS' }] },
     $transaction: async (ops: any[]) => Promise.all(ops)

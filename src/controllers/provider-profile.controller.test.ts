@@ -63,7 +63,8 @@ function createSetupDataMockPrisma(t: TestContext) {
         return { ...providerProfileState };
       }),
       findUnique: async () => ({ ...providerProfileState }),
-      update: providerProfileUpdateSpy
+      update: providerProfileUpdateSpy,
+      updateMany: async () => ({ count: 0 })
     },
     portfolioItem: {
       deleteMany: async () => ({ count: 0 }),
@@ -141,7 +142,9 @@ test('provider saveSetupData: never writes User.profileCompletionPercent', async
   }
 });
 
-test('provider saveSetupData: preserves existing User.status = ACTIVE write', async (t) => {
+// AUD-FND-000036: replaces the old "preserves existing User.status = ACTIVE write" test — that write let a suspended-for-review provider
+// reactivate itself by saving the wizard, so the wizard must never write User.status.
+test('provider saveSetupData: never writes User.status (the wizard cannot reactivate an account)', async (t) => {
   const { controller, userUpdateSpy } = await loadControllerWithFixture(t);
 
   const req: any = {
@@ -159,8 +162,8 @@ test('provider saveSetupData: preserves existing User.status = ACTIVE write', as
 
   await controller.saveSetupData(req, res);
 
-  const statusCall = userUpdateSpy.mock.calls.find((c: any) => c.arguments[0].data.status === 'ACTIVE');
-  assert.notEqual(statusCall, undefined);
+  const statusCall = userUpdateSpy.mock.calls.find((c: any) => 'status' in c.arguments[0].data);
+  assert.equal(statusCall, undefined);
 });
 
 // Phase 3 Batch 2A — F28: this catch block used to hardcode res.status(500)
