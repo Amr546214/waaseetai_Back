@@ -444,7 +444,7 @@ test('refine mode: upstream failure yields the honest AI_GENERATION_FAILED and n
   assert.ok(!JSON.stringify(emitted).includes(UPSTREAM_SECRET_TEXT));
 });
 
-test('the gateway has no direct-Gemini dependency (no AI pre-check, no fallback)', async () => {
+test('the gateway (WaseetAI-linked) has no internal LlmClient dependency (no AI pre-check, no fallback)', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('./ai-assistant.gateway.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /gemini\.client|geminiClient|generateStructured|generateStream/);

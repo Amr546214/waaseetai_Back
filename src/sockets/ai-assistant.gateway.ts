@@ -14,8 +14,7 @@ export interface GenerateDescriptionDto {
   existingDescription?: string;
 }
 
-// Client-request description generation — served exclusively by WaseetAI.
-// There is no direct-Gemini path or fallback.
+// Client-request description generation — a WaseetAI-linked feature, served by WaseetAI (no internal LlmClient, no fallback).
 //
 // Security note (Batch: F1+F2 streaming, section 7 review): this handler
 // previously had NO authentication check at all — the main Socket.IO

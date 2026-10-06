@@ -474,7 +474,7 @@ test('the status controller maps an AppError to its own status code and keeps 50
   assert.match(missing.body.message, /غير موجودة/);
 });
 
-test('assessment files have no direct-Gemini reference and no kill switch', () => {
+test('assessment files (WaseetAI-linked) have no internal LlmClient reference and no kill switch', () => {
   for (const f of ['./ai-assessment.service.ts', '../controllers/ai-assessment.controller.ts', '../sockets/assessment.gateway.ts']) {
     const src = readFileSync(new URL(f, import.meta.url), 'utf8');
     assert.ok(!/gemini/i.test(src), `${f} must not reference Gemini`);

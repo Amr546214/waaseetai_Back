@@ -2,8 +2,8 @@ import { Request, Response } from 'express';
 import { aiFeatureUnavailablePayload } from '../services/ai/ai-feature-unavailable';
 
 // AI evaluation of a provider specialty is switched off: WaseetAI has no
-// documented contract for it, and all AI must run exclusively through the
-// WaseetAI service (no direct-model calls, no fallback, no fabricated scores).
+// documented contract for it. It is not wired to the internal LlmClient yet (planned
+// separately) and never fabricates scores.
 //
 // This handler deliberately performs NO database access at all: it never moves
 // a specialty into UNDER_AI_REVIEW / TEST_REQUIRED / REJECTED / PENDING_PROOF,

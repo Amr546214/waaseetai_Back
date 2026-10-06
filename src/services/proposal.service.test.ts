@@ -182,7 +182,7 @@ test('createProposal: evaluates with the real fields + milestones; stored match 
   assert.deepEqual(data.aiFeedback, { source: 'WASEET_AI', summary: 'ملخص التقييم' });
 });
 
-test('proposal.service.ts has no direct-Gemini dependency', async () => {
+test('proposal.service.ts (WaseetAI-linked) has no internal LlmClient dependency', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('./proposal.service.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /gemini\.client|geminiClient|generateStructured|generateStream/);
