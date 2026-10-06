@@ -5,6 +5,7 @@ import { initializeRoleState } from './account-management.service';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { normalizeWaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
+import { analyzeNewRequest, readAiAnalysis } from './client-request-analysis';
 import type { RequestDraftResponse } from './ai/waseet-ai/waseet-ai.types';
 import { CreateClientRequestDto, ClientRequestAiSuggestDto } from '../dtos/create-client-request.dto';
 import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
@@ -292,6 +293,14 @@ export class ClientRequestsService {
 			ensureCloudinaryUrl(url, `waseetai/client-requests/${userId}`, `attachment-${index + 1}`)
 		))).filter((url): url is string => Boolean(url));
 
+		// 3b. Real WaseetAI project analysis (null fields on any failure — never blocks creation)
+		const analysis = await analyzeNewRequest({
+			title: dto.title,
+			description: dto.description,
+			budget: maxB || minB,
+			deadlineDays: durationDays
+		});
+
 		// 4. Create ClientRequest in PostgreSQL
 		const clientRequest = await prisma.clientRequest.create({
 			data: {
@@ -316,8 +325,8 @@ export class ClientRequestsService {
 				splitMilestones: dto.splitMilestones === true,
 				milestones: dto.splitMilestones ? (dto.milestones || []) : [],
 				status: RequestStatus.OPEN,
-				aiAnalyzedSummary: `طلب مشروع "${dto.title}" في تخصص ${resolvedSpecialty.nameAr || resolvedSpecialty.name}. الميزانية المقدرة: ${minB || 0} - ${maxB || 0} $.`,
-				aiComplexityRating: 'LOW'
+				aiAnalyzedSummary: analysis.aiAnalyzedSummary,
+				aiComplexityRating: analysis.aiComplexityRating
 			},
 			include: {
 				specialty: true,
@@ -1211,10 +1220,7 @@ export class ClientRequestsService {
 			attachments,
 			proposalsCount: proposals.length,
 			proposals,
-			aiAnalysis: {
-				summary: request.aiAnalyzedSummary || null,
-				complexityRating: request.aiComplexityRating || null
-			},
+			aiAnalysis: readAiAnalysis(request.aiAnalyzedSummary, request.aiComplexityRating),
 			client: {
 				name: (request.clientProfile?.user?.firstName || '') + ' ' + (request.clientProfile?.user?.lastName || ''),
 				email: request.clientProfile?.user?.email || ''
