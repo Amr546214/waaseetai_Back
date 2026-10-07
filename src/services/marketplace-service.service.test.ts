@@ -35,7 +35,7 @@ function makeService(overrides: any = {}) {
     specialty: { name: 'Design', nameAr: 'تصميم', slug: 'design', category: { nameAr: 'فئة', slug: 'cat' } },
     stages: [],
     portfolioItem: null,
-    accreditationSample: null,
+    accreditationSample: { attachments: [], providerSpecialty: { status: 'APPROVED' } },
     reviews: [],
     provider: overrides.provider,
     ...overrides
@@ -50,7 +50,7 @@ function makeProvider(overrides: any = {}) {
     avatarUrl: 'https://legacy.example/avatar.png',
     email: 'provider@example.com',
     currentLevel: 'مستكشف - المستوى 1',
-    providerProfile: { firstName: null, lastName: null, avatarUrl: null, isVerified: false },
+    providerProfile: { firstName: null, lastName: null, avatarUrl: null, isVerified: false, kycStatus: 'VERIFIED' },
     gamification: null,
     ...overrides
   };
@@ -125,7 +125,7 @@ async function loadService(t: TestContext, services: any[], projects: any[] = []
 
 test('getMarketplaceModels: uses ProviderProfile name/avatar over legacy User when both are present', async (t) => {
   const provider = makeProvider({
-    providerProfile: { firstName: 'Provider', lastName: 'Persona', avatarUrl: 'https://provider.example/a.png', isVerified: true }
+    providerProfile: { firstName: 'Provider', lastName: 'Persona', avatarUrl: 'https://provider.example/a.png', isVerified: true, kycStatus: 'VERIFIED' }
   });
   const { marketplaceService } = await loadService(t, [makeService({ provider })]);
 
@@ -147,7 +147,7 @@ test('getMarketplaceModels: falls back to legacy User name/avatar when ProviderP
 
 test('getMarketplaceModelById: uses ProviderProfile name/avatar over legacy User', async (t) => {
   const provider = makeProvider({
-    providerProfile: { firstName: 'Provider', lastName: 'Persona', avatarUrl: 'https://provider.example/a.png', isVerified: true }
+    providerProfile: { firstName: 'Provider', lastName: 'Persona', avatarUrl: 'https://provider.example/a.png', isVerified: true, kycStatus: 'VERIFIED' }
   });
   const { marketplaceService } = await loadService(t, [makeService({ id: 'service-1', provider })]);
 
@@ -280,7 +280,7 @@ test('getMarketplaceModels (level filter): an unrecognized level title matches n
 // --- Cross-role isolation ---------------------------------------------------
 
 test('getMarketplaceModels: no ClientProfile/AffiliateProfile data participates in Provider marketplace display', async (t) => {
-  const provider = makeProvider({ providerProfile: { firstName: 'Provider', lastName: 'Persona', avatarUrl: null, isVerified: true } });
+  const provider = makeProvider({ providerProfile: { firstName: 'Provider', lastName: 'Persona', avatarUrl: null, isVerified: true, kycStatus: 'VERIFIED' } });
   const { marketplaceService } = await loadService(t, [makeService({ provider })]);
 
   const result = await marketplaceService.getMarketplaceModels({});
