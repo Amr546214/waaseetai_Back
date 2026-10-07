@@ -234,6 +234,25 @@ export class AuthController {
 	}
 
 	/**
+	 * GET /auth/account-status — the caller's OWN account status, readable in every state (including suspended / pending), so a blocked
+	 * account can be told why. Nothing else is returned.
+	 */
+	public async accountStatus(req: Request, res: Response, next: NextFunction) {
+		try {
+			const status = req.user!.status;
+			const messages: Record<string, string> = {
+				ACTIVE: 'حسابك نشط',
+				PENDING_VERIFICATION: 'حسابك بانتظار التفعيل برمز التحقق',
+				SUSPENDED: 'هذا الحساب معطل حالياً، يرجى التواصل مع الدعم',
+				SUSPENDED_REVIEW: 'هذا الحساب قيد مراجعة الإيقاف حالياً، يرجى التواصل مع الدعم'
+			};
+			res.status(200).json({ success: true, data: { status, message: messages[String(status)] ?? '' } });
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	/**
 	 * Handle user logout and session revocation
 	 */
 	public async logout(req: Request, res: Response, next: NextFunction) {

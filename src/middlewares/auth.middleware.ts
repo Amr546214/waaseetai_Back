@@ -131,7 +131,7 @@ export const optionalAuthenticate = async (req: Request, res: Response, next: Ne
     });
     // Deleted account, or (mirroring requireActiveUser's own rule) an
     // account that is not currently active — never attach identity for it.
-    if (!user || user.status === UserStatus.SUSPENDED || user.status === UserStatus.PENDING_VERIFICATION) {
+    if (!user || user.status === UserStatus.SUSPENDED || user.status === UserStatus.SUSPENDED_REVIEW || user.status === UserStatus.PENDING_VERIFICATION) {
       return next();
     }
 
@@ -170,7 +170,7 @@ export const optionalAuthenticate = async (req: Request, res: Response, next: Ne
 };
 
 /**
- * Require Active User: Block users who are PENDING_VERIFICATION or SUSPENDED
+ * Require Active User: Block users who are PENDING_VERIFICATION, SUSPENDED or SUSPENDED_REVIEW
  */
 export const requireActiveUser = (req: Request, res: Response, next: NextFunction) => {
   if (!req.user) {
@@ -183,6 +183,11 @@ export const requireActiveUser = (req: Request, res: Response, next: NextFunctio
 
   if (req.user.status === UserStatus.SUSPENDED) {
     return next(new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403));
+  }
+
+  // An account under suspension review is blocked exactly like a suspended one.
+  if (req.user.status === UserStatus.SUSPENDED_REVIEW) {
+    return next(new AppError('هذا الحساب قيد مراجعة الإيقاف حالياً، يرجى التواصل مع الدعم', 403));
   }
 
   next();
