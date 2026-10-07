@@ -33,7 +33,7 @@ const prisma: any = {
       if (!allowed || allowed.includes(S.kyc)) { S.kyc = a.data.kycStatus; return { count: 1 }; }
       return { count: 0 };
     },
-    findUnique: async () => ({ kycStatus: S.kyc, firstName: null, lastName: null, avatarUrl: null, bio: null, city: null, country: null, isNafathVerified: true, ...(publicKyc ? { kycStatus: publicKyc } : {}) }),
+    findUnique: async () => ({ idNumber: '1234567890', kycStatus: S.kyc, firstName: null, lastName: null, avatarUrl: null, bio: null, city: null, country: null, isNafathVerified: true, ...(publicKyc ? { kycStatus: publicKyc } : {}) }),
   },
   user: { findUnique: async () => ({ id: 'u1', status: 'ACTIVE', firstName: 'a', lastName: 'b', avatarUrl: null, createdAt: new Date() }), update: async () => ({}) },
   project: { count: async () => 0 }, contract: { count: async () => 0 },
@@ -62,7 +62,7 @@ async function submit(_t: TestContext, init: { onboarding?: Onb; kyc?: string },
   reset(init);
   const { ClientProfileController } = await load();
   const res: any = { statusCode: 0, body: null, status(c: number) { this.statusCode = c; return this; }, json(b: any) { this.body = b; return this; } };
-  await new ClientProfileController().saveSetupData({ user: { userId: 'u1' }, body: { details: { idNumber }, identity, documents: {}, agreements: {}, bank: {} } } as any, res, (e: any) => { throw e; });
+  await new ClientProfileController().saveSetupData({ user: { userId: 'u1' }, body: { details: { idNumber }, identity, documents: {}, agreements: { accurate: true, terms: true, privacy: true }, bank: {} } } as any, res, (e: any) => { throw e; });
   assert.equal(res.statusCode, 200);
   return { ...S, onboarding: S.onboarding, kyc: S.kyc, creates: S.creates, updates: [...S.updates] };
 }

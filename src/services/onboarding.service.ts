@@ -21,8 +21,11 @@ export class OnboardingService {
    * The profile's kycStatus moves UNVERIFIED/REJECTED → PENDING only together with the review row; VERIFIED is never downgraded.
    * Incomplete documents create nothing and leave kycStatus alone.
    */
-  async submitSetupDocuments(userId: string, docs: { idNumber?: string | null; frontIdUrl?: string | null; backIdUrl?: string | null }) {
+  async submitSetupDocuments(userId: string, docs: { idNumber?: string | null; frontIdUrl?: string | null; backIdUrl?: string | null }, options: { identityChanged?: boolean } = {}) {
     if (!docs.idNumber || !docs.frontIdUrl || !docs.backIdUrl) return null;
+    // A save that submits the SAME identity as before never re-opens a review: a REJECTED / UNVERIFIED profile stays as it is until the
+    // client really changes the identity or its documents (default true keeps every other caller unchanged).
+    if (options.identityChanged === false) return prisma.clientOnboarding.findUnique({ where: { userId } });
     const fields = { documentType: 'NATIONAL_ID', documentUrl: docs.frontIdUrl, documentName: 'الهوية الوطنية / الإقامة' };
     const existing = await prisma.clientOnboarding.findUnique({ where: { userId } });
     let record = existing;

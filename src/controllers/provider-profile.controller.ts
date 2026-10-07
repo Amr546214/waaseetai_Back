@@ -5,6 +5,7 @@ import { prisma } from '../config/db';
 import { storeDataUriIfNeeded, storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { sanitizeText } from '../utils/sanitize-text';
 import { assertKycFileValues } from '../utils/kyc-value-guard';
+import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
 import { sessionService } from '../services/session.service';
 import { computeProviderCompletion } from '../utils/completion-calculators';
 
@@ -83,7 +84,7 @@ export const getSetupData = async (req: Request, res: Response) => {
 
 		const profile = await prisma.providerProfile.findUnique({
 			where: { userId },
-			include: { skills: { select: { name: true } } }
+			include: { skills: { select: { name: true } }, portfolioItems: true }
 		});
 
 		res.status(200).json({ success: true, data: profile || {} });
@@ -111,6 +112,10 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			skillConnections = rows.map(({ id }) => ({ id }));
 		}
 
+		// A VERIFIED account's identity (idNumber / dob) is frozen (409); '' / null never erase a stored value.
+		const storedIdentity = await prisma.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, dob: true, kycStatus: true } });
+		assertVerifiedIdentityUnchanged(storedIdentity, details ?? {});
+
 		assertKycFileValues([identity?.frontId, identity?.backId, documents?.supportingDocs, ...(identity?.certs || [])], userId);
 		const [frontIdUrl, backIdUrl, supportingDocsUrl] = await Promise.all([
 			storeKycFileIfNeeded(identity?.frontId, `waseetai/providers/${userId}/identity`, 'front-id'),
@@ -123,11 +128,14 @@ export const saveSetupData = async (req: Request, res: Response) => {
 
 		const providerData = {
 			userId,
-			idNumber: details?.idNumber,
-			dob: details?.dob ? new Date(details.dob) : null,
+			idNumber: details?.idNumber || undefined,
+			dob: details?.dob ? new Date(details.dob) : (storedIdentity?.kycStatus === 'VERIFIED' ? undefined : null),
 			country: details?.country,
 			city: details?.city,
 			industry: details?.occupation,
+			// The job title the wizard collects ("occupation") is the profile headline the completion score and the public profile read:
+			// one value, stored in both columns (industry kept for older readers).
+			headline: typeof details?.occupation === 'string' && sanitizeText(details.occupation).trim() ? sanitizeText(details.occupation).trim().slice(0, 100) : undefined,
 			address: details?.address,
 			bio: typeof details?.bio === 'string' ? sanitizeText(details.bio) : details?.bio,
 			languages: details?.languages || [],
@@ -210,10 +218,17 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		const completion = computeProviderCompletion({ providerProfile: finalProfile || result, user: currentUser || {} });
 
 		// User.status is NOT touched by the setup wizard (AUD-FND-000036): it changes only through OTP activation or an admin decision.
+		const identityChanged = identitySubmissionChanged(storedIdentity, details ?? {}, { front: frontIdUrl, back: backIdUrl });
 		const [updatedResult] = await prisma.$transaction([
 			prisma.providerProfile.update({ where: { userId }, data: { completionPercentage: completion } }),
-			// submitting the wizard marks an UNVERIFIED/REJECTED profile as PENDING review; a VERIFIED one is never downgraded
-			prisma.providerProfile.updateMany({ where: { userId, kycStatus: { in: ['UNVERIFIED', 'REJECTED'] } }, data: { kycStatus: 'PENDING' } })
+			// Submitting a changed, complete identity (idNumber + front + back) marks an UNVERIFIED/REJECTED profile as PENDING review;
+			// a VERIFIED one is never downgraded and an unchanged re-save never re-opens a review.
+			...(identityChanged
+				? [prisma.providerProfile.updateMany({
+					where: { userId, kycStatus: { in: ['UNVERIFIED', 'REJECTED'] }, idNumber: { not: null }, frontIdUrl: { not: null }, backIdUrl: { not: null } },
+					data: { kycStatus: 'PENDING' }
+				})]
+				: [])
 		]);
 
 		res.status(200).json({
@@ -222,6 +237,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			data: updatedResult
 		});
 	} catch (error) {
+		if (error instanceof AppError) return res.status(error.statusCode).json({ success: false, message: error.message });
 		console.error('Error saving provider setup data:', error);
 		res.status(500).json({ message: 'Internal server error' });
 	}

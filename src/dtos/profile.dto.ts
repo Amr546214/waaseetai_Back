@@ -6,7 +6,8 @@ export const updateProfileSchema = z.object({
 	firstName: sanitizedText(z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل')).optional().nullable(),
 	lastName: sanitizedText(z.string().min(2, 'الاسم الأخير يجب أن يكون حرفين على الأقل')).optional().nullable(),
 	phoneNumber: z.string().optional().nullable(),
-	avatarUrl: z.string().optional().nullable().or(z.literal('')),
+	// null = "not provided" (a client that has no avatar value must not erase the stored one); only '' is an explicit delete.
+	avatarUrl: z.string().optional().nullable().transform(v => v ?? undefined),
 
 	// Client Profile fields
 	companyName: z.string().optional().nullable().or(z.literal('')),

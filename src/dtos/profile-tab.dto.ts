@@ -6,8 +6,8 @@ import { sanitizedText } from '../utils/sanitize-text';
 const optionalText = (max: number) => z.string().trim().max(max, `الحد الأقصى ${max} حرفًا`).optional();
 const nullableText = (max: number) => z.string().trim().max(max, `الحد الأقصى ${max} حرفًا`).nullable().optional();
 const personName = () => sanitizedText(z.string().trim().min(2, 'الاسم يجب أن يكون حرفين على الأقل').max(50, 'الاسم يجب ألا يتجاوز 50 حرفًا')).optional();
-// avatarUrl is either '' (delete), a Cloudinary URL, or an image data URI that the service re-stores; the upload guards cap its real size.
-const avatarValue = z.string().max(12_000_000, 'الصورة كبيرة جدًا').nullable().optional();
+// avatarUrl: null = not provided (never erases); '' = explicit delete; otherwise, a Cloudinary URL, or an image data URI that the service re-stores; the upload guards cap its real size.
+const avatarValue = z.string().max(12_000_000, 'الصورة كبيرة جدًا').nullable().optional().transform(v => v ?? undefined);
 
 export const updateBasicsSchema = z.object({
   firstName: personName(),

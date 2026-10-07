@@ -23,7 +23,7 @@ const prisma: any = {
   portfolioItem: { deleteMany: async () => ({}), createMany: async () => ({}) },
   providerProfile: {
     upsert: async (a: any) => { cur.w.providerUpsert.push(a); return { id: 'pp1', ...a.create }; },
-    findUnique: async () => ({ id: 'pp1', skills: [], portfolioItems: [], kycStatus: cur.o.providerKyc ?? 'VERIFIED' }),
+    findUnique: async () => ({ id: 'pp1', skills: [], portfolioItems: [], idNumber: '1234567890', kycStatus: cur.o.providerKyc ?? 'VERIFIED' }),
     update: async (a: any) => { cur.w.providerUpdate.push(a); return { id: 'pp1', ...a.data }; },
     updateMany: async (a: any) => { cur.w.providerUpdateMany.push(a); return { count: 1 }; },
   },
@@ -31,7 +31,7 @@ const prisma: any = {
     upsert: async (a: any) => { cur.w.clientUpsert.push(a); return { id: 'cp1', ...a.create }; },
     update: async (a: any) => { cur.w.clientUpdate.push(a); return { id: 'cp1', ...a.data }; },
     updateMany: async (a: any) => { cur.w.clientUpdateMany.push(a); return { count: 1 }; },
-    findUnique: async () => ({ id: 'cp1', kycStatus: cur.o.clientKyc ?? 'VERIFIED' }),
+    findUnique: async () => ({ id: 'cp1', idNumber: '1234567890', kycStatus: cur.o.clientKyc ?? 'VERIFIED' }),
   },
   clientOnboarding: { findUnique: async () => null, create: async ({ data }: any) => data, update: async ({ data }: any) => data },
   user: {
@@ -106,7 +106,7 @@ test('#48 provider setup: a first submission moves UNVERIFIED/REJECTED to PENDIN
 test('#48 client setup: the body cannot set isNafathVerified/kycStatus/isVerified and an existing kycStatus is not overwritten', async (t) => {
   const w = mockDb(t);
   const { ClientProfileController } = await import(`./client-profile.controller.ts?f=${Date.now()}-${Math.random()}`);
-  const body: any = { details: { idNumber: '1234567890' }, identity: { frontId: 'data:image/png;base64,AAAA', backId: 'data:image/png;base64,AAAA', isNafathVerified: true, kycStatus: 'VERIFIED' }, documents: {}, agreements: {}, bank: {}, isNafathVerified: true, kycStatus: 'VERIFIED', isVerified: true };
+  const body: any = { details: { idNumber: '1234567890' }, identity: { frontId: 'data:image/png;base64,AAAA', backId: 'data:image/png;base64,AAAA', isNafathVerified: true, kycStatus: 'VERIFIED' }, documents: {}, agreements: { accurate: true, terms: true, privacy: true }, bank: {}, isNafathVerified: true, kycStatus: 'VERIFIED', isVerified: true };
   const res = mockRes();
   await new ClientProfileController().saveSetupData({ user: { userId: 'u1' }, body } as any, res, (e: any) => { throw e; });
   const up = w.clientUpsert[0];

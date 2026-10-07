@@ -118,6 +118,8 @@ export interface ProviderCompletionInput {
     lastName?: string | null;
     avatarUrl?: string | null;
     headline?: string | null;
+    /** Older wizard saves stored the job title here only; it still counts as the headline. */
+    industry?: string | null;
     mainSpecialty?: string | null;
     bio?: string | null;
     skills?: unknown[] | null;
@@ -162,7 +164,7 @@ const PROVIDER_RULES: ProviderCompletionRule[] = [
   { key: 'avatar', label: 'الصورة الشخصية', points: 10, tab: 'profile', hint: 'أضف صورة شخصية',
     met: ({ providerProfile: p, user: u }) => !!(p.avatarUrl || u.avatarUrl) },
   { key: 'identity', label: 'الاسم والمسمى المهني والتخصص الرئيسي', points: 15, tab: 'profile', hint: 'أكمل الاسم والمسمى المهني والتخصص الرئيسي',
-    met: ({ providerProfile: p, user: u }) => !!((p.firstName || u.firstName) && (p.lastName || u.lastName) && p.headline && p.mainSpecialty) },
+    met: ({ providerProfile: p, user: u }) => !!((p.firstName || u.firstName) && (p.lastName || u.lastName) && (p.headline || p.industry) && p.mainSpecialty) },
   { key: 'bio', label: 'الوصف المهني', points: 15, tab: 'profile', hint: 'اكتب وصفًا مهنيًا من 50 حرفًا على الأقل',
     met: ({ providerProfile: p }) => !!(p.bio && p.bio.length >= 50) },
   { key: 'skills', label: 'المهارات', points: 10, tab: 'profile', hint: 'أضف مهارة واحدة على الأقل',

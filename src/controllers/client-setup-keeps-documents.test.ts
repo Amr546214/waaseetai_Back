@@ -34,7 +34,7 @@ async function save(identity: any, documents: any = {}) {
 	upserts.length = 0;
 	const Controller = await controller();
 	const res: any = { statusCode: 0, status(c: number) { this.statusCode = c; return this; }, json() { return this; } };
-	await new Controller().saveSetupData({ user: { userId: 'u1' }, body: { details: { idNumber: '1234567890' }, identity, documents, agreements: {}, bank: {} } } as any, res, (e: any) => { throw e; });
+	await new Controller().saveSetupData({ user: { userId: 'u1' }, body: { details: { idNumber: '1234567890' }, identity, documents, agreements: { accurate: true, terms: true, privacy: true }, bank: {} } } as any, res, (e: any) => { throw e; });
 	assert.equal(res.statusCode, 200);
 	return upserts[0];
 }
