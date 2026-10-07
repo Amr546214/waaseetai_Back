@@ -3,8 +3,9 @@ import { sanitizedText } from '../utils/sanitize-text';
 
 // PUT /profiles/update/:tabName. Unknown keys are stripped (never rejected, so the current UI tabs keep working) and the service reads an explicit
 // allow-list on top of this. '' is tolerated where the UI clears a field.
-const optionalText = (max: number) => z.string().trim().max(max, `الحد الأقصى ${max} حرفًا`).optional();
-const nullableText = (max: number) => z.string().trim().max(max, `الحد الأقصى ${max} حرفًا`).nullable().optional();
+// free text: markup is stripped (sanitizedText) before the length check
+const optionalText = (max: number) => sanitizedText(z.string().trim().max(max, `الحد الأقصى ${max} حرفًا`)).optional();
+const nullableText = (max: number) => sanitizedText(z.string().trim().max(max, `الحد الأقصى ${max} حرفًا`)).nullable().optional();
 const personName = () => sanitizedText(z.string().trim().min(2, 'الاسم يجب أن يكون حرفين على الأقل').max(50, 'الاسم يجب ألا يتجاوز 50 حرفًا')).optional();
 // avatarUrl: null = not provided (never erases); '' = explicit delete; otherwise, a Cloudinary URL, or an image data URI that the service re-stores; the upload guards cap its real size.
 const avatarValue = z.string().max(12_000_000, 'الصورة كبيرة جدًا').nullable().optional().transform(v => v ?? undefined);

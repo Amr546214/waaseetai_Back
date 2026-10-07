@@ -185,7 +185,7 @@ test('#13 provider wizard stores the job title as headline (and industry), not o
 	await provider(pBody({ occupation: '  <b>مصمم</b> واجهات ' }));
 	const up = w.pUpsert[0].update;
 	assert.equal(up.headline, 'مصمم واجهات');
-	assert.equal(up.industry, '  <b>مصمم</b> واجهات ');
+	assert.equal(up.industry, 'مصمم واجهات');
 });
 
 test('#13 the completion "identity" rule counts the headline OR an older wizard save that only has industry', async () => {
