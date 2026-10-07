@@ -189,6 +189,21 @@ export class NotificationService {
 		}
 	}
 
+	/** Code that completes a password login, sent to the ACCOUNT EMAIL (purpose LOGIN_EMAIL; SMS is never used for login). */
+	public async sendLoginOtpEmail(email: string, code: string): Promise<EmailDeliveryResult> {
+		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
+		const emailSubject = process.env.LOGIN_EMAIL_SUBJECT ?? 'رمز تسجيل الدخول - Waseet AI';
+		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
+
+		try {
+			const info = await mailTransporter.sendMail({ from: `"${senderName}" <${from}>`, to: email, subject: emailSubject, html: getOtpEmailTemplate(code) });
+			return logEmailDelivery('login', email, info);
+		} catch (error) {
+			logEmailFailure('login', email, error);
+			throw error;
+		}
+	}
+
 	/** True only when a real SMS sender exists. Today the only provider code is a Twilio stub, so this is false. */
 	public isSmsAvailable(): boolean {
 		return process.env.SMS_ENABLED === 'true' && (process.env.SMS_PROVIDER || 'dev') === 'twilio' && SMS_PROVIDER_IMPLEMENTED;

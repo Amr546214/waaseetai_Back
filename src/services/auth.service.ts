@@ -65,7 +65,6 @@ const RESET_INVALID_CODE_MESSAGE = 'رمز التحقق غير صحيح أو م�
 // Activation codes live 10 minutes (the email says 10): a late email must not carry an already-dead code.
 const EMAIL_OTP_EXPIRY_MS = 10 * 60 * 1000;
 const GOOGLE_TOKEN_INVALID_MESSAGE = 'تعذر التحقق من حساب جوجل، حاول تسجيل الدخول مرة أخرى';
-const SMS_LOGIN_DISABLED_MESSAGE = 'التحقق عبر الرسائل النصية غير مفعّل، سجّل الدخول بالبريد الإلكتروني وكلمة المرور';
 
 export interface ReferralAttributionContext {
 	// Explicit affiliate selection made at registration time — either a
@@ -527,8 +526,46 @@ export class AuthService {
 			throw new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403);
 		}
 
-		// Verification is email-only: `phoneOtpEnabled` is ignored (no SMS challenge, no SMS 503), so an account that still has
-		// the legacy flag logs in through the normal flow.
+		// Email OTP is mandatory at login (owner decision #4): a correct password only starts the challenge, no token is issued here.
+		// Phone/SMS is never used (`phoneOtpEnabled` is ignored). The session is created by verifyLoginOtp().
+		return this.loginOtpChallengeResult(user.id, user.email, sessionContext.ipAddress);
+	}
+
+	/** Sends (or re-sends) the LOGIN_EMAIL code for an ACTIVE account; subject to the shared OTP send throttle. */
+	private async loginOtpChallengeResult(userId: string, email: string, ipAddress: string | undefined) {
+		const base = { verified: false as const, phoneOtpRequired: false, loginOtpRequired: true as const, userId };
+		const throttle = otpSendThrottle.consume(`login:${userId}`, ipAddress);
+		if (!throttle.allowed) {
+			return { ...base, emailSent: false, retryAfterSeconds: throttle.retryAfterSeconds, message: otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds) };
+		}
+		const { emailSent } = await this.sendLoginOtp(userId, email);
+		return { ...base, emailSent, message: emailSent ? 'أرسلنا رمز تسجيل الدخول إلى بريدك الإلكتروني' : 'تعذر إرسال رمز تسجيل الدخول الآن، حاول مرة أخرى بعد قليل أو تواصل مع الدعم' };
+	}
+
+	/** A still-valid LOGIN_EMAIL code is re-sent as it is (a late older email must not carry a dead code); otherwise a new one is created. */
+	private async sendLoginOtp(userId: string, email: string): Promise<{ emailSent: boolean; reused: boolean }> {
+		const existing = await authRepository.findLatestOtpByPurpose(userId, OtpPurpose.LOGIN_EMAIL);
+		let code: string;
+		let reused = false;
+		if (existing && existing.expiresAt > new Date() && existing.attempts < OTP_MAX_ATTEMPTS) {
+			code = existing.code;
+			reused = true;
+		} else {
+			code = crypto.randomInt(100000, 999999).toString();
+			await authRepository.deleteOtpsByPurpose(userId, OtpPurpose.LOGIN_EMAIL);
+			await authRepository.createOtp(userId, code, OtpType.EMAIL, new Date(Date.now() + EMAIL_OTP_EXPIRY_MS), OtpPurpose.LOGIN_EMAIL);
+		}
+		try {
+			await notificationService.sendLoginOtpEmail(email, code);
+			return { emailSent: true, reused };
+		} catch (error) {
+			logger.error(`[AuthService] Login OTP email failed (userId=${userId})`, error);
+			return { emailSent: false, reused };
+		}
+	}
+
+	/** Creates the session (JWT + registered session row) for an account whose password AND login code were verified. */
+	private async startSession(user: NonNullable<Awaited<ReturnType<typeof authRepository.findByIdForSession>>>, sessionContext: SessionContext) {
 		// Generate JWT Access Token
 		const jwtSecret = process.env.JWT_SECRET;
 		if (!jwtSecret) {
@@ -664,16 +701,39 @@ export class AuthService {
 	}
 
 	/**
-	 * Login-time PHONE (SMS) verification is disabled: authentication is email-only and no SMS code is ever issued, sent or
-	 * accepted. The endpoint stays only to answer clearly instead of 404ing an old client.
+	 * Second step of every password login: the LOGIN_EMAIL code sent to the account email. Only a code issued for this purpose is accepted
+	 * (a password-reset / activation / phone-change code never works here), 5 wrong guesses delete it, and the session is created only now.
 	 */
-	public async verifyLoginOtp(_input: VerifyLoginOtpInput, _sessionContext: SessionContext = {}): Promise<never> {
-		throw new AppError(SMS_LOGIN_DISABLED_MESSAGE, 400);
+	public async verifyLoginOtp(input: VerifyLoginOtpInput, sessionContext: SessionContext = {}) {
+		const user = await authRepository.findByIdForSession(input.userId);
+		const otp = user ? await authRepository.findLatestOtpByPurpose(input.userId, OtpPurpose.LOGIN_EMAIL) : null;
+		if (!user || !otp) throw new AppError('رمز التحقق غير صحيح', 400);
+		if (otp.attempts >= OTP_MAX_ATTEMPTS) {
+			await authRepository.deleteOtpsByPurpose(input.userId, OtpPurpose.LOGIN_EMAIL);
+			throw new AppError(OTP_LOCKED_MESSAGE, 429);
+		}
+		if (otp.expiresAt < new Date()) throw new AppError('رمز التحقق انتهت صلاحيته، يرجى إعادة الإرسال', 400);
+		if (otp.code !== input.code) {
+			await authRepository.incrementOtpAttempts(otp.id);
+			if (otp.attempts + 1 >= OTP_MAX_ATTEMPTS) {
+				await authRepository.deleteOtpsByPurpose(input.userId, OtpPurpose.LOGIN_EMAIL);
+				throw new AppError(OTP_LOCKED_MESSAGE, 429);
+			}
+			throw new AppError('رمز التحقق غير صحيح', 400);
+		}
+		if (user.status === UserStatus.SUSPENDED) throw new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403);
+		if (user.status === UserStatus.PENDING_VERIFICATION) throw new AppError('رمز التحقق غير صحيح', 400);
+		await authRepository.deleteOtpsByPurpose(input.userId, OtpPurpose.LOGIN_EMAIL);
+		return this.startSession(user, sessionContext);
 	}
 
-	/** See verifyLoginOtp(): SMS login verification is disabled, nothing is created or sent. */
-	public async resendLoginOtp(_userId: string): Promise<never> {
-		throw new AppError(SMS_LOGIN_DISABLED_MESSAGE, 400);
+	/** Re-sends the login code (same throttle as the first send). Only an ACTIVE account that is mid-login has anything to resend. */
+	public async resendLoginOtp(userId: string, ipAddress?: string) {
+		const user = await authRepository.findById(userId);
+		const pending = user ? await authRepository.findLatestOtpByPurpose(userId, OtpPurpose.LOGIN_EMAIL) : null;
+		if (!user || user.status !== UserStatus.ACTIVE || !pending) throw new AppError('ابدأ تسجيل الدخول بالبريد وكلمة المرور أولاً', 400);
+		const result = await this.loginOtpChallengeResult(userId, user.email, ipAddress);
+		return { emailSent: result.emailSent, message: result.message };
 	}
 }
 

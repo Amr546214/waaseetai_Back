@@ -80,9 +80,8 @@ export const resendOtpSchema = z.object({
 
 export type ResendOtpInput = z.infer<typeof resendOtpSchema>['body'];
 
-// Login-time phone OTP (distinct from verifyOtpSchema/resendOtpSchema above,
-// which activate a PENDING_VERIFICATION account's email OTP). These verify/
-// resend an already-ACTIVE user's mandatory phone OTP challenge instead.
+// Login-time EMAIL OTP (purpose LOGIN_EMAIL; distinct from verifyOtpSchema/resendOtpSchema above, which activate a PENDING_VERIFICATION
+// account). These verify/resend an already-ACTIVE user's mandatory login code instead. Phone/SMS is never used for login.
 export const verifyLoginOtpSchema = z.object({
   body: z.object({
     userId: z.string().uuid('معرف المستخدم غير صالح'),

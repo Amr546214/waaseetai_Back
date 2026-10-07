@@ -16,6 +16,8 @@ export const OtpPurpose = {
   PHONE_VERIFY: 'PHONE_VERIFY',
   // PUT-less phone change (AUD-FND-000026): the new number travels in context.newPhone; the code goes to the ACCOUNT EMAIL (SMS is disabled).
   PHONE_CHANGE: 'PHONE_CHANGE',
+  // Mandatory second step of every password login (owner decision #4): the code goes to the ACCOUNT EMAIL, never by SMS.
+  LOGIN_EMAIL: 'LOGIN_EMAIL',
 } as const;
 export type OtpPurposeValue = (typeof OtpPurpose)[keyof typeof OtpPurpose];
 
