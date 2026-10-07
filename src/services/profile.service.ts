@@ -331,6 +331,10 @@ export class ProfileService {
         if (activeRole === UserRole.AFFILIATE && displayResult) {
           await marketerProfileService.recalculateCompletion(userId, tx);
         }
+        if (activeRole === UserRole.PROVIDER && displayResult) {
+          // avatar is a provider completion input (10 points): the stored percentage follows the change
+          await providerProfileService.recalculateProviderCompletion(userId, tx);
+        }
         if (activeRole === UserRole.CLIENT && displayResult) {
           const finalUser = await tx.user.findUnique({ where: { id: userId } });
           const clientCompletion = computeClientCompletion({ user: finalUser || {}, clientProfile: displayResult as any });

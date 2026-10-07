@@ -8,6 +8,8 @@ import { computeClientCompletion, computeClientMissingItems } from '../utils/com
 import { clientProfileService } from '../services/client-profile.service';
 import { AppError } from '../utils/app-error';
 import { onboardingService } from '../services/onboarding.service';
+import { clientSetupSchema } from '../dtos/client-profile-setup.dto';
+import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
 
 export class ClientProfileController {
 
@@ -62,16 +64,24 @@ export class ClientProfileController {
   public async saveSetupData(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.userId;
-      const payload = req.body;
+      // Full validation first: types, length limits, a missing object or a non-true agreement is a 400 (never a TypeError/500).
+      const parsed = clientSetupSchema.safeParse(req.body);
+      if (!parsed.success) {
+        const errors = parsed.error.issues.map(issue => {
+          const field = issue.path.join('.');
+          return { path: field, field, message: issue.message, code: issue.code };
+        });
+        return res.status(400).json({ success: false, message: 'بيانات غير صحيحة، يرجى مراجعة الحقول المحددة', errors });
+      }
+      const payload = parsed.data;
 
       // Extract specific group payloads
       const { details, identity, documents, agreements } = payload;
-      const bank = payload.bank ?? {};
+      const bank: any = payload.bank ?? {};
 
-      // Basic server-side validations
-      if (details.idNumber && !/^[12]\d{9}$/.test(details.idNumber)) {
-        return res.status(400).json({ success: false, message: 'Invalid ID Number format.' });
-      }
+      // A VERIFIED account's identity (idNumber / dob) is frozen.
+      const stored = await prisma.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, dob: true, kycStatus: true } });
+      assertVerifiedIdentityUnchanged(stored, details);
       
       // PayPal payout (PayPal-only platform): optional in setup for backward
       // compatibility, but when the client chooses PayPal (paymentType='paypal')
@@ -100,8 +110,9 @@ export class ClientProfileController {
 
       const clientData = {
         userId,
-        idNumber: details.idNumber,
-        dob: details.dob ? new Date(details.dob) : null,
+        // '' / null = not provided: a stored idNumber / dob is kept (a VERIFIED identity is never erased by a re-save)
+        idNumber: details.idNumber || undefined,
+        dob: details.dob ? new Date(details.dob) : (stored?.kycStatus === 'VERIFIED' ? undefined : null),
         country: details.country,
         city: details.city,
         industry: details.occupation,
@@ -142,7 +153,7 @@ export class ClientProfileController {
         prisma.user.findUnique({ where: { id: userId } })
       ]);
       // complete identity documents → a PENDING review record the admin can see (AUD-FND-000044); kycStatus follows it (never downgraded)
-      await onboardingService.submitSetupDocuments(userId, { idNumber: result.idNumber, frontIdUrl: result.frontIdUrl, backIdUrl: result.backIdUrl });
+      await onboardingService.submitSetupDocuments(userId, { idNumber: result.idNumber, frontIdUrl: result.frontIdUrl, backIdUrl: result.backIdUrl }, { identityChanged: identitySubmissionChanged(stored, details, { front: frontIdUrl, back: backIdUrl }) });
       const completion = computeClientCompletion({ user: currentUser || {}, clientProfile: result });
       const finalResult = await prisma.clientProfile.update({
         where: { userId },

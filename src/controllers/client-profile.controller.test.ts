@@ -51,7 +51,8 @@ function createSetupDataMockPrisma(t: TestContext) {
         return { ...clientProfileState };
       }),
       update: clientUpdateSpy,
-      updateMany: async () => ({ count: 0 })
+      updateMany: async () => ({ count: 0 }),
+      findUnique: async () => null
     },
     user: {
       findUnique: async () => ({ ...userFixture })
@@ -106,7 +107,7 @@ test('client saveSetupData: isProfileComplete is preserved and completion write 
       identity: {},
       bank: {},
       documents: {},
-      agreements: {}
+      agreements: { accurate: true, terms: true, privacy: true }
     }
   };
   const res = createMockRes();
@@ -121,7 +122,7 @@ test('client saveSetupData: isProfileComplete is preserved and completion write 
 function paypalSetupReq(bank: any) {
   return {
     user: { userId: 'user-1' },
-    body: { details: { idNumber: '1234567890' }, identity: {}, bank, documents: {}, agreements: {} }
+    body: { details: { idNumber: '1234567890' }, identity: {}, bank, documents: {}, agreements: { accurate: true, terms: true, privacy: true } }
   } as any;
 }
 

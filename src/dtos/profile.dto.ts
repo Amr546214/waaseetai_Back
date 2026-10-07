@@ -7,7 +7,8 @@ export const updateProfileSchema = z.object({
 	lastName: sanitizedText(z.string().min(2, 'الاسم الأخير يجب أن يكون حرفين على الأقل')).optional().nullable(),
 	// Digits only (spaces/dashes tolerated and stripped), 9-15 long. '' / null mean "not provided": a save never erases the stored number.
 	phoneNumber: z.string().trim().transform(v => v.replace(/[\s-]/g, '')).pipe(z.string().regex(/^\d{9,15}$/, 'رقم الجوال غير صحيح')).or(z.literal('').transform(() => undefined)).optional().nullable().transform(v => v ?? undefined),
-	avatarUrl: z.string().optional().nullable().or(z.literal('')),
+	// null = "not provided" (a client that has no avatar value must not erase the stored one); only '' is an explicit delete.
+	avatarUrl: z.string().optional().nullable().transform(v => v ?? undefined),
 
 	// Client Profile fields
 	companyName: z.string().optional().nullable().or(z.literal('')),
