@@ -8,7 +8,8 @@ import { registerAiAssistantGateway } from './sockets/ai-assistant.gateway';
 import { registerAssessmentGateway } from './sockets/assessment.gateway';
 import { registerSetupTestGateway } from './sockets/setup-test.gateway';
 import { registerHelpAssistantChatGateway } from './sockets/help-assistant-chat.gateway';
-import { sessionService } from './services/session.service';
+import { socketAuthMiddleware, verifySocketToken } from './utils/socket-auth';
+import { setSocketServer } from './utils/socket-registry';
 
 export let ioInstance: SocketIOServer | null = null;
 export const getIO = (): SocketIOServer | null => ioInstance;
@@ -23,27 +24,17 @@ export const initSocketServer = (httpServer: HttpServer, allowedOrigins: string[
 	});
 	ioInstance = io;
 
-	// Dedicated /assessments Namespace
+	setSocketServer(io);
+
+	// Main namespace: the handshake check is shared by every gateway (chat, ai-review, assistant, assessment, proposal audit, setup test, help assistant).
+	io.use(socketAuthMiddleware({
+		required: false,
+		onAuthenticated: (socket, userId) => { socket.join(`project_owner_${userId}`); socket.join(`user_${userId}`); }
+	}));
+
+	// Dedicated /assessments Namespace: an active account is mandatory.
 	const assessmentsNs = io.of('/assessments');
-	assessmentsNs.use(async (socket, next) => {
-		try {
-			const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.replace('Bearer ', '');
-			const jwtSecret = process.env.JWT_SECRET;
-			if (!token || !jwtSecret) return next(new Error('Authentication required'));
-			const decoded = jwt.verify(token, jwtSecret) as { userId?: string; id?: string; exp?: number };
-			const userId = decoded.userId || decoded.id;
-			if (!userId) return next(new Error('Invalid authentication token'));
-			const session = await sessionService.validateOrRegister(userId, token, {
-				ipAddress: socket.handshake.address,
-				userAgent: socket.handshake.headers['user-agent']
-			}, decoded.exp ? new Date(decoded.exp * 1000) : undefined);
-			if (!session) return next(new Error('Session is revoked or expired'));
-			(socket as any).userId = userId;
-			next();
-		} catch {
-			next(new Error('Invalid authentication token'));
-		}
-	});
+	assessmentsNs.use(socketAuthMiddleware({ required: true }));
 	assessmentsNs.on('connection', (socket) => {
 		console.log('🔗 Client connected to /assessments WebSocket namespace:', socket.id);
 		registerAssessmentGateway(socket, io);
@@ -52,22 +43,7 @@ export const initSocketServer = (httpServer: HttpServer, allowedOrigins: string[
 	io.on('connection', (socket) => {
 		console.log('🔗 Client connected to WebSocket:', socket.id);
 
-		// Extract authenticated user ID if token was provided in handshake
-		try {
-			const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.replace('Bearer ', '');
-			if (token && process.env.JWT_SECRET) {
-				const decoded = jwt.verify(token, process.env.JWT_SECRET) as any;
-				if (decoded?.userId || decoded?.id) {
-					const verifiedUserId = decoded.userId || decoded.id;
-					(socket as any).userId = verifiedUserId;
-					socket.join(`project_owner_${verifiedUserId}`);
-					socket.join(`user_${verifiedUserId}`);
-					console.log(`📡 Socket ${socket.id} authenticated and joined rooms for user ${verifiedUserId}`);
-				}
-			}
-		} catch (err: any) {
-			// Handshake auth optional for public pages
-		}
+		// socket.userId (and the user rooms) were set by the handshake middleware above; anonymous sockets have none.
 
 		// Allow clients to join targeted user/owner rooms ONLY if token matches requested userId
 		socket.on('join_user_room', (data: string | { userId: string; token?: string }) => {
@@ -85,20 +61,19 @@ export const initSocketServer = (httpServer: HttpServer, allowedOrigins: string[
 				return;
 			}
 
-			// If token provided in event payload, verify it
-			if (clientToken && process.env.JWT_SECRET) {
-				try {
-					const decoded = jwt.verify(clientToken, process.env.JWT_SECRET) as any;
-					const tokenUserId = decoded.userId || decoded.id;
-					if (tokenUserId === targetUserId) {
+			// If a token is provided in the event payload, it must pass the same active-account check as the handshake
+			if (clientToken) {
+				void verifySocketToken(clientToken, { ipAddress: socket.handshake?.address }).then((result) => {
+					if (result.ok && result.userId === targetUserId) {
 						(socket as any).userId = targetUserId;
+						socket.data = { ...(socket.data ?? {}), userId: targetUserId };
 						socket.join(`project_owner_${targetUserId}`);
 						socket.join(`user_${targetUserId}`);
 						console.log(`📡 Socket ${socket.id} verified via payload and joined rooms for user ${targetUserId}`);
+					} else {
+						console.warn(`⚠️ Socket ${socket.id} unauthorized join_user_room attempt for ${targetUserId}`);
 					}
-				} catch (e) {
-					console.warn(`⚠️ Socket ${socket.id} unauthorized join_user_room attempt for ${targetUserId}`);
-				}
+				}).catch(() => console.warn(`⚠️ Socket ${socket.id} join_user_room verification failed`));
 			}
 		});
 

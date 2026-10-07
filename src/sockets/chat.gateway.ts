@@ -31,27 +31,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 	 * Handle incoming socket connection with JWT authentication parsing
 	 */
 	public handleConnection(socket: Socket): void {
-		try {
-			const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.replace('Bearer ', '');
-			if (!token) {
-				console.warn(`[ChatGateway] Socket ${socket.id} connected without authentication token.`);
-				return;
-			}
-			const jwtSecret = process.env.JWT_SECRET;
-			if (!jwtSecret) {
-				console.error('[ChatGateway] JWT_SECRET is missing; chat authentication is disabled.');
-				return;
-			}
-			const decoded = jwt.verify(token, jwtSecret) as { userId: string; accountType: string };
-
-			if (decoded?.userId) {
-				(socket as any).userId = decoded.userId;
-				socket.join(`user_${decoded.userId}`);
-				console.log(`🔌 [ChatGateway] User ${decoded.userId} authenticated on socket ${socket.id}`);
-			}
-		} catch (err: any) {
-			console.error(`[ChatGateway] JWT authentication failed for socket ${socket.id}:`, err.message);
-		}
+		// Authentication is done once, at the handshake, by socketAuthMiddleware (valid JWT + live session + ACTIVE account): it sets
+		// socket.userId and joins the user room. A socket without a userId is anonymous and every chat event refuses it.
+		const userId = (socket as any).userId;
+		if (!userId) console.warn(`[ChatGateway] Socket ${socket.id} connected without an authenticated account.`);
+		else console.log(`🔌 [ChatGateway] User ${userId} authenticated on socket ${socket.id}`);
 	}
 
 	/**

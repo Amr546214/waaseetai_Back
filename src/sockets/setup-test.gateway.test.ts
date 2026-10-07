@@ -22,12 +22,15 @@ function resetState(over: Partial<any> = {}) {
 }
 
 const prismaMock: any = {
+  // the token in each event now passes the shared handshake check (valid JWT + live session + ACTIVE account)
+  user: { findUnique: async ({ where }: any) => ({ id: where.id, status: state.userStatus ?? 'ACTIVE', accountType: 'PROVIDER_INDIVIDUAL', isBanned: false }) },
   providerProfile: {
     findUnique: async () => state.profile,
     update: async (args: any) => { state.updates.push(args); return {}; }
   }
 };
 mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+mock.module('../services/session.service', { namedExports: { sessionService: { validateOrRegister: async () => ({ id: 'session-1' }) } } });
 mock.module('../services/ai/waseet-ai/waseet-ai.client', {
   namedExports: {
     waseetAiClient: {
@@ -296,4 +299,18 @@ test('anti_cheat is accepted as a no-op', async () => {
 test('static: no Gemini reference, no static question bank, no isPassed use', () => {
   const src = readFileSync(new URL('./setup-test.gateway.ts', import.meta.url), 'utf8').replace(/\/\/.*$/gm, '');
   assert.doesNotMatch(src, /gemini|generateStructured|correctOptionIndex|fallbackQuestions|isPassed/i);
+});
+
+
+test('a suspended / pending / under-review account\'s token is refused: no profile read, no WaseetAI call, no session', async () => {
+  for (const status of ['SUSPENDED', 'PENDING_VERIFICATION', 'SUSPENDED_REVIEW']) {
+    resetState({ userStatus: status, stream: goodStream(15) });
+    const m = await setup();
+    const { token } = newUser();
+    await m.handlers['setup_test:init']({ token });
+    assert.deepEqual(events(m.emitted), ['setup_test:error'], status);
+    assert.equal(state.streamCalls.length, 0, status);
+    assert.equal(state.updates.length, 0, status);
+  }
+  resetState({});
 });

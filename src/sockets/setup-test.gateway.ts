@@ -1,5 +1,6 @@
 import { Socket, Server as SocketIOServer } from 'socket.io';
 import jwt from 'jsonwebtoken';
+import { verifySocketToken } from '../utils/socket-auth';
 import { prisma } from '../config/db';
 import { waseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
@@ -51,20 +52,10 @@ export class SetupTestGateway {
   private io: SocketIOServer | null = null;
   private testSessions = new Map<string, SetupTestSession>();
 
-  private getUserIdFromToken(token?: string): string | null {
-    if (!token) return null;
-    let cleanToken = token;
-    if (cleanToken.startsWith('"') && cleanToken.endsWith('"')) {
-      cleanToken = cleanToken.slice(1, -1);
-    }
-    try {
-      const jwtSecret = process.env.JWT_SECRET;
-      if (!jwtSecret) return null;
-      const decoded = jwt.verify(cleanToken, jwtSecret) as any;
-      return decoded?.userId || decoded?.id || null;
-    } catch {
-      return null;
-    }
+  // The token travels in the event payload: it must pass the same check as a handshake (valid JWT, live session, ACTIVE account).
+  private async getUserIdFromToken(token?: string): Promise<string | null> {
+    const result = await verifySocketToken(token);
+    return result.ok ? result.userId : null;
   }
 
   private emitQuestion(socket: Socket, session: SetupTestSession): void {
@@ -133,7 +124,7 @@ export class SetupTestGateway {
     socket.on('setup_test:init', async (payload: { token: string }) => {
       let onDisconnect: (() => void) | null = null;
       try {
-        const userId = this.getUserIdFromToken(payload?.token);
+        const userId = await this.getUserIdFromToken(payload?.token);
         if (!userId) {
           socket.emit('setup_test:error', { message: 'رمز الحساب غير صالح أو منتهي الصلاحية.' });
           return;
@@ -240,7 +231,7 @@ export class SetupTestGateway {
 
     socket.on('setup_test:get_question', async (payload: { token: string }) => {
       try {
-        const userId = this.getUserIdFromToken(payload?.token);
+        const userId = await this.getUserIdFromToken(payload?.token);
         if (!userId) return;
         const session = this.testSessions.get(userId);
         if (!session) return;
@@ -252,7 +243,7 @@ export class SetupTestGateway {
 
     socket.on('setup_test:answer', async (payload: { token: string; questionId: string; selectedIndex: number }) => {
       try {
-        const userId = this.getUserIdFromToken(payload?.token);
+        const userId = await this.getUserIdFromToken(payload?.token);
         if (!userId) return;
         const session = this.testSessions.get(userId);
         if (!session || session.grading) return;
