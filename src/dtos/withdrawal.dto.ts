@@ -9,21 +9,12 @@ import { z } from 'zod';
 // non-strict object parsing silently drops any key this schema doesn't
 // declare, so an attacker-supplied destination can never reach the service
 // layer, by construction — not by a runtime check that could be bypassed.
+// Finance #32: the bank destination is NEVER taken from the request body, exactly like the PayPal one. Deliberately no iban /
+// accountName / accountNumber field exists on this schema: zod drops any such key a caller sends, so it cannot reach the service
+// (by construction). A bank withdrawal uses the bank data stored on the provider's own profile (see createForProvider).
 export const createWithdrawalSchema = z.object({
   amount: z.number().positive('المبلغ يجب أن يكون أكبر من صفر'),
   method: z.string().trim().min(2, 'طريقة السحب مطلوبة').default('bank_transfer'),
-  accountName: z.string().trim().optional(),
-  accountNumber: z.string().trim().optional(),
-  iban: z.string().trim().optional(),
-}).superRefine((data, ctx) => {
-  // A PayPal withdrawal has no bank destination to validate here at all —
-  // requiring IBAN/accountNumber "merely because" the method is PayPal would
-  // be exactly the mistake this task's owner decisions explicitly forbid.
-  // Every other (i.e. bank) method preserves the EXACT original requirement.
-  if (data.method === 'paypal') return;
-  if (!data.iban && !data.accountNumber) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'يجب توفير رقم IBAN أو رقم الحساب', path: ['iban'] });
-  }
 });
 
 // Marketer/affiliate withdrawal — destination is NEVER taken from the

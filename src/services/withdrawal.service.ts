@@ -7,6 +7,8 @@ import { providerFinanceService } from './provider-finance.service';
 import { isRetryableTransactionConflict } from '../utils/prisma-retry.util';
 import { deriveWithdrawalReferenceId } from '../utils/withdrawal-reference.util';
 
+const NO_APPROVED_BANK_DATA_MESSAGE = 'لا توجد بيانات بنكية معتمدة للسحب';
+
 const MAX_SERIALIZATION_RETRIES = 3;
 
 /**
@@ -109,6 +111,20 @@ export class WithdrawalService {
       paypalEmail = providerProfile.paypalPayoutEmail;
     }
 
+    // Finance #32: a bank withdrawal's destination is resolved here from the provider's OWN stored profile data, never from the
+    // request body (the DTO declares no iban/accountName/accountNumber, and the service ignores any that a caller passes).
+    // Nothing stored -> refused. The values are copied onto the Withdrawal as an immutable snapshot; the profile itself is not touched.
+    let bankDestination: { accountName: string | null; iban: string } | null = null;
+    if (input.method !== 'paypal') {
+      const bankProfile = await prisma.providerProfile.findUnique({
+        where: { userId },
+        select: { iban: true, accountHolder: true }
+      });
+      const storedIban = bankProfile?.iban?.trim();
+      if (!storedIban) throw new AppError(NO_APPROVED_BANK_DATA_MESSAGE, 400);
+      bankDestination = { accountName: bankProfile?.accountHolder?.trim() || null, iban: storedIban };
+    }
+
     // Generated ONCE per call, outside the retry loop — every retry attempt
     // of THIS creation call reuses the identical id/referenceId pair. Only
     // one attempt's INSERT can ever actually commit (Postgres rolls back
@@ -162,9 +178,9 @@ export class WithdrawalService {
               amount: input.amount,
               currency: 'USD', // all withdrawals are USD — never rely on the database default.
               method: input.method,
-              accountName: input.accountName || null,
-              accountNumber: input.accountNumber || null,
-              iban: input.iban || null,
+              accountName: bankDestination?.accountName ?? null,
+              accountNumber: null,
+              iban: bankDestination?.iban ?? null,
               // The IMMUTABLE destination snapshot — resolved once, above,
               // outside this transaction/retry loop. Always null for a
               // non-PayPal withdrawal.
