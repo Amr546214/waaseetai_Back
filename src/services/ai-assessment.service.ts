@@ -2,6 +2,7 @@ import { AssessmentStatus, Prisma, SpecialtyVerificationStatus } from '@prisma/c
 import { prisma } from '../config/db';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { AppError } from '../utils/app-error';
+import { evaluateAssessment, AnswerLogEntry } from '../utils/assessment-review-flags';
 
 // AI assessments run exclusively through the external WaseetAI service:
 //  - generation: POST /v1/ai/assessments/stream (socket) or /v1/ai/assessments (REST)
@@ -269,6 +270,43 @@ function readGradingClaimedAt(submittedAnswers: unknown): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
+/**
+ * Review flags ("for review", never an automatic failure): merged into the attempt's existing `analyzedAssetsSnapshot` JSON next to the
+ * vendor attempt id, together with the per-answer receive times the server recorded (record_answer). Score and status are untouched.
+ */
+function snapshotWithReview(attempt: { analyzedAssetsSnapshot?: unknown; startedAt: Date }, questions: StoredQuestion[], answers: Record<string, string>, completedAt: Date) {
+  const base = (attempt.analyzedAssetsSnapshot && typeof attempt.analyzedAssetsSnapshot === 'object' && !Array.isArray(attempt.analyzedAssetsSnapshot)
+    ? attempt.analyzedAssetsSnapshot : {}) as Record<string, unknown>;
+  const answerLog = Array.isArray(base.answerLog) ? (base.answerLog as AnswerLogEntry[]) : [];
+  const review = evaluateAssessment({ questionIds: questions.map(q => String(q.id)), answers, startedAt: new Date(attempt.startedAt), completedAt, answerLog });
+  return { ...base, review } as any;
+}
+
+const MAX_LOGGED_ANSWERS = 100;
+
+/**
+ * Records WHEN (server time) the user first answered a question, as the client reports each choice. Best effort and append-only per question:
+ * a later change of mind does not move the first-answer time. Returns false when the attempt/question is not valid for this user.
+ */
+export async function recordAssessmentAnswer(userId: string, attemptId: string, questionId: string, answer: string, now: Date = new Date()): Promise<boolean> {
+  if (typeof questionId !== 'string' || typeof answer !== 'string' || !questionId || answer.length > 50) return false;
+  return prisma.$transaction(async (tx) => {
+    const attempt = await tx.assessmentAttempt.findFirst({
+      where: { id: attemptId, status: { in: SUBMITTABLE_STATUSES }, providerSpecialty: { providerProfile: { userId } } },
+      select: { id: true, questionsPayload: true, analyzedAssetsSnapshot: true }
+    });
+    if (!attempt) return false;
+    const questions = (Array.isArray(attempt.questionsPayload) ? attempt.questionsPayload : []) as unknown as StoredQuestion[];
+    if (!questions.some(q => String(q.id) === questionId)) return false;
+    const base = (attempt.analyzedAssetsSnapshot && typeof attempt.analyzedAssetsSnapshot === 'object' && !Array.isArray(attempt.analyzedAssetsSnapshot)
+      ? attempt.analyzedAssetsSnapshot : {}) as Record<string, unknown>;
+    const log = (Array.isArray(base.answerLog) ? base.answerLog : []) as AnswerLogEntry[];
+    if (log.some(e => e.q === questionId) || log.length >= MAX_LOGGED_ANSWERS) return true;
+    await tx.assessmentAttempt.update({ where: { id: attempt.id }, data: { analyzedAssetsSnapshot: { ...base, answerLog: [...log, { q: questionId, a: answer, t: now.getTime() }] } as any } });
+    return true;
+  });
+}
+
 function normalizeAnswers(raw: unknown): Record<string, string> {
   const out: Record<string, string> = {};
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -434,7 +472,7 @@ async function gradeWithWaseetAi(ctx: {
     await prisma.$transaction(async (tx) => {
       await tx.assessmentAttempt.update({
         where: { id: attemptId },
-        data: { submittedAnswers: answers as any, score, isPassed, status, completedAt, feedbackAr, strengths, weaknesses }
+        data: { submittedAnswers: answers as any, score, isPassed, status, completedAt, feedbackAr, strengths, weaknesses, analyzedAssetsSnapshot: snapshotWithReview(attempt, questions, answers, completedAt) }
       });
       await applySpecialtyOutcome(tx, attempt, score, isPassed, completedAt);
     });
@@ -475,7 +513,7 @@ async function gradeLegacyLocally(ctx: {
 
   const claim = await prisma.assessmentAttempt.updateMany({
     where: { id: attemptId, status: { in: SUBMITTABLE_STATUSES } },
-    data: { submittedAnswers: answers as any, score, isPassed, status, completedAt }
+    data: { submittedAnswers: answers as any, score, isPassed, status, completedAt, analyzedAssetsSnapshot: snapshotWithReview(attempt, questions, answers, completedAt) }
   });
   if (claim.count === 0) return { kind: 'ALREADY_FINALIZED' };
 

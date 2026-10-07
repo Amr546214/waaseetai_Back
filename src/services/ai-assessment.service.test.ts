@@ -481,3 +481,66 @@ test('assessment files (WaseetAI-linked) have no internal LlmClient reference an
     assert.ok(!/AI_ASSESSMENT_GENERATION_ENABLED|AI_ASSESSMENT_UNAVAILABLE/.test(src), `${f} must not keep the kill switch`);
   }
 });
+
+// ── #20: review flags (advisory only) and per-answer receive times ────────────────────────────────────────────────────────────────────────
+
+test('record answer: stores the first answer time of a question (server clock), never moves it, ignores unknown questions / foreign attempts', async () => {
+  resetState({ claimExisting: attemptFixture() });
+  const { recordAssessmentAnswer } = await loadSvc();
+  assert.equal(await recordAssessmentAnswer('user-1', 'att-1', '2', 'b', new Date(1000)), true);
+  const stored = state.txUpdates.find((u: any) => u.model === 'attempt').data.analyzedAssetsSnapshot;
+  assert.deepEqual(stored.answerLog, [{ q: '2', a: 'b', t: 1000 }]);
+  assert.equal(stored.vendorAttemptId, 'vendor-9', 'the vendor attempt id next to it is preserved');
+  // a second report for the same question changes nothing (first-answer time is kept)
+  resetState({ claimExisting: attemptFixture({ analyzedAssetsSnapshot: { vendorAttemptId: 'vendor-9', answerLog: [{ q: '2', a: 'b', t: 1000 }] } }) });
+  assert.equal(await recordAssessmentAnswer('user-1', 'att-1', '2', 'c', new Date(5000)), true);
+  assert.equal(state.txUpdates.length, 0);
+  // unknown question / no such attempt for this user
+  resetState({ claimExisting: attemptFixture() });
+  assert.equal(await recordAssessmentAnswer('user-1', 'att-1', '99', 'a'), false);
+  resetState({ claimExisting: null });
+  assert.equal(await recordAssessmentAnswer('user-2', 'att-1', '1', 'a'), false);
+  assert.equal(state.txUpdates.length, 0);
+});
+
+test('submit: a too-fast, uniform attempt is MARKED for review (flags stored with the measurements) and is still graded normally — score/status untouched', async () => {
+  resetState({
+    attempt: attemptFixture({ startedAt: new Date(Date.now() - 20 * 1000), questionsPayload: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(vq),
+      analyzedAssetsSnapshot: { provider: 'WASEET_AI', vendorAttemptId: 'vendor-9', answerLog: [1, 2, 3, 4, 5].map(i => ({ q: String(i), a: 'a', t: Date.now() - 20000 + i * 500 })) } }),
+    client: { submitAssessment: async () => gradedOk({ score: 35, isPassed: false }) }
+  });
+  const { aiAssessmentService } = await loadSvc();
+  const answers = Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(i => [String(i), 'a']));
+  const res = await aiAssessmentService.submitAssessment('att-1', answers, 'user-1');
+  assert.equal(res.score, 35);
+  assert.equal(res.status, 'FAILED');
+  const data = state.txUpdates.find((u: any) => u.model === 'attempt').data;
+  assert.equal(data.score, 35);
+  assert.equal(data.status, 'FAILED');
+  const review = data.analyzedAssetsSnapshot.review;
+  assert.equal(review.flagged, true);
+  assert.deepEqual(review.flags.map((f: any) => f.code).sort(), ['FAST_ANSWERS', 'TOTAL_TIME_TOO_SHORT', 'UNIFORM_ANSWERS']);
+  assert.equal(data.analyzedAssetsSnapshot.vendorAttemptId, 'vendor-9');
+  assert.equal(review.measured.totalSeconds >= 19, true);
+});
+
+test('submit: a normal attempt (enough time, varied answers, slow answers) is not marked; legacy attempts are evaluated too', async () => {
+  const qs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(vq);
+  const varied: Record<string, string> = { '1': 'a', '2': 'c', '3': 'b', '4': 'd', '5': 'a', '6': 'b', '7': 'd', '8': 'c', '9': 'b', '10': 'a' };
+  const start = Date.now() - 300 * 1000;
+  resetState({
+    attempt: attemptFixture({ startedAt: new Date(start), questionsPayload: qs, analyzedAssetsSnapshot: { vendorAttemptId: 'vendor-9', answerLog: qs.map((q, i) => ({ q: String(q.id), a: 'a', t: start + (i + 1) * 20000 })) } }),
+    client: { submitAssessment: async () => gradedOk() }
+  });
+  const { aiAssessmentService } = await loadSvc();
+  await aiAssessmentService.submitAssessment('att-1', varied, 'user-1');
+  const review = state.txUpdates.find((u: any) => u.model === 'attempt').data.analyzedAssetsSnapshot.review;
+  assert.equal(review.flagged, false);
+  assert.deepEqual(review.flags, []);
+
+  resetState({ attempt: legacyAttempt({ startedAt: new Date(Date.now() - 10 * 1000) }) });
+  await aiAssessmentService.submitAssessment('att-1', { '1': 'b', '2': 'b', '3': 'b', '4': 'b' }, 'user-1');
+  const legacy = state.updateManys.find((u: any) => u.data?.analyzedAssetsSnapshot);
+  assert.equal(legacy.data.analyzedAssetsSnapshot.review.flags.some((f: any) => f.code === 'TOTAL_TIME_TOO_SHORT'), true);
+  assert.equal(legacy.data.status, 'COMPLETED');
+});
