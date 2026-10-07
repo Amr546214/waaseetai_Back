@@ -216,7 +216,7 @@ export class AuthController {
 
 			res.status(200).json({
 				success: true,
-				message: result.verified ? 'تم تسجيل الدخول بواسطة جوجل بنجاح' : 'يرجى استكمال خطوات التسجيل والتحقق',
+				message: 'message' in result ? result.message : 'يرجى استكمال خطوات التسجيل والتحقق',
 				data: result
 			});
 		} catch (error) {

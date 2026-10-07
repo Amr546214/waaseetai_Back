@@ -671,33 +671,10 @@ export class AuthService {
 			throw new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403);
 		}
 
-		// Verification is email-only: `phoneOtpEnabled` is ignored (no SMS challenge, no SMS 503), so an account that still has
-		// the legacy flag logs in through the normal flow.
-		const jwtSecret = process.env.JWT_SECRET;
-		if (!jwtSecret) throw new AppError('JWT_SECRET missing', 500);
-
-		const token = jwt.sign(
-			{ userId: user.id, accountType: user.accountType },
-			jwtSecret,
-			{ expiresIn: '7d' }
-		);
-		await sessionService.register(user.id, token, sessionContext);
-
-		const { firstName, lastName } = resolveAuthDisplayName(user, roleRelations);
-
-		return {
-			verified: true as const,
-			token,
-			user: {
-				id: user.id,
-				firstName,
-				lastName,
-				email: user.email,
-				accountType: user.accountType,
-				activeRole: user.activeRole,
-				roles: user.roles
-			}
-		};
+		// Owner decision #4: Google proves the identity but does not create the session. The same mandatory LOGIN_EMAIL challenge as the
+		// password login is started for the account email; the session comes only from POST /auth/login/verify-otp. (A brand-new Google
+		// account never gets here: it is created by POST /register as PENDING_VERIFICATION and is activated by its email code.)
+		return this.loginOtpChallengeResult(user.id, user.email, sessionContext.ipAddress);
 	}
 
 	/**

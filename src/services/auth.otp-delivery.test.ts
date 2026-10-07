@@ -204,7 +204,7 @@ test('login: an ACTIVE user with the legacy phoneOtpEnabled=true gets the EMAIL 
   assert.ok(logs.every(l => !/phone|SMS|جوال/i.test(l)), 'nothing about a phone code is logged');
 });
 
-test('google login: an existing ACTIVE user with phoneOtpEnabled=true gets a session — no SMS challenge, no SMS 503', async (t) => {
+test('google login: an existing ACTIVE user with phoneOtpEnabled=true gets the EMAIL challenge — no session yet, no SMS, no phone code', async (t) => {
   const bcrypt = await import('bcrypt');
   const hash = await bcrypt.hash('Str0ng!Pass1', 4);
   const { created, sent, smsSent, logs } = setup(t, { smsAvailable: false, googleSub: 'g-sub-1', user: ACTIVE_LEGACY_PHONE_OTP_USER(hash) });
@@ -212,12 +212,13 @@ test('google login: an existing ACTIVE user with phoneOtpEnabled=true gets a ses
 
   const result: any = await authService.googleAuth({ idToken: 'tok', intent: 'login' } as any, {});
 
-  assert.equal(result.verified, true);
-  assert.equal(typeof result.token, 'string');
-  assert.equal(result.phoneOtpRequired, undefined);
-  assert.equal(created.length, 0);
+  assert.equal(result.verified, false);
+  assert.equal(result.loginOtpRequired, true);
+  assert.equal(result.token, undefined);
+  assert.equal(result.phoneOtpRequired, false);
+  assert.equal(created.every(c => c.type === 'EMAIL'), true);
   assert.equal(smsSent.length, 0);
-  assert.equal(sent.length, 0);
+  assert.equal(sent.length, 1);
   assert.ok(logs.every(l => !/phone|SMS|جوال/i.test(l)));
 });
 
