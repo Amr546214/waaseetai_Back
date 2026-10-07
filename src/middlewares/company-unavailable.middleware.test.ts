@@ -14,7 +14,7 @@ test('company setup save is refused with 403 and the Arabic message (both compan
 		assert.equal(e.statusCode ?? e.status, 403);
 		assert.equal(e.message, COMPANY_ACCOUNTS_UNAVAILABLE_MESSAGE);
 	}
-	assert.equal(COMPANY_ACCOUNTS_UNAVAILABLE_MESSAGE, 'حسابات الشركات غير متاحة حاليًا');
+	assert.equal(COMPANY_ACCOUNTS_UNAVAILABLE_MESSAGE, 'حسابات الشركات قريبًا');
 });
 
 test('individual, provider and marketer setup is not affected', () => {
