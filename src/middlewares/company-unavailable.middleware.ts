@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { AccountType } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 
-export const COMPANY_ACCOUNTS_UNAVAILABLE_MESSAGE = 'حسابات الشركات غير متاحة حاليًا';
+export const COMPANY_ACCOUNTS_UNAVAILABLE_MESSAGE = 'حسابات الشركات قريبًا';
 
 export const isCompanyAccountType = (accountType: unknown): boolean =>
 	accountType === AccountType.PROVIDER_COMPANY || accountType === AccountType.CLIENT_COMPANY;
