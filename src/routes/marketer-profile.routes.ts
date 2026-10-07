@@ -4,10 +4,15 @@ import { profileRequestsController } from '../controllers/profile-requests.contr
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import { validateDto } from '../middlewares/validate-dto.middleware';
 import { apiLimiter } from '../middlewares/rate-limit.middleware';
+import { marketerKycController } from '../controllers/marketer-kyc.controller';
+import { memoryUpload } from '../utils/cloudinary-storage';
 import { CreateIdentityRequestSchema } from '../dtos/profile-requests.dto';
 import { updateBankInfoSchema, updateMarketingInfoSchema, addChannelSchema } from '../dtos/marketer-profile.dto';
 
 const router = Router();
+
+// Identity document: PDF / JPG / PNG / WEBP, one file, 5 MB. Stored private; there is no field through which a client could set identityVerified.
+const kycUpload = memoryUpload({ fileSize: 5 * 1024 * 1024, files: 1, allowedMimeTypes: new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']) });
 
 // Public, unauthenticated — must be registered before the authenticate/
 // authorize guards below (same pattern as provider-profile.routes.ts's
@@ -23,6 +28,8 @@ router.get('/', marketerProfileController.getProfile);
 router.patch('/marketing-info', validateDto(updateMarketingInfoSchema), marketerProfileController.updateMarketingInfo);
 router.post('/channels', validateDto(addChannelSchema), marketerProfileController.addChannel);
 router.delete('/channels/:id', marketerProfileController.removeChannel);
+router.post('/kyc-document', kycUpload.single('file'), marketerKycController.upload);
+router.get('/kyc-status', marketerKycController.status);
 router.patch('/bank-info', validateDto(updateBankInfoSchema), marketerProfileController.updateBankInfo);
 
 // Change Requests
