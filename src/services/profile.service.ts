@@ -151,11 +151,8 @@ export class ProfileService {
       const userUpdateData: any = {};
       if (phoneNumber !== undefined) userUpdateData.phoneNumber = phoneNumber;
 
-      // Upgrade status if currently pending
+      // A profile save never changes User.status: activation is owned by OTP verification / admin review.
       const currentUser = await tx.user.findUnique({ where: { id: userId } });
-      if (currentUser?.status === UserStatus.PENDING_VERIFICATION) {
-        userUpdateData.status = UserStatus.ACTIVE;
-      }
 
       let updatedUser = currentUser;
       if (Object.keys(userUpdateData).length > 0) {
@@ -387,8 +384,9 @@ export class ProfileService {
       // });
       
       // Flag user as pending review
-      await prisma.user.update({
-        where: { id: userId },
+      // Only an ACTIVE account is flagged: this must never move a SUSPENDED / in-review account to another status.
+      await prisma.user.updateMany({
+        where: { id: userId, status: UserStatus.ACTIVE },
         data: { status: UserStatus.PENDING_VERIFICATION }
       });
 

@@ -209,7 +209,8 @@ function createDisplayWriteMockPrisma(t: TestContext, userFixture: any, existing
   const tx = {
     user: {
       findUnique: async () => userFixture,
-      update: userUpdateSpy
+      update: userUpdateSpy,
+      updateMany: userUpdateSpy
     },
     clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy, findUnique: async () => existingClientProfile },
     providerProfile: { upsert: providerUpsertSpy, update: t.mock.fn((args: any) => ({ id: 'p1', ...args.data })), findUnique: async () => ({ userId: 'user-1', skills: [], portfolioItems: [], user: {} }) },
@@ -375,7 +376,7 @@ test('updateProfile (AFFILIATE active): paypalPayoutEmail is stripped, not sent 
   assert.equal('paypalPayoutEmail' in affiliateCall.update, false);
 });
 
-test('updateProfile: legitimate identity-level behavior (phoneNumber, pending->active status) is preserved', async (t) => {
+test('updateProfile: phoneNumber is saved and a pending account is NOT activated by a profile save (AUD-FND-000036)', async (t) => {
   const pendingUser = { id: 'user-1', status: 'PENDING_VERIFICATION' };
   const { profileService, userUpdateSpy, clientUpsertSpy } = await loadProfileServiceForUpdate(t, pendingUser);
 
@@ -384,7 +385,7 @@ test('updateProfile: legitimate identity-level behavior (phoneNumber, pending->a
   assert.equal(userUpdateSpy.mock.callCount(), 1);
   const userCall = userUpdateSpy.mock.calls[0].arguments[0];
   assert.equal(userCall.data.phoneNumber, '0500000000');
-  assert.equal(userCall.data.status, 'ACTIVE');
+  assert.equal('status' in userCall.data, false);
   // firstName/lastName/avatarUrl were never in this request, so no profile
   // upsert should fire from an empty displayFields+profileData.
   assert.equal(clientUpsertSpy.mock.callCount(), 0);
@@ -455,6 +456,7 @@ test('updateTab: identity/banking tabs remain unaffected by the display-field al
   // it never persists the submitted field data (mocked/no-op moderation flow).
   assert.equal(userUpdateSpy.mock.callCount(), 1);
   assert.equal(userUpdateSpy.mock.calls[0].arguments[0].data.status, 'PENDING_VERIFICATION');
+  assert.equal(userUpdateSpy.mock.calls[0].arguments[0].where.status, 'ACTIVE');
   assert.equal(clientUpsertSpy.mock.callCount(), 0);
   assert.match(result.message, /قيد التحقق/);
 });
@@ -554,7 +556,7 @@ function createCompletionMockPrisma(t: TestContext, userFixture: any) {
   const affiliateUpdateSpy = t.mock.fn((args: any) => { affiliateProfileState = { ...affiliateProfileState, ...args.data }; return { ...affiliateProfileState }; });
 
   const tx = {
-    user: { findUnique: async () => ({ ...userFixture }), update: userUpdateSpy },
+    user: { findUnique: async () => ({ ...userFixture }), update: userUpdateSpy, updateMany: userUpdateSpy },
     clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy },
     providerProfile: { upsert: providerUpsertSpy, update: providerUpdateSpy, findUnique: async () => ({ userId: 'user-1', skills: [], portfolioItems: [], user: {} }) },
     affiliateProfile: {
