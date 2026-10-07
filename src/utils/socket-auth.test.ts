@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import jwt from 'jsonwebtoken';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
 import { io as connect, type Socket as ClientSocket } from 'socket.io-client';
 
 // #35 (sockets) — one handshake check for every gateway: valid JWT + live session + ACTIVE account. Real Socket.IO server and client over a
@@ -20,22 +22,27 @@ const users: Record<string, any> = {
 };
 const tokenFor = (id: string, secret = process.env.JWT_SECRET!) => jwt.sign({ userId: id, accountType: 'CLIENT_INDIVIDUAL' }, secret, { expiresIn: '1h' });
 
+// The gateways log every connect / join with console.log; with many connections that noise interleaves with the test runner's own output
+// stream and corrupts it ("Unable to deserialize cloned data"), so it is muted for this file.
+const originalLog = console.log; const originalWarn = console.warn;
+console.log = () => {}; console.warn = () => {};
+let measured = '';
+
 let booted: Promise<{ url: string; close: () => void; auth: any; registry: any; adminUsers: any }> | undefined;
 function boot() {
 	booted ??= (async () => {
 		mock.module('../config/db', { namedExports: { prisma: {
-			user: { findUnique: async ({ where }: any) => users[where.id] ?? null, update: async ({ where, data }: any) => { Object.assign(users[where.id], data); return { ...users[where.id] }; } },
+			conversation: { findFirst: async () => null, findUnique: async () => null },
+			user: { findUnique: async ({ where }: any) => (users[where.id] ? { ...users[where.id], activeRole: 'CLIENT' } : null), update: async ({ where, data }: any) => { Object.assign(users[where.id], data); return { ...users[where.id] }; } },
 		} } });
 		mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
 		mock.module('../services/session.service', { namedExports: { sessionService: { validateOrRegister: async (userId: string) => (userId === 'revoked' ? null : { id: 's1' }) } } });
-		const log = console.log; console.log = () => {};
 		const { Server } = await import('socket.io');
 		void Server;
 		const { initSocketServer } = await import('../socket');
 		const server = http.createServer();
 		initSocketServer(server, ['*']);
 		await new Promise<void>(r => server.listen(0, r));
-		console.log = log;
 		return {
 			url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
 			close: () => { server.closeAllConnections?.(); server.close(); },
@@ -132,8 +139,83 @@ test('a status change with no live socket (or no server registered) is a harmles
 	assert.equal(await registry.disconnectUserSockets('nobody-connected'), 0);
 });
 
+const roomMembers = async (room: string) => (await (await import('../socket')).getIO()!.in(room).fetchSockets()).length;
+const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+test('join_user_room with a token in the payload: refused for a suspended / pending / under-review / revoked account, accepted for an ACTIVE one', async () => {
+	const { url } = await boot();
+	for (const id of ['suspended', 'pending', 'review', 'revoked']) {
+		const anon = await open(url, '');
+		anon.socket.emit('join_user_room', { userId: id, token: tokenFor(id) });
+		await wait(250);
+		assert.equal(await roomMembers(`user_${id}`), 0, `${id} must not join its room`);
+		anon.socket.close();
+	}
+	const anon = await open(url, '');
+	anon.socket.emit('join_user_room', { userId: 'active', token: tokenFor('active') });
+	await wait(250);
+	assert.equal(await roomMembers('user_active'), 1);
+	anon.socket.close();
+});
+
+test('ACTIVE account: realtime still works — notifications pushed to its user room arrive, chat recognises the account (join_conversation answers "not allowed", not "log in"); an anonymous socket gets neither', async () => {
+	const { url } = await boot();
+	const a = await open(url, '', tokenFor('active'));
+	const anon = await open(url, '');
+	const gotA: any[] = [], gotAnon: any[] = [];
+	a.socket.on('new_notification', (n: any) => gotA.push(n));
+	anon.socket.on('new_notification', (n: any) => gotAnon.push(n));
+	(await import('../socket')).getIO()!.to('user_active').emit('new_notification', { id: 'n1' });
+	await wait(250);
+	assert.deepEqual(gotA, [{ id: 'n1' }]);
+	assert.deepEqual(gotAnon, []);
+	const chatA: any[] = [], chatAnon: any[] = [];
+	a.socket.on('chat_error', (e: any) => chatA.push(e.message));
+	anon.socket.on('chat_error', (e: any) => chatAnon.push(e.message));
+	a.socket.emit('join_conversation', { conversationId: 'c1' });
+	anon.socket.emit('join_conversation', { conversationId: 'c1' });
+	await wait(400);
+	assert.match(chatA[0] ?? '', /غير مصرح/);
+	assert.match(chatAnon[0] ?? '', /تسجيل الدخول/);
+	a.socket.close(); anon.socket.close();
+});
+
+test('handshake cost: 30 authenticated handshakes stay in the same order of magnitude as 30 anonymous ones (the check is two indexed lookups)', async () => {
+	const { url } = await boot();
+	const time = async (token?: string) => { const t0 = performance.now(); for (let i = 0; i < 30; i++) { const r = await open(url, '', token); r.socket.close(); } return (performance.now() - t0) / 30; };
+	await time(); // warm up
+	const anonymous = await time();
+	const authenticated = await time(tokenFor('active'));
+	measured = `handshake avg: anonymous ${anonymous.toFixed(1)} ms, authenticated ${authenticated.toFixed(1)} ms`;
+	assert.ok(authenticated - anonymous < 25, `authenticated handshake adds ${(authenticated - anonymous).toFixed(1)} ms`);
+});
+
+test('every code path that writes a User.status other than ACTIVE is wired to disconnectUserSockets (guard against a new writer being added without it)', () => {
+	const root = path.join(process.cwd(), 'src');
+	const files: string[] = [];
+	const walk = (d: string) => { for (const f of readdirSync(d)) { const p = path.join(d, f); statSync(p).isDirectory() ? walk(p) : /\.ts$/.test(f) && !/\.test\.ts$/.test(f) && files.push(p); } };
+	walk(root);
+	const writers = files.filter(f => {
+		const src = readFileSync(f, 'utf8').replace(/\/\/.*$/gm, '');
+		for (const m of src.matchAll(/\buser\.(update|updateMany)\(/g)) {
+			// the call's own argument text (balanced parentheses); a `status` key inside its `data: { ... }` makes it a status writer
+			let depth = 1, i = m.index! + m[0].length;
+			while (i < src.length && depth > 0) { const c = src[i++]; if (c === '(') depth++; else if (c === ')') depth--; }
+			const call = src.slice(m.index!, i);
+			if (/\bdata:\s*\{[^}]*\bstatus\b/.test(call)) return true;
+		}
+		return false;
+	}).map(f => path.relative(root, f));
+	// updateUserStatus in auth.repository only ever receives ACTIVE (account activation); every other writer must cut sockets
+	const mustCut = writers.filter(f => f !== path.join('repositories', 'auth.repository.ts'));
+	assert.deepEqual(mustCut.sort(), ['services/admin-users.service.ts', 'services/profile.service.ts']);
+	for (const f of mustCut) assert.match(readFileSync(path.join(root, f), 'utf8'), /disconnectUserSockets\(/, f);
+});
+
 after(async () => {
 	const { registry } = await boot();
 	for (const id of Object.keys(users)) await registry.disconnectUserSockets(id).catch(() => 0);
 	(await boot()).close();
+	console.log = originalLog; console.warn = originalWarn;
+	if (measured) console.log(measured);
 });

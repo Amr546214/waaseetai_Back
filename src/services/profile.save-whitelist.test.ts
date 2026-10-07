@@ -15,10 +15,12 @@ const tx: any = {
 };
 const prisma: any = { ...tx, user: { ...tx.user, updateMany: async () => ({ count: 0 }) }, $transaction: async (fn: any) => fn(tx) };
 
+const disconnects: string[] = [];
 let loaded: Promise<any> | undefined;
 function svc() {
 	loaded ??= (async () => {
 		mock.module('../config/db', { namedExports: { prisma } });
+		mock.module('../utils/socket-registry', { namedExports: { disconnectUserSockets: async (id: string) => { disconnects.push(id); return 1; } } });
 		mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
 		return (await import('./profile.service.ts')).profileService;
 	})();
@@ -79,4 +81,18 @@ test('identity/banking tab only flags an ACTIVE account: the write is conditiona
 	assert.equal(calls.length, 1);
 	assert.equal(calls[0].where.status, 'ACTIVE');
 	assert.equal(state.userUpdates.length, 0);
+});
+
+
+test('identity/banking tab that moves an ACTIVE account to PENDING_VERIFICATION cuts its live sockets; no change (count 0) cuts nothing', async () => {
+	reset();
+	disconnects.length = 0;
+	const service = await svc();
+	prisma.user.updateMany = async () => ({ count: 1 });
+	await service.updateTab('u1', 'identity', {}, 'CLIENT');
+	assert.deepEqual(disconnects, ['u1']);
+	disconnects.length = 0;
+	prisma.user.updateMany = async () => ({ count: 0 });
+	await service.updateTab('u1', 'identity', {}, 'CLIENT');
+	assert.deepEqual(disconnects, []);
 });

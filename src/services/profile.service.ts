@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { UpdateProfileDto } from '../dtos/profile.dto';
 import { AppError } from '../utils/app-error';
+import { disconnectUserSockets } from '../utils/socket-registry';
 import { PHONE_CHANGE_REQUIRED_MESSAGE } from '../utils/phone-change-messages';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
@@ -399,10 +400,12 @@ export class ProfileService {
       
       // Flag user as pending review
       // Only an ACTIVE account is flagged: this must never move a SUSPENDED / in-review account to another status.
-      await prisma.user.updateMany({
+      const flagged = await prisma.user.updateMany({
         where: { id: userId, status: UserStatus.ACTIVE },
         data: { status: UserStatus.PENDING_VERIFICATION }
       });
+      // The account just left ACTIVE: its live sockets are cut like on any other status change (HTTP is already refused by requireActiveUser).
+      if (flagged?.count) { try { await disconnectUserSockets(userId); } catch { /* the status change is already committed */ } }
 
       return { message: 'تم إرسال طلب التعديل للمراجعة. حالة الحساب الآن: قيد التحقق' };
     }
