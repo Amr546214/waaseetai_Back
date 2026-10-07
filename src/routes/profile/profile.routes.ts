@@ -18,8 +18,9 @@ router.post('/phone/change/request', authenticate, requireActiveUser, phoneChang
 router.post('/phone/change/confirm', authenticate, requireActiveUser, phoneChangeController.confirm);
 router.put('/update/:tabName', authenticate, requireActiveUser, profileController.updateTab);
 
+import { blockCompanySetup } from '../../middlewares/company-unavailable.middleware';
 import { profileSetupController } from '../../controllers/profile-setup.controller';
 
-router.post('/setup', authenticate, requireActiveUser, profileSetupController.setupProfile);
+router.post('/setup', authenticate, requireActiveUser, blockCompanySetup, profileSetupController.setupProfile);
 
 export default router;

@@ -4,6 +4,7 @@ import { authenticate, requireActiveUser } from '../middlewares/auth.middleware'
 import { authorize } from '../middlewares/auth.middleware';
 import { AccountType } from '@prisma/client';
 import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
+import { blockCompanySetup } from '../middlewares/company-unavailable.middleware';
 import { authLimiter, aiLimiter } from '../middlewares/rate-limit.middleware';
 
 const router = Router();
@@ -63,7 +64,7 @@ router.put('/password', authLimiter, providerProfileController.changePassword);
 router.post('/suggest-bio', requireProvider, aiLimiter, providerProfileController.suggestBio);
 router.post('/suggest-skills', requireProvider, aiLimiter, providerProfileController.suggestSkills);
 router.get('/setup', requireProvider, providerProfileController.getSetupData);
-router.post('/setup', requireProvider, providerProfileController.saveSetupData);
+router.post('/setup', requireProvider, blockCompanySetup, providerProfileController.saveSetupData);
 // Self-preview variant of the same getPublicProfile handler as the public
 // `/public/:providerId` route above — it hits the identical generateAiMetrics
 // WaseetAI call on a cache miss, so it needs the same aiLimiter (Batch 6 gap
