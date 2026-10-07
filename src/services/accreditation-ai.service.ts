@@ -239,7 +239,12 @@ export class AccreditationAiService {
       },
     });
     if (!sample) throw new AppError('نموذج الاعتماد غير موجود', 404);
-    return sample;
+    // "For review" marks of the latest assessment attempt (advisory only: they never changed the score or status).
+    const attempt = sample.providerSpecialty?.id
+      ? await prisma.assessmentAttempt.findFirst({ where: { providerSpecialtyId: sample.providerSpecialty.id, status: { in: ['COMPLETED', 'FAILED'] } }, orderBy: { completedAt: 'desc' }, select: { id: true, score: true, status: true, completedAt: true, analyzedAssetsSnapshot: true } })
+      : null;
+    const review = (attempt?.analyzedAssetsSnapshot as { review?: unknown } | null)?.review ?? null;
+    return { ...sample, assessmentReview: attempt ? { attemptId: attempt.id, status: attempt.status, score: attempt.score, completedAt: attempt.completedAt, review } : null };
   }
 
   async adminApproveSample(id: string) {

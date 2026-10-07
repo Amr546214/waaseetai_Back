@@ -9,6 +9,7 @@ import {
   EXPIRED_WEAKNESS_AR,
   claimAssessmentGeneration,
   processAssessmentSubmission,
+  recordAssessmentAnswer,
   sanitizeQuestions,
   streamAssessmentForClaim,
   PublicAssessmentQuestion
@@ -156,6 +157,16 @@ export class AssessmentGateway {
      * Event: submit_answer / submit_assessment
      * Evaluates the submitted answers and streams back comprehensive feedback and accreditation status
      */
+    /**
+     * Event: record_answer { attemptId, questionId, answer } — the client reports each choice as it is made so the server can time it
+     * (review flags only; the final answers still arrive through submit_answer / submit_assessment). Silent: never emits an error.
+     */
+    socket.on('record_answer', async (payload: { attemptId?: string; questionId?: string | number; answer?: string }) => {
+      const userId = (socket as any).userId as string | undefined;
+      if (!userId || !payload?.attemptId || payload.questionId === undefined) return;
+      try { await recordAssessmentAnswer(userId, String(payload.attemptId), String(payload.questionId), String(payload.answer ?? '')); } catch { /* best effort */ }
+    });
+
     socket.on('submit_answer', async (payload: { attemptId: string; answers: Record<string, string> }) => {
       await this.handleSubmission(socket, payload);
     });
