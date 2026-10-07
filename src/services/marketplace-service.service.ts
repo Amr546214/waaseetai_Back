@@ -1,4 +1,5 @@
 import { AccountType, Prisma } from '@prisma/client';
+import { MARKET_VISIBLE_WHERE, MARKET_ELIGIBILITY_SELECT_PROVIDER, marketBlockReasons, marketBlockMessage } from '../utils/market-visibility';
 import { prisma } from '../config/db';
 import { marketplaceAiService } from './marketplace-ai.service';
 import { aiAuditService } from './ai-audit.service';
@@ -151,6 +152,7 @@ export class MarketplaceService {
 					providerProfile: { userId },
 					isActive: true,
 					isPassed: true,
+					status: 'APPROVED',
 					OR: [{ id: specialtyId }, { specialtyId: specialtyId }]
 				},
 				include: { specialty: true }
@@ -283,6 +285,7 @@ export class MarketplaceService {
 					providerProfile: { userId },
 					isActive: true,
 					isPassed: true,
+					status: 'APPROVED',
 					OR: [{ id: specialtyId }, { specialtyId: specialtyId }]
 				},
 				include: { specialty: true }
@@ -410,7 +413,7 @@ export class MarketplaceService {
 		const activeSub = specialization || sub || specialtyId;
 
 		const whereClause: any = {
-			status: { in: ['PUBLISHED', 'APPROVED'] }
+			...MARKET_VISIBLE_WHERE
 		};
 
 		if (search && typeof search === 'string' && search.trim() !== '') {
@@ -630,12 +633,12 @@ export class MarketplaceService {
 			where: { id },
 			include: {
 				provider: {
-					select: marketplaceProviderSelect
+					select: { ...marketplaceProviderSelect, providerProfile: { select: { ...marketplaceProviderSelect.providerProfile.select, ...MARKET_ELIGIBILITY_SELECT_PROVIDER } } }
 				},
 				specialty: { include: { category: true } },
 				stages: true,
 				portfolioItem: true,
-				accreditationSample: { select: { attachments: true } },
+				accreditationSample: { select: { attachments: true, providerSpecialty: { select: { status: true } } } },
 				reviews: {
 					orderBy: { createdAt: 'desc' },
 					take: 20,
@@ -644,7 +647,7 @@ export class MarketplaceService {
 			}
 		});
 
-		if (!s || !['PUBLISHED', 'APPROVED'].includes(s.status)) {
+		if (!s || !['PUBLISHED', 'APPROVED'].includes(s.status) || marketBlockReasons(s as any).length > 0) {
 			throw new Error('الخدمة غير متوفرة أو غير منشورة');
 		}
 
@@ -765,7 +768,7 @@ export class MarketplaceService {
 							select: {
 								serviceCatalogs: {
 									where: {
-										status: { in: ['PUBLISHED', 'APPROVED'] }
+										...MARKET_VISIBLE_WHERE
 									}
 								}
 							}
@@ -819,7 +822,7 @@ export class MarketplaceService {
 
 	async getFavorites(userId: string) {
 		const favorites = await prisma.marketplaceFavorite.findMany({
-			where: { userId, service: { status: { in: ['PUBLISHED', 'APPROVED'] } } },
+			where: { userId, service: { ...MARKET_VISIBLE_WHERE } },
 			select: { serviceId: true },
 			orderBy: { createdAt: 'desc' }
 		});
@@ -827,7 +830,7 @@ export class MarketplaceService {
 	}
 
 	async setFavorite(userId: string, serviceId: string, favorite: boolean) {
-		const service = await prisma.serviceCatalog.findFirst({ where: { id: serviceId, status: { in: ['PUBLISHED', 'APPROVED'] } }, select: { id: true } });
+		const service = await prisma.serviceCatalog.findFirst({ where: { id: serviceId, ...MARKET_VISIBLE_WHERE }, select: { id: true } });
 		if (!service) throw new Error('الخدمة غير متوفرة');
 		if (favorite) {
 			await prisma.marketplaceFavorite.upsert({
@@ -860,7 +863,7 @@ export class MarketplaceService {
 
 	async requestMarketplaceService(userId: string, serviceId: string, data: any) {
 		const service = await prisma.serviceCatalog.findFirst({
-			where: { id: serviceId, status: { in: ['PUBLISHED', 'APPROVED'] } },
+			where: { id: serviceId, ...MARKET_VISIBLE_WHERE },
 			include: { specialty: true, stages: { orderBy: { stepOrder: 'asc' } } }
 		});
 		if (!service) throw new Error('الخدمة غير متوفرة');
@@ -986,7 +989,7 @@ export class MarketplaceService {
 					include: { category: true }
 				},
 					portfolioItem: true,
-					accreditationSample: true,
+					accreditationSample: { include: { providerSpecialty: { select: { status: true } } } },
 				provider: {
 					include: {
 						providerProfile: {
@@ -1020,6 +1023,7 @@ export class MarketplaceService {
 			const catSlug = model.specialty?.category?.slug || model.specialty?.slug || 'general';
 			const views = model.viewsCount || 0;
 			totalViews += views;
+			const marketReasons = ['PUBLISHED', 'APPROVED'].includes(model.status) ? marketBlockReasons(model as any) : [];
 
 			// استخراج صورة الغلاف بشكل تسلسلي نظيف
 			let coverImage = model.portfolioItem?.coverImage || model.accreditationSample?.attachments?.[0] || null;
@@ -1048,7 +1052,11 @@ export class MarketplaceService {
 				reviewsCount: 0,
 				tags: [model.specialty?.nameAr, model.subSpecialty].filter((value): value is string => Boolean(value)),
 				coverImage: coverImage,
-				status: model.status,
+				// A published service that does not meet the market conditions (KYC verified + specialty approved) is shown to its owner as
+				// "under review" with the reason; nothing is stored — it returns by itself once both conditions hold again.
+				status: marketReasons.length > 0 ? 'UNDER_REVIEW' : model.status,
+				marketVisible: ['PUBLISHED', 'APPROVED'].includes(model.status) ? marketReasons.length === 0 : false,
+				marketNotice: marketReasons.length > 0 ? marketBlockMessage(marketReasons) : null,
 				createdAt: model.createdAt,
 				createdAtFormatted: model.createdAt.toLocaleDateString('ar-SA')
 			};

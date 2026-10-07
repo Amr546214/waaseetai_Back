@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { ContractStatus, EscrowStatus, OrderStatus, OtpType, ProjectStageStatus, ProjectStatus, Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
+import { MARKET_VISIBLE_WHERE } from '../utils/market-visibility';
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
@@ -9,7 +10,7 @@ import { DUPLICATE_PURCHASE_MESSAGE, findActiveServicePurchases } from '../utils
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { LEVEL_MATRIX } from '../utils/progression-calculators';
 
-const serviceWhere = { status: { in: ['PUBLISHED', 'APPROVED'] as any } };
+const serviceWhere = MARKET_VISIBLE_WHERE;
 
 // Prisma's default (unmapped) constraint name for `WalletTransaction.referenceId
 // @unique` — `<@@map table>_<field>_key`. Same dual-shape extraction technique
