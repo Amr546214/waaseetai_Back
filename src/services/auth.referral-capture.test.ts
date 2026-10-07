@@ -129,3 +129,17 @@ test('schema: an explicit affiliateIdentifier wins over an alias; with none give
 	assert.equal((parse({ affiliateIdentifier: 'a', referralSlug: 'b' }) as any).data.body.affiliateIdentifier, 'a');
 	assert.equal((parse({}) as any).data.body.affiliateIdentifier, undefined);
 });
+
+test('registration stores the email trimmed and lower-cased even though validateRequest does not replace req.body (smoke-found)', async () => {
+	const svc = await load();
+	let stored: any;
+	const { authRepository } = await import('../repositories/auth.repository');
+	state.affiliates = [];
+	const original = (authRepository as any).createUserWithProfile;
+	// the module-level mock above is shared: capture what the service hands to the repository
+	(authRepository as any).createUserWithProfile = async (data: any) => { stored = data; return { id: 'new-user', email: data.email }; };
+	try {
+		await svc.registerUser({ ...BASE, email: '  New.User@Example.COM ' }, {});
+	} finally { (authRepository as any).createUserWithProfile = original; }
+	assert.equal(stored.email, 'new.user@example.com');
+});
