@@ -159,7 +159,7 @@ export function memoryUpload(options: { fileSize?: number; files?: number; allow
 		fileFilter: options.allowedMimeTypes
 			? (_req, file, callback) => options.allowedMimeTypes!.has(String(file.mimetype).toLowerCase().split(';')[0].trim())
 				? callback(null, true)
-				: callback(new AppError('نوع الملف غير مسموح به', 400))
+				: callback(new AppError('نوع الملف غير مسموح به', 415))
 			: undefined
 	});
 }

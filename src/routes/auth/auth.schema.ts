@@ -18,12 +18,15 @@ export const PublicAccountTypeEnum = z.enum([
   message: 'نوع الحساب غير صالح'
 });
 
+// Emails are compared case-insensitively everywhere: trim + lower-case at the edge so one address has one spelling.
+export const normalizedEmail = z.string().trim().toLowerCase().email('صيغة البريد الإلكتروني غير صحيحة');
+
 export const registerSchema = z.object({
   body: z.object({
     accountType: PublicAccountTypeEnum,
     firstName: sanitizedText(z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل')),
     lastName: sanitizedText(z.string().min(2, 'اسم العائلة يجب أن يكون حرفين على الأقل')),
-    email: z.string().email('صيغة البريد الإلكتروني غير صحيحة'),
+    email: normalizedEmail,
     phoneCountryCode: z.string().default('+966'),
     phoneNumber: z.string().regex(/^\d+$/, 'رقم الجوال يجب أن يحتوي على أرقام فقط').min(9, 'رقم الجوال غير صحيح'),
     password: z
@@ -98,7 +101,7 @@ export type ResendLoginOtpInput = z.infer<typeof resendLoginOtpSchema>['body'];
 
 export const loginSchema = z.object({
   body: z.object({
-    email: z.string().email('صيغة البريد الإلكتروني غير صحيحة'),
+    email: normalizedEmail,
     password: z.string().min(1, 'كلمة المرور مطلوبة')
   })
 });
@@ -107,7 +110,7 @@ export type LoginInput = z.infer<typeof loginSchema>['body'];
 
 export const forgotPasswordSchema = z.object({
   body: z.object({
-    email: z.string().email('صيغة البريد الإلكتروني غير صحيحة')
+    email: normalizedEmail
   })
 });
 
@@ -115,7 +118,7 @@ export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>['body'];
 
 export const verifyResetCodeSchema = z.object({
   body: z.object({
-    email: z.string().email('صيغة البريد الإلكتروني غير صحيحة'),
+    email: normalizedEmail,
     code: z.string().regex(/^\d{6}$/, 'رمز التحقق يجب أن يكون 6 أرقام')
   })
 });
@@ -124,7 +127,7 @@ export type VerifyResetCodeInput = z.infer<typeof verifyResetCodeSchema>['body']
 
 export const resetPasswordSchema = z.object({
   body: z.object({
-    email: z.string().email('صيغة البريد الإلكتروني غير صحيحة'),
+    email: normalizedEmail,
     code: z.string().regex(/^\d{6}$/, 'رمز التحقق يجب أن يكون 6 أرقام'),
     newPassword: z
       .string()
