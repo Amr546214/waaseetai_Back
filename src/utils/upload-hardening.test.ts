@@ -68,14 +68,14 @@ test('oversized uploads are refused: by buffer size and, for data URIs, from the
 	assert.ok(refused(await rejection(() => uploadDataUri(big, { folder: 'f', fileName: 'a', maxBytes: 1024 }))));
 });
 
-test('memoryUpload allow-lists: svg/html refused with a 400, codec parameters on voice notes tolerated', async () => {
+test('memoryUpload allow-lists: svg/html refused with a 415, codec parameters on voice notes tolerated', async () => {
 	const filter = (memoryUpload({ allowedMimeTypes: CHAT_UPLOAD_MIME_TYPES }) as any).fileFilter as (req: any, file: any, cb: (e: any, ok?: boolean) => void) => void;
 	const run = (mimetype: string) => new Promise<{ err: any; ok?: boolean }>(res => filter({}, { mimetype }, (err, ok) => res({ err, ok })));
 	assert.equal((await run('audio/webm;codecs=opus')).ok, true);
 	assert.equal((await run('image/png')).ok, true);
 	for (const bad of ['image/svg+xml', 'text/html', 'application/x-msdownload', 'application/javascript']) {
 		const r = await run(bad);
-		assert.ok(refused(r.err), bad);
+		assert.ok(r.err instanceof AppError && r.err.statusCode === 415, bad);
 	}
 	assert.equal(SPECIALTY_UPLOAD_MIME_TYPES.has('image/svg+xml'), false);
 	assert.equal(CHAT_UPLOAD_MIME_TYPES.has('image/svg+xml'), false);

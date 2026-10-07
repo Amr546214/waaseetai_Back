@@ -57,6 +57,8 @@ function resolveAuthDisplayName(
 
 const RESET_OTP_MAX_ATTEMPTS = OTP_MAX_ATTEMPTS;
 const RESET_OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+// Cost-12 bcrypt hash of a throwaway string (same cost as real account hashes): login compares against it when the email is unknown.
+const DUMMY_PASSWORD_HASH = '$2b$12$3NFzRulyRz.SFCUL780vDOKcvrKnKyzfJ0HLIldoSkdFk5qbe3EvS';
 const RESET_GENERIC_MESSAGE = 'إذا كان البريد الإلكتروني مسجلاً لدينا، فسيتم إرسال رمز إعادة تعيين كلمة المرور إليه';
 const RESET_INVALID_CODE_MESSAGE = 'رمز التحقق غير صحيح أو منتهي الصلاحية';
 
@@ -188,7 +190,7 @@ export class AuthService {
 	 */
 	public async registerUser(input: RegisterInput, referralContext: Pick<ReferralAttributionContext, 'refCookieSlug'> = {}) {
 		const googleIdentity = input.googleIdToken ? await this.verifyGoogleIdentity(input.googleIdToken) : undefined;
-		if (googleIdentity && googleIdentity.email !== input.email) {
+		if (googleIdentity && googleIdentity.email?.trim().toLowerCase() !== input.email) {
 			throw new AppError('البريد الإلكتروني لا يطابق حساب جوجل المختار', 400);
 		}
 		// 1. Check for duplicates (email or phone)
@@ -313,13 +315,11 @@ export class AuthService {
 			await authRepository.createPasswordResetOtp(user.id, otpCode, new Date(Date.now() + RESET_OTP_EXPIRY_MS));
 		}
 
-		try {
-			await notificationService.sendPasswordResetEmail(user.email, user.firstName, otpCode);
-		} catch {
-			// The failure (with the SMTP response) is already logged by notificationService. The answer stays generic so the
-			// endpoint cannot be used to find out which emails are registered.
-			logger.error('[Auth] Password reset email was NOT delivered.');
-		}
+		// Not awaited: the SMTP round-trip would make a registered address answer measurably slower than an unknown one. The failure
+		// (with the SMTP response) is logged by notificationService; the answer stays generic either way.
+		void Promise.resolve()
+			.then(() => notificationService.sendPasswordResetEmail(user.email, user.firstName, otpCode))
+			.catch(() => { logger.error('[Auth] Password reset email was NOT delivered.'); });
 
 		return { message: RESET_GENERIC_MESSAGE };
 	}
@@ -505,6 +505,8 @@ export class AuthService {
 		const user = await authRepository.findByEmail(input.email);
 
 		if (!user || !user.password) {
+			// Same bcrypt cost as a real check, so "no such account" cannot be told from "wrong password" by response time.
+			await bcrypt.compare(input.password, DUMMY_PASSWORD_HASH);
 			throw new AppError('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
 		}
 
@@ -578,7 +580,7 @@ export class AuthService {
 	 */
 	public async googleAuth(input: GoogleAuthInput, sessionContext: SessionContext = {}, _referralContext: Pick<ReferralAttributionContext, 'refCookieSlug'> = {}) {
 		const payload = await this.verifyGoogleIdentity(input.idToken);
-		const email = payload.email!;
+		const email = payload.email!.trim().toLowerCase();
 		const existingUser = await authRepository.findByEmail(email);
 		// Older clients identify registration by supplying an account type.
 		const intent = input.intent ?? (input.accountType ? 'register' : 'login');

@@ -193,7 +193,12 @@ export async function initializeRoleState(
     const existing = await tx.affiliateProfile.findUnique({ where: { userId }, select: { id: true } });
     if (existing) return false;
 
-    const referralSlug = generateReferralSlug(`${identity.firstName} ${identity.lastName}`, userId);
+    // Fresh random slug, checked for a free value inside this same transaction (the unique constraint stays the final guard: a
+    // concurrent collision aborts the whole registration transaction and the caller retries it — never an account without its profile).
+    let referralSlug = generateReferralSlug(`${identity.firstName} ${identity.lastName}`, userId);
+    for (let attempt = 0; attempt < 5 && await tx.affiliateProfile.findUnique({ where: { referralSlug }, select: { id: true } }); attempt++) {
+      referralSlug = generateReferralSlug(`${identity.firstName} ${identity.lastName}`, userId);
+    }
     const seeded = {
       firstName: identity.firstName,
       lastName: identity.lastName,

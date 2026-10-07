@@ -149,17 +149,25 @@ export class ProfileService {
       // 1. Update Core User fields if provided (identity-level only —
       // firstName/lastName/avatarUrl are handled in step 2 below).
       const userUpdateData: any = {};
-      if (phoneNumber !== undefined) userUpdateData.phoneNumber = phoneNumber;
 
       // A profile save never changes User.status: activation is owned by OTP verification / admin review.
       const currentUser = await tx.user.findUnique({ where: { id: userId } });
 
+      // Only a CHANGED phone number is written (an unchanged one never touches the unique index, and '' / null never erase it).
+      if (phoneNumber && phoneNumber !== currentUser?.phoneNumber) userUpdateData.phoneNumber = phoneNumber;
+
       let updatedUser = currentUser;
       if (Object.keys(userUpdateData).length > 0) {
-        updatedUser = await tx.user.update({
-          where: { id: userId },
-          data: userUpdateData
-        });
+        try {
+          updatedUser = await tx.user.update({
+            where: { id: userId },
+            data: userUpdateData
+          });
+        } catch (error) {
+          // Unique phone number: 409 with a generic message that does not reveal whether the number belongs to another account.
+          if ((error as { code?: string })?.code === 'P2002') throw new AppError('تعذر حفظ رقم الجوال، تأكد من الرقم أو جرّب رقمًا آخر', 409);
+          throw error;
+        }
       }
 
       // 2. Update the active role's profile data, merged with any display
