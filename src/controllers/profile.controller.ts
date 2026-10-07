@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { profileService } from '../services/profile.service';
 import { AppError } from '../utils/app-error';
 import { updateProfileSchema } from '../dtos/profile.dto';
+import { profileTabSchemas } from '../dtos/profile-tab.dto';
 
 /**
  * Phase 3D.1 final review: activeRole is guaranteed by auth.middleware.ts —
@@ -87,7 +88,21 @@ export class ProfileController {
 
       const tabName = req.params.tabName as string;
       const activeRole = requireActiveRole(req);
-      const result = await profileService.updateTab(req.user.userId, tabName, req.body, activeRole);
+      // Validate against the tab's schema (types + length limits); unknown keys are stripped. An unknown tab still reaches the service's 400.
+      const schema = (profileTabSchemas as Record<string, (typeof profileTabSchemas)[keyof typeof profileTabSchemas]>)[tabName];
+      let body: unknown = req.body;
+      if (schema) {
+        const parsed = schema.safeParse(req.body ?? {});
+        if (!parsed.success) {
+          const errors = parsed.error.issues.map((issue) => {
+            const field = issue.path.join('.');
+            return { path: field, field, message: issue.message, code: issue.code };
+          });
+          return void res.status(400).json({ success: false, message: 'بيانات غير صحيحة، يرجى مراجعة الحقول المحددة', errors });
+        }
+        body = parsed.data;
+      }
+      const result = await profileService.updateTab(req.user.userId, tabName, body, activeRole);
 
       res.status(200).json({
         success: true,
