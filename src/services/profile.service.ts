@@ -5,6 +5,7 @@ import { UpdateProfileDto } from '../dtos/profile.dto';
 import { AppError } from '../utils/app-error';
 import { disconnectUserSockets } from '../utils/socket-registry';
 import { PHONE_CHANGE_REQUIRED_MESSAGE } from '../utils/phone-change-messages';
+import { PAYPAL_EMAIL_OTP_REQUIRED_MESSAGE } from '../utils/paypal-email-messages';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
 import { computeClientCompletion, computeClientMissingItems } from '../utils/completion-calculators';
@@ -248,6 +249,14 @@ export class ProfileService {
         } else if (activeRole === UserRole.PROVIDER) {
           // Clean undefined/incompatible properties for Provider.
           const providerData: any = { ...(profileData as any) };
+          // The PayPal payout email is changed only through the email-OTP flow (POST /profiles/paypal-email/change/*): an unchanged value is
+          // ignored, any different one (including clearing it) is refused.
+          if (providerData.paypalPayoutEmail !== undefined) {
+            const requestedPaypal = providerData.paypalPayoutEmail ? String(providerData.paypalPayoutEmail).trim().toLowerCase() : null;
+            const storedPaypal = (await tx.providerProfile.findUnique({ where: { userId }, select: { paypalPayoutEmail: true } }))?.paypalPayoutEmail?.trim().toLowerCase() || null;
+            if (requestedPaypal !== storedPaypal) throw new AppError(PAYPAL_EMAIL_OTP_REQUIRED_MESSAGE, 400);
+            delete providerData.paypalPayoutEmail;
+          }
           delete providerData.companySize;
           delete providerData.industry;
           delete providerData.website;

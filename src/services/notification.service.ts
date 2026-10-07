@@ -204,6 +204,21 @@ export class NotificationService {
 		}
 	}
 
+	/** Code that confirms a change of the PayPal payout email, sent to the ACCOUNT EMAIL (never to the new, unverified address). */
+	public async sendPaypalEmailChangeOtpEmail(email: string, code: string): Promise<EmailDeliveryResult> {
+		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
+		const emailSubject = process.env.PAYPAL_CHANGE_EMAIL_SUBJECT ?? 'رمز تأكيد تغيير بريد PayPal - Waseet AI';
+		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
+
+		try {
+			const info = await mailTransporter.sendMail({ from: `"${senderName}" <${from}>`, to: email, subject: emailSubject, html: getOtpEmailTemplate(code) });
+			return logEmailDelivery('paypal-email-change', email, info);
+		} catch (error) {
+			logEmailFailure('paypal-email-change', email, error);
+			throw error;
+		}
+	}
+
 	/** True only when a real SMS sender exists. Today the only provider code is a Twilio stub, so this is false. */
 	public isSmsAvailable(): boolean {
 		return process.env.SMS_ENABLED === 'true' && (process.env.SMS_PROVIDER || 'dev') === 'twilio' && SMS_PROVIDER_IMPLEMENTED;

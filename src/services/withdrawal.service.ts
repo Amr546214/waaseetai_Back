@@ -5,6 +5,8 @@ import { AppError } from '../utils/app-error';
 import { CreateWithdrawalInput, CreateMarketerWithdrawalInput, RejectWithdrawalInput, ResolveWithdrawalInput } from '../dtos/withdrawal.dto';
 import { providerFinanceService } from './provider-finance.service';
 import { isRetryableTransactionConflict } from '../utils/prisma-retry.util';
+import { paypalEmailChangeService } from './paypal-email-change.service';
+import { PAYPAL_EMAIL_FROZEN_MESSAGE } from '../utils/paypal-email-messages';
 import { deriveWithdrawalReferenceId } from '../utils/withdrawal-reference.util';
 
 const NO_APPROVED_BANK_DATA_MESSAGE = 'لا توجد بيانات بنكية معتمدة للسحب';
@@ -105,6 +107,9 @@ export class WithdrawalService {
         where: { userId },
         select: { paypalPayoutEmail: true }
       });
+      // Finance #33: a PayPal withdrawal is frozen for 24 hours after the payout email was changed (the change itself needs an email OTP).
+      const frozenUntil = await paypalEmailChangeService.frozenUntil(userId, prisma);
+      if (frozenUntil) throw new AppError(PAYPAL_EMAIL_FROZEN_MESSAGE, 400);
       if (!providerProfile?.paypalPayoutEmail) {
         throw new AppError('يجب إضافة بريد PayPal لاستلام الأرباح من إعدادات ملفك الشخصي قبل تقديم طلب سحب عبر PayPal', 400);
       }

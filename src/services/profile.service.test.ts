@@ -337,16 +337,14 @@ test('updateProfile (AFFILIATE active): the upsert selects AffiliateProfile scal
 // Payout P2-A — ProviderProfile.paypalPayoutEmail via updateProfile().
 // ============================================================================
 
-test('A. updateProfile (PROVIDER active): a valid paypalPayoutEmail is saved to ProviderProfile', async (t) => {
+test('A. updateProfile (PROVIDER active): a paypalPayoutEmail is NOT saved directly any more (#33: it needs the email-OTP flow), and nothing is written', async (t) => {
   const { profileService, providerUpsertSpy } = await loadProfileServiceForUpdate(t, activeUser);
 
-  await profileService.updateProfile('user-1', 'PROVIDER', {
-    paypalPayoutEmail: 'provider@paypal-sandbox.example'
-  } as any);
-
-  assert.equal(providerUpsertSpy.mock.callCount(), 1);
-  const providerCall = providerUpsertSpy.mock.calls[0].arguments[0];
-  assert.equal(providerCall.update.paypalPayoutEmail, 'provider@paypal-sandbox.example');
+  await assert.rejects(
+    () => profileService.updateProfile('user-1', 'PROVIDER', { paypalPayoutEmail: 'provider@paypal-sandbox.example' } as any),
+    (e: any) => e.statusCode === 400 && /رمز تحقق/.test(e.message)
+  );
+  assert.equal(providerUpsertSpy.mock.callCount(), 0);
 });
 
 test('D. updateProfile (PROVIDER active): omitting paypalPayoutEmail never falls back to User.email', async (t) => {
