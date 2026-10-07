@@ -24,13 +24,13 @@ function createSetupMockPrisma(t: TestContext) {
 
   const tx = {
     user: { update: userUpdateSpy, findUnique: async () => ({ ...state.user }) },
-    clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy },
-    providerProfile: { upsert: providerUpsertSpy, update: providerUpdateSpy }
+    clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy, findUnique: async () => null },
+    providerProfile: { upsert: providerUpsertSpy, update: providerUpdateSpy, findUnique: async () => null, updateMany: async () => ({ count: 0 }) }
   };
 
   t.mock.module('../config/db', {
     namedExports: {
-      prisma: { ...tx, $transaction: async (fn: any) => fn(tx) }
+      prisma: { ...tx, skill: { findMany: async () => [] }, $transaction: async (fn: any) => fn(tx) }
     }
   });
 
@@ -61,7 +61,7 @@ test('CLIENT setup: writes a real calculated ClientProfile.completionPercentage,
 test('PROVIDER setup: writes a real calculated ProviderProfile.completionPercentage, not User=100', async (t) => {
   const { profileSetupService, providerUpdateSpy, userUpdateSpy } = await loadServiceWithFixture(t);
 
-  await profileSetupService.saveProfileSetup('user-1', 'PROVIDER', { bio: 'a'.repeat(60), skills: ['a', 'b'], hourlyRate: 100 });
+  await profileSetupService.saveProfileSetup('user-1', 'PROVIDER', { bio: 'a'.repeat(60), hourlyRate: 100 });
 
   const completionCall = providerUpdateSpy.mock.calls.find((c: any) => 'completionPercentage' in c.arguments[0].data);
   assert.notEqual(completionCall, undefined);
