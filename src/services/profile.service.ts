@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { UpdateProfileDto } from '../dtos/profile.dto';
 import { AppError } from '../utils/app-error';
+import { PHONE_CHANGE_REQUIRED_MESSAGE } from '../utils/phone-change-messages';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
 import { computeClientCompletion, computeClientMissingItems } from '../utils/completion-calculators';
@@ -153,8 +154,9 @@ export class ProfileService {
       // A profile save never changes User.status: activation is owned by OTP verification / admin review.
       const currentUser = await tx.user.findUnique({ where: { id: userId } });
 
-      // Only a CHANGED phone number is written (an unchanged one never touches the unique index, and '' / null never erase it).
-      if (phoneNumber && phoneNumber !== currentUser?.phoneNumber) userUpdateData.phoneNumber = phoneNumber;
+      // The phone number is changed only through the email-OTP flow (POST /profiles/phone/change/*). An unchanged number is ignored; a
+      // different one is refused, and '' / null never erase it.
+      if (phoneNumber && phoneNumber !== currentUser?.phoneNumber) throw new AppError(PHONE_CHANGE_REQUIRED_MESSAGE, 400);
 
       let updatedUser = currentUser;
       if (Object.keys(userUpdateData).length > 0) {

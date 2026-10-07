@@ -14,6 +14,8 @@ export const OtpPurpose = {
   CHECKOUT_PAYMENT: 'checkout_payment',
   CLIENT_CONTRACT_SIGNATURE: 'CLIENT_CONTRACT_SIGNATURE',
   PHONE_VERIFY: 'PHONE_VERIFY',
+  // PUT-less phone change (AUD-FND-000026): the new number travels in context.newPhone; the code goes to the ACCOUNT EMAIL (SMS is disabled).
+  PHONE_CHANGE: 'PHONE_CHANGE',
 } as const;
 export type OtpPurposeValue = (typeof OtpPurpose)[keyof typeof OtpPurpose];
 

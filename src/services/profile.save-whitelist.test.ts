@@ -35,7 +35,7 @@ for (const status of ['PENDING_VERIFICATION', 'SUSPENDED', 'SUSPENDED_REVIEW', '
 	test(`updateProfile never writes User.status (user is ${status}): a profile save cannot reactivate or upgrade an account`, async () => {
 		reset({ id: 'u1', status });
 		const service = await svc();
-		await service.updateProfile('u1', 'CLIENT', { bio: 'نبذة', phoneNumber: '500000000' } as any);
+		await service.updateProfile('u1', 'CLIENT', { bio: 'نبذة' } as any);
 		for (const data of state.userUpdates) assert.equal('status' in data, false, JSON.stringify(data));
 	});
 }

@@ -376,20 +376,17 @@ test('updateProfile (AFFILIATE active): paypalPayoutEmail is stripped, not sent 
   assert.equal('paypalPayoutEmail' in affiliateCall.update, false);
 });
 
-test('updateProfile: phoneNumber is saved and a pending account is NOT activated by a profile save (AUD-FND-000036)', async (t) => {
-  const pendingUser = { id: 'user-1', status: 'PENDING_VERIFICATION' };
+test('updateProfile: an unchanged phoneNumber is ignored and a pending account is NOT activated by a profile save (AUD-FND-000036)', async (t) => {
+  const pendingUser = { id: 'user-1', status: 'PENDING_VERIFICATION', phoneNumber: '0500000000' };
   const { profileService, userUpdateSpy, clientUpsertSpy } = await loadProfileServiceForUpdate(t, pendingUser);
 
   await profileService.updateProfile('user-1', 'CLIENT', { phoneNumber: '0500000000' });
 
-  assert.equal(userUpdateSpy.mock.callCount(), 1);
-  const userCall = userUpdateSpy.mock.calls[0].arguments[0];
-  assert.equal(userCall.data.phoneNumber, '0500000000');
-  assert.equal('status' in userCall.data, false);
-  // firstName/lastName/avatarUrl were never in this request, so no profile
-  // upsert should fire from an empty displayFields+profileData.
+  // the number did not change, so nothing is written to User at all (a changed number needs the email-OTP flow, #26)
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
   assert.equal(clientUpsertSpy.mock.callCount(), 0);
 });
+
 
 test('updateTab: arbitrary/unrecognized body fields cannot be written to User', async (t) => {
   const { profileService, userUpdateSpy, clientUpsertSpy } = await loadProfileServiceForUpdate(t, activeUser);
