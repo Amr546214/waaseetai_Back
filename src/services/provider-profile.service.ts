@@ -3,6 +3,7 @@ import { Prisma, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { sanitizeText } from '../utils/sanitize-text';
+import { isAcceptableKycDocumentValue } from '../utils/kyc-value-guard';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { aiFeatureUnavailableError } from './ai/ai-feature-unavailable';
 import { AppError } from '../utils/app-error';
@@ -911,7 +912,7 @@ export class ProviderProfileService {
 		return config;
 	}
 
-	private normalizeAndValidateSensitiveChanges(category: string, changes: Record<string, unknown>) {
+	private normalizeAndValidateSensitiveChanges(category: string, changes: Record<string, unknown>, providerId?: string, keepsStoredIdDocument = false) {
 		const normalized = { ...changes };
 		if (category === 'CONTACT') {
 			normalized.email = String(normalized.email || '').trim().toLowerCase();
@@ -937,9 +938,12 @@ export class ProviderProfileService {
 			if (!isMaskedValue && !this.isValidIban(String(normalized.ibanNumber))) throw new Error('INVALID_IBAN');
 		}
 		if (category === 'DOCUMENTS') {
-			if (!normalized.idDocumentUrl) throw new Error('ID_DOCUMENT_REQUIRED');
+			// Omitting idDocumentUrl means "keep the stored one" (the client cannot see a stored private document, so it cannot resend it);
+			// sending it empty is still a removal and still refused.
+			const idOmitted = !Object.prototype.hasOwnProperty.call(normalized, 'idDocumentUrl');
+			if (!normalized.idDocumentUrl && !(idOmitted && keepsStoredIdDocument)) throw new Error('ID_DOCUMENT_REQUIRED');
 			for (const [key, value] of Object.entries(normalized)) {
-				if (value && !this.isSafeDocumentUrl(String(value))) throw new Error(`INVALID_DOCUMENT_URL:${key}`);
+				if (value && !this.isSafeDocumentUrl(String(value), providerId)) throw new Error(`INVALID_DOCUMENT_URL:${key}`);
 			}
 		}
 		return normalized;
@@ -954,14 +958,18 @@ export class ProviderProfileService {
 		return remainder === 1;
 	}
 
-	private isSafeDocumentUrl(value: string) {
-		try { return new URL(value).protocol === 'https:'; } catch { return false; }
+	// A KYC document value is either a private reference inside the provider's own folder, or a URL already inside OUR Cloudinary account
+	// (a document uploaded before the private-storage change). External links are refused.
+	private isSafeDocumentUrl(value: string, providerId?: string) {
+		return isAcceptableKycDocumentValue(value, providerId);
 	}
 
 	async initiateSensitiveChange(providerId: string, category: string, changes: Record<string, unknown>, auditContext?: AuditContext) {
 		const config = this.sensitiveConfig(category);
 		const filtered = Object.fromEntries(Object.entries(changes || {}).filter(([key]) => config.allowed.includes(key)));
-		const cleanChanges = this.normalizeAndValidateSensitiveChanges(category, filtered);
+		const idOmitted = category === 'DOCUMENTS' && !Object.prototype.hasOwnProperty.call(filtered, 'idDocumentUrl');
+		const keepsStoredIdDocument = idOmitted ? !!(await prisma.user.findUnique({ where: { id: providerId }, select: { idDocumentUrl: true } }))?.idDocumentUrl : false;
+		const cleanChanges = this.normalizeAndValidateSensitiveChanges(category, filtered, providerId, keepsStoredIdDocument);
 		if (!Object.keys(cleanChanges).length) throw new Error('No supported changes were provided');
 
 		const user = await prisma.user.findUnique({ where: { id: providerId }, include: { providerProfile: true } });

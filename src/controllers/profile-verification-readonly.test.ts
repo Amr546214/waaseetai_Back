@@ -45,7 +45,7 @@ function mockDb(t: TestContext, o: { userStatus?: string; providerKyc?: string; 
   cur = { w, o };
   t.mock.module('../config/db', { namedExports: { prisma } });
   t.mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
-  t.mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (v: any) => v ?? null } });
+  t.mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (v: any) => v ?? null, storeKycFileIfNeeded: async (v: any) => v ?? null } });
   t.mock.module('../utils/completion-calculators', { namedExports: {
     computeProviderCompletion: () => 80, computeClientCompletion: () => 80, computeClientMissingItems: () => [], computeProviderMissingItems: () => [],
   } });

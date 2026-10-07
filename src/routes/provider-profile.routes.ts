@@ -43,8 +43,14 @@ router.use(authenticate, requireActiveUser);
 router.post('/documents/upload', requireProvider, documentUpload.single('file'), async (req, res, next) => {
 	try {
 	if (!req.file) return res.status(400).json({ success: false, message: 'A PDF, JPG or PNG file is required' });
-	const stored = await uploadMulterFile(req.file, `waseetai/providers/${req.user!.id}/documents`);
-	res.status(201).json({ success: true, data: { url: stored.url, name: stored.fileName } });
+	// Identity / certificates / supporting documents are confidential by default. Content that is displayed publicly on the profile (avatar,
+	// portfolio files) is uploaded with visibility=public, which keeps the previous behaviour.
+	const isPublic = req.body?.visibility === 'public';
+	const stored = await uploadMulterFile(req.file, `waseetai/providers/${req.user!.id}/documents`, undefined, !isPublic);
+	if (isPublic) return res.status(201).json({ success: true, data: { url: stored.url, name: stored.fileName } });
+	// The caller needs the private reference to submit it with its own request; it is never returned by any GET.
+	res.locals.allowPrivateRef = true;
+	res.status(201).json({ success: true, data: { url: stored.privateRef, name: stored.fileName, private: true } });
 	} catch (error) { next(error); }
 });
 

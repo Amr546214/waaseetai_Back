@@ -45,7 +45,7 @@ function load() {
   if (loaded) return loaded;
   mock.module('../config/db', { namedExports: { prisma } });
   mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
-  mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (v: any) => v ?? null } });
+  mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (v: any) => v ?? null, storeKycFileIfNeeded: async (v: any) => v ?? null } });
   mock.module('../utils/completion-calculators', { namedExports: { computeClientCompletion: () => 80, computeClientMissingItems: () => [] } });
   loaded = (async () => ({
     ClientProfileController: (await import('./client-profile.controller.ts')).ClientProfileController,

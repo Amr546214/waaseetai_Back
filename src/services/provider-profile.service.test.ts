@@ -1,4 +1,7 @@
 import { test, TestContext } from 'node:test';
+
+// KYC document values must live inside our own Cloudinary account (or be an owned private reference).
+process.env.CLOUDINARY_CLOUD_NAME = 'testcloud';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -506,7 +509,7 @@ function createSkillsPortfolioMockPrisma(t: TestContext) {
     lastName: 'Name',
     avatarUrl: null,
     ibanNumber: 'SA5300000000000000000099',
-    idDocumentUrl: 'https://cdn.example/id.pdf'
+    idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id.pdf'
   };
 
   const skillsByName = new Map<string, { id: string; name: string }>();
@@ -916,7 +919,7 @@ test('reviewSensitiveChange (DOCUMENTS, approved): recalculates completion after
   const { providerProfileService, providerProfileUpdateSpy, userUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
 
   const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', {
-    idDocumentUrl: 'https://cdn.example/id.pdf'
+    idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id.pdf'
   });
   await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
   await providerProfileService.reviewSensitiveChange(initiated.requestId, true);
@@ -1422,4 +1425,22 @@ test('getPublicProfile: assessment card from the real attempt only, services car
   // nothing personal / documentary about the company leaves through the public endpoint
   assert.ok(!/commercialRegistration|vatCertificateUrl|idDocumentUrl/.test(pub));
   assert.ok(!/companyTeamMember\.findMany/.test(pub));
+});
+
+// Private KYC documents: the provider cannot see (and so cannot resend) a stored private ID document, so a DOCUMENTS change that OMITS
+// idDocumentUrl keeps the stored one; sending it empty is still a removal and is still refused.
+const OWN_DOC = 'https://res.cloudinary.com/testcloud/image/upload/cert.pdf';
+test('DOCUMENTS change: omitting idDocumentUrl is accepted only when a stored one exists; empty is still refused', async (t) => {
+  const { providerProfileService } = await loadServiceForSensitiveFlow(t);
+  const validate = (changes: any, keeps: boolean) => (providerProfileService as any).normalizeAndValidateSensitiveChanges('DOCUMENTS', changes, 'user-1', keeps);
+  assert.doesNotThrow(() => validate({ certificatesUrl: OWN_DOC }, true));
+  assert.throws(() => validate({ certificatesUrl: OWN_DOC }, false), /ID_DOCUMENT_REQUIRED/);
+  assert.throws(() => validate({ idDocumentUrl: '', certificatesUrl: OWN_DOC }, true), /ID_DOCUMENT_REQUIRED/);
+  assert.doesNotThrow(() => validate({ idDocumentUrl: OWN_DOC }, false));
+});
+
+test('DOCUMENTS change: initiateSensitiveChange looks up the stored ID document only when idDocumentUrl is omitted', () => {
+  const src = readFileSync(path.join(__dirname, 'provider-profile.service.ts'), 'utf8');
+  assert.match(src, /category === 'DOCUMENTS' && !Object\.prototype\.hasOwnProperty\.call\(filtered, 'idDocumentUrl'\)/);
+  assert.match(src, /select: \{ idDocumentUrl: true \} \}\)\)\?\.idDocumentUrl/);
 });

@@ -51,7 +51,9 @@ router.post(
 
       const cloudFiles = new Map<Express.Multer.File, Awaited<ReturnType<typeof uploadMulterFile>>>();
       await Promise.all(files.map(async file => {
-        const stored = await uploadMulterFile(file, `waseetai/specialties/${providerSpecialtyId}/${file.fieldname.startsWith('proofFiles_') ? 'proofs' : 'samples'}`);
+        const isProof = file.fieldname.startsWith('proofFiles_');
+        // Ownership proofs are confidential: uploaded private, stored as a private reference, opened only through /api/kyc-documents/access-link.
+        const stored = await uploadMulterFile(file, `waseetai/specialties/${providerSpecialtyId}/${isProof ? 'proofs' : 'samples'}`, undefined, isProof);
         cloudFiles.set(file, stored);
       }));
 
@@ -101,7 +103,7 @@ router.post(
               data: {
                 workSampleId: createdSample.id,
                 fileName: storedProof.fileName.substring(0, 255),
-                fileUrl: storedProof.url,
+                fileUrl: storedProof.privateRef ?? storedProof.url,
                 mimeType: proof.mimetype,
                 fileBytes: proof.size,
                 isConfidential: true,

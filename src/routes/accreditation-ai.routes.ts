@@ -143,11 +143,14 @@ router.post('/upload-proof', upload.single('file'), async (req: Request, res: Re
     const profile = await prisma.providerProfile.findUnique({ where: { userId: user.id } });
     if (!profile) throw new AppError('Provider profile not found', 404);
 
-    const stored = await uploadMulterFile(file, `waseetai/accreditation/${user.id}/proofs`);
+    const stored = await uploadMulterFile(file, `waseetai/accreditation/${user.id}/proofs`, undefined, true);
 
+    // Confidential proof: the caller gets the private reference once (to attach it to its submission); no GET ever returns it.
+    res.locals.allowPrivateRef = true;
     res.status(200).json({
       success: true,
-      fileUrl: stored.url,
+      fileUrl: stored.privateRef,
+      private: true,
       fileName: stored.fileName,
       fileSize: (stored.bytes / 1024 / 1024).toFixed(2) + ' MB'
     });

@@ -7,6 +7,7 @@ import { createServer } from 'http';
 import { initSocketServer } from './socket';
 import { logger } from './config/logger';
 import { globalErrorHandler } from './middlewares/error.middleware';
+import { scrubPrivateRefs } from './middlewares/scrub-private-refs.middleware';
 import { apiLimiter } from './middlewares/rate-limit.middleware';
 import { AppError } from './utils/app-error';
 import authRouter from './routes/auth/auth.routes';
@@ -141,6 +142,8 @@ app.use(express.json({
 	}
 }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// No JSON response may carry a raw private KYC reference (see the middleware's header comment).
+app.use(scrubPrivateRefs);
 
 // ==========================================
 // 2. LOGGING
@@ -264,6 +267,7 @@ import adminAccreditationRoutes from './routes/admin-accreditation.routes';
 import adminAffiliateRequestsRoutes from './routes/admin-affiliate-requests.routes';
 import adminBrokersRoutes from './routes/admin-brokers.routes';
 import adminSecurityRoutes from './routes/admin-security.routes';
+import kycDocumentsRoutes from './routes/kyc-documents.routes';
 
 // Support BOTH prefixed and unprefixed paths.
 // - app.use('/api', apiRouter) handles local development where frontend calls http://localhost:5009/api
@@ -290,6 +294,8 @@ mountAppRoute('/api/admin/brokers', adminBrokersRoutes);
 mountAppRoute('/admin/brokers', adminBrokersRoutes);
 mountAppRoute('/api/admin/security', adminSecurityRoutes);
 mountAppRoute('/admin/security', adminSecurityRoutes);
+mountAppRoute('/api/kyc-documents', kycDocumentsRoutes);
+mountAppRoute('/kyc-documents', kycDocumentsRoutes);
 mountAppRoute('/api', apiRouter);
 mountAppRoute('/', apiRouter);
 
