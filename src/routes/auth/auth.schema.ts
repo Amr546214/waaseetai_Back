@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AccountType } from '@prisma/client';
+import { COMPANY_ACCOUNTS_UNAVAILABLE_MESSAGE, isCompanyAccountType } from '../../middlewares/company-unavailable.middleware';
 import { sanitizedText } from '../../utils/sanitize-text';
 
 // The only account types a public, unauthenticated signup request (email/
@@ -16,7 +17,7 @@ export const PublicAccountTypeEnum = z.enum([
   AccountType.MARKETING_BROKER
 ], {
   message: 'نوع الحساب غير صالح'
-});
+}).refine(type => !isCompanyAccountType(type), { message: COMPANY_ACCOUNTS_UNAVAILABLE_MESSAGE });
 
 // Emails are compared case-insensitively everywhere: trim + lower-case at the edge so one address has one spelling.
 export const normalizedEmail = z.string().trim().toLowerCase().email('صيغة البريد الإلكتروني غير صحيحة');

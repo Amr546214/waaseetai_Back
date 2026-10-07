@@ -21,9 +21,21 @@ const validRegisterBody = {
   agreedToTerms: true as const
 };
 
-test('PublicAccountTypeEnum: accepts only the 5 public self-service account types', () => {
-  for (const accountType of ['CLIENT_INDIVIDUAL', 'CLIENT_COMPANY', 'PROVIDER_INDIVIDUAL', 'PROVIDER_COMPANY', 'MARKETING_BROKER']) {
+test('PublicAccountTypeEnum: accepts the individual / marketer self-service account types (company types are unavailable, see below)', () => {
+  for (const accountType of ['CLIENT_INDIVIDUAL', 'PROVIDER_INDIVIDUAL', 'MARKETING_BROKER']) {
     assert.equal(PublicAccountTypeEnum.safeParse(accountType).success, true);
+  }
+});
+
+test('company accounts are outside the current launch: registration and Google sign-up refuse them in Arabic', () => {
+  for (const accountType of ['CLIENT_COMPANY', 'PROVIDER_COMPANY']) {
+    for (const r of [registerSchema.safeParse({ body: { ...validRegisterBody, accountType } }), googleAuthSchema.safeParse({ body: { idToken: 't', accountType } })]) {
+      assert.equal(r.success, false);
+      assert.equal(!r.success && r.error.issues.some(i => i.message === 'حسابات الشركات غير متاحة حاليًا'), true);
+    }
+  }
+  for (const accountType of ['CLIENT_INDIVIDUAL', 'PROVIDER_INDIVIDUAL', 'MARKETING_BROKER']) {
+    assert.equal(registerSchema.safeParse({ body: { ...validRegisterBody, accountType } }).success, true);
   }
 });
 

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
+import { blockCompanySetup } from '../middlewares/company-unavailable.middleware';
 import { apiLimiter } from '../middlewares/rate-limit.middleware';
 import { clientProfileController } from '../controllers/client-profile.controller';
 
@@ -15,7 +16,7 @@ router.get('/public/:id', apiLimiter, clientProfileController.getPublicProfile);
 router.use(authenticate, requireActiveUser);
 
 router.get('/setup', clientProfileController.getSetupData);
-router.post('/setup', clientProfileController.saveSetupData);
+router.post('/setup', blockCompanySetup, clientProfileController.saveSetupData);
 router.post('/nafath-verify', clientProfileController.nafathVerify);
 
 export default router;
