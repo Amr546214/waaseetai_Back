@@ -1,4 +1,5 @@
 import { AccountType, Prisma } from '@prisma/client';
+import { sanitizeText } from '../utils/sanitize-text';
 import { MARKET_VISIBLE_WHERE, MARKET_ELIGIBILITY_SELECT_PROVIDER, marketBlockReasons, marketBlockMessage } from '../utils/market-visibility';
 import { prisma } from '../config/db';
 import { marketplaceAiService } from './marketplace-ai.service';
@@ -48,6 +49,24 @@ type MarketplaceProviderRow = {
 	providerProfile: { firstName: string | null; lastName: string | null; avatarUrl: string | null; isVerified: boolean } | null;
 	gamification: { points: number; currentLevelIndex: number } | null;
 };
+
+// Free text of a service (title, description, sub-specialty, and every stage's title/description) is stored as plain text: markup is stripped
+// before validation and storage, so "<b></b>" is judged as the empty text it really is. Non-string values are left for the validators below.
+const cleanText = (value: unknown, max: number): unknown => (typeof value === 'string' ? sanitizeText(value).trim().slice(0, max) : value);
+export function sanitizeServiceInput(data: any): any {
+	if (!data || typeof data !== 'object') return data;
+	return {
+		...data,
+		title: cleanText(data.title, 150),
+		description: cleanText(data.description, 5000),
+		subSpecialty: cleanText(data.subSpecialty, 100),
+		stages: Array.isArray(data.stages)
+			? data.stages.map((stage: any) => (stage && typeof stage === 'object'
+				? { ...stage, title: cleanText(stage.title, 150), description: cleanText(stage.description, 2000), desc: cleanText(stage.desc, 2000) }
+				: stage))
+			: data.stages
+	};
+}
 
 export class MarketplaceService {
 	/**
@@ -109,7 +128,8 @@ export class MarketplaceService {
 	/**
 	 * Creates a new ServiceCatalog and its related ServiceStages within a Prisma transaction.
 	 */
-	async createService(userId: string, data: any) {
+	async createService(userId: string, rawData: any) {
+		const data = sanitizeServiceInput(rawData);
 		const { title, description, specialtyId, subSpecialty, portfolioItemId, accreditationSampleId, stages, gallery } = data;
 		const storedGallery = Array.isArray(gallery) ? (await Promise.all(gallery.map((url: string, index: number) =>
 			ensureCloudinaryUrl(url, `waseetai/providers/${userId}/services`, `gallery-${index + 1}`)
@@ -257,7 +277,8 @@ export class MarketplaceService {
 	/**
 	 * Update an existing service catalog and its stages
 	 */
-	async updateService(userId: string, serviceId: string, data: any) {
+	async updateService(userId: string, serviceId: string, rawData: any) {
+		const data = sanitizeServiceInput(rawData);
 		const { title, description, specialtyId, subSpecialty, portfolioItemId, accreditationSampleId, stages, gallery } = data;
 		const storedGallery = Array.isArray(gallery) ? (await Promise.all(gallery.map((url: string, index: number) =>
 			ensureCloudinaryUrl(url, `waseetai/providers/${userId}/services/${serviceId}`, `gallery-${index + 1}`)
