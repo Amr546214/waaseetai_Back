@@ -188,7 +188,9 @@ export class AuthService {
 	/**
 	 * Register a new user
 	 */
-	public async registerUser(input: RegisterInput, referralContext: Pick<ReferralAttributionContext, 'refCookieSlug'> = {}) {
+	public async registerUser(rawInput: RegisterInput, referralContext: Pick<ReferralAttributionContext, 'refCookieSlug'> = {}) {
+		// validateRequest only validates (it does not replace req.body with the parsed value), so the address is normalised here, where it is stored.
+		const input: RegisterInput = { ...rawInput, email: String(rawInput.email ?? '').trim().toLowerCase() };
 		const googleIdentity = input.googleIdToken ? await this.verifyGoogleIdentity(input.googleIdToken) : undefined;
 		if (googleIdentity && googleIdentity.email?.trim().toLowerCase() !== input.email) {
 			throw new AppError('البريد الإلكتروني لا يطابق حساب جوجل المختار', 400);
