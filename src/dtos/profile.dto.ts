@@ -1,12 +1,16 @@
 import { z } from 'zod';
 import { sanitizedText } from '../utils/sanitize-text';
 
+// Shared by PUT /profiles/update and the phone-change OTP flow.
+export const phoneNumberValue = z.string().trim().transform(v => v.replace(/[\s-]/g, '')).pipe(z.string().regex(/^\d{9,15}$/, 'رقم الجوال غير صحيح'));
+const phoneNumberField = phoneNumberValue.or(z.literal('').transform(() => undefined));
+
 export const updateProfileSchema = z.object({
 	// Basic User fields
 	firstName: sanitizedText(z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل')).optional().nullable(),
 	lastName: sanitizedText(z.string().min(2, 'الاسم الأخير يجب أن يكون حرفين على الأقل')).optional().nullable(),
 	// Digits only (spaces/dashes tolerated and stripped), 9-15 long. '' / null mean "not provided": a save never erases the stored number.
-	phoneNumber: z.string().trim().transform(v => v.replace(/[\s-]/g, '')).pipe(z.string().regex(/^\d{9,15}$/, 'رقم الجوال غير صحيح')).or(z.literal('').transform(() => undefined)).optional().nullable().transform(v => v ?? undefined),
+	phoneNumber: phoneNumberField.optional().nullable().transform(v => v ?? undefined),
 	// null = "not provided" (a client that has no avatar value must not erase the stored one); only '' is an explicit delete.
 	avatarUrl: z.string().optional().nullable().transform(v => v ?? undefined),
 

@@ -2,8 +2,8 @@ import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { updateProfileSchema } from '../dtos/profile.dto';
 
-// #26 — profile save: a valid phone number only, written only when it CHANGED, never erased by ''/null, and a duplicate number is a 409 whose
-// message does not reveal that the number belongs to another account.
+// #26 — profile save: a valid phone number only, never erased by ''/null, and a CHANGED number is refused here (it is changed only through the
+// email-OTP flow, see routes/phone-change.flow.test.ts, which also covers the duplicate-number 409).
 process.env.OPENAI_API_KEY = 'test-key';
 process.env.JWT_SECRET = 'test-secret';
 
@@ -43,31 +43,18 @@ test('an unchanged phone number is not written at all', async () => {
 	assert.equal(state.updates.length, 0);
 });
 
-test('a changed phone number is written, and nothing else on User', async () => {
+test('a CHANGED phone number is refused here (400, Arabic): it is changed only through the email-OTP flow, and nothing is written', async () => {
 	reset();
-	await (await svc()).updateProfile('u1', 'CLIENT', { phoneNumber: '0511111111' } as any);
-	assert.deepEqual(state.updates, [{ phoneNumber: '0511111111' }]);
-});
-
-test('no phone in the body (or empty after parsing) leaves the stored number untouched', async () => {
-	reset();
-	await (await svc()).updateProfile('u1', 'CLIENT', { phoneNumber: undefined, bio: 'x' } as any);
+	await assert.rejects(() => svc().then(s => s.updateProfile('u1', 'CLIENT', { phoneNumber: '0511111111' } as any)), (e: any) => {
+		assert.equal(e.statusCode, 400);
+		assert.match(e.message, /رمز تحقق/);
+		return true;
+	});
 	assert.equal(state.updates.length, 0);
 });
 
-test('a number that belongs to another account is a 409 with a generic message (no "already registered", no field / constraint name)', async () => {
+test('no phone in the body leaves the stored number untouched', async () => {
 	reset();
-	state.failWith = Object.assign(new Error('Unique constraint failed on the fields: (`phoneNumber`)'), { code: 'P2002', meta: { target: ['phoneNumber'] } });
-	await assert.rejects(() => svc().then(s => s.updateProfile('u1', 'CLIENT', { phoneNumber: '0522222222' } as any)), (e: any) => {
-		assert.equal(e.statusCode, 409);
-		assert.match(e.message, /[؀-ۿ]/);
-		assert.doesNotMatch(e.message, /مسجل|مستخدم|موجود|phone|unique/i);
-		return true;
-	});
-});
-
-test('any other database error is not disguised as a 409', async () => {
-	reset();
-	state.failWith = new Error('connection lost');
-	await assert.rejects(() => svc().then(s => s.updateProfile('u1', 'CLIENT', { phoneNumber: '0533333333' } as any)), /connection lost/);
+	await (await svc()).updateProfile('u1', 'CLIENT', { phoneNumber: undefined, bio: 'x' } as any);
+	assert.equal(state.updates.length, 0);
 });

@@ -174,6 +174,21 @@ export class NotificationService {
 		}
 	}
 
+	/** Code that confirms a phone-number change, sent to the ACCOUNT EMAIL (the phone itself is not verified by SMS: it is disabled). */
+	public async sendPhoneChangeOtpEmail(email: string, code: string): Promise<EmailDeliveryResult> {
+		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
+		const emailSubject = process.env.PHONE_CHANGE_EMAIL_SUBJECT ?? 'رمز تأكيد تغيير رقم الجوال - Waseet AI';
+		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
+
+		try {
+			const info = await mailTransporter.sendMail({ from: `"${senderName}" <${from}>`, to: email, subject: emailSubject, html: getOtpEmailTemplate(code) });
+			return logEmailDelivery('phone-change', email, info);
+		} catch (error) {
+			logEmailFailure('phone-change', email, error);
+			throw error;
+		}
+	}
+
 	/** True only when a real SMS sender exists. Today the only provider code is a Twilio stub, so this is false. */
 	public isSmsAvailable(): boolean {
 		return process.env.SMS_ENABLED === 'true' && (process.env.SMS_PROVIDER || 'dev') === 'twilio' && SMS_PROVIDER_IMPLEMENTED;
