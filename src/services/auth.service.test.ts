@@ -69,6 +69,7 @@ async function loadAuthServiceForVerifyOtp(t: TestContext, opts?: Parameters<typ
   const mocks = createVerifyOtpMockPrisma(t, opts);
   const moduleUrl = `./auth.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { authService } = await import(moduleUrl);
+  (await import('../utils/otp-send-throttle')).otpSendThrottle.reset();
   return { authService, ...mocks };
 }
 
@@ -154,9 +155,11 @@ function createGoogleAuthMockPrisma(t: TestContext, opts: {
       }
     }
   });
+  const createOtpSpy = t.mock.fn(async (..._a: any[]) => ({}));
   t.mock.module('../repositories/auth.repository', {
-    namedExports: { authRepository: { findByEmail: findByEmailSpy } }
+    namedExports: { authRepository: { findByEmail: findByEmailSpy, findLatestOtpByPurpose: async () => null, deleteOtpsByPurpose: async () => ({ count: 0 }), createOtp: createOtpSpy } }
   });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendLoginOtpEmail: async () => ({}) } } });
   t.mock.module('../config/db', {
     namedExports: { prisma: { user: { update: userUpdateSpy } } }
   });
@@ -164,7 +167,7 @@ function createGoogleAuthMockPrisma(t: TestContext, opts: {
     namedExports: { sessionService: { register: sessionRegisterSpy } }
   });
 
-  return { findByEmailSpy, userUpdateSpy, sessionRegisterSpy };
+  return { findByEmailSpy, userUpdateSpy, sessionRegisterSpy, createOtpSpy };
 }
 
 async function loadAuthServiceForGoogleAuth(t: TestContext, opts?: Parameters<typeof createGoogleAuthMockPrisma>[1]) {
@@ -195,19 +198,22 @@ function existingUserFixture(overrides: any = {}) {
   };
 }
 
-test('googleAuth (intent: login, existing account): authenticates directly — no registrationRequired, no profile-completion signal, real token issued', async (t) => {
-  const { authService, sessionRegisterSpy } = await loadAuthServiceForGoogleAuth(t, {
-    existingUser: existingUserFixture()
+test('googleAuth (intent: login, existing account): starts the mandatory LOGIN_EMAIL challenge — no token, no session, no registrationRequired', async (t) => {
+  const { authService, sessionRegisterSpy, createOtpSpy } = await loadAuthServiceForGoogleAuth(t, {
+    existingUser: existingUserFixture({ googleId: 'google-sub-1' })
   });
 
   const result = await authService.googleAuth({ idToken: 'valid-token', intent: 'login' });
 
-  assert.equal(result.verified, true);
-  assert.equal(typeof result.token, 'string');
-  assert.equal(result.user.id, 'user-1');
-  assert.equal(result.user.accountType, 'PROVIDER_INDIVIDUAL');
+  assert.equal(result.verified, false);
+  assert.equal(result.loginOtpRequired, true);
+  assert.equal(result.userId, 'user-1');
+  assert.equal(result.emailSent, true);
+  assert.equal('token' in result, false);
+  assert.equal('user' in result, false);
   assert.equal('registrationRequired' in result, false);
-  assert.equal(sessionRegisterSpy.mock.callCount(), 1);
+  assert.equal(sessionRegisterSpy.mock.callCount(), 0);
+  assert.equal(createOtpSpy.mock.calls[0].arguments[4], 'LOGIN_EMAIL');
 });
 
 test('googleAuth (intent: login, NO existing account): rejects with 404 — never auto-creates an account', async (t) => {
@@ -269,7 +275,7 @@ test('googleAuth: an explicit intent always wins over the legacy accountType-pre
 
   const result = await authService.googleAuth({ idToken: 'valid-token', intent: 'login', accountType: 'PROVIDER_INDIVIDUAL' } as any);
 
-  assert.equal(result.verified, true);
+  assert.equal(result.loginOtpRequired, true);
   assert.equal('registrationRequired' in result, false);
 });
 

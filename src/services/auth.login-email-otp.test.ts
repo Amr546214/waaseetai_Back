@@ -121,3 +121,38 @@ test('an expired login code is refused with the Arabic expiry message', async (t
 	rows[0].expiresAt = new Date(Date.now() - 1000);
 	await assert.rejects(() => auth.verifyLoginOtp({ userId: 'user-1', code: rows[0].code }, {}), (e: any) => e.statusCode === 400 && /انتهت صلاحيته/.test(e.message));
 });
+
+// ---- Google sign-in: the identity is proven by Google, the session still needs the LOGIN_EMAIL code --------------------------------
+function googleSetup(t: TestContext, hash: string) {
+	const ctx = setup(t, hash);
+	(ctx.user as any).googleId = 'g-sub-1';
+	t.mock.module('google-auth-library', { namedExports: { OAuth2Client: class { async verifyIdToken() { return { getPayload: () => ({ sub: 'g-sub-1', email: ctx.user.email, email_verified: true }) }; } } } });
+	return ctx;
+}
+
+test('google login (existing account) returns the OTP challenge, not a token; the right code then creates the session', async (t) => {
+	const { rows, sent, sessions } = googleSetup(t, await hashed());
+	const auth = await load();
+	const r: any = await auth.googleAuth({ idToken: 'tok', intent: 'login' }, {});
+	assert.equal(r.verified, false);
+	assert.equal(r.loginOtpRequired, true);
+	assert.equal(r.token, undefined);
+	assert.equal(sessions.length, 0);
+	assert.equal(rows[0].purpose, 'LOGIN_EMAIL');
+	assert.deepEqual(sent.map(s => s.to), ['amr@example.com']);
+	const ok: any = await auth.verifyLoginOtp({ userId: 'user-1', code: rows[0].code }, {});
+	assert.equal(typeof ok.token, 'string');
+	assert.deepEqual(sessions, ['user-1']);
+});
+
+test('google login: a wrong code is refused and no session exists; a forgot-password code does not work either', async (t) => {
+	const { rows, sessions } = googleSetup(t, await hashed());
+	const auth = await load();
+	await auth.googleAuth({ idToken: 'tok', intent: 'login' }, {});
+	const wrong = rows[0].code === '000000' ? '111111' : '000000';
+	await assert.rejects(() => auth.verifyLoginOtp({ userId: 'user-1', code: wrong }, {}), (e: any) => e.statusCode === 400);
+	rows.length = 0;
+	rows.push({ id: 'r1', userId: 'user-1', code: '123456', attempts: 0, expiresAt: new Date(Date.now() + 60_000), purpose: 'PASSWORD_RESET', createdAt: 5 });
+	await assert.rejects(() => auth.verifyLoginOtp({ userId: 'user-1', code: '123456' }, {}), (e: any) => e.statusCode === 400);
+	assert.equal(sessions.length, 0);
+});
