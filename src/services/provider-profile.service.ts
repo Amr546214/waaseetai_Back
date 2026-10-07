@@ -1,4 +1,5 @@
 import type { ProviderBioSuggestDto, ProviderSkillsSuggestDto } from '../dtos/provider-profile-suggest.dto';
+import { MARKET_VISIBLE_WHERE } from '../utils/market-visibility';
 import { Prisma, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
@@ -350,7 +351,7 @@ export class ProviderProfileService {
 							orderBy: { completedAt: 'desc' }
 						},
 						accreditationSamples: {
-							where: { serviceCatalogs: { some: { status: { in: ['PUBLISHED', 'APPROVED'] } } } }
+							where: { serviceCatalogs: { some: { ...MARKET_VISIBLE_WHERE } } }
 						}
 					}
 				}
@@ -366,7 +367,7 @@ export class ProviderProfileService {
 		});
 
 		const publishedServices = await prisma.serviceCatalog.findMany({
-			where: { providerId, status: { in: ['PUBLISHED', 'APPROVED'] } },
+			where: { providerId, ...MARKET_VISIBLE_WHERE },
 			include: { specialty: { select: { nameAr: true, name: true } } },
 			orderBy: { createdAt: 'desc' }
 		});

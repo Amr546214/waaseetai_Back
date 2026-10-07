@@ -1,7 +1,7 @@
 import { SourceChannel, CommissionStatus, UserRole } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 import { prisma } from '../config/db';
-import { generateReferralSlug } from '../utils/slug.util';
+import { generateReferralSlug, isReferralSlugConflict } from '../utils/slug.util';
 import { initializeRoleState } from './account-management.service';
 
 export class MarketerOverviewService {
@@ -245,7 +245,7 @@ export class MarketerOverviewService {
     if (!referralSlug) {
       const user = await prisma.user.findUnique({ where: { id: userId } });
       const fullName = user ? `${user.firstName} ${user.lastName}` : '';
-      const slug = generateReferralSlug(fullName, userId);
+      let slug = generateReferralSlug(fullName, userId);
 
       // Explicit select — deployment-safety fix (see getOrCreateProfile's
       // comment above for the same class of bug). Only referralSlug/id/
@@ -254,16 +254,24 @@ export class MarketerOverviewService {
       // channelMetrics relations that used to be `include`d here were never
       // actually used after this reassignment, so they're dropped entirely
       // rather than converted to a nested select.
-      const updated = await prisma.affiliateProfile.update({
-        where: { id: affiliateId },
-        data: { referralSlug: slug },
-        select: {
-          id: true,
-          referralSlug: true,
-          notifyOnNewReferral: true,
-          sharePerformanceStats: true,
+      let updated: { id: string; referralSlug: string | null; notifyOnNewReferral: boolean; sharePerformanceStats: boolean } | undefined;
+      for (let attempt = 1; !updated; attempt++) {
+        try {
+          updated = await prisma.affiliateProfile.update({
+            where: { id: affiliateId },
+            data: { referralSlug: slug },
+            select: {
+              id: true,
+              referralSlug: true,
+              notifyOnNewReferral: true,
+              sharePerformanceStats: true,
+            }
+          });
+        } catch (error) {
+          if (attempt >= 3 || !isReferralSlugConflict(error)) throw error;
+          slug = generateReferralSlug(fullName, userId);
         }
-      });
+      }
       affiliateId = updated.id;
       referralSlug = updated.referralSlug;
       notifyOnNewReferral = updated.notifyOnNewReferral;

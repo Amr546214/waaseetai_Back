@@ -132,6 +132,7 @@ test('forgot-password creates a new code when none is valid, and an SMTP failure
   const r = await authService.forgotPassword({ email: 'amr@example.com' });
   assert.match(r.message, /إذا كان البريد/);
   assert.equal(spies.createResetOtp, 1);
+  await new Promise(resolve => setTimeout(resolve, 10)); // the mail is sent without awaiting (#37): its failure is logged a tick later
   assert.ok(logs.some(l => /NOT delivered/.test(l)));
   assert.ok(logs.every(l => !l.includes(sent[0].code)));
 });

@@ -1,4 +1,5 @@
 import { prisma } from '../config/db';
+import { MARKET_VISIBLE_WHERE } from '../utils/market-visibility';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { LEVEL_MATRIX } from '../utils/progression-calculators';
@@ -27,7 +28,7 @@ export class MarketplaceAiService {
 	}): Promise<AiRecommendationResult> {
 		const { query = '', category = 'all', subSpecialty = '', limit = 4 } = params;
 		const safeLimit = Math.min(10, Math.max(1, Number(limit) || 4));
-		const where: any = { status: { in: ['PUBLISHED', 'APPROVED'] } };
+		const where: any = { ...MARKET_VISIBLE_WHERE };
 		if (query.trim()) where.OR = [{ title: { contains: query.trim(), mode: 'insensitive' } }, { description: { contains: query.trim(), mode: 'insensitive' } }];
 		if (category && category !== 'all') where.specialty = { category: { slug: category } };
 		if (subSpecialty) where.specialty = { ...where.specialty, slug: subSpecialty };

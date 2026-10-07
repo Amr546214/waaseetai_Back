@@ -1,8 +1,30 @@
 import { OtpType, UserStatus, PrismaClient } from '@prisma/client';
 import { OtpPurpose, type OtpPurposeValue } from '../utils/otp-purpose';
 import { prisma } from '../config/db';
+import { isReferralSlugConflict } from '../utils/slug.util';
 import { RegisterInput } from '../routes/auth/auth.schema';
 import { getRoleFromAccountType, getInitialRolesForAccountType, createMissingRoleProfiles } from '../services/account-management.service';
+
+const EMAIL_LOOKUP_SELECT = {
+  id: true,
+  password: true,
+  status: true,
+  accountType: true,
+  activeRole: true,
+  roles: true,
+  firstName: true,
+  lastName: true,
+  avatarUrl: true,
+  email: true,
+  googleId: true,
+  authProvider: true,
+  phoneNumber: true,
+  phoneCountryCode: true,
+  phoneOtpEnabled: true,
+  clientProfile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+  providerProfile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+  affiliateProfile: { select: { firstName: true, lastName: true, avatarUrl: true } }
+} as const;
 
 export class AuthRepository {
   /**
@@ -11,7 +33,8 @@ export class AuthRepository {
   public async findByEmailOrPhone(email: string, phoneNumber: string) {
     return prisma.user.findFirst({
       where: {
-        OR: [{ email }, { phoneNumber }]
+        // email: case-insensitive, so a legacy mixed-case account is still found by its normalised address
+        OR: [{ email: { equals: email.trim(), mode: 'insensitive' } }, { phoneNumber }]
       }
     });
   }
@@ -29,6 +52,18 @@ export class AuthRepository {
    * Create User and their corresponding Profile in a Transaction
    */
   public async createUserWithProfile(data: RegisterInput, hashedPassword: string | null, googleIdentity?: { sub: string; picture?: string }) {
+    // The user and ALL of their role profiles (incl. the affiliate profile) are created in one transaction. A referralSlug collision
+    // rolls the whole transaction back, so it is simply retried with a new random slug: no account is ever left without its profile.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.createUserWithProfileOnce(data, hashedPassword, googleIdentity);
+      } catch (error) {
+        if (attempt >= 3 || !isReferralSlugConflict(error)) throw error;
+      }
+    }
+  }
+
+  private async createUserWithProfileOnce(data: RegisterInput, hashedPassword: string | null, googleIdentity?: { sub: string; picture?: string }) {
     const roles = getInitialRolesForAccountType(data.accountType);
 
     return prisma.$transaction(async (tx) => {
@@ -127,29 +162,11 @@ export class AuthRepository {
    * legacy User.firstName/lastName regardless of which role is active.
    */
   public async findByEmail(email: string) {
-    return prisma.user.findUnique({
-      where: { email },
-      select: {
-        id: true,
-        password: true,
-        status: true,
-        accountType: true,
-        activeRole: true,
-        roles: true,
-        firstName: true,
-        lastName: true,
-        avatarUrl: true,
-        email: true,
-        googleId: true,
-        authProvider: true,
-        phoneNumber: true,
-        phoneCountryCode: true,
-        phoneOtpEnabled: true,
-        clientProfile: { select: { firstName: true, lastName: true, avatarUrl: true } },
-        providerProfile: { select: { firstName: true, lastName: true, avatarUrl: true } },
-        affiliateProfile: { select: { firstName: true, lastName: true, avatarUrl: true } }
-      }
-    });
+    const normalized = email.trim().toLowerCase();
+    // Exact (indexed) match on the normalised address first; a legacy account stored with other casing is found by the
+    // case-insensitive fallback, so normalising input at the edge never locks such an account out.
+    return (await prisma.user.findUnique({ where: { email: normalized }, select: EMAIL_LOOKUP_SELECT }))
+      ?? prisma.user.findFirst({ where: { email: { equals: normalized, mode: 'insensitive' } }, orderBy: { createdAt: 'asc' }, select: EMAIL_LOOKUP_SELECT });
   }
 
   /**
