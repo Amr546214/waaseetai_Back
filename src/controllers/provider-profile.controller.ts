@@ -77,6 +77,11 @@ export const getProfile = async (req: Request, res: Response) => {
 	}
 };
 
+// Free-text fields of the provider wizard: markup stripped, trimmed, length-capped (undefined / non-string stay undefined = keep stored).
+const clean = (value: unknown, max: number): string | undefined => (typeof value === 'string' ? sanitizeText(value).trim().slice(0, max) : undefined);
+const cleanList = (value: unknown, max: number, count: number): string[] =>
+	(Array.isArray(value) ? value : []).filter((v): v is string => typeof v === 'string').map(v => sanitizeText(v).trim().slice(0, max)).filter(Boolean).slice(0, count);
+
 export const getSetupData = async (req: Request, res: Response) => {
 	try {
 		const userId = req.user?.id;
@@ -130,15 +135,15 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			userId,
 			idNumber: details?.idNumber || undefined,
 			dob: details?.dob ? new Date(details.dob) : (storedIdentity?.kycStatus === 'VERIFIED' ? undefined : null),
-			country: details?.country,
-			city: details?.city,
-			industry: details?.occupation,
+			country: clean(details?.country, 60),
+			city: clean(details?.city, 80),
+			industry: clean(details?.occupation, 100),
 			// The job title the wizard collects ("occupation") is the profile headline the completion score and the public profile read:
 			// one value, stored in both columns (industry kept for older readers).
 			headline: typeof details?.occupation === 'string' && sanitizeText(details.occupation).trim() ? sanitizeText(details.occupation).trim().slice(0, 100) : undefined,
-			address: details?.address,
+			address: clean(details?.address, 500),
 			bio: typeof details?.bio === 'string' ? sanitizeText(details.bio) : details?.bio,
-			languages: details?.languages || [],
+			languages: cleanList(details?.languages, 40, 20),
 			yearsOfExperience: details?.expYears ?
 				(details.expYears === 'أقل من سنة' ? 1 :
 					details.expYears === '1 الى 3 سنوات' ? 2 :
@@ -147,8 +152,8 @@ export const saveSetupData = async (req: Request, res: Response) => {
 								details.expYears === 'أكثر من 10 سنوات' ? 10 :
 									parseInt(details.expYears, 10) || null) : null,
 
-			mainSpecialty: specialties?.mainSpec,
-			subSpecialties: specialties?.subSpecs || [],
+			mainSpecialty: clean(specialties?.mainSpec, 100),
+			subSpecialties: cleanList(specialties?.subSpecs, 100, 30),
 
 			// Empty/absent = "keep what is stored" (a stored private document is not visible to the client, so a re-save must not wipe it).
 			frontIdUrl: frontIdUrl || undefined,
@@ -158,12 +163,12 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			// change only through a real verification integration or the admin KYC decision (onboarding.service).
 
 			paymentType: bank?.paymentType,
-			bankName: bank?.bankName,
-			accountHolder: bank?.accountHolder,
+			bankName: clean(bank?.bankName, 100),
+			accountHolder: clean(bank?.accountHolder, 100),
 			iban: bank?.iban,
 
 			supportingDocsUrl: supportingDocsUrl || undefined,
-			notes: documents?.notes,
+			notes: clean(documents?.notes, 1000),
 
 			accurateAgreed: agreements?.accurate,
 			termsAgreed: agreements?.terms,
@@ -190,8 +195,8 @@ export const saveSetupData = async (req: Request, res: Response) => {
 						));
 						portfolioItems.push({
 							providerProfileId: result.id,
-							title: `نموذج أعمال - ${spec}`,
-							description: item.review,
+							title: `نموذج أعمال - ${clean(spec, 100) ?? ""}`,
+							description: clean(item.review, 2000) ?? null,
 							coverImage: proofUrls[0] || null,
 							tags: proofUrls.filter(Boolean) as string[]
 						});
