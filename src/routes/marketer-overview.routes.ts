@@ -1,12 +1,12 @@
 import { Router } from 'express';
 import { marketerOverviewController } from '../controllers/marketer-overview.controller';
 import { submitMarketerWithdrawal, listMyWithdrawals } from '../controllers/withdrawal.controller';
-import { authenticate, authorize } from '../middlewares/auth.middleware';
+import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 
 const router = Router();
 
 // Protect all routes and restrict to MARKETING_BROKER
-router.use(authenticate);
+router.use(authenticate, requireActiveUser);
 router.use(authorize('MARKETING_BROKER'));
 
 router.get('/summary', marketerOverviewController.getSummary);

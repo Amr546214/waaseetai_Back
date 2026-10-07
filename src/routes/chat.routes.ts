@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { chatController } from '../controllers/chat.controller';
-import { authenticate } from '../middlewares/auth.middleware';
+import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { validateDto } from '../middlewares/validate-dto.middleware';
 import { createConversationSchema } from '../dtos/chat.dto';
 import { memoryUpload } from '../utils/cloudinary-storage';
@@ -12,6 +12,7 @@ const router = Router();
 router.post(
   '/conversations/initiate',
   authenticate,
+  requireActiveUser,
   validateDto(createConversationSchema),
   chatController.initiateConversation
 );
@@ -20,6 +21,7 @@ router.post(
 router.get(
   '/conversations',
   authenticate,
+  requireActiveUser,
   chatController.getConversations
 );
 
@@ -27,6 +29,7 @@ router.get(
 router.get(
   '/conversations/:id/messages',
   authenticate,
+  requireActiveUser,
   chatController.getMessages
 );
 
@@ -34,6 +37,7 @@ router.get(
 router.post(
   '/upload',
   authenticate,
+  requireActiveUser,
   memoryUpload({ fileSize: 25 * 1024 * 1024, files: 1, allowedMimeTypes: CHAT_UPLOAD_MIME_TYPES }).single('file'),
   chatController.uploadAttachment
 );

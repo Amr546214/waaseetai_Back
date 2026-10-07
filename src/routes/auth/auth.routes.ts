@@ -96,6 +96,9 @@ router.post(
   authController.resendLoginOtp
 );
 
+// Own status, readable in every account state (authenticate only, by design: a blocked account must be able to see why).
+router.get('/account-status', authenticate, authController.accountStatus.bind(authController));
+
 router.post(
   '/logout',
   authenticate,
