@@ -39,6 +39,8 @@ function createWithdrawalMockPrisma(t: TestContext, opts: {
 	providerProfile?: { paypalPayoutEmail?: string | null } | null;
 	// Finance #32: the stored bank data a bank withdrawal is resolved from (default: a stored IBAN; `null` = nothing stored).
 	bankProfile?: { iban?: string | null; accountHolder?: string | null } | null;
+	// Finance #33: when the provider's PayPal payout email was last changed (the 24 hour freeze is derived from it).
+	paypalEmailChangedAt?: Date;
 } = {}) {
 	const withdrawals: any[] = (opts.seedWithdrawals || []).map((w, i) => ({ id: `seed-${i}`, ...w }));
 	let nextId = withdrawals.length + 1;
@@ -112,6 +114,7 @@ function createWithdrawalMockPrisma(t: TestContext, opts: {
 		$transaction: transactionSpy,
 		withdrawal: { findUnique: findUniqueSpy, update: updateSpy },
 		providerProfile: { findUnique: providerProfileFindUniqueSpy },
+		accountAuditLog: { findFirst: async (args: any) => (opts.paypalEmailChangedAt && opts.paypalEmailChangedAt > args.where.occurredAt.gt ? { occurredAt: opts.paypalEmailChangedAt } : null) },
 		// Release-blocker fix: approve() resolves the ledger from the owner's
 		// identity. Every fixture in this file is a plain provider (no
 		// AffiliateProfile) -> provider-wallet ledger, i.e. unchanged behavior.
@@ -1550,4 +1553,27 @@ test('#32 the request schema carries no bank fields (zod drops them) and no long
 	const parsed = createWithdrawalSchema.parse({ amount: 50, iban: 'SA-X', accountName: 'x', accountNumber: '1' });
 	assert.deepEqual(parsed, { amount: 50, method: 'bank_transfer' });
 	assert.equal(createWithdrawalSchema.safeParse({ amount: 50, method: 'paypal' }).success, true);
+});
+
+
+// ---- Finance #33: PayPal withdrawals are frozen for 24 hours after the payout email was changed ----------------------------------
+test('#33 createForProvider(paypal): within 24 hours of a PayPal email change the withdrawal is refused (Arabic) and nothing is created', async (t) => {
+	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 500, providerProfile: { paypalPayoutEmail: 'new@paypal.example' }, paypalEmailChangedAt: new Date(Date.now() - 60 * 60 * 1000) });
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' } as any),
+		(e: any) => e.statusCode === 400 && e.message === 'تم تغيير بريد PayPal مؤخرًا، يمكن السحب بعد مرور 24 ساعة'
+	);
+	assert.equal(createSpy.mock.callCount(), 0);
+});
+
+test('#33 createForProvider(paypal): after 24 hours the withdrawal is allowed again, to the stored PayPal email', async (t) => {
+	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 500, providerProfile: { paypalPayoutEmail: 'new@paypal.example' }, paypalEmailChangedAt: new Date(Date.now() - 25 * 60 * 60 * 1000) });
+	await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' } as any);
+	assert.equal(createSpy.mock.calls[0].arguments[0].data.paypalEmail, 'new@paypal.example');
+});
+
+test('#33 the freeze does not touch the bank method', async (t) => {
+	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 500, paypalEmailChangedAt: new Date(Date.now() - 60 * 1000) });
+	await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer' } as any);
+	assert.equal(createSpy.mock.callCount(), 1);
 });

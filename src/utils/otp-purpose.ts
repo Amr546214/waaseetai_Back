@@ -18,6 +18,8 @@ export const OtpPurpose = {
   PHONE_CHANGE: 'PHONE_CHANGE',
   // Mandatory second step of every password login (owner decision #4): the code goes to the ACCOUNT EMAIL, never by SMS.
   LOGIN_EMAIL: 'LOGIN_EMAIL',
+  // Provider PayPal payout email change (#33): the new address travels in context.newEmail; the code goes to the ACCOUNT EMAIL.
+  PAYPAL_EMAIL_CHANGE: 'PAYPAL_EMAIL_CHANGE',
 } as const;
 export type OtpPurposeValue = (typeof OtpPurpose)[keyof typeof OtpPurpose];
 
