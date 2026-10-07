@@ -1,4 +1,5 @@
 import { prisma } from '../config/db';
+import { disconnectUserSockets } from '../utils/socket-registry';
 import { AccountType, UserStatus, RiskLevel, Prisma } from '@prisma/client';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
 
@@ -405,6 +406,11 @@ export class AdminUsersService {
       where: { id },
       data: { status: uppercaseStatus }
     });
+
+    // An account that leaves ACTIVE loses its live sockets right away (chat, assistant, assessments); HTTP is already refused by requireActiveUser.
+    if (uppercaseStatus !== UserStatus.ACTIVE) {
+      try { await disconnectUserSockets(id); } catch { /* the status change is already committed */ }
+    }
 
     return updated;
   }

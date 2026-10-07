@@ -50,6 +50,7 @@ test('resolveHelpAssistantUser: a revoked session is UNAUTHENTICATED', async (t)
 test('resolveHelpAssistantUser: suspended, pending or banned accounts are FORBIDDEN', async (t) => {
 	for (const user of [
 		{ accountType: 'CLIENT_INDIVIDUAL', status: 'SUSPENDED', activeRole: 'CLIENT', isBanned: false },
+		{ accountType: 'CLIENT_INDIVIDUAL', status: 'SUSPENDED_REVIEW', activeRole: 'CLIENT', isBanned: false },
 		{ accountType: 'CLIENT_INDIVIDUAL', status: 'PENDING_VERIFICATION', activeRole: 'CLIENT', isBanned: false },
 		{ accountType: 'CLIENT_INDIVIDUAL', status: 'ACTIVE', activeRole: 'CLIENT', isBanned: true },
 	]) {

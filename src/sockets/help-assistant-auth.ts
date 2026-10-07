@@ -23,7 +23,7 @@ export type HelpAssistantAuthResult =
 	| { ok: true; userId: string; role: HelpAssistantRole }
 	| { ok: false; reason: 'UNAUTHENTICATED' | 'FORBIDDEN' };
 
-const BLOCKED_STATUSES = new Set(['PENDING_VERIFICATION', 'SUSPENDED']);
+const BLOCKED_STATUSES = new Set(['PENDING_VERIFICATION', 'SUSPENDED', 'SUSPENDED_REVIEW']);
 
 /** Maps the verified active role (multi-role users) or, failing that, the
  *  account type to one coarse dashboard role. Unknown → null (rejected). */
