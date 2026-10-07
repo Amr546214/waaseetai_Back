@@ -63,7 +63,7 @@ export const getProviderStatistics = async (req: Request, res: Response, next: N
 			// provider progression (Phase 3C source of truth for currentPoints/currentLevel — see gamification.service.ts LEVEL_MATRIX)
 			prisma.providerGamification.findUnique({
 				where: { providerId },
-				select: { points: true, currentLevelIndex: true }
+				select: { points: true, currentLevelIndex: true, currentCommission: true }
 			}),
 			// latest projects & proposals (top 4 combined activity)
 			providerOverviewService.getLatestProviderActivity(providerId),
@@ -128,6 +128,10 @@ export const getProviderStatistics = async (req: Request, res: Response, next: N
 					hasApprovedSpecialties,
 					currentLevel,
 					currentPoints,
+					// Real values only (the dashboard badge is built from them): the profile's KYC status, and the commission percentage stored for
+					// the provider's current level (ProviderGamification.currentCommission). null when the row / value does not exist.
+					kycStatus: providerProfile?.kycStatus ?? null,
+					commissionPercent: typeof gamification?.currentCommission === 'number' ? gamification.currentCommission : null,
 					firstName,
 					lastName
 				},
