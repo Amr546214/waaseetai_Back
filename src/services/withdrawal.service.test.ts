@@ -37,6 +37,8 @@ function createWithdrawalMockPrisma(t: TestContext, opts: {
 	availableBalance?: number;
 	seedWithdrawals?: { userId: string; amount: number; status: string }[];
 	providerProfile?: { paypalPayoutEmail?: string | null } | null;
+	// Finance #32: the stored bank data a bank withdrawal is resolved from (default: a stored IBAN; `null` = nothing stored).
+	bankProfile?: { iban?: string | null; accountHolder?: string | null } | null;
 } = {}) {
 	const withdrawals: any[] = (opts.seedWithdrawals || []).map((w, i) => ({ id: `seed-${i}`, ...w }));
 	let nextId = withdrawals.length + 1;
@@ -100,8 +102,10 @@ function createWithdrawalMockPrisma(t: TestContext, opts: {
 	// `opts.providerProfile === undefined` (the default) means "no
 	// ProviderProfile row at all" (findUnique resolves null), matching a
 	// provider who never configured any PayPal destination.
-	const providerProfileFindUniqueSpy = t.mock.fn(async (_args: any) =>
-		opts.providerProfile === undefined ? null : opts.providerProfile
+	const providerProfileFindUniqueSpy = t.mock.fn(async (args: any) =>
+		args?.select?.iban
+			? (opts.bankProfile === undefined ? { iban: 'SA-STORED-0000000000000000', accountHolder: 'Stored Holder' } : opts.bankProfile)
+			: (opts.providerProfile === undefined ? null : opts.providerProfile)
 	);
 
 	const prismaMock: any = {
@@ -242,7 +246,7 @@ test('createForProvider: a serialization-conflict error (P2034) is retried, not 
 		}
 		return fn(tx);
 	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
@@ -284,7 +288,7 @@ test('createForProvider: a DriverAdapterError (cause.kind = TransactionWriteConf
 		}
 		return fn(tx);
 	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
@@ -305,7 +309,7 @@ test('createForProvider: an UNRELATED DriverAdapterError is never retried — it
 		attempts += 1;
 		throw new DriverAdapterError({ kind: 'DatabaseNotReachable' });
 	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
@@ -348,7 +352,7 @@ test('createForProvider: on retry, released earnings AND pending withdrawals are
 		}
 		return result;
 	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
 	t.mock.module('./provider-finance.service', {
 		namedExports: {
 			providerFinanceService: {
@@ -382,7 +386,7 @@ test('createForProvider: if the retry observes insufficient balance, the caller 
 		if (attempts === 1) throw new DriverAdapterError({ kind: 'TransactionWriteConflict' });
 		return fn(tx);
 	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
@@ -408,7 +412,7 @@ test('createForProvider: retry is bounded — if every attempt conflicts, the fi
 		attempts += 1;
 		throw new DriverAdapterError({ kind: 'TransactionWriteConflict' });
 	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
@@ -559,7 +563,7 @@ test('J. createForProvider: on retry, the WIDENED outstanding-total aggregate is
 		}
 		return result;
 	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 100, currency: 'USD' } }) } }
 	});
@@ -642,7 +646,7 @@ test('E/F. createForProvider: on a SERIALIZABLE retry, the SAME id/referenceId p
 		if (attempts === 1) throw new DriverAdapterError({ kind: 'TransactionWriteConflict' });
 		return fn(tx);
 	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
@@ -741,14 +745,13 @@ test('H. createForProvider: a PayPal withdrawal does NOT require an IBAN or acco
 // parse having already happened. Asserting this at the service layer would
 // test behavior the service never owned, so this is asserted directly
 // against the DTO, which is the actual, and unchanged, source of that rule.
-test('I. createWithdrawalSchema: a bank_transfer request still requires IBAN or account number (existing behavior preserved)', async () => {
+test('I. createWithdrawalSchema: a bank_transfer request no longer carries or needs a destination (#32: it comes from the stored profile)', async () => {
 	const { createWithdrawalSchema } = await import('../dtos/withdrawal.dto');
 
-	const result = createWithdrawalSchema.safeParse({ amount: 100, method: 'bank_transfer' });
-	assert.equal(result.success, false);
-
-	const withIban = createWithdrawalSchema.safeParse({ amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
-	assert.equal(withIban.success, true);
+	assert.equal(createWithdrawalSchema.safeParse({ amount: 100, method: 'bank_transfer' }).success, true);
+	// an IBAN in the body is accepted as noise but dropped by the schema
+	const withIban = createWithdrawalSchema.parse({ amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	assert.equal('iban' in withIban, false);
 });
 
 // Final pre-commit review follow-up: the DTO trust-boundary claim ("Zod's
@@ -1512,4 +1515,39 @@ test('withdrawal.service.ts has no riyal/SAR text and creates both provider and 
 	const src = readFileSync(new URL('./withdrawal.service.ts', import.meta.url), 'utf8');
 	assert.doesNotMatch(src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, ''), /ريال|ر\.س|﷼|'SAR'|"SAR"/);
 	assert.equal((src.match(/currency: 'USD'/g) || []).length >= 2, true);
+});
+
+
+// ---- Finance #32: the bank destination comes ONLY from the stored profile, never from the request body --------------------------
+test('#32 createForProvider: an IBAN / account sent in the body is never used — the stored profile data is the destination', async (t) => {
+	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 500, bankProfile: { iban: 'SA-STORED-1111', accountHolder: 'Stored Holder' } });
+
+	await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA-ATTACKER-9999', accountName: 'Attacker', accountNumber: '999' } as any);
+
+	const data = createSpy.mock.calls[0].arguments[0].data;
+	assert.equal(data.iban, 'SA-STORED-1111');
+	assert.equal(data.accountName, 'Stored Holder');
+	assert.equal(data.accountNumber, null);
+	assert.ok(!JSON.stringify(data).includes('ATTACKER') && !JSON.stringify(data).includes('Attacker'));
+});
+
+test('#32 createForProvider: with no stored bank data the withdrawal is refused (400, Arabic) even if the body carries an IBAN, and nothing is created', async (t) => {
+	// one TestContext per case: t.mock.module() may mock a specifier only once per context
+	for (const [i, bankProfile] of ([null, { iban: null }, { iban: '   ' }] as any[]).entries()) {
+		await t.test(`stored bank data case ${i}`, async (t2) => {
+			const { withdrawalService, createSpy } = await loadService(t2, { availableBalance: 500, bankProfile });
+			await assert.rejects(
+				() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' } as any),
+				(e: any) => e.statusCode === 400 && e.message === 'لا توجد بيانات بنكية معتمدة للسحب'
+			);
+			assert.equal(createSpy.mock.callCount(), 0);
+		});
+	}
+});
+
+test('#32 the request schema carries no bank fields (zod drops them) and no longer demands an IBAN', async () => {
+	const { createWithdrawalSchema } = await import('../dtos/withdrawal.dto');
+	const parsed = createWithdrawalSchema.parse({ amount: 50, iban: 'SA-X', accountName: 'x', accountNumber: '1' });
+	assert.deepEqual(parsed, { amount: 50, method: 'bank_transfer' });
+	assert.equal(createWithdrawalSchema.safeParse({ amount: 50, method: 'paypal' }).success, true);
 });
