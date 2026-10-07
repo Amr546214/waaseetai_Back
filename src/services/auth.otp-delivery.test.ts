@@ -40,9 +40,13 @@ function setup(t: TestContext, opts: {
     deletePasswordResetOtps: async () => { spies.deleteResetOtps++; return { count: 1 }; },
     createPasswordResetOtp: async (_u: string, code: string, expiresAt: Date) => { spies.createResetOtp++; created.push({ code, reset: true, expiresAt }); return {}; },
     deletePhoneOtps: async () => ({ count: 0 }),
+    findLatestOtpByPurpose: async () => null,
+    deleteOtpsByPurpose: async () => ({ count: 0 }),
+    findByIdForSession: async () => user,
   } } });
   t.mock.module('./notification.service', { namedExports: { notificationService: {
     sendEmailOtp: async (to: string, code: string) => { sent.push({ to, code }); if (opts.sendOk === false) throw new Error('SMTP down'); },
+    sendLoginOtpEmail: async (to: string, code: string) => { sent.push({ to, code }); if (opts.sendOk === false) throw new Error('SMTP down'); },
     sendPasswordResetEmail: async (to: string, _n: string, code: string) => { sent.push({ to, code }); if (opts.sendOk === false) throw new Error('SMTP down'); },
     sendSmsOtp: async (...a: any[]) => { smsSent.push(a); },
     isSmsAvailable: () => !!opts.smsAvailable,
@@ -179,20 +183,24 @@ const ACTIVE_LEGACY_PHONE_OTP_USER = (hash: string) => ({
   phoneOtpEnabled: true, phoneNumber: '500000000', phoneCountryCode: '+966'
 });
 
-test('login: an existing ACTIVE user with the legacy phoneOtpEnabled=true logs in normally — no SMS challenge, no SMS 503, no phone code created/sent/logged', async (t) => {
+// Owner decision #4: every password login now needs the EMAIL code (LOGIN_EMAIL). The legacy phoneOtpEnabled flag still changes nothing:
+// no SMS challenge, no SMS 503, nothing about a phone is created, sent or logged. The full flow is in auth.login-email-otp.test.ts.
+test('login: an ACTIVE user with the legacy phoneOtpEnabled=true gets the EMAIL challenge — no token yet, no SMS, no phone code', async (t) => {
   const bcrypt = await import('bcrypt');
   const hash = await bcrypt.hash('Str0ng!Pass1', 4);
   const { created, sent, smsSent, logs } = setup(t, { smsAvailable: false, user: ACTIVE_LEGACY_PHONE_OTP_USER(hash) });
   const { authService } = await load();
 
-  const result = await authService.loginUser({ email: 'amr@example.com', password: 'Str0ng!Pass1' }, {});
+  const result: any = await authService.loginUser({ email: 'amr@example.com', password: 'Str0ng!Pass1' }, {});
 
-  assert.equal(result.verified, true);
-  assert.equal(typeof result.token, 'string');
-  assert.equal((result as any).phoneOtpRequired, undefined);
-  assert.equal(created.length, 0, 'no OTP of any kind is created');
+  assert.equal(result.verified, false);
+  assert.equal(result.loginOtpRequired, true);
+  assert.equal(result.phoneOtpRequired, false);
+  assert.equal(result.token, undefined, 'no session before the code is verified');
   assert.equal(smsSent.length, 0, 'no SMS is sent');
-  assert.equal(sent.length, 0, 'no email code either: a normal login needs none');
+  assert.equal(created.every(c => c.type === 'EMAIL'), true, 'only an email code is ever created');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, 'amr@example.com');
   assert.ok(logs.every(l => !/phone|SMS|جوال/i.test(l)), 'nothing about a phone code is logged');
 });
 
@@ -213,16 +221,15 @@ test('google login: an existing ACTIVE user with phoneOtpEnabled=true gets a ses
   assert.ok(logs.every(l => !/phone|SMS|جوال/i.test(l)));
 });
 
-test('login-time SMS verification endpoints are disabled: they answer 400 and create/send/log nothing', async (t) => {
-  const { created, sent, smsSent, logs } = setup(t, { smsAvailable: true, user: ACTIVE_LEGACY_PHONE_OTP_USER('x') });
+test('login resend / verify with no pending LOGIN_EMAIL code create and send nothing (never an SMS)', async (t) => {
+  const { created, sent, smsSent } = setup(t, { smsAvailable: true, user: ACTIVE_LEGACY_PHONE_OTP_USER('x') });
   const { authService } = await load();
 
-  await assert.rejects(() => authService.resendLoginOtp('user-1'), (e: any) => e.statusCode === 400 && /الرسائل النصية غير مفعّل/.test(e.message));
-  await assert.rejects(() => authService.verifyLoginOtp({ userId: 'user-1', code: '123456' }, {}), (e: any) => e.statusCode === 400 && /الرسائل النصية غير مفعّل/.test(e.message));
+  await assert.rejects(() => authService.resendLoginOtp('user-1'), (e: any) => e.statusCode === 400);
+  await assert.rejects(() => authService.verifyLoginOtp({ userId: 'user-1', code: '123456' }, {}), (e: any) => e.statusCode === 400);
   assert.equal(created.length, 0);
   assert.equal(sent.length, 0);
   assert.equal(smsSent.length, 0);
-  assert.equal(logs.length, 0);
 });
 
 test('email OTP flows are unchanged: an unverified login still e-mails the activation code (never an SMS), whatever phoneOtpEnabled says', async (t) => {

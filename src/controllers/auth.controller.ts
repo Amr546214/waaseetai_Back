@@ -143,29 +143,19 @@ export class AuthController {
 			const input: LoginInput = req.body;
 			const result = await authService.loginUser(input, { ipAddress: req.ip, userAgent: req.get('user-agent') });
 
-			if (!result.verified) {
-				res.status(200).json({
-					success: true,
-					message: result.message,
-					data: {
-						verified: false,
-						phoneOtpRequired: result.phoneOtpRequired,
-						userId: result.userId,
-						// Unverified account: whether the activation email really went out, and the wait when the send was throttled.
-						...('emailSent' in result ? { emailSent: result.emailSent } : {}),
-						...('retryAfterSeconds' in result ? { retryAfterSeconds: result.retryAfterSeconds } : {})
-					}
-				});
-				return;
-			}
-
+			// A password login never returns a session by itself: it answers with a challenge (activation code for an unverified account,
+			// LOGIN_EMAIL code for an active one). The session comes from POST /auth/login/verify-otp.
 			res.status(200).json({
 				success: true,
-				message: 'تم تسجيل الدخول بنجاح',
+				message: result.message,
 				data: {
-					verified: true,
-					token: result.token,
-					user: result.user
+					verified: false,
+					phoneOtpRequired: result.phoneOtpRequired,
+					...('loginOtpRequired' in result ? { loginOtpRequired: true } : {}),
+					userId: result.userId,
+					// Whether the code email really went out, and the wait when the send was throttled.
+					...('emailSent' in result ? { emailSent: result.emailSent } : {}),
+					...('retryAfterSeconds' in result ? { retryAfterSeconds: result.retryAfterSeconds } : {})
 				}
 			});
 		} catch (error) {
@@ -174,7 +164,7 @@ export class AuthController {
 	}
 
 	/**
-	 * Verify the login-time phone OTP and issue the session
+	 * Verify the login-time EMAIL OTP and issue the session
 	 */
 	public async verifyLoginOtp(req: Request, res: Response, next: NextFunction) {
 		try {
@@ -192,16 +182,17 @@ export class AuthController {
 	}
 
 	/**
-	 * Resend the login-time phone OTP
+	 * Resend the login-time EMAIL OTP
 	 */
 	public async resendLoginOtp(req: Request, res: Response, next: NextFunction) {
 		try {
 			const { userId }: ResendLoginOtpInput = req.body;
-			await authService.resendLoginOtp(userId);
+			const result = await authService.resendLoginOtp(userId, req.ip);
 
 			res.status(200).json({
-				success: true,
-				message: 'تم إعادة إرسال رمز التحقق بنجاح'
+				success: result.emailSent,
+				message: result.emailSent ? 'تم إعادة إرسال رمز التحقق بنجاح' : result.message,
+				emailSent: result.emailSent
 			});
 		} catch (error) {
 			next(error);

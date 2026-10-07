@@ -252,6 +252,20 @@ export class AuthRepository {
     });
   }
 
+  /** Latest email OTP of exactly one purpose (a code issued for any other purpose is never returned). */
+  public async findLatestOtpByPurpose(userId: string, purpose: OtpPurposeValue) {
+    return prisma.otpVerification.findFirst({
+      where: { userId, type: OtpType.EMAIL, context: { path: ['purpose'], equals: purpose } },
+      orderBy: { createdAt: 'desc' }
+    });
+  }
+
+  public async deleteOtpsByPurpose(userId: string, purpose: OtpPurposeValue) {
+    return prisma.otpVerification.deleteMany({
+      where: { userId, type: OtpType.EMAIL, context: { path: ['purpose'], equals: purpose } }
+    });
+  }
+
   /** Deletes only ACTIVATION email OTPs (leaves phone, password-reset and every other purpose alone). */
   public async deleteActivationOtps(userId: string) {
     return prisma.otpVerification.deleteMany({
