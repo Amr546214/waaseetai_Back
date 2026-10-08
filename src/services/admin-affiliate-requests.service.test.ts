@@ -41,13 +41,16 @@ function createMockPrisma(t: TestContext, opts: {
 	// The completion recompute that follows an approval goes through marketerProfileService (mocked: it is the unit under
 	// test elsewhere, marketer-completion.test.ts).
 	const recomputeUpdateSpy = t.mock.fn(async (_userId: string) => undefined);
-	const prismaMock: any = { $transaction: async (fn: any) => fn(tx) };
+	const findManySpy = t.mock.fn(async (_args: any) => []);
+	const auditSpy = t.mock.fn(async (_input: any) => ({}));
+	const prismaMock: any = { $transaction: async (fn: any) => fn(tx), profileChangeRequest: { findMany: findManySpy } };
 
 	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+	t.mock.module('./account-logs.service', { namedExports: { accountAuditLogService: { record: auditSpy } } });
 	t.mock.module('./notification.service', { namedExports: { notificationService: { createAndEmit: notifySpy } } });
 	t.mock.module('./marketer-profile.service', { namedExports: { marketerProfileService: { recalculateCompletion: recomputeUpdateSpy } } });
 
-	return { userUpdateSpy, affiliateUpdateSpy, notifySpy, affiliateFindUniqueSpy, recomputeUpdateSpy, getRequest: () => request };
+	return { userUpdateSpy, affiliateUpdateSpy, notifySpy, affiliateFindUniqueSpy, recomputeUpdateSpy, findManySpy, auditSpy, getRequest: () => request };
 }
 
 async function loadService(t: TestContext, opts?: Parameters<typeof createMockPrisma>[1]) {
@@ -356,4 +359,38 @@ test('approve: a failing recompute never undoes the committed approval', async (
 	const result = await adminAffiliateRequestsService.approve('req-12', 'admin-1');
 	assert.equal(result.status, 'APPROVED_AND_APPLIED');
 	assert.equal(getRequest().status, 'APPROVED_AND_APPLIED');
+});
+
+
+test('listRequests: no status = pending only; ALL = every request incl. decided ones (history); a real status filters that one; junk falls back to pending', async (t) => {
+  const { adminAffiliateRequestsService, findManySpy } = await loadService(t);
+  const whereOf = async (status?: string) => { await adminAffiliateRequestsService.listRequests(status); return findManySpy.mock.calls.at(-1)!.arguments[0].where; };
+  assert.deepEqual(await whereOf(undefined), { status: { in: ['PENDING_AI_REVIEW', 'PENDING_HUMAN_APPROVAL'] } });
+  assert.deepEqual(await whereOf('ALL'), {});
+  assert.deepEqual(await whereOf('all'), {});
+  assert.deepEqual(await whereOf('REJECTED'), { status: 'REJECTED' });
+  assert.deepEqual(await whereOf('APPROVED_AND_APPLIED'), { status: 'APPROVED_AND_APPLIED' });
+  assert.deepEqual(await whereOf('nonsense'), { status: { in: ['PENDING_AI_REVIEW', 'PENDING_HUMAN_APPROVAL'] } });
+});
+
+test('approve is written to the account audit trail (admin source, request id)', async (t) => {
+  const { adminAffiliateRequestsService, auditSpy } = await loadService(t, { request: { id: 'req-1', affiliateProfileId: 'aff-1', fieldType: 'FIRST_NAME', fieldLabel: 'الاسم الأول', requestedValue: 'سارة', currentValue: 'نورة', status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-1' } });
+  await adminAffiliateRequestsService.approve('req-1', 'admin-1');
+  const a = auditSpy.mock.calls[0].arguments[0];
+  assert.equal(a.userId, 'user-1'); assert.equal(a.source, 'ADMIN'); assert.equal(a.status, 'APPROVED'); assert.equal(a.requestId, 'req-1');
+});
+
+test('reject is written to the account audit trail with the reason', async (t) => {
+  const { adminAffiliateRequestsService, auditSpy } = await loadService(t);
+  await adminAffiliateRequestsService.reject('req-1', 'admin-1', 'الصورة غير واضحة');
+  const r = auditSpy.mock.calls[0].arguments[0];
+  assert.equal(r.status, 'REJECTED'); assert.equal(r.statusText, 'الصورة غير واضحة'); assert.equal(r.severity, 'WARNING'); assert.equal(r.requestId, 'req-1');
+});
+
+test('a failing audit write never undoes or fails the committed decision', async (t) => {
+  const { adminAffiliateRequestsService, auditSpy, getRequest } = await loadService(t);
+  auditSpy.mock.mockImplementation(async () => { throw new Error('audit down'); });
+  const out = await adminAffiliateRequestsService.reject('req-1', 'admin-1', 'سبب');
+  assert.equal(out.status, 'REJECTED');
+  assert.equal(getRequest().status, 'REJECTED');
 });

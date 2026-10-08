@@ -2,6 +2,7 @@ import { prisma } from '../config/db';
 import { ChangeRequestStatus, SensitiveFieldType, Prisma } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
+import { accountAuditLogService } from './account-logs.service';
 import { isValidIban } from '../utils/iban.util';
 import { marketerProfileService } from './marketer-profile.service';
 import { logger } from '../config/logger';
@@ -28,8 +29,10 @@ const affiliateRequestInclude = {
  */
 export class AdminAffiliateRequestsService {
 	public async listRequests(status?: string) {
-		const where = status && status !== 'ALL'
-			? { status: status as ChangeRequestStatus }
+		// default (no status) = what still waits for a decision; 'ALL' = every request incl. decided ones (history); otherwise that one status
+		const wanted = String(status || '').toUpperCase();
+		const where: Prisma.ProfileChangeRequestWhereInput = wanted === 'ALL' ? {}
+			: wanted && wanted in ChangeRequestStatus ? { status: wanted as ChangeRequestStatus }
 			: { status: { in: PENDING_STATUSES } };
 
 		return prisma.profileChangeRequest.findMany({
@@ -85,6 +88,8 @@ export class AdminAffiliateRequestsService {
 			logger.error(`[AdminAffiliateRequestsService] Failed to recalculate completion after approving ${id}`, error);
 		}
 
+		await this.audit(applied.affiliateProfile.userId, id, applied.fieldLabel, true, adminUserId);
+
 		await notificationService.createAndEmit({
 			userId: applied.affiliateProfile.userId,
 			title: 'تم اعتماد طلب التعديل',
@@ -93,6 +98,20 @@ export class AdminAffiliateRequestsService {
 		});
 
 		return applied;
+	}
+
+	/** The admin decision in the account audit trail (same event the provider review writes). Best effort: the decision is already committed. */
+	private async audit(userId: string, requestId: string, fieldLabel: string, approved: boolean, adminUserId: string, reason?: string) {
+		try {
+			await accountAuditLogService.record({
+				userId, eventType: 'HUMAN_REVIEW_COMPLETED', category: 'PROFILE_COMPLETION', title: fieldLabel,
+				summary: approved ? 'اعتمد المراجع البشري طلب التعديل وتم تطبيقه' : 'رفض المراجع البشري طلب التعديل',
+				source: 'ADMIN', severity: approved ? 'INFO' : 'WARNING', status: approved ? 'APPROVED' : 'REJECTED',
+				statusText: reason || undefined, requestId, context: { actorLabel: adminUserId } as any
+			});
+		} catch (error) {
+			logger.error(`[AdminAffiliateRequestsService] Failed to write the audit log for request ${requestId}`, error);
+		}
 	}
 
 	public async reject(id: string, adminUserId: string, rejectionReason: string) {
@@ -109,6 +128,8 @@ export class AdminAffiliateRequestsService {
 				include: affiliateRequestInclude
 			});
 		});
+
+		await this.audit(rejected.affiliateProfile.userId, id, rejected.fieldLabel, false, adminUserId, rejectionReason);
 
 		await notificationService.createAndEmit({
 			userId: rejected.affiliateProfile.userId,

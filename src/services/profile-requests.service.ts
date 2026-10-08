@@ -27,6 +27,16 @@ export interface FieldChangeCandidate {
  * creates are atomic with whatever else the caller is doing in the same
  * transaction (e.g. banking's direct-vs-governed field split).
  */
+/** `REQ-` + 6 digits, re-drawn until unused (the column is unique: a collision would abort the whole batch with a 500). */
+async function nextFreeRequestNumber(tx: Prisma.TransactionClient): Promise<string> {
+	for (let attempt = 0; attempt < 8; attempt++) {
+		const candidate = `REQ-${Math.floor(100000 + Math.random() * 900000)}`;
+		const taken = await tx.profileChangeRequest.findUnique({ where: { requestNumber: candidate }, select: { id: true } });
+		if (!taken) return candidate;
+	}
+	throw new AppError('تعذر إنشاء رقم للطلب، حاول مرة أخرى', 503);
+}
+
 export async function createGovernedFieldRequests(
 	tx: Prisma.TransactionClient,
 	affiliateProfileId: string,
@@ -52,7 +62,7 @@ export async function createGovernedFieldRequests(
 
 	const created = [];
 	for (const candidate of changed) {
-		const requestNumber = `REQ-${Math.floor(1000 + Math.random() * 9000)}`;
+		const requestNumber = await nextFreeRequestNumber(tx);
 		created.push(await tx.profileChangeRequest.create({
 			data: {
 				requestNumber,
@@ -87,7 +97,7 @@ export class ProfileRequestsService {
 		// has not been applied to DEV/LIVE yet, so default selection here
 		// would 500 this profile-change-requests page.
 		const profile = await prisma.affiliateProfile.findUnique({ where: { userId }, select: { id: true } });
-		if (!profile) throw new Error('Affiliate profile not found');
+		if (!profile) throw new AppError('لم يتم العثور على ملف الوسيط', 404);
 
 		const requests = await prisma.profileChangeRequest.findMany({
 			where: { affiliateProfileId: profile.id },
@@ -151,17 +161,17 @@ export class ProfileRequestsService {
 	public async withdrawRequest(userId: string, requestId: string) {
 		// Explicit select — deployment-safety fix; only `id` is used below.
 		const profile = await prisma.affiliateProfile.findUnique({ where: { userId }, select: { id: true } });
-		if (!profile) throw new Error('Affiliate profile not found');
+		if (!profile) throw new AppError('لم يتم العثور على ملف الوسيط', 404);
 
 		const req = await prisma.profileChangeRequest.findUnique({
 			where: { requestNumber: requestId },
 		});
 
-		if (!req) throw new Error('Request not found');
-		if (req.affiliateProfileId !== profile.id) throw new Error('Unauthorized');
+		if (!req) throw new AppError('طلب التعديل غير موجود', 404);
+		if (req.affiliateProfileId !== profile.id) throw new AppError('طلب التعديل غير موجود', 404);
 
 		if (req.status !== ChangeRequestStatus.PENDING_AI_REVIEW && req.status !== ChangeRequestStatus.PENDING_HUMAN_APPROVAL) {
-			throw new Error('Can only withdraw pending requests');
+			throw new AppError('لا يمكن سحب إلا الطلبات قيد المراجعة', 409);
 		}
 
 		const updated = await prisma.profileChangeRequest.update({
