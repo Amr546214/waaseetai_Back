@@ -16,6 +16,22 @@ import { CLIENT_IDENTITY_REQUEST_CATEGORY as CLIENT_IDENTITY_CATEGORY } from '..
 
 const maskId = (value: string) => (value.length > 4 ? `${'*'.repeat(value.length - 4)}${value.slice(-4)}` : value);
 
+/** The only fields PUT /profiles/update may write on a ClientProfile (display fields firstName/lastName/avatarUrl are handled separately). */
+const CLIENT_PROFILE_FIELDS = ['companyName', 'companySize', 'industry', 'website', 'bio', 'interests', 'portfolioUrl', 'linkedinUrl', 'personalWebsiteUrl', 'interfaceLanguage', 'timezone'] as const;
+const CLIENT_NULLABLE_LINKS = new Set(['portfolioUrl', 'linkedinUrl', 'personalWebsiteUrl']);
+
+function pickClientProfileFields(input: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of CLIENT_PROFILE_FIELDS) {
+    const value = input[key];
+    if (value === undefined) continue;                       // not sent: keep what is stored
+    if (key === 'interests') { if (Array.isArray(value)) out.interests = [...new Set(value.map(v => String(v).trim()).filter(Boolean))]; continue; }
+    if (value === null && key !== 'bio') continue;           // null = "not provided" for everything except the bio (cleared with '')
+    out[key] = CLIENT_NULLABLE_LINKS.has(key) && value === '' ? null : value;
+  }
+  return out;
+}
+
 export class ProfileService {
   /**
    * Fetch a user's full integrated profile.
@@ -189,7 +205,9 @@ export class ProfileService {
       const hasDisplayFields = Object.keys(displayFields).length > 0;
       if (hasProfileData || hasDisplayFields) {
         if (activeRole === UserRole.CLIENT) {
-          const clientData = { ...(profileData as any), ...displayFields };
+          // Explicit allow-list (a provider-only field in the body must never reach the ClientProfile upsert: unknown column -> 500).
+          const clientData: Record<string, unknown> = { ...pickClientProfileFields(profileData as Record<string, unknown>), ...displayFields };
+          if (Object.keys(clientData).length === 0) return { user: updatedUser, profile: profileResult };
           profileResult = await tx.clientProfile.upsert({
             where: { userId },
             create: { userId, ...clientData },
