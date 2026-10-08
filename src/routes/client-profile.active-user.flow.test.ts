@@ -22,7 +22,7 @@ function server() {
 		mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
 		mock.module('../services/session.service', { namedExports: { sessionService: { validateOrRegister: async () => ({ id: 's1' }) } } });
 		mock.module('../controllers/client-profile.controller', {
-			namedExports: { clientProfileController: { getPublicProfile: ok('public'), getSetupData: ok('getSetup'), saveSetupData: ok('saveSetup'), nafathVerify: ok('nafath') } },
+			namedExports: { clientProfileController: { getPublicProfile: ok('public'), getSetupData: ok('getSetup'), saveSetupData: ok('saveSetup'), saveSetupStep: ok('saveSetupStep'), nafathVerify: ok('nafath') } },
 		});
 		const express = (await import('express')).default;
 		const router = (await import('./client-profile.routes')).default;
@@ -39,7 +39,7 @@ function server() {
 const token = () => jwt.sign({ userId: 'u1', accountType: 'CLIENT_INDIVIDUAL' }, process.env.JWT_SECRET!, { expiresIn: '1h' });
 async function call(method: string, path: string, withToken = true) {
 	const { url } = await server();
-	const res = await fetch(url + path, { method, headers: { 'content-type': 'application/json', ...(withToken ? { authorization: `Bearer ${token()}` } : {}) }, body: method === 'POST' ? '{}' : undefined });
+	const res = await fetch(url + path, { method, headers: { 'content-type': 'application/json', ...(withToken ? { authorization: `Bearer ${token()}` } : {}) }, body: method === 'POST' || method === 'PUT' ? '{}' : undefined });
 	return { status: res.status, body: await res.json().catch(() => ({})) };
 }
 
@@ -51,6 +51,9 @@ test('a new client who completed OTP (ACTIVE) reaches GET and POST /client/profi
 	const p = await call('POST', '/api/client/profile/setup');
 	assert.equal(p.status, 200);
 	assert.equal(p.body.handler, 'saveSetup');
+	const step = await call('PUT', '/api/client/profile/setup/step/3');
+	assert.equal(step.status, 200);
+	assert.equal(step.body.handler, 'saveSetupStep');
 });
 
 test('a client still awaiting OTP activation (PENDING_VERIFICATION) is refused with 403', async () => {
@@ -64,11 +67,13 @@ test('a SUSPENDED client holding a valid token is refused with 403', async () =>
 	status = 'SUSPENDED';
 	assert.equal((await call('GET', '/api/client/profile/setup')).status, 403);
 	assert.equal((await call('POST', '/api/client/profile/nafath-verify')).status, 403);
+	assert.equal((await call('PUT', '/api/client/profile/setup/step/1')).status, 403);
 });
 
 test('no token: 401 on setup, while the public client profile stays reachable without one', async () => {
 	status = 'ACTIVE';
 	assert.equal((await call('GET', '/api/client/profile/setup', false)).status, 401);
+	assert.equal((await call('PUT', '/api/client/profile/setup/step/1', false)).status, 401);
 	assert.equal((await call('GET', '/api/client/profile/public/abc', false)).status, 200);
 });
 

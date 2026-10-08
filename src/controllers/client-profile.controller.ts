@@ -8,7 +8,7 @@ import { computeClientCompletion, computeClientMissingItems } from '../utils/com
 import { clientProfileService } from '../services/client-profile.service';
 import { AppError } from '../utils/app-error';
 import { onboardingService } from '../services/onboarding.service';
-import { clientSetupSchema } from '../dtos/client-profile-setup.dto';
+import { clientSetupSchema, clientSetupStepSchemas, ClientSetupStep } from '../dtos/client-profile-setup.dto';
 import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
 
 export class ClientProfileController {
@@ -165,6 +165,78 @@ export class ClientProfileController {
         message: 'تم حفظ البيانات بنجاح',
         data: finalResult
       });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // B2) PUT /api/client/profile/setup/step/:step — stores ONE wizard step as soon as the user moves on (1 details, 2 identity documents,
+  // 3 PayPal, 4 optional documents). Same rules as the final POST /setup for each field (verified identity frozen, KYC file checks, PayPal
+  // validation, a complete identity -> a PENDING review), but nothing about the agreements / isProfileComplete: that stays the final submit.
+  public async saveSetupStep(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId;
+      const step = Number(req.params.step) as ClientSetupStep;
+      const schema = clientSetupStepSchemas[step];
+      if (!schema) return res.status(400).json({ success: false, message: 'خطوة غير معروفة' });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        const errors = parsed.error.issues.map(issue => {
+          const field = issue.path.join('.');
+          return { path: field, field, message: issue.message, code: issue.code };
+        });
+        return res.status(400).json({ success: false, message: 'بيانات غير صحيحة، يرجى مراجعة الحقول المحددة', errors });
+      }
+      const body: any = parsed.data;
+      const stored = await prisma.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, dob: true, kycStatus: true } });
+      const data: Record<string, unknown> = {};
+      let identityArgs: { details: { idNumber?: string | null; dob?: string | null }; front?: string | null; back?: string | null } | null = null;
+
+      if (step === 1) {
+        const d = body.details;
+        assertVerifiedIdentityUnchanged(stored, d);
+        // '' / null = not provided: a stored value is kept
+        Object.assign(data, {
+          idNumber: d.idNumber || undefined,
+          dob: d.dob ? new Date(d.dob) : undefined,
+          country: d.country || undefined,
+          city: d.city || undefined,
+          industry: d.occupation || undefined,
+          address: d.address || undefined
+        });
+        identityArgs = { details: d };
+      } else if (step === 2) {
+        const { frontId, backId } = body.identity;
+        assertKycFileValues([frontId, backId], userId);
+        const [frontIdUrl, backIdUrl] = await Promise.all([
+          storeKycFileIfNeeded(frontId, `waseetai/clients/${userId}/identity`, 'front-id'),
+          storeKycFileIfNeeded(backId, `waseetai/clients/${userId}/identity`, 'back-id')
+        ]);
+        Object.assign(data, { frontIdUrl: frontIdUrl || undefined, backIdUrl: backIdUrl || undefined });
+        identityArgs = { details: {}, front: frontIdUrl, back: backIdUrl };
+      } else if (step === 3) {
+        const paypalPayoutEmail = parsePaypalPayoutEmail(body.paypalPayoutEmail);
+        if (!paypalPayoutEmail) return res.status(400).json({ success: false, message: 'بريد PayPal غير صحيح', errors: [{ path: 'paypalPayoutEmail', field: 'paypalPayoutEmail', message: 'بريد PayPal غير صحيح' }] });
+        Object.assign(data, { paymentType: 'paypal', paypalPayoutEmail });
+      } else {
+        const { supportingDocs, notes } = body.documents;
+        assertKycFileValues([supportingDocs], userId);
+        const supportingDocsUrl = await storeKycFileIfNeeded(supportingDocs, `waseetai/clients/${userId}/documents`, 'supporting-document');
+        Object.assign(data, { supportingDocsUrl: supportingDocsUrl || undefined, notes: notes || undefined });
+      }
+
+      const [result, currentUser] = await prisma.$transaction([
+        prisma.clientProfile.upsert({ where: { userId }, create: { userId, ...data }, update: data }),
+        prisma.user.findUnique({ where: { id: userId } })
+      ]);
+      if (identityArgs) {
+        // a complete identity (id number + both documents) -> a PENDING review record the admin can see; never re-opened by an unchanged save
+        await onboardingService.submitSetupDocuments(userId, { idNumber: result.idNumber, frontIdUrl: result.frontIdUrl, backIdUrl: result.backIdUrl }, { identityChanged: identitySubmissionChanged(stored, identityArgs.details, { front: identityArgs.front, back: identityArgs.back }) });
+      }
+      const input = { user: currentUser || {}, clientProfile: result };
+      const completionPercentage = computeClientCompletion(input);
+      const finalResult = await prisma.clientProfile.update({ where: { userId }, data: { completionPercentage } });
+      res.status(200).json({ success: true, message: 'تم حفظ الخطوة', data: { ...finalResult, completionPercentage, missingItems: computeClientMissingItems(input) } });
     } catch (error) {
       next(error);
     }

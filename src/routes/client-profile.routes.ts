@@ -17,6 +17,7 @@ router.use(authenticate, requireActiveUser);
 
 router.get('/setup', clientProfileController.getSetupData);
 router.post('/setup', blockCompanySetup, clientProfileController.saveSetupData);
+router.put('/setup/step/:step', blockCompanySetup, clientProfileController.saveSetupStep);
 router.post('/nafath-verify', clientProfileController.nafathVerify);
 
 export default router;
