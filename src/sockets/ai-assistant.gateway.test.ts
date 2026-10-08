@@ -333,27 +333,45 @@ for (const [label, existingDescription, projectTitle] of [
 }
 
 for (const [label, reply] of [
-  ['assistant chatter "يبدو أنك"', 'يبدو أنك قمت بنسخ نص يحتوي على خيارات سابقة. أحتاج متجرًا إلكترونيًا لبيع الملابس.'],
-  ['"إليك صياغة"', 'إليك صياغة محسنة: أحتاج إلى متجر إلكتروني لبيع الملابس يدعم الدفع عبر الإنترنت وإدارة المخزون.'],
-  ['markdown ***', '***أحتاج إلى متجر إلكتروني لبيع الملابس*** يدعم الدفع عبر الإنترنت وإدارة المخزون ولوحة تحكم.'],
-  ['invented budget/duration', 'أحتاج إلى متجر إلكتروني لبيع الملابس يدعم الدفع عبر الإنترنت وإدارة المخزون ولوحة تحكم للطلبات بميزانية 5000 دولار خلال 30 يومًا.'],
-  ['unrelated invented text', 'نبحث عن شركة برمجيات متخصصة لتنفيذ تطبيق جوال متكامل لخدمات التوصيل السريع مع نظام تتبع ودعم فني.'],
-  ['an empty reply', '   ']
+  ['assistant phrasing "يبدو أنك"', 'يبدو أنك قمت بنسخ نص يحتوي على خيارات سابقة. أحتاج متجرًا إلكترونيًا لبيع الملابس.'],
+  ['"إليك" and "أنصحك"', 'إليك صياغة محسنة، أنصحك بها: أحتاج إلى متجر إلكتروني لبيع الملابس يدعم الدفع وإدارة المخزون.'],
+  ['markdown ***', '***أحتاج إلى متجر إلكتروني لبيع الملابس*** يدعم الدفع عبر الإنترنت وإدارة المخزون.'],
+  ['markdown headings and bullets', '## الوصف\n- متجر ملابس\n- دفع إلكتروني'],
 ] as const) {
-  test(`rewrite: a reply with ${label} is rejected: nothing reaches the form, the client keeps the original`, async (t) => {
+  test(`rewrite: a reply with ${label} is accepted and relayed as WaseetAI wrote it`, async (t) => {
     const register = await loadGateway(t, { waseetFetch: async () => okStream([reply]) });
     const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
     register(socket);
 
     await handlers['ai:generate_description'](VALID_PAYLOAD);
 
-    assert.equal(emitted.filter((e) => e.event === 'ai:description_chunk' || e.event === 'ai:description_complete').length, 0);
-    const last = emitted[emitted.length - 1];
-    assert.equal(last.event, 'ai:description_error');
-    assert.equal(last.payload.code, 'AI_OUTPUT_REJECTED');
-    assert.ok(!JSON.stringify(emitted).includes('يبدو أنك'), 'the rejected text never goes over the socket');
+    assert.deepEqual(emitted.map((e) => e.event), ['ai:description_start', 'ai:description_chunk', 'ai:description_complete']);
+    assert.equal(emitted[2].payload.fullText, reply.trim());
   });
 }
+
+test('rewrite: a reply longer than 2000 characters is cut to 2000', async (t) => {
+  const register = await loadGateway(t, { waseetFetch: async () => okStream(['ا'.repeat(1500), 'ب'.repeat(1500)]) });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['ai:generate_description'](VALID_PAYLOAD);
+
+  const complete = emitted.find((e) => e.event === 'ai:description_complete')!;
+  assert.equal(complete.payload.fullText.length, 2000);
+  assert.equal(emitted.find((e) => e.event === 'ai:description_chunk')!.payload.chunk.length, 2000);
+});
+
+test('rewrite: an empty reply is refused (AI_OUTPUT_REJECTED), nothing is relayed', async (t) => {
+  const register = await loadGateway(t, { waseetFetch: async () => okStream(['   ']) });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+  register(socket);
+
+  await handlers['ai:generate_description'](VALID_PAYLOAD);
+
+  assert.equal(emitted.filter((e) => e.event === 'ai:description_chunk' || e.event === 'ai:description_complete').length, 0);
+  assert.equal(emitted[emitted.length - 1].payload.code, 'AI_OUTPUT_REJECTED');
+});
 
 for (const [label, status] of [['4xx', 400], ['401', 401], ['5xx', 503]] as const) {
   test(`AI-01: upstream ${label} → honest AI_GENERATION_FAILED, no chunks, no upstream text leaked`, async (t) => {
