@@ -208,7 +208,7 @@ test('every code path that writes a User.status other than ACTIVE is wired to di
 	}).map(f => path.relative(root, f));
 	// updateUserStatus in auth.repository only ever receives ACTIVE (account activation); every other writer must cut sockets
 	const mustCut = writers.filter(f => f !== path.join('repositories', 'auth.repository.ts'));
-	assert.deepEqual(mustCut.sort(), ['services/admin-users.service.ts', 'services/profile.service.ts']);
+	assert.deepEqual(mustCut.sort(), ['services/admin-users.service.ts']);
 	for (const f of mustCut) assert.match(readFileSync(path.join(root, f), 'utf8'), /disconnectUserSockets\(/, f);
 });
 

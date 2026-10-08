@@ -14,7 +14,8 @@ import { notificationService } from './notification.service';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
 import { LEVEL_MATRIX } from './gamification.service';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
-import { computeProviderCompletion, computeProviderMissingItems } from '../utils/completion-calculators';
+import { computeProviderCompletion, computeProviderMissingItems, computeClientCompletion } from '../utils/completion-calculators';
+import { CLIENT_IDENTITY_REQUEST_CATEGORY } from '../utils/profile-request-categories';
 import { logger } from '../config/logger';
 import { OtpPurpose, OTP_MAX_ATTEMPTS } from '../utils/otp-purpose';
 import { sessionService } from './session.service';
@@ -1080,37 +1081,68 @@ export class ProviderProfileService {
 
 	async reviewSensitiveChange(requestId: string, approved: boolean, rejectionReason?: string, auditContext?: AuditContext) {
 		const request = await prisma.profileModificationRequest.findUnique({ where: { id: requestId } });
-		if (!request || request.status !== 'PENDING_HUMAN_REVIEW') throw new Error('REQUEST_NOT_PENDING_REVIEW');
+		if (!request) throw new Error('REQUEST_NOT_FOUND');
+		if (request.status !== 'PENDING_HUMAN_REVIEW') throw new Error('REQUEST_NOT_PENDING_REVIEW');
 		const metadata = (request.metadata || {}) as any;
+		const reason = approved ? null : (String(rejectionReason || '').trim().slice(0, 500) || 'لم يستوفِ الطلب متطلبات التحقق');
+
+		// Claim the request first (compare-and-set on the status): two admins, or a double click, can never apply the same change twice.
+		const claimed = await prisma.profileModificationRequest.updateMany({
+			where: { id: request.id, status: 'PENDING_HUMAN_REVIEW' },
+			data: { status: approved ? 'APPROVED' : 'REJECTED', reviewedByAdmin: true, rejectionReason: reason, appliedAt: approved ? new Date() : null }
+		});
+		if (!claimed.count) throw new Error('REQUEST_NOT_PENDING_REVIEW');
+
 		if (approved) {
-			// `category` distinguishes the modern OTP-verified request shape
-			// (CONTACT/BANKING/DOCUMENTS, metadata.changes) from the legacy
-			// createModificationRequest() shape (Prisma's own schema default,
-			// "PROFILE" — never explicitly set by that path).
-			if (request.category === 'PROFILE') {
-				await this.applyLegacyFieldModification(request.providerId, request.fieldName, request.requestedValue);
-			} else {
-				await this.applySensitivePayload(request.providerId, request.category, metadata.changes || {});
+			try {
+				// `category` distinguishes the modern OTP-verified shape (CONTACT/BANKING/DOCUMENTS, metadata.changes), a client's
+				// governed field (CLIENT_IDENTITY) and the legacy createModificationRequest() shape (schema default "PROFILE").
+				if (request.category === 'PROFILE') {
+					await this.applyLegacyFieldModification(request.providerId, request.fieldName, request.requestedValue);
+				} else if (request.category === CLIENT_IDENTITY_REQUEST_CATEGORY) {
+					await this.applyClientIdentityChange(request.providerId, metadata.changes || {});
+				} else {
+					await this.applySensitivePayload(request.providerId, request.category, metadata.changes || {});
+				}
+			} catch (error) {
+				// nothing was applied: put the request back so the admin can retry, and report the failure (never a false APPROVED)
+				await prisma.profileModificationRequest.updateMany({
+					where: { id: request.id, status: 'APPROVED' },
+					data: { status: 'PENDING_HUMAN_REVIEW', reviewedByAdmin: false, appliedAt: null }
+				});
+				throw error;
 			}
 		}
-		const updated = await prisma.profileModificationRequest.update({
-			where: { id: request.id },
-			data: {
-				status: approved ? 'APPROVED' : 'REJECTED',
-				reviewedByAdmin: true,
-				rejectionReason: approved ? null : (rejectionReason || 'لم يستوفِ الطلب متطلبات التحقق'),
-				appliedAt: approved ? new Date() : null
-			}
-		});
+		const updated = await prisma.profileModificationRequest.findUniqueOrThrow({ where: { id: request.id } });
 		await accountAuditLogService.record({ userId: request.providerId, eventType: 'HUMAN_REVIEW_COMPLETED', category: 'PROFILE_COMPLETION', title: request.fieldLabel, summary: approved ? 'اعتمد المراجع البشري طلب التعديل وتم تطبيقه' : 'رفض المراجع البشري طلب التعديل', source: 'ADMIN', severity: approved ? 'INFO' : 'WARNING', status: approved ? 'APPROVED' : 'REJECTED', statusText: updated.rejectionReason || undefined, requestId, context: auditContext });
 		return updated;
 	}
 
-	async getPendingSensitiveReviews() {
+	/** A client's approved national id / iqama number: written to ClientProfile only, then the completion is recomputed. */
+	private async applyClientIdentityChange(userId: string, changes: Record<string, unknown>) {
+		const idNumber = String(changes.idNumber || '').trim();
+		if (!/^[12]\d{9}$/.test(idNumber)) throw new Error('INVALID_ID_NUMBER');
+		await prisma.clientProfile.upsert({ where: { userId }, create: { userId, idNumber }, update: { idNumber } });
+		try {
+			const user = await prisma.user.findUnique({ where: { id: userId }, include: { clientProfile: true } });
+			if (user?.clientProfile) {
+				const completion = computeClientCompletion({ user, clientProfile: user.clientProfile });
+				await prisma.clientProfile.update({ where: { userId }, data: { completionPercentage: completion } });
+			}
+		} catch (error) {
+			logger.error(`[ProviderProfileService] Failed to recalculate client completion after an approved identity change (userId=${userId})`, error);
+		}
+	}
+
+	/** Admin queue. Default = what waits for a decision; `status` (APPROVED | REJECTED | ALL) also exposes the decided ones as history. */
+	async getPendingSensitiveReviews(status?: string) {
+		const wanted = String(status || '').toUpperCase();
+		const statuses = wanted === 'ALL' ? ['PENDING_HUMAN_REVIEW', 'APPROVED', 'REJECTED']
+			: ['APPROVED', 'REJECTED'].includes(wanted) ? [wanted] : ['PENDING_HUMAN_REVIEW'];
 		return prisma.profileModificationRequest.findMany({
-			where: { status: 'PENDING_HUMAN_REVIEW' },
-			include: { provider: { select: { firstName: true, lastName: true, email: true } } },
-			orderBy: { createdAt: 'asc' }
+			where: { status: { in: statuses as any } },
+			include: { provider: { select: { firstName: true, lastName: true, email: true, accountType: true } } },
+			orderBy: { createdAt: statuses.length === 1 && statuses[0] === 'PENDING_HUMAN_REVIEW' ? 'asc' : 'desc' }
 		});
 	}
 

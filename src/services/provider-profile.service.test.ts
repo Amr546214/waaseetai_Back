@@ -782,6 +782,18 @@ function createSensitiveFlowMockPrisma(t: TestContext, opts: { throwOnRecompute?
         requestsById[args.where.id] = { ...requestsById[args.where.id], ...args.data };
         return requestsById[args.where.id];
       },
+      // compare-and-set used by reviewSensitiveChange to claim a request (only while the status still matches)
+      updateMany: async (args: any) => {
+        const record = requestsById[args.where.id];
+        if (!record || (args.where.status && record.status !== args.where.status)) return { count: 0 };
+        requestsById[args.where.id] = { ...record, ...args.data };
+        return { count: 1 };
+      },
+      findUniqueOrThrow: async (args: any) => {
+        const record = requestsById[args.where.id];
+        if (!record) throw new Error('not found');
+        return record;
+      },
       delete: async (args: any) => { const r = requestsById[args.where.id]; delete requestsById[args.where.id]; return r; }
     },
     otpVerification: {

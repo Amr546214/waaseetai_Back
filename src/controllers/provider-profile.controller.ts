@@ -348,16 +348,23 @@ export const reviewSensitiveChange = async (req: Request, res: Response) => {
 	try {
 		const { approved, rejectionReason } = req.body || {};
 		if (typeof approved !== 'boolean') return res.status(400).json({ success: false, message: 'approved must be boolean' });
-		const result = await providerProfileService.reviewSensitiveChange(req.params.id as string, approved, rejectionReason, { ...auditContext(req), actorLabel: req.user?.email });
-		res.json({ success: true, data: result });
+		if (rejectionReason !== undefined && rejectionReason !== null && typeof rejectionReason !== 'string') return res.status(400).json({ success: false, message: 'rejectionReason must be text' });
+		const result = await providerProfileService.reviewSensitiveChange(req.params.id as string, approved, rejectionReason ?? undefined, { ...auditContext(req), actorLabel: req.user?.email });
+		res.json({ success: true, data: { ...result, metadata: undefined } });
 	} catch (error: any) {
-		res.status(400).json({ success: false, message: error.message });
+		const code = error?.message;
+		const status = code === 'REQUEST_NOT_FOUND' ? 404 : code === 'REQUEST_NOT_PENDING_REVIEW' ? 409 : 400;
+		res.status(status).json({ success: false, message: code });
 	}
 };
 
-export const getPendingSensitiveReviews = async (_req: Request, res: Response) => {
-	const data = await providerProfileService.getPendingSensitiveReviews();
-	res.json({ success: true, data: data.map(item => ({ ...item, metadata: undefined })) });
+export const getPendingSensitiveReviews = async (req: Request, res: Response) => {
+	try {
+		const data = await providerProfileService.getPendingSensitiveReviews(req.query.status as string | undefined);
+		res.json({ success: true, data: data.map(item => ({ ...item, metadata: undefined })) });
+	} catch (error: any) {
+		res.status(500).json({ success: false, message: error.message });
+	}
 };
 
 export const updateBasicInfo = async (req: Request, res: Response) => {
