@@ -26,6 +26,8 @@ function createMockPrisma(t: TestContext, opts: {
 	const tx = {
 		affiliateProfile: { findUnique: async () => profile, update: affiliateUpdateSpy },
 		profileChangeRequest: {
+			// unused-number lookup done before every create (a requestNumber collision must not abort the batch)
+			findUnique: async (args: any) => requests.find(r => r.requestNumber === args.where.requestNumber) || null,
 			findFirst: async (args: any) => requests.find(r =>
 				r.affiliateProfileId === args.where.affiliateProfileId &&
 				r.fieldType === args.where.fieldType &&

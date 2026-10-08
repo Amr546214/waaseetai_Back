@@ -43,7 +43,7 @@ export class ProfileRequestsController {
       res.status(200).json({
         success: true,
         data,
-        message: 'Request withdrawn successfully'
+        message: 'تم سحب الطلب'
       });
     } catch (error) {
       next(error);

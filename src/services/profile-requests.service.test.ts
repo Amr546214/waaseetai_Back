@@ -41,7 +41,7 @@ function createMockPrisma(t: TestContext, opts: {
 	const tx = {
 		affiliateProfile: { findUnique: txAffiliateFindUniqueSpy },
 		user: { findUnique: async () => user },
-		profileChangeRequest: { findFirst: findFirstPending, create: createSpy }
+		profileChangeRequest: { findFirst: findFirstPending, findUnique: async () => null, create: createSpy }
 	};
 
 	const prismaMock: any = {
@@ -221,7 +221,7 @@ test('withdrawRequest: another user cannot withdraw someone else\'s request', as
 		existingRequests: [{ id: 'r1', affiliateProfileId: 'aff-OTHER-USER', fieldType: 'IBAN', status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-1' }]
 	});
 
-	await assert.rejects(() => profileRequestsService.withdrawRequest('user-1', 'REQ-1'), /Unauthorized/);
+	await assert.rejects(() => profileRequestsService.withdrawRequest('user-1', 'REQ-1'), (e: any) => e.statusCode === 404);
 });
 
 test('getRequests: returns newly-created requests for this affiliate (marketer request history)', async (t) => {
