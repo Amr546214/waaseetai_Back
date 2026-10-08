@@ -3,7 +3,7 @@ import { AccountType } from '@prisma/client';
 import { prisma } from '../config/db';
 import { waseetAiClient, type WaseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
 import { normalizeWaseetAiError } from '../services/ai/waseet-ai/waseet-ai.errors';
-import { buildProjectDescriptionRequest } from '../services/ai/waseet-ai/waseet-ai.adapters';
+import { canRewrite, checkRewriteOutput, REWRITE_INPUT_REQUIRED_MESSAGE } from '../utils/description-rewrite-guard';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
 
 export interface GenerateDescriptionDto {
@@ -33,22 +33,14 @@ export interface GenerateDescriptionDto {
 // frontend. The handler now enforces that same role at the socket layer
 // instead of accepting any authenticated account type.
 //
-// WaseetAI integration (AI-01): generate-from-scratch mode now streams from
-// WaseetAI POST /v1/ai/project-description/stream (documented v1.0.0 SSE
-// contract) via the shared WaseetAiClient, bridged to the SAME Socket.IO
-// events the Create Request page already listens to (ai:description_chunk /
-// ai:description_complete / ai:description_error) — the same SSE→socket
-// relay pattern as help-assistant-chat.gateway.ts. The browser never sees
-// the WaseetAI URL, credential or raw SSE frames.
+// REWRITE ONLY: the client writes the title and a real description first; the AI only restates that text. There is no generate-from-scratch mode:
+// an empty/too-short title or description is refused before any AI call, with nothing written into the form. The text goes to WaseetAI
+// POST /v1/ai/text/enhance/stream with {description: <draft>} only (that endpoint takes nothing else, its prompt is the vendor's), the reply is buffered,
+// and it reaches the browser only if checkRewriteOutput() accepts it (no assistant chatter such as "يبدو أنك…", no markdown, no invented numbers,
+// still the client's own content). Otherwise the client gets an honest error and keeps the original text. Events relayed to the Create Request page:
+// ai:description_start / ai:description_chunk (the validated text) / ai:description_complete / ai:description_error.
 //
-// Refine mode (existing draft > 5 chars) streams from WaseetAI
-// POST /v1/ai/text/enhance/stream with {description: <draft>} only, and emits
-// the same events with mode 'refine'.
-//
-// Not available (no WaseetAI contract, no fallback):
-//  - the AI title/specialty pre-check: WaseetAI documents no equivalent
-//    endpoint. Only the deterministic input check (isMeaningfulProjectTitle)
-//    remains.
+// Not available (no WaseetAI contract, no fallback): the AI title/specialty pre-check, and AI rewriting of the title (the title is never changed by AI).
 export class AiAssistantGateway {
   constructor(private readonly waseetAi: WaseetAiClient = waseetAiClient) {}
 
@@ -84,16 +76,12 @@ export class AiAssistantGateway {
       }
 
       const title = payload?.projectTitle?.trim() || '';
-      const specialty = payload?.specialtyName || payload?.specialtyId || 'خدمات الأعمال والتقنية';
-      const subSpecialties = Array.isArray(payload?.subSpecialties)
-        ? payload.subSpecialties.map(item => String(item).trim()).filter(Boolean).slice(0, 5)
-        : [];
       const draft = payload?.existingDescription?.trim() || '';
 
-      if (!this.isMeaningfulProjectTitle(title)) {
+      if (!canRewrite(title, draft)) {
         socket.emit('ai:description_error', {
-          code: 'TITLE_TOO_VAGUE',
-          message: 'العنوان عام أو غير واضح. اكتب عنواناً يحدد الخدمة والهدف قبل طلب الصياغة.'
+          code: 'INSUFFICIENT_INPUT',
+          message: REWRITE_INPUT_REQUIRED_MESSAGE
         });
         return;
       }
@@ -106,11 +94,7 @@ export class AiAssistantGateway {
         return;
       }
 
-      // A non-empty draft (> 5 chars) means REFINE: the draft is sent to the
-      // verified WaseetAI enhance stream. That endpoint takes ONLY the
-      // description, so the title / specialty / sub-specialties cannot be
-      // sent (never invented as extra fields). Otherwise GENERATE.
-      const mode: 'generate' | 'refine' = draft.length > 5 ? 'refine' : 'generate';
+      const mode = 'refine' as const;
       if (!this.waseetAi.isConfigured()) {
         console.error('[AiAssistantGateway] AI generation rejected: WaseetAI not configured.');
         socket.emit('ai:description_error', {
@@ -128,30 +112,33 @@ export class AiAssistantGateway {
       try {
         socket.emit('ai:description_start', { mode, title });
 
-        // AI-01 → WaseetAI SSE, relayed chunk-by-chunk to the socket.
         const callOpts = { signal: abortController.signal, timeoutMs: 45 * 1000 };
-        const stream = mode === 'refine'
-          ? this.waseetAi.streamTextEnhancement({ description: draft }, callOpts)
-          : this.waseetAi.streamProjectDescription(buildProjectDescriptionRequest({ title, specialty, subSpecialties }), callOpts);
+        const stream = this.waseetAi.streamTextEnhancement({ description: draft }, callOpts);
         for await (const evt of stream) {
           if (abortController.signal.aborted) break;
-          if (evt.type === 'delta') {
-            fullStreamedText += evt.chunk;
-            // Only the plain string chunk — never a raw upstream object.
-            socket.emit('ai:description_chunk', { chunk: evt.chunk, mode });
-          } else if (evt.type === 'completed') break;
+          if (evt.type === 'delta') fullStreamedText += evt.chunk;
+          else if (evt.type === 'completed') break;
         }
         if (abortController.signal.aborted) throw new Error('aborted');
 
-        if (fullStreamedText.trim().length > 0) {
+        const checked = checkRewriteOutput(draft, fullStreamedText);
+        if (checked.ok) {
+          // Only the validated plain text ever reaches the browser.
+          socket.emit('ai:description_chunk', { chunk: checked.text, mode });
           socket.emit('ai:description_complete', {
-            fullText: fullStreamedText,
+            fullText: checked.text,
             mode,
             status: 'success',
-            message: '✨ تم توليد الوصف الشامل بنجاح'
+            message: 'تمت إعادة صياغة وصفك، راجعها قبل اعتمادها'
           });
           return;
         }
+        console.error(`[AiAssistantGateway] rewrite rejected reason=${checked.reason}`);
+        socket.emit('ai:description_error', {
+          code: 'AI_OUTPUT_REJECTED',
+          message: 'لم تُنتج إعادة الصياغة نصًا مناسبًا، فبقي وصفك كما كتبته. حاول مرة أخرى.'
+        });
+        return;
       } catch (error: any) {
         // Code/status/requestId only — never upstream text or the token.
         const e = normalizeWaseetAiError(error);
@@ -164,19 +151,9 @@ export class AiAssistantGateway {
       // text of any kind.
       socket.emit('ai:description_error', {
         code: 'AI_GENERATION_FAILED',
-        message: 'تعذر توليد الوصف من خدمة الذكاء الاصطناعي. لم يتم إنشاء نص افتراضي؛ حاول مرة أخرى.'
+        message: 'تعذرت إعادة الصياغة من خدمة الذكاء الاصطناعي، وبقي وصفك كما كتبته. حاول مرة أخرى.'
       });
     });
-  }
-
-  private isMeaningfulProjectTitle(title: string): boolean {
-    const normalized = title.replace(/[\p{P}\p{S}_]+/gu, ' ').replace(/\s+/g, ' ').trim();
-    const genericTitles = new Set([
-      'تجربة', 'اختبار', 'مشروع', 'مشروع جديد', 'طلب', 'طلب جديد', 'خدمة', 'خدمة جديدة',
-      'test', 'testing', 'project', 'new project', 'request', 'service'
-    ]);
-    const words = normalized.split(' ').filter(word => word.length > 1);
-    return normalized.length >= 8 && words.length >= 2 && !genericTitles.has(normalized.toLowerCase());
   }
 }
 

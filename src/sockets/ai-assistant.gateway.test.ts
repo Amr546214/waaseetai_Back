@@ -36,6 +36,8 @@ const okStream = (chunks: string[]) => sseResponse([
   frame('generation.completed', { status: 'completed' })
 ]);
 
+const REWRITE_CHUNKS = ['أحتاج إلى متجر إلكتروني لبيع الملابس ', 'يدعم الدفع عبر الإنترنت وإدارة المخزون، ', 'مع لوحة تحكم لمتابعة الطلبات.'];
+
 // ai:generate_description — WaseetAI-only. Same plain-mock-socket convention
 // as ai-review.gateway.test.ts; no real network call happens.
 
@@ -76,7 +78,7 @@ async function loadGateway(t: TestContext, opts: {
   waseetTimeoutMs?: number;
 }) {
   const waseetCalls: Array<{ url: string; body: any; headers: Record<string, string> }> = [];
-  const waseetFetch: FetchLike = opts.waseetFetch ?? (async () => okStream(['وصف ', 'احترافي']));
+  const waseetFetch: FetchLike = opts.waseetFetch ?? (async () => okStream(REWRITE_CHUNKS));
   const realClient = new WaseetAiClient(async (url, init) => {
     waseetCalls.push({ url, body: JSON.parse(String(init.body)), headers: init.headers as Record<string, string> });
     return waseetFetch(url, init);
@@ -109,7 +111,9 @@ async function loadGateway(t: TestContext, opts: {
   return Object.assign(register, { waseetCalls });
 }
 
-const VALID_PAYLOAD = { projectTitle: 'تطوير متجر إلكتروني متكامل', specialtyName: 'تطوير الويب', subSpecialties: ['React'] };
+const DRAFT = 'أحتاج متجرًا إلكترونيًا لبيع الملابس يدعم الدفع عبر الإنترنت وإدارة المخزون ولوحة تحكم للطلبات';
+const REWRITE = 'أحتاج إلى متجر إلكتروني لبيع الملابس يدعم الدفع عبر الإنترنت وإدارة المخزون، مع لوحة تحكم لمتابعة الطلبات.';
+const VALID_PAYLOAD = { projectTitle: 'تطوير متجر إلكتروني متكامل', specialtyName: 'تطوير الويب', subSpecialties: ['React'], existingDescription: DRAFT };
 
 // ── auth (NEW — this handler previously had no auth check at all) ────────
 
@@ -178,26 +182,17 @@ test('ai:generate_description: switching a multi-role user back to CLIENT is acc
 
 // ── validation success → stream success (two-stage happy path) ───────────
 
-test('ai:generate_description: a successful ordered stream emits the expected event sequence (no AI pre-check events)', async (t) => {
-  const register = await loadGateway(t, { waseetFetch: async () => okStream(['الوصف ', 'الكامل ', 'للمشروع']) });
+test('ai:generate_description: a valid rewrite emits start, the validated text once, then complete', async (t) => {
+  const register = await loadGateway(t, { waseetFetch: async () => okStream(REWRITE_CHUNKS) });
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
 
   await handlers['ai:generate_description'](VALID_PAYLOAD);
 
-  const events = emitted.map((e) => e.event);
-  assert.deepEqual(events, [
-    'ai:description_start',
-    'ai:description_chunk',
-    'ai:description_chunk',
-    'ai:description_chunk',
-    'ai:description_complete'
-  ]);
-  const chunks = emitted.filter((e) => e.event === 'ai:description_chunk').map((e) => e.payload.chunk);
-  assert.deepEqual(chunks, ['الوصف ', 'الكامل ', 'للمشروع']);
-  const complete = emitted[emitted.length - 1];
-  assert.equal(complete.payload.fullText, 'الوصف الكامل للمشروع');
-  assert.equal(complete.payload.status, 'success');
+  assert.deepEqual(emitted.map((e) => e.event), ['ai:description_start', 'ai:description_chunk', 'ai:description_complete']);
+  assert.equal(emitted[1].payload.chunk, REWRITE);
+  assert.equal(emitted[2].payload.fullText, REWRITE);
+  assert.equal(emitted[2].payload.status, 'success');
 });
 
 test('ai:generate_description: a mid-stream generation failure never emits description_complete, only the honest error', async (t) => {
@@ -226,7 +221,7 @@ test('ai:generate_description: an empty (zero-chunk) stream after successful val
 
   const last = emitted[emitted.length - 1];
   assert.equal(last.event, 'ai:description_error');
-  assert.equal(last.payload.code, 'AI_GENERATION_FAILED');
+  assert.equal(last.payload.code, 'AI_OUTPUT_REJECTED');
 });
 
 // ── not configured ───────────────────────────────────────────────────────
@@ -256,10 +251,10 @@ test('ai:generate_description: a vague title is rejected before calling WaseetAI
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
 
-  await handlers['ai:generate_description']({ projectTitle: 'مشروع' });
+  await handlers['ai:generate_description']({ projectTitle: 'مشروع', existingDescription: DRAFT });
 
   assert.equal(register.waseetCalls.length, 0);
-  assert.equal(emitted[0].payload.code, 'TITLE_TOO_VAGUE');
+  assert.equal(emitted[0].payload.code, 'INSUFFICIENT_INPUT');
 });
 
 // ── disconnect cancellation ──────────────────────────────────────────────
@@ -292,7 +287,7 @@ test('ai:generate_description: a socket disconnect aborts the in-flight WaseetAI
 
 // ── WaseetAI AI-01 contract / adapter tests ─────────────────────────────────
 
-test('AI-01: request mapping — generate mode POSTs the documented /v1/ai/project-description/stream body', async (t) => {
+test('rewrite: the enhance endpoint receives ONLY the client\'s description (never the title/specialty, nothing invented)', async (t) => {
   const register = await loadGateway(t, {});
   const { socket, handlers } = createMockSocket({ userId: 'user-1' });
   register(socket);
@@ -300,31 +295,65 @@ test('AI-01: request mapping — generate mode POSTs the documented /v1/ai/proje
   await handlers['ai:generate_description'](VALID_PAYLOAD);
 
   assert.equal(register.waseetCalls.length, 1);
-  assert.equal(register.waseetCalls[0].url, 'https://waseet-ai.test/v1/ai/project-description/stream');
-  assert.deepEqual(register.waseetCalls[0].body, { title: 'تطوير متجر إلكتروني متكامل', category: 'تطوير الويب — React', language: 'ar' });
+  assert.equal(register.waseetCalls[0].url, 'https://waseet-ai.test/v1/ai/text/enhance/stream');
+  assert.deepEqual(register.waseetCalls[0].body, { description: DRAFT });
   assert.equal(register.waseetCalls[0].headers.Accept, 'text/event-stream');
 });
 
-test('AI-01: streaming chunks are relayed in order as plain strings and completion emits ai:description_complete with the full text', async (t) => {
-  const register = await loadGateway(t, {
-    waseetFetch: async () => sseResponse([
-      frame('generation.started', { status: 'started' }),
-      frame('text.delta', { chunk: '## نطاق ' }),
-      frame('text.delta', { chunk: 'العمل' }),
-      frame('generation.completed', { status: 'completed' })
-    ])
-  });
-  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+test('rewrite: there is no generate-from-scratch path any more (the project-description endpoint is never called)', async (t) => {
+  const register = await loadGateway(t, {});
+  const { socket, handlers } = createMockSocket({ userId: 'user-1' });
   register(socket);
-
-  await handlers['ai:generate_description'](VALID_PAYLOAD);
-
-  const chunks = emitted.filter((e) => e.event === 'ai:description_chunk');
-  assert.deepEqual(chunks.map((c) => c.payload), [{ chunk: '## نطاق ', mode: 'generate' }, { chunk: 'العمل', mode: 'generate' }]);
-  const last = emitted[emitted.length - 1];
-  assert.equal(last.event, 'ai:description_complete');
-  assert.equal(last.payload.fullText, '## نطاق العمل');
+  for (const existingDescription of [undefined, '', 'قصير', 'وصف قصير جدا', DRAFT]) {
+    await handlers['ai:generate_description']({ ...VALID_PAYLOAD, existingDescription });
+  }
+  assert.ok(register.waseetCalls.every((c) => c.url.endsWith('/v1/ai/text/enhance/stream')));
+  assert.equal(register.waseetCalls.length, 1, 'only the sufficient draft reaches the AI');
 });
+
+for (const [label, existingDescription, projectTitle] of [
+  ['no description at all', undefined, 'تطوير متجر إلكتروني متكامل'],
+  ['an empty description', '   ', 'تطوير متجر إلكتروني متكامل'],
+  ['a description of a few words', 'متجر ملابس', 'تطوير متجر إلكتروني متكامل'],
+  ['an empty title', DRAFT, ''],
+  ['a generic title', DRAFT, 'مشروع جديد']
+] as const) {
+  test(`rewrite: ${label} → INSUFFICIENT_INPUT, no AI call, nothing written`, async (t) => {
+    const register = await loadGateway(t, {});
+    const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+    register(socket);
+
+    await handlers['ai:generate_description']({ projectTitle, existingDescription });
+
+    assert.equal(register.waseetCalls.length, 0);
+    assert.deepEqual(emitted.map((e) => e.event), ['ai:description_error']);
+    assert.equal(emitted[0].payload.code, 'INSUFFICIENT_INPUT');
+    assert.equal(emitted[0].payload.message, 'اكتب عنوان الطلب ووصفه أولًا، ثم استخدم تحسين الصياغة.');
+  });
+}
+
+for (const [label, reply] of [
+  ['assistant chatter "يبدو أنك"', 'يبدو أنك قمت بنسخ نص يحتوي على خيارات سابقة. أحتاج متجرًا إلكترونيًا لبيع الملابس.'],
+  ['"إليك صياغة"', 'إليك صياغة محسنة: أحتاج إلى متجر إلكتروني لبيع الملابس يدعم الدفع عبر الإنترنت وإدارة المخزون.'],
+  ['markdown ***', '***أحتاج إلى متجر إلكتروني لبيع الملابس*** يدعم الدفع عبر الإنترنت وإدارة المخزون ولوحة تحكم.'],
+  ['invented budget/duration', 'أحتاج إلى متجر إلكتروني لبيع الملابس يدعم الدفع عبر الإنترنت وإدارة المخزون ولوحة تحكم للطلبات بميزانية 5000 دولار خلال 30 يومًا.'],
+  ['unrelated invented text', 'نبحث عن شركة برمجيات متخصصة لتنفيذ تطبيق جوال متكامل لخدمات التوصيل السريع مع نظام تتبع ودعم فني.'],
+  ['an empty reply', '   ']
+] as const) {
+  test(`rewrite: a reply with ${label} is rejected: nothing reaches the form, the client keeps the original`, async (t) => {
+    const register = await loadGateway(t, { waseetFetch: async () => okStream([reply]) });
+    const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+    register(socket);
+
+    await handlers['ai:generate_description'](VALID_PAYLOAD);
+
+    assert.equal(emitted.filter((e) => e.event === 'ai:description_chunk' || e.event === 'ai:description_complete').length, 0);
+    const last = emitted[emitted.length - 1];
+    assert.equal(last.event, 'ai:description_error');
+    assert.equal(last.payload.code, 'AI_OUTPUT_REJECTED');
+    assert.ok(!JSON.stringify(emitted).includes('يبدو أنك'), 'the rejected text never goes over the socket');
+  });
+}
 
 for (const [label, status] of [['4xx', 400], ['401', 401], ['5xx', 503]] as const) {
   test(`AI-01: upstream ${label} → honest AI_GENERATION_FAILED, no chunks, no upstream text leaked`, async (t) => {
@@ -401,43 +430,14 @@ test('AI-01: the WaseetAI credential is never emitted to the browser socket', as
   assert.ok(!wire.includes('waseet-ai.test'), 'the upstream URL is never exposed either');
 });
 
-test('refine mode (existing draft > 5 chars) streams from the enhance endpoint with ONLY the description', async (t) => {
-  const register = await loadGateway(t, {
-    waseetFetch: async () => okStream(['وصف ', 'محسّن'])
-  });
-  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
-  register(socket);
-
-  await handlers['ai:generate_description']({ ...VALID_PAYLOAD, existingDescription: 'مسودة وصف موجودة للمشروع' });
-
-  assert.equal(register.waseetCalls.length, 1);
-  assert.equal(register.waseetCalls[0].url, 'https://waseet-ai.test/v1/ai/text/enhance/stream');
-  assert.deepEqual(register.waseetCalls[0].body, { description: 'مسودة وصف موجودة للمشروع' });
-  assert.deepEqual(emitted.map((e) => e.event), ['ai:description_start', 'ai:description_chunk', 'ai:description_chunk', 'ai:description_complete']);
-  assert.ok(emitted.every((e) => e.payload.mode === 'refine'));
-  assert.equal(emitted[3].payload.fullText, 'وصف محسّن');
-  assert.ok(!emitted.some((e) => e.payload?.code === 'REFINE_UNAVAILABLE'));
-});
-
-test('refine mode: a draft of 5 chars or fewer falls back to generate mode', async (t) => {
-  const register = await loadGateway(t, {});
-  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
-  register(socket);
-
-  await handlers['ai:generate_description']({ ...VALID_PAYLOAD, existingDescription: 'قصير' });
-
-  assert.equal(register.waseetCalls[0].url, 'https://waseet-ai.test/v1/ai/project-description/stream');
-  assert.equal(emitted[0].payload.mode, 'generate');
-});
-
-test('refine mode: upstream failure yields the honest AI_GENERATION_FAILED and no complete event', async (t) => {
+test('rewrite: upstream failure yields the honest AI_GENERATION_FAILED and no complete event', async (t) => {
   const register = await loadGateway(t, {
     waseetFetch: async () => new Response(UPSTREAM_SECRET_TEXT, { status: 502 })
   });
   const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
   register(socket);
 
-  await handlers['ai:generate_description']({ ...VALID_PAYLOAD, existingDescription: 'مسودة وصف موجودة للمشروع' });
+  await handlers['ai:generate_description']({ ...VALID_PAYLOAD, });
 
   assert.ok(!emitted.some((e) => e.event === 'ai:description_complete'));
   assert.equal(emitted[emitted.length - 1].payload.code, 'AI_GENERATION_FAILED');
