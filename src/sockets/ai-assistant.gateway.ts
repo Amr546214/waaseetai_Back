@@ -133,7 +133,8 @@ export class AiAssistantGateway {
           });
           return;
         }
-        console.error(`[AiAssistantGateway] rewrite rejected reason=${checked.reason}`);
+        // Reason + a short escaped head of the rejected reply (dev diagnosis of what the vendor actually returns); never sent to the browser.
+        console.error(`[AiAssistantGateway] rewrite rejected reason=${checked.reason} chars=${fullStreamedText.length} head=${JSON.stringify(fullStreamedText.slice(0, 160))}`);
         socket.emit('ai:description_error', {
           code: 'AI_OUTPUT_REJECTED',
           message: 'لم تُنتج إعادة الصياغة نصًا مناسبًا، فبقي وصفك كما كتبته. حاول مرة أخرى.'
