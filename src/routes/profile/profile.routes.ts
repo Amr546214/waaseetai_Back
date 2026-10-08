@@ -15,6 +15,7 @@ const router = Router();
 
 router.get('/me', authenticate, requireActiveUser, profileController.getProfile);
 router.get('/my-change-requests', authenticate, requireActiveUser, profileController.getMyChangeRequests);
+router.post('/my-change-requests/:id/cancel', authenticate, requireActiveUser, profileController.cancelMyChangeRequest);
 router.put('/update', authenticate, requireActiveUser, profileController.updateProfile);
 // Phone number change: a code sent to the account email confirms it (PUT /update no longer changes the number).
 router.post('/phone/change/request', authenticate, requireActiveUser, phoneChangeController.request);

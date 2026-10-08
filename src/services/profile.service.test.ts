@@ -442,20 +442,6 @@ test('updateTab (PROVIDER active): firstName/lastName/avatarUrl route to Provide
   assert.equal(userUpdateSpy.mock.callCount(), 0);
 });
 
-test('updateTab: identity/banking tabs remain unaffected by the display-field allowlist change', async (t) => {
-  const { profileService, userUpdateSpy, clientUpsertSpy } = await loadProfileServiceForUpdate(t, activeUser);
-
-  const result = await profileService.updateTab('user-1', 'identity', { idNumber: '1234567890' }, 'CLIENT');
-
-  // Unchanged pre-existing behavior: this branch only flags PENDING_VERIFICATION,
-  // it never persists the submitted field data (mocked/no-op moderation flow).
-  assert.equal(userUpdateSpy.mock.callCount(), 1);
-  assert.equal(userUpdateSpy.mock.calls[0].arguments[0].data.status, 'PENDING_VERIFICATION');
-  assert.equal(userUpdateSpy.mock.calls[0].arguments[0].where.status, 'ACTIVE');
-  assert.equal(clientUpsertSpy.mock.callCount(), 0);
-  assert.match(result.message, /قيد التحقق/);
-});
-
 // ============================================================================
 // Phase 3D.1 final review — no implicit "else means PROVIDER" fallback.
 // CLIENT/PROVIDER/AFFILIATE must be the only roles that can ever write a role
@@ -672,14 +658,6 @@ test('updateTab banking (CLIENT): invalid PayPal email is rejected and nothing i
   await assert.rejects(() => profileService.updateTab('user-1', 'banking', { paypalPayoutEmail: 'not-an-email' }, 'CLIENT'), /PayPal/);
   assert.equal(clientUpsertSpy.mock.callCount(), 0);
   assert.equal(userUpdateSpy.mock.callCount(), 0);
-});
-
-test('updateTab banking (CLIENT) without paypalPayoutEmail keeps the legacy PENDING_VERIFICATION behavior', async (t) => {
-  const { profileService, userUpdateSpy, clientUpsertSpy } = await loadProfileServiceForUpdate(t, activeUser);
-
-  await profileService.updateTab('user-1', 'banking', { iban: 'SA00' }, 'CLIENT');
-  assert.equal(clientUpsertSpy.mock.callCount(), 0);
-  assert.equal(userUpdateSpy.mock.calls[0].arguments[0].data.status, 'PENDING_VERIFICATION');
 });
 
 test('getProfile (CLIENT) returns paypalPayoutEmail', async (t) => {

@@ -114,6 +114,18 @@ export class ProfileController {
     }
   }
 
+  public async cancelMyChangeRequest(req: Request, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) {
+        throw new AppError('غير مصرح لك بالوصول', 401);
+      }
+      const result = await profileService.cancelMyChangeRequest(req.user.userId, String(req.params.id));
+      res.status(200).json({ success: true, message: 'تم سحب الطلب', data: result });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public async getMyChangeRequests(req: Request, res: Response, next: NextFunction) {
     try {
       if (!req.user) {

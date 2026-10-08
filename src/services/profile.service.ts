@@ -1,9 +1,8 @@
-import { Prisma, UserRole, UserStatus } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { UpdateProfileDto } from '../dtos/profile.dto';
 import { AppError } from '../utils/app-error';
-import { disconnectUserSockets } from '../utils/socket-registry';
 import { PHONE_CHANGE_REQUIRED_MESSAGE } from '../utils/phone-change-messages';
 import { PAYPAL_EMAIL_OTP_REQUIRED_MESSAGE } from '../utils/paypal-email-messages';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
@@ -13,6 +12,9 @@ import { logger } from '../config/logger';
 import { providerProfileService } from './provider-profile.service';
 import { marketerProfileService } from './marketer-profile.service';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
+import { CLIENT_IDENTITY_REQUEST_CATEGORY as CLIENT_IDENTITY_CATEGORY } from '../utils/profile-request-categories';
+
+const maskId = (value: string) => (value.length > 4 ? `${'*'.repeat(value.length - 4)}${value.slice(-4)}` : value);
 
 export class ProfileService {
   /**
@@ -95,6 +97,10 @@ export class ProfileService {
       ...roleProfile,
       ...resolvedDisplayFields
     };
+
+    // CLIENT: the contact tab saves the city on User while the setup / identity tabs save it on ClientProfile; a null ClientProfile
+    // city must not hide the saved User city (it used to reload empty after a successful save).
+    if (user.activeRole === UserRole.CLIENT && !currentProfileData.city && user.city) currentProfileData.city = user.city;
 
     // CLIENT: the completion is recomputed from the rows just read (so a stored value that predates the current formula is
     // healed on the next read) and returned with what is still missing. The stored column is synced when it differs (best
@@ -397,26 +403,14 @@ export class ProfileService {
       return { message: 'تم حفظ بريد PayPal بنجاح' };
     }
 
-    if (tabName === 'identity' || tabName === 'banking') {
-      // Create a moderation request for sensitive data
-      // await prisma.profileChangeRequest.create({
-      //   data: {
-      //     userId,
-      //     tabName: tabName.toUpperCase() + '_UPDATE',
-      //     requestedChanges: data
-      //   }
-      // });
-      
-      // Flag user as pending review
-      // Only an ACTIVE account is flagged: this must never move a SUSPENDED / in-review account to another status.
-      const flagged = await prisma.user.updateMany({
-        where: { id: userId, status: UserStatus.ACTIVE },
-        data: { status: UserStatus.PENDING_VERIFICATION }
-      });
-      // The account just left ACTIVE: its live sockets are cut like on any other status change (HTTP is already refused by requireActiveUser).
-      if (flagged?.count) { try { await disconnectUserSockets(userId); } catch { /* the status change is already committed */ } }
+    if (tabName === 'identity') {
+      return this.updateClientIdentity(userId, data, activeRole);
+    }
 
-      return { message: 'تم إرسال طلب التعديل للمراجعة. حالة الحساب الآن: قيد التحقق' };
+    if (tabName === 'banking') {
+      // Only the PayPal payout email is editable for a client (handled above). Bank / wallet / IBAN are not supported: refuse
+      // instead of pretending a review request was sent (and never flag the account as PENDING_VERIFICATION).
+      throw new AppError('تعديل بيانات البنك أو المحفظة غير مدعوم حاليًا. يمكنك تحديث بريد PayPal فقط.', 400);
     }
 
     throw new AppError('تبويب غير معروف', 400);
@@ -463,14 +457,106 @@ export class ProfileService {
   }
 
   /**
-   * Get pending change requests for the user
+   * CLIENT identity tab. country / city are plain profile data and save immediately. The national id / iqama number is a governed
+   * field: it never changes here — a modification request (category CLIENT_IDENTITY) is recorded for an admin to approve or
+   * reject, and the stored value changes only when it is approved (ProviderProfileService.reviewSensitiveChange). Fields the
+   * database has no column for (nationality, id expiry date) are refused with a clear error, never silently dropped.
+   */
+  private async updateClientIdentity(userId: string, data: any, activeRole: UserRole) {
+    if (activeRole !== UserRole.CLIENT) {
+      throw new AppError('تعديل الهوية من هذه الصفحة متاح لحساب طالب الخدمة فقط', 400);
+    }
+    const input = data || {};
+    for (const unsupported of ['nationality', 'idExpiryDate'] as const) {
+      if (input[unsupported] !== undefined && String(input[unsupported]).trim() !== '') {
+        throw new AppError('هذا الحقل غير مدعوم حاليًا ولا يمكن حفظه', 400);
+      }
+    }
+
+    const profile = await prisma.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, country: true, city: true } });
+    const placeUpdate: { country?: string; city?: string } = {};
+    if (input.country !== undefined && String(input.country).trim() !== '' && String(input.country).trim() !== profile?.country) placeUpdate.country = String(input.country).trim();
+    if (input.city !== undefined && String(input.city).trim() !== '' && String(input.city).trim() !== profile?.city) placeUpdate.city = String(input.city).trim();
+
+    const requestedId = input.idNumber === undefined ? '' : String(input.idNumber).trim();
+    if (requestedId && !/^[12]\d{9}$/.test(requestedId)) {
+      throw new AppError('رقم الهوية يجب أن يكون 10 أرقام ويبدأ بـ 1 أو 2', 400);
+    }
+    const idChanged = !!requestedId && requestedId !== (profile?.idNumber || '');
+    if (!idChanged && Object.keys(placeUpdate).length === 0) {
+      throw new AppError('لا توجد تغييرات للحفظ', 400);
+    }
+
+    let pendingRequest: { id: string; status: string } | null = null;
+    if (idChanged) {
+      const existing = await prisma.profileModificationRequest.findFirst({
+        where: { providerId: userId, category: CLIENT_IDENTITY_CATEGORY, status: { in: ['PENDING_HUMAN_REVIEW'] } },
+        select: { id: true }
+      });
+      if (existing) throw new AppError('لديك طلب تعديل لرقم الهوية قيد المراجعة بالفعل', 409);
+    }
+
+    // both writes together: a failure must not leave the place saved while the request is lost (or the other way round)
+    await prisma.$transaction(async (tx) => {
+      if (Object.keys(placeUpdate).length > 0) {
+        await tx.clientProfile.upsert({ where: { userId }, create: { userId, ...placeUpdate }, update: placeUpdate });
+      }
+      if (idChanged) {
+        const created = await tx.profileModificationRequest.create({
+          data: {
+            providerId: userId,
+            category: CLIENT_IDENTITY_CATEGORY,
+            fieldName: 'NATIONAL_ID',
+            fieldLabel: 'رقم الهوية / الإقامة',
+            currentValue: profile?.idNumber ? maskId(profile.idNumber) : null,
+            requestedValue: maskId(requestedId),
+            status: 'PENDING_HUMAN_REVIEW',
+            requiresOtp: false,
+            metadata: { changes: { idNumber: requestedId }, requiresHumanReview: true } as any
+          },
+          select: { id: true, status: true }
+        });
+        pendingRequest = created;
+      }
+    });
+
+    if (pendingRequest) {
+      return {
+        message: Object.keys(placeUpdate).length > 0
+          ? 'تم حفظ الدولة والمدينة، وأُرسل طلب تعديل رقم الهوية للمراجعة'
+          : 'تم إرسال طلب تعديل رقم الهوية للمراجعة',
+        isPendingRequest: true,
+        requestId: (pendingRequest as { id: string }).id,
+        status: (pendingRequest as { status: string }).status
+      };
+    }
+    return { message: 'تم حفظ الدولة والمدينة بنجاح', isPendingRequest: false };
+  }
+
+  /**
+   * The signed-in client's own modification requests (newest first), in the shape the "طلبات تعديل الملف" page reads. The stored
+   * metadata (it holds the real, unmasked values) is never returned.
    */
   public async getMyChangeRequests(userId: string) {
-    // const requests = await prisma.profileChangeRequest.findMany({
-    //   where: { userId },
-    //   orderBy: { createdAt: 'desc' }
-    // });
-    return [];
+    const rows = await prisma.profileModificationRequest.findMany({
+      where: { providerId: userId, category: { startsWith: 'CLIENT_' } },
+      orderBy: { createdAt: 'desc' }
+    });
+    return rows.map(({ metadata: _metadata, ...safe }) => safe);
+  }
+
+  /** The client withdraws one of their own requests while it still waits for review. */
+  public async cancelMyChangeRequest(userId: string, requestId: string) {
+    const claimed = await prisma.profileModificationRequest.updateMany({
+      where: { id: requestId, providerId: userId, category: { startsWith: 'CLIENT_' }, status: 'PENDING_HUMAN_REVIEW' },
+      data: { status: 'CANCELLED' }
+    });
+    if (!claimed.count) {
+      const exists = await prisma.profileModificationRequest.findFirst({ where: { id: requestId, providerId: userId, category: { startsWith: 'CLIENT_' } }, select: { status: true } });
+      if (!exists) throw new AppError('الطلب غير موجود', 404);
+      throw new AppError('لا يمكن سحب هذا الطلب لأنه لم يعد قيد المراجعة', 409);
+    }
+    return { id: requestId, status: 'CANCELLED' };
   }
 
   /**

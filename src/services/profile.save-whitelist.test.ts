@@ -56,13 +56,23 @@ for (const tab of ['basics', 'contact']) {
 	});
 }
 
-test('updateTab: the identity and banking tabs (client/provider without PayPal) do not apply the body at all', async () => {
+test('updateTab(identity): a hostile body alone is refused (400) and reaches no table; with a place it writes ClientProfile only, never User', async () => {
 	reset();
 	const service = await svc();
-	await service.updateTab('u1', 'identity', { ...HOSTILE, idNumber: '1234567890' }, 'CLIENT');
-	for (const data of state.userUpdates) {
-		for (const key of ['accountType', 'roles', 'isNafathVerified', 'kycStatus', 'idNumber']) assert.equal(key in data, false, key);
-	}
+	await assert.rejects(() => service.updateTab('u1', 'identity', { ...HOSTILE }, 'CLIENT'), (e: any) => e.statusCode === 400);
+	assert.equal(state.userUpdates.length, 0);
+	assert.equal(state.upserts.length, 0);
+	await service.updateTab('u1', 'identity', { ...HOSTILE, idNumber: undefined, city: 'جدة' }, 'CLIENT');
+	assert.equal(state.userUpdates.length, 0);
+	assert.equal(state.upserts.length, 1);
+	for (const key of Object.keys(state.upserts[0][1].update)) assert.ok(['country', 'city'].includes(key), key);
+});
+
+test('updateTab(banking) without a PayPal email is refused (400): no bank field is applied and nothing is written', async () => {
+	reset();
+	const service = await svc();
+	await assert.rejects(() => service.updateTab('u1', 'banking', { ...HOSTILE, iban: 'SA00' }, 'CLIENT'), (e: any) => e.statusCode === 400);
+	assert.equal(state.userUpdates.length, 0);
 	assert.equal(state.upserts.length, 0);
 });
 
@@ -72,27 +82,15 @@ test('an unknown tab is a 400', async () => {
 	await assert.rejects(() => service.updateTab('u1', 'admin', HOSTILE, 'CLIENT'), (e: any) => e.statusCode === 400);
 });
 
-test('identity/banking tab only flags an ACTIVE account: the write is conditional on status ACTIVE (never touches a suspended/in-review user)', async () => {
+test('identity/banking tabs never change the account status and never cut sockets (no PENDING_VERIFICATION lockout)', async () => {
 	reset();
+	disconnects.length = 0;
 	const calls: any[] = [];
-	prisma.user.updateMany = async (a: any) => { calls.push(a); return { count: 0 }; };
+	prisma.user.updateMany = async (a: any) => { calls.push(a); return { count: 1 }; };
 	const service = await svc();
-	await service.updateTab('u1', 'identity', {}, 'CLIENT');
-	assert.equal(calls.length, 1);
-	assert.equal(calls[0].where.status, 'ACTIVE');
+	await service.updateTab('u1', 'identity', { city: 'جدة' }, 'CLIENT');
+	await assert.rejects(() => service.updateTab('u1', 'banking', { iban: 'SA00' }, 'CLIENT'));
+	assert.equal(calls.length, 0);
 	assert.equal(state.userUpdates.length, 0);
-});
-
-
-test('identity/banking tab that moves an ACTIVE account to PENDING_VERIFICATION cuts its live sockets; no change (count 0) cuts nothing', async () => {
-	reset();
-	disconnects.length = 0;
-	const service = await svc();
-	prisma.user.updateMany = async () => ({ count: 1 });
-	await service.updateTab('u1', 'identity', {}, 'CLIENT');
-	assert.deepEqual(disconnects, ['u1']);
-	disconnects.length = 0;
-	prisma.user.updateMany = async () => ({ count: 0 });
-	await service.updateTab('u1', 'identity', {}, 'CLIENT');
 	assert.deepEqual(disconnects, []);
 });
