@@ -324,6 +324,14 @@ model ClientProfile {
   website     String?
   bio         String?
 
+  // Public-profile extras (additive, nullable): saved by PUT /profiles/update for a CLIENT and read back by GET /profiles/me.
+  interests          String[] @default([])
+  portfolioUrl       String?
+  linkedinUrl        String?
+  personalWebsiteUrl String?
+  interfaceLanguage  String?
+  timezone           String?
+
   // Phase 3A: independent per-role display/progression fields (additive only —
   // see Phase 3 audit). Not yet backfilled or read/written by the app; User's
   // equivalent columns remain the source of truth until Phase 3B/3C/3D.

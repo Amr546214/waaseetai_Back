@@ -21,6 +21,13 @@ export const updateProfileSchema = z.object({
 	website: z.string().url('رابط الموقع غير صحيح').or(z.literal('')).nullable().optional(),
 	bio: sanitizedText(z.string().max(1000, 'النبذة يجب أن لا تتجاوز 1000 حرف')).optional().nullable().or(z.literal('')),
 
+	// Client public-profile extras (stored on ClientProfile): free-text interests (max 20 tags of up to 40 chars), personal links, display prefs.
+	interests: z.array(sanitizedText(z.string().trim().min(1, 'الاهتمام لا يمكن أن يكون فارغًا').max(40, 'الاهتمام يجب ألا يتجاوز 40 حرفًا'))).max(20, 'الحد الأقصى 20 اهتمامًا').optional().nullable(),
+	portfolioUrl: z.string().url('رابط الـ Portfolio غير صحيح').max(300, 'الرابط طويل جدًا').optional().nullable().or(z.literal('')),
+	personalWebsiteUrl: z.string().url('رابط الموقع الشخصي غير صحيح').max(300, 'الرابط طويل جدًا').optional().nullable().or(z.literal('')),
+	interfaceLanguage: z.enum(['العربية', 'English'], { message: 'لغة الواجهة غير مدعومة' }).optional().nullable(),
+	timezone: sanitizedText(z.string().trim().max(60, 'المنطقة الزمنية طويلة جدًا')).optional().nullable(),
+
 	// Provider Profile fields
 	skills: z.array(z.string()).optional().nullable(),
 	hourlyRate: z.number().positive('سعر الساعة يجب أن يكون رقماً موجباً').optional().nullable(),
