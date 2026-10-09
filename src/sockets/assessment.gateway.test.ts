@@ -10,6 +10,10 @@ function resetState(over: Partial<any> = {}) {
   Object.assign(state, {
     providerSpecialty: { id: 'spec-1', specialtyId: 'specialty-1', providerProfileId: 'profile-1', specialty: { nameAr: 'تطوير الويب', name: 'web' } },
     claimExisting: null,
+    specialtyRow: { status: 'UNDER_AI_REVIEW', isActive: true, isPassed: false, passedAt: null, quizScore: null } as any,
+    recentAttempts: [] as any[],
+    onCreate: null as any,
+    approvedCount: 1,
     attempt: null,
     updateManyResult: () => ({ count: 1 }),
     updates: [] as any[],
@@ -18,6 +22,7 @@ function resetState(over: Partial<any> = {}) {
     updateManys: [] as any[],
     txUpdates: [] as any[],
     creates: [] as any[],
+    findManys: [] as any[],
     client: {},
     ...over
   });
@@ -38,12 +43,14 @@ const prismaMock: any = {
     $queryRaw: async () => [],
     assessmentAttempt: {
       findFirst: async (args: any) => { state.claimWheres.push(args); return state.claimExisting; },
-      create: async (args: any) => { state.creates.push(args); return { id: 'reserved-1', ...args.data }; },
+      findMany: async (args: any) => { state.findManys.push(args); return state.recentAttempts; },
+      create: async (args: any) => { state.creates.push(args); const row = { id: 'reserved-1', ...args.data }; state.onCreate?.(row); return row; },
       update: async (args: any) => { state.txUpdates.push({ model: 'attempt', ...args }); return {}; }
     },
     providerSpecialty: {
+      findUnique: async () => state.specialtyRow,
       update: async (args: any) => { state.txUpdates.push({ model: 'specialty', ...args }); return {}; },
-      count: async () => 1
+      count: async () => state.approvedCount
     },
     user: { update: async () => ({}) }
   })
@@ -260,11 +267,15 @@ test('submit_answer: graded by WaseetAI; evaluation_complete carries its score/p
   const evt = emitted.find((e) => e.event === 'evaluation_complete')!;
   assert.equal(evt.payload.score, 72.5);
   assert.equal(evt.payload.scorePercentage, 72.5);
-  assert.equal(evt.payload.status, 'APPROVED');
+  assert.equal(evt.payload.status, 'PASSED');
+  assert.equal(evt.payload.specialtyStatus, 'UNDER_AI_REVIEW');
+  assert.equal(evt.payload.specialtyApproved, false);
+  assert.equal(evt.payload.awaitingAdminApproval, true);
   assert.equal(evt.payload.feedbackAr, 'جيد');
   assert.deepEqual(evt.payload.strengths, ['س']);
   assert.ok(!('correctAnswers' in evt.payload));
   assert.equal(state.txUpdates.find((u: any) => u.model === 'specialty').data.latestScore, 72.5);
+  assert.equal(state.txUpdates.find((u: any) => u.model === 'specialty').data.status, 'UNDER_AI_REVIEW');
 });
 
 test('submit_answer: WaseetAI not-passed result is reported as FAILED', async () => {
@@ -439,4 +450,108 @@ test('submit_answer: a genuine unexpected exception (not a business rejection) i
   } finally {
     prismaMock.assessmentAttempt.findFirst = origFind;
   }
+});
+
+// ── eligibility parity with REST, honest pass wording ────────────────────────
+
+const ago = (ms: number) => new Date(Date.now() - ms);
+const HOUR = 3600 * 1000;
+const noStream = { streamAssessmentQuestions: () => { throw new Error('WaseetAI must not be called'); } };
+
+for (const [label, row, code] of [
+  ['APPROVED', { status: 'APPROVED', isActive: true, isPassed: true }, 'ASSESSMENT_NOT_ELIGIBLE'],
+  ['passed awaiting admin', { status: 'UNDER_AI_REVIEW', isActive: true, isPassed: true }, 'ASSESSMENT_NOT_ELIGIBLE'],
+  ['inactive', { status: 'UNDER_AI_REVIEW', isActive: false, isPassed: false }, 'ASSESSMENT_NOT_ELIGIBLE'],
+  ['LOCKED_OUT', { status: 'LOCKED_OUT', isActive: true, isPassed: false }, 'ASSESSMENT_NOT_ELIGIBLE']
+] as const) {
+  test(`start_assessment: ${label} specialty emits assessment_error ${code}; nothing created, WaseetAI not called`, async () => {
+    resetState({ specialtyRow: row, client: noStream });
+    const { handlers, emitted } = await setup('user-1');
+    await handlers['start_assessment'](START);
+    assert.equal(emitted.length, 1);
+    assert.equal(emitted[0].event, 'assessment_error');
+    assert.equal(emitted[0].payload.code, code);
+    assert.ok(emitted[0].payload.message.length > 0);
+    assert.equal(state.creates.length, 0);
+  });
+}
+
+test('start_assessment: cooldown emits ASSESSMENT_COOLDOWN with retryAfterSeconds; attempt cap emits ASSESSMENT_ATTEMPT_LIMIT', async () => {
+  resetState({ recentAttempts: [{ completedAt: ago(HOUR), createdAt: ago(2 * HOUR) }], client: noStream });
+  let m = await setup('user-1');
+  await m.handlers['start_assessment'](START);
+  assert.equal(m.emitted[0].payload.code, 'ASSESSMENT_COOLDOWN');
+  assert.ok(m.emitted[0].payload.retryAfterSeconds > 0);
+  assert.equal(state.creates.length, 0);
+
+  resetState({ recentAttempts: Array.from({ length: 5 }, () => ({ completedAt: ago(48 * HOUR), createdAt: ago(49 * HOUR) })), client: noStream });
+  m = await setup('user-1');
+  await m.handlers['start_assessment'](START);
+  assert.equal(m.emitted[0].payload.code, 'ASSESSMENT_ATTEMPT_LIMIT');
+  assert.ok(!('retryAfterSeconds' in m.emitted[0].payload));
+});
+
+test('start_assessment: an active attempt is replayed even when the cooldown would apply', async () => {
+  resetState({
+    recentAttempts: [{ completedAt: ago(HOUR), createdAt: ago(2 * HOUR) }],
+    claimExisting: { id: 'active-1', questionsPayload: [vq(1)], analyzedAssetsSnapshot: null },
+    client: noStream
+  });
+  const { handlers, emitted } = await setup('user-1');
+  await handlers['start_assessment'](START);
+  assert.deepEqual(emitted.map((e) => e.event), ['question_streamed', 'assessment_ready']);
+  assert.equal(state.creates.length, 0);
+});
+
+test('start_assessment: a second start while the first is STREAMING gets the in-progress error and no second row', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  let startedFirst!: () => void;
+  const started = new Promise<void>((r) => { startedFirst = r; });
+  resetState({
+    onCreate: (row: any) => { state.claimExisting = { id: row.id, questionsPayload: [], analyzedAssetsSnapshot: null }; },
+    client: {
+      streamAssessmentQuestions: async function* () {
+        startedFirst();
+        await gate;
+        yield { type: 'question', attemptId: 'v-1', question: vq(1) };
+        yield { type: 'assessment_ready', attemptId: 'v-1', totalQuestions: 1, timeLimitMinutes: 15 };
+      }
+    }
+  });
+  const a = await setup('user-1');
+  const b = await setup('user-1');
+  const first = a.handlers['start_assessment'](START);
+  await started;
+  await b.handlers['start_assessment'](START);
+  assert.equal(b.emitted.length, 1);
+  assert.equal(b.emitted[0].event, 'assessment_error');
+  assert.equal(state.creates.length, 1);
+  release();
+  await first;
+  assert.ok(a.emitted.some((e) => e.event === 'assessment_ready'));
+});
+
+test('submit_answer: a pass never says APPROVED / badge; evaluation_complete carries awaitingAdminApproval and an honest message', async () => {
+  resetState({ attempt: attemptFixture(), client: { submitAssessment: async () => ({ attemptId: 'v', score: 90, isPassed: true, status: 'COMPLETED', feedbackAr: 'ممتاز', strengths: [], weaknesses: [] }) } });
+  const { handlers, emitted } = await setup(`parity-${Math.random()}`);
+  await handlers['submit_answer']({ attemptId: 'db-attempt-uuid-1', answers: { '1': 'a' } });
+  const p = emitted.find((e) => e.event === 'evaluation_complete')!.payload;
+  assert.equal(p.status, 'PASSED');
+  assert.equal(p.awaitingAdminApproval, true);
+  assert.equal(p.specialtyApproved, false);
+  assert.match(p.message, /بعد قرار الإدارة/);
+  const json = JSON.stringify(emitted);
+  assert.ok(!json.includes('APPROVED') && !json.includes('شارة اعتماد') && !json.includes('تم اعتماد التخصص'));
+});
+
+test('submit_answer: pass on an already APPROVED specialty reports specialtyApproved without awaiting admin; a fail there does not downgrade', async () => {
+  resetState({ specialtyRow: { status: 'APPROVED', isPassed: true, passedAt: new Date(), quizScore: 90 }, attempt: attemptFixture(),
+    client: { submitAssessment: async () => ({ attemptId: 'v', score: 10, isPassed: false, status: 'COMPLETED', feedbackAr: 'x', strengths: [], weaknesses: [] }) } });
+  const { handlers, emitted } = await setup(`parity-${Math.random()}`);
+  await handlers['submit_answer']({ attemptId: 'db-attempt-uuid-1', answers: {} });
+  const p = emitted.find((e) => e.event === 'evaluation_complete')!.payload;
+  assert.equal(p.status, 'FAILED');
+  assert.equal(p.specialtyApproved, true);
+  assert.deepEqual(state.txUpdates.find((u: any) => u.model === 'specialty').data, { hasTakenAssessment: true, latestScore: 10 });
 });
