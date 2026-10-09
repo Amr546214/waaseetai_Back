@@ -16,7 +16,10 @@ const detailsFields = {
 	country: text(60),
 	city: text(80),
 	occupation: text(100),
-	address: text(500)
+	address: text(500),
+	bio: text(1000),
+	// a short list of interest labels; each is stored trimmed and tag-free
+	interests: z.array(sanitizedText(z.string().trim().min(1).max(40, 'الاهتمام طويل جدًا'))).max(20, 'الحد الأقصى 20 اهتمامًا').nullable().optional()
 };
 
 export const clientSetupSchema = z.object({
