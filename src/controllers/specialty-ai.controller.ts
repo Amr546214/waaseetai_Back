@@ -1,22 +1,27 @@
-import { Request, Response } from 'express';
-import { aiFeatureUnavailablePayload } from '../services/ai/ai-feature-unavailable';
+import { NextFunction, Request, Response } from 'express';
+import { specialtyPortfolioReviewService } from '../services/ai-features/specialty-portfolio-review.service';
 
-// AI evaluation of a provider specialty is switched off: WaseetAI has no
-// documented contract for it. It is not wired to the internal LlmClient yet (planned
-// separately) and never fabricates scores.
-//
-// This handler deliberately performs NO database access at all: it never moves
-// a specialty into UNDER_AI_REVIEW / TEST_REQUIRED / REJECTED / PENDING_PROOF,
-// never writes scores or feedback, and never writes an AI audit log. The
-// human/admin verification workflow and any previously stored results are
-// therefore untouched.
+// Advisory AI review of a provider's specialty portfolio (see specialty-portfolio-review.service.ts). The routes run provider auth and the
+// ownership check first; the service re-checks ownership. Nothing here changes a specialty's status, tier or badge.
+const userIdOf = (req: Request): string => String((req as any).user?.id ?? '');
 
-export const SPECIALTY_AI_EVALUATION_UNAVAILABLE_MESSAGE =
-  'التقييم الذكي للتخصص متوقف مؤقتاً حتى يكتمل ربطه بخدمة WaseetAI. يمكنك متابعة رفع النماذج وإكمال مراجعة التخصص بشكل طبيعي.';
+export async function evaluateSpecialtyWithAI(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const data = await specialtyPortfolioReviewService.evaluate(userIdOf(req), String(req.params.id));
+    res.status(200).json({ success: true, data });
+  } catch (error) { next(error); }
+}
 
-export async function evaluateSpecialtyWithAI(_req: Request, res: Response): Promise<void> {
-  res.status(503).json({
-    success: false,
-    ...aiFeatureUnavailablePayload(SPECIALTY_AI_EVALUATION_UNAVAILABLE_MESSAGE),
-  });
+export async function getLatestSpecialtyAiEvaluation(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const data = await specialtyPortfolioReviewService.latest(userIdOf(req), String(req.params.id));
+    res.status(200).json({ success: true, data });
+  } catch (error) { next(error); }
+}
+
+export async function listSpecialtyAiEvaluations(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const data = await specialtyPortfolioReviewService.history(userIdOf(req), String(req.params.id));
+    res.status(200).json({ success: true, data });
+  } catch (error) { next(error); }
 }
