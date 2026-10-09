@@ -48,7 +48,7 @@ function createMockPrisma(t: TestContext, opts: {
 		$transaction: async (fn: any) => fn(tx),
 		affiliateProfile: { findUnique: affiliateFindUniqueSpy },
 		profileChangeRequest: {
-			findMany: async (args: any) => requests.filter(r => r.affiliateProfileId === args.where.affiliateProfileId),
+			findMany: async (args: any) => requests.filter(r => r.affiliateProfileId === args.where.affiliateProfileId && !(args.where.fieldType?.notIn ?? []).includes(r.fieldType)),
 			findUnique: async (args: any) => requests.find(r => r.requestNumber === args.where.requestNumber) || null,
 			update: async (args: any) => {
 				const idx = requests.findIndex(r => r.requestNumber === args.where.requestNumber);
@@ -233,6 +233,17 @@ test('getRequests: returns newly-created requests for this affiliate (marketer r
 	assert.equal(summary.pendingAiCount, 2);
 	const fieldTypes = summary.items.map((r: any) => r.fieldType).sort();
 	assert.deepEqual(fieldTypes, ['NATIONAL_ID', 'PHONE_NUMBER']);
+});
+
+test('getRequests: legacy bank requests (IBAN / bank name / holder / swift) are never listed, so no bank value is shown', async (t) => {
+	const { profileRequestsService, requests } = await loadService(t);
+	await profileRequestsService.createIdentityRequests('user-1', { nationalId: '2000000000' });
+	for (const fieldType of ['IBAN', 'BANK_NAME', 'ACCOUNT_HOLDER_NAME', 'SWIFT_CODE']) {
+		requests.push({ id: `old-${fieldType}`, affiliateProfileId: 'aff-1', fieldType, status: 'PENDING_AI_REVIEW', requestedValue: 'SA0380000000608010167519' });
+	}
+	const summary = await profileRequestsService.getRequests('user-1');
+	assert.deepEqual(summary.items.map((r: any) => r.fieldType), ['NATIONAL_ID']);
+	assert.equal(summary.totalRequests, 1);
 });
 
 test('getRequests: name change requests (FIRST_NAME/LAST_NAME) appear in marketer request history', async (t) => {
