@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { WithdrawalStatus } from '@prisma/client';
 import { createWithdrawalSchema, createMarketerWithdrawalSchema, rejectWithdrawalSchema, resolveWithdrawalSchema } from '../dtos/withdrawal.dto';
 import { AppError } from '../utils/app-error';
-import { withdrawalService } from '../services/withdrawal.service';
+import { withdrawalService, withoutLegacyWithdrawalBankFields } from '../services/withdrawal.service';
 import { payoutService } from '../services/payout.service';
 import { isPayoutAutomationEnabled } from '../utils/payout-automation.util';
 
@@ -57,11 +57,11 @@ export async function getWithdrawal(req: Request, res: Response, next: NextFunct
 }
 
 export async function approveWithdrawal(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = resolveWithdrawalSchema.safeParse(req.body || {}); if (!parsed.success) throw new AppError('بيانات اعتماد السحب غير صحيحة', 400); res.json({ success: true, data: await withdrawalService.approve(String(req.params.id), adminId(req), parsed.data) }); } catch (error) { next(error); }
+  try { const parsed = resolveWithdrawalSchema.safeParse(req.body || {}); if (!parsed.success) throw new AppError('بيانات اعتماد السحب غير صحيحة', 400); res.json({ success: true, data: withoutLegacyWithdrawalBankFields(await withdrawalService.approve(String(req.params.id), adminId(req), parsed.data)) }); } catch (error) { next(error); }
 }
 
 export async function rejectWithdrawal(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = rejectWithdrawalSchema.safeParse(req.body); if (!parsed.success) throw new AppError('سبب رفض السحب مطلوب', 400); res.json({ success: true, data: await withdrawalService.reject(String(req.params.id), adminId(req), parsed.data) }); } catch (error) { next(error); }
+  try { const parsed = rejectWithdrawalSchema.safeParse(req.body); if (!parsed.success) throw new AppError('سبب رفض السحب مطلوب', 400); res.json({ success: true, data: withoutLegacyWithdrawalBankFields(await withdrawalService.reject(String(req.params.id), adminId(req), parsed.data)) }); } catch (error) { next(error); }
 }
 
 // Payout P2-C: deliberately takes NO request body at all — every financial
