@@ -45,17 +45,6 @@ export interface ProviderAiPerformanceMetrics {
 	conflictFreeDeliveryRate: number;
 }
 
-const ZERO_AI_METRICS: ProviderAiPerformanceMetrics = {
-	executionQuality: 0,
-	onTimeDelivery: 0,
-	communication: 0,
-	clientSatisfaction: 0,
-	onTimeCompletionRate: 0,
-	repeatClientRate: 0,
-	highRatingServicesRate: 0,
-	conflictFreeDeliveryRate: 0
-};
-
 const AI_METRIC_KEYS: (keyof ProviderAiPerformanceMetrics)[] = ['executionQuality', 'onTimeDelivery', 'communication', 'clientSatisfaction', 'onTimeCompletionRate', 'repeatClientRate', 'highRatingServicesRate', 'conflictFreeDeliveryRate'];
 
 // Bio stays disabled by evidence (6 live samples, 2026-10-02): WaseetAI now
@@ -230,9 +219,9 @@ export class ProviderProfileService {
 	 * not derivable). Never fabricated.
 	 */
 	private async generateAiMetrics(providerId: string, completedProjectsCount: number, reviewsCount: number): Promise<ProviderAiPerformanceMetrics | null> {
-		// If the provider has no projects and no reviews, their metrics are genuinely 0.
+		// No projects and no reviews: there is no history to summarise, so the metrics are null ("no data"), never a made-up 0.
 		if (completedProjectsCount === 0 && reviewsCount === 0) {
-			return ZERO_AI_METRICS;
+			return null;
 		}
 
 		try {

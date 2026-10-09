@@ -76,7 +76,7 @@ export interface DeliveryAiReview {
 // authority of reviewDelivery()/dispute resolution/contract management,
 // exactly as with getDeliveryAiReview() above.
 export interface ProjectHealthAnalysis {
-  confidence: number;
+  confidence: number | null;
   riskLevel: string;
   riskLevelKey: 'LOW' | 'MEDIUM' | 'HIGH' | 'UNKNOWN';
   healthRating: string;
@@ -149,7 +149,7 @@ export class ProjectProgressService {
         status: 'PENDING_SIGNATURE', statusLabel: 'بانتظار توقيع العقد',
         employee: project.assignedEmployee ? { id: project.assignedEmployee.id, name: project.assignedEmployee.name, jobTitle: project.assignedEmployee.jobTitle } : null,
         stages: [], deliveries: [], edits: [], messages: [], files: [],
-        aiInsights: { confidence: 0, earlyDays: 0, matchPercentage: null, riskLevel: 'غير محسوبة', riskLevelKey: 'unknown', healthRating: 'بانتظار بيانات كافية', bullets: [] }
+        aiInsights: { confidence: null, earlyDays: null, matchPercentage: null, riskLevel: 'غير محسوبة', riskLevelKey: 'unknown', healthRating: 'بانتظار بيانات كافية', bullets: [] }
       };
     }
     await this.ensureStages(contract.id);
@@ -236,7 +236,7 @@ export class ProjectProgressService {
       messages,
       files: persisted.filter(s => s.deliveries.some(d => d.files.length)).map(s => ({ groupTitle: s.title, isDone: s.status === ProjectStageStatus.APPROVED, files: s.deliveries.flatMap(d => d.files.map(url => normalizeFileEntry(url))) })),
       providerClientRating,
-      aiInsights: { confidence: 0, earlyDays: 0, matchPercentage: null, riskLevel: 'غير محسوبة', riskLevelKey: 'unknown', healthRating: 'بانتظار بيانات كافية', bullets: [] }
+      aiInsights: { confidence: null, earlyDays: null, matchPercentage: null, riskLevel: 'غير محسوبة', riskLevelKey: 'unknown', healthRating: 'بانتظار بيانات كافية', bullets: [] }
     };
   }
 

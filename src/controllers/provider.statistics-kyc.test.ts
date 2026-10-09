@@ -5,11 +5,11 @@ import assert from 'node:assert/strict';
 process.env.OPENAI_API_KEY = 'test-key';
 process.env.JWT_SECRET = 'test-secret';
 
-const state: any = { profile: null, gamification: null };
+const state: any = { profile: null, gamification: null, proposals: [] };
 let loaded: Promise<any> | undefined;
 const load = () => (loaded ??= (async () => {
 	mock.module('../config/db', { namedExports: { prisma: {
-		project: { count: async () => 0 }, proposal: { count: async () => 0 },
+		project: { count: async () => 0 }, proposal: { count: async () => 0, findMany: async () => state.proposals },
 		providerProfile: { findUnique: async () => state.profile },
 		providerGamification: { findUnique: async () => state.gamification },
 	} } });
@@ -64,4 +64,18 @@ test('a missing profile row gives null KYC and still answers', async () => {
 	const s = await call();
 	assert.equal(s.kycStatus, null);
 	assert.equal(s.commissionPercent, null);
+});
+
+test('aiRating: null (never 0) with no scored proposal; otherwise the real WaseetAI proposal-quality average out of 5, with its source', async () => {
+	state.profile = profile(); state.gamification = null;
+	state.proposals = [];
+	let s = await call();
+	assert.equal(s.aiRating, null);
+	assert.equal(s.aiRatingSource, 'none');
+	state.proposals = [{ aiMatchScore: 80, createdAt: new Date('2026-10-01') }, { aiMatchScore: 90, createdAt: new Date('2026-10-02') }];
+	s = await call();
+	assert.equal(s.aiRating, 4.3);
+	assert.equal(s.aiRatingSource, 'waseet_ai_offer_quality');
+	assert.equal(s.aiRatedOffersCount, 2);
+	state.proposals = [];
 });
