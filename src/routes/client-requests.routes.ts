@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { clientSpecialtyRecommendationService, MAX_RECOMMENDATION_TEXT } from '../services/client-specialty-recommendation.service';
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { clientRequestsController } from '../controllers/client-requests.controller';
 import { memoryUpload } from '../utils/cloudinary-storage';
@@ -29,6 +30,26 @@ const router = Router();
 
 // Metadata endpoint (Categories, Specialties, Sub-specialties with provider counts)
 router.get('/meta', clientRequestsController.getMeta);
+
+// Specialty suggestion for create-request step 1 (typed text / the client's own history / platform demand). Rule-based, read/compute only:
+// nothing is saved and no AI is called. Client-only, active-account-only. A failure answers 500 and the page simply shows no suggestion.
+router.post(
+  '/specialty-recommendations',
+  authenticate,
+  requireActiveUser,
+  authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL),
+  async (req, res) => {
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const text = ['query', 'title', 'description'].map(k => (typeof b[k] === 'string' ? (b[k] as string).trim() : '')).filter(Boolean).join(' ').slice(0, MAX_RECOMMENDATION_TEXT);
+      const data = await clientSpecialtyRecommendationService.recommend((req as any).user.id, text);
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      console.error('[ClientRequests] specialty recommendation failed:', error);
+      res.status(500).json({ success: false, message: 'تعذر تحميل اقتراح التخصص حاليًا' });
+    }
+  }
+);
 
 // AI suggestion endpoint — client-only, active-account-only, AI-rate-limited,
 // matching the same authorization pattern used by other client-restricted
