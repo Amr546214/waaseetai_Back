@@ -1,19 +1,19 @@
 import { z } from 'zod';
 import { sanitizedText } from '../utils/sanitize-text';
-import { isValidIban } from '../utils/iban.util';
+import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
 import { AFFILIATE_BIO_MAX_LENGTH } from '../utils/completion-calculators';
 
-export const updateBankInfoSchema = z.object({
-  bankName: z.string().trim().max(120).optional(),
-  accountHolderName: z.string().trim().max(120).optional(),
-  iban: z.string().trim().max(34).optional().refine(
-    (value) => !value || isValidIban(value),
-    { message: 'رقم IBAN غير صحيح' }
-  ),
-  swiftCode: z.string().trim().max(11).optional(),
+/**
+ * PATCH /marketer/profile/paypal (and the old /bank-info path): the PayPal email is the ONLY payout destination. Any bank / IBAN / account
+ * holder / wallet / swift value in the payload is a 400 and nothing is stored. An empty email removes the saved one.
+ */
+export const updatePaypalPayoutSchema = z.object({
+  paypalPayoutEmail: z.string().trim().max(254, 'بريد PayPal طويل جدًا').email('أدخل بريد PayPal صالحًا مثل name@example.com').nullable().optional().or(z.literal('')),
+}).catchall(z.unknown()).superRefine((data, ctx) => {
+  for (const key of nonPaypalPayoutKeys(data)) ctx.addIssue({ code: 'custom', path: [key], message: PAYPAL_ONLY_MESSAGE });
 });
 
-export type UpdateBankInfoInput = z.infer<typeof updateBankInfoSchema>;
+export type UpdatePaypalPayoutInput = z.infer<typeof updatePaypalPayoutSchema>;
 
 /** PATCH /marketer/profile/marketing-info. The bio is optional and may be empty (it only counts toward completion from 50 characters). */
 export const updateMarketingInfoSchema = z.object({

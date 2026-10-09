@@ -4,7 +4,7 @@
 /** The payload keys that would carry a bank account / IBAN / account holder / wallet. */
 export const NON_PAYPAL_PAYOUT_KEYS = [
   'bankName', 'accountHolder', 'accountHolderName', 'iban', 'ibanNumber', 'bankAccount', 'accountNumber',
-  'wallet', 'walletProvider', 'walletPhone', 'walletId', 'walletNumber', 'ewallet'
+  'wallet', 'walletProvider', 'walletPhone', 'walletId', 'walletNumber', 'ewallet', 'swiftCode', 'swift'
 ] as const;
 
 export const PAYPAL_ONLY_MESSAGE = 'لا تُقبل على المنصة إلا وسيلة PayPal: لا حساب بنكي ولا IBAN ولا محفظة';

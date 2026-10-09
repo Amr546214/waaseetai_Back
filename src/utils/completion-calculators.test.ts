@@ -153,7 +153,7 @@ test('computeProviderCompletion: empty fixture -> 0, capped/never negative', () 
 
 const AFF_FULL = {
   user: { avatarUrl: null },
-  affiliateProfile: { avatarUrl: 'https://x/a.png', bio: 'x'.repeat(60), iban: 'SA0380000000608010167519' },
+  affiliateProfile: { avatarUrl: 'https://x/a.png', bio: 'x'.repeat(60), paypalPayoutEmail: 'm@example.com' },
   marketingChannelsCount: 1,
 };
 
@@ -181,9 +181,10 @@ test('computeAffiliateCompletion: one channel = 30 (the count itself is not scor
   assert.equal(computeAffiliateCompletion({ user: {}, affiliateProfile: {}, marketingChannelsCount: 0 }), 0);
 });
 
-test('computeAffiliateCompletion: approved IBAN = 30 (whitespace-only does not count)', () => {
-  assert.equal(computeAffiliateCompletion({ user: {}, affiliateProfile: { iban: 'SA0380000000608010167519' }, marketingChannelsCount: 0 }), 30);
-  assert.equal(computeAffiliateCompletion({ user: {}, affiliateProfile: { iban: '   ' }, marketingChannelsCount: 0 }), 0);
+test('computeAffiliateCompletion: PayPal email = 30 (whitespace-only does not count); an IBAN earns nothing', () => {
+  assert.equal(computeAffiliateCompletion({ user: {}, affiliateProfile: { paypalPayoutEmail: 'm@example.com' }, marketingChannelsCount: 0 }), 30);
+  assert.equal(computeAffiliateCompletion({ user: {}, affiliateProfile: { paypalPayoutEmail: '   ' }, marketingChannelsCount: 0 }), 0);
+  assert.equal(computeAffiliateCompletion({ user: {}, affiliateProfile: { iban: 'SA0380000000608010167519' } as any, marketingChannelsCount: 0 }), 0);
 });
 
 test('computeAffiliateCompletion: full = 100 (20 + 20 + 30 + 30) with nothing missing', () => {
@@ -194,26 +195,22 @@ test('computeAffiliateCompletion: full = 100 (20 + 20 + 30 + 30) with nothing mi
 test('affiliate missing items: every input listed with points and the tab; points add up to 100 - score', () => {
   const empty = { user: {}, affiliateProfile: {}, marketingChannelsCount: 0 };
   const items = computeAffiliateMissingItems(empty);
-  assert.deepEqual(items.map(i => [i.key, i.points, i.tab, i.status]), [['avatar', 20, 'profile', 'missing'], ['bio', 20, 'profile', 'missing'], ['channel', 30, 'profile', 'missing'], ['iban', 30, 'bank', 'missing']]);
+  assert.deepEqual(items.map(i => [i.key, i.points, i.tab, i.status]), [['avatar', 20, 'profile', 'missing'], ['bio', 20, 'profile', 'missing'], ['channel', 30, 'profile', 'missing'], ['payout', 30, 'bank', 'missing']]);
   assert.equal(items.reduce((n, i) => n + i.points, 0), 100 - computeAffiliateCompletion(empty));
   assert.match(items[1].hint, /50/);
 });
 
-test('affiliate: a PENDING IBAN request gives no points but is reported as pending_review (قيد المراجعة), not missing', () => {
-  const noIban = { ...AFF_FULL, affiliateProfile: { ...AFF_FULL.affiliateProfile, iban: null } };
-  assert.equal(computeAffiliateCompletion(noIban), 70);
-  const pending = computeAffiliateMissingItems(noIban, { pendingIbanReview: true });
-  assert.deepEqual(pending.map(i => [i.key, i.status, i.tab]), [['iban', 'pending_review', 'bank']]);
-  assert.match(pending[0].hint, /قيد المراجعة/);
-  assert.equal(computeAffiliateMissingItems(noIban)[0].status, 'missing');
-});
-
-test('affiliate: an approved IBAN is never listed, even when a newer change request is pending', () => {
-  assert.deepEqual(computeAffiliateMissingItems(AFF_FULL, { pendingIbanReview: true }), []);
+test('affiliate: without a PayPal email the payout item is listed (missing) with the PayPal wording, never IBAN / bank', () => {
+  const noPaypal = { ...AFF_FULL, affiliateProfile: { ...AFF_FULL.affiliateProfile, paypalPayoutEmail: null } };
+  assert.equal(computeAffiliateCompletion(noPaypal), 70);
+  const items = computeAffiliateMissingItems(noPaypal);
+  assert.deepEqual(items.map(i => [i.key, i.status, i.tab]), [['payout', 'missing', 'bank']]);
+  assert.match(items[0].hint, /PayPal/);
+  assert.doesNotMatch(JSON.stringify(items), /IBAN|بنك|بنكي/);
 });
 
 test('computeAffiliateCompletion: null/empty semantics (undefined/null fields never throw, never falsely score)', () => {
-  assert.equal(computeAffiliateCompletion({ user: {}, affiliateProfile: { avatarUrl: null, bio: null, iban: null }, marketingChannelsCount: 0 }), 0);
+  assert.equal(computeAffiliateCompletion({ user: {}, affiliateProfile: { avatarUrl: null, bio: null, paypalPayoutEmail: null }, marketingChannelsCount: 0 }), 0);
   assert.equal(computeAffiliateCompletion({ user: { avatarUrl: null }, affiliateProfile: {}, marketingChannelsCount: undefined as any }), 0);
 });
 

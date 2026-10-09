@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { marketerOverviewController } from '../controllers/marketer-overview.controller';
-import { submitMarketerWithdrawal, listMyWithdrawals } from '../controllers/withdrawal.controller';
+import { submitMarketerWithdrawal, listMyMarketerWithdrawals } from '../controllers/withdrawal.controller';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 
 const router = Router();
@@ -27,6 +27,6 @@ router.patch('/ref-links/settings', marketerOverviewController.updateSettings);
 // Withdrawals — reuses the same generic, userId-scoped Withdrawal model and
 // listMyWithdrawals controller the provider finance flow already uses.
 router.post('/withdrawals', submitMarketerWithdrawal);
-router.get('/withdrawals', listMyWithdrawals);
+router.get('/withdrawals', listMyMarketerWithdrawals);
 
 export default router;

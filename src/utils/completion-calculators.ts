@@ -219,8 +219,8 @@ export interface AffiliateCompletionInput {
   affiliateProfile: {
     avatarUrl?: string | null;
     bio?: string | null;
-    /** The APPROVED IBAN (written only when an admin approves the request). */
-    iban?: string | null;
+    /** The saved PayPal payout email (the only payout destination). */
+    paypalPayoutEmail?: string | null;
   };
   marketingChannelsCount: number;
 }
@@ -236,33 +236,30 @@ const AFFILIATE_RULES: CompletionRule<AffiliateCompletionInput>[] = [
     met: ({ affiliateProfile: p }) => !!(p.bio && p.bio.trim().length >= AFFILIATE_BIO_MIN_LENGTH) },
   { key: 'channel', label: 'قناة تسويقية', points: 30, tab: 'profile', hint: 'أضف قناة تسويقية واحدة على الأقل',
     met: ({ marketingChannelsCount }) => marketingChannelsCount > 0 },
-  { key: 'iban', label: 'الحساب البنكي (IBAN)', points: 30, tab: 'bank', hint: 'أضف رقم IBAN (يُفعَّل بعد اعتماد الطلب)',
-    met: ({ affiliateProfile: p }) => !!(p.iban && p.iban.trim().length > 0) },
+  { key: 'payout', label: 'بريد PayPal', points: 30, tab: 'bank', hint: 'أضف بريد PayPal لاستلام الأرباح',
+    met: ({ affiliateProfile: p }) => !!(p.paypalPayoutEmail && p.paypalPayoutEmail.trim().length > 0) },
 ];
 
 /**
  * Marketer completion, weighted to 100 over what the marketer can do: avatar 20, bio 20 (>= 50 characters), at least one
- * channel 30 (no verification needed yet), approved IBAN 30. Names and email are not scored. The IBAN only counts once an
- * admin approves the request (that is when AffiliateProfile.iban is written); a pending request gives no points and is
- * reported as 'pending_review' by computeAffiliateMissingItems.
+ * channel 30 (no verification needed yet), PayPal email 30. Names and email are not scored.
  */
 export function computeAffiliateCompletion(input: AffiliateCompletionInput): number {
   const score = AFFILIATE_RULES.reduce((sum, rule) => sum + (rule.met(input) ? rule.points : 0), 0);
   return Math.min(100, score);
 }
 
-export function computeAffiliateMissingItems(input: AffiliateCompletionInput, options: { pendingIbanReview?: boolean } = {}): CompletionMissingItem[] {
+export function computeAffiliateMissingItems(input: AffiliateCompletionInput): CompletionMissingItem[] {
   const items: CompletionMissingItem[] = [];
   for (const rule of AFFILIATE_RULES) {
     if (rule.met(input)) continue;
-    const pending = rule.key === 'iban' && !!options.pendingIbanReview;
     items.push({
       key: rule.key,
       label: rule.label,
       points: rule.points,
       tab: rule.tab,
-      status: pending ? 'pending_review' : 'missing',
-      hint: pending ? 'طلب الحساب البنكي قيد المراجعة' : rule.hint,
+      status: 'missing',
+      hint: rule.hint,
     });
   }
   return items;

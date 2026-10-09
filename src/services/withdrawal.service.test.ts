@@ -1432,9 +1432,7 @@ function createMarketerWithdrawalMockPrisma(t: TestContext, opts: {
 } = {}) {
 	const affiliate = {
 		id: 'affiliate-1',
-		iban: opts.iban === undefined ? 'SA0000000000000000000000' : opts.iban,
-		bankName: 'Test Bank',
-		accountHolderName: 'Test Affiliate',
+		paypalPayoutEmail: opts.iban === undefined ? 'affiliate@example.com' : opts.iban, // PayPal email (null = none saved)
 		minimumPayoutAmount: opts.minimumPayoutAmount ?? 300
 	};
 	const withdrawals: any[] = [];
