@@ -12,6 +12,7 @@ import {
   recordAssessmentAnswer,
   sanitizeQuestions,
   streamAssessmentForClaim,
+  assessmentResultMessage,
   PublicAssessmentQuestion
 } from '../services/ai-assessment.service';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
@@ -86,6 +87,12 @@ export class AssessmentGateway {
       try {
         claim = await claimAssessmentGeneration(providerSpecId, providerSpecialty.providerProfileId, providerSpecialty.specialtyId);
       } catch (claimErr) {
+        const e: any = claimErr;
+        if (e && typeof e.statusCode === 'number' && e.statusCode < 500 && e.code) {
+          // coded business refusal (not eligible / cooldown / attempt limit / not found): same rules and wording as the REST twin
+          socket.emit('assessment_error', { message: e.message, code: e.code, ...(typeof e.retryAfterSeconds === 'number' ? { retryAfterSeconds: e.retryAfterSeconds } : {}) });
+          return;
+        }
         console.error('[AssessmentGateway] Generation claim failed:', claimErr);
         socket.emit('assessment_error', { message: ASSESSMENT_GENERATION_FAILED_MESSAGE, code: ASSESSMENT_GENERATION_FAILED_CODE });
         return;
@@ -251,14 +258,16 @@ export class AssessmentGateway {
         ...(outcome.correctCount !== undefined ? { correctAnswers: outcome.correctCount } : {}),
         totalQuestions: outcome.totalQuestions,
         isPassed: result.isPassed,
-        status: result.isPassed ? 'APPROVED' : 'FAILED',
+        // the ATTEMPT's status; the specialty's real state is reported separately (a pass is never announced as an approval)
+        status: result.isPassed ? 'PASSED' : 'FAILED',
+        specialtyStatus: result.specialtyStatus,
+        specialtyApproved: result.specialtyApproved === true,
+        awaitingAdminApproval: result.awaitingAdminApproval === true,
         feedbackAr: result.feedbackAr,
         strengths: result.strengths,
         weaknesses: result.weaknesses,
         completedAt: result.completedAt.toISOString(),
-        message: result.isPassed
-          ? '🎉 مبروك! اجتزت التقييم بنجاح وتم منحك شارة اعتماد الجدارة المهنية!'
-          : 'لم تحقق الحد الأدنى المطلوب للاجتياز. يمكنك المحاولة مجدداً لاحقاً.'
+        message: assessmentResultMessage(result)
       };
 
       socket.emit('evaluation_complete', resultPayload);

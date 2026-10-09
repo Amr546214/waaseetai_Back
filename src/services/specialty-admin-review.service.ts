@@ -1,6 +1,7 @@
 import { LogCategory, LogStatus, SpecialtyVerificationStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
+import { tierForVerifiedSpecialties } from './ai-assessment.service';
 
 // BE-3(b): the only way a ProviderSpecialty leaves UNDER_AI_REVIEW without a quiz/accreditation sample is an explicit admin
 // decision. It writes the status (and, for APPROVED, the same isPassed/badgeGrantedAt a human accreditation approval writes) and
@@ -30,6 +31,14 @@ export class SpecialtyAdminReviewService {
       if (moved.count !== 1) throw new AppError('تمت معالجة هذا التخصص مسبقاً', 409);
 
       const userId = specialty.providerProfile?.userId;
+      if (approved && userId) {
+        // the provider tier follows the number of APPROVED specialties (an assessment pass alone no longer changes it)
+        const profileId = (await tx.providerSpecialty.findUnique({ where: { id: providerSpecialtyId }, select: { providerProfileId: true } }))?.providerProfileId;
+        if (profileId) {
+          const approvedCount = await tx.providerSpecialty.count({ where: { providerProfileId: profileId, status: SpecialtyVerificationStatus.APPROVED } });
+          await tx.user.update({ where: { id: userId }, data: { tierLevel: tierForVerifiedSpecialties(approvedCount) } }).catch(() => {});
+        }
+      }
       if (userId) {
         await tx.accountAuditLog.create({
           data: {

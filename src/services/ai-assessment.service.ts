@@ -29,6 +29,15 @@ export const ASSESSMENT_GRADING_FAILED_CODE = 'ASSESSMENT_GRADING_FAILED';
 export const ASSESSMENT_GRADING_FAILED_MESSAGE = 'تعذر تصحيح التقييم عبر خدمة الذكاء الاصطناعي حالياً. لم يتم تسجيل أي نتيجة، يمكنك إعادة تسليم إجاباتك.';
 export const ASSESSMENT_NOT_GRADABLE_CODE = 'ASSESSMENT_NOT_GRADABLE';
 
+// Retake policy (explicit, enforced under the specialty row lock for REST and socket alike).
+export const ASSESSMENT_RETAKE_COOLDOWN_HOURS = Math.max(0, Number(process.env.ASSESSMENT_RETAKE_COOLDOWN_HOURS ?? 24));
+export const ASSESSMENT_MAX_ATTEMPTS_PER_30_DAYS = Math.max(1, Number(process.env.ASSESSMENT_MAX_ATTEMPTS_30D ?? 5));
+export const ASSESSMENT_NOT_ELIGIBLE_CODE = 'ASSESSMENT_NOT_ELIGIBLE';
+export const ASSESSMENT_COOLDOWN_CODE = 'ASSESSMENT_COOLDOWN';
+export const ASSESSMENT_ATTEMPT_LIMIT_CODE = 'ASSESSMENT_ATTEMPT_LIMIT';
+/** Attempts that really consumed a try (a released / cancelled generation does not count). */
+const COUNTED_ATTEMPT_STATUSES: AssessmentStatus[] = [AssessmentStatus.COMPLETED, AssessmentStatus.FAILED, AssessmentStatus.EXPIRED];
+
 /** Question as shown to the user — never carries an answer key. */
 export interface PublicAssessmentQuestion {
   id: number | string;
@@ -61,6 +70,12 @@ export interface SubmitAssessmentResponse {
   strengths: string[];
   weaknesses: string[];
   completedAt: Date;
+  /** What really happened to the specialty (never implied by the score): the status after this result. */
+  specialtyStatus?: string;
+  /** True only when the backend itself holds the specialty as APPROVED. */
+  specialtyApproved?: boolean;
+  /** True when a pass is recorded and the specialty now waits for the admin decision (no automatic approval). */
+  awaitingAdminApproval?: boolean;
 }
 
 export const SUBMITTABLE_STATUSES: AssessmentStatus[] = [AssessmentStatus.IN_PROGRESS, AssessmentStatus.STREAMING];
@@ -74,8 +89,8 @@ export function sanitizeQuestions(questions: StoredQuestion[]): PublicAssessment
   }));
 }
 
-function errorWithCode(message: string, code: string, cause?: unknown): Error {
-  return Object.assign(new Error(message), { code, ...(cause !== undefined ? { cause } : {}) });
+function errorWithCode(message: string, code: string, cause?: unknown, statusCode?: number, extra?: Record<string, unknown>): Error {
+  return Object.assign(new Error(message), { code, ...(statusCode ? { statusCode } : {}), ...(extra ?? {}), ...(cause !== undefined ? { cause } : {}) });
 }
 
 export interface GenerationClaim {
@@ -99,6 +114,12 @@ export async function claimAssessmentGeneration(
   return prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM provider_specialties WHERE id = ${providerSpecialtyId} FOR UPDATE`;
 
+    const specialtyRow = await tx.providerSpecialty.findUnique({
+      where: { id: providerSpecialtyId },
+      select: { status: true, isActive: true, isPassed: true }
+    });
+    if (!specialtyRow) throw errorWithCode('التخصص غير موجود', 'SPECIALTY_NOT_FOUND', undefined, 404);
+
     const existing = await tx.assessmentAttempt.findFirst({
       where: { providerSpecialtyId, status: { in: SUBMITTABLE_STATUSES } },
       orderBy: { createdAt: 'desc' },
@@ -113,6 +134,35 @@ export async function claimAssessmentGeneration(
         existingQuestionsPayload: existing.questionsPayload,
         existingGenerationSource: typeof snapshot?.generationSource === 'string' ? snapshot.generationSource : undefined
       };
+    }
+
+    // Eligibility, only when a NEW attempt would be created (an active attempt above is always reused, never blocked or duplicated).
+    if (!specialtyRow.isActive || specialtyRow.status === SpecialtyVerificationStatus.LOCKED_OUT) {
+      throw errorWithCode('لا يمكن إجراء التقييم لهذا التخصص حاليًا.', ASSESSMENT_NOT_ELIGIBLE_CODE, undefined, 409);
+    }
+    if (specialtyRow.status === SpecialtyVerificationStatus.APPROVED) {
+      throw errorWithCode('هذا التخصص معتمد بالفعل ولا يحتاج إلى إعادة التقييم.', ASSESSMENT_NOT_ELIGIBLE_CODE, undefined, 409);
+    }
+    if (specialtyRow.isPassed) {
+      throw errorWithCode('اجتزت التقييم لهذا التخصص وهو بانتظار قرار الإدارة، ولا حاجة لإعادته.', ASSESSMENT_NOT_ELIGIBLE_CODE, undefined, 409);
+    }
+    const since = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+    const recent = await tx.assessmentAttempt.findMany({
+      where: { providerSpecialtyId, status: { in: COUNTED_ATTEMPT_STATUSES }, createdAt: { gte: since } },
+      orderBy: { createdAt: 'desc' },
+      select: { completedAt: true, createdAt: true }
+    });
+    if (recent.length >= ASSESSMENT_MAX_ATTEMPTS_PER_30_DAYS) {
+      throw errorWithCode(`وصلت إلى الحد الأقصى لمحاولات التقييم (${ASSESSMENT_MAX_ATTEMPTS_PER_30_DAYS} خلال 30 يومًا). يمكنك المحاولة لاحقًا.`, ASSESSMENT_ATTEMPT_LIMIT_CODE, undefined, 429);
+    }
+    const last = recent[0];
+    if (last && ASSESSMENT_RETAKE_COOLDOWN_HOURS > 0) {
+      const lastAt = new Date(last.completedAt ?? last.createdAt).getTime();
+      const waitMs = lastAt + ASSESSMENT_RETAKE_COOLDOWN_HOURS * 3600 * 1000 - Date.now();
+      if (waitMs > 0) {
+        const retryAfterSeconds = Math.ceil(waitMs / 1000);
+        throw errorWithCode(`يمكنك إعادة التقييم بعد ${Math.ceil(waitMs / 3600000)} ساعة تقريبًا.`, ASSESSMENT_COOLDOWN_CODE, undefined, 429, { retryAfterSeconds });
+      }
     }
 
     const reserved = await tx.assessmentAttempt.create({
@@ -327,36 +377,58 @@ export function tierForVerifiedSpecialties(verifiedCount: number): 'PRO' | 'EXPE
   return 'PRO';
 }
 
+interface SpecialtyOutcome { status: SpecialtyVerificationStatus; approved: boolean; awaitingAdminApproval: boolean }
+
+/**
+ * What an assessment result does to the ProviderSpecialty. Explicit rules (never an automatic approval):
+ *  - ALWAYS: the attempt result is recorded (hasTakenAssessment, latestScore).
+ *  - PASS: quizScore / isPassed / passedAt are recorded as a fact. The specialty is NOT approved and no badge is granted here: approval
+ *    is the admin's decision (specialty-admin-review). An already APPROVED specialty stays as it is; a previously REJECTED one goes
+ *    back to the review state (UNDER_AI_REVIEW) so the admin can decide. No tier change here (tier follows APPROVED specialties).
+ *  - FAIL: an APPROVED specialty (or one that already passed) is left completely untouched (no downgrade, no badge removal);
+ *    any other specialty is marked REJECTED and may retake after the cooldown.
+ */
 async function applySpecialtyOutcome(
   tx: Prisma.TransactionClient,
   attempt: { providerSpecialtyId: string; providerProfileId: string; providerSpecialty?: { providerProfile?: { userId?: string } } | null },
   score: number,
   isPassed: boolean,
   completedAt: Date
-): Promise<void> {
+): Promise<SpecialtyOutcome> {
+  const current = await tx.providerSpecialty.findUnique({
+    where: { id: attempt.providerSpecialtyId },
+    select: { status: true, isPassed: true, passedAt: true, quizScore: true }
+  });
+  const currentStatus = current?.status ?? SpecialtyVerificationStatus.UNDER_AI_REVIEW;
+  const wasApproved = currentStatus === SpecialtyVerificationStatus.APPROVED;
+
+  if (isPassed) {
+    const nextStatus = currentStatus === SpecialtyVerificationStatus.REJECTED ? SpecialtyVerificationStatus.UNDER_AI_REVIEW : currentStatus;
+    await tx.providerSpecialty.update({
+      where: { id: attempt.providerSpecialtyId },
+      data: {
+        hasTakenAssessment: true,
+        latestScore: score,
+        quizScore: score,
+        isPassed: true,
+        passedAt: current?.passedAt ?? completedAt,
+        status: nextStatus
+      }
+    });
+    return { status: nextStatus, approved: wasApproved, awaitingAdminApproval: !wasApproved };
+  }
+
+  if (wasApproved || current?.isPassed) {
+    // a failed retake never damages what the provider already earned
+    await tx.providerSpecialty.update({ where: { id: attempt.providerSpecialtyId }, data: { hasTakenAssessment: true, latestScore: score } });
+    return { status: currentStatus, approved: wasApproved, awaitingAdminApproval: !wasApproved };
+  }
+
   await tx.providerSpecialty.update({
     where: { id: attempt.providerSpecialtyId },
-    data: {
-      hasTakenAssessment: true,
-      latestScore: score,
-      isPassed,
-      passedAt: isPassed ? completedAt : null,
-      quizScore: score,
-      status: isPassed ? SpecialtyVerificationStatus.APPROVED : SpecialtyVerificationStatus.REJECTED,
-      badgeGrantedAt: isPassed ? completedAt : null
-    }
+    data: { hasTakenAssessment: true, latestScore: score, quizScore: score, isPassed: false, passedAt: null, status: SpecialtyVerificationStatus.REJECTED, badgeGrantedAt: null }
   });
-
-  const userId = attempt.providerSpecialty?.providerProfile?.userId;
-  if (isPassed && userId) {
-    const verifiedCount = await tx.providerSpecialty.count({
-      where: { providerProfileId: attempt.providerProfileId, isPassed: true }
-    });
-
-    const newTier = tierForVerifiedSpecialties(verifiedCount);
-
-    await tx.user.update({ where: { id: userId }, data: { tierLevel: newTier } }).catch(() => {});
-  }
+  return { status: SpecialtyVerificationStatus.REJECTED, approved: false, awaitingAdminApproval: false };
 }
 
 /**
@@ -468,13 +540,14 @@ async function gradeWithWaseetAi(ctx: {
   const status = isPassed ? AssessmentStatus.COMPLETED : AssessmentStatus.FAILED;
   const completedAt = new Date();
 
+  let specialtyOutcome!: SpecialtyOutcome;
   try {
     await prisma.$transaction(async (tx) => {
       await tx.assessmentAttempt.update({
         where: { id: attemptId },
         data: { submittedAnswers: answers as any, score, isPassed, status, completedAt, feedbackAr, strengths, weaknesses, analyzedAssetsSnapshot: snapshotWithReview(attempt, questions, answers, completedAt) }
       });
-      await applySpecialtyOutcome(tx, attempt, score, isPassed, completedAt);
+      specialtyOutcome = await applySpecialtyOutcome(tx, attempt, score, isPassed, completedAt);
     });
   } catch (err) {
     await release();
@@ -485,7 +558,7 @@ async function gradeWithWaseetAi(ctx: {
     kind: 'GRADED',
     gradedBy: 'WASEET_AI',
     totalQuestions,
-    result: { attemptId, score, isPassed, status, feedbackAr, strengths, weaknesses, completedAt }
+    result: { attemptId, score, isPassed, status, feedbackAr, strengths, weaknesses, completedAt, specialtyStatus: specialtyOutcome.status, specialtyApproved: specialtyOutcome.approved, awaitingAdminApproval: specialtyOutcome.awaitingAdminApproval }
   };
 }
 
@@ -524,9 +597,10 @@ async function gradeLegacyLocally(ctx: {
   const strengths: string[] = [];
   const weaknesses: string[] = [];
 
+  let legacyOutcome!: SpecialtyOutcome;
   await prisma.$transaction(async (tx) => {
     await tx.assessmentAttempt.update({ where: { id: attemptId }, data: { feedbackAr, strengths, weaknesses } });
-    await applySpecialtyOutcome(tx, attempt, score, isPassed, completedAt);
+    legacyOutcome = await applySpecialtyOutcome(tx, attempt, score, isPassed, completedAt);
   });
 
   return {
@@ -534,8 +608,20 @@ async function gradeLegacyLocally(ctx: {
     gradedBy: 'LEGACY_LOCAL_KEY',
     totalQuestions,
     correctCount,
-    result: { attemptId, score, isPassed, status, feedbackAr, strengths, weaknesses, completedAt }
+    result: { attemptId, score, isPassed, status, feedbackAr, strengths, weaknesses, completedAt, specialtyStatus: legacyOutcome.status, specialtyApproved: legacyOutcome.approved, awaitingAdminApproval: legacyOutcome.awaitingAdminApproval }
   };
+}
+
+/** The honest user-facing sentence for a graded result: a pass never says the specialty was approved unless it really is. */
+export function assessmentResultMessage(result: { isPassed: boolean; specialtyApproved?: boolean; awaitingAdminApproval?: boolean }): string {
+  if (result.isPassed) {
+    return result.specialtyApproved
+      ? 'اجتزت التقييم الفني بنجاح.'
+      : 'اجتزت التقييم الفني بنجاح. اعتماد التخصص ومنح الشارة يتمّان بعد قرار الإدارة، ولا يُعتمد التخصص تلقائيًا.';
+  }
+  return result.specialtyApproved
+    ? 'لم تحقق الحد الأدنى المطلوب للاجتياز. تخصصك المعتمد لم يتأثر بهذه المحاولة.'
+    : 'لم تحقق الحد الأدنى المطلوب للاجتياز. يمكنك إعادة المحاولة بعد انتهاء فترة الانتظار.';
 }
 
 export class AiAssessmentService {
@@ -555,7 +641,7 @@ export class AiAssessmentService {
     });
 
     if (!providerSpecialty) {
-      throw new Error(`ProviderSpecialty with ID '${providerSpecialtyId}' was not found.`);
+      throw new AppError('التخصص غير موجود أو لا تملك صلاحية الوصول إليه.', 404);
     }
 
     const specialtyName = providerSpecialty.specialty?.nameAr || providerSpecialty.specialty?.name || 'التخصص الفني';
@@ -608,16 +694,16 @@ export class AiAssessmentService {
    */
   async submitAssessment(attemptId: string, submittedAnswers: Record<string, string>, currentUserId?: string): Promise<SubmitAssessmentResponse> {
     if (!currentUserId) {
-      throw new Error(`Assessment attempt '${attemptId}' was not found.`);
+      throw new AppError('محاولة التقييم غير موجودة.', 404);
     }
 
     const outcome = await processAssessmentSubmission(attemptId, currentUserId, submittedAnswers);
 
     switch (outcome.kind) {
       case 'NOT_FOUND':
-        throw new Error(`Assessment attempt '${attemptId}' was not found.`);
+        throw new AppError('محاولة التقييم غير موجودة.', 404);
       case 'ALREADY_FINALIZED':
-        throw new Error(`Assessment attempt '${attemptId}' was already finalized.`);
+        throw new AppError('تم تسليم وتقييم محاولة التقييم هذه مسبقاً.', 409);
       case 'EXPIRED':
         return {
           attemptId,

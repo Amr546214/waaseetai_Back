@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { AppError } from '../utils/app-error';
-import { aiAssessmentService, ASSESSMENT_GENERATION_FAILED_CODE, ASSESSMENT_GRADING_FAILED_CODE } from '../services/ai-assessment.service';
+import { aiAssessmentService, assessmentResultMessage, ASSESSMENT_GENERATION_FAILED_CODE, ASSESSMENT_GRADING_FAILED_CODE } from '../services/ai-assessment.service';
 
 /**
  * POST /api/assessments/generate
@@ -33,6 +33,12 @@ export async function generateAssessmentController(req: Request, res: Response):
       data: result
     });
   } catch (error: any) {
+    // coded business refusals (404 not found / 409 not eligible or in progress / 429 cooldown or attempt limit) are never a 500
+    const businessStatus: number | undefined = error instanceof AppError ? error.statusCode : (typeof error?.statusCode === 'number' ? error.statusCode : (error?.code === 'GENERATION_IN_PROGRESS' ? 409 : undefined));
+    if (businessStatus && businessStatus < 500) {
+      res.status(businessStatus).json({ success: false, ...(error?.code ? { code: error.code } : {}), ...(typeof error?.retryAfterSeconds === 'number' ? { retryAfterSeconds: error.retryAfterSeconds } : {}), message: error.message });
+      return;
+    }
     console.error('[AiAssessmentController] generate error:', error);
     res.status(error?.code === ASSESSMENT_GENERATION_FAILED_CODE ? 503 : 500).json({
       success: false,
@@ -65,12 +71,14 @@ export async function submitAssessmentController(req: Request, res: Response): P
 
     res.status(200).json({
       success: true,
-      message: result.isPassed
-        ? '✓ مبروك! لقد اجتزت التقييم الفني بنجاح وتم اعتماد التخصص!'
-        : 'لم تحقق الحد الأدنى المطلوب للاجتياز. يُمكنك المراجعة وإعادة المحاولة.',
+      message: assessmentResultMessage(result),
       data: result
     });
   } catch (error: any) {
+    if (error instanceof AppError && error.statusCode < 500) {
+      res.status(error.statusCode).json({ success: false, message: error.message });
+      return;
+    }
     console.error('[AiAssessmentController] submit error:', error);
     res.status(error?.code === ASSESSMENT_GRADING_FAILED_CODE ? 503 : 500).json({
       success: false,

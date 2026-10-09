@@ -3,18 +3,25 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { specialtyReviewDecisionSchema } from '../dtos/accreditation.dto';
 
-async function load(t: TestContext, o: { row?: any; count?: number } = {}) {
+async function load(t: TestContext, o: { row?: any; count?: number; approvedCount?: number; profileId?: string | null } = {}) {
   const updates: any[] = [];
+  const userUpdates: any[] = [];
+  const counts: any[] = [];
   const logs: any[] = [];
   const row = 'row' in o ? o.row : { id: 'ps1', status: 'UNDER_AI_REVIEW', providerProfile: { userId: 'u1' }, specialty: { nameAr: 'تصميم' } };
   const tx = {
-    providerSpecialty: { updateMany: async (a: any) => { updates.push(a); return { count: o.count ?? 1 }; } },
+    providerSpecialty: {
+      updateMany: async (a: any) => { updates.push(a); return { count: o.count ?? 1 }; },
+      findUnique: async () => (o.profileId === null ? null : { providerProfileId: o.profileId ?? 'pp1' }),
+      count: async (a: any) => { counts.push(a); return o.approvedCount ?? 1; },
+    },
+    user: { update: async (a: any) => { userUpdates.push(a); return {}; } },
     accountAuditLog: { create: async (a: any) => { logs.push(a); return {}; } },
   };
   const prisma = { providerSpecialty: { findUnique: async () => row }, $transaction: async (fn: any) => fn(tx) };
   t.mock.module('../config/db', { namedExports: { prisma } });
   const { specialtyAdminReviewService } = await import(`./specialty-admin-review.service.ts?f=${Date.now()}-${Math.random()}`);
-  return { svc: specialtyAdminReviewService, updates, logs };
+  return { svc: specialtyAdminReviewService, updates, logs, userUpdates, counts };
 }
 
 test('approve: status APPROVED + isPassed/badgeGrantedAt only; no AI field is written; audit log recorded with reason', async (t) => {
@@ -65,4 +72,26 @@ test('route sits under the admin/super-admin gate', () => {
   const src = readFileSync(new URL('../routes/admin-accreditation.routes.ts', import.meta.url), 'utf8');
   assert.match(src, /router\.use\(authenticate, requireActiveUser, authorize\(AccountType\.ADMIN, AccountType\.SUPER_ADMIN\)\)/);
   assert.match(src, /router\.post\('\/specialties\/:providerSpecialtyId\/decision'/);
+});
+
+for (const [n, tier] of [[1, 'PRO'], [2, 'PRO'], [3, 'EXPERT'], [4, 'EXPERT'], [5, 'TOP_RATED']] as const) {
+  test(`approve: with ${n} APPROVED specialties the provider tier becomes ${tier}`, async (t) => {
+    const { svc, userUpdates, counts } = await load(t, { approvedCount: n });
+    await svc.decide('admin1', 'ps1', { decision: 'APPROVED', reason: 'سبب القرار' });
+    assert.deepEqual(counts[0].where, { providerProfileId: 'pp1', status: 'APPROVED' });
+    assert.deepEqual(userUpdates, [{ where: { id: 'u1' }, data: { tierLevel: tier } }]);
+  });
+}
+
+test('reject: the tier is never touched', async (t) => {
+  const { svc, userUpdates, counts } = await load(t, { approvedCount: 5 });
+  await svc.decide('admin1', 'ps1', { decision: 'REJECTED', reason: 'سبب القرار' });
+  assert.equal(userUpdates.length, 0);
+  assert.equal(counts.length, 0);
+});
+
+test('lost race: no tier update', async (t) => {
+  const { svc, userUpdates } = await load(t, { count: 0 });
+  await assert.rejects(svc.decide('a', 'ps1', { decision: 'APPROVED', reason: 'سبب القرار' }), { statusCode: 409 });
+  assert.equal(userUpdates.length, 0);
 });

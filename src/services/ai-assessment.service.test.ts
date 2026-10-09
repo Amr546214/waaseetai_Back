@@ -12,6 +12,10 @@ function resetState(over: Partial<any> = {}) {
   Object.assign(state, {
     providerSpecialty: { id: 'spec-1', specialtyId: 'specialty-1', providerProfileId: 'profile-1', specialty: { nameAr: 'تطوير الويب', name: 'web' } },
     claimExisting: null,
+    specialtyRow: { status: 'UNDER_AI_REVIEW', isActive: true, isPassed: false, passedAt: null, quizScore: null } as any,
+    recentAttempts: [] as any[],
+    onCreate: null as any,
+    approvedCount: 1,
     attempt: null,
     updateManyResult: () => ({ count: 1 }),
     updates: [] as any[],
@@ -20,6 +24,7 @@ function resetState(over: Partial<any> = {}) {
     updateManys: [] as any[],
     txUpdates: [] as any[],
     creates: [] as any[],
+    findManys: [] as any[],
     userUpdates: [] as any[],
     client: {},
     ...over
@@ -42,12 +47,14 @@ const prismaMock: any = {
     $queryRaw: async () => [],
     assessmentAttempt: {
       findFirst: async (args: any) => { state.claimWheres.push(args); return state.claimExisting; },
-      create: async (args: any) => { state.creates.push(args); return { id: 'reserved-1', ...args.data }; },
+      findMany: async (args: any) => { state.findManys.push(args); return state.recentAttempts; },
+      create: async (args: any) => { state.creates.push(args); const row = { id: 'reserved-1', ...args.data }; state.onCreate?.(row); return row; },
       update: async (args: any) => { state.txUpdates.push({ model: 'attempt', ...args }); return {}; }
     },
     providerSpecialty: {
+      findUnique: async () => state.specialtyRow,
       update: async (args: any) => { state.txUpdates.push({ model: 'specialty', ...args }); return {}; },
-      count: async () => 1
+      count: async () => state.approvedCount
     },
     user: { update: async (args: any) => { state.userUpdates.push(args); return {}; } }
   })
@@ -96,7 +103,7 @@ const gradedOk = (over: Partial<any> = {}) => ({ attemptId: 'vendor-9', score: 8
 test('generate: ownership failure throws before any claim or WaseetAI call', async () => {
   resetState({ providerSpecialty: null, client: { createAssessment: async () => { throw new Error('must not be called'); } } });
   const { aiAssessmentService } = await loadSvc();
-  await assert.rejects(() => aiAssessmentService.generateAssessment('spec-1', 'user-1'), /not found/);
+  await assert.rejects(() => aiAssessmentService.generateAssessment('spec-1', 'user-1'), (e: any) => e.statusCode === 404);
   assert.equal(state.creates.length, 0);
 });
 
@@ -206,14 +213,14 @@ test('stream: a mid-stream failure releases the claim', async () => {
 test('submit: not owner / unknown attempt is rejected, nothing graded', async () => {
   resetState({ attempt: null, client: { submitAssessment: async () => { throw new Error('must not be called'); } } });
   const { aiAssessmentService } = await loadSvc();
-  await assert.rejects(() => aiAssessmentService.submitAssessment('att-1', {}, 'user-2'), /not found/);
-  await assert.rejects(() => aiAssessmentService.submitAssessment('att-1', {}, undefined), /not found/);
+  await assert.rejects(() => aiAssessmentService.submitAssessment('att-1', {}, 'user-2'), (e: any) => e.statusCode === 404);
+  await assert.rejects(() => aiAssessmentService.submitAssessment('att-1', {}, undefined), (e: any) => e.statusCode === 404);
 });
 
 test('submit: already finalized attempt is rejected before any WaseetAI call', async () => {
   resetState({ attempt: attemptFixture({ status: 'COMPLETED' }), client: { submitAssessment: async () => { throw new Error('must not be called'); } } });
   const { aiAssessmentService } = await loadSvc();
-  await assert.rejects(() => aiAssessmentService.submitAssessment('att-1', {}, 'user-1'), /already finalized/);
+  await assert.rejects(() => aiAssessmentService.submitAssessment('att-1', {}, 'user-1'), (e: any) => e.statusCode === 409);
 });
 
 test('submit: late submission is EXPIRED by our own timing, never graded', async () => {
@@ -236,7 +243,7 @@ test('submit: losing the atomic claim to the twin transport spends no WaseetAI c
     client: { submitAssessment: async () => { throw new Error('must not be called'); } }
   });
   const { aiAssessmentService } = await loadSvc();
-  await assert.rejects(() => aiAssessmentService.submitAssessment('att-1', { '1': 'a' }, 'user-1'), /already finalized/);
+  await assert.rejects(() => aiAssessmentService.submitAssessment('att-1', { '1': 'a' }, 'user-1'), (e: any) => e.statusCode === 409);
   assert.equal(state.txUpdates.length, 0);
 });
 
@@ -246,7 +253,7 @@ test('submit: a fresh grading claim by another transport is not re-graded', asyn
     client: { submitAssessment: async () => { throw new Error('must not be called'); } }
   });
   const { aiAssessmentService } = await loadSvc();
-  await assert.rejects(() => aiAssessmentService.submitAssessment('att-1', {}, 'user-1'), /already finalized/);
+  await assert.rejects(() => aiAssessmentService.submitAssessment('att-1', {}, 'user-1'), (e: any) => e.statusCode === 409);
   assert.equal(state.updateManys.length, 0);
 });
 
@@ -283,8 +290,12 @@ test('submit: grading goes through WaseetAI; score/pass/feedback and ProviderSpe
   assert.equal(attemptUpdate.data.weaknesses[0], 'ب');
   const specUpdate = state.txUpdates.find((u: any) => u.model === 'specialty');
   assert.equal(specUpdate.data.latestScore, 61.5);
-  assert.equal(specUpdate.data.status, 'APPROVED');
-  assert.equal(state.userUpdates.length, 1);
+  assert.equal(specUpdate.data.status, 'UNDER_AI_REVIEW', 'a pass is never an automatic approval');
+  assert.equal(specUpdate.data.isPassed, true);
+  assert.ok(!('badgeGrantedAt' in specUpdate.data));
+  assert.equal(res.awaitingAdminApproval, true);
+  assert.equal(res.specialtyApproved, false);
+  assert.equal(state.userUpdates.length, 0, 'tier is not changed at pass');
 });
 
 test('submit: WaseetAI isPassed=false drives REJECTED/FAILED even with a high score (threshold is the vendor\'s)', async () => {
@@ -335,7 +346,7 @@ test('submit: legacy attempt (local key, no vendor id) is graded locally and det
   assert.equal(res.isPassed, true);
   assert.match(res.feedbackAr, /50%/);
   assert.deepEqual(res.strengths, []);
-  assert.equal(state.txUpdates.find((u: any) => u.model === 'specialty').data.status, 'APPROVED');
+  assert.equal(state.txUpdates.find((u: any) => u.model === 'specialty').data.status, 'UNDER_AI_REVIEW');
 });
 
 test('submit: legacy attempt at or below 25% fails (old rule preserved for old attempts only)', async () => {
@@ -415,7 +426,7 @@ for (const status of ['EXPIRED', 'CANCELLED', 'FAILED']) {
   test(`submit: an already-${status} attempt cannot be scored — rejected before any WaseetAI call`, async () => {
     resetState({ attempt: attemptFixture({ status }), client: { submitAssessment: async () => { throw new Error('must not be called'); } } });
     const { aiAssessmentService } = await loadSvc();
-    await assert.rejects(() => aiAssessmentService.submitAssessment('att-1', { '1': 'a' }, 'user-1'), /already finalized/);
+    await assert.rejects(() => aiAssessmentService.submitAssessment('att-1', { '1': 'a' }, 'user-1'), (e: any) => e.statusCode === 409);
     assert.equal(state.updateManys.length, 0);
     assert.equal(state.txUpdates.length, 0);
   });
@@ -543,4 +554,262 @@ test('submit: a normal attempt (enough time, varied answers, slow answers) is no
   const legacy = state.updateManys.find((u: any) => u.data?.analyzedAssetsSnapshot);
   assert.equal(legacy.data.analyzedAssetsSnapshot.review.flags.some((f: any) => f.code === 'TOTAL_TIME_TOO_SHORT'), true);
   assert.equal(legacy.data.status, 'COMPLETED');
+});
+
+// ── claim eligibility, retake policy, outcome policy ─────────────────────────
+
+const ago = (ms: number) => new Date(Date.now() - ms);
+const HOUR = 3600 * 1000;
+const noWaseet = { createAssessment: async () => { throw new Error('WaseetAI must not be called'); } };
+
+for (const [label, row] of [
+  ['APPROVED', { status: 'APPROVED', isActive: true, isPassed: true }],
+  ['passed and awaiting admin', { status: 'UNDER_AI_REVIEW', isActive: true, isPassed: true }],
+  ['inactive', { status: 'UNDER_AI_REVIEW', isActive: false, isPassed: false }],
+  ['LOCKED_OUT', { status: 'LOCKED_OUT', isActive: true, isPassed: false }]
+] as const) {
+  test(`claim: ${label} specialty is refused with a coded 409, nothing is created and WaseetAI is never called`, async () => {
+    resetState({ specialtyRow: row, client: noWaseet });
+    const { aiAssessmentService } = await loadSvc();
+    await assert.rejects(() => aiAssessmentService.generateAssessment('spec-1', 'user-1'), (e: any) => e.code === 'ASSESSMENT_NOT_ELIGIBLE' && e.statusCode === 409);
+    assert.equal(state.creates.length, 0);
+    assert.equal(state.updates.length, 0);
+  });
+}
+
+test('claim: an unknown specialty row is a coded 404 SPECIALTY_NOT_FOUND', async () => {
+  resetState({ specialtyRow: null, client: noWaseet });
+  const { aiAssessmentService } = await loadSvc();
+  await assert.rejects(() => aiAssessmentService.generateAssessment('spec-1', 'user-1'), (e: any) => e.code === 'SPECIALTY_NOT_FOUND' && e.statusCode === 404);
+  assert.equal(state.creates.length, 0);
+});
+
+test('claim: a REJECTED, active, not-passed specialty with no recent attempts may start', async () => {
+  resetState({ specialtyRow: { status: 'REJECTED', isActive: true, isPassed: false }, client: { createAssessment: async () => ({ attemptId: 'v', timeLimitMinutes: 15, questions: [vq(1)] }) } });
+  const { aiAssessmentService } = await loadSvc();
+  const res = await aiAssessmentService.generateAssessment('spec-1', 'user-1');
+  assert.equal(res.attemptId, 'reserved-1');
+});
+
+test('claim: retake within the 24h cooldown -> 429 ASSESSMENT_COOLDOWN with retryAfterSeconds, nothing created', async () => {
+  resetState({ recentAttempts: [{ completedAt: ago(2 * HOUR), createdAt: ago(3 * HOUR) }], client: noWaseet });
+  const { aiAssessmentService } = await loadSvc();
+  await assert.rejects(() => aiAssessmentService.generateAssessment('spec-1', 'user-1'), (e: any) => {
+    const expected = 22 * 3600;
+    return e.code === 'ASSESSMENT_COOLDOWN' && e.statusCode === 429 && typeof e.retryAfterSeconds === 'number' && Math.abs(e.retryAfterSeconds - expected) <= 5;
+  });
+  assert.equal(state.creates.length, 0);
+});
+
+test('claim: after the cooldown has elapsed a new attempt is allowed', async () => {
+  resetState({ recentAttempts: [{ completedAt: ago(25 * HOUR), createdAt: ago(26 * HOUR) }], client: { createAssessment: async () => ({ attemptId: 'v', timeLimitMinutes: 15, questions: [vq(1)] }) } });
+  const { aiAssessmentService } = await loadSvc();
+  await aiAssessmentService.generateAssessment('spec-1', 'user-1');
+  assert.equal(state.creates.length, 1);
+});
+
+test('claim: 5 counted attempts in 30 days -> 429 ASSESSMENT_ATTEMPT_LIMIT, even when the last one is old', async () => {
+  const recent = Array.from({ length: 5 }, (_, i) => ({ completedAt: ago((30 + i) * HOUR), createdAt: ago((31 + i) * HOUR) }));
+  resetState({ recentAttempts: recent, client: noWaseet });
+  const { aiAssessmentService } = await loadSvc();
+  await assert.rejects(() => aiAssessmentService.generateAssessment('spec-1', 'user-1'), (e: any) => e.code === 'ASSESSMENT_ATTEMPT_LIMIT' && e.statusCode === 429);
+  assert.equal(state.creates.length, 0);
+});
+
+test('claim: only COMPLETED/FAILED/EXPIRED in the last 30 days are counted (CANCELLED / released generations do not consume a try)', async () => {
+  resetState({ client: { createAssessment: async () => ({ attemptId: 'v', timeLimitMinutes: 15, questions: [vq(1)] }) } });
+  const { aiAssessmentService } = await loadSvc();
+  await aiAssessmentService.generateAssessment('spec-1', 'user-1');
+  const where = state.findManys[0].where;
+  assert.deepEqual(where.status.in.slice().sort(), ['COMPLETED', 'EXPIRED', 'FAILED']);
+  assert.ok(!where.status.in.includes('CANCELLED') && !where.status.in.includes('STREAMING') && !where.status.in.includes('IN_PROGRESS'));
+  const days = (Date.now() - where.createdAt.gte.getTime()) / (24 * HOUR);
+  assert.ok(days > 29.9 && days < 30.1);
+  assert.equal(where.providerSpecialtyId, 'spec-1');
+});
+
+test('claim: an active attempt is reused even if the cooldown / attempt limit / pass flag would otherwise refuse (never blocked)', async () => {
+  resetState({
+    specialtyRow: { status: 'UNDER_AI_REVIEW', isActive: true, isPassed: false },
+    recentAttempts: Array.from({ length: 6 }, () => ({ completedAt: ago(HOUR), createdAt: ago(2 * HOUR) })),
+    claimExisting: { id: 'active-1', questionsPayload: [vq(1), vq(2)], analyzedAssetsSnapshot: null },
+    client: noWaseet
+  });
+  const { aiAssessmentService } = await loadSvc();
+  const res = await aiAssessmentService.generateAssessment('spec-1', 'user-1');
+  assert.equal(res.attemptId, 'active-1');
+  assert.equal(state.creates.length, 0);
+  assert.equal(state.findManys.length, 0, 'the retake policy is not even evaluated for a reused attempt');
+});
+
+test('claim: a second start while the first is still STREAMING -> GENERATION_IN_PROGRESS, no second row', async () => {
+  resetState({ onCreate: (row: any) => { state.claimExisting = { id: row.id, questionsPayload: row.questionsPayload, analyzedAssetsSnapshot: null }; } , client: noWaseet });
+  const { claimAssessmentGeneration, aiAssessmentService } = await loadSvc();
+  const first = await claimAssessmentGeneration('spec-1', 'profile-1', 'specialty-1');
+  assert.equal(first.claimed, true);
+  await assert.rejects(() => aiAssessmentService.generateAssessment('spec-1', 'user-1'), (e: any) => e.code === 'GENERATION_IN_PROGRESS');
+  const second = await claimAssessmentGeneration('spec-1', 'profile-1', 'specialty-1');
+  assert.equal(second.claimed, false);
+  assert.equal(second.attemptId, 'reserved-1');
+  assert.equal(state.creates.length, 1);
+});
+
+// outcome policy matrix (graded through the real submit pipeline)
+const specUpdateOf = () => state.txUpdates.find((u: any) => u.model === 'specialty').data;
+
+for (const [from, to] of [['UNDER_AI_REVIEW', 'UNDER_AI_REVIEW'], ['REJECTED', 'UNDER_AI_REVIEW'], ['APPROVED', 'APPROVED']] as const) {
+  test(`outcome: PASS on ${from} -> ${to}; records isPassed/quizScore, never writes badgeGrantedAt, never touches the tier`, async () => {
+    resetState({
+      specialtyRow: { status: from, isPassed: from === 'APPROVED', passedAt: null, quizScore: null },
+      attempt: attemptFixture(), client: { submitAssessment: async () => gradedOk({ score: 77, isPassed: true }) }
+    });
+    const { aiAssessmentService } = await loadSvc();
+    const res = await aiAssessmentService.submitAssessment('att-1', { '1': 'a' }, 'user-1');
+    const d = specUpdateOf();
+    assert.equal(d.status, to);
+    assert.equal(d.isPassed, true);
+    assert.equal(d.quizScore, 77);
+    assert.equal(d.latestScore, 77);
+    assert.equal(d.hasTakenAssessment, true);
+    assert.ok(d.passedAt instanceof Date);
+    assert.ok(!('badgeGrantedAt' in d));
+    assert.equal(res.specialtyStatus, to);
+    assert.equal(res.specialtyApproved, from === 'APPROVED');
+    assert.equal(res.awaitingAdminApproval, from !== 'APPROVED');
+    assert.equal(state.userUpdates.length, 0);
+  });
+}
+
+test('outcome: PASS keeps an existing passedAt (first pass time is not moved)', async () => {
+  const first = new Date('2026-01-01T00:00:00Z');
+  resetState({ specialtyRow: { status: 'UNDER_AI_REVIEW', isPassed: true, passedAt: first, quizScore: 70 }, attempt: attemptFixture(), client: { submitAssessment: async () => gradedOk() } });
+  const { aiAssessmentService } = await loadSvc();
+  await aiAssessmentService.submitAssessment('att-1', {}, 'user-1');
+  assert.equal(specUpdateOf().passedAt, first);
+});
+
+test('outcome: FAIL on APPROVED leaves status/isPassed/passedAt/badge/quizScore untouched; only hasTakenAssessment + latestScore change', async () => {
+  resetState({
+    specialtyRow: { status: 'APPROVED', isPassed: true, passedAt: new Date(), quizScore: 90 },
+    attempt: attemptFixture(), client: { submitAssessment: async () => gradedOk({ score: 20, isPassed: false }) }
+  });
+  const { aiAssessmentService } = await loadSvc();
+  const res = await aiAssessmentService.submitAssessment('att-1', {}, 'user-1');
+  assert.deepEqual(specUpdateOf(), { hasTakenAssessment: true, latestScore: 20 });
+  assert.equal(res.specialtyStatus, 'APPROVED');
+  assert.equal(res.specialtyApproved, true);
+  assert.equal(state.userUpdates.length, 0);
+});
+
+test('outcome: FAIL on a specialty that already passed (awaiting admin) is not downgraded either', async () => {
+  resetState({
+    specialtyRow: { status: 'UNDER_AI_REVIEW', isPassed: true, passedAt: new Date(), quizScore: 80 },
+    attempt: attemptFixture(), client: { submitAssessment: async () => gradedOk({ score: 10, isPassed: false }) }
+  });
+  const { aiAssessmentService } = await loadSvc();
+  const res = await aiAssessmentService.submitAssessment('att-1', {}, 'user-1');
+  assert.deepEqual(specUpdateOf(), { hasTakenAssessment: true, latestScore: 10 });
+  assert.equal(res.specialtyStatus, 'UNDER_AI_REVIEW');
+});
+
+test('outcome: FAIL on a non-approved specialty -> REJECTED, isPassed false, badge cleared', async () => {
+  resetState({ attempt: attemptFixture(), client: { submitAssessment: async () => gradedOk({ score: 10, isPassed: false }) } });
+  const { aiAssessmentService } = await loadSvc();
+  const res = await aiAssessmentService.submitAssessment('att-1', {}, 'user-1');
+  const d = specUpdateOf();
+  assert.equal(d.status, 'REJECTED');
+  assert.equal(d.isPassed, false);
+  assert.equal(d.passedAt, null);
+  assert.equal(d.badgeGrantedAt, null);
+  assert.equal(res.specialtyApproved, false);
+  assert.equal(res.awaitingAdminApproval, false);
+});
+
+test('assessmentResultMessage: a pass never claims approval unless the specialty is really approved', async () => {
+  const { assessmentResultMessage } = await loadSvc();
+  const awaiting = assessmentResultMessage({ isPassed: true, specialtyApproved: false, awaitingAdminApproval: true });
+  assert.match(awaiting, /بعد قرار الإدارة/);
+  assert.ok(!/تم اعتماد التخصص|شارة اعتماد/.test(awaiting));
+  assert.ok(!/بعد قرار الإدارة/.test(assessmentResultMessage({ isPassed: true, specialtyApproved: true })));
+  assert.match(assessmentResultMessage({ isPassed: false, specialtyApproved: true }), /لم يتأثر/);
+  assert.match(assessmentResultMessage({ isPassed: false, specialtyApproved: false }), /إعادة المحاولة/);
+});
+
+test('static: the controller and gateway never announce an approval / badge on a pass', () => {
+  for (const f of ['../controllers/ai-assessment.controller.ts', '../sockets/assessment.gateway.ts']) {
+    const src = readFileSync(new URL(f, import.meta.url), 'utf8');
+    assert.ok(!src.includes('تم اعتماد التخصص'), `${f}: no approval wording`);
+    assert.ok(!src.includes('شارة اعتماد الجدارة'), `${f}: no badge wording`);
+    assert.ok(!/'APPROVED'/.test(src), `${f}: no APPROVED status literal`);
+  }
+});
+
+// ── REST controller status codes (never a 500 for business refusals) ─────────
+
+async function runCtl(name: 'generateAssessmentController' | 'submitAssessmentController', req: any) {
+  const ctl = await import('../controllers/ai-assessment.controller.ts');
+  const out: any = {};
+  const res: any = { status: (c: number) => { out.status = c; return res; }, json: (b: any) => { out.body = b; return res; } };
+  await ctl[name](req, res);
+  return out;
+}
+const genReq = { body: { providerSpecialtyId: 'spec-1' }, params: {}, user: { id: 'user-1' } };
+const subReq = (userId = 'user-1') => ({ params: { attemptId: 'att-1' }, body: { answers: { '1': 'a' } }, user: { id: userId } });
+
+test('REST generate: not-eligible -> 409 with code; cooldown -> 429 with code + retryAfterSeconds; attempt limit -> 429; unknown specialty -> 404', async () => {
+  resetState({ specialtyRow: { status: 'APPROVED', isActive: true, isPassed: true }, client: noWaseet });
+  let r = await runCtl('generateAssessmentController', genReq);
+  assert.equal(r.status, 409);
+  assert.equal(r.body.code, 'ASSESSMENT_NOT_ELIGIBLE');
+  assert.equal(r.body.success, false);
+
+  resetState({ recentAttempts: [{ completedAt: ago(HOUR), createdAt: ago(2 * HOUR) }], client: noWaseet });
+  r = await runCtl('generateAssessmentController', genReq);
+  assert.equal(r.status, 429);
+  assert.equal(r.body.code, 'ASSESSMENT_COOLDOWN');
+  assert.ok(r.body.retryAfterSeconds > 0);
+
+  resetState({ recentAttempts: Array.from({ length: 5 }, () => ({ completedAt: ago(48 * HOUR), createdAt: ago(49 * HOUR) })), client: noWaseet });
+  r = await runCtl('generateAssessmentController', genReq);
+  assert.equal(r.status, 429);
+  assert.equal(r.body.code, 'ASSESSMENT_ATTEMPT_LIMIT');
+  assert.equal(r.body.retryAfterSeconds, undefined);
+
+  resetState({ providerSpecialty: null, client: noWaseet });
+  r = await runCtl('generateAssessmentController', genReq);
+  assert.equal(r.status, 404);
+});
+
+test('REST generate: concurrent start -> 409 GENERATION_IN_PROGRESS; WaseetAI generation failure stays 503', async () => {
+  resetState({ claimExisting: { id: 'other', questionsPayload: [], analyzedAssetsSnapshot: null }, client: noWaseet });
+  let r = await runCtl('generateAssessmentController', genReq);
+  assert.equal(r.status, 409);
+  assert.equal(r.body.code, 'GENERATION_IN_PROGRESS');
+
+  resetState({ client: { createAssessment: async () => { throw new Error('down'); } } });
+  const orig = console.error; console.error = () => {};
+  try { r = await runCtl('generateAssessmentController', genReq); } finally { console.error = orig; }
+  assert.equal(r.status, 503);
+});
+
+test('REST submit: unknown / not-owner attempt -> 404, double submit -> 409, grading failure -> 503, pass message is honest', async () => {
+  resetState({ attempt: null, client: { submitAssessment: async () => { throw new Error('must not be called'); } } });
+  let r = await runCtl('submitAssessmentController', subReq('user-2'));
+  assert.equal(r.status, 404);
+
+  resetState({ attempt: attemptFixture({ status: 'COMPLETED' }), client: { submitAssessment: async () => { throw new Error('must not be called'); } } });
+  r = await runCtl('submitAssessmentController', subReq());
+  assert.equal(r.status, 409);
+
+  resetState({ attempt: attemptFixture(), client: { submitAssessment: async () => { throw new Error('timeout'); } } });
+  const orig = console.error; console.error = () => {};
+  try { r = await runCtl('submitAssessmentController', subReq()); } finally { console.error = orig; }
+  assert.equal(r.status, 503);
+  assert.equal(r.body.code, 'ASSESSMENT_GRADING_FAILED');
+
+  resetState({ attempt: attemptFixture(), client: { submitAssessment: async () => gradedOk() } });
+  r = await runCtl('submitAssessmentController', subReq());
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.awaitingAdminApproval, true);
+  assert.ok(!/تم اعتماد التخصص|شارة اعتماد/.test(r.body.message));
 });
