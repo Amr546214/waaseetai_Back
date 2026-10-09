@@ -390,15 +390,15 @@ test('updateTab: arbitrary/unrecognized body fields cannot be written to User', 
   const { profileService, userUpdateSpy, clientUpsertSpy } = await loadProfileServiceForUpdate(t, activeUser);
 
   await profileService.updateTab('user-1', 'basics', {
-    firstName: 'X',
+    avatarUrl: 'https://res.cloudinary.com/x/avatar.png',
     someRandomField: 'malicious',
     isBanned: true,
     walletBalance: 999999
   }, 'CLIENT');
 
-  // firstName is a display field -> routed to ClientProfile, not User.
+  // the avatar is a display field -> routed to ClientProfile, not User (a client's name is a modification request, covered elsewhere).
   assert.equal(clientUpsertSpy.mock.callCount(), 1);
-  assert.equal(clientUpsertSpy.mock.calls[0].arguments[0].update.firstName, 'X');
+  assert.equal(clientUpsertSpy.mock.calls[0].arguments[0].update.avatarUrl, 'https://res.cloudinary.com/x/avatar.png');
 
   // No allowlisted User field was present, so User must not be touched at
   // all — in particular, the arbitrary/dangerous fields must never reach it.
@@ -580,7 +580,8 @@ test('updateProfile (CLIENT): recalculates ClientProfile.completionPercentage fr
 test('updateTab (CLIENT, basics): a display-field mutation recalculates ClientProfile.completionPercentage', async (t) => {
   const { profileService, clientUpdateSpy } = await loadProfileServiceForCompletion(t, { id: 'user-1', status: 'ACTIVE', phoneNumber: '0500000000' });
 
-  await profileService.updateTab('user-1', 'basics', { firstName: 'Amr', lastName: 'Okasha' }, 'CLIENT');
+  // a CLIENT's name is a governed change (request), so the display field that still saves directly and moves completion is the avatar
+  await profileService.updateTab('user-1', 'basics', { avatarUrl: 'https://res.cloudinary.com/x/avatar.png' }, 'CLIENT');
 
   const completionCall = clientUpdateSpy.mock.calls.find((c: any) => 'completionPercentage' in c.arguments[0].data);
   assert.notEqual(completionCall, undefined);
@@ -591,7 +592,7 @@ test('updateProfile/updateTab (CLIENT): neither writes User.profileCompletionPer
   const { profileService, userUpdateSpy } = await loadProfileServiceForCompletion(t, { id: 'user-1', status: 'ACTIVE', phoneNumber: '0500000000' });
 
   await profileService.updateProfile('user-1', 'CLIENT', { firstName: 'Amr', lastName: 'Okasha' } as any);
-  await profileService.updateTab('user-1', 'basics', { firstName: 'Amr' }, 'CLIENT');
+  await profileService.updateTab('user-1', 'basics', { avatarUrl: 'https://res.cloudinary.com/x/avatar.png' }, 'CLIENT');
 
   for (const call of userUpdateSpy.mock.calls) {
     assert.equal('profileCompletionPercent' in call.arguments[0].data, false);

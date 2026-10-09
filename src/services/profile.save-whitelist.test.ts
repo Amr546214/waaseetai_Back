@@ -46,7 +46,7 @@ for (const tab of ['basics', 'contact']) {
 	test(`updateTab(${tab}) writes only the allow-list: a hostile body (accountType/status/roles/isNafathVerified/…) reaches no table`, async () => {
 		reset();
 		const service = await svc();
-		await service.updateTab('u1', tab, { ...HOSTILE, firstName: 'أحمد', lastName: 'علي', alternativePhone: '0500000001', city: 'الرياض', address: 'عنوان', region: 'منطقة', avatarUrl: 'https://a/b.png' }, 'CLIENT');
+		await service.updateTab('u1', tab, { ...HOSTILE, alternativePhone: '0500000001', city: 'الرياض', address: 'عنوان', region: 'منطقة', avatarUrl: 'https://a/b.png' }, 'CLIENT');
 		const forbidden = ['accountType', 'status', 'roles', 'activeRole', 'isNafathVerified', 'kycStatus', 'isVerified', 'id', 'email', 'password', 'idDocumentUrl', 'idNumber', 'profileCompletionPercent', 'role', 'phoneNumber'];
 		const written = [...state.userUpdates, ...state.upserts.flatMap(([, a]) => [a.create ?? {}, a.update ?? {}])];
 		for (const data of written) for (const key of forbidden) assert.equal(key in data, false, `${tab}: ${key} must never be written (${JSON.stringify(Object.keys(data))})`);
