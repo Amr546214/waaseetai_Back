@@ -15,7 +15,7 @@ import { accountAuditLogService, AuditContext } from './account-logs.service';
 import { LEVEL_MATRIX } from './gamification.service';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { computeProviderCompletion, computeProviderMissingItems, computeClientCompletion } from '../utils/completion-calculators';
-import { CLIENT_IDENTITY_REQUEST_CATEGORY } from '../utils/profile-request-categories';
+import { CLIENT_IDENTITY_REQUEST_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY } from '../utils/profile-request-categories';
 import { logger } from '../config/logger';
 import { OtpPurpose, OTP_MAX_ATTEMPTS } from '../utils/otp-purpose';
 import { sessionService } from './session.service';
@@ -1101,6 +1101,8 @@ export class ProviderProfileService {
 					await this.applyLegacyFieldModification(request.providerId, request.fieldName, request.requestedValue);
 				} else if (request.category === CLIENT_IDENTITY_REQUEST_CATEGORY) {
 					await this.applyClientIdentityChange(request.providerId, metadata.changes || {});
+				} else if (request.category === CLIENT_BASIC_INFO_REQUEST_CATEGORY) {
+					await this.applyClientBasicInfoChange(request.providerId, metadata.changes || {});
 				} else {
 					await this.applySensitivePayload(request.providerId, request.category, metadata.changes || {});
 				}
@@ -1116,6 +1118,23 @@ export class ProviderProfileService {
 		const updated = await prisma.profileModificationRequest.findUniqueOrThrow({ where: { id: request.id } });
 		await accountAuditLogService.record({ userId: request.providerId, eventType: 'HUMAN_REVIEW_COMPLETED', category: 'PROFILE_COMPLETION', title: request.fieldLabel, summary: approved ? 'اعتمد المراجع البشري طلب التعديل وتم تطبيقه' : 'رفض المراجع البشري طلب التعديل', source: 'ADMIN', severity: approved ? 'INFO' : 'WARNING', status: approved ? 'APPROVED' : 'REJECTED', statusText: updated.rejectionReason || undefined, requestId, context: auditContext });
 		return updated;
+	}
+
+	/** A client's approved name: written to ClientProfile (where the client UI reads it), then the completion is recomputed. */
+	private async applyClientBasicInfoChange(userId: string, changes: Record<string, unknown>) {
+		const firstName = String(changes.firstName || '').trim();
+		const lastName = String(changes.lastName || '').trim();
+		if (firstName.length < 2 || lastName.length < 2) throw new Error('INVALID_NAME');
+		await prisma.clientProfile.upsert({ where: { userId }, create: { userId, firstName, lastName }, update: { firstName, lastName } });
+		try {
+			const user = await prisma.user.findUnique({ where: { id: userId }, include: { clientProfile: true } });
+			if (user?.clientProfile) {
+				const completion = computeClientCompletion({ user, clientProfile: user.clientProfile });
+				await prisma.clientProfile.update({ where: { userId }, data: { completionPercentage: completion } });
+			}
+		} catch (error) {
+			logger.error(`[ProviderProfileService] Failed to recalculate client completion after an approved name change (userId=${userId})`, error);
+		}
 	}
 
 	/** A client's approved national id / iqama number: written to ClientProfile only, then the completion is recomputed. */

@@ -12,7 +12,7 @@ import { logger } from '../config/logger';
 import { providerProfileService } from './provider-profile.service';
 import { marketerProfileService } from './marketer-profile.service';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
-import { CLIENT_IDENTITY_REQUEST_CATEGORY as CLIENT_IDENTITY_CATEGORY } from '../utils/profile-request-categories';
+import { CLIENT_IDENTITY_REQUEST_CATEGORY as CLIENT_IDENTITY_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY } from '../utils/profile-request-categories';
 
 const maskId = (value: string) => (value.length > 4 ? `${'*'.repeat(value.length - 4)}${value.slice(-4)}` : value);
 
@@ -341,8 +341,15 @@ export class ProfileService {
       }
 
       const displayFields: { firstName?: string; lastName?: string; avatarUrl?: string | null } = {};
-      if (firstName !== undefined) displayFields.firstName = firstName;
-      if (lastName !== undefined) displayFields.lastName = lastName;
+      // A CLIENT's name is a governed field: it is never written here. A change creates a modification request (category
+      // CLIENT_BASIC_INFO) that an admin approves or rejects; the stored name changes only on approval.
+      let nameRequest: { id: string; status: string } | null = null;
+      if (activeRole === UserRole.CLIENT && (firstName !== undefined || lastName !== undefined)) {
+        nameRequest = await this.requestClientNameChange(userId, firstName, lastName);
+      } else {
+        if (firstName !== undefined) displayFields.firstName = firstName;
+        if (lastName !== undefined) displayFields.lastName = lastName;
+      }
       if (avatarUrl !== undefined) {
         displayFields.avatarUrl = avatarUrl === '' ? '' : await storeDataUriIfNeeded(avatarUrl, `waseetai/users/${userId}/avatar`, 'avatar');
       }
@@ -388,6 +395,9 @@ export class ProfileService {
         //     requestedChanges: { email, phoneNumber }
         //   }
         // });
+      }
+      if (nameRequest) {
+        return { message: 'تم إرسال طلب تعديل البيانات الأساسية للمراجعة', isPendingRequest: true, requestId: nameRequest.id, status: nameRequest.status };
       }
       return { message: 'تم التحديث. التعديلات الحساسة تتطلب التحقق.' };
     }
@@ -472,6 +482,46 @@ export class ProfileService {
     }
 
     throw new AppError(`تحديث الملف الشخصي غير مدعوم لهذا الدور: ${activeRole}`, 400);
+  }
+
+  /**
+   * A client's first/last name change -> one modification request (PENDING_HUMAN_REVIEW) with the old and the new full name. Nothing is
+   * written to the profile here. Returns null when the submitted name equals the current one (nothing to review). A second request
+   * while one is pending is refused with 409. Applied only by an admin approval (ProviderProfileService.reviewSensitiveChange).
+   */
+  private async requestClientNameChange(userId: string, firstNameIn: unknown, lastNameIn: unknown): Promise<{ id: string; status: string } | null> {
+    const [profile, user] = await Promise.all([
+      prisma.clientProfile.findUnique({ where: { userId }, select: { firstName: true, lastName: true } }),
+      prisma.user.findUnique({ where: { id: userId }, select: { firstName: true, lastName: true } })
+    ]);
+    const currentFirst = (profile?.firstName ?? user?.firstName ?? '').trim();
+    const currentLast = (profile?.lastName ?? user?.lastName ?? '').trim();
+    const nextFirst = firstNameIn === undefined ? currentFirst : String(firstNameIn ?? '').trim();
+    const nextLast = lastNameIn === undefined ? currentLast : String(lastNameIn ?? '').trim();
+    if (nextFirst.length < 2 || nextLast.length < 2) throw new AppError('الاسم الأول واسم العائلة يجب أن يكون كل منهما حرفين على الأقل', 400);
+    if (nextFirst.length > 50 || nextLast.length > 50) throw new AppError('الاسم طويل جدًا', 400);
+    if (nextFirst === currentFirst && nextLast === currentLast) return null;
+
+    const existing = await prisma.profileModificationRequest.findFirst({
+      where: { providerId: userId, category: CLIENT_BASIC_INFO_REQUEST_CATEGORY, status: 'PENDING_HUMAN_REVIEW' },
+      select: { id: true }
+    });
+    if (existing) throw new AppError('لديك طلب تعديل للبيانات الأساسية قيد المراجعة بالفعل', 409);
+
+    return prisma.profileModificationRequest.create({
+      data: {
+        providerId: userId,
+        category: CLIENT_BASIC_INFO_REQUEST_CATEGORY,
+        fieldName: 'FULL_NAME',
+        fieldLabel: 'الاسم',
+        currentValue: `${currentFirst} ${currentLast}`.trim() || null,
+        requestedValue: `${nextFirst} ${nextLast}`,
+        status: 'PENDING_HUMAN_REVIEW',
+        requiresOtp: false,
+        metadata: { changes: { firstName: nextFirst, lastName: nextLast }, requiresHumanReview: true } as any
+      },
+      select: { id: true, status: true }
+    });
   }
 
   /**
