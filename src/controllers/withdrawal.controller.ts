@@ -37,6 +37,17 @@ export async function listMyWithdrawals(req: Request, res: Response, next: NextF
   } catch (error) { next(error); }
 }
 
+// Marketer's own history: same as listMyWithdrawals but PayPal only (no legacy bank fields in the response).
+export async function listMyMarketerWithdrawals(req: Request, res: Response, next: NextFunction) {
+  try {
+    const rawStatus = req.query.status ? String(req.query.status).toUpperCase() : undefined;
+    const status = rawStatus && Object.values(WithdrawalStatus).includes(rawStatus as WithdrawalStatus) ? rawStatus as WithdrawalStatus : undefined;
+    if (rawStatus && !status) throw new AppError('حالة طلب السحب غير صحيحة', 400);
+    const data = await withdrawalService.listForMarketer(userId(req), status, Number(req.query.page) || 1, Number(req.query.limit) || 10);
+    res.json({ success: true, message: 'تم جلب سجل السحب بنجاح', data });
+  } catch (error) { next(error); }
+}
+
 export async function listWithdrawals(req: Request, res: Response, next: NextFunction) {
   try { const rawStatus = req.query.status ? String(req.query.status).toUpperCase() : undefined; const status = rawStatus && Object.values(WithdrawalStatus).includes(rawStatus as WithdrawalStatus) ? rawStatus as WithdrawalStatus : undefined; if (rawStatus && !status) throw new AppError('حالة طلب السحب غير صحيحة', 400); res.json({ success: true, data: await withdrawalService.list(status, Number(req.query.page) || 1, Number(req.query.limit) || 20) }); } catch (error) { next(error); }
 }

@@ -110,7 +110,7 @@ function createMock(t: TestContext, opts: {
 		user: { findUnique: t.mock.fn(async () => opts.owner) },
 		affiliateProfile: {
 			findUnique: t.mock.fn(async () => opts.affiliateProfile === undefined
-				? { id: 'aff-1', iban: 'SA4420000001234567891234', bankName: 'Bank', accountHolderName: 'Marketer', minimumPayoutAmount: 50 }
+				? { id: 'aff-1', paypalPayoutEmail: 'marketer@example.com', minimumPayoutAmount: 50 }
 				: opts.affiliateProfile)
 		}
 	};
@@ -331,7 +331,10 @@ test('8. end-to-end: createForMarketer -> approve for a marketer who is not a pr
 	});
 	const created = await withdrawalService.createForMarketer('marketer-1', { amount: 400 });
 	assert.equal(created.currency, 'USD');
-	assert.equal(created.method, 'bank_transfer');
+	assert.equal(created.method, 'paypal');
+	assert.equal(created.paypalEmail, 'marketer@example.com');
+	assert.equal(created.iban ?? null, null);
+	assert.equal(created.accountName ?? null, null);
 	const approved = await withdrawalService.approve(created.id, 'admin-1', {});
 	assert.equal(approved.status, 'APPROVED');
 	assert.equal(getWalletSpy.mock.callCount(), 0);
@@ -366,4 +369,33 @@ test('12. created withdrawal rows carry currency USD explicitly (marketer path)'
 	const { withdrawalService, createSpy } = await load(t, { owner: MARKETER, providerWalletBalance: 0, commissions: [{ affiliateId: 'aff-1', amount: 500, status: 'APPROVED' }] });
 	await withdrawalService.createForMarketer('marketer-1', { amount: 400 });
 	assert.equal(createSpy.mock.calls[0].arguments[0].data.currency, 'USD');
+});
+
+test('PayPal only: a marketer without a saved PayPal email gets a clear 400 and nothing is created', async (t) => {
+	const { withdrawalService, withdrawals, createSpy } = await load(t, {
+		owner: MARKETER,
+		providerWalletBalance: 0,
+		commissions: [{ affiliateId: 'aff-1', amount: 500, status: 'APPROVED' }],
+		affiliateProfile: { id: 'aff-1', paypalPayoutEmail: null, minimumPayoutAmount: 50 }
+	});
+	await assert.rejects(withdrawalService.createForMarketer('marketer-1', { amount: 400 }), (e: any) => e.statusCode === 400 && e.message === 'أضف بريد PayPal لاستلام الأرباح');
+	assert.equal(withdrawals.length, 0);
+	assert.equal(createSpy.mock.callCount(), 0);
+});
+
+test('PayPal only: the withdrawal body cannot carry a bank / IBAN / wallet / method / paypalEmail destination (400 from the schema)', async () => {
+	const { createMarketerWithdrawalSchema } = await import('../dtos/withdrawal.dto');
+	assert.equal(createMarketerWithdrawalSchema.safeParse({ amount: 400 }).success, true);
+	for (const extra of [{ iban: 'SA4420000001234567891234' }, { bankName: 'x' }, { accountHolder: 'x' }, { walletNumber: '1' }, { method: 'bank_transfer' }, { paypalEmail: 'other@example.com' }]) {
+		assert.equal(createMarketerWithdrawalSchema.safeParse({ amount: 400, ...extra }).success, false, JSON.stringify(extra));
+	}
+});
+
+test('PayPal only: the marketer history never returns a legacy bank destination (iban / account name / number)', async (t) => {
+	const { withdrawalService } = await load(t, { owner: MARKETER, providerWalletBalance: 0, commissions: [] });
+	const svc: any = withdrawalService;
+	svc.listForUser = async () => ({ items: [{ id: 'w1', method: 'bank_transfer', iban: 'SA4420000001234567891234', accountName: 'Old', accountNumber: '1', amount: 10 }, { id: 'w2', method: 'paypal', paypalEmail: 'm@example.com', amount: 5 }], pagination: {} });
+	const out = await svc.listForMarketer('marketer-1');
+	for (const item of out.items) for (const k of ['iban', 'accountName', 'accountNumber']) assert.equal(k in item, false, k);
+	assert.equal(out.items[1].paypalEmail, 'm@example.com');
 });

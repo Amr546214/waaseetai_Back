@@ -78,12 +78,12 @@ export class MarketerProfileController {
     }
   }
 
-  public async updateBankInfo(req: Request, res: Response, next: NextFunction) {
+  public async updatePaypalPayout(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.id;
       const body = req.body;
       
-      const updated = await marketerProfileService.updateBankInfo(userId, body);
+      const updated = await marketerProfileService.updatePaypalPayout(userId, body.paypalPayoutEmail);
       
       res.status(200).json({
         success: true,

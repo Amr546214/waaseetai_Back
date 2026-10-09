@@ -7,7 +7,7 @@ import { apiLimiter } from '../middlewares/rate-limit.middleware';
 import { marketerKycController } from '../controllers/marketer-kyc.controller';
 import { memoryUpload } from '../utils/cloudinary-storage';
 import { CreateIdentityRequestSchema } from '../dtos/profile-requests.dto';
-import { updateBankInfoSchema, updateMarketingInfoSchema, addChannelSchema } from '../dtos/marketer-profile.dto';
+import { updatePaypalPayoutSchema, updateMarketingInfoSchema, addChannelSchema } from '../dtos/marketer-profile.dto';
 
 const router = Router();
 
@@ -30,7 +30,9 @@ router.post('/channels', validateDto(addChannelSchema), marketerProfileControlle
 router.delete('/channels/:id', marketerProfileController.removeChannel);
 router.post('/kyc-document', kycUpload.single('file'), marketerKycController.upload);
 router.get('/kyc-status', marketerKycController.status);
-router.patch('/bank-info', validateDto(updateBankInfoSchema), marketerProfileController.updateBankInfo);
+// PayPal is the only payout destination. '/bank-info' stays as an alias so an old page gets the clear PayPal-only 400, never a bank save.
+router.patch('/paypal', validateDto(updatePaypalPayoutSchema), marketerProfileController.updatePaypalPayout);
+router.patch('/bank-info', validateDto(updatePaypalPayoutSchema), marketerProfileController.updatePaypalPayout);
 
 // Change Requests
 router.get('/requests', profileRequestsController.getRequests);

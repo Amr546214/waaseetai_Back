@@ -1665,6 +1665,8 @@ model AffiliateProfile {
   accountHolderName String?
   iban              String?
   swiftCode         String?
+  // PayPal is the only payout destination (legacy bank columns above are never shown or used). NOT EXECUTED migration: 20261009120000.
+  paypalPayoutEmail String?
   identityVerified  Boolean @default(false)
   kycDocumentUrl    String?
 

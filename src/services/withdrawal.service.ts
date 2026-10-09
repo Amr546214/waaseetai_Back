@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { Prisma, WithdrawalStatus, CommissionStatus, AccountType, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
+import { readAffiliatePaypalEmail } from '../utils/affiliate-payout';
 import { AppError } from '../utils/app-error';
 import { CreateWithdrawalInput, CreateMarketerWithdrawalInput, RejectWithdrawalInput, ResolveWithdrawalInput } from '../dtos/withdrawal.dto';
 import { providerFinanceService } from './provider-finance.service';
@@ -9,6 +10,7 @@ import { paypalEmailChangeService } from './paypal-email-change.service';
 import { PAYPAL_EMAIL_FROZEN_MESSAGE } from '../utils/paypal-email-messages';
 import { deriveWithdrawalReferenceId } from '../utils/withdrawal-reference.util';
 
+export const MARKETER_PAYPAL_REQUIRED_MESSAGE = 'أضف بريد PayPal لاستلام الأرباح';
 const NO_APPROVED_BANK_DATA_MESSAGE = 'لا توجد بيانات بنكية معتمدة للسحب';
 
 const MAX_SERIALIZATION_RETRIES = 3;
@@ -231,7 +233,7 @@ export class WithdrawalService {
   async createForMarketer(userId: string, input: CreateMarketerWithdrawalInput) {
     const affiliate = await prisma.affiliateProfile.findUnique({
       where: { userId },
-      select: { id: true, iban: true, bankName: true, accountHolderName: true, minimumPayoutAmount: true }
+      select: { id: true, minimumPayoutAmount: true }
     });
     if (!affiliate) throw new AppError('ملف الوسيط التسويقي غير موجود', 404);
     // Fail closed for a user who is ALSO a provider: approve() cannot tell a
@@ -245,9 +247,9 @@ export class WithdrawalService {
     if (owner && isProviderIdentity(owner)) {
       throw new AppError('سحب العمولات غير متاح حاليًا للحسابات التي تجمع بين دور الوسيط ودور مقدم الخدمة، يرجى التواصل مع الدعم', 409);
     }
-    if (!affiliate.iban) {
-      throw new AppError('يجب إضافة رقم الحساب البنكي (IBAN) من الملف الشخصي قبل تقديم طلب سحب', 400);
-    }
+    // PayPal is the only payout destination: the saved PayPal email is snapshotted on the withdrawal (never a bank account).
+    const paypalEmail = await readAffiliatePaypalEmail(userId, prisma);
+    if (!paypalEmail) throw new AppError(MARKETER_PAYPAL_REQUIRED_MESSAGE, 400);
     // P-LG-012 states a 300 withdrawal-minimum floor. This respects any
     // existing per-affiliate custom minimumPayoutAmount value (which may be
     // set higher than 300) while enforcing 300 as an absolute floor for
@@ -288,9 +290,8 @@ export class WithdrawalService {
               userId,
               amount: input.amount,
               currency: 'USD',
-              method: 'bank_transfer',
-              accountName: affiliate.accountHolderName,
-              iban: affiliate.iban,
+              method: 'paypal',
+              paypalEmail,
               status: WithdrawalStatus.PENDING,
             },
           });
@@ -301,6 +302,12 @@ export class WithdrawalService {
       }
     }
     throw new AppError('تعذر إنشاء طلب السحب بعد عدة محاولات متزامنة، حاول مرة أخرى', 409);
+  }
+
+  /** A marketer's own withdrawals: PayPal only. Any legacy bank destination on an old row (iban / account name / number) is never returned. */
+  async listForMarketer(userId: string, status?: WithdrawalStatus, page = 1, limit = 10) {
+    const data = await this.listForUser(userId, status, page, limit);
+    return { ...data, items: data.items.map(({ iban: _i, accountName: _n, accountNumber: _a, ...safe }) => safe) };
   }
 
   async listForUser(userId: string, status?: WithdrawalStatus, page = 1, limit = 10) {

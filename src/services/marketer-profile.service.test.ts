@@ -49,64 +49,46 @@ async function loadService(t: TestContext, opts?: Parameters<typeof createMockPr
 	return { marketerProfileService, ...mocks };
 }
 
-test('updateBankInfo: IBAN change creates a governed request, never a direct AffiliateProfile write (existing behavior preserved)', async (t) => {
-	const { marketerProfileService, affiliateUpdateSpy } = await loadService(t);
+async function loadPaypalService(t: TestContext, updateImpl: (args: any) => any) {
+	const updateSpy = t.mock.fn(async (args: any) => updateImpl(args));
+	t.mock.module('../config/db', { namedExports: { prisma: { affiliateProfile: {
+		update: updateSpy,
+		findUnique: async () => ({ avatarUrl: null, bio: null, paypalPayoutEmail: 'm@example.com', marketingChannels: [], user: {} }),
+	} } } });
+	const { marketerProfileService } = await import(`./marketer-profile.service.ts?fixture=${Date.now()}-${Math.random()}`);
+	return { marketerProfileService, updateSpy };
+}
 
-	const result = await marketerProfileService.updateBankInfo('user-1', { iban: 'SA0311000000000000000001' });
-
-	assert.equal(result.success, true);
-	assert.equal(result.isPendingRequest, true);
-	assert.equal(result.requests.length, 1);
-	assert.equal(result.requests[0].fieldType, 'IBAN');
-	assert.equal(affiliateUpdateSpy.mock.callCount(), 0);
+test('updatePaypalPayout: saves the PayPal email (trimmed, lower-case) and writes no bank column', async (t) => {
+	const { marketerProfileService, updateSpy } = await loadPaypalService(t, (a) => ({ id: 'aff-1', ...a.data }));
+	const result = await marketerProfileService.updatePaypalPayout('user-1', '  Marketer@Example.com ');
+	assert.equal(result.paypalPayoutEmail, 'marketer@example.com');
+	const first = updateSpy.mock.calls[0].arguments[0];
+	assert.deepEqual(first.data, { paypalPayoutEmail: 'marketer@example.com' });
+	for (const call of updateSpy.mock.calls) for (const k of ['iban', 'bankName', 'accountHolderName', 'swiftCode']) assert.equal(k in call.arguments[0].data, false);
 });
 
-test('updateBankInfo: bankName/accountHolderName/swiftCode are now ALSO governed — no immediate write for any of them', async (t) => {
-	const { marketerProfileService, affiliateUpdateSpy } = await loadService(t);
-
-	const result = await marketerProfileService.updateBankInfo('user-1', {
-		bankName: 'بنك الرياض',
-		accountHolderName: 'Amr Okasha',
-		swiftCode: 'RIBLSARI'
-	});
-
-	assert.equal(result.requests.length, 3);
-	assert.equal(affiliateUpdateSpy.mock.callCount(), 0);
-	const fieldTypes = result.requests.map((r: any) => r.fieldType).sort();
-	assert.deepEqual(fieldTypes, ['ACCOUNT_HOLDER_NAME', 'BANK_NAME', 'SWIFT_CODE']);
+test('updatePaypalPayout: an empty value removes the saved email', async (t) => {
+	const { marketerProfileService, updateSpy } = await loadPaypalService(t, (a) => ({ id: 'aff-1', ...a.data }));
+	await marketerProfileService.updatePaypalPayout('user-1', '');
+	assert.deepEqual(updateSpy.mock.calls[0].arguments[0].data, { paypalPayoutEmail: null });
 });
 
-test('updateBankInfo: all four fields changed together create four independent request rows', async (t) => {
-	const { marketerProfileService } = await loadService(t);
-
-	const result = await marketerProfileService.updateBankInfo('user-1', {
-		iban: 'SA0311000000000000000001',
-		bankName: 'بنك الرياض',
-		accountHolderName: 'Amr Okasha',
-		swiftCode: 'RIBLSARI'
-	});
-
-	assert.equal(result.requests.length, 4);
+test('updatePaypalPayout: a database without the column answers a clear 503, not a raw error', async (t) => {
+	const { marketerProfileService } = await loadPaypalService(t, () => { throw Object.assign(new Error('column does not exist'), { code: 'P2022' }); });
+	await assert.rejects(() => marketerProfileService.updatePaypalPayout('user-1', 'a@b.com'), (e: any) => e.statusCode === 503);
 });
 
-test('updateBankInfo: resubmitting the exact current values throws (no change)', async (t) => {
-	const { marketerProfileService } = await loadService(t, {
-		profile: { id: 'aff-1', userId: 'user-1', iban: 'SA0311000000000000000001', bankName: null, accountHolderName: null, swiftCode: null }
-	});
-
-	await assert.rejects(() => marketerProfileService.updateBankInfo('user-1', { iban: 'SA0311000000000000000001' }));
-});
-
-test('updateBankInfo: a duplicate pending IBAN request blocks resubmission with 409, no new row created', async (t) => {
-	const { marketerProfileService, requests } = await loadService(t, {
-		existingRequests: [{ id: 'r1', affiliateProfileId: 'aff-1', fieldType: 'IBAN', status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-1' }]
-	});
-
-	await assert.rejects(
-		() => marketerProfileService.updateBankInfo('user-1', { iban: 'SA9999999999999999999999' }),
-		(error: any) => error.statusCode === 409
-	);
-	assert.equal(requests.length, 1);
+test('PayPal-only payload: any bank / IBAN / holder / wallet / swift field is rejected by the schema (nothing reaches the service)', async () => {
+	const { updatePaypalPayoutSchema } = await import('../dtos/marketer-profile.dto');
+	assert.equal(updatePaypalPayoutSchema.safeParse({ paypalPayoutEmail: 'a@b.com' }).success, true);
+	assert.equal(updatePaypalPayoutSchema.safeParse({ paypalPayoutEmail: '' }).success, true);
+	assert.equal(updatePaypalPayoutSchema.safeParse({ paypalPayoutEmail: 'not-an-email' }).success, false);
+	for (const extra of [{ iban: 'SA0311000000000000000001' }, { bankName: 'x' }, { accountHolderName: 'x' }, { swiftCode: 'RIBLSARI' }, { walletNumber: '1' }, { walletProvider: 'x' }]) {
+		const r = updatePaypalPayoutSchema.safeParse({ paypalPayoutEmail: 'a@b.com', ...extra });
+		assert.equal(r.success, false, JSON.stringify(extra));
+		assert.match(r.error!.issues[0].message, /PayPal/);
+	}
 });
 
 // Implementation Batch 3, Part A — public marketer profile. These tests
@@ -301,7 +283,9 @@ test('getProfile: selects AffiliateProfile scalars explicitly (never a bare `inc
 
 	await marketerProfileService.getProfile('user-1');
 
-	assert.equal(findUniqueSpy.mock.callCount(), 1);
+	// the profile read, plus the separate PayPal-email read (so a database without that column cannot fail the whole profile)
+	assert.equal(findUniqueSpy.mock.callCount(), 2);
+	assert.deepEqual(findUniqueSpy.mock.calls[1].arguments[0].select, { paypalPayoutEmail: true });
 	const args = findUniqueSpy.mock.calls[0].arguments[0];
 	assert.ok(args.select, 'must pass an explicit select');
 	assert.equal('level' in args.select, false);
@@ -352,7 +336,7 @@ test('addChannel: the profile lookup selects only { id: true } and never `level`
 		findUniqueSpy(args);
 		return args.select?.id !== undefined && Object.keys(args.select).length === 1
 			? { id: 'aff-1' }
-			: { avatarUrl: null, bio: null, iban: null, marketingChannels: [], user: { firstName: 'Khalid', lastName: 'Ghamdi', email: 'k@example.com', avatarUrl: null } };
+			: { avatarUrl: null, bio: null, marketingChannels: [], user: { firstName: 'Khalid', lastName: 'Ghamdi', email: 'k@example.com', avatarUrl: null } };
 	});
 
 	const channel = await marketerProfileService.addChannel('user-1', { platform: 'INSTAGRAM', handle: '@khalid' });
@@ -361,7 +345,7 @@ test('addChannel: the profile lookup selects only { id: true } and never `level`
 	assert.equal(createSpy.mock.calls[0].arguments[0].data.affiliateProfileId, 'aff-1');
 	// First call is addChannel()'s own lookup (the one under test); the
 	// second is recalculateCompletion()'s separate, already-narrow lookup.
-	assert.equal(findUniqueSpy.mock.callCount(), 2);
+	assert.equal(findUniqueSpy.mock.callCount(), 3); // + the PayPal-email read of the completion recalculation
 	const args = findUniqueSpy.mock.calls[0].arguments[0];
 	assert.deepEqual(args.select, { id: true });
 	assert.equal('level' in args.select, false);

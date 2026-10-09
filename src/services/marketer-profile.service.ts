@@ -1,11 +1,11 @@
 import { prisma } from '../config/db';
-import { ChangeRequestStatus, Prisma, SensitiveFieldType } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { logger } from '../config/logger';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { computeAffiliateCompletion, computeAffiliateMissingItems } from '../utils/completion-calculators';
-import { createGovernedFieldRequests, FieldChangeCandidate } from './profile-requests.service';
 import { AppError } from '../utils/app-error';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
+import { readAffiliatePaypalEmail, withoutLegacyAffiliateBankFields } from '../utils/affiliate-payout';
 
 // Explicit public-safe shape (Implementation Batch 3, Part A). Never the
 // full AffiliateProfile row — bank/IBAN/KYC/email/phone/commission-rate
@@ -57,17 +57,16 @@ export class MarketerProfileService {
       throw new Error('Affiliate profile not found');
     }
 
-    // Completion is recomputed from the rows just read (so a stored value that predates the current formula, or one that
-    // went stale when an admin approved the IBAN, is healed on read) and returned with what is still missing. The stored
-    // column is synced when it differs (best effort, never fails the read).
-    const pendingIbanReview = await this.hasPendingIbanReview(profile.id);
+    // Completion is recomputed from the rows just read (a stored value that predates the current formula is healed on read) and returned
+    // with what is still missing. The stored column is synced when it differs (best effort, never fails the read).
+    const paypalPayoutEmail = await readAffiliatePaypalEmail(userId, prisma);
     const completionInput = {
       user: profile.user,
-      affiliateProfile: profile,
+      affiliateProfile: { ...profile, paypalPayoutEmail },
       marketingChannelsCount: profile.marketingChannels?.length || 0
     };
     const completionPercentage = computeAffiliateCompletion(completionInput);
-    const missingItems = computeAffiliateMissingItems(completionInput, { pendingIbanReview });
+    const missingItems = computeAffiliateMissingItems(completionInput);
     if (profile.completionPercentage !== completionPercentage) {
       try {
         await prisma.affiliateProfile.update({ where: { userId }, data: { completionPercentage }, select: { id: true } });
@@ -76,28 +75,8 @@ export class MarketerProfileService {
       }
     }
 
-    // Bank state for the pages: 'approved' (an IBAN is on the profile), 'pending_review' (a request is waiting for review),
-    // or 'none'. bankChangePending is true when a change request is pending even though an approved IBAN already exists.
-    const bankStatus = profile.iban ? 'approved' : pendingIbanReview ? 'pending_review' : 'none';
-
-    return Object.assign(profile, { completionPercentage, missingItems, bankStatus, bankChangePending: pendingIbanReview });
-  }
-
-  /** True while an IBAN request is waiting for the AI/human review (a read failure falls back to false, never breaking the profile read). */
-  private async hasPendingIbanReview(affiliateProfileId: string): Promise<boolean> {
-    try {
-      const count = await prisma.profileChangeRequest.count({
-        where: {
-          affiliateProfileId,
-          fieldType: SensitiveFieldType.IBAN,
-          status: { in: [ChangeRequestStatus.PENDING_AI_REVIEW, ChangeRequestStatus.PENDING_HUMAN_APPROVAL] }
-        }
-      });
-      return count > 0;
-    } catch (error) {
-      logger.error(`[MarketerProfileService] Could not read pending IBAN requests (affiliateProfileId=${affiliateProfileId})`, error);
-      return false;
-    }
+    // PayPal is the only payout destination: the legacy bank columns are never returned.
+    return Object.assign(withoutLegacyAffiliateBankFields(profile), { paypalPayoutEmail, completionPercentage, missingItems });
   }
 
   /**
@@ -177,7 +156,7 @@ export class MarketerProfileService {
     });
 
     await this.recalculateCompletion(userId);
-    return profile;
+    return withoutLegacyAffiliateBankFields(profile);
   }
 
   public async addChannel(userId: string, data: { platform: string; handle: string; url?: string }) {
@@ -212,42 +191,22 @@ export class MarketerProfileService {
   }
 
   /**
-   * ALL banking fields are governed — this page's own "gov-bar" copy says
-   * editing "الحساب البنكي والمستندات" creates a request an AI checks and a
-   * human approves, but previously only IBAN actually went through
-   * ProfileChangeRequest while bankName/accountHolderName/swiftCode were
-   * applied immediately (a real gap between the UI's promise and the code).
-   * None of the four fields are written directly anymore — every changed
-   * field becomes its own governed ProfileChangeRequest via the shared
-   * createGovernedFieldRequests helper (same duplicate-pending and
-   * unchanged-value rules as the identity-fields flow), and the real
-   * AffiliateProfile row is only ever touched later, by an admin approval.
+   * Saves (or, with an empty value, removes) the marketer's PayPal payout email: the only payout destination. Applied at once (an email is
+   * not a governed identity field). A database without the column yet answers a clear 503 instead of a raw error.
    */
-  public async updateBankInfo(userId: string, data: { bankName?: string; accountHolderName?: string; iban?: string; swiftCode?: string }) {
-    return prisma.$transaction(async (tx) => {
-      // Explicit select — deployment-safety fix; only these fields are read
-      // below (id + the 4 bank fields being compared/governed).
-      const profile = await tx.affiliateProfile.findUnique({
-        where: { userId },
-        select: { id: true, iban: true, bankName: true, accountHolderName: true, swiftCode: true }
-      });
-      if (!profile) throw new Error('Affiliate profile not found');
-
-      const candidates: FieldChangeCandidate[] = [
-        { fieldType: SensitiveFieldType.IBAN, fieldLabel: 'رقم الحساب البنكي IBAN', currentValue: profile.iban, requestedValue: data.iban },
-        { fieldType: SensitiveFieldType.BANK_NAME, fieldLabel: 'اسم البنك', currentValue: profile.bankName, requestedValue: data.bankName },
-        { fieldType: SensitiveFieldType.ACCOUNT_HOLDER_NAME, fieldLabel: 'اسم صاحب الحساب', currentValue: profile.accountHolderName, requestedValue: data.accountHolderName },
-        { fieldType: SensitiveFieldType.SWIFT_CODE, fieldLabel: 'رمز السويفت', currentValue: profile.swiftCode, requestedValue: data.swiftCode }
-      ];
-
-      const created = await createGovernedFieldRequests(tx, profile.id, candidates);
-
-      return {
-        success: true,
-        isPendingRequest: true,
-        requests: created
-      };
-    });
+  public async updatePaypalPayout(userId: string, email: string | null | undefined) {
+    const value = email ? String(email).trim().toLowerCase() : null;
+    try {
+      const updated = await prisma.affiliateProfile.update({ where: { userId }, data: { paypalPayoutEmail: value }, select: { id: true } });
+      if (!updated) throw new AppError('ملف الوسيط التسويقي غير موجود', 404);
+    } catch (error: any) {
+      if (error instanceof AppError) throw error;
+      if (error?.code === 'P2025') throw new AppError('ملف الوسيط التسويقي غير موجود', 404);
+      if (error?.code === 'P2022') throw new AppError('حفظ بريد PayPal غير متاح مؤقتًا، حاول لاحقًا', 503);
+      throw error;
+    }
+    await this.recalculateCompletion(userId);
+    return { success: true, paypalPayoutEmail: value };
   }
 
   /**
@@ -263,7 +222,6 @@ export class MarketerProfileService {
       select: {
         avatarUrl: true,
         bio: true,
-        iban: true,
         marketingChannels: { select: { id: true } },
         user: { select: { avatarUrl: true } }
       }
@@ -271,9 +229,10 @@ export class MarketerProfileService {
 
     if (!profile) return;
 
+    const paypalPayoutEmail = await readAffiliatePaypalEmail(userId, prisma) // outside the transaction: a missing column must not abort it;
     const percentage = computeAffiliateCompletion({
       user: profile.user,
-      affiliateProfile: profile,
+      affiliateProfile: { ...profile, paypalPayoutEmail },
       marketingChannelsCount: profile.marketingChannels?.length || 0
     });
 
