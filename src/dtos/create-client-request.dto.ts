@@ -35,8 +35,8 @@ export const createClientRequestSchema = z.object({
 export type CreateClientRequestDto = z.infer<typeof createClientRequestSchema>;
 
 export const clientRequestAiSuggestSchema = z.object({
-  title: z.string().optional(),
-  description: z.string().optional(),
+  title: z.string().max(80, 'عنوان الطلب يجب ألا يتجاوز 80 حرفًا').optional(),
+  description: z.string().max(2000, 'وصف المشروع يجب ألا يتجاوز 2000 حرف').optional(),
   specialtyId: z.string().optional(),
   specialtyName: z.string().optional(),
   subSpecialties: z.array(z.string()).optional().default([])
