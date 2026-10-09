@@ -95,26 +95,20 @@ test('client saveSetupData: recalculates ClientProfile.completionPercentage afte
   assert.equal(completionCall.arguments[0].data.completionPercentage > 0, true);
 });
 
-test('client saveSetupData: isProfileComplete is preserved and completion write never touches User', async (t) => {
+test('client saveSetupData: isProfileComplete reflects what was STORED (a sparse POST is not complete) and the completion write never touches User', async (t) => {
   const { clientProfileController, prismaMock } = await loadControllerWithFixture(t);
   const userUpdateSpy = (prismaMock.user as any).update;
   assert.equal(userUpdateSpy, undefined); // prismaMock.user has no update method at all — proves saveSetupData cannot call it
 
-  const req: any = {
-    user: { userId: 'user-1' },
-    body: {
-      details: { idNumber: '1234567890' },
-      identity: {},
-      bank: {},
-      documents: {},
-      agreements: { accurate: true, terms: true, privacy: true }
-    }
-  };
+  const sparse: any = { user: { userId: 'user-1' }, body: { details: { idNumber: '1234567890' }, identity: {}, bank: {}, documents: {}, agreements: { accurate: true, terms: true, privacy: true } } };
   const res = createMockRes();
+  await clientProfileController.saveSetupData(sparse, res, () => {});
+  assert.equal(res.body.data.isProfileComplete, false, 'country/city/occupation/address/dob were not stored');
 
-  await clientProfileController.saveSetupData(req, res, () => {});
-
-  assert.equal(res.body.data.isProfileComplete, true);
+  const full: any = { user: { userId: 'user-1' }, body: { details: { idNumber: '1234567890', dob: '1990-05-01', country: 'السعودية', city: 'الرياض', occupation: 'مهندس', address: 'حي النخيل' }, identity: {}, bank: {}, documents: {}, agreements: { accurate: true, terms: true, privacy: true } } };
+  const res2 = createMockRes();
+  await clientProfileController.saveSetupData(full, res2, () => {});
+  assert.equal(res2.body.data.isProfileComplete, true);
 });
 
 // ---- Client PayPal payout (setup) ----

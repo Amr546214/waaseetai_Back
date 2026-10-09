@@ -9,6 +9,7 @@ import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../u
 import { sessionService } from '../services/session.service';
 import { computeProviderCompletion } from '../utils/completion-calculators';
 import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
+import { normalizeProviderSetupPayload, isProviderSetupComplete } from '../utils/provider-setup-payload';
 
 import { providerBioSuggestSchema, providerSkillsSuggestSchema, setupSkillsSchema } from '../dtos/provider-profile-suggest.dto';
 
@@ -105,10 +106,14 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		if (!userId) return res.status(401).json({ message: 'Unauthorized' });
 
 		const payload = req.body;
-		const { details, identity, bank, documents, agreements, specialties, portfolio } = payload;
+		const { bank, portfolio } = payload;
 		// PayPal is the only financial method: a bank / IBAN / holder / wallet value is refused, never silently dropped.
 		const forbiddenPayout = [...nonPaypalPayoutKeys(payload), ...nonPaypalPayoutKeys(bank)];
 		if (forbiddenPayout.length) return res.status(400).json({ success: false, message: PAYPAL_ONLY_MESSAGE, errors: forbiddenPayout.map(k => ({ path: k, field: k, message: PAYPAL_ONLY_MESSAGE, code: 'custom' })) });
+		// Known alternative names are mapped onto the canonical fields; an unknown field is a 400 (never accepted and silently dropped).
+		const normalized = normalizeProviderSetupPayload(payload);
+		if (!normalized.ok) return res.status(400).json({ success: false, message: 'بعض الحقول غير مدعومة أو غير صالحة ولم يُحفظ شيء', errors: normalized.errors });
+		const { details, identity, documents, agreements, specialties } = normalized.value;
 		// Only the explicit ordinary save connects accepted skill names. Resolve
 		// every name before any writes/uploads; never upsert taxonomy rows.
 		let skillConnections: { id: string }[] | undefined;
@@ -138,7 +143,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		const providerData = {
 			userId,
 			idNumber: details?.idNumber || undefined,
-			dob: details?.dob ? new Date(details.dob) : (storedIdentity?.kycStatus === 'VERIFIED' ? undefined : null),
+			dob: details?.dob ? new Date(details.dob) : undefined, // absent = keep the stored value (a re-save never erases it)
 			country: clean(details?.country, 60),
 			city: clean(details?.city, 80),
 			industry: clean(details?.occupation, 100),
@@ -148,13 +153,8 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			address: clean(details?.address, 500),
 			bio: typeof details?.bio === 'string' ? sanitizeText(details.bio) : details?.bio,
 			languages: cleanList(details?.languages, 40, 20),
-			yearsOfExperience: details?.expYears ?
-				(details.expYears === 'أقل من سنة' ? 1 :
-					details.expYears === '1 الى 3 سنوات' ? 2 :
-						details.expYears === '3 الى 5 سنوات' ? 4 :
-							details.expYears === '5 الى 10 سنوات' ? 7 :
-								details.expYears === 'أكثر من 10 سنوات' ? 10 :
-									parseInt(details.expYears, 10) || null) : null,
+			yearsOfExperience: normalized.value.yearsOfExperience,
+			hourlyRate: normalized.value.hourlyRate,
 
 			mainSpecialty: clean(specialties?.mainSpec, 100),
 			subSpecialties: cleanList(specialties?.subSpecs, 100, 30),
@@ -173,7 +173,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			termsAgreed: agreements?.terms,
 			privacyAgreed: agreements?.privacy,
 
-			isProfileSetupComplete: true,
+			// isProfileSetupComplete is decided below from what was really stored, not assumed from the POST.
 			...(skillConnections !== undefined && { skills: { connect: skillConnections } })
 		};
 
@@ -224,7 +224,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		// User.status is NOT touched by the setup wizard (AUD-FND-000036): it changes only through OTP activation or an admin decision.
 		const identityChanged = identitySubmissionChanged(storedIdentity, details ?? {}, { front: frontIdUrl, back: backIdUrl });
 		const [updatedResult] = await prisma.$transaction([
-			prisma.providerProfile.update({ where: { userId }, data: { completionPercentage: completion } }),
+			prisma.providerProfile.update({ where: { userId }, data: { completionPercentage: completion, isProfileSetupComplete: isProviderSetupComplete(finalProfile) } }),
 			// Submitting a changed, complete identity (idNumber + front + back) marks an UNVERIFIED/REJECTED profile as PENDING review;
 			// a VERIFIED one is never downgraded and an unchanged re-save never re-opens a review.
 			...(identityChanged

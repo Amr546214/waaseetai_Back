@@ -66,11 +66,11 @@ async function register(c: Awaited<ReturnType<typeof loadAll>>, f: ReturnType<ty
   await c.authService.registerUser(input, { refCookieSlug });
 }
 
-test('flow: a real referral click redirects to /auth/register?ref=1 and a client registering in that visit is attributed', async (t) => {
+test('flow: a real referral click redirects to /auth/register?ref=<slug> and a client registering in that visit is attributed', async (t) => {
   const f = setupFlow(t);
   const c = await loadAll();
   await clickReferralLink(c, f);
-  assert.deepEqual(f.res.redirected, { code: 302, url: '/auth/register?ref=1' });
+  assert.deepEqual(f.res.redirected, { code: 302, url: '/auth/register?ref=khalid2026' });
   assert.equal(f.jar.waseet_ref_code, 'khalid2026');
 
   await register(c, f, { ...INPUT });
@@ -105,5 +105,21 @@ test('flow: marketer from a real referral click is still never referred', async 
   const c = await loadAll();
   await clickReferralLink(c, f);
   await register(c, f, { ...INPUT, accountType: 'MARKETING_BROKER' });
+  assert.equal(f.referrals.length, 0);
+});
+
+// The real slug travels in the URL and in the registration payload (no cookie needed): attribution follows the payload.
+test('flow: the registration payload carries the slug (?ref=<slug> page) and attributes the signup without any cookie', async (t) => {
+  const f = setupFlow(t);
+  const c = await loadAll();
+  await c.authService.registerUser({ ...INPUT, affiliateIdentifier: 'khalid2026' }, {});
+  assert.equal(f.referrals.length, 1);
+  assert.equal(f.referrals[0].affiliateId, 'affiliate-1');
+});
+
+test('flow: an unknown/expired slug in the payload creates NO attribution and does not block the signup', async (t) => {
+  const f = setupFlow(t);
+  const c = await loadAll();
+  await c.authService.registerUser({ ...INPUT, affiliateIdentifier: 'no-such-marketer' }, {});
   assert.equal(f.referrals.length, 0);
 });

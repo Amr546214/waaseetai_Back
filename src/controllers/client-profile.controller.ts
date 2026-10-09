@@ -9,6 +9,7 @@ import { clientProfileService } from '../services/client-profile.service';
 import { AppError } from '../utils/app-error';
 import { onboardingService } from '../services/onboarding.service';
 import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE, withoutLegacyPayoutFields } from '../utils/client-payout-fields';
+import { normalizeClientSetupBody, isClientSetupComplete } from '../utils/client-setup-payload';
 import { clientSetupSchema, clientSetupStepSchemas, ClientSetupStep } from '../dtos/client-profile-setup.dto';
 import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
 
@@ -66,7 +67,10 @@ export class ClientProfileController {
     try {
       const userId = req.user!.userId;
       // Full validation first: types, length limits, a missing object or a non-true agreement is a 400 (never a TypeError/500).
-      const parsed = clientSetupSchema.safeParse(req.body);
+      // Known alternative names are mapped onto the canonical fields; an unknown field is a 400 (never accepted and silently dropped).
+      const normalized = normalizeClientSetupBody(req.body);
+      if (!normalized.ok) return res.status(400).json({ success: false, message: 'بعض الحقول غير مدعومة ولم يُحفظ شيء', errors: normalized.errors });
+      const parsed = clientSetupSchema.safeParse(normalized.body);
       if (!parsed.success) {
         const errors = parsed.error.issues.map(issue => {
           const field = issue.path.join('.');
@@ -109,11 +113,13 @@ export class ClientProfileController {
         userId,
         // '' / null = not provided: a stored idNumber / dob is kept (a VERIFIED identity is never erased by a re-save)
         idNumber: details.idNumber || undefined,
-        dob: details.dob ? new Date(details.dob) : (stored?.kycStatus === 'VERIFIED' ? undefined : null),
+        dob: details.dob ? new Date(details.dob) : undefined, // absent = keep the stored value (a re-save never erases it)
         country: details.country,
         city: details.city,
         industry: details.occupation,
         address: details.address,
+        bio: details.bio,
+        ...(Array.isArray(details.interests) ? { interests: details.interests } : {}),
         
         // Empty/absent = "keep what is stored": the client can no longer see a stored private document, so a re-save must not wipe it.
         frontIdUrl: frontIdUrl || undefined,
@@ -132,7 +138,7 @@ export class ClientProfileController {
         termsAgreed: agreements.terms,
         privacyAgreed: agreements.privacy,
 
-        isProfileComplete: true
+        // isProfileComplete is decided below from what was really stored, not assumed from the POST
       };
 
       // Phase 3D.2A: recalculate ClientProfile.completionPercentage from the
@@ -153,7 +159,7 @@ export class ClientProfileController {
       const completion = computeClientCompletion({ user: currentUser || {}, clientProfile: result });
       const finalResult = await prisma.clientProfile.update({
         where: { userId },
-        data: { completionPercentage: completion }
+        data: { completionPercentage: completion, isProfileComplete: isClientSetupComplete(result) }
       });
 
       res.status(200).json({
@@ -203,7 +209,9 @@ export class ClientProfileController {
           country: d.country || undefined,
           city: d.city || undefined,
           industry: d.occupation || undefined,
-          address: d.address || undefined
+          address: d.address || undefined,
+          bio: d.bio || undefined,
+          ...(Array.isArray(d.interests) ? { interests: d.interests } : {})
         });
         identityArgs = { details: d };
       } else if (step === 2) {

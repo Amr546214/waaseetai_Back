@@ -79,20 +79,17 @@ test('#24 the nafath-verify route still exists (the feature is disabled, not del
 });
 
 // ── #48 ──
-test('#48 provider setup: a body carrying identity.isNafathVerified:true / kycStatus / isVerified writes none of them', async (t) => {
+test('#48 provider setup: a body carrying isNafathVerified / kycStatus / isVerified is refused (400 naming them) and writes nothing', async (t) => {
   const w = mockDb(t);
   const { saveSetupData } = await import(`./provider-profile.controller.ts?f=${Date.now()}-${Math.random()}`);
   const res = mockRes();
   const body: any = providerBody({ isNafathVerified: true, kycStatus: 'VERIFIED', isVerified: true });
   body.isVerified = true; body.kycStatus = 'VERIFIED'; body.isNafathVerified = true; body.details.isVerified = true;
   await saveSetupData({ user: { id: 'u1' }, body } as any, res);
-  assert.equal(res.statusCode, 200);
-  const up = w.providerUpsert[0];
-  for (const side of [up.create, up.update]) {
-    assert.equal('isNafathVerified' in side, false, 'isNafathVerified must not be written');
-    assert.equal('isVerified' in side, false);
-  }
-  assert.equal('kycStatus' in up.update, false, 'an existing kycStatus (e.g. VERIFIED) is never overwritten by the wizard');
+  assert.equal(res.statusCode, 400);
+  const paths = (res.body?.errors ?? []).map((e: any) => e.path);
+  for (const p of ['isVerified', 'kycStatus', 'isNafathVerified', 'identity.isNafathVerified', 'details.isVerified']) assert.ok(paths.includes(p), `${p} must be named`);
+  assert.equal(w.providerUpsert.length, 0, 'nothing is written when the payload is refused');
 });
 
 test('#48 provider setup: a first submission moves UNVERIFIED/REJECTED to PENDING but never touches VERIFIED', async (t) => {
@@ -103,19 +100,16 @@ test('#48 provider setup: a first submission moves UNVERIFIED/REJECTED to PENDIN
   assert.equal(w.providerUpdateMany[0].data.kycStatus, 'PENDING');
 });
 
-test('#48 client setup: the body cannot set isNafathVerified/kycStatus/isVerified and an existing kycStatus is not overwritten', async (t) => {
+test('#48 client setup: a body carrying isNafathVerified/kycStatus/isVerified is refused (400 naming them) and writes nothing', async (t) => {
   const w = mockDb(t);
   const { ClientProfileController } = await import(`./client-profile.controller.ts?f=${Date.now()}-${Math.random()}`);
   const body: any = { details: { idNumber: '1234567890' }, identity: { frontId: 'data:image/png;base64,AAAA', backId: 'data:image/png;base64,AAAA', isNafathVerified: true, kycStatus: 'VERIFIED' }, documents: {}, agreements: { accurate: true, terms: true, privacy: true }, bank: {}, isNafathVerified: true, kycStatus: 'VERIFIED', isVerified: true };
   const res = mockRes();
   await new ClientProfileController().saveSetupData({ user: { userId: 'u1' }, body } as any, res, (e: any) => { throw e; });
-  const up = w.clientUpsert[0];
-  for (const side of [up.create, up.update]) {
-    assert.equal('isNafathVerified' in side, false);
-    assert.equal('isVerified' in side, false);
-  }
-  assert.equal('kycStatus' in up.update, false);
-  assert.deepEqual(w.clientUpdateMany[0].where.kycStatus, { in: ['UNVERIFIED', 'REJECTED'] });
+  assert.equal(res.statusCode, 400);
+  const paths = (res.body?.errors ?? []).map((e: any) => e.path);
+  for (const p of ['isNafathVerified', 'kycStatus', 'isVerified', 'identity.isNafathVerified', 'identity.kycStatus']) assert.ok(paths.includes(p), `${p} must be named`);
+  assert.equal(w.clientUpsert.length, 0);
 });
 
 test('#48 no request-reachable code path writes isNafathVerified / kycStatus / isVerified except the admin KYC decision', () => {

@@ -60,9 +60,11 @@ export class RefController {
       // is mounted at /auth/register (nested under the 'auth' layout route
       // in app.routes.ts). A bare /register previously landed real referral
       // clicks on the frontend's 404 page.
-      // `?ref=1` marks "this visit came through a real referral link": the registration page shows the referrer only
-      // with it (and clears any older referral cookie without it). An unknown slug sets no cookie and gets no marker.
-      res.redirect(302, affiliate ? '/auth/register?ref=1' : '/auth/register');
+      // `?ref=<slug>` carries the REAL slug to the registration page (never a placeholder like ref=1): the page resolves it to show the
+      // referrer, sends it with the registration payload, and treats its presence as the "this visit came through a referral link" marker
+      // (without it the page clears any older referral cookie). An unknown/expired slug sets no cookie and is reported honestly with
+      // `?ref_invalid=1` (the page says so and registers without attribution) - it is never silently turned into a valid-looking marker.
+      res.redirect(302, affiliate ? `/auth/register?ref=${encodeURIComponent(slug)}` : '/auth/register?ref_invalid=1');
     } catch (error) {
       next(error);
     }
