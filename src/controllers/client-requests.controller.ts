@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { clientRequestsService } from '../services/client-requests.service';
 import { createClientRequestSchema, clientRequestAiSuggestSchema } from '../dtos/create-client-request.dto';
 import { AppError } from '../utils/app-error';
+import { canRewrite, REWRITE_INPUT_REQUIRED_MESSAGE } from '../utils/description-rewrite-guard';
 import { uploadMulterFile } from '../utils/cloudinary-storage';
 import { projectProgressService } from '../services/project-progress.service';
 
@@ -21,12 +22,18 @@ export class ClientRequestsController {
   }
 
   // POST /api/client/requests/ai-suggest
+  // Not called by the current create-request UI (kept as an optional, explicit "draft from what you wrote" endpoint). Product rule: it never
+  // drafts from nothing - the client must already have written a meaningful title and enough description, same rule as the rewrite button.
   public async aiSuggest(req: Request, res: Response, next: NextFunction) {
     try {
       const parsed = clientRequestAiSuggestSchema.safeParse(req.body);
       if (!parsed.success) {
         const errorMsg = parsed.error.issues.map(i => i.message).join(', ');
         throw new AppError(errorMsg, 400);
+      }
+
+      if (!canRewrite(parsed.data.title?.trim() ?? '', parsed.data.description?.trim() ?? '')) {
+        throw new AppError(REWRITE_INPUT_REQUIRED_MESSAGE, 400);
       }
 
       const userId = req.user!.userId || req.user!.id;
