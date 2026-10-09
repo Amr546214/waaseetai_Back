@@ -51,17 +51,32 @@ test('a bad body is a 400 with errors[] naming the field (was an uncaught ZodErr
 	assert.equal(s.upserts.length, 0);
 });
 
-test('identity and bank are really written to the role profile (like the main wizard), KYC files stored private, and no fake moderationQueued', async (t) => {
+test('identity is really written to the role profile (like the main wizard), KYC files stored private, no fake moderationQueued, and no bank columns are ever written', async (t) => {
 	const s = setup(t);
-	const { res } = await post('PROVIDER', { idNumber: '1234567890', city: 'الرياض', country: 'السعودية', frontId: IMG, backId: IMG, ibanNumber: 'SA' + '1'.repeat(22), bankName: 'بنك', accountHolderName: 'أحمد' });
+	const { res } = await post('PROVIDER', { idNumber: '1234567890', city: 'الرياض', country: 'السعودية', frontId: IMG, backId: IMG });
 	assert.equal(res.statusCode, 200);
 	const [kind, call] = s.upserts[0];
 	assert.equal(kind, 'provider');
-	assert.deepEqual([call.update.idNumber, call.update.frontIdUrl, call.update.backIdUrl, call.update.iban, call.update.bankName, call.update.accountHolder], ['1234567890', 'private:image:png:x', 'private:image:png:x', 'SA' + '1'.repeat(22), 'بنك', 'أحمد']);
+	assert.deepEqual([call.update.idNumber, call.update.frontIdUrl, call.update.backIdUrl], ['1234567890', 'private:image:png:x', 'private:image:png:x']);
+	for (const k of ['iban', 'bankName', 'accountHolder']) assert.equal(k in call.update || k in call.create, false, k);
 	assert.equal('moderationQueued' in res.body.data, false);
 	assert.equal('changeRequestId' in res.body.data, false);
 	assert.equal(res.body.data.identitySubmitted, true);
 	assert.equal(s.pUpdateMany[0].data.kycStatus, 'PENDING');
+});
+
+test('PayPal only: a bank / IBAN / holder / wallet value is a 400 with the PayPal-only message and nothing is stored (provider and client)', async (t) => {
+	const { PAYPAL_ONLY_MESSAGE } = await import('../utils/client-payout-fields');
+	const s = setup(t);
+	for (const role of ['PROVIDER', 'CLIENT']) {
+		for (const extra of [{ ibanNumber: 'SA' + '1'.repeat(22) }, { bankName: 'بنك' }, { accountHolderName: 'أحمد' }, { walletPhone: '0500000000' }]) {
+			const { res, err } = await post(role, { idNumber: '1234567890', city: 'الرياض', ...extra });
+			assert.equal(err, undefined);
+			assert.equal(res.statusCode, 400, `${role} ${JSON.stringify(extra)}`);
+			assert.ok(JSON.stringify(res.body).includes(PAYPAL_ONLY_MESSAGE) || res.body.errors?.length > 0);
+		}
+	}
+	assert.equal(s.upserts.length, 0);
 });
 
 test('a VERIFIED identity is frozen: changing idNumber is a 409 (nothing written); the same number passes', async (t) => {

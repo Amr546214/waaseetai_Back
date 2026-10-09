@@ -32,7 +32,7 @@ export async function listMyWithdrawals(req: Request, res: Response, next: NextF
     const rawStatus = req.query.status ? String(req.query.status).toUpperCase() : undefined;
     const status = rawStatus && Object.values(WithdrawalStatus).includes(rawStatus as WithdrawalStatus) ? rawStatus as WithdrawalStatus : undefined;
     if (rawStatus && !status) throw new AppError('حالة طلب السحب غير صحيحة', 400);
-    const data = await withdrawalService.listForUser(userId(req), status, Number(req.query.page) || 1, Number(req.query.limit) || 10);
+    const data = await withdrawalService.listForMarketer(userId(req), status, Number(req.query.page) || 1, Number(req.query.limit) || 10); // PayPal only: no legacy bank fields
     res.json({ success: true, message: 'تم جلب سجل السحب بنجاح', data });
   } catch (error) { next(error); }
 }

@@ -1,4 +1,6 @@
 import type { ProviderBioSuggestDto, ProviderSkillsSuggestDto } from '../dtos/provider-profile-suggest.dto';
+import { PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
+import { withoutLegacyProviderBankFields } from '../utils/provider-payout';
 import { MARKET_VISIBLE_WHERE } from '../utils/market-visibility';
 import { Prisma, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
@@ -162,14 +164,8 @@ export class ProviderProfileService {
 		}
 		Object.assign(profile, { completionPercentage, missingItems });
 
-		if (profile?.user?.ibanNumber) {
-			const iban = profile.user.ibanNumber;
-			if (iban.length > 4) {
-				profile.user.ibanNumber = '*'.repeat(iban.length - 4) + iban.slice(-4);
-			}
-		}
-
-		return profile;
+		// PayPal is the only payout destination: legacy bank columns (the profile's and the user's) are never returned.
+		return withoutLegacyProviderBankFields(profile as any) as typeof profile;
 	}
 
 	/**
@@ -906,9 +902,9 @@ export class ProviderProfileService {
 	private sensitiveConfig(category: string) {
 		const configs: Record<string, { label: string; review: boolean; allowed: string[] }> = {
 			CONTACT: { label: 'بيانات التواصل', review: false, allowed: ['email', 'phoneNumber', 'alternativePhone'] },
-			BANKING: { label: 'البيانات البنكية', review: true, allowed: ['accountHolderName', 'ibanNumber', 'bankName'] },
 			DOCUMENTS: { label: 'المستندات الرسمية', review: true, allowed: ['idDocumentUrl', 'certificatesUrl', 'commercialRegistration', 'vatCertificateUrl'] }
 		};
+		if (category === 'BANKING') throw new Error(PAYPAL_ONLY_MESSAGE);
 		const config = configs[category];
 		if (!config) throw new Error('Unsupported sensitive change category');
 		return config;
@@ -923,21 +919,6 @@ export class ProviderProfileService {
 			if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(normalized.email))) throw new Error('INVALID_EMAIL');
 			if (!/^\+?\d{8,15}$/.test(String(normalized.phoneNumber))) throw new Error('INVALID_PHONE');
 			if (normalized.alternativePhone && !/^\+?\d{8,15}$/.test(String(normalized.alternativePhone))) throw new Error('INVALID_ALTERNATIVE_PHONE');
-		}
-		if (category === 'BANKING') {
-			normalized.accountHolderName = String(normalized.accountHolderName || '').trim();
-			normalized.bankName = String(normalized.bankName || '').trim();
-			normalized.ibanNumber = String(normalized.ibanNumber || '').replace(/\s/g, '').toUpperCase();
-			if (String(normalized.accountHolderName).length < 3) throw new Error('INVALID_ACCOUNT_HOLDER');
-			if (!normalized.bankName) throw new Error('INVALID_BANK_NAME');
-			// Security cleanup: the checksum validator existed but was never
-			// enabled. A masked resubmission (e.g. "************1234", sent back
-			// unchanged by the edit form) is intentionally exempt — it's stripped
-			// later in applySensitivePayload and was never meant to be a real
-			// IBAN value — checksum-validating it would reject a legitimate
-			// "leave this field unchanged" resubmission.
-			const isMaskedValue = String(normalized.ibanNumber).includes('*');
-			if (!isMaskedValue && !this.isValidIban(String(normalized.ibanNumber))) throw new Error('INVALID_IBAN');
 		}
 		if (category === 'DOCUMENTS') {
 			// Omitting idDocumentUrl means "keep the stored one" (the client cannot see a stored private document, so it cannot resend it);
@@ -1261,9 +1242,10 @@ export class ProviderProfileService {
 	// mutation now only happens via reviewSensitiveChange() (admin-only,
 	// see applyLegacyFieldModification below) — the same real-approval
 	// gate BANKING/DOCUMENTS sensitive changes already use.
-	private static readonly LEGACY_MODIFICATION_FIELDS = ['EMAIL', 'PHONE_NUMBER', 'IBAN', 'NATIONAL_ID'] as const;
+	private static readonly LEGACY_MODIFICATION_FIELDS = ['EMAIL', 'PHONE_NUMBER', 'NATIONAL_ID'] as const;
 
 	async createModificationRequest(providerId: string, data: { fieldName: string, fieldLabel: string, requestedValue: string }) {
+		if (data.fieldName === 'IBAN') throw new Error(PAYPAL_ONLY_MESSAGE);
 		if (!(ProviderProfileService.LEGACY_MODIFICATION_FIELDS as readonly string[]).includes(data.fieldName)) {
 			throw new Error(`Unsupported fieldName: ${data.fieldName}`);
 		}

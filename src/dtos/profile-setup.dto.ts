@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { sanitizedText } from '../utils/sanitize-text';
+import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
 
+// PayPal is the only financial method: a bank / IBAN / account holder / wallet value in this payload is a 400 (never stored).
 export const profileSetupSchema = z.object({
   // Preferences / Basic Info
   // null = not provided; the avatar is a Cloudinary URL or an image data URI (re-stored by the service)
@@ -23,10 +25,8 @@ export const profileSetupSchema = z.object({
   backId: z.string().max(15_000_000).optional().nullable().or(z.literal('')),
   supportingDocs: z.string().max(15_000_000).optional().nullable().or(z.literal('')),
 
-  // Banking (Sensitive)
-  ibanNumber: z.string().min(24).max(24).optional().nullable(),
-  bankName: sanitizedText(z.string().trim().max(100)).optional().nullable(),
-  accountHolderName: sanitizedText(z.string().trim().max(100)).optional().nullable()
+}).catchall(z.unknown()).superRefine((data, ctx) => {
+  for (const key of nonPaypalPayoutKeys(data)) ctx.addIssue({ code: 'custom', path: [key], message: PAYPAL_ONLY_MESSAGE });
 });
 
 export type ProfileSetupDto = z.infer<typeof profileSetupSchema>;

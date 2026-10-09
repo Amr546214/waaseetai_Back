@@ -8,6 +8,7 @@ import { assertKycFileValues } from '../utils/kyc-value-guard';
 import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
 import { sessionService } from '../services/session.service';
 import { computeProviderCompletion } from '../utils/completion-calculators';
+import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
 
 import { providerBioSuggestSchema, providerSkillsSuggestSchema, setupSkillsSchema } from '../dtos/provider-profile-suggest.dto';
 
@@ -105,6 +106,9 @@ export const saveSetupData = async (req: Request, res: Response) => {
 
 		const payload = req.body;
 		const { details, identity, bank, documents, agreements, specialties, portfolio } = payload;
+		// PayPal is the only financial method: a bank / IBAN / holder / wallet value is refused, never silently dropped.
+		const forbiddenPayout = [...nonPaypalPayoutKeys(payload), ...nonPaypalPayoutKeys(bank)];
+		if (forbiddenPayout.length) return res.status(400).json({ success: false, message: PAYPAL_ONLY_MESSAGE, errors: forbiddenPayout.map(k => ({ path: k, field: k, message: PAYPAL_ONLY_MESSAGE, code: 'custom' })) });
 		// Only the explicit ordinary save connects accepted skill names. Resolve
 		// every name before any writes/uploads; never upsert taxonomy rows.
 		let skillConnections: { id: string }[] | undefined;
@@ -161,11 +165,6 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			...(certUrls.filter(Boolean).length ? { certUrls: certUrls.filter(Boolean) as string[] } : {}),
 			// isNafathVerified / kycStatus / isVerified are NEVER written from this request (AUD-FND-000048): they are read-only here and
 			// change only through a real verification integration or the admin KYC decision (onboarding.service).
-
-			paymentType: bank?.paymentType,
-			bankName: clean(bank?.bankName, 100),
-			accountHolder: clean(bank?.accountHolder, 100),
-			iban: bank?.iban,
 
 			supportingDocsUrl: supportingDocsUrl || undefined,
 			notes: clean(documents?.notes, 1000),
@@ -300,7 +299,7 @@ export const createModificationRequest = async (req: Request, res: Response) => 
 		const result = await providerProfileService.createModificationRequest(userId, req.body);
 		res.json({ success: true, data: result });
 	} catch (error: any) {
-		res.status(500).json({ success: false, message: error.message });
+		res.status(error.message === PAYPAL_ONLY_MESSAGE ? 400 : 500).json({ success: false, message: error.message });
 	}
 };
 
@@ -392,15 +391,11 @@ export const updateContactInfo = async (req: Request, res: Response) => {
 	}
 };
 
+// PayPal is the only payout destination: there is no bank info to update (the PayPal email changes only through the e-mailed code flow).
 export const updateBankingInfo = async (req: Request, res: Response) => {
-	try {
-		const userId = req.user?.id;
-		if (!userId) return res.status(401).json({ message: 'Unauthorized' });
-		const profile = await providerProfileService.updateBankingInfo(userId, req.body);
-		res.json(profile);
-	} catch (error) {
-		res.status(500).json({ message: 'Error updating banking info', error });
-	}
+	const userId = req.user?.id;
+	if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+	res.status(400).json({ success: false, message: PAYPAL_ONLY_MESSAGE });
 };
 
 export const updateDocsInfo = async (req: Request, res: Response) => {
