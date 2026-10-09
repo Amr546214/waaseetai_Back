@@ -5,11 +5,12 @@ import assert from 'node:assert/strict';
 process.env.OPENAI_API_KEY = 'test-key';
 process.env.JWT_SECRET = 'test-secret';
 
-const state: any = { profile: null, gamification: null, proposals: [] };
+const state: any = { profile: null, gamification: null, proposals: [], reviews: 0 };
 let loaded: Promise<any> | undefined;
 const load = () => (loaded ??= (async () => {
 	mock.module('../config/db', { namedExports: { prisma: {
 		project: { count: async () => 0 }, proposal: { count: async () => 0, findMany: async () => state.proposals },
+		review: { count: async () => state.reviews },
 		providerProfile: { findUnique: async () => state.profile },
 		providerGamification: { findUnique: async () => state.gamification },
 	} } });
@@ -78,4 +79,20 @@ test('aiRating: null (never 0) with no scored proposal; otherwise the real Wasee
 	assert.equal(s.aiRatingSource, 'waseet_ai_offer_quality');
 	assert.equal(s.aiRatedOffersCount, 2);
 	state.proposals = [];
+});
+
+test('providerRating/humanRating: a real 5.0 stays 5.0; no client reviews or a missing/invalid stored rating -> null (never 0, never 5.0 by default)', async () => {
+	state.gamification = null;
+	state.reviews = 3; state.profile = profile({ rating: 5.0 });
+	let s = await call();
+	assert.equal(s.providerRating, 5); assert.equal(s.humanRating, 5);
+	state.reviews = 3; state.profile = profile({ rating: 4.2 });
+	s = await call(); assert.equal(s.providerRating, 4.2);
+	state.reviews = 0; state.profile = profile({ rating: 5.0 }); // schema default, nobody rated yet
+	s = await call(); assert.equal(s.providerRating, null); assert.equal(s.humanRating, null);
+	state.reviews = 2; state.profile = profile({ rating: null });
+	s = await call(); assert.equal(s.providerRating, null);
+	state.reviews = 2; state.profile = profile({ rating: 0 }); // 0 is not a valid star rating
+	s = await call(); assert.equal(s.providerRating, null);
+	state.reviews = 0;
 });
