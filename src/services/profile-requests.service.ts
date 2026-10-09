@@ -90,6 +90,8 @@ export interface IdentityChangeInput {
 	phoneNumber?: string;
 }
 
+const LEGACY_BANK_FIELD_TYPES: SensitiveFieldType[] = [SensitiveFieldType.IBAN, SensitiveFieldType.BANK_NAME, SensitiveFieldType.ACCOUNT_HOLDER_NAME, SensitiveFieldType.SWIFT_CODE];
+
 export class ProfileRequestsService {
 	public async getRequests(userId: string) {
 		// Explicit select — deployment-safety fix; only `id` is used below.
@@ -100,7 +102,8 @@ export class ProfileRequestsService {
 		if (!profile) throw new AppError('لم يتم العثور على ملف الوسيط', 404);
 
 		const requests = await prisma.profileChangeRequest.findMany({
-			where: { affiliateProfileId: profile.id },
+			// Bank requests filed before PayPal became the only payout method are never listed (their IBAN / bank values must not be shown).
+			where: { affiliateProfileId: profile.id, fieldType: { notIn: LEGACY_BANK_FIELD_TYPES } },
 			orderBy: { createdAt: 'desc' },
 		});
 
