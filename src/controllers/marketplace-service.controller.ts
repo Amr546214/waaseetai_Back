@@ -12,6 +12,9 @@ const marketplaceService = new MarketplaceService();
 const RE_AUDIT_STATUSES = ['PENDING_APPROVAL', 'UNDER_REVIEW', 'DRAFT', 'PUBLISHED'];
 const RE_AUDIT_BATCH_SIZE = 25;
 
+/** Statuses from which the owner may publish a model by id. */
+const PUBLISHABLE_BY_ID_STATUSES: readonly string[] = ['DRAFT', 'APPROVED', 'PUBLISHED'];
+
 export class MarketplaceServiceController {
 	async getPreData(req: Request, res: Response) {
 		try {
@@ -161,6 +164,11 @@ export class MarketplaceServiceController {
 				const existing = await prisma.serviceCatalog.findFirst({ where: { id, providerId: userId } });
 				if (!existing) {
 					return res.status(404).json({ success: false, error: 'Model not found' }) as any;
+				}
+				// Only a model that is already allowed to be live can be (re)published by its owner: a REJECTED / UNDER_REVIEW / PENDING_* /
+				// ARCHIVED (hidden: use the visibility toggle) model must not be flipped to PUBLISHED by the provider.
+				if (!PUBLISHABLE_BY_ID_STATUSES.includes(existing.status as any)) {
+					return res.status(409).json({ success: false, error: 'لا يمكن نشر هذا النموذج في حالته الحالية، تواصل مع الدعم أو انتظر قرار المراجعة' }) as any;
 				}
 				const updated = await prisma.serviceCatalog.update({
 					where: { id: existing.id },
