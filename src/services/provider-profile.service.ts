@@ -1,5 +1,6 @@
 import type { ProviderBioSuggestDto, ProviderSkillsSuggestDto } from '../dtos/provider-profile-suggest.dto';
 import { PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
+import { profileChangeReviewService, withHonestAiReview } from './ai-features/profile-change-review.service';
 import { withoutLegacyProviderBankFields } from '../utils/provider-payout';
 import { MARKET_VISIBLE_WHERE } from '../utils/market-visibility';
 import { Prisma, UserRole } from '@prisma/client';
@@ -892,7 +893,7 @@ export class ProviderProfileService {
 	}
 
 	private toPublicRequest<T extends Record<string, any>>(request: T): Omit<T, 'metadata'> {
-		const { metadata: _metadata, ...safeRequest } = request;
+		const { metadata: _metadata, ...safeRequest } = withHonestAiReview(request) as any;
 		return {
 			...safeRequest,
 			currentValue: this.redactFileContent(request.currentValue),
@@ -1156,7 +1157,12 @@ export class ProviderProfileService {
 			orderBy: { createdAt: statuses.length === 1 && statuses[0] === 'PENDING_HUMAN_REVIEW' ? 'asc' : 'desc' }
 		});
 		// a password-change request carries a pending password hash in its metadata: the admin queue never receives it
-		return rows.map(row => row.category === CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY ? (({ metadata: _m, ...safe }) => safe)(row) : row);
+		return rows.map(row => {
+			if (row.category === CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY) return (({ metadata: _m, ...safe }) => ({ ...safe, aiAuditStatus: null, aiConfidence: null, aiRecommendation: null, aiReview: null }))(row);
+			// the admin keeps the metadata (the changes under review) but sees AI fields only when a real stored pre-review backs them
+			const honest = withHonestAiReview(row);
+			return { ...honest, metadata: row.metadata };
+		});
 	}
 
 	private async applySensitivePayload(providerId: string, category: string, changes: Record<string, unknown>) {
@@ -1291,12 +1297,10 @@ export class ProviderProfileService {
 		if (data.fieldName === 'IBAN') currentValue = user.ibanNumber;
 		if (data.fieldName === 'NATIONAL_ID') currentValue = user.idNumber;
 
-		// Honest state: no AI evaluation happens here at all, so the AI
-		// audit fields are left genuinely null rather than fabricated —
-		// never a substitute for real verification. Status is always
-		// PENDING_HUMAN_REVIEW; only a real admin action (reviewSensitiveChange)
-		// can ever apply this change.
-		return prisma.profileModificationRequest.create({
+		// Honest state: the AI audit fields start genuinely null. An AI PRE-REVIEW (derived facts only, never the values) is requested in the
+		// background and stored in metadata.aiReview when it really ran. Status is always PENDING_HUMAN_REVIEW; only a real admin action
+		// (reviewSensitiveChange) can ever apply this change.
+		const created = await prisma.profileModificationRequest.create({
 			data: {
 				providerId,
 				// Explicit, not relied on as an implicit Prisma schema default —
@@ -1311,6 +1315,8 @@ export class ProviderProfileService {
 				status: 'PENDING_HUMAN_REVIEW'
 			}
 		});
+		profileChangeReviewService.schedule(created.id);
+		return created;
 	}
 
 	/**
