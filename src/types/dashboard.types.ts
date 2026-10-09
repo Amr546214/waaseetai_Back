@@ -9,7 +9,12 @@ export interface DashboardStatsPayload {
     availableEarnings?: number;
     totalEscrowAmount: number;
     totalSpent: number;
-    aiRating: number;
+    /** Client: average WaseetAI evaluation of the received offers, 0-5 (null = no scored offer). Providers keep 0 (no AI rating). */
+    aiRating: number | null;
+    aiConfidence?: null;
+    aiRatingSource?: 'waseet_ai_offer_quality' | 'none';
+    aiRatingUpdatedAt?: string | null;
+    aiRatedOffersCount?: number;
     humanRating: number;
     providerRating?: number;
     profileCompletionPercent: number;

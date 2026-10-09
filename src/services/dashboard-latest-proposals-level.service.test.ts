@@ -151,10 +151,10 @@ test('8) no N+1: provider/gamification data is fetched in the SAME proposal.find
   });
   const result = await service.getClientStats('client-1');
   assert.equal(result.latestProposals.length, 3);
-  // Only the 2 pre-existing proposal.findMany calls (latestProposals + the
-  // price-fairness aggregate) — no third/fourth call added per provider.
-  assert.equal(proposalFindManyCalls.length, 2);
-  const latestProposalsQuery = proposalFindManyCalls.find(a => !a?.where?.aiPriceTag);
+  // Only the 3 aggregate-style proposal.findMany calls (latestProposals + the price-fairness aggregate + the AI offer rating aggregate) —
+  // none is added per provider.
+  assert.equal(proposalFindManyCalls.length, 3);
+  const latestProposalsQuery = proposalFindManyCalls.find(a => !a?.where?.aiPriceTag && !a?.where?.aiMatchScore);
   assert.ok(latestProposalsQuery.include.provider.select.gamification, 'gamification must be included inside the single proposal query');
 });
 

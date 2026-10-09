@@ -1,3 +1,4 @@
+import { computeClientAiOfferRating } from './client-ai-offer-rating';
 import { prisma } from '../config/db';
 import { AccountType, UserRole } from '@prisma/client';
 import { DashboardStatsPayload } from '../types/dashboard.types';
@@ -228,6 +229,13 @@ export class DashboardService {
         };
       }
 
+      // 7b. AI rating of the offers received (real WaseetAI proposal evaluations stored on the proposals; null when none is scored).
+      const scoredProposals = await prisma.proposal.findMany({
+        where: { project: { clientId: userId }, aiMatchScore: { not: null } },
+        select: { aiMatchScore: true, createdAt: true }
+      });
+      const aiOfferRating = computeClientAiOfferRating(scoredProposals as Array<{ aiMatchScore: number | null; createdAt: Date }>);
+
       // 8. Active Contract (Find real active contract for this client, if any)
       const activeContractEntity = await prisma.contract.findFirst({
         where: {
@@ -275,7 +283,7 @@ export class DashboardService {
           newOffersCount,
           totalEscrowAmount,
           totalSpent,
-          aiRating: 0,
+          ...aiOfferRating,
           humanRating: 0,
           profileCompletionPercent: clientProfileCompletion ?? clientDisplayFields.profileCompletionPercent,
           currentLevel: clientDisplayFields.currentLevel,
