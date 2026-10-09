@@ -845,9 +845,7 @@ export class ProviderProfileService {
 				currentValue: this.toAuditValue(currentValue),
 				requestedValue: this.toAuditValue(requestedValue),
 				status: 'APPROVED',
-				aiAuditStatus: 'PASSED',
-				aiConfidence: 100,
-				aiRecommendation: 'تحديث عادي تم تطبيقه فورًا وتسجيله في سجل التدقيق.',
+				// no AI ran for an ordinary immediate update: no aiAuditStatus / aiConfidence / aiRecommendation are written
 				reviewedByAdmin: false,
 				appliedAt: new Date(),
 				metadata: { applicationMode: 'IMMEDIATE' }
@@ -1051,15 +1049,11 @@ export class ProviderProfileService {
 			data: {
 				otpVerifiedAt: new Date(),
 				status: needsReview ? 'PENDING_HUMAN_REVIEW' : 'APPROVED',
-				aiAuditStatus: needsReview ? 'NEEDS_HUMAN_REVIEW' : 'PASSED',
-				aiConfidence: needsReview ? 90 : 100,
-				aiRecommendation: needsReview
-					? 'تم تأكيد هوية صاحب الحساب عبر البريد، والطلب جاهز للمراجعة البشرية.'
-					: 'تم تأكيد هوية صاحب الحساب عبر البريد وتطبيق التغيير تلقائيًا.',
+				// the e-mailed code only proves the account owner: no AI ran, so no aiAuditStatus / aiConfidence / aiRecommendation are written
 				appliedAt: needsReview ? null : new Date()
 			}
 		});
-		await accountAuditLogService.record({ userId: providerId, eventType: 'AI_REVIEW_COMPLETED', category: 'PROFILE_COMPLETION', title: request.fieldLabel, summary: needsReview ? 'اجتاز الطلب التحقق الآلي وأُحيل إلى مراجع بشري' : 'اجتاز الطلب التحقق الآلي وتم تطبيقه', source: 'AI', status: needsReview ? 'IN_REVIEW' : 'APPROVED', statusText: updated.aiRecommendation || undefined, requestId, details: { aiAuditStatus: updated.aiAuditStatus, aiConfidence: updated.aiConfidence }, context: auditContext });
+		await accountAuditLogService.record({ userId: providerId, eventType: 'OTP_VERIFIED', category: 'PROFILE_COMPLETION', title: request.fieldLabel, summary: needsReview ? 'أُكِّد الطلب برمز البريد وأُحيل إلى مراجعة الفريق' : 'أُكِّد الطلب برمز البريد وتم تطبيقه', source: 'USER', status: needsReview ? 'IN_REVIEW' : 'APPROVED', statusText: needsReview ? 'بانتظار مراجعة الفريق' : undefined, requestId, context: auditContext });
 		return updated;
 	}
 

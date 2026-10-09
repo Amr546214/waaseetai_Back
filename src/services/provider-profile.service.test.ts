@@ -1332,3 +1332,32 @@ test('DOCUMENTS change: initiateSensitiveChange looks up the stored ID document 
   assert.match(src, /category === 'DOCUMENTS' && !Object\.prototype\.hasOwnProperty\.call\(filtered, 'idDocumentUrl'\)/);
   assert.match(src, /select: \{ idDocumentUrl: true \} \}\)\)\?\.idDocumentUrl/);
 });
+
+// ============================================================================
+// AI claims cleanup: nothing in the sensitive-change / profile-change path may pretend an AI reviewed it. The e-mailed code only proves the
+// account owner; a human (admin) reviews. So no aiAuditStatus / aiConfidence / aiRecommendation and no AI_REVIEW_COMPLETED / source 'AI' event.
+// ============================================================================
+test('verifySensitiveChange: an OTP-confirmed request carries NO AI verdict (no aiAuditStatus / aiConfidence / aiRecommendation), for review and immediate flows', async (t) => {
+  const { providerProfileService, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+  const review = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', { idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id.pdf' });
+  const afterReview: any = await providerProfileService.verifySensitiveChange('user-1', review.requestId, getLastOtpCode()!);
+  assert.equal(afterReview.status, 'PENDING_HUMAN_REVIEW');
+  for (const k of ['aiAuditStatus', 'aiConfidence', 'aiRecommendation']) assert.equal(afterReview[k] ?? null, null, k);
+
+  const immediate = await providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'new@example.com', phoneNumber: '0511111111', alternativePhone: '0522222222' });
+  const afterImmediate: any = await providerProfileService.verifySensitiveChange('user-1', immediate.requestId, getLastOtpCode()!);
+  assert.equal(afterImmediate.status, 'APPROVED');
+  for (const k of ['aiAuditStatus', 'aiConfidence', 'aiRecommendation']) assert.equal(afterImmediate[k] ?? null, null, k);
+});
+
+test('static: the profile-change code never writes an AI verdict or an AI-sourced review event (no AI call exists there)', () => {
+  const src = readFileSync(path.join(import.meta.dirname, 'provider-profile.service.ts'), 'utf8').replace(/\/\/.*$/gm, '');
+  assert.doesNotMatch(src, /aiAuditStatus\s*:|aiConfidence\s*:|aiRecommendation\s*:/);
+  assert.doesNotMatch(src, /AI_REVIEW_COMPLETED/);
+  assert.doesNotMatch(src, /source:\s*'AI'/);
+});
+
+test('gamification advice is a rule-based suggestion, not "توصية الذكاء"', () => {
+  const src = readFileSync(path.join(import.meta.dirname, 'gamification.service.ts'), 'utf8');
+  assert.doesNotMatch(src, /توصية الذكاء/);
+});
