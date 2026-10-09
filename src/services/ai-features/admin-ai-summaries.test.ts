@@ -96,6 +96,43 @@ test('forecast: 3 months -> NOT_ENOUGH_DATA', async (t) => {
   const r3 = await (await load(t, fcDb(3), llmOk())).forecast('a1');
   assert.equal(r3.status, 'NOT_ENOUGH_DATA');
 });
+const mixedDb = () => ({
+  ...emptyDb(),
+  walletTransaction: { findMany: async () => [
+    ...Array.from({ length: 7 }, (_, i) => ({ amount: 100 * (i + 1), currency: 'USD', createdAt: new Date(Date.UTC(2026, 8 - i, 5)) })),
+    ...Array.from({ length: 7 }, (_, i) => ({ amount: 999, currency: 'SAR', createdAt: new Date(Date.UTC(2026, 8 - i, 6)) })),
+  ] },
+  withdrawal: { findMany: async () => [] },
+});
+test('forecast currency: mixed currencies -> USD only, flagged mixed, NO next-month estimate, SAR never summed in', async (t) => {
+  const calls: any[] = [];
+  const r = await (await load(t, mixedDb(), llmOk(calls))).forecast('a1');
+  assert.equal(r.status, 'READY');
+  assert.equal(r.series?.currency, 'USD'); assert.equal(r.series?.mixedCurrencies, true); assert.deepEqual(r.series?.currenciesSeen, ['SAR', 'USD']);
+  assert.equal(r.series?.inflowNextMonthEstimate, null); assert.equal(r.series?.inflowTrendBasedOnMonths, null);
+  const inflowTotal = r.series!.months.reduce((n, m) => n + (m.inflow ?? 0), 0);
+  assert.equal(inflowTotal, 100 + 200 + 300 + 400 + 500 + 600 + 700);       // the SAR 999 rows are not in the sums
+  assert.equal(calls[0].input.mixedCurrencies, true); assert.equal(calls[0].input.inflowNextMonthEstimate ?? null, null);
+});
+test('forecast currency: a single non-USD currency in the data is reported as it is (a data fact), the estimate stays allowed', async (t) => {
+  const db = { ...emptyDb(), walletTransaction: { findMany: async () => Array.from({ length: 6 }, (_, i) => ({ amount: 50 * (i + 1), currency: 'SAR', createdAt: new Date(Date.UTC(2026, 8 - i, 5)) })) }, withdrawal: { findMany: async () => [] } };
+  const r = await (await load(t, db, llmOk())).forecast('a1');
+  assert.equal(r.series?.currency, 'SAR'); assert.equal(r.series?.mixedCurrencies, false); assert.notEqual(r.series?.inflowNextMonthEstimate, null);
+});
+test('forecast currency: no rows at all -> no currency (null), never a SAR / USD default', async (t) => {
+  const r = await (await load(t, emptyDb(), llmOk())).forecast('a1');
+  assert.equal(r.status, 'NOT_ENOUGH_DATA'); assert.equal(r.series, null);
+  const { pickForecastCurrency } = await import('./admin-ai-summaries.stats');
+  assert.deepEqual(pickForecastCurrency([]), { currency: null, seen: [], mixed: false });
+  assert.equal(pickForecastCurrency([{ currency: 'SAR' }, { currency: 'SAR' }, { currency: 'USD' }]).currency, 'USD');   // the platform currency wins even when outnumbered
+});
+test('static: the forecast code has no hardcoded SAR default', async () => {
+  const { readFileSync } = await import('node:fs'); const path = await import('node:path');
+  for (const f of ['admin-ai-summaries.service.ts', 'admin-ai-summaries.stats.ts']) {
+    const src = readFileSync(path.join(import.meta.dirname, f), 'utf8').replace(/\/\/.*$/gm, '');
+    assert.doesNotMatch(src, /'SAR'|"SAR"/);
+  }
+});
 test('forecast: model not configured -> FAILED with null fields', async (t) => {
   const r = await (await load(t, fcDb(6), llmMissing)).forecast('a1');
   assert.equal(r.status, 'FAILED'); assert.equal(r.summary, null); assert.equal(r.score, null); assert.equal(r.confidence, null); assert.equal(r.details, null);
