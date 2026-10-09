@@ -3,6 +3,7 @@ import { profileService } from '../services/profile.service';
 import { AppError } from '../utils/app-error';
 import { updateProfileSchema } from '../dtos/profile.dto';
 import { profileTabSchemas } from '../dtos/profile-tab.dto';
+import { clientPasswordChangeSchema } from '../dtos/client-password-change.dto';
 
 /**
  * Phase 3D.1 final review: activeRole is guaranteed by auth.middleware.ts —
@@ -121,6 +122,22 @@ export class ProfileController {
       }
       const result = await profileService.cancelMyChangeRequest(req.user.userId, String(req.params.id));
       res.status(200).json({ success: true, message: 'تم سحب الطلب', data: result });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public async requestPasswordChange(req: Request, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) throw new AppError('غير مصرح لك بالوصول', 401);
+      const parsed = clientPasswordChangeSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        const errors = parsed.error.issues.map(i => ({ path: String(i.path[0] ?? ''), field: String(i.path[0] ?? ''), message: i.message, code: i.code }));
+        res.status(400).json({ success: false, message: errors[0]?.message || 'بيانات غير صالحة', errors });
+        return;
+      }
+      const created = await profileService.requestClientPasswordChange(req.user.userId, parsed.data, { ipAddress: req.ip, userAgent: req.get('user-agent') } as any);
+      res.status(201).json({ success: true, message: 'تم إرسال طلب تغيير كلمة المرور للمراجعة', data: created });
     } catch (error) {
       next(error);
     }

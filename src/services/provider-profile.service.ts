@@ -17,7 +17,7 @@ import { accountAuditLogService, AuditContext } from './account-logs.service';
 import { LEVEL_MATRIX } from './gamification.service';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { computeProviderCompletion, computeProviderMissingItems, computeClientCompletion } from '../utils/completion-calculators';
-import { CLIENT_IDENTITY_REQUEST_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY } from '../utils/profile-request-categories';
+import { CLIENT_IDENTITY_REQUEST_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY, CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY } from '../utils/profile-request-categories';
 import { logger } from '../config/logger';
 import { OtpPurpose, OTP_MAX_ATTEMPTS } from '../utils/otp-purpose';
 import { sessionService } from './session.service';
@@ -77,6 +77,9 @@ const skillKey = (value: string) => value.trim().normalize('NFKC').toLowerCase()
 export class ProviderProfileService {
   async changePassword(userId: string, currentPassword: string, newPassword: string, auditContext?: AuditContext) {
     if (!currentPassword || !newPassword) throw new Error('PASSWORD_FIELDS_REQUIRED');
+    // A client's password changes only through an admin-reviewed request (POST /api/profiles/password-change-request): this direct path must not bypass it.
+    const roleRow = await prisma.user.findUnique({ where: { id: userId }, select: { activeRole: true } });
+    if (roleRow?.activeRole === 'CLIENT') throw new Error('تغيير كلمة مرور طالب الخدمة يتم بطلب مراجعة من صفحة الأمان في الملف الشخصي');
     if (newPassword.length < 8 || newPassword.length > 72) throw new Error('WEAK_PASSWORD');
     const characterGroups = [/[a-z]/.test(newPassword), /[A-Z]/.test(newPassword), /\d/.test(newPassword), /[^A-Za-z0-9]/.test(newPassword)].filter(Boolean).length;
     if (characterGroups < 3) throw new Error('WEAK_PASSWORD');
@@ -1084,6 +1087,8 @@ export class ProviderProfileService {
 					await this.applyClientIdentityChange(request.providerId, metadata.changes || {});
 				} else if (request.category === CLIENT_BASIC_INFO_REQUEST_CATEGORY) {
 					await this.applyClientBasicInfoChange(request.providerId, metadata.changes || {});
+				} else if (request.category === CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY) {
+					await this.applyClientPasswordChange(request.providerId, String(metadata.pendingPasswordHash || ''), auditContext);
 				} else {
 					await this.applySensitivePayload(request.providerId, request.category, metadata.changes || {});
 				}
@@ -1096,9 +1101,21 @@ export class ProviderProfileService {
 				throw error;
 			}
 		}
+		if (request.category === CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY) {
+			// decided either way: the pending hash is never kept (approved = now the real password, rejected = discarded)
+			await prisma.profileModificationRequest.update({ where: { id: request.id }, data: { metadata: { hashCleared: true } as any } });
+		}
 		const updated = await prisma.profileModificationRequest.findUniqueOrThrow({ where: { id: request.id } });
 		await accountAuditLogService.record({ userId: request.providerId, eventType: 'HUMAN_REVIEW_COMPLETED', category: 'PROFILE_COMPLETION', title: request.fieldLabel, summary: approved ? 'اعتمد المراجع البشري طلب التعديل وتم تطبيقه' : 'رفض المراجع البشري طلب التعديل', source: 'ADMIN', severity: approved ? 'INFO' : 'WARNING', status: approved ? 'APPROVED' : 'REJECTED', statusText: updated.rejectionReason || undefined, requestId, context: auditContext });
 		return updated;
+	}
+
+	/** A client's approved password: the stored bcrypt hash becomes the password and every session is revoked (they sign in again). */
+	private async applyClientPasswordChange(userId: string, pendingPasswordHash: string, auditContext?: AuditContext) {
+		if (!/^\$2[aby]\$\d{2}\$.{53}$/.test(pendingPasswordHash)) throw new Error('INVALID_PENDING_PASSWORD');
+		await prisma.user.update({ where: { id: userId }, data: { password: pendingPasswordHash } });
+		await sessionService.revokeAll(userId, 'PASSWORD_CHANGED');
+		await accountAuditLogService.record({ userId, eventType: 'PASSWORD_CHANGED', category: 'SECURITY_CHANGE', title: 'تغيير كلمة المرور', summary: 'اعتمد المراجع طلب تغيير كلمة المرور وتم تطبيقه', source: 'ADMIN', severity: 'CRITICAL', context: auditContext });
 	}
 
 	/** A client's approved name: written to ClientProfile (where the client UI reads it), then the completion is recomputed. */
@@ -1139,11 +1156,13 @@ export class ProviderProfileService {
 		const wanted = String(status || '').toUpperCase();
 		const statuses = wanted === 'ALL' ? ['PENDING_HUMAN_REVIEW', 'APPROVED', 'REJECTED']
 			: ['APPROVED', 'REJECTED'].includes(wanted) ? [wanted] : ['PENDING_HUMAN_REVIEW'];
-		return prisma.profileModificationRequest.findMany({
+		const rows = await prisma.profileModificationRequest.findMany({
 			where: { status: { in: statuses as any } },
 			include: { provider: { select: { firstName: true, lastName: true, email: true, accountType: true } } },
 			orderBy: { createdAt: statuses.length === 1 && statuses[0] === 'PENDING_HUMAN_REVIEW' ? 'asc' : 'desc' }
 		});
+		// a password-change request carries a pending password hash in its metadata: the admin queue never receives it
+		return rows.map(row => row.category === CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY ? (({ metadata: _m, ...safe }) => safe)(row) : row);
 	}
 
 	private async applySensitivePayload(providerId: string, category: string, changes: Record<string, unknown>) {

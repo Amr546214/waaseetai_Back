@@ -15,7 +15,10 @@ import { withoutLegacyProviderBankFields } from '../utils/provider-payout';
 import { marketerProfileService } from './marketer-profile.service';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
 import { withoutLegacyPayoutFields } from '../utils/client-payout-fields';
-import { CLIENT_IDENTITY_REQUEST_CATEGORY as CLIENT_IDENTITY_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY } from '../utils/profile-request-categories';
+import { CLIENT_IDENTITY_REQUEST_CATEGORY as CLIENT_IDENTITY_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY, CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY } from '../utils/profile-request-categories';
+import bcrypt from 'bcrypt';
+import { accountAuditLogService, AuditContext } from './account-logs.service';
+import type { ClientPasswordChangeInput } from '../dtos/client-password-change.dto';
 
 const maskId = (value: string) => (value.length > 4 ? `${'*'.repeat(value.length - 4)}${value.slice(-4)}` : value);
 
@@ -616,6 +619,47 @@ export class ProfileService {
     return rows.map(({ metadata: _metadata, ...safe }) => safe);
   }
 
+  /**
+   * A client's password change: never applied here. The current password is checked, the new one is hashed, and a request
+   * (PENDING_HUMAN_REVIEW) is recorded for an admin. Only the bcrypt hash is stored (metadata.pendingPasswordHash, never returned by
+   * any list); the plaintext is never stored, logged or returned. The password changes only when an admin approves.
+   */
+  public async requestClientPasswordChange(userId: string, input: ClientPasswordChangeInput, auditContext?: AuditContext) {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { password: true, activeRole: true, roles: true } });
+    if (!user) throw new AppError('تعذر العثور على حساب المستخدم', 404);
+    if (user.activeRole !== UserRole.CLIENT) throw new AppError('تغيير كلمة المرور بطلب مراجعة متاح لحساب طالب الخدمة فقط', 403);
+    if (!user.password) throw new AppError('حسابك مسجّل عبر Google ولا توجد له كلمة مرور حالية لتغييرها', 400);
+    if (!(await bcrypt.compare(input.currentPassword, user.password))) {
+      await accountAuditLogService.record({ userId, eventType: 'PASSWORD_CHANGE_REJECTED', category: 'SECURITY_CHANGE', title: 'محاولة تغيير كلمة المرور', summary: 'رُفضت محاولة تغيير كلمة المرور لأن الكلمة الحالية غير صحيحة', source: 'USER', severity: 'WARNING', status: 'REJECTED', context: auditContext });
+      throw new AppError('كلمة المرور الحالية غير صحيحة', 400);
+    }
+    if (await bcrypt.compare(input.newPassword, user.password)) throw new AppError('كلمة المرور الجديدة يجب أن تختلف عن الحالية', 400);
+
+    const pending = await prisma.profileModificationRequest.findFirst({
+      where: { providerId: userId, category: CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY, status: 'PENDING_HUMAN_REVIEW' },
+      select: { id: true }
+    });
+    if (pending) throw new AppError('طلب تغيير كلمة المرور قيد المراجعة بالفعل', 409);
+
+    const pendingPasswordHash = await bcrypt.hash(input.newPassword, 12);
+    const created = await prisma.profileModificationRequest.create({
+      data: {
+        providerId: userId,
+        category: CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY,
+        fieldName: 'PASSWORD',
+        fieldLabel: 'تغيير كلمة المرور',
+        currentValue: 'محجوب',
+        requestedValue: 'كلمة مرور جديدة محجوبة',
+        status: 'PENDING_HUMAN_REVIEW',
+        requiresOtp: false,
+        metadata: { pendingPasswordHash, requiresHumanReview: true } as any
+      },
+      select: { id: true, status: true, category: true, fieldLabel: true, createdAt: true }
+    });
+    await accountAuditLogService.record({ userId, eventType: 'PASSWORD_CHANGE_REQUESTED', category: 'SECURITY_CHANGE', title: 'طلب تغيير كلمة المرور', summary: 'أُرسل طلب تغيير كلمة المرور للمراجعة', source: 'USER', severity: 'INFO', status: 'IN_REVIEW', requestId: created.id, context: auditContext });
+    return created;
+  }
+
   /** The client withdraws one of their own requests while it still waits for review. */
   public async cancelMyChangeRequest(userId: string, requestId: string) {
     const claimed = await prisma.profileModificationRequest.updateMany({
@@ -627,6 +671,8 @@ export class ProfileService {
       if (!exists) throw new AppError('الطلب غير موجود', 404);
       throw new AppError('لا يمكن سحب هذا الطلب لأنه لم يعد قيد المراجعة', 409);
     }
+    // a withdrawn password request must not keep the pending hash
+    await prisma.profileModificationRequest.updateMany({ where: { id: requestId, category: CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY }, data: { metadata: { hashCleared: true } as any } });
     return { id: requestId, status: 'CANCELLED' };
   }
 
