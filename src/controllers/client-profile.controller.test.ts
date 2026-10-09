@@ -79,7 +79,7 @@ test('client saveSetupData: recalculates ClientProfile.completionPercentage afte
     body: {
       details: { idNumber: '1234567890', dob: null, country: 'SA', city: 'Riyadh', occupation: 'Tech', address: '123 St' },
       identity: {},
-      bank: { paymentType: 'BANK', bankName: 'Al Rajhi', accountHolder: 'Amr Okasha', iban: 'SA00000000000000000000AA' },
+      bank: { paymentType: 'paypal', paypalPayoutEmail: 'pay@example.com' },
       documents: {},
       agreements: { accurate: true, terms: true, privacy: true }
     }
@@ -175,7 +175,7 @@ test('client getSetupData (GET /client/profile/setup) returns paypalPayoutEmail,
   await clientProfileController.getSetupData({ user: { userId: 'user-1' } } as any, res, () => {});
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.data.paypalPayoutEmail, 'pay@example.com');
-  assert.equal(res.body.data.paymentType, 'paypal');
+  assert.equal('paymentType' in res.body.data, false); // legacy bank columns are never returned
   // name 15 + PayPal 20 = 35; the rest is listed as missing (individual rules, wizard items point at the setup page)
   assert.equal(res.body.data.completionPercentage, 35);
   assert.deepEqual(res.body.data.missingItems.map((i: any) => i.key), ['avatar', 'bio', 'industry', 'idNumber']);

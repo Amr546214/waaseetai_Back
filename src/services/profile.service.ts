@@ -12,6 +12,7 @@ import { logger } from '../config/logger';
 import { providerProfileService } from './provider-profile.service';
 import { marketerProfileService } from './marketer-profile.service';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
+import { withoutLegacyPayoutFields } from '../utils/client-payout-fields';
 import { CLIENT_IDENTITY_REQUEST_CATEGORY as CLIENT_IDENTITY_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY } from '../utils/profile-request-categories';
 
 const maskId = (value: string) => (value.length > 4 ? `${'*'.repeat(value.length - 4)}${value.slice(-4)}` : value);
@@ -110,7 +111,7 @@ export class ProfileService {
 
     const currentProfileData: Record<string, unknown> = {
       ...safeUser,
-      ...roleProfile,
+      ...(user.activeRole === UserRole.CLIENT ? withoutLegacyPayoutFields(roleProfile as any) : roleProfile),
       ...resolvedDisplayFields
     };
 

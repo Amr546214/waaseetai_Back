@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
 import { sanitizedText } from '../utils/sanitize-text';
 
 // PUT /profiles/update/:tabName. Unknown keys are stripped (never rejected, so the current UI tabs keep working) and the service reads an explicit
@@ -39,15 +40,12 @@ export const updateContactSchema = z.object({
   country: optionalText(60)
 });
 
+// PayPal is the only financial method on the platform: any bank / IBAN / account holder / wallet value in this payload is a 400 (never stored).
 export const updateBankingSchema = z.object({
-  paymentMethod: z.enum(['bank', 'wallet', 'paypal']).optional(),
-  accountHolderName: optionalText(100),
-  bankName: optionalText(100),
-  ibanNumber: optionalText(40),
-  walletProvider: optionalText(60),
-  walletPhone: optionalText(20),
-  walletId: optionalText(60),
+  paymentMethod: z.enum(['paypal', 'wallet']).optional(), // 'wallet' = the legacy name of the PayPal option in old clients
   paypalPayoutEmail: z.string().trim().max(254, 'بريد PayPal طويل جدًا').nullable().optional()
+}).catchall(z.unknown()).superRefine((data, ctx) => {
+  for (const key of nonPaypalPayoutKeys(data)) ctx.addIssue({ code: 'custom', path: [key], message: PAYPAL_ONLY_MESSAGE });
 });
 
 export const profileTabSchemas = {

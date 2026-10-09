@@ -140,3 +140,31 @@ test('after steps 1, 2 and 3 a fresh GET /setup returns everything that was save
   assert.ok(saved.frontIdUrl && saved.backIdUrl);
   assert.ok(saved.completionPercentage > 0);
 });
+
+test('PayPal is the only financial method: a bank / IBAN / holder / wallet value on step 3 is a 400 and nothing is stored', async (t) => {
+  const { state, step } = await load(t);
+  for (const body of [
+    { paypalPayoutEmail: 'a@b.com', iban: 'SA0380000000608010167519' },
+    { paypalPayoutEmail: 'a@b.com', bankName: 'بنك' },
+    { paypalPayoutEmail: 'a@b.com', accountHolder: 'نورا' },
+    { paypalPayoutEmail: 'a@b.com', walletNumber: '0500000000' },
+    { bank: { paymentType: 'bank', iban: 'SA0380000000608010167519' } },
+  ]) {
+    const { r } = await step(3, body);
+    assert.equal(r.statusCode, 400);
+    assert.match(r.body.message, /PayPal/);
+  }
+  assert.equal(state.profile.paypalPayoutEmail, null);
+  assert.equal(state.profile.iban, undefined);
+  assert.equal(state.profile.bankName, undefined);
+});
+
+test('PayPal-only save still works and a refresh (GET /setup) returns no legacy bank fields', async (t) => {
+  const { state, step, get } = await load(t, { iban: 'SA0380000000608010167519', bankName: 'قديم', accountHolder: 'قديم', paymentType: 'bank' });
+  const { r } = await step(3, { paypalPayoutEmail: 'Nora@Example.com' });
+  assert.equal(r.statusCode, 200);
+  assert.equal(state.profile.paypalPayoutEmail, 'nora@example.com');
+  const data = await get();
+  assert.equal(data.paypalPayoutEmail, 'nora@example.com');
+  for (const k of ['iban', 'bankName', 'accountHolder', 'paymentType']) assert.equal(k in data, false, k);
+});
