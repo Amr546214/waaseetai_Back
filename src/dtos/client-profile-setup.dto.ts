@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { sanitizedText } from '../utils/sanitize-text';
+import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
 
 // POST /api/client/profile/setup — the four objects the wizard sends (details, identity, documents, agreements) plus the optional PayPal/bank
 // object. Unknown keys are stripped. Every field keeps the tolerance the handler always had ('' / null = not provided) but now has a type and
@@ -27,12 +28,14 @@ export const clientSetupSchema = z.object({
 		terms: agreed('يجب الموافقة على الشروط والأحكام'),
 		privacy: agreed('يجب الموافقة على سياسة الخصوصية')
 	}, { message: 'الإقرارات مطلوبة' }),
+	// PayPal is the only financial method: a bank / IBAN / account holder / wallet value is a 400 (never stored); an empty one is ignored.
 	bank: z.object({
 		paymentType: z.string().trim().max(20).nullable().optional(),
-		paypalPayoutEmail: z.string().trim().max(254, 'بريد PayPal طويل جدًا').nullable().optional(),
-		bankName: text(100),
-		accountHolder: text(100),
-		iban: z.string().trim().max(40, 'الآيبان طويل جدًا').nullable().optional()
+		paypalPayoutEmail: z.string().trim().max(254, 'بريد PayPal طويل جدًا').nullable().optional()
+	}).catchall(z.unknown()).superRefine((bank, ctx) => {
+		for (const key of nonPaypalPayoutKeys(bank)) ctx.addIssue({ code: 'custom', path: [key], message: PAYPAL_ONLY_MESSAGE });
+		const type = String(bank.paymentType ?? '').trim().toLowerCase();
+		if (type && type !== 'paypal') ctx.addIssue({ code: 'custom', path: ['paymentType'], message: PAYPAL_ONLY_MESSAGE });
 	}).optional(),
 	// legacy top-level field, still read by the handler
 	paypalPayoutEmail: z.string().trim().max(254, 'بريد PayPal طويل جدًا').nullable().optional()

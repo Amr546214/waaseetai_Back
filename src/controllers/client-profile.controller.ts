@@ -8,6 +8,7 @@ import { computeClientCompletion, computeClientMissingItems } from '../utils/com
 import { clientProfileService } from '../services/client-profile.service';
 import { AppError } from '../utils/app-error';
 import { onboardingService } from '../services/onboarding.service';
+import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE, withoutLegacyPayoutFields } from '../utils/client-payout-fields';
 import { clientSetupSchema, clientSetupStepSchemas, ClientSetupStep } from '../dtos/client-profile-setup.dto';
 import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
 
@@ -53,7 +54,7 @@ export class ClientProfileController {
 
       res.status(200).json({
         success: true,
-        data: { ...(profile || {}), completionPercentage, missingItems }
+        data: { ...(withoutLegacyPayoutFields(profile) || {}), completionPercentage, missingItems }
       });
     } catch (error) {
       next(error);
@@ -97,10 +98,6 @@ export class ClientProfileController {
         }
       }
 
-      if (!isPaypal && bank.iban && bank.iban.length !== 24) {
-        return res.status(400).json({ success: false, message: 'IBAN must be exactly 24 characters.' });
-      }
-
       assertKycFileValues([identity.frontId, identity.backId, documents.supportingDocs], userId);
       const [frontIdUrl, backIdUrl, supportingDocsUrl] = await Promise.all([
         storeKycFileIfNeeded(identity.frontId, `waseetai/clients/${userId}/identity`, 'front-id'),
@@ -125,9 +122,8 @@ export class ClientProfileController {
         // through a real verification integration or the admin KYC decision (onboarding.service). See the guarded update below.
 
         // PayPal path leaves bank columns untouched (undefined = not written).
-        ...(isPaypal
-          ? { paymentType: 'paypal', paypalPayoutEmail }
-          : { paymentType: bank.paymentType, bankName: bank.bankName, accountHolder: bank.accountHolder, iban: bank.iban }),
+        // PayPal is the only financial method: only the PayPal email is ever written (the legacy bank columns are never touched).
+        ...(isPaypal ? { paymentType: 'paypal', paypalPayoutEmail } : {}),
 
         supportingDocsUrl: supportingDocsUrl || undefined,
         notes: documents.notes,
@@ -179,6 +175,11 @@ export class ClientProfileController {
       const step = Number(req.params.step) as ClientSetupStep;
       const schema = clientSetupStepSchemas[step];
       if (!schema) return res.status(400).json({ success: false, message: 'خطوة غير معروفة' });
+      // PayPal is the only financial method: a bank / IBAN / account holder / wallet value is refused, never silently dropped.
+      const forbidden = [...nonPaypalPayoutKeys(req.body), ...nonPaypalPayoutKeys((req.body as any)?.bank)];
+      if (forbidden.length) {
+        return res.status(400).json({ success: false, message: PAYPAL_ONLY_MESSAGE, errors: forbidden.map(k => ({ path: k, field: k, message: PAYPAL_ONLY_MESSAGE, code: 'custom' })) });
+      }
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) {
         const errors = parsed.error.issues.map(issue => {
