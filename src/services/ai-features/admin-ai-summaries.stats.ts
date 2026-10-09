@@ -56,24 +56,44 @@ export function linearNextValue(values: (number | null)[], minPoints = FORECAST_
   return Number.isFinite(next) && next >= 0 ? round(next, 2) : null;
 }
 
+export const PLATFORM_CURRENCY = 'USD';
+
 export interface ForecastMetrics {
   currency: string | null;
+  /** True when the data holds more than one currency: only one is summed (never mixed), no next-month estimate is produced. */
+  mixedCurrencies: boolean;
+  /** Every currency that appeared in the rows (labels only). */
+  currenciesSeen: string[];
   months: { month: string; inflow: number | null; outflow: number | null; inflowChangePercent: number | null }[];
   monthsWithData: number;
   inflowNextMonthEstimate: number | null;
   inflowTrendBasedOnMonths: number | null;
 }
 
-export function buildForecastMetrics(inflow: MonthSeriesInput[], outflow: MonthSeriesInput[], months: string[], currency: string | null): ForecastMetrics {
+/**
+ * Which currency the series uses. Amounts of different currencies are NEVER summed together. The platform currency (USD) wins when it is
+ * present; otherwise the most frequent currency in the data; with no rows at all there is no currency (null) — never a default.
+ */
+export function pickForecastCurrency(rows: { currency: string }[]): { currency: string | null; seen: string[]; mixed: boolean } {
+  const tally = new Map<string, number>();
+  for (const r of rows) tally.set(r.currency, (tally.get(r.currency) ?? 0) + 1);
+  const seen = [...tally.keys()].sort();
+  if (seen.length === 0) return { currency: null, seen, mixed: false };
+  const currency = tally.has(PLATFORM_CURRENCY) ? PLATFORM_CURRENCY : [...tally.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  return { currency, seen, mixed: seen.length > 1 };
+}
+
+export function buildForecastMetrics(inflow: MonthSeriesInput[], outflow: MonthSeriesInput[], months: string[], currency: string | null, mixedCurrencies = false, currenciesSeen: string[] = currency ? [currency] : []): ForecastMetrics {
   const inV = monthlyTotals(inflow, months), outV = monthlyTotals(outflow, months);
   const monthsWithData = months.filter((_, i) => inV[i] !== null || outV[i] !== null).length;
   const withInflow = inV.filter((v) => v !== null).length;
   return {
-    currency,
+    currency, mixedCurrencies, currenciesSeen,
     months: months.map((m, i) => ({ month: m, inflow: inV[i], outflow: outV[i], inflowChangePercent: i > 0 ? changePercent(inV[i - 1], inV[i]) : null })),
     monthsWithData,
-    inflowNextMonthEstimate: linearNextValue(inV),
-    inflowTrendBasedOnMonths: withInflow >= FORECAST_TREND_MIN_MONTHS ? withInflow : null,
+    // a trend over one currency is only honest when the data really is one currency
+    inflowNextMonthEstimate: mixedCurrencies ? null : linearNextValue(inV),
+    inflowTrendBasedOnMonths: !mixedCurrencies && withInflow >= FORECAST_TREND_MIN_MONTHS ? withInflow : null,
   };
 }
 

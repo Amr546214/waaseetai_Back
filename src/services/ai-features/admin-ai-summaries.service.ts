@@ -4,7 +4,8 @@ import type { AllowRule } from '../llm/llm.payload';
 import { metricSummaryEngine, type MetricSummaryEngine, type MetricSummaryResult } from './metric-summary';
 import {
   ANOMALY_WINDOW_DAYS, FORECAST_MIN_MONTHS, FORECAST_WINDOW_MONTHS, SENTIMENT_MAX_SNIPPETS, SENTIMENT_MIN_REVIEWS, SENTIMENT_SNIPPET_CHARS,
-  buildForecastMetrics, buildSentimentMetrics, dailyAnomalyStats, lastCompleteMonths, lastDays, topCounts,
+  buildForecastMetrics,
+  pickForecastCurrency, buildSentimentMetrics, dailyAnomalyStats, lastCompleteMonths, lastDays, topCounts,
   type DailyStats, type ForecastMetrics, type SentimentMetrics,
 } from './admin-ai-summaries.stats';
 
@@ -26,7 +27,7 @@ export interface AnomalyMetrics {
 }
 
 const forecastAllow: AllowRule = {
-  currency: 'string', monthsWithData: 'number', inflowNextMonthEstimate: 'number', inflowTrendBasedOnMonths: 'number',
+  currency: 'string', mixedCurrencies: 'boolean', currenciesSeen: ['string'], monthsWithData: 'number', inflowNextMonthEstimate: 'number', inflowTrendBasedOnMonths: 'number',
   months: [{ month: 'string', inflow: 'number', outflow: 'number', inflowChangePercent: 'number' }],
 };
 const anomalyAllow: AllowRule = {
@@ -51,17 +52,15 @@ export class AdminAiSummariesService {
       prisma.walletTransaction.findMany({ where: { type: 'DEPOSIT', status: 'COMPLETED', createdAt: { gte: from, lt: to } }, select: { amount: true, currency: true, createdAt: true }, take: MAX_ROWS }),
       prisma.withdrawal.findMany({ where: { status: 'COMPLETED', createdAt: { gte: from, lt: to } }, select: { amount: true, currency: true, createdAt: true }, take: MAX_ROWS }),
     ]);
-    // One currency only (never sum across currencies): the one with the most completed deposits, else the most withdrawals.
-    const tally = new Map<string, number>();
-    for (const r of [...deposits, ...withdrawals]) tally.set(r.currency, (tally.get(r.currency) ?? 0) + 1);
-    const currency = [...tally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    // Never sum across currencies: USD (the platform currency) when present, else the most frequent one; no rows => no currency at all.
+    const { currency, seen, mixed } = pickForecastCurrency([...deposits, ...withdrawals]);
     const pick = (rows: { amount: number; currency: string; createdAt: Date }[]) => rows.filter((r) => r.currency === currency).map((r) => ({ amount: r.amount, at: r.createdAt }));
-    const metrics = buildForecastMetrics(pick(deposits), pick(withdrawals), months, currency);
+    const metrics = buildForecastMetrics(pick(deposits), pick(withdrawals), months, currency, mixed, seen);
     const result = await this.engine.summarise({
       feature: 'admin-forecast', userId: adminId, metrics, allow: forecastAllow,
       paths: ['months', 'monthsWithData'], minUsedPaths: 2, hasEnoughData: (p) => (p?.monthsWithData ?? 0) >= FORECAST_MIN_MONTHS,
       system: 'أنت محلل مالي للمنصة. لخّص حركة الأموال الشهرية الفعلية (الإيداعات المكتملة كتدفق وارد، والسحوبات المكتملة كتدفق صادر) واتجاهها اعتماداً على الأرقام المرسلة فقط. '
-        + 'إن وُجد inflowNextMonthEstimate فاذكره كتقدير مشتق من الاتجاه الخطي وليس توقعاً مؤكداً؛ وإن كان null فلا تذكر أي توقع. لا تذكر نسبة ثقة أو احتمالاً.',
+        + 'إن كانت mixedCurrencies=true فاذكر أن البيانات تضم عملات متعددة وأن الأرقام المعروضة لعملة واحدة فقط ولا تقدير للشهر القادم. إن وُجد inflowNextMonthEstimate فاذكره كتقدير مشتق من الاتجاه الخطي وليس توقعاً مؤكداً؛ وإن كان null فلا تذكر أي توقع. لا تذكر نسبة ثقة أو احتمالاً.',
     });
     return { ...result, series: result.status === 'NOT_ENOUGH_DATA' ? null : metrics };
   }
