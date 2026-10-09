@@ -6,6 +6,7 @@ import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
 import { SPECIALTY_UPLOAD_MIME_TYPES } from '../utils/upload-mime-types';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { providerSpecialtyRecommendationService } from '../services/provider-specialty-recommendation.service';
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { requireOwnedProviderSpecialtyFromBody, requireOwnedProviderSpecialtyFromParam } from '../utils/provider-specialty-access';
 
@@ -17,6 +18,18 @@ const providerAuth = [
   requireActiveUser,
   authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY)
 ] as const;
+
+// Rule-based specialty suggestion for the "choose your specialty" step (provider history / profile / open demand). Registered before the
+// /:id routes. A failure answers 500: the page then shows no suggestion (no error toast).
+router.get('/recommendations', ...providerAuth, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const data = await providerSpecialtyRecommendationService.getForProvider((req as any).user.id);
+    res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('[ProviderSpecialty] recommendations failed:', error);
+    res.status(500).json({ success: false, message: 'تعذر تحميل اقتراح التخصص حاليًا' });
+  }
+});
 
 router.post(
   '/submit-proof',
