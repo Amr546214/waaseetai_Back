@@ -270,7 +270,7 @@ export class AiMatchingEngineService {
       // 3. Portfolio & Accreditation (20%)
       let portfolioScore = 75 + Math.min(20, provider.portfolioCount * 4 + provider.accreditationCount * 5);
       if (provider.accreditationCount > 0) {
-        reasons.push('ملف أعمال ومعرض نماذج موثق بالذكاء');
+        reasons.push('ملف أعمال ومعرض نماذج موثق');
       }
 
       // 4. Rating & Level (15%) — 0 contribution when genuinely unrated.

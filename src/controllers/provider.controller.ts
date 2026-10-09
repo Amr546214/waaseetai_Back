@@ -10,6 +10,7 @@ import { projectProgressService } from '../services/project-progress.service';
 import { providerFinanceService } from '../services/provider-finance.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { providerDeliveriesService } from '../services/provider-deliveries.service';
+import { computeClientAiOfferRating } from '../services/client-ai-offer-rating';
 
 export const getProviderStatistics = async (req: Request, res: Response, next: NextFunction) => {
 	try {
@@ -77,7 +78,14 @@ export const getProviderStatistics = async (req: Request, res: Response, next: N
 		
 		const providerRating = providerProfile?.rating && providerProfile.rating !== 5.0 ? providerProfile.rating : 0;
 		const humanRating = providerProfile?.rating && providerProfile.rating !== 5.0 ? providerProfile.rating : 0;
-		const aiRating = 0; // Strict DB Mode: No mock AI rating
+		// "تقييم الذكاء الاصطناعي": the average of the REAL WaseetAI quality scores stored on this provider's own proposals (stars out of 5);
+		// null (never 0) when no proposal was scored.
+		let aiOfferRating = computeClientAiOfferRating([]);
+		try {
+			const scoredProposals = await prisma.proposal.findMany({ where: { providerId, aiMatchScore: { not: null } }, select: { aiMatchScore: true, createdAt: true } });
+			aiOfferRating = computeClientAiOfferRating(scoredProposals);
+		} catch { /* no AI rating rather than a wrong one */ }
+		const aiRating = aiOfferRating.aiRating;
 		const profileSetupCompleted = providerProfile?.isProfileSetupComplete === true;
 		const setupTestCompleted = providerProfile?.setupTestStatus === 'COMPLETED';
 		const hasApprovedSpecialties = (providerProfile?.providerSpecialties?.length || 0) > 0;
@@ -122,6 +130,9 @@ export const getProviderStatistics = async (req: Request, res: Response, next: N
 					providerRating,
 					humanRating,
 					aiRating,
+					aiRatingSource: aiOfferRating.aiRatingSource,
+					aiRatingUpdatedAt: aiOfferRating.aiRatingUpdatedAt,
+					aiRatedOffersCount: aiOfferRating.aiRatedOffersCount,
 					profileCompletionPercent,
 					profileSetupCompleted,
 					setupTestCompleted,

@@ -228,8 +228,8 @@ export class ExploreRequestsService {
         aiSuggestedBudget = `${minB} $ فأكثر`;
         aiPriceEval = 'سعر أساسي مناسب للمنافسة';
       } else {
-        aiSuggestedBudget = '1,500 - 4,000 $';
-        aiPriceEval = 'ميزانية تقديرية مفتوحة حسب الجهد';
+        // no budget on the request: nothing is invented (no placeholder range)
+        aiPriceEval = 'ميزانية الطلب غير محددة';
       }
 
       // Timeline appraisal

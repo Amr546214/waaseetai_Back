@@ -1263,17 +1263,14 @@ test('getPublicProfile (aiMetrics): a failed upstream call is not cached', async
   assert.equal(second.aiMetrics.executionQuality, 88);
 });
 
-test('getPublicProfile (aiMetrics): zero projects AND zero reviews short-circuits to honest zeros without calling WaseetAI', async (t) => {
+test('getPublicProfile (aiMetrics): zero projects AND zero reviews has no history: the vendor metrics are absent (no data, never 0) and WaseetAI is not called', async (t) => {
   const { service, calls } = await loadServiceForAiMetrics(t, { projects: [], reviewsCount: 0 });
   const result = await service.getPublicProfile('user-1');
   assert.equal(calls.length, 0);
-  assert.deepEqual(result.aiMetrics, { ...ZERO_AI_METRICS_FOR_TEST, averageTestScore: 0, codeMatchingIndex: 0 });
+  assert.deepEqual(result.aiMetrics, { averageTestScore: 0, codeMatchingIndex: 0 });
+  assert.equal((result.aiMetrics as any).executionQuality, undefined);
 });
 
-const ZERO_AI_METRICS_FOR_TEST = {
-  executionQuality: 0, onTimeDelivery: 0, communication: 0, clientSatisfaction: 0,
-  onTimeCompletionRate: 0, repeatClientRate: 0, highRatingServicesRate: 0, conflictFreeDeliveryRate: 0
-};
 
 test('getPublicProfile (aiMetrics): averageTestScore/codeMatchingIndex stay DB arithmetic; request carries no PII', async (t) => {
   const specialty = {
