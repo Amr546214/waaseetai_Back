@@ -47,6 +47,12 @@ function isProviderIdentity(user: { accountType: AccountType; roles: UserRole[] 
     || user.activeRole === UserRole.PROVIDER;
 }
 
+/** PayPal is the only payout destination: a legacy bank destination on an old row (iban / account name / number) is never returned, not even to the admin. */
+export function withoutLegacyWithdrawalBankFields<T extends Record<string, any>>(row: T): Omit<T, 'iban' | 'accountName' | 'accountNumber'> {
+  const { iban: _i, accountName: _n, accountNumber: _a, ...safe } = row;
+  return safe;
+}
+
 export class WithdrawalService {
   /**
    * Provider balance is COMPUTED from Escrow.releasedAmount, not a stored
@@ -294,7 +300,7 @@ export class WithdrawalService {
   /** A marketer's own withdrawals: PayPal only. Any legacy bank destination on an old row (iban / account name / number) is never returned. */
   async listForMarketer(userId: string, status?: WithdrawalStatus, page = 1, limit = 10) {
     const data = await this.listForUser(userId, status, page, limit);
-    return { ...data, items: data.items.map(({ iban: _i, accountName: _n, accountNumber: _a, ...safe }) => safe) };
+    return { ...data, items: data.items.map(withoutLegacyWithdrawalBankFields) };
   }
 
   async listForUser(userId: string, status?: WithdrawalStatus, page = 1, limit = 10) {
@@ -323,11 +329,11 @@ export class WithdrawalService {
       prisma.withdrawal.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { user: { select: { id: true, firstName: true, lastName: true, email: true, accountType: true } }, reviewedBy: { select: { id: true, firstName: true, lastName: true } } } }),
       prisma.withdrawal.count({ where })
     ]);
-    return { items, pagination: { page: safePage, limit: safeLimit, total, pages: Math.ceil(total / safeLimit) } };
+    return { items: items.map(withoutLegacyWithdrawalBankFields), pagination: { page: safePage, limit: safeLimit, total, pages: Math.ceil(total / safeLimit) } };
   }
 
   async get(id: string) {
-    const item = await prisma.withdrawal.findUnique({ where: { id }, include: { user: { select: { id: true, firstName: true, lastName: true, email: true, accountType: true, walletBalance: true, ibanNumber: true, bankName: true } }, reviewedBy: { select: { id: true, firstName: true, lastName: true } } } });
+    const item = await prisma.withdrawal.findUnique({ where: { id }, include: { user: { select: { id: true, firstName: true, lastName: true, email: true, accountType: true, walletBalance: true } }, reviewedBy: { select: { id: true, firstName: true, lastName: true } } } });
     if (!item) throw new AppError('طلب السحب غير موجود', 404);
     // Release-blocker fix (admin withdrawal detail): the frontend used to
     // fabricate an "available balance" from a deterministic hash of the
@@ -336,7 +342,7 @@ export class WithdrawalService {
     // same withdrawable-balance arithmetic approve() itself will use), so the
     // admin sees a real, non-invented figure instead of a fabricated one.
     const availableBalance = await this.getWithdrawableBalanceForDisplay(item.userId);
-    return { ...item, availableBalance };
+    return { ...withoutLegacyWithdrawalBankFields(item), availableBalance };
   }
 
   /**

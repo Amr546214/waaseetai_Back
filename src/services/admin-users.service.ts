@@ -2,6 +2,7 @@ import { prisma } from '../config/db';
 import { disconnectUserSockets } from '../utils/socket-registry';
 import { AccountType, UserStatus, RiskLevel, Prisma } from '@prisma/client';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
+import { withoutLegacyAffiliateBankFields } from '../utils/affiliate-payout';
 
 export interface GetUsersQueryParams {
   page?: number;
@@ -381,7 +382,7 @@ export class AdminUsersService {
         createdAt: u.createdAt,
         clientProfile: u.clientProfile,
         providerProfile: u.providerProfile,
-        affiliateProfile: u.affiliateProfile
+        affiliateProfile: withoutLegacyAffiliateBankFields(u.affiliateProfile)
       };
     });
 
