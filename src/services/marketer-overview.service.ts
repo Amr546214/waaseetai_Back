@@ -3,6 +3,8 @@ import { AppError } from '../utils/app-error';
 import { prisma } from '../config/db';
 import { generateReferralSlug, isReferralSlugConflict } from '../utils/slug.util';
 import { initializeRoleState } from './account-management.service';
+import { metricSummaryEngine, type MetricSummaryEngine, type MetricSummaryResult } from './ai-features/metric-summary';
+import { MARKETER_INSIGHTS_AI_FEATURE, MARKETER_INSIGHTS_ALLOW, MARKETER_INSIGHTS_PATHS, MARKETER_INSIGHTS_SYSTEM, MARKETER_TREND_DAYS, buildMarketerInsightsMetrics, marketerHasEnoughData } from './ai-features/marketer-insights.service';
 
 export class MarketerOverviewService {
   /**
@@ -143,36 +145,34 @@ export class MarketerOverviewService {
   }
 
   /**
-   * 4. Deterministic performance-insights engine — rule-based tips computed
-   * directly from the affiliate's real channel/referral data (no AI provider
-   * call). Kept as "AI Insights" in the route/method name for API
-   * compatibility with the frontend, but the frontend-facing label and
-   * fabricated "92% accuracy" badge that used to describe it as AI-driven
-   * timing/content analysis were removed (final AI cleanup batch) since no
-   * such analysis is actually performed.
+   * 4. Marketer insights as an AiResult (MetricSummaryEngine over the affiliate's REAL aggregates). NOT_ENOUGH_DATA when there is too
+   * little data (the model is never called); FAILED when the model is unavailable. Nothing is rule-generated or static.
    */
-  async getAiInsights(userId: string) {
+  async getAiInsights(userId: string, engine: Pick<MetricSummaryEngine, 'summarise'> = metricSummaryEngine): Promise<MetricSummaryResult> {
     const affiliate = await this.getOrCreateProfile(userId);
-    const insights = [];
+    const day = 86_400_000;
+    const now = Date.now();
+    const since30 = new Date(now - MARKETER_TREND_DAYS * day);
+    const since60 = new Date(now - 2 * MARKETER_TREND_DAYS * day);
 
-    if (affiliate.channelMetrics.length === 0) {
-      insights.push({ text: "ابدأ ببوست تفاعلي على منصة X لجمع أول إحالة لك." });
-    } else {
-      const topChannel = affiliate.channelMetrics.sort((a, b) => b.conversionPercentage - a.conversionPercentage)[0];
-      if (topChannel && topChannel.conversionPercentage > 0) {
-        insights.push({ text: `قناة ${topChannel.channel} تحقق أفضل معدل تحويل (${topChannel.conversionPercentage}%)، ركز جهودك هناك.` });
-      }
-    }
+    const [grouped, last30, previous30] = await Promise.all([
+      prisma.referral.groupBy({ by: ['status'], where: { affiliateId: affiliate.id }, _count: { _all: true } }),
+      prisma.referral.count({ where: { affiliateId: affiliate.id, createdAt: { gte: since30 } } }),
+      prisma.referral.count({ where: { affiliateId: affiliate.id, createdAt: { gte: since60, lt: since30 } } }),
+    ]);
 
-    const pendingReferrals = await prisma.referral.count({
-      where: { affiliateId: affiliate.id, status: 'PENDING' }
+    const metrics = buildMarketerInsightsMetrics({
+      channels: affiliate.channelMetrics,
+      referralsByStatus: grouped.map((g) => ({ status: g.status, count: g._count._all })),
+      referralsLast30Days: last30,
+      referralsPrevious30Days: previous30,
+      approvedCommissionAmounts: affiliate.commissionLogs.map((c) => c.amount),
     });
 
-    if (pendingReferrals > 0) {
-      insights.push({ text: `لديك ${pendingReferrals} إحالة قيد المراجعة أو لم تكتمل بعد.` });
-    }
-
-    return insights;
+    return engine.summarise({
+      feature: MARKETER_INSIGHTS_AI_FEATURE, userId, metrics, allow: MARKETER_INSIGHTS_ALLOW,
+      paths: MARKETER_INSIGHTS_PATHS, minUsedPaths: 1, system: MARKETER_INSIGHTS_SYSTEM, hasEnoughData: marketerHasEnoughData,
+    });
   }
 
   /**

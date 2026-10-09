@@ -267,6 +267,7 @@ import adminAccreditationRoutes from './routes/admin-accreditation.routes';
 import adminAffiliateRequestsRoutes from './routes/admin-affiliate-requests.routes';
 import adminBrokersRoutes from './routes/admin-brokers.routes';
 import adminSecurityRoutes from './routes/admin-security.routes';
+import adminAiSummariesRoutes from './routes/admin-ai-summaries.routes';
 import kycDocumentsRoutes from './routes/kyc-documents.routes';
 
 // Support BOTH prefixed and unprefixed paths.
@@ -294,6 +295,8 @@ mountAppRoute('/api/admin/brokers', adminBrokersRoutes);
 mountAppRoute('/admin/brokers', adminBrokersRoutes);
 mountAppRoute('/api/admin/security', adminSecurityRoutes);
 mountAppRoute('/admin/security', adminSecurityRoutes);
+mountAppRoute('/api/admin/ai', adminAiSummariesRoutes);
+mountAppRoute('/admin/ai', adminAiSummariesRoutes);
 mountAppRoute('/api/kyc-documents', kycDocumentsRoutes);
 mountAppRoute('/kyc-documents', kycDocumentsRoutes);
 mountAppRoute('/api', apiRouter);

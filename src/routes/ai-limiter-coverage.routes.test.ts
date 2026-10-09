@@ -137,3 +137,80 @@ test('client-requests.routes.ts: POST /:id/health carries aiLimiter', () => {
   assert.match(registration, /aiLimiter/);
   assert.match(registration, /requireActiveUser/);
 });
+
+// A2: the two metric-summary AI endpoints (each call can cost model budget) carry aiLimiter.
+test('client-reports.routes.ts: GET /ai-summary and marketer-overview.routes.ts: GET /ai-insights carry aiLimiter', () => {
+  const reports = readRoute('client-reports.routes.ts');
+  assert.ok(reports.includes("router.get('/ai-summary', authenticate, requireActiveUser, aiLimiter,"));
+  const marketerSource = readRoute('marketer-profile.routes.ts');
+  const marketerRegistration = marketerSource.split('\n').find(l => l.includes("router.get('/public/:id'")) || '';
+  assert.doesNotMatch(marketerRegistration, /aiLimiter/);
+});
+
+// Implementation Batch 7 — ai-assistant.routes.ts (deep project-fit
+// analysis, analyzeProjectForProvider -> geminiClient.generateStructured)
+// was calling Gemini with only `authenticate`: no aiLimiter, no
+// requireActiveUser, no role restriction. The only real callers are the
+// provider-only Explore Requests / Apply-to-Request pages, so the fix adds
+// the same providerOnly + requireActiveUser + aiLimiter chain every other
+// provider-only Gemini route in provider.routes.ts already carries.
+test('ai-assistant.routes.ts: /analyze-project (GET and POST) is providerOnly, requireActiveUser, and carries aiLimiter', () => {
+  const source = readRoute('ai-assistant.routes.ts');
+  assert.match(source, /router\.use\(authenticate,\s*requireActiveUser,\s*providerOnly,\s*aiLimiter\)/);
+  assert.match(source, /providerOnly = authorize\(AccountType\.PROVIDER_INDIVIDUAL,\s*AccountType\.PROVIDER_COMPANY\)/);
+  assert.match(source, /router\.get\('\/analyze-project\/:projectId'/);
+  assert.match(source, /router\.post\('\/analyze-project'/);
+});
+
+// Implementation Batch 8 — the standalone duplicate `GET /ai-matching-
+// projects` route (ai-matching.routes.ts/ai-matching.controller.ts) has
+// been removed: confirmed zero real frontend callers (only a dead,
+// never-invoked provider-api.service.ts method pointed at it) and confirmed
+// to call the exact same aiMatchingEngineService.getTop3MatchingProjects()
+// already live and wired through GET /provider/statistics. This proves the
+// dead route/controller files are gone and the live /statistics path (with
+// its own aiLimiter, asserted above) is untouched.
+test('the removed /ai-matching-projects duplicate route/controller files no longer exist', () => {
+  assert.equal(fs.existsSync(path.join(__dirname, 'ai-matching.routes.ts')), false);
+  assert.equal(fs.existsSync(path.join(__dirname, '..', 'controllers', 'ai-matching.controller.ts')), false);
+});
+
+test('provider.routes.ts: no longer mounts the removed ai-matching.routes.ts, and /statistics still calls the same underlying matching engine unaffected', () => {
+  const source = readRoute('provider.routes.ts');
+  assert.doesNotMatch(source, /ai-matching\.routes/);
+  assert.doesNotMatch(source, /aiMatchingRoutes/);
+  // /statistics registration (and its aiLimiter) is asserted in full above —
+  // this just proves it is still present after the duplicate route's removal.
+  assert.match(source, /router\.get\(\s*'\/statistics',/);
+});
+
+// Implementation Batch 8 — advisory-only Gemini project health analysis
+// (Contract Monitoring / Project Health / Predictive Delay Risk /
+// Predictive Dispute Risk — one real feature). Both the provider-side and
+// client-side entry points must carry aiLimiter like every other
+// Gemini-triggering HTTP route in this codebase.
+test('provider.routes.ts: POST /projects/:id/health carries aiLimiter', () => {
+  const source = readRoute('provider.routes.ts');
+  const start = source.indexOf("router.post('/projects/:id/health',");
+  assert.notEqual(start, -1);
+  const registration = source.slice(start, source.indexOf(');', start));
+  assert.match(registration, /aiLimiter/);
+  assert.match(registration, /requireActiveUser/);
+});
+
+test('client-requests.routes.ts: POST /:id/health carries aiLimiter', () => {
+  const source = readRoute('client-requests.routes.ts');
+  const start = source.indexOf("router.post('/:id/health',");
+  assert.notEqual(start, -1);
+  const registration = source.slice(start, source.indexOf(');', start));
+  assert.match(registration, /aiLimiter/);
+  assert.match(registration, /requireActiveUser/);
+});
+
+// A2: the two metric-summary AI endpoints (each call can cost model budget) carry aiLimiter.
+test('client-reports.routes.ts: GET /ai-summary and marketer-overview.routes.ts: GET /ai-insights carry aiLimiter', () => {
+  const reports = readRoute('client-reports.routes.ts');
+  assert.ok(reports.includes("router.get('/ai-summary', authenticate, requireActiveUser, aiLimiter,"));
+  const marketer = readRoute('marketer-overview.routes.ts');
+  assert.ok(marketer.includes("router.get('/ai-insights', aiLimiter,"));
+});
