@@ -1,4 +1,5 @@
 import { AccountType, Prisma } from '@prisma/client';
+import { businessModelAuditResult } from './ai-features/business-model-audit-result';
 import { sanitizeText } from '../utils/sanitize-text';
 import { MARKET_VISIBLE_WHERE, MARKET_ELIGIBILITY_SELECT_PROVIDER, marketBlockReasons, marketBlockMessage } from '../utils/market-visibility';
 import { prisma } from '../config/db';
@@ -608,9 +609,9 @@ export class MarketplaceService {
 				status: s.status,
 				totalAmount: Number(s.totalAmount),
 				totalDays: s.totalDays,
-				aiScore: s.aiScore ?? s.aiAuditScore ?? 0,
-				aiClarityScore: s.aiClarityScore ?? 0,
-				aiFeasibilityScore: s.aiFeasibilityScore ?? 0,
+				aiScore: s.aiScore ?? s.aiAuditScore ?? null,
+				aiClarityScore: s.aiClarityScore ?? null,
+				aiFeasibilityScore: s.aiFeasibilityScore ?? null,
 				aiRecommendationReason: s.aiReviewSummary || '',
 				viewsCount: s.viewsCount,
 				salesCount: s.salesCount,
@@ -717,9 +718,9 @@ export class MarketplaceService {
 			status: s.status,
 			totalAmount: Number(s.totalAmount),
 			totalDays: s.totalDays,
-			aiScore: s.aiScore ?? s.aiAuditScore ?? 0,
-			aiClarityScore: s.aiClarityScore ?? 0,
-			aiFeasibilityScore: s.aiFeasibilityScore ?? 0,
+			aiScore: s.aiScore ?? s.aiAuditScore ?? null,
+			aiClarityScore: s.aiClarityScore ?? null,
+			aiFeasibilityScore: s.aiFeasibilityScore ?? null,
 			aiRecommendationReason: s.aiReviewSummary || '',
 			viewsCount: updatedViews.viewsCount,
 			salesCount: s.salesCount,
@@ -1068,7 +1069,9 @@ export class MarketplaceService {
 				viewsCount: views,
 				salesCount: model.salesCount || 0,
 				offersCount: model.salesCount || 0,
-				aiScore: model.aiScore || 0,
+				// a real audit score or null (never 0 as "missing")
+				aiScore: model.aiAuditScore ?? model.aiScore ?? null,
+				aiAudit: businessModelAuditResult(model),
 				rating: 0,
 				reviewsCount: 0,
 				tags: [model.specialty?.nameAr, model.subSpecialty].filter((value): value is string => Boolean(value)),
@@ -1118,14 +1121,14 @@ export class MarketplaceService {
 				title: model.title,
 				subtitle: isRejected ? 'ملاحظات التدقيق تتطلب تعديل النموذج' : 'النموذج بانتظار اكتمال المراجعة',
 				date: model.updatedAt.toLocaleDateString('ar-SA'),
-				matchRate: model.aiAuditScore || model.aiScore || 0,
-				statusLabel: isRejected ? 'يحتاج تعديل' : 'قيد مراجعة الذكاء',
+				matchRate: model.aiAuditScore ?? model.aiScore ?? null,
+				statusLabel: isRejected ? 'يحتاج تعديل' : 'قيد المراجعة',
 				isExpanded: false,
 				checks: [
 					...strengths.map((text: string) => ({ text, status: 'سليم', type: 'success' as const })),
 					...gaps.map((text: string) => ({ text, status: 'يحتاج تعديل', type: 'error' as const }))
 				],
-				recommendation: model.auditRejectionReason || model.aiReviewSummary || 'بانتظار اكتمال التدقيق الآلي.',
+				recommendation: model.auditRejectionReason || model.aiReviewSummary || 'بانتظار اكتمال المراجعة.',
 				isError: isRejected,
 				canApprove: false
 			};

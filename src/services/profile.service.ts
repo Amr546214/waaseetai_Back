@@ -17,6 +17,7 @@ import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile
 import { withoutLegacyPayoutFields } from '../utils/client-payout-fields';
 import { CLIENT_IDENTITY_REQUEST_CATEGORY as CLIENT_IDENTITY_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY, CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY } from '../utils/profile-request-categories';
 import bcrypt from 'bcrypt';
+import { profileChangeReviewService, withHonestAiReview } from './ai-features/profile-change-review.service';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
 import type { ClientPasswordChangeInput } from '../dtos/client-password-change.dto';
 
@@ -514,7 +515,7 @@ export class ProfileService {
     });
     if (existing) throw new AppError('لديك طلب تعديل للبيانات الأساسية قيد المراجعة بالفعل', 409);
 
-    return prisma.profileModificationRequest.create({
+    const created = await prisma.profileModificationRequest.create({
       data: {
         providerId: userId,
         category: CLIENT_BASIC_INFO_REQUEST_CATEGORY,
@@ -528,6 +529,8 @@ export class ProfileService {
       },
       select: { id: true, status: true }
     });
+    profileChangeReviewService.schedule(created.id); // AI pre-review in the background: never blocks the request, the human decision stays final
+    return created;
   }
 
   /**
@@ -595,6 +598,7 @@ export class ProfileService {
     });
 
     if (pendingRequest) {
+      profileChangeReviewService.schedule((pendingRequest as { id: string }).id); // AI pre-review in the background (masked id only, never the number)
       return {
         message: Object.keys(placeUpdate).length > 0
           ? 'تم حفظ الدولة والمدينة، وأُرسل طلب تعديل رقم الهوية للمراجعة'
@@ -616,7 +620,7 @@ export class ProfileService {
       where: { providerId: userId, category: { startsWith: 'CLIENT_' } },
       orderBy: { createdAt: 'desc' }
     });
-    return rows.map(({ metadata: _metadata, ...safe }) => safe);
+    return rows.map(withHonestAiReview);
   }
 
   /**

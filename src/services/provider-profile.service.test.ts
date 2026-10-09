@@ -1350,9 +1350,10 @@ test('verifySensitiveChange: an OTP-confirmed request carries NO AI verdict (no 
   for (const k of ['aiAuditStatus', 'aiConfidence', 'aiRecommendation']) assert.equal(afterImmediate[k] ?? null, null, k);
 });
 
-test('static: the profile-change code never writes an AI verdict or an AI-sourced review event (no AI call exists there)', () => {
+test('static: the profile-change code never writes an AI verdict or an AI-sourced review event itself (the real pre-review lives in profile-change-review.service)', () => {
   const src = readFileSync(path.join(import.meta.dirname, 'provider-profile.service.ts'), 'utf8').replace(/\/\/.*$/gm, '');
-  assert.doesNotMatch(src, /aiAuditStatus\s*:|aiConfidence\s*:|aiRecommendation\s*:/);
+  // only a real pre-review (profile-change-review.service) may write an AI verdict; here the fields are at most nulled out of a response
+  assert.doesNotMatch(src, /(aiAuditStatus|aiConfidence|aiRecommendation)\s*:\s*(?!null\b)\S/);
   assert.doesNotMatch(src, /AI_REVIEW_COMPLETED/);
   assert.doesNotMatch(src, /source:\s*'AI'/);
 });
