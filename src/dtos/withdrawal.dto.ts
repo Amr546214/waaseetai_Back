@@ -13,9 +13,15 @@ import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE } from '../utils/client-payout
 // Finance #32: the bank destination is NEVER taken from the request body, exactly like the PayPal one. Deliberately no iban /
 // accountName / accountNumber field exists on this schema: zod drops any such key a caller sends, so it cannot reach the service
 // (by construction). A bank withdrawal uses the bank data stored on the provider's own profile (see createForProvider).
+// PayPal is the only withdrawal method: a bank_transfer / other method, or any bank / IBAN / wallet field, is a 400. The destination is the
+// provider's saved PayPal email (never part of the body).
 export const createWithdrawalSchema = z.object({
   amount: z.number().positive('المبلغ يجب أن يكون أكبر من صفر'),
-  method: z.string().trim().min(2, 'طريقة السحب مطلوبة').default('bank_transfer'),
+  method: z.string().trim().min(2, 'طريقة السحب مطلوبة').default('paypal'),
+}).catchall(z.unknown()).superRefine((data, ctx) => {
+  for (const key of nonPaypalPayoutKeys(data)) ctx.addIssue({ code: 'custom', path: [key], message: PAYPAL_ONLY_MESSAGE });
+  if (data.method !== 'paypal') ctx.addIssue({ code: 'custom', path: ['method'], message: PAYPAL_ONLY_MESSAGE });
+  if (data.paypalEmail !== undefined) ctx.addIssue({ code: 'custom', path: ['paypalEmail'], message: PAYPAL_ONLY_MESSAGE });
 });
 
 // Marketer/affiliate withdrawal — destination is NEVER taken from the

@@ -2,6 +2,8 @@ import { randomUUID } from 'crypto';
 import { Prisma, WithdrawalStatus, CommissionStatus, AccountType, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
 import { readAffiliatePaypalEmail } from '../utils/affiliate-payout';
+import { PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
+import { PROVIDER_PAYPAL_REQUIRED_MESSAGE } from '../utils/provider-payout';
 import { AppError } from '../utils/app-error';
 import { CreateWithdrawalInput, CreateMarketerWithdrawalInput, RejectWithdrawalInput, ResolveWithdrawalInput } from '../dtos/withdrawal.dto';
 import { providerFinanceService } from './provider-finance.service';
@@ -11,7 +13,6 @@ import { PAYPAL_EMAIL_FROZEN_MESSAGE } from '../utils/paypal-email-messages';
 import { deriveWithdrawalReferenceId } from '../utils/withdrawal-reference.util';
 
 export const MARKETER_PAYPAL_REQUIRED_MESSAGE = 'أضف بريد PayPal لاستلام الأرباح';
-const NO_APPROVED_BANK_DATA_MESSAGE = 'لا توجد بيانات بنكية معتمدة للسحب';
 
 const MAX_SERIALIZATION_RETRIES = 3;
 
@@ -113,24 +114,13 @@ export class WithdrawalService {
       const frozenUntil = await paypalEmailChangeService.frozenUntil(userId, prisma);
       if (frozenUntil) throw new AppError(PAYPAL_EMAIL_FROZEN_MESSAGE, 400);
       if (!providerProfile?.paypalPayoutEmail) {
-        throw new AppError('يجب إضافة بريد PayPal لاستلام الأرباح من إعدادات ملفك الشخصي قبل تقديم طلب سحب عبر PayPal', 400);
+        throw new AppError(PROVIDER_PAYPAL_REQUIRED_MESSAGE, 400);
       }
       paypalEmail = providerProfile.paypalPayoutEmail;
     }
 
-    // Finance #32: a bank withdrawal's destination is resolved here from the provider's OWN stored profile data, never from the
-    // request body (the DTO declares no iban/accountName/accountNumber, and the service ignores any that a caller passes).
-    // Nothing stored -> refused. The values are copied onto the Withdrawal as an immutable snapshot; the profile itself is not touched.
-    let bankDestination: { accountName: string | null; iban: string } | null = null;
-    if (input.method !== 'paypal') {
-      const bankProfile = await prisma.providerProfile.findUnique({
-        where: { userId },
-        select: { iban: true, accountHolder: true }
-      });
-      const storedIban = bankProfile?.iban?.trim();
-      if (!storedIban) throw new AppError(NO_APPROVED_BANK_DATA_MESSAGE, 400);
-      bankDestination = { accountName: bankProfile?.accountHolder?.trim() || null, iban: storedIban };
-    }
+    // PayPal is the only withdrawal method: nothing else is ever created (defence in depth behind the DTO).
+    if (input.method !== 'paypal') throw new AppError(PAYPAL_ONLY_MESSAGE, 400);
 
     // Generated ONCE per call, outside the retry loop — every retry attempt
     // of THIS creation call reuses the identical id/referenceId pair. Only
@@ -185,9 +175,6 @@ export class WithdrawalService {
               amount: input.amount,
               currency: 'USD', // all withdrawals are USD — never rely on the database default.
               method: input.method,
-              accountName: bankDestination?.accountName ?? null,
-              accountNumber: null,
-              iban: bankDestination?.iban ?? null,
               // The IMMUTABLE destination snapshot — resolved once, above,
               // outside this transaction/retry loop. Always null for a
               // non-PayPal withdrawal.

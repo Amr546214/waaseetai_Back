@@ -16,13 +16,14 @@ test('PUT /profiles/update: companyName, companySize, industry, headline, locati
 	assert.deepEqual([r.companyName, r.companySize, r.industry, r.headline, r.location, r.city, r.country, r.bio], ['شركة', '10', 'تقنية', 'مصمم', 'الرياض', 'جدة', 'مصر', 'نبذة']);
 });
 
-test('PUT /profiles/update/:tab: contact (address, region, city, country), identity (nationality, country, city), banking (names) and basics are sanitised', () => {
+test('PUT /profiles/update/:tab: contact (address, region, city, country), identity (nationality, country, city), banking (PayPal only) and basics are sanitised', () => {
 	const c: any = updateContactSchema.parse({ address: XSS('حي'), region: XSS('منطقة'), city: XSS('مدينة'), country: XSS('بلد'), firstName: XSS('سارة') });
 	assert.deepEqual([c.address, c.region, c.city, c.country, c.firstName], ['حي', 'منطقة', 'مدينة', 'بلد', 'سارة']);
 	const i: any = updateIdentitySchema.parse({ nationality: XSS('سعودي'), country: XSS('السعودية'), city: XSS('الدمام') });
 	assert.deepEqual([i.nationality, i.country, i.city], ['سعودي', 'السعودية', 'الدمام']);
-	const b: any = updateBankingSchema.parse({ accountHolderName: XSS('أحمد'), bankName: XSS('بنك'), walletProvider: XSS('محفظة') });
-	assert.deepEqual([b.accountHolderName, b.bankName, b.walletProvider], ['أحمد', 'بنك', 'محفظة']);
+	// banking is PayPal only: bank names / wallet are refused, never sanitised-and-stored
+	assert.equal(updateBankingSchema.safeParse({ accountHolderName: XSS('أحمد'), bankName: XSS('بنك'), walletProvider: XSS('محفظة') }).success, false);
+	assert.equal(updateBankingSchema.safeParse({ paypalPayoutEmail: 'a@b.com' }).success, true);
 	assert.equal((updateBasicsSchema.parse({ lastName: XSS('علي') }) as any).lastName, 'علي');
 });
 
@@ -59,21 +60,46 @@ function setup(t: TestContext) {
 	return w;
 }
 
-test('provider wizard: occupation, country, city, address, languages, specialties, bank names, notes, portfolio review/title are sanitised before storing', async (t) => {
+test('provider wizard: occupation, country, city, address, languages, specialties, notes, portfolio review/title are sanitised before storing', async (t) => {
 	const w = setup(t);
 	const { saveSetupData } = await import(`./provider-profile.controller.ts?f=${Date.now()}-${Math.random()}`);
 	const body = {
 		details: { occupation: XSS('مصمم'), country: XSS('السعودية'), city: XSS('جدة'), address: XSS('حي'), languages: [XSS('العربية')], bio: XSS('نبذة') },
-		identity: { certs: [] }, bank: { bankName: XSS('بنك'), accountHolder: XSS('أحمد') }, documents: { notes: XSS('ملاحظة') }, agreements: {},
+		identity: { certs: [] }, bank: {}, documents: { notes: XSS('ملاحظة') }, agreements: {},
 		specialties: { mainSpec: XSS('تصميم'), subSpecs: [XSS('شعارات')] }, portfolio: { [XSS('تصميم')]: [{ review: XSS('عمل ممتاز'), proofs: [] }] }
 	};
 	const res = mockRes();
 	await saveSetupData({ user: { id: 'u1' }, body } as any, res);
 	assert.equal(res.statusCode, 200);
 	const u = w.upsert[0].update;
-	assert.deepEqual([u.industry, u.headline, u.country, u.city, u.address, u.languages, u.mainSpecialty, u.subSpecialties, u.bankName, u.accountHolder, u.notes],
-		['مصمم', 'مصمم', 'السعودية', 'جدة', 'حي', ['العربية'], 'تصميم', ['شعارات'], 'بنك', 'أحمد', 'ملاحظة']);
+	assert.deepEqual([u.industry, u.headline, u.country, u.city, u.address, u.languages, u.mainSpecialty, u.subSpecialties, u.notes],
+		['مصمم', 'مصمم', 'السعودية', 'جدة', 'حي', ['العربية'], 'تصميم', ['شعارات'], 'ملاحظة']);
 	assert.equal(w.portfolio[0].description, 'عمل ممتاز');
 	assert.equal(w.portfolio[0].title, 'نموذج أعمال - تصميم');
 	assert.doesNotMatch(JSON.stringify(w), /<script|<img|<b>|onerror/);
+});
+
+test('provider wizard: bank / IBAN / wallet fields (top level or inside bank) are a 400 with the PayPal-only message and no upsert happens', async (t) => {
+	const w = setup(t);
+	const { PAYPAL_ONLY_MESSAGE } = await import('../utils/client-payout-fields');
+	const { saveSetupData } = await import(`./provider-profile.controller.ts?f=${Date.now()}-${Math.random()}`);
+	for (const extra of [{ bank: { bankName: 'بنك', accountHolder: 'أحمد' } }, { bank: { iban: 'SA' + '1'.repeat(22) } }, { bank: { paymentType: 'paypal', walletNumber: '1' } }, { ibanNumber: 'SA' + '1'.repeat(22) }]) {
+		const res = mockRes();
+		await saveSetupData({ user: { id: 'u1' }, body: { details: { occupation: 'مصمم' }, identity: { certs: [] }, documents: {}, agreements: {}, specialties: {}, ...extra } } as any, res);
+		assert.equal(res.statusCode, 400, JSON.stringify(extra));
+		assert.equal(res.body.success, false);
+		assert.equal(res.body.message, PAYPAL_ONLY_MESSAGE);
+		assert.ok(res.body.errors.length > 0);
+	}
+	assert.equal(w.upsert.length, 0);
+});
+
+test('provider PUT banking handler: always 400 with the PayPal-only message (nothing is updated)', async (t) => {
+	setup(t);
+	const { PAYPAL_ONLY_MESSAGE } = await import('../utils/client-payout-fields');
+	const { updateBankingInfo } = await import(`./provider-profile.controller.ts?f=${Date.now()}-${Math.random()}`);
+	const res = mockRes();
+	await updateBankingInfo({ user: { id: 'u1' }, body: { bankName: 'بنك', iban: 'SA' + '1'.repeat(22) } } as any, res);
+	assert.equal(res.statusCode, 400);
+	assert.equal(res.body.message, PAYPAL_ONLY_MESSAGE);
 });

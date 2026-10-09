@@ -62,10 +62,7 @@ export class ProfileSetupService {
       ...(dto.city ? { city: dto.city } : {}),
       ...(frontIdUrl ? { frontIdUrl } : {}),
       ...(backIdUrl ? { backIdUrl } : {}),
-      ...(supportingDocsUrl ? { supportingDocsUrl } : {}),
-      ...(dto.ibanNumber ? { iban: dto.ibanNumber } : {}),
-      ...(dto.bankName ? { bankName: dto.bankName } : {}),
-      ...(dto.accountHolderName ? { accountHolder: dto.accountHolderName } : {})
+      ...(supportingDocsUrl ? { supportingDocsUrl } : {})
     });
     let identityProfile: { idNumber?: string | null; frontIdUrl?: string | null; backIdUrl?: string | null } | null = null;
     const result = await prisma.$transaction(async (tx) => {

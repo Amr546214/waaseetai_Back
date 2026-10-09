@@ -2,6 +2,7 @@ import { test, TestContext } from 'node:test';
 
 // KYC document values must live inside our own Cloudinary account (or be an owned private reference).
 process.env.CLOUDINARY_CLOUD_NAME = 'testcloud';
+import { PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -845,86 +846,33 @@ async function loadServiceForSensitiveFlow(t: TestContext, opts: { throwOnRecomp
 // applySensitivePayload) is exempt, since it was never meant to be a real
 // IBAN value and rejecting it would break the legitimate "leave this field
 // unchanged" edit-form flow.
-test('initiateSensitiveChange (BANKING): rejects an IBAN that fails the mod-97 checksum', async (t) => {
-  const { providerProfileService } = await loadServiceForSensitiveFlow(t);
+test('initiateSensitiveChange (BANKING): PayPal is the only money method — BANKING is refused with the PayPal-only message, whatever the payload', async (t) => {
+  const { providerProfileService, userUpdateSpy, providerProfileUpdateSpy } = await loadServiceForSensitiveFlow(t);
 
-  await assert.rejects(
-    () => providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
-      accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA0000000000000000000011'
-    }),
-    /INVALID_IBAN/
-  );
-});
-
-test('initiateSensitiveChange (BANKING): a masked ibanNumber ("************1234") is exempt from checksum validation', async (t) => {
-  const { providerProfileService } = await loadServiceForSensitiveFlow(t);
-
-  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
-    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: '************1234'
-  });
-
-  assert.ok(initiated.requestId);
-});
-
-test('initiateSensitiveChange (BANKING): does not recalculate completion at initiation time', async (t) => {
-  const { providerProfileService, providerProfileUpdateSpy } = await loadServiceForSensitiveFlow(t);
-
-  await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
-    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA5300000000000000000099'
-  });
-
+  for (const payload of [
+    { accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA5300000000000000000099' },
+    { accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: '************1234' },
+    { ibanNumber: 'SA0000000000000000000011' },
+    {}
+  ]) {
+    await assert.rejects(
+      () => providerProfileService.initiateSensitiveChange('user-1', 'BANKING', payload),
+      (e: any) => e.message === PAYPAL_ONLY_MESSAGE
+    );
+  }
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
   const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
   assert.equal(completionCalls.length, 0);
 });
 
-test('verifySensitiveChange (BANKING, pending human review): does not recalculate before admin approval', async (t) => {
-  const { providerProfileService, providerProfileUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+test('verify / review of a BANKING request are refused too (PayPal-only), and a non-existent BANKING flow writes nothing', async (t) => {
+  const { providerProfileService, userUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
 
-  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
-    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA5300000000000000000099'
-  });
-  const verified = await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
-
-  assert.equal(verified.status, 'PENDING_HUMAN_REVIEW');
-  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
-  assert.equal(completionCalls.length, 0);
-});
-
-test('reviewSensitiveChange (BANKING, approved): recalculates completion after ibanNumber actually commits', async (t) => {
-  const { providerProfileService, providerProfileUpdateSpy, userUpdateSpy, callOrder, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
-
-  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
-    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA5300000000000000000099'
-  });
-  await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
-  await providerProfileService.reviewSensitiveChange(initiated.requestId, true);
-
-  const ibanCommit = userUpdateSpy.mock.calls.find((c: any) => 'ibanNumber' in c.arguments[0].data);
-  assert.notEqual(ibanCommit, undefined);
-  assert.equal(ibanCommit.arguments[0].data.ibanNumber, 'SA5300000000000000000099');
-
-  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
-  assert.equal(completionCalls.length, 1);
-  // The sensitive User write must commit before the completion recompute reads it.
-  assert.equal(callOrder.indexOf('user.update') < callOrder.indexOf('providerProfile.update:completion'), true);
-});
-
-test('reviewSensitiveChange (BANKING, approved) with a masked ibanNumber stripped from the payload: does NOT recalculate', async (t) => {
-  const { providerProfileService, providerProfileUpdateSpy, userUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
-
-  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
-    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: '************1234'
-  });
-  await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
-  await providerProfileService.reviewSensitiveChange(initiated.requestId, true);
-
-  // The masked value must have been stripped before commit (applySensitivePayload's
-  // existing masked-value guard), so ibanNumber must not even be in the final write.
-  const ibanCommit = userUpdateSpy.mock.calls.find((c: any) => 'ibanNumber' in c.arguments[0].data);
-  assert.equal(ibanCommit, undefined);
-
-  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
-  assert.equal(completionCalls.length, 0);
+  // No BANKING request can be created any more, so there is no OTP to verify and nothing for an admin to approve.
+  assert.equal(getLastOtpCode(), undefined);
+  await assert.rejects(() => providerProfileService.verifySensitiveChange('user-1', 'no-such-banking-request', '000000'));
+  await assert.rejects(() => providerProfileService.reviewSensitiveChange('no-such-banking-request', true));
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
 });
 
 test('reviewSensitiveChange (DOCUMENTS, approved): recalculates completion after idDocumentUrl actually commits', async (t) => {
@@ -961,28 +909,6 @@ test('verifySensitiveChange (CONTACT, applied immediately since it needs no revi
   assert.equal(completionCalls.length, 1);
 });
 
-test('reviewSensitiveChange (BANKING, approved): a completion-recompute failure is logged and does not fail the already-successful sensitive change', async (t) => {
-  const { providerProfileService, userUpdateSpy, loggerErrorSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t, { throwOnRecompute: true });
-
-  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
-    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA5300000000000000000099'
-  });
-  await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
-  const reviewed = await providerProfileService.reviewSensitiveChange(initiated.requestId, true);
-
-  // The sensitive change itself must still succeed...
-  assert.equal(reviewed.status, 'APPROVED');
-  const ibanCommit = userUpdateSpy.mock.calls.find((c: any) => 'ibanNumber' in c.arguments[0].data);
-  assert.notEqual(ibanCommit, undefined);
-  // ...and the recompute failure must be logged, not silently swallowed and
-  // not left as an empty catch.
-  assert.equal(loggerErrorSpy.mock.callCount() > 0, true);
-  const loggedError = loggerErrorSpy.mock.calls[0].arguments;
-  assert.match(String(loggedError[0]), /provider completion/i);
-  // No IBAN/document values leaked into the log line itself.
-  assert.doesNotMatch(String(loggedError[0]), /SA5300000000000000000099/);
-});
-
 // ============================================================================
 // Security batch — createModificationRequest() no longer computes a fake
 // `85 + Math.random() * 10` "AI confidence" that could auto-APPROVE and
@@ -998,43 +924,9 @@ test('reviewSensitiveChange (BANKING, approved): a completion-recompute failure 
 
 const VALID_TEST_IBAN = 'SA1000000000000000000000';
 
-test('createModificationRequest: Math.random no longer influences the outcome — status is PENDING_HUMAN_REVIEW regardless of its value', async (t) => {
-  const originalRandom = Math.random;
-  const { providerProfileService } = await loadServiceForSensitiveFlow(t);
-
-  try {
-    Math.random = () => 0.999; // would have been 85 + 9.99 = 94.99 > 92 -> old code auto-approved
-    const high = await providerProfileService.createModificationRequest('user-1', {
-      fieldName: 'IBAN', fieldLabel: 'IBAN', requestedValue: VALID_TEST_IBAN
-    });
-    assert.equal(high.status, 'PENDING_HUMAN_REVIEW');
-
-    Math.random = () => 0; // would have been 85 <= 92 -> old code also left this pending
-    const low = await providerProfileService.createModificationRequest('user-1', {
-      fieldName: 'IBAN', fieldLabel: 'IBAN', requestedValue: VALID_TEST_IBAN
-    });
-    assert.equal(low.status, 'PENDING_HUMAN_REVIEW');
-  } finally {
-    Math.random = originalRandom;
-  }
-});
-
-test('createModificationRequest: no AI evaluation happens — aiConfidence/aiAuditStatus/aiRecommendation are genuinely null, never fabricated', async (t) => {
-  const { providerProfileService } = await loadServiceForSensitiveFlow(t);
-
-  const request = await providerProfileService.createModificationRequest('user-1', {
-    fieldName: 'IBAN', fieldLabel: 'IBAN', requestedValue: VALID_TEST_IBAN
-  });
-
-  assert.equal(request.aiConfidence, undefined);
-  assert.equal(request.aiAuditStatus, undefined);
-  assert.equal(request.aiRecommendation, undefined);
-});
-
 for (const { fieldName, fieldLabel, requestedValue } of [
   { fieldName: 'EMAIL', fieldLabel: 'Email', requestedValue: 'new@example.com' },
   { fieldName: 'PHONE_NUMBER', fieldLabel: 'Phone', requestedValue: '0511111111' },
-  { fieldName: 'IBAN', fieldLabel: 'IBAN', requestedValue: VALID_TEST_IBAN },
   { fieldName: 'NATIONAL_ID', fieldLabel: 'National ID', requestedValue: '1234567890' }
 ]) {
   test(`createModificationRequest (${fieldName}): can never auto-approve — always PENDING_HUMAN_REVIEW, and User is not mutated at creation time`, async (t) => {
@@ -1046,6 +938,45 @@ for (const { fieldName, fieldLabel, requestedValue } of [
     assert.equal(userUpdateSpy.mock.callCount(), 0, 'the DB mutation must not happen before a real admin approval');
   });
 }
+
+test('createModificationRequest (IBAN): PayPal is the only money method — an IBAN modification request is refused with the PayPal-only message and nothing is written', async (t) => {
+  const { providerProfileService, userUpdateSpy } = await loadServiceForSensitiveFlow(t);
+
+  for (const requestedValue of [VALID_TEST_IBAN, 'SA0000000000000000000099']) {
+    await assert.rejects(
+      () => providerProfileService.createModificationRequest('user-1', { fieldName: 'IBAN', fieldLabel: 'IBAN', requestedValue, status: 'APPROVED', approved: true } as any),
+      (e: any) => e.message === PAYPAL_ONLY_MESSAGE
+    );
+  }
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+test('createModificationRequest: Math.random no longer influences the outcome — status is PENDING_HUMAN_REVIEW regardless of its value', async (t) => {
+  const originalRandom = Math.random;
+  const { providerProfileService } = await loadServiceForSensitiveFlow(t);
+
+  try {
+    Math.random = () => 0.999;
+    const high = await providerProfileService.createModificationRequest('user-1', { fieldName: 'EMAIL', fieldLabel: 'Email', requestedValue: 'new@example.com' });
+    assert.equal(high.status, 'PENDING_HUMAN_REVIEW');
+
+    Math.random = () => 0;
+    const low = await providerProfileService.createModificationRequest('user-1', { fieldName: 'EMAIL', fieldLabel: 'Email', requestedValue: 'other@example.com' });
+    assert.equal(low.status, 'PENDING_HUMAN_REVIEW');
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test('createModificationRequest: no AI evaluation happens — aiConfidence/aiAuditStatus/aiRecommendation are genuinely null, never fabricated', async (t) => {
+  const { providerProfileService } = await loadServiceForSensitiveFlow(t);
+
+  const request = await providerProfileService.createModificationRequest('user-1', { fieldName: 'EMAIL', fieldLabel: 'Email', requestedValue: 'new@example.com' });
+
+  assert.equal(request.aiConfidence, undefined);
+  assert.equal(request.aiAuditStatus, undefined);
+  assert.equal(request.aiRecommendation, undefined);
+});
 
 test('createModificationRequest: rejects a malformed email before creating any request', async (t) => {
   const { providerProfileService } = await loadServiceForSensitiveFlow(t);
@@ -1063,14 +994,6 @@ test('createModificationRequest: rejects a malformed phone number', async (t) =>
   );
 });
 
-test('createModificationRequest: rejects an IBAN that fails the mod-97 checksum (format validation, not ownership verification)', async (t) => {
-  const { providerProfileService } = await loadServiceForSensitiveFlow(t);
-  await assert.rejects(
-    () => providerProfileService.createModificationRequest('user-1', { fieldName: 'IBAN', fieldLabel: 'IBAN', requestedValue: 'SA0000000000000000000099' }),
-    /INVALID_IBAN/
-  );
-});
-
 test('createModificationRequest: rejects an unsupported fieldName instead of silently accepting an arbitrary field', async (t) => {
   const { providerProfileService } = await loadServiceForSensitiveFlow(t);
   await assert.rejects(
@@ -1083,32 +1006,12 @@ test('createModificationRequest: a client-supplied status/aiConfidence/approved 
   const { providerProfileService, userUpdateSpy } = await loadServiceForSensitiveFlow(t);
 
   const request = await providerProfileService.createModificationRequest('user-1', {
-    fieldName: 'IBAN', fieldLabel: 'IBAN', requestedValue: VALID_TEST_IBAN,
+    fieldName: 'EMAIL', fieldLabel: 'Email', requestedValue: 'new@example.com',
     status: 'APPROVED', aiConfidence: 100, aiAuditStatus: 'PASSED', approved: true
   } as any);
 
   assert.equal(request.status, 'PENDING_HUMAN_REVIEW');
   assert.equal(userUpdateSpy.mock.callCount(), 0);
-});
-
-test('reviewSensitiveChange (legacy IBAN request, approved): a real admin approval applies the change and recalculates completion', async (t) => {
-  const { providerProfileService, userUpdateSpy, providerProfileUpdateSpy, callOrder } = await loadServiceForSensitiveFlow(t);
-
-  const request = await providerProfileService.createModificationRequest('user-1', {
-    fieldName: 'IBAN', fieldLabel: 'IBAN', requestedValue: VALID_TEST_IBAN
-  });
-  assert.equal(userUpdateSpy.mock.callCount(), 0, 'sanity check: still unapplied before review');
-
-  const reviewed = await providerProfileService.reviewSensitiveChange(request.id, true);
-
-  assert.equal(reviewed.status, 'APPROVED');
-  assert.equal(reviewed.reviewedByAdmin, true);
-  const ibanCommit = userUpdateSpy.mock.calls.find((c: any) => 'ibanNumber' in c.arguments[0].data);
-  assert.notEqual(ibanCommit, undefined);
-  assert.equal(ibanCommit.arguments[0].data.ibanNumber, VALID_TEST_IBAN);
-  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
-  assert.equal(completionCalls.length, 1);
-  assert.equal(callOrder.indexOf('user.update') < callOrder.indexOf('providerProfile.update:completion'), true);
 });
 
 test('reviewSensitiveChange (legacy EMAIL request, approved): applies the change but does not trigger provider completion recalculation', async (t) => {
@@ -1126,34 +1029,6 @@ test('reviewSensitiveChange (legacy EMAIL request, approved): applies the change
   assert.equal(completionCalls.length, 0);
 });
 
-test('reviewSensitiveChange (legacy IBAN request, rejected): does not mutate User and does not recalculate completion', async (t) => {
-  const { providerProfileService, userUpdateSpy, providerProfileUpdateSpy } = await loadServiceForSensitiveFlow(t);
-
-  const request = await providerProfileService.createModificationRequest('user-1', {
-    fieldName: 'IBAN', fieldLabel: 'IBAN', requestedValue: VALID_TEST_IBAN
-  });
-  const reviewed = await providerProfileService.reviewSensitiveChange(request.id, false, 'بيانات غير مطابقة');
-
-  assert.equal(reviewed.status, 'REJECTED');
-  assert.equal(userUpdateSpy.mock.callCount(), 0);
-  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
-  assert.equal(completionCalls.length, 0);
-});
-
-test('reviewSensitiveChange (legacy IBAN request, approved): a completion-recompute failure is logged and does not undo the already-applied change', async (t) => {
-  const { providerProfileService, userUpdateSpy, loggerErrorSpy } = await loadServiceForSensitiveFlow(t, { throwOnRecompute: true });
-
-  const request = await providerProfileService.createModificationRequest('user-1', {
-    fieldName: 'IBAN', fieldLabel: 'IBAN', requestedValue: VALID_TEST_IBAN
-  });
-  const reviewed = await providerProfileService.reviewSensitiveChange(request.id, true);
-
-  assert.equal(reviewed.status, 'APPROVED');
-  const ibanCommit = userUpdateSpy.mock.calls.find((c: any) => 'ibanNumber' in c.arguments[0].data);
-  assert.notEqual(ibanCommit, undefined);
-  assert.equal(loggerErrorSpy.mock.callCount() > 0, true);
-});
-
 test('reviewSensitiveChange (legacy NATIONAL_ID request, approved): applies via the legacy path since no OTP-based category covers this field', async (t) => {
   const { providerProfileService, userUpdateSpy } = await loadServiceForSensitiveFlow(t);
 
@@ -1168,31 +1043,32 @@ test('reviewSensitiveChange (legacy NATIONAL_ID request, approved): applies via 
   assert.equal(idCommit.arguments[0].data.idNumber, '1234567890');
 });
 
-test('reviewSensitiveChange: the legacy shape (category "PROFILE") and the modern OTP shape (CONTACT/BANKING/DOCUMENTS) both still resolve to the correct apply path independently', async (t) => {
+test('reviewSensitiveChange: the legacy shape (category "PROFILE") and the modern OTP shape (DOCUMENTS) both still resolve to the correct apply path independently', async (t) => {
   const { providerProfileService, userUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
 
   const legacyRequest = await providerProfileService.createModificationRequest('user-1', {
-    fieldName: 'IBAN', fieldLabel: 'IBAN', requestedValue: VALID_TEST_IBAN
+    fieldName: 'NATIONAL_ID', fieldLabel: 'National ID', requestedValue: '1234567890'
   });
-  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
-    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA5300000000000000000099'
+  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', {
+    idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id.pdf'
   });
   await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
 
   await providerProfileService.reviewSensitiveChange(legacyRequest.id, true);
   await providerProfileService.reviewSensitiveChange(initiated.requestId, true);
 
-  const ibanCommits = userUpdateSpy.mock.calls.filter((c: any) => 'ibanNumber' in c.arguments[0].data);
-  assert.equal(ibanCommits.length, 2);
-  assert.equal(ibanCommits[0].arguments[0].data.ibanNumber, VALID_TEST_IBAN);
-  assert.equal(ibanCommits[1].arguments[0].data.ibanNumber, 'SA5300000000000000000099');
+  const idCommit = userUpdateSpy.mock.calls.find((c: any) => 'idNumber' in c.arguments[0].data);
+  assert.equal(idCommit.arguments[0].data.idNumber, '1234567890');
+  const docCommit = userUpdateSpy.mock.calls.find((c: any) => 'idDocumentUrl' in c.arguments[0].data);
+  assert.notEqual(docCommit, undefined);
+  assert.equal(userUpdateSpy.mock.calls.some((c: any) => 'ibanNumber' in c.arguments[0].data), false);
 });
 
 test('regression: no ClientProfile/AffiliateProfile writes from any sensitive-change path', async (t) => {
   const { providerProfileService, clientUpsertSpy, affiliateUpsertSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
 
-  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'BANKING', {
-    accountHolderName: 'Amr Okasha', bankName: 'Al Rajhi', ibanNumber: 'SA5300000000000000000099'
+  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', {
+    idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id.pdf'
   });
   await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
   await providerProfileService.reviewSensitiveChange(initiated.requestId, true);

@@ -11,6 +11,7 @@ import { computeClientCompletion, computeClientMissingItems } from '../utils/com
 import { logger } from '../config/logger';
 import { providerProfileService } from './provider-profile.service';
 import { withoutLegacyAffiliateBankFields } from '../utils/affiliate-payout';
+import { withoutLegacyProviderBankFields } from '../utils/provider-payout';
 import { marketerProfileService } from './marketer-profile.service';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
 import { withoutLegacyPayoutFields } from '../utils/client-payout-fields';
@@ -112,7 +113,7 @@ export class ProfileService {
 
     const currentProfileData: Record<string, unknown> = {
       ...safeUser,
-      ...(user.activeRole === UserRole.CLIENT ? withoutLegacyPayoutFields(roleProfile as any) : user.activeRole === UserRole.AFFILIATE ? withoutLegacyAffiliateBankFields(roleProfile as any) : roleProfile),
+      ...(user.activeRole === UserRole.CLIENT ? withoutLegacyPayoutFields(roleProfile as any) : user.activeRole === UserRole.AFFILIATE ? withoutLegacyAffiliateBankFields(roleProfile as any) : user.activeRole === UserRole.PROVIDER ? withoutLegacyProviderBankFields(roleProfile as any) : roleProfile),
       ...resolvedDisplayFields
     };
 
@@ -306,7 +307,7 @@ export class ProfileService {
 
       return {
         user: updatedUser,
-        profile: activeRole === UserRole.AFFILIATE ? withoutLegacyAffiliateBankFields(profileResult as any) : profileResult
+        profile: activeRole === UserRole.AFFILIATE ? withoutLegacyAffiliateBankFields(profileResult as any) : activeRole === UserRole.PROVIDER ? withoutLegacyProviderBankFields(profileResult as any) : profileResult
       };
     });
   }

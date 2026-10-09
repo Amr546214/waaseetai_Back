@@ -37,8 +37,6 @@ function createWithdrawalMockPrisma(t: TestContext, opts: {
 	availableBalance?: number;
 	seedWithdrawals?: { userId: string; amount: number; status: string }[];
 	providerProfile?: { paypalPayoutEmail?: string | null } | null;
-	// Finance #32: the stored bank data a bank withdrawal is resolved from (default: a stored IBAN; `null` = nothing stored).
-	bankProfile?: { iban?: string | null; accountHolder?: string | null } | null;
 	// Finance #33: when the provider's PayPal payout email was last changed (the 24 hour freeze is derived from it).
 	paypalEmailChangedAt?: Date;
 } = {}) {
@@ -104,10 +102,9 @@ function createWithdrawalMockPrisma(t: TestContext, opts: {
 	// `opts.providerProfile === undefined` (the default) means "no
 	// ProviderProfile row at all" (findUnique resolves null), matching a
 	// provider who never configured any PayPal destination.
-	const providerProfileFindUniqueSpy = t.mock.fn(async (args: any) =>
-		args?.select?.iban
-			? (opts.bankProfile === undefined ? { iban: 'SA-STORED-0000000000000000', accountHolder: 'Stored Holder' } : opts.bankProfile)
-			: (opts.providerProfile === undefined ? null : opts.providerProfile)
+	// Default: a saved PayPal email (PayPal is the only method); pass `providerProfile: null` for "no PayPal saved".
+	const providerProfileFindUniqueSpy = t.mock.fn(async (_args: any) =>
+		opts.providerProfile === undefined ? { paypalPayoutEmail: 'p@example.com' } : opts.providerProfile
 	);
 
 	const prismaMock: any = {
@@ -142,7 +139,7 @@ async function loadService(t: TestContext, opts?: Parameters<typeof createWithdr
 test('createForProvider: a new withdrawal request is explicitly created with currency USD', async (t) => {
 	const { withdrawalService, createSpy, transactionSpy } = await loadService(t, { availableBalance: 500 });
 
-	await withdrawalService.createForProvider('provider-1', { amount: 200, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	await withdrawalService.createForProvider('provider-1', { amount: 200, method: 'paypal' });
 
 	assert.equal(createSpy.mock.callCount(), 1);
 	assert.equal(createSpy.mock.calls[0].arguments[0].data.currency, 'USD');
@@ -155,14 +152,14 @@ test('createForProvider: a new withdrawal request is explicitly created with cur
 test('createForProvider: rejects a request exceeding the available (escrow-derived) balance, and creates nothing', async (t) => {
 	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 100 });
 
-	await assert.rejects(() => withdrawalService.createForProvider('provider-1', { amount: 200, method: 'bank_transfer', iban: 'SA0000000000000000000000' }));
+	await assert.rejects(() => withdrawalService.createForProvider('provider-1', { amount: 200, method: 'paypal' }));
 	assert.equal(createSpy.mock.callCount(), 0);
 });
 
 test('createForProvider: the released-earnings read is taken from inside the transaction (via tx), not the global client', async (t) => {
 	const { withdrawalService, getWalletSpy } = await loadService(t, { availableBalance: 500 });
 
-	await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' });
 
 	assert.equal(getWalletSpy.mock.callCount(), 1);
 	assert.equal(getWalletSpy.mock.calls[0].arguments[0], 'provider-1');
@@ -175,11 +172,11 @@ test('createForProvider: the released-earnings read is taken from inside the tra
 test('createForProvider: a sequential second withdrawal correctly respects the first — the combined total cannot exceed available earnings', async (t) => {
 	const { withdrawalService } = await loadService(t, { availableBalance: 500 });
 
-	await withdrawalService.createForProvider('provider-1', { amount: 300, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	await withdrawalService.createForProvider('provider-1', { amount: 300, method: 'paypal' });
 	// 300 already pending; only 200 left. A second request for 300 must fail.
-	await assert.rejects(() => withdrawalService.createForProvider('provider-1', { amount: 300, method: 'bank_transfer', iban: 'SA0000000000000000000000' }));
+	await assert.rejects(() => withdrawalService.createForProvider('provider-1', { amount: 300, method: 'paypal' }));
 	// But a second request for exactly the remainder must succeed.
-	const second = await withdrawalService.createForProvider('provider-1', { amount: 200, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	const second = await withdrawalService.createForProvider('provider-1', { amount: 200, method: 'paypal' });
 	assert.equal(second.amount, 200);
 });
 
@@ -204,7 +201,7 @@ test('createForProvider: two concurrent requests for the same provider cannot to
 
 	await t.test('request A', async (t2) => {
 		first = await loadService(t2, { availableBalance: 500, seedWithdrawals: sharedWithdrawals });
-		const rowA = await first.withdrawalService.createForProvider('provider-1', { amount: 400, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+		const rowA = await first.withdrawalService.createForProvider('provider-1', { amount: 400, method: 'paypal' });
 		sharedWithdrawals.push({ id: rowA.id, userId: 'provider-1', amount: rowA.amount, status: 'PENDING' });
 	});
 
@@ -213,7 +210,7 @@ test('createForProvider: two concurrent requests for the same provider cannot to
 		second = await loadService(t2, { availableBalance: 500, seedWithdrawals: sharedWithdrawals });
 		try {
 			// 400 already reserved by A; only 100 left — 400 must fail.
-			await second.withdrawalService.createForProvider('provider-1', { amount: 400, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+			await second.withdrawalService.createForProvider('provider-1', { amount: 400, method: 'paypal' });
 		} catch {
 			secondRejected = true;
 		}
@@ -249,14 +246,14 @@ test('createForProvider: a serialization-conflict error (P2034) is retried, not 
 		}
 		return fn(tx);
 	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ paypalPayoutEmail: 'p@example.com' }) }, accountAuditLog: { findFirst: async () => null } } } });
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
 	const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
 	const { withdrawalService } = await import(moduleUrl);
 
-	const result = await withdrawalService.createForProvider('provider-1', { amount: 200, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	const result = await withdrawalService.createForProvider('provider-1', { amount: 200, method: 'paypal' });
 
 	assert.equal(result.amount, 200);
 	assert.equal(transactionSpy.mock.callCount(), 2, 'the first (conflicted) attempt is retried exactly once here, succeeding on the second');
@@ -291,14 +288,14 @@ test('createForProvider: a DriverAdapterError (cause.kind = TransactionWriteConf
 		}
 		return fn(tx);
 	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ paypalPayoutEmail: 'p@example.com' }) }, accountAuditLog: { findFirst: async () => null } } } });
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
 	const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
 	const { withdrawalService } = await import(moduleUrl);
 
-	const result = await withdrawalService.createForProvider('provider-1', { amount: 200, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	const result = await withdrawalService.createForProvider('provider-1', { amount: 200, method: 'paypal' });
 
 	assert.equal(result.amount, 200);
 	assert.equal(transactionSpy.mock.callCount(), 2, 'the first (conflicted) attempt is retried exactly once here, succeeding on the second');
@@ -312,7 +309,7 @@ test('createForProvider: an UNRELATED DriverAdapterError is never retried — it
 		attempts += 1;
 		throw new DriverAdapterError({ kind: 'DatabaseNotReachable' });
 	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ paypalPayoutEmail: 'p@example.com' }) }, accountAuditLog: { findFirst: async () => null } } } });
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
@@ -320,7 +317,7 @@ test('createForProvider: an UNRELATED DriverAdapterError is never retried — it
 	const { withdrawalService } = await import(moduleUrl);
 
 	await assert.rejects(
-		() => withdrawalService.createForProvider('provider-1', { amount: 200, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		() => withdrawalService.createForProvider('provider-1', { amount: 200, method: 'paypal' }),
 		(err: any) => { assert.equal(err.cause?.kind ?? err.constructor?.name, 'DatabaseNotReachable'); return true; }
 	);
 	assert.equal(attempts, 1, 'an unrecognized conflict shape must never be retried — it propagates on the very first attempt');
@@ -355,7 +352,7 @@ test('createForProvider: on retry, released earnings AND pending withdrawals are
 		}
 		return result;
 	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ paypalPayoutEmail: 'p@example.com' }) }, accountAuditLog: { findFirst: async () => null } } } });
 	t.mock.module('./provider-finance.service', {
 		namedExports: {
 			providerFinanceService: {
@@ -370,7 +367,7 @@ test('createForProvider: on retry, released earnings AND pending withdrawals are
 	// so a 200 request must correctly fail with the BUSINESS error — proving
 	// this is genuinely re-validated on retry, not a stale-balance re-insert.
 	await assert.rejects(
-		() => withdrawalService.createForProvider('provider-1', { amount: 200, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		() => withdrawalService.createForProvider('provider-1', { amount: 200, method: 'paypal' }),
 		/يتجاوز رصيدك الصافي/
 	);
 	assert.equal(walletCallCount, 2, 'getWallet() (released earnings) is called again on the retried attempt, not reused from the first');
@@ -389,7 +386,7 @@ test('createForProvider: if the retry observes insufficient balance, the caller 
 		if (attempts === 1) throw new DriverAdapterError({ kind: 'TransactionWriteConflict' });
 		return fn(tx);
 	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ paypalPayoutEmail: 'p@example.com' }) }, accountAuditLog: { findFirst: async () => null } } } });
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
@@ -397,7 +394,7 @@ test('createForProvider: if the retry observes insufficient balance, the caller 
 	const { withdrawalService } = await import(moduleUrl);
 
 	await assert.rejects(
-		() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' }),
 		(err: any) => {
 			// The Arabic business AppError, never the raw DriverAdapterError.
 			assert.match(err.message, /يتجاوز رصيدك الصافي بعد طلبات السحب المعلقة/);
@@ -415,7 +412,7 @@ test('createForProvider: retry is bounded — if every attempt conflicts, the fi
 		attempts += 1;
 		throw new DriverAdapterError({ kind: 'TransactionWriteConflict' });
 	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ paypalPayoutEmail: 'p@example.com' }) }, accountAuditLog: { findFirst: async () => null } } } });
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
@@ -423,7 +420,7 @@ test('createForProvider: retry is bounded — if every attempt conflicts, the fi
 	const { withdrawalService } = await import(moduleUrl);
 
 	await assert.rejects(
-		() => withdrawalService.createForProvider('provider-1', { amount: 200, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		() => withdrawalService.createForProvider('provider-1', { amount: 200, method: 'paypal' }),
 		(err: any) => { assert.equal(err.cause?.kind, 'TransactionWriteConflict'); return true; }
 	);
 	// Bounded at MAX_SERIALIZATION_RETRIES (3) — not infinite.
@@ -442,9 +439,9 @@ test('createForProvider: retry is bounded — if every attempt conflicts, the fi
 
 test('A. createForProvider: availableBalance 100, create 80 then create 30 -> the second creation is rejected', async (t) => {
 	const { withdrawalService } = await loadService(t, { availableBalance: 100 });
-	await withdrawalService.createForProvider('provider-1', { amount: 80, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	await withdrawalService.createForProvider('provider-1', { amount: 80, method: 'paypal' });
 	await assert.rejects(
-		() => withdrawalService.createForProvider('provider-1', { amount: 30, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		() => withdrawalService.createForProvider('provider-1', { amount: 30, method: 'paypal' }),
 		(err: any) => { assert.equal(err.statusCode, 400); return true; }
 	);
 });
@@ -452,7 +449,7 @@ test('A. createForProvider: availableBalance 100, create 80 then create 30 -> th
 test('B. createForProvider: availableBalance 100, existing APPROVED 80, create 30 -> rejected', async (t) => {
 	const { withdrawalService } = await loadService(t, { availableBalance: 100, seedWithdrawals: [{ userId: 'provider-1', amount: 80, status: 'APPROVED' }] });
 	await assert.rejects(
-		() => withdrawalService.createForProvider('provider-1', { amount: 30, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		() => withdrawalService.createForProvider('provider-1', { amount: 30, method: 'paypal' }),
 		(err: any) => { assert.equal(err.statusCode, 400); return true; }
 	);
 });
@@ -460,7 +457,7 @@ test('B. createForProvider: availableBalance 100, existing APPROVED 80, create 3
 test('C. createForProvider: availableBalance 100, existing PROCESSING 80, create 30 -> rejected', async (t) => {
 	const { withdrawalService } = await loadService(t, { availableBalance: 100, seedWithdrawals: [{ userId: 'provider-1', amount: 80, status: 'PROCESSING' }] });
 	await assert.rejects(
-		() => withdrawalService.createForProvider('provider-1', { amount: 30, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		() => withdrawalService.createForProvider('provider-1', { amount: 30, method: 'paypal' }),
 		(err: any) => { assert.equal(err.statusCode, 400); return true; }
 	);
 });
@@ -468,7 +465,7 @@ test('C. createForProvider: availableBalance 100, existing PROCESSING 80, create
 test('D. createForProvider: availableBalance 100, existing COMPLETED 80, create 30 -> rejected', async (t) => {
 	const { withdrawalService } = await loadService(t, { availableBalance: 100, seedWithdrawals: [{ userId: 'provider-1', amount: 80, status: 'COMPLETED' }] });
 	await assert.rejects(
-		() => withdrawalService.createForProvider('provider-1', { amount: 30, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		() => withdrawalService.createForProvider('provider-1', { amount: 30, method: 'paypal' }),
 		(err: any) => { assert.equal(err.statusCode, 400); return true; }
 	);
 });
@@ -476,14 +473,14 @@ test('D. createForProvider: availableBalance 100, existing COMPLETED 80, create 
 test('D2. Payout P3-A: createForProvider: availableBalance 100, existing REVERSED 80, create 30 -> rejected — a reversed payout must NOT free its earnings for a second withdrawal', async (t) => {
 	const { withdrawalService } = await loadService(t, { availableBalance: 100, seedWithdrawals: [{ userId: 'provider-1', amount: 80, status: 'REVERSED' }] });
 	await assert.rejects(
-		() => withdrawalService.createForProvider('provider-1', { amount: 30, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		() => withdrawalService.createForProvider('provider-1', { amount: 30, method: 'paypal' }),
 		(err: any) => { assert.equal(err.statusCode, 400); return true; }
 	);
 });
 
 test('E. createForProvider: availableBalance 100, existing REJECTED 80, create 30 -> allowed (REJECTED never reserves balance)', async (t) => {
 	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 100, seedWithdrawals: [{ userId: 'provider-1', amount: 80, status: 'REJECTED' }] });
-	const result = await withdrawalService.createForProvider('provider-1', { amount: 30, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	const result = await withdrawalService.createForProvider('provider-1', { amount: 30, method: 'paypal' });
 	assert.equal(result.amount, 30);
 	assert.equal(createSpy.mock.callCount(), 1);
 });
@@ -497,7 +494,7 @@ test('F. createForProvider: availableBalance 100, existing APPROVED 60 + existin
 		]
 	});
 	await assert.rejects(
-		() => withdrawalService.createForProvider('provider-1', { amount: 1, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
+		() => withdrawalService.createForProvider('provider-1', { amount: 1, method: 'paypal' }),
 		(err: any) => { assert.equal(err.statusCode, 400); return true; }
 	);
 });
@@ -510,7 +507,7 @@ test('G. createForProvider: availableBalance 100, existing APPROVED 60 + existin
 			{ userId: 'provider-1', amount: 40, status: 'REJECTED' }
 		]
 	});
-	const result = await withdrawalService.createForProvider('provider-1', { amount: 40, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	const result = await withdrawalService.createForProvider('provider-1', { amount: 40, method: 'paypal' });
 	assert.equal(result.amount, 40);
 	assert.equal(createSpy.mock.callCount(), 1);
 });
@@ -520,14 +517,14 @@ test('H. createForProvider: existing outstanding total + new amount exactly equa
 		availableBalance: 100,
 		seedWithdrawals: [{ userId: 'provider-1', amount: 70, status: 'PENDING' }]
 	});
-	const result = await withdrawalService.createForProvider('provider-1', { amount: 30, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	const result = await withdrawalService.createForProvider('provider-1', { amount: 30, method: 'paypal' });
 	assert.equal(result.amount, 30);
 	assert.equal(createSpy.mock.callCount(), 1);
 });
 
 test('createForProvider: the outstanding-withdrawals aggregate explicitly includes PENDING, APPROVED, PROCESSING, COMPLETED, REVERSED and excludes REJECTED', async (t) => {
 	const { withdrawalService, aggregateSpy } = await loadService(t, { availableBalance: 500 });
-	await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' });
 
 	assert.equal(aggregateSpy.mock.callCount(), 1);
 	const statusFilter = aggregateSpy.mock.calls[0].arguments[0].where.status;
@@ -548,244 +545,44 @@ test('createForProvider: the outstanding-withdrawals aggregate explicitly includ
 // TransactionWriteConflict) is retried...' tests, which are unaffected by
 // this fix's query shape change (they never seed a non-PENDING row).
 
-test('J. createForProvider: on retry, the WIDENED outstanding-total aggregate is recalculated from fresh state — a competing withdrawal that became APPROVED between attempts is correctly seen (not just re-reading stale PENDING data)', async (t) => {
-	const { DriverAdapterError } = await import('@prisma/driver-adapter-utils');
-	let transactionAttempt = 0;
-	// availableBalance 100; a competing withdrawal (60, APPROVED) exists only
-	// from the SECOND attempt onward — modeling it having committed between
-	// our attempt 1 and attempt 2, exactly like Batch 2A's own precedent.
-	const aggregateSpy = t.mock.fn(async () => ({ _sum: { amount: transactionAttempt === 1 ? 0 : 60 } }));
-	const createSpy = t.mock.fn(async (args: any) => ({ id: 'withdrawal-1', status: 'PENDING', ...args.data }));
-	const tx = { withdrawal: { aggregate: aggregateSpy, create: createSpy } };
-	const transactionSpy = t.mock.fn(async (fn: any) => {
-		transactionAttempt += 1;
-		const attemptNumber = transactionAttempt;
-		const result = await fn(tx);
-		if (attemptNumber === 1) {
-			throw new DriverAdapterError({ kind: 'TransactionWriteConflict' });
-		}
-		return result;
-	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
-	t.mock.module('./provider-finance.service', {
-		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 100, currency: 'USD' } }) } }
-	});
-	const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
-	const { withdrawalService } = await import(moduleUrl);
-
-	// 100 available, 60 now outstanding (only visible on retry) -> only 40
-	// left, so a 50 request must correctly fail with the BUSINESS error,
-	// proving the retry re-reads the widened aggregate rather than reusing
-	// attempt 1's stale (PENDING-only, zero) view.
-	await assert.rejects(
-		() => withdrawalService.createForProvider('provider-1', { amount: 50, method: 'bank_transfer', iban: 'SA0000000000000000000000' }),
-		/يتجاوز رصيدك الصافي/
-	);
-	assert.equal(aggregateSpy.mock.callCount(), 2, 'the outstanding-total aggregate is re-run on the retried attempt, not reused from the doomed first attempt');
-	assert.equal(createSpy.mock.callCount(), 1, 'the doomed first attempt DID call create() (matching real Postgres, which only detects the conflict at commit) — but the retry correctly refuses once it sees the true, now-insufficient balance');
-});
-
-// ============================================================================
-// createForProvider() / approve() — WalletTransaction.referenceId
-// defense-in-depth (financial invariant audit follow-up). Withdrawal.referenceId
-// used to be left null forever (nothing populated it), so
-// WalletTransaction.referenceId's existing @unique constraint provided zero
-// real protection — Postgres permits unlimited NULLs in a unique column.
-// createForProvider() now generates a real Withdrawal.id up front and
-// derives a deterministic, namespaced referenceId from it
-// (deriveWithdrawalReferenceId); approve() is UNCHANGED — it already passed
-// `item.referenceId` through to WalletTransaction.referenceId, so it now
-// simply forwards a real value instead of always-null.
-// ============================================================================
-
-test('A. createForProvider: a newly-created Withdrawal has a non-null, deterministic referenceId', async (t) => {
-	const { withdrawalService } = await loadService(t, { availableBalance: 500 });
-	const result = await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
-	assert.ok(result.referenceId, 'referenceId must be non-null for a newly-created withdrawal');
-	assert.equal(typeof result.referenceId, 'string');
-});
-
-test('B. createForProvider: the referenceId is derived from the withdrawal\'s own id and follows the "withdrawal-{id}" namespace convention', async (t) => {
-	const { deriveWithdrawalReferenceId } = await import('../utils/withdrawal-reference.util');
-	const { withdrawalService } = await loadService(t, { availableBalance: 500 });
-	const result = await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
-	assert.equal(result.referenceId, deriveWithdrawalReferenceId(result.id));
-	assert.match(result.referenceId, /^withdrawal-/);
-	assert.ok(result.referenceId.includes(result.id), 'the reference must embed the withdrawal\'s own id');
-});
-
-test('C. approve(): the WalletTransaction it creates uses EXACTLY the same referenceId the withdrawal was created with — no second, independent reference is generated', async (t) => {
-	const { withdrawalService, walletTransactions } = await loadService(t, { availableBalance: 500 });
-	const created = await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
-	assert.ok(created.referenceId);
-
-	await withdrawalService.approve(created.id, 'admin-1', { adminNote: 'ok' });
-
-	assert.equal(walletTransactions.length, 1);
-	assert.equal(walletTransactions[0].referenceId, created.referenceId, 'approve() must forward the withdrawal\'s own referenceId unchanged, never mint a new one');
-});
-
-test('D. createForProvider: two different withdrawals receive two different referenceIds', async (t) => {
-	const { withdrawalService } = await loadService(t, { availableBalance: 500 });
-	const first = await withdrawalService.createForProvider('provider-1', { amount: 50, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
-	const second = await withdrawalService.createForProvider('provider-1', { amount: 50, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
-	assert.notEqual(first.id, second.id);
-	assert.notEqual(first.referenceId, second.referenceId);
-});
-
-test('E/F. createForProvider: on a SERIALIZABLE retry, the SAME id/referenceId pair is reused across every attempt of one logical creation call — never a fresh id per attempt, and never more than one row ever persists', async (t) => {
-	const { DriverAdapterError } = await import('@prisma/driver-adapter-utils');
-	const { deriveWithdrawalReferenceId } = await import('../utils/withdrawal-reference.util');
-	let attempts = 0;
-	const seenIds: string[] = [];
-	const aggregateSpy = t.mock.fn(async () => ({ _sum: { amount: 0 } }));
-	const createSpy = t.mock.fn(async (args: any) => {
-		seenIds.push(args.data.id);
-		return { status: 'PENDING', ...args.data };
-	});
-	const tx = { withdrawal: { aggregate: aggregateSpy, create: createSpy } };
-	const transactionSpy = t.mock.fn(async (fn: any) => {
-		attempts += 1;
-		if (attempts === 1) throw new DriverAdapterError({ kind: 'TransactionWriteConflict' });
-		return fn(tx);
-	});
-	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ iban: 'SA-STORED-0000', accountHolder: 'Stored Holder' }) } } } });
-	t.mock.module('./provider-finance.service', {
-		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
-	});
-	const moduleUrl = `./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`;
-	const { withdrawalService } = await import(moduleUrl);
-
-	const result = await withdrawalService.createForProvider('provider-1', { amount: 200, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
-
-	assert.equal(transactionSpy.mock.callCount(), 2, 'the first (conflicted) attempt is retried exactly once, succeeding on the second');
-	assert.equal(createSpy.mock.callCount(), 1, 'the doomed first attempt never even reached create() here (it conflicted before running), so only the successful attempt generated a row at all');
-	assert.equal(result.referenceId, deriveWithdrawalReferenceId(result.id));
-	assert.equal(new Set(seenIds).size, 1, 'no more than one logical withdrawal id/referenceId was ever used for this one successfully-created withdrawal');
-});
-
-// ============================================================================
-// createForProvider() — Payout P2-A: PayPal destination snapshot. The
-// destination is resolved ONCE from the authenticated provider's own
-// ProviderProfile.paypalPayoutEmail (never the request body, never
-// User.email), then copied onto Withdrawal.paypalEmail at creation time.
-// Changing ProviderProfile.paypalPayoutEmail afterward must never alter an
-// already-created Withdrawal's snapshot — the mock's providerProfile fixture
-// is read once per call and never mutates the created row retroactively,
-// which is exactly what a real, separate DB row would do too.
-// ============================================================================
-
-test('E. createForProvider: a PayPal withdrawal snapshots ProviderProfile.paypalPayoutEmail onto Withdrawal.paypalEmail', async (t) => {
+test('J. createForProvider: a bank_transfer request is refused (400 PayPal-only) and nothing is created', async (t) => {
 	const { withdrawalService, createSpy } = await loadService(t, {
 		availableBalance: 500,
 		providerProfile: { paypalPayoutEmail: 'provider@paypal-sandbox.example' }
 	});
-
-	const result = await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' } as any);
-
-	assert.equal(result.paypalEmail, 'provider@paypal-sandbox.example');
-	assert.equal(createSpy.mock.calls[0].arguments[0].data.paypalEmail, 'provider@paypal-sandbox.example');
-});
-
-test('F. createForProvider: a caller-supplied paypalEmail in the request is silently ignored — the destination always comes from ProviderProfile, never the caller', async (t) => {
-	const { withdrawalService } = await loadService(t, {
-		availableBalance: 500,
-		providerProfile: { paypalPayoutEmail: 'real-provider@paypal-sandbox.example' }
-	});
-
-	// Simulates a caller/attacker who somehow got an extra field into the
-	// object reaching the service (e.g. bypassing the DTO in a hypothetical
-	// future caller) — createForProvider() itself must never read it.
-	const result = await withdrawalService.createForProvider('provider-1', {
-		amount: 100, method: 'paypal', paypalEmail: 'attacker@evil.example'
-	} as any);
-
-	assert.equal(result.paypalEmail, 'real-provider@paypal-sandbox.example', 'the snapshot must come from ProviderProfile, never from anything on the input object');
-});
-
-test('G. createForProvider: a PayPal withdrawal is rejected cleanly BEFORE any row is created when the provider has no configured PayPal destination', async (t) => {
-	const { withdrawalService, createSpy, transactionSpy } = await loadService(t, { availableBalance: 500 }); // no providerProfile fixture -> findUnique resolves null
+	const { PAYPAL_ONLY_MESSAGE } = await import('../utils/client-payout-fields');
 
 	await assert.rejects(
-		() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' } as any),
-		(err: any) => { assert.equal(err.statusCode, 400); return true; }
-	);
-	assert.equal(createSpy.mock.callCount(), 0);
-	assert.equal(transactionSpy.mock.callCount(), 0, 'the destination check happens before the transaction/retry loop even starts');
-});
-
-test('G2. createForProvider: a PayPal withdrawal is rejected cleanly when ProviderProfile.paypalPayoutEmail is an empty string (the DTO\'s own "cleared" representation)', async (t) => {
-	const { withdrawalService, createSpy } = await loadService(t, {
-		availableBalance: 500,
-		providerProfile: { paypalPayoutEmail: '' }
-	});
-
-	await assert.rejects(
-		() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' } as any),
-		(err: any) => { assert.equal(err.statusCode, 400); return true; }
+		() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' } as any),
+		(e: any) => e.statusCode === 400 && e.message === PAYPAL_ONLY_MESSAGE
 	);
 	assert.equal(createSpy.mock.callCount(), 0);
 });
 
-test('H. createForProvider: a PayPal withdrawal does NOT require an IBAN or account number', async (t) => {
-	const { withdrawalService } = await loadService(t, {
-		availableBalance: 500,
-		providerProfile: { paypalPayoutEmail: 'provider@paypal-sandbox.example' }
-	});
-
-	// No iban/accountNumber supplied at all — must succeed for method: 'paypal'.
-	const result = await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' } as any);
-	assert.equal(result.status, 'PENDING');
-	assert.equal(result.accountNumber, null);
-	assert.equal(result.iban, null);
-});
-
-// I. Requirement "existing bank withdrawal still requires its existing
-// destination requirements (preserved)" — this has always been enforced at
-// the DTO layer (createWithdrawalSchema's superRefine), never inside
-// WithdrawalService itself; the service has never re-validated iban/
-// accountNumber presence, relying entirely on the controller-level DTO
-// parse having already happened. Asserting this at the service layer would
-// test behavior the service never owned, so this is asserted directly
-// against the DTO, which is the actual, and unchanged, source of that rule.
-test('I. createWithdrawalSchema: a bank_transfer request no longer carries or needs a destination (#32: it comes from the stored profile)', async () => {
-	const { createWithdrawalSchema } = await import('../dtos/withdrawal.dto');
-
-	assert.equal(createWithdrawalSchema.safeParse({ amount: 100, method: 'bank_transfer' }).success, true);
-	// an IBAN in the body is accepted as noise but dropped by the schema
-	const withIban = createWithdrawalSchema.parse({ amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
-	assert.equal('iban' in withIban, false);
-});
-
-// Final pre-commit review follow-up: the DTO trust-boundary claim ("Zod's
-// default non-strict parsing silently drops any key this schema doesn't
-// declare") was previously only asserted in a comment and manually verified
-// ad hoc — this pins it down as a real regression test against the actual
-// schema, independent of and in addition to F's service-level proof that
-// createForProvider() itself ignores a paypalEmail on its input object.
-test('createWithdrawalSchema: a caller-supplied paypalEmail is stripped at the DTO trust boundary', async () => {
-	const { createWithdrawalSchema } = await import('../dtos/withdrawal.dto');
-
-	const result = createWithdrawalSchema.safeParse({
-		amount: 100,
-		method: 'paypal',
-		paypalEmail: 'attacker@evil.example'
-	} as any);
-
-	assert.equal(result.success, true);
-	if (result.success) {
-		assert.equal('paypalEmail' in result.data, false);
+test('J2. createForProvider: with no PayPal email saved the withdrawal is refused with exactly the PayPal-required message and nothing is created', async (t) => {
+	for (const [i, providerProfile] of ([null, { paypalPayoutEmail: null }, { paypalPayoutEmail: '' }] as any[]).entries()) {
+		await t.test(`no paypal case ${i}`, async (t2) => {
+			const { withdrawalService, createSpy } = await loadService(t2, { availableBalance: 500, providerProfile });
+			await assert.rejects(
+				() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' } as any),
+				(e: any) => e.statusCode === 400 && e.message === 'أضف بريد PayPal لاستلام الأرباح'
+			);
+			assert.equal(createSpy.mock.callCount(), 0);
+		});
 	}
 });
 
-test('J. createForProvider: a bank_transfer withdrawal leaves Withdrawal.paypalEmail null, even with a ProviderProfile.paypalPayoutEmail on file', async (t) => {
-	const { withdrawalService } = await loadService(t, {
+test('J3. createForProvider: a PayPal withdrawal stores method paypal + the paypalEmail snapshot and no iban / accountName / accountNumber', async (t) => {
+	const { withdrawalService, createSpy } = await loadService(t, {
 		availableBalance: 500,
 		providerProfile: { paypalPayoutEmail: 'provider@paypal-sandbox.example' }
 	});
-
-	const result = await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
-	assert.equal(result.paypalEmail, null);
+	await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal', iban: 'SA-ATTACKER-9999', accountName: 'Attacker' } as any);
+	const data = createSpy.mock.calls[0].arguments[0].data;
+	assert.equal(data.method, 'paypal');
+	assert.equal(data.paypalEmail, 'provider@paypal-sandbox.example');
+	for (const k of ['iban', 'accountName', 'accountNumber']) assert.equal(k in data, false, k);
+	assert.ok(!JSON.stringify(data).includes('ATTACKER') && !JSON.stringify(data).includes('Attacker'));
 });
 
 test('K. createForProvider: changing ProviderProfile.paypalPayoutEmail AFTER a withdrawal is created does not alter that withdrawal\'s already-snapshotted destination', async (t) => {
@@ -1398,12 +1195,12 @@ test('reject: a rejected withdrawal does not permanently consume available earni
 	// moment it's rejected, with nothing to "restore".
 	const { withdrawalService } = await loadService(t, { availableBalance: 500 });
 
-	const first = await withdrawalService.createForProvider('provider-1', { amount: 400, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	const first = await withdrawalService.createForProvider('provider-1', { amount: 400, method: 'paypal' });
 	assert.equal(first.status, 'PENDING');
 
 	// While the first is still PENDING, a second full-amount request must
 	// still correctly fail (only 100 left).
-	await assert.rejects(() => withdrawalService.createForProvider('provider-1', { amount: 400, method: 'bank_transfer', iban: 'SA0000000000000000000000' }));
+	await assert.rejects(() => withdrawalService.createForProvider('provider-1', { amount: 400, method: 'paypal' }));
 
 	// Reject the first via the real (unchanged) reject() — sharing the same
 	// mock withdrawals array as createForProvider() above.
@@ -1412,7 +1209,7 @@ test('reject: a rejected withdrawal does not permanently consume available earni
 
 	// Now the full 400 is fundable again — nothing needed to be explicitly
 	// "restored", since the rejected row simply stopped being counted.
-	const second = await withdrawalService.createForProvider('provider-1', { amount: 400, method: 'bank_transfer', iban: 'SA0000000000000000000000' });
+	const second = await withdrawalService.createForProvider('provider-1', { amount: 400, method: 'paypal' });
 	assert.equal(second.status, 'PENDING');
 	assert.equal(second.amount, 400);
 });
@@ -1519,37 +1316,22 @@ test('withdrawal.service.ts has no riyal/SAR text and creates both provider and 
 });
 
 
-// ---- Finance #32: the bank destination comes ONLY from the stored profile, never from the request body --------------------------
-test('#32 createForProvider: an IBAN / account sent in the body is never used — the stored profile data is the destination', async (t) => {
-	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 500, bankProfile: { iban: 'SA-STORED-1111', accountHolder: 'Stored Holder' } });
+// ---- PayPal only: the request body never decides the destination or method -------------------------------------------------------
+test('#32 createForProvider: a bank payload is never stored — bank_transfer is refused and a PayPal request ignores any bank keys on the input object', async (t) => {
+	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 500, providerProfile: { paypalPayoutEmail: 'p@example.com' } });
 
-	await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA-ATTACKER-9999', accountName: 'Attacker', accountNumber: '999' } as any);
-
-	const data = createSpy.mock.calls[0].arguments[0].data;
-	assert.equal(data.iban, 'SA-STORED-1111');
-	assert.equal(data.accountName, 'Stored Holder');
-	assert.equal(data.accountNumber, null);
-	assert.ok(!JSON.stringify(data).includes('ATTACKER') && !JSON.stringify(data).includes('Attacker'));
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA-ATTACKER-9999', accountName: 'Attacker', accountNumber: '999' } as any),
+		(e: any) => e.statusCode === 400
+	);
+	assert.equal(createSpy.mock.callCount(), 0);
 });
 
-test('#32 createForProvider: with no stored bank data the withdrawal is refused (400, Arabic) even if the body carries an IBAN, and nothing is created', async (t) => {
-	// one TestContext per case: t.mock.module() may mock a specifier only once per context
-	for (const [i, bankProfile] of ([null, { iban: null }, { iban: '   ' }] as any[]).entries()) {
-		await t.test(`stored bank data case ${i}`, async (t2) => {
-			const { withdrawalService, createSpy } = await loadService(t2, { availableBalance: 500, bankProfile });
-			await assert.rejects(
-				() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer', iban: 'SA0000000000000000000000' } as any),
-				(e: any) => e.statusCode === 400 && e.message === 'لا توجد بيانات بنكية معتمدة للسحب'
-			);
-			assert.equal(createSpy.mock.callCount(), 0);
-		});
-	}
-});
-
-test('#32 the request schema carries no bank fields (zod drops them) and no longer demands an IBAN', async () => {
+test('#32 the request schema rejects bank / IBAN / account fields and bank_transfer (no silent drop)', async () => {
 	const { createWithdrawalSchema } = await import('../dtos/withdrawal.dto');
-	const parsed = createWithdrawalSchema.parse({ amount: 50, iban: 'SA-X', accountName: 'x', accountNumber: '1' });
-	assert.deepEqual(parsed, { amount: 50, method: 'bank_transfer' });
+	assert.equal(createWithdrawalSchema.safeParse({ amount: 50, iban: 'SA-X', accountName: 'x', accountNumber: '1' }).success, false);
+	assert.equal(createWithdrawalSchema.safeParse({ amount: 50, method: 'bank_transfer' }).success, false);
+	assert.deepEqual(createWithdrawalSchema.parse({ amount: 50 }), { amount: 50, method: 'paypal' });
 	assert.equal(createWithdrawalSchema.safeParse({ amount: 50, method: 'paypal' }).success, true);
 });
 
@@ -1570,8 +1352,12 @@ test('#33 createForProvider(paypal): after 24 hours the withdrawal is allowed ag
 	assert.equal(createSpy.mock.calls[0].arguments[0].data.paypalEmail, 'new@paypal.example');
 });
 
-test('#33 the freeze does not touch the bank method', async (t) => {
+test('#33 the freeze never lets a non-PayPal method through: bank_transfer is refused with the PayPal-only message', async (t) => {
 	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 500, paypalEmailChangedAt: new Date(Date.now() - 60 * 1000) });
-	await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer' } as any);
-	assert.equal(createSpy.mock.callCount(), 1);
+	const { PAYPAL_ONLY_MESSAGE } = await import('../utils/client-payout-fields');
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer' } as any),
+		(e: any) => e.statusCode === 400 && e.message === PAYPAL_ONLY_MESSAGE
+	);
+	assert.equal(createSpy.mock.callCount(), 0);
 });
