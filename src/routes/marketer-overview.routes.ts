@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { marketerOverviewController } from '../controllers/marketer-overview.controller';
 import { submitMarketerWithdrawal, listMyMarketerWithdrawals } from '../controllers/withdrawal.controller';
+import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 
 const router = Router();
@@ -12,7 +13,7 @@ router.use(authorize('MARKETING_BROKER'));
 router.get('/summary', marketerOverviewController.getSummary);
 router.get('/channel-performance', marketerOverviewController.getChannelPerformance);
 router.get('/commissions', marketerOverviewController.getCommissions);
-router.get('/ai-insights', marketerOverviewController.getAiInsights);
+router.get('/ai-insights', aiLimiter, marketerOverviewController.getAiInsights);
 
 // Referred users (paginated) — strictly scoped to req.user.id's own
 // AffiliateProfile inside the service (getOrCreateProfile()); never accepts

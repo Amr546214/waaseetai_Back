@@ -184,6 +184,8 @@ export class ClientReportsService {
 				completedDeltaThisMonth: completedThisMonth,
 				totalSpent,
 				avgRating,
+				// additive: lets callers tell "no reviews" (avgRating 0) from a real rating, so AI features never treat 0 as data.
+				reviewsCount: reviews.length,
 				ratingDelta: ratingLastMonth === null ? 0 : Math.round((avgRating - ratingLastMonth) * 10) / 10
 			},
 			orders: {
