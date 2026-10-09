@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { authPasswordSchema } from '../../utils/auth-password-policy';
 import { AccountType } from '@prisma/client';
 import { COMPANY_ACCOUNTS_UNAVAILABLE_MESSAGE, isCompanyAccountType } from '../../middlewares/company-unavailable.middleware';
 import { sanitizedText } from '../../utils/sanitize-text';
@@ -30,11 +31,7 @@ export const registerSchema = z.object({
     email: normalizedEmail,
     phoneCountryCode: z.string().default('+966'),
     phoneNumber: z.string().regex(/^\d+$/, 'رقم الجوال يجب أن يحتوي على أرقام فقط').min(9, 'رقم الجوال غير صحيح'),
-    password: z
-      .string()
-      .min(8, 'كلمة المرور يجب أن لا تقل عن 8 أحرف')
-      .regex(/[A-Z]/, 'كلمة المرور يجب أن تحتوي على حرف كبير واحد على الأقل')
-      .regex(/[0-9]/, 'كلمة المرور يجب أن تحتوي على رقم واحد على الأقل').optional(),
+    password: authPasswordSchema.optional(),
     googleIdToken: z.string().min(1).optional(),
     // Optional explicit affiliate selection at registration time — either a
     // manually-typed referral code/slug OR the value picked via the
@@ -129,11 +126,7 @@ export const resetPasswordSchema = z.object({
   body: z.object({
     email: normalizedEmail,
     code: z.string().regex(/^\d{6}$/, 'رمز التحقق يجب أن يكون 6 أرقام'),
-    newPassword: z
-      .string()
-      .min(8, 'كلمة المرور يجب أن لا تقل عن 8 أحرف')
-      .regex(/[A-Z]/, 'كلمة المرور يجب أن تحتوي على حرف كبير واحد على الأقل')
-      .regex(/[0-9]/, 'كلمة المرور يجب أن تحتوي على رقم واحد على الأقل')
+    newPassword: authPasswordSchema
   })
 });
 
