@@ -27,6 +27,7 @@ export const getProviderStatistics = async (req: Request, res: Response, next: N
 			pendingOffersCount,
 			negotiationOffersCount,
 			pendingClientApprovalCount,
+			clientReviewsCount,
 			wallet,
 			providerProfile,
 			gamification,
@@ -49,6 +50,9 @@ export const getProviderStatistics = async (req: Request, res: Response, next: N
 			prisma.project.count({
 				where: { providerId, status: ProjectStatus.PENDING_APPROVAL }
 			}),
+			// ProviderProfile.rating defaults to 5.0 in the schema, so "has a rating" is decided by REAL client reviews, never by the value:
+			// a genuine 5.0 stays 5.0 and a provider with no reviews has no rating (null).
+			prisma.review.count({ where: { providerId, reviewerRole: 'CLIENT' } }),
 			// Same financial source used by the wallet; includes partial stage releases.
 			providerFinanceService.getWallet(providerId),
 			// profile & user
@@ -76,8 +80,10 @@ export const getProviderStatistics = async (req: Request, res: Response, next: N
 		const monthlyEarnings = wallet.summary.releasedThisMonth;
 		const totalEscrowAmount = wallet.summary.escrowBalance;
 		
-		const providerRating = providerProfile?.rating && providerProfile.rating !== 5.0 ? providerProfile.rating : 0;
-		const humanRating = providerProfile?.rating && providerProfile.rating !== 5.0 ? providerProfile.rating : 0;
+		const storedRating = providerProfile?.rating;
+		const hasRating = clientReviewsCount > 0 && typeof storedRating === 'number' && Number.isFinite(storedRating) && storedRating > 0;
+		const providerRating: number | null = hasRating ? storedRating! : null;
+		const humanRating: number | null = providerRating;
 		// "تقييم الذكاء الاصطناعي": the average of the REAL WaseetAI quality scores stored on this provider's own proposals (stars out of 5);
 		// null (never 0) when no proposal was scored.
 		let aiOfferRating = computeClientAiOfferRating([]);
