@@ -9,7 +9,7 @@ import { CreateWithdrawalInput, CreateMarketerWithdrawalInput, RejectWithdrawalI
 import { providerFinanceService } from './provider-finance.service';
 import { isRetryableTransactionConflict } from '../utils/prisma-retry.util';
 import { paypalEmailChangeService } from './paypal-email-change.service';
-import { PAYPAL_EMAIL_FROZEN_MESSAGE } from '../utils/paypal-email-messages';
+import { paypalEmailFrozenError } from '../utils/paypal-email-messages';
 import { deriveWithdrawalReferenceId } from '../utils/withdrawal-reference.util';
 
 export const MARKETER_PAYPAL_REQUIRED_MESSAGE = 'أضف بريد PayPal لاستلام الأرباح';
@@ -118,7 +118,7 @@ export class WithdrawalService {
       });
       // Finance #33: a PayPal withdrawal is frozen for 24 hours after the payout email was changed (the change itself needs an email OTP).
       const frozenUntil = await paypalEmailChangeService.frozenUntil(userId, prisma);
-      if (frozenUntil) throw new AppError(PAYPAL_EMAIL_FROZEN_MESSAGE, 400);
+      if (frozenUntil) throw paypalEmailFrozenError(AppError, frozenUntil);
       if (!providerProfile?.paypalPayoutEmail) {
         throw new AppError(PROVIDER_PAYPAL_REQUIRED_MESSAGE, 400);
       }

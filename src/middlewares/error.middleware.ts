@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/app-error';
 import { logger } from '../config/logger';
 import { AI_FEATURE_UNAVAILABLE_CODE } from '../services/ai/ai-feature-unavailable';
+import { PAYPAL_EMAIL_FROZEN_CODE } from '../utils/paypal-email-messages';
 
 // Known library errors that are the caller's mistake (4xx), not a server fault: they must never surface as a 500 "Internal Server Error".
 // Messages are fixed Arabic text — nothing from the library error (field names, constraint targets, SQL) is echoed.
@@ -37,6 +38,7 @@ export const globalErrorHandler = (
   let message = 'Internal Server Error';
   let errors: any[] | undefined = undefined;
   let code: string | undefined = undefined;
+  let extra: Record<string, unknown> | undefined = undefined;
 
   const mapped = mapKnownError(err);
   if (mapped) {
@@ -48,6 +50,12 @@ export const globalErrorHandler = (
     errors = err.errors;
     // Only the fixed, hardcoded AI-disabled marker is forwarded.
     if ((err as { code?: unknown }).code === AI_FEATURE_UNAVAILABLE_CODE) code = AI_FEATURE_UNAVAILABLE_CODE;
+    // The PayPal-email freeze also says when it ends (two fixed, non-sensitive fields).
+    if ((err as { code?: unknown }).code === PAYPAL_EMAIL_FROZEN_CODE) {
+      code = PAYPAL_EMAIL_FROZEN_CODE;
+      const e = err as unknown as { availableAt?: string; retryAfterSeconds?: number };
+      extra = { availableAt: e.availableAt, retryAfterSeconds: e.retryAfterSeconds };
+    }
   } else {
     // Unhandled operational/programming errors
     logger.error('Unhandled Exception:', err);
@@ -68,6 +76,7 @@ export const globalErrorHandler = (
     success: false,
     message,
     ...(code && { code }),
+    ...(extra && extra),
     ...(errors && { errors })
   });
 };
