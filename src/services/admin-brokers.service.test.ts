@@ -182,11 +182,14 @@ test('listBrokers: uses an explicit top-level `select` (never a bare `include`) 
 
 	await adminBrokersService.listBrokers({ page: 1, limit: 20 });
 
-	assert.equal(findManySpy.mock.callCount(), 1);
+	// call 1 = the list (explicit select, never `level`); call 2 = the numeric level read on its own (guarded), so the list can never 500 on a missing column
+	assert.equal(findManySpy.mock.callCount(), 2);
 	const args = findManySpy.mock.calls[0].arguments[0];
 	assert.equal(args.include, undefined, 'must use `select`, not a bare top-level `include`');
 	assert.ok(args.select, 'must pass an explicit select');
 	assert.equal('level' in args.select, false);
+	assert.equal('currentLevel' in args.select, false, 'the stale label is no longer read');
+	assert.deepEqual(findManySpy.mock.calls[1].arguments[0].select, { id: true, level: true });
 });
 
 test('getBrokerDetail: uses an explicit top-level `select` (never a bare `include`) and never requests `level`', async (t) => {
@@ -202,4 +205,10 @@ test('getBrokerDetail: uses an explicit top-level `select` (never a bare `includ
 	// `id` must still be selected — getBrokerDetail() uses it to scope the
 	// separate commissionLog.findMany() query.
 	assert.equal(args.select.id, true);
+});
+
+test('listBrokers: the level shown is the single ladder\'s name / number / commission for the numeric level (a missing level reads as level 1)', async (t) => {
+	const { adminBrokersService } = await loadService(t, { findMany: [affiliateFixture({ id: 'aff-x', level: 8 })] });
+	const { items } = await adminBrokersService.listBrokers({ page: 1, limit: 20 });
+	assert.deepEqual([items[0].level, items[0].levelNumber, items[0].commissionPercent], ['موجه', 8, 3]);
 });

@@ -222,18 +222,18 @@ test('reviewDelivery: avgRating is sourced from the live Review aggregate (same 
 
 test('reviewDelivery: ProviderGamification persists points, completedProjects, avgRating, currentLevelIndex and currentCommission together, consistently', async (t) => {
   const { projectProgressService, getGamificationState } = await loadProjectProgressServiceWithFixture(t, {
-    completedProjectsCount: 2,
+    completedProjectsCount: 3,
     avgRating: 3.5,
-    seedPointTransactions: [0] // total after award = 50, exactly level 2's reqPoints
+    seedPointTransactions: [51] // total after award = 101, exactly level 2's reqPoints
   });
 
   await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
 
   const state = getGamificationState();
-  assert.equal(state.points, 50);
-  assert.equal(state.completedProjects, 2);
+  assert.equal(state.points, 101);
+  assert.equal(state.completedProjects, 3);
   assert.equal(state.avgRating, 3.5);
-  // Level 2 requires points>=50, completedProjects>=2, avgRating>=3.5 — all exactly met.
+  // Level 2 requires points>=101, completedProjects>=3, avgRating>=3.5 — all exactly met.
   assert.equal(state.currentLevelIndex, 2);
   assert.equal(state.currentCommission, 4.8);
 });

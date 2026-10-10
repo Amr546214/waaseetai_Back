@@ -78,9 +78,9 @@ test('rateRequest: recalculates authoritative avgRating from the live Review agg
 });
 
 test('rateRequest: can promote a provider when a rating change makes all 3 thresholds newly satisfied', async (t) => {
-  // points/completedProjects already clear level 2 (50/2); only avgRating was missing.
+  // points/completedProjects already clear level 2 (101/3); only avgRating was missing.
   const { ratingService, getGamificationState } = await loadRatingServiceWithFixture(t, {
-    avgRating: 3.5, totalPoints: 50, completedProjectsCount: 2
+    avgRating: 3.5, totalPoints: 101, completedProjectsCount: 3
   });
 
   await ratingService.rateRequest('contract-1', 'client-1', 'client', { rating: 4, comment: 'جيد جداً' });
@@ -92,7 +92,7 @@ test('rateRequest: can promote a provider when a rating change makes all 3 thres
 test('rateRequest: a dropped authoritative rating results in the correct lower qualified level', async (t) => {
   // points/completedProjects still clear level 2, but avgRating has now dropped below 3.5.
   const { ratingService, getGamificationState } = await loadRatingServiceWithFixture(t, {
-    avgRating: 3.0, totalPoints: 50, completedProjectsCount: 2
+    avgRating: 3.0, totalPoints: 101, completedProjectsCount: 3
   });
 
   await ratingService.rateRequest('contract-1', 'client-1', 'client', { rating: 2, comment: 'كان يمكن أن يكون أفضل' });
@@ -102,16 +102,16 @@ test('rateRequest: a dropped authoritative rating results in the correct lower q
 
 test('rateRequest: ProviderGamification writes points/completedProjects/avgRating/currentLevelIndex/currentCommission together, all synchronized', async (t) => {
   const { ratingService, getGamificationState } = await loadRatingServiceWithFixture(t, {
-    avgRating: 4.6, totalPoints: 751, completedProjectsCount: 20
+    avgRating: 4.6, totalPoints: 1001, completedProjectsCount: 21
   });
 
   await ratingService.rateRequest('contract-1', 'client-1', 'client', { rating: 5 });
 
   const state = getGamificationState();
-  assert.equal(state.points, 751);
-  assert.equal(state.completedProjects, 20);
+  assert.equal(state.points, 1001);
+  assert.equal(state.completedProjects, 21);
   assert.equal(state.avgRating, 4.6);
-  // Level 6 requires points>=751, completedProjects>=20, avgRating>=4.2 — all met.
+  // Level 6 requires points>=1001, completedProjects>=21, avgRating>=4.2 — all met.
   assert.equal(state.currentLevelIndex, 6);
   assert.equal(state.currentCommission, 4.0);
 });
