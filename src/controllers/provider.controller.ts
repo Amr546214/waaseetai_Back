@@ -1,3 +1,4 @@
+import { providerProfileService } from '../services/provider-profile.service';
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/db';
 import { ProjectStatus, ProposalStatus, EscrowStatus, ContractStatus, Project } from '@prisma/client';
@@ -148,6 +149,9 @@ export const getProviderStatistics = async (req: Request, res: Response, next: N
 					// Real values only (the dashboard badge is built from them): the profile's KYC status, and the commission percentage stored for
 					// the provider's current level (ProviderGamification.currentCommission). null when the row / value does not exist.
 					kycStatus: providerProfile?.kycStatus ?? null,
+					// The badge must say what the profile data page says: the SAME derivation (identityVerification), never the raw kycStatus alone
+					// (an approved document with a stale KYC "PENDING" used to show "under review" next to "verified").
+					identityVerification: await providerProfileService.getIdentityVerification(providerId),
 					commissionPercent: typeof gamification?.currentCommission === 'number' ? gamification.currentCommission : null,
 					firstName,
 					lastName

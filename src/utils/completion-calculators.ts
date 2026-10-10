@@ -191,11 +191,12 @@ export function computeProviderCompletion(input: ProviderCompletionInput): numbe
  * status 'pending_review' (the provider did their part; it is NOT missing), and does not count in the percentage until
  * it is approved (User.idDocumentUrl is only written on approval).
  */
-export function computeProviderMissingItems(input: ProviderCompletionInput, options: { pendingDocumentReview?: boolean; rejectedIdentity?: boolean } = {}): CompletionMissingItem[] {
+export function computeProviderMissingItems(input: ProviderCompletionInput, options: { pendingDocumentReview?: boolean; rejectedIdentity?: boolean; verifiedIdentity?: boolean } = {}): CompletionMissingItem[] {
   const items: CompletionMissingItem[] = [];
   for (const rule of PROVIDER_RULES) {
     // a refused identity review is never "complete", even with a stored document: it needs a new one (unless a new one is already waiting)
     const rejected = rule.key === 'idDocument' && !!options.rejectedIdentity && !options.pendingDocumentReview;
+    if (rule.key === 'idDocument' && options.verifiedIdentity) continue; // approved identity is never listed as missing
     if (rule.met(input) && !rejected) continue;
     const pending = rule.key === 'idDocument' && !!options.pendingDocumentReview && !rule.met(input);
     items.push({

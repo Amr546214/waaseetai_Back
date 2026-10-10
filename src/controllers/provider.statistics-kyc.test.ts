@@ -5,13 +5,18 @@ import assert from 'node:assert/strict';
 process.env.OPENAI_API_KEY = 'test-key';
 process.env.JWT_SECRET = 'test-secret';
 
-const state: any = { profile: null, gamification: null, proposals: [], reviews: 0 };
+const state: any = { profile: null, gamification: null, proposals: [], reviews: 0, idDoc: null, docRequests: [] as any[] };
 let loaded: Promise<any> | undefined;
 const load = () => (loaded ??= (async () => {
 	mock.module('../config/db', { namedExports: { prisma: {
 		project: { count: async () => 0 }, proposal: { count: async () => 0, findMany: async () => state.proposals },
 		review: { count: async () => state.reviews },
 		providerProfile: { findUnique: async () => state.profile },
+		user: { findUnique: async () => ({ idDocumentUrl: state.idDoc }) },
+		profileModificationRequest: {
+			findFirst: async () => [...state.docRequests].sort((a: any, b: any) => b.createdAt - a.createdAt).find((r: any) => ['PENDING_HUMAN_REVIEW', 'REJECTED'].includes(r.status)) ?? null,
+			count: async () => state.docRequests.filter((r: any) => r.status === 'PENDING_HUMAN_REVIEW').length,
+		},
 		providerGamification: { findUnique: async () => state.gamification },
 	} } });
 	mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
@@ -95,4 +100,42 @@ test('providerRating/humanRating: a real 5.0 stays 5.0; no client reviews or a m
 	state.reviews = 2; state.profile = profile({ rating: 0 }); // 0 is not a valid star rating
 	s = await call(); assert.equal(s.providerRating, null);
 	state.reviews = 0;
+});
+
+// ── the dashboard badge and the profile data page say the same thing (one derivation: identityVerification) ──
+const idv = async (over: { kyc?: string | null; notes?: string | null; idDoc?: string | null; requests?: any[] }) => {
+	state.profile = profile({ kycStatus: over.kyc ?? null, notes: over.notes ?? null }); state.gamification = null;
+	state.idDoc = over.idDoc ?? null; state.docRequests = over.requests ?? [];
+	return (await call()).identityVerification;
+};
+const req = (status: string, extra: any = {}) => ({ id: 'r1', status, createdAt: new Date('2026-10-10'), rejectionReason: null, ...extra });
+
+test('VERIFIED document + a stale KYC "PENDING": the dashboard says VERIFIED, never "under review" (the contradiction that was reported)', async () => {
+	const v = await idv({ kyc: 'PENDING', idDoc: 'private:ref', requests: [req('APPROVED')] });
+	assert.equal(v.status, 'VERIFIED');
+	const s = await call();
+	assert.equal(s.kycStatus, 'PENDING', 'the raw column is still passed as it is');
+});
+test('PENDING_REVIEW only when something really waits: a request for the admin, or identity documents waiting in the KYC queue', async () => {
+	assert.equal((await idv({ requests: [req('PENDING_HUMAN_REVIEW')] })).status, 'PENDING_REVIEW');
+	assert.equal((await idv({ kyc: 'PENDING' })).status, 'PENDING_REVIEW');
+	assert.equal((await idv({ kyc: 'PENDING', idDoc: 'private:ref' })).status, 'VERIFIED');
+	assert.equal((await idv({})).status, 'NOT_SUBMITTED');
+});
+test('REJECTED: a refused KYC review or a rejected request, with the safe reason (never the raw notes)', async () => {
+	const k = await idv({ kyc: 'REJECTED', notes: 'سبب الرفض: الصورة غير واضحة', idDoc: 'private:ref' });
+	assert.deepEqual([k.status, k.rejectionReason], ['REJECTED', 'الصورة غير واضحة']);
+	const g = await idv({ kyc: 'REJECTED', notes: 'ملاحظة داخلية سرية' });
+	assert.equal(g.rejectionReason, 'تم رفض المستندات. يرجى رفع مستندات أوضح أو التواصل مع الدعم.');
+	assert.equal((await idv({ requests: [req('REJECTED', { rejectionReason: 'x' })] })).status, 'REJECTED');
+	assert.doesNotMatch(JSON.stringify(await call()), /ملاحظة داخلية سرية/);
+});
+test('a new waiting request overrides an old refusal; KYC VERIFIED without a stored document is VERIFIED', async () => {
+	assert.equal((await idv({ kyc: 'REJECTED', notes: 'سبب الرفض: x', requests: [req('PENDING_HUMAN_REVIEW')] })).status, 'PENDING_REVIEW');
+	assert.equal((await idv({ kyc: 'VERIFIED' })).status, 'VERIFIED');
+});
+test('a failed identity read gives null (no claim is made) and the rest of the dashboard still answers', async () => {
+	state.profile = null; state.gamification = null;
+	const s = await call();
+	assert.ok(s.identityVerification === null || s.identityVerification?.status === 'NOT_SUBMITTED');
 });

@@ -1512,3 +1512,33 @@ test('a new ID document after a KYC refusal starts a new review: kycStatus PENDI
   const after: any = await providerProfileService.getProfile('user-1');
   assert.deepEqual([after.identityVerification.status, after.identityVerification.rejectionReason], ['PENDING_REVIEW', null]);
 });
+
+test('dashboard and profile data page agree: getIdentityVerification equals getProfile().identityVerification in every state', async (t) => {
+  const { providerProfileService, getProviderProfileState, getUserState, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+  const same = async (label: string) => {
+    const a = await providerProfileService.getIdentityVerification('user-1');
+    const b: any = await providerProfileService.getProfile('user-1');
+    assert.deepEqual(a, b.identityVerification, label);
+    return a!.status;
+  };
+  assert.equal(await same('nothing sent'), 'NOT_SUBMITTED');
+  Object.assign(getProviderProfileState(), { kycStatus: 'PENDING' });
+  assert.equal(await same('setup docs waiting in the KYC queue'), 'PENDING_REVIEW');
+  Object.assign(getProviderProfileState(), { kycStatus: 'REJECTED', notes: 'سبب الرفض: غير واضح' });
+  assert.equal(await same('KYC refused'), 'REJECTED');
+  Object.assign(getProviderProfileState(), { kycStatus: 'PENDING', notes: null });
+  Object.assign(getUserState(), { idDocumentUrl: 'private:ref' });
+  assert.equal(await same('approved document + stale KYC PENDING'), 'VERIFIED');
+  Object.assign(getUserState(), { idDocumentUrl: null });
+  const r = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', { idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id.pdf' });
+  await providerProfileService.verifySensitiveChange('user-1', r.requestId, getLastOtpCode()!);
+  assert.equal(await same('a request waits for the admin'), 'PENDING_REVIEW');
+});
+
+test('completion: an approved identity is never listed as missing, even with KYC VERIFIED and no stored document', async (t) => {
+  const { providerProfileService, getProviderProfileState } = await loadServiceForSensitiveFlow(t);
+  Object.assign(getProviderProfileState(), { kycStatus: 'VERIFIED' });
+  const p: any = await providerProfileService.getProfile('user-1');
+  assert.equal(p.identityVerification.status, 'VERIFIED');
+  assert.equal(p.missingItems.some((i: any) => i.key === 'idDocument'), false);
+});
