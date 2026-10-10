@@ -28,6 +28,9 @@ export class AuthController {
 			const refCookieSlug = getRequestCookie(req, 'waseet_ref_code');
 
 			const result = await authService.registerUser(input, { refCookieSlug });
+			// the mailer was called: the cooldown starts only if the SMTP server accepted the code (see otpSendGate)
+			res.locals.otpEmailAttempted = true;
+			res.locals.otpEmailSent = result.emailSent === true;
 
 			res.status(201).json({
 				success: true,
@@ -68,6 +71,8 @@ export class AuthController {
 		try {
 			const { userId } = req.body;
 			const { emailSent } = await authService.resendOtp(userId);
+			res.locals.otpEmailAttempted = true;
+			res.locals.otpEmailSent = emailSent === true;
 
 			// success:false when the email did not go out, so an older app version that only reads `success` / `message`
 			// does not claim the code was sent.

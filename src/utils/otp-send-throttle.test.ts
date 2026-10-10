@@ -61,3 +61,15 @@ test('Arabic messages carry the wait, and the wait formatter is Arabic', () => {
     assert.doesNotMatch(m, /[A-Za-z]{4,}/);
   }
 });
+
+test('peek never records; record(delivered=false) counts only the IP, record(delivered=true) also starts the recipient cooldown', () => {
+  const t = new OtpSendThrottle();
+  assert.equal(t.peek('a@y.co', '1.1.1.1', 0).allowed, true);
+  assert.equal(t.peek('a@y.co', '1.1.1.1', 1).allowed, true);              // peeking twice changes nothing
+  t.record('a@y.co', '1.1.1.1', false, 10);
+  assert.equal(t.peek('a@y.co', '1.1.1.1', 20).allowed, true);             // a failed send starts no cooldown
+  t.record('a@y.co', '1.1.1.1', true, 30);
+  const r = t.peek('a@y.co', '1.1.1.1', 40);
+  assert.equal(r.allowed, false); assert.equal(r.reason, 'interval');      // cooldown only after a delivered one
+  assert.equal(t.peek('b@y.co', '1.1.1.1', 40).allowed, true);
+});

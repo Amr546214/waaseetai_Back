@@ -8,9 +8,10 @@ import { otpSendThrottle } from '../utils/otp-send-throttle';
 process.env.RATE_LIMIT_ENABLED = 'true';
 process.env.AUTH_RATE_LIMIT_MAX = '10';
 let otpSendLimiter: typeof import('./rate-limit.middleware').otpSendLimiter;
+let otpSendGate: typeof import('./rate-limit.middleware').otpSendGate;
 let authLimiter: typeof import('./rate-limit.middleware').authLimiter;
 test.before(async () => {
-  ({ otpSendLimiter, authLimiter } = await import('./rate-limit.middleware'));
+  ({ otpSendLimiter, otpSendGate, authLimiter } = await import('./rate-limit.middleware'));
 });
 
 function run(mw: any, req: any) {
@@ -55,10 +56,12 @@ test('route wiring: SEND endpoints use otpSendLimiter (after validation) and not
     assert.ok(i >= 0, route);
     return src.slice(i, src.indexOf(');', i));
   };
-  for (const route of ['/register', '/resend-otp', '/forgot-password']) {
-    assert.match(block(route), /otpSendLimiter\(/, route);
+  // forgot-password answers the same for every address, so it records up front (otpSendLimiter); register / resend-otp start the cooldown only
+  // once a code was really sent (otpSendGate: peek first, record when the mailer reported its result)
+  for (const [route, fn] of [['/register', 'otpSendGate'], ['/resend-otp', 'otpSendGate'], ['/forgot-password', 'otpSendLimiter']] as const) {
+    assert.match(block(route), new RegExp(`${fn}\\(`), route);
     assert.doesNotMatch(block(route), /authLimiter/, `${route} must not share the login limiter`);
-    assert.ok(block(route).indexOf('validateRequest(') < block(route).indexOf('otpSendLimiter('), `${route}: the limiter runs AFTER the schema validation`);
+    assert.ok(block(route).indexOf('validateRequest(') < block(route).indexOf(`${fn}(`), `${route}: the limiter runs AFTER the schema validation`);
   }
   for (const route of ['/verify-otp', '/verify-reset-code', '/reset-password']) {
     assert.match(block(route), /otpVerifyLimiters\(/, route);
@@ -93,4 +96,61 @@ test('the general limiters answer in Arabic with Retry-After as well', async () 
   assert.match(err.message, /[؀-ۿ]/);
   assert.doesNotMatch(err.message, /Too many/i);
   assert.ok(Number(headers['Retry-After']) > 0);
+});
+
+
+// ── otpSendGate: the cooldown starts only after a code was REALLY sent ─────────────────────────────────────────────────────────────
+function runGate(email: string, outcome: 'none' | 'sent' | 'smtp-failed', ip = '5.5.5.5') {
+  const handlers: Array<() => void> = [];
+  const res: any = { locals: {}, setHeader() {}, once: (_e: string, fn: () => void) => { handlers.push(fn); } };
+  let err: any = null; let passed = false;
+  otpSendGate(r => r.body?.email)({ body: { email }, ip } as any, res, (e?: unknown) => { if (e) err = e; else passed = true; });
+  if (passed) {
+    if (outcome !== 'none') { res.locals.otpEmailAttempted = true; res.locals.otpEmailSent = outcome === 'sent'; }
+    handlers.forEach(h => h());
+  }
+  return { err, passed };
+}
+
+test('a first registration is never answered with a cooldown, and a request that failed before any e-mail went out starts none (409 / crash)', () => {
+  otpSendThrottle.reset();
+  assert.equal(runGate('new@y.co', 'none').passed, true);      // e.g. 409 duplicate phone: the mailer was never called
+  const retry = runGate('new@y.co', 'sent');                    // the corrected retry goes through and sends the code
+  assert.equal(retry.passed, true, 'no false "we just sent you a code"');
+});
+
+test('after a code was really sent, the next request within 60 s is 429 with the cooldown message (and retryAfterSeconds)', () => {
+  otpSendThrottle.reset();
+  assert.equal(runGate('a@y.co', 'sent').passed, true);
+  const second = runGate('a@y.co', 'sent');
+  assert.equal(second.passed, false);
+  assert.equal(second.err.statusCode, 429);
+  assert.match(second.err.message, /أرسلنا الرمز بالفعل.*يمكنك إعادة الإرسال بعد/);
+  assert.equal(second.err.errors[0].reason, 'interval');
+  assert.ok(second.err.errors[0].retryAfterSeconds > 0);
+});
+
+test('an SMTP failure leaves NO recipient cooldown (the user can retry at once) but still counts against the per-IP budget', () => {
+  otpSendThrottle.reset();
+  assert.equal(runGate('f@y.co', 'smtp-failed').passed, true);
+  assert.equal(runGate('f@y.co', 'sent').passed, true, 'retry right after a failed send is allowed');
+  // per-IP: 30 attempts that reached the mailer per hour, whatever the recipient
+  otpSendThrottle.reset();
+  for (let i = 0; i < 30; i++) assert.equal(runGate(`u${i}@y.co`, 'smtp-failed', '9.9.9.9').passed, true);
+  const blocked = runGate('another@y.co', 'sent', '9.9.9.9');
+  assert.equal(blocked.passed, false);
+  assert.equal(blocked.err.errors[0].reason, 'ip-hour');
+  assert.match(blocked.err.message, /محاولات كثيرة من هذا الجهاز/);
+});
+
+test('rate-limited wording: per recipient per hour and per IP are "محاولات كثيرة، حاول لاحقًا ..."', async () => {
+  const { otpThrottleMessage } = await import('../utils/otp-send-throttle');
+  assert.match(otpThrottleMessage('recipient-hour', 1800), /^محاولات كثيرة لإرسال الرمز لهذا الحساب، حاول لاحقًا/);
+  assert.match(otpThrottleMessage('ip-hour', 1800), /^محاولات كثيرة من هذا الجهاز، حاول لاحقًا/);
+});
+
+test('the controllers report the mailer result to the gate', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../controllers/auth.controller.ts'), 'utf8');
+  assert.match(src, /registerUser\(input, \{ refCookieSlug \}\);\s*[^]*?res\.locals\.otpEmailAttempted = true;\s*res\.locals\.otpEmailSent = result\.emailSent === true;/);
+  assert.match(src, /authService\.resendOtp\(userId\);\s*res\.locals\.otpEmailAttempted = true;\s*res\.locals\.otpEmailSent = emailSent === true;/);
 });
