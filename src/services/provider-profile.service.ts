@@ -13,7 +13,7 @@ import { aiFeatureUnavailableError } from './ai/ai-feature-unavailable';
 import { AppError } from '../utils/app-error';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
-import { deriveIdentityVerification } from '../utils/identity-verification-status';
+import { deriveIdentityVerification, type IdentityVerification } from '../utils/identity-verification-status';
 import { notificationService } from './notification.service';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
 import { LEVEL_MATRIX } from './gamification.service';
@@ -155,9 +155,12 @@ export class ProviderProfileService {
 		}
 		const completionInput = { providerProfile: profile, user: profile.user || {} };
 		const completionPercentage = computeProviderCompletion(completionInput);
-		// The admin's KYC review is a separate queue from the DOCUMENTS request: a refusal there must show up here too (safe reason only, never the raw notes).
-		const kycRejection = publicKycRejectionReason((profile as { kycStatus?: string | null }).kycStatus, (profile as { notes?: unknown }).notes);
-		const missingItems = computeProviderMissingItems(completionInput, { pendingDocumentReview, rejectedIdentity: !!kycRejection });
+		// Where the identity document stands, so the page can say it and keep saying it after a refresh: a document waiting for the admin
+		// (PENDING_REVIEW), an approved document that is stored on the account (VERIFIED), a rejected request (REJECTED, with the reason) or nothing sent.
+		const storedIdDocument = !!(profile.user as { idDocumentUrl?: string | null } | undefined)?.idDocumentUrl;
+		const identityVerification = deriveIdentityVerification({ pendingDocumentReview, storedIdDocument, latestDocumentRequest, kycStatus: (profile as { kycStatus?: string | null }).kycStatus, kycNotes: (profile as { notes?: unknown }).notes });
+		// The identity item follows the SAME state the page shows: refused -> "مرفوض"; verified (an approved document or an approved KYC) -> not listed.
+		const missingItems = computeProviderMissingItems(completionInput, { pendingDocumentReview, rejectedIdentity: identityVerification.status === 'REJECTED' && !pendingDocumentReview, verifiedIdentity: identityVerification.status === 'VERIFIED' });
 		if (profile.completionPercentage !== completionPercentage) {
 			try {
 				await prisma.providerProfile.update({ where: { userId }, data: { completionPercentage }, select: { id: true } });
@@ -165,10 +168,6 @@ export class ProviderProfileService {
 				logger.error(`[ProviderProfileService] Failed to sync stored completion (userId=${userId})`, error);
 			}
 		}
-		// Where the identity document stands, so the page can say it and keep saying it after a refresh: a document waiting for the admin
-		// (PENDING_REVIEW), an approved document that is stored on the account (VERIFIED), a rejected request (REJECTED, with the reason) or nothing sent.
-		const storedIdDocument = !!(profile.user as { idDocumentUrl?: string | null } | undefined)?.idDocumentUrl;
-		const identityVerification = deriveIdentityVerification({ pendingDocumentReview, storedIdDocument, latestDocumentRequest, kycRejection });
 		// One lifecycle for every role: only admin-decided changes are listed here (the e-mail-code-only CONTACT / PayPal changes are not a review).
 		let documents: ReviewEntry = { ...NOT_SUBMITTED };
 		try {
@@ -188,6 +187,31 @@ export class ProviderProfileService {
 
 		// PayPal is the only payout destination: legacy bank columns (the profile's and the user's) are never returned.
 		return withoutInternalProviderNotes(withoutLegacyProviderBankFields(profile as any)) as typeof profile;
+	}
+
+	/**
+	 * The identity-verification state as the profile data page says it (same derivation, same inputs), for any page that needs the badge
+	 * (the dashboard). Reads only what the rule needs; never throws into a page: a failed read answers null (no claim is made).
+	 */
+	async getIdentityVerification(userId: string): Promise<IdentityVerification | null> {
+		try {
+			const [profile, user, latestDocumentRequest, waiting] = await Promise.all([
+				prisma.providerProfile.findUnique({ where: { userId }, select: { kycStatus: true, notes: true } }),
+				prisma.user.findUnique({ where: { id: userId }, select: { idDocumentUrl: true } }),
+				prisma.profileModificationRequest.findFirst({
+					where: { providerId: userId, category: 'DOCUMENTS', status: { in: ['PENDING_HUMAN_REVIEW', 'REJECTED'] as any } },
+					orderBy: { createdAt: 'desc' }, select: { id: true, status: true, createdAt: true, rejectionReason: true }
+				}),
+				prisma.profileModificationRequest.count({ where: { providerId: userId, category: 'DOCUMENTS', status: 'PENDING_HUMAN_REVIEW' as any } })
+			]);
+			return deriveIdentityVerification({
+				pendingDocumentReview: waiting > 0, storedIdDocument: !!user?.idDocumentUrl, latestDocumentRequest,
+				kycStatus: profile?.kycStatus, kycNotes: profile?.notes
+			});
+		} catch (error) {
+			logger.error(`[ProviderProfileService] Could not read the identity verification (userId=${userId})`, error);
+			return null;
+		}
 	}
 
 	/**
