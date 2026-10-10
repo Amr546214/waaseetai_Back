@@ -48,8 +48,8 @@ test('PROVIDER active role resolves name/avatar/completion from ProviderProfile 
       avatarUrl: 'https://provider.example/avatar.png',
       completionPercentage: 80
     },
-    // 50 points is exactly the level-2 ("منجز") threshold in LEVEL_MATRIX.
-    providerGamification: { points: 50, currentLevelIndex: 2 }
+    // 101 points is exactly the level-2 ("منجز") threshold in the provider ladder (config/levels.config.ts).
+    providerGamification: { points: 101, currentLevelIndex: 2 }
   });
 
   assert.equal(result.firstName, 'Provider');
@@ -59,9 +59,9 @@ test('PROVIDER active role resolves name/avatar/completion from ProviderProfile 
   // currentLevel must come from LEVEL_MATRIX[index].title, not ClientProfile
   // and not the legacy User.currentLevel string.
   assert.equal(result.currentLevel, 'منجز');
-  assert.equal(result.currentPoints, 50);
-  // Level 3 ("باحث") requires 150 points -> gap is 100.
-  assert.equal(result.pointsToNextLevel, 100);
+  assert.equal(result.currentPoints, 101);
+  // Level 3 ("منفذ") requires 251 points -> gap is 150.
+  assert.equal(result.pointsToNextLevel, 150);
 });
 
 test('AFFILIATE active role resolves name/avatar/level/completion from AffiliateProfile, preserves legacy points fields as-is', () => {

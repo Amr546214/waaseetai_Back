@@ -21,6 +21,7 @@ function matches(row: any, where: any): boolean {
       if ('contains' in cond) return ci(value).includes(ci(cond.contains));
       if ('equals' in cond) return value != null && ci(value) === ci(cond.equals);
       if ('not' in cond) return value !== cond.not;
+      if ('in' in cond) return (cond.in as unknown[]).includes(value);
       return false;
     }
     return value === cond;
@@ -58,7 +59,7 @@ const AFFILIATE_FIXTURE = {
   referralSlug: 'khalid2026',
   firstName: 'خالد',
   lastName: 'العتيبي',
-  currentLevel: 'موصل',
+  currentLevel: 'STALE-LABEL-NEVER-USED',
   identityVerified: true,
   avatarUrl: 'https://example.com/a.png',
   user: { status: 'ACTIVE' },
@@ -70,7 +71,7 @@ const AFFILIATE_FIXTURE = {
   kycDocumentUrl: 'https://example.com/kyc.pdf',
   minimumPayoutAmount: 300,
   commissionRatePercentage: 5,
-  level: 7,
+  level: 3, // موصل in the single ladder (the stale currentLevel label above is never used)
   payoutMethod: 'BANK_TRANSFER'
 };
 const FORBIDDEN_FIELDS = ['email', 'phone', 'phoneNumber', 'iban', 'bankName', 'kycDocumentUrl', 'minimumPayoutAmount', 'commissionRatePercentage', 'commissionLogs', 'walletBalance', 'payoutMethod', 'level', 'user', 'userId'];
@@ -132,7 +133,7 @@ test('resolveByCode: response never contains email/phone/bank/IBAN/KYC/wallet/co
   }
   // and the query itself never even selects them
   const select = findFirstSpy.mock.calls[0].arguments[0].select;
-  assert.deepEqual(Object.keys(select).sort(), ['avatarUrl', 'currentLevel', 'firstName', 'id', 'identityVerified', 'lastName', 'referralSlug']);
+  assert.deepEqual(Object.keys(select).sort(), ['avatarUrl', 'firstName', 'id', 'identityVerified', 'lastName', 'referralSlug']);
 });
 
 test('search: by name — case-insensitive partial match on firstName/lastName, and every word must match', async (t) => {
@@ -208,8 +209,8 @@ test('search: every result has the public shape and excludes email/phone/bank/IB
   }
 });
 
-test('shape: levelName comes from currentLevel, verified from identityVerified, avatarUrl is null when absent', async (t) => {
-  const { affiliatesPublicService } = await loadService(t, [make({ currentLevel: 'مساعد', identityVerified: false, avatarUrl: null })]);
+test('shape: levelName comes from the numeric level through the single ladder (never the stale currentLevel), verified from identityVerified, avatarUrl is null when absent', async (t) => {
+  const { affiliatesPublicService } = await loadService(t, [make({ level: 2, identityVerified: false, avatarUrl: null })]);
 
   const r: any = await affiliatesPublicService.resolveByCode('khalid2026');
 

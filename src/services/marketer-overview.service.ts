@@ -1,3 +1,4 @@
+import { readAffiliateLevels, affiliateLevelInfo } from '../utils/affiliate-level-reader';
 import { SourceChannel, CommissionStatus, UserRole } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 import { prisma } from '../config/db';
@@ -73,8 +74,14 @@ export class MarketerOverviewService {
     const totalVisitors = affiliate.channelMetrics.reduce((acc, metric) => acc + metric.visitors, 0);
     const overallConversionRate = totalVisitors > 0 ? (successfulReferrals / totalVisitors) * 100 : 0;
 
+    // The level comes from the single ladder (numeric AffiliateProfile.level), never from the stale currentLevel label.
+    const levels = await readAffiliateLevels([affiliate.id], prisma);
+    const info = affiliateLevelInfo(levels.get(affiliate.id));
     return {
-      tier: affiliate.currentLevel,
+      tier: info.name,
+      level: info.level,
+      commissionPercent: info.commissionPercent,
+      levelColor: info.color,
       successfulReferrals,
       totalCommissions,
       overallConversionRate: parseFloat(overallConversionRate.toFixed(2)),

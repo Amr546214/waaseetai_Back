@@ -1,5 +1,6 @@
 import { prisma } from '../config/db';
-import { LEVEL_MATRIX, deriveProviderProgression } from '../utils/progression-calculators';
+import { LEVEL_MATRIX, REQUESTER_LEVEL_MATRIX, deriveProviderProgression, deriveRequesterProgression } from '../utils/progression-calculators';
+import { levelColor, levelStation } from '../config/levels.config';
 
 // Phase 3D.3A: LEVEL_MATRIX now lives in progression-calculators.ts (a pure
 // module with no Prisma/DB imports) — re-exported here unchanged so existing
@@ -99,16 +100,25 @@ class GamificationService {
 
     const roadmap = LEVEL_MATRIX.map(level => ({
       ...level,
+      station: levelStation(level.index),
+      color: { dark: levelColor('PROVIDER', level.index, 'dark'), light: levelColor('PROVIDER', level.index, 'light') },
       isCurrent: level.index === currentLevel.index
     }));
 
+    // Rule-based text built only from the real gaps and the level table: no invented point values, no "AI" claim.
     let aiRecommendation = '';
     if (completedProjects === 0) {
-      aiRecommendation = 'مرحباً بك! ابدأ بنشر نموذج خدمتك الأول في السوق وقدم على المشاريع المتاحة لكسب أول 50 نقطة والارتقاء لمستوى \'مستكشف\'.';
-    } else if (currentLevel.index === 15) {
-      aiRecommendation = 'أنت في أعلى مستوى مؤسسي! حافظ على أدائك الاستثنائي.';
+      aiRecommendation = `مرحباً بك! ابدأ بنشر نموذج خدمتك الأول والتقديم على المشاريع المتاحة للوصول إلى مستوى '${nextLevel.title}'.`;
+    } else if (currentLevel.index === maxLevelIndex) {
+      aiRecommendation = 'أنت في أعلى مستوى! حافظ على أدائك الاستثنائي.';
     } else {
-      aiRecommendation = `اقتراح لك: أكمل ${projectsGap} مشاريع إضافية للوصول للمستوى التالي. التسليم في الوقت (+15 نقطة) والتقييم المفصل (+10 نقطة) أسرع طريقة لكسب النقاط المتبقية وخفض عمولة المنصة.`;
+      const parts: string[] = [];
+      if (projectsGap > 0) parts.push(`${projectsGap} مشروعًا إضافيًا`);
+      if (pointsGap > 0) parts.push(`${pointsGap} نقطة`);
+      if (ratingGap > 0) parts.push(`متوسط تقييم ${nextLevel.reqRating}`);
+      aiRecommendation = parts.length
+        ? `المتبقي للوصول إلى مستوى '${nextLevel.title}': ${parts.join('، ')}. وكل مستوى أعلى يخفض عمولة المنصة حسب جدول المستويات.`
+        : `استوفيت شروط مستوى '${nextLevel.title}' وسيظهر عند تحديث مستواك.`;
     }
 
     return {
@@ -140,6 +150,42 @@ class GamificationService {
       }
     };
   }
+}
+
+
+
+// ── طالب الخدمة: the client's own level view, from the single ladder. ──
+// Client points are not awarded by any event yet and there is no rating OF a client in the data, so the view says so instead of inventing progress.
+export async function getClientLevelDetails(userId: string) {
+  const [profile, completedProjects] = await Promise.all([
+    prisma.clientProfile.findUnique({ where: { userId }, select: { currentPoints: true } }),
+    prisma.project.count({ where: { clientId: userId, status: 'COMPLETED' } })
+  ]);
+  const points = Math.max(0, profile?.currentPoints || 0);
+  const progression = deriveRequesterProgression({ points, completedProjects, avgRating: 0 });
+  const current = REQUESTER_LEVEL_MATRIX.find(l => l.index === progression.currentLevelIndex) || REQUESTER_LEVEL_MATRIX[0];
+  const maxIndex = REQUESTER_LEVEL_MATRIX[REQUESTER_LEVEL_MATRIX.length - 1].index;
+  const next = REQUESTER_LEVEL_MATRIX.find(l => l.index === Math.min(current.index + 1, maxIndex)) || current;
+  return {
+    currentStats: { points, completedProjects, avgRating: null, cashbackRate: current.rate },
+    currentLevel: { index: current.index, title: current.title },
+    nextLevelProgress: {
+      title: next.title,
+      pointsGap: Math.max(0, next.reqPoints - points),
+      projectsGap: Math.max(0, next.reqProjects - completedProjects),
+      ratingRequired: next.reqRating,
+      pointsPercent: next.reqPoints > 0 ? Math.min(100, (points / next.reqPoints) * 100) : 100,
+      projectsPercent: next.reqProjects > 0 ? Math.min(100, (completedProjects / next.reqProjects) * 100) : 100,
+      nextCashbackRate: next.rate
+    },
+    roadmap: REQUESTER_LEVEL_MATRIX.map(l => ({
+      ...l, station: levelStation(l.index),
+      color: { dark: levelColor('CLIENT', l.index, 'dark'), light: levelColor('CLIENT', l.index, 'light') },
+      isCurrent: l.index === current.index
+    })),
+    // what is not live yet, so the page can say it (no fake progress): points events and a client rating do not exist
+    limitations: ['CLIENT_POINTS_NOT_AWARDED', 'CLIENT_RATING_NOT_AVAILABLE', 'CASHBACK_NOT_CREDITED_YET']
+  };
 }
 
 export const gamificationService = new GamificationService();
