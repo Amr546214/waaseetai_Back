@@ -151,9 +151,47 @@ test('rejection needs a reason, clears the document, never sets identityVerified
 	assert.match(notes.find(n => n.userId === M1).message, /الصورة غير واضحة/);
 	assert.doesNotMatch(notes.find(n => n.userId === M1).message, /<b>/);
 	assert.ok(audit.some(e => e.eventType === 'MARKETER_KYC_REJECTED'));
-	assert.equal((await call(M1, 'GET', '/marketer/profile/kyc-status')).body.data.status, 'NONE');
+	// the reason and the time are kept, so the marketer still sees them after a refresh; nothing is approved
+	const st = (await call(M1, 'GET', '/marketer/profile/kyc-status')).body.data;
+	assert.equal(st.status, 'REJECTED');
+	assert.equal(st.rejectionReason, 'الصورة غير واضحة');
+	assert.ok(st.reviewedAt);
+	assert.equal(aff.a1.identityVerified, false);
 	assert.equal((await call(ADMIN, 'POST', '/admin/brokers/kyc-requests/a1/approve')).status, 404, 'nothing pending to approve');
+	// a new document starts a new review: the rejection is cleared and the status is PENDING again
 	assert.equal((await upload(M1)).status, 201);
+	const after = (await call(M1, 'GET', '/marketer/profile/kyc-status')).body.data;
+	assert.deepEqual([after.status, after.rejectionReason, after.reviewedAt], ['PENDING', null, null]);
+	assert.equal((aff.a1 as any).kycRejectionReason, null);
+});
+
+test('a never-uploaded marketer is NONE (no rejection), and approval clears any old reason and stamps the review time', async () => {
+	resetAff();
+	const none = (await call(M1, 'GET', '/marketer/profile/kyc-status')).body.data;
+	assert.deepEqual([none.status, none.rejectionReason], ['NONE', null]);
+	await upload(M1);
+	await call(ADMIN, 'POST', '/admin/brokers/kyc-requests/a1/reject', { json: { reason: 'سبب أول' } });
+	await upload(M1);
+	assert.equal((await call(ADMIN, 'POST', '/admin/brokers/kyc-requests/a1/approve')).status, 200);
+	const ok = (await call(M1, 'GET', '/marketer/profile/kyc-status')).body.data;
+	assert.deepEqual([ok.status, ok.rejectionReason], ['APPROVED', null]);
+	assert.equal((aff.a1 as any).kycRejectionReason, null);
+	assert.ok((aff.a1 as any).kycReviewedAt instanceof Date);
+});
+
+test('a database without the review columns keeps working: reject / upload fall back to the old write (the reason still goes to the notification)', async () => {
+	resetAff();
+	const real = prisma.affiliateProfile.updateMany;
+	prisma.affiliateProfile.updateMany = async (a: any) => {
+		if ('kycRejectionReason' in (a.data ?? {})) throw Object.assign(new Error('The column `kycRejectionReason` does not exist in the current database.'), { code: 'P2022' });
+		return real(a);
+	};
+	try {
+		assert.equal((await upload(M1)).status, 201);
+		assert.equal((await call(ADMIN, 'POST', '/admin/brokers/kyc-requests/a1/reject', { json: { reason: 'سبب' } })).status, 200);
+		assert.equal(aff.a1.kycDocumentUrl, null);
+		assert.match(notes.filter(n => n.userId === M1).pop().message, /سبب/);
+	} finally { prisma.affiliateProfile.updateMany = real; }
 });
 
 test('an admin who also holds a marketer profile cannot decide on their own document', async () => {

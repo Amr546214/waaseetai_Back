@@ -24,3 +24,23 @@ export async function readAffiliatePaypalEmail(userId: string, client: Pick<type
     return null;
   }
 }
+
+/**
+ * The last KYC decision (rejection reason + time). Read on its own, like the PayPal email, so a database that has not got the columns yet
+ * answers "no decision" instead of failing the whole profile read.
+ */
+export async function readAffiliateKycReview(userId: string, client: Pick<typeof PrismaClientInstance, 'affiliateProfile'>): Promise<{ rejectionReason: string | null; reviewedAt: Date | null }> {
+  try {
+    const row = await client.affiliateProfile.findUnique({ where: { userId }, select: { kycRejectionReason: true, kycReviewedAt: true } });
+    return { rejectionReason: row?.kycRejectionReason ?? null, reviewedAt: row?.kycReviewedAt ?? null };
+  } catch (error) {
+    logger.error(`[affiliate-payout] could not read the KYC review columns (userId=${userId}); treated as no decision`, error);
+    return { rejectionReason: null, reviewedAt: null };
+  }
+}
+
+/** True when the error is "column does not exist" (a database that has not run the KYC review migration yet). */
+export function isMissingColumnError(error: unknown): boolean {
+  const e = error as { code?: string; message?: string } | null;
+  return e?.code === 'P2022' || /column .* does not exist|The column .* does not exist/i.test(String(e?.message ?? ''));
+}

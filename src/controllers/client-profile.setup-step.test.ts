@@ -168,3 +168,23 @@ test('PayPal-only save still works and a refresh (GET /setup) returns no legacy 
   assert.equal(data.paypalPayoutEmail, 'nora@example.com');
   for (const k of ['iban', 'bankName', 'accountHolder', 'paymentType']) assert.equal(k in data, false, k);
 });
+
+test('a rejected identity review: GET returns the admin reason, a new upload makes it PENDING again, the reason disappears, and approval is shown as VERIFIED', async (t) => {
+  const { state, step, get } = await load(t);
+  await step(1, { details: DETAILS });
+  await step(2, { identity: { frontId: 'data:image/png;base64,AAAA', backId: 'data:image/png;base64,BBBB' } });
+  assert.equal(state.profile.kycStatus, 'PENDING');
+  // the admin rejects (what rejectOnboarding writes)
+  state.onboarding = { ...state.onboarding, status: 'REJECTED', rejectionReason: 'الصورة غير واضحة' };
+  state.profile.kycStatus = 'REJECTED';
+  const rejected = await get();
+  assert.deepEqual([rejected.kycStatus, rejected.kycRejectionReason], ['REJECTED', 'الصورة غير واضحة']);
+  await step(2, { identity: { frontId: 'data:image/png;base64,CCCC' } });
+  const again = await get();
+  assert.equal(again.kycStatus, 'PENDING');
+  assert.equal(again.kycRejectionReason, null);
+  assert.equal(state.onboarding.status, 'PENDING');
+  state.profile.kycStatus = 'VERIFIED';
+  const ok = await get();
+  assert.deepEqual([ok.kycStatus, ok.kycRejectionReason], ['VERIFIED', null]);
+});

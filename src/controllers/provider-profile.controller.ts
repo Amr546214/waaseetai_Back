@@ -94,7 +94,10 @@ export const getSetupData = async (req: Request, res: Response) => {
 			include: { skills: { select: { name: true } }, portfolioItems: true }
 		});
 
-		res.status(200).json({ success: true, data: profile || {} });
+		// A rejected identity review: the admin's reason (stored as "سبب الرفض: …" in the profile notes) is returned on its own field, so the wizard can show it.
+		const note = typeof profile?.notes === 'string' ? profile.notes : '';
+		const kycRejectionReason = profile?.kycStatus === 'REJECTED' && note.startsWith('سبب الرفض:') ? note.slice('سبب الرفض:'.length).trim() || null : null;
+		res.status(200).json({ success: true, data: profile ? { ...profile, kycRejectionReason } : {} });
 	} catch (error) {
 		res.status(500).json({ message: 'Internal server error' });
 	}
