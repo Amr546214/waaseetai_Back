@@ -769,7 +769,7 @@ function createSensitiveFlowMockPrisma(t: TestContext, opts: { throwOnRecompute?
     profileModificationRequest: {
       create: async (args: any) => {
         const id = `req-${++requestSeq}`;
-        const record = { id, ...args.data };
+        const record = { id, createdAt: new Date(Date.now() + requestSeq), ...args.data };
         requestsById[id] = record;
         return record;
       },
@@ -778,7 +778,7 @@ function createSensitiveFlowMockPrisma(t: TestContext, opts: { throwOnRecompute?
         const byId = typeof w.id === 'string';
         const pool: any[] = byId ? [requestsById[w.id]].filter(Boolean) : Object.values(requestsById);
         const hit = pool.filter((r: any) => (!w.providerId || r.providerId === w.providerId) && (!w.category || r.category === w.category)
-          && (!w.status || r.status === w.status) && (!w.id?.not || r.id !== w.id.not));
+          && (!w.status || (typeof w.status === 'object' ? (w.status.in ?? []).includes(r.status) : r.status === w.status)) && (!w.id?.not || r.id !== w.id.not));
         return hit[hit.length - 1] ?? null;
       },
       findMany: async (args: any) => Object.values(requestsById).filter((r: any) => (!args.where.providerId || r.providerId === args.where.providerId) && (!args.where.category || r.category === args.where.category)).map((r: any) => ({ createdAt: new Date(), updatedAt: new Date(), ...r })),
@@ -1435,4 +1435,25 @@ test('static: the three profile GETs return reviewStatus and the controllers pas
   assert.match(read('profile-requests.service.ts'), /alreadyPendingDetails\(waiting, 'MARKETER_BASIC_INFO'\)/);
   assert.match(read('profile.service.ts'), /alreadyPendingDetails\(existing, CLIENT_BASIC_INFO_REQUEST_CATEGORY\)/);
   assert.match(read('../controllers/provider-profile.controller.ts'), /errors: error\.details/);
+});
+
+test('GET profile follows the DOCUMENTS lifecycle in identityVerification and reviewStatus: none, waiting, rejected with the reason, waiting, approved (stored)', async (t) => {
+  const { providerProfileService, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+  const url = 'https://res.cloudinary.com/testcloud/image/upload/id.pdf';
+  const read = async () => { const p: any = await providerProfileService.getProfile('user-1'); return { iv: p.identityVerification, rs: p.reviewStatus }; };
+  const none = await read();
+  assert.deepEqual([none.iv.status, none.rs.documents.status, none.rs.identity.status], ['NOT_SUBMITTED', 'NOT_SUBMITTED', 'NOT_SUBMITTED']);
+  const a = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', { idDocumentUrl: url });
+  await providerProfileService.verifySensitiveChange('user-1', a.requestId, getLastOtpCode()!);
+  const waiting = await read();
+  assert.deepEqual([waiting.iv.status, waiting.rs.documents.status, waiting.rs.identity.status, waiting.rs.documents.requestId], ['PENDING_REVIEW', 'PENDING_REVIEW', 'PENDING_REVIEW', a.requestId]);
+  await providerProfileService.reviewSensitiveChange(a.requestId, false, 'الصورة غير واضحة');
+  const rejected = await read();
+  assert.deepEqual([rejected.iv.status, rejected.iv.rejectionReason, rejected.rs.documents.status, rejected.rs.identity.rejectionReason], ['REJECTED', 'الصورة غير واضحة', 'REJECTED', 'الصورة غير واضحة']);
+  const b = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', { idDocumentUrl: url });
+  await providerProfileService.verifySensitiveChange('user-1', b.requestId, getLastOtpCode()!);
+  assert.equal((await read()).rs.documents.requestId, b.requestId);
+  await providerProfileService.reviewSensitiveChange(b.requestId, true);
+  const approved = await read();
+  assert.deepEqual([approved.iv.status, approved.rs.documents.status, approved.rs.identity.status, approved.rs.documents.rejectionReason], ['VERIFIED', 'APPROVED', 'APPROVED', null]);
 });

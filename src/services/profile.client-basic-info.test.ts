@@ -25,6 +25,7 @@ function createDb(t: TestContext, o: { clientProfile?: any } = {}) {
       update: async (a: any) => { state.clientProfile = { ...state.clientProfile, ...a.data }; return state.clientProfile; }
     },
     providerProfile: { upsert: providerUpsert, update: async () => ({}), findUnique: async () => null },
+    clientOnboarding: { findUnique: async () => null },
     profileModificationRequest: {
       findFirst: async (a: any) => state.requests.find((r: any) => matches(r, a.where)) || null,
       findUnique: async (a: any) => state.requests.find((r: any) => r.id === a.where.id) || null,
@@ -131,4 +132,25 @@ test('PROVIDER keeps its direct name save: no modification request, the provider
   assert.equal(state.requests.length, 0);
   assert.equal(providerUpsert.mock.callCount(), 1);
   assert.deepEqual(providerUpsert.mock.calls[0].arguments[0].update, { firstName: 'Nora', lastName: 'Provider' });
+});
+
+// The profile read tells the page the same story at every step (NOT_SUBMITTED -> PENDING_REVIEW -> REJECTED -> PENDING_REVIEW -> APPROVED).
+test('GET profile reviewStatus.basicInfo follows the lifecycle: none, waiting, rejected with the reason, waiting again, approved', async (t) => {
+  const { profileService, providerProfileService, state } = await load(t);
+  state.user.activeRole = 'CLIENT';
+  const read = async () => (await profileService.getProfile('client-1')).currentProfileData.reviewStatus.basicInfo;
+  assert.equal((await read()).status, 'NOT_SUBMITTED');
+  await profileService.updateTab('client-1', 'basics', { firstName: 'سارة', lastName: 'العتيبي' }, 'CLIENT');
+  const first = state.requests[0].id;
+  const waiting = await read();
+  assert.deepEqual([waiting.status, waiting.requestId, waiting.category, waiting.rejectionReason], ['PENDING_REVIEW', first, 'CLIENT_BASIC_INFO', null]);
+  await providerProfileService.reviewSensitiveChange(first, false, 'الاسم لا يطابق الهوية');
+  const rejected = await read();
+  assert.deepEqual([rejected.status, rejected.rejectionReason], ['REJECTED', 'الاسم لا يطابق الهوية']);
+  await profileService.updateTab('client-1', 'basics', { firstName: 'منى', lastName: 'الحربي' }, 'CLIENT');
+  const second = state.requests[1].id;
+  assert.deepEqual([(await read()).status, (await read()).requestId], ['PENDING_REVIEW', second]);
+  await providerProfileService.reviewSensitiveChange(second, true);
+  const approved = await read();
+  assert.deepEqual([approved.status, approved.rejectionReason], ['APPROVED', null]);
 });

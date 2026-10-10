@@ -1669,6 +1669,9 @@ model AffiliateProfile {
   paypalPayoutEmail String?
   identityVerified  Boolean @default(false)
   kycDocumentUrl    String?
+  // Last admin KYC decision (kept so a rejection reason survives a refresh). Migration 20261011120000; read separately from the safe select.
+  kycRejectionReason String?
+  kycReviewedAt      DateTime?
 
   // Commission Preferences
   payoutMethod        String? @default("BANK_TRANSFER") // BANK_TRANSFER, PAYONEER, etc.

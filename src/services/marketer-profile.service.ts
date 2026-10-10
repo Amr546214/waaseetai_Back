@@ -6,7 +6,7 @@ import { computeAffiliateCompletion, computeAffiliateMissingItems } from '../uti
 import { AppError } from '../utils/app-error';
 import { deriveReviewEntry, NOT_SUBMITTED, type ReviewEntry } from '../utils/review-status';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
-import { readAffiliatePaypalEmail, withoutLegacyAffiliateBankFields } from '../utils/affiliate-payout';
+import { readAffiliatePaypalEmail, readAffiliateKycReview, withoutLegacyAffiliateBankFields } from '../utils/affiliate-payout';
 
 // Explicit public-safe shape (Implementation Batch 3, Part A). Never the
 // full AffiliateProfile row — bank/IBAN/KYC/email/phone/commission-rate
@@ -89,9 +89,13 @@ export class MarketerProfileService {
     } catch (error) {
       logger.error(`[MarketerProfileService] Could not read review status (userId=${userId})`, error);
     }
-    // The KYC document keeps no request row: a stored document with no approval is waiting; a rejected one is simply cleared (its reason goes to the notification only).
+    // The KYC document keeps no request row: the state is on the profile. A stored document with no approval is waiting; a rejected one
+    // is cleared but its reason and time are kept (kycRejectionReason / kycReviewedAt).
+    const kycReview = (profile as any).identityVerified || (profile as any).kycDocumentUrl ? { rejectionReason: null, reviewedAt: null } : await readAffiliateKycReview(userId, prisma);
     const documents: ReviewEntry = (profile as any).identityVerified ? { ...NOT_SUBMITTED, status: 'APPROVED' }
-      : (profile as any).kycDocumentUrl ? { ...NOT_SUBMITTED, status: 'PENDING_REVIEW' } : { ...NOT_SUBMITTED };
+      : (profile as any).kycDocumentUrl ? { ...NOT_SUBMITTED, status: 'PENDING_REVIEW' }
+      : kycReview.rejectionReason ? { ...NOT_SUBMITTED, status: 'REJECTED', rejectionReason: kycReview.rejectionReason, reviewedAt: kycReview.reviewedAt ? new Date(kycReview.reviewedAt).toISOString() : null }
+      : { ...NOT_SUBMITTED };
     return Object.assign(withoutLegacyAffiliateBankFields(profile), { paypalPayoutEmail, completionPercentage, missingItems, reviewStatus: { basicInfo, documents } });
   }
 

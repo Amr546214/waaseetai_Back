@@ -5,12 +5,14 @@ import { uploadMulterFile } from '../utils/cloudinary-storage';
 import { sanitizeText } from '../utils/sanitize-text';
 import { notificationService } from './notification.service';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
+import { readAffiliateKycReview, isMissingColumnError } from '../utils/affiliate-payout';
 
-// AUD-FND-000051 — marketer identity document. No schema change: the two existing AffiliateProfile columns carry the whole state.
-//   kycDocumentUrl set + identityVerified=false  → PENDING (visible in the admin review list)
-//   identityVerified=true                         → APPROVED (only an admin decision writes it)
-//   kycDocumentUrl null + identityVerified=false  → none (never uploaded, or the admin rejected it; the reason is sent as a notification
-//                                                   and kept in the account audit log — there is no column for a persisted rejection reason)
+// AUD-FND-000051 — marketer identity document. The state lives on AffiliateProfile:
+//   kycDocumentUrl set + identityVerified=false                       → PENDING (visible in the admin review list)
+//   identityVerified=true                                              → APPROVED (only an admin decision writes it)
+//   kycDocumentUrl null + identityVerified=false + kycRejectionReason  → REJECTED (the admin's reason and time are kept: migration 20261011120000)
+//   kycDocumentUrl null + identityVerified=false, no reason            → none (never uploaded)
+// A database that has not run the migration yet keeps the old behaviour (the reason then only goes to the notification and the audit log).
 export const MARKETER_KYC_ALREADY_VERIFIED = 'تم توثيق هويتك مسبقًا ولا يمكن رفع مستند جديد';
 
 export class MarketerKycService {
@@ -22,7 +24,12 @@ export class MarketerKycService {
 
 		const stored = await uploadMulterFile(file, `waseetai/marketers/${userId}/identity`, undefined, true);
 		// updateMany + identityVerified:false so a concurrent approval can never be overwritten by this write
-		const { count } = await prisma.affiliateProfile.updateMany({ where: { id: profile.id, identityVerified: false }, data: { kycDocumentUrl: stored.privateRef } });
+		const where = { id: profile.id, identityVerified: false };
+		// a new document starts a new review: the previous rejection is cleared
+		const { count } = await this.writeWithReviewColumns(
+			() => prisma.affiliateProfile.updateMany({ where, data: { kycDocumentUrl: stored.privateRef, kycRejectionReason: null, kycReviewedAt: null } }),
+			() => prisma.affiliateProfile.updateMany({ where, data: { kycDocumentUrl: stored.privateRef } })
+		);
 		if (count === 0) throw new AppError(MARKETER_KYC_ALREADY_VERIFIED, 409);
 
 		await accountAuditLogService.record({
@@ -35,7 +42,17 @@ export class MarketerKycService {
 	async getStatus(userId: string) {
 		const p = await prisma.affiliateProfile.findUnique({ where: { userId }, select: { identityVerified: true, kycDocumentUrl: true } });
 		if (!p) throw new AppError('ملف الوسيط غير موجود', 404);
-		return { status: p.identityVerified ? ('APPROVED' as const) : p.kycDocumentUrl ? ('PENDING' as const) : ('NONE' as const) };
+		if (p.identityVerified) return { status: 'APPROVED' as const, rejectionReason: null, reviewedAt: null };
+		if (p.kycDocumentUrl) return { status: 'PENDING' as const, rejectionReason: null, reviewedAt: null };
+		const review = await readAffiliateKycReview(userId, prisma);
+		return review.rejectionReason
+			? { status: 'REJECTED' as const, rejectionReason: review.rejectionReason, reviewedAt: review.reviewedAt }
+			: { status: 'NONE' as const, rejectionReason: null, reviewedAt: null };
+	}
+
+	/** The write that carries the new review columns, with the old write as the fallback on a database that has not got them yet. */
+	private async writeWithReviewColumns<T>(withColumns: () => Promise<T>, withoutColumns: () => Promise<T>): Promise<T> {
+		try { return await withColumns(); } catch (error) { if (isMissingColumnError(error)) return withoutColumns(); throw error; }
 	}
 
 	/** Admin review queue: documents waiting for a decision. */
@@ -69,7 +86,11 @@ export class MarketerKycService {
 	async approve(affiliateId: string, adminUserId: string, context?: AuditContext) {
 		const target = await this.loadForReview(affiliateId, adminUserId);
 		// the decision applies only to a still-pending document (a re-upload or a concurrent decision makes count 0)
-		const { count } = await prisma.affiliateProfile.updateMany({ where: { id: target.id, identityVerified: false, kycDocumentUrl: { not: null } }, data: { identityVerified: true } });
+		const where = { id: target.id, identityVerified: false, kycDocumentUrl: { not: null } };
+		const { count } = await this.writeWithReviewColumns(
+			() => prisma.affiliateProfile.updateMany({ where, data: { identityVerified: true, kycRejectionReason: null, kycReviewedAt: new Date() } }),
+			() => prisma.affiliateProfile.updateMany({ where, data: { identityVerified: true } })
+		);
 		if (count === 0) throw new AppError('تعذر اعتماد الطلب لأن حالته تغيّرت', 409);
 		await accountAuditLogService.record({
 			userId: target.userId, eventType: 'MARKETER_KYC_APPROVED', category: LogCategory.SECURITY_CHANGE, title: 'اعتماد هوية الوسيط',
@@ -84,7 +105,12 @@ export class MarketerKycService {
 		if (cleaned.length < 3) throw new AppError('سبب الرفض مطلوب', 400);
 		const target = await this.loadForReview(affiliateId, adminUserId);
 		// the rejected document leaves the queue; identityVerified stays false (it is written only on approval)
-		const { count } = await prisma.affiliateProfile.updateMany({ where: { id: target.id, identityVerified: false, kycDocumentUrl: { not: null } }, data: { kycDocumentUrl: null } });
+		const where = { id: target.id, identityVerified: false, kycDocumentUrl: { not: null } };
+		// the reason and the time are kept, so the marketer sees why after a refresh (nothing is approved)
+		const { count } = await this.writeWithReviewColumns(
+			() => prisma.affiliateProfile.updateMany({ where, data: { kycDocumentUrl: null, kycRejectionReason: cleaned, kycReviewedAt: new Date() } }),
+			() => prisma.affiliateProfile.updateMany({ where, data: { kycDocumentUrl: null } })
+		);
 		if (count === 0) throw new AppError('تعذر رفض الطلب لأن حالته تغيّرت', 409);
 		await accountAuditLogService.record({
 			userId: target.userId, eventType: 'MARKETER_KYC_REJECTED', category: LogCategory.SECURITY_CHANGE, title: 'رفض مستند هوية الوسيط',
