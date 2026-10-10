@@ -539,7 +539,7 @@ model ProviderGamification {
   completedProjects Int   @default(0)
   avgRating         Float @default(0.0)
   currentLevelIndex Int   @default(1) // 1 to 15
-  currentCommission Float @default(15.0) // 15% down to 10%
+  currentCommission Float @default(15.0) // legacy DB default; every writer sets it from config/levels.config.ts (12.75% at level 1 down to 8.15% at level 15). Changing the default needs a migration (not done)
 
   updatedAt DateTime @updatedAt
 

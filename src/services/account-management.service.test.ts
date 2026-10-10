@@ -253,7 +253,7 @@ test('initializeRoleState (PROVIDER): ProviderGamification row is created immedi
   assert.equal(data.currentLevelIndex, expected.currentLevelIndex);
   assert.equal(data.currentCommission, expected.currentCommission);
   assert.equal(data.currentLevelIndex, 1);
-  assert.equal(data.currentCommission, 5.0);
+  assert.equal(data.currentCommission, 12.75);
 });
 
 test('initializeRoleState (PROVIDER): never creates a PointTransaction for initialization', async (t) => {
@@ -549,7 +549,7 @@ test('addAccountType: PROVIDER initialization creates the profile AND its Provid
   assert.equal(data.yearsOfExperience, 3);
   const gamData = gamificationCreateSpy.mock.calls[0].arguments[0].data;
   assert.equal(gamData.currentLevelIndex, 1);
-  assert.equal(gamData.currentCommission, 5.0);
+  assert.equal(gamData.currentCommission, 12.75);
 });
 
 test('addAccountType: AFFILIATE initialization seeds display + completion and generates a referralSlug', async (t) => {

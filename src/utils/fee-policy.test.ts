@@ -3,16 +3,12 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  FEE_POLICY_VERSION, PROVIDER_FEE_TABLE, providerWithdrawalFees, adjustedPlatformCommission, depositGrossUp, DEPOSIT_FEE_PERCENT,
+  FEE_POLICY_VERSION, PROVIDER_FEE_TABLE, MARKETER_WITHDRAWAL_FEE_PERCENT, marketerWithdrawalFees, providerWithdrawalFees, adjustedPlatformCommission, depositGrossUp, DEPOSIT_FEE_PERCENT,
   cashback, cashbackRatingFactor, REQUESTER_CASHBACK_PERCENT, affiliateCommission, getFeePolicyEffectiveFrom, isFeePolicyV2Active,
 } from './fee-policy';
 
-// the reference table, spelled out independently of the implementation: [platform, admin, transfer, vat, total]
-const REF: Array<[number, number, number, number, number]> = [
-  [5.0, 2, 5.0, 0.75, 12.75], [4.8, 2, 5.0, 0.72, 12.52], [4.6, 2.5, 5.0, 0.69, 12.79], [4.4, 2.5, 4.5, 0.66, 12.06], [4.2, 3, 4.5, 0.63, 12.33],
-  [4.0, 3, 4.0, 0.60, 11.60], [3.75, 3.5, 4.0, 0.56, 11.81], [3.5, 3.5, 3.5, 0.53, 11.03], [3.25, 4, 3.5, 0.49, 11.24], [3.0, 4, 3.0, 0.45, 10.45],
-  [2.75, 4.5, 3.0, 0.41, 10.66], [2.5, 4.5, 2.5, 0.38, 9.88], [2.0, 5, 2.5, 0.30, 9.80], [1.5, 5, 2.0, 0.23, 8.73], [1.0, 5, 2.0, 0.15, 8.15],
-];
+// the reference table, spelled out independently of the implementation: نسب الدفع.xlsx "الخصم النهائي لمقدمي الخدمات" (= the platform commission)
+const REF = [12.75, 12.42, 12.10, 11.77, 11.45, 11.12, 10.80, 10.47, 10.15, 9.82, 9.50, 9.17, 8.85, 8.52, 8.15];
 
 test('policy version is 2 and the effective date is unset by default (v2 inactive)', () => {
   assert.equal(FEE_POLICY_VERSION, 2);
@@ -23,43 +19,38 @@ test('policy version is 2 and the effective date is unset by default (v2 inactiv
   assert.equal(getFeePolicyEffectiveFrom({ FEE_POLICY_EFFECTIVE_FROM: 'garbage' }), null);
 });
 
-test('provider fee table: 15 levels × 5 columns match the reference verbatim', () => {
+test('provider fee table: 15 levels, the final deduction 12.75% -> 8.15% verbatim, with no other fee on top', () => {
   assert.equal(PROVIDER_FEE_TABLE.length, 15);
-  REF.forEach(([platform, admin, transfer, vat, total], i) => {
-    const r = PROVIDER_FEE_TABLE[i];
-    assert.deepEqual([r.level, r.platform, r.admin, r.transfer, r.vat, r.total], [i + 1, platform, admin, transfer, vat, total], `level ${i + 1}`);
-    // the published total equals the sum of its parts
-    assert.equal(Math.round((platform + admin + transfer + vat) * 100) / 100, total, `sum level ${i + 1}`);
+  REF.forEach((pct, i) => {
+    assert.deepEqual(PROVIDER_FEE_TABLE[i], { level: i + 1, platform: pct, total: pct }, `level ${i + 1}`);
   });
 });
 
-test('providerWithdrawalFees: net = amount × (1 − total%) for every level', () => {
-  REF.forEach(([, , , , total], i) => {
+test('providerWithdrawalFees: net = amount × (1 − final deduction) for every level', () => {
+  REF.forEach((pct, i) => {
     const r = providerWithdrawalFees(i + 1, 1000);
-    assert.equal(r.percent.total, total);
-    assert.equal(r.net, Math.round(1000 * (1 - total / 100) * 100) / 100);
+    assert.deepEqual(r.percent, { platform: pct, total: pct });
+    assert.equal(r.net, Math.round(1000 * (1 - pct / 100) * 100) / 100);
     assert.equal(Math.round((r.net + r.fees.total) * 100) / 100, 1000);
   });
   const l1 = providerWithdrawalFees(1, 200);
-  assert.deepEqual(l1.fees, { platform: 10, admin: 4, transfer: 10, vat: 1.5, total: 25.5 });
+  assert.deepEqual(l1.fees, { platform: 25.5, total: 25.5 });
   assert.equal(l1.net, 174.5);
 });
 
-test('commission adjustments: −0.5 / −0.3 / −0.2, floor 0.5, none for missing data', () => {
-  assert.equal(adjustedPlatformCommission(1, {}), 5.0);
-  assert.equal(adjustedPlatformCommission(1, { avgRating: 4.8 }), 4.5);
-  assert.equal(adjustedPlatformCommission(1, { avgRating: 4.79 }), 5.0);
-  assert.equal(adjustedPlatformCommission(1, { onTimePercent: 80 }), 4.7);
-  assert.equal(adjustedPlatformCommission(1, { onTimePercent: 79.9 }), 5.0);
-  assert.equal(adjustedPlatformCommission(1, { projectsPerMonth: 10 }), 4.8);
-  assert.equal(adjustedPlatformCommission(1, { projectsPerMonth: 9 }), 5.0);
-  assert.equal(adjustedPlatformCommission(1, { avgRating: 5, onTimePercent: 100, projectsPerMonth: 12 }), 4.0);
-  assert.equal(adjustedPlatformCommission(15, { avgRating: 5, onTimePercent: 100, projectsPerMonth: 12 }), 0.5); // 1.0 − 1.0 → floored
-  assert.equal(adjustedPlatformCommission(14, { avgRating: 5 }), 1.0);
-  assert.equal(adjustedPlatformCommission(1, { avgRating: null, onTimePercent: null, projectsPerMonth: null }), 5.0);
+test('commission adjustments (config only, not wired): −0.5 / −0.3 / −0.2 on the same number, floor 0.5, none for missing data', () => {
+  assert.equal(adjustedPlatformCommission(1, {}), 12.75);
+  assert.equal(adjustedPlatformCommission(1, { avgRating: 4.8 }), 12.25);
+  assert.equal(adjustedPlatformCommission(1, { avgRating: 4.79 }), 12.75);
+  assert.equal(adjustedPlatformCommission(1, { onTimePercent: 80 }), 12.45);
+  assert.equal(adjustedPlatformCommission(1, { onTimePercent: 79.9 }), 12.75);
+  assert.equal(adjustedPlatformCommission(1, { projectsPerMonth: 10 }), 12.55);
+  assert.equal(adjustedPlatformCommission(1, { projectsPerMonth: 9 }), 12.75);
+  assert.equal(adjustedPlatformCommission(1, { avgRating: 5, onTimePercent: 100, projectsPerMonth: 12 }), 11.75);
+  assert.equal(adjustedPlatformCommission(15, { avgRating: 5, onTimePercent: 100, projectsPerMonth: 12 }), 7.15);
+  assert.equal(adjustedPlatformCommission(1, { avgRating: null, onTimePercent: null, projectsPerMonth: null }), 12.75);
   const withMod = providerWithdrawalFees(1, 1000, { avgRating: 4.9 });
-  assert.equal(withMod.percent.platform, 4.5);
-  assert.equal(withMod.percent.total, 12.25);
+  assert.deepEqual(withMod.percent, { platform: 12.25, total: 12.25 });
   assert.equal(withMod.net, 877.5);
 });
 
@@ -95,12 +86,22 @@ test('affiliateCommission: 15 levels from the live config; level 7 = 2.75', () =
   expected.forEach((p, i) => assert.equal(affiliateCommission(i + 1), p, `level ${i + 1}`));
 });
 
-test('fee-policy is wired into nothing (no production file imports it) and BROKER_LEVEL_MATRIX is gone', () => {
+// The ONLY importer is the read-only display endpoint (GET /levels serves the published percentage tables); no money path imports it.
+const READ_ONLY_DISPLAY_IMPORTERS = ['gamification.controller.ts'];
+test('fee-policy is wired into no money path (only the read-only /levels display imports it) and BROKER_LEVEL_MATRIX is gone', () => {
   const root = join(__dirname, '..');
   const walk = (d: string, out: string[] = []): string[] => { for (const f of readdirSync(d)) { const p = join(d, f); statSync(p).isDirectory() ? walk(p, out) : out.push(p); } return out; };
   for (const f of walk(root).filter((x) => x.endsWith('.ts') && !x.endsWith('.test.ts') && !x.endsWith('fee-policy.ts'))) {
     const t = readFileSync(f, 'utf-8');
-    assert.equal(/from ['"][^'"]*fee-policy['"]/.test(t), false, `${f} imports fee-policy`);
+    if (!READ_ONLY_DISPLAY_IMPORTERS.some(n => f.endsWith(n))) assert.equal(/from ['"][^'"]*fee-policy['"]/.test(t), false, `${f} imports fee-policy`);
     assert.equal(t.includes('BROKER_LEVEL_MATRIX'), false, `${f} references BROKER_LEVEL_MATRIX`);
   }
+});
+
+test('marketer withdrawal fees (نسب الدفع.xlsx): bank transfer 8.25%, PayPal 7.75%, USDT 4% — net = amount × (1 − rate)', () => {
+  assert.deepEqual(MARKETER_WITHDRAWAL_FEE_PERCENT, { bank_transfer: 8.25, paypal: 7.75, usdt: 4 });
+  assert.deepEqual(marketerWithdrawalFees(1000, 'bank_transfer'), { percent: 8.25, fee: 82.5, net: 917.5 });
+  assert.deepEqual(marketerWithdrawalFees(1000, 'paypal'), { percent: 7.75, fee: 77.5, net: 922.5 });
+  assert.deepEqual(marketerWithdrawalFees(1000, 'usdt'), { percent: 4, fee: 40, net: 960 });
+  assert.throws(() => marketerWithdrawalFees(100, 'x' as any), RangeError);
 });

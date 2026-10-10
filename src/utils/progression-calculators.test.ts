@@ -13,7 +13,7 @@ test('0 points / 0 projects / 0 rating -> level 1', () => {
   const result = deriveProviderProgression({ points: 0, completedProjects: 0, avgRating: 0 });
   assert.equal(result.currentLevelIndex, 1);
   assert.equal(result.currentLevelTitle, 'مبتدئ');
-  assert.equal(result.currentCommission, 5.0);
+  assert.equal(result.currentCommission, 12.75); // level 1 = the workbook's 12.75%
 });
 
 test('exact level-2 threshold on all 3 dimensions qualifies (inclusive >=)', () => {

@@ -283,9 +283,10 @@ test('getProfile: selects AffiliateProfile scalars explicitly (never a bare `inc
 
 	await marketerProfileService.getProfile('user-1');
 
-	// the profile read, plus the separate PayPal-email read (so a database without that column cannot fail the whole profile)
-	assert.equal(findUniqueSpy.mock.callCount(), 2);
+	// the profile read, plus the separate PayPal-email read and the separate KYC-review read (so a database without those columns cannot fail the whole profile)
+	assert.equal(findUniqueSpy.mock.callCount(), 3);
 	assert.deepEqual(findUniqueSpy.mock.calls[1].arguments[0].select, { paypalPayoutEmail: true });
+	assert.deepEqual(findUniqueSpy.mock.calls[2].arguments[0].select, { kycRejectionReason: true, kycReviewedAt: true });
 	const args = findUniqueSpy.mock.calls[0].arguments[0];
 	assert.ok(args.select, 'must pass an explicit select');
 	assert.equal('level' in args.select, false);

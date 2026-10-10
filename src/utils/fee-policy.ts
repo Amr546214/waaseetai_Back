@@ -23,33 +23,12 @@ export function isFeePolicyV2Active(at: Date, env: NodeJS.ProcessEnv = process.e
 
 const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
 
-// ── Provider: every deduction is applied at withdrawal. Percent points. ─────────────────────────
-export interface ProviderFeeRow { level: number; platform: number; admin: number; transfer: number; vat: number; total: number }
+// ── Provider: the final deduction by level (نسب الدفع.xlsx, "الخصم النهائي لمقدمي الخدمات"). Percent points. ──────────────────────
+// The workbook gives ONE number per level (12.75% ... 8.15%): it is the platform commission and the whole deduction, so there is no admin /
+// transfer / VAT column to add on top. It comes from the single ladder (config/levels.config.ts PROVIDER_LEVELS).
+export interface ProviderFeeRow { level: number; platform: number; total: number }
 
-// The `platform` column is NOT stored here: it is the level's commission from the single ladder (config/levels.config.ts PROVIDER_LEVELS).
-// admin / transfer / vat / total are the workbook's fee schedule ("نسب الدفع.xlsx"), kept as published.
-// [level, admin, transfer, vat, total]
-const PROVIDER_EXTRA_FEES: readonly (readonly [number, number, number, number, number])[] = [
-  [1, 2.0, 5.0, 0.75, 12.75],
-  [2, 2.0, 5.0, 0.72, 12.52],
-  [3, 2.5, 5.0, 0.69, 12.79],
-  [4, 2.5, 4.5, 0.66, 12.06],
-  [5, 3.0, 4.5, 0.63, 12.33],
-  [6, 3.0, 4.0, 0.60, 11.60],
-  [7, 3.5, 4.0, 0.56, 11.81],
-  [8, 3.5, 3.5, 0.53, 11.03],
-  [9, 4.0, 3.5, 0.49, 11.24],
-  [10, 4.0, 3.0, 0.45, 10.45],
-  [11, 4.5, 3.0, 0.41, 10.66],
-  [12, 4.5, 2.5, 0.38, 9.88],
-  [13, 5.0, 2.5, 0.30, 9.80],
-  [14, 5.0, 2.0, 0.23, 8.73],
-  [15, 5.0, 2.0, 0.15, 8.15],
-];
-
-export const PROVIDER_FEE_TABLE: readonly ProviderFeeRow[] = PROVIDER_EXTRA_FEES.map(([level, admin, transfer, vat, total]) => ({
-  level, platform: PROVIDER_LEVELS[level - 1].percent, admin, transfer, vat, total,
-}));
+export const PROVIDER_FEE_TABLE: readonly ProviderFeeRow[] = PROVIDER_LEVELS.map(d => ({ level: d.level, platform: d.percent, total: d.percent }));
 
 /** Commission adjustments (percentage points). "Complex / high-value projects +1.0" is NOT implemented: its value threshold is undefined. */
 export const COMMISSION_ADJUSTMENTS = {
@@ -85,29 +64,20 @@ export interface ProviderWithdrawalFees {
   policyVersion: number;
   level: number;
   amount: number;
-  percent: { platform: number; admin: number; transfer: number; vat: number; total: number };
-  fees: { platform: number; admin: number; transfer: number; vat: number; total: number };
+  percent: { platform: number; total: number };
+  fees: { platform: number; total: number };
   net: number;
 }
 
 /**
- * net = amount × (1 − total%). The table's VAT column is used as published (it is not recomputed when commission modifiers
- * lower the platform commission); only the platform commission is adjusted.
+ * net = amount × (1 − platform%). The platform commission is the whole deduction (workbook "الخصم النهائي"); commission modifiers (config only,
+ * not wired) only adjust that same number.
  */
 export function providerWithdrawalFees(level: number, amount: number, modifiers: CommissionModifiers = {}): ProviderWithdrawalFees {
   const row = providerFeeRow(level);
   const platform = adjustedPlatformCommission(level, modifiers);
-  const total = round2(platform + row.admin + row.transfer + row.vat);
-  const fees = {
-    platform: round2((amount * platform) / 100),
-    admin: round2((amount * row.admin) / 100),
-    transfer: round2((amount * row.transfer) / 100),
-    vat: round2((amount * row.vat) / 100),
-    total: 0,
-  };
-  const net = round2(amount * (1 - total / 100));
-  fees.total = round2(amount - net);
-  return { policyVersion: FEE_POLICY_VERSION, level: row.level, amount, percent: { platform, admin: row.admin, transfer: row.transfer, vat: row.vat, total }, fees, net };
+  const net = round2(amount * (1 - platform / 100));
+  return { policyVersion: FEE_POLICY_VERSION, level: row.level, amount, percent: { platform, total: platform }, fees: { platform: round2(amount - net), total: round2(amount - net) }, net };
 }
 
 // ── Requester: deposit fee (transfer + 3.5% admin) by payment method. Percent. ─────────────────────
@@ -126,6 +96,18 @@ export function depositGrossUp(netAmount: number, method: DepositMethod): number
   const rate = DEPOSIT_FEE_PERCENT[method];
   if (rate === undefined) throw new RangeError(`unknown deposit method: ${method}`);
   return round2(netAmount / (1 - rate / 100));
+}
+
+// ── Marketer: withdrawal fee by method (نسب الدفع.xlsx "السحب للوسطاء": transfer + admin + VAT). Percent. Reference data, NOT wired ──
+export type MarketerWithdrawalMethod = 'bank_transfer' | 'paypal' | 'usdt';
+export const MARKETER_WITHDRAWAL_FEE_PERCENT: Readonly<Record<MarketerWithdrawalMethod, number>> = { bank_transfer: 8.25, paypal: 7.75, usdt: 4 };
+
+/** What the marketer receives when `amount` is withdrawn by `method`: amount × (1 − rate). */
+export function marketerWithdrawalFees(amount: number, method: MarketerWithdrawalMethod): { percent: number; fee: number; net: number } {
+  const percent = MARKETER_WITHDRAWAL_FEE_PERCENT[method];
+  if (percent === undefined) throw new RangeError(`unknown withdrawal method: ${method}`);
+  const net = round2(amount * (1 - percent / 100));
+  return { percent, fee: round2(amount - net), net };
 }
 
 // ── Requester: cashback = level% × project value × ratingFactor × paymentFactor ────────────────────
