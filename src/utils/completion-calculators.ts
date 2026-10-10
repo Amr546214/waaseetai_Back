@@ -169,7 +169,7 @@ const PROVIDER_RULES: ProviderCompletionRule[] = [
     met: ({ providerProfile: p }) => !!(p.bio && p.bio.length >= 50) },
   { key: 'skills', label: 'المهارات', points: 10, tab: 'profile', hint: 'أضف مهارة واحدة على الأقل',
     met: ({ providerProfile: p }) => !!p.skills?.length },
-  { key: 'portfolio', label: 'معرض الأعمال', points: 10, tab: 'profile', hint: 'أضف رابط معرض أعمالك',
+  { key: 'portfolio', label: 'معرض الأعمال', points: 10, tab: 'profile', hint: 'أضف رابط معرض أعمالك (Behance أو GitHub أو موقعك الشخصي) في قسم «الروابط الشخصية»',
     met: ({ providerProfile: p }) => !!(p.portfolioItems?.length || p.websiteUrl) },
   { key: 'contact', label: 'البريد ورقم الجوال', points: 10, tab: 'contact', hint: 'أضف البريد الإلكتروني ورقم الجوال',
     met: ({ user: u }) => !!(u.email && u.phoneNumber) },

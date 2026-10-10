@@ -269,3 +269,14 @@ test('provider missingItems: every scoring input is listed with its points and t
   assert.equal(computeProviderMissingItems({ providerProfile: { ...FULL_PROVIDER.providerProfile, bio: 'x'.repeat(49) }, user: FULL_PROVIDER.user }).some(i => i.key === 'bio'), true);
   assert.equal(computeProviderMissingItems({ providerProfile: { ...FULL_PROVIDER.providerProfile, bio: 'x'.repeat(50) }, user: FULL_PROVIDER.user }).some(i => i.key === 'bio'), false);
 });
+
+test('provider "معرض الأعمال" (+10): fixed by a portfolio link (websiteUrl) or a portfolio item, and the hint says where to add it', () => {
+  const without = { ...FULL_PROVIDER, providerProfile: { ...FULL_PROVIDER.providerProfile, websiteUrl: null, portfolioItems: [] } };
+  const missing = computeProviderMissingItems(without).find(i => i.key === 'portfolio')!;
+  assert.equal(missing.points, 10);
+  assert.equal(missing.tab, 'profile');
+  assert.match(missing.hint, /Behance/);
+  assert.match(missing.hint, /الروابط الشخصية/);
+  assert.equal(computeProviderMissingItems({ ...without, providerProfile: { ...without.providerProfile, websiteUrl: 'https://www.behance.net/x' } }).some(i => i.key === 'portfolio'), false);
+  assert.equal(computeProviderMissingItems({ ...without, providerProfile: { ...without.providerProfile, portfolioItems: [{}] } }).some(i => i.key === 'portfolio'), false);
+});
