@@ -53,9 +53,19 @@ export class ClientProfileController {
         }
       }
 
+      // A rejected identity review: say why, so the wizard can show it and open the step again (ClientOnboarding keeps the admin's reason).
+      let kycRejectionReason: string | null = null;
+      if (profile?.kycStatus === 'REJECTED') {
+        try {
+          kycRejectionReason = (await prisma.clientOnboarding.findUnique({ where: { userId }, select: { rejectionReason: true } }))?.rejectionReason ?? null;
+        } catch (error) {
+          logger.error(`[ClientProfileController] Could not read the KYC rejection reason (userId=${userId})`, error);
+        }
+      }
+
       res.status(200).json({
         success: true,
-        data: { ...(withoutLegacyPayoutFields(profile) || {}), completionPercentage, missingItems }
+        data: { ...(withoutLegacyPayoutFields(profile) || {}), completionPercentage, missingItems, kycRejectionReason }
       });
     } catch (error) {
       next(error);
