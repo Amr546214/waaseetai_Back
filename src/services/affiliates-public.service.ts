@@ -1,3 +1,4 @@
+import { readAffiliateLevels, affiliateLevelInfo } from '../utils/affiliate-level-reader';
 import { UserStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 
@@ -14,7 +15,6 @@ const PUBLIC_AFFILIATE_SELECT = {
   referralSlug: true,
   firstName: true,
   lastName: true,
-  currentLevel: true,
   identityVerified: true,
   avatarUrl: true
 } as const;
@@ -26,7 +26,7 @@ export interface PublicAffiliateResult {
   id: string;
   referralSlug: string | null;
   displayName: string;
-  /** From AffiliateProfile.currentLevel (a label such as "مساعد"); never the numeric level. */
+  /** The level's NAME from the single ladder (config/levels.config.ts); never the numeric level, never the stale currentLevel label. */
   levelName: string | null;
   /** AffiliateProfile.identityVerified. */
   verified: boolean;
@@ -41,12 +41,11 @@ type PublicAffiliateRow = {
   referralSlug: string | null;
   firstName: string | null;
   lastName: string | null;
-  currentLevel?: string | null;
   identityVerified?: boolean | null;
   avatarUrl?: string | null;
 };
 
-function toPublicShape(affiliate: PublicAffiliateRow): PublicAffiliateResult {
+function toPublicShape(affiliate: PublicAffiliateRow, level?: number): PublicAffiliateResult {
   const nameFromParts = `${affiliate.firstName || ''} ${affiliate.lastName || ''}`.trim();
   // Fallback chain when both name fields are null: the affiliate's own
   // referral slug (still not private), and only as a last resort a generic
@@ -56,7 +55,7 @@ function toPublicShape(affiliate: PublicAffiliateRow): PublicAffiliateResult {
     id: affiliate.id,
     referralSlug: affiliate.referralSlug,
     displayName,
-    levelName: affiliate.currentLevel?.trim() || null,
+    levelName: affiliateLevelInfo(level).name,
     verified: affiliate.identityVerified === true,
     avatarUrl: affiliate.avatarUrl || null
   };
@@ -81,7 +80,9 @@ export class AffiliatesPublicService {
       },
       select: PUBLIC_AFFILIATE_SELECT
     });
-    return affiliate ? toPublicShape(affiliate) : null;
+    if (!affiliate) return null;
+    const levels = await readAffiliateLevels([affiliate.id], prisma);
+    return toPublicShape(affiliate, levels.get(affiliate.id));
   }
 
   /**
@@ -137,7 +138,9 @@ export class AffiliatesPublicService {
       take: exact ? SEARCH_RESULT_LIMIT - 1 : SEARCH_RESULT_LIMIT
     });
 
-    return [...(exact ? [exact] : []), ...others].map(toPublicShape);
+    const found = [...(exact ? [exact] : []), ...others];
+    const levels = await readAffiliateLevels(found.map(a => a.id), prisma);
+    return found.map(a => toPublicShape(a, levels.get(a.id)));
   }
 }
 

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { profileController } from '../../controllers/profile.controller';
+import { clientLevelController } from '../../controllers/gamification.controller';
 import { authenticate, requireActiveUser } from '../../middlewares/auth.middleware';
 
 import { phoneChangeController } from '../../controllers/phone-change.controller';
@@ -15,6 +16,8 @@ const router = Router();
 // ==========================================
 
 router.get('/me', authenticate, requireActiveUser, profileController.getProfile);
+// the client's own level view (single ladder; limitations are returned, never invented progress)
+router.get('/level-details', authenticate, requireActiveUser, clientLevelController.getClientLevelDetails);
 router.get('/my-change-requests', authenticate, requireActiveUser, profileController.getMyChangeRequests);
 // A client's password change is a request an admin approves (never applied directly). authLimiter: it verifies the current password.
 router.post('/password-change-request', authLimiter, authenticate, requireActiveUser, profileController.requestPasswordChange);

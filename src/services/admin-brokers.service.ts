@@ -1,3 +1,4 @@
+import { readAffiliateLevels, affiliateLevelInfo } from '../utils/affiliate-level-reader';
 import { UserStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
@@ -92,7 +93,7 @@ export class AdminBrokersService {
           firstName: true,
           lastName: true,
           referralSlug: true,
-          currentLevel: true,
+          id: true,
           user: { select: { id: true, firstName: true, lastName: true, email: true, status: true, createdAt: true } },
           referrals: { select: { status: true } },
           commissionLogs: { select: { status: true, amount: true } },
@@ -102,6 +103,7 @@ export class AdminBrokersService {
       prisma.affiliateProfile.count({ where }),
     ]);
 
+    const levels = await readAffiliateLevels(rows.map(r => r.id), prisma);
     const items = rows.map((affiliate) => {
       const aggregates = computeAggregates(affiliate);
       return {
@@ -109,7 +111,9 @@ export class AdminBrokersService {
         name: `${affiliate.firstName || affiliate.user.firstName || ''} ${affiliate.lastName || affiliate.user.lastName || ''}`.trim() || null,
         email: affiliate.user.email,
         referralSlug: affiliate.referralSlug,
-        level: affiliate.currentLevel,
+        level: affiliateLevelInfo(levels.get(affiliate.id)).name,
+        levelNumber: affiliateLevelInfo(levels.get(affiliate.id)).level,
+        commissionPercent: affiliateLevelInfo(levels.get(affiliate.id)).commissionPercent,
         status: affiliate.user.status,
         joinedAt: affiliate.user.createdAt,
         ...aggregates,
@@ -134,7 +138,6 @@ export class AdminBrokersService {
         firstName: true,
         lastName: true,
         referralSlug: true,
-        currentLevel: true,
         user: { select: { id: true, firstName: true, lastName: true, email: true, status: true, createdAt: true } },
         referrals: { select: { status: true } },
         commissionLogs: { select: { status: true, amount: true } },
@@ -146,6 +149,7 @@ export class AdminBrokersService {
     if (!affiliate) throw new AppError('الوسيط غير موجود', 404);
 
     const aggregates = computeAggregates(affiliate);
+    const detailLevel = affiliateLevelInfo((await readAffiliateLevels([affiliate.id], prisma)).get(affiliate.id));
 
     const recentCommissionRows = await prisma.commissionLog.findMany({
       where: { affiliateId: affiliate.id },
@@ -174,7 +178,9 @@ export class AdminBrokersService {
       name: `${affiliate.firstName || affiliate.user.firstName || ''} ${affiliate.lastName || affiliate.user.lastName || ''}`.trim() || null,
       email: affiliate.user.email,
       referralSlug: affiliate.referralSlug,
-      level: affiliate.currentLevel,
+      level: detailLevel.name,
+      levelNumber: detailLevel.level,
+      commissionPercent: detailLevel.commissionPercent,
       status: affiliate.user.status,
       joinedAt: affiliate.user.createdAt,
       channels: affiliate.marketingChannels,

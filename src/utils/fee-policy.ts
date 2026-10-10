@@ -3,6 +3,7 @@
 // No Prisma, no DB, no service imports with side effects.
 
 import { resolveAffiliateCommissionPercentage } from '../config/affiliate-levels.config';
+import { PROVIDER_LEVELS, CLIENT_LEVELS } from '../config/levels.config';
 
 export const FEE_POLICY_VERSION = 2;
 
@@ -25,23 +26,30 @@ const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 1
 // ── Provider: every deduction is applied at withdrawal. Percent points. ─────────────────────────
 export interface ProviderFeeRow { level: number; platform: number; admin: number; transfer: number; vat: number; total: number }
 
-export const PROVIDER_FEE_TABLE: readonly ProviderFeeRow[] = [
-  { level: 1, platform: 5.0, admin: 2.0, transfer: 5.0, vat: 0.75, total: 12.75 },
-  { level: 2, platform: 4.8, admin: 2.0, transfer: 5.0, vat: 0.72, total: 12.52 },
-  { level: 3, platform: 4.6, admin: 2.5, transfer: 5.0, vat: 0.69, total: 12.79 },
-  { level: 4, platform: 4.4, admin: 2.5, transfer: 4.5, vat: 0.66, total: 12.06 },
-  { level: 5, platform: 4.2, admin: 3.0, transfer: 4.5, vat: 0.63, total: 12.33 },
-  { level: 6, platform: 4.0, admin: 3.0, transfer: 4.0, vat: 0.60, total: 11.60 },
-  { level: 7, platform: 3.75, admin: 3.5, transfer: 4.0, vat: 0.56, total: 11.81 },
-  { level: 8, platform: 3.5, admin: 3.5, transfer: 3.5, vat: 0.53, total: 11.03 },
-  { level: 9, platform: 3.25, admin: 4.0, transfer: 3.5, vat: 0.49, total: 11.24 },
-  { level: 10, platform: 3.0, admin: 4.0, transfer: 3.0, vat: 0.45, total: 10.45 },
-  { level: 11, platform: 2.75, admin: 4.5, transfer: 3.0, vat: 0.41, total: 10.66 },
-  { level: 12, platform: 2.5, admin: 4.5, transfer: 2.5, vat: 0.38, total: 9.88 },
-  { level: 13, platform: 2.0, admin: 5.0, transfer: 2.5, vat: 0.30, total: 9.80 },
-  { level: 14, platform: 1.5, admin: 5.0, transfer: 2.0, vat: 0.23, total: 8.73 },
-  { level: 15, platform: 1.0, admin: 5.0, transfer: 2.0, vat: 0.15, total: 8.15 },
+// The `platform` column is NOT stored here: it is the level's commission from the single ladder (config/levels.config.ts PROVIDER_LEVELS).
+// admin / transfer / vat / total are the workbook's fee schedule ("نسب الدفع.xlsx"), kept as published.
+// [level, admin, transfer, vat, total]
+const PROVIDER_EXTRA_FEES: readonly (readonly [number, number, number, number, number])[] = [
+  [1, 2.0, 5.0, 0.75, 12.75],
+  [2, 2.0, 5.0, 0.72, 12.52],
+  [3, 2.5, 5.0, 0.69, 12.79],
+  [4, 2.5, 4.5, 0.66, 12.06],
+  [5, 3.0, 4.5, 0.63, 12.33],
+  [6, 3.0, 4.0, 0.60, 11.60],
+  [7, 3.5, 4.0, 0.56, 11.81],
+  [8, 3.5, 3.5, 0.53, 11.03],
+  [9, 4.0, 3.5, 0.49, 11.24],
+  [10, 4.0, 3.0, 0.45, 10.45],
+  [11, 4.5, 3.0, 0.41, 10.66],
+  [12, 4.5, 2.5, 0.38, 9.88],
+  [13, 5.0, 2.5, 0.30, 9.80],
+  [14, 5.0, 2.0, 0.23, 8.73],
+  [15, 5.0, 2.0, 0.15, 8.15],
 ];
+
+export const PROVIDER_FEE_TABLE: readonly ProviderFeeRow[] = PROVIDER_EXTRA_FEES.map(([level, admin, transfer, vat, total]) => ({
+  level, platform: PROVIDER_LEVELS[level - 1].percent, admin, transfer, vat, total,
+}));
 
 /** Commission adjustments (percentage points). "Complex / high-value projects +1.0" is NOT implemented: its value threshold is undefined. */
 export const COMMISSION_ADJUSTMENTS = {
@@ -121,7 +129,8 @@ export function depositGrossUp(netAmount: number, method: DepositMethod): number
 }
 
 // ── Requester: cashback = level% × project value × ratingFactor × paymentFactor ────────────────────
-export const REQUESTER_CASHBACK_PERCENT: readonly number[] = [1, 1.5, 2, 2.5, 2.75, 3, 3.25, 3.5, 3.75, 4, 4.2, 4.4, 4.6, 4.8, 5];
+// from the single ladder (config/levels.config.ts CLIENT_LEVELS)
+export const REQUESTER_CASHBACK_PERCENT: readonly number[] = CLIENT_LEVELS.map(d => d.percent);
 
 /** ≥4.8 → 1.2, ≥4.0 → 1.0, otherwise 0.8. */
 export function cashbackRatingFactor(rating: number): number {

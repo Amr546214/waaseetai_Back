@@ -58,7 +58,9 @@ function createMockPrisma(t: TestContext, opts: {
 
   const prismaMock: any = {
     affiliateProfile: {
-      findUnique: affiliateFindUniqueSpy
+      findUnique: affiliateFindUniqueSpy,
+      // the numeric level is read on its own (never in the safe select); a row without it (pre-migration shape) answers level 1
+      findMany: async () => (affiliateState ? [{ id: affiliateState.id, level: affiliateState.level }] : [])
     },
     commissionLog: { findMany: commissionLogFindManySpy },
     referral: { findMany: referralFindManySpy, count: referralCountSpy },
@@ -129,7 +131,7 @@ test('getSummary: repeat call with an existing AffiliateProfile never re-initial
 
 test('getSummary: does not compute or return nextTierThreshold/progressPercentage — no fabricated formula, no placeholder', async (t) => {
   const { marketerOverviewService } = await loadService(t, {
-    existingAffiliate: { id: 'affiliate-1', currentLevel: 'مساعد', completionPercentage: 45 },
+    existingAffiliate: { id: 'affiliate-1', currentLevel: 'STALE-LABEL', level: 2, completionPercentage: 45 },
     successfulReferrals: 3
   });
 
@@ -164,20 +166,20 @@ test('getSummary: totalCommissions and overallConversionRate remain correctly co
   assert.equal('progressPercentage' in summary, false);
 });
 
-test('getSummary: never transitions currentLevel from "مساعد" to "موصل" regardless of successfulReferrals', async (t) => {
+test('getSummary: the tier is the level\'s name from the single ladder and never moves by itself regardless of successfulReferrals', async (t) => {
   const { marketerOverviewService, affiliateCreateSpy, getAffiliateState } = await loadService(t, {
-    existingAffiliate: { id: 'affiliate-1', currentLevel: 'مساعد', completionPercentage: 45 },
+    existingAffiliate: { id: 'affiliate-1', currentLevel: 'STALE-LABEL', level: 2, completionPercentage: 45 },
     successfulReferrals: 10
   });
 
   const summary = await marketerOverviewService.getSummary('user-1');
 
-  // tier is still reported as "مساعد" — no automatic promotion exists.
+  // level 2 = "مساعد" in the ladder; no automatic promotion exists, so 10 referrals do not move it.
   assert.equal(summary.tier, 'مساعد');
   // No write of any kind was attempted (only `.create` exists on the fake
   // model, and it was never called — an `.update` attempt would have thrown).
   assert.equal(affiliateCreateSpy.mock.callCount(), 0);
-  assert.equal(getAffiliateState().currentLevel, 'مساعد');
+  assert.equal(getAffiliateState().level, 2);
 });
 
 // ============================================================================
@@ -330,7 +332,10 @@ test('getSummary: still computes the correct summary from a fixture row shaped e
 
   const summary = await marketerOverviewService.getSummary('user-1');
 
-  assert.equal(summary.tier, 'مساعد');
+  // a row without the numeric level answers level 1 of the ladder ("مسوق"), never the stale label
+  assert.equal(summary.tier, 'مسوق');
+  assert.equal(summary.level, 1);
+  assert.equal(summary.commissionPercent, 1);
   assert.equal(summary.successfulReferrals, 3);
 });
 
@@ -378,4 +383,13 @@ test('getRecentCommissions: maps a fixture row shaped exactly like the pre-migra
   assert.equal(result[0].currency, 'USD');
   assert.equal(result[0].status, 'APPROVED');
   assert.equal(result[0].source, 'إحالة عميل جديد');
+});
+
+
+test('getSummary: tier, level, commission percent and colours all come from the single ladder (level 15 = رابط مؤسسي, 4.5%)', async (t) => {
+  const { marketerOverviewService } = await loadService(t, { existingAffiliate: { id: 'affiliate-1', currentLevel: 'STALE-LABEL', level: 15, referralSlug: 'k', notifyOnNewReferral: true, sharePerformanceStats: false } });
+  const summary = await marketerOverviewService.getSummary('user-1');
+  assert.deepEqual([summary.tier, summary.level, summary.commissionPercent], ['رابط مؤسسي', 15, 4.5]);
+  assert.match(summary.levelColor.dark, /^#[0-9A-F]{6}$/);
+  assert.match(summary.levelColor.light, /^#[0-9A-F]{6}$/);
 });
