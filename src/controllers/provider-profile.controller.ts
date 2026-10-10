@@ -1,3 +1,4 @@
+import { publicKycRejectionReason, withoutInternalProviderNotes } from '../utils/provider-kyc-review';
 import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/app-error';
 import { providerProfileService } from '../services/provider-profile.service';
@@ -94,10 +95,9 @@ export const getSetupData = async (req: Request, res: Response) => {
 			include: { skills: { select: { name: true } }, portfolioItems: true }
 		});
 
-		// A rejected identity review: the admin's reason (stored as "سبب الرفض: …" in the profile notes) is returned on its own field, so the wizard can show it.
-		const note = typeof profile?.notes === 'string' ? profile.notes : '';
-		const kycRejectionReason = profile?.kycStatus === 'REJECTED' && note.startsWith('سبب الرفض:') ? note.slice('سبب الرفض:'.length).trim() || null : null;
-		res.status(200).json({ success: true, data: profile ? { ...profile, kycRejectionReason } : {} });
+		// The raw `notes` column (internal / admin text) is never returned; a rejected identity review comes back as a safe reason on its own field.
+		const kycRejectionReason = publicKycRejectionReason(profile?.kycStatus, profile?.notes);
+		res.status(200).json({ success: true, data: profile ? { ...withoutInternalProviderNotes(profile), kycRejectionReason } : {} });
 	} catch (error) {
 		res.status(500).json({ message: 'Internal server error' });
 	}
@@ -241,7 +241,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		res.status(200).json({
 			success: true,
 			message: 'تم حفظ البيانات بنجاح',
-			data: updatedResult
+			data: withoutInternalProviderNotes(updatedResult)
 		});
 	} catch (error) {
 		if (error instanceof AppError) return res.status(error.statusCode).json({ success: false, message: error.message });

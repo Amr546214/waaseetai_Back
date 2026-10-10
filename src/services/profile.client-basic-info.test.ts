@@ -30,7 +30,7 @@ function createDb(t: TestContext, o: { clientProfile?: any } = {}) {
       findFirst: async (a: any) => state.requests.find((r: any) => matches(r, a.where)) || null,
       findUnique: async (a: any) => state.requests.find((r: any) => r.id === a.where.id) || null,
       findUniqueOrThrow: async (a: any) => { const r = state.requests.find((x: any) => x.id === a.where.id); if (!r) throw new Error('nf'); return r; },
-      findMany: async (a: any) => state.requests.filter((r: any) => matches(r, { ...a.where, status: a.where.status })).map((r: any) => ({ ...r, provider: { firstName: 'Nora', lastName: 'Q', email: 'c@example.com', accountType: 'CLIENT_INDIVIDUAL' } })),
+      findMany: async (a: any) => [...state.requests].reverse().filter((r: any) => matches(r, { ...a.where, status: a.where.status })).map((r: any) => ({ ...r, provider: { firstName: 'Nora', lastName: 'Q', email: 'c@example.com', accountType: 'CLIENT_INDIVIDUAL' } })),
       create: async (a: any) => { const r = { id: `req-${++seq}`, createdAt: new Date(), ...a.data }; state.requests.push(r); return r; },
       updateMany: async (a: any) => { const hits = state.requests.filter((r: any) => matches(r, a.where)); hits.forEach((r: any) => Object.assign(r, a.data)); return { count: hits.length }; }
     },
