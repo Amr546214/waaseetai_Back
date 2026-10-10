@@ -83,6 +83,7 @@ async function loadProviderProfileServiceWithFixture(t: TestContext) {
         profileModificationRequest: {
           create: async () => ({}),
           count: async () => 0,
+          findMany: async () => [],
           findFirst: async () => null
         },
         accountAuditLog: {
@@ -773,12 +774,14 @@ function createSensitiveFlowMockPrisma(t: TestContext, opts: { throwOnRecompute?
         return record;
       },
       findFirst: async (args: any) => {
-        const record = requestsById[args.where.id];
-        if (!record) return null;
-        if (args.where.providerId && record.providerId !== args.where.providerId) return null;
-        if (args.where.status && record.status !== args.where.status) return null;
-        return record;
+        const w = args.where;
+        const byId = typeof w.id === 'string';
+        const pool: any[] = byId ? [requestsById[w.id]].filter(Boolean) : Object.values(requestsById);
+        const hit = pool.filter((r: any) => (!w.providerId || r.providerId === w.providerId) && (!w.category || r.category === w.category)
+          && (!w.status || r.status === w.status) && (!w.id?.not || r.id !== w.id.not));
+        return hit[hit.length - 1] ?? null;
       },
+      findMany: async (args: any) => Object.values(requestsById).filter((r: any) => (!args.where.providerId || r.providerId === args.where.providerId) && (!args.where.category || r.category === args.where.category)).map((r: any) => ({ createdAt: new Date(), updatedAt: new Date(), ...r })),
       count: async (args: any) => Object.values(requestsById).filter((r: any) => r.providerId === args.where.providerId && r.category === args.where.category && r.status === args.where.status).length,
       findUnique: async (args: any) => requestsById[args.where.id] || null,
       update: async (args: any) => {
@@ -1379,4 +1382,57 @@ test('initiateSensitiveChange (CONTACT, no human review): the duplicate guard do
   const { providerProfileService } = await loadServiceForSensitiveFlow(t);
   await providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'a@example.com', phoneNumber: '0511111111', alternativePhone: '0522222222' });
   await providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'b@example.com', phoneNumber: '0511111111', alternativePhone: '0522222222' });
+});
+
+// ── unified review lifecycle ──
+test('409 REQUEST_ALREADY_PENDING names the waiting request (id, category, submittedAt) and no second request is stored', async (t) => {
+  const { providerProfileService, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+  const doc = { idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id.pdf' };
+  const first = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', doc);
+  await providerProfileService.verifySensitiveChange('user-1', first.requestId, getLastOtpCode()!);
+  const err: any = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', doc).catch((e) => e);
+  assert.equal(err.message, 'REQUEST_ALREADY_PENDING');
+  assert.equal(err.details[0].code, 'REQUEST_ALREADY_PENDING');
+  assert.equal(err.details[0].requestId, first.requestId);
+  assert.equal(err.details[0].category, 'DOCUMENTS');
+});
+
+test('two requests opened before either was confirmed: only the first can reach the admin, the second confirmation is refused (409) and stays out of the queue', async (t) => {
+  const { providerProfileService, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+  const doc = { idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id.pdf' };
+  const a = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', doc);
+  const codeA = getLastOtpCode()!;
+  const b = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', doc);
+  const codeB = getLastOtpCode()!;
+  const okA: any = await providerProfileService.verifySensitiveChange('user-1', a.requestId, codeA);
+  assert.equal(okA.status, 'PENDING_HUMAN_REVIEW');
+  const err: any = await providerProfileService.verifySensitiveChange('user-1', b.requestId, codeB).catch((e) => e);
+  assert.equal(err.message, 'REQUEST_ALREADY_PENDING');
+  assert.equal(err.details[0].requestId, a.requestId);
+});
+
+test('creating a review request does not apply the value; rejection keeps the reason and applies nothing; approval applies it', async (t) => {
+  const { providerProfileService, getLastOtpCode, getUserState } = await loadServiceForSensitiveFlow(t);
+  const url = 'https://res.cloudinary.com/testcloud/image/upload/id.pdf';
+  const first = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', { idDocumentUrl: url });
+  await providerProfileService.verifySensitiveChange('user-1', first.requestId, getLastOtpCode()!);
+  assert.notEqual(getUserState().idDocumentUrl, url, 'nothing is applied before the admin decides');
+  const rejected: any = await providerProfileService.reviewSensitiveChange(first.requestId, false, 'الصورة غير واضحة');
+  assert.equal(rejected.status, 'REJECTED'); assert.equal(rejected.rejectionReason, 'الصورة غير واضحة');
+  assert.notEqual(getUserState().idDocumentUrl, url, 'a rejection applies nothing');
+  const second = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', { idDocumentUrl: url });
+  await providerProfileService.verifySensitiveChange('user-1', second.requestId, getLastOtpCode()!);
+  const approved: any = await providerProfileService.reviewSensitiveChange(second.requestId, true);
+  assert.equal(approved.status, 'APPROVED');
+  assert.equal(getUserState().idDocumentUrl, url, 'approval applies the value');
+});
+
+test('static: the three profile GETs return reviewStatus and the controllers pass the 409 details through', () => {
+  const read = (f: string) => readFileSync(path.join(__dirname, f), 'utf8');
+  assert.match(read('provider-profile.service.ts'), /reviewStatus: \{ identity, documents \}/);
+  assert.match(read('profile.service.ts'), /currentProfileData\.reviewStatus = reviewStatus/);
+  assert.match(read('marketer-profile.service.ts'), /reviewStatus: \{ basicInfo, documents \}/);
+  assert.match(read('profile-requests.service.ts'), /alreadyPendingDetails\(waiting, 'MARKETER_BASIC_INFO'\)/);
+  assert.match(read('profile.service.ts'), /alreadyPendingDetails\(existing, CLIENT_BASIC_INFO_REQUEST_CATEGORY\)/);
+  assert.match(read('../controllers/provider-profile.controller.ts'), /errors: error\.details/);
 });

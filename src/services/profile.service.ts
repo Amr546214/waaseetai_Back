@@ -19,6 +19,7 @@ import { CLIENT_IDENTITY_REQUEST_CATEGORY as CLIENT_IDENTITY_CATEGORY, CLIENT_BA
 import bcrypt from 'bcrypt';
 import { profileChangeReviewService, withHonestAiReview } from './ai-features/profile-change-review.service';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
+import { deriveReviewEntry, alreadyPendingDetails, NOT_SUBMITTED, type ReviewEntry } from '../utils/review-status';
 import type { ClientPasswordChangeInput } from '../dtos/client-password-change.dto';
 
 const maskId = (value: string) => (value.length > 4 ? `${'*'.repeat(value.length - 4)}${value.slice(-4)}` : value);
@@ -142,6 +143,27 @@ export class ProfileService {
       currentProfileData.profileCompletionPercent = completion;
       currentProfileData.completionPercentage = completion;
       currentProfileData.missingItems = missingItems;
+    }
+
+    // CLIENT: one review lifecycle per admin-decided change (name, ID number, password, identity documents). Immediate saves are not listed.
+    if (user.activeRole === UserRole.CLIENT) {
+      let reviewStatus: Record<string, ReviewEntry> = { basicInfo: { ...NOT_SUBMITTED }, identity: { ...NOT_SUBMITTED }, password: { ...NOT_SUBMITTED }, documents: { ...NOT_SUBMITTED } };
+      try {
+        const rows = await prisma.profileModificationRequest.findMany({
+          where: { providerId: userId, category: { in: [CLIENT_BASIC_INFO_REQUEST_CATEGORY, CLIENT_IDENTITY_CATEGORY, CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY] } },
+          orderBy: { createdAt: 'desc' }, take: 30,
+          select: { id: true, category: true, status: true, createdAt: true, updatedAt: true, rejectionReason: true, reviewedByAdmin: true }
+        });
+        const of = (c: string) => deriveReviewEntry(rows.filter((r) => r.category === c) as any);
+        const onboarding = await prisma.clientOnboarding.findUnique({ where: { userId }, select: { id: true, status: true, createdAt: true, reviewedAt: true, rejectionReason: true } });
+        reviewStatus = {
+          basicInfo: of(CLIENT_BASIC_INFO_REQUEST_CATEGORY), identity: of(CLIENT_IDENTITY_CATEGORY), password: of(CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY),
+          documents: onboarding ? deriveReviewEntry([{ id: onboarding.id, category: 'CLIENT_KYC', status: onboarding.status, createdAt: onboarding.createdAt, updatedAt: onboarding.reviewedAt, rejectionReason: onboarding.rejectionReason }]) : { ...NOT_SUBMITTED },
+        };
+      } catch (error) {
+        logger.error(`[ProfileService] Could not read review status (userId=${userId})`, error);
+      }
+      currentProfileData.reviewStatus = reviewStatus;
     }
 
     return {
@@ -511,9 +533,9 @@ export class ProfileService {
 
     const existing = await prisma.profileModificationRequest.findFirst({
       where: { providerId: userId, category: CLIENT_BASIC_INFO_REQUEST_CATEGORY, status: 'PENDING_HUMAN_REVIEW' },
-      select: { id: true }
+      select: { id: true, category: true, createdAt: true }, orderBy: { createdAt: 'desc' }
     });
-    if (existing) throw new AppError('لديك طلب تعديل للبيانات الأساسية قيد المراجعة بالفعل', 409);
+    if (existing) throw new AppError('لديك طلب تعديل للبيانات الأساسية قيد المراجعة بالفعل', 409, alreadyPendingDetails(existing, CLIENT_BASIC_INFO_REQUEST_CATEGORY));
 
     const created = await prisma.profileModificationRequest.create({
       data: {
@@ -568,9 +590,9 @@ export class ProfileService {
     if (idChanged) {
       const existing = await prisma.profileModificationRequest.findFirst({
         where: { providerId: userId, category: CLIENT_IDENTITY_CATEGORY, status: { in: ['PENDING_HUMAN_REVIEW'] } },
-        select: { id: true }
+        select: { id: true, category: true, createdAt: true }, orderBy: { createdAt: 'desc' }
       });
-      if (existing) throw new AppError('لديك طلب تعديل لرقم الهوية قيد المراجعة بالفعل', 409);
+      if (existing) throw new AppError('لديك طلب تعديل لرقم الهوية قيد المراجعة بالفعل', 409, alreadyPendingDetails(existing, CLIENT_IDENTITY_CATEGORY));
     }
 
     // both writes together: a failure must not leave the place saved while the request is lost (or the other way round)
@@ -641,9 +663,9 @@ export class ProfileService {
 
     const pending = await prisma.profileModificationRequest.findFirst({
       where: { providerId: userId, category: CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY, status: 'PENDING_HUMAN_REVIEW' },
-      select: { id: true }
+      select: { id: true, category: true, createdAt: true }, orderBy: { createdAt: 'desc' }
     });
-    if (pending) throw new AppError('طلب تغيير كلمة المرور قيد المراجعة بالفعل', 409);
+    if (pending) throw new AppError('طلب تغيير كلمة المرور قيد المراجعة بالفعل', 409, alreadyPendingDetails(pending, CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY));
 
     const pendingPasswordHash = await bcrypt.hash(input.newPassword, 12);
     const created = await prisma.profileModificationRequest.create({
