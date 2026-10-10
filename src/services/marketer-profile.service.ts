@@ -4,6 +4,7 @@ import { logger } from '../config/logger';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { computeAffiliateCompletion, computeAffiliateMissingItems } from '../utils/completion-calculators';
 import { AppError } from '../utils/app-error';
+import { deriveReviewEntry, NOT_SUBMITTED, type ReviewEntry } from '../utils/review-status';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
 import { readAffiliatePaypalEmail, withoutLegacyAffiliateBankFields } from '../utils/affiliate-payout';
 
@@ -76,7 +77,22 @@ export class MarketerProfileService {
     }
 
     // PayPal is the only payout destination: the legacy bank columns are never returned.
-    return Object.assign(withoutLegacyAffiliateBankFields(profile), { paypalPayoutEmail, completionPercentage, missingItems });
+    // One review lifecycle: the name / national id / phone requests (admin-decided) and the identity document. PayPal and the marketing profile save at once.
+    let basicInfo: ReviewEntry = { ...NOT_SUBMITTED };
+    try {
+      const rows = await prisma.profileChangeRequest.findMany({
+        where: { affiliateProfileId: profile.id, fieldType: { in: ['FIRST_NAME', 'LAST_NAME', 'NATIONAL_ID', 'PHONE_NUMBER'] as any } },
+        orderBy: { createdAt: 'desc' }, take: 20,
+        select: { id: true, fieldType: true, status: true, createdAt: true, updatedAt: true, rejectionReason: true }
+      });
+      basicInfo = deriveReviewEntry(rows.map(r => ({ ...r, category: 'MARKETER_BASIC_INFO' })) as any);
+    } catch (error) {
+      logger.error(`[MarketerProfileService] Could not read review status (userId=${userId})`, error);
+    }
+    // The KYC document keeps no request row: a stored document with no approval is waiting; a rejected one is simply cleared (its reason goes to the notification only).
+    const documents: ReviewEntry = (profile as any).identityVerified ? { ...NOT_SUBMITTED, status: 'APPROVED' }
+      : (profile as any).kycDocumentUrl ? { ...NOT_SUBMITTED, status: 'PENDING_REVIEW' } : { ...NOT_SUBMITTED };
+    return Object.assign(withoutLegacyAffiliateBankFields(profile), { paypalPayoutEmail, completionPercentage, missingItems, reviewStatus: { basicInfo, documents } });
   }
 
   /**

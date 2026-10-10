@@ -23,6 +23,7 @@ import { CLIENT_IDENTITY_REQUEST_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY, C
 import { logger } from '../config/logger';
 import { OtpPurpose, OTP_MAX_ATTEMPTS } from '../utils/otp-purpose';
 import { sessionService } from './session.service';
+import { deriveReviewEntry, alreadyPendingDetails, NOT_SUBMITTED, type ReviewEntry } from '../utils/review-status';
 import { initializeRoleState } from './account-management.service';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 import { buildAssessmentDetails, buildCompanySummary, withSpecialtyName } from './provider-public-profile.helpers';
@@ -165,7 +166,22 @@ export class ProviderProfileService {
 		// (PENDING_REVIEW), an approved document that is stored on the account (VERIFIED), a rejected request (REJECTED, with the reason) or nothing sent.
 		const storedIdDocument = !!(profile.user as { idDocumentUrl?: string | null } | undefined)?.idDocumentUrl;
 		const identityVerification = deriveIdentityVerification({ pendingDocumentReview, storedIdDocument, latestDocumentRequest });
-		Object.assign(profile, { completionPercentage, missingItems, identityVerification });
+		// One lifecycle for every role: only admin-decided changes are listed here (the e-mail-code-only CONTACT / PayPal changes are not a review).
+		let documents: ReviewEntry = { ...NOT_SUBMITTED };
+		try {
+			const rows = await prisma.profileModificationRequest.findMany({
+				where: { providerId: userId, category: 'DOCUMENTS' }, orderBy: { createdAt: 'desc' }, take: 10,
+				select: { id: true, category: true, status: true, createdAt: true, updatedAt: true, rejectionReason: true, reviewedByAdmin: true }
+			});
+			documents = deriveReviewEntry(rows as any);
+		} catch (error) {
+			logger.error(`[ProviderProfileService] Could not read review status (userId=${userId})`, error);
+		}
+		const identity: ReviewEntry = identityVerification.status === 'VERIFIED'
+			? { ...documents, status: 'APPROVED', rejectionReason: null }
+			: identityVerification.status === 'NOT_SUBMITTED' ? { ...NOT_SUBMITTED }
+			: { ...documents, status: identityVerification.status === 'PENDING_REVIEW' ? 'PENDING_REVIEW' : 'REJECTED', requestId: identityVerification.requestId, submittedAt: identityVerification.submittedAt, rejectionReason: identityVerification.rejectionReason };
+		Object.assign(profile, { completionPercentage, missingItems, identityVerification, reviewStatus: { identity, documents } });
 
 		// PayPal is the only payout destination: legacy bank columns (the profile's and the user's) are never returned.
 		return withoutLegacyProviderBankFields(profile as any) as typeof profile;
@@ -961,8 +977,8 @@ export class ProviderProfileService {
 
 		// A category that a human reviews can have only ONE request waiting: a second tap / a second device never creates a duplicate.
 		if (config.review) {
-			const waiting = await prisma.profileModificationRequest.count({ where: { providerId, category, status: 'PENDING_HUMAN_REVIEW' as any } });
-			if (waiting > 0) throw new Error('REQUEST_ALREADY_PENDING');
+			const waiting = await prisma.profileModificationRequest.findFirst({ where: { providerId, category, status: 'PENDING_HUMAN_REVIEW' as any }, orderBy: { createdAt: 'desc' }, select: { id: true, category: true, createdAt: true } });
+			if (waiting) throw Object.assign(new Error('REQUEST_ALREADY_PENDING'), { details: alreadyPendingDetails(waiting, category) });
 		}
 
 		if (category === 'CONTACT' && cleanChanges.email && cleanChanges.email !== user.email) {
@@ -1045,6 +1061,11 @@ export class ProviderProfileService {
 		await prisma.otpVerification.delete({ where: { id: otp.id } });
 		const metadata = (request.metadata || {}) as any;
 		const needsReview = Boolean(metadata.requiresHumanReview);
+		if (needsReview) {
+			// a second request opened before the first was confirmed must not reach the admin as a duplicate
+			const waiting = await prisma.profileModificationRequest.findFirst({ where: { providerId, category: request.category, status: 'PENDING_HUMAN_REVIEW' as any, id: { not: request.id } }, orderBy: { createdAt: 'desc' }, select: { id: true, category: true, createdAt: true } });
+			if (waiting) throw Object.assign(new Error('REQUEST_ALREADY_PENDING'), { details: alreadyPendingDetails(waiting, request.category) });
+		}
 
 		if (!needsReview) {
 			await this.applySensitivePayload(providerId, request.category, metadata.changes || {});

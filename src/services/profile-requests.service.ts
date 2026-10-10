@@ -1,3 +1,4 @@
+import { alreadyPendingDetails } from '../utils/review-status';
 import { prisma } from '../config/db';
 import { ChangeRequestStatus, SensitiveFieldType, Prisma } from '@prisma/client';
 import { AppError } from '../utils/app-error';
@@ -49,15 +50,17 @@ export async function createGovernedFieldRequests(
 	}
 
 	const conflicts: FieldChangeCandidate[] = [];
+	let waiting: { id: string; category: string; createdAt: Date } | null = null;
 	for (const candidate of changed) {
 		const existing = await tx.profileChangeRequest.findFirst({
-			where: { affiliateProfileId, fieldType: candidate.fieldType, status: { in: PENDING_STATUSES } }
+			where: { affiliateProfileId, fieldType: candidate.fieldType, status: { in: PENDING_STATUSES } },
+			orderBy: { createdAt: 'desc' }
 		});
-		if (existing) conflicts.push(candidate);
+		if (existing) { conflicts.push(candidate); waiting = waiting ?? { id: existing.id, category: existing.fieldType, createdAt: existing.createdAt }; }
 	}
 
 	if (conflicts.length > 0) {
-		throw new AppError(`يوجد طلب تعديل معلّق بالفعل لـ: ${conflicts.map(c => c.fieldLabel).join('، ')}`, 409);
+		throw new AppError(`يوجد طلب تعديل معلّق بالفعل لـ: ${conflicts.map(c => c.fieldLabel).join('، ')}`, 409, alreadyPendingDetails(waiting, 'MARKETER_BASIC_INFO'));
 	}
 
 	const created = [];

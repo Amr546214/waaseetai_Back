@@ -324,7 +324,7 @@ export const initiateSensitiveChange = async (req: Request, res: Response) => {
 		res.status(201).json({ success: true, data: result });
 	} catch (error: any) {
 		const status = error.message === 'EMAIL_ALREADY_USED' || error.message === 'REQUEST_ALREADY_PENDING' ? 409 : 400;
-		res.status(status).json({ success: false, message: error.message });
+		res.status(status).json({ success: false, message: error.message, ...(error.details ? { errors: error.details } : {}) });
 	}
 };
 
@@ -339,7 +339,7 @@ export const verifySensitiveChange = async (req: Request, res: Response) => {
 		const result = await providerProfileService.verifySensitiveChange(userId, String(requestId), String(code), auditContext(req));
 		res.json({ success: true, data: result });
 	} catch (error: any) {
-		res.status(400).json({ success: false, message: error.message });
+		res.status(error.message === 'REQUEST_ALREADY_PENDING' ? 409 : 400).json({ success: false, message: error.message, ...(error.details ? { errors: error.details } : {}) });
 	}
 };
 
