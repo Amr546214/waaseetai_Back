@@ -61,6 +61,22 @@ export const authLimiter = rateLimit({
   }
 });
 
+/**
+ * Limiter for the dashboard summary endpoints that EVERY dashboard page loads (the sidebar / overview call GET /provider/statistics on each
+ * navigation, twice on some pages). They make no AI call, so they must not share the 30-per-15-minutes AI budget (that returned a misleading
+ * "AI limit" 429 after ~15 page views). Separate counter, still bounded per IP.
+ */
+export const dashboardLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipWhenRateLimitDisabled,
+  handler: (req, res, next) => {
+    next(rateLimited(req, res, 'طلبات كثيرة من هذا الجهاز، حاول مرة أخرى بعد'));
+  }
+});
+
 export const aiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 30,

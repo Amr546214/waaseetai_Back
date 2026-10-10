@@ -3,7 +3,7 @@ import { getProviderStatistics, getProviderOffers, getEligibleAccreditationSpeci
 import { submitWithdrawal, listMyWithdrawals } from '../controllers/withdrawal.controller';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
-import { aiLimiter } from '../middlewares/rate-limit.middleware';
+import { aiLimiter, dashboardLimiter } from '../middlewares/rate-limit.middleware';
 import providerProfileRouter from './provider-profile.routes';
 import marketplaceServiceRouter from './marketplace-service.routes';
 import { exploreRequestsController } from '../controllers/explore-requests.controller';
@@ -60,10 +60,9 @@ router.use('/special-offers', specialOfferRouter);
 // Phase 7 — marketing center aggregation + company spend cap → /api/provider/marketing
 router.use('/marketing', marketingCenterRouter);
 
-// Endpoint for Provider Dashboard Overview Statistics. Internally calls
-// providerOverviewService.getAiMatchingProjects -> aiMatchingEngineService
-// .getTop3MatchingProjects, a real Gemini call — needs aiLimiter like every
-// other Gemini-triggering route (Batch 6 gap fix; this route was missing it).
+// Endpoint for Provider Dashboard Overview Statistics. It makes NO AI call any more (the matching is a deterministic rule engine and the AI rating is
+// read from stored proposal scores), and the dashboard calls it on every page: it uses dashboardLimiter, not the 30/15min aiLimiter (which gave a
+// misleading "AI limit" 429 after ~15 page views).
 //
 // Phase 3 Batch 2B: confirmed via a full frontend trace that every real
 // caller (the shared dashboard sidebar, gated on effectiveRole()===PROVIDER,
@@ -75,7 +74,7 @@ router.get(
   authenticate,
   requireActiveUser,
   providerOnly,
-  aiLimiter,
+  dashboardLimiter,
   getProviderStatistics
 );
 

@@ -42,12 +42,15 @@ test('project.routes.ts: POST /:id/proposals (createProposal -> evaluateAndSugge
   assert.match(registration, /aiLimiter/);
 });
 
-test('provider.routes.ts: GET /statistics (getAiMatchingProjects -> aiMatchingEngineService) carries aiLimiter', () => {
+test('provider.routes.ts: GET /statistics makes no AI call (rule-based matching + stored scores), so it uses dashboardLimiter, NOT the 30/15min aiLimiter', () => {
   const source = readRoute('provider.routes.ts');
   const start = source.indexOf("router.get(\n  '/statistics',");
   assert.notEqual(start, -1);
   const registration = source.slice(start, source.indexOf(');', start));
-  assert.match(registration, /aiLimiter/);
+  assert.match(registration, /dashboardLimiter/);
+  assert.doesNotMatch(registration, /aiLimiter/);
+  const mw = fs.readFileSync(path.join(__dirname, '../middlewares/rate-limit.middleware.ts'), 'utf8');
+  assert.match(mw, /dashboardLimiter = rateLimit\(\{[^}]*max: 600/s);
 });
 
 // Phase 3 Batch 2B: confirmed via a full frontend trace (shared dashboard
