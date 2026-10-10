@@ -28,7 +28,24 @@ for (const kycStatus of ['PENDING', 'VERIFIED', 'UNVERIFIED']) {
     assert.equal((await get(t)).kycRejectionReason, null);
   });
 }
-test('REJECTED with a note that is not a rejection reason returns null (never leaks free text)', async (t) => {
-  profile = { id: 'p1', kycStatus: 'REJECTED', notes: 'ملاحظة داخلية', skills: [], portfolioItems: [] };
-  assert.equal((await get(t)).kycRejectionReason, null);
+test('REJECTED with a note that is not a rejection reason: the generic message, never the raw note', async (t) => {
+  profile = { id: 'p1', kycStatus: 'REJECTED', notes: 'ملاحظة داخلية سرية', skills: [], portfolioItems: [] };
+  const d = await get(t);
+  assert.equal(d.kycRejectionReason, 'تم رفض المستندات. يرجى رفع مستندات أوضح أو التواصل مع الدعم.');
+  assert.doesNotMatch(JSON.stringify(d), /ملاحظة داخلية سرية/);
+});
+
+for (const [kycStatus, notes] of [['REJECTED', 'سبب الرفض: الصورة غير واضحة'], ['REJECTED', 'ملاحظة داخلية سرية'], ['PENDING', 'internal'], ['VERIFIED', 'internal'], ['UNVERIFIED', null]] as const) {
+  test(`the raw "notes" column is never in the response (${kycStatus}, ${notes ?? 'no note'})`, async (t) => {
+    profile = { id: 'p1', kycStatus, notes, skills: [], portfolioItems: [] };
+    const d = await get(t);
+    assert.equal('notes' in d, false);
+    if (notes) assert.equal(JSON.stringify(d).includes(notes.replace('سبب الرفض: ', '')) && kycStatus !== 'REJECTED', false);
+  });
+}
+
+test('a profile with no note and no review still answers normally (pending / approved are not affected)', async (t) => {
+  profile = { id: 'p1', kycStatus: 'PENDING', notes: null, headline: 'مصمم', skills: [], portfolioItems: [] };
+  const d = await get(t);
+  assert.deepEqual([d.kycStatus, d.headline, d.kycRejectionReason], ['PENDING', 'مصمم', null]);
 });

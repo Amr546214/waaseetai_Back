@@ -23,6 +23,7 @@ import { CLIENT_IDENTITY_REQUEST_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY, C
 import { logger } from '../config/logger';
 import { OtpPurpose, OTP_MAX_ATTEMPTS } from '../utils/otp-purpose';
 import { sessionService } from './session.service';
+import { publicKycRejectionReason, withoutInternalProviderNotes, PROVIDER_KYC_REJECTION_PREFIX } from '../utils/provider-kyc-review';
 import { deriveReviewEntry, alreadyPendingDetails, NOT_SUBMITTED, type ReviewEntry } from '../utils/review-status';
 import { initializeRoleState } from './account-management.service';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
@@ -154,7 +155,9 @@ export class ProviderProfileService {
 		}
 		const completionInput = { providerProfile: profile, user: profile.user || {} };
 		const completionPercentage = computeProviderCompletion(completionInput);
-		const missingItems = computeProviderMissingItems(completionInput, { pendingDocumentReview });
+		// The admin's KYC review is a separate queue from the DOCUMENTS request: a refusal there must show up here too (safe reason only, never the raw notes).
+		const kycRejection = publicKycRejectionReason((profile as { kycStatus?: string | null }).kycStatus, (profile as { notes?: unknown }).notes);
+		const missingItems = computeProviderMissingItems(completionInput, { pendingDocumentReview, rejectedIdentity: !!kycRejection });
 		if (profile.completionPercentage !== completionPercentage) {
 			try {
 				await prisma.providerProfile.update({ where: { userId }, data: { completionPercentage }, select: { id: true } });
@@ -165,7 +168,7 @@ export class ProviderProfileService {
 		// Where the identity document stands, so the page can say it and keep saying it after a refresh: a document waiting for the admin
 		// (PENDING_REVIEW), an approved document that is stored on the account (VERIFIED), a rejected request (REJECTED, with the reason) or nothing sent.
 		const storedIdDocument = !!(profile.user as { idDocumentUrl?: string | null } | undefined)?.idDocumentUrl;
-		const identityVerification = deriveIdentityVerification({ pendingDocumentReview, storedIdDocument, latestDocumentRequest });
+		const identityVerification = deriveIdentityVerification({ pendingDocumentReview, storedIdDocument, latestDocumentRequest, kycRejection });
 		// One lifecycle for every role: only admin-decided changes are listed here (the e-mail-code-only CONTACT / PayPal changes are not a review).
 		let documents: ReviewEntry = { ...NOT_SUBMITTED };
 		try {
@@ -184,7 +187,7 @@ export class ProviderProfileService {
 		Object.assign(profile, { completionPercentage, missingItems, identityVerification, reviewStatus: { identity, documents } });
 
 		// PayPal is the only payout destination: legacy bank columns (the profile's and the user's) are never returned.
-		return withoutLegacyProviderBankFields(profile as any) as typeof profile;
+		return withoutInternalProviderNotes(withoutLegacyProviderBankFields(profile as any)) as typeof profile;
 	}
 
 	/**
@@ -1069,6 +1072,11 @@ export class ProviderProfileService {
 
 		if (!needsReview) {
 			await this.applySensitivePayload(providerId, request.category, metadata.changes || {});
+		} else if (request.category === 'DOCUMENTS' && (metadata.changes || {}).idDocumentUrl) {
+			// a new identity document after the admin refused the previous one starts a new review: the refusal (status + its text) is cleared,
+			// so the page shows "under review", never the old rejection
+			await prisma.providerProfile.updateMany({ where: { userId: providerId, kycStatus: 'REJECTED' as any }, data: { kycStatus: 'PENDING' as any } });
+			await prisma.providerProfile.updateMany({ where: { userId: providerId, notes: { startsWith: PROVIDER_KYC_REJECTION_PREFIX } }, data: { notes: null } });
 		}
 
 		const updated = await prisma.profileModificationRequest.update({

@@ -762,7 +762,9 @@ function createSensitiveFlowMockPrisma(t: TestContext, opts: { throwOnRecompute?
         if (opts.throwOnRecompute) throw new Error('simulated DB failure during completion recompute');
         return { ...providerProfileState, user: { ...userState } };
       },
-      update: providerProfileUpdateSpy
+      update: providerProfileUpdateSpy,
+      // a new ID document after a KYC refusal re-opens the review (no refusal stored in these fixtures)
+      updateMany: async () => ({ count: 0 })
     },
     clientProfile: { upsert: clientUpsertSpy },
     affiliateProfile: { upsert: affiliateUpsertSpy },
@@ -1456,4 +1458,57 @@ test('GET profile follows the DOCUMENTS lifecycle in identityVerification and re
   await providerProfileService.reviewSensitiveChange(b.requestId, true);
   const approved = await read();
   assert.deepEqual([approved.iv.status, approved.rs.documents.status, approved.rs.identity.status, approved.rs.documents.rejectionReason], ['VERIFIED', 'APPROVED', 'APPROVED', null]);
+});
+
+// ── provider KYC refusal (separate queue) is visible on the profile read, safely ──
+test('GET profile: a KYC refusal shows as REJECTED with the admin reason, completion says "مرفوض — يحتاج تعديل", and the raw notes never leave', async (t) => {
+  const { providerProfileService, getProviderProfileState, getUserState } = await loadServiceForSensitiveFlow(t);
+  Object.assign(getUserState(), { idDocumentUrl: 'private:ref' }); // a stored document does not make a refused identity "complete"
+  Object.assign(getProviderProfileState(), { kycStatus: 'REJECTED', notes: 'سبب الرفض: الصورة غير واضحة' });
+  const p: any = await providerProfileService.getProfile('user-1');
+  assert.deepEqual([p.identityVerification.status, p.identityVerification.rejectionReason], ['REJECTED', 'الصورة غير واضحة']);
+  assert.deepEqual([p.reviewStatus.identity.status, p.reviewStatus.identity.rejectionReason], ['REJECTED', 'الصورة غير واضحة']);
+  const item = p.missingItems.find((i: any) => i.key === 'idDocument');
+  assert.deepEqual([item.status, item.hint], ['rejected', 'مرفوض — يحتاج تعديل']);
+  assert.equal('notes' in p, false);
+  assert.doesNotMatch(JSON.stringify(p), /سبب الرفض/);
+});
+
+test('GET profile: a refusal with no admin text gets the generic message (an internal note is never shown)', async (t) => {
+  const { providerProfileService, getProviderProfileState } = await loadServiceForSensitiveFlow(t);
+  Object.assign(getProviderProfileState(), { kycStatus: 'REJECTED', notes: 'ملاحظة داخلية سرية' });
+  const p: any = await providerProfileService.getProfile('user-1');
+  assert.equal(p.identityVerification.rejectionReason, 'تم رفض المستندات. يرجى رفع مستندات أوضح أو التواصل مع الدعم.');
+  assert.doesNotMatch(JSON.stringify(p), /ملاحظة داخلية سرية/);
+});
+
+test('GET profile: PENDING / VERIFIED / UNVERIFIED are not affected (no refusal, no "rejected" item)', async (t) => {
+  const { providerProfileService, getProviderProfileState } = await loadServiceForSensitiveFlow(t);
+  for (const kycStatus of ['PENDING', 'VERIFIED', 'UNVERIFIED']) {
+    Object.assign(getProviderProfileState(), { kycStatus, notes: 'سبب الرفض: قديم' });
+    const p: any = await providerProfileService.getProfile('user-1');
+    assert.notEqual(p.identityVerification.status, 'REJECTED', kycStatus);
+    assert.equal(p.missingItems.some((i: any) => i.status === 'rejected'), false, kycStatus);
+  }
+});
+
+test('a new ID document after a KYC refusal starts a new review: kycStatus PENDING, the refusal text is cleared, the page shows "under review"', async (t) => {
+  const { providerProfileService, getProviderProfileState, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+  const state: any = getProviderProfileState();
+  Object.assign(state, { kycStatus: 'REJECTED', notes: 'سبب الرفض: الصورة غير واضحة' });
+  // the fixture's updateMany is a no-op: apply the same writes the real database would
+  const prismaDb = (await import('../config/db')).prisma as any;
+  prismaDb.providerProfile.updateMany = async (a: any) => {
+    if (a.where.kycStatus === 'REJECTED' && state.kycStatus === 'REJECTED') { Object.assign(state, a.data); return { count: 1 }; }
+    if (a.where.notes?.startsWith && String(state.notes ?? '').startsWith(a.where.notes.startsWith)) { Object.assign(state, a.data); return { count: 1 }; }
+    return { count: 0 };
+  };
+  const before: any = await providerProfileService.getProfile('user-1');
+  assert.equal(before.identityVerification.status, 'REJECTED');
+  const r = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', { idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id.pdf' });
+  await providerProfileService.verifySensitiveChange('user-1', r.requestId, getLastOtpCode()!);
+  assert.equal(state.kycStatus, 'PENDING');
+  assert.equal(state.notes, null);
+  const after: any = await providerProfileService.getProfile('user-1');
+  assert.deepEqual([after.identityVerification.status, after.identityVerification.rejectionReason], ['PENDING_REVIEW', null]);
 });

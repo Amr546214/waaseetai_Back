@@ -39,7 +39,7 @@ export interface ClientCompletionInput {
 
 /** The profile page that can fix the item. 'setup' = the profile-setup wizard (the only place that collects it). */
 export type CompletionTab = 'profile' | 'contact' | 'payout' | 'docs' | 'basics' | 'banking' | 'setup' | 'bank';
-export type CompletionItemStatus = 'missing' | 'pending_review';
+export type CompletionItemStatus = 'missing' | 'pending_review' | 'rejected';
 export interface CompletionMissingItem {
   key: string;
   label: string;
@@ -191,18 +191,20 @@ export function computeProviderCompletion(input: ProviderCompletionInput): numbe
  * status 'pending_review' (the provider did their part; it is NOT missing), and does not count in the percentage until
  * it is approved (User.idDocumentUrl is only written on approval).
  */
-export function computeProviderMissingItems(input: ProviderCompletionInput, options: { pendingDocumentReview?: boolean } = {}): CompletionMissingItem[] {
+export function computeProviderMissingItems(input: ProviderCompletionInput, options: { pendingDocumentReview?: boolean; rejectedIdentity?: boolean } = {}): CompletionMissingItem[] {
   const items: CompletionMissingItem[] = [];
   for (const rule of PROVIDER_RULES) {
-    if (rule.met(input)) continue;
-    const pending = rule.key === 'idDocument' && !!options.pendingDocumentReview;
+    // a refused identity review is never "complete", even with a stored document: it needs a new one (unless a new one is already waiting)
+    const rejected = rule.key === 'idDocument' && !!options.rejectedIdentity && !options.pendingDocumentReview;
+    if (rule.met(input) && !rejected) continue;
+    const pending = rule.key === 'idDocument' && !!options.pendingDocumentReview && !rule.met(input);
     items.push({
       key: rule.key,
       label: rule.label,
       points: rule.points,
       tab: rule.tab,
-      status: pending ? 'pending_review' : 'missing',
-      hint: pending ? 'مستند الهوية قيد المراجعة' : rule.hint,
+      status: rejected ? 'rejected' : pending ? 'pending_review' : 'missing',
+      hint: rejected ? 'مرفوض — يحتاج تعديل' : pending ? 'مستند الهوية قيد المراجعة' : rule.hint,
     });
   }
   return items;
