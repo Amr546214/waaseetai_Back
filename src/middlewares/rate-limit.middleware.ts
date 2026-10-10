@@ -107,6 +107,31 @@ export const otpSendLimiter = (recipient: (req: Request) => string | undefined) 
     ]));
   };
 
+/**
+ * Like `otpSendLimiter`, for the endpoints whose cooldown must start only once a code was REALLY sent (register, resend-otp). It only checks
+ * here; the controller reports what happened with `res.locals.otpEmailAttempted` (the mailer was called) and `res.locals.otpEmailSent`
+ * (the SMTP server accepted it), and the attempt is recorded when the response finishes: the per-IP counter for any attempt that reached the
+ * mailer, the recipient cooldown only for a delivered one. A request that failed earlier (409 duplicate, validation in the service, a crash)
+ * records nothing, so the corrected retry is never answered with "we just sent you a code".
+ */
+export const otpSendGate = (recipient: (req: Request) => string | undefined) =>
+  (req: Request, res: Response, next: NextFunction) => {
+    if (!RATE_LIMIT_ENABLED) return next();
+    const key = recipient(req);
+    if (!key) return next();
+    const result = otpSendThrottle.peek(key, req.ip);
+    if (!result.allowed) {
+      res.setHeader('Retry-After', String(result.retryAfterSeconds));
+      return next(new AppError(otpThrottleMessage(result.reason!, result.retryAfterSeconds), 429, [
+        { code: 'OTP_RATE_LIMITED', reason: result.reason, retryAfterSeconds: result.retryAfterSeconds }
+      ]));
+    }
+    res.once('finish', () => {
+      if (res.locals.otpEmailAttempted === true) otpSendThrottle.record(key, req.ip, res.locals.otpEmailSent === true);
+    });
+    return next();
+  };
+
 /** Lower-cased, trimmed identifier (email / user id) so differently-written forms of the same account share one bucket. */
 export const normalizeOtpIdentifier = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;

@@ -56,6 +56,6 @@ test('mounted after the schema validation on every OTP route; send routes key by
   assert.match(src, /normalizeOtpIdentifier\(req\.body\?\.userId\)/);
   for (const r of ['/register', '/verify-otp', '/resend-otp', '/forgot-password', '/verify-reset-code', '/reset-password']) {
     const i = src.indexOf(`'${r}'`); const block = src.slice(i, src.indexOf(');', i));
-    assert.ok(block.indexOf('validateRequest(') >= 0 && block.indexOf('validateRequest(') < block.search(/otpSendLimiter\(|otpVerifyLimiters\(/), `${r}: validation first`);
+    assert.ok(block.indexOf('validateRequest(') >= 0 && block.indexOf('validateRequest(') < block.search(/otpSendLimiter\(|otpSendGate\(|otpVerifyLimiters\(/), `${r}: validation first`);
   }
 });

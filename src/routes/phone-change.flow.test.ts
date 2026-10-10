@@ -192,7 +192,7 @@ test('validation and throttling: bad number 400, same as current 400, a second r
 	assert.equal((await call(U1, REQ, { phoneNumber: '0511111111' })).status, 200);
 	const again = await call(U1, REQ, { phoneNumber: '0511111111' });
 	assert.equal(again.status, 429);
-	assert.match(again.body.message, /انتظر/);
+	assert.match(again.body.message, /يمكنك إعادة الإرسال بعد/);
 });
 
 test('mail failure: the answer says so (emailSent false), no usable code remains, the phone is unchanged', async () => {

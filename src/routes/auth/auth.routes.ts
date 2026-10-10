@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authController } from '../../controllers/auth.controller';
 import { validateRequest } from '../../middlewares/validation.middleware';
 import { registerSchema, verifyOtpSchema, loginSchema, resendOtpSchema, googleAuthSchema, forgotPasswordSchema, verifyResetCodeSchema, resetPasswordSchema, verifyLoginOtpSchema, resendLoginOtpSchema } from './auth.schema';
-import { authLimiter, otpSendLimiter, otpVerifyLimiters, normalizeOtpIdentifier } from '../../middlewares/rate-limit.middleware';
+import { authLimiter, otpSendLimiter, otpSendGate, otpVerifyLimiters, normalizeOtpIdentifier } from '../../middlewares/rate-limit.middleware';
 
 // Who is receiving the code, for the send limiter (sending is limited per recipient and per IP, apart from authLimiter).
 // The key is normalised (trim + lower-case) so different spellings of one account share one bucket, and the limiters are mounted AFTER the
@@ -29,7 +29,7 @@ const router = Router();
 router.post(
   '/register',
   validateRequest(registerSchema),
-  otpSendLimiter(byEmail),
+  otpSendGate(byEmail),
   authController.register
 );
 
@@ -43,7 +43,7 @@ router.post(
 router.post(
   '/resend-otp',
   validateRequest(resendOtpSchema),
-  otpSendLimiter(byUserId),
+  otpSendGate(byUserId),
   authController.resendOtp
 );
 

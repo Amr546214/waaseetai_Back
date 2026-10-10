@@ -39,9 +39,10 @@ export function formatWaitArabic(seconds: number): string {
 
 export function otpThrottleMessage(reason: OtpThrottleReason, retryAfterSeconds: number): string {
   const wait = formatWaitArabic(retryAfterSeconds);
-  if (reason === 'interval') return `أرسلنا لك رمزًا قبل قليل. انتظر ${wait} قبل طلب رمز جديد، أو استخدم الرمز الذي وصلك.`;
-  if (reason === 'recipient-hour') return `وصلت إلى الحد الأقصى لطلبات الرمز لهذا الحساب. حاول مرة أخرى بعد ${wait}.`;
-  return `تم تجاوز الحد المسموح لطلبات الرمز من هذا الجهاز. حاول مرة أخرى بعد ${wait}.`;
+  // 'interval' is only ever answered after a code REALLY went out for this recipient (a failed attempt records nothing), so it may say so.
+  if (reason === 'interval') return `أرسلنا الرمز بالفعل. يمكنك إعادة الإرسال بعد ${wait}، أو استخدم الرمز الذي وصلك.`;
+  if (reason === 'recipient-hour') return `محاولات كثيرة لإرسال الرمز لهذا الحساب، حاول لاحقًا بعد ${wait}.`;
+  return `محاولات كثيرة من هذا الجهاز، حاول لاحقًا بعد ${wait}.`;
 }
 
 export class OtpSendThrottle {
@@ -61,10 +62,35 @@ export class OtpSendThrottle {
   }
 
   /**
+   * Checks the limits WITHOUT recording anything. Used by the endpoints that must only start a cooldown once a code was really sent
+   * (register, resend): an attempt that failed before any e-mail went out (duplicate phone, server error, SMTP failure) must not make the
+   * next try look like "a code was just sent".
+   */
+  peek(recipientKey: string, ip: string | undefined, now: number = Date.now()): OtpThrottleResult {
+    return this.evaluate(recipientKey, ip, now, false);
+  }
+
+  /**
+   * Records an attempt that really went through to the mailer. The per-IP counter always counts it; the recipient cooldown and the per-hour
+   * recipient count start only when the SMTP server accepted the message (`delivered`).
+   */
+  record(recipientKey: string, ip: string | undefined, delivered: boolean, now: number = Date.now()): void {
+    const key = recipientKey.trim().toLowerCase();
+    const ipKey = (ip || 'unknown').trim();
+    const ipHits = this.prune(this.ips.get(ipKey), now); ipHits.push(now); this.ips.set(ipKey, ipHits);
+    if (delivered) { const hits = this.prune(this.recipients.get(key), now); hits.push(now); this.recipients.set(key, hits); }
+    this.sweep(now);
+  }
+
+  /**
    * Checks the three limits and, only when all pass, records this attempt. A rejected attempt is NOT recorded, so asking
    * again early never extends the wait.
    */
   consume(recipientKey: string, ip: string | undefined, now: number = Date.now()): OtpThrottleResult {
+    return this.evaluate(recipientKey, ip, now, true);
+  }
+
+  private evaluate(recipientKey: string, ip: string | undefined, now: number, recordWhenAllowed: boolean): OtpThrottleResult {
     const key = recipientKey.trim().toLowerCase();
     const ipKey = (ip || 'unknown').trim();
 
@@ -82,6 +108,7 @@ export class OtpSendThrottle {
       return { allowed: false, reason: 'ip-hour', retryAfterSeconds: Math.ceil((HOUR_MS - (now - ipHits[0])) / 1000) };
     }
 
+    if (!recordWhenAllowed) return { allowed: true, retryAfterSeconds: 0 };
     recipientHits.push(now);
     ipHits.push(now);
     this.recipients.set(key, recipientHits);
