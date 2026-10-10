@@ -79,3 +79,10 @@ test('PayPal-email freeze error: the handler forwards the fixed code plus availa
 	assert.ok(r.body.retryAfterSeconds > 3500 && r.body.retryAfterSeconds <= 3600);
 	assert.equal('secret' in r.body, false);
 });
+
+test('OTP request errors: the throttle forwards code + retryAfterSeconds; the failed-mail error forwards its fixed code only', () => {
+	const t = run(Object.assign(new AppError('انتظر قليلًا', 429), { code: 'OTP_THROTTLED', retryAfterSeconds: 42, secret: 'x' }));
+	assert.equal(t.statusCode, 429); assert.equal(t.body.code, 'OTP_THROTTLED'); assert.equal(t.body.retryAfterSeconds, 42); assert.equal('secret' in t.body, false);
+	const m = run(Object.assign(new AppError('تعذر إرسال رمز التحقق، حاول مرة أخرى', 503), { code: 'PAYPAL_OTP_EMAIL_FAILED', smtp: 'details' }));
+	assert.equal(m.statusCode, 503); assert.equal(m.body.code, 'PAYPAL_OTP_EMAIL_FAILED'); assert.equal('smtp' in m.body, false);
+});

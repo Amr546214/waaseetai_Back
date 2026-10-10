@@ -5,7 +5,7 @@ import { AppError } from '../utils/app-error';
 import { logger } from '../config/logger';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { otpSendThrottle, otpThrottleMessage } from '../utils/otp-send-throttle';
-import { PAYPAL_EMAIL_OTP_REQUIRED_MESSAGE, PAYPAL_EMAIL_FROZEN_MESSAGE } from '../utils/paypal-email-messages';
+import { PAYPAL_EMAIL_OTP_REQUIRED_MESSAGE, PAYPAL_EMAIL_FROZEN_MESSAGE, PAYPAL_OTP_EMAIL_FAILED_MESSAGE, PAYPAL_OTP_EMAIL_FAILED_CODE, OTP_THROTTLED_CODE } from '../utils/paypal-email-messages';
 import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
 import { notificationService } from './notification.service';
 
@@ -21,7 +21,8 @@ export const PAYPAL_EMAIL_FREEZE_MS = 24 * 60 * 60 * 1000;
 export const PAYPAL_EMAIL_CHANGED_EVENT = 'PAYPAL_EMAIL_CHANGED';
 
 const purposeWhere = { path: ['purpose'], equals: OtpPurpose.PAYPAL_EMAIL_CHANGE } as const;
-const maskEmail = (email: string) => { const [n = '', d = ''] = email.split('@'); return `${n.slice(0, 2)}***@${d}`; };
+/** a***@domain.com: the ACCOUNT email the code was sent to (never the PayPal address). */
+const maskEmail = (email: string) => { const [n = '', d = ''] = email.split('@'); return `${n.slice(0, 1)}***@${d}`; };
 
 export class PaypalEmailChangeService {
 	/** Step 1: validate the new address and e-mail a code to the account email; the pending address is kept in the OTP row. */
@@ -34,7 +35,7 @@ export class PaypalEmailChangeService {
 		if (profile?.paypalPayoutEmail && profile.paypalPayoutEmail.trim().toLowerCase() === newEmail) throw new AppError(PAYPAL_EMAIL_SAME_MESSAGE, 400);
 
 		const throttle = otpSendThrottle.consume(`paypal-change:${userId}`, ipAddress);
-		if (!throttle.allowed) throw new AppError(otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds), 429);
+		if (!throttle.allowed) throw Object.assign(new AppError(otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds), 429), { code: OTP_THROTTLED_CODE, retryAfterSeconds: throttle.retryAfterSeconds });
 
 		await prisma.otpVerification.deleteMany({ where: { userId, type: OtpType.EMAIL, context: purposeWhere } });
 		const code = crypto.randomInt(100000, 1000000).toString();
@@ -42,15 +43,17 @@ export class PaypalEmailChangeService {
 			data: { userId, code, type: OtpType.EMAIL, expiresAt: new Date(Date.now() + PAYPAL_EMAIL_CHANGE_EXPIRY_MS), context: { purpose: OtpPurpose.PAYPAL_EMAIL_CHANGE, newEmail } }
 		});
 
-		let emailSent = true;
+		// Success is reported ONLY when the mail server accepted the message (sendPaypalEmailChangeOtpEmail throws on a rejected recipient or an
+		// SMTP error and logs the server's answer without the code). Otherwise the pending code is removed and the caller gets a controlled error.
 		try {
 			await notificationService.sendPaypalEmailChangeOtpEmail(user.email, code);
 		} catch {
-			emailSent = false;
-			logger.error('[PaypalEmailChange] The confirmation email was NOT delivered.');
+			logger.error('[PaypalEmailChange] The confirmation email was NOT accepted by the mail service.');
 			await prisma.otpVerification.deleteMany({ where: { userId, type: OtpType.EMAIL, context: purposeWhere } });
+			throw Object.assign(new AppError(PAYPAL_OTP_EMAIL_FAILED_MESSAGE, 503), { code: PAYPAL_OTP_EMAIL_FAILED_CODE });
 		}
-		return { emailSent, emailHint: maskEmail(user.email), expiresInSeconds: PAYPAL_EMAIL_CHANGE_EXPIRY_MS / 1000 };
+		const mode: 'add' | 'change' = profile?.paypalPayoutEmail?.trim() ? 'change' : 'add';
+		return { emailSent: true as const, emailHint: maskEmail(user.email), expiresInSeconds: PAYPAL_EMAIL_CHANGE_EXPIRY_MS / 1000, mode };
 	}
 
 	/** Step 2: the right code writes the pending address, and the same transaction records the change that starts the 24-hour freeze. */
