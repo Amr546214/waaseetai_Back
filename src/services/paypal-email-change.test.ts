@@ -97,6 +97,10 @@ test('confirm: the right code writes the new address once, records the change an
 	assert.equal(r.paypalPayoutEmail, 'new@paypal.example');
 	assert.equal(state.paypal, 'new@paypal.example');
 	assert.equal(state.audit[0].eventType, 'PAYPAL_EMAIL_CHANGED');
+	// the log says it was confirmed by the e-mail code and was NOT human-reviewed; it is COMPLETED at once
+	assert.match(state.audit[0].title, /مؤكَّد برمز التحقق/);
+	assert.match(state.audit[0].actionText, /دون مراجعة يدوية/);
+	assert.equal(state.audit[0].status, 'COMPLETED');
 	const until = await paypal.frozenUntil('u1');
 	assert.ok(until && Math.abs(+until - (Date.now() + 24 * 3600_000)) < 5000);
 	await assert.rejects(() => paypal.confirmChange('u1', state.sent[0].code), (e: any) => e.statusCode === 400, 'the code is single-use');
@@ -119,4 +123,10 @@ test('other OTP purposes (login, forgot-password, phone change, activation) cann
 	await assert.rejects(() => paypal.confirmChange('u1', '123456'), (e: any) => e.statusCode === 400);
 	assert.equal(state.paypal, 'old@paypal.example');
 	assert.equal(state.audit.length, 0);
+});
+
+test('policy: a PayPal email change is OTP-confirmed and immediate — it never creates an admin review / modification request', async () => {
+	const { readFileSync } = await import('node:fs');
+	const src = readFileSync(new URL('./paypal-email-change.service.ts', import.meta.url), 'utf8').replace(/\/\/.*$/gm, '');
+	assert.doesNotMatch(src, /profileModificationRequest|profileChangeRequest|PENDING_HUMAN_REVIEW|IN_REVIEW|adminReview/i);
 });

@@ -77,8 +77,8 @@ export class PaypalEmailChangeService {
 			await tx.providerProfile.upsert({ where: { userId }, create: { userId, paypalPayoutEmail: newEmail }, update: { paypalPayoutEmail: newEmail } });
 			await tx.otpVerification.delete({ where: { id: otp.id } });
 			await tx.accountAuditLog.create({ data: {
-				userId, category: LogCategory.SECURITY_CHANGE, title: 'تغيير بريد PayPal', actionText: 'تم تغيير بريد PayPal بعد التحقق عبر البريد الإلكتروني، وسحب PayPal مجمّد 24 ساعة',
-				summary: 'تم تغيير بريد PayPal بعد التحقق عبر البريد الإلكتروني', eventType: PAYPAL_EMAIL_CHANGED_EVENT, source: 'USER', severity: 'WARNING', status: LogStatus.COMPLETED
+				userId, category: LogCategory.SECURITY_CHANGE, title: 'تغيير بريد PayPal (مؤكَّد برمز التحقق)', actionText: 'تم تغيير بريد PayPal فورًا بعد تأكيده برمز التحقق المرسل إلى بريد الحساب، دون مراجعة يدوية، وسحب PayPal مجمّد 24 ساعة',
+				summary: 'تغيير بريد PayPal مؤكَّد برمز التحقق (بدون مراجعة يدوية)', eventType: PAYPAL_EMAIL_CHANGED_EVENT, source: 'USER', severity: 'WARNING', status: LogStatus.COMPLETED
 			} });
 		});
 		try { await notificationService.createAndEmit({ userId, title: 'تم تغيير بريد PayPal', message: 'تم تغيير بريد PayPal لاستلام المدفوعات، وسحب PayPal مجمّد 24 ساعة. إن لم تكن أنت، تواصل مع الدعم فورًا.', actionUrl: '/' }); } catch { /* the change is already committed */ }

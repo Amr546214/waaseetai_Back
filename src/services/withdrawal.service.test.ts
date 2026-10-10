@@ -1341,7 +1341,8 @@ test('#33 createForProvider(paypal): within 24 hours of a PayPal email change th
 	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 500, providerProfile: { paypalPayoutEmail: 'new@paypal.example' }, paypalEmailChangedAt: new Date(Date.now() - 60 * 60 * 1000) });
 	await assert.rejects(
 		() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' } as any),
-		(e: any) => e.statusCode === 400 && e.message === 'تم تغيير بريد PayPal مؤخرًا، يمكن السحب بعد مرور 24 ساعة'
+		(e: any) => e.statusCode === 400 && e.message === 'تم تغيير بريد PayPal مؤخرًا. يمكنك طلب السحب بعد مرور 24 ساعة.' && e.code === 'PAYPAL_EMAIL_FROZEN'
+			&& typeof e.availableAt === 'string' && Math.abs(e.retryAfterSeconds - 23 * 3600) < 120 && Math.abs(+new Date(e.availableAt) - (Date.now() + 23 * 3600_000)) < 120_000
 	);
 	assert.equal(createSpy.mock.callCount(), 0);
 });
@@ -1359,5 +1360,20 @@ test('#33 the freeze never lets a non-PayPal method through: bank_transfer is re
 		() => withdrawalService.createForProvider('provider-1', { amount: 100, method: 'bank_transfer' } as any),
 		(e: any) => e.statusCode === 400 && e.message === PAYPAL_ONLY_MESSAGE
 	);
+	assert.equal(createSpy.mock.callCount(), 0);
+});
+
+test('#33 insufficient balance (even with a PayPal email and no freeze) is a clear business error and creates no withdrawal row', async (t) => {
+	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 0, providerProfile: { paypalPayoutEmail: 'me@paypal.example' } });
+	await assert.rejects(
+		() => withdrawalService.createForProvider('provider-1', { amount: 1, method: 'paypal' } as any),
+		(e: any) => e.statusCode === 400 && /يتجاوز رصيدك المتاح \(0 \$\)/.test(e.message)
+	);
+	assert.equal(createSpy.mock.callCount(), 0);
+});
+
+test('#33 the freeze is checked BEFORE the balance: a frozen account with enough balance is refused with the freeze message, not a silent no-op', async (t) => {
+	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 10_000, providerProfile: { paypalPayoutEmail: 'new@paypal.example' }, paypalEmailChangedAt: new Date(Date.now() - 5 * 60 * 1000) });
+	await assert.rejects(() => withdrawalService.createForProvider('provider-1', { amount: 1, method: 'paypal' } as any), (e: any) => e.code === 'PAYPAL_EMAIL_FROZEN' && e.retryAfterSeconds > 0);
 	assert.equal(createSpy.mock.callCount(), 0);
 });

@@ -67,3 +67,15 @@ test('end to end: bad JSON body is a 400, an oversize / wrong-type upload is 413
 	assert.equal((await call(app, '/upload', { body: form('text/html', 5) })).status, 415);
 	assert.equal((await call(app, '/upload', { body: form('image/png', 5) })).status, 200);
 });
+
+test('PayPal-email freeze error: the handler forwards the fixed code plus availableAt / retryAfterSeconds (and nothing else extra)', async () => {
+	const { paypalEmailFrozenError } = await import('../utils/paypal-email-messages');
+	const until = new Date(Date.now() + 3600_000);
+	const e = Object.assign(paypalEmailFrozenError(AppError, until), { secret: 'x' });
+	const r = run(e);
+	assert.equal(r.statusCode, 400);
+	assert.equal(r.body.code, 'PAYPAL_EMAIL_FROZEN');
+	assert.equal(r.body.availableAt, until.toISOString());
+	assert.ok(r.body.retryAfterSeconds > 3500 && r.body.retryAfterSeconds <= 3600);
+	assert.equal('secret' in r.body, false);
+});
