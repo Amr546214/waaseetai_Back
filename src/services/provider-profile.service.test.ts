@@ -82,7 +82,8 @@ async function loadProviderProfileServiceWithFixture(t: TestContext) {
         affiliateProfile: { upsert: affiliateUpsertSpy },
         profileModificationRequest: {
           create: async () => ({}),
-          count: async () => 0
+          count: async () => 0,
+          findFirst: async () => null
         },
         accountAuditLog: {
           create: async () => ({})
@@ -778,6 +779,7 @@ function createSensitiveFlowMockPrisma(t: TestContext, opts: { throwOnRecompute?
         if (args.where.status && record.status !== args.where.status) return null;
         return record;
       },
+      count: async (args: any) => Object.values(requestsById).filter((r: any) => r.providerId === args.where.providerId && r.category === args.where.category && r.status === args.where.status).length,
       findUnique: async (args: any) => requestsById[args.where.id] || null,
       update: async (args: any) => {
         requestsById[args.where.id] = { ...requestsById[args.where.id], ...args.data };
@@ -1358,4 +1360,23 @@ test('static: the profile-change code never writes an AI verdict or an AI-source
 test('gamification advice is a rule-based suggestion, not "توصية الذكاء"', () => {
   const src = readFileSync(path.join(import.meta.dirname, 'gamification.service.ts'), 'utf8');
   assert.doesNotMatch(src, /توصية الذكاء/);
+});
+
+// A category a human reviews can have only ONE request waiting: the second tap / device never creates a duplicate.
+test('initiateSensitiveChange (DOCUMENTS): a second request while one waits for the admin is refused (REQUEST_ALREADY_PENDING) and creates nothing; after the decision a new one is allowed', async (t) => {
+  const { providerProfileService, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+  const doc = { idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id.pdf' };
+  const first = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', doc);
+  // still PENDING_OTP (not yet confirmed): another attempt may replace it
+  await providerProfileService.verifySensitiveChange('user-1', first.requestId, getLastOtpCode()!);
+  await assert.rejects(() => providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', doc), /REQUEST_ALREADY_PENDING/);
+  await providerProfileService.reviewSensitiveChange(first.requestId, false, 'الصورة غير واضحة');
+  const again = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', doc);
+  assert.notEqual(again.requestId, first.requestId);
+});
+
+test('initiateSensitiveChange (CONTACT, no human review): the duplicate guard does not apply', async (t) => {
+  const { providerProfileService } = await loadServiceForSensitiveFlow(t);
+  await providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'a@example.com', phoneNumber: '0511111111', alternativePhone: '0522222222' });
+  await providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'b@example.com', phoneNumber: '0511111111', alternativePhone: '0522222222' });
 });

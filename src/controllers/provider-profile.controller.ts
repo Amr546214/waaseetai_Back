@@ -323,7 +323,7 @@ export const initiateSensitiveChange = async (req: Request, res: Response) => {
 		const result = await providerProfileService.initiateSensitiveChange(userId, String(category || ''), changes || {}, auditContext(req));
 		res.status(201).json({ success: true, data: result });
 	} catch (error: any) {
-		const status = error.message === 'EMAIL_ALREADY_USED' ? 409 : 400;
+		const status = error.message === 'EMAIL_ALREADY_USED' || error.message === 'REQUEST_ALREADY_PENDING' ? 409 : 400;
 		res.status(status).json({ success: false, message: error.message });
 	}
 };

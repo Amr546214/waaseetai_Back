@@ -13,6 +13,7 @@ import { aiFeatureUnavailableError } from './ai/ai-feature-unavailable';
 import { AppError } from '../utils/app-error';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
+import { deriveIdentityVerification } from '../utils/identity-verification-status';
 import { notificationService } from './notification.service';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
 import { LEVEL_MATRIX } from './gamification.service';
@@ -137,7 +138,12 @@ export class ProviderProfileService {
 		// number predates the PayPal formula), together with what is still missing. A pending ID-document review is reported
 		// as 'pending_review', not as missing. The stored percentage is brought in sync when it differs (best effort).
 		let pendingDocumentReview = false;
+		let latestDocumentRequest: { id: string; status: string; createdAt: Date; rejectionReason: string | null } | null = null;
 		try {
+			latestDocumentRequest = await prisma.profileModificationRequest.findFirst({
+				where: { providerId: userId, category: 'DOCUMENTS', status: { in: ['PENDING_HUMAN_REVIEW', 'REJECTED'] as any } },
+				orderBy: { createdAt: 'desc' }, select: { id: true, status: true, createdAt: true, rejectionReason: true }
+			});
 			pendingDocumentReview = (await prisma.profileModificationRequest.count({
 				where: { providerId: userId, category: 'DOCUMENTS', status: 'PENDING_HUMAN_REVIEW' as any }
 			})) > 0;
@@ -155,7 +161,11 @@ export class ProviderProfileService {
 				logger.error(`[ProviderProfileService] Failed to sync stored completion (userId=${userId})`, error);
 			}
 		}
-		Object.assign(profile, { completionPercentage, missingItems });
+		// Where the identity document stands, so the page can say it and keep saying it after a refresh: a document waiting for the admin
+		// (PENDING_REVIEW), an approved document that is stored on the account (VERIFIED), a rejected request (REJECTED, with the reason) or nothing sent.
+		const storedIdDocument = !!(profile.user as { idDocumentUrl?: string | null } | undefined)?.idDocumentUrl;
+		const identityVerification = deriveIdentityVerification({ pendingDocumentReview, storedIdDocument, latestDocumentRequest });
+		Object.assign(profile, { completionPercentage, missingItems, identityVerification });
 
 		// PayPal is the only payout destination: legacy bank columns (the profile's and the user's) are never returned.
 		return withoutLegacyProviderBankFields(profile as any) as typeof profile;
@@ -948,6 +958,12 @@ export class ProviderProfileService {
 
 		const user = await prisma.user.findUnique({ where: { id: providerId }, include: { providerProfile: true } });
 		if (!user) throw new Error('User not found');
+
+		// A category that a human reviews can have only ONE request waiting: a second tap / a second device never creates a duplicate.
+		if (config.review) {
+			const waiting = await prisma.profileModificationRequest.count({ where: { providerId, category, status: 'PENDING_HUMAN_REVIEW' as any } });
+			if (waiting > 0) throw new Error('REQUEST_ALREADY_PENDING');
+		}
 
 		if (category === 'CONTACT' && cleanChanges.email && cleanChanges.email !== user.email) {
 			const duplicate = await prisma.user.findUnique({ where: { email: String(cleanChanges.email).trim().toLowerCase() } });
