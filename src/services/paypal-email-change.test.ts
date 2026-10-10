@@ -173,8 +173,11 @@ test('resend too soon: 429 with code OTP_THROTTLED and retryAfterSeconds (a clea
 	assert.equal(state.sent.length, 1, 'no second mail');
 });
 
-test('the confirmation e-mail subject is distinguishable: "رمز تأكيد بريد PayPal"', async () => {
+test('the confirmation e-mail goes through the SHARED OTP sender (same path as login) with its own brand-free subject', async () => {
 	const { readFileSync } = await import('node:fs');
 	const src = readFileSync(new URL('./notification.service.ts', import.meta.url), 'utf8');
-	assert.match(src, /PAYPAL_CHANGE_EMAIL_SUBJECT \?\? 'رمز تأكيد بريد PayPal - Waseet AI'/);
+	assert.match(src, /sendPaypalEmailChangeOtpEmail\(email: string, code: string\)[^{]*\{\s*return this\.sendOtpMail\('paypal-email-change'/);
+	assert.match(src, /sendLoginOtpEmail\(email: string, code: string\)[^{]*\{\s*return this\.sendOtpMail\('login'/);
+	assert.match(src, /PAYPAL_OTP_DEFAULT_SUBJECT = 'رمز التحقق لتأكيد بريد استلام المدفوعات - Waseet AI'/);
+	assert.ok(!/PAYPAL_OTP_DEFAULT_SUBJECT = '[^']*PayPal/.test(src), 'no third-party brand in the default subject');
 });

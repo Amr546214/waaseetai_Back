@@ -19,6 +19,9 @@ export const maskEmail = (email: string): string => {
 	return `${name.slice(0, 1)}***@${domain}`;
 };
 
+// No brand name in the subject: a third-party brand in the subject of a message that does not come from that brand is a classic phishing signal for mail providers.
+export const PAYPAL_OTP_DEFAULT_SUBJECT = 'رمز التحقق لتأكيد بريد استلام المدفوعات - Waseet AI';
+
 const SMS_PROVIDER_IMPLEMENTED = false; // sendSmsViaTwilio() is a stub
 
 const asAddresses = (list: unknown): string[] => (Array.isArray(list) ? list.map(a => String((a as { address?: string })?.address ?? a)) : []);
@@ -129,25 +132,35 @@ export class NotificationService {
 	}
 
 	/**
-	 * Send an OTP verification code via email.
+	 * The ONE place every OTP e-mail (activation, login, phone change, PayPal email) is built and sent: the same from address, sender name, HTML template, plain-text
+	 * alternative and headers, so a code that arrives for one purpose is no different, for the mail provider, from a code for another. Only the subject differs.
+	 * Throws on an SMTP error or a rejected recipient; logs the server's answer (message id, accepted, rejected, response) and never the code.
 	 */
-	public async sendEmailOtp(email: string, code: string): Promise<EmailDeliveryResult> {
+	private async sendOtpMail(kind: string, email: string, code: string, subject: string): Promise<EmailDeliveryResult> {
 		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
-		const emailSubject = process.env.OTP_EMAIL_SUBJECT ?? 'رمز التحقق لتفعيل حسابك - Waseet AI';
 		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
-
 		try {
 			const info = await mailTransporter.sendMail({
 				from: `"${senderName}" <${from}>`,
 				to: email,
-				subject: emailSubject,
+				subject,
 				html: getOtpEmailTemplate(code),
+				// An HTML-only message is a spam signal: every OTP mail also carries a plain-text part.
+				text: `رمز التحقق الخاص بك في وسيط AI هو: ${code}\nالرمز صالح لمدة 10 دقائق. لا تشاركه مع أي أحد. إذا لم تطلبه فتجاهل هذه الرسالة.`,
+				headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },
 			});
-			return logEmailDelivery('otp', email, info);
+			return logEmailDelivery(kind, email, info);
 		} catch (error) {
-			logEmailFailure('otp', email, error);
+			logEmailFailure(kind, email, error);
 			throw error;
 		}
+	}
+
+	/**
+	 * Send an OTP verification code via email.
+	 */
+	public async sendEmailOtp(email: string, code: string): Promise<EmailDeliveryResult> {
+		return this.sendOtpMail('otp', email, code, process.env.OTP_EMAIL_SUBJECT ?? 'رمز التحقق لتفعيل حسابك - Waseet AI');
 	}
 
 	/**
@@ -176,47 +189,17 @@ export class NotificationService {
 
 	/** Code that confirms a phone-number change, sent to the ACCOUNT EMAIL (the phone itself is not verified by SMS: it is disabled). */
 	public async sendPhoneChangeOtpEmail(email: string, code: string): Promise<EmailDeliveryResult> {
-		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
-		const emailSubject = process.env.PHONE_CHANGE_EMAIL_SUBJECT ?? 'رمز تأكيد تغيير رقم الجوال - Waseet AI';
-		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
-
-		try {
-			const info = await mailTransporter.sendMail({ from: `"${senderName}" <${from}>`, to: email, subject: emailSubject, html: getOtpEmailTemplate(code) });
-			return logEmailDelivery('phone-change', email, info);
-		} catch (error) {
-			logEmailFailure('phone-change', email, error);
-			throw error;
-		}
+		return this.sendOtpMail('phone-change', email, code, process.env.PHONE_CHANGE_EMAIL_SUBJECT ?? 'رمز تأكيد تغيير رقم الجوال - Waseet AI');
 	}
 
 	/** Code that completes a password login, sent to the ACCOUNT EMAIL (purpose LOGIN_EMAIL; SMS is never used for login). */
 	public async sendLoginOtpEmail(email: string, code: string): Promise<EmailDeliveryResult> {
-		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
-		const emailSubject = process.env.LOGIN_EMAIL_SUBJECT ?? 'رمز تسجيل الدخول - Waseet AI';
-		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
-
-		try {
-			const info = await mailTransporter.sendMail({ from: `"${senderName}" <${from}>`, to: email, subject: emailSubject, html: getOtpEmailTemplate(code) });
-			return logEmailDelivery('login', email, info);
-		} catch (error) {
-			logEmailFailure('login', email, error);
-			throw error;
-		}
+		return this.sendOtpMail('login', email, code, process.env.LOGIN_EMAIL_SUBJECT ?? 'رمز تسجيل الدخول - Waseet AI');
 	}
 
 	/** Code that confirms a change of the PayPal payout email, sent to the ACCOUNT EMAIL (never to the new, unverified address). */
 	public async sendPaypalEmailChangeOtpEmail(email: string, code: string): Promise<EmailDeliveryResult> {
-		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
-		const emailSubject = process.env.PAYPAL_CHANGE_EMAIL_SUBJECT ?? 'رمز تأكيد بريد PayPal - Waseet AI';
-		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
-
-		try {
-			const info = await mailTransporter.sendMail({ from: `"${senderName}" <${from}>`, to: email, subject: emailSubject, html: getOtpEmailTemplate(code) });
-			return logEmailDelivery('paypal-email-change', email, info);
-		} catch (error) {
-			logEmailFailure('paypal-email-change', email, error);
-			throw error;
-		}
+		return this.sendOtpMail('paypal-email-change', email, code, process.env.PAYPAL_CHANGE_EMAIL_SUBJECT || PAYPAL_OTP_DEFAULT_SUBJECT);
 	}
 
 	/** True only when a real SMS sender exists. Today the only provider code is a Twilio stub, so this is false. */
