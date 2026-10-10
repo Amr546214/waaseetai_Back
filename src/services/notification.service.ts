@@ -207,7 +207,7 @@ export class NotificationService {
 	/** Code that confirms a change of the PayPal payout email, sent to the ACCOUNT EMAIL (never to the new, unverified address). */
 	public async sendPaypalEmailChangeOtpEmail(email: string, code: string): Promise<EmailDeliveryResult> {
 		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
-		const emailSubject = process.env.PAYPAL_CHANGE_EMAIL_SUBJECT ?? 'رمز تأكيد تغيير بريد PayPal - Waseet AI';
+		const emailSubject = process.env.PAYPAL_CHANGE_EMAIL_SUBJECT ?? 'رمز تأكيد بريد PayPal - Waseet AI';
 		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
 
 		try {

@@ -7,7 +7,7 @@ process.env.JWT_SECRET = 'test-secret';
 // Finance #33: the provider's PayPal payout email changes only with an email OTP (purpose PAYPAL_EMAIL_CHANGE), never through PUT /update, and a
 // confirmed change records the event that freezes PayPal withdrawals for 24 hours. Database, mail and notifications are replaced.
 type Otp = { id: string; userId: string; code: string; type: string; expiresAt: Date; attempts: number; context: any; createdAt: number };
-const state = { paypal: 'old@paypal.example' as string | null, otps: [] as Otp[], audit: [] as any[], upserts: [] as any[], sent: [] as { to: string; code: string }[], seq: 0 };
+const state = { paypal: 'old@paypal.example' as string | null, otps: [] as Otp[], audit: [] as any[], upserts: [] as any[], sent: [] as { to: string; code: string }[], seq: 0, failMail: false };
 const hasPurpose = (o: Otp, where: any) => !where.context || o.context?.purpose === where.context.equals;
 const db: any = {
 	user: { findUnique: async () => ({ id: 'u1', email: 'owner@example.com', status: 'ACTIVE', phoneNumber: '0500000000' }) },
@@ -37,7 +37,7 @@ function load() {
 		mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
 		mock.module('../utils/socket-registry', { namedExports: { disconnectUserSockets: async () => 0 } });
 		mock.module('./notification.service', { namedExports: { notificationService: {
-			sendPaypalEmailChangeOtpEmail: async (to: string, code: string) => { state.sent.push({ to, code }); },
+			sendPaypalEmailChangeOtpEmail: async (to: string, code: string) => { if (state.failMail) throw new Error('SMTP rejected the recipient'); state.sent.push({ to, code }); },
 			createAndEmit: async () => ({}),
 		} } });
 		const { paypalEmailChangeService } = await import('./paypal-email-change.service.ts');
@@ -50,7 +50,7 @@ const reset = async () => {
 	const { paypal } = await load();
 	const { otpSendThrottle } = await import('../utils/otp-send-throttle');
 	otpSendThrottle.reset();
-	Object.assign(state, { paypal: 'old@paypal.example', otps: [], audit: [], upserts: [], sent: [] });
+	Object.assign(state, { paypal: 'old@paypal.example', otps: [], audit: [], upserts: [], sent: [], failMail: false });
 	return paypal;
 };
 
@@ -129,4 +129,52 @@ test('policy: a PayPal email change is OTP-confirmed and immediate — it never 
 	const { readFileSync } = await import('node:fs');
 	const src = readFileSync(new URL('./paypal-email-change.service.ts', import.meta.url), 'utf8').replace(/\/\/.*$/gm, '');
 	assert.doesNotMatch(src, /profileModificationRequest|profileChangeRequest|PENDING_HUMAN_REVIEW|IN_REVIEW|adminReview/i);
+});
+
+test('request, ADD mode (no PayPal email yet): the code goes to the account email, mode is "add", the hint is the masked ACCOUNT email', async () => {
+	const paypal = await reset();
+	state.paypal = null;
+	const r = await paypal.requestChange('u1', 'first@paypal.example', undefined);
+	assert.equal(r.emailSent, true); assert.equal(r.mode, 'add');
+	assert.equal(r.emailHint, 'o***@example.com');
+	assert.equal(r.expiresInSeconds, 600);
+	assert.deepEqual(state.sent.map(x => x.to), ['owner@example.com']);
+	assert.equal(state.otps[0].context.purpose, 'PAYPAL_EMAIL_CHANGE');
+	assert.ok(+state.otps[0].expiresAt > Date.now() + 9 * 60_000 && +state.otps[0].expiresAt <= Date.now() + 10 * 60_000 + 1000, 'expires in 10 minutes');
+	assert.equal(state.paypal, null, 'nothing is saved before the code is confirmed');
+	// confirming an ADD applies it and starts the freeze too
+	await paypal.confirmChange('u1', state.sent[0].code);
+	assert.equal(state.paypal, 'first@paypal.example');
+	assert.ok(await paypal.frozenUntil('u1'));
+});
+
+test('request, CHANGE mode (a PayPal email exists): mode is "change" and the code still goes to the account email', async () => {
+	const paypal = await reset();
+	const r = await paypal.requestChange('u1', 'second@paypal.example', undefined);
+	assert.equal(r.mode, 'change');
+	assert.deepEqual(state.sent.map(x => x.to), ['owner@example.com']);
+});
+
+test('mail failure: a controlled 503 (code PAYPAL_OTP_EMAIL_FAILED), no success shape, and no pending code is left behind', async () => {
+	const paypal = await reset();
+	state.failMail = true;
+	await assert.rejects(() => paypal.requestChange('u1', 'new@paypal.example', undefined), (e: any) =>
+		e.statusCode === 503 && e.code === 'PAYPAL_OTP_EMAIL_FAILED' && e.message === 'تعذر إرسال رمز التحقق، حاول مرة أخرى');
+	assert.equal(state.otps.length, 0);
+	assert.equal(state.sent.length, 0);
+	assert.equal(state.paypal, 'old@paypal.example');
+});
+
+test('resend too soon: 429 with code OTP_THROTTLED and retryAfterSeconds (a clear wait, not a silent failure)', async () => {
+	const paypal = await reset();
+	await paypal.requestChange('u1', 'new@paypal.example', undefined);
+	await assert.rejects(() => paypal.requestChange('u1', 'new@paypal.example', undefined), (e: any) =>
+		e.statusCode === 429 && e.code === 'OTP_THROTTLED' && e.retryAfterSeconds > 0 && /انتظر|بعد/.test(e.message));
+	assert.equal(state.sent.length, 1, 'no second mail');
+});
+
+test('the confirmation e-mail subject is distinguishable: "رمز تأكيد بريد PayPal"', async () => {
+	const { readFileSync } = await import('node:fs');
+	const src = readFileSync(new URL('./notification.service.ts', import.meta.url), 'utf8');
+	assert.match(src, /PAYPAL_CHANGE_EMAIL_SUBJECT \?\? 'رمز تأكيد بريد PayPal - Waseet AI'/);
 });

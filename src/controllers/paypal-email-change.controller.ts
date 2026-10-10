@@ -17,11 +17,8 @@ export const paypalEmailChangeController = {
 			const parsed = requestSchema.safeParse(req.body ?? {});
 			if (!parsed.success) return void bad(res, parsed.error);
 			const data = await paypalEmailChangeService.requestChange(req.user!.userId, parsed.data.paypalEmail, req.ip);
-			res.status(200).json({
-				success: true,
-				message: data.emailSent ? 'أرسلنا رمز التحقق إلى بريد حسابك الإلكتروني' : 'تعذر إرسال رمز التحقق إلى بريدك الآن، حاول مرة أخرى بعد قليل',
-				data
-			});
+			// requestChange throws a controlled error when the mail service did not accept the message, so reaching here means emailSent is true.
+			res.status(200).json({ success: true, message: 'أرسلنا رمز التحقق إلى بريد حسابك الإلكتروني', data });
 		} catch (error) { next(error); }
 	},
 	// POST /api/profiles/paypal-email/change/confirm { code }

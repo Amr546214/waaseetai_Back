@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/app-error';
 import { logger } from '../config/logger';
 import { AI_FEATURE_UNAVAILABLE_CODE } from '../services/ai/ai-feature-unavailable';
-import { PAYPAL_EMAIL_FROZEN_CODE } from '../utils/paypal-email-messages';
+import { PAYPAL_EMAIL_FROZEN_CODE, PAYPAL_OTP_EMAIL_FAILED_CODE, OTP_THROTTLED_CODE } from '../utils/paypal-email-messages';
 
 // Known library errors that are the caller's mistake (4xx), not a server fault: they must never surface as a 500 "Internal Server Error".
 // Messages are fixed Arabic text — nothing from the library error (field names, constraint targets, SQL) is echoed.
@@ -56,6 +56,12 @@ export const globalErrorHandler = (
       const e = err as unknown as { availableAt?: string; retryAfterSeconds?: number };
       extra = { availableAt: e.availableAt, retryAfterSeconds: e.retryAfterSeconds };
     }
+    // A throttled OTP request says how long to wait; a failed OTP e-mail has its own fixed code.
+    if ((err as { code?: unknown }).code === OTP_THROTTLED_CODE) {
+      code = OTP_THROTTLED_CODE;
+      extra = { retryAfterSeconds: (err as unknown as { retryAfterSeconds?: number }).retryAfterSeconds };
+    }
+    if ((err as { code?: unknown }).code === PAYPAL_OTP_EMAIL_FAILED_CODE) code = PAYPAL_OTP_EMAIL_FAILED_CODE;
   } else {
     // Unhandled operational/programming errors
     logger.error('Unhandled Exception:', err);
