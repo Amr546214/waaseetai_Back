@@ -3,6 +3,23 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { RejectOnboardingInput } from '../dtos/onboarding.dto';
 
+type ListedUser = { id: string; firstName?: string | null; lastName?: string | null; email?: string | null; phoneNumber?: string | null; accountType?: string | null } | null | undefined;
+
+/** The admin lists show who owns a request: the flat fields the admin pages read (userName / userEmail / userPhone / accountType), next to the nested user. */
+export function flatOwnerFields(user: ListedUser) {
+  return {
+    userName: user ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || null : null,
+    userEmail: user?.email ?? null,
+    userPhone: user?.phoneNumber ?? null,
+    accountType: user?.accountType ?? null,
+  };
+}
+
+/** How many KYC documents the provider has on file (ID front/back, selfie, supporting document, certificates). */
+export function providerDocumentsCount(p: { frontIdUrl?: string | null; backIdUrl?: string | null; selfieUrl?: string | null; supportingDocsUrl?: string | null; certUrls?: string[] | null }) {
+  return [p.frontIdUrl, p.backIdUrl, p.selfieUrl, p.supportingDocsUrl].filter(Boolean).length + (Array.isArray(p.certUrls) ? p.certUrls.filter(Boolean).length : 0);
+}
+
 export class OnboardingService {
   async saveUpload(userId: string, input: { documentType: string; documentUrl: string; documentName: string }) {
     const record = await prisma.clientOnboarding.upsert({ where: { userId }, create: { userId, documentType: input.documentType, documentUrl: input.documentUrl, documentName: input.documentName, status: OnboardingStatus.PENDING }, update: { documentType: input.documentType, documentUrl: input.documentUrl, documentName: input.documentName, status: OnboardingStatus.PENDING, rejectionReason: null, reviewedAt: null } });
@@ -68,7 +85,7 @@ export class OnboardingService {
         where: { userId: item.userId },
         select: { kycStatus: true },
       });
-      return { ...item, clientProfileKycStatus: clientProfile?.kycStatus || null };
+      return { ...item, ...flatOwnerFields(item.user), clientProfileKycStatus: clientProfile?.kycStatus || null };
     }));
     return {
       items: enrichedItems,
@@ -129,7 +146,7 @@ export class OnboardingService {
       prisma.providerProfile.count({ where }),
     ]);
     return {
-      items,
+      items: items.map((item) => ({ ...item, userId: item.userId, ...flatOwnerFields(item.user), documentsCount: providerDocumentsCount(item as any) })),
       pagination: { page: safePage, limit: safeLimit, total, totalPages: Math.ceil(total / safeLimit) },
     };
   }
