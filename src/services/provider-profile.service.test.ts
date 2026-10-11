@@ -76,6 +76,9 @@ async function loadProviderProfileServiceWithFixture(t: TestContext) {
         user: {
           update: async (args: any) => userUpdateSpy(args)
         },
+        // updateBasicInfo resolves the main specialty against the marketplace taxonomy (a name that is not a category stays as stored)
+        category: { findFirst: async ({ where }: any) => (where.OR.some((o: any) => o.nameAr === 'دعم فني') ? { slug: 'customer-support' } : null) },
+        specialty: { findMany: async () => [] },
         // Never touched by updateBasicInfo — only present here so the
         // role-isolation regression test below can assert callCount() === 0.
         clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy },
@@ -495,7 +498,7 @@ function createSkillsPortfolioMockPrisma(t: TestContext) {
     lastName: 'Expert',
     avatarUrl: null,
     headline: 'Senior Consultant',
-    mainSpecialty: 'دعم فني',
+    mainSpecialty: 'programming-development', // a catalog category slug: skills come from its catalog
     bio: 'x'.repeat(60),
     country: 'SA',
     city: 'Riyadh',

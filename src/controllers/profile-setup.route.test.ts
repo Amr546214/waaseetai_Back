@@ -24,7 +24,7 @@ function setup(t: TestContext, over: Partial<S> = {}) {
 		updateMany: async (a: any) => { cur.pUpdateMany.push(a); return { count: 1 }; }
 	});
 	const tx: any = { user: { update: async ({ data }: any) => ({ id: 'u1', ...data }), findUnique: async () => ({ id: 'u1' }) }, clientProfile: profile('client'), providerProfile: profile('provider') };
-	t.mock.module('../config/db', { namedExports: { prisma: { ...tx, skill: { findMany: async ({ where }: any) => where.name.in.filter((n: string) => cur.skills.includes(n)).map((name: string) => ({ id: `id-${name}`, name })) }, $transaction: async (fn: any) => fn(tx) } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { ...tx, skill: { upsert: async ({ where }: any) => ({ id: `id-${where.name}` }) }, category: { findFirst: async () => null }, $transaction: async (fn: any) => fn(tx) } } });
 	t.mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
 	t.mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (v: any) => v ?? null, storeKycFileIfNeeded: async (v: any) => (v ? 'private:image:png:x' : null) } });
 	t.mock.module('../services/onboarding.service', { namedExports: { onboardingService: { submitSetupDocuments: async (_u: string, docs: any, opts: any) => { cur.onb.push({ docs, opts }); return { id: 'o1' }; } } } });
@@ -109,13 +109,17 @@ test('an unsupported KYC file (svg / wrong type) is refused before anything is s
 	assert.equal(s.upserts.length, 0);
 });
 
-test('skills go through the catalogue like the provider wizard: known names are connected, unknown names are a 400', async (t) => {
-	let s = setup(t);
-	await post('PROVIDER', { skills: ['تصميم'] });
-	assert.deepEqual(s.upserts[0][1].update.skills, { connect: [{ id: 'id-تصميم' }] });
-	s = setup(t);
-	const { err } = await post('PROVIDER', { skills: ['مهارة غير موجودة'] });
-	assert.equal(err.statusCode, 400);
+test('skills come only from the catalog of the provider main specialty: catalog names are connected, anything else is a 400 and nothing is written', async (t) => {
+	let s = setup(t, { stored: { mainSpecialty: 'design-creative', skills: [], kycStatus: 'UNVERIFIED', idNumber: null, dob: null } });
+	await post('PROVIDER', { skills: ['تصميم الجرافيك'] });
+	assert.deepEqual(s.upserts[0][1].update.skills, { connect: [{ id: 'id-تصميم الجرافيك' }] });
+	s = setup(t, { stored: { mainSpecialty: 'design-creative', skills: [], kycStatus: 'UNVERIFIED', idNumber: null, dob: null } });
+	let r = await post('PROVIDER', { skills: ['مهارة غير موجودة'] });
+	assert.equal(r.err.statusCode, 400);
+	assert.equal(s.upserts.length, 0);
+	s = setup(t, { stored: { mainSpecialty: 'design-creative', skills: [], kycStatus: 'UNVERIFIED', idNumber: null, dob: null } });
+	r = await post('PROVIDER', { skills: ['Python'] }); // a real skill, but of another field (programming), so it is refused for a designer
+	assert.equal(r.err.statusCode, 400);
 	assert.equal(s.upserts.length, 0);
 });
 

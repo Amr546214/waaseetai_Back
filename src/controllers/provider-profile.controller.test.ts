@@ -59,7 +59,8 @@ function createSetupDataMockPrisma(t: TestContext) {
   const prismaMock = {
     providerProfile: {
       upsert: t.mock.fn((args: any) => {
-        providerProfileState = { ...providerProfileState, ...args.update };
+        // Prisma semantics: an undefined field is left alone (it never erases the stored value)
+        providerProfileState = { ...providerProfileState, ...Object.fromEntries(Object.entries(args.update).filter(([, v]) => v !== undefined)) };
         return { ...providerProfileState };
       }),
       findUnique: async () => ({ ...providerProfileState }),
@@ -212,4 +213,72 @@ test('getPublicProfile: an unrelated non-AppError failure still responds with 50
   await controller.getPublicProfile(req, res);
 
   assert.equal(res.statusCode, 500);
+});
+
+// ── the profile photo chosen in the setup wizard is stored (one canonical column), never only shown ──
+const setupBody = (extra: any = {}) => ({
+  details: { country: 'SA', city: 'Riyadh', occupation: 'مصمم', bio: 'x'.repeat(60) }, identity: {}, bank: {}, documents: {}, agreements: {}, specialties: { mainSpec: 'تصميم' }, ...extra,
+});
+
+test('provider saveSetupData: the uploaded photo (our own storage URL) is written to ProviderProfile.avatarUrl and the completion counts it', async (t) => {
+  process.env.CLOUDINARY_CLOUD_NAME = 'demo';
+  const { controller, getProviderProfileState } = await loadControllerWithFixture(t);
+  const url = 'https://res.cloudinary.com/demo/image/upload/v1/waseetai/providers/user-1/documents/me.jpg';
+  const res = createMockRes();
+  await controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ avatarUrl: url }) } as any, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(getProviderProfileState().avatarUrl, url);
+});
+
+test('provider saveSetupData: a foreign / invalid photo URL is a 400 and NOTHING is saved (no "saved" for a photo that was not stored)', async (t) => {
+  process.env.CLOUDINARY_CLOUD_NAME = 'demo';
+  const { controller, getProviderProfileState } = await loadControllerWithFixture(t);
+  const res = createMockRes();
+  await controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ avatarUrl: 'https://evil.example.com/a.jpg' }) } as any, res);
+  assert.equal(res.statusCode, 400);
+  assert.equal(getProviderProfileState().avatarUrl ?? null, null);
+});
+
+test('provider saveSetupData: a re-save without a photo keeps the stored one (never erases it)', async (t) => {
+  process.env.CLOUDINARY_CLOUD_NAME = 'demo';
+  const { controller, getProviderProfileState } = await loadControllerWithFixture(t);
+  const url = 'https://res.cloudinary.com/demo/image/upload/v1/waseetai/users/user-1/avatar/avatar.jpg';
+  await controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ avatarUrl: url }) } as any, createMockRes());
+  const res = createMockRes();
+  await controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody() } as any, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(getProviderProfileState().avatarUrl, url);
+});
+
+test('provider saveSetupData: the date of birth is stored (ProviderProfile.dob) and a re-save without it keeps it', async (t) => {
+  const { controller, getProviderProfileState } = await loadControllerWithFixture(t);
+  const res = createMockRes();
+  await controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ details: { country: 'SA', city: 'Riyadh', occupation: 'مصمم', bio: 'x'.repeat(60), dob: '1990-05-17' } }) } as any, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(new Date(getProviderProfileState().dob).toISOString().slice(0, 10), '1990-05-17');
+  const res2 = createMockRes();
+  await controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody() } as any, res2);
+  assert.equal(new Date(getProviderProfileState().dob).toISOString().slice(0, 10), '1990-05-17');
+});
+
+test('provider saveSetupData: an invalid or future date of birth is a 400 and nothing is saved', async (t) => {
+  const { controller, getProviderProfileState } = await loadControllerWithFixture(t);
+  for (const dob of ['not-a-date', '2999-01-01', '1800-01-01']) {
+    const res = createMockRes();
+    await controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ details: { country: 'SA', city: 'Riyadh', occupation: 'x', bio: 'y'.repeat(60), dob } }) } as any, res);
+    assert.equal(res.statusCode, 400, dob);
+  }
+  assert.equal(getProviderProfileState().dob ?? null, null);
+});
+
+test('round trip: the photo saved in the setup is what the completion counts, so the "الصورة الشخصية" item is no longer missing (and is missing without it)', async (t) => {
+  process.env.CLOUDINARY_CLOUD_NAME = 'demo';
+  const url = 'https://res.cloudinary.com/demo/image/upload/v1/waseetai/users/user-1/avatar/avatar.jpg';
+  const { computeProviderMissingItems } = await import('../utils/completion-calculators');
+  const withPhoto = await loadControllerWithFixture(t);
+  await withPhoto.controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ avatarUrl: url }) } as any, createMockRes());
+  const stored = withPhoto.getProviderProfileState();
+  assert.equal(stored.avatarUrl, url);
+  assert.equal(computeProviderMissingItems({ providerProfile: { ...stored, skills: [], portfolioItems: [] }, user: {} } as any).some((i: any) => i.key === 'avatar'), false);
+  assert.equal(computeProviderMissingItems({ providerProfile: { ...stored, avatarUrl: null, skills: [], portfolioItems: [] }, user: {} } as any).some((i: any) => i.key === 'avatar'), true);
 });

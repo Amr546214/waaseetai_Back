@@ -16,7 +16,8 @@ async function load(t: TestContext, accountType = AccountType.PROVIDER_INDIVIDUA
       update: async () => ({}),
       updateMany: async () => ({ count: 0 })
     },
-    skill: { findMany: async () => opts.skills ?? [{ id: 'real-css-id', name: 'CSS' }] },
+    skill: { upsert: async ({ where }: any) => ({ id: `real-${String(where.name).toLowerCase()}-id` }) },
+    category: { findFirst: async () => null },
     $transaction: async (ops: any[]) => Promise.all(ops)
   } } });
   t.mock.module('../services/session.service', { namedExports: { sessionService: { validateOrRegister: async () => ({ id: 'session' }) } } });
@@ -93,7 +94,7 @@ test('route wiring: both suggestions are behind authenticate, active status, pro
 
 test('ordinary setup save connects only real taxonomy IDs and preserves existing skills (no set/delete/upsert of taxonomy)', async t => {
   const x = await load(t);
-  await x.controller.saveSetupData({ user: { id: 'owner' }, body: { skills: ['CSS'] } } as any, x.res);
+  await x.controller.saveSetupData({ user: { id: 'owner' }, body: { specialties: { mainSpec: 'programming-development' }, skills: ['CSS'] } } as any, x.res);
   assert.equal(x.res.statusCode, 200);
   assert.deepEqual(x.saves[0].update.skills, { connect: [{ id: 'real-css-id' }] });
   assert.deepEqual(x.saves[0].create.skills, { connect: [{ id: 'real-css-id' }] });

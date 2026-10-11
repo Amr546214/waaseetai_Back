@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { ProfileSetupDto } from '../dtos/profile-setup.dto';
 import { storeDataUriIfNeeded, storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { AppError } from '../utils/app-error';
+import { resolveSkillIdsFromCatalog } from './skills-catalog.service';
 import { assertKycFileValues } from '../utils/kyc-value-guard';
 import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
 import { onboardingService } from './onboarding.service';
@@ -46,13 +47,11 @@ export class ProfileSetupService {
       storeKycFileIfNeeded(dto.backId, `waseetai/${folder}/${userId}/identity`, 'back-id'),
       storeKycFileIfNeeded(dto.supportingDocs, `waseetai/${folder}/${userId}/documents`, 'supporting-document')
     ]);
-    // Skills are resolved against the skills catalogue exactly like the provider wizard (never written as raw strings, never upserted).
+    // Skills come from the catalog of the provider's main specialty, exactly like the provider wizard (no free text).
     let skillConnections: { id: string }[] | undefined;
     if (activeRole === UserRole.PROVIDER && dto.skills) {
-      const names = [...new Set(dto.skills)];
-      const rows = await prisma.skill.findMany({ where: { name: { in: names } }, select: { id: true, name: true } });
-      if (rows.length !== names.length) throw new AppError('اختر مهارات موجودة في دليل المهارات؛ لم يتم حفظ البيانات.', 400);
-      skillConnections = rows.map(({ id }) => ({ id }));
+      const held = await prisma.providerProfile.findUnique({ where: { userId }, select: { mainSpecialty: true, skills: { select: { name: true } } } });
+      skillConnections = await resolveSkillIdsFromCatalog(prisma, dto.skills, held?.mainSpecialty, (held?.skills ?? []).map(s => s.name));
     }
     const avatarUrl = dto.avatarUrl === undefined ? undefined : await storeDataUriIfNeeded(dto.avatarUrl, `waseetai/users/${userId}/avatar`, 'avatar');
     // Role-profile columns, identical to the main wizards: empty = keep what is stored (a stored private document is never wiped by a re-save).
