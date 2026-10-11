@@ -80,6 +80,7 @@ router.post('/sensitive-change', requireProvider, providerProfileController.init
 router.post('/sensitive-change/verify', requireProvider, providerProfileController.verifySensitiveChange);
 router.put('/basic-info', requireProvider, providerProfileController.updateBasicInfo);
 router.put('/contact', requireProvider, providerProfileController.updateContactInfo);
+router.put('/whatsapp', requireProvider, providerProfileController.updateWhatsapp);
 router.put('/banking', requireProvider, providerProfileController.updateBankingInfo);
 router.put('/docs', requireProvider, providerProfileController.updateDocsInfo);
 router.get('/skills/catalog', requireProvider, providerProfileController.getSkillsCatalog);

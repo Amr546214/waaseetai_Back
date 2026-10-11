@@ -2,6 +2,7 @@ import { alreadyPendingDetails } from '../utils/review-status';
 import { prisma } from '../config/db';
 import { ChangeRequestStatus, SensitiveFieldType, Prisma } from '@prisma/client';
 import { AppError } from '../utils/app-error';
+import { CONTACT_IMMUTABLE_MESSAGE } from '../utils/contact-policy';
 
 const PENDING_STATUSES: ChangeRequestStatus[] = [ChangeRequestStatus.PENDING_AI_REVIEW, ChangeRequestStatus.PENDING_HUMAN_APPROVAL];
 
@@ -153,11 +154,13 @@ export class ProfileRequestsService {
 			const user = await tx.user.findUnique({ where: { id: userId } });
 			if (!user) throw new AppError('حساب المستخدم غير موجود', 404);
 
+			// The account phone is immutable from the interface (no code, no request): a different phone is refused, the same one is ignored.
+			if (changes.phoneNumber !== undefined && changes.phoneNumber !== '' && changes.phoneNumber !== user.phoneNumber) throw new AppError(CONTACT_IMMUTABLE_MESSAGE, 403);
+
 			const candidates: FieldChangeCandidate[] = [
 				{ fieldType: SensitiveFieldType.FIRST_NAME, fieldLabel: 'الاسم الأول', currentValue: user.firstName, requestedValue: changes.firstName },
 				{ fieldType: SensitiveFieldType.LAST_NAME, fieldLabel: 'اسم العائلة', currentValue: user.lastName, requestedValue: changes.lastName },
-				{ fieldType: SensitiveFieldType.NATIONAL_ID, fieldLabel: 'رقم الهوية الوطنية', currentValue: user.idNumber, requestedValue: changes.nationalId },
-				{ fieldType: SensitiveFieldType.PHONE_NUMBER, fieldLabel: 'رقم الجوال', currentValue: user.phoneNumber, requestedValue: changes.phoneNumber }
+				{ fieldType: SensitiveFieldType.NATIONAL_ID, fieldLabel: 'رقم الهوية الوطنية', currentValue: user.idNumber, requestedValue: changes.nationalId }
 			];
 
 			return createGovernedFieldRequests(tx, profile.id, candidates);

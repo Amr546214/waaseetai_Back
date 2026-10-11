@@ -498,3 +498,16 @@ export const getSkillsCatalog = async (req: Request, res: Response) => {
 		res.status(500).json({ success: false, message: 'Internal server error' });
 	}
 };
+
+// PUT /provider/profile/whatsapp { alternativePhone }: a direct save (no code, no request, no review). The e-mail and the primary phone stay immutable.
+export const updateWhatsapp = async (req: Request, res: Response) => {
+	try {
+		const userId = req.user?.id;
+		if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+		const result = await providerProfileService.updateWhatsapp(userId, req.body?.alternativePhone);
+		res.json({ success: true, message: result.alternativePhone ? 'تم حفظ رقم WhatsApp' : 'تم حذف رقم WhatsApp', data: result });
+	} catch (error: any) {
+		if (error?.message === 'INVALID_WHATSAPP') return res.status(400).json({ success: false, code: 'INVALID_WHATSAPP', message: 'رقم WhatsApp غير صالح: من 8 إلى 15 رقمًا، ويمكن أن يبدأ بـ +' });
+		res.status(500).json({ success: false, message: 'Internal server error' });
+	}
+};

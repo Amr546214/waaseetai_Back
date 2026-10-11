@@ -81,13 +81,13 @@ test('createIdentityRequests: creates a NATIONAL_ID request when idNumber actual
 	assert.equal(created[0].status, 'PENDING_AI_REVIEW');
 });
 
-test('createIdentityRequests: creates a PHONE_NUMBER request when phone actually changes', async (t) => {
-	const { profileRequestsService } = await loadService(t);
-	const created = await profileRequestsService.createIdentityRequests('user-1', { phoneNumber: '0511111111' });
-
-	assert.equal(created.length, 1);
-	assert.equal(created[0].fieldType, 'PHONE_NUMBER');
-	assert.equal(created[0].requestedValue, '0511111111');
+test('createIdentityRequests: the account phone is immutable: a different phone is refused (403), the same one is ignored, and no PHONE_NUMBER request is ever created', async (t) => {
+	const { profileRequestsService, requests } = await loadService(t);
+	await assert.rejects(() => profileRequestsService.createIdentityRequests('user-1', { phoneNumber: '0511111111' }), (e: any) => e.statusCode === 403 && /للعرض فقط/.test(e.message));
+	await assert.rejects(() => profileRequestsService.createIdentityRequests('user-1', { firstName: 'NewFirst', phoneNumber: '0511111111' }), (e: any) => e.statusCode === 403);
+	assert.equal(requests.length, 0);
+	const created = await profileRequestsService.createIdentityRequests('user-1', { firstName: 'NewFirst', phoneNumber: '0500000000' });
+	assert.deepEqual(created.map((c: any) => c.fieldType), ['FIRST_NAME']);
 });
 
 test('createIdentityRequests: creates a FIRST_NAME request when firstName actually changes', async (t) => {
@@ -113,16 +113,16 @@ test('createIdentityRequests: creates a LAST_NAME request when lastName actually
 	assert.equal(created[0].requestedValue, 'NewLast');
 });
 
-test('createIdentityRequests: unchanged firstName/lastName are skipped (no rows created) when submitted alongside a real phone change', async (t) => {
+test('createIdentityRequests: unchanged firstName/lastName are skipped (no rows created) when submitted alongside a real national-id change', async (t) => {
 	const { profileRequestsService } = await loadService(t);
 	const created = await profileRequestsService.createIdentityRequests('user-1', {
 		firstName: 'OldFirst',
 		lastName: 'OldLast',
-		phoneNumber: '0511111111'
+		nationalId: '2000000000'
 	});
 
 	assert.equal(created.length, 1);
-	assert.equal(created[0].fieldType, 'PHONE_NUMBER');
+	assert.equal(created[0].fieldType, 'NATIONAL_ID');
 });
 
 test('createIdentityRequests: submitting the exact current firstName/lastName alone creates no request and rejects', async (t) => {
@@ -189,11 +189,11 @@ test('createIdentityRequests: submitting the exact current value creates no requ
 
 test('createIdentityRequests: a duplicate pending request for the same field is rejected (409) and nothing new is created', async (t) => {
 	const { profileRequestsService, requests } = await loadService(t, {
-		existingRequests: [{ id: 'r1', affiliateProfileId: 'aff-1', fieldType: 'PHONE_NUMBER', status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-1' }]
+		existingRequests: [{ id: 'r1', affiliateProfileId: 'aff-1', fieldType: 'NATIONAL_ID', status: 'PENDING_AI_REVIEW', requestNumber: 'REQ-1' }]
 	});
 
 	await assert.rejects(
-		() => profileRequestsService.createIdentityRequests('user-1', { phoneNumber: '0511111111' }),
+		() => profileRequestsService.createIdentityRequests('user-1', { nationalId: '2000000000' }),
 		(error: any) => error.statusCode === 409
 	);
 	assert.equal(requests.length, 1); // no new row created
@@ -209,10 +209,10 @@ test('createIdentityRequests: a PENDING_HUMAN_APPROVAL request also counts as a 
 
 test('createIdentityRequests: a REJECTED request for the same field does NOT block a new submission', async (t) => {
 	const { profileRequestsService } = await loadService(t, {
-		existingRequests: [{ id: 'r1', affiliateProfileId: 'aff-1', fieldType: 'PHONE_NUMBER', status: 'REJECTED', requestNumber: 'REQ-1' }]
+		existingRequests: [{ id: 'r1', affiliateProfileId: 'aff-1', fieldType: 'NATIONAL_ID', status: 'REJECTED', requestNumber: 'REQ-1' }]
 	});
 
-	const created = await profileRequestsService.createIdentityRequests('user-1', { phoneNumber: '0511111111' });
+	const created = await profileRequestsService.createIdentityRequests('user-1', { nationalId: '2000000000' });
 	assert.equal(created.length, 1);
 });
 
@@ -226,13 +226,13 @@ test('withdrawRequest: another user cannot withdraw someone else\'s request', as
 
 test('getRequests: returns newly-created requests for this affiliate (marketer request history)', async (t) => {
 	const { profileRequestsService } = await loadService(t);
-	await profileRequestsService.createIdentityRequests('user-1', { nationalId: '2000000000', phoneNumber: '0511111111' });
+	await profileRequestsService.createIdentityRequests('user-1', { nationalId: '2000000000', firstName: 'NewFirst' });
 
 	const summary = await profileRequestsService.getRequests('user-1');
 	assert.equal(summary.totalRequests, 2);
 	assert.equal(summary.pendingAiCount, 2);
 	const fieldTypes = summary.items.map((r: any) => r.fieldType).sort();
-	assert.deepEqual(fieldTypes, ['NATIONAL_ID', 'PHONE_NUMBER']);
+	assert.deepEqual(fieldTypes, ['FIRST_NAME', 'NATIONAL_ID']);
 });
 
 test('getRequests: legacy bank requests (IBAN / bank name / holder / swift) are never listed, so no bank value is shown', async (t) => {
