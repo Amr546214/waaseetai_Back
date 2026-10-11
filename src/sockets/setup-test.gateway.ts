@@ -1,6 +1,7 @@
 import { Socket, Server as SocketIOServer } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { verifySocketToken } from '../utils/socket-auth';
+import { specialtyService } from '../services/specialty.service';
 import { prisma } from '../config/db';
 import { waseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
@@ -48,6 +49,9 @@ interface SetupTestSession {
   grading: boolean;
 }
 
+/** Score (%) above which the chosen specialties are recorded as passed from the setup test (the specialty record's own documented floor). */
+export const SETUP_TEST_PASS_SCORE = 25;
+
 export class SetupTestGateway {
   private io: SocketIOServer | null = null;
   private testSessions = new Map<string, SetupTestSession>();
@@ -80,6 +84,7 @@ export class SetupTestGateway {
       const timeSpentSeconds = Math.max(0, Math.min(limitSeconds, Math.round((Date.now() - session.startedAt) / 1000)));
 
       let score: number;
+      let passed = false;
       try {
         const graded = await waseetAiClient.submitAssessment(
           session.vendorAttemptId,
@@ -90,6 +95,7 @@ export class SetupTestGateway {
           throw new Error('WaseetAI returned an invalid grading result');
         }
         score = graded.score;
+        passed = graded.score > SETUP_TEST_PASS_SCORE; // the platform's own floor (the same 25% the specialty record documents); the vendor verdict is not read
       } catch (err: any) {
         console.warn('[SetupTestGateway] grading failed:', err?.code || err?.message);
         socket.emit('setup_test:error', { message: SETUP_TEST_GRADING_FAILED_MESSAGE, retryable: true });
@@ -106,6 +112,9 @@ export class SetupTestGateway {
         socket.emit('setup_test:error', { message: SETUP_TEST_GRADING_FAILED_MESSAGE, retryable: true });
         return;
       }
+
+      // The setup test is the assessment of the specialties chosen at signup: record the result on the provider's specialty rows (a fact, never an approval).
+      try { await specialtyService.applySetupTestToSpecialties(session.profileId, score, passed); } catch (err: any) { console.error('[SetupTestGateway] specialty write failed:', err?.message); }
 
       this.testSessions.delete(userId);
       socket.emit('setup_test:result', {

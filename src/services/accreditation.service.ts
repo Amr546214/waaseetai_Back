@@ -63,7 +63,8 @@ export class AccreditationService {
 				return {
 					success: true,
 					hasAccreditedSpecialties: false,
-					categories: []
+					categories: [],
+					registered: []
 				};
 			}
 
@@ -81,6 +82,27 @@ export class AccreditationService {
 					}
 				}
 			});
+
+			// EVERY specialty registered on the account (the ones chosen at signup too), with where it stands: the pages show this instead of "no specialty".
+			const allRegistered = await prisma.providerSpecialty.findMany({
+				where: { providerProfileId: providerProfile.id, isActive: true },
+				include: { specialty: { include: { category: true } } },
+				orderBy: { createdAt: 'asc' }
+			});
+			const registered = allRegistered.map((ps) => ({
+				id: ps.id,
+				specialtyId: ps.specialtyId,
+				name: ps.specialty?.nameAr || ps.specialty?.nameEn || ps.specialty?.name || 'تخصص',
+				categoryName: ps.specialty?.category?.nameAr || ps.specialty?.category?.name || '',
+				status: ps.status,
+				isPassed: ps.isPassed,
+				hasTakenAssessment: ps.hasTakenAssessment,
+				latestScore: ps.latestScore ?? null,
+				state: ps.status === 'LOCKED_OUT' ? 'LOCKED_OUT'
+					: ps.status === 'REJECTED' && !ps.isPassed ? 'REJECTED'
+					: ps.isPassed ? 'PASSED'
+					: ps.hasTakenAssessment ? 'TEST_NOT_PASSED' : 'TEST_NOT_TAKEN'
+			}));
 
 			const categoriesMap = new Map();
 
@@ -118,7 +140,8 @@ export class AccreditationService {
 			return {
 				success: true,
 				hasAccreditedSpecialties: categories.length > 0,
-				categories
+				categories,
+				registered
 			};
 
 		} catch (error: any) {

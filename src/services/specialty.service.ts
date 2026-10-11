@@ -1,5 +1,7 @@
 import { prisma } from '../config/db';
 import { SpecialtyVerificationStatus } from '@prisma/client';
+import { logger } from '../config/logger';
+import { resolveCategorySlug } from './skills-catalog.service';
 
 function generateSlug(text: string): string {
   if (!text) return `slug-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -210,6 +212,12 @@ class SpecialtyService {
       }
     }
 
+    // Re-selecting a specialty the provider already passed / was approved for never resets it to PENDING_PROOF.
+    const existing = await prisma.providerSpecialty.findUnique({
+      where: { providerProfileId_specialtyId: { providerProfileId, specialtyId: finalSpecialtyId } },
+      select: { status: true, isPassed: true }
+    });
+    const keepsProgress = !!existing && (existing.isPassed || existing.status === SpecialtyVerificationStatus.APPROVED || existing.status === SpecialtyVerificationStatus.UNDER_AI_REVIEW || existing.status === SpecialtyVerificationStatus.LOCKED_OUT);
     return prisma.providerSpecialty.upsert({
       where: {
         providerProfileId_specialtyId: {
@@ -219,7 +227,7 @@ class SpecialtyService {
       },
       update: {
         subSpecialties,
-        status: SpecialtyVerificationStatus.PENDING_PROOF
+        ...(keepsProgress ? {} : { status: SpecialtyVerificationStatus.PENDING_PROOF })
       },
       create: {
         providerProfileId,
@@ -228,6 +236,69 @@ class SpecialtyService {
         status: SpecialtyVerificationStatus.PENDING_PROOF
       }
     });
+  }
+
+  /**
+   * The specialties chosen in the signup / setup wizard (ProviderProfile.mainSpecialty = the marketplace category, subSpecialties = the chosen
+   * specialties of that category) become the provider's ProviderSpecialty rows, so every page that reads provider_specialties (model upload,
+   * market, accreditation) sees them. CREATE-ONLY: an existing row (any status) is never touched, so a re-run never resets progress and never
+   * duplicates (unique providerProfileId + specialtyId). Returns the ids of the provider's rows for the chosen specialties.
+   */
+  async syncProviderSpecialtiesFromProfile(profileId: string, db: typeof prisma = prisma): Promise<{ created: number; ids: string[] }> {
+    const profile = await db.providerProfile.findUnique({ where: { id: profileId }, select: { id: true, mainSpecialty: true, subSpecialties: true } });
+    const names = [...new Set((profile?.subSpecialties ?? []).map(n => String(n).trim()).filter(Boolean))];
+    if (!profile || !names.length) return { created: 0, ids: [] };
+    const categorySlug = await resolveCategorySlug(db as any, profile.mainSpecialty);
+    const specialties = await db.specialty.findMany({
+      where: { isActive: true, nameAr: { in: names }, ...(categorySlug ? { category: { slug: categorySlug } } : {}) },
+      select: { id: true }
+    });
+    let created = 0;
+    const ids: string[] = [];
+    for (const sp of specialties) {
+      const where = { providerProfileId_specialtyId: { providerProfileId: profile.id, specialtyId: sp.id } };
+      const before = await db.providerSpecialty.findUnique({ where, select: { id: true } });
+      const row = await db.providerSpecialty.upsert({
+        where,
+        update: {},
+        create: { providerProfileId: profile.id, specialtyId: sp.id, subSpecialties: [], status: SpecialtyVerificationStatus.PENDING_PROOF },
+        select: { id: true }
+      });
+      if (!before) created += 1;
+      ids.push(row.id);
+    }
+    return { created, ids };
+  }
+
+  /**
+   * The setup test is the assessment of the specialties chosen at signup: its result is recorded on those rows as a FACT (taken, score, passed), exactly
+   * like a specialty assessment, and never approves anything (status stays; the admin approves the proof / samples). A row that already passed, is
+   * approved or is locked out is left untouched.
+   */
+  async applySetupTestToSpecialties(profileId: string, score: number, passed: boolean, db: typeof prisma = prisma): Promise<number> {
+    await this.syncProviderSpecialtiesFromProfile(profileId, db);
+    const profile = await db.providerProfile.findUnique({ where: { id: profileId }, select: { subSpecialties: true } });
+    const names = (profile?.subSpecialties ?? []).map(n => String(n).trim()).filter(Boolean);
+    if (!names.length) return 0;
+    const rows = await db.providerSpecialty.findMany({
+      where: { providerProfileId: profileId, isActive: true, specialty: { nameAr: { in: names } } },
+      select: { id: true, status: true, isPassed: true }
+    });
+    let updated = 0;
+    for (const row of rows) {
+      if (row.isPassed || row.status === SpecialtyVerificationStatus.APPROVED || row.status === SpecialtyVerificationStatus.LOCKED_OUT) continue;
+      await db.providerSpecialty.update({
+        where: { id: row.id },
+        data: { hasTakenAssessment: true, latestScore: score, quizScore: score, isPassed: passed, passedAt: passed ? new Date() : null }
+      });
+      updated += 1;
+    }
+    return updated;
+  }
+
+  /** Best-effort wrapper for the call sites that must never fail because of this sync (the profile save already succeeded). */
+  async trySyncProviderSpecialties(profileId: string): Promise<void> {
+    try { await this.syncProviderSpecialtiesFromProfile(profileId); } catch (error: any) { logger.error(`[SpecialtyService] could not sync provider specialties (profileId=${profileId}): ${error?.message}`); }
   }
 
   async uploadWorkSamples(providerSpecialtyId: string, samplesData: any[]) {

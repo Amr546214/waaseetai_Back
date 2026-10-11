@@ -21,6 +21,8 @@ export interface DashboardStatsPayload {
     currentLevel: string;
     pointsToNextLevel: number;
     currentPoints: number;
+    /** The level of the account's active role, from the single ladder (see utils/level-info.ts). */
+    levelInfo?: import('../utils/level-info').LevelInfo;
   };
   // Batch 7: deterministic aggregate of the client's own proposals' real,
   // already-Gemini-computed `aiPriceTag` field (see ai-proposal.service.ts)
