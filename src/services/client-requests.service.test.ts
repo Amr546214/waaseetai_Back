@@ -198,17 +198,16 @@ test('client-requests.service.ts (WaseetAI-linked) has no internal LlmClient dep
 
 const clientRequestsSource = fs.readFileSync(path.join(__dirname, 'client-requests.service.ts'), 'utf8');
 
-test('signContract: the escrow fee percentages (VAT 7%, insurance 1%, platform 5%) are unchanged by the USD transition', () => {
-  assert.match(clientRequestsSource, /const ESCROW_FEE_VAT = 0\.07;/);
-  assert.match(clientRequestsSource, /const ESCROW_FEE_INSURANCE = 0\.01;/);
-  assert.match(clientRequestsSource, /const ESCROW_FEE_PLATFORM = 0\.05;/);
+test('depositEscrow (fee policy v2): the old 13% escrow-lock charge (VAT 7% + platform 5% + insurance 1%) is gone — no fee constant and no fee in the amount', () => {
+  assert.doesNotMatch(clientRequestsSource, /ESCROW_FEE_(VAT|PLATFORM|INSURANCE)\s*=/);
+  assert.doesNotMatch(clientRequestsSource, /rawEscrowAmount/);
+  assert.match(clientRequestsSource, /const txEscrowAmount = Math\.round\(contractBeforePayment\.price \* 100\) \/ 100;/);
 });
 
-test('signContract: the escrow amount formula (price * (1 + VAT + insurance + platform)) is unchanged', () => {
-  assert.match(
-    clientRequestsSource,
-    /const rawEscrowAmount = contractBeforePayment\.price \* \(1 \+ ESCROW_FEE_VAT \+ ESCROW_FEE_INSURANCE \+ ESCROW_FEE_PLATFORM\);/
-  );
+test('depositEscrow (fee policy v2): the escrow row and the ESCROW_LOCK transaction carry the v2 snapshot and a zero escrow fee', () => {
+  assert.match(clientRequestsSource, /const escrowSnapshot = buildEscrowSnapshot\(providerGamification\?\.currentLevelIndex\);/);
+  assert.match(clientRequestsSource, /\.\.\.escrowSnapshot/);
+  assert.match(clientRequestsSource, /feePolicyVersion: ESCROW_FEE_POLICY_V2, escrowFee: 0, contractPrice: txEscrowAmount/);
 });
 
 test('signContract: the escrow-lock WalletTransaction it creates is explicitly USD (never the database default)', () => {

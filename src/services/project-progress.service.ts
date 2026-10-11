@@ -1,3 +1,4 @@
+import { isV2Escrow, splitRelease } from '../utils/escrow-commission';
 import { AmendmentStatus, ContractStatus, EscrowStatus, LogCategory, LogStatus, ProjectStageStatus, ProjectStatus, RequestStatus, StageDeliveryStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
@@ -386,7 +387,16 @@ export class ProjectProgressService {
         if (next) {
           await tx.projectStage.update({ where: { id: next.id }, data: { status: ProjectStageStatus.IN_PROGRESS, startedAt: new Date() } });
           await tx.project.update({ where: { id: contract.projectId }, data: { status: ProjectStatus.IN_PROGRESS } });
-          await tx.escrow.updateMany({ where: { projectId: contract.projectId }, data: { releasedAmount: { increment: stage.amount } } });
+          // Fee policy v2: a v2 escrow releases the stage net of the provider's snapshotted commission; a legacy escrow releases gross exactly as before.
+          const intermediateEscrow = await tx.escrow.findUnique({ where: { projectId: contract.projectId } });
+          const intermediateSplit = isV2Escrow(intermediateEscrow) && intermediateEscrow!.providerCommissionRateSnapshot != null
+            ? splitRelease({ grossReleasedBefore: intermediateEscrow!.releasedAmount, commissionTotalBefore: intermediateEscrow!.platformCommissionAmount, grossReleasedAfter: intermediateEscrow!.releasedAmount + stage.amount, ratePercent: intermediateEscrow!.providerCommissionRateSnapshot })
+            : null;
+          if (intermediateSplit) {
+            await tx.escrow.updateMany({ where: { projectId: contract.projectId }, data: { releasedAmount: intermediateSplit.grossReleasedAfter, platformCommissionAmount: intermediateSplit.commissionTotalAfter, providerNetReleasedAmount: intermediateSplit.netReleasedAfter } });
+          } else {
+            await tx.escrow.updateMany({ where: { projectId: contract.projectId }, data: { releasedAmount: { increment: stage.amount } } });
+          }
           // Durable audit trail for the fund release itself — the stage/
           // delivery status transitions above record WHAT happened, this
           // records the financial event specifically, in the same shape
@@ -414,6 +424,7 @@ export class ProjectProgressService {
                 stageId: stage.id,
                 stageTitle: stage.title,
                 releasedAmount: stage.amount,
+                ...(intermediateSplit ? { grossAmount: intermediateSplit.gross, platformCommission: intermediateSplit.commission, providerNet: intermediateSplit.net, commissionRatePercent: intermediateEscrow!.providerCommissionRateSnapshot, commissionLevel: intermediateEscrow!.providerCommissionLevelSnapshot, feePolicyVersion: 2 } : {}),
                 currency: 'USD',
                 isFinalStage: false,
                 approvedByClientId: contract.clientId
@@ -443,7 +454,13 @@ export class ProjectProgressService {
           });
           if (completed.count !== 1) throw new AppError('تم اعتماد المشروع النهائي مسبقاً', 409);
           await tx.project.update({ where: { id: contract.projectId }, data: { status: ProjectStatus.COMPLETED, providerId: contract.providerId } });
-          await tx.escrow.updateMany({ where: { projectId: contract.projectId }, data: { status: EscrowStatus.RELEASED, releasedAmount: contract.price } });
+          const finalEscrow = await tx.escrow.findUnique({ where: { projectId: contract.projectId } });
+          const finalSplit = isV2Escrow(finalEscrow) && finalEscrow!.providerCommissionRateSnapshot != null
+            ? splitRelease({ grossReleasedBefore: finalEscrow!.releasedAmount, commissionTotalBefore: finalEscrow!.platformCommissionAmount, grossReleasedAfter: contract.price, ratePercent: finalEscrow!.providerCommissionRateSnapshot })
+            : null;
+          await tx.escrow.updateMany({ where: { projectId: contract.projectId }, data: finalSplit
+            ? { status: EscrowStatus.RELEASED, releasedAmount: finalSplit.grossReleasedAfter, platformCommissionAmount: finalSplit.commissionTotalAfter, providerNetReleasedAmount: finalSplit.netReleasedAfter }
+            : { status: EscrowStatus.RELEASED, releasedAmount: contract.price } });
           // Same durable audit-trail entry as the intermediate-stage branch
           // above, for the final stage's release — still the same
           // transaction as the contract-completion/escrow mutations.
@@ -465,6 +482,7 @@ export class ProjectProgressService {
                 stageId: stage.id,
                 stageTitle: stage.title,
                 releasedAmount: stage.amount,
+                ...(finalSplit ? { grossAmount: finalSplit.gross, platformCommission: finalSplit.commission, providerNet: finalSplit.net, commissionRatePercent: finalEscrow!.providerCommissionRateSnapshot, commissionLevel: finalEscrow!.providerCommissionLevelSnapshot, feePolicyVersion: 2 } : {}),
                 currency: 'USD',
                 isFinalStage: true,
                 approvedByClientId: contract.clientId

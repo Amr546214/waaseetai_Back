@@ -32,7 +32,7 @@ export class ProviderReportsService {
 		const since = rangeStart(range);
 		const inRange = since ? { createdAt: { gte: since } } : {};
 
-		const [proposals, projects, disputes, releasedAgg, heldAgg, transactions] = await Promise.all([
+		const [proposals, projects, disputes, releasedAgg, heldAgg, transactions, releasedNetAgg] = await Promise.all([
 			prisma.proposal.findMany({
 				where: { providerId, ...inRange },
 				select: {
@@ -52,7 +52,8 @@ export class ProviderReportsService {
 				select: { id: true, status: true, reason: true, createdAt: true, resolvedAt: true },
 				orderBy: { createdAt: 'desc' }
 			}),
-			prisma.escrow.aggregate({ where: { project: { providerId, ...inRange } }, _sum: { releasedAmount: true } }),
+			// legacy escrows: the gross released (unchanged); fee-policy-v2 escrows are counted net, below
+			prisma.escrow.aggregate({ where: { project: { providerId, ...inRange }, feePolicyVersion: null }, _sum: { releasedAmount: true } }),
 			prisma.escrow.aggregate({ where: { project: { providerId }, status: 'HELD' }, _sum: { amount: true } }),
 			prisma.walletTransaction.findMany({
 				where: { userId: providerId, ...inRange },
@@ -60,7 +61,8 @@ export class ProviderReportsService {
 				select: { id: true, type: true, amount: true, currency: true, status: true, description: true, createdAt: true },
 				orderBy: { createdAt: 'desc' },
 				take: 50
-			})
+			}),
+			prisma.escrow.aggregate({ where: { project: { providerId, ...inRange }, feePolicyVersion: { not: null } }, _sum: { providerNetReleasedAmount: true } })
 		]);
 
 		// ── incoming requests / offers and their statuses ────────────────────
@@ -124,7 +126,8 @@ export class ProviderReportsService {
 				completedWithAgreedDuration: withAgreed.length
 			},
 			payments: {
-				releasedTotal: releasedAgg._sum.releasedAmount ?? null,
+				// what the provider actually received: legacy gross + v2 net (after the platform commission)
+				releasedTotal: releasedAgg._sum.releasedAmount == null && releasedNetAgg?._sum?.providerNetReleasedAmount == null ? null : (releasedAgg._sum.releasedAmount ?? 0) + (releasedNetAgg?._sum?.providerNetReleasedAmount ?? 0),
 				heldInEscrow: heldAgg._sum.amount ?? null,
 				transactions
 			},
