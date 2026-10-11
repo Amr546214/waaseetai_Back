@@ -8,6 +8,7 @@ import { OAuth2Client } from 'google-auth-library';
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 import { AppError } from '../utils/app-error';
+import { normalizePhone } from '../utils/phone-countries';
 import { logger } from '../config/logger';
 import { notificationService } from './notification.service';
 import { prisma } from '../config/db';
@@ -193,6 +194,15 @@ export class AuthService {
 		const googleIdentity = input.googleIdToken ? await this.verifyGoogleIdentity(input.googleIdToken) : undefined;
 		if (googleIdentity && googleIdentity.email?.trim().toLowerCase() !== input.email) {
 			throw new AppError('البريد الإلكتروني لا يطابق حساب جوجل المختار', 400);
+		}
+		// The phone is the pair (country code, LOCAL number) and must be a real mobile number OF THAT COUNTRY (an Egyptian number never goes with +966);
+		// it is stored as the code in phoneCountryCode and the local digits (no code, no trunk zero) in phoneNumber.
+		try {
+			const phone = normalizePhone(input.phoneNumber, input.phoneCountryCode);
+			input.phoneNumber = phone.nationalNumber;
+			input.phoneCountryCode = phone.countryCode;
+		} catch {
+			throw new AppError('رقم الجوال غير صالح أو لا يطابق رمز الدولة المختار', 400);
 		}
 		// 1. Check for duplicates (email or phone)
 		const existingUser = await authRepository.findByEmailOrPhone(input.email, input.phoneNumber);

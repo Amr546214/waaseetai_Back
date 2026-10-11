@@ -274,7 +274,8 @@ export const getPublicProfile = async (req: Request, res: Response) => {
 			return res.status(401).json({ message: 'Unauthorized or missing provider ID' });
 		}
 
-		const publicProfile = await providerProfileService.getPublicProfile(providerId);
+		const isOwner = !req.params.providerId || req.user?.id === providerId;
+		const publicProfile = await providerProfileService.getPublicProfile(providerId, { isOwner });
 		res.json({ success: true, data: publicProfile });
 	} catch (error: any) {
 		console.error('Error fetching public profile:', error);
