@@ -129,10 +129,21 @@ export class OnboardingService {
     return updated;
   }
 
-  async listProviderKyc(status?: KYCStatus, page = 1, limit = 10) {
+  async listProviderKyc(status?: KYCStatus, page = 1, limit = 10, search?: string) {
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(100, Math.max(1, limit));
-    const where = status ? { kycStatus: status } : {};
+    const term = (search ?? '').trim().slice(0, 100);
+    // Search by the owner's name, e-mail, phone or userId, over ALL providers (not just the loaded page).
+    const where: any = {
+      ...(status ? { kycStatus: status } : {}),
+      ...(term ? { OR: [
+        { userId: { equals: term } },
+        { user: { email: { contains: term, mode: 'insensitive' } } },
+        { user: { firstName: { contains: term, mode: 'insensitive' } } },
+        { user: { lastName: { contains: term, mode: 'insensitive' } } },
+        { user: { phoneNumber: { contains: term } } },
+      ] } : {}),
+    };
     const [items, total] = await Promise.all([
       prisma.providerProfile.findMany({
         where,
