@@ -11,12 +11,11 @@ const profileRow = (user: any = {}) => ({
   user: { firstName: 'سارة', lastName: 'أحمد', email: 'sara@example.com', avatarUrl: null, phoneCountryCode: '+20', phoneNumber: '1025073026', createdAt: new Date('2026-01-01'), currentLevel: 'x', ratingAverage: 0, profileCompletionPercent: 0, accountType: 'PROVIDER_INDIVIDUAL', ...user },
 });
 
-async function load(t: TestContext, over: { user?: any; pending?: boolean } = {}) {
+async function load(t: TestContext, over: { user?: any } = {}) {
   // every other model answers "nothing" (empty list / 0 / null)
   const empty = new Proxy({}, { get: (_m, method: string) => async () => (method === 'count' ? 0 : method === 'findMany' ? [] : null) });
   const prisma: any = new Proxy({}, { get: (target: any, model: string) => target[model] ?? empty });
   prisma.providerProfile = { findUnique: async () => profileRow(over.user) };
-  prisma.profileModificationRequest = { findFirst: async () => (over.pending ? { status: 'PENDING_OTP', createdAt: new Date('2026-10-11T08:00:00Z') } : null), findMany: async () => [], count: async () => 0 };
   t.mock.module('../config/db', { namedExports: { prisma } });
   const { providerProfileService } = await import(`./provider-profile.service.ts?fixture=${Date.now()}-${Math.random()}`);
   return providerProfileService;
@@ -30,7 +29,7 @@ test('owner view: the preview shows the stored email and the phone merged with i
   assert.equal(view.contact.phone.display, '+20 1025073026');
   assert.equal(view.contact.phone.countryCode, '+20');
   assert.equal(view.contact.phone.nationalNumber, '1025073026');
-  assert.equal(view.contact.pendingChange, null);
+  assert.equal('pendingChange' in view.contact, false); // the e-mail and the phone are immutable: there is never a pending change to report
 });
 
 test('owner view: an Egyptian number that was stored next to +966 is shown as +20 (never as a Saudi number)', async (t) => {
@@ -38,13 +37,6 @@ test('owner view: an Egyptian number that was stored next to +966 is shown as +2
   const view = await svc.getPublicProfile('user-1', { isOwner: true });
   assert.equal(view.contact.phone.display, '+20 1025073026');
   assert.equal(view.contact.phone.consistent, false);
-});
-
-test('owner view: a phone change waiting for its e-mailed code is stated (not a silent "-"), while the current value is still shown', async (t) => {
-  const svc = await load(t, { pending: true });
-  const view = await svc.getPublicProfile('user-1', { isOwner: true });
-  assert.equal(view.contact.pendingChange.status, 'PENDING_OTP');
-  assert.equal(view.contact.phone.display, '+20 1025073026');
 });
 
 test('visitor / client view: no email and no phone anywhere in the answer, and the hiding is stated (HIDDEN_FROM_VISITORS), different from the owner view', async (t) => {

@@ -14,7 +14,7 @@ const LOCKED = 'تم تجاوز عدد المحاولات المسموح به، 
 async function sensitive(t: TestContext, otpRow: any) {
   const state = { otp: otpRow ? { ...otpRow } : null, deleted: 0, attemptsIncremented: 0, audit: [] as any[] };
   const prisma: any = {
-    profileModificationRequest: { findFirst: async () => ({ id: 'req-1', providerId: 'p1', status: 'PENDING_OTP', category: 'CONTACT', metadata: {} }) },
+    profileModificationRequest: { findFirst: async () => ({ id: 'req-1', providerId: 'p1', status: 'PENDING_OTP', category: 'DOCUMENTS', metadata: {} }) },
     otpVerification: {
       findFirst: async (args: any) => {
         const ands = (args.where.AND ?? []).map((c: any) => c.context.equals);

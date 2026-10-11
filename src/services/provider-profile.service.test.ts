@@ -901,45 +901,20 @@ test('reviewSensitiveChange (DOCUMENTS, approved): recalculates completion after
   assert.equal(completionCalls.length, 1);
 });
 
-test('verifySensitiveChange (CONTACT, applied immediately since it needs no review): recomputes provider completion (email/phone are scored)', async (t) => {
-  const { providerProfileService, providerProfileUpdateSpy, userUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
-
-  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', {
-    email: 'new@example.com', phoneNumber: '0511111111', alternativePhone: '0522222222'
-  });
-  const verified = await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
-
-  assert.equal(verified.status, 'APPROVED');
-  const emailCommit = userUpdateSpy.mock.calls.find((c: any) => 'email' in c.arguments[0].data);
-  assert.notEqual(emailCommit, undefined);
-
-  // Email/phone are completion inputs, so the CONTACT commit now recomputes the stored percentage (previously only the
-  // BANKING and DOCUMENTS commit points did).
-  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
-  assert.equal(completionCalls.length, 1);
-});
-
-test('CONTACT phone: the country code and the LOCAL number are validated together and stored apart (+20 / 1025073026)', async (t) => {
+// ── the e-mail and the phone are IMMUTABLE from the interface: no code, no request, no review, no write ──
+test('CONTACT is refused: initiateSensitiveChange creates no request and sends no code (e-mail and phone are display-only)', async (t) => {
   const { providerProfileService, userUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
-  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'new@example.com', phoneCountryCode: '+20', phoneNumber: '01025073026', alternativePhone: '' });
-  await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
-  const commit = userUpdateSpy.mock.calls.map((c: any) => c.arguments[0].data).find((d: any) => 'phoneNumber' in d);
-  assert.equal(commit.phoneCountryCode, '+20');
-  assert.equal(commit.phoneNumber, '1025073026');
+  await assert.rejects(() => providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'new@example.com', phoneCountryCode: '+20', phoneNumber: '1025073026', alternativePhone: '' }), /CONTACT_IMMUTABLE/);
+  assert.equal(getLastOtpCode(), undefined);
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
 });
 
-test('CONTACT phone: a full "+201025073026" pasted as the number decides the country: stored as +20 and 1025073026', async (t) => {
-  const { providerProfileService, userUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
-  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'new@example.com', phoneNumber: '+201025073026', alternativePhone: '' });
-  await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
-  const commit = userUpdateSpy.mock.calls.map((c: any) => c.arguments[0].data).find((d: any) => 'phoneNumber' in d);
-  assert.deepEqual([commit.phoneCountryCode, commit.phoneNumber], ['+20', '1025073026']);
-});
-
-test('CONTACT phone: an Egyptian number with the Saudi code (or the reverse) is refused and no request is created', async (t) => {
+test('CONTACT is refused: the legacy PUT /contact and a legacy EMAIL / PHONE_NUMBER modification request are refused too (nothing is created)', async (t) => {
   const { providerProfileService, userUpdateSpy } = await loadServiceForSensitiveFlow(t);
-  await assert.rejects(() => providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'new@example.com', phoneCountryCode: '+966', phoneNumber: '1025073026', alternativePhone: '' }), /INVALID_PHONE/);
-  await assert.rejects(() => providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'new@example.com', phoneCountryCode: '+20', phoneNumber: '501234567', alternativePhone: '' }), /INVALID_PHONE/);
+  await assert.rejects(() => providerProfileService.updateContactInfo('user-1', { email: 'new@example.com', phoneNumber: '0511111111' }), /CONTACT_IMMUTABLE/);
+  for (const fieldName of ['EMAIL', 'PHONE_NUMBER']) {
+    await assert.rejects(() => providerProfileService.createModificationRequest('user-1', { fieldName, fieldLabel: fieldName, requestedValue: fieldName === 'EMAIL' ? 'new@example.com' : '0511111111' }), /CONTACT_IMMUTABLE/);
+  }
   assert.equal(userUpdateSpy.mock.callCount(), 0);
 });
 
@@ -959,8 +934,6 @@ test('CONTACT phone: an Egyptian number with the Saudi code (or the reverse) is 
 const VALID_TEST_IBAN = 'SA1000000000000000000000';
 
 for (const { fieldName, fieldLabel, requestedValue } of [
-  { fieldName: 'EMAIL', fieldLabel: 'Email', requestedValue: 'new@example.com' },
-  { fieldName: 'PHONE_NUMBER', fieldLabel: 'Phone', requestedValue: '0511111111' },
   { fieldName: 'NATIONAL_ID', fieldLabel: 'National ID', requestedValue: '1234567890' }
 ]) {
   test(`createModificationRequest (${fieldName}): can never auto-approve — always PENDING_HUMAN_REVIEW, and User is not mutated at creation time`, async (t) => {
@@ -991,11 +964,11 @@ test('createModificationRequest: Math.random no longer influences the outcome �
 
   try {
     Math.random = () => 0.999;
-    const high = await providerProfileService.createModificationRequest('user-1', { fieldName: 'EMAIL', fieldLabel: 'Email', requestedValue: 'new@example.com' });
+    const high = await providerProfileService.createModificationRequest('user-1', { fieldName: 'NATIONAL_ID', fieldLabel: 'National ID', requestedValue: '1234567890' });
     assert.equal(high.status, 'PENDING_HUMAN_REVIEW');
 
     Math.random = () => 0;
-    const low = await providerProfileService.createModificationRequest('user-1', { fieldName: 'EMAIL', fieldLabel: 'Email', requestedValue: 'other@example.com' });
+    const low = await providerProfileService.createModificationRequest('user-1', { fieldName: 'NATIONAL_ID', fieldLabel: 'National ID', requestedValue: '1234567891' });
     assert.equal(low.status, 'PENDING_HUMAN_REVIEW');
   } finally {
     Math.random = originalRandom;
@@ -1005,27 +978,11 @@ test('createModificationRequest: Math.random no longer influences the outcome �
 test('createModificationRequest: no AI evaluation happens — aiConfidence/aiAuditStatus/aiRecommendation are genuinely null, never fabricated', async (t) => {
   const { providerProfileService } = await loadServiceForSensitiveFlow(t);
 
-  const request = await providerProfileService.createModificationRequest('user-1', { fieldName: 'EMAIL', fieldLabel: 'Email', requestedValue: 'new@example.com' });
+  const request = await providerProfileService.createModificationRequest('user-1', { fieldName: 'NATIONAL_ID', fieldLabel: 'National ID', requestedValue: '1234567890' });
 
   assert.equal(request.aiConfidence, undefined);
   assert.equal(request.aiAuditStatus, undefined);
   assert.equal(request.aiRecommendation, undefined);
-});
-
-test('createModificationRequest: rejects a malformed email before creating any request', async (t) => {
-  const { providerProfileService } = await loadServiceForSensitiveFlow(t);
-  await assert.rejects(
-    () => providerProfileService.createModificationRequest('user-1', { fieldName: 'EMAIL', fieldLabel: 'Email', requestedValue: 'not-an-email' }),
-    /INVALID_EMAIL/
-  );
-});
-
-test('createModificationRequest: rejects a malformed phone number', async (t) => {
-  const { providerProfileService } = await loadServiceForSensitiveFlow(t);
-  await assert.rejects(
-    () => providerProfileService.createModificationRequest('user-1', { fieldName: 'PHONE_NUMBER', fieldLabel: 'Phone', requestedValue: 'abc' }),
-    /INVALID_PHONE/
-  );
 });
 
 test('createModificationRequest: rejects an unsupported fieldName instead of silently accepting an arbitrary field', async (t) => {
@@ -1040,27 +997,12 @@ test('createModificationRequest: a client-supplied status/aiConfidence/approved 
   const { providerProfileService, userUpdateSpy } = await loadServiceForSensitiveFlow(t);
 
   const request = await providerProfileService.createModificationRequest('user-1', {
-    fieldName: 'EMAIL', fieldLabel: 'Email', requestedValue: 'new@example.com',
+    fieldName: 'NATIONAL_ID', fieldLabel: 'National ID', requestedValue: '1234567890',
     status: 'APPROVED', aiConfidence: 100, aiAuditStatus: 'PASSED', approved: true
   } as any);
 
   assert.equal(request.status, 'PENDING_HUMAN_REVIEW');
   assert.equal(userUpdateSpy.mock.callCount(), 0);
-});
-
-test('reviewSensitiveChange (legacy EMAIL request, approved): applies the change but does not trigger provider completion recalculation', async (t) => {
-  const { providerProfileService, userUpdateSpy, providerProfileUpdateSpy } = await loadServiceForSensitiveFlow(t);
-
-  const request = await providerProfileService.createModificationRequest('user-1', {
-    fieldName: 'EMAIL', fieldLabel: 'Email', requestedValue: 'new@example.com'
-  });
-  const reviewed = await providerProfileService.reviewSensitiveChange(request.id, true);
-
-  assert.equal(reviewed.status, 'APPROVED');
-  const emailCommit = userUpdateSpy.mock.calls.find((c: any) => 'email' in c.arguments[0].data);
-  assert.notEqual(emailCommit, undefined);
-  const completionCalls = providerProfileUpdateSpy.mock.calls.filter((c: any) => 'completionPercentage' in c.arguments[0].data);
-  assert.equal(completionCalls.length, 0);
 });
 
 test('reviewSensitiveChange (legacy NATIONAL_ID request, approved): applies via the legacy path since no OTP-based category covers this field', async (t) => {
@@ -1375,10 +1317,6 @@ test('verifySensitiveChange: an OTP-confirmed request carries NO AI verdict (no 
   assert.equal(afterReview.status, 'PENDING_HUMAN_REVIEW');
   for (const k of ['aiAuditStatus', 'aiConfidence', 'aiRecommendation']) assert.equal(afterReview[k] ?? null, null, k);
 
-  const immediate = await providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'new@example.com', phoneNumber: '0511111111', alternativePhone: '0522222222' });
-  const afterImmediate: any = await providerProfileService.verifySensitiveChange('user-1', immediate.requestId, getLastOtpCode()!);
-  assert.equal(afterImmediate.status, 'APPROVED');
-  for (const k of ['aiAuditStatus', 'aiConfidence', 'aiRecommendation']) assert.equal(afterImmediate[k] ?? null, null, k);
 });
 
 test('static: the profile-change code never writes an AI verdict or an AI-sourced review event itself (the real pre-review lives in profile-change-review.service)', () => {
@@ -1405,12 +1343,6 @@ test('initiateSensitiveChange (DOCUMENTS): a second request while one waits for 
   await providerProfileService.reviewSensitiveChange(first.requestId, false, 'الصورة غير واضحة');
   const again = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', doc);
   assert.notEqual(again.requestId, first.requestId);
-});
-
-test('initiateSensitiveChange (CONTACT, no human review): the duplicate guard does not apply', async (t) => {
-  const { providerProfileService } = await loadServiceForSensitiveFlow(t);
-  await providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'a@example.com', phoneNumber: '0511111111', alternativePhone: '0522222222' });
-  await providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'b@example.com', phoneNumber: '0511111111', alternativePhone: '0522222222' });
 });
 
 // ── unified review lifecycle ──
