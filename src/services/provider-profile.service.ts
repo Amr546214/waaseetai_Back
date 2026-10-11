@@ -163,7 +163,7 @@ export class ProviderProfileService {
 		const storedIdDocument = !!(profile.user as { idDocumentUrl?: string | null } | undefined)?.idDocumentUrl;
 		const identityVerification = deriveIdentityVerification({ pendingDocumentReview, storedIdDocument, latestDocumentRequest, kycStatus: (profile as { kycStatus?: string | null }).kycStatus, kycNotes: (profile as { notes?: unknown }).notes });
 		// The identity item follows the SAME state the page shows: refused -> "مرفوض"; verified (an approved document or an approved KYC) -> not listed.
-		const missingItems = computeProviderMissingItems(completionInput, { pendingDocumentReview, rejectedIdentity: identityVerification.status === 'REJECTED' && !pendingDocumentReview, verifiedIdentity: identityVerification.status === 'VERIFIED' });
+		const missingItems = computeProviderMissingItems(completionInput, { pendingDocumentReview: identityVerification.status === 'PENDING_REVIEW', rejectedIdentity: identityVerification.status === 'REJECTED', verifiedIdentity: identityVerification.status === 'VERIFIED' });
 		if (profile.completionPercentage !== completionPercentage) {
 			try {
 				await prisma.providerProfile.update({ where: { userId }, data: { completionPercentage }, select: { id: true } });
@@ -183,9 +183,9 @@ export class ProviderProfileService {
 			logger.error(`[ProviderProfileService] Could not read review status (userId=${userId})`, error);
 		}
 		const identity: ReviewEntry = identityVerification.status === 'VERIFIED'
-			? { ...documents, status: 'APPROVED', rejectionReason: null }
+			? { ...documents, status: 'APPROVED', category: identityVerification.category, rejectionReason: null }
 			: identityVerification.status === 'NOT_SUBMITTED' ? { ...NOT_SUBMITTED }
-			: { ...documents, status: identityVerification.status === 'PENDING_REVIEW' ? 'PENDING_REVIEW' : 'REJECTED', requestId: identityVerification.requestId, submittedAt: identityVerification.submittedAt, rejectionReason: identityVerification.rejectionReason };
+			: { ...documents, status: identityVerification.status === 'PENDING_REVIEW' ? 'PENDING_REVIEW' : 'REJECTED', category: identityVerification.category, requestId: identityVerification.requestId, submittedAt: identityVerification.submittedAt, rejectionReason: identityVerification.rejectionReason };
 		Object.assign(profile, { completionPercentage, missingItems, identityVerification, reviewStatus: { identity, documents } });
 
 		// PayPal is the only payout destination: legacy bank columns (the profile's and the user's) are never returned.

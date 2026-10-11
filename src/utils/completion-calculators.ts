@@ -129,6 +129,8 @@ export interface ProviderCompletionInput {
     city?: string | null;
     /** The provider's confirmed PayPal payout destination (replaces User.ibanNumber in the score). */
     paypalPayoutEmail?: string | null;
+    /** The admin's KYC decision on the identity submitted in the setup (VERIFIED counts the identity item as done). */
+    kycStatus?: string | null;
   };
   user: {
     firstName?: string | null;
@@ -178,7 +180,8 @@ const PROVIDER_RULES: ProviderCompletionRule[] = [
   { key: 'payout', label: 'حساب PayPal لاستلام المدفوعات', points: 10, tab: 'payout', hint: 'أضف بريد PayPal لاستلام المدفوعات',
     met: ({ providerProfile: p }) => !!(p.paypalPayoutEmail && p.paypalPayoutEmail.trim()) },
   { key: 'idDocument', label: 'مستند إثبات الهوية', points: 10, tab: 'docs', hint: 'ارفع مستند إثبات الهوية',
-    met: ({ user: u }) => !!u.idDocumentUrl },
+    // an approved document is stored on the account (DOCUMENTS approval) OR the admin approved the identity submitted in the setup (KYC): both are "done"
+    met: ({ user: u, providerProfile: p }) => !!u.idDocumentUrl || p.kycStatus === 'VERIFIED' },
 ];
 
 export function computeProviderCompletion(input: ProviderCompletionInput): number {

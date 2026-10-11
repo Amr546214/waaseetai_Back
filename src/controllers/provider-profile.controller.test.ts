@@ -50,6 +50,7 @@ function createSetupDataMockPrisma(t: TestContext) {
     profileCompletionPercent: 0
   };
 
+  const updateManyCalls: any[] = [];
   const providerProfileUpdateSpy = t.mock.fn((args: any) => {
     providerProfileState = { ...providerProfileState, ...args.data };
     return { ...providerProfileState };
@@ -65,7 +66,7 @@ function createSetupDataMockPrisma(t: TestContext) {
       }),
       findUnique: async () => ({ ...providerProfileState }),
       update: providerProfileUpdateSpy,
-      updateMany: async () => ({ count: 0 })
+      updateMany: async (args: any) => { updateManyCalls.push(args); const hit = args.where?.kycStatus?.in?.includes(providerProfileState.kycStatus ?? 'UNVERIFIED') && args.where?.frontIdUrl?.not === null ? !!providerProfileState.frontIdUrl : false; if (hit) providerProfileState = { ...providerProfileState, ...args.data }; return { count: hit ? 1 : 0 }; }
     },
     portfolioItem: {
       deleteMany: async () => ({ count: 0 }),
@@ -81,7 +82,7 @@ function createSetupDataMockPrisma(t: TestContext) {
     $transaction: async (ops: any) => Promise.all(ops)
   };
 
-  return { prismaMock, providerProfileUpdateSpy, userUpdateSpy, getProviderProfileState: () => providerProfileState };
+  return { prismaMock, providerProfileUpdateSpy, userUpdateSpy, updateManyCalls, getProviderProfileState: () => providerProfileState };
 }
 
 async function loadControllerWithFixture(t: TestContext) {
@@ -281,4 +282,61 @@ test('round trip: the photo saved in the setup is what the completion counts, so
   assert.equal(stored.avatarUrl, url);
   assert.equal(computeProviderMissingItems({ providerProfile: { ...stored, skills: [], portfolioItems: [] }, user: {} } as any).some((i: any) => i.key === 'avatar'), false);
   assert.equal(computeProviderMissingItems({ providerProfile: { ...stored, avatarUrl: null, skills: [], portfolioItems: [] }, user: {} } as any).some((i: any) => i.key === 'avatar'), true);
+});
+
+
+// ── identity documents sent in the setup: ONE review lifecycle (NOT_SUBMITTED -> PENDING_REVIEW -> APPROVED | REJECTED), never "stored but not submitted" ──
+const USER_REF = (name: string) => `private:image:png:waseetai/providers/user-1/identity/${name}`;
+const PNG = 'data:image/png;base64,iVBORw0KGgo=';
+async function loadWithKyc(t: TestContext, state: any = {}) {
+  t.mock.module('../utils/cloudinary-storage', { namedExports: {
+    storeDataUriIfNeeded: async (v: any) => v, ensureCloudinaryUrl: async (v: any) => v,
+    storeKycFileIfNeeded: async (v: any, _folder: string, name: string) => (typeof v === 'string' && v.startsWith('data:') ? USER_REF(`${name}-new`) : v),
+  } });
+  const x = await loadControllerWithFixture(t);
+  await x.prismaMock.providerProfile.upsert({ update: { userId: 'user-1', ...state } } as any);
+  return x;
+}
+
+test('setup: the front of the ID uploaded in the wizard is a complete submission: kycStatus UNVERIFIED -> PENDING (no ID number or back needed)', async (t) => {
+  const x = await loadWithKyc(t);
+  const res = createMockRes();
+  await x.controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ identity: { frontId: PNG } }) } as any, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(x.getProviderProfileState().kycStatus, 'PENDING');
+  assert.equal(x.getProviderProfileState().frontIdUrl, USER_REF('front-id-new'));
+});
+
+test('setup: a REJECTED identity re-sent in the wizard goes back to PENDING (re-submission)', async (t) => {
+  const x = await loadWithKyc(t, { kycStatus: 'REJECTED', frontIdUrl: USER_REF('old') });
+  const res = createMockRes();
+  await x.controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ identity: { frontId: PNG } }) } as any, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(x.getProviderProfileState().kycStatus, 'PENDING');
+});
+
+test('setup: a NEW document while the previous one is still PENDING is a 409 and nothing is saved (no duplicate request)', async (t) => {
+  const x = await loadWithKyc(t, { kycStatus: 'PENDING', frontIdUrl: USER_REF('first') });
+  const res = createMockRes();
+  await x.controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ identity: { frontId: PNG } }) } as any, res);
+  assert.equal(res.statusCode, 409);
+  assert.equal(x.getProviderProfileState().frontIdUrl, USER_REF('first'));
+  assert.equal(x.getProviderProfileState().kycStatus, 'PENDING');
+});
+
+test('setup: re-saving the wizard with the SAME stored document while PENDING is fine (200) and changes nothing', async (t) => {
+  const x = await loadWithKyc(t, { kycStatus: 'PENDING', frontIdUrl: USER_REF('first') });
+  const res = createMockRes();
+  await x.controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ identity: { frontId: USER_REF('first') } }) } as any, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(x.getProviderProfileState().kycStatus, 'PENDING');
+  assert.equal(x.getProviderProfileState().frontIdUrl, USER_REF('first'));
+});
+
+test('setup: a VERIFIED identity is never downgraded by a re-save', async (t) => {
+  const x = await loadWithKyc(t, { kycStatus: 'VERIFIED', frontIdUrl: USER_REF('first') });
+  const res = createMockRes();
+  await x.controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ identity: { frontId: USER_REF('first') } }) } as any, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(x.getProviderProfileState().kycStatus, 'VERIFIED');
 });
