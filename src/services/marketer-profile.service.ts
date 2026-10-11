@@ -1,4 +1,6 @@
 import { prisma } from '../config/db';
+import { levelInfo } from '../utils/level-info';
+import { readAffiliateLevels } from '../utils/affiliate-level-reader';
 import { Prisma } from '@prisma/client';
 import { logger } from '../config/logger';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
@@ -19,6 +21,7 @@ export interface MarketerPublicProfile {
   avatarUrl: string | null;
   bio: string | null;
   level: string;
+  levelInfo?: import('../utils/level-info').LevelInfo;
   identityVerified: boolean;
   channels: { platform: string; handle: string; url: string | null }[];
   channelMetrics: { channel: string; visitors: number; clients: number; conversionPercentage: number }[] | null;
@@ -149,13 +152,17 @@ export class MarketerProfileService {
       channelMetrics = metrics;
     }
 
+    const marketerLevel = (await readAffiliateLevels([profile.id], prisma)).get(profile.id);
+
     return {
       id: userId,
       name: name || null,
       avatarUrl: profile.avatarUrl || profile.user.avatarUrl || null,
       bio: profile.bio || null,
       identityVerified: profile.identityVerified,
-      level: profile.currentLevel,
+      // The level is read from the single ladder (numeric AffiliateProfile.level), never from the stale currentLevel label.
+      level: levelInfo('MARKETER', marketerLevel).name,
+      levelInfo: levelInfo('MARKETER', marketerLevel),
       channels: profile.marketingChannels,
       channelMetrics,
     };
