@@ -1,6 +1,6 @@
 import { levelDef, MIN_LEVEL } from '../config/levels.config';
 
-// Fee policy v2 for ESCROWS created after the cut-over (migration 20261012120000):
+// Fee policy v2 for ESCROWS created after the cut-over (migration 20261011130000):
 //  - the client funds exactly the contract price (no escrow-lock fee);
 //  - the provider's platform commission is taken when each stage is RELEASED, at the rate snapshotted when the escrow was locked
 //    (the provider's level at that moment, from config/levels.config.ts), so a later level change never alters an existing contract;

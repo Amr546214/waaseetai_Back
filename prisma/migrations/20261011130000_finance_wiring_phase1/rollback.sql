@@ -1,4 +1,4 @@
--- Rollback for 20261012120000 (drops only the columns it added; they hold nothing else).
+-- Rollback for 20261011130000 (drops only the columns it added; they hold nothing else).
 ALTER TABLE "escrows" DROP COLUMN IF EXISTS "feePolicyVersion";
 ALTER TABLE "escrows" DROP COLUMN IF EXISTS "providerCommissionRateSnapshot";
 ALTER TABLE "escrows" DROP COLUMN IF EXISTS "providerCommissionLevelSnapshot";

@@ -867,7 +867,7 @@ model Escrow {
   // GROSS released from the escrow so far (the contract/stage value). For a fee-policy-v2 escrow the provider receives providerNetReleasedAmount.
   releasedAmount   Float        @default(0)
 
-  // Fee policy v2 (migration 20261012120000). NULL feePolicyVersion = a LEGACY escrow: funded with the old 13% client charge and released
+  // Fee policy v2 (migration 20261011130000). NULL feePolicyVersion = a LEGACY escrow: funded with the old 13% client charge and released
   // gross; it is never recalculated. A v2 escrow holds exactly the contract price, and snapshots the provider's commission at lock so a later
   // level change never alters it.
   feePolicyVersion                Int?
@@ -2619,7 +2619,7 @@ model PaypalPayment {
   paypalOrderId   String              @unique
   paypalCaptureId String?             @unique // set only once capture succeeds; globally idempotent
   amount          Decimal             @db.Decimal(12, 2) // USD, exact decimal — no float comparisons for money. The amount CHARGED on PayPal (gross).
-  // Fee policy v2 (migration 20261012120000): the wallet credit the user asked for (net), the PayPal fee and its percent. NULL netAmount = a legacy
+  // Fee policy v2 (migration 20261011130000): the wallet credit the user asked for (net), the PayPal fee and its percent. NULL netAmount = a legacy
   // order created before the fee: the whole captured amount is credited.
   netAmount       Decimal?            @db.Decimal(12, 2)
   feeAmount       Decimal?            @db.Decimal(12, 2)
