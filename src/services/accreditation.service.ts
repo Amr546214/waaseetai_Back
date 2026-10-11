@@ -1,3 +1,4 @@
+import { ASSESSMENT_ATTEMPT_WINDOW_DAYS, COUNTED_ATTEMPT_STATUS_NAMES, computeRetryWindow } from '../utils/assessment-retake';
 import { deriveApprovalState } from '../utils/specialty-approval-state';
 import { prisma } from '../config/db';
 import { logger } from '../config/logger';
@@ -97,6 +98,23 @@ export class AccreditationService {
 					select: { providerSpecialtyId: true, status: true, aiFeedbackAr: true, createdAt: true }
 				})
 				: [];
+			// The retake window (cooldown / attempt limit) of each specialty that has not passed yet: the page says "you can retake in X hours" in advance.
+			const attemptRows = allRegistered.length
+				? await prisma.assessmentAttempt.findMany({
+					where: {
+						providerSpecialtyId: { in: allRegistered.map((r) => r.id) },
+						status: { in: [...COUNTED_ATTEMPT_STATUS_NAMES] as any },
+						createdAt: { gte: new Date(Date.now() - ASSESSMENT_ATTEMPT_WINDOW_DAYS * 24 * 3600 * 1000) }
+					},
+					orderBy: { createdAt: 'desc' },
+					select: { providerSpecialtyId: true, completedAt: true, createdAt: true }
+				})
+				: [];
+			const retryOf = (ps: { id: string; isPassed: boolean; status: string }) => {
+				if (ps.isPassed || ps.status === 'APPROVED' || ps.status === 'LOCKED_OUT') return { retryAfterSeconds: null, attemptLimitReached: false };
+				const w = computeRetryWindow(attemptRows.filter((x) => x.providerSpecialtyId === ps.id));
+				return { retryAfterSeconds: w.retryAfterSeconds > 0 ? w.retryAfterSeconds : null, attemptLimitReached: w.limitReached };
+			};
 			const registered = allRegistered.map((ps) => ({
 				id: ps.id,
 				specialtyId: ps.specialtyId,
@@ -110,6 +128,7 @@ export class AccreditationService {
 					: ps.status === 'REJECTED' && !ps.isPassed ? 'REJECTED'
 					: ps.isPassed ? 'PASSED'
 					: ps.hasTakenAssessment ? 'TEST_NOT_PASSED' : 'TEST_NOT_TAKEN',
+				...retryOf(ps),
 				...deriveApprovalState({
 					status: ps.status, isPassed: ps.isPassed, hasTakenAssessment: ps.hasTakenAssessment,
 					workSampleCount: (ps as any)._count?.workSamples ?? 0,

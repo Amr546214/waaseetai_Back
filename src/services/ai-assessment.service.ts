@@ -1,3 +1,4 @@
+import { ASSESSMENT_ATTEMPT_WINDOW_DAYS, ASSESSMENT_MAX_ATTEMPTS_PER_30_DAYS, ASSESSMENT_RETAKE_COOLDOWN_HOURS, computeRetryWindow } from '../utils/assessment-retake';
 import { SPECIALTY_TEST_QUESTION_COUNT, SPECIALTY_TEST_TIME_LIMIT_MINUTES } from '../constants/specialty-test';
 import { AssessmentStatus, Prisma, SpecialtyVerificationStatus } from '@prisma/client';
 import { prisma } from '../config/db';
@@ -32,8 +33,8 @@ export const ASSESSMENT_GRADING_FAILED_MESSAGE = 'تعذر تصحيح التقي
 export const ASSESSMENT_NOT_GRADABLE_CODE = 'ASSESSMENT_NOT_GRADABLE';
 
 // Retake policy (explicit, enforced under the specialty row lock for REST and socket alike).
-export const ASSESSMENT_RETAKE_COOLDOWN_HOURS = Math.max(0, Number(process.env.ASSESSMENT_RETAKE_COOLDOWN_HOURS ?? 24));
-export const ASSESSMENT_MAX_ATTEMPTS_PER_30_DAYS = Math.max(1, Number(process.env.ASSESSMENT_MAX_ATTEMPTS_30D ?? 5));
+// The cooldown / attempt limit live in utils/assessment-retake.ts (shared with the pages that announce the wait in advance).
+export { ASSESSMENT_RETAKE_COOLDOWN_HOURS, ASSESSMENT_MAX_ATTEMPTS_PER_30_DAYS };
 export const ASSESSMENT_NOT_ELIGIBLE_CODE = 'ASSESSMENT_NOT_ELIGIBLE';
 export const ASSESSMENT_COOLDOWN_CODE = 'ASSESSMENT_COOLDOWN';
 export const ASSESSMENT_ATTEMPT_LIMIT_CODE = 'ASSESSMENT_ATTEMPT_LIMIT';
@@ -148,23 +149,19 @@ export async function claimAssessmentGeneration(
     if (specialtyRow.isPassed) {
       throw errorWithCode('اجتزت التقييم لهذا التخصص وهو بانتظار قرار الإدارة، ولا حاجة لإعادته.', ASSESSMENT_NOT_ELIGIBLE_CODE, undefined, 409);
     }
-    const since = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+    const since = new Date(Date.now() - ASSESSMENT_ATTEMPT_WINDOW_DAYS * 24 * 3600 * 1000);
     const recent = await tx.assessmentAttempt.findMany({
       where: { providerSpecialtyId, status: { in: COUNTED_ATTEMPT_STATUSES }, createdAt: { gte: since } },
       orderBy: { createdAt: 'desc' },
       select: { completedAt: true, createdAt: true }
     });
-    if (recent.length >= ASSESSMENT_MAX_ATTEMPTS_PER_30_DAYS) {
+    const retryWindow = computeRetryWindow(recent);
+    if (retryWindow.limitReached) {
       throw errorWithCode(`وصلت إلى الحد الأقصى لمحاولات التقييم (${ASSESSMENT_MAX_ATTEMPTS_PER_30_DAYS} خلال 30 يومًا). يمكنك المحاولة لاحقًا.`, ASSESSMENT_ATTEMPT_LIMIT_CODE, undefined, 429);
     }
-    const last = recent[0];
-    if (last && ASSESSMENT_RETAKE_COOLDOWN_HOURS > 0) {
-      const lastAt = new Date(last.completedAt ?? last.createdAt).getTime();
-      const waitMs = lastAt + ASSESSMENT_RETAKE_COOLDOWN_HOURS * 3600 * 1000 - Date.now();
-      if (waitMs > 0) {
-        const retryAfterSeconds = Math.ceil(waitMs / 1000);
-        throw errorWithCode(`يمكنك إعادة التقييم بعد ${Math.ceil(waitMs / 3600000)} ساعة تقريبًا.`, ASSESSMENT_COOLDOWN_CODE, undefined, 429, { retryAfterSeconds });
-      }
+    if (retryWindow.retryAfterSeconds > 0) {
+      const retryAfterSeconds = retryWindow.retryAfterSeconds;
+      throw errorWithCode(`يمكنك إعادة التقييم بعد ${Math.ceil(retryAfterSeconds / 3600)} ساعة تقريبًا.`, ASSESSMENT_COOLDOWN_CODE, undefined, 429, { retryAfterSeconds });
     }
 
     const reserved = await tx.assessmentAttempt.create({
