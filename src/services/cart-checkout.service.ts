@@ -1,3 +1,4 @@
+import { buildEscrowSnapshot } from '../utils/escrow-commission';
 import crypto from 'crypto';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { ContractStatus, EscrowStatus, OrderStatus, OtpType, ProjectStageStatus, ProjectStatus, Prisma } from '@prisma/client';
@@ -435,7 +436,9 @@ export class CartCheckoutService {
 
         const contract = await tx.contract.create({ data: { projectId: project.id, clientId: userId, providerId: item.providerId, price: item.price, durationDays: item.deliveryDays, phasesCount, status: ContractStatus.ACTIVE, signedAt: new Date() } });
 
-        await tx.escrow.create({ data: { projectId: project.id, amount: item.price, status: EscrowStatus.HELD, paymentMethod: 'WALLET', paymentReference: context.paymentReference || null, fundedAt: new Date() } });
+        // fee policy v2: the same snapshot as a request escrow (the provider's level + commission now), so marketplace orders release net too
+        const itemProviderGamification = await tx.providerGamification.findUnique({ where: { providerId: item.providerId }, select: { currentLevelIndex: true } });
+        await tx.escrow.create({ data: { projectId: project.id, amount: item.price, status: EscrowStatus.HELD, paymentMethod: 'WALLET', paymentReference: context.paymentReference || null, fundedAt: new Date(), ...buildEscrowSnapshot(itemProviderGamification?.currentLevelIndex) } });
 
         if (stages.length > 0) {
           await tx.projectStage.createMany({ data: stages.map((stage, index) => ({

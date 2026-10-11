@@ -4,6 +4,7 @@ import { clientFinanceService } from './client-finance.service';
 import { LogCategory, LogStatus, Prisma, PaypalPaymentStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { AppError } from '../utils/app-error';
+import { DEPOSIT_FEE_PERCENT, depositGrossUp } from '../utils/fee-policy';
 
 // USD deposit bounds: see dtos/paypal.dto.ts.
 const MIN_DEPOSIT_USD = 50;
@@ -17,15 +18,20 @@ export class PaypalFinanceService {
 	 * row at all, let alone one that looks successful.
 	 */
 	async initiateDeposit(clientId: string, amount: number) {
+		// `amount` is the NET the user wants added to the wallet (the same 50 / 100,000 bounds). The PayPal order is for the GROSS that includes the
+		// PayPal deposit fee of نسب الدفع.xlsx (7%): gross = net / (1 − 7%), e.g. 100 -> 107.53. The wallet is credited the net on capture.
 		if (!Number.isFinite(amount) || amount < MIN_DEPOSIT_USD || amount > MAX_DEPOSIT_USD) {
 			throw new AppError(`المبلغ يجب أن يكون بين ${MIN_DEPOSIT_USD} و ${MAX_DEPOSIT_USD.toLocaleString('en-US')} دولار أمريكي`, 400);
 		}
 
-		const normalizedAmount = new Prisma.Decimal(amount).toDecimalPlaces(2);
+		const netAmount = new Prisma.Decimal(amount).toDecimalPlaces(2);
+		const feePercent = DEPOSIT_FEE_PERCENT.paypal;
+		const grossAmount = new Prisma.Decimal(depositGrossUp(netAmount.toNumber(), 'paypal')).toDecimalPlaces(2);
+		const feeAmount = grossAmount.minus(netAmount).toDecimalPlaces(2);
 		const reference = randomUUID();
 
 		const order = await paypalService.createOrder({
-			amount: normalizedAmount.toFixed(2),
+			amount: grossAmount.toFixed(2),
 			currency: 'USD',
 			referenceId: reference,
 			customId: clientId
@@ -40,13 +46,22 @@ export class PaypalFinanceService {
 				userId: clientId,
 				reference,
 				paypalOrderId: order.id,
-				amount: normalizedAmount,
+				amount: grossAmount,
+				netAmount,
+				feeAmount,
+				feePercent,
 				currency: 'USD',
 				status: PaypalPaymentStatus.PENDING
 			}
 		});
 
-		return { paypalOrderId: order.id };
+		return {
+			paypalOrderId: order.id,
+			netAmount: netAmount.toNumber(),
+			feePercent,
+			feeAmount: feeAmount.toNumber(),
+			grossAmount: grossAmount.toNumber()
+		};
 	}
 
 	/**
@@ -184,7 +199,14 @@ export class PaypalFinanceService {
 	 * treated as "already credited", and
 	 * the unique referenceId makes the credit exactly-once.
 	 */
-	private async creditWalletForCapture(payment: { id: string; userId: string }, captureId: string, verifiedAmount: Prisma.Decimal) {
+	private async creditWalletForCapture(
+		payment: { id: string; userId: string; netAmount?: Prisma.Decimal | null; feeAmount?: Prisma.Decimal | null; feePercent?: number | null },
+		captureId: string,
+		verifiedAmount: Prisma.Decimal
+	) {
+		// The wallet gets the NET the user asked for. An order created before the fee existed (netAmount null) is credited what PayPal captured, in full.
+		const creditAmount = payment.netAmount ?? verifiedAmount;
+		const feeAmount = payment.netAmount ? (payment.feeAmount ?? verifiedAmount.minus(payment.netAmount)) : null;
 		const existing = await prisma.walletTransaction.findFirst({ where: { referenceId: captureId } });
 		if (existing) {
 			await prisma.paypalPayment.updateMany({
@@ -200,19 +222,22 @@ export class PaypalFinanceService {
 					data: {
 						userId: payment.userId,
 						type: 'DEPOSIT',
-						amount: verifiedAmount.toNumber(),
+						amount: creditAmount.toNumber(),
 						currency: 'USD',
 						status: 'COMPLETED',
 						paymentMethod: 'PAYPAL',
 						referenceId: captureId,
-						description: 'إيداع رصيد بالمحفظة عبر PayPal',
-						metadata: { paypalPaymentId: payment.id, paypalCaptureId: captureId }
+						description: feeAmount ? 'إيداع رصيد بالمحفظة عبر PayPal (بعد رسوم PayPal)' : 'إيداع رصيد بالمحفظة عبر PayPal',
+						// the fee breakdown stays with the transaction: net credited, gross charged on PayPal, the percent and the fee itself
+						metadata: feeAmount
+							? { paypalPaymentId: payment.id, paypalCaptureId: captureId, feePolicyVersion: 2, method: 'PAYPAL', netCredited: creditAmount.toNumber(), grossCharged: verifiedAmount.toNumber(), feePercent: payment.feePercent ?? DEPOSIT_FEE_PERCENT.paypal, feeAmount: feeAmount.toNumber() }
+							: { paypalPaymentId: payment.id, paypalCaptureId: captureId }
 					}
 				});
 
 				await tx.user.update({
 					where: { id: payment.userId },
-					data: { walletBalance: { increment: verifiedAmount.toNumber() } }
+					data: { walletBalance: { increment: creditAmount.toNumber() } }
 				});
 
 				await tx.paypalPayment.update({
@@ -225,10 +250,10 @@ export class PaypalFinanceService {
 						userId: payment.userId,
 						category: LogCategory.SYSTEM_AUDIT,
 						title: 'إيداع رصيد بالمحفظة',
-						actionText: `إيداع بمبلغ ${verifiedAmount.toFixed(2)} دولار عبر PayPal`,
+						actionText: feeAmount ? `إيداع ${creditAmount.toFixed(2)} دولار (صافي) عبر PayPal، المدفوع ${verifiedAmount.toFixed(2)} شاملًا رسوم PayPal ${feeAmount.toFixed(2)}` : `إيداع بمبلغ ${verifiedAmount.toFixed(2)} دولار عبر PayPal`,
 						status: LogStatus.COMPLETED,
 						statusText: 'مكتمل بنجاح',
-						summary: `تم شحن المحفظة بمبلغ ${verifiedAmount.toFixed(2)} دولار - رقم عملية PayPal: ${captureId}`,
+						summary: feeAmount ? `تم شحن المحفظة بصافي ${creditAmount.toFixed(2)} دولار (دُفع ${verifiedAmount.toFixed(2)} شاملًا رسوم PayPal ${feeAmount.toFixed(2)}) - رقم عملية PayPal: ${captureId}` : `تم شحن المحفظة بمبلغ ${verifiedAmount.toFixed(2)} دولار - رقم عملية PayPal: ${captureId}`,
 						source: 'USER',
 						eventType: 'WALLET_DEPOSIT_COMPLETED',
 						severity: 'INFO'
@@ -239,7 +264,7 @@ export class PaypalFinanceService {
 					data: {
 						userId: payment.userId,
 						title: 'تم إيداع الرصيد بنجاح',
-						message: `أُضيف مبلغ ${verifiedAmount.toFixed(2)} دولار إلى رصيد محفظتك عبر PayPal، يمكنك الآن استخدامه لتمويل المشاريع.`,
+						message: `أُضيف مبلغ ${creditAmount.toFixed(2)} دولار إلى رصيد محفظتك عبر PayPal${feeAmount ? ` (المدفوع ${verifiedAmount.toFixed(2)} شاملًا رسوم PayPal ${feeAmount.toFixed(2)})` : ''}، يمكنك الآن استخدامه لتمويل المشاريع.`,
 						type: 'FINANCIAL',
 						category: 'FINANCIAL',
 						// This service is client-only (initiateDeposit/captureDeposit

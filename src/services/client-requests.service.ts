@@ -1,3 +1,4 @@
+import { buildEscrowSnapshot, ESCROW_FEE_POLICY_V2 } from '../utils/escrow-commission';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { BudgetType, ContractStatus, ProposalStatus, ProviderTypePreference, RequestStatus, UserRole } from '@prisma/client';
@@ -31,10 +32,9 @@ function generateSlug(text: string): string {
 	return clean || `slug-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 }
 
-// Platform fee constants (percentage of bid amount)
-const ESCROW_FEE_VAT = 0.07;       // 7% VAT
-const ESCROW_FEE_PLATFORM = 0.05;  // 5% platform commission
-const ESCROW_FEE_INSURANCE = 0.01; // 1% dispute insurance
+// Fee policy v2: NO fee is charged to the client when an escrow is locked (the old 13% = 7% VAT + 5% platform + 1% insurance is gone for every escrow
+// created from now on; existing escrows keep what they were funded with and are never touched). The platform earns the provider's level commission
+// when each stage is released (utils/escrow-commission.ts); the client pays only the deposit fee when adding money to the wallet.
 
 // Shape consumed by the Angular create-request page. Every field except the
 // two texts is nullable: a value WaseetAI did not return (or returned in an
@@ -1580,8 +1580,11 @@ export class ClientRequestsService {
 			}
 
 			// c. Create Escrow Record with precise financial float conversion
-			const rawEscrowAmount = contractBeforePayment.price * (1 + ESCROW_FEE_VAT + ESCROW_FEE_INSURANCE + ESCROW_FEE_PLATFORM);
-			const txEscrowAmount = Math.round(rawEscrowAmount * 100) / 100;
+			// The client funds exactly the contract price. The provider's commission snapshot (level + rate at this moment) is written on the escrow,
+			// so a later level change never alters this contract.
+			const txEscrowAmount = Math.round(contractBeforePayment.price * 100) / 100;
+			const providerGamification = await tx.providerGamification.findUnique({ where: { providerId: contractBeforePayment.providerId }, select: { currentLevelIndex: true } });
+			const escrowSnapshot = buildEscrowSnapshot(providerGamification?.currentLevelIndex);
 			const walletDebit = await tx.user.updateMany({
 				where: { id: userId, walletBalance: { gte: txEscrowAmount } },
 				data: { walletBalance: { decrement: txEscrowAmount } }
@@ -1607,7 +1610,7 @@ export class ClientRequestsService {
 					paymentMethod: 'WALLET',
 					referenceId: escrowReference,
 					description: `حجز ضمان المشروع: ${requestId}`,
-					metadata: { requestId, contractId: contractBeforePayment.id, offerId }
+					metadata: { requestId, contractId: contractBeforePayment.id, offerId, feePolicyVersion: ESCROW_FEE_POLICY_V2, escrowFee: 0, contractPrice: txEscrowAmount }
 				}
 			});
 
@@ -1619,14 +1622,16 @@ export class ClientRequestsService {
 					status: 'HELD',
 					paymentMethod: 'WALLET',
 					paymentReference: escrowReference,
-					fundedAt: new Date()
+					fundedAt: new Date(),
+					...escrowSnapshot
 				},
 				update: {
 					amount: txEscrowAmount,
 					status: 'HELD',
 					paymentMethod: 'WALLET',
 					paymentReference: escrowReference,
-					fundedAt: new Date()
+					fundedAt: new Date(),
+					...escrowSnapshot
 				}
 			});
 

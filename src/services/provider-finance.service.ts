@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
+import { isV2Escrow, providerReleased, providerNetEntitlement, splitRelease } from '../utils/escrow-commission';
 
 export class ProviderFinanceService {
   /**
@@ -35,30 +36,51 @@ export class ProviderFinanceService {
       orderBy: { updatedAt: 'desc' }
     });
 
-    const availableBalance = escrows.reduce((sum, escrow) => sum + escrow.releasedAmount, 0);
-    const escrowBalance = escrows.reduce((sum, escrow) => {
-      const providerEntitlement = escrow.project.contract?.price || escrow.amount;
-      return sum + Math.max(0, providerEntitlement - escrow.releasedAmount);
-    }, 0);
-    const stageTransactions = escrows.flatMap(escrow =>
-      (escrow.project.contract?.stages || []).map(stage => ({
-        id: `stage-release-${stage.id}`,
-        type: 'credit' as const,
-        category: 'STAGE_RELEASE' as const,
-        amount: stage.amount,
-        currency: 'USD',
-        title: 'إفراج دفعة مرحلة',
-        description: `${stage.title} · ${escrow.project.title}`,
-        projectId: escrow.project.id,
-        projectTitle: escrow.project.title,
-        stageId: stage.id,
-        status: 'COMPLETED' as const,
-        createdAt: stage.approvedAt || escrow.updatedAt
-      }))
-    );
+    // Fee policy v2: a v2 escrow counts what the provider really receives (the net after the snapshotted platform commission); a legacy escrow is
+    // unchanged (gross). The two never mix inside one escrow.
+    const entitlementOf = (escrow: (typeof escrows)[number]): number => {
+      const price = escrow.project.contract?.price || escrow.amount;
+      return isV2Escrow(escrow) && escrow.providerCommissionRateSnapshot != null ? providerNetEntitlement(price, escrow.providerCommissionRateSnapshot) : price;
+    };
+    const availableBalance = escrows.reduce((sum, escrow) => sum + providerReleased(escrow), 0);
+    const escrowBalance = escrows.reduce((sum, escrow) => sum + Math.max(0, entitlementOf(escrow) - providerReleased(escrow)), 0);
+    const platformCommissionTotal = escrows.reduce((sum, escrow) => sum + (isV2Escrow(escrow) ? escrow.platformCommissionAmount : 0), 0);
 
-    // Keeps old completed contracts visible if they were released before stage-level tracking was introduced.
-    const legacyTransactions = escrows.flatMap(escrow => {
+    const stageTransactions = escrows.flatMap(escrow => {
+      const stages = escrow.project.contract?.stages || [];
+      const v2Rate = isV2Escrow(escrow) ? escrow.providerCommissionRateSnapshot : null;
+      // v2: the same cumulative split the release used, replayed in release order, so every stage shows its commission and its net
+      const splitByStage = new Map<string, { gross: number; commission: number; net: number }>();
+      if (v2Rate != null) {
+        let grossSoFar = 0; let commissionSoFar = 0;
+        for (const stage of [...stages].sort((x, y) => (x.approvedAt?.getTime() ?? 0) - (y.approvedAt?.getTime() ?? 0))) {
+          const r = splitRelease({ grossReleasedBefore: grossSoFar, commissionTotalBefore: commissionSoFar, grossReleasedAfter: grossSoFar + stage.amount, ratePercent: v2Rate });
+          splitByStage.set(stage.id, { gross: r.gross, commission: r.commission, net: r.net });
+          grossSoFar = r.grossReleasedAfter; commissionSoFar = r.commissionTotalAfter;
+        }
+      }
+      return stages.map(stage => {
+        const split = splitByStage.get(stage.id);
+        return {
+          id: `stage-release-${stage.id}`,
+          type: 'credit' as const,
+          category: 'STAGE_RELEASE' as const,
+          amount: split ? split.net : stage.amount,
+          ...(split ? { grossAmount: split.gross, platformCommission: split.commission, commissionRatePercent: v2Rate } : {}),
+          currency: 'USD',
+          title: 'إفراج دفعة مرحلة',
+          description: split ? `${stage.title} · ${escrow.project.title} · بعد خصم عمولة المنصة ${v2Rate}%` : `${stage.title} · ${escrow.project.title}`,
+          projectId: escrow.project.id,
+          projectTitle: escrow.project.title,
+          stageId: stage.id,
+          status: 'COMPLETED' as const,
+          createdAt: stage.approvedAt || escrow.updatedAt
+        };
+      });
+    });
+
+    // Keeps old completed contracts visible if they were released before stage-level tracking was introduced (legacy escrows only).
+    const legacyTransactions = escrows.filter(escrow => !isV2Escrow(escrow)).flatMap(escrow => {
       const tracked = (escrow.project.contract?.stages || []).reduce((sum, stage) => sum + stage.amount, 0);
       const residual = Math.max(0, escrow.releasedAmount - tracked);
       return residual > 0 ? [{
@@ -86,6 +108,8 @@ export class ProviderFinanceService {
         availableBalance,
         totalEarnings: availableBalance,
         escrowBalance,
+        // what the platform kept as commission on v2 escrows (the provider's availableBalance is already net of it)
+        platformCommissionTotal,
         releasedThisMonth: transactions.filter(tx => tx.createdAt >= monthStart).reduce((sum, tx) => sum + tx.amount, 0),
         releasedTransactionsCount: transactions.length,
         fundedProjectsCount: escrows.filter(escrow => (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).length,
@@ -97,9 +121,10 @@ export class ProviderFinanceService {
         id: escrow.id,
         projectId: escrow.project.id,
         projectTitle: escrow.project.title,
-        total: escrow.project.contract?.price || escrow.amount,
-        released: escrow.releasedAmount,
-        held: Math.max(0, (escrow.project.contract?.price || escrow.amount) - escrow.releasedAmount),
+        total: entitlementOf(escrow),
+        released: providerReleased(escrow),
+        held: Math.max(0, entitlementOf(escrow) - providerReleased(escrow)),
+        ...(isV2Escrow(escrow) ? { grossTotal: escrow.project.contract?.price || escrow.amount, commissionRatePercent: escrow.providerCommissionRateSnapshot } : {}),
         status: escrow.status,
         updatedAt: escrow.updatedAt
       }))

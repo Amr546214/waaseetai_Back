@@ -86,9 +86,10 @@ test('affiliateCommission: 15 levels from the live config; level 7 = 2.75', () =
   expected.forEach((p, i) => assert.equal(affiliateCommission(i + 1), p, `level ${i + 1}`));
 });
 
-// The ONLY importer is the read-only display endpoint (GET /levels serves the published percentage tables); no money path imports it.
-const READ_ONLY_DISPLAY_IMPORTERS = ['gamification.controller.ts'];
-test('fee-policy is wired into no money path (only the read-only /levels display imports it) and BROKER_LEVEL_MATRIX is gone', () => {
+// The ONLY importers: the read-only display endpoint (GET /levels serves the published percentage tables) and the PayPal DEPOSIT fee (7%, phase 1).
+// Nothing else is wired: no cashback, no marketer withdrawal fee, no provider withdrawal fee (the provider commission is taken at stage release, in utils/escrow-commission.ts).
+const READ_ONLY_DISPLAY_IMPORTERS = ['gamification.controller.ts', 'paypal-finance.service.ts'];
+test('fee-policy is wired only into the /levels display and the PayPal deposit fee, and BROKER_LEVEL_MATRIX is gone', () => {
   const root = join(__dirname, '..');
   const walk = (d: string, out: string[] = []): string[] => { for (const f of readdirSync(d)) { const p = join(d, f); statSync(p).isDirectory() ? walk(p, out) : out.push(p); } return out; };
   for (const f of walk(root).filter((x) => x.endsWith('.ts') && !x.endsWith('.test.ts') && !x.endsWith('fee-policy.ts'))) {

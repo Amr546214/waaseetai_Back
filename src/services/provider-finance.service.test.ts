@@ -77,3 +77,67 @@ test('getTransactions: escrow-funded entries carry currency USD, amount unchange
 	assert.equal(fundingEvent.currency, 'USD');
 	assert.equal(fundingEvent.amount, 1000); // unchanged from source contract.price
 });
+
+// ── fee policy v2: the provider's balance is what they RECEIVE (net of the snapshotted platform commission); legacy escrows are unchanged ──
+const v2 = (over: any = {}, stages: any[] = [{ id: 's1', title: 'مرحلة 1', amount: 400, approvedAt: new Date('2026-02-01') }]) => makeEscrow({
+	amount: 1000, releasedAmount: 400, feePolicyVersion: 2, providerCommissionRateSnapshot: 12.75, providerCommissionLevelSnapshot: 1,
+	platformCommissionAmount: 51, providerNetReleasedAmount: 349, project: { ...makeEscrow().project, contract: { price: 1000, stages } }, ...over
+});
+
+test('v2 escrow: availableBalance grows by the NET released (349 of a 400 stage at 12.75%), never the gross', async (t) => {
+	const service = await loadService(t, [v2()]);
+	const wallet = await service.getWallet('provider-1');
+	assert.equal(wallet.summary.availableBalance, 349);
+	assert.equal(wallet.summary.totalEarnings, 349);
+});
+
+test('v2 escrow: what is still held for the provider is the NET entitlement left (872.5 - 349 = 523.5), not the gross price left', async (t) => {
+	const service = await loadService(t, [v2()]);
+	const wallet = await service.getWallet('provider-1');
+	assert.equal(wallet.summary.escrowBalance, 523.5);
+	assert.equal(wallet.escrows[0].total, 872.5);
+	assert.equal(wallet.escrows[0].released, 349);
+	assert.equal(wallet.escrows[0].held, 523.5);
+	assert.equal(wallet.escrows[0].grossTotal, 1000);
+	assert.equal(wallet.escrows[0].commissionRatePercent, 12.75);
+});
+
+test('v2 escrow: the platform commission is reported, and the stage transaction shows gross, commission and net', async (t) => {
+	const service = await loadService(t, [v2()]);
+	const wallet = await service.getWallet('provider-1');
+	assert.equal(wallet.summary.platformCommissionTotal, 51);
+	const tx = wallet.transactions.find((x: any) => x.category === 'STAGE_RELEASE');
+	assert.deepEqual([tx.amount, tx.grossAmount, tx.platformCommission, tx.commissionRatePercent], [349, 400, 51, 12.75]);
+	assert.match(tx.description, /بعد خصم عمولة المنصة 12\.75%/);
+});
+
+test('v2 escrow with several stages: each stage nets its own part and the net transactions add up to the stored net released', async (t) => {
+	const stages = [
+		{ id: 's1', title: 'أولى', amount: 100.01, approvedAt: new Date('2026-02-01') },
+		{ id: 's2', title: 'ثانية', amount: 200.02, approvedAt: new Date('2026-02-02') },
+		{ id: 's3', title: 'ثالثة', amount: 300.03, approvedAt: new Date('2026-02-03') }
+	];
+	const gross = 600.06; const commission = Math.round(gross * 12.42) / 100; // 74.53
+	const service = await loadService(t, [v2({ amount: gross, releasedAmount: gross, providerCommissionRateSnapshot: 12.42, platformCommissionAmount: Math.round(gross * 12.42) / 100, providerNetReleasedAmount: Math.round((gross - commission) * 100) / 100, status: 'RELEASED', project: { ...makeEscrow().project, contract: { price: gross, stages } } }, stages)]);
+	const wallet = await service.getWallet('provider-1');
+	const nets = wallet.transactions.filter((x: any) => x.category === 'STAGE_RELEASE').map((x: any) => x.amount);
+	assert.equal(Math.round(nets.reduce((a: number, b: number) => a + b, 0) * 100) / 100, wallet.summary.availableBalance);
+	assert.equal(wallet.summary.escrowBalance, 0);
+});
+
+test('a v2 escrow\'s commission never changes with the provider\'s later level: the wallet only reads the snapshot', async (t) => {
+	const service = await loadService(t, [v2({ providerCommissionRateSnapshot: 12.75, providerCommissionLevelSnapshot: 1 })]);
+	const first = await service.getWallet('provider-1');
+	assert.equal(first.summary.availableBalance, 349); // the same whatever level 15 would pay now (8.15%)
+});
+
+test('LEGACY escrow (feePolicyVersion null) next to a v2 one: the legacy one stays gross, the v2 one is net, no mixing', async (t) => {
+	const legacy = makeEscrow({ id: 'escrow-legacy', amount: 1130, releasedAmount: 400, feePolicyVersion: null });
+	const service = await loadService(t, [legacy, v2({ id: 'escrow-v2' })]);
+	const wallet = await service.getWallet('provider-1');
+	assert.equal(wallet.summary.availableBalance, 400 + 349);
+	assert.equal(wallet.summary.platformCommissionTotal, 51, 'only the v2 escrow carries a commission');
+	const legacyTx = wallet.transactions.filter((x: any) => x.stageId === 'stage-1');
+	assert.equal(legacyTx[0].amount, 400);
+	assert.equal('grossAmount' in legacyTx[0], false);
+});

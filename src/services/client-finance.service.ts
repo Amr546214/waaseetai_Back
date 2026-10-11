@@ -1,12 +1,13 @@
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 
-const VAT_RATE = 0.15;
+// No tax is recorded on invoices (legal policy s10: no VAT is charged). The old 15% line was display-only and never collected, so it is gone: the invoice
+// shows the stage amount, and tax is 0 / taxRate 0.
 
 const buildInvoice = (contract: any, stage: any, delivery: any) => {
   const total = Number(stage.amount || 0);
-  const subtotal = Number((total / (1 + VAT_RATE)).toFixed(2));
-  const tax = Number((total - subtotal).toFixed(2));
+  const subtotal = total;
+  const tax = 0;
   const issuedAt = delivery.submittedAt as Date;
   const status: 'paid' | 'due' = stage.status === 'APPROVED' && delivery.status === 'APPROVED' ? 'paid' : 'due';
   const verificationChecks = [
@@ -32,7 +33,7 @@ const buildInvoice = (contract: any, stage: any, delivery: any) => {
     subtotal,
     total,
     tax,
-    taxRate: VAT_RATE * 100,
+    taxRate: 0,
     status,
     paymentDate: status === 'paid' ? (stage.approvedAt || delivery.reviewedAt || null) : null,
     verificationScore,

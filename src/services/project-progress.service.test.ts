@@ -30,6 +30,7 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
   disputeActive?: boolean;
   referrals?: any[];
   commissionCreateImpl?: (args: any) => any;
+  escrowRow?: any;
 } = {}) {
   const contract = {
     id: 'contract-1',
@@ -114,7 +115,8 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
       update: projectUpdateSpy,
       count: async () => opts.completedProjectsCount ?? 1
     },
-    escrow: { updateMany: escrowUpdateManySpy },
+    // a legacy escrow by default (no fee-policy snapshot): released gross exactly as before. A test can pass `escrowRow` for a v2 escrow.
+    escrow: { updateMany: escrowUpdateManySpy, findUnique: async () => opts.escrowRow ?? null },
     clientRequest: { updateMany: clientRequestUpdateManySpy },
     contract: { updateMany: contractUpdateManySpy },
     accountAuditLog: { create: accountAuditLogCreateSpy },
@@ -759,4 +761,54 @@ test('commission engine (flag enabled, two referrals on the same release — cli
   const logs = getCommissionLogs();
   assert.equal(logs.find((l: any) => l.affiliateId === 'affiliate-a')?.referredUserId, 'client-1');
   assert.equal(logs.find((l: any) => l.affiliateId === 'affiliate-b')?.referredUserId, 'provider-1');
+});
+
+// ── fee policy v2: the provider's platform commission is taken at STAGE RELEASE, at the rate snapshotted on the escrow ──
+const v2Escrow = (over: any = {}) => ({ feePolicyVersion: 2, providerCommissionRateSnapshot: 12.75, providerCommissionLevelSnapshot: 1, releasedAmount: 0, platformCommissionAmount: 0, providerNetReleasedAmount: 0, ...over });
+
+test('v2 intermediate release: the stage 100 is released gross (escrow), the platform keeps 12.75, the provider nets 87.25 — all stored on the escrow', async (t) => {
+  const { projectProgressService, escrowUpdateManySpy, accountAuditLogCreateSpy } = await loadProjectProgressServiceWithFixture(t, { nextStage: { id: 'stage-2' }, escrowRow: v2Escrow() });
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+  assert.equal(escrowUpdateManySpy.mock.callCount(), 1);
+  assert.deepEqual(escrowUpdateManySpy.mock.calls[0].arguments[0].data, { releasedAmount: 100, platformCommissionAmount: 12.75, providerNetReleasedAmount: 87.25 });
+  const meta = accountAuditLogCreateSpy.mock.calls[0].arguments[0].data.metaData;
+  assert.deepEqual([meta.releasedAmount, meta.grossAmount, meta.platformCommission, meta.providerNet, meta.commissionRatePercent, meta.commissionLevel, meta.feePolicyVersion], [100, 100, 12.75, 87.25, 12.75, 1, 2]);
+});
+
+test('v2 intermediate release after earlier releases: the commission is on the cumulative gross, so the stage takes only its own part', async (t) => {
+  const { projectProgressService, escrowUpdateManySpy } = await loadProjectProgressServiceWithFixture(t, { nextStage: { id: 'stage-2' }, escrowRow: v2Escrow({ releasedAmount: 300, platformCommissionAmount: 38.25, providerNetReleasedAmount: 261.75 }) });
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+  assert.deepEqual(escrowUpdateManySpy.mock.calls[0].arguments[0].data, { releasedAmount: 400, platformCommissionAmount: 51, providerNetReleasedAmount: 349 });
+});
+
+test('v2 final release: the escrow becomes RELEASED at the contract price with the exact total commission (1000 at 12.75% -> 127.5 kept, 872.5 to the provider)', async (t) => {
+  const { projectProgressService, escrowUpdateManySpy, accountAuditLogCreateSpy } = await loadProjectProgressServiceWithFixture(t, { escrowRow: v2Escrow({ releasedAmount: 900, platformCommissionAmount: 114.75, providerNetReleasedAmount: 785.25 }) });
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+  assert.deepEqual(escrowUpdateManySpy.mock.calls[0].arguments[0].data, { status: 'RELEASED', releasedAmount: 1000, platformCommissionAmount: 127.5, providerNetReleasedAmount: 872.5 });
+  const meta = accountAuditLogCreateSpy.mock.calls[0].arguments[0].data.metaData;
+  assert.deepEqual([meta.isFinalStage, meta.grossAmount, meta.platformCommission, meta.providerNet], [true, 100, 12.75, 87.25]);
+});
+
+test('a provider level change AFTER the contract does not touch an existing release: the snapshot rate is used, never the provider\'s current level', async (t) => {
+  // the provider now qualifies for a much better level (points + completed projects), but the escrow was locked at level 1 (12.75%)
+  const { projectProgressService, escrowUpdateManySpy, getGamificationState } = await loadProjectProgressServiceWithFixture(t, {
+    completedProjectsCount: 61, avgRating: 4.5, seedPointTransactions: [3000], escrowRow: v2Escrow({ releasedAmount: 900, platformCommissionAmount: 114.75, providerNetReleasedAmount: 785.25 })
+  });
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+  assert.ok(getGamificationState().currentLevelIndex > 1, 'the provider level moved up (live value)');
+  assert.equal(escrowUpdateManySpy.mock.calls[0].arguments[0].data.platformCommissionAmount, 127.5, 'still 12.75% of 1000');
+});
+
+test('LEGACY escrow (feePolicyVersion null): released gross exactly as before, no commission fields written, no reading of the provider level', async (t) => {
+  const { projectProgressService, escrowUpdateManySpy, accountAuditLogCreateSpy } = await loadProjectProgressServiceWithFixture(t, { nextStage: { id: 'stage-2' }, escrowRow: { feePolicyVersion: null, releasedAmount: 400, platformCommissionAmount: 0, providerNetReleasedAmount: 0, amount: 1130 } });
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+  assert.deepEqual(escrowUpdateManySpy.mock.calls[0].arguments[0].data, { releasedAmount: { increment: 100 } });
+  const meta = accountAuditLogCreateSpy.mock.calls[0].arguments[0].data.metaData;
+  for (const k of ['grossAmount', 'platformCommission', 'providerNet', 'commissionRatePercent', 'feePolicyVersion']) assert.equal(k in meta, false, k);
+});
+
+test('LEGACY final release: releasedAmount is set to the price exactly as before (the old escrow is never recalculated)', async (t) => {
+  const { projectProgressService, escrowUpdateManySpy } = await loadProjectProgressServiceWithFixture(t, { escrowRow: { feePolicyVersion: null, releasedAmount: 900, amount: 1130 } });
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+  assert.deepEqual(escrowUpdateManySpy.mock.calls[0].arguments[0].data, { status: 'RELEASED', releasedAmount: 1000 });
 });

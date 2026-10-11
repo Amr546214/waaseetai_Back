@@ -1,5 +1,6 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { Prisma } from '@prisma/client';
 
 // paypal-finance.service.ts pulls in client-finance.service.ts (for the
 // shared getWallet() call at the end of a successful capture), which eagerly
@@ -394,4 +395,104 @@ test('denyFromWebhook: marks the pending payment FAILED and never touches the wa
 	assert.equal(payments[0].status, 'FAILED');
 	assert.equal(walletTransactionCreateSpy.mock.callCount(), 0);
 	assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
+// ── fee policy v2: the PayPal DEPOSIT fee (نسب الدفع.xlsx: PayPal 7%). The user picks the NET; PayPal is charged the gross; the wallet gets the net. ──
+const decimalLike = (v: string) => new Prisma.Decimal(v); // what Prisma hands back for Decimal columns
+
+test('PayPal deposit: net 100 -> PayPal is charged 107.53 (7% fee), the row stores net / fee / percent', async (t) => {
+	const { createPaypalPaymentSpy } = createPrismaMock(t);
+	let orderAmount = '';
+	mockPaypalService(t, { createOrder: async (o: any) => { orderAmount = o.amount; return { id: 'ORDER-FEE' }; } });
+	const service = await loadService(t);
+	const r = await service.initiateDeposit('client-1', 100);
+	assert.equal(orderAmount, '107.53');
+	assert.deepEqual([r.netAmount, r.feePercent, r.feeAmount, r.grossAmount], [100, 7, 7.53, 107.53]);
+	const data = createPaypalPaymentSpy.mock.calls[0].arguments[0].data;
+	assert.equal(Number(data.amount), 107.53);
+	assert.equal(Number(data.netAmount), 100);
+	assert.equal(Number(data.feeAmount), 7.53);
+	assert.equal(data.feePercent, 7);
+});
+
+test('PayPal deposit: more reference examples of the 7% gross-up (net 50 -> 53.76, 250 -> 268.82, 1000 -> 1075.27)', async (t) => {
+	createPrismaMock(t);
+	const seen: string[] = [];
+	mockPaypalService(t, { createOrder: async (o: any) => { seen.push(o.amount); return { id: 'O' }; } });
+	const service = await loadService(t);
+	for (const net of [50, 250, 1000]) await service.initiateDeposit('client-1', net);
+	assert.deepEqual(seen, ['53.76', '268.82', '1075.27']);
+});
+
+test('PayPal deposit: the 50 / 100,000 bounds apply to the NET the user asks for', async (t) => {
+	createPrismaMock(t);
+	mockPaypalService(t);
+	const service = await loadService(t);
+	await assert.rejects(() => service.initiateDeposit('client-1', 49.99), /50/);
+	await assert.rejects(() => service.initiateDeposit('client-1', 100000.01));
+	await service.initiateDeposit('client-1', 50);
+	await service.initiateDeposit('client-1', 100000);
+});
+
+test('PayPal deposit capture: PayPal captured 107.53 -> the wallet is credited the NET 100, the transaction keeps the fee breakdown', async (t) => {
+	const { walletTransactionCreateSpy, userUpdateSpy } = createPrismaMock(t, {
+		seedPayments: [{ userId: 'client-1', paypalOrderId: 'ORDER-1', amount: decimalLike('107.53'), netAmount: decimalLike('100'), feeAmount: decimalLike('7.53'), feePercent: 7, currency: 'USD', status: 'PENDING' }]
+	});
+	mockPaypalService(t, { captureOrder: async () => ({ purchase_units: [{ custom_id: 'client-1', payments: { captures: [{ id: 'CAP-FEE', status: 'COMPLETED', amount: { currency_code: 'USD', value: '107.53' } }] } }] }) });
+	const service = await loadService(t);
+	await service.captureDeposit('client-1', 'ORDER-1');
+	assert.equal(walletTransactionCreateSpy.mock.callCount(), 1);
+	const tx = walletTransactionCreateSpy.mock.calls[0].arguments[0].data;
+	assert.equal(tx.type, 'DEPOSIT');
+	assert.equal(tx.amount, 100, 'the wallet transaction is the NET');
+	assert.deepEqual(tx.metadata, { paypalPaymentId: tx.metadata.paypalPaymentId, paypalCaptureId: 'CAP-FEE', feePolicyVersion: 2, method: 'PAYPAL', netCredited: 100, grossCharged: 107.53, feePercent: 7, feeAmount: 7.53 });
+	assert.equal(userUpdateSpy.mock.calls[0].arguments[0].data.walletBalance.increment, 100, 'the balance grows by the NET only');
+});
+
+test('PayPal deposit capture: a repeated capture and the webhook after it credit the net exactly once', async (t) => {
+	const { walletTransactionCreateSpy, userUpdateSpy } = createPrismaMock(t, {
+		seedPayments: [{ userId: 'client-1', paypalOrderId: 'ORDER-1', amount: decimalLike('107.53'), netAmount: decimalLike('100'), feeAmount: decimalLike('7.53'), feePercent: 7, currency: 'USD', status: 'PENDING' }]
+	});
+	mockPaypalService(t, { captureOrder: async () => ({ purchase_units: [{ custom_id: 'client-1', payments: { captures: [{ id: 'CAP-ONCE', status: 'COMPLETED', amount: { currency_code: 'USD', value: '107.53' } }] } }] }) });
+	const service = await loadService(t);
+	await service.captureDeposit('client-1', 'ORDER-1');
+	await service.captureDeposit('client-1', 'ORDER-1');
+	await service.completeFromWebhook({ paypalOrderId: 'ORDER-1', paypalCaptureId: 'CAP-ONCE', currency: 'USD', amountValue: '107.53' });
+	assert.equal(walletTransactionCreateSpy.mock.callCount(), 1);
+	assert.equal(userUpdateSpy.mock.callCount(), 1);
+});
+
+test('PayPal deposit webhook: a still-PENDING fee order finalised by the webhook also credits the NET (same single credit path)', async (t) => {
+	const { walletTransactionCreateSpy } = createPrismaMock(t, {
+		seedPayments: [{ userId: 'client-1', paypalOrderId: 'ORDER-W', amount: decimalLike('268.82'), netAmount: decimalLike('250'), feeAmount: decimalLike('18.82'), feePercent: 7, currency: 'USD', status: 'PENDING' }]
+	});
+	mockPaypalService(t);
+	const service = await loadService(t);
+	await service.completeFromWebhook({ paypalOrderId: 'ORDER-W', paypalCaptureId: 'CAP-W', currency: 'USD', amountValue: '268.82' });
+	assert.equal(walletTransactionCreateSpy.mock.calls[0].arguments[0].data.amount, 250);
+	assert.equal(walletTransactionCreateSpy.mock.calls[0].arguments[0].data.metadata.grossCharged, 268.82);
+});
+
+test('PayPal deposit capture: a capture that does not equal the GROSS charged is still rejected (FAILED, nothing credited)', async (t) => {
+	const { payments, walletTransactionCreateSpy } = createPrismaMock(t, {
+		seedPayments: [{ userId: 'client-1', paypalOrderId: 'ORDER-1', amount: decimalLike('107.53'), netAmount: decimalLike('100'), feeAmount: decimalLike('7.53'), feePercent: 7, currency: 'USD', status: 'PENDING' }]
+	});
+	mockPaypalService(t, { captureOrder: async () => ({ purchase_units: [{ custom_id: 'client-1', payments: { captures: [{ id: 'CAP-X', status: 'COMPLETED', amount: { currency_code: 'USD', value: '100.00' } }] } }] }) });
+	const service = await loadService(t);
+	await assert.rejects(() => service.captureDeposit('client-1', 'ORDER-1'));
+	assert.equal(payments[0].status, 'FAILED');
+	assert.equal(walletTransactionCreateSpy.mock.callCount(), 0);
+});
+
+test('PayPal deposit capture: an order created BEFORE the fee existed (no netAmount) is credited what PayPal captured, in full — historical orders are not re-priced', async (t) => {
+	const { walletTransactionCreateSpy, userUpdateSpy } = createPrismaMock(t, {
+		seedPayments: [{ userId: 'client-1', paypalOrderId: 'ORDER-OLD', amount: decimalLike('80.00'), currency: 'USD', status: 'PENDING' }]
+	});
+	mockPaypalService(t, { captureOrder: async () => ({ purchase_units: [{ custom_id: 'client-1', payments: { captures: [{ id: 'CAP-OLD', status: 'COMPLETED', amount: { currency_code: 'USD', value: '80.00' } }] } }] }) });
+	const service = await loadService(t);
+	await service.captureDeposit('client-1', 'ORDER-OLD');
+	const tx = walletTransactionCreateSpy.mock.calls[0].arguments[0].data;
+	assert.equal(tx.amount, 80);
+	assert.deepEqual(Object.keys(tx.metadata).sort(), ['paypalCaptureId', 'paypalPaymentId']);
+	assert.equal(userUpdateSpy.mock.calls[0].arguments[0].data.walletBalance.increment, 80);
 });

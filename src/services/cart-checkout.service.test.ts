@@ -363,6 +363,7 @@ function createConfirmMockPrisma(t: TestContext, opts: { order: any; walletBalan
     coupon: { findUnique: async () => null, updateMany: async () => ({ count: 0 }) },
     couponRedemption: { count: async () => 0, create: async () => ({}) },
     contract: { create: async (args: any) => ({ id: 'contract-1', ...args.data }) },
+    providerGamification: { findUnique: async () => null },
     escrow: { create: t.mock.fn(async (args: any) => args.data) },
     projectStage: { create: async () => ({}), createMany: async () => ({}) },
     order: {
@@ -469,6 +470,7 @@ test('confirmPayment: two concurrent confirmations for the same user against a b
     couponRedemption: { count: async () => 0, create: async () => ({}) },
     project: { create: async (args: any) => ({ id: `project-${args.data.title}`, ...args.data }), findMany: async () => [] },
     contract: { create: async (args: any) => ({ id: 'contract-1', ...args.data }) },
+    providerGamification: { findUnique: async () => null },
     escrow: { create: t.mock.fn(async (args: any) => args.data) },
     projectStage: { create: async () => ({}), createMany: async () => ({}) },
     order: { updateMany: async () => ({ count: 1 }) },
@@ -553,6 +555,7 @@ test('confirmPayment: two concurrent confirmations for the SAME order (same paym
     couponRedemption: { count: async () => 0, create: async () => ({}) },
     project: { create: async (args: any) => ({ id: `project-${Math.random()}`, ...args.data }), findMany: async () => [] },
     contract: { create: async (args: any) => ({ id: `contract-${Math.random()}`, ...args.data }) },
+    providerGamification: { findUnique: async () => null },
     escrow: { create: t.mock.fn(async (args: any) => { escrows.push(args.data); return args.data; }) },
     projectStage: { create: async () => ({}), createMany: async () => ({}) },
     // Phase 4: the order transition is now the first, guarded statement.
