@@ -1,3 +1,4 @@
+import { levelInfo } from '../utils/level-info';
 import { prisma } from '../config/db';
 import { LEVEL_MATRIX, REQUESTER_LEVEL_MATRIX, deriveProviderProgression, deriveRequesterProgression } from '../utils/progression-calculators';
 import { levelColor, levelStation } from '../config/levels.config';
@@ -156,6 +157,16 @@ class GamificationService {
 
 // ── طالب الخدمة: the client's own level view, from the single ladder. ──
 // Client points are not awarded by any event yet and there is no rating OF a client in the data, so the view says so instead of inventing progress.
+/** The client's current level as the shared LevelInfo (points + completed projects through the single ladder). */
+export async function getClientLevelInfo(userId: string) {
+  const [profile, completedProjects] = await Promise.all([
+    prisma.clientProfile.findUnique({ where: { userId }, select: { currentPoints: true } }),
+    prisma.project.count({ where: { clientId: userId, status: 'COMPLETED' } })
+  ]);
+  const progression = deriveRequesterProgression({ points: Math.max(0, profile?.currentPoints || 0), completedProjects, avgRating: 0 });
+  return levelInfo('CLIENT', progression.currentLevelIndex);
+}
+
 export async function getClientLevelDetails(userId: string) {
   const [profile, completedProjects] = await Promise.all([
     prisma.clientProfile.findUnique({ where: { userId }, select: { currentPoints: true } }),

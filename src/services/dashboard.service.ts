@@ -6,6 +6,9 @@ import { AppError } from '../utils/app-error';
 import { getRoleFromAccountType } from './account-management.service';
 import { resolveActiveRoleDisplayFields, resolveProviderProgression } from '../utils/role-display-resolver';
 import { computeClientCompletion } from '../utils/completion-calculators';
+import { levelInfo } from '../utils/level-info';
+import { logger } from '../config/logger';
+import { getClientLevelInfo } from './gamification.service';
 
 export class DashboardService {
   /**
@@ -277,6 +280,8 @@ export class DashboardService {
         };
       }
 
+      // the level is extra display data: a failure here never breaks the dashboard (level 1 of the ladder, logged)
+      const clientLevel = await getClientLevelInfo(userId).catch((error: unknown) => { logger.warn(`[DashboardService] client level unavailable (userId=${userId}): ${(error as Error)?.message}`); return levelInfo('CLIENT', 1); });
       return {
         summary: {
           activeProjectsCount,
@@ -286,7 +291,9 @@ export class DashboardService {
           ...aiOfferRating,
           humanRating: 0,
           profileCompletionPercent: clientProfileCompletion ?? clientDisplayFields.profileCompletionPercent,
-          currentLevel: clientDisplayFields.currentLevel,
+          // the level comes from the single ladder (points + completed projects), never from the stale ClientProfile label
+          currentLevel: clientLevel.name,
+          levelInfo: clientLevel,
           pointsToNextLevel: clientDisplayFields.pointsToNextLevel,
           currentPoints: clientDisplayFields.currentPoints
         },
@@ -459,7 +466,8 @@ export class DashboardService {
           humanRating: 0,
           providerRating,
           profileCompletionPercent: providerDisplayFields.profileCompletionPercent,
-          currentLevel: providerDisplayFields.currentLevel,
+          currentLevel: levelInfo('PROVIDER', gamification?.currentLevelIndex).name,
+          levelInfo: levelInfo('PROVIDER', gamification?.currentLevelIndex),
           pointsToNextLevel: providerDisplayFields.pointsToNextLevel,
           currentPoints: providerDisplayFields.currentPoints
         },

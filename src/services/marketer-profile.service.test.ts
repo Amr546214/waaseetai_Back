@@ -137,10 +137,11 @@ test('getPublicProfile: returns only the explicit allowlisted fields for a real 
 
 	const result = await marketerProfileService.getPublicProfile('user-1');
 
-	assert.deepEqual(Object.keys(result).sort(), ['avatarUrl', 'bio', 'channelMetrics', 'channels', 'id', 'identityVerified', 'level', 'name'].sort());
+	assert.deepEqual(Object.keys(result).sort(), ['avatarUrl', 'bio', 'channelMetrics', 'channels', 'id', 'identityVerified', 'level', 'levelInfo', 'name'].sort());
 	assert.equal(result.name, 'خالد الغامدي');
 	assert.equal(result.bio, 'سيرة ذاتية حقيقية');
-	assert.equal(result.level, 'مساعد');
+	assert.equal(result.level, 'مسوق');
+	assert.equal(result.levelInfo?.index, 1);
 	assert.equal(result.identityVerified, true);
 	assert.deepEqual(result.channels, [{ platform: 'INSTAGRAM', handle: '@khalid', url: 'https://instagram.com/khalid' }]);
 });

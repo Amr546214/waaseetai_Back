@@ -5,6 +5,7 @@ import { providerProfileService } from '../services/provider-profile.service';
 import { prisma } from '../config/db';
 import { CONTACT_IMMUTABLE, CONTACT_IMMUTABLE_MESSAGE } from '../services/provider-profile.service';
 import { resolveCategorySlug, resolveSkillIdsFromCatalog } from '../services/skills-catalog.service';
+import { specialtyService } from '../services/specialty.service';
 import { skillsForCategory } from '../config/skills-catalog.config';
 import { ensureCloudinaryUrl, storeDataUriIfNeeded, storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { sanitizeText } from '../utils/sanitize-text';
@@ -201,6 +202,9 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			create: providerData,
 			update: providerData
 		});
+
+		// The specialties chosen in the wizard become the provider's ProviderSpecialty rows (create-only, no duplicates): the model-upload / market pages read those rows.
+		await specialtyService.trySyncProviderSpecialties(result.id);
 
 		if (portfolio) {
 			await prisma.portfolioItem.deleteMany({ where: { providerProfileId: result.id } });

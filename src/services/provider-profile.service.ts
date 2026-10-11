@@ -2,6 +2,8 @@ import type { ProviderBioSuggestDto, ProviderSkillsSuggestDto } from '../dtos/pr
 import { canonicalStoredPhone } from '../utils/phone-countries';
 
 import { CONTACT_IMMUTABLE, CONTACT_IMMUTABLE_MESSAGE } from '../utils/contact-policy';
+import { specialtyService } from './specialty.service';
+import { levelInfo } from '../utils/level-info';
 export { CONTACT_IMMUTABLE, CONTACT_IMMUTABLE_MESSAGE };
 import { planSpecialtyUpdate, resolveSkillIdsFromCatalog } from './skills-catalog.service';
 import { PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
@@ -591,6 +593,8 @@ export class ProviderProfileService {
 				},
 				levelInfo: {
 					levelName: levelName,
+					// the same level payload every page uses (index, percent, colour pair, station), from the single ladder
+					levelDisplay: levelInfo('PROVIDER', gamification?.currentLevelIndex),
 					points,
 					// Phase 3D.2A follow-up: ProviderProfile.completionPercentage is the
 					// Phase 3 source of truth — it must win even when it is genuinely 0,
@@ -723,6 +727,8 @@ export class ProviderProfileService {
 			}
 		});
 
+		// a changed main specialty / sub-specialties selection creates the new provider specialties (create-only)
+		if (subSpecialties !== undefined || (before as any)?.mainSpecialty !== mainSpecialty) await specialtyService.trySyncProviderSpecialties(updatedProfile.id);
 		const result = await this.getProfile(userId);
 		const completion = this.calculateProfileCompletion(result);
 		// Phase 3D.2A follow-up: the legacy User.profileCompletionPercent mirror

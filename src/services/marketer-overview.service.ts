@@ -1,3 +1,4 @@
+import { levelInfo } from '../utils/level-info';
 import { readAffiliateLevels, affiliateLevelInfo } from '../utils/affiliate-level-reader';
 import { SourceChannel, CommissionStatus, UserRole } from '@prisma/client';
 import { AppError } from '../utils/app-error';
@@ -82,6 +83,7 @@ export class MarketerOverviewService {
       level: info.level,
       commissionPercent: info.commissionPercent,
       levelColor: info.color,
+      levelInfo: levelInfo('MARKETER', info.level),
       successfulReferrals,
       totalCommissions,
       overallConversionRate: parseFloat(overallConversionRate.toFixed(2)),
