@@ -1,4 +1,6 @@
 import type { ProviderBioSuggestDto, ProviderSkillsSuggestDto } from '../dtos/provider-profile-suggest.dto';
+import { toNationalPhone } from '../utils/national-phone';
+import { planSpecialtyUpdate, resolveSkillIdsFromCatalog } from './skills-catalog.service';
 import { PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
 import { profileChangeReviewService, withHonestAiReview } from './ai-features/profile-change-review.service';
 import { withoutLegacyProviderBankFields } from '../utils/provider-payout';
@@ -97,7 +99,7 @@ export class ProviderProfileService {
 			user: {
 				select: {
 					firstName: true, lastName: true, email: true, avatarUrl: true,
-					phoneNumber: true, alternativePhone: true,
+					phoneCountryCode: true, phoneNumber: true, alternativePhone: true,
 					accountHolderName: true, ibanNumber: true, bankName: true,
 					idDocumentUrl: true, commercialRegistration: true, vatCertificateUrl: true
 				}
@@ -651,6 +653,15 @@ export class ProviderProfileService {
 		}
 		const avatarUrl = data.avatarUrl === undefined ? undefined : await storeDataUriIfNeeded(data.avatarUrl, `waseetai/users/${userId}/avatar`, 'avatar');
 		const before = await this.getProfile(userId);
+
+		const heldSkills = (await prisma.providerProfile.findUnique({ where: { userId }, select: { skills: { select: { id: true, name: true } } } }))?.skills ?? [];
+		const plan = await planSpecialtyUpdate(prisma, {
+			storedMain: String((before as any)?.mainSpecialty ?? ''),
+			requestedMain: String(data.mainSpecialty ?? ''),
+			subSpecialties: Array.isArray(data.subSpecialties) ? data.subSpecialties.map((n: unknown) => sanitizeText(String(n ?? '')).trim()) : undefined,
+			heldSkills
+		});
+		const { mainSpecialty, subSpecialties, skillsAfterFieldChange } = plan;
 		const updatedProfile = await prisma.providerProfile.update({
 			where: { userId },
 			data: {
@@ -662,7 +673,9 @@ export class ProviderProfileService {
 				city: data.city,
 				country: data.country,
 				availabilityStatus: data.availabilityStatus,
-				mainSpecialty: data.mainSpecialty,
+				mainSpecialty,
+				...(subSpecialties !== undefined && { subSpecialties }),
+				...(skillsAfterFieldChange && { skills: { set: skillsAfterFieldChange } }),
 				githubUrl: data.githubUrl,
 				linkedinUrl: data.linkedinUrl,
 				twitterUrl: data.twitterUrl,
@@ -781,14 +794,9 @@ export class ProviderProfileService {
 		const profile = await prisma.providerProfile.findUnique({ where: { userId } });
 		if (!profile) throw new Error("Profile not found");
 
-		const skillIds = await Promise.all(skillNames.map(async name => {
-			const skill = await prisma.skill.upsert({
-				where: { name },
-				update: {},
-				create: { name }
-			});
-			return skill.id;
-		}));
+		// Catalog only (the same rule as the setup wizard); skills already held stay valid so an older profile can still be saved.
+		const held = await prisma.providerProfile.findUnique({ where: { userId }, select: { mainSpecialty: true, skills: { select: { name: true } } } });
+		const skillIds = (await resolveSkillIdsFromCatalog(prisma, skillNames, held?.mainSpecialty, (held?.skills ?? []).map(s => s.name))).map(s => s.id);
 
 		await prisma.providerProfile.update({
 			where: { userId },
@@ -1007,6 +1015,9 @@ export class ProviderProfileService {
 			const waiting = await prisma.profileModificationRequest.findFirst({ where: { providerId, category, status: 'PENDING_HUMAN_REVIEW' as any }, orderBy: { createdAt: 'desc' }, select: { id: true, category: true, createdAt: true } });
 			if (waiting) throw Object.assign(new Error('REQUEST_ALREADY_PENDING'), { details: alreadyPendingDetails(waiting, category) });
 		}
+
+		// The phone is stored as the account's country code + NATIONAL digits: "+966501234567", "0501234567" and "501234567" are the same number.
+		if (category === 'CONTACT' && cleanChanges.phoneNumber) cleanChanges.phoneNumber = toNationalPhone(cleanChanges.phoneNumber, user.phoneCountryCode);
 
 		if (category === 'CONTACT' && cleanChanges.email && cleanChanges.email !== user.email) {
 			const duplicate = await prisma.user.findUnique({ where: { email: String(cleanChanges.email).trim().toLowerCase() } });

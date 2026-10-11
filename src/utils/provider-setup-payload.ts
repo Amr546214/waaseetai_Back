@@ -7,7 +7,7 @@ export interface SetupFieldError { path: string; field: string; message: string;
 const err = (path: string, message: string): SetupFieldError => ({ path, field: path, message, code: 'custom' });
 
 const TOP_KEYS = ['details', 'specialties', 'identity', 'documents', 'agreements', 'portfolio', 'skills', 'bank',
-  'headline', 'hourlyRate', 'yearsOfExperience', 'mainSpecialty', 'subSpecialties', 'idNumber', 'dob'];
+  'headline', 'hourlyRate', 'yearsOfExperience', 'mainSpecialty', 'subSpecialties', 'idNumber', 'dob', 'avatarUrl'];
 const DETAILS_KEYS = ['occupation', 'headline', 'country', 'city', 'address', 'bio', 'languages', 'expYears', 'yearsOfExperience', 'hourlyRate', 'idNumber', 'dob'];
 const IDENTITY_KEYS = ['frontId', 'backId', 'certs', 'idNumber', 'dob'];
 const SPECIALTY_KEYS = ['mainSpec', 'subSpecs', 'mainSpecialty', 'subSpecialties'];
@@ -27,6 +27,8 @@ export interface NormalizedProviderSetup {
   documents: Record<string, any>;
   agreements: Record<string, any>;
   hourlyRate: number | undefined;
+  /** The profile photo the wizard uploaded (our Cloudinary URL, or an image data URI the controller re-stores). undefined = keep the stored one. */
+  avatarUrl: string | undefined;
   /** A number of years, or undefined when the payload did not state it (the stored value is then kept). */
   yearsOfExperience: number | undefined;
 }
@@ -96,8 +98,15 @@ export function normalizeProviderSetupPayload(body: unknown): { ok: true; value:
     else out.dob = d.toISOString();
   }
 
+  // profile photo: a non-empty string only; '' / null mean "keep what is stored". The controller verifies that it is our own storage.
+  let avatarUrl: string | undefined;
+  if (present(raw.avatarUrl)) {
+    if (typeof raw.avatarUrl !== 'string' || raw.avatarUrl.length > 12_000_000) errors.push(err('avatarUrl', 'الصورة الشخصية غير صالحة'));
+    else avatarUrl = raw.avatarUrl;
+  }
+
   if (errors.length) return { ok: false, errors };
-  return { ok: true, value: { details: out, specialties: outSpecialties, identity, documents, agreements, hourlyRate, yearsOfExperience } };
+  return { ok: true, value: { details: out, specialties: outSpecialties, identity, documents, agreements, hourlyRate, yearsOfExperience, avatarUrl } };
 }
 
 export interface ProviderSetupCompletenessInput {

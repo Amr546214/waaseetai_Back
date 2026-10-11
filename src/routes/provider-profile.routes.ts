@@ -82,6 +82,7 @@ router.put('/basic-info', requireProvider, providerProfileController.updateBasic
 router.put('/contact', requireProvider, providerProfileController.updateContactInfo);
 router.put('/banking', requireProvider, providerProfileController.updateBankingInfo);
 router.put('/docs', requireProvider, providerProfileController.updateDocsInfo);
+router.get('/skills/catalog', requireProvider, providerProfileController.getSkillsCatalog);
 router.put('/skills', requireProvider, providerProfileController.updateSkills);
 router.post('/portfolio', requireProvider, providerProfileController.addPortfolioItem);
 router.put('/portfolio/:id', requireProvider, providerProfileController.updatePortfolioItem);

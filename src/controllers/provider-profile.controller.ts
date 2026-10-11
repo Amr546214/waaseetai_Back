@@ -3,7 +3,9 @@ import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/app-error';
 import { providerProfileService } from '../services/provider-profile.service';
 import { prisma } from '../config/db';
-import { storeDataUriIfNeeded, storeKycFileIfNeeded } from '../utils/cloudinary-storage';
+import { resolveCategorySlug, resolveSkillIdsFromCatalog } from '../services/skills-catalog.service';
+import { skillsForCategory } from '../config/skills-catalog.config';
+import { ensureCloudinaryUrl, storeDataUriIfNeeded, storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { sanitizeText } from '../utils/sanitize-text';
 import { assertKycFileValues } from '../utils/kyc-value-guard';
 import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
@@ -123,10 +125,9 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		if (payload.skills !== undefined) {
 			const parsed = setupSkillsSchema.safeParse(payload.skills);
 			if (!parsed.success) return res.status(400).json({ message: 'قائمة المهارات غير صالحة' });
-			const names = [...new Set(parsed.data)];
-			const rows = await prisma.skill.findMany({ where: { name: { in: names } }, select: { id: true, name: true } });
-			if (rows.length !== names.length) return res.status(400).json({ message: 'اختر مهارات موجودة في دليل المهارات؛ لم يتم حفظ البيانات.' });
-			skillConnections = rows.map(({ id }) => ({ id }));
+			// The catalog of the main specialty chosen in THIS request (or the stored one) is the only source of skills.
+			const held = await prisma.providerProfile.findUnique({ where: { userId }, select: { mainSpecialty: true, skills: { select: { name: true } } } });
+			skillConnections = await resolveSkillIdsFromCatalog(prisma, parsed.data, specialties?.mainSpec ?? held?.mainSpecialty, (held?.skills ?? []).map(s => s.name));
 		}
 
 		// A VERIFIED account's identity (idNumber / dob) is frozen (409); '' / null never erase a stored value.
@@ -143,8 +144,12 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			storeKycFileIfNeeded(url, `waseetai/providers/${userId}/certificates`, `certificate-${index + 1}`)
 		));
 
+		// The profile photo (ProviderProfile.avatarUrl is the one canonical column): only our own storage URL or an image data URI is stored; anything else is a 400 and nothing is saved.
+		const avatarUrl = normalized.value.avatarUrl ? await ensureCloudinaryUrl(normalized.value.avatarUrl, `waseetai/users/${userId}/avatar`, 'avatar') : undefined;
+
 		const providerData = {
 			userId,
+			avatarUrl: avatarUrl || undefined, // absent = keep the stored photo (a re-save never erases it)
 			idNumber: details?.idNumber || undefined,
 			dob: details?.dob ? new Date(details.dob) : undefined, // absent = keep the stored value (a re-save never erases it)
 			country: clean(details?.country, 60),
@@ -417,9 +422,12 @@ export const updateSkills = async (req: Request, res: Response) => {
 		const userId = req.user?.id;
 		if (!userId) return res.status(401).json({ message: 'Unauthorized' });
 
-		const updated = await providerProfileService.updateSkills(userId, req.body.skills || []);
+		const parsed = setupSkillsSchema.safeParse(req.body?.skills ?? []);
+		if (!parsed.success) return res.status(400).json({ success: false, message: 'قائمة المهارات غير صالحة' });
+		const updated = await providerProfileService.updateSkills(userId, parsed.data);
 		res.json(updated);
 	} catch (error) {
+		if (error instanceof AppError) return res.status(error.statusCode).json({ success: false, message: error.message });
 		console.error('Error updating skills:', error);
 		res.status(500).json({ message: 'Internal server error' });
 	}
@@ -461,5 +469,15 @@ export const deletePortfolioItem = async (req: Request, res: Response) => {
 	} catch (error) {
 		console.error('Error deleting portfolio item:', error);
 		res.status(500).json({ message: 'Internal server error' });
+	}
+};
+
+// GET /provider/profile/skills/catalog?category=<slug|id|name>: the skills offered for that main specialty (the only skills a provider can pick).
+export const getSkillsCatalog = async (req: Request, res: Response) => {
+	try {
+		const slug = await resolveCategorySlug(prisma, String(req.query.category ?? ''));
+		res.json({ success: true, data: { category: slug, skills: skillsForCategory(slug) } });
+	} catch (error) {
+		res.status(500).json({ success: false, message: 'Internal server error' });
 	}
 };
