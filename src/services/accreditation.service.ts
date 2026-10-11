@@ -1,3 +1,4 @@
+import { deriveApprovalState } from '../utils/specialty-approval-state';
 import { prisma } from '../config/db';
 import { logger } from '../config/logger';
 
@@ -86,9 +87,16 @@ export class AccreditationService {
 			// EVERY specialty registered on the account (the ones chosen at signup too), with where it stands: the pages show this instead of "no specialty".
 			const allRegistered = await prisma.providerSpecialty.findMany({
 				where: { providerProfileId: providerProfile.id, isActive: true },
-				include: { specialty: { include: { category: true } } },
+				include: { specialty: { include: { category: true } }, _count: { select: { workSamples: true } } },
 				orderBy: { createdAt: 'asc' }
 			});
+			// Submitted accreditation samples (the only thing the admin queue lists) per specialty: with the test and the admin decision they give the real approval state.
+			const sampleRows = allRegistered.length
+				? await prisma.accreditationSample.findMany({
+					where: { providerSpecialtyId: { in: allRegistered.map((r) => r.id) } },
+					select: { providerSpecialtyId: true, status: true, aiFeedbackAr: true, createdAt: true }
+				})
+				: [];
 			const registered = allRegistered.map((ps) => ({
 				id: ps.id,
 				specialtyId: ps.specialtyId,
@@ -101,9 +109,15 @@ export class AccreditationService {
 				state: ps.status === 'LOCKED_OUT' ? 'LOCKED_OUT'
 					: ps.status === 'REJECTED' && !ps.isPassed ? 'REJECTED'
 					: ps.isPassed ? 'PASSED'
-					: ps.hasTakenAssessment ? 'TEST_NOT_PASSED' : 'TEST_NOT_TAKEN'
+					: ps.hasTakenAssessment ? 'TEST_NOT_PASSED' : 'TEST_NOT_TAKEN',
+				...deriveApprovalState({
+					status: ps.status, isPassed: ps.isPassed, hasTakenAssessment: ps.hasTakenAssessment,
+					workSampleCount: (ps as any)._count?.workSamples ?? 0,
+					samples: sampleRows.filter((x) => x.providerSpecialtyId === ps.id)
+				})
 			}));
 
+			const approvalById = new Map(registered.map((r) => [r.id, r.approvalState]));
 			const categoriesMap = new Map();
 
 			passedSpecs.forEach((ps) => {
@@ -131,6 +145,7 @@ export class AccreditationService {
 					score: ps.latestScore ?? ps.quizScore ?? 0,
 					passedAt: ps.passedAt || ps.updatedAt,
 					accreditationStatus: ps.status,
+					approvalState: approvalById.get(ps.id) ?? null,
 					subSpecialties: Array.isArray(ps.subSpecialties) ? ps.subSpecialties : []
 				});
 			});
