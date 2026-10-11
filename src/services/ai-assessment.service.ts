@@ -1,3 +1,4 @@
+import { SPECIALTY_TEST_QUESTION_COUNT, SPECIALTY_TEST_TIME_LIMIT_MINUTES } from '../constants/specialty-test';
 import { AssessmentStatus, Prisma, SpecialtyVerificationStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
@@ -16,8 +17,9 @@ import { evaluateAssessment, AnswerLogEntry } from '../utils/assessment-review-f
 // JSON column. Attempts created before this integration (local answer key, no
 // vendor attempt id) remain gradable by a deterministic local comparison.
 
-export const ASSESSMENT_QUESTION_COUNT = 20;
-export const ASSESSMENT_TIME_LIMIT_MINUTES = 15;
+// Same test as the setup test: the counts come from ONE place (constants/specialty-test.ts).
+export const ASSESSMENT_QUESTION_COUNT = SPECIALTY_TEST_QUESTION_COUNT;
+export const ASSESSMENT_TIME_LIMIT_MINUTES = SPECIALTY_TEST_TIME_LIMIT_MINUTES;
 const GRADING_TIMEOUT_MS = 45_000;
 // A grading claim older than this is considered abandoned (e.g. process crash)
 // and may be released so the user can retry.

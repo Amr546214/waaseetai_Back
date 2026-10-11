@@ -42,7 +42,7 @@ function fakeWaseetAi(): http.Server {
         fake.streamBodies.push(body);
         if (fake.streamMode === 'fail500') { res.writeHead(500).end('{"error":"upstream boom"}'); return; }
         const vendorId = `vendor-att-${++fake.counter}`;
-        const n = body.questionCount ?? 20;
+        const n = body.questionCount ?? 15;
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
         for (let i = 1; i <= n; i++) {
           if (fake.streamMode === 'hang_after_3' && i === 4) return; // never ends
@@ -58,7 +58,7 @@ function fakeWaseetAi(): http.Server {
         if (fake.submitMode === 'fail500') { res.writeHead(500).end('{"error":"grader down"}'); return; }
         const answers = Object.values(body.submittedAnswers ?? {}) as string[];
         const correct = answers.filter((a) => a === FAKE_KEY).length;
-        const score = Math.round((correct / 20) * 100);
+        const score = Math.round((correct / 15) * 100);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, data: { attemptId: m[1], score, isPassed: score >= 60, status: 'COMPLETED', feedbackAr: `نتيجتك ${score}%`, strengths: ['قوة اختبارية'], weaknesses: score >= 60 ? [] : ['ضعف اختباري'] } }));
         return;
@@ -148,9 +148,9 @@ test('e2e: start -> save -> questions arrive (no answer key) -> submit -> graded
   const { socket, events } = await startAndFinish(psId);
 
   const questions = has(events, 'question_streamed');
-  assert.equal(questions.length, 20);
+  assert.equal(questions.length, 15);
   const ready = has(events, 'assessment_ready')[0].payload;
-  assert.equal(ready.totalQuestions, 20);
+  assert.equal(ready.totalQuestions, 15);
   assert.equal(ready.generationSource, 'TEST', 'the vendor generationSource is relayed as reported');
   const attemptId = ready.attemptId;
   assert.ok(!String(attemptId).startsWith('vendor-att-'), 'UI sees OUR attempt id, never the vendor id');
@@ -158,12 +158,12 @@ test('e2e: start -> save -> questions arrive (no answer key) -> submit -> graded
   // What WaseetAI received: name from OUR DB, never from the client payload.
   assert.equal(fake.streamBodies.length, 1);
   assert.match(fake.streamBodies[0].specialtyName, /تصميم الشعارات/);
-  assert.equal(fake.streamBodies[0].questionCount, 20);
+  assert.equal(fake.streamBodies[0].questionCount, 15);
 
   // Saved: key-less payload + vendor attempt id inside existing JSON columns.
   const row = await prisma.assessmentAttempt.findUnique({ where: { id: attemptId } });
   assert.equal(row.status, 'IN_PROGRESS');
-  assert.equal((row.questionsPayload as any[]).length, 20);
+  assert.equal((row.questionsPayload as any[]).length, 15);
   assert.ok(!JSON.stringify(row.questionsPayload).match(/correctAnswer|explanation/));
   assert.match((row.analyzedAssetsSnapshot as any).vendorAttemptId, /^vendor-att-/);
 
@@ -171,7 +171,7 @@ test('e2e: start -> save -> questions arrive (no answer key) -> submit -> graded
   assert.ok(!JSON.stringify(events).match(/correctAnswer|explanation|vendor-att-/));
 
   // Submit all-correct answers.
-  const answers: Record<string, string> = {}; for (let i = 1; i <= 20; i++) answers[String(i)] = FAKE_KEY;
+  const answers: Record<string, string> = {}; for (let i = 1; i <= 15; i++) answers[String(i)] = FAKE_KEY;
   events.length = 0;
   socket.emit('submit_answer', { attemptId, answers });
   await waitFor(() => has(events, 'evaluation_complete').length + has(events, 'assessment_error').length > 0);
@@ -205,7 +205,7 @@ test('e2e: concurrent identical submissions are graded once (atomic claim)', { s
   fake.streamMode = 'ok'; fake.submitMode = 'ok'; fake.submitCalls.length = 0;
   const { socket, events } = await startAndFinish(ctx.psIds[1]);
   const attemptId = has(events, 'assessment_ready')[0].payload.attemptId;
-  const answers: Record<string, string> = {}; for (let i = 1; i <= 20; i++) answers[String(i)] = FAKE_KEY;
+  const answers: Record<string, string> = {}; for (let i = 1; i <= 15; i++) answers[String(i)] = FAKE_KEY;
   events.length = 0;
   socket.emit('submit_answer', { attemptId, answers });
   socket.emit('submit_assessment', { attemptId, answers });
@@ -221,7 +221,7 @@ test('e2e: WaseetAI grading failure does NOT fail the user or change approval st
   const before = await prisma.providerSpecialty.findUnique({ where: { id: psId } });
   const { socket, events } = await startAndFinish(psId);
   const attemptId = has(events, 'assessment_ready')[0].payload.attemptId;
-  const answers: Record<string, string> = {}; for (let i = 1; i <= 20; i++) answers[String(i)] = FAKE_KEY;
+  const answers: Record<string, string> = {}; for (let i = 1; i <= 15; i++) answers[String(i)] = FAKE_KEY;
 
   events.length = 0;
   socket.emit('submit_answer', { attemptId, answers });
@@ -296,7 +296,7 @@ test('e2e: a second start while an active attempt exists replays the stored ques
   first.socket.disconnect();
   const second = await startAndFinish(psId);
   assert.equal(has(second.events, 'assessment_ready')[0].payload.attemptId, attemptId);
-  assert.equal(has(second.events, 'question_streamed').length, 20);
+  assert.equal(has(second.events, 'question_streamed').length, 15);
   assert.equal(fake.streamBodies.length, 1);
   assert.ok(!JSON.stringify(second.events).match(/correctAnswer|explanation|vendor-att-/));
   second.socket.disconnect();

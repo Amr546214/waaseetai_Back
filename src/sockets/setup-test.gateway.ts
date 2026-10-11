@@ -1,3 +1,4 @@
+import { SPECIALTY_TEST_PASS_SCORE, SPECIALTY_TEST_QUESTION_COUNT, SPECIALTY_TEST_TIME_LIMIT_MINUTES } from '../constants/specialty-test';
 import { Socket, Server as SocketIOServer } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { verifySocketToken } from '../utils/socket-auth';
@@ -20,8 +21,9 @@ import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/so
 // Failures never write to the profile: a generation failure creates no session;
 // a grading failure keeps the session so the last answer can be re-sent.
 
-export const SETUP_TEST_QUESTION_COUNT = 15;
-export const SETUP_TEST_TIME_LIMIT_MINUTES = 15;
+// Same test as the later specialty test: the counts come from ONE place (constants/specialty-test.ts).
+export const SETUP_TEST_QUESTION_COUNT = SPECIALTY_TEST_QUESTION_COUNT;
+export const SETUP_TEST_TIME_LIMIT_MINUTES = SPECIALTY_TEST_TIME_LIMIT_MINUTES;
 const GENERATION_TIMEOUT_MS = 60_000;
 const GRADING_TIMEOUT_MS = 45_000;
 
@@ -50,7 +52,7 @@ interface SetupTestSession {
 }
 
 /** Score (%) above which the chosen specialties are recorded as passed from the setup test (the specialty record's own documented floor). */
-export const SETUP_TEST_PASS_SCORE = 25;
+export const SETUP_TEST_PASS_SCORE = SPECIALTY_TEST_PASS_SCORE;
 
 export class SetupTestGateway {
   private io: SocketIOServer | null = null;
