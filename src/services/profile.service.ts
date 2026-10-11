@@ -9,6 +9,7 @@ import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
 import { computeClientCompletion, computeClientMissingItems } from '../utils/completion-calculators';
 import { logger } from '../config/logger';
+import { getClientLevelInfo } from './gamification.service';
 import { providerProfileService } from './provider-profile.service';
 import { withoutLegacyAffiliateBankFields } from '../utils/affiliate-payout';
 import { withoutLegacyProviderBankFields } from '../utils/provider-payout';
@@ -143,6 +144,15 @@ export class ProfileService {
       currentProfileData.profileCompletionPercent = completion;
       currentProfileData.completionPercentage = completion;
       currentProfileData.missingItems = missingItems;
+    }
+
+    // CLIENT: the level as the one shared LevelInfo (same payload the dashboard sends), so no page rebuilds it from the stale currentLevel label.
+    if (user.activeRole === UserRole.CLIENT) {
+      try {
+        currentProfileData.levelInfo = await getClientLevelInfo(userId);
+      } catch (error) {
+        logger.warn(`[ProfileService] Could not read the client level (userId=${userId}): ${(error as Error)?.message}`);
+      }
     }
 
     // CLIENT: one review lifecycle per admin-decided change (name, ID number, password, identity documents). Immediate saves are not listed.
