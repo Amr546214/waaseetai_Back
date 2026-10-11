@@ -46,7 +46,10 @@ for (const tab of ['basics', 'contact']) {
 	test(`updateTab(${tab}) writes only the allow-list: a hostile body (accountType/status/roles/isNafathVerified/…) reaches no table`, async () => {
 		reset();
 		const service = await svc();
-		await service.updateTab('u1', tab, { ...HOSTILE, alternativePhone: '0500000001', city: 'الرياض', address: 'عنوان', region: 'منطقة', avatarUrl: 'https://a/b.png' }, 'CLIENT');
+		// a hostile e-mail / phone is refused outright (403, the account contact data is immutable), so the allow-list check below runs without them
+		await assert.rejects(() => service.updateTab('u1', tab, { ...HOSTILE }, 'CLIENT'), (e: any) => e.statusCode === 403);
+		assert.equal(state.userUpdates.length, 0);
+		await service.updateTab('u1', tab, { ...HOSTILE, email: undefined, phoneNumber: undefined, alternativePhone: '0500000001', city: 'الرياض', address: 'عنوان', region: 'منطقة', avatarUrl: 'https://a/b.png' }, 'CLIENT');
 		const forbidden = ['accountType', 'status', 'roles', 'activeRole', 'isNafathVerified', 'kycStatus', 'isVerified', 'id', 'email', 'password', 'idDocumentUrl', 'idNumber', 'profileCompletionPercent', 'role', 'phoneNumber'];
 		const written = [...state.userUpdates, ...state.upserts.flatMap(([, a]) => [a.create ?? {}, a.update ?? {}])];
 		for (const data of written) for (const key of forbidden) assert.equal(key in data, false, `${tab}: ${key} must never be written (${JSON.stringify(Object.keys(data))})`);

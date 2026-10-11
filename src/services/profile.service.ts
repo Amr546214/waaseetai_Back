@@ -357,6 +357,15 @@ export class ProfileService {
     if (tabName === 'basics' || tabName === 'contact') {
       const { email, phoneNumber, firstName, lastName, avatarUrl, ...rest } = data;
 
+      // The e-mail and the account phone are immutable from the interface for every role: a DIFFERENT value is refused (403, nothing is written, no code,
+      // no request); the same value, '' and null are ignored.
+      if (email || phoneNumber) {
+        const current = await prisma.user.findUnique({ where: { id: userId }, select: { email: true, phoneNumber: true } });
+        if ((email && String(email).trim().toLowerCase() !== (current?.email ?? '').toLowerCase()) || (phoneNumber && String(phoneNumber) !== (current?.phoneNumber ?? ''))) {
+          throw new AppError(CONTACT_IMMUTABLE_MESSAGE, 403);
+        }
+      }
+
       // Re-verified against the current User model (prisma/schema.prisma):
       // User has NO `country` column at all (only ClientProfile/
       // ProviderProfile do) — updateContactSchema lists `country` but it does
@@ -414,21 +423,10 @@ export class ProfileService {
         }
       });
 
-      // If sensitive data changed, trigger OTP/Moderation flow
-      if (email || phoneNumber) {
-        // Mock OTP creation for now
-        // await prisma.profileChangeRequest.create({
-        //   data: {
-        //     userId,
-        //     tabName: 'CONTACT_UPDATE',
-        //     requestedChanges: { email, phoneNumber }
-        //   }
-        // });
-      }
       if (nameRequest) {
         return { message: 'تم إرسال طلب تعديل البيانات الأساسية للمراجعة', isPendingRequest: true, requestId: nameRequest.id, status: nameRequest.status };
       }
-      return { message: 'تم التحديث. التعديلات الحساسة تتطلب التحقق.' };
+      return { message: 'تم التحديث' };
     }
 
     // CLIENT PayPal payout: saved directly (like the Provider PayPal email) to
