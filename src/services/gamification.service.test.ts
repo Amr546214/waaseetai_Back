@@ -70,8 +70,8 @@ test('getLevelDetails: the persisted currentCommission equals the returned quali
 
   const result = await gamificationService.getLevelDetails('provider-1');
 
-  assert.equal(result.currentStats.commissionRate, 4.0);
-  assert.equal(getGamificationState().currentCommission, 4.0);
+  assert.equal(result.currentStats.commissionRate, 11.12);
+  assert.equal(getGamificationState().currentCommission, 11.12);
   assert.equal(result.currentStats.commissionRate, getGamificationState().currentCommission);
 });
 
@@ -112,8 +112,8 @@ test('provider roadmap: 15 levels from the single ladder, each with its station 
   assert.equal(r.roadmap[14].color.light, '#07108D');
   assert.equal(r.roadmap.filter((l: any) => l.isCurrent).length, 1);
   assert.equal(r.roadmap.find((l: any) => l.isCurrent).index, 2);
-  assert.equal(r.currentStats.commissionRate, 4.8);
-  assert.equal(r.nextLevelProgress.nextCommission, 4.6);
+  assert.equal(r.currentStats.commissionRate, 12.42);
+  assert.equal(r.nextLevelProgress.nextCommission, 12.10);
 });
 
 test('the recommendation text uses only real gaps and level names: no invented point values, no stale "مستكشف after 50 points"', async (t) => {

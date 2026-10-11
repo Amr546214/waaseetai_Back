@@ -1,4 +1,6 @@
 import { test } from 'node:test';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { PROVIDER_LEVELS, CLIENT_LEVELS, MARKETER_LEVELS, levelColor, levelStation, levelDef, publicLevelsPayload, clampLevel } from './levels.config';
 import { PROVIDER_LEVEL_MATRIX, REQUESTER_LEVEL_MATRIX, LEVEL_MATRIX, deriveProviderProgression, deriveRequesterProgression } from '../utils/progression-calculators';
@@ -11,7 +13,8 @@ const PROVIDER = {
   points: [0, 101, 251, 451, 701, 1001, 1501, 2201, 3001, 4001, 5001, 6501, 8001, 10001, 12001],
   projects: [0, 3, 6, 11, 16, 21, 30, 46, 61, 81, 101, 126, 151, 181, 211],
   rating: [0, 3.5, 3.8, 4, 4.1, 4.2, 4.3, 4.4, 4.5, 4.5, 4.5, 4.6, 4.7, 4.8, 4.9],
-  commission: [5, 4.8, 4.6, 4.4, 4.2, 4, 3.75, 3.5, 3.25, 3, 2.75, 2.5, 2, 1.5, 1],
+  // نسب الدفع.xlsx / المستويات.G: the platform commission = the final deduction
+  commission: [12.75, 12.42, 12.10, 11.77, 11.45, 11.12, 10.80, 10.47, 10.15, 9.82, 9.50, 9.17, 8.85, 8.52, 8.15],
 };
 const CLIENT = {
   names: ['زائر', 'مستكشف', 'باحث', 'عميل', 'داعم', 'ناشط', 'فعال', 'راعي', 'سفير', 'استراتيجي', 'أساسي', 'مالك', 'مؤسس', 'دائم', 'مؤسسي'],
@@ -25,11 +28,11 @@ const MARKETER = {
   points: [0, 101, 251, 451, 701, 1001, 1501, 2201, 3001, 4001, 5001, 6501, 8001, 10001, 12001],
   clients: [0, 4, 8, 13, 19, 26, 36, 51, 71, 96, 126, 161, 201, 251, 301],
   revenue: [0, 501, 1501, 3001, 5001, 8001, 12001, 20001, 35001, 60001, 100001, 150001, 250001, 400001, 600001],
-  // level 7 keeps 2.75 until the owner confirms (the workbook prints 3.75, which is above level 8's 3.0)
+  // exactly the workbook (level 7 = 2.75%); NOT the 3%-18% table of the old identity page
   commission: [1, 1.2, 1.5, 2, 2.25, 2.5, 2.75, 3, 3.2, 3.4, 3.6, 3.8, 4, 4.3, 4.5],
 };
 
-test('PROVIDER ladder = the workbook: 15 names, thresholds (points, projects, rating) and the commission (5% down to 1%)', () => {
+test('PROVIDER ladder = the workbook: 15 names, thresholds (points, projects, rating) and the commission (12.75% down to 8.15%)', () => {
   assert.equal(PROVIDER_LEVELS.length, 15);
   assert.deepEqual(PROVIDER_LEVELS.map(l => l.name), PROVIDER.names);
   assert.deepEqual(PROVIDER_LEVELS.map(l => l.minPoints), PROVIDER.points);
@@ -50,13 +53,15 @@ test('MARKETER ladder = the workbook: 15 names, thresholds (points, clients, rev
   assert.deepEqual(MARKETER_LEVELS.map(l => l.minProjects), MARKETER.clients);
   assert.deepEqual(MARKETER_LEVELS.map(l => l.minRevenue), MARKETER.revenue);
   assert.deepEqual(MARKETER_LEVELS.map(l => l.percent), MARKETER.commission);
-  assert.equal(MARKETER_LEVELS[6].pendingOwnerConfirmation !== undefined, true, 'level 7 is flagged as pending the owner');
+  assert.equal(MARKETER_LEVELS.some(l => l.pendingOwnerConfirmation !== undefined), false, 'no level is pending: the workbook is final');
+  assert.equal(MARKETER_LEVELS[6].percent, 2.75);
+  assert.equal(MARKETER_LEVELS[14].percent, 4.5, 'never the old 18%');
 });
-test('direction of the money: provider commission only goes down, client cashback and marketer commission only go up (marketer: from level 8 on, level 7 is pending)', () => {
+test('direction of the money: provider commission only goes down, client cashback and marketer commission only go up', () => {
   for (let i = 1; i < 15; i++) {
     assert.ok(PROVIDER_LEVELS[i].percent < PROVIDER_LEVELS[i - 1].percent, `provider ${i + 1}`);
     assert.ok(CLIENT_LEVELS[i].percent > CLIENT_LEVELS[i - 1].percent, `client ${i + 1}`);
-    if (i !== 7) assert.ok(MARKETER_LEVELS[i].percent > MARKETER_LEVELS[i - 1].percent, `marketer ${i + 1}`);
+    assert.ok(MARKETER_LEVELS[i].percent > MARKETER_LEVELS[i - 1].percent, `marketer ${i + 1}`);
   }
 });
 
@@ -69,10 +74,11 @@ test('every consumer reads the single ladder: progression matrices, fee policy, 
   assert.deepEqual([...REQUESTER_CASHBACK_PERCENT], CLIENT_LEVELS.map(l => l.percent));
   for (const l of MARKETER_LEVELS) { assert.equal(AFFILIATE_LEVEL_RATES[l.level], l.percent); assert.equal(AFFILIATE_LEVEL_NAMES[l.level], l.name); assert.equal(affiliateCommission(l.level), l.percent); }
 });
-test('the fee schedule\'s other columns are untouched (admin / transfer / VAT / total as published) and the money helpers follow the ladder', () => {
-  assert.deepEqual(PROVIDER_FEE_TABLE[0], { level: 1, platform: 5, admin: 2, transfer: 5, vat: 0.75, total: 12.75 });
-  assert.deepEqual(PROVIDER_FEE_TABLE[14], { level: 15, platform: 1, admin: 5, transfer: 2, vat: 0.15, total: 8.15 });
-  assert.equal(providerWithdrawalFees(15, 1000).percent.platform, 1);
+test('the provider deduction is the ladder commission alone (no extra fee on top) and the money helpers follow the ladder', () => {
+  assert.deepEqual(PROVIDER_FEE_TABLE[0], { level: 1, platform: 12.75, total: 12.75 });
+  assert.deepEqual(PROVIDER_FEE_TABLE[14], { level: 15, platform: 8.15, total: 8.15 });
+  assert.equal(providerWithdrawalFees(15, 1000).percent.platform, 8.15);
+  assert.equal(providerWithdrawalFees(1, 1000).net, 872.5);
   assert.equal(cashback(15, 1000, 1), 50);       // 5% of 1000
   assert.equal(cashback(1, 1000, 1), 10);        // 1% of 1000
   assert.equal(resolveAffiliateCommissionPercentage(15), 4.5);
@@ -92,7 +98,7 @@ test('PROVIDER selection: exactly at a boundary is IN, one short on any single t
     }
   }
   const p = deriveProviderProgression({ points: 101, completedProjects: 3, avgRating: 3.5 });
-  assert.deepEqual([p.currentLevelIndex, p.currentLevelTitle, p.currentCommission, p.pointsToNextLevel], [2, 'منجز', 4.8, 150]);
+  assert.deepEqual([p.currentLevelIndex, p.currentLevelTitle, p.currentCommission, p.pointsToNextLevel], [2, 'منجز', 12.42, 150]);
   assert.equal(deriveProviderProgression({ points: 100, completedProjects: 3, avgRating: 3.5 }).currentLevelIndex, 1, '100 points is still level 1 (the level starts AT 101)');
   assert.equal(deriveProviderProgression({ points: 999999, completedProjects: 999, avgRating: 5 }).currentLevelIndex, 15);
   assert.equal(deriveProviderProgression({ points: 999999, completedProjects: 999, avgRating: 5 }).pointsToNextLevel, 0);
@@ -103,6 +109,7 @@ test('PROVIDER demotion exists only as the live recompute: a rating that falls b
   assert.equal(before.currentLevelIndex, 7);
   assert.equal(after.currentLevelIndex, 6);
   assert.ok(after.currentCommission > before.currentCommission, 'a lower level means a higher commission');
+  assert.deepEqual([before.currentCommission, after.currentCommission], [10.8, 11.12]);
 });
 test('CLIENT selection: boundaries, promotion, and the cashback of the level reached', () => {
   const at = (l: typeof CLIENT_LEVELS[number]) => deriveRequesterProgression({ points: l.minPoints, completedProjects: l.minProjects, avgRating: l.minRating });
@@ -133,12 +140,27 @@ test('GET /levels payload: 15 levels x 3 roles with names, percent kind, thresho
   assert.deepEqual(Object.keys(p.roles), ['PROVIDER', 'CLIENT', 'MARKETER']);
   assert.deepEqual([p.roles.PROVIDER.percentKind, p.roles.CLIENT.percentKind, p.roles.MARKETER.percentKind], ['COMMISSION', 'CASHBACK', 'COMMISSION']);
   for (const r of ['PROVIDER', 'CLIENT', 'MARKETER']) assert.equal(p.roles[r].levels.length, 15);
-  assert.deepEqual(p.roles.PROVIDER.levels[1], { level: 2, name: 'منجز', percent: 4.8, station: 1, color: { dark: levelColor('PROVIDER', 2, 'dark'), light: levelColor('PROVIDER', 2, 'light') }, thresholds: { points: 101, projects: 3, rating: 3.5 } });
+  assert.deepEqual(p.roles.PROVIDER.levels[1], { level: 2, name: 'منجز', percent: 12.42, station: 1, color: { dark: levelColor('PROVIDER', 2, 'dark'), light: levelColor('PROVIDER', 2, 'light') }, thresholds: { points: 101, projects: 3, rating: 3.5 } });
   assert.deepEqual(p.roles.MARKETER.levels[1].thresholds, { points: 101, clients: 4, revenueUsd: 501 });
-  assert.equal(p.roles.MARKETER.levels[6].pendingOwnerConfirmation, true);
+  assert.equal(p.roles.MARKETER.levels[6].pendingOwnerConfirmation, undefined);
   assert.equal(JSON.stringify(p).includes('userId'), false);
 });
 test('clampLevel / levelDef never go out of range', () => {
   assert.equal(clampLevel(0), 1); assert.equal(clampLevel(99), 15); assert.equal(clampLevel(2.5), 1);
   assert.equal(levelDef('CLIENT', 99).name, 'مؤسسي');
+});
+
+// ── no second copy and no retired number anywhere in the backend source ──
+test('static: no level table / old percentage lives outside config/levels.config.ts (old provider 5%..1% ladder, the 3%-18% marketer table)', () => {
+  const root = join(__dirname, '..');
+  const walk = (d: string, out: string[] = []): string[] => { for (const f of readdirSync(d)) { const p = join(d, f); statSync(p).isDirectory() ? walk(p, out) : out.push(p); } return out; };
+  const sources = walk(root).filter(f => f.endsWith('.ts') && !f.endsWith('.test.ts') && !f.endsWith('levels.config.ts'));
+  for (const f of sources) {
+    const t = readFileSync(f, 'utf-8');
+    // the retired provider commission ladder (5.0, 4.8, 4.6 ...) as level data
+    assert.equal(/commission:\s*(5\.0|4\.8|4\.6|4\.4)\b/.test(t), false, `${f} carries an old provider commission`);
+    assert.equal(/reqPoints:\s*\d/.test(t), false, `${f} carries its own level thresholds`);
+    // the retired marketer table (3% ... 18%)
+    assert.equal(/B1->B15|3%, 4%, 5%, 6%, 7%, 8%, 9%, 10%, 11%, 12%, 13%, 14%, 15%, 16%, 18%/.test(t), false, `${f} carries the 3%-18% marketer table`);
+  }
 });

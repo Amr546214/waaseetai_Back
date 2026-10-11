@@ -2,13 +2,13 @@
 // and the level colours. Everything else (progression calculators, the fee policy, the affiliate commission engine, the public /levels API and,
 // through it, the UI) reads THIS file; no other file may carry a level name or a level percentage.
 //
-// Source: the binding finance workbook "نظام النقاط و الولاء.xlsx" (sheet المستويات), cross-checked with the PDF "شرح نظام النقاط و الولاء" (inclusive
-// ranges) and the brand identity page (names + colour formula). Threshold semantics: a level is reached when EVERY threshold is met with `>=`
-// (the workbook formula is AND(points>=D, projects>=E, rating>=F); the PDF ranges, e.g. provider level 2 = 101-250 points, agree).
-// Percentages: provider = platform COMMISSION (decreases with the level); client = CASHBACK (increases); marketer = COMMISSION (increases).
+// Source (the ONLY one, owner correction): the two workbooks "نظام النقاط و الولاء.xlsx" (sheet المستويات: names, thresholds, commission / cashback)
+// and "نسب الدفع.xlsx" (provider final deduction by level, client deposit fees, marketer withdrawal fees). Earlier identity images, the PDF and the
+// 3%-18% marketer table are NOT used. Threshold semantics: a level is reached when EVERY threshold is met with `>=` (workbook formula
+// AND(points>=D, projects>=E, rating>=F)). Percentages: provider = platform commission (decreases: 12.75% -> 8.15%); client = CASHBACK (increases:
+// 1% -> 5%); marketer = COMMISSION (increases: 1% -> 4.5%; level 7 = 2.75% exactly as the workbook).
 //
-// NOT here (owner decisions pending, see the report): marketer commission table conflict (workbook 1%-4.5% vs identity page 3%-18%), level-7
-// marketer rate, downgrade rules, the points-earning events for clients and marketers.
+// NOT here: downgrade rules and the points-earning events for clients and marketers (not defined in the workbooks).
 
 export type LevelRole = 'PROVIDER' | 'CLIENT' | 'MARKETER';
 
@@ -31,12 +31,17 @@ export interface LevelDef {
 const L = (level: number, name: string, percent: number, minPoints: number, minProjects: number, minRating: number, minRevenue = 0, pendingOwnerConfirmation?: string): LevelDef =>
   ({ level, name, percent, minPoints, minProjects, minRating, minRevenue, ...(pendingOwnerConfirmation ? { pendingOwnerConfirmation } : {}) });
 
-// مقدم الخدمة — platform commission DECREASES as the level rises.
+// مقدم الخدمة — the platform commission (= the FINAL deduction, "الخصم النهائي لمقدمي الخدمات" in نسب الدفع.xlsx: no other fee is added on top)
+// DECREASES as the level rises: 12.75% at level 1 down to 8.15% at level 15.
 export const PROVIDER_LEVELS: readonly LevelDef[] = [
-  L(1, 'مبتدئ', 5.0, 0, 0, 0), L(2, 'منجز', 4.8, 101, 3, 3.5), L(3, 'منفذ', 4.6, 251, 6, 3.8), L(4, 'بارع', 4.4, 451, 11, 4.0),
-  L(5, 'متقن', 4.2, 701, 16, 4.1), L(6, 'متمكن', 4.0, 1001, 21, 4.2), L(7, 'أخصائي', 3.75, 1501, 30, 4.3), L(8, 'محترف', 3.5, 2201, 46, 4.4),
-  L(9, 'خبير', 3.25, 3001, 61, 4.5), L(10, 'رصين', 3.0, 4001, 81, 4.5), L(11, 'مستشار', 2.75, 5001, 101, 4.5), L(12, 'رائد', 2.5, 6501, 126, 4.6),
-  L(13, 'مراجع', 2.0, 8001, 151, 4.7), L(14, 'مبتكر', 1.5, 10001, 181, 4.8), L(15, 'مرجع', 1.0, 12001, 211, 4.9),
+  L(1, 'مبتدئ', 12.75, 0, 0, 0), L(2, 'منجز', 12.42, 101, 3, 3.5),
+  L(3, 'منفذ', 12.1, 251, 6, 3.8), L(4, 'بارع', 11.77, 451, 11, 4.0),
+  L(5, 'متقن', 11.45, 701, 16, 4.1), L(6, 'متمكن', 11.12, 1001, 21, 4.2),
+  L(7, 'أخصائي', 10.8, 1501, 30, 4.3), L(8, 'محترف', 10.47, 2201, 46, 4.4),
+  L(9, 'خبير', 10.15, 3001, 61, 4.5), L(10, 'رصين', 9.82, 4001, 81, 4.5),
+  L(11, 'مستشار', 9.5, 5001, 101, 4.5), L(12, 'رائد', 9.17, 6501, 126, 4.6),
+  L(13, 'مراجع', 8.85, 8001, 151, 4.7), L(14, 'مبتكر', 8.52, 10001, 181, 4.8),
+  L(15, 'مرجع', 8.15, 12001, 211, 4.9),
 ];
 
 // طالب الخدمة — cashback INCREASES with the level.
@@ -51,8 +56,7 @@ export const CLIENT_LEVELS: readonly LevelDef[] = [
 export const MARKETER_LEVELS: readonly LevelDef[] = [
   L(1, 'مسوق', 1.0, 0, 0, 0, 0), L(2, 'مساعد', 1.2, 101, 4, 0, 501), L(3, 'موصل', 1.5, 251, 8, 0, 1501), L(4, 'منسق', 2.0, 451, 13, 0, 3001),
   L(5, 'وسيط', 2.25, 701, 19, 0, 5001), L(6, 'ممثل', 2.5, 1001, 26, 0, 8001),
-  // the workbook prints 3.75% here (above level 8's 3.0%); 2.75% is kept until the owner confirms (decision of 2026-10-06)
-  L(7, 'سفير', 2.75, 1501, 36, 0, 12001, 'workbook 3.75% vs kept 2.75% (non-monotonic): owner to confirm'),
+  L(7, 'سفير', 2.75, 1501, 36, 0, 12001),
   L(8, 'موجه', 3.0, 2201, 51, 0, 20001), L(9, 'حلقة وصل', 3.2, 3001, 71, 0, 35001), L(10, 'جسر الوصل', 3.4, 4001, 96, 0, 60001),
   L(11, 'ناقل حيوي', 3.6, 5001, 126, 0, 100001), L(12, 'موصل استراتيجي', 3.8, 6501, 161, 0, 150001), L(13, 'رابط استشاري', 4.0, 8001, 201, 0, 250001),
   L(14, 'شريك تنفيذي', 4.3, 10001, 251, 0, 400001), L(15, 'رابط مؤسسي', 4.5, 12001, 301, 0, 600001),

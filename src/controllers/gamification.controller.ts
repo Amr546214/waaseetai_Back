@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { gamificationService, getClientLevelDetails } from '../services/gamification.service';
 import { publicLevelsPayload } from '../config/levels.config';
+import { DEPOSIT_FEE_PERCENT, MARKETER_WITHDRAWAL_FEE_PERCENT } from '../utils/fee-policy';
 
 class GamificationController {
   async getLevelDetails(req: Request, res: Response) {
@@ -31,7 +32,16 @@ class ClientLevelController {
 }
 
 /** GET /api/levels — the single, public, read-only level table (names, thresholds, percentages, colours) for every page that shows levels. */
-export const getLevelsTable = (_req: Request, res: Response) => { res.json({ success: true, data: publicLevelsPayload() }); };
+export const getLevelsTable = (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: {
+      ...publicLevelsPayload(),
+      // the payment-percentage tables of نسب الدفع.xlsx: the provider's final deduction IS the PROVIDER commission above (no extra fee on top)
+      payments: { clientDeposit: { ...DEPOSIT_FEE_PERCENT }, marketerWithdrawal: { ...MARKETER_WITHDRAWAL_FEE_PERCENT } },
+    },
+  });
+};
 
 export const gamificationController = new GamificationController();
 export const clientLevelController = new ClientLevelController();
