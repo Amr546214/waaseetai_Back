@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { ProfileSetupDto } from '../dtos/profile-setup.dto';
 import { storeDataUriIfNeeded, storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { AppError } from '../utils/app-error';
+import { CONTACT_IMMUTABLE_MESSAGE } from '../utils/contact-policy';
 import { resolveSkillIdsFromCatalog } from './skills-catalog.service';
 import { assertKycFileValues } from '../utils/kyc-value-guard';
 import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
@@ -71,7 +72,8 @@ export class ProfileSetupService {
       // ==========================================
       const userUpdates: any = {};
       if (dto.avatarUrl !== undefined) userUpdates.avatarUrl = avatarUrl;
-      if (dto.phoneNumber !== undefined) userUpdates.phoneNumber = dto.phoneNumber;
+      // The account phone is set at registration and is immutable from the interface: a setup never rewrites it.
+      if (dto.phoneNumber !== undefined && dto.phoneNumber !== '' && dto.phoneNumber !== (await tx.user.findUnique({ where: { id: userId }, select: { phoneNumber: true } }))?.phoneNumber) throw new AppError(CONTACT_IMMUTABLE_MESSAGE, 403);
 
       const updatedUser = Object.keys(userUpdates).length > 0
         ? await tx.user.update({ where: { id: userId }, data: userUpdates })

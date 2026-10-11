@@ -1,8 +1,8 @@
 import type { ProviderBioSuggestDto, ProviderSkillsSuggestDto } from '../dtos/provider-profile-suggest.dto';
 import { canonicalStoredPhone } from '../utils/phone-countries';
 
-export const CONTACT_IMMUTABLE = 'CONTACT_IMMUTABLE';
-export const CONTACT_IMMUTABLE_MESSAGE = 'البريد الإلكتروني ورقم الجوال للعرض فقط ولا يمكن تعديلهما من الواجهة. للمساعدة تواصل مع الدعم.';
+import { CONTACT_IMMUTABLE, CONTACT_IMMUTABLE_MESSAGE } from '../utils/contact-policy';
+export { CONTACT_IMMUTABLE, CONTACT_IMMUTABLE_MESSAGE };
 import { planSpecialtyUpdate, resolveSkillIdsFromCatalog } from './skills-catalog.service';
 import { PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
 import { profileChangeReviewService, withHonestAiReview } from './ai-features/profile-change-review.service';
@@ -803,6 +803,17 @@ export class ProviderProfileService {
 
 	async updateContactInfo(userId: string, data: any) {
 		throw new Error(CONTACT_IMMUTABLE);
+	}
+
+	/**
+	 * The optional WhatsApp number is the only contact number a provider edits, as a DIRECT save: no code, no request, no review, never part of the review
+	 * lifecycle. Empty clears it. A real number: optional "+" then 8-15 digits (spaces, dashes and brackets are stripped).
+	 */
+	async updateWhatsapp(userId: string, value: unknown) {
+		const raw = String(value ?? '').replace(/[\s()-]/g, '');
+		if (raw && !/^\+?\d{8,15}$/.test(raw)) throw new Error('INVALID_WHATSAPP');
+		const user = await prisma.user.update({ where: { id: userId }, data: { alternativePhone: raw || null }, select: { alternativePhone: true } });
+		return { alternativePhone: user.alternativePhone };
 	}
 
 	async updateBankingInfo(userId: string, data: any) {

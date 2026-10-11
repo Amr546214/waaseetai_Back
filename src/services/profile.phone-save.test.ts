@@ -2,8 +2,8 @@ import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { updateProfileSchema } from '../dtos/profile.dto';
 
-// #26 — profile save: a valid phone number only, never erased by ''/null, and a CHANGED number is refused here (it is changed only through the
-// email-OTP flow, see routes/phone-change.flow.test.ts, which also covers the duplicate-number 409).
+// #26 — profile save: a valid phone number only, never erased by ''/null, and a CHANGED number is refused (the account phone is immutable
+// from the interface for every role: 403, no code flow, nothing is written).
 process.env.OPENAI_API_KEY = 'test-key';
 process.env.JWT_SECRET = 'test-secret';
 
@@ -43,11 +43,11 @@ test('an unchanged phone number is not written at all', async () => {
 	assert.equal(state.updates.length, 0);
 });
 
-test('a CHANGED phone number is refused here (400, Arabic): it is changed only through the email-OTP flow, and nothing is written', async () => {
+test('a CHANGED phone number is refused (403, Arabic, display-only message): the account phone is immutable for every role, and nothing is written', async () => {
 	reset();
 	await assert.rejects(() => svc().then(s => s.updateProfile('u1', 'CLIENT', { phoneNumber: '0511111111' } as any)), (e: any) => {
-		assert.equal(e.statusCode, 400);
-		assert.match(e.message, /رمز تحقق/);
+		assert.equal(e.statusCode, 403);
+		assert.match(e.message, /للعرض فقط/);
 		return true;
 	});
 	assert.equal(state.updates.length, 0);
