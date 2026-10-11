@@ -146,7 +146,7 @@ test('start_assessment: relays WaseetAI questions in order on the UI socket even
   const { handlers, emitted } = await setup('user-1');
   await handlers['start_assessment']({ ...START, specialtyName: 'client supplied name must be ignored' });
 
-  assert.deepEqual(reqBody, { providerSpecialtyId: 'spec-1', specialtyName: 'تطوير الويب', questionCount: 20, timeLimitMinutes: 15 });
+  assert.deepEqual(reqBody, { providerSpecialtyId: 'spec-1', specialtyName: 'تطوير الويب', questionCount: 15, timeLimitMinutes: 15 });
   const events = emitted.map((e) => e.event);
   assert.deepEqual(events, ['question_streamed', 'question_streamed', 'question_streamed', 'assessment_ready']);
   assert.deepEqual(emitted.slice(0, 3).map((e) => [e.payload.questionIndex, e.payload.question.id]), [[1, 1], [2, 2], [3, 3]]);

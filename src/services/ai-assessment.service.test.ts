@@ -115,7 +115,7 @@ test('generate: claim winner calls createAssessment with DB specialty name, pers
   const { aiAssessmentService } = await loadSvc();
   const res = await aiAssessmentService.generateAssessment('spec-1', 'user-1');
 
-  assert.deepEqual(calls, [{ providerSpecialtyId: 'spec-1', specialtyName: 'تطوير الويب', questionCount: 20, timeLimitMinutes: 15 }]);
+  assert.deepEqual(calls, [{ providerSpecialtyId: 'spec-1', specialtyName: 'تطوير الويب', questionCount: 15, timeLimitMinutes: 15 }]);
   assert.equal(res.attemptId, 'reserved-1');
   assert.equal(res.questions.length, 2);
   assert.equal(res.generationSource, undefined, 'no generationSource is invented when WaseetAI reports none');
@@ -176,7 +176,7 @@ test('stream: questions are relayed as they arrive (before the stream ends) and 
     onQuestion: (q: any, i: number, total: number) => order.push(`q${i}`)
   });
   assert.equal(sawQuestionBeforeEnd, true);
-  assert.deepEqual(order, ['req:تطوير الويب:20:15', 'q1', 'q2']);
+  assert.deepEqual(order, ['req:تطوير الويب:15:15', 'q1', 'q2']);
   assert.equal(out.generationSource, 'SOME_SOURCE');
   const persisted = state.updates[0].data;
   assert.equal(persisted.analyzedAssetsSnapshot.vendorAttemptId, 'v-1');
