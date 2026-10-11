@@ -1,5 +1,8 @@
 import type { ProviderBioSuggestDto, ProviderSkillsSuggestDto } from '../dtos/provider-profile-suggest.dto';
-import { canonicalStoredPhone, normalizePhone } from '../utils/phone-countries';
+import { canonicalStoredPhone } from '../utils/phone-countries';
+
+export const CONTACT_IMMUTABLE = 'CONTACT_IMMUTABLE';
+export const CONTACT_IMMUTABLE_MESSAGE = 'البريد الإلكتروني ورقم الجوال للعرض فقط ولا يمكن تعديلهما من الواجهة. للمساعدة تواصل مع الدعم.';
 import { planSpecialtyUpdate, resolveSkillIdsFromCatalog } from './skills-catalog.service';
 import { PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
 import { profileChangeReviewService, withHonestAiReview } from './ai-features/profile-change-review.service';
@@ -564,17 +567,10 @@ export class ProviderProfileService {
 		const displayIdentity = resolveProviderDisplayIdentity({ providerProfile: profile, user: profile.user || {} });
 
 		// Contact details: the OWNER's own preview shows what is stored (the same source as the profile data page); visitors and clients never get them from this endpoint.
-		let contact: null | { email: string | null; phone: ReturnType<typeof canonicalStoredPhone>; pendingChange: null | { status: string; requestedAt: string } } = null;
-		if (viewer.isOwner) {
-			let pendingChange: { status: string; requestedAt: string } | null = null;
-			try {
-				const waiting = await prisma.profileModificationRequest.findFirst({ where: { providerId, category: 'CONTACT', status: 'PENDING_OTP' as any }, orderBy: { createdAt: 'desc' }, select: { status: true, createdAt: true } });
-				if (waiting) pendingChange = { status: 'PENDING_OTP', requestedAt: waiting.createdAt.toISOString() };
-			} catch (error) {
-				logger.error(`[ProviderProfileService] Could not read the pending contact change (userId=${providerId})`, error);
-			}
-			contact = { email: profile.user?.email ?? null, phone: canonicalStoredPhone((profile.user as any)?.phoneCountryCode, profile.user?.phoneNumber), pendingChange };
-		}
+		// The e-mail and the phone are immutable from the interface, so there is no "pending change" to report.
+		const contact: null | { email: string | null; phone: ReturnType<typeof canonicalStoredPhone> } = viewer.isOwner
+			? { email: profile.user?.email ?? null, phone: canonicalStoredPhone((profile.user as any)?.phoneCountryCode, profile.user?.phoneNumber) }
+			: null;
 
 		return {
 			contact,
@@ -806,7 +802,7 @@ export class ProviderProfileService {
 	}
 
 	async updateContactInfo(userId: string, data: any) {
-		throw new Error('OTP_REQUIRED: use /sensitive-change and verify the emailed OTP');
+		throw new Error(CONTACT_IMMUTABLE);
 	}
 
 	async updateBankingInfo(userId: string, data: any) {
@@ -980,10 +976,11 @@ export class ProviderProfileService {
 
 	private sensitiveConfig(category: string) {
 		const configs: Record<string, { label: string; review: boolean; allowed: string[] }> = {
-			CONTACT: { label: 'بيانات التواصل', review: false, allowed: ['email', 'phoneCountryCode', 'phoneNumber', 'alternativePhone'] },
 			DOCUMENTS: { label: 'المستندات الرسمية', review: true, allowed: ['idDocumentUrl', 'certificatesUrl', 'commercialRegistration', 'vatCertificateUrl'] }
 		};
 		if (category === 'BANKING') throw new Error(PAYPAL_ONLY_MESSAGE);
+		// The e-mail and the phone are immutable from the user interface (no code, no request, no review): any attempt is refused.
+		if (category === 'CONTACT') throw new Error(CONTACT_IMMUTABLE);
 		const config = configs[category];
 		if (!config) throw new Error('Unsupported sensitive change category');
 		return config;
@@ -991,14 +988,6 @@ export class ProviderProfileService {
 
 	private normalizeAndValidateSensitiveChanges(category: string, changes: Record<string, unknown>, providerId?: string, keepsStoredIdDocument = false) {
 		const normalized = { ...changes };
-		if (category === 'CONTACT') {
-			normalized.email = String(normalized.email || '').trim().toLowerCase();
-			normalized.phoneNumber = String(normalized.phoneNumber || '').replace(/[\s()-]/g, '');
-			normalized.alternativePhone = String(normalized.alternativePhone || '').replace(/[\s()-]/g, '');
-			if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(normalized.email))) throw new Error('INVALID_EMAIL');
-			if (!/^\+?\d{8,15}$/.test(String(normalized.phoneNumber))) throw new Error('INVALID_PHONE');
-			if (normalized.alternativePhone && !/^\+?\d{8,15}$/.test(String(normalized.alternativePhone))) throw new Error('INVALID_ALTERNATIVE_PHONE');
-		}
 		if (category === 'DOCUMENTS') {
 			// Omitting idDocumentUrl means "keep the stored one" (the client cannot see a stored private document, so it cannot resend it);
 			// sending it empty is still a removal and still refused.
@@ -1041,23 +1030,6 @@ export class ProviderProfileService {
 		if (config.review) {
 			const waiting = await prisma.profileModificationRequest.findFirst({ where: { providerId, category, status: 'PENDING_HUMAN_REVIEW' as any }, orderBy: { createdAt: 'desc' }, select: { id: true, category: true, createdAt: true } });
 			if (waiting) throw Object.assign(new Error('REQUEST_ALREADY_PENDING'), { details: alreadyPendingDetails(waiting, category) });
-		}
-
-		// The phone is stored as the account's country code + NATIONAL digits: "+966501234567", "0501234567" and "501234567" are the same number.
-		if (category === 'CONTACT' && cleanChanges.phoneNumber) {
-			// country code + local number are validated TOGETHER (an Egyptian number never goes with +966) and stored apart: the code in phoneCountryCode, the local digits in phoneNumber
-			const phone = normalizePhone(cleanChanges.phoneNumber, cleanChanges.phoneCountryCode ?? user.phoneCountryCode);
-			cleanChanges.phoneNumber = phone.nationalNumber;
-			cleanChanges.phoneCountryCode = phone.countryCode;
-		}
-
-		if (category === 'CONTACT' && cleanChanges.email && cleanChanges.email !== user.email) {
-			const duplicate = await prisma.user.findUnique({ where: { email: String(cleanChanges.email).trim().toLowerCase() } });
-			if (duplicate && duplicate.id !== providerId) throw new Error('EMAIL_ALREADY_USED');
-		}
-		if (category === 'CONTACT' && cleanChanges.phoneNumber && cleanChanges.phoneNumber !== user.phoneNumber) {
-			const duplicate = await prisma.user.findUnique({ where: { phoneNumber: String(cleanChanges.phoneNumber) } });
-			if (duplicate && duplicate.id !== providerId) throw new Error('PHONE_ALREADY_USED');
 		}
 
 		const current: Record<string, unknown> = {};
@@ -1103,6 +1075,11 @@ export class ProviderProfileService {
 	async verifySensitiveChange(providerId: string, requestId: string, code: string, auditContext?: AuditContext) {
 		const request = await prisma.profileModificationRequest.findFirst({ where: { id: requestId, providerId } });
 		if (!request || request.status !== 'PENDING_OTP') throw new Error('REQUEST_NOT_PENDING_OTP');
+		if (request.category === 'CONTACT') {
+			// a contact change requested before the e-mail/phone became immutable is never applied: it is closed
+			await prisma.profileModificationRequest.update({ where: { id: request.id }, data: { status: 'CANCELLED' as any } });
+			throw new Error(CONTACT_IMMUTABLE);
+		}
 
 		// this request's SENSITIVE_CHANGE code only: any other purpose, or a legacy purpose-less code, never confirms a change
 		const otp = await prisma.otpVerification.findFirst({
@@ -1362,10 +1339,11 @@ export class ProviderProfileService {
 	// mutation now only happens via reviewSensitiveChange() (admin-only,
 	// see applyLegacyFieldModification below) — the same real-approval
 	// gate BANKING/DOCUMENTS sensitive changes already use.
-	private static readonly LEGACY_MODIFICATION_FIELDS = ['EMAIL', 'PHONE_NUMBER', 'NATIONAL_ID'] as const;
+	private static readonly LEGACY_MODIFICATION_FIELDS = ['NATIONAL_ID'] as const;
 
 	async createModificationRequest(providerId: string, data: { fieldName: string, fieldLabel: string, requestedValue: string }) {
 		if (data.fieldName === 'IBAN') throw new Error(PAYPAL_ONLY_MESSAGE);
+		if (data.fieldName === 'EMAIL' || data.fieldName === 'PHONE_NUMBER') throw new Error(CONTACT_IMMUTABLE);
 		if (!(ProviderProfileService.LEGACY_MODIFICATION_FIELDS as readonly string[]).includes(data.fieldName)) {
 			throw new Error(`Unsupported fieldName: ${data.fieldName}`);
 		}

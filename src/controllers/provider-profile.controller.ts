@@ -3,6 +3,7 @@ import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/app-error';
 import { providerProfileService } from '../services/provider-profile.service';
 import { prisma } from '../config/db';
+import { CONTACT_IMMUTABLE, CONTACT_IMMUTABLE_MESSAGE } from '../services/provider-profile.service';
 import { resolveCategorySlug, resolveSkillIdsFromCatalog } from '../services/skills-catalog.service';
 import { skillsForCategory } from '../config/skills-catalog.config';
 import { ensureCloudinaryUrl, storeDataUriIfNeeded, storeKycFileIfNeeded } from '../utils/cloudinary-storage';
@@ -319,6 +320,7 @@ export const createModificationRequest = async (req: Request, res: Response) => 
 		const result = await providerProfileService.createModificationRequest(userId, req.body);
 		res.json({ success: true, data: result });
 	} catch (error: any) {
+		if (error.message === CONTACT_IMMUTABLE) return res.status(403).json({ success: false, code: CONTACT_IMMUTABLE, message: CONTACT_IMMUTABLE_MESSAGE });
 		res.status(error.message === PAYPAL_ONLY_MESSAGE ? 400 : 500).json({ success: false, message: error.message });
 	}
 };
@@ -343,6 +345,7 @@ export const initiateSensitiveChange = async (req: Request, res: Response) => {
 		const result = await providerProfileService.initiateSensitiveChange(userId, String(category || ''), changes || {}, auditContext(req));
 		res.status(201).json({ success: true, data: result });
 	} catch (error: any) {
+		if (error.message === CONTACT_IMMUTABLE) return res.status(403).json({ success: false, code: CONTACT_IMMUTABLE, message: CONTACT_IMMUTABLE_MESSAGE });
 		const status = error.message === 'EMAIL_ALREADY_USED' || error.message === 'REQUEST_ALREADY_PENDING' ? 409 : 400;
 		res.status(status).json({ success: false, message: error.message, ...(error.details ? { errors: error.details } : {}) });
 	}
@@ -359,6 +362,7 @@ export const verifySensitiveChange = async (req: Request, res: Response) => {
 		const result = await providerProfileService.verifySensitiveChange(userId, String(requestId), String(code), auditContext(req));
 		res.json({ success: true, data: result });
 	} catch (error: any) {
+		if (error.message === CONTACT_IMMUTABLE) return res.status(403).json({ success: false, code: CONTACT_IMMUTABLE, message: CONTACT_IMMUTABLE_MESSAGE });
 		res.status(error.message === 'REQUEST_ALREADY_PENDING' ? 409 : 400).json({ success: false, message: error.message, ...(error.details ? { errors: error.details } : {}) });
 	}
 };
@@ -406,7 +410,8 @@ export const updateContactInfo = async (req: Request, res: Response) => {
 		if (!userId) return res.status(401).json({ message: 'Unauthorized' });
 		const profile = await providerProfileService.updateContactInfo(userId, req.body);
 		res.json(profile);
-	} catch (error) {
+	} catch (error: any) {
+		if (error?.message === CONTACT_IMMUTABLE) return res.status(403).json({ success: false, code: CONTACT_IMMUTABLE, message: CONTACT_IMMUTABLE_MESSAGE });
 		res.status(500).json({ message: 'Error updating contact info', error });
 	}
 };
