@@ -688,7 +688,7 @@ test('commission engine (flag enabled, no matching referral): zero CommissionLog
   assert.equal(referralFindManySpy.mock.callCount(), 1);
   // Looks up both the client and provider side generically, per P-LG-012's
   // referred-role-agnostic trigger.
-  assert.deepEqual(referralFindManySpy.mock.calls[0].arguments[0].where.referredUserId.in, ['client-1', 'provider-1']);
+  assert.equal(referralFindManySpy.mock.calls[0].arguments[0].where.referredUserId, 'client-1'); // client-only: the provider is never looked up
   assert.equal(commissionLogCreateSpy.mock.callCount(), 0);
 });
 
@@ -748,7 +748,7 @@ test('commission engine (flag enabled, an UNRELATED P2002): propagates unmodifie
   await assert.rejects(() => projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve'));
 });
 
-test('commission engine (flag enabled, two referrals on the same release — client AND provider both attributed): creates one independent CommissionLog per referral', async (t) => {
+test('commission engine (flag enabled, client AND provider both attributed): only the referred CLIENT earns, the referred provider earns nothing', async (t) => {
   withCommissionEngineFlag(t, 'true');
   const clientReferral = referralFixture({ id: 'referral-client', referredUserId: 'client-1', affiliate: { id: 'affiliate-a', level: 1, userId: 'aff-user-a' } });
   const providerReferral = referralFixture({ id: 'referral-provider', referredUserId: 'provider-1', affiliate: { id: 'affiliate-b', level: 2, userId: 'aff-user-b' } });
@@ -757,10 +757,11 @@ test('commission engine (flag enabled, two referrals on the same release — cli
 
   await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
 
-  assert.equal(commissionLogCreateSpy.mock.callCount(), 2);
+  assert.equal(commissionLogCreateSpy.mock.callCount(), 1);
   const logs = getCommissionLogs();
-  assert.equal(logs.find((l: any) => l.affiliateId === 'affiliate-a')?.referredUserId, 'client-1');
-  assert.equal(logs.find((l: any) => l.affiliateId === 'affiliate-b')?.referredUserId, 'provider-1');
+  assert.equal(logs[0].affiliateId, 'affiliate-a');
+  assert.equal(logs[0].referredUserId, 'client-1');
+  assert.equal(logs.some((l: any) => l.referredUserId === 'provider-1'), false);
 });
 
 // ── fee policy v2: the provider's platform commission is taken at STAGE RELEASE, at the rate snapshotted on the escrow ──

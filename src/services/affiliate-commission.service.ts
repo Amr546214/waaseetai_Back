@@ -114,12 +114,11 @@ export interface StageReleaseCommissionContext {
  * here; it is flagged as an unresolved design question (see the final audit
  * report).
  *
- * Referred-role handling: checks BOTH contract.clientId and
- * contract.providerId for a matching Referral.referredUserId — P-LG-012
- * does not restrict which role can be referred, and a project could
- * plausibly have either or both parties attributed to (different)
- * affiliates. Each matching referral gets its own independent CommissionLog
- * row for this same release event.
+ * Referred-role handling (owner decision 2026-10-11): ONLY the referred CLIENT
+ * of the contract earns a commission. A referred PROVIDER earns nothing at this
+ * stage — contract.providerId is deliberately never looked up. The commission is
+ * a platform liability: it is not deducted from the client's price or the
+ * provider's net, and the base is the gross stage.amount.
  */
 export async function createCommissionsForStageReleaseEvent(
   tx: Prisma.TransactionClient,
@@ -137,11 +136,13 @@ export async function createCommissionsForStageReleaseEvent(
   if (activeDispute) return;
 
   const referrals = await tx.referral.findMany({
-    where: { referredUserId: { in: [contract.clientId, contract.providerId] } },
+    where: { referredUserId: contract.clientId },
     include: { affiliate: { select: { id: true, level: true, userId: true } } }
   });
 
   for (const referral of referrals) {
+    // Client-only: never pay on any referral that is not the contract's client (defence in depth beyond the query above).
+    if (referral.referredUserId !== contract.clientId) continue;
     // Defense-in-depth self-referral guard, mirroring the primary guard
     // applied at attribution time in auth.service.ts's resolveReferralAttribution().
     // Structurally can't happen via normal signup (the referred user has no
