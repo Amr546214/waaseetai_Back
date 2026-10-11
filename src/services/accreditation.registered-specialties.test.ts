@@ -8,10 +8,12 @@ const spec = (id: string, nameAr: string) => ({ id, nameAr, category: { id: 'c1'
 const row = (id: string, specialty: any, over: any) => ({ id, specialtyId: specialty.id, specialty, status: 'PENDING_PROOF', isPassed: false, hasTakenAssessment: false, latestScore: null, quizScore: null, passedAt: null, subSpecialties: [], isActive: true, createdAt: new Date(), updatedAt: new Date(), ...over });
 let rows: any[] = [];
 let samples: any[] = [];
+let attempts: any[] = [];
 let loaded: Promise<any> | undefined;
 const svc = () => (loaded ??= (async () => {
 	mock.module('../config/db', { namedExports: { prisma: {
 		providerProfile: { findUnique: async ({ where }: any) => (where.userId === 'none' ? null : { id: 'pp-1' }) },
+		assessmentAttempt: { findMany: async () => attempts },
 		accreditationSample: { findMany: async ({ where }: any) => samples.filter(x => where.providerSpecialtyId.in.includes(x.providerSpecialtyId)) },
 		providerSpecialty: { findMany: async ({ where }: any) => rows.filter(r => r.isActive && (where.isPassed === undefined || r.isPassed === where.isPassed)) },
 	} } });
@@ -82,4 +84,31 @@ test('a passed test alone is never APPROVED, whatever the score', async () => {
 	const r = await (await svc()).getPassedSpecialties('u1');
 	assert.notEqual(r.registered[0].approvalState, 'APPROVED');
 	assert.equal(r.registered[0].approvalState, 'PASSED_NO_SAMPLES');
+});
+
+test('retake window: a failed specialty says how long until it can be retaken (cooldown) or that the attempt limit is reached; passed / approved ones never carry one', async () => {
+	const hoursAgo = (h: number) => new Date(Date.now() - h * 3600 * 1000);
+	rows = [
+		row('ps-a', spec('s1', 'أ'), { hasTakenAssessment: true, latestScore: 10, status: 'REJECTED' }),
+		row('ps-b', spec('s2', 'ب'), { hasTakenAssessment: true, latestScore: 10, status: 'REJECTED' }),
+		row('ps-c', spec('s3', 'ج'), { hasTakenAssessment: true, latestScore: 10, status: 'REJECTED' }),
+		row('ps-d', spec('s4', 'د'), { isPassed: true, hasTakenAssessment: true, latestScore: 70 }),
+		row('ps-e', spec('s5', 'هـ'), {}),
+	];
+	samples = [];
+	attempts = [
+		{ providerSpecialtyId: 'ps-a', completedAt: hoursAgo(2), createdAt: hoursAgo(2.2) },                       // retake in ~22h
+		{ providerSpecialtyId: 'ps-b', completedAt: hoursAgo(30), createdAt: hoursAgo(30.2) },                    // cooldown over
+		...[1, 2, 3, 4, 5].map(i => ({ providerSpecialtyId: 'ps-c', completedAt: hoursAgo(25 * i), createdAt: hoursAgo(25 * i) })), // 5 attempts in 30 days
+		{ providerSpecialtyId: 'ps-d', completedAt: hoursAgo(1), createdAt: hoursAgo(1) },
+	];
+	const r = await (await svc()).getPassedSpecialties('u1');
+	const by = Object.fromEntries(r.registered.map((x: any) => [x.name, x]));
+	assert.ok(by['أ'].retryAfterSeconds > 21 * 3600 && by['أ'].retryAfterSeconds <= 22 * 3600);
+	assert.equal(by['أ'].attemptLimitReached, false);
+	assert.equal(by['ب'].retryAfterSeconds, null);
+	assert.equal(by['ج'].attemptLimitReached, true);
+	assert.equal(by['د'].retryAfterSeconds, null);          // passed: no wait
+	assert.equal(by['هـ'].retryAfterSeconds, null);         // never attempted
+	assert.equal(by['هـ'].attemptLimitReached, false);
 });
