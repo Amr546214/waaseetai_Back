@@ -1,3 +1,4 @@
+import { levelInfo } from '../utils/level-info';
 import { providerProfileService } from '../services/provider-profile.service';
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/db';
@@ -145,6 +146,8 @@ export const getProviderStatistics = async (req: Request, res: Response, next: N
 					setupTestCompleted,
 					hasApprovedSpecialties,
 					currentLevel,
+					// The shared level payload (name, percent, colours from the single ladder), same shape every dashboard receives.
+					levelInfo: levelInfo('PROVIDER', gamification?.currentLevelIndex),
 					currentPoints,
 					// Real values only (the dashboard badge is built from them): the profile's KYC status, and the commission percentage stored for
 					// the provider's current level (ProviderGamification.currentCommission). null when the row / value does not exist.

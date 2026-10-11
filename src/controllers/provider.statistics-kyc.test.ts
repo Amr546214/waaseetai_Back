@@ -139,3 +139,17 @@ test('a failed identity read gives null (no claim is made) and the rest of the d
 	const s = await call();
 	assert.ok(s.identityVerification === null || s.identityVerification?.status === 'NOT_SUBMITTED');
 });
+
+test('levelInfo: the dashboard summary carries the shared level payload (level 1 without a gamification row, the real level otherwise)', async () => {
+	state.profile = profile({ kycStatus: 'VERIFIED' });
+	state.gamification = null;
+	const first = await call();
+	assert.equal(first.levelInfo.index, 1);
+	assert.equal(first.levelInfo.name, 'مبتدئ');
+	assert.equal(first.levelInfo.percentKind, 'PLATFORM_COMMISSION');
+	assert.ok(first.levelInfo.color.dark && first.levelInfo.color.light);
+	state.gamification = { points: 3000, currentLevelIndex: 9, currentCommission: 5 };
+	const s = await call();
+	assert.equal(s.levelInfo.index, 9);
+	assert.equal(s.levelInfo.name, 'خبير');
+});
