@@ -270,3 +270,15 @@ test('provider saveSetupData: an invalid or future date of birth is a 400 and no
   }
   assert.equal(getProviderProfileState().dob ?? null, null);
 });
+
+test('round trip: the photo saved in the setup is what the completion counts, so the "الصورة الشخصية" item is no longer missing (and is missing without it)', async (t) => {
+  process.env.CLOUDINARY_CLOUD_NAME = 'demo';
+  const url = 'https://res.cloudinary.com/demo/image/upload/v1/waseetai/users/user-1/avatar/avatar.jpg';
+  const { computeProviderMissingItems } = await import('../utils/completion-calculators');
+  const withPhoto = await loadControllerWithFixture(t);
+  await withPhoto.controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ avatarUrl: url }) } as any, createMockRes());
+  const stored = withPhoto.getProviderProfileState();
+  assert.equal(stored.avatarUrl, url);
+  assert.equal(computeProviderMissingItems({ providerProfile: { ...stored, skills: [], portfolioItems: [] }, user: {} } as any).some((i: any) => i.key === 'avatar'), false);
+  assert.equal(computeProviderMissingItems({ providerProfile: { ...stored, avatarUrl: null, skills: [], portfolioItems: [] }, user: {} } as any).some((i: any) => i.key === 'avatar'), true);
+});

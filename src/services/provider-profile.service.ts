@@ -10,6 +10,7 @@ import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { sanitizeText } from '../utils/sanitize-text';
 import { isAcceptableKycDocumentValue } from '../utils/kyc-value-guard';
+import { assertVerifiedIdentityUnchanged } from '../utils/kyc-identity-guard';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { aiFeatureUnavailableError } from './ai/ai-feature-unavailable';
 import { AppError } from '../utils/app-error';
@@ -654,6 +655,15 @@ export class ProviderProfileService {
 		const avatarUrl = data.avatarUrl === undefined ? undefined : await storeDataUriIfNeeded(data.avatarUrl, `waseetai/users/${userId}/avatar`, 'avatar');
 		const before = await this.getProfile(userId);
 
+		// Date of birth (private, optional): a real past date; a VERIFIED account's date is frozen; absent / '' keeps the stored value.
+		let dob: Date | undefined;
+		if (data.dob !== undefined && data.dob !== null && data.dob !== '') {
+			const parsed = new Date(String(data.dob));
+			if (Number.isNaN(parsed.getTime()) || parsed.getTime() > Date.now() || parsed.getFullYear() < 1900) throw new Error('INVALID_DOB');
+			const storedIdentity = await prisma.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, dob: true, kycStatus: true } });
+			assertVerifiedIdentityUnchanged(storedIdentity, { dob: parsed });
+			dob = parsed;
+		}
 		const heldSkills = (await prisma.providerProfile.findUnique({ where: { userId }, select: { skills: { select: { id: true, name: true } } } }))?.skills ?? [];
 		const plan = await planSpecialtyUpdate(prisma, {
 			storedMain: String((before as any)?.mainSpecialty ?? ''),
@@ -674,6 +684,7 @@ export class ProviderProfileService {
 				country: data.country,
 				availabilityStatus: data.availabilityStatus,
 				mainSpecialty,
+				...(dob && { dob }),
 				...(subSpecialties !== undefined && { subSpecialties }),
 				...(skillsAfterFieldChange && { skills: { set: skillsAfterFieldChange } }),
 				githubUrl: data.githubUrl,
