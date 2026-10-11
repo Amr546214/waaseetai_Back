@@ -5,7 +5,7 @@ import { isAffiliateCommissionEngineEnabled } from '../utils/affiliate-commissio
 // The exact composite unique index this engine relies on for exactly-once
 // commission creation — see prisma/schema.prisma's CommissionLog
 // @@unique([affiliateId, referralId, type, sourceStageId]) and the
-// (not-executed) migration prisma/migrations/
+// migration (applied by hand on DEV 2026-10-11; LIVE applied by the team) prisma/migrations/
 // 20260930100000_add_affiliate_commission_fields/migration.sql.
 const COMMISSION_DEDUP_CONSTRAINT = 'commission_logs_affiliateId_referralId_type_sourceStageId_key';
 const COMMISSION_DEDUP_FIELDS = ['affiliateId', 'referralId', 'type', 'sourceStageId'];

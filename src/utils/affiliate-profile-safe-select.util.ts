@@ -6,7 +6,7 @@ import { Prisma } from '@prisma/client';
  * `AffiliateProfile.level` was added to prisma/schema.prisma for the
  * (currently disabled) commission engine, but its migration
  * (prisma/migrations/20260930100000_add_affiliate_commission_fields) is
- * marked NOT EXECUTED and has not been applied to DEV/LIVE. Any Prisma query
+ * was applied by hand on DEV on 2026-10-11 (LIVE is applied by the team, so this safe select stays until LIVE is confirmed). Any Prisma query
  * against AffiliateProfile that uses the default field selection (no
  * `select`, or a bare `include`/`select: { affiliateProfile: true }`, which
  * does NOT restrict the parent model's own scalars) will ask Postgres for

@@ -1,4 +1,5 @@
--- NOT EXECUTED — do not apply. Written for review only.
+-- APPLIED BY HAND on DEV (wasit-pg-dev) on 2026-10-11, in one transaction, after a pg_dump backup of commission_logs + affiliate_profiles.
+-- This is the adapted, idempotent version (IF NOT EXISTS), because affiliate_profiles.level already existed on DEV. LIVE: the team applies it.
 --
 -- Source: P-LG-012 (مسودة مرجعية حاكمة) — Marketing Affiliate/referral
 -- system governing draft. This migration adds:
@@ -39,35 +40,24 @@
 -- or split it into its own migration/transaction first.
 
 -- 1 & 2: AffiliateProfile
-ALTER TABLE "affiliate_profiles" ADD COLUMN "level" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "affiliate_profiles" ADD COLUMN IF NOT EXISTS "level" INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE "affiliate_profiles" ALTER COLUMN "minimumPayoutAmount" SET DEFAULT 300.0;
 
 -- 3: CommissionType enum
 ALTER TYPE "CommissionType" ADD VALUE IF NOT EXISTS 'STAGE_RELEASE';
 
--- 4: CommissionLog auditability fields.
--- referredUserId is NOT NULL going forward; backfilled to '' only so the
--- ALTER succeeds against any pre-existing rows, then immediately dropped —
--- there are no pre-existing STAGE_RELEASE rows in DEV as of this writing
--- (the engine has never run), so in practice this backfill affects zero rows.
-ALTER TABLE "commission_logs" ADD COLUMN "referredUserId" TEXT NOT NULL DEFAULT '';
+-- 4: CommissionLog auditability fields
+ALTER TABLE "commission_logs" ADD COLUMN IF NOT EXISTS "referredUserId" TEXT NOT NULL DEFAULT '';
 ALTER TABLE "commission_logs" ALTER COLUMN "referredUserId" DROP DEFAULT;
-
-ALTER TABLE "commission_logs" ADD COLUMN "sourceProjectId" TEXT;
-ALTER TABLE "commission_logs" ADD COLUMN "sourceStageId" TEXT;
-
-ALTER TABLE "commission_logs" ADD COLUMN "baseAmount" DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE "commission_logs" ADD COLUMN IF NOT EXISTS "sourceProjectId" TEXT;
+ALTER TABLE "commission_logs" ADD COLUMN IF NOT EXISTS "sourceStageId" TEXT;
+ALTER TABLE "commission_logs" ADD COLUMN IF NOT EXISTS "baseAmount" DOUBLE PRECISION NOT NULL DEFAULT 0;
 ALTER TABLE "commission_logs" ALTER COLUMN "baseAmount" DROP DEFAULT;
-
-ALTER TABLE "commission_logs" ADD COLUMN "appliedPercentage" DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE "commission_logs" ADD COLUMN IF NOT EXISTS "appliedPercentage" DOUBLE PRECISION NOT NULL DEFAULT 0;
 ALTER TABLE "commission_logs" ALTER COLUMN "appliedPercentage" DROP DEFAULT;
-
-ALTER TABLE "commission_logs" ADD COLUMN "level" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "commission_logs" ADD COLUMN IF NOT EXISTS "level" INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE "commission_logs" ALTER COLUMN "level" DROP DEFAULT;
 
--- 5: exactly-once guard — one commission per affiliate+referral+type per
--- distinct release event (sourceStageId). Deliberately NOT
--- (affiliateId, referralId, type) alone, which would wrongly collapse every
--- stage of a multi-stage project into a single one-time commission.
-CREATE UNIQUE INDEX "commission_logs_affiliateId_referralId_type_sourceStageId_key"
+-- 5: exactly-once guard — one commission per affiliate+referral+type per distinct release event (sourceStageId).
+CREATE UNIQUE INDEX IF NOT EXISTS "commission_logs_affiliateId_referralId_type_sourceStageId_key"
   ON "commission_logs" ("affiliateId", "referralId", "type", "sourceStageId");
