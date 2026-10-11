@@ -62,7 +62,7 @@ export async function adminListProviderKyc(req: Request, res: Response, next: Ne
     const rawStatus = req.query.status ? String(req.query.status).toUpperCase() : undefined;
     const status = rawStatus && Object.values(KYCStatus).includes(rawStatus as KYCStatus) ? rawStatus as KYCStatus : undefined;
     if (rawStatus && !status) throw new AppError('حالة KYC غير صحيحة', 400);
-    const data = await onboardingService.listProviderKyc(status, Number(req.query.page) || 1, Number(req.query.limit) || 10);
+    const data = await onboardingService.listProviderKyc(status, Number(req.query.page) || 1, Number(req.query.limit) || 10, typeof req.query.search === 'string' ? req.query.search : undefined);
     res.json({ success: true, message: 'تم جلب قائمة طلبات التحقق من المزودين بنجاح', data });
   } catch (error) { next(error); }
 }
