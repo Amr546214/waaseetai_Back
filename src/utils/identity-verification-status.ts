@@ -5,7 +5,9 @@ import { publicKycRejectionReason } from './provider-kyc-review';
 //  REJECTED        the last request was rejected and nothing is stored, or the admin's KYC review refused the identity (with the reason)
 //  NOT_SUBMITTED   nothing was sent
 export type IdentityVerificationStatus = 'PENDING_REVIEW' | 'VERIFIED' | 'REJECTED' | 'NOT_SUBMITTED';
-export interface IdentityVerification { status: IdentityVerificationStatus; requestId: string | null; submittedAt: string | null; rejectionReason: string | null }
+/** Which review the state comes from: a DOCUMENTS change request (profile page) or the KYC review of the identity sent in the setup. Same four statuses either way. */
+export type IdentityReviewCategory = 'DOCUMENTS' | 'KYC' | null;
+export interface IdentityVerification { status: IdentityVerificationStatus; category: IdentityReviewCategory; requestId: string | null; submittedAt: string | null; rejectionReason: string | null }
 
 export function deriveIdentityVerification(input: {
   pendingDocumentReview: boolean;
@@ -24,11 +26,11 @@ export function deriveIdentityVerification(input: {
   //  4. the last document request was rejected              -> REJECTED
   //  5. identity documents sent in the setup wizard wait in the KYC queue -> PENDING_REVIEW
   //  6. otherwise                                           -> NOT_SUBMITTED
-  if (input.pendingDocumentReview) return { status: 'PENDING_REVIEW', requestId: r?.id ?? null, submittedAt: r?.createdAt?.toISOString() ?? null, rejectionReason: null };
+  if (input.pendingDocumentReview) return { status: 'PENDING_REVIEW', category: 'DOCUMENTS', requestId: r?.id ?? null, submittedAt: r?.createdAt?.toISOString() ?? null, rejectionReason: null };
   const kycRejection = publicKycRejectionReason(input.kycStatus, input.kycNotes);
-  if (kycRejection) return { status: 'REJECTED', requestId: null, submittedAt: null, rejectionReason: kycRejection };
-  if (input.storedIdDocument || input.kycStatus === 'VERIFIED') return { status: 'VERIFIED', requestId: null, submittedAt: null, rejectionReason: null };
-  if (r?.status === 'REJECTED') return { status: 'REJECTED', requestId: r.id, submittedAt: r.createdAt.toISOString(), rejectionReason: r.rejectionReason ?? null };
-  if (input.kycStatus === 'PENDING') return { status: 'PENDING_REVIEW', requestId: null, submittedAt: null, rejectionReason: null };
-  return { status: 'NOT_SUBMITTED', requestId: null, submittedAt: null, rejectionReason: null };
+  if (kycRejection) return { status: 'REJECTED', category: 'KYC', requestId: null, submittedAt: null, rejectionReason: kycRejection };
+  if (input.storedIdDocument || input.kycStatus === 'VERIFIED') return { status: 'VERIFIED', category: input.storedIdDocument ? 'DOCUMENTS' : 'KYC', requestId: null, submittedAt: null, rejectionReason: null };
+  if (r?.status === 'REJECTED') return { status: 'REJECTED', category: 'DOCUMENTS', requestId: r.id, submittedAt: r.createdAt.toISOString(), rejectionReason: r.rejectionReason ?? null };
+  if (input.kycStatus === 'PENDING') return { status: 'PENDING_REVIEW', category: 'KYC', requestId: null, submittedAt: null, rejectionReason: null };
+  return { status: 'NOT_SUBMITTED', category: null, requestId: null, submittedAt: null, rejectionReason: null };
 }

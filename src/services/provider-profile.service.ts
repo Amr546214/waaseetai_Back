@@ -1,5 +1,5 @@
 import type { ProviderBioSuggestDto, ProviderSkillsSuggestDto } from '../dtos/provider-profile-suggest.dto';
-import { toNationalPhone } from '../utils/national-phone';
+import { canonicalStoredPhone, normalizePhone } from '../utils/phone-countries';
 import { planSpecialtyUpdate, resolveSkillIdsFromCatalog } from './skills-catalog.service';
 import { PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
 import { profileChangeReviewService, withHonestAiReview } from './ai-features/profile-change-review.service';
@@ -163,7 +163,7 @@ export class ProviderProfileService {
 		const storedIdDocument = !!(profile.user as { idDocumentUrl?: string | null } | undefined)?.idDocumentUrl;
 		const identityVerification = deriveIdentityVerification({ pendingDocumentReview, storedIdDocument, latestDocumentRequest, kycStatus: (profile as { kycStatus?: string | null }).kycStatus, kycNotes: (profile as { notes?: unknown }).notes });
 		// The identity item follows the SAME state the page shows: refused -> "مرفوض"; verified (an approved document or an approved KYC) -> not listed.
-		const missingItems = computeProviderMissingItems(completionInput, { pendingDocumentReview, rejectedIdentity: identityVerification.status === 'REJECTED' && !pendingDocumentReview, verifiedIdentity: identityVerification.status === 'VERIFIED' });
+		const missingItems = computeProviderMissingItems(completionInput, { pendingDocumentReview: identityVerification.status === 'PENDING_REVIEW', rejectedIdentity: identityVerification.status === 'REJECTED', verifiedIdentity: identityVerification.status === 'VERIFIED' });
 		if (profile.completionPercentage !== completionPercentage) {
 			try {
 				await prisma.providerProfile.update({ where: { userId }, data: { completionPercentage }, select: { id: true } });
@@ -183,10 +183,10 @@ export class ProviderProfileService {
 			logger.error(`[ProviderProfileService] Could not read review status (userId=${userId})`, error);
 		}
 		const identity: ReviewEntry = identityVerification.status === 'VERIFIED'
-			? { ...documents, status: 'APPROVED', rejectionReason: null }
+			? { ...documents, status: 'APPROVED', category: identityVerification.category, rejectionReason: null }
 			: identityVerification.status === 'NOT_SUBMITTED' ? { ...NOT_SUBMITTED }
-			: { ...documents, status: identityVerification.status === 'PENDING_REVIEW' ? 'PENDING_REVIEW' : 'REJECTED', requestId: identityVerification.requestId, submittedAt: identityVerification.submittedAt, rejectionReason: identityVerification.rejectionReason };
-		Object.assign(profile, { completionPercentage, missingItems, identityVerification, reviewStatus: { identity, documents } });
+			: { ...documents, status: identityVerification.status === 'PENDING_REVIEW' ? 'PENDING_REVIEW' : 'REJECTED', category: identityVerification.category, requestId: identityVerification.requestId, submittedAt: identityVerification.submittedAt, rejectionReason: identityVerification.rejectionReason };
+		Object.assign(profile, { completionPercentage, missingItems, identityVerification, reviewStatus: { identity, documents }, contactPhone: canonicalStoredPhone((profile.user as any)?.phoneCountryCode, (profile.user as any)?.phoneNumber) });
 
 		// PayPal is the only payout destination: legacy bank columns (the profile's and the user's) are never returned.
 		return withoutInternalProviderNotes(withoutLegacyProviderBankFields(profile as any)) as typeof profile;
@@ -368,7 +368,7 @@ export class ProviderProfileService {
 		}
 	}
 
-	async getPublicProfile(providerId: string) {
+	async getPublicProfile(providerId: string, viewer: { isOwner?: boolean } = {}) {
 		const profile = await prisma.providerProfile.findUnique({
 			where: { userId: providerId },
 			include: {
@@ -378,6 +378,7 @@ export class ProviderProfileService {
 						lastName: true,
 						email: true,
 						avatarUrl: true,
+						phoneCountryCode: true,
 						phoneNumber: true,
 						createdAt: true,
 						currentLevel: true,
@@ -562,7 +563,22 @@ export class ProviderProfileService {
 		// fallback for a null/empty ProviderProfile value, never the default.
 		const displayIdentity = resolveProviderDisplayIdentity({ providerProfile: profile, user: profile.user || {} });
 
+		// Contact details: the OWNER's own preview shows what is stored (the same source as the profile data page); visitors and clients never get them from this endpoint.
+		let contact: null | { email: string | null; phone: ReturnType<typeof canonicalStoredPhone>; pendingChange: null | { status: string; requestedAt: string } } = null;
+		if (viewer.isOwner) {
+			let pendingChange: { status: string; requestedAt: string } | null = null;
+			try {
+				const waiting = await prisma.profileModificationRequest.findFirst({ where: { providerId, category: 'CONTACT', status: 'PENDING_OTP' as any }, orderBy: { createdAt: 'desc' }, select: { status: true, createdAt: true } });
+				if (waiting) pendingChange = { status: 'PENDING_OTP', requestedAt: waiting.createdAt.toISOString() };
+			} catch (error) {
+				logger.error(`[ProviderProfileService] Could not read the pending contact change (userId=${providerId})`, error);
+			}
+			contact = { email: profile.user?.email ?? null, phone: canonicalStoredPhone((profile.user as any)?.phoneCountryCode, profile.user?.phoneNumber), pendingChange };
+		}
+
 		return {
+			contact,
+			contactVisibility: viewer.isOwner ? 'OWNER_ONLY' : 'HIDDEN_FROM_VISITORS',
 			header: {
 				fullName: displayIdentity.fullName || 'مزود خدمة',
 				avatarUrl: displayIdentity.avatarUrl,
@@ -964,7 +980,7 @@ export class ProviderProfileService {
 
 	private sensitiveConfig(category: string) {
 		const configs: Record<string, { label: string; review: boolean; allowed: string[] }> = {
-			CONTACT: { label: 'بيانات التواصل', review: false, allowed: ['email', 'phoneNumber', 'alternativePhone'] },
+			CONTACT: { label: 'بيانات التواصل', review: false, allowed: ['email', 'phoneCountryCode', 'phoneNumber', 'alternativePhone'] },
 			DOCUMENTS: { label: 'المستندات الرسمية', review: true, allowed: ['idDocumentUrl', 'certificatesUrl', 'commercialRegistration', 'vatCertificateUrl'] }
 		};
 		if (category === 'BANKING') throw new Error(PAYPAL_ONLY_MESSAGE);
@@ -1028,7 +1044,12 @@ export class ProviderProfileService {
 		}
 
 		// The phone is stored as the account's country code + NATIONAL digits: "+966501234567", "0501234567" and "501234567" are the same number.
-		if (category === 'CONTACT' && cleanChanges.phoneNumber) cleanChanges.phoneNumber = toNationalPhone(cleanChanges.phoneNumber, user.phoneCountryCode);
+		if (category === 'CONTACT' && cleanChanges.phoneNumber) {
+			// country code + local number are validated TOGETHER (an Egyptian number never goes with +966) and stored apart: the code in phoneCountryCode, the local digits in phoneNumber
+			const phone = normalizePhone(cleanChanges.phoneNumber, cleanChanges.phoneCountryCode ?? user.phoneCountryCode);
+			cleanChanges.phoneNumber = phone.nationalNumber;
+			cleanChanges.phoneCountryCode = phone.countryCode;
+		}
 
 		if (category === 'CONTACT' && cleanChanges.email && cleanChanges.email !== user.email) {
 			const duplicate = await prisma.user.findUnique({ where: { email: String(cleanChanges.email).trim().toLowerCase() } });

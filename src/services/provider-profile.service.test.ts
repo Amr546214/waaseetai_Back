@@ -919,6 +919,30 @@ test('verifySensitiveChange (CONTACT, applied immediately since it needs no revi
   assert.equal(completionCalls.length, 1);
 });
 
+test('CONTACT phone: the country code and the LOCAL number are validated together and stored apart (+20 / 1025073026)', async (t) => {
+  const { providerProfileService, userUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'new@example.com', phoneCountryCode: '+20', phoneNumber: '01025073026', alternativePhone: '' });
+  await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
+  const commit = userUpdateSpy.mock.calls.map((c: any) => c.arguments[0].data).find((d: any) => 'phoneNumber' in d);
+  assert.equal(commit.phoneCountryCode, '+20');
+  assert.equal(commit.phoneNumber, '1025073026');
+});
+
+test('CONTACT phone: a full "+201025073026" pasted as the number decides the country: stored as +20 and 1025073026', async (t) => {
+  const { providerProfileService, userUpdateSpy, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
+  const initiated = await providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'new@example.com', phoneNumber: '+201025073026', alternativePhone: '' });
+  await providerProfileService.verifySensitiveChange('user-1', initiated.requestId, getLastOtpCode()!);
+  const commit = userUpdateSpy.mock.calls.map((c: any) => c.arguments[0].data).find((d: any) => 'phoneNumber' in d);
+  assert.deepEqual([commit.phoneCountryCode, commit.phoneNumber], ['+20', '1025073026']);
+});
+
+test('CONTACT phone: an Egyptian number with the Saudi code (or the reverse) is refused and no request is created', async (t) => {
+  const { providerProfileService, userUpdateSpy } = await loadServiceForSensitiveFlow(t);
+  await assert.rejects(() => providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'new@example.com', phoneCountryCode: '+966', phoneNumber: '1025073026', alternativePhone: '' }), /INVALID_PHONE/);
+  await assert.rejects(() => providerProfileService.initiateSensitiveChange('user-1', 'CONTACT', { email: 'new@example.com', phoneCountryCode: '+20', phoneNumber: '501234567', alternativePhone: '' }), /INVALID_PHONE/);
+  assert.equal(userUpdateSpy.mock.callCount(), 0);
+});
+
 // ============================================================================
 // Security batch — createModificationRequest() no longer computes a fake
 // `85 + Math.random() * 10` "AI confidence" that could auto-APPROVE and

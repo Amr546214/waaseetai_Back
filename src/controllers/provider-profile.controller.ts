@@ -99,7 +99,10 @@ export const getSetupData = async (req: Request, res: Response) => {
 
 		// The raw `notes` column (internal / admin text) is never returned; a rejected identity review comes back as a safe reason on its own field.
 		const kycRejectionReason = publicKycRejectionReason(profile?.kycStatus, profile?.notes);
-		res.status(200).json({ success: true, data: profile ? { ...withoutInternalProviderNotes(profile), kycRejectionReason } : {} });
+		// The same identity state the profile page and the dashboard use (NOT_SUBMITTED / PENDING_REVIEW / VERIFIED / REJECTED + category), so a document sent in the setup is "under review" here too.
+		let identityVerification: Awaited<ReturnType<typeof providerProfileService.getIdentityVerification>> = null;
+		try { identityVerification = await providerProfileService.getIdentityVerification(userId); } catch { /* the status is extra information: the setup read never fails because of it */ }
+		res.status(200).json({ success: true, data: profile ? { ...withoutInternalProviderNotes(profile), kycRejectionReason, identityVerification } : {} });
 	} catch (error) {
 		res.status(500).json({ message: 'Internal server error' });
 	}
@@ -131,7 +134,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		}
 
 		// A VERIFIED account's identity (idNumber / dob) is frozen (409); '' / null never erase a stored value.
-		const storedIdentity = await prisma.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, dob: true, kycStatus: true } });
+		const storedIdentity = await prisma.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, dob: true, kycStatus: true, frontIdUrl: true, backIdUrl: true } });
 		assertVerifiedIdentityUnchanged(storedIdentity, details ?? {});
 
 		assertKycFileValues([identity?.frontId, identity?.backId, documents?.supportingDocs, ...(identity?.certs || [])], userId);
@@ -146,6 +149,13 @@ export const saveSetupData = async (req: Request, res: Response) => {
 
 		// The profile photo (ProviderProfile.avatarUrl is the one canonical column): only our own storage URL or an image data URI is stored; anything else is a 400 and nothing is saved.
 		const avatarUrl = normalized.value.avatarUrl ? await ensureCloudinaryUrl(normalized.value.avatarUrl, `waseetai/users/${userId}/avatar`, 'avatar') : undefined;
+
+		// A document that really differs from the stored one is a NEW identity submission. While the admin has not decided the previous one, it is refused (409), never queued twice.
+		const newFront = frontIdUrl && frontIdUrl !== storedIdentity?.frontIdUrl ? frontIdUrl : undefined;
+		const newBack = backIdUrl && backIdUrl !== storedIdentity?.backIdUrl ? backIdUrl : undefined;
+		if (storedIdentity?.kycStatus === 'PENDING' && (newFront || newBack)) {
+			throw new AppError('مستندات الهوية قيد المراجعة بالفعل. انتظر قرار الإدارة قبل إرسال مستندات جديدة.', 409);
+		}
 
 		const providerData = {
 			userId,
@@ -230,14 +240,15 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		const completion = computeProviderCompletion({ providerProfile: finalProfile || result, user: currentUser || {} });
 
 		// User.status is NOT touched by the setup wizard (AUD-FND-000036): it changes only through OTP activation or an admin decision.
-		const identityChanged = identitySubmissionChanged(storedIdentity, details ?? {}, { front: frontIdUrl, back: backIdUrl });
+		const identityChanged = identitySubmissionChanged(storedIdentity, details ?? {}, { front: newFront, back: newBack });
 		const [updatedResult] = await prisma.$transaction([
 			prisma.providerProfile.update({ where: { userId }, data: { completionPercentage: completion, isProfileSetupComplete: isProviderSetupComplete(finalProfile) } }),
 			// Submitting a changed, complete identity (idNumber + front + back) marks an UNVERIFIED/REJECTED profile as PENDING review;
 			// a VERIFIED one is never downgraded and an unchanged re-save never re-opens a review.
 			...(identityChanged
 				? [prisma.providerProfile.updateMany({
-					where: { userId, kycStatus: { in: ['UNVERIFIED', 'REJECTED'] }, idNumber: { not: null }, frontIdUrl: { not: null }, backIdUrl: { not: null } },
+					// The wizard collects the front of the ID as the required evidence (the back and the number are optional): a stored front is a complete submission.
+					where: { userId, kycStatus: { in: ['UNVERIFIED', 'REJECTED'] }, frontIdUrl: { not: null } },
 					data: { kycStatus: 'PENDING' }
 				})]
 				: [])
@@ -263,7 +274,8 @@ export const getPublicProfile = async (req: Request, res: Response) => {
 			return res.status(401).json({ message: 'Unauthorized or missing provider ID' });
 		}
 
-		const publicProfile = await providerProfileService.getPublicProfile(providerId);
+		const isOwner = !req.params.providerId || req.user?.id === providerId;
+		const publicProfile = await providerProfileService.getPublicProfile(providerId, { isOwner });
 		res.json({ success: true, data: publicProfile });
 	} catch (error: any) {
 		console.error('Error fetching public profile:', error);
