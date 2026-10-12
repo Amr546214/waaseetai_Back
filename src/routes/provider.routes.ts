@@ -19,6 +19,7 @@ import { memoryUpload } from '../utils/cloudinary-storage';
 import { DELIVERY_MAX_FILE_BYTES, DELIVERY_MAX_UPLOADED_FILES } from '../utils/delivery-artifacts';
 import { DELIVERY_UPLOAD_MIME_TYPES } from '../utils/upload-mime-types';
 import { providerReportsController } from '../controllers/provider-reports.controller';
+import { providerProjectAmendmentsController } from '../controllers/provider-project-amendments.controller';
 
 const router = Router();
 const providerOnly = authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
@@ -83,6 +84,9 @@ router.get(
 
 // Real upload of delivery files (25MB x 5, allow-listed types). Provider accounts only; the service re-checks contract + stage ownership before storing anything.
 const deliveryUpload = memoryUpload({ fileSize: DELIVERY_MAX_FILE_BYTES, files: DELIVERY_MAX_UPLOADED_FILES, allowedMimeTypes: DELIVERY_UPLOAD_MIME_TYPES });
+// Provider change requests (ProjectAmendment raised by the PROVIDER): list own requests / create one. The client answers via /client/projects/amendments/:id/respond.
+router.get('/projects/:projectId/amendments', authenticate, requireActiveUser, providerOnly, providerProjectAmendmentsController.list);
+router.post('/projects/:projectId/amendments', authenticate, requireActiveUser, providerOnly, providerProjectAmendmentsController.create);
 router.post('/projects/:projectId/stages/:stageId/deliveries/files', authenticate, requireActiveUser, providerOnly, deliveryUpload.array('files', DELIVERY_MAX_UPLOADED_FILES), uploadStageDeliveryFiles);
 router.post('/projects/:id/stages/:stageId/deliveries', authenticate, requireActiveUser, submitStageDelivery);
 // Advisory-only Gemini review of the provider's own stage delivery —

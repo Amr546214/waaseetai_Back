@@ -22,6 +22,52 @@ const parseOptionalFiniteInteger = (value: unknown, label: string): number | nul
   return value;
 };
 
+
+type AmendmentInput = { title?: string; description?: string; type?: string; budgetDelta?: number; durationDeltaDays?: number };
+
+// Shared by the client's and the provider's "create amendment": the declared type must genuinely match what was supplied.
+// (Extracted unchanged from ProjectAmendmentService.createAmendment; the client path behaves exactly as before.)
+const validateAmendmentInput = (input: AmendmentInput) => {
+  const title = input.title?.trim();
+  if (!title) throw new AppError('أضف عنوانًا لطلب التعديل', 400);
+  if (title.length > TITLE_MAX_LENGTH) throw new AppError(`العنوان طويل جدًا (الحد الأقصى ${TITLE_MAX_LENGTH} حرفًا)`, 400);
+
+  const type = input.type as AmendmentType;
+  if (!AMENDMENT_TYPES.includes(type)) throw new AppError('نوع التعديل غير صالح', 400);
+
+  const description = input.description?.trim() || null;
+  if (description && description.length > DESCRIPTION_MAX_LENGTH) throw new AppError(`الوصف طويل جدًا (الحد الأقصى ${DESCRIPTION_MAX_LENGTH} حرفًا)`, 400);
+
+  // NaN/Infinity/wrong-typed values are rejected outright (400), not
+  // silently coerced to "not supplied" — see parseOptionalFinite* above.
+  let budgetDelta = parseOptionalFiniteNumber(input.budgetDelta, 'الميزانية');
+  if (budgetDelta === 0) budgetDelta = null; // a zero delta means "no real budget change", same as omitting it
+  let durationDeltaDays = parseOptionalFiniteInteger(input.durationDeltaDays, 'المدة');
+  if (durationDeltaDays === 0) durationDeltaDays = null; // same for duration
+
+  const hasScope = !!(description && description.length > 0);
+  const hasBudget = budgetDelta !== null;
+  const hasDuration = durationDeltaDays !== null;
+
+  // The declared type must genuinely match what was supplied — a client
+  // can never claim type=BUDGET while only a duration change (or nothing
+  // meaningful at all) was actually provided.
+  if (type === AmendmentType.SCOPE && !hasScope) {
+    throw new AppError('تعديل النطاق يتطلب وصفًا يوضح التغيير المطلوب', 400);
+  }
+  if (type === AmendmentType.BUDGET && !hasBudget) {
+    throw new AppError('تعديل الميزانية يتطلب قيمة تغيير فعلية غير صفرية', 400);
+  }
+  if (type === AmendmentType.DURATION && !hasDuration) {
+    throw new AppError('تعديل المدة يتطلب عدد أيام تغيير فعلي غير صفري', 400);
+  }
+  if (type === AmendmentType.MIXED) {
+    const dimensionCount = [hasScope, hasBudget, hasDuration].filter(Boolean).length;
+    if (dimensionCount < 2) throw new AppError('التعديل المتعدد يتطلب بُعدين على الأقل من التغيير: نطاق أو ميزانية أو مدة', 400);
+  }
+  return { title, type, description, budgetDelta, durationDeltaDays };
+};
+
 const toPublicAmendment = (row: any, conversationId: string | null) => ({
   id: row.id,
   projectId: row.projectId,
@@ -78,43 +124,7 @@ export class ProjectAmendmentService {
     projectId: string,
     input: { title?: string; description?: string; type?: string; budgetDelta?: number; durationDeltaDays?: number }
   ) {
-    const title = input.title?.trim();
-    if (!title) throw new AppError('أضف عنوانًا لطلب التعديل', 400);
-    if (title.length > TITLE_MAX_LENGTH) throw new AppError(`العنوان طويل جدًا (الحد الأقصى ${TITLE_MAX_LENGTH} حرفًا)`, 400);
-
-    const type = input.type as AmendmentType;
-    if (!AMENDMENT_TYPES.includes(type)) throw new AppError('نوع التعديل غير صالح', 400);
-
-    const description = input.description?.trim() || null;
-    if (description && description.length > DESCRIPTION_MAX_LENGTH) throw new AppError(`الوصف طويل جدًا (الحد الأقصى ${DESCRIPTION_MAX_LENGTH} حرفًا)`, 400);
-
-    // NaN/Infinity/wrong-typed values are rejected outright (400), not
-    // silently coerced to "not supplied" — see parseOptionalFinite* above.
-    let budgetDelta = parseOptionalFiniteNumber(input.budgetDelta, 'الميزانية');
-    if (budgetDelta === 0) budgetDelta = null; // a zero delta means "no real budget change", same as omitting it
-    let durationDeltaDays = parseOptionalFiniteInteger(input.durationDeltaDays, 'المدة');
-    if (durationDeltaDays === 0) durationDeltaDays = null; // same for duration
-
-    const hasScope = !!(description && description.length > 0);
-    const hasBudget = budgetDelta !== null;
-    const hasDuration = durationDeltaDays !== null;
-
-    // The declared type must genuinely match what was supplied — a client
-    // can never claim type=BUDGET while only a duration change (or nothing
-    // meaningful at all) was actually provided.
-    if (type === AmendmentType.SCOPE && !hasScope) {
-      throw new AppError('تعديل النطاق يتطلب وصفًا يوضح التغيير المطلوب', 400);
-    }
-    if (type === AmendmentType.BUDGET && !hasBudget) {
-      throw new AppError('تعديل الميزانية يتطلب قيمة تغيير فعلية غير صفرية', 400);
-    }
-    if (type === AmendmentType.DURATION && !hasDuration) {
-      throw new AppError('تعديل المدة يتطلب عدد أيام تغيير فعلي غير صفري', 400);
-    }
-    if (type === AmendmentType.MIXED) {
-      const dimensionCount = [hasScope, hasBudget, hasDuration].filter(Boolean).length;
-      if (dimensionCount < 2) throw new AppError('التعديل المتعدد يتطلب بُعدين على الأقل من التغيير: نطاق أو ميزانية أو مدة', 400);
-    }
+    const { title, type, description, budgetDelta, durationDeltaDays } = validateAmendmentInput(input);
 
     const contract = await prisma.contract.findFirst({
       where: { projectId, clientId, status: ContractStatus.ACTIVE }
@@ -140,6 +150,73 @@ export class ProjectAmendmentService {
         project: { select: { title: true } },
         provider: { select: { firstName: true, lastName: true } }
       }
+    });
+
+    const convMap = await this.resolveConversationIds([{ projectId: created.projectId, providerId: created.providerId }]);
+    return toPublicAmendment(created, convMap.get(`${created.projectId}:${created.providerId}`) || null);
+  }
+
+  // ── Provider side ───────────────────────────────────────────────────────────────────────────────────────────────
+  // The provider's own amendment requests for ONE project (ownership enforced in the WHERE: providerId + projectId).
+  async listProviderAmendments(providerId: string, projectId: string) {
+    const rows = await prisma.projectAmendment.findMany({
+      where: { providerId, projectId },
+      orderBy: { createdAt: 'desc' },
+      include: { project: { select: { title: true } }, provider: { select: { firstName: true, lastName: true } } }
+    });
+    const convMap = await this.resolveConversationIds(rows.map(r => ({ projectId: r.projectId, providerId: r.providerId })));
+    return rows.map(row => toPublicAmendment(row, convMap.get(`${row.projectId}:${row.providerId}`) || null));
+  }
+
+  // A formal change request raised by the PROVIDER: it is only RECORDED (PENDING_OTHER_PARTY) and the client is notified. It never changes the
+  // contract price, duration, escrow or stages — the client's answer is a recorded decision, same as for client-raised amendments.
+  // At most ONE pending provider-raised request per contract: the contract row is locked for the transaction (a harmless updatedAt touch), so
+  // two simultaneous requests cannot both pass the "no pending request" check.
+  async createProviderAmendment(providerId: string, projectId: string, input: AmendmentInput) {
+    const { title, type, description, budgetDelta, durationDeltaDays } = validateAmendmentInput(input);
+
+    const contract = await prisma.contract.findFirst({ where: { projectId, providerId, status: ContractStatus.ACTIVE } });
+    if (!contract) throw new AppError('المشروع غير موجود أو العقد غير نشط أو لا تملك صلاحية طلب تعديل عليه', 403);
+
+    const created = await prisma.$transaction(async tx => {
+      const locked = await tx.contract.updateMany({ where: { id: contract.id, providerId, status: ContractStatus.ACTIVE }, data: { updatedAt: new Date() } });
+      if (locked.count !== 1) throw new AppError('المشروع غير موجود أو العقد غير نشط أو لا تملك صلاحية طلب تعديل عليه', 403);
+
+      const pending = await tx.projectAmendment.count({
+        where: { contractId: contract.id, requestedByRole: AmendmentRequesterRole.PROVIDER, status: AmendmentStatus.PENDING_OTHER_PARTY }
+      });
+      if (pending > 0) throw new AppError('لديك طلب تعديل معلّق لهذا المشروع بانتظار رد العميل', 409);
+
+      const row = await tx.projectAmendment.create({
+        data: {
+          projectId,
+          contractId: contract.id,
+          clientId: contract.clientId,
+          providerId: contract.providerId,
+          requestedById: providerId,
+          requestedByRole: AmendmentRequesterRole.PROVIDER,
+          type,
+          title,
+          description,
+          budgetDelta,
+          durationDeltaDays,
+          status: AmendmentStatus.PENDING_OTHER_PARTY
+        },
+        include: { project: { select: { title: true } }, provider: { select: { firstName: true, lastName: true } } }
+      });
+
+      await tx.notification.create({
+        data: {
+          userId: contract.clientId,
+          title: 'طلب تعديل جديد على مشروعك',
+          message: `طلب مقدم الخدمة تعديلًا على المشروع: ${title}`,
+          type: 'PROJECT_AMENDMENT',
+          category: 'PROJECTS',
+          actionUrl: '/client-overview/projects/amendments',
+          metadata: { projectId, amendmentId: row.id }
+        }
+      });
+      return row;
     });
 
     const convMap = await this.resolveConversationIds([{ projectId: created.projectId, providerId: created.providerId }]);
