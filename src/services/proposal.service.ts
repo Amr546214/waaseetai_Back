@@ -23,6 +23,8 @@ export type ProviderOfferStatusKey = 'pending' | 'pending_response' | 'pending_s
 export interface ProviderOfferItemDto {
 	offerId: string;
 	id: string;
+	/** The real project id (an offer id is NOT a project id): lets the provider's pages open the conversation of THIS project. */
+	projectId: string;
 	projectRef: string;
 	ref: string;
 	projectTitle: string;
@@ -442,6 +444,7 @@ export class ProposalService {
 		return {
 			offerId: item.id,
 			id: item.id,
+			projectId: projectIdStr,
 			projectRef,
 			ref: projectRef,
 			projectTitle,

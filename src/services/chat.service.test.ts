@@ -152,6 +152,14 @@ test('getConversations: PROVIDER activeRole sees only conversations where the us
   assert.equal(result[0].id, 'conv-as-provider');
 });
 
+test('getConversations: every conversation carries its projectId (the provider pages match their message context on it)', async (t) => {
+  const { chatService } = await loadServiceWithFixture(t);
+  const asProvider = await chatService.getConversations('user-multi', 'PROVIDER');
+  const asClient = await chatService.getConversations('user-multi', 'CLIENT');
+  assert.deepEqual(asProvider.map((c: any) => [c.id, c.projectId]), [['conv-as-provider', 'proj-2']]);
+  assert.deepEqual(asClient.map((c: any) => [c.id, c.projectId]), [['conv-as-client', 'proj-1']]);
+});
+
 test('getConversations: AFFILIATE (or any non-CLIENT/PROVIDER role) sees an empty inbox, never the union of both', async (t) => {
   const { chatService } = await loadServiceWithFixture(t);
   const result = await chatService.getConversations('user-multi', 'AFFILIATE');
