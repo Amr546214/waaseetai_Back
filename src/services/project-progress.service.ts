@@ -8,6 +8,8 @@ import { deriveProviderProgression } from '../utils/progression-calculators';
 import { projectHealthService, type ProjectHealthResult } from './ai-features/project-health.service';
 import { deliveryReviewService, type DeliveryReviewResult } from './ai-features/delivery-review.service';
 import { createCommissionsForStageReleaseEvent } from './affiliate-commission.service';
+import { DELIVERY_MAX_FILE_BYTES, DELIVERY_MAX_UPLOADED_FILES, deliveryFolder, validateDeliveryArtifacts } from '../utils/delivery-artifacts';
+import { uploadMulterFile } from '../utils/cloudinary-storage';
 
 const PROJECT_COMPLETION_POINTS = 50;
 
@@ -22,6 +24,12 @@ const deliveryLabels: Record<string, [string, string]> = {
 const nameFromUrl = (url: string) => {
   try { return decodeURIComponent(new URL(url).pathname.split('/').pop() || 'ملف مرفق'); }
   catch { return url.split('/').pop() || 'ملف مرفق'; }
+};
+
+// multer hands over the original file name decoded as latin1, which garbles Arabic names: re-decode as UTF-8 when that is lossless.
+const decodeUploadedName = (name: string) => {
+  const fixed = Buffer.from(name || '', 'latin1').toString('utf8');
+  return fixed.includes('\uFFFD') ? name : fixed;
 };
 
 // Normalize a single file entry from StageDelivery.files (String[]).
@@ -286,31 +294,31 @@ export class ProjectProgressService {
       });
   }
 
-  async submitDelivery(providerId: string, key: string, stageId: string, note: string, files: any[]) {
-    if (!note?.trim() || note.trim().length < 10) throw new AppError('أضف وصفاً واضحاً للتسليم (10 أحرف على الأقل)', 400);
+  // Shared by the upload endpoint and the delivery itself: the contract must be this provider's and ACTIVE, and the stage must be open for a delivery.
+  private async assertDeliverable(providerId: string, key: string, stageId: string) {
     const contract = await prisma.contract.findFirst({ where: { OR: [{ id: key }, { projectId: key }], providerId } });
     if (!contract || contract.status !== ContractStatus.ACTIVE) throw new AppError('العقد غير نشط أو لا تملك صلاحية التسليم', 403);
     await this.ensureStages(contract.id);
     const stage = await prisma.projectStage.findFirst({ where: { id: stageId, contractId: contract.id } });
     if (!stage || (stage.status !== ProjectStageStatus.IN_PROGRESS && stage.status !== ProjectStageStatus.REVISION_REQUESTED)) throw new AppError('هذه المرحلة غير متاحة للتسليم حالياً', 409);
-    // Accept both file objects ({name,url,type,size}) and plain URL strings.
-    // Serialize each entry to a JSON string for storage in String[] column.
-    const safeFiles: string[] = Array.isArray(files)
-      ? files
-          .filter(v => v != null)
-          .map(v => {
-            if (typeof v === 'string') return v.trim() ? v.trim() : null;
-            if (typeof v === 'object') {
-              const url = v.url || v.fileUrl || v.file_url || '';
-              if (!url) return null;
-              return JSON.stringify({ name: v.name || v.fileName || nameFromUrl(url), url, type: v.type || v.mimeType || '', size: typeof v.size === 'number' ? v.size : 0 });
-            }
-            return null;
-          })
-          .filter((v): v is string => v !== null)
-          .slice(0, 10)
-      : [];
-    console.log('[submitDelivery] safeFiles count:', safeFiles.length, 'sample:', safeFiles.slice(0, 2));
+    return { contract, stage };
+  }
+
+  // Real upload of delivery files (the delivery used to record picked file NAMES only). Authorisation and stage state are checked BEFORE anything
+  // is stored; every file goes to this provider's folder for this stage, which is exactly what validateDeliveryArtifacts() later requires.
+  async uploadDeliveryFiles(providerId: string, key: string, stageId: string, files: Express.Multer.File[]) {
+    if (!files?.length) throw new AppError('اختر ملفاً واحداً على الأقل للرفع', 400);
+    if (files.length > DELIVERY_MAX_UPLOADED_FILES) throw new AppError(`الحد الأقصى ${DELIVERY_MAX_UPLOADED_FILES} ملفات`, 400);
+    const { stage } = await this.assertDeliverable(providerId, key, stageId);
+    const stored = await Promise.all(files.map(file => uploadMulterFile({ ...file, originalname: decodeUploadedName(file.originalname) } as Express.Multer.File, deliveryFolder(providerId, stage.id), DELIVERY_MAX_FILE_BYTES)));
+    return stored.map(f => ({ name: f.fileName, url: f.url, type: f.mimeType, size: f.bytes }));
+  }
+
+  async submitDelivery(providerId: string, key: string, stageId: string, note: string, files: any[]) {
+    if (!note?.trim() || note.trim().length < 10) throw new AppError('أضف وصفاً واضحاً للتسليم (10 أحرف على الأقل)', 400);
+    // At least one REAL artifact (an uploaded file of this stage, or an https link). File names alone are refused.
+    const safeFiles = validateDeliveryArtifacts(providerId, stageId, files);
+    const { contract, stage } = await this.assertDeliverable(providerId, key, stageId);
     return prisma.$transaction(async tx => {
       // Phase 4 — conditional, row-locked transition taken BEFORE the delivery
       // row is written: a double-click / concurrent second submit (or a stage
