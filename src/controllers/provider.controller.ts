@@ -444,6 +444,19 @@ export const submitStageDelivery = async (req: Request, res: Response, next: Nex
 	} catch (error) { next(error); }
 };
 
+// POST /api/provider/projects/:projectId/stages/:stageId/deliveries/files — multipart field "files" (max 5 x 25MB).
+// Stores the files for real (Cloudinary) after checking the stage belongs to this provider's ACTIVE contract and is open for a delivery;
+// returns the file descriptors to send back in POST .../deliveries. Nothing is written to the database here.
+export const uploadStageDeliveryFiles = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		const files = (Array.isArray(req.files) ? req.files : []) as Express.Multer.File[];
+		const data = await projectProgressService.uploadDeliveryFiles(providerId, req.params.projectId as string, req.params.stageId as string, files);
+		res.status(201).json({ success: true, message: 'تم رفع الملفات', data: { files: data } });
+	} catch (error) { next(error); }
+};
+
 // POST /api/provider/projects/:id/stages/:stageId/ai-review
 // Advisory-only — same read-only review a client can request for the same
 // delivery, never approves/rejects it and never touches status or escrow.

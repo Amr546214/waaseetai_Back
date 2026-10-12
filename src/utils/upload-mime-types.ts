@@ -17,3 +17,21 @@ export const SPECIALTY_UPLOAD_MIME_TYPES = new Set([...IMAGES, ...PDF, ...OFFICE
 
 /** Chat attachments: pictures, documents and recorded voice notes. */
 export const CHAT_UPLOAD_MIME_TYPES = new Set([...IMAGES, 'image/gif', ...PDF, ...OFFICE_DOCS, ...ZIP, ...VOICE_NOTES]);
+
+/** Stage-delivery files (provider -> client): the work itself, so a wider set than chat — pictures, documents, archives and short media. Max 25MB each. */
+export const DELIVERY_UPLOAD_MIME_TYPES = new Set([
+	...IMAGES,
+	'image/gif',
+	...PDF,
+	...OFFICE_DOCS,
+	'application/vnd.ms-powerpoint',
+	'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+	...ZIP,
+	'text/plain',
+	'text/csv',
+	'video/mp4',
+	'video/webm',
+	'audio/mpeg',
+	'audio/wav',
+	'audio/x-wav'
+]);

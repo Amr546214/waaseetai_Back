@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { getProviderStatistics, getProviderOffers, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, getDeliveryAiReview, getProjectHealthAnalysis, getProviderWallet, getProviderTransactions, getCompanyDeliveries } from '../controllers/provider.controller';
+import { getProviderStatistics, getProviderOffers, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, uploadStageDeliveryFiles, getDeliveryAiReview, getProjectHealthAnalysis, getProviderWallet, getProviderTransactions, getCompanyDeliveries } from '../controllers/provider.controller';
 import { submitWithdrawal, listMyWithdrawals } from '../controllers/withdrawal.controller';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
@@ -15,6 +15,9 @@ import companyTeamRouter from './company-team.routes';
 import specialOfferRouter from './provider-special-offer.routes';
 import marketingCenterRouter from './provider-marketing-center.routes';
 import { AppError } from '../utils/app-error';
+import { memoryUpload } from '../utils/cloudinary-storage';
+import { DELIVERY_MAX_FILE_BYTES, DELIVERY_MAX_UPLOADED_FILES } from '../utils/delivery-artifacts';
+import { DELIVERY_UPLOAD_MIME_TYPES } from '../utils/upload-mime-types';
 import { providerReportsController } from '../controllers/provider-reports.controller';
 
 const router = Router();
@@ -78,6 +81,9 @@ router.get(
   getProviderStatistics
 );
 
+// Real upload of delivery files (25MB x 5, allow-listed types). Provider accounts only; the service re-checks contract + stage ownership before storing anything.
+const deliveryUpload = memoryUpload({ fileSize: DELIVERY_MAX_FILE_BYTES, files: DELIVERY_MAX_UPLOADED_FILES, allowedMimeTypes: DELIVERY_UPLOAD_MIME_TYPES });
+router.post('/projects/:projectId/stages/:stageId/deliveries/files', authenticate, requireActiveUser, providerOnly, deliveryUpload.array('files', DELIVERY_MAX_UPLOADED_FILES), uploadStageDeliveryFiles);
 router.post('/projects/:id/stages/:stageId/deliveries', authenticate, requireActiveUser, submitStageDelivery);
 // Advisory-only Gemini review of the provider's own stage delivery —
 // read-only, no DB write, never approves/rejects it. AI-rate-limited like
