@@ -16,6 +16,8 @@ export interface GetProviderOffersFiltersDto {
 	limit?: number;
 }
 
+import { buildProviderContractView, type ProviderContractView } from '../utils/contract-terms';
+
 export type ProviderOfferStatusKey = 'pending' | 'pending_response' | 'pending_signature' | 'nego' | 'accepted' | 'rejected';
 
 export interface ProviderOfferItemDto {
@@ -39,6 +41,8 @@ export interface ProviderOfferItemDto {
 	phases: string;
 	actionRequired: boolean;
 	actionText: string;
+	/** The real contract (price, duration, phases, saved milestones, escrow) — only when the provider can sign it right now, otherwise null. */
+	contract: ProviderContractView | null;
 }
 
 export interface ProviderOfferCountsDto {
@@ -400,6 +404,7 @@ export class ProposalService {
 		let statusText = 'بانتظار الرد';
 		let actionRequired = false;
 		let actionText = 'فتح العرض';
+		let contractView: ProviderContractView | null = null;
 
 		if (rawStatus === ProposalStatus.UNDER_NEGOTIATION) {
 			statusEnum = 'UNDER_NEGOTIATION';
@@ -414,6 +419,7 @@ export class ProposalService {
 			statusText = providerCanSign ? 'قُبل — توقيعك مطلوب' : 'اختارك العميل — يستكمل التوقيع والضمان';
 			actionRequired = providerCanSign;
 			actionText = providerCanSign ? 'مراجعة وتوقيع العقد' : 'بانتظار العميل';
+			if (providerCanSign && proj?.contract) contractView = buildProviderContractView(proj.contract, proj.escrow);
 		} else if (rawStatus === ProposalStatus.ACCEPTED) {
 			statusEnum = 'ACCEPTED';
 			statusKey = 'accepted';
@@ -453,7 +459,8 @@ export class ProposalService {
 			duration: `${item.deliveryDays || 14} يوم`,
 			phases: `${item.milestones?.length || 1} مراحل`,
 			actionRequired,
-			actionText
+			actionText,
+			contract: contractView
 		};
 	}
 
