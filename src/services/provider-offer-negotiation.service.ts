@@ -28,6 +28,8 @@ export interface OfferNegotiationView {
 	counterPending: boolean;
 	/** The client's newest unanswered request (only while the offer is under negotiation). */
 	request: { messageId: string; price: number | null; deliveryDays: number | null; notes: string; clear: boolean; createdAt: string } | null;
+	/** The provider's own pending counter (waiting for the client), otherwise null. */
+	counter: { messageId: string; price: number | null; deliveryDays: number | null; notes: string; createdAt: string } | null;
 	/** Why a free-text request cannot be acted on automatically (shown instead of buttons). */
 	hint: string | null;
 }
@@ -60,11 +62,13 @@ class ProviderOfferNegotiationService {
 		const underNegotiation = offer.status === ProposalStatus.UNDER_NEGOTIATION;
 		let counterPending = false;
 		let open: NegotiationEntry | null = null;
+		let pending: NegotiationEntry | null = null;
 		if (underNegotiation) {
 			const { entries } = await this.recentEntries(prisma, offer.projectId, providerId);
 			const state = deriveNegotiationState(entries, offer.id);
 			counterPending = state.counterPending;
 			open = state.openRequest;
+			pending = state.pendingCounter;
 		}
 		const clear = !!open && isClearRequest(open);
 		return {
@@ -76,6 +80,7 @@ class ProviderOfferNegotiationService {
 			canReject: underNegotiation && clear,
 			counterPending,
 			request: open ? { messageId: open.messageId, price: open.price, deliveryDays: open.deliveryDays, notes: open.notes, clear, createdAt: open.createdAt.toISOString() } : null,
+			counter: pending ? { messageId: pending.messageId, price: pending.price, deliveryDays: pending.deliveryDays, notes: pending.notes, createdAt: pending.createdAt.toISOString() } : null,
 			hint: open && !clear ? FREE_TEXT_MESSAGE : null
 		};
 	}

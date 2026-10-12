@@ -87,6 +87,8 @@ export function readNegotiationEntries(rows: NegotiationMessageRow[], providerId
 export interface NegotiationState {
 	/** The newest state-bearing entry decides: a counter is pending when it is the newest entry. */
 	counterPending: boolean;
+	/** That pending counter (its numbers), otherwise null. */
+	pendingCounter: NegotiationEntry | null;
 	/** The newest client request, only while it is also the newest entry (nothing answered it yet). */
 	openRequest: NegotiationEntry | null;
 }
@@ -96,6 +98,7 @@ export function deriveNegotiationState(entriesNewestFirst: NegotiationEntry[], o
 	const newest = relevant[0] || null;
 	return {
 		counterPending: !!newest && newest.kind === 'PROVIDER_COUNTER',
+		pendingCounter: newest && newest.kind === 'PROVIDER_COUNTER' ? newest : null,
 		openRequest: newest && newest.kind === 'CLIENT_REQUEST' ? newest : null
 	};
 }

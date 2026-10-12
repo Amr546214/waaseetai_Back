@@ -257,6 +257,8 @@ test('view: open clear request => canReject + canCounter, numbers exposed; free 
 	await l.svc.counter('prov-1', 'offer-1', { price: 900, deliveryDays: 10 });
 	v = await l.svc.getView('prov-1', { offerId: 'offer-1' });
 	assert.deepEqual([v.counterPending, v.canCounter, v.canReject], [true, false, false]);
+	assert.deepEqual([v.counter?.price, v.counter?.deliveryDays], [900, 10]);
+	assert.equal(v.request, null);
 });
 test('view: a SUBMITTED offer can be withdrawn but not countered/rejected; a CANCELLED one nothing; another provider => 404', async (t) => {
 	let l = await load(t, base({ offer: { ...base().offer, status: 'SUBMITTED' } }));
