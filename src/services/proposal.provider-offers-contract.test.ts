@@ -57,3 +57,11 @@ test('no contract for offers the provider cannot sign yet or that are not at the
 	for (const o of out) assert.equal(o.contract, null, `${o.id} (${o.status})`);
 	assert.equal(out[0].status, 'PENDING_CLIENT_SIGNATURE');
 });
+
+test('every offer item carries its REAL project id (not the offer id), so messaging can open this project\'s conversation', async (t) => {
+	const a = base({ id: 'offer-A', projectId: 'proj-A' }); a.project.id = 'proj-A';
+	const b = base({ id: 'offer-B', projectId: 'proj-B', status: 'SUBMITTED' }); b.project.id = 'proj-B';
+	const out = await offersFor(t, [a, b]);
+	assert.deepEqual(out.map((o: any) => [o.offerId, o.projectId]), [['offer-A', 'proj-A'], ['offer-B', 'proj-B']]);
+	for (const o of out) assert.notEqual(o.projectId, o.offerId);
+});
