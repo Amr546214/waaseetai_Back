@@ -20,6 +20,7 @@ import { DELIVERY_MAX_FILE_BYTES, DELIVERY_MAX_UPLOADED_FILES } from '../utils/d
 import { DELIVERY_UPLOAD_MIME_TYPES } from '../utils/upload-mime-types';
 import { providerReportsController } from '../controllers/provider-reports.controller';
 import { providerProjectAmendmentsController } from '../controllers/provider-project-amendments.controller';
+import { providerOfferNegotiationController } from '../controllers/provider-offer-negotiation.controller';
 
 const router = Router();
 const providerOnly = authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
@@ -117,6 +118,13 @@ router.get(
   requireActiveUser,
   getProviderOffers
 );
+
+// Offer negotiation (provider side): read state, withdraw, counter, decline the client's request. Own offers only; no contract / escrow involvement.
+router.get('/offers/:id/negotiation', authenticate, requireActiveUser, providerOnly, providerOfferNegotiationController.viewByOffer);
+router.get('/projects/:projectId/negotiation', authenticate, requireActiveUser, providerOnly, providerOfferNegotiationController.viewByProject);
+router.post('/offers/:id/withdraw', authenticate, requireActiveUser, providerOnly, providerOfferNegotiationController.withdraw);
+router.post('/offers/:id/counter', authenticate, requireActiveUser, providerOnly, providerOfferNegotiationController.counter);
+router.post('/offers/:id/negotiation/reject', authenticate, requireActiveUser, providerOnly, providerOfferNegotiationController.reject);
 
 router.post(
   '/offers/:id/sign',
