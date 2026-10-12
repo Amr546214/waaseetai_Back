@@ -43,6 +43,8 @@ export interface ProviderOfferItemDto {
 	phases: string;
 	actionRequired: boolean;
 	actionText: string;
+	/** The provider may withdraw this offer right now (SUBMITTED / PENDING / UNDER_NEGOTIATION); the action itself re-checks on the server. */
+	canWithdraw: boolean;
 	/** The real contract (price, duration, phases, saved milestones, escrow) — only when the provider can sign it right now, otherwise null. */
 	contract: ProviderContractView | null;
 }
@@ -429,9 +431,11 @@ export class ProposalService {
 			actionRequired = false;
 			actionText = 'فتح المشروع';
 		} else if (rawStatus === ProposalStatus.REJECTED || rawStatus === ProposalStatus.CANCELLED) {
-			statusEnum = 'REJECTED';
+			// CANCELLED (withdrawn / cancelled) is shown as such, never as "rejected"; both still count under the "rejected" filter.
+			const cancelled = rawStatus === ProposalStatus.CANCELLED;
+			statusEnum = cancelled ? 'CANCELLED' : 'REJECTED';
 			statusKey = 'rejected';
-			statusText = 'مرفوض';
+			statusText = cancelled ? 'ملغي' : 'مرفوض';
 			actionRequired = false;
 			actionText = 'عرض التفاصيل';
 		}
@@ -463,6 +467,7 @@ export class ProposalService {
 			phases: `${item.milestones?.length || 1} مراحل`,
 			actionRequired,
 			actionText,
+			canWithdraw: rawStatus === ProposalStatus.PENDING || rawStatus === ProposalStatus.SUBMITTED || rawStatus === ProposalStatus.UNDER_NEGOTIATION,
 			contract: contractView
 		};
 	}
