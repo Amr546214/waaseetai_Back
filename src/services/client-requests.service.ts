@@ -12,6 +12,7 @@ import { CreateClientRequestDto, ClientRequestAiSuggestDto } from '../dtos/creat
 import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { providerNotifications } from './provider-notifications.service';
+import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import {
 	mailTransporter,
 	getOtpEmailTemplate,
@@ -1691,6 +1692,9 @@ export class ClientRequestsService {
 					html: getProviderContractSignatureTemplate(projectName, clientName, bidAmount)
 				});
 			}
+
+			// In-App confirmation to the client: the amount really held from the wallet
+			await clientNotifications.send(clientNotificationFor.escrowFunded({ clientId: userId, requestId, amount: Number(escrowAmount), projectName }));
 
 			if (providerUserId) {
 				// In-App Notification to Provider

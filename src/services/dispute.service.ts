@@ -5,6 +5,7 @@ import { CreateDisputeInput, ResolveDisputeInput } from '../dtos/dispute.dto';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { WaseetAiError, WaseetAiErrorCode } from './ai/waseet-ai/waseet-ai.errors';
 import { providerNotifications } from './provider-notifications.service';
+import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 
 // Advisory-only dispute summary — never a verdict. Human admin resolution
 // via resolve() above remains the sole authority on status/fault/money;
@@ -107,7 +108,11 @@ export class DisputeService {
       include: { request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } } }
     });
     // The provider is the opener (confirmation) or the party the client opened it against.
-    await providerNotifications.disputeOpened({ disputeId: dispute.id, providerId: actor === 'provider' ? userId : target.againstUserId, openedBy: actor, requestTitle: dispute.request?.title ?? dispute.project?.title ?? '' });
+    const disputedTitle = dispute.request?.title ?? dispute.project?.title ?? '';
+    await providerNotifications.disputeOpened({ disputeId: dispute.id, providerId: actor === 'provider' ? userId : target.againstUserId, openedBy: actor, requestTitle: disputedTitle });
+    // The client is the opener (confirmation) or the party the provider opened it against.
+    const disputeClientId = actor === 'client' ? userId : target.againstUserId;
+    if (disputeClientId) await clientNotifications.send(clientNotificationFor.disputeOpened({ clientId: disputeClientId, disputeId: dispute.id, openedBy: actor, requestTitle: disputedTitle }));
     return dispute;
   }
 
@@ -179,7 +184,11 @@ export class DisputeService {
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
     if (dispute.status !== DisputeStatus.OPEN && dispute.status !== DisputeStatus.UNDER_REVIEW) throw new AppError('تمت معالجة النزاع مسبقاً', 409);
     const updated = await prisma.dispute.update({ where: { id }, data: { status: input.action === 'resolve' ? DisputeStatus.RESOLVED : DisputeStatus.REJECTED, resolution: input.resolution, resolutionNote: input.resolutionNote, resolvedById: adminId, resolvedAt: new Date() } });
-    await providerNotifications.disputeResolved({ disputeId: id, providerId: await this.providerOf(dispute), action: input.action, resolution: input.resolution });
+    const disputeProviderId = await this.providerOf(dispute);
+    await providerNotifications.disputeResolved({ disputeId: id, providerId: disputeProviderId, action: input.action, resolution: input.resolution });
+    // the client is whichever party of the dispute is not its provider
+    const disputeClientId = disputeProviderId ? [dispute.openedById, dispute.againstUserId].find(u => u && u !== disputeProviderId) : undefined;
+    if (disputeClientId) await clientNotifications.send(clientNotificationFor.disputeResolved({ clientId: disputeClientId, disputeId: id, action: input.action, resolution: input.resolution }));
     return updated;
   }
 

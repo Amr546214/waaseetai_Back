@@ -294,6 +294,15 @@ test('reviewDelivery (intermediate stage, approve): releases stage.amount exactl
   assert.equal(contractUpdateManySpy.mock.callCount(), 0);
 });
 
+test('reviewDelivery (intermediate stage, approve): the CLIENT is also told the stage was approved, linking to the project page', async (t) => {
+  const { projectProgressService, notificationCreates } = await loadProjectProgressServiceWithFixture(t, { nextStage: { id: 'stage-2' } });
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+  const mine = notificationCreates.find(n => n.userId === 'client-1');
+  assert.equal(mine.type, 'STAGE_APPROVED');
+  assert.match(mine.actionUrl, /^\/client-overview\/projects\/[^/]+$/);
+  assert.equal(notificationCreates.filter(n => n.userId === 'client-1').length, 1);
+});
+
 test('reviewDelivery (intermediate stage, approve): an already-approved stage cannot release again — the conditional updateMany matches zero rows and no financial write happens', async (t) => {
   const nextStage = { id: 'stage-2' };
   const { projectProgressService, escrowUpdateManySpy, stageDeliveryUpdateSpy, accountAuditLogCreateSpy, projectStageUpdateManySpy } =
@@ -823,7 +832,11 @@ const PROVIDER_PROGRESS_URL = /^\/provider-overview\/projects\/active\/progress\
 test('reviewDelivery (final stage, approve): the provider gets the completion notification and e-mail, both linking to the real progress route', async (t) => {
   const { projectProgressService, notificationCreates, completionEmails } = await loadProjectProgressServiceWithFixture(t);
   await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
-  assert.equal(notificationCreates.length, 1);
+  // the provider's completion notification + the client's own "project completed" (rating link)
+  assert.equal(notificationCreates.length, 2);
+  assert.equal(notificationCreates[1].userId, 'client-1');
+  assert.equal(notificationCreates[1].type, 'PROJECT_COMPLETED');
+  assert.match(notificationCreates[1].actionUrl, /^\/client-overview\/projects\/[^/]+\/rating$/);
   assert.equal(notificationCreates[0].userId, 'provider-1');
   assert.equal(notificationCreates[0].type, 'PROJECT_COMPLETION_REWARD');
   assert.equal(notificationCreates[0].category, 'PROJECTS');
