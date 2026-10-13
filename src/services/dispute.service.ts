@@ -73,13 +73,37 @@ export class DisputeService {
     return { request, againstUserId: actor === 'client' ? accepted?.providerId : request.clientProfile.userId };
   }
 
+  /**
+   * Marketplace (serviceCatalog) purchases create a Project + Contract + Escrow directly, with no ClientRequest and no
+   * accepted Proposal, so requestForActor() cannot see them. This resolves the same URL id as a contract-backed Project
+   * instead: the actor must be the project's own client/provider, and the contract must be in a state that can be disputed.
+   */
+  private async projectForActor(projectId: string, userId: string, actor: 'client' | 'provider') {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, clientId: true, providerId: true, contract: { select: { id: true, status: true, clientId: true, providerId: true } } }
+    });
+    if (!project) throw new AppError('الطلب غير موجود', 404);
+    const contract = project.contract;
+    const ownerId = actor === 'client' ? (contract?.clientId ?? project.clientId) : (contract?.providerId ?? project.providerId);
+    if (ownerId !== userId) throw new AppError('لا تملك صلاحية هذا الطلب', 403);
+    if (!contract) throw new AppError('لا يمكن فتح نزاع على هذا المشروع لأنه لا يوجد عقد مرتبط به بعد', 400);
+    const disputable: ContractStatus[] = [ContractStatus.ACTIVE, ContractStatus.COMPLETED, ContractStatus.DISPUTED];
+    if (!disputable.includes(contract.status)) throw new AppError('لا يمكن فتح نزاع على هذا المشروع في حالة العقد الحالية', 400);
+    return { projectId: project.id, againstUserId: actor === 'client' ? (contract.providerId ?? project.providerId) : (contract.clientId ?? project.clientId) };
+  }
+
   async createForRequest(requestId: string, userId: string, actor: 'client' | 'provider', input: CreateDisputeInput) {
-    const { request, againstUserId } = await this.requestForActor(requestId, userId, actor);
-    const existing = await prisma.dispute.findFirst({ where: { requestId, openedById: userId, status: { in: [DisputeStatus.OPEN, DisputeStatus.UNDER_REVIEW] } } });
+    const legacyRequest = await prisma.clientRequest.findUnique({ where: { id: requestId }, select: { id: true } });
+    const target = legacyRequest
+      ? { requestId, projectId: undefined as string | undefined, againstUserId: (await this.requestForActor(requestId, userId, actor)).againstUserId }
+      : { requestId: undefined as string | undefined, ...(await this.projectForActor(requestId, userId, actor)) };
+    const where = target.projectId ? { projectId: target.projectId } : { requestId };
+    const existing = await prisma.dispute.findFirst({ where: { ...where, openedById: userId, status: { in: [DisputeStatus.OPEN, DisputeStatus.UNDER_REVIEW] } } });
     if (existing) throw new AppError('لديك نزاع مفتوح مسبقاً لهذا الطلب', 409);
     return prisma.dispute.create({
-      data: { requestId, openedById: userId, againstUserId, reason: input.reason, description: input.description, evidence: input.evidence || [], status: DisputeStatus.OPEN },
-      include: { request: { select: { id: true, title: true } } }
+      data: { requestId: target.requestId, projectId: target.projectId, openedById: userId, againstUserId: target.againstUserId, reason: input.reason, description: input.description, evidence: input.evidence || [], status: DisputeStatus.OPEN },
+      include: { request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } } }
     });
   }
 
@@ -118,7 +142,7 @@ export class DisputeService {
     const safePage = Math.max(1, page); const safeLimit = Math.min(100, Math.max(1, limit));
     const where = { OR: [{ openedById: userId }, { againstUserId: userId }], ...(status ? { status } : {}) };
     const [items, total] = await Promise.all([
-      prisma.dispute.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { request: { select: { id: true, title: true } }, openedBy: { select: { id: true, firstName: true, lastName: true } }, againstUser: { select: { id: true, firstName: true, lastName: true } } } }),
+      prisma.dispute.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } }, openedBy: { select: { id: true, firstName: true, lastName: true } }, againstUser: { select: { id: true, firstName: true, lastName: true } } } }),
       prisma.dispute.count({ where })
     ]);
     return { items, pagination: { page: safePage, limit: safeLimit, total, pages: Math.ceil(total / safeLimit) } };
