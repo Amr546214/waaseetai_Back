@@ -60,3 +60,22 @@ test('not a provider / no preferences: behaviour is unchanged (push, no mail)', 
   assert.equal(pushes.length, 1);
   assert.equal(mails.length, 0);
 });
+
+test('mail language: en = English wording', async t => {
+  const en = await load(t, { notifChannels: ['email'], preferredCommunicationLanguage: 'en' });
+  await en.notificationService.createAndEmit({ userId: 'u1', title: 'ت', message: 'م' });
+  await settle();
+  assert.match(en.mails[0].html, /dir="ltr"/);
+  assert.match(en.mails[0].html, /Hello /);
+  assert.match(en.mails[0].html, />Open</);
+});
+
+test('mail language: ar = Arabic wording; nothing saved = Arabic', async t => {
+  const ar = await load(t, { notifChannels: ['email'], preferredCommunicationLanguage: 'ar' });
+  await ar.notificationService.createAndEmit({ userId: 'u1', title: 'ت', message: 'م' });
+  await settle();
+  assert.match(ar.mails[0].html, /dir="rtl"/);
+  assert.match(ar.mails[0].html, /أهلاً/);
+  assert.equal(ar.resolveCommunicationLanguage({}), 'ar');
+  assert.equal(ar.resolveCommunicationLanguage({ preferredCommunicationLanguage: 'en' }), 'en');
+});
