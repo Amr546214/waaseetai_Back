@@ -19,6 +19,15 @@ export class ProviderProjectAmendmentsController {
       res.status(201).json({ success: true, message: 'تم تسجيل طلب التعديل وهو بانتظار رد العميل', data });
     } catch (error) { next(error); }
   }
+
+  // POST /provider/amendments/:id/respond — the provider answers a request the CLIENT raised (decision recorded only; nothing else changes).
+  public async respond(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId || req.user!.id;
+      const data = await projectAmendmentService.respondToAmendmentAsProvider(userId, req.params.id as string, req.body?.decision);
+      res.status(200).json({ success: true, message: 'تم تسجيل قرارك على طلب التعديل', data });
+    } catch (error) { next(error); }
+  }
 }
 
 export const providerProjectAmendmentsController = new ProviderProjectAmendmentsController();

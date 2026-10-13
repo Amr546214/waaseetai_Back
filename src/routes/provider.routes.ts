@@ -88,6 +88,8 @@ const deliveryUpload = memoryUpload({ fileSize: DELIVERY_MAX_FILE_BYTES, files: 
 // Provider change requests (ProjectAmendment raised by the PROVIDER): list own requests / create one. The client answers via /client/projects/amendments/:id/respond.
 router.get('/projects/:projectId/amendments', authenticate, requireActiveUser, providerOnly, providerProjectAmendmentsController.list);
 router.post('/projects/:projectId/amendments', authenticate, requireActiveUser, providerOnly, providerProjectAmendmentsController.create);
+// The provider answers a change request the CLIENT raised: the decision is recorded only (no price / duration / escrow / stage change).
+router.post('/amendments/:id/respond', authenticate, requireActiveUser, providerOnly, providerProjectAmendmentsController.respond);
 router.post('/projects/:projectId/stages/:stageId/deliveries/files', authenticate, requireActiveUser, providerOnly, deliveryUpload.array('files', DELIVERY_MAX_UPLOADED_FILES), uploadStageDeliveryFiles);
 router.post('/projects/:id/stages/:stageId/deliveries', authenticate, requireActiveUser, submitStageDelivery);
 // Advisory-only Gemini review of the provider's own stage delivery —
