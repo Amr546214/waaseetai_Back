@@ -26,6 +26,11 @@ const contractStatusLabel: Record<string, string> = {
   PENDING_CLIENT_SIGNATURE: 'بانتظار توقيع العميل', PENDING_PROVIDER_SIGNATURE: 'بانتظار توقيعك على العقد', PENDING_PAYMENT: 'بانتظار إيداع الضمان',
   ACTIVE: 'مشروع نشط', COMPLETED: 'مكتمل', CANCELLED: 'ملغى', DISPUTED: 'قيد نزاع'
 };
+// The same contract state worded for the CLIENT (the map above is worded for the provider): says whose signature / money is still missing.
+const clientContractStatusLabel = (status: string, funded: boolean): string => status === 'PENDING_PROVIDER_SIGNATURE'
+  ? (funded ? 'بانتظار توقيع مقدم الخدمة' : 'بانتظار التمويل وتوقيع الأطراف')
+  : status === 'PENDING_CLIENT_SIGNATURE' || status === 'PENDING_PAYMENT' ? 'بانتظار توقيعك وإيداع الضمان'
+  : contractStatusLabel[status] || 'غير نشط';
 const nameFromUrl = (url: string) => {
   try { return decodeURIComponent(new URL(url).pathname.split('/').pop() || 'ملف مرفق'); }
   catch { return url.split('/').pop() || 'ملف مرفق'; }
@@ -145,7 +150,7 @@ export class ProjectProgressService {
         where: { id: key, clientId: userId },
         include: {
           escrow: true,
-          proposals: { where: { status: 'ACCEPTED' }, include: { provider: { select: { id: true, firstName: true, lastName: true } } }, orderBy: { createdAt: 'desc' }, take: 1 },
+          proposals: { where: { status: { in: ['ACCEPTED', 'PENDING_SIGNATURE'] } }, include: { provider: { select: { id: true, firstName: true, lastName: true } } }, orderBy: { createdAt: 'desc' }, take: 1 },
           assignedEmployee: { select: { id: true, name: true, jobTitle: true } }
         }
       });
@@ -159,8 +164,9 @@ export class ProjectProgressService {
         contractRef: `CT-${project.id.slice(0, 6).toUpperCase()}`,
         price: acceptedProp ? Number(acceptedProp.price || 0) : 0, durationDays: project.deliveryDays || 0,
         daysLeft: project.deliveryDays || 0, progress: 0,
-        escrowTotal: project.escrow?.amount || 0, escrowHeld: project.escrow?.amount || 0, escrowReleased: 0,
-        status: 'PENDING_SIGNATURE', statusLabel: 'بانتظار توقيع العقد',
+        // Money counts as held only while the escrow row is really HELD.
+        escrowTotal: project.escrow?.amount || 0, escrowHeld: project.escrow?.status === 'HELD' ? project.escrow.amount : 0, escrowReleased: 0,
+        status: 'PENDING_SIGNATURE', statusLabel: project.escrow?.status === 'HELD' ? 'بانتظار توقيع مقدم الخدمة' : 'بانتظار توقيعك وإيداع الضمان',
         contractStatus: null, escrowStatus: project.escrow?.status || null, escrowFunded: project.escrow?.status === 'HELD', disputeStatus: null,
         canUploadDelivery: false, canSubmitDelivery: false, uploadBlockedReason: 'لا يوجد عقد بعد، ولا يمكن التسليم قبل توقيعه',
         awaitingClientReview: false, revisionRequested: false, revisionResubmitted: false,
@@ -257,7 +263,7 @@ export class ProjectProgressService {
       price: contract.price, durationDays: contract.durationDays, daysLeft: Math.max(0, contract.durationDays - elapsed), progress,
       escrowTotal: contract.project.escrow?.amount || contract.price, escrowHeld: escrow.heldAmount, escrowReleased: released,
       ...state, canUploadDelivery: mayUpload && state.canUploadDelivery, canSubmitDelivery: mayUpload && state.canSubmitDelivery,
-      status: contract.status, statusLabel: contractStatusLabel[contract.status] || 'غير نشط',
+      status: contract.status, statusLabel: role === 'client' ? clientContractStatusLabel(contract.status, escrow.escrowFunded) : (contractStatusLabel[contract.status] || 'غير نشط'),
       employee: contract.project.assignedEmployee ? { id: contract.project.assignedEmployee.id, name: contract.project.assignedEmployee.name, jobTitle: contract.project.assignedEmployee.jobTitle } : null,
       stages, deliveries,
       edits: persisted.flatMap(stage => stage.deliveries.map((delivery, index) => ({ stage, delivery, index }))

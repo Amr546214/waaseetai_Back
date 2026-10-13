@@ -67,9 +67,14 @@ export class DisputeService {
       include: { clientProfile: { select: { userId: true } }, proposals: { where: { providerId: userId }, select: { id: true, status: true, providerId: true } } }
     });
     if (!request) throw new AppError('الطلب غير موجود', 404);
-    if (!allowedStatuses.includes(request.status)) throw new AppError(statusErrorMessage, 400);
+    // Ownership first: someone who is not a party never learns anything about the request's state.
     if (actor === 'client' && request.clientProfile.userId !== userId) throw new AppError('لا تملك صلاحية هذا الطلب', 403);
     if (actor === 'provider' && !request.proposals.some(proposal => proposal.status === 'ACCEPTED')) throw new AppError('لا تملك صلاحية هذا الطلب', 403);
+    if (!allowedStatuses.includes(request.status)) {
+      // A request that is still being agreed on has no signed, funded contract to dispute.
+      const notStarted = request.status === RequestStatus.OPEN || request.status === RequestStatus.PENDING_SIGNATURE;
+      throw new AppError(notStarted ? 'لا يمكن فتح نزاع قبل توقيع العقد من الطرفين وتمويل الضمان' : statusErrorMessage, 400);
+    }
     const accepted = await prisma.proposal.findFirst({ where: { clientRequestId: requestId, status: 'ACCEPTED' }, select: { providerId: true } });
     return { request, againstUserId: actor === 'client' ? accepted?.providerId : request.clientProfile.userId };
   }
@@ -90,6 +95,8 @@ export class DisputeService {
     if (ownerId !== userId) throw new AppError('لا تملك صلاحية هذا الطلب', 403);
     if (!contract) throw new AppError('لا يمكن فتح نزاع على هذا المشروع لأنه لا يوجد عقد مرتبط به بعد', 400);
     const disputable: ContractStatus[] = [ContractStatus.ACTIVE, ContractStatus.COMPLETED, ContractStatus.DISPUTED];
+    const notStarted: ContractStatus[] = [ContractStatus.PENDING_CLIENT_SIGNATURE, ContractStatus.PENDING_PAYMENT, ContractStatus.PENDING_PROVIDER_SIGNATURE];
+    if (notStarted.includes(contract.status)) throw new AppError('لا يمكن فتح نزاع قبل توقيع العقد من الطرفين وتمويل الضمان', 400);
     if (!disputable.includes(contract.status)) throw new AppError('لا يمكن فتح نزاع على هذا المشروع في حالة العقد الحالية', 400);
     return { projectId: project.id, againstUserId: actor === 'client' ? (contract.providerId ?? project.providerId) : (contract.clientId ?? project.clientId) };
   }
@@ -97,7 +104,7 @@ export class DisputeService {
   async createForRequest(requestId: string, userId: string, actor: 'client' | 'provider', input: CreateDisputeInput) {
     const legacyRequest = await prisma.clientRequest.findUnique({ where: { id: requestId }, select: { id: true } });
     const target = legacyRequest
-      ? { requestId, projectId: undefined as string | undefined, againstUserId: (await this.requestForActor(requestId, userId, actor)).againstUserId }
+      ? { requestId, projectId: (await prisma.project.findUnique({ where: { id: requestId }, select: { id: true } }))?.id, againstUserId: (await this.requestForActor(requestId, userId, actor)).againstUserId }
       : { requestId: undefined as string | undefined, ...(await this.projectForActor(requestId, userId, actor)) };
     const where = target.projectId ? { projectId: target.projectId } : { requestId };
     const existing = await prisma.dispute.findFirst({ where: { ...where, openedById: userId, status: { in: [DisputeStatus.OPEN, DisputeStatus.UNDER_REVIEW] } } });

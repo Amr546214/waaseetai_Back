@@ -115,6 +115,9 @@ router.post('/:id/offers/:offerId/counter/accept', authenticate, requireActiveUs
 // Select an offer (freezes the commercial snapshot)
 router.post('/:id/offers/select', authenticate, requireActiveUser, clientRequestsController.selectOffer);
 
+// The frozen contract the client is about to sign
+router.get('/:id/contract', authenticate, requireActiveUser, clientRequestsController.getContractForSignature);
+
 // Sign contract & send OTP
 router.post('/:id/contract/sign', authenticate, requireActiveUser, clientRequestsController.signContract);
 

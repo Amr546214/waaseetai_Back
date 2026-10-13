@@ -256,3 +256,40 @@ test('createForRequest: legacy ClientRequest flow is unchanged (requestId record
   assert.equal(data.requestId, 'req-1');
   assert.equal(data.projectId, undefined);
 });
+
+// Client side of the legacy request flow: ownership, funded state, duplicates and the project link the detail page / workspace read.
+const legacyRequest = (status: string, ownerId = CLIENT_ID) => ({ id: 'req-1', status, clientProfile: { userId: ownerId }, proposals: [] });
+
+test('createForRequest (client): a funded, running request opens a dispute against the accepted provider and links the project', async (t) => {
+  const { disputeService, createSpy } = await loadCreate(t, { request: legacyRequest('IN_PROGRESS'), project: { id: 'req-1' } });
+  const d = await disputeService.createForRequest('req-1', CLIENT_ID, 'client', dispInput);
+  const data = createSpy.mock.calls[0].arguments[0].data;
+  assert.equal(data.requestId, 'req-1');
+  assert.equal(data.projectId, 'req-1', 'the dispute carries the project id so the held escrow and the workspace dispute state resolve');
+  assert.equal(data.openedById, CLIENT_ID);
+  assert.equal(d.status, 'OPEN');
+});
+
+for (const status of ['OPEN', 'PENDING_SIGNATURE']) test(`createForRequest (client): a ${status} request (not signed / funded yet) is rejected with a clear message and nothing is created`, async (t) => {
+  const { disputeService, createSpy } = await loadCreate(t, { request: legacyRequest(status) });
+  await assert.rejects(() => disputeService.createForRequest('req-1', CLIENT_ID, 'client', dispInput), (e: any) => e.statusCode === 400 && /قبل توقيع العقد/.test(e.message));
+  assert.equal(createSpy.mock.calls.length, 0);
+});
+
+for (const status of ['IN_PROGRESS', 'PENDING_SIGNATURE']) test(`createForRequest (client): a ${status} request that belongs to another client is rejected with 403`, async (t) => {
+  const { disputeService, createSpy } = await loadCreate(t, { request: legacyRequest(status, 'another-client') });
+  await assert.rejects(() => disputeService.createForRequest('req-1', CLIENT_ID, 'client', dispInput), (e: any) => e.statusCode === 403);
+  assert.equal(createSpy.mock.calls.length, 0);
+});
+
+test('createForRequest (client): a second open dispute for the same request is a 409', async (t) => {
+  const { disputeService, createSpy } = await loadCreate(t, { request: legacyRequest('IN_PROGRESS'), existingDispute: { id: 'd-old' } });
+  await assert.rejects(() => disputeService.createForRequest('req-1', CLIENT_ID, 'client', dispInput), (e: any) => e.statusCode === 409);
+  assert.equal(createSpy.mock.calls.length, 0);
+});
+
+test('createForRequest (client): a marketplace contract still waiting for signatures / funding is rejected with the same clear message', async (t) => {
+  const { disputeService, createSpy } = await loadCreate(t, { project: marketplaceProject('PENDING_PROVIDER_SIGNATURE') });
+  await assert.rejects(() => disputeService.createForRequest('proj-mk', CLIENT_ID, 'client', dispInput), (e: any) => e.statusCode === 400 && /قبل توقيع العقد/.test(e.message));
+  assert.equal(createSpy.mock.calls.length, 0);
+});

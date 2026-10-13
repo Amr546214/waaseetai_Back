@@ -37,6 +37,9 @@ function generateSlug(text: string): string {
 // created from now on; existing escrows keep what they were funded with and are never touched). The platform earns the provider's level commission
 // when each stage is released (utils/escrow-commission.ts); the client pays only the deposit fee when adding money to the wallet.
 
+/** How long the contract-signature e-mail code stays valid (the client page shows this, never a made-up timer). */
+export const CONTRACT_OTP_TTL_SECONDS = 10 * 60;
+
 // Shape consumed by the Angular create-request page. Every field except the
 // two texts is nullable: a value WaseetAI did not return (or returned in an
 // unusable type) is null, never invented or defaulted.
@@ -615,27 +618,24 @@ export class ClientRequestsService {
 			const escrow = escrowMap.get(item.id);
 			// Only money really in escrow counts as held; an unfunded (awaiting-signature) project holds nothing.
 			const heldAmount = escrow && escrow.status === 'HELD' ? Math.max(0, Number(escrow.amount) - Number(escrow.releasedAmount || 0)) : 0;
+			const funded = escrow?.status === 'HELD';
 			const durationDays = item.expectedDurationDays || 14;
+			const isPending = item.status === 'PENDING_SIGNATURE';
 			const endAt = new Date(item.updatedAt.getTime() + durationDays * 24 * 60 * 60 * 1000);
-			const daysLeft = Math.ceil((endAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-
-			// For ClientRequest with no milestone schema, estimate progress from status + elapsed time
-			let progress = 0;
-			if (item.status === 'PENDING_SIGNATURE') {
-				progress = 5;
-			} else if (item.status === 'IN_PROGRESS' && durationDays > 0) {
-				const elapsedDays = Math.max(0, Math.floor((Date.now() - item.updatedAt.getTime()) / (1000 * 60 * 60 * 24)));
-				progress = Math.min(85, Math.round((elapsedDays / durationDays) * 100));
-			}
+			// Nothing is running before the contract is signed and funded: no countdown.
+			const daysLeft = isPending ? null : Math.ceil((endAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
 
 			activeItems.push({
 				id: item.id,
 				projectId: item.id,
 				workspaceId: workspaceMap.get(item.id) || null,
 				title: item.title,
-				status: item.status === 'PENDING_SIGNATURE' ? 'wait' : (daysLeft < 0 ? 'late' : 'run'),
+				status: isPending ? 'pending' : ((daysLeft as number) < 0 ? 'late' : 'run'),
 				rawStatus: item.status,
-				progress,
+				funded,
+				phase: isPending ? (funded ? 'awaiting_provider_signature' : 'awaiting_funding') : 'running',
+				// A request with no stage records has no measurable progress; elapsed time is not progress.
+				progress: 0,
 				provider,
 				contract: `CT-${item.id.substring(0, 4).toUpperCase()}`,
 				heldAmount,
@@ -665,42 +665,20 @@ export class ClientRequestsService {
 			const milestones = contractStages.length > 0 ? contractStages : (ppProp?.milestones || []);
 			const awaitingSignature = p.status === 'PENDING_SIGNATURE';
 			const funded = escrow?.status === 'HELD';
-			const startAt = p.contract?.clientSignedAt || p.updatedAt;
+			const startAt = p.contract?.signedAt || p.contract?.clientSignedAt || p.updatedAt;
 			const endAt = new Date(startAt.getTime() + Number(p.deliveryDays || 0) * 24 * 60 * 60 * 1000);
-			const daysLeft = Math.ceil((endAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+			// Nothing is running before the contract is signed and funded: no countdown.
+			const daysLeft = awaitingSignature ? null : Math.ceil((endAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
 
-			// Compute progress from real milestones
-			let progress = 0;
-			if (awaitingSignature) {
-				// Not running yet: the client still has to sign + fund, or the provider still has to sign.
-				progress = 0;
-			} else if (milestones.length > 0) {
-				const elapsedDays = Math.max(0, Math.floor((Date.now() - startAt.getTime()) / (1000 * 60 * 60 * 24)));
-				let accDays = 0;
-				let completed = 0;
-				for (const m of milestones) {
-					accDays += Number(m.days || 0);
-					const milestoneStatus = 'status' in m ? m.status : null;
-					if (p.status === 'COMPLETED' || milestoneStatus === 'APPROVED' || (!milestoneStatus && elapsedDays >= accDays)) {
-						completed++;
-					}
-				}
-				progress = Math.round((completed / milestones.length) * 100);
-			} else if (p.status === 'PENDING_SIGNATURE') {
-				progress = 5;
-			} else if (p.status === 'AWAITING_DELIVERY') {
-				progress = 90;
-			} else if (p.status === 'IN_PROGRESS' && p.deliveryDays > 0) {
-				const elapsedDays = Math.max(0, Math.floor((Date.now() - p.updatedAt.getTime()) / (1000 * 60 * 60 * 24)));
-				progress = Math.min(85, Math.round((elapsedDays / p.deliveryDays) * 100));
-			}
-
-			const completedStages = awaitingSignature ? 0 : milestones.filter((m: any) => m.status === 'APPROVED').length ||
-				(milestones.length > 0 ? Math.round((progress / 100) * milestones.length) : 0);
+			// Progress is ONLY the approved stages of the real contract (by their share of the contract): no time-based or status-based guess.
+			const approvedStages = contractStages.filter((m: any) => m.status === 'APPROVED');
+			const progress = awaitingSignature ? 0 : p.status === 'COMPLETED' ? 100
+				: Math.min(100, Math.round(approvedStages.reduce((sum: number, m: any) => sum + Number(m.percentage || 0), 0)));
+			const completedStages = awaitingSignature ? 0 : approvedStages.length;
 			const reviewStage = milestones.find((m: any) => m.status === 'SUBMITTED');
 			const currentStage = reviewStage || milestones.find((m: any) => m.status !== 'APPROVED') || milestones[milestones.length - 1];
 			const needsReview = !awaitingSignature && (p.status === 'AWAITING_DELIVERY' || Boolean(reviewStage));
-			const displayStatus = awaitingSignature || needsReview ? 'wait' : (daysLeft < 0 ? 'late' : 'run');
+			const displayStatus = awaitingSignature ? 'pending' : needsReview ? 'wait' : ((daysLeft as number) < 0 ? 'late' : 'run');
 			const nextStep = awaitingSignature
 				? (funded ? 'بانتظار توقيع مقدم الخدمة لبدء التنفيذ' : 'توقيع العقد وإيداع الضمان لبدء التنفيذ')
 				: currentStage
@@ -714,6 +692,8 @@ export class ClientRequestsService {
 				title: p.title,
 				status: displayStatus,
 				rawStatus: p.status,
+				funded,
+				phase: awaitingSignature ? (funded ? 'awaiting_provider_signature' : 'awaiting_funding') : 'running',
 				progress,
 				provider,
 				contract: `CT-${p.id.substring(0, 4).toUpperCase()}`,
@@ -736,10 +716,8 @@ export class ClientRequestsService {
 			? activeItems.filter(item => item.employee?.id === employeeId)
 			: activeItems;
 
-		// Compute KPIs from real data
-		const totalHeld = escrowRecords
-			.filter(e => e.status === 'HELD')
-			.reduce((acc, e) => acc + Math.max(0, Number(e.amount) - Number(e.releasedAmount || 0)), 0);
+		// Compute KPIs from real data: only money really HELD in escrow counts (the per-item heldAmount already says so).
+		const totalHeld = filteredItems.reduce((acc, item) => acc + Number(item.heldAmount || 0), 0);
 		const awaitingReviewCount = filteredItems.filter(i => i.status === 'wait').length;
 		const overdueCount = filteredItems.filter(i => i.status === 'late').length;
 
@@ -747,7 +725,7 @@ export class ClientRequestsService {
 			{ icon: 'list', value: filteredItems.length, label: 'مشاريع نشطة' },
 			{ icon: 'lock', value: totalHeld, label: 'محتجز بالضمان $' },
 			{ icon: 'clock', value: awaitingReviewCount, label: 'بانتظار مراجعتك' },
-			{ icon: 'ai', value: overdueCount > 0 ? `${overdueCount} متأخر` : 'جيد', label: 'الحالة العامة' },
+			{ icon: 'ai', value: filteredItems.length === 0 ? '—' : (overdueCount > 0 ? `${overdueCount} متأخر` : 'لا يوجد متأخر'), label: 'الحالة العامة' },
 		];
 
 		return {
@@ -1362,6 +1340,80 @@ export class ClientRequestsService {
 	}
 
 	/**
+	 * GET /api/client/my-requests/:id/contract[?offerId=]
+	 * The contract the client is about to sign, read from the frozen contract itself (price, duration and stages as selectOffer froze them;
+	 * for an accepted counter that is the counter's terms) — never recomputed from the offers list, so the page shows exactly what is charged.
+	 * `state` tells the page whether signing is possible: only 'ready' may show a sign/pay button.
+	 */
+	public async getContractForSignature(userId: string, requestId: string, offerId?: string) {
+		const contract = await prisma.contract.findFirst({
+			where: { projectId: requestId, clientId: userId },
+			include: { provider: { select: { id: true, firstName: true, lastName: true, providerProfile: { select: { companyName: true } } } } }
+		});
+		if (!contract) {
+			// Same answer for "not yours" and "does not exist": nothing about someone else's request is revealed.
+			const own = await prisma.clientRequest.findFirst({ where: { id: requestId, clientProfile: { userId } }, select: { id: true } })
+				|| await prisma.project.findFirst({ where: { id: requestId, clientId: userId }, select: { id: true } });
+			if (!own) throw new AppError('طلب المشروع غير موجود أو لا تملك صلاحية الوصول إليه', 404);
+			return { requestId, state: 'no_contract' as const, ready: false, message: 'لم يتم اختيار عرض لهذا الطلب بعد، اختر عرضاً أولاً ليُجهَّز العقد.' };
+		}
+
+		let offerMatches = true;
+		if (offerId && offerId !== contract.offerId) {
+			const mirrored = await prisma.proposal.findFirst({ where: { id: offerId, clientRequestId: requestId, providerId: contract.providerId }, select: { id: true } });
+			offerMatches = !!mirrored;
+		}
+
+		const escrow = await prisma.escrow.findUnique({ where: { projectId: requestId }, select: { status: true } });
+		const state = contract.status === ContractStatus.PENDING_CLIENT_SIGNATURE ? 'ready' as const
+			: contract.status === ContractStatus.PENDING_PROVIDER_SIGNATURE ? 'awaiting_provider' as const
+			: contract.status === ContractStatus.ACTIVE ? 'active' as const
+			: contract.status === ContractStatus.COMPLETED ? 'completed' as const
+			: 'unavailable' as const;
+		const stateMessage: Record<typeof state, string> = {
+			ready: '',
+			awaiting_provider: 'وقّعت هذا العقد وأودعت الضمان، وبانتظار توقيع مقدم الخدمة.',
+			active: 'هذا العقد موقّع وجارٍ تنفيذه.',
+			completed: 'اكتمل هذا العقد.',
+			unavailable: 'هذا العقد غير متاح للتوقيع حالياً.'
+		};
+
+		const terms = (contract.terms ?? {}) as { milestones?: Array<Record<string, any>> };
+		const milestones = (Array.isArray(terms.milestones) ? terms.milestones : []).map((m, i) => ({
+			order: Number(m.stepOrder) || i + 1,
+			title: String(m.title || ''),
+			description: String(m.description || ''),
+			days: Number(m.days) || 0,
+			amount: Number(m.amount) || 0,
+			percentage: Number(m.percentage) || 0
+		})).filter(m => m.title);
+
+		const providerName = contract.provider.providerProfile?.companyName
+			|| [contract.provider.firstName, contract.provider.lastName].filter(Boolean).join(' ')
+			|| 'مقدم الخدمة';
+
+		return {
+			requestId,
+			contractId: contract.id,
+			state,
+			// Signing needs a contract that waits for THIS client and an offer that is the one the contract was frozen for.
+			ready: state === 'ready' && offerMatches,
+			offerMatches,
+			message: !offerMatches ? 'هذا العرض ليس العرض الذي جُهِّز له العقد. ارجع إلى العروض واختر العرض مجدداً.' : stateMessage[state],
+			status: contract.status,
+			price: contract.price,
+			currency: 'USD',
+			durationDays: contract.durationDays,
+			milestones,
+			// No milestones in the frozen terms = the contract has one final delivery for the whole price.
+			singleDelivery: milestones.length === 0,
+			provider: { id: contract.provider.id, name: providerName },
+			escrowFunded: escrow?.status === 'HELD',
+			otpTtlSeconds: CONTRACT_OTP_TTL_SECONDS
+		};
+	}
+
+	/**
 	 * POST /api/client/requests/:id/contract/sign
 	 * Creates an OTP and sends it to the user's email
 	 */
@@ -1401,7 +1453,7 @@ export class ClientRequestsService {
 				code: otpHash,
 				type: 'EMAIL',
 				context: { purpose: 'CLIENT_CONTRACT_SIGNATURE', requestId, contractId: contract.id, offerId: contract.offerId },
-				expiresAt: new Date(Date.now() + 10 * 60 * 1000)
+				expiresAt: new Date(Date.now() + CONTRACT_OTP_TTL_SECONDS * 1000)
 			}
 		});
 
@@ -1419,7 +1471,7 @@ export class ClientRequestsService {
 			throw new AppError('تعذر إرسال رمز التوقيع. لم يتم تنفيذ أي توقيع أو حجز', 503);
 		}
 
-		return { email: user.email };
+		return { email: user.email, expiresInSeconds: CONTRACT_OTP_TTL_SECONDS };
 	}
 
 	/**
@@ -1476,7 +1528,7 @@ export class ClientRequestsService {
 			const attempts = otpRecord.attempts + 1;
 			if (attempts >= 5) await prisma.otpVerification.delete({ where: { id: otpRecord.id } });
 			else await prisma.otpVerification.update({ where: { id: otpRecord.id }, data: { attempts } });
-			throw new AppError(attempts >= 5 ? 'تم إبطال رمز التوقيع بعد محاولات متعددة' : 'رمز التحقق غير صحيح', 400);
+			throw new AppError(attempts >= 5 ? 'تم إبطال رمز التوقيع بعد محاولات متعددة، اطلب رمزاً جديداً' : `رمز التحقق غير صحيح. المحاولات المتبقية: ${5 - attempts}`, 400);
 		}
 
 		// Execute all state-modifying operations inside a strict interactive transaction
