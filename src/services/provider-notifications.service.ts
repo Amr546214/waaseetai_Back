@@ -22,8 +22,6 @@ export const PROVIDER_ROUTES = {
 	// The PayPal payout email is edited from the "حساب PayPal" tab of the profile data page.
 	paypalSettings: '/provider-overview/profile/data',
 	// The progress page resolves its key as a project id or a contract id.
-	// The real offer negotiation page of the provider (offers/:id/negotiate).
-	offerNegotiate: (offerId: string) => `/provider-overview/offers/${offerId}/negotiate`,
 	projectProgress: (projectId: string) => `/provider-overview/projects/active/progress/${projectId}`
 } as const;
 
