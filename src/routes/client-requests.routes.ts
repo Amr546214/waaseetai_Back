@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { AccountType } from '@prisma/client';
-import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { authenticate, authorize, authorizeActiveRole, requireActiveUser } from '../middlewares/auth.middleware';
 import { clientSpecialtyRecommendationService, MAX_RECOMMENDATION_TEXT } from '../services/client-specialty-recommendation.service';
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { clientRequestsController } from '../controllers/client-requests.controller';
@@ -28,6 +28,7 @@ const upload = memoryUpload({ fileSize: 15 * 1024 * 1024, files: 5, allowedMimeT
 
 const router = Router();
 const clientOnly = authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL);
+const clientActingOnly = authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL);
 
 // Metadata endpoint (Categories, Specialties, Sub-specialties with provider counts)
 router.get('/meta', clientRequestsController.getMeta);
@@ -68,7 +69,8 @@ router.post(
 router.post('/upload', authenticate, upload.array('attachments', 5), clientRequestsController.uploadAttachments);
 
 // Create request endpoint
-router.post('/', authenticate, requireActiveUser, clientOnly, clientRequestsController.createRequest);
+// the role the user is ACTING as must be the client (a provider acting as a provider cannot create client requests even though every account also holds CLIENT)
+router.post('/', authenticate, requireActiveUser, clientActingOnly, clientRequestsController.createRequest);
 
 // My requests list endpoint (MUST be before /:id)
 router.get('/my-requests', authenticate, requireActiveUser, clientRequestsController.getMyRequests);
