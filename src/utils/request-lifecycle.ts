@@ -14,7 +14,7 @@ export const REQUEST_STAGE_LABEL: Record<RequestStage, string> = {
 	OPEN: 'مفتوح لاستقبال العروض',
 	OFFERS_RECEIVED: 'وصلتك عروض',
 	UNDER_NEGOTIATION: 'قيد التفاوض',
-	AWAITING_CLIENT_SIGNATURE: 'تم اختيار العرض، بانتظار توقيعك',
+	AWAITING_CLIENT_SIGNATURE: 'تم اختيار العرض، بانتظار توقيعك وتمويل الضمان',
 	AWAITING_FUNDING: 'بانتظار تمويل الضمان',
 	AWAITING_PROVIDER_SIGNATURE: 'بانتظار توقيع مقدم الخدمة',
 	ACTIVE: 'قيد التنفيذ',
