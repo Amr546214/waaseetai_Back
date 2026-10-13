@@ -1,6 +1,7 @@
 import { AmendmentRequesterRole, AmendmentStatus, AmendmentType, ContractStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
+import { providerNotifications } from './provider-notifications.service';
 
 const AMENDMENT_TYPES: AmendmentType[] = ['SCOPE', 'BUDGET', 'DURATION', 'MIXED'];
 const TITLE_MAX_LENGTH = 200;
@@ -133,6 +134,7 @@ export class ProjectAmendmentService {
 
     // At most ONE pending client-raised request per contract: the contract row is locked for the transaction (a harmless updatedAt touch), so
     // two simultaneous requests cannot both pass the "no pending request" check. The provider is notified; nothing about the contract changes.
+    let providerNotificationId = '';
     const created = await prisma.$transaction(async tx => {
       const locked = await tx.contract.updateMany({ where: { id: contract.id, clientId, status: ContractStatus.ACTIVE }, data: { updatedAt: new Date() } });
       if (locked.count !== 1) throw new AppError('المشروع غير موجود أو العقد غير نشط أو لا تملك صلاحية إنشاء تعديل عليه', 403);
@@ -163,7 +165,7 @@ export class ProjectAmendmentService {
         }
       });
 
-      await tx.notification.create({
+      const providerNotification = await tx.notification.create({
         data: {
           userId: contract.providerId,
           title: 'طلب تعديل على مشروعك',
@@ -171,11 +173,15 @@ export class ProjectAmendmentService {
           type: 'PROJECT_AMENDMENT',
           category: 'PROJECTS',
           actionUrl: `/provider-overview/projects/active/progress/${contract.id}`,
+          actionText: 'عرض المشروع',
           metadata: { projectId, amendmentId: row.id }
         }
       });
+      providerNotificationId = providerNotification.id;
       return row;
     });
+    // Delivered through the provider's saved channels (push / e-mail) once the row is committed.
+    await providerNotifications.deliverStored([providerNotificationId]);
 
     const convMap = await this.resolveConversationIds([{ projectId: created.projectId, providerId: created.providerId }]);
     return toPublicAmendment(created, convMap.get(`${created.projectId}:${created.providerId}`) || null);
@@ -294,6 +300,7 @@ export class ProjectAmendmentService {
         provider: { select: { firstName: true, lastName: true } }
       }
     });
+    await providerNotifications.amendmentAnswered({ providerId: updated!.providerId, projectId: updated!.projectId, amendmentId, title: updated!.title, decision });
 
     const convMap = await this.resolveConversationIds([{ projectId: updated!.projectId, providerId: updated!.providerId }]);
     return toPublicAmendment(updated, convMap.get(`${updated!.projectId}:${updated!.providerId}`) || null);

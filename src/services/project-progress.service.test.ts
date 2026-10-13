@@ -93,6 +93,8 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
   const disputeFindFirstSpy = t.mock.fn(async () => (opts.disputeActive ? { id: 'dispute-1' } : null));
   const referralFindManySpy = t.mock.fn(async () => opts.referrals ?? []);
   const commissionLogs: any[] = [];
+  const notificationCreates: any[] = [];
+  const completionEmails: any[] = [];
   const commissionLogCreateSpy = t.mock.fn(async (args: any) => {
     if (opts.commissionCreateImpl) return opts.commissionCreateImpl(args);
     const row = { id: `commission-${commissionLogs.length + 1}`, ...args.data };
@@ -130,7 +132,7 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
     user: { update: userUpdateSpy },
     providerGamification: { upsert: gamificationUpsertSpy },
     gamificationRule: { upsert: gamificationRuleUpsertSpy },
-    notification: { create: async () => ({ id: 'notif-1' }) },
+    notification: { create: async (args: any) => { notificationCreates.push(args.data); return { id: 'notif-1' }; } },
     dispute: { findFirst: disputeFindFirstSpy },
     referral: { findMany: referralFindManySpy },
     commissionLog: { create: commissionLogCreateSpy }
@@ -144,9 +146,10 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
 
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   t.mock.module('./notification.service', { namedExports: { notificationService: { emitStored: async () => {} } } });
-  t.mock.module('./email.service', { namedExports: { emailService: { sendProjectCompletionRewardEmail: async () => {} } } });
+  t.mock.module('./email.service', { namedExports: { emailService: { sendProjectCompletionRewardEmail: async (args: any) => { completionEmails.push(args); } } } });
 
   return {
+    notificationCreates, completionEmails,
     pointTransactionCreateSpy, userUpdateSpy, gamificationUpsertSpy, gamificationRuleUpsertSpy,
     contractUpdateManySpy, escrowUpdateManySpy, clientRequestUpdateManySpy, projectUpdateSpy,
     stageDeliveryUpdateSpy, accountAuditLogCreateSpy, projectStageUpdateManySpy,
@@ -812,4 +815,30 @@ test('LEGACY final release: releasedAmount is set to the price exactly as before
   const { projectProgressService, escrowUpdateManySpy } = await loadProjectProgressServiceWithFixture(t, { escrowRow: { feePolicyVersion: null, releasedAmount: 900, amount: 1130 } });
   await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
   assert.deepEqual(escrowUpdateManySpy.mock.calls[0].arguments[0].data, { status: 'RELEASED', releasedAmount: 1000 });
+});
+
+// Provider notifications for the client's delivery decision: stored for the provider with a link that opens a real provider route.
+const PROVIDER_PROGRESS_URL = /^\/provider-overview\/projects\/active\/progress\/[^/]+$/;
+
+test('reviewDelivery (final stage, approve): the provider gets the completion notification and e-mail, both linking to the real progress route', async (t) => {
+  const { projectProgressService, notificationCreates, completionEmails } = await loadProjectProgressServiceWithFixture(t);
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+  assert.equal(notificationCreates.length, 1);
+  assert.equal(notificationCreates[0].userId, 'provider-1');
+  assert.equal(notificationCreates[0].type, 'PROJECT_COMPLETION_REWARD');
+  assert.equal(notificationCreates[0].category, 'PROJECTS');
+  assert.match(notificationCreates[0].actionUrl, PROVIDER_PROGRESS_URL);
+  assert.equal(completionEmails.length, 1);
+  assert.match(completionEmails[0].projectUrl, PROVIDER_PROGRESS_URL);
+});
+
+test('reviewDelivery (revision): the provider is told a revision is requested, with the client note and a real route', async (t) => {
+  const { projectProgressService, notificationCreates, completionEmails } = await loadProjectProgressServiceWithFixture(t);
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'revision', 'يرجى تعديل الألوان');
+  assert.equal(notificationCreates.length, 1);
+  assert.equal(notificationCreates[0].type, 'STAGE_REVIEW');
+  assert.equal(notificationCreates[0].title, 'مطلوب تعديل على التسليم');
+  assert.equal(notificationCreates[0].message, 'يرجى تعديل الألوان');
+  assert.match(notificationCreates[0].actionUrl, PROVIDER_PROGRESS_URL);
+  assert.equal(completionEmails.length, 0);
 });
