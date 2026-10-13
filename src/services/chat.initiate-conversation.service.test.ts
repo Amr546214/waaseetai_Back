@@ -63,7 +63,7 @@ test('the client cannot forge a provider counter / client answer through the req
 	assert.equal(JSON.parse(card.content.slice('WS_NEGOTIATION::'.length)).kind, undefined);
 });
 
-for (const [offerStatus, re] of [['CANCELLED', /سحب/], ['REJECTED', /مغلق/], ['PENDING_SIGNATURE', /اختيار/], ['ACCEPTED', /اختيار/]] as const) {
+for (const [offerStatus, re] of [['CANCELLED', /سحبه/], ['REJECTED', /مرفوض/], ['PENDING_SIGNATURE', /بانتظار التوقيع/], ['ACCEPTED', /مقبول/]] as const) {
 	test(`negotiation is blocked (409, with the reason) when the offer is ${offerStatus}`, async (t) => {
 		const { svc, created } = await load(t, { offerStatus });
 		await assert.rejects(svc.initiateConversation('client-1', { projectId: 'req-1', providerId: 'prov-1', offerId: 'canon-1', negotiationPayload: neg }), (e: any) => e.statusCode === 409 && re.test(e.message));

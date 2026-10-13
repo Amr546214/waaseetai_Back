@@ -56,7 +56,7 @@ class ClientOfferCounterService {
 			select: { id: true, senderId: true, content: true, createdAt: true, conversation: { select: { providerId: true } } }
 		});
 		for (const [providerId, offerId] of offers) {
-			const state = deriveNegotiationState(readNegotiationEntries(rows.filter(r => r.conversation.providerId === providerId), providerId), offerId);
+			const state = deriveNegotiationState(readNegotiationEntries(rows.filter(r => r.conversation?.providerId === providerId), providerId), offerId);
 			const pending = state.pendingCounter;
 			out.set(providerId, {
 				state: pending ? 'COUNTER_PENDING' : state.openRequest ? 'REQUEST_SENT' : 'NONE',
