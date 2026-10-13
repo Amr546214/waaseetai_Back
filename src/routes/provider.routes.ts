@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { getProviderStatistics, getProviderOffers, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, uploadStageDeliveryFiles, getDeliveryAiReview, getProjectHealthAnalysis, getProviderWallet, getProviderTransactions, getCompanyDeliveries } from '../controllers/provider.controller';
+import { getProviderStatistics, getProviderOffers, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, uploadStageDeliveryFiles, getDeliveryAiReview, getProjectHealthAnalysis, getProviderWallet, getProviderTransactions, getCompanyDeliveries, getProviderInvoices, getProviderInvoice, getProviderSales } from '../controllers/provider.controller';
 import { submitWithdrawal, listMyWithdrawals } from '../controllers/withdrawal.controller';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
@@ -110,6 +110,9 @@ router.get('/company/deliveries', authenticate, requireActiveUser, providerOnly,
 
 router.get('/finance/wallet', authenticate, requireActiveUser, getProviderWallet);
 router.get('/finance/transactions', authenticate, requireActiveUser, getProviderTransactions);
+router.get('/finance/invoices', authenticate, requireActiveUser, providerOnly, getProviderInvoices);
+router.get('/finance/invoices/:id', authenticate, requireActiveUser, providerOnly, getProviderInvoice);
+router.get('/finance/sales', authenticate, requireActiveUser, providerOnly, getProviderSales);
 router.post('/finance/withdrawals', authenticate, requireActiveUser, providerOnly, submitWithdrawal);
 router.get('/finance/withdrawals', authenticate, requireActiveUser, listMyWithdrawals);
 
