@@ -641,6 +641,28 @@ export class ProposalService {
 			data: paginatedData
 		};
 	}
+
+	/**
+	 * One offer of this provider, in exactly the item shape of GET /provider/offers (same mapper).
+	 * Someone else's offer is reported as 404, never 403, so ids cannot be probed.
+	 */
+	public async getProviderOfferById(providerId: string, offerId: string): Promise<ProviderOfferItemDto> {
+		const proposal = await prisma.projectProposal.findFirst({
+			where: { id: offerId, providerId },
+			include: {
+				project: {
+					include: {
+						contract: true,
+						escrow: true,
+						client: { select: { id: true, firstName: true, lastName: true, accountType: true, avatarUrl: true } }
+					}
+				},
+				milestones: true
+			}
+		});
+		if (!proposal) throw new AppError('العرض غير موجود', 404);
+		return this.processProposalItem(proposal);
+	}
 }
 
 export const proposalService = new ProposalService();

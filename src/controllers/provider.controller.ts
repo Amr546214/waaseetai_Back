@@ -203,6 +203,19 @@ export const getProviderOffers = async (req: Request, res: Response, next: NextF
 	}
 };
 
+export const getProviderOfferById = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) {
+			return res.status(401).json({ success: false, message: 'غير مصرح' });
+		}
+		const data = await proposalService.getProviderOfferById(providerId, String(req.params.id));
+		res.status(200).json({ success: true, data });
+	} catch (error) {
+		next(error);
+	}
+};
+
 export const getEligibleAccreditationSpecialties = async (req: Request, res: Response, next: NextFunction) => {
 	try {
 		const providerId = (req as any).user?.id;

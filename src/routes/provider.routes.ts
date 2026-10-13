@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { getProviderStatistics, getProviderOffers, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, uploadStageDeliveryFiles, getDeliveryAiReview, getProjectHealthAnalysis, getProviderWallet, getProviderTransactions, getCompanyDeliveries, getProviderInvoices, getProviderInvoice, getProviderSales } from '../controllers/provider.controller';
+import { getProviderStatistics, getProviderOffers, getProviderOfferById, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, uploadStageDeliveryFiles, getDeliveryAiReview, getProjectHealthAnalysis, getProviderWallet, getProviderTransactions, getCompanyDeliveries, getProviderInvoices, getProviderInvoice, getProviderSales } from '../controllers/provider.controller';
 import { submitWithdrawal, listMyWithdrawals } from '../controllers/withdrawal.controller';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
@@ -123,6 +123,9 @@ router.get(
   requireActiveUser,
   getProviderOffers
 );
+
+// One own offer (same item shape as the list); another provider's offer is 404.
+router.get('/offers/:id', authenticate, requireActiveUser, providerOnly, getProviderOfferById);
 
 // Offer negotiation (provider side): read state, withdraw, counter, decline the client's request. Own offers only; no contract / escrow involvement.
 router.get('/offers/:id/negotiation', authenticate, requireActiveUser, providerOnly, providerOfferNegotiationController.viewByOffer);
