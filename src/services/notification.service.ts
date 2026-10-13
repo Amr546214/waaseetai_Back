@@ -156,7 +156,10 @@ export const resolveClientNotificationChannels = (settings: unknown, type?: stri
 	const s = settings && typeof settings === 'object' && !Array.isArray(settings) ? (settings as Record<string, unknown>) : {};
 	const topic = type ? CLIENT_TOPIC_BY_TYPE[type] : undefined;
 	if (topic && s[topic] === false) return { push: false, email: false };
-	return { push: s.inApp !== false, email: s.email === true };
+	// two key families exist for the same two switches: the settings page's (inApp / email) and the profile page's (channel_in_app / channel_email); either one counts
+	const inApp = s.inApp ?? s.channel_in_app;
+	const email = s.email ?? s.channel_email;
+	return { push: inApp !== false, email: email === true };
 };
 
 /** The client's own language setting is the profile's "لغة الواجهة" (العربية / English); nothing saved is Arabic. */
@@ -178,8 +181,10 @@ export class NotificationService {
 		let lang: 'ar' | 'en' = 'ar';
 		// An account can hold both roles: a notification that points into /client-overview follows the CLIENT's settings, anything else the provider's (as before).
 		const forClient = !!dto.actionUrl && dto.actionUrl.startsWith('/client-overview');
+		let profileChannels: unknown = null;
 		try {
 			const profile = forClient ? null : await prisma.providerProfile.findUnique({ where: { userId: dto.userId }, select: { preferences: true, user: { select: { email: true, firstName: true } } } });
+			profileChannels = profile?.preferences ?? null;
 			if (profile) { channels = resolveNotificationChannels(profile.preferences); lang = resolveCommunicationLanguage(profile.preferences); recipient = profile.user; }
 			else if (forClient) {
 				const [prefs, clientProfile, user] = await Promise.all([
@@ -190,6 +195,15 @@ export class NotificationService {
 				channels = resolveClientNotificationChannels(prefs?.settings, dto.type); lang = resolveClientLanguage(clientProfile?.interfaceLanguage); recipient = user;
 			}
 		} catch { /* default channels */ }
+		// No channels chosen on a provider profile: the account's shared preferences apply (Settings / profile page: channel_in_app, channel_email). Unsaved = push on, e-mail off.
+		const providerChose = Array.isArray((profileChannels as Record<string, unknown> | null)?.notifChannels);
+		if (!providerChose && !forClient) {
+			try {
+				const row = await prisma.notificationPreference.findUnique({ where: { userId: dto.userId }, select: { settings: true } });
+				channels = resolveClientNotificationChannels(row?.settings);
+				if (channels.email && !recipient) recipient = await prisma.user.findUnique({ where: { id: dto.userId }, select: { email: true, firstName: true } });
+			} catch { /* default channels */ }
+		}
 		if (channels.push) this.emitDto(dto);
 		if (channels.email && recipient?.email) void this.sendNotificationMail(recipient.email, recipient.firstName, dto, lang);
 	}
