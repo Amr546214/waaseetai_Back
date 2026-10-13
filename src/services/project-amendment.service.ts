@@ -131,25 +131,50 @@ export class ProjectAmendmentService {
     });
     if (!contract) throw new AppError('المشروع غير موجود أو العقد غير نشط أو لا تملك صلاحية إنشاء تعديل عليه', 403);
 
-    const created = await prisma.projectAmendment.create({
-      data: {
-        projectId,
-        contractId: contract.id,
-        clientId: contract.clientId,
-        providerId: contract.providerId,
-        requestedById: clientId,
-        requestedByRole: AmendmentRequesterRole.CLIENT,
-        type,
-        title,
-        description,
-        budgetDelta,
-        durationDeltaDays,
-        status: AmendmentStatus.PENDING_OTHER_PARTY
-      },
-      include: {
-        project: { select: { title: true } },
-        provider: { select: { firstName: true, lastName: true } }
-      }
+    // At most ONE pending client-raised request per contract: the contract row is locked for the transaction (a harmless updatedAt touch), so
+    // two simultaneous requests cannot both pass the "no pending request" check. The provider is notified; nothing about the contract changes.
+    const created = await prisma.$transaction(async tx => {
+      const locked = await tx.contract.updateMany({ where: { id: contract.id, clientId, status: ContractStatus.ACTIVE }, data: { updatedAt: new Date() } });
+      if (locked.count !== 1) throw new AppError('المشروع غير موجود أو العقد غير نشط أو لا تملك صلاحية إنشاء تعديل عليه', 403);
+
+      const pending = await tx.projectAmendment.count({
+        where: { contractId: contract.id, requestedByRole: AmendmentRequesterRole.CLIENT, status: AmendmentStatus.PENDING_OTHER_PARTY }
+      });
+      if (pending > 0) throw new AppError('لديك طلب تعديل معلّق لهذا المشروع بانتظار رد مقدم الخدمة', 409);
+
+      const row = await tx.projectAmendment.create({
+        data: {
+          projectId,
+          contractId: contract.id,
+          clientId: contract.clientId,
+          providerId: contract.providerId,
+          requestedById: clientId,
+          requestedByRole: AmendmentRequesterRole.CLIENT,
+          type,
+          title,
+          description,
+          budgetDelta,
+          durationDeltaDays,
+          status: AmendmentStatus.PENDING_OTHER_PARTY
+        },
+        include: {
+          project: { select: { title: true } },
+          provider: { select: { firstName: true, lastName: true } }
+        }
+      });
+
+      await tx.notification.create({
+        data: {
+          userId: contract.providerId,
+          title: 'طلب تعديل على مشروعك',
+          message: `طلب العميل تعديلًا على المشروع: ${title}`,
+          type: 'PROJECT_AMENDMENT',
+          category: 'PROJECTS',
+          actionUrl: `/provider-overview/projects/active/progress/${contract.id}`,
+          metadata: { projectId, amendmentId: row.id }
+        }
+      });
+      return row;
     });
 
     const convMap = await this.resolveConversationIds([{ projectId: created.projectId, providerId: created.providerId }]);
@@ -267,6 +292,52 @@ export class ProjectAmendmentService {
       include: {
         project: { select: { title: true } },
         provider: { select: { firstName: true, lastName: true } }
+      }
+    });
+
+    const convMap = await this.resolveConversationIds([{ projectId: updated!.projectId, providerId: updated!.providerId }]);
+    return toPublicAmendment(updated, convMap.get(`${updated!.projectId}:${updated!.providerId}`) || null);
+  }
+
+  // The PROVIDER answers a request the CLIENT raised. Same rule as the client's answer: the decision is only RECORDED — it never touches
+  // Contract.price / durationDays, Escrow or any stage. One atomic conditional updateMany repeats every guard (ownership, requester role,
+  // still pending), so a second answer (or a race) matches zero rows.
+  async respondToAmendmentAsProvider(providerId: string, amendmentId: string, decision: 'approve' | 'reject') {
+    if (decision !== 'approve' && decision !== 'reject') throw new AppError('قرار غير صالح', 400);
+
+    const result = await prisma.projectAmendment.updateMany({
+      where: {
+        id: amendmentId,
+        providerId,
+        requestedByRole: AmendmentRequesterRole.CLIENT,
+        status: AmendmentStatus.PENDING_OTHER_PARTY
+      },
+      data: {
+        status: decision === 'approve' ? AmendmentStatus.APPROVED : AmendmentStatus.REJECTED,
+        respondedAt: new Date()
+      }
+    });
+
+    if (result.count !== 1) {
+      const existing = await prisma.projectAmendment.findFirst({ where: { id: amendmentId, providerId } });
+      if (!existing) throw new AppError('طلب التعديل غير موجود أو لا تملك صلاحية الوصول إليه', 403);
+      if (existing.requestedByRole !== AmendmentRequesterRole.CLIENT) throw new AppError('لا يمكنك الرد على طلب تعديل رفعته أنت', 403);
+      throw new AppError('تم الرد على طلب التعديل هذا مسبقًا', 409);
+    }
+
+    const updated = await prisma.projectAmendment.findFirst({
+      where: { id: amendmentId },
+      include: { project: { select: { title: true } }, provider: { select: { firstName: true, lastName: true } } }
+    });
+    await prisma.notification.create({
+      data: {
+        userId: updated!.clientId,
+        title: decision === 'approve' ? 'وافق مقدم الخدمة على طلب التعديل' : 'رفض مقدم الخدمة طلب التعديل',
+        message: `${decision === 'approve' ? 'وافق' : 'رفض'} مقدم الخدمة على طلب التعديل "${updated!.title}". القرار مسجّل فقط ولا يغيّر السعر أو المدة أو الضمان تلقائيًا.`,
+        type: 'PROJECT_AMENDMENT',
+        category: 'PROJECTS',
+        actionUrl: '/client-overview/projects/amendments',
+        metadata: { projectId: updated!.projectId, amendmentId }
       }
     });
 

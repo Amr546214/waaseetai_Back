@@ -130,6 +130,20 @@ test('listAmendments: conversationId is null (not fabricated) when no real conve
   assert.equal(result[0].conversationId, null);
 });
 
+// createAmendment (client) runs in a transaction: contract lock + "no pending request of mine" check + create + provider notification.
+function clientCreateDb(contract: any, createSpy: any) {
+  const tx = {
+    contract: { updateMany: async () => ({ count: 1 }) },
+    projectAmendment: { count: async () => 0, create: createSpy },
+    notification: { create: async (a: any) => a.data }
+  };
+  return {
+    contract: { findFirst: async () => contract },
+    conversation: { findMany: async () => [] },
+    $transaction: async (fn: any) => fn(tx)
+  };
+}
+
 // ── createAmendment ────────────────────────────────────────────────────────
 
 test('createAmendment: client creates an amendment on their own active contract', async (t) => {
@@ -144,9 +158,7 @@ test('createAmendment: client creates an amendment on their own active contract'
     provider: { firstName: 'نورة', lastName: 'التصميم' }
   }));
   const service = await loadServiceWithMockPrisma(t, {
-    contract: { findFirst: async () => contract },
-    projectAmendment: { create: createSpy },
-    conversation: { findMany: async () => [] }
+    ...clientCreateDb(contract, createSpy)
   });
 
   const result = await service.createAmendment('client-1', 'project-1', { title: 'تمديد المدة', type: 'DURATION', durationDeltaDays: 5 });
@@ -278,9 +290,7 @@ test('createAmendment: MIXED with two real change dimensions is accepted', async
     project: { title: 'مشروع' }, provider: { firstName: 'م', lastName: '' }
   }));
   const service = await loadServiceWithMockPrisma(t, {
-    contract: { findFirst: async () => contract },
-    projectAmendment: { create: createSpy },
-    conversation: { findMany: async () => [] }
+    ...clientCreateDb(contract, createSpy)
   });
 
   await service.createAmendment('client-1', 'project-1', { title: 'عنوان', type: 'MIXED', budgetDelta: 100, durationDeltaDays: 3 });
@@ -294,9 +304,7 @@ test('createAmendment: a negative finite budget delta is accepted (a reduction i
     project: { title: 'مشروع' }, provider: { firstName: 'م', lastName: '' }
   }));
   const service = await loadServiceWithMockPrisma(t, {
-    contract: { findFirst: async () => contract },
-    projectAmendment: { create: createSpy },
-    conversation: { findMany: async () => [] }
+    ...clientCreateDb(contract, createSpy)
   });
 
   await service.createAmendment('client-1', 'project-1', { title: 'تخفيض', type: 'BUDGET', budgetDelta: -500 });
@@ -310,9 +318,7 @@ test('createAmendment: a negative integer duration delta is accepted (shortening
     project: { title: 'مشروع' }, provider: { firstName: 'م', lastName: '' }
   }));
   const service = await loadServiceWithMockPrisma(t, {
-    contract: { findFirst: async () => contract },
-    projectAmendment: { create: createSpy },
-    conversation: { findMany: async () => [] }
+    ...clientCreateDb(contract, createSpy)
   });
 
   await service.createAmendment('client-1', 'project-1', { title: 'تقصير', type: 'DURATION', durationDeltaDays: -2 });
