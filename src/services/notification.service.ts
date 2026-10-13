@@ -115,6 +115,20 @@ function parseCategoryFilter(raw?: string): NotificationCategory | null {
 
 // ─── Service ──────────────────────────────────────────────────────────────────
 
+/**
+ * A provider's saved notification channels (provider_profiles.preferences.notifChannels, set from the profile page):
+ *  - 'push'  = the real-time in-app push (socket). The notification itself is ALWAYS stored and stays in the inbox either way.
+ *  - 'email' = an optional e-mail copy of the notification.
+ * Nothing saved (or not a provider) keeps today's behaviour: real-time push on, no e-mail.
+ */
+export const resolveNotificationChannels = (preferences: unknown): { push: boolean; email: boolean } => {
+	const channels = preferences && typeof preferences === 'object' && !Array.isArray(preferences) ? (preferences as Record<string, unknown>).notifChannels : undefined;
+	if (!Array.isArray(channels)) return { push: true, email: false };
+	return { push: channels.includes('push'), email: channels.includes('email') };
+};
+
+const escapeMailHtml = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
 export class NotificationService {
 	private emitDto(dto: NotificationDto): void {
 		const io = getIO();
@@ -122,12 +136,43 @@ export class NotificationService {
 		io.to(`user_${dto.userId}`).to(`project_owner_${dto.userId}`).emit('new_notification', dto);
 	}
 
+	/** Delivers a stored notification through the recipient's chosen channels (a lookup failure falls back to the default: real-time push only). */
+	private async deliver(dto: NotificationDto): Promise<void> {
+		let channels = { push: true, email: false };
+		let recipient: { email: string; firstName: string | null } | null = null;
+		try {
+			const profile = await prisma.providerProfile.findUnique({ where: { userId: dto.userId }, select: { preferences: true, user: { select: { email: true, firstName: true } } } });
+			if (profile) { channels = resolveNotificationChannels(profile.preferences); recipient = profile.user; }
+		} catch { /* default channels */ }
+		if (channels.push) this.emitDto(dto);
+		if (channels.email && recipient?.email) void this.sendNotificationMail(recipient.email, recipient.firstName, dto);
+	}
+
+	private async sendNotificationMail(email: string, firstName: string | null, dto: NotificationDto): Promise<void> {
+		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
+		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
+		const base = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
+		const link = dto.actionUrl ? `${base}${dto.actionUrl.startsWith('/') ? '' : '/'}${dto.actionUrl}` : '';
+		try {
+			await mailTransporter.sendMail({
+				from: `"${senderName}" <${from}>`,
+				to: email,
+				subject: `${dto.title} - Waseet AI`,
+				html: `<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif"><p>أهلاً ${escapeMailHtml(firstName || '')}</p><h3>${escapeMailHtml(dto.title)}</h3><p>${escapeMailHtml(dto.message)}</p>${link ? `<p><a href="${escapeMailHtml(link)}">${escapeMailHtml(dto.actionText || 'فتح')}</a></p>` : ''}<p style="color:#6b7699;font-size:12px">وصلتك هذه الرسالة لأنك اخترت البريد كقناة إشعارات في ملفك.</p></div>`,
+				text: `${dto.title}\n${dto.message}${link ? `\n${link}` : ''}`,
+				headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },
+			});
+		} catch (error) {
+			logEmailFailure('notification', email, error);
+		}
+	}
+
 	/** Broadcast a notification persisted as part of another database transaction. */
 	public async emitStored(notificationId: string): Promise<NotificationDto> {
 		const notification = await prisma.notification.findUnique({ where: { id: notificationId } });
 		if (!notification) throw new Error('Notification not found');
 		const dto = toDto(notification);
-		this.emitDto(dto);
+		await this.deliver(dto);
 		return dto;
 	}
 
@@ -316,7 +361,7 @@ export class NotificationService {
 
 		const dto = toDto(notification);
 
-		this.emitDto(dto);
+		await this.deliver(dto);
 
 		return dto;
 	}
