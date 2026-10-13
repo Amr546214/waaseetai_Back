@@ -11,6 +11,7 @@ import type { RequestDraftResponse } from './ai/waseet-ai/waseet-ai.types';
 import { CreateClientRequestDto, ClientRequestAiSuggestDto } from '../dtos/create-client-request.dto';
 import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
+import { providerNotifications } from './provider-notifications.service';
 import {
 	mailTransporter,
 	getOtpEmailTemplate,
@@ -404,9 +405,12 @@ export class ClientRequestsService {
 					metadata: { clientRequestId: clientRequest.id }
 				}));
 
-				await prisma.notification.createMany({
-					data: notificationsData
+				const stored = await prisma.notification.createManyAndReturn({
+					data: notificationsData,
+					select: { id: true }
 				});
+				// Deliver through each provider's saved channels (push / e-mail); the inbox rows are already stored.
+				void providerNotifications.deliverStored(stored.map(n => n.id));
 			}
 		} catch (err) {
 			console.error('Failed to send provider notifications:', err);
@@ -1676,7 +1680,7 @@ export class ClientRequestsService {
 
 			if (providerUserId) {
 				// In-App Notification to Provider
-				await prisma.notification.create({
+				const offerAcceptedNotification = await prisma.notification.create({
 					data: {
 						userId: providerUserId,
 						title: `🎉 تم قبول عرضك: ${projectName}`,
@@ -1694,6 +1698,7 @@ export class ClientRequestsService {
 						metadata: { offerId: contractBeforePayment.offerId || offerId, requestId }
 					}
 				});
+				await providerNotifications.deliverStored([offerAcceptedNotification.id]);
 			}
 		} catch (err) {
 			console.error('Failed to send deposit confirmation email or notifications:', err);

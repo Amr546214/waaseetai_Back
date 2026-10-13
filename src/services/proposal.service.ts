@@ -363,7 +363,7 @@ export class ProposalService {
 					title: 'تم استلام عرض جديد',
 					message: `تم استلام عرض جديد على مشروعك "${targetTitle}"`,
 					type: 'NEW_PROPOSAL',
-					actionUrl: `/client-overview/projects/${projectId}/proposals`,
+					actionUrl: `/client-overview/my-requests/${projectId}`,
 					createdAt: new Date()
 				});
 				console.log(`[ProposalService] Real-time proposal notification emitted to owner: ${targetClientId}`);

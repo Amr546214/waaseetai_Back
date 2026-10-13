@@ -12,6 +12,7 @@ import { isRetryableTransactionConflict } from '../utils/prisma-retry.util';
 import { paypalEmailChangeService } from './paypal-email-change.service';
 import { paypalEmailFrozenError } from '../utils/paypal-email-messages';
 import { deriveWithdrawalReferenceId } from '../utils/withdrawal-reference.util';
+import { providerNotifications } from './provider-notifications.service';
 
 export const MARKETER_PAYPAL_REQUIRED_MESSAGE = 'أضف بريد PayPal لاستلام الأرباح';
 
@@ -142,7 +143,7 @@ export class WithdrawalService {
 
     for (let attempt = 1; attempt <= MAX_SERIALIZATION_RETRIES; attempt++) {
       try {
-        return await prisma.$transaction(async tx => {
+        const created = await prisma.$transaction(async tx => {
           // Reads via `tx`, not the global `prisma` — the released-earnings
           // computation must be part of the same serializable snapshot as
           // the outstanding-withdrawals read and the insert below, not a
@@ -190,6 +191,8 @@ export class WithdrawalService {
             },
           });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        await providerNotifications.withdrawal(created.id, 'REQUESTED');
+        return created;
       } catch (error) {
         // Bounded retry, and ONLY for a recognized transaction-conflict
         // shape (see isRetryableTransactionConflict) — every other error,
@@ -426,7 +429,7 @@ export class WithdrawalService {
 
     for (let attempt = 1; attempt <= MAX_SERIALIZATION_RETRIES; attempt++) {
       try {
-        return await prisma.$transaction(async tx => {
+        const approved = await prisma.$transaction(async tx => {
           if (ledger.kind === 'AFFILIATE_COMMISSION') {
             // Marketer/affiliate commission withdrawal: the authoritative
             // balance is SUM(APPROVED CommissionLog.amount) for this
@@ -496,6 +499,8 @@ export class WithdrawalService {
           await tx.walletTransaction.create({ data: { userId: item.userId, type: 'WITHDRAWAL', amount: -item.amount, currency: item.currency, status: 'COMPLETED', paymentMethod: item.method, referenceId: item.referenceId, description: `اعتماد طلب السحب ${item.id}`, metadata: { withdrawalId: item.id } } });
           return tx.withdrawal.findUniqueOrThrow({ where: { id } });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        if (ledger.kind === 'PROVIDER_EARNINGS') await providerNotifications.withdrawal(id, 'APPROVED');
+        return approved;
       } catch (error) {
         // Bounded retry, and ONLY for a recognized transaction-conflict
         // shape (see isRetryableTransactionConflict) — every other error,
@@ -538,7 +543,7 @@ export class WithdrawalService {
     // reject() currently has no related audit/side-effect write beyond this
     // transition itself, so there is nothing to sequence after it — the
     // transaction wrapper exists purely to make the read-then-write atomic.
-    return prisma.$transaction(async tx => {
+    const rejected = await prisma.$transaction(async tx => {
       const transition = await tx.withdrawal.updateMany({
         where: { id, status: WithdrawalStatus.PENDING },
         data: { status: WithdrawalStatus.REJECTED, reviewedById: adminId, rejectionReason: input.rejectionReason },
@@ -553,6 +558,8 @@ export class WithdrawalService {
       }
       return tx.withdrawal.findUniqueOrThrow({ where: { id } });
     });
+    await providerNotifications.withdrawal(id, 'REJECTED');
+    return rejected;
   }
 }
 

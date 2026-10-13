@@ -625,7 +625,7 @@ export class ProjectProgressService {
         providerName: result.providerName,
         projectTitle: result.projectTitle,
         pointsAwarded: PROJECT_COMPLETION_POINTS,
-        projectUrl: `/provider-overview/projects/${contract.projectId}/progress`
+        projectUrl: `/provider-overview/projects/active/progress/${contract.projectId}`
       });
     }
     return { decision: result.decision, stageId: result.stageId, pointsAwarded: result.isProjectCompleted ? PROJECT_COMPLETION_POINTS : 0 };
