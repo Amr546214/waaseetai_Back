@@ -152,10 +152,22 @@ export class NotificationService {
 		let channels = { push: true, email: false };
 		let recipient: { email: string; firstName: string | null } | null = null;
 		let lang: 'ar' | 'en' = 'ar';
+		let profileChannels: unknown = null;
 		try {
 			const profile = await prisma.providerProfile.findUnique({ where: { userId: dto.userId }, select: { preferences: true, user: { select: { email: true, firstName: true } } } });
+			profileChannels = profile?.preferences ?? null;
 			if (profile) { channels = resolveNotificationChannels(profile.preferences); lang = resolveCommunicationLanguage(profile.preferences); recipient = profile.user; }
 		} catch { /* default channels */ }
+		// No channels chosen on a provider profile: the account's shared preferences apply (Settings / profile page: channel_in_app, channel_email). Unsaved = push on, e-mail off.
+		const providerChose = Array.isArray((profileChannels as Record<string, unknown> | null)?.notifChannels);
+		if (!providerChose) {
+			try {
+				const row = await prisma.notificationPreference.findUnique({ where: { userId: dto.userId }, select: { settings: true } });
+				const saved = (row?.settings ?? {}) as Record<string, unknown>;
+				channels = { push: saved.channel_in_app !== false, email: saved.channel_email === true };
+				if (channels.email && !recipient) recipient = await prisma.user.findUnique({ where: { id: dto.userId }, select: { email: true, firstName: true } });
+			} catch { /* default channels */ }
+		}
 		if (channels.push) this.emitDto(dto);
 		if (channels.email && recipient?.email) void this.sendNotificationMail(recipient.email, recipient.firstName, dto, lang);
 	}
