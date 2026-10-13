@@ -453,8 +453,10 @@ test('confirmPayment: insufficient balance rejects with 402 + required/available
 });
 
 test('confirmPayment: two concurrent confirmations for the same user against a balance that can fund only one — exactly one succeeds, the other is rejected 402, no overspend', async (t) => {
-  const orderA = makeOrderForConfirm({ id: 'order-A', total: 80 });
-  const orderB = makeOrderForConfirm({ id: 'order-B', total: 80 });
+  // (an order's total is always its items' sum minus the discount — the items carry the 80 so the fixture is consistent)
+  const item80 = [{ id: 'item-1', serviceId: 'service-1', providerId: 'provider-1', title: 'Service', price: 80, deliveryDays: 5, aiScore: 0 }];
+  const orderA = makeOrderForConfirm({ id: 'order-A', total: 80, items: item80 });
+  const orderB = makeOrderForConfirm({ id: 'order-B', total: 80, items: item80 });
   const users: any[] = [{ id: 'user-1', walletBalance: 100 }];
   const walletTransactions: any[] = [];
 
