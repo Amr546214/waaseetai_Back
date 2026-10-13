@@ -107,9 +107,9 @@ test('a notification failure does not fail the staff reply', async (t) => {
   assert.equal(r.message.body, 'hello');
 });
 
-test('other users cannot read a ticket through the owner path (403)', async (t) => {
+test('other users cannot read a ticket through the owner path (404, like a missing ticket)', async (t) => {
   const svc = await load(t, makeFixture('OPEN'));
-  await assert.rejects(() => svc.getForUser('t1', 'someone-else'), (e: any) => e.statusCode === 403);
+  await assert.rejects(() => svc.getForUser('t1', 'someone-else'), (e: any) => e.statusCode === 404);
 });
 
 test('admin-tickets router is guarded by authenticate + requireActiveUser + authorize(ADMIN, SUPER_ADMIN) before every route', () => {

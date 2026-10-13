@@ -141,21 +141,13 @@ export const resolveNotificationChannels = (preferences: unknown): { push: boole
 
 /**
  * A CLIENT's saved channels live in notification_preferences.settings (the client "إعدادات الإشعارات" page): inApp = the real-time push in the app,
- * email = an e-mail copy; the topic toggles (newOffer, requestStatus, newMessage, walletActivity) silence one family of events on BOTH channels.
+ * email = an e-mail copy. The per-type toggles (newOffer, requestStatus, newMessage, walletActivity) are NOT applied: the settings page shows them as not controllable yet,
+ * so an old saved `false` there must not silently silence anything.
  * Only what the client really saved is honoured: nothing saved keeps today's behaviour (real-time push on, no e-mail). The notification is ALWAYS stored.
  * (The page's sms / mobile-push toggles have no sender yet, so they change nothing here.)
  */
-const CLIENT_TOPIC_BY_TYPE: Record<string, string> = {
-	NEW_PROPOSAL: 'newOffer', OFFER_COUNTER: 'newOffer', OFFER_WITHDRAWN: 'newOffer', OFFER_NEGOTIATION_REJECTED: 'newOffer', OFFER_COUNTER_ACCEPTED: 'newOffer',
-	PROJECT_AMENDMENT: 'requestStatus', STAGE_DELIVERY: 'requestStatus', STAGE_APPROVED: 'requestStatus', PROJECT_COMPLETED: 'requestStatus', DISPUTE_OPENED: 'requestStatus', DISPUTE_RESOLVED: 'requestStatus',
-	CHAT: 'newMessage',
-	FINANCIAL: 'walletActivity', ESCROW_FUNDED: 'walletActivity', ORDER_PAID: 'walletActivity'
-};
-
-export const resolveClientNotificationChannels = (settings: unknown, type?: string): { push: boolean; email: boolean } => {
+export const resolveClientNotificationChannels = (settings: unknown, _type?: string): { push: boolean; email: boolean } => {
 	const s = settings && typeof settings === 'object' && !Array.isArray(settings) ? (settings as Record<string, unknown>) : {};
-	const topic = type ? CLIENT_TOPIC_BY_TYPE[type] : undefined;
-	if (topic && s[topic] === false) return { push: false, email: false };
 	// two key families exist for the same two switches: the settings page's (inApp / email) and the profile page's (channel_in_app / channel_email); either one counts
 	const inApp = s.inApp ?? s.channel_in_app;
 	const email = s.email ?? s.channel_email;

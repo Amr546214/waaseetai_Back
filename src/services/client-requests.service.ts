@@ -964,6 +964,12 @@ export class ClientRequestsService {
 			}
 		}
 
+		// Only money really sitting in an escrow counts as held. The branches above work from the offer price and can only ESTIMATE; a project that is not funded holds nothing,
+		// and without real milestones there is no honest progress figure (0, or 100 once completed). This endpoint must never report estimated held amounts.
+		const escrowRow = await prisma.escrow.findUnique({ where: { projectId: requestId }, select: { status: true, amount: true, releasedAmount: true } });
+		heldAmount = escrowRow && String(escrowRow.status) === 'HELD' ? Math.max(0, Number(escrowRow.amount) - Number(escrowRow.releasedAmount || 0)) : 0;
+		if (realMilestones.length === 0 || timelines.length === 0) progress = rawStatus === 'COMPLETED' ? 100 : 0;
+
 		return {
 			project: {
 				id: requestId,

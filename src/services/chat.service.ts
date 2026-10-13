@@ -171,6 +171,15 @@ class ChatService {
       throw new AppError('لا يمكن إنشاء محادثة: يجب تحديد طالب الخدمة ومقدم الخدمة', 400);
     }
 
+    // The provider side must really belong to this project: it is the project's provider, or it has an offer on it. Anyone else (a provider with no offer on the
+    // project, or a provider id the client made up) gets no conversation: not the client's project to talk about, not their offer to discuss.
+    const providerInContext = project?.providerId === providerId
+      || !!(await prisma.projectProposal.findFirst({ where: { projectId, providerId }, select: { id: true } }))
+      || !!(await prisma.proposal.findFirst({ where: { providerId, OR: [{ projectId }, { clientRequestId: projectId }] }, select: { id: true } }));
+    if (!providerInContext) {
+      throw new AppError('لا يمكن بدء محادثة: مقدم الخدمة غير مرتبط بهذا المشروع أو بأي عرض عليه', 403);
+    }
+
     let negotiationOfferId: string | null = null;
     // A client can only open a conversation on a project that is their own (the provider on the other end is then checked by the offer / project below).
     if (isActingAsClient && targetClientId && currentUser.id !== targetClientId) {

@@ -81,11 +81,11 @@ test('a CLOSED ticket cannot be replied to by the owner (400) and cannot be clos
   await assert.rejects(() => svc.close('t1', 'owner'), (e: any) => e.statusCode === 409);
 });
 
-test('another user cannot read, reply to or close the ticket (403) and a missing ticket is 404', async (t) => {
+test('another user cannot read, reply to or close the ticket (404, same as a missing one)', async (t) => {
   const svc = await load(t, makeFixture('OPEN'));
-  await assert.rejects(() => svc.getForUser('t1', 'intruder'), (e: any) => e.statusCode === 403);
-  await assert.rejects(() => svc.reply('t1', 'intruder', 'x'), (e: any) => e.statusCode === 403);
-  await assert.rejects(() => svc.close('t1', 'intruder'), (e: any) => e.statusCode === 403);
+  await assert.rejects(() => svc.getForUser('t1', 'intruder'), (e: any) => e.statusCode === 404);
+  await assert.rejects(() => svc.reply('t1', 'intruder', 'x'), (e: any) => e.statusCode === 404);
+  await assert.rejects(() => svc.close('t1', 'intruder'), (e: any) => e.statusCode === 404);
   await assert.rejects(() => svc.getForUser('nope', 'owner'), (e: any) => e.statusCode === 404);
 });
 

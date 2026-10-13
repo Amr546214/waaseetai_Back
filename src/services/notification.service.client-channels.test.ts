@@ -28,10 +28,10 @@ test('resolveClientNotificationChannels: nothing saved = push on, email off; sav
 	assert.deepEqual(r({}), { push: true, email: false });
 	assert.deepEqual(r({ inApp: false, email: true }), { push: false, email: true });
 	assert.deepEqual(r({ inApp: true, email: false }), { push: true, email: false });
-	assert.deepEqual(r({ requestStatus: false, email: true }, 'STAGE_DELIVERY'), { push: false, email: false });
-	assert.deepEqual(r({ newOffer: false }, 'NEW_PROPOSAL'), { push: false, email: false });
-	assert.deepEqual(r({ newOffer: false, email: true }, 'STAGE_DELIVERY'), { push: true, email: true });
-	assert.deepEqual(r({ walletActivity: false }, 'ESCROW_FUNDED'), { push: false, email: false });
+	// per-type switches are NOT applied (the page shows them as not controllable yet): only the general channels decide
+	assert.deepEqual(r({ requestStatus: false, email: true }, 'STAGE_DELIVERY'), { push: true, email: true });
+	assert.deepEqual(r({ newOffer: false }, 'NEW_PROPOSAL'), { push: true, email: false });
+	assert.deepEqual(r({ walletActivity: false }, 'ESCROW_FUNDED'), { push: true, email: false });
 });
 
 test('client with nothing saved: stored, real-time push, no mail (today\'s behaviour)', async t => {
@@ -66,10 +66,11 @@ test('client saved both off: stored only', async t => {
 	assert.equal(mails.length + pushes.length, 0);
 });
 
-test('a switched-off topic silences both channels; an unrelated topic does not', async t => {
+test('a saved per-type switch does not silence anything (only the general channels control sending)', async t => {
 	const off = await load(t, { settings: { requestStatus: false, email: true } });
 	await send(off.notificationService); await settle();
-	assert.equal(off.mails.length + off.pushes.length, 0);
+	assert.equal(off.pushes.length, 1);
+	assert.equal(off.mails.length, 1);
 });
 
 test('client e-mail follows the profile language: English mail is ltr with English copy', async t => {

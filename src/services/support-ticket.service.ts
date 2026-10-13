@@ -96,8 +96,8 @@ export class SupportTicketService {
 
   private async findOwned(id: string, userId: string) {
     const ticket = await prisma.supportTicket.findUnique({ where: { id } });
-    if (!ticket) throw new AppError('التذكرة غير موجودة', 404);
-    if (ticket.userId !== userId) throw new AppError('لا تملك صلاحية الوصول لهذه التذكرة', 403);
+    // Someone else's ticket answers exactly like a missing one (404): the ids of other users' tickets cannot be probed.
+    if (!ticket || ticket.userId !== userId) throw new AppError('التذكرة غير موجودة', 404);
     return ticket;
   }
 

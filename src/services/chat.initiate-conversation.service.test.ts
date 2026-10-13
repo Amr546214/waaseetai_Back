@@ -2,17 +2,17 @@ import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 
 // A client opens / negotiates a conversation only on THEIR project, only with an offer that is still live on a request that still takes offers.
-type Fx = { user?: object; requestStatus?: string; owner?: string; offerStatus?: string; existing?: boolean };
+type Fx = { user?: object; requestStatus?: string; owner?: string; offerStatus?: string; existing?: boolean; offerProvider?: string; projectProvider?: string | null };
 
 async function load(t: TestContext, fx: Fx = {}) {
 	const created: { conversations: any[]; messages: any[]; offerUpdates: any[] } = { conversations: [], messages: [], offerUpdates: [] };
 	const conversation = (data: any) => ({ id: 'conv-1', ...data, project: { title: 't' }, client: { id: data.clientId, firstName: 'a', lastName: 'b' }, provider: { id: data.providerId, firstName: 'c', lastName: 'd' }, messages: [], createdAt: new Date(), updatedAt: new Date() });
 	const db: any = {
 		user: { findUnique: async () => ({ id: 'client-1', accountType: 'CLIENT_INDIVIDUAL', activeRole: 'CLIENT', firstName: 'a', lastName: 'b', ...fx.user }) },
-		project: { findUnique: async () => ({ id: 'req-1', clientId: fx.owner ?? 'client-1', providerId: null, title: 't', specialty: 's', budgetMin: 1, budgetMax: 2, budgetFixed: null }) },
+		project: { findUnique: async () => ({ id: 'req-1', clientId: fx.owner ?? 'client-1', providerId: fx.projectProvider ?? null, title: 't', specialty: 's', budgetMin: 1, budgetMax: 2, budgetFixed: null }) },
 		clientRequest: { findUnique: async () => ({ id: 'req-1', title: 't', status: fx.requestStatus ?? 'OPEN', clientProfile: { userId: fx.owner ?? 'client-1' } }) },
 		projectProposal: {
-			findFirst: async () => ({ id: 'canon-1', status: fx.offerStatus ?? 'SUBMITTED' }),
+			findFirst: async (a: any) => (a?.where?.providerId && a.where.providerId !== (fx.offerProvider ?? 'prov-1') ? null : { id: 'canon-1', status: fx.offerStatus ?? 'SUBMITTED' }),
 			findUnique: async () => ({ id: 'canon-1', providerId: 'prov-1' }),
 			updateMany: async (a: any) => { created.offerUpdates.push(a); return { count: 1 }; }
 		},
@@ -79,3 +79,28 @@ for (const [requestStatus, re] of [['CANCELLED', /إلغاء/], ['PENDING_SIGNAT
 		assert.equal(created.messages.length, 0);
 	});
 }
+
+test('ownership: a provider with no offer on the project cannot open a conversation on it (403)', async (t) => {
+	const { svc, created } = await load(t, { user: { id: 'prov-9', accountType: 'PROVIDER_INDIVIDUAL', activeRole: 'PROVIDER' } });
+	await assert.rejects(svc.initiateConversation('prov-9', { projectId: 'req-1' }), (e: any) => e.statusCode === 403);
+	assert.equal(created.conversations.length, 0);
+});
+
+test('ownership: a provider that has an offer on the project can open the conversation', async (t) => {
+	const { svc, created } = await load(t, { user: { id: 'prov-1', accountType: 'PROVIDER_INDIVIDUAL', activeRole: 'PROVIDER' }, offerProvider: 'prov-1' });
+	const out = await svc.initiateConversation('prov-1', { projectId: 'req-1' });
+	assert.equal(out.projectId, 'req-1');
+	assert.equal(created.conversations[0].providerId, 'prov-1');
+});
+
+test('ownership: the project\'s own provider (e.g. a marketplace purchase, no offer rows) can open it', async (t) => {
+	const { svc, created } = await load(t, { user: { id: 'prov-7', accountType: 'PROVIDER_INDIVIDUAL', activeRole: 'PROVIDER' }, projectProvider: 'prov-7', offerProvider: 'nobody' });
+	await svc.initiateConversation('prov-7', { projectId: 'req-1' });
+	assert.equal(created.conversations[0].providerId, 'prov-7');
+});
+
+test('ownership: a client cannot start a conversation with a provider id that is not on their project (403)', async (t) => {
+	const { svc, created } = await load(t);
+	await assert.rejects(svc.initiateConversation('client-1', { projectId: 'req-1', providerId: 'made-up-provider' }), (e: any) => e.statusCode === 403);
+	assert.equal(created.conversations.length, 0);
+});
