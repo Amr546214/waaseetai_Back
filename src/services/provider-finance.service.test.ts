@@ -7,16 +7,17 @@ import assert from 'node:assert/strict';
 // LABEL is USD; the summation arithmetic must stay byte-for-
 // byte identical, since the source amounts were never converted.
 
-function createEscrowMockPrisma(t: TestContext, escrows: any[]) {
+function createEscrowMockPrisma(t: TestContext, escrows: any[], withdrawalGroups: any[] = []) {
 	const prismaMock: any = {
-		escrow: { findMany: async () => escrows }
+		escrow: { findMany: async () => escrows },
+		withdrawal: { groupBy: async () => withdrawalGroups }
 	};
 	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
 	return prismaMock;
 }
 
-async function loadService(t: TestContext, escrows: any[]) {
-	createEscrowMockPrisma(t, escrows);
+async function loadService(t: TestContext, escrows: any[], withdrawalGroups: any[] = []) {
+	createEscrowMockPrisma(t, escrows, withdrawalGroups);
 	const moduleUrl = `./provider-finance.service.ts?fixture=${Date.now()}-${Math.random()}`;
 	const { providerFinanceService } = await import(moduleUrl);
 	return providerFinanceService;
@@ -140,4 +141,29 @@ test('LEGACY escrow (feePolicyVersion null) next to a v2 one: the legacy one sta
 	const legacyTx = wallet.transactions.filter((x: any) => x.stageId === 'stage-1');
 	assert.equal(legacyTx[0].amount, 400);
 	assert.equal('grossAmount' in legacyTx[0], false);
+});
+
+test('getWallet: pending/approved/processing and paid/reversed withdrawals reduce withdrawableBalance; availableBalance stays the released total', async (t) => {
+	const service = await loadService(t, [makeEscrow({ releasedAmount: 400 })], [
+		{ status: 'PENDING', _sum: { amount: 50 } },
+		{ status: 'APPROVED', _sum: { amount: 20 } },
+		{ status: 'COMPLETED', _sum: { amount: 100 } },
+		{ status: 'REVERSED', _sum: { amount: 30 } }
+	]);
+	const { summary } = (await service.getWallet('provider-1'));
+	assert.equal(summary.availableBalance, 400);
+	assert.equal(summary.pendingWithdrawals, 70);
+	assert.equal(summary.paidWithdrawals, 130);
+	assert.equal(summary.withdrawableBalance, 200);
+});
+
+test('getWallet: with no withdrawals withdrawableBalance equals availableBalance, and it never goes negative', async (t) => {
+	const none = await (await loadService(t, [makeEscrow({ releasedAmount: 400 })])).getWallet('provider-1');
+	assert.equal(none.summary.withdrawableBalance, 400);
+	assert.equal(none.summary.pendingWithdrawals, 0);
+});
+
+test('getWallet: the reservation query asks for exactly the statuses createForProvider reserves against (REJECTED is the only release)', async () => {
+	const { RESERVING_WITHDRAWAL_STATUSES } = await import('../utils/withdrawal-reservation.ts');
+	assert.deepEqual([...RESERVING_WITHDRAWAL_STATUSES].sort(), ['APPROVED', 'COMPLETED', 'PENDING', 'PROCESSING', 'REVERSED']);
 });

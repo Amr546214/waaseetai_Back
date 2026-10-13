@@ -7,6 +7,7 @@ import { PROVIDER_PAYPAL_REQUIRED_MESSAGE } from '../utils/provider-payout';
 import { AppError } from '../utils/app-error';
 import { CreateWithdrawalInput, CreateMarketerWithdrawalInput, RejectWithdrawalInput, ResolveWithdrawalInput } from '../dtos/withdrawal.dto';
 import { providerFinanceService } from './provider-finance.service';
+import { RESERVING_WITHDRAWAL_STATUSES } from '../utils/withdrawal-reservation';
 import { isRetryableTransactionConflict } from '../utils/prisma-retry.util';
 import { paypalEmailChangeService } from './paypal-email-change.service';
 import { paypalEmailFrozenError } from '../utils/paypal-email-messages';
@@ -152,7 +153,7 @@ export class WithdrawalService {
             throw new AppError(`المبلغ المطلوب يتجاوز رصيدك المتاح (${availableBalance} $)`, 400);
           }
           const outstandingWithdrawals = await tx.withdrawal.aggregate({
-            where: { userId, status: { in: [WithdrawalStatus.PENDING, WithdrawalStatus.APPROVED, WithdrawalStatus.PROCESSING, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
+            where: { userId, status: { in: [...RESERVING_WITHDRAWAL_STATUSES] as WithdrawalStatus[] } },
             _sum: { amount: true },
           });
           const outstandingAmount = outstandingWithdrawals._sum.amount || 0;

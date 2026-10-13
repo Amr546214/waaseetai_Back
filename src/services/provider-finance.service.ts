@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
+import { IN_FLIGHT_WITHDRAWAL_STATUSES, SPENT_WITHDRAWAL_STATUSES, RESERVING_WITHDRAWAL_STATUSES } from '../utils/withdrawal-reservation';
 import { isV2Escrow, providerReleased, providerNetEntitlement, splitRelease } from '../utils/escrow-commission';
 
 export class ProviderFinanceService {
@@ -44,6 +45,12 @@ export class ProviderFinanceService {
     };
     const availableBalance = escrows.reduce((sum, escrow) => sum + providerReleased(escrow), 0);
     const escrowBalance = escrows.reduce((sum, escrow) => sum + Math.max(0, entitlementOf(escrow) - providerReleased(escrow)), 0);
+    // availableBalance stays the total released earnings; withdrawableBalance is what a NEW request may still ask for (the server enforces the same figure).
+    const reserved = await client.withdrawal.groupBy({ by: ['status'], where: { userId: providerId, status: { in: [...RESERVING_WITHDRAWAL_STATUSES] } }, _sum: { amount: true } });
+    const sumOf = (statuses: readonly string[]) => reserved.filter(r => statuses.includes(r.status)).reduce((sum, r) => sum + (r._sum.amount ?? 0), 0);
+    const pendingWithdrawals = sumOf(IN_FLIGHT_WITHDRAWAL_STATUSES);
+    const paidWithdrawals = sumOf(SPENT_WITHDRAWAL_STATUSES);
+    const withdrawableBalance = Math.max(0, availableBalance - pendingWithdrawals - paidWithdrawals);
     const platformCommissionTotal = escrows.reduce((sum, escrow) => sum + (isV2Escrow(escrow) ? escrow.platformCommissionAmount : 0), 0);
 
     const stageTransactions = escrows.flatMap(escrow => {
@@ -106,6 +113,9 @@ export class ProviderFinanceService {
     return {
       summary: {
         availableBalance,
+        pendingWithdrawals,
+        paidWithdrawals,
+        withdrawableBalance,
         totalEarnings: availableBalance,
         escrowBalance,
         // what the platform kept as commission on v2 escrows (the provider's availableBalance is already net of it)
