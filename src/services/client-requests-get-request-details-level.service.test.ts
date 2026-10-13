@@ -71,6 +71,8 @@ async function loadService(t: TestContext, opts: { proposals?: ReturnType<typeof
     },
     projectProposal: { findMany: async () => opts.projectProposals ?? [] },
     project: { groupBy: async () => [] },
+    contract: { findUnique: async () => null },
+    message: { findMany: async () => [] },
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   const moduleUrl = `./client-requests.service.ts?fixture=${Date.now()}-${Math.random()}`;

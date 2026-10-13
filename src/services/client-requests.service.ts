@@ -1,5 +1,7 @@
 import { buildEscrowSnapshot, ESCROW_FEE_POLICY_V2 } from '../utils/escrow-commission';
 import { prisma } from '../config/db';
+import { deriveRequestStage, offerActionBlock, REQUEST_STAGE_GROUP, REQUEST_STAGE_LABEL } from '../utils/request-lifecycle';
+import { clientOfferCounterService } from './client-offer-counter.service';
 import { AppError } from '../utils/app-error';
 import { BudgetType, ContractStatus, ProposalStatus, ProviderTypePreference, RequestStatus, UserRole } from '@prisma/client';
 import { initializeRoleState } from './account-management.service';
@@ -248,27 +250,8 @@ export class ClientRequestsService {
 			});
 		}
 
-		if (!specialty) {
-			specialty = await prisma.specialty.findFirst({ where: { isActive: true } });
-		}
-
-		if (!specialty) {
-			let category = await prisma.category.findFirst();
-			if (!category) {
-				category = await prisma.category.create({
-					data: { name: 'عام', nameAr: 'عام', slug: generateSlug('general'), icon: 'folder' }
-				});
-			}
-			specialty = await prisma.specialty.create({
-				data: {
-					categoryId: category.id,
-					name: dto.specialty || 'عام',
-					nameAr: dto.specialty || 'عام',
-					slug: generateSlug(dto.specialty || 'general'),
-					isActive: true
-				}
-			});
-		}
+		// No silent fallback to "any active specialty" (or a made-up one): a request on a specialty the client did not choose would reach the wrong providers.
+		if (!specialty) throw new AppError('التخصص المحدد غير موجود، اختر تخصصًا صحيحًا لطلبك', 400);
 
 		const resolvedSpecialty = specialty;
 
@@ -286,7 +269,8 @@ export class ClientRequestsService {
 
 		const minB = dto.minBudget ? Number(dto.minBudget) : null;
 		const maxB = dto.maxBudget ? Number(dto.maxBudget) : null;
-		const durationDays = dto.expectedDurationDays ? Number(dto.expectedDurationDays) : 14;
+		if (!dto.expectedDurationDays || Number(dto.expectedDurationDays) < 1) throw new AppError('أدخل مدة التنفيذ المتوقعة بالأيام', 400);
+		const durationDays = Number(dto.expectedDurationDays);
 
 		const subSpecs = Array.isArray(dto.subSpecialties) ? dto.subSpecialties : [];
 		const skills = Array.isArray(dto.requiredSkills) && dto.requiredSkills.length > 0 ? dto.requiredSkills : subSpecs;
@@ -443,7 +427,18 @@ export class ClientRequestsService {
 			})
 		]);
 
-		const formattedRequests: any[] = clientRequests.map((req: any) => ({
+		// The contract decides what "waiting" means (signature / funding); the request status alone cannot tell them apart.
+		const contracts = clientRequests.length
+			? await prisma.contract.findMany({ where: { projectId: { in: clientRequests.map((r: any) => r.id) } }, select: { projectId: true, status: true } })
+			: [];
+		const contractByRequest = new Map(contracts.map((c: any) => [c.projectId, c.status as string]));
+
+		const withStage = (row: any, contractStatus: string | null, offerStatuses: string[]) => {
+			const stage = deriveRequestStage({ requestStatus: row.status, contractStatus, offerStatuses });
+			return { ...row, stage, stageLabel: REQUEST_STAGE_LABEL[stage], stageGroup: REQUEST_STAGE_GROUP[stage] };
+		};
+
+		const formattedRequests: any[] = clientRequests.map((req: any) => withStage({
 			id: req.id,
 			title: req.title,
 			description: req.description,
@@ -455,12 +450,12 @@ export class ClientRequestsService {
 			budgetType: req.budgetType,
 			proposalsCount: req.proposals?.length || 0,
 			createdAt: req.createdAt
-		}));
+		}, contractByRequest.get(req.id) || null, (req.proposals || []).map((p: any) => p.status)));
 
 		// Merge projects if not already represented in clientRequests
 		projects.forEach((p: any) => {
 			if (!formattedRequests.some((r: any) => r.id === p.id || r.title === p.title)) {
-				formattedRequests.push({
+				formattedRequests.push(withStage({
 					id: p.id,
 					title: p.title,
 					description: p.description,
@@ -472,38 +467,21 @@ export class ClientRequestsService {
 					budgetType: p.budgetType || 'FIXED',
 					proposalsCount: p.proposalsCount || p.proposals?.length || 0,
 					createdAt: p.createdAt
-				});
+				}, null, (p.proposals || []).map((x: any) => x.status)));
 			}
 		});
 
-		let allCount = formattedRequests.length;
-		let activeCount = 0;
-		let pendingCount = 0;
-		let closedCount = 0;
-		let draftCount = 0;
-
-		formattedRequests.forEach((req: any) => {
-			const st = String(req.status || '').toUpperCase();
-			if (['OPEN', 'PUBLISHED', 'UNDER_BIDDING', 'IN_PROGRESS'].includes(st)) {
-				activeCount++;
-			} else if (['PENDING_REVIEW', 'AWAITING_DELIVERY'].includes(st)) {
-				pendingCount++;
-			} else if (['COMPLETED', 'CLOSED'].includes(st)) {
-				closedCount++;
-			} else if (st === 'DRAFT') {
-				draftCount++;
-			} else {
-				activeCount++;
-			}
-		});
+		// Every request falls in exactly one group, derived from the same stage the rows carry (never a default "active").
+		const count = (group: string) => formattedRequests.filter((r: any) => r.stageGroup === group).length;
 
 		return {
 			filters: {
-				allCount,
-				activeCount,
-				pendingCount,
-				closedCount,
-				draftCount
+				allCount: formattedRequests.length,
+				draftCount: count('draft'),
+				openCount: count('open'),
+				pendingCount: count('pending'),
+				activeCount: count('active'),
+				closedCount: count('closed')
 			},
 			data: formattedRequests
 		};
@@ -1087,6 +1065,15 @@ export class ClientRequestsService {
 			}
 		});
 
+		// The contract (if an offer was selected) says whether the request is waiting for a signature / the funding or really running.
+		const contract = await prisma.contract.findUnique({
+			where: { projectId: requestId },
+			select: { status: true, offerId: true, providerId: true }
+		});
+		// providerId -> canonical offer id, then the negotiation state of every offer (newest structured message decides)
+		const canonicalByProvider = new Map<string, string>(projectProposals.map(pp => [pp.providerId, pp.id]));
+		const negotiationByProvider = await clientOfferCounterService.viewsForRequest(requestId, canonicalByProvider);
+
 		// Build a providerId → milestones lookup for merging
 		const milestonesMap = new Map<string, any[]>();
 		// providerId → the WaseetAI proposal-quality review stored at creation
@@ -1158,9 +1145,23 @@ export class ClientRequestsService {
 			// Merge milestones from ProjectProposal if available
 			const realMilestones = milestonesMap.get(prop.providerId) || [];
 
+			// What the client may do with this offer right now, and the server's reason when not (the page shows the reason, never a dead button).
+			const negotiation = negotiationByProvider.get(prop.providerId) || { state: 'NONE' as const, counter: null };
+			const blockedReason = offerActionBlock(request.status, prop.status);
+			const counterPending = negotiation.state === 'COUNTER_PENDING';
+			const actions = {
+				canSelect: !blockedReason && !counterPending,
+				canNegotiate: !blockedReason,
+				canChat: String(request.status) !== 'CANCELLED',
+				blockedReason: blockedReason || (counterPending ? 'ردّ على العرض المضاد (قبول أو رفض) قبل اختيار هذا العرض' : null),
+				chatBlockedReason: String(request.status) === 'CANCELLED' ? 'تم إلغاء هذا الطلب' : null
+			};
+
 			return {
 				id: prop.id,
 				status: prop.status,
+				actions,
+				negotiation,
 				coverLetter: prop.coverLetter || '',
 				workPlan: prop.workPlan || '',
 				bidAmount: Number(prop.price || 0),
@@ -1205,11 +1206,18 @@ export class ClientRequestsService {
 			};
 		});
 
+		const stage = deriveRequestStage({ requestStatus: request.status, contractStatus: contract?.status ?? null, offerStatuses: request.proposals.map(p => p.status) });
+
 		return {
 			id: request.id,
 			title: request.title,
 			description: request.description,
 			status: request.status,
+			// derived from the request, its contract and the offers: a request is "ACTIVE" only once the contract is signed and the escrow funded
+			stage,
+			stageLabel: REQUEST_STAGE_LABEL[stage],
+			contractStatus: contract?.status ?? null,
+			selectedOfferId: contract?.offerId ?? null,
 			budget: {
 				type: request.budgetType,
 				min: request.minBudget,
@@ -1227,7 +1235,7 @@ export class ClientRequestsService {
 				slug: request.specialty?.slug || ''
 			},
 			subSpecialties: request.subSpecialties || [],
-			expectedDurationDays: request.expectedDurationDays || 14,
+			expectedDurationDays: request.expectedDurationDays ?? null,
 			createdAt: request.createdAt,
 			updatedAt: request.updatedAt,
 			attachments,
@@ -1266,6 +1274,14 @@ export class ClientRequestsService {
 			throw new AppError('هذا العرض مسحوب ولا يمكن اختياره', 409);
 		}
 		const providerId = canonical?.providerId || legacy!.providerId;
+		// While the request is still OPEN only a live offer can be chosen, and not while the provider's counter offer waits for an answer
+		// (changing the chosen offer after selection stays as before: allowed until the client signs).
+		if (String(request.status) === 'OPEN') {
+			const blocked = offerActionBlock(request.status, canonical?.status ?? legacy?.status);
+			if (blocked) throw new AppError(blocked, 409);
+			const view = (await clientOfferCounterService.viewsForRequest(requestId, new Map(canonical ? [[providerId, canonical.id]] : []))).get(providerId);
+			if (view?.state === 'COUNTER_PENDING') throw new AppError('ردّ على العرض المضاد (قبول أو رفض) قبل اختيار هذا العرض', 409);
+		}
 
 		// Phase 4 — once the client has signed + funded escrow (contract moved
 		// past PENDING_CLIENT_SIGNATURE, escrow HELD), the selection is frozen.
