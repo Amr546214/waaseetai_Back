@@ -176,3 +176,83 @@ test('getForUser: adds heldEscrowAmount from the escrow of the dispute project; 
 
   await assert.rejects(() => disputeService.getForUser('d1', 'stranger'), (e: any) => e.statusCode === 403);
 });
+
+// ---- createForRequest: marketplace (serviceCatalog) projects with no ClientRequest/Proposal ----
+
+const dispInput = { reason: 'تأخر في التسليم', description: 'لم يتم التسليم في الموعد المتفق عليه' };
+
+async function loadCreate(t: TestContext, opts: { request?: any; project?: any; existingDispute?: any }) {
+  const createSpy = t.mock.fn(async (args: any) => ({ id: 'd-new', ...args.data }));
+  const prismaMock: any = {
+    clientRequest: { findUnique: async () => opts.request ?? null },
+    project: { findUnique: async () => opts.project ?? null },
+    proposal: { findFirst: async () => null },
+    dispute: { findFirst: async () => opts.existingDispute ?? null, create: createSpy },
+  };
+  t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  t.mock.module('./ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: {} } });
+  const mod = await import(`./dispute.service.ts?fixture=${Date.now()}-${Math.random()}`);
+  return { disputeService: mod.disputeService, createSpy };
+}
+
+const marketplaceProject = (contractStatus: string | null = 'ACTIVE') => ({
+  id: 'proj-mk', clientId: CLIENT_ID, providerId: PROVIDER_ID,
+  contract: contractStatus ? { id: 'c-1', status: contractStatus, clientId: CLIENT_ID, providerId: PROVIDER_ID } : null,
+});
+
+test('createForRequest: provider opens a dispute on a marketplace project (no ClientRequest/Proposal)', async (t) => {
+  const { disputeService, createSpy } = await loadCreate(t, { project: marketplaceProject() });
+  const d = await disputeService.createForRequest('proj-mk', PROVIDER_ID, 'provider', dispInput);
+  const data = createSpy.mock.calls[0].arguments[0].data;
+  assert.equal(data.projectId, 'proj-mk');
+  assert.equal(data.requestId, undefined);
+  assert.equal(data.openedById, PROVIDER_ID);
+  assert.equal(data.againstUserId, CLIENT_ID);
+  assert.equal(d.status, 'OPEN');
+});
+
+test('createForRequest: client opens a dispute on a marketplace project against the provider', async (t) => {
+  const { disputeService, createSpy } = await loadCreate(t, { project: marketplaceProject('COMPLETED') });
+  await disputeService.createForRequest('proj-mk', CLIENT_ID, 'client', dispInput);
+  const data = createSpy.mock.calls[0].arguments[0].data;
+  assert.equal(data.projectId, 'proj-mk');
+  assert.equal(data.againstUserId, PROVIDER_ID);
+});
+
+test('createForRequest: a provider who does not own the marketplace project is rejected with 403', async (t) => {
+  const { disputeService, createSpy } = await loadCreate(t, { project: marketplaceProject() });
+  await assert.rejects(() => disputeService.createForRequest('proj-mk', 'someone-else', 'provider', dispInput), (e: any) => e.statusCode === 403);
+  await assert.rejects(() => disputeService.createForRequest('proj-mk', PROVIDER_ID, 'client', dispInput), (e: any) => e.statusCode === 403);
+  assert.equal(createSpy.mock.calls.length, 0);
+});
+
+test('createForRequest: a contract in a non-disputable state is rejected with a clear 400 message', async (t) => {
+  const { disputeService, createSpy } = await loadCreate(t, { project: marketplaceProject('CANCELLED') });
+  await assert.rejects(() => disputeService.createForRequest('proj-mk', PROVIDER_ID, 'provider', dispInput), (e: any) => e.statusCode === 400 && /حالة العقد/.test(e.message));
+  assert.equal(createSpy.mock.calls.length, 0);
+});
+
+test('createForRequest: a project without a contract is rejected with a clear 400 message', async (t) => {
+  const { disputeService } = await loadCreate(t, { project: marketplaceProject(null) });
+  await assert.rejects(() => disputeService.createForRequest('proj-mk', PROVIDER_ID, 'provider', dispInput), (e: any) => e.statusCode === 400 && /عقد/.test(e.message));
+});
+
+test('createForRequest: unknown id is rejected with 404', async (t) => {
+  const a = await loadCreate(t, {});
+  await assert.rejects(() => a.disputeService.createForRequest('nope', PROVIDER_ID, 'provider', dispInput), (e: any) => e.statusCode === 404);
+});
+
+test('createForRequest: duplicate open dispute on a marketplace project is rejected with 409', async (t) => {
+  const { disputeService, createSpy } = await loadCreate(t, { project: marketplaceProject(), existingDispute: { id: 'd-old' } });
+  await assert.rejects(() => disputeService.createForRequest('proj-mk', PROVIDER_ID, 'provider', dispInput), (e: any) => e.statusCode === 409);
+  assert.equal(createSpy.mock.calls.length, 0);
+});
+
+test('createForRequest: legacy ClientRequest flow is unchanged (requestId recorded, accepted proposal required)', async (t) => {
+  const request = { id: 'req-1', status: 'IN_PROGRESS', clientProfile: { userId: CLIENT_ID }, proposals: [{ id: 'p', status: 'ACCEPTED', providerId: PROVIDER_ID }] };
+  const { disputeService, createSpy } = await loadCreate(t, { request });
+  await disputeService.createForRequest('req-1', PROVIDER_ID, 'provider', dispInput);
+  const data = createSpy.mock.calls[0].arguments[0].data;
+  assert.equal(data.requestId, 'req-1');
+  assert.equal(data.projectId, undefined);
+});
