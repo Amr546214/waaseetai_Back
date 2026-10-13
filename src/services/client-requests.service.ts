@@ -534,7 +534,7 @@ export class ClientRequestsService {
 				},
 				include: {
 					proposals: {
-						where: { status: 'ACCEPTED' },
+						where: { status: { in: ['ACCEPTED', 'PENDING_SIGNATURE'] } },
 						include: { provider: { include: { providerProfile: true } } }
 					}
 				},
@@ -547,16 +547,16 @@ export class ClientRequestsService {
 				},
 				include: {
 					projectProposals: {
-						where: { status: 'ACCEPTED' },
+						where: { status: { in: ['ACCEPTED', 'PENDING_SIGNATURE'] } },
 						include: { provider: { include: { providerProfile: true } }, milestones: { orderBy: { stepOrder: 'asc' } } }
 					},
 					proposals: {
-						where: { status: 'ACCEPTED' },
+						where: { status: { in: ['ACCEPTED', 'PENDING_SIGNATURE'] } },
 						include: { provider: { include: { providerProfile: true } } }
 					},
 					escrow: true,
 					contract: {
-						include: { stages: { orderBy: { stepOrder: 'asc' } } }
+						include: { stages: { orderBy: { stepOrder: 'asc' } }, provider: { include: { providerProfile: true } } }
 					}
 				},
 				orderBy: { createdAt: 'desc' }
@@ -613,7 +613,8 @@ export class ClientRequestsService {
 			const provider = acceptedProp ? extractProvider(acceptedProp.provider) : { name: 'مقدم خدمة', initial: 'مـ' };
 			const price = acceptedProp ? Number(acceptedProp.price || 0) : 0;
 			const escrow = escrowMap.get(item.id);
-			const heldAmount = escrow ? Math.max(0, Number(escrow.amount) - Number(escrow.releasedAmount || 0)) : price;
+			// Only money really in escrow counts as held; an unfunded (awaiting-signature) project holds nothing.
+			const heldAmount = escrow && escrow.status === 'HELD' ? Math.max(0, Number(escrow.amount) - Number(escrow.releasedAmount || 0)) : 0;
 			const durationDays = item.expectedDurationDays || 14;
 			const endAt = new Date(item.updatedAt.getTime() + durationDays * 24 * 60 * 60 * 1000);
 			const daysLeft = Math.ceil((endAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
@@ -639,7 +640,7 @@ export class ClientRequestsService {
 				contract: `CT-${item.id.substring(0, 4).toUpperCase()}`,
 				heldAmount,
 				employee: employeeMap.get(item.id) || null,
-				nextStep: item.status === 'PENDING_SIGNATURE' ? 'استكمال توقيع العقد من الطرفين' : 'التسليم النهائي للمشروع، قيد العمل لدى مقدم الخدمة',
+				nextStep: item.status === 'PENDING_SIGNATURE' ? (escrow?.status === 'HELD' ? 'بانتظار توقيع مقدم الخدمة لبدء التنفيذ' : 'توقيع العقد وإيداع الضمان لبدء التنفيذ') : 'التسليم النهائي للمشروع، قيد العمل لدى مقدم الخدمة',
 				completedStages: 0,
 				stagesCount: 1,
 				daysLeft,
@@ -654,20 +655,26 @@ export class ClientRequestsService {
 
 			const ppProp = p.projectProposals?.[0] || null;
 			const legacyProp = p.proposals?.[0] || null;
-			const providerUser = ppProp?.provider || legacyProp?.provider || null;
+			const providerUser = ppProp?.provider || legacyProp?.provider || p.contract?.provider || null;
 			const provider = providerUser ? extractProvider(providerUser) : { name: 'مقدم خدمة', initial: 'مـ' };
 			const price = ppProp ? Number(ppProp.totalPrice || 0) : (legacyProp ? Number(legacyProp.price || 0) : 0);
 			const escrow = p.escrow;
-			const heldAmount = escrow ? Math.max(0, Number(escrow.amount) - Number(escrow.releasedAmount || 0)) : price;
+			// Only money really in escrow counts as held; an unfunded (awaiting-signature) project holds nothing.
+			const heldAmount = escrow && escrow.status === 'HELD' ? Math.max(0, Number(escrow.amount) - Number(escrow.releasedAmount || 0)) : 0;
 			const contractStages = p.contract?.stages || [];
 			const milestones = contractStages.length > 0 ? contractStages : (ppProp?.milestones || []);
+			const awaitingSignature = p.status === 'PENDING_SIGNATURE';
+			const funded = escrow?.status === 'HELD';
 			const startAt = p.contract?.clientSignedAt || p.updatedAt;
 			const endAt = new Date(startAt.getTime() + Number(p.deliveryDays || 0) * 24 * 60 * 60 * 1000);
 			const daysLeft = Math.ceil((endAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
 
 			// Compute progress from real milestones
 			let progress = 0;
-			if (milestones.length > 0) {
+			if (awaitingSignature) {
+				// Not running yet: the client still has to sign + fund, or the provider still has to sign.
+				progress = 0;
+			} else if (milestones.length > 0) {
 				const elapsedDays = Math.max(0, Math.floor((Date.now() - startAt.getTime()) / (1000 * 60 * 60 * 24)));
 				let accDays = 0;
 				let completed = 0;
@@ -688,13 +695,15 @@ export class ClientRequestsService {
 				progress = Math.min(85, Math.round((elapsedDays / p.deliveryDays) * 100));
 			}
 
-			const completedStages = milestones.filter((m: any) => m.status === 'APPROVED').length ||
+			const completedStages = awaitingSignature ? 0 : milestones.filter((m: any) => m.status === 'APPROVED').length ||
 				(milestones.length > 0 ? Math.round((progress / 100) * milestones.length) : 0);
 			const reviewStage = milestones.find((m: any) => m.status === 'SUBMITTED');
 			const currentStage = reviewStage || milestones.find((m: any) => m.status !== 'APPROVED') || milestones[milestones.length - 1];
-			const needsReview = p.status === 'AWAITING_DELIVERY' || Boolean(reviewStage);
-			const displayStatus = needsReview ? 'wait' : (daysLeft < 0 ? 'late' : 'run');
-			const nextStep = currentStage
+			const needsReview = !awaitingSignature && (p.status === 'AWAITING_DELIVERY' || Boolean(reviewStage));
+			const displayStatus = awaitingSignature || needsReview ? 'wait' : (daysLeft < 0 ? 'late' : 'run');
+			const nextStep = awaitingSignature
+				? (funded ? 'بانتظار توقيع مقدم الخدمة لبدء التنفيذ' : 'توقيع العقد وإيداع الضمان لبدء التنفيذ')
+				: currentStage
 				? `${currentStage.title || 'المرحلة الحالية'}، ${needsReview ? 'سُلّمت وتنتظر اعتمادك' : 'قيد العمل لدى مقدم الخدمة'}`
 				: (needsReview ? 'مراجعة التسليم المرسل واعتماده' : 'متابعة تنفيذ المشروع');
 
@@ -1267,7 +1276,7 @@ export class ClientRequestsService {
 		// funds. Advisory pre-check here; the authoritative, race-safe gate is
 		// the conditional updateMany inside the transaction below.
 		const [existingContract, heldEscrow] = await Promise.all([
-			prisma.contract.findUnique({ where: { projectId: requestId }, select: { id: true, status: true } }),
+			prisma.contract.findUnique({ where: { projectId: requestId }, select: { id: true, status: true, providerId: true, offerId: true } }),
 			prisma.escrow.findUnique({ where: { projectId: requestId }, select: { status: true } })
 		]);
 		if ((existingContract && existingContract.status !== ContractStatus.PENDING_CLIENT_SIGNATURE) || heldEscrow?.status === 'HELD') {
@@ -1343,6 +1352,11 @@ export class ClientRequestsService {
 				}
 			});
 		});
+
+		// Tell the provider their offer was chosen (once: re-selecting the same offer does not notify again). Never fails the selection.
+		if (!(existingContract && existingContract.providerId === providerId && existingContract.offerId === contract.offerId)) {
+			await providerNotifications.offerSelected({ providerId, offerId: contract.offerId ?? canonical?.id ?? legacy!.id, projectId: requestId, requestTitle: request.title });
+		}
 
 		return { contractId: contract.id, status: contract.status, selectedOfferId: contract.offerId };
 	}

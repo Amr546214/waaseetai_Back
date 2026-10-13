@@ -14,6 +14,10 @@ export const PROVIDER_ROUTES = {
 	dispute: (disputeId: string) => `/provider-overview/disputes/${disputeId}`,
 	// Reviews received are shown on the provider's public profile.
 	reviews: '/provider-overview/profile/public',
+	// The offers list shows every offer with its live state (under negotiation, awaiting signature...).
+	offers: '/provider-overview/offers',
+	// Provider side of the offer negotiation; the id is the provider's own (canonical) offer id.
+	offerNegotiate: (offerId: string) => `/provider-overview/offers/${offerId}/negotiate`,
 	withdraw: '/provider-overview/finance/withdraw',
 	// The PayPal payout email is edited from the "حساب PayPal" tab of the profile data page.
 	paypalSettings: '/provider-overview/profile/data',
@@ -122,6 +126,36 @@ export const providerNotifications = {
 			actionUrl: PROVIDER_ROUTES.projectProgress(p.projectId),
 			actionText: 'عرض المشروع',
 			metadata: { projectId: p.projectId, amendmentId: p.amendmentId, decision: p.decision }
+		}));
+	},
+
+	/** The client asked to negotiate the provider's offer (the provider has to answer on the negotiation page). */
+	async negotiationRequested(p: { providerId: string; offerId: string; projectId: string; requestTitle?: string | null }) {
+		const title = short(p.requestTitle);
+		await safely('negotiationRequested', () => notificationService.createAndEmit({
+			userId: p.providerId,
+			title: 'طلب العميل التفاوض على عرضك',
+			message: `طلب العميل التفاوض على عرضك${title ? ` في «${title}»` : ''}. راجع الطلب وأرسل عرضًا مضادًا أو اعتذر عنه.`,
+			category: NotificationCategory.OFFERS,
+			type: 'OFFER_NEGOTIATION_REQUESTED',
+			actionUrl: PROVIDER_ROUTES.offerNegotiate(p.offerId),
+			actionText: 'عرض التفاوض',
+			metadata: { offerId: p.offerId, projectId: p.projectId }
+		}));
+	},
+
+	/** The client selected the provider's offer; the contract now waits for the client's signature and escrow deposit (no signing action for the provider yet). */
+	async offerSelected(p: { providerId: string; offerId: string; projectId: string; requestTitle?: string | null }) {
+		const title = short(p.requestTitle);
+		await safely('offerSelected', () => notificationService.createAndEmit({
+			userId: p.providerId,
+			title: 'اختار العميل عرضك',
+			message: `اختار العميل عرضك${title ? ` في «${title}»` : ''}. العقد الآن بانتظار توقيع العميل وإيداع الضمان، وسنخبرك عندما يحين دورك للتوقيع.`,
+			category: NotificationCategory.OFFERS,
+			type: 'OFFER_SELECTED',
+			actionUrl: PROVIDER_ROUTES.offers,
+			actionText: 'عرض عروضي',
+			metadata: { offerId: p.offerId, projectId: p.projectId }
 		}));
 	},
 

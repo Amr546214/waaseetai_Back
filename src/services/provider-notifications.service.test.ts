@@ -12,7 +12,9 @@ const REAL_PROVIDER_ROUTES = [
 	/^\/provider-overview\/finance\/withdraw$/,
 	/^\/provider-overview\/projects\/active\/progress\/[^/]+$/,
 	/^\/provider-overview\/offers\/[^/]+\/sign-contract$/,
-	/^\/provider-overview\/explore-requests\/[^/]+\/apply$/
+	/^\/provider-overview\/explore-requests\/[^/]+\/apply$/,
+	/^\/provider-overview\/offers$/,
+	/^\/provider-overview\/offers\/[^/]+\/negotiate$/
 ];
 const isRealProviderRoute = (url: unknown) => typeof url === 'string' && REAL_PROVIDER_ROUTES.some(r => r.test(url));
 
@@ -164,6 +166,46 @@ test('a notification failure never fails the business action', async t => {
 	const { providerNotifications } = await fresh('./provider-notifications.service.ts');
 	await providerNotifications.paypalEmailChanged('prov-1');
 	await providerNotifications.ratingReceived({ providerId: 'prov-1', rating: 5, reviewId: 'r1' });
+});
+
+test('negotiation requested / offer selected: provider notified with OFFERS category, real route, action text; e-mail-only preference respected', async t => {
+	const f = await load(t, { preferences: { notifChannels: ['email'], preferredCommunicationLanguage: 'ar' } });
+	const { providerNotifications } = await fresh('./provider-notifications.service.ts');
+	await providerNotifications.negotiationRequested({ providerId: 'prov-1', offerId: 'o1', projectId: 'p1', requestTitle: 'متجر' });
+	await providerNotifications.offerSelected({ providerId: 'prov-1', offerId: 'o1', projectId: 'p1', requestTitle: 'متجر' });
+	await settle();
+	assert.equal(f.notifications.length, 2);
+	const [neg, sel] = f.notifications;
+	assert.equal(neg.type, 'OFFER_NEGOTIATION_REQUESTED');
+	assert.equal(neg.category, 'OFFERS');
+	assert.equal(neg.userId, 'prov-1');
+	assert.equal(neg.actionUrl, '/provider-overview/offers/o1/negotiate');
+	assert.equal(neg.actionText, 'عرض التفاوض');
+	assert.equal(sel.type, 'OFFER_SELECTED');
+	assert.equal(sel.category, 'OFFERS');
+	assert.equal(sel.actionUrl, '/provider-overview/offers');
+	assert.equal(sel.actionText, 'عرض عروضي');
+	assert.ok(f.notifications.every(n => isRealProviderRoute(n.actionUrl)));
+	// e-mail-only preference: mails sent, no push
+	assert.equal(f.mails.length, 2);
+	assert.equal(f.pushes.length, 0);
+});
+
+test('negotiation / selection: a notification failure never fails the action', async t => {
+	await load(t, { db: { notification: { create: async () => { throw new Error('db down'); } } } });
+	const { providerNotifications } = await fresh('./provider-notifications.service.ts');
+	await providerNotifications.negotiationRequested({ providerId: 'prov-1', offerId: 'o1', projectId: 'p1' });
+	await providerNotifications.offerSelected({ providerId: 'prov-1', offerId: 'o1', projectId: 'p1' });
+});
+
+test('negotiation / selection: push-only preference = stored + push, no mail', async t => {
+	const f = await load(t, { preferences: { notifChannels: ['push'] } });
+	const { providerNotifications } = await fresh('./provider-notifications.service.ts');
+	await providerNotifications.offerSelected({ providerId: 'prov-1', offerId: 'o1', projectId: 'p1' });
+	await settle();
+	assert.equal(f.notifications.length, 1);
+	assert.equal(f.pushes.length, 1);
+	assert.equal(f.mails.length, 0);
 });
 
 // ─── The services call the right notification at the right moment ────────────────────────────────────────────────

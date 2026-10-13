@@ -27,6 +27,7 @@ const ALLOWED_MIME_TYPES = new Set([
 const upload = memoryUpload({ fileSize: 15 * 1024 * 1024, files: 5, allowedMimeTypes: ALLOWED_MIME_TYPES });
 
 const router = Router();
+const clientOnly = authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL);
 
 // Metadata endpoint (Categories, Specialties, Sub-specialties with provider counts)
 router.get('/meta', clientRequestsController.getMeta);
@@ -67,7 +68,7 @@ router.post(
 router.post('/upload', authenticate, upload.array('attachments', 5), clientRequestsController.uploadAttachments);
 
 // Create request endpoint
-router.post('/', authenticate, requireActiveUser, clientRequestsController.createRequest);
+router.post('/', authenticate, requireActiveUser, clientOnly, clientRequestsController.createRequest);
 
 // My requests list endpoint (MUST be before /:id)
 router.get('/my-requests', authenticate, requireActiveUser, clientRequestsController.getMyRequests);

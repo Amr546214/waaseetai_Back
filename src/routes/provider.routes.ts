@@ -138,6 +138,7 @@ router.post(
   '/offers/:id/sign',
   authenticate,
   requireActiveUser,
+  providerOnly,
   signContract
 );
 
@@ -166,6 +167,7 @@ router.get(
   '/explore-requests',
   authenticate,
   requireActiveUser,
+  providerOnly,
   exploreRequestsController.getExploreRequests
 );
 

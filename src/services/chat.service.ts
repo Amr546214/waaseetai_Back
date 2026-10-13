@@ -1,7 +1,17 @@
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { CreateConversationDto, SendMessageDto } from '../dtos/chat.dto';
+import { providerNotifications } from './provider-notifications.service';
 import { MessageType, MessageStatus, UserRole } from '@prisma/client';
+
+/** Offer states a client can still open a negotiation on. Everything else (withdrawn, rejected, accepted, awaiting signature, draft, in review) is closed. */
+export const NEGOTIABLE_OFFER_STATUSES = ['SUBMITTED', 'PENDING', 'UNDER_NEGOTIATION'];
+const NON_NEGOTIABLE_MESSAGES: Record<string, string> = {
+  CANCELLED: 'لا يمكن التفاوض على هذا العرض لأن مقدم الخدمة سحبه',
+  REJECTED: 'لا يمكن التفاوض على هذا العرض لأنه مرفوض',
+  ACCEPTED: 'لا يمكن التفاوض على هذا العرض لأنه مقبول بالفعل',
+  PENDING_SIGNATURE: 'لا يمكن التفاوض على هذا العرض لأنه مختار وبانتظار التوقيع'
+};
 
 /**
  * Single source of truth for CLIENT/PROVIDER chat role isolation.
@@ -160,6 +170,7 @@ class ChatService {
       throw new AppError('لا يمكن إنشاء محادثة: يجب تحديد طالب الخدمة ومقدم الخدمة', 400);
     }
 
+    let negotiationOfferId: string | null = null;
     if (data.negotiationPayload) {
       if (!isActingAsClient || currentUser.id !== targetClientId || !offerId) {
         throw new AppError('لا يمكن بدء التفاوض دون عرض صالح يملكه هذا المشروع', 403);
@@ -169,6 +180,12 @@ class ChatService {
         prisma.proposal.findFirst({ where: { id: offerId, providerId, OR: [{ projectId }, { clientRequestId: projectId }] } })
       ]);
       if (!canonicalOffer && !legacyOffer) throw new AppError('العرض المحدد لا يتبع هذا المشروع أو مقدم الخدمة', 404);
+      // Only a live offer can be negotiated: not withdrawn / rejected / accepted / awaiting signature (nor a draft / in review).
+      const offerStatus = String((canonicalOffer ?? legacyOffer)!.status);
+      if (!NEGOTIABLE_OFFER_STATUSES.includes(offerStatus)) {
+        throw new AppError(NON_NEGOTIABLE_MESSAGES[offerStatus] ?? 'لا يمكن التفاوض على هذا العرض في حالته الحالية', 409, [{ code: 'OFFER_NOT_NEGOTIABLE', status: offerStatus }]);
+      }
+      negotiationOfferId = (canonicalOffer ?? legacyOffer)!.id;
       await prisma.$transaction([
         prisma.projectProposal.updateMany({
           where: { projectId, providerId, status: { in: ['SUBMITTED', 'PENDING'] } },
@@ -285,6 +302,11 @@ class ChatService {
           status: MessageStatus.SENT
         }
       });
+    }
+
+    if (data.negotiationPayload && negotiationOfferId) {
+      // Never breaks the action (the helper swallows and logs its own failures).
+      await providerNotifications.negotiationRequested({ providerId, offerId: negotiationOfferId, projectId, requestTitle: project?.title || clientRequest?.title });
     }
 
     return this.formatConversationOutput(conversation, userId);
