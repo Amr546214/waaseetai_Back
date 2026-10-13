@@ -2,6 +2,7 @@ import { AmendmentRequesterRole, AmendmentStatus, AmendmentType, ContractStatus 
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { providerNotifications } from './provider-notifications.service';
+import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 
 const AMENDMENT_TYPES: AmendmentType[] = ['SCOPE', 'BUDGET', 'DURATION', 'MIXED'];
 const TITLE_MAX_LENGTH = 200;
@@ -209,6 +210,7 @@ export class ProjectAmendmentService {
     const contract = await prisma.contract.findFirst({ where: { projectId, providerId, status: ContractStatus.ACTIVE } });
     if (!contract) throw new AppError('المشروع غير موجود أو العقد غير نشط أو لا تملك صلاحية طلب تعديل عليه', 403);
 
+    let clientNotificationId: string | null = null;
     const created = await prisma.$transaction(async tx => {
       const locked = await tx.contract.updateMany({ where: { id: contract.id, providerId, status: ContractStatus.ACTIVE }, data: { updatedAt: new Date() } });
       if (locked.count !== 1) throw new AppError('المشروع غير موجود أو العقد غير نشط أو لا تملك صلاحية طلب تعديل عليه', 403);
@@ -236,19 +238,12 @@ export class ProjectAmendmentService {
         include: { project: { select: { title: true } }, provider: { select: { firstName: true, lastName: true } } }
       });
 
-      await tx.notification.create({
-        data: {
-          userId: contract.clientId,
-          title: 'طلب تعديل جديد على مشروعك',
-          message: `طلب مقدم الخدمة تعديلًا على المشروع: ${title}`,
-          type: 'PROJECT_AMENDMENT',
-          category: 'PROJECTS',
-          actionUrl: '/client-overview/projects/amendments',
-          metadata: { projectId, amendmentId: row.id }
-        }
-      });
+      clientNotificationId = (await tx.notification.create({ data: clientNotificationFor.amendmentRequested({ clientId: contract.clientId, projectId, amendmentId: row.id, title }) })).id;
       return row;
     });
+
+    // Delivered through the client's saved channels (in-app push / e-mail) once the row is committed.
+    await clientNotifications.deliverStored([clientNotificationId]);
 
     const convMap = await this.resolveConversationIds([{ projectId: created.projectId, providerId: created.providerId }]);
     return toPublicAmendment(created, convMap.get(`${created.projectId}:${created.providerId}`) || null);
@@ -336,17 +331,8 @@ export class ProjectAmendmentService {
       where: { id: amendmentId },
       include: { project: { select: { title: true } }, provider: { select: { firstName: true, lastName: true } } }
     });
-    await prisma.notification.create({
-      data: {
-        userId: updated!.clientId,
-        title: decision === 'approve' ? 'وافق مقدم الخدمة على طلب التعديل' : 'رفض مقدم الخدمة طلب التعديل',
-        message: `${decision === 'approve' ? 'وافق' : 'رفض'} مقدم الخدمة على طلب التعديل "${updated!.title}". القرار مسجّل فقط ولا يغيّر السعر أو المدة أو الضمان تلقائيًا.`,
-        type: 'PROJECT_AMENDMENT',
-        category: 'PROJECTS',
-        actionUrl: '/client-overview/projects/amendments',
-        metadata: { projectId: updated!.projectId, amendmentId }
-      }
-    });
+    const clientNotification = await prisma.notification.create({ data: clientNotificationFor.amendmentAnswered({ clientId: updated!.clientId, projectId: updated!.projectId, amendmentId, title: updated!.title, decision }) });
+    await clientNotifications.deliverStored([clientNotification.id]);
 
     const convMap = await this.resolveConversationIds([{ projectId: updated!.projectId, providerId: updated!.providerId }]);
     return toPublicAmendment(updated, convMap.get(`${updated!.projectId}:${updated!.providerId}`) || null);

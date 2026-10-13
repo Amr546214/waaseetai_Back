@@ -4,6 +4,7 @@ import { prisma } from '../config/db';
 import { contractDeliveryState, editState, escrowFacts, stageDeliveryState } from '../utils/delivery-state';
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
+import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import { emailService } from './email.service';
 import { deriveProviderProgression } from '../utils/progression-calculators';
 import { projectHealthService, type ProjectHealthResult } from './ai-features/project-health.service';
@@ -344,7 +345,8 @@ export class ProjectProgressService {
     // At least one REAL artifact (an uploaded file of this stage, or an https link). File names alone are refused.
     const safeFiles = validateDeliveryArtifacts(providerId, stageId, files);
     const { contract, stage } = await this.assertDeliverable(providerId, key, stageId);
-    return prisma.$transaction(async tx => {
+    let clientNotificationId: string | null = null;
+    const created = await prisma.$transaction(async tx => {
       // Phase 4 — conditional, row-locked transition taken BEFORE the delivery
       // row is written: a double-click / concurrent second submit (or a stage
       // that left IN_PROGRESS/REVISION_REQUESTED meanwhile) matches zero rows
@@ -363,9 +365,12 @@ export class ProjectProgressService {
       const delivery = await tx.stageDelivery.create({ data: { stageId, providerId, note: note.trim(), files: safeFiles } });
       console.log('[submitDelivery] created delivery id:', delivery.id, 'files:', JSON.stringify(delivery.files));
       await tx.project.update({ where: { id: contract.projectId }, data: { status: ProjectStatus.AWAITING_DELIVERY } });
-      await tx.notification.create({ data: { userId: contract.clientId, title: 'تسليم جديد بانتظار مراجعتك', message: `تم تسليم مرحلة: ${stage.title}`, type: 'STAGE_DELIVERY', category: 'PROJECTS', actionUrl: `/client-overview/projects/${contract.projectId}`, metadata: { projectId: contract.projectId, stageId, deliveryId: delivery.id } } });
+      clientNotificationId = (await tx.notification.create({ data: clientNotificationFor.stageDelivered({ clientId: contract.clientId, projectId: contract.projectId, stageId, stageTitle: stage.title, deliveryId: delivery.id }) })).id;
       return delivery;
     });
+    // The client is told through their saved channels (in-app push / e-mail) once the delivery is committed.
+    await clientNotifications.deliverStored([clientNotificationId]);
+    return created;
   }
 
   async reviewDelivery(clientId: string, key: string, stageId: string, decision: string, note?: string) {
@@ -605,10 +610,17 @@ export class ProjectProgressService {
           metadata: { projectId: contract.projectId, contractId: contract.id, stageId, decision, ...(isProjectCompleted ? { pointsAwarded: PROJECT_COMPLETION_POINTS } : {}) }
         }
       });
+      // The client's own confirmation of the approval (the provider's notification above is about the same decision).
+      const clientNotification = decision === 'approve'
+        ? await tx.notification.create({ data: isProjectCompleted
+          ? clientNotificationFor.projectCompleted({ clientId, projectId: contract.projectId, projectTitle: contract.project.title })
+          : clientNotificationFor.stageApproved({ clientId, projectId: contract.projectId, stageId, stageTitle: stage.title, amount: stage.amount }) })
+        : null;
       return {
         decision,
         stageId,
         notificationId: notification.id,
+        clientNotificationId: clientNotification?.id ?? null,
         isProjectCompleted,
         providerEmail: isProjectCompleted ? contract.provider.email : null,
         providerName: `${contract.provider.firstName || 'مقدم الخدمة'} ${contract.provider.lastName || ''}`.trim(),
@@ -616,6 +628,7 @@ export class ProjectProgressService {
       };
     });
 
+    await clientNotifications.deliverStored([result.clientNotificationId]);
     await notificationService.emitStored(result.notificationId).catch(error => {
       console.error('[ProjectProgress] Failed to emit project review notification:', error);
     });

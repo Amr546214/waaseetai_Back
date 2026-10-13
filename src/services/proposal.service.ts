@@ -6,6 +6,7 @@ import { aiProposalService } from './ai-proposal.service';
 import { getIO } from '../socket';
 import { WaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
 import { logger } from '../config/logger';
+import { clientNotifications, clientNotificationFor, CLIENT_ROUTES } from './client-notifications.service';
 
 export interface GetProviderOffersFiltersDto {
 	status?: string;
@@ -240,6 +241,7 @@ export class ProposalService {
 		}
 
 		// 5. Transactional execution saving ProjectProposal & ProposalMilestone entries
+		let offerNotificationId: string | null = null;
 		const newProposal = await prisma.$transaction(async (tx) => {
 			const created = await tx.projectProposal.create({
 				data: {
@@ -326,19 +328,16 @@ export class ProposalService {
 				`${created.provider?.firstName || ''} ${created.provider?.lastName || ''}`.trim() ||
 				'مقدم خدمة';
 
-			await tx.notification.create({
-				data: {
-					userId: targetClientId,
-					title: 'تم استلام عرض جديد',
-					message: `تم استلام عرض جديد على مشروعك "${targetTitle}" من قبل ${providerName}`,
-					type: 'NEW_PROPOSAL',
-					actionUrl: `/client-overview/my-requests/${projectId}`,
-					metadata: { requestId: projectId, offerId: created.id }
-				}
+			const offerNotification = await tx.notification.create({
+				data: clientNotificationFor.offerReceived({ clientId: targetClientId, requestId: projectId, offerId: created.id, requestTitle: targetTitle, providerName })
 			});
+			offerNotificationId = offerNotification.id;
 
 			return created;
 		});
+
+		// the stored notification goes through the client's saved channels (in-app push / e-mail) once the offer is committed
+		await clientNotifications.deliverStored([offerNotificationId]);
 
 		// 8. Emit real-time WebSocket event to Project Owner outside transaction scope
 		try {

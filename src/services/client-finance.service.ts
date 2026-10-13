@@ -193,7 +193,21 @@ export class ClientFinanceService {
       createdAt: tx.createdAt
     }));
 
-    const allTransactions = [...formattedWalletTx, ...escrowTransactions]
+    // A deposit attempt that PayPal denied / that failed validation is never credited and has no WalletTransaction: show it as a FAILED row so the client sees what happened.
+    const failedDeposits = await prisma.paypalPayment.findMany({ where: { userId: clientId, status: 'FAILED' }, orderBy: { createdAt: 'desc' }, take: 50 });
+    const failedDepositRows = failedDeposits.map(p => ({
+      id: `paypal-failed-${p.id}`,
+      type: 'DEPOSIT',
+      amount: Number(p.netAmount ?? p.amount),
+      currency: p.currency || 'USD',
+      status: 'FAILED',
+      paymentMethod: 'PAYPAL',
+      referenceId: p.reference,
+      description: 'محاولة إيداع عبر PayPal لم تكتمل، ولم يُضف أي مبلغ إلى رصيدك',
+      createdAt: p.createdAt
+    }));
+
+    const allTransactions = [...formattedWalletTx, ...escrowTransactions, ...failedDepositRows]
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
     const totalDeposited = walletTransactions

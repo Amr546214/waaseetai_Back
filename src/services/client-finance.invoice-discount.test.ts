@@ -55,3 +55,34 @@ test('release maths on the NET: commission is taken on 18 (not 20) and the provi
   assert.equal(Math.round((r1.net + r2.net) * 100) / 100, 15.7);
   assert.equal(r2.netReleasedAfter, 15.7);
 });
+
+// ---- invoice lifecycle: due after delivery, paid after approval, 404 for a missing / someone else's invoice ----
+async function loadLifecycle(t: TestContext, o: { stageStatus: string; deliveryStatus: string; found?: boolean }) {
+  const st = { ...stage(18), status: o.stageStatus, approvedAt: o.stageStatus === 'APPROVED' ? new Date('2026-10-13T16:27:38Z') : null };
+  const del = delivery({ status: o.deliveryStatus, reviewedAt: o.deliveryStatus === 'APPROVED' ? new Date('2026-10-13T16:27:38Z') : null });
+  const c = { ...contract(null, [{ ...st, deliveries: [del] }]) };
+  t.mock.module('../config/db', { namedExports: { prisma: { contract: { findMany: async () => [c] }, stageDelivery: { findFirst: async (args: any) => (o.found === false || args.where.stage.contract.clientId !== 'client-1' ? null : { ...del, stage: { ...st, contract: c } }) } } } });
+  const { clientFinanceService } = await import(`./client-finance.service.ts?fixture=${Date.now()}-${Math.random()}`);
+  return clientFinanceService;
+}
+
+test('invoice right after delivery (not yet approved) is DUE with no payment date; after the client approves it is PAID with the approval date', async t => {
+  const before = (await (await loadLifecycle(t, { stageStatus: 'SUBMITTED', deliveryStatus: 'SUBMITTED' })).getInvoices('client-1')).invoices[0];
+  assert.equal(before.status, 'due');
+  assert.equal(before.paymentDate, null);
+});
+test('invoice after delivery approval is paid, shows service value / discount / total and tax 0 (no VAT claim)', async t => {
+  const svc = await loadLifecycle(t, { stageStatus: 'APPROVED', deliveryStatus: 'APPROVED' });
+  const inv = await svc.getInvoice('client-1', 'del-1');
+  assert.equal(inv.status, 'paid');
+  assert.ok(inv.paymentDate);
+  assert.deepEqual([inv.subtotal, inv.discount, inv.total, inv.tax, inv.taxRate], [18, 0, 18, 0, 0]);
+});
+test('invoice not found (or another client\'s) is 404', async t => {
+  const svc = await loadLifecycle(t, { stageStatus: 'APPROVED', deliveryStatus: 'APPROVED', found: false });
+  await assert.rejects(svc.getInvoice('client-1', 'nope'), (e: any) => e.statusCode === 404);
+});
+test('another client\'s invoice is 404 too (ownership is in the query)', async t => {
+  const other = await loadLifecycle(t, { stageStatus: 'APPROVED', deliveryStatus: 'APPROVED' });
+  await assert.rejects(other.getInvoice('client-2', 'del-1'), (e: any) => e.statusCode === 404);
+});

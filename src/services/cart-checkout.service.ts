@@ -7,6 +7,7 @@ import { prisma } from '../config/db';
 import { MARKET_VISIBLE_WHERE } from '../utils/market-visibility';
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
+import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 import { DUPLICATE_PURCHASE_MESSAGE, findActiveServicePurchases } from '../utils/active-purchase.util';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
@@ -322,7 +323,7 @@ export class CartCheckoutService {
     await prisma.otpVerification.deleteMany({ where: { userId, type: OtpType.EMAIL } });
     await prisma.otpVerification.create({ data: { userId, code, type: OtpType.EMAIL, expiresAt, context: this.paymentOtpContext(orderId, paymentReference, paymentMethod) } });
     if (process.env.NODE_ENV === 'development') console.info(`[DEV CHECKOUT OTP] ${order.user.email}: ${code}`);
-    notificationService.sendEmailOtp(order.user.email, code).catch(() => undefined);
+    notificationService.sendPaymentOtpEmail(order.user.email, code).catch(() => undefined);
     return { paymentReference, otpSentTo: this.maskEmail(order.user.email), expiresAt: expiresAt.toISOString() };
   }
 
@@ -336,7 +337,7 @@ export class CartCheckoutService {
     const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
     await prisma.otpVerification.update({ where: { id: previous.id }, data: { code, expiresAt, attempts: 0 } });
     if (process.env.NODE_ENV === 'development') console.info(`[DEV CHECKOUT OTP] ${order.user.email}: ${code}`);
-    notificationService.sendEmailOtp(order.user.email, code).catch(() => undefined);
+    notificationService.sendPaymentOtpEmail(order.user.email, code).catch(() => undefined);
     return { paymentReference: context.paymentReference, otpSentTo: this.maskEmail(order.user.email), expiresAt: expiresAt.toISOString() };
   }
 
@@ -474,6 +475,8 @@ export class CartCheckoutService {
       await tx.otpVerification.delete({ where: { id: otp.id } });
       return createdProjectIds;
     });
+    // stored + delivered AFTER the payment committed; a notification failure never undoes the payment
+    await clientNotifications.send(clientNotificationFor.orderPaid({ clientId: userId, orderId: order.id, orderNumber: order.orderNumber, total: order.total, projectIds }));
     return { orderId: order.id, orderNumber: order.orderNumber, status: 'paid', total: order.total, projectIds };
   }
 
