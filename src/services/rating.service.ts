@@ -2,6 +2,7 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { CreateRatingInput } from '../dtos/rating.dto';
 import { deriveProviderProgression } from '../utils/progression-calculators';
+import { providerNotifications } from './provider-notifications.service';
 
 export class RatingService {
   async rateRequest(requestId: string, userId: string, actor: 'client' | 'provider', input: CreateRatingInput) {
@@ -98,6 +99,8 @@ export class RatingService {
       });
       return created;
     });
+    // Only a client's rating is news for the provider (a provider's rating of the client is not).
+    if (reviewerRole === 'CLIENT') await providerNotifications.ratingReceived({ providerId, rating: input.rating, reviewId: review.id, projectId });
     return review;
   }
 
@@ -142,6 +145,7 @@ export class RatingService {
         comment: input.comment,
       },
     });
+    await providerNotifications.ratingReceived({ providerId, rating: input.rating, reviewId: review.id, projectId, stage: true });
     return review;
   }
 }

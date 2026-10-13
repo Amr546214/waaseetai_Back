@@ -363,7 +363,7 @@ export class ProposalService {
 					title: 'تم استلام عرض جديد',
 					message: `تم استلام عرض جديد على مشروعك "${targetTitle}"`,
 					type: 'NEW_PROPOSAL',
-					actionUrl: `/client-overview/projects/${projectId}/proposals`,
+					actionUrl: `/client-overview/my-requests/${projectId}`,
 					createdAt: new Date()
 				});
 				console.log(`[ProposalService] Real-time proposal notification emitted to owner: ${targetClientId}`);
@@ -640,6 +640,28 @@ export class ProposalService {
 			},
 			data: paginatedData
 		};
+	}
+
+	/**
+	 * One offer of this provider, in exactly the item shape of GET /provider/offers (same mapper).
+	 * Someone else's offer is reported as 404, never 403, so ids cannot be probed.
+	 */
+	public async getProviderOfferById(providerId: string, offerId: string): Promise<ProviderOfferItemDto> {
+		const proposal = await prisma.projectProposal.findFirst({
+			where: { id: offerId, providerId },
+			include: {
+				project: {
+					include: {
+						contract: true,
+						escrow: true,
+						client: { select: { id: true, firstName: true, lastName: true, accountType: true, avatarUrl: true } }
+					}
+				},
+				milestones: true
+			}
+		});
+		if (!proposal) throw new AppError('العرض غير موجود', 404);
+		return this.processProposalItem(proposal);
 	}
 }
 

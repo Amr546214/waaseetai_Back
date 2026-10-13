@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { clientRequestsService } from '../services/client-requests.service';
+import { clientOfferCounterService } from '../services/client-offer-counter.service';
 import { createClientRequestSchema, clientRequestAiSuggestSchema } from '../dtos/create-client-request.dto';
 import { AppError } from '../utils/app-error';
 import { canRewrite, REWRITE_INPUT_REQUIRED_MESSAGE } from '../utils/description-rewrite-guard';
@@ -251,6 +252,28 @@ export class ClientRequestsController {
       if (!offerId || typeof offerId !== 'string') throw new AppError('offerId is required', 400);
       const result = await clientRequestsService.selectOffer(userId, requestId, offerId);
       res.status(200).json({ success: true, message: 'تم اختيار العرض وتجهيز العقد للتوقيع', data: result });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // GET /api/client/requests/:id/offers/:offerId/counter
+  public async getOfferCounter(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId || req.user!.id;
+      const data = await clientOfferCounterService.getView(userId, req.params.id as string, req.params.offerId as string);
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // POST /api/client/requests/:id/offers/:offerId/counter/accept  { messageId }
+  public async acceptOfferCounter(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId || req.user!.id;
+      const data = await clientOfferCounterService.accept(userId, req.params.id as string, req.params.offerId as string, req.body || {});
+      res.status(200).json({ success: true, message: 'تم قبول العرض المضاد، وأصبحت شروطه هي شروط العرض', data });
     } catch (error) {
       next(error);
     }

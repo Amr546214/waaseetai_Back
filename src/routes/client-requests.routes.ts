@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { AccountType } from '@prisma/client';
-import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { authenticate, authorize, authorizeActiveRole, requireActiveUser } from '../middlewares/auth.middleware';
 import { clientSpecialtyRecommendationService, MAX_RECOMMENDATION_TEXT } from '../services/client-specialty-recommendation.service';
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { clientRequestsController } from '../controllers/client-requests.controller';
@@ -27,6 +27,8 @@ const ALLOWED_MIME_TYPES = new Set([
 const upload = memoryUpload({ fileSize: 15 * 1024 * 1024, files: 5, allowedMimeTypes: ALLOWED_MIME_TYPES });
 
 const router = Router();
+const clientOnly = authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL);
+const clientActingOnly = authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL);
 
 // Metadata endpoint (Categories, Specialties, Sub-specialties with provider counts)
 router.get('/meta', clientRequestsController.getMeta);
@@ -67,7 +69,8 @@ router.post(
 router.post('/upload', authenticate, upload.array('attachments', 5), clientRequestsController.uploadAttachments);
 
 // Create request endpoint
-router.post('/', authenticate, requireActiveUser, clientRequestsController.createRequest);
+// the role the user is ACTING as must be the client (a provider acting as a provider cannot create client requests even though every account also holds CLIENT)
+router.post('/', authenticate, requireActiveUser, clientActingOnly, clientRequestsController.createRequest);
 
 // My requests list endpoint (MUST be before /:id)
 router.get('/my-requests', authenticate, requireActiveUser, clientRequestsController.getMyRequests);
@@ -105,7 +108,11 @@ router.post('/:id/stages/:stageId/rating', authenticate, requireActiveUser, rate
 // Request details by ID
 router.get('/:id', authenticate, requireActiveUser, clientRequestsController.getRequestDetails);
 
-// Sign contract & send OTP
+// The provider's pending counter-offer on an offer, and the client's acceptance of it. Client accounts only; ownership of the request is checked in the service.
+router.get('/:id/offers/:offerId/counter', authenticate, requireActiveUser, authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.getOfferCounter);
+router.post('/:id/offers/:offerId/counter/accept', authenticate, requireActiveUser, authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.acceptOfferCounter);
+
+// Select an offer (freezes the commercial snapshot)
 router.post('/:id/offers/select', authenticate, requireActiveUser, clientRequestsController.selectOffer);
 
 // Sign contract & send OTP

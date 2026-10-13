@@ -229,3 +229,27 @@ export const authorize = (...allowedAccountTypes: AccountType[]) => {
     return next(new AppError('غير مصرح لك بالوصول لهذه الصلاحية', 403));
   };
 };
+
+const roleOfAccountType = (type: AccountType): UserRole | null => {
+  if (type === AccountType.CLIENT_INDIVIDUAL || type === AccountType.CLIENT_COMPANY) return UserRole.CLIENT;
+  if (type === AccountType.PROVIDER_INDIVIDUAL || type === AccountType.PROVIDER_COMPANY) return UserRole.PROVIDER;
+  if (type === AccountType.MARKETING_BROKER) return UserRole.AFFILIATE;
+  if (type === AccountType.SUPER_ADMIN) return UserRole.SUPER_ADMIN;
+  if (type === AccountType.ADMIN) return UserRole.ADMIN;
+  return null;
+};
+
+/**
+ * Like `authorize`, but for the sensitive flows of one side (create a client request, explore requests, sign a contract): the role the user is acting as RIGHT NOW
+ * (`activeRole`) must be one of the allowed sides. Merely holding the role inside `roles` is not enough — every account also carries CLIENT, so a provider acting as a
+ * provider must not reach the client's flows (and the other way round). No active role falls back to the account type's own role.
+ */
+export const authorizeActiveRole = (...allowedAccountTypes: AccountType[]) => {
+  const allowedRoles = new Set(allowedAccountTypes.map(roleOfAccountType).filter((r): r is UserRole => r !== null));
+  return (req: Request, _res: Response, next: NextFunction) => {
+    if (!req.user) return next(new AppError('غير مصرح لك بالوصول، يرجى تسجيل الدخول', 401));
+    const acting = req.user.activeRole ?? roleOfAccountType(req.user.accountType);
+    if (acting && allowedRoles.has(acting)) return next();
+    return next(new AppError('غير مصرح لك بالوصول لهذه الصلاحية', 403));
+  };
+};

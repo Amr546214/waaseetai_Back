@@ -3,6 +3,7 @@ import { providerSalesService } from '../services/provider-sales.service';
 import { levelInfo } from '../utils/level-info';
 import { providerProfileService } from '../services/provider-profile.service';
 import { Request, Response, NextFunction } from 'express';
+import { contractDeliveryState, listStatus } from '../utils/delivery-state';
 import { prisma } from '../config/db';
 import { ProjectStatus, ProposalStatus, EscrowStatus, ContractStatus, Project } from '@prisma/client';
 import { createHash } from 'crypto';
@@ -203,6 +204,19 @@ export const getProviderOffers = async (req: Request, res: Response, next: NextF
 	}
 };
 
+export const getProviderOfferById = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) {
+			return res.status(401).json({ success: false, message: 'غير مصرح' });
+		}
+		const data = await proposalService.getProviderOfferById(providerId, String(req.params.id));
+		res.status(200).json({ success: true, data });
+	} catch (error) {
+		next(error);
+	}
+};
+
 export const getEligibleAccreditationSpecialties = async (req: Request, res: Response, next: NextFunction) => {
 	try {
 		const providerId = (req as any).user?.id;
@@ -344,7 +358,7 @@ export const getActiveProjects = async (req: Request, res: Response, next: NextF
 			where: { providerId, status: { in: ['ACTIVE', 'PENDING_PAYMENT', 'PENDING_PROVIDER_SIGNATURE'] } },
 			include: {
 				project: { include: { escrow: true } },
-				stages: { orderBy: { stepOrder: 'asc' } },
+				stages: { orderBy: { stepOrder: 'asc' }, include: { deliveries: { select: { status: true }, orderBy: { submittedAt: 'asc' } } } },
 				client: {
 					select: {
 						firstName: true,
@@ -354,32 +368,26 @@ export const getActiveProjects = async (req: Request, res: Response, next: NextF
 			},
 			orderBy: { createdAt: 'desc' }
 		});
+		// A project with an open dispute says so (the newest open one wins).
+		const openDisputes = contracts.length ? await prisma.dispute.findMany({
+			where: { projectId: { in: contracts.map(c => c.projectId) }, status: { in: ['OPEN', 'UNDER_REVIEW'] } },
+			select: { projectId: true, status: true }, orderBy: { createdAt: 'asc' }
+		}) : [];
+		const disputeByProject = new Map(openDisputes.map(d => [d.projectId as string, d.status as string]));
 
 		// Map them to the format expected by the frontend
 		const data = contracts.map(c => {
 			const project = c.project;
 			const clientName = `${c.client.firstName || 'عميل'} ${c.client.lastName || ''}`.trim();
 			
-			// Determine status logic
-			let status: 'wait' | 'run' | 'late' = 'wait';
-			let statusLabel = 'بانتظار بدء المشروع';
 			const approvedStages = c.stages.filter(stage => stage.status === 'APPROVED');
 			const currentStage = c.stages.find(stage => ['IN_PROGRESS', 'SUBMITTED', 'REVISION_REQUESTED'].includes(stage.status));
 			const progress = Math.min(100, Math.round(approvedStages.reduce((sum, stage) => sum + stage.percentage, 0)));
 			const elapsedDays = Math.max(0, Math.floor((Date.now() - (c.signedAt || c.createdAt).getTime()) / 86400000));
 			const daysLeft = Math.max(0, c.durationDays - elapsedDays);
-			
-			if (project.status === 'AWAITING_DELIVERY' || currentStage?.status === 'SUBMITTED') {
-				status = 'wait';
-				statusLabel = 'بانتظار رد العميل';
-			} else if (c.status === 'ACTIVE') {
-				status = 'run';
-				statusLabel = 'قيد التنفيذ';
-			} else if (c.status === 'PENDING_PAYMENT') {
-				status = 'wait';
-				statusLabel = 'بانتظار الإيداع';
-			}
-			if (c.status === 'ACTIVE' && daysLeft === 0 && progress < 100) { status = 'late'; statusLabel = 'متأخر'; }
+			// Every state below comes from the real contract / stage / escrow rows (see utils/delivery-state.ts); nothing is assumed.
+			const state = contractDeliveryState(c.status, c.stages, project.escrow, disputeByProject.get(project.id) || null);
+			const { status, statusLabel } = listStatus(state, daysLeft, progress);
 
 			// Generate random color from a predefined list based on ID hash
 			const colors = ['#2ECC8A', '#2BD4C7', '#06B6A2', '#5DA0FF', '#A56BE0', '#FFB400'];
@@ -392,14 +400,18 @@ export const getActiveProjects = async (req: Request, res: Response, next: NextF
 				title: project.title,
 				status,
 				statusLabel,
+				...state,
 				progress,
 				providerName: clientName, // "providerName" in frontend interface actually represents the other party (client)
 				providerInitial: clientName.charAt(0) || 'ع',
 				providerAvatarColor: color,
-				currentStage: c.status === 'PENDING_PAYMENT' ? 'بانتظار إيداع الضمان للبدء' : (currentStage?.title || 'بانتظار بدء المرحلة التالية'),
-				escrowAmount: `${Math.max(0, c.price - (project.escrow?.releasedAmount || 0)).toLocaleString('en-US')} $`,
-				rawPrice: Math.max(0, c.price - (project.escrow?.releasedAmount || 0)),
-				escrowLabel: c.status === 'PENDING_PAYMENT' ? 'بانتظار الإيداع' : 'مستحق لي',
+				currentStage: c.status === 'PENDING_PAYMENT' ? 'بانتظار إيداع الضمان للبدء'
+					: c.status !== 'ACTIVE' ? 'لم تبدأ المراحل بعد'
+					: (currentStage?.title || (c.stages.length && approvedStages.length === c.stages.length ? 'اعتُمدت كل المراحل' : 'لم تُجهَّز مراحل المشروع بعد')),
+				// Only a funded escrow is "held". An unfunded contract shows its value, never a lock.
+				escrowAmount: `${(state.escrowFunded ? state.heldAmount : c.price).toLocaleString('en-US')} $`,
+				rawPrice: state.heldAmount,
+				escrowLabel: state.escrowFunded ? 'محتجز بالضمان' : 'قيمة العقد (غير ممولة بعد)',
 				contractRef: `CT-${c.id.slice(0, 6).toUpperCase()}`,
 				approvedStagesCount: approvedStages.length,
 				stagesCount: c.stages.length,

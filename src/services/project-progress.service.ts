@@ -1,6 +1,7 @@
 import { isV2Escrow, splitRelease } from '../utils/escrow-commission';
 import { AmendmentStatus, ContractStatus, EscrowStatus, LogCategory, LogStatus, ProjectStageStatus, ProjectStatus, RequestStatus, StageDeliveryStatus } from '@prisma/client';
 import { prisma } from '../config/db';
+import { contractDeliveryState, editState, escrowFacts, stageDeliveryState } from '../utils/delivery-state';
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
 import { emailService } from './email.service';
@@ -20,6 +21,10 @@ const stageLabels: Record<string, [string, string]> = {
 };
 const deliveryLabels: Record<string, [string, string]> = {
   SUBMITTED: ['pending', 'قيد مراجعة العميل'], REVISION_REQUESTED: ['notes', 'مطلوب تعديل'], APPROVED: ['approved', 'معتمد']
+};
+const contractStatusLabel: Record<string, string> = {
+  PENDING_CLIENT_SIGNATURE: 'بانتظار توقيع العميل', PENDING_PROVIDER_SIGNATURE: 'بانتظار توقيعك على العقد', PENDING_PAYMENT: 'بانتظار إيداع الضمان',
+  ACTIVE: 'مشروع نشط', COMPLETED: 'مكتمل', CANCELLED: 'ملغى', DISPUTED: 'قيد نزاع'
 };
 const nameFromUrl = (url: string) => {
   try { return decodeURIComponent(new URL(url).pathname.split('/').pop() || 'ملف مرفق'); }
@@ -156,6 +161,9 @@ export class ProjectProgressService {
         daysLeft: project.deliveryDays || 0, progress: 0,
         escrowTotal: project.escrow?.amount || 0, escrowHeld: project.escrow?.amount || 0, escrowReleased: 0,
         status: 'PENDING_SIGNATURE', statusLabel: 'بانتظار توقيع العقد',
+        contractStatus: null, escrowStatus: project.escrow?.status || null, escrowFunded: project.escrow?.status === 'HELD', disputeStatus: null,
+        canUploadDelivery: false, canSubmitDelivery: false, uploadBlockedReason: 'لا يوجد عقد بعد، ولا يمكن التسليم قبل توقيعه',
+        awaitingClientReview: false, revisionRequested: false, revisionResubmitted: false,
         employee: project.assignedEmployee ? { id: project.assignedEmployee.id, name: project.assignedEmployee.name, jobTitle: project.assignedEmployee.jobTitle } : null,
         stages: [], deliveries: [], edits: [], messages: [], files: [],
         aiInsights: { confidence: null, earlyDays: null, matchPercentage: null, riskLevel: 'غير محسوبة', riskLevelKey: 'unknown', healthRating: 'بانتظار بيانات كافية', bullets: [] }
@@ -180,8 +188,15 @@ export class ProjectProgressService {
       });
     }
     const released = contract.project.escrow?.releasedAmount || 0;
+    const openDispute = await prisma.dispute.findFirst({ where: { projectId: contract.projectId, status: { in: ['OPEN', 'UNDER_REVIEW'] } }, orderBy: { createdAt: 'desc' }, select: { status: true } });
+    const state = contractDeliveryState(contract.status, persisted, contract.project.escrow, openDispute?.status || null);
+    const escrow = escrowFacts(contract.project.escrow);
+    // Only the provider uploads; the client side of this shared endpoint never gets an upload permission.
+    const mayUpload = role === 'provider';
     const stages = persisted.map(stage => {
-      const [status, statusText] = stageLabels[stage.status];
+      const [status, statusText0] = stageLabels[stage.status];
+      const ss = stageDeliveryState(contract.status, stage);
+      const statusText = ss.revisionResubmitted ? 'أُعيد التسليم، بانتظار مراجعة العميل' : statusText0;
       const stageReview = (stage as any).stageReviews?.[0] || null;
       return {
         id: stage.id, stageNumber: stage.stepOrder, title: stage.title, description: stage.description,
@@ -189,6 +204,9 @@ export class ProjectProgressService {
         isDone: stage.status === ProjectStageStatus.APPROVED,
         isWait: stage.status === ProjectStageStatus.IN_PROGRESS || stage.status === ProjectStageStatus.SUBMITTED || stage.status === ProjectStageStatus.REVISION_REQUESTED,
         status, statusText, completedDate: stage.approvedAt, roundsCount: stage.deliveries.length,
+        ...ss, canUploadDelivery: mayUpload && ss.canUploadDelivery, canSubmitDelivery: mayUpload && ss.canSubmitDelivery,
+        // The stage amount is "held" only while a funded escrow exists and the stage is not yet released.
+        amountHeld: escrow.escrowFunded && stage.status !== ProjectStageStatus.APPROVED,
         hasClientRating: !!stageReview,
         clientRating: stageReview?.rating || null,
         clientRatingComment: stageReview?.comment || null,
@@ -237,11 +255,18 @@ export class ProjectProgressService {
       id: contract.id, projectId: contract.projectId, role, conversationId: conversation?.id || null,
       title: contract.project.title, clientName: otherName, clientInitial: otherName.charAt(0) || 'ع', contractRef: `CT-${contract.id.slice(0, 6).toUpperCase()}`,
       price: contract.price, durationDays: contract.durationDays, daysLeft: Math.max(0, contract.durationDays - elapsed), progress,
-      escrowTotal: contract.project.escrow?.amount || contract.price, escrowHeld: Math.max(0, (contract.project.escrow?.amount || contract.price) - released), escrowReleased: released,
-      status: contract.status, statusLabel: contract.status === ContractStatus.COMPLETED ? 'مكتمل' : contract.status === ContractStatus.ACTIVE ? 'مشروع نشط' : 'بانتظار بدء المشروع',
+      escrowTotal: contract.project.escrow?.amount || contract.price, escrowHeld: escrow.heldAmount, escrowReleased: released,
+      ...state, canUploadDelivery: mayUpload && state.canUploadDelivery, canSubmitDelivery: mayUpload && state.canSubmitDelivery,
+      status: contract.status, statusLabel: contractStatusLabel[contract.status] || 'غير نشط',
       employee: contract.project.assignedEmployee ? { id: contract.project.assignedEmployee.id, name: contract.project.assignedEmployee.name, jobTitle: contract.project.assignedEmployee.jobTitle } : null,
       stages, deliveries,
-      edits: deliveries.filter(d => d.status === 'notes').map(d => ({ id: d.id, stageId: d.stageId, stageTitle: d.stageTitle, title: `ملاحظات على ${d.stageTitle}`, clientNotes: d.reviewNote || '', status: 'waiting', statusText: 'بانتظار إعادة التسليم', createdAt: d.submittedAt })),
+      edits: persisted.flatMap(stage => stage.deliveries.map((delivery, index) => ({ stage, delivery, index }))
+        .filter(({ delivery }) => delivery.status === StageDeliveryStatus.REVISION_REQUESTED)
+        .map(({ stage, delivery, index }) => {
+          const ss = stageDeliveryState(contract.status, stage);
+          return { id: delivery.id, stageId: stage.id, stageTitle: stage.title, title: `ملاحظات على ${stage.title}`, clientNotes: delivery.reviewNote || '',
+            ...editState(stage.status, index, stage.deliveries.length), canUploadDelivery: mayUpload && ss.canUploadDelivery, uploadBlockedReason: ss.uploadBlockedReason, createdAt: delivery.submittedAt };
+        })),
       messages,
       files: persisted.filter(s => s.deliveries.some(d => d.files.length)).map(s => ({ groupTitle: s.title, isDone: s.status === ProjectStageStatus.APPROVED, files: s.deliveries.flatMap(d => d.files.map(url => normalizeFileEntry(url))) })),
       providerClientRating,
@@ -600,7 +625,7 @@ export class ProjectProgressService {
         providerName: result.providerName,
         projectTitle: result.projectTitle,
         pointsAwarded: PROJECT_COMPLETION_POINTS,
-        projectUrl: `/provider-overview/projects/${contract.projectId}/progress`
+        projectUrl: `/provider-overview/projects/active/progress/${contract.projectId}`
       });
     }
     return { decision: result.decision, stageId: result.stageId, pointsAwarded: result.isProjectCompleted ? PROJECT_COMPLETION_POINTS : 0 };

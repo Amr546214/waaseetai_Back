@@ -65,3 +65,19 @@ test('every offer item carries its REAL project id (not the offer id), so messag
 	assert.deepEqual(out.map((o: any) => [o.offerId, o.projectId]), [['offer-A', 'proj-A'], ['offer-B', 'proj-B']]);
 	for (const o of out) assert.notEqual(o.projectId, o.offerId);
 });
+
+// GET /provider/offers/:id: same item shape as the list, own offers only (someone else's = 404).
+test('getProviderOfferById returns the list item shape for an offer beyond the first page, scoped to the provider', async (t) => {
+	let where: any;
+	const prismaMock = { projectProposal: { findFirst: async (a: any) => { where = a.where; return a.where.providerId === 'provider-1' && a.where.id === 'offer-99' ? base({ id: 'offer-99' }) : null; } } };
+	t.mock.module('../utils/prisma.client', { namedExports: { prisma: prismaMock } });
+	t.mock.module('./ai-proposal.service', { namedExports: { aiProposalService: {} } });
+	t.mock.module('../socket', { namedExports: { getIO: () => ({}) } });
+	const { proposalService } = await import(`./proposal.service.ts?fixture=${Date.now()}-${Math.random()}`);
+	const o = await proposalService.getProviderOfferById('provider-1', 'offer-99');
+	assert.equal(o.id, 'offer-99');
+	assert.equal(o.projectId, 'proj-1');
+	assert.equal(o.contract.price, 950);
+	assert.deepEqual(where, { id: 'offer-99', providerId: 'provider-1' });
+	await assert.rejects(() => proposalService.getProviderOfferById('provider-2', 'offer-99'), (e: any) => e.statusCode === 404);
+});
