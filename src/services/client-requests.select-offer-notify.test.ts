@@ -22,6 +22,7 @@ function setup(t: TestContext, o: { existingContract?: any; notifyThrows?: boole
     projectProposal: { findFirst: async () => ({ id: OFFER, providerId: PROVIDER, totalPrice: 500, deliveryDays: 10, milestones: [] }) },
     contract: { findUnique: async () => o.existingContract ?? null },
     escrow: { findUnique: async () => null },
+    message: { findMany: async () => [] },
     $transaction: async (fn: any) => fn(tx)
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });

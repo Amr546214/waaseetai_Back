@@ -112,6 +112,8 @@ router.get('/:id', authenticate, requireActiveUser, clientRequestsController.get
 router.get('/:id/offers/:offerId/counter', authenticate, requireActiveUser, authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.getOfferCounter);
 router.post('/:id/offers/:offerId/counter/accept', authenticate, requireActiveUser, authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.acceptOfferCounter);
 
+router.post('/:id/offers/:offerId/counter/decline', authenticate, requireActiveUser, authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.declineOfferCounter);
+
 // Select an offer (freezes the commercial snapshot)
 router.post('/:id/offers/select', authenticate, requireActiveUser, clientRequestsController.selectOffer);
 
