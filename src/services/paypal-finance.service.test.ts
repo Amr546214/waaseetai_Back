@@ -56,6 +56,7 @@ function createPrismaMock(t: TestContext, opts: { seedPayments?: any[]; seedWall
 	const prismaMock: any = {
 		paypalPayment: {
 			create: createPaypalPaymentSpy,
+			findMany: async () => [], // the wallet lists failed deposits too (none in these scenarios)
 			findUnique: async (args: any) => findPayment(payments, args.where) ?? null,
 			updateMany: async (args: any) => {
 				const matches = payments.filter(
