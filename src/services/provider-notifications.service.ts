@@ -18,6 +18,8 @@ export const PROVIDER_ROUTES = {
 	// The PayPal payout email is edited from the "حساب PayPal" tab of the profile data page.
 	paypalSettings: '/provider-overview/profile/data',
 	// The progress page resolves its key as a project id or a contract id.
+	// The real offer negotiation page of the provider (offers/:id/negotiate).
+	offerNegotiate: (offerId: string) => `/provider-overview/offers/${offerId}/negotiate`,
 	projectProgress: (projectId: string) => `/provider-overview/projects/active/progress/${projectId}`
 } as const;
 
@@ -122,6 +124,21 @@ export const providerNotifications = {
 			actionUrl: PROVIDER_ROUTES.projectProgress(p.projectId),
 			actionText: 'عرض المشروع',
 			metadata: { projectId: p.projectId, amendmentId: p.amendmentId, decision: p.decision }
+		}));
+	},
+
+	/** The client accepted the provider's counter-offer: the offer now carries the counter's price and duration. */
+	async counterAccepted(p: { providerId: string; offerId: string; projectId: string; projectTitle?: string | null; price: number; deliveryDays: number }) {
+		const title = short(p.projectTitle);
+		await safely('counterAccepted', () => notificationService.createAndEmit({
+			userId: p.providerId,
+			title: 'قبل العميل عرضك المضاد',
+			message: `قبل العميل عرضك المضاد${title ? ` على «${title}»` : ''}: ${p.price} $ خلال ${p.deliveryDays} يومًا. أصبحت هذه شروط عرضك، وبانتظار اختيار العميل لك والتوقيع.`,
+			category: NotificationCategory.OFFERS,
+			type: 'OFFER_COUNTER_ACCEPTED',
+			actionUrl: PROVIDER_ROUTES.offerNegotiate(p.offerId),
+			actionText: 'عرض العرض',
+			metadata: { projectId: p.projectId, offerId: p.offerId, price: p.price, deliveryDays: p.deliveryDays }
 		}));
 	},
 

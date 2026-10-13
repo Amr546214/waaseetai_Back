@@ -105,7 +105,11 @@ router.post('/:id/stages/:stageId/rating', authenticate, requireActiveUser, rate
 // Request details by ID
 router.get('/:id', authenticate, requireActiveUser, clientRequestsController.getRequestDetails);
 
-// Sign contract & send OTP
+// The provider's pending counter-offer on an offer, and the client's acceptance of it. Client accounts only; ownership of the request is checked in the service.
+router.get('/:id/offers/:offerId/counter', authenticate, requireActiveUser, authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.getOfferCounter);
+router.post('/:id/offers/:offerId/counter/accept', authenticate, requireActiveUser, authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.acceptOfferCounter);
+
+// Select an offer (freezes the commercial snapshot)
 router.post('/:id/offers/select', authenticate, requireActiveUser, clientRequestsController.selectOffer);
 
 // Sign contract & send OTP
