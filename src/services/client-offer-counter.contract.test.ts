@@ -40,7 +40,7 @@ test('after accepting a counter, selectOffer freezes the contract on the counter
 		$transaction: async (fn: any) => fn(db)
 	};
 	t.mock.module('../config/db', { namedExports: { prisma: db } });
-	t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { counterAccepted: async () => undefined }, PROVIDER_ROUTES: {} } });
+	t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { counterAccepted: async () => undefined, offerSelected: async () => undefined, negotiationRequested: async () => undefined }, PROVIDER_ROUTES: {} } });
 	const { clientOfferCounterService } = await import(`./client-offer-counter.service.ts?x=${Math.random()}`);
 	const { clientRequestsService } = await import(`./client-requests.service.ts?x=${Math.random()}`);
 
