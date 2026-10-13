@@ -9,7 +9,7 @@ const CLIENT = 'client-1';
 const terms = { version: 1, price: 1500, durationDays: 21, milestones: [
   { stepOrder: 1, title: 'التصميم', description: 'هوية', days: 7, amount: 500, percentage: 33.3 },
   { stepOrder: 2, title: 'التنفيذ', days: 14, amount: 1000, percentage: 66.7 }] };
-const contract = (over: any = {}) => ({ id: 'c1', projectId: 'req-1', clientId: CLIENT, providerId: 'prov-1', offerId: 'offer-1', price: 1500, durationDays: 21, status: 'PENDING_CLIENT_SIGNATURE', terms,
+const contract = (over: any = {}) => ({ id: 'c1', projectId: 'req-1', clientId: CLIENT, providerId: 'prov-1', offerId: 'offer-1', price: 1500, durationDays: 21, status: 'PENDING_CLIENT_SIGNATURE', terms, project: { title: 'مشروع الهوية' },
   provider: { id: 'prov-1', firstName: 'نورة', lastName: 'التصميم', providerProfile: null }, ...over });
 
 async function read(t: TestContext, o: { contract?: any; ownRequest?: boolean; mirror?: boolean; escrow?: any; client?: string; offerId?: string }) {
@@ -35,6 +35,7 @@ test('a ready contract returns the frozen price, duration and stages, and may be
   assert.deepEqual(r.milestones.map((m: any) => [m.order, m.title, m.amount, m.days]), [[1, 'التصميم', 500, 7], [2, 'التنفيذ', 1000, 14]]);
   assert.equal(r.singleDelivery, false);
   assert.equal(r.provider.name, 'نورة التصميم');
+  assert.equal(r.title, 'مشروع الهوية');
   assert.equal(r.otpTtlSeconds, 600);
 });
 

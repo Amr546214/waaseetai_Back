@@ -1348,7 +1348,7 @@ export class ClientRequestsService {
 	public async getContractForSignature(userId: string, requestId: string, offerId?: string) {
 		const contract = await prisma.contract.findFirst({
 			where: { projectId: requestId, clientId: userId },
-			include: { provider: { select: { id: true, firstName: true, lastName: true, providerProfile: { select: { companyName: true } } } } }
+			include: { project: { select: { title: true } }, provider: { select: { id: true, firstName: true, lastName: true, providerProfile: { select: { companyName: true } } } } }
 		});
 		if (!contract) {
 			// Same answer for "not yours" and "does not exist": nothing about someone else's request is revealed.
@@ -1394,6 +1394,7 @@ export class ClientRequestsService {
 
 		return {
 			requestId,
+			title: contract.project?.title || '',
 			contractId: contract.id,
 			state,
 			// Signing needs a contract that waits for THIS client and an offer that is the one the contract was frozen for.
