@@ -815,6 +815,16 @@ export class ProviderProfileService {
 	 * The optional WhatsApp number is the only contact number a provider edits, as a DIRECT save: no code, no request, no review, never part of the review
 	 * lifecycle. Empty clears it. A real number: optional "+" then 8-15 digits (spaces, dashes and brackets are stripped).
 	 */
+	/** Saves language / timezone / notification channels into provider_profiles.preferences (merged: other keys of the JSON survive). */
+	async updatePreferences(userId: string, input: { interfaceLanguage?: string; timezone?: string; notifChannels?: string[] }) {
+		const profile = await prisma.providerProfile.findUnique({ where: { userId }, select: { preferences: true } });
+		if (!profile) throw new Error('PROFILE_NOT_FOUND');
+		const current = profile.preferences && typeof profile.preferences === 'object' && !Array.isArray(profile.preferences) ? (profile.preferences as Record<string, unknown>) : {};
+		const next = { ...current, ...input };
+		await prisma.providerProfile.update({ where: { userId }, data: { preferences: next as any } });
+		return next;
+	}
+
 	async updateWhatsapp(userId: string, value: unknown) {
 		const raw = String(value ?? '').replace(/[\s()-]/g, '');
 		if (raw && !/^\+?\d{8,15}$/.test(raw)) throw new Error('INVALID_WHATSAPP');

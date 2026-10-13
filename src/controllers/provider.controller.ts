@@ -1,3 +1,5 @@
+import { providerInvoicesService } from '../services/provider-invoices.service';
+import { providerSalesService } from '../services/provider-sales.service';
 import { levelInfo } from '../utils/level-info';
 import { providerProfileService } from '../services/provider-profile.service';
 import { Request, Response, NextFunction } from 'express';
@@ -688,4 +690,28 @@ export const getCompanyDeliveries = async (req: Request, res: Response, next: Ne
 	} catch (error) {
 		next(error);
 	}
+};
+
+export const getProviderInvoices = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		res.status(200).json({ success: true, data: await providerInvoicesService.list(providerId) });
+	} catch (error) { next(error); }
+};
+
+export const getProviderInvoice = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		res.status(200).json({ success: true, data: await providerInvoicesService.get(providerId, String(req.params.id || '')) });
+	} catch (error) { next(error); }
+};
+
+export const getProviderSales = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		res.status(200).json({ success: true, data: await providerSalesService.getSales(providerId) });
+	} catch (error) { next(error); }
 };

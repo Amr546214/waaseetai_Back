@@ -1,3 +1,4 @@
+import { updateProviderPreferencesSchema } from '../dtos/provider-preferences.dto';
 import { publicKycRejectionReason, withoutInternalProviderNotes } from '../utils/provider-kyc-review';
 import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/app-error';
@@ -504,6 +505,20 @@ export const getSkillsCatalog = async (req: Request, res: Response) => {
 };
 
 // PUT /provider/profile/whatsapp { alternativePhone }: a direct save (no code, no request, no review). The e-mail and the primary phone stay immutable.
+export const updatePreferences = async (req: Request, res: Response) => {
+	try {
+		const userId = req.user?.id;
+		if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+		const parsed = updateProviderPreferencesSchema.safeParse(req.body);
+		if (!parsed.success) return res.status(400).json({ success: false, message: parsed.error.issues.map(i => i.message).join(', ') });
+		const data = await providerProfileService.updatePreferences(userId, parsed.data);
+		res.json({ success: true, message: 'تم حفظ التفضيلات', data });
+	} catch (error: any) {
+		if (error?.message === 'PROFILE_NOT_FOUND') return res.status(404).json({ success: false, message: 'ملف مقدم الخدمة غير موجود' });
+		res.status(500).json({ success: false, message: 'Internal server error' });
+	}
+};
+
 export const updateWhatsapp = async (req: Request, res: Response) => {
 	try {
 		const userId = req.user?.id;
