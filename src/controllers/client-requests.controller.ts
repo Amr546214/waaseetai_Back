@@ -280,6 +280,18 @@ export class ClientRequestsController {
   }
 
   // POST /api/client/requests/:id/contract/sign
+  // GET /api/client/my-requests/:id/contract — the frozen contract the client is about to sign (price/duration/stages) and whether signing is possible.
+  public async getContractForSignature(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId || req.user!.id;
+      const offerId = typeof req.query.offerId === 'string' && req.query.offerId ? req.query.offerId : undefined;
+      const data = await clientRequestsService.getContractForSignature(userId, req.params.id as string, offerId);
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public async signContract(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.userId || req.user!.id;
