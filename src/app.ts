@@ -269,6 +269,7 @@ import adminAccreditationRoutes from './routes/admin-accreditation.routes';
 import adminAffiliateRequestsRoutes from './routes/admin-affiliate-requests.routes';
 import adminBrokersRoutes from './routes/admin-brokers.routes';
 import adminSecurityRoutes from './routes/admin-security.routes';
+import adminTicketsRoutes from './routes/admin-tickets.routes';
 import adminAiSummariesRoutes from './routes/admin-ai-summaries.routes';
 import kycDocumentsRoutes from './routes/kyc-documents.routes';
 
@@ -297,6 +298,8 @@ mountAppRoute('/api/admin/brokers', adminBrokersRoutes);
 mountAppRoute('/admin/brokers', adminBrokersRoutes);
 mountAppRoute('/api/admin/security', adminSecurityRoutes);
 mountAppRoute('/admin/security', adminSecurityRoutes);
+mountAppRoute('/api/admin/tickets', adminTicketsRoutes);
+mountAppRoute('/admin/tickets', adminTicketsRoutes);
 mountAppRoute('/api/admin/ai', adminAiSummariesRoutes);
 mountAppRoute('/admin/ai', adminAiSummariesRoutes);
 mountAppRoute('/api/kyc-documents', kycDocumentsRoutes);

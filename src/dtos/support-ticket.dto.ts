@@ -15,5 +15,16 @@ export const replyToTicketSchema = z.object({
   body: z.string().trim().min(1, 'أدخل نص الرد').max(5000),
 });
 
+export const SUPPORT_TICKET_STATUSES = ['OPEN', 'IN_PROGRESS', 'AWAITING_CUSTOMER', 'RESOLVED', 'CLOSED'] as const;
+
+export const staffReplySchema = z.object({
+  body: z.string().trim().min(1, 'أدخل نص الرد').max(5000),
+  status: z.enum(SUPPORT_TICKET_STATUSES, { message: 'حالة التذكرة غير صحيحة' }).optional(),
+});
+
+export const setTicketStatusSchema = z.object({
+  status: z.enum(SUPPORT_TICKET_STATUSES, { message: 'حالة التذكرة غير صحيحة' }),
+});
+
 export type CreateSupportTicketInput = z.infer<typeof createSupportTicketSchema>;
 export type ReplyToTicketInput = z.infer<typeof replyToTicketSchema>;
