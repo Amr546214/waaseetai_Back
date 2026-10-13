@@ -1,4 +1,5 @@
 import { buildEscrowSnapshot } from '../utils/escrow-commission';
+import { allocateOrderDiscount, splitByWeights, round2 } from '../utils/order-discount';
 import crypto from 'crypto';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { ContractStatus, EscrowStatus, OrderStatus, OtpType, ProjectStageStatus, ProjectStatus, Prisma } from '@prisma/client';
@@ -415,8 +416,9 @@ export class CartCheckoutService {
         }
         throw error;
       }
+      let couponScope: { serviceIds: string[]; excludedServiceIds: string[] } | null = null;
       if (order.couponId) {
-        const coupon = await tx.coupon.findUnique({ where: { id: order.couponId } });
+        const coupon = await tx.coupon.findUnique({ where: { id: order.couponId }, include: { services: { select: { serviceId: true } } } });
         const now = new Date();
         if (!coupon || !coupon.active || coupon.startAt > now || (coupon.expiresAt && coupon.expiresAt < now)) throw new AppError('الكوبون لم يعد صالحا', 400);
         if (coupon.maxUses !== null) {
@@ -426,29 +428,40 @@ export class CartCheckoutService {
         const userUses = await tx.couponRedemption.count({ where: { couponId: coupon.id, userId } });
         if (userUses >= coupon.maxUsesPerUser) throw new AppError('لقد استعملت هذا الكوبون من قبل', 400);
         await tx.couponRedemption.create({ data: { couponId: coupon.id, userId, orderId: order.id, amount: order.discount } });
+        couponScope = { serviceIds: ((coupon as any).services ?? []).map((x: any) => x.serviceId), excludedServiceIds: coupon.excludedServiceIds ?? [] };
       }
+      // A provider coupon discounts the service value itself: each item's contract price / escrow / stage amounts are the NET of its share of the discount,
+      // so the platform commission and the provider's release are computed on what the client really paid.
+      const discountShares = allocateOrderDiscount(order.items.map(i => ({ id: i.id, serviceId: i.serviceId, price: i.price })), order.discount, couponScope);
+      const netPrices = order.items.map(i => round2(i.price - (discountShares.get(i.id) ?? 0)));
+      if (Math.abs(round2(netPrices.reduce((a, b) => a + b, 0)) - round2(order.total)) > 0.01) throw new AppError('تعذر توزيع خصم الكوبون على الطلب، لم يتم الدفع', 500);
       const createdProjectIds: string[] = [];
-      for (const item of order.items) {
-        const project = await tx.project.create({ data: { title: item.title, description: `طلب خدمة: ${item.title}`, specialty: 'Marketplace', subSpecialties: [], requirements: [], attachments: [], deliveryDays: item.deliveryDays, budgetType: 'fixed', budgetFixed: item.price, status: ProjectStatus.IN_PROGRESS, clientId: userId, providerId: item.providerId, serviceCatalogId: item.serviceId } });
+      for (const [itemIndex, item] of order.items.entries()) {
+        const netPrice = netPrices[itemIndex];
+        const itemDiscount = round2(item.price - netPrice);
+        const project = await tx.project.create({ data: { title: item.title, description: `طلب خدمة: ${item.title}`, specialty: 'Marketplace', subSpecialties: [], requirements: [], attachments: [], deliveryDays: item.deliveryDays, budgetType: 'fixed', budgetFixed: netPrice, status: ProjectStatus.IN_PROGRESS, clientId: userId, providerId: item.providerId, serviceCatalogId: item.serviceId } });
 
         const stages = allServiceStages.filter(s => s.serviceId === item.serviceId);
         const phasesCount = stages.length || 1;
 
-        const contract = await tx.contract.create({ data: { projectId: project.id, clientId: userId, providerId: item.providerId, price: item.price, durationDays: item.deliveryDays, phasesCount, status: ContractStatus.ACTIVE, signedAt: new Date() } });
+        const contract = await tx.contract.create({ data: { projectId: project.id, clientId: userId, providerId: item.providerId, price: netPrice, durationDays: item.deliveryDays, phasesCount, status: ContractStatus.ACTIVE, signedAt: new Date(),
+          // only when a coupon applied: the invoice shows the service value, the coupon discount and the total paid
+          ...(itemDiscount > 0 ? { terms: { source: 'marketplace_order', orderId: order.id, orderNumber: order.orderNumber, couponCode: order.couponCode ?? null, listPrice: item.price, discount: itemDiscount, netPrice } } : {}) } });
 
         // fee policy v2: the same snapshot as a request escrow (the provider's level + commission now), so marketplace orders release net too
         const itemProviderGamification = await tx.providerGamification.findUnique({ where: { providerId: item.providerId }, select: { currentLevelIndex: true } });
-        await tx.escrow.create({ data: { projectId: project.id, amount: item.price, status: EscrowStatus.HELD, paymentMethod: 'WALLET', paymentReference: context.paymentReference || null, fundedAt: new Date(), ...buildEscrowSnapshot(itemProviderGamification?.currentLevelIndex) } });
+        await tx.escrow.create({ data: { projectId: project.id, amount: netPrice, status: EscrowStatus.HELD, paymentMethod: 'WALLET', paymentReference: context.paymentReference || null, fundedAt: new Date(), ...buildEscrowSnapshot(itemProviderGamification?.currentLevelIndex) } });
 
         if (stages.length > 0) {
+          const stageAmounts = splitByWeights(stages.map(st => Number(st.computedAmount)), netPrice);
           await tx.projectStage.createMany({ data: stages.map((stage, index) => ({
             contractId: contract.id, stepOrder: stage.stepOrder, title: stage.title, description: stage.description,
-            days: stage.deliveryDays, percentage: stage.percentage, amount: Number(stage.computedAmount),
+            days: stage.deliveryDays, percentage: stage.percentage, amount: stageAmounts[index],
             status: index === 0 ? ProjectStageStatus.IN_PROGRESS : ProjectStageStatus.PENDING,
             startedAt: index === 0 ? new Date() : null
           })) });
         } else {
-          await tx.projectStage.create({ data: { contractId: contract.id, stepOrder: 1, title: 'المرحلة الأولى', description: 'تسليم المشروع النهائي', days: item.deliveryDays, percentage: 100, amount: item.price, status: ProjectStageStatus.IN_PROGRESS, startedAt: new Date() } });
+          await tx.projectStage.create({ data: { contractId: contract.id, stepOrder: 1, title: 'المرحلة الأولى', description: 'تسليم المشروع النهائي', days: item.deliveryDays, percentage: 100, amount: netPrice, status: ProjectStageStatus.IN_PROGRESS, startedAt: new Date() } });
         }
 
         createdProjectIds.push(project.id);

@@ -4,9 +4,23 @@ import { AppError } from '../utils/app-error';
 // No tax is recorded on invoices (legal policy s10: no VAT is charged). The old 15% line was display-only and never collected, so it is gone: the invoice
 // shows the stage amount, and tax is 0 / taxRate 0.
 
+// A marketplace purchase with a provider coupon stores the service value and the discount in the contract's terms (see cart-checkout confirmPayment): the contract,
+// escrow and stage amounts are already NET of the discount, so the invoice shows the service value, the coupon discount and the total actually paid.
+const couponTerms = (terms: unknown): { listPrice: number; netPrice: number; couponCode: string | null } | null => {
+  if (!terms || typeof terms !== 'object' || Array.isArray(terms)) return null;
+  const t = terms as Record<string, unknown>;
+  if (t.source !== 'marketplace_order') return null;
+  const listPrice = Number(t.listPrice); const netPrice = Number(t.netPrice);
+  if (!Number.isFinite(listPrice) || !Number.isFinite(netPrice) || netPrice <= 0 || listPrice <= netPrice) return null;
+  return { listPrice, netPrice, couponCode: typeof t.couponCode === 'string' ? t.couponCode : null };
+};
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
 const buildInvoice = (contract: any, stage: any, delivery: any) => {
   const total = Number(stage.amount || 0);
-  const subtotal = total;
+  const coupon = couponTerms(contract.terms);
+  const subtotal = coupon ? round2(total * coupon.listPrice / coupon.netPrice) : total;
+  const discount = coupon ? round2(subtotal - total) : 0;
   const tax = 0;
   const issuedAt = delivery.submittedAt as Date;
   const status: 'paid' | 'due' = stage.status === 'APPROVED' && delivery.status === 'APPROVED' ? 'paid' : 'due';
@@ -31,6 +45,8 @@ const buildInvoice = (contract: any, stage: any, delivery: any) => {
     projectTitle: contract.project.title,
     stageTitle: stage.title,
     subtotal,
+    discount,
+    couponCode: coupon?.couponCode ?? null,
     total,
     tax,
     taxRate: 0,
