@@ -4,7 +4,7 @@
 
 export const NEG_PREFIX = 'WS_NEGOTIATION::';
 
-export type NegotiationKind = 'CLIENT_REQUEST' | 'PROVIDER_COUNTER' | 'PROVIDER_REJECT';
+export type NegotiationKind = 'CLIENT_REQUEST' | 'PROVIDER_COUNTER' | 'PROVIDER_REJECT' | 'CLIENT_ACCEPT_COUNTER';
 
 export interface ParsedNegotiation {
 	kind: NegotiationKind;
@@ -55,6 +55,8 @@ export function parseNegotiationMessage(content: string | null | undefined, send
 	if (senderIsProvider) {
 		if (o.kind === 'PROVIDER_COUNTER' || o.kind === 'PROVIDER_REJECT') kind = o.kind;
 		else return null; // a provider's free-form WS_NEGOTIATION text is not a state-bearing entry
+	} else if (o.kind === 'CLIENT_ACCEPT_COUNTER' && typeof o.offerId === 'string') {
+		kind = 'CLIENT_ACCEPT_COUNTER'; // written by the accept endpoint: it closes the counter, it is never an open request
 	}
 	return {
 		kind,
@@ -120,5 +122,24 @@ export function buildProviderEntry(kind: 'PROVIDER_COUNTER' | 'PROVIDER_REJECT',
 		notes: input.notes || '',
 		replyToMessageId: input.replyToMessageId,
 		status: isCounter ? 'COUNTER_SENT' : 'REJECTED'
+	});
+}
+
+/** The client's acceptance of a provider counter (written only by the accept endpoint). It closes the counter: nothing is pending after it. */
+export function buildClientAcceptEntry(input: { offerId: string; price: number; deliveryDays: number; counterMessageId: string }): string {
+	return NEG_PREFIX + JSON.stringify({
+		isNegotiation: true,
+		schema: 2,
+		kind: 'CLIENT_ACCEPT_COUNTER',
+		offerId: input.offerId,
+		negType: 'counter_accept',
+		negTypeName: 'قبول العرض المضاد',
+		price: String(input.price),
+		priceValue: input.price,
+		deliveryDays: input.deliveryDays,
+		duration: `${input.deliveryDays} يوم`,
+		notes: '',
+		replyToMessageId: input.counterMessageId,
+		status: 'ACCEPTED'
 	});
 }

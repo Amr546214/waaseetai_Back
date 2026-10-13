@@ -56,3 +56,15 @@ test('state: the NEWEST entry decides — counter pending, open client request, 
 	assert.equal(e([req, reject]).openRequest, null); // answered
 	assert.equal(e([req, reject]).counterPending, false);
 });
+
+test('CLIENT_ACCEPT_COUNTER: a client entry with an offerId closes the counter; without an offerId it stays a plain request; providers cannot write it', async () => {
+	const { buildClientAcceptEntry } = await import('./offer-negotiation');
+	const accept = parseNegotiationMessage(buildClientAcceptEntry({ offerId: 'o1', price: 880, deliveryDays: 18, counterMessageId: 'c1' }), false)!;
+	assert.deepEqual({ kind: accept.kind, price: accept.price, days: accept.deliveryDays, offerId: accept.offerId, reply: accept.replyToMessageId }, { kind: 'CLIENT_ACCEPT_COUNTER', price: 880, days: 18, offerId: 'o1', reply: 'c1' });
+	assert.equal(isClearRequest(accept), false);
+	assert.equal(parseNegotiationMessage(client({ kind: 'CLIENT_ACCEPT_COUNTER', price: '1' }), false)!.kind, 'CLIENT_REQUEST');
+	assert.equal(parseNegotiationMessage(buildClientAcceptEntry({ offerId: 'o1', price: 880, deliveryDays: 18, counterMessageId: 'c1' }), true), null);
+	const entries = readNegotiationEntries([row('c', 'p', buildProviderEntry('PROVIDER_COUNTER', { offerId: 'o1', price: 880, deliveryDays: 18 }), 1), row('a', 'cl', buildClientAcceptEntry({ offerId: 'o1', price: 880, deliveryDays: 18, counterMessageId: 'c' }), 2)], 'p');
+	const state = deriveNegotiationState(entries, 'o1');
+	assert.deepEqual({ pending: state.counterPending, open: state.openRequest }, { pending: false, open: null });
+});

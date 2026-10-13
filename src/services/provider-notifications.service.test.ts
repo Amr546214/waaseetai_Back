@@ -289,3 +289,23 @@ test('withdrawalService.reject notifies REJECTED; payoutService completed / fail
 	await payoutService.markAttemptDefinitelyFailed('at1', 'x');
 	assert.equal(calls.length, 0);
 });
+
+test('counter accepted: the provider gets a stored notification with the new terms and the real negotiate route', async t => {
+	const f = await load(t);
+	const { providerNotifications } = await fresh('./provider-notifications.service.ts');
+	await providerNotifications.counterAccepted({ providerId: 'prov-1', offerId: 'offer-1', projectId: 'req-1', projectTitle: 'متجر إلكتروني', price: 880, deliveryDays: 18 });
+	assert.equal(f.notifications.length, 1);
+	const n = f.notifications[0];
+	assert.equal(n.userId, 'prov-1');
+	assert.equal(n.type, 'OFFER_COUNTER_ACCEPTED');
+	assert.equal(n.category, 'OFFERS');
+	assert.match(n.message, /880 \$ خلال 18 يومًا/);
+	assert.equal(n.actionUrl, '/provider-overview/offers/offer-1/negotiate');
+	assert.ok(isRealProviderRoute(n.actionUrl));
+});
+
+test('counter accepted: a failing notification never throws into the accept action', async t => {
+	await load(t, { db: { notification: { create: async () => { throw new Error('db down'); } } } });
+	const { providerNotifications } = await fresh('./provider-notifications.service.ts');
+	await assert.doesNotReject(providerNotifications.counterAccepted({ providerId: 'prov-1', offerId: 'offer-1', projectId: 'req-1', price: 1, deliveryDays: 1 }));
+});
