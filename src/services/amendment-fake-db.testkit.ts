@@ -149,12 +149,14 @@ export function amendmentRow(o: Row = {}): Row {
 		id: 'amend-1', projectId: 'project-1', contractId: 'contract-abcdef123', clientId: 'client-1', providerId: 'provider-1', requestedById: 'provider-1', requestedByRole: 'PROVIDER',
 		type: 'BUDGET', title: 'زيادة الميزانية', description: null, budgetDelta: 5, durationDeltaDays: null, status: 'PENDING_OTHER_PARTY',
 		createdAt: new Date('2026-02-01T00:00:00Z'), updatedAt: new Date('2026-02-01T00:00:00Z'), respondedAt: null,
-		appliedAt: null, priceBefore: null, priceAfter: null, durationBefore: null, durationAfter: null, addedStageId: null, fundingAuthorizedAt: null, fundingAuthorizedAmount: null,
+		appliedAt: null, priceBefore: null, priceAfter: null, durationBefore: null, durationAfter: null, addedStageId: null, fundingAuthorizedAt: null, fundingAuthorizedAmount: null, fundingAuthorizedTerms: null,
 		project: { title: 'مشروع' }, provider: { firstName: 'نورة', lastName: 'م' }, ...o
 	};
 }
 
+/** termsFingerprint of the seeded contract (termsVersion 1, price 20, 14 days). */
+export const DEFAULT_TERMS = '1|20|14';
 export const otpRow = (o: Row = {}): Row => ({
 	id: 'otp-1', userId: 'client-1', code: '123456', type: 'EMAIL', attempts: 0, createdAt: new Date(), expiresAt: new Date(Date.now() + 120000),
-	context: { purpose: 'AMENDMENT_PAYMENT', amendmentId: 'amend-1', amount: 5 }, ...o
+	context: { purpose: 'AMENDMENT_PAYMENT', amendmentId: 'amend-1', amount: 5, terms: DEFAULT_TERMS }, ...o
 });

@@ -1,7 +1,7 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { amendmentRow, otpRow, seedWorld } from './amendment-fake-db.testkit';
+import { amendmentRow, otpRow, seedWorld, DEFAULT_TERMS } from './amendment-fake-db.testkit';
 import { splitRelease } from '../utils/escrow-commission';
 
 // Amendment EFFECTIVE: behavior tests over an in-memory stand-in for the DB (see amendment-fake-db.testkit.ts: serialized transactions + rollback on throw).
@@ -136,7 +136,7 @@ test('payment code: an expired code is refused and removed; nothing changes', as
 });
 
 test('payment code issued for a DIFFERENT amount can never authorize this amendment', async (t) => {
-	const { world, svc } = await setup(t, { amendments: [amendmentRow()], otps: [otpRow({ context: { purpose: 'AMENDMENT_PAYMENT', amendmentId: 'amend-1', amount: 7 } })] });
+	const { world, svc } = await setup(t, { amendments: [amendmentRow()], otps: [otpRow({ context: { purpose: 'AMENDMENT_PAYMENT', amendmentId: 'amend-1', amount: 7, terms: DEFAULT_TERMS } })] });
 	const before = snapshotMoney(world);
 	await refused(svc.respondToAmendment('client-1', 'amend-1', 'approve', '123456'), 400, /مبلغ مختلف/);
 	assert.equal(snapshotMoney(world), before);
@@ -204,14 +204,14 @@ test('client-raised increase: the OTP authorization charges NOTHING; the provide
 });
 
 test('client-raised increase: if the wallet no longer covers it when the provider approves, 409 and nothing changes', async (t) => {
-	const { world, svc } = await setup(t, { amendments: [amendmentRow({ requestedByRole: 'CLIENT', requestedById: 'client-1', fundingAuthorizedAt: new Date(), fundingAuthorizedAmount: 5 })], wallet: 1 });
+	const { world, svc } = await setup(t, { amendments: [amendmentRow({ requestedByRole: 'CLIENT', requestedById: 'client-1', fundingAuthorizedAt: new Date(), fundingAuthorizedTerms: DEFAULT_TERMS, fundingAuthorizedAmount: 5 })], wallet: 1 });
 	const before = snapshotMoney(world);
 	await refused(svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'approve'), 409, /رصيد المحفظة غير كافٍ/);
 	assert.equal(snapshotMoney(world), before);
 });
 
 test('an authorization stored for another amount does not authorize this one', async (t) => {
-	const { world, svc } = await setup(t, { amendments: [amendmentRow({ requestedByRole: 'CLIENT', requestedById: 'client-1', fundingAuthorizedAt: new Date(), fundingAuthorizedAmount: 3 })] });
+	const { world, svc } = await setup(t, { amendments: [amendmentRow({ requestedByRole: 'CLIENT', requestedById: 'client-1', fundingAuthorizedAt: new Date(), fundingAuthorizedTerms: DEFAULT_TERMS, fundingAuthorizedAmount: 3 })] });
 	const before = snapshotMoney(world);
 	await refused(svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'approve'), 409, /لم يعتمد العميل دفع/);
 	assert.equal(snapshotMoney(world), before);
@@ -230,7 +230,7 @@ test('reject (either side) and cancel change nothing: no money, no stage, no wal
 });
 
 test('cancel: only the raiser, only while pending; the stored funding authorization is cleared', async (t) => {
-	const { world, svc } = await setup(t, { amendments: [amendmentRow({ requestedByRole: 'CLIENT', requestedById: 'client-1', fundingAuthorizedAt: new Date(), fundingAuthorizedAmount: 5 })] });
+	const { world, svc } = await setup(t, { amendments: [amendmentRow({ requestedByRole: 'CLIENT', requestedById: 'client-1', fundingAuthorizedAt: new Date(), fundingAuthorizedTerms: DEFAULT_TERMS, fundingAuthorizedAmount: 5 })] });
 	await refused(svc.cancelAmendment('provider-1', 'PROVIDER', 'amend-1'), 403);
 	await refused(svc.cancelAmendment('client-9', 'CLIENT', 'amend-1'), 403);
 	const out = await svc.cancelAmendment('client-1', 'CLIENT', 'amend-1');
@@ -267,7 +267,7 @@ test('two simultaneous approvals: exactly one wins, the other is a clean 409, on
 });
 
 test('two simultaneous provider approvals of a client-raised increase: one debit', async (t) => {
-	const { world, svc } = await setup(t, { amendments: [amendmentRow({ requestedByRole: 'CLIENT', requestedById: 'client-1', fundingAuthorizedAt: new Date(), fundingAuthorizedAmount: 5 })] });
+	const { world, svc } = await setup(t, { amendments: [amendmentRow({ requestedByRole: 'CLIENT', requestedById: 'client-1', fundingAuthorizedAt: new Date(), fundingAuthorizedTerms: DEFAULT_TERMS, fundingAuthorizedAmount: 5 })] });
 	const results = await Promise.allSettled([svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'approve'), svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'approve')]);
 	assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
 	assert.equal(walletOf(world), 95);
@@ -590,4 +590,72 @@ test('static: the dispute check is one isolated helper', () => {
 	assert.match(guard, /DisputeStatus\.OPEN, DisputeStatus\.UNDER_REVIEW/);
 	assert.match(guard, /export async function hasActiveDispute\(projectId: string/);
 	assert.match(guard, /OR: \[\{ projectId \}, \{ requestId: projectId \}\]/);
+});
+
+// ---------- owner decisions: the funding authorization is bound to the terms, expires, and is voided by any terms change ----------
+test('funding authorization expires: after 15 minutes the provider approval is refused (409) and nothing changes', async (t) => {
+	const { world, svc } = await setup(t, { amendments: [amendmentRow({ requestedByRole: 'CLIENT', requestedById: 'client-1', fundingAuthorizedAt: new Date(Date.now() - 16 * 60 * 1000), fundingAuthorizedTerms: DEFAULT_TERMS, fundingAuthorizedAmount: 5 })] });
+	const before = snapshotMoney(world);
+	await refused(svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'approve'), 409, /انتهت صلاحية تفويض/);
+	assert.equal(snapshotMoney(world), before);
+	assert.equal(amendmentOf(world).status, 'PENDING_OTHER_PARTY');
+});
+
+test('a fresh authorization (inside 15 minutes) still works and the public payload shows its expiry', async (t) => {
+	const { world, svc } = await setup(t, { amendments: [amendmentRow({ requestedByRole: 'CLIENT', requestedById: 'client-1', fundingAuthorizedAt: new Date(Date.now() - 5 * 60 * 1000), fundingAuthorizedTerms: DEFAULT_TERMS, fundingAuthorizedAmount: 5 })] });
+	const out = await svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'approve');
+	assert.equal(out.effect, 'APPLIED');
+	assert.equal(walletOf(world), 95);
+});
+
+test('any change of the contract terms voids a stored authorization (version, price or duration)', async (t) => {
+	const { termsFingerprint } = await import(`./amendment-apply.service.ts?fp=${Math.random()}`);
+	assert.notEqual(termsFingerprint({ termsVersion: 1, price: 21, durationDays: 14 }), DEFAULT_TERMS); // a price change alone changes the fingerprint
+	for (const change of [{ termsVersion: 2 }, { durationDays: 15 }]) {
+		const { world, svc } = await setup(t, { amendments: [amendmentRow({ requestedByRole: 'CLIENT', requestedById: 'client-1', fundingAuthorizedAt: new Date(), fundingAuthorizedTerms: DEFAULT_TERMS, fundingAuthorizedAmount: 5 })] });
+		Object.assign(contractOf(world), change);
+		const before = snapshotMoney(world);
+		await refused(svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'approve'), 409, /تغيّرت شروط العقد/);
+		assert.equal(snapshotMoney(world), before, JSON.stringify(change));
+	}
+});
+
+test('a payment code issued for older terms is void: refused, wallet untouched, and the code is not spent by the refused approval', async (t) => {
+	const { world, svc } = await setup(t, { amendments: [amendmentRow()] });
+	await svc.initPaymentAuthorization('client-1', 'amend-1');
+	const code = lastOtpCode(world);
+	contractOf(world).termsVersion = 2; // another amendment changed the terms after the code was issued
+	const before = snapshotMoney(world);
+	await refused(svc.respondToAmendment('client-1', 'amend-1', 'approve', code), 400, /تغيّرت شروط العقد/);
+	assert.equal(snapshotMoney(world), before);
+	assert.equal(walletOf(world), 100);
+});
+
+test('applying one amendment voids the funding authorization stored on the other pending requests of the same contract', async (t) => {
+	const { world, svc } = await setup(t, { amendments: [
+		amendmentRow({ id: 'amend-dur', type: 'DURATION', budgetDelta: null, durationDeltaDays: 2 }),
+		amendmentRow({ id: 'amend-inc', requestedByRole: 'CLIENT', requestedById: 'client-1', fundingAuthorizedAt: new Date(), fundingAuthorizedTerms: DEFAULT_TERMS, fundingAuthorizedAmount: 5 })
+	] });
+	await svc.respondToAmendment('client-1', 'amend-dur', 'approve');
+	assert.equal(amendmentOf(world, 'amend-inc').fundingAuthorizedAt, null);
+	assert.equal(amendmentOf(world, 'amend-inc').fundingAuthorizedTerms, null);
+	await refused(svc.respondToAmendmentAsProvider('provider-1', 'amend-inc', 'approve'), 409, /لم يعتمد العميل دفع/);
+	assert.equal(walletOf(world), 100);
+});
+
+test('cancel notifies the other party (client cancels -> provider, provider cancels -> client)', async (t) => {
+	const calls: string[] = [];
+	t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: new Proxy({}, { get: (_x, k) => async (p: any) => { calls.push(`provider:${String(k)}:${p.providerId}`); } }) } });
+	const { svc } = await setup(t, { amendments: [amendmentRow({ requestedByRole: 'CLIENT', requestedById: 'client-1' }), amendmentRow({ id: 'amend-2' })] });
+	await svc.cancelAmendment('client-1', 'CLIENT', 'amend-1');
+	assert.ok(calls.includes('provider:amendmentCancelled:provider-1'), calls.join(','));
+});
+
+test('static: the authorization window and the terms binding are explicit', () => {
+	const apply = readFileSync(new URL('./amendment-apply.service.ts', import.meta.url), 'utf8');
+	assert.match(apply, /FUNDING_AUTHORIZATION_TTL_MS = 15 \* 60 \* 1000/);
+	assert.match(apply, /fundingAuthorizedTerms !== terms/);
+	const svc = readFileSync(new URL('./project-amendment.service.ts', import.meta.url), 'utf8');
+	assert.match(svc, /fundingAuthorizedUntil/);
+	assert.match(svc, /amendmentCancelled/);
 });

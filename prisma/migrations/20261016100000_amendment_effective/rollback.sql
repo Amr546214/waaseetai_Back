@@ -10,4 +10,5 @@ ALTER TABLE "project_amendments"
   DROP COLUMN IF EXISTS "durationAfter",
   DROP COLUMN IF EXISTS "addedStageId",
   DROP COLUMN IF EXISTS "fundingAuthorizedAt",
-  DROP COLUMN IF EXISTS "fundingAuthorizedAmount";
+  DROP COLUMN IF EXISTS "fundingAuthorizedAmount",
+  DROP COLUMN IF EXISTS "fundingAuthorizedTerms";

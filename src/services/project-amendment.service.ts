@@ -5,7 +5,7 @@ import { AppError } from '../utils/app-error';
 import { round2 } from '../utils/money';
 import { isV2Escrow } from '../utils/escrow-commission';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
-import { applyAmendment, effectiveParts } from './amendment-apply.service';
+import { applyAmendment, effectiveParts, termsFingerprint, FUNDING_AUTHORIZATION_TTL_MS } from './amendment-apply.service';
 import { hasActiveDispute } from './amendment-dispute-guard';
 import { notificationService } from './notification.service';
 import { projectProgressService } from './project-progress.service';
@@ -124,7 +124,9 @@ const toPublicAmendment = (row: any, conversationId: string | null) => {
     addedStageId: row.addedStageId ?? null,
     // A budget INCREASE needs the client's OTP-authorized payment before it can become effective.
     needsClientPayment: parts.budget > 0,
-    fundingAuthorized: row.fundingAuthorizedAt != null,
+    // Valid only while it is not expired and the contract terms are still the ones it was given for; never an open-ended permission.
+    fundingAuthorized: row.fundingAuthorizedAt != null && Date.now() - new Date(row.fundingAuthorizedAt).getTime() <= FUNDING_AUTHORIZATION_TTL_MS && (!row.contract || row.fundingAuthorizedTerms === termsFingerprint(row.contract)),
+    fundingAuthorizedUntil: row.fundingAuthorizedAt != null ? new Date(new Date(row.fundingAuthorizedAt).getTime() + FUNDING_AUTHORIZATION_TTL_MS).toISOString() : null,
     // The contract's CURRENT price / duration (what the financial preview is computed from); null when unknown.
     contractPrice: row.contract?.price ?? null,
     contractDurationDays: row.contract?.durationDays ?? null,
@@ -159,7 +161,7 @@ export class ProjectAmendmentService {
       include: {
         project: { select: { title: true } },
         provider: { select: { firstName: true, lastName: true } },
-        contract: { select: { price: true, durationDays: true } }
+        contract: { select: { price: true, durationDays: true, termsVersion: true } }
       }
     });
     const convMap = await this.resolveConversationIds(rows.map(r => ({ projectId: r.projectId, providerId: r.providerId })));
@@ -208,7 +210,7 @@ export class ProjectAmendmentService {
         include: {
           project: { select: { title: true } },
           provider: { select: { firstName: true, lastName: true } },
-        contract: { select: { price: true, durationDays: true } }
+        contract: { select: { price: true, durationDays: true, termsVersion: true } }
         }
       });
 
@@ -241,7 +243,7 @@ export class ProjectAmendmentService {
       where: { providerId, projectId },
       orderBy: { createdAt: 'desc' },
       include: { project: { select: { title: true } }, provider: { select: { firstName: true, lastName: true } },
-        contract: { select: { price: true, durationDays: true } } }
+        contract: { select: { price: true, durationDays: true, termsVersion: true } } }
     });
     const convMap = await this.resolveConversationIds(rows.map(r => ({ projectId: r.projectId, providerId: r.providerId })));
     return rows.map(row => toPublicAmendment(row, convMap.get(`${row.projectId}:${row.providerId}`) || null));
@@ -283,7 +285,7 @@ export class ProjectAmendmentService {
           status: AmendmentStatus.PENDING_OTHER_PARTY
         },
         include: { project: { select: { title: true } }, provider: { select: { firstName: true, lastName: true } },
-        contract: { select: { price: true, durationDays: true } } }
+        contract: { select: { price: true, durationDays: true, termsVersion: true } } }
       });
 
       clientNotificationId = (await tx.notification.create({ data: clientNotificationFor.amendmentRequested({ clientId: contract.clientId, projectId, amendmentId: row.id, title }) })).id;
@@ -300,7 +302,7 @@ export class ProjectAmendmentService {
   private readonly amendmentInclude = {
     project: { select: { title: true } },
     provider: { select: { firstName: true, lastName: true } },
-        contract: { select: { price: true, durationDays: true } }
+        contract: { select: { price: true, durationDays: true, termsVersion: true } }
   } as const;
 
   private async publicById(amendmentId: string) {
@@ -322,7 +324,7 @@ export class ProjectAmendmentService {
     return records.find(r => (r.context as any)?.purpose === OtpPurpose.AMENDMENT_PAYMENT && (r.context as any)?.amendmentId === amendmentId) ?? null;
   }
 
-  private async verifyPaymentOtp(userId: string, amendment: { id: string }, amount: number, otpCode: unknown): Promise<string> {
+  private async verifyPaymentOtp(userId: string, amendment: { id: string; contractId: string }, amount: number, otpCode: unknown): Promise<string> {
     if (typeof otpCode !== 'string' || !otpCode.trim()) throw new AppError('رمز التحقق مطلوب لاعتماد دفع زيادة الميزانية', 400);
     const otp = await this.findPaymentOtp(userId, amendment.id);
     if (!otp) throw new AppError('لا يوجد رمز اعتماد دفع فعّال لهذا التعديل، اطلب رمزًا جديدًا', 400);
@@ -333,6 +335,12 @@ export class ProjectAmendmentService {
     if (otp.expiresAt < new Date()) {
       await prisma.otpVerification.delete({ where: { id: otp.id } });
       throw new AppError('انتهت صلاحية رمز التحقق، اطلب رمزًا جديدًا', 400);
+    }
+    // Bound to the contract terms at issue time: if they changed since (another amendment applied), the code is void.
+    const contractNow = await prisma.contract.findUnique({ where: { id: amendment.contractId }, select: { termsVersion: true, price: true, durationDays: true } });
+    if (!contractNow || (otp.context as any)?.terms !== termsFingerprint(contractNow)) {
+      await prisma.otpVerification.delete({ where: { id: otp.id } });
+      throw new AppError('تغيّرت شروط العقد بعد إصدار الرمز، فبطل. اطلب رمزًا جديدًا.', 400);
     }
     const boundAmount = Number((otp.context as any)?.amount);
     if (!Number.isFinite(boundAmount) || Math.abs(boundAmount - amount) > 0.005) {
@@ -371,11 +379,13 @@ export class ProjectAmendmentService {
       throw new AppError('رصيد المحفظة غير كافٍ لتمويل زيادة الميزانية، اشحن المحفظة ثم أعد المحاولة', 409, [{ required: budget, available, shortfall: Math.max(0, round2(budget - available)) }]);
     }
 
+    const contractForTerms = await prisma.contract.findUnique({ where: { id: amendment.contractId }, select: { termsVersion: true, price: true, durationDays: true } });
+    if (!contractForTerms) throw new AppError('العقد غير موجود', 404);
     const code = crypto.randomInt(100000, 999999).toString();
     const expiresAt = new Date(Date.now() + PAYMENT_OTP_TTL_MS);
     const previous = await this.findPaymentOtp(clientId, amendmentId);
     if (previous) await prisma.otpVerification.deleteMany({ where: { id: previous.id } });
-    await prisma.otpVerification.create({ data: { userId: clientId, code, type: OtpType.EMAIL, expiresAt, context: { purpose: OtpPurpose.AMENDMENT_PAYMENT, amendmentId, amount: budget, paymentReference: `AMD-${crypto.randomBytes(6).toString('hex').toUpperCase()}` } } });
+    await prisma.otpVerification.create({ data: { userId: clientId, code, type: OtpType.EMAIL, expiresAt, context: { purpose: OtpPurpose.AMENDMENT_PAYMENT, amendmentId, amount: budget, terms: termsFingerprint(contractForTerms), paymentReference: `AMD-${crypto.randomBytes(6).toString('hex').toUpperCase()}` } } });
     if (process.env.NODE_ENV === 'development') console.info(`[DEV AMENDMENT OTP] ${user.email}: ${code}`);
     notificationService.sendPaymentOtpEmail(user.email, code).catch(() => undefined);
     return { otpSentTo: maskEmail(user.email), expiresAt: expiresAt.toISOString(), amount: budget };
@@ -392,11 +402,16 @@ export class ProjectAmendmentService {
     if (budget <= 0) throw new AppError('هذا الطلب لا يتطلب دفعًا', 400);
     const otpId = await this.verifyPaymentOtp(clientId, amendment, budget, otpCode);
     await prisma.$transaction(async tx => {
+      // Locks the contract so the terms read here are the committed ones the authorization is bound to.
+      const locked = await tx.contract.updateMany({ where: { id: amendment.contractId, status: ContractStatus.ACTIVE }, data: { updatedAt: new Date() } });
+      if (locked.count !== 1) throw new AppError('لا يمكن اعتماد الدفع: العقد غير نشط', 409);
+      const contractNow = await tx.contract.findUnique({ where: { id: amendment.contractId }, select: { termsVersion: true, price: true, durationDays: true } });
+      if (!contractNow) throw new AppError('العقد غير موجود', 404);
       const consumed = await tx.otpVerification.deleteMany({ where: { id: otpId, userId: clientId } });
       if (consumed.count !== 1) throw new AppError('رمز اعتماد الدفع استُخدم أو انتهى، اطلب رمزًا جديدًا', 409);
       const stored = await tx.projectAmendment.updateMany({
         where: { id: amendmentId, clientId, requestedByRole: AmendmentRequesterRole.CLIENT, status: AmendmentStatus.PENDING_OTHER_PARTY },
-        data: { fundingAuthorizedAt: new Date(), fundingAuthorizedAmount: budget }
+        data: { fundingAuthorizedAt: new Date(), fundingAuthorizedAmount: budget, fundingAuthorizedTerms: termsFingerprint(contractNow) }
       });
       if (stored.count !== 1) throw new AppError('طلب التعديل لم يعد معلّقًا', 409);
     });
@@ -476,14 +491,20 @@ export class ProjectAmendmentService {
     const requesterRole = role === 'CLIENT' ? AmendmentRequesterRole.CLIENT : AmendmentRequesterRole.PROVIDER;
     const result = await prisma.projectAmendment.updateMany({
       where: { id: amendmentId, requestedById: userId, requestedByRole: requesterRole, status: AmendmentStatus.PENDING_OTHER_PARTY },
-      data: { status: AmendmentStatus.CANCELLED, respondedAt: new Date(), fundingAuthorizedAt: null, fundingAuthorizedAmount: null }
+      data: { status: AmendmentStatus.CANCELLED, respondedAt: new Date(), fundingAuthorizedAt: null, fundingAuthorizedAmount: null, fundingAuthorizedTerms: null }
     });
     if (result.count !== 1) {
       const existing = await prisma.projectAmendment.findFirst({ where: { id: amendmentId, requestedById: userId, requestedByRole: requesterRole } });
       if (!existing) throw new AppError('طلب التعديل غير موجود أو لا تملك صلاحية إلغائه', 403);
       throw new AppError('لا يمكن إلغاء طلب لم يعد معلّقًا', 409);
     }
-    return (await this.publicById(amendmentId)).data;
+    const { updated, data } = await this.publicById(amendmentId);
+    // The other party is told (inbox always, channels per their preferences); a notification failure never fails the cancellation.
+    try {
+      if (role === 'CLIENT') await providerNotifications.amendmentCancelled({ providerId: updated.providerId, projectId: updated.projectId, amendmentId, title: updated.title });
+      else await clientNotifications.send(clientNotificationFor.amendmentCancelled({ clientId: updated.clientId, projectId: updated.projectId, amendmentId, title: updated.title }));
+    } catch { /* never fails the cancellation */ }
+    return data;
   }
 }
 

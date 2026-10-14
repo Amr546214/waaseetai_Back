@@ -10,7 +10,8 @@ ALTER TABLE "project_amendments"
   ADD COLUMN IF NOT EXISTS "durationAfter" INTEGER,
   ADD COLUMN IF NOT EXISTS "addedStageId" TEXT,
   ADD COLUMN IF NOT EXISTS "fundingAuthorizedAt" TIMESTAMP(3),
-  ADD COLUMN IF NOT EXISTS "fundingAuthorizedAmount" DOUBLE PRECISION;
+  ADD COLUMN IF NOT EXISTS "fundingAuthorizedAmount" DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS "fundingAuthorizedTerms" TEXT;
 
 ALTER TABLE "project_stages" ADD COLUMN IF NOT EXISTS "amendmentId" TEXT;
 

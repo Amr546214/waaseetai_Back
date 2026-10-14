@@ -142,6 +142,20 @@ export const providerNotifications = {
 		}));
 	},
 
+	/** The client withdrew an amendment request they had raised: nothing changed and any payment authorization was voided. */
+	async amendmentCancelled(p: { providerId: string; projectId: string; amendmentId: string; title: string }) {
+		await safely('amendmentCancelled', () => notificationService.createAndEmit({
+			userId: p.providerId,
+			title: 'ألغى العميل طلب التعديل',
+			message: `ألغى العميل طلب التعديل «${short(p.title)}». لم يتغيّر شيء في العقد ولا في الضمان.`,
+			category: NotificationCategory.PROJECTS,
+			type: 'PROJECT_AMENDMENT',
+			actionUrl: PROVIDER_ROUTES.projectProgress(p.projectId),
+			actionText: 'عرض المشروع',
+			metadata: { projectId: p.projectId, amendmentId: p.amendmentId, decision: 'cancelled' }
+		}));
+	},
+
 	/** The client asked to negotiate the provider's offer (the provider has to answer on the negotiation page). */
 	async negotiationRequested(p: { providerId: string; offerId: string; projectId: string; requestTitle?: string | null }) {
 		const title = short(p.requestTitle);

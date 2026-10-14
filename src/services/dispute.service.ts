@@ -316,6 +316,9 @@ export class DisputeService {
    * Money already released earlier (earned stages, or a COMPLETED project) is never touched: a settled escrow has held = 0 and is refused.
    */
   async resolveFinancial(id: string, adminId: string, input: ResolveDisputeFinancialInput) {
+    // Owner decision: only a SUPER_ADMIN account moves money. The route enforces it too; this is the last line of defence at the service.
+    const actor = await prisma.user.findUnique({ where: { id: adminId }, select: { accountType: true } });
+    if (!actor || actor.accountType !== AccountType.SUPER_ADMIN) throw new AppError('القرار المالي في النزاعات من صلاحية المدير الأعلى (SUPER_ADMIN) فقط', 403);
     const dispute = await prisma.dispute.findUnique({ where: { id } });
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
     if (dispute.status !== DisputeStatus.OPEN && dispute.status !== DisputeStatus.UNDER_REVIEW) throw new AppError('تمت معالجة النزاع مسبقاً', 409);

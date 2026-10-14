@@ -115,7 +115,8 @@ function makeWorld(t: TestContext, init: WorldInit = {}) {
     },
     user: {
       update: async ({ where, data }: any) => { const u = st.users[where.id]; if (data.walletBalance?.increment !== undefined) u.walletBalance = Math.round((u.walletBalance + data.walletBalance.increment) * 100) / 100; return clone(u); },
-      findUnique: async () => null
+      // the acting admin of a financial decision: admin-1 is a SUPER_ADMIN, admin-2 a plain ADMIN (refused)
+      findUnique: async ({ where }: any) => (where.id === 'admin-1' ? { accountType: 'SUPER_ADMIN' } : where.id === 'admin-2' ? { accountType: 'ADMIN' } : null)
     },
     walletTransaction: { create: async ({ data }: any) => { if (st.walletTx.some((w: Row) => w.referenceId === data.referenceId)) throw Object.assign(new Error('Unique constraint failed on referenceId'), { code: 'P2002' }); st.walletTx.push(clone(data)); return data; } },
     accountAuditLog: {
@@ -557,7 +558,7 @@ test('multiple active disputes + a financial decision on one: the escrow is sett
 
 test('permissions: the financial route is gated by authorizeAdminActing (acting role), the text route is not financial', () => {
   const routes = readFileSync(join(__dirname, '..', 'routes', 'admin-disputes.routes.ts'), 'utf8');
-  assert.match(routes, /router\.post\('\/:id\/resolve-financial', authorizeAdminActing, resolveDisputeFinancial\)/);
+  assert.match(routes, /router\.post\('\/:id\/resolve-financial', authorize\(AccountType\.SUPER_ADMIN\), authorizeAdminActing, resolveDisputeFinancial\)/);
   assert.match(routes, /router\.use\(authenticate, requireActiveUser, authorize\(AccountType\.ADMIN, AccountType\.SUPER_ADMIN\)\)/);
   assert.match(routes, /router\.post\('\/:id\/resolve', resolveDispute\)/);
 });
@@ -633,4 +634,15 @@ test('getForUser / getForAdmin carry the Arabic label, the financial outcome and
   assert.equal(after.projectFreeze.activeDisputeCount, 1, 'one dispute closed, the other still counts');
   const admin = await disputeService.getForAdmin('d1');
   assert.equal(admin.financialOutcome.outcome, 'REFUND_CLIENT');
+});
+
+test('SUPER_ADMIN only: a plain ADMIN (or an unknown actor) cannot execute a financial decision and nothing moves', async (t) => {
+  const w = makeWorld(t, { disputes: [dispute()] });
+  const { disputeService } = await loadServices(t, w);
+  const before = clone({ escrow: w.get().escrow, users: w.get().users, contract: w.get().contract });
+  for (const actor of ['admin-2', 'ghost']) {
+    await assert.rejects(() => disputeService.resolveFinancial('disp-x', actor, { outcome: 'RELEASE_PROVIDER', refundToClient: 0, releaseToProvider: 50, expectedHeldAmount: 50, confirm: true } as any), (e: any) => e.statusCode === 403 && /SUPER_ADMIN/.test(e.message));
+  }
+  assert.deepEqual(clone({ escrow: w.get().escrow, users: w.get().users, contract: w.get().contract }), before);
+  assert.equal(w.get().walletTx.length, 0);
 });

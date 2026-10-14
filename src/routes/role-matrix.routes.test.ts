@@ -62,7 +62,7 @@ const GROUPS: Group[] = [
 // approval / spend-cap routes are additionally PROVIDER_COMPANY-only (individual accounts never reach them)
 const PROVIDER_COMPANY_ONLY = ['/x/approval', '/spend-cap', '/coupons/x/approval'];
 // hard-deleting a user is SUPER_ADMIN-only (plain ADMIN is denied)
-const SUPER_ADMIN_ONLY = ['./admin-users.routes.ts DELETE /x'];
+const SUPER_ADMIN_ONLY = ['./admin-users.routes.ts DELETE /x', './admin-disputes.routes.ts POST /x/resolve-financial'];
 const PUBLIC_BY_DESIGN = ['/public/x'];
 
 function listRoutes(router: any): Array<[string, string]> {

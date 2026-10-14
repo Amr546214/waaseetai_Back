@@ -9,8 +9,8 @@ router.use(authenticate, requireActiveUser, authorize(AccountType.ADMIN, Account
 router.get('/', listDisputes);
 router.get('/:id', getDispute);
 router.post('/:id/resolve', resolveDispute);
-// Moves money from the HELD escrow. Admin gate on the ACTING role (an admin account that is acting as a client/provider is refused), on top of the router gate.
-router.post('/:id/resolve-financial', authorizeAdminActing, resolveDisputeFinancial);
+// Moves money from the HELD escrow: SUPER_ADMIN only (owner decision), and on the ACTING role (an admin account that is acting as a client/provider is refused), on top of the router gate.
+router.post('/:id/resolve-financial', authorize(AccountType.SUPER_ADMIN), authorizeAdminActing, resolveDisputeFinancial);
 router.post('/:id/assign', assignAdminDispute);
 router.post('/:id/notes', addAdminDisputeNote);
 router.patch('/:id/status', setAdminDisputeStatus);

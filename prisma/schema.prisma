@@ -1979,6 +1979,8 @@ model ProjectAmendment {
   // Client-raised budget increase: the client's OTP-authorized funding intent (the amount is bound; the provider's approval debits the wallet).
   fundingAuthorizedAt     DateTime?
   fundingAuthorizedAmount Float?
+  // The contract terms the client authorized against (termsVersion|price|durationDays). Any change to the terms voids the authorization.
+  fundingAuthorizedTerms  String?
 
   @@index([clientId, status])
   @@index([providerId, status])

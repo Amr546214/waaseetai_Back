@@ -12,6 +12,11 @@ import { hasActiveDispute } from './amendment-dispute-guard';
 export const AMENDMENT_TOPUP = 'AMENDMENT_TOPUP';
 export const AMENDMENT_REFUND = 'AMENDMENT_REFUND';
 export const MIN_STAGE_AMOUNT = 0.01;
+/** How long a client's funding authorization stays valid. Never an open-ended permission to debit: after this the client must authorize again. */
+export const FUNDING_AUTHORIZATION_TTL_MS = 15 * 60 * 1000;
+
+/** The contract terms an authorization is bound to. ANY applied amendment (scope, price or duration) changes it and so voids earlier authorizations. */
+export const termsFingerprint = (c: { termsVersion?: number | null; price: number; durationDays: number }) => `${c.termsVersion ?? 1}|${round2(Number(c.price))}|${c.durationDays}`;
 
 const EPS = 0.005;
 const EDITABLE_MONEY_STATUSES: ProjectStageStatus[] = [ProjectStageStatus.PENDING, ProjectStageStatus.IN_PROGRESS];
@@ -31,6 +36,7 @@ export type AmendmentToApply = {
 	durationDeltaDays: number | null;
 	fundingAuthorizedAt?: Date | null;
 	fundingAuthorizedAmount?: number | null;
+	fundingAuthorizedTerms?: string | null;
 };
 
 export type AmendmentActor = {
@@ -111,11 +117,17 @@ export async function applyAmendment(tx: any, amendment: AmendmentToApply, actor
 
 	// 4) Funding authorization for an INCREASE. Never debit without it.
 	if (budget > 0) {
+		const terms = termsFingerprint(contract);
 		if (raisedByClient) {
-			const authorized = amendment.fundingAuthorizedAt != null && Math.abs(Number(amendment.fundingAuthorizedAmount) - budget) <= EPS;
-			if (!authorized) throw fail('لم يعتمد العميل دفع هذه الزيادة بعد (رمز التحقق مطلوب منه)');
+			const at = amendment.fundingAuthorizedAt ? new Date(amendment.fundingAuthorizedAt).getTime() : null;
+			if (at == null || !(Math.abs(Number(amendment.fundingAuthorizedAmount) - budget) <= EPS)) throw fail('لم يعتمد العميل دفع هذه الزيادة بعد (رمز التحقق مطلوب منه)');
+			if (now.getTime() - at > FUNDING_AUTHORIZATION_TTL_MS) throw fail('انتهت صلاحية تفويض العميل لدفع هذه الزيادة (15 دقيقة). يلزم تفويض جديد برمز تحقق جديد.');
+			if (amendment.fundingAuthorizedTerms !== terms) throw fail('تغيّرت شروط العقد بعد تفويض الدفع، فبطل التفويض. يلزم تفويض جديد.');
 		} else {
 			if (!actor.paymentOtpId) throw fail('اعتماد الدفع برمز التحقق مطلوب لزيادة الميزانية', 400);
+			const otpRow = await tx.otpVerification.findFirst({ where: { id: actor.paymentOtpId, userId: amendment.clientId } });
+			if (!otpRow) throw fail('رمز اعتماد الدفع استُخدم أو انتهى، اطلب رمزًا جديدًا');
+			if ((otpRow.context as any)?.terms !== terms) throw fail('تغيّرت شروط العقد بعد إصدار رمز الدفع، فبطل. اطلب رمزًا جديدًا.');
 			const consumed = await tx.otpVerification.deleteMany({ where: { id: actor.paymentOtpId, userId: amendment.clientId } });
 			if (consumed.count !== 1) throw fail('رمز اعتماد الدفع استُخدم أو انتهى، اطلب رمزًا جديدًا');
 		}
@@ -259,6 +271,8 @@ export async function applyAmendment(tx: any, amendment: AmendmentToApply, actor
 		data: { price: priceAfter, durationDays: durationAfter, phasesCount, ...(termsVersion ? { termsVersion } : {}) }
 	});
 	if (contractUpdate.count !== 1) throw fail('تغيّر العقد أثناء التطبيق، أعد المحاولة');
+	// The terms just changed: every other pending request loses its funding authorization (it was bound to the previous terms).
+	await tx.projectAmendment.updateMany({ where: { contractId: contract.id, id: { not: amendment.id }, status: AmendmentStatus.PENDING_OTHER_PARTY }, data: { fundingAuthorizedAt: null, fundingAuthorizedAmount: null, fundingAuthorizedTerms: null } });
 
 	// 11) Safety net: contract, escrow and stages must agree afterwards, or everything rolls back.
 	if (needsMoney) {

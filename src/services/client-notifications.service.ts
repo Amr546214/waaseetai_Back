@@ -77,6 +77,10 @@ export const clientNotificationFor = {
 			type: 'PROJECT_AMENDMENT', category: PROJECTS, actionUrl: CLIENT_ROUTES.amendments, actionText: 'عرض طلبات التعديل', metadata: { projectId: p.projectId, amendmentId: p.amendmentId, decision: p.decision }
 		};
 	},
+	amendmentCancelled: (p: { clientId: string; projectId: string; amendmentId: string; title: string }): ClientNotificationInput => ({
+		userId: p.clientId, title: 'ألغى مقدم الخدمة طلب التعديل', message: `ألغى مقدم الخدمة طلب التعديل «${short(p.title)}». لم يتغيّر شيء في العقد ولا في الضمان.`,
+		type: 'PROJECT_AMENDMENT', category: PROJECTS, actionUrl: CLIENT_ROUTES.amendments, actionText: 'عرض طلبات التعديل', metadata: { projectId: p.projectId, amendmentId: p.amendmentId, decision: 'cancelled' }
+	}),
 	stageDelivered: (p: { clientId: string; projectId: string; stageId: string; stageTitle: string; deliveryId?: string }): ClientNotificationInput => ({
 		userId: p.clientId, title: 'تسليم جديد بانتظار مراجعتك', message: `تم تسليم مرحلة: ${short(p.stageTitle)}`,
 		type: 'STAGE_DELIVERY', category: PROJECTS, actionUrl: CLIENT_ROUTES.deliveryReview(p.projectId, p.stageId), actionText: 'مراجعة التسليم',
