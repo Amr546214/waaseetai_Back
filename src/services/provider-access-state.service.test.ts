@@ -1,6 +1,6 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 // In-memory fake of the tables the onboarding gate touches. The same fake backs config/db for the real admin + middleware code.
 type Any = Record<string, any>;
@@ -158,13 +158,44 @@ test('requireApprovedProvider: 403 while pending, passes when approved, passes f
 	assert.equal((await run(undefined as any)).statusCode, 401);
 });
 
-test('route wiring: access-state is providerOnly (activeRole) and un-gated; the dashboard-data prefixes are gated; setup/accreditation/tickets are not', () => {
+test('route wiring: access-state is providerOnly (activeRole) and un-gated; the gated prefixes are exact and mounted before the sub-routers', () => {
 	const src = readFileSync(new URL('../routes/provider.routes.ts', import.meta.url), 'utf8');
 	assert.match(src, /router\.get\('\/access-state', authenticate, requireActiveUser, providerOnly,/);
-	const gate = src.match(/const DASHBOARD_DATA_PREFIXES = \[([^\]]+)\];\nrouter\.use\(DASHBOARD_DATA_PREFIXES, \.\.\.dashboardGate\)/)![1];
-	assert.deepEqual(gate.split(',').map(x => x.trim().replace(/'/g, '')).sort(), ['/explore-requests', '/finance', '/offers', '/reports', '/statistics']);
+	const gate = src.match(/export const DASHBOARD_DATA_PREFIXES = \[([^\]]+)\];\nrouter\.use\(DASHBOARD_DATA_PREFIXES, \.\.\.dashboardGate\)/)![1];
+	assert.deepEqual(gate.split(',').map(x => x.trim().replace(/'/g, '')).sort(), ['/amendments', '/coupons', '/explore-requests', '/finance', '/marketing', '/offers', '/projects', '/reports', '/requests', '/services', '/special-offers', '/statistics']);
 	assert.match(src, /const providerOnly = authorizeActiveRole\(AccountType\.PROVIDER_INDIVIDUAL, AccountType\.PROVIDER_COMPANY\)/);
-	assert.ok(src.indexOf('router.use(DASHBOARD_DATA_PREFIXES') < src.indexOf("router.get(\n  '/statistics'"));
+	const gateAt = src.indexOf('router.use(DASHBOARD_DATA_PREFIXES');
+	for (const m of ["router.use('/profile'", "router.use('/services'", "router.use('/special-offers'", "router.use('/marketing'", "router.get(\n  '/statistics'"]) assert.ok(gateAt < src.indexOf(m), m);
+	// the open (onboarding / help) prefixes are never in the gated list
+	for (const open of ['/profile', '/accreditation', '/access-state', '/tickets', '/disputes', '/gamification', '/specialties']) assert.ok(!gate.includes(`'${open}'`), open);
+});
+
+test('every router that holds a provider guard is classified: gated (own guard or provider.routes prefix) or open (onboarding / company / shared)', () => {
+	const dir = new URL('../routes/', import.meta.url);
+	const GATED_OWN = ['business-models.routes.ts', 'proposal.routes.ts', 'project.routes.ts', 'ai-assistant.routes.ts']; // contain requireApprovedProvider themselves
+	const GATED_BY_PROVIDER_ROUTES: Record<string, string> = { 'marketplace-service.routes.ts': '/services', 'provider-special-offer.routes.ts': '/special-offers', 'provider-marketing-center.routes.ts': '/marketing' };
+	const OPEN = ['accreditation-ai.routes.ts', 'ai-assessment.routes.ts', 'gamification.routes.ts', 'provider-specialty.routes.ts', 'provider-profile.routes.ts', 'specialty.routes.ts', 'skills.routes.ts', 'company-team.routes.ts', 'provider.routes.ts'];
+	const providerSrc = readFileSync(new URL('../routes/provider.routes.ts', import.meta.url), 'utf8');
+	const files = readdirSync(dir).filter(f => f.endsWith('.routes.ts') && !f.startsWith('admin-') && !f.startsWith('client-'))
+		.filter(f => /providerOnly|requireProvider|PROVIDER_INDIVIDUAL|PROVIDER_COMPANY|providerActingOnly/.test(readFileSync(new URL(f, dir), 'utf8')));
+	for (const f of files) {
+		assert.ok(GATED_OWN.includes(f) || f in GATED_BY_PROVIDER_ROUTES || OPEN.includes(f), `${f} holds a provider guard but is not classified as gated or open in the onboarding gate`);
+		if (GATED_OWN.includes(f)) assert.match(readFileSync(new URL(f, dir), 'utf8'), /requireApprovedProvider/, f);
+		if (f in GATED_BY_PROVIDER_ROUTES) assert.ok(providerSrc.includes(`'${GATED_BY_PROVIDER_ROUTES[f]}'`) && providerSrc.includes(`router.use('${GATED_BY_PROVIDER_ROUTES[f]}'`), f);
+	}
+});
+
+test('gate behaviour per route class: pending individual 403 / approved passes / company + client-acting + non-provider untouched', async () => {
+	reset({ portfolio: portfolio() });
+	const { gate } = await load();
+	const run = async (user: Any) => { let err: any = 'none'; await gate({ user } as any, {} as any, (e?: any) => { err = e ?? null; }); return err; };
+	const indiv = { id: 'u1', accountType: 'PROVIDER_INDIVIDUAL', activeRole: 'PROVIDER', roles: ['CLIENT', 'PROVIDER'] };
+	assert.equal((await run(indiv)).statusCode, 403);
+	assert.equal(await run({ ...indiv, activeRole: 'CLIENT' }), null); // left to the route's own role guard
+	assert.equal(await run({ id: 'x', accountType: 'CLIENT_INDIVIDUAL', activeRole: 'CLIENT', roles: ['CLIENT'] }), null);
+	assert.equal(await run({ id: 'a', accountType: 'ADMIN', activeRole: 'ADMIN', roles: ['ADMIN'] }), null);
+	S.ps.forEach((r: Any) => { r.status = 'APPROVED'; });
+	assert.equal(await run(indiv), null);
 });
 
 test('hooks: the form save and the setup-test completion both call the onboarding sample persistence', () => {

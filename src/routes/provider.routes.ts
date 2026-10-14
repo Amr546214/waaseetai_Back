@@ -42,6 +42,13 @@ const requireCompanyAccount = (req: Request, _res: Response, next: NextFunction)
   next();
 };
 
+// OPERATIONAL provider routes: an individual provider acting as a provider gets 403 on all of them until the admin APPROVES a specialty.
+// Mounted BEFORE every sub-router so the prefix covers the mounted routers too (services, coupons, special-offers, marketing).
+// Deliberately NOT gated (onboarding / help): profile, specialties, accreditation, access-state, gamification, logs, tickets, disputes (basic), company/team.
+const dashboardGate = [authenticate, requireActiveUser, requireApprovedProvider];
+export const DASHBOARD_DATA_PREFIXES = ['/statistics', '/offers', '/finance', '/reports', '/services', '/projects', '/amendments', '/requests', '/coupons', '/special-offers', '/marketing', '/explore-requests'];
+router.use(DASHBOARD_DATA_PREFIXES, ...dashboardGate);
+
 // The derived access state (one source of truth for "may the provider open the dashboard"). Individual AND company providers (activeRole PROVIDER) may ask; never gated itself.
 router.get('/access-state', authenticate, requireActiveUser, providerOnly, async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -50,11 +57,6 @@ router.get('/access-state', authenticate, requireActiveUser, providerOnly, async
   } catch (error) { next(error); }
 });
 
-// Dashboard-DATA endpoints a not-yet-approved individual provider has no business calling (403 until a specialty is APPROVED by the admin).
-// Deliberately NOT gated: profile / setup / specialties / skills / accreditation / access-state / notifications / tickets / disputes / KYC / services / projects / chat.
-const dashboardGate = [authenticate, requireActiveUser, requireApprovedProvider];
-const DASHBOARD_DATA_PREFIXES = ['/statistics', '/offers', '/finance', '/reports', '/explore-requests'];
-router.use(DASHBOARD_DATA_PREFIXES, ...dashboardGate);
 
 // BE-2(a): provider reports (incoming requests, projects, acceptance by specialty, payments, disputes) → GET /api/provider/reports
 router.get('/reports', authenticate, requireActiveUser, providerOnly, providerReportsController.getReports);
