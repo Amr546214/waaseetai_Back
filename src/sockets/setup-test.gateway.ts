@@ -6,6 +6,7 @@ import { verifySocketToken } from '../utils/socket-auth';
 import { specialtyService } from '../services/specialty.service';
 import { prisma } from '../config/db';
 import { waseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
+import { isSetupTestDevFallbackEnabled, SETUP_TEST_DEV_FALLBACK_QUESTIONS } from '../constants/setup-test-dev-fallback';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
 
 // Provider onboarding "setup test" on top of WaseetAI (the only AI provider).
@@ -18,6 +19,10 @@ import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/so
 // setupTestStatus becomes COMPLETED (this is a calibration test, never a
 // pass/fail gate, so `isPassed` is deliberately ignored). Because the number of
 // correct answers is not known, `setup_test:result` has no `correct` field.
+//
+// DEV-SAFE FALLBACK (opt-in): ONLY when process.env.SETUP_TEST_DEV_FALLBACK === 'true' (exact string, default OFF, never committed to env/config/docker)
+// AND the WaseetAI generation call failed, the test is served from a small generic local bank and graded locally (correct / total * 100). It completes through
+// the same completeSetupTest as the AI path; only the question / grade source differs. The result then carries `source: 'DEV_FALLBACK'`.
 //
 // Failures never write to the profile: a generation failure creates no session;
 // a grading failure keeps the session so the last answer can be re-sent.
@@ -39,6 +44,8 @@ interface SessionQuestion {
   id: string; // String(vendor numeric id)
   text: string;
   options: Array<{ id: string; text: string }>;
+  /** DEV_FALLBACK only; server-side, never emitted. */
+  correctOptionId?: string;
 }
 
 interface SetupTestSession {
@@ -50,6 +57,8 @@ interface SetupTestSession {
   answers: Record<string, string>;
   startedAt: number;
   grading: boolean;
+  /** 'AI' = WaseetAI questions + grading (default). 'DEV_FALLBACK' = local generic bank + local grading (see constants/setup-test-dev-fallback.ts). */
+  source: 'AI' | 'DEV_FALLBACK';
 }
 
 /** Score (%) above which the chosen specialties are recorded as passed from the setup test (the specialty record's own documented floor). */
@@ -89,6 +98,12 @@ export class SetupTestGateway {
       let score: number;
       let passed = false;
       try {
+        if (session.source === 'DEV_FALLBACK') {
+          // local, real arithmetic from the user's real answers; WaseetAI is never called for this session
+          const correct = session.questions.filter((fq) => session.answers[fq.id] === fq.correctOptionId).length;
+          score = (correct / session.questions.length) * 100;
+          passed = score > SETUP_TEST_PASS_SCORE;
+        } else {
         const graded = await waseetAiClient.submitAssessment(
           session.vendorAttemptId,
           { submittedAnswers: { ...session.answers }, timeSpentSeconds },
@@ -99,6 +114,7 @@ export class SetupTestGateway {
         }
         score = graded.score;
         passed = graded.score > SETUP_TEST_PASS_SCORE; // the platform's own floor (the same 25% the specialty record documents); the vendor verdict is not read
+        }
       } catch (err: any) {
         console.warn('[SetupTestGateway] grading failed:', err?.code || err?.message);
         socket.emit('setup_test:error', { message: SETUP_TEST_GRADING_FAILED_MESSAGE, retryable: true });
@@ -119,7 +135,8 @@ export class SetupTestGateway {
       socket.emit('setup_test:result', {
         score,
         total: session.questions.length,
-        message: 'تم الانتهاء من الاختبار بنجاح وتم تسجيل نتيجتك لتصنيف مستواك.'
+        message: 'تم الانتهاء من الاختبار بنجاح وتم تسجيل نتيجتك لتصنيف مستواك.',
+        ...(session.source === 'DEV_FALLBACK' ? { source: 'DEV_FALLBACK' } : {})
       });
     } finally {
       session.grading = false;
@@ -178,6 +195,7 @@ export class SetupTestGateway {
         socket.emit('setup_test:generating', { message: 'جاري إنشاء الاختبار المخصص لك بناءً على تخصصاتك باستخدام الذكاء الاصطناعي...' });
 
         const questions: SessionQuestion[] = [];
+        let fallbackQuestions: SessionQuestion[] | null = null;
         const vendorAttemptIds = new Set<string>();
         let ready: { attemptId: string; totalQuestions: number } | null = null;
         try {
@@ -212,23 +230,28 @@ export class SetupTestGateway {
         } catch (aiErr: any) {
           if (abortController.signal.aborted) return; // client gone
           console.warn('[SetupTestGateway] WaseetAI generation failed:', aiErr?.code || aiErr?.message);
-          socket.emit('setup_test:error', { message: SETUP_TEST_GENERATION_FAILED_MESSAGE });
-          return;
+          if (!isSetupTestDevFallbackEnabled()) {
+            socket.emit('setup_test:error', { message: SETUP_TEST_GENERATION_FAILED_MESSAGE });
+            return;
+          }
+          console.warn(`[SetupTestGateway] DEV_FALLBACK in use: WaseetAI failed (${aiErr?.code || aiErr?.message})`);
+          fallbackQuestions = SETUP_TEST_DEV_FALLBACK_QUESTIONS.map((fq) => ({ id: fq.id, text: fq.textAr, options: fq.options.map((o) => ({ ...o })), correctOptionId: fq.correctOptionId }));
         }
 
         if (abortController.signal.aborted) return;
 
         this.testSessions.set(userId, {
           profileId: profile.id,
-          vendorAttemptId: ready!.attemptId,
-          questions,
+          vendorAttemptId: fallbackQuestions ? 'DEV_FALLBACK' : ready!.attemptId,
+          source: fallbackQuestions ? 'DEV_FALLBACK' : 'AI',
+          questions: fallbackQuestions ?? questions,
           currentQIndex: 0,
           answers: {},
           startedAt: Date.now(),
           grading: false
         });
 
-        socket.emit('setup_test:ready', { totalQuestions: questions.length });
+        socket.emit('setup_test:ready', { totalQuestions: (fallbackQuestions ?? questions).length });
       } catch (err: any) {
         console.error('[SetupTestGateway Init Error]:', err);
         socket.emit('setup_test:error', { message: 'حدث خطأ أثناء إنشاء أسئلة الاختبار.' });
