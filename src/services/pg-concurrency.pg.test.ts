@@ -232,3 +232,63 @@ test('pg: an approval that fails after the stage flip (audit write sabotaged by 
 	assert.equal(after.escrow.releasedAmount, before.escrow.releasedAmount);
 	assert.equal(after.wallet, before.wallet);
 });
+
+// ── 6. referral commission engine on a real database: allowlist, exact amounts, dedupe ──────────────────────────────────────────
+// A user can have only ONE referral (unique on referredUserId), so "the other referrals" are OTHER referred clients of OTHER affiliates.
+const mkAffiliate = async (prisma: any, level: number) => {
+	const u = await prisma.user.create({ data: { id: randomUUID(), accountType: 'MARKETING_BROKER', firstName: 'm', lastName: 'k', email: `mk-${randomUUID()}@pg.test`, roles: ['AFFILIATE'], activeRole: 'AFFILIATE' } });
+	return prisma.affiliateProfile.create({ data: { userId: u.id, referralSlug: `slug-${randomUUID().slice(0, 8)}`, level } });
+};
+const withEnv = async (env: { enabled?: string; allow?: string | null }, fn: () => Promise<void>) => {
+	const saved = { e: process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED, a: process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS };
+	if (env.enabled === undefined) delete process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED; else process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED = env.enabled;
+	if (env.allow == null) delete process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS; else process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS = env.allow;
+	try { await fn(); } finally {
+		if (saved.e === undefined) delete process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED; else process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED = saved.e;
+		if (saved.a === undefined) delete process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS; else process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS = saved.a;
+	}
+};
+const approveBothStages = async (w: Awaited<ReturnType<typeof seedWorld>>) => {
+	const { projectProgressService } = await import('./project-progress.service');
+	await projectProgressService.reviewDelivery(w.client.id, w.contract.id, w.s1.id, 'approve');
+	await w.prisma.stageDelivery.create({ data: { id: randomUUID(), stageId: w.s2.id, providerId: w.provider.id, note: 'second synthetic delivery', status: 'SUBMITTED' } });
+	await w.prisma.projectStage.update({ where: { id: w.s2.id }, data: { status: 'SUBMITTED' } });
+	await projectProgressService.reviewDelivery(w.client.id, w.contract.id, w.s2.id, 'approve');
+	await assert.rejects(() => projectProgressService.reviewDelivery(w.client.id, w.contract.id, w.s2.id, 'approve'), 'a repeated approval is refused');
+};
+
+test('pg: engine ON + dev allowlist: ONLY the allowlisted QA referral earns exactly 0.10 + 0.10 on a 20 USD purchase (1% of each GROSS 10 stage); a client referred by another affiliate earns nothing for that affiliate', opts, async () => {
+	const qaWorld = await seedWorld(); const otherWorld = await seedWorld();
+	const qa = await mkAffiliate(qaWorld.prisma, 1), other = await mkAffiliate(qaWorld.prisma, 1);
+	const rQa = await qaWorld.prisma.referral.create({ data: { affiliateId: qa.id, referredUserId: qaWorld.client.id } });
+	await qaWorld.prisma.referral.create({ data: { affiliateId: other.id, referredUserId: otherWorld.client.id } });
+	await withEnv({ enabled: 'true', allow: rQa.id }, async () => {
+		await approveBothStages(qaWorld);
+		await approveBothStages(otherWorld);
+	});
+	const rows = await qaWorld.prisma.commissionLog.findMany({ where: { affiliateId: qa.id }, orderBy: { createdAt: 'asc' } });
+	assert.equal(rows.length, 2, 'one commission per released stage');
+	assert.deepEqual(rows.map((r: any) => r.amount), [0.1, 0.1]);
+	assert.deepEqual(rows.map((r: any) => r.baseAmount), [10, 10]);
+	assert.ok(rows.every((r: any) => r.appliedPercentage === 1 && r.level === 1 && r.status === 'APPROVED' && r.currency === 'USD' && r.referralId === rQa.id && r.referredUserId === qaWorld.client.id));
+	assert.equal(r2(rows.reduce((a: number, r: any) => a + r.amount, 0)), 0.2);
+	assert.equal(await qaWorld.prisma.commissionLog.count({ where: { affiliateId: other.id } }), 0, 'another affiliate is untouched');
+	assert.equal(await qaWorld.prisma.commissionLog.count({ where: { referredUserId: otherWorld.client.id } }), 0, 'the other referred client produced nothing');
+	// both purchases still settled normally
+	for (const w of [qaWorld, otherWorld]) { const m = await money(w); assert.equal(m.escrow.releasedAmount, 20); assert.equal(r2(m.escrow.platformCommissionAmount), 2.55); }
+	assert.equal(await qaWorld.prisma.withdrawal.count({ where: { userId: qa.userId } }), 0, 'a commission never creates a withdrawal or payout');
+});
+
+test('pg control: WITHOUT the allowlist the other affiliate earns too (what the restriction prevents on the 12 real referrals); engine OFF earns nothing', opts, async () => {
+	const w1 = await seedWorld(); const w2 = await seedWorld();
+	const a = await mkAffiliate(w1.prisma, 1), b = await mkAffiliate(w1.prisma, 1);
+	await w1.prisma.referral.create({ data: { affiliateId: a.id, referredUserId: w1.client.id } });
+	await w1.prisma.referral.create({ data: { affiliateId: b.id, referredUserId: w2.client.id } });
+	await withEnv({ enabled: 'true', allow: null }, async () => { await approveBothStages(w1); await approveBothStages(w2); });
+	assert.equal(await w1.prisma.commissionLog.count({ where: { affiliateId: a.id } }), 2);
+	assert.equal(await w1.prisma.commissionLog.count({ where: { affiliateId: b.id } }), 2);
+	const w3 = await seedWorld(); const c = await mkAffiliate(w3.prisma, 1);
+	await w3.prisma.referral.create({ data: { affiliateId: c.id, referredUserId: w3.client.id } });
+	await withEnv({ enabled: undefined, allow: null }, async () => { await approveBothStages(w3); });
+	assert.equal(await w3.prisma.commissionLog.count({ where: { affiliateId: c.id } }), 0, 'engine off = nothing');
+});

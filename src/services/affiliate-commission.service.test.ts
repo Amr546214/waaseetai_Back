@@ -174,3 +174,55 @@ test('engine: a self-referral (affiliate is the client) never earns', async () =
     assert.equal(calls.create.length, 0);
   } finally { restore(); }
 });
+
+// ── dev-only allowlist of Referral ids (AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS) ──
+import { createCommissionsForStageReleaseEvent } from './affiliate-commission.service';
+
+function allowTx(referrals: any[]) {
+  const created: any[] = [];
+  const tx: any = {
+    dispute: { findFirst: async () => null },
+    referral: { findMany: async () => referrals },
+    commissionLog: { create: async ({ data }: any) => { created.push(data); return { id: `c${created.length}`, ...data }; } }
+  };
+  return { tx, created };
+}
+const allowRef = (id: string, affiliateId: string, level = 1) => ({ id, referredUserId: 'client-1', affiliate: { id: affiliateId, level, userId: `u-${affiliateId}` } });
+const allowCtx = { contract: { id: 'c', projectId: 'p', clientId: 'client-1', providerId: 'prov-1' }, stageId: 's1', releasedAmount: 10 };
+
+test('allowlist: with the engine on and an allowlist set, ONLY the listed referral earns (exactly 1% of the gross stage amount); the others are untouched', async () => {
+  const saved = { e: process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED, a: process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS };
+  process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED = 'true';
+  process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS = 'ref-qa';
+  try {
+    const { tx, created } = allowTx([allowRef('ref-other-1', 'aff-1'), allowRef('ref-qa', 'aff-qa'), allowRef('ref-other-2', 'aff-2', 5)]);
+    const notices = await createCommissionsForStageReleaseEvent(tx, allowCtx);
+    assert.equal(created.length, 1);
+    assert.equal(created[0].affiliateId, 'aff-qa');
+    assert.equal(created[0].referralId, 'ref-qa');
+    assert.equal(created[0].amount, 0.1); // 10 x 1.00% (level 1)
+    assert.equal(created[0].baseAmount, 10);
+    assert.equal(created[0].appliedPercentage, 1);
+    assert.equal(created[0].status, 'APPROVED');
+    assert.equal(notices.length, 1);
+  } finally { restoreEnv(saved); }
+});
+
+test('allowlist: unset = no restriction (production behaviour); set but empty = nobody earns (fail closed)', async () => {
+  const saved = { e: process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED, a: process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS };
+  process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED = 'true';
+  try {
+    delete process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS;
+    let r = allowTx([allowRef('a', 'aff-1'), allowRef('b', 'aff-2')]); await createCommissionsForStageReleaseEvent(r.tx, allowCtx); assert.equal(r.created.length, 2);
+    process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS = '';
+    r = allowTx([allowRef('a', 'aff-1'), allowRef('b', 'aff-2')]); await createCommissionsForStageReleaseEvent(r.tx, allowCtx); assert.equal(r.created.length, 0);
+    process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED = 'false';
+    delete process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS;
+    r = allowTx([allowRef('a', 'aff-1')]); await createCommissionsForStageReleaseEvent(r.tx, allowCtx); assert.equal(r.created.length, 0, 'engine off = nothing, allowlist or not');
+  } finally { restoreEnv(saved); }
+});
+
+function restoreEnv(s: { e?: string; a?: string }) {
+  if (s.e === undefined) delete process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED; else process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED = s.e;
+  if (s.a === undefined) delete process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS; else process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS = s.a;
+}

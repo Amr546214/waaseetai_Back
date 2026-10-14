@@ -15,3 +15,15 @@
 export function isAffiliateCommissionEngineEnabled(): boolean {
   return process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED === 'true';
 }
+
+/**
+ * Optional restriction of the engine to specific referrals (a comma-separated list of Referral ids in
+ * AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS). Used on DEV to test the engine with ONE QA referral while every other referral keeps behaving
+ * exactly as before (no commission). UNSET (production default) = no restriction: every eligible referral earns, as the owner decided.
+ * A set-but-empty value restricts to nobody (fail closed).
+ */
+export function affiliateCommissionAllowedReferralIds(): Set<string> | null {
+  const raw = process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS;
+  if (raw === undefined) return null;
+  return new Set(raw.split(',').map(s => s.trim()).filter(Boolean));
+}

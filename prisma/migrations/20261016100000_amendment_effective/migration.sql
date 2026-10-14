@@ -26,5 +26,11 @@ CREATE TABLE IF NOT EXISTS "contract_terms_versions" (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "contract_terms_versions_amendmentId_key" ON "contract_terms_versions"("amendmentId");
 CREATE UNIQUE INDEX IF NOT EXISTS "contract_terms_versions_contractId_version_key" ON "contract_terms_versions"("contractId", "version");
-ALTER TABLE "contract_terms_versions"
-  ADD CONSTRAINT "contract_terms_versions_contractId_fkey" FOREIGN KEY ("contractId") REFERENCES "contracts"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $fk$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'contract_terms_versions_contractId_fkey') THEN
+    ALTER TABLE "contract_terms_versions"
+      ADD CONSTRAINT "contract_terms_versions_contractId_fkey" FOREIGN KEY ("contractId") REFERENCES "contracts"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END
+$fk$;

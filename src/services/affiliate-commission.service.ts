@@ -1,7 +1,7 @@
 import { Prisma, CommissionType, CommissionStatus, DisputeStatus } from '@prisma/client';
 import type { MarketerCommissionNotice } from './marketer-notifications.service';
 import { resolveAffiliateCommissionPercentage } from '../config/affiliate-levels.config';
-import { isAffiliateCommissionEngineEnabled } from '../utils/affiliate-commission-engine.util';
+import { isAffiliateCommissionEngineEnabled, affiliateCommissionAllowedReferralIds } from '../utils/affiliate-commission-engine.util';
 
 // The exact composite unique index this engine relies on for exactly-once
 // commission creation — see prisma/schema.prisma's CommissionLog
@@ -143,7 +143,10 @@ export async function createCommissionsForStageReleaseEvent(
     include: { affiliate: { select: { id: true, level: true, userId: true } } }
   });
 
+  // DEV-only restriction (env allowlist of Referral ids): referrals outside it are skipped exactly as if the engine were off for them. Unset = no restriction.
+  const allowed = affiliateCommissionAllowedReferralIds();
   for (const referral of referrals) {
+    if (allowed && !allowed.has(referral.id)) continue;
     // Client-only: never pay on any referral that is not the contract's client (defence in depth beyond the query above).
     if (referral.referredUserId !== contract.clientId) continue;
     // Defense-in-depth self-referral guard, mirroring the primary guard
