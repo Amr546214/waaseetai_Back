@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { marketerOverviewController } from '../controllers/marketer-overview.controller';
 import { submitMarketerWithdrawal, listMyMarketerWithdrawals } from '../controllers/withdrawal.controller';
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
+import { validateDto } from '../middlewares/validate-dto.middleware';
+import { createCustomLinkSchema, updateRefSettingsSchema } from '../dtos/marketer-overview.dto';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 
 const router = Router();
@@ -22,8 +24,9 @@ router.get('/referrals', marketerOverviewController.getReferrals);
 
 // Referral links
 router.get('/ref-links', marketerOverviewController.getRefLinks);
-router.post('/ref-links/custom', marketerOverviewController.createCustomLink);
-router.patch('/ref-links/settings', marketerOverviewController.updateSettings);
+router.post('/ref-links/custom', validateDto(createCustomLinkSchema), marketerOverviewController.createCustomLink);
+router.delete('/ref-links/custom/:id', marketerOverviewController.deleteCustomLink);
+router.patch('/ref-links/settings', validateDto(updateRefSettingsSchema), marketerOverviewController.updateSettings);
 
 // Withdrawals — reuses the same generic, userId-scoped Withdrawal model and
 // listMyWithdrawals controller the provider finance flow already uses.

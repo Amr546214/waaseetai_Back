@@ -1,6 +1,19 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/db';
-import { REFERRAL_COOKIE_NAME, referralCookieSetOptions } from '../utils/referral-cookie';
+import { REFERRAL_COOKIE_NAME, REFERRAL_SOURCE_COOKIE_NAME, referralCookieSetOptions } from '../utils/referral-cookie';
+
+// Link-preview / crawler / scripted clients: never counted as a visit.
+const BOT_USER_AGENT = /bot|crawl|spider|slurp|preview|facebookexternalhit|headless|curl|wget|python-requests|postman|node-fetch|axios/i;
+
+function parseCookieHeader(header: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of (header ?? '').split(';')) {
+    const i = part.indexOf('=');
+    if (i <= 0) continue;
+    try { out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch { /* malformed cookie value: ignored */ }
+  }
+  return out;
+}
 
 export class RefController {
   public async handleReferralClick(req: Request, res: Response, next: NextFunction) {
@@ -19,24 +32,31 @@ export class RefController {
       });
 
       if (affiliate) {
-        // Increment click logs in background
-        if (utm_source) {
-          // find channel by utm_source matching enum or fallback to OTHER
-          const channelName = utm_source.toUpperCase();
-          const channelMap: any = {
-            'TIKTOK': 'TIKTOK',
-            'X_TWITTER': 'X_TWITTER',
-            'TWITTER': 'X_TWITTER',
-            'INSTAGRAM': 'INSTAGRAM',
-            'LINKEDIN': 'LINKEDIN',
-          };
-          const mappedChannel = channelMap[channelName] || 'OTHER';
+        // Click tracking: every real human click on the marketer's link counts as one visit (a link without utm_source is a
+        // direct visit, counted under OTHER). Bot-safe / dedupe-as-far-as-the-schema-allows: link-preview crawlers and HEAD
+        // requests are not counted, and a browser that already carries this same slug+channel cookie (a refresh or a repeat
+        // click within the 30-day attribution window) is not counted again. There is no per-visitor table, so this is the
+        // strongest dedupe available without a migration.
+        const channelMap: Record<string, string> = {
+          TIKTOK: 'TIKTOK',
+          X_TWITTER: 'X_TWITTER',
+          TWITTER: 'X_TWITTER',
+          INSTAGRAM: 'INSTAGRAM',
+          LINKEDIN: 'LINKEDIN',
+        };
+        const mappedChannel = (utm_source && channelMap[String(utm_source).toUpperCase()]) || 'OTHER';
 
+        const cookies = parseCookieHeader(req.headers?.cookie);
+        const alreadyCounted = cookies[REFERRAL_COOKIE_NAME] === slug && cookies[REFERRAL_SOURCE_COOKIE_NAME] === mappedChannel;
+        const userAgent = String(req.headers?.['user-agent'] ?? '');
+        const isBot = req.method === 'HEAD' || !userAgent || BOT_USER_AGENT.test(userAgent);
+
+        if (!alreadyCounted && !isBot) {
           prisma.affiliateChannelMetric.upsert({
             where: {
               affiliateId_channel: {
                 affiliateId: affiliate.id,
-                channel: mappedChannel,
+                channel: mappedChannel as any,
               },
             },
             update: {
@@ -44,14 +64,15 @@ export class RefController {
             },
             create: {
               affiliateId: affiliate.id,
-              channel: mappedChannel,
+              channel: mappedChannel as any,
               visitors: 1,
             },
           }).catch(err => console.error("Error updating channel metric:", err));
         }
 
-        // Set secure HTTP-Only attribution cookie for 30 days
+        // Set secure HTTP-Only attribution cookies for 30 days (slug + the channel it came through)
         res.cookie(REFERRAL_COOKIE_NAME, slug, referralCookieSetOptions());
+        res.cookie(REFERRAL_SOURCE_COOKIE_NAME, mappedChannel, referralCookieSetOptions());
       }
 
       // Redirect visitor seamlessly to the registration page — this MUST

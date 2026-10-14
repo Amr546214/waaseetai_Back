@@ -27,7 +27,9 @@ export class AuthController {
 			// silently read nothing.
 			const refCookieSlug = getRequestCookie(req, 'waseet_ref_code');
 
-			const result = await authService.registerUser(input, { refCookieSlug });
+			const refCookieSource = getRequestCookie(req, 'waseet_ref_src');
+
+			const result = await authService.registerUser(input, { refCookieSlug, refCookieSource });
 			// the mailer was called: the cooldown starts only if the SMTP server accepted the code (see otpSendGate)
 			res.locals.otpEmailAttempted = true;
 			res.locals.otpEmailSent = result.emailSent === true;
