@@ -215,3 +215,27 @@ test('decideApproval: throws when the coupon does not exist for this provider', 
 
   await assert.rejects(() => providerCouponService.decideApproval(providerId, 'missing-coupon', { decision: 'APPROVED' }), /غير موجود/);
 });
+
+// --- admin hardening: ownership + merged-row limits on update ---------------
+
+test('update: a provider cannot edit another provider\'s coupon (404, nothing written)', async (t) => {
+  const { providerCouponService } = await loadService(t, { accountType: 'PROVIDER_INDIVIDUAL', existingCoupon: null });
+  await assert.rejects(providerCouponService.update('provider-1', 'coupon-of-someone-else', { maxUses: 5 }), (e: any) => e.statusCode === 404);
+});
+
+test('create: restricting a coupon to a service of another provider is refused (403)', async (t) => {
+  const { providerCouponService } = await loadService(t, { accountType: 'PROVIDER_INDIVIDUAL' });
+  await assert.rejects(providerCouponService.create('someone-else', { code: 'X1', discountType: 'percentage', discountValue: 10, serviceIds: ['service-1'], maxUsesPerUser: 1 }), (e: any) => e.statusCode === 403);
+});
+
+test('update: raising discountValue above 100 on a stored percentage coupon is refused (merged-row check)', async (t) => {
+  const existingCoupon = { id: 'coupon-1', providerId: 'provider-1', discountType: 'percentage', discountValue: 10, startAt: new Date(0), usedCount: 0, maxUses: 10, approvalStatus: 'APPROVED' };
+  const { providerCouponService } = await loadService(t, { accountType: 'PROVIDER_INDIVIDUAL', existingCoupon });
+  await assert.rejects(providerCouponService.update('provider-1', 'coupon-1', { discountValue: 150 }), (e: any) => e.statusCode === 400);
+});
+
+test('update: maxUses cannot be lowered below the current usedCount', async (t) => {
+  const existingCoupon = { id: 'coupon-1', providerId: 'provider-1', discountType: 'percentage', discountValue: 10, startAt: new Date(0), usedCount: 8, maxUses: 10, approvalStatus: 'APPROVED' };
+  const { providerCouponService } = await loadService(t, { accountType: 'PROVIDER_INDIVIDUAL', existingCoupon });
+  await assert.rejects(providerCouponService.update('provider-1', 'coupon-1', { maxUses: 5 }), (e: any) => e.statusCode === 400);
+});

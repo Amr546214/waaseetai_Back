@@ -11,6 +11,7 @@ import {
 } from './paypal.service';
 import { logger } from '../config/logger';
 import { providerNotifications } from './provider-notifications.service';
+import { notifyAdmins } from './admin-notifications.service';
 
 // Same bound as withdrawal.service.ts's SERIALIZABLE retry loop — kept
 // separate rather than shared/imported, since this constant is small and
@@ -553,7 +554,7 @@ export class PayoutService {
 			// unchanged.
 			return current;
 		});
-		if (transitioned) await providerNotifications.withdrawal(result.withdrawalId, 'FAILED');
+		if (transitioned) { await providerNotifications.withdrawal(result.withdrawalId, 'FAILED'); void notifyAdmins('PAYOUT_FAILED', { id: result.withdrawalId, ref: failureReason.slice(0, 80) }); }
 		return result;
 	}
 

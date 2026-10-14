@@ -29,3 +29,12 @@ export async function getBrokerDetail(req: Request, res: Response, next: NextFun
     next(error);
   }
 }
+
+export async function setBrokerStatus(req: Request, res: Response, next: NextFunction) {
+  try {
+    const data = await adminBrokersService.setBrokerStatus(String(req.user!.userId), String(req.params.id), { status: req.body?.status, reason: req.body?.reason });
+    res.json({ success: true, message: 'تم تحديث حالة الوسيط', data });
+  } catch (error) {
+    next(error);
+  }
+}

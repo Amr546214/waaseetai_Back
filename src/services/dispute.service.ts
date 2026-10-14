@@ -6,6 +6,7 @@ import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { WaseetAiError, WaseetAiErrorCode } from './ai/waseet-ai/waseet-ai.errors';
 import { providerNotifications } from './provider-notifications.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
+import { notifyAdmins } from './admin-notifications.service';
 
 // Advisory-only dispute summary — never a verdict. Human admin resolution
 // via resolve() above remains the sole authority on status/fault/money;
@@ -120,6 +121,7 @@ export class DisputeService {
     // The client is the opener (confirmation) or the party the provider opened it against.
     const disputeClientId = actor === 'client' ? userId : target.againstUserId;
     if (disputeClientId) await clientNotifications.send(clientNotificationFor.disputeOpened({ clientId: disputeClientId, disputeId: dispute.id, openedBy: actor, requestTitle: disputedTitle }));
+    void notifyAdmins('NEW_DISPUTE', { id: dispute.id, ref: disputedTitle });
     return dispute;
   }
 

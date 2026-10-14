@@ -13,6 +13,7 @@ import { paypalEmailChangeService } from './paypal-email-change.service';
 import { paypalEmailFrozenError } from '../utils/paypal-email-messages';
 import { deriveWithdrawalReferenceId } from '../utils/withdrawal-reference.util';
 import { providerNotifications } from './provider-notifications.service';
+import { notifyAdmins } from './admin-notifications.service';
 
 export const MARKETER_PAYPAL_REQUIRED_MESSAGE = 'أضف بريد PayPal لاستلام الأرباح';
 
@@ -192,6 +193,7 @@ export class WithdrawalService {
           });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
         await providerNotifications.withdrawal(created.id, 'REQUESTED');
+        void notifyAdmins('WITHDRAWAL_REQUESTED', { id: created.id, ref: `${created.amount} $` });
         return created;
       } catch (error) {
         // Bounded retry, and ONLY for a recognized transaction-conflict
@@ -262,7 +264,7 @@ export class WithdrawalService {
 
     for (let attempt = 1; attempt <= MAX_SERIALIZATION_RETRIES; attempt++) {
       try {
-        return await prisma.$transaction(async tx => {
+        const createdWithdrawal = await prisma.$transaction(async tx => {
           const approvedCommissions = await tx.commissionLog.aggregate({
             where: { affiliateId: affiliate.id, status: CommissionStatus.APPROVED },
             _sum: { amount: true },
@@ -293,6 +295,8 @@ export class WithdrawalService {
             },
           });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        void notifyAdmins('WITHDRAWAL_REQUESTED', { id: createdWithdrawal.id, ref: `${createdWithdrawal.amount} $` });
+        return createdWithdrawal;
       } catch (error) {
         if (isRetryableTransactionConflict(error) && attempt < MAX_SERIALIZATION_RETRIES) continue;
         throw error;
