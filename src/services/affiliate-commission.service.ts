@@ -1,4 +1,5 @@
 import { Prisma, CommissionType, CommissionStatus, DisputeStatus } from '@prisma/client';
+import type { MarketerCommissionNotice } from './marketer-notifications.service';
 import { resolveAffiliateCommissionPercentage } from '../config/affiliate-levels.config';
 import { isAffiliateCommissionEngineEnabled } from '../utils/affiliate-commission-engine.util';
 
@@ -123,8 +124,10 @@ export interface StageReleaseCommissionContext {
 export async function createCommissionsForStageReleaseEvent(
   tx: Prisma.TransactionClient,
   { contract, stageId, releasedAmount }: StageReleaseCommissionContext
-): Promise<void> {
-  if (!isAffiliateCommissionEngineEnabled()) return;
+): Promise<MarketerCommissionNotice[]> {
+  // The commissions written by this call, so the caller can tell each marketer AFTER its transaction has committed (never from inside it).
+  const created: MarketerCommissionNotice[] = [];
+  if (!isAffiliateCommissionEngineEnabled()) return created;
 
   const activeDispute = await tx.dispute.findFirst({
     where: {
@@ -133,7 +136,7 @@ export async function createCommissionsForStageReleaseEvent(
     },
     select: { id: true }
   });
-  if (activeDispute) return;
+  if (activeDispute) return created;
 
   const referrals = await tx.referral.findMany({
     where: { referredUserId: contract.clientId },
@@ -153,7 +156,7 @@ export async function createCommissionsForStageReleaseEvent(
     const { percentage, amount, level } = calculateAffiliateCommission(referral.affiliate.level, releasedAmount);
 
     try {
-      await tx.commissionLog.create({
+      const row = await tx.commissionLog.create({
         data: {
           affiliateId: referral.affiliate.id,
           referralId: referral.id,
@@ -176,9 +179,11 @@ export async function createCommissionsForStageReleaseEvent(
           level
         }
       });
+      created.push({ affiliateUserId: referral.affiliate.userId, commissionId: row.id, amount: row.amount, currency: row.currency });
     } catch (error) {
       if (isDuplicateCommissionConflict(error)) continue;
       throw error;
     }
   }
+  return created;
 }

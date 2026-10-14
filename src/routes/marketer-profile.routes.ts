@@ -1,8 +1,8 @@
 import { Router } from 'express';
+import { AccountType } from '@prisma/client';
 import { marketerProfileController } from '../controllers/marketer-profile.controller';
 import { profileRequestsController } from '../controllers/profile-requests.controller';
-import { AccountType } from '@prisma/client';
-import { authenticate, authorize, requireActiveUser , authorizeActiveRole } from '../middlewares/auth.middleware';
+import { authenticate, authorizeActiveRoleWithMessage, requireActiveUser } from '../middlewares/auth.middleware';
 import { validateDto } from '../middlewares/validate-dto.middleware';
 import { apiLimiter } from '../middlewares/rate-limit.middleware';
 import { marketerKycController } from '../controllers/marketer-kyc.controller';
@@ -21,9 +21,9 @@ const kycUpload = memoryUpload({ fileSize: 5 * 1024 * 1024, files: 1, allowedMim
 // used rather than aiLimiter (which is reserved for AI-cost-bearing routes).
 router.get('/public/:id', apiLimiter, marketerProfileController.getPublicProfile);
 
-// Protect all routes and restrict to MARKETING_BROKER
+// Protect all routes: the role the user is acting as RIGHT NOW must be the marketer
 router.use(authenticate, requireActiveUser);
-router.use(authorizeActiveRole(AccountType.MARKETING_BROKER));
+router.use(authorizeActiveRoleWithMessage('بدّل إلى حساب الوسيط التسويقي للوصول إلى هذه الصفحة', AccountType.MARKETING_BROKER));
 
 router.get('/', marketerProfileController.getProfile);
 router.patch('/marketing-info', validateDto(updateMarketingInfoSchema), marketerProfileController.updateMarketingInfo);

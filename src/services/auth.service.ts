@@ -19,6 +19,7 @@ import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { otpSendThrottle, otpThrottleMessage } from '../utils/otp-send-throttle';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { normalizeReferralIdentifier } from '../utils/referral-identifier';
+import { marketerNotifications } from './marketer-notifications.service';
 
 /**
  * Phase 3C: resolves firstName/lastName for an auth response from the user's
@@ -184,7 +185,7 @@ export class AuthService {
 		}
 
 		try {
-			await prisma.referral.create({
+			const referral = await prisma.referral.create({
 				data: {
 					affiliateId: affiliate.id,
 					referredUserId: newUserId,
@@ -193,6 +194,9 @@ export class AuthService {
 					...(viaCookie && isSourceChannel(context.refCookieSource) ? { sourceChannel: context.refCookieSource } : {})
 				}
 			});
+			// Conversion of a click into a sign-up: the marketer is told (first name only, never e-mail / phone).
+			const referred = await prisma.user.findUnique({ where: { id: newUserId }, select: { firstName: true } }).catch(() => null);
+			await marketerNotifications.referralJoined({ affiliateId: affiliate.id, referralId: referral.id, referredName: referred?.firstName });
 		} catch (error: any) {
 			if (error?.code === 'P2002') return;
 			// The account already exists at this point: a failed attribution write is logged, never turned into a failed signup.

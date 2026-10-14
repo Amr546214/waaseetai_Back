@@ -32,6 +32,8 @@ const STATUS_LABELS_AR: Record<SupportTicketStatus, string> = {
 function ticketActionUrl(accountType: string | undefined, ticketId: string): string | undefined {
   if (accountType?.startsWith('PROVIDER')) return `/provider-overview/help/tickets/${ticketId}`;
   if (accountType?.startsWith('CLIENT')) return `/client-overview/help/tickets/${ticketId}`;
+  // The marketer's ticket detail page (angular-app marketer.routes.ts: help/tickets/:id).
+  if (accountType === 'MARKETING_BROKER') return `/marketer-overview/help/tickets/${ticketId}`;
   return undefined;
 }
 
