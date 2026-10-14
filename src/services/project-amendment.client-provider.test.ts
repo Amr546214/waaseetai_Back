@@ -2,7 +2,7 @@ import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 
 // C1: a client-raised change request (a) is recorded once per contract (one pending), (b) notifies the PROVIDER, and (c) the PROVIDER of that
-// contract can answer it (record only: nothing about price / duration / escrow / stages is touched). The provider can never answer its own request.
+// contract can answer it (a REJECT changes nothing about price / duration / escrow / stages; an APPROVE applies it: see amendment-apply.service.test.ts). The provider can never answer its own request.
 
 const CONTRACT = { id: 'contract-abcdef123', projectId: 'project-1', clientId: 'client-1', providerId: 'provider-1', status: 'ACTIVE', price: 1000, durationDays: 14 };
 const ROW = (o: Record<string, unknown> = {}) => ({
@@ -103,23 +103,23 @@ test('client create changes nothing about the contract (no contract / escrow / s
 });
 
 // ---------- provider respond ----------
-test('provider respond: the provider of the contract approves a CLIENT request — decision recorded, client notified', async (t) => {
+test('provider respond: the provider of the contract rejects a CLIENT request — decision recorded, client notified, nothing else changes', async (t) => {
   const { svc, state } = await load(t);
-  const out = await svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'approve');
-  assert.equal(out.status, 'APPROVED');
+  const out = await svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'reject');
+  assert.equal(out.status, 'REJECTED');
   assert.ok(out.respondedAt);
   assert.deepEqual(state.amendUpdates[0].where, { id: 'amend-1', providerId: 'provider-1', requestedByRole: 'CLIENT', status: 'PENDING_OTHER_PARTY' });
   assert.deepEqual(Object.keys(state.amendUpdates[0].data).sort(), ['respondedAt', 'status']);
   assert.equal(state.notifications[0].userId, 'client-1');
-  assert.match(state.notifications[0].message, /يُسجَّل للمتابعة فقط ولا يغيّر سعر العقد أو مدته أو الضمان/);
+  assert.match(state.notifications[0].message, /ولم يتغيّر شيء في العقد/);
 });
 test('provider respond: reject is recorded as REJECTED', async (t) => {
   const { svc } = await load(t);
   assert.equal((await svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'reject')).status, 'REJECTED');
 });
-test('provider respond: NEVER touches price / duration / escrow / stages', async (t) => {
+test('provider respond: a rejection NEVER touches price / duration / escrow / stages', async (t) => {
   const { svc, state } = await load(t);
-  await svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'approve');
+  await svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'reject');
   assert.equal(state.forbiddenWrites, 0);
 });
 test('provider respond: another provider is refused (403) and nothing changes', async (t) => {
@@ -134,13 +134,14 @@ test('provider respond: a request the PROVIDER raised cannot be answered by the 
 });
 test('provider respond: answering twice is refused (409); the first decision stands', async (t) => {
   const { svc, state } = await load(t);
-  await svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'approve');
+  await svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'reject');
+  await refused(svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'approve'), 409, /مسبقًا/);
   await refused(svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'reject'), 409, /مسبقًا/);
   assert.equal(state.notifications.length, 1);
 });
 test('provider respond: an unknown request is 403 and an invalid decision is 400 (no query at all)', async (t) => {
   const { svc, state } = await load(t, { stored: null });
-  await refused(svc.respondToAmendmentAsProvider('provider-1', 'nope', 'approve'), 403);
+  await refused(svc.respondToAmendmentAsProvider('provider-1', 'nope', 'reject'), 403);
   for (const d of ['maybe', '', undefined, 'APPROVE', 1]) await refused(svc.respondToAmendmentAsProvider('provider-1', 'amend-1', d as any), 400);
   assert.equal(state.amendUpdates.length, 1); // only the unknown-id attempt reached the DB
 });

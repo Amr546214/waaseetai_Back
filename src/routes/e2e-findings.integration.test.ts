@@ -236,14 +236,18 @@ test('(5) a submitted stage: both endpoints agree on awaitingClientReview and no
 	assert.equal(row.currentStage, 'التحليل');
 });
 
-test('(6) every amendment payload says RECORD_ONLY, and the notifications say the decision changes nothing', async () => {
-	const { AMENDMENT_EFFECT, AMENDMENT_EFFECT_NOTE } = await import('../services/project-amendment.service');
+test('(6) legacy APPROVED rows keep the RECORD_ONLY wording; the notifications of the effective flow no longer claim "record only"', async () => {
+	const { AMENDMENT_EFFECT, AMENDMENT_EFFECT_NOTE, amendmentEffectOf } = await import('../services/project-amendment.service');
 	assert.equal(AMENDMENT_EFFECT, 'RECORD_ONLY');
 	assert.equal(AMENDMENT_EFFECT_NOTE, 'القرار يُسجَّل للمتابعة فقط ولا يغيّر سعر العقد أو مدته أو الضمان حاليًا.');
+	assert.equal(amendmentEffectOf({ status: 'APPROVED', appliedAt: null }), 'RECORD_ONLY');
+	assert.equal(amendmentEffectOf({ status: 'APPROVED', appliedAt: new Date() }), 'APPLIED');
 	const { clientNotificationFor } = await import('../services/client-notifications.service');
-	for (const n of [
-		clientNotificationFor.amendmentRequested({ clientId: 'c', projectId: 'p', amendmentId: 'a', title: 'زيادة' }),
-		clientNotificationFor.amendmentAnswered({ clientId: 'c', projectId: 'p', amendmentId: 'a', title: 'زيادة', decision: 'approve' }),
-		clientNotificationFor.amendmentAnswered({ clientId: 'c', projectId: 'p', amendmentId: 'a', title: 'زيادة', decision: 'reject' }),
-	]) assert.ok(n.message.includes(AMENDMENT_EFFECT_NOTE), n.message);
+	const approved = clientNotificationFor.amendmentAnswered({ clientId: 'c', projectId: 'p', amendmentId: 'a', title: 'زيادة', decision: 'approve' });
+	const rejected = clientNotificationFor.amendmentAnswered({ clientId: 'c', projectId: 'p', amendmentId: 'a', title: 'زيادة', decision: 'reject' });
+	const requested = clientNotificationFor.amendmentRequested({ clientId: 'c', projectId: 'p', amendmentId: 'a', title: 'زيادة' });
+	for (const n of [approved, rejected, requested]) assert.ok(!n.message.includes('للمتابعة فقط'), n.message);
+	assert.match(approved.message, /طُبّق التعديل على العقد/);
+	assert.match(rejected.message, /لم يتغيّر شيء في العقد/);
+	assert.match(requested.message, /قبل موافقتك/);
 });
