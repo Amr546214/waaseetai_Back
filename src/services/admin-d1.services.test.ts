@@ -266,7 +266,7 @@ test('specialty decision notifies the provider with the specialties route (appro
 	const { SpecialtyAdminReviewService } = await fresh('./specialty-admin-review.service.ts');
 	const svc = new SpecialtyAdminReviewService(); notes.length = 0;
 	const audit: any[] = [];
-	current = { providerSpecialty: { findUnique: async () => ({ id: 'ps1', status: 'UNDER_AI_REVIEW', providerProfile: { userId: 'p1' }, specialty: { nameAr: 'تصميم' }, providerProfileId: 'pp' }), updateMany: async () => ({ count: 1 }), count: async () => 1 }, user: { update: async () => ({}) }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
+	current = { providerSpecialty: { findUnique: async () => ({ id: 'ps1', status: 'UNDER_AI_REVIEW', providerProfile: { userId: 'p1' }, specialty: { nameAr: 'تصميم' }, providerProfileId: 'pp' }), updateMany: async () => ({ count: 1 }), count: async () => 1 }, accreditationSample: { findMany: async () => [], update: async () => ({}) }, user: { update: async () => ({}) }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
 	await svc.decide('adm', 'ps1', { decision: 'APPROVED', reason: 'نماذج ممتازة وموثقة' });
 	await svc.decide('adm', 'ps1', { decision: 'REJECTED', reason: 'الأدلة غير كافية' });
 	assert.deepEqual(notes.map(n => n.type), ['SPECIALTY_APPROVED', 'SPECIALTY_REJECTED']);

@@ -15,6 +15,8 @@ import companyTeamRouter from './company-team.routes';
 import specialOfferRouter from './provider-special-offer.routes';
 import marketingCenterRouter from './provider-marketing-center.routes';
 import { AppError } from '../utils/app-error';
+import { requireApprovedProvider } from '../middlewares/provider-access.middleware';
+import { providerAccessStateService } from '../services/provider-access-state.service';
 import { memoryUpload } from '../utils/cloudinary-storage';
 import { DELIVERY_MAX_FILE_BYTES, DELIVERY_MAX_UPLOADED_FILES } from '../utils/delivery-artifacts';
 import { DELIVERY_UPLOAD_MIME_TYPES } from '../utils/upload-mime-types';
@@ -39,6 +41,20 @@ const requireCompanyAccount = (req: Request, _res: Response, next: NextFunction)
   }
   next();
 };
+
+// The derived access state (one source of truth for "may the provider open the dashboard"). Individual AND company providers (activeRole PROVIDER) may ask; never gated itself.
+router.get('/access-state', authenticate, requireActiveUser, providerOnly, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const data = await providerAccessStateService.get(req.user!.id);
+    res.json({ success: true, data });
+  } catch (error) { next(error); }
+});
+
+// Dashboard-DATA endpoints a not-yet-approved individual provider has no business calling (403 until a specialty is APPROVED by the admin).
+// Deliberately NOT gated: profile / setup / specialties / skills / accreditation / access-state / notifications / tickets / disputes / KYC / services / projects / chat.
+const dashboardGate = [authenticate, requireActiveUser, requireApprovedProvider];
+const DASHBOARD_DATA_PREFIXES = ['/statistics', '/offers', '/finance', '/reports', '/explore-requests'];
+router.use(DASHBOARD_DATA_PREFIXES, ...dashboardGate);
 
 // BE-2(a): provider reports (incoming requests, projects, acceptance by specialty, payments, disputes) → GET /api/provider/reports
 router.get('/reports', authenticate, requireActiveUser, providerOnly, providerReportsController.getReports);
