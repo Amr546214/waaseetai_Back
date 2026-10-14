@@ -50,6 +50,7 @@ function createRateRequestMockPrisma(t: TestContext, opts: {
 
   const prismaMock = {
     clientRequest: { findUnique: async () => null },
+    dispute: { findFirst: async () => null },
     contract: { findUnique: async () => ({ ...contract }) },
     project: { findUnique: async () => ({ serviceCatalogId: null }) },
     review: { findFirst: async () => null },

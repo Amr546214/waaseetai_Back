@@ -264,6 +264,7 @@ test('ratingService: a client rating notifies the provider; a provider rating of
 	};
 	t.mock.module('../config/db', { namedExports: { prisma: {
 		clientRequest: { findUnique: async () => null },
+		dispute: { findFirst: async () => null },
 		contract: { findUnique: async () => ({ id: 'c1', providerId: 'prov-1', clientId: 'client-1', projectId: 'p1', status: 'COMPLETED', project: { id: 'p1', status: 'COMPLETED' } }) },
 		project: { findUnique: async () => ({ serviceCatalogId: null }) },
 		review: { findFirst: async () => null },

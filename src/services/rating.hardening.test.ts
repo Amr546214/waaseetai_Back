@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createRatingSchema } from '../dtos/rating.dto';
 
 /** An in-memory review table + a mutex that behaves like pg_advisory_xact_lock (held until the transaction callback ends). */
-function setup(t: TestContext, over: { serviceCatalogId?: string | null; contractStatus?: string } = {}) {
+function setup(t: TestContext, over: { serviceCatalogId?: string | null; contractStatus?: string; settledDispute?: boolean } = {}) {
 	const reviews: any[] = [];
 	const clientNotes: any[] = []; const providerNotes: any[] = [];
 	let chain: Promise<void> = Promise.resolve();
@@ -21,6 +21,7 @@ function setup(t: TestContext, over: { serviceCatalogId?: string | null; contrac
 	});
 	const prismaMock: any = {
 		clientRequest: { findUnique: async () => null },
+		dispute: { findFirst: async ({ where }: any) => (over.settledDispute && where.status === 'RESOLVED' && where.resolution?.in?.includes('SPLIT') ? { id: 'd-settled' } : null) },
 		contract: { findUnique: async () => ({ id: 'c1', providerId: 'prov', clientId: 'cli', projectId: 'p1', status: over.contractStatus ?? 'COMPLETED' }), findFirst: async () => ({ id: 'c1', providerId: 'prov', clientId: 'cli', projectId: 'p1' }) },
 		project: { findUnique: async () => ({ serviceCatalogId: over.serviceCatalogId ?? null }) },
 		projectStage: { findFirst: async () => ({ id: 'st1', status: 'APPROVED' }) },
@@ -110,4 +111,21 @@ test('no rating before the project is completed, and an unfinished stage cannot 
 	const svc = new RatingService();
 	await assert.rejects(() => svc.rateRequest('p1', 'cli', 'client', { rating: 5 }), (e: any) => e.statusCode === 400);
 	await assert.rejects(() => svc.rateRequest('p1', 'prov', 'provider', { rating: 5 }), (e: any) => e.statusCode === 400);
+});
+
+test('a project settled by an admin FINANCIAL dispute decision cannot be rated by either side (project or stage), and no review / notification is created', async t => {
+	const { reviews, clientNotes, providerNotes } = setup(t, { settledDispute: true });
+	const { RatingService } = await import(`./rating.service.ts?fixture=${Date.now()}-${Math.random()}`);
+	const svc = new RatingService();
+	await assert.rejects(() => svc.rateRequest('p1', 'cli', 'client', { rating: 5 }), (e: any) => e.statusCode === 409 && /سُوّي إداريًا/.test(e.message));
+	await assert.rejects(() => svc.rateRequest('p1', 'prov', 'provider', { rating: 5 }), (e: any) => e.statusCode === 409);
+	await assert.rejects(() => svc.rateStage('p1', 'st1', 'cli', { rating: 5 }), (e: any) => e.statusCode === 409);
+	assert.equal(reviews.length, 0); assert.equal(clientNotes.length, 0); assert.equal(providerNotes.length, 0);
+});
+
+test('a TEXT closure (no money moved) does not block rating: only financial outcomes count as an admin settlement', async t => {
+	const { reviews } = setup(t, { settledDispute: false });
+	const { RatingService } = await import(`./rating.service.ts?fixture=${Date.now()}-${Math.random()}`);
+	await new RatingService().rateRequest('p1', 'cli', 'client', { rating: 4 });
+	assert.equal(reviews.length, 1);
 });

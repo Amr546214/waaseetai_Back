@@ -5,6 +5,19 @@ import { deriveProviderProgression } from '../utils/progression-calculators';
 import { providerNotifications } from './provider-notifications.service';
 import { clientNotificationFor, clientNotifications } from './client-notifications.service';
 import type { Prisma } from '@prisma/client';
+import { FINANCIAL_OUTCOMES } from '../utils/dispute-resolution';
+
+export const ADMIN_SETTLED_MESSAGE = 'لا يمكن تقييم مشروع سُوّي إداريًا عبر نزاع. التقييم متاح للمشاريع التي اكتملت باعتماد التسليم.';
+
+/** A project whose escrow an admin settled through a FINANCIAL dispute decision did not complete through delivery approval: no rating (and no points) for it. */
+async function assertNotAdminSettled(db: { dispute: { findFirst: (args: any) => Promise<{ id: string } | null> } }, projectId: string | null, requestId: string | null) {
+  const keys: Array<Record<string, string>> = [];
+  if (projectId) keys.push({ projectId });
+  if (requestId) keys.push({ requestId });
+  if (!keys.length) return;
+  const settled = await db.dispute.findFirst({ where: { OR: keys, status: 'RESOLVED', resolution: { in: FINANCIAL_OUTCOMES as string[] } }, select: { id: true } });
+  if (settled) throw new AppError(ADMIN_SETTLED_MESSAGE, 409);
+}
 
 /** Serializes the check-then-create of one review (same reviewer, same project/request/stage) so a double click or two parallel requests can never both pass the duplicate check. */
 async function lockReviewKey(tx: Prisma.TransactionClient, key: string) {
@@ -80,6 +93,8 @@ export class RatingService {
     if (actor === 'client' && clientId !== userId) throw new AppError('لا تملك صلاحية تقييم هذا الطلب', 403);
     if (actor === 'provider' && providerId !== userId) throw new AppError('لا تملك صلاحية تقييم هذا الطلب', 403);
 
+    await assertNotAdminSettled(prisma as any, projectId, clientRequestId);
+
     // Duplicate check: only block if the SAME actor already rated in the SAME direction.
     // CLIENT → PROVIDER reviews must NOT block PROVIDER → CLIENT reviews (and vice versa).
     const reviewerRole = actor === 'provider' ? 'PROVIDER' : 'CLIENT';
@@ -131,6 +146,7 @@ export class RatingService {
     });
     if (!stage) throw new AppError('المرحلة غير موجودة', 404);
     if (stage.status !== 'APPROVED') throw new AppError('يمكن تقييم المرحلة بعد اعتمادها فقط', 400);
+    await assertNotAdminSettled(prisma as any, contract.projectId, null);
 
     const providerId = contract.providerId;
     const clientId = contract.clientId;

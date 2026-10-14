@@ -334,3 +334,19 @@ test('pg: status, counters and conversion all follow the one definition (a seede
 	assert.equal((await w.prisma.referral.findUnique({ where: { id: rA.id } })).status, 'CONVERTED');
 	assert.equal((await w.prisma.referral.findUnique({ where: { id: rB.id } })).status, 'PENDING');
 });
+
+// ── 9. a project settled by an admin financial decision: no rating, no points, no repeat settlement ────────────────────────────
+test('pg: after an admin FINANCIAL settlement the project cannot be rated (either side), earns no completion points, and a second settlement is refused', opts, async () => {
+	const { disputeService } = await import('./dispute.service');
+	const { ratingService } = await import('./rating.service');
+	const w = await seedWorld({ stagesSubmitted: false });
+	const d = await w.prisma.dispute.create({ data: { id: randomUUID(), projectId: w.project.id, openedById: w.client.id, againstUserId: w.provider.id, reason: 'x', description: 'synthetic dispute for settlement then rating', status: 'OPEN' } });
+	const input: any = { outcome: 'SPLIT', refundToClient: 10, releaseToProvider: 10, expectedHeldAmount: 20, confirm: true };
+	await disputeService.resolveFinancial(d.id, w.admin.id, input);
+	await assert.rejects(() => ratingService.rateRequest(w.project.id, w.client.id, 'client', { rating: 5 }), (e: any) => e.statusCode === 409 && /سُوّي إداريًا/.test(e.message));
+	await assert.rejects(() => ratingService.rateRequest(w.project.id, w.provider.id, 'provider', { rating: 5 }), (e: any) => e.statusCode === 409);
+	assert.equal(await w.prisma.review.count({ where: { projectId: w.project.id } }), 0);
+	assert.equal(await w.prisma.pointTransaction.count({ where: { providerId: w.provider.id } }), 0, 'no completion points for an admin settlement');
+	await assert.rejects(() => disputeService.resolveFinancial(d.id, w.admin.id, input), (e: any) => e.statusCode === 409);
+	assert.equal(r2((await money(w)).wallet), 110, 'refund credited once (100 + 10)');
+});
