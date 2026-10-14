@@ -16,7 +16,8 @@ ALTER TABLE "project_amendments"
   ADD COLUMN IF NOT EXISTS "durationAfter" INTEGER,
   ADD COLUMN IF NOT EXISTS "addedStageId" TEXT,
   ADD COLUMN IF NOT EXISTS "fundingAuthorizedAt" TIMESTAMP(3),
-  ADD COLUMN IF NOT EXISTS "fundingAuthorizedAmount" DOUBLE PRECISION;
+  ADD COLUMN IF NOT EXISTS "fundingAuthorizedAmount" DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS "fundingAuthorizedTerms" TEXT;   -- termsVersion|price|durationDays the client authorized against
 ALTER TABLE "project_stages" ADD COLUMN IF NOT EXISTS "amendmentId" TEXT;
 CREATE TABLE IF NOT EXISTS "contract_terms_versions" (...);   -- id, contractId (FK, cascade), version, addendumText, amendmentId (unique), createdAt; unique (contractId, version)
 ```
@@ -25,6 +26,18 @@ CREATE TABLE IF NOT EXISTS "contract_terms_versions" (...);   -- id, contractId 
 * Effect on existing rows: every new column is NULL. Old `APPROVED` rows therefore stay "recorded only" (`appliedAt` NULL, `effect: RECORD_ONLY`) and are never re-applied (the claim only matches `PENDING_OTHER_PARTY`).
 * Rollback (`rollback.sql`): drops the new table and columns. Safe only before any amendment was applied; afterwards the contract/escrow/stage changes remain and only the before/after audit values are lost.
 * The code must NOT be deployed before this migration is applied (Prisma selects the new columns).
+
+### Rollback impact (what happens if the rollback is run AFTER amendments were applied)
+| Moment of rollback | Effect |
+|---|---|
+| Before any amendment was applied (all `appliedAt` NULL, no `contract_terms_versions`, no `AMENDMENT_*` wallet rows) | clean: the columns/table are dropped, nothing else changes |
+| After at least one amendment was applied | **the financial effects stay** (contract price/duration, escrow amount, the added stage, wallet `AMENDMENT_TOPUP`/`AMENDMENT_REFUND` rows, escrow commission arithmetic). Dropping the columns only deletes the audit values (`priceBefore/After`, `durationBefore/After`, `addedStageId`, funding authorization) and the scope addenda (`contract_terms_versions`), so the history of WHY the price/duration changed would be lost. `project_stages.amendmentId` is lost too, so the stage added by an amendment would look like an ordinary stage. |
+| Old code running after such a rollback | would read the changed contract price/escrow/stages as normal data (they stay consistent: contract == escrow == stage sum), but could not explain them. A pending amendment would be "recorded only" again. |
+| Recommended handling | do NOT run `rollback.sql` once any amendment was applied. Instead keep the columns (harmless) and turn the feature off by deploying the previous image, or reverse a specific amendment by raising an opposite amendment through the normal flow (append-only history). If the rollback is unavoidable: first export the three tables (`project_amendments`, `contract_terms_versions`, the `AMENDMENT_*` wallet rows) for the audit trail, then run it. |
+| Detection query before any rollback (read-only) | `SELECT count(*) FROM project_amendments WHERE "appliedAt" IS NOT NULL;` — must be 0 for a clean rollback |
+
+### Authorization window (owner decision)
+A client's funding authorization is bound to the contract terms (`termsVersion|price|durationDays`) and the amount, expires after **15 minutes** (`FUNDING_AUTHORIZATION_TTL_MS`), and is voided by ANY applied amendment (every other pending request loses its authorization in the same transaction). The email code itself stays valid 2 minutes. There is no open-ended permission to debit the wallet.
 
 ## 2. API contract
 
