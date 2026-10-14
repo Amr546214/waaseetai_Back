@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { DisputeStatus } from '@prisma/client';
 import { disputeService } from '../services/dispute.service';
-import { createDisputeSchema, resolveDisputeSchema } from '../dtos/dispute.dto';
+import { assignDisputeSchema, createDisputeSchema, disputeNoteSchema, disputeStatusSchema, resolveDisputeSchema } from '../dtos/dispute.dto';
 import { AppError } from '../utils/app-error';
 
 const actorId = (req: Request) => req.user?.id || req.user?.userId!;
@@ -54,4 +54,16 @@ export async function openProviderDispute(req: Request, res: Response, next: Nex
 
 export async function cancelProviderRequest(req: Request, res: Response, next: NextFunction) {
   try { res.json({ success: true, data: await disputeService.cancelByProvider(String(req.params.id), actorId(req)) }); } catch (error) { next(error); }
+}
+
+export async function assignAdminDispute(req: Request, res: Response, next: NextFunction) {
+  try { const parsed = assignDisputeSchema.safeParse(req.body); if (!parsed.success) throw new AppError('حدد المشرف المسؤول عن النزاع', 400); res.json({ success: true, data: await disputeService.assign(String(req.params.id), actorId(req), parsed.data.assigneeId) }); } catch (error) { next(error); }
+}
+
+export async function addAdminDisputeNote(req: Request, res: Response, next: NextFunction) {
+  try { const parsed = disputeNoteSchema.safeParse(req.body); if (!parsed.success) throw new AppError('أدخل نص الملاحظة', 400); res.status(201).json({ success: true, data: await disputeService.addNote(String(req.params.id), actorId(req), parsed.data.body) }); } catch (error) { next(error); }
+}
+
+export async function setAdminDisputeStatus(req: Request, res: Response, next: NextFunction) {
+  try { const parsed = disputeStatusSchema.safeParse(req.body); if (!parsed.success) throw new AppError('حالة النزاع غير صحيحة', 400); res.json({ success: true, data: await disputeService.setStatus(String(req.params.id), actorId(req), parsed.data.status) }); } catch (error) { next(error); }
 }

@@ -1,4 +1,4 @@
-import { ContractStatus, DisputeStatus, EscrowStatus, RequestStatus } from '@prisma/client';
+import { AccountType, ContractStatus, DisputeStatus, EscrowStatus, RequestStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { CreateDisputeInput, ResolveDisputeInput } from '../dtos/dispute.dto';
@@ -6,6 +6,7 @@ import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { WaseetAiError, WaseetAiErrorCode } from './ai/waseet-ai/waseet-ai.errors';
 import { providerNotifications } from './provider-notifications.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
+import { adminAudit } from './admin-audit.service';
 
 // Advisory-only dispute summary — never a verdict. Human admin resolution
 // via resolve() above remains the sole authority on status/fault/money;
@@ -144,11 +145,32 @@ export class DisputeService {
   async listForAdmin(status?: DisputeStatus, page = 1, limit = 20) {
     const safePage = Math.max(1, page); const safeLimit = Math.min(100, Math.max(1, limit));
     const where = status ? { status } : {};
-    const [items, total] = await Promise.all([
-      prisma.dispute.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { request: { select: { id: true, title: true } }, openedBy: { select: { id: true, firstName: true, lastName: true, email: true } }, againstUser: { select: { id: true, firstName: true, lastName: true, email: true } } } }),
-      prisma.dispute.count({ where })
+    const [items, total, grouped] = await Promise.all([
+      prisma.dispute.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } }, openedBy: { select: { id: true, firstName: true, lastName: true, email: true } }, againstUser: { select: { id: true, firstName: true, lastName: true, email: true } } } }),
+      prisma.dispute.count({ where }),
+      prisma.dispute.groupBy({ by: ['status'], _count: { _all: true } })
     ]);
-    return { items, pagination: { page: safePage, limit: safeLimit, total, pages: Math.ceil(total / safeLimit) } };
+    const counts: Record<string, number> = {};
+    for (const g of grouped) counts[g.status] = g._count._all;
+    const assignees = await this.assigneesFor(items.map(i => i.id));
+    const pages = Math.ceil(total / safeLimit);
+    return { items: items.map(i => ({ ...i, assignedTo: assignees.get(i.id) ?? null })), counts, pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages } };
+  }
+
+  /** Current assignee per dispute = the newest DISPUTE_ASSIGNED audit row (no schema column exists for it). */
+  private async assigneesFor(ids: string[]) {
+    const result = new Map<string, { id: string; name: string }>();
+    if (!ids.length) return result;
+    const rows = await prisma.accountAuditLog.findMany({
+      where: { source: 'ADMIN', eventType: 'DISPUTE_ASSIGNED', OR: ids.map(id => ({ context: { path: ['entityId'], equals: id } })) },
+      orderBy: { occurredAt: 'desc' },
+      select: { context: true }
+    });
+    for (const row of rows) {
+      const ctx = (row.context ?? {}) as Record<string, any>;
+      if (ctx.entityId && !result.has(ctx.entityId) && ctx.assigneeId) result.set(ctx.entityId, { id: ctx.assigneeId, name: ctx.assigneeName ?? '' });
+    }
+    return result;
   }
 
   // A user is a party to a dispute if they opened it or it was opened
@@ -183,7 +205,57 @@ export class DisputeService {
   async getForAdmin(id: string) {
     const dispute = await prisma.dispute.findUnique({ where: { id }, include: { request: true, project: true, openedBy: { select: { id: true, firstName: true, lastName: true, email: true } }, againstUser: { select: { id: true, firstName: true, lastName: true, email: true } }, resolvedBy: { select: { id: true, firstName: true, lastName: true } } } });
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
+    const projectId = dispute.projectId ?? dispute.requestId;
+    const [escrow, audit] = await Promise.all([
+      projectId
+        ? prisma.escrow.findUnique({ where: { projectId }, select: { amount: true, releasedAmount: true, status: true, fundedAt: true, project: { select: { contract: { select: { price: true, status: true } } } } } })
+        : Promise.resolve(null),
+      adminAudit.listForEntity('DISPUTE', id)
+    ]);
+    const assignment = audit.find(e => e.eventType === 'DISPUTE_ASSIGNED');
+    return {
+      ...dispute,
+      heldEscrowAmount: heldEscrowAmount(escrow, escrow?.project?.contract?.price),
+      escrow: escrow ? { status: escrow.status, amount: escrow.amount, releasedAmount: escrow.releasedAmount, fundedAt: escrow.fundedAt } : null,
+      contractStatus: escrow?.project?.contract?.status ?? null,
+      assignedTo: assignment ? { id: assignment.context.assigneeId, name: assignment.context.assigneeName ?? '' } : null,
+      // Internal admin notes: returned by this admin-only endpoint ONLY — the parties' own detail (getForUser) never carries them.
+      notes: audit.filter(e => e.eventType === 'DISPUTE_NOTE').map(e => ({ id: e.id, body: String(e.context.body ?? ''), createdAt: e.occurredAt, admin: e.admin })),
+      timeline: audit.map(e => ({ id: e.id, eventType: e.eventType, title: e.title, summary: e.summary, occurredAt: e.occurredAt, admin: e.admin }))
+    };
+  }
+
+  private async openDisputeForAdmin(id: string) {
+    const dispute = await prisma.dispute.findUnique({ where: { id } });
+    if (!dispute) throw new AppError('النزاع غير موجود', 404);
+    if (dispute.status === DisputeStatus.RESOLVED || dispute.status === DisputeStatus.REJECTED) throw new AppError('تمت معالجة النزاع مسبقاً ولا يمكن تعديله', 409);
     return dispute;
+  }
+
+  async assign(id: string, adminId: string, assigneeId: string) {
+    const dispute = await this.openDisputeForAdmin(id);
+    const assignee = await prisma.user.findUnique({ where: { id: assigneeId }, select: { id: true, firstName: true, lastName: true, accountType: true } });
+    if (!assignee || (assignee.accountType !== AccountType.ADMIN && assignee.accountType !== AccountType.SUPER_ADMIN)) throw new AppError('يمكن إسناد النزاع إلى مشرف أو مدير فقط', 400);
+    const name = [assignee.firstName, assignee.lastName].filter(Boolean).join(' ');
+    await adminAudit.record({ adminId, entity: 'DISPUTE', entityId: dispute.id, eventType: 'DISPUTE_ASSIGNED', title: 'إسناد نزاع', summary: `إسناد النزاع إلى ${name || 'مشرف'}`, details: { assigneeId: assignee.id, assigneeName: name } });
+    return { id: dispute.id, assignedTo: { id: assignee.id, name } };
+  }
+
+  async addNote(id: string, adminId: string, body: string) {
+    const dispute = await prisma.dispute.findUnique({ where: { id }, select: { id: true } });
+    if (!dispute) throw new AppError('النزاع غير موجود', 404);
+    const row = await adminAudit.record({ adminId, entity: 'DISPUTE', entityId: dispute.id, eventType: 'DISPUTE_NOTE', title: 'ملاحظة داخلية على نزاع', summary: 'إضافة ملاحظة داخلية على النزاع', details: { body } });
+    if (!row) throw new AppError('تعذر حفظ الملاحظة، حاول مرة أخرى', 500);
+    return { id: row.id, body, createdAt: row.occurredAt };
+  }
+
+  /** OPEN <-> UNDER_REVIEW only. RESOLVED / REJECTED are reached exclusively through resolve(), which carries the decision text and notifies both parties. */
+  async setStatus(id: string, adminId: string, status: 'OPEN' | 'UNDER_REVIEW') {
+    const dispute = await this.openDisputeForAdmin(id);
+    if (dispute.status === status) throw new AppError('النزاع بهذه الحالة مسبقاً', 409);
+    const updated = await prisma.dispute.update({ where: { id }, data: { status } });
+    await adminAudit.record({ adminId, entity: 'DISPUTE', entityId: id, eventType: 'DISPUTE_STATUS_CHANGED', title: 'تغيير حالة نزاع', summary: `تغيير حالة النزاع من ${dispute.status} إلى ${status}`, before: { status: dispute.status }, after: { status } });
+    return updated;
   }
 
   async resolve(id: string, adminId: string, input: ResolveDisputeInput) {
@@ -191,6 +263,7 @@ export class DisputeService {
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
     if (dispute.status !== DisputeStatus.OPEN && dispute.status !== DisputeStatus.UNDER_REVIEW) throw new AppError('تمت معالجة النزاع مسبقاً', 409);
     const updated = await prisma.dispute.update({ where: { id }, data: { status: input.action === 'resolve' ? DisputeStatus.RESOLVED : DisputeStatus.REJECTED, resolution: input.resolution, resolutionNote: input.resolutionNote, resolvedById: adminId, resolvedAt: new Date() } });
+    await adminAudit.record({ adminId, entity: 'DISPUTE', entityId: id, eventType: input.action === 'resolve' ? 'DISPUTE_RESOLVED' : 'DISPUTE_REJECTED', title: input.action === 'resolve' ? 'حل نزاع' : 'رفض نزاع', summary: `قرار النزاع: ${input.resolution}`, severity: 'WARNING', before: { status: dispute.status }, after: { status: updated.status, resolution: input.resolution }, details: { resolutionNote: input.resolutionNote ?? null } });
     const disputeProviderId = await this.providerOf(dispute);
     await providerNotifications.disputeResolved({ disputeId: id, providerId: disputeProviderId, action: input.action, resolution: input.resolution });
     // the client is whichever party of the dispute is not its provider

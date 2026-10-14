@@ -87,13 +87,15 @@ export const providerNotifications = {
 		}));
 	},
 
-	/** The provider's withdrawal changed state. Marketer (commission) withdrawals are not provider notifications and are skipped. */
+	/** The provider's withdrawal changed state. Marketer (commission) withdrawals are handed to the marketer helper instead. */
 	async withdrawal(withdrawalId: string, event: ProviderWithdrawalEvent) {
 		await safely(`withdrawal ${event}`, async () => {
 			const w = await prisma.withdrawal.findUnique({ where: { id: withdrawalId }, select: { id: true, userId: true, amount: true, currency: true, rejectionReason: true } });
 			if (!w) return;
 			const owner = await prisma.user.findUnique({ where: { id: w.userId }, select: { accountType: true, roles: true, activeRole: true, affiliateProfile: { select: { id: true } } } });
-			if (!owner || (owner.affiliateProfile && !isProviderUser(owner))) return;
+			if (!owner) return;
+			// a marketer's withdrawal is announced by marketerNotifications (called next to this one at every call site)
+			if (owner.affiliateProfile && !isProviderUser(owner)) return;
 			const amount = `${w.amount} ${w.currency === 'USD' ? '$' : w.currency}`;
 			const copy: Record<ProviderWithdrawalEvent, { title: string; message: string }> = {
 				REQUESTED: { title: 'تم استلام طلب السحب', message: `طلب سحب ${amount} قيد مراجعة الإدارة، ولا يُخصم من رصيدك حتى تعتمده.` },

@@ -3,7 +3,6 @@ import { AccountType } from '@prisma/client';
 import { marketerOverviewController } from '../controllers/marketer-overview.controller';
 import { submitMarketerWithdrawal, listMyMarketerWithdrawals } from '../controllers/withdrawal.controller';
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
-import { AccountType } from '@prisma/client';
 import { validateDto } from '../middlewares/validate-dto.middleware';
 import { createCustomLinkSchema, updateRefSettingsSchema } from '../dtos/marketer-overview.dto';
 import { authenticate, authorizeActiveRoleWithMessage, requireActiveUser } from '../middlewares/auth.middleware';

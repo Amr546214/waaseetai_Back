@@ -61,13 +61,13 @@ export const splitsForContract = (stages: any[], escrow: any): Map<string, { gro
   return out;
 };
 
-const contractInclude = {
+export const contractInclude = {
   project: { select: { title: true, escrow: true } },
   client: { select: { firstName: true, lastName: true } },
   stages: { orderBy: { stepOrder: 'asc' as const }, include: { deliveries: { orderBy: { submittedAt: 'desc' as const }, take: 1 } } }
 };
 
-const invoicesOf = (contract: any) => {
+export const invoicesOf = (contract: any) => {
   const splits = splitsForContract(contract.stages, contract.project?.escrow);
   return contract.stages.flatMap((stage: any) => {
     const delivery = stage.deliveries[0];

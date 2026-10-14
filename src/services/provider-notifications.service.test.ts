@@ -102,11 +102,14 @@ test('every withdrawal state produces its own FINANCIAL notification with a real
 	assert.match(f.notifications[0].message, /120 \$/);
 });
 
-test('a marketer (commission) withdrawal is not a provider notification', async t => {
+test('a marketer (commission) withdrawal is handed to the marketer helper: marketer wording and the marketer withdraw route', async t => {
 	const f = await load(t, { owner: { accountType: 'MARKETER', roles: ['AFFILIATE'], activeRole: 'AFFILIATE', affiliateProfile: { id: 'a1' } } });
 	const { providerNotifications } = await fresh('./provider-notifications.service.ts');
 	await providerNotifications.withdrawal('w1', 'APPROVED');
-	assert.equal(f.notifications.length, 0);
+	await settle();
+	assert.equal(f.notifications.length, 1);
+	assert.equal(f.notifications[0].actionUrl, '/marketer-overview/withdraw');
+	assert.match(f.notifications[0].title, /العمولات/);
 });
 
 test('a missing withdrawal is a no-op', async t => {
