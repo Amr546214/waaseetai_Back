@@ -418,6 +418,11 @@ export class ProjectProgressService {
     const result = await prisma.$transaction(async tx => {
       let isProjectCompleted = false;
       const commissionNotices: MarketerCommissionNotice[] = [];
+      // Same lock as an amendment being applied (contract row FIRST, then stages / escrow): a stage approval and an amendment on the same contract never interleave,
+      // and the price used by the final release is the committed one, not the value read before the transaction.
+      const contractLock = await tx.contract.updateMany({ where: { id: contract.id, status: ContractStatus.ACTIVE }, data: { updatedAt: new Date() } });
+      if (contractLock.count !== 1) throw new AppError('العقد غير نشط أو لا تملك صلاحية المراجعة', 403);
+      const livePrice = (await tx.contract.findUnique({ where: { id: contract.id }, select: { price: true } }))?.price ?? contract.price;
       if (decision === 'revision') {
         // Guarded the same way the approve path below is: an unconditional
         // update-by-id here would let a request that raced past the
@@ -523,11 +528,11 @@ export class ProjectProgressService {
           await tx.project.update({ where: { id: contract.projectId }, data: { status: ProjectStatus.COMPLETED, providerId: contract.providerId } });
           const finalEscrow = await tx.escrow.findUnique({ where: { projectId: contract.projectId } });
           const finalSplit = isV2Escrow(finalEscrow) && finalEscrow!.providerCommissionRateSnapshot != null
-            ? splitRelease({ grossReleasedBefore: finalEscrow!.releasedAmount, commissionTotalBefore: finalEscrow!.platformCommissionAmount, grossReleasedAfter: contract.price, ratePercent: finalEscrow!.providerCommissionRateSnapshot })
+            ? splitRelease({ grossReleasedBefore: finalEscrow!.releasedAmount, commissionTotalBefore: finalEscrow!.platformCommissionAmount, grossReleasedAfter: livePrice, ratePercent: finalEscrow!.providerCommissionRateSnapshot })
             : null;
           await tx.escrow.updateMany({ where: { projectId: contract.projectId }, data: finalSplit
             ? { status: EscrowStatus.RELEASED, releasedAmount: finalSplit.grossReleasedAfter, platformCommissionAmount: finalSplit.commissionTotalAfter, providerNetReleasedAmount: finalSplit.netReleasedAfter }
-            : { status: EscrowStatus.RELEASED, releasedAmount: contract.price } });
+            : { status: EscrowStatus.RELEASED, releasedAmount: livePrice } });
           // Same durable audit-trail entry as the intermediate-stage branch
           // above, for the final stage's release — still the same
           // transaction as the contract-completion/escrow mutations.

@@ -127,8 +127,8 @@ export const providerNotifications = {
 		const approved = p.decision === 'approve';
 		await safely('amendmentAnswered', () => notificationService.createAndEmit({
 			userId: p.providerId,
-			title: approved ? 'سجّل العميل موافقته على طلب التعديل' : 'سجّل العميل رفضه لطلب التعديل',
-			message: `${approved ? 'وافق' : 'رفض'} العميل على طلب التعديل «${short(p.title)}». القرار يُسجَّل للمتابعة فقط ولا يغيّر سعر العقد أو مدته أو الضمان حاليًا.`,
+			title: approved ? 'وافق العميل وطُبّق التعديل على العقد' : 'رفض العميل طلب التعديل',
+			message: `${approved ? 'وافق' : 'رفض'} العميل على طلب التعديل «${short(p.title)}». ${approved ? 'وطُبّق التعديل على العقد.' : 'ولم يتغيّر شيء في العقد.'}`,
 			category: NotificationCategory.PROJECTS,
 			type: 'PROJECT_AMENDMENT',
 			actionUrl: PROVIDER_ROUTES.projectProgress(p.projectId),

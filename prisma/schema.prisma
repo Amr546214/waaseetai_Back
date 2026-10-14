@@ -1906,6 +1906,7 @@ model Contract {
   signedAt              DateTime?
   stages                ProjectStage[]
   amendments            ProjectAmendment[]
+  termsVersions         ContractTermsVersion[]
   createdAt             DateTime           @default(now())
   updatedAt             DateTime           @updatedAt
 
@@ -1966,10 +1967,37 @@ model ProjectAmendment {
   updatedAt   DateTime  @updatedAt
   respondedAt DateTime?
 
+  // Effective amendments (migration 20261016100000_amendment_effective, NOT EXECUTED until the owner approves): appliedAt is set in the SAME transaction
+  // that changed the contract / escrow / stages / wallet. APPROVED with appliedAt NULL is a legacy row that was only RECORDED and is never re-applied.
+  appliedAt      DateTime?
+  priceBefore    Float?
+  priceAfter     Float?
+  durationBefore Int?
+  durationAfter  Int?
+  // The extra last stage this amendment created for a budget increase.
+  addedStageId   String?
+  // Client-raised budget increase: the client's OTP-authorized funding intent (the amount is bound; the provider's approval debits the wallet).
+  fundingAuthorizedAt     DateTime?
+  fundingAuthorizedAmount Float?
+
   @@index([clientId, status])
   @@index([providerId, status])
   @@index([contractId])
   @@map("project_amendments")
+}
+
+// Versioned contract terms: one row per APPLIED scope addendum (version 1 is the original contract terms and has no row).
+model ContractTermsVersion {
+  id           String   @id @default(uuid())
+  contractId   String
+  contract     Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  version      Int
+  addendumText String   @db.Text
+  amendmentId  String   @unique
+  createdAt    DateTime @default(now())
+
+  @@unique([contractId, version])
+  @@map("contract_terms_versions")
 }
 
 enum ProjectStageStatus {
@@ -1999,6 +2027,8 @@ model ProjectStage {
   status       ProjectStageStatus @default(PENDING)
   startedAt    DateTime?
   approvedAt   DateTime?
+  // The amendment that created this stage (extra last stage of a budget increase); NULL for the original stages.
+  amendmentId  String?
   deliveries   StageDelivery[]
   stageReviews Review[]
   createdAt    DateTime           @default(now())

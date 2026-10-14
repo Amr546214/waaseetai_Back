@@ -64,7 +64,7 @@ export const PROVIDER_OPERATIONAL: [string, string][] = [
 	['POST', '/provider/coupons'], ['GET', '/provider/coupons'], ['GET', '/provider/coupons/:id/stats'], ['GET', '/provider/coupons/:id'], ['PUT', '/provider/coupons/:id'], ['DELETE', '/provider/coupons/:id'], ['PATCH', '/provider/coupons/:id/approval'],
 	['POST', '/provider/special-offers'], ['GET', '/provider/special-offers'], ['GET', '/provider/special-offers/summary'], ['GET', '/provider/special-offers/:id/stats'], ['GET', '/provider/special-offers/:id'], ['PUT', '/provider/special-offers/:id'], ['DELETE', '/provider/special-offers/:id'], ['PATCH', '/provider/special-offers/:id/approval'],
 	['GET', '/provider/marketing/center'], ['PATCH', '/provider/marketing/spend-cap'],
-	['GET', '/provider/projects/:id/amendments'], ['POST', '/provider/projects/:id/amendments'], ['POST', '/provider/amendments/:id/respond'],
+	['GET', '/provider/projects/:id/amendments'], ['POST', '/provider/projects/:id/amendments'], ['POST', '/provider/amendments/:id/respond'], ['POST', '/provider/amendments/:id/cancel'],
 	['POST', '/provider/projects/:id/stages/:stageId/deliveries/files'], ['POST', '/provider/projects/:id/stages/:stageId/deliveries'], ['POST', '/provider/projects/:id/stages/:stageId/ai-review'], ['POST', '/provider/projects/:id/health'],
 	['GET', '/provider/projects/active'], ['GET', '/provider/projects/archived'], ['GET', '/provider/projects/:id/progress'],
 	['GET', '/provider/finance/wallet'], ['GET', '/provider/finance/transactions'], ['GET', '/provider/finance/invoices'], ['GET', '/provider/finance/invoices/:id'], ['GET', '/provider/finance/sales'], ['POST', '/provider/finance/withdrawals'], ['GET', '/provider/finance/withdrawals'],

@@ -1,6 +1,6 @@
 # Proposal: making an approved amendment effective
 
-Status: PROPOSAL ONLY. No code, no migration. Everything below needs a product and a financial decision from the owner before any implementation. All amounts are USD.
+Status: the owner-approved "simplest variant" is implemented in code and tests on branch `feat/amendment-effective-be` (see `amendment-effects-migration-preview.md` for the API contract, money rules and the NOT EXECUTED migration). The rest of this document is the original proposal text. Original status line: PROPOSAL ONLY. No code, no migration. Everything below needs a product and a financial decision from the owner before any implementation. All amounts are USD.
 
 ## 1. Current behavior (what is true today)
 

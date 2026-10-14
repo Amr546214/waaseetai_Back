@@ -41,7 +41,10 @@ const OFFERS = NotificationCategory.OFFERS;
 const FINANCIAL = NotificationCategory.FINANCIAL;
 
 /** Pure builders: the same object is stored by createAndEmit or, inside a transaction, by tx.notification.create({ data }). */
-const NOTE = 'القرار يُسجَّل للمتابعة فقط ولا يغيّر سعر العقد أو مدته أو الضمان حاليًا.';
+// An amendment changes nothing until the other party approves; an approval is applied to the contract in the same step (see project-amendment.service.ts).
+const REQUESTED_NOTE = 'لن يتغيّر العقد أو الضمان أو المحفظة قبل موافقتك، وعند الموافقة يُطبَّق التعديل فورًا.';
+const APPROVED_NOTE = 'وطُبّق التعديل على العقد.';
+const REJECTED_NOTE = 'ولم يتغيّر شيء في العقد.';
 export const clientNotificationFor = {
 	offerReceived: (p: { clientId: string; requestId: string; offerId: string; requestTitle?: string | null; providerName: string }): ClientNotificationInput => ({
 		userId: p.clientId, title: 'تم استلام عرض جديد', message: `تم استلام عرض جديد على مشروعك${quoted(p.requestTitle)} من ${p.providerName}.`,
@@ -60,14 +63,14 @@ export const clientNotificationFor = {
 		type: 'OFFER_NEGOTIATION_REJECTED', category: OFFERS, actionUrl: CLIENT_ROUTES.request(p.requestId), actionText: 'عرض الطلب', metadata: { projectId: p.requestId, offerId: p.offerId, messageId: p.messageId }
 	}),
 	amendmentRequested: (p: { clientId: string; projectId: string; amendmentId: string; title: string }): ClientNotificationInput => ({
-		userId: p.clientId, title: 'طلب تعديل جديد على مشروعك', message: `طلب مقدم الخدمة تعديلًا على المشروع: ${short(p.title)}. ${NOTE}`,
+		userId: p.clientId, title: 'طلب تعديل جديد على مشروعك', message: `طلب مقدم الخدمة تعديلًا على المشروع: ${short(p.title)}. ${REQUESTED_NOTE}`,
 		type: 'PROJECT_AMENDMENT', category: PROJECTS, actionUrl: CLIENT_ROUTES.amendments, actionText: 'مراجعة الطلب', metadata: { projectId: p.projectId, amendmentId: p.amendmentId }
 	}),
 	amendmentAnswered: (p: { clientId: string; projectId: string; amendmentId: string; title: string; decision: 'approve' | 'reject' }): ClientNotificationInput => {
 		const approved = p.decision === 'approve';
 		return {
-			userId: p.clientId, title: approved ? 'سجّل مقدم الخدمة موافقته على طلب التعديل' : 'سجّل مقدم الخدمة رفضه لطلب التعديل',
-			message: `${approved ? 'وافق' : 'رفض'} مقدم الخدمة على طلب التعديل «${short(p.title)}». ${NOTE}`,
+			userId: p.clientId, title: approved ? 'وافق مقدم الخدمة وطُبّق التعديل على العقد' : 'رفض مقدم الخدمة طلب التعديل',
+			message: `${approved ? 'وافق' : 'رفض'} مقدم الخدمة على طلب التعديل «${short(p.title)}». ${approved ? APPROVED_NOTE : REJECTED_NOTE}`,
 			type: 'PROJECT_AMENDMENT', category: PROJECTS, actionUrl: CLIENT_ROUTES.amendments, actionText: 'عرض طلبات التعديل', metadata: { projectId: p.projectId, amendmentId: p.amendmentId, decision: p.decision }
 		};
 	},

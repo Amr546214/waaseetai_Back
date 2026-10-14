@@ -1,6 +1,14 @@
-import { AmendmentRequesterRole, AmendmentStatus, AmendmentType, ContractStatus } from '@prisma/client';
+import { AmendmentRequesterRole, AmendmentStatus, AmendmentType, ContractStatus, OtpType } from '@prisma/client';
 import { prisma } from '../config/db';
+import crypto from 'crypto';
 import { AppError } from '../utils/app-error';
+import { round2 } from '../utils/money';
+import { isV2Escrow } from '../utils/escrow-commission';
+import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
+import { applyAmendment, effectiveParts } from './amendment-apply.service';
+import { hasActiveDispute } from './amendment-dispute-guard';
+import { notificationService } from './notification.service';
+import { projectProgressService } from './project-progress.service';
 import { providerNotifications } from './provider-notifications.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 
@@ -47,6 +55,8 @@ const validateAmendmentInput = (input: AmendmentInput) => {
   let durationDeltaDays = parseOptionalFiniteInteger(input.durationDeltaDays, 'المدة');
   if (durationDeltaDays === 0) durationDeltaDays = null; // same for duration
 
+  if (budgetDelta !== null && Math.abs(round2(budgetDelta) - budgetDelta) > 1e-9) throw new AppError('قيمة الميزانية يجب ألا تتجاوز خانتين عشريتين', 400);
+
   const hasScope = !!(description && description.length > 0);
   const hasBudget = budgetDelta !== null;
   const hasDuration = durationDeltaDays !== null;
@@ -70,32 +80,60 @@ const validateAmendmentInput = (input: AmendmentInput) => {
   return { title, type, description, budgetDelta, durationDeltaDays };
 };
 
-// An approved amendment is only RECORDED today (no price / duration / escrow / stage change): every amendment says so, whatever its status.
+// Legacy rows: an amendment APPROVED before the amendment-effective release (appliedAt NULL) was only RECORDED; it is never re-applied.
 export const AMENDMENT_EFFECT = 'RECORD_ONLY' as const;
 export const AMENDMENT_EFFECT_NOTE = 'القرار يُسجَّل للمتابعة فقط ولا يغيّر سعر العقد أو مدته أو الضمان حاليًا.';
+export const AMENDMENT_APPLIED_NOTE = 'طُبّق التعديل على العقد والضمان والمراحل.';
+export const AMENDMENT_PENDING_NOTE = 'لن يتغيّر العقد أو الضمان أو المحفظة قبل موافقة الطرف الآخر، وعند الموافقة يُطبَّق التعديل فورًا.';
+export const AMENDMENT_NONE_NOTE = 'لم يتغيّر شيء في العقد.';
 
-const toPublicAmendment = (row: any, conversationId: string | null) => ({
-  id: row.id,
-  projectId: row.projectId,
-  projectTitle: row.project.title,
-  contractId: row.contractId,
-  contractRef: `CT-${row.contractId.slice(0, 6).toUpperCase()}`,
-  providerId: row.providerId,
-  providerName: `${row.provider.firstName || 'مقدم الخدمة'} ${row.provider.lastName || ''}`.trim(),
-  requestedByRole: row.requestedByRole,
-  type: row.type,
-  title: row.title,
-  description: row.description,
-  budgetDelta: row.budgetDelta,
-  durationDeltaDays: row.durationDeltaDays,
-  status: row.status,
-  createdAt: row.createdAt,
-  updatedAt: row.updatedAt,
-  respondedAt: row.respondedAt,
-  effect: AMENDMENT_EFFECT,
-  effectNote: AMENDMENT_EFFECT_NOTE,
-  conversationId
-});
+export type AmendmentEffect = 'APPLIED' | 'RECORD_ONLY' | 'PENDING' | 'NONE';
+// APPLIED: changed the contract (appliedAt set in the same transaction). RECORD_ONLY: legacy approved row, status only. PENDING: will apply on approval. NONE: rejected / cancelled.
+export const amendmentEffectOf = (row: { status: string; appliedAt?: Date | null }): AmendmentEffect =>
+  row.appliedAt ? 'APPLIED' : row.status === 'APPROVED' ? 'RECORD_ONLY' : row.status === 'PENDING_OTHER_PARTY' ? 'PENDING' : 'NONE';
+const EFFECT_NOTES: Record<AmendmentEffect, string> = { APPLIED: AMENDMENT_APPLIED_NOTE, RECORD_ONLY: AMENDMENT_EFFECT_NOTE, PENDING: AMENDMENT_PENDING_NOTE, NONE: AMENDMENT_NONE_NOTE };
+
+const toPublicAmendment = (row: any, conversationId: string | null) => {
+  const effect = amendmentEffectOf(row);
+  const parts = effectiveParts(row);
+  return {
+    id: row.id,
+    projectId: row.projectId,
+    projectTitle: row.project.title,
+    contractId: row.contractId,
+    contractRef: `CT-${row.contractId.slice(0, 6).toUpperCase()}`,
+    providerId: row.providerId,
+    providerName: `${row.provider.firstName || 'مقدم الخدمة'} ${row.provider.lastName || ''}`.trim(),
+    requestedByRole: row.requestedByRole,
+    type: row.type,
+    title: row.title,
+    description: row.description,
+    budgetDelta: row.budgetDelta,
+    durationDeltaDays: row.durationDeltaDays,
+    status: row.status,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    respondedAt: row.respondedAt,
+    effect,
+    effectNote: EFFECT_NOTES[effect],
+    appliedAt: row.appliedAt ?? null,
+    priceBefore: row.priceBefore ?? null,
+    priceAfter: row.priceAfter ?? null,
+    durationBefore: row.durationBefore ?? null,
+    durationAfter: row.durationAfter ?? null,
+    addedStageId: row.addedStageId ?? null,
+    // A budget INCREASE needs the client's OTP-authorized payment before it can become effective.
+    needsClientPayment: parts.budget > 0,
+    fundingAuthorized: row.fundingAuthorizedAt != null,
+    // The contract's CURRENT price / duration (what the financial preview is computed from); null when unknown.
+    contractPrice: row.contract?.price ?? null,
+    contractDurationDays: row.contract?.durationDays ?? null,
+    conversationId
+  };
+};
+
+const maskEmail = (email: string) => email.replace(/^(.).*(@.*)$/, '$1***$2');
+const PAYMENT_OTP_TTL_MS = 2 * 60 * 1000;
 
 export class ProjectAmendmentService {
   // Resolves the single real conversation for a given project+provider pair,
@@ -120,7 +158,8 @@ export class ProjectAmendmentService {
       orderBy: { updatedAt: 'desc' },
       include: {
         project: { select: { title: true } },
-        provider: { select: { firstName: true, lastName: true } }
+        provider: { select: { firstName: true, lastName: true } },
+        contract: { select: { price: true, durationDays: true } }
       }
     });
     const convMap = await this.resolveConversationIds(rows.map(r => ({ projectId: r.projectId, providerId: r.providerId })));
@@ -168,7 +207,8 @@ export class ProjectAmendmentService {
         },
         include: {
           project: { select: { title: true } },
-          provider: { select: { firstName: true, lastName: true } }
+          provider: { select: { firstName: true, lastName: true } },
+        contract: { select: { price: true, durationDays: true } }
         }
       });
 
@@ -176,7 +216,7 @@ export class ProjectAmendmentService {
         data: {
           userId: contract.providerId,
           title: 'طلب تعديل على مشروعك',
-          message: `طلب العميل تعديلًا على المشروع: ${title}. ${AMENDMENT_EFFECT_NOTE}`,
+          message: `طلب العميل تعديلًا على المشروع: ${title}. ${AMENDMENT_PENDING_NOTE}`,
           type: 'PROJECT_AMENDMENT',
           category: 'PROJECTS',
           actionUrl: `/provider-overview/projects/active/progress/${contract.id}`,
@@ -200,14 +240,15 @@ export class ProjectAmendmentService {
     const rows = await prisma.projectAmendment.findMany({
       where: { providerId, projectId },
       orderBy: { createdAt: 'desc' },
-      include: { project: { select: { title: true } }, provider: { select: { firstName: true, lastName: true } } }
+      include: { project: { select: { title: true } }, provider: { select: { firstName: true, lastName: true } },
+        contract: { select: { price: true, durationDays: true } } }
     });
     const convMap = await this.resolveConversationIds(rows.map(r => ({ projectId: r.projectId, providerId: r.providerId })));
     return rows.map(row => toPublicAmendment(row, convMap.get(`${row.projectId}:${row.providerId}`) || null));
   }
 
-  // A formal change request raised by the PROVIDER: it is only RECORDED (PENDING_OTHER_PARTY) and the client is notified. It never changes the
-  // contract price, duration, escrow or stages — the client's answer is a recorded decision, same as for client-raised amendments.
+  // A formal change request raised by the PROVIDER: it waits (PENDING_OTHER_PARTY) and the client is notified. A request alone never changes the
+  // contract price, duration, escrow or stages: only the client's approval applies it (applyAmendment).
   // At most ONE pending provider-raised request per contract: the contract row is locked for the transaction (a harmless updatedAt touch), so
   // two simultaneous requests cannot both pass the "no pending request" check.
   async createProviderAmendment(providerId: string, projectId: string, input: AmendmentInput) {
@@ -241,7 +282,8 @@ export class ProjectAmendmentService {
           durationDeltaDays,
           status: AmendmentStatus.PENDING_OTHER_PARTY
         },
-        include: { project: { select: { title: true } }, provider: { select: { firstName: true, lastName: true } } }
+        include: { project: { select: { title: true } }, provider: { select: { firstName: true, lastName: true } },
+        contract: { select: { price: true, durationDays: true } } }
       });
 
       clientNotificationId = (await tx.notification.create({ data: clientNotificationFor.amendmentRequested({ clientId: contract.clientId, projectId, amendmentId: row.id, title }) })).id;
@@ -255,93 +297,193 @@ export class ProjectAmendmentService {
     return toPublicAmendment(created, convMap.get(`${created.projectId}:${created.providerId}`) || null);
   }
 
-  // Only the owning client may respond here, and only to an amendment the
-  // PROVIDER raised (a client never approves/rejects their own request) that
-  // is still genuinely pending. This phase records the decision only — it
-  // never mutates Contract.price, Escrow, or ProjectStage amounts.
-  //
-  // The write is a single atomic conditional updateMany() whose WHERE clause
-  // repeats every guard (ownership, requester role, still-pending status).
-  // Two simultaneous respond() calls can both read the row as pending, but
-  // only one can ever match this WHERE at UPDATE time — Postgres's row lock
-  // means the second call's updateMany simply matches zero rows once the
-  // first has committed. First successful decision wins; a later racing
-  // request can never overwrite it.
-  async respondToAmendment(clientId: string, amendmentId: string, decision: 'approve' | 'reject') {
+  private readonly amendmentInclude = {
+    project: { select: { title: true } },
+    provider: { select: { firstName: true, lastName: true } },
+        contract: { select: { price: true, durationDays: true } }
+  } as const;
+
+  private async publicById(amendmentId: string) {
+    const updated = await prisma.projectAmendment.findFirst({ where: { id: amendmentId }, include: this.amendmentInclude });
+    const convMap = await this.resolveConversationIds([{ projectId: updated!.projectId, providerId: updated!.providerId }]);
+    return { updated: updated!, data: toPublicAmendment(updated, convMap.get(`${updated!.projectId}:${updated!.providerId}`) || null) };
+  }
+
+  // Creates the contract's stage rows when none exist yet (idempotent), so the amendment always applies to a real stage plan.
+  private async ensureStages(contractId: string) {
+    await projectProgressService.ensureStages(contractId);
+  }
+
+  // ── Payment authorization (client, budget INCREASE) ─────────────────────────────────────────────────────────────
+  // The code is purpose-bound (AMENDMENT_PAYMENT) AND bound to THIS amendment id and THIS amount: a payment-checkout code, a login code, a code of another
+  // amendment, or a code issued for a different amount can never authorize it. 2 minutes, 5 wrong guesses, one-time use (consumed in the applying transaction).
+  private async findPaymentOtp(userId: string, amendmentId: string) {
+    const records = await prisma.otpVerification.findMany({ where: { userId, type: OtpType.EMAIL }, orderBy: { createdAt: 'desc' }, take: 20 });
+    return records.find(r => (r.context as any)?.purpose === OtpPurpose.AMENDMENT_PAYMENT && (r.context as any)?.amendmentId === amendmentId) ?? null;
+  }
+
+  private async verifyPaymentOtp(userId: string, amendment: { id: string }, amount: number, otpCode: unknown): Promise<string> {
+    if (typeof otpCode !== 'string' || !otpCode.trim()) throw new AppError('رمز التحقق مطلوب لاعتماد دفع زيادة الميزانية', 400);
+    const otp = await this.findPaymentOtp(userId, amendment.id);
+    if (!otp) throw new AppError('لا يوجد رمز اعتماد دفع فعّال لهذا التعديل، اطلب رمزًا جديدًا', 400);
+    if (otp.attempts >= OTP_MAX_ATTEMPTS) {
+      await prisma.otpVerification.delete({ where: { id: otp.id } });
+      throw new AppError(OTP_LOCKED_MESSAGE, 429);
+    }
+    if (otp.expiresAt < new Date()) {
+      await prisma.otpVerification.delete({ where: { id: otp.id } });
+      throw new AppError('انتهت صلاحية رمز التحقق، اطلب رمزًا جديدًا', 400);
+    }
+    const boundAmount = Number((otp.context as any)?.amount);
+    if (!Number.isFinite(boundAmount) || Math.abs(boundAmount - amount) > 0.005) {
+      // Issued for another amount: never usable for this one.
+      await prisma.otpVerification.delete({ where: { id: otp.id } });
+      throw new AppError('رمز التحقق صادر لمبلغ مختلف، اطلب رمزًا جديدًا', 400);
+    }
+    if (otp.code !== otpCode.trim()) {
+      if (otp.attempts + 1 >= OTP_MAX_ATTEMPTS) {
+        await prisma.otpVerification.delete({ where: { id: otp.id } });
+        throw new AppError(OTP_LOCKED_MESSAGE, 429);
+      }
+      await prisma.otpVerification.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } });
+      throw new AppError('رمز التحقق غير صحيح', 400);
+    }
+    return otp.id;
+  }
+
+  // POST /client/projects/amendments/:id/payment-otp — sends the payment-authorization code (to the ACCOUNT EMAIL) for a pending budget increase.
+  async initPaymentAuthorization(clientId: string, amendmentId: string) {
+    const amendment = await prisma.projectAmendment.findFirst({ where: { id: amendmentId, clientId } });
+    if (!amendment) throw new AppError('طلب التعديل غير موجود أو لا تملك صلاحية الوصول إليه', 403);
+    if (amendment.status !== AmendmentStatus.PENDING_OTHER_PARTY) throw new AppError('طلب التعديل لم يعد معلّقًا', 409);
+    const { budget } = effectiveParts(amendment);
+    if (budget <= 0) throw new AppError('هذا الطلب لا يتطلب دفعًا', 400);
+
+    // Advisory pre-checks (they only spare a useless code); the authoritative gates run inside the applying transaction.
+    const escrow = await prisma.escrow.findUnique({ where: { projectId: amendment.projectId } });
+    if (!escrow || escrow.status !== 'HELD') throw new AppError('لا يمكن تطبيق التعديل: ضمان المشروع غير محجوز', 409);
+    if (!isV2Escrow(escrow)) throw new AppError('لا يمكن تعديل ميزانية عقد قديم قبل سياسة الرسوم الجديدة. تواصل مع الدعم.', 409);
+    if (await hasActiveDispute(amendment.projectId, prisma as any)) throw new AppError('لا يمكن تطبيق التعديل أثناء وجود نزاع مفتوح على المشروع', 409);
+    const user = await prisma.user.findUnique({ where: { id: clientId }, select: { email: true, walletBalance: true } });
+    if (!user) throw new AppError('المستخدم غير موجود', 404);
+    const available = Number(user.walletBalance);
+    if (available < budget) {
+      throw new AppError('رصيد المحفظة غير كافٍ لتمويل زيادة الميزانية، اشحن المحفظة ثم أعد المحاولة', 409, [{ required: budget, available, shortfall: Math.max(0, round2(budget - available)) }]);
+    }
+
+    const code = crypto.randomInt(100000, 999999).toString();
+    const expiresAt = new Date(Date.now() + PAYMENT_OTP_TTL_MS);
+    const previous = await this.findPaymentOtp(clientId, amendmentId);
+    if (previous) await prisma.otpVerification.deleteMany({ where: { id: previous.id } });
+    await prisma.otpVerification.create({ data: { userId: clientId, code, type: OtpType.EMAIL, expiresAt, context: { purpose: OtpPurpose.AMENDMENT_PAYMENT, amendmentId, amount: budget, paymentReference: `AMD-${crypto.randomBytes(6).toString('hex').toUpperCase()}` } } });
+    if (process.env.NODE_ENV === 'development') console.info(`[DEV AMENDMENT OTP] ${user.email}: ${code}`);
+    notificationService.sendPaymentOtpEmail(user.email, code).catch(() => undefined);
+    return { otpSentTo: maskEmail(user.email), expiresAt: expiresAt.toISOString(), amount: budget };
+  }
+
+  // POST /client/projects/amendments/:id/authorize-funding {otpCode} — the CLIENT who raised a budget increase authorizes the payment. Nothing is charged here:
+  // it stores the authorization (bound to this amount); the provider's approval is what applies the amendment and debits the wallet in one transaction.
+  async authorizeFunding(clientId: string, amendmentId: string, otpCode: unknown) {
+    const amendment = await prisma.projectAmendment.findFirst({ where: { id: amendmentId, clientId } });
+    if (!amendment) throw new AppError('طلب التعديل غير موجود أو لا تملك صلاحية الوصول إليه', 403);
+    if (amendment.requestedByRole !== AmendmentRequesterRole.CLIENT) throw new AppError('اعتماد الدفع هنا لطلبات التعديل التي رفعها العميل؛ ادفع عند الموافقة على طلب مقدم الخدمة', 400);
+    if (amendment.status !== AmendmentStatus.PENDING_OTHER_PARTY) throw new AppError('طلب التعديل لم يعد معلّقًا', 409);
+    const { budget } = effectiveParts(amendment);
+    if (budget <= 0) throw new AppError('هذا الطلب لا يتطلب دفعًا', 400);
+    const otpId = await this.verifyPaymentOtp(clientId, amendment, budget, otpCode);
+    await prisma.$transaction(async tx => {
+      const consumed = await tx.otpVerification.deleteMany({ where: { id: otpId, userId: clientId } });
+      if (consumed.count !== 1) throw new AppError('رمز اعتماد الدفع استُخدم أو انتهى، اطلب رمزًا جديدًا', 409);
+      const stored = await tx.projectAmendment.updateMany({
+        where: { id: amendmentId, clientId, requestedByRole: AmendmentRequesterRole.CLIENT, status: AmendmentStatus.PENDING_OTHER_PARTY },
+        data: { fundingAuthorizedAt: new Date(), fundingAuthorizedAmount: budget }
+      });
+      if (stored.count !== 1) throw new AppError('طلب التعديل لم يعد معلّقًا', 409);
+    });
+    return (await this.publicById(amendmentId)).data;
+  }
+
+  // ── Answer ──────────────────────────────────────────────────────────────────────────────────────────────────────
+  // Reject = one atomic conditional updateMany repeating every guard (ownership, requester role, still pending); the first decision wins.
+  // Approve = applyAmendment() in ONE transaction (contract lock, claim, refusal rules, funding, escrow, stages, audit) — see amendment-apply.service.ts.
+  // `otpCode` is only used by the CLIENT approving a provider-raised budget increase (the payment authorization).
+  async respondToAmendment(clientId: string, amendmentId: string, decision: 'approve' | 'reject', otpCode?: string) {
     if (decision !== 'approve' && decision !== 'reject') throw new AppError('قرار غير صالح', 400);
+    if (decision === 'approve') return this.approve('CLIENT', clientId, amendmentId, otpCode);
 
     const result = await prisma.projectAmendment.updateMany({
-      where: {
-        id: amendmentId,
-        clientId,
-        requestedByRole: AmendmentRequesterRole.PROVIDER,
-        status: AmendmentStatus.PENDING_OTHER_PARTY
-      },
-      data: {
-        status: decision === 'approve' ? AmendmentStatus.APPROVED : AmendmentStatus.REJECTED,
-        respondedAt: new Date()
-      }
+      where: { id: amendmentId, clientId, requestedByRole: AmendmentRequesterRole.PROVIDER, status: AmendmentStatus.PENDING_OTHER_PARTY },
+      data: { status: AmendmentStatus.REJECTED, respondedAt: new Date() }
     });
-
     if (result.count !== 1) {
-      // The conditional write didn't happen — diagnose why for an accurate
-      // error, without this read ever granting a write of its own.
       const existing = await prisma.projectAmendment.findFirst({ where: { id: amendmentId, clientId } });
       if (!existing) throw new AppError('طلب التعديل غير موجود أو لا تملك صلاحية الوصول إليه', 403);
       if (existing.requestedByRole !== AmendmentRequesterRole.PROVIDER) throw new AppError('لا يمكنك الرد على طلب تعديل رفعته أنت', 403);
-      // Either already terminal before this call, or lost the race to a
-      // concurrent respond() that committed first.
       throw new AppError('تم الرد على طلب التعديل هذا مسبقًا', 409);
     }
-
-    const updated = await prisma.projectAmendment.findFirst({
-      where: { id: amendmentId },
-      include: {
-        project: { select: { title: true } },
-        provider: { select: { firstName: true, lastName: true } }
-      }
-    });
-    await providerNotifications.amendmentAnswered({ providerId: updated!.providerId, projectId: updated!.projectId, amendmentId, title: updated!.title, decision });
-
-    const convMap = await this.resolveConversationIds([{ projectId: updated!.projectId, providerId: updated!.providerId }]);
-    return toPublicAmendment(updated, convMap.get(`${updated!.projectId}:${updated!.providerId}`) || null);
+    const { updated, data } = await this.publicById(amendmentId);
+    await providerNotifications.amendmentAnswered({ providerId: updated.providerId, projectId: updated.projectId, amendmentId, title: updated.title, decision });
+    return data;
   }
 
-  // The PROVIDER answers a request the CLIENT raised. Same rule as the client's answer: the decision is only RECORDED — it never touches
-  // Contract.price / durationDays, Escrow or any stage. One atomic conditional updateMany repeats every guard (ownership, requester role,
-  // still pending), so a second answer (or a race) matches zero rows.
   async respondToAmendmentAsProvider(providerId: string, amendmentId: string, decision: 'approve' | 'reject') {
     if (decision !== 'approve' && decision !== 'reject') throw new AppError('قرار غير صالح', 400);
+    if (decision === 'approve') return this.approve('PROVIDER', providerId, amendmentId);
 
     const result = await prisma.projectAmendment.updateMany({
-      where: {
-        id: amendmentId,
-        providerId,
-        requestedByRole: AmendmentRequesterRole.CLIENT,
-        status: AmendmentStatus.PENDING_OTHER_PARTY
-      },
-      data: {
-        status: decision === 'approve' ? AmendmentStatus.APPROVED : AmendmentStatus.REJECTED,
-        respondedAt: new Date()
-      }
+      where: { id: amendmentId, providerId, requestedByRole: AmendmentRequesterRole.CLIENT, status: AmendmentStatus.PENDING_OTHER_PARTY },
+      data: { status: AmendmentStatus.REJECTED, respondedAt: new Date() }
     });
-
     if (result.count !== 1) {
       const existing = await prisma.projectAmendment.findFirst({ where: { id: amendmentId, providerId } });
       if (!existing) throw new AppError('طلب التعديل غير موجود أو لا تملك صلاحية الوصول إليه', 403);
       if (existing.requestedByRole !== AmendmentRequesterRole.CLIENT) throw new AppError('لا يمكنك الرد على طلب تعديل رفعته أنت', 403);
       throw new AppError('تم الرد على طلب التعديل هذا مسبقًا', 409);
     }
-
-    const updated = await prisma.projectAmendment.findFirst({
-      where: { id: amendmentId },
-      include: { project: { select: { title: true } }, provider: { select: { firstName: true, lastName: true } } }
-    });
-    const clientNotification = await prisma.notification.create({ data: clientNotificationFor.amendmentAnswered({ clientId: updated!.clientId, projectId: updated!.projectId, amendmentId, title: updated!.title, decision }) });
+    const { updated, data } = await this.publicById(amendmentId);
+    const clientNotification = await prisma.notification.create({ data: clientNotificationFor.amendmentAnswered({ clientId: updated.clientId, projectId: updated.projectId, amendmentId, title: updated.title, decision }) });
     await clientNotifications.deliverStored([clientNotification.id]);
+    return data;
+  }
 
-    const convMap = await this.resolveConversationIds([{ projectId: updated!.projectId, providerId: updated!.providerId }]);
-    return toPublicAmendment(updated, convMap.get(`${updated!.projectId}:${updated!.providerId}`) || null);
+  private async approve(side: 'CLIENT' | 'PROVIDER', userId: string, amendmentId: string, otpCode?: unknown) {
+    const pre = await prisma.projectAmendment.findFirst({ where: side === 'CLIENT' ? { id: amendmentId, clientId: userId } : { id: amendmentId, providerId: userId } });
+    if (!pre) throw new AppError('طلب التعديل غير موجود أو لا تملك صلاحية الوصول إليه', 403);
+    const mustBeRaisedBy = side === 'CLIENT' ? AmendmentRequesterRole.PROVIDER : AmendmentRequesterRole.CLIENT;
+    if (pre.requestedByRole !== mustBeRaisedBy) throw new AppError('لا يمكنك الرد على طلب تعديل رفعته أنت', 403);
+    if (pre.status !== AmendmentStatus.PENDING_OTHER_PARTY) throw new AppError('تم الرد على طلب التعديل هذا مسبقًا', 409);
+
+    const parts = effectiveParts(pre);
+    if (parts.budget !== 0 || parts.days !== 0) await this.ensureStages(pre.contractId);
+    // Provider-raised increase: the CLIENT's code authorizes the payment. Verified outside the transaction so wrong guesses are counted even when the answer is refused;
+    // the code itself is consumed inside the applying transaction, so a refused approval leaves it valid.
+    const paymentOtpId = side === 'CLIENT' && parts.budget > 0 ? await this.verifyPaymentOtp(userId, pre, parts.budget, otpCode) : null;
+
+    await prisma.$transaction(tx => applyAmendment(tx, pre as any, { id: userId, role: side, paymentOtpId }));
+
+    const { updated, data } = await this.publicById(amendmentId);
+    if (side === 'CLIENT') {
+      await providerNotifications.amendmentAnswered({ providerId: updated.providerId, projectId: updated.projectId, amendmentId, title: updated.title, decision: 'approve' });
+    } else {
+      const clientNotification = await prisma.notification.create({ data: clientNotificationFor.amendmentAnswered({ clientId: updated.clientId, projectId: updated.projectId, amendmentId, title: updated.title, decision: 'approve' }) });
+      await clientNotifications.deliverStored([clientNotification.id]);
+    }
+    return data;
+  }
+
+  // The raiser withdraws a request that is still pending: nothing changes (no money moved, no authorization survives).
+  async cancelAmendment(userId: string, role: 'CLIENT' | 'PROVIDER', amendmentId: string) {
+    const requesterRole = role === 'CLIENT' ? AmendmentRequesterRole.CLIENT : AmendmentRequesterRole.PROVIDER;
+    const result = await prisma.projectAmendment.updateMany({
+      where: { id: amendmentId, requestedById: userId, requestedByRole: requesterRole, status: AmendmentStatus.PENDING_OTHER_PARTY },
+      data: { status: AmendmentStatus.CANCELLED, respondedAt: new Date(), fundingAuthorizedAt: null, fundingAuthorizedAmount: null }
+    });
+    if (result.count !== 1) {
+      const existing = await prisma.projectAmendment.findFirst({ where: { id: amendmentId, requestedById: userId, requestedByRole: requesterRole } });
+      if (!existing) throw new AppError('طلب التعديل غير موجود أو لا تملك صلاحية إلغائه', 403);
+      throw new AppError('لا يمكن إلغاء طلب لم يعد معلّقًا', 409);
+    }
+    return (await this.publicById(amendmentId)).data;
   }
 }
 

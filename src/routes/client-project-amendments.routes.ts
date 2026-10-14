@@ -6,14 +6,19 @@ import { setProjectAssignedEmployee } from '../controllers/client-project-assign
 import { requireClientCompanyAccount } from './client-company-team.routes';
 
 const router = Router();
+// The role the user is acting as RIGHT NOW decides (a provider acting as a provider never reaches the client's amendment flows).
+const clientOnly = authorizeActiveRole(AccountType.CLIENT_INDIVIDUAL, AccountType.CLIENT_COMPANY);
 
 router.use(authenticate, requireActiveUser);
 
 // Literal-segment routes are registered before the ':projectId' param route so
 // Express never mistakes "amendments" for a project id.
-router.get('/amendments', clientProjectAmendmentsController.listAmendments);
-router.post('/amendments/:id/respond', clientProjectAmendmentsController.respondToAmendment);
-router.post('/:projectId/amendments', clientProjectAmendmentsController.createAmendment);
+router.get('/amendments', clientOnly, clientProjectAmendmentsController.listAmendments);
+router.post('/amendments/:id/respond', clientOnly, clientProjectAmendmentsController.respondToAmendment);
+router.post('/amendments/:id/payment-otp', clientOnly, clientProjectAmendmentsController.initPaymentAuthorization);
+router.post('/amendments/:id/authorize-funding', clientOnly, clientProjectAmendmentsController.authorizeFunding);
+router.post('/amendments/:id/cancel', clientOnly, clientProjectAmendmentsController.cancelAmendment);
+router.post('/:projectId/amendments', clientOnly, clientProjectAmendmentsController.createAmendment);
 
 // Batch 6 — Client Company "responsible employee" assignment. Company-only
 // (CLIENT_INDIVIDUAL has no employee concept) — reuses the exact same
