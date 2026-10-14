@@ -1,6 +1,7 @@
 import { NotificationCategory, Prisma } from '@prisma/client';
 import { logger } from '../config/logger';
 import { notificationService } from './notification.service';
+import { resolutionLabelAr, type FinancialOutcomeSummary } from '../utils/dispute-resolution';
 
 /**
  * The client-facing notifications, one builder per event (a pure function that returns the notification's type, title, message and destination), so the
@@ -18,6 +19,8 @@ export const CLIENT_ROUTES = {
 	activeProjects: '/client-overview/projects/active',
 	amendments: '/client-overview/projects/amendments',
 	disputes: '/client-overview/disputes',
+	// The client app has NO dispute-details page: the list opens focused on this dispute (?dispute=<id>) so the link is specific, not generic.
+	dispute: (disputeId: string) => `/client-overview/disputes?dispute=${encodeURIComponent(disputeId)}`,
 	wallet: '/client-overview/finance/wallet',
 	invoices: '/client-overview/finance/invoices',
 	// The identity documents (KYC) are uploaded and followed from the profile page.
@@ -91,15 +94,18 @@ export const clientNotificationFor = {
 		userId: p.clientId,
 		title: p.openedBy === 'client' ? 'تم تسجيل نزاعك' : 'تم فتح نزاع على مشروعك',
 		message: p.openedBy === 'client' ? `تم فتح النزاع${quoted(p.requestTitle)} وهو بانتظار مراجعة الإدارة.` : `فتح مقدم الخدمة نزاعًا${quoted(p.requestTitle)}. يمكنك متابعة حالته من صفحة النزاعات.`,
-		type: 'DISPUTE_OPENED', category: PROJECTS, actionUrl: CLIENT_ROUTES.disputes, actionText: 'عرض النزاعات', metadata: { disputeId: p.disputeId, openedBy: p.openedBy }
+		type: 'DISPUTE_OPENED', category: PROJECTS, actionUrl: CLIENT_ROUTES.dispute(p.disputeId), actionText: 'عرض النزاع', metadata: { disputeId: p.disputeId, openedBy: p.openedBy }
 	}),
-	disputeResolved: (p: { clientId: string; disputeId: string; action: 'resolve' | 'reject'; resolution?: string | null }): ClientNotificationInput => {
+	disputeResolved: (p: { clientId: string; disputeId: string; action: 'resolve' | 'reject'; resolution?: string | null; financial?: FinancialOutcomeSummary | null }): ClientNotificationInput => {
 		const resolved = p.action === 'resolve';
-		const decision = short(p.resolution, 120);
+		const decision = short(resolutionLabelAr(p.resolution, !!p.financial), 120);
+		const money = p.financial
+			? ` ${p.financial.refundToClient > 0 ? `أُضيف ${usd(p.financial.refundToClient)} إلى محفظتك. ` : ''}${p.financial.releaseToProvider > 0 ? `صُرف ${usd(p.financial.releaseToProvider)} لمقدم الخدمة من المبلغ المحتجز.` : ''}`.trimEnd()
+			: ' لم يتغيّر أي مبلغ مالي بهذا القرار.';
 		return {
 			userId: p.clientId, title: resolved ? 'تم حسم النزاع' : 'تم إغلاق النزاع دون قبوله',
-			message: `${resolved ? 'أنهت الإدارة مراجعة النزاع.' : 'رفضت الإدارة النزاع بعد مراجعته.'}${decision ? ` القرار: ${decision}` : ''}`,
-			type: 'DISPUTE_RESOLVED', category: PROJECTS, actionUrl: CLIENT_ROUTES.disputes, actionText: 'عرض النزاعات', metadata: { disputeId: p.disputeId, action: p.action }
+			message: `${resolved ? 'أنهت الإدارة مراجعة النزاع.' : 'رفضت الإدارة النزاع بعد مراجعته.'}${decision ? ` القرار: «${decision}».` : ''}${money}`,
+			type: 'DISPUTE_RESOLVED', category: PROJECTS, actionUrl: CLIENT_ROUTES.dispute(p.disputeId), actionText: 'عرض النزاع', metadata: { disputeId: p.disputeId, action: p.action }
 		};
 	},
 	escrowFunded: (p: { clientId: string; requestId: string; amount: number; projectName?: string | null }): ClientNotificationInput => ({

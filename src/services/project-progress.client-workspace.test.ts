@@ -17,7 +17,7 @@ async function workspace(t: TestContext, o: { contract?: any; escrow?: any; stag
     contract: { findFirst: async () => contract },
     project: { findFirst: async () => o.preProject ?? null },
     projectStage: { findMany: async () => o.stages ?? [] },
-    dispute: { findFirst: async () => null },
+    dispute: { findFirst: async () => null, count: async () => 0 },
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   const mod = await import(`./project-progress.service.ts?f=${Date.now()}-${Math.random()}`);

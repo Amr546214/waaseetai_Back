@@ -1,7 +1,11 @@
-import { AccountType, ContractStatus, DisputeStatus, EscrowStatus, RequestStatus } from '@prisma/client';
+import { AccountType, ContractStatus, DisputeStatus, EscrowStatus, LogCategory, LogStatus, Prisma, ProjectStatus, RequestStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
-import { CreateDisputeInput, ResolveDisputeInput } from '../dtos/dispute.dto';
+import { CreateDisputeInput, ResolveDisputeFinancialInput, ResolveDisputeInput } from '../dtos/dispute.dto';
+import { isV2Escrow, splitRelease } from '../utils/escrow-commission';
+import { round2 } from '../utils/money';
+import { resolutionLabelAr, type FinancialOutcomeSummary } from '../utils/dispute-resolution';
+import { ACTIVE_DISPUTE_STATUSES, getFreezeState, lockProjectForFreezeCheck } from './dispute-freeze.service';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { WaseetAiError, WaseetAiErrorCode } from './ai/waseet-ai/waseet-ai.errors';
 import { providerNotifications } from './provider-notifications.service';
@@ -110,11 +114,16 @@ export class DisputeService {
       ? { requestId, projectId: (await prisma.project.findUnique({ where: { id: requestId }, select: { id: true } }))?.id, againstUserId: (await this.requestForActor(requestId, userId, actor)).againstUserId }
       : { requestId: undefined as string | undefined, ...(await this.projectForActor(requestId, userId, actor)) };
     const where = target.projectId ? { projectId: target.projectId } : { requestId };
-    const existing = await prisma.dispute.findFirst({ where: { ...where, openedById: userId, status: { in: [DisputeStatus.OPEN, DisputeStatus.UNDER_REVIEW] } } });
-    if (existing) throw new AppError('لديك نزاع مفتوح مسبقاً لهذا الطلب', 409);
-    const dispute = await prisma.dispute.create({
-      data: { requestId: target.requestId, projectId: target.projectId, openedById: userId, againstUserId: target.againstUserId, reason: input.reason, description: input.description, evidence: input.evidence || [], status: DisputeStatus.OPEN },
-      include: { request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } } }
+    // Same contract-row lock the stage approval takes before it releases money: a dispute opened "at the same moment" as an approval either
+    // is seen by that approval (refused) or is created after the approval fully committed. Also closes the duplicate-open race.
+    const dispute = await prisma.$transaction(async tx => {
+      if (target.projectId) await lockProjectForFreezeCheck(tx, target.projectId);
+      const existing = await tx.dispute.findFirst({ where: { ...where, openedById: userId, status: { in: ACTIVE_DISPUTE_STATUSES } } });
+      if (existing) throw new AppError('لديك نزاع مفتوح مسبقاً لهذا الطلب', 409);
+      return tx.dispute.create({
+        data: { requestId: target.requestId, projectId: target.projectId, openedById: userId, againstUserId: target.againstUserId, reason: input.reason, description: input.description, evidence: input.evidence || [], status: DisputeStatus.OPEN },
+        include: { request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } } }
+      });
     });
     // The provider is the opener (confirmation) or the party the client opened it against.
     const disputedTitle = dispute.request?.title ?? dispute.project?.title ?? '';
@@ -201,7 +210,14 @@ export class DisputeService {
       });
       held = heldEscrowAmount(escrow, escrow?.project?.contract?.price);
     }
-    return { ...dispute, heldEscrowAmount: held };
+    const projectKey = dispute.projectId ?? dispute.requestId;
+    const closed = dispute.status === DisputeStatus.RESOLVED || dispute.status === DisputeStatus.REJECTED;
+    const financialOutcome = closed ? await this.financialOutcomeOf(dispute.id) : null;
+    return {
+      ...dispute, heldEscrowAmount: held,
+      resolutionLabel: resolutionLabelAr(dispute.resolution, !!financialOutcome), financialOutcome,
+      projectFreeze: projectKey ? await getFreezeState(projectKey, prisma) : null
+    };
   }
 
   async getForAdmin(id: string) {
@@ -215,8 +231,11 @@ export class DisputeService {
       adminAudit.listForEntity('DISPUTE', id)
     ]);
     const assignment = audit.find(e => e.eventType === 'DISPUTE_ASSIGNED');
+    const financialOutcome = (audit.find(e => e.eventType === 'DISPUTE_FINANCIAL_RESOLVED')?.context?.outcomeSummary as FinancialOutcomeSummary | undefined) ?? null;
     return {
       ...dispute,
+      resolutionLabel: resolutionLabelAr(dispute.resolution, !!financialOutcome), financialOutcome,
+      projectFreeze: projectId ? await getFreezeState(projectId, prisma) : null,
       heldEscrowAmount: heldEscrowAmount(escrow, escrow?.project?.contract?.price),
       escrow: escrow ? { status: escrow.status, amount: escrow.amount, releasedAmount: escrow.releasedAmount, fundedAt: escrow.fundedAt } : null,
       contractStatus: escrow?.project?.contract?.status ?? null,
@@ -260,18 +279,111 @@ export class DisputeService {
     return updated;
   }
 
+  /**
+   * Kind (1): TEXT closure / rejection. Records the decision, notifies both parties, moves NO money and changes no escrow, contract or project.
+   * The status flip is a conditional update, so a double click (or two admins) closes the dispute once. Whatever the admin typed is inert text;
+   * a bare financial code is refused by the DTO and routed to resolveFinancial().
+   */
   async resolve(id: string, adminId: string, input: ResolveDisputeInput) {
     const dispute = await prisma.dispute.findUnique({ where: { id } });
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
     if (dispute.status !== DisputeStatus.OPEN && dispute.status !== DisputeStatus.UNDER_REVIEW) throw new AppError('تمت معالجة النزاع مسبقاً', 409);
-    const updated = await prisma.dispute.update({ where: { id }, data: { status: input.action === 'resolve' ? DisputeStatus.RESOLVED : DisputeStatus.REJECTED, resolution: input.resolution, resolutionNote: input.resolutionNote, resolvedById: adminId, resolvedAt: new Date() } });
-    await adminAudit.record({ adminId, entity: 'DISPUTE', entityId: id, eventType: input.action === 'resolve' ? 'DISPUTE_RESOLVED' : 'DISPUTE_REJECTED', title: input.action === 'resolve' ? 'حل نزاع' : 'رفض نزاع', summary: `قرار النزاع: ${input.resolution}`, severity: 'WARNING', before: { status: dispute.status }, after: { status: updated.status, resolution: input.resolution }, details: { resolutionNote: input.resolutionNote ?? null } });
+    const nextStatus = input.action === 'resolve' ? DisputeStatus.RESOLVED : DisputeStatus.REJECTED;
+    const claimed = await prisma.dispute.updateMany({ where: { id, status: { in: ACTIVE_DISPUTE_STATUSES } }, data: { status: nextStatus, resolution: input.resolution, resolutionNote: input.resolutionNote, resolvedById: adminId, resolvedAt: new Date() } });
+    if (claimed.count !== 1) throw new AppError('تمت معالجة النزاع مسبقاً', 409);
+    const updated = (await prisma.dispute.findUnique({ where: { id } })) ?? { ...dispute, status: nextStatus, resolution: input.resolution, resolutionNote: input.resolutionNote ?? null };
+    await adminAudit.record({ adminId, entity: 'DISPUTE', entityId: id, eventType: input.action === 'resolve' ? 'DISPUTE_RESOLVED' : 'DISPUTE_REJECTED', title: input.action === 'resolve' ? 'حل نزاع' : 'رفض نزاع', summary: `قرار النزاع: ${input.resolution}`, severity: 'WARNING', before: { status: dispute.status }, after: { status: updated.status, resolution: input.resolution }, details: { resolutionNote: input.resolutionNote ?? null, financialEffect: 'NONE' } });
+    await this.notifyParties(dispute, id, input.action, input.resolution, null);
+    return updated;
+  }
+
+  private async notifyParties(dispute: { requestId: string | null; projectId: string | null; openedById: string; againstUserId: string | null }, id: string, action: 'resolve' | 'reject', resolution: string, financial: FinancialOutcomeSummary | null) {
     const disputeProviderId = await this.providerOf(dispute);
-    await providerNotifications.disputeResolved({ disputeId: id, providerId: disputeProviderId, action: input.action, resolution: input.resolution });
+    await providerNotifications.disputeResolved({ disputeId: id, providerId: disputeProviderId, action, resolution, financial });
     // the client is whichever party of the dispute is not its provider
     const disputeClientId = disputeProviderId ? [dispute.openedById, dispute.againstUserId].find(u => u && u !== disputeProviderId) : undefined;
-    if (disputeClientId) await clientNotifications.send(clientNotificationFor.disputeResolved({ clientId: disputeClientId, disputeId: id, action: input.action, resolution: input.resolution }));
-    return updated;
+    if (disputeClientId) await clientNotifications.send(clientNotificationFor.disputeResolved({ clientId: disputeClientId, disputeId: id, action, resolution, financial }));
+  }
+
+  /**
+   * Kind (2): FINANCIAL decision. The only code path that moves money for a dispute. One transaction, in this order:
+   *   1. lock the contract row (the same row an approval / a new dispute locks),
+   *   2. claim the dispute (OPEN|UNDER_REVIEW -> RESOLVED, conditional: a second execution matches 0 rows and fails with 409 before anything moves),
+   *   3. re-read the escrow and require status HELD, expectedHeldAmount == real held, and refund + release == held (full settlement of the held balance),
+   *   4. escrow -> RELEASED (release > 0, cumulative commission split with the escrow's snapshotted rate) or REFUNDED (refund only),
+   *   5. client wallet credit + WalletTransaction (referenceId unique per dispute = DB-level idempotency),
+   *   6. contract / project / request closed, 7. audit row (CRITICAL) written in the same transaction (a failed audit rolls the money back).
+   * Money already released earlier (earned stages, or a COMPLETED project) is never touched: a settled escrow has held = 0 and is refused.
+   */
+  async resolveFinancial(id: string, adminId: string, input: ResolveDisputeFinancialInput) {
+    const dispute = await prisma.dispute.findUnique({ where: { id } });
+    if (!dispute) throw new AppError('النزاع غير موجود', 404);
+    if (dispute.status !== DisputeStatus.OPEN && dispute.status !== DisputeStatus.UNDER_REVIEW) throw new AppError('تمت معالجة النزاع مسبقاً', 409);
+    const projectId = dispute.projectId ?? dispute.requestId;
+    const contractRef = projectId ? await prisma.contract.findUnique({ where: { projectId }, select: { id: true, clientId: true, providerId: true } }) : null;
+    if (!projectId || !contractRef) throw new AppError('لا يوجد عقد وضمان مرتبطان بهذا النزاع لتنفيذ قرار مالي', 409);
+    const refund = round2(input.refundToClient);
+    const release = round2(input.releaseToProvider);
+
+    const summary = await prisma.$transaction(async tx => {
+      if (!(await lockProjectForFreezeCheck(tx, projectId))) throw new AppError('لا يوجد عقد وضمان مرتبطان بهذا النزاع لتنفيذ قرار مالي', 409);
+      const current = await tx.contract.findUniqueOrThrow({ where: { id: contractRef.id }, select: { status: true } });
+      if (current.status !== ContractStatus.ACTIVE) throw new AppError('العقد غير نشط: لا يوجد مبلغ محتجز لتسويته (المبالغ المصروفة سابقًا لا تُسترد بقرار نزاع)', 409);
+      const claimed = await tx.dispute.updateMany({ where: { id, status: { in: ACTIVE_DISPUTE_STATUSES } }, data: { status: DisputeStatus.RESOLVED, resolution: input.outcome, resolutionNote: input.resolutionNote, resolvedById: adminId, resolvedAt: new Date() } });
+      if (claimed.count !== 1) throw new AppError('تمت معالجة النزاع مسبقاً ولم يُنفَّذ أي مبلغ جديد', 409);
+      const [escrow, contract] = await Promise.all([tx.escrow.findUnique({ where: { projectId } }), tx.contract.findUniqueOrThrow({ where: { id: contractRef.id }, select: { price: true, clientId: true, providerId: true } })]);
+      const held = round2(heldEscrowAmount(escrow, contract.price) ?? 0);
+      if (!escrow || escrow.status !== EscrowStatus.HELD || held <= 0) throw new AppError('لا يوجد مبلغ محتجز لتسويته', 409);
+      if (round2(input.expectedHeldAmount) !== held) throw new AppError('تغيّر المبلغ المحتجز منذ عرضه عليك. حدّث الصفحة وراجع المبالغ ثم أعد التأكيد', 409, [{ heldAmount: held }]);
+      if (round2(refund + release) !== held) throw new AppError(`مجموع المبلغين (${round2(refund + release)}) يجب أن يساوي المبلغ المحتجز بالكامل (${held})`, 400, [{ heldAmount: held }]);
+
+      const split = release > 0 && isV2Escrow(escrow) && escrow.providerCommissionRateSnapshot != null
+        ? splitRelease({ grossReleasedBefore: escrow.releasedAmount, commissionTotalBefore: escrow.platformCommissionAmount, grossReleasedAfter: escrow.releasedAmount + release, ratePercent: escrow.providerCommissionRateSnapshot })
+        : null;
+      const escrowMoved = await tx.escrow.updateMany({
+        where: { id: escrow.id, status: EscrowStatus.HELD, releasedAmount: escrow.releasedAmount },
+        data: release > 0
+          ? { status: EscrowStatus.RELEASED, releasedAmount: split ? split.grossReleasedAfter : round2(escrow.releasedAmount + release), ...(split ? { platformCommissionAmount: split.commissionTotalAfter, providerNetReleasedAmount: split.netReleasedAfter } : {}) }
+          : { status: EscrowStatus.REFUNDED }
+      });
+      if (escrowMoved.count !== 1) throw new AppError('تغيّر الضمان أثناء التنفيذ، لم يُنفَّذ أي مبلغ. أعد المحاولة', 409);
+
+      if (refund > 0) {
+        await tx.user.update({ where: { id: contract.clientId }, data: { walletBalance: { increment: refund } } });
+        await tx.walletTransaction.create({ data: {
+          userId: contract.clientId, type: 'REFUND', amount: refund, currency: 'USD', status: 'COMPLETED', paymentMethod: 'ESCROW',
+          referenceId: `DISPUTE-REFUND-${id}`, description: 'استرداد من الضمان بقرار نزاع',
+          metadata: { disputeId: id, projectId, contractId: contractRef.id, outcome: input.outcome, decidedBy: adminId }
+        } });
+      }
+
+      // Engagement closed: money left the escrow, so the contract cannot stay ACTIVE (a later approval would try to release again).
+      const toProvider = release > 0;
+      await tx.contract.update({ where: { id: contractRef.id }, data: { status: toProvider ? ContractStatus.COMPLETED : ContractStatus.CANCELLED } });
+      await tx.project.update({ where: { id: projectId }, data: { status: toProvider ? ProjectStatus.COMPLETED : ProjectStatus.DISPUTED } });
+      await tx.clientRequest.updateMany({ where: { proposals: { some: { projectId } } }, data: { status: toProvider ? RequestStatus.COMPLETED : RequestStatus.CANCELLED } });
+
+      const result: FinancialOutcomeSummary = { outcome: input.outcome, refundToClient: refund, releaseToProvider: release, platformCommission: split?.commission ?? 0, providerNet: split ? split.net : release };
+      await tx.accountAuditLog.create({ data: {
+        userId: adminId, category: LogCategory.SYSTEM_AUDIT, title: 'قرار مالي في نزاع', actionText: `تنفيذ قرار مالي (${input.outcome}) على نزاع`,
+        summary: `تنفيذ قرار مالي (${input.outcome}) على نزاع`, status: LogStatus.COMPLETED, eventType: 'DISPUTE_FINANCIAL_RESOLVED', source: 'ADMIN', severity: 'CRITICAL',
+        beforeData: { disputeStatus: dispute.status, escrowStatus: escrow.status, heldAmount: held, escrowReleasedBefore: escrow.releasedAmount } as Prisma.InputJsonObject,
+        afterData: { disputeStatus: DisputeStatus.RESOLVED, escrowStatus: release > 0 ? EscrowStatus.RELEASED : EscrowStatus.REFUNDED } as Prisma.InputJsonObject,
+        context: { entity: 'DISPUTE', entityId: id, projectId, contractId: contractRef.id, escrowId: escrow.id, outcomeSummary: { ...result }, feePolicyVersion: escrow.feePolicyVersion ?? null, commissionRatePercent: escrow.providerCommissionRateSnapshot ?? null, resolutionNote: input.resolutionNote ?? null } as Prisma.InputJsonObject
+      } });
+      return result;
+    });
+
+    const updated = await prisma.dispute.findUnique({ where: { id } });
+    await this.notifyParties(dispute, id, 'resolve', input.outcome, summary);
+    return { ...(updated ?? dispute), financialOutcome: summary };
+  }
+
+  /** The executed financial outcome of a dispute (from its audit row), or null when it was closed by text only. */
+  private async financialOutcomeOf(id: string): Promise<FinancialOutcomeSummary | null> {
+    const rows = await adminAudit.listForEntity('DISPUTE', id, ['DISPUTE_FINANCIAL_RESOLVED']);
+    const summary = rows[0]?.context?.outcomeSummary as FinancialOutcomeSummary | undefined;
+    return summary ?? null;
   }
 
   /** The provider side of a dispute: the accepted proposal's provider on a request, else the project's provider / contract provider. */

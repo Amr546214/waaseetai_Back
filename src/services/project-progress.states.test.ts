@@ -15,7 +15,7 @@ async function load(t: TestContext) {
   const prismaMock = {
     contract: { findFirst: async () => contract() },
     projectStage: { findMany: async () => state.stages },
-    dispute: { findFirst: async () => null },
+    dispute: { findFirst: async () => null, count: async () => 0 },
     review: { findFirst: async () => null }
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });

@@ -2,6 +2,7 @@ import { NotificationCategory } from '@prisma/client';
 import { prisma } from '../config/db';
 import { logger } from '../config/logger';
 import { notificationService } from './notification.service';
+import { resolutionLabelAr, type FinancialOutcomeSummary } from '../utils/dispute-resolution';
 
 /**
  * The provider-facing notifications for events that used to leave the provider with nothing (dispute, rating, withdrawal, PayPal email change,
@@ -57,14 +58,18 @@ export const providerNotifications = {
 	},
 
 	/** An admin closed a dispute (resolved, or rejected as not upheld). */
-	async disputeResolved(p: { disputeId: string; providerId: string | null | undefined; action: 'resolve' | 'reject'; resolution?: string | null }) {
+	async disputeResolved(p: { disputeId: string; providerId: string | null | undefined; action: 'resolve' | 'reject'; resolution?: string | null; financial?: FinancialOutcomeSummary | null }) {
 		if (!p.providerId) return;
 		const resolved = p.action === 'resolve';
-		const decision = short(p.resolution, 120);
+		const decision = short(resolutionLabelAr(p.resolution, !!p.financial), 120);
+		const usd = (n: number) => `${Math.round(n * 100) / 100} $`;
+		const money = p.financial
+			? ` ${p.financial.releaseToProvider > 0 ? `صُرف لرصيدك ${usd(p.financial.providerNet)}${p.financial.platformCommission > 0 ? ` بعد خصم عمولة المنصة ${usd(p.financial.platformCommission)}` : ''}. ` : ''}${p.financial.refundToClient > 0 ? `أُعيد ${usd(p.financial.refundToClient)} إلى العميل من المبلغ المحتجز.` : ''}`.trimEnd()
+			: ' لم يتغيّر أي مبلغ مالي بهذا القرار.';
 		await safely('disputeResolved', () => notificationService.createAndEmit({
 			userId: p.providerId!,
 			title: resolved ? 'تم حسم النزاع' : 'تم إغلاق النزاع دون قبوله',
-			message: `${resolved ? 'أنهت الإدارة مراجعة النزاع.' : 'رفضت الإدارة النزاع بعد مراجعته.'}${decision ? ` القرار: ${decision}` : ''}`,
+			message: `${resolved ? 'أنهت الإدارة مراجعة النزاع.' : 'رفضت الإدارة النزاع بعد مراجعته.'}${decision ? ` القرار: «${decision}».` : ''}${money}`,
 			category: NotificationCategory.PROJECTS,
 			type: 'DISPUTE_RESOLVED',
 			actionUrl: PROVIDER_ROUTES.dispute(p.disputeId),
