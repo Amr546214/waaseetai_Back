@@ -3,6 +3,9 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { heldEscrowAmount } from './dispute.service';
 import { adminAudit } from './admin-audit.service';
+import { adminSettlementFor, adminSettledView, settlementsByProject, stageDisplayStatus, SETTLED_LABEL_AR, SETTLED_DISPUTE_WHERE } from './settlement-state.service';
+
+const settledProjectWhere = { disputes: { some: SETTLED_DISPUTE_WHERE } } as const;
 
 /**
  * Read-only admin view of projects, contracts and their escrow. Every number comes from the database; the escrow status is Escrow.status as stored
@@ -53,9 +56,15 @@ export class AdminOperationsService {
 		]);
 		const counts: Record<string, number> = {};
 		for (const g of grouped) counts[g.status] = g._count._all;
+		// Closed by a dispute settlement is its own bucket: it is not counted as a delivery-completed project.
+		const settledView = await settlementsByProject(items.map(p => p.id));
+		const settledCompleted = await prisma.project.count({ where: { status: ProjectStatus.COMPLETED, ...settledProjectWhere } });
+		if (counts.COMPLETED !== undefined) counts.COMPLETED = Math.max(0, counts.COMPLETED - settledCompleted);
+		counts.CLOSED_BY_SETTLEMENT = settledCompleted;
 		const pages = Math.ceil(total / safeLimit);
 		return {
 			items: items.map(p => ({
+				adminSettled: settledView.get(p.id) ?? null, statusLabel: settledView.has(p.id) ? SETTLED_LABEL_AR : null,
 				id: p.id, title: p.title, status: p.status, createdAt: p.createdAt, deliveryDays: p.deliveryDays,
 				client: party(p.client), provider: party(p.provider),
 				contract: p.contract ? { id: p.contract.id, price: p.contract.price, status: p.contract.status } : null,
@@ -79,12 +88,14 @@ export class AdminOperationsService {
 		if (!project) throw new AppError('المشروع غير موجود', 404);
 		const disputes = await prisma.dispute.findMany({ where: { OR: [{ projectId: id }, { requestId: id }] }, orderBy: { createdAt: 'desc' }, select: { id: true, status: true, reason: true, createdAt: true, resolvedAt: true } });
 		const contract = project.contract;
+		const settlement = await adminSettlementFor({ projectId: id });
 		return {
+			adminSettled: adminSettledView(settlement), statusLabel: settlement.settled ? SETTLED_LABEL_AR : null,
 			id: project.id, title: project.title, description: project.description, status: project.status, createdAt: project.createdAt, deliveryDays: project.deliveryDays, specialty: project.specialty,
 			client: party(project.client), provider: party(project.provider),
 			contract: contract ? { id: contract.id, price: contract.price, status: contract.status, durationDays: contract.durationDays, signedAt: contract.signedAt, clientSignedAt: contract.clientSignedAt, providerSignedAt: contract.providerSignedAt } : null,
 			escrow: escrowView(project.escrow, contract?.price),
-			stages: (contract?.stages ?? []).map(s => ({ id: s.id, stepOrder: s.stepOrder, title: s.title, amount: s.amount, percentage: s.percentage, days: s.days, status: s.status, startedAt: s.startedAt, approvedAt: s.approvedAt, deliveries: s.deliveries.map(d => ({ id: d.id, status: d.status, note: d.note, files: d.files, reviewNote: d.reviewNote, submittedAt: d.submittedAt, reviewedAt: d.reviewedAt })) })),
+			stages: (contract?.stages ?? []).map(s => ({ ...stageDisplayStatus(s.status, settlement.settled), id: s.id, stepOrder: s.stepOrder, title: s.title, amount: s.amount, percentage: s.percentage, days: s.days, status: s.status, startedAt: s.startedAt, approvedAt: s.approvedAt, deliveries: s.deliveries.map(d => ({ id: d.id, status: d.status, note: d.note, files: d.files, reviewNote: d.reviewNote, submittedAt: d.submittedAt, reviewedAt: d.reviewedAt })) })),
 			amendments: contract?.amendments ?? [],
 			progress: progressOf(contract?.stages),
 			disputes,

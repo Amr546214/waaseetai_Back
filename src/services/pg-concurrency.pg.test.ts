@@ -435,6 +435,11 @@ test('pg: unreleased stages of a settled project are DISPLAYED as closed by the 
 		assert.equal(view.progress, 0, 'only genuinely approved stages count');
 		assert.ok(view.stages.every((s: any) => !s.isDone));
 	}
+	const { adminOperationsService } = await import('./admin-operations.service');
+	const adminView: any = await adminOperationsService.getProject(w.project.id);
+	assert.equal(adminView.adminSettled.label, 'أُغلق بتسوية نزاع'); assert.deepEqual(adminView.stages.map((x: any) => x.displayStatus), ['CLOSED_BY_SETTLEMENT', 'CLOSED_BY_SETTLEMENT']);
+	const adminList: any = await adminOperationsService.listProjects({ q: w.project.title });
+	assert.equal(adminList.items[0].statusLabel, 'أُغلق بتسوية نزاع'); assert.ok(adminList.counts.CLOSED_BY_SETTLEMENT >= 1);
 	const after = await w.prisma.projectStage.findMany({ where: { contractId: w.contract.id }, orderBy: { stepOrder: 'asc' } });
 	assert.deepEqual(after.map((s: any) => s.status), before.map((s: any) => s.status), 'stored stage statuses unchanged');
 	assert.equal(await w.prisma.stageDelivery.count({ where: { stageId: w.s1.id } }), 1, 'the delivery is kept');
