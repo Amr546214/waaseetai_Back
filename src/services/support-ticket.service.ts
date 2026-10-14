@@ -5,6 +5,7 @@ import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
 import { CreateSupportTicketInput } from '../dtos/support-ticket.dto';
 import { adminAudit } from './admin-audit.service';
+import { notifyAdmins } from './admin-notifications.service';
 
 const OPEN_STATUSES: SupportTicketStatus[] = [
   SupportTicketStatus.OPEN,
@@ -81,6 +82,7 @@ export class SupportTicketService {
       data: { ticketId: ticket.id, senderId: userId, body: input.description },
     });
     await this.notifyOwner(ticket, 'تم استلام تذكرتك', `فُتحت التذكرة ${ticket.ticketNumber}. سنُبلغك هنا عند ردّ فريق الدعم.`, 'created');
+    void notifyAdmins('NEW_TICKET', { id: ticket.id, ref: ticket.ticketNumber });
     return ticket;
   }
 

@@ -58,3 +58,18 @@ test('the minimum amount of the coupon is enforced on the server price', async t
 	const { svc } = await load(t, { coupon: COUPON({ minimumAmount: 500 }) });
 	await refused(svc.validateCoupon('u1', input()), /لا تستوفي شروط الكوبون/);
 });
+
+// restricted services: only the coupon's own services take the discount; a cart with none of them is refused
+test('a coupon restricted to s1 discounts only s1 (200 of 300 -> 20), the other service is untouched', async t => {
+	const { svc } = await load(t, { coupon: COUPON({ services: [{ serviceId: 's1' }] }), services: [{ id: 's1', totalAmount: 200 }, { id: 's2', totalAmount: 100 }] });
+	const r = await svc.validateCoupon('u1', { code: 'save10', items: [{ modelId: 's1', totalAmount: 1 }, { modelId: 's2', totalAmount: 1 }] });
+	assert.equal(r.discountAmount, 20);
+});
+test('a coupon restricted to other services is refused for a cart without them', async t => {
+	const { svc } = await load(t, { coupon: COUPON({ services: [{ serviceId: 'other' }] }) });
+	await refused(svc.validateCoupon('u1', input()), /لا تستوفي شروط الكوبون/);
+});
+test('an excluded service is not discounted: the cart of only that service is refused', async t => {
+	const { svc } = await load(t, { coupon: COUPON({ excludedServiceIds: ['s1'] }) });
+	await refused(svc.validateCoupon('u1', input()), /لا تستوفي شروط الكوبون/);
+});

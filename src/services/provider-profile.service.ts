@@ -79,8 +79,10 @@ export class ProviderProfileService {
   async changePassword(userId: string, currentPassword: string, newPassword: string, auditContext?: AuditContext) {
     if (!currentPassword || !newPassword) throw new Error('PASSWORD_FIELDS_REQUIRED');
     // A client's password changes only through an admin-reviewed request (POST /api/profiles/password-change-request): this direct path must not bypass it.
-    const roleRow = await prisma.user.findUnique({ where: { id: userId }, select: { activeRole: true } });
-    if (roleRow?.activeRole === 'CLIENT') throw new Error('تغيير كلمة مرور طالب الخدمة يتم بطلب مراجعة من صفحة الأمان في الملف الشخصي');
+    const roleRow = await prisma.user.findUnique({ where: { id: userId }, select: { activeRole: true, accountType: true } });
+    // Admin / super-admin accounts change their own password directly (their default activeRole may be CLIENT, but they have no admin review queue for it).
+    const isAdminAccount = roleRow?.accountType === 'ADMIN' || roleRow?.accountType === 'SUPER_ADMIN';
+    if (roleRow?.activeRole === 'CLIENT' && !isAdminAccount) throw new Error('تغيير كلمة مرور طالب الخدمة يتم بطلب مراجعة من صفحة الأمان في الملف الشخصي');
     if (newPassword.length < 8 || newPassword.length > 72) throw new Error('WEAK_PASSWORD');
     const characterGroups = [/[a-z]/.test(newPassword), /[A-Z]/.test(newPassword), /\d/.test(newPassword), /[^A-Za-z0-9]/.test(newPassword)].filter(Boolean).length;
     if (characterGroups < 3) throw new Error('WEAK_PASSWORD');

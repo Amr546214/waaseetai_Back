@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import { AppError } from '../utils/app-error';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import { DEPOSIT_FEE_PERCENT, depositGrossUp } from '../utils/fee-policy';
+import { notifyAdmins } from './admin-notifications.service';
 
 // USD deposit bounds: see dtos/paypal.dto.ts.
 const MIN_DEPOSIT_USD = 50;
@@ -107,6 +108,7 @@ export class PaypalFinanceService {
 		// markFailedIfPending()'s own comment for why this is conditional).
 		if (purchaseUnit?.custom_id && purchaseUnit.custom_id !== clientId) {
 			await this.markFailedIfPending(payment.id);
+			void notifyAdmins('SUSPICIOUS_PAYMENT', { ref: `PayPal ${paypalOrderId}`, metadata: { paymentId: payment.id } });
 			throw new AppError('طلب الدفع لا يخص هذا المستخدم', 403);
 		}
 
@@ -119,6 +121,7 @@ export class PaypalFinanceService {
 		const capturedAmount = new Prisma.Decimal(capture.amount.value);
 		if (!capturedAmount.equals(payment.amount)) {
 			await this.markFailedIfPending(payment.id);
+			void notifyAdmins('SUSPICIOUS_PAYMENT', { ref: `PayPal ${paypalOrderId}`, metadata: { paymentId: payment.id } });
 			throw new AppError('مبلغ الدفع لا يطابق المبلغ المسجل لهذا الطلب', 400);
 		}
 
@@ -161,6 +164,7 @@ export class PaypalFinanceService {
 		const capturedAmount = new Prisma.Decimal(params.amountValue);
 		if (!capturedAmount.equals(payment.amount)) {
 			await this.markFailedIfPending(payment.id);
+			void notifyAdmins('SUSPICIOUS_PAYMENT', { ref: `PayPal ${params.paypalOrderId}`, metadata: { paymentId: payment.id } });
 			return { handled: false as const };
 		}
 

@@ -1,5 +1,6 @@
 import { OnboardingStatus, KYCStatus, LogCategory, LogStatus } from '@prisma/client';
 import { prisma } from '../config/db';
+import { notifyAdmins } from './admin-notifications.service';
 import { AppError } from '../utils/app-error';
 import { RejectOnboardingInput } from '../dtos/onboarding.dto';
 import { AdminActor, adminAuditData } from './admin-audit';
@@ -58,6 +59,7 @@ export class OnboardingService {
     }
     if (!existing || existing.status !== OnboardingStatus.APPROVED) {
       await prisma.clientProfile.updateMany({ where: { userId, kycStatus: { in: [KYCStatus.UNVERIFIED, KYCStatus.REJECTED] } }, data: { kycStatus: KYCStatus.PENDING } });
+      void notifyAdmins('KYC_SUBMITTED', { ref: 'عميل' });
     }
     return record;
   }

@@ -7,7 +7,7 @@ export class NotificationsController {
 		try {
 			const userId = (req as any).user?.id;
 			const category = req.query.category as string | undefined;
-			const notifications = await notificationService.getUserNotifications(userId, category);
+			const notifications = await notificationService.getUserNotifications(userId, category, { unreadOnly: req.query.unreadOnly === 'true', type: typeof req.query.type === 'string' && req.query.type ? req.query.type : undefined });
 			return res.status(200).json({ success: true, data: notifications }) as any;
 		} catch (error: any) {
 			console.error('[NotificationsController] Error getting notifications:', error);
@@ -29,7 +29,8 @@ export class NotificationsController {
 			return res.status(200).json({ success: true, data: notification }) as any;
 		} catch (error: any) {
 			console.error('[NotificationsController] Error marking notification as read:', error);
-			return res.status(500).json({ success: false, error: error.message }) as any;
+			// a notification that is not the caller's (or does not exist) is a 404, never a server error
+			return res.status(typeof error?.statusCode === 'number' ? error.statusCode : 500).json({ success: false, error: error.message }) as any;
 		}
 	}
 

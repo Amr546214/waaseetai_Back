@@ -22,3 +22,10 @@ test('all four expected routes are registered', () => {
 	assert.match(source, /router\.post\('\/:id\/approve',\s*adminAffiliateRequestsController\.approve\)/);
 	assert.match(source, /router\.post\('\/:id\/reject',\s*adminAffiliateRequestsController\.reject\)/);
 });
+
+const brokersSource = fs.readFileSync(path.join(__dirname, 'admin-brokers.routes.ts'), 'utf8');
+
+test('admin-brokers router (incl. the new status mutation) is admin-only and registers PATCH /:id/status', () => {
+	assert.match(brokersSource, /router\.use\(authenticate,\s*requireActiveUser,\s*authorize\(AccountType\.ADMIN,\s*AccountType\.SUPER_ADMIN\)\)/);
+	assert.match(brokersSource, /router\.patch\('\/:id\/status',\s*setBrokerStatus\)/);
+});

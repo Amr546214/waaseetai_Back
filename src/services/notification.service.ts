@@ -385,6 +385,7 @@ export class NotificationService {
 	public async getUserNotifications(
 		userId: string,
 		categoryFilter?: string,
+		options: { unreadOnly?: boolean; type?: string } = {},
 	): Promise<NotificationDto[]> {
 		const category = parseCategoryFilter(categoryFilter);
 
@@ -392,6 +393,8 @@ export class NotificationService {
 			where: {
 				userId,
 				...(category ? { category } : {}),
+				...(options.unreadOnly ? { isRead: false } : {}),
+				...(options.type ? { type: options.type } : {}),
 			},
 			orderBy: { createdAt: 'desc' },
 		});
