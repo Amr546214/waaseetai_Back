@@ -195,7 +195,7 @@ export class SetupTestGateway {
         socket.emit('setup_test:generating', { message: 'جاري إنشاء الاختبار المخصص لك بناءً على تخصصاتك باستخدام الذكاء الاصطناعي...' });
 
         const questions: SessionQuestion[] = [];
-        let fallbackQuestions: SessionQuestion[] | null = null;
+        let devBankQuestions: SessionQuestion[] | null = null;
         const vendorAttemptIds = new Set<string>();
         let ready: { attemptId: string; totalQuestions: number } | null = null;
         try {
@@ -235,23 +235,23 @@ export class SetupTestGateway {
             return;
           }
           console.warn(`[SetupTestGateway] DEV_FALLBACK in use: WaseetAI failed (${aiErr?.code || aiErr?.message})`);
-          fallbackQuestions = SETUP_TEST_DEV_FALLBACK_QUESTIONS.map((fq) => ({ id: fq.id, text: fq.textAr, options: fq.options.map((o) => ({ ...o })), correctOptionId: fq.correctOptionId }));
+          devBankQuestions = SETUP_TEST_DEV_FALLBACK_QUESTIONS.map((fq) => ({ id: fq.id, text: fq.textAr, options: fq.options.map((o) => ({ ...o })), correctOptionId: fq.correctOptionId }));
         }
 
         if (abortController.signal.aborted) return;
 
         this.testSessions.set(userId, {
           profileId: profile.id,
-          vendorAttemptId: fallbackQuestions ? 'DEV_FALLBACK' : ready!.attemptId,
-          source: fallbackQuestions ? 'DEV_FALLBACK' : 'AI',
-          questions: fallbackQuestions ?? questions,
+          vendorAttemptId: devBankQuestions ? 'DEV_FALLBACK' : ready!.attemptId,
+          source: devBankQuestions ? 'DEV_FALLBACK' : 'AI',
+          questions: devBankQuestions ?? questions,
           currentQIndex: 0,
           answers: {},
           startedAt: Date.now(),
           grading: false
         });
 
-        socket.emit('setup_test:ready', { totalQuestions: (fallbackQuestions ?? questions).length });
+        socket.emit('setup_test:ready', { totalQuestions: (devBankQuestions ?? questions).length });
       } catch (err: any) {
         console.error('[SetupTestGateway Init Error]:', err);
         socket.emit('setup_test:error', { message: 'حدث خطأ أثناء إنشاء أسئلة الاختبار.' });
