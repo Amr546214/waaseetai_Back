@@ -271,6 +271,8 @@ import adminBrokersRoutes from './routes/admin-brokers.routes';
 import adminSecurityRoutes from './routes/admin-security.routes';
 import adminTicketsRoutes from './routes/admin-tickets.routes';
 import adminAiSummariesRoutes from './routes/admin-ai-summaries.routes';
+import adminDashboardRoutes from './routes/admin-dashboard.routes';
+import { adminRequestsRouter, adminOffersRouter } from './routes/admin-requests.routes';
 import kycDocumentsRoutes from './routes/kyc-documents.routes';
 
 // Support BOTH prefixed and unprefixed paths.
@@ -300,6 +302,12 @@ mountAppRoute('/api/admin/security', adminSecurityRoutes);
 mountAppRoute('/admin/security', adminSecurityRoutes);
 mountAppRoute('/api/admin/tickets', adminTicketsRoutes);
 mountAppRoute('/admin/tickets', adminTicketsRoutes);
+mountAppRoute('/api/admin/requests', adminRequestsRouter);
+mountAppRoute('/admin/requests', adminRequestsRouter);
+mountAppRoute('/api/admin/offers', adminOffersRouter);
+mountAppRoute('/admin/offers', adminOffersRouter);
+mountAppRoute('/api/admin/dashboard', adminDashboardRoutes);
+mountAppRoute('/admin/dashboard', adminDashboardRoutes);
 mountAppRoute('/api/admin/ai', adminAiSummariesRoutes);
 mountAppRoute('/admin/ai', adminAiSummariesRoutes);
 mountAppRoute('/api/kyc-documents', kycDocumentsRoutes);

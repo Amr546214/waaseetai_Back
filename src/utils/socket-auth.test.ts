@@ -31,10 +31,13 @@ let measured = '';
 let booted: Promise<{ url: string; close: () => void; auth: any; registry: any; adminUsers: any }> | undefined;
 function boot() {
 	booted ??= (async () => {
-		mock.module('../config/db', { namedExports: { prisma: {
+		const fakePrisma: any = {
 			conversation: { findFirst: async () => null, findUnique: async () => null },
+			accountAuditLog: { create: async () => ({}) },
 			user: { findUnique: async ({ where }: any) => (users[where.id] ? { ...users[where.id], activeRole: 'CLIENT' } : null), update: async ({ where, data }: any) => { Object.assign(users[where.id], data); return { ...users[where.id] }; } },
-		} } });
+			$transaction: async (fn: any) => fn(fakePrisma),
+		};
+		mock.module('../config/db', { namedExports: { prisma: fakePrisma } });
 		mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
 		mock.module('../services/session.service', { namedExports: { sessionService: { validateOrRegister: async (userId: string) => (userId === 'revoked' ? null : { id: 's1' }) } } });
 		const { Server } = await import('socket.io');
@@ -118,7 +121,7 @@ test('mid-session cut: when an admin moves a connected account out of ACTIVE its
 	a.socket.on('account_not_active', (p: any) => told.push(p));
 	const closed = Promise.all([a, b].map(s => new Promise<void>(r => s.socket.on('disconnect', () => r()))));
 	const svc = new adminUsers.AdminUsersService();
-	await svc.updateUserStatus('victim', 'suspended');
+	await svc.updateUserStatus({ id: 'admin-1', accountType: 'ADMIN' }, 'victim', 'suspended', 'سبب الاختبار');
 	await Promise.race([closed, new Promise((_, rej) => setTimeout(() => rej(new Error('sockets were not cut')), 3000))]);
 	assert.equal(a.socket.connected, false);
 	assert.equal(b.socket.connected, false);
@@ -128,7 +131,7 @@ test('mid-session cut: when an admin moves a connected account out of ACTIVE its
 	assert.ok((await open(url, '', tokenFor('victim'))).error);
 	// moving an account to ACTIVE cuts nothing
 	const stay = await open(url, '', tokenFor('bystander'));
-	await svc.updateUserStatus('bystander', 'active');
+	users.bystander.status = 'SUSPENDED'; await svc.updateUserStatus({ id: 'admin-1', accountType: 'ADMIN' }, 'bystander', 'active');
 	await new Promise(r => setTimeout(r, 200));
 	assert.equal(stay.socket.connected, true);
 	other.socket.close(); stay.socket.close();

@@ -19,7 +19,9 @@ export const CLIENT_ROUTES = {
 	amendments: '/client-overview/projects/amendments',
 	disputes: '/client-overview/disputes',
 	wallet: '/client-overview/finance/wallet',
-	invoices: '/client-overview/finance/invoices'
+	invoices: '/client-overview/finance/invoices',
+	// The identity documents (KYC) are uploaded and followed from the profile page.
+	profile: '/client-overview/profile'
 } as const;
 
 export type ClientNotificationInput = {
@@ -104,6 +106,12 @@ export const clientNotificationFor = {
 		userId: p.clientId, title: 'تم دفع طلبك', message: `خُصم ${usd(p.total)} من محفظتك لطلب الخدمة${p.orderNumber ? ` رقم ${p.orderNumber}` : ''}، وبدأ المشروع.`,
 		type: 'ORDER_PAID', category: FINANCIAL, actionUrl: p.projectIds.length === 1 ? CLIENT_ROUTES.project(p.projectIds[0]) : CLIENT_ROUTES.activeProjects, actionText: 'عرض المشروع',
 		metadata: { orderId: p.orderId, projectIds: p.projectIds }
+	}),
+	kycDecided: (p: { clientId: string; decision: 'APPROVED' | 'REJECTED'; reason?: string | null }): ClientNotificationInput => ({
+		userId: p.clientId,
+		title: p.decision === 'APPROVED' ? 'تم اعتماد توثيق هويتك' : 'تم رفض توثيق هويتك',
+		message: p.decision === 'APPROVED' ? 'اعتمدت الإدارة مستندات هويتك وأصبح حسابك موثّقًا.' : `رفضت الإدارة مستندات الهوية.${p.reason ? ` السبب: ${short(p.reason, 200)}` : ''} يمكنك رفع مستند جديد وإعادة الإرسال.`,
+		type: p.decision === 'APPROVED' ? 'KYC_APPROVED' : 'KYC_REJECTED', category: PROJECTS, actionUrl: CLIENT_ROUTES.profile, actionText: p.decision === 'APPROVED' ? 'عرض ملفي' : 'رفع مستند جديد', metadata: { decision: p.decision }
 	}),
 	depositCompleted: (p: { clientId: string; transactionId: string; credited: number; paid: number; fee: number }): ClientNotificationInput => ({
 		userId: p.clientId, title: 'تم إيداع الرصيد بنجاح',

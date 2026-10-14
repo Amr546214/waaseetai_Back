@@ -22,7 +22,13 @@ export const PROVIDER_ROUTES = {
 	// The PayPal payout email is edited from the "حساب PayPal" tab of the profile data page.
 	paypalSettings: '/provider-overview/profile/data',
 	// The progress page resolves its key as a project id or a contract id.
-	projectProgress: (projectId: string) => `/provider-overview/projects/active/progress/${projectId}`
+	projectProgress: (projectId: string) => `/provider-overview/projects/active/progress/${projectId}`,
+	// The identity / KYC documents live in the profile data page.
+	kyc: '/provider-overview/profile/data',
+	// Specialties and their review state.
+	specialties: '/provider-overview/profile/specialties',
+	// The provider's own accreditation sample page (the id is the sample's).
+	accreditation: (sampleId: string) => `/provider-overview/business-models/center/accreditation-details/${sampleId}`
 } as const;
 
 const short = (text: string | null | undefined, max = 60) => {
@@ -171,6 +177,53 @@ export const providerNotifications = {
 			actionUrl: PROVIDER_ROUTES.offerNegotiate(p.offerId),
 			actionText: 'عرض العرض',
 			metadata: { projectId: p.projectId, offerId: p.offerId, price: p.price, deliveryDays: p.deliveryDays }
+		}));
+	},
+
+	/** An admin decided the provider's identity (KYC) review. */
+	async kycDecided(p: { providerId: string; decision: 'APPROVED' | 'REJECTED'; reason?: string | null }) {
+		const approved = p.decision === 'APPROVED';
+		await safely('kycDecided', () => notificationService.createAndEmit({
+			userId: p.providerId,
+			title: approved ? 'تم اعتماد توثيق هويتك' : 'تم رفض توثيق هويتك',
+			message: approved ? 'اعتمدت الإدارة مستندات هويتك وأصبح حسابك موثّقًا.' : `رفضت الإدارة مستندات الهوية.${p.reason ? ` السبب: ${short(p.reason, 200)}` : ''} يمكنك تحديث المستندات وإعادة الإرسال.`,
+			category: NotificationCategory.PROJECTS,
+			type: approved ? 'KYC_APPROVED' : 'KYC_REJECTED',
+			actionUrl: PROVIDER_ROUTES.kyc,
+			actionText: approved ? 'عرض بياناتي' : 'تحديث المستندات',
+			metadata: { decision: p.decision }
+		}));
+	},
+
+	/** An admin decided a specialty that was under review (specialty decision endpoint). */
+	async specialtyDecided(p: { providerId: string; specialtyName?: string | null; decision: 'APPROVED' | 'REJECTED'; reason?: string | null }) {
+		const approved = p.decision === 'APPROVED';
+		const name = short(p.specialtyName);
+		await safely('specialtyDecided', () => notificationService.createAndEmit({
+			userId: p.providerId,
+			title: approved ? 'تم اعتماد تخصصك' : 'تم رفض تخصصك',
+			message: `${approved ? 'اعتمدت' : 'رفضت'} الإدارة تخصص${name ? ` «${name}»` : 'ك'}.${p.reason ? ` ${approved ? 'ملاحظة' : 'السبب'}: ${short(p.reason, 200)}` : ''}`,
+			category: NotificationCategory.PROJECTS,
+			type: approved ? 'SPECIALTY_APPROVED' : 'SPECIALTY_REJECTED',
+			actionUrl: PROVIDER_ROUTES.specialties,
+			actionText: 'عرض تخصصاتي',
+			metadata: { decision: p.decision }
+		}));
+	},
+
+	/** An admin approved / rejected an accreditation sample the provider uploaded. */
+	async accreditationDecided(p: { providerId: string; sampleId: string; sampleTitle?: string | null; decision: 'APPROVED' | 'REJECTED'; reason?: string | null }) {
+		const approved = p.decision === 'APPROVED';
+		const title = short(p.sampleTitle);
+		await safely('accreditationDecided', () => notificationService.createAndEmit({
+			userId: p.providerId,
+			title: approved ? 'تم اعتماد نموذج الاعتماد' : 'تم رفض نموذج الاعتماد',
+			message: `${approved ? 'اعتمدت' : 'رفضت'} الإدارة نموذج الاعتماد${title ? ` «${title}»` : ''}.${!approved && p.reason ? ` السبب: ${short(p.reason, 200)}` : ''}`,
+			category: NotificationCategory.PROJECTS,
+			type: approved ? 'ACCREDITATION_APPROVED' : 'ACCREDITATION_REJECTED',
+			actionUrl: PROVIDER_ROUTES.accreditation(p.sampleId),
+			actionText: 'عرض النموذج',
+			metadata: { sampleId: p.sampleId, decision: p.decision }
 		}));
 	},
 
