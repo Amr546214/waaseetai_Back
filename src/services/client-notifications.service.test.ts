@@ -12,6 +12,7 @@ const REAL_CLIENT_ROUTES = [
 	/^\/client-overview\/projects\/[^/]+\/rating$/,
 	/^\/client-overview\/projects\/[^/]+\/delivery-review\/[^/]+$/,
 	/^\/client-overview\/disputes$/,
+	/^\/client-overview\/profile$/,
 	/^\/client-overview\/finance\/(wallet|transactions|invoices)$/
 ];
 const isRealClientRoute = (url: string) => REAL_CLIENT_ROUTES.some(r => r.test(url));

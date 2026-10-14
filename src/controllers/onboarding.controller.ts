@@ -4,6 +4,7 @@ import { onboardingUploadSchema, rejectOnboardingSchema } from '../dtos/onboardi
 import { AppError } from '../utils/app-error';
 import { uploadMulterFile } from '../utils/cloudinary-storage';
 import { onboardingService } from '../services/onboarding.service';
+import { adminActor } from '../utils/admin-actor';
 
 export async function uploadOnboardingDocument(req: Request, res: Response, next: NextFunction) {
   try {
@@ -41,7 +42,7 @@ export async function adminGetOnboarding(req: Request, res: Response, next: Next
 
 export async function adminApproveOnboarding(req: Request, res: Response, next: NextFunction) {
   try {
-    const data = await onboardingService.approveOnboarding(String(req.params.id));
+    const data = await onboardingService.approveOnboarding(String(req.params.id), adminActor(req));
     res.json({ success: true, message: 'تم اعتماد طلب التحقق بنجاح', data });
   } catch (error) { next(error); }
 }
@@ -50,7 +51,7 @@ export async function adminRejectOnboarding(req: Request, res: Response, next: N
   try {
     const parsed = rejectOnboardingSchema.safeParse(req.body);
     if (!parsed.success) throw new AppError('سبب الرفض مطلوب', 400);
-    const data = await onboardingService.rejectOnboarding(String(req.params.id), parsed.data);
+    const data = await onboardingService.rejectOnboarding(String(req.params.id), parsed.data, adminActor(req));
     res.json({ success: true, message: 'تم رفض طلب التحقق', data });
   } catch (error) { next(error); }
 }
@@ -69,7 +70,7 @@ export async function adminListProviderKyc(req: Request, res: Response, next: Ne
 
 export async function adminApproveProviderKyc(req: Request, res: Response, next: NextFunction) {
   try {
-    const data = await onboardingService.approveProviderKyc(String(req.params.userId));
+    const data = await onboardingService.approveProviderKyc(String(req.params.userId), adminActor(req));
     res.json({ success: true, message: 'تم اعتماد التحقق من المزود بنجاح', data });
   } catch (error) { next(error); }
 }
@@ -78,7 +79,7 @@ export async function adminRejectProviderKyc(req: Request, res: Response, next: 
   try {
     const parsed = rejectOnboardingSchema.safeParse(req.body);
     if (!parsed.success) throw new AppError('سبب الرفض مطلوب', 400);
-    const data = await onboardingService.rejectProviderKyc(String(req.params.userId), parsed.data);
+    const data = await onboardingService.rejectProviderKyc(String(req.params.userId), parsed.data, adminActor(req));
     res.json({ success: true, message: 'تم رفض التحقق من المزود', data });
   } catch (error) { next(error); }
 }

@@ -1,8 +1,10 @@
 import { prisma } from '../config/db';
 import { logger } from '../config/logger';
-import { AccreditationStatus } from '@prisma/client';
+import { AccreditationStatus, LogStatus } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 import { aiFeatureUnavailablePayload } from './ai/ai-feature-unavailable';
+import { AdminActor, adminAuditData } from './admin-audit';
+import { providerNotifications } from './provider-notifications.service';
 
 // Accreditation sample submission. The AI evaluation of samples is DISABLED:
 // no documented WaseetAI contract exists for sample evaluation and it is not wired to the
@@ -247,10 +249,10 @@ export class AccreditationAiService {
     return { ...sample, assessmentReview: attempt ? { attemptId: attempt.id, status: attempt.status, score: attempt.score, completedAt: attempt.completedAt, review } : null };
   }
 
-  async adminApproveSample(id: string) {
+  async adminApproveSample(id: string, actor?: AdminActor) {
     const sample = await prisma.accreditationSample.findUnique({
       where: { id },
-      include: { providerSpecialty: { select: { status: true } } }
+      include: { providerSpecialty: { select: { status: true } }, providerProfile: { select: { userId: true } } }
     });
     if (!sample) throw new AppError('نموذج الاعتماد غير موجود', 404);
     // The real "already done" condition is whether the linked specialty has
@@ -259,7 +261,7 @@ export class AccreditationAiService {
     // recommends approval", never "approval already granted".
     if (sample.providerSpecialty?.status === 'APPROVED') throw new AppError('تم اعتماد هذا النموذج مسبقاً', 409);
 
-    return prisma.$transaction(async (tx) => {
+    const approved = await prisma.$transaction(async (tx) => {
       const updated = await tx.accreditationSample.update({
         where: { id },
         // `aiAuditedAt` records WHEN AN AI AUDITED the sample. A human approval must not stamp it: it is only set here (once) when the
@@ -280,19 +282,27 @@ export class AccreditationAiService {
         },
       });
 
+      const providerId = (sample as { providerProfile?: { userId?: string } }).providerProfile?.userId;
+      if (actor && providerId) {
+        await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId: providerId, eventType: 'ACCREDITATION_APPROVED_BY_ADMIN', title: 'اعتماد نموذج الاعتماد', summary: `اعتمدت الإدارة نموذج الاعتماد «${sample.title ?? ''}»`.trim(), status: LogStatus.APPROVED, before: { sampleStatus: sample.status, specialtyStatus: sample.providerSpecialty?.status ?? null }, after: { sampleStatus: AccreditationStatus.AI_VERIFIED, specialtyStatus: 'APPROVED' }, details: { sampleId: id, providerSpecialtyId: sample.providerSpecialtyId } }) });
+      }
+
       return updated;
     });
+    const approvedProviderId = (sample as { providerProfile?: { userId?: string } }).providerProfile?.userId;
+    if (approvedProviderId) await providerNotifications.accreditationDecided({ providerId: approvedProviderId, sampleId: id, sampleTitle: sample.title, decision: 'APPROVED' });
+    return approved;
   }
 
-  async adminRejectSample(id: string, rejectionReason: string) {
-    const sample = await prisma.accreditationSample.findUnique({ where: { id } });
+  async adminRejectSample(id: string, rejectionReason: string, actor?: AdminActor) {
+    const sample = await prisma.accreditationSample.findUnique({ where: { id }, include: { providerProfile: { select: { userId: true } } } });
     if (!sample) throw new AppError('نموذج الاعتماد غير موجود', 404);
     if (sample.status === AccreditationStatus.REJECTED) throw new AppError('تم رفض هذا النموذج مسبقاً', 409);
 
     const adminNote = `\n[مراجعة الإدارة] سبب الرفض: ${rejectionReason}`;
     const existingFeedback = sample.aiFeedbackAr || '';
 
-    return prisma.$transaction(async (tx) => {
+    const rejected = await prisma.$transaction(async (tx) => {
       const updated = await tx.accreditationSample.update({
         where: { id },
         data: {
@@ -306,8 +316,16 @@ export class AccreditationAiService {
         data: { status: 'REJECTED' },
       });
 
+      const providerId = (sample as { providerProfile?: { userId?: string } }).providerProfile?.userId;
+      if (actor && providerId) {
+        await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId: providerId, eventType: 'ACCREDITATION_REJECTED_BY_ADMIN', title: 'رفض نموذج الاعتماد', summary: `رفضت الإدارة نموذج الاعتماد «${sample.title ?? ''}»: ${rejectionReason}`.trim(), status: LogStatus.REJECTED, severity: 'WARNING', before: { sampleStatus: sample.status }, after: { sampleStatus: AccreditationStatus.REJECTED }, details: { sampleId: id, providerSpecialtyId: sample.providerSpecialtyId, reason: rejectionReason } }) });
+      }
+
       return updated;
     });
+    const rejectedProviderId = (sample as { providerProfile?: { userId?: string } }).providerProfile?.userId;
+    if (rejectedProviderId) await providerNotifications.accreditationDecided({ providerId: rejectedProviderId, sampleId: id, sampleTitle: sample.title, decision: 'REJECTED', reason: rejectionReason });
+    return rejected;
   }
 }
 
