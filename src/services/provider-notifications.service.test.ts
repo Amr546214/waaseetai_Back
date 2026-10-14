@@ -249,19 +249,23 @@ test('disputeService: client opens -> provider (against) notified; provider open
 	assert.deepEqual([calls[2][1].disputeId, calls[2][1].providerId, calls[2][1].action], ['d1', 'prov-1', 'resolve']);
 });
 
-test('ratingService: a client rating notifies the provider; a provider rating of the client does not', async t => {
+test('ratingService: a client rating notifies the provider; a provider rating of the client notifies the CLIENT, never the provider', async t => {
 	const calls: any[] = [];
+	const clientCalls: any[] = [];
+	t.mock.module('./client-notifications.service', { namedExports: { clientNotifications: { send: async (n: any) => { clientCalls.push(n); } }, clientNotificationFor: { ratingReceived: (p: any) => ({ type: 'RATING_RECEIVED', ...p }) } } });
 	t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { ratingReceived: async (a: any) => { calls.push(a); } } } });
 	const tx = {
-		review: { create: async ({ data }: any) => ({ id: 'rev-1', ...data }), aggregate: async () => ({ _avg: { rating: 4 } }) },
+		$executeRaw: async () => 1,
+		review: { findFirst: async () => null, create: async ({ data }: any) => ({ id: 'rev-1', ...data }), aggregate: async () => ({ _avg: { rating: 4 } }) },
 		user: { update: async () => ({}) },
 		pointTransaction: { aggregate: async () => ({ _sum: { amount: 0 } }) },
-		project: { count: async () => 0 },
+		project: { count: async () => 0, findUnique: async () => ({ serviceCatalogId: null }) },
 		providerGamification: { updateMany: async () => ({ count: 1 }) }
 	};
 	t.mock.module('../config/db', { namedExports: { prisma: {
 		clientRequest: { findUnique: async () => null },
 		contract: { findUnique: async () => ({ id: 'c1', providerId: 'prov-1', clientId: 'client-1', projectId: 'p1', status: 'COMPLETED', project: { id: 'p1', status: 'COMPLETED' } }) },
+		project: { findUnique: async () => ({ serviceCatalogId: null }) },
 		review: { findFirst: async () => null },
 		$transaction: async (fn: any) => fn(tx)
 	} } });
@@ -270,6 +274,8 @@ test('ratingService: a client rating notifies the provider; a provider rating of
 	await ratingService.rateRequest('c1', 'prov-1', 'provider', { rating: 3 });
 	assert.equal(calls.length, 1);
 	assert.deepEqual([calls[0].providerId, calls[0].rating, calls[0].reviewId, calls[0].projectId], ['prov-1', 5, 'rev-1', 'p1']);
+	assert.equal(clientCalls.length, 1);
+	assert.deepEqual([clientCalls[0].clientId, clientCalls[0].rating], ['client-1', 3]);
 });
 
 test('withdrawalService.reject notifies REJECTED; payoutService completed / failed / reversed notify only on a real transition', async t => {

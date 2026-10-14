@@ -336,6 +336,13 @@ test('a dispute opened right before the amendment applies blocks it (409); RESOL
 	}
 });
 
+test('a legacy dispute keyed only by requestId (same id as the project) blocks an amendment as well', async t => {
+	const { world, svc } = await setup(t, { amendments: [amendmentRow({ type: 'DURATION', budgetDelta: null, durationDeltaDays: 2 })], disputes: [{ id: 'd1', requestId: 'project-1', projectId: null, status: 'OPEN' }] });
+	const before = snapshotMoney(world);
+	await refused(svc.respondToAmendment('client-1', 'amend-1', 'approve'), 409, /نزاع/);
+	assert.equal(snapshotMoney(world), before);
+});
+
 test('asking for a payment code while a dispute is open is refused too', async (t) => {
 	const { svc } = await setup(t, { amendments: [amendmentRow()], disputes: [{ id: 'd1', projectId: 'project-1', status: 'OPEN' }] });
 	await refused(svc.initPaymentAuthorization('client-1', 'amend-1'), 409, /نزاع/);
@@ -582,4 +589,5 @@ test('static: the dispute check is one isolated helper', () => {
 	const guard = readFileSync(new URL('./amendment-dispute-guard.ts', import.meta.url), 'utf8');
 	assert.match(guard, /DisputeStatus\.OPEN, DisputeStatus\.UNDER_REVIEW/);
 	assert.match(guard, /export async function hasActiveDispute\(projectId: string/);
+	assert.match(guard, /OR: \[\{ projectId \}, \{ requestId: projectId \}\]/);
 });

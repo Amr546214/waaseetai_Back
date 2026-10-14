@@ -325,7 +325,11 @@ test('STATIC: the only escrow/stage/contract money writers are project-progress 
   const root = join(__dirname, '..');
   const walk = (dir: string): string[] => readdirSync(dir).flatMap(n => { const p = join(dir, n); return statSync(p).isDirectory() ? walk(p) : p.endsWith('.ts') && !/\.test\.ts$/.test(p) ? [p] : []; });
   const writers = walk(root).filter(f => /(escrow|projectStage)\.(update|updateMany|upsert)\(/.test(readFileSync(f, 'utf8'))).map(f => f.slice(root.length + 1)).sort();
-  assert.deepEqual(writers, ['services/client-requests.service.ts', 'services/dispute.service.ts', 'services/project-progress.service.ts']);
+  assert.deepEqual(writers, ['services/amendment-apply.service.ts', 'services/client-requests.service.ts', 'services/dispute.service.ts', 'services/project-progress.service.ts']);
+  // the amendment applier is the 4th writer: it must refuse while a dispute is active (inside its own transaction, after taking the contract lock)
+  const amend = readFileSync(join(root, 'services/amendment-apply.service.ts'), 'utf8');
+  assert.match(amend, /hasActiveDispute/);
+  assert.match(amend, /contract\.updateMany|FOR UPDATE/);
   const funding = readFileSync(join(root, 'services/client-requests.service.ts'), 'utf8');
   assert.ok(!/escrow\.(update|updateMany)\(/.test(funding), 'client-requests only UPSERTS the escrow at funding time (a new HELD escrow), it never releases');
   for (const f of ['services/project-progress.service.ts', 'services/dispute.service.ts']) assert.match(readFileSync(join(root, f), 'utf8'), /lockProjectForFreezeCheck/, `${f} takes the contract lock`);

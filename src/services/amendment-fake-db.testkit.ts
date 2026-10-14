@@ -20,7 +20,7 @@ const matchValue = (actual: any, cond: any): boolean => {
 	}
 	return actual === cond || (actual == null && cond == null);
 };
-const matches = (row: Row, where: Row = {}): boolean => Object.entries(where).every(([k, v]) => matchValue(row[k], v));
+const matches = (row: Row, where: Row = {}): boolean => Object.entries(where).every(([k, v]) => k === 'OR' ? (v as Row[]).some(w => matches(row, w)) : matchValue(row[k], v));
 
 const applyData = (row: Row, data: Row) => {
 	for (const [k, v] of Object.entries(data)) {
