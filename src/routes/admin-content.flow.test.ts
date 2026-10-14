@@ -24,7 +24,7 @@ const guard = <T>(fn: () => T) => async (...a: any[]) => { if (tablesMissing) th
 const prisma: any = {
 	user: { findUnique: async ({ where }: any) => users[where.id] ?? null },
 	platformSetting: {
-		findMany: guard(() => settings.map(s => ({ ...s }))),
+		findMany: guard(() => settings.map(s => ({ ...s }))), count: guard(() => settings.length),
 		upsert: guard(function ({ where, create, update }: any) { const i = settings.findIndex(s => s.key === where.key); if (i >= 0) settings[i].value = update.value; else settings.push({ key: create.key, value: create.value }); return {}; })
 	},
 	marketingAsset: {
@@ -107,13 +107,15 @@ test('public settings: no auth, only public keys (admin-only key never leaks)', 
 	assert.equal('adminNotificationEmail' in r.body.data, false);
 });
 
-test('missing tables answer 503 with an Arabic message, not 500', async () => {
+test('missing tables: visible reads answer 200 with defaults / an empty list (storageReady=false); only a save / upload is a clear 503', async () => {
 	reset(); tablesMissing = true;
-	for (const [m, p] of [['GET', '/admin/settings'], ['GET', '/public/settings'], ['GET', '/admin/marketing-assets']] as const) {
-		const r = await call(ADMIN, m, p);
-		assert.equal(r.status, 503, p);
-		assert.match(JSON.stringify(r.body), /غير جاهز/);
-	}
+	const st = await call(ADMIN, 'GET', '/admin/settings');
+	assert.equal(st.status, 200); assert.equal(st.body.storageReady, false); assert.equal(st.body.data.platformName, '');
+	assert.equal((await call(null, 'GET', '/public/settings')).status, 200);
+	const as = await call(ADMIN, 'GET', '/admin/marketing-assets');
+	assert.equal(as.status, 200); assert.equal(as.body.data.storageReady, false); assert.deepEqual(as.body.data.items, []);
+	const put = await call(ADMIN, 'PUT', '/admin/settings', { json: { platformName: 'x' } });
+	assert.equal(put.status, 503); assert.match(JSON.stringify(put.body), /غير جاهز/);
 	assert.equal((await call(ADMIN, 'POST', '/admin/marketing-assets', { form: assetForm({ title: 'عنوان', kind: 'TEXT', text: 'نص' }) })).status, 503);
 });
 
