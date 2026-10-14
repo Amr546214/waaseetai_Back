@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { SupportTicketStatus } from '@prisma/client';
-import { createSupportTicketSchema, replyToTicketSchema, staffReplySchema, setTicketStatusSchema } from '../dtos/support-ticket.dto';
+import { createSupportTicketSchema, replyToTicketSchema, staffReplySchema, setTicketStatusSchema, assignTicketSchema, ticketPrioritySchema, internalNoteSchema } from '../dtos/support-ticket.dto';
 import { supportTicketService } from '../services/support-ticket.service';
 import { AppError } from '../utils/app-error';
 
@@ -83,7 +83,31 @@ export async function adminSetTicketStatus(req: Request, res: Response, next: Ne
   try {
     const parsed = setTicketStatusSchema.safeParse(req.body);
     if (!parsed.success) throw new AppError(parsed.error.issues.map(i => i.message).join(', '), 400);
-    const data = await supportTicketService.setStatus(String(req.params.id), parsed.data.status);
+    const data = await supportTicketService.setStatus(String(req.params.id), parsed.data.status, userId(req));
     res.json({ success: true, message: 'تم تحديث حالة التذكرة', data });
+  } catch (error) { next(error); }
+}
+
+export async function adminAssignTicket(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = assignTicketSchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError('حدد المشرف المكلَّف بالتذكرة', 400);
+    res.json({ success: true, message: 'تم تكليف التذكرة', data: await supportTicketService.assign(String(req.params.id), userId(req), parsed.data.assigneeId) });
+  } catch (error) { next(error); }
+}
+
+export async function adminSetTicketPriority(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = ticketPrioritySchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError(parsed.error.issues.map(i => i.message).join(', '), 400);
+    res.json({ success: true, message: 'تم تحديث أولوية التذكرة', data: await supportTicketService.setPriority(String(req.params.id), userId(req), parsed.data.priority) });
+  } catch (error) { next(error); }
+}
+
+export async function adminAddTicketNote(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = internalNoteSchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError(parsed.error.issues.map(i => i.message).join(', '), 400);
+    res.status(201).json({ success: true, message: 'تمت إضافة الملاحظة الداخلية', data: await supportTicketService.addInternalNote(String(req.params.id), userId(req), parsed.data.body) });
   } catch (error) { next(error); }
 }

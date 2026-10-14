@@ -270,6 +270,8 @@ import adminAffiliateRequestsRoutes from './routes/admin-affiliate-requests.rout
 import adminBrokersRoutes from './routes/admin-brokers.routes';
 import adminSecurityRoutes from './routes/admin-security.routes';
 import adminTicketsRoutes from './routes/admin-tickets.routes';
+import adminFinanceRoutes from './routes/admin-finance.routes';
+import { adminProjectsRouter, adminContractsRouter, adminStaffRouter } from './routes/admin-projects.routes';
 import adminAiSummariesRoutes from './routes/admin-ai-summaries.routes';
 import kycDocumentsRoutes from './routes/kyc-documents.routes';
 
@@ -300,6 +302,14 @@ mountAppRoute('/api/admin/security', adminSecurityRoutes);
 mountAppRoute('/admin/security', adminSecurityRoutes);
 mountAppRoute('/api/admin/tickets', adminTicketsRoutes);
 mountAppRoute('/admin/tickets', adminTicketsRoutes);
+mountAppRoute('/api/admin/finance', adminFinanceRoutes);
+mountAppRoute('/admin/finance', adminFinanceRoutes);
+mountAppRoute('/api/admin/projects', adminProjectsRouter);
+mountAppRoute('/admin/projects', adminProjectsRouter);
+mountAppRoute('/api/admin/contracts', adminContractsRouter);
+mountAppRoute('/admin/contracts', adminContractsRouter);
+mountAppRoute('/api/admin/staff', adminStaffRouter);
+mountAppRoute('/admin/staff', adminStaffRouter);
 mountAppRoute('/api/admin/ai', adminAiSummariesRoutes);
 mountAppRoute('/admin/ai', adminAiSummariesRoutes);
 mountAppRoute('/api/kyc-documents', kycDocumentsRoutes);

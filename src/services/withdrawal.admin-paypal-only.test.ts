@@ -12,7 +12,7 @@ async function load(t: TestContext) {
   const findUnique = t.mock.fn(async (args: any) => ({ ...OLD_ROW, user: { id: 'u1', firstName: 'A', lastName: 'B', email: 'a@b.co', accountType: 'PROVIDER_INDIVIDUAL', walletBalance: 0 }, reviewedBy: null }));
   const select = { user: { findUnique: async () => ({ accountType: 'PROVIDER_INDIVIDUAL', roles: ['PROVIDER'], activeRole: 'PROVIDER', affiliateProfile: null }) } };
   t.mock.module('../config/db', { namedExports: { prisma: {
-    withdrawal: { findMany: async () => [{ ...OLD_ROW, user: {}, reviewedBy: null }], count: async () => 1, findUnique, aggregate: async () => ({ _sum: { amount: 0 } }) },
+    withdrawal: { findMany: async () => [{ ...OLD_ROW, user: {}, reviewedBy: null }], count: async () => 1, groupBy: async () => [], findUnique, aggregate: async () => ({ _sum: { amount: 0 } }) },
     ...select,
   } } });
   t.mock.module('./provider-finance.service', { namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 0, currency: 'USD' } }) } } });
