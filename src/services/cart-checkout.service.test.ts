@@ -51,7 +51,7 @@ function createCartMockPrisma(t: TestContext, service: any) {
 
   const prismaMock: any = { cart: { upsert: cartUpsertSpy } };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: async () => {} } } });
 
   return { cartUpsertSpy };
 }
@@ -180,7 +180,7 @@ function createOrderMockPrisma(t: TestContext, service: any) {
   };
 
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: async () => {} } } });
 
   return { orderCreateSpy, getCreatedItemData: () => createdItemData };
 }
@@ -278,7 +278,7 @@ test('getPaymentMethods: wallet is the ONLY method offered, with the balance exp
   t.mock.module('../config/db', {
     namedExports: { prisma: { user: { findUnique: async () => ({ walletBalance: 250 }) } } }
   });
-  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: async () => {} } } });
 
   const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { cartCheckoutService } = await import(moduleUrl);
@@ -296,7 +296,7 @@ for (const rejected of ['card', 'stc_pay', 'apple_pay', 'paypal', 'bank', 'cash'
       throw new Error('should not be reached — method validation must reject first');
     });
     t.mock.module('../config/db', { namedExports: { prisma: { order: { findFirst: orderFindFirstSpy } } } });
-    t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+    t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: async () => {} } } });
 
     const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
     const { cartCheckoutService } = await import(moduleUrl);
@@ -316,8 +316,8 @@ test('initPayment: "wallet" with a sufficient balance proceeds past the method g
       }
     }
   });
-  const sendEmailOtpSpy = t.mock.fn(async () => {});
-  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: sendEmailOtpSpy } } });
+  const sendPaymentOtpEmailSpy = t.mock.fn(async () => {});
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: sendPaymentOtpEmailSpy } } });
 
   const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { cartCheckoutService } = await import(moduleUrl);
@@ -325,14 +325,14 @@ test('initPayment: "wallet" with a sufficient balance proceeds past the method g
   const result = await cartCheckoutService.initPayment('user-1', 'order-1', 'wallet');
 
   assert.ok(result.paymentReference);
-  assert.equal(sendEmailOtpSpy.mock.callCount(), 1);
+  assert.equal(sendPaymentOtpEmailSpy.mock.callCount(), 1);
 });
 
 test('initPayment: an insufficient balance is rejected with a 402 and exact required/available/shortfall — no OTP sent', async (t) => {
   const order = { id: 'order-1', status: 'PENDING_PAYMENT', total: 120, user: { email: 'client@example.com', phoneNumber: null, walletBalance: 80 } };
   t.mock.module('../config/db', { namedExports: { prisma: { order: { findFirst: async () => order } } } });
-  const sendEmailOtpSpy = t.mock.fn(async () => {});
-  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: sendEmailOtpSpy } } });
+  const sendPaymentOtpEmailSpy = t.mock.fn(async () => {});
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: sendPaymentOtpEmailSpy } } });
 
   const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { cartCheckoutService } = await import(moduleUrl);
@@ -341,7 +341,7 @@ test('initPayment: an insufficient balance is rejected with a 402 and exact requ
 
   assert.equal(error.statusCode, 402);
   assert.deepEqual(error.errors, [{ required: 120, available: 80, shortfall: 40 }]);
-  assert.equal(sendEmailOtpSpy.mock.callCount(), 0, 'no OTP is sent when the pre-check already knows the balance is insufficient');
+  assert.equal(sendPaymentOtpEmailSpy.mock.callCount(), 0, 'no OTP is sent when the pre-check already knows the balance is insufficient');
 });
 
 // --- confirmPayment(): the authoritative wallet debit -----------------------
@@ -399,7 +399,7 @@ function createConfirmMockPrisma(t: TestContext, opts: { order: any; walletBalan
   };
 
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: async () => {} } } });
 
   return { users, walletTransactions, tx, getOrderUpdated: () => orderUpdated };
 }
@@ -495,7 +495,7 @@ test('confirmPayment: two concurrent confirmations for the same user against a b
     $transaction: async (fn: any) => fn(tx)
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: async () => {} } } });
 
   const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { cartCheckoutService } = await import(moduleUrl);
@@ -619,7 +619,7 @@ test('confirmPayment: two concurrent confirmations for the SAME order (same paym
     $transaction: transactionMock
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: async () => {} } } });
 
   const moduleUrl = `./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const { cartCheckoutService } = await import(moduleUrl);
@@ -707,7 +707,7 @@ test('Phase 4 createOrder: an existing active purchase of the same service rejec
     project: { findMany: async () => [ACTIVE_PURCHASE] },
     $transaction: async (fn: any) => fn({ order: { count: async () => 0, create: orderCreateSpy } })
   } } });
-  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: async () => {} } } });
   const { cartCheckoutService } = await import(`./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`);
 
   const error: any = await cartCheckoutService.createOrder('user-1', { items: [{ modelId: 'service-1' }] }).catch((e: any) => e);
@@ -727,7 +727,7 @@ test('Phase 4 addItem: an existing active purchase rejects 409 and the cart is n
     cart: { upsert: cartUpsert },
     cartItem: { upsert: async () => ({}) }
   } } });
-  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: async () => {} } } });
   const { cartCheckoutService } = await import(`./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`);
 
   const dup: any = await cartCheckoutService.addItem('user-1', { modelId: 'service-1' }).catch((e: any) => e);
@@ -760,7 +760,7 @@ test('Phase 4 addItem: a COMPLETED contract for the same service does not block 
     cart: { upsert: cartUpsert },
     cartItem: { upsert: async () => ({}) }
   } } });
-  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: async () => {} } } });
   const { cartCheckoutService } = await import(`./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`);
 
   const cart = await cartCheckoutService.addItem('user-1', { modelId: 'service-1' });
@@ -786,7 +786,7 @@ for (const terminalStatus of ['COMPLETED', 'CANCELLED']) {
       project: { findMany: async (args: any) => [terminalProject].filter(p => args.where.contract.status.in.includes(p.contract.status)) },
       $transaction: async (fn: any) => fn({ order: { count: async () => 0, create: orderCreateSpy } })
     } } });
-    t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+    t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: async () => {} } } });
     const { cartCheckoutService } = await import(`./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`);
 
     const order = await cartCheckoutService.createOrder('user-1', { items: [{ modelId: 'service-1' }] });
@@ -834,7 +834,7 @@ test('Phase 4 (stale cart item): a service added to the cart before any active c
     cartItem: { upsert: async () => ({}) },
     $transaction: async (fn: any) => fn({ order: { count: async () => 0, create: orderCreateSpy } })
   } } });
-  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: async () => {} } } });
   const { cartCheckoutService } = await import(`./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`);
 
   // Step 1: adding to the cart succeeds — nothing active yet.

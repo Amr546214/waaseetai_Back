@@ -10,6 +10,9 @@ import { levelInfo } from '../utils/level-info';
 import { logger } from '../config/logger';
 import { getClientLevelInfo } from './gamification.service';
 
+// Offers the client can act on: the same ones the request page lists, minus drafts and closed ones.
+const CLIENT_ACTIONABLE_PROPOSAL_STATUSES = ['PENDING', 'SUBMITTED', 'UNDER_NEGOTIATION'] as const;
+
 export class DashboardService {
   /**
    * Batch 5 — resolves a proposal's provider's REAL gamification level for
@@ -40,6 +43,46 @@ export class DashboardService {
     return resolved && resolved.trim() ? resolved : null;
   }
 
+  /** The three "needs your action" counts of the client dashboard. Each one is read on its own so one failure shows 0 for that card only (logged). */
+  private async clientTopSteps(userId: string) {
+    const safe = async (label: string, read: () => Promise<number>): Promise<number> => {
+      try { return await read(); } catch (error: unknown) { logger.warn(`[DashboardService] client ${label} count unavailable (userId=${userId}): ${(error as Error)?.message}`); return 0; }
+    };
+    const [step1, step2, step3] = await Promise.all([
+      // contracts the client signed that still wait for the escrow deposit
+      safe('escrow-required', () => prisma.contract.count({ where: { clientId: userId, status: 'PENDING_PAYMENT' } })),
+      // delivered stages waiting for the client's decision (the stages the delivery-review page lists)
+      safe('pending-approval', () => prisma.projectStage.count({ where: { status: 'SUBMITTED', contract: { clientId: userId, status: 'ACTIVE' }, deliveries: { some: { status: 'SUBMITTED' } } } })),
+      safe('pending-proposals', () => prisma.proposal.count({ where: { status: { in: [...CLIENT_ACTIONABLE_PROPOSAL_STATUSES] }, project: { clientId: userId, status: 'OPEN' } } }))
+    ]);
+    return { step1_escrowRequiredCount: step1, step2_pendingApprovalCount: step2, step3_pendingProposalsCount: step3 };
+  }
+
+  /** Average of the reviews providers left about this client (same source as the public client profile); null when there is none yet, never 0. */
+  private async clientHumanRating(userId: string): Promise<number | null> {
+    try {
+      const agg = await prisma.review.aggregate({ where: { clientId: userId, reviewerRole: 'PROVIDER' }, _avg: { rating: true }, _count: { _all: true } });
+      return agg._count._all > 0 && agg._avg.rating != null ? Number(agg._avg.rating) : null;
+    } catch (error: unknown) {
+      logger.warn(`[DashboardService] client rating unavailable (userId=${userId}): ${(error as Error)?.message}`);
+      return null;
+    }
+  }
+
+  /** Approved stages / all stages of a contract, as a whole percent (0 when the contract has no stages yet). */
+  private async contractStageProgress(contractId: string): Promise<number> {
+    try {
+      const [total, approved] = await Promise.all([
+        prisma.projectStage.count({ where: { contractId } }),
+        prisma.projectStage.count({ where: { contractId, status: 'APPROVED' } })
+      ]);
+      return total > 0 ? Math.round((approved / total) * 100) : 0;
+    } catch (error: unknown) {
+      logger.warn(`[DashboardService] contract progress unavailable (contractId=${contractId}): ${(error as Error)?.message}`);
+      return 0;
+    }
+  }
+
   /**
    * Retrieves dashboard statistics tailored for a Client.
    */
@@ -56,6 +99,7 @@ export class DashboardService {
       // 2. New Offers Count (proposals received across all client's OPEN projects)
       const newOffersCount = await prisma.proposal.count({
         where: {
+          status: { in: [...CLIENT_ACTIONABLE_PROPOSAL_STATUSES] },
           project: {
             clientId: userId,
             status: 'OPEN'
@@ -263,11 +307,12 @@ export class DashboardService {
         const providerName = activeContractEntity.provider?.providerProfile?.companyName || 
                              `${activeContractEntity.provider?.firstName || ''} ${activeContractEntity.provider?.lastName || ''}`.trim() || 
                              'مقدم خدمة موثق';
+        // progress = approved stages / all stages of the contract (0 while it has none), never a placeholder
         let progress = 0;
         if (activeContractEntity.status === 'COMPLETED' || activeContractEntity.project.status === 'COMPLETED') {
           progress = 100;
-        } else if (activeContractEntity.status === 'ACTIVE' || activeContractEntity.project.status === 'IN_PROGRESS') {
-          progress = 0;
+        } else {
+          progress = await this.contractStageProgress(activeContractEntity.id);
         }
 
         activeContract = {
@@ -280,6 +325,8 @@ export class DashboardService {
         };
       }
 
+      const [topSteps, humanRating] = await Promise.all([this.clientTopSteps(userId), this.clientHumanRating(userId)]);
+
       // the level is extra display data: a failure here never breaks the dashboard (level 1 of the ladder, logged)
       const clientLevel = await getClientLevelInfo(userId).catch((error: unknown) => { logger.warn(`[DashboardService] client level unavailable (userId=${userId}): ${(error as Error)?.message}`); return levelInfo('CLIENT', 1); });
       return {
@@ -289,7 +336,7 @@ export class DashboardService {
           totalEscrowAmount,
           totalSpent,
           ...aiOfferRating,
-          humanRating: 0,
+          humanRating,
           profileCompletionPercent: clientProfileCompletion ?? clientDisplayFields.profileCompletionPercent,
           // the level comes from the single ladder (points + completed projects), never from the stale ClientProfile label
           currentLevel: clientLevel.name,
@@ -298,11 +345,7 @@ export class DashboardService {
           currentPoints: clientDisplayFields.currentPoints
         },
         priceFairnessInsight,
-        topSteps: {
-          step1_escrowRequiredCount: 0,
-          step2_pendingApprovalCount: 0,
-          step3_pendingProposalsCount: 0
-        },
+        topSteps,
         latestProjects: latestProjectsData,
         latestProposals,
         activeContract

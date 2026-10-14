@@ -32,7 +32,7 @@ function setup(t: TestContext, opts: { order: any; coupon?: any; stages?: any[];
     $transaction: async (fn: any) => { const snap = users.map(u => ({ ...u })); const wasPaid = paid; try { return await fn(tx); } catch (e) { users.length = 0; users.push(...snap); paid = wasPaid; throw e; } }
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-  t.mock.module('./notification.service', { namedExports: { notificationService: { sendEmailOtp: async () => {} } } });
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: async () => {} } } });
   return { users, rec };
 }
 async function load(t: TestContext, opts: Parameters<typeof setup>[1]) {

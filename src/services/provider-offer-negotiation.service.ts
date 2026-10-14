@@ -1,4 +1,5 @@
 import { ProposalStatus } from '@prisma/client';
+import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import {
@@ -103,22 +104,14 @@ class ProviderOfferNegotiationService {
 	async withdraw(providerId: string, offerId: string) {
 		const offer = await this.loadOffer(providerId, { offerId });
 		if (!WITHDRAWABLE.includes(offer.status)) throw new AppError('لا يمكن سحب هذا العرض في حالته الحالية', 409);
+		let notificationId: string | null = null;
 		await prisma.$transaction(async (tx) => {
 			const contract = await tx.contract.findUnique({ where: { projectId: offer.projectId }, select: { offerId: true, providerId: true } });
 			if (contract && contract.providerId === providerId) throw new AppError('لا يمكن سحب العرض بعد اختيار العميل له وبدء التعاقد', 409);
 			await this.moveOffer(tx, offer, providerId, WITHDRAWABLE, ProposalStatus.CANCELLED);
-			await tx.notification.create({
-				data: {
-					userId: offer.project.clientId,
-					title: 'تم سحب عرض على مشروعك',
-					message: `سحب مقدم الخدمة عرضه على مشروعك "${offer.project.title}".`,
-					type: 'OFFER_WITHDRAWN',
-					category: 'OFFERS',
-					actionUrl: `/client-overview/my-requests/${offer.projectId}`,
-					metadata: { projectId: offer.projectId, offerId: offer.id }
-				}
-			});
+			notificationId = (await tx.notification.create({ data: clientNotificationFor.offerWithdrawn({ clientId: offer.project.clientId, requestId: offer.projectId, offerId: offer.id, requestTitle: offer.project.title }) })).id;
 		});
+		await clientNotifications.deliverStored([notificationId]);
 		return { offerId: offer.id, status: ProposalStatus.CANCELLED };
 	}
 
@@ -134,7 +127,7 @@ class ProviderOfferNegotiationService {
 		const offer = await this.loadOffer(providerId, { offerId });
 		if (offer.status !== ProposalStatus.UNDER_NEGOTIATION) throw new AppError('لا يمكن إرسال عرض مضاد إلا بعد أن يبدأ العميل التفاوض على العرض', 409);
 
-		return prisma.$transaction(async (tx) => {
+		const result = await prisma.$transaction(async (tx) => {
 			await this.lockOffer(tx, offer.id, providerId, ProposalStatus.UNDER_NEGOTIATION);
 			const { conversationId, entries } = await this.recentEntries(tx, offer.projectId, providerId);
 			if (!conversationId) throw new AppError('لا توجد محادثة تفاوض لهذا العرض بعد', 409);
@@ -150,19 +143,12 @@ class ProviderOfferNegotiationService {
 				},
 				select: { id: true }
 			});
-			await tx.notification.create({
-				data: {
-					userId: offer.project.clientId,
-					title: 'عرض مضاد على مشروعك',
-					message: `أرسل مقدم الخدمة عرضًا مضادًا على "${offer.project.title}": ${price} $ خلال ${days} يومًا.`,
-					type: 'OFFER_COUNTER',
-					category: 'OFFERS',
-					actionUrl: `/client-overview/my-requests/${offer.projectId}`,
-					metadata: { projectId: offer.projectId, offerId: offer.id, messageId: message.id }
-				}
-			});
-			return { offerId: offer.id, messageId: message.id, price, deliveryDays: days };
+			const notification = await tx.notification.create({ data: clientNotificationFor.offerCounter({ clientId: offer.project.clientId, requestId: offer.projectId, offerId: offer.id, messageId: message.id, requestTitle: offer.project.title, price, deliveryDays: days }) });
+			return { offerId: offer.id, messageId: message.id, price, deliveryDays: days, notificationId: notification.id };
 		});
+		await clientNotifications.deliverStored([result.notificationId]);
+		const { notificationId: _n, ...view } = result;
+		return view;
 	}
 
 	// Declines the client's newest request: the offer goes back to SUBMITTED with its ORIGINAL values and the client is told.
@@ -171,7 +157,7 @@ class ProviderOfferNegotiationService {
 		const offer = await this.loadOffer(providerId, { offerId });
 		if (offer.status !== ProposalStatus.UNDER_NEGOTIATION) throw new AppError('لا يوجد تفاوض جارٍ على هذا العرض', 409);
 
-		return prisma.$transaction(async (tx) => {
+		const result = await prisma.$transaction(async (tx) => {
 			await this.lockOffer(tx, offer.id, providerId, ProposalStatus.UNDER_NEGOTIATION);
 			const { conversationId, entries } = await this.recentEntries(tx, offer.projectId, providerId);
 			if (!conversationId) throw new AppError('لا توجد محادثة تفاوض لهذا العرض', 409);
@@ -187,19 +173,12 @@ class ProviderOfferNegotiationService {
 				data: { conversationId, senderId: providerId, type: 'TEXT', status: 'SENT', content: buildProviderEntry('PROVIDER_REJECT', { offerId: offer.id, replyToMessageId: open.messageId }) },
 				select: { id: true }
 			});
-			await tx.notification.create({
-				data: {
-					userId: offer.project.clientId,
-					title: 'ردّ مقدم الخدمة على طلب التفاوض',
-					message: `اعتذر مقدم الخدمة عن طلب التفاوض على "${offer.project.title}"، ويبقى عرضه بشروطه الأصلية.`,
-					type: 'OFFER_NEGOTIATION_REJECTED',
-					category: 'OFFERS',
-					actionUrl: `/client-overview/my-requests/${offer.projectId}`,
-					metadata: { projectId: offer.projectId, offerId: offer.id, messageId: reply.id }
-				}
-			});
-			return { offerId: offer.id, status: ProposalStatus.SUBMITTED, messageId: reply.id };
+			const notification = await tx.notification.create({ data: clientNotificationFor.negotiationDeclined({ clientId: offer.project.clientId, requestId: offer.projectId, offerId: offer.id, messageId: reply.id, requestTitle: offer.project.title }) });
+			return { offerId: offer.id, status: ProposalStatus.SUBMITTED, messageId: reply.id, notificationId: notification.id };
 		});
+		await clientNotifications.deliverStored([result.notificationId]);
+		const { notificationId: _n, ...view } = result;
+		return view;
 	}
 }
 

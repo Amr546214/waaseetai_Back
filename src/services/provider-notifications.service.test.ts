@@ -214,6 +214,7 @@ test('disputeService: client opens -> provider (against) notified; provider open
 	const calls: any[] = [];
 	t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { disputeOpened: async (a: any) => { calls.push(['opened', a]); }, disputeResolved: async (a: any) => { calls.push(['resolved', a]); } } } });
 	t.mock.module('../config/db', { namedExports: { prisma: {
+		project: { findUnique: async () => null },
 		clientRequest: { findUnique: async () => ({ id: 'req-1', title: 'طلب', status: 'IN_PROGRESS', clientProfile: { userId: 'client-1' }, proposals: [{ id: 'pr1', status: 'ACCEPTED', providerId: 'prov-1' }] }) },
 		proposal: { findFirst: async () => ({ providerId: 'prov-1' }) },
 		dispute: {

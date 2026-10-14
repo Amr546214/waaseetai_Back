@@ -279,7 +279,30 @@ export class ClientRequestsController {
     }
   }
 
+  // POST /api/client/requests/:id/offers/:offerId/counter/decline  { messageId }
+  public async declineOfferCounter(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId || req.user!.id;
+      const data = await clientOfferCounterService.decline(userId, req.params.id as string, req.params.offerId as string, req.body || {});
+      res.status(200).json({ success: true, message: 'تم رفض العرض المضاد، ويبقى العرض بشروطه الأصلية', data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   // POST /api/client/requests/:id/contract/sign
+  // GET /api/client/my-requests/:id/contract — the frozen contract the client is about to sign (price/duration/stages) and whether signing is possible.
+  public async getContractForSignature(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId || req.user!.id;
+      const offerId = typeof req.query.offerId === 'string' && req.query.offerId ? req.query.offerId : undefined;
+      const data = await clientRequestsService.getContractForSignature(userId, req.params.id as string, offerId);
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public async signContract(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.userId || req.user!.id;

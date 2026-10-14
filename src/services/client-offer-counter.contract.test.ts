@@ -31,6 +31,7 @@ test('after accepting a counter, selectOffer freezes the contract on the counter
 			upsert: async ({ create }: any) => { s.contract = { id: 'contract-1', ...create }; return s.contract; }
 		},
 		escrow: { findUnique: async () => null },
+		message: { findMany: async () => [] },
 		conversation: { findUnique: async () => ({ id: 'conv-1' }) },
 		message: {
 			findMany: async () => [...s.msgs].sort((a, b) => b.createdAt - a.createdAt),

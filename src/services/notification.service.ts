@@ -20,6 +20,7 @@ export const maskEmail = (email: string): string => {
 };
 
 // No brand name in the subject: a third-party brand in the subject of a message that does not come from that brand is a classic phishing signal for mail providers.
+export const PAYMENT_OTP_DEFAULT_SUBJECT = 'رمز التحقق لتأكيد الدفع - Waseet AI';
 export const PAYPAL_OTP_DEFAULT_SUBJECT = 'رمز التحقق لتأكيد بريد استلام المدفوعات - Waseet AI';
 
 const SMS_PROVIDER_IMPLEMENTED = false; // sendSmsViaTwilio() is a stub
@@ -129,8 +130,8 @@ export const resolveCommunicationLanguage = (preferences: unknown): 'ar' | 'en' 
 
 /** The e-mail's own wording (greeting, button, footer, subject suffix) in the provider's language. The notification's title / message are shown as authored. */
 export const notificationMailCopy = (lang: 'ar' | 'en') => lang === 'en'
-	? { dir: 'ltr', greeting: (n: string) => `Hello ${n}`.trim(), open: 'Open', footer: 'You are receiving this because you chose e-mail as a notification channel in your profile.', subjectSuffix: 'Waseet AI' }
-	: { dir: 'rtl', greeting: (n: string) => `أهلاً ${n}`.trim(), open: 'فتح', footer: 'وصلتك هذه الرسالة لأنك اخترت البريد كقناة إشعارات في ملفك.', subjectSuffix: 'Waseet AI' };
+	? { dir: 'ltr', greeting: (n: string) => `Hello ${n}`.trim(), open: 'Open', footer: 'You are receiving this because you chose e-mail as a notification channel in your settings.', subjectSuffix: 'Waseet AI' }
+	: { dir: 'rtl', greeting: (n: string) => `أهلاً ${n}`.trim(), open: 'فتح', footer: 'وصلتك هذه الرسالة لأنك اخترت البريد كقناة إشعارات في إعداداتك.', subjectSuffix: 'Waseet AI' };
 
 export const resolveNotificationChannels = (preferences: unknown): { push: boolean; email: boolean } => {
 	const channels = preferences && typeof preferences === 'object' && !Array.isArray(preferences) ? (preferences as Record<string, unknown>).notifChannels : undefined;
@@ -138,7 +139,25 @@ export const resolveNotificationChannels = (preferences: unknown): { push: boole
 	return { push: channels.includes('push'), email: channels.includes('email') };
 };
 
-const escapeMailHtml = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+/**
+ * A CLIENT's saved channels live in notification_preferences.settings (the client "إعدادات الإشعارات" page): inApp = the real-time push in the app,
+ * email = an e-mail copy. The per-type toggles (newOffer, requestStatus, newMessage, walletActivity) are NOT applied: the settings page shows them as not controllable yet,
+ * so an old saved `false` there must not silently silence anything.
+ * Only what the client really saved is honoured: nothing saved keeps today's behaviour (real-time push on, no e-mail). The notification is ALWAYS stored.
+ * (The page's sms / mobile-push toggles have no sender yet, so they change nothing here.)
+ */
+export const resolveClientNotificationChannels = (settings: unknown, _type?: string): { push: boolean; email: boolean } => {
+	const s = settings && typeof settings === 'object' && !Array.isArray(settings) ? (settings as Record<string, unknown>) : {};
+	// two key families exist for the same two switches: the settings page's (inApp / email) and the profile page's (channel_in_app / channel_email); either one counts
+	const inApp = s.inApp ?? s.channel_in_app;
+	const email = s.email ?? s.channel_email;
+	return { push: inApp !== false, email: email === true };
+};
+
+/** The client's own language setting is the profile's "لغة الواجهة" (العربية / English); nothing saved is Arabic. */
+export const resolveClientLanguage = (interfaceLanguage: unknown): 'ar' | 'en' => (interfaceLanguage === 'English' ? 'en' : 'ar');
+
+const escapeMailHtml =(v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 export class NotificationService {
 	private emitDto(dto: NotificationDto): void {
@@ -152,10 +171,31 @@ export class NotificationService {
 		let channels = { push: true, email: false };
 		let recipient: { email: string; firstName: string | null } | null = null;
 		let lang: 'ar' | 'en' = 'ar';
+		// An account can hold both roles: a notification that points into /client-overview follows the CLIENT's settings, anything else the provider's (as before).
+		const forClient = !!dto.actionUrl && dto.actionUrl.startsWith('/client-overview');
+		let profileChannels: unknown = null;
 		try {
-			const profile = await prisma.providerProfile.findUnique({ where: { userId: dto.userId }, select: { preferences: true, user: { select: { email: true, firstName: true } } } });
+			const profile = forClient ? null : await prisma.providerProfile.findUnique({ where: { userId: dto.userId }, select: { preferences: true, user: { select: { email: true, firstName: true } } } });
+			profileChannels = profile?.preferences ?? null;
 			if (profile) { channels = resolveNotificationChannels(profile.preferences); lang = resolveCommunicationLanguage(profile.preferences); recipient = profile.user; }
+			else if (forClient) {
+				const [prefs, clientProfile, user] = await Promise.all([
+					prisma.notificationPreference.findUnique({ where: { userId: dto.userId }, select: { settings: true } }),
+					prisma.clientProfile.findUnique({ where: { userId: dto.userId }, select: { interfaceLanguage: true } }),
+					prisma.user.findUnique({ where: { id: dto.userId }, select: { email: true, firstName: true } })
+				]);
+				channels = resolveClientNotificationChannels(prefs?.settings, dto.type); lang = resolveClientLanguage(clientProfile?.interfaceLanguage); recipient = user;
+			}
 		} catch { /* default channels */ }
+		// No channels chosen on a provider profile: the account's shared preferences apply (Settings / profile page: channel_in_app, channel_email). Unsaved = push on, e-mail off.
+		const providerChose = Array.isArray((profileChannels as Record<string, unknown> | null)?.notifChannels);
+		if (!providerChose && !forClient) {
+			try {
+				const row = await prisma.notificationPreference.findUnique({ where: { userId: dto.userId }, select: { settings: true } });
+				channels = resolveClientNotificationChannels(row?.settings);
+				if (channels.email && !recipient) recipient = await prisma.user.findUnique({ where: { id: dto.userId }, select: { email: true, firstName: true } });
+			} catch { /* default channels */ }
+		}
 		if (channels.push) this.emitDto(dto);
 		if (channels.email && recipient?.email) void this.sendNotificationMail(recipient.email, recipient.firstName, dto, lang);
 	}
@@ -258,6 +298,11 @@ export class NotificationService {
 	/** Code that confirms a change of the PayPal payout email, sent to the ACCOUNT EMAIL (never to the new, unverified address). */
 	public async sendPaypalEmailChangeOtpEmail(email: string, code: string): Promise<EmailDeliveryResult> {
 		return this.sendOtpMail('paypal-email-change', email, code, process.env.PAYPAL_CHANGE_EMAIL_SUBJECT || PAYPAL_OTP_DEFAULT_SUBJECT);
+	}
+
+	/** Code that confirms a payment (marketplace checkout): its own subject, never the account-activation one. */
+	public async sendPaymentOtpEmail(email: string, code: string): Promise<EmailDeliveryResult> {
+		return this.sendOtpMail('payment', email, code, process.env.PAYMENT_OTP_EMAIL_SUBJECT || PAYMENT_OTP_DEFAULT_SUBJECT);
 	}
 
 	/** True only when a real SMS sender exists. Today the only provider code is a Twilio stub, so this is false. */

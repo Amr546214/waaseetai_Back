@@ -5,6 +5,7 @@ import { CreateDisputeInput, ResolveDisputeInput } from '../dtos/dispute.dto';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { WaseetAiError, WaseetAiErrorCode } from './ai/waseet-ai/waseet-ai.errors';
 import { providerNotifications } from './provider-notifications.service';
+import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 
 // Advisory-only dispute summary — never a verdict. Human admin resolution
 // via resolve() above remains the sole authority on status/fault/money;
@@ -67,9 +68,14 @@ export class DisputeService {
       include: { clientProfile: { select: { userId: true } }, proposals: { where: { providerId: userId }, select: { id: true, status: true, providerId: true } } }
     });
     if (!request) throw new AppError('الطلب غير موجود', 404);
-    if (!allowedStatuses.includes(request.status)) throw new AppError(statusErrorMessage, 400);
+    // Ownership first: someone who is not a party never learns anything about the request's state.
     if (actor === 'client' && request.clientProfile.userId !== userId) throw new AppError('لا تملك صلاحية هذا الطلب', 403);
     if (actor === 'provider' && !request.proposals.some(proposal => proposal.status === 'ACCEPTED')) throw new AppError('لا تملك صلاحية هذا الطلب', 403);
+    if (!allowedStatuses.includes(request.status)) {
+      // A request that is still being agreed on has no signed, funded contract to dispute.
+      const notStarted = request.status === RequestStatus.OPEN || request.status === RequestStatus.PENDING_SIGNATURE;
+      throw new AppError(notStarted ? 'لا يمكن فتح نزاع قبل توقيع العقد من الطرفين وتمويل الضمان' : statusErrorMessage, 400);
+    }
     const accepted = await prisma.proposal.findFirst({ where: { clientRequestId: requestId, status: 'ACCEPTED' }, select: { providerId: true } });
     return { request, againstUserId: actor === 'client' ? accepted?.providerId : request.clientProfile.userId };
   }
@@ -90,6 +96,8 @@ export class DisputeService {
     if (ownerId !== userId) throw new AppError('لا تملك صلاحية هذا الطلب', 403);
     if (!contract) throw new AppError('لا يمكن فتح نزاع على هذا المشروع لأنه لا يوجد عقد مرتبط به بعد', 400);
     const disputable: ContractStatus[] = [ContractStatus.ACTIVE, ContractStatus.COMPLETED, ContractStatus.DISPUTED];
+    const notStarted: ContractStatus[] = [ContractStatus.PENDING_CLIENT_SIGNATURE, ContractStatus.PENDING_PAYMENT, ContractStatus.PENDING_PROVIDER_SIGNATURE];
+    if (notStarted.includes(contract.status)) throw new AppError('لا يمكن فتح نزاع قبل توقيع العقد من الطرفين وتمويل الضمان', 400);
     if (!disputable.includes(contract.status)) throw new AppError('لا يمكن فتح نزاع على هذا المشروع في حالة العقد الحالية', 400);
     return { projectId: project.id, againstUserId: actor === 'client' ? (contract.providerId ?? project.providerId) : (contract.clientId ?? project.clientId) };
   }
@@ -97,7 +105,7 @@ export class DisputeService {
   async createForRequest(requestId: string, userId: string, actor: 'client' | 'provider', input: CreateDisputeInput) {
     const legacyRequest = await prisma.clientRequest.findUnique({ where: { id: requestId }, select: { id: true } });
     const target = legacyRequest
-      ? { requestId, projectId: undefined as string | undefined, againstUserId: (await this.requestForActor(requestId, userId, actor)).againstUserId }
+      ? { requestId, projectId: (await prisma.project.findUnique({ where: { id: requestId }, select: { id: true } }))?.id, againstUserId: (await this.requestForActor(requestId, userId, actor)).againstUserId }
       : { requestId: undefined as string | undefined, ...(await this.projectForActor(requestId, userId, actor)) };
     const where = target.projectId ? { projectId: target.projectId } : { requestId };
     const existing = await prisma.dispute.findFirst({ where: { ...where, openedById: userId, status: { in: [DisputeStatus.OPEN, DisputeStatus.UNDER_REVIEW] } } });
@@ -107,7 +115,11 @@ export class DisputeService {
       include: { request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } } }
     });
     // The provider is the opener (confirmation) or the party the client opened it against.
-    await providerNotifications.disputeOpened({ disputeId: dispute.id, providerId: actor === 'provider' ? userId : target.againstUserId, openedBy: actor, requestTitle: dispute.request?.title ?? dispute.project?.title ?? '' });
+    const disputedTitle = dispute.request?.title ?? dispute.project?.title ?? '';
+    await providerNotifications.disputeOpened({ disputeId: dispute.id, providerId: actor === 'provider' ? userId : target.againstUserId, openedBy: actor, requestTitle: disputedTitle });
+    // The client is the opener (confirmation) or the party the provider opened it against.
+    const disputeClientId = actor === 'client' ? userId : target.againstUserId;
+    if (disputeClientId) await clientNotifications.send(clientNotificationFor.disputeOpened({ clientId: disputeClientId, disputeId: dispute.id, openedBy: actor, requestTitle: disputedTitle }));
     return dispute;
   }
 
@@ -179,7 +191,11 @@ export class DisputeService {
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
     if (dispute.status !== DisputeStatus.OPEN && dispute.status !== DisputeStatus.UNDER_REVIEW) throw new AppError('تمت معالجة النزاع مسبقاً', 409);
     const updated = await prisma.dispute.update({ where: { id }, data: { status: input.action === 'resolve' ? DisputeStatus.RESOLVED : DisputeStatus.REJECTED, resolution: input.resolution, resolutionNote: input.resolutionNote, resolvedById: adminId, resolvedAt: new Date() } });
-    await providerNotifications.disputeResolved({ disputeId: id, providerId: await this.providerOf(dispute), action: input.action, resolution: input.resolution });
+    const disputeProviderId = await this.providerOf(dispute);
+    await providerNotifications.disputeResolved({ disputeId: id, providerId: disputeProviderId, action: input.action, resolution: input.resolution });
+    // the client is whichever party of the dispute is not its provider
+    const disputeClientId = disputeProviderId ? [dispute.openedById, dispute.againstUserId].find(u => u && u !== disputeProviderId) : undefined;
+    if (disputeClientId) await clientNotifications.send(clientNotificationFor.disputeResolved({ clientId: disputeClientId, disputeId: id, action: input.action, resolution: input.resolution }));
     return updated;
   }
 

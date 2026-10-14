@@ -3,6 +3,7 @@ import { AppError } from '../utils/app-error';
 import { CreateConversationDto, SendMessageDto } from '../dtos/chat.dto';
 import { providerNotifications } from './provider-notifications.service';
 import { MessageType, MessageStatus, UserRole } from '@prisma/client';
+import { offerActionBlock } from '../utils/request-lifecycle';
 
 /** Offer states a client can still open a negotiation on. Everything else (withdrawn, rejected, accepted, awaiting signature, draft, in review) is closed. */
 export const NEGOTIABLE_OFFER_STATUSES = ['SUBMITTED', 'PENDING', 'UNDER_NEGOTIATION'];
@@ -170,7 +171,21 @@ class ChatService {
       throw new AppError('لا يمكن إنشاء محادثة: يجب تحديد طالب الخدمة ومقدم الخدمة', 400);
     }
 
+    // The provider side must really belong to this project: it is the project's provider, or it has an offer on it. Anyone else (a provider with no offer on the
+    // project, or a provider id the client made up) gets no conversation: not the client's project to talk about, not their offer to discuss.
+    const providerInContext = project?.providerId === providerId
+      || !!(await prisma.projectProposal.findFirst({ where: { projectId, providerId }, select: { id: true } }))
+      || !!(await prisma.proposal.findFirst({ where: { providerId, OR: [{ projectId }, { clientRequestId: projectId }] }, select: { id: true } }));
+    if (!providerInContext) {
+      throw new AppError('لا يمكن بدء محادثة: مقدم الخدمة غير مرتبط بهذا المشروع أو بأي عرض عليه', 403);
+    }
+
     let negotiationOfferId: string | null = null;
+    // A client can only open a conversation on a project that is their own (the provider on the other end is then checked by the offer / project below).
+    if (isActingAsClient && targetClientId && currentUser.id !== targetClientId) {
+      throw new AppError('لا تملك صلاحية بدء محادثة على هذا المشروع', 403);
+    }
+
     if (data.negotiationPayload) {
       if (!isActingAsClient || currentUser.id !== targetClientId || !offerId) {
         throw new AppError('لا يمكن بدء التفاوض دون عرض صالح يملكه هذا المشروع', 403);
@@ -186,6 +201,9 @@ class ChatService {
         throw new AppError(NON_NEGOTIABLE_MESSAGES[offerStatus] ?? 'لا يمكن التفاوض على هذا العرض في حالته الحالية', 409, [{ code: 'OFFER_NOT_NEGOTIABLE', status: offerStatus }]);
       }
       negotiationOfferId = (canonicalOffer ?? legacyOffer)!.id;
+      // A request that no longer takes offers (cancelled, chosen, running, completed) closes negotiation too; the reason is the one the request page shows.
+      const closedReason = offerActionBlock(clientRequest?.status, undefined);
+      if (closedReason) throw new AppError(`لا يمكن التفاوض على هذا العرض: ${closedReason}`, 409, [{ code: 'OFFER_NOT_NEGOTIABLE', status: String(clientRequest?.status) }]);
       await prisma.$transaction([
         prisma.projectProposal.updateMany({
           where: { projectId, providerId, status: { in: ['SUBMITTED', 'PENDING'] } },
@@ -292,7 +310,9 @@ class ChatService {
 
     // If negotiation payload was sent during initiation, store it as a negotiation card message
     if (data.negotiationPayload) {
-      const payloadContent = 'WS_NEGOTIATION::' + JSON.stringify(data.negotiationPayload);
+      // only the client's own card fields are stored: `kind` / `offerId` / `replyToMessageId` mark the provider's and the server's entries and are never taken from the client
+      const { isNegotiation, negType, negTypeName, price, duration, notes, status } = data.negotiationPayload;
+      const payloadContent = 'WS_NEGOTIATION::' + JSON.stringify({ isNegotiation, negType, negTypeName, price, duration, notes, status });
       await prisma.message.create({
         data: {
           conversationId: conversation.id,
