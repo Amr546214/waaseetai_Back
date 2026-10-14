@@ -15,6 +15,7 @@ async function load(t: TestContext, o: { row?: any; count?: number; approvedCoun
       findUnique: async () => (o.profileId === null ? null : { providerProfileId: o.profileId ?? 'pp1' }),
       count: async (a: any) => { counts.push(a); return o.approvedCount ?? 1; },
     },
+    accreditationSample: { findMany: async () => [], update: async () => ({}) },
     user: { update: async (a: any) => { userUpdates.push(a); return {}; } },
     accountAuditLog: { create: async (a: any) => { logs.push(a); return {}; } },
   };

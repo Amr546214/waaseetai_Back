@@ -1,3 +1,4 @@
+import { requireApprovedProvider } from '../middlewares/provider-access.middleware';
 import { Router } from 'express';
 import { analyzeProjectForProvider } from '../controllers/ai-assistant.controller';
 import { authenticate, authorize, requireActiveUser , authorizeActiveRole } from '../middlewares/auth.middleware';
@@ -10,6 +11,7 @@ const router = Router();
 const providerOnly = authorizeActiveRole(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
 
 router.use(authenticate, requireActiveUser, providerOnly, aiLimiter);
+router.use(authenticate, requireActiveUser, requireApprovedProvider); // operational AI helper: unapproved individual providers get 403
 
 router.get('/analyze-project/:projectId', (req, res, next) => analyzeProjectForProvider(req, res, next));
 

@@ -1,3 +1,4 @@
+import { requireApprovedProvider } from '../../middlewares/provider-access.middleware';
 import { Router } from 'express';
 import { AiReviewController } from './ai-review.controller';
 import { AccountType } from '@prisma/client';
@@ -11,6 +12,7 @@ router.use(
   authenticate,
   requireActiveUser,
   authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY),
+  requireApprovedProvider, // operational AI helper: unapproved individual providers get 403
   aiLimiter
 );
 

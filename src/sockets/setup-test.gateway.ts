@@ -1,3 +1,4 @@
+import { tryEnsureOnboardingAccreditationSamples } from '../services/onboarding-accreditation.service';
 import { SPECIALTY_TEST_PASS_SCORE, SPECIALTY_TEST_QUESTION_COUNT, SPECIALTY_TEST_TIME_LIMIT_MINUTES } from '../constants/specialty-test';
 import { Socket, Server as SocketIOServer } from 'socket.io';
 import jwt from 'jsonwebtoken';
@@ -117,6 +118,9 @@ export class SetupTestGateway {
 
       // The setup test is the assessment of the specialties chosen at signup: record the result on the provider's specialty rows (a fact, never an approval).
       try { await specialtyService.applySetupTestToSpecialties(session.profileId, score, passed); } catch (err: any) { console.error('[SetupTestGateway] specialty write failed:', err?.message); }
+
+      // The onboarding sample becomes a real AccreditationSample waiting for the admin (idempotent; the test result alone never opens the dashboard).
+      await tryEnsureOnboardingAccreditationSamples(session.profileId);
 
       this.testSessions.delete(userId);
       socket.emit('setup_test:result', {

@@ -31,6 +31,12 @@ export class SpecialtyAdminReviewService {
       });
       if (moved.count !== 1) throw new AppError('تمت معالجة هذا التخصص مسبقاً', 409);
 
+      // the samples still waiting for the admin follow the decision (same outcome as the sample approve / reject endpoints) so the provider's access state never contradicts it
+      const waiting = await tx.accreditationSample.findMany({ where: { providerSpecialtyId, status: { in: ['MANUAL_REVIEW', 'PENDING_AI_AUDIT'] } }, select: { id: true, aiFeedbackAr: true } });
+      for (const sample of waiting) {
+        await tx.accreditationSample.update({ where: { id: sample.id }, data: approved ? { status: 'AI_VERIFIED' } : { status: 'REJECTED', aiFeedbackAr: `${sample.aiFeedbackAr || ''}\n[مراجعة الإدارة] سبب الرفض: ${input.reason}` } });
+      }
+
       const userId = specialty.providerProfile?.userId;
       if (approved && userId) {
         // the provider tier follows the number of APPROVED specialties (an assessment pass alone no longer changes it)

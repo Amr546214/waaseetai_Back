@@ -1,3 +1,4 @@
+import { requireApprovedProvider } from '../middlewares/provider-access.middleware';
 import { Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { proposalController } from '../controllers/proposal.controller';
@@ -22,6 +23,7 @@ const router = Router();
 // apply/proposal route exists anywhere in the marketer dashboard) — so it is
 // deliberately NOT included here; that would be an unproven, aspirational
 // grant rather than a fix backed by current product wiring.
+router.use(/^\/ai-suggest/, authenticate, requireActiveUser, requireApprovedProvider);
 router.post(
   '/ai-suggest',
   authenticate,

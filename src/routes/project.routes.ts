@@ -1,3 +1,4 @@
+import { requireApprovedProvider } from '../middlewares/provider-access.middleware';
 import { Router } from 'express';
 import { projectController } from '../controllers/project.controller';
 import { proposalController } from '../controllers/proposal.controller';
@@ -31,6 +32,9 @@ router.get(
   authenticate,
   projectController.getSummary
 );
+
+// Proposal creation is operational: an unapproved individual provider gets 403.
+router.use('/:id/proposals', authenticate, requireActiveUser, requireApprovedProvider);
 
 // Submit a proposal for an open project. createProposal runs a real Gemini
 // call before creating the proposal (ai-proposal.service.ts#
