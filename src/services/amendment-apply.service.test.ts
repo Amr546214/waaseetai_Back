@@ -659,3 +659,16 @@ test('static: the authorization window and the terms binding are explicit', () =
 	assert.match(svc, /fundingAuthorizedUntil/);
 	assert.match(svc, /amendmentCancelled/);
 });
+
+test('a client can raise an amendment with the CONTRACT id in the URL (the marketplace project page is keyed by it); it is stored against the real project id', async (t) => {
+	const { world, svc } = await setup(t, {});
+	const out = await svc.createAmendment('client-1', 'contract-abcdef123', { title: 'زيادة نطاق', description: 'تفاصيل التعديل المطلوب بالكامل', type: 'BUDGET', budgetDelta: 5 });
+	assert.equal(out.projectId, 'project-1');
+	assert.equal(world.tables.projectAmendment[0].projectId, 'project-1');
+	assert.equal(contractOf(world).price, 20, 'a request alone changes nothing');
+	// the same with the project id still works (idempotent behaviour for the other pages)
+	const { world: w2, svc: s2 } = await setup(t, {});
+	const out2 = await s2.createAmendment('client-1', 'project-1', { title: 'زيادة نطاق', description: 'تفاصيل التعديل المطلوب بالكامل', type: 'DURATION', durationDeltaDays: 2 });
+	assert.equal(out2.projectId, 'project-1');
+	assert.equal(w2.tables.projectAmendment.length, 1);
+});

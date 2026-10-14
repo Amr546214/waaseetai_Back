@@ -88,6 +88,7 @@ function makeWorld(t: TestContext, init: WorldInit = {}) {
     },
     project: {
       findUnique: async () => clone({ id: 'project-1', clientId: 'client-1', providerId: 'provider-1', contract: { id: 'contract-1', status: st.contract.status, clientId: 'client-1', providerId: 'provider-1' } }),
+      findFirst: async () => clone({ id: 'project-1', clientId: 'client-1', providerId: 'provider-1', contract: { id: 'contract-1', status: st.contract.status, clientId: 'client-1', providerId: 'provider-1' } }),
       update: async ({ data }: any) => { Object.assign(st.project, data); return clone(st.project); },
       count: async () => 1
     },

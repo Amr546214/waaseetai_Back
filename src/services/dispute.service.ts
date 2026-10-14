@@ -92,8 +92,9 @@ export class DisputeService {
    * instead: the actor must be the project's own client/provider, and the contract must be in a state that can be disputed.
    */
   private async projectForActor(projectId: string, userId: string, actor: 'client' | 'provider') {
-    const project = await prisma.project.findUnique({
-      where: { id: projectId },
+    // Accept the project id OR the contract id (the client project page is keyed by the contract id for marketplace purchases).
+    const project = await prisma.project.findFirst({
+      where: { OR: [{ id: projectId }, { contract: { id: projectId } }] },
       select: { id: true, clientId: true, providerId: true, contract: { select: { id: true, status: true, clientId: true, providerId: true } } }
     });
     if (!project) throw new AppError('الطلب غير موجود', 404);

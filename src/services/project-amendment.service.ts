@@ -175,10 +175,12 @@ export class ProjectAmendmentService {
   ) {
     const { title, type, description, budgetDelta, durationDeltaDays } = validateAmendmentInput(input);
 
+    // The client project page is keyed by the CONTRACT id for marketplace purchases (and by the project id elsewhere): accept either, then work with the real project id.
     const contract = await prisma.contract.findFirst({
-      where: { projectId, clientId, status: ContractStatus.ACTIVE }
+      where: { OR: [{ projectId }, { id: projectId }], clientId, status: ContractStatus.ACTIVE }
     });
     if (!contract) throw new AppError('المشروع غير موجود أو العقد غير نشط أو لا تملك صلاحية إنشاء تعديل عليه', 403);
+    projectId = contract.projectId;
 
     // At most ONE pending client-raised request per contract: the contract row is locked for the transaction (a harmless updatedAt touch), so
     // two simultaneous requests cannot both pass the "no pending request" check. The provider is notified; nothing about the contract changes.
