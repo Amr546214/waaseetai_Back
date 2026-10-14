@@ -54,7 +54,7 @@ test('FAILED when the model is NOT_CONFIGURED', async (t) => {
 test('route wiring and old rule-based generator removed', () => {
   const routes = fs.readFileSync(path.join(__dirname, '..', '..', 'routes', 'marketer-overview.routes.ts'), 'utf8');
   assert.ok(routes.includes("router.get('/ai-insights', aiLimiter, marketerOverviewController.getAiInsights);"));
-  assert.match(routes, /router\.use\(authenticate, requireActiveUser\);\s*router\.use\(authorize\('MARKETING_BROKER'\)\);/);
+  assert.match(routes, /router\.use\(authenticate, requireActiveUser\);\s*router\.use\(authorizeActiveRole\(AccountType\.MARKETING_BROKER\)\);/);
   const svc = fs.readFileSync(path.join(__dirname, '..', 'marketer-overview.service.ts'), 'utf8');
   assert.doesNotMatch(svc, /ابدأ ببوست تفاعلي|تحقق أفضل معدل تحويل/);
 });

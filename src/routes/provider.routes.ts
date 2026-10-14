@@ -23,7 +23,7 @@ import { providerProjectAmendmentsController } from '../controllers/provider-pro
 import { providerOfferNegotiationController } from '../controllers/provider-offer-negotiation.controller';
 
 const router = Router();
-const providerOnly = authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
+const providerOnly = authorizeActiveRole(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
 // sensitive provider flows: the role the user is ACTING as must be the provider (holding PROVIDER inside `roles` is not enough)
 const providerActingOnly = authorizeActiveRole(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
 
@@ -59,7 +59,7 @@ router.get('/coupons/:id/stats', authenticate, requireActiveUser, providerOnly, 
 router.get('/coupons/:id', authenticate, requireActiveUser, providerOnly, getCoupon);
 router.put('/coupons/:id', authenticate, requireActiveUser, providerOnly, updateCoupon);
 router.delete('/coupons/:id', authenticate, requireActiveUser, providerOnly, deactivateCoupon);
-router.patch('/coupons/:id/approval', authenticate, requireActiveUser, authorize(AccountType.PROVIDER_COMPANY), requireCompanyAccount, decideCouponApproval);
+router.patch('/coupons/:id/approval', authenticate, requireActiveUser, authorizeActiveRole(AccountType.PROVIDER_COMPANY), requireCompanyAccount, decideCouponApproval);
 
 // Phase 6 — special offers CRUD + company approval → /api/provider/special-offers
 router.use('/special-offers', specialOfferRouter);

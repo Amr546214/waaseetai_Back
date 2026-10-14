@@ -2,13 +2,14 @@ import { Router } from 'express';
 import { marketerOverviewController } from '../controllers/marketer-overview.controller';
 import { submitMarketerWithdrawal, listMyMarketerWithdrawals } from '../controllers/withdrawal.controller';
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
-import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { AccountType } from '@prisma/client';
+import { authenticate, authorize, requireActiveUser , authorizeActiveRole } from '../middlewares/auth.middleware';
 
 const router = Router();
 
 // Protect all routes and restrict to MARKETING_BROKER
 router.use(authenticate, requireActiveUser);
-router.use(authorize('MARKETING_BROKER'));
+router.use(authorizeActiveRole(AccountType.MARKETING_BROKER));
 
 router.get('/summary', marketerOverviewController.getSummary);
 router.get('/channel-performance', marketerOverviewController.getChannelPerformance);

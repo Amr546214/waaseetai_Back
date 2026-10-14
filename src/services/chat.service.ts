@@ -605,14 +605,13 @@ class ChatService {
       partnerId: partner?.id,
       partnerAvatar: partner?.avatarUrl,
       project: conv.project?.title || 'مشروع وسيط',
-      projectSpecialty: conv.project?.specialty || (isUserClient && partner?.providerProfile?.headline ? partner.providerProfile.headline : 'تطوير وتصميم'),
+      projectSpecialty: conv.project?.specialty || (isUserClient && partner?.providerProfile?.headline ? partner.providerProfile.headline : ''),
       projectBudget,
       avatarType,
       initials: partnerInitials,
       lastMsg: lastMsgText,
       time: timeStr,
       unreadCount,
-      online: true,
       messages: formattedMessages
     };
   }

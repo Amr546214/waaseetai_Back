@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { AccountType } from '@prisma/client';
-import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { authenticate, authorize, requireActiveUser , authorizeActiveRole } from '../middlewares/auth.middleware';
 import { clientProjectAmendmentsController } from '../controllers/client-project-amendments.controller';
 import { setProjectAssignedEmployee } from '../controllers/client-project-assignment.controller';
 import { requireClientCompanyAccount } from './client-company-team.routes';
@@ -22,7 +22,7 @@ router.post('/:projectId/amendments', clientProjectAmendmentsController.createAm
 // role-equivalence (see client-company-team.routes.ts).
 router.put(
 	'/:id/assigned-employee',
-	authorize(AccountType.CLIENT_COMPANY),
+	authorizeActiveRole(AccountType.CLIENT_COMPANY),
 	requireClientCompanyAccount,
 	setProjectAssignedEmployee
 );

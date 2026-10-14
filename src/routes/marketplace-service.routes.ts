@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { MarketplaceServiceController } from '../controllers/marketplace-service.controller';
 import { AccountType } from '@prisma/client';
-import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { authenticate, authorize, requireActiveUser , authorizeActiveRole } from '../middlewares/auth.middleware';
 import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
 
 const router = Router();
@@ -15,7 +15,7 @@ const galleryUpload = memoryUpload({
 router.use(
 	authenticate,
 	requireActiveUser,
-	authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY)
+	authorizeActiveRole(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY)
 );
 
 // All routes here should be mounted under /api/provider/services

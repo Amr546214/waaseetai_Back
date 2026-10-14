@@ -27,7 +27,7 @@ const ALLOWED_MIME_TYPES = new Set([
 const upload = memoryUpload({ fileSize: 15 * 1024 * 1024, files: 5, allowedMimeTypes: ALLOWED_MIME_TYPES });
 
 const router = Router();
-const clientOnly = authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL);
+const clientOnly = authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL);
 const clientActingOnly = authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL);
 
 // Metadata endpoint (Categories, Specialties, Sub-specialties with provider counts)
@@ -39,7 +39,7 @@ router.post(
   '/specialty-recommendations',
   authenticate,
   requireActiveUser,
-  authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL),
+  authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL),
   async (req, res) => {
     try {
       const b = (req.body ?? {}) as Record<string, unknown>;
@@ -60,7 +60,7 @@ router.post(
   '/ai-suggest',
   authenticate,
   requireActiveUser,
-  authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL),
+  authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL),
   aiLimiter,
   clientRequestsController.aiSuggest
 );
@@ -91,7 +91,7 @@ router.get('/pending-deliveries', authenticate, requireActiveUser, clientRequest
 router.get('/active-projects/:id', authenticate, requireActiveUser, clientRequestsController.getActiveProjectTracking);
 
 router.get('/:id/workspace', authenticate, requireActiveUser, clientRequestsController.getProjectWorkspace);
-router.post('/:id/stages/:stageId/review', authenticate, requireActiveUser, clientRequestsController.reviewStageDelivery);
+router.post('/:id/stages/:stageId/review', authenticate, requireActiveUser, clientOnly, clientRequestsController.reviewStageDelivery);
 // Advisory-only Gemini review of a stage delivery — read-only, no DB write,
 // never approves/rejects the delivery. AI-rate-limited like every other
 // Gemini-triggering HTTP route in this codebase. Ownership (must be this
@@ -109,23 +109,23 @@ router.post('/:id/stages/:stageId/rating', authenticate, requireActiveUser, rate
 router.get('/:id', authenticate, requireActiveUser, clientRequestsController.getRequestDetails);
 
 // The provider's pending counter-offer on an offer, and the client's acceptance of it. Client accounts only; ownership of the request is checked in the service.
-router.get('/:id/offers/:offerId/counter', authenticate, requireActiveUser, authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.getOfferCounter);
-router.post('/:id/offers/:offerId/counter/accept', authenticate, requireActiveUser, authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.acceptOfferCounter);
+router.get('/:id/offers/:offerId/counter', authenticate, requireActiveUser, authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.getOfferCounter);
+router.post('/:id/offers/:offerId/counter/accept', authenticate, requireActiveUser, authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.acceptOfferCounter);
 
-router.post('/:id/offers/:offerId/counter/decline', authenticate, requireActiveUser, authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.declineOfferCounter);
+router.post('/:id/offers/:offerId/counter/decline', authenticate, requireActiveUser, authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.declineOfferCounter);
 
 // Select an offer (freezes the commercial snapshot)
-router.post('/:id/offers/select', authenticate, requireActiveUser, clientRequestsController.selectOffer);
+router.post('/:id/offers/select', authenticate, requireActiveUser, clientOnly, clientRequestsController.selectOffer);
 
 // The frozen contract the client is about to sign
-router.get('/:id/contract', authenticate, requireActiveUser, clientRequestsController.getContractForSignature);
+router.get('/:id/contract', authenticate, requireActiveUser, clientOnly, clientRequestsController.getContractForSignature);
 
 // Sign contract & send OTP
-router.post('/:id/contract/sign', authenticate, requireActiveUser, clientRequestsController.signContract);
+router.post('/:id/contract/sign', authenticate, requireActiveUser, clientOnly, clientRequestsController.signContract);
 
 // Verify OTP & deposit escrow
-router.post('/:id/escrow/deposit', authenticate, requireActiveUser, clientRequestsController.depositEscrow);
-router.post('/:id/disputes', authenticate, requireActiveUser, openClientDispute);
-router.post('/:id/rate', authenticate, requireActiveUser, rateAsClient);
+router.post('/:id/escrow/deposit', authenticate, requireActiveUser, clientOnly, clientRequestsController.depositEscrow);
+router.post('/:id/disputes', authenticate, requireActiveUser, clientOnly, openClientDispute);
+router.post('/:id/rate', authenticate, requireActiveUser, clientOnly, rateAsClient);
 
 export default router;

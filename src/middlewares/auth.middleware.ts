@@ -256,3 +256,16 @@ export const authorizeActiveRoleWithMessage = (message: string, ...allowedAccoun
 
 export const authorizeActiveRole = (...allowedAccountTypes: AccountType[]) =>
   authorizeActiveRoleWithMessage('غير مصرح لك بالوصول لهذه الصلاحية', ...allowedAccountTypes);
+
+/**
+ * Admin gate for a user who may be ACTING as another role: a real admin account (accountType ADMIN / SUPER_ADMIN) always passes — dev super-admins default to activeRole CLIENT and
+ * must never be locked out — and so does anyone whose active role is ADMIN / SUPER_ADMIN. Holding ADMIN only inside `roles` while acting as CLIENT / PROVIDER / AFFILIATE does not.
+ */
+export const authorizeAdminActing = (req: Request, _res: Response, next: NextFunction) => {
+  if (!req.user) return next(new AppError('غير مصرح لك بالوصول، يرجى تسجيل الدخول', 401));
+  const { accountType, activeRole } = req.user;
+  const isAdminAccount = accountType === AccountType.ADMIN || accountType === AccountType.SUPER_ADMIN;
+  const actsAsAdmin = activeRole === UserRole.ADMIN || activeRole === UserRole.SUPER_ADMIN;
+  if (isAdminAccount || actsAsAdmin) return next();
+  return next(new AppError('غير مصرح لك بالوصول لهذه الصلاحية', 403));
+};

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import * as providerProfileController from '../controllers/provider-profile.controller';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
-import { authorize } from '../middlewares/auth.middleware';
+import { authorize , authorizeAdminActing } from '../middlewares/auth.middleware';
 import { AccountType } from '@prisma/client';
 import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
 import { blockCompanySetup } from '../middlewares/company-unavailable.middleware';
@@ -73,8 +73,8 @@ router.get('/public', requireProvider, aiLimiter, providerProfileController.getP
 router.get('/requests', requireProvider, providerProfileController.getModificationRequests);
 router.post('/requests', requireProvider, providerProfileController.createModificationRequest);
 router.post('/requests/:id/cancel', requireProvider, providerProfileController.cancelModificationRequest);
-router.post('/requests/:id/review', authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN), providerProfileController.reviewSensitiveChange);
-router.get('/admin/pending-reviews', authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN), providerProfileController.getPendingSensitiveReviews);
+router.post('/requests/:id/review', authorizeAdminActing, providerProfileController.reviewSensitiveChange);
+router.get('/admin/pending-reviews', authorizeAdminActing, providerProfileController.getPendingSensitiveReviews);
 router.get('/requests/:tabName', requireProvider, providerProfileController.getChangeRequests);
 router.post('/sensitive-change', requireProvider, providerProfileController.initiateSensitiveChange);
 router.post('/sensitive-change/verify', requireProvider, providerProfileController.verifySensitiveChange);

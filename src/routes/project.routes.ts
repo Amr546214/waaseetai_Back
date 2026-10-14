@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { projectController } from '../controllers/project.controller';
 import { proposalController } from '../controllers/proposal.controller';
-import { authenticate, requireActiveUser, authorize } from '../middlewares/auth.middleware';
+import { authenticate, requireActiveUser, authorize , authorizeActiveRole } from '../middlewares/auth.middleware';
 import { validateDto } from '../middlewares/validate-dto.middleware';
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { createProposalSchema } from '../dtos/create-proposal.dto';
@@ -40,7 +40,7 @@ router.post(
   '/:id/proposals',
   authenticate,
   requireActiveUser,
-  authorize(AccountType.PROVIDER_COMPANY, AccountType.PROVIDER_INDIVIDUAL, AccountType.MARKETING_BROKER),
+  authorizeActiveRole(AccountType.PROVIDER_COMPANY, AccountType.PROVIDER_INDIVIDUAL, AccountType.MARKETING_BROKER),
   aiLimiter,
   validateDto(createProposalSchema),
   proposalController.createProposal
@@ -52,7 +52,7 @@ router.post(
   '/', 
   authenticate, 
   requireActiveUser, 
-  authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL),
+  authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL),
   validateDto(createProjectSchema),
   projectController.createProject
 );
