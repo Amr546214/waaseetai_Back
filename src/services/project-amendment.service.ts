@@ -7,6 +7,7 @@ import { isV2Escrow } from '../utils/escrow-commission';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { applyAmendment, effectiveParts, termsFingerprint, FUNDING_AUTHORIZATION_TTL_MS } from './amendment-apply.service';
 import { hasActiveDispute } from './amendment-dispute-guard';
+import { AMENDMENT_CONTRACT_CLOSED_AR } from './settlement-state.service';
 import { notificationService } from './notification.service';
 import { projectProgressService } from './project-progress.service';
 import { providerNotifications } from './provider-notifications.service';
@@ -93,8 +94,13 @@ export const amendmentEffectOf = (row: { status: string; appliedAt?: Date | null
   row.appliedAt ? 'APPLIED' : row.status === 'APPROVED' ? 'RECORD_ONLY' : row.status === 'PENDING_OTHER_PARTY' ? 'PENDING' : 'NONE';
 const EFFECT_NOTES: Record<AmendmentEffect, string> = { APPLIED: AMENDMENT_APPLIED_NOTE, RECORD_ONLY: AMENDMENT_EFFECT_NOTE, PENDING: AMENDMENT_PENDING_NOTE, NONE: AMENDMENT_NONE_NOTE };
 
+/** A contract that is COMPLETED / CANCELLED (e.g. closed by a dispute settlement) can no longer take an amendment. */
+export const isClosedContractStatus = (status: string | null | undefined): boolean => status === ContractStatus.COMPLETED || status === ContractStatus.CANCELLED;
+
 const toPublicAmendment = (row: any, conversationId: string | null) => {
-  const effect = amendmentEffectOf(row);
+  // A still-pending amendment of a closed contract is not applicable any more: no effect, a clear reason, no actions.
+  const closedPending = row.status === AmendmentStatus.PENDING_OTHER_PARTY && isClosedContractStatus(row.contract?.status);
+  const effect: AmendmentEffect = closedPending ? 'NONE' : amendmentEffectOf(row);
   const parts = effectiveParts(row);
   return {
     id: row.id,
@@ -115,7 +121,10 @@ const toPublicAmendment = (row: any, conversationId: string | null) => {
     updatedAt: row.updatedAt,
     respondedAt: row.respondedAt,
     effect,
-    effectNote: EFFECT_NOTES[effect],
+    effectNote: closedPending ? AMENDMENT_CONTRACT_CLOSED_AR : EFFECT_NOTES[effect],
+    actionable: !closedPending,
+    actionBlockedReason: closedPending ? AMENDMENT_CONTRACT_CLOSED_AR : null,
+    contractStatus: row.contract?.status ?? null,
     appliedAt: row.appliedAt ?? null,
     priceBefore: row.priceBefore ?? null,
     priceAfter: row.priceAfter ?? null,
@@ -152,6 +161,12 @@ export class ProjectAmendmentService {
     return new Map(conversations.map(c => [`${c.projectId}:${c.providerId}`, c.id]));
   }
 
+  // Refuses a pending amendment's action (approve / payment code / authorize) once its contract is closed. A missing contract row is left to the later guards.
+  private async assertContractOpen(contractId: string) {
+    const c = await prisma.contract.findUnique({ where: { id: contractId }, select: { status: true } });
+    if (c && isClosedContractStatus(c.status)) throw new AppError(AMENDMENT_CONTRACT_CLOSED_AR, 409);
+  }
+
   // Real amendments belonging to the authenticated client only — ownership is
   // enforced at the Prisma WHERE clause itself, not by post-filtering.
   async listAmendments(clientId: string) {
@@ -161,7 +176,7 @@ export class ProjectAmendmentService {
       include: {
         project: { select: { title: true } },
         provider: { select: { firstName: true, lastName: true } },
-        contract: { select: { price: true, durationDays: true, termsVersion: true } }
+        contract: { select: { price: true, durationDays: true, termsVersion: true, status: true } }
       }
     });
     const convMap = await this.resolveConversationIds(rows.map(r => ({ projectId: r.projectId, providerId: r.providerId })));
@@ -212,7 +227,7 @@ export class ProjectAmendmentService {
         include: {
           project: { select: { title: true } },
           provider: { select: { firstName: true, lastName: true } },
-        contract: { select: { price: true, durationDays: true, termsVersion: true } }
+        contract: { select: { price: true, durationDays: true, termsVersion: true, status: true } }
         }
       });
 
@@ -245,7 +260,7 @@ export class ProjectAmendmentService {
       where: { providerId, projectId },
       orderBy: { createdAt: 'desc' },
       include: { project: { select: { title: true } }, provider: { select: { firstName: true, lastName: true } },
-        contract: { select: { price: true, durationDays: true, termsVersion: true } } }
+        contract: { select: { price: true, durationDays: true, termsVersion: true, status: true } } }
     });
     const convMap = await this.resolveConversationIds(rows.map(r => ({ projectId: r.projectId, providerId: r.providerId })));
     return rows.map(row => toPublicAmendment(row, convMap.get(`${row.projectId}:${row.providerId}`) || null));
@@ -287,7 +302,7 @@ export class ProjectAmendmentService {
           status: AmendmentStatus.PENDING_OTHER_PARTY
         },
         include: { project: { select: { title: true } }, provider: { select: { firstName: true, lastName: true } },
-        contract: { select: { price: true, durationDays: true, termsVersion: true } } }
+        contract: { select: { price: true, durationDays: true, termsVersion: true, status: true } } }
       });
 
       clientNotificationId = (await tx.notification.create({ data: clientNotificationFor.amendmentRequested({ clientId: contract.clientId, projectId, amendmentId: row.id, title }) })).id;
@@ -304,7 +319,7 @@ export class ProjectAmendmentService {
   private readonly amendmentInclude = {
     project: { select: { title: true } },
     provider: { select: { firstName: true, lastName: true } },
-        contract: { select: { price: true, durationDays: true, termsVersion: true } }
+        contract: { select: { price: true, durationDays: true, termsVersion: true, status: true } }
   } as const;
 
   private async publicById(amendmentId: string) {
@@ -366,6 +381,7 @@ export class ProjectAmendmentService {
     const amendment = await prisma.projectAmendment.findFirst({ where: { id: amendmentId, clientId } });
     if (!amendment) throw new AppError('طلب التعديل غير موجود أو لا تملك صلاحية الوصول إليه', 403);
     if (amendment.status !== AmendmentStatus.PENDING_OTHER_PARTY) throw new AppError('طلب التعديل لم يعد معلّقًا', 409);
+    await this.assertContractOpen(amendment.contractId);
     const { budget } = effectiveParts(amendment);
     if (budget <= 0) throw new AppError('هذا الطلب لا يتطلب دفعًا', 400);
 
@@ -400,6 +416,7 @@ export class ProjectAmendmentService {
     if (!amendment) throw new AppError('طلب التعديل غير موجود أو لا تملك صلاحية الوصول إليه', 403);
     if (amendment.requestedByRole !== AmendmentRequesterRole.CLIENT) throw new AppError('اعتماد الدفع هنا لطلبات التعديل التي رفعها العميل؛ ادفع عند الموافقة على طلب مقدم الخدمة', 400);
     if (amendment.status !== AmendmentStatus.PENDING_OTHER_PARTY) throw new AppError('طلب التعديل لم يعد معلّقًا', 409);
+    await this.assertContractOpen(amendment.contractId);
     const { budget } = effectiveParts(amendment);
     if (budget <= 0) throw new AppError('هذا الطلب لا يتطلب دفعًا', 400);
     const otpId = await this.verifyPaymentOtp(clientId, amendment, budget, otpCode);
@@ -470,6 +487,7 @@ export class ProjectAmendmentService {
     if (pre.requestedByRole !== mustBeRaisedBy) throw new AppError('لا يمكنك الرد على طلب تعديل رفعته أنت', 403);
     if (pre.status !== AmendmentStatus.PENDING_OTHER_PARTY) throw new AppError('تم الرد على طلب التعديل هذا مسبقًا', 409);
 
+    await this.assertContractOpen(pre.contractId);
     const parts = effectiveParts(pre);
     if (parts.budget !== 0 || parts.days !== 0) await this.ensureStages(pre.contractId);
     // Provider-raised increase: the CLIENT's code authorizes the payment. Verified outside the transaction so wrong guesses are counted even when the answer is refused;

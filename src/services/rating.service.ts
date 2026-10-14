@@ -5,7 +5,7 @@ import { deriveProviderProgression } from '../utils/progression-calculators';
 import { providerNotifications } from './provider-notifications.service';
 import { clientNotificationFor, clientNotifications } from './client-notifications.service';
 import type { Prisma } from '@prisma/client';
-import { adminSettlementFor, SETTLED_NO_RATING_AR, SETTLED_LABEL_AR } from './settlement-state.service';
+import { adminSettlementFor, deliveryCompletedProject, SETTLED_NO_RATING_AR, SETTLED_LABEL_AR } from './settlement-state.service';
 import { adminAudit } from './admin-audit.service';
 import type { FinancialOutcomeSummary } from '../utils/dispute-resolution';
 
@@ -41,7 +41,7 @@ async function refreshProviderAggregates(tx: Prisma.TransactionClient, providerI
   await tx.user.update({ where: { id: providerId }, data: { ratingAverage: avgRating } });
   const [pointsAggregate, completedProjects] = await Promise.all([
     tx.pointTransaction.aggregate({ where: { providerId }, _sum: { amount: true } }),
-    tx.project.count({ where: { providerId, status: 'COMPLETED' } })
+    tx.project.count({ where: deliveryCompletedProject({ providerId }) })
   ]);
   const totalPoints = pointsAggregate._sum.amount || 0;
   const progression = deriveProviderProgression({ points: totalPoints, completedProjects, avgRating });

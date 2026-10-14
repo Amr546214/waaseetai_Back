@@ -1,4 +1,5 @@
 import { prisma } from '../config/db';
+import { deliveryCompletedProject } from './settlement-state.service';
 
 // Read-only analytics over real aggregates (no writes). Every number is a COUNT / AVG over database rows,
 // optionally limited to the [from, to] createdAt window. Nothing is estimated or invented.
@@ -61,7 +62,7 @@ export const adminAnalyticsService = {
 			}),
 			prisma.review.groupBy({ by: ['providerId'], where: when, _avg: { rating: true }, _count: { _all: true } }),
 			prisma.review.findMany({ where: when, select: { createdAt: true, rating: true } }),
-			prisma.project.groupBy({ by: ['providerId'], where: { ...when, status: 'COMPLETED', providerId: { not: null } }, _count: { _all: true } }),
+			prisma.project.groupBy({ by: ['providerId'], where: deliveryCompletedProject({ ...when, providerId: { not: null } }), _count: { _all: true } }),
 			prisma.project.groupBy({ by: ['specialty'], where: when, _count: { _all: true } }),
 			prisma.providerProfile.groupBy({ by: ['mainSpecialty'], where: { mainSpecialty: { not: null } }, _count: { _all: true } }),
 		]);

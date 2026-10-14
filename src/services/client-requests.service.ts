@@ -16,6 +16,7 @@ import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { providerNotifications } from './provider-notifications.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
+import { deliveryCompletedProject, adminSettlementFor, adminSettledView, settlementsByProject, STAGE_CLOSED_BY_SETTLEMENT, SETTLED_LABEL_AR, SETTLED_STAGE_LABEL_AR } from './settlement-state.service';
 import {
 	mailTransporter,
 	getOtpEmailTemplate,
@@ -772,8 +773,10 @@ export class ClientRequestsService {
 			? await prisma.review.findMany({ where: { projectId: { in: projectIds }, clientId: userId, reviewerRole: 'CLIENT' } })
 			: [];
 		const reviewMap = new Map(reviews.map(r => [r.projectId, r]));
+		const settledMap = await settlementsByProject(projectIds);
 
 		const items = contracts.map(c => {
+			const adminSettled = settledMap.get(c.projectId) ?? null;
 			const providerName = c.provider?.providerProfile?.companyName ||
 				[c.provider?.firstName, c.provider?.lastName].filter(Boolean).join(' ') || 'مقدم خدمة';
 			const escrow = c.project?.escrow;
@@ -786,6 +789,9 @@ export class ClientRequestsService {
 				title: c.project?.title || 'مشروع',
 				status: c.status,
 				rawStatus: c.project?.status || c.status,
+				// Derived: a project closed by an admin financial dispute decision is not "completed" (no stored status changes).
+				adminSettled,
+				statusLabel: adminSettled ? SETTLED_LABEL_AR : null,
 				provider: {
 					id: c.providerId,
 					name: providerName,
@@ -797,7 +803,7 @@ export class ClientRequestsService {
 				heldAmount: Math.max(0, totalPrice - releasedAmount),
 				completedAt: c.updatedAt.toISOString(),
 				category: c.project?.serviceCatalog?.title || c.project?.specialty || '',
-				canRate: c.status === 'COMPLETED' && !review,
+				canRate: c.status === 'COMPLETED' && !review && !adminSettled,
 				hasRated: !!review,
 				rating: review?.rating || null,
 				ratingComment: review?.comment || null,
@@ -912,6 +918,7 @@ export class ClientRequestsService {
 		// The signed contract's ProjectStage rows are the single source of truth for the milestones (title, days, amount, real status); the request/offer milestones are only a fallback.
 		const contractRow = await prisma.contract.findFirst({ where: { projectId: requestId, clientId: userId }, select: { price: true, signedAt: true, stages: { orderBy: { stepOrder: 'asc' } } } });
 		const stageRows = contractRow?.stages ?? [];
+		const settlement = await adminSettlementFor({ projectId: requestId });
 		if (stageRows.length > 0) {
 			price = Number(contractRow!.price || price);
 			if (contractRow!.signedAt) startDate = contractRow!.signedAt;
@@ -997,7 +1004,17 @@ export class ClientRequestsService {
 		// and without real milestones there is no honest progress figure (0, or 100 once completed). This endpoint must never report estimated held amounts.
 		const escrowRow = await prisma.escrow.findUnique({ where: { projectId: requestId }, select: { status: true, amount: true, releasedAmount: true } });
 		heldAmount = escrowRow && String(escrowRow.status) === 'HELD' ? Math.max(0, Number(escrowRow.amount) - Number(escrowRow.releasedAmount || 0)) : 0;
-		if (realMilestones.length === 0 || timelines.length === 0) progress = rawStatus === 'COMPLETED' ? 100 : 0;
+		if (realMilestones.length === 0 || timelines.length === 0) progress = rawStatus === 'COMPLETED' && !settlement.settled ? 100 : 0;
+		if (settlement.settled && stageRows.length === 0) {
+			// No genuine stage rows: nothing was approved, so no stage is shown as completed and no fake 100% is reported.
+			timelines = timelines.map((t: any) => ({ ...t, status: 'PENDING' }));
+			completedMilestones = 0; progress = 0;
+		}
+		// Display-only: the unreleased stages of a settled project read "closed by the settlement"; stored statuses and progress are untouched.
+		timelines = timelines.map((t: any) => {
+			const closed = settlement.settled && t.status !== 'COMPLETED';
+			return { ...t, displayStatus: closed ? STAGE_CLOSED_BY_SETTLEMENT : null, displayStatusLabel: closed ? SETTLED_STAGE_LABEL_AR : null };
+		});
 
 		return {
 			project: {
@@ -1010,6 +1027,8 @@ export class ClientRequestsService {
 				startDate: startDate.toISOString(),
 				endDate: expectedEndDate.toISOString(),
 				daysLeft: daysLeft,
+				adminSettled: adminSettledView(settlement),
+				statusLabel: settlement.settled ? SETTLED_LABEL_AR : null,
 				milestonesCount: realMilestones.length,
 				completedMilestones: completedMilestones,
 				heldAmount: heldAmount,
@@ -1118,7 +1137,7 @@ export class ClientRequestsService {
 		const completedProjectCounts = providerIds.length > 0
 			? await prisma.project.groupBy({
 				by: ['providerId'],
-				where: { providerId: { in: providerIds }, status: 'COMPLETED' },
+				where: deliveryCompletedProject({ providerId: { in: providerIds } }),
 				_count: { id: true }
 			})
 			: [];

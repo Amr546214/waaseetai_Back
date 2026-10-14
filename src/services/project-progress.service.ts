@@ -14,6 +14,7 @@ import { marketerNotifications, type MarketerCommissionNotice } from './marketer
 import { DELIVERY_MAX_FILE_BYTES, DELIVERY_MAX_UPLOADED_FILES, deliveryFolder, validateDeliveryArtifacts } from '../utils/delivery-artifacts';
 import { uploadMulterFile } from '../utils/cloudinary-storage';
 import { ACTIVE_DISPUTE_STATUSES, PROJECT_FROZEN_MESSAGE, assertProjectNotFrozen, freezeStateOf, getActiveDisputeForProject, countActiveDisputes, lockProjectForFreezeCheck } from './dispute-freeze.service';
+import { deliveryCompletedProject, adminSettlementFor, adminSettledView, stageDisplayStatus, SETTLED_LABEL_AR } from './settlement-state.service';
 
 const PROJECT_COMPLETION_POINTS = 50;
 
@@ -220,6 +221,8 @@ export class ProjectProgressService {
     const released = contract.project.escrow?.releasedAmount || 0;
     const [openDispute, activeDisputeCount] = await Promise.all([getActiveDisputeForProject(contract.projectId, prisma), countActiveDisputes(contract.projectId, prisma)]);
     const disputeFreeze = freezeStateOf(activeDisputeCount, openDispute);
+    // Derived end state: closed by an admin financial dispute decision (nothing stored, progress still counts only approved stages).
+    const settlement = await adminSettlementFor({ projectId: contract.projectId });
     const state = contractDeliveryState(contract.status, persisted, contract.project.escrow, openDispute?.status || null);
     const escrow = escrowFacts(contract.project.escrow);
     // Only the provider uploads; the client side of this shared endpoint never gets an upload permission.
@@ -235,6 +238,7 @@ export class ProjectProgressService {
         isDone: stage.status === ProjectStageStatus.APPROVED,
         isWait: stage.status === ProjectStageStatus.IN_PROGRESS || stage.status === ProjectStageStatus.SUBMITTED || stage.status === ProjectStageStatus.REVISION_REQUESTED,
         status, statusText, completedDate: stage.approvedAt, roundsCount: stage.deliveries.length,
+        ...stageDisplayStatus(stage.status, settlement.settled),
         ...ss, canUploadDelivery: mayUpload && ss.canUploadDelivery, canSubmitDelivery: mayUpload && ss.canSubmitDelivery,
         // The stage amount is "held" only while a funded escrow exists and the stage is not yet released.
         amountHeld: escrow.escrowFunded && stage.status !== ProjectStageStatus.APPROVED,
@@ -290,7 +294,8 @@ export class ProjectProgressService {
       ...state, canUploadDelivery: mayUpload && state.canUploadDelivery, canSubmitDelivery: mayUpload && state.canSubmitDelivery,
       // Dispute freeze (read model shared by both apps): approvals and releases are refused by the backend while `frozen`; the screens show `reason`.
       disputeFreeze, activeDisputeCount: disputeFreeze.activeDisputeCount, activeDisputeId: disputeFreeze.disputeId, canApproveStage: !disputeFreeze.frozen && contract.status === ContractStatus.ACTIVE, approvalBlockedReason: disputeFreeze.reason,
-      status: contract.status, statusLabel: role === 'client' ? clientContractStatusLabel(contract.status, escrow.escrowFunded) : (contractStatusLabel[contract.status] || 'غير نشط'),
+      status: contract.status, statusLabel: settlement.settled ? SETTLED_LABEL_AR : (role === 'client' ? clientContractStatusLabel(contract.status, escrow.escrowFunded) : (contractStatusLabel[contract.status] || 'غير نشط')),
+      adminSettled: adminSettledView(settlement),
       employee: contract.project.assignedEmployee ? { id: contract.project.assignedEmployee.id, name: contract.project.assignedEmployee.name, jobTitle: contract.project.assignedEmployee.jobTitle } : null,
       stages, deliveries,
       edits: persisted.flatMap(stage => stage.deliveries.map((delivery, index) => ({ stage, delivery, index }))
@@ -302,7 +307,7 @@ export class ProjectProgressService {
         })),
       messages,
       files: persisted.filter(s => s.deliveries.some(d => d.files.length)).map(s => ({ groupTitle: s.title, isDone: s.status === ProjectStageStatus.APPROVED, files: s.deliveries.flatMap(d => d.files.map(url => normalizeFileEntry(url))) })),
-      providerClientRating,
+      providerClientRating: { ...providerClientRating, canRate: contract.status === ContractStatus.COMPLETED && !providerClientRating.hasRated && !settlement.settled },
       aiInsights: { confidence: null, earlyDays: null, matchPercentage: null, riskLevel: 'غير محسوبة', riskLevelKey: 'unknown', healthRating: 'بانتظار بيانات كافية', bullets: [] }
     };
   }
@@ -616,7 +621,7 @@ export class ProjectProgressService {
           // see this transaction's own already-committed PointTransaction.
           const [pointsAggregate, completedProjects, ratingAggregate] = await Promise.all([
             tx.pointTransaction.aggregate({ where: { providerId: contract.providerId }, _sum: { amount: true } }),
-            tx.project.count({ where: { providerId: contract.providerId, status: ProjectStatus.COMPLETED } }),
+            tx.project.count({ where: deliveryCompletedProject({ providerId: contract.providerId }) }),
             tx.review.aggregate({ where: { providerId: contract.providerId, reviewerRole: 'CLIENT' }, _avg: { rating: true } })
           ]);
           const totalPoints = pointsAggregate._sum.amount || 0;

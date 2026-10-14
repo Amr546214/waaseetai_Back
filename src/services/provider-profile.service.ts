@@ -36,6 +36,7 @@ import { deriveReviewEntry, alreadyPendingDetails, NOT_SUBMITTED, type ReviewEnt
 import { initializeRoleState } from './account-management.service';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 import { buildAssessmentDetails, buildCompanySummary, withSpecialtyName } from './provider-public-profile.helpers';
+import { deliveryCompletedProject } from './settlement-state.service';
 
 // Cached values are always a real validated WaseetAI result, keyed by the
 // provider plus the exact counts sent (so any change in real data busts it).
@@ -238,7 +239,7 @@ export class ProviderProfileService {
 	 */
 	private async derivePerformanceCounts(providerId: string, reviewsCount: number) {
 		const completed = await prisma.project.findMany({
-			where: { providerId, status: 'COMPLETED' },
+			where: deliveryCompletedProject({ providerId }),
 			select: {
 				id: true, clientId: true,
 				contract: { select: { signedAt: true, durationDays: true, stages: { select: { status: true, approvedAt: true } } } }
@@ -417,7 +418,7 @@ export class ProviderProfileService {
 		}
 
 		const completedProjectsCount = await prisma.project.count({
-			where: { providerId, status: 'COMPLETED' }
+			where: deliveryCompletedProject({ providerId })
 		});
 
 		const publishedServices = await prisma.serviceCatalog.findMany({
@@ -450,7 +451,8 @@ export class ProviderProfileService {
 			where: { providerId }
 		});
 
-		const completedTasks = gamification?.completedProjects || completedProjectsCount;
+		// derived from the delivery-completed projects (settled ones excluded); the stored gamification counter may predate that rule, so it is never preferred
+		const completedTasks = completedProjectsCount;
 
 		// Rating is usually out of 5 in the DB. We need to convert it to a percentage (out of 100) for the UI.
 		const baseRating = reviewsCount > 0 ? (gamification?.avgRating || profile.user?.ratingAverage || profile.rating || 0) : 0;

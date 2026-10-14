@@ -16,6 +16,7 @@ import { providerFinanceService } from '../services/provider-finance.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { providerDeliveriesService } from '../services/provider-deliveries.service';
 import { computeClientAiOfferRating } from '../services/client-ai-offer-rating';
+import { settledProjectIds, SETTLED_LABEL_AR } from '../services/settlement-state.service';
 
 export const getProviderStatistics = async (req: Request, res: Response, next: NextFunction) => {
 	try {
@@ -601,6 +602,9 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 		});
 
 		const archivedList: any[] = [];
+		// Projects closed by an admin financial dispute settlement: shown as such, never as "completed".
+		const settledIds = await settledProjectIds([...contracts.map(c => c.projectId), ...projects.map(p => p.id)]);
+		const settledExtra = (id: string) => (settledIds.has(id) ? { settled: true, statusLabel: SETTLED_LABEL_AR } : {});
 
 		// Filter contracts that are completed, cancelled, or archived/disputed
 		for (const c of contracts) {
@@ -632,9 +636,10 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				title: p.title,
 				clientName: clientName || 'عميل وسيط AI',
 				value: `${c.price.toLocaleString()} $`,
-				date: status === 'done' ? `أُغلق ${dateFormatted}` : (status === 'cancel' ? `ملغى ${dateFormatted}` : `مؤرشف ${dateFormatted}`),
+				date: settledIds.has(c.projectId) ? `${SETTLED_LABEL_AR} ${dateFormatted}` : (status === 'done' ? `أُغلق ${dateFormatted}` : (status === 'cancel' ? `ملغى ${dateFormatted}` : `مؤرشف ${dateFormatted}`)),
 				status,
-				icon: status === 'done' ? 'check' : (status === 'cancel' ? 'list' : 'doc')
+				icon: status === 'done' ? 'check' : (status === 'cancel' ? 'list' : 'doc'),
+				...settledExtra(c.projectId)
 			});
 		}
 
@@ -656,9 +661,10 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				title: p.title,
 				clientName: clientName || 'عميل وسيط AI',
 				value: `${budgetVal.toLocaleString()} $`,
-				date: status === 'done' ? `أُغلق ${dateFormatted}` : `مؤرشف ${dateFormatted}`,
+				date: settledIds.has(p.id) ? `${SETTLED_LABEL_AR} ${dateFormatted}` : (status === 'done' ? `أُغلق ${dateFormatted}` : `مؤرشف ${dateFormatted}`),
 				status,
-				icon: status === 'done' ? 'check' : 'doc'
+				icon: status === 'done' ? 'check' : 'doc',
+				...settledExtra(p.id)
 			});
 		}
 

@@ -392,3 +392,72 @@ test('pg: a settled project shows the settlement and the historical review, and 
 	assert.equal(prov.reason, 'ADMIN_SETTLED'); assert.equal(prov.canRate, false);
 	assert.equal(await w.prisma.review.count({ where: { projectId: w.project.id } }), 1, 'nothing was deleted or added');
 });
+
+// ── 11. closed by a dispute settlement vs completed by delivery (derived end state; nothing stored is rewritten) ─────────────────
+const settleSplit = async (w: Awaited<ReturnType<typeof seedWorld>>) => {
+	const { disputeService } = await import('./dispute.service');
+	const d = await w.prisma.dispute.create({ data: { id: randomUUID(), projectId: w.project.id, openedById: w.client.id, againstUserId: w.provider.id, reason: 'x', description: 'synthetic dispute for the settled end state', status: 'OPEN' } });
+	await disputeService.resolveFinancial(d.id, w.admin.id, { outcome: 'SPLIT', refundToClient: 10, releaseToProvider: 10, expectedHeldAmount: 20, confirm: true } as any);
+	return d;
+};
+
+test('pg: a settled project is excluded from every delivery counter while a delivery-completed project still counts', opts, async () => {
+	const { gamificationService, getClientLevelDetails } = await import('./gamification.service');
+	const { deliveryCompletedProject } = await import('./settlement-state.service');
+	const w = await seedWorld({ stagesSubmitted: false });
+	await settleSplit(w);
+	assert.equal((await w.prisma.project.findUnique({ where: { id: w.project.id } })).status, 'COMPLETED', 'stored status is untouched (derived end state)');
+	assert.equal(await w.prisma.project.count({ where: deliveryCompletedProject({ providerId: w.provider.id }) }), 0);
+	assert.equal((await gamificationService.getLevelDetails(w.provider.id)).currentStats.completedProjects, 0);
+	assert.equal((await getClientLevelDetails(w.client.id)).currentStats.completedProjects, 0);
+	const { providerFinanceService } = await import('./provider-finance.service');
+	assert.equal((await providerFinanceService.getWallet(w.provider.id)).summary.completedProjectsCount, 0, 'the only escrow belongs to the settled project');
+	assert.equal(await w.prisma.pointTransaction.count({ where: { providerId: w.provider.id } }), 0, 'no completion points');
+	// a project of the same people completed by delivery approval still counts everywhere
+	await w.prisma.project.create({ data: { id: randomUUID(), title: 'QA delivered', description: 'synthetic', specialty: 'x', deliveryDays: 5, clientId: w.client.id, providerId: w.provider.id, status: 'COMPLETED' } });
+	assert.equal(await w.prisma.project.count({ where: deliveryCompletedProject({ providerId: w.provider.id }) }), 1);
+	assert.equal((await gamificationService.getLevelDetails(w.provider.id)).currentStats.completedProjects, 1);
+	assert.equal((await getClientLevelDetails(w.client.id)).currentStats.completedProjects, 1);
+});
+
+test('pg: unreleased stages of a settled project are DISPLAYED as closed by the settlement; stored statuses, deliveries and progress are untouched (no fake 100%)', opts, async () => {
+	const { projectProgressService } = await import('./project-progress.service');
+	const w = await seedWorld();
+	const before = await w.prisma.projectStage.findMany({ where: { contractId: w.contract.id }, orderBy: { stepOrder: 'asc' } });
+	await settleSplit(w);
+	const asClient = await projectProgressService.getProjectProgress(w.client.id, w.project.id);
+	const asProvider = await projectProgressService.getProjectProgress(w.provider.id, w.project.id);
+	for (const view of [asClient, asProvider] as any[]) {
+		assert.equal(view.adminSettled.label, 'أُغلق بتسوية نزاع');
+		assert.equal(view.statusLabel, 'أُغلق بتسوية نزاع');
+		assert.deepEqual(view.stages.map((s: any) => s.displayStatus), ['CLOSED_BY_SETTLEMENT', 'CLOSED_BY_SETTLEMENT']);
+		assert.deepEqual(view.stages.map((s: any) => s.displayStatusLabel), ['أُغلقت بالتسوية', 'أُغلقت بالتسوية']);
+		assert.equal(view.progress, 0, 'only genuinely approved stages count');
+		assert.ok(view.stages.every((s: any) => !s.isDone));
+	}
+	const after = await w.prisma.projectStage.findMany({ where: { contractId: w.contract.id }, orderBy: { stepOrder: 'asc' } });
+	assert.deepEqual(after.map((s: any) => s.status), before.map((s: any) => s.status), 'stored stage statuses unchanged');
+	assert.equal(await w.prisma.stageDelivery.count({ where: { stageId: w.s1.id } }), 1, 'the delivery is kept');
+});
+
+test('pg: a pending amendment of a closed contract shows NONE with the reason and can neither be applied nor authorized', opts, async () => {
+	const { projectAmendmentService: svc } = await import('./project-amendment.service');
+	const w = await seedWorld({ stagesSubmitted: false });
+	const fromClient = await w.prisma.projectAmendment.create({ data: { id: randomUUID(), projectId: w.project.id, contractId: w.contract.id, clientId: w.client.id, providerId: w.provider.id, requestedById: w.client.id, requestedByRole: 'CLIENT', type: 'BUDGET', title: 'زيادة', budgetDelta: 5 } });
+	const fromProvider = await w.prisma.projectAmendment.create({ data: { id: randomUUID(), projectId: w.project.id, contractId: w.contract.id, clientId: w.client.id, providerId: w.provider.id, requestedById: w.provider.id, requestedByRole: 'PROVIDER', type: 'BUDGET', title: 'زيادة المزود', budgetDelta: 5 } });
+	await settleSplit(w);
+	const REASON = 'أُغلق العقد، ولم يعد التعديل قابلًا للتطبيق';
+	const list = await svc.listAmendments(w.client.id);
+	const mine = list.filter((x: any) => [fromClient.id, fromProvider.id].includes(x.id));
+	assert.equal(mine.length, 2);
+	for (const a of mine) {
+		assert.equal(a.effect, 'NONE'); assert.equal(a.effectNote, REASON); assert.equal(a.actionable, false); assert.equal(a.actionBlockedReason, REASON);
+	}
+	const refused = (e: any) => e.statusCode === 409 && e.message === REASON;
+	await assert.rejects(() => svc.respondToAmendmentAsProvider(w.provider.id, fromClient.id, 'approve'), refused);
+	await assert.rejects(() => svc.respondToAmendment(w.client.id, fromProvider.id, 'approve', '123456'), refused);
+	await assert.rejects(() => svc.initPaymentAuthorization(w.client.id, fromProvider.id), refused);
+	await assert.rejects(() => svc.authorizeFunding(w.client.id, fromClient.id, '123456'), refused);
+	const m = await money(w);
+	assert.equal(r2(m.contract.price), 20, 'the contract price did not change'); assert.equal(m.wtx.filter((t: any) => t.type === 'AMENDMENT_TOPUP').length, 0);
+});

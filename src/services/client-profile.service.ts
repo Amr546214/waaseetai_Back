@@ -1,6 +1,7 @@
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { ProjectStatus } from '@prisma/client';
+import { deliveryCompletedProject } from './settlement-state.service';
 
 // Batch 6 — real public client profile. Replaces the frontend's previous
 // buildMockClientProfile() (hardcoded aiTrust 94/97/89 + a fabricated "97%
@@ -75,7 +76,7 @@ export class ClientProfileService {
     if (!user || !clientProfile) throw new AppError('الملف الشخصي غير موجود', 404);
 
     const [completedProjects, activeProjects, totalContracts, providerReviewsCount, ratingAggregate, recentReviews] = await Promise.all([
-      prisma.project.count({ where: { clientId: userId, status: ProjectStatus.COMPLETED } }),
+      prisma.project.count({ where: deliveryCompletedProject({ clientId: userId }) }),
       prisma.project.count({ where: { clientId: userId, status: { in: ACTIVE_PROJECT_STATUSES } } }),
       prisma.contract.count({ where: { clientId: userId } }),
       prisma.review.count({ where: { clientId: userId, reviewerRole: 'PROVIDER' } }),

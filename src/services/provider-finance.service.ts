@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { IN_FLIGHT_WITHDRAWAL_STATUSES, SPENT_WITHDRAWAL_STATUSES, RESERVING_WITHDRAWAL_STATUSES } from '../utils/withdrawal-reservation';
 import { round2, sumMoney } from '../utils/money';
+import { SETTLED_DISPUTE_WHERE } from './settlement-state.service';
 import { isV2Escrow, providerReleased, providerNetEntitlement, splitRelease } from '../utils/escrow-commission';
 
 export class ProviderFinanceService {
@@ -21,6 +22,7 @@ export class ProviderFinanceService {
             id: true,
             title: true,
             status: true,
+            disputes: { where: SETTLED_DISPUTE_WHERE, select: { id: true }, take: 1 },
             contract: {
               select: {
                 id: true,
@@ -124,7 +126,7 @@ export class ProviderFinanceService {
         releasedThisMonth: sumMoney(transactions.filter(tx => tx.createdAt >= monthStart).map(tx => tx.amount)),
         releasedTransactionsCount: transactions.length,
         fundedProjectsCount: escrows.filter(escrow => escrow.status === 'HELD' && (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).length,
-        completedProjectsCount: escrows.filter(escrow => escrow.project.status === 'COMPLETED').length,
+        completedProjectsCount: escrows.filter(escrow => escrow.project.status === 'COMPLETED' && !(escrow.project.disputes?.length)).length,
         currency: 'USD' // active escrow/contract pricing pipeline is now USD-semantic
       },
       transactions,
