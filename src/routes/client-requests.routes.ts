@@ -6,7 +6,7 @@ import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { clientRequestsController } from '../controllers/client-requests.controller';
 import { memoryUpload } from '../utils/cloudinary-storage';
 import { openClientDispute } from '../controllers/dispute.controller';
-import { rateAsClient, rateStage } from '../controllers/rating.controller';
+import { rateAsClient, rateStage, ratingStatusAsClient } from '../controllers/rating.controller';
 
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
@@ -127,5 +127,6 @@ router.post('/:id/contract/sign', authenticate, requireActiveUser, clientOnly, c
 router.post('/:id/escrow/deposit', authenticate, requireActiveUser, clientOnly, clientRequestsController.depositEscrow);
 router.post('/:id/disputes', authenticate, requireActiveUser, clientOnly, openClientDispute);
 router.post('/:id/rate', authenticate, requireActiveUser, clientOnly, rateAsClient);
+router.get('/:id/rating-status', authenticate, requireActiveUser, clientOnly, ratingStatusAsClient);
 
 export default router;

@@ -563,6 +563,8 @@ model Review {
   reviewerRole    String          @default("CLIENT")
   rating          Float
   comment         String?
+  // The quick-pick tags the reviewer chose with the stars (from RATING_TAGS of their side). Migration 20261017100000 (NOT EXECUTED until approved).
+  tags            String[]        @default([])
   createdAt       DateTime        @default(now())
 
   @@index([providerId])

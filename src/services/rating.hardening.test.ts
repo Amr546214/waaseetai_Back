@@ -21,7 +21,8 @@ function setup(t: TestContext, over: { serviceCatalogId?: string | null; contrac
 	});
 	const prismaMock: any = {
 		clientRequest: { findUnique: async () => null },
-		dispute: { findFirst: async ({ where }: any) => (over.settledDispute && where.status === 'RESOLVED' && where.resolution?.in?.includes('SPLIT') ? { id: 'd-settled' } : null) },
+		dispute: { findFirst: async ({ where }: any) => (over.settledDispute && where.status === 'RESOLVED' && where.resolution?.in?.includes('SPLIT') ? { id: 'd-settled', resolution: 'SPLIT', resolvedAt: new Date() } : null) },
+		review: { findFirst: async ({ where }: any) => reviews.filter(r => Object.entries(where).every(([k, v]) => r[k] === v || (v === null && r[k] == null))).slice(-1)[0] ?? null },
 		contract: { findUnique: async () => ({ id: 'c1', providerId: 'prov', clientId: 'cli', projectId: 'p1', status: over.contractStatus ?? 'COMPLETED' }), findFirst: async () => ({ id: 'c1', providerId: 'prov', clientId: 'cli', projectId: 'p1' }) },
 		project: { findUnique: async () => ({ serviceCatalogId: over.serviceCatalogId ?? null }) },
 		projectStage: { findFirst: async () => ({ id: 'st1', status: 'APPROVED' }) },
@@ -117,7 +118,7 @@ test('a project settled by an admin FINANCIAL dispute decision cannot be rated b
 	const { reviews, clientNotes, providerNotes } = setup(t, { settledDispute: true });
 	const { RatingService } = await import(`./rating.service.ts?fixture=${Date.now()}-${Math.random()}`);
 	const svc = new RatingService();
-	await assert.rejects(() => svc.rateRequest('p1', 'cli', 'client', { rating: 5 }), (e: any) => e.statusCode === 409 && /سُوّي إداريًا/.test(e.message));
+	await assert.rejects(() => svc.rateRequest('p1', 'cli', 'client', { rating: 5 }), (e: any) => e.statusCode === 409 && /أُغلق المشروع بتسوية نزاع/.test(e.message));
 	await assert.rejects(() => svc.rateRequest('p1', 'prov', 'provider', { rating: 5 }), (e: any) => e.statusCode === 409);
 	await assert.rejects(() => svc.rateStage('p1', 'st1', 'cli', { rating: 5 }), (e: any) => e.statusCode === 409);
 	assert.equal(reviews.length, 0); assert.equal(clientNotes.length, 0); assert.equal(providerNotes.length, 0);
@@ -128,4 +129,51 @@ test('a TEXT closure (no money moved) does not block rating: only financial outc
 	const { RatingService } = await import(`./rating.service.ts?fixture=${Date.now()}-${Math.random()}`);
 	await new RatingService().rateRequest('p1', 'cli', 'client', { rating: 4 });
 	assert.equal(reviews.length, 1);
+});
+
+test('rating status: eligible -> canRate; after saving -> ALREADY_RATED with the saved stars / comment / tags (read-only data), never a default', async t => {
+	setup(t);
+	const { RatingService } = await import(`./rating.service.ts?fixture=${Date.now()}-${Math.random()}`);
+	const svc = new RatingService();
+	const before = await svc.getStatus('p1', 'cli', 'client');
+	assert.equal(before.canRate, true); assert.equal(before.review, null); assert.equal(before.reason, null);
+	await svc.rateRequest('p1', 'cli', 'client', { rating: 3, comment: 'مقبول', tags: ['احترافية', 'تواصل ممتاز'] });
+	const after = await svc.getStatus('p1', 'cli', 'client');
+	assert.equal(after.canRate, false); assert.equal(after.reason, 'ALREADY_RATED');
+	assert.equal(after.review.rating, 3); assert.equal(after.review.comment, 'مقبول'); assert.deepEqual(after.review.tags, ['احترافية', 'تواصل ممتاز']);
+	// the other side has its OWN status: the provider has not rated the client yet
+	const prov = await svc.getStatus('p1', 'prov', 'provider');
+	assert.equal(prov.canRate, true); assert.equal(prov.review, null);
+});
+
+test('rating status: a stranger / the wrong side is refused 403 and learns nothing', async t => {
+	setup(t);
+	const { RatingService } = await import(`./rating.service.ts?fixture=${Date.now()}-${Math.random()}`);
+	const svc = new RatingService();
+	await assert.rejects(() => svc.getStatus('p1', 'stranger', 'client'), (e: any) => e.statusCode === 403);
+	await assert.rejects(() => svc.getStatus('p1', 'cli', 'provider'), (e: any) => e.statusCode === 403);
+	await assert.rejects(() => svc.getStatus('p1', 'prov', 'client'), (e: any) => e.statusCode === 403);
+});
+
+test('rating status: an admin-settled project says so, hides the form, and keeps showing a rating that existed before the settlement', async t => {
+	const { reviews } = setup(t, { settledDispute: true });
+	reviews.push({ id: 'old', clientId: 'cli', providerId: 'prov', stageId: null, reviewerRole: 'CLIENT', projectId: 'p1', rating: 4, comment: 'قبل التسوية', tags: ['جودة عالية'], createdAt: new Date() });
+	const { RatingService } = await import(`./rating.service.ts?fixture=${Date.now()}-${Math.random()}`);
+	const svc = new RatingService();
+	const st = await svc.getStatus('p1', 'cli', 'client');
+	assert.equal(st.canRate, false); assert.equal(st.adminSettled.label, 'أُغلق بتسوية نزاع');
+	assert.equal(st.review.rating, 4, 'history stays visible, separate from the eligibility of a NEW review');
+	const prov = await svc.getStatus('p1', 'prov', 'provider');
+	assert.equal(prov.reason, 'ADMIN_SETTLED'); assert.equal(prov.message, 'أُغلق المشروع بتسوية نزاع، ولا يتاح تقييمه'); assert.equal(prov.review, null);
+});
+
+test('tags: each side may only attach its own list, duplicates collapse, unknown tags are a 400 and nothing is created', async t => {
+	const { reviews } = setup(t);
+	const { RatingService } = await import(`./rating.service.ts?fixture=${Date.now()}-${Math.random()}`);
+	const svc = new RatingService();
+	await assert.rejects(() => svc.rateRequest('p1', 'cli', 'client', { rating: 5, tags: ['توصيات واضحة'] }), (e: any) => e.statusCode === 400); // a provider tag on a client review
+	await assert.rejects(() => svc.rateRequest('p1', 'prov', 'provider', { rating: 5, tags: ['جودة عالية'] }), (e: any) => e.statusCode === 400);
+	assert.equal(reviews.length, 0);
+	await svc.rateRequest('p1', 'cli', 'client', { rating: 5, tags: ['جودة عالية', 'جودة عالية'] });
+	assert.deepEqual(reviews[0].tags, ['جودة عالية']);
 });

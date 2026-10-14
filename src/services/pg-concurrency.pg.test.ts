@@ -343,10 +343,50 @@ test('pg: after an admin FINANCIAL settlement the project cannot be rated (eithe
 	const d = await w.prisma.dispute.create({ data: { id: randomUUID(), projectId: w.project.id, openedById: w.client.id, againstUserId: w.provider.id, reason: 'x', description: 'synthetic dispute for settlement then rating', status: 'OPEN' } });
 	const input: any = { outcome: 'SPLIT', refundToClient: 10, releaseToProvider: 10, expectedHeldAmount: 20, confirm: true };
 	await disputeService.resolveFinancial(d.id, w.admin.id, input);
-	await assert.rejects(() => ratingService.rateRequest(w.project.id, w.client.id, 'client', { rating: 5 }), (e: any) => e.statusCode === 409 && /سُوّي إداريًا/.test(e.message));
+	await assert.rejects(() => ratingService.rateRequest(w.project.id, w.client.id, 'client', { rating: 5 }), (e: any) => e.statusCode === 409 && /أُغلق المشروع بتسوية نزاع/.test(e.message));
 	await assert.rejects(() => ratingService.rateRequest(w.project.id, w.provider.id, 'provider', { rating: 5 }), (e: any) => e.statusCode === 409);
 	assert.equal(await w.prisma.review.count({ where: { projectId: w.project.id } }), 0);
 	assert.equal(await w.prisma.pointTransaction.count({ where: { providerId: w.provider.id } }), 0, 'no completion points for an admin settlement');
 	await assert.rejects(() => disputeService.resolveFinancial(d.id, w.admin.id, input), (e: any) => e.statusCode === 409);
 	assert.equal(r2((await money(w)).wallet), 110, 'refund credited once (100 + 10)');
+});
+
+// ── 10. the rating page contract on a real database: status before the form, two windows, saved data read back exactly ─────────
+test('pg: rating status reads the REAL saved review; two windows rating at once save ONE review with its tags and both end on the saved one', opts, async () => {
+	const { ratingService } = await import('./rating.service');
+	const w = await seedWorld();
+	await w.prisma.contract.update({ where: { id: w.contract.id }, data: { status: 'COMPLETED' } });
+	await w.prisma.project.update({ where: { id: w.project.id }, data: { status: 'COMPLETED' } });
+	const first = await ratingService.getStatus(w.project.id, w.client.id, 'client');
+	assert.equal(first.canRate, true); assert.equal(first.review, null);
+	const input = { rating: 4, comment: 'عمل جيد جدًا', tags: ['جودة عالية', 'التزام بالموعد'] };
+	const results = await Promise.allSettled([ratingService.rateRequest(w.project.id, w.client.id, 'client', input), ratingService.rateRequest(w.project.id, w.client.id, 'client', input)]);
+	assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+	assert.equal(results.filter(r => r.status === 'rejected' && (r as any).reason.statusCode === 409).length, 1, 'the second window gets 409 and must then load the saved review');
+	assert.equal(await w.prisma.review.count({ where: { projectId: w.project.id, reviewerRole: 'CLIENT' } }), 1);
+	for (const key of [w.project.id, w.contract.id]) { // refresh / direct link by either key
+		const st = await ratingService.getStatus(key, w.client.id, 'client');
+		assert.equal(st.canRate, false); assert.equal(st.reason, 'ALREADY_RATED');
+		assert.equal(st.review.rating, 4); assert.equal(st.review.comment, 'عمل جيد جدًا'); assert.deepEqual(st.review.tags, ['جودة عالية', 'التزام بالموعد']);
+	}
+	await assert.rejects(() => ratingService.getStatus(w.project.id, w.provider.id, 'client'), (e: any) => e.statusCode === 403);
+	const prov = await ratingService.getStatus(w.project.id, w.provider.id, 'provider');
+	assert.equal(prov.canRate, true, 'the provider has not rated the client yet: their own form is shown');
+	assert.equal(prov.review, null);
+});
+
+test('pg: a settled project shows the settlement and the historical review, and offers no new rating', opts, async () => {
+	const { ratingService } = await import('./rating.service');
+	const { disputeService } = await import('./dispute.service');
+	const w = await seedWorld({ stagesSubmitted: false });
+	// a review that existed BEFORE the settlement (historical, kept)
+	await w.prisma.review.create({ data: { projectId: w.project.id, clientId: w.client.id, providerId: w.provider.id, reviewerRole: 'CLIENT', rating: 2, comment: 'قبل التسوية', tags: ['احترافية'] } });
+	const d = await w.prisma.dispute.create({ data: { id: randomUUID(), projectId: w.project.id, openedById: w.client.id, againstUserId: w.provider.id, reason: 'x', description: 'synthetic dispute rating history', status: 'OPEN' } });
+	await disputeService.resolveFinancial(d.id, w.admin.id, { outcome: 'REFUND_CLIENT', refundToClient: 20, releaseToProvider: 0, expectedHeldAmount: 20, confirm: true } as any);
+	const st = await ratingService.getStatus(w.project.id, w.client.id, 'client');
+	assert.equal(st.canRate, false); assert.equal(st.adminSettled?.label, 'أُغلق بتسوية نزاع');
+	assert.equal(st.review?.rating, 2, 'the historical review is still readable');
+	const prov = await ratingService.getStatus(w.project.id, w.provider.id, 'provider');
+	assert.equal(prov.reason, 'ADMIN_SETTLED'); assert.equal(prov.canRate, false);
+	assert.equal(await w.prisma.review.count({ where: { projectId: w.project.id } }), 1, 'nothing was deleted or added');
 });

@@ -4,17 +4,25 @@ import { AppError } from '../utils/app-error';
 import { ratingService } from '../services/rating.service';
 
 export async function rateAsClient(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = createRatingSchema.safeParse(req.body); if (!parsed.success) throw new AppError('بيانات التقييم غير صحيحة', 400); res.status(201).json({ success: true, data: await ratingService.rateRequest(String(req.params.id), req.user!.id, 'client', parsed.data) }); } catch (error) { next(error); }
+  try { const parsed = createRatingSchema.safeParse(req.body); if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message === 'وسم تقييم غير معروف' ? 'وسم تقييم غير معروف' : 'بيانات التقييم غير صحيحة', 400); res.status(201).json({ success: true, data: await ratingService.rateRequest(String(req.params.id), req.user!.id, 'client', parsed.data) }); } catch (error) { next(error); }
 }
 
 export async function rateAsProvider(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = createRatingSchema.safeParse(req.body); if (!parsed.success) throw new AppError('بيانات التقييم غير صحيحة', 400); res.status(201).json({ success: true, data: await ratingService.rateRequest(String(req.params.id), req.user!.id, 'provider', parsed.data) }); } catch (error) { next(error); }
+  try { const parsed = createRatingSchema.safeParse(req.body); if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message === 'وسم تقييم غير معروف' ? 'وسم تقييم غير معروف' : 'بيانات التقييم غير صحيحة', 400); res.status(201).json({ success: true, data: await ratingService.rateRequest(String(req.params.id), req.user!.id, 'provider', parsed.data) }); } catch (error) { next(error); }
 }
 
 export async function rateStage(req: Request, res: Response, next: NextFunction) {
   try {
     const parsed = createRatingSchema.safeParse(req.body);
-    if (!parsed.success) throw new AppError('بيانات التقييم غير صحيحة', 400);
+    if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message === 'وسم تقييم غير معروف' ? 'وسم تقييم غير معروف' : 'بيانات التقييم غير صحيحة', 400);
     res.status(201).json({ success: true, data: await ratingService.rateStage(String(req.params.id), String(req.params.stageId), req.user!.id, parsed.data) });
   } catch (error) { next(error); }
+}
+
+export async function ratingStatusAsClient(req: Request, res: Response, next: NextFunction) {
+  try { res.json({ success: true, data: await ratingService.getStatus(String(req.params.id), req.user!.id, 'client') }); } catch (error) { next(error); }
+}
+
+export async function ratingStatusAsProvider(req: Request, res: Response, next: NextFunction) {
+  try { res.json({ success: true, data: await ratingService.getStatus(String(req.params.id), req.user!.id, 'provider') }); } catch (error) { next(error); }
 }
