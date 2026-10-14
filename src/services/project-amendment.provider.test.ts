@@ -111,5 +111,5 @@ test('list: only THIS provider\'s requests for THIS project (ownership in the WH
   assert.deepEqual(state.listArgs[0].where, { providerId: 'provider-1', projectId: 'project-1' });
   assert.deepEqual(state.listArgs[0].orderBy, { createdAt: 'desc' });
   assert.equal(out.length, 1);
-  assert.deepEqual(Object.keys(out[0]).sort(), ['budgetDelta', 'contractId', 'contractRef', 'conversationId', 'createdAt', 'description', 'durationDeltaDays', 'id', 'projectId', 'projectTitle', 'providerId', 'providerName', 'requestedByRole', 'respondedAt', 'status', 'title', 'type', 'updatedAt']);
+  assert.deepEqual(Object.keys(out[0]).sort(), ['budgetDelta', 'contractId', 'contractRef', 'conversationId', 'createdAt', 'description', 'durationDeltaDays', 'effect', 'effectNote', 'id', 'projectId', 'projectTitle', 'providerId', 'providerName', 'requestedByRole', 'respondedAt', 'status', 'title', 'type', 'updatedAt']);
 });

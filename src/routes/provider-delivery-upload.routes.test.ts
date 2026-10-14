@@ -21,7 +21,7 @@ test('the delivery upload is capped at 25MB x 5 files and uses the delivery MIME
 });
 
 test('the JSON delivery route is still there (it now requires real artifacts, enforced in the service)', () => {
-	assert.match(source, /router\.post\('\/projects\/:id\/stages\/:stageId\/deliveries',\s*authenticate,\s*requireActiveUser,\s*submitStageDelivery\)/);
+	assert.match(source, /router\.post\('\/projects\/:id\/stages\/:stageId\/deliveries',\s*authenticate,\s*requireActiveUser,\s*providerOnly,\s*submitStageDelivery\)/);
 });
 
 test('delivery MIME allow-list: work files yes; svg / html / executables / scripts no', () => {

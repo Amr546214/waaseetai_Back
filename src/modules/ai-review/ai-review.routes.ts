@@ -2,7 +2,7 @@ import { requireApprovedProvider } from '../../middlewares/provider-access.middl
 import { Router } from 'express';
 import { AiReviewController } from './ai-review.controller';
 import { AccountType } from '@prisma/client';
-import { authenticate, authorize, requireActiveUser } from '../../middlewares/auth.middleware';
+import { authenticate, authorizeActiveRole, requireActiveUser } from '../../middlewares/auth.middleware';
 import { aiLimiter } from '../../middlewares/rate-limit.middleware';
 
 const router = Router();
@@ -11,7 +11,7 @@ const controller = new AiReviewController();
 router.use(
   authenticate,
   requireActiveUser,
-  authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY),
+  authorizeActiveRole(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY),
   requireApprovedProvider, // operational AI helper: unapproved individual providers get 403
   aiLimiter
 );

@@ -1,3 +1,4 @@
+import { round2 } from '../utils/money';
 import { computeClientAiOfferRating } from './client-ai-offer-rating';
 import { prisma } from '../config/db';
 import { AccountType, UserRole } from '@prisma/client';
@@ -119,7 +120,7 @@ export class DashboardService {
           amount: true
         }
       });
-      const totalEscrowAmount = escrowResult._sum.amount || 0;
+      const totalEscrowAmount = round2(escrowResult._sum.amount || 0);
 
       // 4. Total Spent (sum of budgets of all client's COMPLETED projects)
       const spentResult = await prisma.project.aggregate({
@@ -132,7 +133,7 @@ export class DashboardService {
           budgetMax: true
         }
       });
-      const totalSpent = (spentResult._sum.budgetFixed || 0) + (spentResult._sum.budgetMax || 0);
+      const totalSpent = round2((spentResult._sum.budgetFixed || 0) + (spentResult._sum.budgetMax || 0));
 
       // 5. Latest Projects (Top 3 recent projects)
       const latestProjectsRaw = await prisma.project.findMany({
@@ -447,7 +448,7 @@ export class DashboardService {
         })
       ]);
 
-      const monthlyEarnings = (monthlyEarningsAgg._sum.budgetFixed || 0) + (monthlyEarningsAgg._sum.budgetMax || 0);
+      const monthlyEarnings = round2((monthlyEarningsAgg._sum.budgetFixed || 0) + (monthlyEarningsAgg._sum.budgetMax || 0));
 
       // Phase 3C: profileCompletionPercent comes from ProviderProfile, and
       // currentPoints/currentLevel/pointsToNextLevel come from the provider's

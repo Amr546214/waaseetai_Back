@@ -368,6 +368,14 @@ export const getActiveProjects = async (req: Request, res: Response, next: NextF
 			},
 			orderBy: { createdAt: 'desc' }
 		});
+		// A contract that came through offer negotiation + signing may not have its stage rows yet: the progress endpoint creates them lazily, so the list must resolve them the
+		// same way (one helper) or it would show «لم تُجهَّز مراحل المشروع» and canUploadDelivery:false for a project that is actually deliverable.
+		for (const c of contracts) {
+			if (c.status === 'ACTIVE' && c.stages.length === 0) {
+				await projectProgressService.ensureStages(c.id);
+				c.stages = await prisma.projectStage.findMany({ where: { contractId: c.id }, orderBy: { stepOrder: 'asc' }, include: { deliveries: { select: { status: true }, orderBy: { submittedAt: 'asc' } } } });
+			}
+		}
 		// A project with an open dispute says so (the newest open one wins).
 		const openDisputes = contracts.length ? await prisma.dispute.findMany({
 			where: { projectId: { in: contracts.map(c => c.projectId) }, status: { in: ['OPEN', 'UNDER_REVIEW'] } },

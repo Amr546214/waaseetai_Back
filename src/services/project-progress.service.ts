@@ -113,7 +113,8 @@ export interface ProjectHealthAnalysis {
 }
 
 export class ProjectProgressService {
-  private async ensureStages(contractId: string) {
+  /** Single source of the contract's stage rows: creates them from the accepted offer's milestones (or one final stage) when none exist yet. Shared by the progress endpoint and the provider lists. */
+  async ensureStages(contractId: string) {
     const found = await prisma.projectStage.findMany({ where: { contractId }, orderBy: { stepOrder: 'asc' } });
     if (found.length) return;
     const contract = await prisma.contract.findUnique({ where: { id: contractId }, include: { project: true } });

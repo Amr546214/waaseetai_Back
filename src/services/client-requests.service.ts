@@ -103,6 +103,29 @@ export function mapRequestDraftToSuggestion(raw: Partial<RequestDraftResponse> |
 	return suggestion;
 }
 
+/** Timelines of the real ProjectStage rows of a contract: the stage status is the stored one (APPROVED = completed), never guessed from elapsed days. */
+export function buildStageTimelines(
+	stages: Array<{ id: string; stepOrder: number; title: string; description?: string | null; days: number; amount: number; status: string; startedAt?: Date | null; approvedAt?: Date | null }>,
+	contractStart: Date
+) {
+	let acc = 0;
+	const day = 24 * 60 * 60 * 1000;
+	const timelines = stages.map((st, index) => {
+		const start = st.startedAt ?? new Date(contractStart.getTime() + acc * day);
+		const end = st.approvedAt ?? new Date(contractStart.getTime() + (acc + Number(st.days || 0)) * day);
+		acc += Number(st.days || 0);
+		const status: 'COMPLETED' | 'IN_PROGRESS' | 'PENDING' = st.status === 'APPROVED' ? 'COMPLETED' : (st.status === 'PENDING' ? 'PENDING' : 'IN_PROGRESS');
+		return { id: st.id, title: st.title || `المرحلة ${index + 1}`, status, rawStatus: st.status, startDate: start.toISOString(), endDate: end.toISOString(), description: st.description || '', days: Number(st.days || 0), amount: Math.round(Number(st.amount || 0) * 100) / 100 };
+	});
+	const done = timelines.filter(t => t.status === 'COMPLETED');
+	return {
+		timelines,
+		completed: done.length,
+		releasedAmount: Math.round(done.reduce((a, t) => a + t.amount, 0) * 100) / 100,
+		progress: stages.length ? Math.round((done.length / stages.length) * 100) : 0
+	};
+}
+
 export class ClientRequestsService {
 	/**
 	 * GET /api/client/requests/meta
@@ -773,7 +796,7 @@ export class ClientRequestsService {
 				releasedAmount,
 				heldAmount: Math.max(0, totalPrice - releasedAmount),
 				completedAt: c.updatedAt.toISOString(),
-				category: c.project?.serviceCatalog?.title || c.project?.specialty || 'Marketplace',
+				category: c.project?.serviceCatalog?.title || c.project?.specialty || '',
 				canRate: c.status === 'COMPLETED' && !review,
 				hasRated: !!review,
 				rating: review?.rating || null,
@@ -836,15 +859,7 @@ export class ClientRequestsService {
 				const prop = clientReq.proposals[0];
 				price = Number(prop.price || 0);
 
-				// ClientRequest Proposals don't have explicit milestones in schema, so we create a dynamic one
-				realMilestones = [{
-					id: 'm-req-1',
-					title: 'تسليم المشروع النهائي',
-					amount: price,
-					percentage: 100,
-					days: duration,
-					status: rawStatus === 'COMPLETED' ? 'COMPLETED' : 'PENDING'
-				}];
+				// A ClientRequest proposal carries no milestones: the real ones come from the signed contract's ProjectStage rows below; nothing is invented here.
 
 				const pProfile = prop.provider.providerProfile;
 				providerName = pProfile?.companyName || `${prop.provider.firstName || ''} ${prop.provider.lastName || ''}`.trim() || 'مقدم خدمة';
@@ -884,14 +899,7 @@ export class ClientRequestsService {
 				} else if (project.proposals && project.proposals.length > 0) {
 					const prop = project.proposals[0];
 					price = Number(prop.price || 0);
-					realMilestones = [{
-						id: 'm-proj-1',
-						title: 'تسليم المشروع النهائي',
-						amount: price,
-						percentage: 100,
-						days: duration,
-						status: rawStatus === 'COMPLETED' ? 'COMPLETED' : 'PENDING'
-					}];
+					// no milestones on this legacy proposal: real stages (if any) come from the contract below
 					const pProfile = prop.provider.providerProfile;
 					providerName = pProfile?.companyName || `${prop.provider.firstName || ''} ${prop.provider.lastName || ''}`.trim() || 'مقدم خدمة';
 					providerInitial = providerName.split(' ').map((n: string) => n[0] || '').join('').substring(0, 2);
@@ -901,7 +909,20 @@ export class ClientRequestsService {
 			}
 		}
 
-		if (realMilestones.length > 0) {
+		// The signed contract's ProjectStage rows are the single source of truth for the milestones (title, days, amount, real status); the request/offer milestones are only a fallback.
+		const contractRow = await prisma.contract.findFirst({ where: { projectId: requestId, clientId: userId }, select: { price: true, signedAt: true, stages: { orderBy: { stepOrder: 'asc' } } } });
+		const stageRows = contractRow?.stages ?? [];
+		if (stageRows.length > 0) {
+			price = Number(contractRow!.price || price);
+			if (contractRow!.signedAt) startDate = contractRow!.signedAt;
+			const built = buildStageTimelines(stageRows, startDate);
+			timelines = built.timelines;
+			realMilestones = stageRows;
+			completedMilestones = built.completed;
+			releasedAmount = built.releasedAmount;
+			heldAmount = Math.max(0, price - releasedAmount);
+			progress = built.progress;
+		} else if (realMilestones.length > 0) {
 			let accDays = 0;
 			const elapsedMs = new Date().getTime() - startDate.getTime();
 			const elapsedDays = Math.max(0, Math.floor(elapsedMs / (1000 * 60 * 60 * 24)));

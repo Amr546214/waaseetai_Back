@@ -68,6 +68,23 @@ function initials(user: { firstName: string; lastName: string }) {
   return `${user.firstName?.[0] || ''}${user.lastName?.[0] || ''}`.toUpperCase();
 }
 
+/**
+ * The project details of a marketplace purchase come from the REAL service: description, specialty (Arabic name), skills as requirements and an honest
+ * outputs summary built from its stage titles. Anything the service does not have stays empty ('' / []) — nothing is invented.
+ */
+export function deriveMarketplaceProjectFields(
+  service: { description?: string | null; skills?: string[] | null; specialty?: { name?: string | null; nameAr?: string | null } | null } | undefined | null,
+  stages: Array<{ title: string; stepOrder?: number }>
+): { description: string; specialty: string; requirements: string[]; outputs: string | null } {
+  const titles = [...stages].sort((a, b) => (a.stepOrder ?? 0) - (b.stepOrder ?? 0)).map(s => (s.title ?? '').trim()).filter(Boolean);
+  return {
+    description: (service?.description ?? '').trim(),
+    specialty: (service?.specialty?.nameAr || service?.specialty?.name || '').trim(),
+    requirements: (service?.skills ?? []).filter(Boolean),
+    outputs: titles.length > 0 ? titles.join(' + ') : null
+  };
+}
+
 // Phase 3E.2: the exact Prisma select shared by the live cart (formatCartItem)
 // and the NEW-order snapshot (createOrder) for a service's provider —
 // ProviderProfile's own display columns (Phase 3A/3D.1 source of truth) and
@@ -367,6 +384,10 @@ export class CartCheckoutService {
     const allServiceStages = serviceIds.length > 0
       ? await prisma.serviceStage.findMany({ where: { serviceId: { in: serviceIds } }, orderBy: { stepOrder: 'asc' } })
       : [];
+    // Real service facts for the project details (description / specialty / skills): read-only, outside the transaction. Never invented.
+    const serviceFacts = serviceIds.length > 0
+      ? await prisma.serviceCatalog.findMany({ where: { id: { in: serviceIds } }, select: { id: true, description: true, skills: true, specialty: { select: { name: true, nameAr: true } } } })
+      : [];
     const projectIds = await prisma.$transaction(async tx => {
       // Phase 4 — authoritative order transition FIRST (row lock on the
       // order): a second concurrent confirm for the same order blocks here,
@@ -440,7 +461,9 @@ export class CartCheckoutService {
       for (const [itemIndex, item] of order.items.entries()) {
         const netPrice = netPrices[itemIndex];
         const itemDiscount = round2(item.price - netPrice);
-        const project = await tx.project.create({ data: { title: item.title, description: `طلب خدمة: ${item.title}`, specialty: 'Marketplace', subSpecialties: [], requirements: [], attachments: [], deliveryDays: item.deliveryDays, budgetType: 'fixed', budgetFixed: netPrice, status: ProjectStatus.IN_PROGRESS, clientId: userId, providerId: item.providerId, serviceCatalogId: item.serviceId } });
+        const itemStages = allServiceStages.filter(s => s.serviceId === item.serviceId);
+        const derived = deriveMarketplaceProjectFields(serviceFacts.find(f => f.id === item.serviceId), itemStages);
+        const project = await tx.project.create({ data: { title: item.title, description: derived.description, specialty: derived.specialty, subSpecialties: [], requirements: derived.requirements, outputs: derived.outputs, attachments: [], deliveryDays: item.deliveryDays, budgetType: 'fixed', budgetFixed: netPrice, status: ProjectStatus.IN_PROGRESS, clientId: userId, providerId: item.providerId, serviceCatalogId: item.serviceId } });
 
         const stages = allServiceStages.filter(s => s.serviceId === item.serviceId);
         const phasesCount = stages.length || 1;

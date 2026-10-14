@@ -111,7 +111,7 @@ test('provider respond: the provider of the contract approves a CLIENT request �
   assert.deepEqual(state.amendUpdates[0].where, { id: 'amend-1', providerId: 'provider-1', requestedByRole: 'CLIENT', status: 'PENDING_OTHER_PARTY' });
   assert.deepEqual(Object.keys(state.amendUpdates[0].data).sort(), ['respondedAt', 'status']);
   assert.equal(state.notifications[0].userId, 'client-1');
-  assert.match(state.notifications[0].message, /لا يغيّر السعر أو المدة أو الضمان/);
+  assert.match(state.notifications[0].message, /يُسجَّل للمتابعة فقط ولا يغيّر سعر العقد أو مدته أو الضمان/);
 });
 test('provider respond: reject is recorded as REJECTED', async (t) => {
   const { svc } = await load(t);

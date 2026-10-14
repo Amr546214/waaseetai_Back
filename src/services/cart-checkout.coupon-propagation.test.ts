@@ -29,6 +29,7 @@ function setup(t: TestContext, opts: { order: any; coupon?: any; stages?: any[];
     order: { findFirst: async () => opts.order },
     otpVerification: { findMany: async () => [{ id: 'otp-1', code: '111111', expiresAt: new Date(Date.now() + 60_000), context: { purpose: 'checkout_payment', orderId: opts.order.id, paymentReference: 'PAY-X', paymentMethod: 'wallet' } }], update: async () => ({}) },
     serviceStage: { findMany: async () => opts.stages || [] },
+    serviceCatalog: { findMany: async () => [] },
     $transaction: async (fn: any) => { const snap = users.map(u => ({ ...u })); const wasPaid = paid; try { return await fn(tx); } catch (e) { users.length = 0; users.push(...snap); paid = wasPaid; throw e; } }
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });

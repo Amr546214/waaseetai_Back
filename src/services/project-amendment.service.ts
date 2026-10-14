@@ -70,6 +70,10 @@ const validateAmendmentInput = (input: AmendmentInput) => {
   return { title, type, description, budgetDelta, durationDeltaDays };
 };
 
+// An approved amendment is only RECORDED today (no price / duration / escrow / stage change): every amendment says so, whatever its status.
+export const AMENDMENT_EFFECT = 'RECORD_ONLY' as const;
+export const AMENDMENT_EFFECT_NOTE = 'القرار يُسجَّل للمتابعة فقط ولا يغيّر سعر العقد أو مدته أو الضمان حاليًا.';
+
 const toPublicAmendment = (row: any, conversationId: string | null) => ({
   id: row.id,
   projectId: row.projectId,
@@ -88,6 +92,8 @@ const toPublicAmendment = (row: any, conversationId: string | null) => ({
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
   respondedAt: row.respondedAt,
+  effect: AMENDMENT_EFFECT,
+  effectNote: AMENDMENT_EFFECT_NOTE,
   conversationId
 });
 
@@ -170,7 +176,7 @@ export class ProjectAmendmentService {
         data: {
           userId: contract.providerId,
           title: 'طلب تعديل على مشروعك',
-          message: `طلب العميل تعديلًا على المشروع: ${title}`,
+          message: `طلب العميل تعديلًا على المشروع: ${title}. ${AMENDMENT_EFFECT_NOTE}`,
           type: 'PROJECT_AMENDMENT',
           category: 'PROJECTS',
           actionUrl: `/provider-overview/projects/active/progress/${contract.id}`,

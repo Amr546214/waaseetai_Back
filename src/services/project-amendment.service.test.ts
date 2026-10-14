@@ -63,6 +63,8 @@ test('listAmendments: returns real fields mapped from the DB row, including a re
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-01-02T00:00:00Z'),
     respondedAt: null,
+    effect: 'RECORD_ONLY',
+    effectNote: 'القرار يُسجَّل للمتابعة فقط ولا يغيّر سعر العقد أو مدته أو الضمان حاليًا.',
     conversationId: 'conv-1'
   });
 });
@@ -78,7 +80,7 @@ test('listAmendments: exposes only whitelisted fields — no private/internal da
   const keys = Object.keys(result[0]).sort();
   assert.deepEqual(keys, [
     'budgetDelta', 'contractId', 'contractRef', 'conversationId', 'createdAt', 'description',
-    'durationDeltaDays', 'id', 'projectId', 'projectTitle', 'providerId', 'providerName',
+    'durationDeltaDays', 'effect', 'effectNote', 'id', 'projectId', 'projectTitle', 'providerId', 'providerName',
     'requestedByRole', 'respondedAt', 'status', 'title', 'type', 'updatedAt'
   ].sort());
 });
@@ -173,6 +175,10 @@ test('createAmendment: client creates an amendment on their own active contract'
   assert.equal(data.status, 'PENDING_OTHER_PARTY');
   assert.equal(result.status, 'PENDING_OTHER_PARTY');
   assert.equal(result.requestedByRole, 'CLIENT');
+  // honest payload: the decision is recorded only, it never changes price / duration / escrow
+  assert.equal(result.effect, 'RECORD_ONLY');
+  assert.equal(result.effectNote, 'القرار يُسجَّل للمتابعة فقط ولا يغيّر سعر العقد أو مدته أو الضمان حاليًا.');
+  assert.ok(String(createSpy.mock.calls[0].arguments[0].data.title).length > 0);
 });
 
 test('createAmendment: cannot create for a project/contract the caller does not own as client', async (t) => {

@@ -384,6 +384,7 @@ function createConfirmMockPrisma(t: TestContext, opts: { order: any; walletBalan
       update: async () => ({})
     },
     serviceStage: { findMany: async () => opts.services || [] },
+    serviceCatalog: { findMany: async () => [] },
     // Rollback-on-throw for the order transition + wallet state, mirroring a
     // real ROLLBACK (the order PENDING_PAYMENT -> PAID gate now runs first in
     // the transaction, so a later failure must undo it, as Postgres would).
@@ -492,6 +493,7 @@ test('confirmPayment: two concurrent confirmations for the same user against a b
     order: { findFirst: async (args: any) => ordersById[args.where.id] || null },
     otpVerification: { findMany: async () => otpRows, update: async () => ({}) },
     serviceStage: { findMany: async () => [] },
+    serviceCatalog: { findMany: async () => [] },
     $transaction: async (fn: any) => fn(tx)
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
@@ -616,6 +618,7 @@ test('confirmPayment: two concurrent confirmations for the SAME order (same paym
     order: { findFirst: async () => order },
     otpVerification: { findMany: async () => [sharedOtp], delete: async () => ({}), update: async () => ({}) },
     serviceStage: { findMany: async () => [] },
+    serviceCatalog: { findMany: async () => [] },
     $transaction: transactionMock
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });

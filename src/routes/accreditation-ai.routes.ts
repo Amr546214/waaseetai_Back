@@ -2,13 +2,13 @@ import express, { Request, Response } from 'express';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { AccountType } from '@prisma/client';
-import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { authenticate, authorizeActiveRole, requireActiveUser } from '../middlewares/auth.middleware';
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { accreditationAiService } from '../services/accreditation-ai.service';
 import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
 
 const router = express.Router();
-router.use(authenticate, requireActiveUser, authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY));
+router.use(authenticate, requireActiveUser, authorizeActiveRole(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY));
 
 const ALLOWED_ACCREDITATION_MIME_TYPES = new Set([
   'image/png',

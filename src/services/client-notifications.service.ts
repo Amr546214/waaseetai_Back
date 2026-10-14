@@ -41,6 +41,7 @@ const OFFERS = NotificationCategory.OFFERS;
 const FINANCIAL = NotificationCategory.FINANCIAL;
 
 /** Pure builders: the same object is stored by createAndEmit or, inside a transaction, by tx.notification.create({ data }). */
+const NOTE = 'القرار يُسجَّل للمتابعة فقط ولا يغيّر سعر العقد أو مدته أو الضمان حاليًا.';
 export const clientNotificationFor = {
 	offerReceived: (p: { clientId: string; requestId: string; offerId: string; requestTitle?: string | null; providerName: string }): ClientNotificationInput => ({
 		userId: p.clientId, title: 'تم استلام عرض جديد', message: `تم استلام عرض جديد على مشروعك${quoted(p.requestTitle)} من ${p.providerName}.`,
@@ -59,14 +60,14 @@ export const clientNotificationFor = {
 		type: 'OFFER_NEGOTIATION_REJECTED', category: OFFERS, actionUrl: CLIENT_ROUTES.request(p.requestId), actionText: 'عرض الطلب', metadata: { projectId: p.requestId, offerId: p.offerId, messageId: p.messageId }
 	}),
 	amendmentRequested: (p: { clientId: string; projectId: string; amendmentId: string; title: string }): ClientNotificationInput => ({
-		userId: p.clientId, title: 'طلب تعديل جديد على مشروعك', message: `طلب مقدم الخدمة تعديلًا على المشروع: ${short(p.title)}`,
+		userId: p.clientId, title: 'طلب تعديل جديد على مشروعك', message: `طلب مقدم الخدمة تعديلًا على المشروع: ${short(p.title)}. ${NOTE}`,
 		type: 'PROJECT_AMENDMENT', category: PROJECTS, actionUrl: CLIENT_ROUTES.amendments, actionText: 'مراجعة الطلب', metadata: { projectId: p.projectId, amendmentId: p.amendmentId }
 	}),
 	amendmentAnswered: (p: { clientId: string; projectId: string; amendmentId: string; title: string; decision: 'approve' | 'reject' }): ClientNotificationInput => {
 		const approved = p.decision === 'approve';
 		return {
-			userId: p.clientId, title: approved ? 'وافق مقدم الخدمة على طلب التعديل' : 'رفض مقدم الخدمة طلب التعديل',
-			message: `${approved ? 'وافق' : 'رفض'} مقدم الخدمة على طلب التعديل «${short(p.title)}». القرار مسجّل فقط ولا يغيّر السعر أو المدة أو الضمان تلقائيًا.`,
+			userId: p.clientId, title: approved ? 'سجّل مقدم الخدمة موافقته على طلب التعديل' : 'سجّل مقدم الخدمة رفضه لطلب التعديل',
+			message: `${approved ? 'وافق' : 'رفض'} مقدم الخدمة على طلب التعديل «${short(p.title)}». ${NOTE}`,
 			type: 'PROJECT_AMENDMENT', category: PROJECTS, actionUrl: CLIENT_ROUTES.amendments, actionText: 'عرض طلبات التعديل', metadata: { projectId: p.projectId, amendmentId: p.amendmentId, decision: p.decision }
 		};
 	},
