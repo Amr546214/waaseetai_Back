@@ -75,3 +75,58 @@ export async function planSpecialtyUpdate(
 	}
 	return { mainSpecialty, subSpecialties, skillsAfterFieldChange };
 }
+
+export const SKILLS_MAX_PER_ITEM = 30;
+
+type CatalogDb = Pick<PrismaClient, 'category'>;
+
+/** GET /api/skills/catalog: the skills of ONE category (slug | id | nameAr). Unknown or missing category = { category: null, skills: [] } (200, honest empty). */
+export async function getCatalogForCategoryParam(db: Db, value: unknown): Promise<{ category: string | null; skills: string[] }> {
+	const slug = await resolveCategorySlug(db, typeof value === 'string' ? value : '');
+	return { category: slug, skills: skillsForCategory(slug) };
+}
+
+/** GET /api/skills/catalog/all: every ACTIVE Category (the DB taxonomy) joined with the catalog; a category without a catalog entry returns skills: []. */
+export async function getCatalogAll(db: CatalogDb): Promise<{ categories: { slug: string; nameAr: string; skills: string[] }[] }> {
+	const rows = await db.category.findMany({ where: { isActive: true }, orderBy: { sortOrder: 'asc' }, select: { slug: true, nameAr: true } });
+	return { categories: rows.map(c => ({ slug: c.slug, nameAr: c.nameAr, skills: skillsForCategory(c.slug) })) };
+}
+
+/** Trim + de-duplicate + cap a submitted skills list. Not an array / non-strings are a 400. */
+export function normalizeSkillList(input: unknown): string[] {
+	if (!Array.isArray(input) || input.some(v => typeof v !== 'string')) throw new AppError('قائمة المهارات غير صالحة', 400);
+	const names = [...new Set((input as string[]).map(normalizeSkillName).filter(Boolean))];
+	if (names.length > SKILLS_MAX_PER_ITEM) throw new AppError(`الحد الأقصى للمهارات ${SKILLS_MAX_PER_ITEM}`, 400);
+	return names;
+}
+
+/**
+ * Server-side rule shared by the marketplace service and the client request: every skill must belong to the catalog of the Category of the chosen
+ * specialty (or be in `alreadyHeld`, so older data is never broken). Returns the clean list; otherwise 400 naming the offenders (nothing is saved).
+ */
+export function assertSkillsInCategory(names: unknown, categorySlug: string | null | undefined, alreadyHeld: string[] = []): string[] {
+	const wanted = normalizeSkillList(names);
+	const allowed = new Set<string>([...skillsForCategory(categorySlug), ...alreadyHeld.map(normalizeSkillName)]);
+	const outside = wanted.filter(n => !allowed.has(n));
+	if (outside.length) throw new AppError(`${SKILLS_NOT_IN_CATALOG_MESSAGE} (${outside.slice(0, 5).join('، ')})`, 400);
+	return wanted;
+}
+
+export interface ProviderSpecialtyWithCatalog { id: string; specialtyId: string; slug: string; nameAr: string; categorySlug: string | null; subSpecialties: string[]; skillOptions: string[] }
+
+/** The provider's approved + active specialties (the ones a service can be published under), each with the catalog skills of its Category. */
+export async function listProviderSpecialtiesWithCatalog(db: Pick<PrismaClient, 'providerSpecialty'>, userId: string): Promise<ProviderSpecialtyWithCatalog[]> {
+	const rows = await db.providerSpecialty.findMany({
+		where: { providerProfile: { userId }, isActive: true, isPassed: true, status: 'APPROVED' },
+		select: { id: true, specialtyId: true, subSpecialties: true, specialty: { select: { slug: true, nameAr: true, category: { select: { slug: true } } } } }
+	});
+	return rows.map(r => ({
+		id: r.id,
+		specialtyId: r.specialtyId,
+		slug: r.specialty.slug,
+		nameAr: r.specialty.nameAr,
+		categorySlug: r.specialty.category?.slug ?? null,
+		subSpecialties: r.subSpecialties,
+		skillOptions: skillsForCategory(r.specialty.category?.slug)
+	}));
+}

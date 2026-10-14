@@ -10,6 +10,7 @@ import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { LEVEL_MATRIX } from '../utils/progression-calculators';
 import { findActiveServicePurchases } from '../utils/active-purchase.util';
+import { assertSkillsInCategory, listProviderSpecialtiesWithCatalog } from './skills-catalog.service';
 
 // Batch 4 — the minimal shape getMarketplaceModels/getMarketplaceModelById
 // need from req.user to read back the requesting Client's own
@@ -120,10 +121,26 @@ export class MarketplaceService {
 			throw new Error('Provider profile not found');
 		}
 
+		// Each approved specialty carries the catalog skills of its Category (the only skills a service of that specialty may use).
+		const specialties = await listProviderSpecialtiesWithCatalog(prisma, userId);
+
 		return {
 			skills: providerProfile.skills,
+			savedSkills: providerProfile.skills.map(skill => skill.name),
+			specialties,
 			portfolioItems: providerProfile.portfolioItems
 		};
+	}
+
+	/**
+	 * `skills` omitted = untouched (undefined). Otherwise trimmed, de-duplicated, max 30, each one in the catalog of the specialty's Category or already held
+	 * (on the provider's profile or already on this service), else a 400 naming the offenders.
+	 */
+	private async validateServiceSkills(userId: string, input: unknown, categorySlug: string | null, onService: string[] = []): Promise<string[] | undefined> {
+		if (input === undefined || input === null) return undefined;
+		if (Array.isArray(input) && input.length === 0) return [];
+		const profile = await prisma.providerProfile.findUnique({ where: { userId }, select: { skills: { select: { name: true } } } });
+		return assertSkillsInCategory(input, categorySlug, [...(profile?.skills ?? []).map(sk => sk.name), ...(onService ?? [])]);
 	}
 
 	/**
@@ -166,6 +183,7 @@ export class MarketplaceService {
 
 		// Resolve Skill / Specialty from ProviderSpecialty, Specialty or Skill ID
 		let validSkillId: string | undefined = undefined;
+		let categorySlug: string | null = null;
 
 		if (specialtyId && typeof specialtyId === 'string') {
 			const provSpec = await prisma.providerSpecialty.findFirst({
@@ -176,16 +194,19 @@ export class MarketplaceService {
 					status: 'APPROVED',
 					OR: [{ id: specialtyId }, { specialtyId: specialtyId }]
 				},
-				include: { specialty: true }
+				include: { specialty: { include: { category: { select: { slug: true } } } } }
 			});
 
 			if (provSpec && provSpec.specialty) {
 				validSkillId = provSpec.specialty.id;
+				categorySlug = provSpec.specialty.category?.slug ?? null;
 			}
 		}
 		if (!validSkillId) {
 			throw new Error('التخصص غير معتمد أو غير مرتبط بحساب مقدم الخدمة');
 		}
+		// Skills: only names of the catalog of this specialty's Category (or skills the provider already holds); a bad name is a 400 and nothing is saved.
+		const validSkills = await this.validateServiceSkills(userId, data.skills, categorySlug);
 		if (typeof accreditationSampleId !== 'string' || !accreditationSampleId) {
 			throw new Error('يجب اختيار نموذج اعتماد موثق تابع لنفس التخصص');
 		}
@@ -220,6 +241,7 @@ export class MarketplaceService {
 						title,
 						description: fullDescription,
 						subSpecialty: typeof subSpecialty === 'string' ? subSpecialty.trim() || null : null,
+						...(validSkills && { skills: validSkills }),
 						...(validSkillId && { specialty: { connect: { id: validSkillId } } }),
 						...(validPortfolioItemId && { portfolioItem: { connect: { id: validPortfolioItemId } } }),
 						accreditationSample: { connect: { id: accreditationSample.id } },
@@ -300,6 +322,7 @@ export class MarketplaceService {
 
 		// Resolve Specialty
 		let validSkillId: string | undefined = undefined;
+		let categorySlug: string | null = null;
 
 		if (specialtyId && typeof specialtyId === 'string') {
 			const provSpec = await prisma.providerSpecialty.findFirst({
@@ -310,14 +333,16 @@ export class MarketplaceService {
 					status: 'APPROVED',
 					OR: [{ id: specialtyId }, { specialtyId: specialtyId }]
 				},
-				include: { specialty: true }
+				include: { specialty: { include: { category: { select: { slug: true } } } } }
 			});
 
 			if (provSpec && provSpec.specialty) {
 				validSkillId = provSpec.specialty.id;
+				categorySlug = provSpec.specialty.category?.slug ?? null;
 			}
 		}
 		if (!validSkillId) throw new Error('التخصص غير معتمد أو غير مرتبط بحساب مقدم الخدمة');
+		const validSkills = await this.validateServiceSkills(userId, data.skills, categorySlug, (existing as any).skills);
 
 		// Resolve optional portfolioItemId
 		let validPortfolioItemId: string | undefined = undefined;
@@ -366,6 +391,7 @@ export class MarketplaceService {
 						title,
 						description: fullDescription,
 						subSpecialty: typeof subSpecialty === 'string' ? subSpecialty.trim() || null : null,
+					...(validSkills && { skills: validSkills }),
 					// stale advisory verdict cleared: a failed re-audit must leave null, not the score of the previous content
 					aiScore: null,
 					aiReviewSummary: null,
@@ -430,7 +456,7 @@ export class MarketplaceService {
 	 */
 	async getMarketplaceModels(query: any, requestingUser?: RequestingUser) {
 		const { category, cat, specialization, sub, specialtyId, search, featuredOnly, sort, page = 1, limit = 20,
-			minPrice, maxPrice, minRating, maxDays, level } = query || {};
+			minPrice, maxPrice, minRating, maxDays, level, skill } = query || {};
 		const activeCat = category || cat;
 		const activeSub = specialization || sub || specialtyId;
 
@@ -461,6 +487,9 @@ export class MarketplaceService {
 				};
 			}
 		}
+
+		// Exact catalog skill name (the service's own `skills` column).
+		if (typeof skill === 'string' && skill.trim()) whereClause.skills = { has: skill.trim().replace(/\s+/g, ' ') };
 
 		const parsedMinPrice = Number(minPrice);
 		const parsedMaxPrice = Number(maxPrice);
@@ -575,7 +604,8 @@ export class MarketplaceService {
 			const categoryTitle = s.specialty?.category?.nameAr || 'غير محدد';
 			const categorySlug = s.specialty?.category?.slug || 'unknown';
 
-			let parsedTags: string[] = [s.specialty?.nameAr, s.subSpecialty].filter((tag): tag is string => Boolean(tag));
+			const skills: string[] = Array.isArray(s.skills) ? s.skills : [];
+			let parsedTags: string[] = [...new Set([s.specialty?.nameAr, s.subSpecialty, ...skills].filter((tag): tag is string => Boolean(tag)))];
 			const rawTags = (s as any).tags;
 			if (typeof rawTags === 'string' && rawTags.trim() !== '') {
 				try {
@@ -632,6 +662,7 @@ export class MarketplaceService {
 				},
 				stages: s.stages || [],
 				tags: parsedTags,
+				skills,
 				gallery,
 				...(requestingUser && CLIENT_ACCOUNT_TYPES.includes(requestingUser.accountType)
 					? { eligibility: { hasActivePurchase: activeByServiceId.has(s.id), activeProjectId: activeByServiceId.get(s.id)?.id ?? null } }
@@ -675,7 +706,8 @@ export class MarketplaceService {
 
 		const providerCard = this.resolveProviderCardFields(s.provider);
 
-		let parsedTags: string[] = [s.specialty?.nameAr, s.subSpecialty].filter((tag): tag is string => Boolean(tag));
+		const skills: string[] = Array.isArray(s.skills) ? s.skills : [];
+		let parsedTags: string[] = [...new Set([s.specialty?.nameAr, s.subSpecialty, ...skills].filter((tag): tag is string => Boolean(tag)))];
 		const rawTags = (s as any).tags;
 		if (typeof rawTags === 'string' && rawTags.trim() !== '') {
 			try { parsedTags = JSON.parse(rawTags); } catch (e) { parsedTags = rawTags.split(',').map(t => t.trim()); }
@@ -712,8 +744,8 @@ export class MarketplaceService {
 			id: s.id,
 			title: s.title,
 			description: s.description,
-			category: s.specialty?.category?.nameAr || s.specialty?.nameAr || 'البرمجة والتقنية',
-			categorySlug: s.specialty?.category?.slug || s.specialty?.slug || 'code',
+			category: s.specialty?.category?.nameAr || s.specialty?.nameAr || 'غير محدد',
+			categorySlug: s.specialty?.category?.slug || s.specialty?.slug || 'unknown',
 			specialtySlug: s.specialty?.slug || '',
 			status: s.status,
 			totalAmount: Number(s.totalAmount),
@@ -741,6 +773,7 @@ export class MarketplaceService {
 			},
 			stages: s.stages || [],
 			tags: parsedTags,
+			skills,
 			gallery,
 			...(eligibility ? { eligibility } : {}),
 			reviews: s.reviews.map(review => ({
@@ -1074,7 +1107,8 @@ export class MarketplaceService {
 				aiAudit: businessModelAuditResult(model),
 				rating: 0,
 				reviewsCount: 0,
-				tags: [model.specialty?.nameAr, model.subSpecialty].filter((value): value is string => Boolean(value)),
+				skills: Array.isArray((model as any).skills) ? (model as any).skills : [],
+				tags: [...new Set([model.specialty?.nameAr, model.subSpecialty, ...(((model as any).skills as string[] | undefined) ?? [])].filter((value): value is string => Boolean(value)))],
 				coverImage: coverImage,
 				// A published service that does not meet the market conditions (KYC verified + specialty approved) is shown to its owner as
 				// "under review" with the reason; nothing is stored — it returns by itself once both conditions hold again.
