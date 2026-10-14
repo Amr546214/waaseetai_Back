@@ -23,7 +23,7 @@ export async function getDispute(req: Request, res: Response, next: NextFunction
 }
 
 export async function resolveDispute(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = resolveDisputeSchema.safeParse(req.body); if (!parsed.success) throw new AppError('بيانات حل النزاع غير صحيحة', 400); res.json({ success: true, data: await disputeService.resolve(String(req.params.id), actorId(req), parsed.data) }); } catch (error) { next(error); }
+  try { const parsed = resolveDisputeSchema.safeParse(req.body); if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message || 'بيانات حل النزاع غير صحيحة', 400, parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message }))); res.json({ success: true, data: await disputeService.resolve(String(req.params.id), actorId(req), parsed.data) }); } catch (error) { next(error); }
 }
 
 // Advisory-only — never resolves/rejects the dispute, never touches status
