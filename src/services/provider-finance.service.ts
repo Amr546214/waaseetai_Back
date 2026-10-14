@@ -123,12 +123,12 @@ export class ProviderFinanceService {
         platformCommissionTotal,
         releasedThisMonth: sumMoney(transactions.filter(tx => tx.createdAt >= monthStart).map(tx => tx.amount)),
         releasedTransactionsCount: transactions.length,
-        fundedProjectsCount: escrows.filter(escrow => (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).length,
+        fundedProjectsCount: escrows.filter(escrow => escrow.status === 'HELD' && (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).length,
         completedProjectsCount: escrows.filter(escrow => escrow.project.status === 'COMPLETED').length,
         currency: 'USD' // active escrow/contract pricing pipeline is now USD-semantic
       },
       transactions,
-      escrows: escrows.filter(escrow => (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).map(escrow => ({
+      escrows: escrows.filter(escrow => escrow.status === 'HELD' && (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).map(escrow => ({
         id: escrow.id,
         projectId: escrow.project.id,
         projectTitle: escrow.project.title,

@@ -13,6 +13,7 @@ import { createCommissionsForStageReleaseEvent } from './affiliate-commission.se
 import { marketerNotifications, type MarketerCommissionNotice } from './marketer-notifications.service';
 import { DELIVERY_MAX_FILE_BYTES, DELIVERY_MAX_UPLOADED_FILES, deliveryFolder, validateDeliveryArtifacts } from '../utils/delivery-artifacts';
 import { uploadMulterFile } from '../utils/cloudinary-storage';
+import { ACTIVE_DISPUTE_STATUSES, PROJECT_FROZEN_MESSAGE, assertProjectNotFrozen, freezeStateOf, getActiveDisputeForProject, countActiveDisputes, lockProjectForFreezeCheck } from './dispute-freeze.service';
 
 const PROJECT_COMPLETION_POINTS = 50;
 
@@ -217,7 +218,8 @@ export class ProjectProgressService {
       });
     }
     const released = contract.project.escrow?.releasedAmount || 0;
-    const openDispute = await prisma.dispute.findFirst({ where: { projectId: contract.projectId, status: { in: ['OPEN', 'UNDER_REVIEW'] } }, orderBy: { createdAt: 'desc' }, select: { status: true } });
+    const [openDispute, activeDisputeCount] = await Promise.all([getActiveDisputeForProject(contract.projectId, prisma), countActiveDisputes(contract.projectId, prisma)]);
+    const disputeFreeze = freezeStateOf(activeDisputeCount, openDispute);
     const state = contractDeliveryState(contract.status, persisted, contract.project.escrow, openDispute?.status || null);
     const escrow = escrowFacts(contract.project.escrow);
     // Only the provider uploads; the client side of this shared endpoint never gets an upload permission.
@@ -286,6 +288,8 @@ export class ProjectProgressService {
       price: contract.price, durationDays: contract.durationDays, daysLeft: Math.max(0, contract.durationDays - elapsed), progress,
       escrowTotal: contract.project.escrow?.amount || contract.price, escrowHeld: escrow.heldAmount, escrowReleased: released,
       ...state, canUploadDelivery: mayUpload && state.canUploadDelivery, canSubmitDelivery: mayUpload && state.canSubmitDelivery,
+      // Dispute freeze (read model shared by both apps): approvals and releases are refused by the backend while `frozen`; the screens show `reason`.
+      disputeFreeze, activeDisputeCount: disputeFreeze.activeDisputeCount, activeDisputeId: disputeFreeze.disputeId, canApproveStage: !disputeFreeze.frozen && contract.status === ContractStatus.ACTIVE, approvalBlockedReason: disputeFreeze.reason,
       status: contract.status, statusLabel: role === 'client' ? clientContractStatusLabel(contract.status, escrow.escrowFunded) : (contractStatusLabel[contract.status] || 'غير نشط'),
       employee: contract.project.assignedEmployee ? { id: contract.project.assignedEmployee.id, name: contract.project.assignedEmployee.name, jobTitle: contract.project.assignedEmployee.jobTitle } : null,
       stages, deliveries,
@@ -328,6 +332,13 @@ export class ProjectProgressService {
       }
     });
 
+    // Projects of these stages that are frozen by an open dispute (approval is refused by the backend; the list says so instead of offering it).
+    const projectIds = [...new Set(stages.map(stage => stage.contract.projectId))];
+    const frozenRows = projectIds.length
+      ? await prisma.dispute.findMany({ where: { status: { in: ACTIVE_DISPUTE_STATUSES }, OR: [{ projectId: { in: projectIds } }, { requestId: { in: projectIds } }] }, select: { projectId: true, requestId: true } })
+      : [];
+    const frozenProjects = new Set(frozenRows.map(r => r.projectId ?? r.requestId));
+
     return stages
       .filter(stage => stage.deliveries[0]?.status === StageDeliveryStatus.SUBMITTED)
       .map(stage => {
@@ -343,7 +354,9 @@ export class ProjectProgressService {
           submittedAt: delivery.submittedAt,
           providerName: `${provider.firstName || 'مقدم الخدمة'} ${provider.lastName || ''}`.trim(),
           filesCount: delivery.files.length,
-          contractRef: `CT-${stage.contract.id.slice(0, 6).toUpperCase()}`
+          contractRef: `CT-${stage.contract.id.slice(0, 6).toUpperCase()}`,
+          frozen: frozenProjects.has(stage.contract.projectId),
+          approvalBlockedReason: frozenProjects.has(stage.contract.projectId) ? PROJECT_FROZEN_MESSAGE : null
         };
       });
   }
@@ -418,6 +431,13 @@ export class ProjectProgressService {
     const result = await prisma.$transaction(async tx => {
       let isProjectCompleted = false;
       const commissionNotices: MarketerCommissionNotice[] = [];
+      if (decision === 'approve') {
+        // Dispute freeze, authoritative: take the contract row lock (the same one createForRequest takes when a dispute is opened), THEN read the
+        // disputes. A dispute opened concurrently either commits first (this approval is refused) or waits for this transaction (the approval and
+        // its release are complete before the dispute exists). No money can be released past an open dispute.
+        if (!(await lockProjectForFreezeCheck(tx, contract.projectId))) throw new AppError('العقد غير نشط أو لا تملك صلاحية المراجعة', 403);
+        await assertProjectNotFrozen(contract.projectId, tx);
+      }
       if (decision === 'revision') {
         // Guarded the same way the approve path below is: an unconditional
         // update-by-id here would let a request that raced past the

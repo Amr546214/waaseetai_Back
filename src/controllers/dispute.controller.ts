@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { DisputeStatus } from '@prisma/client';
 import { disputeService } from '../services/dispute.service';
-import { assignDisputeSchema, createDisputeSchema, disputeNoteSchema, disputeStatusSchema, resolveDisputeSchema } from '../dtos/dispute.dto';
+import { assignDisputeSchema, createDisputeSchema, disputeNoteSchema, disputeStatusSchema, resolveDisputeFinancialSchema, resolveDisputeSchema } from '../dtos/dispute.dto';
 import { AppError } from '../utils/app-error';
 
 const actorId = (req: Request) => req.user?.id || req.user?.userId!;
@@ -24,6 +24,11 @@ export async function getDispute(req: Request, res: Response, next: NextFunction
 
 export async function resolveDispute(req: Request, res: Response, next: NextFunction) {
   try { const parsed = resolveDisputeSchema.safeParse(req.body); if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message || 'بيانات حل النزاع غير صحيحة', 400, parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message }))); res.json({ success: true, data: await disputeService.resolve(String(req.params.id), actorId(req), parsed.data) }); } catch (error) { next(error); }
+}
+
+// Financial resolution: the only dispute endpoint that moves money. Explicit amounts + `confirm: true`; see docs/proposals/dispute-freeze-and-resolution.md.
+export async function resolveDisputeFinancial(req: Request, res: Response, next: NextFunction) {
+  try { const parsed = resolveDisputeFinancialSchema.safeParse(req.body); if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message || 'بيانات القرار المالي غير صحيحة', 400, parsed.error.issues.map(i => ({ field: i.path.join('.'), message: i.message }))); res.json({ success: true, data: await disputeService.resolveFinancial(String(req.params.id), actorId(req), parsed.data) }); } catch (error) { next(error); }
 }
 
 // Advisory-only — never resolves/rejects the dispute, never touches status

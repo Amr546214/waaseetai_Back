@@ -160,7 +160,7 @@ test('heldEscrowAmount: the escrow balance still held, using the provider-financ
 test('getForUser: adds heldEscrowAmount from the escrow of the dispute project; null without a project', async (t) => {
   const escrowFind = t.mock.fn(async (_args: any) => ({ amount: 113, releasedAmount: 40, status: 'HELD', project: { contract: { price: 100 } } }));
   let dispute: any = { id: 'd1', openedById: 'u1', againstUserId: 'u2', projectId: 'p1', status: 'OPEN' };
-  const prismaMock: any = { dispute: { findUnique: async () => dispute }, escrow: { findUnique: escrowFind } };
+  const prismaMock: any = { dispute: { findUnique: async () => dispute, count: async () => 0, findFirst: async () => null }, escrow: { findUnique: escrowFind } };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   const { disputeService } = await import(`./dispute.service.ts?fixture=${Date.now()}-${Math.random()}`);
 
@@ -188,6 +188,8 @@ async function loadCreate(t: TestContext, opts: { request?: any; project?: any; 
     project: { findUnique: async () => opts.project ?? null },
     proposal: { findFirst: async () => null },
     dispute: { findFirst: async () => opts.existingDispute ?? null, create: createSpy },
+    $queryRaw: async () => [{ id: 'c-1' }],
+    $transaction: async (fn: any) => fn(prismaMock),
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   t.mock.module('./ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: {} } });

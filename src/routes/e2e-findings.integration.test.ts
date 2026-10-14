@@ -55,7 +55,7 @@ const prisma: any = new Proxy({
 		findMany: async () => fx.stages.map((s: any) => ({ ...s })),
 		createMany: async ({ data }: any) => { fx.createdFromOffer = true; fx.stages = data.map((d: any, i: number) => st({ id: `s${i + 1}`, ...d })); return { count: data.length }; },
 	},
-	dispute: { findMany: async () => [], findFirst: async () => null },
+	dispute: { findMany: async () => [], findFirst: async () => null, count: async () => 0 },
 	conversation: { upsert: async () => ({ messages: [] }) },
 	review: { findFirst: async () => null },
 }, { get: (t: any, k: string) => t[k] ?? modelProxy() });

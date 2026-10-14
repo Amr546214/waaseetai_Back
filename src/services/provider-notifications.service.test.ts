@@ -220,7 +220,9 @@ test('negotiation / selection: push-only preference = stored + push, no mail', a
 test('disputeService: client opens -> provider (against) notified; provider opens -> provider notified; admin resolve -> provider notified', async t => {
 	const calls: any[] = [];
 	t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { disputeOpened: async (a: any) => { calls.push(['opened', a]); }, disputeResolved: async (a: any) => { calls.push(['resolved', a]); } } } });
-	t.mock.module('../config/db', { namedExports: { prisma: {
+	const prismaMock: any = {};
+	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+	Object.assign(prismaMock, {
 		project: { findUnique: async () => null },
 		clientRequest: { findUnique: async () => ({ id: 'req-1', title: 'طلب', status: 'IN_PROGRESS', clientProfile: { userId: 'client-1' }, proposals: [{ id: 'pr1', status: 'ACCEPTED', providerId: 'prov-1' }] }) },
 		proposal: { findFirst: async () => ({ providerId: 'prov-1' }) },
@@ -228,9 +230,12 @@ test('disputeService: client opens -> provider (against) notified; provider open
 			findFirst: async () => null,
 			create: async ({ data }: any) => ({ id: 'd1', ...data, request: { id: 'req-1', title: 'طلب' } }),
 			findUnique: async () => ({ id: 'd1', status: 'OPEN', requestId: 'req-1', projectId: null }),
-			update: async () => ({ id: 'd1', status: 'RESOLVED' })
-		}
-	} } });
+			update: async () => ({ id: 'd1', status: 'RESOLVED' }),
+			updateMany: async () => ({ count: 1 })
+		},
+		$queryRaw: async () => [{ id: 'c1' }],
+		$transaction: async (fn: any) => fn(prismaMock)
+	});
 	const { disputeService } = await fresh('./dispute.service.ts');
 	const input = { reason: 'تأخر التسليم', description: 'وصف طويل بما يكفي للنزاع', evidence: [] };
 	await disputeService.createForRequest('req-1', 'client-1', 'client', input);

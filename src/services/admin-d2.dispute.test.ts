@@ -11,6 +11,8 @@ async function load(t: TestContext, overrides: Partial<any> = {}) {
 		dispute: {
 			findUnique: async ({ where }: any) => (where.id === 'd1' ? { ...fx.dispute, request: null, project: { id: 'p1' }, openedBy: { id: 'client-1' }, againstUser: { id: 'prov-1' }, resolvedBy: null } : null),
 			update: async ({ data }: any) => { Object.assign(fx.dispute, data); return { ...fx.dispute }; },
+			updateMany: async ({ where, data }: any) => { if (where.status?.in && !where.status.in.includes(fx.dispute.status)) return { count: 0 }; Object.assign(fx.dispute, data); return { count: 1 }; },
+			findFirst: async () => null,
 			groupBy: async () => [], findMany: async () => [], count: async () => 0
 		},
 		user: { findUnique: async ({ where }: any) => (where.id === 'admin-2' ? { id: 'admin-2', firstName: 'Sara', lastName: 'A', accountType: 'ADMIN' } : where.id === 'client-1' ? { id: 'client-1', accountType: 'CLIENT_INDIVIDUAL' } : null) },
