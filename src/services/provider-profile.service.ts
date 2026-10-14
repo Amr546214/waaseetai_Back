@@ -451,7 +451,8 @@ export class ProviderProfileService {
 
 		// Rating is usually out of 5 in the DB. We need to convert it to a percentage (out of 100) for the UI.
 		const baseRating = reviewsCount > 0 ? (gamification?.avgRating || profile.user?.ratingAverage || profile.rating || 0) : 0;
-		const clientRating = baseRating <= 5 ? Math.round((baseRating / 5) * 100) : baseRating;
+		// One decimal on the percentage, so the stars/average the pages derive from it (clientRating / 20) are not off by a rounding step (4.33 of 5 was shown as 4.4).
+		const clientRating = baseRating <= 5 ? Math.round((baseRating / 5) * 1000) / 10 : baseRating;
 
 		const points = gamification?.points || 0;
 		// Phase 3C bug fix: derive the level title via the same pure, already-tested

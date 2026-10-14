@@ -95,3 +95,11 @@ test('static: the stage-rating route is client-role only, like the project ratin
 	assert.match(src, /\/:id\/rate', authenticate, requireActiveUser, clientOnly, rateAsClient/);
 	assert.match(readFileSync('src/services/rating.service.ts', 'utf8'), /pg_advisory_xact_lock/);
 });
+
+test('static: the public provider rating percentage keeps one decimal (4.33 of 5 must not display as 4.4)', () => {
+	const src = readFileSync('src/services/provider-profile.service.ts', 'utf8');
+	assert.match(src, /Math\.round\(\(baseRating \/ 5\) \* 1000\) \/ 10/);
+	const pct = Math.round((13 / 3 / 5) * 1000) / 10;
+	assert.equal(pct, 86.7);
+	assert.equal((Math.round((pct / 20) * 10) / 10).toFixed(1), '4.3');
+});
