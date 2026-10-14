@@ -292,3 +292,17 @@ test('pg control: WITHOUT the allowlist the other affiliate earns too (what the 
 	await withEnv({ enabled: undefined, allow: null }, async () => { await approveBothStages(w3); });
 	assert.equal(await w3.prisma.commissionLog.count({ where: { affiliateId: c.id } }), 0, 'engine off = nothing');
 });
+
+// ── 7. the provider's commission rate is frozen in the escrow at purchase time ──────────────────────────────────────────────────
+test('pg: the escrow keeps the commission snapshot taken at purchase (12.75%, level 1) even if the provider levels up before the release', opts, async () => {
+	const { projectProgressService } = await import('./project-progress.service');
+	const w = await seedWorld();
+	// the provider is promoted to a much better level (8.15%) AFTER the purchase and BEFORE the release
+	await w.prisma.providerGamification.upsert({ where: { providerId: w.provider.id }, update: { currentLevelIndex: 15, currentCommission: 8.15 }, create: { providerId: w.provider.id, currentLevelIndex: 15, currentCommission: 8.15, points: 99999 } });
+	await projectProgressService.reviewDelivery(w.client.id, w.contract.id, w.s1.id, 'approve');
+	const e = await w.prisma.escrow.findUnique({ where: { id: w.escrow.id } });
+	assert.equal(e.providerCommissionRateSnapshot, 12.75, 'snapshot untouched');
+	assert.equal(e.providerCommissionLevelSnapshot, 1);
+	assert.equal(r2(e.platformCommissionAmount), 1.28, 'commission uses the snapshotted 12.75%, not the new 8.15%');
+	assert.equal(r2(e.providerNetReleasedAmount), 8.72);
+});
