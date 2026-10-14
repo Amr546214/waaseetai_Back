@@ -5,9 +5,8 @@ import { AppError } from '../utils/app-error';
 import { providerProfileService } from '../services/provider-profile.service';
 import { prisma } from '../config/db';
 import { CONTACT_IMMUTABLE, CONTACT_IMMUTABLE_MESSAGE } from '../services/provider-profile.service';
-import { resolveCategorySlug, resolveSkillIdsFromCatalog } from '../services/skills-catalog.service';
+import { getCatalogForCategoryParam, resolveSkillIdsFromCatalog } from '../services/skills-catalog.service';
 import { specialtyService } from '../services/specialty.service';
-import { skillsForCategory } from '../config/skills-catalog.config';
 import { ensureCloudinaryUrl, storeDataUriIfNeeded, storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { sanitizeText } from '../utils/sanitize-text';
 import { assertKycFileValues } from '../utils/kyc-value-guard';
@@ -494,11 +493,10 @@ export const deletePortfolioItem = async (req: Request, res: Response) => {
 	}
 };
 
-// GET /provider/profile/skills/catalog?category=<slug|id|name>: the skills offered for that main specialty (the only skills a provider can pick).
+// GET /provider/profile/skills/catalog?category=<slug|id|name>: kept for compatibility; delegates to the same function as GET /api/skills/catalog.
 export const getSkillsCatalog = async (req: Request, res: Response) => {
 	try {
-		const slug = await resolveCategorySlug(prisma, String(req.query.category ?? ''));
-		res.json({ success: true, data: { category: slug, skills: skillsForCategory(slug) } });
+		res.json({ success: true, data: await getCatalogForCategoryParam(prisma, req.query.category) });
 	} catch (error) {
 		res.status(500).json({ success: false, message: 'Internal server error' });
 	}

@@ -893,6 +893,8 @@ model ServiceCatalog {
   specialtyId  String?
   specialty    Specialty? @relation(fields: [specialtyId], references: [id])
   subSpecialty String?
+  // Skills of this service: each one is a name of the skills catalog of the specialty's Category (validated server-side), see src/config/skills-catalog.config.ts
+  skills       String[]   @default([])
 
   portfolioItemId String?
   portfolioItem   PortfolioItem? @relation(fields: [portfolioItemId], references: [id])

@@ -24,6 +24,7 @@ import cartCheckoutRouter from './routes/cart-checkout.routes';
 
 import providerProfileRoutes from './routes/provider-profile.routes';
 import specialtyRoutes from './routes/specialty.routes';
+import skillsRoutes from './routes/skills.routes';
 import providerSpecialtyRoutes from './routes/provider-specialty.routes';
 import gamificationRoutes from './routes/gamification.routes';
 import levelsRoutes from './routes/levels.routes';
@@ -226,6 +227,8 @@ import paypalWebhookRoutes from './routes/paypal-webhook.routes';
 
 mountAppRoute('/api/provider/profile', providerProfileRoutes);
 mountAppRoute('/api/specialties', specialtyRoutes);
+mountAppRoute('/api/skills', skillsRoutes);
+mountAppRoute('/skills', skillsRoutes);
 mountAppRoute('/api/provider/specialties', providerSpecialtyRoutes);
 mountAppRoute('/api/provider/gamification', gamificationRoutes);
 mountAppRoute('/api/levels', levelsRoutes);

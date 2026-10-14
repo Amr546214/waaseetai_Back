@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { deriveRequestStage, offerActionBlock, REQUEST_STAGE_GROUP, REQUEST_STAGE_LABEL } from '../utils/request-lifecycle';
 import { clientOfferCounterService } from './client-offer-counter.service';
 import { AppError } from '../utils/app-error';
+import { assertSkillsInCategory } from './skills-catalog.service';
 import { BudgetType, ContractStatus, ProposalStatus, ProviderTypePreference, RequestStatus, UserRole } from '@prisma/client';
 import { initializeRoleState } from './account-management.service';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
@@ -259,6 +260,13 @@ export class ClientRequestsService {
 
 		const resolvedSpecialty = specialty;
 
+		// requiredSkills come from the skills catalog of the chosen specialty's Category (one source for the whole system); a bad name is a 400 and nothing is saved.
+		let validRequiredSkills: string[] | undefined;
+		if (Array.isArray(dto.requiredSkills) && dto.requiredSkills.length > 0) {
+			const category = await prisma.category.findUnique({ where: { id: resolvedSpecialty.categoryId }, select: { slug: true } });
+			validRequiredSkills = assertSkillsInCategory(dto.requiredSkills, category?.slug);
+		}
+
 		// 3. Normalize Enums
 		let budgetTypeEnum: BudgetType = BudgetType.FIXED;
 		const bType = (dto.budgetType || 'FIXED').toUpperCase();
@@ -277,7 +285,7 @@ export class ClientRequestsService {
 		const durationDays = Number(dto.expectedDurationDays);
 
 		const subSpecs = Array.isArray(dto.subSpecialties) ? dto.subSpecialties : [];
-		const skills = Array.isArray(dto.requiredSkills) && dto.requiredSkills.length > 0 ? dto.requiredSkills : subSpecs;
+		const skills = validRequiredSkills && validRequiredSkills.length > 0 ? validRequiredSkills : subSpecs;
 		const files = (await Promise.all((Array.isArray(dto.attachments) ? dto.attachments : []).map((url, index) =>
 			ensureCloudinaryUrl(url, `waseetai/client-requests/${userId}`, `attachment-${index + 1}`)
 		))).filter((url): url is string => Boolean(url));
