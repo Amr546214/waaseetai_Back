@@ -167,17 +167,20 @@ test('route wiring: access-state is providerOnly (activeRole) and un-gated; the 
 	const gateAt = src.indexOf('router.use(DASHBOARD_DATA_PREFIXES');
 	for (const m of ["router.use('/profile'", "router.use('/services'", "router.use('/special-offers'", "router.use('/marketing'", "router.get(\n  '/statistics'"]) assert.ok(gateAt < src.indexOf(m), m);
 	// the open (onboarding / help) prefixes are never in the gated list
-	for (const open of ['/profile', '/accreditation', '/access-state', '/tickets', '/disputes', '/gamification', '/specialties']) assert.ok(!gate.includes(`'${open}'`), open);
+	for (const open of ['/profile', '/accreditation', '/access-state', '/tickets', '/disputes', '/specialties']) assert.ok(!gate.includes(`'${open}'`), open);
 });
 
 test('every router that holds a provider guard is classified: gated (own guard or provider.routes prefix) or open (onboarding / company / shared)', () => {
 	const dir = new URL('../routes/', import.meta.url);
-	const GATED_OWN = ['business-models.routes.ts', 'proposal.routes.ts', 'project.routes.ts', 'ai-assistant.routes.ts']; // contain requireApprovedProvider themselves
+	const GATED_OWN = ['business-models.routes.ts', 'proposal.routes.ts', 'project.routes.ts', 'ai-assistant.routes.ts', 'gamification.routes.ts', 'account-logs.routes.ts']; // contain requireApprovedProvider themselves
 	const GATED_BY_PROVIDER_ROUTES: Record<string, string> = { 'marketplace-service.routes.ts': '/services', 'provider-special-offer.routes.ts': '/special-offers', 'provider-marketing-center.routes.ts': '/marketing' };
-	const OPEN = ['accreditation-ai.routes.ts', 'ai-assessment.routes.ts', 'gamification.routes.ts', 'provider-specialty.routes.ts', 'provider-profile.routes.ts', 'specialty.routes.ts', 'skills.routes.ts', 'company-team.routes.ts', 'provider.routes.ts'];
+	const OPEN = ['accreditation-ai.routes.ts', 'ai-assessment.routes.ts', 'provider-specialty.routes.ts', 'provider-profile.routes.ts', 'specialty.routes.ts', 'skills.routes.ts', 'company-team.routes.ts', 'provider.routes.ts'];
 	const providerSrc = readFileSync(new URL('../routes/provider.routes.ts', import.meta.url), 'utf8');
 	const files = readdirSync(dir).filter(f => f.endsWith('.routes.ts') && !f.startsWith('admin-') && !f.startsWith('client-'))
 		.filter(f => /providerOnly|requireProvider|PROVIDER_INDIVIDUAL|PROVIDER_COMPANY|providerActingOnly/.test(readFileSync(new URL(f, dir), 'utf8')));
+	files.push('account-logs.routes.ts');
+	for (const extra of ['modules/ai-review/ai-review.routes.ts', 'dashboard/dashboard.routes.ts']) assert.match(readFileSync(new URL(extra.startsWith('modules') ? '../' + extra : extra, dir), 'utf8'), /requireApprovedProvider/, extra);
+	void 0; // // mounted at /api/provider/logs, no provider guard text of its own
 	for (const f of files) {
 		assert.ok(GATED_OWN.includes(f) || f in GATED_BY_PROVIDER_ROUTES || OPEN.includes(f), `${f} holds a provider guard but is not classified as gated or open in the onboarding gate`);
 		if (GATED_OWN.includes(f)) assert.match(readFileSync(new URL(f, dir), 'utf8'), /requireApprovedProvider/, f);
