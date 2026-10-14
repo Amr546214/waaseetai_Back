@@ -162,3 +162,22 @@ export function buildClientDeclineEntry(input: { offerId: string; counterMessage
 		status: 'DECLINED'
 	});
 }
+
+/**
+ * Human text for a conversation-list preview. A negotiation card is stored as `WS_NEGOTIATION::{json}` (internal state): that raw text must never reach the
+ * list. The wording follows the entry kind; the price is shown only when it is a clear number.
+ */
+export function negotiationPreviewText(content: string | null | undefined, senderIsProvider: boolean): string | null {
+	if (!content || !content.startsWith(NEG_PREFIX)) return null;
+	const p = parseNegotiationMessage(content, senderIsProvider) ?? parseNegotiationMessage(content, !senderIsProvider);
+	if (!p) return 'رسالة تفاوض';
+	const price = p.price !== null ? ` — ${p.price} $` : '';
+	switch (p.kind) {
+		case 'CLIENT_REQUEST': return `طلب تفاوض على العرض${price}`;
+		case 'PROVIDER_COUNTER': return `عرض مضاد من مقدم الخدمة${price}`;
+		case 'PROVIDER_REJECT': return 'رفض مقدم الخدمة طلب التفاوض';
+		case 'CLIENT_ACCEPT_COUNTER': return 'قبل العميل العرض المضاد';
+		case 'CLIENT_DECLINE_COUNTER': return 'رفض العميل العرض المضاد';
+	}
+}
+

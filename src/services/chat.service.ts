@@ -1,5 +1,6 @@
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
+import { negotiationPreviewText } from '../utils/offer-negotiation';
 import { CreateConversationDto, SendMessageDto } from '../dtos/chat.dto';
 import { providerNotifications } from './provider-notifications.service';
 import { MessageType, MessageStatus, UserRole } from '@prisma/client';
@@ -590,7 +591,7 @@ class ChatService {
       if (lastMsgObj.type === 'AUDIO') lastMsgText = '🎤 رسالة صوتية';
       else if (lastMsgObj.type === 'IMAGE') lastMsgText = '📷 مرفق صورة';
       else if (lastMsgObj.type === 'FILE') lastMsgText = `📁 ${lastMsgObj.fileName || 'ملف مرفق'}`;
-      else lastMsgText = lastMsgObj.content || lastMsgText;
+      else lastMsgText = negotiationPreviewText(lastMsgObj.content, lastMsgObj.senderId === conv.providerId) ?? (lastMsgObj.content || lastMsgText);
     }
 
     const date = new Date(conv.updatedAt || conv.createdAt);
