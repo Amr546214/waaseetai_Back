@@ -8,7 +8,7 @@ const router = Router();
 router.use(authenticate, requireActiveUser, authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN));
 
 router.get('/', async (_req, res, next) => {
-	try { res.json({ success: true, data: await platformSettingsService.getAll() }); } catch (e) { next(e); }
+	try { const data = await platformSettingsService.getAll(); res.json({ success: true, data, storageReady: await platformSettingsService.storageReady() }); } catch (e) { next(e); }
 });
 
 // Declared before '/' PUT is irrelevant (different path); the history feeds the "change log" on the settings page.

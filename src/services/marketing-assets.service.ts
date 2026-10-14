@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
-import { withTableGuard } from '../utils/missing-table';
+import { withTableGuard, isMissingTableError } from '../utils/missing-table';
 import { uploadMulterFile } from '../utils/cloudinary-storage';
 
 export const ASSET_KINDS = ['IMAGE', 'VIDEO', 'DOCUMENT', 'LINK', 'TEXT'] as const;
@@ -59,11 +59,18 @@ export class MarketingAssetsService {
 		if (f.active === 'true' || f.active === 'false') where.active = f.active === 'true';
 		if (f.search?.trim()) where.title = { contains: f.search.trim(), mode: 'insensitive' };
 		const page = Math.max(1, Number(f.page) || 1), limit = Math.min(100, Math.max(1, Number(f.limit) || 50));
-		const [items, total] = await withTableGuard(() => prisma.$transaction([
-			prisma.marketingAsset.findMany({ where, orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }], skip: (page - 1) * limit, take: limit }),
-			prisma.marketingAsset.count({ where })
-		]), 'مركز المواد التسويقية');
-		return { items, pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) } };
+		let items: Awaited<ReturnType<typeof prisma.marketingAsset.findMany>> = [], total = 0, storageReady = true;
+		try {
+			[items, total] = await prisma.$transaction([
+				prisma.marketingAsset.findMany({ where, orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }], skip: (page - 1) * limit, take: limit }),
+				prisma.marketingAsset.count({ where })
+			]);
+		} catch (e) {
+			// The marketing_assets table is not created yet: an empty list (page opens) flagged storageReady=false; adding is refused with a clear 503 in create().
+			if (!isMissingTableError(e)) throw e;
+			storageReady = false;
+		}
+		return { items, storageReady, pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) } };
 	}
 
 	async create(body: unknown, file: Express.Multer.File | undefined, adminId: string) {

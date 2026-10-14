@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
-import { withTableGuard } from '../utils/missing-table';
+import { withTableGuard, isMissingTableError } from '../utils/missing-table';
 
 const text = (max: number) => z.string().trim().max(max);
 const optionalPhone = text(30).regex(/^[0-9+()\-\s]*$/, 'رقم الهاتف غير صالح');
@@ -39,14 +39,21 @@ function withDefaults(rows: Array<{ key: string; value: unknown }>, keys: Settin
 }
 
 export class PlatformSettingsService {
+	/** False while the platform_settings table has not been created yet: reads then answer the built-in defaults (200) and saving is refused with a clear 503. */
+	async storageReady(): Promise<boolean> {
+		try { await prisma.platformSetting.count(); return true; } catch (e) { if (isMissingTableError(e)) return false; throw e; }
+	}
+
+	private async rowsOrDefaults(args?: Parameters<typeof prisma.platformSetting.findMany>[0]) {
+		try { return await prisma.platformSetting.findMany(args); } catch (e) { if (isMissingTableError(e)) return []; throw e; }
+	}
+
 	async getAll() {
-		const rows = await withTableGuard(() => prisma.platformSetting.findMany(), 'مخزن الإعدادات');
-		return withDefaults(rows, SETTING_KEYS);
+		return withDefaults(await this.rowsOrDefaults(), SETTING_KEYS);
 	}
 
 	async getPublic() {
-		const rows = await withTableGuard(() => prisma.platformSetting.findMany({ where: { key: { in: PUBLIC_KEYS } } }), 'مخزن الإعدادات');
-		return withDefaults(rows, PUBLIC_KEYS);
+		return withDefaults(await this.rowsOrDefaults({ where: { key: { in: PUBLIC_KEYS } } }), PUBLIC_KEYS);
 	}
 
 	/** Validates a partial update against the whitelist; unknown keys are rejected. Returns the cleaned values. */

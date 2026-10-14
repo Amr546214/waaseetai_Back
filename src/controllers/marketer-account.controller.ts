@@ -25,8 +25,8 @@ export async function getMyMarketerWithdrawal(req: Request, res: Response, next:
   } catch (error) { next(error); }
 }
 
-export function getMarketerAssets(_req: Request, res: Response, next: NextFunction) {
-  try { res.json({ success: true, data: marketerAssetsService.list() }); } catch (error) { next(error); }
+export async function getMarketerAssets(_req: Request, res: Response, next: NextFunction) {
+  try { res.json({ success: true, data: await marketerAssetsService.listForMarketer() }); } catch (error) { next(error); }
 }
 
 export async function getMarketerSettings(req: Request, res: Response, next: NextFunction) {
