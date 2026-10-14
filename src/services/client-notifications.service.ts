@@ -108,6 +108,10 @@ export const clientNotificationFor = {
 		type: 'ORDER_PAID', category: FINANCIAL, actionUrl: p.projectIds.length === 1 ? CLIENT_ROUTES.project(p.projectIds[0]) : CLIENT_ROUTES.activeProjects, actionText: 'عرض المشروع',
 		metadata: { orderId: p.orderId, projectIds: p.projectIds }
 	}),
+	ratingReceived: (p: { clientId: string; rating: number; reviewId: string; projectId?: string | null }): ClientNotificationInput => ({
+		userId: p.clientId, title: 'وصلك تقييم جديد', message: `قيّمك مقدم الخدمة بـ ${p.rating} من 5.`,
+		type: 'RATING_RECEIVED', category: PROJECTS, actionUrl: CLIENT_ROUTES.profile, actionText: 'عرض التقييمات', metadata: { reviewId: p.reviewId, rating: p.rating, ...(p.projectId ? { projectId: p.projectId } : {}) }
+	}),
 	kycDecided: (p: { clientId: string; decision: 'APPROVED' | 'REJECTED'; reason?: string | null }): ClientNotificationInput => ({
 		userId: p.clientId,
 		title: p.decision === 'APPROVED' ? 'تم اعتماد توثيق هويتك' : 'تم رفض توثيق هويتك',

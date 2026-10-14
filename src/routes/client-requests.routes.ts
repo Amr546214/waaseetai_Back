@@ -103,7 +103,7 @@ router.post('/:id/stages/:stageId/ai-review', authenticate, requireActiveUser, a
 // write, never changes any status. Ownership (must be this contract's own
 // client or provider) is enforced inside the shared service method.
 router.post('/:id/health', authenticate, requireActiveUser, aiLimiter, clientRequestsController.getProjectHealthAnalysis);
-router.post('/:id/stages/:stageId/rating', authenticate, requireActiveUser, rateStage);
+router.post('/:id/stages/:stageId/rating', authenticate, requireActiveUser, clientOnly, rateStage);
 
 // Request details by ID
 router.get('/:id', authenticate, requireActiveUser, clientRequestsController.getRequestDetails);
