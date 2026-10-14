@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { proposalController } from '../controllers/proposal.controller';
-import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { authenticate, authorize, requireActiveUser , authorizeActiveRole } from '../middlewares/auth.middleware';
 import { validateDto } from '../middlewares/validate-dto.middleware';
 import { aiSuggestRequestSchema } from '../dtos/ai-suggest-request.dto';
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
@@ -26,7 +26,7 @@ router.post(
   '/ai-suggest',
   authenticate,
   requireActiveUser,
-  authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY),
+  authorizeActiveRole(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY),
   aiLimiter,
   validateDto(aiSuggestRequestSchema),
   proposalController.aiSuggest

@@ -3,8 +3,9 @@ import { AccountType, AccreditationStatus } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import { accreditationAiService } from '../services/accreditation-ai.service';
 import { rejectAccreditationSchema, specialtyReviewDecisionSchema } from '../dtos/accreditation.dto';
-import { specialtyAdminReviewService } from '../services/specialty-admin-review.service';
+import { specialtyAdminReviewService, specialtyReviewQueryService } from '../services/specialty-admin-review.service';
 import { AppError } from '../utils/app-error';
+import { adminActor } from '../utils/admin-actor';
 
 const router = Router();
 router.use(authenticate, requireActiveUser, authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN));
@@ -28,7 +29,7 @@ router.get('/samples/:id', async (req: Request, res: Response, next: NextFunctio
 
 router.post('/samples/:id/approve', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const data = await accreditationAiService.adminApproveSample(String(req.params.id));
+    const data = await accreditationAiService.adminApproveSample(String(req.params.id), adminActor(req));
     res.json({ success: true, message: 'تم اعتماد نموذج الاعتماد بنجاح', data });
   } catch (error) { next(error); }
 });
@@ -37,8 +38,23 @@ router.post('/samples/:id/reject', async (req: Request, res: Response, next: Nex
   try {
     const parsed = rejectAccreditationSchema.safeParse(req.body);
     if (!parsed.success) throw new AppError('سبب الرفض مطلوب', 400);
-    const data = await accreditationAiService.adminRejectSample(String(req.params.id), parsed.data.rejectionReason);
+    const data = await accreditationAiService.adminRejectSample(String(req.params.id), parsed.data.rejectionReason, adminActor(req));
     res.json({ success: true, message: 'تم رفض نموذج الاعتماد', data });
+  } catch (error) { next(error); }
+});
+
+// Specialty review queue (UNDER_AI_REVIEW by default) and its decided history; ?status=pending|approved|rejected|all
+router.get('/specialties', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const data = await specialtyReviewQueryService.list({ status: typeof req.query.status === 'string' ? req.query.status : undefined, search: typeof req.query.search === 'string' ? req.query.search : undefined, page: Number(req.query.page), limit: Number(req.query.limit) });
+    res.json({ success: true, data });
+  } catch (error) { next(error); }
+});
+
+router.get('/specialties/:providerSpecialtyId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const data = await specialtyReviewQueryService.get(String(req.params.providerSpecialtyId));
+    res.json({ success: true, data });
   } catch (error) { next(error); }
 });
 

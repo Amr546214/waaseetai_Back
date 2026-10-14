@@ -30,7 +30,7 @@ test('proposal.routes.ts: POST /ai-suggest is restricted to PROVIDER_INDIVIDUAL/
   const source = readRoute('proposal.routes.ts');
   const start = source.indexOf("router.post(\n  '/ai-suggest',");
   const registration = source.slice(start, source.indexOf(');', start));
-  assert.match(registration, /authorize\(AccountType\.PROVIDER_INDIVIDUAL,\s*AccountType\.PROVIDER_COMPANY\)/);
+  assert.match(registration, /authorizeActiveRole\(AccountType\.PROVIDER_INDIVIDUAL,\s*AccountType\.PROVIDER_COMPANY\)/);
   assert.doesNotMatch(registration, /MARKETING_BROKER/);
 });
 
@@ -91,7 +91,7 @@ test('deterministic sibling routes were left untouched (no aiLimiter added where
 test('ai-assistant.routes.ts: /analyze-project (GET and POST) is providerOnly, requireActiveUser, and carries aiLimiter', () => {
   const source = readRoute('ai-assistant.routes.ts');
   assert.match(source, /router\.use\(authenticate,\s*requireActiveUser,\s*providerOnly,\s*aiLimiter\)/);
-  assert.match(source, /providerOnly = authorize\(AccountType\.PROVIDER_INDIVIDUAL,\s*AccountType\.PROVIDER_COMPANY\)/);
+  assert.match(source, /providerOnly = authorizeActiveRole\(AccountType\.PROVIDER_INDIVIDUAL,\s*AccountType\.PROVIDER_COMPANY\)/);
   assert.match(source, /router\.get\('\/analyze-project\/:projectId'/);
   assert.match(source, /router\.post\('\/analyze-project'/);
 });
@@ -160,7 +160,7 @@ test('client-reports.routes.ts: GET /ai-summary and marketer-overview.routes.ts:
 test('ai-assistant.routes.ts: /analyze-project (GET and POST) is providerOnly, requireActiveUser, and carries aiLimiter', () => {
   const source = readRoute('ai-assistant.routes.ts');
   assert.match(source, /router\.use\(authenticate,\s*requireActiveUser,\s*providerOnly,\s*aiLimiter\)/);
-  assert.match(source, /providerOnly = authorize\(AccountType\.PROVIDER_INDIVIDUAL,\s*AccountType\.PROVIDER_COMPANY\)/);
+  assert.match(source, /providerOnly = authorizeActiveRole\(AccountType\.PROVIDER_INDIVIDUAL,\s*AccountType\.PROVIDER_COMPANY\)/);
   assert.match(source, /router\.get\('\/analyze-project\/:projectId'/);
   assert.match(source, /router\.post\('\/analyze-project'/);
 });

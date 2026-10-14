@@ -74,7 +74,7 @@ test('identity-level session/password routes remain open to any authenticated ro
   }
 });
 
-test('admin-only review routes are unaffected — still gated by authorize(ADMIN, SUPER_ADMIN), not requireProvider', () => {
+test('admin-only review routes are unaffected — still gated by authorizeAdminActing, not requireProvider', () => {
   const adminRoutes = [
     "router.post('/requests/:id/review'",
     "router.get('/admin/pending-reviews'"
@@ -82,7 +82,7 @@ test('admin-only review routes are unaffected — still gated by authorize(ADMIN
 
   for (const needle of adminRoutes) {
     const line = lineContaining(needle);
-    assert.ok(line.includes('authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN)'), `Expected "${needle}" to keep its admin guard, got: ${line}`);
+    assert.ok(line.includes('authorizeAdminActing'), `Expected "${needle}" to keep its admin guard, got: ${line}`);
     assert.ok(!line.includes('requireProvider'), `Admin route "${needle}" should not also require PROVIDER`);
   }
 });

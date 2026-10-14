@@ -151,6 +151,6 @@ test('rate-limited wording: per recipient per hour and per IP are "محاولا�
 
 test('the controllers report the mailer result to the gate', () => {
   const src = fs.readFileSync(path.join(__dirname, '../controllers/auth.controller.ts'), 'utf8');
-  assert.match(src, /registerUser\(input, \{ refCookieSlug \}\);\s*[^]*?res\.locals\.otpEmailAttempted = true;\s*res\.locals\.otpEmailSent = result\.emailSent === true;/);
+  assert.match(src, /registerUser\(input, \{ refCookieSlug, refCookieSource \}\);\s*[^]*?res\.locals\.otpEmailAttempted = true;\s*res\.locals\.otpEmailSent = result\.emailSent === true;/);
   assert.match(src, /authService\.resendOtp\(userId\);\s*res\.locals\.otpEmailAttempted = true;\s*res\.locals\.otpEmailSent = emailSent === true;/);
 });

@@ -13,6 +13,7 @@ const prisma: any = {
 		findMany: async () => (state.row ? [{ ...state.row, createdAt: new Date(), user: {} }] : []),
 		count: async () => (state.row ? 1 : 0),
 		update: async ({ data }: any) => { state.row = { ...state.row!, ...data }; return { ...state.row }; },
+		updateMany: async ({ data }: any) => { state.row = { ...state.row!, ...data }; return { count: 1 }; },
 	},
 	user: { update: async (a: any) => { state.userUpdates.push(a); return {}; }, findUnique: async () => ({ id: 'u1', idDocumentUrl: null }) },
 	clientProfile: { updateMany: async (a: any) => { state.profileUpdates.push(a); return { count: 1 }; }, findUnique: async () => null },

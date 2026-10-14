@@ -63,7 +63,7 @@ test('handleReferralClick: a real affiliate (fixture shaped like the pre-migrati
 
   await refController.handleReferralClick(req, res, () => { throw new Error('next() should not be called on success'); });
 
-  assert.equal(res.cookieCalls.length, 1);
+  assert.equal(res.cookieCalls.length, 2);
   assert.equal(res.cookieCalls[0].name, 'waseet_ref_code');
   assert.equal(res.cookieCalls[0].value, 'khalid-1');
   // the real slug is carried in the URL: /auth/register?ref=khalid-1
@@ -117,7 +117,7 @@ test('handleReferralClick: invalid slug — redirect Location is exactly /auth/r
 
 test('handleReferralClick: with a utm_source, bumps the channel metric using only affiliate.id from the narrowed select', async (t) => {
   const { refController, upsertSpy } = await loadController(t, { affiliate: { id: 'affiliate-1' } });
-  const req: any = { params: { slug: 'khalid-1' }, query: { utm_source: 'tiktok' } };
+  const req: any = { params: { slug: 'khalid-1' }, query: { utm_source: 'tiktok' }, method: 'GET', headers: { 'user-agent': 'Mozilla/5.0 Safari' } };
   const res = createMockRes();
 
   await refController.handleReferralClick(req, res, () => { throw new Error('next() should not be called on success'); });
@@ -126,4 +126,48 @@ test('handleReferralClick: with a utm_source, bumps the channel metric using onl
   const args = upsertSpy.mock.calls[0].arguments[0];
   assert.equal(args.where.affiliateId_channel.affiliateId, 'affiliate-1');
   assert.equal(args.where.affiliateId_channel.channel, 'TIKTOK');
+});
+
+const BROWSER_UA = 'Mozilla/5.0 (Macintosh) AppleWebKit/605.1.15 Safari/605.1.15';
+
+test('click tracking: a plain browser click without utm_source counts one direct (OTHER) visit and stores the channel cookie', async (t) => {
+  const { refController, upsertSpy } = await loadController(t, { affiliate: { id: 'affiliate-1' } });
+  const req: any = { params: { slug: 'khalid-1' }, query: {}, method: 'GET', headers: { 'user-agent': BROWSER_UA } };
+  const res = createMockRes();
+  await refController.handleReferralClick(req, res, () => { throw new Error('unexpected'); });
+  assert.equal(upsertSpy.mock.callCount(), 1);
+  const args = upsertSpy.mock.calls[0].arguments[0];
+  assert.equal(args.where.affiliateId_channel.channel, 'OTHER');
+  assert.equal(args.update.visitors.increment, 1);
+  assert.deepEqual(res.cookieCalls.map((c: any) => [c.name, c.value]), [['waseet_ref_code', 'khalid-1'], ['waseet_ref_src', 'OTHER']]);
+});
+
+test('click tracking: bots, link-preview crawlers, HEAD requests and clients without a user-agent are not counted', async (t) => {
+  const { refController, upsertSpy } = await loadController(t, { affiliate: { id: 'affiliate-1' } });
+  for (const req of [
+    { method: 'GET', headers: { 'user-agent': 'facebookexternalhit/1.1' } },
+    { method: 'GET', headers: { 'user-agent': 'Googlebot/2.1' } },
+    { method: 'HEAD', headers: { 'user-agent': BROWSER_UA } },
+    { method: 'GET', headers: {} },
+  ]) {
+    await refController.handleReferralClick({ params: { slug: 'khalid-1' }, query: {}, ...req } as any, createMockRes(), () => { throw new Error('unexpected'); });
+  }
+  assert.equal(upsertSpy.mock.callCount(), 0);
+});
+
+test('click tracking: a repeat click from a browser already holding the same slug+channel cookie is not counted twice', async (t) => {
+  const { refController, upsertSpy } = await loadController(t, { affiliate: { id: 'affiliate-1' } });
+  const req: any = { params: { slug: 'khalid-1' }, query: { utm_source: 'tiktok' }, method: 'GET', headers: { 'user-agent': BROWSER_UA, cookie: 'waseet_ref_code=khalid-1; waseet_ref_src=TIKTOK' } };
+  await refController.handleReferralClick(req, createMockRes(), () => { throw new Error('unexpected'); });
+  assert.equal(upsertSpy.mock.callCount(), 0);
+  // a different channel from the same browser IS a new visit
+  const req2: any = { ...req, query: { utm_source: 'instagram' } };
+  await refController.handleReferralClick(req2, createMockRes(), () => { throw new Error('unexpected'); });
+  assert.equal(upsertSpy.mock.callCount(), 1);
+});
+
+test('click tracking: an unknown slug increments nothing', async (t) => {
+  const { refController, upsertSpy } = await loadController(t, { affiliate: null });
+  await refController.handleReferralClick({ params: { slug: 'nope' }, query: {}, method: 'GET', headers: { 'user-agent': BROWSER_UA } } as any, createMockRes(), () => { throw new Error('unexpected'); });
+  assert.equal(upsertSpy.mock.callCount(), 0);
 });

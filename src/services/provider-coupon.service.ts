@@ -99,6 +99,14 @@ export class ProviderCouponService {
     const current = await prisma.coupon.findFirst({ where: { id, providerId } });
     if (!current) throw new AppError('الكوبون غير موجود', 404);
     if (input.serviceIds) await this.validateServices(providerId, input.serviceIds);
+    // The DTO only sees the fields of this partial update, so re-check the
+    // limits against the MERGED row (e.g. discountValue 150 on a stored
+    // percentage coupon, or an expiry before the stored start date).
+    const effType = input.discountType ?? current.discountType;
+    const effValue = input.discountValue ?? current.discountValue;
+    if (effType === 'percentage' && (effValue > 100 || effValue < 1)) throw new AppError('النسبة يجب أن تكون بين 1 و100', 400);
+    if (input.expiresAt && input.expiresAt <= (input.startAt ?? current.startAt)) throw new AppError('تاريخ الانتهاء يجب أن يكون بعد تاريخ البداية', 400);
+    if (input.maxUses !== undefined && input.maxUses !== null && input.maxUses < current.usedCount) throw new AppError('الحد الأقصى للاستخدام لا يمكن أن يقل عن عدد مرات الاستخدام الحالية', 400);
     if (input.assignedToTeamMemberId) await this.validateTeamMember(providerId, input.assignedToTeamMemberId);
 
     const user = await prisma.user.findUnique({ where: { id: providerId }, select: { accountType: true } });

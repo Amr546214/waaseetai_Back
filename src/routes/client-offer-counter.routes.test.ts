@@ -8,7 +8,7 @@ for (const [method, path, handler] of [['get', '/:id/offers/:offerId/counter', '
 	test(`${method.toUpperCase()} ${path} is client-only`, () => {
 		const line = src.split('\n').find((l) => l.includes(`router.${method}('${path}'`));
 		assert.ok(line, 'route registered');
-		assert.match(line!, /authenticate, requireActiveUser, authorize\(AccountType\.CLIENT_COMPANY, AccountType\.CLIENT_INDIVIDUAL\), clientRequestsController\./);
+		assert.match(line!, /authenticate, requireActiveUser, authorizeActiveRole\(AccountType\.CLIENT_COMPANY, AccountType\.CLIENT_INDIVIDUAL\), clientRequestsController\./);
 		assert.ok(line!.includes(`clientRequestsController.${handler}`));
 	});
 }

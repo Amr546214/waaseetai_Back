@@ -212,3 +212,60 @@ test('listBrokers: the level shown is the single ladder\'s name / number / commi
 	const { items } = await adminBrokersService.listBrokers({ page: 1, limit: 20 });
 	assert.deepEqual([items[0].level, items[0].levelNumber, items[0].commissionPercent], ['موجه', 8, 3]);
 });
+
+test('getBrokerDetail: monthlyCommissions covers the last 6 months and only sums real rows', async (t) => {
+	const now = new Date();
+	const { adminBrokersService } = await loadService(t, {
+		recentCommissions: [
+			{ type: 'X', amount: 40, currency: 'USD', status: 'APPROVED', createdAt: now, referral: null },
+			{ type: 'X', amount: 10, currency: 'USD', status: 'PENDING', createdAt: now, referral: null },
+		],
+	});
+	const detail = await adminBrokersService.getBrokerDetail('user-1');
+	assert.equal(detail.monthlyCommissions.length, 6);
+	const current = detail.monthlyCommissions[5];
+	assert.equal(current.month, now.toISOString().slice(0, 7));
+	assert.equal(current.approved, 40);
+	assert.equal(current.pending, 10);
+	assert.equal(detail.monthlyCommissions[0].approved, 0);
+});
+
+async function loadStatusService(t: TestContext, opts: { affiliate?: any }) {
+	const update = t.mock.fn(async () => ({}));
+	const record = t.mock.fn(async () => ({}));
+	const prismaMock: any = {
+		affiliateProfile: { findUnique: t.mock.fn(async () => (opts.affiliate === undefined ? { userId: 'u1', user: { status: 'ACTIVE', accountType: 'AFFILIATE' } } : opts.affiliate)) },
+		user: { update },
+	};
+	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+	const { adminBrokersService } = await import(`./admin-brokers.service.ts?status=${Date.now()}-${Math.random()}`);
+	const logs = await import('./account-logs.service');
+	t.mock.method(logs.accountAuditLogService, 'record', record);
+	return { adminBrokersService, update, record };
+}
+
+test('setBrokerStatus: suspending needs a reason, updates the user and writes an ADMIN audit entry', async (t) => {
+	const { adminBrokersService, update, record } = await loadStatusService(t, {});
+	await assert.rejects(() => adminBrokersService.setBrokerStatus('admin-1', 'u1', { status: 'SUSPENDED' }), /سبب/);
+	assert.equal(update.mock.callCount(), 0);
+	const res = await adminBrokersService.setBrokerStatus('admin-1', 'u1', { status: 'suspended', reason: 'نشاط مخالف للسياسة' });
+	assert.equal(res.status, 'SUSPENDED');
+	assert.equal(update.mock.callCount(), 1);
+	assert.equal(record.mock.callCount(), 1);
+	const arg = (record.mock.calls[0].arguments as any[])[0];
+	assert.equal(arg.eventType, 'BROKER_SUSPENDED');
+	assert.equal(arg.source, 'ADMIN');
+	assert.equal(arg.userId, 'u1');
+});
+
+test('setBrokerStatus: rejects an unknown status', async (t) => {
+	const { adminBrokersService, update } = await loadStatusService(t, {});
+	await assert.rejects(() => adminBrokersService.setBrokerStatus('admin-1', 'u1', { status: 'DELETED' }), /الحالة/);
+	assert.equal(update.mock.callCount(), 0);
+});
+
+test('setBrokerStatus: refuses an admin account and a non-broker', async (t) => {
+	const { adminBrokersService, update } = await loadStatusService(t, { affiliate: { userId: 'u2', user: { status: 'ACTIVE', accountType: 'ADMIN' } } });
+	await assert.rejects(() => adminBrokersService.setBrokerStatus('admin-1', 'u2', { status: 'ACTIVE' }), /إداري/);
+	assert.equal(update.mock.callCount(), 0);
+});

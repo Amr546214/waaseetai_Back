@@ -10,7 +10,9 @@ import {
 	type PaypalPayoutItemResult
 } from './paypal.service';
 import { logger } from '../config/logger';
+import { marketerNotifications } from './marketer-notifications.service';
 import { providerNotifications } from './provider-notifications.service';
+import { notifyAdmins } from './admin-notifications.service';
 
 // Same bound as withdrawal.service.ts's SERIALIZABLE retry loop — kept
 // separate rather than shared/imported, since this constant is small and
@@ -553,7 +555,7 @@ export class PayoutService {
 			// unchanged.
 			return current;
 		});
-		if (transitioned) await providerNotifications.withdrawal(result.withdrawalId, 'FAILED');
+		if (transitioned) { await providerNotifications.withdrawal(result.withdrawalId, 'FAILED'); await marketerNotifications.withdrawal(result.withdrawalId, 'FAILED'); void notifyAdmins('PAYOUT_FAILED', { id: result.withdrawalId, ref: failureReason.slice(0, 80) }); }
 		return result;
 	}
 
@@ -622,7 +624,7 @@ export class PayoutService {
 			// COMPLETED -> REVERSED transition below — never re-completed here.
 			throw new AppError('لا يمكن تعليم محاولة تحويل فاشلة كمكتملة — يجب أن تبدأ محاولة جديدة', 409);
 		});
-		if (transitioned) await providerNotifications.withdrawal(result.withdrawalId, 'PAID');
+		if (transitioned) { await providerNotifications.withdrawal(result.withdrawalId, 'PAID'); await marketerNotifications.withdrawal(result.withdrawalId, 'PAID'); }
 		return result;
 	}
 
@@ -730,7 +732,7 @@ export class PayoutService {
 			}
 			throw new AppError(`لا يمكن تسجيل استرجاع التحويل — حالة المحاولة الحالية (${current.status}) لم تكن مكتملة`, 409);
 		});
-		if (transitioned) await providerNotifications.withdrawal(result.withdrawalId, 'REVERSED');
+		if (transitioned) { await providerNotifications.withdrawal(result.withdrawalId, 'REVERSED'); await marketerNotifications.withdrawal(result.withdrawalId, 'REVERSED'); }
 		return result;
 	}
 

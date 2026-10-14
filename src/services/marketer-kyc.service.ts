@@ -4,6 +4,7 @@ import { AppError } from '../utils/app-error';
 import { uploadMulterFile } from '../utils/cloudinary-storage';
 import { sanitizeText } from '../utils/sanitize-text';
 import { notificationService } from './notification.service';
+import { notifyAdmins } from './admin-notifications.service';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
 import { readAffiliateKycReview, isMissingColumnError } from '../utils/affiliate-payout';
 
@@ -36,6 +37,7 @@ export class MarketerKycService {
 			userId, eventType: 'MARKETER_KYC_DOCUMENT_SUBMITTED', category: LogCategory.SECURITY_CHANGE, title: 'رفع مستند هوية الوسيط',
 			summary: 'رفع الوسيط مستند هوية للمراجعة.', source: 'USER', severity: 'INFO', context
 		});
+		void notifyAdmins('KYC_SUBMITTED', { ref: 'وسيط' });
 		return { status: 'PENDING' as const };
 	}
 

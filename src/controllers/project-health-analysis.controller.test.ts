@@ -185,7 +185,7 @@ test('route wiring: client health analysis is behind authenticate, requireActive
     "router.post('/:id/health', authenticate, requireActiveUser, aiLimiter, clientRequestsController.getProjectHealthAnalysis);"
   ));
   assert.ok(source.includes(
-    "router.post('/:id/stages/:stageId/review', authenticate, requireActiveUser, clientRequestsController.reviewStageDelivery);"
+    "router.post('/:id/stages/:stageId/review', authenticate, requireActiveUser, clientOnly, clientRequestsController.reviewStageDelivery);"
   ), 'the manual, human-authoritative review route must remain present and untouched');
 });
 

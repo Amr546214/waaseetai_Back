@@ -7,7 +7,7 @@ const src = readFileSync(new URL('./client-requests.routes.ts', import.meta.url)
 test('POST /:id/offers/:offerId/counter/decline is client-only like accept', () => {
 	const line = src.split('\n').find((l) => l.includes("router.post('/:id/offers/:offerId/counter/decline'"));
 	assert.ok(line, 'route registered');
-	assert.match(line!, /authenticate, requireActiveUser, authorize\(AccountType\.CLIENT_COMPANY, AccountType\.CLIENT_INDIVIDUAL\), clientRequestsController\.declineOfferCounter/);
+	assert.match(line!, /authenticate, requireActiveUser, authorizeActiveRole\(AccountType\.CLIENT_COMPANY, AccountType\.CLIENT_INDIVIDUAL\), clientRequestsController\.declineOfferCounter/);
 });
 test('the decline controller takes the client id from the token only', () => {
 	const c = readFileSync(new URL('../controllers/client-requests.controller.ts', import.meta.url), 'utf8');

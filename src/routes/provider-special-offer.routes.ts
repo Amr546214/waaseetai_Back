@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { AccountType } from '@prisma/client';
-import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { authenticate, authorize, requireActiveUser , authorizeActiveRole } from '../middlewares/auth.middleware';
 import { AppError } from '../utils/app-error';
 import { createSpecialOffer, deactivateSpecialOffer, decideSpecialOfferApproval, getSpecialOffer, getSpecialOfferStats, getSpecialOffersSummary, listSpecialOffers, updateSpecialOffer } from '../controllers/provider-special-offer.controller';
 
@@ -20,7 +20,7 @@ const requireCompanyAccount = (req: Request, _res: Response, next: NextFunction)
 };
 
 const router = Router();
-const providerOnly = authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
+const providerOnly = authorizeActiveRole(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
 
 router.post('/', authenticate, requireActiveUser, providerOnly, createSpecialOffer);
 router.get('/', authenticate, requireActiveUser, providerOnly, listSpecialOffers);
@@ -30,6 +30,6 @@ router.get('/:id/stats', authenticate, requireActiveUser, providerOnly, getSpeci
 router.get('/:id', authenticate, requireActiveUser, providerOnly, getSpecialOffer);
 router.put('/:id', authenticate, requireActiveUser, providerOnly, updateSpecialOffer);
 router.delete('/:id', authenticate, requireActiveUser, providerOnly, deactivateSpecialOffer);
-router.patch('/:id/approval', authenticate, requireActiveUser, authorize(AccountType.PROVIDER_COMPANY), requireCompanyAccount, decideSpecialOfferApproval);
+router.patch('/:id/approval', authenticate, requireActiveUser, authorizeActiveRole(AccountType.PROVIDER_COMPANY), requireCompanyAccount, decideSpecialOfferApproval);
 
 export default router;

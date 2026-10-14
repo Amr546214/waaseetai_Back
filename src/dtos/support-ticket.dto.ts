@@ -26,5 +26,10 @@ export const setTicketStatusSchema = z.object({
   status: z.enum(SUPPORT_TICKET_STATUSES, { message: 'حالة التذكرة غير صحيحة' }),
 });
 
+export const TICKET_PRIORITIES = ['منخفضة', 'عادية', 'عالية', 'عاجلة'] as const;
+export const assignTicketSchema = z.object({ assigneeId: z.string().trim().min(1).max(64) });
+export const ticketPrioritySchema = z.object({ priority: z.enum(TICKET_PRIORITIES, { message: 'أولوية التذكرة غير صحيحة' }) });
+export const internalNoteSchema = z.object({ body: z.string().trim().min(1, 'أدخل نص الملاحظة').max(5000) });
+
 export type CreateSupportTicketInput = z.infer<typeof createSupportTicketSchema>;
 export type ReplyToTicketInput = z.infer<typeof replyToTicketSchema>;

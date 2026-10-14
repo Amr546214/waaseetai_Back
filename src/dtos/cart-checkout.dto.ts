@@ -52,20 +52,26 @@ export const createCouponSchema = couponFieldsSchema.extend({
   // authenticated company's own roster in provider-coupon.service.ts.
   createdByTeamMemberId: z.string().uuid().optional().nullable()
 }).superRefine((value, ctx) => {
-  if (value.discountType === 'percentage' && value.discountValue > 100) {
+  if (value.discountType === 'percentage' && (value.discountValue > 100 || value.discountValue < 1)) {
     ctx.addIssue({ code: 'custom', path: ['discountValue'], message: 'النسبة يجب أن تكون بين 1 و100' });
   }
   if (value.expiresAt && value.startAt && value.expiresAt <= value.startAt) {
     ctx.addIssue({ code: 'custom', path: ['expiresAt'], message: 'تاريخ الانتهاء يجب أن يكون بعد تاريخ البداية' });
+  }
+  if (value.expiresAt && value.expiresAt.getTime() <= Date.now()) {
+    ctx.addIssue({ code: 'custom', path: ['expiresAt'], message: 'تاريخ الانتهاء يجب أن يكون في المستقبل' });
   }
 });
 
 export const updateCouponSchema = couponFieldsSchema.partial().extend({ active: z.boolean().optional() }).superRefine((value, ctx) => {
-  if (value.discountType === 'percentage' && value.discountValue !== undefined && value.discountValue > 100) {
+  if (value.discountType === 'percentage' && value.discountValue !== undefined && (value.discountValue > 100 || value.discountValue < 1)) {
     ctx.addIssue({ code: 'custom', path: ['discountValue'], message: 'النسبة يجب أن تكون بين 1 و100' });
   }
   if (value.expiresAt && value.startAt && value.expiresAt <= value.startAt) {
     ctx.addIssue({ code: 'custom', path: ['expiresAt'], message: 'تاريخ الانتهاء يجب أن يكون بعد تاريخ البداية' });
+  }
+  if (value.expiresAt && value.expiresAt.getTime() <= Date.now()) {
+    ctx.addIssue({ code: 'custom', path: ['expiresAt'], message: 'تاريخ الانتهاء يجب أن يكون في المستقبل' });
   }
 });
 

@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { AccountType } from '@prisma/client';
-import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { authenticate, authorize, requireActiveUser , authorizeActiveRole } from '../middlewares/auth.middleware';
 import { AppError } from '../utils/app-error';
 import { getMarketingCenter, updateMarketingSpendCap } from '../controllers/marketing-center.controller';
 
@@ -17,9 +17,9 @@ const requireCompanyAccount = (req: Request, _res: Response, next: NextFunction)
 };
 
 const router = Router();
-const providerOnly = authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
+const providerOnly = authorizeActiveRole(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
 
 router.get('/center', authenticate, requireActiveUser, providerOnly, getMarketingCenter);
-router.patch('/spend-cap', authenticate, requireActiveUser, authorize(AccountType.PROVIDER_COMPANY), requireCompanyAccount, updateMarketingSpendCap);
+router.patch('/spend-cap', authenticate, requireActiveUser, authorizeActiveRole(AccountType.PROVIDER_COMPANY), requireCompanyAccount, updateMarketingSpendCap);
 
 export default router;

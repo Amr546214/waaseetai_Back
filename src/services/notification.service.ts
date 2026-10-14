@@ -157,6 +157,30 @@ export const resolveClientNotificationChannels = (settings: unknown, _type?: str
 /** The client's own language setting is the profile's "لغة الواجهة" (العربية / English); nothing saved is Arabic. */
 export const resolveClientLanguage = (interfaceLanguage: unknown): 'ar' | 'en' => (interfaceLanguage === 'English' ? 'en' : 'ar');
 
+/**
+ * A marketer's own per-event switches (settings page "تنبيهات"): an event whose switch the marketer turned off is still STORED in the inbox, but neither pushed nor e-mailed.
+ * Only events that have a real sender are listed; a missing / true value keeps the event on.
+ */
+export const MARKETER_TYPE_TOGGLES: Record<string, string> = {
+	REFERRAL_JOINED: 'marketer_new_referral',
+	COMMISSION_APPROVED: 'marketer_new_commission'
+};
+
+/** The marketer's communication language (settings key written by the marketer settings page); nothing saved is Arabic. */
+export const resolveMarketerLanguage = (settings: unknown): 'ar' | 'en' => {
+	const s = settings && typeof settings === 'object' && !Array.isArray(settings) ? (settings as Record<string, unknown>) : {};
+	return s.marketer_communication_language === 'en' ? 'en' : 'ar';
+};
+
+/** Channels of a notification that points into /marketer-overview: the shared in-app / e-mail switches, then the per-event switch (off = stored only). */
+export const resolveMarketerNotificationChannels = (settings: unknown, type?: string): { push: boolean; email: boolean } => {
+	const channels = resolveClientNotificationChannels(settings);
+	const key = type ? MARKETER_TYPE_TOGGLES[type] : undefined;
+	const s = settings && typeof settings === 'object' && !Array.isArray(settings) ? (settings as Record<string, unknown>) : {};
+	if (key && s[key] === false) return { push: false, email: false };
+	return channels;
+};
+
 const escapeMailHtml =(v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 export class NotificationService {
@@ -173,9 +197,11 @@ export class NotificationService {
 		let lang: 'ar' | 'en' = 'ar';
 		// An account can hold both roles: a notification that points into /client-overview follows the CLIENT's settings, anything else the provider's (as before).
 		const forClient = !!dto.actionUrl && dto.actionUrl.startsWith('/client-overview');
+		// Same rule for the marketer side: a notification into /marketer-overview follows the marketer's shared switches (and communication language), never the provider profile's.
+		const forMarketer = !!dto.actionUrl && dto.actionUrl.startsWith('/marketer-overview');
 		let profileChannels: unknown = null;
 		try {
-			const profile = forClient ? null : await prisma.providerProfile.findUnique({ where: { userId: dto.userId }, select: { preferences: true, user: { select: { email: true, firstName: true } } } });
+			const profile = forClient || forMarketer ? null : await prisma.providerProfile.findUnique({ where: { userId: dto.userId }, select: { preferences: true, user: { select: { email: true, firstName: true } } } });
 			profileChannels = profile?.preferences ?? null;
 			if (profile) { channels = resolveNotificationChannels(profile.preferences); lang = resolveCommunicationLanguage(profile.preferences); recipient = profile.user; }
 			else if (forClient) {
@@ -186,10 +212,17 @@ export class NotificationService {
 				]);
 				channels = resolveClientNotificationChannels(prefs?.settings, dto.type); lang = resolveClientLanguage(clientProfile?.interfaceLanguage); recipient = user;
 			}
+			else if (forMarketer) {
+				const [prefs, user] = await Promise.all([
+					prisma.notificationPreference.findUnique({ where: { userId: dto.userId }, select: { settings: true } }),
+					prisma.user.findUnique({ where: { id: dto.userId }, select: { email: true, firstName: true } })
+				]);
+				channels = resolveMarketerNotificationChannels(prefs?.settings, dto.type); lang = resolveMarketerLanguage(prefs?.settings); recipient = user;
+			}
 		} catch { /* default channels */ }
 		// No channels chosen on a provider profile: the account's shared preferences apply (Settings / profile page: channel_in_app, channel_email). Unsaved = push on, e-mail off.
 		const providerChose = Array.isArray((profileChannels as Record<string, unknown> | null)?.notifChannels);
-		if (!providerChose && !forClient) {
+		if (!providerChose && !forClient && !forMarketer) {
 			try {
 				const row = await prisma.notificationPreference.findUnique({ where: { userId: dto.userId }, select: { settings: true } });
 				channels = resolveClientNotificationChannels(row?.settings);
@@ -352,6 +385,7 @@ export class NotificationService {
 	public async getUserNotifications(
 		userId: string,
 		categoryFilter?: string,
+		options: { unreadOnly?: boolean; type?: string } = {},
 	): Promise<NotificationDto[]> {
 		const category = parseCategoryFilter(categoryFilter);
 
@@ -359,6 +393,8 @@ export class NotificationService {
 			where: {
 				userId,
 				...(category ? { category } : {}),
+				...(options.unreadOnly ? { isRead: false } : {}),
+				...(options.type ? { type: options.type } : {}),
 			},
 			orderBy: { createdAt: 'desc' },
 		});
@@ -446,19 +482,19 @@ export const notificationService = new NotificationService();
 // JSON object rather than replacing it wholesale.
 
 export const notificationPreferenceService = {
-	async getPreferences(userId: string): Promise<Record<string, boolean>> {
+	async getPreferences(userId: string): Promise<Record<string, boolean | string>> {
 		const row = await prisma.notificationPreference.findUnique({ where: { userId } });
-		return (row?.settings as Record<string, boolean>) || {};
+		return (row?.settings as Record<string, boolean | string>) || {};
 	},
 
-	async updatePreferences(userId: string, patch: Record<string, boolean>): Promise<Record<string, boolean>> {
+	async updatePreferences(userId: string, patch: Record<string, boolean | string>): Promise<Record<string, boolean | string>> {
 		const existing = await prisma.notificationPreference.findUnique({ where: { userId } });
-		const merged = { ...(existing?.settings as Record<string, boolean> | undefined), ...patch };
+		const merged = { ...(existing?.settings as Record<string, boolean | string> | undefined), ...patch };
 		const row = await prisma.notificationPreference.upsert({
 			where: { userId },
 			create: { userId, settings: merged },
 			update: { settings: merged },
 		});
-		return row.settings as Record<string, boolean>;
+		return row.settings as Record<string, boolean | string>;
 	},
 };

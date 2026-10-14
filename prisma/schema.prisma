@@ -2689,3 +2689,38 @@ model CompanyTeamMember {
   @@index([companyOwnerId, memberType, status])
   @@map("company_team_members")
 }
+
+// Admin-managed platform settings (key/value). Keys are whitelisted in services/platform-settings.service.ts.
+model PlatformSetting {
+  key       String   @id
+  value     Json
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("platform_settings")
+}
+
+// Marketing material managed by admins and read by marketers (kind: IMAGE | VIDEO | DOCUMENT | LINK | TEXT; audience: MARKETER | ALL).
+model MarketingAsset {
+  id          String   @id @default(uuid())
+  title       String
+  description String?  @db.Text
+  kind        String
+  fileUrl     String?
+  fileName    String?
+  mimeType    String?
+  fileBytes   Int?
+  linkUrl     String?
+  text        String?  @db.Text
+  audience    String   @default("MARKETER")
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdBy   String?
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([active, audience, sortOrder])
+  @@map("marketing_assets")
+}

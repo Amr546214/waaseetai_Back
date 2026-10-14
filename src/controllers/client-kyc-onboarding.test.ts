@@ -20,6 +20,7 @@ const prisma: any = {
     findUnique: async ({ where }: any = {}) => (S.onboarding ? { id: 'o1', ...S.onboarding } : null),
     create: async ({ data }: any) => { S.creates++; S.onboarding = { rejectionReason: null, reviewedAt: null, ...data }; return { ...S.onboarding }; },
     update: async ({ data }: any) => { S.updates.push(data); S.onboarding = { ...S.onboarding!, ...data }; return { id: 'o1', ...S.onboarding }; },
+    updateMany: async ({ where, data }: any) => { if (S.onboarding && (!where?.status || where.status === S.onboarding.status)) { S.updates.push(data); S.onboarding = { ...S.onboarding, ...data }; return { count: 1 }; } return { count: 0 }; },
     findMany: async ({ where }: any) => (S.onboarding && (!where?.status || where.status === S.onboarding.status) ? [{ id: 'o1', createdAt: new Date(), ...S.onboarding, user: {} }] : []),
     count: async ({ where }: any) => (S.onboarding && (!where?.status || where.status === S.onboarding.status) ? 1 : 0),
   },
@@ -38,7 +39,7 @@ const prisma: any = {
   user: { findUnique: async () => ({ id: 'u1', status: 'ACTIVE', firstName: 'a', lastName: 'b', avatarUrl: null, createdAt: new Date() }), update: async () => ({}) },
   project: { count: async () => 0 }, contract: { count: async () => 0 },
   review: { count: async () => 0, aggregate: async () => ({ _avg: { rating: null } }), findMany: async () => [] },
-  $transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops({})),
+  $transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops(prisma)),
 };
 let loaded: Promise<{ ClientProfileController: any; OnboardingService: any; clientProfileService: any }> | null = null;
 function load() {
@@ -128,10 +129,10 @@ test('#44 approve → APPROVED + kycStatus VERIFIED; reject → REJECTED + kycSt
   const { OnboardingService } = await load();
   const svc = new OnboardingService();
   adminKyc = [];
-  const approved = await svc.approveOnboarding('o1');
+  const approved: any = await svc.approveOnboarding('o1');
   assert.equal(approved.status, 'APPROVED');
   S.onboarding = { ...S.onboarding!, status: 'PENDING' };
-  const rejected = await svc.rejectOnboarding('o1', { rejectionReason: 'سبب' } as any);
+  const rejected: any = await svc.rejectOnboarding('o1', { rejectionReason: 'سبب' } as any);
   assert.equal(rejected.status, 'REJECTED');
   assert.deepEqual(adminKyc, ['VERIFIED', 'REJECTED']);
 });
