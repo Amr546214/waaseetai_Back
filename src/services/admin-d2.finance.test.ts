@@ -14,8 +14,8 @@ test('csv: BOM, quoting, and spreadsheet-formula neutralisation', () => {
 	assert.ok(out.includes('\r\n5,'));
 });
 
-test('withdrawal approve / reject write an audit row (before/after + amount) and notify via the provider/marketer helper', async (t) => {
-	const audit: any[] = []; const notified: any[] = [];
+test('withdrawal approve / reject write an audit row (before/after + amount) and notify via the provider/marketer helper (a marketer withdrawal goes to marketerNotifications)', async (t) => {
+	const audit: any[] = []; const notified: any[] = []; const providerNotified: any[] = [];
 	const rows: any = { w1: { id: 'w1', userId: 'aff-user', amount: 300, currency: 'USD', method: 'paypal', status: 'PENDING', referenceId: 'r1' } };
 	const prisma: any = {
 		withdrawal: {
@@ -32,7 +32,8 @@ test('withdrawal approve / reject write an audit row (before/after + amount) and
 	};
 	t.mock.module('../config/db', { namedExports: { prisma } });
 	t.mock.module('./provider-finance.service', { namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 0 } }) } } });
-	t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { withdrawal: async (id: string, ev: string) => { notified.push([id, ev]); } } } });
+	t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { withdrawal: async (id: string, ev: string) => { providerNotified.push([id, ev]); } } } });
+	t.mock.module('./marketer-notifications.service', { namedExports: { marketerNotifications: { withdrawal: async (id: string, ev: string) => { notified.push([id, ev]); } } } });
 	t.mock.module('./admin-audit.service', { namedExports: { adminAudit: (await import(`./admin-audit.service.ts?f=${Math.random()}`)).adminAudit } });
 	const { withdrawalService } = await import(`./withdrawal.service.ts?fixture=${Date.now()}-${Math.random()}`);
 	const approved = await withdrawalService.approve('w1', 'admin-1', { adminNote: 'ok' });
@@ -41,6 +42,7 @@ test('withdrawal approve / reject write an audit row (before/after + amount) and
 	assert.equal(audit[0].userId, 'admin-1');
 	assert.equal(audit[0].context.amount, 300);
 	assert.deepEqual(notified, [['w1', 'APPROVED']]);
+	assert.deepEqual(providerNotified, [], 'a marketer withdrawal approval is announced only by the marketer helper (no duplicate)');
 	// an approved request can no longer be approved or rejected (state machine), and no second audit row is written
 	await assert.rejects(() => withdrawalService.approve('w1', 'admin-1', {}), /مسبقاً/);
 	await assert.rejects(() => withdrawalService.reject('w1', 'admin-1', { rejectionReason: 'x' }), /مسبقاً/);

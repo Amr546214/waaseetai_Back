@@ -40,7 +40,7 @@ test('admin reply notifies an affiliate (marketer) owner with a marketer-router 
 	const { svc, notifications } = await load(t, 'MARKETING_BROKER');
 	await svc.replyAsStaff('t1', 'admin-1', 'مرحبا');
 	assert.equal(notifications[0].userId, 'owner');
-	assert.equal(notifications[0].actionUrl, '/marketer-overview/help');
+	assert.equal(notifications[0].actionUrl, '/marketer-overview/help/tickets/t1');
 });
 
 test('internal note is NEVER visible to the ticket owner but is returned to the admin detail', async (t) => {

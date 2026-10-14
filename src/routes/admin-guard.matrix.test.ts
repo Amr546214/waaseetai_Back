@@ -35,7 +35,9 @@ const appSource = fs.readFileSync(path.join(__dirname, '..', 'app.ts'), 'utf8');
 function importedRouters() {
 	const out = new Map<string, { file: string; name: string }>();
 	for (const m of appSource.matchAll(/import\s+(\w+)\s+from\s+'(\.\/routes\/[^']+)'/g)) out.set(m[1], { file: m[2], name: 'default' });
-	for (const m of appSource.matchAll(/import\s+\{([^}]+)\}\s+from\s+'(\.\/routes\/[^']+)'/g)) for (const n of m[1].split(',').map(s => s.trim()).filter(Boolean)) out.set(n, { file: m[2], name: n });
+	// `import x, { a } from './routes/x'` (default + named)
+	for (const m of appSource.matchAll(/import\s+(\w+)\s*,\s*\{[^}]+\}\s+from\s+'(\.\/routes\/[^']+)'/g)) out.set(m[1], { file: m[2], name: 'default' });
+	for (const m of appSource.matchAll(/import\s+(?:\w+\s*,\s*)?\{([^}]+)\}\s+from\s+'(\.\/routes\/[^']+)'/g)) for (const n of m[1].split(',').map(s => s.trim()).filter(Boolean)) out.set(n, { file: m[2], name: n });
 	return out;
 }
 const adminMounts = [...appSource.matchAll(/mountAppRoute\('\/api\/admin\/([\w-]+)',\s*(\w+)\)/g)].map(m => ({ prefix: m[1], ident: m[2] }));
