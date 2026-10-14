@@ -139,7 +139,7 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
     // dispute freeze: the approve path takes the contract row lock and counts OPEN/UNDER_REVIEW disputes (0 unless `freezeActive`)
     $queryRaw: async () => { order.push('lock'); return [{ id: 'contract-1' }]; },
     dispute: { findFirst: disputeFindFirstSpy, count: async () => { order.push('count'); return opts.freezeActive ? 1 : 0; } },
-    referral: { findMany: referralFindManySpy },
+    referral: { findMany: referralFindManySpy, updateMany: async () => ({ count: 1 }) },
     commissionLog: { create: commissionLogCreateSpy }
   };
 

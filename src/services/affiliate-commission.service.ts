@@ -183,6 +183,8 @@ export async function createCommissionsForStageReleaseEvent(
         }
       });
       created.push({ affiliateUserId: referral.affiliate.userId, commissionId: row.id, amount: row.amount, currency: row.currency });
+      // The first real due commission makes the referral SUCCESSFUL (owner definition): forward-only, in the same transaction (the counters derive from the commissions too).
+      await tx.referral.updateMany({ where: { id: referral.id, status: { not: 'CONVERTED' } }, data: { status: 'CONVERTED' } });
     } catch (error) {
       if (isDuplicateCommissionConflict(error)) continue;
       throw error;

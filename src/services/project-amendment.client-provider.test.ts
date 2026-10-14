@@ -87,7 +87,8 @@ test('client create: a lost lock (contract changed meanwhile) is 403 and writes 
 test('client create: only the owning client of an ACTIVE contract (403 otherwise); the lookup is scoped by clientId', async (t) => {
   const { svc, state } = await load(t, { contractFound: false });
   await refused(svc.createAmendment('someone-else', 'project-1', VALID), 403);
-  assert.deepEqual(state.contractFindArgs[0].where, { projectId: 'project-1', clientId: 'someone-else', status: 'ACTIVE' });
+  // accepts the project id OR the contract id (marketplace pages are keyed by the contract id), always scoped by the caller as the client
+  assert.deepEqual(state.contractFindArgs[0].where, { OR: [{ projectId: 'project-1' }, { id: 'project-1' }], clientId: 'someone-else', status: 'ACTIVE' });
   assert.equal(state.created.length, 0);
 });
 test('client create: validation of the type and its fields is unchanged (400) and writes nothing', async (t) => {

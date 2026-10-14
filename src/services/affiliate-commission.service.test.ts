@@ -71,7 +71,7 @@ function fakeTx(opts: { referrals?: any[]; dispute?: boolean; createImpl?: (a: a
   const calls = { dispute: 0, referral: [] as any[], create: [] as any[] };
   const tx: any = {
     dispute: { findFirst: async () => { calls.dispute++; return opts.dispute ? { id: 'd1' } : null; } },
-    referral: { findMany: async (args: any) => { calls.referral.push(args); return (opts.referrals ?? []); } }, // returns every fixture row regardless of the where, so the service's own guard is what is under test
+    referral: { findMany: async (args: any) => { calls.referral.push(args); return (opts.referrals ?? []); }, updateMany: async () => ({ count: 1 }) }, // returns every fixture row regardless of the where, so the service's own guard is what is under test
     commissionLog: { create: async (args: any) => { calls.create.push(args.data); if (opts.createImpl) return opts.createImpl(args); return args.data; } },
   };
   return { tx, calls };
@@ -182,7 +182,7 @@ function allowTx(referrals: any[]) {
   const created: any[] = [];
   const tx: any = {
     dispute: { findFirst: async () => null },
-    referral: { findMany: async () => referrals },
+    referral: { findMany: async () => referrals, updateMany: async () => ({ count: 1 }) },
     commissionLog: { create: async ({ data }: any) => { created.push(data); return { id: `c${created.length}`, ...data }; } }
   };
   return { tx, created };

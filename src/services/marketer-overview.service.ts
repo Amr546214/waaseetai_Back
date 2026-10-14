@@ -1,3 +1,4 @@
+import { successfulReferralIds, effectiveReferralStatus, isRealDueCommission } from '../utils/referral-success';
 import { levelInfo } from '../utils/level-info';
 import { readAffiliateLevels, affiliateLevelInfo } from '../utils/affiliate-level-reader';
 import { SourceChannel, CommissionStatus, UserRole } from '@prisma/client';
@@ -70,14 +71,17 @@ export class MarketerOverviewService {
   async getSummary(userId: string) {
     const affiliate = await this.getOrCreateProfile(userId);
 
-    const successfulReferrals = affiliate.referrals.length;
 
     // Real aggregates only: every figure below is a count/sum over this affiliate's own rows (zeros when there are none).
-    const [referralGroups, commissionGroups] = await Promise.all([
-      prisma.referral.groupBy({ by: ['status'], where: { affiliateId: affiliate.id }, _count: { _all: true } }),
+    const [referralRows, commissionGroups, successfulIds] = await Promise.all([
+      prisma.referral.findMany({ where: { affiliateId: affiliate.id }, select: { id: true, status: true } }),
       prisma.commissionLog.groupBy({ by: ['status'], where: { affiliateId: affiliate.id }, _sum: { amount: true } }),
+      successfulReferralIds(prisma as any, affiliate.id),
     ]);
-    const referralCount = (status: string) => referralGroups.find((g) => g.status === status)?._count._all ?? 0;
+    // ONE definition (utils/referral-success.ts): successful = first due (APPROVED/PAID) commission from a real stage release. Status, counters and rates all derive from it.
+    const effective = referralRows.map((r) => effectiveReferralStatus(r.status, successfulIds.has(r.id)));
+    const referralCount = (status: string) => effective.filter((st) => st === status).length;
+    const successfulReferrals = successfulIds.size;
     const commissionSum = (status: string) => commissionGroups.find((g) => g.status === status)?._sum.amount ?? 0;
     const approvedCommissions = affiliate.commissionLogs.reduce((acc, log) => acc + log.amount, 0);
     const paidCommissions = commissionSum('PAID');
@@ -102,7 +106,7 @@ export class MarketerOverviewService {
       totalCommissions,
       overallConversionRate: parseFloat(overallConversionRate.toFixed(2)),
       totalVisits: totalVisitors,
-      totalReferrals: referralGroups.reduce((acc, g) => acc + g._count._all, 0),
+      totalReferrals: referralRows.length,
       pendingReferrals: referralCount('PENDING'),
       qualifiedReferrals: referralCount('QUALIFIED'),
       approvedCommissions,
@@ -117,19 +121,27 @@ export class MarketerOverviewService {
   async getChannelPerformance(userId: string) {
     const affiliate = await this.getOrCreateProfile(userId);
 
-    const [metrics, referralGroups] = await Promise.all([
+    const [metrics, referralRows, successfulIds] = await Promise.all([
       prisma.affiliateChannelMetric.findMany({ where: { affiliateId: affiliate.id } }),
-      prisma.referral.groupBy({ by: ['sourceChannel'], where: { affiliateId: affiliate.id }, _count: { _all: true } }),
+      prisma.referral.findMany({ where: { affiliateId: affiliate.id }, select: { id: true, sourceChannel: true } }),
+      successfulReferralIds(prisma as any, affiliate.id),
     ]);
+    const referralGroups = [...new Set(referralRows.map((r) => r.sourceChannel))].map((channel) => ({
+      sourceChannel: channel,
+      registrations: referralRows.filter((r) => r.sourceChannel === channel).length,
+      successful: referralRows.filter((r) => r.sourceChannel === channel && successfulIds.has(r.id)).length
+    }));
 
     // visitors = recorded link clicks per channel; clients = users who registered through that channel (live count over the
     // Referral rows, so it can never drift from the referrals list); conversion = clients / visitors, capped at 100%.
     const channels = new Set<string>([...metrics.map((m) => m.channel), ...referralGroups.map((g) => g.sourceChannel)]);
     return [...channels].map((channel) => {
       const visitors = metrics.find((m) => m.channel === channel)?.visitors ?? 0;
-      const clients = referralGroups.find((g) => g.sourceChannel === channel)?._count._all ?? 0;
+      const group = referralGroups.find((g) => g.sourceChannel === channel);
+      // clients = SUCCESSFUL referrals of the channel (the owner definition); registrations = everyone who signed up through it.
+      const clients = group?.successful ?? 0;
       const conversionPercentage = visitors > 0 ? parseFloat(Math.min(100, (clients / visitors) * 100).toFixed(2)) : 0;
-      return { channel, visitors, clients, conversionPercentage };
+      return { channel, visitors, clients, registrations: group?.registrations ?? 0, conversionPercentage };
     });
   }
 
@@ -237,7 +249,7 @@ export class MarketerOverviewService {
           referredUser: { select: { firstName: true, lastName: true } },
           commissionLogs: {
             where: { status: { in: [CommissionStatus.APPROVED, CommissionStatus.PAID] } },
-            select: { amount: true }
+            select: { amount: true, type: true, sourceStageId: true, status: true }
           }
         }
       }),
@@ -248,7 +260,7 @@ export class MarketerOverviewService {
       items: referrals.map(r => ({
         referralId: r.id,
         displayName: `${r.referredUser.firstName || ''} ${r.referredUser.lastName || ''}`.trim() || 'مستخدم وسيط',
-        status: r.status,
+        status: effectiveReferralStatus(r.status, r.commissionLogs.some(isRealDueCommission)),
         joinedAt: r.createdAt,
         totalCommissionEarned: r.commissionLogs.reduce((sum, log) => sum + log.amount, 0)
       })),

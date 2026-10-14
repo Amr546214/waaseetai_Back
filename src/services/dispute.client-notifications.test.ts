@@ -9,7 +9,11 @@ async function load(t: TestContext, o: { disputeFor?: any } = {}) {
 	const dispute = { id: 'd1', requestId: null, projectId: 'p1', request: null, project: { id: 'p1', title: 'مشروع' } };
 	const prisma: any = {
 		clientRequest: { findUnique: async () => null },
-		project: { findUnique: async (a: any) => (a.select?.contract ? { id: 'p1', clientId: 'client-1', providerId: 'prov-1', contract: { id: 'c1', status: 'ACTIVE', clientId: 'client-1', providerId: 'prov-1' } } : { providerId: 'prov-1', contract: { providerId: 'prov-1' } }) },
+		project: {
+			findUnique: async (a: any) => (a.select?.contract ? { id: 'p1', clientId: 'client-1', providerId: 'prov-1', contract: { id: 'c1', status: 'ACTIVE', clientId: 'client-1', providerId: 'prov-1' } } : { providerId: 'prov-1', contract: { providerId: 'prov-1' } }),
+			// the dispute service now resolves the project by id OR contract id with findFirst
+			findFirst: async () => ({ id: 'p1', clientId: 'client-1', providerId: 'prov-1', contract: { id: 'c1', status: 'ACTIVE', clientId: 'client-1', providerId: 'prov-1' } })
+		},
 		dispute: {
 			count: async () => 0,
 			findFirst: async () => null,

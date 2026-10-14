@@ -306,3 +306,31 @@ test('pg: the escrow keeps the commission snapshot taken at purchase (12.75%, le
 	assert.equal(r2(e.platformCommissionAmount), 1.28, 'commission uses the snapshotted 12.75%, not the new 8.15%');
 	assert.equal(r2(e.providerNetReleasedAmount), 8.72);
 });
+
+// ── 8. "successful referral" = first due commission from a REAL release; status, counters and rates agree ──────────────────────
+test('pg: status, counters and conversion all follow the one definition (a seeded 300 USD row does not make a referral successful; two stages count once)', opts, async () => {
+	const { marketerOverviewService } = await import('./marketer-overview.service');
+	const w = await seedWorld();          // referral A: will release two real stages
+	const w2 = await seedWorld();         // referral B: only a SEEDED commission row, no real operation
+	const aff = await mkAffiliate(w.prisma, 1);
+	const rA = await w.prisma.referral.create({ data: { affiliateId: aff.id, referredUserId: w.client.id, sourceChannel: 'LINKEDIN' } });
+	const rB = await w.prisma.referral.create({ data: { affiliateId: aff.id, referredUserId: w2.client.id, sourceChannel: 'LINKEDIN' } });
+	await w.prisma.referral.create({ data: { affiliateId: aff.id, referredUserId: (await seedWorld()).client.id, sourceChannel: 'OTHER' } }); // registered only
+	await w.prisma.affiliateChannelMetric.create({ data: { affiliateId: aff.id, channel: 'LINKEDIN', visitors: 10 } });
+	await w.prisma.commissionLog.create({ data: { affiliateId: aff.id, referralId: rB.id, referredUserId: w2.client.id, sourceProjectId: 'QA-SEED', baseAmount: 30000, appliedPercentage: 1, level: 1, type: 'FIRST_PROJECT_COMPLETED', amount: 300, currency: 'USD', status: 'APPROVED' } });
+	await withEnv({ enabled: 'true', allow: null }, async () => { await approveBothStages(w); });
+	const sum = await marketerOverviewService.getSummary(aff.userId);
+	assert.equal(sum.successfulReferrals, 1, 'only referral A (real release) is successful; the seeded row of B does not count; A counts once for 2 commissions');
+	assert.equal(sum.totalReferrals, 3);
+	assert.equal(sum.pendingReferrals, 2);
+	assert.equal(sum.overallConversionRate, 10, '1 successful / 10 visits');
+	const ch = await marketerOverviewService.getChannelPerformance(aff.userId);
+	assert.deepEqual(ch.find((c: any) => c.channel === 'LINKEDIN'), { channel: 'LINKEDIN', visitors: 10, clients: 1, registrations: 2, conversionPercentage: 10 });
+	const list = await marketerOverviewService.getReferredUsers(aff.userId, 1, 20);
+	const statusOf = (id: string) => list.items.find((i: any) => i.referralId === id)?.status;
+	assert.equal(statusOf(rA.id), 'CONVERTED');
+	assert.equal(statusOf(rB.id), 'PENDING', 'a seeded commission never converts a referral');
+	// the engine also moved the stored status forward, in the same transaction as the commission
+	assert.equal((await w.prisma.referral.findUnique({ where: { id: rA.id } })).status, 'CONVERTED');
+	assert.equal((await w.prisma.referral.findUnique({ where: { id: rB.id } })).status, 'PENDING');
+});
