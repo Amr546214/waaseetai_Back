@@ -1,4 +1,5 @@
 import { prisma } from '../config/db';
+import { marketerNotifications } from './marketer-notifications.service';
 import { levelInfo } from '../utils/level-info';
 import { readAffiliateLevels } from '../utils/affiliate-level-reader';
 import { Prisma } from '@prisma/client';
@@ -223,6 +224,7 @@ export class MarketerProfileService {
    */
   public async updatePaypalPayout(userId: string, email: string | null | undefined) {
     const value = email ? String(email).trim().toLowerCase() : null;
+    const previous = await readAffiliatePaypalEmail(userId, prisma);
     try {
       const updated = await prisma.affiliateProfile.update({ where: { userId }, data: { paypalPayoutEmail: value }, select: { id: true } });
       if (!updated) throw new AppError('ملف الوسيط التسويقي غير موجود', 404);
@@ -233,6 +235,8 @@ export class MarketerProfileService {
       throw error;
     }
     await this.recalculateCompletion(userId);
+    // A change of where the earnings are paid (set, replaced or removed) is always told to the marketer; saving the same email again is not a change.
+    if ((previous ?? '').toLowerCase() !== (value ?? '')) await marketerNotifications.paypalEmailChanged(userId, !value);
     return { success: true, paypalPayoutEmail: value };
   }
 

@@ -13,6 +13,7 @@ import { paypalEmailChangeService } from './paypal-email-change.service';
 import { paypalEmailFrozenError } from '../utils/paypal-email-messages';
 import { deriveWithdrawalReferenceId } from '../utils/withdrawal-reference.util';
 import { providerNotifications } from './provider-notifications.service';
+import { marketerNotifications } from './marketer-notifications.service';
 
 export const MARKETER_PAYPAL_REQUIRED_MESSAGE = 'أضف بريد PayPal لاستلام الأرباح';
 
@@ -42,7 +43,7 @@ type ApprovalLedger =
   | { kind: 'PROVIDER_EARNINGS' }
   | { kind: 'AFFILIATE_COMMISSION'; affiliateId: string };
 
-function isProviderIdentity(user: { accountType: AccountType; roles: UserRole[] | null; activeRole: UserRole | null }): boolean {
+export function isProviderIdentity(user: { accountType: AccountType; roles: UserRole[] | null; activeRole: UserRole | null }): boolean {
   return user.accountType === AccountType.PROVIDER_INDIVIDUAL
     || user.accountType === AccountType.PROVIDER_COMPANY
     || (user.roles ?? []).includes(UserRole.PROVIDER)
@@ -262,7 +263,7 @@ export class WithdrawalService {
 
     for (let attempt = 1; attempt <= MAX_SERIALIZATION_RETRIES; attempt++) {
       try {
-        return await prisma.$transaction(async tx => {
+        const created = await prisma.$transaction(async tx => {
           const approvedCommissions = await tx.commissionLog.aggregate({
             where: { affiliateId: affiliate.id, status: CommissionStatus.APPROVED },
             _sum: { amount: true },
@@ -293,6 +294,8 @@ export class WithdrawalService {
             },
           });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        await marketerNotifications.withdrawal(created.id, 'REQUESTED');
+        return created;
       } catch (error) {
         if (isRetryableTransactionConflict(error) && attempt < MAX_SERIALIZATION_RETRIES) continue;
         throw error;
@@ -500,6 +503,7 @@ export class WithdrawalService {
           return tx.withdrawal.findUniqueOrThrow({ where: { id } });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
         if (ledger.kind === 'PROVIDER_EARNINGS') await providerNotifications.withdrawal(id, 'APPROVED');
+        else await marketerNotifications.withdrawal(id, 'APPROVED');
         return approved;
       } catch (error) {
         // Bounded retry, and ONLY for a recognized transaction-conflict
@@ -559,6 +563,7 @@ export class WithdrawalService {
       return tx.withdrawal.findUniqueOrThrow({ where: { id } });
     });
     await providerNotifications.withdrawal(id, 'REJECTED');
+    await marketerNotifications.withdrawal(id, 'REJECTED');
     return rejected;
   }
 }

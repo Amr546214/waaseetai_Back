@@ -10,6 +10,7 @@ import { deriveProviderProgression } from '../utils/progression-calculators';
 import { projectHealthService, type ProjectHealthResult } from './ai-features/project-health.service';
 import { deliveryReviewService, type DeliveryReviewResult } from './ai-features/delivery-review.service';
 import { createCommissionsForStageReleaseEvent } from './affiliate-commission.service';
+import { marketerNotifications, type MarketerCommissionNotice } from './marketer-notifications.service';
 import { DELIVERY_MAX_FILE_BYTES, DELIVERY_MAX_UPLOADED_FILES, deliveryFolder, validateDeliveryArtifacts } from '../utils/delivery-artifacts';
 import { uploadMulterFile } from '../utils/cloudinary-storage';
 
@@ -395,6 +396,7 @@ export class ProjectProgressService {
     if (!stage || stage.status !== ProjectStageStatus.SUBMITTED || !delivery || delivery.status !== StageDeliveryStatus.SUBMITTED) throw new AppError('لا يوجد تسليم جديد بانتظار المراجعة لهذه المرحلة', 409);
     const result = await prisma.$transaction(async tx => {
       let isProjectCompleted = false;
+      const commissionNotices: MarketerCommissionNotice[] = [];
       if (decision === 'revision') {
         // Guarded the same way the approve path below is: an unconditional
         // update-by-id here would let a request that raced past the
@@ -485,11 +487,11 @@ export class ProjectProgressService {
           // commissionable base — the same figure this same audit log's own
           // metaData.releasedAmount above already uses for "the amount
           // released at this specific step".
-          await createCommissionsForStageReleaseEvent(tx, {
+          commissionNotices.push(...(await createCommissionsForStageReleaseEvent(tx, {
             contract: { id: contract.id, projectId: contract.projectId, clientId: contract.clientId, providerId: contract.providerId },
             stageId: stage.id,
             releasedAmount: stage.amount
-          });
+          }) ?? []));
         } else {
           isProjectCompleted = true;
           const completed = await tx.contract.updateMany({
@@ -542,11 +544,11 @@ export class ProjectProgressService {
           // `releasedAmount: contract.price` (a direct set, not an
           // increment), not the incremental amount released at this specific
           // final step.
-          await createCommissionsForStageReleaseEvent(tx, {
+          commissionNotices.push(...(await createCommissionsForStageReleaseEvent(tx, {
             contract: { id: contract.id, projectId: contract.projectId, clientId: contract.clientId, providerId: contract.providerId },
             stageId: stage.id,
             releasedAmount: stage.amount
-          });
+          }) ?? []));
           await tx.clientRequest.updateMany({
             where: { proposals: { some: { projectId: contract.projectId } } },
             data: { status: RequestStatus.COMPLETED }
@@ -628,6 +630,7 @@ export class ProjectProgressService {
         notificationId: notification.id,
         clientNotificationId: clientNotification?.id ?? null,
         isProjectCompleted,
+        commissionNotices,
         providerEmail: isProjectCompleted ? contract.provider.email : null,
         providerName: `${contract.provider.firstName || 'مقدم الخدمة'} ${contract.provider.lastName || ''}`.trim(),
         projectTitle: contract.project.title
@@ -635,6 +638,7 @@ export class ProjectProgressService {
     });
 
     await clientNotifications.deliverStored([result.clientNotificationId]);
+    await marketerNotifications.commissionsApproved(result.commissionNotices);
     await notificationService.emitStored(result.notificationId).catch(error => {
       console.error('[ProjectProgress] Failed to emit project review notification:', error);
     });
