@@ -112,8 +112,24 @@ export interface ProjectHealthAnalysis {
   matchPercentage: null;
 }
 
+/** True when the stage list is a valid split of the contract: unique positive step orders, amounts add up to the price and percentages to 100 (tolerance 0.01). */
+export function stagesMatchContract(list: Array<{ stepOrder?: number | null; amount?: unknown; percentage?: unknown }>, price: number): boolean {
+  if (!list.length || !(price > 0)) return false;
+  const orders = list.map((x, i) => Number(x.stepOrder || i + 1));
+  if (new Set(orders).size !== orders.length || orders.some(o => !Number.isInteger(o) || o < 1)) return false;
+  const amount = list.reduce((sum, x) => sum + Number(x.amount ?? NaN), 0);
+  const pct = list.reduce((sum, x) => sum + Number(x.percentage ?? NaN), 0);
+  return Number.isFinite(amount) && Number.isFinite(pct) && Math.abs(amount - price) <= 0.01 && Math.abs(pct - 100) <= 0.01;
+}
+
 export class ProjectProgressService {
   /** Single source of the contract's stage rows: creates them from the accepted offer's milestones (or one final stage) when none exist yet. Shared by the progress endpoint and the provider lists. */
+  /**
+   * Creates the stage rows of a contract that has none yet. Safe to call from several requests at once: the rows are written by ONE atomic createMany and
+   * (contractId, stepOrder) is unique, so a concurrent caller that lost the race gets P2002 (swallowed) and nothing is duplicated; a contract that already has ANY
+   * stage is never touched. The stages must add up to the contract: amounts == contract.price and percentages == 100 (tolerance 0.01); the frozen contract terms
+   * are preferred over the offer's milestones, and when neither adds up the contract falls back to ONE stage worth the whole price (never an inconsistent split).
+   */
   async ensureStages(contractId: string) {
     const found = await prisma.projectStage.findMany({ where: { contractId }, orderBy: { stepOrder: 'asc' } });
     if (found.length) return;
@@ -122,12 +138,16 @@ export class ProjectProgressService {
     const proposal = contract.offerId
       ? await prisma.projectProposal.findUnique({ where: { id: contract.offerId }, include: { milestones: { orderBy: { stepOrder: 'asc' } } } })
       : await prisma.projectProposal.findFirst({ where: { projectId: contract.projectId, providerId: contract.providerId }, include: { milestones: { orderBy: { stepOrder: 'asc' } } } });
-    const source = proposal?.milestones.length ? proposal.milestones : [{
+    const frozen = Array.isArray((contract.terms as any)?.milestones) ? ((contract.terms as any).milestones as any[]) : [];
+    const candidates = [frozen, proposal?.milestones ?? []].filter(list => list.length > 0);
+    const source = candidates.find(list => stagesMatchContract(list, contract.price)) ?? null;
+    if (candidates.length && !source) console.warn(`[ensureStages] contract ${contractId}: milestones do not add up to the price (${contract.price}); using one stage for the whole price`);
+    const items = source ?? [{
       stepOrder: 1, title: 'تسليم المشروع النهائي', description: contract.project.description,
       days: contract.durationDays, percentage: 100, amount: contract.price
     }];
     try {
-      await prisma.projectStage.createMany({ data: source.map((item, index) => ({
+      await prisma.projectStage.createMany({ data: items.map((item: any, index: number) => ({
         contractId, stepOrder: item.stepOrder || index + 1, title: item.title, description: item.description,
         days: item.days, percentage: item.percentage, amount: item.amount,
         status: index === 0 && contract.status === ContractStatus.ACTIVE ? ProjectStageStatus.IN_PROGRESS : ProjectStageStatus.PENDING,
