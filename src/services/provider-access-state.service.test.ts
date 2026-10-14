@@ -22,19 +22,21 @@ const withSamples = (r: Any) => ({ ...r, specialty: S.catalog.find((c: Any) => c
 const db: Any = {
 	user: { findUnique: async () => S.user },
 	category: { findFirst: async () => null },
-	providerProfile: { findUnique: async ({ where }: Any) => (where.userId ? (where.userId === S.profile.userId ? S.profile : null) : where.id === S.profile.id ? S.profile : null) },
+	providerProfile: { update: async ({ data }: Any) => { Object.assign(S.profile, data); return S.profile; }, findUnique: async ({ where }: Any) => (where.userId ? (where.userId === S.profile.userId ? S.profile : null) : where.id === S.profile.id ? S.profile : null) },
 	specialty: { findMany: async ({ where }: Any) => S.catalog.filter((c: Any) => where.nameAr.in.includes(c.nameAr)) },
 	portfolioItem: { findMany: async ({ where }: Any) => S.portfolio.filter((p: Any) => matches(p, where)) },
 	providerSpecialty: {
 		findUnique: async ({ where }: Any) => { const k = where.providerProfileId_specialtyId; return S.ps.find((r: Any) => r.providerProfileId === k.providerProfileId && r.specialtyId === k.specialtyId) ?? null; },
 		upsert: async ({ where, create }: Any) => { const k = where.providerProfileId_specialtyId; const hit = S.ps.find((r: Any) => r.providerProfileId === k.providerProfileId && r.specialtyId === k.specialtyId); if (hit) return hit; const row = { id: S.seq(), isActive: true, isPassed: false, createdAt: new Date(), ...create }; S.ps.push(row); return row; },
 		findMany: async ({ where }: Any) => S.ps.filter((r: Any) => r.providerProfileId === where.providerProfileId && r.isActive).map(withSamples),
+		update: async ({ where, data }: Any) => { Object.assign(S.ps.find((r: Any) => r.id === where.id), data); return {}; },
 		updateMany: async ({ where, data }: Any) => { const rows = S.ps.filter((r: Any) => matches(r, where.status && typeof where.status === 'object' ? { id: where.id } : where)); rows.forEach((r: Any) => Object.assign(r, data)); return { count: rows.length }; },
 	},
 	accreditationSample: {
 		findFirst: async ({ where }: Any) => S.samples.find((s: Any) => matches(s, where)) ?? null,
 		findUnique: async ({ where }: Any) => { const s = S.samples.find((x: Any) => x.id === where.id); return s ? { ...s, providerSpecialty: S.ps.find((r: Any) => r.id === s.providerSpecialtyId), providerProfile: { userId: 'u1' } } : null; },
-		findMany: async () => [],
+		count: async ({ where }: Any) => S.samples.filter((x: Any) => matches(x, where)).length,
+		findMany: async ({ where }: Any) => S.samples.filter((x: Any) => matches(x, where ?? {})).map((x: Any) => ({ ...x, providerProfile: { id: 'pp1', userId: 'u1', user: { firstName: 'سارة', lastName: 'أحمد', email: 'sara@example.com' } }, providerSpecialty: { ...S.ps.find((r: Any) => r.id === x.providerSpecialtyId), specialty: S.catalog.find((c: Any) => c.id === S.ps.find((r: Any) => r.id === x.providerSpecialtyId)?.specialtyId) } })),
 		create: async ({ data }: Any) => { const s = { id: S.seq(), createdAt: new Date(), aiFeedbackAr: null, aiScore: null, aiAuditedAt: null, ...data }; S.samples.push(s); return s; },
 		update: async ({ where, data }: Any) => { const s = S.samples.find((x: Any) => x.id === where.id); Object.assign(s, data); return s; },
 	},
@@ -52,6 +54,8 @@ const load = async () => ({
 	gate: (await import('../middlewares/provider-access.middleware.ts')).requireApprovedProvider,
 });
 const portfolio = (extra: Any = {}) => [{ providerProfileId: 'pp1', title: 'نموذج أعمال - تصميم جرافيك', description: 'هوية بصرية كاملة لمتجر', coverImage: 'https://x/a.png', projectUrl: 'https://p.example', tags: ['https://x/a.png', 'https://x/b.pdf'], ...extra }];
+// the REAL wizard payload as the setup POST stores it: description = the work FILE url, tags = proof file urls, coverImage = first proof
+const wizardPortfolio = () => [{ providerProfileId: 'pp1', title: 'نموذج أعمال - تصميم جرافيك', description: 'https://res.cloudinary.com/w/work.pdf', coverImage: 'https://res.cloudinary.com/w/proof1.png', projectUrl: null, tags: ['https://res.cloudinary.com/w/proof1.png'] }];
 const PENDING_MSG = 'تم اجتياز الاختبار، ونموذج الاعتماد قيد المراجعة. ستفتح لوحة مقدم الخدمة بعد اعتماد الإدارة.';
 const REQUIRED_MSG = 'اجتزت الاختبار، لكن يجب رفع نموذج الاعتماد لإكمال المراجعة.';
 
@@ -89,12 +93,14 @@ test('test pass alone: access-state is not approved (setup+test done, no sample 
 	assert.deepEqual([r.state, r.canAccessDashboard, r.hasSample, r.message], ['SAMPLE_REQUIRED', false, false, REQUIRED_MSG]);
 });
 
-test('setup incomplete or test not completed -> SETUP_INCOMPLETE', async () => {
+test('form incomplete -> SETUP_INCOMPLETE; form complete but test not COMPLETED -> ASSESSMENT_REQUIRED (no sample registered before the test)', async () => {
 	const { access } = await load();
-	reset({ setup: false }); assert.equal((await access.get('u1', db)).state, 'SETUP_INCOMPLETE');
-	reset({ test: false, portfolio: portfolio() }); const r = await access.get('u1', db);
-	assert.deepEqual([r.state, r.canAccessDashboard], ['SETUP_INCOMPLETE', false]);
-	assert.equal(S.samples.length, 0); // no repair before the test is done
+	reset({ setup: false, test: true, portfolio: wizardPortfolio() }); const a = await access.get('u1', db);
+	assert.deepEqual([a.state, a.canAccessDashboard], ['SETUP_INCOMPLETE', false]);
+	reset({ test: false, portfolio: wizardPortfolio() }); const r = await access.get('u1', db);
+	assert.deepEqual([r.state, r.canAccessDashboard, r.message], ['ASSESSMENT_REQUIRED', false, 'أكمل الاختبار لإكمال اعتماد حسابك.']);
+	assert.equal(S.samples.length, 0); // the lazy repair never runs before the test is completed
+	assert.equal(S.ps.length, 0);
 });
 
 test('lazy repair: a provider with setup+test done and a stored onboarding portfolio gets the sample and is PENDING_REVIEW (blocked)', async () => {
@@ -201,7 +207,45 @@ test('gate behaviour per route class: pending individual 403 / approved passes /
 	assert.equal(await run(indiv), null);
 });
 
-test('hooks: the form save and the setup-test completion both call the onboarding sample persistence', () => {
-	assert.match(readFileSync(new URL('../controllers/provider-profile.controller.ts', import.meta.url), 'utf8'), /await tryEnsureOnboardingAccreditationSamples\(result\.id\)/);
-	assert.match(readFileSync(new URL('../sockets/setup-test.gateway.ts', import.meta.url), 'utf8'), /await tryEnsureOnboardingAccreditationSamples\(session\.profileId\)/);
+test('hooks: the form save does NOT register samples; the setup-test completion does (via completeSetupTest)', () => {
+	assert.doesNotMatch(readFileSync(new URL('../controllers/provider-profile.controller.ts', import.meta.url), 'utf8'), /EnsureOnboardingAccreditationSamples|ensureOnboardingAccreditationSamples/);
+	assert.match(readFileSync(new URL('../sockets/setup-test.gateway.ts', import.meta.url), 'utf8'), /await completeSetupTest\(session\.profileId, score, passed\)/);
+});
+
+test('setup test completion: before => no sample; after => MANUAL_REVIEW sample linked to profile + specialty, specialty UNDER_AI_REVIEW, PENDING_REVIEW, still no access; admin list shows it; approve opens access', async () => {
+	reset({ test: false, portfolio: wizardPortfolio() });
+	const { access, admin } = await load();
+	const { completeSetupTest } = await import('./setup-test-completion.service.ts');
+	assert.equal((await access.get('u1', db)).state, 'ASSESSMENT_REQUIRED');
+	assert.equal(S.samples.length, 0);
+	const done = await completeSetupTest('pp1', 80, true, db);
+	assert.equal(done.samplesCreated, 1);
+	const [s] = S.samples; const ps = S.ps.find((r: Any) => r.specialtyId === 'sp-g');
+	assert.deepEqual([s.status, s.providerProfileId, s.providerSpecialtyId, ps.status, ps.isPassed, ps.hasTakenAssessment], ['MANUAL_REVIEW', 'pp1', ps.id, 'UNDER_AI_REVIEW', true, true]);
+	assert.deepEqual(s.attachments, ['https://res.cloudinary.com/w/work.pdf', 'https://res.cloudinary.com/w/proof1.png']);
+	const st = await access.get('u1', db);
+	assert.deepEqual([st.state, st.canAccessDashboard, st.message], ['PENDING_REVIEW', false, PENDING_MSG]);
+	// admin queue: GET /admin/accreditation/samples?status=MANUAL_REVIEW
+	const list = await admin.listAllSamples('MANUAL_REVIEW', 1, 10);
+	assert.equal(list.items.length, 1);
+	const it = list.items[0];
+	assert.deepEqual([it.title, it.providerProfile.user.email, it.providerSpecialty.specialty.nameAr, it.status], ['نموذج أعمال - تصميم جرافيك', 'sara@example.com', 'تصميم جرافيك', 'MANUAL_REVIEW']);
+	assert.ok(it.description && it.attachments.length === 2);
+	// the admin specialties pending queue reads status UNDER_AI_REVIEW (STATUS_FILTERS.pending)
+	assert.match(readFileSync(new URL('./specialty-admin-review.service.ts', import.meta.url), 'utf8'), /pending: \[SpecialtyVerificationStatus\.UNDER_AI_REVIEW\]/);
+	await admin.adminApproveSample(s.id, undefined);
+	assert.deepEqual([(await access.get('u1', db)).state, (await access.get('u1', db)).canAccessDashboard], ['APPROVED', true]);
+});
+
+test('setup test completion: re-running is idempotent, and with no usable onboarding sample it warns and the state is SAMPLE_REQUIRED (never silent)', async () => {
+	reset({ test: false, portfolio: wizardPortfolio() });
+	const { access } = await load();
+	const { completeSetupTest } = await import('./setup-test-completion.service.ts');
+	await completeSetupTest('pp1', 80, true, db); await completeSetupTest('pp1', 80, true, db);
+	assert.equal(S.samples.length, 1);
+	reset({ test: false, portfolio: [] });
+	const r = await completeSetupTest('pp1', 80, true, db);
+	assert.equal(r.samplesCreated, 0);
+	const st = await access.get('u1', db);
+	assert.deepEqual([st.state, st.canAccessDashboard], ['SAMPLE_REQUIRED', false]);
 });

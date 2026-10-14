@@ -7,10 +7,11 @@ import { ensureOnboardingAccreditationSamples } from './onboarding-accreditation
 // (profile completeness, setup test, accreditation samples, ProviderSpecialty status). Nothing here is client-provided and nothing is cached.
 // Passing the test never opens the dashboard: only >= 1 APPROVED + active ProviderSpecialty does (set by the admin).
 
-export type ProviderAccessStateName = 'SETUP_INCOMPLETE' | 'SAMPLE_REQUIRED' | 'PENDING_REVIEW' | 'REJECTED' | 'APPROVED' | 'NOT_APPLICABLE';
+export type ProviderAccessStateName = 'SETUP_INCOMPLETE' | 'ASSESSMENT_REQUIRED' | 'SAMPLE_REQUIRED' | 'PENDING_REVIEW' | 'REJECTED' | 'APPROVED' | 'NOT_APPLICABLE';
 
 export const ACCESS_MESSAGES: Record<ProviderAccessStateName, string> = {
-	SETUP_INCOMPLETE: 'أكمل إعداد ملفك واجتز الاختبار لمتابعة اعتماد حسابك.',
+	SETUP_INCOMPLETE: 'أكمل إعداد ملفك لمتابعة اعتماد حسابك.',
+	ASSESSMENT_REQUIRED: 'أكمل الاختبار لإكمال اعتماد حسابك.',
 	SAMPLE_REQUIRED: 'اجتزت الاختبار، لكن يجب رفع نموذج الاعتماد لإكمال المراجعة.',
 	PENDING_REVIEW: 'تم اجتياز الاختبار، ونموذج الاعتماد قيد المراجعة. ستفتح لوحة مقدم الخدمة بعد اعتماد الإدارة.',
 	REJECTED: 'تم رفض نموذج الاعتماد. راجع السبب وارفع نموذجاً جديداً لإعادة المراجعة.',
@@ -66,8 +67,9 @@ export const providerAccessStateService = {
 
 		let rows = await load(db, profile.id);
 		const approved = rows.some(r => r.status === SpecialtyVerificationStatus.APPROVED);
-		const setupDone = profile.isProfileSetupComplete === true && profile.setupTestStatus === 'COMPLETED';
-		if (!approved && !setupDone) return result('SETUP_INCOMPLETE', { specialties: shape(rows) });
+		// form not complete -> SETUP_INCOMPLETE; form complete but the test not COMPLETED -> ASSESSMENT_REQUIRED (no sample is registered before the test is completed)
+		if (!approved && profile.isProfileSetupComplete !== true) return result('SETUP_INCOMPLETE', { specialties: shape(rows) });
+		if (!approved && profile.setupTestStatus !== 'COMPLETED') return result('ASSESSMENT_REQUIRED', { specialties: shape(rows) });
 
 		// lazy repair (backfill of accounts created before the onboarding sample was persisted): idempotent, never blocks the answer
 		if (!approved && !rows.some(r => r.accreditationSamples.length)) {
