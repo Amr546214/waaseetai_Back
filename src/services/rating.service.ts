@@ -6,6 +6,8 @@ import { providerNotifications } from './provider-notifications.service';
 import { clientNotificationFor, clientNotifications } from './client-notifications.service';
 import type { Prisma } from '@prisma/client';
 import { adminSettlementFor, SETTLED_NO_RATING_AR, SETTLED_LABEL_AR } from './settlement-state.service';
+import { adminAudit } from './admin-audit.service';
+import type { FinancialOutcomeSummary } from '../utils/dispute-resolution';
 
 export const ADMIN_SETTLED_MESSAGE = SETTLED_NO_RATING_AR;
 
@@ -135,6 +137,12 @@ export class RatingService {
       prisma.review.findFirst({ where, orderBy: { createdAt: 'desc' } }),
       adminSettlementFor({ projectId, requestId: clientRequestId }, prisma as any)
     ]);
+    // The REAL distribution the admin executed (refund to the client, gross release to the provider, platform commission, provider net) — from the settlement's own
+    // audit row, so the page never claims "completed / the whole amount released" for a project that was closed by a settlement.
+    let distribution: FinancialOutcomeSummary | null = null;
+    if (settlement.settled) {
+      try { distribution = ((await adminAudit.listForEntity('DISPUTE', settlement.disputeId, ['DISPUTE_FINANCIAL_RESOLVED']))[0]?.context?.outcomeSummary as FinancialOutcomeSummary | undefined) ?? null; } catch { distribution = null; }
+    }
     let canRate = false; let reason: 'ALREADY_RATED' | 'ADMIN_SETTLED' | 'NOT_COMPLETED' | null = null; let message = '';
     if (saved) { reason = 'ALREADY_RATED'; message = 'قيّمتَ هذا المشروع مسبقًا'; }
     else if (settlement.settled) { reason = 'ADMIN_SETTLED'; message = SETTLED_NO_RATING_AR; }
@@ -142,7 +150,7 @@ export class RatingService {
     else canRate = true;
     return {
       projectId, requestId: clientRequestId, actor, canRate, reason, message,
-      adminSettled: settlement.settled ? { disputeId: settlement.disputeId, outcome: settlement.outcome, label: SETTLED_LABEL_AR } : null,
+      adminSettled: settlement.settled ? { disputeId: settlement.disputeId, outcome: settlement.outcome, label: SETTLED_LABEL_AR, distribution } : null,
       review: saved ? { id: saved.id, rating: saved.rating, comment: saved.comment ?? null, tags: saved.tags ?? [], createdAt: saved.createdAt } : null
     };
   }

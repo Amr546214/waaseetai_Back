@@ -32,6 +32,7 @@ function setup(t: TestContext, over: { serviceCatalogId?: string | null; contrac
 		}
 	};
 	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+	t.mock.module('./admin-audit.service', { namedExports: { adminAudit: { listForEntity: async () => (over.settledDispute ? [{ context: { outcomeSummary: { outcome: 'SPLIT', refundToClient: 10, releaseToProvider: 15, platformCommission: 1.86, providerNet: 13.14 } } }] : []) } } });
 	t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { ratingReceived: async (p: any) => { providerNotes.push(p); } } } });
 	t.mock.module('./client-notifications.service', { namedExports: { clientNotifications: { send: async (n: any) => { clientNotes.push(n); } }, clientNotificationFor: { ratingReceived: (p: any) => ({ type: 'RATING_RECEIVED', ...p }) } } });
 	return { reviews, clientNotes, providerNotes };
@@ -162,6 +163,7 @@ test('rating status: an admin-settled project says so, hides the form, and keeps
 	const svc = new RatingService();
 	const st = await svc.getStatus('p1', 'cli', 'client');
 	assert.equal(st.canRate, false); assert.equal(st.adminSettled.label, 'أُغلق بتسوية نزاع');
+	assert.deepEqual(st.adminSettled.distribution, { outcome: 'SPLIT', refundToClient: 10, releaseToProvider: 15, platformCommission: 1.86, providerNet: 13.14 }, 'the real executed distribution, never "the whole amount released"');
 	assert.equal(st.review.rating, 4, 'history stays visible, separate from the eligibility of a NEW review');
 	const prov = await svc.getStatus('p1', 'prov', 'provider');
 	assert.equal(prov.reason, 'ADMIN_SETTLED'); assert.equal(prov.message, 'أُغلق المشروع بتسوية نزاع، ولا يتاح تقييمه'); assert.equal(prov.review, null);

@@ -386,6 +386,8 @@ test('pg: a settled project shows the settlement and the historical review, and 
 	const st = await ratingService.getStatus(w.project.id, w.client.id, 'client');
 	assert.equal(st.canRate, false); assert.equal(st.adminSettled?.label, 'أُغلق بتسوية نزاع');
 	assert.equal(st.review?.rating, 2, 'the historical review is still readable');
+	assert.equal(st.adminSettled?.distribution?.refundToClient, 20, 'the executed distribution (refund 20, release 0) is what the page shows');
+	assert.equal(st.adminSettled?.distribution?.releaseToProvider, 0);
 	const prov = await ratingService.getStatus(w.project.id, w.provider.id, 'provider');
 	assert.equal(prov.reason, 'ADMIN_SETTLED'); assert.equal(prov.canRate, false);
 	assert.equal(await w.prisma.review.count({ where: { projectId: w.project.id } }), 1, 'nothing was deleted or added');
