@@ -244,12 +244,15 @@ const roleOfAccountType = (type: AccountType): UserRole | null => {
  * (`activeRole`) must be one of the allowed sides. Merely holding the role inside `roles` is not enough — every account also carries CLIENT, so a provider acting as a
  * provider must not reach the client's flows (and the other way round). No active role falls back to the account type's own role.
  */
-export const authorizeActiveRole = (...allowedAccountTypes: AccountType[]) => {
+export const authorizeActiveRoleWithMessage = (message: string, ...allowedAccountTypes: AccountType[]) => {
   const allowedRoles = new Set(allowedAccountTypes.map(roleOfAccountType).filter((r): r is UserRole => r !== null));
   return (req: Request, _res: Response, next: NextFunction) => {
     if (!req.user) return next(new AppError('غير مصرح لك بالوصول، يرجى تسجيل الدخول', 401));
     const acting = req.user.activeRole ?? roleOfAccountType(req.user.accountType);
     if (acting && allowedRoles.has(acting)) return next();
-    return next(new AppError('غير مصرح لك بالوصول لهذه الصلاحية', 403));
+    return next(new AppError(message, 403));
   };
 };
+
+export const authorizeActiveRole = (...allowedAccountTypes: AccountType[]) =>
+  authorizeActiveRoleWithMessage('غير مصرح لك بالوصول لهذه الصلاحية', ...allowedAccountTypes);
