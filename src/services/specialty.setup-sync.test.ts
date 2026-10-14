@@ -83,9 +83,10 @@ test('wiring: the setup save, the specialty edit and the setup test all create /
 	const ctrl = src('controllers/provider-profile.controller.ts');
 	assert.match(ctrl, /specialtyService\.trySyncProviderSpecialties\(result\.id\)/);
 	assert.match(src('services/provider-profile.service.ts'), /specialtyService\.trySyncProviderSpecialties\(updatedProfile\.id\)/);
-	const gw = src('sockets/setup-test.gateway.ts');
-	assert.match(gw, /specialtyService\.applySetupTestToSpecialties\(session\.profileId, score, passed\)/);
-	assert.ok(gw.indexOf("setupTestStatus: 'COMPLETED'") < gw.indexOf('applySetupTestToSpecialties'), 'the specialties are recorded after the score is stored');
+	assert.match(src('sockets/setup-test.gateway.ts'), /completeSetupTest\(session\.profileId, score, passed\)/);
+	const done = src('services/setup-test-completion.service.ts');
+	assert.match(done, /specialtyService\.applySetupTestToSpecialties\(profileId, score, passed, db\)/);
+	assert.ok(done.indexOf("setupTestStatus: 'COMPLETED'") < done.indexOf('applySetupTestToSpecialties'), 'the specialties are recorded after the score is stored');
 });
 
 test('selectSpecialty never resets a passed / approved / under-review / locked specialty to PENDING_PROOF', () => {

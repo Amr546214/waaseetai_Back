@@ -28,8 +28,9 @@ export async function ensureOnboardingAccreditationSamples(profileId: string, db
 		let row = rows.find(r => [r.specialty?.nameAr, r.specialty?.name, r.specialty?.nameEn].some(n => norm(n) && norm(n) === specName));
 		if (!row && rows.length === 1) row = rows[0]; // a single chosen specialty: the sample can only belong to it
 		if (!row) continue;
-		const attachments = [...new Set([...(item.tags ?? []), ...(item.coverImage ? [item.coverImage] : [])].filter(Boolean))];
 		const description = norm(item.description);
+		// the wizard stores the work FILE url in `description` and the proof files in `tags`: both are evidence the admin must be able to open
+		const attachments = [...new Set([...(/^https?:\/\//i.test(description) ? [description] : []), ...(item.tags ?? []), ...(item.coverImage ? [item.coverImage] : [])].filter(Boolean))];
 		if (!description && !attachments.length && !item.projectUrl) continue; // nothing to review
 		const key = `${row.id}::${item.title}`;
 		const g = groups.get(key);

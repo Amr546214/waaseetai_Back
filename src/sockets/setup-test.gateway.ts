@@ -1,4 +1,4 @@
-import { tryEnsureOnboardingAccreditationSamples } from '../services/onboarding-accreditation.service';
+import { completeSetupTest } from '../services/setup-test-completion.service';
 import { SPECIALTY_TEST_PASS_SCORE, SPECIALTY_TEST_QUESTION_COUNT, SPECIALTY_TEST_TIME_LIMIT_MINUTES } from '../constants/specialty-test';
 import { Socket, Server as SocketIOServer } from 'socket.io';
 import jwt from 'jsonwebtoken';
@@ -106,21 +106,14 @@ export class SetupTestGateway {
       }
 
       try {
-        await prisma.providerProfile.update({
-          where: { id: session.profileId },
-          data: { setupTestScore: score, setupTestStatus: 'COMPLETED' }
-        });
+        // Records the result, applies it to the specialty rows (a fact, never an approval) and — only now that the test is really COMPLETED —
+        // registers the onboarding sample as an AccreditationSample waiting for the admin.
+        await completeSetupTest(session.profileId, score, passed);
       } catch (err: any) {
         console.error('[SetupTestGateway] profile write failed:', err?.message);
         socket.emit('setup_test:error', { message: SETUP_TEST_GRADING_FAILED_MESSAGE, retryable: true });
         return;
       }
-
-      // The setup test is the assessment of the specialties chosen at signup: record the result on the provider's specialty rows (a fact, never an approval).
-      try { await specialtyService.applySetupTestToSpecialties(session.profileId, score, passed); } catch (err: any) { console.error('[SetupTestGateway] specialty write failed:', err?.message); }
-
-      // The onboarding sample becomes a real AccreditationSample waiting for the admin (idempotent; the test result alone never opens the dashboard).
-      await tryEnsureOnboardingAccreditationSamples(session.profileId);
 
       this.testSessions.delete(userId);
       socket.emit('setup_test:result', {

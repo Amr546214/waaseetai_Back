@@ -14,7 +14,6 @@ import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../u
 import { sessionService } from '../services/session.service';
 import { computeProviderCompletion } from '../utils/completion-calculators';
 import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
-import { tryEnsureOnboardingAccreditationSamples } from '../services/onboarding-accreditation.service';
 import { normalizeProviderSetupPayload, isProviderSetupComplete } from '../utils/provider-setup-payload';
 
 import { providerBioSuggestSchema, providerSkillsSuggestSchema, setupSkillsSchema } from '../dtos/provider-profile-suggest.dto';
@@ -238,9 +237,6 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		// than trusting `result`, which has neither (no `include` was used on
 		// the upsert above). No more User.profileCompletionPercent=100
 		// hardcode.
-		// The onboarding samples become real AccreditationSample rows (waiting for the admin). Best-effort: never fails the save.
-		await tryEnsureOnboardingAccreditationSamples(result.id);
-
 		const finalProfile = await prisma.providerProfile.findUnique({
 			where: { userId },
 			include: { skills: true, portfolioItems: true }
