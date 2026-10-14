@@ -78,6 +78,13 @@ export interface ReferralAttributionContext {
 	// The waseet_ref_code cookie set by ref.controller.ts::handleReferralClick()
 	// when this user earlier followed an affiliate's /ref/:slug link.
 	refCookieSlug?: string;
+	// The waseet_ref_src cookie (a SourceChannel value) set together with the slug cookie; recorded on Referral.sourceChannel.
+	refCookieSource?: string;
+}
+
+const SOURCE_CHANNELS = ['TIKTOK', 'X_TWITTER', 'INSTAGRAM', 'LINKEDIN', 'OTHER'] as const;
+function isSourceChannel(v: string | undefined): v is (typeof SOURCE_CHANNELS)[number] {
+	return !!v && (SOURCE_CHANNELS as readonly string[]).includes(v);
 }
 
 export class AuthService {
@@ -157,10 +164,12 @@ export class AuthService {
 		};
 
 		let affiliate: { id: string; userId: string } | null = null;
+		let viaCookie = false;
 
 		const cookieSlug = context.refCookieSlug?.trim();
 		if (cookieSlug) {
 			affiliate = await findValidAffiliate(cookieSlug);
+			viaCookie = !!affiliate;
 		}
 
 		if (!affiliate) {
@@ -176,7 +185,13 @@ export class AuthService {
 
 		try {
 			await prisma.referral.create({
-				data: { affiliateId: affiliate.id, referredUserId: newUserId, status: ReferralStatus.PENDING }
+				data: {
+					affiliateId: affiliate.id,
+					referredUserId: newUserId,
+					status: ReferralStatus.PENDING,
+					// the channel is only known when the visitor arrived through a tracked link (cookie); a typed code stays OTHER
+					...(viaCookie && isSourceChannel(context.refCookieSource) ? { sourceChannel: context.refCookieSource } : {})
+				}
 			});
 		} catch (error: any) {
 			if (error?.code === 'P2002') return;
@@ -188,7 +203,7 @@ export class AuthService {
 	/**
 	 * Register a new user
 	 */
-	public async registerUser(rawInput: RegisterInput, referralContext: Pick<ReferralAttributionContext, 'refCookieSlug'> = {}) {
+	public async registerUser(rawInput: RegisterInput, referralContext: Pick<ReferralAttributionContext, 'refCookieSlug' | 'refCookieSource'> = {}) {
 		// validateRequest only validates (it does not replace req.body with the parsed value), so the address is normalised here, where it is stored.
 		const input: RegisterInput = { ...rawInput, email: String(rawInput.email ?? '').trim().toLowerCase() };
 		const googleIdentity = input.googleIdToken ? await this.verifyGoogleIdentity(input.googleIdToken) : undefined;
@@ -233,7 +248,8 @@ export class AuthService {
 		if (input.accountType !== AccountType.MARKETING_BROKER) {
 			await this.resolveReferralAttribution(user.id, {
 				affiliateIdentifier: input.affiliateIdentifier,
-				refCookieSlug: referralContext.refCookieSlug
+				refCookieSlug: referralContext.refCookieSlug,
+				refCookieSource: referralContext.refCookieSource
 			});
 		}
 

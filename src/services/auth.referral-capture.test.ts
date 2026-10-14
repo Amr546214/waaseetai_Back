@@ -45,12 +45,12 @@ function load() {
 const BASE: any = { accountType: 'CLIENT_INDIVIDUAL', firstName: 'Test', lastName: 'User', email: 'new@example.com', phoneCountryCode: '+966', phoneNumber: '500000001', password: 'Password1', agreedToTerms: true };
 const KHALID: Affiliate = { id: 'aff-1', userId: 'aff-user-1', referralSlug: 'khalid2026' };
 
-async function register(extra: any, cookie?: string) {
+async function register(extra: any, cookie?: string, source?: string) {
 	state.referrals = [];
 	state.createError = null;
 	logs.length = 0;
 	const svc = await load();
-	return svc.registerUser({ ...BASE, ...extra }, { refCookieSlug: cookie });
+	return svc.registerUser({ ...BASE, ...extra }, { refCookieSlug: cookie, refCookieSource: source });
 }
 
 test('a valid slug creates a PENDING referral for that marketer (what GET /marketer-overview/referrals lists)', async () => {
@@ -142,4 +142,14 @@ test('registration stores the email trimmed and lower-cased even though validate
 		await svc.registerUser({ ...BASE, email: '  New.User@Example.COM ' }, {});
 	} finally { (authRepository as any).createUserWithProfile = original; }
 	assert.equal(stored.email, 'new.user@example.com');
+});
+
+test('conversion attribution: a tracked-link visit stores its channel on the referral; a typed code or bogus channel stays default', async () => {
+	state.affiliates = [KHALID];
+	await register({}, 'khalid2026', 'TIKTOK');
+	assert.equal(state.referrals[0].sourceChannel, 'TIKTOK');
+	await register({ affiliateIdentifier: 'khalid2026' }, undefined, 'TIKTOK');
+	assert.equal('sourceChannel' in state.referrals[0], false);
+	await register({}, 'khalid2026', 'EVIL');
+	assert.equal('sourceChannel' in state.referrals[0], false);
 });
