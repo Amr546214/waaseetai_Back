@@ -75,6 +75,17 @@ export class AdminUsersController {
 		}
 	}
 
+	static async notifyUser(req: Request, res: Response, next: NextFunction) {
+		try {
+			const parsed = z.object({ message: z.string(), title: z.string().optional(), context: z.object({ type: z.enum(['REQUEST', 'OFFER']), id: z.string().min(1) }).optional() }).safeParse(req.body ?? {});
+			if (!parsed.success) throw new AppError('بيانات الرسالة غير صحيحة', 400);
+			const data = await usersService.notifyUser(adminActor(req), String(req.params.id), parsed.data);
+			res.status(200).json({ success: true, message: 'تم إرسال الرسالة للمستخدم', data });
+		} catch (error) {
+			next(error);
+		}
+	}
+
 	static async getRolesOverview(_req: Request, res: Response, next: NextFunction) {
 		try {
 			res.status(200).json({ success: true, data: await usersService.getRolesOverview() });

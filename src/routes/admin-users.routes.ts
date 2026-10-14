@@ -18,6 +18,7 @@ router.get('/:id', AdminUsersController.getUserDetail);
 router.get('/:id/audit-log', AdminUsersController.getUserAuditLog);
 router.patch('/:id/status', AdminUsersController.updateUserStatus);
 router.patch('/:id/roles', AdminUsersController.updateUserRoles);
+router.post('/:id/notify', AdminUsersController.notifyUser);
 
 // Only SUPER_ADMIN can delete users (enforced by the controller and middleware)
 router.delete('/:id', authorize(AccountType.SUPER_ADMIN), AdminUsersController.deleteUser);

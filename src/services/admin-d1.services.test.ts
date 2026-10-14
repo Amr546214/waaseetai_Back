@@ -205,6 +205,25 @@ test('delete user: refuses self and admin accounts; audits on the actor', async 
 	assert.equal(audit[0].userId, 'sup'); assert.equal(audit[0].eventType, 'USER_DELETED_BY_ADMIN'); assert.equal(audit[0].severity, 'CRITICAL');
 });
 
+test('admin message: validates, refuses self / admins, checks the context belongs to the user, audits and notifies with a real route', async () => {
+	const { AdminUsersService } = await fresh('./admin-users.service.ts'); const svc = new AdminUsersService();
+	notes.length = 0;
+	const audit: any[] = [];
+	current = { user: { findUnique: async () => ({ id: 'c1', accountType: 'CLIENT_INDIVIDUAL', activeRole: 'CLIENT' }) }, clientRequest: { findFirst: async (a: any) => (a.where.id === 'r1' ? { id: 'r1' } : null) }, projectProposal: { findFirst: async (a: any) => (a.where.id === 'o1' ? { id: 'o1' } : null) }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
+	await rejects(svc.notifyUser(admin, 'c1', { message: 'x' }), 400);
+	await rejects(svc.notifyUser(admin, 'adm', { message: 'رسالة صحيحة' }), 403);
+	await rejects(svc.notifyUser(admin, 'c1', { message: 'رسالة صحيحة', context: { type: 'REQUEST', id: 'other' } }), 409);
+	const r = await svc.notifyUser(admin, 'c1', { message: 'يرجى استكمال تفاصيل الطلب', context: { type: 'REQUEST', id: 'r1' } });
+	assert.equal(r.actionUrl, '/client-overview/my-requests/r1');
+	assert.equal(notes[0].type, 'ADMIN_MESSAGE'); assert.equal(notes[0].userId, 'c1');
+	assert.equal(audit[0].eventType, 'ADMIN_MESSAGE_SENT');
+	await rejects(svc.notifyUser(admin, 'c1', { message: 'رسالة صحيحة', context: { type: 'OFFER', id: 'zz' } }), 409);
+	current.user.findUnique = async () => ({ id: 'p1', accountType: 'PROVIDER_INDIVIDUAL', activeRole: 'PROVIDER' });
+	assert.equal((await svc.notifyUser(admin, 'p1', { message: 'رسالة صحيحة', context: { type: 'OFFER', id: 'o1' } })).actionUrl, '/provider-overview/offers');
+	current.user.findUnique = async () => ({ id: 'a2', accountType: 'ADMIN', activeRole: 'ADMIN' });
+	await rejects(svc.notifyUser(admin, 'a2', { message: 'رسالة صحيحة' }), 403);
+});
+
 // ───────────── KYC (provider + client) : decision, audit, notification
 test('provider KYC approve: audited, provider notified with a real provider route; no document -> 400; already verified -> 409', async () => {
 	const { onboardingService } = await fresh('./onboarding.service.ts');

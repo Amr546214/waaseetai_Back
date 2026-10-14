@@ -5,6 +5,10 @@ import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile
 import { AppError } from '../utils/app-error';
 import { AdminActor, adminAuditData } from './admin-audit';
 import { PROVIDER_LEVELS, levelColor } from '../config/levels.config';
+import { notificationService } from './notification.service';
+import { PROVIDER_ROUTES } from './provider-notifications.service';
+import { CLIENT_ROUTES } from './client-notifications.service';
+import { NotificationCategory } from '@prisma/client';
 
 export interface GetUsersQueryParams {
   page?: number;
@@ -501,6 +505,44 @@ export class AdminUsersService {
       }) });
       return row;
     });
+  }
+
+  /**
+   * An admin message to ONE user (a notification, delivered through the user's saved channels). Rules: not to admin accounts, not to yourself, 5-500
+   * chars. An optional context sends the user straight to the right page and is checked against the data (a REQUEST must be the user's own request,
+   * an OFFER must be the user's own offer); without a context the user lands on the home of their ACTIVE role. The send is audit-logged on the user.
+   */
+  async notifyUser(actor: AdminActor, id: string, input: { message: string; title?: string; context?: { type: 'REQUEST' | 'OFFER'; id: string } }) {
+    const message = String(input.message ?? '').trim();
+    if (message.length < 5 || message.length > 500) throw new AppError('نص الرسالة يجب أن يكون بين 5 و500 حرف', 400);
+    const title = String(input.title ?? '').trim().slice(0, 80) || 'رسالة من إدارة وسيط';
+    if (actor.id === id) throw new AppError('لا يمكنك إرسال رسالة لنفسك', 403);
+    const target = await prisma.user.findUnique({ where: { id }, select: { id: true, accountType: true, activeRole: true } });
+    if (!target) throw new AppError('المستخدم غير موجود', 404);
+    if (ADMIN_TYPES.includes(target.accountType)) throw new AppError('لا يمكن مراسلة حساب إداري من هنا', 403);
+
+    let actionUrl: string;
+    let actionText = 'فتح لوحتي';
+    let category: NotificationCategory = NotificationCategory.ALL;
+    const ctx = input.context;
+    if (ctx?.type === 'REQUEST') {
+      const req = await prisma.clientRequest.findFirst({ where: { id: ctx.id, clientProfile: { userId: id } }, select: { id: true } });
+      if (!req) throw new AppError('هذا الطلب لا يخص المستخدم المحدد', 409);
+      actionUrl = CLIENT_ROUTES.request(req.id); actionText = 'عرض الطلب'; category = NotificationCategory.PROJECTS;
+    } else if (ctx?.type === 'OFFER') {
+      const offer = await prisma.projectProposal.findFirst({ where: { id: ctx.id, providerId: id }, select: { id: true } });
+      if (!offer) throw new AppError('هذا العرض لا يخص المستخدم المحدد', 409);
+      actionUrl = PROVIDER_ROUTES.offers; actionText = 'عرض عروضي'; category = NotificationCategory.OFFERS;
+    } else {
+      actionUrl = target.activeRole === UserRole.PROVIDER ? '/provider-overview' : target.activeRole === UserRole.AFFILIATE ? '/marketer-overview' : '/client-overview';
+    }
+
+    await prisma.accountAuditLog.create({ data: adminAuditData({
+      actor, userId: id, eventType: 'ADMIN_MESSAGE_SENT', title: 'رسالة من الإدارة', summary: `أرسلت الإدارة رسالة للمستخدم: ${message.slice(0, 200)}`,
+      details: { context: ctx ?? null }
+    }) });
+    await notificationService.createAndEmit({ userId: id, title, message, category, type: 'ADMIN_MESSAGE', actionUrl, actionText, metadata: { adminId: actor.id, ...(ctx ? { context: ctx } : {}) } });
+    return { sent: true, actionUrl };
   }
 
   /** Real role / account-type counts for the roles page (no invented members, no permission matrix beyond what the code enforces). */
