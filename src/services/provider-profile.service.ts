@@ -436,7 +436,10 @@ export class ProviderProfileService {
 			where: { providerId, reviewerRole: 'CLIENT' },
 			orderBy: { createdAt: 'desc' },
 			take: 20,
-			include: {
+			// Public payload: ONLY what the page shows (the review id for list keys, stars, text, tags, date, the reviewer's name/avatar and the project title).
+			// The internal ids (providerId / clientId / projectId / serviceId / clientRequestId / stageId) and the reviewer role are never sent to visitors.
+			select: {
+				id: true, rating: true, comment: true, tags: true, createdAt: true,
 				client: { select: { firstName: true, lastName: true, avatarUrl: true } },
 				project: { select: { title: true } }
 			}
