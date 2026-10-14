@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createRatingSchema } from '../dtos/rating.dto';
 
 /** An in-memory review table + a mutex that behaves like pg_advisory_xact_lock (held until the transaction callback ends). */
-function setup(t: TestContext, over: { serviceCatalogId?: string | null } = {}) {
+function setup(t: TestContext, over: { serviceCatalogId?: string | null; contractStatus?: string } = {}) {
 	const reviews: any[] = [];
 	const clientNotes: any[] = []; const providerNotes: any[] = [];
 	let chain: Promise<void> = Promise.resolve();
@@ -21,7 +21,7 @@ function setup(t: TestContext, over: { serviceCatalogId?: string | null } = {}) 
 	});
 	const prismaMock: any = {
 		clientRequest: { findUnique: async () => null },
-		contract: { findUnique: async () => ({ id: 'c1', providerId: 'prov', clientId: 'cli', projectId: 'p1', status: 'COMPLETED' }), findFirst: async () => ({ id: 'c1', providerId: 'prov', clientId: 'cli', projectId: 'p1' }) },
+		contract: { findUnique: async () => ({ id: 'c1', providerId: 'prov', clientId: 'cli', projectId: 'p1', status: over.contractStatus ?? 'COMPLETED' }), findFirst: async () => ({ id: 'c1', providerId: 'prov', clientId: 'cli', projectId: 'p1' }) },
 		project: { findUnique: async () => ({ serviceCatalogId: over.serviceCatalogId ?? null }) },
 		projectStage: { findFirst: async () => ({ id: 'st1', status: 'APPROVED' }) },
 		$transaction: async (fn: any) => {
@@ -102,4 +102,12 @@ test('static: the public provider rating percentage keeps one decimal (4.33 of 5
 	const pct = Math.round((13 / 3 / 5) * 1000) / 10;
 	assert.equal(pct, 86.7);
 	assert.equal((Math.round((pct / 20) * 10) / 10).toFixed(1), '4.3');
+});
+
+test('no rating before the project is completed, and an unfinished stage cannot be rated', async t => {
+	setup(t, { contractStatus: 'ACTIVE' });
+	const { RatingService } = await import(`./rating.service.ts?fixture=${Date.now()}-${Math.random()}`);
+	const svc = new RatingService();
+	await assert.rejects(() => svc.rateRequest('p1', 'cli', 'client', { rating: 5 }), (e: any) => e.statusCode === 400);
+	await assert.rejects(() => svc.rateRequest('p1', 'prov', 'provider', { rating: 5 }), (e: any) => e.statusCode === 400);
 });
