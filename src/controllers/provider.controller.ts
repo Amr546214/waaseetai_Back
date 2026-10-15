@@ -17,6 +17,7 @@ import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { providerDeliveriesService } from '../services/provider-deliveries.service';
 import { computeClientAiOfferRating } from '../services/client-ai-offer-rating';
 import { settledProjectIds, SETTLED_LABEL_AR } from '../services/settlement-state.service';
+import { listLifecycles } from '../services/project-lifecycle.service';
 
 export const getProviderStatistics = async (req: Request, res: Response, next: NextFunction) => {
 	try {
@@ -410,6 +411,10 @@ export const getActiveProjects = async (req: Request, res: Response, next: NextF
 				status,
 				statusLabel,
 				...state,
+				// The dispute freeze (approval / release only) is shown by the list too; delivery stays allowed.
+				hasActiveDispute: disputeByProject.has(project.id),
+				operationalStatus: c.status === 'ACTIVE' ? 'ACTIVE' : 'PENDING_START',
+				closedBySettlement: false,
 				progress,
 				providerName: clientName, // "providerName" in frontend interface actually represents the other party (client)
 				providerInitial: clientName.charAt(0) || 'ع',
@@ -551,7 +556,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 		const contracts = await prisma.contract.findMany({
 			where: { providerId },
 			include: {
-				project: true,
+				project: { include: { escrow: true } },
 				client: {
 					select: {
 						firstName: true,
@@ -604,7 +609,13 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 		const archivedList: any[] = [];
 		// Projects closed by an admin financial dispute settlement: shown as such, never as "completed".
 		const settledIds = await settledProjectIds([...contracts.map(c => c.projectId), ...projects.map(p => p.id)]);
-		const settledExtra = (id: string) => (settledIds.has(id) ? { settled: true, statusLabel: SETTLED_LABEL_AR } : {});
+		// ONE lifecycle per archived contract: the same state and the same money as the detail pages (a settled project is its own end state, never "completed").
+		const lifecycleMap = await listLifecycles(contracts.map(c => ({ projectId: c.projectId, contractStatus: c.status, price: c.price, escrow: c.project?.escrow ?? null })));
+		const settledExtra = (id: string) => {
+			const lc = lifecycleMap.get(id);
+			const base = settledIds.has(id) ? { settled: true, statusLabel: SETTLED_LABEL_AR } : {};
+			return lc ? { ...base, operationalStatus: lc.operationalStatus, closureReason: lc.closureReason, completedByDelivery: lc.completedByDelivery, closedBySettlement: lc.closedBySettlement, hasActiveDispute: lc.hasActiveDispute, financial: lc.financial } : base;
+		};
 
 		// Filter contracts that are completed, cancelled, or archived/disputed
 		for (const c of contracts) {
@@ -620,9 +631,11 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				continue;
 			}
 
-			let status: 'done' | 'cancel' | 'arch' = 'done';
+			let status: 'done' | 'cancel' | 'arch' | 'settled' = 'done';
 			if (isCancel) status = 'cancel';
 			else if (isArch) status = 'arch';
+			// Closed by a dispute settlement: its own state (never "done"), whatever the stored contract / project status is.
+			if (settledIds.has(c.projectId)) status = 'settled';
 
 			const clientName = `${c.client?.firstName || 'عميل'} ${c.client?.lastName || ''}`.trim();
 			const displayId = `PRJ-${p.id.substring(0, 4).toUpperCase()}`;
@@ -649,7 +662,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				continue;
 			}
 
-			const status: 'done' | 'cancel' | 'arch' = p.status === ProjectStatus.COMPLETED ? 'done' : 'arch';
+			const status: 'done' | 'cancel' | 'arch' | 'settled' = settledIds.has(p.id) ? 'settled' : p.status === ProjectStatus.COMPLETED ? 'done' : 'arch';
 			const clientName = `${p.client?.firstName || 'عميل'} ${p.client?.lastName || ''}`.trim();
 			const displayId = `PRJ-${p.id.substring(0, 4).toUpperCase()}`;
 			const dateFormatted = new Date(p.updatedAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'long' });

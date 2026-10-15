@@ -60,6 +60,7 @@ function makeWorld(t: TestContext, init: WorldInit = {}) {
     if (where.projectId && d.projectId !== where.projectId) return false;
     if (where.requestId && d.requestId !== where.requestId) return false;
     if (where.status?.in && !where.status.in.includes(d.status)) return false;
+    if (where.resolution?.in && !where.resolution.in.includes(d.resolution)) return false;
     if (typeof where.status === 'string' && d.status !== where.status) return false;
     if (where.OR && !where.OR.some((w: Row) => matchDispute(d, w))) return false;
     return true;
@@ -544,7 +545,7 @@ test('after a financial decision a later approval cannot release again (contract
   const { disputeService, projectProgressService } = await loadServices(t, w);
   await disputeService.resolveFinancial('disp-x', 'admin-1', fin({ outcome: 'REFUND_CLIENT', refundToClient: 1000, releaseToProvider: 0 }));
   w.prisma.contract.findFirst = async () => clone({ ...w.get().contract, project: { title: 'x' }, provider: {} });
-  await assert.rejects(() => approve(projectProgressService), (e: any) => e.statusCode === 403);
+  await assert.rejects(() => approve(projectProgressService), (e: any) => e.statusCode === 409 && /تسوية نزاع/.test(e.message));
   assert.equal(w.get().escrow.releasedAmount, 0);
 });
 

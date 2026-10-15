@@ -146,6 +146,8 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
   const prismaMock = {
     contract: { findFirst: async () => ({ ...contract }) },
     projectStage: { findFirst: async () => ({ ...stage }) },
+    // the lifecycle pre-check (outside the transaction) reads the disputes too; the authoritative locked re-check stays inside the transaction (tx.dispute)
+    dispute: { findFirst: async () => null, count: async () => (opts.freezeActive ? 1 : 0) },
     $transaction: async (fn: any) => fn(tx)
   };
 
@@ -429,7 +431,9 @@ test('regression: revision decision does not touch points/gamification at all', 
 // coverage (existing guards, verified not weakened by this change).
 // ============================================================================
 
-async function loadProjectProgressServiceWithCustomPrisma(t: TestContext, prismaMock: any) {
+async function loadProjectProgressServiceWithCustomPrisma(t: TestContext, prismaMockIn: any) {
+  // the lifecycle pre-check reads the disputes: no dispute unless the test brings its own delegate
+  const prismaMock = { dispute: { findFirst: async () => null, count: async () => 0, findMany: async () => [] }, ...prismaMockIn };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   t.mock.module('./notification.service', { namedExports: { notificationService: { emitStored: async () => {} } } });
   t.mock.module('./email.service', { namedExports: { emailService: { sendProjectCompletionRewardEmail: async () => {} } } });
@@ -467,7 +471,7 @@ test('reviewDelivery: the real owning client DOES pass the ownership check (proc
   // Fails later for an unrelated reason (no matching stage in this fixture) — proving ownership itself was NOT what rejected it.
   await assert.rejects(
     () => projectProgressService.reviewDelivery('real-client', 'contract-1', 'stage-1', 'approve'),
-    /لا يوجد تسليم جديد بانتظار المراجعة/
+    /غير موجودة ضمن هذا العقد/
   );
 });
 
@@ -486,7 +490,7 @@ test('reviewDelivery: an already-approved stage (not just a mid-transaction race
 
   await assert.rejects(
     () => projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve'),
-    /لا يوجد تسليم جديد بانتظار المراجعة/
+    /اعتُمدت هذه المرحلة مسبقًا/
   );
   // Rejected before the transaction (and therefore before any escrow/points write) ever runs.
   assert.equal(transactionSpy.mock.callCount(), 0);
