@@ -8,7 +8,7 @@ import { loginLimiters, otpSendLimiter, otpSendGate, otpVerifyLimiters, normaliz
 // The key is normalised (trim + lower-case) so different spellings of one account share one bucket, and the limiters are mounted AFTER the
 // schema validation so malformed requests never consume (or fill) a bucket.
 const byEmail = (req: { body?: { email?: unknown } }) => normalizeOtpIdentifier(req.body?.email);
-const byUserId = (req: { body?: { userId?: unknown } }) => { const id = normalizeOtpIdentifier(req.body?.userId); return id ? `user:${id}` : undefined; };
+const byUserId = (req: { body?: { userId?: unknown; email?: unknown } }) => { const id = normalizeOtpIdentifier(req.body?.userId); return id ? `user:${id}` : byEmail(req); };
 import { authenticate, authorize, requireActiveUser } from '../../middlewares/auth.middleware';
 import { AccountType } from '@prisma/client';
 import { memoryUpload } from '../../utils/cloudinary-storage';
@@ -36,7 +36,7 @@ router.post(
 router.post(
   '/verify-otp',
   validateRequest(verifyOtpSchema),
-  ...otpVerifyLimiters((req) => req.body?.userId),
+  ...otpVerifyLimiters((req) => req.body?.userId ?? req.body?.email),
   authController.verifyOtp
 );
 

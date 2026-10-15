@@ -70,18 +70,19 @@ test('register: emailSent=true when SMTP accepts; the code lives 10 minutes (as 
   const { created, sent, logs } = setup(t);
   const { authService } = await load();
   const result = await authService.registerUser(REGISTER_INPUT);
-  assert.deepEqual(result, { userId: 'user-1', emailSent: true, accountCreated: true });
+  assert.deepEqual(result, { userId: 'user-1', accountCreated: true });
+  await new Promise((r) => setImmediate(r)); // the send is not awaited by register
   const lifetime = created[0].expiresAt.getTime() - created[0].at; // relative to when the code was created (bcrypt may be slow)
   assert.ok(lifetime >= 10 * MIN - 2000 && lifetime <= 10 * MIN + 2000, `lifetime ${lifetime}`);
   assert.ok(logs.every(l => !l.includes(sent[0].code)), 'no clear-text OTP in the logs');
 });
 
-test('register: SMTP failure -> emailSent=false (the account exists, the UI must not say "sent")', async (t) => {
+test('register: SMTP failure is only logged (the public answer is uniform; the user resends from the code step)', async (t) => {
   const { logs, sent } = setup(t, { sendOk: false });
   const { authService } = await load();
   const result = await authService.registerUser(REGISTER_INPUT);
-  assert.equal(result.emailSent, false);
   assert.equal(result.userId, 'user-1');
+  await new Promise((r) => setImmediate(r));
   assert.ok(logs.some(l => /NOT delivered/.test(l)));
   assert.ok(logs.every(l => !l.includes(sent[0].code)));
 });
