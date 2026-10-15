@@ -4,6 +4,7 @@ import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { AppError } from '../utils/app-error';
 import { clientIpKey, identityKey, verifiedUserId } from '../utils/rate-limit-identity';
 import { createStrictStore } from '../utils/rate-limit-store';
+import { BoundedRateLimitStore } from '../utils/bounded-rate-limit-store';
 import { formatWaitArabic, otpSendThrottle, otpThrottleMessage } from '../utils/otp-send-throttle';
 
 dotenv.config();
@@ -226,36 +227,107 @@ export const normalizeOtpIdentifier = (value: unknown): string | undefined => {
 /** Bucket key of the OTP-verification limiter: the client address AND the normalised identifier. */
 export const otpVerifyKey = (ip: string | undefined, identifier: string | undefined): string => `${ipKeyGenerator(ip || '0.0.0.0')}|${identifier ?? '-'}`;
 
+/** Cap of live keys per pre-authentication limiter (identifier keys come from the request body; see BoundedRateLimitStore). */
+const PREAUTH_MAX_KEYS = positiveIntEnv(process.env.RL_PREAUTH_MAX_KEYS, 20_000);
+const HOUR = 60 * 60 * 1000;
+
+/** Longest identifier we key on; longer values are not valid emails / uuids and fall back to the per-address limiters only. */
+const IDENTIFIER_MAX_LENGTH = 254;
+/** Normalised identifier for limiter keys: trimmed, lower-cased, bounded. Nothing is looked up, so existing and unknown accounts get identical treatment. */
+export const limiterIdentifier = (value: unknown): string | undefined => {
+  const v = normalizeOtpIdentifier(value);
+  return v && v.length <= IDENTIFIER_MAX_LENGTH ? v : undefined;
+};
+
+interface PreAuthBucketSpec {
+  name: string;
+  tier: string;
+  limit: number;
+  windowMs?: number;
+  /** progressive lockout cap in windows (1 = none) */
+  maxMultiplier?: number;
+  /** true = every request counts (flood guard); false = only responses with status >= 400 count */
+  countAll?: boolean;
+  /** return undefined to skip this bucket for the request (no usable identifier) */
+  key: (req: Request) => string | undefined;
+}
+
+/**
+ * One pre-authentication bucket. The counter is raised BEFORE the handler runs (so concurrent guesses cannot slip past) and, unless
+ * `countAll`, handed back when the response is a success; failed attempts (status >= 400) keep it. Bounded in-memory store by default,
+ * the shared postgres store when RATE_LIMIT_STORE=postgres.
+ */
+const preAuthBucket = (spec: PreAuthBucketSpec): RequestHandler => {
+  const store = createStrictStore(spec.name) ?? new BoundedRateLimitStore({ limit: spec.limit, maxKeys: PREAUTH_MAX_KEYS, maxMultiplier: spec.maxMultiplier ?? 1 });
+  return rateLimit({
+    windowMs: spec.windowMs ?? HOUR,
+    limit: spec.limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: !spec.countAll,
+    validate: { keyGeneratorIpFallback: false },
+    passOnStoreError: true,
+    store,
+    keyGenerator: (req) => spec.key(req) as string,
+    skip: (req) => !RATE_LIMIT_ENABLED || spec.key(req) === undefined,
+    handler: (req, res, next) => { next(rateLimited(req, res, 'محاولات كثيرة، حاول مرة أخرى بعد', spec.tier)); }
+  });
+};
+
+const idKey = (identifier: (req: Request) => unknown) => (req: Request) => limiterIdentifier(identifier(req));
+
+/** Numbers of the pre-authentication tiers (env override RL_*; reasoning in docs/proposals/rate-limit-tiers.md). */
+export const PREAUTH = {
+  // login (password): failed attempts
+  LOGIN_ID_IP: positiveIntEnv(process.env.RL_LOGIN_ID_IP, 6),     // one account from one address
+  LOGIN_ID: positiveIntEnv(process.env.RL_LOGIN_ID, 20),          // one account from ALL addresses
+  LOGIN_IP: positiveIntEnv(process.env.RL_LOGIN_IP, 60),          // one address across ALL accounts (credential spraying)
+  LOGIN_IP_ALL: positiveIntEnv(process.env.RL_LOGIN_IP_ALL, 300), // one address, every request incl. successes (flood guard)
+  // second login step (code sent at login) and Google sign-in
+  STEP_ID_IP: positiveIntEnv(process.env.RL_LOGIN_STEP_ID_IP, 10),
+  STEP_ID: positiveIntEnv(process.env.RL_LOGIN_STEP_ID, 30),
+  STEP_IP: positiveIntEnv(process.env.RL_LOGIN_STEP_IP, 60),
+  // OTP verify (verify-otp, verify-reset-code, reset-password)
+  OTPV_ID_IP: AUTH_RATE_LIMIT_MAX,                                // unchanged (10)
+  OTPV_IP: AUTH_RATE_LIMIT_MAX * 5,                               // unchanged (50)
+  OTPV_ID: positiveIntEnv(process.env.RL_OTPV_ID, AUTH_RATE_LIMIT_MAX * 3) // new: one account from all addresses
+} as const;
+
+/**
+ * Login family limiters. `identifier` = getter of the (validated) email / userId in the body; undefined = address-only buckets.
+ * Order matters: address buckets first, so a flood of invented identifiers from one address is cut before it creates identifier keys.
+ *  1. every request per address (flood guard, counts successes too)
+ *  2. failures per address across all accounts (spraying ceiling)
+ *  3. failures per account + address (guessing one account from one place)
+ *  4. failures per account from ALL addresses (distributed guessing), with progressive lockout
+ * Nothing here reads the database, so a known and an unknown identifier see the same counters and the same 429.
+ */
+export const loginLimiters = (identifier: (req: Request) => unknown, prefix: 'login' | 'login_step' | 'google' = 'login'): RequestHandler[] => {
+  const idOf = idKey(identifier);
+  const ip = (req: Request) => clientIpKey(req);
+  const pw = prefix === 'login';
+  const n = { ip: pw ? PREAUTH.LOGIN_IP : PREAUTH.STEP_IP, idIp: pw ? PREAUTH.LOGIN_ID_IP : PREAUTH.STEP_ID_IP, id: pw ? PREAUTH.LOGIN_ID : PREAUTH.STEP_ID };
+  return [
+    preAuthBucket({ name: `${prefix}:ipall`, tier: `${prefix}_ip_flood`, limit: PREAUTH.LOGIN_IP_ALL, countAll: true, key: ip }),
+    preAuthBucket({ name: `${prefix}:ip`, tier: `${prefix}_ip`, limit: n.ip, maxMultiplier: 4, key: ip }),
+    preAuthBucket({ name: `${prefix}:idip`, tier: `${prefix}_account_ip`, limit: n.idIp, maxMultiplier: 4, key: (req) => { const id = idOf(req); return id ? `${ip(req)}|${id}` : undefined; } }),
+    preAuthBucket({ name: `${prefix}:id`, tier: `${prefix}_account`, limit: n.id, maxMultiplier: 8, key: idOf })
+  ];
+};
+
 /**
  * Limiters for the endpoints that VERIFY a code (verify-otp, verify-reset-code, reset-password). Mounted AFTER the schema validation, so
- * malformed requests never reach them, and keyed by IP + normalised identifier, so a third party cannot lock another user out by
- * hammering that user's email/userId from a different address. Successful requests are not counted (`skipSuccessfulRequests`). A
- * second, looser per-IP bucket stops one address from cycling through identifiers. The per-code attempt lock (5 guesses) is the
- * real brute-force defence; these only bound the request volume.
+ * malformed requests never reach them. Failures only (`skipSuccessfulRequests`):
+ *  - per address across identifiers (50 / h, unchanged) stops one address cycling through accounts;
+ *  - per address + normalised identifier (10 / h, unchanged) so a third party cannot lock another user out from a different address;
+ *  - NEW per identifier across ALL addresses (30 / h, progressive lockout) bounds distributed guessing against one account.
+ * The per-code attempt lock (5 guesses) is the real brute-force defence and is untouched; these only bound the request volume.
  */
-export const otpVerifyLimiters = (identifier: (req: Request) => unknown) => [
-  rateLimit({
-    windowMs: AUTH_RATE_LIMIT_WINDOW_MS,
-    max: AUTH_RATE_LIMIT_MAX,
-    standardHeaders: true,
-    legacyHeaders: false,
-    skipSuccessfulRequests: true,
-    skip: skipWhenRateLimitDisabled,
-    store: createStrictStore('otpv:id'),
-    validate: { keyGeneratorIpFallback: false }, // the key is built with ipKeyGenerator() inside otpVerifyKey()
-    keyGenerator: (req) => otpVerifyKey(req.ip, normalizeOtpIdentifier(identifier(req))),
-    handler: (req, res, next) => { next(rateLimited(req, res, 'محاولات كثيرة، حاول مرة أخرى بعد')); }
-  }),
-  rateLimit({
-    windowMs: AUTH_RATE_LIMIT_WINDOW_MS,
-    max: AUTH_RATE_LIMIT_MAX * 5,
-    standardHeaders: true,
-    legacyHeaders: false,
-    skipSuccessfulRequests: true,
-    skip: skipWhenRateLimitDisabled,
-    store: createStrictStore('otpv:ip'),
-    validate: { keyGeneratorIpFallback: false },
-    keyGenerator: (req) => clientIpKey(req),
-    handler: (req, res, next) => { next(rateLimited(req, res, 'محاولات كثيرة، حاول مرة أخرى بعد')); }
-  })
-];
+export const otpVerifyLimiters = (identifier: (req: Request) => unknown) => {
+  const idOf = idKey(identifier);
+  return [
+    preAuthBucket({ name: 'otpv:ip', tier: 'otp_verify_ip', limit: PREAUTH.OTPV_IP, key: (req) => clientIpKey(req) }),
+    preAuthBucket({ name: 'otpv:id', tier: 'otp_verify_account_ip', limit: PREAUTH.OTPV_ID_IP, maxMultiplier: 4, key: (req) => { const id = idOf(req); return id ? otpVerifyKey(req.ip, id) : undefined; } }),
+    preAuthBucket({ name: 'otpv:acct', tier: 'otp_verify_account', limit: PREAUTH.OTPV_ID, maxMultiplier: 8, key: idOf })
+  ];
+};

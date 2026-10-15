@@ -13,6 +13,8 @@ export const OTP_SEND_MIN_INTERVAL_MS = 60 * 1000;
 export const OTP_SEND_PER_RECIPIENT_PER_HOUR = 5;
 export const OTP_SEND_PER_IP_PER_HOUR = 30;
 const HOUR_MS = 60 * 60 * 1000;
+/** Upper bound of live keys per map (memory bound; expired keys are swept long before this in normal use). */
+export const OTP_SEND_MAX_KEYS = 20_000;
 
 export type OtpThrottleReason = 'interval' | 'recipient-hour' | 'ip-hour';
 
@@ -120,6 +122,10 @@ export class OtpSendThrottle {
   /** Drops expired entries once in a while so the maps cannot grow without bound. */
   private sweepCounter = 0;
   private sweep(now: number) {
+    // hard cap: recipients come from the request body, so the maps may never grow past MAX_KEYS (oldest-inserted keys go first)
+    for (const map of [this.recipients, this.ips]) {
+      while (map.size > OTP_SEND_MAX_KEYS) { const first = map.keys().next(); if (first.done) break; map.delete(first.value); }
+    }
     if (++this.sweepCounter % 200 !== 0) return;
     for (const map of [this.recipients, this.ips]) {
       for (const [k, list] of map) {
