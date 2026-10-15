@@ -12,6 +12,7 @@ import { notificationService } from './notification.service';
 import { projectProgressService } from './project-progress.service';
 import { providerNotifications } from './provider-notifications.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
+import { emitAmendmentEvent } from './amendment-events';
 
 const AMENDMENT_TYPES: AmendmentType[] = ['SCOPE', 'BUDGET', 'DURATION', 'MIXED'];
 const TITLE_MAX_LENGTH = 200;
@@ -172,7 +173,8 @@ export class ProjectAmendmentService {
   async listAmendments(clientId: string) {
     const rows = await prisma.projectAmendment.findMany({
       where: { clientId },
-      orderBy: { updatedAt: 'desc' },
+      // newest first by the REAL creation time (a later status change does not move a row), id breaks a tie deterministically
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       include: {
         project: { select: { title: true } },
         provider: { select: { firstName: true, lastName: true } },
@@ -248,6 +250,8 @@ export class ProjectAmendmentService {
     });
     // Delivered through the provider's saved channels (push / e-mail) once the row is committed.
     await providerNotifications.deliverStored([providerNotificationId]);
+    // ONE project event for the committed request (keyed by the amendment id: a retry creates nothing twice).
+    await emitAmendmentEvent('created', created, clientId, { price: contract.price, durationDays: contract.durationDays });
 
     const convMap = await this.resolveConversationIds([{ projectId: created.projectId, providerId: created.providerId }]);
     return toPublicAmendment(created, convMap.get(`${created.projectId}:${created.providerId}`) || null);
@@ -258,7 +262,7 @@ export class ProjectAmendmentService {
   async listProviderAmendments(providerId: string, projectId: string) {
     const rows = await prisma.projectAmendment.findMany({
       where: { providerId, projectId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       include: { project: { select: { title: true } }, provider: { select: { firstName: true, lastName: true } },
         contract: { select: { price: true, durationDays: true, termsVersion: true, status: true } } }
     });
@@ -311,6 +315,7 @@ export class ProjectAmendmentService {
 
     // Delivered through the client's saved channels (in-app push / e-mail) once the row is committed.
     await clientNotifications.deliverStored([clientNotificationId]);
+    await emitAmendmentEvent('created', created, providerId, { price: contract.price, durationDays: contract.durationDays });
 
     const convMap = await this.resolveConversationIds([{ projectId: created.projectId, providerId: created.providerId }]);
     return toPublicAmendment(created, convMap.get(`${created.projectId}:${created.providerId}`) || null);
@@ -434,7 +439,10 @@ export class ProjectAmendmentService {
       });
       if (stored.count !== 1) throw new AppError('طلب التعديل لم يعد معلّقًا', 409);
     });
-    return (await this.publicById(amendmentId)).data;
+    const { updated, data } = await this.publicById(amendmentId);
+    // The authorization only (nothing is charged yet): the event says exactly that, and carries no code.
+    await emitAmendmentEvent('funding_authorised', updated, clientId);
+    return data;
   }
 
   // ── Answer ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -457,6 +465,7 @@ export class ProjectAmendmentService {
     }
     const { updated, data } = await this.publicById(amendmentId);
     await providerNotifications.amendmentAnswered({ providerId: updated.providerId, projectId: updated.projectId, amendmentId, title: updated.title, decision });
+    await emitAmendmentEvent('rejected', updated, clientId);
     return data;
   }
 
@@ -477,6 +486,7 @@ export class ProjectAmendmentService {
     const { updated, data } = await this.publicById(amendmentId);
     // stored + delivered by the safe sender: a notification failure after the decision committed must not turn a successful answer into an error (a retry would only meet a 409)
     await clientNotifications.send(clientNotificationFor.amendmentAnswered({ clientId: updated.clientId, projectId: updated.projectId, amendmentId, title: updated.title, decision }));
+    await emitAmendmentEvent('rejected', updated, providerId);
     return data;
   }
 
@@ -497,6 +507,9 @@ export class ProjectAmendmentService {
     await prisma.$transaction(tx => applyAmendment(tx, pre as any, { id: userId, role: side, paymentOtpId }));
 
     const { updated, data } = await this.publicById(amendmentId);
+    // Post-commit and in order: the decision, then (only because the committed row carries appliedAt) the application.
+    const accepted = await emitAmendmentEvent('accepted', updated, userId);
+    await emitAmendmentEvent('applied', updated, userId, undefined, accepted.createdAt);
     if (side === 'CLIENT') {
       await providerNotifications.amendmentAnswered({ providerId: updated.providerId, projectId: updated.projectId, amendmentId, title: updated.title, decision: 'approve' });
     } else {
@@ -518,6 +531,7 @@ export class ProjectAmendmentService {
       throw new AppError('لا يمكن إلغاء طلب لم يعد معلّقًا', 409);
     }
     const { updated, data } = await this.publicById(amendmentId);
+    await emitAmendmentEvent('cancelled', updated, userId);
     // The other party is told (inbox always, channels per their preferences); a notification failure never fails the cancellation.
     try {
       if (role === 'CLIENT') await providerNotifications.amendmentCancelled({ providerId: updated.providerId, projectId: updated.projectId, amendmentId, title: updated.title });

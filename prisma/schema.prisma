@@ -1604,12 +1604,23 @@ enum MessageStatus {
   READ
 }
 
+// GENERAL: the account's general messages (negotiation rooms and every row that existed before the project context). PROJECT: the one room bound to a
+// contract and its two parties, shown only inside the project's «الرسائل» tab. A PROJECT row is reached by its unique contractId, never by a new row per click.
+enum ConversationKind {
+  GENERAL
+  PROJECT
+}
+
 model Conversation {
   id         String  @id @default(uuid())
   projectId  String  @map("project_id")
   offerId    String? @map("offer_id")
   clientId   String  @map("client_id")
   providerId String  @map("provider_id")
+
+  // Project context (migration 20261018040000_project_message_context, NOT EXECUTED until the owner approves). Old rows stay GENERAL with a NULL contractId.
+  kind       ConversationKind @default(GENERAL)
+  contractId String?          @unique @map("contract_id")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -1618,9 +1629,12 @@ model Conversation {
   project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   client   User      @relation("ClientConversations", fields: [clientId], references: [id])
   provider User      @relation("ProviderConversations", fields: [providerId], references: [id])
+  contract Contract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
   messages Message[]
 
   @@unique([projectId, providerId])
+  @@index([clientId, kind])
+  @@index([providerId, kind])
   @@map("conversations")
 }
 
@@ -1642,12 +1656,16 @@ model Message {
   // Discussion context (project/stage/delivery reference, like WhatsApp reply preview)
   context Json?
 
+  // Deterministic key of a project EVENT message (e.g. "amendment:<id>:created"): the unique index makes a retried request or a socket echo a no-op.
+  eventKey String? @unique @map("event_key")
+
   createdAt DateTime @default(now()) @map("created_at")
 
   // Relations
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender       User         @relation(fields: [senderId], references: [id])
 
+  @@index([conversationId, createdAt, id])
   @@map("messages")
 }
 
@@ -1913,6 +1931,7 @@ model Contract {
   stages                ProjectStage[]
   amendments            ProjectAmendment[]
   termsVersions         ContractTermsVersion[]
+  projectConversation   Conversation?
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt
 

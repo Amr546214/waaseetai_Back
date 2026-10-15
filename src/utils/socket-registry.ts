@@ -4,6 +4,7 @@ import type { Server } from 'socket.io';
 // user's live connections without importing the whole socket stack.
 let server: Server | null = null;
 export const setSocketServer = (s: Server | null): void => { server = s; };
+export const getSocketServer = (): Server | null => server;
 
 export const ACCOUNT_NOT_ACTIVE_CODE = 'ACCOUNT_NOT_ACTIVE';
 export const ACCOUNT_NOT_ACTIVE_MESSAGE = 'تم إيقاف الاتصال لأن حسابك لم يعد نشطًا.';
