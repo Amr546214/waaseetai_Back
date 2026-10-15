@@ -45,6 +45,7 @@ function proposalFixture(overrides: Partial<{ id: string; providerId: string; pr
 async function loadService(t: TestContext, opts: { proposals?: ReturnType<typeof proposalFixture>[]; projectProposals?: any[] } = {}) {
   const clientRequestFindFirstArgs: any[] = [];
   const prismaMock: any = {
+    dispute: { findFirst: async () => null, findMany: async () => [], count: async () => 0 },
     clientRequest: {
       findFirst: async (args: any) => {
         clientRequestFindFirstArgs.push(args);

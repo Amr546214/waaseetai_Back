@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { heldEscrowAmount } from './dispute.service';
 import { adminAudit } from './admin-audit.service';
+import { computeLifecycle, listLifecycles, settlementDistributionOf } from './project-lifecycle.service';
 import { adminSettlementFor, adminSettledView, settlementsByProject, stageDisplayStatus, SETTLED_LABEL_AR, SETTLED_DISPUTE_WHERE } from './settlement-state.service';
 
 const settledProjectWhere = { disputes: { some: SETTLED_DISPUTE_WHERE } } as const;
@@ -61,10 +62,12 @@ export class AdminOperationsService {
 		const settledCompleted = await prisma.project.count({ where: { status: ProjectStatus.COMPLETED, ...settledProjectWhere } });
 		if (counts.COMPLETED !== undefined) counts.COMPLETED = Math.max(0, counts.COMPLETED - settledCompleted);
 		counts.CLOSED_BY_SETTLEMENT = settledCompleted;
+		const lifecycleMap = await listLifecycles(items.map(p => ({ projectId: p.id, contractStatus: p.contract?.status ?? null, price: p.contract?.price ?? null, escrow: p.escrow as any })), { db: prisma, audit: adminAudit });
 		const pages = Math.ceil(total / safeLimit);
 		return {
 			items: items.map(p => ({
 				adminSettled: settledView.get(p.id) ?? null, statusLabel: settledView.has(p.id) ? SETTLED_LABEL_AR : null,
+				lifecycle: lifecycleMap.get(p.id) ?? null,
 				id: p.id, title: p.title, status: p.status, createdAt: p.createdAt, deliveryDays: p.deliveryDays,
 				client: party(p.client), provider: party(p.provider),
 				contract: p.contract ? { id: p.contract.id, price: p.contract.price, status: p.contract.status } : null,
@@ -89,7 +92,15 @@ export class AdminOperationsService {
 		const disputes = await prisma.dispute.findMany({ where: { OR: [{ projectId: id }, { requestId: id }] }, orderBy: { createdAt: 'desc' }, select: { id: true, status: true, reason: true, createdAt: true, resolvedAt: true } });
 		const contract = project.contract;
 		const settlement = await adminSettlementFor({ projectId: id });
+		// The shared lifecycle (admin is a viewer: read-only, no operational action is ever allowed to it).
+		const lifecycle = computeLifecycle({
+			viewer: { role: 'admin', isOwner: false }, contractStatus: contract?.status ?? null, contractPrice: contract?.price ?? null, escrow: project.escrow as any,
+			stages: (contract?.stages ?? []).map(s => ({ id: s.id, stepOrder: s.stepOrder, status: s.status, amount: s.amount, approvedAt: s.approvedAt, deliveries: [...s.deliveries].reverse().map(d => ({ status: d.status })) })),
+			activeDisputes: { count: disputes.filter(d => d.status === DisputeStatus.OPEN || d.status === DisputeStatus.UNDER_REVIEW).length, latestId: disputes.find(d => d.status === DisputeStatus.OPEN || d.status === DisputeStatus.UNDER_REVIEW)?.id ?? null },
+			settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId) : null
+		});
 		return {
+			lifecycle, financial: lifecycle.financial,
 			adminSettled: adminSettledView(settlement), statusLabel: settlement.settled ? SETTLED_LABEL_AR : null,
 			id: project.id, title: project.title, description: project.description, status: project.status, createdAt: project.createdAt, deliveryDays: project.deliveryDays, specialty: project.specialty,
 			client: party(project.client), provider: party(project.provider),

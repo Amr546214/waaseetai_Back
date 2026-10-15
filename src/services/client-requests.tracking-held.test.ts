@@ -11,7 +11,7 @@ async function track(t: TestContext, escrow: any) {
   const db: any = {
     clientRequest: { findFirst: async () => request },
     escrow: { findUnique: async () => escrow },
-    dispute: { findFirst: async () => null },
+    dispute: { findFirst: async () => null, findMany: async () => [] },
     project: { findFirst: async () => null },
     contract: { findFirst: async () => null }
   };

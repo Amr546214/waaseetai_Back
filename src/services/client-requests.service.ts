@@ -16,7 +16,9 @@ import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { providerNotifications } from './provider-notifications.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
-import { deliveryCompletedProject, adminSettlementFor, adminSettledView, settlementsByProject, STAGE_CLOSED_BY_SETTLEMENT, SETTLED_LABEL_AR, SETTLED_STAGE_LABEL_AR } from './settlement-state.service';
+import { listLifecycles, activeDisputeCounts } from './project-lifecycle.service';
+import { adminAudit } from './admin-audit.service';
+import { settledProjectIds, deliveryCompletedProject, adminSettlementFor, adminSettledView, settlementsByProject, STAGE_CLOSED_BY_SETTLEMENT, SETTLED_LABEL_AR, SETTLED_STAGE_LABEL_AR } from './settlement-state.service';
 import {
 	mailTransporter,
 	getOtpEmailTemplate,
@@ -469,8 +471,10 @@ export class ClientRequestsService {
 			: [];
 		const contractByRequest = new Map(contracts.map((c: any) => [c.projectId, c.status as string]));
 
+		// a request closed by a dispute settlement is its own stage (never «مكتمل»)
+		const settledRequestIds = await settledProjectIds([...clientRequests.map((r: any) => r.id), ...projects.map((p: any) => p.id)]);
 		const withStage = (row: any, contractStatus: string | null, offerStatuses: string[]) => {
-			const stage = deriveRequestStage({ requestStatus: row.status, contractStatus, offerStatuses });
+			const stage = deriveRequestStage({ requestStatus: row.status, contractStatus, offerStatuses, settled: settledRequestIds.has(row.id) });
 			return { ...row, stage, stageLabel: REQUEST_STAGE_LABEL[stage], stageGroup: REQUEST_STAGE_GROUP[stage] };
 		};
 
@@ -595,6 +599,8 @@ export class ClientRequestsService {
 			})
 			: [];
 		const workspaceMap = new Map(contracts.map(contract => [contract.projectId, contract.id]));
+		// Projects frozen by an open dispute (approval / release is refused by the backend): the list says so.
+		const activeDisputeMap = await activeDisputeCounts(allProjectIds, prisma as any);
 		// Batch 6 — one batched lookup (same pattern as escrowRecords/contracts
 		// above) for the real responsible-employee field, covering BOTH
 		// Project-primary AND ClientRequest-primary items uniformly via the
@@ -650,6 +656,7 @@ export class ClientRequestsService {
 				provider,
 				contract: `CT-${item.id.substring(0, 4).toUpperCase()}`,
 				heldAmount,
+				hasActiveDispute: (activeDisputeMap.get(item.id) ?? 0) > 0,
 				employee: employeeMap.get(item.id) || null,
 				nextStep: item.status === 'PENDING_SIGNATURE' ? (escrow?.status === 'HELD' ? 'بانتظار توقيع مقدم الخدمة لبدء التنفيذ' : 'توقيع العقد وإيداع الضمان لبدء التنفيذ') : 'التسليم النهائي للمشروع، قيد العمل لدى مقدم الخدمة',
 				completedStages: 0,
@@ -688,7 +695,8 @@ export class ClientRequestsService {
 			const completedStages = awaitingSignature ? 0 : approvedStages.length;
 			const reviewStage = milestones.find((m: any) => m.status === 'SUBMITTED');
 			const currentStage = reviewStage || milestones.find((m: any) => m.status !== 'APPROVED') || milestones[milestones.length - 1];
-			const needsReview = !awaitingSignature && (p.status === 'AWAITING_DELIVERY' || Boolean(reviewStage));
+			// A project waits for the client only when a stage was really delivered (stage SUBMITTED); the stored project status alone is not trusted when stage rows exist.
+			const needsReview = !awaitingSignature && (contractStages.length > 0 ? Boolean(reviewStage) : p.status === 'AWAITING_DELIVERY');
 			const displayStatus = awaitingSignature ? 'pending' : needsReview ? 'wait' : ((daysLeft as number) < 0 ? 'late' : 'run');
 			const nextStep = awaitingSignature
 				? (funded ? 'بانتظار توقيع مقدم الخدمة لبدء التنفيذ' : 'توقيع العقد وإيداع الضمان لبدء التنفيذ')
@@ -709,6 +717,7 @@ export class ClientRequestsService {
 				provider,
 				contract: `CT-${p.id.substring(0, 4).toUpperCase()}`,
 				heldAmount,
+				hasActiveDispute: (activeDisputeMap.get(p.id) ?? 0) > 0,
 				employee: employeeMap.get(p.id) || null,
 				nextStep,
 				completedStages,
@@ -774,14 +783,16 @@ export class ClientRequestsService {
 			: [];
 		const reviewMap = new Map(reviews.map(r => [r.projectId, r]));
 		const settledMap = await settlementsByProject(projectIds);
+		// ONE lifecycle for the archive: state, closure reason and the real money (held now / released by stage approvals / the settlement's own figures).
+		const lifecycleMap = await listLifecycles(contracts.map(c => ({ projectId: c.projectId, contractStatus: c.status, price: c.price, escrow: c.project?.escrow ?? null })), { db: prisma, audit: adminAudit });
 
 		const items = contracts.map(c => {
 			const adminSettled = settledMap.get(c.projectId) ?? null;
+			const lc = lifecycleMap.get(c.projectId)!;
 			const providerName = c.provider?.providerProfile?.companyName ||
 				[c.provider?.firstName, c.provider?.lastName].filter(Boolean).join(' ') || 'مقدم خدمة';
 			const escrow = c.project?.escrow;
 			const totalPrice = escrow ? Number(escrow.amount) : c.price;
-			const releasedAmount = escrow ? Number(escrow.releasedAmount || 0) : 0;
 			const review = reviewMap.get(c.projectId);
 			return {
 				id: c.id,
@@ -798,9 +809,17 @@ export class ClientRequestsService {
 					initials: providerName.split(' ').map((n: string) => n[0] || '').join('').substring(0, 2) || 'مـ',
 				},
 				contractReference: `CT-${c.id.substring(0, 4).toUpperCase()}`,
-				totalPrice,
-				releasedAmount,
-				heldAmount: Math.max(0, totalPrice - releasedAmount),
+				// totalPrice = the contract value (historical for a settled project); releasedAmount = released through stage approvals ONLY; heldAmount = money really in the escrow now.
+				totalPrice: lc.financial.contractValue || totalPrice,
+				releasedAmount: lc.financial.releasedByStageApprovals,
+				heldAmount: lc.financial.heldNow,
+				operationalStatus: lc.operationalStatus,
+				operationalLabel: lc.operationalLabel,
+				closureReason: lc.closureReason,
+				completedByDelivery: lc.completedByDelivery,
+				closedBySettlement: lc.closedBySettlement,
+				hasActiveDispute: lc.hasActiveDispute,
+				financial: lc.financial,
 				completedAt: c.updatedAt.toISOString(),
 				category: c.project?.serviceCatalog?.title || c.project?.specialty || '',
 				canRate: c.status === 'COMPLETED' && !review && !adminSettled,
@@ -916,7 +935,7 @@ export class ClientRequestsService {
 		}
 
 		// The signed contract's ProjectStage rows are the single source of truth for the milestones (title, days, amount, real status); the request/offer milestones are only a fallback.
-		const contractRow = await prisma.contract.findFirst({ where: { projectId: requestId, clientId: userId }, select: { price: true, signedAt: true, stages: { orderBy: { stepOrder: 'asc' } } } });
+		const contractRow = await prisma.contract.findFirst({ where: { projectId: requestId, clientId: userId }, select: { price: true, status: true, signedAt: true, stages: { orderBy: { stepOrder: 'asc' } } } });
 		const stageRows = contractRow?.stages ?? [];
 		const settlement = await adminSettlementFor({ projectId: requestId });
 		if (stageRows.length > 0) {
@@ -1002,7 +1021,7 @@ export class ClientRequestsService {
 
 		// Only money really sitting in an escrow counts as held. The branches above work from the offer price and can only ESTIMATE; a project that is not funded holds nothing,
 		// and without real milestones there is no honest progress figure (0, or 100 once completed). This endpoint must never report estimated held amounts.
-		const escrowRow = await prisma.escrow.findUnique({ where: { projectId: requestId }, select: { status: true, amount: true, releasedAmount: true } });
+		const escrowRow = await prisma.escrow.findUnique({ where: { projectId: requestId }, select: { status: true, amount: true, releasedAmount: true, platformCommissionAmount: true, providerNetReleasedAmount: true } });
 		heldAmount = escrowRow && String(escrowRow.status) === 'HELD' ? Math.max(0, Number(escrowRow.amount) - Number(escrowRow.releasedAmount || 0)) : 0;
 		if (realMilestones.length === 0 || timelines.length === 0) progress = rawStatus === 'COMPLETED' && !settlement.settled ? 100 : 0;
 		if (settlement.settled && stageRows.length === 0) {
@@ -1015,6 +1034,10 @@ export class ClientRequestsService {
 			const closed = settlement.settled && t.status !== 'COMPLETED';
 			return { ...t, displayStatus: closed ? STAGE_CLOSED_BY_SETTLEMENT : null, displayStatusLabel: closed ? SETTLED_STAGE_LABEL_AR : null };
 		});
+
+		// The shared lifecycle (same state + money as the archive and the workspace).
+		const lifecycle = (await listLifecycles([{ projectId: requestId, contractStatus: contractRow?.status ?? null, price: contractRow?.price ?? price, escrow: escrowRow as any }], { db: prisma, audit: adminAudit })).get(requestId)!;
+		if (lifecycle.closedBySettlement) { heldAmount = 0; releasedAmount = lifecycle.financial.releasedByStageApprovals; }
 
 		return {
 			project: {
@@ -1029,6 +1052,13 @@ export class ClientRequestsService {
 				daysLeft: daysLeft,
 				adminSettled: adminSettledView(settlement),
 				statusLabel: settlement.settled ? SETTLED_LABEL_AR : null,
+				operationalStatus: lifecycle.operationalStatus,
+				operationalLabel: lifecycle.operationalLabel,
+				closureReason: lifecycle.closureReason,
+				completedByDelivery: lifecycle.completedByDelivery,
+				closedBySettlement: lifecycle.closedBySettlement,
+				hasActiveDispute: lifecycle.hasActiveDispute,
+				financial: lifecycle.financial,
 				milestonesCount: realMilestones.length,
 				completedMilestones: completedMilestones,
 				heldAmount: heldAmount,
@@ -1239,7 +1269,7 @@ export class ClientRequestsService {
 			};
 		});
 
-		const stage = deriveRequestStage({ requestStatus: request.status, contractStatus: contract?.status ?? null, offerStatuses: request.proposals.map(p => p.status) });
+		const stage = deriveRequestStage({ requestStatus: request.status, contractStatus: contract?.status ?? null, offerStatuses: request.proposals.map(p => p.status), settled: (await adminSettlementFor({ projectId: requestId })).settled });
 
 		return {
 			id: request.id,

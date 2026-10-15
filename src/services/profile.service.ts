@@ -10,6 +10,7 @@ import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
 import { computeClientCompletion, computeClientMissingItems } from '../utils/completion-calculators';
 import { logger } from '../config/logger';
 import { getClientLevelInfo } from './gamification.service';
+import { deliveryCompletedProject } from './settlement-state.service';
 import { providerProfileService } from './provider-profile.service';
 import { withoutLegacyAffiliateBankFields } from '../utils/affiliate-payout';
 import { withoutLegacyProviderBankFields } from '../utils/provider-payout';
@@ -181,7 +182,7 @@ export class ProfileService {
       try {
         const [totalRequests, completedProjects, reviewAgg] = await Promise.all([
           user.clientProfile ? prisma.clientRequest.count({ where: { clientProfileId: user.clientProfile.id } }) : Promise.resolve(0),
-          prisma.project.count({ where: { clientId: userId, status: 'COMPLETED' } }),
+          prisma.project.count({ where: deliveryCompletedProject({ clientId: userId }) }),
           prisma.review.aggregate({ where: { clientId: userId, reviewerRole: 'PROVIDER' }, _avg: { rating: true }, _count: { _all: true } })
         ]);
         currentProfileData.totalRequests = totalRequests;

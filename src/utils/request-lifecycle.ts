@@ -4,7 +4,7 @@
 export type RequestStage =
 	| 'DRAFT' | 'OPEN' | 'OFFERS_RECEIVED' | 'UNDER_NEGOTIATION'
 	| 'AWAITING_CLIENT_SIGNATURE' | 'AWAITING_FUNDING' | 'AWAITING_PROVIDER_SIGNATURE'
-	| 'ACTIVE' | 'COMPLETED' | 'CANCELLED' | 'DISPUTED';
+	| 'ACTIVE' | 'COMPLETED' | 'CANCELLED' | 'DISPUTED' | 'CLOSED_BY_SETTLEMENT';
 
 /** The groups the requests list tabs count (every stage belongs to exactly one). */
 export type RequestStageGroup = 'draft' | 'open' | 'pending' | 'active' | 'closed';
@@ -20,7 +20,9 @@ export const REQUEST_STAGE_LABEL: Record<RequestStage, string> = {
 	ACTIVE: 'قيد التنفيذ',
 	COMPLETED: 'مكتمل',
 	CANCELLED: 'ملغي',
-	DISPUTED: 'نزاع مفتوح'
+	DISPUTED: 'نزاع مفتوح',
+	// closed by an admin financial dispute decision: derived, never stored, and never "مكتمل"
+	CLOSED_BY_SETTLEMENT: 'أُغلق بتسوية نزاع'
 };
 
 export const REQUEST_STAGE_GROUP: Record<RequestStage, RequestStageGroup> = {
@@ -34,7 +36,8 @@ export const REQUEST_STAGE_GROUP: Record<RequestStage, RequestStageGroup> = {
 	ACTIVE: 'active',
 	COMPLETED: 'closed',
 	CANCELLED: 'closed',
-	DISPUTED: 'active'
+	DISPUTED: 'active',
+	CLOSED_BY_SETTLEMENT: 'closed'
 };
 
 // offer statuses that still count as a live offer on an OPEN request
@@ -44,12 +47,15 @@ export interface RequestLifecycleInput {
 	requestStatus: string | null | undefined;
 	contractStatus?: string | null;
 	offerStatuses?: Array<string | null | undefined>;
+	/** True when a RESOLVED dispute with a FINANCIAL outcome closed the project (see settlement-state.service). */
+	settled?: boolean;
 }
 
 export function deriveRequestStage(input: RequestLifecycleInput): RequestStage {
 	const status = String(input.requestStatus || '').toUpperCase();
 	const contract = String(input.contractStatus || '').toUpperCase();
 	if (status === 'DRAFT') return 'DRAFT';
+	if (input.settled && (status === 'COMPLETED' || status === 'CANCELLED' || contract === 'COMPLETED' || contract === 'CANCELLED' || contract === 'DISPUTED')) return 'CLOSED_BY_SETTLEMENT';
 	if (status === 'CANCELLED') return 'CANCELLED';
 	if (status === 'COMPLETED' || contract === 'COMPLETED') return 'COMPLETED';
 	if (contract === 'DISPUTED') return 'DISPUTED';
