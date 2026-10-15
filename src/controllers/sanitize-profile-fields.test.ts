@@ -104,3 +104,15 @@ test('provider PUT banking handler: always 400 with the PayPal-only message (not
 	assert.equal(res.statusCode, 400);
 	assert.equal(res.body.message, PAYPAL_ONLY_MESSAGE);
 });
+
+// Batch B T1 (§2): step 1 is now «مهاراتي»; the old languages value stays on the profile untouched when the request does not carry it
+test('provider wizard: a save WITHOUT languages never writes the languages column (legacy data kept), a save WITH them still stores them', async (t) => {
+	const w = setup(t);
+	const { saveSetupData } = await import(`./provider-profile.controller.ts?f=${Date.now()}-${Math.random()}`);
+	const base = { details: { occupation: 'مصمم', country: 'السعودية', city: 'جدة', bio: 'نبذة' }, identity: { certs: [] }, bank: {}, documents: {}, agreements: {} };
+	await saveSetupData({ user: { id: 'u1' }, body: base } as any, mockRes());
+	assert.equal('languages' in w.upsert[0].update, false);
+	assert.equal('languages' in w.upsert[0].create, false);
+	await saveSetupData({ user: { id: 'u1' }, body: { ...base, details: { ...base.details, languages: ['العربية'] } } } as any, mockRes());
+	assert.deepEqual(w.upsert[1].update.languages, ['العربية']);
+});

@@ -178,7 +178,8 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			headline: typeof details?.occupation === 'string' && sanitizeText(details.occupation).trim() ? sanitizeText(details.occupation).trim().slice(0, 100) : undefined,
 			address: clean(details?.address, 500),
 			bio: typeof details?.bio === 'string' ? sanitizeText(details.bio) : details?.bio,
-			languages: cleanList(details?.languages, 40, 20),
+			// Batch B T1: the legacy languages value is never touched unless the request carries it (the wizard no longer sends it: step 1 is now «مهاراتي»)
+			...(Array.isArray(details?.languages) ? { languages: cleanList(details?.languages, 40, 20) } : {}),
 			yearsOfExperience: normalized.value.yearsOfExperience,
 			hourlyRate: normalized.value.hourlyRate,
 
