@@ -6,8 +6,18 @@ import { waseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
 import { normalizeWaseetAiError, WaseetAiError, WaseetAiErrorCode } from '../services/ai/waseet-ai/waseet-ai.errors';
 import { logger } from '../config/logger';
 import { prisma } from '../config/db';
+import { AppError } from '../utils/app-error';
 
 const marketplaceService = new MarketplaceService();
+
+/** A validation refusal (AppError) keeps its status and names the field(s); anything else stays the previous plain 400. */
+const statusOf = (error: any) => (error instanceof AppError ? error.statusCode : 400);
+const failureBody = (error: any) => ({
+	success: false,
+	error: error.message,
+	message: error.message,
+	...(error instanceof AppError && error.errors?.length ? { errors: error.errors, code: (error.errors[0] as any)?.code } : {})
+});
 
 const RE_AUDIT_STATUSES = ['PENDING_APPROVAL', 'UNDER_REVIEW', 'DRAFT', 'PUBLISHED'];
 const RE_AUDIT_BATCH_SIZE = 25;
@@ -32,7 +42,7 @@ export class MarketplaceServiceController {
 			const service = await marketplaceService.createService(userId, req.body);
 			res.status(201).json(service);
 		} catch (error: any) {
-			res.status(400).json({ error: error.message });
+			res.status(statusOf(error)).json(failureBody(error));
 		}
 	}
 
@@ -54,7 +64,7 @@ export class MarketplaceServiceController {
 			const updated = await marketplaceService.updateService(userId, serviceId, req.body);
 			res.status(200).json({ success: true, data: updated });
 		} catch (error: any) {
-			res.status(400).json({ success: false, error: error.message });
+			res.status(statusOf(error)).json(failureBody(error));
 		}
 	}
 
@@ -69,7 +79,7 @@ export class MarketplaceServiceController {
 			const updated = await marketplaceService.setServiceVisibility(userId, serviceId, visible);
 			return res.status(200).json({ success: true, data: updated }) as any;
 		} catch (error: any) {
-			return res.status(400).json({ success: false, error: error.message }) as any;
+			return res.status(statusOf(error)).json(failureBody(error)) as any;
 		}
 	}
 
@@ -172,6 +182,8 @@ export class MarketplaceServiceController {
 				if (!PUBLISHABLE_BY_ID_STATUSES.includes(existing.status as any)) {
 					return res.status(409).json({ success: false, error: 'لا يمكن نشر هذا النموذج في حالته الحالية، تواصل مع الدعم أو انتظر قرار المراجعة' }) as any;
 				}
+				// Batch B T1: the specialty must still be approved and the linked model valid before the service goes live again
+				await marketplaceService.assertServicePublishable(userId, existing);
 				const updated = await prisma.serviceCatalog.update({
 					where: { id: existing.id },
 					data: { status: 'PUBLISHED', approvedAt: existing.approvedAt || new Date() }
@@ -180,7 +192,7 @@ export class MarketplaceServiceController {
 			}
 			return res.status(400).json({ success: false, error: 'Invalid model payload provided' }) as any;
 		} catch (error: any) {
-			return res.status(400).json({ success: false, error: error.message }) as any;
+			return res.status(statusOf(error)).json(failureBody(error)) as any;
 		}
 	}
 

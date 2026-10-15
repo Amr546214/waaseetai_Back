@@ -2,6 +2,8 @@ import { prisma } from '../config/db';
 import { logger } from '../config/logger';
 import { AccreditationStatus, SpecialtyVerificationStatus } from '@prisma/client';
 import { specialtyService } from './specialty.service';
+import { privateRefBelongsTo } from '../utils/kyc-private-ref';
+import { isOwnCloudinaryUrl } from '../utils/cloudinary-url';
 
 // The samples a provider attaches in the onboarding wizard (step 5) are stored as PortfolioItem rows titled «نموذج أعمال - <specialty>».
 // This service turns each one into a REAL AccreditationSample (MANUAL_REVIEW = waiting for the admin) linked to the provider's ProviderSpecialty,
@@ -13,6 +15,11 @@ export const ONBOARDING_SAMPLE_TITLE_PREFIX = 'نموذج أعمال - ';
 type Db = typeof prisma;
 
 export async function ensureOnboardingAccreditationSamples(profileId: string, db: Db = prisma): Promise<{ created: number; updated: number }> {
+	// Batch B T1 (§3): a document counts for this request only when it sits in THIS provider's own storage folder (a file of another account, a foreign link or a
+	// bare string is not a proof). Identity documents are a different function and are never read here.
+	const owner = await db.providerProfile.findUnique({ where: { id: profileId }, select: { userId: true } });
+	const ownerId = owner?.userId ?? '';
+	const isOwnProof = (url: string) => !!ownerId && (privateRefBelongsTo(url, ownerId) || (isOwnCloudinaryUrl(url) && new URL(url).pathname.split('/').includes(ownerId)));
 	const items = await db.portfolioItem.findMany({ where: { providerProfileId: profileId, title: { startsWith: ONBOARDING_SAMPLE_TITLE_PREFIX } }, select: { title: true, description: true, coverImage: true, projectUrl: true, tags: true } });
 	if (!items.length) return { created: 0, updated: 0 };
 
@@ -30,8 +37,9 @@ export async function ensureOnboardingAccreditationSamples(profileId: string, db
 		if (!row) continue;
 		const description = norm(item.description);
 		// the wizard stores the work FILE url in `description` and the proof files in `tags`: both are evidence the admin must be able to open
-		const attachments = [...new Set([...(/^https?:\/\//i.test(description) ? [description] : []), ...(item.tags ?? []), ...(item.coverImage ? [item.coverImage] : [])].filter(Boolean))];
-		if (!description && !attachments.length && !item.projectUrl) continue; // nothing to review
+		const attachments = [...new Set([...(/^(https?:\/\/|private:)/i.test(description) ? [description] : []), ...(item.tags ?? []), ...(item.coverImage ? [item.coverImage] : [])].filter(Boolean))].filter(isOwnProof);
+		// no valid proof document of this provider = no approval request (the access state then says a sample is still required)
+		if (!attachments.length) continue;
 		const key = `${row.id}::${item.title}`;
 		const g = groups.get(key);
 		if (!g) groups.set(key, { providerSpecialtyId: row.id, title: item.title, description, projectUrl: item.projectUrl ?? null, attachments });

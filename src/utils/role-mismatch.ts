@@ -1,0 +1,1 @@
+export const ROLE_MISMATCH_CODE = 'ROLE_MISMATCH';

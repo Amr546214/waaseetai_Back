@@ -109,7 +109,7 @@ export class ProfileSetupService {
         if (dto.bio !== undefined) providerData.bio = dto.bio;
         if (dto.hourlyRate !== undefined) providerData.hourlyRate = dto.hourlyRate;
         Object.assign(providerData, identityAndBankData());
-        if (skillConnections) providerData.skills = { connect: skillConnections };
+        if (skillConnections) providerData.skills = { set: skillConnections };
 
         const providerProfile = await tx.providerProfile.upsert({
           where: { userId },

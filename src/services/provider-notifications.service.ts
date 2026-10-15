@@ -31,7 +31,8 @@ export const PROVIDER_ROUTES = {
 	// Specialties and their review state.
 	specialties: '/provider-overview/profile/specialties',
 	// The provider's own accreditation sample page (the id is the sample's).
-	accreditation: (sampleId: string) => `/provider-overview/business-models/center/accreditation-details/${sampleId}`
+	// Batch B T1: the request lives in the «إجراءات الحساب» log (the old accreditation-details page is not an approval status page).
+	accreditation: (sampleId: string) => `/provider-overview/account-actions/${sampleId}`
 } as const;
 
 const short = (text: string | null | undefined, max = 60) => {
@@ -257,6 +258,21 @@ export const providerNotifications = {
 			actionUrl: PROVIDER_ROUTES.accreditation(p.sampleId),
 			actionText: 'عرض النموذج',
 			metadata: { sampleId: p.sampleId, decision: p.decision }
+		}));
+	},
+
+	/** An admin asked the provider to complete the request (not a rejection): the note addressed to the provider is quoted, the internal note never. */
+	async accreditationCompletionRequested(p: { providerId: string; sampleId: string; sampleTitle?: string | null; note?: string | null }) {
+		const title = short(p.sampleTitle);
+		await safely('accreditationCompletionRequested', () => notificationService.createAndEmit({
+			userId: p.providerId,
+			title: 'مطلوب استكمال بيانات طلب الاعتماد',
+			message: `طلبت الإدارة استكمال بيانات نموذج الاعتماد${title ? ` «${title}»` : ''}.${p.note ? ` الملاحظة: ${short(p.note, 200)}` : ''}`,
+			category: NotificationCategory.PROJECTS,
+			type: 'ACCREDITATION_COMPLETION_REQUESTED',
+			actionUrl: PROVIDER_ROUTES.accreditation(p.sampleId),
+			actionText: 'استكمال البيانات',
+			metadata: { sampleId: p.sampleId }
 		}));
 	},
 

@@ -12,7 +12,7 @@ function reset() {
 	S.profile = { id: 'pp1', userId: 'u1', isProfileSetupComplete: true, setupTestStatus: 'NOT_STARTED', setupTestScore: null, setupTestBannedUntil: null, mainSpecialty: 'design-creative', industry: null, subSpecialties: ['تصميم جرافيك'] };
 	S.catalog = [{ id: 'sp-g', nameAr: 'تصميم جرافيك', name: 'تصميم جرافيك', nameEn: 'Graphic', isActive: true }];
 	S.ps = []; S.samples = [];
-	S.portfolio = [{ providerProfileId: 'pp1', title: 'نموذج أعمال - تصميم جرافيك', description: 'https://res.cloudinary.com/w/work.pdf', coverImage: 'https://res.cloudinary.com/w/p.png', projectUrl: null, tags: ['https://res.cloudinary.com/w/p.png'] }];
+	S.portfolio = [{ providerProfileId: 'pp1', title: 'نموذج أعمال - تصميم جرافيك', description: 'private:raw:pdf:waseetai/providers/u1/work', coverImage: 'private:image:png:waseetai/providers/u1/p', projectUrl: null, tags: ['private:image:png:waseetai/providers/u1/p'] }];
 	ai.mode = 'fail'; ai.submitCalls = 0; ai.streamCalls = 0;
 }
 const matches = (row: Any, where: Any = {}) => Object.entries(where).every(([k, v]) => v && typeof v === 'object' && 'startsWith' in (v as Any) ? String(row[k]).startsWith((v as Any).startsWith) : row[k] === v);

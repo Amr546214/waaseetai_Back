@@ -188,7 +188,7 @@ model User {
   notificationPreference NotificationPreference?
 
   supportTickets        SupportTicket[]        @relation("SupportTicketOwner")
-  supportTicketMessages SupportTicketMessage[]  @relation("SupportTicketMessageSender")
+  supportTicketMessages SupportTicketMessage[] @relation("SupportTicketMessageSender")
 
   @@index([accountType, status])
   @@index([aiRiskScore])
@@ -358,10 +358,10 @@ model ClientProfile {
   kycStatus        KYCStatus @default(UNVERIFIED)
 
   // Step 3: Bank / Wallet
-  paymentType   String? // 'bank' | 'wallet' | 'paypal'
-  bankName      String?
-  accountHolder String?
-  iban          String?
+  paymentType       String? // 'bank' | 'wallet' | 'paypal'
+  bankName          String?
+  accountHolder     String?
+  iban              String?
   // PayPal payout destination (platform is PayPal-only for now). Dedicated
   // column — never stored in iban/accountHolder. Legacy bank columns are kept.
   paypalPayoutEmail String?
@@ -1355,6 +1355,7 @@ model ProviderSpecialty {
 
   workSamples          WorkSample[]
   accreditationSamples AccreditationSample[]
+  proofUploads         AccreditationProofUpload[]
   aiAuditLogs          AiAuditLog[]
   assessmentAttempts   AssessmentAttempt[]
 
@@ -1679,14 +1680,14 @@ model AffiliateProfile {
   marketingChannels AffiliateChannelHandle[]
 
   // Bank & KYC Tab
-  bankName          String?
-  accountHolderName String?
-  iban              String?
-  swiftCode         String?
+  bankName           String?
+  accountHolderName  String?
+  iban               String?
+  swiftCode          String?
   // PayPal is the only payout destination (legacy bank columns above are never shown or used). NOT EXECUTED migration: 20261009120000.
-  paypalPayoutEmail String?
-  identityVerified  Boolean @default(false)
-  kycDocumentUrl    String?
+  paypalPayoutEmail  String?
+  identityVerified   Boolean   @default(false)
+  kycDocumentUrl     String?
   // Last admin KYC decision (kept so a rejection reason survives a refresh). Migration 20261011120000; read separately from the safe select.
   kycRejectionReason String?
   kycReviewedAt      DateTime?
@@ -1822,7 +1823,6 @@ model CommissionLog {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([affiliateId, status])
   // Exactly-once guard: at most one commission per affiliate+referral+type
   // for the SAME release event (sourceStageId). A project has multiple
   // stages, each independently releasing funds and each independently
@@ -1830,6 +1830,7 @@ model CommissionLog {
   // @@unique([referralId, affiliateId, type]) alone, which would wrongly
   // collapse every stage of the same project into a single one-time payout.
   @@unique([affiliateId, referralId, type, sourceStageId])
+  @@index([affiliateId, status])
   @@map("commission_logs")
 }
 
@@ -1907,13 +1908,13 @@ model Contract {
   providerSignedAt      DateTime?
   clientSignatureHash   String?
   providerSignatureHash String?
-  termsVersion          Int                @default(1)
+  termsVersion          Int                    @default(1)
   signedAt              DateTime?
   stages                ProjectStage[]
   amendments            ProjectAmendment[]
   termsVersions         ContractTermsVersion[]
-  createdAt             DateTime           @default(now())
-  updatedAt             DateTime           @updatedAt
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
 
   @@map("contracts")
 }
@@ -1974,13 +1975,13 @@ model ProjectAmendment {
 
   // Effective amendments (migration 20261016100000_amendment_effective, NOT EXECUTED until the owner approves): appliedAt is set in the SAME transaction
   // that changed the contract / escrow / stages / wallet. APPROVED with appliedAt NULL is a legacy row that was only RECORDED and is never re-applied.
-  appliedAt      DateTime?
-  priceBefore    Float?
-  priceAfter     Float?
-  durationBefore Int?
-  durationAfter  Int?
+  appliedAt               DateTime?
+  priceBefore             Float?
+  priceAfter              Float?
+  durationBefore          Int?
+  durationAfter           Int?
   // The extra last stage this amendment created for a budget increase.
-  addedStageId   String?
+  addedStageId            String?
   // Client-raised budget increase: the client's OTP-authorized funding intent (the amount is bound; the provider's approval debits the wallet).
   fundingAuthorizedAt     DateTime?
   fundingAuthorizedAmount Float?
@@ -2074,6 +2075,16 @@ enum AccreditationStatus {
   AI_VERIFIED
   REJECTED
   MANUAL_REVIEW
+  // Batch B T1: the admin asked the provider to complete / fix the request (not a rejection); the provider resubmits the SAME request.
+  NEEDS_COMPLETION
+}
+
+// Batch B T1: a proof file uploaded for ONE approval request (provider specialty). Only COMPLETED rows count as a valid document.
+enum ProofUploadStatus {
+  UPLOADING
+  COMPLETED
+  FAILED
+  CANCELLED
 }
 
 model AccreditationSample {
@@ -2107,6 +2118,15 @@ model AccreditationSample {
   offersAccepted  Int    @default(0)
 
   serviceCatalogs ServiceCatalog[]
+
+  // Batch B T1: review loop. `userNote` is the admin note addressed to the provider (shown); `internalNote` NEVER leaves the admin API.
+  userNote         String?                    @db.Text
+  internalNote     String?                    @db.Text
+  completionFields String[]                   @default([])
+  revision         Int                        @default(1)
+  decidedAt        DateTime?
+  events           AccreditationSampleEvent[]
+  proofUploads     AccreditationProofUpload[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2767,10 +2787,48 @@ model MarketingAsset {
 // Shared counter store for the strict rate-limit tiers (login / OTP / payment / withdrawal / AI / upload) when RATE_LIMIT_STORE=postgres.
 // Optional: the default store is in memory and this table is not touched. Migration 20261018060000 (NOT EXECUTED on any shared DB).
 model RateLimitCounter {
-  key       String   @id
-  hits      Int
-  resetAt   DateTime @map("reset_at")
+  key     String   @id
+  hits    Int
+  resetAt DateTime @map("reset_at")
 
   @@index([resetAt])
   @@map("rate_limit_counters")
+}
+
+// Batch B T1: the review history of one approval request (submitted, completion requested, resubmitted, approved, rejected). Never deleted on resubmission.
+model AccreditationSampleEvent {
+  id           String              @id @default(uuid())
+  sampleId     String
+  sample       AccreditationSample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+  kind         String // SUBMITTED | RESUBMITTED | COMPLETION_REQUESTED | REJECTED | APPROVED
+  revision     Int                 @default(1)
+  userNote     String?             @db.Text // addressed to the provider
+  internalNote String?             @db.Text // admin-only
+  actorId      String?
+  createdAt    DateTime            @default(now())
+
+  @@index([sampleId, createdAt])
+  @@map("accreditation_sample_events")
+}
+
+// Batch B T1: a proof document is tied to the uploading user AND to one approval request (the provider specialty, then the sample once submitted).
+model AccreditationProofUpload {
+  id                  String               @id @default(uuid())
+  userId              String
+  providerSpecialtyId String
+  providerSpecialty   ProviderSpecialty    @relation(fields: [providerSpecialtyId], references: [id], onDelete: Cascade)
+  sampleId            String?
+  sample              AccreditationSample? @relation(fields: [sampleId], references: [id], onDelete: SetNull)
+  kind                ProofFileType        @default(WORK_SAMPLE)
+  privateRef          String
+  fileName            String
+  mimeType            String               @default("application/octet-stream")
+  bytes               Int                  @default(0)
+  status              ProofUploadStatus    @default(COMPLETED)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@index([userId, providerSpecialtyId, status])
+  @@index([sampleId])
+  @@map("accreditation_proof_uploads")
 }

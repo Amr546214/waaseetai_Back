@@ -112,7 +112,7 @@ test('an unsupported KYC file (svg / wrong type) is refused before anything is s
 test('skills come only from the catalog of the provider main specialty: catalog names are connected, anything else is a 400 and nothing is written', async (t) => {
 	let s = setup(t, { stored: { mainSpecialty: 'design-creative', skills: [], kycStatus: 'UNVERIFIED', idNumber: null, dob: null } });
 	await post('PROVIDER', { skills: ['تصميم الجرافيك'] });
-	assert.deepEqual(s.upserts[0][1].update.skills, { connect: [{ id: 'id-تصميم الجرافيك' }] });
+	assert.deepEqual(s.upserts[0][1].update.skills, { set: [{ id: 'id-تصميم الجرافيك' }] });
 	s = setup(t, { stored: { mainSpecialty: 'design-creative', skills: [], kycStatus: 'UNVERIFIED', idNumber: null, dob: null } });
 	let r = await post('PROVIDER', { skills: ['مهارة غير موجودة'] });
 	assert.equal(r.err.statusCode, 400);

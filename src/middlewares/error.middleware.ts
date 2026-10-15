@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/app-error';
+import { ROLE_MISMATCH_CODE } from '../utils/role-mismatch';
 import { logger } from '../config/logger';
 import { AI_FEATURE_UNAVAILABLE_CODE } from '../services/ai/ai-feature-unavailable';
 import { SELF_DEALING_CODES } from '../utils/self-dealing';
@@ -66,6 +67,12 @@ export const globalErrorHandler = (
     // Fixed self-purchase / self-negotiation / self-hire markers (a stable code the FE branches on).
     const appCode = (err as { code?: unknown }).code;
     if (typeof appCode === 'string' && SELF_DEALING_CODES.has(appCode)) code = appCode;
+    // A wrong-role refusal (the caller's OWN roles only): which role the page needs, the role in use and whether switching is possible.
+    if ((err as { code?: unknown }).code === ROLE_MISMATCH_CODE) {
+      code = ROLE_MISMATCH_CODE;
+      const e = err as unknown as { requiredRoles?: string[]; activeRole?: string | null; canSwitch?: boolean };
+      extra = { requiredRoles: e.requiredRoles, activeRole: e.activeRole, canSwitch: e.canSwitch };
+    }
   } else {
     // Unhandled operational/programming errors
     logger.error('Unhandled Exception:', err);
