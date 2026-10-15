@@ -1,3 +1,4 @@
+import { startChatDigestScheduler } from './services/chat-digest.service';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -407,6 +408,7 @@ if (process.env.NODE_ENV !== 'test') {
 	httpServer.listen(Number(PORT), '0.0.0.0', () => {
 		logger.info(`🚀 Server is running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
 		logger.info(`👉 http://localhost:${PORT}/api`);
+		startChatDigestScheduler(); // no-op unless CHAT_DIGEST_EMAIL_ENABLED=true
 	});
 }
 

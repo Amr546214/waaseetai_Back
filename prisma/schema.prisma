@@ -2851,3 +2851,23 @@ model AccreditationProofUpload {
   @@index([sampleId])
   @@map("accreditation_proof_uploads")
 }
+
+// Chat e-mail digest (migration 20261019020000_chat_digest, NOT EXECUTED on any shared DB). One row per (recipient, conversation): when the last digest mail was claimed.
+// The claim is a conditional upsert, so two instances / a restart can never send the same digest twice. Used only when CHAT_DIGEST_EMAIL_ENABLED=true.
+model ChatDigestState {
+  userId         String   @map("user_id")
+  conversationId String   @map("conversation_id")
+  lastDigestAt   DateTime @map("last_digest_at") @db.Timestamptz(3)
+
+  @@id([userId, conversationId])
+  @@index([userId, lastDigestAt])
+  @@map("chat_digest_state")
+}
+
+// Single row ('default'): the moment the digest was first switched on. Only messages created AFTER it are ever mailed (never a historical e-mail).
+model ChatDigestActivation {
+  id        String   @id @default("default")
+  enabledAt DateTime @map("enabled_at") @db.Timestamptz(3)
+
+  @@map("chat_digest_activation")
+}
