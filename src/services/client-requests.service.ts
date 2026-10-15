@@ -1542,15 +1542,22 @@ export class ClientRequestsService {
 
 		// Generate 6 digit OTP
 		const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-		const recentChallenges = await prisma.otpVerification.count({
+		const recentChallengeRows = await prisma.otpVerification.findMany({
 			where: {
 				userId,
 				type: 'EMAIL',
 				createdAt: { gt: new Date(Date.now() - 60 * 1000) },
 				context: { path: ['requestId'], equals: requestId }
-			}
+			},
+			select: { createdAt: true },
+			orderBy: { createdAt: 'asc' }
 		});
-		if (recentChallenges >= 3) throw new AppError('طلبات رمز التوقيع كثيرة. انتظر دقيقة ثم حاول مجدداً', 429);
+		if (recentChallengeRows.length >= 3) {
+			// The wait ends when the oldest challenge that still counts leaves the 60-second window.
+			const blocking = recentChallengeRows[recentChallengeRows.length - 3].createdAt.getTime() + 60 * 1000;
+			const retryAfterSeconds = Math.max(1, Math.ceil((blocking - Date.now()) / 1000));
+			throw new AppError('طلبات رمز التوقيع كثيرة. انتظر دقيقة ثم حاول مجدداً', 429, [{ code: 'SIGN_OTP_THROTTLED', retryAfterSeconds }]);
+		}
 		const otpHash = createHmac('sha256', otpSecret).update(`${contract.id}:${otpCode}`).digest('hex');
 
 		const otpRecord = await prisma.otpVerification.create({
@@ -1577,7 +1584,7 @@ export class ClientRequestsService {
 			throw new AppError('تعذر إرسال رمز التوقيع. لم يتم تنفيذ أي توقيع أو حجز', 503);
 		}
 
-		return { email: user.email, expiresInSeconds: CONTRACT_OTP_TTL_SECONDS };
+		return { email: user.email, expiresInSeconds: CONTRACT_OTP_TTL_SECONDS, expiresAt: otpRecord.expiresAt.toISOString() };
 	}
 
 	/**

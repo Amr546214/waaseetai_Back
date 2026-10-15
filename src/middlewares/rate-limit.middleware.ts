@@ -5,7 +5,7 @@ import { AppError } from '../utils/app-error';
 import { clientIpKey, identityKey, verifiedUserId } from '../utils/rate-limit-identity';
 import { createStrictStore } from '../utils/rate-limit-store';
 import { BoundedRateLimitStore } from '../utils/bounded-rate-limit-store';
-import { formatWaitArabic, otpSendThrottle, otpThrottleMessage } from '../utils/otp-send-throttle';
+import { formatWaitArabic, otpSendThrottle, otpThrottleMessage, resendAvailableAtIso } from '../utils/otp-send-throttle';
 
 dotenv.config();
 
@@ -211,6 +211,16 @@ export const otpSendGate = (recipient: (req: Request) => string | undefined) =>
         { code: 'OTP_RATE_LIMITED', reason: result.reason, retryAfterSeconds: result.retryAfterSeconds }
       ]));
     }
+    // A send that really went out also says when the next one is allowed (additive field, top level and in `data`; old apps ignore it).
+    const sendJson = typeof res.json === 'function' ? res.json.bind(res) : null;
+    if (sendJson) res.json = ((body?: unknown) => {
+      if (res.locals.otpEmailSent === true && body && typeof body === 'object' && !Array.isArray(body)) {
+        const at = resendAvailableAtIso();
+        const b = body as Record<string, unknown>;
+        body = { ...b, resendAvailableAt: at, ...(b.data && typeof b.data === 'object' ? { data: { ...(b.data as object), resendAvailableAt: at } } : {}) };
+      }
+      return sendJson(body);
+    }) as typeof res.json;
     res.once('finish', () => {
       if (res.locals.otpEmailAttempted === true) otpSendThrottle.record(key, req.ip, res.locals.otpEmailSent === true);
     });

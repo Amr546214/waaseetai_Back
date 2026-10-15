@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from '../services/auth.service';
 import { RESEND_GENERIC_MESSAGE, REGISTER_GENERIC_MESSAGE } from '../utils/auth-messages';
+import { resendAvailableAtIso } from '../utils/otp-send-throttle';
 import { sessionService } from '../services/session.service';
 import { getAuthCookie, getRequestCookie } from '../utils/request-cookie';
 import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput, VerifyLoginOtpInput, ResendLoginOtpInput } from '../routes/auth/auth.schema';
@@ -107,7 +108,9 @@ export class AuthController {
 
 			res.status(200).json({
 				success: true,
-				message: result.message
+				message: result.message,
+				// The send limiter consumed this attempt (same for every address), so the next one is allowed after the interval.
+				resendAvailableAt: resendAvailableAtIso()
 			});
 		} catch (error) {
 			next(error);
@@ -168,7 +171,10 @@ export class AuthController {
 					userId: result.userId,
 					// Whether the code email really went out, and the wait when the send was throttled.
 					...('emailSent' in result ? { emailSent: result.emailSent } : {}),
-					...('retryAfterSeconds' in result ? { retryAfterSeconds: result.retryAfterSeconds } : {})
+					...('retryAfterSeconds' in result ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
+					// When the next send is allowed / when the code stops being valid (ISO), only for a send that really went out.
+					...('resendAvailableAt' in result ? { resendAvailableAt: result.resendAvailableAt } : {}),
+					...('expiresAt' in result ? { expiresAt: result.expiresAt } : {})
 				}
 			});
 		} catch (error) {
@@ -205,7 +211,10 @@ export class AuthController {
 			res.status(200).json({
 				success: result.emailSent,
 				message: result.emailSent ? RESEND_GENERIC_MESSAGE : result.message,
-				emailSent: result.emailSent
+				emailSent: result.emailSent,
+				...('retryAfterSeconds' in result ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
+				...('resendAvailableAt' in result ? { resendAvailableAt: result.resendAvailableAt } : {}),
+				...('expiresAt' in result ? { expiresAt: result.expiresAt } : {})
 			});
 		} catch (error) {
 			next(error);

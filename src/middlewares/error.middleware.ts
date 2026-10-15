@@ -4,6 +4,7 @@ import { ROLE_MISMATCH_CODE } from '../utils/role-mismatch';
 import { logger } from '../config/logger';
 import { AI_FEATURE_UNAVAILABLE_CODE } from '../services/ai/ai-feature-unavailable';
 import { SELF_DEALING_CODES } from '../utils/self-dealing';
+import { OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { PAYPAL_EMAIL_FROZEN_CODE, PAYPAL_OTP_EMAIL_FAILED_CODE, OTP_THROTTLED_CODE } from '../utils/paypal-email-messages';
 
 // Known library errors that are the caller's mistake (4xx), not a server fault: they must never surface as a 500 "Internal Server Error".
@@ -81,6 +82,22 @@ export const globalErrorHandler = (
       errors = [err.stack];
     }
   }
+
+  // A wait (429) or lock (423) always says how long, in machine-readable form: Retry-After header + retryAfterSeconds + retryAt (additive).
+  // The duration comes from the error itself (retryAfterSeconds / errors[].retryAfterSeconds) or the header a limiter already set; never invented.
+  if (statusCode === 429 || statusCode === 423) {
+    const fromErr = (err as unknown as { retryAfterSeconds?: unknown }).retryAfterSeconds;
+    const fromList = (errors ?? []).map((x: any) => x?.retryAfterSeconds).find((n: unknown) => typeof n === 'number');
+    const fromHeader = Number(res.getHeader?.('Retry-After'));
+    const raw = [fromErr, fromList, fromHeader].find((n): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0);
+    if (raw !== undefined) {
+      const seconds = Math.ceil(raw);
+      if (!res.getHeader?.('Retry-After')) res.setHeader?.('Retry-After', String(seconds));
+      extra = { ...(extra ?? {}), retryAfterSeconds: seconds, retryAt: new Date(Date.now() + seconds * 1000).toISOString() };
+    }
+  }
+  // Locked by wrong attempts: a stable code; there is no timer (a new code is requested instead), so none is invented.
+  if (statusCode === 429 && message === OTP_LOCKED_MESSAGE && !code) code = 'OTP_ATTEMPTS_LOCKED';
 
   // Log all non-4xx errors
   if (statusCode >= 500) {

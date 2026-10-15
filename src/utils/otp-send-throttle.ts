@@ -16,6 +16,11 @@ const HOUR_MS = 60 * 60 * 1000;
 /** Upper bound of live keys per map (memory bound; expired keys are swept long before this in normal use). */
 export const OTP_SEND_MAX_KEYS = 20_000;
 
+/** ISO time at which the next send to the same recipient is allowed again (the per-recipient interval), for the OTP send responses. */
+export function resendAvailableAtIso(now: number = Date.now(), minIntervalMs: number = OTP_SEND_MIN_INTERVAL_MS): string {
+  return new Date(now + minIntervalMs).toISOString();
+}
+
 export type OtpThrottleReason = 'interval' | 'recipient-hour' | 'ip-hour';
 
 export interface OtpThrottleResult {

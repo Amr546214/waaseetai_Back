@@ -247,3 +247,20 @@ test('email OTP flows are unchanged: an unverified login still e-mails the activ
   assert.equal(smsSent.length, 0);
   assert.ok(created.every(c => c.type !== 'PHONE'));
 });
+
+test('countdown: an active-account login whose code went out carries resendAvailableAt (~60 s) and expiresAt (10 min); a throttled one carries only retryAfterSeconds', async (t) => {
+  const bcrypt = await import('bcrypt');
+  const hash = await bcrypt.hash('Str0ng!Pass1', 4);
+  setup(t, { user: { id: 'user-1', email: 'amr@example.com', firstName: 'Amr', status: 'ACTIVE', password: hash } });
+  const { authService } = await load();
+  const t0 = Date.now();
+  const first: any = await authService.loginUser({ email: 'amr@example.com', password: 'Str0ng!Pass1' }, { ipAddress: '9.9.9.9' });
+  assert.equal(first.emailSent, true);
+  const resend = Date.parse(first.resendAvailableAt), exp = Date.parse(first.expiresAt);
+  assert.ok(resend >= t0 + 59_000 && resend <= Date.now() + 61_000);
+  assert.ok(exp >= t0 + 10 * MIN - 1000 && exp <= Date.now() + 10 * MIN + 1000);
+  const second: any = await authService.loginUser({ email: 'amr@example.com', password: 'Str0ng!Pass1' }, { ipAddress: '9.9.9.9' });
+  assert.equal(second.emailSent, false);
+  assert.ok(second.retryAfterSeconds > 0 && second.retryAfterSeconds <= 60);
+  assert.equal('resendAvailableAt' in second, false); assert.equal('expiresAt' in second, false);
+});

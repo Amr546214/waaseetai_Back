@@ -156,3 +156,21 @@ test('the controllers report the mailer result to the gate', () => {
   assert.match(src, /registerUser\(input, \{ refCookieSlug, refCookieSource \}\);\s*[^]*?res\.locals\.otpEmailAttempted = true;\s*res\.locals\.otpEmailSent = result\.emailSent === true;/);
   assert.match(src, /authService\.resendOtp\(userId\);\s*res\.locals\.otpEmailAttempted = true;\s*res\.locals\.otpEmailSent = emailSent === true;/);
 });
+
+test('otpSendGate: a send that really went out answers with resendAvailableAt (top level and data); one that did not, does not', () => {
+  otpSendThrottle.reset();
+  const sendWith = (emailSent: boolean) => {
+    const res: any = { locals: {}, setHeader() {}, once() {}, json(b: any) { this.sent = b; return this; } };
+    otpSendGate(req => req.body?.email)({ body: { email: 'g@y.co' }, ip: '7.7.7.7' } as any, res, () => {});
+    res.locals.otpEmailSent = emailSent;
+    res.json({ success: emailSent, data: { emailSent } });
+    return res.sent;
+  };
+  const before = Date.now();
+  const ok = sendWith(true);
+  const at = Date.parse(ok.resendAvailableAt);
+  assert.ok(at >= before + 59_000 && at <= Date.now() + 61_000);
+  assert.equal(ok.data.resendAvailableAt, ok.resendAvailableAt); assert.equal(ok.data.emailSent, true);
+  const no = sendWith(false);
+  assert.equal('resendAvailableAt' in no, false); assert.equal('resendAvailableAt' in no.data, false);
+});
