@@ -5,6 +5,8 @@ import { AppError } from '../utils/app-error';
 import { clientIpKey, identityKey, verifiedUserId } from '../utils/rate-limit-identity';
 import { createStrictStore } from '../utils/rate-limit-store';
 import { BoundedRateLimitStore } from '../utils/bounded-rate-limit-store';
+import { AccountDelayGuard } from '../utils/account-delay-guard';
+import { RecognisedOrigins, originKey } from '../utils/recognised-origins';
 import { formatWaitArabic, otpSendThrottle, otpThrottleMessage } from '../utils/otp-send-throttle';
 
 dotenv.config();
@@ -280,7 +282,11 @@ const idKey = (identifier: (req: Request) => unknown) => (req: Request) => limit
 export const PREAUTH = {
   // login (password): failed attempts
   LOGIN_ID_IP: positiveIntEnv(process.env.RL_LOGIN_ID_IP, 6),     // one account from one address
-  LOGIN_ID: positiveIntEnv(process.env.RL_LOGIN_ID, 20),          // one account from ALL addresses
+  // one account from ALL addresses: NOT a lockout any more. Unrecognised origins get LOGIN_FREE attempts per 24 h, then a growing gap (base .. ceiling)
+  LOGIN_FREE: positiveIntEnv(process.env.RL_LOGIN_FREE, 10),
+  LOGIN_DELAY_BASE_MS: positiveIntEnv(process.env.RL_LOGIN_DELAY_BASE_MS, 30_000),
+  LOGIN_DELAY_MAX_MS: positiveIntEnv(process.env.RL_LOGIN_DELAY_MAX_MS, 900_000),
+  LOGIN_RECOGNISED_MS: positiveIntEnv(process.env.RL_LOGIN_RECOGNISED_HOURS, 14 * 24) * HOUR,
   LOGIN_IP: positiveIntEnv(process.env.RL_LOGIN_IP, 60),          // one address across ALL accounts (credential spraying)
   LOGIN_IP_ALL: positiveIntEnv(process.env.RL_LOGIN_IP_ALL, 300), // one address, every request incl. successes (flood guard)
   // second login step (code sent at login) and Google sign-in
@@ -293,25 +299,78 @@ export const PREAUTH = {
   OTPV_ID: positiveIntEnv(process.env.RL_OTPV_ID, AUTH_RATE_LIMIT_MAX * 3) // new: one account from all addresses
 } as const;
 
+/** Recognition / delay state of the password-login account layer (per process; see utils/account-delay-guard.ts and recognised-origins.ts). */
+export const accountDelay = new AccountDelayGuard({ free: PREAUTH.LOGIN_FREE, baseMs: PREAUTH.LOGIN_DELAY_BASE_MS, ceilingMs: PREAUTH.LOGIN_DELAY_MAX_MS, maxKeys: PREAUTH_MAX_KEYS });
+export const recognisedOrigins = new RecognisedOrigins({ ttlMs: PREAUTH.LOGIN_RECOGNISED_MS, maxAccounts: PREAUTH_MAX_KEYS, maxPending: PREAUTH_MAX_KEYS });
+const originOf = (req: Request) => originKey(clientIpKey(req), req.get?.('user-agent') ?? (req.headers?.['user-agent'] as string | undefined));
+
+/**
+ * Per-account layer of password login. Recognised origins (a completed login within RL_LOGIN_RECOGNISED_HOURS, default 14 days) skip it. Any
+ * other origin is admitted with the growing gap of AccountDelayGuard; a request inside the gap gets the standard 429 (tier login_account,
+ * Retry-After = remaining gap) and changes nothing. Nothing is looked up, so an unknown e-mail sees exactly the same gap as a real one.
+ */
+const accountDelayGate = (idOf: (req: Request) => string | undefined): RequestHandler => (req, res, next) => {
+  if (!RATE_LIMIT_ENABLED) return next();
+  const id = idOf(req);
+  if (!id || recognisedOrigins.has(id, originOf(req))) return next();
+  const r = accountDelay.admit(id);
+  if (!r.allowed) {
+    const seconds = Math.max(1, Math.ceil(r.retryAfterMs / 1000));
+    res.setHeader('Retry-After', String(seconds));
+    return next(new AppError(`محاولات كثيرة، حاول مرة أخرى بعد ${formatWaitArabic(seconds)}`, 429, [{ code: 'RATE_LIMITED', tier: 'login_account', retryAfterSeconds: seconds }]));
+  }
+  res.once('finish', () => { if (res.statusCode < 400) accountDelay.refund(id); });
+  return next();
+};
+
+/** Password step answered 200 (challenge issued): remember userId -> (account, origin) briefly, so a later verify-otp success can recognise the origin. */
+const loginChallengeLink = (idOf: (req: Request) => string | undefined): RequestHandler => (req, res, next) => {
+  const id = idOf(req);
+  if (RATE_LIMIT_ENABLED && id) {
+    const json = res.json.bind(res);
+    res.json = ((body: any) => {
+      const userId = body?.data?.userId;
+      if (res.statusCode < 400 && typeof userId === 'string' && userId) recognisedOrigins.noteChallenge(userId.toLowerCase(), id, originOf(req));
+      return json(body);
+    }) as typeof res.json;
+  }
+  next();
+};
+
+/** Second login step (verify-otp only, not resend) that ends in success from the origin that passed the password step: recognise it. */
+const loginStepRecognition: RequestHandler = (req, res, next) => {
+  if (RATE_LIMIT_ENABLED && /\/login\/verify-otp\/?$/.test(req.path || req.originalUrl || '')) {
+    const userId = limiterIdentifier(req.body?.userId);
+    if (userId) res.once('finish', () => { if (res.statusCode < 400) recognisedOrigins.confirm(userId, originOf(req)); });
+  }
+  next();
+};
+
 /**
  * Login family limiters. `identifier` = getter of the (validated) email / userId in the body; undefined = address-only buckets.
  * Order matters: address buckets first, so a flood of invented identifiers from one address is cut before it creates identifier keys.
  *  1. every request per address (flood guard, counts successes too)
  *  2. failures per address across all accounts (spraying ceiling)
  *  3. failures per account + address (guessing one account from one place)
- *  4. failures per account from ALL addresses (distributed guessing), with progressive lockout
+ *  4. password login: per account from ALL addresses = progressive DELAY for unrecognised origins only (accountDelayGate, never a lock);
+ *     login steps: failures per userId from all addresses, progressive lockout (the userId is only known after a correct password)
  * Nothing here reads the database, so a known and an unknown identifier see the same counters and the same 429.
  */
 export const loginLimiters = (identifier: (req: Request) => unknown, prefix: 'login' | 'login_step' | 'google' = 'login'): RequestHandler[] => {
   const idOf = idKey(identifier);
   const ip = (req: Request) => clientIpKey(req);
   const pw = prefix === 'login';
-  const n = { ip: pw ? PREAUTH.LOGIN_IP : PREAUTH.STEP_IP, idIp: pw ? PREAUTH.LOGIN_ID_IP : PREAUTH.STEP_ID_IP, id: pw ? PREAUTH.LOGIN_ID : PREAUTH.STEP_ID };
+  const n = { ip: pw ? PREAUTH.LOGIN_IP : PREAUTH.STEP_IP, idIp: pw ? PREAUTH.LOGIN_ID_IP : PREAUTH.STEP_ID_IP, id: PREAUTH.STEP_ID };
   return [
     preAuthBucket({ name: `${prefix}:ipall`, tier: `${prefix}_ip_flood`, limit: PREAUTH.LOGIN_IP_ALL, countAll: true, key: ip }),
     preAuthBucket({ name: `${prefix}:ip`, tier: `${prefix}_ip`, limit: n.ip, maxMultiplier: 4, key: ip }),
     preAuthBucket({ name: `${prefix}:idip`, tier: `${prefix}_account_ip`, limit: n.idIp, maxMultiplier: 4, key: (req) => { const id = idOf(req); return id ? `${ip(req)}|${id}` : undefined; } }),
-    preAuthBucket({ name: `${prefix}:id`, tier: `${prefix}_account`, limit: n.id, maxMultiplier: 8, key: idOf })
+    ...(pw
+      ? [loginChallengeLink(idOf), accountDelayGate(idOf)]
+      : [
+        preAuthBucket({ name: `${prefix}:id`, tier: `${prefix}_account`, limit: n.id, maxMultiplier: 8, key: idOf }),
+        ...(prefix === 'login_step' ? [loginStepRecognition] : [])
+      ])
   ];
 };
 
@@ -331,3 +390,38 @@ export const otpVerifyLimiters = (identifier: (req: Request) => unknown) => {
     preAuthBucket({ name: 'otpv:acct', tier: 'otp_verify_account', limit: PREAUTH.OTPV_ID, maxMultiplier: 8, key: idOf })
   ];
 };
+
+/** Numbers of the authenticated account-security routes (env override RL_*; reasoning in docs/proposals/rate-limit-tiers.md). */
+export const ACCOUNT = {
+  PWD_FAIL_USER: positiveIntEnv(process.env.RL_PWD_FAIL_USER, 5),        // wrong current password etc., per ACCOUNT per hour (strict: a stolen session must not guess it)
+  PWD_ALL_USER: positiveIntEnv(process.env.RL_PWD_ALL_USER, 10),         // every password-change request per account per hour
+  PWD_FAIL_NET: positiveIntEnv(process.env.RL_PWD_FAIL_NET, 40),         // failures per address across accounts (an office), authenticated traffic
+  PWD_FAIL_ANON: positiveIntEnv(process.env.RL_PWD_FAIL_ANON, 10),       // no verified token: per address, as before
+  SESSIONS_USER: positiveIntEnv(process.env.RL_SESSIONS_USER, 60),       // sessions revoke / own-profile edits per account per hour
+  SESSIONS_NET: positiveIntEnv(process.env.RL_SESSIONS_NET, 300),
+  SESSIONS_ANON: positiveIntEnv(process.env.RL_SESSIONS_ANON, 10)
+} as const;
+
+const accountKey = (req: Request) => { const u = verifiedUserId(req); return u ? `u:${u}` : undefined; };
+const netKey = (req: Request) => (verifiedUserId(req) ? clientIpKey(req) : undefined);
+const anonKey = (req: Request) => (verifiedUserId(req) ? undefined : clientIpKey(req));
+
+/**
+ * Authenticated password change (provider/identity PUT /password, client POST /password-change-request) — replaces the 10 / h / address
+ * `authLimiter`. Strict PER ACCOUNT (the current password is verified here): 5 failures / h and 10 requests / h per verified account id, so a
+ * stolen session cannot guess it, while other accounts behind the same address are unaffected; 40 failures / h per address across
+ * accounts as a net; a request without a verified token keeps 10 failures / h per address (authenticate answers 401 anyway).
+ */
+export const passwordChangeLimiter: RequestHandler = chain([
+  preAuthBucket({ name: 'pwdchg:all', tier: 'password_change', limit: ACCOUNT.PWD_ALL_USER, countAll: true, key: accountKey }),
+  preAuthBucket({ name: 'pwdchg:fail', tier: 'password_change_failed', limit: ACCOUNT.PWD_FAIL_USER, key: accountKey }),
+  preAuthBucket({ name: 'pwdchg:net', tier: 'password_change_ip', limit: ACCOUNT.PWD_FAIL_NET, key: netKey }),
+  preAuthBucket({ name: 'pwdchg:anon', tier: 'password_change_ip', limit: ACCOUNT.PWD_FAIL_ANON, key: anonKey })
+]);
+
+/** Authenticated account housekeeping (revoke sessions, edit own account details): per account, a generous net per address. */
+export const accountActionLimiter: RequestHandler = chain([
+  preAuthBucket({ name: 'acctact:user', tier: 'account_action', limit: ACCOUNT.SESSIONS_USER, countAll: true, key: accountKey }),
+  preAuthBucket({ name: 'acctact:net', tier: 'account_action_ip', limit: ACCOUNT.SESSIONS_NET, countAll: true, key: netKey }),
+  preAuthBucket({ name: 'acctact:anon', tier: 'account_action_ip', limit: ACCOUNT.SESSIONS_ANON, countAll: true, key: anonKey })
+]);
