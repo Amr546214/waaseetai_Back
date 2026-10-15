@@ -5,13 +5,14 @@ import assert from 'node:assert/strict';
 // no unnecessary account-existence disclosure). Real controller + real service, mocked repository / mailer.
 process.env.OPENAI_API_KEY = 'test-key';
 process.env.JWT_SECRET = 'test-secret';
+import { REGISTER_GENERIC_MESSAGE } from '../utils/auth-messages';
 
 const USER: any = { id: '11111111-1111-4111-8111-111111111111', email: 'amr@example.com', phoneNumber: '500000000', firstName: 'Amr', status: 'ACTIVE', password: null };
 const GHOST_ID = '99999999-9999-4999-8999-999999999999';
 const BODY = { email: 'amr@example.com', phoneNumber: '0500000000', phoneCountryCode: '+966', password: 'Str0ng!Pass1', firstName: 'Amr', lastName: 'O', accountType: 'CLIENT_INDIVIDUAL', agreedToTerms: true };
 
-function setup(t: TestContext, o: { exists: boolean; status?: string; resetOtp?: any; googleEmail?: string; googleSub?: string; googleId?: string | null }) {
-	const user = o.exists ? { ...USER, status: o.status ?? 'ACTIVE', googleId: o.googleId ?? null } : null;
+function setup(t: TestContext, o: { exists: boolean; status?: string; resetOtp?: any; googleEmail?: string; googleSub?: string; googleId?: string | null; smtpFails?: boolean; password?: string | null }) {
+	const user = o.exists ? { ...USER, status: o.status ?? 'ACTIVE', googleId: o.googleId ?? null, ...(o.password !== undefined ? { password: o.password } : {}) } : null;
 	const calls = { createUser: 0, createOtp: 0, mails: 0 };
 	t.mock.module('../config/logger', { namedExports: { logger: { info() {}, warn() {}, error() {}, debug() {} } } });
 	t.mock.module('../config/db', { namedExports: { prisma: { user: { update: async () => ({ ...user }) } } } });
@@ -33,7 +34,7 @@ function setup(t: TestContext, o: { exists: boolean; status?: string; resetOtp?:
 		incrementOtpAttempts: async () => ({}),
 	} } });
 	t.mock.module('./notification.service', { namedExports: { notificationService: {
-		sendEmailOtp: async () => { calls.mails++; },
+		sendEmailOtp: async () => { calls.mails++; if (o.smtpFails) throw new Error('smtp'); },
 		sendLoginOtpEmail: async () => { calls.mails++; },
 		sendPasswordResetEmail: async () => { calls.mails++; },
 	} } });
@@ -72,42 +73,67 @@ function shape(r: any) {
 	return { status: r.status, message: r.body?.message, keys: Object.keys(r.body ?? {}).sort().join(','), dataKeys: data ? Object.keys(data).sort().join(',') : undefined, success: r.body?.success, emailSent: r.body?.emailSent ?? data?.emailSent, uuid: typeof data?.userId === 'string' ? /^[0-9a-f-]{36}$/i.test(data.userId) : undefined };
 }
 
-test('register: an email / phone already in use answers exactly like a fresh registration (201, same shape and wording, no 409), creates and sends nothing', async (t) => {
-	const a = await run(t, { exists: false }, async (c, calls) => { const r = await call(c.register.bind(c), BODY); assert.equal(calls.createUser, 1); return r; });
-	const b = await run(t, { exists: true, status: 'ACTIVE' }, async (c, used) => {
-		const r = await call(c.register.bind(c), BODY);
-		assert.equal(used.createUser, 0);
-		assert.equal(used.createOtp, 0);
-		assert.equal(used.mails, 0);
-		return r;
-	});
-	assert.deepEqual(shape(b), shape(a));
-	assert.equal(b.status, 201);
-	assert.equal(b.error, undefined);
-	assert.ok(b.locals.otpEmailAttempted && b.locals.otpEmailSent, 'the send cooldown starts the same way');
-	assert.notEqual(b.body.data.userId, USER.id, 'the real account id is never returned');
-	assert.doesNotMatch(JSON.stringify(b.body), /مسجل بالفعل|موجود بالفعل/);
+// The response SHAPE is the same (status, keys, data keys); the two things that differ are the ones a caller needs to continue: a real
+// userId only when an account was created for THIS request (so the app can open the code step), and accountCreated.
+test('register: an email / phone already in use (active or pending) gets 201, the same shape as a fresh registration, no userId, no code claim, and creates / sends nothing', async (t) => {
+	const fresh = await run(t, { exists: false }, async (c, calls) => { const r = await call(c.register.bind(c), BODY); assert.equal(calls.createUser, 1); assert.equal(calls.createOtp, 1); assert.equal(calls.mails, 1); return r; });
+	const results: any[] = [];
+	for (const status of ['ACTIVE', 'PENDING_VERIFICATION']) {
+		results.push(await run(t, { exists: true, status }, async (c, used) => {
+			const r = await call(c.register.bind(c), BODY);
+			assert.equal(used.createUser, 0);
+			assert.equal(used.createOtp, 0, `${status}: no code is created`);
+			assert.equal(used.mails, 0, `${status}: no mail at all, no alert to an active account`);
+			return r;
+		}));
+	}
+	const [active, pending] = results;
+	assert.deepEqual(shape(pending), shape(active), 'active and pending are indistinguishable');
+	for (const r of results) {
+		assert.equal(r.status, 201);
+		assert.equal(r.error, undefined);
+		assert.equal(r.body.data.userId, null);
+		assert.equal(r.body.data.emailSent, false);
+		assert.equal(r.body.data.accountCreated, false);
+		assert.equal(r.body.message, REGISTER_GENERIC_MESSAGE);
+		assert.ok(!r.locals.otpEmailAttempted, 'no mailer call, so no cooldown is recorded');
+		assert.doesNotMatch(JSON.stringify(r.body), /أرسلنا رمز|مسجل بالفعل|موجود بالفعل|USER_ID_PLACEHOLDER/);
+		assert.ok(!JSON.stringify(r.body).includes(USER.id));
+	}
+	// same keys at every level as the real registration
+	assert.equal(Object.keys(active.body).sort().join(), Object.keys(fresh.body).sort().join());
+	assert.equal(Object.keys(active.body.data).sort().join(), Object.keys(fresh.body.data).sort().join());
+	assert.equal(fresh.status, active.status);
+	// the only revealed difference: a real account id (and the flag) for the caller's own new account
+	assert.match(fresh.body.data.userId, /^[0-9a-f-]{36}$/i);
+	assert.equal(fresh.body.data.accountCreated, true);
+	assert.equal(fresh.body.data.emailSent, true);
+	assert.equal(fresh.body.message, REGISTER_GENERIC_MESSAGE, 'a new account whose code went out gets the same words (no extra channel)');
+	assert.ok(fresh.locals.otpEmailAttempted && fresh.locals.otpEmailSent);
+});
+
+test('register: a new account whose activation email failed is told so honestly (with its real userId, so it can resend)', async (t) => {
+	const r = await run(t, { exists: false, smtpFails: true }, (c) => call(c.register.bind(c), BODY));
+	assert.equal(r.status, 201);
+	assert.equal(r.body.data.emailSent, false);
+	assert.equal(r.body.data.accountCreated, true);
+	assert.ok(r.body.data.userId);
+	assert.match(r.body.message, /تعذر إرسال رمز التحقق/);
+	assert.equal(r.locals.otpEmailAttempted, true);
+	assert.equal(r.locals.otpEmailSent, false);
 });
 
 test('register: a phone that matches another account (different email) is also generic', async (t) => {
 	const r = await run(t, { exists: true, status: 'PENDING_VERIFICATION' }, (c) => call(c.register.bind(c), { ...BODY, email: 'someone.else@example.com' }));
 	assert.equal(r.status, 201);
-	assert.equal(r.body.data.emailSent, true);
+	assert.equal(r.body.data.userId, null);
+	assert.equal(r.body.message, REGISTER_GENERIC_MESSAGE);
 });
 
 test('register with a VERIFIED Google credential for that very address may be told the account exists (409)', async (t) => {
 	const own = await run(t, { exists: true }, (c) => call(c.register.bind(c), { ...BODY, password: undefined, googleIdToken: 'tok' }));
 	assert.equal(own.error?.statusCode, 409);
 	assert.match(own.error.message, /موجود بالفعل/);
-});
-
-test('verify with the decoy id fails like any wrong code', async (t) => {
-	const v = await run(t, { exists: true }, async (c) => {
-		const reg = await call(c.register.bind(c), BODY);
-		return call(c.verifyOtp.bind(c), { userId: reg.body.data.userId, code: '123456' });
-	});
-	assert.equal(v.error.statusCode, 400);
-	assert.equal(v.error.message, 'رمز التحقق غير صحيح');
 });
 
 test('forgot-password: same status/body for a known and an unknown email', async (t) => {

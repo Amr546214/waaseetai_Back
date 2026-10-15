@@ -70,7 +70,7 @@ test('register: emailSent=true when SMTP accepts; the code lives 10 minutes (as 
   const { created, sent, logs } = setup(t);
   const { authService } = await load();
   const result = await authService.registerUser(REGISTER_INPUT);
-  assert.deepEqual(result, { userId: 'user-1', emailSent: true });
+  assert.deepEqual(result, { userId: 'user-1', emailSent: true, accountCreated: true });
   const lifetime = created[0].expiresAt.getTime() - created[0].at; // relative to when the code was created (bcrypt may be slow)
   assert.ok(lifetime >= 10 * MIN - 2000 && lifetime <= 10 * MIN + 2000, `lifetime ${lifetime}`);
   assert.ok(logs.every(l => !l.includes(sent[0].code)), 'no clear-text OTP in the logs');
