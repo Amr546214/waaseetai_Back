@@ -70,7 +70,7 @@ export const PROVIDER_OPERATIONAL: [string, string][] = [
 	['GET', '/provider/finance/wallet'], ['GET', '/provider/finance/transactions'], ['GET', '/provider/finance/invoices'], ['GET', '/provider/finance/invoices/:id'], ['GET', '/provider/finance/sales'], ['POST', '/provider/finance/withdrawals'], ['GET', '/provider/finance/withdrawals'],
 	['GET', '/provider/offers'], ['GET', '/provider/offers/:id'], ['GET', '/provider/offers/:id/negotiation'], ['GET', '/provider/projects/:id/negotiation'], ['POST', '/provider/offers/:id/withdraw'], ['POST', '/provider/offers/:id/counter'], ['POST', '/provider/offers/:id/negotiation/reject'], ['POST', '/provider/offers/:id/sign'],
 	['GET', '/provider/explore-requests'], ['POST', '/provider/explore-requests/:id/toggle-save'],
-	['POST', '/provider/requests/:id/disputes'], ['POST', '/provider/requests/:id/rate'], ['POST', '/provider/requests/:id/cancel'], ['GET', '/provider/disputes'], ['GET', '/provider/disputes/:id'],
+	['POST', '/provider/requests/:id/disputes'], ['POST', '/provider/requests/:id/rate'], ['GET', '/provider/requests/:id/rating-status'], ['POST', '/provider/requests/:id/cancel'], ['GET', '/provider/disputes'], ['GET', '/provider/disputes/:id'],
 	['POST', '/provider/tickets'], ['GET', '/provider/tickets'], ['GET', '/provider/tickets/:id'], ['POST', '/provider/tickets/:id/reply'], ['POST', '/provider/tickets/:id/close'],
 	['GET', '/provider/accreditation/eligible-specialties'], ['GET', '/provider/accreditation/passed-specialties'], ['GET', '/provider/accreditation/samples'], ['POST', '/provider/accreditation/submit'],
 	['GET', '/provider/gamification/level-details'], ['GET', '/provider/logs'], ['GET', '/provider/logs/:id'],
