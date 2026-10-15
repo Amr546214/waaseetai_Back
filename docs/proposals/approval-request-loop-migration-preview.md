@@ -17,4 +17,4 @@ Old approvals are NOT cancelled by the new proof validation (it only applies to 
 `rollback.sql` is self-protecting: it refuses when any request is `NEEDS_COMPLETION`, any event/admin note exists, or any proof upload row exists. The enum value cannot be dropped by PostgreSQL and stays (unused).
 
 ## Order
-migration -> BE -> FE. The new BE reads/writes the new columns; it must not run before the migration.
+migrations first (additive, the OLD backend and OLD frontend keep working on the migrated schema: proven on an isolated database), then the NEW FE, then the NEW BE (see qa-final-2026-10-14/DEPLOY-ORDER-BATCH-B.md). The new BE reads/writes the new columns; it must not start before the migration. Before any BE rollback check `select count(*) from accreditation_samples where status='NEEDS_COMPLETION'` is 0 (the old Prisma client throws on that enum value).
