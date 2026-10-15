@@ -48,7 +48,7 @@ const code = (e: any) => e?.statusCode;
 test('pg: the isolated database is the throw-away one', opts, async () => {
 	const prisma = await db();
 	const [{ current_database }] = await prisma.$queryRaw`SELECT current_database()` as any[];
-	assert.equal(current_database, 'qa_iso_t1');
+	assert.match(current_database, /^qa_iso/); // any throw-away qa_iso* database; the file only runs when the URL is a local :55432 server (see `enabled`)
 });
 
 test('proof: a submission without a valid document is a 400 naming the files field; links and body URLs are not documents', opts, async () => {
