@@ -109,7 +109,7 @@ test('list: only THIS provider\'s requests for THIS project (ownership in the WH
   const { svc, state } = await load(t);
   const out = await svc.listProviderAmendments('provider-1', 'project-1');
   assert.deepEqual(state.listArgs[0].where, { providerId: 'provider-1', projectId: 'project-1' });
-  assert.deepEqual(state.listArgs[0].orderBy, { createdAt: 'desc' });
+  assert.deepEqual(state.listArgs[0].orderBy, [{ createdAt: 'desc' }, { id: 'desc' }]);
   assert.equal(out.length, 1);
   assert.deepEqual(Object.keys(out[0]).sort(), ['actionBlockedReason', 'actionable', 'addedStageId', 'appliedAt', 'budgetDelta', 'contractId', 'contractRef', 'contractDurationDays', 'contractPrice', 'contractStatus', 'conversationId', 'createdAt', 'description', 'durationAfter', 'durationBefore', 'durationDeltaDays', 'effect', 'effectNote', 'fundingAuthorized', 'fundingAuthorizedUntil', 'id', 'needsClientPayment', 'priceAfter', 'priceBefore', 'projectId', 'projectTitle', 'providerId', 'providerName', 'requestedByRole', 'respondedAt', 'status', 'title', 'type', 'updatedAt'].sort());
 });
