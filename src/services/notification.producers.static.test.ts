@@ -8,7 +8,7 @@ const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
 test('a chat message notification goes through NotificationService (stored AND delivered per the recipient\'s channels), never a bare insert', () => {
 	const src = read('../sockets/chat.gateway.ts');
 	assert.doesNotMatch(src, /prisma\.notification\.create/);
-	assert.match(src, /notificationService\.createAndEmit\(/);
+	assert.match(src, /notificationService\.createOrCoalesceChat\(/); // intentional (chat-digest batch): one unread row per conversation, same delivery path
 	assert.match(src, /type: 'CHAT'/);
 });
 
@@ -31,6 +31,7 @@ test('the notification list is only ever read for the caller (userId in the WHER
 
 test('every socket room a notification is emitted to is the recipient\'s own personal room', () => {
 	const svc = read('./notification.service.ts');
-	assert.match(svc, /io\.to\(`user_\$\{dto\.userId\}`\)\.to\(`project_owner_\$\{dto\.userId\}`\)\.emit\('new_notification', dto\)/);
+	assert.match(svc, /io\.to\(`user_\$\{dto\.userId\}`\)\.to\(`project_owner_\$\{dto\.userId\}`\)\.emit\(event, dto\)/); // event = new_notification | notification_updated (coalesced chat row)
+	assert.match(svc, /event: 'new_notification' \| 'notification_updated'/);
 	assert.doesNotMatch(svc, /io\.emit\(/);
 });

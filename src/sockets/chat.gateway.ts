@@ -152,15 +152,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 						: data.type === 'IMAGE' ? '📷 أرسل لك صورة جديدة'
 							: data.type === 'FILE' ? `📁 أرسل لك ملفاً: ${data.fileName || 'مرفق'}`
 								: (data.content || 'رسالة جديدة في غرفة التفاوض');
-					// Stored AND delivered through the recipient's channels (real-time push; never an e-mail per message, see NotificationService.deliver): the row
+					// Stored AND delivered through the recipient's channels (real-time push; never an e-mail per message, only the throttled digest, see chat-digest.service). One UNREAD notification per conversation: later messages update it (createOrCoalesceChat): the row
 					// alone never reached an open session, so the bell counter missed every message until a reload. Created only after sendMessage succeeded.
 					// A message of the PROJECT context opens that project's messages tab (stable URL); a general one opens the recipient role's messages page.
 					const messagesBase = result.recipientRole === 'CLIENT' ? '/client-overview/messages' : '/provider-overview/messages';
-					await notificationService.createAndEmit(isProjectRoom ? {
+					await notificationService.createOrCoalesceChat(isProjectRoom ? {
 						userId: result.recipientId,
 						title: 'رسالة جديدة في المشروع',
 						message: notificationText,
 						type: 'CHAT',
+						conversationId: data.conversationId,
 						category: 'PROJECTS',
 						actionUrl: projectMessagesUrl(result.recipientRole, result.contractId!),
 						actionText: 'فتح رسائل المشروع',
@@ -170,6 +171,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 						title: 'رسالة تفاوض جديدة',
 						message: notificationText,
 						type: 'CHAT',
+						conversationId: data.conversationId,
 						actionUrl: `${messagesBase}?conversationId=${encodeURIComponent(data.conversationId)}`,
 						actionText: 'فتح المحادثة',
 						metadata: { conversationId: data.conversationId }

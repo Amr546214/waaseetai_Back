@@ -184,53 +184,62 @@ export const resolveMarketerNotificationChannels = (settings: unknown, type?: st
 const escapeMailHtml =(v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 export class NotificationService {
-	private emitDto(dto: NotificationDto): void {
+	private emitDto(dto: NotificationDto, event: 'new_notification' | 'notification_updated' = 'new_notification'): void {
 		const io = getIO();
 		if (!io) return;
-		io.to(`user_${dto.userId}`).to(`project_owner_${dto.userId}`).emit('new_notification', dto);
+		io.to(`user_${dto.userId}`).to(`project_owner_${dto.userId}`).emit(event, dto);
 	}
 
-	/** Delivers a stored notification through the recipient's chosen channels (a lookup failure falls back to the default: real-time push only). */
-	private async deliver(dto: NotificationDto): Promise<void> {
+	/**
+	 * The channels, e-mail address and language a notification is delivered through. The channel family follows the actionUrl prefix (client / marketer / else provider);
+	 * a lookup failure falls back to the default: real-time push only. Shared by deliver() and the chat digest so both read the exact same switches.
+	 */
+	public async resolveDelivery(userId: string, actionUrl: string | null | undefined, type?: string): Promise<{ channels: { push: boolean; email: boolean }; recipient: { email: string; firstName: string | null } | null; lang: 'ar' | 'en' }> {
 		let channels = { push: true, email: false };
 		let recipient: { email: string; firstName: string | null } | null = null;
 		let lang: 'ar' | 'en' = 'ar';
 		// An account can hold both roles: a notification that points into /client-overview follows the CLIENT's settings, anything else the provider's (as before).
-		const forClient = !!dto.actionUrl && dto.actionUrl.startsWith('/client-overview');
+		const forClient = !!actionUrl && actionUrl.startsWith('/client-overview');
 		// Same rule for the marketer side: a notification into /marketer-overview follows the marketer's shared switches (and communication language), never the provider profile's.
-		const forMarketer = !!dto.actionUrl && dto.actionUrl.startsWith('/marketer-overview');
+		const forMarketer = !!actionUrl && actionUrl.startsWith('/marketer-overview');
 		let profileChannels: unknown = null;
 		try {
-			const profile = forClient || forMarketer ? null : await prisma.providerProfile.findUnique({ where: { userId: dto.userId }, select: { preferences: true, user: { select: { email: true, firstName: true } } } });
+			const profile = forClient || forMarketer ? null : await prisma.providerProfile.findUnique({ where: { userId }, select: { preferences: true, user: { select: { email: true, firstName: true } } } });
 			profileChannels = profile?.preferences ?? null;
 			if (profile) { channels = resolveNotificationChannels(profile.preferences); lang = resolveCommunicationLanguage(profile.preferences); recipient = profile.user; }
 			else if (forClient) {
 				const [prefs, clientProfile, user] = await Promise.all([
-					prisma.notificationPreference.findUnique({ where: { userId: dto.userId }, select: { settings: true } }),
-					prisma.clientProfile.findUnique({ where: { userId: dto.userId }, select: { interfaceLanguage: true } }),
-					prisma.user.findUnique({ where: { id: dto.userId }, select: { email: true, firstName: true } })
+					prisma.notificationPreference.findUnique({ where: { userId }, select: { settings: true } }),
+					prisma.clientProfile.findUnique({ where: { userId }, select: { interfaceLanguage: true } }),
+					prisma.user.findUnique({ where: { id: userId }, select: { email: true, firstName: true } })
 				]);
-				channels = resolveClientNotificationChannels(prefs?.settings, dto.type); lang = resolveClientLanguage(clientProfile?.interfaceLanguage); recipient = user;
+				channels = resolveClientNotificationChannels(prefs?.settings, type); lang = resolveClientLanguage(clientProfile?.interfaceLanguage); recipient = user;
 			}
 			else if (forMarketer) {
 				const [prefs, user] = await Promise.all([
-					prisma.notificationPreference.findUnique({ where: { userId: dto.userId }, select: { settings: true } }),
-					prisma.user.findUnique({ where: { id: dto.userId }, select: { email: true, firstName: true } })
+					prisma.notificationPreference.findUnique({ where: { userId }, select: { settings: true } }),
+					prisma.user.findUnique({ where: { id: userId }, select: { email: true, firstName: true } })
 				]);
-				channels = resolveMarketerNotificationChannels(prefs?.settings, dto.type); lang = resolveMarketerLanguage(prefs?.settings); recipient = user;
+				channels = resolveMarketerNotificationChannels(prefs?.settings, type); lang = resolveMarketerLanguage(prefs?.settings); recipient = user;
 			}
 		} catch { /* default channels */ }
 		// No channels chosen on a provider profile: the account's shared preferences apply (Settings / profile page: channel_in_app, channel_email). Unsaved = push on, e-mail off.
 		const providerChose = Array.isArray((profileChannels as Record<string, unknown> | null)?.notifChannels);
 		if (!providerChose && !forClient && !forMarketer) {
 			try {
-				const row = await prisma.notificationPreference.findUnique({ where: { userId: dto.userId }, select: { settings: true } });
+				const row = await prisma.notificationPreference.findUnique({ where: { userId }, select: { settings: true } });
 				channels = resolveClientNotificationChannels(row?.settings);
-				if (channels.email && !recipient) recipient = await prisma.user.findUnique({ where: { id: dto.userId }, select: { email: true, firstName: true } });
+				if (channels.email && !recipient) recipient = await prisma.user.findUnique({ where: { id: userId }, select: { email: true, firstName: true } });
 			} catch { /* default channels */ }
 		}
-		if (channels.push) this.emitDto(dto);
-		// A chat message is pushed in real time only: one e-mail per message of a negotiation would flood the inbox (the message itself is stored and unread-counted).
+		return { channels, recipient, lang };
+	}
+
+	/** Delivers a stored notification through the recipient's chosen channels (a lookup failure falls back to the default: real-time push only). */
+	private async deliver(dto: NotificationDto, event: 'new_notification' | 'notification_updated' = 'new_notification'): Promise<void> {
+		const { channels, recipient, lang } = await this.resolveDelivery(dto.userId, dto.actionUrl, dto.type);
+		if (channels.push) this.emitDto(dto, event);
+		// A chat message is never mailed one by one (a negotiation would flood the inbox): unread chat messages reach the e-mail channel only as the throttled digest (chat-digest.service).
 		if (channels.email && recipient?.email && dto.type !== 'CHAT') void this.sendNotificationMail(recipient.email, recipient.firstName, dto, lang);
 	}
 
@@ -466,6 +475,59 @@ export class NotificationService {
 		await this.deliver(dto);
 
 		return dto;
+	}
+
+	/**
+	 * A chat message's notification. At most ONE unread CHAT notification exists per (recipient, conversation): while the recipient has not read it, the next messages of the
+	 * same conversation update that row (latest text, running count in metadata.unreadCount, createdAt bumped so it sorts first, same link) and push it as `notification_updated`
+	 * (same id: the client replaces the row and its bell counter does not move). Once the row is read, the next message creates a fresh row. The messages themselves are never touched.
+	 * Race-safe: a transaction-scoped advisory lock per (recipient, conversation) serialises concurrent messages, and the update is conditional on the row still being unread
+	 * (a read that wins the race simply makes the next message a new row). Returns the stored row and whether it was coalesced.
+	 */
+	public async createOrCoalesceChat(input: CreateNotificationInput & { conversationId: string }): Promise<{ dto: NotificationDto; coalesced: boolean }> {
+		const context = (input.metadata as Record<string, unknown> | undefined)?.context ?? null;
+		const lockKey = `chat-notif:${input.userId}:${input.conversationId}`;
+		const out = await prisma.$transaction(async (tx) => {
+			await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+			const candidates = await tx.notification.findMany({
+				where: { userId: input.userId, type: 'CHAT', isRead: false, metadata: { path: ['conversationId'], equals: input.conversationId } },
+				orderBy: { createdAt: 'desc' },
+			});
+			const existing = candidates.find(n => ((n.metadata as Record<string, unknown> | null)?.context ?? null) === context);
+			if (existing) {
+				const prev = (existing.metadata as Record<string, unknown> | null) ?? {};
+				const unreadCount = (Number(prev.unreadCount) > 0 ? Number(prev.unreadCount) : 1) + 1;
+				const claimed = await tx.notification.updateMany({
+					where: { id: existing.id, isRead: false },
+					data: {
+						message: input.message,
+						title: unreadCount > 1 ? `${input.title} (${unreadCount})` : input.title,
+						createdAt: new Date(),
+						actionUrl: input.actionUrl ?? existing.actionUrl,
+						actionText: input.actionText ?? existing.actionText,
+						metadata: JSON.parse(JSON.stringify({ ...prev, ...(input.metadata ?? {}), unreadCount })),
+					},
+				});
+				if (claimed.count === 1) return { row: await tx.notification.findUniqueOrThrow({ where: { id: existing.id } }), coalesced: true };
+			}
+			const row = await tx.notification.create({
+				data: {
+					userId: input.userId,
+					title: input.title,
+					message: input.message,
+					category: input.category ?? NotificationCategory.ALL,
+					type: 'CHAT',
+					actionUrl: input.actionUrl ?? null,
+					actionText: input.actionText ?? null,
+					metadata: JSON.parse(JSON.stringify({ ...(input.metadata ?? {}), unreadCount: 1 })),
+					isRead: false,
+				},
+			});
+			return { row, coalesced: false };
+		});
+		const dto = toDto(out.row);
+		await this.deliver(dto, out.coalesced ? 'notification_updated' : 'new_notification');
+		return { dto, coalesced: out.coalesced };
 	}
 
 	/**
