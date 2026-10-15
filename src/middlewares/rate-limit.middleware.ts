@@ -1,7 +1,9 @@
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import dotenv from 'dotenv';
-import type { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { AppError } from '../utils/app-error';
+import { clientIpKey, identityKey, verifiedUserId } from '../utils/rate-limit-identity';
+import { createStrictStore } from '../utils/rate-limit-store';
 import { formatWaitArabic, otpSendThrottle, otpThrottleMessage } from '../utils/otp-send-throttle';
 
 dotenv.config();
@@ -26,67 +28,149 @@ const skipWhenRateLimitDisabled = () => !RATE_LIMIT_ENABLED;
 
 /**
  * Builds the Arabic 429 with a `Retry-After` header (seconds) read from the limiter's reset time, so the app can show the
- * real wait instead of guessing it from the message text.
+ * real wait instead of guessing it from the message text. The body carries the machine code `RATE_LIMITED` (+ the tier that tripped).
  */
-const rateLimited = (req: Request, res: Response, prefix: string): AppError => {
+const rateLimited = (req: Request, res: Response, prefix: string, tier?: string): AppError => {
   const resetTime = (req as Request & { rateLimit?: { resetTime?: Date } }).rateLimit?.resetTime;
   const seconds = resetTime ? Math.max(1, Math.ceil((resetTime.getTime() - Date.now()) / 1000)) : 60;
   res.setHeader('Retry-After', String(seconds));
-  return new AppError(`${prefix} ${formatWaitArabic(seconds)}`, 429, [{ code: 'RATE_LIMITED', retryAfterSeconds: seconds }]);
+  return new AppError(`${prefix} ${formatWaitArabic(seconds)}`, 429, [{ code: 'RATE_LIMITED', ...(tier ? { tier } : {}), retryAfterSeconds: seconds }]);
 };
 
-// Standard rate limiter for API endpoints
-export const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per `window` (here, per 15 minutes)
-  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
-  skip: skipWhenRateLimitDisabled,
-  handler: (req, res, next) => {
-    next(rateLimited(req, res, 'طلبات كثيرة من هذا الجهاز، حاول مرة أخرى بعد'));
-  }
+/**
+ * TIERS. Every number is a per-window cap and can be overridden by env (RL_<TIER>_<FIELD>); the defaults come from the measured
+ * navigation session in docs/proposals/rate-limit-tiers.md. `user` = per verified account, `ip` = unauthenticated client address,
+ * `ipNet` = safety net per address for ALL traffic of authenticated users (an office / QA machine with several accounts).
+ */
+export interface TierConfig { windowMs: number; user: number; ip: number; ipNet: number }
+const MIN15 = 15 * 60 * 1000;
+const tierFromEnv = (name: string, base: TierConfig): TierConfig => ({
+  windowMs: positiveIntEnv(process.env[`RL_${name}_WINDOW_MS`], base.windowMs),
+  user: positiveIntEnv(process.env[`RL_${name}_USER`], base.user),
+  ip: positiveIntEnv(process.env[`RL_${name}_IP`], base.ip),
+  ipNet: positiveIntEnv(process.env[`RL_${name}_IP_NET`], base.ipNet)
 });
+export const TIERS = {
+  // normal reads (GET/HEAD): layout, guards, statistics, lists, details
+  BROWSE: tierFromEnv('BROWSE', { windowMs: MIN15, user: 900, ip: 300, ipNet: 4500 }),
+  // normal writes (POST/PUT/PATCH/DELETE) that are not in a stricter tier
+  WRITE: tierFromEnv('WRITE', { windowMs: MIN15, user: 240, ip: 120, ipNet: 1200 }),
+  // GET /provider/statistics and friends: every dashboard page loads them
+  DASHBOARD: tierFromEnv('DASHBOARD', { windowMs: MIN15, user: 300, ip: 300, ipNet: 1500 }),
+  // endpoints that call a language model
+  AI: tierFromEnv('AI', { windowMs: MIN15, user: 30, ip: 30, ipNet: 150 }),
+  // file uploads (multipart): memory + cloud storage cost
+  UPLOAD: tierFromEnv('UPLOAD', { windowMs: MIN15, user: 40, ip: 20, ipNet: 200 }),
+  // money in: PayPal order create / capture, escrow deposit, funding
+  PAYMENT: tierFromEnv('PAYMENT', { windowMs: MIN15, user: 20, ip: 10, ipNet: 100 }),
+  // money out: withdrawal requests
+  WITHDRAWAL: tierFromEnv('WITHDRAWAL', { windowMs: 60 * 60 * 1000, user: 10, ip: 5, ipNet: 50 }),
+  // PayPal webhook: signature-verified, from PayPal's addresses only
+  WEBHOOK: tierFromEnv('WEBHOOK', { windowMs: MIN15, user: 1200, ip: 1200, ipNet: 1200 })
+} as const;
+
+/**
+ * One tier = (1) a bucket per identity — the verified account id when the request carries a valid token, else the trusted client address
+ * (IPv6 collapsed to /56) — and (2) for authenticated traffic a looser per-address safety net, so one machine cannot spread abuse over many
+ * accounts, while several honest accounts behind one address do not block each other. Keyed by account id, never by token / session /
+ * role: refreshing the token or switching role keeps the same bucket. Strict tiers use the shared store when RATE_LIMIT_STORE=postgres.
+ */
+const buildTier = (name: string, cfg: TierConfig, message: string, opts: { shared?: boolean } = {}): RequestHandler[] => {
+  const common = {
+    windowMs: cfg.windowMs,
+    standardHeaders: true as const,
+    legacyHeaders: false as const,
+    validate: { keyGeneratorIpFallback: false },
+    passOnStoreError: true
+  };
+  const identity = rateLimit({
+    ...common,
+    skip: skipWhenRateLimitDisabled,
+    limit: (req: Request) => (verifiedUserId(req) ? cfg.user : cfg.ip),
+    keyGenerator: (req: Request) => identityKey(req),
+    ...(opts.shared ? { store: createStrictStore(`${name}:id`) } : {}),
+    handler: (req, res, next) => { next(rateLimited(req, res, message, name)); }
+  });
+  const net = rateLimit({
+    ...common,
+    skip: (req: Request) => !RATE_LIMIT_ENABLED || !verifiedUserId(req),
+    limit: cfg.ipNet,
+    keyGenerator: (req: Request) => clientIpKey(req),
+    ...(opts.shared ? { store: createStrictStore(`${name}:net`) } : {}),
+    handler: (req, res, next) => { next(rateLimited(req, res, message, `${name}_ip`)); }
+  });
+  return [identity, net];
+};
+
+/** Runs middlewares in order; the first one that errors ends the chain. */
+const chain = (handlers: RequestHandler[]): RequestHandler => (req, res, next) => {
+  let i = 0;
+  const step = (err?: unknown) => {
+    if (err || i >= handlers.length) return next(err as any);
+    const h = handlers[i++];
+    try { h(req, res, step); } catch (e) { next(e); }
+  };
+  step();
+};
+
+const READ_METHODS = new Set(['GET', 'HEAD']);
+const GLOBAL_DONE = Symbol.for('waseet.rateLimit.globalDone');
+/** Paths the global tiers never count: container health probes (they come from the host, not a user). */
+const UNCOUNTED_PATHS = /^\/(api\/)?health\/?$/;
+const WEBHOOK_PATH = /^\/(api\/)?(webhooks?\/)?paypal[-/]?webhook/i;
+
+const browseTier = chain(buildTier('browse', TIERS.BROWSE, 'طلبات كثيرة، حاول مرة أخرى بعد'));
+const writeTier = chain(buildTier('write', TIERS.WRITE, 'طلبات كثيرة، حاول مرة أخرى بعد'));
+const webhookTier = chain(buildTier('webhook', TIERS.WEBHOOK, 'طلبات كثيرة، حاول مرة أخرى بعد'));
+
+/**
+ * The global limiter (mounted once in app.ts; some public routes also name it, and the second pass is a no-op). Reads and writes have
+ * separate budgets, so browsing can never use up what a form submission needs, and the other way round.
+ */
+export const apiLimiter: RequestHandler = (req, res, next) => {
+  if ((res.locals as Record<symbol, unknown>)[GLOBAL_DONE]) return next();
+  (res.locals as Record<symbol, unknown>)[GLOBAL_DONE] = true;
+  const path = req.path || req.originalUrl || '';
+  if (UNCOUNTED_PATHS.test(path)) return next();
+  if (WEBHOOK_PATH.test(path)) return webhookTier(req, res, next);
+  return (READ_METHODS.has(req.method) ? browseTier : writeTier)(req, res, next);
+};
 
 // Stricter rate limiter for sensitive Auth endpoints (Login, Register, OTP).
 // Configurable via AUTH_RATE_LIMIT_WINDOW_MS / AUTH_RATE_LIMIT_MAX for dev/QA testing;
-// defaults stay at the production-safe 10 attempts/hour if those env vars are unset.
+// defaults stay at the production-safe 10 attempts/hour if those env vars are unset. Always per client address (the caller is not yet known).
 export const authLimiter = rateLimit({
   windowMs: AUTH_RATE_LIMIT_WINDOW_MS,
-  max: AUTH_RATE_LIMIT_MAX,
+  limit: AUTH_RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
   skip: skipWhenRateLimitDisabled,
+  validate: { keyGeneratorIpFallback: false },
+  keyGenerator: (req) => clientIpKey(req),
+  passOnStoreError: true,
+  store: createStrictStore('auth'),
   handler: (req, res, next) => {
-    next(rateLimited(req, res, 'محاولات كثيرة، حاول مرة أخرى بعد'));
+    next(rateLimited(req, res, 'محاولات كثيرة، حاول مرة أخرى بعد', 'auth'));
   }
 });
 
 /**
- * Limiter for the dashboard summary endpoints that EVERY dashboard page loads (the sidebar / overview call GET /provider/statistics on each
- * navigation, twice on some pages). They make no AI call, so they must not share the 30-per-15-minutes AI budget (that returned a misleading
- * "AI limit" 429 after ~15 page views). Separate counter, still bounded per IP.
+ * Dashboard summary endpoints that EVERY dashboard page loads (the sidebar / overview call GET /provider/statistics on each navigation, twice on
+ * some pages). They make no AI call, so they must not share the AI budget. Own counter, per account (per address when anonymous).
  */
-export const dashboardLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 600,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: skipWhenRateLimitDisabled,
-  handler: (req, res, next) => {
-    next(rateLimited(req, res, 'طلبات كثيرة من هذا الجهاز، حاول مرة أخرى بعد'));
-  }
-});
+export const dashboardLimiter: RequestHandler = chain(buildTier('dashboard', TIERS.DASHBOARD, 'طلبات كثيرة، حاول مرة أخرى بعد'));
 
-export const aiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: skipWhenRateLimitDisabled,
-  handler: (req, res, next) => {
-    next(new AppError('تم تجاوز الحد المسموح لطلبات الذكاء الاصطناعي، يرجى المحاولة لاحقاً', 429));
-  }
-});
+/** AI-bound routes: strict, per account (30 / 15 min each), independent of browsing. */
+export const aiLimiter: RequestHandler = chain(buildTier('ai', TIERS.AI, 'تم تجاوز الحد المسموح لطلبات الذكاء الاصطناعي، يرجى المحاولة لاحقاً بعد', { shared: true }));
+
+/** Upload routes: mount BEFORE multer so a rejected request never buffers the file. */
+export const uploadLimiter: RequestHandler = chain(buildTier('upload', TIERS.UPLOAD, 'عدد كبير من عمليات رفع الملفات، حاول مرة أخرى بعد', { shared: true }));
+
+/** Money-in routes (PayPal order / capture, escrow deposit, funding authorisation). Never retried automatically by the app. */
+export const paymentLimiter: RequestHandler = chain(buildTier('payment', TIERS.PAYMENT, 'محاولات دفع كثيرة، حاول مرة أخرى بعد', { shared: true }));
+
+/** Withdrawal requests (money out). */
+export const withdrawalLimiter: RequestHandler = chain(buildTier('withdrawal', TIERS.WITHDRAWAL, 'محاولات سحب كثيرة، حاول مرة أخرى بعد', { shared: true }));
 
 /**
  * Limiter for the endpoints that SEND a code by email (register, resend-otp, forgot-password): per recipient (1 per 60 s,
@@ -157,6 +241,7 @@ export const otpVerifyLimiters = (identifier: (req: Request) => unknown) => [
     legacyHeaders: false,
     skipSuccessfulRequests: true,
     skip: skipWhenRateLimitDisabled,
+    store: createStrictStore('otpv:id'),
     validate: { keyGeneratorIpFallback: false }, // the key is built with ipKeyGenerator() inside otpVerifyKey()
     keyGenerator: (req) => otpVerifyKey(req.ip, normalizeOtpIdentifier(identifier(req))),
     handler: (req, res, next) => { next(rateLimited(req, res, 'محاولات كثيرة، حاول مرة أخرى بعد')); }
@@ -168,8 +253,9 @@ export const otpVerifyLimiters = (identifier: (req: Request) => unknown) => [
     legacyHeaders: false,
     skipSuccessfulRequests: true,
     skip: skipWhenRateLimitDisabled,
+    store: createStrictStore('otpv:ip'),
     validate: { keyGeneratorIpFallback: false },
-    keyGenerator: (req) => ipKeyGenerator(req.ip || '0.0.0.0'),
+    keyGenerator: (req) => clientIpKey(req),
     handler: (req, res, next) => { next(rateLimited(req, res, 'محاولات كثيرة، حاول مرة أخرى بعد')); }
   })
 ];

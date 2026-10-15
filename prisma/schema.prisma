@@ -2763,3 +2763,14 @@ model MarketingAsset {
   @@index([active, audience, sortOrder])
   @@map("marketing_assets")
 }
+
+// Shared counter store for the strict rate-limit tiers (login / OTP / payment / withdrawal / AI / upload) when RATE_LIMIT_STORE=postgres.
+// Optional: the default store is in memory and this table is not touched. Migration 20261018060000 (NOT EXECUTED on any shared DB).
+model RateLimitCounter {
+  key       String   @id
+  hits      Int
+  resetAt   DateTime @map("reset_at")
+
+  @@index([resetAt])
+  @@map("rate_limit_counters")
+}

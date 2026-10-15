@@ -9,6 +9,7 @@ import { logger } from './config/logger';
 import { globalErrorHandler } from './middlewares/error.middleware';
 import { scrubPrivateRefs } from './middlewares/scrub-private-refs.middleware';
 import { apiLimiter } from './middlewares/rate-limit.middleware';
+import { resolveTrustProxy } from './config/trust-proxy';
 import { AppError } from './utils/app-error';
 import authRouter from './routes/auth/auth.routes';
 import profileRouter from './routes/profile/profile.routes';
@@ -82,7 +83,10 @@ const app = express();
 // every real visitor into one shared rate-limit bucket. That is what
 // produced the 429 on GET /api/marketer/profile during active multi-user
 // DEV testing.
-app.set('trust proxy', 'uniquelocal');
+//
+// The setting is now driven by TRUST_PROXY (see src/config/trust-proxy.ts); unset keeps exactly the 'uniquelocal' above. A different
+// topology (a second proxy / CDN in front, another bridge subnet) is a configuration change: TRUST_PROXY='loopback,172.23.0.1/32'.
+app.set('trust proxy', resolveTrustProxy(process.env.TRUST_PROXY));
 
 // ==========================================
 // 1. SECURITY & MIDDLEWARES

@@ -3,7 +3,7 @@ import { getProviderStatistics, getProviderOffers, getProviderOfferById, getElig
 import { submitWithdrawal, listMyWithdrawals } from '../controllers/withdrawal.controller';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, authorizeActiveRole, requireActiveUser } from '../middlewares/auth.middleware';
-import { aiLimiter, dashboardLimiter } from '../middlewares/rate-limit.middleware';
+import { aiLimiter, dashboardLimiter, withdrawalLimiter } from '../middlewares/rate-limit.middleware';
 import providerProfileRouter from './provider-profile.routes';
 import marketplaceServiceRouter from './marketplace-service.routes';
 import { exploreRequestsController } from '../controllers/explore-requests.controller';
@@ -135,7 +135,7 @@ router.get('/finance/transactions', authenticate, requireActiveUser, providerOnl
 router.get('/finance/invoices', authenticate, requireActiveUser, providerOnly, getProviderInvoices);
 router.get('/finance/invoices/:id', authenticate, requireActiveUser, providerOnly, getProviderInvoice);
 router.get('/finance/sales', authenticate, requireActiveUser, providerOnly, getProviderSales);
-router.post('/finance/withdrawals', authenticate, requireActiveUser, providerOnly, submitWithdrawal);
+router.post('/finance/withdrawals', authenticate, requireActiveUser, providerOnly, withdrawalLimiter, submitWithdrawal);
 router.get('/finance/withdrawals', authenticate, requireActiveUser, providerOnly, listMyWithdrawals);
 
 // Endpoint for Provider Submitted Offers tracking and AI analysis

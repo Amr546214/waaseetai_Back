@@ -28,8 +28,8 @@ test('the client\'s own amendment routes are unchanged', () => {
 test('amendment-effective routes: client payment-otp / authorize-funding / cancel are client-role gated; the provider cancel is provider-only; the OTP code travels only in the body', () => {
 	const client = fs.readFileSync(path.join(__dirname, 'client-project-amendments.routes.ts'), 'utf8');
 	assert.match(client, /const clientOnly = authorizeActiveRole\(AccountType\.CLIENT_INDIVIDUAL, AccountType\.CLIENT_COMPANY\)/);
-	assert.match(client, /router\.post\('\/amendments\/:id\/payment-otp', clientOnly, clientProjectAmendmentsController\.initPaymentAuthorization\)/);
-	assert.match(client, /router\.post\('\/amendments\/:id\/authorize-funding', clientOnly, clientProjectAmendmentsController\.authorizeFunding\)/);
+	assert.match(client, /router\.post\('\/amendments\/:id\/payment-otp', clientOnly, paymentLimiter, clientProjectAmendmentsController\.initPaymentAuthorization\)/);
+	assert.match(client, /router\.post\('\/amendments\/:id\/authorize-funding', clientOnly, paymentLimiter, clientProjectAmendmentsController\.authorizeFunding\)/);
 	assert.match(client, /router\.post\('\/amendments\/:id\/cancel', clientOnly, clientProjectAmendmentsController\.cancelAmendment\)/);
 	assert.match(source, /router\.post\('\/amendments\/:id\/cancel',\s*authenticate,\s*requireActiveUser,\s*providerOnly,\s*providerProjectAmendmentsController\.cancel\)/);
 	const controller = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'client-project-amendments.controller.ts'), 'utf8');

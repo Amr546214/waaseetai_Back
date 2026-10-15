@@ -2,6 +2,7 @@ import jwt from 'jsonwebtoken';
 import type { Socket } from 'socket.io';
 import { prisma } from '../config/db';
 import { sessionService } from '../services/session.service';
+import { isSocketConnectLimited, SOCKET_CONNECT_RATE_LIMIT_CODE, SOCKET_CONNECT_RATE_LIMIT_MESSAGE } from './socket-connect-rate-limit';
 import { ACCOUNT_NOT_ACTIVE_CODE, ACCOUNT_NOT_ACTIVE_MESSAGE } from './socket-registry';
 
 // One handshake check for every socket gateway (AUD-FND-000035): the token must be a valid JWT, its session must be live (not revoked / expired)
@@ -62,6 +63,7 @@ export function socketAuthMiddleware(options: { required: boolean; onAuthenticat
 				if (!options.required && (result.reason === 'INVALID_TOKEN' || result.reason === 'NO_TOKEN')) return next();
 				return next(refusal(result.reason));
 			}
+			if (isSocketConnectLimited(result.userId)) return next(Object.assign(new Error(SOCKET_CONNECT_RATE_LIMIT_MESSAGE), { data: { code: SOCKET_CONNECT_RATE_LIMIT_CODE } }));
 			(socket as any).userId = result.userId;
 			socket.data = { ...(socket.data ?? {}), userId: result.userId };
 			options.onAuthenticated?.(socket, result.userId);
