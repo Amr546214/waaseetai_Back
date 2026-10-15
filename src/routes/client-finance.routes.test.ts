@@ -26,8 +26,8 @@ test('client-finance router applies authenticate + requireActiveUser before any 
 });
 
 test('PayPal create-order and capture routes are registered with amount/order-id validation', () => {
-	assert.match(source, /router\.post\('\/paypal\/order\/create',\s*validateDto\(createPaypalOrderSchema\),\s*createPaypalOrder\)/);
-	assert.match(source, /router\.post\('\/paypal\/order\/capture',\s*validateDto\(capturePaypalOrderSchema\),\s*capturePaypalOrder\)/);
+	assert.match(source, /router\.post\('\/paypal\/order\/create',\s*paymentLimiter,\s*validateDto\(createPaypalOrderSchema\),\s*createPaypalOrder\)/);
+	assert.match(source, /router\.post\('\/paypal\/order\/capture',\s*paymentLimiter,\s*validateDto\(capturePaypalOrderSchema\),\s*capturePaypalOrder\)/);
 });
 
 // PayPal (USD) is the only wallet deposit rail: the Moyasar entry points are gone, not just disabled.
