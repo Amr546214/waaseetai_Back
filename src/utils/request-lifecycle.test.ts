@@ -65,3 +65,15 @@ for (const [name, patch] of [
 		assert.equal(createClientRequestSchema.safeParse({ ...valid, ...patch }).success, false);
 	});
 }
+
+test('a request closed by a dispute settlement is its own stage «أُغلق بتسوية نزاع» (closed group), never «مكتمل» — whatever the stored request / contract status is', () => {
+	for (const [rs, cs] of [['COMPLETED', 'COMPLETED'], ['CANCELLED', 'CANCELLED'], ['COMPLETED', 'DISPUTED']] as const) {
+		const got = deriveRequestStage({ requestStatus: rs, contractStatus: cs, offerStatuses: [], settled: true });
+		assert.equal(got, 'CLOSED_BY_SETTLEMENT');
+		assert.equal(REQUEST_STAGE_LABEL[got], 'أُغلق بتسوية نزاع');
+		assert.equal(REQUEST_STAGE_GROUP[got], 'closed');
+	}
+	// not settled: unchanged
+	assert.equal(deriveRequestStage({ requestStatus: 'COMPLETED', contractStatus: 'COMPLETED', offerStatuses: [] }), 'COMPLETED');
+	assert.equal(deriveRequestStage({ requestStatus: 'IN_PROGRESS', contractStatus: 'ACTIVE', offerStatuses: [], settled: false }), 'ACTIVE');
+});

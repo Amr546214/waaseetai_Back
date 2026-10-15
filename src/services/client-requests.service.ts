@@ -18,7 +18,7 @@ import { providerNotifications } from './provider-notifications.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import { listLifecycles, activeDisputeCounts } from './project-lifecycle.service';
 import { adminAudit } from './admin-audit.service';
-import { deliveryCompletedProject, adminSettlementFor, adminSettledView, settlementsByProject, STAGE_CLOSED_BY_SETTLEMENT, SETTLED_LABEL_AR, SETTLED_STAGE_LABEL_AR } from './settlement-state.service';
+import { settledProjectIds, deliveryCompletedProject, adminSettlementFor, adminSettledView, settlementsByProject, STAGE_CLOSED_BY_SETTLEMENT, SETTLED_LABEL_AR, SETTLED_STAGE_LABEL_AR } from './settlement-state.service';
 import {
 	mailTransporter,
 	getOtpEmailTemplate,
@@ -471,8 +471,10 @@ export class ClientRequestsService {
 			: [];
 		const contractByRequest = new Map(contracts.map((c: any) => [c.projectId, c.status as string]));
 
+		// a request closed by a dispute settlement is its own stage (never «مكتمل»)
+		const settledRequestIds = await settledProjectIds([...clientRequests.map((r: any) => r.id), ...projects.map((p: any) => p.id)]);
 		const withStage = (row: any, contractStatus: string | null, offerStatuses: string[]) => {
-			const stage = deriveRequestStage({ requestStatus: row.status, contractStatus, offerStatuses });
+			const stage = deriveRequestStage({ requestStatus: row.status, contractStatus, offerStatuses, settled: settledRequestIds.has(row.id) });
 			return { ...row, stage, stageLabel: REQUEST_STAGE_LABEL[stage], stageGroup: REQUEST_STAGE_GROUP[stage] };
 		};
 
@@ -1267,7 +1269,7 @@ export class ClientRequestsService {
 			};
 		});
 
-		const stage = deriveRequestStage({ requestStatus: request.status, contractStatus: contract?.status ?? null, offerStatuses: request.proposals.map(p => p.status) });
+		const stage = deriveRequestStage({ requestStatus: request.status, contractStatus: contract?.status ?? null, offerStatuses: request.proposals.map(p => p.status), settled: (await adminSettlementFor({ projectId: requestId })).settled });
 
 		return {
 			id: request.id,
