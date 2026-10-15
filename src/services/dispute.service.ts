@@ -1,6 +1,6 @@
 import { AccountType, ContractStatus, DisputeStatus, EscrowStatus, LogCategory, LogStatus, Prisma, ProjectStatus, RequestStatus } from '@prisma/client';
 import { prisma } from '../config/db';
-import { AppError } from '../utils/app-error';
+import { AppError, fieldError, fieldErrorItem } from '../utils/app-error';
 import { CreateDisputeInput, ResolveDisputeFinancialInput, ResolveDisputeInput } from '../dtos/dispute.dto';
 import { isV2Escrow, splitRelease } from '../utils/escrow-commission';
 import { round2 } from '../utils/money';
@@ -257,7 +257,7 @@ export class DisputeService {
   async assign(id: string, adminId: string, assigneeId: string) {
     const dispute = await this.openDisputeForAdmin(id);
     const assignee = await prisma.user.findUnique({ where: { id: assigneeId }, select: { id: true, firstName: true, lastName: true, accountType: true } });
-    if (!assignee || (assignee.accountType !== AccountType.ADMIN && assignee.accountType !== AccountType.SUPER_ADMIN)) throw new AppError('يمكن إسناد النزاع إلى مشرف أو مدير فقط', 400);
+    if (!assignee || (assignee.accountType !== AccountType.ADMIN && assignee.accountType !== AccountType.SUPER_ADMIN)) throw fieldError('assigneeId', 'يمكن إسناد النزاع إلى مشرف أو مدير فقط');
     const name = [assignee.firstName, assignee.lastName].filter(Boolean).join(' ');
     await adminAudit.record({ adminId, entity: 'DISPUTE', entityId: dispute.id, eventType: 'DISPUTE_ASSIGNED', title: 'إسناد نزاع', summary: `إسناد النزاع إلى ${name || 'مشرف'}`, details: { assigneeId: assignee.id, assigneeName: name } });
     return { id: dispute.id, assignedTo: { id: assignee.id, name } };
@@ -339,7 +339,7 @@ export class DisputeService {
       const held = round2(heldEscrowAmount(escrow, contract.price) ?? 0);
       if (!escrow || escrow.status !== EscrowStatus.HELD || held <= 0) throw new AppError('لا يوجد مبلغ محتجز لتسويته', 409);
       if (round2(input.expectedHeldAmount) !== held) throw new AppError('تغيّر المبلغ المحتجز منذ عرضه عليك. حدّث الصفحة وراجع المبالغ ثم أعد التأكيد', 409, [{ heldAmount: held }]);
-      if (round2(refund + release) !== held) throw new AppError(`مجموع المبلغين (${round2(refund + release)}) يجب أن يساوي المبلغ المحتجز بالكامل (${held})`, 400, [{ heldAmount: held }]);
+      if (round2(refund + release) !== held) { const m = `مجموع المبلغين (${round2(refund + release)}) يجب أن يساوي المبلغ المحتجز بالكامل (${held})`; throw new AppError(m, 400, [{ heldAmount: held }, fieldErrorItem('releaseToProvider', m)]); }
 
       const split = release > 0 && isV2Escrow(escrow) && escrow.providerCommissionRateSnapshot != null
         ? splitRelease({ grossReleasedBefore: escrow.releasedAmount, commissionTotalBefore: escrow.platformCommissionAmount, grossReleasedAfter: escrow.releasedAmount + release, ratePercent: escrow.providerCommissionRateSnapshot })

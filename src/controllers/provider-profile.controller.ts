@@ -1,7 +1,7 @@
 import { updateProviderPreferencesSchema } from '../dtos/provider-preferences.dto';
 import { publicKycRejectionReason, withoutInternalProviderNotes } from '../utils/provider-kyc-review';
 import { Request, Response, NextFunction } from 'express';
-import { AppError } from '../utils/app-error';
+import { AppError, fieldErrorItem } from '../utils/app-error';
 import { providerProfileService } from '../services/provider-profile.service';
 import { prisma } from '../config/db';
 import { CONTACT_IMMUTABLE, CONTACT_IMMUTABLE_MESSAGE } from '../services/provider-profile.service';
@@ -57,6 +57,13 @@ export const revokeSession = async (req: Request, res: Response) => {
 	}
 };
 
+const PASSWORD_ERROR_FIELDS: Record<string, Array<{ field: string; message: string }>> = {
+	CURRENT_PASSWORD_INCORRECT: [{ field: 'currentPassword', message: 'كلمة المرور الحالية غير صحيحة' }],
+	WEAK_PASSWORD: [{ field: 'newPassword', message: 'كلمة المرور ضعيفة: استخدم 8 أحرف على الأقل مع حرف كبير ورقم' }],
+	PASSWORD_UNCHANGED: [{ field: 'newPassword', message: 'كلمة المرور الجديدة يجب أن تختلف عن الحالية' }],
+	PASSWORD_FIELDS_REQUIRED: [{ field: 'currentPassword', message: 'أدخل كلمة المرور الحالية' }, { field: 'newPassword', message: 'أدخل كلمة المرور الجديدة' }],
+};
+
 export const changePassword = async (req: Request, res: Response) => {
 	try {
 		const userId = req.user?.id;
@@ -66,7 +73,9 @@ export const changePassword = async (req: Request, res: Response) => {
 		res.json({ success: true, data });
 	} catch (error: any) {
 		const status = error.message === 'CURRENT_PASSWORD_INCORRECT' ? 401 : 400;
-		res.status(status).json({ success: false, message: error.message });
+		// The code stays the message; `errors` names the password box it belongs under (admin "my account" and the other password forms read it).
+		const where = PASSWORD_ERROR_FIELDS[error.message];
+		res.status(status).json({ success: false, message: error.message, ...(where && { errors: where.map((w) => fieldErrorItem(w.field, w.message)) }) });
 	}
 };
 

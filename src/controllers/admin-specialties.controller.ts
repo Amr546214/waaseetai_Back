@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { AdminSpecialtiesService } from '../services/admin-specialties.service';
 import { recordAdminAudit } from '../utils/admin-audit';
-import { AppError } from '../utils/app-error';
+import { fieldError, fieldErrors } from '../utils/app-error';
 
 const specialtiesService = new AdminSpecialtiesService();
 
@@ -10,10 +10,10 @@ const CATEGORY_FIELDS = ['slug', 'nameAr', 'nameEn', 'icon', 'description', 'sor
 function pickCategory(body: any, partial: boolean) {
   const out: Record<string, unknown> = {};
   for (const k of CATEGORY_FIELDS) if (body && body[k] !== undefined) out[k] = body[k];
-  if (!partial && (!out.slug || !out.nameAr)) throw new AppError('المعرّف والاسم العربي مطلوبان', 400);
-  for (const k of ['slug', 'nameAr', 'nameEn', 'icon', 'description']) if (out[k] !== undefined && typeof out[k] !== 'string') throw new AppError('قيمة غير صالحة', 400);
-  if (out.sortOrder !== undefined && !Number.isInteger(out.sortOrder)) throw new AppError('ترتيب غير صالح', 400);
-  if (out.isActive !== undefined && typeof out.isActive !== 'boolean') throw new AppError('قيمة غير صالحة', 400);
+  if (!partial && (!out.slug || !out.nameAr)) throw fieldErrors('المعرّف والاسم العربي مطلوبان', [...(!out.nameAr ? [{ field: 'nameAr', message: 'الاسم العربي مطلوب' }] : []), ...(!out.slug ? [{ field: 'slug', message: 'المعرّف (slug) مطلوب' }] : [])]);
+  for (const k of ['slug', 'nameAr', 'nameEn', 'icon', 'description']) if (out[k] !== undefined && typeof out[k] !== 'string') throw fieldError(k, 'قيمة غير صالحة');
+  if (out.sortOrder !== undefined && !Number.isInteger(out.sortOrder)) throw fieldError('sortOrder', 'ترتيب غير صالح');
+  if (out.isActive !== undefined && typeof out.isActive !== 'boolean') throw fieldError('isActive', 'قيمة غير صالحة');
   return out;
 }
 const brief = (c: any) => c && ({ id: c.id, slug: c.slug, nameAr: c.nameAr, nameEn: c.nameEn, isActive: c.isActive, sortOrder: c.sortOrder });

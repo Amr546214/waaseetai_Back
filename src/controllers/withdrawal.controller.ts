@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { WithdrawalStatus } from '@prisma/client';
 import { createWithdrawalSchema, createMarketerWithdrawalSchema, rejectWithdrawalSchema, resolveWithdrawalSchema } from '../dtos/withdrawal.dto';
-import { AppError } from '../utils/app-error';
+import { AppError, zodAppError } from '../utils/app-error';
 import { withdrawalService, withoutLegacyWithdrawalBankFields } from '../services/withdrawal.service';
 import { payoutService } from '../services/payout.service';
 import { adminAudit } from '../services/admin-audit.service';
@@ -58,11 +58,11 @@ export async function getWithdrawal(req: Request, res: Response, next: NextFunct
 }
 
 export async function approveWithdrawal(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = resolveWithdrawalSchema.safeParse(req.body || {}); if (!parsed.success) throw new AppError('بيانات اعتماد السحب غير صحيحة', 400); res.json({ success: true, data: withoutLegacyWithdrawalBankFields(await withdrawalService.approve(String(req.params.id), adminId(req), parsed.data)) }); } catch (error) { next(error); }
+  try { const parsed = resolveWithdrawalSchema.safeParse(req.body || {}); if (!parsed.success) throw zodAppError(parsed.error.issues, 'بيانات اعتماد السحب غير صحيحة', { adminNote: 'ملاحظات الإدارة طويلة جدًا (الحد الأقصى 2000 حرف)' }); res.json({ success: true, data: withoutLegacyWithdrawalBankFields(await withdrawalService.approve(String(req.params.id), adminId(req), parsed.data)) }); } catch (error) { next(error); }
 }
 
 export async function rejectWithdrawal(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = rejectWithdrawalSchema.safeParse(req.body); if (!parsed.success) throw new AppError('سبب رفض السحب مطلوب', 400); res.json({ success: true, data: withoutLegacyWithdrawalBankFields(await withdrawalService.reject(String(req.params.id), adminId(req), parsed.data)) }); } catch (error) { next(error); }
+  try { const parsed = rejectWithdrawalSchema.safeParse(req.body); if (!parsed.success) throw zodAppError(parsed.error.issues, 'سبب رفض السحب مطلوب', { rejectionReason: 'سبب رفض السحب مطلوب' }); res.json({ success: true, data: withoutLegacyWithdrawalBankFields(await withdrawalService.reject(String(req.params.id), adminId(req), parsed.data)) }); } catch (error) { next(error); }
 }
 
 // Payout P2-C: deliberately takes NO request body at all — every financial

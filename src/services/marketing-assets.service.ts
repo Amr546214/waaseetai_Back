@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { prisma } from '../config/db';
-import { AppError } from '../utils/app-error';
+import { AppError, fieldError, zodAppError } from '../utils/app-error';
 import { withTableGuard, isMissingTableError } from '../utils/missing-table';
 import { uploadMulterFile } from '../utils/cloudinary-storage';
 
@@ -34,18 +34,18 @@ export const updateAssetSchema = z.object(fields).partial().strict();
 
 function parse<T>(schema: z.ZodType<T>, body: unknown): T {
 	const r = schema.safeParse(body ?? {});
-	if (!r.success) throw new AppError(r.error.issues[0]?.message || 'بيانات غير صالحة', 400, r.error.issues.map(i => i.message));
+	if (!r.success) throw zodAppError(r.error.issues, r.error.issues[0]?.message || 'بيانات غير صالحة');
 	return r.data;
 }
 
 function assertKindPayload(kind: string, d: { linkUrl?: string | null; text?: string | null }, hasFile: boolean, file?: Express.Multer.File) {
 	if (MIME_BY_KIND[kind]) {
-		if (!hasFile) throw new AppError('ارفع ملفاً لهذا النوع من المواد', 400);
+		if (!hasFile) throw fieldError('file', 'ارفع ملفاً لهذا النوع من المواد');
 		if (file && !MIME_BY_KIND[kind].includes(String(file.mimetype).toLowerCase())) throw new AppError('نوع الملف لا يطابق نوع المادة المختار', 415);
 	} else if (kind === 'LINK') {
-		if (!d.linkUrl) throw new AppError('الرابط مطلوب', 400);
+		if (!d.linkUrl) throw fieldError('linkUrl', 'الرابط مطلوب');
 	} else if (kind === 'TEXT') {
-		if (!d.text) throw new AppError('النص مطلوب', 400);
+		if (!d.text) throw fieldError('text', 'النص مطلوب');
 	}
 }
 

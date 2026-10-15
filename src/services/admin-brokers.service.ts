@@ -1,7 +1,7 @@
 import { readAffiliateLevels, affiliateLevelInfo } from '../utils/affiliate-level-reader';
 import { LogCategory, UserStatus } from '@prisma/client';
 import { prisma } from '../config/db';
-import { AppError } from '../utils/app-error';
+import { AppError, fieldError } from '../utils/app-error';
 import { accountAuditLogService } from './account-logs.service';
 import { disconnectUserSockets } from '../utils/socket-registry';
 
@@ -219,9 +219,9 @@ export class AdminBrokersService {
   // Suspend / reactivate a broker account. Admin-only (route gate), requires a written reason when suspending, closes live sockets, and leaves an ADMIN audit entry on the broker's own log.
   async setBrokerStatus(adminId: string, userId: string, input: { status: string; reason?: string }) {
     const status = String(input.status || '').toUpperCase();
-    if (status !== UserStatus.ACTIVE && status !== UserStatus.SUSPENDED) throw new AppError('الحالة المسموحة: نشط أو موقوف', 400);
+    if (status !== UserStatus.ACTIVE && status !== UserStatus.SUSPENDED) throw fieldError('status', 'الحالة المسموحة: نشط أو موقوف');
     const reason = String(input.reason || '').trim();
-    if (status === UserStatus.SUSPENDED && reason.length < 5) throw new AppError('سبب الإيقاف مطلوب', 400);
+    if (status === UserStatus.SUSPENDED && reason.length < 5) throw fieldError('reason', 'سبب الإيقاف مطلوب');
 
     const affiliate = await prisma.affiliateProfile.findUnique({ where: { userId }, select: { userId: true, user: { select: { status: true, accountType: true } } } });
     if (!affiliate) throw new AppError('الوسيط غير موجود', 404);

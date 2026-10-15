@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { OnboardingStatus, KYCStatus } from '@prisma/client';
 import { onboardingUploadSchema, rejectOnboardingSchema } from '../dtos/onboarding.dto';
-import { AppError } from '../utils/app-error';
+import { AppError, zodAppError } from '../utils/app-error';
 import { uploadMulterFile } from '../utils/cloudinary-storage';
 import { onboardingService } from '../services/onboarding.service';
 import { adminActor } from '../utils/admin-actor';
@@ -50,7 +50,7 @@ export async function adminApproveOnboarding(req: Request, res: Response, next: 
 export async function adminRejectOnboarding(req: Request, res: Response, next: NextFunction) {
   try {
     const parsed = rejectOnboardingSchema.safeParse(req.body);
-    if (!parsed.success) throw new AppError('سبب الرفض مطلوب', 400);
+    if (!parsed.success) throw zodAppError(parsed.error.issues, 'سبب الرفض مطلوب', { rejectionReason: 'سبب الرفض مطلوب' });
     const data = await onboardingService.rejectOnboarding(String(req.params.id), parsed.data, adminActor(req));
     res.json({ success: true, message: 'تم رفض طلب التحقق', data });
   } catch (error) { next(error); }
@@ -78,7 +78,7 @@ export async function adminApproveProviderKyc(req: Request, res: Response, next:
 export async function adminRejectProviderKyc(req: Request, res: Response, next: NextFunction) {
   try {
     const parsed = rejectOnboardingSchema.safeParse(req.body);
-    if (!parsed.success) throw new AppError('سبب الرفض مطلوب', 400);
+    if (!parsed.success) throw zodAppError(parsed.error.issues, 'سبب الرفض مطلوب', { rejectionReason: 'سبب الرفض مطلوب' });
     const data = await onboardingService.rejectProviderKyc(String(req.params.userId), parsed.data, adminActor(req));
     res.json({ success: true, message: 'تم رفض التحقق من المزود', data });
   } catch (error) { next(error); }
