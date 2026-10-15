@@ -68,9 +68,11 @@ test('route wiring: SEND endpoints use otpSendLimiter (after validation) and not
     assert.doesNotMatch(block(route), /otpSendLimiter/, route);
     assert.ok(block(route).indexOf('validateRequest(') < block(route).indexOf('otpVerifyLimiters('), `${route}: the limiter runs AFTER the schema validation`);
   }
-  for (const route of ['/login', '/google', '/login/verify-otp']) {
-    assert.match(block(route), /authLimiter/, route);
-    assert.doesNotMatch(block(route), /otpSendLimiter/, route);
+  // login family: per-account + per-address pre-auth limiters (loginLimiters), after the schema validation (intentional change: was the shared per-IP authLimiter)
+  for (const route of ['/login', '/google', '/login/verify-otp', '/login/resend-otp']) {
+    assert.match(block(route), /loginLimiters\(/, route);
+    assert.doesNotMatch(block(route), /otpSendLimiter|authLimiter/, route);
+    assert.ok(block(route).indexOf('validateRequest(') < block(route).indexOf('loginLimiters('), `${route}: the limiter runs AFTER the schema validation`);
   }
 });
 
