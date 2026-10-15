@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from '../services/auth.service';
-import { RESEND_GENERIC_MESSAGE } from '../utils/auth-messages';
+import { RESEND_GENERIC_MESSAGE, REGISTER_GENERIC_MESSAGE } from '../utils/auth-messages';
 import { sessionService } from '../services/session.service';
 import { getAuthCookie, getRequestCookie } from '../utils/request-cookie';
 import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput, VerifyLoginOtpInput, ResendLoginOtpInput } from '../routes/auth/auth.schema';
@@ -31,17 +31,21 @@ export class AuthController {
 			const refCookieSource = getRequestCookie(req, 'waseet_ref_src');
 
 			const result = await authService.registerUser(input, { refCookieSlug, refCookieSource });
-			// the mailer was called: the cooldown starts only if the SMTP server accepted the code (see otpSendGate)
-			res.locals.otpEmailAttempted = true;
-			res.locals.otpEmailSent = result.emailSent === true;
+			// No userId = nothing was created for this caller (data already in use): no mailer call, so no cooldown is recorded either.
+			const created = typeof result.userId === 'string';
+			if (created) {
+				// the mailer was called: the cooldown starts only if the SMTP server accepted the code (see otpSendGate)
+				res.locals.otpEmailAttempted = true;
+				res.locals.otpEmailSent = result.emailSent === true;
+			}
 
 			res.status(201).json({
 				success: true,
-				// emailSent=false: the account exists but the code email did not go out; the app must say so and offer a resend.
-				// generic: the same words whether the account was created or the data was already in use (see registerUser)
-				message: result.emailSent
-					? 'تمت معالجة طلبك. إذا كانت البيانات صالحة للتسجيل فقد أرسلنا رمز التحقق إلى بريدك الإلكتروني'
-					: 'تم إنشاء الحساب لكن تعذر إرسال رمز التحقق إلى بريدك الآن. حاول إعادة الإرسال بعد قليل أو تواصل مع الدعم',
+				// emailSent=false with a userId: the account exists but the code email did not go out; the app must say so and offer a resend.
+				// Without a userId (data already in use) and for a new account whose code went out, the wording is the same and claims no code.
+				message: created && !result.emailSent
+					? 'تم إنشاء الحساب لكن تعذر إرسال رمز التحقق إلى بريدك الآن. حاول إعادة الإرسال بعد قليل أو تواصل مع الدعم'
+					: REGISTER_GENERIC_MESSAGE,
 				data: result
 			});
 		} catch (error) {

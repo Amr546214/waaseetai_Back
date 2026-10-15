@@ -231,11 +231,12 @@ export class AuthService {
 			if (googleIdentity && existingUser.email.trim().toLowerCase() === input.email) {
 				throw new AppError('هذا الحساب موجود بالفعل، يرجى تسجيل الدخول', 409);
 			}
-			// Anyone else (an arbitrary email / phone typed into the form) gets the SAME answer as a fresh registration: a decoy id, emailSent
-			// true, and the same bcrypt cost. Nothing is created or sent; verify-otp with the decoy id fails like any wrong code, and the real
-			// owner is still served by login / forgot-password. Nothing here says which of the email or the phone matched.
+			// Anyone else (an arbitrary email / phone typed into the form) gets the same status and body SHAPE as a fresh registration, but with
+			// NO userId and emailSent:false: nothing is created, no code is created or sent (active or pending alike, no alert mail either), and the
+			// response does not claim otherwise. A pending owner activates through login (which re-sends the code, throttled); an active one logs in
+			// or recovers the password. The same bcrypt cost keeps the response time close. Nothing here says which of email / phone matched.
 			if (input.password) await bcrypt.hash(input.password, 12);
-			return { userId: crypto.randomUUID(), emailSent: true };
+			return { userId: null as string | null, emailSent: false, accountCreated: false };
 		}
 
 		// 2. Hash Password
@@ -275,8 +276,9 @@ export class AuthService {
 		const emailSent = await this.sendActivationEmail(user.email, otpCode, 'register');
 
 		return {
-			userId: user.id,
-			emailSent
+			userId: user.id as string | null,
+			emailSent,
+			accountCreated: true
 		};
 	}
 
