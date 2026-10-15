@@ -770,7 +770,7 @@ export class ClientRequestsService {
 
 		const projectIds = contracts.map(c => c.projectId);
 		const reviews = projectIds.length > 0
-			? await prisma.review.findMany({ where: { projectId: { in: projectIds }, clientId: userId, reviewerRole: 'CLIENT' } })
+			? await prisma.review.findMany({ where: { projectId: { in: projectIds }, clientId: userId, reviewerRole: 'CLIENT', stageId: null } }) // project-level reviews only: a stage review must not make the project look rated
 			: [];
 		const reviewMap = new Map(reviews.map(r => [r.projectId, r]));
 		const settledMap = await settlementsByProject(projectIds);

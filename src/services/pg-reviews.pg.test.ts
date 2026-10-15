@@ -303,3 +303,15 @@ test('migration rollback: refuses with an unpublished review or saved tags (noth
 		assert.deepEqual([row.id, row.rating], ['r1', 4]);
 	});
 });
+
+test('pg: the client archive row (completed-projects) counts only the PROJECT review: a stage review alone does not make the project look rated', opts, async () => {
+	const svc = await rating();
+	const { clientRequestsService } = await import('./client-requests.service');
+	const w = await seed();
+	await svc.rateStage(w.project.id, w.stages[0].id, w.client.id, { rating: 2, comment: 'stage only' });
+	let row = (await clientRequestsService.getCompletedProjects(w.client.id)).items.find((i: any) => i.projectId === w.project.id)!;
+	assert.deepEqual([row.hasRated, row.canRate, row.rating], [false, true, null]);
+	await svc.rateRequest(w.project.id, w.client.id, 'client', { rating: 5, comment: 'project review' });
+	row = (await clientRequestsService.getCompletedProjects(w.client.id)).items.find((i: any) => i.projectId === w.project.id)!;
+	assert.deepEqual([row.hasRated, row.canRate, row.rating, row.ratingComment], [true, false, 5, 'project review']);
+});
