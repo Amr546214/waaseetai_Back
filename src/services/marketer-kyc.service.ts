@@ -1,6 +1,6 @@
 import { LogCategory } from '@prisma/client';
 import { prisma } from '../config/db';
-import { AppError } from '../utils/app-error';
+import { AppError, fieldError } from '../utils/app-error';
 import { uploadMulterFile } from '../utils/cloudinary-storage';
 import { sanitizeText } from '../utils/sanitize-text';
 import { notificationService } from './notification.service';
@@ -104,7 +104,7 @@ export class MarketerKycService {
 
 	async reject(affiliateId: string, adminUserId: string, reason: string, context?: AuditContext) {
 		const cleaned = sanitizeText(String(reason ?? '')).trim().slice(0, 500);
-		if (cleaned.length < 3) throw new AppError('سبب الرفض مطلوب', 400);
+		if (cleaned.length < 3) throw fieldError('reason', 'سبب الرفض مطلوب');
 		const target = await this.loadForReview(affiliateId, adminUserId);
 		// the rejected document leaves the queue; identityVerified stays false (it is written only on approval)
 		const where = { id: target.id, identityVerified: false, kycDocumentUrl: { not: null } };

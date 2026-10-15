@@ -49,9 +49,10 @@ export const resolveDisputeFinancialSchema = z.object({
     z.string().trim().min(2, 'الملاحظة قصيرة جدًا').max(10000, 'الملاحظة طويلة جدًا (الحد الأقصى 10000 حرف)').optional()
   )
 }).superRefine((v, ctx) => {
-  const bad = (message: string) => ctx.addIssue({ code: 'custom', message });
-  if (v.outcome === 'REFUND_CLIENT' && !(v.refundToClient > 0 && v.releaseToProvider === 0)) bad('الاسترداد الكامل: مبلغ الاسترداد أكبر من صفر ومبلغ مقدم الخدمة صفر');
-  if (v.outcome === 'RELEASE_PROVIDER' && !(v.releaseToProvider > 0 && v.refundToClient === 0)) bad('الصرف الكامل: مبلغ مقدم الخدمة أكبر من صفر ومبلغ الاسترداد صفر');
-  if (v.outcome === 'SPLIT' && !(v.releaseToProvider > 0 && v.refundToClient > 0)) bad('التقسيم: يجب أن يكون المبلغان أكبر من صفر');
+  // `path` names the amount box the message belongs under (the FE puts it right there).
+  const bad = (message: string, field: 'refundToClient' | 'releaseToProvider') => ctx.addIssue({ code: 'custom', message, path: [field] });
+  if (v.outcome === 'REFUND_CLIENT' && !(v.refundToClient > 0 && v.releaseToProvider === 0)) bad('الاسترداد الكامل: مبلغ الاسترداد أكبر من صفر ومبلغ مقدم الخدمة صفر', v.refundToClient > 0 ? 'releaseToProvider' : 'refundToClient');
+  if (v.outcome === 'RELEASE_PROVIDER' && !(v.releaseToProvider > 0 && v.refundToClient === 0)) bad('الصرف الكامل: مبلغ مقدم الخدمة أكبر من صفر ومبلغ الاسترداد صفر', v.releaseToProvider > 0 ? 'refundToClient' : 'releaseToProvider');
+  if (v.outcome === 'SPLIT' && !(v.releaseToProvider > 0 && v.refundToClient > 0)) bad('التقسيم: يجب أن يكون المبلغان أكبر من صفر', v.releaseToProvider > 0 ? 'refundToClient' : 'releaseToProvider');
 });
 export type ResolveDisputeFinancialInput = z.infer<typeof resolveDisputeFinancialSchema>;
