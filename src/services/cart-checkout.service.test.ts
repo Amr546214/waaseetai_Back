@@ -1,5 +1,6 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { liveServices } from './cart-checkout-live.testkit';
 import { Prisma } from '@prisma/client';
 
 // Phase 3E.2: getCart()/formatCartItem() and createOrder()'s NEW OrderItem
@@ -307,11 +308,12 @@ for (const rejected of ['card', 'stc_pay', 'apple_pay', 'paypal', 'bank', 'cash'
 }
 
 test('initPayment: "wallet" with a sufficient balance proceeds past the method gate and sends an OTP', async (t) => {
-  const order = { id: 'order-1', status: 'PENDING_PAYMENT', total: 100, user: { email: 'client@example.com', phoneNumber: null, walletBalance: 250 } };
+  const order = { id: 'order-1', status: 'PENDING_PAYMENT', total: 100, items: [{ serviceId: 'service-1', providerId: 'provider-9' }], user: { email: 'client@example.com', phoneNumber: null, walletBalance: 250 } };
   t.mock.module('../config/db', {
     namedExports: {
       prisma: {
         order: { findFirst: async () => order },
+        serviceCatalog: { findMany: liveServices('provider-9') },
         otpVerification: { deleteMany: async () => ({ count: 0 }), create: async () => ({}) }
       }
     }
@@ -329,8 +331,8 @@ test('initPayment: "wallet" with a sufficient balance proceeds past the method g
 });
 
 test('initPayment: an insufficient balance is rejected with a 402 and exact required/available/shortfall — no OTP sent', async (t) => {
-  const order = { id: 'order-1', status: 'PENDING_PAYMENT', total: 120, user: { email: 'client@example.com', phoneNumber: null, walletBalance: 80 } };
-  t.mock.module('../config/db', { namedExports: { prisma: { order: { findFirst: async () => order } } } });
+  const order = { id: 'order-1', status: 'PENDING_PAYMENT', total: 120, items: [{ serviceId: 'service-1', providerId: 'provider-9' }], user: { email: 'client@example.com', phoneNumber: null, walletBalance: 80 } };
+  t.mock.module('../config/db', { namedExports: { prisma: { order: { findFirst: async () => order }, serviceCatalog: { findMany: liveServices('provider-9') } } } });
   const sendPaymentOtpEmailSpy = t.mock.fn(async () => {});
   t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: sendPaymentOtpEmailSpy } } });
 
@@ -372,7 +374,9 @@ function createConfirmMockPrisma(t: TestContext, opts: { order: any; walletBalan
         orderUpdated = args.data; return { count: 1 };
       })
     },
-    project: { create: async (args: any) => ({ id: `project-${args.data.title}`, ...args.data }), findMany: t.mock.fn(async () => opts.activePurchases || []) },
+    project: { findFirst: async () => null, create: async (args: any) => ({ id: `project-${args.data.title}`, ...args.data }), findMany: t.mock.fn(async () => opts.activePurchases || []) },
+    serviceCatalog: { findMany: liveServices() },
+    $queryRaw: async () => [],
     cartItem: { deleteMany: t.mock.fn(async () => ({ count: 1 })) },
     otpVerification: { delete: async () => ({}) }
   };
@@ -384,7 +388,7 @@ function createConfirmMockPrisma(t: TestContext, opts: { order: any; walletBalan
       update: async () => ({})
     },
     serviceStage: { findMany: async () => opts.services || [] },
-    serviceCatalog: { findMany: async () => [] },
+    serviceCatalog: { findMany: liveServices() },
     // Rollback-on-throw for the order transition + wallet state, mirroring a
     // real ROLLBACK (the order PENDING_PAYMENT -> PAID gate now runs first in
     // the transaction, so a later failure must undo it, as Postgres would).
@@ -471,12 +475,14 @@ test('confirmPayment: two concurrent confirmations for the same user against a b
     walletTransaction: { create: t.mock.fn(async (args: any) => { walletTransactions.push(args.data); return args.data; }) },
     coupon: { findUnique: async () => null, updateMany: async () => ({ count: 0 }) },
     couponRedemption: { count: async () => 0, create: async () => ({}) },
-    project: { create: async (args: any) => ({ id: `project-${args.data.title}`, ...args.data }), findMany: async () => [] },
+    project: { findFirst: async () => null, create: async (args: any) => ({ id: `project-${args.data.title}`, ...args.data }), findMany: async () => [] },
     contract: { create: async (args: any) => ({ id: 'contract-1', ...args.data }) },
     providerGamification: { findUnique: async () => null },
     escrow: { create: t.mock.fn(async (args: any) => args.data) },
     projectStage: { create: async () => ({}), createMany: async () => ({}) },
     order: { updateMany: async () => ({ count: 1 }) },
+    serviceCatalog: { findMany: liveServices() },
+    $queryRaw: async () => [],
     cartItem: { deleteMany: async () => ({ count: 0 }) },
     otpVerification: { delete: async () => ({}) }
   };
@@ -493,7 +499,7 @@ test('confirmPayment: two concurrent confirmations for the same user against a b
     order: { findFirst: async (args: any) => ordersById[args.where.id] || null },
     otpVerification: { findMany: async () => otpRows, update: async () => ({}) },
     serviceStage: { findMany: async () => [] },
-    serviceCatalog: { findMany: async () => [] },
+    serviceCatalog: { findMany: liveServices() },
     $transaction: async (fn: any) => fn(tx)
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
@@ -557,7 +563,7 @@ test('confirmPayment: two concurrent confirmations for the SAME order (same paym
     walletTransaction: { create: createWalletTransaction },
     coupon: { findUnique: async () => null, updateMany: async () => ({ count: 0 }) },
     couponRedemption: { count: async () => 0, create: async () => ({}) },
-    project: { create: async (args: any) => ({ id: `project-${Math.random()}`, ...args.data }), findMany: async () => [] },
+    project: { findFirst: async () => null, create: async (args: any) => ({ id: `project-${Math.random()}`, ...args.data }), findMany: async () => [] },
     contract: { create: async (args: any) => ({ id: `contract-${Math.random()}`, ...args.data }) },
     providerGamification: { findUnique: async () => null },
     escrow: { create: t.mock.fn(async (args: any) => { escrows.push(args.data); return args.data; }) },
@@ -567,6 +573,8 @@ test('confirmPayment: two concurrent confirmations for the SAME order (same paym
       if (order.status !== args.where.status) return { count: 0 };
       Object.assign(order, args.data); return { count: 1 };
     } },
+    serviceCatalog: { findMany: liveServices() },
+    $queryRaw: async () => [],
     cartItem: { deleteMany: async () => ({ count: 0 }) },
     otpVerification: { delete: async () => ({}) }
   };
@@ -618,7 +626,7 @@ test('confirmPayment: two concurrent confirmations for the SAME order (same paym
     order: { findFirst: async () => order },
     otpVerification: { findMany: async () => [sharedOtp], delete: async () => ({}), update: async () => ({}) },
     serviceStage: { findMany: async () => [] },
-    serviceCatalog: { findMany: async () => [] },
+    serviceCatalog: { findMany: liveServices() },
     $transaction: transactionMock
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
@@ -720,7 +728,7 @@ test('Phase 4 createOrder: an existing active purchase of the same service rejec
   assert.equal(orderCreateSpy.mock.callCount(), 0);
 });
 
-test('Phase 4 addItem: an existing active purchase rejects 409 and the cart is not touched; own service rejected 400', async (t) => {
+test('Phase 4 addItem: an existing active purchase rejects 409 and the cart is not touched; own service rejected 403 SELF_PURCHASE_FORBIDDEN', async (t) => {
   const cartUpsert = t.mock.fn(async () => ({ id: 'cart-1', items: [] }));
   let active: any[] = [ACTIVE_PURCHASE];
   let service: any = { id: 'service-1', providerId: 'provider-9' };
@@ -739,7 +747,7 @@ test('Phase 4 addItem: an existing active purchase rejects 409 and the cart is n
 
   active = []; service = { id: 'service-1', providerId: 'user-1' };
   const own: any = await cartCheckoutService.addItem('user-1', { modelId: 'service-1' }).catch((e: any) => e);
-  assert.equal(own.statusCode, 400);
+  assert.equal(own.statusCode, 403); assert.equal(own.code, 'SELF_PURCHASE_FORBIDDEN');
   assert.equal(cartUpsert.mock.callCount(), 0);
 });
 

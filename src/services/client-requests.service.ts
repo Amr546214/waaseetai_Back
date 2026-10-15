@@ -1,3 +1,4 @@
+import { selfHireError } from '../utils/self-dealing';
 import { buildEscrowSnapshot, ESCROW_FEE_POLICY_V2 } from '../utils/escrow-commission';
 import { prisma } from '../config/db';
 import { deriveRequestStage, offerActionBlock, REQUEST_STAGE_GROUP, REQUEST_STAGE_LABEL } from '../utils/request-lifecycle';
@@ -1337,6 +1338,8 @@ export class ClientRequestsService {
 			throw new AppError('هذا العرض مسحوب ولا يمكن اختياره', 409);
 		}
 		const providerId = canonical?.providerId || legacy!.providerId;
+		// the real provider user id vs the authenticated client: nobody hires themselves, whatever role they act as
+		if (providerId === userId) throw selfHireError();
 		// While the request is still OPEN only a live offer can be chosen, and not while the provider's counter offer waits for an answer
 		// (changing the chosen offer after selection stays as before: allowed until the client signs).
 		if (String(request.status) === 'OPEN') {
@@ -1529,6 +1532,7 @@ export class ClientRequestsService {
 			where: { projectId: requestId, clientId: userId, status: ContractStatus.PENDING_CLIENT_SIGNATURE }
 		});
 		if (!contract) throw new AppError('يجب اختيار عرض صالح قبل توقيع العقد', 409);
+		if (contract.providerId === userId) throw selfHireError();
 		if (offerId !== contract.offerId) {
 			const selectedLegacy = await prisma.proposal.findFirst({
 				where: { id: offerId, clientRequestId: requestId, providerId: contract.providerId, status: ProposalStatus.PENDING_SIGNATURE }
@@ -1590,6 +1594,8 @@ export class ClientRequestsService {
 			where: { projectId: requestId, clientId: userId, status: ContractStatus.PENDING_CLIENT_SIGNATURE }
 		});
 		if (!contractBeforePayment) throw new AppError('العقد غير جاهز لتوقيع العميل أو تم توقيعه مسبقاً', 409);
+		// before the OTP is read and before any wallet debit / escrow hold
+		if (contractBeforePayment.providerId === userId) throw selfHireError();
 		// Phase 4 — selectOffer() stores the CANONICAL ProjectProposal id on
 		// Contract.offerId whenever one exists, while the client UI (request
 		// details → contract → deposit) carries the legacy Proposal mirror id

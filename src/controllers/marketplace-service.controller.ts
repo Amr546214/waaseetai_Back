@@ -143,9 +143,11 @@ export class MarketplaceServiceController {
 	async requestService(req: Request, res: Response) {
 		try {
 			const data = await marketplaceService.requestMarketplaceService(req.user!.id, req.params.id as string, req.body);
-			return res.status(201).json({ success: true, data }) as any;
+			return res.status(data.created ? 201 : 200).json({ success: true, data }) as any;
 		} catch (error: any) {
-			return res.status(400).json({ success: false, error: error.message }) as any;
+			// AppError keeps its status + stable code (SELF_NEGOTIATION_FORBIDDEN → 403); anything else stays the legacy 400
+			const status = typeof error?.statusCode === 'number' ? error.statusCode : 400;
+			return res.status(status).json({ success: false, error: error.message, message: error.message, ...(error?.code && typeof error.code === 'string' ? { code: error.code } : {}) }) as any;
 		}
 	}
 
