@@ -44,6 +44,9 @@ async function load(t: TestContext, opts: { pending?: number; lockCount?: number
     $transaction: async (fn: any) => fn(tx)
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  // The service now sends through the safe client sender (store + deliver, never throws); recorded here with the REAL builders, so the stored shape is the production one.
+  const realClientNotifications = await import('./client-notifications.service');
+  t.mock.module('./client-notifications.service', { namedExports: { clientNotificationFor: realClientNotifications.clientNotificationFor, CLIENT_ROUTES: realClientNotifications.CLIENT_ROUTES, clientNotifications: { send: async (n: any) => { state.notifications.push(n); }, deliverStored: async () => undefined } } });
   const { projectAmendmentService } = await import(`./project-amendment.service.ts?fixture=${Date.now()}-${Math.random()}`);
   return { svc: projectAmendmentService, state };
 }

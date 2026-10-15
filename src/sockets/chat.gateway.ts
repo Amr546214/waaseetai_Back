@@ -2,6 +2,7 @@ import { Socket, Server as SocketIOServer } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { chatService, authorizeConversationForRole, resolveActiveRole } from '../services/chat.service';
 import { prisma } from '../config/db';
+import { notificationService } from '../services/notification.service';
 import { JoinRoomDto, SendMessageDto } from '../dtos/chat.dto';
 
 // NestJS compatible lifecycle interfaces for Express Gateway structure
@@ -142,20 +143,18 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 						: data.type === 'IMAGE' ? '📷 أرسل لك صورة جديدة'
 							: data.type === 'FILE' ? `📁 أرسل لك ملفاً: ${data.fileName || 'مرفق'}`
 								: (data.content || 'رسالة جديدة في غرفة التفاوض');
-					await prisma.notification.create({
-						data: {
-							userId: result.recipientId,
-							title: 'رسالة تفاوض جديدة',
-							message: notificationText,
-							type: 'CHAT',
-							// The notification's recipient can be either a client or a
-							// provider (this gateway is shared), so a single static
-							// actionUrl can never be correct for both dashboard sections.
-							// The frontend resolves the real destination itself from
-							// metadata.conversationId, scoped to whichever dashboard it
-							// is currently rendering the notification in.
-							metadata: { conversationId: data.conversationId }
-						}
+					// Stored AND delivered through the recipient's channels (real-time push; never an e-mail per message, see NotificationService.deliver): the row
+					// alone never reached an open session, so the bell counter missed every message until a reload. Created only after sendMessage succeeded.
+					// The destination follows the recipient's role in THIS conversation, so the channel preferences and the link are the right dashboard's.
+					const messagesBase = result.recipientRole === 'CLIENT' ? '/client-overview/messages' : '/provider-overview/messages';
+					await notificationService.createAndEmit({
+						userId: result.recipientId,
+						title: 'رسالة تفاوض جديدة',
+						message: notificationText,
+						type: 'CHAT',
+						actionUrl: `${messagesBase}?conversationId=${encodeURIComponent(data.conversationId)}`,
+						actionText: 'فتح المحادثة',
+						metadata: { conversationId: data.conversationId }
 					}).catch(e => console.error('[ChatGateway] Notification creation err:', e));
 				}
 

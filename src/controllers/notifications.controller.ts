@@ -7,8 +7,13 @@ export class NotificationsController {
 		try {
 			const userId = (req as any).user?.id;
 			const category = req.query.category as string | undefined;
-			const notifications = await notificationService.getUserNotifications(userId, category, { unreadOnly: req.query.unreadOnly === 'true', type: typeof req.query.type === 'string' && req.query.type ? req.query.type : undefined });
-			return res.status(200).json({ success: true, data: notifications }) as any;
+			// `since` (ISO date): only notifications stored after it, so a reconnecting client recovers what it missed; an unreadable value is a 400, never "everything".
+			const sinceRaw = typeof req.query.since === 'string' && req.query.since ? req.query.since : null;
+			const since = sinceRaw ? new Date(sinceRaw) : null;
+			if (since && Number.isNaN(since.getTime())) return res.status(400).json({ success: false, error: 'قيمة since غير صالحة' }) as any;
+			const notifications = await notificationService.getUserNotifications(userId, category, { unreadOnly: req.query.unreadOnly === 'true', type: typeof req.query.type === 'string' && req.query.type ? req.query.type : undefined, since });
+			// unreadCount = the real total for the account (not the size of the returned page), so the bell counter is exact after any recovery
+			return res.status(200).json({ success: true, data: notifications, unreadCount: await notificationService.countUnread(userId) }) as any;
 		} catch (error: any) {
 			console.error('[NotificationsController] Error getting notifications:', error);
 			return res.status(500).json({ success: false, error: error.message }) as any;

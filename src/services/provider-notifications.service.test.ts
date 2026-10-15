@@ -11,6 +11,8 @@ const REAL_PROVIDER_ROUTES = [
 	/^\/provider-overview\/profile\/data$/,
 	/^\/provider-overview\/finance\/withdraw$/,
 	/^\/provider-overview\/projects\/active\/progress\/[^/]+$/,
+	// the provider's rating page of a project (provider.routes.ts: projects/:id/rating)
+	/^\/provider-overview\/projects\/[^/]+\/rating$/,
 	/^\/provider-overview\/offers\/[^/]+\/sign-contract$/,
 	/^\/provider-overview\/explore-requests\/[^/]+\/apply$/,
 	/^\/provider-overview\/offers$/,

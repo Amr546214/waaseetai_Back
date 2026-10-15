@@ -358,13 +358,6 @@ export class ProposalService {
 				};
 
 				io.to(`project_owner_${targetClientId}`).emit('new_proposal_submitted', payload);
-				io.to(`user_${targetClientId}`).emit('notification_received', {
-					title: 'تم استلام عرض جديد',
-					message: `تم استلام عرض جديد على مشروعك "${targetTitle}"`,
-					type: 'NEW_PROPOSAL',
-					actionUrl: `/client-overview/my-requests/${projectId}`,
-					createdAt: new Date()
-				});
 				console.log(`[ProposalService] Real-time proposal notification emitted to owner: ${targetClientId}`);
 			}
 		} catch (err) {

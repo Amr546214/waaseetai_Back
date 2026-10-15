@@ -230,7 +230,8 @@ export class NotificationService {
 			} catch { /* default channels */ }
 		}
 		if (channels.push) this.emitDto(dto);
-		if (channels.email && recipient?.email) void this.sendNotificationMail(recipient.email, recipient.firstName, dto, lang);
+		// A chat message is pushed in real time only: one e-mail per message of a negotiation would flood the inbox (the message itself is stored and unread-counted).
+		if (channels.email && recipient?.email && dto.type !== 'CHAT') void this.sendNotificationMail(recipient.email, recipient.firstName, dto, lang);
 	}
 
 	private async sendNotificationMail(email: string, firstName: string | null, dto: NotificationDto, lang: 'ar' | 'en' = 'ar'): Promise<void> {
@@ -385,7 +386,7 @@ export class NotificationService {
 	public async getUserNotifications(
 		userId: string,
 		categoryFilter?: string,
-		options: { unreadOnly?: boolean; type?: string } = {},
+		options: { unreadOnly?: boolean; type?: string; since?: Date | null } = {},
 	): Promise<NotificationDto[]> {
 		const category = parseCategoryFilter(categoryFilter);
 
@@ -395,11 +396,18 @@ export class NotificationService {
 				...(category ? { category } : {}),
 				...(options.unreadOnly ? { isRead: false } : {}),
 				...(options.type ? { type: options.type } : {}),
+				// recovery after a socket reconnection: what was stored at or after the newest notification the client already holds (the client de-duplicates by id, so a same-millisecond tie is never lost)
+				...(options.since ? { createdAt: { gte: options.since } } : {}),
 			},
 			orderBy: { createdAt: 'desc' },
 		});
 
 		return notifications.map(toDto);
+	}
+
+	/** The real number of unread notifications of one user (what the bell shows); never derived from a page of the list. */
+	public async countUnread(userId: string): Promise<number> {
+		return prisma.notification.count({ where: { userId, isRead: false } });
 	}
 
 	/**
