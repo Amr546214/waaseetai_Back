@@ -23,7 +23,8 @@ function setup(t: TestContext, projects: any[]) {
     clientRequest: { findMany: async () => [] },
     project: { findMany: async () => projects },
     escrow: { findMany: async () => projects.filter(p => p.escrow).map(p => ({ projectId: p.id, ...p.escrow })) },
-    contract: { findMany: async () => projects.filter(p => p.contract).map(p => ({ id: p.contract.id, projectId: p.id })) }
+    contract: { findMany: async () => projects.filter(p => p.contract).map(p => ({ id: p.contract.id, projectId: p.id })) },
+    dispute: { findMany: async () => [] }
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
 }

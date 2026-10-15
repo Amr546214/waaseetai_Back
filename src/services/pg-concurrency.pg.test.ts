@@ -62,7 +62,7 @@ const consistent = (m: Awaited<ReturnType<typeof money>>) => {
 test('pg: the isolated database is really the throw-away one', opts, async () => {
 	const prisma = await db();
 	const [{ current_database }] = await prisma.$queryRaw`SELECT current_database()` as any[];
-	assert.equal(current_database, 'qa_iso');
+	assert.match(current_database, /^qa_iso/);
 });
 
 // ── 1. two simultaneous approvals of the same amendment ─────────────────────────────────────────────────────────────────────

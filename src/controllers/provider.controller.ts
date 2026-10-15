@@ -610,7 +610,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 		// Projects closed by an admin financial dispute settlement: shown as such, never as "completed".
 		const settledIds = await settledProjectIds([...contracts.map(c => c.projectId), ...projects.map(p => p.id)]);
 		// ONE lifecycle per archived contract: the same state and the same money as the detail pages (a settled project is its own end state, never "completed").
-		const lifecycleMap = await listLifecycles(contracts.map(c => ({ projectId: c.projectId, contractStatus: c.status, price: c.price, escrow: c.project?.escrow ?? null })));
+		const lifecycleMap = await listLifecycles(contracts.map(c => ({ projectId: c.projectId, contractStatus: c.status, price: c.price, escrow: c.project?.escrow ?? null })), { db: prisma });
 		const settledExtra = (id: string) => {
 			const lc = lifecycleMap.get(id);
 			const base = settledIds.has(id) ? { settled: true, statusLabel: SETTLED_LABEL_AR } : {};

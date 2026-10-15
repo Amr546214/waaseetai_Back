@@ -17,6 +17,7 @@ import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { providerNotifications } from './provider-notifications.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import { listLifecycles, activeDisputeCounts } from './project-lifecycle.service';
+import { adminAudit } from './admin-audit.service';
 import { deliveryCompletedProject, adminSettlementFor, adminSettledView, settlementsByProject, STAGE_CLOSED_BY_SETTLEMENT, SETTLED_LABEL_AR, SETTLED_STAGE_LABEL_AR } from './settlement-state.service';
 import {
 	mailTransporter,
@@ -597,7 +598,7 @@ export class ClientRequestsService {
 			: [];
 		const workspaceMap = new Map(contracts.map(contract => [contract.projectId, contract.id]));
 		// Projects frozen by an open dispute (approval / release is refused by the backend): the list says so.
-		const activeDisputeMap = await activeDisputeCounts(allProjectIds);
+		const activeDisputeMap = await activeDisputeCounts(allProjectIds, prisma as any);
 		// Batch 6 — one batched lookup (same pattern as escrowRecords/contracts
 		// above) for the real responsible-employee field, covering BOTH
 		// Project-primary AND ClientRequest-primary items uniformly via the
@@ -781,7 +782,7 @@ export class ClientRequestsService {
 		const reviewMap = new Map(reviews.map(r => [r.projectId, r]));
 		const settledMap = await settlementsByProject(projectIds);
 		// ONE lifecycle for the archive: state, closure reason and the real money (held now / released by stage approvals / the settlement's own figures).
-		const lifecycleMap = await listLifecycles(contracts.map(c => ({ projectId: c.projectId, contractStatus: c.status, price: c.price, escrow: c.project?.escrow ?? null })));
+		const lifecycleMap = await listLifecycles(contracts.map(c => ({ projectId: c.projectId, contractStatus: c.status, price: c.price, escrow: c.project?.escrow ?? null })), { db: prisma, audit: adminAudit });
 
 		const items = contracts.map(c => {
 			const adminSettled = settledMap.get(c.projectId) ?? null;
@@ -1033,7 +1034,7 @@ export class ClientRequestsService {
 		});
 
 		// The shared lifecycle (same state + money as the archive and the workspace).
-		const lifecycle = (await listLifecycles([{ projectId: requestId, contractStatus: contractRow?.status ?? null, price: contractRow?.price ?? price, escrow: escrowRow as any }])).get(requestId)!;
+		const lifecycle = (await listLifecycles([{ projectId: requestId, contractStatus: contractRow?.status ?? null, price: contractRow?.price ?? price, escrow: escrowRow as any }], { db: prisma, audit: adminAudit })).get(requestId)!;
 		if (lifecycle.closedBySettlement) { heldAmount = 0; releasedAmount = lifecycle.financial.releasedByStageApprovals; }
 
 		return {

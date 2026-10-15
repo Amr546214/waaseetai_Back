@@ -62,7 +62,7 @@ export class AdminOperationsService {
 		const settledCompleted = await prisma.project.count({ where: { status: ProjectStatus.COMPLETED, ...settledProjectWhere } });
 		if (counts.COMPLETED !== undefined) counts.COMPLETED = Math.max(0, counts.COMPLETED - settledCompleted);
 		counts.CLOSED_BY_SETTLEMENT = settledCompleted;
-		const lifecycleMap = await listLifecycles(items.map(p => ({ projectId: p.id, contractStatus: p.contract?.status ?? null, price: p.contract?.price ?? null, escrow: p.escrow as any })));
+		const lifecycleMap = await listLifecycles(items.map(p => ({ projectId: p.id, contractStatus: p.contract?.status ?? null, price: p.contract?.price ?? null, escrow: p.escrow as any })), { db: prisma, audit: adminAudit });
 		const pages = Math.ceil(total / safeLimit);
 		return {
 			items: items.map(p => ({
