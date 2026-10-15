@@ -22,7 +22,11 @@ function setup(t: TestContext, over: { serviceCatalogId?: string | null; contrac
 	const prismaMock: any = {
 		clientRequest: { findUnique: async () => null },
 		dispute: { findFirst: async ({ where }: any) => (over.settledDispute && where.status === 'RESOLVED' && where.resolution?.in?.includes('SPLIT') ? { id: 'd-settled', resolution: 'SPLIT', resolvedAt: new Date() } : null) },
-		review: { findFirst: async ({ where }: any) => reviews.filter(r => Object.entries(where).every(([k, v]) => r[k] === v || (v === null && r[k] == null))).slice(-1)[0] ?? null },
+		review: {
+			findFirst: async ({ where }: any) => reviews.filter(r => Object.entries(where).every(([k, v]) => r[k] === v || (v === null && r[k] == null))).slice(-1)[0] ?? null,
+			// the status read also lists the client's stage reviews ({ stageId: { not: null } })
+			findMany: async ({ where }: any) => reviews.filter(r => Object.entries(where).every(([k, v]) => (v && typeof v === 'object' && 'not' in (v as object)) ? r[k] != null : (r[k] === v || (v === null && r[k] == null))))
+		},
 		contract: { findUnique: async () => ({ id: 'c1', providerId: 'prov', clientId: 'cli', projectId: 'p1', status: over.contractStatus ?? 'COMPLETED' }), findFirst: async () => ({ id: 'c1', providerId: 'prov', clientId: 'cli', projectId: 'p1' }) },
 		project: { findUnique: async () => ({ serviceCatalogId: over.serviceCatalogId ?? null }) },
 		projectStage: { findFirst: async () => ({ id: 'st1', status: 'APPROVED' }) },

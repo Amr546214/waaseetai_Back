@@ -116,6 +116,10 @@ export const clientNotificationFor = {
 		userId: p.clientId, title: 'تم إيداع الضمان', message: `حُجز ${usd(p.amount)} من محفظتك في الضمان لمشروع${quoted(p.projectName)}. يبدأ التنفيذ عندما يوقّع مقدم الخدمة العقد.`,
 		type: 'ESCROW_FUNDED', category: FINANCIAL, actionUrl: CLIENT_ROUTES.activeProjects, actionText: 'عرض مشاريعي', metadata: { requestId: p.requestId, amount: p.amount }
 	}),
+	contractSigned: (p: { clientId: string; projectId: string; projectTitle?: string | null }): ClientNotificationInput => ({
+		userId: p.clientId, title: 'وقّع مقدم الخدمة العقد وبدأ مشروعك', message: `وقّع مقدم الخدمة العقد${quoted(p.projectTitle)} وأصبح المشروع قيد التنفيذ. يمكنك متابعة المراحل من صفحة المشروع.`,
+		type: 'CONTRACT_SIGNED', category: PROJECTS, actionUrl: CLIENT_ROUTES.project(p.projectId), actionText: 'عرض المشروع', metadata: { projectId: p.projectId }
+	}),
 	orderPaid: (p: { clientId: string; orderId: string; orderNumber?: string | null; total: number; projectIds: string[] }): ClientNotificationInput => ({
 		userId: p.clientId, title: 'تم دفع طلبك', message: `خُصم ${usd(p.total)} من محفظتك لطلب الخدمة${p.orderNumber ? ` رقم ${p.orderNumber}` : ''}، وبدأ المشروع.`,
 		type: 'ORDER_PAID', category: FINANCIAL, actionUrl: p.projectIds.length === 1 ? CLIENT_ROUTES.project(p.projectIds[0]) : CLIENT_ROUTES.activeProjects, actionText: 'عرض المشروع',
@@ -123,7 +127,7 @@ export const clientNotificationFor = {
 	}),
 	ratingReceived: (p: { clientId: string; rating: number; reviewId: string; projectId?: string | null }): ClientNotificationInput => ({
 		userId: p.clientId, title: 'وصلك تقييم جديد', message: `قيّمك مقدم الخدمة بـ ${p.rating} من 5.`,
-		type: 'RATING_RECEIVED', category: PROJECTS, actionUrl: CLIENT_ROUTES.profile, actionText: 'عرض التقييمات', metadata: { reviewId: p.reviewId, rating: p.rating, ...(p.projectId ? { projectId: p.projectId } : {}) }
+		type: 'RATING_RECEIVED', category: PROJECTS, actionUrl: p.projectId ? CLIENT_ROUTES.rating(p.projectId) : CLIENT_ROUTES.profile, actionText: p.projectId ? 'عرض التقييم' : 'عرض التقييمات', metadata: { reviewId: p.reviewId, rating: p.rating, ...(p.projectId ? { projectId: p.projectId } : {}) }
 	}),
 	kycDecided: (p: { clientId: string; decision: 'APPROVED' | 'REJECTED'; reason?: string | null }): ClientNotificationInput => ({
 		userId: p.clientId,

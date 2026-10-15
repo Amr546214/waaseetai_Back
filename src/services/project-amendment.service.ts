@@ -475,8 +475,8 @@ export class ProjectAmendmentService {
       throw new AppError('تم الرد على طلب التعديل هذا مسبقًا', 409);
     }
     const { updated, data } = await this.publicById(amendmentId);
-    const clientNotification = await prisma.notification.create({ data: clientNotificationFor.amendmentAnswered({ clientId: updated.clientId, projectId: updated.projectId, amendmentId, title: updated.title, decision }) });
-    await clientNotifications.deliverStored([clientNotification.id]);
+    // stored + delivered by the safe sender: a notification failure after the decision committed must not turn a successful answer into an error (a retry would only meet a 409)
+    await clientNotifications.send(clientNotificationFor.amendmentAnswered({ clientId: updated.clientId, projectId: updated.projectId, amendmentId, title: updated.title, decision }));
     return data;
   }
 
@@ -500,8 +500,7 @@ export class ProjectAmendmentService {
     if (side === 'CLIENT') {
       await providerNotifications.amendmentAnswered({ providerId: updated.providerId, projectId: updated.projectId, amendmentId, title: updated.title, decision: 'approve' });
     } else {
-      const clientNotification = await prisma.notification.create({ data: clientNotificationFor.amendmentAnswered({ clientId: updated.clientId, projectId: updated.projectId, amendmentId, title: updated.title, decision: 'approve' }) });
-      await clientNotifications.deliverStored([clientNotification.id]);
+      await clientNotifications.send(clientNotificationFor.amendmentAnswered({ clientId: updated.clientId, projectId: updated.projectId, amendmentId, title: updated.title, decision: 'approve' }));
     }
     return data;
   }

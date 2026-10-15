@@ -30,3 +30,7 @@ export async function ratingStatusAsProvider(req: Request, res: Response, next: 
 export async function stageRatingStatusAsClient(req: Request, res: Response, next: NextFunction) {
   try { res.json({ success: true, data: await ratingService.getStageStatus(String(req.params.id), String(req.params.stageId), req.user!.id) }); } catch (error) { next(error); }
 }
+
+export async function stageRatingStatusAsProvider(req: Request, res: Response, next: NextFunction) {
+  try { res.json({ success: true, data: await ratingService.getProviderStageStatus(String(req.params.id), String(req.params.stageId), req.user!.id) }); } catch (error) { next(error); }
+}

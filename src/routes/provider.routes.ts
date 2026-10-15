@@ -9,7 +9,7 @@ import marketplaceServiceRouter from './marketplace-service.routes';
 import { exploreRequestsController } from '../controllers/explore-requests.controller';
 import { openProviderDispute, cancelProviderRequest, listMyDisputes, getMyDispute } from '../controllers/dispute.controller';
 import { createTicket, listMyTickets, getMyTicket, replyToTicket, closeMyTicket } from '../controllers/support-ticket.controller';
-import { rateAsProvider, ratingStatusAsProvider } from '../controllers/rating.controller';
+import { rateAsProvider, ratingStatusAsProvider, stageRatingStatusAsProvider } from '../controllers/rating.controller';
 import { createCoupon, deactivateCoupon, getCoupon, listCoupons, updateCoupon, decideCouponApproval, getCouponStats } from '../controllers/provider-coupon.controller';
 import companyTeamRouter from './company-team.routes';
 import specialOfferRouter from './provider-special-offer.routes';
@@ -208,6 +208,8 @@ router.post(
 router.post('/requests/:id/disputes', authenticate, requireActiveUser, providerOnly, openProviderDispute);
 router.post('/requests/:id/rate', authenticate, requireActiveUser, providerOnly, rateAsProvider);
 router.get('/requests/:id/rating-status', authenticate, requireActiveUser, providerOnly, ratingStatusAsProvider);
+// the client's rating of ONE stage, read-only for the provider (the provider never rates a stage)
+router.get('/requests/:id/stages/:stageId/rating-status', authenticate, requireActiveUser, providerOnly, stageRatingStatusAsProvider);
 router.post('/requests/:id/cancel', authenticate, requireActiveUser, providerOnly, cancelProviderRequest);
 
 // Provider's own disputes — list/detail, scoped to disputes where this

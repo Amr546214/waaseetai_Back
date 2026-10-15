@@ -8,6 +8,7 @@ import { MARKET_VISIBLE_WHERE } from '../utils/market-visibility';
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
+import { providerNotifications } from './provider-notifications.service';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 import { DUPLICATE_PURCHASE_MESSAGE, findActiveServicePurchases } from '../utils/active-purchase.util';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
@@ -500,6 +501,10 @@ export class CartCheckoutService {
     });
     // stored + delivered AFTER the payment committed; a notification failure never undoes the payment
     await clientNotifications.send(clientNotificationFor.orderPaid({ clientId: userId, orderId: order.id, orderNumber: order.orderNumber, total: order.total, projectIds }));
+    // each seller is told of the purchase once, after the payment committed (projectIds follow the order items one to one)
+    for (const [index, item] of order.items.entries()) {
+      if (projectIds[index]) await providerNotifications.servicePurchased({ providerId: item.providerId, projectId: projectIds[index], title: item.title });
+    }
     return { orderId: order.id, orderNumber: order.orderNumber, status: 'paid', total: order.total, projectIds };
   }
 

@@ -63,7 +63,8 @@ export class ClientReportsService {
 				include: { proposals: { select: { status: true } }, contract: { select: { durationDays: true } }, disputes: { where: SETTLED_DISPUTE_WHERE, select: { id: true }, take: 1 } },
 				orderBy: { createdAt: 'desc' }
 			}),
-			prisma.review.findMany({ where: { clientId: userId }, select: { rating: true, createdAt: true } }),
+			// only the ratings THIS client gave to providers: the reviews providers gave the client share clientId and used to be averaged into the same number
+			prisma.review.findMany({ where: { clientId: userId, reviewerRole: 'CLIENT' }, select: { rating: true, createdAt: true } }),
 			prisma.dispute.findMany({
 				where: { OR: [{ openedById: userId }, { againstUserId: userId }], ...(since ? { createdAt: { gte: since } } : {}) },
 				select: { id: true, status: true, reason: true, createdAt: true, resolvedAt: true },

@@ -80,6 +80,15 @@ export const providerNotifications = {
 		}));
 	},
 
+	/** A marketplace service was bought and its project started: the seller learns it the moment the payment committed. */
+	async servicePurchased(p: { providerId: string | null | undefined; projectId: string; title?: string | null }) {
+		if (!p.providerId) return;
+		await safely('servicePurchased', () => notificationService.createAndEmit({
+			userId: p.providerId!, title: 'طلب شراء جديد لخدمتك', message: `اشترى عميل خدمتك${p.title ? ` «${short(p.title)}»` : ''} وبدأ المشروع. افتح المشروع لمتابعة المراحل والتسليم.`,
+			category: NotificationCategory.PROJECTS, type: 'SERVICE_PURCHASED', actionUrl: PROVIDER_ROUTES.projectProgress(p.projectId), actionText: 'عرض المشروع', metadata: { projectId: p.projectId }
+		}));
+	},
+
 	/** A client rated the provider (whole project or one stage). */
 	async ratingReceived(p: { providerId: string; rating: number; reviewId: string; projectId?: string | null; stage?: boolean }) {
 		await safely('ratingReceived', () => notificationService.createAndEmit({
@@ -88,8 +97,9 @@ export const providerNotifications = {
 			message: `قيّمك العميل بـ ${p.rating} من 5${p.stage ? ' على إحدى مراحل المشروع' : ''}.`,
 			category: NotificationCategory.PROJECTS,
 			type: 'RATING_RECEIVED',
-			actionUrl: PROVIDER_ROUTES.reviews,
-			actionText: 'عرض التقييمات',
+			// The rating sits inside its project (the rating page shows the client's review of this provider, read-only); without a project the public profile lists it.
+			actionUrl: p.projectId ? (p.stage ? PROVIDER_ROUTES.projectProgress(p.projectId) : PROVIDER_ROUTES.rating(p.projectId)) : PROVIDER_ROUTES.reviews,
+			actionText: p.projectId ? 'عرض التقييم' : 'عرض التقييمات',
 			metadata: { reviewId: p.reviewId, rating: p.rating, ...(p.projectId ? { projectId: p.projectId } : {}) }
 		}));
 	},
