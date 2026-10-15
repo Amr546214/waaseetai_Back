@@ -109,6 +109,8 @@ export class AuthController {
 			res.status(200).json({
 				success: true,
 				message: result.message,
+				// When the code stops being valid (ISO; same shape for every address).
+				expiresAt: result.expiresAt,
 				// The send limiter consumed this attempt (same for every address), so the next one is allowed after the interval.
 				resendAvailableAt: resendAvailableAtIso()
 			});

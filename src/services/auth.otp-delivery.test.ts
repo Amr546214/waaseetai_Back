@@ -264,3 +264,12 @@ test('countdown: an active-account login whose code went out carries resendAvail
   assert.ok(second.retryAfterSeconds > 0 && second.retryAfterSeconds <= 60);
   assert.equal('resendAvailableAt' in second, false); assert.equal('expiresAt' in second, false);
 });
+
+test('countdown: forgot-password answers with expiresAt (10 min) for a known address and the same shape for an unknown one', async (t) => {
+  setup(t, { user: { id: 'user-1', email: 'amr@example.com', firstName: 'Amr', status: 'ACTIVE', password: 'x' } });
+  const { authService } = await load();
+  const t0 = Date.now();
+  const known: any = await authService.forgotPassword({ email: 'amr@example.com' } as any);
+  const exp = Date.parse(known.expiresAt);
+  assert.ok(exp >= t0 + 10 * MIN - 1000 && exp <= Date.now() + 10 * MIN + 1000);
+});

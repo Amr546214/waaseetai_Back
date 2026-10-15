@@ -340,19 +340,23 @@ export class AuthService {
 		// regardless of authProvider, letting these accounts gain a local
 		// password via the same OTP flow. This never touches authProvider or
 		// googleId, so Google login keeps working unchanged afterwards.
+		// `expiresAt` has the same shape for a known and an unknown address (the unknown one is the time a fresh code WOULD stop being valid).
 		if (!user) {
-			return { message: RESET_GENERIC_MESSAGE };
+			return { message: RESET_GENERIC_MESSAGE, expiresAt: new Date(Date.now() + RESET_OTP_EXPIRY_MS).toISOString() };
 		}
 
 		// A reset code that is still valid (and not locked by wrong attempts) is re-sent as it is, not replaced.
 		const existingReset = await authRepository.findLatestPasswordResetOtp(user.id);
 		let otpCode: string;
+		let resetExpiresAt: Date;
 		if (existingReset && existingReset.expiresAt > new Date() && existingReset.attempts < RESET_OTP_MAX_ATTEMPTS) {
 			otpCode = existingReset.code;
+			resetExpiresAt = existingReset.expiresAt;
 		} else {
 			otpCode = crypto.randomInt(100000, 999999).toString();
+			resetExpiresAt = new Date(Date.now() + RESET_OTP_EXPIRY_MS);
 			await authRepository.deletePasswordResetOtps(user.id);
-			await authRepository.createPasswordResetOtp(user.id, otpCode, new Date(Date.now() + RESET_OTP_EXPIRY_MS));
+			await authRepository.createPasswordResetOtp(user.id, otpCode, resetExpiresAt);
 		}
 
 		// Not awaited: the SMTP round-trip would make a registered address answer measurably slower than an unknown one. The failure
@@ -361,7 +365,7 @@ export class AuthService {
 			.then(() => notificationService.sendPasswordResetEmail(user.email, user.firstName, otpCode))
 			.catch(() => { logger.error('[Auth] Password reset email was NOT delivered.'); });
 
-		return { message: RESET_GENERIC_MESSAGE };
+		return { message: RESET_GENERIC_MESSAGE, expiresAt: resetExpiresAt.toISOString() };
 	}
 
 	/**
