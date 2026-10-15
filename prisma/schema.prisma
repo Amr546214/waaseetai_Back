@@ -1355,6 +1355,7 @@ model ProviderSpecialty {
 
   workSamples          WorkSample[]
   accreditationSamples AccreditationSample[]
+  proofUploads         AccreditationProofUpload[]
   aiAuditLogs          AiAuditLog[]
   assessmentAttempts   AssessmentAttempt[]
 
@@ -2074,6 +2075,16 @@ enum AccreditationStatus {
   AI_VERIFIED
   REJECTED
   MANUAL_REVIEW
+  // Batch B T1: the admin asked the provider to complete / fix the request (not a rejection); the provider resubmits the SAME request.
+  NEEDS_COMPLETION
+}
+
+// Batch B T1: a proof file uploaded for ONE approval request (provider specialty). Only COMPLETED rows count as a valid document.
+enum ProofUploadStatus {
+  UPLOADING
+  COMPLETED
+  FAILED
+  CANCELLED
 }
 
 model AccreditationSample {
@@ -2107,6 +2118,15 @@ model AccreditationSample {
   offersAccepted  Int    @default(0)
 
   serviceCatalogs ServiceCatalog[]
+
+  // Batch B T1: review loop. `userNote` is the admin note addressed to the provider (shown); `internalNote` NEVER leaves the admin API.
+  userNote         String?   @db.Text
+  internalNote     String?   @db.Text
+  completionFields String[]  @default([])
+  revision         Int       @default(1)
+  decidedAt        DateTime?
+  events           AccreditationSampleEvent[]
+  proofUploads     AccreditationProofUpload[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2762,4 +2782,43 @@ model MarketingAsset {
 
   @@index([active, audience, sortOrder])
   @@map("marketing_assets")
+}
+
+
+// Batch B T1: the review history of one approval request (submitted, completion requested, resubmitted, approved, rejected). Never deleted on resubmission.
+model AccreditationSampleEvent {
+  id           String              @id @default(uuid())
+  sampleId     String
+  sample       AccreditationSample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+  kind         String // SUBMITTED | RESUBMITTED | COMPLETION_REQUESTED | REJECTED | APPROVED
+  revision     Int                 @default(1)
+  userNote     String?             @db.Text // addressed to the provider
+  internalNote String?             @db.Text // admin-only
+  actorId      String?
+  createdAt    DateTime            @default(now())
+
+  @@index([sampleId, createdAt])
+  @@map("accreditation_sample_events")
+}
+
+// Batch B T1: a proof document is tied to the uploading user AND to one approval request (the provider specialty, then the sample once submitted).
+model AccreditationProofUpload {
+  id                  String               @id @default(uuid())
+  userId              String
+  providerSpecialtyId String
+  providerSpecialty   ProviderSpecialty    @relation(fields: [providerSpecialtyId], references: [id], onDelete: Cascade)
+  sampleId            String?
+  sample              AccreditationSample? @relation(fields: [sampleId], references: [id], onDelete: SetNull)
+  kind                ProofFileType        @default(WORK_SAMPLE)
+  privateRef          String
+  fileName            String
+  mimeType            String               @default("application/octet-stream")
+  bytes               Int                  @default(0)
+  status              ProofUploadStatus    @default(COMPLETED)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@index([userId, providerSpecialtyId, status])
+  @@index([sampleId])
+  @@map("accreditation_proof_uploads")
 }
