@@ -114,10 +114,12 @@ test('resend after the code expired creates a NEW code (10 minutes), replacing o
   assert.equal(created[0].type, 'EMAIL');
 });
 
-test('resend never touches a verified account', async (t) => {
-  setup(t, { user: { id: 'user-1', email: 'amr@example.com', status: 'ACTIVE' } });
+test('resend never touches a verified account (answered like a send, nothing created or sent)', async (t) => {
+  const { created, sent } = setup(t, { user: { id: 'user-1', email: 'amr@example.com', status: 'ACTIVE' } });
   const { authService } = await load();
-  await assert.rejects(() => authService.resendOtp('user-1'), (e: any) => e.statusCode === 400);
+  assert.deepEqual(await authService.resendOtp('user-1'), { emailSent: true, reused: false });
+  assert.equal(created.length, 0);
+  assert.equal(sent.length, 0);
 });
 
 test('forgot-password re-sends a still-valid reset code instead of replacing it; the answer stays generic', async (t) => {
@@ -226,7 +228,7 @@ test('login resend / verify with no pending LOGIN_EMAIL code create and send not
   const { created, sent, smsSent } = setup(t, { smsAvailable: true, user: ACTIVE_LEGACY_PHONE_OTP_USER('x') });
   const { authService } = await load();
 
-  await assert.rejects(() => authService.resendLoginOtp('user-1'), (e: any) => e.statusCode === 400);
+  assert.equal((await authService.resendLoginOtp('user-1')).emailSent, true); // generic no-op answer, nothing sent
   await assert.rejects(() => authService.verifyLoginOtp({ userId: 'user-1', code: '123456' }, {}), (e: any) => e.statusCode === 400);
   assert.equal(created.length, 0);
   assert.equal(sent.length, 0);
