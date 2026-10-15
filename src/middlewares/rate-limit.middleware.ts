@@ -52,11 +52,11 @@ const tierFromEnv = (name: string, base: TierConfig): TierConfig => ({
 });
 export const TIERS = {
   // normal reads (GET/HEAD): layout, guards, statistics, lists, details
-  BROWSE: tierFromEnv('BROWSE', { windowMs: MIN15, user: 1500, ip: 600, ipNet: 6000 }),
+  BROWSE: tierFromEnv('BROWSE', { windowMs: MIN15, user: 900, ip: 300, ipNet: 4500 }),
   // normal writes (POST/PUT/PATCH/DELETE) that are not in a stricter tier
   WRITE: tierFromEnv('WRITE', { windowMs: MIN15, user: 240, ip: 120, ipNet: 1200 }),
   // GET /provider/statistics and friends: every dashboard page loads them
-  DASHBOARD: tierFromEnv('DASHBOARD', { windowMs: MIN15, user: 600, ip: 600, ipNet: 3000 }),
+  DASHBOARD: tierFromEnv('DASHBOARD', { windowMs: MIN15, user: 300, ip: 300, ipNet: 1500 }),
   // endpoints that call a language model
   AI: tierFromEnv('AI', { windowMs: MIN15, user: 30, ip: 30, ipNet: 150 }),
   // file uploads (multipart): memory + cloud storage cost

@@ -50,7 +50,7 @@ test('provider.routes.ts: GET /statistics makes no AI call (rule-based matching 
   assert.match(registration, /dashboardLimiter/);
   assert.doesNotMatch(registration, /aiLimiter/);
   const mw = fs.readFileSync(path.join(__dirname, '../middlewares/rate-limit.middleware.ts'), 'utf8');
-  assert.match(mw, /DASHBOARD: tierFromEnv\('DASHBOARD', \{[^}]*user: 600/s);
+  assert.match(mw, /DASHBOARD: tierFromEnv\('DASHBOARD', \{[^}]*user: 300/s);
   assert.match(mw, /export const dashboardLimiter/);
 });
 
