@@ -3,6 +3,7 @@ import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser , authorizeActiveRole } from '../middlewares/auth.middleware';
 import { clientProjectAmendmentsController } from '../controllers/client-project-amendments.controller';
 import { setProjectAssignedEmployee } from '../controllers/client-project-assignment.controller';
+import { paymentLimiter } from '../middlewares/rate-limit.middleware';
 import { requireClientCompanyAccount } from './client-company-team.routes';
 
 const router = Router();
@@ -15,8 +16,8 @@ router.use(authenticate, requireActiveUser);
 // Express never mistakes "amendments" for a project id.
 router.get('/amendments', clientOnly, clientProjectAmendmentsController.listAmendments);
 router.post('/amendments/:id/respond', clientOnly, clientProjectAmendmentsController.respondToAmendment);
-router.post('/amendments/:id/payment-otp', clientOnly, clientProjectAmendmentsController.initPaymentAuthorization);
-router.post('/amendments/:id/authorize-funding', clientOnly, clientProjectAmendmentsController.authorizeFunding);
+router.post('/amendments/:id/payment-otp', clientOnly, paymentLimiter, clientProjectAmendmentsController.initPaymentAuthorization);
+router.post('/amendments/:id/authorize-funding', clientOnly, paymentLimiter, clientProjectAmendmentsController.authorizeFunding);
 router.post('/amendments/:id/cancel', clientOnly, clientProjectAmendmentsController.cancelAmendment);
 router.post('/:projectId/amendments', clientOnly, clientProjectAmendmentsController.createAmendment);
 

@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, authorizeActiveRole, requireActiveUser } from '../middlewares/auth.middleware';
 import { clientSpecialtyRecommendationService, MAX_RECOMMENDATION_TEXT } from '../services/client-specialty-recommendation.service';
-import { aiLimiter } from '../middlewares/rate-limit.middleware';
+import { aiLimiter, paymentLimiter } from '../middlewares/rate-limit.middleware';
+
 import { clientRequestsController } from '../controllers/client-requests.controller';
 import { memoryUpload } from '../utils/cloudinary-storage';
 import { openClientDispute } from '../controllers/dispute.controller';
@@ -125,7 +126,7 @@ router.get('/:id/contract', authenticate, requireActiveUser, clientOnly, clientR
 router.post('/:id/contract/sign', authenticate, requireActiveUser, clientOnly, clientRequestsController.signContract);
 
 // Verify OTP & deposit escrow
-router.post('/:id/escrow/deposit', authenticate, requireActiveUser, clientOnly, clientRequestsController.depositEscrow);
+router.post('/:id/escrow/deposit', authenticate, requireActiveUser, clientOnly, paymentLimiter, clientRequestsController.depositEscrow);
 router.post('/:id/disputes', authenticate, requireActiveUser, clientOnly, openClientDispute);
 router.post('/:id/rate', authenticate, requireActiveUser, clientOnly, rateAsClient);
 router.get('/:id/rating-status', authenticate, requireActiveUser, clientOnly, ratingStatusAsClient);
