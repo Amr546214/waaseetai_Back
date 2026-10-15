@@ -15,6 +15,7 @@ import { sessionService } from '../services/session.service';
 import { computeProviderCompletion } from '../utils/completion-calculators';
 import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
 import { normalizeProviderSetupPayload, isProviderSetupComplete } from '../utils/provider-setup-payload';
+import { assertSetupPortfolioProofs } from '../utils/setup-portfolio-proofs';
 
 import { providerBioSuggestSchema, providerSkillsSuggestSchema, setupSkillsSchema } from '../dtos/provider-profile-suggest.dto';
 
@@ -124,6 +125,11 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		const normalized = normalizeProviderSetupPayload(payload);
 		if (!normalized.ok) return res.status(400).json({ success: false, message: 'بعض الحقول غير مدعومة أو غير صالحة ولم يُحفظ شيء', errors: normalized.errors });
 		const { details, identity, documents, agreements, specialties } = normalized.value;
+		// Batch B T1 (§3): the work-model files must be valid documents of THIS provider, one per chosen sub-specialty (checked only when `portfolio` is sent)
+		if (portfolio !== undefined) {
+			const stored = specialties?.subSpecs === undefined ? await prisma.providerProfile.findUnique({ where: { userId }, select: { subSpecialties: true } }) : null;
+			assertSetupPortfolioProofs(userId, portfolio, specialties?.subSpecs ?? stored?.subSpecialties ?? []);
+		}
 		// Only the explicit ordinary save connects accepted skill names. Resolve
 		// every name before any writes/uploads; never upsert taxonomy rows.
 		let skillConnections: { id: string }[] | undefined;
@@ -200,7 +206,8 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		const result = await prisma.providerProfile.upsert({
 			where: { userId },
 			create: providerData,
-			update: providerData
+			// `set` on update: the saved list is exactly what was sent, so removing a skill really removes it (connect alone could never drop one)
+			update: { ...providerData, ...(skillConnections !== undefined && { skills: { set: skillConnections } }) }
 		});
 
 		// The specialties chosen in the wizard become the provider's ProviderSpecialty rows (create-only, no duplicates): the model-upload / market pages read those rows.
@@ -265,7 +272,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			data: withoutInternalProviderNotes(updatedResult)
 		});
 	} catch (error) {
-		if (error instanceof AppError) return res.status(error.statusCode).json({ success: false, message: error.message });
+		if (error instanceof AppError) return res.status(error.statusCode).json({ success: false, message: error.message, ...(error.errors?.length ? { errors: error.errors } : {}) });
 		console.error('Error saving provider setup data:', error);
 		res.status(500).json({ message: 'Internal server error' });
 	}

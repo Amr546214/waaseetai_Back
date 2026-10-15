@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/app-error';
+import { ROLE_MISMATCH_CODE } from '../utils/role-mismatch';
 import { logger } from '../config/logger';
 import { AI_FEATURE_UNAVAILABLE_CODE } from '../services/ai/ai-feature-unavailable';
 import { PAYPAL_EMAIL_FROZEN_CODE, PAYPAL_OTP_EMAIL_FAILED_CODE, OTP_THROTTLED_CODE } from '../utils/paypal-email-messages';
@@ -62,6 +63,12 @@ export const globalErrorHandler = (
       extra = { retryAfterSeconds: (err as unknown as { retryAfterSeconds?: number }).retryAfterSeconds };
     }
     if ((err as { code?: unknown }).code === PAYPAL_OTP_EMAIL_FAILED_CODE) code = PAYPAL_OTP_EMAIL_FAILED_CODE;
+    // A wrong-role refusal (the caller's OWN roles only): which role the page needs, the role in use and whether switching is possible.
+    if ((err as { code?: unknown }).code === ROLE_MISMATCH_CODE) {
+      code = ROLE_MISMATCH_CODE;
+      const e = err as unknown as { requiredRoles?: string[]; activeRole?: string | null; canSwitch?: boolean };
+      extra = { requiredRoles: e.requiredRoles, activeRole: e.activeRole, canSwitch: e.canSwitch };
+    }
   } else {
     // Unhandled operational/programming errors
     logger.error('Unhandled Exception:', err);

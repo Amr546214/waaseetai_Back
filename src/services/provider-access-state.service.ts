@@ -7,13 +7,24 @@ import { ensureOnboardingAccreditationSamples } from './onboarding-accreditation
 // (profile completeness, setup test, accreditation samples, ProviderSpecialty status). Nothing here is client-provided and nothing is cached.
 // Passing the test never opens the dashboard: only >= 1 APPROVED + active ProviderSpecialty does (set by the admin).
 
-export type ProviderAccessStateName = 'SETUP_INCOMPLETE' | 'ASSESSMENT_REQUIRED' | 'SAMPLE_REQUIRED' | 'PENDING_REVIEW' | 'REJECTED' | 'APPROVED' | 'NOT_APPLICABLE';
+export type ProviderAccessStateName = 'SETUP_INCOMPLETE' | 'ASSESSMENT_REQUIRED' | 'SAMPLE_REQUIRED' | 'PENDING_REVIEW' | 'COMPLETION_REQUIRED' | 'REJECTED' | 'APPROVED' | 'NOT_APPLICABLE';
+
+/**
+ * Batch B T1 (§4) entry gate, derived on the server from the state (never from the client):
+ *  - SETUP: setup / test / sample missing -> only the page that completes it (no operating menus);
+ *  - REVIEW: the request is under review / needs completion / was rejected -> the actions log, the needed completion, help and account, no operating services;
+ *  - OPEN: approved (or a company) -> the operating dashboard. An APPROVED account adding another specialty stays OPEN.
+ */
+export type ProviderEntryGate = 'SETUP' | 'REVIEW' | 'OPEN';
+export const entryGateOf = (state: ProviderAccessStateName): ProviderEntryGate =>
+	state === 'APPROVED' || state === 'NOT_APPLICABLE' ? 'OPEN' : state === 'PENDING_REVIEW' || state === 'COMPLETION_REQUIRED' || state === 'REJECTED' ? 'REVIEW' : 'SETUP';
 
 export const ACCESS_MESSAGES: Record<ProviderAccessStateName, string> = {
 	SETUP_INCOMPLETE: 'أكمل إعداد ملفك لمتابعة اعتماد حسابك.',
 	ASSESSMENT_REQUIRED: 'أكمل الاختبار لإكمال اعتماد حسابك.',
 	SAMPLE_REQUIRED: 'اجتزت الاختبار، لكن يجب رفع نموذج الاعتماد لإكمال المراجعة.',
 	PENDING_REVIEW: 'تم اجتياز الاختبار، ونموذج الاعتماد قيد المراجعة. ستفتح لوحة مقدم الخدمة بعد اعتماد الإدارة.',
+	COMPLETION_REQUIRED: 'طلبت الإدارة استكمال بيانات طلب الاعتماد. افتح «إجراءات الحساب» لاستكماله.',
 	REJECTED: 'تم رفض نموذج الاعتماد. راجع السبب وارفع نموذجاً جديداً لإعادة المراجعة.',
 	APPROVED: 'تم اعتماد حسابك. يمكنك الدخول إلى لوحة مقدم الخدمة.',
 	NOT_APPLICABLE: 'هذا المسار لا ينطبق على حسابات الشركات.'
@@ -28,7 +39,9 @@ export interface ProviderAccessSpecialty {
 	sample: { id: string; status: string; rejectionReason: string | null; submittedAt: Date } | null;
 }
 export interface ProviderAccessState {
-	state: ProviderAccessStateName; canAccessDashboard: boolean; message: string; reason: string | null; hasSample: boolean; specialties: ProviderAccessSpecialty[];
+	state: ProviderAccessStateName; gate: ProviderEntryGate; canAccessDashboard: boolean; message: string; reason: string | null; hasSample: boolean; specialties: ProviderAccessSpecialty[];
+	/** the request waiting for the provider to complete it (COMPLETION_REQUIRED only) */
+	completionSampleId?: string | null;
 }
 
 /** The admin reject appends «[مراجعة الإدارة] سبب الرفض: <reason>» to aiFeedbackAr; only that human reason is returned. */
@@ -40,7 +53,7 @@ export function extractRejectionReason(feedback?: string | null): string | null 
 }
 
 const result = (state: ProviderAccessStateName, extra: Partial<ProviderAccessState> = {}): ProviderAccessState => ({
-	state, canAccessDashboard: state === 'APPROVED' || state === 'NOT_APPLICABLE', message: ACCESS_MESSAGES[state], reason: null, hasSample: false, specialties: [], ...extra
+	state, gate: entryGateOf(state), canAccessDashboard: state === 'APPROVED' || state === 'NOT_APPLICABLE', message: ACCESS_MESSAGES[state], reason: null, hasSample: false, specialties: [], ...extra
 });
 
 type Db = typeof prisma;
@@ -85,12 +98,18 @@ export const providerAccessStateService = {
 
 		const effective = rows.map(r => {
 			const samples = r.accreditationSamples;
+			// the admin asked for more data on the latest request: the provider has to act (samples are newest first)
+			if (samples[0]?.status === AccreditationStatus.NEEDS_COMPLETION) return 'COMPLETION' as const;
 			// a sample waiting for the admin wins (a re-submission after a rejection re-opens the review)
 			if (samples.some(s => PENDING_SAMPLE.includes(s.status)) || r.status === SpecialtyVerificationStatus.UNDER_AI_REVIEW) return 'PENDING' as const;
 			if (r.status === SpecialtyVerificationStatus.REJECTED) return 'REJECTED' as const;
 			if (samples.length && samples.every(s => s.status === AccreditationStatus.REJECTED)) return 'REJECTED' as const;
 			return 'NONE' as const;
 		});
+		if (effective.includes('COMPLETION')) {
+			const row = rows.find(r => r.accreditationSamples[0]?.status === AccreditationStatus.NEEDS_COMPLETION);
+			return result('COMPLETION_REQUIRED', { specialties, hasSample, completionSampleId: row?.accreditationSamples[0]?.id ?? null });
+		}
 		if (effective.includes('PENDING')) return result('PENDING_REVIEW', { specialties, hasSample });
 		if (effective.includes('REJECTED')) {
 			let reason: string | null = null;

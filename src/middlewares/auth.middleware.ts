@@ -6,6 +6,7 @@ import { prisma } from '../config/db';
 import { sessionService } from '../services/session.service';
 import { getAuthCookie } from '../utils/request-cookie';
 import { logger } from '../config/logger';
+import { ROLE_MISMATCH_CODE } from '../utils/role-mismatch';
 
 // Express Request interface is extended via src/types/express.d.ts
 
@@ -254,8 +255,34 @@ export const authorizeActiveRoleWithMessage = (message: string, ...allowedAccoun
   };
 };
 
-export const authorizeActiveRole = (...allowedAccountTypes: AccountType[]) =>
-  authorizeActiveRoleWithMessage('غير مصرح لك بالوصول لهذه الصلاحية', ...allowedAccountTypes);
+const ROLE_LABELS: Partial<Record<UserRole, string>> = {
+  [UserRole.CLIENT]: 'العميل', [UserRole.PROVIDER]: 'مقدم الخدمة', [UserRole.AFFILIATE]: 'المسوّق', [UserRole.ADMIN]: 'المشرف', [UserRole.SUPER_ADMIN]: 'المشرف العام'
+};
+
+/**
+ * Batch B T1 (§1): a wrong-role refusal says WHICH role the page needs, which role the caller is acting as now, and what to do:
+ *  - the caller holds the required role: switch to it from the account menu;
+ *  - the caller does not hold it: add that account type first.
+ * Only the caller's OWN roles are described (nothing about any other account).
+ */
+export const authorizeActiveRole = (...allowedAccountTypes: AccountType[]) => {
+  const allowedRoles = [...new Set(allowedAccountTypes.map(roleOfAccountType).filter((r): r is UserRole => r !== null))];
+  return (req: Request, _res: Response, next: NextFunction) => {
+    if (!req.user) return next(new AppError('غير مصرح لك بالوصول، يرجى تسجيل الدخول', 401));
+    const acting = req.user.activeRole ?? roleOfAccountType(req.user.accountType);
+    if (acting && allowedRoles.includes(acting)) return next();
+    const held = new Set<UserRole>([...(req.user.roles || []), ...(roleOfAccountType(req.user.accountType) ? [roleOfAccountType(req.user.accountType) as UserRole] : [])]);
+    const required = allowedRoles.map(r => ROLE_LABELS[r] ?? r).join(' أو ');
+    const current = acting ? (ROLE_LABELS[acting] ?? acting) : 'غير محدد';
+    const canSwitch = allowedRoles.some(r => held.has(r));
+    const message = canSwitch
+      ? `هذه الصفحة خاصة بدور «${required}»، وأنت تعمل الآن بدور «${current}». بدّل الدور من قائمة الحساب ثم أعد المحاولة.`
+      : `هذه الصفحة خاصة بدور «${required}» وحسابك لا يتضمن هذا الدور. أضف هذا النوع من الحساب من «إضافة حساب» أولاً.`;
+    const error = new AppError(message, 403) as AppError & { code: string; requiredRoles: string[]; activeRole: string | null; canSwitch: boolean };
+    error.code = ROLE_MISMATCH_CODE; error.requiredRoles = allowedRoles; error.activeRole = acting ?? null; error.canSwitch = canSwitch;
+    return next(error);
+  };
+};
 
 /**
  * Admin gate for a user who may be ACTING as another role: a real admin account (accountType ADMIN / SUPER_ADMIN) always passes — dev super-admins default to activeRole CLIENT and
