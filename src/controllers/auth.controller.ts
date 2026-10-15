@@ -30,23 +30,17 @@ export class AuthController {
 
 			const refCookieSource = getRequestCookie(req, 'waseet_ref_src');
 
-			const result = await authService.registerUser(input, { refCookieSlug, refCookieSource });
-			// No userId = nothing was created for this caller (data already in use): no mailer call, so no cooldown is recorded either.
-			const created = typeof result.userId === 'string';
-			if (created) {
-				// the mailer was called: the cooldown starts only if the SMTP server accepted the code (see otpSendGate)
-				res.locals.otpEmailAttempted = true;
-				res.locals.otpEmailSent = result.emailSent === true;
-			}
+			await authService.registerUser(input, { refCookieSlug, refCookieSource });
+			// ONE public answer for every outcome (new, in use and active, in use and pending): same status, keys and words, no account id and
+			// no created / sent flags. Nothing the caller receives depends on the account. The cooldown is likewise recorded for every
+			// successful request, so a second request inside the interval gets the same 429 whether or not an account exists.
+			res.locals.otpEmailAttempted = true;
+			res.locals.otpEmailSent = true;
 
 			res.status(201).json({
 				success: true,
-				// emailSent=false with a userId: the account exists but the code email did not go out; the app must say so and offer a resend.
-				// Without a userId (data already in use) and for a new account whose code went out, the wording is the same and claims no code.
-				message: created && !result.emailSent
-					? 'تم إنشاء الحساب لكن تعذر إرسال رمز التحقق إلى بريدك الآن. حاول إعادة الإرسال بعد قليل أو تواصل مع الدعم'
-					: REGISTER_GENERIC_MESSAGE,
-				data: result
+				message: REGISTER_GENERIC_MESSAGE,
+				data: {}
 			});
 		} catch (error) {
 			// Pass errors to the global error handler gracefully
@@ -77,6 +71,14 @@ export class AuthController {
 	 */
 	public async resendOtp(req: Request, res: Response, next: NextFunction) {
 		try {
+			if (typeof req.body.email === 'string') {
+				// By e-mail (the public registration step): always the same generic 200; the cooldown applies to every address alike.
+				await authService.resendOtpByEmail(req.body.email);
+				res.locals.otpEmailAttempted = true;
+				res.locals.otpEmailSent = true;
+				res.status(200).json({ success: true, message: RESEND_GENERIC_MESSAGE, data: {} });
+				return;
+			}
 			const { userId } = req.body;
 			const { emailSent } = await authService.resendOtp(userId);
 			res.locals.otpEmailAttempted = true;

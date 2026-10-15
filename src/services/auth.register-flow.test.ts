@@ -50,14 +50,13 @@ test('flow: new registration -> code step -> verify-otp activates; a repeated re
 	const reg = await w.authService.registerUser({ ...BODY });
 	assert.equal(reg.accountCreated, true);
 	assert.ok(reg.userId);
-	assert.equal(reg.emailSent, true);
 	assert.equal(w.store.mails.length, 1);
 	const code = w.store.mails[0].code!;
 	await w.authService.verifyOtp({ userId: reg.userId, code });
 	assert.equal(w.store.user.status, 'ACTIVE');
 
 	const again = await w.authService.registerUser({ ...BODY });
-	assert.deepEqual(again, { userId: null, emailSent: false, accountCreated: false });
+	assert.deepEqual(again, { userId: null, accountCreated: false });
 	assert.equal(w.store.mails.length, 1, 'no alert / activation mail to an ACTIVE account');
 });
 

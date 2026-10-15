@@ -73,10 +73,11 @@ function shape(r: any) {
 	return { status: r.status, message: r.body?.message, keys: Object.keys(r.body ?? {}).sort().join(','), dataKeys: data ? Object.keys(data).sort().join(',') : undefined, success: r.body?.success, emailSent: r.body?.emailSent ?? data?.emailSent, uuid: typeof data?.userId === 'string' ? /^[0-9a-f-]{36}$/i.test(data.userId) : undefined };
 }
 
-// The response SHAPE is the same (status, keys, data keys); the two things that differ are the ones a caller needs to continue: a real
-// userId only when an account was created for THIS request (so the app can open the code step), and accountCreated.
-test('register: an email / phone already in use (active or pending) gets 201, the same shape as a fresh registration, no userId, no code claim, and creates / sends nothing', async (t) => {
+// The PUBLIC register answer is byte-identical for a new account, an in-use ACTIVE one and an in-use PENDING one (and for a new account whose
+// activation email failed): no userId, no emailSent, no accountCreated, one neutral message.
+test('register: new, in-use active and in-use pending get the IDENTICAL status and body; nothing in it depends on the account', async (t) => {
 	const fresh = await run(t, { exists: false }, async (c, calls) => { const r = await call(c.register.bind(c), BODY); assert.equal(calls.createUser, 1); assert.equal(calls.createOtp, 1); assert.equal(calls.mails, 1); return r; });
+	const freshSmtpDown = await run(t, { exists: false, smtpFails: true }, (c) => call(c.register.bind(c), BODY));
 	const results: any[] = [];
 	for (const status of ['ACTIVE', 'PENDING_VERIFICATION']) {
 		results.push(await run(t, { exists: true, status }, async (c, used) => {
@@ -87,47 +88,28 @@ test('register: an email / phone already in use (active or pending) gets 201, th
 			return r;
 		}));
 	}
-	const [active, pending] = results;
-	assert.deepEqual(shape(pending), shape(active), 'active and pending are indistinguishable');
-	for (const r of results) {
-		assert.equal(r.status, 201);
+	for (const r of [fresh, freshSmtpDown, ...results]) {
 		assert.equal(r.error, undefined);
-		assert.equal(r.body.data.userId, null);
-		assert.equal(r.body.data.emailSent, false);
-		assert.equal(r.body.data.accountCreated, false);
-		assert.equal(r.body.message, REGISTER_GENERIC_MESSAGE);
-		assert.ok(!r.locals.otpEmailAttempted, 'no mailer call, so no cooldown is recorded');
-		assert.doesNotMatch(JSON.stringify(r.body), /أرسلنا رمز|مسجل بالفعل|موجود بالفعل|USER_ID_PLACEHOLDER/);
+		assert.equal(r.status, 201);
+		assert.deepEqual(r.body, { success: true, message: REGISTER_GENERIC_MESSAGE, data: {} });
+		assert.deepEqual(r.body, fresh.body);
+		assert.deepEqual(r.locals, fresh.locals, 'the cooldown bookkeeping is the same for every outcome');
+		assert.doesNotMatch(JSON.stringify(r.body), /userId|emailSent|accountCreated|أرسلنا رمز|مسجل بالفعل|موجود بالفعل/);
 		assert.ok(!JSON.stringify(r.body).includes(USER.id));
 	}
-	// same keys at every level as the real registration
-	assert.equal(Object.keys(active.body).sort().join(), Object.keys(fresh.body).sort().join());
-	assert.equal(Object.keys(active.body.data).sort().join(), Object.keys(fresh.body.data).sort().join());
-	assert.equal(fresh.status, active.status);
-	// the only revealed difference: a real account id (and the flag) for the caller's own new account
-	assert.match(fresh.body.data.userId, /^[0-9a-f-]{36}$/i);
-	assert.equal(fresh.body.data.accountCreated, true);
-	assert.equal(fresh.body.data.emailSent, true);
-	assert.equal(fresh.body.message, REGISTER_GENERIC_MESSAGE, 'a new account whose code went out gets the same words (no extra channel)');
-	assert.ok(fresh.locals.otpEmailAttempted && fresh.locals.otpEmailSent);
 });
 
-test('register: a new account whose activation email failed is told so honestly (with its real userId, so it can resend)', async (t) => {
-	const r = await run(t, { exists: false, smtpFails: true }, (c) => call(c.register.bind(c), BODY));
-	assert.equal(r.status, 201);
-	assert.equal(r.body.data.emailSent, false);
-	assert.equal(r.body.data.accountCreated, true);
-	assert.ok(r.body.data.userId);
-	assert.match(r.body.message, /تعذر إرسال رمز التحقق/);
-	assert.equal(r.locals.otpEmailAttempted, true);
-	assert.equal(r.locals.otpEmailSent, false);
-});
-
-test('register: a phone that matches another account (different email) is also generic', async (t) => {
+test('register: a phone that matches another account (different email) is also identical', async (t) => {
 	const r = await run(t, { exists: true, status: 'PENDING_VERIFICATION' }, (c) => call(c.register.bind(c), { ...BODY, email: 'someone.else@example.com' }));
 	assert.equal(r.status, 201);
-	assert.equal(r.body.data.userId, null);
-	assert.equal(r.body.message, REGISTER_GENERIC_MESSAGE);
+	assert.deepEqual(r.body, { success: true, message: REGISTER_GENERIC_MESSAGE, data: {} });
+});
+
+test('register: a missing password is the same 400 whether or not the address is in use', async (t) => {
+	const a = await run(t, { exists: false }, (c) => call(c.register.bind(c), { ...BODY, password: undefined }));
+	const b = await run(t, { exists: true, status: 'ACTIVE' }, (c) => call(c.register.bind(c), { ...BODY, password: undefined }));
+	assert.equal(a.error?.statusCode, 400);
+	assert.deepEqual([b.error?.statusCode, b.error?.message], [a.error?.statusCode, a.error?.message]);
 });
 
 test('register with a VERIFIED Google credential for that very address may be told the account exists (409)', async (t) => {
