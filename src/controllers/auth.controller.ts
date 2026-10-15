@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from '../services/auth.service';
+import { RESEND_GENERIC_MESSAGE } from '../utils/auth-messages';
 import { sessionService } from '../services/session.service';
 import { getAuthCookie, getRequestCookie } from '../utils/request-cookie';
 import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput, VerifyLoginOtpInput, ResendLoginOtpInput } from '../routes/auth/auth.schema';
@@ -37,8 +38,9 @@ export class AuthController {
 			res.status(201).json({
 				success: true,
 				// emailSent=false: the account exists but the code email did not go out; the app must say so and offer a resend.
+				// generic: the same words whether the account was created or the data was already in use (see registerUser)
 				message: result.emailSent
-					? 'تم التسجيل بنجاح، يرجى تفعيل الحساب'
+					? 'تمت معالجة طلبك. إذا كانت البيانات صالحة للتسجيل فقد أرسلنا رمز التحقق إلى بريدك الإلكتروني'
 					: 'تم إنشاء الحساب لكن تعذر إرسال رمز التحقق إلى بريدك الآن. حاول إعادة الإرسال بعد قليل أو تواصل مع الدعم',
 				data: result
 			});
@@ -82,7 +84,7 @@ export class AuthController {
 				success: emailSent,
 				emailSent,
 				message: emailSent
-					? 'تم إعادة إرسال رمز التحقق بنجاح'
+					? RESEND_GENERIC_MESSAGE
 					: 'تعذر إرسال رمز التحقق، حاول مرة أخرى بعد قليل أو تواصل مع الدعم',
 				data: { emailSent }
 			});
@@ -198,7 +200,7 @@ export class AuthController {
 
 			res.status(200).json({
 				success: result.emailSent,
-				message: result.emailSent ? 'تم إعادة إرسال رمز التحقق بنجاح' : result.message,
+				message: result.emailSent ? RESEND_GENERIC_MESSAGE : result.message,
 				emailSent: result.emailSent
 			});
 		} catch (error) {

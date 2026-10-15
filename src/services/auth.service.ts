@@ -19,6 +19,7 @@ import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { otpSendThrottle, otpThrottleMessage } from '../utils/otp-send-throttle';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { normalizeReferralIdentifier } from '../utils/referral-identifier';
+import { RESEND_GENERIC_MESSAGE } from '../utils/auth-messages';
 import { marketerNotifications } from './marketer-notifications.service';
 
 /**
@@ -226,7 +227,15 @@ export class AuthService {
 		// 1. Check for duplicates (email or phone)
 		const existingUser = await authRepository.findByEmailOrPhone(input.email, input.phoneNumber);
 		if (existingUser) {
-			throw new AppError('البريد الإلكتروني أو رقم الجوال مسجل بالفعل، يرجى تسجيل الدخول', 409);
+			// Only a VERIFIED Google credential for this very address proves the caller controls it: that caller may be told the account exists.
+			if (googleIdentity && existingUser.email.trim().toLowerCase() === input.email) {
+				throw new AppError('هذا الحساب موجود بالفعل، يرجى تسجيل الدخول', 409);
+			}
+			// Anyone else (an arbitrary email / phone typed into the form) gets the SAME answer as a fresh registration: a decoy id, emailSent
+			// true, and the same bcrypt cost. Nothing is created or sent; verify-otp with the decoy id fails like any wrong code, and the real
+			// owner is still served by login / forgot-password. Nothing here says which of the email or the phone matched.
+			if (input.password) await bcrypt.hash(input.password, 12);
+			return { userId: crypto.randomUUID(), emailSent: true };
 		}
 
 		// 2. Hash Password
@@ -290,11 +299,9 @@ export class AuthService {
 	 */
 	public async resendOtp(userId: string): Promise<{ emailSent: boolean; reused: boolean }> {
 		const user = await authRepository.findById(userId);
-		if (!user) {
-			throw new AppError('المستخدم غير موجود', 404);
-		}
-		if (user.status === UserStatus.ACTIVE) {
-			throw new AppError('الحساب مفعل مسبقاً', 400);
+		// Unknown id and already-active account are answered exactly like a send (the endpoint is unauthenticated): nothing is sent or created.
+		if (!user || user.status === UserStatus.ACTIVE) {
+			return { emailSent: true, reused: false };
 		}
 
 		// A code that is still valid is RE-SENT as it is (not replaced): an older email that arrives late must not carry a
@@ -402,7 +409,8 @@ export class AuthService {
 		}
 
 		if (otp.expiresAt < new Date()) {
-			throw new AppError('رمز التحقق انتهت صلاحيته، يرجى طلب رمز جديد', 400);
+			// same words as a wrong code: an expired answer would tell an unauthenticated caller that a reset was requested for this email
+			throw new AppError(RESET_INVALID_CODE_MESSAGE, 400);
 		}
 
 		if (otp.code !== code) {
@@ -655,6 +663,7 @@ export class AuthService {
 		const intent = input.intent ?? (input.accountType ? 'register' : 'login');
 		if (intent === 'register') {
 			if (existingUser) {
+				// Reached only with a VERIFIED Google credential for this address: the caller proved they control it.
 				throw new AppError('هذا الحساب موجود بالفعل، يرجى تسجيل الدخول', 409);
 			}
 			// Only return verified identity fields. No user, session or access token
@@ -670,13 +679,15 @@ export class AuthService {
 			};
 		}
 		if (!existingUser) {
-			throw new AppError('لا يوجد حساب بهذا البريد الإلكتروني، يرجى إنشاء حساب أولاً', 404);
+			// Verified Google credential only (see above). The way forward is the Sign-up path; a Login intent never creates an account.
+			throw new AppError('لا يوجد حساب مرتبط بحساب جوجل هذا، يرجى إنشاء حساب أولاً', 404);
 		}
 		if (existingUser.status === UserStatus.SUSPENDED) {
 			throw new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403);
 		}
 		if (existingUser.googleId && existingUser.googleId !== payload.sub) {
-			throw new AppError('حساب جوجل لا يطابق الحساب المرتبط', 401);
+			// the address is the same but another Google identity is linked: not spelled out (same words as an unverifiable token)
+			throw new AppError(GOOGLE_TOKEN_INVALID_MESSAGE, 401);
 		}
 		// Captured before any prisma.user.update() below, which returns a bare
 		// scalar User (no relations) and would otherwise silently drop these.
@@ -738,7 +749,12 @@ export class AuthService {
 	public async resendLoginOtp(userId: string, ipAddress?: string) {
 		const user = await authRepository.findById(userId);
 		const pending = user ? await authRepository.findLatestOtpByPurpose(userId, OtpPurpose.LOGIN_EMAIL) : null;
-		if (!user || user.status !== UserStatus.ACTIVE || !pending) throw new AppError('ابدأ تسجيل الدخول بالبريد وكلمة المرور أولاً', 400);
+		if (!user || user.status !== UserStatus.ACTIVE || !pending) {
+			// Unauthenticated endpoint: unknown id / not mid-login looks like a real send (same throttle bucket, same shape); nothing is sent.
+			const throttle = otpSendThrottle.consume(`login:${userId}`, ipAddress);
+			if (!throttle.allowed) return { emailSent: false, message: otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds) };
+			return { emailSent: true, message: RESEND_GENERIC_MESSAGE };
+		}
 		const result = await this.loginOtpChallengeResult(userId, user.email, ipAddress);
 		return { emailSent: result.emailSent, message: result.message };
 	}
