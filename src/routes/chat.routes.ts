@@ -33,6 +33,29 @@ router.get(
   chatController.getMessages
 );
 
+// Context of a conversation id (GENERAL | PROJECT) so an old link can redirect to the right place
+router.get(
+  '/conversations/:id/context',
+  authenticate,
+  requireActiveUser,
+  chatController.getConversationContext
+);
+
+// The project's own room: bound to the contract and its two parties, idempotent get-or-create
+router.post(
+  '/project-rooms/:contractId',
+  authenticate,
+  requireActiveUser,
+  chatController.getProjectRoom
+);
+
+router.get(
+  '/project-rooms/:contractId/messages',
+  authenticate,
+  requireActiveUser,
+  chatController.getProjectRoomMessages
+);
+
 // Upload file, image, or audio voice note attachment
 router.post(
   '/upload',

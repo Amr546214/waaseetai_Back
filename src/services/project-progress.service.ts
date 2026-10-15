@@ -16,6 +16,7 @@ import { uploadMulterFile } from '../utils/cloudinary-storage';
 import { ACTIVE_DISPUTE_STATUSES, PROJECT_FROZEN_MESSAGE, assertProjectNotFrozen, freezeStateOf, getActiveDisputeForProject, countActiveDisputes, lockProjectForFreezeCheck } from './dispute-freeze.service';
 import { deliveryCompletedProject, adminSettlementFor, adminSettledView, stageDisplayStatus, SETTLED_LABEL_AR, SETTLED_STAGE_LABEL_AR } from './settlement-state.service';
 import { adminAudit } from './admin-audit.service';
+import { ensureProjectRoom } from './project-conversation.service';
 import { computeLifecycle, evaluateAction, assertStageActionAllowed, settlementDistributionOf } from './project-lifecycle.service';
 
 const PROJECT_COMPLETION_POINTS = 50;
@@ -211,15 +212,12 @@ export class ProjectProgressService {
     const role = contract.providerId === userId ? 'provider' : 'client';
     const other = role === 'provider' ? contract.client : contract.provider;
     const otherName = `${other.firstName || (role === 'provider' ? 'العميل' : 'مقدم الخدمة')} ${other.lastName || ''}`.trim();
-    let conversation = contract.project.conversations.find(c => c.providerId === contract.providerId && c.clientId === contract.clientId);
-    if (!conversation) {
-      conversation = await prisma.conversation.upsert({
-        where: { projectId_providerId: { projectId: contract.projectId, providerId: contract.providerId } },
-        update: {},
-        create: { projectId: contract.projectId, providerId: contract.providerId, clientId: contract.clientId, offerId: contract.offerId || null },
-        include: { messages: { orderBy: { createdAt: 'asc' }, include: { sender: { select: { id: true, firstName: true, lastName: true } } } } }
-      });
-    }
+    // The project's own message room (bound to this contract and its two parties): idempotent get-or-create, never a new conversation per visit. An old shared room
+    // of the same project and parties keeps being used as is until the approved backfill (see project-conversation.service).
+    const room = await ensureProjectRoom(prisma, contract, contract.project.conversations);
+    const loaded = contract.project.conversations.find(c => c.id === room.id);
+    const conversation = loaded ?? { id: room.id, messages: await prisma.message.findMany({ where: { conversationId: room.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], include: { sender: { select: { id: true, firstName: true, lastName: true } } } }) };
+    const unreadMessages = (conversation.messages || []).filter(m => m.senderId !== userId && m.status !== 'READ').length;
     const released = contract.project.escrow?.releasedAmount || 0;
     const [openDispute, activeDisputeCount] = await Promise.all([getActiveDisputeForProject(contract.projectId, prisma), countActiveDisputes(contract.projectId, prisma)]);
     const disputeFreeze = freezeStateOf(activeDisputeCount, openDispute);
@@ -269,8 +267,8 @@ export class ProjectProgressService {
         title: stage.title, status, statusText, submittedAt: delivery.submittedAt, roundText: `التسليم ${index + 1}`,
         summary: delivery.note, reviewNote: delivery.reviewNote, files: delivery.files.map(url => normalizeFileEntry(url)) };
     }));
-    const messages = (conversation?.messages || []).map(message => ({
-      id: message.id, senderName: message.senderId === userId ? 'أنت' : `${message.sender.firstName || otherName} ${message.sender.lastName || ''}`.trim(),
+    const messages = [...(conversation?.messages || [])].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : 1)).map(message => ({
+      id: message.id, type: message.type, isEvent: message.type === 'SYSTEM', eventKey: (message as any).eventKey ?? null, senderName: message.senderId === userId ? 'أنت' : `${message.sender.firstName || otherName} ${message.sender.lastName || ''}`.trim(),
       senderInitial: (message.sender.firstName || otherName).charAt(0), senderRole: message.senderId === contract.providerId ? 'provider' : 'client',
       isMe: message.senderId === userId, time: message.createdAt, content: message.content || message.fileName || 'مرفق', fileUrl: message.fileUrl, fileName: message.fileName
     }));
@@ -297,7 +295,7 @@ export class ProjectProgressService {
     }
 
     return {
-      id: contract.id, projectId: contract.projectId, role, conversationId: conversation?.id || null,
+      id: contract.id, projectId: contract.projectId, role, conversationId: conversation?.id || null, messageContext: room.kind === 'PROJECT' ? 'PROJECT' : 'GENERAL', legacyShared: room.legacyShared, unreadMessages,
       title: contract.project.title, clientName: otherName, clientInitial: otherName.charAt(0) || 'ع', contractRef: `CT-${contract.id.slice(0, 6).toUpperCase()}`,
       price: contract.price, durationDays: contract.durationDays, daysLeft: Math.max(0, contract.durationDays - elapsed), progress,
       // escrowReleased = money released through STAGE APPROVALS only; for a settled project the settlement's own release is in financial.settlement (never mixed).

@@ -2,6 +2,7 @@ import { Socket, Server as SocketIOServer } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { chatService, authorizeConversationForRole, resolveActiveRole } from '../services/chat.service';
 import { prisma } from '../config/db';
+import { projectMessagesUrl, roomNameFor } from '../services/project-conversation.service';
 import { JoinRoomDto, SendMessageDto } from '../dtos/chat.dto';
 
 // NestJS compatible lifecycle interfaces for Express Gateway structure
@@ -59,11 +60,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 		// event (join, send, typing, read receipts, calls). activeRole is always
 		// resolved fresh from the DB here rather than cached at connect time,
 		// since a long-lived socket can outlive a role switch made elsewhere.
-		const isConversationParticipant = async (conversationId: string): Promise<boolean> => {
+		const isConversationParticipant = async (conversationId: string): Promise<boolean> => Boolean(await participantRoom(conversationId));
+
+		// The Socket.IO room of a conversation the socket's user is a member of (null for a non-member / wrong role). A project room and a general
+		// room have different names, so a message of one context never reaches a listener of the other.
+		const participantRoom = async (conversationId: string): Promise<string | null> => {
 			const userId = (socket as any).userId as string | undefined;
-			if (!userId || !conversationId) return false;
+			if (!userId || !conversationId) return null;
 			const activeRole = await resolveActiveRole(userId);
-			return Boolean(await authorizeConversationForRole(conversationId, userId, activeRole));
+			const conv = await authorizeConversationForRole(conversationId, userId, activeRole);
+			return conv ? roomNameFor(conv) : null;
 		};
 
 		socket.on('disconnect', () => {
@@ -88,11 +94,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 					socket.emit('chat_error', { message: 'يجب تسجيل الدخول لفتح المحادثة' });
 					return;
 				}
-				if (!(await isConversationParticipant(data.conversationId))) {
+				const roomName = await participantRoom(data.conversationId);
+				if (!roomName) {
 					socket.emit('chat_error', { message: 'غير مصرح لك بالوصول إلى هذه المحادثة' });
 					return;
 				}
-				const roomName = `conversation_${data.conversationId}`;
 				socket.join(roomName);
 				console.log(`💬 Socket ${socket.id} joined conversation room: ${roomName}`);
 
@@ -108,10 +114,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 		});
 
 		// Leave conversation room
-		socket.on('leave_conversation', (data: { conversationId: string; userId: string }) => {
+		socket.on('leave_conversation', async (data: { conversationId: string; userId: string }) => {
 			if (data?.conversationId) {
 				const authenticatedUserId = (socket as any).userId as string | undefined;
-				const roomName = `conversation_${data.conversationId}`;
+				// Leaving needs no membership (a socket can only leave rooms it joined); the room name still depends on the context.
+				const conv = await prisma.conversation.findUnique({ where: { id: data.conversationId }, select: { id: true, kind: true, contractId: true } }).catch(() => null);
+				const roomName = roomNameFor(conv ?? { id: data.conversationId });
 				socket.leave(roomName);
 				socket.to(roomName).emit('user_online_status', {
 					conversationId: data.conversationId,
@@ -134,7 +142,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
 				// Persist message via Prisma
 				const result = await chatService.sendMessage(senderId, data, senderActiveRole);
-				const roomName = `conversation_${data.conversationId}`;
+				const roomName = roomNameFor({ id: data.conversationId, kind: result.kind, contractId: result.contractId });
+				const isProjectRoom = Boolean(result.kind === 'PROJECT' && result.contractId);
 
 				// Push notification in database for offline/unread alert
 				if (result.recipientId) {
@@ -143,7 +152,17 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 							: data.type === 'FILE' ? `📁 أرسل لك ملفاً: ${data.fileName || 'مرفق'}`
 								: (data.content || 'رسالة جديدة في غرفة التفاوض');
 					await prisma.notification.create({
-						data: {
+						data: isProjectRoom ? {
+							// A message of the PROJECT context opens that project's messages tab (stable URL, same format for T5's notification list).
+							userId: result.recipientId,
+							title: 'رسالة جديدة في المشروع',
+							message: notificationText,
+							type: 'CHAT',
+							category: 'PROJECTS',
+							actionUrl: projectMessagesUrl(result.recipientRole, result.contractId!),
+							actionText: 'فتح رسائل المشروع',
+							metadata: { conversationId: data.conversationId, contractId: result.contractId, projectId: result.projectId, context: 'PROJECT' }
+						} : {
 							userId: result.recipientId,
 							title: 'رسالة تفاوض جديدة',
 							message: notificationText,
@@ -160,7 +179,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 				}
 
 				// Attach temporary client deduplication ID if present
-				const msgPayload = { ...result.message, tempId: (data as any).tempId, conversationId: data.conversationId };
+				const msgPayload = { ...result.message, tempId: (data as any).tempId, conversationId: data.conversationId, conversationContext: isProjectRoom ? 'PROJECT' : 'GENERAL', ...(isProjectRoom ? { contractId: result.contractId, projectId: result.projectId } : {}) };
 
 				// Broadcast strictly to targeted conversation room and recipient user room
 				if (io) {
@@ -173,8 +192,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 						// incorrectly surface in their currently active dashboard.
 						const recipientActiveRole = await resolveActiveRole(result.recipientId);
 						if (recipientActiveRole === result.recipientRole) {
-							io.to(`user_${result.recipientId}`).emit('conversation_list_update', {
+							// The general list is told only about GENERAL conversations; a project message updates that project's own badge instead.
+							io.to(`user_${result.recipientId}`).emit(isProjectRoom ? 'project_conversation_update' : 'conversation_list_update', {
 								conversationId: data.conversationId,
+								...(isProjectRoom ? { contractId: result.contractId, projectId: result.projectId } : {}),
 								lastMsg: msgPayload
 							});
 						}
@@ -194,8 +215,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 			if (!data?.conversationId) return;
 			const authenticatedUserId = (socket as any).userId as string | undefined;
 			if (!authenticatedUserId) return;
-			if (!(await isConversationParticipant(data.conversationId))) return;
-			const roomName = `conversation_${data.conversationId}`;
+			const roomName = await participantRoom(data.conversationId);
+			if (!roomName) return;
 			socket.to(roomName).emit('typing_indicator', {
 				conversationId: data.conversationId,
 				userId: authenticatedUserId,
@@ -210,9 +231,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 				const authenticatedUserId = (socket as any).userId as string | undefined;
 				if (!data?.conversationId || !authenticatedUserId) return;
 				const activeRole = await resolveActiveRole(authenticatedUserId);
-				if (!(await authorizeConversationForRole(data.conversationId, authenticatedUserId, activeRole))) return;
+				const member = await authorizeConversationForRole(data.conversationId, authenticatedUserId, activeRole);
+				if (!member) return;
 				await chatService.markAsRead(data.conversationId, authenticatedUserId, activeRole);
-				const roomName = `conversation_${data.conversationId}`;
+				const roomName = roomNameFor(member);
 				socket.to(roomName).emit('messages_read', {
 					conversationId: data.conversationId,
 					readByUserId: authenticatedUserId
@@ -224,8 +246,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
 		// 5. WebRTC Video Call Signaling Events (Scoped strictly to conversation room)
 		socket.on('call_user', async (data: { conversationId: string; callerId: string; callerName: string; offer: any; isVideo?: boolean }) => {
-			if (!data?.conversationId || !(await isConversationParticipant(data.conversationId))) return;
-			const roomName = `conversation_${data.conversationId}`;
+			if (!data?.conversationId) return;
+			const roomName = await participantRoom(data.conversationId);
+			if (!roomName) return;
 			const userId = (socket as any).userId as string;
 			console.log(`📹 [VideoCall] Call initiated by ${userId} in room ${roomName}`);
 			socket.to(roomName).emit('incoming_call', { ...data, callerId: userId });
@@ -243,21 +266,24 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 		});
 
 		socket.on('answer_call', async (data: { conversationId: string; answer: any; responderId: string }) => {
-			if (!data?.conversationId || !(await isConversationParticipant(data.conversationId))) return;
-			const roomName = `conversation_${data.conversationId}`;
+			if (!data?.conversationId) return;
+			const roomName = await participantRoom(data.conversationId);
+			if (!roomName) return;
 			console.log(`📹 [VideoCall] Call answered in room ${roomName}`);
 			socket.to(roomName).emit('call_accepted', { ...data, responderId: (socket as any).userId });
 		});
 
 		socket.on('ice_candidate', async (data: { conversationId: string; candidate: any; senderId: string }) => {
-			if (!data?.conversationId || !(await isConversationParticipant(data.conversationId))) return;
-			const roomName = `conversation_${data.conversationId}`;
+			if (!data?.conversationId) return;
+			const roomName = await participantRoom(data.conversationId);
+			if (!roomName) return;
 			socket.to(roomName).emit('ice_candidate', { ...data, senderId: (socket as any).userId });
 		});
 
 		socket.on('end_call', async (data: { conversationId: string; senderId: string }) => {
-			if (!data?.conversationId || !(await isConversationParticipant(data.conversationId))) return;
-			const roomName = `conversation_${data.conversationId}`;
+			if (!data?.conversationId) return;
+			const roomName = await participantRoom(data.conversationId);
+			if (!roomName) return;
 			console.log(`📹 [VideoCall] Call ended in room ${roomName}`);
 			socket.to(roomName).emit('call_ended', { ...data, senderId: (socket as any).userId });
 		});
