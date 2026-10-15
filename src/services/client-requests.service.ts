@@ -1542,20 +1542,18 @@ export class ClientRequestsService {
 
 		// Generate 6 digit OTP
 		const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-		const recentChallengeRows = await prisma.otpVerification.findMany({
-			where: {
-				userId,
-				type: 'EMAIL',
-				createdAt: { gt: new Date(Date.now() - 60 * 1000) },
-				context: { path: ['requestId'], equals: requestId }
-			},
-			select: { createdAt: true },
-			orderBy: { createdAt: 'asc' }
-		});
-		if (recentChallengeRows.length >= 3) {
-			// The wait ends when the oldest challenge that still counts leaves the 60-second window.
-			const blocking = recentChallengeRows[recentChallengeRows.length - 3].createdAt.getTime() + 60 * 1000;
-			const retryAfterSeconds = Math.max(1, Math.ceil((blocking - Date.now()) / 1000));
+		const recentWhere = {
+			userId,
+			type: 'EMAIL' as const,
+			createdAt: { gt: new Date(Date.now() - 60 * 1000) },
+			context: { path: ['requestId'], equals: requestId }
+		};
+		const recentChallenges = await prisma.otpVerification.count({ where: recentWhere });
+		if (recentChallenges >= 3) {
+			// The wait ends when the oldest challenge that still counts leaves the 60-second window (a machine-readable duration; the text stays as it was).
+			const rows = await prisma.otpVerification.findMany({ where: recentWhere, select: { createdAt: true }, orderBy: { createdAt: 'asc' } });
+			const blockingAt = rows.length >= 3 ? rows[rows.length - 3].createdAt.getTime() : Date.now();
+			const retryAfterSeconds = Math.max(1, Math.ceil((blockingAt + 60 * 1000 - Date.now()) / 1000));
 			throw new AppError('طلبات رمز التوقيع كثيرة. انتظر دقيقة ثم حاول مجدداً', 429, [{ code: 'SIGN_OTP_THROTTLED', retryAfterSeconds }]);
 		}
 		const otpHash = createHmac('sha256', otpSecret).update(`${contract.id}:${otpCode}`).digest('hex');
