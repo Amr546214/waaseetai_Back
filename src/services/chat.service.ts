@@ -1,3 +1,4 @@
+import { selfNegotiationError } from '../utils/self-dealing';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { negotiationPreviewText } from '../utils/offer-negotiation';
@@ -171,6 +172,8 @@ class ChatService {
     if (!clientId || !providerId) {
       throw new AppError('لا يمكن إنشاء محادثة: يجب تحديد طالب الخدمة ومقدم الخدمة', 400);
     }
+    // the same real user on both ends (a multi-role account negotiating with itself) never gets a room
+    if (clientId === providerId) throw selfNegotiationError();
 
     // The provider side must really belong to this project: it is the project's provider, or it has an offer on it. Anyone else (a provider with no offer on the
     // project, or a provider id the client made up) gets no conversation: not the client's project to talk about, not their offer to discuss.

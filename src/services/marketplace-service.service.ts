@@ -12,6 +12,8 @@ import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { LEVEL_MATRIX } from '../utils/progression-calculators';
 import { findActiveServicePurchases } from '../utils/active-purchase.util';
 import { assertSkillsInCategory, listProviderSpecialtiesWithCatalog } from './skills-catalog.service';
+import { AppError } from '../utils/app-error';
+import { selfNegotiationError } from '../utils/self-dealing';
 
 // Batch 4 — the minimal shape getMarketplaceModels/getMarketplaceModelById
 // need from req.user to read back the requesting Client's own
@@ -790,6 +792,8 @@ export class MarketplaceService {
 			tags: parsedTags,
 			skills,
 			gallery,
+			// real owner id vs the signed-in user (never profile / activeRole): the page shows «هذه خدمتك» instead of any buy / negotiate action
+			isOwnService: Boolean(requestingUser) && s.providerId === requestingUser!.id,
 			...(eligibility ? { eligibility } : {}),
 			reviews: s.reviews.map(review => ({
 				id: review.id,
@@ -931,57 +935,66 @@ export class MarketplaceService {
 		};
 	}
 
+	/**
+	 * «طلب تفاوض» on a market service page (the ONE contact action): finds-or-creates the pre-contract negotiation project for (client, provider, service) and
+	 * its single room, idempotently. A per-(client, service) transaction advisory lock serialises repeated clicks / concurrent requests, so they all land on the
+	 * same project and the same conversation (Conversation is also unique per project + provider). The owner of the service can never open one (real user id).
+	 * When the order is later paid, confirmPayment() turns this same project into the real one, so the room and its messages carry over.
+	 */
 	async requestMarketplaceService(userId: string, serviceId: string, data: any) {
 		const service = await prisma.serviceCatalog.findFirst({
 			where: { id: serviceId, ...MARKET_VISIBLE_WHERE },
 			include: { specialty: true, stages: { orderBy: { stepOrder: 'asc' } } }
 		});
-		if (!service) throw new Error('الخدمة غير متوفرة');
-		if (service.providerId === userId) throw new Error('لا يمكنك طلب خدمتك الخاصة');
+		if (!service) throw new AppError('الخدمة غير متوفرة', 404);
+		if (service.providerId === userId) throw selfNegotiationError();
 		const message = typeof data?.message === 'string' ? data.message.trim().slice(0, 3000) : '';
 		const mode = data?.mode === 'negotiation' ? 'negotiation' : 'order';
-		let project = await prisma.project.findFirst({
-			where: { clientId: userId, providerId: service.providerId, serviceCatalogId: service.id, status: { in: ['OPEN', 'PENDING_REVIEW', 'IN_PROGRESS'] } },
-			orderBy: { createdAt: 'desc' }
-		});
-		let created = false;
-		if (!project) {
-			project = await prisma.project.create({
-				data: {
-					clientId: userId,
-					providerId: service.providerId,
-					serviceCatalogId: service.id,
-					title: service.title,
-					description: message || service.description,
-					specialty: service.specialty?.nameAr || service.specialty?.name || 'خدمة عامة',
-					subSpecialties: service.subSpecialty ? [service.subSpecialty] : [],
-					requirements: service.stages.map(stage => stage.title),
-					deliveryDays: service.totalDays,
-					budgetType: 'fixed',
-					budgetFixed: Number(service.totalAmount),
-					allowNegotiation: mode === 'negotiation',
-					status: 'OPEN'
-				}
+		return prisma.$transaction(async (tx: any) => {
+			await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`market-negotiation:${userId}:${service.id}`}))`;
+			let project = await tx.project.findFirst({
+				where: { clientId: userId, providerId: service.providerId, serviceCatalogId: service.id, status: { in: ['OPEN', 'PENDING_REVIEW', 'IN_PROGRESS'] } },
+				orderBy: { createdAt: 'desc' }
 			});
-			created = true;
-		}
-		const conversation = await prisma.conversation.upsert({
-			where: { projectId_providerId: { projectId: project.id, providerId: service.providerId } },
-			update: {},
-			create: { projectId: project.id, clientId: userId, providerId: service.providerId }
-		});
-		if (created || message) {
-			await prisma.message.create({
-				data: {
-					conversationId: conversation.id,
-					senderId: userId,
-					type: 'TEXT',
-					content: message || `أرغب في طلب خدمة: ${service.title}`
-				}
+			let created = false;
+			if (!project) {
+				project = await tx.project.create({
+					data: {
+						clientId: userId,
+						providerId: service.providerId,
+						serviceCatalogId: service.id,
+						title: service.title,
+						description: message || service.description,
+						specialty: service.specialty?.nameAr || service.specialty?.name || 'خدمة عامة',
+						subSpecialties: service.subSpecialty ? [service.subSpecialty] : [],
+						requirements: service.stages.map((stage: any) => stage.title),
+						deliveryDays: service.totalDays,
+						budgetType: 'fixed',
+						budgetFixed: Number(service.totalAmount),
+						allowNegotiation: mode === 'negotiation',
+						status: 'OPEN'
+					}
+				});
+				created = true;
+			}
+			const conversation = await tx.conversation.upsert({
+				where: { projectId_providerId: { projectId: project.id, providerId: service.providerId } },
+				update: {},
+				create: { projectId: project.id, clientId: userId, providerId: service.providerId }
 			});
-		}
-		if (created) await prisma.serviceCatalog.update({ where: { id: service.id }, data: { salesCount: { increment: 1 } } });
-		return { projectId: project.id, conversationId: conversation.id, providerId: service.providerId };
+			if (created || message) {
+				await tx.message.create({
+					data: {
+						conversationId: conversation.id,
+						senderId: userId,
+						type: 'TEXT',
+						content: message || `أرغب في طلب خدمة: ${service.title}`
+					}
+				});
+			}
+			if (created) await tx.serviceCatalog.update({ where: { id: service.id }, data: { salesCount: { increment: 1 } } });
+			return { projectId: project.id, conversationId: conversation.id, providerId: service.providerId, created };
+		});
 	}
 
 	/**

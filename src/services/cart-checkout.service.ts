@@ -6,6 +6,7 @@ import { ContractStatus, EscrowStatus, OrderStatus, OtpType, ProjectStageStatus,
 import { prisma } from '../config/db';
 import { MARKET_VISIBLE_WHERE } from '../utils/market-visibility';
 import { AppError } from '../utils/app-error';
+import { SELF_PURCHASE_CODE, assertNoOwnService, selfPurchaseError, serviceUnavailableError } from '../utils/self-dealing';
 import { notificationService } from './notification.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
@@ -161,7 +162,7 @@ export class CartCheckoutService {
     });
   }
 
-  private formatCartItem(item: any) {
+  private formatCartItem(item: any, userId?: string) {
     const service = item.service;
     const provider = service.provider;
     const providerCard = resolveProviderCardFields(provider);
@@ -179,19 +180,21 @@ export class CartCheckoutService {
       provider: { id: provider.id, name: providerCard.name, initials: providerCard.initials, isVerified: providerCard.isVerified },
       packageName: item.packageName,
       addedAt: item.addedAt.toISOString(),
-      savedForLater: item.savedForLater
+      savedForLater: item.savedForLater,
+      // real owner id (service -> provider user) vs the authenticated user: an old cart row for the user's own service is flagged, never purchasable
+      ownService: Boolean(userId) && service.providerId === userId
     };
   }
 
   async getCart(userId: string) {
     const cart = await this.getOrCreateCart(userId);
-    return { id: cart.id, items: cart.items.map(item => this.formatCartItem(item)) };
+    return { id: cart.id, items: cart.items.map(item => this.formatCartItem(item, userId)) };
   }
 
   async addItem(userId: string, input: { modelId: string; packageId?: string; savedForLater?: boolean }) {
     const service = await prisma.serviceCatalog.findFirst({ where: { id: input.modelId, ...serviceWhere } });
     if (!service) throw new AppError('الخدمة غير موجودة أو غير متاحة للطلب', 404);
-    if (service.providerId === userId) throw new AppError('لا يمكنك شراء خدمتك الخاصة', 400);
+    assertNoOwnService(userId, [service]);
     if ((await findActiveServicePurchases(prisma, userId, [service.id])).length) throw new AppError(DUPLICATE_PURCHASE_MESSAGE, 409);
     const cart = await prisma.cart.upsert({ where: { userId }, create: { userId }, update: {} });
     await prisma.cartItem.upsert({
@@ -205,6 +208,9 @@ export class CartCheckoutService {
   async updateItem(userId: string, itemId: string, input: { packageId?: string; savedForLater?: boolean }) {
     const item = await prisma.cartItem.findFirst({ where: { id: itemId, cart: { userId } } });
     if (!item) throw new AppError('عنصر السلة غير موجود', 404);
+    // an old row for a service the user now owns can be removed but never changed / moved back into the purchasable list
+    const owner = await prisma.serviceCatalog.findUnique({ where: { id: item.serviceId }, select: { id: true, providerId: true } });
+    if (owner) assertNoOwnService(userId, [owner]);
     await prisma.cartItem.update({ where: { id: itemId }, data: { packageId: input.packageId, savedForLater: input.savedForLater } });
     return this.getCart(userId);
   }
@@ -218,14 +224,33 @@ export class CartCheckoutService {
 
   async sync(userId: string, items: Array<{ modelId: string; packageId?: string; savedForLater?: boolean }>) {
     const cart = await prisma.cart.upsert({ where: { userId }, create: { userId }, update: {} });
-    const services = await prisma.serviceCatalog.findMany({ where: { id: { in: items.map(item => item.modelId) }, ...serviceWhere }, select: { id: true } });
-    const available = new Set(services.map(service => service.id));
+    const services = await prisma.serviceCatalog.findMany({ where: { id: { in: items.map(item => item.modelId) }, ...serviceWhere }, select: { id: true, providerId: true } });
+    // the user's own services are never merged into the cart; each is reported back with the stable code instead of failing the whole sync
+    const ownIds = new Set(services.filter(service => service.providerId === userId).map(service => service.id));
+    const available = new Set(services.filter(service => !ownIds.has(service.id)).map(service => service.id));
     const validItems = items.filter(item => available.has(item.modelId));
+    const rejected = items.filter(item => ownIds.has(item.modelId)).map(item => ({ modelId: item.modelId, code: SELF_PURCHASE_CODE }));
     await prisma.$transaction(async tx => {
       await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
       if (validItems.length) await tx.cartItem.createMany({ data: validItems.map(item => ({ cartId: cart.id, serviceId: item.modelId, packageId: item.packageId || 'basic', savedForLater: item.savedForLater ?? false })) });
     });
-    return this.getCart(userId);
+    const cart2 = await this.getCart(userId);
+    return rejected.length ? { ...cart2, rejected } : cart2;
+  }
+
+  /**
+   * Ownership + availability of the services behind an order, by the REAL owner user id (ServiceCatalog.providerId, and the providerId snapshot on the item),
+   * whatever id the order carries (serviceId / modelId). Runs BEFORE any OTP, debit, hold or project creation. `db` is the prisma client or a transaction.
+   */
+  private async assertOrderItemsPurchasable(db: any, userId: string, items: Array<{ serviceId: string | null; providerId: string }>) {
+    const own = items.find(i => i.providerId === userId);
+    if (own) throw selfPurchaseError(own.serviceId ?? undefined);
+    const ids = items.map(i => i.serviceId).filter((id): id is string => Boolean(id));
+    const live: Array<{ id: string; providerId: string }> = ids.length ? await db.serviceCatalog.findMany({ where: { id: { in: ids } }, select: { id: true, providerId: true } }) : [];
+    assertNoOwnService(userId, live);
+    const visible: Array<{ id: string }> = ids.length ? await db.serviceCatalog.findMany({ where: { id: { in: ids }, ...serviceWhere }, select: { id: true } }) : [];
+    const visibleIds = new Set(visible.map(v => v.id));
+    if (items.some(i => !i.serviceId || !visibleIds.has(i.serviceId))) throw serviceUnavailableError();
   }
 
   private async calculateCoupon(code: string, modelIds: string[], userId?: string) {
@@ -256,7 +281,7 @@ export class CartCheckoutService {
     if (new Set(ids).size !== ids.length) throw new AppError('لا يمكن تكرار الخدمة داخل الطلب', 400);
     const services = await prisma.serviceCatalog.findMany({ where: { id: { in: ids }, ...serviceWhere }, include: serviceInclude });
     if (services.length !== ids.length) throw new AppError('إحدى الخدمات غير موجودة أو غير متاحة للطلب', 400);
-    if (services.some(service => service.providerId === userId)) throw new AppError('لا يمكنك شراء خدمتك الخاصة', 400);
+    assertNoOwnService(userId, services);
     // Phase 4 — advisory duplicate-purchase gate at order creation (the
     // authoritative, race-safe one is inside confirmPayment()'s transaction).
     const alreadyActive = await findActiveServicePurchases(prisma, userId, ids);
@@ -315,9 +340,11 @@ export class CartCheckoutService {
     // per the current business decision — no currency conversion is
     // performed anywhere in this method, the numeric value is unchanged.
     if (paymentMethod !== 'wallet') throw new AppError('طريقة الدفع غير متاحة — المحفظة هي وسيلة الدفع الوحيدة المتاحة', 400);
-    const order = await prisma.order.findFirst({ where: { id: orderId, userId }, include: { user: { select: { email: true, phoneNumber: true, walletBalance: true } } } });
+    const order = await prisma.order.findFirst({ where: { id: orderId, userId }, include: { items: true, user: { select: { email: true, phoneNumber: true, walletBalance: true } } } });
     if (!order) throw new AppError('الطلب غير موجود', 404);
     if (order.status !== OrderStatus.PENDING_PAYMENT) throw new AppError('الطلب لا ينتظر الدفع', 400);
+    // old orders / cart items are re-validated now: no OTP is issued for an order that contains the user's own service
+    await this.assertOrderItemsPurchasable(prisma, userId, order.items);
     // Advisory pre-check only (spares an unnecessary OTP email) — NOT the
     // authoritative gate. The real, race-safe guard is confirmPayment()'s
     // own guarded updateMany debit below; balance can still legitimately
@@ -347,8 +374,9 @@ export class CartCheckoutService {
   async resendPaymentOtp(userId: string, orderId: string) {
     const previous = await this.getPaymentOtp(userId, orderId);
     if (!previous || previous.expiresAt < new Date()) throw new AppError('لا توجد عملية دفع فعالة، أعد تهيئة الدفع', 400);
-    const order = await prisma.order.findFirst({ where: { id: orderId, userId }, include: { user: { select: { email: true, phoneNumber: true } } } });
+    const order = await prisma.order.findFirst({ where: { id: orderId, userId }, include: { items: true, user: { select: { email: true, phoneNumber: true } } } });
     if (!order || order.status !== OrderStatus.PENDING_PAYMENT) throw new AppError('الطلب لا ينتظر الدفع', 400);
+    await this.assertOrderItemsPurchasable(prisma, userId, order.items);
     const context = previous.context as any;
     const code = crypto.randomInt(100000, 999999).toString();
     const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
@@ -362,6 +390,8 @@ export class CartCheckoutService {
     const order = await prisma.order.findFirst({ where: { id: orderId, userId }, include: { items: true } });
     if (!order) throw new AppError('الطلب غير موجود', 404);
     if (order.status !== OrderStatus.PENDING_PAYMENT) throw new AppError('الطلب مدفوع مسبقاً أو غير قابل للدفع', 400);
+    // fast pre-check BEFORE the OTP is consumed; the authoritative, race-safe one is inside the transaction below
+    await this.assertOrderItemsPurchasable(prisma, userId, order.items);
     const otp = await this.getPaymentOtp(userId, orderId);
     if (otp && otp.attempts >= OTP_MAX_ATTEMPTS) {
       await prisma.otpVerification.delete({ where: { id: otp.id } });
@@ -396,6 +426,11 @@ export class CartCheckoutService {
       // order.update(PAID) at the end of this transaction.
       const orderGate = await tx.order.updateMany({ where: { id: order.id, userId, status: OrderStatus.PENDING_PAYMENT }, data: { status: OrderStatus.PAID } });
       if (orderGate.count !== 1) throw new AppError('تم تأكيد دفع هذا الطلب بالفعل من جلسة أخرى', 409);
+      // Authoritative self-purchase / availability gate, BEFORE the wallet debit: the service rows are share-locked for the rest of the transaction, so an owner
+      // change (or unpublish) racing this payment either committed first (seen here -> rejected, whole transaction rolls back, nothing debited or created) or
+      // waits for this commit. Throwing rolls back the order -> PAID transition too.
+      if (serviceIds.length) await tx.$queryRaw`SELECT id FROM service_catalogs WHERE id IN (${Prisma.join(serviceIds)}) FOR SHARE`;
+      await this.assertOrderItemsPurchasable(tx, userId, order.items);
       // Wallet-only internal purchasing — the ONE authoritative, race-safe
       // gate (never trust initPayment()'s earlier advisory check, and never
       // trust the frontend): a conditional updateMany guarded on
@@ -463,7 +498,11 @@ export class CartCheckoutService {
         const itemDiscount = round2(item.price - netPrice);
         const itemStages = allServiceStages.filter(s => s.serviceId === item.serviceId);
         const derived = deriveMarketplaceProjectFields(serviceFacts.find(f => f.id === item.serviceId), itemStages);
-        const project = await tx.project.create({ data: { title: item.title, description: derived.description, specialty: derived.specialty, subSpecialties: [], requirements: derived.requirements, outputs: derived.outputs, attachments: [], deliveryDays: item.deliveryDays, budgetType: 'fixed', budgetFixed: netPrice, status: ProjectStatus.IN_PROGRESS, clientId: userId, providerId: item.providerId, serviceCatalogId: item.serviceId } });
+        const projectData = { title: item.title, description: derived.description, specialty: derived.specialty, subSpecialties: [], requirements: derived.requirements, outputs: derived.outputs, attachments: [], deliveryDays: item.deliveryDays, budgetType: 'fixed', budgetFixed: netPrice, status: ProjectStatus.IN_PROGRESS, clientId: userId, providerId: item.providerId, serviceCatalogId: item.serviceId };
+        // The pre-contract negotiation (market «طلب تفاوض») already opened an OPEN project + room for this client / provider / service. When the order forms the real
+        // project it BECOMES that project (same id), so the room, its messages and its notification links carry over: no second room, no lost log.
+        const negotiation = await tx.project.findFirst({ where: { clientId: userId, providerId: item.providerId, serviceCatalogId: item.serviceId, status: ProjectStatus.OPEN, contract: { is: null } }, orderBy: { createdAt: 'desc' }, select: { id: true } });
+        const project = negotiation ? await tx.project.update({ where: { id: negotiation.id }, data: projectData }) : await tx.project.create({ data: projectData });
 
         const stages = allServiceStages.filter(s => s.serviceId === item.serviceId);
         const phasesCount = stages.length || 1;

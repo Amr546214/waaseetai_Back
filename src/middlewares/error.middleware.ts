@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/app-error';
 import { logger } from '../config/logger';
 import { AI_FEATURE_UNAVAILABLE_CODE } from '../services/ai/ai-feature-unavailable';
+import { SELF_DEALING_CODES } from '../utils/self-dealing';
 import { PAYPAL_EMAIL_FROZEN_CODE, PAYPAL_OTP_EMAIL_FAILED_CODE, OTP_THROTTLED_CODE } from '../utils/paypal-email-messages';
 
 // Known library errors that are the caller's mistake (4xx), not a server fault: they must never surface as a 500 "Internal Server Error".
@@ -62,6 +63,9 @@ export const globalErrorHandler = (
       extra = { retryAfterSeconds: (err as unknown as { retryAfterSeconds?: number }).retryAfterSeconds };
     }
     if ((err as { code?: unknown }).code === PAYPAL_OTP_EMAIL_FAILED_CODE) code = PAYPAL_OTP_EMAIL_FAILED_CODE;
+    // Fixed self-purchase / self-negotiation / self-hire markers (a stable code the FE branches on).
+    const appCode = (err as { code?: unknown }).code;
+    if (typeof appCode === 'string' && SELF_DEALING_CODES.has(appCode)) code = appCode;
   } else {
     // Unhandled operational/programming errors
     logger.error('Unhandled Exception:', err);
