@@ -66,16 +66,17 @@ test('provider wizard: occupation, country, city, address, languages, specialtie
 	const body = {
 		details: { occupation: XSS('مصمم'), country: XSS('السعودية'), city: XSS('جدة'), address: XSS('حي'), languages: [XSS('العربية')], bio: XSS('نبذة') },
 		identity: { certs: [] }, bank: {}, documents: { notes: XSS('ملاحظة') }, agreements: {},
-		specialties: { mainSpec: XSS('تصميم'), subSpecs: [XSS('شعارات')] }, portfolio: { [XSS('تصميم')]: [{ review: XSS('عمل ممتاز'), proofs: [] }] }
+		specialties: { mainSpec: XSS('تصميم'), subSpecs: [XSS('شعارات')] }, portfolio: { [XSS('شعارات')]: [{ review: 'private:raw:pdf:waseetai/providers/u1/documents/work', proofs: [] }] }
 	};
 	const res = mockRes();
 	await saveSetupData({ user: { id: 'u1' }, body } as any, res);
-	assert.equal(res.statusCode, 200);
+	assert.equal(res.statusCode, 200, JSON.stringify(res.body));
 	const u = w.upsert[0].update;
 	assert.deepEqual([u.industry, u.headline, u.country, u.city, u.address, u.languages, u.mainSpecialty, u.subSpecialties, u.notes],
 		['مصمم', 'مصمم', 'السعودية', 'جدة', 'حي', ['العربية'], 'تصميم', ['شعارات'], 'ملاحظة']);
-	assert.equal(w.portfolio[0].description, 'عمل ممتاز');
-	assert.equal(w.portfolio[0].title, 'نموذج أعمال - تصميم');
+	// Batch B T1: the work model is a FILE of this provider (a private reference), no longer free text
+	assert.equal(w.portfolio[0].description, 'private:raw:pdf:waseetai/providers/u1/documents/work');
+	assert.equal(w.portfolio[0].title, 'نموذج أعمال - شعارات');
 	assert.doesNotMatch(JSON.stringify(w), /<script|<img|<b>|onerror/);
 });
 

@@ -1,4 +1,5 @@
 import { AppError } from './app-error';
+import { sanitizeText } from './sanitize-text';
 import { isOwnCloudinaryUrl } from './cloudinary-url';
 import { privateRefBelongsTo, isPrivateRef } from './kyc-private-ref';
 
@@ -26,7 +27,8 @@ const fieldError = (spec: string, message: string) => new AppError(message, 400,
 export function assertSetupPortfolioProofs(userId: string, portfolio: unknown, chosenSubSpecs: string[]): void {
 	if (portfolio === undefined || portfolio === null) return;
 	if (typeof portfolio !== 'object' || Array.isArray(portfolio)) throw new AppError('نماذج الأعمال غير صالحة', 400, [{ path: 'portfolio', field: 'portfolio', message: 'نماذج الأعمال غير صالحة' }]);
-	const map = portfolio as Record<string, unknown>;
+	// keys are sub-specialty names; they are compared after the same sanitising the rest of the setup gets
+	const map: Record<string, unknown> = Object.fromEntries(Object.entries(portfolio as Record<string, unknown>).map(([k, v]) => [sanitizeText(k).trim(), v]));
 	for (const spec of Object.keys(map)) {
 		const items = Array.isArray(map[spec]) ? (map[spec] as any[]) : [];
 		for (const item of items) {
@@ -36,7 +38,7 @@ export function assertSetupPortfolioProofs(userId: string, portfolio: unknown, c
 			}
 		}
 	}
-	for (const spec of chosenSubSpecs) {
+	for (const spec of chosenSubSpecs.map(c => sanitizeText(String(c)).trim()).filter(Boolean)) {
 		const items = Array.isArray(map[spec]) ? (map[spec] as any[]) : [];
 		if (!items.some(item => isValidSetupProofValue(item?.review, userId))) throw fieldError(spec, `ارفع نموذج عمل واحدًا على الأقل لتخصص «${spec}» (ملف صورة أو PDF حتى 15 ميجابايت)`);
 	}

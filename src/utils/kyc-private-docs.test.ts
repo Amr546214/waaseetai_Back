@@ -136,8 +136,10 @@ test('wiring: the scrubbing middleware is installed app-wide and the access-link
 	assert.match(read('routes/kyc-documents.routes.ts'), /authenticate, requireActiveUser, createAccessLink/);
 });
 
-test('wiring: the two responses that must hand a reference to their caller opt out of scrubbing, and only those', () => {
-	for (const f of ['routes/provider-profile.routes.ts', 'routes/accreditation-ai.routes.ts']) assert.match(read(f), /res\.locals\.allowPrivateRef = true/, f);
+test('wiring: the only response that hands a reference to its caller opts out of scrubbing (accreditation proofs return an id instead)', () => {
+	assert.match(read('routes/provider-profile.routes.ts'), /res\.locals\.allowPrivateRef = true/);
+	// Batch B T1: an accreditation proof is tied to an upload record; the caller keeps the proof id, never the private reference
+	assert.doesNotMatch(read('routes/accreditation-ai.routes.ts'), /allowPrivateRef/);
 	const offenders = ['controllers/client-profile.controller.ts', 'controllers/provider-profile.controller.ts', 'controllers/onboarding.controller.ts', 'controllers/kyc-documents.controller.ts'].filter(f => /allowPrivateRef/.test(read(f)));
 	assert.deepEqual(offenders, []);
 });

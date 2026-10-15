@@ -110,8 +110,9 @@ test('favourites, ordering, cart checkout, AI recommendations and the public pro
 
 test('publishing or editing a service requires the specialty to be APPROVED (not only isPassed)', () => {
 	const src = readFileSync(new URL('./marketplace-service.service.ts', import.meta.url), 'utf8');
-	const gates = src.match(/isActive: true,\s*isPassed: true,\s*status: 'APPROVED',/g) ?? [];
-	assert.equal(gates.length, 2, 'both create and update look the ProviderSpecialty up with status APPROVED');
+	// Batch B T1: ONE shared resolver (used by create, update and every re-publish path) demands an APPROVED + passed + active specialty
+	assert.match(src, /own\.status !== 'APPROVED' \|\| !own\.isPassed \|\| !own\.isActive/);
+	assert.equal((src.match(/this\.resolveApprovedSpecialty\(/g) ?? []).length >= 3, true, 'create, update and re-publish all call it');
 });
 
 test('marketBlockReasons / MARKET_VISIBLE_WHERE agree on the edge cases (no profile, no sample, null status)', () => {
