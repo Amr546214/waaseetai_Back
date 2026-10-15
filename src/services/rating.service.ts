@@ -30,6 +30,10 @@ async function lockReviewKey(tx: Prisma.TransactionClient, key: string) {
 }
 
 /**
+ * INTERNAL aggregate (NOT the public one). Counts EVERY client -> provider review, published or not: it feeds User.ratingAverage / ProviderGamification.avgRating, one of the
+ * three LEVEL_MATRIX gates, so a provider's level never depends on whether the reviewer chose to publish. The PUBLIC average/count/percentage (public profile, service pages,
+ * cards) are computed separately from `isPublic = true` reviews only (see review-visibility.ts).
+ *
  * Re-derives the provider's rating average and level from the stored reviews, inside the caller's transaction. Phase 3D.3A: avgRating is one of the three
  * LEVEL_MATRIX qualification gates (see progression-calculators.ts), so a rating change alone can move a provider's level even though no points were awarded here;
  * points/completedProjects are re-read from their own sources so this write never regresses them. Used by both the project rating and the stage rating, so the
@@ -107,7 +111,8 @@ export class RatingService {
           reviewerRole,
           rating: input.rating,
           comment: input.comment,
-          tags: tagsFor(reviewerRole, input.tags)
+          tags: tagsFor(reviewerRole, input.tags),
+          isPublic: input.publish ?? true
         }
       });
       // Only client -> provider reviews feed the provider's average, count and level gate (a provider's rating of the client does not).
@@ -121,9 +126,38 @@ export class RatingService {
   }
 
   /**
+   * Builds the RatingStatus payload shared by the project and the stage status endpoints. `blocked` is the reason the target itself cannot be rated right now
+   * (not completed / stage not approved); a saved review always wins, then an admin settlement, then `blocked`. The saved review is returned even for a project
+   * that was later settled (history stays readable) while `canRate` is false.
+   */
+  private async buildStatus(args: {
+    saved: any | null; scope: 'PROJECT' | 'STAGE'; actor: 'client' | 'provider'; projectId: string | null; requestId: string | null; stageId?: string | null;
+    blocked: { reason: 'NOT_COMPLETED' | 'STAGE_NOT_APPROVED'; message: string } | null;
+  }) {
+    const { saved, scope, actor, projectId, requestId, stageId = null, blocked } = args;
+    const settlement = await adminSettlementFor({ projectId, requestId }, prisma as any);
+    // The REAL distribution the admin executed (refund to the client, gross release to the provider, platform commission, provider net) — from the settlement's own
+    // audit row, so the page never claims "completed / the whole amount released" for a project that was closed by a settlement.
+    let distribution: FinancialOutcomeSummary | null = null;
+    if (settlement.settled) {
+      try { distribution = ((await adminAudit.listForEntity('DISPUTE', settlement.disputeId, ['DISPUTE_FINANCIAL_RESOLVED']))[0]?.context?.outcomeSummary as FinancialOutcomeSummary | undefined) ?? null; } catch { distribution = null; }
+    }
+    const what = scope === 'STAGE' ? 'هذه المرحلة' : 'هذا المشروع';
+    let canRate = false; let reason: 'ALREADY_RATED' | 'ADMIN_SETTLED' | 'NOT_COMPLETED' | 'STAGE_NOT_APPROVED' | null = null; let message = '';
+    if (saved) { reason = 'ALREADY_RATED'; message = `قيّمتَ ${what} مسبقًا`; }
+    else if (settlement.settled) { reason = 'ADMIN_SETTLED'; message = SETTLED_NO_RATING_AR; }
+    else if (blocked) { reason = blocked.reason; message = blocked.message; }
+    else canRate = true;
+    return {
+      scope, projectId, requestId, stageId, actor, canRate, reason, message,
+      adminSettled: settlement.settled ? { disputeId: settlement.disputeId, outcome: settlement.outcome, label: SETTLED_LABEL_AR, distribution } : null,
+      review: saved ? { id: saved.id, rating: saved.rating, comment: saved.comment ?? null, tags: saved.tags ?? [], isPublic: saved.isPublic !== false, createdAt: saved.createdAt } : null
+    };
+  }
+
+  /**
    * What the rating page needs BEFORE it shows anything: may this user rate, and what did this user already rate. Ownership is checked first (a stranger gets 403 and
-   * learns nothing). The saved review is the user's own project-level review of the OTHER side; it is returned even for a project that was later settled by a dispute
-   * (the history stays visible), while `canRate` is false whenever a review exists, the project did not complete by delivery, or an admin settled it.
+   * learns nothing). The saved review is the user's own project-level review of the OTHER side (never a stage review, never the account-level rating).
    */
   async getStatus(requestId: string, userId: string, actor: 'client' | 'provider') {
     const target = await this.resolveTarget(requestId);
@@ -133,45 +167,46 @@ export class RatingService {
     const reviewerRole = actor === 'provider' ? 'PROVIDER' : 'CLIENT';
     const where: any = { clientId, providerId, stageId: null, reviewerRole };
     if (clientRequestId) where.clientRequestId = clientRequestId; else if (projectId) where.projectId = projectId;
-    const [saved, settlement] = await Promise.all([
-      prisma.review.findFirst({ where, orderBy: { createdAt: 'desc' } }),
-      adminSettlementFor({ projectId, requestId: clientRequestId }, prisma as any)
-    ]);
-    // The REAL distribution the admin executed (refund to the client, gross release to the provider, platform commission, provider net) — from the settlement's own
-    // audit row, so the page never claims "completed / the whole amount released" for a project that was closed by a settlement.
-    let distribution: FinancialOutcomeSummary | null = null;
-    if (settlement.settled) {
-      try { distribution = ((await adminAudit.listForEntity('DISPUTE', settlement.disputeId, ['DISPUTE_FINANCIAL_RESOLVED']))[0]?.context?.outcomeSummary as FinancialOutcomeSummary | undefined) ?? null; } catch { distribution = null; }
-    }
-    let canRate = false; let reason: 'ALREADY_RATED' | 'ADMIN_SETTLED' | 'NOT_COMPLETED' | null = null; let message = '';
-    if (saved) { reason = 'ALREADY_RATED'; message = 'قيّمتَ هذا المشروع مسبقًا'; }
-    else if (settlement.settled) { reason = 'ADMIN_SETTLED'; message = SETTLED_NO_RATING_AR; }
-    else if (!target.completed) { reason = 'NOT_COMPLETED'; message = 'يمكن التقييم بعد اكتمال المشروع'; }
-    else canRate = true;
-    return {
-      projectId, requestId: clientRequestId, actor, canRate, reason, message,
-      adminSettled: settlement.settled ? { disputeId: settlement.disputeId, outcome: settlement.outcome, label: SETTLED_LABEL_AR, distribution } : null,
-      review: saved ? { id: saved.id, rating: saved.rating, comment: saved.comment ?? null, tags: saved.tags ?? [], createdAt: saved.createdAt } : null
-    };
+    const saved = await prisma.review.findFirst({ where, orderBy: { createdAt: 'desc' } });
+    return this.buildStatus({
+      saved, scope: 'PROJECT', actor, projectId, requestId: clientRequestId,
+      blocked: target.completed ? null : { reason: 'NOT_COMPLETED', message: 'يمكن التقييم بعد اكتمال المشروع' }
+    });
+  }
+
+  /** The client's contract for a project key (project id or contract id), with the ownership check shared by the stage status and the stage rating. */
+  private async clientContractFor(projectKey: string, userId: string) {
+    const contract = await prisma.contract.findFirst({ where: { OR: [{ projectId: projectKey }, { id: projectKey }] }, include: { project: { select: { id: true } } } });
+    if (!contract) throw new AppError('المشروع غير موجود', 404);
+    if (contract.clientId !== userId) throw new AppError('لا تملك صلاحية الوصول إلى هذا المشروع', 403);
+    return contract;
   }
 
   /**
-   * Client rates a specific stage/delivery after approving it.
-   * Different from rateRequest (which rates the whole project/provider).
-   * Stores a Review with stageId set, scoped to the stage.
+   * The same RatingStatus shape for ONE stage: ownership (stranger -> 403, a stage of another contract -> 404), only APPROVED stages are rateable, a settled project
+   * allows no new stage rating, and an existing stage review is returned read-only. Stage reviews are the client's only (the provider rates the project, not stages).
+   */
+  async getStageStatus(projectKey: string, stageId: string, userId: string) {
+    const contract = await this.clientContractFor(projectKey, userId);
+    const stage = await prisma.projectStage.findFirst({ where: { id: stageId, contractId: contract.id } });
+    if (!stage) throw new AppError('المرحلة غير موجودة', 404);
+    const saved = await prisma.review.findFirst({ where: { stageId: stage.id, clientId: contract.clientId, providerId: contract.providerId, reviewerRole: 'CLIENT' }, orderBy: { createdAt: 'desc' } });
+    return this.buildStatus({
+      saved, scope: 'STAGE', actor: 'client', projectId: contract.projectId, requestId: null, stageId: stage.id,
+      blocked: stage.status === 'APPROVED' ? null : { reason: 'STAGE_NOT_APPROVED', message: 'يمكن تقييم المرحلة بعد اعتمادها فقط' }
+    });
+  }
+
+  /**
+   * Client rates a specific stage/delivery after approving it (a different review from rateRequest, which rates the whole project). Stores a Review with stageId set.
+   *
+   * DECISION (documented): stage reviews ARE client -> provider reviews, so they feed the provider's rating (internal average and, when published, the public average/count),
+   * exactly like project reviews. The public list labels each review as a project or a stage review (`kind`), so the count the page shows is the number of rows the list
+   * can show. A stage review is never an account-level rating of the client.
    */
   async rateStage(projectKey: string, stageId: string, userId: string, input: CreateRatingInput) {
-    // Find the contract by projectId or contractId
-    const contract = await prisma.contract.findFirst({
-      where: { OR: [{ projectId: projectKey }, { id: projectKey }], clientId: userId },
-      include: { project: { select: { id: true } } },
-    });
-    if (!contract) throw new AppError('المشروع غير موجود أو لا تملك صلاحية الوصول إليه', 404);
-
-    // Find the stage and ensure it belongs to this contract
-    const stage = await prisma.projectStage.findFirst({
-      where: { id: stageId, contractId: contract.id },
-    });
+    const contract = await this.clientContractFor(projectKey, userId);
+    const stage = await prisma.projectStage.findFirst({ where: { id: stageId, contractId: contract.id } });
     if (!stage) throw new AppError('المرحلة غير موجودة', 404);
     if (stage.status !== 'APPROVED') throw new AppError('يمكن تقييم المرحلة بعد اعتمادها فقط', 400);
     await assertNotAdminSettled(prisma as any, contract.projectId, null);
@@ -186,7 +221,7 @@ export class RatingService {
       if (existing) throw new AppError('تم تقييم هذه المرحلة مسبقاً', 409);
       const serviceId = (await tx.project.findUnique({ where: { id: projectId }, select: { serviceCatalogId: true } }))?.serviceCatalogId ?? null;
       const created = await tx.review.create({
-        data: { stageId: stage.id, clientId, providerId, projectId, ...(serviceId ? { serviceId } : {}), reviewerRole: 'CLIENT', rating: input.rating, comment: input.comment, tags: tagsFor('CLIENT', input.tags) }
+        data: { stageId: stage.id, clientId, providerId, projectId, ...(serviceId ? { serviceId } : {}), reviewerRole: 'CLIENT', rating: input.rating, comment: input.comment, tags: tagsFor('CLIENT', input.tags), isPublic: input.publish ?? true }
       });
       await refreshProviderAggregates(tx, providerId);
       return created;

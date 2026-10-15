@@ -9,6 +9,8 @@ export const createRatingSchema = z.object({
   // A whole number of stars: a half or fractional score is not a valid rating.
   rating: z.number().int().min(1).max(5),
   comment: z.string().trim().max(2000).optional(),
+  /** The reviewer's publish choice. true (default, also for old clients that send nothing) = the review is public; false = visible only to both parties and the admin. */
+  publish: z.boolean().optional(),
   tags: z.array(z.string().trim().refine(t => ALL_RATING_TAGS.includes(t), 'وسم تقييم غير معروف')).max(6).optional()
 });
 

@@ -182,7 +182,7 @@ test('tags: each side may only attach its own list, duplicates collapse, unknown
 
 test('static: the PUBLIC provider profile review list is a whitelist (no internal ids, no reviewer role); the client public profile exposes only stars/text/date/name', () => {
 	const src = readFileSync('src/services/provider-profile.service.ts', 'utf8');
-	const block = src.slice(src.indexOf('const reviews = await prisma.review.findMany'), src.indexOf('const reviewsCount'));
+	const block = src.slice(src.indexOf('const publicReviewRows = await prisma.review.findMany'), src.indexOf('const [publicAgg'));
 	assert.match(block, /select: \{\s*id: true, rating: true, comment: true, tags: true, createdAt: true,/);
 	for (const leak of ['providerId', 'clientId', 'projectId', 'serviceId', 'clientRequestId', 'stageId', 'reviewerRole']) assert.ok(!block.includes(`${leak}: true`), `${leak} must not be selected for visitors`);
 	assert.ok(!/include:\s*\{/.test(block), 'no raw include (it would return every column)');

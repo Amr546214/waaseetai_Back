@@ -1,3 +1,4 @@
+import { PUBLIC_SERVICE_REVIEWS_RELATION, publicServiceReviewsWhere } from './review-visibility';
 import { AccountType, Prisma } from '@prisma/client';
 import { businessModelAuditResult } from './ai-features/business-model-audit-result';
 import { sanitizeText } from '../utils/sanitize-text';
@@ -506,7 +507,7 @@ export class MarketplaceService {
 
 		const parsedMinRating = Number(minRating);
 		if (Number.isFinite(parsedMinRating) && parsedMinRating > 0) {
-			whereClause.reviews = { some: { rating: { gte: parsedMinRating } } };
+			whereClause.reviews = { some: { rating: { gte: parsedMinRating }, reviewerRole: 'CLIENT', isPublic: true } };
 		}
 
 		// Phase 3E.1 Part 4: `level` values are the SAME canonical LEVEL_MATRIX
@@ -565,9 +566,22 @@ export class MarketplaceService {
 		const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
 		const pageSize = Math.min(50, Math.max(1, parseInt(limit as string, 10) || 20));
 
-		const [dbModels, totalCount] = await Promise.all([
+		// "rating" / "top_rated" order by the number of PUBLISHED client reviews. Prisma cannot filter a relation _count in orderBy (it would count unpublished reviews and
+		// leak their number through the order), so these two sorts rank the ids in memory from a published-only groupBy and then load just the requested page.
+		let rankedPageIds: string[] | null = null;
+		if (sort === 'rating' || sort === 'top_rated') {
+			const candidates = await prisma.serviceCatalog.findMany({ where: whereClause, select: { id: true, createdAt: true } });
+			const counts = await prisma.review.groupBy({ by: ['serviceId'], where: { serviceId: { in: candidates.map((c: any) => c.id) }, reviewerRole: 'CLIENT', isPublic: true }, _count: { _all: true } });
+			const countOf = new Map<string, number>(counts.map((g: any) => [g.serviceId as string, g._count._all as number]));
+			rankedPageIds = candidates
+				.sort((a: any, b: any) => (countOf.get(b.id) ?? 0) - (countOf.get(a.id) ?? 0) || b.createdAt.getTime() - a.createdAt.getTime())
+				.slice((pageNum - 1) * pageSize, pageNum * pageSize)
+				.map((c: any) => c.id);
+		}
+
+		const [loadedModels, totalCount] = await Promise.all([
 			prisma.serviceCatalog.findMany({
-				where: whereClause,
+				where: rankedPageIds ? { AND: [whereClause, { id: { in: rankedPageIds } }] } : whereClause,
 				include: {
 					provider: {
 						select: marketplaceProviderSelect
@@ -578,14 +592,13 @@ export class MarketplaceService {
 					stages: true,
 					portfolioItem: true,
 					accreditationSample: { select: { attachments: true } },
-					reviews: { select: { rating: true } }
+					reviews: { ...PUBLIC_SERVICE_REVIEWS_RELATION, select: { rating: true } }
 				},
-				orderBy,
-				skip: (pageNum - 1) * pageSize,
-				take: pageSize
+				...(rankedPageIds ? {} : { orderBy, skip: (pageNum - 1) * pageSize, take: pageSize })
 			}),
 			prisma.serviceCatalog.count({ where: whereClause })
 		]);
+		const dbModels = rankedPageIds ? rankedPageIds.map(id => loadedModels.find((m: any) => m.id === id)).filter((m): m is NonNullable<typeof m> => Boolean(m)) : loadedModels;
 
 		// Batch 4 — ONE batched lookup for every service id on this page, never
 		// one request per card (findActiveServicePurchases already accepts an
@@ -693,6 +706,8 @@ export class MarketplaceService {
 				portfolioItem: true,
 				accreditationSample: { select: { attachments: true, providerSpecialty: { select: { status: true } } } },
 				reviews: {
+					// published client reviews only: an unpublished review (and any provider -> client review) never appears on a service page
+					where: PUBLIC_SERVICE_REVIEWS_RELATION.where,
 					orderBy: { createdAt: 'desc' },
 					take: 20,
 					include: { client: { select: { firstName: true, lastName: true, avatarUrl: true } } }
@@ -725,7 +740,7 @@ export class MarketplaceService {
 		}
 		gallery = [...new Set(gallery)];
 		const [reviewStats, updatedViews] = await Promise.all([
-			prisma.review.aggregate({ where: { serviceId: s.id, reviewerRole: 'CLIENT' }, _count: { _all: true }, _avg: { rating: true } }),
+			prisma.review.aggregate({ where: publicServiceReviewsWhere(s.id), _count: { _all: true }, _avg: { rating: true } }),
 			prisma.serviceCatalog.update({ where: { id: s.id }, data: { viewsCount: { increment: 1 } }, select: { viewsCount: true } })
 		]);
 		const reviewsCount = reviewStats._count._all;

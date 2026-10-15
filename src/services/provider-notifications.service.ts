@@ -15,6 +15,8 @@ export const PROVIDER_ROUTES = {
 	dispute: (disputeId: string) => `/provider-overview/disputes/${disputeId}`,
 	// Reviews received are shown on the provider's public profile.
 	reviews: '/provider-overview/profile/public',
+	// The provider's rating page of a project (project id or contract id); it reads the rating status first (form / saved card / blocked reason).
+	rating: (projectId: string) => `/provider-overview/projects/${projectId}/rating`,
 	// The offers list shows every offer with its live state (under negotiation, awaiting signature...).
 	offers: '/provider-overview/offers',
 	// Provider side of the offer negotiation; the id is the provider's own (canonical) offer id.

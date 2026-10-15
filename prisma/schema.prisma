@@ -565,6 +565,9 @@ model Review {
   comment         String?
   // The quick-pick tags the reviewer chose with the stars (from RATING_TAGS of their side). Migration 20261017100000 (NOT EXECUTED until approved).
   tags            String[]        @default([])
+  // The reviewer's publish choice. false = visible only to the two parties and the admin; it never reaches a public API nor the PUBLIC average/count.
+  // Existing rows are public today, so the migration keeps them true (no retroactive change). Migration 20261017110000 (NOT EXECUTED until approved).
+  isPublic        Boolean         @default(true)
   createdAt       DateTime        @default(now())
 
   @@index([providerId])

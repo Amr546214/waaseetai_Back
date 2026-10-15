@@ -52,7 +52,7 @@ export class MarketplaceAiService {
 				specialty: { include: { category: true } },
 				stages: true,
 				portfolioItem: true,
-				reviews: { select: { rating: true } }
+				reviews: { where: { reviewerRole: 'CLIENT', isPublic: true }, select: { rating: true } }
 			},
 			orderBy: { viewsCount: 'desc' },
 			take: 15

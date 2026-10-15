@@ -1,3 +1,4 @@
+import { publicClientReviewsWhere } from './review-visibility';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { ProjectStatus } from '@prisma/client';
@@ -79,10 +80,10 @@ export class ClientProfileService {
       prisma.project.count({ where: deliveryCompletedProject({ clientId: userId }) }),
       prisma.project.count({ where: { clientId: userId, status: { in: ACTIVE_PROJECT_STATUSES } } }),
       prisma.contract.count({ where: { clientId: userId } }),
-      prisma.review.count({ where: { clientId: userId, reviewerRole: 'PROVIDER' } }),
-      prisma.review.aggregate({ where: { clientId: userId, reviewerRole: 'PROVIDER' }, _avg: { rating: true } }),
+      prisma.review.count({ where: publicClientReviewsWhere(userId) }),
+      prisma.review.aggregate({ where: publicClientReviewsWhere(userId), _avg: { rating: true } }),
       prisma.review.findMany({
-        where: { clientId: userId, reviewerRole: 'PROVIDER' },
+        where: publicClientReviewsWhere(userId),
         orderBy: { createdAt: 'desc' },
         take: 10,
         select: { rating: true, comment: true, createdAt: true, provider: { select: { firstName: true, lastName: true } } }

@@ -12,6 +12,7 @@ import { withoutLegacyProviderBankFields } from '../utils/provider-payout';
 import { MARKET_VISIBLE_WHERE } from '../utils/market-visibility';
 import { Prisma, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
+import { publicProviderReviewsWhere } from './review-visibility';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { sanitizeText } from '../utils/sanitize-text';
 import { isAcceptableKycDocumentValue } from '../utils/kyc-value-guard';
@@ -234,7 +235,7 @@ export class ProviderProfileService {
 	 *   If ANY completed project lacks that timing evidence, returns null.
 	 * - totalClientsCount / repeatClientsCount: distinct clientId over completed
 	 *   projects / those with >= 2 completed projects.
-	 * - fiveStarReviewsCount / totalReviewsCount: CLIENT reviews with rating >= 5 / all.
+	 * - fiveStarReviewsCount / totalReviewsCount: PUBLISHED CLIENT reviews with rating >= 5 / all published (these metrics are shown publicly).
 	 * - disputedProjectsCount: distinct completed projects having >= 1 Dispute row.
 	 */
 	private async derivePerformanceCounts(providerId: string, reviewsCount: number) {
@@ -264,7 +265,7 @@ export class ProviderProfileService {
 			select: { projectId: true }
 		});
 		const disputedProjectsCount = new Set(disputes.map(d => d.projectId)).size;
-		const fiveStarReviewsCount = await prisma.review.count({ where: { providerId, reviewerRole: 'CLIENT', rating: { gte: 5 } } });
+		const fiveStarReviewsCount = await prisma.review.count({ where: { ...publicProviderReviewsWhere(providerId), rating: { gte: 5 } } });
 
 		return {
 			totalProjectsCompleted: completed.length,
@@ -433,8 +434,10 @@ export class ProviderProfileService {
 			? await prisma.companyTeamMember.count({ where: { companyOwnerId: providerId, status: 'ACTIVE' } })
 			: 0;
 
-		const reviews = await prisma.review.findMany({
-			where: { providerId, reviewerRole: 'CLIENT' },
+		// PUBLIC reviews only: an unpublished review (isPublic = false) never reaches this payload, nor the public count / average below.
+		const publicWhere = publicProviderReviewsWhere(providerId);
+		const publicReviewRows = await prisma.review.findMany({
+			where: publicWhere,
 			orderBy: { createdAt: 'desc' },
 			take: 20,
 			// Public payload: ONLY what the page shows (the review id for list keys, stars, text, tags, date, the reviewer's name/avatar and the project title).
@@ -442,10 +445,20 @@ export class ProviderProfileService {
 			select: {
 				id: true, rating: true, comment: true, tags: true, createdAt: true,
 				client: { select: { firstName: true, lastName: true, avatarUrl: true } },
-				project: { select: { title: true } }
+				project: { select: { title: true } },
+				stage: { select: { title: true } }
 			}
 		});
-		const reviewsCount = await prisma.review.count({ where: { providerId, reviewerRole: 'CLIENT' } });
+		// A stage review carries the stage title; `kind` labels the row (project review vs stage review). No stage id is sent.
+		const reviews = publicReviewRows.map(({ stage, ...r }) => ({ ...r, kind: stage ? 'STAGE' as const : 'PROJECT' as const, stageTitle: stage?.title ?? null }));
+		const [publicAgg, internalCount, internalAgg, unpublishedRows] = await Promise.all([
+			prisma.review.aggregate({ where: publicWhere, _count: { _all: true }, _avg: { rating: true } }),
+			viewer.isOwner ? prisma.review.count({ where: { providerId, reviewerRole: 'CLIENT' } }) : Promise.resolve(0),
+			viewer.isOwner ? prisma.review.aggregate({ where: { providerId, reviewerRole: 'CLIENT' }, _avg: { rating: true } }) : Promise.resolve(null),
+			// the provider may read the reviews clients chose NOT to publish (visible to both parties); visitors never run this query
+			viewer.isOwner ? prisma.review.findMany({ where: { providerId, reviewerRole: 'CLIENT', isPublic: false }, orderBy: { createdAt: 'desc' }, take: 50, select: { id: true, rating: true, comment: true, tags: true, createdAt: true, client: { select: { firstName: true, lastName: true } }, project: { select: { title: true } }, stage: { select: { title: true } } } }) : Promise.resolve([])
+		]);
+		const reviewsCount = publicAgg._count._all;
 
 		const gamification = await prisma.providerGamification.findUnique({
 			where: { providerId }
@@ -455,7 +468,8 @@ export class ProviderProfileService {
 		const completedTasks = completedProjectsCount;
 
 		// Rating is usually out of 5 in the DB. We need to convert it to a percentage (out of 100) for the UI.
-		const baseRating = reviewsCount > 0 ? (gamification?.avgRating || profile.user?.ratingAverage || profile.rating || 0) : 0;
+		// PUBLIC average = the mean of the published reviews only (never gamification.avgRating / User.ratingAverage, which count every review for the level gate).
+		const baseRating = reviewsCount > 0 ? Number(publicAgg._avg.rating || 0) : 0;
 		// One decimal on the percentage, so the stars/average the pages derive from it (clientRating / 20) are not off by a rounding step (4.33 of 5 was shown as 4.4).
 		const clientRating = baseRating <= 5 ? Math.round((baseRating / 5) * 1000) / 10 : baseRating;
 
@@ -629,6 +643,8 @@ export class ProviderProfileService {
 			services: publishedServices.map(withSpecialtyName),
 			company: buildCompanySummary({ accountType: profile.user?.accountType, companyName: profile.companyName, activeTeamMembersCount }),
 			reviews: reviews,
+			// Owner-only (the self-preview of the public page): the INTERNAL numbers, clearly separate from the public ones above. Visitors never get this key.
+			...(viewer.isOwner ? { reviewsInternal: { count: internalCount, average: internalAgg?._avg.rating ?? null, unpublishedCount: Math.max(0, internalCount - reviewsCount), unpublished: unpublishedRows.map((r: any) => ({ id: r.id, rating: r.rating, comment: r.comment, tags: r.tags, createdAt: r.createdAt, kind: r.stage ? 'STAGE' : 'PROJECT', stageTitle: r.stage?.title ?? null, projectTitle: r.project?.title ?? null, reviewerName: `${r.client?.firstName || ''} ${r.client?.lastName || ''}`.trim() || null })) } } : {}),
 			portfolioItems: allPortfolioItems,
 			socialLinks: {
 				github: profile.githubUrl || null,
