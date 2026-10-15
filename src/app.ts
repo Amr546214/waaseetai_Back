@@ -132,6 +132,8 @@ app.use(
 			}
 		},
 		credentials: true,
+		// The app reads Retry-After on 429 / 423 to run its countdown; a cross-origin page cannot see it unless it is exposed.
+		exposedHeaders: ['Retry-After'],
 	})
 );
 

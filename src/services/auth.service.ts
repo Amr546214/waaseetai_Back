@@ -16,7 +16,7 @@ import { sessionService, SessionContext } from './session.service';
 import { accountAuditLogService } from './account-logs.service';
 import { initializeRoleState } from './account-management.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
-import { otpSendThrottle, otpThrottleMessage } from '../utils/otp-send-throttle';
+import { otpSendThrottle, otpThrottleMessage, resendAvailableAtIso } from '../utils/otp-send-throttle';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { normalizeReferralIdentifier } from '../utils/referral-identifier';
 import { RESEND_GENERIC_MESSAGE, ACTIVATION_CODE_REJECTED_MESSAGE } from '../utils/auth-messages';
@@ -355,19 +355,23 @@ export class AuthService {
 		// regardless of authProvider, letting these accounts gain a local
 		// password via the same OTP flow. This never touches authProvider or
 		// googleId, so Google login keeps working unchanged afterwards.
+		// `expiresAt` has the same shape for a known and an unknown address (the unknown one is the time a fresh code WOULD stop being valid).
 		if (!user) {
-			return { message: RESET_GENERIC_MESSAGE };
+			return { message: RESET_GENERIC_MESSAGE, expiresAt: new Date(Date.now() + RESET_OTP_EXPIRY_MS).toISOString() };
 		}
 
 		// A reset code that is still valid (and not locked by wrong attempts) is re-sent as it is, not replaced.
 		const existingReset = await authRepository.findLatestPasswordResetOtp(user.id);
 		let otpCode: string;
+		let resetExpiresAt: Date;
 		if (existingReset && existingReset.expiresAt > new Date() && existingReset.attempts < RESET_OTP_MAX_ATTEMPTS) {
 			otpCode = existingReset.code;
+			resetExpiresAt = existingReset.expiresAt;
 		} else {
 			otpCode = crypto.randomInt(100000, 999999).toString();
+			resetExpiresAt = new Date(Date.now() + RESET_OTP_EXPIRY_MS);
 			await authRepository.deletePasswordResetOtps(user.id);
-			await authRepository.createPasswordResetOtp(user.id, otpCode, new Date(Date.now() + RESET_OTP_EXPIRY_MS));
+			await authRepository.createPasswordResetOtp(user.id, otpCode, resetExpiresAt);
 		}
 
 		// Not awaited: the SMTP round-trip would make a registered address answer measurably slower than an unknown one. The failure
@@ -376,7 +380,7 @@ export class AuthService {
 			.then(() => notificationService.sendPasswordResetEmail(user.email, user.firstName, otpCode))
 			.catch(() => { logger.error('[Auth] Password reset email was NOT delivered.'); });
 
-		return { message: RESET_GENERIC_MESSAGE };
+		return { message: RESET_GENERIC_MESSAGE, expiresAt: resetExpiresAt.toISOString() };
 	}
 
 	/**
@@ -564,6 +568,7 @@ export class AuthService {
 			phoneOtpRequired: false,
 			userId,
 			emailSent,
+			...(emailSent ? { resendAvailableAt: resendAvailableAtIso() } : {}),
 			message: emailSent ? 'يرجى تفعيل حسابك أولاً' : 'يرجى تفعيل حسابك أولاً. تعذر إرسال رمز التحقق الآن، حاول مرة أخرى بعد قليل أو تواصل مع الدعم'
 		};
 	}
@@ -604,29 +609,32 @@ export class AuthService {
 		if (!throttle.allowed) {
 			return { ...base, emailSent: false, retryAfterSeconds: throttle.retryAfterSeconds, message: otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds) };
 		}
-		const { emailSent } = await this.sendLoginOtp(userId, email);
-		return { ...base, emailSent, message: emailSent ? 'أرسلنا رمز تسجيل الدخول إلى بريدك الإلكتروني' : 'تعذر إرسال رمز تسجيل الدخول الآن، حاول مرة أخرى بعد قليل أو تواصل مع الدعم' };
+		const { emailSent, expiresAt } = await this.sendLoginOtp(userId, email);
+		return { ...base, emailSent, ...(emailSent ? { resendAvailableAt: resendAvailableAtIso(), expiresAt: expiresAt.toISOString() } : {}), message: emailSent ? 'أرسلنا رمز تسجيل الدخول إلى بريدك الإلكتروني' : 'تعذر إرسال رمز تسجيل الدخول الآن، حاول مرة أخرى بعد قليل أو تواصل مع الدعم' };
 	}
 
 	/** A still-valid LOGIN_EMAIL code is re-sent as it is (a late older email must not carry a dead code); otherwise a new one is created. */
-	private async sendLoginOtp(userId: string, email: string): Promise<{ emailSent: boolean; reused: boolean }> {
+	private async sendLoginOtp(userId: string, email: string): Promise<{ emailSent: boolean; reused: boolean; expiresAt: Date }> {
 		const existing = await authRepository.findLatestOtpByPurpose(userId, OtpPurpose.LOGIN_EMAIL);
 		let code: string;
 		let reused = false;
+		let expiresAt: Date;
 		if (existing && existing.expiresAt > new Date() && existing.attempts < OTP_MAX_ATTEMPTS) {
 			code = existing.code;
 			reused = true;
+			expiresAt = existing.expiresAt;
 		} else {
 			code = crypto.randomInt(100000, 999999).toString();
+			expiresAt = new Date(Date.now() + EMAIL_OTP_EXPIRY_MS);
 			await authRepository.deleteOtpsByPurpose(userId, OtpPurpose.LOGIN_EMAIL);
-			await authRepository.createOtp(userId, code, OtpType.EMAIL, new Date(Date.now() + EMAIL_OTP_EXPIRY_MS), OtpPurpose.LOGIN_EMAIL);
+			await authRepository.createOtp(userId, code, OtpType.EMAIL, expiresAt, OtpPurpose.LOGIN_EMAIL);
 		}
 		try {
 			await notificationService.sendLoginOtpEmail(email, code);
-			return { emailSent: true, reused };
+			return { emailSent: true, reused, expiresAt };
 		} catch (error) {
 			logger.error(`[AuthService] Login OTP email failed (userId=${userId})`, error);
-			return { emailSent: false, reused };
+			return { emailSent: false, reused, expiresAt };
 		}
 	}
 
@@ -780,11 +788,11 @@ export class AuthService {
 		if (!user || user.status !== UserStatus.ACTIVE || !pending) {
 			// Unauthenticated endpoint: unknown id / not mid-login looks like a real send (same throttle bucket, same shape); nothing is sent.
 			const throttle = otpSendThrottle.consume(`login:${userId}`, ipAddress);
-			if (!throttle.allowed) return { emailSent: false, message: otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds) };
-			return { emailSent: true, message: RESEND_GENERIC_MESSAGE };
+			if (!throttle.allowed) return { emailSent: false, retryAfterSeconds: throttle.retryAfterSeconds, message: otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds) };
+			return { emailSent: true, resendAvailableAt: resendAvailableAtIso(), message: RESEND_GENERIC_MESSAGE };
 		}
 		const result = await this.loginOtpChallengeResult(userId, user.email, ipAddress);
-		return { emailSent: result.emailSent, message: result.message };
+		return { emailSent: result.emailSent, message: result.message, ...('retryAfterSeconds' in result ? { retryAfterSeconds: result.retryAfterSeconds } : {}), ...('resendAvailableAt' in result ? { resendAvailableAt: result.resendAvailableAt, expiresAt: result.expiresAt } : {}) };
 	}
 }
 
