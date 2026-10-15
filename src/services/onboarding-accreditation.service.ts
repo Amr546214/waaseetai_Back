@@ -37,7 +37,7 @@ export async function ensureOnboardingAccreditationSamples(profileId: string, db
 		if (!row) continue;
 		const description = norm(item.description);
 		// the wizard stores the work FILE url in `description` and the proof files in `tags`: both are evidence the admin must be able to open
-		const attachments = [...new Set([...(/^https?:\/\//i.test(description) ? [description] : []), ...(item.tags ?? []), ...(item.coverImage ? [item.coverImage] : [])].filter(Boolean))].filter(isOwnProof);
+		const attachments = [...new Set([...(/^(https?:\/\/|private:)/i.test(description) ? [description] : []), ...(item.tags ?? []), ...(item.coverImage ? [item.coverImage] : [])].filter(Boolean))].filter(isOwnProof);
 		// no valid proof document of this provider = no approval request (the access state then says a sample is still required)
 		if (!attachments.length) continue;
 		const key = `${row.id}::${item.title}`;

@@ -24,11 +24,11 @@ const load = () => (loaded ??= (async () => {
 	};
 	const prisma: any = {
 		providerSpecialty: {
-			findFirst: async () => (ownSpecialty ? { id: 'ps1', specialty: { id: 'sp1', category: { slug: 'programming-development' } } } : null),
+			findFirst: async () => (ownSpecialty ? { id: 'ps1', status: 'APPROVED', isPassed: true, isActive: true, specialty: { id: 'sp1', nameAr: 'تطوير الواجهات', category: { slug: 'programming-development' } } } : null),
 			findMany: async () => [{ id: 'ps1', specialtyId: 'sp1', subSpecialties: ['React'], specialty: { slug: 'web', nameAr: 'تطوير الواجهات', category: { slug: 'programming-development' } } }]
 		},
 		providerProfile: { findUnique: async () => ({ skills: [...heldSkills.map(name => ({ name })), { name: 'x' }].slice(0, heldSkills.length), portfolioItems: [] }) },
-		accreditationSample: { findFirst: async () => ({ id: 'as1' }) },
+		accreditationSample: { findFirst: async () => ({ id: 'as1', status: 'AI_VERIFIED' }) },
 		portfolioItem: { findFirst: async () => null },
 		serviceCatalog: {
 			findFirst: async ({ where }: any) => rows.find(r => r.id === where.id) ?? null,
@@ -75,11 +75,12 @@ test('create: a skill outside the specialty catalog is a 400 naming the offender
 	assert.equal(rows.length, 0);
 });
 
-test('create: a skill the provider already holds on the profile is accepted even if it is not in this category (old data is never broken)', async () => {
+// Batch B T1 (intentional change): holding a skill on the profile no longer widens what a service may use; only the specialty's catalog counts.
+test('create: a skill the provider holds on the profile but that is not in this specialty catalog is refused (field skills)', async () => {
 	const s = await svc();
 	rows.length = 0;
-	const created = await s.createService('u1', base({ skills: ['Figma'] }));
-	assert.deepEqual(created.skills, ['Figma']);
+	await assert.rejects(() => s.createService('u1', base({ skills: ['Figma'] })), (e: any) => e.statusCode === 400 && e.errors?.[0]?.field === 'skills');
+	assert.equal(rows.length, 0);
 });
 
 test('create: more than 30 skills or a non-array is refused', async () => {
@@ -102,7 +103,7 @@ test('create/update: a specialty that is not the provider\'s own is refused (bef
 	rows.length = 0;
 	ownSpecialty = false;
 	try {
-		await assert.rejects(() => s.createService('u1', base({ skills: ['React'] })), /التخصص غير معتمد/);
+		await assert.rejects(() => s.createService('u1', base({ skills: ['React'] })), /غير مضاف إلى حسابك/);
 		await assert.rejects(() => s.updateService('u1', 's1', base({ skills: ['React'] })), /التخصص غير معتمد|غير موجود/);
 	} finally { ownSpecialty = true; }
 	assert.equal(rows.length, 0);

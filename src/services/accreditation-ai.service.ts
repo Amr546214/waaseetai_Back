@@ -94,7 +94,7 @@ export class AccreditationAiService {
 
     // 4. One open request per specialty: a concurrent double submit cannot create two (advisory lock + re-check inside the transaction).
     const { accreditationSample, resubmitted } = await prisma.$transaction(async (tx: any) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'accreditation:' + providerSpecialty!.id}))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'accreditation:' + providerSpecialty!.id}))`;
       const latest = await tx.accreditationSample.findFirst({ where: { providerSpecialtyId: providerSpecialty!.id }, orderBy: { createdAt: 'desc' } });
       if (latest && (latest.status === AccreditationStatus.MANUAL_REVIEW || latest.status === AccreditationStatus.PENDING_AI_AUDIT)) {
         throw new AppError('لديك طلب اعتماد قيد المراجعة لهذا التخصص؛ تابعه من «إجراءات الحساب»', 409);
