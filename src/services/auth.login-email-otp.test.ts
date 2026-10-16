@@ -98,10 +98,13 @@ test('a forgot-password / activation / phone-change code cannot be used to log i
 	assert.equal(sessions.length, 0);
 });
 
-test('resend re-sends the same still-valid login code (no new row) and refuses when no login is in progress', async (t) => {
+test('resend re-sends the same still-valid login code (no new row) and answers generically (sends nothing) when no login is in progress', async (t) => {
 	const { rows, sent } = setup(t, await hashed());
 	const auth = await load();
-	await assert.rejects(() => auth.resendLoginOtp('user-1'), (e: any) => e.statusCode === 400);
+	const none = await auth.resendLoginOtp('user-1');
+	assert.equal(none.emailSent, true, 'no login in progress: the generic answer, nothing is sent');
+	assert.equal(sent.length, 0);
+	auth.__throttle.reset();
 	await auth.loginUser({ email: 'amr@example.com', password: PW }, {});
 	const early = await auth.resendLoginOtp('user-1', undefined);
 	assert.equal(early.emailSent, false, 'an immediate resend is throttled like every other code send');

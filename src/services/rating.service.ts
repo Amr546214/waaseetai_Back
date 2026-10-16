@@ -24,6 +24,9 @@ function tagsFor(reviewerRole: 'CLIENT' | 'PROVIDER', tags: string[] | undefined
   return clean;
 }
 
+/** One stored review as the status payloads show it (the same shape for «my review», the counterpart's and the per-stage list). */
+const toSavedReview = (r: any) => ({ id: r.id, rating: r.rating, comment: r.comment ?? null, tags: r.tags ?? [], isPublic: r.isPublic !== false, createdAt: r.createdAt });
+
 /** Serializes the check-then-create of one review (same reviewer, same project/request/stage) so a double click or two parallel requests can never both pass the duplicate check. */
 async function lockReviewKey(tx: Prisma.TransactionClient, key: string) {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
@@ -132,9 +135,13 @@ export class RatingService {
    */
   private async buildStatus(args: {
     saved: any | null; scope: 'PROJECT' | 'STAGE'; actor: 'client' | 'provider'; projectId: string | null; requestId: string | null; stageId?: string | null;
-    blocked: { reason: 'NOT_COMPLETED' | 'STAGE_NOT_APPROVED'; message: string } | null;
+    blocked: { reason: 'NOT_COMPLETED' | 'STAGE_NOT_APPROVED' | 'NOT_RATER'; message: string } | null;
+    /** The OTHER party's review of this same target (read-only, shown to both parties even when unpublished). */
+    counterpart?: any | null;
+    /** Project scope only: the client's stage reviews of this project, newest stage first; never mixed into `review` / `counterpart`. */
+    stageReviews?: any[];
   }) {
-    const { saved, scope, actor, projectId, requestId, stageId = null, blocked } = args;
+    const { saved, scope, actor, projectId, requestId, stageId = null, blocked, counterpart = null, stageReviews } = args;
     const settlement = await adminSettlementFor({ projectId, requestId }, prisma as any);
     // The REAL distribution the admin executed (refund to the client, gross release to the provider, platform commission, provider net) — from the settlement's own
     // audit row, so the page never claims "completed / the whole amount released" for a project that was closed by a settlement.
@@ -143,7 +150,7 @@ export class RatingService {
       try { distribution = ((await adminAudit.listForEntity('DISPUTE', settlement.disputeId, ['DISPUTE_FINANCIAL_RESOLVED']))[0]?.context?.outcomeSummary as FinancialOutcomeSummary | undefined) ?? null; } catch { distribution = null; }
     }
     const what = scope === 'STAGE' ? 'هذه المرحلة' : 'هذا المشروع';
-    let canRate = false; let reason: 'ALREADY_RATED' | 'ADMIN_SETTLED' | 'NOT_COMPLETED' | 'STAGE_NOT_APPROVED' | null = null; let message = '';
+    let canRate = false; let reason: 'ALREADY_RATED' | 'ADMIN_SETTLED' | 'NOT_COMPLETED' | 'STAGE_NOT_APPROVED' | 'NOT_RATER' | null = null; let message = '';
     if (saved) { reason = 'ALREADY_RATED'; message = `قيّمتَ ${what} مسبقًا`; }
     else if (settlement.settled) { reason = 'ADMIN_SETTLED'; message = SETTLED_NO_RATING_AR; }
     else if (blocked) { reason = blocked.reason; message = blocked.message; }
@@ -151,7 +158,10 @@ export class RatingService {
     return {
       scope, projectId, requestId, stageId, actor, canRate, reason, message,
       adminSettled: settlement.settled ? { disputeId: settlement.disputeId, outcome: settlement.outcome, label: SETTLED_LABEL_AR, distribution } : null,
-      review: saved ? { id: saved.id, rating: saved.rating, comment: saved.comment ?? null, tags: saved.tags ?? [], isPublic: saved.isPublic !== false, createdAt: saved.createdAt } : null
+      review: saved ? toSavedReview(saved) : null,
+      // what the other party saved about this target: a party may always read it (published or not); nobody else can reach this payload
+      counterpart: counterpart ? { ...toSavedReview(counterpart), reviewerRole: counterpart.reviewerRole } : null,
+      ...(stageReviews ? { stageReviews: stageReviews.map(r => ({ ...toSavedReview(r), stageId: r.stageId })) } : {})
     };
   }
 
@@ -168,9 +178,18 @@ export class RatingService {
     const where: any = { clientId, providerId, stageId: null, reviewerRole };
     if (clientRequestId) where.clientRequestId = clientRequestId; else if (projectId) where.projectId = projectId;
     const saved = await prisma.review.findFirst({ where, orderBy: { createdAt: 'desc' } });
+    // The other direction (client -> provider vs provider -> client) of the SAME project, project level only, plus the client's stage reviews of it.
+    const counterpartWhere: any = { clientId, providerId, stageId: null, reviewerRole: actor === 'provider' ? 'CLIENT' : 'PROVIDER' };
+    if (clientRequestId) counterpartWhere.clientRequestId = clientRequestId; else if (projectId) counterpartWhere.projectId = projectId;
+    const projectKeyForStages = projectId ?? clientRequestId;
+    const [counterpart, stageReviews] = await Promise.all([
+      prisma.review.findFirst({ where: counterpartWhere, orderBy: { createdAt: 'desc' } }),
+      projectKeyForStages ? prisma.review.findMany({ where: { projectId: projectKeyForStages, clientId, providerId, reviewerRole: 'CLIENT', stageId: { not: null } }, orderBy: { createdAt: 'desc' } }) : Promise.resolve([] as any[])
+    ]);
     return this.buildStatus({
       saved, scope: 'PROJECT', actor, projectId, requestId: clientRequestId,
-      blocked: target.completed ? null : { reason: 'NOT_COMPLETED', message: 'يمكن التقييم بعد اكتمال المشروع' }
+      blocked: target.completed ? null : { reason: 'NOT_COMPLETED', message: 'يمكن التقييم بعد اكتمال المشروع' },
+      counterpart, stageReviews
     });
   }
 
@@ -194,6 +213,24 @@ export class RatingService {
     return this.buildStatus({
       saved, scope: 'STAGE', actor: 'client', projectId: contract.projectId, requestId: null, stageId: stage.id,
       blocked: stage.status === 'APPROVED' ? null : { reason: 'STAGE_NOT_APPROVED', message: 'يمكن تقييم المرحلة بعد اعتمادها فقط' }
+    });
+  }
+
+  /**
+   * The PROVIDER's read of one stage's rating: the client's stage review of this provider, read-only. The provider never rates a stage (canRate is always false,
+   * reason NOT_RATER). Ownership: only the contract's provider (a stranger -> 403, a stage of another contract -> 404).
+   */
+  async getProviderStageStatus(projectKey: string, stageId: string, providerId: string) {
+    const contract = await prisma.contract.findFirst({ where: { OR: [{ projectId: projectKey }, { id: projectKey }] } });
+    if (!contract) throw new AppError('المشروع غير موجود', 404);
+    if (contract.providerId !== providerId) throw new AppError('لا تملك صلاحية الوصول إلى هذا المشروع', 403);
+    const stage = await prisma.projectStage.findFirst({ where: { id: stageId, contractId: contract.id } });
+    if (!stage) throw new AppError('المرحلة غير موجودة', 404);
+    const counterpart = await prisma.review.findFirst({ where: { stageId: stage.id, clientId: contract.clientId, providerId, reviewerRole: 'CLIENT' }, orderBy: { createdAt: 'desc' } });
+    return this.buildStatus({
+      saved: null, scope: 'STAGE', actor: 'provider', projectId: contract.projectId, requestId: null, stageId: stage.id,
+      blocked: { reason: 'NOT_RATER', message: counterpart ? 'قيّم العميل هذه المرحلة' : 'تقييم المراحل من حق العميل، ولم يقيّم هذه المرحلة بعد' },
+      counterpart
     });
   }
 

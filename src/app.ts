@@ -1,3 +1,4 @@
+import { startChatDigestScheduler } from './services/chat-digest.service';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -9,6 +10,7 @@ import { logger } from './config/logger';
 import { globalErrorHandler } from './middlewares/error.middleware';
 import { scrubPrivateRefs } from './middlewares/scrub-private-refs.middleware';
 import { apiLimiter } from './middlewares/rate-limit.middleware';
+import { resolveTrustProxy } from './config/trust-proxy';
 import { AppError } from './utils/app-error';
 import authRouter from './routes/auth/auth.routes';
 import profileRouter from './routes/profile/profile.routes';
@@ -29,6 +31,7 @@ import providerSpecialtyRoutes from './routes/provider-specialty.routes';
 import gamificationRoutes from './routes/gamification.routes';
 import levelsRoutes from './routes/levels.routes';
 import accountLogsRoutes from './routes/account-logs.routes';
+import providerAccountActionsRoutes from './routes/provider-account-actions.routes';
 import clientProfileRoutes from './routes/client-profile.routes';
 import clientRequestsRoutes from './routes/client-requests.routes';
 import clientProjectAmendmentsRoutes from './routes/client-project-amendments.routes';
@@ -82,7 +85,10 @@ const app = express();
 // every real visitor into one shared rate-limit bucket. That is what
 // produced the 429 on GET /api/marketer/profile during active multi-user
 // DEV testing.
-app.set('trust proxy', 'uniquelocal');
+//
+// The setting is now driven by TRUST_PROXY (see src/config/trust-proxy.ts); unset keeps exactly the 'uniquelocal' above. A different
+// topology (a second proxy / CDN in front, another bridge subnet) is a configuration change: TRUST_PROXY='loopback,172.23.0.1/32'.
+app.set('trust proxy', resolveTrustProxy(process.env.TRUST_PROXY));
 
 // ==========================================
 // 1. SECURITY & MIDDLEWARES
@@ -126,6 +132,8 @@ app.use(
 			}
 		},
 		credentials: true,
+		// The app reads Retry-After on 429 / 423 to run its countdown; a cross-origin page cannot see it unless it is exposed.
+		exposedHeaders: ['Retry-After'],
 	})
 );
 
@@ -233,6 +241,7 @@ mountAppRoute('/api/provider/specialties', providerSpecialtyRoutes);
 mountAppRoute('/api/provider/gamification', gamificationRoutes);
 mountAppRoute('/api/levels', levelsRoutes);
 mountAppRoute('/api/provider/logs', accountLogsRoutes);
+mountAppRoute('/api/provider/account-actions', providerAccountActionsRoutes);
 mountAppRoute('/api/client/profile', clientProfileRoutes);
 mountAppRoute('/api/client/requests', clientRequestsRoutes);
 mountAppRoute('/client/requests', clientRequestsRoutes);
@@ -401,6 +410,7 @@ if (process.env.NODE_ENV !== 'test') {
 	httpServer.listen(Number(PORT), '0.0.0.0', () => {
 		logger.info(`🚀 Server is running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
 		logger.info(`👉 http://localhost:${PORT}/api`);
+		startChatDigestScheduler(); // no-op unless CHAT_DIGEST_EMAIL_ENABLED=true
 	});
 }
 

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { marketerOverviewController } from '../controllers/marketer-overview.controller';
 import { submitMarketerWithdrawal, listMyMarketerWithdrawals } from '../controllers/withdrawal.controller';
-import { aiLimiter } from '../middlewares/rate-limit.middleware';
+import { aiLimiter, withdrawalLimiter } from '../middlewares/rate-limit.middleware';
 import { validateDto } from '../middlewares/validate-dto.middleware';
 import { createCustomLinkSchema, updateRefSettingsSchema } from '../dtos/marketer-overview.dto';
 import { authenticate, authorizeActiveRoleWithMessage, requireActiveUser } from '../middlewares/auth.middleware';
@@ -33,7 +33,7 @@ router.patch('/ref-links/settings', validateDto(updateRefSettingsSchema), market
 
 // Withdrawals — reuses the same generic, userId-scoped Withdrawal model and
 // listMyWithdrawals controller the provider finance flow already uses.
-router.post('/withdrawals', submitMarketerWithdrawal);
+router.post('/withdrawals', withdrawalLimiter, submitMarketerWithdrawal);
 router.get('/withdrawals', listMyMarketerWithdrawals);
 router.get('/withdrawals/:id', getMyMarketerWithdrawal);
 // The marketer's money in one read: approved earnings, reserved / paid withdrawals and the withdrawable balance the server enforces. Never the client wallet.

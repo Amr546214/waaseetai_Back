@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { prisma } from '../config/db';
-import { AppError } from '../utils/app-error';
+import { AppError, fieldErrors } from '../utils/app-error';
 import { withTableGuard, isMissingTableError } from '../utils/missing-table';
 
 const text = (max: number) => z.string().trim().max(max);
@@ -60,15 +60,15 @@ export class PlatformSettingsService {
 	validate(body: unknown): Record<string, string | boolean> {
 		if (!body || typeof body !== 'object' || Array.isArray(body)) throw new AppError('صيغة الطلب غير صحيحة', 400);
 		const clean: Record<string, string | boolean> = {};
-		const errors: string[] = [];
+		const errors: Array<{ field: string; message: string }> = [];
 		for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
 			const def = SETTING_DEFS[key as SettingKey];
-			if (!def || !Object.prototype.hasOwnProperty.call(SETTING_DEFS, key)) { errors.push(`إعداد غير معروف: ${key}`); continue; }
+			if (!def || !Object.prototype.hasOwnProperty.call(SETTING_DEFS, key)) { errors.push({ field: key, message: `إعداد غير معروف: ${key}` }); continue; }
 			const parsed = def.schema.safeParse(value);
-			if (!parsed.success) errors.push(parsed.error.issues[0]?.message || `قيمة غير صالحة: ${key}`);
+			if (!parsed.success) errors.push({ field: key, message: parsed.error.issues[0]?.message || `قيمة غير صالحة: ${key}` });
 			else clean[key] = parsed.data as string | boolean;
 		}
-		if (errors.length) throw new AppError(errors[0], 400, errors);
+		if (errors.length) throw fieldErrors(errors[0].message, errors);
 		if (!Object.keys(clean).length) throw new AppError('لا توجد إعدادات للحفظ', 400);
 		return clean;
 	}

@@ -20,6 +20,7 @@ function reset(o: { accountType?: string; setup?: boolean; test?: boolean; portf
 const matches = (row: Any, where: Any = {}) => Object.entries(where).every(([k, v]) => v && typeof v === 'object' && 'in' in (v as Any) ? (v as Any).in.includes(row[k]) : v && typeof v === 'object' && 'startsWith' in (v as Any) ? String(row[k]).startsWith((v as Any).startsWith) : row[k] === v);
 const withSamples = (r: Any) => ({ ...r, specialty: S.catalog.find((c: Any) => c.id === r.specialtyId), accreditationSamples: S.samples.filter((s: Any) => s.providerSpecialtyId === r.id).sort((a: Any, b: Any) => b.createdAt - a.createdAt) });
 const db: Any = {
+	accreditationSampleEvent: { create: async () => ({}) },
 	user: { findUnique: async () => S.user },
 	category: { findFirst: async () => null },
 	providerProfile: { update: async ({ data }: Any) => { Object.assign(S.profile, data); return S.profile; }, findUnique: async ({ where }: Any) => (where.userId ? (where.userId === S.profile.userId ? S.profile : null) : where.id === S.profile.id ? S.profile : null) },
@@ -53,9 +54,9 @@ const load = async () => ({
 	admin: (await import('./accreditation-ai.service.ts')).accreditationAiService,
 	gate: (await import('../middlewares/provider-access.middleware.ts')).requireApprovedProvider,
 });
-const portfolio = (extra: Any = {}) => [{ providerProfileId: 'pp1', title: 'نموذج أعمال - تصميم جرافيك', description: 'هوية بصرية كاملة لمتجر', coverImage: 'https://x/a.png', projectUrl: 'https://p.example', tags: ['https://x/a.png', 'https://x/b.pdf'], ...extra }];
+const portfolio = (extra: Any = {}) => [{ providerProfileId: 'pp1', title: 'نموذج أعمال - تصميم جرافيك', description: 'هوية بصرية كاملة لمتجر', coverImage: 'private:image:png:waseetai/providers/u1/a', projectUrl: 'https://p.example', tags: ['private:image:png:waseetai/providers/u1/a', 'private:raw:pdf:waseetai/providers/u1/b'], ...extra }];
 // the REAL wizard payload as the setup POST stores it: description = the work FILE url, tags = proof file urls, coverImage = first proof
-const wizardPortfolio = () => [{ providerProfileId: 'pp1', title: 'نموذج أعمال - تصميم جرافيك', description: 'https://res.cloudinary.com/w/work.pdf', coverImage: 'https://res.cloudinary.com/w/proof1.png', projectUrl: null, tags: ['https://res.cloudinary.com/w/proof1.png'] }];
+const wizardPortfolio = () => [{ providerProfileId: 'pp1', title: 'نموذج أعمال - تصميم جرافيك', description: 'private:raw:pdf:waseetai/providers/u1/work', coverImage: 'private:image:png:waseetai/providers/u1/proof1', projectUrl: null, tags: ['private:image:png:waseetai/providers/u1/proof1'] }];
 const PENDING_MSG = 'تم اجتياز الاختبار، ونموذج الاعتماد قيد المراجعة. ستفتح لوحة مقدم الخدمة بعد اعتماد الإدارة.';
 const REQUIRED_MSG = 'اجتزت الاختبار، لكن يجب رفع نموذج الاعتماد لإكمال المراجعة.';
 
@@ -67,7 +68,7 @@ test('onboarding save creates a real AccreditationSample (MANUAL_REVIEW, linked 
 	assert.equal(S.samples.length, 1);
 	const s = S.samples[0]; const ps = S.ps.find((r: Any) => r.specialtyId === 'sp-g');
 	assert.deepEqual([s.status, s.providerProfileId, s.providerSpecialtyId, s.title, s.description, s.projectUrl], ['MANUAL_REVIEW', 'pp1', ps.id, 'نموذج أعمال - تصميم جرافيك', 'هوية بصرية كاملة لمتجر', 'https://p.example']);
-	assert.deepEqual(s.attachments, ['https://x/a.png', 'https://x/b.pdf']);
+	assert.deepEqual(s.attachments, ['private:image:png:waseetai/providers/u1/a', 'private:raw:pdf:waseetai/providers/u1/b']);
 	assert.equal(ps.status, 'UNDER_AI_REVIEW'); // enters the admin queue, never approved
 	const again = await ob.ensureOnboardingAccreditationSamples('pp1', db);
 	assert.deepEqual([again.created, again.updated, S.samples.length], [0, 0, 1]);
@@ -180,7 +181,7 @@ test('every router that holds a provider guard is classified: gated (own guard o
 	const dir = new URL('../routes/', import.meta.url);
 	const GATED_OWN = ['business-models.routes.ts', 'proposal.routes.ts', 'project.routes.ts', 'ai-assistant.routes.ts', 'gamification.routes.ts', 'account-logs.routes.ts']; // contain requireApprovedProvider themselves
 	const GATED_BY_PROVIDER_ROUTES: Record<string, string> = { 'marketplace-service.routes.ts': '/services', 'provider-special-offer.routes.ts': '/special-offers', 'provider-marketing-center.routes.ts': '/marketing' };
-	const OPEN = ['accreditation-ai.routes.ts', 'ai-assessment.routes.ts', 'provider-specialty.routes.ts', 'provider-profile.routes.ts', 'specialty.routes.ts', 'skills.routes.ts', 'company-team.routes.ts', 'provider.routes.ts'];
+	const OPEN = ['accreditation-ai.routes.ts', 'ai-assessment.routes.ts', 'provider-specialty.routes.ts', 'provider-profile.routes.ts', 'specialty.routes.ts', 'skills.routes.ts', 'company-team.routes.ts', 'provider.routes.ts', 'provider-account-actions.routes.ts'];
 	const providerSrc = readFileSync(new URL('../routes/provider.routes.ts', import.meta.url), 'utf8');
 	const files = readdirSync(dir).filter(f => f.endsWith('.routes.ts') && !f.startsWith('admin-') && !f.startsWith('client-'))
 		.filter(f => /providerOnly|requireProvider|PROVIDER_INDIVIDUAL|PROVIDER_COMPANY|providerActingOnly/.test(readFileSync(new URL(f, dir), 'utf8')));
@@ -222,7 +223,7 @@ test('setup test completion: before => no sample; after => MANUAL_REVIEW sample 
 	assert.equal(done.samplesCreated, 1);
 	const [s] = S.samples; const ps = S.ps.find((r: Any) => r.specialtyId === 'sp-g');
 	assert.deepEqual([s.status, s.providerProfileId, s.providerSpecialtyId, ps.status, ps.isPassed, ps.hasTakenAssessment], ['MANUAL_REVIEW', 'pp1', ps.id, 'UNDER_AI_REVIEW', true, true]);
-	assert.deepEqual(s.attachments, ['https://res.cloudinary.com/w/work.pdf', 'https://res.cloudinary.com/w/proof1.png']);
+	assert.deepEqual(s.attachments, ['private:raw:pdf:waseetai/providers/u1/work', 'private:image:png:waseetai/providers/u1/proof1']);
 	const st = await access.get('u1', db);
 	assert.deepEqual([st.state, st.canAccessDashboard, st.message], ['PENDING_REVIEW', false, PENDING_MSG]);
 	// admin queue: GET /admin/accreditation/samples?status=MANUAL_REVIEW

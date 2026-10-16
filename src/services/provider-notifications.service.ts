@@ -31,7 +31,8 @@ export const PROVIDER_ROUTES = {
 	// Specialties and their review state.
 	specialties: '/provider-overview/profile/specialties',
 	// The provider's own accreditation sample page (the id is the sample's).
-	accreditation: (sampleId: string) => `/provider-overview/business-models/center/accreditation-details/${sampleId}`
+	// Batch B T1: the request lives in the «إجراءات الحساب» log (the old accreditation-details page is not an approval status page).
+	accreditation: (sampleId: string) => `/provider-overview/account-actions/${sampleId}`
 } as const;
 
 const short = (text: string | null | undefined, max = 60) => {
@@ -80,6 +81,15 @@ export const providerNotifications = {
 		}));
 	},
 
+	/** A marketplace service was bought and its project started: the seller learns it the moment the payment committed. */
+	async servicePurchased(p: { providerId: string | null | undefined; projectId: string; title?: string | null }) {
+		if (!p.providerId) return;
+		await safely('servicePurchased', () => notificationService.createAndEmit({
+			userId: p.providerId!, title: 'طلب شراء جديد لخدمتك', message: `اشترى عميل خدمتك${p.title ? ` «${short(p.title)}»` : ''} وبدأ المشروع. افتح المشروع لمتابعة المراحل والتسليم.`,
+			category: NotificationCategory.PROJECTS, type: 'SERVICE_PURCHASED', actionUrl: PROVIDER_ROUTES.projectProgress(p.projectId), actionText: 'عرض المشروع', metadata: { projectId: p.projectId }
+		}));
+	},
+
 	/** A client rated the provider (whole project or one stage). */
 	async ratingReceived(p: { providerId: string; rating: number; reviewId: string; projectId?: string | null; stage?: boolean }) {
 		await safely('ratingReceived', () => notificationService.createAndEmit({
@@ -88,8 +98,9 @@ export const providerNotifications = {
 			message: `قيّمك العميل بـ ${p.rating} من 5${p.stage ? ' على إحدى مراحل المشروع' : ''}.`,
 			category: NotificationCategory.PROJECTS,
 			type: 'RATING_RECEIVED',
-			actionUrl: PROVIDER_ROUTES.reviews,
-			actionText: 'عرض التقييمات',
+			// The rating sits inside its project (the rating page shows the client's review of this provider, read-only); without a project the public profile lists it.
+			actionUrl: p.projectId ? (p.stage ? PROVIDER_ROUTES.projectProgress(p.projectId) : PROVIDER_ROUTES.rating(p.projectId)) : PROVIDER_ROUTES.reviews,
+			actionText: p.projectId ? 'عرض التقييم' : 'عرض التقييمات',
 			metadata: { reviewId: p.reviewId, rating: p.rating, ...(p.projectId ? { projectId: p.projectId } : {}) }
 		}));
 	},
@@ -247,6 +258,21 @@ export const providerNotifications = {
 			actionUrl: PROVIDER_ROUTES.accreditation(p.sampleId),
 			actionText: 'عرض النموذج',
 			metadata: { sampleId: p.sampleId, decision: p.decision }
+		}));
+	},
+
+	/** An admin asked the provider to complete the request (not a rejection): the note addressed to the provider is quoted, the internal note never. */
+	async accreditationCompletionRequested(p: { providerId: string; sampleId: string; sampleTitle?: string | null; note?: string | null }) {
+		const title = short(p.sampleTitle);
+		await safely('accreditationCompletionRequested', () => notificationService.createAndEmit({
+			userId: p.providerId,
+			title: 'مطلوب استكمال بيانات طلب الاعتماد',
+			message: `طلبت الإدارة استكمال بيانات نموذج الاعتماد${title ? ` «${title}»` : ''}.${p.note ? ` الملاحظة: ${short(p.note, 200)}` : ''}`,
+			category: NotificationCategory.PROJECTS,
+			type: 'ACCREDITATION_COMPLETION_REQUESTED',
+			actionUrl: PROVIDER_ROUTES.accreditation(p.sampleId),
+			actionText: 'استكمال البيانات',
+			metadata: { sampleId: p.sampleId }
 		}));
 	},
 

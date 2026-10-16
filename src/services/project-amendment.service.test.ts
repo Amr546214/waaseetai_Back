@@ -107,7 +107,7 @@ test('listAmendments: query is scoped to the calling client only (never another 
   assert.deepEqual(args.where, { clientId: 'client-1' });
 });
 
-test('listAmendments: orders by newest activity first (updatedAt desc)', async (t) => {
+test('listAmendments: orders newest first by creation time (createdAt desc, id tie-break)', async (t) => {
   const findManySpy = t.mock.fn(async () => []);
   const service = await loadServiceWithMockPrisma(t, {
     projectAmendment: { findMany: findManySpy },
@@ -117,7 +117,7 @@ test('listAmendments: orders by newest activity first (updatedAt desc)', async (
   await service.listAmendments('client-1');
 
   const args = findManySpy.mock.calls[0].arguments[0];
-  assert.deepEqual(args.orderBy, { updatedAt: 'desc' });
+  assert.deepEqual(args.orderBy, [{ createdAt: 'desc' }, { id: 'desc' }]);
 });
 
 test('listAmendments: an empty result returns a clean empty array', async (t) => {

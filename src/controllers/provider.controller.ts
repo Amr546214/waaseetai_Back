@@ -18,6 +18,7 @@ import { providerDeliveriesService } from '../services/provider-deliveries.servi
 import { computeClientAiOfferRating } from '../services/client-ai-offer-rating';
 import { settledProjectIds, SETTLED_LABEL_AR } from '../services/settlement-state.service';
 import { listLifecycles } from '../services/project-lifecycle.service';
+import { clientNotifications, clientNotificationFor } from '../services/client-notifications.service';
 
 export const getProviderStatistics = async (req: Request, res: Response, next: NextFunction) => {
 	try {
@@ -341,7 +342,9 @@ export const getPassedSpecialties = async (req: Request, res: Response, next: Ne
 				await tx.clientRequest.updateMany({ where: { id: targetProjectId }, data: { status: 'IN_PROGRESS' } });
 				return updated;
 			});
-		
+
+		// The client learns the project started: stored + delivered once, only after the signing transaction committed (a failure here never undoes the signature).
+		await clientNotifications.send(clientNotificationFor.contractSigned({ clientId: contract.clientId, projectId: contract.projectId, projectTitle: projectData?.title ?? null }));
 		res.status(200).json({ success: true, message: 'تم التوقيع بنجاح، المشروع الآن قيد التنفيذ', data: contract });
 	} catch (error) {
 		next(error);

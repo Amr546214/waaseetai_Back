@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { prisma } from '../config/db';
-import { AppError } from '../utils/app-error';
+import { AppError, fieldError, zodAppError } from '../utils/app-error';
 
 // Moderation maps onto the existing ServiceCatalog.status workflow; nothing new is stored.
 const ACTIONS = { APPROVE: 'PUBLISHED', REJECT: 'REJECTED', HIDE: 'ARCHIVED', RESTORE: 'PUBLISHED' } as const;
@@ -37,9 +37,9 @@ export class AdminMarketplaceModerationService {
 
 	async moderate(id: string, body: unknown) {
 		const parsed = moderationSchema.safeParse(body);
-		if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message || 'بيانات غير صالحة', 400);
+		if (!parsed.success) throw zodAppError(parsed.error.issues, parsed.error.issues[0]?.message || 'بيانات غير صالحة', { reason: 'السبب غير صالح' });
 		const { action, reason } = parsed.data;
-		if (action === 'REJECT' && !reason) throw new AppError('سبب الرفض مطلوب', 400);
+		if (action === 'REJECT' && !reason) throw fieldError('reason', 'سبب الرفض مطلوب');
 		const svc = await prisma.serviceCatalog.findUnique({ where: { id }, select: { id: true, title: true, status: true, providerId: true, approvedAt: true } });
 		if (!svc) throw new AppError('الخدمة غير موجودة', 404);
 		if (!ALLOWED_FROM[action].includes(svc.status)) throw new AppError('لا يمكن تنفيذ هذا الإجراء على حالة الخدمة الحالية', 409);

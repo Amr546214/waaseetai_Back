@@ -1,5 +1,7 @@
 import { v2 as cloudinary, UploadApiOptions, UploadApiResponse } from 'cloudinary';
 import multer from 'multer';
+import type { RequestHandler } from 'express';
+import { uploadLimiter } from '../middlewares/rate-limit.middleware';
 import path from 'path';
 import { AppError } from './app-error';
 import { contentMatchesDeclaredType, looksLikeMarkup } from './file-signature';
@@ -152,8 +154,13 @@ export async function deleteCloudFile(publicId: string, resourceType: Cloudinary
 	await cloudinary.uploader.destroy(publicId, { resource_type: resourceType, invalidate: true });
 }
 
-export function memoryUpload(options: { fileSize?: number; files?: number; allowedMimeTypes?: Set<string> } = {}) {
-	return multer({
+/** Puts the upload tier (per account, then per address) in front of a multer handler, so a refused request never buffers a file. */
+function limitedFirst(handler: RequestHandler): RequestHandler {
+	return (req, res, next) => uploadLimiter(req, res, (err?: unknown) => (err ? next(err as any) : handler(req, res, next)));
+}
+
+export function memoryUpload(options: { fileSize?: number; files?: number; allowedMimeTypes?: Set<string> } = {}): multer.Multer {
+	const m = multer({
 		storage: multer.memoryStorage(),
 		limits: { fileSize: options.fileSize || 15 * 1024 * 1024, files: options.files },
 		fileFilter: options.allowedMimeTypes
@@ -162,4 +169,12 @@ export function memoryUpload(options: { fileSize?: number; files?: number; allow
 				: callback(new AppError('نوع الملف غير مسموح به', 415))
 			: undefined
 	});
+	// Every upload route in the app goes through here, so none can be added without the upload tier.
+	return Object.assign(Object.create(m), {
+		single: (name: string) => limitedFirst(m.single(name)),
+		array: (name: string, max?: number) => limitedFirst(m.array(name, max)),
+		fields: (specs: multer.Field[]) => limitedFirst(m.fields(specs)),
+		any: () => limitedFirst(m.any()),
+		none: () => limitedFirst(m.none())
+	}) as multer.Multer;
 }

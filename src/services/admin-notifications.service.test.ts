@@ -27,6 +27,7 @@ const prisma: any = {
 	notification: {
 		create: async ({ data }: any) => { if (failCreate) throw new Error('db down'); const row = { id: `n${rows.length + 1}`, actionText: null, metadata: null, isRead: false, createdAt: new Date(), ...data }; rows.push(row); return row; },
 		findMany: async ({ where }: any) => rows.filter(r => r.userId === where.userId && (where.isRead === undefined || r.isRead === where.isRead) && (!where.type || r.type === where.type)),
+		count: async ({ where }: any) => rows.filter(r => r.userId === where.userId && (where.isRead === undefined || r.isRead === where.isRead)).length,
 		findFirst: async ({ where }: any) => rows.find(r => r.id === where.id && r.userId === where.userId) ?? null,
 		update: async ({ where, data }: any) => Object.assign(rows.find(r => r.id === where.id), data),
 		updateMany: async ({ where, data }: any) => { rows.filter(r => r.userId === where.userId && r.isRead === where.isRead).forEach(r => Object.assign(r, data)); return { count: 1 }; }

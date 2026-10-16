@@ -70,18 +70,19 @@ test('register: emailSent=true when SMTP accepts; the code lives 10 minutes (as 
   const { created, sent, logs } = setup(t);
   const { authService } = await load();
   const result = await authService.registerUser(REGISTER_INPUT);
-  assert.deepEqual(result, { userId: 'user-1', emailSent: true });
+  assert.deepEqual(result, { userId: 'user-1', accountCreated: true });
+  await new Promise((r) => setImmediate(r)); // the send is not awaited by register
   const lifetime = created[0].expiresAt.getTime() - created[0].at; // relative to when the code was created (bcrypt may be slow)
   assert.ok(lifetime >= 10 * MIN - 2000 && lifetime <= 10 * MIN + 2000, `lifetime ${lifetime}`);
   assert.ok(logs.every(l => !l.includes(sent[0].code)), 'no clear-text OTP in the logs');
 });
 
-test('register: SMTP failure -> emailSent=false (the account exists, the UI must not say "sent")', async (t) => {
+test('register: SMTP failure is only logged (the public answer is uniform; the user resends from the code step)', async (t) => {
   const { logs, sent } = setup(t, { sendOk: false });
   const { authService } = await load();
   const result = await authService.registerUser(REGISTER_INPUT);
-  assert.equal(result.emailSent, false);
   assert.equal(result.userId, 'user-1');
+  await new Promise((r) => setImmediate(r));
   assert.ok(logs.some(l => /NOT delivered/.test(l)));
   assert.ok(logs.every(l => !l.includes(sent[0].code)));
 });
@@ -114,10 +115,12 @@ test('resend after the code expired creates a NEW code (10 minutes), replacing o
   assert.equal(created[0].type, 'EMAIL');
 });
 
-test('resend never touches a verified account', async (t) => {
-  setup(t, { user: { id: 'user-1', email: 'amr@example.com', status: 'ACTIVE' } });
+test('resend never touches a verified account (answered like a send, nothing created or sent)', async (t) => {
+  const { created, sent } = setup(t, { user: { id: 'user-1', email: 'amr@example.com', status: 'ACTIVE' } });
   const { authService } = await load();
-  await assert.rejects(() => authService.resendOtp('user-1'), (e: any) => e.statusCode === 400);
+  assert.deepEqual(await authService.resendOtp('user-1'), { emailSent: true, reused: false });
+  assert.equal(created.length, 0);
+  assert.equal(sent.length, 0);
 });
 
 test('forgot-password re-sends a still-valid reset code instead of replacing it; the answer stays generic', async (t) => {
@@ -226,7 +229,7 @@ test('login resend / verify with no pending LOGIN_EMAIL code create and send not
   const { created, sent, smsSent } = setup(t, { smsAvailable: true, user: ACTIVE_LEGACY_PHONE_OTP_USER('x') });
   const { authService } = await load();
 
-  await assert.rejects(() => authService.resendLoginOtp('user-1'), (e: any) => e.statusCode === 400);
+  assert.equal((await authService.resendLoginOtp('user-1')).emailSent, true); // generic no-op answer, nothing sent
   await assert.rejects(() => authService.verifyLoginOtp({ userId: 'user-1', code: '123456' }, {}), (e: any) => e.statusCode === 400);
   assert.equal(created.length, 0);
   assert.equal(sent.length, 0);
@@ -244,4 +247,30 @@ test('email OTP flows are unchanged: an unverified login still e-mails the activ
   assert.equal(sent.every(x => x.to === 'amr@example.com'), true);
   assert.equal(smsSent.length, 0);
   assert.ok(created.every(c => c.type !== 'PHONE'));
+});
+
+test('countdown: an active-account login whose code went out carries resendAvailableAt (~60 s) and expiresAt (10 min); a throttled one carries only retryAfterSeconds', async (t) => {
+  const bcrypt = await import('bcrypt');
+  const hash = await bcrypt.hash('Str0ng!Pass1', 4);
+  setup(t, { user: { id: 'user-1', email: 'amr@example.com', firstName: 'Amr', status: 'ACTIVE', password: hash } });
+  const { authService } = await load();
+  const t0 = Date.now();
+  const first: any = await authService.loginUser({ email: 'amr@example.com', password: 'Str0ng!Pass1' }, { ipAddress: '9.9.9.9' });
+  assert.equal(first.emailSent, true);
+  const resend = Date.parse(first.resendAvailableAt), exp = Date.parse(first.expiresAt);
+  assert.ok(resend >= t0 + 59_000 && resend <= Date.now() + 61_000);
+  assert.ok(exp >= t0 + 10 * MIN - 1000 && exp <= Date.now() + 10 * MIN + 1000);
+  const second: any = await authService.loginUser({ email: 'amr@example.com', password: 'Str0ng!Pass1' }, { ipAddress: '9.9.9.9' });
+  assert.equal(second.emailSent, false);
+  assert.ok(second.retryAfterSeconds > 0 && second.retryAfterSeconds <= 60);
+  assert.equal('resendAvailableAt' in second, false); assert.equal('expiresAt' in second, false);
+});
+
+test('countdown: forgot-password answers with expiresAt (10 min) for a known address and the same shape for an unknown one', async (t) => {
+  setup(t, { user: { id: 'user-1', email: 'amr@example.com', firstName: 'Amr', status: 'ACTIVE', password: 'x' } });
+  const { authService } = await load();
+  const t0 = Date.now();
+  const known: any = await authService.forgotPassword({ email: 'amr@example.com' } as any);
+  const exp = Date.parse(known.expiresAt);
+  assert.ok(exp >= t0 + 10 * MIN - 1000 && exp <= Date.now() + 10 * MIN + 1000);
 });

@@ -5,7 +5,7 @@ import { authorize , authorizeAdminActing } from '../middlewares/auth.middleware
 import { AccountType } from '@prisma/client';
 import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
 import { blockCompanySetup } from '../middlewares/company-unavailable.middleware';
-import { authLimiter, aiLimiter } from '../middlewares/rate-limit.middleware';
+import { passwordChangeLimiter, accountActionLimiter, aiLimiter } from '../middlewares/rate-limit.middleware';
 
 const router = Router();
 const documentUpload = memoryUpload({
@@ -59,8 +59,8 @@ router.get('/me', requireProvider, providerProfileController.getProfile);
 // Identity-level: session management and password change apply to any
 // authenticated role, not just PROVIDER — no authorize() gate here.
 router.get('/sessions', providerProfileController.getActiveSessions);
-router.delete('/sessions/:id', authLimiter, providerProfileController.revokeSession);
-router.put('/password', authLimiter, providerProfileController.changePassword);
+router.delete('/sessions/:id', accountActionLimiter, providerProfileController.revokeSession);
+router.put('/password', passwordChangeLimiter, providerProfileController.changePassword);
 router.post('/suggest-bio', requireProvider, aiLimiter, providerProfileController.suggestBio);
 router.post('/suggest-skills', requireProvider, aiLimiter, providerProfileController.suggestSkills);
 router.get('/setup', requireProvider, providerProfileController.getSetupData);

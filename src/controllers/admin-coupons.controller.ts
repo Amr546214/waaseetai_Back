@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { adminCouponsService } from '../services/admin-coupons.service';
 import { parsePaging } from '../services/marketing-stats.util';
-import { AppError } from '../utils/app-error';
+import { AppError, zodAppError } from '../utils/app-error';
 
 const adminId = (req: Request) => (req.user?.id || req.user?.userId)!;
 const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
@@ -20,7 +20,7 @@ export const getCoupon = async (req: Request, res: Response, next: NextFunction)
 export const setCouponActive = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = setActiveSchema.safeParse(req.body);
-    if (!parsed.success) throw new AppError('بيانات غير صحيحة', 400);
+    if (!parsed.success) throw zodAppError(parsed.error.issues, 'بيانات غير صحيحة', { reason: 'سبب الإيقاف طويل جدًا (الحد الأقصى 1000 حرف)' });
     res.json({ success: true, data: await adminCouponsService.setActive(adminId(req), String(req.params.id), parsed.data) });
   } catch (e) { next(e); }
 };

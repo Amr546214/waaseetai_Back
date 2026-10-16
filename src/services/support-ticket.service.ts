@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { AccountType, SupportTicketStatus } from '@prisma/client';
 import { prisma } from '../config/db';
-import { AppError } from '../utils/app-error';
+import { AppError, fieldError } from '../utils/app-error';
 import { notificationService } from './notification.service';
 import { CreateSupportTicketInput } from '../dtos/support-ticket.dto';
 import { adminAudit } from './admin-audit.service';
@@ -218,7 +218,7 @@ export class SupportTicketService {
   async assign(id: string, adminId: string, assigneeId: string) {
     const ticket = await this.findAny(id);
     const assignee = await prisma.user.findUnique({ where: { id: assigneeId }, select: { id: true, firstName: true, lastName: true, accountType: true } });
-    if (!assignee || (assignee.accountType !== AccountType.ADMIN && assignee.accountType !== AccountType.SUPER_ADMIN)) throw new AppError('يمكن تكليف مشرف أو مدير فقط', 400);
+    if (!assignee || (assignee.accountType !== AccountType.ADMIN && assignee.accountType !== AccountType.SUPER_ADMIN)) throw fieldError('assigneeId', 'يمكن تكليف مشرف أو مدير فقط');
     const name = [assignee.firstName, assignee.lastName].filter(Boolean).join(' ');
     await adminAudit.record({ adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_ASSIGNED', title: 'تكليف تذكرة', summary: `تكليف التذكرة ${ticket.ticketNumber} إلى ${name || 'مشرف'}`, details: { assigneeId: assignee.id, assigneeName: name } });
     return { id: ticket.id, assignedTo: { id: assignee.id, name } };
