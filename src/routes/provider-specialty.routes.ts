@@ -8,6 +8,8 @@ import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import { providerSpecialtyRecommendationService } from '../services/provider-specialty-recommendation.service';
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
+import { AppError } from '../utils/app-error';
+import { assertLegacySpecialtyProofs } from '../services/accreditation-proof.service';
 import { requireOwnedProviderSpecialtyFromBody, requireOwnedProviderSpecialtyFromParam } from '../utils/provider-specialty-access';
 
 const router = Router();
@@ -69,6 +71,12 @@ router.post(
         const stored = await uploadMulterFile(file, `waseetai/specialties/${providerSpecialtyId}/${isProof ? 'proofs' : 'samples'}`, undefined, isProof);
         cloudFiles.set(file, stored);
       }));
+
+      // The proof documents are mandatory: a stored, owned proof of this request (new in this call, or already completed) must exist BEFORE anything is replaced.
+      await assertLegacySpecialtyProofs(prisma as any, {
+        userId: req.user!.id, providerSpecialtyId,
+        proofRefs: files.filter(f => f.fieldname.startsWith('proofFiles_')).map(f => cloudFiles.get(f)?.privateRef)
+      });
 
       await prisma.$transaction(async (tx) => {
         await tx.workSample.deleteMany({ where: { providerSpecialtyId } });
@@ -138,6 +146,7 @@ router.post(
         data: { providerSpecialtyId, samplesProcessed: sampleCount },
       });
     } catch (error: any) {
+      if (error instanceof AppError) { next(error); return; }
       console.error('[Specialty Proof Upload Error]:', error);
       res.status(500).json({ success: false, message: 'حدث خطأ داخلي أثناء معالجة الملفات المرفوعة.', error: error?.message });
     }
