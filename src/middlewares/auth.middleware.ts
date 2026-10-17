@@ -7,6 +7,7 @@ import { prisma } from '../config/db';
 import { sessionService } from '../services/session.service';
 import { getAuthCookie } from '../utils/request-cookie';
 import { logger } from '../config/logger';
+import { ROLE_MISMATCH_CODE } from '../utils/role-mismatch';
 
 // Express Request interface is extended via src/types/express.d.ts
 
@@ -229,4 +230,70 @@ export const authorize = (...allowedAccountTypes: AccountType[]) => {
 
     return next(new AppError('غير مصرح لك بالوصول لهذه الصلاحية', 403));
   };
+};
+
+const roleOfAccountType = (type: AccountType): UserRole | null => {
+  if (type === AccountType.CLIENT_INDIVIDUAL || type === AccountType.CLIENT_COMPANY) return UserRole.CLIENT;
+  if (type === AccountType.PROVIDER_INDIVIDUAL || type === AccountType.PROVIDER_COMPANY) return UserRole.PROVIDER;
+  if (type === AccountType.MARKETING_BROKER) return UserRole.AFFILIATE;
+  if (type === AccountType.SUPER_ADMIN) return UserRole.SUPER_ADMIN;
+  if (type === AccountType.ADMIN) return UserRole.ADMIN;
+  return null;
+};
+
+/**
+ * Like `authorize`, but for the sensitive flows of one side (create a client request, explore requests, sign a contract): the role the user is acting as RIGHT NOW
+ * (`activeRole`) must be one of the allowed sides. Merely holding the role inside `roles` is not enough — every account also carries CLIENT, so a provider acting as a
+ * provider must not reach the client's flows (and the other way round). No active role falls back to the account type's own role.
+ */
+export const authorizeActiveRoleWithMessage = (message: string, ...allowedAccountTypes: AccountType[]) => {
+  const allowedRoles = new Set(allowedAccountTypes.map(roleOfAccountType).filter((r): r is UserRole => r !== null));
+  return (req: Request, _res: Response, next: NextFunction) => {
+    if (!req.user) return next(new AppError('غير مصرح لك بالوصول، يرجى تسجيل الدخول', 401));
+    const acting = req.user.activeRole ?? roleOfAccountType(req.user.accountType);
+    if (acting && allowedRoles.has(acting)) return next();
+    return next(new AppError(message, 403));
+  };
+};
+
+const ROLE_LABELS: Partial<Record<UserRole, string>> = {
+  [UserRole.CLIENT]: 'العميل', [UserRole.PROVIDER]: 'مقدم الخدمة', [UserRole.AFFILIATE]: 'المسوّق', [UserRole.ADMIN]: 'المشرف', [UserRole.SUPER_ADMIN]: 'المشرف العام'
+};
+
+/**
+ * Batch B T1 (§1): a wrong-role refusal says WHICH role the page needs, which role the caller is acting as now, and what to do:
+ *  - the caller holds the required role: switch to it from the account menu;
+ *  - the caller does not hold it: add that account type first.
+ * Only the caller's OWN roles are described (nothing about any other account).
+ */
+export const authorizeActiveRole = (...allowedAccountTypes: AccountType[]) => {
+  const allowedRoles = [...new Set(allowedAccountTypes.map(roleOfAccountType).filter((r): r is UserRole => r !== null))];
+  return (req: Request, _res: Response, next: NextFunction) => {
+    if (!req.user) return next(new AppError('غير مصرح لك بالوصول، يرجى تسجيل الدخول', 401));
+    const acting = req.user.activeRole ?? roleOfAccountType(req.user.accountType);
+    if (acting && allowedRoles.includes(acting)) return next();
+    const held = new Set<UserRole>([...(req.user.roles || []), ...(roleOfAccountType(req.user.accountType) ? [roleOfAccountType(req.user.accountType) as UserRole] : [])]);
+    const required = allowedRoles.map(r => ROLE_LABELS[r] ?? r).join(' أو ');
+    const current = acting ? (ROLE_LABELS[acting] ?? acting) : 'غير محدد';
+    const canSwitch = allowedRoles.some(r => held.has(r));
+    const message = canSwitch
+      ? `هذه الصفحة خاصة بدور «${required}»، وأنت تعمل الآن بدور «${current}». بدّل الدور من قائمة الحساب ثم أعد المحاولة.`
+      : `هذه الصفحة خاصة بدور «${required}» وحسابك لا يتضمن هذا الدور. أضف هذا النوع من الحساب من «إضافة حساب» أولاً.`;
+    const error = new AppError(message, 403) as AppError & { code: string; requiredRoles: string[]; activeRole: string | null; canSwitch: boolean };
+    error.code = ROLE_MISMATCH_CODE; error.requiredRoles = allowedRoles; error.activeRole = acting ?? null; error.canSwitch = canSwitch;
+    return next(error);
+  };
+};
+
+/**
+ * Admin gate for a user who may be ACTING as another role: a real admin account (accountType ADMIN / SUPER_ADMIN) always passes — dev super-admins default to activeRole CLIENT and
+ * must never be locked out — and so does anyone whose active role is ADMIN / SUPER_ADMIN. Holding ADMIN only inside `roles` while acting as CLIENT / PROVIDER / AFFILIATE does not.
+ */
+export const authorizeAdminActing = (req: Request, _res: Response, next: NextFunction) => {
+  if (!req.user) return next(new AppError('غير مصرح لك بالوصول، يرجى تسجيل الدخول', 401));
+  const { accountType, activeRole } = req.user;
+  const isAdminAccount = accountType === AccountType.ADMIN || accountType === AccountType.SUPER_ADMIN;
+  const actsAsAdmin = activeRole === UserRole.ADMIN || activeRole === UserRole.SUPER_ADMIN;
+  if (isAdminAccount || actsAsAdmin) return next();
+  return next(new AppError('غير مصرح لك بالوصول لهذه الصلاحية', 403));
 };

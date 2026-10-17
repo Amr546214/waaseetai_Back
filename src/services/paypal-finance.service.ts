@@ -4,7 +4,9 @@ import { clientFinanceService } from './client-finance.service';
 import { LogCategory, LogStatus, Prisma, PaypalPaymentStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { AppError } from '../utils/app-error';
+import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import { DEPOSIT_FEE_PERCENT, depositGrossUp } from '../utils/fee-policy';
+import { notifyAdmins } from './admin-notifications.service';
 
 // USD deposit bounds: see dtos/paypal.dto.ts.
 const MIN_DEPOSIT_USD = 50;
@@ -106,6 +108,7 @@ export class PaypalFinanceService {
 		// markFailedIfPending()'s own comment for why this is conditional).
 		if (purchaseUnit?.custom_id && purchaseUnit.custom_id !== clientId) {
 			await this.markFailedIfPending(payment.id);
+			void notifyAdmins('SUSPICIOUS_PAYMENT', { ref: `PayPal ${paypalOrderId}`, metadata: { paymentId: payment.id } });
 			throw new AppError('طلب الدفع لا يخص هذا المستخدم', 403);
 		}
 
@@ -118,6 +121,7 @@ export class PaypalFinanceService {
 		const capturedAmount = new Prisma.Decimal(capture.amount.value);
 		if (!capturedAmount.equals(payment.amount)) {
 			await this.markFailedIfPending(payment.id);
+			void notifyAdmins('SUSPICIOUS_PAYMENT', { ref: `PayPal ${paypalOrderId}`, metadata: { paymentId: payment.id } });
 			throw new AppError('مبلغ الدفع لا يطابق المبلغ المسجل لهذا الطلب', 400);
 		}
 
@@ -160,6 +164,7 @@ export class PaypalFinanceService {
 		const capturedAmount = new Prisma.Decimal(params.amountValue);
 		if (!capturedAmount.equals(payment.amount)) {
 			await this.markFailedIfPending(payment.id);
+			void notifyAdmins('SUSPICIOUS_PAYMENT', { ref: `PayPal ${params.paypalOrderId}`, metadata: { paymentId: payment.id } });
 			return { handled: false as const };
 		}
 
@@ -216,6 +221,7 @@ export class PaypalFinanceService {
 			return;
 		}
 
+		let notificationId: string | null = null;
 		try {
 			await prisma.$transaction(async tx => {
 				const walletTransaction = await tx.walletTransaction.create({
@@ -260,24 +266,10 @@ export class PaypalFinanceService {
 					}
 				});
 
-				await tx.notification.create({
-					data: {
-						userId: payment.userId,
-						title: 'تم إيداع الرصيد بنجاح',
-						message: `أُضيف مبلغ ${creditAmount.toFixed(2)} دولار إلى رصيد محفظتك عبر PayPal${feeAmount ? ` (المدفوع ${verifiedAmount.toFixed(2)} شاملًا رسوم PayPal ${feeAmount.toFixed(2)})` : ''}، يمكنك الآن استخدامه لتمويل المشاريع.`,
-						type: 'FINANCIAL',
-						category: 'FINANCIAL',
-						// This service is client-only (initiateDeposit/captureDeposit
-						// both take a clientId) — the real route is
-						// /client-overview/finance/wallet, not the old
-						// /dashboard/clients-overview/... path (never existed in
-						// this app's router).
-						actionUrl: '/client-overview/finance/wallet',
-						actionText: 'عرض المحفظة',
-						metadata: { transactionId: walletTransaction.id }
-					}
-				});
+				notificationId = (await tx.notification.create({ data: clientNotificationFor.depositCompleted({ clientId: payment.userId, transactionId: walletTransaction.id, credited: creditAmount.toNumber(), paid: verifiedAmount.toNumber(), fee: feeAmount ? feeAmount.toNumber() : 0 }) })).id;
 			});
+			// delivered through the client's saved channels once the credit is committed
+			await clientNotifications.deliverStored([notificationId]);
 		} catch (error) {
 			if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
 				// Lost the race to a concurrent credit for the same capture ID —

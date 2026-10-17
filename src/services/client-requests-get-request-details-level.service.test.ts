@@ -46,6 +46,7 @@ async function loadService(t: TestContext, opts: { proposals?: ReturnType<typeof
   const clientRequestFindFirstArgs: any[] = [];
   const inference = t.mock.fn(async () => { throw new Error('request views must never generate AI reviews'); });
   const prismaMock: any = {
+    dispute: { findFirst: async () => null, findMany: async () => [], count: async () => 0 },
     clientRequest: {
       findFirst: async (args: any) => {
         clientRequestFindFirstArgs.push(args);
@@ -72,6 +73,8 @@ async function loadService(t: TestContext, opts: { proposals?: ReturnType<typeof
     },
     projectProposal: { findMany: async () => opts.projectProposals ?? [] },
     project: { groupBy: async () => [] },
+    contract: { findUnique: async () => null },
+    message: { findMany: async () => [] },
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   t.mock.module('./ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: {

@@ -38,17 +38,21 @@ function createRateRequestMockPrisma(t: TestContext, opts: {
   const tx = {
     review: {
       create: reviewCreateSpy,
+      findFirst: async () => null,
       aggregate: async () => ({ _avg: { rating: opts.avgRating } })
     },
+    $executeRaw: async () => 1,
+    project: { findUnique: async () => ({ serviceCatalogId: null }), count: async () => opts.completedProjectsCount ?? 0 },
     user: { update: userUpdateSpy },
     pointTransaction: { aggregate: async () => ({ _sum: { amount: opts.totalPoints ?? 0 } }) },
-    project: { count: async () => opts.completedProjectsCount ?? 0 },
     providerGamification: { updateMany: gamificationUpdateManySpy }
   };
 
   const prismaMock = {
     clientRequest: { findUnique: async () => null },
+    dispute: { findFirst: async () => null },
     contract: { findUnique: async () => ({ ...contract }) },
+    project: { findUnique: async () => ({ serviceCatalogId: null }) },
     review: { findFirst: async () => null },
     $transaction: async (fn: any) => fn(tx)
   };

@@ -11,11 +11,18 @@ function res() {
   return r;
 }
 
+const refuse = { on: false };
 async function load(t: TestContext, status: string) {
   const update = t.mock.fn(async (a: any) => ({ id: 'm1', status: a.data.status }));
   const prisma: any = { serviceCatalog: { findFirst: async (a: any) => (a.where.providerId === 'p1' ? { id: 'm1', providerId: 'p1', status, approvedAt: null } : null), update } };
   t.mock.module('../config/db', { namedExports: { prisma } });
-  t.mock.module('../services/marketplace-service.service', { namedExports: { MarketplaceService: class {} } });
+  t.mock.module('../services/marketplace-service.service', { namedExports: { MarketplaceService: class {
+    async assertServicePublishable() {
+      if (!refuse.on) return;
+      const { AppError } = await import('../utils/app-error');
+      throw new AppError('تخصص «س» قيد المراجعة', 403, [{ field: 'specialtyId', path: 'specialtyId', message: 'x', code: 'SPECIALTY_NOT_APPROVED' }]);
+    }
+  } } });
   const { MarketplaceServiceController } = await import(`./marketplace-service.controller.ts?fixture=${Date.now()}-${Math.random()}`);
   const controller: any = new MarketplaceServiceController();
   return { controller, update };
@@ -46,4 +53,16 @@ test('another provider\'s model is not found (404)', async (t) => {
   await controller.publishBusinessModel({ user: { id: 'someone-else' }, body: { modelId: 'm1' } } as any, r);
   assert.equal(r.statusCode, 404);
   assert.equal(update.mock.callCount(), 0);
+});
+
+// Batch B T1: a publish-by-id is re-validated against the CURRENT specialty approval / model link (a manual API call cannot bring back a service whose specialty is no longer approved)
+test('a model whose specialty is no longer approved cannot be re-published by id (403 naming the field, nothing written)', async (t) => {
+  refuse.on = true;
+  try {
+    const { controller, update } = await load(t, 'PUBLISHED');
+    const r = await publish(controller, { modelId: 'm1' });
+    assert.equal(r.statusCode, 403);
+    assert.equal(r.body.errors[0].field, 'specialtyId');
+    assert.equal(update.mock.callCount(), 0);
+  } finally { refuse.on = false; }
 });

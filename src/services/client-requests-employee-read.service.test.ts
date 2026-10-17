@@ -46,6 +46,7 @@ async function loadService(t: TestContext, opts: { projects?: any[]; clientReque
     },
     escrow: { findMany: async () => [] },
     contract: { findMany: async () => [] },
+    dispute: { findMany: async () => [] },
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   const mod = await import(`./client-requests.service.ts?fixture=${Date.now()}-${Math.random()}`);

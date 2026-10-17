@@ -1,6 +1,9 @@
+import { providerInvoicesService } from '../services/provider-invoices.service';
+import { providerSalesService } from '../services/provider-sales.service';
 import { levelInfo } from '../utils/level-info';
 import { providerProfileService } from '../services/provider-profile.service';
 import { Request, Response, NextFunction } from 'express';
+import { contractDeliveryState, listStatus } from '../utils/delivery-state';
 import { prisma } from '../config/db';
 import { ProjectStatus, ProposalStatus, EscrowStatus, ContractStatus, Project } from '@prisma/client';
 import { createHash } from 'crypto';
@@ -13,6 +16,9 @@ import { providerFinanceService } from '../services/provider-finance.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { providerDeliveriesService } from '../services/provider-deliveries.service';
 import { computeClientAiOfferRating } from '../services/client-ai-offer-rating';
+import { settledProjectIds, SETTLED_LABEL_AR } from '../services/settlement-state.service';
+import { listLifecycles } from '../services/project-lifecycle.service';
+import { clientNotifications, clientNotificationFor } from '../services/client-notifications.service';
 
 export const getProviderStatistics = async (req: Request, res: Response, next: NextFunction) => {
 	try {
@@ -201,6 +207,19 @@ export const getProviderOffers = async (req: Request, res: Response, next: NextF
 	}
 };
 
+export const getProviderOfferById = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) {
+			return res.status(401).json({ success: false, message: 'غير مصرح' });
+		}
+		const data = await proposalService.getProviderOfferById(providerId, String(req.params.id));
+		res.status(200).json({ success: true, data });
+	} catch (error) {
+		next(error);
+	}
+};
+
 export const getEligibleAccreditationSpecialties = async (req: Request, res: Response, next: NextFunction) => {
 	try {
 		const providerId = (req as any).user?.id;
@@ -323,7 +342,9 @@ export const getPassedSpecialties = async (req: Request, res: Response, next: Ne
 				await tx.clientRequest.updateMany({ where: { id: targetProjectId }, data: { status: 'IN_PROGRESS' } });
 				return updated;
 			});
-		
+
+		// The client learns the project started: stored + delivered once, only after the signing transaction committed (a failure here never undoes the signature).
+		await clientNotifications.send(clientNotificationFor.contractSigned({ clientId: contract.clientId, projectId: contract.projectId, projectTitle: projectData?.title ?? null }));
 		res.status(200).json({ success: true, message: 'تم التوقيع بنجاح، المشروع الآن قيد التنفيذ', data: contract });
 	} catch (error) {
 		next(error);
@@ -342,7 +363,7 @@ export const getActiveProjects = async (req: Request, res: Response, next: NextF
 			where: { providerId, status: { in: ['ACTIVE', 'PENDING_PAYMENT', 'PENDING_PROVIDER_SIGNATURE'] } },
 			include: {
 				project: { include: { escrow: true } },
-				stages: { orderBy: { stepOrder: 'asc' } },
+				stages: { orderBy: { stepOrder: 'asc' }, include: { deliveries: { select: { status: true }, orderBy: { submittedAt: 'asc' } } } },
 				client: {
 					select: {
 						firstName: true,
@@ -352,32 +373,34 @@ export const getActiveProjects = async (req: Request, res: Response, next: NextF
 			},
 			orderBy: { createdAt: 'desc' }
 		});
+		// A contract that came through offer negotiation + signing may not have its stage rows yet: the progress endpoint creates them lazily, so the list must resolve them the
+		// same way (one helper) or it would show «لم تُجهَّز مراحل المشروع» and canUploadDelivery:false for a project that is actually deliverable.
+		for (const c of contracts) {
+			if (c.status === 'ACTIVE' && c.stages.length === 0) {
+				await projectProgressService.ensureStages(c.id);
+				c.stages = await prisma.projectStage.findMany({ where: { contractId: c.id }, orderBy: { stepOrder: 'asc' }, include: { deliveries: { select: { status: true }, orderBy: { submittedAt: 'asc' } } } });
+			}
+		}
+		// A project with an open dispute says so (the newest open one wins).
+		const openDisputes = contracts.length ? await prisma.dispute.findMany({
+			where: { projectId: { in: contracts.map(c => c.projectId) }, status: { in: ['OPEN', 'UNDER_REVIEW'] } },
+			select: { projectId: true, status: true }, orderBy: { createdAt: 'asc' }
+		}) : [];
+		const disputeByProject = new Map(openDisputes.map(d => [d.projectId as string, d.status as string]));
 
 		// Map them to the format expected by the frontend
 		const data = contracts.map(c => {
 			const project = c.project;
 			const clientName = `${c.client.firstName || 'عميل'} ${c.client.lastName || ''}`.trim();
 			
-			// Determine status logic
-			let status: 'wait' | 'run' | 'late' = 'wait';
-			let statusLabel = 'بانتظار بدء المشروع';
 			const approvedStages = c.stages.filter(stage => stage.status === 'APPROVED');
 			const currentStage = c.stages.find(stage => ['IN_PROGRESS', 'SUBMITTED', 'REVISION_REQUESTED'].includes(stage.status));
 			const progress = Math.min(100, Math.round(approvedStages.reduce((sum, stage) => sum + stage.percentage, 0)));
 			const elapsedDays = Math.max(0, Math.floor((Date.now() - (c.signedAt || c.createdAt).getTime()) / 86400000));
 			const daysLeft = Math.max(0, c.durationDays - elapsedDays);
-			
-			if (project.status === 'AWAITING_DELIVERY' || currentStage?.status === 'SUBMITTED') {
-				status = 'wait';
-				statusLabel = 'بانتظار رد العميل';
-			} else if (c.status === 'ACTIVE') {
-				status = 'run';
-				statusLabel = 'قيد التنفيذ';
-			} else if (c.status === 'PENDING_PAYMENT') {
-				status = 'wait';
-				statusLabel = 'بانتظار الإيداع';
-			}
-			if (c.status === 'ACTIVE' && daysLeft === 0 && progress < 100) { status = 'late'; statusLabel = 'متأخر'; }
+			// Every state below comes from the real contract / stage / escrow rows (see utils/delivery-state.ts); nothing is assumed.
+			const state = contractDeliveryState(c.status, c.stages, project.escrow, disputeByProject.get(project.id) || null);
+			const { status, statusLabel } = listStatus(state, daysLeft, progress);
 
 			// Generate random color from a predefined list based on ID hash
 			const colors = ['#2ECC8A', '#2BD4C7', '#06B6A2', '#5DA0FF', '#A56BE0', '#FFB400'];
@@ -390,14 +413,22 @@ export const getActiveProjects = async (req: Request, res: Response, next: NextF
 				title: project.title,
 				status,
 				statusLabel,
+				...state,
+				// The dispute freeze (approval / release only) is shown by the list too; delivery stays allowed.
+				hasActiveDispute: disputeByProject.has(project.id),
+				operationalStatus: c.status === 'ACTIVE' ? 'ACTIVE' : 'PENDING_START',
+				closedBySettlement: false,
 				progress,
 				providerName: clientName, // "providerName" in frontend interface actually represents the other party (client)
 				providerInitial: clientName.charAt(0) || 'ع',
 				providerAvatarColor: color,
-				currentStage: c.status === 'PENDING_PAYMENT' ? 'بانتظار إيداع الضمان للبدء' : (currentStage?.title || 'بانتظار بدء المرحلة التالية'),
-				escrowAmount: `${Math.max(0, c.price - (project.escrow?.releasedAmount || 0)).toLocaleString('en-US')} $`,
-				rawPrice: Math.max(0, c.price - (project.escrow?.releasedAmount || 0)),
-				escrowLabel: c.status === 'PENDING_PAYMENT' ? 'بانتظار الإيداع' : 'مستحق لي',
+				currentStage: c.status === 'PENDING_PAYMENT' ? 'بانتظار إيداع الضمان للبدء'
+					: c.status !== 'ACTIVE' ? 'لم تبدأ المراحل بعد'
+					: (currentStage?.title || (c.stages.length && approvedStages.length === c.stages.length ? 'اعتُمدت كل المراحل' : 'لم تُجهَّز مراحل المشروع بعد')),
+				// Only a funded escrow is "held". An unfunded contract shows its value, never a lock.
+				escrowAmount: `${(state.escrowFunded ? state.heldAmount : c.price).toLocaleString('en-US')} $`,
+				rawPrice: state.heldAmount,
+				escrowLabel: state.escrowFunded ? 'محتجز بالضمان' : 'قيمة العقد (غير ممولة بعد)',
 				contractRef: `CT-${c.id.slice(0, 6).toUpperCase()}`,
 				approvedStagesCount: approvedStages.length,
 				stagesCount: c.stages.length,
@@ -441,6 +472,19 @@ export const submitStageDelivery = async (req: Request, res: Response, next: Nex
 		const data = await projectProgressService.submitDelivery(providerId, req.params.id as string, req.params.stageId as string, req.body?.note, req.body?.files);
 		console.log('[submitStageDelivery] created delivery files:', JSON.stringify((data as any)?.files));
 		res.status(201).json({ success: true, message: 'تم إرسال المرحلة للعميل للمراجعة', data });
+	} catch (error) { next(error); }
+};
+
+// POST /api/provider/projects/:projectId/stages/:stageId/deliveries/files — multipart field "files" (max 5 x 25MB).
+// Stores the files for real (Cloudinary) after checking the stage belongs to this provider's ACTIVE contract and is open for a delivery;
+// returns the file descriptors to send back in POST .../deliveries. Nothing is written to the database here.
+export const uploadStageDeliveryFiles = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		const files = (Array.isArray(req.files) ? req.files : []) as Express.Multer.File[];
+		const data = await projectProgressService.uploadDeliveryFiles(providerId, req.params.projectId as string, req.params.stageId as string, files);
+		res.status(201).json({ success: true, message: 'تم رفع الملفات', data: { files: data } });
 	} catch (error) { next(error); }
 };
 
@@ -515,7 +559,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 		const contracts = await prisma.contract.findMany({
 			where: { providerId },
 			include: {
-				project: true,
+				project: { include: { escrow: true } },
 				client: {
 					select: {
 						firstName: true,
@@ -566,6 +610,15 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 		});
 
 		const archivedList: any[] = [];
+		// Projects closed by an admin financial dispute settlement: shown as such, never as "completed".
+		const settledIds = await settledProjectIds([...contracts.map(c => c.projectId), ...projects.map(p => p.id)]);
+		// ONE lifecycle per archived contract: the same state and the same money as the detail pages (a settled project is its own end state, never "completed").
+		const lifecycleMap = await listLifecycles(contracts.map(c => ({ projectId: c.projectId, contractStatus: c.status, price: c.price, escrow: c.project?.escrow ?? null })), { db: prisma });
+		const settledExtra = (id: string) => {
+			const lc = lifecycleMap.get(id);
+			const base = settledIds.has(id) ? { settled: true, statusLabel: SETTLED_LABEL_AR } : {};
+			return lc ? { ...base, operationalStatus: lc.operationalStatus, closureReason: lc.closureReason, completedByDelivery: lc.completedByDelivery, closedBySettlement: lc.closedBySettlement, hasActiveDispute: lc.hasActiveDispute, financial: lc.financial } : base;
+		};
 
 		// Filter contracts that are completed, cancelled, or archived/disputed
 		for (const c of contracts) {
@@ -581,9 +634,11 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				continue;
 			}
 
-			let status: 'done' | 'cancel' | 'arch' = 'done';
+			let status: 'done' | 'cancel' | 'arch' | 'settled' = 'done';
 			if (isCancel) status = 'cancel';
 			else if (isArch) status = 'arch';
+			// Closed by a dispute settlement: its own state (never "done"), whatever the stored contract / project status is.
+			if (settledIds.has(c.projectId)) status = 'settled';
 
 			const clientName = `${c.client?.firstName || 'عميل'} ${c.client?.lastName || ''}`.trim();
 			const displayId = `PRJ-${p.id.substring(0, 4).toUpperCase()}`;
@@ -597,9 +652,10 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				title: p.title,
 				clientName: clientName || 'عميل وسيط AI',
 				value: `${c.price.toLocaleString()} $`,
-				date: status === 'done' ? `أُغلق ${dateFormatted}` : (status === 'cancel' ? `ملغى ${dateFormatted}` : `مؤرشف ${dateFormatted}`),
+				date: settledIds.has(c.projectId) ? `${SETTLED_LABEL_AR} ${dateFormatted}` : (status === 'done' ? `أُغلق ${dateFormatted}` : (status === 'cancel' ? `ملغى ${dateFormatted}` : `مؤرشف ${dateFormatted}`)),
 				status,
-				icon: status === 'done' ? 'check' : (status === 'cancel' ? 'list' : 'doc')
+				icon: status === 'done' ? 'check' : (status === 'cancel' ? 'list' : 'doc'),
+				...settledExtra(c.projectId)
 			});
 		}
 
@@ -609,7 +665,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				continue;
 			}
 
-			const status: 'done' | 'cancel' | 'arch' = p.status === ProjectStatus.COMPLETED ? 'done' : 'arch';
+			const status: 'done' | 'cancel' | 'arch' | 'settled' = settledIds.has(p.id) ? 'settled' : p.status === ProjectStatus.COMPLETED ? 'done' : 'arch';
 			const clientName = `${p.client?.firstName || 'عميل'} ${p.client?.lastName || ''}`.trim();
 			const displayId = `PRJ-${p.id.substring(0, 4).toUpperCase()}`;
 			const dateFormatted = new Date(p.updatedAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'long' });
@@ -621,9 +677,10 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				title: p.title,
 				clientName: clientName || 'عميل وسيط AI',
 				value: `${budgetVal.toLocaleString()} $`,
-				date: status === 'done' ? `أُغلق ${dateFormatted}` : `مؤرشف ${dateFormatted}`,
+				date: settledIds.has(p.id) ? `${SETTLED_LABEL_AR} ${dateFormatted}` : (status === 'done' ? `أُغلق ${dateFormatted}` : `مؤرشف ${dateFormatted}`),
 				status,
-				icon: status === 'done' ? 'check' : 'doc'
+				icon: status === 'done' ? 'check' : 'doc',
+				...settledExtra(p.id)
 			});
 		}
 
@@ -675,4 +732,28 @@ export const getCompanyDeliveries = async (req: Request, res: Response, next: Ne
 	} catch (error) {
 		next(error);
 	}
+};
+
+export const getProviderInvoices = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		res.status(200).json({ success: true, data: await providerInvoicesService.list(providerId) });
+	} catch (error) { next(error); }
+};
+
+export const getProviderInvoice = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		res.status(200).json({ success: true, data: await providerInvoicesService.get(providerId, String(req.params.id || '')) });
+	} catch (error) { next(error); }
+};
+
+export const getProviderSales = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		res.status(200).json({ success: true, data: await providerSalesService.getSales(providerId) });
+	} catch (error) { next(error); }
 };

@@ -10,6 +10,9 @@ import {
 	type PaypalPayoutItemResult
 } from './paypal.service';
 import { logger } from '../config/logger';
+import { marketerNotifications } from './marketer-notifications.service';
+import { providerNotifications } from './provider-notifications.service';
+import { notifyAdmins } from './admin-notifications.service';
 
 // Same bound as withdrawal.service.ts's SERIALIZABLE retry loop — kept
 // separate rather than shared/imported, since this constant is small and
@@ -513,13 +516,15 @@ export class PayoutService {
 	 *    duplicate webhook delivery arriving after a prior definitive failure)
 	 */
 	async markAttemptDefinitelyFailed(attemptId: string, failureReason: string) {
-		return prisma.$transaction(async tx => {
+		let transitioned = false;
+		const result = await prisma.$transaction(async tx => {
 			const transition = await tx.payoutAttempt.updateMany({
 				where: { id: attemptId, status: { in: [PayoutAttemptStatus.PENDING, PayoutAttemptStatus.PROCESSING] } },
 				data: { status: PayoutAttemptStatus.FAILED, failureReason }
 			});
 
 			if (transition.count === 1) {
+				transitioned = true;
 				const attempt = await tx.payoutAttempt.findUniqueOrThrow({ where: { id: attemptId } });
 				// Payout P3-C hardening: verified, not left unchecked as before —
 				// see markAttemptReversed()'s identical pattern/reasoning. P3-C now
@@ -550,6 +555,8 @@ export class PayoutService {
 			// unchanged.
 			return current;
 		});
+		if (transitioned) { await providerNotifications.withdrawal(result.withdrawalId, 'FAILED'); await marketerNotifications.withdrawal(result.withdrawalId, 'FAILED'); void notifyAdmins('PAYOUT_FAILED', { id: result.withdrawalId, ref: failureReason.slice(0, 80) }); }
+		return result;
 	}
 
 	/**
@@ -573,7 +580,8 @@ export class PayoutService {
 	 *    silent no-op would hide it from whoever needs to investigate.
 	 */
 	async markAttemptCompleted(attemptId: string, options: { payoutItemId?: string; rawResponse?: Prisma.InputJsonValue } = {}) {
-		return prisma.$transaction(async tx => {
+		let transitioned = false;
+		const result = await prisma.$transaction(async tx => {
 			const transition = await tx.payoutAttempt.updateMany({
 				where: { id: attemptId, status: { in: [PayoutAttemptStatus.PENDING, PayoutAttemptStatus.PROCESSING] } },
 				data: {
@@ -585,6 +593,7 @@ export class PayoutService {
 			});
 
 			if (transition.count === 1) {
+				transitioned = true;
 				const attempt = await tx.payoutAttempt.findUniqueOrThrow({ where: { id: attemptId } });
 				// Payout P3-C hardening: verified, not left unchecked as before —
 				// see markAttemptReversed()'s identical pattern/reasoning. P3-C now
@@ -615,6 +624,8 @@ export class PayoutService {
 			// COMPLETED -> REVERSED transition below — never re-completed here.
 			throw new AppError('لا يمكن تعليم محاولة تحويل فاشلة كمكتملة — يجب أن تبدأ محاولة جديدة', 409);
 		});
+		if (transitioned) { await providerNotifications.withdrawal(result.withdrawalId, 'PAID'); await marketerNotifications.withdrawal(result.withdrawalId, 'PAID'); }
+		return result;
 	}
 
 	/**
@@ -671,13 +682,15 @@ export class PayoutService {
 	 * are guaranteed true together, or neither transition ever committed.
 	 */
 	async markAttemptReversed(attemptId: string, paypalTerminalStatus: string) {
-		return prisma.$transaction(async tx => {
+		let transitioned = false;
+		const result = await prisma.$transaction(async tx => {
 			const transition = await tx.payoutAttempt.updateMany({
 				where: { id: attemptId, status: PayoutAttemptStatus.COMPLETED },
 				data: { status: PayoutAttemptStatus.REVERSED, paypalTerminalStatus }
 			});
 
 			if (transition.count === 1) {
+				transitioned = true;
 				const attempt = await tx.payoutAttempt.findUniqueOrThrow({ where: { id: attemptId } });
 				const withdrawalTransition = await tx.withdrawal.updateMany({
 					where: { id: attempt.withdrawalId, status: WithdrawalStatus.COMPLETED },
@@ -719,6 +732,8 @@ export class PayoutService {
 			}
 			throw new AppError(`لا يمكن تسجيل استرجاع التحويل — حالة المحاولة الحالية (${current.status}) لم تكن مكتملة`, 409);
 		});
+		if (transitioned) { await providerNotifications.withdrawal(result.withdrawalId, 'REVERSED'); await marketerNotifications.withdrawal(result.withdrawalId, 'REVERSED'); }
+		return result;
 	}
 
 	/**

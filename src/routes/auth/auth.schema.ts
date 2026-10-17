@@ -60,19 +60,29 @@ export const registerSchema = z.object({
 
 export type RegisterInput = z.infer<typeof registerSchema>['body'];
 
+// Activation by account id (the login-while-pending path, which is after the password check and may keep returning the id) OR by the
+// e-mail the caller typed at registration (the public register answer carries no id). Exactly one of the two.
+const exactlyOneAccountRef = (v: { userId?: string; email?: string }, ctx: z.RefinementCtx) => {
+  if ((v.userId === undefined) === (v.email === undefined)) {
+    ctx.addIssue({ code: 'custom', message: 'معرف المستخدم غير صالح', path: ['userId'] });
+  }
+};
+
 export const verifyOtpSchema = z.object({
   body: z.object({
-    userId: z.string().uuid('معرف المستخدم غير صالح'),
+    userId: z.string().uuid('معرف المستخدم غير صالح').optional(),
+    email: normalizedEmail.optional(),
     code: z.string().regex(/^\d{6}$/, 'رمز التحقق يجب أن يكون 6 أرقام')
-  })
+  }).superRefine(exactlyOneAccountRef)
 });
 
 export type VerifyOtpInput = z.infer<typeof verifyOtpSchema>['body'];
 
 export const resendOtpSchema = z.object({
   body: z.object({
-    userId: z.string().uuid('معرف المستخدم غير صالح')
-  })
+    userId: z.string().uuid('معرف المستخدم غير صالح').optional(),
+    email: normalizedEmail.optional()
+  }).superRefine(exactlyOneAccountRef)
 });
 
 export type ResendOtpInput = z.infer<typeof resendOtpSchema>['body'];

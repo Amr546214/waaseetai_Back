@@ -86,3 +86,38 @@ test('OTP request errors: the throttle forwards code + retryAfterSeconds; the fa
 	const m = run(Object.assign(new AppError('تعذر إرسال رمز التحقق، حاول مرة أخرى', 503), { code: 'PAYPAL_OTP_EMAIL_FAILED', smtp: 'details' }));
 	assert.equal(m.statusCode, 503); assert.equal(m.body.code, 'PAYPAL_OTP_EMAIL_FAILED'); assert.equal('smtp' in m.body, false);
 });
+
+// Countdown: every 429 / 423 wait says how long in machine-readable form (header + retryAfterSeconds + retryAt); a lock by wrong attempts invents no duration.
+function runWithHeaders(err: any, preset: Record<string, string> = {}) {
+	const headers: Record<string, string> = { ...preset };
+	const res: any = { statusCode: 0, body: null, headers, status(c: number) { this.statusCode = c; return this; }, json(b: any) { this.body = b; return this; }, getHeader: (k: string) => headers[k], setHeader: (k: string, v: string) => { headers[k] = v; } };
+	globalErrorHandler(err, { method: 'POST', url: '/x' } as any, res, () => {});
+	return res;
+}
+
+test('429 with errors[].retryAfterSeconds and no header: Retry-After + retryAfterSeconds + retryAt are added; message and status stay', () => {
+	const before = Date.now();
+	const r = runWithHeaders(new AppError('طلبات رمز التوقيع كثيرة. انتظر دقيقة ثم حاول مجدداً', 429, [{ code: 'SIGN_OTP_THROTTLED', retryAfterSeconds: 42 }]));
+	assert.equal(r.statusCode, 429); assert.equal(r.headers['Retry-After'], '42'); assert.equal(r.body.retryAfterSeconds, 42);
+	assert.equal(r.body.message, 'طلبات رمز التوقيع كثيرة. انتظر دقيقة ثم حاول مجدداً');
+	const at = Date.parse(r.body.retryAt); assert.ok(at >= before + 42_000 - 1000 && at <= Date.now() + 42_000 + 1000);
+});
+
+test('429 whose limiter already set Retry-After: the header is kept and mirrored into the body', () => {
+	const r = runWithHeaders(new AppError('محاولات كثيرة', 429), { 'Retry-After': '90' });
+	assert.equal(r.headers['Retry-After'], '90'); assert.equal(r.body.retryAfterSeconds, 90);
+});
+
+test('423 with a duration gets the header too; a 429/423 without any duration gets NO invented seconds', () => {
+	const r = runWithHeaders(Object.assign(new AppError('مجمّد', 423), { retryAfterSeconds: 5 }));
+	assert.equal(r.headers['Retry-After'], '5');
+	const n = runWithHeaders(new AppError('محاولات كثيرة', 429));
+	assert.equal(n.headers['Retry-After'], undefined); assert.equal('retryAfterSeconds' in n.body, false); assert.equal('retryAt' in n.body, false);
+});
+
+test('OTP attempts lock (429) carries a stable code and no duration; other statuses never get Retry-After', () => {
+	const l = runWithHeaders(new AppError('تم تجاوز عدد المحاولات المسموح به، يرجى طلب رمز جديد', 429));
+	assert.equal(l.body.code, 'OTP_ATTEMPTS_LOCKED'); assert.equal(l.headers['Retry-After'], undefined);
+	const b = runWithHeaders(Object.assign(new AppError('x', 400), { retryAfterSeconds: 9 }));
+	assert.equal(b.headers['Retry-After'], undefined);
+});

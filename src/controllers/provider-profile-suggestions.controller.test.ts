@@ -92,11 +92,12 @@ test('route wiring: both suggestions are behind authenticate, active status, pro
   }
 });
 
-test('ordinary setup save connects only real taxonomy IDs and preserves existing skills (no set/delete/upsert of taxonomy)', async t => {
+test('ordinary setup save connects only real taxonomy IDs and replaces the saved list on update (no delete/upsert of taxonomy)', async t => {
   const x = await load(t);
   await x.controller.saveSetupData({ user: { id: 'owner' }, body: { specialties: { mainSpec: 'programming-development' }, skills: ['CSS'] } } as any, x.res);
   assert.equal(x.res.statusCode, 200);
-  assert.deepEqual(x.saves[0].update.skills, { connect: [{ id: 'real-css-id' }] });
+  // Batch B T1 (intentional): an update REPLACES the saved list (set), so a removed skill really leaves the profile; a create connects
+  assert.deepEqual(x.saves[0].update.skills, { set: [{ id: 'real-css-id' }] });
   assert.deepEqual(x.saves[0].create.skills, { connect: [{ id: 'real-css-id' }] });
 });
 

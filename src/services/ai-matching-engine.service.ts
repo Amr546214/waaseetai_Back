@@ -360,7 +360,7 @@ export class AiMatchingEngineService {
         id: proj.id,
         title: proj.title,
         category: proj.specialty || 'خدمة تخصصية',
-        specialty: proj.specialty || 'تطوير وتصميم',
+        specialty: proj.specialty || 'غير محدد',
         budget: realBudget(proj),
         // Batch 5: never exposed as a percentage — see AiMatchingProjectItem.
         aiMatchScore: null,

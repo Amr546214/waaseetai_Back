@@ -1,0 +1,330 @@
+{
+ "client": {
+  "total": 28,
+  "pages": 12,
+  "perPage": [
+   {
+    "page": "/client-overview",
+    "calls": 8
+   },
+   {
+    "page": "/client-overview/my-requests",
+    "calls": 2
+   },
+   {
+    "page": "/client-overview/my-requests/r1",
+    "calls": 2
+   },
+   {
+    "page": "/client-overview/projects/active",
+    "calls": 1
+   },
+   {
+    "page": "/client-overview/finance/wallet",
+    "calls": 1
+   },
+   {
+    "page": "/client-overview/finance/transactions",
+    "calls": 1
+   },
+   {
+    "page": "/client-overview/notifications",
+    "calls": 2
+   },
+   {
+    "page": "/client-overview/messages",
+    "calls": 1
+   },
+   {
+    "page": "/client-overview/profile",
+    "calls": 1
+   },
+   {
+    "page": "/client-overview/market",
+    "calls": 5
+   },
+   {
+    "page": "/client-overview/reports",
+    "calls": 3
+   },
+   {
+    "page": "/client-overview/disputes",
+    "calls": 1
+   }
+  ],
+  "topRepeated": [
+   [
+    "GET /socket.io/",
+    10
+   ],
+   [
+    "GET /api/chat/conversations",
+    3
+   ],
+   [
+    "GET /api/dashboard/stats",
+    1
+   ],
+   [
+    "GET /api/client/requests/my-requests",
+    1
+   ],
+   [
+    "GET /api/client/my-requests/r1",
+    1
+   ],
+   [
+    "GET /api/client/my-requests/active-projects",
+    1
+   ],
+   [
+    "GET /api/client/finance/wallet",
+    1
+   ],
+   [
+    "GET /api/notifications",
+    1
+   ]
+  ]
+ },
+ "provider": {
+  "total": 40,
+  "pages": 12,
+  "perPage": [
+   {
+    "page": "/provider-overview",
+    "calls": 11
+   },
+   {
+    "page": "/provider-overview/explore-requests",
+    "calls": 3
+   },
+   {
+    "page": "/provider-overview/offers",
+    "calls": 3
+   },
+   {
+    "page": "/provider-overview/projects/active",
+    "calls": 3
+   },
+   {
+    "page": "/provider-overview/finance/wallet",
+    "calls": 3
+   },
+   {
+    "page": "/provider-overview/finance/transactions",
+    "calls": 2
+   },
+   {
+    "page": "/provider-overview/notifications",
+    "calls": 1
+   },
+   {
+    "page": "/provider-overview/messages",
+    "calls": 2
+   },
+   {
+    "page": "/provider-overview/reports",
+    "calls": 4
+   },
+   {
+    "page": "/provider-overview/business-models/market",
+    "calls": 2
+   },
+   {
+    "page": "/provider-overview/profile/data",
+    "calls": 3
+   },
+   {
+    "page": "/provider-overview/disputes",
+    "calls": 3
+   }
+  ],
+  "topRepeated": [
+   [
+    "GET /socket.io/",
+    12
+   ],
+   [
+    "GET /api/provider/access-state",
+    11
+   ],
+   [
+    "GET /api/chat/conversations",
+    2
+   ],
+   [
+    "GET /api/provider/statistics",
+    2
+   ],
+   [
+    "GET /api/provider/profile/setup",
+    1
+   ],
+   [
+    "GET /api/provider/explore-requests",
+    1
+   ],
+   [
+    "GET /api/provider/offers",
+    1
+   ],
+   [
+    "GET /api/provider/projects/active",
+    1
+   ]
+  ]
+ },
+ "affiliate": {
+  "total": 35,
+  "pages": 10,
+  "perPage": [
+   {
+    "page": "/marketer-overview",
+    "calls": 14
+   },
+   {
+    "page": "/marketer-overview/referrals",
+    "calls": 3
+   },
+   {
+    "page": "/marketer-overview/ref-links",
+    "calls": 2
+   },
+   {
+    "page": "/marketer-overview/commissions",
+    "calls": 4
+   },
+   {
+    "page": "/marketer-overview/withdraw",
+    "calls": 4
+   },
+   {
+    "page": "/marketer-overview/assets",
+    "calls": 2
+   },
+   {
+    "page": "/marketer-overview/profile",
+    "calls": 0
+   },
+   {
+    "page": "/marketer-overview/notifications",
+    "calls": 2
+   },
+   {
+    "page": "/marketer-overview/messages",
+    "calls": 1
+   },
+   {
+    "page": "/marketer-overview/help",
+    "calls": 3
+   }
+  ],
+  "topRepeated": [
+   [
+    "GET /socket.io/",
+    11
+   ],
+   [
+    "GET /api/marketer-overview/summary",
+    7
+   ],
+   [
+    "GET /api/chat/conversations",
+    2
+   ],
+   [
+    "GET /api/marketer-overview/commissions",
+    2
+   ],
+   [
+    "GET /api/marketer-overview/ref-links",
+    2
+   ],
+   [
+    "GET /api/marketer-overview/wallet",
+    2
+   ],
+   [
+    "GET /api/marketer-overview/settings",
+    1
+   ],
+   [
+    "GET /api/marketer/profile",
+    1
+   ]
+  ]
+ },
+ "admin": {
+  "total": 20,
+  "pages": 8,
+  "perPage": [
+   {
+    "page": "/supper-admin-overview",
+    "calls": 10
+   },
+   {
+    "page": "/supper-admin-overview/users",
+    "calls": 4
+   },
+   {
+    "page": "/supper-admin-overview/requests",
+    "calls": 1
+   },
+   {
+    "page": "/supper-admin-overview/finance",
+    "calls": 0
+   },
+   {
+    "page": "/supper-admin-overview/disputes",
+    "calls": 3
+   },
+   {
+    "page": "/supper-admin-overview/support",
+    "calls": 1
+   },
+   {
+    "page": "/supper-admin-overview/kyc",
+    "calls": 1
+   },
+   {
+    "page": "/supper-admin-overview/settings",
+    "calls": 0
+   }
+  ],
+  "topRepeated": [
+   [
+    "GET /socket.io/",
+    10
+   ],
+   [
+    "GET /api/chat/conversations",
+    1
+   ],
+   [
+    "GET /api/admin/dashboard/summary",
+    1
+   ],
+   [
+    "GET /api/admin/dashboard/charts",
+    1
+   ],
+   [
+    "GET /api/admin/dashboard/activity",
+    1
+   ],
+   [
+    "GET /api/admin/users/stats",
+    1
+   ],
+   [
+    "GET /api/admin/users",
+    1
+   ],
+   [
+    "GET /api/admin/requests",
+    1
+   ]
+  ]
+ }
+}

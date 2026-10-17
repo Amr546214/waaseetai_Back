@@ -1,7 +1,11 @@
-import { OnboardingStatus, KYCStatus } from '@prisma/client';
+import { OnboardingStatus, KYCStatus, LogCategory, LogStatus } from '@prisma/client';
 import { prisma } from '../config/db';
+import { notifyAdmins } from './admin-notifications.service';
 import { AppError } from '../utils/app-error';
 import { RejectOnboardingInput } from '../dtos/onboarding.dto';
+import { AdminActor, adminAuditData } from './admin-audit';
+import { providerNotifications } from './provider-notifications.service';
+import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 
 type ListedUser = { id: string; firstName?: string | null; lastName?: string | null; email?: string | null; phoneNumber?: string | null; accountType?: string | null } | null | undefined;
 
@@ -55,6 +59,7 @@ export class OnboardingService {
     }
     if (!existing || existing.status !== OnboardingStatus.APPROVED) {
       await prisma.clientProfile.updateMany({ where: { userId, kycStatus: { in: [KYCStatus.UNVERIFIED, KYCStatus.REJECTED] } }, data: { kycStatus: KYCStatus.PENDING } });
+      void notifyAdmins('KYC_SUBMITTED', { ref: 'عميل' });
     }
     return record;
   }
@@ -106,26 +111,35 @@ export class OnboardingService {
     return { ...item, clientProfile };
   }
 
-  async approveOnboarding(id: string) {
+  async approveOnboarding(id: string, actor?: AdminActor) {
     const item = await prisma.clientOnboarding.findUnique({ where: { id } });
     if (!item) throw new AppError('سجل التحقق غير موجود', 404);
     if (item.status !== OnboardingStatus.PENDING) throw new AppError('تمت معالجة هذا الطلب مسبقاً', 409);
-    const [updated] = await Promise.all([
-      prisma.clientOnboarding.update({ where: { id }, data: { status: OnboardingStatus.APPROVED, reviewedAt: new Date() } }),
-      prisma.clientProfile.updateMany({ where: { userId: item.userId }, data: { kycStatus: KYCStatus.VERIFIED } }),
-      prisma.user.update({ where: { id: item.userId }, data: { idDocumentUrl: item.documentUrl } }),
-    ]);
+    const updated = await prisma.$transaction(async (tx) => {
+      // conditional transition: a concurrent decision matches zero rows
+      const moved = await tx.clientOnboarding.updateMany({ where: { id, status: OnboardingStatus.PENDING }, data: { status: OnboardingStatus.APPROVED, reviewedAt: new Date() } });
+      if (moved.count !== 1) throw new AppError('تمت معالجة هذا الطلب مسبقاً', 409);
+      await tx.clientProfile.updateMany({ where: { userId: item.userId }, data: { kycStatus: KYCStatus.VERIFIED } });
+      await tx.user.update({ where: { id: item.userId }, data: { idDocumentUrl: item.documentUrl } });
+      if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId: item.userId, eventType: 'KYC_APPROVED_BY_ADMIN', title: 'اعتماد توثيق الهوية', summary: 'اعتمدت الإدارة مستندات هوية العميل', status: LogStatus.APPROVED, before: { status: item.status }, after: { status: OnboardingStatus.APPROVED }, details: { onboardingId: id, party: 'CLIENT' } }) });
+      return tx.clientOnboarding.findUnique({ where: { id } });
+    });
+    await clientNotifications.send(clientNotificationFor.kycDecided({ clientId: item.userId, decision: 'APPROVED' }));
     return updated;
   }
 
-  async rejectOnboarding(id: string, input: RejectOnboardingInput) {
+  async rejectOnboarding(id: string, input: RejectOnboardingInput, actor?: AdminActor) {
     const item = await prisma.clientOnboarding.findUnique({ where: { id } });
     if (!item) throw new AppError('سجل التحقق غير موجود', 404);
     if (item.status !== OnboardingStatus.PENDING) throw new AppError('تمت معالجة هذا الطلب مسبقاً', 409);
-    const [updated] = await Promise.all([
-      prisma.clientOnboarding.update({ where: { id }, data: { status: OnboardingStatus.REJECTED, rejectionReason: input.rejectionReason, reviewedAt: new Date() } }),
-      prisma.clientProfile.updateMany({ where: { userId: item.userId }, data: { kycStatus: KYCStatus.REJECTED } }),
-    ]);
+    const updated = await prisma.$transaction(async (tx) => {
+      const moved = await tx.clientOnboarding.updateMany({ where: { id, status: OnboardingStatus.PENDING }, data: { status: OnboardingStatus.REJECTED, rejectionReason: input.rejectionReason, reviewedAt: new Date() } });
+      if (moved.count !== 1) throw new AppError('تمت معالجة هذا الطلب مسبقاً', 409);
+      await tx.clientProfile.updateMany({ where: { userId: item.userId }, data: { kycStatus: KYCStatus.REJECTED } });
+      if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId: item.userId, eventType: 'KYC_REJECTED_BY_ADMIN', title: 'رفض توثيق الهوية', summary: `رفضت الإدارة مستندات هوية العميل: ${input.rejectionReason}`, status: LogStatus.REJECTED, severity: 'WARNING', before: { status: item.status }, after: { status: OnboardingStatus.REJECTED }, details: { onboardingId: id, party: 'CLIENT', reason: input.rejectionReason } }) });
+      return tx.clientOnboarding.findUnique({ where: { id } });
+    });
+    await clientNotifications.send(clientNotificationFor.kycDecided({ clientId: item.userId, decision: 'REJECTED', reason: input.rejectionReason }));
     return updated;
   }
 
@@ -162,18 +176,32 @@ export class OnboardingService {
     };
   }
 
-  async approveProviderKyc(userId: string) {
+  async approveProviderKyc(userId: string, actor?: AdminActor) {
     const profile = await prisma.providerProfile.findUnique({ where: { userId } });
     if (!profile) throw new AppError('ملف المزود غير موجود', 404);
     if (profile.kycStatus === KYCStatus.VERIFIED) throw new AppError('تم التحقق من هذا المزود مسبقاً', 409);
-    return prisma.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.VERIFIED, isVerified: true, notes: null } });
+    // nothing to verify: an approval needs at least one identity document on file
+    if (providerDocumentsCount(profile as any) === 0) throw new AppError('لا توجد مستندات هوية لدى المزود لاعتمادها', 400);
+    const updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.VERIFIED, isVerified: true, notes: null } });
+      if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId, category: LogCategory.SYSTEM_AUDIT, eventType: 'KYC_APPROVED_BY_ADMIN', title: 'اعتماد توثيق الهوية', summary: 'اعتمدت الإدارة مستندات هوية مقدم الخدمة', status: LogStatus.APPROVED, before: { kycStatus: profile.kycStatus }, after: { kycStatus: KYCStatus.VERIFIED }, details: { party: 'PROVIDER' } }) });
+      return row;
+    });
+    await providerNotifications.kycDecided({ providerId: userId, decision: 'APPROVED' });
+    return updated;
   }
 
-  async rejectProviderKyc(userId: string, input: RejectOnboardingInput) {
+  async rejectProviderKyc(userId: string, input: RejectOnboardingInput, actor?: AdminActor) {
     const profile = await prisma.providerProfile.findUnique({ where: { userId } });
     if (!profile) throw new AppError('ملف المزود غير موجود', 404);
     if (profile.kycStatus === KYCStatus.REJECTED) throw new AppError('تم رفض هذا المزود مسبقاً', 409);
-    return prisma.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.REJECTED, isVerified: false, notes: `سبب الرفض: ${input.rejectionReason}` } });
+    const updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.REJECTED, isVerified: false, notes: `سبب الرفض: ${input.rejectionReason}` } });
+      if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId, eventType: 'KYC_REJECTED_BY_ADMIN', title: 'رفض توثيق الهوية', summary: `رفضت الإدارة مستندات هوية مقدم الخدمة: ${input.rejectionReason}`, status: LogStatus.REJECTED, severity: 'WARNING', before: { kycStatus: profile.kycStatus }, after: { kycStatus: KYCStatus.REJECTED }, details: { party: 'PROVIDER', reason: input.rejectionReason } }) });
+      return row;
+    });
+    await providerNotifications.kycDecided({ providerId: userId, decision: 'REJECTED', reason: input.rejectionReason });
+    return updated;
   }
 }
 

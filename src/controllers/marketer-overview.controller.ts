@@ -108,6 +108,15 @@ export class MarketerOverviewController {
     }
   }
 
+  public async deleteCustomLink(req: Request, res: Response, next: NextFunction) {
+    try {
+      const data = await marketerOverviewService.deleteCustomLink(req.user!.id, String(req.params.id));
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public async updateSettings(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.id;

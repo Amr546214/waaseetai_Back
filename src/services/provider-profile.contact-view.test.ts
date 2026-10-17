@@ -13,7 +13,7 @@ const profileRow = (user: any = {}) => ({
 
 async function load(t: TestContext, over: { user?: any } = {}) {
   // every other model answers "nothing" (empty list / 0 / null)
-  const empty = new Proxy({}, { get: (_m, method: string) => async () => (method === 'count' ? 0 : method === 'findMany' ? [] : null) });
+  const empty = new Proxy({}, { get: (_m, method: string) => async () => (method === 'count' ? 0 : method === 'findMany' ? [] : method === 'aggregate' ? { _count: { _all: 0 }, _avg: { rating: null } } : null) });
   const prisma: any = new Proxy({}, { get: (target: any, model: string) => target[model] ?? empty });
   prisma.providerProfile = { findUnique: async () => profileRow(over.user) };
   t.mock.module('../config/db', { namedExports: { prisma } });

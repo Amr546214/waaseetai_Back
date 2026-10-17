@@ -1,13 +1,23 @@
 import { isV2Escrow, splitRelease } from '../utils/escrow-commission';
 import { AmendmentStatus, ContractStatus, EscrowStatus, LogCategory, LogStatus, ProjectStageStatus, ProjectStatus, RequestStatus, StageDeliveryStatus } from '@prisma/client';
 import { prisma } from '../config/db';
+import { contractDeliveryState, editState, escrowFacts, stageDeliveryState } from '../utils/delivery-state';
 import { AppError } from '../utils/app-error';
 import { notificationService } from './notification.service';
+import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import { emailService } from './email.service';
 import { deriveProviderProgression } from '../utils/progression-calculators';
 import { projectHealthService, type ProjectHealthResult } from './ai-features/project-health.service';
 import { deliveryReviewService, type DeliveryReviewResult } from './ai-features/delivery-review.service';
 import { createCommissionsForStageReleaseEvent } from './affiliate-commission.service';
+import { marketerNotifications, type MarketerCommissionNotice } from './marketer-notifications.service';
+import { DELIVERY_MAX_FILE_BYTES, DELIVERY_MAX_UPLOADED_FILES, deliveryFolder, validateDeliveryArtifacts } from '../utils/delivery-artifacts';
+import { uploadMulterFile } from '../utils/cloudinary-storage';
+import { ACTIVE_DISPUTE_STATUSES, PROJECT_FROZEN_MESSAGE, assertProjectNotFrozen, freezeStateOf, getActiveDisputeForProject, countActiveDisputes, lockProjectForFreezeCheck } from './dispute-freeze.service';
+import { deliveryCompletedProject, adminSettlementFor, adminSettledView, stageDisplayStatus, SETTLED_LABEL_AR, SETTLED_STAGE_LABEL_AR } from './settlement-state.service';
+import { adminAudit } from './admin-audit.service';
+import { ensureProjectRoom } from './project-conversation.service';
+import { computeLifecycle, evaluateAction, assertStageActionAllowed, settlementDistributionOf } from './project-lifecycle.service';
 
 const PROJECT_COMPLETION_POINTS = 50;
 
@@ -19,9 +29,24 @@ const stageLabels: Record<string, [string, string]> = {
 const deliveryLabels: Record<string, [string, string]> = {
   SUBMITTED: ['pending', 'قيد مراجعة العميل'], REVISION_REQUESTED: ['notes', 'مطلوب تعديل'], APPROVED: ['approved', 'معتمد']
 };
+const contractStatusLabel: Record<string, string> = {
+  PENDING_CLIENT_SIGNATURE: 'بانتظار توقيع العميل', PENDING_PROVIDER_SIGNATURE: 'بانتظار توقيعك على العقد', PENDING_PAYMENT: 'بانتظار إيداع الضمان',
+  ACTIVE: 'مشروع نشط', COMPLETED: 'مكتمل', CANCELLED: 'ملغى', DISPUTED: 'قيد نزاع'
+};
+// The same contract state worded for the CLIENT (the map above is worded for the provider): says whose signature / money is still missing.
+const clientContractStatusLabel = (status: string, funded: boolean): string => status === 'PENDING_PROVIDER_SIGNATURE'
+  ? (funded ? 'بانتظار توقيع مقدم الخدمة' : 'بانتظار التمويل وتوقيع الأطراف')
+  : status === 'PENDING_CLIENT_SIGNATURE' || status === 'PENDING_PAYMENT' ? 'بانتظار توقيعك وإيداع الضمان'
+  : contractStatusLabel[status] || 'غير نشط';
 const nameFromUrl = (url: string) => {
   try { return decodeURIComponent(new URL(url).pathname.split('/').pop() || 'ملف مرفق'); }
   catch { return url.split('/').pop() || 'ملف مرفق'; }
+};
+
+// multer hands over the original file name decoded as latin1, which garbles Arabic names: re-decode as UTF-8 when that is lossless.
+const decodeUploadedName = (name: string) => {
+  const fixed = Buffer.from(name || '', 'latin1').toString('utf8');
+  return fixed.includes('\uFFFD') ? name : fixed;
 };
 
 // Normalize a single file entry from StageDelivery.files (String[]).
@@ -92,8 +117,25 @@ export interface ProjectHealthAnalysis {
   matchPercentage: null;
 }
 
+/** True when the stage list is a valid split of the contract: unique positive step orders, amounts add up to the price and percentages to 100 (tolerance 0.01). */
+export function stagesMatchContract(list: Array<{ stepOrder?: number | null; amount?: unknown; percentage?: unknown }>, price: number): boolean {
+  if (!list.length || !(price > 0)) return false;
+  const orders = list.map((x, i) => Number(x.stepOrder || i + 1));
+  if (new Set(orders).size !== orders.length || orders.some(o => !Number.isInteger(o) || o < 1)) return false;
+  const amount = list.reduce((sum, x) => sum + Number(x.amount ?? NaN), 0);
+  const pct = list.reduce((sum, x) => sum + Number(x.percentage ?? NaN), 0);
+  return Number.isFinite(amount) && Number.isFinite(pct) && Math.abs(amount - price) <= 0.01 && Math.abs(pct - 100) <= 0.01;
+}
+
 export class ProjectProgressService {
-  private async ensureStages(contractId: string) {
+  /** Single source of the contract's stage rows: creates them from the accepted offer's milestones (or one final stage) when none exist yet. Shared by the progress endpoint and the provider lists. */
+  /**
+   * Creates the stage rows of a contract that has none yet. Safe to call from several requests at once: the rows are written by ONE atomic createMany and
+   * (contractId, stepOrder) is unique, so a concurrent caller that lost the race gets P2002 (swallowed) and nothing is duplicated; a contract that already has ANY
+   * stage is never touched. The stages must add up to the contract: amounts == contract.price and percentages == 100 (tolerance 0.01); the frozen contract terms
+   * are preferred over the offer's milestones, and when neither adds up the contract falls back to ONE stage worth the whole price (never an inconsistent split).
+   */
+  async ensureStages(contractId: string) {
     const found = await prisma.projectStage.findMany({ where: { contractId }, orderBy: { stepOrder: 'asc' } });
     if (found.length) return;
     const contract = await prisma.contract.findUnique({ where: { id: contractId }, include: { project: true } });
@@ -101,12 +143,16 @@ export class ProjectProgressService {
     const proposal = contract.offerId
       ? await prisma.projectProposal.findUnique({ where: { id: contract.offerId }, include: { milestones: { orderBy: { stepOrder: 'asc' } } } })
       : await prisma.projectProposal.findFirst({ where: { projectId: contract.projectId, providerId: contract.providerId }, include: { milestones: { orderBy: { stepOrder: 'asc' } } } });
-    const source = proposal?.milestones.length ? proposal.milestones : [{
+    const frozen = Array.isArray((contract.terms as any)?.milestones) ? ((contract.terms as any).milestones as any[]) : [];
+    const candidates = [frozen, proposal?.milestones ?? []].filter(list => list.length > 0);
+    const source = candidates.find(list => stagesMatchContract(list, contract.price)) ?? null;
+    if (candidates.length && !source) console.warn(`[ensureStages] contract ${contractId}: milestones do not add up to the price (${contract.price}); using one stage for the whole price`);
+    const items = source ?? [{
       stepOrder: 1, title: 'تسليم المشروع النهائي', description: contract.project.description,
       days: contract.durationDays, percentage: 100, amount: contract.price
     }];
     try {
-      await prisma.projectStage.createMany({ data: source.map((item, index) => ({
+      await prisma.projectStage.createMany({ data: items.map((item: any, index: number) => ({
         contractId, stepOrder: item.stepOrder || index + 1, title: item.title, description: item.description,
         days: item.days, percentage: item.percentage, amount: item.amount,
         status: index === 0 && contract.status === ContractStatus.ACTIVE ? ProjectStageStatus.IN_PROGRESS : ProjectStageStatus.PENDING,
@@ -132,7 +178,7 @@ export class ProjectProgressService {
         where: { id: key, clientId: userId },
         include: {
           escrow: true,
-          proposals: { where: { status: 'ACCEPTED' }, include: { provider: { select: { id: true, firstName: true, lastName: true } } }, orderBy: { createdAt: 'desc' }, take: 1 },
+          proposals: { where: { status: { in: ['ACCEPTED', 'PENDING_SIGNATURE'] } }, include: { provider: { select: { id: true, firstName: true, lastName: true } } }, orderBy: { createdAt: 'desc' }, take: 1 },
           assignedEmployee: { select: { id: true, name: true, jobTitle: true } }
         }
       });
@@ -146,8 +192,12 @@ export class ProjectProgressService {
         contractRef: `CT-${project.id.slice(0, 6).toUpperCase()}`,
         price: acceptedProp ? Number(acceptedProp.price || 0) : 0, durationDays: project.deliveryDays || 0,
         daysLeft: project.deliveryDays || 0, progress: 0,
-        escrowTotal: project.escrow?.amount || 0, escrowHeld: project.escrow?.amount || 0, escrowReleased: 0,
-        status: 'PENDING_SIGNATURE', statusLabel: 'بانتظار توقيع العقد',
+        // Money counts as held only while the escrow row is really HELD.
+        escrowTotal: project.escrow?.amount || 0, escrowHeld: project.escrow?.status === 'HELD' ? project.escrow.amount : 0, escrowReleased: 0,
+        status: 'PENDING_SIGNATURE', statusLabel: project.escrow?.status === 'HELD' ? 'بانتظار توقيع مقدم الخدمة' : 'بانتظار توقيعك وإيداع الضمان',
+        contractStatus: null, escrowStatus: project.escrow?.status || null, escrowFunded: project.escrow?.status === 'HELD', disputeStatus: null,
+        canUploadDelivery: false, canSubmitDelivery: false, uploadBlockedReason: 'لا يوجد عقد بعد، ولا يمكن التسليم قبل توقيعه',
+        awaitingClientReview: false, revisionRequested: false, revisionResubmitted: false,
         employee: project.assignedEmployee ? { id: project.assignedEmployee.id, name: project.assignedEmployee.name, jobTitle: project.assignedEmployee.jobTitle } : null,
         stages: [], deliveries: [], edits: [], messages: [], files: [],
         aiInsights: { confidence: null, earlyDays: null, matchPercentage: null, riskLevel: 'غير محسوبة', riskLevelKey: 'unknown', healthRating: 'بانتظار بيانات كافية', bullets: [] }
@@ -162,25 +212,44 @@ export class ProjectProgressService {
     const role = contract.providerId === userId ? 'provider' : 'client';
     const other = role === 'provider' ? contract.client : contract.provider;
     const otherName = `${other.firstName || (role === 'provider' ? 'العميل' : 'مقدم الخدمة')} ${other.lastName || ''}`.trim();
-    let conversation = contract.project.conversations.find(c => c.providerId === contract.providerId && c.clientId === contract.clientId);
-    if (!conversation) {
-      conversation = await prisma.conversation.upsert({
-        where: { projectId_providerId: { projectId: contract.projectId, providerId: contract.providerId } },
-        update: {},
-        create: { projectId: contract.projectId, providerId: contract.providerId, clientId: contract.clientId, offerId: contract.offerId || null },
-        include: { messages: { orderBy: { createdAt: 'asc' }, include: { sender: { select: { id: true, firstName: true, lastName: true } } } } }
-      });
-    }
+    // The project's own message room (bound to this contract and its two parties): idempotent get-or-create, never a new conversation per visit. An old shared room
+    // of the same project and parties keeps being used as is until the approved backfill (see project-conversation.service).
+    const room = await ensureProjectRoom(prisma, contract, contract.project.conversations);
+    const loaded = contract.project.conversations.find(c => c.id === room.id);
+    const conversation = loaded ?? { id: room.id, messages: await prisma.message.findMany({ where: { conversationId: room.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], include: { sender: { select: { id: true, firstName: true, lastName: true } } } }) };
+    const unreadMessages = (conversation.messages || []).filter(m => m.senderId !== userId && m.status !== 'READ').length;
     const released = contract.project.escrow?.releasedAmount || 0;
+    const [openDispute, activeDisputeCount] = await Promise.all([getActiveDisputeForProject(contract.projectId, prisma), countActiveDisputes(contract.projectId, prisma)]);
+    const disputeFreeze = freezeStateOf(activeDisputeCount, openDispute);
+    // Derived end state: closed by an admin financial dispute decision (nothing stored, progress still counts only approved stages).
+    const settlement = await adminSettlementFor({ projectId: contract.projectId });
+    const state = contractDeliveryState(contract.status, persisted, contract.project.escrow, openDispute?.status || null);
+    const escrow = escrowFacts(contract.project.escrow);
+    // THE lifecycle (single source of truth, see project-lifecycle.service): state, closure, money and per-action eligibility with specific reasons.
+    const lifecycleInput = { viewer: { role: role as 'client' | 'provider', isOwner: true }, contractStatus: contract.status, contractPrice: contract.price, escrow: contract.project.escrow, stages: persisted, activeDisputes: { count: activeDisputeCount, latestId: openDispute?.id ?? null, latestStatus: openDispute?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId, adminAudit) : null };
+    const lifecycle = computeLifecycle(lifecycleInput);
+    const lifecycleStage = new Map(lifecycle.stages.map(s => [s.stageId, s]));
+    // Contract-level approval gate (any role's view): is approving a delivered stage possible right now, and if not, why.
+    const approveProbe = evaluateAction({ ...lifecycleInput, viewer: { role: 'client', isOwner: true } }, 'approve', { id: 'probe', stepOrder: 1, status: 'SUBMITTED', amount: 0, deliveries: [{ status: 'SUBMITTED' }] });
+    // Only the provider uploads; the client side of this shared endpoint never gets an upload permission.
+    const mayUpload = role === 'provider';
     const stages = persisted.map(stage => {
-      const [status, statusText] = stageLabels[stage.status];
+      const [status, statusText0] = stageLabels[stage.status];
+      const ss = stageDeliveryState(contract.status, stage);
+      const statusText = settlement.settled && lifecycleStage.get(stage.id)?.closedBySettlement ? SETTLED_STAGE_LABEL_AR : ss.revisionResubmitted ? 'أُعيد التسليم، بانتظار مراجعة العميل' : statusText0;
       const stageReview = (stage as any).stageReviews?.[0] || null;
       return {
         id: stage.id, stageNumber: stage.stepOrder, title: stage.title, description: stage.description,
         amount: stage.amount, percentage: stage.percentage, days: stage.days,
         isDone: stage.status === ProjectStageStatus.APPROVED,
-        isWait: stage.status === ProjectStageStatus.IN_PROGRESS || stage.status === ProjectStageStatus.SUBMITTED || stage.status === ProjectStageStatus.REVISION_REQUESTED,
+        isWait: !settlement.settled && (stage.status === ProjectStageStatus.IN_PROGRESS || stage.status === ProjectStageStatus.SUBMITTED || stage.status === ProjectStageStatus.REVISION_REQUESTED),
         status, statusText, completedDate: stage.approvedAt, roundsCount: stage.deliveries.length,
+        ...stageDisplayStatus(stage.status, settlement.settled),
+        ...ss, canUploadDelivery: lifecycleStage.get(stage.id)!.eligibility.upload.allowed, canSubmitDelivery: lifecycleStage.get(stage.id)!.eligibility.submit.allowed,
+        uploadBlockedReason: lifecycleStage.get(stage.id)!.eligibility.upload.reason,
+        lifecycle: lifecycleStage.get(stage.id),
+        // The stage amount is "held" only while a funded escrow still holds it: never for a stage a settlement closed (its value is historical).
+        amountHeld: lifecycleStage.get(stage.id)!.amountState === 'HELD',
         hasClientRating: !!stageReview,
         clientRating: stageReview?.rating || null,
         clientRatingComment: stageReview?.comment || null,
@@ -198,8 +267,8 @@ export class ProjectProgressService {
         title: stage.title, status, statusText, submittedAt: delivery.submittedAt, roundText: `التسليم ${index + 1}`,
         summary: delivery.note, reviewNote: delivery.reviewNote, files: delivery.files.map(url => normalizeFileEntry(url)) };
     }));
-    const messages = (conversation?.messages || []).map(message => ({
-      id: message.id, senderName: message.senderId === userId ? 'أنت' : `${message.sender.firstName || otherName} ${message.sender.lastName || ''}`.trim(),
+    const messages = [...(conversation?.messages || [])].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : 1)).map(message => ({
+      id: message.id, type: message.type, isEvent: message.type === 'SYSTEM', eventKey: (message as any).eventKey ?? null, senderName: message.senderId === userId ? 'أنت' : `${message.sender.firstName || otherName} ${message.sender.lastName || ''}`.trim(),
       senderInitial: (message.sender.firstName || otherName).charAt(0), senderRole: message.senderId === contract.providerId ? 'provider' : 'client',
       isMe: message.senderId === userId, time: message.createdAt, content: message.content || message.fileName || 'مرفق', fileUrl: message.fileUrl, fileName: message.fileName
     }));
@@ -226,17 +295,30 @@ export class ProjectProgressService {
     }
 
     return {
-      id: contract.id, projectId: contract.projectId, role, conversationId: conversation?.id || null,
+      id: contract.id, projectId: contract.projectId, role, conversationId: conversation?.id || null, messageContext: room.kind === 'PROJECT' ? 'PROJECT' : 'GENERAL', legacyShared: room.legacyShared, unreadMessages,
       title: contract.project.title, clientName: otherName, clientInitial: otherName.charAt(0) || 'ع', contractRef: `CT-${contract.id.slice(0, 6).toUpperCase()}`,
       price: contract.price, durationDays: contract.durationDays, daysLeft: Math.max(0, contract.durationDays - elapsed), progress,
-      escrowTotal: contract.project.escrow?.amount || contract.price, escrowHeld: Math.max(0, (contract.project.escrow?.amount || contract.price) - released), escrowReleased: released,
-      status: contract.status, statusLabel: contract.status === ContractStatus.COMPLETED ? 'مكتمل' : contract.status === ContractStatus.ACTIVE ? 'مشروع نشط' : 'بانتظار بدء المشروع',
+      // escrowReleased = money released through STAGE APPROVALS only; for a settled project the settlement's own release is in financial.settlement (never mixed).
+      escrowTotal: contract.project.escrow?.amount || contract.price, escrowHeld: lifecycle.financial.heldNow, escrowReleased: lifecycle.financial.releasedByStageApprovals,
+      ...state, canUploadDelivery: lifecycle.eligibility.upload.allowed, canSubmitDelivery: lifecycle.eligibility.submit.allowed,
+      uploadBlockedReason: lifecycle.eligibility.upload.reason,
+      lifecycle, financial: lifecycle.financial, operationalStatus: lifecycle.operationalStatus, closureReason: lifecycle.closureReason, completedByDelivery: lifecycle.completedByDelivery, closedBySettlement: lifecycle.closedBySettlement, hasActiveDispute: lifecycle.hasActiveDispute, eligibility: lifecycle.eligibility,
+      // Dispute freeze (read model shared by both apps): approvals and releases are refused by the backend while `frozen`; the screens show `reason`.
+      disputeFreeze, activeDisputeCount: disputeFreeze.activeDisputeCount, activeDisputeId: disputeFreeze.disputeId, canApproveStage: approveProbe.allowed, approvalBlockedReason: approveProbe.reason,
+      status: contract.status, statusLabel: settlement.settled ? SETTLED_LABEL_AR : (role === 'client' ? clientContractStatusLabel(contract.status, escrow.escrowFunded) : (contractStatusLabel[contract.status] || 'غير نشط')),
+      adminSettled: adminSettledView(settlement),
       employee: contract.project.assignedEmployee ? { id: contract.project.assignedEmployee.id, name: contract.project.assignedEmployee.name, jobTitle: contract.project.assignedEmployee.jobTitle } : null,
       stages, deliveries,
-      edits: deliveries.filter(d => d.status === 'notes').map(d => ({ id: d.id, stageId: d.stageId, stageTitle: d.stageTitle, title: `ملاحظات على ${d.stageTitle}`, clientNotes: d.reviewNote || '', status: 'waiting', statusText: 'بانتظار إعادة التسليم', createdAt: d.submittedAt })),
+      edits: persisted.flatMap(stage => stage.deliveries.map((delivery, index) => ({ stage, delivery, index }))
+        .filter(({ delivery }) => delivery.status === StageDeliveryStatus.REVISION_REQUESTED)
+        .map(({ stage, delivery, index }) => {
+          const ss = stageDeliveryState(contract.status, stage);
+          return { id: delivery.id, stageId: stage.id, stageTitle: stage.title, title: `ملاحظات على ${stage.title}`, clientNotes: delivery.reviewNote || '',
+            ...editState(stage.status, index, stage.deliveries.length), canUploadDelivery: mayUpload && ss.canUploadDelivery, uploadBlockedReason: ss.uploadBlockedReason, createdAt: delivery.submittedAt };
+        })),
       messages,
       files: persisted.filter(s => s.deliveries.some(d => d.files.length)).map(s => ({ groupTitle: s.title, isDone: s.status === ProjectStageStatus.APPROVED, files: s.deliveries.flatMap(d => d.files.map(url => normalizeFileEntry(url))) })),
-      providerClientRating,
+      providerClientRating: { ...providerClientRating, canRate: contract.status === ContractStatus.COMPLETED && !providerClientRating.hasRated && !settlement.settled },
       aiInsights: { confidence: null, earlyDays: null, matchPercentage: null, riskLevel: 'غير محسوبة', riskLevelKey: 'unknown', healthRating: 'بانتظار بيانات كافية', bullets: [] }
     };
   }
@@ -266,6 +348,13 @@ export class ProjectProgressService {
       }
     });
 
+    // Projects of these stages that are frozen by an open dispute (approval is refused by the backend; the list says so instead of offering it).
+    const projectIds = [...new Set(stages.map(stage => stage.contract.projectId))];
+    const frozenRows = projectIds.length
+      ? await prisma.dispute.findMany({ where: { status: { in: ACTIVE_DISPUTE_STATUSES }, OR: [{ projectId: { in: projectIds } }, { requestId: { in: projectIds } }] }, select: { projectId: true, requestId: true } })
+      : [];
+    const frozenProjects = new Set(frozenRows.map(r => r.projectId ?? r.requestId));
+
     return stages
       .filter(stage => stage.deliveries[0]?.status === StageDeliveryStatus.SUBMITTED)
       .map(stage => {
@@ -281,37 +370,41 @@ export class ProjectProgressService {
           submittedAt: delivery.submittedAt,
           providerName: `${provider.firstName || 'مقدم الخدمة'} ${provider.lastName || ''}`.trim(),
           filesCount: delivery.files.length,
-          contractRef: `CT-${stage.contract.id.slice(0, 6).toUpperCase()}`
+          contractRef: `CT-${stage.contract.id.slice(0, 6).toUpperCase()}`,
+          frozen: frozenProjects.has(stage.contract.projectId),
+          approvalBlockedReason: frozenProjects.has(stage.contract.projectId) ? PROJECT_FROZEN_MESSAGE : null
         };
       });
   }
 
+  // Shared by the upload endpoint and the delivery itself. Ownership is the only 403; everything else comes from the ONE lifecycle evaluation
+  // (settled / ended contract / stage not open ... each with its own Arabic reason and a 409 / 423).
+  private async assertDeliverable(providerId: string, key: string, stageId: string, action: 'upload' | 'submit' = 'upload') {
+    const contract = await prisma.contract.findFirst({ where: { OR: [{ id: key }, { projectId: key }], providerId } });
+    // The stage rows are created lazily, but never for a contract that cannot deliver anyway.
+    if (contract && contract.status === ContractStatus.ACTIVE) await this.ensureStages(contract.id);
+    const stage = contract ? await prisma.projectStage.findFirst({ where: { id: stageId, contractId: contract.id } }) : null;
+    await assertStageActionAllowed({ role: 'provider', userId: providerId, action, contract, stage, db: prisma });
+    return { contract: contract!, stage: stage! };
+  }
+
+  // Real upload of delivery files (the delivery used to record picked file NAMES only). Authorisation and stage state are checked BEFORE anything
+  // is stored; every file goes to this provider's folder for this stage, which is exactly what validateDeliveryArtifacts() later requires.
+  async uploadDeliveryFiles(providerId: string, key: string, stageId: string, files: Express.Multer.File[]) {
+    if (!files?.length) throw new AppError('اختر ملفاً واحداً على الأقل للرفع', 400);
+    if (files.length > DELIVERY_MAX_UPLOADED_FILES) throw new AppError(`الحد الأقصى ${DELIVERY_MAX_UPLOADED_FILES} ملفات`, 400);
+    const { stage } = await this.assertDeliverable(providerId, key, stageId, 'upload');
+    const stored = await Promise.all(files.map(file => uploadMulterFile({ ...file, originalname: decodeUploadedName(file.originalname) } as Express.Multer.File, deliveryFolder(providerId, stage.id), DELIVERY_MAX_FILE_BYTES)));
+    return stored.map(f => ({ name: f.fileName, url: f.url, type: f.mimeType, size: f.bytes }));
+  }
+
   async submitDelivery(providerId: string, key: string, stageId: string, note: string, files: any[]) {
     if (!note?.trim() || note.trim().length < 10) throw new AppError('أضف وصفاً واضحاً للتسليم (10 أحرف على الأقل)', 400);
-    const contract = await prisma.contract.findFirst({ where: { OR: [{ id: key }, { projectId: key }], providerId } });
-    if (!contract || contract.status !== ContractStatus.ACTIVE) throw new AppError('العقد غير نشط أو لا تملك صلاحية التسليم', 403);
-    await this.ensureStages(contract.id);
-    const stage = await prisma.projectStage.findFirst({ where: { id: stageId, contractId: contract.id } });
-    if (!stage || (stage.status !== ProjectStageStatus.IN_PROGRESS && stage.status !== ProjectStageStatus.REVISION_REQUESTED)) throw new AppError('هذه المرحلة غير متاحة للتسليم حالياً', 409);
-    // Accept both file objects ({name,url,type,size}) and plain URL strings.
-    // Serialize each entry to a JSON string for storage in String[] column.
-    const safeFiles: string[] = Array.isArray(files)
-      ? files
-          .filter(v => v != null)
-          .map(v => {
-            if (typeof v === 'string') return v.trim() ? v.trim() : null;
-            if (typeof v === 'object') {
-              const url = v.url || v.fileUrl || v.file_url || '';
-              if (!url) return null;
-              return JSON.stringify({ name: v.name || v.fileName || nameFromUrl(url), url, type: v.type || v.mimeType || '', size: typeof v.size === 'number' ? v.size : 0 });
-            }
-            return null;
-          })
-          .filter((v): v is string => v !== null)
-          .slice(0, 10)
-      : [];
-    console.log('[submitDelivery] safeFiles count:', safeFiles.length, 'sample:', safeFiles.slice(0, 2));
-    return prisma.$transaction(async tx => {
+    // At least one REAL artifact (an uploaded file of this stage, or an https link). File names alone are refused.
+    const safeFiles = validateDeliveryArtifacts(providerId, stageId, files);
+    const { contract, stage } = await this.assertDeliverable(providerId, key, stageId, 'submit');
+    let clientNotificationId: string | null = null;
+    const created = await prisma.$transaction(async tx => {
       // Phase 4 — conditional, row-locked transition taken BEFORE the delivery
       // row is written: a double-click / concurrent second submit (or a stage
       // that left IN_PROGRESS/REVISION_REQUESTED meanwhile) matches zero rows
@@ -330,27 +423,45 @@ export class ProjectProgressService {
       const delivery = await tx.stageDelivery.create({ data: { stageId, providerId, note: note.trim(), files: safeFiles } });
       console.log('[submitDelivery] created delivery id:', delivery.id, 'files:', JSON.stringify(delivery.files));
       await tx.project.update({ where: { id: contract.projectId }, data: { status: ProjectStatus.AWAITING_DELIVERY } });
-      await tx.notification.create({ data: { userId: contract.clientId, title: 'تسليم جديد بانتظار مراجعتك', message: `تم تسليم مرحلة: ${stage.title}`, type: 'STAGE_DELIVERY', category: 'PROJECTS', actionUrl: `/client-overview/projects/${contract.projectId}`, metadata: { projectId: contract.projectId, stageId, deliveryId: delivery.id } } });
+      clientNotificationId = (await tx.notification.create({ data: clientNotificationFor.stageDelivered({ clientId: contract.clientId, projectId: contract.projectId, stageId, stageTitle: stage.title, deliveryId: delivery.id }) })).id;
       return delivery;
     });
+    // The client is told through their saved channels (in-app push / e-mail) once the delivery is committed.
+    await clientNotifications.deliverStored([clientNotificationId]);
+    return created;
   }
 
   async reviewDelivery(clientId: string, key: string, stageId: string, decision: string, note?: string) {
     if (!['approve', 'revision'].includes(decision)) throw new AppError('قرار المراجعة غير صالح', 400);
     if (decision === 'revision' && (!note?.trim() || note.trim().length < 10)) throw new AppError('اكتب ملاحظات التعديل بوضوح', 400);
-    const contract = await prisma.contract.findFirst({
+    const contractRow = await prisma.contract.findFirst({
       where: { OR: [{ id: key }, { projectId: key }], clientId },
       include: {
         project: { select: { title: true } },
         provider: { select: { firstName: true, lastName: true, email: true } }
       }
     });
-    if (!contract || contract.status !== ContractStatus.ACTIVE) throw new AppError('العقد غير نشط أو لا تملك صلاحية المراجعة', 403);
-    const stage = await prisma.projectStage.findFirst({ where: { id: stageId, contractId: contract.id }, include: { deliveries: { orderBy: { submittedAt: 'desc' }, take: 1 } } });
-    const delivery = stage?.deliveries[0];
-    if (!stage || stage.status !== ProjectStageStatus.SUBMITTED || !delivery || delivery.status !== StageDeliveryStatus.SUBMITTED) throw new AppError('لا يوجد تسليم جديد بانتظار المراجعة لهذه المرحلة', 409);
+    const stageRow = contractRow ? await prisma.projectStage.findFirst({ where: { id: stageId, contractId: contractRow.id }, include: { deliveries: { orderBy: { submittedAt: 'desc' }, take: 1 } } }) : null;
+    // ONE lifecycle evaluation: not the owner = 403; settled / ended contract / stage not delivered / already decided = 409 with the specific reason; open dispute (approve) = 423.
+    await assertStageActionAllowed({ role: 'client', userId: clientId, action: decision === 'approve' ? 'approve' : 'requestRevision', contract: contractRow, stage: stageRow, db: prisma });
+    const contract = contractRow!;
+    const stage = stageRow!;
+    const delivery = stage.deliveries[0];
     const result = await prisma.$transaction(async tx => {
       let isProjectCompleted = false;
+      const commissionNotices: MarketerCommissionNotice[] = [];
+      // Same lock as an amendment being applied (contract row FIRST, then stages / escrow): a stage approval and an amendment on the same contract never interleave,
+      // and the price used by the final release is the committed one, not the value read before the transaction.
+      const contractLock = await tx.contract.updateMany({ where: { id: contract.id, status: ContractStatus.ACTIVE }, data: { updatedAt: new Date() } });
+      if (contractLock.count !== 1) throw new AppError('تغيّرت حالة العقد أثناء المراجعة ولم يعد نشطًا. حدّث الصفحة', 409);
+      const livePrice = (await tx.contract.findUnique({ where: { id: contract.id }, select: { price: true } }))?.price ?? contract.price;
+      if (decision === 'approve') {
+        // Dispute freeze, authoritative: take the contract row lock (the same one createForRequest takes when a dispute is opened), THEN read the
+        // disputes. A dispute opened concurrently either commits first (this approval is refused) or waits for this transaction (the approval and
+        // its release are complete before the dispute exists). No money can be released past an open dispute.
+        if (!(await lockProjectForFreezeCheck(tx, contract.projectId))) throw new AppError('تغيّرت حالة العقد أثناء المراجعة ولم يعد نشطًا. حدّث الصفحة', 409);
+        await assertProjectNotFrozen(contract.projectId, tx);
+      }
       if (decision === 'revision') {
         // Guarded the same way the approve path below is: an unconditional
         // update-by-id here would let a request that raced past the
@@ -441,11 +552,11 @@ export class ProjectProgressService {
           // commissionable base — the same figure this same audit log's own
           // metaData.releasedAmount above already uses for "the amount
           // released at this specific step".
-          await createCommissionsForStageReleaseEvent(tx, {
+          commissionNotices.push(...(await createCommissionsForStageReleaseEvent(tx, {
             contract: { id: contract.id, projectId: contract.projectId, clientId: contract.clientId, providerId: contract.providerId },
             stageId: stage.id,
             releasedAmount: stage.amount
-          });
+          }) ?? []));
         } else {
           isProjectCompleted = true;
           const completed = await tx.contract.updateMany({
@@ -456,11 +567,11 @@ export class ProjectProgressService {
           await tx.project.update({ where: { id: contract.projectId }, data: { status: ProjectStatus.COMPLETED, providerId: contract.providerId } });
           const finalEscrow = await tx.escrow.findUnique({ where: { projectId: contract.projectId } });
           const finalSplit = isV2Escrow(finalEscrow) && finalEscrow!.providerCommissionRateSnapshot != null
-            ? splitRelease({ grossReleasedBefore: finalEscrow!.releasedAmount, commissionTotalBefore: finalEscrow!.platformCommissionAmount, grossReleasedAfter: contract.price, ratePercent: finalEscrow!.providerCommissionRateSnapshot })
+            ? splitRelease({ grossReleasedBefore: finalEscrow!.releasedAmount, commissionTotalBefore: finalEscrow!.platformCommissionAmount, grossReleasedAfter: livePrice, ratePercent: finalEscrow!.providerCommissionRateSnapshot })
             : null;
           await tx.escrow.updateMany({ where: { projectId: contract.projectId }, data: finalSplit
             ? { status: EscrowStatus.RELEASED, releasedAmount: finalSplit.grossReleasedAfter, platformCommissionAmount: finalSplit.commissionTotalAfter, providerNetReleasedAmount: finalSplit.netReleasedAfter }
-            : { status: EscrowStatus.RELEASED, releasedAmount: contract.price } });
+            : { status: EscrowStatus.RELEASED, releasedAmount: livePrice } });
           // Same durable audit-trail entry as the intermediate-stage branch
           // above, for the final stage's release — still the same
           // transaction as the contract-completion/escrow mutations.
@@ -498,11 +609,11 @@ export class ProjectProgressService {
           // `releasedAmount: contract.price` (a direct set, not an
           // increment), not the incremental amount released at this specific
           // final step.
-          await createCommissionsForStageReleaseEvent(tx, {
+          commissionNotices.push(...(await createCommissionsForStageReleaseEvent(tx, {
             contract: { id: contract.id, projectId: contract.projectId, clientId: contract.clientId, providerId: contract.providerId },
             stageId: stage.id,
             releasedAmount: stage.amount
-          });
+          }) ?? []));
           await tx.clientRequest.updateMany({
             where: { proposals: { some: { projectId: contract.projectId } } },
             data: { status: RequestStatus.COMPLETED }
@@ -524,7 +635,7 @@ export class ProjectProgressService {
           // see this transaction's own already-committed PointTransaction.
           const [pointsAggregate, completedProjects, ratingAggregate] = await Promise.all([
             tx.pointTransaction.aggregate({ where: { providerId: contract.providerId }, _sum: { amount: true } }),
-            tx.project.count({ where: { providerId: contract.providerId, status: ProjectStatus.COMPLETED } }),
+            tx.project.count({ where: deliveryCompletedProject({ providerId: contract.providerId }) }),
             tx.review.aggregate({ where: { providerId: contract.providerId, reviewerRole: 'CLIENT' }, _avg: { rating: true } })
           ]);
           const totalPoints = pointsAggregate._sum.amount || 0;
@@ -572,17 +683,27 @@ export class ProjectProgressService {
           metadata: { projectId: contract.projectId, contractId: contract.id, stageId, decision, ...(isProjectCompleted ? { pointsAwarded: PROJECT_COMPLETION_POINTS } : {}) }
         }
       });
+      // The client's own confirmation of the approval (the provider's notification above is about the same decision).
+      const clientNotification = decision === 'approve'
+        ? await tx.notification.create({ data: isProjectCompleted
+          ? clientNotificationFor.projectCompleted({ clientId, projectId: contract.projectId, projectTitle: contract.project.title })
+          : clientNotificationFor.stageApproved({ clientId, projectId: contract.projectId, stageId, stageTitle: stage.title, amount: stage.amount }) })
+        : null;
       return {
         decision,
         stageId,
         notificationId: notification.id,
+        clientNotificationId: clientNotification?.id ?? null,
         isProjectCompleted,
+        commissionNotices,
         providerEmail: isProjectCompleted ? contract.provider.email : null,
         providerName: `${contract.provider.firstName || 'مقدم الخدمة'} ${contract.provider.lastName || ''}`.trim(),
         projectTitle: contract.project.title
       };
     });
 
+    await clientNotifications.deliverStored([result.clientNotificationId]);
+    await marketerNotifications.commissionsApproved(result.commissionNotices);
     await notificationService.emitStored(result.notificationId).catch(error => {
       console.error('[ProjectProgress] Failed to emit project review notification:', error);
     });
@@ -592,7 +713,7 @@ export class ProjectProgressService {
         providerName: result.providerName,
         projectTitle: result.projectTitle,
         pointsAwarded: PROJECT_COMPLETION_POINTS,
-        projectUrl: `/provider-overview/projects/${contract.projectId}/progress`
+        projectUrl: `/provider-overview/projects/active/progress/${contract.projectId}`
       });
     }
     return { decision: result.decision, stageId: result.stageId, pointsAwarded: result.isProjectCompleted ? PROJECT_COMPLETION_POINTS : 0 };

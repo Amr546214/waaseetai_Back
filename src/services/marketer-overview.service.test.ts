@@ -21,15 +21,27 @@ function createMockPrisma(t: TestContext, opts: {
   // referredUserId/sourceProjectId/sourceStageId/baseAmount/
   // appliedPercentage/level fields at all.
   commissionLogRows?: any[];
+  // groupBy fixtures for the real dashboard aggregates
+  referralGroups?: any[];
+  commissionGroups?: any[];
+  channelMetricRows?: any[];
+  channelReferralGroups?: any[];
+  // the ids that are SUCCESSFUL by the owner definition (first due commission from a real stage release); defaults to the first `successfulReferrals` rows
+  successfulIds?: string[];
 } = {}) {
   let affiliateState: any = opts.existingAffiliate ?? null;
   const userFixture = { firstName: 'Amr', lastName: 'Okasha', avatarUrl: null, email: 'amr@example.com' };
   const referrals = Array.from({ length: opts.successfulReferrals ?? 0 }, (_, i) => ({ id: `referral-${i}` }));
   const referralRows = opts.referralRows ?? [];
+  const expand = (groups: any[] | undefined, key: 'status' | 'sourceChannel') => (groups ?? []).flatMap((g: any) => Array.from({ length: g._count._all }, (_, i) => ({ id: `${g[key]}-${i}`, status: key === 'status' ? g.status : 'PENDING', sourceChannel: key === 'sourceChannel' ? g.sourceChannel : 'OTHER' })));
+  const successfulIds = opts.successfulIds ?? referrals.map(r => r.id);
+  // rows the summary / channel queries read (a `select` call): the status groups, the channel groups and the successful ones
+  const summaryRows = [...expand(opts.referralGroups, 'status'), ...expand(opts.channelReferralGroups, 'sourceChannel'), ...successfulIds.filter(id => !expand(opts.referralGroups, 'status').some(r => r.id === id) && !expand(opts.channelReferralGroups, 'sourceChannel').some(r => r.id === id)).map(id => ({ id, status: 'PENDING', sourceChannel: 'OTHER' }))];
   const commissionLogRows = opts.commissionLogRows ?? [];
 
   const affiliateCreateSpy = t.mock.fn((args: any) => { affiliateState = { id: 'affiliate-1', ...args.data }; return affiliateState; });
   const referralFindManySpy = t.mock.fn(async (args: any) => {
+    if (args.select) return summaryRows;
     const scoped = referralRows.filter(r => r.affiliateId === args.where.affiliateId);
     const skip = args.skip ?? 0;
     const take = args.take ?? scoped.length;
@@ -62,8 +74,13 @@ function createMockPrisma(t: TestContext, opts: {
       // the numeric level is read on its own (never in the safe select); a row without it (pre-migration shape) answers level 1
       findMany: async () => (affiliateState ? [{ id: affiliateState.id, level: affiliateState.level }] : [])
     },
-    commissionLog: { findMany: commissionLogFindManySpy },
-    referral: { findMany: referralFindManySpy, count: referralCountSpy },
+    commissionLog: { findMany: commissionLogFindManySpy, groupBy: async (args: any) => (args.by[0] === 'referralId' ? successfulIds.map(id => ({ referralId: id })) : opts.commissionGroups ?? []) },
+    affiliateChannelMetric: { findMany: async () => opts.channelMetricRows ?? [] },
+    referral: {
+      findMany: referralFindManySpy,
+      count: referralCountSpy,
+      groupBy: async (args: any) => (args.by[0] === 'sourceChannel' ? opts.channelReferralGroups ?? [] : opts.referralGroups ?? []),
+    },
     user: { findUnique: async () => userFixture },
     $transaction: async (fn: any) => fn(tx)
   };
@@ -365,7 +382,7 @@ test('getRecentCommissions: maps a fixture row shaped exactly like the pre-migra
     currency: 'USD',
     status: 'APPROVED',
     createdAt: new Date('2026-01-01T00:00:00Z'),
-    referral: { referredUser: { id: 'user-9' } }
+    referral: { referredUser: { firstName: 'Sara' } }
     // No referredUserId/sourceProjectId/sourceStageId/baseAmount/
     // appliedPercentage/level — matches the CURRENT (pre-migration) schema.
   };
@@ -382,7 +399,7 @@ test('getRecentCommissions: maps a fixture row shaped exactly like the pre-migra
   assert.equal(result[0].amount, 42);
   assert.equal(result[0].currency, 'USD');
   assert.equal(result[0].status, 'APPROVED');
-  assert.equal(result[0].source, 'إحالة عميل جديد');
+  assert.equal(result[0].source, 'إحالة: Sara');
 });
 
 
@@ -392,4 +409,75 @@ test('getSummary: tier, level, commission percent and colours all come from the 
   assert.deepEqual([summary.tier, summary.level, summary.commissionPercent], ['رابط مؤسسي', 15, 4.5]);
   assert.match(summary.levelColor.dark, /^#[0-9A-F]{6}$/);
   assert.match(summary.levelColor.light, /^#[0-9A-F]{6}$/);
+});
+
+
+// ---- M1: real dashboard aggregates, channel attribution, link ownership ----
+
+test('getSummary: an affiliate with no data gets zeros everywhere (no invented KPI)', async (t) => {
+  const { marketerOverviewService } = await loadService(t, { existingAffiliate: { id: 'affiliate-1', referralSlug: 'k' } });
+  const s = await marketerOverviewService.getSummary('user-1');
+  for (const k of ['successfulReferrals', 'totalCommissions', 'overallConversionRate', 'totalVisits', 'totalReferrals', 'pendingReferrals', 'qualifiedReferrals', 'approvedCommissions', 'paidCommissions', 'pendingCommissions']) {
+    assert.equal(s[k], 0, k);
+  }
+});
+
+test('getSummary: returns real aggregates - pending is never counted as earned, paid is, conversion is capped at 100', async (t) => {
+  const { marketerOverviewService } = await loadService(t, {
+    existingAffiliate: { id: 'affiliate-1', commissionLogs: [{ amount: 40 }], channelMetrics: [{ channel: 'TIKTOK', visitors: 2, conversionPercentage: 0 }] },
+    successfulIds: ['CONVERTED-0', 'CONVERTED-1', 'CONVERTED-2'],
+    referralGroups: [{ status: 'PENDING', _count: { _all: 5 } }, { status: 'QUALIFIED', _count: { _all: 1 } }, { status: 'CONVERTED', _count: { _all: 3 } }],
+    commissionGroups: [{ status: 'PENDING', _sum: { amount: 25 } }, { status: 'APPROVED', _sum: { amount: 40 } }, { status: 'PAID', _sum: { amount: 60 } }],
+  });
+  const s = await marketerOverviewService.getSummary('user-1');
+  assert.equal(s.successfulReferrals, 3);
+  assert.equal(s.totalReferrals, 9);
+  assert.equal(s.pendingReferrals, 5);
+  assert.equal(s.qualifiedReferrals, 1);
+  assert.equal(s.totalCommissions, 100); // approved 40 + paid 60, pending 25 excluded
+  assert.equal(s.pendingCommissions, 25);
+  assert.equal(s.paidCommissions, 60);
+  assert.equal(s.totalVisits, 2);
+  assert.equal(s.overallConversionRate, 100);
+});
+
+test('getChannelPerformance: visitors from click counters, clients from real referrals per source channel; empty when none', async (t) => {
+  const empty = await loadService(t, { existingAffiliate: { id: 'affiliate-1' } });
+  assert.deepEqual(await empty.marketerOverviewService.getChannelPerformance('user-1'), []);
+});
+
+test('getChannelPerformance: conversion = clients / visitors, a channel with sign-ups but no recorded clicks shows 0%', async (t) => {
+  const { marketerOverviewService } = await loadService(t, {
+    existingAffiliate: { id: 'affiliate-1' },
+    channelMetricRows: [{ channel: 'TIKTOK', visitors: 10, clients: 99, conversionPercentage: 99 }],
+    channelReferralGroups: [{ sourceChannel: 'TIKTOK', _count: { _all: 3 } }, { sourceChannel: 'OTHER', _count: { _all: 1 } }],
+    successfulIds: ['TIKTOK-0', 'TIKTOK-1', 'OTHER-0'], // 2 of the 3 TikTok sign-ups are successful, the only OTHER one too
+  });
+  const rows = await marketerOverviewService.getChannelPerformance('user-1');
+  // clients = SUCCESSFUL referrals of the channel; registrations = every sign-up through it
+  assert.deepEqual(rows.find((r: any) => r.channel === 'TIKTOK'), { channel: 'TIKTOK', visitors: 10, clients: 2, registrations: 3, conversionPercentage: 20 });
+  assert.deepEqual(rows.find((r: any) => r.channel === 'OTHER'), { channel: 'OTHER', visitors: 0, clients: 1, registrations: 1, conversionPercentage: 0 });
+});
+
+test('custom links: delete is scoped to the caller\'s own affiliate id (another marketer\'s link is a 404), create ignores customSlug', async (t) => {
+  const deleteMany = t.mock.fn(async (args: any) => ({ count: args.where.affiliateId === 'affiliate-1' && args.where.id === 'mine' ? 1 : 0 }));
+  const create = t.mock.fn(async (args: any) => ({ id: 'new', ...args.data }));
+  const { marketerOverviewService } = await loadService(t, { existingAffiliate: { id: 'affiliate-1' } });
+  const db = (await import('../config/db')).prisma as any;
+  db.referralCustomLink = { deleteMany, create, count: async () => 0, findFirst: async () => null };
+
+  assert.deepEqual(await marketerOverviewService.deleteCustomLink('user-1', 'mine'), { id: 'mine' });
+  await assert.rejects(() => marketerOverviewService.deleteCustomLink('user-1', 'theirs'), /غير موجود/);
+  assert.equal(deleteMany.mock.calls[0].arguments[0].where.affiliateId, 'affiliate-1');
+
+  const link = await marketerOverviewService.createCustomLink('user-1', { channelName: 'X', utmSource: 'x', customSlug: 'FREE-MONEY' } as any);
+  assert.equal('customSlug' in link, false);
+});
+
+test('createCustomLinkSchema: only a safe utm tag is accepted and customSlug is rejected', async () => {
+  const { createCustomLinkSchema } = await import('../dtos/marketer-overview.dto');
+  assert.equal(createCustomLinkSchema.safeParse({ channelName: 'لينكد إن', utmSource: 'LinkedIn' }).data?.utmSource, 'linkedin');
+  assert.equal(createCustomLinkSchema.safeParse({ channelName: 'a', utmSource: 'a b&c' }).success, false);
+  assert.equal(createCustomLinkSchema.safeParse({ channelName: 'a', utmSource: 'a', customSlug: 'x' }).success, false);
+  assert.equal(createCustomLinkSchema.safeParse({ channelName: '', utmSource: 'a' }).success, false);
 });

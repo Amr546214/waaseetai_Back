@@ -67,12 +67,13 @@ import { createCommissionsForStageReleaseEvent } from './affiliate-commission.se
 const FLAG = 'AFFILIATE_COMMISSION_ENGINE_ENABLED';
 const ctx = { contract: { id: 'c1', projectId: 'p1', clientId: 'client-1', providerId: 'provider-1' }, stageId: 'stage-1', releasedAmount: 500 };
 const ref = (referredUserId: string, level = 1, over: any = {}) => ({ id: `ref-${referredUserId}`, referredUserId, affiliate: { id: `aff-${referredUserId}`, level, userId: `aff-user-${referredUserId}` }, ...over });
-function fakeTx(opts: { referrals?: any[]; dispute?: boolean; createImpl?: (a: any) => any } = {}) {
+function fakeTx(opts: { referrals?: any[]; dispute?: boolean; createImpl?: (a: any) => any; duplicate?: boolean } = {}) {
   const calls = { dispute: 0, referral: [] as any[], create: [] as any[] };
   const tx: any = {
     dispute: { findFirst: async () => { calls.dispute++; return opts.dispute ? { id: 'd1' } : null; } },
-    referral: { findMany: async (args: any) => { calls.referral.push(args); return (opts.referrals ?? []); } }, // returns every fixture row regardless of the where, so the service's own guard is what is under test
-    commissionLog: { create: async (args: any) => { calls.create.push(args.data); if (opts.createImpl) return opts.createImpl(args); return args.data; } },
+    referral: { findMany: async (args: any) => { calls.referral.push(args); return (opts.referrals ?? []); }, updateMany: async () => ({ count: 1 }) }, // returns every fixture row regardless of the where, so the service's own guard is what is under test
+    // createMany + skipDuplicates (INSERT ... ON CONFLICT DO NOTHING): count 1 = inserted, count 0 = the unique key already existed
+    commissionLog: { createMany: async (args: any) => { assert.equal(args.skipDuplicates, true); calls.create.push(args.data[0]); if (opts.createImpl) return opts.createImpl(args); return { count: opts.duplicate ? 0 : 1 }; } },
   };
   return { tx, calls };
 }
@@ -154,15 +155,18 @@ test('engine: an OPEN / UNDER_REVIEW dispute => no commission and no referral re
   } finally { restore(); }
 });
 
-test('engine: a duplicate/retried stage release (dedup constraint P2002) is swallowed, so no duplicate and no throw', async () => {
+test('engine: a duplicate/retried stage release (ON CONFLICT DO NOTHING, count 0) adds nothing: no notice, no CONVERTED flip, no throw', async () => {
   const restore = withFlag('true');
   try {
-    const dup = new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 'test', meta: { target: ['commission_logs_affiliateId_referralId_type_sourceStageId_key'] } });
-    const { tx, calls } = fakeTx({ referrals: [ref('client-1')], createImpl: () => { throw dup; } });
-    await createCommissionsForStageReleaseEvent(tx, ctx);
+    let flips = 0;
+    const { tx, calls } = fakeTx({ referrals: [ref('client-1')], duplicate: true });
+    tx.referral.updateMany = async () => { flips++; return { count: 1 }; };
+    const notices = await createCommissionsForStageReleaseEvent(tx, ctx);
     assert.equal(calls.create.length, 1);
-    const other = new Prisma.PrismaClientKnownRequestError('other', { code: 'P2002', clientVersion: 'test', meta: { target: ['something_else'] } });
-    await assert.rejects(() => createCommissionsForStageReleaseEvent(fakeTx({ referrals: [ref('client-1')], createImpl: () => { throw other; } }).tx, ctx));
+    assert.deepEqual(notices, []);
+    assert.equal(flips, 0);
+    const boom = new Error('connection lost');
+    await assert.rejects(() => createCommissionsForStageReleaseEvent(fakeTx({ referrals: [ref('client-1')], createImpl: () => { throw boom; } }).tx, ctx), /connection lost/);
   } finally { restore(); }
 });
 
@@ -174,3 +178,55 @@ test('engine: a self-referral (affiliate is the client) never earns', async () =
     assert.equal(calls.create.length, 0);
   } finally { restore(); }
 });
+
+// ── dev-only allowlist of Referral ids (AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS) ──
+import { createCommissionsForStageReleaseEvent } from './affiliate-commission.service';
+
+function allowTx(referrals: any[]) {
+  const created: any[] = [];
+  const tx: any = {
+    dispute: { findFirst: async () => null },
+    referral: { findMany: async () => referrals, updateMany: async () => ({ count: 1 }) },
+    commissionLog: { createMany: async ({ data }: any) => { created.push(data[0]); return { count: 1 }; } }
+  };
+  return { tx, created };
+}
+const allowRef = (id: string, affiliateId: string, level = 1) => ({ id, referredUserId: 'client-1', affiliate: { id: affiliateId, level, userId: `u-${affiliateId}` } });
+const allowCtx = { contract: { id: 'c', projectId: 'p', clientId: 'client-1', providerId: 'prov-1' }, stageId: 's1', releasedAmount: 10 };
+
+test('allowlist: with the engine on and an allowlist set, ONLY the listed referral earns (exactly 1% of the gross stage amount); the others are untouched', async () => {
+  const saved = { e: process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED, a: process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS };
+  process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED = 'true';
+  process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS = 'ref-qa';
+  try {
+    const { tx, created } = allowTx([allowRef('ref-other-1', 'aff-1'), allowRef('ref-qa', 'aff-qa'), allowRef('ref-other-2', 'aff-2', 5)]);
+    const notices = await createCommissionsForStageReleaseEvent(tx, allowCtx);
+    assert.equal(created.length, 1);
+    assert.equal(created[0].affiliateId, 'aff-qa');
+    assert.equal(created[0].referralId, 'ref-qa');
+    assert.equal(created[0].amount, 0.1); // 10 x 1.00% (level 1)
+    assert.equal(created[0].baseAmount, 10);
+    assert.equal(created[0].appliedPercentage, 1);
+    assert.equal(created[0].status, 'APPROVED');
+    assert.equal(notices.length, 1);
+  } finally { restoreEnv(saved); }
+});
+
+test('allowlist: unset = no restriction (production behaviour); set but empty = nobody earns (fail closed)', async () => {
+  const saved = { e: process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED, a: process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS };
+  process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED = 'true';
+  try {
+    delete process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS;
+    let r = allowTx([allowRef('a', 'aff-1'), allowRef('b', 'aff-2')]); await createCommissionsForStageReleaseEvent(r.tx, allowCtx); assert.equal(r.created.length, 2);
+    process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS = '';
+    r = allowTx([allowRef('a', 'aff-1'), allowRef('b', 'aff-2')]); await createCommissionsForStageReleaseEvent(r.tx, allowCtx); assert.equal(r.created.length, 0);
+    process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED = 'false';
+    delete process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS;
+    r = allowTx([allowRef('a', 'aff-1')]); await createCommissionsForStageReleaseEvent(r.tx, allowCtx); assert.equal(r.created.length, 0, 'engine off = nothing, allowlist or not');
+  } finally { restoreEnv(saved); }
+});
+
+function restoreEnv(s: { e?: string; a?: string }) {
+  if (s.e === undefined) delete process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED; else process.env.AFFILIATE_COMMISSION_ENGINE_ENABLED = s.e;
+  if (s.a === undefined) delete process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS; else process.env.AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS = s.a;
+}

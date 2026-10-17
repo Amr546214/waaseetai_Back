@@ -1,5 +1,6 @@
 import { UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
+import { notifyAdmins } from './admin-notifications.service';
 import { ProfileSetupDto } from '../dtos/profile-setup.dto';
 import { storeDataUriIfNeeded, storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { AppError } from '../utils/app-error';
@@ -108,7 +109,7 @@ export class ProfileSetupService {
         if (dto.bio !== undefined) providerData.bio = dto.bio;
         if (dto.hourlyRate !== undefined) providerData.hourlyRate = dto.hourlyRate;
         Object.assign(providerData, identityAndBankData());
-        if (skillConnections) providerData.skills = { connect: skillConnections };
+        if (skillConnections) providerData.skills = { set: skillConnections };
 
         const providerProfile = await tx.providerProfile.upsert({
           where: { userId },
@@ -135,6 +136,7 @@ export class ProfileSetupService {
         identitySubmitted = Boolean(await onboardingService.submitSetupDocuments(userId, { idNumber: p.idNumber, frontIdUrl: p.frontIdUrl, backIdUrl: p.backIdUrl }, { identityChanged: true }));
       } else if (p.idNumber && p.frontIdUrl && p.backIdUrl) {
         await prisma.providerProfile.updateMany({ where: { userId, kycStatus: { in: ['UNVERIFIED', 'REJECTED'] } }, data: { kycStatus: 'PENDING' } });
+        void notifyAdmins('KYC_SUBMITTED', { ref: 'مزود خدمة' });
         identitySubmitted = true;
       }
     }

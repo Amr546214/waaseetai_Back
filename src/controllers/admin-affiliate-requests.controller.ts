@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { adminAffiliateRequestsService } from '../services/admin-affiliate-requests.service';
+import { fieldError } from '../utils/app-error';
 
 export class AdminAffiliateRequestsController {
 	public async listRequests(req: Request, res: Response, next: NextFunction) {
@@ -36,8 +37,7 @@ export class AdminAffiliateRequestsController {
 			const adminUserId = req.user!.id;
 			const { rejectionReason } = req.body || {};
 			if (!rejectionReason || typeof rejectionReason !== 'string' || !rejectionReason.trim()) {
-				res.status(400).json({ success: false, message: 'سبب الرفض مطلوب' });
-				return;
+				throw fieldError('rejectionReason', 'سبب الرفض مطلوب');
 			}
 			const data = await adminAffiliateRequestsService.reject(req.params.id as string, adminUserId, rejectionReason.trim());
 			res.status(200).json({ success: true, data, message: 'تم رفض الطلب' });

@@ -116,7 +116,7 @@ test('route keeps authenticate + provider authorize + aiLimiter + validation; co
   const route = readFileSync(new URL('../routes/proposal.routes.ts', import.meta.url), 'utf8');
   const idx = route.indexOf("'/ai-suggest'");
   const block = route.slice(idx, route.indexOf(');', idx));
-  for (const piece of ['authenticate', 'authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY)', 'aiLimiter', 'validateDto(aiSuggestRequestSchema)']) {
+  for (const piece of ['authenticate', 'authorizeActiveRole(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY)', 'aiLimiter', 'validateDto(aiSuggestRequestSchema)']) {
     assert.ok(block.includes(piece), `route must keep ${piece}`);
   }
 });

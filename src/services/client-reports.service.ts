@@ -1,4 +1,5 @@
 import { prisma } from '../config/db';
+import { SETTLED_DISPUTE_WHERE } from './settlement-state.service';
 
 // Batch (client reports real-data fix): the client-overview "تقاريري" page was
 // entirely hardcoded markup (no data binding at all). This service replaces
@@ -59,10 +60,11 @@ export class ClientReportsService {
 				: Promise.resolve([] as any[]),
 			prisma.project.findMany({
 				where: { clientId: userId, ...(since ? { createdAt: { gte: since } } : {}) },
-				include: { proposals: { select: { status: true } }, contract: { select: { durationDays: true } } },
+				include: { proposals: { select: { status: true } }, contract: { select: { durationDays: true } }, disputes: { where: SETTLED_DISPUTE_WHERE, select: { id: true }, take: 1 } },
 				orderBy: { createdAt: 'desc' }
 			}),
-			prisma.review.findMany({ where: { clientId: userId }, select: { rating: true, createdAt: true } }),
+			// only the ratings THIS client gave to providers: the reviews providers gave the client share clientId and used to be averaged into the same number
+			prisma.review.findMany({ where: { clientId: userId, reviewerRole: 'CLIENT' }, select: { rating: true, createdAt: true } }),
 			prisma.dispute.findMany({
 				where: { OR: [{ openedById: userId }, { againstUserId: userId }], ...(since ? { createdAt: { gte: since } } : {}) },
 				select: { id: true, status: true, reason: true, createdAt: true, resolvedAt: true },
@@ -154,7 +156,8 @@ export class ClientReportsService {
 		// ── Projects tab ────────────────────────────────────────────────────
 		const activeProjects = orders.filter(o => o.bucket === 'نشط');
 		const projectDurations = (projects as any[])
-			.filter(p => p.status === 'COMPLETED')
+			// delivery durations: a project closed by a dispute settlement is not a delivery
+			.filter(p => p.status === 'COMPLETED' && !(p.disputes?.length))
 			.map(p => {
 				const days = Math.max(1, Math.round((p.updatedAt.getTime() - p.createdAt.getTime()) / 86400000));
 				const agreed = p.contract?.durationDays || p.deliveryDays || days;

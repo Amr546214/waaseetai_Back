@@ -1,5 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from '../services/auth.service';
+import { RESEND_GENERIC_MESSAGE, REGISTER_GENERIC_MESSAGE } from '../utils/auth-messages';
+import { resendAvailableAtIso } from '../utils/otp-send-throttle';
 import { sessionService } from '../services/session.service';
 import { getAuthCookie, getRequestCookie } from '../utils/request-cookie';
 import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput, VerifyLoginOtpInput, ResendLoginOtpInput } from '../routes/auth/auth.schema';
@@ -27,18 +29,19 @@ export class AuthController {
 			// silently read nothing.
 			const refCookieSlug = getRequestCookie(req, 'waseet_ref_code');
 
-			const result = await authService.registerUser(input, { refCookieSlug });
-			// the mailer was called: the cooldown starts only if the SMTP server accepted the code (see otpSendGate)
+			const refCookieSource = getRequestCookie(req, 'waseet_ref_src');
+
+			await authService.registerUser(input, { refCookieSlug, refCookieSource });
+			// ONE public answer for every outcome (new, in use and active, in use and pending): same status, keys and words, no account id and
+			// no created / sent flags. Nothing the caller receives depends on the account. The cooldown is likewise recorded for every
+			// successful request, so a second request inside the interval gets the same 429 whether or not an account exists.
 			res.locals.otpEmailAttempted = true;
-			res.locals.otpEmailSent = result.emailSent === true;
+			res.locals.otpEmailSent = true;
 
 			res.status(201).json({
 				success: true,
-				// emailSent=false: the account exists but the code email did not go out; the app must say so and offer a resend.
-				message: result.emailSent
-					? 'تم التسجيل بنجاح، يرجى تفعيل الحساب'
-					: 'تم إنشاء الحساب لكن تعذر إرسال رمز التحقق إلى بريدك الآن. حاول إعادة الإرسال بعد قليل أو تواصل مع الدعم',
-				data: result
+				message: REGISTER_GENERIC_MESSAGE,
+				data: {}
 			});
 		} catch (error) {
 			// Pass errors to the global error handler gracefully
@@ -69,6 +72,14 @@ export class AuthController {
 	 */
 	public async resendOtp(req: Request, res: Response, next: NextFunction) {
 		try {
+			if (typeof req.body.email === 'string') {
+				// By e-mail (the public registration step): always the same generic 200; the cooldown applies to every address alike.
+				await authService.resendOtpByEmail(req.body.email);
+				res.locals.otpEmailAttempted = true;
+				res.locals.otpEmailSent = true;
+				res.status(200).json({ success: true, message: RESEND_GENERIC_MESSAGE, data: {} });
+				return;
+			}
 			const { userId } = req.body;
 			const { emailSent } = await authService.resendOtp(userId);
 			res.locals.otpEmailAttempted = true;
@@ -80,7 +91,7 @@ export class AuthController {
 				success: emailSent,
 				emailSent,
 				message: emailSent
-					? 'تم إعادة إرسال رمز التحقق بنجاح'
+					? RESEND_GENERIC_MESSAGE
 					: 'تعذر إرسال رمز التحقق، حاول مرة أخرى بعد قليل أو تواصل مع الدعم',
 				data: { emailSent }
 			});
@@ -99,7 +110,11 @@ export class AuthController {
 
 			res.status(200).json({
 				success: true,
-				message: result.message
+				message: result.message,
+				// When the code stops being valid (ISO; same shape for every address).
+				expiresAt: result.expiresAt,
+				// The send limiter consumed this attempt (same for every address), so the next one is allowed after the interval.
+				resendAvailableAt: resendAvailableAtIso()
 			});
 		} catch (error) {
 			next(error);
@@ -160,7 +175,10 @@ export class AuthController {
 					userId: result.userId,
 					// Whether the code email really went out, and the wait when the send was throttled.
 					...('emailSent' in result ? { emailSent: result.emailSent } : {}),
-					...('retryAfterSeconds' in result ? { retryAfterSeconds: result.retryAfterSeconds } : {})
+					...('retryAfterSeconds' in result ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
+					// When the next send is allowed / when the code stops being valid (ISO), only for a send that really went out.
+					...('resendAvailableAt' in result ? { resendAvailableAt: result.resendAvailableAt } : {}),
+					...('expiresAt' in result ? { expiresAt: result.expiresAt } : {})
 				}
 			});
 		} catch (error) {
@@ -196,8 +214,11 @@ export class AuthController {
 
 			res.status(200).json({
 				success: result.emailSent,
-				message: result.emailSent ? 'تم إعادة إرسال رمز التحقق بنجاح' : result.message,
-				emailSent: result.emailSent
+				message: result.emailSent ? RESEND_GENERIC_MESSAGE : result.message,
+				emailSent: result.emailSent,
+				...('retryAfterSeconds' in result ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
+				...('resendAvailableAt' in result ? { resendAvailableAt: result.resendAvailableAt } : {}),
+				...('expiresAt' in result ? { expiresAt: result.expiresAt } : {})
 			});
 		} catch (error) {
 			next(error);

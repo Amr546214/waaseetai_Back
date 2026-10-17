@@ -1,3 +1,4 @@
+import { isBlankText } from './sanitize-text';
 // POST /api/provider/profile/setup: the payload is nested ({ details, specialties, identity, documents, agreements, portfolio, skills }).
 // Some clients send the same facts under other names (top-level headline / hourlyRate / yearsOfExperience / mainSpecialty, or the identity
 // number / date of birth inside `identity`). Every KNOWN name is mapped onto the one canonical field and saved; every UNKNOWN name is a
@@ -113,7 +114,7 @@ export interface ProviderSetupCompletenessInput {
   headline?: string | null; country?: string | null; city?: string | null; bio?: string | null; mainSpecialty?: string | null;
   yearsOfExperience?: number | null; accurateAgreed?: boolean | null; termsAgreed?: boolean | null; privacyAgreed?: boolean | null;
 }
-const filled = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
+const filled = (v: unknown) => typeof v === 'string' && !isBlankText(v);
 
 /** Setup is complete only when every required field is really STORED (read back from the saved profile, never from the request). */
 export function isProviderSetupComplete(p: ProviderSetupCompletenessInput | null | undefined): boolean {

@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { clientRequestsService } from '../services/client-requests.service';
+import { clientOfferCounterService } from '../services/client-offer-counter.service';
 import { createClientRequestSchema, clientRequestAiSuggestSchema } from '../dtos/create-client-request.dto';
 import { AppError } from '../utils/app-error';
 import { canRewrite, REWRITE_INPUT_REQUIRED_MESSAGE } from '../utils/description-rewrite-guard';
@@ -134,7 +135,8 @@ export class ClientRequestsController {
     try {
       const userId = req.user!.userId || req.user!.id;
       const page = parseInt(req.query.page as string) || 1;
-      const limit = parseInt(req.query.limit as string) || 10;
+      // The archive screen counts what it loads: allow a full page of up to 100 rows (still bounded).
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
       const result = await clientRequestsService.getCompletedProjects(userId, page, limit);
       res.status(200).json({
         success: true,
@@ -256,7 +258,52 @@ export class ClientRequestsController {
     }
   }
 
+  // GET /api/client/requests/:id/offers/:offerId/counter
+  public async getOfferCounter(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId || req.user!.id;
+      const data = await clientOfferCounterService.getView(userId, req.params.id as string, req.params.offerId as string);
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // POST /api/client/requests/:id/offers/:offerId/counter/accept  { messageId }
+  public async acceptOfferCounter(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId || req.user!.id;
+      const data = await clientOfferCounterService.accept(userId, req.params.id as string, req.params.offerId as string, req.body || {});
+      res.status(200).json({ success: true, message: 'تم قبول العرض المضاد، وأصبحت شروطه هي شروط العرض', data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // POST /api/client/requests/:id/offers/:offerId/counter/decline  { messageId }
+  public async declineOfferCounter(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId || req.user!.id;
+      const data = await clientOfferCounterService.decline(userId, req.params.id as string, req.params.offerId as string, req.body || {});
+      res.status(200).json({ success: true, message: 'تم رفض العرض المضاد، ويبقى العرض بشروطه الأصلية', data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   // POST /api/client/requests/:id/contract/sign
+  // GET /api/client/my-requests/:id/contract — the frozen contract the client is about to sign (price/duration/stages) and whether signing is possible.
+  public async getContractForSignature(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId || req.user!.id;
+      const offerId = typeof req.query.offerId === 'string' && req.query.offerId ? req.query.offerId : undefined;
+      const data = await clientRequestsService.getContractForSignature(userId, req.params.id as string, offerId);
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public async signContract(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.userId || req.user!.id;

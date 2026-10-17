@@ -30,6 +30,12 @@ export const createClientRequestSchema = z.object({
   allowNegotiation: z.boolean().optional().default(true),
   splitMilestones: z.boolean().optional().default(false),
   milestones: z.array(z.object({ name: z.string().min(2).max(150), pct: z.number().positive().max(100) })).optional().default([])
+}).superRefine((v, ctx) => {
+  // Nothing is invented for a missing field (no default specialty, budget or duration): the request is refused with the missing field named.
+  if (!v.specialtyId?.trim() && !v.specialty?.trim()) ctx.addIssue({ code: 'custom', path: ['specialtyId'], message: 'اختر تخصص الطلب' });
+  if (typeof v.minBudget !== 'number' || !(v.minBudget > 0)) ctx.addIssue({ code: 'custom', path: ['minBudget'], message: 'أدخل ميزانية الطلب' });
+  else if (String(v.budgetType).toUpperCase() === 'RANGE' && (typeof v.maxBudget !== 'number' || v.maxBudget < v.minBudget)) ctx.addIssue({ code: 'custom', path: ['maxBudget'], message: 'الحد الأعلى للميزانية يجب ألا يقل عن الحد الأدنى' });
+  if (typeof v.expectedDurationDays !== 'number' || !Number.isInteger(v.expectedDurationDays) || v.expectedDurationDays < 1 || v.expectedDurationDays > 3650) ctx.addIssue({ code: 'custom', path: ['expectedDurationDays'], message: 'أدخل مدة التنفيذ المتوقعة بالأيام' });
 });
 
 export type CreateClientRequestDto = z.infer<typeof createClientRequestSchema>;

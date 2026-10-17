@@ -116,9 +116,11 @@ test('clearReferralCookie: removes waseet_ref_code with the SAME attributes it w
 
   assert.equal(res.statusCode, 200);
   assert.deepEqual(res.body, { success: true, data: { cleared: true } });
-  assert.equal(res.clearCalls.length, 1);
-  assert.equal(res.clearCalls[0].name, 'waseet_ref_code');
-  assert.deepEqual(res.clearCalls[0].options, { httpOnly: true, secure: true, sameSite: 'lax', path: '/' });
+  assert.equal(res.clearCalls.length, 2);
+  assert.deepEqual(res.clearCalls.map((c: any) => c.name), ['waseet_ref_code', 'waseet_ref_src']);
+  for (const call of res.clearCalls) {
+    assert.deepEqual(call.options, { httpOnly: true, secure: true, sameSite: 'lax', path: '/' });
+  }
 });
 
 test('clearReferralCookie: idempotent — with no cookie at all it is still a 200 no-op', async (t) => {

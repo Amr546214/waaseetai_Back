@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { affiliatesPublicService } from '../services/affiliates-public.service';
 import { AppError } from '../utils/app-error';
 import { getRequestCookie } from '../utils/request-cookie';
-import { REFERRAL_COOKIE_NAME, referralCookieBaseOptions } from '../utils/referral-cookie';
+import { REFERRAL_COOKIE_NAME, REFERRAL_SOURCE_COOKIE_NAME, referralCookieBaseOptions } from '../utils/referral-cookie';
 
 export class AffiliatesPublicController {
   public async resolve(req: Request, res: Response, next: NextFunction) {
@@ -56,6 +56,7 @@ export class AffiliatesPublicController {
   public async clearReferralCookie(_req: Request, res: Response, next: NextFunction) {
     try {
       res.clearCookie(REFERRAL_COOKIE_NAME, referralCookieBaseOptions());
+      res.clearCookie(REFERRAL_SOURCE_COOKIE_NAME, referralCookieBaseOptions());
       res.status(200).json({ success: true, data: { cleared: true } });
     } catch (error) {
       next(error);

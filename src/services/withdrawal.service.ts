@@ -7,10 +7,16 @@ import { PROVIDER_PAYPAL_REQUIRED_MESSAGE } from '../utils/provider-payout';
 import { AppError } from '../utils/app-error';
 import { CreateWithdrawalInput, CreateMarketerWithdrawalInput, RejectWithdrawalInput, ResolveWithdrawalInput } from '../dtos/withdrawal.dto';
 import { providerFinanceService } from './provider-finance.service';
+import { RESERVING_WITHDRAWAL_STATUSES } from '../utils/withdrawal-reservation';
 import { isRetryableTransactionConflict } from '../utils/prisma-retry.util';
 import { paypalEmailChangeService } from './paypal-email-change.service';
 import { paypalEmailFrozenError } from '../utils/paypal-email-messages';
 import { deriveWithdrawalReferenceId } from '../utils/withdrawal-reference.util';
+import { providerNotifications } from './provider-notifications.service';
+import { marketerNotifications } from './marketer-notifications.service';
+import { adminAudit } from './admin-audit.service';
+import { isPayoutAutomationEnabled } from '../utils/payout-automation.util';
+import { notifyAdmins } from './admin-notifications.service';
 
 export const MARKETER_PAYPAL_REQUIRED_MESSAGE = 'أضف بريد PayPal لاستلام الأرباح';
 
@@ -40,7 +46,7 @@ type ApprovalLedger =
   | { kind: 'PROVIDER_EARNINGS' }
   | { kind: 'AFFILIATE_COMMISSION'; affiliateId: string };
 
-function isProviderIdentity(user: { accountType: AccountType; roles: UserRole[] | null; activeRole: UserRole | null }): boolean {
+export function isProviderIdentity(user: { accountType: AccountType; roles: UserRole[] | null; activeRole: UserRole | null }): boolean {
   return user.accountType === AccountType.PROVIDER_INDIVIDUAL
     || user.accountType === AccountType.PROVIDER_COMPANY
     || (user.roles ?? []).includes(UserRole.PROVIDER)
@@ -141,7 +147,7 @@ export class WithdrawalService {
 
     for (let attempt = 1; attempt <= MAX_SERIALIZATION_RETRIES; attempt++) {
       try {
-        return await prisma.$transaction(async tx => {
+        const created = await prisma.$transaction(async tx => {
           // Reads via `tx`, not the global `prisma` — the released-earnings
           // computation must be part of the same serializable snapshot as
           // the outstanding-withdrawals read and the insert below, not a
@@ -152,7 +158,7 @@ export class WithdrawalService {
             throw new AppError(`المبلغ المطلوب يتجاوز رصيدك المتاح (${availableBalance} $)`, 400);
           }
           const outstandingWithdrawals = await tx.withdrawal.aggregate({
-            where: { userId, status: { in: [WithdrawalStatus.PENDING, WithdrawalStatus.APPROVED, WithdrawalStatus.PROCESSING, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
+            where: { userId, status: { in: [...RESERVING_WITHDRAWAL_STATUSES] as WithdrawalStatus[] } },
             _sum: { amount: true },
           });
           const outstandingAmount = outstandingWithdrawals._sum.amount || 0;
@@ -189,6 +195,9 @@ export class WithdrawalService {
             },
           });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        await providerNotifications.withdrawal(created.id, 'REQUESTED');
+        void notifyAdmins('WITHDRAWAL_REQUESTED', { id: created.id, ref: `${created.amount} $` });
+        return created;
       } catch (error) {
         // Bounded retry, and ONLY for a recognized transaction-conflict
         // shape (see isRetryableTransactionConflict) — every other error,
@@ -258,7 +267,7 @@ export class WithdrawalService {
 
     for (let attempt = 1; attempt <= MAX_SERIALIZATION_RETRIES; attempt++) {
       try {
-        return await prisma.$transaction(async tx => {
+        const created = await prisma.$transaction(async tx => {
           const approvedCommissions = await tx.commissionLog.aggregate({
             where: { affiliateId: affiliate.id, status: CommissionStatus.APPROVED },
             _sum: { amount: true },
@@ -289,6 +298,9 @@ export class WithdrawalService {
             },
           });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        await marketerNotifications.withdrawal(created.id, 'REQUESTED');
+        void notifyAdmins('WITHDRAWAL_REQUESTED', { id: created.id, ref: `${created.amount} $` });
+        return created;
       } catch (error) {
         if (isRetryableTransactionConflict(error) && attempt < MAX_SERIALIZATION_RETRIES) continue;
         throw error;
@@ -322,14 +334,21 @@ export class WithdrawalService {
     };
   }
 
-  async list(status?: WithdrawalStatus, page = 1, limit = 20) {
+  /** Admin list. `owner` narrows to provider or marketer (affiliate) withdrawals; `counts` is per status over the whole table. */
+  async list(status?: WithdrawalStatus, page = 1, limit = 20, owner?: 'provider' | 'affiliate') {
     const safePage = Math.max(1, page); const safeLimit = Math.min(100, Math.max(1, limit));
-    const where = status ? { status } : {};
-    const [items, total] = await Promise.all([
-      prisma.withdrawal.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { user: { select: { id: true, firstName: true, lastName: true, email: true, accountType: true } }, reviewedBy: { select: { id: true, firstName: true, lastName: true } } } }),
-      prisma.withdrawal.count({ where })
+    const ownerWhere = owner === 'affiliate' ? { user: { affiliateProfile: { isNot: null }, accountType: { notIn: [AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY] } } }
+      : owner === 'provider' ? { NOT: { user: { affiliateProfile: { isNot: null }, accountType: { notIn: [AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY] } } } } : {};
+    const where = { ...(status ? { status } : {}), ...ownerWhere };
+    const [items, total, grouped] = await Promise.all([
+      prisma.withdrawal.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { user: { select: { id: true, firstName: true, lastName: true, email: true, accountType: true, affiliateProfile: { select: { id: true } } } }, reviewedBy: { select: { id: true, firstName: true, lastName: true } } } }),
+      prisma.withdrawal.count({ where }),
+      prisma.withdrawal.groupBy({ by: ['status'], _sum: { amount: true }, _count: { _all: true } })
     ]);
-    return { items: items.map(withoutLegacyWithdrawalBankFields), pagination: { page: safePage, limit: safeLimit, total, pages: Math.ceil(total / safeLimit) } };
+    const counts: Record<string, { count: number; amount: number }> = {};
+    for (const g of grouped) counts[g.status] = { count: g._count._all, amount: g._sum.amount ?? 0 };
+    const pages = Math.ceil(total / safeLimit);
+    return { items: items.map(withoutLegacyWithdrawalBankFields), counts, pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages } };
   }
 
   async get(id: string) {
@@ -342,7 +361,11 @@ export class WithdrawalService {
     // same withdrawable-balance arithmetic approve() itself will use), so the
     // admin sees a real, non-invented figure instead of a fabricated one.
     const availableBalance = await this.getWithdrawableBalanceForDisplay(item.userId);
-    return { ...withoutLegacyWithdrawalBankFields(item), availableBalance };
+    // Latest payout attempts: the failure / acceptance history of the PayPal transfer (state "paid" / "failed" is read from these + the withdrawal status).
+    // Only read when payout automation is on: its tables are not guaranteed to exist in every environment.
+    const payoutAutomationEnabled = isPayoutAutomationEnabled();
+    const payoutAttempts = !payoutAutomationEnabled ? [] : await prisma.payoutAttempt.findMany({ where: { withdrawalId: item.id }, orderBy: { createdAt: 'desc' }, take: 10, select: { id: true, status: true, createdAt: true, updatedAt: true } });
+    return { ...withoutLegacyWithdrawalBankFields(item), availableBalance, payoutAttempts, payoutAutomationEnabled };
   }
 
   /**
@@ -425,7 +448,7 @@ export class WithdrawalService {
 
     for (let attempt = 1; attempt <= MAX_SERIALIZATION_RETRIES; attempt++) {
       try {
-        return await prisma.$transaction(async tx => {
+        const approved = await prisma.$transaction(async tx => {
           if (ledger.kind === 'AFFILIATE_COMMISSION') {
             // Marketer/affiliate commission withdrawal: the authoritative
             // balance is SUM(APPROVED CommissionLog.amount) for this
@@ -495,6 +518,10 @@ export class WithdrawalService {
           await tx.walletTransaction.create({ data: { userId: item.userId, type: 'WITHDRAWAL', amount: -item.amount, currency: item.currency, status: 'COMPLETED', paymentMethod: item.method, referenceId: item.referenceId, description: `اعتماد طلب السحب ${item.id}`, metadata: { withdrawalId: item.id } } });
           return tx.withdrawal.findUniqueOrThrow({ where: { id } });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        await adminAudit.record({ adminId, entity: 'WITHDRAWAL', entityId: id, eventType: 'WITHDRAWAL_APPROVED', title: 'اعتماد طلب سحب', summary: `اعتماد طلب سحب ${approved.amount} ${approved.currency}`, severity: 'WARNING', before: { status: WithdrawalStatus.PENDING }, after: { status: WithdrawalStatus.APPROVED }, details: { amount: approved.amount, currency: approved.currency, ownerId: approved.userId, ledger: ledger.kind, adminNote: input.adminNote ?? null } });
+        if (ledger.kind === 'PROVIDER_EARNINGS') await providerNotifications.withdrawal(id, 'APPROVED');
+        else await marketerNotifications.withdrawal(id, 'APPROVED');
+        return approved;
       } catch (error) {
         // Bounded retry, and ONLY for a recognized transaction-conflict
         // shape (see isRetryableTransactionConflict) — every other error,
@@ -537,7 +564,7 @@ export class WithdrawalService {
     // reject() currently has no related audit/side-effect write beyond this
     // transition itself, so there is nothing to sequence after it — the
     // transaction wrapper exists purely to make the read-then-write atomic.
-    return prisma.$transaction(async tx => {
+    const rejected = await prisma.$transaction(async tx => {
       const transition = await tx.withdrawal.updateMany({
         where: { id, status: WithdrawalStatus.PENDING },
         data: { status: WithdrawalStatus.REJECTED, reviewedById: adminId, rejectionReason: input.rejectionReason },
@@ -552,6 +579,10 @@ export class WithdrawalService {
       }
       return tx.withdrawal.findUniqueOrThrow({ where: { id } });
     });
+    await adminAudit.record({ adminId, entity: 'WITHDRAWAL', entityId: id, eventType: 'WITHDRAWAL_REJECTED', title: 'رفض طلب سحب', summary: `رفض طلب سحب ${rejected.amount} ${rejected.currency}`, severity: 'WARNING', before: { status: WithdrawalStatus.PENDING }, after: { status: WithdrawalStatus.REJECTED }, details: { amount: rejected.amount, currency: rejected.currency, ownerId: rejected.userId, rejectionReason: input.rejectionReason } });
+    await providerNotifications.withdrawal(id, 'REJECTED');
+    await marketerNotifications.withdrawal(id, 'REJECTED');
+    return rejected;
   }
 }
 

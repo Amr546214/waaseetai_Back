@@ -20,6 +20,8 @@ export const OtpPurpose = {
   LOGIN_EMAIL: 'LOGIN_EMAIL',
   // Provider PayPal payout email change (#33): the new address travels in context.newEmail; the code goes to the ACCOUNT EMAIL.
   PAYPAL_EMAIL_CHANGE: 'PAYPAL_EMAIL_CHANGE',
+  // Client's payment authorization for a contract BUDGET INCREASE (amendment): bound to context.amendmentId + context.amount; the code goes to the ACCOUNT EMAIL.
+  AMENDMENT_PAYMENT: 'AMENDMENT_PAYMENT',
 } as const;
 export type OtpPurposeValue = (typeof OtpPurpose)[keyof typeof OtpPurpose];
 

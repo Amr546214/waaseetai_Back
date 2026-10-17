@@ -72,6 +72,27 @@ class SessionService {
     return result;
   }
 
+  /** Ends every active session of the account except the current one ("terminate all others"); one audit entry records the count. */
+  async revokeOthers(userId: string, currentSessionId?: string) {
+    const result = await prisma.userSession.updateMany({
+      where: { userId, revokedAt: null, ...(currentSessionId ? { id: { not: currentSessionId } } : {}) },
+      data: { revokedAt: new Date() }
+    });
+    await accountAuditLogService.record({
+      userId,
+      eventType: 'SESSIONS_REVOKED_OTHERS',
+      category: 'SECURITY_CHANGE',
+      title: 'إنهاء جلسات الدخول الأخرى',
+      summary: 'أنهى المستخدم جميع جلسات الدخول الأخرى وأبقى الجلسة الحالية',
+      source: 'USER',
+      severity: 'WARNING',
+      status: 'COMPLETED',
+      details: { revokedSessions: result.count },
+      context: { sessionId: currentSessionId }
+    });
+    return { revoked: result.count };
+  }
+
   async logout(userId: string, token: string, context?: SessionContext) {
     const hash = this.tokenHash(token);
     await prisma.userSession.updateMany({

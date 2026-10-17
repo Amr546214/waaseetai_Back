@@ -1,7 +1,9 @@
 import { readAffiliateLevels, affiliateLevelInfo } from '../utils/affiliate-level-reader';
-import { UserStatus } from '@prisma/client';
+import { LogCategory, UserStatus } from '@prisma/client';
 import { prisma } from '../config/db';
-import { AppError } from '../utils/app-error';
+import { AppError, fieldError } from '../utils/app-error';
+import { accountAuditLogService } from './account-logs.service';
+import { disconnectUserSockets } from '../utils/socket-registry';
 
 // Implementation Batch 3, Part B — replaces the fully mock sa-brokers
 // frontend page with real AffiliateProfile/Referral/CommissionLog/
@@ -164,6 +166,28 @@ export class AdminBrokersService {
         referral: { select: { referredUser: { select: { firstName: true, lastName: true } } } },
       },
     });
+    // Real month-by-month totals of this broker's own commission rows (last 6 calendar months, current month included); nothing is projected.
+    const monthStart = new Date();
+    monthStart.setUTCDate(1);
+    monthStart.setUTCHours(0, 0, 0, 0);
+    monthStart.setUTCMonth(monthStart.getUTCMonth() - 5);
+    const monthRows = await prisma.commissionLog.findMany({
+      where: { affiliateId: affiliate.id, createdAt: { gte: monthStart } },
+      select: { amount: true, status: true, createdAt: true },
+    });
+    const monthlyCommissions = [] as { month: string; approved: number; pending: number }[];
+    for (let i = 0; i < 6; i++) {
+      const d = new Date(monthStart);
+      d.setUTCMonth(monthStart.getUTCMonth() + i);
+      monthlyCommissions.push({ month: d.toISOString().slice(0, 7), approved: 0, pending: 0 });
+    }
+    for (const row of monthRows) {
+      const bucket = monthlyCommissions.find((m) => m.month === new Date(row.createdAt).toISOString().slice(0, 7));
+      if (!bucket) continue;
+      if (row.status === 'APPROVED' || row.status === 'PAID') bucket.approved += row.amount;
+      else if (row.status === 'PENDING') bucket.pending += row.amount;
+    }
+
     const recentCommissions = recentCommissionRows.map((c) => ({
       type: c.type,
       amount: c.amount,
@@ -187,8 +211,41 @@ export class AdminBrokersService {
       channelMetrics: affiliate.channelMetrics,
       customLinks: affiliate.customLinks,
       recentCommissions,
+      monthlyCommissions,
       ...aggregates,
     };
+  }
+
+  // Suspend / reactivate a broker account. Admin-only (route gate), requires a written reason when suspending, closes live sockets, and leaves an ADMIN audit entry on the broker's own log.
+  async setBrokerStatus(adminId: string, userId: string, input: { status: string; reason?: string }) {
+    const status = String(input.status || '').toUpperCase();
+    if (status !== UserStatus.ACTIVE && status !== UserStatus.SUSPENDED) throw fieldError('status', 'الحالة المسموحة: نشط أو موقوف');
+    const reason = String(input.reason || '').trim();
+    if (status === UserStatus.SUSPENDED && reason.length < 5) throw fieldError('reason', 'سبب الإيقاف مطلوب');
+
+    const affiliate = await prisma.affiliateProfile.findUnique({ where: { userId }, select: { userId: true, user: { select: { status: true, accountType: true } } } });
+    if (!affiliate) throw new AppError('الوسيط غير موجود', 404);
+    if (affiliate.user.accountType === 'ADMIN' || affiliate.user.accountType === 'SUPER_ADMIN') throw new AppError('لا يمكن تغيير حالة حساب إداري من هنا', 403);
+    const before = affiliate.user.status;
+    if (before === status) return { id: userId, status };
+
+    await prisma.user.update({ where: { id: userId }, data: { status: status as UserStatus } });
+    if (status !== UserStatus.ACTIVE) {
+      try { await disconnectUserSockets(userId); } catch { /* the status change is already committed */ }
+    }
+    await accountAuditLogService.record({
+      userId,
+      eventType: status === UserStatus.SUSPENDED ? 'BROKER_SUSPENDED' : 'BROKER_REACTIVATED',
+      category: LogCategory.SYSTEM_AUDIT,
+      title: status === UserStatus.SUSPENDED ? 'إيقاف حساب الوسيط' : 'إعادة تفعيل حساب الوسيط',
+      summary: status === UserStatus.SUSPENDED ? `تم إيقاف حساب الوسيط من الإدارة: ${reason}` : 'تمت إعادة تفعيل حساب الوسيط من الإدارة',
+      source: 'ADMIN',
+      severity: status === UserStatus.SUSPENDED ? 'WARNING' : 'INFO',
+      before: { status: before },
+      after: { status },
+      details: { adminId, reason: reason || null },
+    });
+    return { id: userId, status };
   }
 }
 

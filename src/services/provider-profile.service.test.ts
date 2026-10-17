@@ -316,7 +316,7 @@ function createPublicProfileMockPrisma(t: TestContext, opts: {
     providerProfile: { findUnique: async () => ({ ...profileFixture }) },
     project: { count: async () => 0 },
     serviceCatalog: { findMany: async () => [] },
-    review: { findMany: async () => [], count: async () => 0 },
+    review: { findMany: async () => [], count: async () => 0, aggregate: async () => ({ _count: { _all: 0 }, _avg: { rating: null } }) },
     providerGamification: { findUnique: async () => null },
     // Never touched by getPublicProfile — present only so cross-role
     // isolation tests can assert callCount() === 0.
@@ -1162,7 +1162,8 @@ async function loadServiceForAiMetrics(t: TestContext, opts: {
     serviceCatalog: { findMany: async () => [] },
     review: {
       findMany: async () => [],
-      count: async (args: any) => args?.where?.rating ? (opts.fiveStar ?? 0) : (opts.reviewsCount ?? 5)
+      count: async (args: any) => args?.where?.rating ? (opts.fiveStar ?? 0) : (opts.reviewsCount ?? 5),
+      aggregate: async () => ({ _count: { _all: opts.reviewsCount ?? 5 }, _avg: { rating: 4.8 } })
     },
     dispute: { findMany: async () => opts.disputes ?? [] },
     providerGamification: { findUnique: async () => ({ avgRating: 4.8 }) }

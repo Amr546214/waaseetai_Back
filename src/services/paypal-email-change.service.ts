@@ -4,10 +4,11 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { logger } from '../config/logger';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
-import { otpSendThrottle, otpThrottleMessage } from '../utils/otp-send-throttle';
+import { otpSendThrottle, otpThrottleMessage, resendAvailableAtIso } from '../utils/otp-send-throttle';
 import { PAYPAL_EMAIL_OTP_REQUIRED_MESSAGE, PAYPAL_EMAIL_FROZEN_MESSAGE, PAYPAL_OTP_EMAIL_FAILED_MESSAGE, PAYPAL_OTP_EMAIL_FAILED_CODE, OTP_THROTTLED_CODE } from '../utils/paypal-email-messages';
 import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
 import { notificationService } from './notification.service';
+import { providerNotifications } from './provider-notifications.service';
 
 // Finance #33 — the provider's PayPal payout email changes only with a code sent to the ACCOUNT email, and after a change PayPal
 // withdrawals are frozen for 24 hours. No schema change: the pending address lives in the OTP row's JSON context
@@ -53,7 +54,7 @@ export class PaypalEmailChangeService {
 			throw Object.assign(new AppError(PAYPAL_OTP_EMAIL_FAILED_MESSAGE, 503), { code: PAYPAL_OTP_EMAIL_FAILED_CODE });
 		}
 		const mode: 'add' | 'change' = profile?.paypalPayoutEmail?.trim() ? 'change' : 'add';
-		return { emailSent: true as const, emailHint: maskEmail(user.email), expiresInSeconds: PAYPAL_EMAIL_CHANGE_EXPIRY_MS / 1000, mode };
+		return { emailSent: true as const, emailHint: maskEmail(user.email), expiresInSeconds: PAYPAL_EMAIL_CHANGE_EXPIRY_MS / 1000, expiresAt: new Date(Date.now() + PAYPAL_EMAIL_CHANGE_EXPIRY_MS).toISOString(), resendAvailableAt: resendAvailableAtIso(), mode };
 	}
 
 	/** Step 2: the right code writes the pending address, and the same transaction records the change that starts the 24-hour freeze. */
@@ -84,7 +85,7 @@ export class PaypalEmailChangeService {
 				summary: 'تغيير بريد PayPal مؤكَّد برمز التحقق (بدون مراجعة يدوية)', eventType: PAYPAL_EMAIL_CHANGED_EVENT, source: 'USER', severity: 'WARNING', status: LogStatus.COMPLETED
 			} });
 		});
-		try { await notificationService.createAndEmit({ userId, title: 'تم تغيير بريد PayPal', message: 'تم تغيير بريد PayPal لاستلام المدفوعات، وسحب PayPal مجمّد 24 ساعة. إن لم تكن أنت، تواصل مع الدعم فورًا.', actionUrl: '/' }); } catch { /* the change is already committed */ }
+		await providerNotifications.paypalEmailChanged(userId); // the change is already committed: a notification failure never undoes it
 		return { paypalPayoutEmail: newEmail, withdrawalsFrozenUntil: new Date(Date.now() + PAYPAL_EMAIL_FREEZE_MS).toISOString() };
 	}
 

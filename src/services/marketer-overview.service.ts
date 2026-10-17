@@ -1,3 +1,4 @@
+import { successfulReferralIds, effectiveReferralStatus, isRealDueCommission } from '../utils/referral-success';
 import { levelInfo } from '../utils/level-info';
 import { readAffiliateLevels, affiliateLevelInfo } from '../utils/affiliate-level-reader';
 import { SourceChannel, CommissionStatus, UserRole } from '@prisma/client';
@@ -7,6 +8,8 @@ import { generateReferralSlug, isReferralSlugConflict } from '../utils/slug.util
 import { initializeRoleState } from './account-management.service';
 import { metricSummaryEngine, type MetricSummaryEngine, type MetricSummaryResult } from './ai-features/metric-summary';
 import { MARKETER_INSIGHTS_AI_FEATURE, MARKETER_INSIGHTS_ALLOW, MARKETER_INSIGHTS_PATHS, MARKETER_INSIGHTS_SYSTEM, MARKETER_TREND_DAYS, buildMarketerInsightsMetrics, marketerHasEnoughData } from './ai-features/marketer-insights.service';
+
+const MAX_CUSTOM_LINKS = 20;
 
 export class MarketerOverviewService {
   /**
@@ -68,12 +71,27 @@ export class MarketerOverviewService {
   async getSummary(userId: string) {
     const affiliate = await this.getOrCreateProfile(userId);
 
-    const successfulReferrals = affiliate.referrals.length;
-    const totalCommissions = affiliate.commissionLogs.reduce((acc, log) => acc + log.amount, 0);
-    
-    // Average conversion rate across all channels
+
+    // Real aggregates only: every figure below is a count/sum over this affiliate's own rows (zeros when there are none).
+    const [referralRows, commissionGroups, successfulIds] = await Promise.all([
+      prisma.referral.findMany({ where: { affiliateId: affiliate.id }, select: { id: true, status: true } }),
+      prisma.commissionLog.groupBy({ by: ['status'], where: { affiliateId: affiliate.id }, _sum: { amount: true } }),
+      successfulReferralIds(prisma as any, affiliate.id),
+    ]);
+    // ONE definition (utils/referral-success.ts): successful = first due (APPROVED/PAID) commission from a real stage release. Status, counters and rates all derive from it.
+    const effective = referralRows.map((r) => effectiveReferralStatus(r.status, successfulIds.has(r.id)));
+    const referralCount = (status: string) => effective.filter((st) => st === status).length;
+    const successfulReferrals = successfulIds.size;
+    const commissionSum = (status: string) => commissionGroups.find((g) => g.status === status)?._sum.amount ?? 0;
+    const approvedCommissions = affiliate.commissionLogs.reduce((acc, log) => acc + log.amount, 0);
+    const paidCommissions = commissionSum('PAID');
+    const pendingCommissions = commissionSum('PENDING');
+    // Earned = approved + already paid out; pending commissions are reported separately and never counted as earned.
+    const totalCommissions = approvedCommissions + paidCommissions;
+
+    // Average conversion rate across all channels (capped: a sign-up without a recorded click must not push it past 100%).
     const totalVisitors = affiliate.channelMetrics.reduce((acc, metric) => acc + metric.visitors, 0);
-    const overallConversionRate = totalVisitors > 0 ? (successfulReferrals / totalVisitors) * 100 : 0;
+    const overallConversionRate = totalVisitors > 0 ? Math.min(100, (successfulReferrals / totalVisitors) * 100) : 0;
 
     // The level comes from the single ladder (numeric AffiliateProfile.level), never from the stale currentLevel label.
     const levels = await readAffiliateLevels([affiliate.id], prisma);
@@ -87,6 +105,13 @@ export class MarketerOverviewService {
       successfulReferrals,
       totalCommissions,
       overallConversionRate: parseFloat(overallConversionRate.toFixed(2)),
+      totalVisits: totalVisitors,
+      totalReferrals: referralRows.length,
+      pendingReferrals: referralCount('PENDING'),
+      qualifiedReferrals: referralCount('QUALIFIED'),
+      approvedCommissions,
+      paidCommissions,
+      pendingCommissions,
     };
   }
 
@@ -96,26 +121,35 @@ export class MarketerOverviewService {
   async getChannelPerformance(userId: string) {
     const affiliate = await this.getOrCreateProfile(userId);
 
-    const metrics = await prisma.affiliateChannelMetric.findMany({
-      where: { affiliateId: affiliate.id }
-    });
-
-    if (metrics.length === 0) {
-      return [];
-    }
-
-    return metrics.map(metric => ({
-      channel: metric.channel,
-      visitors: metric.visitors,
-      clients: metric.clients,
-      conversionPercentage: metric.conversionPercentage,
+    const [metrics, referralRows, successfulIds] = await Promise.all([
+      prisma.affiliateChannelMetric.findMany({ where: { affiliateId: affiliate.id } }),
+      prisma.referral.findMany({ where: { affiliateId: affiliate.id }, select: { id: true, sourceChannel: true } }),
+      successfulReferralIds(prisma as any, affiliate.id),
+    ]);
+    const referralGroups = [...new Set(referralRows.map((r) => r.sourceChannel))].map((channel) => ({
+      sourceChannel: channel,
+      registrations: referralRows.filter((r) => r.sourceChannel === channel).length,
+      successful: referralRows.filter((r) => r.sourceChannel === channel && successfulIds.has(r.id)).length
     }));
+
+    // visitors = recorded link clicks per channel; clients = users who registered through that channel (live count over the
+    // Referral rows, so it can never drift from the referrals list); conversion = clients / visitors, capped at 100%.
+    const channels = new Set<string>([...metrics.map((m) => m.channel), ...referralGroups.map((g) => g.sourceChannel)]);
+    return [...channels].map((channel) => {
+      const visitors = metrics.find((m) => m.channel === channel)?.visitors ?? 0;
+      const group = referralGroups.find((g) => g.sourceChannel === channel);
+      // clients = SUCCESSFUL referrals of the channel (the owner definition); registrations = everyone who signed up through it.
+      const clients = group?.successful ?? 0;
+      const conversionPercentage = visitors > 0 ? parseFloat(Math.min(100, (clients / visitors) * 100).toFixed(2)) : 0;
+      return { channel, visitors, clients, registrations: group?.registrations ?? 0, conversionPercentage };
+    });
   }
 
   /**
    * 3. Get Recent Commissions
    */
   async getRecentCommissions(userId: string, limit = 5) {
+    const safeLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 100) : 5;
     const affiliate = await this.getOrCreateProfile(userId);
 
     // Explicit select — deployment-safety fix. CommissionLog gained 6 new
@@ -128,7 +162,7 @@ export class MarketerOverviewService {
     const commissions = await prisma.commissionLog.findMany({
       where: { affiliateId: affiliate.id },
       orderBy: { createdAt: 'desc' },
-      take: limit,
+      take: safeLimit,
       select: {
         id: true,
         type: true,
@@ -137,14 +171,14 @@ export class MarketerOverviewService {
         status: true,
         createdAt: true,
         referral: {
-          select: { referredUser: { select: { id: true } } },
+          select: { referredUser: { select: { firstName: true } } },
         },
       },
     });
 
     return commissions.map(log => ({
       id: log.id,
-      source: log.referral?.referredUser ? `إحالة عميل جديد` : 'إحالة',
+      source: log.referral?.referredUser?.firstName ? `إحالة: ${log.referral.referredUser.firstName}` : 'إحالة',
       type: log.type,
       time: log.createdAt,
       amount: log.amount,
@@ -215,7 +249,7 @@ export class MarketerOverviewService {
           referredUser: { select: { firstName: true, lastName: true } },
           commissionLogs: {
             where: { status: { in: [CommissionStatus.APPROVED, CommissionStatus.PAID] } },
-            select: { amount: true }
+            select: { amount: true, type: true, sourceStageId: true, status: true }
           }
         }
       }),
@@ -226,7 +260,7 @@ export class MarketerOverviewService {
       items: referrals.map(r => ({
         referralId: r.id,
         displayName: `${r.referredUser.firstName || ''} ${r.referredUser.lastName || ''}`.trim() || 'مستخدم وسيط',
-        status: r.status,
+        status: effectiveReferralStatus(r.status, r.commissionLogs.some(isRealDueCommission)),
         joinedAt: r.createdAt,
         totalCommissionEarned: r.commissionLogs.reduce((sum, log) => sum + log.amount, 0)
       })),
@@ -294,7 +328,7 @@ export class MarketerOverviewService {
 
     return {
       primarySlug: referralSlug,
-      primaryLink: `https://waseet.ai/ref/${referralSlug}`,
+      primaryLink: `${(process.env.FRONTEND_URL || 'https://waseet.ai').replace(/\/$/, '')}/ref/${referralSlug}`,
       customLinks,
       settings: {
         notifyOnNewReferral,
@@ -306,19 +340,29 @@ export class MarketerOverviewService {
   /**
    * 6. Create Custom Campaign Link
    */
-  async createCustomLink(userId: string, data: { channelName: string; utmSource: string; customSlug?: string }) {
+  async createCustomLink(userId: string, data: { channelName: string; utmSource: string }) {
     const affiliate = await this.getOrCreateProfile(userId);
-    
-    const newLink = await prisma.referralCustomLink.create({
-      data: {
-        affiliateId: affiliate.id,
-        channelName: data.channelName,
-        utmSource: data.utmSource,
-        customSlug: data.customSlug,
-      }
+
+    const existing = await prisma.referralCustomLink.count({ where: { affiliateId: affiliate.id } });
+    if (existing >= MAX_CUSTOM_LINKS) throw new AppError(`الحد الأقصى لروابط القنوات هو ${MAX_CUSTOM_LINKS}`, 400);
+
+    const duplicate = await prisma.referralCustomLink.findFirst({ where: { affiliateId: affiliate.id, utmSource: data.utmSource }, select: { id: true } });
+    if (duplicate) throw new AppError('لديك رابط بنفس رمز المصدر مسبقاً', 409);
+
+    // customSlug is intentionally never written: the tracking link is only a label on the marketer's own referral code.
+    return prisma.referralCustomLink.create({
+      data: { affiliateId: affiliate.id, channelName: data.channelName, utmSource: data.utmSource },
     });
-    
-    return newLink;
+  }
+
+  /**
+   * 6b. Remove one of the caller's own channel links (ownership enforced by the affiliateId in the delete filter).
+   */
+  async deleteCustomLink(userId: string, linkId: string) {
+    const affiliate = await this.getOrCreateProfile(userId);
+    const result = await prisma.referralCustomLink.deleteMany({ where: { id: linkId, affiliateId: affiliate.id } });
+    if (result.count === 0) throw new AppError('الرابط غير موجود', 404);
+    return { id: linkId };
   }
 
   /**

@@ -10,6 +10,7 @@ import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
 import { computeClientCompletion, computeClientMissingItems } from '../utils/completion-calculators';
 import { logger } from '../config/logger';
 import { getClientLevelInfo } from './gamification.service';
+import { deliveryCompletedProject } from './settlement-state.service';
 import { providerProfileService } from './provider-profile.service';
 import { withoutLegacyAffiliateBankFields } from '../utils/affiliate-payout';
 import { withoutLegacyProviderBankFields } from '../utils/provider-payout';
@@ -174,6 +175,23 @@ export class ProfileService {
         logger.error(`[ProfileService] Could not read review status (userId=${userId})`, error);
       }
       currentProfileData.reviewStatus = reviewStatus;
+    }
+
+    // CLIENT: the profile header's real numbers (requests, completed projects, reviews providers left about the client). Never a placeholder; a failed read leaves them out.
+    if (user.activeRole === UserRole.CLIENT) {
+      try {
+        const [totalRequests, completedProjects, reviewAgg] = await Promise.all([
+          user.clientProfile ? prisma.clientRequest.count({ where: { clientProfileId: user.clientProfile.id } }) : Promise.resolve(0),
+          prisma.project.count({ where: deliveryCompletedProject({ clientId: userId }) }),
+          prisma.review.aggregate({ where: { clientId: userId, reviewerRole: 'PROVIDER' }, _avg: { rating: true }, _count: { _all: true } })
+        ]);
+        currentProfileData.totalRequests = totalRequests;
+        currentProfileData.completedProjects = completedProjects;
+        currentProfileData.reviewsCount = reviewAgg._count._all;
+        currentProfileData.humanRating = reviewAgg._count._all > 0 && reviewAgg._avg.rating != null ? Number(reviewAgg._avg.rating) : null;
+      } catch (error) {
+        logger.warn(`[ProfileService] Could not read the client profile numbers (userId=${userId}): ${(error as Error)?.message}`);
+      }
     }
 
     return {

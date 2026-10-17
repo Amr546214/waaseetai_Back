@@ -101,7 +101,7 @@ test('route: client-only, registered before the :id routes, compute-only (no wri
   const routes = readFileSync(new URL('../routes/client-requests.routes.ts', import.meta.url), 'utf8');
   const i = routes.indexOf("'/specialty-recommendations'");
   assert.ok(i > 0);
-  assert.match(routes.slice(i, i + 300), /authorize\(AccountType\.CLIENT_COMPANY, AccountType\.CLIENT_INDIVIDUAL\)/);
+  assert.match(routes.slice(i, i + 300), /authorizeActiveRole\(AccountType\.CLIENT_COMPANY, AccountType\.CLIENT_INDIVIDUAL\)/);
   assert.ok(i < routes.indexOf("router.get('/:id/workspace'"));
   const svc = readFileSync(new URL('./client-specialty-recommendation.service.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(svc, /\.(create|update|upsert|delete|createMany|updateMany|deleteMany)\(/);

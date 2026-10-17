@@ -15,7 +15,7 @@ test('PUT /:id/assigned-employee carries both authorize(CLIENT_COMPANY) and requ
   const start = source.indexOf("router.put(\n\t'/:id/assigned-employee'");
   assert.ok(start >= 0, 'expected the assigned-employee PUT route registration to exist');
   const block = source.slice(start, start + 300);
-  assert.ok(block.includes('authorize(AccountType.CLIENT_COMPANY)'), 'missing authorize(CLIENT_COMPANY) guard');
+  assert.ok(block.includes('authorizeActiveRole(AccountType.CLIENT_COMPANY)'), 'missing authorize(CLIENT_COMPANY) guard');
   assert.ok(block.includes('requireClientCompanyAccount'), 'missing requireClientCompanyAccount strict guard');
   assert.ok(block.includes('setProjectAssignedEmployee'), 'missing the real controller handler');
 });

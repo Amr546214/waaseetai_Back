@@ -28,6 +28,7 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
   // pre-existing test above, which never sets these, exercises zero
   // commission-engine reads/writes even when the flag happens to be on.
   disputeActive?: boolean;
+  freezeActive?: boolean;
   referrals?: any[];
   commissionCreateImpl?: (args: any) => any;
   escrowRow?: any;
@@ -80,7 +81,8 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
     dbAlreadyCompleted = true;
     return { count: 1 };
   });
-  const escrowUpdateManySpy = t.mock.fn(async () => ({ count: 1 }));
+  const order: string[] = [];
+  const escrowUpdateManySpy = t.mock.fn(async () => { order.push('escrow'); return { count: 1 }; });
   const clientRequestUpdateManySpy = t.mock.fn(async () => ({ count: 1 }));
   const projectUpdateSpy = t.mock.fn(async () => ({}));
   const stageDeliveryUpdateSpy = t.mock.fn(async () => ({}));
@@ -93,11 +95,14 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
   const disputeFindFirstSpy = t.mock.fn(async () => (opts.disputeActive ? { id: 'dispute-1' } : null));
   const referralFindManySpy = t.mock.fn(async () => opts.referrals ?? []);
   const commissionLogs: any[] = [];
+  const notificationCreates: any[] = [];
+  const completionEmails: any[] = [];
+  // The engine inserts with createMany + skipDuplicates (INSERT ... ON CONFLICT DO NOTHING): the spy keeps its historical name; count 1 = inserted.
   const commissionLogCreateSpy = t.mock.fn(async (args: any) => {
     if (opts.commissionCreateImpl) return opts.commissionCreateImpl(args);
-    const row = { id: `commission-${commissionLogs.length + 1}`, ...args.data };
+    const row = { ...args.data[0] };
     commissionLogs.push(row);
-    return row;
+    return { count: 1 };
   });
 
   const tx = {
@@ -118,7 +123,8 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
     // a legacy escrow by default (no fee-policy snapshot): released gross exactly as before. A test can pass `escrowRow` for a v2 escrow.
     escrow: { updateMany: escrowUpdateManySpy, findUnique: async () => opts.escrowRow ?? null },
     clientRequest: { updateMany: clientRequestUpdateManySpy },
-    contract: { updateMany: contractUpdateManySpy },
+    // the first updateMany is the amendment/stage-approval row LOCK (an updatedAt touch); only the completion guard is counted by the spy
+    contract: { updateMany: async (args: any) => ('updatedAt' in (args?.data ?? {}) ? { count: 1 } : (contractUpdateManySpy as any)(args)), findUnique: async () => ({ price: contract.price }) },
     accountAuditLog: { create: accountAuditLogCreateSpy },
     pointTransaction: {
       create: pointTransactionCreateSpy,
@@ -130,23 +136,28 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
     user: { update: userUpdateSpy },
     providerGamification: { upsert: gamificationUpsertSpy },
     gamificationRule: { upsert: gamificationRuleUpsertSpy },
-    notification: { create: async () => ({ id: 'notif-1' }) },
-    dispute: { findFirst: disputeFindFirstSpy },
-    referral: { findMany: referralFindManySpy },
-    commissionLog: { create: commissionLogCreateSpy }
+    notification: { create: async (args: any) => { notificationCreates.push(args.data); return { id: 'notif-1' }; } },
+    // dispute freeze: the approve path takes the contract row lock and counts OPEN/UNDER_REVIEW disputes (0 unless `freezeActive`)
+    $queryRaw: async () => { order.push('lock'); return [{ id: 'contract-1' }]; },
+    dispute: { findFirst: disputeFindFirstSpy, count: async () => { order.push('count'); return opts.freezeActive ? 1 : 0; } },
+    referral: { findMany: referralFindManySpy, updateMany: async () => ({ count: 1 }) },
+    commissionLog: { createMany: commissionLogCreateSpy }
   };
 
   const prismaMock = {
     contract: { findFirst: async () => ({ ...contract }) },
     projectStage: { findFirst: async () => ({ ...stage }) },
+    // the lifecycle pre-check (outside the transaction) reads the disputes too; the authoritative locked re-check stays inside the transaction (tx.dispute)
+    dispute: { findFirst: async () => null, count: async () => (opts.freezeActive ? 1 : 0) },
     $transaction: async (fn: any) => fn(tx)
   };
 
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   t.mock.module('./notification.service', { namedExports: { notificationService: { emitStored: async () => {} } } });
-  t.mock.module('./email.service', { namedExports: { emailService: { sendProjectCompletionRewardEmail: async () => {} } } });
+  t.mock.module('./email.service', { namedExports: { emailService: { sendProjectCompletionRewardEmail: async (args: any) => { completionEmails.push(args); } } } });
 
   return {
+    order, notificationCreates, completionEmails,
     pointTransactionCreateSpy, userUpdateSpy, gamificationUpsertSpy, gamificationRuleUpsertSpy,
     contractUpdateManySpy, escrowUpdateManySpy, clientRequestUpdateManySpy, projectUpdateSpy,
     stageDeliveryUpdateSpy, accountAuditLogCreateSpy, projectStageUpdateManySpy,
@@ -291,6 +302,15 @@ test('reviewDelivery (intermediate stage, approve): releases stage.amount exactl
   assert.equal(contractUpdateManySpy.mock.callCount(), 0);
 });
 
+test('reviewDelivery (intermediate stage, approve): the CLIENT is also told the stage was approved, linking to the project page', async (t) => {
+  const { projectProgressService, notificationCreates } = await loadProjectProgressServiceWithFixture(t, { nextStage: { id: 'stage-2' } });
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+  const mine = notificationCreates.find(n => n.userId === 'client-1');
+  assert.equal(mine.type, 'STAGE_APPROVED');
+  assert.match(mine.actionUrl, /^\/client-overview\/projects\/[^/]+$/);
+  assert.equal(notificationCreates.filter(n => n.userId === 'client-1').length, 1);
+});
+
 test('reviewDelivery (intermediate stage, approve): an already-approved stage cannot release again — the conditional updateMany matches zero rows and no financial write happens', async (t) => {
   const nextStage = { id: 'stage-2' };
   const { projectProgressService, escrowUpdateManySpy, stageDeliveryUpdateSpy, accountAuditLogCreateSpy, projectStageUpdateManySpy } =
@@ -412,7 +432,9 @@ test('regression: revision decision does not touch points/gamification at all', 
 // coverage (existing guards, verified not weakened by this change).
 // ============================================================================
 
-async function loadProjectProgressServiceWithCustomPrisma(t: TestContext, prismaMock: any) {
+async function loadProjectProgressServiceWithCustomPrisma(t: TestContext, prismaMockIn: any) {
+  // the lifecycle pre-check reads the disputes: no dispute unless the test brings its own delegate
+  const prismaMock = { dispute: { findFirst: async () => null, count: async () => 0, findMany: async () => [] }, ...prismaMockIn };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   t.mock.module('./notification.service', { namedExports: { notificationService: { emitStored: async () => {} } } });
   t.mock.module('./email.service', { namedExports: { emailService: { sendProjectCompletionRewardEmail: async () => {} } } });
@@ -450,7 +472,7 @@ test('reviewDelivery: the real owning client DOES pass the ownership check (proc
   // Fails later for an unrelated reason (no matching stage in this fixture) — proving ownership itself was NOT what rejected it.
   await assert.rejects(
     () => projectProgressService.reviewDelivery('real-client', 'contract-1', 'stage-1', 'approve'),
-    /لا يوجد تسليم جديد بانتظار المراجعة/
+    /غير موجودة ضمن هذا العقد/
   );
 });
 
@@ -469,7 +491,7 @@ test('reviewDelivery: an already-approved stage (not just a mid-transaction race
 
   await assert.rejects(
     () => projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve'),
-    /لا يوجد تسليم جديد بانتظار المراجعة/
+    /اعتُمدت هذه المرحلة مسبقًا/
   );
   // Rejected before the transaction (and therefore before any escrow/points write) ever runs.
   assert.equal(transactionSpy.mock.callCount(), 0);
@@ -490,7 +512,7 @@ function stageFixture(overrides: Partial<any> = {}) {
 
 test('getPendingReviewDeliveries: returns real project/stage/provider/file metadata for a genuinely reviewable stage', async (t) => {
   const findManySpy = t.mock.fn(async () => [stageFixture()]);
-  const projectProgressService = await loadProjectProgressServiceWithCustomPrisma(t, { projectStage: { findMany: findManySpy } });
+  const projectProgressService = await loadProjectProgressServiceWithCustomPrisma(t, { projectStage: { findMany: findManySpy }, dispute: { findMany: async () => [] } });
 
   const result = await projectProgressService.getPendingReviewDeliveries('client-1');
 
@@ -505,13 +527,15 @@ test('getPendingReviewDeliveries: returns real project/stage/provider/file metad
     submittedAt: new Date('2026-01-01T00:00:00Z'),
     providerName: 'نورة التصميم',
     filesCount: 2,
-    contractRef: 'CT-CONTRA'
+    contractRef: 'CT-CONTRA',
+    frozen: false,
+    approvalBlockedReason: null
   });
 });
 
 test('getPendingReviewDeliveries: filters the query to the calling client\'s ACTIVE contracts and SUBMITTED stages only (never another client\'s data)', async (t) => {
   const findManySpy = t.mock.fn(async () => []);
-  const projectProgressService = await loadProjectProgressServiceWithCustomPrisma(t, { projectStage: { findMany: findManySpy } });
+  const projectProgressService = await loadProjectProgressServiceWithCustomPrisma(t, { projectStage: { findMany: findManySpy }, dispute: { findMany: async () => [] } });
 
   await projectProgressService.getPendingReviewDeliveries('client-1');
 
@@ -524,7 +548,7 @@ test('getPendingReviewDeliveries: filters the query to the calling client\'s ACT
 
 test('getPendingReviewDeliveries: excludes a SUBMITTED stage whose latest delivery is no longer SUBMITTED (stale/already-decided)', async (t) => {
   const stale = stageFixture({ deliveries: [{ id: 'delivery-1', status: 'APPROVED', submittedAt: new Date(), files: [] }] });
-  const projectProgressService = await loadProjectProgressServiceWithCustomPrisma(t, { projectStage: { findMany: async () => [stale] } });
+  const projectProgressService = await loadProjectProgressServiceWithCustomPrisma(t, { projectStage: { findMany: async () => [stale] }, dispute: { findMany: async () => [] } });
 
   const result = await projectProgressService.getPendingReviewDeliveries('client-1');
 
@@ -533,7 +557,7 @@ test('getPendingReviewDeliveries: excludes a SUBMITTED stage whose latest delive
 
 test('getPendingReviewDeliveries: a stage with no delivery rows at all is excluded, not crashed on', async (t) => {
   const noDelivery = stageFixture({ deliveries: [] });
-  const projectProgressService = await loadProjectProgressServiceWithCustomPrisma(t, { projectStage: { findMany: async () => [noDelivery] } });
+  const projectProgressService = await loadProjectProgressServiceWithCustomPrisma(t, { projectStage: { findMany: async () => [noDelivery] }, dispute: { findMany: async () => [] } });
 
   const result = await projectProgressService.getPendingReviewDeliveries('client-1');
 
@@ -541,7 +565,7 @@ test('getPendingReviewDeliveries: a stage with no delivery rows at all is exclud
 });
 
 test('getPendingReviewDeliveries: no pending deliveries returns a clean empty array', async (t) => {
-  const projectProgressService = await loadProjectProgressServiceWithCustomPrisma(t, { projectStage: { findMany: async () => [] } });
+  const projectProgressService = await loadProjectProgressServiceWithCustomPrisma(t, { projectStage: { findMany: async () => [] }, dispute: { findMany: async () => [] } });
 
   const result = await projectProgressService.getPendingReviewDeliveries('client-1');
 
@@ -559,7 +583,7 @@ test('getPendingReviewDeliveries: a stage with delivery history (revision cycle)
     deliveries: [{ id: 'delivery-3', status: 'SUBMITTED', submittedAt: new Date('2026-02-01T00:00:00Z'), files: ['final-1.png', 'final-2.png', 'final-3.png'] }]
   });
   const findManySpy = t.mock.fn(async () => [latestOfMany]);
-  const projectProgressService = await loadProjectProgressServiceWithCustomPrisma(t, { projectStage: { findMany: findManySpy } });
+  const projectProgressService = await loadProjectProgressServiceWithCustomPrisma(t, { projectStage: { findMany: findManySpy }, dispute: { findMany: async () => [] } });
 
   const result = await projectProgressService.getPendingReviewDeliveries('client-1');
 
@@ -574,7 +598,7 @@ test('getPendingReviewDeliveries: a stage with delivery history (revision cycle)
 
 test('getPendingReviewDeliveries: the Prisma query requests only the newest delivery (orderBy submittedAt desc, take 1) — regression guard against stale delivery metadata', async (t) => {
   const findManySpy = t.mock.fn(async () => [stageFixture()]);
-  const projectProgressService = await loadProjectProgressServiceWithCustomPrisma(t, { projectStage: { findMany: findManySpy } });
+  const projectProgressService = await loadProjectProgressServiceWithCustomPrisma(t, { projectStage: { findMany: findManySpy }, dispute: { findMany: async () => [] } });
 
   const result = await projectProgressService.getPendingReviewDeliveries('client-1');
 
@@ -715,25 +739,21 @@ test('commission engine (flag enabled, self-referral defense-in-depth): an affil
   assert.equal(commissionLogCreateSpy.mock.callCount(), 0);
 });
 
-test('commission engine (flag enabled, duplicate/retried release event): a P2002 on the exactly-once dedup constraint is swallowed as a safe no-op, never a fatal error', async (t) => {
+test('commission engine (flag enabled, duplicate/retried release event): ON CONFLICT DO NOTHING (count 0) is a safe no-op that adds nothing and does not fail the approval', async (t) => {
   withCommissionEngineFlag(t, 'true');
-  const { Prisma } = await import('@prisma/client');
-  const duplicateError = new Prisma.PrismaClientKnownRequestError(
-    'duplicate key value violates unique constraint "commission_logs_affiliateId_referralId_type_sourceStageId_key"',
-    { code: 'P2002', clientVersion: 'test', meta: { target: ['commission_logs_affiliateId_referralId_type_sourceStageId_key'] } }
-  );
-  const { projectProgressService, commissionLogCreateSpy } = await loadProjectProgressServiceWithFixture(t, {
+  const { projectProgressService, commissionLogCreateSpy, getCommissionLogs } = await loadProjectProgressServiceWithFixture(t, {
     referrals: [referralFixture()],
-    commissionCreateImpl: () => { throw duplicateError; }
+    commissionCreateImpl: () => ({ count: 0 })
   });
 
   // Must resolve successfully (the duplicate is a safe no-op), not reject.
   await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
 
   assert.equal(commissionLogCreateSpy.mock.callCount(), 1);
+  assert.equal(getCommissionLogs().length, 0);
 });
 
-test('commission engine (flag enabled, an UNRELATED P2002): propagates unmodified, never silently swallowed as "already processed"', async (t) => {
+test('commission engine (flag enabled, any database error on the insert): propagates unmodified, never silently swallowed as "already processed"', async (t) => {
   withCommissionEngineFlag(t, 'true');
   const { Prisma } = await import('@prisma/client');
   const unrelatedError = new Prisma.PrismaClientKnownRequestError(
@@ -812,4 +832,75 @@ test('LEGACY final release: releasedAmount is set to the price exactly as before
   const { projectProgressService, escrowUpdateManySpy } = await loadProjectProgressServiceWithFixture(t, { escrowRow: { feePolicyVersion: null, releasedAmount: 900, amount: 1130 } });
   await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
   assert.deepEqual(escrowUpdateManySpy.mock.calls[0].arguments[0].data, { status: 'RELEASED', releasedAmount: 1000 });
+});
+
+// Provider notifications for the client's delivery decision: stored for the provider with a link that opens a real provider route.
+const PROVIDER_PROGRESS_URL = /^\/provider-overview\/projects\/active\/progress\/[^/]+$/;
+
+test('reviewDelivery (final stage, approve): the provider gets the completion notification and e-mail, both linking to the real progress route', async (t) => {
+  const { projectProgressService, notificationCreates, completionEmails } = await loadProjectProgressServiceWithFixture(t);
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+  // the provider's completion notification + the client's own "project completed" (rating link)
+  assert.equal(notificationCreates.length, 2);
+  assert.equal(notificationCreates[1].userId, 'client-1');
+  assert.equal(notificationCreates[1].type, 'PROJECT_COMPLETED');
+  assert.match(notificationCreates[1].actionUrl, /^\/client-overview\/projects\/[^/]+\/rating$/);
+  assert.equal(notificationCreates[0].userId, 'provider-1');
+  assert.equal(notificationCreates[0].type, 'PROJECT_COMPLETION_REWARD');
+  assert.equal(notificationCreates[0].category, 'PROJECTS');
+  assert.match(notificationCreates[0].actionUrl, PROVIDER_PROGRESS_URL);
+  assert.equal(completionEmails.length, 1);
+  assert.match(completionEmails[0].projectUrl, PROVIDER_PROGRESS_URL);
+});
+
+test('reviewDelivery (revision): the provider is told a revision is requested, with the client note and a real route', async (t) => {
+  const { projectProgressService, notificationCreates, completionEmails } = await loadProjectProgressServiceWithFixture(t);
+  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'revision', 'يرجى تعديل الألوان');
+  assert.equal(notificationCreates.length, 1);
+  assert.equal(notificationCreates[0].type, 'STAGE_REVIEW');
+  assert.equal(notificationCreates[0].title, 'مطلوب تعديل على التسليم');
+  assert.equal(notificationCreates[0].message, 'يرجى تعديل الألوان');
+  assert.match(notificationCreates[0].actionUrl, PROVIDER_PROGRESS_URL);
+  assert.equal(completionEmails.length, 0);
+});
+
+// ── Dispute freeze: stage approval (and the release / completion it triggers) is refused while a dispute is OPEN / UNDER_REVIEW ──
+
+for (const [label, nextStage] of [['final stage', undefined], ['intermediate stage', { id: 'stage-2', stepOrder: 2, status: 'PENDING' }]] as const) {
+  test(`dispute freeze (${label}): approve is refused with 423 and NOTHING is written — no stage change, no escrow release, no completion, no points, no audit`, async (t) => {
+    const fx = await loadProjectProgressServiceWithFixture(t, { freezeActive: true, nextStage });
+    await assert.rejects(
+      () => fx.projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve'),
+      (e: any) => e.statusCode === 423 && /نزاع/.test(e.message) && e.errors?.[0]?.code === 'PROJECT_FROZEN_BY_DISPUTE'
+    );
+    assert.equal(fx.projectStageUpdateManySpy.mock.callCount(), 0);
+    assert.equal(fx.stageDeliveryUpdateSpy.mock.callCount(), 0);
+    assert.equal(fx.escrowUpdateManySpy.mock.callCount(), 0);
+    assert.equal(fx.contractUpdateManySpy.mock.callCount(), 0);
+    assert.equal(fx.clientRequestUpdateManySpy.mock.callCount(), 0);
+    assert.equal(fx.projectUpdateSpy.mock.callCount(), 0);
+    assert.equal(fx.accountAuditLogCreateSpy.mock.callCount(), 0);
+    assert.equal(fx.pointTransactionCreateSpy.mock.callCount(), 0);
+    assert.equal(fx.notificationCreates.length, 0);
+  });
+}
+
+test('dispute freeze: the contract row is locked BEFORE the disputes are counted, and both happen before any money moves (race-safe order)', async (t) => {
+  const fx = await loadProjectProgressServiceWithFixture(t);
+  await fx.projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+  assert.deepEqual(fx.order.slice(0, 2), ['lock', 'count']);
+  assert.ok(fx.order.indexOf('escrow') > fx.order.indexOf('count'));
+});
+
+test('dispute freeze: with no active dispute the approval releases exactly as before (the freeze is invisible)', async (t) => {
+  const fx = await loadProjectProgressServiceWithFixture(t, { freezeActive: false });
+  await fx.projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
+  assert.equal(fx.escrowUpdateManySpy.mock.callCount(), 1);
+});
+
+test('dispute freeze: a REVISION request is not an approval and is still allowed while a dispute is open (no money moves)', async (t) => {
+  const fx = await loadProjectProgressServiceWithFixture(t, { freezeActive: true });
+  await fx.projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'revision', 'يرجى تعديل الألوان كما في الملاحظات');
+  assert.equal(fx.escrowUpdateManySpy.mock.callCount(), 0);
+  assert.ok(!fx.order.includes('lock'), 'a revision does not take the release lock');
 });

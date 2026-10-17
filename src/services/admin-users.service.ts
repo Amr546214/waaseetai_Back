@@ -1,8 +1,14 @@
 import { prisma } from '../config/db';
 import { disconnectUserSockets } from '../utils/socket-registry';
-import { AccountType, UserStatus, RiskLevel, Prisma } from '@prisma/client';
+import { AccountType, UserStatus, UserRole, RiskLevel, Prisma, LogCategory, LogStatus, ProjectStatus } from '@prisma/client';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
-import { withoutLegacyAffiliateBankFields } from '../utils/affiliate-payout';
+import { AppError, fieldError } from '../utils/app-error';
+import { AdminActor, adminAuditData } from './admin-audit';
+import { PROVIDER_LEVELS, levelColor } from '../config/levels.config';
+import { notificationService } from './notification.service';
+import { PROVIDER_ROUTES } from './provider-notifications.service';
+import { CLIENT_ROUTES } from './client-notifications.service';
+import { NotificationCategory } from '@prisma/client';
 
 export interface GetUsersQueryParams {
   page?: number;
@@ -87,6 +93,30 @@ function getTypeMeta(type: AccountType) {
       return { tab: 'all', label: 'مستخدم', bg: 'rgba(255,255,255,.10)', color: '#FFFFFF' };
   }
 }
+
+const ADMIN_TYPES: AccountType[] = [AccountType.ADMIN, AccountType.SUPER_ADMIN, AccountType.EMPLOYEE];
+const MANAGEABLE_ROLES: UserRole[] = [UserRole.CLIENT, UserRole.PROVIDER, UserRole.AFFILIATE];
+const ALL_ROLES: UserRole[] = [UserRole.CLIENT, UserRole.PROVIDER, UserRole.AFFILIATE, UserRole.ADMIN, UserRole.SUPER_ADMIN];
+const ROLE_LABELS: Record<UserRole, string> = { CLIENT: 'طالب خدمة', PROVIDER: 'مقدم خدمة', AFFILIATE: 'وسيط تسويقي', ADMIN: 'إداري', SUPER_ADMIN: 'مدير عام' };
+const ROLE_DESCRIPTIONS: Record<UserRole, string> = {
+  CLIENT: 'ينشئ الطلبات ويستلم العروض ويمول العقود', PROVIDER: 'يقدّم العروض وينفّذ المشاريع ويسحب أرباحه',
+  AFFILIATE: 'يحيل عملاء جدداً ويتتبع عمولاته', ADMIN: 'يدير المستخدمين والاعتمادات والطلبات والمالية من لوحة الإدارة', SUPER_ADMIN: 'كل صلاحيات الإداري، إضافة إلى حذف الحسابات نهائياً وتعديل حالة الحسابات الإدارية'
+};
+const ADMIN_CAPABILITIES = [
+  { key: 'admin-area', label: 'الدخول إلى لوحة الإدارة وإدارة المستخدمين والاعتمادات والطلبات والمالية', admin: true, superAdmin: true },
+  { key: 'user-status', label: 'إيقاف / تفعيل حساب مستخدم (مع سبب وسجل تدقيق)', admin: true, superAdmin: true },
+  { key: 'user-roles', label: 'تعديل أدوار مستخدم عادي (طالب / مقدم / وسيط)', admin: true, superAdmin: true },
+  { key: 'admin-account-status', label: 'تغيير حالة حساب إداري آخر', admin: false, superAdmin: true },
+  { key: 'user-delete', label: 'حذف حساب مستخدم نهائياً', admin: false, superAdmin: true }
+];
+function baseRoleOf(type: AccountType): UserRole | null {
+  if (type === AccountType.CLIENT_INDIVIDUAL || type === AccountType.CLIENT_COMPANY) return UserRole.CLIENT;
+  if (type === AccountType.PROVIDER_INDIVIDUAL || type === AccountType.PROVIDER_COMPANY) return UserRole.PROVIDER;
+  if (type === AccountType.MARKETING_BROKER) return UserRole.AFFILIATE;
+  return null;
+}
+
+const ACTIVE_PROJECT_STATUSES: ProjectStatus[] = [ProjectStatus.IN_PROGRESS, ProjectStatus.AWAITING_DELIVERY, ProjectStatus.PENDING_APPROVAL];
 
 const AVATAR_GRADIENTS = [
   'linear-gradient(135deg,#2BD4C7,#2B7FFF)',
@@ -302,31 +332,19 @@ export class AdminUsersService {
         skip,
         take: limit,
         orderBy: { [sortBy]: sortOrder },
+        // The list carries only what its columns show. The whole client / provider / affiliate profile rows (identity document refs, payout
+        // e-mail, bank data) are NOT forwarded: they are not needed here and the detail endpoint serves the reviewed fields.
         include: {
-          clientProfile: true,
-          providerProfile: {
-            include: {
-              providerSpecialties: {
-                include: {
-                  specialty: true
-                }
-              },
-              accreditationSubmissions: true
-            }
-          },
-          // Deployment-safety fix: `u.affiliateProfile` is forwarded as-is
-          // into this endpoint's response below, so the full pre-existing
-          // scalar shape is preserved via AFFILIATE_PROFILE_SAFE_SCALAR_SELECT
-          // — only the new, not-yet-migrated `level` column is excluded. A
-          // bare `true` here previously fetched AffiliateProfile's full
-          // default scalar set (including `level`), which would 500 this
-          // admin users list.
-          affiliateProfile: { select: AFFILIATE_PROFILE_SAFE_SCALAR_SELECT }
+          clientProfile: { select: { companyName: true, companySize: true, kycStatus: true, _count: { select: { clientRequests: true } } } },
+          providerProfile: { select: { headline: true, kycStatus: true, providerSpecialties: { select: { specialty: { select: { name: true, nameAr: true } } } } } },
+          // AffiliateProfile.level is not migrated everywhere yet: select the scalars explicitly (never the default field set).
+          affiliateProfile: { select: { currentLevel: true, _count: { select: { referrals: true } } } },
+          _count: { select: { clientProjects: { where: { status: { in: ACTIVE_PROJECT_STATUSES } } }, providerProjects: { where: { status: { in: ACTIVE_PROJECT_STATUSES } } } } }
         }
       })
     ]);
 
-    const formattedUsers = rawUsers.map((u, index) => {
+    const formattedUsers = rawUsers.map((u: any, index: number) => {
       const name = u.accountHolderName || `${u.firstName} ${u.lastName}`.trim() || u.email;
       const typeMeta = getTypeMeta(u.accountType);
       const av = name ? name.charAt(0).toUpperCase() : u.email.charAt(0).toUpperCase();
@@ -336,16 +354,22 @@ export class AdminUsersService {
 
       // Extract real specialty list if provider profile exists
       const specialtiesList = u.providerProfile?.providerSpecialties
-        ?.map(ps => ps.specialty?.nameAr || ps.specialty?.name || '')
+        ?.map((ps: any) => ps.specialty?.nameAr || ps.specialty?.name || '')
         .filter(Boolean)
         .join(', ') || u.providerProfile?.headline || '-';
 
+      const activeProjects = Number(u._count?.clientProjects ?? 0) + Number(u._count?.providerProjects ?? 0);
+
+      // Only fields that exist in the database are filled. A figure the platform does not record for this account type (budget, pending
+      // commission, team size, tasks) is null — the page shows "—", never an invented number.
       return {
         id: u.id,
         name,
         email: u.email,
         phoneNumber: u.phoneNumber,
         accountType: u.accountType,
+        roles: u.roles,
+        activeRole: u.activeRole,
         type: typeMeta.tab,
         typeLabel: typeMeta.label,
         typeBg: typeMeta.bg,
@@ -363,26 +387,24 @@ export class AdminUsersService {
         avBg,
         spending: formattedFinancial,
         revenue: formattedFinancial,
-        monthlyBudget: formattedFinancial,
-        pendingCommission: formattedFinancial,
+        monthlyBudget: null,
+        pendingCommission: null,
         rating: u.ratingAverage ? u.ratingAverage.toFixed(1) : '0.0',
         level: u.tierLevel || 'Bronze',
-        requests: u.completedProjectsCount || 0,
-        lastReq: formatRelativeTime(u.lastActiveAt),
-        manager: u.clientProfile?.companyName || `${u.firstName} ${u.lastName}`.trim() || '-',
-        teamSize: u.clientProfile?.companySize || '1',
+        requests: u.clientProfile?._count?.clientRequests ?? 0,
+        lastReq: null,
+        manager: u.clientProfile?.companyName || null,
+        teamSize: u.clientProfile?.companySize || null,
         specialty: u.providerProfile?.headline || specialtiesList,
-        providerCount: '1',
+        providerCount: null,
         specialties: specialtiesList,
-        activeProjects: String(u.completedProjectsCount || 0),
-        totalReferrals: String(u.affiliateProfile ? u.completedProjectsCount : 0),
-        affiliateLevel: '1',
+        activeProjects: String(activeProjects),
+        totalReferrals: String(u.affiliateProfile?._count?.referrals ?? 0),
+        affiliateLevel: u.affiliateProfile?.currentLevel ?? null,
         role: u.accountType === AccountType.SUPER_ADMIN ? 'Super Admin' : u.accountType === AccountType.ADMIN ? 'مدير' : 'موظف',
-        tasksCount: '0',
-        createdAt: u.createdAt,
-        clientProfile: u.clientProfile,
-        providerProfile: u.providerProfile,
-        affiliateProfile: withoutLegacyAffiliateBankFields(u.affiliateProfile)
+        tasksCount: null,
+        kycStatus: u.providerProfile?.kycStatus ?? u.clientProfile?.kycStatus ?? null,
+        createdAt: u.createdAt
       };
     });
 
@@ -397,26 +419,271 @@ export class AdminUsersService {
     };
   }
 
-  async updateUserStatus(id: string, status: string) {
-    const uppercaseStatus = status.toUpperCase() as UserStatus;
-    if (!Object.values(UserStatus).includes(uppercaseStatus)) {
-      throw new Error(`Invalid status: ${status}`);
-    }
+  /**
+   * An admin moves an account between ACTIVE and SUSPENDED / SUSPENDED_REVIEW. Rules (all enforced here, not only in the UI):
+   *  - the status must be one of those three; PENDING_VERIFICATION is the e-mail verification state and is never set or lifted by hand (409);
+   *  - an admin cannot change their own account, and only a SUPER_ADMIN can change another admin account;
+   *  - suspending needs a reason (kept in the audit row); the change and its audit row commit together;
+   *  - leaving ACTIVE cuts the account's live sockets (HTTP is already refused by requireActiveUser).
+   */
+  async updateUserStatus(actor: AdminActor, id: string, status: string, reason?: string) {
+    const next = String(status || '').toUpperCase() as UserStatus;
+    if (!([UserStatus.ACTIVE, UserStatus.SUSPENDED, UserStatus.SUSPENDED_REVIEW] as UserStatus[]).includes(next)) throw fieldError('status', 'حالة الحساب غير صحيحة');
+    const cleanReason = String(reason ?? '').trim().slice(0, 500);
+    if (next !== UserStatus.ACTIVE && cleanReason.length < 3) throw fieldError('reason', 'سبب الإيقاف مطلوب');
+    if (actor.id === id) throw new AppError('لا يمكنك تغيير حالة حسابك بنفسك', 403);
 
-    const updated = await prisma.user.update({
-      where: { id },
-      data: { status: uppercaseStatus }
+    const target = await prisma.user.findUnique({ where: { id }, select: { id: true, accountType: true, status: true } });
+    if (!target) throw new AppError('المستخدم غير موجود', 404);
+    if (ADMIN_TYPES.includes(target.accountType) && actor.accountType !== AccountType.SUPER_ADMIN) throw new AppError('تغيير حالة حساب إداري يتطلب صلاحية المدير العام', 403);
+    if (target.status === UserStatus.PENDING_VERIFICATION) throw new AppError('الحساب لم يؤكد بريده بعد، ولا يمكن تغيير حالته يدوياً', 409);
+    if (target.status === next) throw new AppError('الحساب بهذه الحالة بالفعل', 409);
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.user.update({ where: { id }, data: { status: next }, select: { id: true, status: true, accountType: true } });
+      await tx.accountAuditLog.create({ data: adminAuditData({
+        actor, userId: id, category: LogCategory.SECURITY_CHANGE,
+        eventType: next === UserStatus.ACTIVE ? 'ACCOUNT_ACTIVATED_BY_ADMIN' : 'ACCOUNT_SUSPENDED_BY_ADMIN',
+        title: next === UserStatus.ACTIVE ? 'تفعيل الحساب من الإدارة' : 'إيقاف الحساب من الإدارة',
+        summary: next === UserStatus.ACTIVE ? 'أعادت الإدارة تفعيل الحساب' : `أوقفت الإدارة الحساب: ${cleanReason}`,
+        status: LogStatus.COMPLETED, severity: next === UserStatus.ACTIVE ? 'INFO' : 'WARNING',
+        before: { status: target.status }, after: { status: next }, details: cleanReason ? { reason: cleanReason } : {}
+      }) });
+      return row;
     });
 
     // An account that leaves ACTIVE loses its live sockets right away (chat, assistant, assessments); HTTP is already refused by requireActiveUser.
-    if (uppercaseStatus !== UserStatus.ACTIVE) {
+    if (next !== UserStatus.ACTIVE) {
       try { await disconnectUserSockets(id); } catch { /* the status change is already committed */ }
     }
-
     return updated;
   }
 
-  async deleteUser(id: string) {
+  /**
+   * Replaces a non-admin user's roles. activeRole always ends up INSIDE roles: an explicit activeRole must be one of the new roles, and when the
+   * current activeRole is revoked it falls back to the account's own base role. The account's base role can never be removed; a role is only
+   * added when the account really has that role's profile (PROVIDER needs a provider profile, AFFILIATE an affiliate profile, CLIENT a client
+   * profile). ADMIN / SUPER_ADMIN roles are not handled here (admin team management), and an admin cannot edit their own roles.
+   */
+  async updateUserRoles(actor: AdminActor, id: string, input: { roles: string[]; activeRole?: string }) {
+    if (actor.id === id) throw new AppError('لا يمكنك تعديل أدوار حسابك بنفسك', 403);
+    const requested = Array.from(new Set((input.roles ?? []).map(r => String(r).toUpperCase())));
+    if (requested.length === 0) throw fieldError('roles', 'يجب أن يحتفظ الحساب بدور واحد على الأقل');
+    const invalid = requested.filter(r => !MANAGEABLE_ROLES.includes(r as UserRole));
+    if (invalid.length) throw fieldError('roles', `دور غير مسموح تعديله من هنا: ${invalid.join(', ')}`);
+    const roles = requested as UserRole[];
+
+    const target = await prisma.user.findUnique({
+      where: { id },
+      select: { id: true, accountType: true, roles: true, activeRole: true, clientProfile: { select: { id: true } }, providerProfile: { select: { id: true } }, affiliateProfile: { select: { id: true } } }
+    });
+    if (!target) throw new AppError('المستخدم غير موجود', 404);
+    if (ADMIN_TYPES.includes(target.accountType)) throw new AppError('أدوار الحسابات الإدارية تُدار من صفحة فريق الإدارة', 403);
+
+    const base = baseRoleOf(target.accountType);
+    if (base && !roles.includes(base)) throw fieldError('roles', 'لا يمكن إزالة الدور الأساسي للحساب');
+    const hasProfile: Record<string, boolean> = { CLIENT: !!target.clientProfile, PROVIDER: !!target.providerProfile, AFFILIATE: !!target.affiliateProfile };
+    const added = roles.filter(r => !target.roles.includes(r));
+    const missing = added.filter(r => !hasProfile[r]);
+    if (missing.length) throw new AppError(`لا يمكن إضافة دور بلا ملف مفعّل له: ${missing.join(', ')}`, 409);
+
+    let activeRole: UserRole;
+    if (input.activeRole !== undefined) {
+      const wanted = String(input.activeRole).toUpperCase() as UserRole;
+      if (!roles.includes(wanted)) throw fieldError('activeRole', 'الدور النشط يجب أن يكون ضمن الأدوار الجديدة');
+      activeRole = wanted;
+    } else {
+      activeRole = roles.includes(target.activeRole) ? target.activeRole : (base && roles.includes(base) ? base : roles[0]);
+    }
+
+    return prisma.$transaction(async (tx) => {
+      const row = await tx.user.update({ where: { id }, data: { roles, activeRole }, select: { id: true, roles: true, activeRole: true } });
+      await tx.accountAuditLog.create({ data: adminAuditData({
+        actor, userId: id, category: LogCategory.SECURITY_CHANGE, eventType: 'ROLES_CHANGED_BY_ADMIN', title: 'تعديل أدوار الحساب من الإدارة',
+        summary: `عدّلت الإدارة أدوار الحساب إلى: ${roles.join(', ')} (الدور النشط: ${activeRole})`, severity: 'WARNING',
+        before: { roles: target.roles, activeRole: target.activeRole }, after: { roles, activeRole }
+      }) });
+      return row;
+    });
+  }
+
+  /**
+   * An admin message to ONE user (a notification, delivered through the user's saved channels). Rules: not to admin accounts, not to yourself, 5-500
+   * chars. An optional context sends the user straight to the right page and is checked against the data (a REQUEST must be the user's own request,
+   * an OFFER must be the user's own offer); without a context the user lands on the home of their ACTIVE role. The send is audit-logged on the user.
+   */
+  async notifyUser(actor: AdminActor, id: string, input: { message: string; title?: string; context?: { type: 'REQUEST' | 'OFFER'; id: string } }) {
+    const message = String(input.message ?? '').trim();
+    if (message.length < 5 || message.length > 500) throw fieldError('message', 'نص الرسالة يجب أن يكون بين 5 و500 حرف');
+    const title = String(input.title ?? '').trim().slice(0, 80) || 'رسالة من إدارة وسيط';
+    if (actor.id === id) throw new AppError('لا يمكنك إرسال رسالة لنفسك', 403);
+    const target = await prisma.user.findUnique({ where: { id }, select: { id: true, accountType: true, activeRole: true } });
+    if (!target) throw new AppError('المستخدم غير موجود', 404);
+    if (ADMIN_TYPES.includes(target.accountType)) throw new AppError('لا يمكن مراسلة حساب إداري من هنا', 403);
+
+    let actionUrl: string;
+    let actionText = 'فتح لوحتي';
+    let category: NotificationCategory = NotificationCategory.ALL;
+    const ctx = input.context;
+    if (ctx?.type === 'REQUEST') {
+      const req = await prisma.clientRequest.findFirst({ where: { id: ctx.id, clientProfile: { userId: id } }, select: { id: true } });
+      if (!req) throw new AppError('هذا الطلب لا يخص المستخدم المحدد', 409);
+      actionUrl = CLIENT_ROUTES.request(req.id); actionText = 'عرض الطلب'; category = NotificationCategory.PROJECTS;
+    } else if (ctx?.type === 'OFFER') {
+      const offer = await prisma.projectProposal.findFirst({ where: { id: ctx.id, providerId: id }, select: { id: true } });
+      if (!offer) throw new AppError('هذا العرض لا يخص المستخدم المحدد', 409);
+      actionUrl = PROVIDER_ROUTES.offers; actionText = 'عرض عروضي'; category = NotificationCategory.OFFERS;
+    } else {
+      actionUrl = target.activeRole === UserRole.PROVIDER ? '/provider-overview' : target.activeRole === UserRole.AFFILIATE ? '/marketer-overview' : '/client-overview';
+    }
+
+    await prisma.accountAuditLog.create({ data: adminAuditData({
+      actor, userId: id, eventType: 'ADMIN_MESSAGE_SENT', title: 'رسالة من الإدارة', summary: `أرسلت الإدارة رسالة للمستخدم: ${message.slice(0, 200)}`,
+      details: { context: ctx ?? null }
+    }) });
+    await notificationService.createAndEmit({ userId: id, title, message, category, type: 'ADMIN_MESSAGE', actionUrl, actionText, metadata: { adminId: actor.id, ...(ctx ? { context: ctx } : {}) } });
+    return { sent: true, actionUrl };
+  }
+
+  /** Real role / account-type counts for the roles page (no invented members, no permission matrix beyond what the code enforces). */
+  async getRolesOverview() {
+    const [roleCounts, typeGroups, suspended] = await Promise.all([
+      Promise.all(ALL_ROLES.map(async role => ({ role, members: await prisma.user.count({ where: { roles: { has: role } } }) }))),
+      prisma.user.groupBy({ by: ['accountType'], _count: { _all: true } }),
+      prisma.user.count({ where: { status: { in: [UserStatus.SUSPENDED, UserStatus.SUSPENDED_REVIEW] } } })
+    ]);
+    return {
+      roles: roleCounts.map(r => ({ ...r, label: ROLE_LABELS[r.role], description: ROLE_DESCRIPTIONS[r.role] })),
+      accountTypes: typeGroups.map(g => ({ accountType: g.accountType, count: g._count._all })),
+      suspendedAccounts: suspended,
+      // What the code really enforces for the two admin tiers (see routes/admin-*.routes.ts and the delete-user route).
+      adminCapabilities: ADMIN_CAPABILITIES
+    };
+  }
+
+  /**
+   * The provider level ladder (names / thresholds / commission from config/levels.config.ts — the owner-approved table, read-only here) with the real
+   * number of providers at each level (ProviderGamification.currentLevelIndex) and the top providers by points. Nothing is simulated.
+   */
+  async getProviderLevels() {
+    const [groups, top, totalProviders] = await Promise.all([
+      prisma.providerGamification.groupBy({ by: ['currentLevelIndex'], _count: { _all: true } }),
+      prisma.providerGamification.findMany({
+        orderBy: [{ points: 'desc' }, { completedProjects: 'desc' }], take: 5,
+        select: { points: true, completedProjects: true, avgRating: true, currentLevelIndex: true, provider: { select: { id: true, firstName: true, lastName: true, email: true, totalGmvAmount: true, createdAt: true, providerProfile: { select: { headline: true } } } } }
+      }),
+      prisma.providerProfile.count()
+    ]);
+    const countBy = new Map<number, number>(groups.map(g => [g.currentLevelIndex, g._count._all]));
+    const tracked = groups.reduce((sum, g) => sum + g._count._all, 0);
+    return {
+      levels: PROVIDER_LEVELS.map(l => ({ level: l.level, name: l.name, commissionPercent: l.percent, color: levelColor('PROVIDER', l.level), thresholds: { points: l.minPoints, projects: l.minProjects, rating: l.minRating }, providers: countBy.get(l.level) ?? 0 })),
+      totalProviders,
+      providersWithoutLevelRow: Math.max(0, totalProviders - tracked),
+      topProviders: top.map((t: any) => ({
+        userId: t.provider?.id, name: `${t.provider?.firstName ?? ''} ${t.provider?.lastName ?? ''}`.trim() || t.provider?.email, specialty: t.provider?.providerProfile?.headline ?? null,
+        level: t.currentLevelIndex, levelName: PROVIDER_LEVELS[Math.min(15, Math.max(1, t.currentLevelIndex)) - 1].name, points: t.points, rating: t.avgRating, completedProjects: t.completedProjects,
+        revenue: Number(t.provider?.totalGmvAmount ?? 0), memberSince: t.provider?.createdAt ?? null
+      }))
+    };
+  }
+
+  /** One user's file for the admin: identity, roles, KYC, counters and the last records of every tab, all from the database. */
+  async getUserDetail(id: string) {
+    const user: any = await prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true, accountType: true, status: true, roles: true, activeRole: true, firstName: true, lastName: true, accountHolderName: true, email: true,
+        phoneNumber: true, city: true, idNumber: true, lastActiveAt: true, createdAt: true, totalGmvAmount: true, completedProjectsCount: true,
+        ratingAverage: true, tierLevel: true, walletBalance: true,
+        clientProfile: { select: { id: true, kycStatus: true, companyName: true } },
+        providerProfile: { select: { id: true, kycStatus: true, isVerified: true, headline: true } },
+        affiliateProfile: { select: { currentLevel: true, identityVerified: true } }
+      }
+    });
+    if (!user) throw new AppError('المستخدم غير موجود', 404);
+
+    const sessionAgg = prisma.userSession.findFirst({ where: { userId: id }, orderBy: { lastActiveAt: 'desc' }, select: { device: true, lastActiveAt: true } });
+    const [requests, orders, disputes, tickets, contracts, payments, audit, lastSession, releasedEscrows, onboarding] = await Promise.all([
+      user.clientProfile ? prisma.clientRequest.findMany({ where: { clientProfileId: user.clientProfile.id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, title: true, status: true, proposalsCount: true, createdAt: true } }) : Promise.resolve([]),
+      prisma.order.findMany({ where: { userId: id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, orderNumber: true, total: true, status: true, createdAt: true } }),
+      prisma.dispute.findMany({ where: { OR: [{ openedById: id }, { againstUserId: id }] }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, reason: true, status: true, openedById: true, createdAt: true } }),
+      prisma.supportTicket.findMany({ where: { userId: id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, ticketNumber: true, subject: true, status: true, createdAt: true } }),
+      prisma.contract.findMany({ where: { OR: [{ clientId: id }, { providerId: id }] }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, projectId: true, status: true, price: true, clientId: true, createdAt: true } }),
+      prisma.walletTransaction.findMany({ where: { userId: id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, type: true, amount: true, currency: true, status: true, createdAt: true } }),
+      prisma.accountAuditLog.findMany({ where: { userId: id }, orderBy: { occurredAt: 'desc' }, take: 15, select: { id: true, eventType: true, title: true, summary: true, source: true, severity: true, occurredAt: true } }),
+      sessionAgg,
+      user.providerProfile ? prisma.escrow.findMany({ where: { project: { providerId: id }, releasedAmount: { gt: 0 }, updatedAt: { gte: new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - 5, 1)) } }, select: { providerNetReleasedAmount: true, releasedAmount: true, feePolicyVersion: true, updatedAt: true } }) : Promise.resolve([]),
+      prisma.clientOnboarding.findUnique({ where: { userId: id }, select: { status: true } })
+    ]);
+
+    const name = user.accountHolderName || `${user.firstName} ${user.lastName}`.trim() || user.email;
+    const typeMeta = getTypeMeta(user.accountType);
+
+    const now = new Date();
+    const months = Array.from({ length: 6 }, (_, i) => { const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 5 + i, 1)); return { key: d.toISOString().slice(0, 7), label: d.toISOString().slice(0, 7), value: 0 }; });
+    for (const e of releasedEscrows as any[]) {
+      const row = months.find(m => m.key === new Date(e.updatedAt).toISOString().slice(0, 7));
+      if (row) row.value = Math.round((row.value + Number(e.feePolicyVersion ? e.providerNetReleasedAmount : e.releasedAmount)) * 100) / 100;
+    }
+    const revenueHistory = months.map(({ label, value }) => ({ label, value })).filter(() => user.providerProfile).filter(m => (releasedEscrows as any[]).length > 0 || m.value > 0);
+
+    return {
+      id: user.id,
+      name,
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      accountType: user.accountType,
+      type: typeMeta.tab, typeLabel: typeMeta.label, typeBg: typeMeta.bg, typeColor: typeMeta.color,
+      status: user.status.toLowerCase(),
+      statusOriginal: user.status,
+      roles: user.roles,
+      activeRole: user.activeRole,
+      av: name.charAt(0).toUpperCase(),
+      avBg: AVATAR_GRADIENTS[0],
+      rating: user.ratingAverage ? user.ratingAverage.toFixed(1) : null,
+      level: user.tierLevel || null,
+      createdAt: user.createdAt,
+      lastActiveAt: user.lastActiveAt,
+      kyc: {
+        client: user.clientProfile?.kycStatus ?? null,
+        clientOnboarding: onboarding?.status ?? null,
+        provider: user.providerProfile?.kycStatus ?? null,
+        affiliateIdentityVerified: user.affiliateProfile ? !!user.affiliateProfile.identityVerified : null
+      },
+      kpis: {
+        reports: tickets.length,
+        disputes: disputes.length,
+        avgRating: user.ratingAverage ? Math.round(user.ratingAverage * 10) / 10 : null,
+        totalRevenue: `${Number(user.totalGmvAmount || 0).toLocaleString('en-US')} $`,
+        completedProjects: user.completedProjectsCount || 0,
+        walletBalance: Number(user.walletBalance || 0)
+      },
+      revenueHistory,
+      personalInfo: {
+        fullName: name, email: user.email, phoneNumber: user.phoneNumber ?? undefined, city: user.city ?? undefined,
+        device: lastSession?.device ?? undefined,
+        nationalIdLast4: user.idNumber ? String(user.idNumber).slice(-4) : undefined,
+        nationalIdVerified: user.clientProfile?.kycStatus === 'VERIFIED' || user.providerProfile?.kycStatus === 'VERIFIED',
+        registeredAt: user.createdAt?.toISOString?.() ?? String(user.createdAt),
+        lastLoginAt: lastSession?.lastActiveAt ? new Date(lastSession.lastActiveAt).toISOString() : undefined
+      },
+      tabs: {
+        requests, purchases: orders, disputes, reports: tickets, contracts: contracts.map(c => ({ ...c, role: c.clientId === id ? 'CLIENT' : 'PROVIDER' })), payments
+      },
+      audit
+    };
+  }
+
+  /**
+   * Permanent deletion (SUPER_ADMIN only, enforced by the route). Safeguards: never your own account, never an admin account. The audit row is
+   * written on the ACTOR's own log (the deleted account's logs go with it) and commits with the deletion.
+   */
+  async deleteUser(id: string, actor?: AdminActor) {
+    if (actor && actor.id === id) throw new AppError('لا يمكنك حذف حسابك بنفسك', 403);
+    const target = await prisma.user.findUnique({ where: { id }, select: { id: true, accountType: true, status: true } });
+    if (!target) throw new AppError('المستخدم غير موجود', 404);
+    if (ADMIN_TYPES.includes(target.accountType)) throw new AppError('لا يمكن حذف حساب إداري من هنا', 403);
     return await prisma.$transaction(async (tx) => {
       // 1. Unassign provider from any projects to prevent constraint errors
       await tx.project.updateMany({
@@ -443,6 +710,13 @@ export class AdminUsersService {
       const deletedUser = await tx.user.delete({
         where: { id }
       });
+
+      if (actor) {
+        await tx.accountAuditLog.create({ data: adminAuditData({
+          actor, userId: actor.id, category: LogCategory.SECURITY_CHANGE, eventType: 'USER_DELETED_BY_ADMIN', title: 'حذف حساب مستخدم نهائياً',
+          summary: `حذف المدير العام الحساب ${id} نهائياً`, severity: 'CRITICAL', before: { accountType: target.accountType, status: target.status }, details: { deletedUserId: id }
+        }) });
+      }
 
       return deletedUser;
     });

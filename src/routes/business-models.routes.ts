@@ -1,14 +1,17 @@
+import { requireApprovedProvider } from '../middlewares/provider-access.middleware';
 import { Router } from 'express';
 import { MarketplaceServiceController } from '../controllers/marketplace-service.controller';
-import { authenticate, requireActiveUser, authorize } from '../middlewares/auth.middleware';
+import { authenticate, requireActiveUser, authorize , authorizeActiveRole } from '../middlewares/auth.middleware';
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { AccountType } from '@prisma/client';
 
 const router = Router();
 const controller = new MarketplaceServiceController();
 
-const providerOnly = authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
+const providerOnly = authorizeActiveRole(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY);
 
+// Market-model management is operational: an unapproved individual provider gets 403 (admins and other roles pass through).
+router.use(authenticate, requireActiveUser, requireApprovedProvider);
 router.get('/my-market-models', authenticate, requireActiveUser, providerOnly, controller.getMyMarketModels.bind(controller));
 router.post('/re-audit-all', authenticate, requireActiveUser, authorize(AccountType.SUPER_ADMIN, AccountType.ADMIN), aiLimiter, controller.reAuditAllPendingModels.bind(controller));
 router.post('/publish', authenticate, requireActiveUser, providerOnly, controller.publishBusinessModel.bind(controller));

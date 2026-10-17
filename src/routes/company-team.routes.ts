@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { AccountType } from '@prisma/client';
-import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { authenticate, authorize, requireActiveUser , authorizeActiveRole } from '../middlewares/auth.middleware';
 import { AppError } from '../utils/app-error';
 import { createTeamMember, deleteTeamMember, getTeamMember, listTeamMembers, updateTeamMember } from '../controllers/company-team.controller';
 
@@ -21,7 +21,7 @@ const requireCompanyAccount = (req: Request, _res: Response, next: NextFunction)
 
 const router = Router();
 
-router.use(authenticate, requireActiveUser, authorize(AccountType.PROVIDER_COMPANY), requireCompanyAccount);
+router.use(authenticate, requireActiveUser, authorizeActiveRole(AccountType.PROVIDER_COMPANY), requireCompanyAccount);
 
 router.post('/', createTeamMember);
 router.get('/', listTeamMembers);

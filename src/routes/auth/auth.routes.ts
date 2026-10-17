@@ -2,13 +2,13 @@ import { Router } from 'express';
 import { authController } from '../../controllers/auth.controller';
 import { validateRequest } from '../../middlewares/validation.middleware';
 import { registerSchema, verifyOtpSchema, loginSchema, resendOtpSchema, googleAuthSchema, forgotPasswordSchema, verifyResetCodeSchema, resetPasswordSchema, verifyLoginOtpSchema, resendLoginOtpSchema } from './auth.schema';
-import { authLimiter, otpSendLimiter, otpSendGate, otpVerifyLimiters, normalizeOtpIdentifier } from '../../middlewares/rate-limit.middleware';
+import { loginLimiters, otpSendLimiter, otpSendGate, otpVerifyLimiters, normalizeOtpIdentifier } from '../../middlewares/rate-limit.middleware';
 
 // Who is receiving the code, for the send limiter (sending is limited per recipient and per IP, apart from authLimiter).
 // The key is normalised (trim + lower-case) so different spellings of one account share one bucket, and the limiters are mounted AFTER the
 // schema validation so malformed requests never consume (or fill) a bucket.
 const byEmail = (req: { body?: { email?: unknown } }) => normalizeOtpIdentifier(req.body?.email);
-const byUserId = (req: { body?: { userId?: unknown } }) => { const id = normalizeOtpIdentifier(req.body?.userId); return id ? `user:${id}` : undefined; };
+const byUserId = (req: { body?: { userId?: unknown; email?: unknown } }) => { const id = normalizeOtpIdentifier(req.body?.userId); return id ? `user:${id}` : byEmail(req); };
 import { authenticate, authorize, requireActiveUser } from '../../middlewares/auth.middleware';
 import { AccountType } from '@prisma/client';
 import { memoryUpload } from '../../utils/cloudinary-storage';
@@ -36,7 +36,7 @@ router.post(
 router.post(
   '/verify-otp',
   validateRequest(verifyOtpSchema),
-  ...otpVerifyLimiters((req) => req.body?.userId),
+  ...otpVerifyLimiters((req) => req.body?.userId ?? req.body?.email),
   authController.verifyOtp
 );
 
@@ -70,29 +70,29 @@ router.post(
 
 router.post(
   '/login',
-  authLimiter,
   validateRequest(loginSchema),
+  ...loginLimiters((req) => req.body?.email),
   authController.login
 );
 
 router.post(
   '/google',
-  authLimiter,
   validateRequest(googleAuthSchema),
+  ...loginLimiters(() => undefined, 'google'),
   authController.googleAuth
 );
 
 router.post(
   '/login/verify-otp',
-  authLimiter,
   validateRequest(verifyLoginOtpSchema),
+  ...loginLimiters((req) => req.body?.userId, 'login_step'),
   authController.verifyLoginOtp
 );
 
 router.post(
   '/login/resend-otp',
-  authLimiter,
   validateRequest(resendLoginOtpSchema),
+  ...loginLimiters((req) => req.body?.userId, 'login_step'),
   authController.resendLoginOtp
 );
 

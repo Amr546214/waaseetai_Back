@@ -12,8 +12,9 @@ import { withoutLegacyProviderBankFields } from '../utils/provider-payout';
 import { MARKET_VISIBLE_WHERE } from '../utils/market-visibility';
 import { Prisma, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
+import { publicProviderReviewsWhere } from './review-visibility';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
-import { sanitizeText } from '../utils/sanitize-text';
+import { sanitizeText, isBlankText } from '../utils/sanitize-text';
 import { isAcceptableKycDocumentValue } from '../utils/kyc-value-guard';
 import { assertVerifiedIdentityUnchanged } from '../utils/kyc-identity-guard';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
@@ -37,6 +38,7 @@ import { deriveReviewEntry, alreadyPendingDetails, NOT_SUBMITTED, type ReviewEnt
 import { initializeRoleState } from './account-management.service';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 import { buildAssessmentDetails, buildCompanySummary, withSpecialtyName } from './provider-public-profile.helpers';
+import { deliveryCompletedProject } from './settlement-state.service';
 
 // Cached values are always a real validated WaseetAI result, keyed by the
 // provider plus the exact counts sent (so any change in real data busts it).
@@ -80,8 +82,10 @@ export class ProviderProfileService {
   async changePassword(userId: string, currentPassword: string, newPassword: string, auditContext?: AuditContext) {
     if (!currentPassword || !newPassword) throw new Error('PASSWORD_FIELDS_REQUIRED');
     // A client's password changes only through an admin-reviewed request (POST /api/profiles/password-change-request): this direct path must not bypass it.
-    const roleRow = await prisma.user.findUnique({ where: { id: userId }, select: { activeRole: true } });
-    if (roleRow?.activeRole === 'CLIENT') throw new Error('تغيير كلمة مرور طالب الخدمة يتم بطلب مراجعة من صفحة الأمان في الملف الشخصي');
+    const roleRow = await prisma.user.findUnique({ where: { id: userId }, select: { activeRole: true, accountType: true } });
+    // Admin / super-admin accounts change their own password directly (their default activeRole may be CLIENT, but they have no admin review queue for it).
+    const isAdminAccount = roleRow?.accountType === 'ADMIN' || roleRow?.accountType === 'SUPER_ADMIN';
+    if (roleRow?.activeRole === 'CLIENT' && !isAdminAccount) throw new Error('تغيير كلمة مرور طالب الخدمة يتم بطلب مراجعة من صفحة الأمان في الملف الشخصي');
     if (newPassword.length < 8 || newPassword.length > 72) throw new Error('WEAK_PASSWORD');
     const characterGroups = [/[a-z]/.test(newPassword), /[A-Z]/.test(newPassword), /\d/.test(newPassword), /[^A-Za-z0-9]/.test(newPassword)].filter(Boolean).length;
     if (characterGroups < 3) throw new Error('WEAK_PASSWORD');
@@ -232,12 +236,12 @@ export class ProviderProfileService {
 	 *   If ANY completed project lacks that timing evidence, returns null.
 	 * - totalClientsCount / repeatClientsCount: distinct clientId over completed
 	 *   projects / those with >= 2 completed projects.
-	 * - fiveStarReviewsCount / totalReviewsCount: CLIENT reviews with rating >= 5 / all.
+	 * - fiveStarReviewsCount / totalReviewsCount: PUBLISHED CLIENT reviews with rating >= 5 / all published (these metrics are shown publicly).
 	 * - disputedProjectsCount: distinct completed projects having >= 1 Dispute row.
 	 */
 	private async derivePerformanceCounts(providerId: string, reviewsCount: number) {
 		const completed = await prisma.project.findMany({
-			where: { providerId, status: 'COMPLETED' },
+			where: deliveryCompletedProject({ providerId }),
 			select: {
 				id: true, clientId: true,
 				contract: { select: { signedAt: true, durationDays: true, stages: { select: { status: true, approvedAt: true } } } }
@@ -262,7 +266,7 @@ export class ProviderProfileService {
 			select: { projectId: true }
 		});
 		const disputedProjectsCount = new Set(disputes.map(d => d.projectId)).size;
-		const fiveStarReviewsCount = await prisma.review.count({ where: { providerId, reviewerRole: 'CLIENT', rating: { gte: 5 } } });
+		const fiveStarReviewsCount = await prisma.review.count({ where: { ...publicProviderReviewsWhere(providerId), rating: { gte: 5 } } });
 
 		return {
 			totalProjectsCompleted: completed.length,
@@ -416,7 +420,7 @@ export class ProviderProfileService {
 		}
 
 		const completedProjectsCount = await prisma.project.count({
-			where: { providerId, status: 'COMPLETED' }
+			where: deliveryCompletedProject({ providerId })
 		});
 
 		const publishedServices = await prisma.serviceCatalog.findMany({
@@ -431,26 +435,44 @@ export class ProviderProfileService {
 			? await prisma.companyTeamMember.count({ where: { companyOwnerId: providerId, status: 'ACTIVE' } })
 			: 0;
 
-		const reviews = await prisma.review.findMany({
-			where: { providerId, reviewerRole: 'CLIENT' },
+		// PUBLIC reviews only: an unpublished review (isPublic = false) never reaches this payload, nor the public count / average below.
+		const publicWhere = publicProviderReviewsWhere(providerId);
+		const publicReviewRows = await prisma.review.findMany({
+			where: publicWhere,
 			orderBy: { createdAt: 'desc' },
 			take: 20,
-			include: {
+			// Public payload: ONLY what the page shows (the review id for list keys, stars, text, tags, date, the reviewer's name/avatar and the project title).
+			// The internal ids (providerId / clientId / projectId / serviceId / clientRequestId / stageId) and the reviewer role are never sent to visitors.
+			select: {
+				id: true, rating: true, comment: true, tags: true, createdAt: true,
 				client: { select: { firstName: true, lastName: true, avatarUrl: true } },
-				project: { select: { title: true } }
+				project: { select: { title: true } },
+				stage: { select: { title: true } }
 			}
 		});
-		const reviewsCount = await prisma.review.count({ where: { providerId, reviewerRole: 'CLIENT' } });
+		// A stage review carries the stage title; `kind` labels the row (project review vs stage review). No stage id is sent.
+		const reviews = publicReviewRows.map(({ stage, ...r }) => ({ ...r, kind: stage ? 'STAGE' as const : 'PROJECT' as const, stageTitle: stage?.title ?? null }));
+		const [publicAgg, internalCount, internalAgg, unpublishedRows] = await Promise.all([
+			prisma.review.aggregate({ where: publicWhere, _count: { _all: true }, _avg: { rating: true } }),
+			viewer.isOwner ? prisma.review.count({ where: { providerId, reviewerRole: 'CLIENT' } }) : Promise.resolve(0),
+			viewer.isOwner ? prisma.review.aggregate({ where: { providerId, reviewerRole: 'CLIENT' }, _avg: { rating: true } }) : Promise.resolve(null),
+			// the provider may read the reviews clients chose NOT to publish (visible to both parties); visitors never run this query
+			viewer.isOwner ? prisma.review.findMany({ where: { providerId, reviewerRole: 'CLIENT', isPublic: false }, orderBy: { createdAt: 'desc' }, take: 50, select: { id: true, rating: true, comment: true, tags: true, createdAt: true, client: { select: { firstName: true, lastName: true } }, project: { select: { title: true } }, stage: { select: { title: true } } } }) : Promise.resolve([])
+		]);
+		const reviewsCount = publicAgg._count._all;
 
 		const gamification = await prisma.providerGamification.findUnique({
 			where: { providerId }
 		});
 
-		const completedTasks = gamification?.completedProjects || completedProjectsCount;
+		// derived from the delivery-completed projects (settled ones excluded); the stored gamification counter may predate that rule, so it is never preferred
+		const completedTasks = completedProjectsCount;
 
 		// Rating is usually out of 5 in the DB. We need to convert it to a percentage (out of 100) for the UI.
-		const baseRating = reviewsCount > 0 ? (gamification?.avgRating || profile.user?.ratingAverage || profile.rating || 0) : 0;
-		const clientRating = baseRating <= 5 ? Math.round((baseRating / 5) * 100) : baseRating;
+		// PUBLIC average = the mean of the published reviews only (never gamification.avgRating / User.ratingAverage, which count every review for the level gate).
+		const baseRating = reviewsCount > 0 ? Number(publicAgg._avg.rating || 0) : 0;
+		// One decimal on the percentage, so the stars/average the pages derive from it (clientRating / 20) are not off by a rounding step (4.33 of 5 was shown as 4.4).
+		const clientRating = baseRating <= 5 ? Math.round((baseRating / 5) * 1000) / 10 : baseRating;
 
 		const points = gamification?.points || 0;
 		// Phase 3C bug fix: derive the level title via the same pure, already-tested
@@ -622,6 +644,8 @@ export class ProviderProfileService {
 			services: publishedServices.map(withSpecialtyName),
 			company: buildCompanySummary({ accountType: profile.user?.accountType, companyName: profile.companyName, activeTeamMembersCount }),
 			reviews: reviews,
+			// Owner-only (the self-preview of the public page): the INTERNAL numbers, clearly separate from the public ones above. Visitors never get this key.
+			...(viewer.isOwner ? { reviewsInternal: { count: internalCount, average: internalAgg?._avg.rating ?? null, unpublishedCount: Math.max(0, internalCount - reviewsCount), unpublished: unpublishedRows.map((r: any) => ({ id: r.id, rating: r.rating, comment: r.comment, tags: r.tags, createdAt: r.createdAt, kind: r.stage ? 'STAGE' : 'PROJECT', stageTitle: r.stage?.title ?? null, projectTitle: r.project?.title ?? null, reviewerName: `${r.client?.firstName || ''} ${r.client?.lastName || ''}`.trim() || null })) } } : {}),
 			portfolioItems: allPortfolioItems,
 			socialLinks: {
 				github: profile.githubUrl || null,
@@ -664,7 +688,7 @@ export class ProviderProfileService {
 		const lastName = sanitizeText(String(data.lastName || '')).trim();
 		const headline = sanitizeText(String(data.headline || '')).trim();
 		const bio = sanitizeText(String(data.bio || '')).trim();
-		if (!firstName || !lastName || !headline || !String(data.mainSpecialty || '').trim()) throw new Error('REQUIRED_PROFILE_FIELDS');
+		if (!firstName || !lastName || isBlankText(headline) || !String(data.mainSpecialty || '').trim()) throw new Error('REQUIRED_PROFILE_FIELDS');
 		if (firstName.length > 60 || lastName.length > 60 || headline.length > 100 || bio.length > 500) throw new Error('PROFILE_FIELD_TOO_LONG');
 		for (const key of ['githubUrl', 'linkedinUrl', 'websiteUrl']) {
 			if (data[key]) { try { const url = new URL(String(data[key])); if (!['http:', 'https:'].includes(url.protocol)) throw new Error(); } catch { throw new Error(`INVALID_URL:${key}`); } }
@@ -816,6 +840,16 @@ export class ProviderProfileService {
 	 * The optional WhatsApp number is the only contact number a provider edits, as a DIRECT save: no code, no request, no review, never part of the review
 	 * lifecycle. Empty clears it. A real number: optional "+" then 8-15 digits (spaces, dashes and brackets are stripped).
 	 */
+	/** Saves language / timezone / notification channels into provider_profiles.preferences (merged: other keys of the JSON survive). */
+	async updatePreferences(userId: string, input: { preferredCommunicationLanguage?: string; timezone?: string; notifChannels?: string[] }) {
+		const profile = await prisma.providerProfile.findUnique({ where: { userId }, select: { preferences: true } });
+		if (!profile) throw new Error('PROFILE_NOT_FOUND');
+		const current = profile.preferences && typeof profile.preferences === 'object' && !Array.isArray(profile.preferences) ? (profile.preferences as Record<string, unknown>) : {};
+		const next = { ...current, ...input };
+		await prisma.providerProfile.update({ where: { userId }, data: { preferences: next as any } });
+		return next;
+	}
+
 	async updateWhatsapp(userId: string, value: unknown) {
 		const raw = String(value ?? '').replace(/[\s()-]/g, '');
 		if (raw && !/^\+?\d{8,15}$/.test(raw)) throw new Error('INVALID_WHATSAPP');

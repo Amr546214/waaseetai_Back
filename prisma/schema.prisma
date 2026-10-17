@@ -188,7 +188,7 @@ model User {
   notificationPreference NotificationPreference?
 
   supportTickets        SupportTicket[]        @relation("SupportTicketOwner")
-  supportTicketMessages SupportTicketMessage[]  @relation("SupportTicketMessageSender")
+  supportTicketMessages SupportTicketMessage[] @relation("SupportTicketMessageSender")
 
   @@index([accountType, status])
   @@index([aiRiskScore])
@@ -358,10 +358,10 @@ model ClientProfile {
   kycStatus        KYCStatus @default(UNVERIFIED)
 
   // Step 3: Bank / Wallet
-  paymentType   String? // 'bank' | 'wallet' | 'paypal'
-  bankName      String?
-  accountHolder String?
-  iban          String?
+  paymentType       String? // 'bank' | 'wallet' | 'paypal'
+  bankName          String?
+  accountHolder     String?
+  iban              String?
   // PayPal payout destination (platform is PayPal-only for now). Dedicated
   // column — never stored in iban/accountHolder. Legacy bank columns are kept.
   paypalPayoutEmail String?
@@ -563,6 +563,11 @@ model Review {
   reviewerRole    String          @default("CLIENT")
   rating          Float
   comment         String?
+  // The quick-pick tags the reviewer chose with the stars (from RATING_TAGS of their side). Migration 20261017100000 (NOT EXECUTED until approved).
+  tags            String[]        @default([])
+  // The reviewer's publish choice. false = visible only to the two parties and the admin; it never reaches a public API nor the PUBLIC average/count.
+  // Existing rows are public today, so the migration keeps them true (no retroactive change). Migration 20261017110000 (NOT EXECUTED until approved).
+  isPublic        Boolean         @default(true)
   createdAt       DateTime        @default(now())
 
   @@index([providerId])
@@ -893,6 +898,8 @@ model ServiceCatalog {
   specialtyId  String?
   specialty    Specialty? @relation(fields: [specialtyId], references: [id])
   subSpecialty String?
+  // Skills of this service: each one is a name of the skills catalog of the specialty's Category (validated server-side), see src/config/skills-catalog.config.ts
+  skills       String[]   @default([])
 
   portfolioItemId String?
   portfolioItem   PortfolioItem? @relation(fields: [portfolioItemId], references: [id])
@@ -1348,6 +1355,7 @@ model ProviderSpecialty {
 
   workSamples          WorkSample[]
   accreditationSamples AccreditationSample[]
+  proofUploads         AccreditationProofUpload[]
   aiAuditLogs          AiAuditLog[]
   assessmentAttempts   AssessmentAttempt[]
 
@@ -1596,12 +1604,23 @@ enum MessageStatus {
   READ
 }
 
+// GENERAL: the account's general messages (negotiation rooms and every row that existed before the project context). PROJECT: the one room bound to a
+// contract and its two parties, shown only inside the project's «الرسائل» tab. A PROJECT row is reached by its unique contractId, never by a new row per click.
+enum ConversationKind {
+  GENERAL
+  PROJECT
+}
+
 model Conversation {
   id         String  @id @default(uuid())
   projectId  String  @map("project_id")
   offerId    String? @map("offer_id")
   clientId   String  @map("client_id")
   providerId String  @map("provider_id")
+
+  // Project context (migration 20261018040000_project_message_context, NOT EXECUTED until the owner approves). Old rows stay GENERAL with a NULL contractId.
+  kind       ConversationKind @default(GENERAL)
+  contractId String?          @unique @map("contract_id")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -1610,9 +1629,12 @@ model Conversation {
   project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   client   User      @relation("ClientConversations", fields: [clientId], references: [id])
   provider User      @relation("ProviderConversations", fields: [providerId], references: [id])
+  contract Contract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
   messages Message[]
 
   @@unique([projectId, providerId])
+  @@index([clientId, kind])
+  @@index([providerId, kind])
   @@map("conversations")
 }
 
@@ -1634,12 +1656,16 @@ model Message {
   // Discussion context (project/stage/delivery reference, like WhatsApp reply preview)
   context Json?
 
+  // Deterministic key of a project EVENT message (e.g. "amendment:<id>:created"): the unique index makes a retried request or a socket echo a no-op.
+  eventKey String? @unique @map("event_key")
+
   createdAt DateTime @default(now()) @map("created_at")
 
   // Relations
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender       User         @relation(fields: [senderId], references: [id])
 
+  @@index([conversationId, createdAt, id])
   @@map("messages")
 }
 
@@ -1672,14 +1698,14 @@ model AffiliateProfile {
   marketingChannels AffiliateChannelHandle[]
 
   // Bank & KYC Tab
-  bankName          String?
-  accountHolderName String?
-  iban              String?
-  swiftCode         String?
+  bankName           String?
+  accountHolderName  String?
+  iban               String?
+  swiftCode          String?
   // PayPal is the only payout destination (legacy bank columns above are never shown or used). NOT EXECUTED migration: 20261009120000.
-  paypalPayoutEmail String?
-  identityVerified  Boolean @default(false)
-  kycDocumentUrl    String?
+  paypalPayoutEmail  String?
+  identityVerified   Boolean   @default(false)
+  kycDocumentUrl     String?
   // Last admin KYC decision (kept so a rejection reason survives a refresh). Migration 20261011120000; read separately from the safe select.
   kycRejectionReason String?
   kycReviewedAt      DateTime?
@@ -1815,7 +1841,6 @@ model CommissionLog {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([affiliateId, status])
   // Exactly-once guard: at most one commission per affiliate+referral+type
   // for the SAME release event (sourceStageId). A project has multiple
   // stages, each independently releasing funds and each independently
@@ -1823,6 +1848,7 @@ model CommissionLog {
   // @@unique([referralId, affiliateId, type]) alone, which would wrongly
   // collapse every stage of the same project into a single one-time payout.
   @@unique([affiliateId, referralId, type, sourceStageId])
+  @@index([affiliateId, status])
   @@map("commission_logs")
 }
 
@@ -1900,12 +1926,14 @@ model Contract {
   providerSignedAt      DateTime?
   clientSignatureHash   String?
   providerSignatureHash String?
-  termsVersion          Int                @default(1)
+  termsVersion          Int                    @default(1)
   signedAt              DateTime?
   stages                ProjectStage[]
   amendments            ProjectAmendment[]
-  createdAt             DateTime           @default(now())
-  updatedAt             DateTime           @updatedAt
+  termsVersions         ContractTermsVersion[]
+  projectConversation   Conversation?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
 
   @@map("contracts")
 }
@@ -1964,10 +1992,39 @@ model ProjectAmendment {
   updatedAt   DateTime  @updatedAt
   respondedAt DateTime?
 
+  // Effective amendments (migration 20261016100000_amendment_effective, NOT EXECUTED until the owner approves): appliedAt is set in the SAME transaction
+  // that changed the contract / escrow / stages / wallet. APPROVED with appliedAt NULL is a legacy row that was only RECORDED and is never re-applied.
+  appliedAt               DateTime?
+  priceBefore             Float?
+  priceAfter              Float?
+  durationBefore          Int?
+  durationAfter           Int?
+  // The extra last stage this amendment created for a budget increase.
+  addedStageId            String?
+  // Client-raised budget increase: the client's OTP-authorized funding intent (the amount is bound; the provider's approval debits the wallet).
+  fundingAuthorizedAt     DateTime?
+  fundingAuthorizedAmount Float?
+  // The contract terms the client authorized against (termsVersion|price|durationDays). Any change to the terms voids the authorization.
+  fundingAuthorizedTerms  String?
+
   @@index([clientId, status])
   @@index([providerId, status])
   @@index([contractId])
   @@map("project_amendments")
+}
+
+// Versioned contract terms: one row per APPLIED scope addendum (version 1 is the original contract terms and has no row).
+model ContractTermsVersion {
+  id           String   @id @default(uuid())
+  contractId   String
+  contract     Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  version      Int
+  addendumText String   @db.Text
+  amendmentId  String   @unique
+  createdAt    DateTime @default(now())
+
+  @@unique([contractId, version])
+  @@map("contract_terms_versions")
 }
 
 enum ProjectStageStatus {
@@ -1997,6 +2054,8 @@ model ProjectStage {
   status       ProjectStageStatus @default(PENDING)
   startedAt    DateTime?
   approvedAt   DateTime?
+  // The amendment that created this stage (extra last stage of a budget increase); NULL for the original stages.
+  amendmentId  String?
   deliveries   StageDelivery[]
   stageReviews Review[]
   createdAt    DateTime           @default(now())
@@ -2035,6 +2094,16 @@ enum AccreditationStatus {
   AI_VERIFIED
   REJECTED
   MANUAL_REVIEW
+  // Batch B T1: the admin asked the provider to complete / fix the request (not a rejection); the provider resubmits the SAME request.
+  NEEDS_COMPLETION
+}
+
+// Batch B T1: a proof file uploaded for ONE approval request (provider specialty). Only COMPLETED rows count as a valid document.
+enum ProofUploadStatus {
+  UPLOADING
+  COMPLETED
+  FAILED
+  CANCELLED
 }
 
 model AccreditationSample {
@@ -2068,6 +2137,15 @@ model AccreditationSample {
   offersAccepted  Int    @default(0)
 
   serviceCatalogs ServiceCatalog[]
+
+  // Batch B T1: review loop. `userNote` is the admin note addressed to the provider (shown); `internalNote` NEVER leaves the admin API.
+  userNote         String?                    @db.Text
+  internalNote     String?                    @db.Text
+  completionFields String[]                   @default([])
+  revision         Int                        @default(1)
+  decidedAt        DateTime?
+  events           AccreditationSampleEvent[]
+  proofUploads     AccreditationProofUpload[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2688,4 +2766,108 @@ model CompanyTeamMember {
   @@unique([companyOwnerId, email])
   @@index([companyOwnerId, memberType, status])
   @@map("company_team_members")
+}
+
+// Admin-managed platform settings (key/value). Keys are whitelisted in services/platform-settings.service.ts.
+model PlatformSetting {
+  key       String   @id
+  value     Json
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("platform_settings")
+}
+
+// Marketing material managed by admins and read by marketers (kind: IMAGE | VIDEO | DOCUMENT | LINK | TEXT; audience: MARKETER | ALL).
+model MarketingAsset {
+  id          String   @id @default(uuid())
+  title       String
+  description String?  @db.Text
+  kind        String
+  fileUrl     String?
+  fileName    String?
+  mimeType    String?
+  fileBytes   Int?
+  linkUrl     String?
+  text        String?  @db.Text
+  audience    String   @default("MARKETER")
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdBy   String?
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([active, audience, sortOrder])
+  @@map("marketing_assets")
+}
+
+// Shared counter store for the strict rate-limit tiers (login / OTP / payment / withdrawal / AI / upload) when RATE_LIMIT_STORE=postgres.
+// Optional: the default store is in memory and this table is not touched. Migration 20261018060000 (NOT EXECUTED on any shared DB).
+model RateLimitCounter {
+  key     String   @id
+  hits    Int
+  resetAt DateTime @map("reset_at")
+
+  @@index([resetAt])
+  @@map("rate_limit_counters")
+}
+
+// Batch B T1: the review history of one approval request (submitted, completion requested, resubmitted, approved, rejected). Never deleted on resubmission.
+model AccreditationSampleEvent {
+  id           String              @id @default(uuid())
+  sampleId     String
+  sample       AccreditationSample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+  kind         String // SUBMITTED | RESUBMITTED | COMPLETION_REQUESTED | REJECTED | APPROVED
+  revision     Int                 @default(1)
+  userNote     String?             @db.Text // addressed to the provider
+  internalNote String?             @db.Text // admin-only
+  actorId      String?
+  createdAt    DateTime            @default(now())
+
+  @@index([sampleId, createdAt])
+  @@map("accreditation_sample_events")
+}
+
+// Batch B T1: a proof document is tied to the uploading user AND to one approval request (the provider specialty, then the sample once submitted).
+model AccreditationProofUpload {
+  id                  String               @id @default(uuid())
+  userId              String
+  providerSpecialtyId String
+  providerSpecialty   ProviderSpecialty    @relation(fields: [providerSpecialtyId], references: [id], onDelete: Cascade)
+  sampleId            String?
+  sample              AccreditationSample? @relation(fields: [sampleId], references: [id], onDelete: SetNull)
+  kind                ProofFileType        @default(WORK_SAMPLE)
+  privateRef          String
+  fileName            String
+  mimeType            String               @default("application/octet-stream")
+  bytes               Int                  @default(0)
+  status              ProofUploadStatus    @default(COMPLETED)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@index([userId, providerSpecialtyId, status])
+  @@index([sampleId])
+  @@map("accreditation_proof_uploads")
+}
+
+// Chat e-mail digest (migration 20261019020000_chat_digest, NOT EXECUTED on any shared DB). One row per (recipient, conversation): when the last digest mail was claimed.
+// The claim is a conditional upsert, so two instances / a restart can never send the same digest twice. Used only when CHAT_DIGEST_EMAIL_ENABLED=true.
+model ChatDigestState {
+  userId         String   @map("user_id")
+  conversationId String   @map("conversation_id")
+  lastDigestAt   DateTime @map("last_digest_at") @db.Timestamptz(3)
+
+  @@id([userId, conversationId])
+  @@index([userId, lastDigestAt])
+  @@map("chat_digest_state")
+}
+
+// Single row ('default'): the moment the digest was first switched on. Only messages created AFTER it are ever mailed (never a historical e-mail).
+model ChatDigestActivation {
+  id        String   @id @default("default")
+  enabledAt DateTime @map("enabled_at") @db.Timestamptz(3)
+
+  @@map("chat_digest_activation")
 }

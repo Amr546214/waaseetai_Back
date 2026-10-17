@@ -1,12 +1,26 @@
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
+import { round2, sumMoney } from '../utils/money';
 
 // No tax is recorded on invoices (legal policy s10: no VAT is charged). The old 15% line was display-only and never collected, so it is gone: the invoice
 // shows the stage amount, and tax is 0 / taxRate 0.
 
+// A marketplace purchase with a provider coupon stores the service value and the discount in the contract's terms (see cart-checkout confirmPayment): the contract,
+// escrow and stage amounts are already NET of the discount, so the invoice shows the service value, the coupon discount and the total actually paid.
+const couponTerms = (terms: unknown): { listPrice: number; netPrice: number; couponCode: string | null } | null => {
+  if (!terms || typeof terms !== 'object' || Array.isArray(terms)) return null;
+  const t = terms as Record<string, unknown>;
+  if (t.source !== 'marketplace_order') return null;
+  const listPrice = Number(t.listPrice); const netPrice = Number(t.netPrice);
+  if (!Number.isFinite(listPrice) || !Number.isFinite(netPrice) || netPrice <= 0 || listPrice <= netPrice) return null;
+  return { listPrice, netPrice, couponCode: typeof t.couponCode === 'string' ? t.couponCode : null };
+};
+
 const buildInvoice = (contract: any, stage: any, delivery: any) => {
-  const total = Number(stage.amount || 0);
-  const subtotal = total;
+  const total = round2(Number(stage.amount || 0));
+  const coupon = couponTerms(contract.terms);
+  const subtotal = coupon ? round2(total * coupon.listPrice / coupon.netPrice) : total;
+  const discount = coupon ? round2(subtotal - total) : 0;
   const tax = 0;
   const issuedAt = delivery.submittedAt as Date;
   const status: 'paid' | 'due' = stage.status === 'APPROVED' && delivery.status === 'APPROVED' ? 'paid' : 'due';
@@ -31,6 +45,8 @@ const buildInvoice = (contract: any, stage: any, delivery: any) => {
     projectTitle: contract.project.title,
     stageTitle: stage.title,
     subtotal,
+    discount,
+    couponCode: coupon?.couponCode ?? null,
     total,
     tax,
     taxRate: 0,
@@ -71,7 +87,7 @@ export class ClientFinanceService {
         totalCount: invoices.length,
         paidCount: paid.length,
         dueCount: due.length,
-        totalTax: Number(invoices.reduce((sum, invoice) => sum + invoice.tax, 0).toFixed(2)),
+        totalTax: sumMoney(invoices.map(invoice => invoice.tax)),
         averageVerificationScore: invoices.length
           ? Math.round(invoices.reduce((sum, invoice) => sum + invoice.verificationScore, 0) / invoices.length)
           : 0,
@@ -140,8 +156,8 @@ export class ClientFinanceService {
       .filter(p => p.escrow && p.escrow.status === 'HELD')
       .map(p => p.escrow!);
 
-    const escrowBalance = activeEscrows.reduce((sum, esc) => sum + Math.max(0, esc.amount - esc.releasedAmount), 0);
-    const availableBalance = Number(user.walletBalance || 0);
+    const escrowBalance = sumMoney(activeEscrows.map(esc => Math.max(0, esc.amount - esc.releasedAmount)));
+    const availableBalance = round2(Number(user.walletBalance || 0));
 
     // Fetch all recorded wallet transactions
     const walletTransactions = await prisma.walletTransaction.findMany({
@@ -156,7 +172,7 @@ export class ClientFinanceService {
       .map(p => ({
         id: `escrow-${p.escrow!.id}`,
         type: 'ESCROW_LOCK',
-        amount: p.escrow!.amount,
+        amount: round2(p.escrow!.amount),
         currency: 'USD', // active escrow pricing is now USD-semantic (not a stored WalletTransaction row)
         status: p.escrow!.status === 'HELD' ? 'HELD' : 'COMPLETED',
         paymentMethod: p.escrow!.paymentMethod || 'محفظة وسيط AI',
@@ -168,7 +184,7 @@ export class ClientFinanceService {
     const formattedWalletTx = walletTransactions.map(tx => ({
       id: tx.id,
       type: tx.type,
-      amount: tx.amount,
+      amount: round2(tx.amount),
       currency: tx.currency,
       status: tx.status,
       paymentMethod: tx.paymentMethod,
@@ -177,12 +193,26 @@ export class ClientFinanceService {
       createdAt: tx.createdAt
     }));
 
-    const allTransactions = [...formattedWalletTx, ...escrowTransactions]
+    // A deposit attempt that PayPal denied / that failed validation is never credited and has no WalletTransaction: show it as a FAILED row so the client sees what happened.
+    const failedDeposits = await prisma.paypalPayment.findMany({ where: { userId: clientId, status: 'FAILED' }, orderBy: { createdAt: 'desc' }, take: 50 });
+    const failedDepositRows = failedDeposits.map(p => ({
+      id: `paypal-failed-${p.id}`,
+      type: 'DEPOSIT',
+      amount: round2(Number(p.netAmount ?? p.amount)),
+      currency: p.currency || 'USD',
+      status: 'FAILED',
+      paymentMethod: 'PAYPAL',
+      referenceId: p.reference,
+      description: 'محاولة إيداع عبر PayPal لم تكتمل، ولم يُضف أي مبلغ إلى رصيدك',
+      createdAt: p.createdAt
+    }));
+
+    const allTransactions = [...formattedWalletTx, ...escrowTransactions, ...failedDepositRows]
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-    const totalDeposited = walletTransactions
+    const totalDeposited = sumMoney(walletTransactions
       .filter(tx => tx.type === 'DEPOSIT' && tx.status === 'COMPLETED')
-      .reduce((sum, tx) => sum + tx.amount, 0);
+      .map(tx => tx.amount));
 
     return {
       summary: {

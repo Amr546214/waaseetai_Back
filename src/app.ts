@@ -1,3 +1,4 @@
+import { startChatDigestScheduler } from './services/chat-digest.service';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -9,6 +10,7 @@ import { logger } from './config/logger';
 import { globalErrorHandler } from './middlewares/error.middleware';
 import { scrubPrivateRefs } from './middlewares/scrub-private-refs.middleware';
 import { apiLimiter } from './middlewares/rate-limit.middleware';
+import { resolveTrustProxy } from './config/trust-proxy';
 import { AppError } from './utils/app-error';
 import authRouter from './routes/auth/auth.routes';
 import profileRouter from './routes/profile/profile.routes';
@@ -24,10 +26,12 @@ import cartCheckoutRouter from './routes/cart-checkout.routes';
 
 import providerProfileRoutes from './routes/provider-profile.routes';
 import specialtyRoutes from './routes/specialty.routes';
+import skillsRoutes from './routes/skills.routes';
 import providerSpecialtyRoutes from './routes/provider-specialty.routes';
 import gamificationRoutes from './routes/gamification.routes';
 import levelsRoutes from './routes/levels.routes';
 import accountLogsRoutes from './routes/account-logs.routes';
+import providerAccountActionsRoutes from './routes/provider-account-actions.routes';
 import clientProfileRoutes from './routes/client-profile.routes';
 import clientRequestsRoutes from './routes/client-requests.routes';
 import clientProjectAmendmentsRoutes from './routes/client-project-amendments.routes';
@@ -89,7 +93,10 @@ const app = express();
 // every real visitor into one shared rate-limit bucket. That is what
 // produced the 429 on GET /api/marketer/profile during active multi-user
 // DEV testing.
-app.set('trust proxy', 'uniquelocal');
+//
+// The setting is now driven by TRUST_PROXY (see src/config/trust-proxy.ts); unset keeps exactly the 'uniquelocal' above. A different
+// topology (a second proxy / CDN in front, another bridge subnet) is a configuration change: TRUST_PROXY='loopback,172.23.0.1/32'.
+app.set('trust proxy', resolveTrustProxy(process.env.TRUST_PROXY));
 
 // ==========================================
 // 1. SECURITY & MIDDLEWARES
@@ -133,6 +140,8 @@ app.use(
 			}
 		},
 		credentials: true,
+		// The app reads Retry-After on 429 / 423 to run its countdown; a cross-origin page cannot see it unless it is exposed.
+		exposedHeaders: ['Retry-After'],
 	})
 );
 
@@ -234,10 +243,13 @@ import paypalWebhookRoutes from './routes/paypal-webhook.routes';
 
 mountAppRoute('/api/provider/profile', providerProfileRoutes);
 mountAppRoute('/api/specialties', specialtyRoutes);
+mountAppRoute('/api/skills', skillsRoutes);
+mountAppRoute('/skills', skillsRoutes);
 mountAppRoute('/api/provider/specialties', providerSpecialtyRoutes);
 mountAppRoute('/api/provider/gamification', gamificationRoutes);
 mountAppRoute('/api/levels', levelsRoutes);
 mountAppRoute('/api/provider/logs', accountLogsRoutes);
+mountAppRoute('/api/provider/account-actions', providerAccountActionsRoutes);
 mountAppRoute('/api/client/profile', clientProfileRoutes);
 mountAppRoute('/api/client/requests', clientRequestsRoutes);
 mountAppRoute('/client/requests', clientRequestsRoutes);
@@ -277,7 +289,19 @@ import adminAccreditationRoutes from './routes/admin-accreditation.routes';
 import adminAffiliateRequestsRoutes from './routes/admin-affiliate-requests.routes';
 import adminBrokersRoutes from './routes/admin-brokers.routes';
 import adminSecurityRoutes from './routes/admin-security.routes';
+import adminAccountRoutes from './routes/admin-account.routes';
+import adminCouponsRoutes, { adminSpecialOffersRouter } from './routes/admin-coupons.routes';
+import adminTicketsRoutes from './routes/admin-tickets.routes';
+import adminFinanceRoutes from './routes/admin-finance.routes';
+import { adminProjectsRouter, adminContractsRouter, adminStaffRouter } from './routes/admin-projects.routes';
 import adminAiSummariesRoutes from './routes/admin-ai-summaries.routes';
+import adminDashboardRoutes from './routes/admin-dashboard.routes';
+import { adminRequestsRouter, adminOffersRouter } from './routes/admin-requests.routes';
+import adminSettingsRoutes from './routes/admin-settings.routes';
+import publicSettingsRoutes from './routes/public-settings.routes';
+import adminMarketingAssetsRoutes from './routes/admin-marketing-assets.routes';
+import adminMarketplaceServicesRoutes from './routes/admin-marketplace-services.routes';
+import adminAnalyticsRoutes from './routes/admin-analytics.routes';
 import kycDocumentsRoutes from './routes/kyc-documents.routes';
 
 // Support BOTH prefixed and unprefixed paths.
@@ -305,8 +329,40 @@ mountAppRoute('/api/admin/brokers', adminBrokersRoutes);
 mountAppRoute('/admin/brokers', adminBrokersRoutes);
 mountAppRoute('/api/admin/security', adminSecurityRoutes);
 mountAppRoute('/admin/security', adminSecurityRoutes);
+mountAppRoute('/api/admin/console', adminAccountRoutes);
+mountAppRoute('/admin/console', adminAccountRoutes);
+mountAppRoute('/api/admin/coupons', adminCouponsRoutes);
+mountAppRoute('/admin/coupons', adminCouponsRoutes);
+mountAppRoute('/api/admin/special-offers', adminSpecialOffersRouter);
+mountAppRoute('/admin/special-offers', adminSpecialOffersRouter);
+mountAppRoute('/api/admin/tickets', adminTicketsRoutes);
+mountAppRoute('/admin/tickets', adminTicketsRoutes);
+mountAppRoute('/api/admin/requests', adminRequestsRouter);
+mountAppRoute('/admin/requests', adminRequestsRouter);
+mountAppRoute('/api/admin/offers', adminOffersRouter);
+mountAppRoute('/admin/offers', adminOffersRouter);
+mountAppRoute('/api/admin/dashboard', adminDashboardRoutes);
+mountAppRoute('/admin/dashboard', adminDashboardRoutes);
+mountAppRoute('/api/admin/finance', adminFinanceRoutes);
+mountAppRoute('/admin/finance', adminFinanceRoutes);
+mountAppRoute('/api/admin/projects', adminProjectsRouter);
+mountAppRoute('/admin/projects', adminProjectsRouter);
+mountAppRoute('/api/admin/contracts', adminContractsRouter);
+mountAppRoute('/admin/contracts', adminContractsRouter);
+mountAppRoute('/api/admin/staff', adminStaffRouter);
+mountAppRoute('/admin/staff', adminStaffRouter);
 mountAppRoute('/api/admin/ai', adminAiSummariesRoutes);
 mountAppRoute('/admin/ai', adminAiSummariesRoutes);
+mountAppRoute('/api/admin/settings', adminSettingsRoutes);
+mountAppRoute('/admin/settings', adminSettingsRoutes);
+mountAppRoute('/api/public', publicSettingsRoutes);
+mountAppRoute('/public', publicSettingsRoutes);
+mountAppRoute('/api/admin/marketing-assets', adminMarketingAssetsRoutes);
+mountAppRoute('/admin/marketing-assets', adminMarketingAssetsRoutes);
+mountAppRoute('/api/admin/marketplace-services', adminMarketplaceServicesRoutes);
+mountAppRoute('/admin/marketplace-services', adminMarketplaceServicesRoutes);
+mountAppRoute('/api/admin/analytics', adminAnalyticsRoutes);
+mountAppRoute('/admin/analytics', adminAnalyticsRoutes);
 mountAppRoute('/api/kyc-documents', kycDocumentsRoutes);
 mountAppRoute('/kyc-documents', kycDocumentsRoutes);
 
@@ -369,6 +425,7 @@ if (process.env.NODE_ENV !== 'test') {
 	httpServer.listen(Number(PORT), '0.0.0.0', () => {
 		logger.info(`🚀 Server is running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
 		logger.info(`👉 http://localhost:${PORT}/api`);
+		startChatDigestScheduler(); // no-op unless CHAT_DIGEST_EMAIL_ENABLED=true
 	});
 }
 

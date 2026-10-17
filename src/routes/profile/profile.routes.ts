@@ -7,7 +7,7 @@ import { phoneChangeController } from '../../controllers/phone-change.controller
 import { paypalEmailChangeController } from '../../controllers/paypal-email-change.controller';
 import { authorize } from '../../middlewares/auth.middleware';
 import { AccountType } from '@prisma/client';
-import { authLimiter } from '../../middlewares/rate-limit.middleware';
+import { passwordChangeLimiter } from '../../middlewares/rate-limit.middleware';
 
 const router = Router();
 
@@ -19,8 +19,8 @@ router.get('/me', authenticate, requireActiveUser, profileController.getProfile)
 // the client's own level view (single ladder; limitations are returned, never invented progress)
 router.get('/level-details', authenticate, requireActiveUser, clientLevelController.getClientLevelDetails);
 router.get('/my-change-requests', authenticate, requireActiveUser, profileController.getMyChangeRequests);
-// A client's password change is a request an admin approves (never applied directly). authLimiter: it verifies the current password.
-router.post('/password-change-request', authLimiter, authenticate, requireActiveUser, profileController.requestPasswordChange);
+// A client's password change is a request an admin approves (never applied directly). passwordChangeLimiter: it verifies the current password.
+router.post('/password-change-request', passwordChangeLimiter, authenticate, requireActiveUser, profileController.requestPasswordChange);
 router.post('/my-change-requests/:id/cancel', authenticate, requireActiveUser, profileController.cancelMyChangeRequest);
 router.put('/update', authenticate, requireActiveUser, profileController.updateProfile);
 // Phone number change: a code sent to the account email confirms it (PUT /update no longer changes the number).

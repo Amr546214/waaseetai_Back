@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import { AccountType } from '@prisma/client';
-import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { authenticate, authorize, authorizeActiveRole, requireActiveUser } from '../middlewares/auth.middleware';
 import { clientSpecialtyRecommendationService, MAX_RECOMMENDATION_TEXT } from '../services/client-specialty-recommendation.service';
-import { aiLimiter } from '../middlewares/rate-limit.middleware';
+import { aiLimiter, paymentLimiter } from '../middlewares/rate-limit.middleware';
+
 import { clientRequestsController } from '../controllers/client-requests.controller';
 import { memoryUpload } from '../utils/cloudinary-storage';
 import { openClientDispute } from '../controllers/dispute.controller';
-import { rateAsClient, rateStage } from '../controllers/rating.controller';
+import { rateAsClient, rateStage, ratingStatusAsClient, stageRatingStatusAsClient } from '../controllers/rating.controller';
 
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
@@ -27,6 +28,8 @@ const ALLOWED_MIME_TYPES = new Set([
 const upload = memoryUpload({ fileSize: 15 * 1024 * 1024, files: 5, allowedMimeTypes: ALLOWED_MIME_TYPES });
 
 const router = Router();
+const clientOnly = authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL);
+const clientActingOnly = authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL);
 
 // Metadata endpoint (Categories, Specialties, Sub-specialties with provider counts)
 router.get('/meta', clientRequestsController.getMeta);
@@ -37,7 +40,7 @@ router.post(
   '/specialty-recommendations',
   authenticate,
   requireActiveUser,
-  authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL),
+  authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL),
   async (req, res) => {
     try {
       const b = (req.body ?? {}) as Record<string, unknown>;
@@ -58,7 +61,7 @@ router.post(
   '/ai-suggest',
   authenticate,
   requireActiveUser,
-  authorize(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL),
+  authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL),
   aiLimiter,
   clientRequestsController.aiSuggest
 );
@@ -67,7 +70,8 @@ router.post(
 router.post('/upload', authenticate, upload.array('attachments', 5), clientRequestsController.uploadAttachments);
 
 // Create request endpoint
-router.post('/', authenticate, requireActiveUser, clientRequestsController.createRequest);
+// the role the user is ACTING as must be the client (a provider acting as a provider cannot create client requests even though every account also holds CLIENT)
+router.post('/', authenticate, requireActiveUser, clientActingOnly, clientRequestsController.createRequest);
 
 // My requests list endpoint (MUST be before /:id)
 router.get('/my-requests', authenticate, requireActiveUser, clientRequestsController.getMyRequests);
@@ -88,7 +92,7 @@ router.get('/pending-deliveries', authenticate, requireActiveUser, clientRequest
 router.get('/active-projects/:id', authenticate, requireActiveUser, clientRequestsController.getActiveProjectTracking);
 
 router.get('/:id/workspace', authenticate, requireActiveUser, clientRequestsController.getProjectWorkspace);
-router.post('/:id/stages/:stageId/review', authenticate, requireActiveUser, clientRequestsController.reviewStageDelivery);
+router.post('/:id/stages/:stageId/review', authenticate, requireActiveUser, clientOnly, clientRequestsController.reviewStageDelivery);
 // Advisory-only Gemini review of a stage delivery — read-only, no DB write,
 // never approves/rejects the delivery. AI-rate-limited like every other
 // Gemini-triggering HTTP route in this codebase. Ownership (must be this
@@ -100,20 +104,31 @@ router.post('/:id/stages/:stageId/ai-review', authenticate, requireActiveUser, a
 // write, never changes any status. Ownership (must be this contract's own
 // client or provider) is enforced inside the shared service method.
 router.post('/:id/health', authenticate, requireActiveUser, aiLimiter, clientRequestsController.getProjectHealthAnalysis);
-router.post('/:id/stages/:stageId/rating', authenticate, requireActiveUser, rateStage);
+router.post('/:id/stages/:stageId/rating', authenticate, requireActiveUser, clientOnly, rateStage);
+router.get('/:id/stages/:stageId/rating-status', authenticate, requireActiveUser, clientOnly, stageRatingStatusAsClient);
 
 // Request details by ID
 router.get('/:id', authenticate, requireActiveUser, clientRequestsController.getRequestDetails);
 
-// Sign contract & send OTP
-router.post('/:id/offers/select', authenticate, requireActiveUser, clientRequestsController.selectOffer);
+// The provider's pending counter-offer on an offer, and the client's acceptance of it. Client accounts only; ownership of the request is checked in the service.
+router.get('/:id/offers/:offerId/counter', authenticate, requireActiveUser, authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.getOfferCounter);
+router.post('/:id/offers/:offerId/counter/accept', authenticate, requireActiveUser, authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.acceptOfferCounter);
+
+router.post('/:id/offers/:offerId/counter/decline', authenticate, requireActiveUser, authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL), clientRequestsController.declineOfferCounter);
+
+// Select an offer (freezes the commercial snapshot)
+router.post('/:id/offers/select', authenticate, requireActiveUser, clientOnly, clientRequestsController.selectOffer);
+
+// The frozen contract the client is about to sign
+router.get('/:id/contract', authenticate, requireActiveUser, clientOnly, clientRequestsController.getContractForSignature);
 
 // Sign contract & send OTP
-router.post('/:id/contract/sign', authenticate, requireActiveUser, clientRequestsController.signContract);
+router.post('/:id/contract/sign', authenticate, requireActiveUser, clientOnly, clientRequestsController.signContract);
 
 // Verify OTP & deposit escrow
-router.post('/:id/escrow/deposit', authenticate, requireActiveUser, clientRequestsController.depositEscrow);
-router.post('/:id/disputes', authenticate, requireActiveUser, openClientDispute);
-router.post('/:id/rate', authenticate, requireActiveUser, rateAsClient);
+router.post('/:id/escrow/deposit', authenticate, requireActiveUser, clientOnly, paymentLimiter, clientRequestsController.depositEscrow);
+router.post('/:id/disputes', authenticate, requireActiveUser, clientOnly, openClientDispute);
+router.post('/:id/rate', authenticate, requireActiveUser, clientOnly, rateAsClient);
+router.get('/:id/rating-status', authenticate, requireActiveUser, clientOnly, ratingStatusAsClient);
 
 export default router;

@@ -1,5 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { AdminUsersService } from '../services/admin-users.service';
+import { adminActor } from '../utils/admin-actor';
+import { accountAuditLogService } from '../services/account-logs.service';
+import { z } from 'zod';
+import { AppError, fieldError, zodAppError } from '../utils/app-error';
 
 const usersService = new AdminUsersService();
 
@@ -47,19 +51,69 @@ export class AdminUsersController {
 
 	static async updateUserStatus(req: Request, res: Response, next: NextFunction) {
 		try {
-			const { id } = req.params;
-			const { status } = req.body;
-			if (!status) {
-				res.status(400).json({ success: false, message: 'Status is required' });
-				return;
-			}
-
-			const updatedUser = await usersService.updateUserStatus(String(id), String(status));
+			const { status, reason } = req.body ?? {};
+			if (!status) throw fieldError('status', 'الحالة مطلوبة');
+			const updatedUser = await usersService.updateUserStatus(adminActor(req), String(req.params.id), String(status), reason === undefined ? undefined : String(reason));
 			res.status(200).json({
 				success: true,
-				message: 'User status updated successfully',
+				message: 'تم تحديث حالة الحساب',
 				data: updatedUser
 			});
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	static async updateUserRoles(req: Request, res: Response, next: NextFunction) {
+		try {
+			const parsed = z.object({ roles: z.array(z.string()).min(1), activeRole: z.string().optional() }).safeParse(req.body ?? {});
+			if (!parsed.success) throw zodAppError(parsed.error.issues, 'بيانات الأدوار غير صحيحة', { roles: 'اختر دورًا واحدًا على الأقل', activeRole: 'الدور النشط غير صالح' });
+			const data = await usersService.updateUserRoles(adminActor(req), String(req.params.id), parsed.data);
+			res.status(200).json({ success: true, message: 'تم تحديث أدوار الحساب', data });
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	static async notifyUser(req: Request, res: Response, next: NextFunction) {
+		try {
+			const parsed = z.object({ message: z.string(), title: z.string().optional(), context: z.object({ type: z.enum(['REQUEST', 'OFFER']), id: z.string().min(1) }).optional() }).safeParse(req.body ?? {});
+			if (!parsed.success) throw zodAppError(parsed.error.issues, 'بيانات الرسالة غير صحيحة', { message: 'اكتب نص الرسالة (5 أحرف على الأقل)', title: 'عنوان الرسالة غير صالح' });
+			const data = await usersService.notifyUser(adminActor(req), String(req.params.id), parsed.data);
+			res.status(200).json({ success: true, message: 'تم إرسال الرسالة للمستخدم', data });
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	static async getRolesOverview(_req: Request, res: Response, next: NextFunction) {
+		try {
+			res.status(200).json({ success: true, data: await usersService.getRolesOverview() });
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	static async getProviderLevels(_req: Request, res: Response, next: NextFunction) {
+		try {
+			res.status(200).json({ success: true, data: await usersService.getProviderLevels() });
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	static async getUserDetail(req: Request, res: Response, next: NextFunction) {
+		try {
+			res.status(200).json({ success: true, data: await usersService.getUserDetail(String(req.params.id)) });
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	static async getUserAuditLog(req: Request, res: Response, next: NextFunction) {
+		try {
+			const data = await accountAuditLogService.getUserLogs(String(req.params.id), { page: Number(req.query.page) || 1, limit: Number(req.query.limit) || 20, source: typeof req.query.source === 'string' ? req.query.source : undefined });
+			res.status(200).json({ success: true, data });
 		} catch (error) {
 			next(error);
 		}
@@ -75,7 +129,7 @@ export class AdminUsersController {
 				return;
 			}
 
-			await usersService.deleteUser(String(id));
+			await usersService.deleteUser(String(id), adminActor(req));
 			res.status(200).json({
 				success: true,
 				message: 'تم حذف المستخدم وجميع بياناته بنجاح'

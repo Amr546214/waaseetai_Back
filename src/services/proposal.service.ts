@@ -8,6 +8,7 @@ import { WaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
 import { logger } from '../config/logger';
 import { projectFitService } from './ai-features/project-fit.service';
 import { proposalBudgetSuitability, proposalDeadlineSuitability } from './proposal-suitability';
+import { clientNotifications, clientNotificationFor, CLIENT_ROUTES } from './client-notifications.service';
 
 export interface GetProviderOffersFiltersDto {
 	status?: string;
@@ -18,11 +19,15 @@ export interface GetProviderOffersFiltersDto {
 	limit?: number;
 }
 
+import { buildProviderContractView, type ProviderContractView } from '../utils/contract-terms';
+
 export type ProviderOfferStatusKey = 'pending' | 'pending_response' | 'pending_signature' | 'nego' | 'accepted' | 'rejected';
 
 export interface ProviderOfferItemDto {
 	offerId: string;
 	id: string;
+	/** The real project id (an offer id is NOT a project id): lets the provider's pages open the conversation of THIS project. */
+	projectId: string;
 	projectRef: string;
 	ref: string;
 	projectTitle: string;
@@ -41,6 +46,10 @@ export interface ProviderOfferItemDto {
 	phases: string;
 	actionRequired: boolean;
 	actionText: string;
+	/** The provider may withdraw this offer right now (SUBMITTED / PENDING / UNDER_NEGOTIATION); the action itself re-checks on the server. */
+	canWithdraw: boolean;
+	/** The real contract (price, duration, phases, saved milestones, escrow) — only when the provider can sign it right now, otherwise null. */
+	contract: ProviderContractView | null;
 }
 
 export interface ProviderOfferCountsDto {
@@ -244,6 +253,7 @@ export class ProposalService {
 		}
 
 		// 5. Transactional execution saving ProjectProposal & ProposalMilestone entries
+		let offerNotificationId: string | null = null;
 		const newProposal = await prisma.$transaction(async (tx) => {
 			const created = await tx.projectProposal.create({
 				data: {
@@ -330,19 +340,16 @@ export class ProposalService {
 				`${created.provider?.firstName || ''} ${created.provider?.lastName || ''}`.trim() ||
 				'مقدم خدمة';
 
-			await tx.notification.create({
-				data: {
-					userId: targetClientId,
-					title: 'تم استلام عرض جديد',
-					message: `تم استلام عرض جديد على مشروعك "${targetTitle}" من قبل ${providerName}`,
-					type: 'NEW_PROPOSAL',
-					actionUrl: `/client-overview/my-requests/${projectId}`,
-					metadata: { requestId: projectId, offerId: created.id }
-				}
+			const offerNotification = await tx.notification.create({
+				data: clientNotificationFor.offerReceived({ clientId: targetClientId, requestId: projectId, offerId: created.id, requestTitle: targetTitle, providerName })
 			});
+			offerNotificationId = offerNotification.id;
 
 			return created;
 		});
+
+		// the stored notification goes through the client's saved channels (in-app push / e-mail) once the offer is committed
+		await clientNotifications.deliverStored([offerNotificationId]);
 
 		// 8. Emit real-time WebSocket event to Project Owner outside transaction scope
 		try {
@@ -363,13 +370,6 @@ export class ProposalService {
 				};
 
 				io.to(`project_owner_${targetClientId}`).emit('new_proposal_submitted', payload);
-				io.to(`user_${targetClientId}`).emit('notification_received', {
-					title: 'تم استلام عرض جديد',
-					message: `تم استلام عرض جديد على مشروعك "${targetTitle}"`,
-					type: 'NEW_PROPOSAL',
-					actionUrl: `/client-overview/projects/${projectId}/proposals`,
-					createdAt: new Date()
-				});
 				console.log(`[ProposalService] Real-time proposal notification emitted to owner: ${targetClientId}`);
 			}
 		} catch (err) {
@@ -412,6 +412,7 @@ export class ProposalService {
 		let statusText = 'بانتظار الرد';
 		let actionRequired = false;
 		let actionText = 'فتح العرض';
+		let contractView: ProviderContractView | null = null;
 
 		if (rawStatus === ProposalStatus.UNDER_NEGOTIATION) {
 			statusEnum = 'UNDER_NEGOTIATION';
@@ -426,6 +427,7 @@ export class ProposalService {
 			statusText = providerCanSign ? 'قُبل — توقيعك مطلوب' : 'اختارك العميل — يستكمل التوقيع والضمان';
 			actionRequired = providerCanSign;
 			actionText = providerCanSign ? 'مراجعة وتوقيع العقد' : 'بانتظار العميل';
+			if (providerCanSign && proj?.contract) contractView = buildProviderContractView(proj.contract, proj.escrow);
 		} else if (rawStatus === ProposalStatus.ACCEPTED) {
 			statusEnum = 'ACCEPTED';
 			statusKey = 'accepted';
@@ -433,9 +435,11 @@ export class ProposalService {
 			actionRequired = false;
 			actionText = 'فتح المشروع';
 		} else if (rawStatus === ProposalStatus.REJECTED || rawStatus === ProposalStatus.CANCELLED) {
-			statusEnum = 'REJECTED';
+			// CANCELLED (withdrawn / cancelled) is shown as such, never as "rejected"; both still count under the "rejected" filter.
+			const cancelled = rawStatus === ProposalStatus.CANCELLED;
+			statusEnum = cancelled ? 'CANCELLED' : 'REJECTED';
 			statusKey = 'rejected';
-			statusText = 'مرفوض';
+			statusText = cancelled ? 'ملغي' : 'مرفوض';
 			actionRequired = false;
 			actionText = 'عرض التفاصيل';
 		}
@@ -448,6 +452,7 @@ export class ProposalService {
 		return {
 			offerId: item.id,
 			id: item.id,
+			projectId: projectIdStr,
 			projectRef,
 			ref: projectRef,
 			projectTitle,
@@ -465,7 +470,9 @@ export class ProposalService {
 			duration: `${item.deliveryDays || 14} يوم`,
 			phases: `${item.milestones?.length || 1} مراحل`,
 			actionRequired,
-			actionText
+			actionText,
+			canWithdraw: rawStatus === ProposalStatus.PENDING || rawStatus === ProposalStatus.SUBMITTED || rawStatus === ProposalStatus.UNDER_NEGOTIATION,
+			contract: contractView
 		};
 	}
 
@@ -637,6 +644,28 @@ export class ProposalService {
 			},
 			data: paginatedData
 		};
+	}
+
+	/**
+	 * One offer of this provider, in exactly the item shape of GET /provider/offers (same mapper).
+	 * Someone else's offer is reported as 404, never 403, so ids cannot be probed.
+	 */
+	public async getProviderOfferById(providerId: string, offerId: string): Promise<ProviderOfferItemDto> {
+		const proposal = await prisma.projectProposal.findFirst({
+			where: { id: offerId, providerId },
+			include: {
+				project: {
+					include: {
+						contract: true,
+						escrow: true,
+						client: { select: { id: true, firstName: true, lastName: true, accountType: true, avatarUrl: true } }
+					}
+				},
+				milestones: true
+			}
+		});
+		if (!proposal) throw new AppError('العرض غير موجود', 404);
+		return this.processProposalItem(proposal);
 	}
 }
 

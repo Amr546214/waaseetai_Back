@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import * as providerProfileController from '../controllers/provider-profile.controller';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
-import { authorize } from '../middlewares/auth.middleware';
+import { authorize , authorizeAdminActing } from '../middlewares/auth.middleware';
 import { AccountType } from '@prisma/client';
 import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
 import { blockCompanySetup } from '../middlewares/company-unavailable.middleware';
-import { authLimiter, aiLimiter } from '../middlewares/rate-limit.middleware';
+import { passwordChangeLimiter, accountActionLimiter, aiLimiter } from '../middlewares/rate-limit.middleware';
 
 const router = Router();
 const documentUpload = memoryUpload({
@@ -59,8 +59,8 @@ router.get('/me', requireProvider, providerProfileController.getProfile);
 // Identity-level: session management and password change apply to any
 // authenticated role, not just PROVIDER — no authorize() gate here.
 router.get('/sessions', providerProfileController.getActiveSessions);
-router.delete('/sessions/:id', authLimiter, providerProfileController.revokeSession);
-router.put('/password', authLimiter, providerProfileController.changePassword);
+router.delete('/sessions/:id', accountActionLimiter, providerProfileController.revokeSession);
+router.put('/password', passwordChangeLimiter, providerProfileController.changePassword);
 router.post('/suggest-bio', requireProvider, aiLimiter, providerProfileController.suggestBio);
 router.post('/suggest-skills', requireProvider, aiLimiter, providerProfileController.suggestSkills);
 router.get('/setup', requireProvider, providerProfileController.getSetupData);
@@ -73,13 +73,14 @@ router.get('/public', requireProvider, aiLimiter, providerProfileController.getP
 router.get('/requests', requireProvider, providerProfileController.getModificationRequests);
 router.post('/requests', requireProvider, providerProfileController.createModificationRequest);
 router.post('/requests/:id/cancel', requireProvider, providerProfileController.cancelModificationRequest);
-router.post('/requests/:id/review', authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN), providerProfileController.reviewSensitiveChange);
-router.get('/admin/pending-reviews', authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN), providerProfileController.getPendingSensitiveReviews);
+router.post('/requests/:id/review', authorizeAdminActing, providerProfileController.reviewSensitiveChange);
+router.get('/admin/pending-reviews', authorizeAdminActing, providerProfileController.getPendingSensitiveReviews);
 router.get('/requests/:tabName', requireProvider, providerProfileController.getChangeRequests);
 router.post('/sensitive-change', requireProvider, providerProfileController.initiateSensitiveChange);
 router.post('/sensitive-change/verify', requireProvider, providerProfileController.verifySensitiveChange);
 router.put('/basic-info', requireProvider, providerProfileController.updateBasicInfo);
 router.put('/contact', requireProvider, providerProfileController.updateContactInfo);
+router.put('/preferences', requireProvider, providerProfileController.updatePreferences);
 router.put('/whatsapp', requireProvider, providerProfileController.updateWhatsapp);
 router.put('/banking', requireProvider, providerProfileController.updateBankingInfo);
 router.put('/docs', requireProvider, providerProfileController.updateDocsInfo);
