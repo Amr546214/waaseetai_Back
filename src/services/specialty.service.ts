@@ -2,6 +2,7 @@ import { prisma } from '../config/db';
 import { SpecialtyVerificationStatus } from '@prisma/client';
 import { logger } from '../config/logger';
 import { resolveCategorySlug } from './skills-catalog.service';
+import { assertLegacySpecialtyProofs } from './accreditation-proof.service';
 
 function generateSlug(text: string): string {
   if (!text) return `slug-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -301,7 +302,10 @@ class SpecialtyService {
     try { await this.syncProviderSpecialtiesFromProfile(profileId); } catch (error: any) { logger.error(`[SpecialtyService] could not sync provider specialties (profileId=${profileId}): ${error?.message}`); }
   }
 
-  async uploadWorkSamples(providerSpecialtyId: string, samplesData: any[]) {
+  async uploadWorkSamples(providerSpecialtyId: string, samplesData: any[], userId?: string) {
+    // The proof documents are mandatory (same rule as the main approval request): at least one stored, owned proof of this specialty, new here or already completed.
+    const proofRefs = samplesData.flatMap(s => [s?.privateProofUrl, ...(Array.isArray(s?.proofs) ? s.proofs.map((p: any) => p?.url) : [])]);
+    await assertLegacySpecialtyProofs(prisma as any, { userId: userId ?? '', providerSpecialtyId, proofRefs });
     await prisma.$transaction(async (tx) => {
       await tx.workSample.deleteMany({ where: { providerSpecialtyId } });
 
