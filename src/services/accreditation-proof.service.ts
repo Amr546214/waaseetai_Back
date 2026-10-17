@@ -1,7 +1,7 @@
 import { ProofFileType, ProofUploadStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
-import { isPrivateRef } from '../utils/kyc-private-ref';
+import { isPrivateRef, parsePrivateRef } from '../utils/kyc-private-ref';
 
 // Batch B T1 (§3): proof documents of an approval request. A document counts only when it is a COMPLETED upload row that belongs to the SAME user
 // AND to the SAME request (the provider specialty). A URL typed into the body, an upload still in progress, a failed or a cancelled one never counts.
@@ -111,4 +111,20 @@ export async function resolveProofsForSubmission(db: Db, input: { userId: string
 export async function uploadsOfSample(db: Db, sampleId: string) {
 	const rows = await db.accreditationProofUpload.findMany({ where: { sampleId, status: ProofUploadStatus.COMPLETED }, orderBy: { createdAt: 'asc' } });
 	return rows.map(publicUpload);
+}
+
+/**
+ * The older multi-sample submit paths (POST /provider-specialty/submit-proof, POST /provider/specialties/step2-upload) store their proofs in the
+ * specialty's own private folder and move the specialty to review. They obey the same rule as the main path: at least PROOF_MIN_FILES valid, completed,
+ * owned proof documents. A proof is valid when it is a private reference (the file was really stored by the server before this check) inside THIS
+ * specialty's folder; documents the user already has as COMPLETED uploads of this request (an edit) count too. Anything else named is refused.
+ */
+export async function assertLegacySpecialtyProofs(db: Db, input: { userId: string; providerSpecialtyId: string; proofRefs: unknown[] }) {
+	const refs = [...new Set(input.proofRefs.filter((r): r is string => typeof r === 'string' && r.length > 0))];
+	const inOwnFolder = (r: string) => isPrivateRef(r) && !!parsePrivateRef(r)?.publicId.split('/').includes(input.providerSpecialtyId);
+	if (refs.some(r => !inOwnFolder(r))) throw fieldError('files', 'أحد ملفات الإثبات غير صالح أو لا يخص هذا الطلب؛ أعد رفعه');
+	if (refs.length >= PROOF_MIN_FILES) return { fresh: refs.length, existing: 0 };
+	const existing = await db.accreditationProofUpload.count({ where: { userId: input.userId, providerSpecialtyId: input.providerSpecialtyId, status: ProofUploadStatus.COMPLETED } });
+	if (existing < PROOF_MIN_FILES) throw fieldError('files', PROOF_REQUIRED_MESSAGE);
+	return { fresh: 0, existing };
 }
