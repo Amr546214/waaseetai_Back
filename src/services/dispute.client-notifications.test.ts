@@ -7,29 +7,38 @@ const sent: any[] = [];
 async function load(t: TestContext, o: { disputeFor?: any } = {}) {
 	sent.length = 0;
 	const dispute = { id: 'd1', requestId: null, projectId: 'p1', request: null, project: { id: 'p1', title: 'مشروع' } };
-	t.mock.module('../config/db', { namedExports: { prisma: {
+	const prisma: any = {
 		clientRequest: { findUnique: async () => null },
-		project: { findUnique: async (a: any) => (a.select?.contract ? { id: 'p1', clientId: 'client-1', providerId: 'prov-1', contract: { id: 'c1', status: 'ACTIVE', clientId: 'client-1', providerId: 'prov-1' } } : { providerId: 'prov-1', contract: { providerId: 'prov-1' } }) },
+		project: {
+			findUnique: async (a: any) => (a.select?.contract ? { id: 'p1', clientId: 'client-1', providerId: 'prov-1', contract: { id: 'c1', status: 'ACTIVE', clientId: 'client-1', providerId: 'prov-1' } } : { providerId: 'prov-1', contract: { providerId: 'prov-1' } }),
+			// the dispute service now resolves the project by id OR contract id with findFirst
+			findFirst: async () => ({ id: 'p1', clientId: 'client-1', providerId: 'prov-1', contract: { id: 'c1', status: 'ACTIVE', clientId: 'client-1', providerId: 'prov-1' } })
+		},
 		dispute: {
+			count: async () => 0,
 			findFirst: async () => null,
 			create: async () => dispute,
 			findUnique: async () => o.disputeFor ?? { id: 'd1', requestId: null, projectId: 'p1', openedById: 'client-1', againstUserId: 'prov-1', status: 'OPEN' },
-			update: async () => ({ id: 'd1' })
-		}
-	} } });
+			update: async () => ({ id: 'd1' }),
+			updateMany: async () => ({ count: 1 })
+		},
+		$queryRaw: async () => [{ id: 'c1' }],
+		$transaction: async (fn: any) => fn(prisma)
+	};
+	t.mock.module('../config/db', { namedExports: { prisma } });
 	t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { disputeOpened: async () => {}, disputeResolved: async () => {} } } });
 	t.mock.module('./client-notifications.service', { namedExports: { clientNotifications: { send: async (n: any) => { sent.push(n); } }, clientNotificationFor: (await import('./client-notifications.service.ts?real=' + Math.random())).clientNotificationFor } });
 	const { disputeService } = await import(`./dispute.service.ts?fixture=${Date.now()}-${Math.random()}`);
 	return disputeService;
 }
 
-test('the client opens a dispute: the client gets a confirmation linking to /client-overview/disputes', async t => {
+test('the client opens a dispute: the client gets a confirmation linking to /client-overview/disputes?dispute=<id>', async t => {
 	const svc = await load(t);
 	await svc.createForRequest('p1', 'client-1', 'client', { reason: 'سبب كافٍ للنزاع', description: 'وصف كافٍ للنزاع هنا' });
 	assert.equal(sent.length, 1);
 	assert.equal(sent[0].userId, 'client-1');
 	assert.equal(sent[0].type, 'DISPUTE_OPENED');
-	assert.equal(sent[0].actionUrl, '/client-overview/disputes');
+	assert.equal(sent[0].actionUrl, '/client-overview/disputes?dispute=d1');
 });
 
 test('the provider opens a dispute against the client: the CLIENT is told', async t => {

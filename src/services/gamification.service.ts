@@ -2,6 +2,7 @@ import { levelInfo } from '../utils/level-info';
 import { prisma } from '../config/db';
 import { LEVEL_MATRIX, REQUESTER_LEVEL_MATRIX, deriveProviderProgression, deriveRequesterProgression } from '../utils/progression-calculators';
 import { levelColor, levelStation } from '../config/levels.config';
+import { deliveryCompletedProject } from './settlement-state.service';
 
 // Phase 3D.3A: LEVEL_MATRIX now lives in progression-calculators.ts (a pure
 // module with no Prisma/DB imports) — re-exported here unchanged so existing
@@ -13,7 +14,7 @@ class GamificationService {
   async getLevelDetails(providerId: string) {
     // 1. LIVE DATABASE AGGREGATION LOGIC
     const completedProjects = await prisma.project.count({
-      where: { providerId, status: 'COMPLETED' }
+      where: deliveryCompletedProject({ providerId })
     });
 
     const pointsSum = await prisma.pointTransaction.aggregate({
@@ -161,7 +162,7 @@ class GamificationService {
 export async function getClientLevelInfo(userId: string) {
   const [profile, completedProjects] = await Promise.all([
     prisma.clientProfile.findUnique({ where: { userId }, select: { currentPoints: true } }),
-    prisma.project.count({ where: { clientId: userId, status: 'COMPLETED' } })
+    prisma.project.count({ where: deliveryCompletedProject({ clientId: userId }) })
   ]);
   const progression = deriveRequesterProgression({ points: Math.max(0, profile?.currentPoints || 0), completedProjects, avgRating: 0 });
   return levelInfo('CLIENT', progression.currentLevelIndex);
@@ -170,7 +171,7 @@ export async function getClientLevelInfo(userId: string) {
 export async function getClientLevelDetails(userId: string) {
   const [profile, completedProjects] = await Promise.all([
     prisma.clientProfile.findUnique({ where: { userId }, select: { currentPoints: true } }),
-    prisma.project.count({ where: { clientId: userId, status: 'COMPLETED' } })
+    prisma.project.count({ where: deliveryCompletedProject({ clientId: userId }) })
   ]);
   const points = Math.max(0, profile?.currentPoints || 0);
   const progression = deriveRequesterProgression({ points, completedProjects, avgRating: 0 });

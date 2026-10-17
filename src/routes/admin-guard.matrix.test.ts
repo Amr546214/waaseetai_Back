@@ -49,14 +49,40 @@ test('app.ts mounts the expected admin routers (table is read from the source, n
 	for (const m of adminMounts) assert.match(appSource, new RegExp(`mountAppRoute\\('/admin/${m.prefix}',\\s*${m.ident}\\)`));
 });
 
+/**
+ * One request against a throw-away local server.
+ *
+ * Why this is written defensively (diagnosis of the intermittent `TypeError: fetch failed` seen only in the FULL parallel run): fetch() (undici) keeps idle
+ * keep-alive sockets in a pool keyed by origin. This test creates thousands of short-lived servers on port 0, so the OS regularly hands out a port number that an
+ * earlier, already closed server used; undici then reuses its pooled socket to that dead server and the write fails with ECONNRESET / UND_ERR_SOCKET
+ * ("fetch failed"). Under CPU pressure (many test processes at once) the window is wide. The fix keeps every assertion untouched:
+ *   - `connection: close` so no socket is ever pooled,
+ *   - bind explicitly to 127.0.0.1 and await `listening`,
+ *   - close the server and ALL of its connections before returning (no leaked sockets for the next server),
+ *   - a request that fails with a TRANSIENT transport error (reset / socket closed) is repeated, up to 3 times; any other error, and every status, still reaches the assertions.
+ */
+const TRANSIENT = new Set(['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT']);
+const isTransient = (e: any) => TRANSIENT.has(e?.cause?.code) || TRANSIENT.has(e?.code) || /other side closed|socket hang up|terminated/i.test(String(e?.cause?.message ?? e?.message ?? ''));
 async function request(handler: any, method: string, url: string, token?: string) {
 	const server = http.createServer(handler);
-	await new Promise<void>(r => server.listen(0, r));
+	await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve()); });
 	try {
 		const port = (server.address() as AddressInfo).port;
-		const res = await fetch(`http://127.0.0.1:${port}${url}`, { method, headers: token ? { authorization: `Bearer ${token}`, 'content-type': 'application/json' } : {}, body: method === 'GET' ? undefined : '{}' });
-		return res.status;
-	} finally { server.close(); }
+		const headers: Record<string, string> = { connection: 'close', ...(token ? { authorization: `Bearer ${token}`, 'content-type': 'application/json' } : {}) };
+		for (let attempt = 1; ; attempt++) {
+			try {
+				const res = await fetch(`http://127.0.0.1:${port}${url}`, { method, headers, body: method === 'GET' ? undefined : '{}', signal: AbortSignal.timeout(20000) });
+				await res.arrayBuffer();
+				return res.status;
+			} catch (error) {
+				if (attempt >= 3 || !isTransient(error)) throw error;
+				await new Promise(r => setTimeout(r, 25 * attempt));
+			}
+		}
+	} finally {
+		server.closeAllConnections();
+		await new Promise<void>(resolve => server.close(() => resolve()));
+	}
 }
 
 test('every /admin router: no token 401; client / provider / affiliate 403; admin, super admin and a super admin acting as CLIENT pass the guard', async () => {

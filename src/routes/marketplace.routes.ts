@@ -15,7 +15,7 @@ const controller = new MarketplaceServiceController();
 router.get('/models', optionalAuthenticate, controller.getMarketplaceModels.bind(controller));
 router.get('/models/:id', optionalAuthenticate, controller.getMarketplaceModelById.bind(controller));
 router.get('/categories', controller.getMarketplaceCategories.bind(controller));
-router.post('/ai-recommendations', aiLimiter, controller.getAiRecommendations.bind(controller));
+router.post('/ai-recommendations', optionalAuthenticate, aiLimiter, controller.getAiRecommendations.bind(controller));
 router.get('/favorites', authenticate, requireActiveUser, controller.getFavorites.bind(controller));
 router.put('/models/:id/favorite', authenticate, requireActiveUser, controller.setFavorite.bind(controller));
 // Phase 4 — the signed-in client's own active purchase of this service (if any),

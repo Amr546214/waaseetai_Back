@@ -3,13 +3,13 @@ import { getProviderStatistics, getProviderOffers, getProviderOfferById, getElig
 import { submitWithdrawal, listMyWithdrawals } from '../controllers/withdrawal.controller';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, authorizeActiveRole, requireActiveUser } from '../middlewares/auth.middleware';
-import { aiLimiter, dashboardLimiter } from '../middlewares/rate-limit.middleware';
+import { aiLimiter, dashboardLimiter, withdrawalLimiter } from '../middlewares/rate-limit.middleware';
 import providerProfileRouter from './provider-profile.routes';
 import marketplaceServiceRouter from './marketplace-service.routes';
 import { exploreRequestsController } from '../controllers/explore-requests.controller';
 import { openProviderDispute, cancelProviderRequest, listMyDisputes, getMyDispute } from '../controllers/dispute.controller';
 import { createTicket, listMyTickets, getMyTicket, replyToTicket, closeMyTicket } from '../controllers/support-ticket.controller';
-import { rateAsProvider } from '../controllers/rating.controller';
+import { rateAsProvider, ratingStatusAsProvider, stageRatingStatusAsProvider } from '../controllers/rating.controller';
 import { createCoupon, deactivateCoupon, getCoupon, listCoupons, updateCoupon, decideCouponApproval, getCouponStats } from '../controllers/provider-coupon.controller';
 import companyTeamRouter from './company-team.routes';
 import specialOfferRouter from './provider-special-offer.routes';
@@ -108,39 +108,42 @@ const deliveryUpload = memoryUpload({ fileSize: DELIVERY_MAX_FILE_BYTES, files: 
 // Provider change requests (ProjectAmendment raised by the PROVIDER): list own requests / create one. The client answers via /client/projects/amendments/:id/respond.
 router.get('/projects/:projectId/amendments', authenticate, requireActiveUser, providerOnly, providerProjectAmendmentsController.list);
 router.post('/projects/:projectId/amendments', authenticate, requireActiveUser, providerOnly, providerProjectAmendmentsController.create);
-// The provider answers a change request the CLIENT raised: the decision is recorded only (no price / duration / escrow / stage change).
+// The provider answers a change request the CLIENT raised: approving APPLIES it (contract / escrow / stages) in one transaction; rejecting changes nothing.
 router.post('/amendments/:id/respond', authenticate, requireActiveUser, providerOnly, providerProjectAmendmentsController.respond);
+// The provider withdraws a request they raised while it is still pending.
+router.post('/amendments/:id/cancel', authenticate, requireActiveUser, providerOnly, providerProjectAmendmentsController.cancel);
 router.post('/projects/:projectId/stages/:stageId/deliveries/files', authenticate, requireActiveUser, providerOnly, deliveryUpload.array('files', DELIVERY_MAX_UPLOADED_FILES), uploadStageDeliveryFiles);
-router.post('/projects/:id/stages/:stageId/deliveries', authenticate, requireActiveUser, submitStageDelivery);
+router.post('/projects/:id/stages/:stageId/deliveries', authenticate, requireActiveUser, providerOnly, submitStageDelivery);
 // Advisory-only Gemini review of the provider's own stage delivery —
 // read-only, no DB write, never approves/rejects it. AI-rate-limited like
 // every other Gemini-triggering HTTP route. Ownership (must be this
 // contract's own provider) is enforced inside the shared service method.
-router.post('/projects/:id/stages/:stageId/ai-review', authenticate, requireActiveUser, aiLimiter, getDeliveryAiReview);
+router.post('/projects/:id/stages/:stageId/ai-review', authenticate, requireActiveUser, providerOnly, aiLimiter, getDeliveryAiReview);
 
 // Batch 8 — advisory-only Gemini project health analysis. Read-only, no DB
 // write, never changes any status. Ownership (must be this contract's own
 // client or provider) is enforced inside the shared service method.
-router.post('/projects/:id/health', authenticate, requireActiveUser, aiLimiter, getProjectHealthAnalysis);
+router.post('/projects/:id/health', authenticate, requireActiveUser, providerOnly, aiLimiter, getProjectHealthAnalysis);
 
 // Real deliveries list replacing team-deliveries.ts's fully hardcoded
 // fictional "company deliveries" data (Batch 7). Deterministic — no
 // Gemini call, so no aiLimiter needed (same rationale as /projects/active).
 router.get('/company/deliveries', authenticate, requireActiveUser, providerOnly, getCompanyDeliveries);
 
-router.get('/finance/wallet', authenticate, requireActiveUser, getProviderWallet);
-router.get('/finance/transactions', authenticate, requireActiveUser, getProviderTransactions);
+router.get('/finance/wallet', authenticate, requireActiveUser, providerOnly, getProviderWallet);
+router.get('/finance/transactions', authenticate, requireActiveUser, providerOnly, getProviderTransactions);
 router.get('/finance/invoices', authenticate, requireActiveUser, providerOnly, getProviderInvoices);
 router.get('/finance/invoices/:id', authenticate, requireActiveUser, providerOnly, getProviderInvoice);
 router.get('/finance/sales', authenticate, requireActiveUser, providerOnly, getProviderSales);
-router.post('/finance/withdrawals', authenticate, requireActiveUser, providerOnly, submitWithdrawal);
-router.get('/finance/withdrawals', authenticate, requireActiveUser, listMyWithdrawals);
+router.post('/finance/withdrawals', authenticate, requireActiveUser, providerOnly, withdrawalLimiter, submitWithdrawal);
+router.get('/finance/withdrawals', authenticate, requireActiveUser, providerOnly, listMyWithdrawals);
 
 // Endpoint for Provider Submitted Offers tracking and AI analysis
 router.get(
   '/offers',
   authenticate,
   requireActiveUser,
+  providerOnly,
   getProviderOffers
 );
 
@@ -166,6 +169,7 @@ router.get(
   '/projects/active',
   authenticate,
   requireActiveUser,
+  providerOnly,
   getActiveProjects
 );
 
@@ -173,6 +177,7 @@ router.get(
   '/projects/archived',
   authenticate,
   requireActiveUser,
+  providerOnly,
   getArchivedProjects
 );
 
@@ -180,6 +185,7 @@ router.get(
   '/projects/:id/progress',
   authenticate,
   requireActiveUser,
+  providerOnly,
   getProjectProgress
 );
 
@@ -195,11 +201,15 @@ router.post(
   '/explore-requests/:id/toggle-save',
   authenticate,
   requireActiveUser,
+  providerOnly,
   exploreRequestsController.toggleSave
 );
 
 router.post('/requests/:id/disputes', authenticate, requireActiveUser, providerOnly, openProviderDispute);
 router.post('/requests/:id/rate', authenticate, requireActiveUser, providerOnly, rateAsProvider);
+router.get('/requests/:id/rating-status', authenticate, requireActiveUser, providerOnly, ratingStatusAsProvider);
+// the client's rating of ONE stage, read-only for the provider (the provider never rates a stage)
+router.get('/requests/:id/stages/:stageId/rating-status', authenticate, requireActiveUser, providerOnly, stageRatingStatusAsProvider);
 router.post('/requests/:id/cancel', authenticate, requireActiveUser, providerOnly, cancelProviderRequest);
 
 // Provider's own disputes — list/detail, scoped to disputes where this
@@ -209,11 +219,11 @@ router.get('/disputes/:id', authenticate, requireActiveUser, providerOnly, getMy
 
 // Provider's own support tickets — same generic, userId-scoped model and
 // service the client-side tickets router uses (see SupportTicketService).
-router.post('/tickets', authenticate, requireActiveUser, createTicket);
-router.get('/tickets', authenticate, requireActiveUser, listMyTickets);
-router.get('/tickets/:id', authenticate, requireActiveUser, getMyTicket);
-router.post('/tickets/:id/reply', authenticate, requireActiveUser, replyToTicket);
-router.post('/tickets/:id/close', authenticate, requireActiveUser, closeMyTicket);
+router.post('/tickets', authenticate, requireActiveUser, providerOnly, createTicket);
+router.get('/tickets', authenticate, requireActiveUser, providerOnly, listMyTickets);
+router.get('/tickets/:id', authenticate, requireActiveUser, providerOnly, getMyTicket);
+router.post('/tickets/:id/reply', authenticate, requireActiveUser, providerOnly, replyToTicket);
+router.post('/tickets/:id/close', authenticate, requireActiveUser, providerOnly, closeMyTicket);
 
 import accreditationAiRoutes from './accreditation-ai.routes';
 

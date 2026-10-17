@@ -1,4 +1,5 @@
 import { prisma } from '../config/db';
+import { SETTLED_DISPUTE_WHERE } from './settlement-state.service';
 import { ReportDateRange } from './client-reports.service';
 
 // BE-2(a): provider-side "تقاريري". Same conventions as client-reports.service.ts, applied to the provider's own rows.
@@ -44,7 +45,7 @@ export class ProviderReportsService {
 			}),
 			prisma.project.findMany({
 				where: { providerId, ...inRange },
-				select: { id: true, title: true, status: true, createdAt: true, updatedAt: true, deliveryDays: true, contract: { select: { durationDays: true } } },
+				select: { id: true, title: true, status: true, createdAt: true, updatedAt: true, deliveryDays: true, disputes: { where: SETTLED_DISPUTE_WHERE, select: { id: true }, take: 1 }, contract: { select: { durationDays: true } } },
 				orderBy: { createdAt: 'desc' }
 			}),
 			prisma.dispute.findMany({
@@ -93,7 +94,7 @@ export class ProviderReportsService {
 			.slice(0, 8);
 
 		// ── projects ─────────────────────────────────────────────────────────
-		const completed = (projects as any[]).filter(p => p.status === 'COMPLETED');
+		const completed = (projects as any[]).filter(p => p.status === 'COMPLETED' && !(p.disputes?.length));
 		const active = (projects as any[]).filter(p => ['IN_PROGRESS', 'AWAITING_DELIVERY', 'PENDING_APPROVAL', 'DISPUTED'].includes(p.status));
 		// duration and on-time need a contractual/agreed number; rows without one are excluded rather than assumed
 		const timed = completed

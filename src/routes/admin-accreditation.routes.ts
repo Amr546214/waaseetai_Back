@@ -2,9 +2,9 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { AccountType, AccreditationStatus } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import { accreditationAiService } from '../services/accreditation-ai.service';
-import { rejectAccreditationSchema, specialtyReviewDecisionSchema } from '../dtos/accreditation.dto';
+import { rejectAccreditationSchema, requestCompletionSchema, specialtyReviewDecisionSchema } from '../dtos/accreditation.dto';
 import { specialtyAdminReviewService, specialtyReviewQueryService } from '../services/specialty-admin-review.service';
-import { AppError } from '../utils/app-error';
+import { AppError, zodAppError } from '../utils/app-error';
 import { adminActor } from '../utils/admin-actor';
 
 const router = Router();
@@ -37,9 +37,19 @@ router.post('/samples/:id/approve', async (req: Request, res: Response, next: Ne
 router.post('/samples/:id/reject', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = rejectAccreditationSchema.safeParse(req.body);
-    if (!parsed.success) throw new AppError('سبب الرفض مطلوب', 400);
-    const data = await accreditationAiService.adminRejectSample(String(req.params.id), parsed.data.rejectionReason, adminActor(req));
+    if (!parsed.success) throw zodAppError(parsed.error.issues, 'سبب الرفض مطلوب', { rejectionReason: 'سبب الرفض مطلوب' });
+    const data = await accreditationAiService.adminRejectSample(String(req.params.id), parsed.data.rejectionReason, adminActor(req), parsed.data.internalNote);
     res.json({ success: true, message: 'تم رفض نموذج الاعتماد', data });
+  } catch (error) { next(error); }
+});
+
+// Batch B T1: ask the provider to complete / fix the request. `userNote` is shown to the provider, `internalNote` never leaves the admin API.
+router.post('/samples/:id/request-completion', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = requestCompletionSchema.safeParse(req.body);
+    if (!parsed.success) throw zodAppError(parsed.error.issues, parsed.error.issues[0]?.message || 'بيانات الطلب غير صحيحة', { userNote: 'اكتب ملاحظة واضحة للمستخدم (3 أحرف على الأقل)' });
+    const data = await accreditationAiService.adminRequestCompletion(String(req.params.id), parsed.data, adminActor(req));
+    res.json({ success: true, message: 'تم إرسال طلب الاستكمال للمستخدم', data });
   } catch (error) { next(error); }
 });
 
@@ -62,7 +72,7 @@ router.get('/specialties/:providerSpecialtyId', async (req: Request, res: Respon
 router.post('/specialties/:providerSpecialtyId/decision', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = specialtyReviewDecisionSchema.safeParse(req.body);
-    if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message || 'بيانات القرار غير صحيحة', 400);
+    if (!parsed.success) throw zodAppError(parsed.error.issues, parsed.error.issues[0]?.message || 'بيانات القرار غير صحيحة', { reason: 'سبب القرار مطلوب (5 أحرف على الأقل)', decision: 'نوع القرار غير صحيح' });
     const data = await specialtyAdminReviewService.decide(req.user!.id, String(req.params.providerSpecialtyId), parsed.data);
     res.json({ success: true, message: parsed.data.decision === 'APPROVED' ? 'تم اعتماد التخصص' : 'تم رفض التخصص', data });
   } catch (error) { next(error); }

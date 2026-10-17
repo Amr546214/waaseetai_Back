@@ -1,3 +1,4 @@
+import { selfHireError } from '../utils/self-dealing';
 import { buildEscrowSnapshot, ESCROW_FEE_POLICY_V2 } from '../utils/escrow-commission';
 import { prisma } from '../config/db';
 import { deriveRequestStage, offerActionBlock, REQUEST_STAGE_GROUP, REQUEST_STAGE_LABEL } from '../utils/request-lifecycle';
@@ -16,6 +17,9 @@ import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { providerNotifications } from './provider-notifications.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
+import { listLifecycles, activeDisputeCounts } from './project-lifecycle.service';
+import { adminAudit } from './admin-audit.service';
+import { settledProjectIds, deliveryCompletedProject, adminSettlementFor, adminSettledView, settlementsByProject, STAGE_CLOSED_BY_SETTLEMENT, SETTLED_LABEL_AR, SETTLED_STAGE_LABEL_AR } from './settlement-state.service';
 import {
 	mailTransporter,
 	getOtpEmailTemplate,
@@ -101,6 +105,29 @@ export function mapRequestDraftToSuggestion(raw: Partial<RequestDraftResponse> |
 
 	if (suggestion.suggestedTitle === null && suggestion.suggestedDescription === null) return null;
 	return suggestion;
+}
+
+/** Timelines of the real ProjectStage rows of a contract: the stage status is the stored one (APPROVED = completed), never guessed from elapsed days. */
+export function buildStageTimelines(
+	stages: Array<{ id: string; stepOrder: number; title: string; description?: string | null; days: number; amount: number; status: string; startedAt?: Date | null; approvedAt?: Date | null }>,
+	contractStart: Date
+) {
+	let acc = 0;
+	const day = 24 * 60 * 60 * 1000;
+	const timelines = stages.map((st, index) => {
+		const start = st.startedAt ?? new Date(contractStart.getTime() + acc * day);
+		const end = st.approvedAt ?? new Date(contractStart.getTime() + (acc + Number(st.days || 0)) * day);
+		acc += Number(st.days || 0);
+		const status: 'COMPLETED' | 'IN_PROGRESS' | 'PENDING' = st.status === 'APPROVED' ? 'COMPLETED' : (st.status === 'PENDING' ? 'PENDING' : 'IN_PROGRESS');
+		return { id: st.id, title: st.title || `المرحلة ${index + 1}`, status, rawStatus: st.status, startDate: start.toISOString(), endDate: end.toISOString(), description: st.description || '', days: Number(st.days || 0), amount: Math.round(Number(st.amount || 0) * 100) / 100 };
+	});
+	const done = timelines.filter(t => t.status === 'COMPLETED');
+	return {
+		timelines,
+		completed: done.length,
+		releasedAmount: Math.round(done.reduce((a, t) => a + t.amount, 0) * 100) / 100,
+		progress: stages.length ? Math.round((done.length / stages.length) * 100) : 0
+	};
 }
 
 export class ClientRequestsService {
@@ -445,8 +472,10 @@ export class ClientRequestsService {
 			: [];
 		const contractByRequest = new Map(contracts.map((c: any) => [c.projectId, c.status as string]));
 
+		// a request closed by a dispute settlement is its own stage (never «مكتمل»)
+		const settledRequestIds = await settledProjectIds([...clientRequests.map((r: any) => r.id), ...projects.map((p: any) => p.id)]);
 		const withStage = (row: any, contractStatus: string | null, offerStatuses: string[]) => {
-			const stage = deriveRequestStage({ requestStatus: row.status, contractStatus, offerStatuses });
+			const stage = deriveRequestStage({ requestStatus: row.status, contractStatus, offerStatuses, settled: settledRequestIds.has(row.id) });
 			return { ...row, stage, stageLabel: REQUEST_STAGE_LABEL[stage], stageGroup: REQUEST_STAGE_GROUP[stage] };
 		};
 
@@ -571,6 +600,8 @@ export class ClientRequestsService {
 			})
 			: [];
 		const workspaceMap = new Map(contracts.map(contract => [contract.projectId, contract.id]));
+		// Projects frozen by an open dispute (approval / release is refused by the backend): the list says so.
+		const activeDisputeMap = await activeDisputeCounts(allProjectIds, prisma as any);
 		// Batch 6 — one batched lookup (same pattern as escrowRecords/contracts
 		// above) for the real responsible-employee field, covering BOTH
 		// Project-primary AND ClientRequest-primary items uniformly via the
@@ -626,6 +657,7 @@ export class ClientRequestsService {
 				provider,
 				contract: `CT-${item.id.substring(0, 4).toUpperCase()}`,
 				heldAmount,
+				hasActiveDispute: (activeDisputeMap.get(item.id) ?? 0) > 0,
 				employee: employeeMap.get(item.id) || null,
 				nextStep: item.status === 'PENDING_SIGNATURE' ? (escrow?.status === 'HELD' ? 'بانتظار توقيع مقدم الخدمة لبدء التنفيذ' : 'توقيع العقد وإيداع الضمان لبدء التنفيذ') : 'التسليم النهائي للمشروع، قيد العمل لدى مقدم الخدمة',
 				completedStages: 0,
@@ -664,7 +696,8 @@ export class ClientRequestsService {
 			const completedStages = awaitingSignature ? 0 : approvedStages.length;
 			const reviewStage = milestones.find((m: any) => m.status === 'SUBMITTED');
 			const currentStage = reviewStage || milestones.find((m: any) => m.status !== 'APPROVED') || milestones[milestones.length - 1];
-			const needsReview = !awaitingSignature && (p.status === 'AWAITING_DELIVERY' || Boolean(reviewStage));
+			// A project waits for the client only when a stage was really delivered (stage SUBMITTED); the stored project status alone is not trusted when stage rows exist.
+			const needsReview = !awaitingSignature && (contractStages.length > 0 ? Boolean(reviewStage) : p.status === 'AWAITING_DELIVERY');
 			const displayStatus = awaitingSignature ? 'pending' : needsReview ? 'wait' : ((daysLeft as number) < 0 ? 'late' : 'run');
 			const nextStep = awaitingSignature
 				? (funded ? 'بانتظار توقيع مقدم الخدمة لبدء التنفيذ' : 'توقيع العقد وإيداع الضمان لبدء التنفيذ')
@@ -685,6 +718,7 @@ export class ClientRequestsService {
 				provider,
 				contract: `CT-${p.id.substring(0, 4).toUpperCase()}`,
 				heldAmount,
+				hasActiveDispute: (activeDisputeMap.get(p.id) ?? 0) > 0,
 				employee: employeeMap.get(p.id) || null,
 				nextStep,
 				completedStages,
@@ -746,16 +780,20 @@ export class ClientRequestsService {
 
 		const projectIds = contracts.map(c => c.projectId);
 		const reviews = projectIds.length > 0
-			? await prisma.review.findMany({ where: { projectId: { in: projectIds }, clientId: userId, reviewerRole: 'CLIENT' } })
+			? await prisma.review.findMany({ where: { projectId: { in: projectIds }, clientId: userId, reviewerRole: 'CLIENT', stageId: null } }) // project-level reviews only: a stage review must not make the project look rated
 			: [];
 		const reviewMap = new Map(reviews.map(r => [r.projectId, r]));
+		const settledMap = await settlementsByProject(projectIds);
+		// ONE lifecycle for the archive: state, closure reason and the real money (held now / released by stage approvals / the settlement's own figures).
+		const lifecycleMap = await listLifecycles(contracts.map(c => ({ projectId: c.projectId, contractStatus: c.status, price: c.price, escrow: c.project?.escrow ?? null })), { db: prisma, audit: adminAudit });
 
 		const items = contracts.map(c => {
+			const adminSettled = settledMap.get(c.projectId) ?? null;
+			const lc = lifecycleMap.get(c.projectId)!;
 			const providerName = c.provider?.providerProfile?.companyName ||
 				[c.provider?.firstName, c.provider?.lastName].filter(Boolean).join(' ') || 'مقدم خدمة';
 			const escrow = c.project?.escrow;
 			const totalPrice = escrow ? Number(escrow.amount) : c.price;
-			const releasedAmount = escrow ? Number(escrow.releasedAmount || 0) : 0;
 			const review = reviewMap.get(c.projectId);
 			return {
 				id: c.id,
@@ -763,18 +801,29 @@ export class ClientRequestsService {
 				title: c.project?.title || 'مشروع',
 				status: c.status,
 				rawStatus: c.project?.status || c.status,
+				// Derived: a project closed by an admin financial dispute decision is not "completed" (no stored status changes).
+				adminSettled,
+				statusLabel: adminSettled ? SETTLED_LABEL_AR : null,
 				provider: {
 					id: c.providerId,
 					name: providerName,
 					initials: providerName.split(' ').map((n: string) => n[0] || '').join('').substring(0, 2) || 'مـ',
 				},
 				contractReference: `CT-${c.id.substring(0, 4).toUpperCase()}`,
-				totalPrice,
-				releasedAmount,
-				heldAmount: Math.max(0, totalPrice - releasedAmount),
+				// totalPrice = the contract value (historical for a settled project); releasedAmount = released through stage approvals ONLY; heldAmount = money really in the escrow now.
+				totalPrice: lc.financial.contractValue || totalPrice,
+				releasedAmount: lc.financial.releasedByStageApprovals,
+				heldAmount: lc.financial.heldNow,
+				operationalStatus: lc.operationalStatus,
+				operationalLabel: lc.operationalLabel,
+				closureReason: lc.closureReason,
+				completedByDelivery: lc.completedByDelivery,
+				closedBySettlement: lc.closedBySettlement,
+				hasActiveDispute: lc.hasActiveDispute,
+				financial: lc.financial,
 				completedAt: c.updatedAt.toISOString(),
-				category: c.project?.serviceCatalog?.title || c.project?.specialty || 'Marketplace',
-				canRate: c.status === 'COMPLETED' && !review,
+				category: c.project?.serviceCatalog?.title || c.project?.specialty || '',
+				canRate: c.status === 'COMPLETED' && !review && !adminSettled,
 				hasRated: !!review,
 				rating: review?.rating || null,
 				ratingComment: review?.comment || null,
@@ -836,15 +885,7 @@ export class ClientRequestsService {
 				const prop = clientReq.proposals[0];
 				price = Number(prop.price || 0);
 
-				// ClientRequest Proposals don't have explicit milestones in schema, so we create a dynamic one
-				realMilestones = [{
-					id: 'm-req-1',
-					title: 'تسليم المشروع النهائي',
-					amount: price,
-					percentage: 100,
-					days: duration,
-					status: rawStatus === 'COMPLETED' ? 'COMPLETED' : 'PENDING'
-				}];
+				// A ClientRequest proposal carries no milestones: the real ones come from the signed contract's ProjectStage rows below; nothing is invented here.
 
 				const pProfile = prop.provider.providerProfile;
 				providerName = pProfile?.companyName || `${prop.provider.firstName || ''} ${prop.provider.lastName || ''}`.trim() || 'مقدم خدمة';
@@ -884,14 +925,7 @@ export class ClientRequestsService {
 				} else if (project.proposals && project.proposals.length > 0) {
 					const prop = project.proposals[0];
 					price = Number(prop.price || 0);
-					realMilestones = [{
-						id: 'm-proj-1',
-						title: 'تسليم المشروع النهائي',
-						amount: price,
-						percentage: 100,
-						days: duration,
-						status: rawStatus === 'COMPLETED' ? 'COMPLETED' : 'PENDING'
-					}];
+					// no milestones on this legacy proposal: real stages (if any) come from the contract below
 					const pProfile = prop.provider.providerProfile;
 					providerName = pProfile?.companyName || `${prop.provider.firstName || ''} ${prop.provider.lastName || ''}`.trim() || 'مقدم خدمة';
 					providerInitial = providerName.split(' ').map((n: string) => n[0] || '').join('').substring(0, 2);
@@ -901,7 +935,21 @@ export class ClientRequestsService {
 			}
 		}
 
-		if (realMilestones.length > 0) {
+		// The signed contract's ProjectStage rows are the single source of truth for the milestones (title, days, amount, real status); the request/offer milestones are only a fallback.
+		const contractRow = await prisma.contract.findFirst({ where: { projectId: requestId, clientId: userId }, select: { price: true, status: true, signedAt: true, stages: { orderBy: { stepOrder: 'asc' } } } });
+		const stageRows = contractRow?.stages ?? [];
+		const settlement = await adminSettlementFor({ projectId: requestId });
+		if (stageRows.length > 0) {
+			price = Number(contractRow!.price || price);
+			if (contractRow!.signedAt) startDate = contractRow!.signedAt;
+			const built = buildStageTimelines(stageRows, startDate);
+			timelines = built.timelines;
+			realMilestones = stageRows;
+			completedMilestones = built.completed;
+			releasedAmount = built.releasedAmount;
+			heldAmount = Math.max(0, price - releasedAmount);
+			progress = built.progress;
+		} else if (realMilestones.length > 0) {
 			let accDays = 0;
 			const elapsedMs = new Date().getTime() - startDate.getTime();
 			const elapsedDays = Math.max(0, Math.floor(elapsedMs / (1000 * 60 * 60 * 24)));
@@ -974,9 +1022,23 @@ export class ClientRequestsService {
 
 		// Only money really sitting in an escrow counts as held. The branches above work from the offer price and can only ESTIMATE; a project that is not funded holds nothing,
 		// and without real milestones there is no honest progress figure (0, or 100 once completed). This endpoint must never report estimated held amounts.
-		const escrowRow = await prisma.escrow.findUnique({ where: { projectId: requestId }, select: { status: true, amount: true, releasedAmount: true } });
+		const escrowRow = await prisma.escrow.findUnique({ where: { projectId: requestId }, select: { status: true, amount: true, releasedAmount: true, platformCommissionAmount: true, providerNetReleasedAmount: true } });
 		heldAmount = escrowRow && String(escrowRow.status) === 'HELD' ? Math.max(0, Number(escrowRow.amount) - Number(escrowRow.releasedAmount || 0)) : 0;
-		if (realMilestones.length === 0 || timelines.length === 0) progress = rawStatus === 'COMPLETED' ? 100 : 0;
+		if (realMilestones.length === 0 || timelines.length === 0) progress = rawStatus === 'COMPLETED' && !settlement.settled ? 100 : 0;
+		if (settlement.settled && stageRows.length === 0) {
+			// No genuine stage rows: nothing was approved, so no stage is shown as completed and no fake 100% is reported.
+			timelines = timelines.map((t: any) => ({ ...t, status: 'PENDING' }));
+			completedMilestones = 0; progress = 0;
+		}
+		// Display-only: the unreleased stages of a settled project read "closed by the settlement"; stored statuses and progress are untouched.
+		timelines = timelines.map((t: any) => {
+			const closed = settlement.settled && t.status !== 'COMPLETED';
+			return { ...t, displayStatus: closed ? STAGE_CLOSED_BY_SETTLEMENT : null, displayStatusLabel: closed ? SETTLED_STAGE_LABEL_AR : null };
+		});
+
+		// The shared lifecycle (same state + money as the archive and the workspace).
+		const lifecycle = (await listLifecycles([{ projectId: requestId, contractStatus: contractRow?.status ?? null, price: contractRow?.price ?? price, escrow: escrowRow as any }], { db: prisma, audit: adminAudit })).get(requestId)!;
+		if (lifecycle.closedBySettlement) { heldAmount = 0; releasedAmount = lifecycle.financial.releasedByStageApprovals; }
 
 		return {
 			project: {
@@ -989,6 +1051,15 @@ export class ClientRequestsService {
 				startDate: startDate.toISOString(),
 				endDate: expectedEndDate.toISOString(),
 				daysLeft: daysLeft,
+				adminSettled: adminSettledView(settlement),
+				statusLabel: settlement.settled ? SETTLED_LABEL_AR : null,
+				operationalStatus: lifecycle.operationalStatus,
+				operationalLabel: lifecycle.operationalLabel,
+				closureReason: lifecycle.closureReason,
+				completedByDelivery: lifecycle.completedByDelivery,
+				closedBySettlement: lifecycle.closedBySettlement,
+				hasActiveDispute: lifecycle.hasActiveDispute,
+				financial: lifecycle.financial,
 				milestonesCount: realMilestones.length,
 				completedMilestones: completedMilestones,
 				heldAmount: heldAmount,
@@ -1097,7 +1168,7 @@ export class ClientRequestsService {
 		const completedProjectCounts = providerIds.length > 0
 			? await prisma.project.groupBy({
 				by: ['providerId'],
-				where: { providerId: { in: providerIds }, status: 'COMPLETED' },
+				where: deliveryCompletedProject({ providerId: { in: providerIds } }),
 				_count: { id: true }
 			})
 			: [];
@@ -1199,7 +1270,7 @@ export class ClientRequestsService {
 			};
 		});
 
-		const stage = deriveRequestStage({ requestStatus: request.status, contractStatus: contract?.status ?? null, offerStatuses: request.proposals.map(p => p.status) });
+		const stage = deriveRequestStage({ requestStatus: request.status, contractStatus: contract?.status ?? null, offerStatuses: request.proposals.map(p => p.status), settled: (await adminSettlementFor({ projectId: requestId })).settled });
 
 		return {
 			id: request.id,
@@ -1267,6 +1338,8 @@ export class ClientRequestsService {
 			throw new AppError('هذا العرض مسحوب ولا يمكن اختياره', 409);
 		}
 		const providerId = canonical?.providerId || legacy!.providerId;
+		// the real provider user id vs the authenticated client: nobody hires themselves, whatever role they act as
+		if (providerId === userId) throw selfHireError();
 		// While the request is still OPEN only a live offer can be chosen, and not while the provider's counter offer waits for an answer
 		// (changing the chosen offer after selection stays as before: allowed until the client signs).
 		if (String(request.status) === 'OPEN') {
@@ -1459,6 +1532,7 @@ export class ClientRequestsService {
 			where: { projectId: requestId, clientId: userId, status: ContractStatus.PENDING_CLIENT_SIGNATURE }
 		});
 		if (!contract) throw new AppError('يجب اختيار عرض صالح قبل توقيع العقد', 409);
+		if (contract.providerId === userId) throw selfHireError();
 		if (offerId !== contract.offerId) {
 			const selectedLegacy = await prisma.proposal.findFirst({
 				where: { id: offerId, clientRequestId: requestId, providerId: contract.providerId, status: ProposalStatus.PENDING_SIGNATURE }
@@ -1468,15 +1542,20 @@ export class ClientRequestsService {
 
 		// Generate 6 digit OTP
 		const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-		const recentChallenges = await prisma.otpVerification.count({
-			where: {
-				userId,
-				type: 'EMAIL',
-				createdAt: { gt: new Date(Date.now() - 60 * 1000) },
-				context: { path: ['requestId'], equals: requestId }
-			}
-		});
-		if (recentChallenges >= 3) throw new AppError('طلبات رمز التوقيع كثيرة. انتظر دقيقة ثم حاول مجدداً', 429);
+		const recentWhere = {
+			userId,
+			type: 'EMAIL' as const,
+			createdAt: { gt: new Date(Date.now() - 60 * 1000) },
+			context: { path: ['requestId'], equals: requestId }
+		};
+		const recentChallenges = await prisma.otpVerification.count({ where: recentWhere });
+		if (recentChallenges >= 3) {
+			// The wait ends when the oldest challenge that still counts leaves the 60-second window (a machine-readable duration; the text stays as it was).
+			const rows = await prisma.otpVerification.findMany({ where: recentWhere, select: { createdAt: true }, orderBy: { createdAt: 'asc' } });
+			const blockingAt = rows.length >= 3 ? rows[rows.length - 3].createdAt.getTime() : Date.now();
+			const retryAfterSeconds = Math.max(1, Math.ceil((blockingAt + 60 * 1000 - Date.now()) / 1000));
+			throw new AppError('طلبات رمز التوقيع كثيرة. انتظر دقيقة ثم حاول مجدداً', 429, [{ code: 'SIGN_OTP_THROTTLED', retryAfterSeconds }]);
+		}
 		const otpHash = createHmac('sha256', otpSecret).update(`${contract.id}:${otpCode}`).digest('hex');
 
 		const otpRecord = await prisma.otpVerification.create({
@@ -1503,7 +1582,7 @@ export class ClientRequestsService {
 			throw new AppError('تعذر إرسال رمز التوقيع. لم يتم تنفيذ أي توقيع أو حجز', 503);
 		}
 
-		return { email: user.email, expiresInSeconds: CONTRACT_OTP_TTL_SECONDS };
+		return { email: user.email, expiresInSeconds: CONTRACT_OTP_TTL_SECONDS, expiresAt: otpRecord.expiresAt.toISOString() };
 	}
 
 	/**
@@ -1520,6 +1599,8 @@ export class ClientRequestsService {
 			where: { projectId: requestId, clientId: userId, status: ContractStatus.PENDING_CLIENT_SIGNATURE }
 		});
 		if (!contractBeforePayment) throw new AppError('العقد غير جاهز لتوقيع العميل أو تم توقيعه مسبقاً', 409);
+		// before the OTP is read and before any wallet debit / escrow hold
+		if (contractBeforePayment.providerId === userId) throw selfHireError();
 		// Phase 4 — selectOffer() stores the CANONICAL ProjectProposal id on
 		// Contract.offerId whenever one exists, while the client UI (request
 		// details → contract → deposit) carries the legacy Proposal mirror id

@@ -16,9 +16,10 @@ import { sessionService, SessionContext } from './session.service';
 import { accountAuditLogService } from './account-logs.service';
 import { initializeRoleState } from './account-management.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
-import { otpSendThrottle, otpThrottleMessage } from '../utils/otp-send-throttle';
+import { otpSendThrottle, otpThrottleMessage, resendAvailableAtIso } from '../utils/otp-send-throttle';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { normalizeReferralIdentifier } from '../utils/referral-identifier';
+import { RESEND_GENERIC_MESSAGE, ACTIVATION_CODE_REJECTED_MESSAGE } from '../utils/auth-messages';
 import { marketerNotifications } from './marketer-notifications.service';
 
 /**
@@ -223,15 +224,25 @@ export class AuthService {
 		} catch {
 			throw new AppError('رقم الجوال غير صالح أو لا يطابق رمز الدولة المختار', 400);
 		}
+		// A missing password is a plain input error: answered the same whether or not the address / phone is in use.
+		if (!input.password && !googleIdentity) throw new AppError('كلمة المرور مطلوبة', 400);
 		// 1. Check for duplicates (email or phone)
 		const existingUser = await authRepository.findByEmailOrPhone(input.email, input.phoneNumber);
 		if (existingUser) {
-			throw new AppError('البريد الإلكتروني أو رقم الجوال مسجل بالفعل، يرجى تسجيل الدخول', 409);
+			// Only a VERIFIED Google credential for this very address proves the caller controls it: that caller may be told the account exists.
+			if (googleIdentity && existingUser.email.trim().toLowerCase() === input.email) {
+				throw new AppError('هذا الحساب موجود بالفعل، يرجى تسجيل الدخول', 409);
+			}
+			// Anyone else (an arbitrary email / phone typed into the form): nothing is created, no code is created or sent (active or pending
+			// alike, no alert mail either). The CONTROLLER answers every outcome with one identical public body (no id, no flags), so this
+			// internal result is never visible to the caller. A pending owner gets a code through "resend" (by e-mail, throttled) or login; an
+			// active one logs in or recovers the password. The same bcrypt cost keeps the response time close.
+			if (input.password) await bcrypt.hash(input.password, 12);
+			return { userId: null as string | null, accountCreated: false };
 		}
 
 		// 2. Hash Password
 		const saltRounds = 12;
-		if (!input.password && !googleIdentity) throw new AppError('كلمة المرور مطلوبة', 400);
 		const hashedPassword = input.password ? await bcrypt.hash(input.password, saltRounds) : null;
 
 		// 3. Create User & Profile via Repository Transaction
@@ -262,12 +273,14 @@ export class AuthService {
 		const expiresAt = new Date(Date.now() + EMAIL_OTP_EXPIRY_MS);
 		await authRepository.createOtp(user.id, otpCode, OtpType.EMAIL, expiresAt, OtpPurpose.ACTIVATION);
 
-		// 5. Send it and WAIT for the SMTP result: the caller must be told when the email did not go out.
-		const emailSent = await this.sendActivationEmail(user.email, otpCode, 'register');
+		// 5. Send it WITHOUT waiting for SMTP: the public answer is identical for a new and an in-use address, and an SMTP round-trip
+		//    would make a new registration measurably slower than an in-use one. A failed send is logged by sendActivationEmail (never the
+		//    code); the user then uses "resend code" on the code step (generic, throttled).
+		void this.sendActivationEmail(user.email, otpCode, 'register');
 
 		return {
-			userId: user.id,
-			emailSent
+			userId: user.id as string | null,
+			accountCreated: true
 		};
 	}
 
@@ -290,29 +303,40 @@ export class AuthService {
 	 */
 	public async resendOtp(userId: string): Promise<{ emailSent: boolean; reused: boolean }> {
 		const user = await authRepository.findById(userId);
-		if (!user) {
-			throw new AppError('المستخدم غير موجود', 404);
+		// Unknown id and already-active account are answered exactly like a send (the endpoint is unauthenticated): nothing is sent or created.
+		if (!user || user.status === UserStatus.ACTIVE) {
+			return { emailSent: true, reused: false };
 		}
-		if (user.status === UserStatus.ACTIVE) {
-			throw new AppError('الحساب مفعل مسبقاً', 400);
-		}
-
-		// A code that is still valid is RE-SENT as it is (not replaced): an older email that arrives late must not carry a
-		// dead code. A new one is created only when there is none or the last one has expired.
-		const existing = await authRepository.findLatestActivationOtp(user.id);
-		let otpCode: string;
-		let reused = false;
-		if (existing && existing.expiresAt > new Date() && existing.attempts < OTP_MAX_ATTEMPTS) {
-			otpCode = existing.code;
-			reused = true;
-		} else {
-			otpCode = crypto.randomInt(100000, 999999).toString();
-			await authRepository.deleteActivationOtps(user.id);
-			await authRepository.createOtp(user.id, otpCode, OtpType.EMAIL, new Date(Date.now() + EMAIL_OTP_EXPIRY_MS), OtpPurpose.ACTIVATION);
-		}
-
+		const { otpCode, reused } = await this.prepareActivationCode(user.id);
 		const emailSent = await this.sendActivationEmail(user.email, otpCode, reused ? 'resend-same-code' : 'resend-new-code');
 		return { emailSent, reused };
+	}
+
+	/**
+	 * Resend by the e-mail typed at registration (the public register answer carries no account id). Sends only when an account with that
+	 * address is still waiting for activation; every other case (unknown, active, suspended) does nothing. The caller always gets the same
+	 * answer; the SMTP result is not awaited (equal timing) and a failure is only logged.
+	 */
+	public async resendOtpByEmail(email: string): Promise<void> {
+		const user = await authRepository.findByEmail(email);
+		if (!user || user.status !== UserStatus.PENDING_VERIFICATION) return;
+		const { otpCode, reused } = await this.prepareActivationCode(user.id);
+		void this.sendActivationEmail(user.email, otpCode, reused ? 'resend-same-code' : 'resend-new-code');
+	}
+
+	/**
+	 * A code that is still valid is RE-SENT as it is (not replaced): an older email that arrives late must not carry a
+	 * dead code. A new one is created only when there is none or the last one has expired.
+	 */
+	private async prepareActivationCode(userId: string): Promise<{ otpCode: string; reused: boolean }> {
+		const existing = await authRepository.findLatestActivationOtp(userId);
+		if (existing && existing.expiresAt > new Date() && existing.attempts < OTP_MAX_ATTEMPTS) {
+			return { otpCode: existing.code, reused: true };
+		}
+		const otpCode = crypto.randomInt(100000, 999999).toString();
+		await authRepository.deleteActivationOtps(userId);
+		await authRepository.createOtp(userId, otpCode, OtpType.EMAIL, new Date(Date.now() + EMAIL_OTP_EXPIRY_MS), OtpPurpose.ACTIVATION);
+		return { otpCode, reused: false };
 	}
 
 	/**
@@ -331,19 +355,23 @@ export class AuthService {
 		// regardless of authProvider, letting these accounts gain a local
 		// password via the same OTP flow. This never touches authProvider or
 		// googleId, so Google login keeps working unchanged afterwards.
+		// `expiresAt` has the same shape for a known and an unknown address (the unknown one is the time a fresh code WOULD stop being valid).
 		if (!user) {
-			return { message: RESET_GENERIC_MESSAGE };
+			return { message: RESET_GENERIC_MESSAGE, expiresAt: new Date(Date.now() + RESET_OTP_EXPIRY_MS).toISOString() };
 		}
 
 		// A reset code that is still valid (and not locked by wrong attempts) is re-sent as it is, not replaced.
 		const existingReset = await authRepository.findLatestPasswordResetOtp(user.id);
 		let otpCode: string;
+		let resetExpiresAt: Date;
 		if (existingReset && existingReset.expiresAt > new Date() && existingReset.attempts < RESET_OTP_MAX_ATTEMPTS) {
 			otpCode = existingReset.code;
+			resetExpiresAt = existingReset.expiresAt;
 		} else {
 			otpCode = crypto.randomInt(100000, 999999).toString();
+			resetExpiresAt = new Date(Date.now() + RESET_OTP_EXPIRY_MS);
 			await authRepository.deletePasswordResetOtps(user.id);
-			await authRepository.createPasswordResetOtp(user.id, otpCode, new Date(Date.now() + RESET_OTP_EXPIRY_MS));
+			await authRepository.createPasswordResetOtp(user.id, otpCode, resetExpiresAt);
 		}
 
 		// Not awaited: the SMTP round-trip would make a registered address answer measurably slower than an unknown one. The failure
@@ -352,7 +380,7 @@ export class AuthService {
 			.then(() => notificationService.sendPasswordResetEmail(user.email, user.firstName, otpCode))
 			.catch(() => { logger.error('[Auth] Password reset email was NOT delivered.'); });
 
-		return { message: RESET_GENERIC_MESSAGE };
+		return { message: RESET_GENERIC_MESSAGE, expiresAt: resetExpiresAt.toISOString() };
 	}
 
 	/**
@@ -402,7 +430,8 @@ export class AuthService {
 		}
 
 		if (otp.expiresAt < new Date()) {
-			throw new AppError('رمز التحقق انتهت صلاحيته، يرجى طلب رمز جديد', 400);
+			// same words as a wrong code: an expired answer would tell an unauthenticated caller that a reset was requested for this email
+			throw new AppError(RESET_INVALID_CODE_MESSAGE, 400);
 		}
 
 		if (otp.code !== code) {
@@ -422,38 +451,49 @@ export class AuthService {
 	 * Verify OTP and issue JWT
 	 */
 	public async verifyOtp(input: VerifyOtpInput, sessionContext: SessionContext = {}) {
+		// By e-mail (the public registration step) every failure is ONE answer with one status: unknown address, active / blocked account,
+		// no code, expired, wrong, locked. By id (login-while-pending, after the password check) the specific messages are kept.
+		const byEmail = !input.userId;
+		const fail = (specific: AppError): never => { throw byEmail ? new AppError(ACTIVATION_CODE_REJECTED_MESSAGE, 400) : specific; };
+		let userId = input.userId as string;
+		if (byEmail) {
+			const account = await authRepository.findByEmail(input.email as string);
+			if (!account || account.status !== UserStatus.PENDING_VERIFICATION) return fail(new AppError('', 400));
+			userId = account.id;
+		}
+
 		// 1. Fetch the latest ACTIVATION code only: a code issued for another purpose (password reset, sensitive change, checkout,
 		//    contract signature) or a legacy purpose-less one is never accepted here (AUD-FND-000031). An unknown user and a wrong
 		//    code share the same answer, so the endpoint cannot be used to find out which accounts exist.
-		const otp = await authRepository.findLatestActivationOtp(input.userId);
+		const otp = await authRepository.findLatestActivationOtp(userId);
 
 		if (!otp) {
-			throw new AppError('رمز التحقق غير صحيح', 400);
+			return fail(new AppError('رمز التحقق غير صحيح', 400));
 		}
 
 		if (otp.attempts >= OTP_MAX_ATTEMPTS) {
-			await authRepository.deleteActivationOtps(input.userId);
-			throw new AppError(OTP_LOCKED_MESSAGE, 429);
+			await authRepository.deleteActivationOtps(userId);
+			return fail(new AppError(OTP_LOCKED_MESSAGE, 429));
 		}
 
 		// 2. Check Expiration
 		if (otp.expiresAt < new Date()) {
-			throw new AppError('رمز التحقق انتهت صلاحيته، يرجى إعادة الإرسال', 400);
+			return fail(new AppError('رمز التحقق انتهت صلاحيته، يرجى إعادة الإرسال', 400));
 		}
 
 		// 3. Compare; every wrong guess counts and the fifth deletes the code (AUD-FND-000030)
 		if (otp.code !== input.code) {
 			await authRepository.incrementOtpAttempts(otp.id);
 			if (otp.attempts + 1 >= OTP_MAX_ATTEMPTS) {
-				await authRepository.deleteActivationOtps(input.userId);
-				throw new AppError(OTP_LOCKED_MESSAGE, 429);
+				await authRepository.deleteActivationOtps(userId);
+				return fail(new AppError(OTP_LOCKED_MESSAGE, 429));
 			}
-			throw new AppError('رمز التحقق غير صحيح', 400);
+			return fail(new AppError('رمز التحقق غير صحيح', 400));
 		}
 
 		// 3. Mark user as ACTIVE and delete OTPs
-		const updatedUser = await authRepository.updateUserStatus(input.userId, UserStatus.ACTIVE);
-		await authRepository.deleteUserOtps(input.userId);
+		const updatedUser = await authRepository.updateUserStatus(userId, UserStatus.ACTIVE);
+		await authRepository.deleteUserOtps(userId);
 
 		// If user is a MARKETING_BROKER, ensure their AffiliateProfile exists.
 		// This is normally a dead branch — registration already creates it via
@@ -528,6 +568,7 @@ export class AuthService {
 			phoneOtpRequired: false,
 			userId,
 			emailSent,
+			...(emailSent ? { resendAvailableAt: resendAvailableAtIso() } : {}),
 			message: emailSent ? 'يرجى تفعيل حسابك أولاً' : 'يرجى تفعيل حسابك أولاً. تعذر إرسال رمز التحقق الآن، حاول مرة أخرى بعد قليل أو تواصل مع الدعم'
 		};
 	}
@@ -568,29 +609,32 @@ export class AuthService {
 		if (!throttle.allowed) {
 			return { ...base, emailSent: false, retryAfterSeconds: throttle.retryAfterSeconds, message: otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds) };
 		}
-		const { emailSent } = await this.sendLoginOtp(userId, email);
-		return { ...base, emailSent, message: emailSent ? 'أرسلنا رمز تسجيل الدخول إلى بريدك الإلكتروني' : 'تعذر إرسال رمز تسجيل الدخول الآن، حاول مرة أخرى بعد قليل أو تواصل مع الدعم' };
+		const { emailSent, expiresAt } = await this.sendLoginOtp(userId, email);
+		return { ...base, emailSent, ...(emailSent ? { resendAvailableAt: resendAvailableAtIso(), expiresAt: expiresAt.toISOString() } : {}), message: emailSent ? 'أرسلنا رمز تسجيل الدخول إلى بريدك الإلكتروني' : 'تعذر إرسال رمز تسجيل الدخول الآن، حاول مرة أخرى بعد قليل أو تواصل مع الدعم' };
 	}
 
 	/** A still-valid LOGIN_EMAIL code is re-sent as it is (a late older email must not carry a dead code); otherwise a new one is created. */
-	private async sendLoginOtp(userId: string, email: string): Promise<{ emailSent: boolean; reused: boolean }> {
+	private async sendLoginOtp(userId: string, email: string): Promise<{ emailSent: boolean; reused: boolean; expiresAt: Date }> {
 		const existing = await authRepository.findLatestOtpByPurpose(userId, OtpPurpose.LOGIN_EMAIL);
 		let code: string;
 		let reused = false;
+		let expiresAt: Date;
 		if (existing && existing.expiresAt > new Date() && existing.attempts < OTP_MAX_ATTEMPTS) {
 			code = existing.code;
 			reused = true;
+			expiresAt = existing.expiresAt;
 		} else {
 			code = crypto.randomInt(100000, 999999).toString();
+			expiresAt = new Date(Date.now() + EMAIL_OTP_EXPIRY_MS);
 			await authRepository.deleteOtpsByPurpose(userId, OtpPurpose.LOGIN_EMAIL);
-			await authRepository.createOtp(userId, code, OtpType.EMAIL, new Date(Date.now() + EMAIL_OTP_EXPIRY_MS), OtpPurpose.LOGIN_EMAIL);
+			await authRepository.createOtp(userId, code, OtpType.EMAIL, expiresAt, OtpPurpose.LOGIN_EMAIL);
 		}
 		try {
 			await notificationService.sendLoginOtpEmail(email, code);
-			return { emailSent: true, reused };
+			return { emailSent: true, reused, expiresAt };
 		} catch (error) {
 			logger.error(`[AuthService] Login OTP email failed (userId=${userId})`, error);
-			return { emailSent: false, reused };
+			return { emailSent: false, reused, expiresAt };
 		}
 	}
 
@@ -655,6 +699,7 @@ export class AuthService {
 		const intent = input.intent ?? (input.accountType ? 'register' : 'login');
 		if (intent === 'register') {
 			if (existingUser) {
+				// Reached only with a VERIFIED Google credential for this address: the caller proved they control it.
 				throw new AppError('هذا الحساب موجود بالفعل، يرجى تسجيل الدخول', 409);
 			}
 			// Only return verified identity fields. No user, session or access token
@@ -670,13 +715,15 @@ export class AuthService {
 			};
 		}
 		if (!existingUser) {
-			throw new AppError('لا يوجد حساب بهذا البريد الإلكتروني، يرجى إنشاء حساب أولاً', 404);
+			// Verified Google credential only (see above). The way forward is the Sign-up path; a Login intent never creates an account.
+			throw new AppError('لا يوجد حساب مرتبط بحساب جوجل هذا، يرجى إنشاء حساب أولاً', 404);
 		}
 		if (existingUser.status === UserStatus.SUSPENDED) {
 			throw new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403);
 		}
 		if (existingUser.googleId && existingUser.googleId !== payload.sub) {
-			throw new AppError('حساب جوجل لا يطابق الحساب المرتبط', 401);
+			// the address is the same but another Google identity is linked: not spelled out (same words as an unverifiable token)
+			throw new AppError(GOOGLE_TOKEN_INVALID_MESSAGE, 401);
 		}
 		// Captured before any prisma.user.update() below, which returns a bare
 		// scalar User (no relations) and would otherwise silently drop these.
@@ -738,9 +785,14 @@ export class AuthService {
 	public async resendLoginOtp(userId: string, ipAddress?: string) {
 		const user = await authRepository.findById(userId);
 		const pending = user ? await authRepository.findLatestOtpByPurpose(userId, OtpPurpose.LOGIN_EMAIL) : null;
-		if (!user || user.status !== UserStatus.ACTIVE || !pending) throw new AppError('ابدأ تسجيل الدخول بالبريد وكلمة المرور أولاً', 400);
+		if (!user || user.status !== UserStatus.ACTIVE || !pending) {
+			// Unauthenticated endpoint: unknown id / not mid-login looks like a real send (same throttle bucket, same shape); nothing is sent.
+			const throttle = otpSendThrottle.consume(`login:${userId}`, ipAddress);
+			if (!throttle.allowed) return { emailSent: false, retryAfterSeconds: throttle.retryAfterSeconds, message: otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds) };
+			return { emailSent: true, resendAvailableAt: resendAvailableAtIso(), message: RESEND_GENERIC_MESSAGE };
+		}
 		const result = await this.loginOtpChallengeResult(userId, user.email, ipAddress);
-		return { emailSent: result.emailSent, message: result.message };
+		return { emailSent: result.emailSent, message: result.message, ...('retryAfterSeconds' in result ? { retryAfterSeconds: result.retryAfterSeconds } : {}), ...('resendAvailableAt' in result ? { resendAvailableAt: result.resendAvailableAt, expiresAt: result.expiresAt } : {}) };
 	}
 }
 

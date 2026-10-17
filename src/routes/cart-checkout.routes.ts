@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorizeActiveRoleWithMessage, requireActiveUser } from '../middlewares/auth.middleware';
+import { paymentLimiter } from '../middlewares/rate-limit.middleware';
 import { addCartItem, confirmPayment, createOrder, deleteCartItem, getCart, getOrder, getPaymentMethods, initPayment, resendPaymentOtp, syncCart, updateCartItem, validateCoupon } from '../controllers/cart-checkout.controller';
 
 const router = Router();
@@ -18,8 +19,8 @@ router.post('/checkout/coupon/validate', ...clientAuth, validateCoupon);
 router.post('/checkout/order', ...clientAuth, createOrder);
 router.get('/checkout/order/:id', ...clientAuth, getOrder);
 router.get('/checkout/payment/methods', ...clientAuth, getPaymentMethods);
-router.post('/checkout/payment/init', ...clientAuth, initPayment);
-router.post('/checkout/payment/confirm', ...clientAuth, confirmPayment);
-router.post('/checkout/payment/resend-otp', ...clientAuth, resendPaymentOtp);
+router.post('/checkout/payment/init', ...clientAuth, paymentLimiter, initPayment);
+router.post('/checkout/payment/confirm', ...clientAuth, paymentLimiter, confirmPayment);
+router.post('/checkout/payment/resend-otp', ...clientAuth, paymentLimiter, resendPaymentOtp);
 
 export default router;

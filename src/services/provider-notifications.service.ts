@@ -2,6 +2,7 @@ import { NotificationCategory } from '@prisma/client';
 import { prisma } from '../config/db';
 import { logger } from '../config/logger';
 import { notificationService } from './notification.service';
+import { resolutionLabelAr, type FinancialOutcomeSummary } from '../utils/dispute-resolution';
 
 /**
  * The provider-facing notifications for events that used to leave the provider with nothing (dispute, rating, withdrawal, PayPal email change,
@@ -14,6 +15,8 @@ export const PROVIDER_ROUTES = {
 	dispute: (disputeId: string) => `/provider-overview/disputes/${disputeId}`,
 	// Reviews received are shown on the provider's public profile.
 	reviews: '/provider-overview/profile/public',
+	// The provider's rating page of a project (project id or contract id); it reads the rating status first (form / saved card / blocked reason).
+	rating: (projectId: string) => `/provider-overview/projects/${projectId}/rating`,
 	// The offers list shows every offer with its live state (under negotiation, awaiting signature...).
 	offers: '/provider-overview/offers',
 	// Provider side of the offer negotiation; the id is the provider's own (canonical) offer id.
@@ -28,7 +31,8 @@ export const PROVIDER_ROUTES = {
 	// Specialties and their review state.
 	specialties: '/provider-overview/profile/specialties',
 	// The provider's own accreditation sample page (the id is the sample's).
-	accreditation: (sampleId: string) => `/provider-overview/business-models/center/accreditation-details/${sampleId}`
+	// Batch B T1: the request lives in the «إجراءات الحساب» log (the old accreditation-details page is not an approval status page).
+	accreditation: (sampleId: string) => `/provider-overview/account-actions/${sampleId}`
 } as const;
 
 const short = (text: string | null | undefined, max = 60) => {
@@ -57,19 +61,32 @@ export const providerNotifications = {
 	},
 
 	/** An admin closed a dispute (resolved, or rejected as not upheld). */
-	async disputeResolved(p: { disputeId: string; providerId: string | null | undefined; action: 'resolve' | 'reject'; resolution?: string | null }) {
+	async disputeResolved(p: { disputeId: string; providerId: string | null | undefined; action: 'resolve' | 'reject'; resolution?: string | null; financial?: FinancialOutcomeSummary | null }) {
 		if (!p.providerId) return;
 		const resolved = p.action === 'resolve';
-		const decision = short(p.resolution, 120);
+		const decision = short(resolutionLabelAr(p.resolution, !!p.financial), 120);
+		const usd = (n: number) => `${Math.round(n * 100) / 100} $`;
+		const money = p.financial
+			? ` ${p.financial.releaseToProvider > 0 ? `صُرف لرصيدك ${usd(p.financial.providerNet)}${p.financial.platformCommission > 0 ? ` بعد خصم عمولة المنصة ${usd(p.financial.platformCommission)}` : ''}. ` : ''}${p.financial.refundToClient > 0 ? `أُعيد ${usd(p.financial.refundToClient)} إلى العميل من المبلغ المحتجز.` : ''}`.trimEnd()
+			: ' لم يتغيّر أي مبلغ مالي بهذا القرار.';
 		await safely('disputeResolved', () => notificationService.createAndEmit({
 			userId: p.providerId!,
 			title: resolved ? 'تم حسم النزاع' : 'تم إغلاق النزاع دون قبوله',
-			message: `${resolved ? 'أنهت الإدارة مراجعة النزاع.' : 'رفضت الإدارة النزاع بعد مراجعته.'}${decision ? ` القرار: ${decision}` : ''}`,
+			message: `${resolved ? 'أنهت الإدارة مراجعة النزاع.' : 'رفضت الإدارة النزاع بعد مراجعته.'}${decision ? ` القرار: «${decision}».` : ''}${money}`,
 			category: NotificationCategory.PROJECTS,
 			type: 'DISPUTE_RESOLVED',
 			actionUrl: PROVIDER_ROUTES.dispute(p.disputeId),
 			actionText: 'عرض النزاع',
 			metadata: { disputeId: p.disputeId, action: p.action }
+		}));
+	},
+
+	/** A marketplace service was bought and its project started: the seller learns it the moment the payment committed. */
+	async servicePurchased(p: { providerId: string | null | undefined; projectId: string; title?: string | null }) {
+		if (!p.providerId) return;
+		await safely('servicePurchased', () => notificationService.createAndEmit({
+			userId: p.providerId!, title: 'طلب شراء جديد لخدمتك', message: `اشترى عميل خدمتك${p.title ? ` «${short(p.title)}»` : ''} وبدأ المشروع. افتح المشروع لمتابعة المراحل والتسليم.`,
+			category: NotificationCategory.PROJECTS, type: 'SERVICE_PURCHASED', actionUrl: PROVIDER_ROUTES.projectProgress(p.projectId), actionText: 'عرض المشروع', metadata: { projectId: p.projectId }
 		}));
 	},
 
@@ -81,8 +98,9 @@ export const providerNotifications = {
 			message: `قيّمك العميل بـ ${p.rating} من 5${p.stage ? ' على إحدى مراحل المشروع' : ''}.`,
 			category: NotificationCategory.PROJECTS,
 			type: 'RATING_RECEIVED',
-			actionUrl: PROVIDER_ROUTES.reviews,
-			actionText: 'عرض التقييمات',
+			// The rating sits inside its project (the rating page shows the client's review of this provider, read-only); without a project the public profile lists it.
+			actionUrl: p.projectId ? (p.stage ? PROVIDER_ROUTES.projectProgress(p.projectId) : PROVIDER_ROUTES.rating(p.projectId)) : PROVIDER_ROUTES.reviews,
+			actionText: p.projectId ? 'عرض التقييم' : 'عرض التقييمات',
 			metadata: { reviewId: p.reviewId, rating: p.rating, ...(p.projectId ? { projectId: p.projectId } : {}) }
 		}));
 	},
@@ -127,13 +145,27 @@ export const providerNotifications = {
 		const approved = p.decision === 'approve';
 		await safely('amendmentAnswered', () => notificationService.createAndEmit({
 			userId: p.providerId,
-			title: approved ? 'وافق العميل على طلب التعديل' : 'رفض العميل طلب التعديل',
-			message: `${approved ? 'وافق' : 'رفض'} العميل على طلب التعديل «${short(p.title)}». القرار مسجّل فقط ولا يغيّر السعر أو المدة أو الضمان تلقائيًا.`,
+			title: approved ? 'وافق العميل وطُبّق التعديل على العقد' : 'رفض العميل طلب التعديل',
+			message: `${approved ? 'وافق' : 'رفض'} العميل على طلب التعديل «${short(p.title)}». ${approved ? 'وطُبّق التعديل على العقد.' : 'ولم يتغيّر شيء في العقد.'}`,
 			category: NotificationCategory.PROJECTS,
 			type: 'PROJECT_AMENDMENT',
 			actionUrl: PROVIDER_ROUTES.projectProgress(p.projectId),
 			actionText: 'عرض المشروع',
 			metadata: { projectId: p.projectId, amendmentId: p.amendmentId, decision: p.decision }
+		}));
+	},
+
+	/** The client withdrew an amendment request they had raised: nothing changed and any payment authorization was voided. */
+	async amendmentCancelled(p: { providerId: string; projectId: string; amendmentId: string; title: string }) {
+		await safely('amendmentCancelled', () => notificationService.createAndEmit({
+			userId: p.providerId,
+			title: 'ألغى العميل طلب التعديل',
+			message: `ألغى العميل طلب التعديل «${short(p.title)}». لم يتغيّر شيء في العقد ولا في الضمان.`,
+			category: NotificationCategory.PROJECTS,
+			type: 'PROJECT_AMENDMENT',
+			actionUrl: PROVIDER_ROUTES.projectProgress(p.projectId),
+			actionText: 'عرض المشروع',
+			metadata: { projectId: p.projectId, amendmentId: p.amendmentId, decision: 'cancelled' }
 		}));
 	},
 
@@ -226,6 +258,21 @@ export const providerNotifications = {
 			actionUrl: PROVIDER_ROUTES.accreditation(p.sampleId),
 			actionText: 'عرض النموذج',
 			metadata: { sampleId: p.sampleId, decision: p.decision }
+		}));
+	},
+
+	/** An admin asked the provider to complete the request (not a rejection): the note addressed to the provider is quoted, the internal note never. */
+	async accreditationCompletionRequested(p: { providerId: string; sampleId: string; sampleTitle?: string | null; note?: string | null }) {
+		const title = short(p.sampleTitle);
+		await safely('accreditationCompletionRequested', () => notificationService.createAndEmit({
+			userId: p.providerId,
+			title: 'مطلوب استكمال بيانات طلب الاعتماد',
+			message: `طلبت الإدارة استكمال بيانات نموذج الاعتماد${title ? ` «${title}»` : ''}.${p.note ? ` الملاحظة: ${short(p.note, 200)}` : ''}`,
+			category: NotificationCategory.PROJECTS,
+			type: 'ACCREDITATION_COMPLETION_REQUESTED',
+			actionUrl: PROVIDER_ROUTES.accreditation(p.sampleId),
+			actionText: 'استكمال البيانات',
+			metadata: { sampleId: p.sampleId }
 		}));
 	},
 

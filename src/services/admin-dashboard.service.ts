@@ -1,5 +1,6 @@
 import { AccountType, AccreditationStatus, DisputeStatus, EscrowStatus, KYCStatus, ModificationStatus, OnboardingStatus, ChangeRequestStatus, ProjectStatus, SpecialtyVerificationStatus, SupportTicketStatus, UserStatus, WithdrawalStatus } from '@prisma/client';
 import { prisma } from '../config/db';
+import { deliveryCompletedProject } from './settlement-state.service';
 
 // Admin dashboard aggregates. Every number comes from a COUNT / SUM / GROUP over the real tables — nothing is a fixed figure, a percentage with no
 // base, or a placeholder. With no rows every figure is 0 and every list is []. Revenue = the platform commission recorded on escrows
@@ -51,7 +52,7 @@ export class AdminDashboardService {
 			prisma.user.count({ where: { ...memberWhere, createdAt: { gte: prevMonthStart, lt: monthStart } } }),
 			prisma.user.count({ where: { ...memberWhere, status: { in: [UserStatus.SUSPENDED, UserStatus.SUSPENDED_REVIEW] } } }),
 			prisma.project.count({ where: { status: { in: ACTIVE_PROJECT_STATUSES } } }),
-			prisma.project.count({ where: { status: ProjectStatus.COMPLETED } }),
+			prisma.project.count({ where: deliveryCompletedProject() }),
 			prisma.clientRequest.count({ where: { status: 'OPEN' } }),
 			prisma.escrow.aggregate({ _sum: { platformCommissionAmount: true } }),
 			prisma.escrow.aggregate({ _sum: { platformCommissionAmount: true }, where: { platformCommissionAmount: { gt: 0 }, updatedAt: { gte: monthStart } } }),

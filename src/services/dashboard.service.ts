@@ -1,3 +1,4 @@
+import { round2 } from '../utils/money';
 import { computeClientAiOfferRating } from './client-ai-offer-rating';
 import { prisma } from '../config/db';
 import { AccountType, UserRole } from '@prisma/client';
@@ -9,6 +10,7 @@ import { computeClientCompletion } from '../utils/completion-calculators';
 import { levelInfo } from '../utils/level-info';
 import { logger } from '../config/logger';
 import { getClientLevelInfo } from './gamification.service';
+import { deliveryCompletedProject, adminSettlementFor } from './settlement-state.service';
 
 // Offers the client can act on: the same ones the request page lists, minus drafts and closed ones.
 const CLIENT_ACTIONABLE_PROPOSAL_STATUSES = ['PENDING', 'SUBMITTED', 'UNDER_NEGOTIATION'] as const;
@@ -119,20 +121,18 @@ export class DashboardService {
           amount: true
         }
       });
-      const totalEscrowAmount = escrowResult._sum.amount || 0;
+      const totalEscrowAmount = round2(escrowResult._sum.amount || 0);
 
       // 4. Total Spent (sum of budgets of all client's COMPLETED projects)
       const spentResult = await prisma.project.aggregate({
-        where: {
-          clientId: userId,
-          status: 'COMPLETED'
-        },
+        // budget of the projects completed BY DELIVERY (a settled project's budget is not what was spent: its real money is in the wallet / finance reports)
+        where: deliveryCompletedProject({ clientId: userId }),
         _sum: {
           budgetFixed: true,
           budgetMax: true
         }
       });
-      const totalSpent = (spentResult._sum.budgetFixed || 0) + (spentResult._sum.budgetMax || 0);
+      const totalSpent = round2((spentResult._sum.budgetFixed || 0) + (spentResult._sum.budgetMax || 0));
 
       // 5. Latest Projects (Top 3 recent projects)
       const latestProjectsRaw = await prisma.project.findMany({
@@ -309,7 +309,8 @@ export class DashboardService {
                              'مقدم خدمة موثق';
         // progress = approved stages / all stages of the contract (0 while it has none), never a placeholder
         let progress = 0;
-        if (activeContractEntity.status === 'COMPLETED' || activeContractEntity.project.status === 'COMPLETED') {
+        const settledContract = (await adminSettlementFor({ projectId: activeContractEntity.projectId })).settled;
+        if (!settledContract && (activeContractEntity.status === 'COMPLETED' || activeContractEntity.project.status === 'COMPLETED')) {
           progress = 100;
         } else {
           progress = await this.contractStageProgress(activeContractEntity.id);
@@ -392,11 +393,7 @@ export class DashboardService {
         }),
         // 3. Monthly Earnings (Completed projects in current month)
         prisma.project.aggregate({
-          where: {
-            providerId: userId,
-            status: 'COMPLETED',
-            updatedAt: { gte: firstDayOfMonth }
-          },
+          where: deliveryCompletedProject({ providerId: userId, updatedAt: { gte: firstDayOfMonth } }),
           _sum: { budgetFixed: true, budgetMax: true }
         }),
         // 4. User details for profile completion level (legacy fallback only —
@@ -447,7 +444,7 @@ export class DashboardService {
         })
       ]);
 
-      const monthlyEarnings = (monthlyEarningsAgg._sum.budgetFixed || 0) + (monthlyEarningsAgg._sum.budgetMax || 0);
+      const monthlyEarnings = round2((monthlyEarningsAgg._sum.budgetFixed || 0) + (monthlyEarningsAgg._sum.budgetMax || 0));
 
       // Phase 3C: profileCompletionPercent comes from ProviderProfile, and
       // currentPoints/currentLevel/pointsToNextLevel come from the provider's

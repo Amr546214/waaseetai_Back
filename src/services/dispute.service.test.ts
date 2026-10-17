@@ -160,7 +160,7 @@ test('heldEscrowAmount: the escrow balance still held, using the provider-financ
 test('getForUser: adds heldEscrowAmount from the escrow of the dispute project; null without a project', async (t) => {
   const escrowFind = t.mock.fn(async (_args: any) => ({ amount: 113, releasedAmount: 40, status: 'HELD', project: { contract: { price: 100 } } }));
   let dispute: any = { id: 'd1', openedById: 'u1', againstUserId: 'u2', projectId: 'p1', status: 'OPEN' };
-  const prismaMock: any = { dispute: { findUnique: async () => dispute }, escrow: { findUnique: escrowFind } };
+  const prismaMock: any = { dispute: { findUnique: async () => dispute, count: async () => 0, findFirst: async () => null }, escrow: { findUnique: escrowFind } };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   const { disputeService } = await import(`./dispute.service.ts?fixture=${Date.now()}-${Math.random()}`);
 
@@ -185,9 +185,11 @@ async function loadCreate(t: TestContext, opts: { request?: any; project?: any; 
   const createSpy = t.mock.fn(async (args: any) => ({ id: 'd-new', ...args.data }));
   const prismaMock: any = {
     clientRequest: { findUnique: async () => opts.request ?? null },
-    project: { findUnique: async () => opts.project ?? null },
+    project: { findUnique: async () => opts.project ?? null, findFirst: async () => opts.project ?? null },
     proposal: { findFirst: async () => null },
     dispute: { findFirst: async () => opts.existingDispute ?? null, create: createSpy },
+    $queryRaw: async () => [{ id: 'c-1' }],
+    $transaction: async (fn: any) => fn(prismaMock),
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   t.mock.module('./ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: {} } });
@@ -292,4 +294,21 @@ test('createForRequest (client): a marketplace contract still waiting for signat
   const { disputeService, createSpy } = await loadCreate(t, { project: marketplaceProject('PENDING_PROVIDER_SIGNATURE') });
   await assert.rejects(() => disputeService.createForRequest('proj-mk', CLIENT_ID, 'client', dispInput), (e: any) => e.statusCode === 400 && /قبل توقيع العقد/.test(e.message));
   assert.equal(createSpy.mock.calls.length, 0);
+});
+
+test('createForRequest: the marketplace project can be opened by its CONTRACT id (the client project page is keyed by the contract id)', async t => {
+  let seenWhere: any = null;
+  const created: any[] = [];
+  t.mock.module('../config/db', { namedExports: { prisma: {
+    clientRequest: { findUnique: async () => null },
+    project: { findFirst: async ({ where }: any) => { seenWhere = where; return { id: 'proj-9', clientId: 'client-9', providerId: 'prov-9', contract: { id: 'contract-9', status: 'ACTIVE', clientId: 'client-9', providerId: 'prov-9' } }; } },
+    dispute: { findFirst: async () => null, create: async ({ data }: any) => { created.push(data); return { id: 'd9', ...data, request: null, project: { id: 'proj-9', title: 'x' } }; } },
+    $transaction: async (fn: any) => fn({ $queryRaw: async () => [{ id: 'contract-9' }], dispute: { findFirst: async () => null, create: async ({ data }: any) => { created.push(data); return { id: 'd9', ...data, request: null, project: { id: 'proj-9', title: 'x' } }; } } })
+  } } });
+  t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { disputeOpened: async () => undefined } } });
+  t.mock.module('./client-notifications.service', { namedExports: { clientNotifications: { send: async () => undefined }, clientNotificationFor: new Proxy({}, { get: () => () => ({}) }), CLIENT_ROUTES: {} } });
+  const { disputeService } = await import(`./dispute.service.ts?contractkey=${Date.now()}-${Math.random()}`);
+  await disputeService.createForRequest('contract-9', 'client-9', 'client', { reason: 'سبب النزاع', description: 'وصف النزاع بالتفصيل', evidence: [] });
+  assert.deepEqual(seenWhere, { OR: [{ id: 'contract-9' }, { contract: { id: 'contract-9' } }] });
+  assert.equal(created[0].projectId, 'proj-9', 'the dispute is stored against the REAL project id, never the contract id');
 });

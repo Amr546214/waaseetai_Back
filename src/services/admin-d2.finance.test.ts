@@ -114,7 +114,7 @@ test('projects list / detail: escrow status and held amount from the DB, 404 for
 	const prisma: any = {
 		project: { findMany: async () => [project], count: async () => 1, groupBy: async () => [{ status: 'IN_PROGRESS', _count: { _all: 1 } }], findUnique: async ({ where }: any) => (where.id === 'p1' ? { ...project, description: 'd', specialty: 's', contract: { ...project.contract, durationDays: 30, signedAt: null, clientSignedAt: null, providerSignedAt: null, stages: [], amendments: [] } } : null) },
 		escrow: { aggregate: async () => ({ _count: { _all: 1 }, _sum: { amount: 100, releasedAmount: 25 } }) },
-		dispute: { findMany: async () => [{ id: 'd1', status: 'OPEN' }] }
+		dispute: { findMany: async () => [{ id: 'd1', status: 'OPEN' }], findFirst: async () => null }
 	};
 	t.mock.module('../config/db', { namedExports: { prisma } });
 	t.mock.module('./admin-audit.service', { namedExports: { adminAudit: { listForEntity: async () => [] } } });
@@ -126,6 +126,7 @@ test('projects list / detail: escrow status and held amount from the DB, 404 for
 	assert.equal(list.kpis.escrowHeldTotal, 75);
 	const detail = await adminOperationsService.getProject('p1');
 	assert.equal(detail.openDisputes, 1);
+	assert.equal(detail.adminSettled, null, 'not settled: no settlement label');
 	await assert.rejects(() => adminOperationsService.getProject('nope'), /غير موجود/);
 });
 

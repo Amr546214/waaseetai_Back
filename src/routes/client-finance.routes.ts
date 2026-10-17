@@ -5,6 +5,7 @@ import { validateDto } from '../middlewares/validate-dto.middleware';
 import { getClientInvoice, getClientInvoices, getClientWallet } from '../controllers/client-finance.controller';
 import { createPaypalOrder, capturePaypalOrder } from '../controllers/paypal.controller';
 import { createPaypalOrderSchema, capturePaypalOrderSchema } from '../dtos/paypal.dto';
+import { paymentLimiter } from '../middlewares/rate-limit.middleware';
 
 const router = Router();
 
@@ -19,7 +20,7 @@ router.get('/invoices', getClientInvoices);
 router.get('/invoices/:id', getClientInvoice);
 
 // PayPal (USD) is the ONLY wallet deposit rail. Same authenticated/active-user protection applied via router.use() at the top.
-router.post('/paypal/order/create', validateDto(createPaypalOrderSchema), createPaypalOrder);
-router.post('/paypal/order/capture', validateDto(capturePaypalOrderSchema), capturePaypalOrder);
+router.post('/paypal/order/create', paymentLimiter, validateDto(createPaypalOrderSchema), createPaypalOrder);
+router.post('/paypal/order/capture', paymentLimiter, validateDto(capturePaypalOrderSchema), capturePaypalOrder);
 
 export default router;

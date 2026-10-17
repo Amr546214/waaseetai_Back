@@ -68,9 +68,11 @@ test('route wiring: SEND endpoints use otpSendLimiter (after validation) and not
     assert.doesNotMatch(block(route), /otpSendLimiter/, route);
     assert.ok(block(route).indexOf('validateRequest(') < block(route).indexOf('otpVerifyLimiters('), `${route}: the limiter runs AFTER the schema validation`);
   }
-  for (const route of ['/login', '/google', '/login/verify-otp']) {
-    assert.match(block(route), /authLimiter/, route);
-    assert.doesNotMatch(block(route), /otpSendLimiter/, route);
+  // login family: per-account + per-address pre-auth limiters (loginLimiters), after the schema validation (intentional change: was the shared per-IP authLimiter)
+  for (const route of ['/login', '/google', '/login/verify-otp', '/login/resend-otp']) {
+    assert.match(block(route), /loginLimiters\(/, route);
+    assert.doesNotMatch(block(route), /otpSendLimiter|authLimiter/, route);
+    assert.ok(block(route).indexOf('validateRequest(') < block(route).indexOf('loginLimiters('), `${route}: the limiter runs AFTER the schema validation`);
   }
 });
 
@@ -151,6 +153,24 @@ test('rate-limited wording: per recipient per hour and per IP are "محاولا�
 
 test('the controllers report the mailer result to the gate', () => {
   const src = fs.readFileSync(path.join(__dirname, '../controllers/auth.controller.ts'), 'utf8');
-  assert.match(src, /registerUser\(input, \{ refCookieSlug, refCookieSource \}\);\s*[^]*?res\.locals\.otpEmailAttempted = true;\s*res\.locals\.otpEmailSent = result\.emailSent === true;/);
+  assert.match(src, /registerUser\(input, \{ refCookieSlug, refCookieSource \}\);\s*[^]*?res\.locals\.otpEmailAttempted = true;\s*res\.locals\.otpEmailSent = true;/);
   assert.match(src, /authService\.resendOtp\(userId\);\s*res\.locals\.otpEmailAttempted = true;\s*res\.locals\.otpEmailSent = emailSent === true;/);
+});
+
+test('otpSendGate: a send that really went out answers with resendAvailableAt (top level and data); one that did not, does not', () => {
+  otpSendThrottle.reset();
+  const sendWith = (emailSent: boolean) => {
+    const res: any = { locals: {}, setHeader() {}, once() {}, json(b: any) { this.sent = b; return this; } };
+    otpSendGate(req => req.body?.email)({ body: { email: 'g@y.co' }, ip: '7.7.7.7' } as any, res, () => {});
+    res.locals.otpEmailSent = emailSent;
+    res.json({ success: emailSent, data: { emailSent } });
+    return res.sent;
+  };
+  const before = Date.now();
+  const ok = sendWith(true);
+  const at = Date.parse(ok.resendAvailableAt);
+  assert.ok(at >= before + 59_000 && at <= Date.now() + 61_000);
+  assert.equal(ok.data.resendAvailableAt, ok.resendAvailableAt); assert.equal(ok.data.emailSent, true);
+  const no = sendWith(false);
+  assert.equal('resendAvailableAt' in no, false); assert.equal('resendAvailableAt' in no.data, false);
 });

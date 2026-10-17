@@ -1,3 +1,4 @@
+import { PUBLIC_SERVICE_REVIEWS_RELATION, publicServiceReviewsWhere } from './review-visibility';
 import { AccountType, Prisma } from '@prisma/client';
 import { businessModelAuditResult } from './ai-features/business-model-audit-result';
 import { sanitizeText } from '../utils/sanitize-text';
@@ -11,6 +12,8 @@ import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { LEVEL_MATRIX } from '../utils/progression-calculators';
 import { findActiveServicePurchases } from '../utils/active-purchase.util';
 import { assertSkillsInCategory, listProviderSpecialtiesWithCatalog } from './skills-catalog.service';
+import { AppError } from '../utils/app-error';
+import { selfNegotiationError } from '../utils/self-dealing';
 
 // Batch 4 — the minimal shape getMarketplaceModels/getMarketplaceModelById
 // need from req.user to read back the requesting Client's own
@@ -133,14 +136,58 @@ export class MarketplaceService {
 	}
 
 	/**
-	 * `skills` omitted = untouched (undefined). Otherwise trimmed, de-duplicated, max 30, each one in the catalog of the specialty's Category or already held
-	 * (on the provider's profile or already on this service), else a 400 naming the offenders.
+	 * `skills` omitted = untouched (undefined). Otherwise trimmed, de-duplicated, max 30, and EVERY name must be in the catalog of the specialty's Category
+	 * (Batch B T1: a skill the provider merely holds on the profile no longer widens the list; only the names already on THIS service stay valid while its
+	 * specialty is unchanged), else a 400 naming the offenders and the field.
 	 */
-	private async validateServiceSkills(userId: string, input: unknown, categorySlug: string | null, onService: string[] = []): Promise<string[] | undefined> {
+	private async validateServiceSkills(input: unknown, categorySlug: string | null, onService: string[] = []): Promise<string[] | undefined> {
 		if (input === undefined || input === null) return undefined;
 		if (Array.isArray(input) && input.length === 0) return [];
-		const profile = await prisma.providerProfile.findUnique({ where: { userId }, select: { skills: { select: { name: true } } } });
-		return assertSkillsInCategory(input, categorySlug, [...(profile?.skills ?? []).map(sk => sk.name), ...(onService ?? [])]);
+		try {
+			return assertSkillsInCategory(input, categorySlug, onService);
+		} catch (error) {
+			if (error instanceof AppError) throw new AppError(error.message, error.statusCode, [{ path: 'skills', field: 'skills', message: error.message, code: 'SKILL_NOT_IN_SPECIALTY' }]);
+			throw error;
+		}
+	}
+
+	/**
+	 * Batch B T1 (§2/§5): the specialty of a service must be one of the provider's APPROVED + active specialties. Another specialty that is still under
+	 * review (or rejected) never blocks an approved one, and never opens early. The error says which case it is.
+	 */
+	private async resolveApprovedSpecialty(userId: string, specialtyId: unknown) {
+		const wanted = typeof specialtyId === 'string' ? specialtyId : '';
+		const own = wanted ? await prisma.providerSpecialty.findFirst({
+			where: { providerProfile: { userId }, OR: [{ id: wanted }, { specialtyId: wanted }] },
+			include: { specialty: { include: { category: { select: { slug: true } } } } }
+		}) : null;
+		const fail = (message: string, code: string) => new AppError(message, 403, [{ path: 'specialtyId', field: 'specialtyId', message, code }]);
+		if (!wanted) throw new AppError('اختر التخصص', 400, [{ path: 'specialtyId', field: 'specialtyId', message: 'اختر التخصص', code: 'required' }]);
+		if (!own) throw fail('هذا التخصص غير مضاف إلى حسابك؛ أضفه واجتز اختباره واطلب اعتماده أولاً', 'SPECIALTY_NOT_OWNED');
+		const name = own.specialty?.nameAr || own.specialty?.name || 'التخصص';
+		if (own.status !== 'APPROVED' || !own.isPassed || !own.isActive) {
+			const reason = own.status === 'UNDER_AI_REVIEW' ? `تخصص «${name}» قيد المراجعة؛ يمكنك النشر فيه بعد اعتماده`
+				: own.status === 'REJECTED' ? `تخصص «${name}» مرفوض؛ عدّل طلب الاعتماد وأعد إرساله من «إجراءات الحساب»`
+				: `تخصص «${name}» غير معتمد بعد؛ أكمل الاختبار وطلب الاعتماد أولاً`;
+			throw fail(reason, 'SPECIALTY_NOT_APPROVED');
+		}
+		return { id: own.specialty.id, categorySlug: own.specialty.category?.slug ?? null };
+	}
+
+	/**
+	 * The approval model linked to a service: the provider's OWN request, of the SAME specialty, and approved by the admin. `keep` is the sample already
+	 * linked (an old service is never broken just because it is edited).
+	 */
+	private async resolveApprovalModel(userId: string, specialtyId: string, accreditationSampleId: unknown, keep?: string | null) {
+		const fail = (message: string, code: string) => new AppError(message, 400, [{ path: 'accreditationSampleId', field: 'accreditationSampleId', message, code }]);
+		if (typeof accreditationSampleId !== 'string' || !accreditationSampleId) throw fail('اختر نموذج الاعتماد المعتمد الخاص بهذا التخصص', 'required');
+		const sample = await prisma.accreditationSample.findFirst({
+			where: { id: accreditationSampleId, providerProfile: { userId }, providerSpecialty: { specialtyId } },
+			select: { id: true, status: true }
+		});
+		if (!sample) throw fail('نموذج الاعتماد المختار لا يخص هذا التخصص أو حسابك', 'MODEL_MISMATCH');
+		if (sample.status !== 'AI_VERIFIED' && sample.id !== keep) throw fail('نموذج الاعتماد المختار لم يُعتمد بعد من الإدارة', 'MODEL_NOT_APPROVED');
+		return sample;
 	}
 
 	/**
@@ -181,46 +228,11 @@ export class MarketplaceService {
 			}
 		}
 
-		// Resolve Skill / Specialty from ProviderSpecialty, Specialty or Skill ID
-		let validSkillId: string | undefined = undefined;
-		let categorySlug: string | null = null;
-
-		if (specialtyId && typeof specialtyId === 'string') {
-			const provSpec = await prisma.providerSpecialty.findFirst({
-				where: {
-					providerProfile: { userId },
-					isActive: true,
-					isPassed: true,
-					status: 'APPROVED',
-					OR: [{ id: specialtyId }, { specialtyId: specialtyId }]
-				},
-				include: { specialty: { include: { category: { select: { slug: true } } } } }
-			});
-
-			if (provSpec && provSpec.specialty) {
-				validSkillId = provSpec.specialty.id;
-				categorySlug = provSpec.specialty.category?.slug ?? null;
-			}
-		}
-		if (!validSkillId) {
-			throw new Error('التخصص غير معتمد أو غير مرتبط بحساب مقدم الخدمة');
-		}
-		// Skills: only names of the catalog of this specialty's Category (or skills the provider already holds); a bad name is a 400 and nothing is saved.
-		const validSkills = await this.validateServiceSkills(userId, data.skills, categorySlug);
-		if (typeof accreditationSampleId !== 'string' || !accreditationSampleId) {
-			throw new Error('يجب اختيار نموذج اعتماد موثق تابع لنفس التخصص');
-		}
-
-		const accreditationSample = await prisma.accreditationSample.findFirst({
-			where: {
-				id: accreditationSampleId,
-				providerProfile: { userId },
-				providerSpecialty: { specialtyId: validSkillId }
-			}
-		});
-		if (!accreditationSample) {
-			throw new Error('يجب اختيار نموذج اعتماد موثق تابع لنفس التخصص');
-		}
+		// Specialty: only an APPROVED one of this provider; skills: only from its catalog; model: this provider's approved request of the same specialty.
+		const approved = await this.resolveApprovedSpecialty(userId, specialtyId);
+		const validSkillId = approved.id;
+		const validSkills = await this.validateServiceSkills(data.skills, approved.categorySlug);
+		const accreditationSample = await this.resolveApprovalModel(userId, validSkillId, accreditationSampleId);
 
 		// Compute derived total fields
 		const totalAmount = stages.reduce((sum: number, stage: any) => sum + Number(stage.computedAmount || 0), 0);
@@ -283,7 +295,8 @@ export class MarketplaceService {
 			include: {
 				specialty: true,
 				portfolioItem: true,
-				accreditationSample: true,
+				// the admin's internal note is never part of what the provider reads
+				accreditationSample: { select: { id: true, title: true, description: true, status: true, attachments: true, providerSpecialtyId: true, createdAt: true } },
 				stages: {
 					orderBy: { stepOrder: 'asc' }
 				}
@@ -320,29 +333,16 @@ export class MarketplaceService {
 			throw new Error('Title and description are required.');
 		}
 
-		// Resolve Specialty
-		let validSkillId: string | undefined = undefined;
-		let categorySlug: string | null = null;
-
-		if (specialtyId && typeof specialtyId === 'string') {
-			const provSpec = await prisma.providerSpecialty.findFirst({
-				where: {
-					providerProfile: { userId },
-					isActive: true,
-					isPassed: true,
-					status: 'APPROVED',
-					OR: [{ id: specialtyId }, { specialtyId: specialtyId }]
-				},
-				include: { specialty: { include: { category: { select: { slug: true } } } } }
-			});
-
-			if (provSpec && provSpec.specialty) {
-				validSkillId = provSpec.specialty.id;
-				categorySlug = provSpec.specialty.category?.slug ?? null;
-			}
+		// Batch B T1: editing re-validates everything against the CURRENT state (an edit or a manual API call cannot publish into a specialty that is no
+		// longer approved, nor keep skills / a model of another specialty).
+		const approved = await this.resolveApprovedSpecialty(userId, specialtyId);
+		const validSkillId = approved.id;
+		const specialtyChanged = (existing as any).specialtyId !== validSkillId;
+		let validSkills = await this.validateServiceSkills(data.skills, approved.categorySlug, specialtyChanged ? [] : ((existing as any).skills ?? []));
+		if (validSkills === undefined && specialtyChanged) {
+			// skills not sent but the specialty changed: the skills already on the service must belong to the NEW specialty's catalog
+			validSkills = await this.validateServiceSkills((existing as any).skills ?? [], approved.categorySlug, []);
 		}
-		if (!validSkillId) throw new Error('التخصص غير معتمد أو غير مرتبط بحساب مقدم الخدمة');
-		const validSkills = await this.validateServiceSkills(userId, data.skills, categorySlug, (existing as any).skills);
 
 		// Resolve optional portfolioItemId
 		let validPortfolioItemId: string | undefined = undefined;
@@ -355,16 +355,9 @@ export class MarketplaceService {
 			}
 		}
 
-		const targetAccreditationId = accreditationSampleId || existing.accreditationSampleId;
-		if (!targetAccreditationId) throw new Error('يجب اختيار نموذج اعتماد موثق تابع لنفس التخصص');
-		const accreditationSample = await prisma.accreditationSample.findFirst({
-			where: {
-				id: targetAccreditationId,
-				providerProfile: { userId },
-				providerSpecialty: { specialtyId: validSkillId }
-			}
-		});
-		if (!accreditationSample) throw new Error('يجب اختيار نموذج اعتماد موثق تابع لنفس التخصص');
+		// a changed specialty never keeps the old model: the model is re-validated against the new specialty (and must be sent again)
+		const keepSample = specialtyChanged ? null : existing.accreditationSampleId;
+		const accreditationSample = await this.resolveApprovalModel(userId, validSkillId, accreditationSampleId || keepSample, keepSample);
 
 		const stageList = Array.isArray(stages) ? stages : [];
 		if (stageList.length === 0) throw new Error('At least one service stage is required.');
@@ -431,10 +424,21 @@ export class MarketplaceService {
 		return updated;
 	}
 
+	/**
+	 * Batch B T1: before a service goes (back) live its specialty must still be APPROVED for this provider and its approval model must still be a valid,
+	 * approved model of that specialty. Used by every re-publish path (visibility toggle, publish-by-id); nothing is changed here.
+	 */
+	async assertServicePublishable(userId: string, service: { specialtyId: string | null; accreditationSampleId: string | null }) {
+		if (!service.specialtyId) throw new AppError('هذه الخدمة غير مرتبطة بتخصص؛ عدّلها واختر تخصصاً معتمداً', 409, [{ path: 'specialtyId', field: 'specialtyId', message: 'اختر تخصصاً معتمداً', code: 'required' }]);
+		await this.resolveApprovedSpecialty(userId, service.specialtyId);
+		await this.resolveApprovalModel(userId, service.specialtyId, service.accreditationSampleId, null);
+	}
+
 	async setServiceVisibility(userId: string, serviceId: string, visible: boolean) {
 		const existing = await prisma.serviceCatalog.findFirst({ where: { id: serviceId, providerId: userId } });
 		if (!existing) throw new Error('نموذج العمل غير موجود');
 		if (visible && existing.status !== 'ARCHIVED') throw new Error('لا يمكن إظهار نموذج غير مخفي');
+		if (visible) await this.assertServicePublishable(userId, existing);
 		if (!visible && !['PUBLISHED', 'APPROVED'].includes(existing.status)) throw new Error('لا يمكن إخفاء نموذج غير منشور');
 		return prisma.serviceCatalog.update({
 			where: { id: existing.id },
@@ -506,7 +510,7 @@ export class MarketplaceService {
 
 		const parsedMinRating = Number(minRating);
 		if (Number.isFinite(parsedMinRating) && parsedMinRating > 0) {
-			whereClause.reviews = { some: { rating: { gte: parsedMinRating } } };
+			whereClause.reviews = { some: { rating: { gte: parsedMinRating }, reviewerRole: 'CLIENT', isPublic: true } };
 		}
 
 		// Phase 3E.1 Part 4: `level` values are the SAME canonical LEVEL_MATRIX
@@ -565,9 +569,22 @@ export class MarketplaceService {
 		const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
 		const pageSize = Math.min(50, Math.max(1, parseInt(limit as string, 10) || 20));
 
-		const [dbModels, totalCount] = await Promise.all([
+		// "rating" / "top_rated" order by the number of PUBLISHED client reviews. Prisma cannot filter a relation _count in orderBy (it would count unpublished reviews and
+		// leak their number through the order), so these two sorts rank the ids in memory from a published-only groupBy and then load just the requested page.
+		let rankedPageIds: string[] | null = null;
+		if (sort === 'rating' || sort === 'top_rated') {
+			const candidates = await prisma.serviceCatalog.findMany({ where: whereClause, select: { id: true, createdAt: true } });
+			const counts = await prisma.review.groupBy({ by: ['serviceId'], where: { serviceId: { in: candidates.map((c: any) => c.id) }, reviewerRole: 'CLIENT', isPublic: true }, _count: { _all: true } });
+			const countOf = new Map<string, number>(counts.map((g: any) => [g.serviceId as string, g._count._all as number]));
+			rankedPageIds = candidates
+				.sort((a: any, b: any) => (countOf.get(b.id) ?? 0) - (countOf.get(a.id) ?? 0) || b.createdAt.getTime() - a.createdAt.getTime())
+				.slice((pageNum - 1) * pageSize, pageNum * pageSize)
+				.map((c: any) => c.id);
+		}
+
+		const [loadedModels, totalCount] = await Promise.all([
 			prisma.serviceCatalog.findMany({
-				where: whereClause,
+				where: rankedPageIds ? { AND: [whereClause, { id: { in: rankedPageIds } }] } : whereClause,
 				include: {
 					provider: {
 						select: marketplaceProviderSelect
@@ -578,14 +595,13 @@ export class MarketplaceService {
 					stages: true,
 					portfolioItem: true,
 					accreditationSample: { select: { attachments: true } },
-					reviews: { select: { rating: true } }
+					reviews: { ...PUBLIC_SERVICE_REVIEWS_RELATION, select: { rating: true } }
 				},
-				orderBy,
-				skip: (pageNum - 1) * pageSize,
-				take: pageSize
+				...(rankedPageIds ? {} : { orderBy, skip: (pageNum - 1) * pageSize, take: pageSize })
 			}),
 			prisma.serviceCatalog.count({ where: whereClause })
 		]);
+		const dbModels = rankedPageIds ? rankedPageIds.map(id => loadedModels.find((m: any) => m.id === id)).filter((m): m is NonNullable<typeof m> => Boolean(m)) : loadedModels;
 
 		// Batch 4 — ONE batched lookup for every service id on this page, never
 		// one request per card (findActiveServicePurchases already accepts an
@@ -664,6 +680,8 @@ export class MarketplaceService {
 				tags: parsedTags,
 				skills,
 				gallery,
+				// real owner user id (ServiceCatalog.providerId) vs the authenticated user, whatever the active role / account type; absent for a guest
+				...(requestingUser ? { isOwnService: s.providerId === requestingUser.id } : {}),
 				...(requestingUser && CLIENT_ACCOUNT_TYPES.includes(requestingUser.accountType)
 					? { eligibility: { hasActivePurchase: activeByServiceId.has(s.id), activeProjectId: activeByServiceId.get(s.id)?.id ?? null } }
 					: {})
@@ -693,6 +711,8 @@ export class MarketplaceService {
 				portfolioItem: true,
 				accreditationSample: { select: { attachments: true, providerSpecialty: { select: { status: true } } } },
 				reviews: {
+					// published client reviews only: an unpublished review (and any provider -> client review) never appears on a service page
+					where: PUBLIC_SERVICE_REVIEWS_RELATION.where,
 					orderBy: { createdAt: 'desc' },
 					take: 20,
 					include: { client: { select: { firstName: true, lastName: true, avatarUrl: true } } }
@@ -725,7 +745,7 @@ export class MarketplaceService {
 		}
 		gallery = [...new Set(gallery)];
 		const [reviewStats, updatedViews] = await Promise.all([
-			prisma.review.aggregate({ where: { serviceId: s.id, reviewerRole: 'CLIENT' }, _count: { _all: true }, _avg: { rating: true } }),
+			prisma.review.aggregate({ where: publicServiceReviewsWhere(s.id), _count: { _all: true }, _avg: { rating: true } }),
 			prisma.serviceCatalog.update({ where: { id: s.id }, data: { viewsCount: { increment: 1 } }, select: { viewsCount: true } })
 		]);
 		const reviewsCount = reviewStats._count._all;
@@ -775,6 +795,8 @@ export class MarketplaceService {
 			tags: parsedTags,
 			skills,
 			gallery,
+			// real owner id vs the signed-in user (never profile / activeRole): the page shows «هذه خدمتك» instead of any buy / negotiate action
+			isOwnService: Boolean(requestingUser) && s.providerId === requestingUser!.id,
 			...(eligibility ? { eligibility } : {}),
 			reviews: s.reviews.map(review => ({
 				id: review.id,
@@ -795,13 +817,17 @@ export class MarketplaceService {
 	 * generationSource — never presented as AI-generated unless Gemini
 	 * actually produced it).
 	 */
-	async getAiRecommendations(body: any) {
+	async getAiRecommendations(body: any, requestingUser?: RequestingUser) {
 		const { query, category, subSpecialty, limit } = body || {};
 		const aiResult = await marketplaceAiService.generateAiRecommendations({ query, category, subSpecialty, limit });
+		// provider.id of a recommendation is the owner USER id; the flag spares the FE any guesswork (guests get no flag)
+		const recommendations = requestingUser
+			? aiResult.recommendations.map((r: any) => ({ ...r, isOwnService: r?.provider?.id === requestingUser.id }))
+			: aiResult.recommendations;
 		return {
 			success: true,
 			data: {
-				recommendations: aiResult.recommendations,
+				recommendations,
 				matchSummary: aiResult.bannerInsight,
 				smartSearchTags: aiResult.smartSearchTags,
 				generationSource: aiResult.generationSource
@@ -916,57 +942,66 @@ export class MarketplaceService {
 		};
 	}
 
+	/**
+	 * «طلب تفاوض» on a market service page (the ONE contact action): finds-or-creates the pre-contract negotiation project for (client, provider, service) and
+	 * its single room, idempotently. A per-(client, service) transaction advisory lock serialises repeated clicks / concurrent requests, so they all land on the
+	 * same project and the same conversation (Conversation is also unique per project + provider). The owner of the service can never open one (real user id).
+	 * When the order is later paid, confirmPayment() turns this same project into the real one, so the room and its messages carry over.
+	 */
 	async requestMarketplaceService(userId: string, serviceId: string, data: any) {
 		const service = await prisma.serviceCatalog.findFirst({
 			where: { id: serviceId, ...MARKET_VISIBLE_WHERE },
 			include: { specialty: true, stages: { orderBy: { stepOrder: 'asc' } } }
 		});
-		if (!service) throw new Error('الخدمة غير متوفرة');
-		if (service.providerId === userId) throw new Error('لا يمكنك طلب خدمتك الخاصة');
+		if (!service) throw new AppError('الخدمة غير متوفرة', 404);
+		if (service.providerId === userId) throw selfNegotiationError();
 		const message = typeof data?.message === 'string' ? data.message.trim().slice(0, 3000) : '';
 		const mode = data?.mode === 'negotiation' ? 'negotiation' : 'order';
-		let project = await prisma.project.findFirst({
-			where: { clientId: userId, providerId: service.providerId, serviceCatalogId: service.id, status: { in: ['OPEN', 'PENDING_REVIEW', 'IN_PROGRESS'] } },
-			orderBy: { createdAt: 'desc' }
-		});
-		let created = false;
-		if (!project) {
-			project = await prisma.project.create({
-				data: {
-					clientId: userId,
-					providerId: service.providerId,
-					serviceCatalogId: service.id,
-					title: service.title,
-					description: message || service.description,
-					specialty: service.specialty?.nameAr || service.specialty?.name || 'خدمة عامة',
-					subSpecialties: service.subSpecialty ? [service.subSpecialty] : [],
-					requirements: service.stages.map(stage => stage.title),
-					deliveryDays: service.totalDays,
-					budgetType: 'fixed',
-					budgetFixed: Number(service.totalAmount),
-					allowNegotiation: mode === 'negotiation',
-					status: 'OPEN'
-				}
+		return prisma.$transaction(async (tx: any) => {
+			await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`market-negotiation:${userId}:${service.id}`}))`;
+			let project = await tx.project.findFirst({
+				where: { clientId: userId, providerId: service.providerId, serviceCatalogId: service.id, status: { in: ['OPEN', 'PENDING_REVIEW', 'IN_PROGRESS'] } },
+				orderBy: { createdAt: 'desc' }
 			});
-			created = true;
-		}
-		const conversation = await prisma.conversation.upsert({
-			where: { projectId_providerId: { projectId: project.id, providerId: service.providerId } },
-			update: {},
-			create: { projectId: project.id, clientId: userId, providerId: service.providerId }
-		});
-		if (created || message) {
-			await prisma.message.create({
-				data: {
-					conversationId: conversation.id,
-					senderId: userId,
-					type: 'TEXT',
-					content: message || `أرغب في طلب خدمة: ${service.title}`
-				}
+			let created = false;
+			if (!project) {
+				project = await tx.project.create({
+					data: {
+						clientId: userId,
+						providerId: service.providerId,
+						serviceCatalogId: service.id,
+						title: service.title,
+						description: message || service.description,
+						specialty: service.specialty?.nameAr || service.specialty?.name || 'خدمة عامة',
+						subSpecialties: service.subSpecialty ? [service.subSpecialty] : [],
+						requirements: service.stages.map((stage: any) => stage.title),
+						deliveryDays: service.totalDays,
+						budgetType: 'fixed',
+						budgetFixed: Number(service.totalAmount),
+						allowNegotiation: mode === 'negotiation',
+						status: 'OPEN'
+					}
+				});
+				created = true;
+			}
+			const conversation = await tx.conversation.upsert({
+				where: { projectId_providerId: { projectId: project.id, providerId: service.providerId } },
+				update: {},
+				create: { projectId: project.id, clientId: userId, providerId: service.providerId }
 			});
-		}
-		if (created) await prisma.serviceCatalog.update({ where: { id: service.id }, data: { salesCount: { increment: 1 } } });
-		return { projectId: project.id, conversationId: conversation.id, providerId: service.providerId };
+			if (created || message) {
+				await tx.message.create({
+					data: {
+						conversationId: conversation.id,
+						senderId: userId,
+						type: 'TEXT',
+						content: message || `أرغب في طلب خدمة: ${service.title}`
+					}
+				});
+			}
+			if (created) await tx.serviceCatalog.update({ where: { id: service.id }, data: { salesCount: { increment: 1 } } });
+			return { projectId: project.id, conversationId: conversation.id, providerId: service.providerId, created };
+		});
 	}
 
 	/**

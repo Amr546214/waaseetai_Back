@@ -1,20 +1,21 @@
 import { updateProviderPreferencesSchema } from '../dtos/provider-preferences.dto';
 import { publicKycRejectionReason, withoutInternalProviderNotes } from '../utils/provider-kyc-review';
 import { Request, Response, NextFunction } from 'express';
-import { AppError } from '../utils/app-error';
+import { AppError, fieldErrorItem } from '../utils/app-error';
 import { providerProfileService } from '../services/provider-profile.service';
 import { prisma } from '../config/db';
 import { CONTACT_IMMUTABLE, CONTACT_IMMUTABLE_MESSAGE } from '../services/provider-profile.service';
 import { getCatalogForCategoryParam, resolveSkillIdsFromCatalog } from '../services/skills-catalog.service';
 import { specialtyService } from '../services/specialty.service';
 import { ensureCloudinaryUrl, storeDataUriIfNeeded, storeKycFileIfNeeded } from '../utils/cloudinary-storage';
-import { sanitizeText } from '../utils/sanitize-text';
+import { sanitizeText, isBlankText } from '../utils/sanitize-text';
 import { assertKycFileValues } from '../utils/kyc-value-guard';
 import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
 import { sessionService } from '../services/session.service';
 import { computeProviderCompletion } from '../utils/completion-calculators';
 import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
 import { normalizeProviderSetupPayload, isProviderSetupComplete } from '../utils/provider-setup-payload';
+import { assertSetupPortfolioProofs } from '../utils/setup-portfolio-proofs';
 
 import { providerBioSuggestSchema, providerSkillsSuggestSchema, setupSkillsSchema } from '../dtos/provider-profile-suggest.dto';
 
@@ -56,6 +57,13 @@ export const revokeSession = async (req: Request, res: Response) => {
 	}
 };
 
+const PASSWORD_ERROR_FIELDS: Record<string, Array<{ field: string; message: string }>> = {
+	CURRENT_PASSWORD_INCORRECT: [{ field: 'currentPassword', message: 'كلمة المرور الحالية غير صحيحة' }],
+	WEAK_PASSWORD: [{ field: 'newPassword', message: 'كلمة المرور ضعيفة: استخدم 8 أحرف على الأقل مع حرف كبير ورقم' }],
+	PASSWORD_UNCHANGED: [{ field: 'newPassword', message: 'كلمة المرور الجديدة يجب أن تختلف عن الحالية' }],
+	PASSWORD_FIELDS_REQUIRED: [{ field: 'currentPassword', message: 'أدخل كلمة المرور الحالية' }, { field: 'newPassword', message: 'أدخل كلمة المرور الجديدة' }],
+};
+
 export const changePassword = async (req: Request, res: Response) => {
 	try {
 		const userId = req.user?.id;
@@ -65,7 +73,9 @@ export const changePassword = async (req: Request, res: Response) => {
 		res.json({ success: true, data });
 	} catch (error: any) {
 		const status = error.message === 'CURRENT_PASSWORD_INCORRECT' ? 401 : 400;
-		res.status(status).json({ success: false, message: error.message });
+		// The code stays the message; `errors` names the password box it belongs under (admin "my account" and the other password forms read it).
+		const where = PASSWORD_ERROR_FIELDS[error.message];
+		res.status(status).json({ success: false, message: error.message, ...(where && { errors: where.map((w) => fieldErrorItem(w.field, w.message)) }) });
 	}
 };
 
@@ -124,6 +134,11 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		const normalized = normalizeProviderSetupPayload(payload);
 		if (!normalized.ok) return res.status(400).json({ success: false, message: 'بعض الحقول غير مدعومة أو غير صالحة ولم يُحفظ شيء', errors: normalized.errors });
 		const { details, identity, documents, agreements, specialties } = normalized.value;
+		// Batch B T1 (§3): the work-model files must be valid documents of THIS provider, one per chosen sub-specialty (checked only when `portfolio` is sent)
+		if (portfolio !== undefined) {
+			const stored = specialties?.subSpecs === undefined ? await prisma.providerProfile.findUnique({ where: { userId }, select: { subSpecialties: true } }) : null;
+			assertSetupPortfolioProofs(userId, portfolio, specialties?.subSpecs ?? stored?.subSpecialties ?? []);
+		}
 		// Only the explicit ordinary save connects accepted skill names. Resolve
 		// every name before any writes/uploads; never upsert taxonomy rows.
 		let skillConnections: { id: string }[] | undefined;
@@ -169,10 +184,11 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			industry: clean(details?.occupation, 100),
 			// The job title the wizard collects ("occupation") is the profile headline the completion score and the public profile read:
 			// one value, stored in both columns (industry kept for older readers).
-			headline: typeof details?.occupation === 'string' && sanitizeText(details.occupation).trim() ? sanitizeText(details.occupation).trim().slice(0, 100) : undefined,
+			headline: typeof details?.occupation === 'string' && !isBlankText(sanitizeText(details.occupation)) ? sanitizeText(details.occupation).trim().slice(0, 100) : undefined,
 			address: clean(details?.address, 500),
 			bio: typeof details?.bio === 'string' ? sanitizeText(details.bio) : details?.bio,
-			languages: cleanList(details?.languages, 40, 20),
+			// Batch B T1: the legacy languages value is never touched unless the request carries it (the wizard no longer sends it: step 1 is now «مهاراتي»)
+			...(Array.isArray(details?.languages) ? { languages: cleanList(details?.languages, 40, 20) } : {}),
 			yearsOfExperience: normalized.value.yearsOfExperience,
 			hourlyRate: normalized.value.hourlyRate,
 
@@ -200,7 +216,8 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		const result = await prisma.providerProfile.upsert({
 			where: { userId },
 			create: providerData,
-			update: providerData
+			// `set` on update: the saved list is exactly what was sent, so removing a skill really removes it (connect alone could never drop one)
+			update: { ...providerData, ...(skillConnections !== undefined && { skills: { set: skillConnections } }) }
 		});
 
 		// The specialties chosen in the wizard become the provider's ProviderSpecialty rows (create-only, no duplicates): the model-upload / market pages read those rows.
@@ -265,7 +282,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			data: withoutInternalProviderNotes(updatedResult)
 		});
 	} catch (error) {
-		if (error instanceof AppError) return res.status(error.statusCode).json({ success: false, message: error.message });
+		if (error instanceof AppError) return res.status(error.statusCode).json({ success: false, message: error.message, ...(error.errors?.length ? { errors: error.errors } : {}) });
 		console.error('Error saving provider setup data:', error);
 		res.status(500).json({ message: 'Internal server error' });
 	}

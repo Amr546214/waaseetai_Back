@@ -46,6 +46,7 @@ test('listAmendments: returns real fields mapped from the DB row, including a re
 
   assert.equal(result.length, 1);
   assert.deepEqual(result[0], {
+    actionable: true, actionBlockedReason: null, contractStatus: null,
     id: 'amend-1',
     projectId: 'project-1',
     projectTitle: 'مشروع تجريبي',
@@ -63,6 +64,19 @@ test('listAmendments: returns real fields mapped from the DB row, including a re
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-01-02T00:00:00Z'),
     respondedAt: null,
+    effect: 'PENDING',
+    effectNote: 'لن يتغيّر العقد أو الضمان أو المحفظة قبل موافقة الطرف الآخر، وعند الموافقة يُطبَّق التعديل فورًا.',
+    appliedAt: null,
+    priceBefore: null,
+    priceAfter: null,
+    durationBefore: null,
+    durationAfter: null,
+    addedStageId: null,
+    needsClientPayment: false,
+    fundingAuthorized: false,
+    fundingAuthorizedUntil: null,
+    contractPrice: null,
+    contractDurationDays: null,
     conversationId: 'conv-1'
   });
 });
@@ -76,11 +90,7 @@ test('listAmendments: exposes only whitelisted fields — no private/internal da
 
   const result = await service.listAmendments('client-1');
   const keys = Object.keys(result[0]).sort();
-  assert.deepEqual(keys, [
-    'budgetDelta', 'contractId', 'contractRef', 'conversationId', 'createdAt', 'description',
-    'durationDeltaDays', 'id', 'projectId', 'projectTitle', 'providerId', 'providerName',
-    'requestedByRole', 'respondedAt', 'status', 'title', 'type', 'updatedAt'
-  ].sort());
+  assert.deepEqual(keys, ['actionBlockedReason', 'actionable', 'addedStageId', 'appliedAt', 'budgetDelta', 'contractId', 'contractRef', 'contractDurationDays', 'contractPrice', 'contractStatus', 'conversationId', 'createdAt', 'description', 'durationAfter', 'durationBefore', 'durationDeltaDays', 'effect', 'effectNote', 'fundingAuthorized', 'fundingAuthorizedUntil', 'id', 'needsClientPayment', 'priceAfter', 'priceBefore', 'projectId', 'projectTitle', 'providerId', 'providerName', 'requestedByRole', 'respondedAt', 'status', 'title', 'type', 'updatedAt'].sort());
 });
 
 test('listAmendments: query is scoped to the calling client only (never another client\'s data)', async (t) => {
@@ -97,7 +107,7 @@ test('listAmendments: query is scoped to the calling client only (never another 
   assert.deepEqual(args.where, { clientId: 'client-1' });
 });
 
-test('listAmendments: orders by newest activity first (updatedAt desc)', async (t) => {
+test('listAmendments: orders newest first by creation time (createdAt desc, id tie-break)', async (t) => {
   const findManySpy = t.mock.fn(async () => []);
   const service = await loadServiceWithMockPrisma(t, {
     projectAmendment: { findMany: findManySpy },
@@ -107,7 +117,7 @@ test('listAmendments: orders by newest activity first (updatedAt desc)', async (
   await service.listAmendments('client-1');
 
   const args = findManySpy.mock.calls[0].arguments[0];
-  assert.deepEqual(args.orderBy, { updatedAt: 'desc' });
+  assert.deepEqual(args.orderBy, [{ createdAt: 'desc' }, { id: 'desc' }]);
 });
 
 test('listAmendments: an empty result returns a clean empty array', async (t) => {
@@ -173,6 +183,10 @@ test('createAmendment: client creates an amendment on their own active contract'
   assert.equal(data.status, 'PENDING_OTHER_PARTY');
   assert.equal(result.status, 'PENDING_OTHER_PARTY');
   assert.equal(result.requestedByRole, 'CLIENT');
+  // honest payload: a pending request changes nothing and says it will apply only on the other party's approval
+  assert.equal(result.effect, 'PENDING');
+  assert.match(result.effectNote, /قبل موافقة الطرف الآخر/);
+  assert.ok(String(createSpy.mock.calls[0].arguments[0].data.title).length > 0);
 });
 
 test('createAmendment: cannot create for a project/contract the caller does not own as client', async (t) => {
@@ -376,11 +390,11 @@ test('respondToAmendment (A): the first valid response succeeds and persists the
     conversation: { findMany: async () => [] }
   });
 
-  const result = await service.respondToAmendment('client-1', 'amend-1', 'approve');
+  const result = await service.respondToAmendment('client-1', 'amend-1', 'reject');
 
   assert.equal(updateManySpy.mock.callCount(), 1);
-  assert.equal(result.status, 'APPROVED');
-  assert.equal(table.getRow().status, 'APPROVED');
+  assert.equal(result.status, 'REJECTED');
+  assert.equal(table.getRow().status, 'REJECTED');
   assert.ok(table.getRow().respondedAt instanceof Date);
 });
 
@@ -391,17 +405,17 @@ test('respondToAmendment (B): a second response after the status is no longer PE
     conversation: { findMany: async () => [] }
   });
 
-  // First call (e.g. the winner of a race) commits APPROVED.
-  await service.respondToAmendment('client-1', 'amend-1', 'approve');
-  assert.equal(table.getRow().status, 'APPROVED');
+  // First call (e.g. the winner of a race) commits REJECTED.
+  await service.respondToAmendment('client-1', 'amend-1', 'reject');
+  assert.equal(table.getRow().status, 'REJECTED');
 
   // A second, later call (e.g. the race loser, or simply a stale retry) must
   // be rejected — and must NOT flip the already-decided row to REJECTED.
   await assert.rejects(
-    () => service.respondToAmendment('client-1', 'amend-1', 'reject'),
+    () => service.respondToAmendment('client-1', 'amend-1', 'approve'),
     /تم الرد على طلب التعديل هذا مسبقًا/
   );
-  assert.equal(table.getRow().status, 'APPROVED', 'first successful decision must win — never overwritten');
+  assert.equal(table.getRow().status, 'REJECTED', 'first successful decision must win — never overwritten');
 });
 
 test('respondToAmendment (C): the atomic update predicates on id, clientId, requestedByRole=PROVIDER, and status=PENDING_OTHER_PARTY together', async (t) => {
@@ -412,7 +426,7 @@ test('respondToAmendment (C): the atomic update predicates on id, clientId, requ
     conversation: { findMany: async () => [] }
   });
 
-  await service.respondToAmendment('client-1', 'amend-1', 'approve');
+  await service.respondToAmendment('client-1', 'amend-1', 'reject');
 
   assert.deepEqual(updateManySpy.mock.calls[0].arguments[0].where, {
     id: 'amend-1',
@@ -432,7 +446,7 @@ test('respondToAmendment (D): zero affected rows from the atomic update never pr
   });
 
   await assert.rejects(
-    () => service.respondToAmendment('client-1', 'amend-1', 'approve'),
+    () => service.respondToAmendment('client-1', 'amend-1', 'reject'),
     /تم الرد على طلب التعديل هذا مسبقًا/
   );
   assert.equal(updateManySpy.mock.callCount(), 1);
@@ -482,7 +496,7 @@ test('respondToAmendment: does NOT mutate escrow, contract price, or stage amoun
     conversation: { findMany: async () => [] }
   });
 
-  await service.respondToAmendment('client-1', 'amend-1', 'approve');
+  await service.respondToAmendment('client-1', 'amend-1', 'reject');
 
   assert.equal(contractUpdateSpy.mock.callCount(), 0);
   assert.equal(escrowUpdateSpy.mock.callCount(), 0);

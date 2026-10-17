@@ -1,6 +1,6 @@
 import { LogCategory, LogStatus } from '@prisma/client';
 import { prisma } from '../config/db';
-import { AppError } from '../utils/app-error';
+import { AppError, fieldError } from '../utils/app-error';
 import { StatsPaging, customerName, pageMeta, round2 } from './marketing-stats.util';
 
 // Admin oversight of provider coupons + special offers. Coupons/offers are
@@ -107,7 +107,7 @@ export class AdminCouponsService {
 
   async setActive(adminId: string, id: string, input: { active: boolean; reason?: string | null }, now = new Date()) {
     const reason = input.reason?.trim() || '';
-    if (!input.active && !reason) throw new AppError('يجب توضيح سبب إيقاف الكوبون', 400);
+    if (!input.active && !reason) throw fieldError('reason', 'يجب توضيح سبب إيقاف الكوبون');
     const coupon = await prisma.coupon.findUnique({ where: { id } });
     if (!coupon) throw new AppError('الكوبون غير موجود', 404);
     if (coupon.active === input.active) throw new AppError(input.active ? 'الكوبون مفعّل بالفعل' : 'الكوبون موقوف بالفعل', 409);

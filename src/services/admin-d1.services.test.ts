@@ -278,11 +278,11 @@ test('accreditation sample approve / reject: audit + provider notification point
 	const { accreditationAiService } = await fresh('./accreditation-ai.service.ts'); notes.length = 0;
 	const audit: any[] = [];
 	const sample = { id: 's1', title: 'نظام مخزون', status: 'MANUAL_REVIEW', providerSpecialtyId: 'ps1', aiScore: null, providerSpecialty: { status: 'UNDER_AI_REVIEW' }, providerProfile: { userId: 'p1' } };
-	current = { accreditationSample: { findUnique: async () => sample, update: async (a: any) => ({ id: 's1', ...a.data }) }, providerSpecialty: { updateMany: async () => ({ count: 1 }) }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
+	current = { accreditationSampleEvent: { create: async () => ({}) }, accreditationSample: { findUnique: async () => sample, update: async (a: any) => ({ id: 's1', ...a.data }) }, providerSpecialty: { updateMany: async () => ({ count: 1 }) }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
 	await accreditationAiService.adminApproveSample('s1', admin);
 	await accreditationAiService.adminRejectSample('s1', 'العينة منسوخة', admin);
 	assert.deepEqual(audit.map(a => a.eventType), ['ACCREDITATION_APPROVED_BY_ADMIN', 'ACCREDITATION_REJECTED_BY_ADMIN']);
-	assert.deepEqual(notes.map(n => n.actionUrl), ['/provider-overview/business-models/center/accreditation-details/s1', '/provider-overview/business-models/center/accreditation-details/s1']);
+	assert.deepEqual(notes.map(n => n.actionUrl), ['/provider-overview/account-actions/s1', '/provider-overview/account-actions/s1']);
 	assert.match(notes[1].message, /العينة منسوخة/);
 });
 

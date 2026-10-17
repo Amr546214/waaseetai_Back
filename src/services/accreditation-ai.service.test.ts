@@ -28,10 +28,11 @@ const BASE_DTO = {
   title: 'نظام إدارة المخزون',
   description: 'وصف تقني حقيقي وكامل للمشروع',
   technologiesUsed: ['React', 'Node.js'],
-  attachments: ['https://cdn.example.com/proof1.png']
+  attachments: [] as string[],
+  proofIds: ['up-1']
 };
 
-async function loadService(t: TestContext, opts: { providerProfile?: any; providerSpecialty?: any }) {
+async function loadService(t: TestContext, opts: { providerProfile?: any; providerSpecialty?: any; proofs?: any[] }) {
   const accreditationCreateSpy = t.mock.fn(async (args: any) => ({ id: 'sample-1', aiAuditedAt: null, ...args.data }));
   const providerSpecialtyUpdateSpy = t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
   const providerSpecialtyUpdateManySpy = t.mock.fn(async () => ({ count: 1 }));
@@ -42,8 +43,16 @@ async function loadService(t: TestContext, opts: { providerProfile?: any; provid
       update: providerSpecialtyUpdateSpy,
       updateMany: providerSpecialtyUpdateManySpy
     },
-    accreditationSample: { create: accreditationCreateSpy },
-    $transaction: async () => { throw new Error('submission must not need a transaction'); }
+    accreditationSample: { create: accreditationCreateSpy, findFirst: async () => null },
+    // Batch B T1: the proof must be a COMPLETED upload of this user for this request (a body URL is not a document)
+    accreditationProofUpload: { findMany: async () => (opts.proofs === undefined ? [{ id: 'up-1', privateRef: 'private:image:png:waseetai/accreditation/user-1/proofs/p1', fileName: 'p1.png' }] : opts.proofs), updateMany: async () => ({ count: 1 }) },
+    $transaction: async (fn: any) => fn({
+      $executeRaw: async () => 0,
+      accreditationSample: { create: accreditationCreateSpy, findFirst: async () => null, update: async () => ({}) },
+      accreditationProofUpload: { updateMany: async () => ({ count: 1 }) },
+      accreditationSampleEvent: { create: async () => ({}) },
+      providerSpecialty: { updateMany: providerSpecialtyUpdateManySpy }
+    })
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
 
@@ -67,7 +76,8 @@ test('submitAccreditationSample: stores the sample as MANUAL_REVIEW with no AI f
   assert.equal(result.aiEvaluation.available, false);
   assert.equal(result.aiEvaluation.code, 'AI_FEATURE_UNAVAILABLE');
   assert.equal(providerSpecialtyUpdateSpy.mock.callCount(), 0);
-  assert.equal(providerSpecialtyUpdateManySpy.mock.callCount(), 0);
+  // the specialty may only move to UNDER_AI_REVIEW (waiting for the admin); it is never approved by a submission
+  for (const call of providerSpecialtyUpdateManySpy.mock.calls) assert.equal(call.arguments[0].data.status, 'UNDER_AI_REVIEW');
 });
 
 test('submitAccreditationSample: throws when the provider profile does not exist, writing nothing', async (t) => {
@@ -88,9 +98,9 @@ test('submitAccreditationSample: throws when the specialty has not passed its te
   assert.equal(accreditationCreateSpy.mock.callCount(), 0);
 });
 
-test('submitAccreditationSample: requires at least one piece of evidence', async (t) => {
-  const { accreditationAiService, accreditationCreateSpy } = await loadService(t, {});
-  await assert.rejects(() => accreditationAiService.submitAccreditationSample({ ...BASE_DTO, attachments: [] }));
+test('submitAccreditationSample: requires at least one valid proof DOCUMENT (a link or a body URL is not one) and names the files field', async (t) => {
+  const { accreditationAiService, accreditationCreateSpy } = await loadService(t, { proofs: [] });
+  await assert.rejects(() => accreditationAiService.submitAccreditationSample({ ...BASE_DTO, proofIds: [], projectUrl: 'https://example.com', attachments: ['https://cdn.example.com/x.png'] }), (e: any) => e.statusCode === 400 && e.errors?.[0]?.field === 'files');
   assert.equal(accreditationCreateSpy.mock.callCount(), 0);
 });
 
@@ -106,6 +116,7 @@ test('adminApproveSample/adminRejectSample: the existing manual/deterministic au
   const sampleUpdateSpy = t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
   const specialtyUpdateManySpy = t.mock.fn(async () => ({ count: 1 }));
   const tx = {
+    accreditationSampleEvent: { create: async () => ({}) },
     accreditationSample: { update: sampleUpdateSpy },
     providerSpecialty: { updateMany: specialtyUpdateManySpy }
   };
@@ -136,6 +147,7 @@ test('adminApproveSample: an AI_VERIFIED sample whose ProviderSpecialty is NOT y
   const sampleUpdateSpy = t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
   const specialtyUpdateManySpy = t.mock.fn(async () => ({ count: 1 }));
   const tx = {
+    accreditationSampleEvent: { create: async () => ({}) },
     accreditationSample: { update: sampleUpdateSpy },
     providerSpecialty: { updateMany: specialtyUpdateManySpy }
   };
@@ -168,6 +180,7 @@ test('adminApproveSample: a second approval attempt is rejected based on the REA
   const sampleUpdateSpy = t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
   const specialtyUpdateManySpy = t.mock.fn(async () => ({ count: 1 }));
   const tx = {
+    accreditationSampleEvent: { create: async () => ({}) },
     accreditationSample: { update: sampleUpdateSpy },
     providerSpecialty: { updateMany: specialtyUpdateManySpy }
   };
@@ -200,6 +213,7 @@ test('adminRejectSample: rejecting one sample never downgrades a ProviderSpecial
   const sampleUpdateSpy = t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
   const specialtyUpdateManySpy = t.mock.fn(async (args: any) => ({ count: args.where.status?.not === 'APPROVED' ? 0 : 1 }));
   const tx = {
+    accreditationSampleEvent: { create: async () => ({}) },
     accreditationSample: { update: sampleUpdateSpy },
     providerSpecialty: { updateMany: specialtyUpdateManySpy }
   };
@@ -238,7 +252,7 @@ test('accreditationAiService: the removed fake processProofImage method (hardcod
 
 async function approveWith(t: TestContext, sample: any) {
   const sampleUpdateSpy = t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
-  const tx = { accreditationSample: { update: sampleUpdateSpy }, providerSpecialty: { updateMany: t.mock.fn(async () => ({ count: 1 })) } };
+  const tx = { accreditationSampleEvent: { create: async () => ({}) }, accreditationSample: { update: sampleUpdateSpy }, providerSpecialty: { updateMany: t.mock.fn(async () => ({ count: 1 })) } };
   const prismaMock: any = {
     accreditationSample: { findUnique: async () => sample },
     $transaction: async (fn: any) => fn(tx)

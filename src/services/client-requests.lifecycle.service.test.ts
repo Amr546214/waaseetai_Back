@@ -20,6 +20,7 @@ test('getMyRequests: stage is derived from the contract - a request waiting for 
 	const svc = await load(t, {
 		clientProfile: { findUnique: async () => ({ id: 'cp-1' }) },
 		clientRequest: { findMany: async () => [row('a', 'OPEN'), row('b', 'OPEN', ['SUBMITTED']), row('c', 'OPEN', ['UNDER_NEGOTIATION']), row('d', 'PENDING_SIGNATURE'), row('e', 'PENDING_SIGNATURE'), row('f', 'IN_PROGRESS'), row('g', 'CANCELLED'), row('h', 'COMPLETED'), row('i', 'DRAFT')] },
+		dispute: { findFirst: async () => null, findMany: async () => [], count: async () => 0 },
 		project: { findMany: async () => [] },
 		contract: { findMany: async () => [{ projectId: 'd', status: 'PENDING_CLIENT_SIGNATURE' }, { projectId: 'e', status: 'PENDING_PROVIDER_SIGNATURE' }, { projectId: 'f', status: 'ACTIVE' }] }
 	});
@@ -34,6 +35,7 @@ test('getMyRequests: a cancelled request is never counted as active (it used to 
 	const svc = await load(t, {
 		clientProfile: { findUnique: async () => ({ id: 'cp-1' }) },
 		clientRequest: { findMany: async () => [row('g', 'CANCELLED')] },
+		dispute: { findFirst: async () => null, findMany: async () => [], count: async () => 0 },
 		project: { findMany: async () => [] },
 		contract: { findMany: async () => [] }
 	});
@@ -105,6 +107,7 @@ function detailsDb(o: { requestStatus?: string; offerStatus?: string; contract?:
 		},
 		projectProposal: { findMany: async () => [{ id: 'canon-1', providerId: 'prov-1', milestones: [], aiQualityTag: null, aiFeedback: null }] },
 		project: { groupBy: async () => [] },
+		dispute: { findFirst: async () => null, findMany: async () => [], count: async () => 0 },
 		contract: { findUnique: async () => o.contract ?? null },
 		message: { findMany: async () => (o.messages ?? []).map(m => ({ ...m, conversation: { providerId: 'prov-1' } })) }
 	};

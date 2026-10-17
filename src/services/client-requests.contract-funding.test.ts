@@ -10,7 +10,7 @@ process.env.OTP_SECRET = 'contract-funding-secret';
 // contract that is not ready / not this client's is refused before anything is written. One in-memory database behind a mocked prisma.
 const REQUEST = 'req-1', CONTRACT = 'contract-1', CLIENT = 'client-1', PROVIDER = 'provider-1', OFFER = 'offer-1', CODE = '123456';
 
-function setup(t: TestContext, o: { price?: number; wallet?: number; contractStatus?: string; contractClient?: string; otp?: 'valid' | 'none'; mailFails?: boolean } = {}) {
+function setup(t: TestContext, o: { price?: number; wallet?: number; contractStatus?: string; contractClient?: string; otp?: 'valid' | 'none'; mailFails?: boolean; recentChallengeAges?: number[] } = {}) {
   const price = o.price ?? 1000;
   const state: any = { wallet: o.wallet ?? 5000, escrow: null, walletTx: [] as any[], escrowWrites: 0, otpCreated: 0, otpAttempts: 0, otpDeleted: 0, mails: 0, contractStatus: o.contractStatus ?? 'PENDING_CLIENT_SIGNATURE' };
   const contractRow = () => ({ id: CONTRACT, projectId: REQUEST, clientId: o.contractClient ?? CLIENT, providerId: PROVIDER, price, status: state.contractStatus, offerId: OFFER, termsVersion: 1 });
@@ -39,7 +39,8 @@ function setup(t: TestContext, o: { price?: number; wallet?: number; contractSta
     proposal: { findFirst: async () => null },
     otpVerification: {
       findFirst: async () => (o.otp === 'none' ? null : otp),
-      count: async () => 0,
+      count: async () => o.recentChallengeAges?.length ?? 0,
+      findMany: async () => (o.recentChallengeAges ?? []).map(age => ({ createdAt: new Date(Date.now() - age) })).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()),
       create: async () => { state.otpCreated++; return { id: 'otp-new' }; },
       delete: async () => { state.otpDeleted++; return {}; },
       update: async (a: any) => { state.otpAttempts = a.data.attempts; return {}; },
@@ -145,4 +146,17 @@ test('depositEscrow: two simultaneous submissions pay once (the guarded contract
   assert.equal(state.wallet, 4000);
   assert.equal(state.walletTx.length, 1);
   assert.equal(state.escrowWrites, 1);
+});
+
+test('signContract: three challenges within a minute -> 429 with the text unchanged AND a machine-readable wait (retryAfterSeconds until the oldest leaves the window); no code created or sent', async (t) => {
+  const state = setup(t, { recentChallengeAges: [10_000, 30_000, 50_000] });
+  await assert.rejects(async () => (await load()).signContract(CLIENT, REQUEST, OFFER), (e: any) => {
+    assert.equal(status(e), 429);
+    assert.match(e.message, /انتظر دقيقة/);
+    const wait = e.errors?.[0]?.retryAfterSeconds;
+    assert.equal(e.errors[0].code, 'SIGN_OTP_THROTTLED');
+    assert.ok(wait >= 9 && wait <= 11, `wait ${wait}`); // the oldest (50 s ago) leaves the 60 s window in ~10 s
+    return true;
+  });
+  assert.equal(state.otpCreated + state.mails, 0);
 });

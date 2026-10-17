@@ -1,10 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
 import { DisputeStatus } from '@prisma/client';
 import { disputeService } from '../services/dispute.service';
-import { assignDisputeSchema, createDisputeSchema, disputeNoteSchema, disputeStatusSchema, resolveDisputeSchema } from '../dtos/dispute.dto';
-import { AppError } from '../utils/app-error';
+import { assignDisputeSchema, createDisputeSchema, disputeNoteSchema, disputeStatusSchema, resolveDisputeFinancialSchema, resolveDisputeSchema } from '../dtos/dispute.dto';
+import { AppError, zodAppError } from '../utils/app-error';
 
 const actorId = (req: Request) => req.user?.id || req.user?.userId!;
+
+// Arabic text for a field that zod reports with its default English message (a missing / wrong-typed value).
+const DISPUTE_FIELD_TEXT = { action: 'نوع القرار غير صالح', resolution: 'اكتب قرار النزاع', outcome: 'نوع القرار المالي غير صالح', refundToClient: 'أدخل مبلغ الاسترداد للعميل', releaseToProvider: 'أدخل المبلغ المصروف لمقدم الخدمة', expectedHeldAmount: 'المبلغ المحتجز المعروض غير صالح، حدّث الصفحة', confirm: 'يجب تأكيد تنفيذ القرار المالي صراحةً', resolutionNote: 'الملاحظة غير صالحة' };
 
 export async function listDisputes(req: Request, res: Response, next: NextFunction) {
   try { const rawStatus = req.query.status ? String(req.query.status).toUpperCase() : undefined; const status = rawStatus && Object.values(DisputeStatus).includes(rawStatus as DisputeStatus) ? rawStatus as DisputeStatus : undefined; if (rawStatus && !status) throw new AppError('حالة النزاع غير صحيحة', 400); const data = await disputeService.listForAdmin(status, Number(req.query.page) || 1, Number(req.query.limit) || 20); res.json({ success: true, data }); } catch (error) { next(error); }
@@ -23,7 +26,12 @@ export async function getDispute(req: Request, res: Response, next: NextFunction
 }
 
 export async function resolveDispute(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = resolveDisputeSchema.safeParse(req.body); if (!parsed.success) throw new AppError('بيانات حل النزاع غير صحيحة', 400); res.json({ success: true, data: await disputeService.resolve(String(req.params.id), actorId(req), parsed.data) }); } catch (error) { next(error); }
+  try { const parsed = resolveDisputeSchema.safeParse(req.body); if (!parsed.success) throw zodAppError(parsed.error.issues, parsed.error.issues[0]?.message || 'بيانات حل النزاع غير صحيحة', DISPUTE_FIELD_TEXT); res.json({ success: true, data: await disputeService.resolve(String(req.params.id), actorId(req), parsed.data) }); } catch (error) { next(error); }
+}
+
+// Financial resolution: the only dispute endpoint that moves money. Explicit amounts + `confirm: true`; see docs/proposals/dispute-freeze-and-resolution.md.
+export async function resolveDisputeFinancial(req: Request, res: Response, next: NextFunction) {
+  try { const parsed = resolveDisputeFinancialSchema.safeParse(req.body); if (!parsed.success) throw zodAppError(parsed.error.issues, parsed.error.issues[0]?.message || 'بيانات القرار المالي غير صحيحة', DISPUTE_FIELD_TEXT); res.json({ success: true, data: await disputeService.resolveFinancial(String(req.params.id), actorId(req), parsed.data) }); } catch (error) { next(error); }
 }
 
 // Advisory-only — never resolves/rejects the dispute, never touches status
@@ -57,13 +65,13 @@ export async function cancelProviderRequest(req: Request, res: Response, next: N
 }
 
 export async function assignAdminDispute(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = assignDisputeSchema.safeParse(req.body); if (!parsed.success) throw new AppError('حدد المشرف المسؤول عن النزاع', 400); res.json({ success: true, data: await disputeService.assign(String(req.params.id), actorId(req), parsed.data.assigneeId) }); } catch (error) { next(error); }
+  try { const parsed = assignDisputeSchema.safeParse(req.body); if (!parsed.success) throw zodAppError(parsed.error.issues, 'حدد المشرف المسؤول عن النزاع', { assigneeId: 'حدد المشرف المسؤول عن النزاع' }); res.json({ success: true, data: await disputeService.assign(String(req.params.id), actorId(req), parsed.data.assigneeId) }); } catch (error) { next(error); }
 }
 
 export async function addAdminDisputeNote(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = disputeNoteSchema.safeParse(req.body); if (!parsed.success) throw new AppError('أدخل نص الملاحظة', 400); res.status(201).json({ success: true, data: await disputeService.addNote(String(req.params.id), actorId(req), parsed.data.body) }); } catch (error) { next(error); }
+  try { const parsed = disputeNoteSchema.safeParse(req.body); if (!parsed.success) throw zodAppError(parsed.error.issues, 'أدخل نص الملاحظة', { body: 'أدخل نص الملاحظة' }); res.status(201).json({ success: true, data: await disputeService.addNote(String(req.params.id), actorId(req), parsed.data.body) }); } catch (error) { next(error); }
 }
 
 export async function setAdminDisputeStatus(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = disputeStatusSchema.safeParse(req.body); if (!parsed.success) throw new AppError('حالة النزاع غير صحيحة', 400); res.json({ success: true, data: await disputeService.setStatus(String(req.params.id), actorId(req), parsed.data.status) }); } catch (error) { next(error); }
+  try { const parsed = disputeStatusSchema.safeParse(req.body); if (!parsed.success) throw zodAppError(parsed.error.issues, 'حالة النزاع غير صحيحة', { status: 'حالة النزاع غير صحيحة' }); res.json({ success: true, data: await disputeService.setStatus(String(req.params.id), actorId(req), parsed.data.status) }); } catch (error) { next(error); }
 }

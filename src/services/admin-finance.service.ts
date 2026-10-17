@@ -8,7 +8,7 @@ import { toCsv } from '../utils/csv.util';
  * payments, withdrawals, affiliate commission logs, stage deliveries); nothing is typed in. USD only. No tax / VAT figure exists anywhere in the
  * platform's money flow, so none is shown. Read-only: no money moves from here.
  */
-const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+import { round2 } from '../utils/money';
 const fullName = (u?: { firstName?: string | null; lastName?: string | null } | null) => [u?.firstName, u?.lastName].filter(Boolean).join(' ').trim();
 const monthKey = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 const CSV_ROW_CAP = 5000;
@@ -88,7 +88,7 @@ export class AdminFinanceService {
 		]);
 		const pages = Math.ceil(total / safeLimit);
 		return {
-			items: items.map(t => ({ id: t.id, type: t.type, amount: t.amount, currency: t.currency, status: t.status, paymentMethod: t.paymentMethod, referenceId: t.referenceId, description: t.description, createdAt: t.createdAt, user: t.user ? { id: t.user.id, name: fullName(t.user), email: t.user.email } : null })),
+			items: items.map(t => ({ id: t.id, type: t.type, amount: round2(t.amount), currency: t.currency, status: t.status, paymentMethod: t.paymentMethod, referenceId: t.referenceId, description: t.description, createdAt: t.createdAt, user: t.user ? { id: t.user.id, name: fullName(t.user), email: t.user.email } : null })),
 			typeCounts: Object.fromEntries(types.map(g => [g.type, g._count._all])),
 			pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages }
 		};
@@ -116,7 +116,7 @@ export class AdminFinanceService {
 			currency: 'USD',
 			totals: { releasedGross: round2(sums._sum.releasedAmount ?? 0), platformCommission: round2(sums._sum.platformCommissionAmount ?? 0), providerNet: round2(sums._sum.providerNetReleasedAmount ?? 0) },
 			affiliate: affiliateTotals,
-			items: items.map(e => ({ id: e.id, projectId: e.projectId, projectTitle: e.project?.title ?? '', provider: fullName(e.project?.provider), escrowStatus: e.status, releasedGross: e.releasedAmount, platformCommission: e.platformCommissionAmount, providerNet: e.providerNetReleasedAmount, ratePercent: e.providerCommissionRateSnapshot, level: e.providerCommissionLevelSnapshot, updatedAt: e.updatedAt })),
+			items: items.map(e => ({ id: e.id, projectId: e.projectId, projectTitle: e.project?.title ?? '', provider: fullName(e.project?.provider), escrowStatus: e.status, releasedGross: round2(e.releasedAmount), platformCommission: round2(e.platformCommissionAmount), providerNet: round2(e.providerNetReleasedAmount), ratePercent: e.providerCommissionRateSnapshot, level: e.providerCommissionLevelSnapshot, updatedAt: e.updatedAt })),
 			pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages }
 		};
 	}

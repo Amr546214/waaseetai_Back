@@ -16,6 +16,9 @@ import { providerFinanceService } from '../services/provider-finance.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { providerDeliveriesService } from '../services/provider-deliveries.service';
 import { computeClientAiOfferRating } from '../services/client-ai-offer-rating';
+import { settledProjectIds, SETTLED_LABEL_AR } from '../services/settlement-state.service';
+import { listLifecycles } from '../services/project-lifecycle.service';
+import { clientNotifications, clientNotificationFor } from '../services/client-notifications.service';
 
 export const getProviderStatistics = async (req: Request, res: Response, next: NextFunction) => {
 	try {
@@ -339,7 +342,9 @@ export const getPassedSpecialties = async (req: Request, res: Response, next: Ne
 				await tx.clientRequest.updateMany({ where: { id: targetProjectId }, data: { status: 'IN_PROGRESS' } });
 				return updated;
 			});
-		
+
+		// The client learns the project started: stored + delivered once, only after the signing transaction committed (a failure here never undoes the signature).
+		await clientNotifications.send(clientNotificationFor.contractSigned({ clientId: contract.clientId, projectId: contract.projectId, projectTitle: projectData?.title ?? null }));
 		res.status(200).json({ success: true, message: 'تم التوقيع بنجاح، المشروع الآن قيد التنفيذ', data: contract });
 	} catch (error) {
 		next(error);
@@ -368,6 +373,14 @@ export const getActiveProjects = async (req: Request, res: Response, next: NextF
 			},
 			orderBy: { createdAt: 'desc' }
 		});
+		// A contract that came through offer negotiation + signing may not have its stage rows yet: the progress endpoint creates them lazily, so the list must resolve them the
+		// same way (one helper) or it would show «لم تُجهَّز مراحل المشروع» and canUploadDelivery:false for a project that is actually deliverable.
+		for (const c of contracts) {
+			if (c.status === 'ACTIVE' && c.stages.length === 0) {
+				await projectProgressService.ensureStages(c.id);
+				c.stages = await prisma.projectStage.findMany({ where: { contractId: c.id }, orderBy: { stepOrder: 'asc' }, include: { deliveries: { select: { status: true }, orderBy: { submittedAt: 'asc' } } } });
+			}
+		}
 		// A project with an open dispute says so (the newest open one wins).
 		const openDisputes = contracts.length ? await prisma.dispute.findMany({
 			where: { projectId: { in: contracts.map(c => c.projectId) }, status: { in: ['OPEN', 'UNDER_REVIEW'] } },
@@ -401,6 +414,10 @@ export const getActiveProjects = async (req: Request, res: Response, next: NextF
 				status,
 				statusLabel,
 				...state,
+				// The dispute freeze (approval / release only) is shown by the list too; delivery stays allowed.
+				hasActiveDispute: disputeByProject.has(project.id),
+				operationalStatus: c.status === 'ACTIVE' ? 'ACTIVE' : 'PENDING_START',
+				closedBySettlement: false,
 				progress,
 				providerName: clientName, // "providerName" in frontend interface actually represents the other party (client)
 				providerInitial: clientName.charAt(0) || 'ع',
@@ -542,7 +559,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 		const contracts = await prisma.contract.findMany({
 			where: { providerId },
 			include: {
-				project: true,
+				project: { include: { escrow: true } },
 				client: {
 					select: {
 						firstName: true,
@@ -593,6 +610,15 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 		});
 
 		const archivedList: any[] = [];
+		// Projects closed by an admin financial dispute settlement: shown as such, never as "completed".
+		const settledIds = await settledProjectIds([...contracts.map(c => c.projectId), ...projects.map(p => p.id)]);
+		// ONE lifecycle per archived contract: the same state and the same money as the detail pages (a settled project is its own end state, never "completed").
+		const lifecycleMap = await listLifecycles(contracts.map(c => ({ projectId: c.projectId, contractStatus: c.status, price: c.price, escrow: c.project?.escrow ?? null })), { db: prisma });
+		const settledExtra = (id: string) => {
+			const lc = lifecycleMap.get(id);
+			const base = settledIds.has(id) ? { settled: true, statusLabel: SETTLED_LABEL_AR } : {};
+			return lc ? { ...base, operationalStatus: lc.operationalStatus, closureReason: lc.closureReason, completedByDelivery: lc.completedByDelivery, closedBySettlement: lc.closedBySettlement, hasActiveDispute: lc.hasActiveDispute, financial: lc.financial } : base;
+		};
 
 		// Filter contracts that are completed, cancelled, or archived/disputed
 		for (const c of contracts) {
@@ -608,9 +634,11 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				continue;
 			}
 
-			let status: 'done' | 'cancel' | 'arch' = 'done';
+			let status: 'done' | 'cancel' | 'arch' | 'settled' = 'done';
 			if (isCancel) status = 'cancel';
 			else if (isArch) status = 'arch';
+			// Closed by a dispute settlement: its own state (never "done"), whatever the stored contract / project status is.
+			if (settledIds.has(c.projectId)) status = 'settled';
 
 			const clientName = `${c.client?.firstName || 'عميل'} ${c.client?.lastName || ''}`.trim();
 			const displayId = `PRJ-${p.id.substring(0, 4).toUpperCase()}`;
@@ -624,9 +652,10 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				title: p.title,
 				clientName: clientName || 'عميل وسيط AI',
 				value: `${c.price.toLocaleString()} $`,
-				date: status === 'done' ? `أُغلق ${dateFormatted}` : (status === 'cancel' ? `ملغى ${dateFormatted}` : `مؤرشف ${dateFormatted}`),
+				date: settledIds.has(c.projectId) ? `${SETTLED_LABEL_AR} ${dateFormatted}` : (status === 'done' ? `أُغلق ${dateFormatted}` : (status === 'cancel' ? `ملغى ${dateFormatted}` : `مؤرشف ${dateFormatted}`)),
 				status,
-				icon: status === 'done' ? 'check' : (status === 'cancel' ? 'list' : 'doc')
+				icon: status === 'done' ? 'check' : (status === 'cancel' ? 'list' : 'doc'),
+				...settledExtra(c.projectId)
 			});
 		}
 
@@ -636,7 +665,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				continue;
 			}
 
-			const status: 'done' | 'cancel' | 'arch' = p.status === ProjectStatus.COMPLETED ? 'done' : 'arch';
+			const status: 'done' | 'cancel' | 'arch' | 'settled' = settledIds.has(p.id) ? 'settled' : p.status === ProjectStatus.COMPLETED ? 'done' : 'arch';
 			const clientName = `${p.client?.firstName || 'عميل'} ${p.client?.lastName || ''}`.trim();
 			const displayId = `PRJ-${p.id.substring(0, 4).toUpperCase()}`;
 			const dateFormatted = new Date(p.updatedAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'long' });
@@ -648,9 +677,10 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				title: p.title,
 				clientName: clientName || 'عميل وسيط AI',
 				value: `${budgetVal.toLocaleString()} $`,
-				date: status === 'done' ? `أُغلق ${dateFormatted}` : `مؤرشف ${dateFormatted}`,
+				date: settledIds.has(p.id) ? `${SETTLED_LABEL_AR} ${dateFormatted}` : (status === 'done' ? `أُغلق ${dateFormatted}` : `مؤرشف ${dateFormatted}`),
 				status,
-				icon: status === 'done' ? 'check' : 'doc'
+				icon: status === 'done' ? 'check' : 'doc',
+				...settledExtra(p.id)
 			});
 		}
 

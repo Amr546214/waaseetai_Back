@@ -1,6 +1,8 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { IN_FLIGHT_WITHDRAWAL_STATUSES, SPENT_WITHDRAWAL_STATUSES, RESERVING_WITHDRAWAL_STATUSES } from '../utils/withdrawal-reservation';
+import { round2, sumMoney } from '../utils/money';
+import { SETTLED_DISPUTE_WHERE } from './settlement-state.service';
 import { isV2Escrow, providerReleased, providerNetEntitlement, splitRelease } from '../utils/escrow-commission';
 
 export class ProviderFinanceService {
@@ -20,6 +22,7 @@ export class ProviderFinanceService {
             id: true,
             title: true,
             status: true,
+            disputes: { where: SETTLED_DISPUTE_WHERE, select: { id: true }, take: 1 },
             contract: {
               select: {
                 id: true,
@@ -43,15 +46,15 @@ export class ProviderFinanceService {
       const price = escrow.project.contract?.price || escrow.amount;
       return isV2Escrow(escrow) && escrow.providerCommissionRateSnapshot != null ? providerNetEntitlement(price, escrow.providerCommissionRateSnapshot) : price;
     };
-    const availableBalance = escrows.reduce((sum, escrow) => sum + providerReleased(escrow), 0);
-    const escrowBalance = escrows.reduce((sum, escrow) => sum + Math.max(0, entitlementOf(escrow) - providerReleased(escrow)), 0);
+    const availableBalance = sumMoney(escrows.map(escrow => providerReleased(escrow)));
+    const escrowBalance = sumMoney(escrows.map(escrow => Math.max(0, entitlementOf(escrow) - providerReleased(escrow))));
     // availableBalance stays the total released earnings; withdrawableBalance is what a NEW request may still ask for (the server enforces the same figure).
     const reserved = await client.withdrawal.groupBy({ by: ['status'], where: { userId: providerId, status: { in: [...RESERVING_WITHDRAWAL_STATUSES] } }, _sum: { amount: true } });
-    const sumOf = (statuses: readonly string[]) => reserved.filter(r => statuses.includes(r.status)).reduce((sum, r) => sum + (r._sum.amount ?? 0), 0);
+    const sumOf = (statuses: readonly string[]) => round2(reserved.filter(r => statuses.includes(r.status)).reduce((sum, r) => sum + (r._sum.amount ?? 0), 0));
     const pendingWithdrawals = sumOf(IN_FLIGHT_WITHDRAWAL_STATUSES);
     const paidWithdrawals = sumOf(SPENT_WITHDRAWAL_STATUSES);
-    const withdrawableBalance = Math.max(0, availableBalance - pendingWithdrawals - paidWithdrawals);
-    const platformCommissionTotal = escrows.reduce((sum, escrow) => sum + (isV2Escrow(escrow) ? escrow.platformCommissionAmount : 0), 0);
+    const withdrawableBalance = round2(Math.max(0, availableBalance - pendingWithdrawals - paidWithdrawals));
+    const platformCommissionTotal = sumMoney(escrows.map(escrow => (isV2Escrow(escrow) ? escrow.platformCommissionAmount : 0)));
 
     const stageTransactions = escrows.flatMap(escrow => {
       const stages = escrow.project.contract?.stages || [];
@@ -72,8 +75,8 @@ export class ProviderFinanceService {
           id: `stage-release-${stage.id}`,
           type: 'credit' as const,
           category: 'STAGE_RELEASE' as const,
-          amount: split ? split.net : stage.amount,
-          ...(split ? { grossAmount: split.gross, platformCommission: split.commission, commissionRatePercent: v2Rate } : {}),
+          amount: round2(split ? split.net : stage.amount),
+          ...(split ? { grossAmount: round2(split.gross), platformCommission: round2(split.commission), commissionRatePercent: v2Rate } : {}),
           currency: 'USD',
           title: 'إفراج دفعة مرحلة',
           description: split ? `${stage.title} · ${escrow.project.title} · بعد خصم عمولة المنصة ${v2Rate}%` : `${stage.title} · ${escrow.project.title}`,
@@ -94,7 +97,7 @@ export class ProviderFinanceService {
         id: `escrow-release-${escrow.id}`,
         type: 'credit' as const,
         category: 'ESCROW_RELEASE' as const,
-        amount: residual,
+        amount: round2(residual),
         currency: 'USD',
         title: 'إفراج ضمان المشروع',
         description: escrow.project.title,
@@ -120,21 +123,21 @@ export class ProviderFinanceService {
         escrowBalance,
         // what the platform kept as commission on v2 escrows (the provider's availableBalance is already net of it)
         platformCommissionTotal,
-        releasedThisMonth: transactions.filter(tx => tx.createdAt >= monthStart).reduce((sum, tx) => sum + tx.amount, 0),
+        releasedThisMonth: sumMoney(transactions.filter(tx => tx.createdAt >= monthStart).map(tx => tx.amount)),
         releasedTransactionsCount: transactions.length,
-        fundedProjectsCount: escrows.filter(escrow => (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).length,
-        completedProjectsCount: escrows.filter(escrow => escrow.project.status === 'COMPLETED').length,
+        fundedProjectsCount: escrows.filter(escrow => escrow.status === 'HELD' && (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).length,
+        completedProjectsCount: escrows.filter(escrow => escrow.project.status === 'COMPLETED' && !(escrow.project.disputes?.length)).length,
         currency: 'USD' // active escrow/contract pricing pipeline is now USD-semantic
       },
       transactions,
-      escrows: escrows.filter(escrow => (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).map(escrow => ({
+      escrows: escrows.filter(escrow => escrow.status === 'HELD' && (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).map(escrow => ({
         id: escrow.id,
         projectId: escrow.project.id,
         projectTitle: escrow.project.title,
-        total: entitlementOf(escrow),
-        released: providerReleased(escrow),
-        held: Math.max(0, entitlementOf(escrow) - providerReleased(escrow)),
-        ...(isV2Escrow(escrow) ? { grossTotal: escrow.project.contract?.price || escrow.amount, commissionRatePercent: escrow.providerCommissionRateSnapshot } : {}),
+        total: round2(entitlementOf(escrow)),
+        released: round2(providerReleased(escrow)),
+        held: round2(Math.max(0, entitlementOf(escrow) - providerReleased(escrow))),
+        ...(isV2Escrow(escrow) ? { grossTotal: round2(escrow.project.contract?.price || escrow.amount), commissionRatePercent: escrow.providerCommissionRateSnapshot } : {}),
         status: escrow.status,
         updatedAt: escrow.updatedAt
       }))
@@ -152,7 +155,7 @@ export class ProviderFinanceService {
       id: `escrow-funded-${escrow.id}`,
       type: 'hold' as const,
       category: 'ESCROW_FUNDED' as const,
-      amount: escrow.project.contract?.price || escrow.amount,
+      amount: round2(escrow.project.contract?.price || escrow.amount),
       currency: 'USD' as const,
       title: 'تمويل ضمان المشروع',
       description: escrow.project.title,

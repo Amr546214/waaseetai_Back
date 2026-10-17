@@ -1,6 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { adminAccountService } from '../services/admin-account.service';
+import { zodFieldErrors } from '../utils/app-error';
+
+// Arabic text for zod's default messages on the admin profile form.
+const ACCOUNT_FIELD_MESSAGES = { firstName: 'الاسم الأول مطلوب (حتى 60 حرفًا)', lastName: 'الاسم الأخير مطلوب (حتى 60 حرفًا)', phoneCountryCode: 'رمز الدولة غير صالح (مثال: +966)', phoneNumber: 'رقم الجوال غير صالح (6 إلى 15 رقمًا)' };
 
 const ctx = (req: Request) => ({ sessionId: req.user?.sessionId, ipAddress: req.ip, actorLabel: req.user?.email });
 const q = (v: unknown) => (typeof v === 'string' ? v : undefined);
@@ -21,7 +25,7 @@ export const getMe = async (req: Request, res: Response, next: NextFunction) => 
 export const updateMe = async (req: Request, res: Response, next: NextFunction) => {
   try { res.json({ success: true, data: await adminAccountService.updateMe(req.user!.id, req.body, ctx(req)) }); }
   catch (e: any) {
-    if (e instanceof ZodError) return void res.status(400).json({ success: false, message: 'بيانات غير صالحة' });
+    if (e instanceof ZodError) return void res.status(400).json({ success: false, message: 'بيانات غير صالحة', errors: zodFieldErrors(e.issues, ACCOUNT_FIELD_MESSAGES) });
     if (e?.message === 'NO_FIELDS') return void res.status(400).json({ success: false, message: 'لا توجد حقول للتحديث' });
     if (e?.message === 'PHONE_TAKEN') return void res.status(409).json({ success: false, message: 'رقم الجوال مستخدم في حساب آخر' });
     next(e);

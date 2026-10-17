@@ -38,8 +38,8 @@ function load() {
 	loaded ??= (async () => {
 		const tx: any = { serviceCatalog: { create: async (a: any) => { created.push(a.data); return { id: 's1', ...a.data, stages: [] }; }, update: async (a: any) => { created.push(a.data); return { id: 's1', ...a.data, stages: [] }; } }, serviceStage: { deleteMany: async () => ({}) } };
 		const prisma: any = {
-			providerSpecialty: { findFirst: async () => ({ id: 'ps1', specialty: { id: 'sp1' } }) },
-			accreditationSample: { findFirst: async () => ({ id: 'as1' }) },
+			providerSpecialty: { findFirst: async () => ({ id: 'ps1', status: 'APPROVED', isPassed: true, isActive: true, specialty: { id: 'sp1' } }) },
+			accreditationSample: { findFirst: async () => ({ id: 'as1', status: 'AI_VERIFIED' }) },
 			portfolioItem: { findFirst: async () => null },
 			serviceCatalog: { findFirst: async () => ({ id: 's1', providerId: 'u1', approvedAt: new Date(), totalAmount: 100, totalDays: 5 }) },
 			$transaction: async (fn: any) => fn(tx),

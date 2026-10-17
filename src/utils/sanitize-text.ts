@@ -23,3 +23,6 @@ export function sanitizeText(value: string): string {
 /** zod: sanitize the incoming string first, then validate it (so "<b></b>" is judged as the empty text it really is). */
 export const sanitizedText = <T extends z.ZodTypeAny>(inner: T) =>
 	z.preprocess((value) => (typeof value === 'string' ? sanitizeText(value) : value), inner);
+
+/** True for text that is empty, only whitespace (incl. NBSP) or only invisible zero-width characters: such a value is "not filled" for every required text field. */
+export const isBlankText = (value: unknown): boolean => String(value ?? '').replace(/[\s\u00A0\u200B-\u200D\u2060\uFEFF]/g, '') === '';

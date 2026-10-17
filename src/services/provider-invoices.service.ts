@@ -7,16 +7,16 @@ import { commissionOn, isV2Escrow, splitRelease } from '../utils/escrow-commissi
 // Status: 'paid' once the stage is APPROVED (released to the provider's balance), 'due' while it is delivered and waiting for the client's approval.
 // Commission: a fee-policy-v2 escrow replays the same cumulative split the release uses (splitRelease), so released stages show exactly what was kept; an unreleased stage shows
 // the expected figure at the snapshotted rate (`estimated: true`); a legacy escrow has no commission (released gross).
-const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+import { round2 } from '../utils/money';
 
 type Row = { contract: any; stage: any; delivery: any; escrow: any; split: { gross: number; commission: number; net: number; estimated: boolean } | null };
 
 export const buildProviderInvoice = ({ contract, stage, delivery, split }: Row) => {
-  const stageValue = Number(stage.amount || 0);
+  const stageValue = round2(Number(stage.amount || 0));
   const issuedAt = delivery.submittedAt as Date;
   const status: 'paid' | 'due' = stage.status === 'APPROVED' ? 'paid' : 'due';
-  const commission = split ? split.commission : 0;
-  const net = split ? split.net : stageValue;
+  const commission = split ? round2(split.commission) : 0;
+  const net = split ? round2(split.net) : stageValue;
   return {
     id: `PINV-${issuedAt.getFullYear()}-${String(delivery.id).replace(/-/g, '').slice(0, 10).toUpperCase()}`,
     sourceId: delivery.id,

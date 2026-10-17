@@ -2,11 +2,12 @@ import { Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, authorizeActiveRole, requireActiveUser } from '../middlewares/auth.middleware';
 import { clientSpecialtyRecommendationService, MAX_RECOMMENDATION_TEXT } from '../services/client-specialty-recommendation.service';
-import { aiLimiter } from '../middlewares/rate-limit.middleware';
+import { aiLimiter, paymentLimiter } from '../middlewares/rate-limit.middleware';
+
 import { clientRequestsController } from '../controllers/client-requests.controller';
 import { memoryUpload } from '../utils/cloudinary-storage';
 import { openClientDispute } from '../controllers/dispute.controller';
-import { rateAsClient, rateStage } from '../controllers/rating.controller';
+import { rateAsClient, rateStage, ratingStatusAsClient, stageRatingStatusAsClient } from '../controllers/rating.controller';
 
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
@@ -103,7 +104,8 @@ router.post('/:id/stages/:stageId/ai-review', authenticate, requireActiveUser, a
 // write, never changes any status. Ownership (must be this contract's own
 // client or provider) is enforced inside the shared service method.
 router.post('/:id/health', authenticate, requireActiveUser, aiLimiter, clientRequestsController.getProjectHealthAnalysis);
-router.post('/:id/stages/:stageId/rating', authenticate, requireActiveUser, rateStage);
+router.post('/:id/stages/:stageId/rating', authenticate, requireActiveUser, clientOnly, rateStage);
+router.get('/:id/stages/:stageId/rating-status', authenticate, requireActiveUser, clientOnly, stageRatingStatusAsClient);
 
 // Request details by ID
 router.get('/:id', authenticate, requireActiveUser, clientRequestsController.getRequestDetails);
@@ -124,8 +126,9 @@ router.get('/:id/contract', authenticate, requireActiveUser, clientOnly, clientR
 router.post('/:id/contract/sign', authenticate, requireActiveUser, clientOnly, clientRequestsController.signContract);
 
 // Verify OTP & deposit escrow
-router.post('/:id/escrow/deposit', authenticate, requireActiveUser, clientOnly, clientRequestsController.depositEscrow);
+router.post('/:id/escrow/deposit', authenticate, requireActiveUser, clientOnly, paymentLimiter, clientRequestsController.depositEscrow);
 router.post('/:id/disputes', authenticate, requireActiveUser, clientOnly, openClientDispute);
 router.post('/:id/rate', authenticate, requireActiveUser, clientOnly, rateAsClient);
+router.get('/:id/rating-status', authenticate, requireActiveUser, clientOnly, ratingStatusAsClient);
 
 export default router;

@@ -2,7 +2,7 @@ import { prisma } from '../config/db';
 import { disconnectUserSockets } from '../utils/socket-registry';
 import { AccountType, UserStatus, UserRole, RiskLevel, Prisma, LogCategory, LogStatus, ProjectStatus } from '@prisma/client';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
-import { AppError } from '../utils/app-error';
+import { AppError, fieldError } from '../utils/app-error';
 import { AdminActor, adminAuditData } from './admin-audit';
 import { PROVIDER_LEVELS, levelColor } from '../config/levels.config';
 import { notificationService } from './notification.service';
@@ -428,9 +428,9 @@ export class AdminUsersService {
    */
   async updateUserStatus(actor: AdminActor, id: string, status: string, reason?: string) {
     const next = String(status || '').toUpperCase() as UserStatus;
-    if (!([UserStatus.ACTIVE, UserStatus.SUSPENDED, UserStatus.SUSPENDED_REVIEW] as UserStatus[]).includes(next)) throw new AppError('حالة الحساب غير صحيحة', 400);
+    if (!([UserStatus.ACTIVE, UserStatus.SUSPENDED, UserStatus.SUSPENDED_REVIEW] as UserStatus[]).includes(next)) throw fieldError('status', 'حالة الحساب غير صحيحة');
     const cleanReason = String(reason ?? '').trim().slice(0, 500);
-    if (next !== UserStatus.ACTIVE && cleanReason.length < 3) throw new AppError('سبب الإيقاف مطلوب', 400);
+    if (next !== UserStatus.ACTIVE && cleanReason.length < 3) throw fieldError('reason', 'سبب الإيقاف مطلوب');
     if (actor.id === id) throw new AppError('لا يمكنك تغيير حالة حسابك بنفسك', 403);
 
     const target = await prisma.user.findUnique({ where: { id }, select: { id: true, accountType: true, status: true } });
@@ -468,9 +468,9 @@ export class AdminUsersService {
   async updateUserRoles(actor: AdminActor, id: string, input: { roles: string[]; activeRole?: string }) {
     if (actor.id === id) throw new AppError('لا يمكنك تعديل أدوار حسابك بنفسك', 403);
     const requested = Array.from(new Set((input.roles ?? []).map(r => String(r).toUpperCase())));
-    if (requested.length === 0) throw new AppError('يجب أن يحتفظ الحساب بدور واحد على الأقل', 400);
+    if (requested.length === 0) throw fieldError('roles', 'يجب أن يحتفظ الحساب بدور واحد على الأقل');
     const invalid = requested.filter(r => !MANAGEABLE_ROLES.includes(r as UserRole));
-    if (invalid.length) throw new AppError(`دور غير مسموح تعديله من هنا: ${invalid.join(', ')}`, 400);
+    if (invalid.length) throw fieldError('roles', `دور غير مسموح تعديله من هنا: ${invalid.join(', ')}`);
     const roles = requested as UserRole[];
 
     const target = await prisma.user.findUnique({
@@ -481,7 +481,7 @@ export class AdminUsersService {
     if (ADMIN_TYPES.includes(target.accountType)) throw new AppError('أدوار الحسابات الإدارية تُدار من صفحة فريق الإدارة', 403);
 
     const base = baseRoleOf(target.accountType);
-    if (base && !roles.includes(base)) throw new AppError('لا يمكن إزالة الدور الأساسي للحساب', 400);
+    if (base && !roles.includes(base)) throw fieldError('roles', 'لا يمكن إزالة الدور الأساسي للحساب');
     const hasProfile: Record<string, boolean> = { CLIENT: !!target.clientProfile, PROVIDER: !!target.providerProfile, AFFILIATE: !!target.affiliateProfile };
     const added = roles.filter(r => !target.roles.includes(r));
     const missing = added.filter(r => !hasProfile[r]);
@@ -490,7 +490,7 @@ export class AdminUsersService {
     let activeRole: UserRole;
     if (input.activeRole !== undefined) {
       const wanted = String(input.activeRole).toUpperCase() as UserRole;
-      if (!roles.includes(wanted)) throw new AppError('الدور النشط يجب أن يكون ضمن الأدوار الجديدة', 400);
+      if (!roles.includes(wanted)) throw fieldError('activeRole', 'الدور النشط يجب أن يكون ضمن الأدوار الجديدة');
       activeRole = wanted;
     } else {
       activeRole = roles.includes(target.activeRole) ? target.activeRole : (base && roles.includes(base) ? base : roles[0]);
@@ -514,7 +514,7 @@ export class AdminUsersService {
    */
   async notifyUser(actor: AdminActor, id: string, input: { message: string; title?: string; context?: { type: 'REQUEST' | 'OFFER'; id: string } }) {
     const message = String(input.message ?? '').trim();
-    if (message.length < 5 || message.length > 500) throw new AppError('نص الرسالة يجب أن يكون بين 5 و500 حرف', 400);
+    if (message.length < 5 || message.length > 500) throw fieldError('message', 'نص الرسالة يجب أن يكون بين 5 و500 حرف');
     const title = String(input.title ?? '').trim().slice(0, 80) || 'رسالة من إدارة وسيط';
     if (actor.id === id) throw new AppError('لا يمكنك إرسال رسالة لنفسك', 403);
     const target = await prisma.user.findUnique({ where: { id }, select: { id: true, accountType: true, activeRole: true } });

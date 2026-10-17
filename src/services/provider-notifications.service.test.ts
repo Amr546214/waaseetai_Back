@@ -11,6 +11,8 @@ const REAL_PROVIDER_ROUTES = [
 	/^\/provider-overview\/profile\/data$/,
 	/^\/provider-overview\/finance\/withdraw$/,
 	/^\/provider-overview\/projects\/active\/progress\/[^/]+$/,
+	// the provider's rating page of a project (provider.routes.ts: projects/:id/rating)
+	/^\/provider-overview\/projects\/[^/]+\/rating$/,
 	/^\/provider-overview\/offers\/[^/]+\/sign-contract$/,
 	/^\/provider-overview\/explore-requests\/[^/]+\/apply$/,
 	/^\/provider-overview\/offers$/,
@@ -220,7 +222,9 @@ test('negotiation / selection: push-only preference = stored + push, no mail', a
 test('disputeService: client opens -> provider (against) notified; provider opens -> provider notified; admin resolve -> provider notified', async t => {
 	const calls: any[] = [];
 	t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { disputeOpened: async (a: any) => { calls.push(['opened', a]); }, disputeResolved: async (a: any) => { calls.push(['resolved', a]); } } } });
-	t.mock.module('../config/db', { namedExports: { prisma: {
+	const prismaMock: any = {};
+	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+	Object.assign(prismaMock, {
 		project: { findUnique: async () => null },
 		clientRequest: { findUnique: async () => ({ id: 'req-1', title: 'طلب', status: 'IN_PROGRESS', clientProfile: { userId: 'client-1' }, proposals: [{ id: 'pr1', status: 'ACCEPTED', providerId: 'prov-1' }] }) },
 		proposal: { findFirst: async () => ({ providerId: 'prov-1' }) },
@@ -228,9 +232,12 @@ test('disputeService: client opens -> provider (against) notified; provider open
 			findFirst: async () => null,
 			create: async ({ data }: any) => ({ id: 'd1', ...data, request: { id: 'req-1', title: 'طلب' } }),
 			findUnique: async () => ({ id: 'd1', status: 'OPEN', requestId: 'req-1', projectId: null }),
-			update: async () => ({ id: 'd1', status: 'RESOLVED' })
-		}
-	} } });
+			update: async () => ({ id: 'd1', status: 'RESOLVED' }),
+			updateMany: async () => ({ count: 1 })
+		},
+		$queryRaw: async () => [{ id: 'c1' }],
+		$transaction: async (fn: any) => fn(prismaMock)
+	});
 	const { disputeService } = await fresh('./dispute.service.ts');
 	const input = { reason: 'تأخر التسليم', description: 'وصف طويل بما يكفي للنزاع', evidence: [] };
 	await disputeService.createForRequest('req-1', 'client-1', 'client', input);
@@ -244,19 +251,24 @@ test('disputeService: client opens -> provider (against) notified; provider open
 	assert.deepEqual([calls[2][1].disputeId, calls[2][1].providerId, calls[2][1].action], ['d1', 'prov-1', 'resolve']);
 });
 
-test('ratingService: a client rating notifies the provider; a provider rating of the client does not', async t => {
+test('ratingService: a client rating notifies the provider; a provider rating of the client notifies the CLIENT, never the provider', async t => {
 	const calls: any[] = [];
+	const clientCalls: any[] = [];
+	t.mock.module('./client-notifications.service', { namedExports: { clientNotifications: { send: async (n: any) => { clientCalls.push(n); } }, clientNotificationFor: { ratingReceived: (p: any) => ({ type: 'RATING_RECEIVED', ...p }) } } });
 	t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { ratingReceived: async (a: any) => { calls.push(a); } } } });
 	const tx = {
-		review: { create: async ({ data }: any) => ({ id: 'rev-1', ...data }), aggregate: async () => ({ _avg: { rating: 4 } }) },
+		$executeRaw: async () => 1,
+		review: { findFirst: async () => null, create: async ({ data }: any) => ({ id: 'rev-1', ...data }), aggregate: async () => ({ _avg: { rating: 4 } }) },
 		user: { update: async () => ({}) },
 		pointTransaction: { aggregate: async () => ({ _sum: { amount: 0 } }) },
-		project: { count: async () => 0 },
+		project: { count: async () => 0, findUnique: async () => ({ serviceCatalogId: null }) },
 		providerGamification: { updateMany: async () => ({ count: 1 }) }
 	};
 	t.mock.module('../config/db', { namedExports: { prisma: {
 		clientRequest: { findUnique: async () => null },
+		dispute: { findFirst: async () => null },
 		contract: { findUnique: async () => ({ id: 'c1', providerId: 'prov-1', clientId: 'client-1', projectId: 'p1', status: 'COMPLETED', project: { id: 'p1', status: 'COMPLETED' } }) },
+		project: { findUnique: async () => ({ serviceCatalogId: null }) },
 		review: { findFirst: async () => null },
 		$transaction: async (fn: any) => fn(tx)
 	} } });
@@ -265,6 +277,8 @@ test('ratingService: a client rating notifies the provider; a provider rating of
 	await ratingService.rateRequest('c1', 'prov-1', 'provider', { rating: 3 });
 	assert.equal(calls.length, 1);
 	assert.deepEqual([calls[0].providerId, calls[0].rating, calls[0].reviewId, calls[0].projectId], ['prov-1', 5, 'rev-1', 'p1']);
+	assert.equal(clientCalls.length, 1);
+	assert.deepEqual([clientCalls[0].clientId, clientCalls[0].rating], ['client-1', 3]);
 });
 
 test('withdrawalService.reject notifies REJECTED; payoutService completed / failed / reversed notify only on a real transition', async t => {

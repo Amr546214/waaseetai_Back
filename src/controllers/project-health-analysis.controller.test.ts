@@ -192,10 +192,10 @@ test('route wiring: client health analysis is behind authenticate, requireActive
 test('route wiring: provider health analysis is behind authenticate, requireActiveUser and aiLimiter, alongside the manual submit route', () => {
   const source = fs.readFileSync(path.join(__dirname, '../routes/provider.routes.ts'), 'utf8');
   assert.ok(source.includes(
-    "router.post('/projects/:id/health', authenticate, requireActiveUser, aiLimiter, getProjectHealthAnalysis);"
+    "router.post('/projects/:id/health', authenticate, requireActiveUser, providerOnly, aiLimiter, getProjectHealthAnalysis);"
   ));
   assert.ok(source.includes(
-    "router.post('/projects/:id/stages/:stageId/deliveries', authenticate, requireActiveUser, submitStageDelivery);"
+    "router.post('/projects/:id/stages/:stageId/deliveries', authenticate, requireActiveUser, providerOnly, submitStageDelivery);"
   ), 'the manual, human-authoritative submit route must remain present and untouched');
 });
 

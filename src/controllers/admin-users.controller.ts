@@ -3,7 +3,7 @@ import { AdminUsersService } from '../services/admin-users.service';
 import { adminActor } from '../utils/admin-actor';
 import { accountAuditLogService } from '../services/account-logs.service';
 import { z } from 'zod';
-import { AppError } from '../utils/app-error';
+import { AppError, fieldError, zodAppError } from '../utils/app-error';
 
 const usersService = new AdminUsersService();
 
@@ -52,7 +52,7 @@ export class AdminUsersController {
 	static async updateUserStatus(req: Request, res: Response, next: NextFunction) {
 		try {
 			const { status, reason } = req.body ?? {};
-			if (!status) throw new AppError('الحالة مطلوبة', 400);
+			if (!status) throw fieldError('status', 'الحالة مطلوبة');
 			const updatedUser = await usersService.updateUserStatus(adminActor(req), String(req.params.id), String(status), reason === undefined ? undefined : String(reason));
 			res.status(200).json({
 				success: true,
@@ -67,7 +67,7 @@ export class AdminUsersController {
 	static async updateUserRoles(req: Request, res: Response, next: NextFunction) {
 		try {
 			const parsed = z.object({ roles: z.array(z.string()).min(1), activeRole: z.string().optional() }).safeParse(req.body ?? {});
-			if (!parsed.success) throw new AppError('بيانات الأدوار غير صحيحة', 400);
+			if (!parsed.success) throw zodAppError(parsed.error.issues, 'بيانات الأدوار غير صحيحة', { roles: 'اختر دورًا واحدًا على الأقل', activeRole: 'الدور النشط غير صالح' });
 			const data = await usersService.updateUserRoles(adminActor(req), String(req.params.id), parsed.data);
 			res.status(200).json({ success: true, message: 'تم تحديث أدوار الحساب', data });
 		} catch (error) {
@@ -78,7 +78,7 @@ export class AdminUsersController {
 	static async notifyUser(req: Request, res: Response, next: NextFunction) {
 		try {
 			const parsed = z.object({ message: z.string(), title: z.string().optional(), context: z.object({ type: z.enum(['REQUEST', 'OFFER']), id: z.string().min(1) }).optional() }).safeParse(req.body ?? {});
-			if (!parsed.success) throw new AppError('بيانات الرسالة غير صحيحة', 400);
+			if (!parsed.success) throw zodAppError(parsed.error.issues, 'بيانات الرسالة غير صحيحة', { message: 'اكتب نص الرسالة (5 أحرف على الأقل)', title: 'عنوان الرسالة غير صالح' });
 			const data = await usersService.notifyUser(adminActor(req), String(req.params.id), parsed.data);
 			res.status(200).json({ success: true, message: 'تم إرسال الرسالة للمستخدم', data });
 		} catch (error) {

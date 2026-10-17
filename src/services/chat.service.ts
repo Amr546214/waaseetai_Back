@@ -1,8 +1,10 @@
+import { selfNegotiationError } from '../utils/self-dealing';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
+import { negotiationPreviewText } from '../utils/offer-negotiation';
 import { CreateConversationDto, SendMessageDto } from '../dtos/chat.dto';
 import { providerNotifications } from './provider-notifications.service';
-import { MessageType, MessageStatus, UserRole } from '@prisma/client';
+import { ConversationKind, MessageType, MessageStatus, UserRole } from '@prisma/client';
 import { offerActionBlock } from '../utils/request-lifecycle';
 
 /** Offer states a client can still open a negotiation on. Everything else (withdrawn, rejected, accepted, awaiting signature, draft, in review) is closed. */
@@ -62,10 +64,10 @@ export async function authorizeConversationForRole(
   conversationId: string,
   userId: string,
   activeRole: UserRole | string | null | undefined
-): Promise<{ id: string } | null> {
+): Promise<{ id: string; kind: ConversationKind; contractId: string | null; projectId: string } | null> {
   const roleFilter = conversationRoleFilter(userId, activeRole);
   if (!roleFilter) return null;
-  return prisma.conversation.findFirst({ where: { id: conversationId, ...roleFilter }, select: { id: true } });
+  return prisma.conversation.findFirst({ where: { id: conversationId, ...roleFilter }, select: { id: true, kind: true, contractId: true, projectId: true } });
 }
 
 class ChatService {
@@ -170,6 +172,8 @@ class ChatService {
     if (!clientId || !providerId) {
       throw new AppError('لا يمكن إنشاء محادثة: يجب تحديد طالب الخدمة ومقدم الخدمة', 400);
     }
+    // the same real user on both ends (a multi-role account negotiating with itself) never gets a room
+    if (clientId === providerId) throw selfNegotiationError();
 
     // The provider side must really belong to this project: it is the project's provider, or it has an offer on it. Anyone else (a provider with no offer on the
     // project, or a provider id the client made up) gets no conversation: not the client's project to talk about, not their offer to discuss.
@@ -251,27 +255,34 @@ class ChatService {
       }
     });
 
-    // Create new conversation if it does not exist
+    // Create new conversation if it does not exist. Two simultaneous opens race on the unique (projectId, providerId): the loser re-reads the winner's row
+    // (never a second room, never a 500) and posts no second welcome message.
     if (!conversation) {
-      const newConv = await prisma.conversation.create({
-        data: {
-          projectId,
-          providerId,
-          clientId,
-          offerId: offerId || null
-        }
-      });
-
-      // Insert an initial system welcome message
-      await prisma.message.create({
-        data: {
-          conversationId: newConv.id,
-          senderId: userId,
-          type: MessageType.SYSTEM,
-          content: `تم إطلاق غرفة التفاوض الحصري لمشروع: "${project?.title || clientRequest?.title || 'مشروع وسيط'}". وسيط AI مطّلع لضمان حماية الأطراف وتوثيق التفاوض.`,
-          status: MessageStatus.READ
-        }
-      });
+      let newConv: { id: string } | null = null;
+      try {
+        newConv = await prisma.conversation.create({
+          data: {
+            projectId,
+            providerId,
+            clientId,
+            offerId: offerId || null
+          }
+        });
+        // Insert an initial system welcome message
+        await prisma.message.create({
+          data: {
+            conversationId: newConv.id,
+            senderId: userId,
+            type: MessageType.SYSTEM,
+            content: `تم إطلاق غرفة التفاوض الحصري لمشروع: "${project?.title || clientRequest?.title || 'مشروع وسيط'}". وسيط AI مطّلع لضمان حماية الأطراف وتوثيق التفاوض.`,
+            status: MessageStatus.READ
+          }
+        });
+      } catch (err: any) {
+        if (err?.code !== 'P2002') throw err;
+        newConv = await prisma.conversation.findUnique({ where: { projectId_providerId: { projectId, providerId } }, select: { id: true } });
+        if (!newConv) throw err;
+      }
 
       // Refetch with relations
       conversation = await prisma.conversation.findUnique({
@@ -343,7 +354,8 @@ class ChatService {
     if (!roleFilter) return [];
 
     const conversations = await prisma.conversation.findMany({
-      where: roleFilter,
+      // The GENERAL context only: a project room lives in its project's messages tab and is never listed here.
+      where: { ...roleFilter, kind: ConversationKind.GENERAL },
       orderBy: { updatedAt: 'desc' },
       include: {
         project: {
@@ -411,7 +423,8 @@ class ChatService {
       prisma.message.count({ where: { conversationId } }),
       prisma.message.findMany({
         where: { conversationId },
-        orderBy: { createdAt: 'desc' },
+        // createdAt then id: messages written in the same millisecond keep one stable order on every page and refresh
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take: limit,
         include: {
@@ -509,7 +522,10 @@ class ChatService {
       message: this.formatMessage(newMsg, senderId),
       recipientId,
       recipientRole,
-      conversationId
+      conversationId,
+      kind: conversation.kind,
+      contractId: conversation.contractId,
+      projectId: conversation.projectId
     };
   }
 
@@ -531,7 +547,7 @@ class ChatService {
     return { success: true, conversationId };
   }
 
-  private formatMessage(msg: any, currentUserId: string) {
+  formatMessage(msg: any, currentUserId: string) {
     const isMe = msg.senderId === currentUserId;
     const date = new Date(msg.createdAt);
     const timeStr = `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
@@ -590,7 +606,7 @@ class ChatService {
       if (lastMsgObj.type === 'AUDIO') lastMsgText = '🎤 رسالة صوتية';
       else if (lastMsgObj.type === 'IMAGE') lastMsgText = '📷 مرفق صورة';
       else if (lastMsgObj.type === 'FILE') lastMsgText = `📁 ${lastMsgObj.fileName || 'ملف مرفق'}`;
-      else lastMsgText = lastMsgObj.content || lastMsgText;
+      else lastMsgText = negotiationPreviewText(lastMsgObj.content, lastMsgObj.senderId === conv.providerId) ?? (lastMsgObj.content || lastMsgText);
     }
 
     const date = new Date(conv.updatedAt || conv.createdAt);
@@ -601,6 +617,9 @@ class ChatService {
       id: conv.id,
       projectId: conv.projectId,
       offerId: conv.offerId,
+      // GENERAL | PROJECT: a PROJECT room is opened in the project's messages tab (contractId), never in the general list.
+      context: conv.kind === ConversationKind.PROJECT ? 'PROJECT' : 'GENERAL',
+      contractId: conv.contractId ?? null,
       name: partnerName,
       partnerId: partner?.id,
       partnerAvatar: partner?.avatarUrl,

@@ -27,6 +27,7 @@ async function load(t: TestContext) {
 	const prismaMock = {
 		contract: { findFirst: async (args: any) => { calls.contractFind++; return args.where.providerId === contract.providerId ? { id: contract.id, projectId: contract.projectId, providerId: contract.providerId, clientId: contract.clientId, status: contract.status } : null; } },
 		projectStage: { findMany: async () => [{ id: stage.id }], findFirst: async () => (state.stageFound ? { id: stage.id, contractId: stage.contractId, title: stage.title, status: stage.status } : null) },
+		dispute: { findFirst: async () => null, count: async () => 0 },
 		$transaction: async (fn: any) => { calls.tx++; return fn(tx); }
 	};
 	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
@@ -96,7 +97,8 @@ test('uploadDeliveryFiles stores nothing without files, with too many files, or 
 	state.stageFound = true; state.stageStatus = 'SUBMITTED';
 	await refused(svc.uploadDeliveryFiles(P, 'contract-1', S, [f('a.png')] as any), 409);
 	state.stageStatus = 'IN_PROGRESS'; state.contractStatus = 'COMPLETED';
-	await refused(svc.uploadDeliveryFiles(P, 'contract-1', S, [f('a.png')] as any), 403);
+	// an ended contract is NOT an ownership problem: 409 with the specific reason (the generic 403 mixed "contract ended" and "not the owner")
+	await refused(svc.uploadDeliveryFiles(P, 'contract-1', S, [f('a.png')] as any), 409, /اكتمل المشروع/);
 	assert.equal(uploadSpy.mock.callCount(), 0, 'nothing was stored in any refused case');
 });
 

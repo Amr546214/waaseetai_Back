@@ -15,7 +15,8 @@ const REAL_CLIENT_ROUTES = [
 	/^\/client-overview\/profile$/,
 	/^\/client-overview\/finance\/(wallet|transactions|invoices)$/
 ];
-const isRealClientRoute = (url: string) => REAL_CLIENT_ROUTES.some(r => r.test(url));
+// a query string only selects what the page focuses on (e.g. ?dispute=<id>); the path itself must be a real route
+const isRealClientRoute = (url: string) => REAL_CLIENT_ROUTES.some(r => r.test(url.split('?')[0]));
 
 async function load(t: TestContext) {
 	const created: any[] = [];
@@ -39,10 +40,10 @@ test('every client event: right type, a title, a message and a REAL client route
 		['stageDelivered', f.stageDelivered({ clientId: c, projectId: 'p1', stageId: 's1', stageTitle: 'التصميم' }), 'STAGE_DELIVERY', /projects\/p1\/delivery-review\/s1$/],
 		['stageApproved', f.stageApproved({ clientId: c, projectId: 'p1', stageId: 's1', stageTitle: 'التصميم', amount: 250 }), 'STAGE_APPROVED', /projects\/p1$/],
 		['projectCompleted', f.projectCompleted({ clientId: c, projectId: 'p1', projectTitle: 'موقع' }), 'PROJECT_COMPLETED', /projects\/p1\/rating$/],
-		['disputeOpened(client)', f.disputeOpened({ clientId: c, disputeId: 'd1', openedBy: 'client' }), 'DISPUTE_OPENED', /\/disputes$/],
-		['disputeOpened(provider)', f.disputeOpened({ clientId: c, disputeId: 'd1', openedBy: 'provider' }), 'DISPUTE_OPENED', /\/disputes$/],
-		['disputeResolved', f.disputeResolved({ clientId: c, disputeId: 'd1', action: 'resolve', resolution: 'استرداد' }), 'DISPUTE_RESOLVED', /\/disputes$/],
-		['disputeResolved(reject)', f.disputeResolved({ clientId: c, disputeId: 'd1', action: 'reject' }), 'DISPUTE_RESOLVED', /\/disputes$/],
+		['disputeOpened(client)', f.disputeOpened({ clientId: c, disputeId: 'd1', openedBy: 'client' }), 'DISPUTE_OPENED', /\/disputes\?dispute=d1$/],
+		['disputeOpened(provider)', f.disputeOpened({ clientId: c, disputeId: 'd1', openedBy: 'provider' }), 'DISPUTE_OPENED', /\/disputes\?dispute=d1$/],
+		['disputeResolved', f.disputeResolved({ clientId: c, disputeId: 'd1', action: 'resolve', resolution: 'استرداد' }), 'DISPUTE_RESOLVED', /\/disputes\?dispute=d1$/],
+		['disputeResolved(reject)', f.disputeResolved({ clientId: c, disputeId: 'd1', action: 'reject' }), 'DISPUTE_RESOLVED', /\/disputes\?dispute=d1$/],
 		['escrowFunded', f.escrowFunded({ clientId: c, requestId: 'r1', amount: 500, projectName: 'موقع' }), 'ESCROW_FUNDED', /projects\/active$/],
 		['orderPaid(one)', f.orderPaid({ clientId: c, orderId: 'or1', orderNumber: 'ORD-1', total: 80, projectIds: ['p9'] }), 'ORDER_PAID', /projects\/p9$/],
 		['orderPaid(many)', f.orderPaid({ clientId: c, orderId: 'or1', total: 80, projectIds: ['p9', 'p10'] }), 'ORDER_PAID', /projects\/active$/],

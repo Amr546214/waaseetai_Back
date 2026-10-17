@@ -2,7 +2,7 @@ import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 
 // C1: a client-raised change request (a) is recorded once per contract (one pending), (b) notifies the PROVIDER, and (c) the PROVIDER of that
-// contract can answer it (record only: nothing about price / duration / escrow / stages is touched). The provider can never answer its own request.
+// contract can answer it (a REJECT changes nothing about price / duration / escrow / stages; an APPROVE applies it: see amendment-apply.service.test.ts). The provider can never answer its own request.
 
 const CONTRACT = { id: 'contract-abcdef123', projectId: 'project-1', clientId: 'client-1', providerId: 'provider-1', status: 'ACTIVE', price: 1000, durationDays: 14 };
 const ROW = (o: Record<string, unknown> = {}) => ({
@@ -44,6 +44,9 @@ async function load(t: TestContext, opts: { pending?: number; lockCount?: number
     $transaction: async (fn: any) => fn(tx)
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  // The service now sends through the safe client sender (store + deliver, never throws); recorded here with the REAL builders, so the stored shape is the production one.
+  const realClientNotifications = await import('./client-notifications.service');
+  t.mock.module('./client-notifications.service', { namedExports: { clientNotificationFor: realClientNotifications.clientNotificationFor, CLIENT_ROUTES: realClientNotifications.CLIENT_ROUTES, clientNotifications: { send: async (n: any) => { state.notifications.push(n); }, deliverStored: async () => undefined } } });
   const { projectAmendmentService } = await import(`./project-amendment.service.ts?fixture=${Date.now()}-${Math.random()}`);
   return { svc: projectAmendmentService, state };
 }
@@ -87,7 +90,8 @@ test('client create: a lost lock (contract changed meanwhile) is 403 and writes 
 test('client create: only the owning client of an ACTIVE contract (403 otherwise); the lookup is scoped by clientId', async (t) => {
   const { svc, state } = await load(t, { contractFound: false });
   await refused(svc.createAmendment('someone-else', 'project-1', VALID), 403);
-  assert.deepEqual(state.contractFindArgs[0].where, { projectId: 'project-1', clientId: 'someone-else', status: 'ACTIVE' });
+  // accepts the project id OR the contract id (marketplace pages are keyed by the contract id), always scoped by the caller as the client
+  assert.deepEqual(state.contractFindArgs[0].where, { OR: [{ projectId: 'project-1' }, { id: 'project-1' }], clientId: 'someone-else', status: 'ACTIVE' });
   assert.equal(state.created.length, 0);
 });
 test('client create: validation of the type and its fields is unchanged (400) and writes nothing', async (t) => {
@@ -103,23 +107,23 @@ test('client create changes nothing about the contract (no contract / escrow / s
 });
 
 // ---------- provider respond ----------
-test('provider respond: the provider of the contract approves a CLIENT request — decision recorded, client notified', async (t) => {
+test('provider respond: the provider of the contract rejects a CLIENT request — decision recorded, client notified, nothing else changes', async (t) => {
   const { svc, state } = await load(t);
-  const out = await svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'approve');
-  assert.equal(out.status, 'APPROVED');
+  const out = await svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'reject');
+  assert.equal(out.status, 'REJECTED');
   assert.ok(out.respondedAt);
   assert.deepEqual(state.amendUpdates[0].where, { id: 'amend-1', providerId: 'provider-1', requestedByRole: 'CLIENT', status: 'PENDING_OTHER_PARTY' });
   assert.deepEqual(Object.keys(state.amendUpdates[0].data).sort(), ['respondedAt', 'status']);
   assert.equal(state.notifications[0].userId, 'client-1');
-  assert.match(state.notifications[0].message, /لا يغيّر السعر أو المدة أو الضمان/);
+  assert.match(state.notifications[0].message, /ولم يتغيّر شيء في العقد/);
 });
 test('provider respond: reject is recorded as REJECTED', async (t) => {
   const { svc } = await load(t);
   assert.equal((await svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'reject')).status, 'REJECTED');
 });
-test('provider respond: NEVER touches price / duration / escrow / stages', async (t) => {
+test('provider respond: a rejection NEVER touches price / duration / escrow / stages', async (t) => {
   const { svc, state } = await load(t);
-  await svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'approve');
+  await svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'reject');
   assert.equal(state.forbiddenWrites, 0);
 });
 test('provider respond: another provider is refused (403) and nothing changes', async (t) => {
@@ -134,13 +138,14 @@ test('provider respond: a request the PROVIDER raised cannot be answered by the 
 });
 test('provider respond: answering twice is refused (409); the first decision stands', async (t) => {
   const { svc, state } = await load(t);
-  await svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'approve');
+  await svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'reject');
+  await refused(svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'approve'), 409, /مسبقًا/);
   await refused(svc.respondToAmendmentAsProvider('provider-1', 'amend-1', 'reject'), 409, /مسبقًا/);
   assert.equal(state.notifications.length, 1);
 });
 test('provider respond: an unknown request is 403 and an invalid decision is 400 (no query at all)', async (t) => {
   const { svc, state } = await load(t, { stored: null });
-  await refused(svc.respondToAmendmentAsProvider('provider-1', 'nope', 'approve'), 403);
+  await refused(svc.respondToAmendmentAsProvider('provider-1', 'nope', 'reject'), 403);
   for (const d of ['maybe', '', undefined, 'APPROVE', 1]) await refused(svc.respondToAmendmentAsProvider('provider-1', 'amend-1', d as any), 400);
   assert.equal(state.amendUpdates.length, 1); // only the unknown-id attempt reached the DB
 });

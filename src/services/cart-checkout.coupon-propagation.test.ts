@@ -1,5 +1,6 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { liveServices } from './cart-checkout-live.testkit';
 
 // A provider coupon discounts the SERVICE VALUE: the contract price, the escrow and the stage amounts are the NET (what the client paid), so the platform commission and
 // the provider's release are computed on it. The order's `discount` is spread over its items with the same eligibility the coupon was priced with.
@@ -21,7 +22,9 @@ function setup(t: TestContext, opts: { order: any; coupon?: any; stages?: any[];
     escrow: { create: async (a: any) => { rec.escrows.push(a.data); return a.data; } },
     projectStage: { create: async (a: any) => { rec.stageOne.push(a.data); return a.data; }, createMany: async (a: any) => { rec.stagesMany.push(a.data); return {}; } },
     order: { updateMany: async () => { if (paid) return { count: 0 }; paid = true; return { count: 1 }; } },
-    project: { create: async (a: any) => { rec.projects.push(a.data); return { id: `project-${rec.projects.length}`, ...a.data }; }, findMany: async () => [] },
+    project: { findFirst: async () => null, create: async (a: any) => { rec.projects.push(a.data); return { id: `project-${rec.projects.length}`, ...a.data }; }, findMany: async () => [] },
+    serviceCatalog: { findMany: liveServices() },
+    $queryRaw: async () => [],
     cartItem: { deleteMany: async () => ({ count: 1 }) },
     otpVerification: { delete: async () => ({}) }
   };
@@ -29,6 +32,7 @@ function setup(t: TestContext, opts: { order: any; coupon?: any; stages?: any[];
     order: { findFirst: async () => opts.order },
     otpVerification: { findMany: async () => [{ id: 'otp-1', code: '111111', expiresAt: new Date(Date.now() + 60_000), context: { purpose: 'checkout_payment', orderId: opts.order.id, paymentReference: 'PAY-X', paymentMethod: 'wallet' } }], update: async () => ({}) },
     serviceStage: { findMany: async () => opts.stages || [] },
+    serviceCatalog: { findMany: liveServices() },
     $transaction: async (fn: any) => { const snap = users.map(u => ({ ...u })); const wasPaid = paid; try { return await fn(tx); } catch (e) { users.length = 0; users.push(...snap); paid = wasPaid; throw e; } }
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
