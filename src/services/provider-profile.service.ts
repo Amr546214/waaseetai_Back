@@ -14,7 +14,7 @@ import { Prisma, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
 import { publicProviderReviewsWhere } from './review-visibility';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
-import { sanitizeText } from '../utils/sanitize-text';
+import { sanitizeText, isBlankText } from '../utils/sanitize-text';
 import { isAcceptableKycDocumentValue } from '../utils/kyc-value-guard';
 import { assertVerifiedIdentityUnchanged } from '../utils/kyc-identity-guard';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
@@ -687,7 +687,7 @@ export class ProviderProfileService {
 		const lastName = sanitizeText(String(data.lastName || '')).trim();
 		const headline = sanitizeText(String(data.headline || '')).trim();
 		const bio = sanitizeText(String(data.bio || '')).trim();
-		if (!firstName || !lastName || !headline || !String(data.mainSpecialty || '').trim()) throw new Error('REQUIRED_PROFILE_FIELDS');
+		if (!firstName || !lastName || isBlankText(headline) || !String(data.mainSpecialty || '').trim()) throw new Error('REQUIRED_PROFILE_FIELDS');
 		if (firstName.length > 60 || lastName.length > 60 || headline.length > 100 || bio.length > 500) throw new Error('PROFILE_FIELD_TOO_LONG');
 		for (const key of ['githubUrl', 'linkedinUrl', 'websiteUrl']) {
 			if (data[key]) { try { const url = new URL(String(data[key])); if (!['http:', 'https:'].includes(url.protocol)) throw new Error(); } catch { throw new Error(`INVALID_URL:${key}`); } }
