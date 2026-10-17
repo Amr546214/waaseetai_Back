@@ -215,12 +215,19 @@ export interface RequestDraftRequest {
   title?: string;
   description?: string;
   specialtyName?: string;
+  subSpecialties?: string[];
+  availableSkills?: string[];
+  deliveryDays?: number | null;
   currency?: string;
 }
 export interface RequestDraftResponse {
   suggestedTitle: string;
   suggestedDescription: string;
   suggestedSubSpecialties: string[];
+  suggestedRequiredSkills?: string[];
+  suggestedRequirements?: string[];
+  suggestedOutputs?: string;
+  suggestedMilestones?: Array<{ name: string; pct: number }>;
   recommendedMinBudget: number | null;
   recommendedMaxBudget: number | null;
   suggestedDurationDays: number;
@@ -237,10 +244,21 @@ export interface ProposalSuggestRequest {
   currentTitle: string;
   currentMessage: string;
   currency?: string;
+  project?: {
+    budgetMin?: number;
+    budgetMax?: number;
+    deliveryDays?: number;
+    title?: string;
+    description?: string;
+    requirements?: string[];
+  };
 }
 export interface ProposalSuggestResponse {
   suggestedTitle: string;
   suggestedMessage: string;
+  suggestedOutputs?: string;
+  suggestedTotalPrice?: number | null;
+  suggestedMilestones?: Array<{ name: string; desc: string; days: number; pct: number }>;
   qualityScore: number;
   qualityTag: string;
   priceAudit?: { recommendedMin: number | null; recommendedMax: number | null; priceTag: string | null; justification: string };

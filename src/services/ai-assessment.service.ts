@@ -234,6 +234,7 @@ export async function streamAssessmentForClaim(input: {
   claimAttemptId: string;
   providerSpecialtyId: string;
   specialtyName: string;
+  userId?: string;
   signal?: AbortSignal;
   onQuestion?: (question: PublicAssessmentQuestion, index: number, total: number) => void;
 }): Promise<StreamedGeneration> {
@@ -247,7 +248,7 @@ export async function streamAssessmentForClaim(input: {
       specialtyName: input.specialtyName,
       questionCount: ASSESSMENT_QUESTION_COUNT,
       timeLimitMinutes: ASSESSMENT_TIME_LIMIT_MINUTES
-    }, { signal: input.signal })) {
+    }, { signal: input.signal, ...(input.userId ? { actor: { userId: input.userId, role: 'provider' } } : {}) })) {
       if (event.type === 'question') {
         vendorAttemptIds.add(event.attemptId);
         const question: PublicAssessmentQuestion = {
@@ -484,16 +485,16 @@ export async function processAssessmentSubmission(
   }
 
   if (vendorAttemptId) {
-    return gradeWithWaseetAi({ attempt, attemptId, answers, questions, vendorAttemptId, totalQuestions, elapsedMs });
+    return gradeWithWaseetAi({ attempt, attemptId, userId, answers, questions, vendorAttemptId, totalQuestions, elapsedMs });
   }
   return gradeLegacyLocally({ attempt, attemptId, answers, questions, totalQuestions });
 }
 
 async function gradeWithWaseetAi(ctx: {
-  attempt: any; attemptId: string; answers: Record<string, string>; questions: StoredQuestion[];
+  attempt: any; attemptId: string; userId: string; answers: Record<string, string>; questions: StoredQuestion[];
   vendorAttemptId: string; totalQuestions: number; elapsedMs: number;
 }): Promise<SubmissionOutcome> {
-  const { attempt, attemptId, answers, questions, vendorAttemptId, totalQuestions, elapsedMs } = ctx;
+  const { attempt, attemptId, userId, answers, questions, vendorAttemptId, totalQuestions, elapsedMs } = ctx;
 
   // Atomic claim BEFORE calling WaseetAI: the losing transport must never
   // spend a second grading call or overwrite the winner. The marker lives in
@@ -522,7 +523,7 @@ async function gradeWithWaseetAi(ctx: {
 
   let graded;
   try {
-    graded = await waseetAiClient.submitAssessment(vendorAttemptId, { submittedAnswers, timeSpentSeconds }, { timeoutMs: GRADING_TIMEOUT_MS });
+    graded = await waseetAiClient.submitAssessment(vendorAttemptId, { submittedAnswers, timeSpentSeconds }, { timeoutMs: GRADING_TIMEOUT_MS, actor: { userId, role: 'provider' } });
     if (!Number.isFinite(graded.score) || graded.score < 0 || graded.score > 100 || typeof graded.isPassed !== 'boolean') {
       throw new Error('WaseetAI returned an invalid grading result');
     }
@@ -668,7 +669,7 @@ export class AiAssessmentService {
         specialtyName,
         questionCount: ASSESSMENT_QUESTION_COUNT,
         timeLimitMinutes: ASSESSMENT_TIME_LIMIT_MINUTES
-      });
+      }, { actor: { userId: currentUserId, role: 'provider' } });
 
       const questions: PublicAssessmentQuestion[] = (created.questions || []).map((q) => ({
         id: q.id,

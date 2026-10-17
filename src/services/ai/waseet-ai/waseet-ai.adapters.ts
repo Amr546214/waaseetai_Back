@@ -175,7 +175,7 @@ export function mapProjectAnalysisResponse(data: unknown, milestones: SuggestedM
     executiveSummary: data.executiveSummary.trim(),
     strengths: stringList(data.strengths, 'strengths'),
     gapsAndRisks: stringList(data.gapsAndRisks, 'gapsAndRisks'),
-    recommendedImprovements: [],
+    recommendedImprovements: Array.isArray(data.recommendedImprovements) ? stringList(data.recommendedImprovements, 'recommendedImprovements') : [],
     suggestedMilestones: milestones ?? [],
     suggestedPricingStrategy: null,
   };

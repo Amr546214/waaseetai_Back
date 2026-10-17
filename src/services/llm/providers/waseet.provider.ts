@@ -10,9 +10,14 @@ export class WaseetProvider implements LlmProvider {
   async generate(req: LlmProviderRequest): Promise<LlmProviderResponse> {
     try {
       const actor = currentWaseetActor();
+      const system = [
+        req.system,
+        req.schemaJson ? `يجب أن يطابق JSON المُعاد هذا المخطط (JSON Schema) حرفياً بأسماء الحقول وأنواعها:\n${req.schemaJson}` : '',
+        req.groundingHint || '',
+      ].filter(Boolean).join('\n\n');
       const result = await this.client.generate({
-        system: req.system, user: req.user, maxOutputTokens: req.maxOutputTokens,
-        effort: req.effort || (/delivery|audit|portfolio/.test(req.feature || '') ? 'high' : 'medium'),
+        system, user: req.user, maxOutputTokens: req.maxOutputTokens,
+        effort: req.effort || (/delivery|audit|portfolio/.test(req.feature || '') ? 'medium' : 'low'),
         profile: 'analyst', feature: req.feature || 'structured-analysis', responseFormat: 'json',
         classification: 'PERSONAL',
         ...((req.model || this.model) !== 'auto' ? { model: req.model || this.model } : {}),

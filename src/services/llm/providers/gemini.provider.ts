@@ -33,12 +33,17 @@ export class GeminiProvider implements LlmProvider {
       const activeKey = this.keys[this.currentKeyIndex % this.keys.length];
       let res: Response;
       try {
+        const systemText = [
+          request.system,
+          request.schemaJson ? `يجب أن يطابق JSON المُعاد هذا المخطط (JSON Schema) حرفياً بأسماء الحقول وأنواعها:\n${request.schemaJson}` : '',
+          request.groundingHint || '',
+        ].filter(Boolean).join('\n\n');
         res = await this.fetchImpl(`${BASE_URL}/models/${encodeURIComponent(this.model)}:generateContent`, {
           method: 'POST',
           signal: request.signal,
           headers: { 'content-type': 'application/json', 'x-goog-api-key': activeKey },
           body: JSON.stringify({
-            systemInstruction: { parts: [{ text: request.system }] },
+            systemInstruction: { parts: [{ text: systemText }] },
             contents: [{ role: 'user', parts: [{ text: request.user }] }],
             generationConfig: { responseMimeType: 'application/json', maxOutputTokens: request.maxOutputTokens, temperature: 0.2 },
           }),

@@ -8,6 +8,8 @@ export interface LlmProviderRequest {
   feature?: string;
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   model?: string;
+  schemaJson?: string;
+  groundingHint?: string;
 }
 
 export interface LlmProviderResponse {

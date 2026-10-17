@@ -514,8 +514,9 @@ export class WaseetAiClient {
           if (chunk.length > 0) yield { type: 'delta', chunk };
         } else if (name === 'question.streamed') {
           const q = isObject(data.question) ? data.question : null;
+          const qIdNum = q && (typeof q.id === 'number' || (typeof q.id === 'string' && q.id.trim().length > 0)) ? Number(q.id) : NaN;
           if (
-            typeof data.attemptId !== 'string' || !q || typeof q.id !== 'number' || typeof q.textAr !== 'string' ||
+            typeof data.attemptId !== 'string' || !q || !Number.isFinite(qIdNum) || typeof q.textAr !== 'string' ||
             !Array.isArray(q.options) || !q.options.every((o: unknown) => isObject(o) && typeof o.id === 'string' && typeof o.text === 'string')
           ) {
             throw new WaseetAiError(WaseetAiErrorCode.INVALID_RESPONSE, 'WaseetAI sent a malformed question event', { requestId });
@@ -523,7 +524,7 @@ export class WaseetAiClient {
           yield {
             type: 'question',
             attemptId: data.attemptId,
-            question: { id: q.id, textAr: q.textAr, options: (q.options as Array<{ id: string; text: string }>).map((o) => ({ id: o.id, text: o.text })) },
+            question: { id: qIdNum, textAr: q.textAr, options: (q.options as Array<{ id: string; text: string }>).map((o) => ({ id: o.id, text: o.text })) },
           };
         } else if (name === 'assessment.ready') {
           if (typeof data.attemptId !== 'string' || typeof data.totalQuestions !== 'number' || typeof data.timeLimitMinutes !== 'number') {

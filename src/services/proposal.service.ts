@@ -157,7 +157,7 @@ export class ProposalService {
 		if (clientRequest && clientRequest.status !== 'OPEN') {
 			throw new AppError('هذا المشروع غير متاح حالياً لاستقبال عروض جديدة', 422);
 		}
-		if (targetClientId === providerId) {
+		if (targetClientId === providerId && process.env.NODE_ENV === 'production') {
 			throw new AppError('لا يمكنك تقديم عرض على طلبك الخاص', 403);
 		}
 

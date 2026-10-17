@@ -135,8 +135,12 @@ export class AiReviewGateway {
 				return;
 			}
 
-			const requester = await prisma.user.findUnique({ where: { id: userId }, select: { accountType: true } });
-			const isProvider = requester?.accountType === AccountType.PROVIDER_INDIVIDUAL || requester?.accountType === AccountType.PROVIDER_COMPANY;
+			const requester = await prisma.user.findUnique({ where: { id: userId }, select: { accountType: true, activeRole: true } });
+			const isAdminAccount = requester?.accountType === AccountType.ADMIN || requester?.accountType === AccountType.SUPER_ADMIN;
+			const isProvider =
+				!isAdminAccount &&
+				(requester?.activeRole === 'PROVIDER' ||
+					(!requester?.activeRole && (requester?.accountType === AccountType.PROVIDER_INDIVIDUAL || requester?.accountType === AccountType.PROVIDER_COMPANY)));
 			if (!isProvider) {
 				emitStreamError(socket, mode, AI_TEXT_STREAM_ERROR_CODES.FORBIDDEN, '⚠️ هذه الميزة متاحة فقط لحسابات مقدمي الخدمة');
 				return;
@@ -177,8 +181,12 @@ export class AiReviewGateway {
 				return;
 			}
 
-			const requester = await prisma.user.findUnique({ where: { id: userId }, select: { accountType: true } });
-			const isProvider = requester?.accountType === AccountType.PROVIDER_INDIVIDUAL || requester?.accountType === AccountType.PROVIDER_COMPANY;
+			const requester = await prisma.user.findUnique({ where: { id: userId }, select: { accountType: true, activeRole: true } });
+			const isAdminAccount = requester?.accountType === AccountType.ADMIN || requester?.accountType === AccountType.SUPER_ADMIN;
+			const isProvider =
+				!isAdminAccount &&
+				(requester?.activeRole === 'PROVIDER' ||
+					(!requester?.activeRole && (requester?.accountType === AccountType.PROVIDER_INDIVIDUAL || requester?.accountType === AccountType.PROVIDER_COMPANY)));
 			if (!isProvider) {
 				emitStreamError(socket, mode, AI_TEXT_STREAM_ERROR_CODES.FORBIDDEN, '⚠️ هذه الميزة متاحة فقط لحسابات مقدمي الخدمة');
 				return;

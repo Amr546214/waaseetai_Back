@@ -2,7 +2,7 @@ import { toJSONSchema, type ZodType } from 'zod';
 import { logger as defaultLogger } from '../../config/logger';
 import { getLlmConfig, type LlmConfig } from './llm.config';
 import { LlmError, LlmErrorCode } from './llm.errors';
-import { GroundingError, verifyGrounding, type GroundingSpec } from './llm.truth';
+import { GroundingError, buildGroundingHint, verifyGrounding, type GroundingSpec } from './llm.truth';
 import { InFlightLock, MonthlyBudget, RateLimiter, TtlLru, canonicalJson, hashOf, userHash } from './llm.limits';
 import { createProvider } from './providers';
 import type { LlmProvider } from './providers/llm-provider';
@@ -132,6 +132,8 @@ export class LlmClient {
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       const deadline = this.now() + timeoutMs;
       const provider = this.makeProvider(config);
+      const schemaJson = canonicalJson(toJSONSchema(opts.schema, { unrepresentable: 'any' }));
+      const groundingHint = buildGroundingHint(opts.input, opts.grounding);
 
       const call = async (user: string) => {
         let attempt = 0;
@@ -139,7 +141,7 @@ export class LlmClient {
           try {
             if (controller.signal.aborted) throw new LlmError(LlmErrorCode.TIMEOUT, 'cancelled');
             attempted = true;
-            const res = await provider.generate({ system: opts.system, user, maxOutputTokens, signal: controller.signal, userId: opts.userId, feature: opts.feature, effort: opts.effort, model: opts.model });
+            const res = await provider.generate({ system: opts.system, user, maxOutputTokens, signal: controller.signal, userId: opts.userId, feature: opts.feature, effort: opts.effort, model: opts.model, schemaJson, groundingHint });
             tokensIn += res.tokensIn; tokensOut += res.tokensOut;
             usageMeasured = usageMeasured && res.usageMeasured !== false;
             actualModel = res.model || actualModel;

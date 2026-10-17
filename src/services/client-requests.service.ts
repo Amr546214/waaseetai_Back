@@ -56,6 +56,10 @@ export interface ClientRequestAiSuggestion {
 	suggestedTitle: string | null;
 	suggestedDescription: string | null;
 	suggestedSubSpecialties: string[] | null;
+	suggestedRequiredSkills?: string[] | null;
+	suggestedRequirements?: string[] | null;
+	suggestedOutputs?: string | null;
+	suggestedMilestones?: Array<{ name: string; pct: number }> | null;
 	recommendedMinBudget: number | null;
 	recommendedMaxBudget: number | null;
 	suggestedDurationDays: number | null;
@@ -83,6 +87,20 @@ export function mapRequestDraftToSuggestion(raw: Partial<RequestDraftResponse> |
 		? raw.suggestedSubSpecialties.map(nonEmptyString).filter((x): x is string => x !== null)
 		: [];
 
+	const skills = Array.isArray(raw.suggestedRequiredSkills)
+		? raw.suggestedRequiredSkills.map(nonEmptyString).filter((x): x is string => x !== null)
+		: [];
+
+	const reqs = Array.isArray(raw.suggestedRequirements)
+		? raw.suggestedRequirements.map(nonEmptyString).filter((x): x is string => x !== null)
+		: [];
+
+	const milestones = Array.isArray(raw.suggestedMilestones)
+		? raw.suggestedMilestones
+			.filter(m => m && typeof m.name === 'string' && m.name.trim().length >= 2 && typeof m.pct === 'number' && m.pct > 0)
+			.map(m => ({ name: m.name.trim(), pct: Math.round(m.pct) }))
+		: [];
+
 	let min = positiveNumber(raw.recommendedMinBudget);
 	let max = positiveNumber(raw.recommendedMaxBudget);
 	if (min !== null && max !== null && max < min) { min = null; max = null; }
@@ -96,6 +114,10 @@ export function mapRequestDraftToSuggestion(raw: Partial<RequestDraftResponse> |
 		suggestedTitle: nonEmptyString(raw.suggestedTitle),
 		suggestedDescription: nonEmptyString(raw.suggestedDescription),
 		suggestedSubSpecialties: subs.length > 0 ? subs : null,
+		...(skills.length > 0 ? { suggestedRequiredSkills: skills } : {}),
+		...(reqs.length > 0 ? { suggestedRequirements: reqs } : {}),
+		...(nonEmptyString(raw.suggestedOutputs) ? { suggestedOutputs: nonEmptyString(raw.suggestedOutputs) } : {}),
+		...(milestones.length >= 2 ? { suggestedMilestones: milestones } : {}),
 		recommendedMinBudget: min,
 		recommendedMaxBudget: max,
 		suggestedDurationDays: positiveNumber(raw.suggestedDurationDays),
@@ -190,25 +212,27 @@ export class ClientRequestsService {
 	}
 
 	/**
-	 * POST /api/client/my-requests/ai-suggest
-	 * WaseetAI request-draft (POST /v1/ai/request-draft). Only the verified
-	 * request fields {title, description, specialtyName, currency} are sent:
-	 * the selected sub-specialties and the client's past-request history have
-	 * no field in that contract and are NOT sent.
+	 * POST /api/client/requests/ai-suggest
 	 */
 	public async generateAiSuggest(_clientId: string, payload: ClientRequestAiSuggestDto): Promise<ClientRequestAiSuggestion> {
-		const title = payload.title?.trim() || undefined;
-		const description = payload.description?.trim() || undefined;
-		const specialtyName = payload.specialtyName?.trim() || undefined;
+		const specialtyName = payload.specialtyName?.trim() || 'عام';
+		const title = payload.title?.trim() || `مشروع في مجال ${specialtyName}`;
+		const description = payload.description?.trim() || `مطلوب تنفيذ ${title} في تخصص ${specialtyName}${payload.subSpecialties?.length ? ` (${payload.subSpecialties.join('، ')})` : ''}.`;
 
 		const unavailable = () => new AppError('تعذر توليد اقتراح ذكي لطلبك حالياً، يرجى المحاولة لاحقاً.', 503);
 
 		let draft: RequestDraftResponse;
 		try {
-			draft = await waseetAiClient.requestDraft({ title, description, specialtyName, currency: CLIENT_REQUEST_AI_CURRENCY });
+			draft = await waseetAiClient.requestDraft({
+				title,
+				description,
+				specialtyName,
+				...(payload.subSpecialties?.length ? { subSpecialties: payload.subSpecialties } : {}),
+				...(payload.availableSkills?.length ? { availableSkills: payload.availableSkills } : {}),
+				...(payload.deliveryDays ? { deliveryDays: payload.deliveryDays } : {}),
+				currency: CLIENT_REQUEST_AI_CURRENCY
+			});
 		} catch (error) {
-			// Honest failure: code/status only are logged, upstream text is never
-			// forwarded, and no fabricated suggestion is returned.
 			const e = normalizeWaseetAiError(error);
 			console.error(`[ClientRequests] WaseetAI request-draft failed code=${e.code} status=${e.status ?? '-'} requestId=${e.requestId ?? '-'}`);
 			throw unavailable();

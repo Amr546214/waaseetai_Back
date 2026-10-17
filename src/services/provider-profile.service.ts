@@ -316,7 +316,7 @@ export class ProviderProfileService {
 	private async suggestionContext(userId: string, input: ProviderBioSuggestDto) {
 		const profile = await prisma.providerProfile.findUnique({
 			where: { userId },
-			select: { headline: true, industry: true, mainSpecialty: true, skills: { select: { name: true } } }
+			select: { headline: true, industry: true, mainSpecialty: true, subSpecialties: true, skills: { select: { name: true } } }
 		});
 		const jobTitle = profile?.headline?.trim() || profile?.industry?.trim() || input.jobTitle || '';
 		const mainSpecialty = profile?.mainSpecialty?.trim() || input.mainSpecialty || '';
@@ -327,11 +327,13 @@ export class ProviderProfileService {
 			select: { nameAr: true }
 		}) : null;
 		const existingSkills = [...new Set([...(profile?.skills || []).map(s => s.name), ...(input.existingSkills || [])])];
+		const subSpecialties = Array.isArray((profile as any)?.subSpecialties) ? (profile as any).subSpecialties.filter((s: unknown): s is string => typeof s === 'string' && Boolean(s.trim())).map((s: string) => s.trim().slice(0, 80)) : [];
 		if (!jobTitle && !mainSpecialty && !existingSkills.length) {
 			throw new AppError('أدخل المسمى المهني أو التخصص أولاً.', 400);
 		}
 		return {
 			jobTitle: jobTitle.slice(0, 120), specialty: (category?.nameAr || mainSpecialty).slice(0, 120),
+			subSpecialties,
 			existingSkills: existingSkills.slice(0, 30).map(s => s.slice(0, 40)),
 			// Preserve the user's range as context, never turn it into exact years.
 			experienceRange: input.experienceRange,
@@ -339,11 +341,28 @@ export class ProviderProfileService {
 		};
 	}
 
-	// Disabled: WaseetAI /v1/ai/profile/bio accepts only providerId, ignores
-	// the provider's data and returns a generic template with [placeholder]
-	// gaps. Manual bio editing is untouched.
-	async suggestBio(_userId: string, _input: ProviderBioSuggestDto): Promise<ProviderBioSuggestion> {
-		throw aiFeatureUnavailableError('تعذر اقتراح النبذة التعريفية حالياً. يمكنك كتابة نبذتك يدوياً.');
+	async suggestBio(userId: string, input: ProviderBioSuggestDto): Promise<ProviderBioSuggestion> {
+		const context = await this.suggestionContext(userId, input);
+		const specialties = [...new Set([context.specialty, ...context.subSpecialties, context.jobTitle].map(s => s.trim()).filter(Boolean))];
+		if (!specialties.length && !context.existingSkills.length) {
+			throw new AppError('أدخل المسمى المهني أو التخصص أولاً.', 400);
+		}
+		try {
+			const result = await waseetAiClient.suggestBio({
+				providerId: userId,
+				jobTitle: context.jobTitle || undefined,
+				specialties: specialties.length ? specialties : context.existingSkills.slice(0, 3),
+				existingSkills: context.existingSkills,
+				experienceRange: context.experienceRange,
+				maxLength: 500,
+			});
+			const suggestedBio = typeof result?.suggestedBio === 'string' ? result.suggestedBio.trim().slice(0, 500) : '';
+			if (!suggestedBio) throw new Error('EMPTY_BIO');
+			return { suggestedBio };
+		} catch (error: any) {
+			logger.warn(`[ProviderProfileService] suggestBio failed: ${error?.code || error?.name || 'ERROR'}`);
+			throw new AppError('تعذر إنشاء اقتراح النبذة بالذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.', 503);
+		}
 	}
 
 	async suggestSkills(userId: string, input: ProviderSkillsSuggestDto): Promise<ProviderSkillsSuggestion> {
@@ -684,17 +703,17 @@ export class ProviderProfileService {
 	 * silently added.
 	 */
 	async updateBasicInfo(userId: string, data: any, auditContext?: AuditContext) {
-		const firstName = sanitizeText(String(data.firstName || '')).trim();
-		const lastName = sanitizeText(String(data.lastName || '')).trim();
-		const headline = sanitizeText(String(data.headline || '')).trim();
-		const bio = sanitizeText(String(data.bio || '')).trim();
-		if (!firstName || !lastName || isBlankText(headline) || !String(data.mainSpecialty || '').trim()) throw new Error('REQUIRED_PROFILE_FIELDS');
+		const before = await this.getProfile(userId);
+		const firstName = sanitizeText(String(data.firstName || (before as any)?.firstName || (before as any)?.user?.firstName || '')).trim();
+		const lastName = sanitizeText(String(data.lastName || (before as any)?.lastName || (before as any)?.user?.lastName || '')).trim();
+		const headline = sanitizeText(String(data.headline ?? (before as any)?.headline ?? '')).trim();
+		const bio = sanitizeText(String(data.bio ?? (before as any)?.bio ?? '')).trim();
+		const requestedMain = String(data.mainSpecialty || (before as any)?.mainSpecialty || '').trim();
 		if (firstName.length > 60 || lastName.length > 60 || headline.length > 100 || bio.length > 500) throw new Error('PROFILE_FIELD_TOO_LONG');
 		for (const key of ['githubUrl', 'linkedinUrl', 'websiteUrl']) {
 			if (data[key]) { try { const url = new URL(String(data[key])); if (!['http:', 'https:'].includes(url.protocol)) throw new Error(); } catch { throw new Error(`INVALID_URL:${key}`); } }
 		}
 		const avatarUrl = data.avatarUrl === undefined ? undefined : await storeDataUriIfNeeded(data.avatarUrl, `waseetai/users/${userId}/avatar`, 'avatar');
-		const before = await this.getProfile(userId);
 
 		// Date of birth (private, optional): a real past date; a VERIFIED account's date is frozen; absent / '' keeps the stored value.
 		let dob: Date | undefined;
@@ -708,7 +727,7 @@ export class ProviderProfileService {
 		const heldSkills = (await prisma.providerProfile.findUnique({ where: { userId }, select: { skills: { select: { id: true, name: true } } } }))?.skills ?? [];
 		const plan = await planSpecialtyUpdate(prisma, {
 			storedMain: String((before as any)?.mainSpecialty ?? ''),
-			requestedMain: String(data.mainSpecialty ?? ''),
+			requestedMain,
 			subSpecialties: Array.isArray(data.subSpecialties) ? data.subSpecialties.map((n: unknown) => sanitizeText(String(n ?? '')).trim()) : undefined,
 			heldSkills
 		});

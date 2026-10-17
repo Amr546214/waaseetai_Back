@@ -119,3 +119,32 @@ export function verifyGrounding(output: unknown, input: unknown, spec: Grounding
     }
   }
 }
+
+/** Builds a concise grounding hint listing non-empty input paths and allowed numbers so the model complies on the first attempt. */
+export function buildGroundingHint(input: unknown, spec?: GroundingSpec): string {
+  if (!spec) return '';
+  const lines: string[] = [];
+  if (spec.basedOn?.length && input && typeof input === 'object' && !Array.isArray(input)) {
+    const validPaths: string[] = [];
+    for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+      if (isEmptyValue(v)) continue;
+      if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
+        for (const [subK, subV] of Object.entries(v as Record<string, unknown>)) {
+          if (!isEmptyValue(subV)) validPaths.push(`${k}.${subK}`);
+        }
+      } else {
+        validPaths.push(k);
+      }
+    }
+    if (validPaths.length > 0) {
+      lines.push(`المسارات المسموح فقط بذكرها داخل مصفوفة basedOn (لأنها غير فارغة في المدخلات): ${JSON.stringify(validPaths)} — لا تذكر أي مسار غير موجود في هذه القائمة إطلاقاً.`);
+    }
+  }
+  if (spec.freeText?.length) {
+    const inputNumbers = new Set<string>();
+    collectInputNumbers(input, inputNumbers);
+    for (const n of spec.allowedNumbers ?? []) inputNumbers.add(String(n));
+    lines.push(`الأرقام المسموح فقط بكتابتها كأرقام في النصوص (${spec.freeText.join(', ')}): ${JSON.stringify([...inputNumbers])}. لا تكتب أي رقم آخر بالأرقام إطلاقاً (لا ترقيم قوائم مثل 1، 2 ولا نسب مئوية غير موجودة في القائمة؛ اكتب الكلمات بالحروف العربية بدلاً من الأرقام).`);
+  }
+  return lines.join('\n');
+}
