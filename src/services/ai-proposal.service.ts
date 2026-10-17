@@ -78,7 +78,7 @@ class AiProposalService {
 
     const qualityTag = typeof raw?.aiQualityTag === 'string' ? raw.aiQualityTag.trim() : '';
     const summary = typeof raw?.aiFeedback?.summary === 'string' ? raw.aiFeedback.summary.trim() : '';
-    const score = raw?.aiMatchScore;
+    const score = raw?.qualityScore ?? raw?.aiMatchScore;
     if (typeof score !== 'number' || !Number.isFinite(score) || score < 0 || score > 100 || !qualityTag || !summary) {
       throw new AppError(UNAVAILABLE_MESSAGE, 503);
     }

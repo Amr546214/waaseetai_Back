@@ -12,6 +12,43 @@ import { parseSseStream } from './waseet-ai.sse';
 
 const TEST_TOKEN = ['unit', 'test', 'marker'].join('-');
 
+test('avatar text-only requests accept legacy lazy audio without fetching or exposing it', async () => {
+  const calls: Recorded[] = [];
+  const client = new WaseetAiClient(jsonFetch(200, { success: true, data: {
+    text: 'An API connects applications.', audio: { url: '/tts/speak?text=reply', mimeType: 'audio/mpeg' },
+  } }, calls), config());
+  const result = await client.avatarChat({ message: 'Explain API', locale: 'en', includeBase64: false });
+  assert.deepEqual(result, { text: 'An API connects applications.', audio: { status: 'omitted' } });
+  assert.equal(calls.length, 1, 'text-only replies must never request audio');
+  assert.equal(JSON.parse(String(calls[0].init.body)).includeBase64, false);
+});
+
+test('avatar text-only compatibility still rejects a missing text answer', async () => {
+  const client = new WaseetAiClient(jsonFetch(200, { success: true, data: { audio: { url: '/tts/speak' } } }), config());
+  await assert.rejects(client.avatarChat({ message: 'Explain API', includeBase64: false }),
+    (error: any) => error.code === WaseetAiErrorCode.INVALID_RESPONSE);
+});
+
+test('avatar requests for speech retain strict audio validation', async () => {
+  const client = new WaseetAiClient(jsonFetch(200, { success: true, data: { text: 'Reply', audio: { url: '/tts/speak' } } }), config());
+  await assert.rejects(client.avatarChat({ message: 'Explain API', includeBase64: true }),
+    (error: any) => error.code === WaseetAiErrorCode.INVALID_RESPONSE);
+});
+
+test('knowledge search uses the canonical POST contract and rejects draft documents before returning them', async () => {
+  const calls: Recorded[] = [];
+  const doc = { documentId: 'policy', version: '1', title: 'Policy', content: 'Approved content', locale: 'ar',
+    createdAt: '2026-01-01', status: 'APPROVED', audience: 'all', approvedBy: 'reviewer', approvedAt: '2026-01-01' };
+  const client = new WaseetAiClient(jsonFetch(200, { success: true, data: { documents: [doc], retrievalMode: 'hybrid' } }, calls), config());
+  const result = await client.searchKnowledge({ query: 'policy', limit: 3, audience: 'client' }, { actor: { userId: 'u', role: 'client' } });
+  assert.equal(result.documents.length, 1);
+  assert.equal(calls[0].url, 'https://waseet-ai.test/v1/knowledge/search');
+  assert.equal(calls[0].init.method, 'POST');
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { query: 'policy', limit: 3, audience: 'client' });
+  const invalid = new WaseetAiClient(jsonFetch(200, { success: true, data: { documents: [{ ...doc, status: 'DRAFT' }], retrievalMode: 'lexical' } }), config());
+  await assert.rejects(invalid.searchKnowledge({ query: 'policy' }), (error: any) => error.code === WaseetAiErrorCode.INVALID_RESPONSE);
+});
+
 function config(overrides: Partial<WaseetAiConfig> = {}): () => WaseetAiConfig {
   return () => ({
     baseUrl: 'https://waseet-ai.test',
@@ -68,7 +105,8 @@ test('config: placeholder token values are treated as not configured; trailing s
 
 test('isConfigured() reflects the real process env of this environment without throwing', () => {
   const client = new WaseetAiClient(jsonFetch(200, {}));
-  const expected = !!getWaseetAiConfig(process.env).bearerToken;
+  const cfg = getWaseetAiConfig(process.env);
+  const expected = cfg.authMode === 'signed' ? !!cfg.clientSecret && cfg.clientSecret.length >= 32 : !!cfg.bearerToken;
   assert.equal(client.isConfigured(), expected);
 });
 
@@ -369,6 +407,37 @@ test('synthesizeSpeech: parses the live-observed envelope (data.audio.base64Audi
 
 const frame = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 
+test('help citations forward provider search display text up to 64000 characters and discard objects or overflow', async () => {
+  const html = '<div class="suggestions"><a href="https://www.google.com/search?q=API">API</a></div>';
+  for (const value of [html, 'x'.repeat(64000), 'x'.repeat(64001), { html }, [html], true, null, undefined]) {
+    const client = new WaseetAiClient(sseFetch([
+      frame('help:citations', { citations: [{ docId: 'web-1', title: 'API source', internal: { raw: 'provider-object' } }], searchSuggestionsHtml: value }),
+      frame('help:answer_complete', {}),
+    ]), config());
+    const events = await collect(client.streamHelpChat({ question: 'اشرح API', mode: 'general', webSearch: true }));
+    const citation = events.find(event => event.type === 'citations');
+    assert.ok(citation?.type === 'citations');
+    assert.deepEqual(citation.citations, [{ docId: 'web-1', title: 'API source' }]);
+    if (typeof value === 'string' && value.length <= 64000) assert.equal(citation.searchSuggestionsHtml, value);
+    else assert.equal('searchSuggestionsHtml' in citation, false);
+    assert.equal(JSON.stringify(events).includes('provider-object'), false);
+  }
+});
+
+test('completion can carry search suggestions without duplicating citations already streamed', async () => {
+  const html = '<div>Search suggestions</div>';
+  const client = new WaseetAiClient(sseFetch([
+    frame('citations', { citations: [{ docId: 'web-1', title: 'Source' }] }),
+    frame('generation.completed', { citations: [{ docId: 'web-1', title: 'Source' }], searchSuggestionsHtml: html }),
+  ]), config());
+  const events = await collect(client.streamHelpChat({ question: 'API', mode: 'general' }));
+  assert.deepEqual(events, [
+    { type: 'citations', citations: [{ docId: 'web-1', title: 'Source' }] },
+    { type: 'citations', citations: [], searchSuggestionsHtml: html },
+    { type: 'completed' },
+  ]);
+});
+
 test('requestDraft: POSTs /v1/ai/request-draft and validates the verified response shape', async () => {
   const calls: Recorded[] = [];
   const draft = { suggestedTitle: 't', suggestedDescription: 'd', suggestedSubSpecialties: ['a'], recommendedMinBudget: 600, recommendedMaxBudget: 1800, suggestedDurationDays: 25, complexityRating: 'Medium', personalizedNote: 'n', aiMatchScoreEstimate: 90 };
@@ -428,6 +497,21 @@ test('text suggest/enhance streams relay text.delta chunks and require generatio
   await assert.rejects(() => collect(noEnd.streamTextSuggestion({ title: 'عنوان' })), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
 });
 
+test('enhancement completion rejects explicit truncation/error metadata while other stream contracts remain unchanged', async () => {
+  for (const completion of [
+    { status: 'partial' }, { status: 'error' }, { status: 'completed', partial: true },
+    { status: 'completed', truncated: true }, { status: 'completed', finishReason: 'MAX_TOKENS' },
+    { status: 'completed', finish_reason: 'SAFETY' }, { status: 'completed', error: { code: 'CUT' } },
+  ]) {
+    const client = new WaseetAiClient(sseFetch([frame('text.delta', { chunk: 'partial' }), frame('generation.completed', completion)]), config());
+    await assert.rejects(() => collect(client.streamTextEnhancement({ description: 'نص' })), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
+  }
+  const complete = new WaseetAiClient(sseFetch([frame('text.delta', { chunk: 'full' }), frame('generation.completed', { status: 'completed', finishReason: 'STOP' })]), config());
+  assert.equal((await collect(complete.streamTextEnhancement({ description: 'نص' }))).at(-1)!.type, 'completed');
+  const other = new WaseetAiClient(sseFetch([frame('text.delta', { chunk: 'answer' }), frame('generation.completed', { status: 'legacy' })]), config());
+  assert.equal((await collect(other.streamHelpChat({ question: 'سؤال' }))).at(-1)!.type, 'completed');
+});
+
 test('streamAssessmentQuestions maps question.streamed/assessment.ready and never exposes an answer key', async () => {
   const q = (id: number) => frame('question.streamed', { attemptId: 'att-1', question: { id, textAr: `س${id}`, options: [{ id: 'a', text: 'x' }, { id: 'b', text: 'y' }] } });
   const client = new WaseetAiClient(sseFetch([q(1), q(2), frame('assessment.ready', { attemptId: 'att-1', totalQuestions: 2, timeLimitMinutes: 15, generationSource: 'GEMINI' })]), config());
@@ -461,6 +545,17 @@ test('auditBusinessModel: POSTs the verified body and validates the advisory ver
   assert.deepEqual(JSON.parse(String(calls[0].init.body)).pricing, { amount: 120 });
   const bad = new WaseetAiClient(jsonFetch(200, { success: true, data: { ...verdict, score: 150 } }), config());
   await assert.rejects(() => bad.auditBusinessModel({ title: 't', description: 'd', category: 'c', pricing: { amount: 1 } }), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
+});
+
+test('auditBusinessModel: accepts a real score deferred to human review and rejects malformed approval flags', async () => {
+  const verdict = { isApproved: null, status: 'REQUIRES_HUMAN_REVIEW', scoreBasis: 'OFFERING_COMPLETENESS_RUBRIC', score: 76, summary: 'مراجعة استرشادية', strengths: ['أ'], issues: [], recommendations: ['ب'] };
+  const body = { title: 't', description: 'd', category: 'التصميم', pricing: { amount: 120 } };
+  const client = new WaseetAiClient(jsonFetch(200, { success: true, data: verdict }), config());
+  assert.deepEqual(await client.auditBusinessModel(body), verdict);
+  for (const isApproved of [undefined, 'true', 1]) {
+    const malformed = new WaseetAiClient(jsonFetch(200, { success: true, data: { ...verdict, isApproved } }), config());
+    await assert.rejects(() => malformed.auditBusinessModel(body), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
+  }
 });
 
 test('enrichProposal: POSTs milestones and validates the verified response', async () => {

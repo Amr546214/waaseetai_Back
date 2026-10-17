@@ -17,6 +17,7 @@ import { sanitizeText } from '../utils/sanitize-text';
 import { isAcceptableKycDocumentValue } from '../utils/kyc-value-guard';
 import { assertVerifiedIdentityUnchanged } from '../utils/kyc-identity-guard';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
+import { normalizeWaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
 import { aiFeatureUnavailableError } from './ai/ai-feature-unavailable';
 import { AppError } from '../utils/app-error';
 import crypto from 'crypto';
@@ -46,14 +47,14 @@ const AI_METRICS_TTL_MS = 1000 * 60 * 60;
 // computed from real DB counts we send. averageTestScore/codeMatchingIndex
 // (see getPublicProfile) are real DB arithmetic and stay application-owned.
 export interface ProviderAiPerformanceMetrics {
-	executionQuality: number;
-	onTimeDelivery: number;
-	communication: number;
-	clientSatisfaction: number;
-	onTimeCompletionRate: number;
-	repeatClientRate: number;
-	highRatingServicesRate: number;
-	conflictFreeDeliveryRate: number;
+	executionQuality: number | null;
+	onTimeDelivery: number | null;
+	communication: number | null;
+	clientSatisfaction: number | null;
+	onTimeCompletionRate: number | null;
+	repeatClientRate: number | null;
+	highRatingServicesRate: number | null;
+	conflictFreeDeliveryRate: number | null;
 }
 
 const AI_METRIC_KEYS: (keyof ProviderAiPerformanceMetrics)[] = ['executionQuality', 'onTimeDelivery', 'communication', 'clientSatisfaction', 'onTimeCompletionRate', 'repeatClientRate', 'highRatingServicesRate', 'conflictFreeDeliveryRate'];
@@ -297,7 +298,7 @@ export class ProviderProfileService {
 			const metrics = {} as ProviderAiPerformanceMetrics;
 			for (const key of AI_METRIC_KEYS) {
 				const v = (result as any)?.[key];
-				if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+				if (v !== null && (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 100)) return null;
 				metrics[key] = v;
 			}
 			aiCache.set(cacheKey, { metrics, expiresAt: Date.now() + AI_METRICS_TTL_MS });
@@ -338,7 +339,7 @@ export class ProviderProfileService {
 	// the provider's data and returns a generic template with [placeholder]
 	// gaps. Manual bio editing is untouched.
 	async suggestBio(_userId: string, _input: ProviderBioSuggestDto): Promise<ProviderBioSuggestion> {
-		throw aiFeatureUnavailableError(BIO_SUGGESTION_UNAVAILABLE_MESSAGE);
+		throw aiFeatureUnavailableError('تعذر اقتراح النبذة التعريفية حالياً. يمكنك كتابة نبذتك يدوياً.');
 	}
 
 	async suggestSkills(userId: string, input: ProviderSkillsSuggestDto): Promise<ProviderSkillsSuggestion> {

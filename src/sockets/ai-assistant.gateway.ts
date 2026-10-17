@@ -2,8 +2,8 @@ import { Socket } from 'socket.io';
 import { AccountType } from '@prisma/client';
 import { prisma } from '../config/db';
 import { waseetAiClient, type WaseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
-import { normalizeWaseetAiError } from '../services/ai/waseet-ai/waseet-ai.errors';
-import { canRewrite, checkRewriteOutput, REWRITE_INPUT_REQUIRED_MESSAGE } from '../utils/description-rewrite-guard';
+import { normalizeWaseetAiError, WaseetAiError, WaseetAiErrorCode } from '../services/ai/waseet-ai/waseet-ai.errors';
+import { canRewrite, checkRewritePreview, REWRITE_INPUT_REQUIRED_MESSAGE, REWRITE_MAX_CHARS, REWRITE_PREVIEW_MAX_CHARS } from '../utils/description-rewrite-guard';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
 
 export interface GenerateDescriptionDto {
@@ -36,8 +36,9 @@ export interface GenerateDescriptionDto {
 // REWRITE ONLY: the client writes the title and a real description first; the AI only restates that text. There is no generate-from-scratch mode:
 // an empty/too-short title or description is refused before any AI call, with nothing written into the form. The text goes to WaseetAI
 // POST /v1/ai/text/enhance/stream with {description: <draft>} only (that endpoint takes nothing else, its prompt is the vendor's), the reply is buffered,
-// and it is relayed as WaseetAI wrote it (assistant phrasing/markdown are accepted by owner decision). Only an empty reply is refused and an over-long one is cut
-// to 2000 (checkRewriteOutput). On refusal or failure the client gets an honest error and keeps the original text. Events relayed to the Create Request page:
+// and a genuinely completed preview is relayed as WaseetAI wrote it (assistant phrasing/markdown are accepted by owner decision). The preview may contain
+// multiple alternatives and is bounded at 30000 characters, never silently cut. The chosen plain description still has a 2000-character field limit.
+// On refusal or failure the client gets an honest error and keeps the original text. Events relayed to the Create Request page:
 // ai:description_start / ai:description_chunk (the reply) / ai:description_complete / ai:description_error.
 //
 // Not available (no WaseetAI contract, no fallback): the AI title/specialty pre-check, and AI rewriting of the title (the title is never changed by AI).
@@ -104,6 +105,7 @@ export class AiAssistantGateway {
         return;
       }
       let fullStreamedText = '';
+      let completed = false;
 
       const abortController = new AbortController();
       const onDisconnect = () => abortController.abort();
@@ -116,19 +118,37 @@ export class AiAssistantGateway {
         const stream = this.waseetAi.streamTextEnhancement({ description: draft }, callOpts);
         for await (const evt of stream) {
           if (abortController.signal.aborted) break;
-          if (evt.type === 'delta') fullStreamedText += evt.chunk;
-          else if (evt.type === 'completed') break;
+          if (evt.type === 'delta') {
+            if (fullStreamedText.length + evt.chunk.length > REWRITE_PREVIEW_MAX_CHARS) {
+              abortController.abort();
+              socket.emit('ai:description_error', {
+                code: 'AI_OUTPUT_TOO_LONG',
+                message: 'تجاوزت معاينة الصياغة الحد المسموح. لم تُعتمد صياغة ناقصة، وبقي وصفك كما كتبته. حاول مرة أخرى.',
+                partial: true, truncated: true,
+                ...(fullStreamedText ? { partialText: fullStreamedText } : {}),
+              });
+              return;
+            }
+            fullStreamedText += evt.chunk;
+          } else if (evt.type === 'completed') {
+            completed = true;
+            break;
+          }
         }
         if (abortController.signal.aborted) throw new Error('aborted');
+        if (!completed) throw new WaseetAiError(WaseetAiErrorCode.INVALID_RESPONSE, 'Rewrite stream did not complete');
 
-        const checked = checkRewriteOutput(draft, fullStreamedText);
+        const checked = checkRewritePreview(draft, fullStreamedText);
         if (checked.ok) {
           socket.emit('ai:description_chunk', { chunk: checked.text, mode });
           socket.emit('ai:description_complete', {
             fullText: checked.text,
             mode,
             status: 'success',
-            message: 'تمت إعادة صياغة وصفك، راجعها قبل اعتمادها'
+            message: 'تمت إعادة صياغة وصفك، راجعها قبل اعتمادها',
+            truncated: false,
+            previewMaxChars: REWRITE_PREVIEW_MAX_CHARS,
+            descriptionMaxChars: REWRITE_MAX_CHARS,
           });
           return;
         }
@@ -150,7 +170,10 @@ export class AiAssistantGateway {
       // text of any kind.
       socket.emit('ai:description_error', {
         code: 'AI_GENERATION_FAILED',
-        message: 'تعذرت إعادة الصياغة من خدمة الذكاء الاصطناعي، وبقي وصفك كما كتبته. حاول مرة أخرى.'
+        message: 'تعذرت إعادة الصياغة من خدمة الذكاء الاصطناعي، وبقي وصفك كما كتبته. حاول مرة أخرى.',
+        partial: fullStreamedText.length > 0,
+        truncated: fullStreamedText.length > 0,
+        ...(fullStreamedText ? { partialText: fullStreamedText } : {}),
       });
     });
   }

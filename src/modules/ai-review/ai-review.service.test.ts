@@ -48,6 +48,19 @@ const DOC_ANALYSIS = {
   gapsAndRisks: ['API subscription costs not accounted for'],
 };
 
+test('analysis accepts an unavailable feasibility score as null without manufacturing a number', async () => {
+  const { service } = makeService(routeAnalysis(() => ok({ ...DOC_ANALYSIS, feasibilityScore: null, marketFitRating: 'Unknown' })));
+  const result = await service.analyzeProjectModel(ANALYZE_DTO);
+  assert.equal(result.feasibilityScore, null);
+  assert.equal(result.marketFitRating, null);
+});
+
+test('existing milestones API runs breakdown validation and forwards the supplied delivery deadline', async () => {
+  const { service, calls } = makeService(() => ok(DOC_MILESTONES));
+  await rejectsWith(service.suggestMilestones({ title: 'Project', description: 'Work', totalAmount: 3000, deliveryDays: 19 }), 503);
+  assert.equal(calls[0].body.deliveryDays, 19);
+});
+
 async function rejectsWith(promise: Promise<unknown>, status: number): Promise<AppError> {
   try {
     await promise;
@@ -86,18 +99,16 @@ test('milestones: documented response maps to the existing SuggestedMilestone sh
   assert.ok(!JSON.stringify(result).includes(TEST_TOKEN));
 });
 
-test('milestones: the existing 100%-sum invariant is preserved (difference applied to the last milestone)', async () => {
+test('milestones: a 95% response is rejected instead of silently editing the AI suggestion', async () => {
   const data = { milestones: [{ ...DOC_MILESTONES.milestones[0] }, { ...DOC_MILESTONES.milestones[1] }, { ...DOC_MILESTONES.milestones[2], percentage: 15 }] };
   const { service } = makeService(() => ok(data));
-  const result = await service.suggestMilestones({ title: 'App', totalAmount: 3000 });
-  assert.equal(result.reduce((s, m) => s + (m.percentage ?? 0), 0), 100);
-  assert.equal(result[2].percentage, 20);
+  await rejectsWith(service.suggestMilestones({ title: 'App', description: 'x', totalAmount: 3000 }), 503);
 });
 
 test('milestones: percentages that cannot be balanced to 100 are invalid (503), never silently rebalanced', async () => {
   const data = { milestones: [{ ...DOC_MILESTONES.milestones[0], percentage: 100 }, { ...DOC_MILESTONES.milestones[1], percentage: 100 }, { ...DOC_MILESTONES.milestones[2], percentage: 0 }] };
   const { service } = makeService(() => ok(data));
-  await rejectsWith(service.suggestMilestones({ title: 'App', totalAmount: 3000 }), 503);
+  await rejectsWith(service.suggestMilestones({ title: 'App', description: 'x', totalAmount: 3000 }), 503);
 });
 
 test('milestones: missing documented required input (totalAmount) is a 400 and WaseetAI is never called', async () => {
@@ -110,13 +121,13 @@ test('milestones: missing documented required input (totalAmount) is a 400 and W
 for (const [label, status] of [['4xx', 400], ['401', 401], ['429', 429], ['5xx', 503]] as const) {
   test(`milestones: upstream ${label} → honest 503, no fabricated milestones, upstream body not leaked`, async () => {
     const { service } = makeService(() => json(status, { success: false, error: { message: UPSTREAM_SECRET_TEXT } }));
-    await rejectsWith(service.suggestMilestones({ title: 'App', totalAmount: 3000 }), 503);
+    await rejectsWith(service.suggestMilestones({ title: 'App', description: 'x', totalAmount: 3000 }), 503);
   });
 }
 
 test('milestones: timeout → honest 503', async () => {
   const { service } = makeService((_u, _b, init) => hang(init));
-  await rejectsWith(service.suggestMilestones({ title: 'App', totalAmount: 3000 }), 503);
+  await rejectsWith(service.suggestMilestones({ title: 'App', description: 'x', totalAmount: 3000 }), 503);
 });
 
 test('milestones: malformed JSON / unsuccessful envelope / missing fields → 503', async () => {
@@ -129,13 +140,13 @@ test('milestones: malformed JSON / unsuccessful envelope / missing fields → 50
     () => ok({ nothing: true }),
   ]) {
     const { service } = makeService(respond);
-    await rejectsWith(service.suggestMilestones({ title: 'App', totalAmount: 3000 }), 503);
+    await rejectsWith(service.suggestMilestones({ title: 'App', description: 'x', totalAmount: 3000 }), 503);
   }
 });
 
 test('milestones: WaseetAI not configured → 503 without any network call', async () => {
   const { service, calls } = makeService(() => ok(DOC_MILESTONES), { bearerToken: undefined });
-  await rejectsWith(service.suggestMilestones({ title: 'App', totalAmount: 3000 }), 503);
+  await rejectsWith(service.suggestMilestones({ title: 'App', description: 'x', totalAmount: 3000 }), 503);
   assert.equal(calls.length, 0);
 });
 
@@ -152,7 +163,7 @@ const ANALYZE_DTO = {
   ],
 };
 
-function routeAnalysis(analysis: () => Response | Promise<Response>, milestones: () => Response | Promise<Response> = () => ok(DOC_MILESTONES)) {
+function routeAnalysis(analysis: () => Response | Promise<Response>, milestones: () => Response | Promise<Response> = () => ok({ milestones: DOC_MILESTONES.milestones.map(item => ({ ...item, days: 5 })) })) {
   return (url: string, _b: any, init: RequestInit) => (url.endsWith('/v1/ai/project-analysis') ? analysis() : url.endsWith('/v1/ai/milestones') ? milestones() : hang(init));
 }
 
@@ -164,7 +175,7 @@ test('analysis: request mapping matches the documented /v1/ai/project-analysis b
   assert.ok(analysisCall);
   assert.deepEqual(analysisCall!.body, { title: 'Smart Travel Booking App', description: 'Integration with 4 flight APIs', budget: 1500, deadlineDays: 15, currency: 'USD' });
   const msCall = calls.find((c) => c.url.endsWith('/v1/ai/milestones'));
-  assert.deepEqual(msCall!.body, { title: 'Smart Travel Booking App', description: 'Integration with 4 flight APIs', totalAmount: 1500, currency: 'USD' });
+  assert.deepEqual(msCall!.body, { title: 'Smart Travel Booking App', description: 'Integration with 4 flight APIs', totalAmount: 1500, currency: 'USD', deliveryDays: 15 });
 });
 
 test('analysis: documented response maps field-for-field; scores pass through untouched; absent Waseet fields are empty/null, not invented', async () => {
@@ -180,7 +191,7 @@ test('analysis: documented response maps field-for-field; scores pass through un
   assert.deepEqual(result.recommendedImprovements, []);
   assert.equal(result.suggestedPricingStrategy, null);
   assert.equal(result.suggestedMilestones.length, 3, 'milestones come from the real documented /v1/ai/milestones call');
-  assert.equal(result.suggestedMilestones[1].estimatedDays, 10);
+  assert.equal(result.suggestedMilestones[1].estimatedDays, 5);
   assert.ok(!JSON.stringify(result).includes(TEST_TOKEN));
 });
 

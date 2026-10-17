@@ -35,7 +35,7 @@ function createMockSocket(opts: { id?: string } = {}) {
 	};
 }
 
-type StreamEvt = { type: 'started' } | { type: 'delta'; chunk: string } | { type: 'citations'; citations: any[] } | { type: 'completed' };
+type StreamEvt = { type: 'started' } | { type: 'delta'; chunk: string } | { type: 'citations'; citations: any[]; searchSuggestionsHtml?: unknown } | { type: 'completed' };
 
 function fakeStream(events: StreamEvt[], opts: { failAt?: number; error?: unknown; signal?: AbortSignal; pauseAt?: number; pause?: Promise<void> } = {}) {
 	return (async function* () {
@@ -129,6 +129,23 @@ test('help:ask: citations are relayed as plain {docId,title}', async (t) => {
 	assert.deepEqual(c?.payload.citations, [{ docId: 'd1', title: 'سياسة الضمان' }]);
 });
 
+test('help:citations forwards bounded provider suggestions as text without raw objects or overflow', async t => {
+  const html = '<div class="suggestions">Search suggestions</div>';
+  for (const value of [html, 'x'.repeat(64000), { html }, 'x'.repeat(64001)]) {
+    const { register, restore } = await loadGateway(t, { stream: () => fakeStream([
+      { type: 'delta', chunk: 'إجابة' }, { type: 'citations', citations: [{ docId: 'web-1', title: 'Source', raw: 'provider-object' }], searchSuggestionsHtml: value }, { type: 'completed' },
+    ]) });
+    const s = createMockSocket(); register(s.socket);
+    await s.handlers['help:ask']({ question: 'اشرح API', webSearch: true });
+    const event = s.emitted.find(item => item.event === 'help:citations');
+    assert.deepEqual(event?.payload.citations, [{ docId: 'web-1', title: 'Source' }]);
+    if (typeof value === 'string' && value.length <= 64000) assert.equal(event?.payload.searchSuggestionsHtml, value);
+    else assert.equal('searchSuggestionsHtml' in event!.payload, false);
+    assert.equal(JSON.stringify(s.emitted).includes('provider-object'), false);
+    restore();
+  }
+});
+
 // ── role + payload minimisation ─────────────────────────────────────────
 
 test('help:ask: every dashboard role uses the same real engine; role is never sent upstream nor taken from the payload', async (t) => {
@@ -138,7 +155,9 @@ test('help:ask: every dashboard role uses the same real engine; role is never se
 		register(s.socket);
 		await s.handlers['help:ask']({ question: 'كيف أبدأ؟', role: 'admin', userId: 'spoofed', accountType: 'SUPER_ADMIN' });
 		assert.equal(s.events().at(-1), 'help:answer_complete', `role ${role} served`);
-		assert.deepEqual(Object.keys(calls.stream[0].body), ['question'], 'only the question goes upstream');
+		assert.deepEqual(Object.keys(calls.stream[0].body), ['skin', 'mode', 'question'], 'only character selection, answer mode and question go upstream');
+		assert.equal(calls.stream[0].body.mode, 'general');
+		assert.equal(calls.stream[0].body.skin, 'scout');
 		assert.equal(calls.stream[0].body.question, 'كيف أبدأ؟');
 		restore();
 	}
@@ -162,7 +181,7 @@ test('help:ask: legacy {question,answer} history is converted to the upstream-va
 
 // ── failures ────────────────────────────────────────────────────────────
 
-test('help:ask: upstream in-stream help:error (no approved answer) → truthful NO_ANSWER with human fallback, no fabricated text', async (t) => {
+test('help:ask: an unresolved upstream failure has an availability error, never the removed knowledge-base refusal', async (t) => {
 	const { register } = await loadGateway(t, {
 		stream: () => fakeStream([{ type: 'started' }, { type: 'completed' }], { failAt: 1, error: new WaseetAiError(WaseetAiErrorCode.STREAM_ERROR, 'x', { humanSupportFallback: true }) }),
 	});
@@ -171,7 +190,7 @@ test('help:ask: upstream in-stream help:error (no approved answer) → truthful 
 	await s.handlers['help:ask']({ question: 'سؤال خارج قاعدة المعرفة' });
 	assert.deepEqual(s.events(), ['help:answer_start', 'help:error']);
 	const err = s.emitted[1].payload;
-	assert.equal(err.code, 'NO_ANSWER');
+	assert.equal(err.code, 'UNAVAILABLE');
 	assert.equal(err.humanSupportFallback, true);
 	assert.equal(s.emitted.some((e) => e.event === 'help:answer_chunk'), false);
 });
@@ -337,4 +356,82 @@ test('help:ask: no socket audio path — a client-sent speak flag is ignored and
 	assert.equal(s.events().at(-1), 'help:answer_complete');
 	assert.equal(s.events().some((e) => e.startsWith('help:audio')), false);
 	assert.equal('speak' in calls.stream[0].body, false);
+});
+
+test('help:ask: greeting intents (like "عامل ايه" or "السلام عليكم") are answered gracefully without calling upstream', async (t) => {
+	const { register, calls } = await loadGateway(t);
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'عامل ايه', clientRequestId: 'g1' });
+	assert.equal(calls.stream.length, 0);
+	assert.deepEqual(s.events(), ['help:answer_start', 'help:answer_chunk', 'help:answer_complete']);
+	assert.match(s.emitted[1].payload.chunk, /أهلاً وسهلاً بك/);
+	assert.equal(s.emitted[1].payload.clientRequestId, 'g1');
+});
+
+test('help:ask forwards the selected character for real questions and does not consume a greeting followed by a question', async (t) => {
+  const { register, calls } = await loadGateway(t);
+  const s = createMockSocket();
+  register(s.socket);
+  for (const skin of ['scout', 'classic']) {
+    await s.handlers['help:ask']({ question: 'أهلاً، إزاي أنشر مشروع؟', skin, clientRequestId: `skin_${skin}` });
+    assert.equal(calls.stream.at(-1)?.body.skin, skin);
+    assert.equal(calls.stream.at(-1)?.body.question, 'أهلاً، إزاي أنشر مشروع؟');
+  }
+  assert.equal(calls.stream.length, 2);
+});
+
+test('help:ask rejects invalid character values before upstream and greets the selected character', async (t) => {
+  const { register, calls } = await loadGateway(t);
+  const s = createMockSocket();
+  register(s.socket);
+  await s.handlers['help:ask']({ question: 'عامل ايه', skin: 'classic', dialect: 'egyptian', clientRequestId: 'classic_hello' });
+  assert.match(s.emitted.find(e => e.event === 'help:answer_chunk')?.payload.chunk, /أنا بيبو/);
+  await s.handlers['help:ask']({ question: 'سؤال حقيقي', skin: 'invalid', clientRequestId: 'invalid_skin' });
+  assert.equal(s.emitted.at(-1)?.payload.code, 'INVALID_INPUT');
+  assert.equal(calls.stream.length, 0);
+});
+
+test('help:ask answers dialect identity with the selected character and keeps real questions on AI', async t => {
+  const { register, calls } = await loadGateway(t);
+  for (const [skin, dialect, question, name] of [
+    ['scout', 'egyptian', 'انت مين؟', 'نديم'], ['classic', 'gulf', 'وش اسمك؟', 'بيبو'],
+    ['scout', 'english', 'Who are you?', 'Nadeem'], ['classic', 'english', "What's your name?", 'Bebo'],
+  ] as const) {
+    const s = createMockSocket(); register(s.socket);
+    await s.handlers['help:ask']({ question, skin, dialect });
+    assert.ok(s.emitted.find(e => e.event === 'help:answer_chunk')?.payload.chunk.includes(name));
+    assert.equal(s.events().at(-1), 'help:answer_complete');
+  }
+  assert.equal(calls.stream.length, 0);
+  for (const question of ['ما عاصمة اليابان؟', 'أهلاً، اشرح لي JavaScript', 'انت مين وازاي أتعلم البرمجة؟']) {
+    const s = createMockSocket(); register(s.socket);
+    await s.handlers['help:ask']({ question });
+    assert.equal(calls.stream.at(-1)?.body.question, question);
+    assert.equal(calls.stream.at(-1)?.body.mode, 'general');
+  }
+  const s = createMockSocket(); register(s.socket);
+  await s.handlers['help:ask']({ question: 'متى أفتح نزاع على الضمان؟', mode: 'general' });
+  assert.equal(calls.stream.at(-1)?.body.mode, 'policy');
+  assert.equal(calls.stream.length, 4);
+});
+
+test('help:ask forwards optional web search booleans, preserves policy and rejects non-boolean flags', async t => {
+  const { register, calls } = await loadGateway(t);
+  const s = createMockSocket(); register(s.socket);
+  for (const webSearch of [true, false]) {
+    await s.handlers['help:ask']({ question: 'اشرح JavaScript', webSearch });
+    assert.equal(calls.stream.at(-1)?.body.webSearch, webSearch);
+    assert.equal(calls.stream.at(-1)?.body.mode, 'general');
+  }
+  await s.handlers['help:ask']({ question: 'متى أفتح نزاع؟', mode: 'general', webSearch: true });
+  assert.equal(calls.stream.at(-1)?.body.mode, 'policy');
+  assert.equal(calls.stream.at(-1)?.body.webSearch, true);
+  await s.handlers['help:ask']({ question: 'اشرح JavaScript' });
+  assert.equal('webSearch' in calls.stream.at(-1)!.body, false);
+  for (const webSearch of ['true', 1, null]) {
+    await s.handlers['help:ask']({ question: 'اشرح JavaScript', webSearch });
+    assert.equal(s.emitted.at(-1)?.payload.code, 'INVALID_INPUT');
+  }
+  assert.equal(calls.stream.length, 4);
 });

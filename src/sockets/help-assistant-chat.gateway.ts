@@ -2,10 +2,22 @@ import { Socket } from 'socket.io';
 import { randomUUID } from 'node:crypto';
 import { logger } from '../config/logger';
 import { waseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
+import { readSearchSuggestionsHtml } from '../services/ai/waseet-ai/waseet-ai.grounding';
 import { WaseetAiErrorCode, normalizeWaseetAiError } from '../services/ai/waseet-ai/waseet-ai.errors';
-import type { HelpChatHistoryMessage } from '../services/ai/waseet-ai/waseet-ai.types';
+import type { HelpChatHistoryMessage, HelpChatRequest } from '../services/ai/waseet-ai/waseet-ai.types';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
 import { resolveHelpAssistantUser, type HelpAssistantRole } from './help-assistant-auth';
+import { assistantGreetingResponse, isGreetingIntent, resolveAssistantOptions, resolveAssistantMode } from '../services/ai/assistant-request';
+import { streamAssistantAnswer } from '../services/ai/assistant-answer';
+export { isGreetingIntent } from '../services/ai/assistant-request';
+
+export const GREETING_RESPONSE =
+	'أهلاً وسهلاً بك! أنا المساعد الذكي لمنصة وسيط AI للخدمات المهنية والضمان المالي (Escrow).\n\n' +
+	'أنا بخير ويسعدني تواصلك! يمكنني مساعدتك في:\n' +
+	'• شرح كيفية عمل الضمان المالي لحماية المعاملات.\n' +
+	'• خطوات نشر المشاريع، وتقديم العروض، وإدارة مراحل التسليم (Milestones).\n' +
+	'• توضيح آليات تقييم جودة التسليمات وحل النزاعات.\n\n' +
+	'كيف أستطيع مساعدتك اليوم؟';
 
 // Help AI Assistant + dashboard Avatar — ONE real engine for every
 // authenticated dashboard role (client / provider / marketer / admin).
@@ -52,12 +64,11 @@ export const HELP_MESSAGES = {
 	EMPTY: 'يرجى كتابة سؤالك أولاً.',
 	TOO_LONG: `السؤال طويل جداً (الحد الأقصى ${MAX_QUESTION_LENGTH} حرفاً)، يرجى اختصاره.`,
 	NOT_CONFIGURED: 'المساعد الذكي غير متاح حالياً. يمكنك التواصل مع فريق الدعم البشري للمساعدة.',
-	NO_ANSWER: 'لم يجد المساعد الذكي إجابة معتمدة لهذا السؤال في قاعدة المعرفة. يمكنك إعادة صياغة سؤالك أو التواصل مع فريق الدعم البشري.',
 	TIMEOUT: 'انتهت مهلة انتظار رد المساعد الذكي. يرجى المحاولة مرة أخرى.',
 	UNAVAILABLE: 'تعذر الحصول على رد من المساعد الذكي حالياً. يمكنك المحاولة مرة أخرى أو التواصل مع فريق الدعم البشري.',
 } as const;
 
-export type HelpErrorCode = 'AUTH_REQUIRED' | 'FORBIDDEN' | 'INVALID_INPUT' | 'RATE_LIMITED' | 'NOT_CONFIGURED' | 'NO_ANSWER' | 'TIMEOUT' | 'UNAVAILABLE';
+export type HelpErrorCode = 'AUTH_REQUIRED' | 'FORBIDDEN' | 'INVALID_INPUT' | 'RATE_LIMITED' | 'NOT_CONFIGURED' | 'TIMEOUT' | 'UNAVAILABLE';
 
 interface LegacyHistoryTurn {
 	question: string;
@@ -88,13 +99,9 @@ function mapFailure(error: unknown): { code: HelpErrorCode; message: string } {
 	const e = normalizeWaseetAiError(error);
 	switch (e.code) {
 		case WaseetAiErrorCode.STREAM_ERROR:
-			// Only an explicit upstream human_support_fallback flag means "no
-			// approved policy answers this" (knowledge-base gap). Any other
-			// in-stream error is a service failure and must not be reported to
-			// the user as a missing policy.
-			return e.humanSupportFallback === true
-				? { code: 'NO_ANSWER', message: HELP_MESSAGES.NO_ANSWER }
-				: { code: 'UNAVAILABLE', message: HELP_MESSAGES.UNAVAILABLE };
+			// Missing knowledge is handled by streamAssistantAnswer before here.
+			// Unresolved stream failures report service availability honestly.
+			return { code: 'UNAVAILABLE', message: HELP_MESSAGES.UNAVAILABLE };
 		case WaseetAiErrorCode.TIMEOUT:
 			return { code: 'TIMEOUT', message: HELP_MESSAGES.TIMEOUT };
 		case WaseetAiErrorCode.NOT_CONFIGURED:
@@ -107,6 +114,7 @@ function mapFailure(error: unknown): { code: HelpErrorCode; message: string } {
 export class HelpAssistantChatGateway {
 	/** One in-flight help stream per socket; a new question supersedes it. */
 	private readonly inFlight = new WeakMap<Socket, { clientRequestId: string; controller: AbortController }>();
+	private readonly requestSequence = new WeakMap<Socket, number>();
 
 	public register(socket: Socket): void {
 		socket.on('help:cancel', (payload: { clientRequestId?: unknown }) => {
@@ -114,7 +122,9 @@ export class HelpAssistantChatGateway {
 			if (current && payload?.clientRequestId === current.clientRequestId) current.controller.abort();
 		});
 
-		socket.on('help:ask', async (payload: { question?: unknown; history?: unknown; clientRequestId?: unknown }) => {
+		socket.on('help:ask', async (payload: { question?: unknown; history?: unknown; clientRequestId?: unknown; [key:string]:unknown }) => {
+			const sequence = (this.requestSequence.get(socket) || 0) + 1;
+			this.requestSequence.set(socket, sequence);
 			const clientRequestId =
 				typeof payload?.clientRequestId === 'string' && CLIENT_REQUEST_ID_PATTERN.test(payload.clientRequestId) ? payload.clientRequestId : randomUUID();
 			const fail = (code: HelpErrorCode, message: string, humanSupportFallback = false) =>
@@ -133,6 +143,7 @@ export class HelpAssistantChatGateway {
 				fail(auth.reason === 'FORBIDDEN' ? 'FORBIDDEN' : 'AUTH_REQUIRED', auth.reason === 'FORBIDDEN' ? HELP_MESSAGES.FORBIDDEN : HELP_MESSAGES.AUTH_REQUIRED);
 				return;
 			}
+			if (this.requestSequence.get(socket) !== sequence) return;
 
 			// 2. Input validation.
 			const question = typeof payload?.question === 'string' ? payload.question.trim() : '';
@@ -141,8 +152,23 @@ export class HelpAssistantChatGateway {
 
 			// 3. Rate limit per verified user id.
 			if (isSocketAiRateLimited(auth.userId)) return void fail('RATE_LIMITED', SOCKET_AI_RATE_LIMIT_MESSAGE);
+			this.inFlight.get(socket)?.controller.abort();
+			let settings: Partial<HelpChatRequest>;
+			try { settings = await resolveAssistantOptions(payload, auth.userId, auth.role); }
+			catch (error) { const denied = (error as {code?:string})?.code === 'FORBIDDEN'; return void fail(denied ? 'FORBIDDEN' : 'INVALID_INPUT', denied ? 'لا تملك صلاحية الوصول إلى سياق هذا المشروع.' : 'إعدادات المساعد غير صالحة.'); }
+			if (this.requestSequence.get(socket) !== sequence) return;
+			settings.mode = resolveAssistantMode(question, settings.mode);
 
-			// 4. Configuration.
+			// 4. Intent Routing: immediate friendly greeting unless disabled
+			const bypassGreeting = process.env.DISABLE_GREETING_FILTER === 'true' || process.env.BYPASS_GREETING_FILTER === 'true';
+			if (!bypassGreeting && isGreetingIntent(question)) {
+				socket.emit('help:answer_start', { clientRequestId });
+				socket.emit('help:answer_chunk', { clientRequestId, chunk: assistantGreetingResponse(settings) });
+				socket.emit('help:answer_complete', { clientRequestId });
+				return;
+			}
+
+			// 5. Configuration.
 			if (!waseetAiClient.isConfigured()) return void fail('NOT_CONFIGURED', HELP_MESSAGES.NOT_CONFIGURED, true);
 
 			await this.relay(socket, {
@@ -150,13 +176,15 @@ export class HelpAssistantChatGateway {
 				question,
 				history: toUpstreamHistory(payload?.history),
 				role: auth.role,
+				userId: auth.userId,
+				settings,
 			});
 		});
 	}
 
 	private async relay(
 		socket: Socket,
-		req: { clientRequestId: string; question: string; history: HelpChatHistoryMessage[]; role: HelpAssistantRole },
+		req: { clientRequestId: string; question: string; history: HelpChatHistoryMessage[]; role: HelpAssistantRole; userId: string; settings: Partial<HelpChatRequest> },
 	): Promise<void> {
 		const { clientRequestId } = req;
 		this.inFlight.get(socket)?.controller.abort();
@@ -176,8 +204,8 @@ export class HelpAssistantChatGateway {
 		};
 
 		try {
-			const body = req.history.length ? { question: req.question, history: req.history } : { question: req.question };
-			const stream = waseetAiClient.streamHelpChat(body, { signal: controller.signal, timeoutMs: STREAM_TIMEOUT_MS, requestId });
+			const body: HelpChatRequest = { ...req.settings, question: req.question, ...(req.history.length ? { history: req.history } : {}) };
+			const stream = streamAssistantAnswer(body, { signal: controller.signal, timeoutMs: STREAM_TIMEOUT_MS, requestId, actor: { userId: req.userId, role: req.role } }, waseetAiClient);
 
 			for await (const evt of stream) {
 				if (controller.signal.aborted) break;
@@ -188,7 +216,12 @@ export class HelpAssistantChatGateway {
 					// Only ever the plain string chunk — never a raw upstream object.
 					socket.emit('help:answer_chunk', { clientRequestId, chunk: evt.chunk });
 				} else if (evt.type === 'citations') {
-					socket.emit('help:citations', { clientRequestId, citations: evt.citations.map((c) => ({ docId: c.docId, title: c.title })) });
+					const searchSuggestionsHtml = readSearchSuggestionsHtml(evt.searchSuggestionsHtml);
+					socket.emit('help:citations', { clientRequestId, citations: evt.citations.map((c) => ({ docId: c.docId, title: c.title,
+						...(c.url ? {url:c.url} : {}), ...(c.section ? {section:c.section} : {}), ...(c.line ? {line:c.line} : {}), ...(c.version ? {version:c.version} : {}), ...(c.excerpt ? {excerpt:c.excerpt} : {}) })),
+						...(searchSuggestionsHtml !== undefined ? { searchSuggestionsHtml } : {}) });
+				} else if (evt.type === 'progress') {
+					socket.emit('help:progress', { clientRequestId, stage: evt.stage, ...(evt.message ? { message: evt.message } : {}), ...(evt.status ? { status: evt.status } : {}), ...(evt.runId ? { runId: evt.runId } : {}) });
 				} else if (evt.type === 'completed') break;
 			}
 
@@ -217,6 +250,9 @@ export class HelpAssistantChatGateway {
 			const mapped = mapFailure(error);
 			const e = normalizeWaseetAiError(error);
 			logger.warn(`[HelpAssistant] failed code=${e.code} status=${e.status ?? '-'} role=${req.role} requestId=${requestId}`);
+
+			// A policy gap never bypasses retrieval, actor permissions or the shared model gateway.
+
 			// Honest failure — never a canned/fabricated answer. Every AI
 			// failure offers the human-support path.
 			socket.emit('help:error', { clientRequestId, code: mapped.code, message: mapped.message, humanSupportFallback: true });
@@ -226,6 +262,7 @@ export class HelpAssistantChatGateway {
 			if (this.inFlight.get(socket)?.controller === controller) this.inFlight.delete(socket);
 		}
 	}
+
 }
 
 export const helpAssistantChatGateway = new HelpAssistantChatGateway();

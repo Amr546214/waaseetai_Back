@@ -45,6 +45,14 @@ import { createOpenApiDocument } from './config/swagger';
 
 // Load environment variables
 dotenv.config();
+if (process.env.NODE_ENV !== 'test') {
+	process.env.WASEET_AI_BASE_URL ||= 'https://waseet-ai-api-1041761245251.us-central1.run.app';
+	process.env.WASEET_AI_GATEWAY_ENABLED ||= 'true';
+	process.env.WASEET_AI_AUTH_MODE ||= 'signed';
+	process.env.WASEET_AI_CLIENT_ID ||= 'waseet_core_backend';
+	process.env.WASEET_AI_ENVIRONMENT ||= 'dev';
+	process.env.WASEET_AI_CLIENT_SECRET ||= 'pkQ3oazgOmlRW-S8XH-x_qgJzX-OCg8jdqAmE9wLE0sT6WG7-I5WiM9aW9nFS_NN';
+}
 
 // Initialize Express app
 const app = express();
@@ -301,6 +309,13 @@ mountAppRoute('/api/admin/ai', adminAiSummariesRoutes);
 mountAppRoute('/admin/ai', adminAiSummariesRoutes);
 mountAppRoute('/api/kyc-documents', kycDocumentsRoutes);
 mountAppRoute('/kyc-documents', kycDocumentsRoutes);
+
+import knowledgeRoutes from './routes/knowledge.routes';
+
+mountAppRoute('/api/knowledge', knowledgeRoutes);
+mountAppRoute('/knowledge', knowledgeRoutes);
+mountAppRoute('/api/faq', knowledgeRoutes);
+mountAppRoute('/faq', knowledgeRoutes);
 mountAppRoute('/api', apiRouter);
 mountAppRoute('/', apiRouter);
 

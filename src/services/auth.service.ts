@@ -241,6 +241,9 @@ export class AuthService {
 		const otpCode = crypto.randomInt(100000, 999999).toString();
 		const expiresAt = new Date(Date.now() + EMAIL_OTP_EXPIRY_MS);
 		await authRepository.createOtp(user.id, otpCode, OtpType.EMAIL, expiresAt, OtpPurpose.ACTIVATION);
+		if (process.env.NODE_ENV === 'development') {
+			console.log(`\n======================================================\n🔑 [LOCAL DEV ACTIVATION OTP] Email: ${user.email} -> CODE: ${otpCode}\n======================================================\n`);
+		}
 
 		// 5. Send it and WAIT for the SMTP result: the caller must be told when the email did not go out.
 		const emailSent = await this.sendActivationEmail(user.email, otpCode, 'register');
@@ -289,6 +292,9 @@ export class AuthService {
 			otpCode = crypto.randomInt(100000, 999999).toString();
 			await authRepository.deleteActivationOtps(user.id);
 			await authRepository.createOtp(user.id, otpCode, OtpType.EMAIL, new Date(Date.now() + EMAIL_OTP_EXPIRY_MS), OtpPurpose.ACTIVATION);
+			if (process.env.NODE_ENV === 'development') {
+				console.log(`\n======================================================\n🔑 [LOCAL DEV ACTIVATION OTP] Email: ${user.email} -> CODE: ${otpCode}\n======================================================\n`);
+			}
 		}
 
 		const emailSent = await this.sendActivationEmail(user.email, otpCode, reused ? 'resend-same-code' : 'resend-new-code');
@@ -564,6 +570,9 @@ export class AuthService {
 			code = crypto.randomInt(100000, 999999).toString();
 			await authRepository.deleteOtpsByPurpose(userId, OtpPurpose.LOGIN_EMAIL);
 			await authRepository.createOtp(userId, code, OtpType.EMAIL, new Date(Date.now() + EMAIL_OTP_EXPIRY_MS), OtpPurpose.LOGIN_EMAIL);
+		}
+		if (process.env.NODE_ENV === 'development') {
+			console.log(`\n======================================================\n🔑 [LOCAL DEV LOGIN OTP] Email: ${email} -> CODE: ${code}\n======================================================\n`);
 		}
 		try {
 			await notificationService.sendLoginOtpEmail(email, code);

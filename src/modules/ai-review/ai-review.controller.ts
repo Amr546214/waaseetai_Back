@@ -12,7 +12,7 @@ export class AiReviewController {
 
   suggestMilestones = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const dto: SuggestMilestonesDto = req.body;
+      const dto: SuggestMilestonesDto = req.body || {};
       if (!dto.title && !dto.description) {
         return next(new AppError('Title or description is required to suggest milestones', 400));
       }
@@ -20,7 +20,8 @@ export class AiReviewController {
       const milestones = await this.service.suggestMilestones({
         title: dto.title || '',
         description: dto.description || '',
-        totalAmount: dto.totalAmount
+        totalAmount: dto.totalAmount,
+        deliveryDays: dto.deliveryDays
       });
 
       res.status(200).json({

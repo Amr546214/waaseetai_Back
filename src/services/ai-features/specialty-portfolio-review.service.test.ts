@@ -122,3 +122,14 @@ test('advisory only: the service never updates a specialty (no status / tier / b
   const src = readFileSync(new URL('./specialty-portfolio-review.service.ts', import.meta.url), 'utf8').replace(/\/\/.*$/gm, '');
   assert.doesNotMatch(src, /providerSpecialty\.(update|updateMany|upsert)|badgeGrantedAt|SpecialtyVerificationStatus/);
 });
+
+test('latest cannot return a stale review after an owned work sample changes', async (t) => {
+  const samples = [{ ...SAMPLE }];
+  const { svc, calls } = await load(t, { samples });
+  await svc.evaluate('u1', 'ps1');
+  assert.equal((await svc.latest('u1', 'ps1')).status, 'READY');
+  samples[0].description = 'مشروع آخر بوصف مختلف ومحتوى جديد يحتاج مراجعة.';
+  assert.equal((await svc.latest('u1', 'ps1')).status, 'NOT_ENOUGH_DATA');
+  await svc.evaluate('u1', 'ps1');
+  assert.equal(calls.length, 2);
+});

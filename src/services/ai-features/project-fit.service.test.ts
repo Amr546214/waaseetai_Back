@@ -120,3 +120,32 @@ test('a Project (not ClientRequest) is read through its requirements[] and fixed
   assert.deepEqual(JSON.parse(calls[0].user).project.requirements, ['دفع إلكتروني']);
   assert.equal(r.analysis.overallFit, 'MEDIUM');
 });
+
+test('submitted comment, plan and actual provider profile/portfolio summaries are grounded and cached by their content', async (t) => {
+  const calls: any[] = [];
+  const state = { profile: { ...PROFILE, headline: 'React developer', bio: 'خدمات ويب. البريد owner@shop.com', portfolioItems: [{ title: 'متجر React', description: 'إدارة المخزون', tags: ['React'] }] } };
+  const svc = await load(t, (input: any) => {
+    assert.equal(input.proposal.message, 'أقدم تنفيذ متجر React مع إدارة المخزون');
+    return { overallFit: 'HIGH', summary: 'ملف React وعرض المتجر متوافقان مع المتطلبات.',
+      matchPoints: [{ text: 'React في الملف ومتطلبات الطلب والعرض.', basedOn: ['project.requiredSkills', 'provider.skills', 'proposal.message'] }], gaps: [] };
+  }, state, calls);
+  const proposal = { title: 'تنفيذ متجر', message: 'أقدم تنفيذ متجر React مع إدارة المخزون', outputs: 'متجر React', advantages: ['إدارة المخزون'], milestones: [{ title: 'تنفيذ', description: 'تطوير المتجر' }] };
+  const a = await svc.analyze('same-provider', 'req-1', proposal);
+  const b = await svc.analyze('same-provider', 'req-1', proposal);
+  assert.deepEqual(a.analysis, b.analysis);
+  assert.equal(calls.length, 1, 'unchanged comparison must reuse the cache');
+  const payload = JSON.parse(calls[0].user);
+  assert.equal(payload.provider.portfolioItems[0].title, 'متجر React');
+  assert.doesNotMatch(calls[0].user, /owner@shop.com/);
+  assert.equal('location' in payload.provider, false);
+  state.profile.bio = 'تغيرت نبذة العمل';
+  await svc.analyze('same-provider', 'req-1', proposal);
+  assert.equal(calls.length, 2, 'updated profile content must invalidate cached evidence');
+});
+
+test('years or progression level alone do not invent technical suitability when provider expertise is absent', async (t) => {
+  const calls: any[] = [];
+  const svc = await load(t, honest, { profile: { ...PROFILE, skills: [], providerSpecialties: [], mainSpecialty: null, subSpecialties: [], yearsOfExperience: 5 }, gamification: { currentLevelIndex: 3 } }, calls);
+  assert.equal((await svc.analyze('u1', 'req-1')).analysis, null);
+  assert.equal(calls.length, 0);
+});

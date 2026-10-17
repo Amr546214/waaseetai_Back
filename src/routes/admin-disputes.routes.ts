@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
-import { getDispute, getDisputeAiSummary, listDisputes, resolveDispute } from '../controllers/dispute.controller';
+import { getDispute, getDisputeAiSummary, listDisputes, resolveDispute } from '../controllers/admin-disputes.controller';
 
 const router = Router();
 router.use(authenticate, requireActiveUser, authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN));

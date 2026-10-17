@@ -59,11 +59,15 @@ export function buildProjectDescriptionRequest(input: { title: string; specialty
 
 /** Returns null when a documented required input is missing — `totalAmount`
  *  is required by the guide and is never defaulted. */
-export function buildMilestonesRequest(input: { title?: string; description?: string; totalAmount?: unknown }): MilestonesRequest | null {
-  const title = (input.title ?? '').trim();
+export function buildMilestonesRequest(input: { title?: string; description?: string; totalAmount?: unknown; deliveryDays?: number }): MilestonesRequest | null {
+  const title = typeof input.title === 'string' ? input.title.trim() : '';
+  const description = typeof input.description === 'string' ? input.description.trim() : '';
   const totalAmount = typeof input.totalAmount === 'string' ? Number(input.totalAmount) : input.totalAmount;
-  if (!title || !isFiniteNumber(totalAmount) || totalAmount <= 0) return null;
-  return { title, description: (input.description ?? '').trim(), totalAmount, currency: PROVIDER_SERVICE_CURRENCY };
+  if (!title || !description || !isFiniteNumber(totalAmount) || totalAmount <= 0 ||
+      !Number.isSafeInteger(Math.round(totalAmount * 100)) || Math.abs(totalAmount * 100 - Math.round(totalAmount * 100)) > 0.000001 ||
+      (input.deliveryDays !== undefined && (!Number.isSafeInteger(input.deliveryDays) || input.deliveryDays < 1))) return null;
+  return { title, description, totalAmount, currency: PROVIDER_SERVICE_CURRENCY,
+    ...(input.deliveryDays !== undefined ? { deliveryDays: input.deliveryDays } : {}) };
 }
 
 /**
@@ -74,29 +78,28 @@ export function buildMilestonesRequest(input: { title?: string; description?: st
  * its own totalAmount, which keeps the money figures consistent with the
  * user's current budget.
  *
- * The pre-existing exact-100% business rule is preserved: if the
- * percentages do not sum to 100 the difference is applied to the last
- * milestone; if that would push it outside 0..100 the response is invalid
- * (it is never silently rebalanced into something WaseetAI didn't say).
+ * Reject incomplete percentages rather than silently changing an AI suggestion.
  */
 export function mapMilestonesResponse(data: unknown): SuggestedMilestone[] {
-  if (!isObject(data) || !Array.isArray(data.milestones) || data.milestones.length === 0) {
+  if (!isObject(data) || !Array.isArray(data.milestones) || data.milestones.length === 0 || data.milestones.length > 12) {
     throw invalid('milestones must be a non-empty array');
   }
   const milestones: SuggestedMilestone[] = data.milestones.map((m: unknown, i: number) => {
     if (!isObject(m)) throw invalid(`milestone ${i} is not an object`);
     if (!nonEmptyString(m.title)) throw invalid(`milestone ${i} title missing`);
     if (typeof m.description !== 'string') throw invalid(`milestone ${i} description missing`);
-    if (!isFiniteNumber(m.days) || m.days <= 0) throw invalid(`milestone ${i} days missing or not positive`);
-    if (!isFiniteNumber(m.percentage) || m.percentage < 0 || m.percentage > 100) throw invalid(`milestone ${i} percentage missing or out of range`);
+    if (!Number.isInteger(m.days) || !isFiniteNumber(m.days) || m.days < 1 || m.days > 365) throw invalid(`milestone ${i} days missing or out of range`);
+    if (!isFiniteNumber(m.percentage) || m.percentage <= 0 || m.percentage > 100) throw invalid(`milestone ${i} percentage missing or out of range`);
+    if (m.amount !== undefined && (!isFiniteNumber(m.amount) || m.amount < 0)) throw invalid(`milestone ${i} amount invalid`);
     return { title: m.title.trim(), description: m.description.trim(), estimatedDays: m.days, percentage: m.percentage };
   });
 
   const total = milestones.reduce((sum, m) => sum + (m.percentage ?? 0), 0);
+  if (Math.abs(total - 100) > 0.001) throw invalid('percentages must sum to 100');
   if (total !== 100) {
     const last = milestones[milestones.length - 1];
     const corrected = (last.percentage ?? 0) + (100 - total);
-    if (corrected < 0 || corrected > 100) throw invalid('percentages cannot be balanced to 100');
+    if (corrected <= 0 || corrected > 100) throw invalid('percentages must sum to 100');
     last.percentage = corrected;
   }
   return milestones;
@@ -167,7 +170,7 @@ export function mapProjectAnalysisResponse(data: unknown, milestones: SuggestedM
   if (!nonEmptyString(data.executiveSummary)) throw invalid('executiveSummary missing');
   return {
     clarityScore: score(data.clarityScore, 'clarityScore'),
-    feasibilityScore: score(data.feasibilityScore, 'feasibilityScore'),
+    feasibilityScore: data.feasibilityScore === null ? null : score(data.feasibilityScore, 'feasibilityScore'),
     marketFitRating: normalizeMarketFitRating(data.marketFitRating),
     executiveSummary: data.executiveSummary.trim(),
     strengths: stringList(data.strengths, 'strengths'),

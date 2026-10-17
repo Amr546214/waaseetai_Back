@@ -2,9 +2,11 @@ import { prisma } from '../config/db';
 import { ProjectStatus, SpecialtyVerificationStatus } from '@prisma/client';
 import { logger } from '../config/logger';
 import type { ProviderContextPayload } from '../prompts/ai-matching.prompt';
+import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
+import { normalizeWaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
 
 // Matching is a deterministic rule engine over stored data; no AI generation.
-export type AiMatchingGenerationSource = 'DETERMINISTIC';
+export type AiMatchingGenerationSource = 'DETERMINISTIC' | 'SEMANTIC_EMBEDDING';
 
 export interface AiMatchingProjectItem {
   id: string;
@@ -208,7 +210,69 @@ export class AiMatchingEngineService {
         return [];
       }
 
-      // Deterministic multi-factor rule engine (no AI)
+      // If Waseet AI microservice is configured, query the matching engine
+      if (waseetAiClient.isConfigured()) {
+        try {
+          const aiResponse = await waseetAiClient.matchProjectsForProvider({
+            providerId,
+            provider: {
+              skills: providerContext.skills,
+              specialties: providerContext.specialties.map(s => s.name),
+              level: providerContext.level,
+            },
+            candidates: openProjects.map(p => ({
+              id: p.id,
+              title: p.title,
+              description: p.description || '',
+              requirements: p.requirements || [],
+              budget: realBudget(p) ?? undefined,
+              duration: p.deliveryDays || undefined,
+              category: p.specialty || undefined,
+              isOpen: true,
+              status: 'OPEN'
+            })),
+            limit: 3,
+          });
+
+          if (aiResponse && Array.isArray(aiResponse.aiMatchingProjects)) {
+            const projectMap = new Map(openProjects.map(p => [p.id, p]));
+            const results: AiMatchingProjectItem[] = [];
+            const seen = new Set<string>();
+
+            for (const match of aiResponse.aiMatchingProjects) {
+              const proj = projectMap.get(match.projectId);
+              if (!proj || seen.has(proj.id) || !['DETERMINISTIC', 'SEMANTIC_EMBEDDING'].includes(match.generationSource)) continue;
+              seen.add(proj.id);
+
+              const clientName = proj.client
+                ? `${proj.client.firstName || ''} ${proj.client.lastName || ''}`.trim()
+                : 'عميل Waseet AI';
+
+              results.push({
+                id: proj.id,
+                title: proj.title,
+                category: proj.specialty || 'خدمة تخصصية',
+                specialty: proj.specialty || 'تطوير وتصميم',
+                budget: realBudget(proj),
+                aiMatchScore: null,
+                matchReasons: Array.isArray(match.matchReasons) ? match.matchReasons.filter(reason => typeof reason === 'string').slice(0, 10) : [],
+                createdAt: proj.createdAt || new Date(),
+                deliveryDays: proj.deliveryDays || undefined,
+                clientName: clientName || 'عميل موثوق',
+                generationSource: match.generationSource as AiMatchingGenerationSource
+              });
+              if (results.length >= 3) break;
+            }
+
+            return results;
+          }
+        } catch (error: any) {
+          const failure = normalizeWaseetAiError(error);
+          logger.warn(`[AiMatchingEngineService] matching unavailable; using local rules code=${failure.code} status=${failure.status ?? '-'}`);
+        }
+      }
+
+      // Deterministic multi-factor rule engine (fallback or unconfigured)
       return this.computeFallbackTop3Matches(providerContext, openProjects);
     } catch (error: any) {
       logger.error(`[AiMatchingEngineService] Error matching projects: ${error.message}`, error);

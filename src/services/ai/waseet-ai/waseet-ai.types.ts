@@ -29,6 +29,7 @@ export interface MilestonesRequest {
   description: string;
   totalAmount: number;
   currency: string;
+  deliveryDays?: number;
 }
 export interface WaseetAiMilestone {
   title: string;
@@ -51,7 +52,7 @@ export interface ProjectAnalysisRequest {
 }
 export interface ProjectAnalysisResponse {
   clarityScore: number;
-  feasibilityScore: number;
+  feasibilityScore: number | null;
   marketFitRating: number | string;
   executiveSummary: string;
   strengths: string[];
@@ -70,7 +71,7 @@ export interface WaseetAiAssessmentOption {
   text: string;
 }
 export interface WaseetAiAssessmentQuestion {
-  id: string;
+  id: string | number;
   textAr: string;
   options: WaseetAiAssessmentOption[];
 }
@@ -126,22 +127,39 @@ export interface HelpChatHistoryMessage {
 }
 export interface HelpChatRequest {
   question: string;
+  skin?: 'scout' | 'classic';
+  mode?: 'policy' | 'general';
+  webSearch?: boolean;
   history?: HelpChatHistoryMessage[];
+  dialect?: 'egyptian' | 'saudi' | 'gulf' | 'msa' | 'english';
+  language?: 'ar' | 'ar-EG' | 'en';
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  profile?: 'fast' | 'balanced' | 'deep' | 'auto';
+  model?: string;
+  pageContext?: { path: string; project?: { id: string; title: string; description: string; requirements: string[]; status: string }; role?: string };
 }
 export interface WaseetAiCitation {
   docId: string;
   title: string;
+  url?: string;
+  section?: string;
+  line?: number;
+  version?: string;
+  excerpt?: string;
 }
 
 // AI2-04 — POST /v1/ai/avatar/chat (text + server-side Arabic speech)
 export interface AvatarChatRequest {
   message: string;
+  locale?: 'ar' | 'en';
+  includeBase64?: boolean;
 }
 export interface AvatarChatResponse {
   text: string;
   audio?: {
-    mimeType: string; // documented as "audio/mp3"
-    base64Audio: string;
+    status?: 'available' | 'unavailable' | 'omitted';
+    mimeType?: string;
+    base64Audio?: string;
   } | null;
 }
 
@@ -180,7 +198,8 @@ export type WaseetAiStreamEvent =
   | { type: 'question'; attemptId: string; question: WaseetAiStreamedQuestion }
   | { type: 'assessment_ready'; attemptId: string; totalQuestions: number; timeLimitMinutes: number; generationSource?: string }
   | { type: 'delta'; chunk: string }
-  | { type: 'citations'; citations: WaseetAiCitation[] }
+  | { type: 'citations'; citations: WaseetAiCitation[]; searchSuggestionsHtml?: string }
+  | { type: 'progress'; runId?: string; stage: string; message?: string; status?: string }
   | { type: 'completed' }
   | { type: 'unknown'; event: string; data: unknown };
 
@@ -202,12 +221,12 @@ export interface RequestDraftResponse {
   suggestedTitle: string;
   suggestedDescription: string;
   suggestedSubSpecialties: string[];
-  recommendedMinBudget: number;
-  recommendedMaxBudget: number;
+  recommendedMinBudget: number | null;
+  recommendedMaxBudget: number | null;
   suggestedDurationDays: number;
   complexityRating: string;
   personalizedNote: string;
-  aiMatchScoreEstimate: number;
+  aiMatchScoreEstimate: number | null;
 }
 
 /** POST /v1/ai/proposals/suggest — projectId is an opaque string; the service
@@ -224,7 +243,7 @@ export interface ProposalSuggestResponse {
   suggestedMessage: string;
   qualityScore: number;
   qualityTag: string;
-  priceAudit?: { recommendedMin: number; recommendedMax: number; priceTag: string; justification: string };
+  priceAudit?: { recommendedMin: number | null; recommendedMax: number | null; priceTag: string | null; justification: string };
   suggestedAdvantages?: string[];
 }
 
@@ -240,14 +259,14 @@ export interface PerformanceSummaryRequest {
   disputedProjectsCount: number;
 }
 export interface PerformanceSummaryResponse {
-  executionQuality: number;
-  onTimeDelivery: number;
-  communication: number;
-  clientSatisfaction: number;
-  onTimeCompletionRate: number;
-  repeatClientRate: number;
-  highRatingServicesRate: number;
-  conflictFreeDeliveryRate: number;
+  executionQuality: number | null;
+  onTimeDelivery: number | null;
+  communication: number | null;
+  clientSatisfaction: number | null;
+  onTimeCompletionRate: number | null;
+  repeatClientRate: number | null;
+  highRatingServicesRate: number | null;
+  conflictFreeDeliveryRate: number | null;
 }
 
 /** POST /v1/ai/profile/skills — specialtyName drives the output. */
@@ -299,7 +318,10 @@ export interface BusinessModelAuditRequest {
   pricing: { amount: number };
 }
 export interface BusinessModelAuditResponse {
-  isApproved: boolean;
+  /** Newer advisory audits defer approval to a human and return null. */
+  isApproved: boolean | null;
+  status?: 'REQUIRES_HUMAN_REVIEW';
+  scoreBasis?: 'OFFERING_COMPLETENESS_RUBRIC';
   score: number;
   summary: string;
   strengths: string[];
@@ -324,8 +346,95 @@ export interface EnrichProposalRequest {
 }
 export interface EnrichProposalResponse {
   id: string;
-  aiMatchScore: number;
+  aiMatchScore: number | null;
+  qualityScore?: number;
+  scoreBasis?: 'PROPOSAL_QUALITY';
   aiQualityTag: string;
-  aiPriceTag: string;
+  aiPriceTag: string | null;
   aiFeedback: { summary: string };
+}
+
+// AI-13 — POST /v1/ai/matching/projects-for-provider
+export interface CandidateProjectInput {
+  id: string;
+  title: string;
+  description?: string;
+  requirements?: string[];
+  budget?: number;
+  duration?: number;
+  category?: string;
+  isOpen?: boolean;
+  status?: string;
+}
+
+export interface ProviderProfileInput {
+  specialties?: string[];
+  skills?: string[];
+  experience?: number;
+  level?: string;
+  hourlyRate?: number;
+}
+
+export interface ProviderMatchingRequest {
+  providerId?: string;
+  provider?: ProviderProfileInput;
+  candidates?: CandidateProjectInput[];
+  limit?: number;
+  specialtyFilter?: string;
+  constraints?: {
+    budgetMin?: number;
+    budgetMax?: number;
+    maxDurationDays?: number;
+    category?: string;
+    requiredSkills?: string[];
+    excludedProjectIds?: string[];
+  };
+}
+
+export interface MatchedProjectItem {
+  projectId: string;
+  aiMatchScore: number | null;
+  matchReasons: string[];
+  generationSource: string;
+}
+
+export interface ProviderMatchingResponse {
+  aiMatchingProjects: MatchedProjectItem[];
+  summary: {
+    aiRating: number | null;
+  };
+}
+
+// AI2-06 — GET /v1/ai/assessments/:id/status
+export interface AssessmentStatusResponse {
+  attemptId: string;
+  status: string;
+  score: number | null;
+  isPassed: boolean | null;
+}
+
+/** POST /v1/knowledge/search; audience comes from a server-authenticated actor. */
+export interface KnowledgeSearchRequest {
+  query: string;
+  limit?: number;
+  locale?: string;
+  audience?: 'all' | 'client' | 'provider' | 'admin';
+}
+export interface KnowledgeSearchDocument {
+  documentId: string;
+  version: string;
+  title: string;
+  locale: string;
+  content: string;
+  status: 'APPROVED';
+  audience: 'all' | 'client' | 'provider' | 'admin';
+  createdAt: string;
+  approvedBy: string;
+  approvedAt: string;
+  ownerId?: string;
+  sourceUrl?: string;
+}
+export interface KnowledgeSearchResponse {
+  documents: KnowledgeSearchDocument[];
+  retrievalMode: 'hybrid' | 'lexical';
 }

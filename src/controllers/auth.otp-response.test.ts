@@ -6,7 +6,7 @@ process.env.OPENAI_API_KEY = 'test-key';
 process.env.JWT_SECRET = 'test-secret';
 
 function mockRes() {
-  const res: any = { statusCode: null, body: null };
+  const res: any = { statusCode: null, body: null, locals: {} };
   res.status = (c: number) => { res.statusCode = c; return res; };
   res.json = (b: any) => { res.body = b; return res; };
   res.cookie = () => res;

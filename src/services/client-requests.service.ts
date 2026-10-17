@@ -11,6 +11,7 @@ import type { RequestDraftResponse } from './ai/waseet-ai/waseet-ai.types';
 import { CreateClientRequestDto, ClientRequestAiSuggestDto } from '../dtos/create-client-request.dto';
 import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
+import { readProposalReview, proposalBudgetSuitability, proposalDeadlineSuitability, proposalRecommendationRanks } from './proposal-suitability';
 import {
 	mailTransporter,
 	getOtpEmailTemplate,
@@ -1081,8 +1082,10 @@ export class ClientRequestsService {
 		// proposal's own plan/price/days only — never project fit or price
 		// fairness — so it is exposed under quality-specific names.
 		const qualityMap = new Map<string, { tag: string | null; summary: string | null }>();
+		const reviewMap = new Map<string, ReturnType<typeof readProposalReview>>();
 		for (const pp of projectProposals) {
 			milestonesMap.set(pp.providerId, pp.milestones || []);
+			reviewMap.set(pp.providerId, readProposalReview(pp.aiFeedback));
 			const fb = pp.aiFeedback as { source?: unknown; summary?: unknown } | null;
 			qualityMap.set(pp.providerId, {
 				tag: pp.aiQualityTag || null,
@@ -1144,6 +1147,7 @@ export class ClientRequestsService {
 
 			// Merge milestones from ProjectProposal if available
 			const realMilestones = milestonesMap.get(prop.providerId) || [];
+			const review = reviewMap.get(prop.providerId);
 
 			return {
 				id: prop.id,
@@ -1152,7 +1156,13 @@ export class ClientRequestsService {
 				workPlan: prop.workPlan || '',
 				bidAmount: Number(prop.price || 0),
 				deliveryDays: prop.deliveryDays || 1,
-				aiMatchScore: prop.aiMatchScore || null,
+				aiMatchScore: prop.aiMatchScore ?? null,
+				aiQualityScore: review?.qualityScore ?? null,
+				aiProviderFit: review?.providerFit ?? null,
+				budgetSuitability: proposalBudgetSuitability(Number(prop.price), request.minBudget, request.maxBudget, request.budgetType),
+				deadlineSuitability: proposalDeadlineSuitability(prop.deliveryDays, request.expectedDurationDays),
+				aiRecommendationRank: null as number | null,
+				aiRecommendationBasis: [] as string[],
 				aiFairPriceMin: prop.aiFairPriceMin || null,
 				aiFairPriceMax: prop.aiFairPriceMax || null,
 				aiPriceTag: prop.aiPriceTag || null,
@@ -1191,6 +1201,20 @@ export class ClientRequestsService {
 				}))
 			};
 		});
+		// Every AI result was stored on submission. Viewing the page performs
+		// zero inference; ranks compare reviewed live offers without changing status.
+		const recommendationRanks = proposalRecommendationRanks(proposals);
+		for (const proposal of proposals) {
+			proposal.aiRecommendationRank = recommendationRanks.get(proposal.id) ?? null;
+			if (proposal.aiRecommendationRank !== null) {
+				const fitLabels = { HIGH: 'مرتفعة', MEDIUM: 'متوسطة', LOW: 'منخفضة' };
+				proposal.aiRecommendationBasis = [
+					`ملاءمة الملف والعرض لمتطلبات الطلب: ${fitLabels[proposal.aiProviderFit!.overallFit]}.`,
+					proposal.deadlineSuitability.summary, proposal.budgetSuitability.summary,
+					proposal.aiQualityScore !== null ? 'تقييم جودة نص العرض مسجل ومنفصل عن ملاءمة المقدم.' : 'تقييم جودة نص العرض غير متوفر.',
+				];
+			}
+		}
 
 		return {
 			id: request.id,
@@ -1220,6 +1244,7 @@ export class ClientRequestsService {
 			attachments,
 			proposalsCount: proposals.length,
 			proposals,
+			aiRecommendationPolicy: 'الملاءمة الفنية للملف والعرض أولًا، ثم توافق المدة والميزانية، ثم جودة نص العرض. البيانات غير المتوفرة تبقى ظاهرة كغير متوفرة؛ الاختيار النهائي لك.',
 			aiAnalysis: readAiAnalysis(request.aiAnalyzedSummary, request.aiComplexityRating),
 			client: {
 				name: (request.clientProfile?.user?.firstName || '') + ' ' + (request.clientProfile?.user?.lastName || ''),
