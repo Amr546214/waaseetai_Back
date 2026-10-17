@@ -1,6 +1,7 @@
 import { ProofFileType, ProofUploadStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
+import { privateFileExists } from '../utils/cloudinary-storage';
 import { isPrivateRef, parsePrivateRef } from '../utils/kyc-private-ref';
 
 // Batch B T1 (§3): proof documents of an approval request. A document counts only when it is a COMPLETED upload row that belongs to the SAME user
@@ -113,18 +114,62 @@ export async function uploadsOfSample(db: Db, sampleId: string) {
 	return rows.map(publicUpload);
 }
 
+/** The storage probe is swappable so tests run without Cloudinary; production uses the Cloudinary Admin API stat check. */
+export const proofStorage: { exists: (ref: string) => Promise<boolean> } = {
+	exists: ref => privateFileExists(ref)
+};
+
+const UNVERIFIED_MESSAGE = 'أحد ملفات الإثبات غير صالح أو لا يخص هذا الطلب؛ أعد رفعه';
+const SEGMENT = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Is `ref` a proof document this user may rely on for THIS provider specialty? Verified, in this order, never from the string shape alone:
+ *  1. SHAPE: a parsed private reference (never a URL / data URI / foreign string) under  waseetai/specialties/<specialty>/proofs/<file>
+ *     or the owner's accreditation folder  waseetai/accreditation/<userId>/proofs/<file>.
+ *  2. OWNERSHIP: specialty folder -> the specialty is the caller's own; accreditation folder -> the caller's own id.
+ *  3. REGISTRY STATE: if the server registered the file (AccreditationProofUpload by this exact ref), the row must be the caller's, for this specialty and
+ *     COMPLETED (UPLOADING / FAILED / CANCELLED or someone else's row refuses it). A ref that sits in another specialty's attachments is refused.
+ *     A ref in the accreditation folder must be backed by such a COMPLETED row (that folder is per user, not per request).
+ *  4. EXISTENCE: the object really exists in the storage (stat check).
+ * LEGACY: a file the server stored in the specialty's own folder before upload rows existed (no AccreditationProofUpload row) passes on 1+2+3+4.
+ */
+export async function verifyStoredProofRef(db: Db, input: { userId: string; providerSpecialtyId: string; ref: string }): Promise<boolean> {
+	const { userId, ref } = input;
+	if (!isPrivateRef(ref)) return false;
+	const parsed = parsePrivateRef(ref);
+	if (!parsed) return false;
+	const seg = parsed.publicId.split('/');
+	if (seg.length < 5 || seg[0] !== 'waseetai' || seg[3] !== 'proofs' || !seg.every(x => SEGMENT.test(x))) return false;
+	const ps = await db.providerSpecialty.findFirst({ where: { OR: [{ id: input.providerSpecialtyId }, { specialtyId: input.providerSpecialtyId }], providerProfile: { userId } }, select: { id: true } });
+	if (!ps) return false;
+	const inSpecialtyFolder = seg[1] === 'specialties' && (seg[2] === ps.id || seg[2] === input.providerSpecialtyId);
+	const inOwnAccreditationFolder = seg[1] === 'accreditation' && seg[2] === userId;
+	if (!inSpecialtyFolder && !inOwnAccreditationFolder) return false;
+	const rows = await db.accreditationProofUpload.findMany({ where: { privateRef: ref }, select: { userId: true, providerSpecialtyId: true, status: true } });
+	if (rows.some(r => r.userId !== userId || r.providerSpecialtyId !== ps.id || r.status !== ProofUploadStatus.COMPLETED)) return false;
+	if (inOwnAccreditationFolder && rows.length === 0) return false;
+	const elsewhere = await db.proofAttachment.count({ where: { fileUrl: ref, workSample: { providerSpecialtyId: { not: ps.id } } } });
+	if (elsewhere > 0) return false;
+	return proofStorage.exists(ref);
+}
+
 /**
  * The older multi-sample submit paths (POST /provider-specialty/submit-proof, POST /provider/specialties/step2-upload) store their proofs in the
  * specialty's own private folder and move the specialty to review. They obey the same rule as the main path: at least PROOF_MIN_FILES valid, completed,
- * owned proof documents. A proof is valid when it is a private reference (the file was really stored by the server before this check) inside THIS
- * specialty's folder; documents the user already has as COMPLETED uploads of this request (an edit) count too. Anything else named is refused.
+ * owned proof documents, VERIFIED through verifyStoredProofRef (existence in storage, ownership, registry state). Documents the user already has as COMPLETED
+ * uploads of this request (an edit) count too, each re-verified against storage. Anything else named is refused. This runs BEFORE any write.
  */
 export async function assertLegacySpecialtyProofs(db: Db, input: { userId: string; providerSpecialtyId: string; proofRefs: unknown[] }) {
 	const refs = [...new Set(input.proofRefs.filter((r): r is string => typeof r === 'string' && r.length > 0))];
-	const inOwnFolder = (r: string) => isPrivateRef(r) && !!parsePrivateRef(r)?.publicId.split('/').includes(input.providerSpecialtyId);
-	if (refs.some(r => !inOwnFolder(r))) throw fieldError('files', 'أحد ملفات الإثبات غير صالح أو لا يخص هذا الطلب؛ أعد رفعه');
+	const base = { userId: input.userId, providerSpecialtyId: input.providerSpecialtyId };
+	for (const ref of refs) {
+		if (!(await verifyStoredProofRef(db, { ...base, ref }))) throw fieldError('files', UNVERIFIED_MESSAGE);
+	}
 	if (refs.length >= PROOF_MIN_FILES) return { fresh: refs.length, existing: 0 };
-	const existing = await db.accreditationProofUpload.count({ where: { userId: input.userId, providerSpecialtyId: input.providerSpecialtyId, status: ProofUploadStatus.COMPLETED } });
+	const ps = await db.providerSpecialty.findFirst({ where: { OR: [{ id: input.providerSpecialtyId }, { specialtyId: input.providerSpecialtyId }], providerProfile: { userId: input.userId } }, select: { id: true } });
+	const rows = ps ? await db.accreditationProofUpload.findMany({ where: { userId: input.userId, providerSpecialtyId: ps.id, status: ProofUploadStatus.COMPLETED }, select: { privateRef: true } }) : [];
+	let existing = 0;
+	for (const row of rows) if (await verifyStoredProofRef(db, { ...base, ref: row.privateRef })) existing += 1;
 	if (existing < PROOF_MIN_FILES) throw fieldError('files', PROOF_REQUIRED_MESSAGE);
 	return { fresh: 0, existing };
 }

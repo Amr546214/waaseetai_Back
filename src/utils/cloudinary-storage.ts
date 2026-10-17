@@ -129,6 +129,23 @@ export function createPrivateDownloadUrl(ref: string, ttlSeconds: number): { url
 	return { url, expiresAt: new Date(expiresAtSec * 1000) };
 }
 
+/**
+ * Stat check of a stored private reference against the storage itself (Cloudinary Admin API, type=authenticated): true when the object exists,
+ * false when the storage answers "not found". Any other failure (network, quota, bad credentials) is thrown, so a caller fails CLOSED.
+ */
+export async function privateFileExists(ref: string): Promise<boolean> {
+	const parsed = parsePrivateRef(ref);
+	if (!parsed) return false;
+	ensureConfigured();
+	try {
+		const res: any = await cloudinary.api.resource(parsed.publicId, { resource_type: parsed.resourceType, type: 'authenticated' });
+		return !!res && res.public_id === parsed.publicId;
+	} catch (e: any) {
+		if ((e?.http_code ?? e?.error?.http_code) === 404) return false;
+		throw e;
+	}
+}
+
 export async function storeDataUriIfNeeded(value: string | null | undefined, folder: string, fileName: string): Promise<string | null | undefined> {
 	if (!value?.startsWith('data:')) return value;
 	return (await uploadDataUri(value, { folder, fileName })).url;
