@@ -680,6 +680,8 @@ export class MarketplaceService {
 				tags: parsedTags,
 				skills,
 				gallery,
+				// real owner user id (ServiceCatalog.providerId) vs the authenticated user, whatever the active role / account type; absent for a guest
+				...(requestingUser ? { isOwnService: s.providerId === requestingUser.id } : {}),
 				...(requestingUser && CLIENT_ACCOUNT_TYPES.includes(requestingUser.accountType)
 					? { eligibility: { hasActivePurchase: activeByServiceId.has(s.id), activeProjectId: activeByServiceId.get(s.id)?.id ?? null } }
 					: {})
@@ -815,13 +817,17 @@ export class MarketplaceService {
 	 * generationSource — never presented as AI-generated unless Gemini
 	 * actually produced it).
 	 */
-	async getAiRecommendations(body: any) {
+	async getAiRecommendations(body: any, requestingUser?: RequestingUser) {
 		const { query, category, subSpecialty, limit } = body || {};
 		const aiResult = await marketplaceAiService.generateAiRecommendations({ query, category, subSpecialty, limit });
+		// provider.id of a recommendation is the owner USER id; the flag spares the FE any guesswork (guests get no flag)
+		const recommendations = requestingUser
+			? aiResult.recommendations.map((r: any) => ({ ...r, isOwnService: r?.provider?.id === requestingUser.id }))
+			: aiResult.recommendations;
 		return {
 			success: true,
 			data: {
-				recommendations: aiResult.recommendations,
+				recommendations,
 				matchSummary: aiResult.bannerInsight,
 				smartSearchTags: aiResult.smartSearchTags,
 				generationSource: aiResult.generationSource
