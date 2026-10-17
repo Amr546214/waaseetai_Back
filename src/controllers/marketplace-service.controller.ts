@@ -106,7 +106,7 @@ export class MarketplaceServiceController {
 
 	async getAiRecommendations(req: Request, res: Response) {
 		try {
-			const result = await marketplaceService.getAiRecommendations(req.body);
+			const result = await marketplaceService.getAiRecommendations(req.body, req.user);
 			res.status(200).json(result);
 		} catch (error: any) {
 			res.status(400).json({ success: false, error: error.message });
