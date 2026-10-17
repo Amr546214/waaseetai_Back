@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { uploadMulterFile } from '../utils/cloudinary-storage';
 import { specialtyService } from '../services/specialty.service';
 import { prisma } from '../config/db';
+import { AppError } from '../utils/app-error';
 
 class SpecialtyController {
   async getCategories(req: Request, res: Response) {
@@ -66,9 +67,10 @@ class SpecialtyController {
         });
       }
 
-      const result = await specialtyService.uploadWorkSamples(providerSpecialtyId, samplesData);
+      const result = await specialtyService.uploadWorkSamples(providerSpecialtyId, samplesData, (req as any).user?.id);
       res.json({ success: true, data: result });
     } catch (error: any) {
+      if (error instanceof AppError) { res.status(error.statusCode).json({ success: false, message: error.message, ...(error.errors?.length ? { errors: error.errors } : {}) }); return; }
       res.status(500).json({ success: false, message: error.message });
     }
   }
