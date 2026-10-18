@@ -9,7 +9,7 @@ import { getCatalogForCategoryParam, resolveSkillIdsFromCatalog } from '../servi
 import { specialtyService } from '../services/specialty.service';
 import { ensureCloudinaryUrl, storeDataUriIfNeeded, storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { sanitizeText, isBlankText } from '../utils/sanitize-text';
-import { assertKycFileValues } from '../utils/kyc-value-guard';
+import { assertKycFileValues, isStoredValueUnchanged } from '../utils/kyc-value-guard';
 import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
 import { sessionService } from '../services/session.service';
 import { computeProviderCompletion } from '../utils/completion-calculators';
@@ -151,10 +151,12 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		}
 
 		// A VERIFIED account's identity (idNumber / dob) is frozen (409); '' / null never erase a stored value.
-		const storedIdentity = await prisma.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, dob: true, kycStatus: true, frontIdUrl: true, backIdUrl: true } });
+		const storedIdentity = await prisma.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, dob: true, kycStatus: true, frontIdUrl: true, backIdUrl: true, supportingDocsUrl: true, certUrls: true, avatarUrl: true, user: { select: { avatarUrl: true } } } });
 		assertVerifiedIdentityUnchanged(storedIdentity, details ?? {});
 
-		assertKycFileValues([identity?.frontId, identity?.backId, documents?.supportingDocs, ...(identity?.certs || [])], userId);
+		// A value the user already has stored in these fields and re-sends unchanged is "keep", not a new link (legacy file names / public URLs would otherwise be refused on every re-save).
+		const storedFileValues = [storedIdentity?.frontIdUrl, storedIdentity?.backIdUrl, storedIdentity?.supportingDocsUrl, ...(storedIdentity?.certUrls ?? [])];
+		assertKycFileValues([identity?.frontId, identity?.backId, documents?.supportingDocs, ...(identity?.certs || [])], userId, storedFileValues);
 		const [frontIdUrl, backIdUrl, supportingDocsUrl] = await Promise.all([
 			storeKycFileIfNeeded(identity?.frontId, `waseetai/providers/${userId}/identity`, 'front-id'),
 			storeKycFileIfNeeded(identity?.backId, `waseetai/providers/${userId}/identity`, 'back-id'),
@@ -165,7 +167,9 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		));
 
 		// The profile photo (ProviderProfile.avatarUrl is the one canonical column): only our own storage URL or an image data URI is stored; anything else is a 400 and nothing is saved.
-		const avatarUrl = normalized.value.avatarUrl ? await ensureCloudinaryUrl(normalized.value.avatarUrl, `waseetai/users/${userId}/avatar`, 'avatar') : undefined;
+		// The photo already stored on the account (e.g. the Google sign-in picture) that the wizard echoes back unchanged is kept as it is: never re-validated as a new link, never rewritten.
+		const avatarUnchanged = isStoredValueUnchanged(normalized.value.avatarUrl, [storedIdentity?.avatarUrl, storedIdentity?.user?.avatarUrl]);
+		const avatarUrl = normalized.value.avatarUrl && !avatarUnchanged ? await ensureCloudinaryUrl(normalized.value.avatarUrl, `waseetai/users/${userId}/avatar`, 'avatar') : undefined;
 
 		// A document that really differs from the stored one is a NEW identity submission. While the admin has not decided the previous one, it is refused (409), never queued twice.
 		const newFront = frontIdUrl && frontIdUrl !== storedIdentity?.frontIdUrl ? frontIdUrl : undefined;

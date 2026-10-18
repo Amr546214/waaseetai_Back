@@ -143,3 +143,20 @@ test('wiring: the only response that hands a reference to its caller opts out of
 	const offenders = ['controllers/client-profile.controller.ts', 'controllers/provider-profile.controller.ts', 'controllers/onboarding.controller.ts', 'controllers/kyc-documents.controller.ts'].filter(f => /allowPrivateRef/.test(read(f)));
 	assert.deepEqual(offenders, []);
 });
+
+// ── G4: stored-value echo ──
+import { isStoredValueUnchanged as _g4Unchanged, assertKycFileValue as _g4Assert } from './kyc-value-guard';
+test('G4 isStoredValueUnchanged: exact match with the user\'s stored value only; data: URIs, empty and near-misses never match', () => {
+  const stored = ['https://lh3.googleusercontent.com/a/X=s96-c', null, undefined, 'private:image:jpg:waseetai/providers/u1/identity/front-id'];
+  assert.equal(_g4Unchanged('https://lh3.googleusercontent.com/a/X=s96-c', stored), true);
+  assert.equal(_g4Unchanged('https://lh3.googleusercontent.com/a/X=s96-d', stored), false);
+  assert.equal(_g4Unchanged('', stored), false);
+  assert.equal(_g4Unchanged('data:image/png;base64,AAAA', ['data:image/png;base64,AAAA']), false);
+  assert.equal(_g4Unchanged('x', undefined), false);
+});
+test('G4 assertKycFileValue: foreign link still refused with the same message unless it equals the stored value', () => {
+  assert.throws(() => _g4Assert('https://evil.example.com/a.pdf', 'u1', ['https://other.example.com/b.pdf']), /رابط الملف غير مسموح به/);
+  assert.doesNotThrow(() => _g4Assert('https://evil.example.com/a.pdf', 'u1', ['https://evil.example.com/a.pdf']));
+  // a private ref of someone else's folder is still refused even if (impossibly) listed — only via the stored list of THIS user
+  assert.throws(() => _g4Assert('private:image:jpg:waseetai/providers/u2/identity/x', 'u1', []), /مرجع الملف غير صالح/);
+});
