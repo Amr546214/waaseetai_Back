@@ -25,15 +25,22 @@ export function normalizeClientSetupBody(body: unknown): { ok: true; body: Recor
   check('details', DETAILS); check('identity', IDENTITY); check('documents', DOCUMENTS); check('agreements', AGREEMENTS);
   if (errors.length) return { ok: false, errors };
 
-  const details: Record<string, any> = isObj(raw.details) ? { ...raw.details } : {};
-  const identity: Record<string, any> = isObj(raw.identity) ? { ...raw.identity } : {};
+  const hasDetailsObj = isObj(raw.details);
+  const details: Record<string, any> = hasDetailsObj ? { ...raw.details } : {};
+  const hasIdentityObj = isObj(raw.identity);
+  const identity: Record<string, any> = hasIdentityObj ? { ...raw.identity } : {};
   // the alias wins only when the canonical field is empty
+  let hasAlias = false;
   for (const key of ['bio', 'interests', 'idNumber', 'dob', 'occupation'] as const) {
     const alias = [raw[key], key === 'idNumber' || key === 'dob' ? identity[key] : undefined].find(present);
-    if (present(alias) && !present(details[key])) details[key] = alias;
+    if (present(alias) && !present(details[key])) { details[key] = alias; hasAlias = true; }
   }
   delete identity.idNumber; delete identity.dob;
-  const out: Record<string, any> = { ...raw, details, identity };
+  const out: Record<string, any> = {
+    ...raw,
+    details: hasDetailsObj || hasAlias ? details : raw.details,
+    identity: hasIdentityObj ? identity : raw.identity
+  };
   for (const key of ['bio', 'interests', 'idNumber', 'dob', 'occupation']) delete out[key];
   return { ok: true, body: out };
 }

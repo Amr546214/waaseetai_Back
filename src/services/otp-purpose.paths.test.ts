@@ -148,7 +148,9 @@ test('#34 revokeAll only touches the account sessions that are still active and 
 test('static: no OTP creation without a purpose anywhere in the services', () => {
   const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
   const auth = read('./auth.service.ts');
-  assert.equal((auth.match(/createOtp\(/g) || []).length, (auth.match(/OtpPurpose\.ACTIVATION\)/g) || []).length);
+  const createOtpCalls = auth.match(/createOtp\(/g) || [];
+  const createOtpWithPurpose = auth.match(/createOtp\([\s\S]*?OtpPurpose\.[A-Z_]+/g) || [];
+  assert.equal(createOtpCalls.length, createOtpWithPurpose.length);
   assert.doesNotMatch(read('../repositories/auth.repository.ts'), /findValidOtp/);
   assert.match(read('./provider-profile.service.ts'), /purpose: OtpPurpose\.SENSITIVE_CHANGE, requestId: request\.id/);
 });

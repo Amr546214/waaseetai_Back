@@ -20,7 +20,7 @@ export const AI_AUDIT_UNAVAILABLE_MESSAGE =
   'تعذر إكمال التدقيق الذكي لنموذج العمل حالياً. لم يتم تغيير النموذج ويبقى ضمن مسار المراجعة الإدارية.';
 
 export type AiAuditOutcome =
-  | { outcome: 'audited'; serviceId: string; score: number; isApproved: boolean }
+  | { outcome: 'audited'; serviceId: string; score: number; isApproved: boolean | null }
   | { outcome: 'skipped'; serviceId: string; reason: 'NO_CATEGORY' };
 
 const unavailable = (code: string): AppError =>
@@ -91,7 +91,7 @@ export class AiAuditService {
 
     const score = verdict?.score;
     if (
-      !verdict || typeof verdict.isApproved !== 'boolean' || typeof score !== 'number' || !Number.isFinite(score) ||
+      !verdict || (verdict.isApproved !== null && typeof verdict.isApproved !== 'boolean') || typeof score !== 'number' || !Number.isFinite(score) ||
       score < 0 || score > 100 || typeof verdict.summary !== 'string' ||
       !isStringArray(verdict.strengths) || !isStringArray(verdict.issues) || !isStringArray(verdict.recommendations)
     ) {
@@ -99,7 +99,7 @@ export class AiAuditService {
       throw unavailable(WaseetAiErrorCode.INVALID_RESPONSE);
     }
 
-    const { isApproved, summary, strengths, issues, recommendations } = verdict;
+    const { isApproved, summary, strengths, issues, recommendations, status, scoreBasis } = verdict;
     // ADVISORY fields only — status / approvedAt / auditRejectionReason are never written.
     await prisma.serviceCatalog.update({
       where: { id: serviceId },
@@ -107,7 +107,10 @@ export class AiAuditService {
         aiScore: Math.round(score),
         aiReviewSummary: summary,
         aiReviewDetails: { source: 'WASEET_AI', strengths, issues, recommendations } as any,
-        aiAuditReport: { source: 'WASEET_AI', isApproved, score, summary, strengths, issues, recommendations } as any,
+        aiAuditReport: {
+          source: 'WASEET_AI', isApproved, score, summary, strengths, issues, recommendations,
+          ...(status ? { status } : {}), ...(scoreBasis ? { scoreBasis } : {}),
+        } as any,
         aiAuditScore: score,
         aiAuditFeedback: { summary, recommendations } as any,
       },

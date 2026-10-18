@@ -104,20 +104,20 @@ async function loadServiceForAiSuggest(t: TestContext, opts: { requestDraft?: (b
   return Object.assign(clientRequestsService, { calls });
 }
 
-test('generateAiSuggest: maps the WaseetAI response onto the app shape and sends only verified request fields', async (t) => {
+test('generateAiSuggest: maps the WaseetAI response onto the app shape and sends verified request fields including subSpecialties', async (t) => {
   const service = await loadServiceForAiSuggest(t, {});
   const result = await service.generateAiSuggest('client-1', {
     title: ' مسودة ', description: ' وصف مبدئي ', specialtyName: 'تطوير الويب', specialtyId: 'sp-1', subSpecialties: ['React']
   } as any);
 
-  assert.deepEqual(service.calls, [{ title: 'مسودة', description: 'وصف مبدئي', specialtyName: 'تطوير الويب', currency: 'USD' }]);
+  assert.deepEqual(service.calls, [{ title: 'مسودة', description: 'وصف مبدئي', specialtyName: 'تطوير الويب', subSpecialties: ['React'], currency: 'USD' }]);
   assert.deepEqual(result, draftFixture());
 });
 
-test('generateAiSuggest: an empty draft sends no title/description (undefined, not invented)', async (t) => {
+test('generateAiSuggest: an empty draft sends fallback specialty context so WaseetAI can generate a full draft', async (t) => {
   const service = await loadServiceForAiSuggest(t, {});
   await service.generateAiSuggest('client-1', {} as any);
-  assert.deepEqual(service.calls[0], { title: undefined, description: undefined, specialtyName: undefined, currency: 'USD' });
+  assert.deepEqual(service.calls[0], { title: 'مشروع في مجال عام', description: 'مطلوب تنفيذ مشروع في مجال عام في تخصص عام.', specialtyName: 'عام', currency: 'USD' });
 });
 
 for (const score of [0, 25, 100]) {

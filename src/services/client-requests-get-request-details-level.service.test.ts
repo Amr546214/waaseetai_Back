@@ -44,6 +44,7 @@ function proposalFixture(overrides: Partial<{ id: string; providerId: string; pr
 
 async function loadService(t: TestContext, opts: { proposals?: ReturnType<typeof proposalFixture>[]; projectProposals?: any[] } = {}) {
   const clientRequestFindFirstArgs: any[] = [];
+  const inference = t.mock.fn(async () => { throw new Error('request views must never generate AI reviews'); });
   const prismaMock: any = {
     dispute: { findFirst: async () => null, findMany: async () => [], count: async () => 0 },
     clientRequest: {
@@ -76,9 +77,13 @@ async function loadService(t: TestContext, opts: { proposals?: ReturnType<typeof
     message: { findMany: async () => [] },
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+  t.mock.module('./ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: {
+    requestDraft: inference, analyzeProject: inference, enrichProposal: inference,
+  } } });
+  t.mock.module('./ai-features/project-fit.service', { namedExports: { projectFitService: { analyze: inference } } });
   const moduleUrl = `./client-requests.service.ts?fixture=${Date.now()}-${Math.random()}`;
   const mod = await import(moduleUrl);
-  return { service: mod.clientRequestsService as { getRequestDetails: (userId: string, requestId: string) => Promise<any> }, clientRequestFindFirstArgs };
+  return { service: mod.clientRequestsService as { getRequestDetails: (userId: string, requestId: string) => Promise<any> }, clientRequestFindFirstArgs, inference };
 }
 
 test('1) getRequestDetails returns the real canonical providerLevel on each proposal.provider', async t => {
@@ -203,4 +208,28 @@ test('12) no stored review -> null quality fields, never invented', async t => {
   const p = (await service.getRequestDetails('client-1', 'req-1')).proposals[0];
   assert.equal(p.aiQualityTag, null);
   assert.equal(p.aiQualitySummary, null);
+});
+
+test('request details returns stored fit evidence and pure zero quality without inferring on a page view', async t => {
+  const fit = { source: 'LLM', overallFit: 'HIGH', summary: 'المقدم مناسب للطلب.', matchPoints: [{ text: 'مهارة مطلوبة موجودة', basedOn: ['project.requiredSkills', 'provider.skills'] }], gaps: [] };
+  const { service, inference } = await loadService(t, { proposals: [proposalFixture()], projectProposals: [
+    { providerId: 'provider-1', milestones: [], aiQualityTag: 'Average', aiFeedback: { source: 'WASEET_AI', qualityScore: 0, summary: 'نص ضعيف', providerFit: fit } },
+  ] });
+  const first = await service.getRequestDetails('client-1', 'req-1');
+  const second = await service.getRequestDetails('client-1', 'req-1');
+  assert.equal(first.proposals[0].aiQualityScore, 0);
+  assert.deepEqual(first.proposals[0].aiProviderFit, fit);
+  assert.equal(first.proposals[0].aiRecommendationRank, 1);
+  assert.equal(first.proposals[0].budgetSuitability.status, 'WITHIN_RANGE');
+  assert.equal(first.proposals[0].deadlineSuitability.status, 'WITHIN_DEADLINE');
+  assert.deepEqual(first.proposals, second.proposals);
+  assert.equal(inference.mock.callCount(), 0, 'both page views consume stored reviews without a model call');
+});
+
+test('request details with no offers produces no recommendation or invented AI review', async t => {
+  const { service, inference } = await loadService(t);
+  const result = await service.getRequestDetails('client-1', 'req-1');
+  assert.deepEqual(result.proposals, []);
+  assert.equal(result.proposalsCount, 0);
+  assert.equal(inference.mock.callCount(), 0);
 });

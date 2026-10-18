@@ -134,6 +134,7 @@ export class AssessmentGateway {
           claimAttemptId: attemptId,
           providerSpecialtyId: providerSpecId,
           specialtyName,
+          userId,
           signal: abortController.signal,
           onQuestion: (question, index, total) => {
             const streamPayload = this.questionEvent(attemptId, question, index, total);

@@ -45,7 +45,10 @@ export const clientRequestAiSuggestSchema = z.object({
   description: z.string().max(2000, 'وصف المشروع يجب ألا يتجاوز 2000 حرف').optional(),
   specialtyId: z.string().optional(),
   specialtyName: z.string().optional(),
-  subSpecialties: z.array(z.string()).optional().default([])
+  subSpecialties: z.array(z.string()).optional().default([]),
+  availableSkills: z.array(z.string()).optional().default([]),
+  deliveryDays: z.number().int().positive().nullable().optional(),
+  fullDraft: z.boolean().optional().default(false)
 });
 
 export type ClientRequestAiSuggestDto = z.infer<typeof clientRequestAiSuggestSchema>;

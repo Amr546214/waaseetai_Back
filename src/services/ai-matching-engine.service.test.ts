@@ -223,3 +223,92 @@ test('ai-matching-engine.service has no Gemini usage and reports DETERMINISTIC o
   assert.doesNotMatch(src, /gemini|generateStructured|generateStream/i);
   assert.doesNotMatch(src, /generationSource: '(?!DETERMINISTIC)/);
 });
+
+test('getTop3MatchingProjects: delegates to waseetAiClient.matchProjectsForProvider when configured', async (t) => {
+  createMockPrisma(t, {
+    openProjects: [
+      baseProject({ id: 'proj-1', title: 'مشروع متجر', specialty: 'تطوير الويب' }),
+      baseProject({ id: 'proj-2', title: 'مشروع مدونة', specialty: 'تطوير الويب' })
+    ]
+  });
+
+  const matchSpy = t.mock.fn(async () => ({
+    aiMatchingProjects: [
+      { projectId: 'proj-2', aiMatchScore: null, matchReasons: ['تطابق تخصص'], generationSource: 'DETERMINISTIC' }
+    ],
+    summary: { aiRating: null }
+  }));
+
+  t.mock.module('./ai/waseet-ai/waseet-ai.client', {
+    namedExports: {
+      waseetAiClient: {
+        isConfigured: () => true,
+        matchProjectsForProvider: matchSpy
+      }
+    }
+  });
+
+  const moduleUrl = `./ai-matching-engine.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { AiMatchingEngineService } = await import(moduleUrl);
+  const service = new AiMatchingEngineService();
+
+  const result = await service.getTop3MatchingProjects('provider-1');
+
+  assert.equal(matchSpy.mock.calls.length, 1);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, 'proj-2');
+  assert.equal(result[0].generationSource, 'DETERMINISTIC');
+});
+
+test('getTop3MatchingProjects: falls back to local rule engine when waseetAiClient fails', async (t) => {
+  createMockPrisma(t, {
+    openProjects: [
+      baseProject({ id: 'proj-1', title: 'مشروع متجر', specialty: 'تطوير الويب' })
+    ]
+  });
+
+  t.mock.module('./ai/waseet-ai/waseet-ai.client', {
+    namedExports: {
+      waseetAiClient: {
+        isConfigured: () => true,
+        matchProjectsForProvider: async () => { throw new Error('Waseet AI connection timeout'); }
+      }
+    }
+  });
+
+  const moduleUrl = `./ai-matching-engine.service.ts?fixture=${Date.now()}-${Math.random()}`;
+  const { AiMatchingEngineService } = await import(moduleUrl);
+  const service = new AiMatchingEngineService();
+
+  const result = await service.getTop3MatchingProjects('provider-1');
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, 'proj-1');
+  assert.equal(result[0].generationSource, 'DETERMINISTIC');
+});
+
+test('matching keeps only distinct owned candidates and never exposes a semantic similarity as a success percentage', async (t) => {
+  createMockPrisma(t, { openProjects: [baseProject({ id: 'proj-1', specialty: 'تطوير الويب' })] });
+  t.mock.module('./ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: {
+    isConfigured: () => true, matchProjectsForProvider: async () => ({ aiMatchingProjects: [
+      { projectId: 'outside', generationSource: 'SEMANTIC_EMBEDDING', aiMatchScore: 99, matchReasons: [] },
+      { projectId: 'proj-1', generationSource: 'SEMANTIC_EMBEDDING', aiMatchScore: 99, matchReasons: ['تشابه نصي'] },
+      { projectId: 'proj-1', generationSource: 'SEMANTIC_EMBEDDING', aiMatchScore: 98, matchReasons: [] },
+    ], summary: { aiRating: null } })
+  } } });
+  const { AiMatchingEngineService } = await import(`./ai-matching-engine.service.ts?fixture=${Date.now()}-${Math.random()}`);
+  const result = await new AiMatchingEngineService().getTop3MatchingProjects('provider-1');
+  assert.deepEqual(result.map(item => item.id), ['proj-1']);
+  assert.equal(result[0].aiMatchScore, null);
+  assert.equal(result[0].generationSource, 'SEMANTIC_EMBEDDING');
+});
+
+test('a configured matching engine returning no matches does not invent recommendations through local fallback', async (t) => {
+  createMockPrisma(t, { openProjects: [baseProject({ id: 'proj-1', specialty: 'تطوير الويب' })] });
+  t.mock.module('./ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: {
+    isConfigured: () => true, matchProjectsForProvider: async () => ({ aiMatchingProjects: [], summary: { aiRating: null } })
+  } } });
+  const { AiMatchingEngineService } = await import(`./ai-matching-engine.service.ts?fixture=${Date.now()}-${Math.random()}`);
+  assert.deepEqual(await new AiMatchingEngineService().getTop3MatchingProjects('provider-1'), []);
+});
+

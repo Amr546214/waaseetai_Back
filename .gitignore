@@ -50,3 +50,7 @@ backend/sessions/
 
 /src/generated/prisma
 .env
+
+.env.local
+.env.ai-local
+work/ai-state/

@@ -26,6 +26,11 @@ async function load(t: TestContext, opts: { profile?: any; rows?: any[]; output?
     warn: (...a: any[]) => logs.push(a), debug: () => {}, info: () => {}, error: () => {}
   } } });
   t.mock.module('./ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: {
+    suggestBio: async (body: any) => {
+      sent.push(body);
+      if (opts.error !== undefined) throw opts.error;
+      return opts.output ?? { suggestedBio: 'مطور مواقع متخصص في تطوير المواقع باستخدام HTML.' };
+    },
     suggestSkills: async (body: any) => {
       sent.push(body);
       if (opts.error !== undefined) throw opts.error;
@@ -36,12 +41,13 @@ async function load(t: TestContext, opts: { profile?: any; rows?: any[]; output?
   return { service, reads, sent, logs, writes: () => writes };
 }
 
-test('bio: disabled with AI_FEATURE_UNAVAILABLE 503 and a specific Arabic message; no DB read, no upstream call', async t => {
+test('bio: sends providerId = authenticated user id and context from DB; returns suggestedBio with zero writes', async t => {
   const x = await load(t);
-  await assert.rejects(x.service.suggestBio('p', { jobTitle: 'مطور' }), (e: any) =>
-    e.statusCode === 503 && e.code === 'AI_FEATURE_UNAVAILABLE' && /النبذة التعريفية/.test(e.message));
-  assert.equal(x.reads.length, 0);
-  assert.equal(x.sent.length, 0);
+  const result = await x.service.suggestBio('p', { jobTitle: 'مطور' });
+  assert.equal(result.suggestedBio, 'مطور مواقع متخصص في تطوير المواقع باستخدام HTML.');
+  assert.equal(x.reads.length, 1);
+  assert.equal(x.sent.length, 1);
+  assert.equal(x.sent[0].providerId, 'p');
   assert.equal(x.writes(), 0);
 });
 

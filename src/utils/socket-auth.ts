@@ -4,6 +4,7 @@ import { prisma } from '../config/db';
 import { sessionService } from '../services/session.service';
 import { isSocketConnectLimited, SOCKET_CONNECT_RATE_LIMIT_CODE, SOCKET_CONNECT_RATE_LIMIT_MESSAGE } from './socket-connect-rate-limit';
 import { ACCOUNT_NOT_ACTIVE_CODE, ACCOUNT_NOT_ACTIVE_MESSAGE } from './socket-registry';
+import { runWithWaseetActor, waseetActorRole } from '../services/ai/waseet-ai/waseet-ai.auth';
 
 // One handshake check for every socket gateway (AUD-FND-000035): the token must be a valid JWT, its session must be live (not revoked / expired)
 // and the account must be ACTIVE and not banned. PENDING_VERIFICATION, SUSPENDED and SUSPENDED_REVIEW are all refused.
@@ -56,6 +57,13 @@ const refusal = (reason: string) => Object.assign(new Error(reason === 'NOT_ACTI
 export function socketAuthMiddleware(options: { required: boolean; onAuthenticated?: (socket: Socket, userId: string) => void }) {
 	return async (socket: Socket, next: (err?: Error) => void) => {
 		try {
+			socket.use((_packet, packetNext) => {
+				const uid = (socket as any).userId as string | undefined;
+				if (uid) {
+					return runWithWaseetActor({ userId: uid, role: waseetActorRole(undefined, (socket as any).accountType) }, () => packetNext());
+				}
+				packetNext();
+			});
 			const token = handshakeToken(socket);
 			if (!token) return options.required ? next(refusal('NO_TOKEN')) : next();
 			const result = await verifySocketToken(token, { ipAddress: socket.handshake?.address, userAgent: (socket.handshake as any)?.headers?.['user-agent'] });
@@ -65,7 +73,8 @@ export function socketAuthMiddleware(options: { required: boolean; onAuthenticat
 			}
 			if (isSocketConnectLimited(result.userId)) return next(Object.assign(new Error(SOCKET_CONNECT_RATE_LIMIT_MESSAGE), { data: { code: SOCKET_CONNECT_RATE_LIMIT_CODE } }));
 			(socket as any).userId = result.userId;
-			socket.data = { ...(socket.data ?? {}), userId: result.userId };
+			(socket as any).accountType = result.accountType;
+			socket.data = { ...(socket.data ?? {}), userId: result.userId, accountType: result.accountType };
 			options.onAuthenticated?.(socket, result.userId);
 			next();
 		} catch {

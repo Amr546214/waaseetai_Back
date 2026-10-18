@@ -1,5 +1,5 @@
 // "تقييم AI للعروض" on the client dashboard: the average of the REAL WaseetAI proposal evaluations stored on the offers the client received
-// (Proposal.aiMatchScore = WaseetAI qualityScore of the submitted proposal, blended with budget closeness in proposal.service.ts; null when the AI was
+// (Proposal.aiMatchScore = WaseetAI qualityScore of the submitted proposal; null when the AI was
 // unavailable at submission). Shown as stars out of 5 (score / 20). Nothing is invented: no scored offer -> aiRating null.
 // aiConfidence is null on purpose: WaseetAI reports no accuracy/confidence for these scores, so none is claimed.
 

@@ -4,6 +4,8 @@ import { authenticate, requireActiveUser } from '../middlewares/auth.middleware'
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { waseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
 import { createHelpAssistantTtsHandler, createUserRateLimiter, type HelpAssistantTtsDeps } from '../services/ai/help-assistant-tts';
+import { createAssistantToolsHandlers } from '../services/ai/help-assistant-tools';
+import { createAssistantHttpHandler } from '../services/ai/help-assistant-http';
 
 // POST /api/help-assistant/tts — Help Assistant / Bebo speech (WaseetAI TTS).
 // Available to every authenticated, active dashboard role (the same
@@ -33,6 +35,16 @@ export function createHelpAssistantTtsRouter(options: HelpAssistantTtsRouterOpti
 		isRateLimited: options.isRateLimited ?? createUserRateLimiter(),
 	});
 	router.post('/tts', ...guards, handler);
+	router.post('/chat', ...guards, createAssistantHttpHandler());
+	const tools = createAssistantToolsHandlers();
+	router.get('/capabilities', ...guards, tools.capabilities);
+	router.post('/stt', ...guards, tools.stt);
+	router.post('/live-token', ...guards, tools.live);
+	router.post('/runs', ...guards, tools.run);
+	router.get('/runs/:runId', ...guards, tools.status);
+	router.get('/runs/:runId/events', ...guards, tools.events);
+	router.post('/runs/:runId/cancel', ...guards, tools.cancel);
+	router.post('/runs/:runId/resume', ...guards, tools.resume);
 	return router;
 }
 

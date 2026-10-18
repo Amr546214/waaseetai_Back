@@ -43,6 +43,7 @@ async function loadGateway(t: TestContext, opts: {
   isConfigured?: boolean;
   stream?: (call: Call) => AsyncGenerator<WaseetAiStreamEvent, void, void>;
   accountType?: string | null;
+  activeRole?: string | null;
 } = {}) {
   const calls: Call[] = [];
   const make = (method: string) => (body: any, o: any) => {
@@ -58,7 +59,7 @@ async function loadGateway(t: TestContext, opts: {
   t.mock.module('../services/ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: clientMock } });
   const accountType = opts.accountType === undefined ? 'PROVIDER_INDIVIDUAL' : opts.accountType;
   t.mock.module('../config/db', {
-    namedExports: { prisma: { user: { findUnique: async () => (accountType === null ? null : { accountType }) } } }
+    namedExports: { prisma: { user: { findUnique: async () => (accountType === null ? null : { accountType, activeRole: opts.activeRole ?? undefined }) } } }
   });
   const mod = await import(`./ai-review.gateway.ts?fixture=${Date.now()}-${Math.random()}`);
   const register = mod.registerAiReviewGateway as (socket: any) => void;
@@ -112,6 +113,15 @@ for (const accountType of ['PROVIDER_INDIVIDUAL', 'PROVIDER_COMPANY']) {
     assert.deepEqual(register.calls.map((c) => c.method), ['streamTextSuggestion', 'streamTextEnhancement']);
   });
 }
+
+test('both events: multi-role account with CLIENT_INDIVIDUAL and activeRole=PROVIDER reaches WaseetAI', async (t) => {
+  const register = await loadGateway(t, { accountType: 'CLIENT_INDIVIDUAL', activeRole: 'PROVIDER' });
+  const { socket, handlers } = createMockSocket({ userId: 'user-multi' });
+  register(socket);
+  await handlers['stream_ai_suggest_text']({ title: TITLE });
+  await handlers['stream_ai_enhance_description']({ description: 'وصف مبدئي' });
+  assert.deepEqual(register.calls.map((c) => c.method), ['streamTextSuggestion', 'streamTextEnhancement']);
+});
 
 // ── validation ───────────────────────────────────────────────────────────
 

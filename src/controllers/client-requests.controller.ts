@@ -23,8 +23,6 @@ export class ClientRequestsController {
   }
 
   // POST /api/client/requests/ai-suggest
-  // Not called by the current create-request UI (kept as an optional, explicit "draft from what you wrote" endpoint). Product rule: it never
-  // drafts from nothing - the client must already have written a meaningful title and enough description, same rule as the rewrite button.
   public async aiSuggest(req: Request, res: Response, next: NextFunction) {
     try {
       const parsed = clientRequestAiSuggestSchema.safeParse(req.body);
@@ -33,7 +31,15 @@ export class ClientRequestsController {
         throw new AppError(errorMsg, 400);
       }
 
-      if (!canRewrite(parsed.data.title?.trim() ?? '', parsed.data.description?.trim() ?? '')) {
+      const title = parsed.data.title?.trim() ?? '';
+      const desc = parsed.data.description?.trim() ?? '';
+      const specName = parsed.data.specialtyName?.trim() ?? '';
+
+      if (parsed.data.fullDraft) {
+        if (title.length < 3 && desc.length < 5 && !specName) {
+          throw new AppError('يرجى كتابة عنوان مبدئي للطلب أو اختيار التخصص أولاً لتوليد الطلب بالذكاء الاصطناعي.', 400);
+        }
+      } else if (!canRewrite(title, desc)) {
         throw new AppError(REWRITE_INPUT_REQUIRED_MESSAGE, 400);
       }
 

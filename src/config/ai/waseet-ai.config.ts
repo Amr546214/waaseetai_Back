@@ -25,6 +25,11 @@ export interface WaseetAiConfig {
   restTimeoutMs: number;
   /** Default overall timeout for SSE streaming calls. */
   streamTimeoutMs: number;
+  /** Legacy is retained only for an explicitly configured older remote service. */
+  authMode?: 'legacy' | 'signed';
+  clientId?: string;
+  clientSecret?: string;
+  environment?: 'dev' | 'bank' | 'prod';
 }
 
 const PLACEHOLDER_TOKENS = new Set(['', '<set-me>', 'changeme', 'dummy_key']);
@@ -42,5 +47,9 @@ export function getWaseetAiConfig(env: NodeJS.ProcessEnv = process.env): WaseetA
     bearerToken: PLACEHOLDER_TOKENS.has(rawToken) ? undefined : rawToken,
     restTimeoutMs: readPositiveInt(env.WASEET_AI_TIMEOUT_MS, 30_000),
     streamTimeoutMs: readPositiveInt(env.WASEET_AI_STREAM_TIMEOUT_MS, 90_000),
+    authMode: env.WASEET_AI_AUTH_MODE === 'signed' || !!env.WASEET_AI_CLIENT_SECRET ? 'signed' : 'legacy',
+    clientId: (env.WASEET_AI_CLIENT_ID || WASEET_AI_CLIENT_ID).trim(),
+    clientSecret: (env.WASEET_AI_CLIENT_SECRET || (env.WASEET_AI_AUTH_MODE === 'signed' ? rawToken : '')).trim() || undefined,
+    environment: env.WASEET_AI_ENVIRONMENT === 'bank' ? 'bank' : env.WASEET_AI_ENVIRONMENT === 'prod' ? 'prod' : 'dev',
   };
 }

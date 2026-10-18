@@ -1,10 +1,10 @@
 // Create-request "تحسين وصياغة AI" works on text the client already wrote: no generation from nothing.
 // The WaseetAI enhance endpoint takes nothing but {description} (no instruction field, its prompt is the vendor's), so the rewrite-only rule is enforced
-// on OUR side only for the INPUT: nothing is sent unless the client wrote enough. The reply is accepted as-is (empty refused, cut to 2000).
+// on OUR side only for the INPUT: nothing is sent unless the client wrote enough. A complete preview is retained for review; only the selected draft belongs in the field.
 // The FE keeps a mirror of this file (create-request/description-rewrite-guard.ts): keep both in sync.
 
 export const REWRITE_MIN_DESCRIPTION_CHARS = 30;
-export const REWRITE_MIN_DESCRIPTION_WORDS = 6;
+export const REWRITE_MIN_DESCRIPTION_WORDS = 4;
 export const REWRITE_INPUT_REQUIRED_MESSAGE = 'اكتب عنوان الطلب ووصفه أولًا، ثم استخدم تحسين الصياغة.';
 
 const GENERIC_TITLES = new Set([
@@ -31,15 +31,26 @@ export function canRewrite(title: string, description: string): boolean {
 }
 
 export const REWRITE_MAX_CHARS = 2000;
+export const REWRITE_PREVIEW_MAX_CHARS = 30000;
 
-export type RewriteCheck = { ok: true; text: string } | { ok: false; reason: 'empty' };
+export type RewriteCheck = { ok: true; text: string } | { ok: false; reason: 'empty' | 'too_long' };
 
 /**
  * The AI reply is shown as WaseetAI wrote it (owner decision): assistant phrasing and markdown are NOT rejected.
- * Only an empty reply is refused, and an over-long one is cut to the description limit so the field can never exceed it.
+ * A selected description must fit the field; reject excess text instead of silently cutting a sentence or requirement.
  */
 export function checkRewriteOutput(_input: string, output: string): RewriteCheck {
+  return checkRewriteText(output, REWRITE_MAX_CHARS);
+}
+
+/** The preview may contain introductions, alternative drafts and notes. Preserve it in full within a separate bounded limit. */
+export function checkRewritePreview(_input: string, output: string): RewriteCheck {
+  return checkRewriteText(output, REWRITE_PREVIEW_MAX_CHARS);
+}
+
+function checkRewriteText(output: string, maxChars: number): RewriteCheck {
   const text = output.trim();
   if (!text) return { ok: false, reason: 'empty' };
-  return { ok: true, text: text.slice(0, REWRITE_MAX_CHARS) };
+  if (text.length > maxChars) return { ok: false, reason: 'too_long' };
+  return { ok: true, text };
 }

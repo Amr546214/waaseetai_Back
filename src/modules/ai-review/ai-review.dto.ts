@@ -2,6 +2,7 @@ export interface SuggestMilestonesDto {
   title: string;
   description?: string;
   totalAmount?: number;
+  deliveryDays?: number;
 }
 
 export interface MilestoneDto {
@@ -38,7 +39,7 @@ export interface SuggestedMilestone {
 // services/ai/waseet-ai/waseet-ai.adapters.ts (mapProjectAnalysisResponse).
 export interface AiReviewResponse {
   clarityScore: number;
-  feasibilityScore: number;
+  feasibilityScore: number | null;
   /** null when WaseetAI's rating is not exactly High/Medium/Low. */
   marketFitRating: 'High' | 'Medium' | 'Low' | null;
   executiveSummary: string;

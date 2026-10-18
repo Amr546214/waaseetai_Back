@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { runWithWaseetActor, waseetActorRole } from '../services/ai/waseet-ai/waseet-ai.auth';
 import { AccountType, UserRole, UserStatus } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 import { prisma } from '../config/db';
@@ -64,7 +65,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
       sessionId: session.id
     };
 
-    next();
+    runWithWaseetActor({ userId: user.id, role: waseetActorRole(user.activeRole || decoded.activeRole, user.accountType) }, () => next());
   } catch (error) {
     if (error instanceof jwt.TokenExpiredError || error instanceof jwt.JsonWebTokenError) {
       next(new AppError('جلسة العمل انتهت، يرجى إعادة تسجيل الدخول', 401));

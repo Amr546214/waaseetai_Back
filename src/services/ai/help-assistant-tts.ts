@@ -25,6 +25,7 @@ export const TTS_VOICES = ['Puck', 'Kore', 'Fenrir', 'Aoede', 'Zephyr', 'Sulafat
 export const TTS_DIALECTS = ['egyptian', 'saudi', 'gulf', 'msa', 'english'] as const;
 /** Handoff default ("Flash-Lite · سريع"); the client cannot choose a model. */
 export const TTS_MODEL = 'gemini-3.8-flash-lite-tts';
+export const TTS_MODELS = [TTS_MODEL, 'gemini-3.8-flash-tts'] as const;
 /** Same bound the help gateway already applies to spoken answers. */
 export const MAX_TTS_TEXT_LENGTH = 1500;
 const TTS_TIMEOUT_MS = 45_000;
@@ -51,7 +52,7 @@ export type TtsErrorCode = 'AUTH_REQUIRED' | 'FORBIDDEN' | 'INVALID_INPUT' | 'RA
 export interface HelpAssistantTtsDeps {
 	client: {
 		isConfigured(): boolean;
-		synthesizeSpeech(body: TtsSynthesizeRequest, opts?: { signal?: AbortSignal; timeoutMs?: number; requestId?: string }): Promise<Buffer>;
+		synthesizeSpeech(body: TtsSynthesizeRequest, opts?: { signal?: AbortSignal; timeoutMs?: number; requestId?: string; actor?: {userId:string;role:'client'|'provider'|'marketer'|'admin'|'system'} }): Promise<Buffer>;
 	};
 	/** True when the verified user must not use the assistant (e.g. banned). */
 	isBlocked(userId: string): Promise<boolean>;
@@ -75,7 +76,7 @@ export function createUserRateLimiter(max = USER_MAX_REQUESTS, windowMs = USER_W
 	};
 }
 
-export type TtsInput = { ok: true; text: string; voice: TtsVoice; dialect: TtsDialect } | { ok: false; message: string };
+export type TtsInput = { ok: true; text: string; voice: TtsVoice; dialect: TtsDialect; model?: string } | { ok: false; message: string };
 
 /** Validates the request body. Only `text`, `voice`, `dialect` are read. */
 export function validateTtsInput(body: unknown): TtsInput {
@@ -84,7 +85,8 @@ export function validateTtsInput(body: unknown): TtsInput {
 	if (!text || text.length > MAX_TTS_TEXT_LENGTH) return { ok: false, message: TTS_MESSAGES.INVALID_TEXT };
 	if (typeof b.voice !== 'string' || !(TTS_VOICES as readonly string[]).includes(b.voice)) return { ok: false, message: TTS_MESSAGES.INVALID_VOICE };
 	if (typeof b.dialect !== 'string' || !(TTS_DIALECTS as readonly string[]).includes(b.dialect)) return { ok: false, message: TTS_MESSAGES.INVALID_DIALECT };
-	return { ok: true, text, voice: b.voice as TtsVoice, dialect: b.dialect as TtsDialect };
+	if (b.model !== undefined && (typeof b.model !== 'string' || !(TTS_MODELS as readonly string[]).includes(b.model))) return { ok: false, message: 'نموذج الصوت غير مدعوم.' };
+	return { ok: true, text, voice: b.voice as TtsVoice, dialect: b.dialect as TtsDialect, ...(b.model ? { model: b.model as string } : {}) };
 }
 
 function mapFailure(code: WaseetAiErrorCode): { status: number; code: TtsErrorCode; message: string } {
@@ -135,8 +137,8 @@ export function createHelpAssistantTtsHandler(deps: HelpAssistantTtsDeps) {
 		const startedAt = Date.now();
 		try {
 			const wav = await deps.client.synthesizeSpeech(
-				{ text: input.text, dialect: input.dialect, voice: input.voice, model: TTS_MODEL, speakingRate: 'normal', mimeType: 'audio/wav' },
-				{ signal: controller.signal, timeoutMs: TTS_TIMEOUT_MS, requestId },
+				{ text: input.text, dialect: input.dialect, voice: input.voice, model: input.model || TTS_MODEL, speakingRate: 'normal', mimeType: 'audio/wav' },
+				{ signal: controller.signal, timeoutMs: TTS_TIMEOUT_MS, requestId, actor: { userId, role } },
 			);
 			if (controller.signal.aborted) return;
 			logger.info(`[HelpAssistantTTS] ok role=${role} chars=${input.text.length} bytes=${wav.length} ms=${Date.now() - startedAt} requestId=${requestId}`);

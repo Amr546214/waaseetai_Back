@@ -85,22 +85,16 @@ test('missing projectId or fully empty draft is a 400 without calling WaseetAI',
   assert.equal(svc.calls.length, 0);
 });
 
-test('title and message are both required: each missing/blank case is a clear 400 and WaseetAI is never called', async (t) => {
+test('either title or message can generate a proposal; only when both are blank without project context is 400 thrown', async (t) => {
   const svc = await load(t);
-  const cases: Array<[string, string, RegExp]> = [
-    ['', 'نص العرض', /عنوان العرض/],
-    ['   ', 'نص العرض', /عنوان العرض/],
-    ['عنوان العرض', '', /نص العرض/],
-    ['عنوان العرض', '  ', /نص العرض/],
-    ['', '', /العنوان ونصه معًا|ونصه معًا/]
-  ];
-  for (const [title, message, expected] of cases) {
-    await assert.rejects(
-      () => svc.evaluateAndSuggestProposal('p1', title, message),
-      (err: any) => err.statusCode === 400 && expected.test(err.message)
-    );
-  }
+  await assert.rejects(
+    () => svc.evaluateAndSuggestProposal('p1', '   ', '   '),
+    (err: any) => err.statusCode === 400 && /عنوان أو نص العرض/.test(err.message)
+  );
   assert.equal(svc.calls.length, 0);
+  const fromTitleOnly = await svc.evaluateAndSuggestProposal('p1', 'عنوان العرض', '');
+  assert.ok(fromTitleOnly.suggestedTitle);
+  assert.equal(svc.calls.length, 1);
 });
 
 test('a title plus a message still reaches WaseetAI (successful path unchanged)', async (t) => {

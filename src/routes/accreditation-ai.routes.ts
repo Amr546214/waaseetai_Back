@@ -189,4 +189,93 @@ router.delete('/proofs/:id', async (req: Request, res: Response, next) => {
   } catch (error) { next(error); }
 });
 
+import { z } from 'zod';
+import { llmClient } from '../services/llm/llm.client';
+
+const AccreditationDraftSchema = z.object({
+  title: z.string().min(5).max(160),
+  overview: z.string().min(20).max(500),
+  architecturePoints: z.array(z.string().min(10).max(300)).min(2).max(5),
+  performanceAndSecurityPoints: z.array(z.string().min(10).max(300)).min(2).max(4),
+  technologiesUsed: z.array(z.string().min(1).max(50)).min(3).max(8),
+});
+
+const cleanLine = (s: string): string =>
+  s.replace(/^[\s•\-*#\d.)]+/, '').replace(/\*\*/g, '').replace(/`/g, '').trim();
+
+/**
+ * POST /api/provider/accreditation/ai-suggest
+ * Generates or enhances the technical work sample draft (title, multi-line architectural description, and tech stack) for Step 2.
+ */
+router.post('/ai-suggest', aiLimiter, async (req: Request, res: Response, next) => {
+  try {
+    const user = req.user!;
+    const specialtyName = typeof req.body?.specialtyName === 'string' ? req.body.specialtyName.trim() : 'تطوير البرمجيات';
+    const subSpecialties = asStringList(req.body?.subSpecialties);
+    const currentTitle = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+    const currentDescription = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
+    const currentTechs = asStringList(req.body?.technologiesUsed);
+
+    const profile = await prisma.providerProfile.findUnique({
+      where: { userId: user.id },
+      select: { skills: true, headline: true },
+    });
+    const profileSkills = Array.isArray(profile?.skills)
+      ? (profile!.skills as unknown[]).filter((s): s is string => typeof s === 'string' && s.trim().length > 0).slice(0, 15)
+      : [];
+
+    const system = `أنت مستشار تقني ومعماري خبير على منصة "وسيط AI".
+مهمتك مساعدة مقدم الخدمة في صياغة أو تحسين بيانات نموذج العمل الفني للاعتماد باللغة العربية الاحترافية والمنسقة (بدون رموز ماركداون مثل ** أو ##).
+القواعد:
+1. إذا كان المستخدم قد كتب عنواناً أو وصفاً مبدئياً، قم بتحسينه وتوسيعه تقنياً ومعمارياً مع الحفاظ على فكرته الأساسية.
+2. إذا لم يكتب المستخدم عنواناً أو وصفاً، اقترح نموذج عمل فني احترافي ومتكامل يناسب التخصص المختار (${specialtyName}${subSpecialties.length ? ' - ' + subSpecialties.join('، ') : ''}).
+3. قسّم الوصف الفني المعماري إلى:
+   - overview: فقرة تمهيدية واضحة تشرح فكرة المشروع والهدف منه (جملتين إلى 3 جمل).
+   - architecturePoints: من 3 إلى 4 نقاط تفصيلية تشرح البنية المعمارية، تقسيم المكونات، أنماط التصميم (Design Patterns)، وإدارة الحالة أو البيانات.
+   - performanceAndSecurityPoints: من 2 إلى 3 نقاط تشرح تحسينات الأداء، الأمان، إمكانية الوصول (Accessibility)، واختبارات الجودة.
+4. اقترح في technologiesUsed من 4 إلى 7 تقنيات ومكتبات حقيقية ومناسبة جداً للتخصص والمشروع (بأسمائها القياسية بالإنجليزية).`;
+
+    const result = await llmClient.generateJson({
+      feature: 'accreditation-sample-draft',
+      userId: user.id,
+      schema: AccreditationDraftSchema,
+      system,
+      input: {
+        specialtyName,
+        subSpecialties,
+        providerSkills: profileSkills,
+        currentTitle: currentTitle || null,
+        currentDescription: currentDescription || null,
+        currentTechs,
+      },
+      effort: 'medium',
+      maxOutputTokens: 1400,
+      timeoutMs: 25_000,
+    });
+
+    const formattedDescription = [
+      'نظرة عامة على المشروع:',
+      result.data.overview.replace(/\*\*/g, '').trim(),
+      '',
+      'البنية المعمارية وأنماط التصميم:',
+      ...result.data.architecturePoints.map((p) => `• ${cleanLine(p)}`),
+      '',
+      'الأداء والأمان وضمان الجودة:',
+      ...result.data.performanceAndSecurityPoints.map((p) => `• ${cleanLine(p)}`),
+    ].join('\n');
+
+    res.status(200).json({
+      success: true,
+      data: {
+        title: result.data.title.replace(/\*\*/g, '').trim(),
+        description: formattedDescription,
+        technologiesUsed: result.data.technologiesUsed.map((t) => t.replace(/\*\*/g, '').trim()).filter(Boolean),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;
+

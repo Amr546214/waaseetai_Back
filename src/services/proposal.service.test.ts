@@ -26,7 +26,7 @@ function baseProposalPayload(overrides: any = {}) {
   };
 }
 
-function createProposalMockPrisma(t: TestContext, opts: { existingProposal?: any; aiEvaluationError?: unknown; evalCalls?: any[] } = {}) {
+function createProposalMockPrisma(t: TestContext, opts: { existingProposal?: any; aiEvaluationError?: unknown; evalCalls?: any[]; fitError?: unknown; fitResult?: any; fitCalls?: any[] } = {}) {
   const projectFixture = {
     id: 'project-1',
     clientId: 'client-1',
@@ -76,6 +76,13 @@ function createProposalMockPrisma(t: TestContext, opts: { existingProposal?: any
       }
     }
   });
+  t.mock.module('./ai-features/project-fit.service', { namedExports: { projectFitService: {
+    analyze: async (...args: any[]) => {
+      opts.fitCalls?.push(args);
+      if (opts.fitError) throw opts.fitError;
+      return opts.fitResult ?? { generationSource: null, insufficientData: true, analysis: null, inputsUsed: [], unavailableFields: [] };
+    },
+  } } });
 
   return { prismaMock, projectProposalCreateSpy };
 }
@@ -165,7 +172,7 @@ test('createProposal: a successful AI evaluation still populates the real aiMatc
   assert.ok(data.aiFeedback && typeof data.aiFeedback === 'object');
 });
 
-test('createProposal: evaluates with the real fields + milestones; stored match formula unchanged; feedback = {source, summary}; aiPriceTag null', async (t) => {
+test('createProposal: evaluates the real proposal and preserves pure quality independently of the budget midpoint', async (t) => {
   const evalCalls: any[] = [];
   const { service, projectProposalCreateSpy } = await loadService(t, { evalCalls });
   await service.createProposal('project-1', 'provider-1', baseProposalPayload());
@@ -175,11 +182,56 @@ test('createProposal: evaluates with the real fields + milestones; stored match 
     totalPrice: 1000, deliveryDays: 5, milestones: VALID_MILESTONES
   }]);
   const data = projectProposalCreateSpy.mock.calls[0].arguments[0].data;
-  // budget 500-1500 -> mid 1000, price 1000 -> budgetFactor 100 -> 0.6*80 + 0.4*100 = 88
-  assert.equal(data.aiMatchScore, 88);
+  assert.equal(data.aiMatchScore, 80);
   assert.equal(data.aiQualityTag, 'جيد');
   assert.equal(data.aiPriceTag, null);
-  assert.deepEqual(data.aiFeedback, { source: 'WASEET_AI', summary: 'ملخص التقييم' });
+  assert.equal(data.aiFeedback.source, 'WASEET_AI');
+  assert.equal(data.aiFeedback.summary, 'ملخص التقييم');
+  assert.equal(data.aiFeedback.qualityScore, 80);
+  assert.equal(data.aiFeedback.budgetSuitability.status, 'WITHIN_RANGE');
+  assert.equal(data.aiFeedback.deadlineSuitability.status, 'UNKNOWN');
+  await service.createProposal('project-1', 'provider-2', baseProposalPayload({ totalPrice: 600 }));
+  assert.equal(projectProposalCreateSpy.mock.calls[1].arguments[0].data.aiMatchScore, 80, 'a cheaper appropriate offer must not lose text-quality points');
+});
+
+const FIT_RESULT = { generationSource: 'LLM', insufficientData: false, analysis: {
+  overallFit: 'HIGH', summary: 'مهارات المقدم تناسب متطلبات الطلب.',
+  matchPoints: [{ text: 'React في المتطلبات والملف.', basedOn: ['project.requiredSkills', 'provider.skills'] }], gaps: [],
+}, inputsUsed: ['project.requiredSkills', 'provider.skills'], unavailableFields: [] };
+
+test('createProposal: the actual provider, project and submitted comment/plan are compared and evidence stored without changing submission status', async (t) => {
+  const fitCalls: any[] = [];
+  const { service, projectProposalCreateSpy } = await loadService(t, { fitCalls, fitResult: FIT_RESULT });
+  const payload = baseProposalPayload();
+  await service.createProposal('project-1', 'provider-1', payload);
+  assert.deepEqual(fitCalls, [['provider-1', 'project-1', {
+    title: payload.title, message: payload.message, outputs: '', advantages: [],
+    milestones: VALID_MILESTONES.map(({ title, description }) => ({ title, description })),
+  }]]);
+  const data = projectProposalCreateSpy.mock.calls[0].arguments[0].data;
+  assert.equal(data.aiFeedback.providerFit.source, 'LLM');
+  assert.deepEqual(data.aiFeedback.providerFit.matchPoints, FIT_RESULT.analysis.matchPoints);
+  assert.equal(data.status, 'SUBMITTED');
+});
+
+test('createProposal: fit failure preserves proposal quality and does not block submission', async (t) => {
+  const qualityOnly = await loadService(t, { fitError: new Error('fit unavailable') });
+  await qualityOnly.service.createProposal('project-1', 'provider-1', baseProposalPayload());
+  const qualityData = qualityOnly.projectProposalCreateSpy.mock.calls[0].arguments[0].data;
+  assert.equal(qualityData.aiMatchScore, 80);
+  assert.equal(qualityData.aiFeedback.providerFit, undefined);
+  assert.equal(qualityData.status, 'SUBMITTED');
+});
+
+test('createProposal: quality failure preserves grounded fit without inventing the missing score', async (t) => {
+  const fitOnly = await loadService(t, { aiEvaluationError: new Error('quality unavailable'), fitResult: FIT_RESULT });
+  await fitOnly.service.createProposal('project-1', 'provider-1', baseProposalPayload());
+  const fitData = fitOnly.projectProposalCreateSpy.mock.calls[0].arguments[0].data;
+  assert.equal(fitData.aiMatchScore, null);
+  assert.equal(fitData.aiQualityTag, null);
+  assert.equal(fitData.aiFeedback.qualityScore, undefined);
+  assert.equal(fitData.aiFeedback.providerFit.overallFit, 'HIGH');
+  assert.equal(fitData.status, 'SUBMITTED');
 });
 
 test('proposal.service.ts (WaseetAI-linked) has no internal LlmClient dependency', async () => {

@@ -2,10 +2,10 @@ import { logger } from '../../config/logger';
 import { AppError } from '../../utils/app-error';
 import { waseetAiClient, type WaseetAiClient } from '../../services/ai/waseet-ai/waseet-ai.client';
 import { normalizeWaseetAiError } from '../../services/ai/waseet-ai/waseet-ai.errors';
+import { MilestonesBreakdownService } from '../../services/ai-features/milestones-breakdown.service';
 import {
   buildMilestonesRequest,
   buildProjectAnalysisRequest,
-  mapMilestonesResponse,
   mapProjectAnalysisResponse,
 } from '../../services/ai/waseet-ai/waseet-ai.adapters';
 import { CompleteProjectDataDto, AiReviewResponse, SuggestMilestonesDto, SuggestedMilestone } from './ai-review.dto';
@@ -41,8 +41,9 @@ export class AiReviewService {
       throw new AppError('اسم المشروع والقيمة الإجمالية مطلوبان لاقتراح المراحل.', 400);
     }
     try {
-      const data = await this.client.suggestMilestones(request);
-      return mapMilestonesResponse(data);
+      const data = await new MilestonesBreakdownService(this.client).generateBreakdown(request);
+      return data.milestones.map(item => ({ title: item.title, description: item.description,
+        estimatedDays: item.days, percentage: item.percentage }));
     } catch (error) {
       logFailure('milestones', error);
       throw new AppError(MILESTONES_UNAVAILABLE, 503);
@@ -69,7 +70,7 @@ export class AiReviewService {
 
     const [analysis, milestones] = await Promise.allSettled([
       this.client.analyzeProject(analysisRequest),
-      milestonesRequest ? this.client.suggestMilestones(milestonesRequest).then(mapMilestonesResponse) : Promise.resolve(null),
+      milestonesRequest ? this.suggestMilestones({ ...milestonesRequest, deliveryDays: analysisRequest.deadlineDays }) : Promise.resolve(null),
     ]);
 
     if (milestones.status === 'rejected') logFailure('milestones (analysis companion)', milestones.reason);

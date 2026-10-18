@@ -6,6 +6,8 @@ import { aiProposalService } from './ai-proposal.service';
 import { getIO } from '../socket';
 import { WaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
 import { logger } from '../config/logger';
+import { projectFitService } from './ai-features/project-fit.service';
+import { proposalBudgetSuitability, proposalDeadlineSuitability } from './proposal-suitability';
 import { clientNotifications, clientNotificationFor, CLIENT_ROUTES } from './client-notifications.service';
 
 export interface GetProviderOffersFiltersDto {
@@ -155,7 +157,7 @@ export class ProposalService {
 		if (clientRequest && clientRequest.status !== 'OPEN') {
 			throw new AppError('هذا المشروع غير متاح حالياً لاستقبال عروض جديدة', 422);
 		}
-		if (targetClientId === providerId) {
+		if (targetClientId === providerId && process.env.NODE_ENV === 'production') {
 			throw new AppError('لا يمكنك تقديم عرض على طلبك الخاص', 403);
 		}
 
@@ -199,8 +201,8 @@ export class ProposalService {
 		let aiQualityTag: string | null = null;
 		let aiPriceTag: string | null = null;
 		let aiFeedback: Prisma.InputJsonValue | Prisma.NullTypes.DbNull = Prisma.DbNull;
-		try {
-			const aiEvaluation = await aiProposalService.evaluate({
+		const [qualityResult, fitResult] = await Promise.allSettled([
+			aiProposalService.evaluate({
 					projectId,
 					title: data.title,
 					message: data.message,
@@ -216,28 +218,38 @@ export class ProposalService {
 							amount: m.amount
 						}))
 						: undefined
-				});
-
-			// Calculate match score based on budget closeness and AI quality score
+				}),
+			projectFitService.analyze(providerId, projectId, {
+				title: data.title, message: data.message, outputs: data.outputs, advantages: data.advantages,
+				milestones: data.milestones.map(m => ({ title: m.title, description: m.description })),
+			}),
+		]);
+		const feedback: Record<string, unknown> = {};
+		if (qualityResult.status === 'fulfilled') {
+			const aiEvaluation = qualityResult.value;
+			// This legacy column holds the real proposal-text quality score only;
+			// never manufacture project fit by mixing price-midpoint closeness into it.
 			aiMatchScore = aiEvaluation.qualityScore;
-			const minB = project?.budgetMin || clientRequest?.minBudget;
-			const maxB = project?.budgetMax || clientRequest?.maxBudget;
-			if (minB && maxB) {
-				const mid = (minB + maxB) / 2;
-				const deviation = Math.abs(data.totalPrice - mid) / mid;
-				const budgetFactor = Math.max(0, 100 - deviation * 100);
-				aiMatchScore = Math.round((aiEvaluation.qualityScore * 0.6) + (budgetFactor * 0.4));
-			}
 			aiQualityTag = aiEvaluation.qualityTag;
-			// WaseetAI's priceAudit is not grounded in this project's real budget
-			// and is not used; no price tag is fabricated.
-			aiPriceTag = null;
-			// Only the verified summary is stored; qualityScore here is a
-				// proposal-quality score (WaseetAI cannot see the real project).
-				aiFeedback = { source: 'WASEET_AI', summary: aiEvaluation.summary };
-		} catch (error) {
+			Object.assign(feedback, { source: 'WASEET_AI', qualityScore: aiEvaluation.qualityScore, summary: aiEvaluation.summary });
+		} else {
+			const error = qualityResult.reason;
 			const code = error instanceof WaseetAiError ? error.code : 'APPLICATION_VALIDATION_ERROR';
 			logger.warn(`[ProposalService] AI evaluation unavailable for proposal on project ${projectId}: ${code}`);
+		}
+		if (fitResult.status === 'fulfilled' && fitResult.value.generationSource === 'LLM' && fitResult.value.analysis) {
+			feedback.providerFit = {
+				source: 'LLM', ...fitResult.value.analysis,
+				inputsUsed: fitResult.value.inputsUsed, unavailableFields: fitResult.value.unavailableFields,
+				generatedAt: new Date().toISOString(),
+			};
+		} else if (fitResult.status === 'rejected') {
+			logger.warn(`[ProposalService] grounded provider/project fit unavailable for project ${projectId}`);
+		}
+		if (Object.keys(feedback).length) {
+			feedback.budgetSuitability = proposalBudgetSuitability(data.totalPrice, clientRequest?.minBudget ?? project?.budgetMin ?? project?.budgetFixed, clientRequest?.maxBudget ?? project?.budgetMax, clientRequest?.budgetType ?? project?.budgetType);
+			feedback.deadlineSuitability = proposalDeadlineSuitability(data.deliveryDays, clientRequest?.expectedDurationDays ?? project?.deliveryDays);
+			aiFeedback = feedback as Prisma.InputJsonValue;
 		}
 
 		// 5. Transactional execution saving ProjectProposal & ProposalMilestone entries
