@@ -117,7 +117,7 @@ test('adminApproveSample/adminRejectSample: the existing manual/deterministic au
   const specialtyUpdateManySpy = t.mock.fn(async () => ({ count: 1 }));
   const tx = {
     accreditationSampleEvent: { create: async () => ({}) },
-    accreditationSample: { update: sampleUpdateSpy },
+    accreditationSample: { update: sampleUpdateSpy, updateMany: async () => ({ count: 1 }) },
     providerSpecialty: { updateMany: specialtyUpdateManySpy }
   };
   const prismaMock: any = {
@@ -148,7 +148,7 @@ test('adminApproveSample: an AI_VERIFIED sample whose ProviderSpecialty is NOT y
   const specialtyUpdateManySpy = t.mock.fn(async () => ({ count: 1 }));
   const tx = {
     accreditationSampleEvent: { create: async () => ({}) },
-    accreditationSample: { update: sampleUpdateSpy },
+    accreditationSample: { update: sampleUpdateSpy, updateMany: async () => ({ count: 1 }) },
     providerSpecialty: { updateMany: specialtyUpdateManySpy }
   };
   const prismaMock: any = {
@@ -181,7 +181,7 @@ test('adminApproveSample: a second approval attempt is rejected based on the REA
   const specialtyUpdateManySpy = t.mock.fn(async () => ({ count: 1 }));
   const tx = {
     accreditationSampleEvent: { create: async () => ({}) },
-    accreditationSample: { update: sampleUpdateSpy },
+    accreditationSample: { update: sampleUpdateSpy, updateMany: async () => ({ count: 1 }) },
     providerSpecialty: { updateMany: specialtyUpdateManySpy }
   };
   const prismaMock: any = {
@@ -214,7 +214,7 @@ test('adminRejectSample: rejecting one sample never downgrades a ProviderSpecial
   const specialtyUpdateManySpy = t.mock.fn(async (args: any) => ({ count: args.where.status?.not === 'APPROVED' ? 0 : 1 }));
   const tx = {
     accreditationSampleEvent: { create: async () => ({}) },
-    accreditationSample: { update: sampleUpdateSpy },
+    accreditationSample: { update: sampleUpdateSpy, updateMany: async () => ({ count: 1 }) },
     providerSpecialty: { updateMany: specialtyUpdateManySpy }
   };
   const prismaMock: any = {
@@ -252,7 +252,7 @@ test('accreditationAiService: the removed fake processProofImage method (hardcod
 
 async function approveWith(t: TestContext, sample: any) {
   const sampleUpdateSpy = t.mock.fn(async (args: any) => ({ id: args.where.id, ...args.data }));
-  const tx = { accreditationSampleEvent: { create: async () => ({}) }, accreditationSample: { update: sampleUpdateSpy }, providerSpecialty: { updateMany: t.mock.fn(async () => ({ count: 1 })) } };
+  const tx = { accreditationSampleEvent: { create: async () => ({}) }, accreditationSample: { update: sampleUpdateSpy, updateMany: async () => ({ count: 1 }) }, providerSpecialty: { updateMany: t.mock.fn(async () => ({ count: 1 })) } };
   const prismaMock: any = {
     accreditationSample: { findUnique: async () => sample },
     $transaction: async (fn: any) => fn(tx)
