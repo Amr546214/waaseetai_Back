@@ -40,6 +40,8 @@ const db: Any = {
 		findMany: async ({ where }: Any) => S.samples.filter((x: Any) => matches(x, where ?? {})).map((x: Any) => ({ ...x, providerProfile: { id: 'pp1', userId: 'u1', user: { firstName: 'سارة', lastName: 'أحمد', email: 'sara@example.com' } }, providerSpecialty: { ...S.ps.find((r: Any) => r.id === x.providerSpecialtyId), specialty: S.catalog.find((c: Any) => c.id === S.ps.find((r: Any) => r.id === x.providerSpecialtyId)?.specialtyId) } })),
 		create: async ({ data }: Any) => { const s = { id: S.seq(), createdAt: new Date(), aiFeedbackAr: null, aiScore: null, aiAuditedAt: null, ...data }; S.samples.push(s); return s; },
 		update: async ({ where, data }: Any) => { const s = S.samples.find((x: Any) => x.id === where.id); Object.assign(s, data); return s; },
+		// the decision claim (undecided + decidable status): one row or none
+		updateMany: async ({ where, data }: Any) => { const s = S.samples.find((x: Any) => x.id === where.id); if (!s || s.decidedAt || !where.status.in.includes(s.status)) return { count: 0 }; Object.assign(s, data); return { count: 1 }; },
 	},
 	accountAuditLog: { findFirst: async () => null, create: async ({ data }: Any) => { S.audit.push(data); return data; } },
 	$transaction: async (fn: any) => fn(db),
