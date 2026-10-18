@@ -8,7 +8,7 @@ import { CONTACT_IMMUTABLE, CONTACT_IMMUTABLE_MESSAGE } from '../services/provid
 import { getCatalogForCategoryParam, resolveSkillIdsFromCatalog } from '../services/skills-catalog.service';
 import { specialtyService } from '../services/specialty.service';
 import { ensureCloudinaryUrl, storeDataUriIfNeeded, storeKycFileIfNeeded } from '../utils/cloudinary-storage';
-import { sanitizeText } from '../utils/sanitize-text';
+import { sanitizeText, isBlankText } from '../utils/sanitize-text';
 import { assertKycFileValues } from '../utils/kyc-value-guard';
 import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
 import { sessionService } from '../services/session.service';
@@ -184,7 +184,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			industry: clean(details?.occupation, 100),
 			// The job title the wizard collects ("occupation") is the profile headline the completion score and the public profile read:
 			// one value, stored in both columns (industry kept for older readers).
-			headline: typeof details?.occupation === 'string' && sanitizeText(details.occupation).trim() ? sanitizeText(details.occupation).trim().slice(0, 100) : undefined,
+			headline: typeof details?.occupation === 'string' && !isBlankText(sanitizeText(details.occupation)) ? sanitizeText(details.occupation).trim().slice(0, 100) : undefined,
 			address: clean(details?.address, 500),
 			bio: typeof details?.bio === 'string' ? sanitizeText(details.bio) : details?.bio,
 			// Batch B T1: the legacy languages value is never touched unless the request carries it (the wizard no longer sends it: step 1 is now «مهاراتي»)
