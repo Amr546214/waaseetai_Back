@@ -10,7 +10,7 @@ export const KYC_DOCUMENT_KEYS = [
 	'client_front_id', 'client_back_id', 'client_supporting_docs',
 	'provider_front_id', 'provider_back_id', 'provider_supporting_docs', 'provider_certificate',
 	'onboarding_document', 'user_id_document', 'user_vat_certificate',
-	'specialty_proof', 'accreditation_proof', 'accreditation_upload', 'marketer_kyc_document'
+	'specialty_proof', 'accreditation_proof', 'accreditation_upload', 'accreditation_sample_attachment', 'marketer_kyc_document'
 ] as const;
 export type KycDocumentKey = (typeof KYC_DOCUMENT_KEYS)[number];
 
@@ -79,6 +79,15 @@ async function resolve(input: KycAccessInput, target: string): Promise<Resolved>
 			if (!row || row.status !== 'COMPLETED') throw NOT_FOUND();
 			return { ownerUserId: row.userId, stored: row.privateRef };
 		}
+		case 'accreditation_sample_attachment': {
+			// Older samples keep their proof as a private reference inside AccreditationSample.attachments (no upload row): addressed by sample id + position.
+			if (!input.id) throw new AppError('معرّف الملف مطلوب', 400);
+			if (typeof input.index !== 'number') throw new AppError('رقم المرفق مطلوب', 400);
+			const row = await prisma.accreditationSample.findUnique({ where: { id: input.id }, select: { attachments: true, providerProfile: { select: { userId: true } } } });
+			const owner = row?.providerProfile?.userId;
+			if (!row || !owner) throw NOT_FOUND();
+			return { ownerUserId: owner, stored: row.attachments?.[input.index] ?? null };
+		}
 		case 'accreditation_proof': {
 			if (!input.id) throw new AppError('معرّف الملف مطلوب', 400);
 			const row = await prisma.accreditationProofFile.findUnique({ where: { id: input.id }, select: { fileUrl: true, submission: { select: { providerProfile: { select: { userId: true } } } } } });
@@ -96,7 +105,7 @@ async function resolve(input: KycAccessInput, target: string): Promise<Resolved>
 export async function createKycAccessLink(requester: Requester, input: KycAccessInput, context?: AuditContext): Promise<KycAccessLink> {
 	const admin = isAdminRequester(requester);
 	if (input.userId && !admin) throw FORBIDDEN();
-	const idKeyed = input.document === 'specialty_proof' || input.document === 'accreditation_proof' || input.document === 'accreditation_upload' || (input.document === 'onboarding_document' && !!input.id);
+	const idKeyed = input.document === 'specialty_proof' || input.document === 'accreditation_proof' || input.document === 'accreditation_upload' || input.document === 'accreditation_sample_attachment' || (input.document === 'onboarding_document' && !!input.id);
 	if (admin && !input.userId && !idKeyed) throw new AppError('معرّف المستخدم مطلوب للمشرف', 400);
 	const target = admin ? (input.userId as string) : requester.id;
 

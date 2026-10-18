@@ -5,7 +5,7 @@ import { AppError } from '../utils/app-error';
 import { aiFeatureUnavailablePayload } from './ai/ai-feature-unavailable';
 import { AdminActor, adminAuditData } from './admin-audit';
 import { providerNotifications } from './provider-notifications.service';
-import { resolveProofsForSubmission } from './accreditation-proof.service';
+import { resolveProofsForSubmission, buildAdminProofList, publicLegacyAttachments } from './accreditation-proof.service';
 
 // Accreditation sample submission. The AI evaluation of samples is DISABLED:
 // no documented WaseetAI contract exists for sample evaluation and it is not wired to the
@@ -256,7 +256,7 @@ export class AccreditationAiService {
       include: {
         // admin only: the review history INCLUDING the internal notes, and the proof documents (opened through the KYC access-link, never as a URL)
         events: { orderBy: { createdAt: 'asc' } },
-        proofUploads: { where: { status: 'COMPLETED' }, select: { id: true, fileName: true, mimeType: true, bytes: true, createdAt: true } },
+        proofUploads: { where: { status: 'COMPLETED' }, orderBy: { createdAt: 'asc' }, select: { id: true, privateRef: true, fileName: true, mimeType: true, bytes: true, createdAt: true } },
         providerProfile: {
           select: {
             id: true,
@@ -283,7 +283,11 @@ export class AccreditationAiService {
       ? await prisma.assessmentAttempt.findFirst({ where: { providerSpecialtyId: sample.providerSpecialty.id, status: { in: ['COMPLETED', 'FAILED'] } }, orderBy: { completedAt: 'desc' }, select: { id: true, score: true, status: true, completedAt: true, analyzedAssetsSnapshot: true } })
       : null;
     const review = (attempt?.analyzedAssetsSnapshot as { review?: unknown } | null)?.review ?? null;
-    return { ...sample, assessmentReview: attempt ? { attemptId: attempt.id, status: attempt.status, score: attempt.score, completedAt: attempt.completedAt, review } : null };
+    // Proof contract (admin detail): `proofs` lists BOTH shapes (upload rows + legacy attachments) with how to open each; the private reference never leaves the server.
+    const proofs = await buildAdminProofList(sample as any);
+    const { proofUploads: _uploads, ...rest } = sample as any;
+    const publicUploads = ((_uploads ?? []) as any[]).map(({ privateRef: _ref, ...u }) => u);
+    return { ...rest, attachments: publicLegacyAttachments(sample.attachments), proofUploads: publicUploads, proofs, assessmentReview: attempt ? { attemptId: attempt.id, status: attempt.status, score: attempt.score, completedAt: attempt.completedAt, review } : null };
   }
 
   async adminApproveSample(id: string, actor?: AdminActor) {
