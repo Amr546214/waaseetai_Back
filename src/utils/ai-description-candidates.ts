@@ -19,6 +19,8 @@ export interface AiDescriptionCandidate {
   length: number;
   /** True when the model text was longer than the limit and was cut at a complete sentence boundary. */
   trimmed: boolean;
+  /** Style label the model put before the text («مباشر وواضح»…): a card title only, never part of `text`. */
+  label?: string;
 }
 
 export interface AiDescriptionCandidates {
@@ -46,6 +48,23 @@ export function cleanDescriptionText(markdown: string): string {
     .replace(/^\s*>\s?/gm, '').replace(/^\s*[-*•]\s+/gm, '• ')
     .replace(/^\s*(?:---|\*\*\*|___)\s*$/gm, '')
     .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+const LABEL_MAX_CHARS = 40;
+const LABEL_MAX_WORDS = 5;
+const looksLikeLabel = (line: string) => {
+  const t = line.replace(/^#{1,6}\s*/, '').replace(/\*\*|__/g, '').replace(/^["“«]|["”»]$/g, '').replace(/[:：]\s*$/, '').trim();
+  return t.length > 0 && t.length <= LABEL_MAX_CHARS && t.split(/\s+/).length <= LABEL_MAX_WORDS && !SENTENCE_END.test(t[t.length - 1]) && !/^[•\-*\d]/.test(t) ? t : null;
+};
+
+/**
+ * A variant may start with a short style-label line followed by a blank line («مباشر وواضح\n\nالنص…»).
+ * The label is returned separately so the text (counter, limit, applied value) is label-free.
+ */
+export function extractStyleLabel(text: string): { label?: string; body: string } {
+  const m = /^([^\n]+)\n\s*\n([\s\S]+)$/.exec(text.trim());
+  if (m) { const l = looksLikeLabel(m[1]); if (l) return { label: l, body: m[2].trim() }; }
+  return { body: text.trim() };
 }
 
 const SENTENCE_END = /[.!?؟۔…。]/;
@@ -85,9 +104,8 @@ function splitRaw(raw: string): string[] {
       sawHeading = true; inAdvice = false;
       current = [];
       // Keep the ORIGINAL (un-normalised) inline text after the colon, if any.
-      const colon = unmark(line).search(/[:：]/);
-      const inline = m[1] && colon >= 0 ? unmark(line).slice(colon + 1).trim().replace(/^["“«]|["”»]$/g, '') : '';
-      if (inline) current.push(inline);
+      const inline = m[1] ? unmark(line).replace(/^\S+\s+\S+\s*[:：\-–—.)]\s*/, '').trim().replace(/^["“«]|["”»]$/g, '') : '';
+      if (inline) { current.push(inline); if (looksLikeLabel(inline)) current.push(''); }
       drafts.push(current);
       continue;
     }
@@ -96,6 +114,17 @@ function splitRaw(raw: string): string[] {
     if (current) current.push(line); else preamble.push(line);
   }
   if (sawHeading) return drafts.map(d => d.join('\n'));
+  // No explicit headings: variants introduced by short label blocks («مباشر وواضح» / «احترافي» / …), separated by blank lines.
+  const blocks = lines.join('\n').split(/\n\s*\n/).map(b => b.trim()).filter(Boolean);
+  const labelAt = blocks.map((b, i) => (!b.includes('\n') && looksLikeLabel(b) ? i : -1)).filter(i => i >= 0);
+  if (labelAt.length >= 2 && labelAt.every((i, k) => k === 0 || i - labelAt[k - 1] >= 2)) {
+    const out: string[] = [];
+    labelAt.forEach((at, k) => {
+      const end = k + 1 < labelAt.length ? labelAt[k + 1] : blocks.length;
+      out.push(blocks[at] + '\n\n' + blocks.slice(at + 1, end).join('\n\n'));
+    });
+    return out;
+  }
   // Single description: drop an introductory "here is ..." line and a trailing advice section.
   const body = preamble.slice();
   while (body.length && !body[0].trim()) body.shift();
@@ -109,13 +138,14 @@ export function buildDescriptionCandidates(raw: string, max = AI_DESCRIPTION_MAX
   const candidates: AiDescriptionCandidate[] = [];
   let rejectedTooLong = 0;
   for (const part of splitRaw(String(raw ?? '').slice(0, AI_DESCRIPTION_RAW_MAX_CHARS))) {
-    const text = cleanDescriptionText(part);
+    const cleaned = cleanDescriptionText(part);
+    const { label, body: text } = extractStyleLabel(cleaned);
     if (!text || seen.has(text)) continue;
     seen.add(text);
     const fitted = cutAtSentenceBoundary(text, max);
     if (fitted === null) { rejectedTooLong++; continue; }
     if (candidates.length >= AI_DESCRIPTION_MAX_CANDIDATES) break;
-    candidates.push({ id: `option-${candidates.length + 1}`, text: fitted, length: fitted.length, trimmed: fitted.length < text.length });
+    candidates.push({ id: `option-${candidates.length + 1}`, text: fitted, length: fitted.length, trimmed: fitted.length < text.length, ...(label ? { label } : {}) });
   }
   return { candidates, rejectedTooLong };
 }
