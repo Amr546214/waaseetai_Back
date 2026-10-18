@@ -252,7 +252,12 @@ export const authorizeActiveRoleWithMessage = (message: string, ...allowedAccoun
     if (!req.user) return next(new AppError('غير مصرح لك بالوصول، يرجى تسجيل الدخول', 401));
     const acting = req.user.activeRole ?? roleOfAccountType(req.user.accountType);
     if (acting && allowedRoles.has(acting)) return next();
-    return next(new AppError(message, 403));
+    // Same machine-readable refusal as authorizeActiveRole, so a tab/device that still believes the other role can reconcile with the server's active role.
+    const held = new Set<UserRole>([...(req.user.roles || []), ...(roleOfAccountType(req.user.accountType) ? [roleOfAccountType(req.user.accountType) as UserRole] : [])]);
+    const required = [...allowedRoles];
+    const error = new AppError(message, 403) as AppError & { code: string; requiredRoles: string[]; activeRole: string | null; canSwitch: boolean };
+    error.code = ROLE_MISMATCH_CODE; error.requiredRoles = required; error.activeRole = acting ?? null; error.canSwitch = required.some(r => held.has(r));
+    return next(error);
   };
 };
 

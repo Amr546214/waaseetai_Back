@@ -242,3 +242,34 @@ test('optionalAuthenticate: an unexpected failure (e.g. the database being unrea
   assert.equal(req.user, undefined);
   assert.equal(loggerErrorCalls.length, 1, 'an unexpected error must be logged, never silently indistinguishable from routine guest traffic');
 });
+
+// H1 (role sync): a wrong-active-role refusal is a 403 with the stable ROLE_MISMATCH code + the server's active role, on BOTH guards, so a stale tab can reconcile.
+import { authorizeActiveRole, authorizeActiveRoleWithMessage } from './auth.middleware';
+import { ROLE_MISMATCH_CODE } from '../utils/role-mismatch';
+
+test('H1: authorizeActiveRole(PROVIDER) with server activeRole CLIENT -> 403 ROLE_MISMATCH carrying activeRole CLIENT and canSwitch', () => {
+  const r = run(authorizeActiveRole(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY), { accountType: AccountType.PROVIDER_INDIVIDUAL, activeRole: 'CLIENT', roles: ['PROVIDER', 'CLIENT'] });
+  assert.equal(r.statusCode, 403);
+  assert.equal(r.code, ROLE_MISMATCH_CODE);
+  assert.equal(r.activeRole, 'CLIENT');
+  assert.equal(r.canSwitch, true);
+});
+
+test('H1: authorizeActiveRoleWithMessage(CLIENT) with server activeRole PROVIDER -> 403 ROLE_MISMATCH, same message kept', () => {
+  const r = run(authorizeActiveRoleWithMessage('بدّل', AccountType.CLIENT_INDIVIDUAL, AccountType.CLIENT_COMPANY), { accountType: AccountType.PROVIDER_INDIVIDUAL, activeRole: 'PROVIDER', roles: ['PROVIDER', 'CLIENT'] });
+  assert.equal(r.statusCode, 403);
+  assert.equal(r.code, ROLE_MISMATCH_CODE);
+  assert.equal(r.activeRole, 'PROVIDER');
+  assert.equal(r.message, 'بدّل');
+  assert.equal(r.canSwitch, true);
+});
+
+test('H1: a user who does NOT hold the role gets ROLE_MISMATCH with canSwitch=false (must not be auto-switched)', () => {
+  const r = run(authorizeActiveRole(AccountType.PROVIDER_INDIVIDUAL), { accountType: AccountType.CLIENT_INDIVIDUAL, activeRole: 'CLIENT', roles: ['CLIENT'] });
+  assert.equal(r.statusCode, 403);
+  assert.equal(r.canSwitch, false);
+});
+
+test('H1: matching active role passes both guards', () => {
+  assert.equal(run(authorizeActiveRole(AccountType.PROVIDER_INDIVIDUAL), { accountType: AccountType.PROVIDER_INDIVIDUAL, activeRole: 'PROVIDER', roles: ['PROVIDER'] }), undefined);
+});
