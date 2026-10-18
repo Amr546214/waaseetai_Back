@@ -272,6 +272,9 @@ export class AuthService {
 		const otpCode = crypto.randomInt(100000, 999999).toString();
 		const expiresAt = new Date(Date.now() + EMAIL_OTP_EXPIRY_MS);
 		await authRepository.createOtp(user.id, otpCode, OtpType.EMAIL, expiresAt, OtpPurpose.ACTIVATION);
+		if (process.env.NODE_ENV === 'development') {
+			console.log(`\n======================================================\n🔑 [LOCAL DEV ACTIVATION OTP] Email: ${user.email} -> CODE: ${otpCode}\n======================================================\n`);
+		}
 
 		// 5. Send it WITHOUT waiting for SMTP: the public answer is identical for a new and an in-use address, and an SMTP round-trip
 		//    would make a new registration measurably slower than an in-use one. A failed send is logged by sendActivationEmail (never the
@@ -308,6 +311,9 @@ export class AuthService {
 			return { emailSent: true, reused: false };
 		}
 		const { otpCode, reused } = await this.prepareActivationCode(user.id);
+		if (!reused && process.env.NODE_ENV === 'development') {
+			console.log(`\n======================================================\n🔑 [LOCAL DEV ACTIVATION OTP] Email: ${user.email} -> CODE: ${otpCode}\n======================================================\n`);
+		}
 		const emailSent = await this.sendActivationEmail(user.email, otpCode, reused ? 'resend-same-code' : 'resend-new-code');
 		return { emailSent, reused };
 	}
@@ -628,6 +634,9 @@ export class AuthService {
 			expiresAt = new Date(Date.now() + EMAIL_OTP_EXPIRY_MS);
 			await authRepository.deleteOtpsByPurpose(userId, OtpPurpose.LOGIN_EMAIL);
 			await authRepository.createOtp(userId, code, OtpType.EMAIL, expiresAt, OtpPurpose.LOGIN_EMAIL);
+		}
+		if (process.env.NODE_ENV === 'development') {
+			console.log(`\n======================================================\n🔑 [LOCAL DEV LOGIN OTP] Email: ${email} -> CODE: ${code}\n======================================================\n`);
 		}
 		try {
 			await notificationService.sendLoginOtpEmail(email, code);

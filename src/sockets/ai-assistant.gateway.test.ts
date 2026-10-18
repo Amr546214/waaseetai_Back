@@ -350,16 +350,57 @@ for (const [label, reply] of [
   });
 }
 
-test('rewrite: a reply longer than 2000 characters is cut to 2000', async (t) => {
-  const register = await loadGateway(t, { waseetFetch: async () => okStream(['ا'.repeat(1500), 'ب'.repeat(1500)]) });
-  const { socket, handlers, emitted } = createMockSocket({ userId: 'user-1' });
+test('rewrite: a multi-option preview beyond 2000 characters is delivered in full with separate editor limits', async (t) => {
+  const chunks = ['### الخيار الأول\n' + 'أ'.repeat(1600), '\n### الخيار الثاني\n' + 'ب'.repeat(1600), '\n### الخيار الثالث\n' + 'ج'.repeat(1600) + '\nالتسليم 15/10/2026 والميزانية 4500 دولار.'];
+  const register = await loadGateway(t, { waseetFetch: async () => okStream(chunks) });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'preview-user' });
   register(socket);
 
   await handlers['ai:generate_description'](VALID_PAYLOAD);
 
   const complete = emitted.find((e) => e.event === 'ai:description_complete')!;
-  assert.equal(complete.payload.fullText.length, 2000);
-  assert.equal(emitted.find((e) => e.event === 'ai:description_chunk')!.payload.chunk.length, 2000);
+  assert.equal(complete.payload.fullText, chunks.join(''));
+  assert.equal(emitted.find((e) => e.event === 'ai:description_chunk')!.payload.chunk, chunks.join(''));
+  assert.equal(complete.payload.previewMaxChars, 30000);
+  assert.equal(complete.payload.descriptionMaxChars, 2000);
+  assert.equal(complete.payload.truncated, false);
+});
+
+test('rewrite: an oversized preview is rejected with explicit partial metadata, never silently completed', async (t) => {
+  const register = await loadGateway(t, { waseetFetch: async () => okStream(['أ'.repeat(16000), 'ب'.repeat(16000)]) });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'overlimit-preview-user' });
+  register(socket);
+  await handlers['ai:generate_description'](VALID_PAYLOAD);
+  assert.equal(emitted.filter(e => e.event === 'ai:description_complete' || e.event === 'ai:description_chunk').length, 0);
+  const error = emitted.at(-1)!;
+  assert.equal(error.payload.code, 'AI_OUTPUT_TOO_LONG');
+  assert.equal(error.payload.partial, true);
+  assert.equal(error.payload.truncated, true);
+  assert.equal(error.payload.partialText, 'أ'.repeat(16000));
+});
+
+test('rewrite: a stream without completion preserves partial preview as non-applicable error data', async (t) => {
+  const register = await loadGateway(t, { waseetFetch: async () => sseResponse([frame('text.delta', { chunk: 'جزء أول غير مكتمل' })]) });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'incomplete-preview-user' });
+  register(socket);
+  await handlers['ai:generate_description'](VALID_PAYLOAD);
+  assert.equal(emitted.filter(e => e.event === 'ai:description_complete' || e.event === 'ai:description_chunk').length, 0);
+  assert.equal(emitted.at(-1)!.payload.code, 'AI_GENERATION_FAILED');
+  assert.equal(emitted.at(-1)!.payload.partialText, 'جزء أول غير مكتمل');
+  assert.equal(emitted.at(-1)!.payload.truncated, true);
+});
+
+test('rewrite: provider truncation metadata cannot turn a partial preview into success', async (t) => {
+  const register = await loadGateway(t, { waseetFetch: async () => sseResponse([
+    frame('text.delta', { chunk: 'جزء ناقص' }),
+    frame('generation.completed', { status: 'completed', finishReason: 'MAX_TOKENS' }),
+  ]) });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'provider-truncated-preview-user' });
+  register(socket);
+  await handlers['ai:generate_description'](VALID_PAYLOAD);
+  assert.equal(emitted.filter(e => e.event === 'ai:description_complete').length, 0);
+  assert.equal(emitted.at(-1)!.payload.code, 'AI_GENERATION_FAILED');
+  assert.equal(emitted.at(-1)!.payload.partial, true);
 });
 
 test('rewrite: an empty reply is refused (AI_OUTPUT_REJECTED), nothing is relayed', async (t) => {

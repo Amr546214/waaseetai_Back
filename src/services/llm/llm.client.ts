@@ -1,11 +1,12 @@
-import type { ZodType } from 'zod';
+import { toJSONSchema, type ZodType } from 'zod';
 import { logger as defaultLogger } from '../../config/logger';
 import { getLlmConfig, type LlmConfig } from './llm.config';
 import { LlmError, LlmErrorCode } from './llm.errors';
-import { GroundingError, verifyGrounding, type GroundingSpec } from './llm.truth';
+import { GroundingError, buildGroundingHint, verifyGrounding, type GroundingSpec } from './llm.truth';
 import { InFlightLock, MonthlyBudget, RateLimiter, TtlLru, canonicalJson, hashOf, userHash } from './llm.limits';
 import { createProvider } from './providers';
 import type { LlmProvider } from './providers/llm-provider';
+import { getDurableLlmGuard, type DurableLlmGuard } from './llm.durable-limits';
 
 export type LlmFeature = 'project-fit' | 'project-health' | 'delivery-review' | (string & {});
 
@@ -22,11 +23,17 @@ export interface GenerateJsonOptions<T> {
   grounding?: GroundingSpec;
   /** Short in-memory cache, ONLY for read-only features whose result does not depend on anything not in `input`. */
   cache?: boolean;
+  signal?: AbortSignal;
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  model?: string;
+  promptVersion?: string;
+  schemaVersion?: string;
 }
 
 export interface GenerateJsonResult<T> {
   data: T;
-  usage: { tokensIn: number; tokensOut: number };
+  usage: { tokensIn: number; tokensOut: number; measured?: boolean };
+  model?: string;
   /** Internal marker; the UI shows the "AI" label only when this is 'LLM'. Never a provider name. */
   source: 'LLM';
 }
@@ -39,6 +46,7 @@ export interface LlmClientDeps {
   logger?: LlmLogger;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  durableGuard?: DurableLlmGuard | null;
 }
 
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -53,6 +61,7 @@ export class LlmClient {
   private readonly log: LlmLogger;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly guardOverride: DurableLlmGuard | null | undefined;
 
   private limiter?: RateLimiter;
   private limiterRate = 0;
@@ -67,6 +76,7 @@ export class LlmClient {
     this.log = deps.logger ?? defaultLogger;
     this.now = deps.now ?? Date.now;
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.guardOverride = deps.durableGuard;
   }
 
   isConfigured(): boolean { return this.getConfig() !== null; }
@@ -76,6 +86,12 @@ export class LlmClient {
     const uh = userHash(opts.userId);
     let tokensIn = 0;
     let tokensOut = 0;
+    let usageMeasured = true;
+    let actualModel: string | undefined;
+    let usageRecorded = false;
+    let attempted = false;
+    let durable: DurableLlmGuard | null | undefined;
+    let reservationId: string | undefined;
     let lockKey: string | null = null;
     try {
       const config = this.getConfig();
@@ -85,7 +101,9 @@ export class LlmClient {
       if (!budget.allows()) throw new LlmError(LlmErrorCode.BUDGET_EXCEEDED, 'monthly budget reached');
 
       // cache first (read-only features): a hit costs nothing and is not rate limited
-      const cacheKey = opts.cache ? hashOf(`${opts.feature}|${opts.userId}|${canonicalJson(opts.input)}`) : null;
+      const schemaIdentity = opts.cache ? opts.schemaVersion || canonicalJson(toJSONSchema(opts.schema, { unrepresentable: 'any' })) : '';
+      const cacheKey = opts.cache ? hashOf(canonicalJson([opts.feature, opts.userId, config.provider, opts.model || config.model, config.policyVersion,
+        opts.effort, opts.promptVersion || opts.system, schemaIdentity, opts.input])) : null;
       if (cacheKey) {
         const hit = this.cache.get(cacheKey) as GenerateJsonResult<T> | undefined;
         if (hit) {
@@ -94,26 +112,44 @@ export class LlmClient {
         }
       }
 
-      if (!this.limiterFor(config).tryAcquire(`${opts.feature}:${opts.userId}`)) throw new LlmError(LlmErrorCode.RATE_LIMITED, 'user rate limit');
+      durable = this.guardOverride === undefined ? (config.provider === 'waseet' || process.env.WASEET_AI_DURABLE_GUARDS ? getDurableLlmGuard() : null) : this.guardOverride;
+      if (!durable && !this.limiterFor(config).tryAcquire(`${opts.feature}:${opts.userId}`)) throw new LlmError(LlmErrorCode.RATE_LIMITED, 'user rate limit');
       lockKey = `${opts.feature}:${opts.userId}`;
       if (!this.lock.acquire(lockKey)) { lockKey = null; throw new LlmError(LlmErrorCode.BUSY, 'concurrent call'); }
 
       const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1000, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS));
       const maxOutputTokens = Math.min(MAX_OUTPUT_TOKENS_CAP, Math.max(100, opts.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS));
+      const userText = JSON.stringify(opts.input ?? null);
+      if (durable) reservationId = (await durable.reserve({ userId: opts.userId, feature: opts.feature, ratePerHour: config.ratePerHour,
+        monthlyBudgetUsd: config.monthlyBudgetUsd, priceInputPerMillionUsd: config.priceInputPerMillionUsd, priceOutputPerMillionUsd: config.priceOutputPerMillionUsd,
+        // Unified gateway may make three bounded vendor attempts per logical call.
+        maxTokensIn: (config.provider === 'waseet' ? 12 : 4) * (Buffer.byteLength(opts.system, 'utf8') + Buffer.byteLength(userText, 'utf8') + 40_000),
+        maxTokensOut: (config.provider === 'waseet' ? 12 : 4) * maxOutputTokens, leaseMs: timeoutMs + 30_000 })).id;
       const controller = new AbortController();
+      const onAbort = () => controller.abort();
+      if (opts.signal?.aborted) controller.abort();
+      else opts.signal?.addEventListener('abort', onAbort, { once: true });
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       const deadline = this.now() + timeoutMs;
       const provider = this.makeProvider(config);
-      const userText = JSON.stringify(opts.input ?? null);
+      const schemaJson = canonicalJson(toJSONSchema(opts.schema, { unrepresentable: 'any' }));
+      const groundingHint = buildGroundingHint(opts.input, opts.grounding);
 
       const call = async (user: string) => {
         let attempt = 0;
         for (;;) {
           try {
-            const res = await provider.generate({ system: opts.system, user, maxOutputTokens, signal: controller.signal });
+            if (controller.signal.aborted) throw new LlmError(LlmErrorCode.TIMEOUT, 'cancelled');
+            attempted = true;
+            const res = await provider.generate({ system: opts.system, user, maxOutputTokens, signal: controller.signal, userId: opts.userId, feature: opts.feature, effort: opts.effort, model: opts.model, schemaJson, groundingHint });
             tokensIn += res.tokensIn; tokensOut += res.tokensOut;
+            usageMeasured = usageMeasured && res.usageMeasured !== false;
+            actualModel = res.model || actualModel;
             return res;
           } catch (error) {
+            // An attempted request with no usage result may still have been billed.
+            // Known usage from another turn does not prove this turn cost zero.
+            if (attempted) usageMeasured = false;
             const e = error instanceof LlmError ? error : new LlmError(LlmErrorCode.UNKNOWN, 'unexpected');
             if (controller.signal.aborted) throw new LlmError(LlmErrorCode.TIMEOUT, 'timeout');
             // one retry, transient upstream failures only, and only if time remains for it
@@ -141,21 +177,27 @@ export class LlmClient {
           }
         }
         budget.record(tokensIn, tokensOut);
-        const result: GenerateJsonResult<T> = { data: parsed.data as T, usage: { tokensIn, tokensOut }, source: 'LLM' };
+        usageRecorded = true;
+        const result: GenerateJsonResult<T> = { data: parsed.data as T, usage: { tokensIn, tokensOut, measured: usageMeasured }, source: 'LLM', ...(actualModel ? { model: actualModel } : {}) };
         if (cacheKey) this.cache.set(cacheKey, result, config.cacheTtlMs);
         this.log.info(this.line({ feature: opts.feature, user: uh, ms: this.now() - started, tokensIn, tokensOut, outcome: 'ok' }));
         return result;
       } finally {
         clearTimeout(timer);
+        opts.signal?.removeEventListener('abort', onAbort);
       }
     } catch (error) {
       const e = error instanceof LlmError ? error : new LlmError(LlmErrorCode.UNKNOWN, 'unexpected');
       // tokens spent on a failed call still count against the budget
-      if ((tokensIn || tokensOut) && this.budget) this.budget.record(tokensIn, tokensOut);
+      if (!usageRecorded && (tokensIn || tokensOut) && this.budget) this.budget.record(tokensIn, tokensOut);
       this.log.warn(this.line({ feature: opts.feature, user: uh, ms: this.now() - started, tokensIn, tokensOut, outcome: 'error', errorCode: e.code }));
       throw e;
     } finally {
       if (lockKey) this.lock.release(lockKey);
+      if (durable && reservationId) {
+        try { await durable.settle(reservationId, { tokensIn, tokensOut, measured: usageMeasured && tokensIn + tokensOut > 0, attempted }); }
+        catch { throw new LlmError(LlmErrorCode.PROVIDER_UNAVAILABLE, 'usage ledger settlement failed'); }
+      }
     }
   }
 

@@ -296,7 +296,7 @@ export class AccreditationAiService {
     // actually been granted the credential — not whether the sample itself
     // is labeled AI_VERIFIED, which only ever means "AI
     // recommends approval", never "approval already granted".
-    if (sample.providerSpecialty?.status === 'APPROVED') throw new AppError('تم اعتماد هذا النموذج مسبقاً', 409);
+    if (sample.status === AccreditationStatus.AI_VERIFIED && sample.providerSpecialty?.status === 'APPROVED') throw new AppError('تم اعتماد هذا النموذج مسبقاً', 409);
 
     const approved = await prisma.$transaction(async (tx) => {
       const updated = await tx.accreditationSample.update({

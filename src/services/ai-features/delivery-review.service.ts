@@ -5,6 +5,8 @@ import { llmClient, type LlmClient } from '../llm/llm.client';
 import { llmErrorToAppError } from '../llm/llm.errors';
 import { buildPayload, type AllowRule } from '../llm/llm.payload';
 import { GROUNDING_RULES_AR, basedOnSchema, countNumbers, inputsUsed } from './ai-feature.shared';
+import { waseetAiClient, type WaseetAiClient } from '../ai/waseet-ai/waseet-ai.client';
+import { currentWaseetActor } from '../ai/waseet-ai/waseet-ai.auth';
 
 // Features #19/#24 — advisory review of a stage delivery. Built in-house (LlmClient). It NEVER approves/rejects a delivery and never
 // reads file CONTENT: only the note and each file's name + extension (derived from its URL). Requirements are the PROJECT's
@@ -45,7 +47,7 @@ export interface DeliveryReviewResult {
   insufficientData: boolean;
   message: string | null;
   /** Fixed: the review never reads file contents. */
-  contentRead: false;
+  contentRead: boolean;
   contentNotice: string;
   requirementsScope: 'PROJECT';
   summary: string | null;
@@ -56,7 +58,9 @@ export interface DeliveryReviewResult {
   // fields the existing screens already read
   alignedPoints: string[];
   potentialGaps: string[];
-  reviewedInputs: { deliveryText: boolean; stageRequirements: boolean; attachmentContent: false };
+  reviewedInputs: { deliveryText: boolean; stageRequirements: boolean; attachmentContent: boolean };
+  evidence?: Array<{ source: string; sha256: string; contentRead: boolean; excerpt: string; truncated: boolean; basis: string }>;
+  execution?: { status: 'UNAVAILABLE'; executed: false; reason: string };
   inputsUsed: string[];
   unavailableFields: string[];
 }
@@ -76,13 +80,14 @@ export function fileNameAndExt(entry: string): { name: string; ext: string } {
 }
 
 export class DeliveryReviewService {
-  constructor(private readonly llm: Pick<LlmClient, 'generateJson'> = llmClient) {}
+  constructor(private readonly llm: Pick<LlmClient, 'generateJson'> = llmClient,
+    private readonly inspection: { enabled?: () => boolean; client?: Pick<WaseetAiClient, 'reviewDelivery'> } = {}) {}
 
   async review(userId: string, key: string, stageId: string): Promise<DeliveryReviewResult> {
     const contract = await prisma.contract.findFirst({
       where: { OR: [{ projectId: key }, { id: key }], AND: [{ OR: [{ providerId: userId }, { clientId: userId }] }] },
       select: {
-        project: { select: { title: true, description: true, requirements: true } },
+        project: { select: { id: true, title: true, description: true, requirements: true } },
         stages: { where: { id: stageId }, select: { title: true, description: true, deliveries: { orderBy: { submittedAt: 'asc' }, select: { note: true, files: true, submittedAt: true } } } },
       },
     });
@@ -105,6 +110,10 @@ export class DeliveryReviewService {
     const requirements: string[] = (payload.project.requirements as string[]).filter((r) => typeof r === 'string' && r.trim());
     // nothing the model could actually compare → say so
     if (!used.includes('delivery.note') && !used.includes('delivery.files')) return this.empty(NOT_ENOUGH_DELIVERY_DATA_MESSAGE, used, unavailable);
+
+    if ((this.inspection.enabled ?? (() => process.env.WASEET_AI_GATEWAY_ENABLED === 'true'))()) {
+      return this.reviewContent(userId, contract.project.id || key, stageId, payload, latest.files ?? [], used, unavailable, requirements);
+    }
 
     try {
       const res = await this.llm.generateJson<DeliveryReviewOutput>({
@@ -130,6 +139,49 @@ export class DeliveryReviewService {
       };
     } catch (error) {
       throw llmErrorToAppError(error);
+    }
+  }
+
+  private async reviewContent(userId: string, projectId: string, stageId: string, payload: any, entries: string[], used: string[], unavailable: string[], requirements: string[]): Promise<DeliveryReviewResult> {
+    const files = entries.slice(0, 6).flatMap(entry => {
+      let url = entry, name = fileNameAndExt(entry).name;
+      if (entry.trim().startsWith('{')) {
+        try { const object = JSON.parse(entry); url = object.url || object.fileUrl; } catch { return []; }
+      }
+      try { const parsed = new URL(url); if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return []; }
+      catch { return []; }
+      return [{ name: name.slice(0, 300) || 'attachment', url }];
+    });
+    const schema = z.object({ summary: z.string().min(1).max(4000), contentRead: z.boolean(),
+      requirementsScope: z.literal('PROJECT'), met: z.array(z.object({ requirement: z.string().max(2000), evidence: z.string().min(1).max(2000), source: z.string().min(1).max(2000) })).max(50),
+      potentialGaps: z.array(z.string().max(2000)).max(60), questionsForReviewer: z.array(z.string().max(2000)).max(20),
+      evidence: z.array(z.object({ source: z.string().max(2000), sha256: z.string().regex(/^[a-f0-9]{64}$/), contentRead: z.boolean(), excerpt: z.string().max(24000), truncated: z.boolean(), basis: z.string().max(100) })).max(30),
+      unavailable: z.array(z.string().max(2500)).max(30),
+      execution: z.object({ status: z.literal('UNAVAILABLE'), executed: z.literal(false), reason: z.string().max(1000) }),
+    });
+    try {
+      const actor = currentWaseetActor();
+      const raw = await (this.inspection.client ?? waseetAiClient).reviewDelivery({ view: actor?.role === 'provider' ? 'provider' : 'client',
+        projectId, stageId, scopeAgreed: payload.stage.description || '', submissionDetails: payload.delivery.note || '',
+        requirements, requirementsScope: 'PROJECT', files, deliverableLinks: [] },
+        { actor: actor ?? { userId, role: 'client' }, timeoutMs: 60_000 });
+      const data = schema.parse(raw);
+      const evidenceBySource = new Map(data.evidence.filter(e => e.contentRead).map(e => [e.source, e.excerpt]));
+      if (data.contentRead !== (evidenceBySource.size > 0) || data.met.some(m => !requirements.includes(m.requirement)
+        || !(m.source === 'delivery-note' ? String(payload.delivery.note || '') : evidenceBySource.get(m.source) || '').includes(m.evidence)))
+        throw new Error('UNGROUNDED_DELIVERY_EVIDENCE');
+      const met = data.met.map(m => ({ requirement: m.requirement, evidence: m.evidence }));
+      const documented = new Set(met.map(m => m.requirement));
+      const unmetRequirements = requirements.filter(r => !documented.has(r));
+      return { generationSource: 'LLM', insufficientData: false, message: null, contentRead: data.contentRead,
+        contentNotice: data.contentRead ? 'قُرئت الأجزاء النصية المحددة في الأدلة؛ لم يُشغّل الكود ولم يُعتمد التسليم تلقائياً.' : CONTENT_NOT_READ_NOTICE,
+        requirementsScope: 'PROJECT', summary: data.summary, met, unmetRequirements, observations: [], questionsForReviewer: data.questionsForReviewer,
+        alignedPoints: met.map(m => `${m.requirement} — «${m.evidence}»`), potentialGaps: data.potentialGaps,
+        reviewedInputs: { deliveryText: used.includes('delivery.note'), stageRequirements: requirements.length > 0, attachmentContent: data.contentRead },
+        evidence: data.evidence, execution: data.execution, inputsUsed: [...used, ...(data.contentRead ? ['delivery.attachmentContent'] : [])],
+        unavailableFields: [...unavailable, ...data.unavailable] };
+    } catch {
+      throw new AppError('تعذر فحص محتوى التسليم أو التحقق من أدلته حالياً. لم يُعتمد التسليم تلقائياً.', 503);
     }
   }
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { canRewrite, checkRewriteOutput, hasEnoughDescriptionToRewrite } from './description-rewrite-guard';
+import { canRewrite, checkRewriteOutput, checkRewritePreview, hasEnoughDescriptionToRewrite, REWRITE_MAX_CHARS, REWRITE_PREVIEW_MAX_CHARS } from './description-rewrite-guard';
 
 const DRAFT = 'أحتاج متجرًا إلكترونيًا لبيع الملابس يدعم الدفع عبر الإنترنت وإدارة المخزون ولوحة تحكم للطلبات';
 
@@ -19,8 +19,16 @@ test('output: the reply is accepted as written (assistant phrasing, markdown, ne
   }
 });
 
-test('output: only an empty reply is refused; a long one is cut to 2000', () => {
+test('selected output: empty or over-limit descriptions are rejected without truncating their content', () => {
   assert.deepEqual(checkRewriteOutput(DRAFT, '  \n '), { ok: false, reason: 'empty' });
-  const r = checkRewriteOutput(DRAFT, 'ا'.repeat(2600));
-  assert.equal(r.ok && r.text.length, 2000);
+  assert.deepEqual(checkRewriteOutput(DRAFT, 'ا'.repeat(REWRITE_MAX_CHARS)), { ok: true, text: 'ا'.repeat(REWRITE_MAX_CHARS) });
+  assert.deepEqual(checkRewriteOutput(DRAFT, 'ا'.repeat(REWRITE_MAX_CHARS + 1)), { ok: false, reason: 'too_long' });
+});
+
+test('preview: preserve all alternative drafts and final facts beyond the selected-description limit', () => {
+  const text = `مقدمة\n### الخيار الأول\n${'أ'.repeat(1800)}\n### الخيار الثاني\n${'ب'.repeat(1800)}\n### الخيار الثالث\n${'ج'.repeat(1800)}\nموعد التسليم 15/10/2026 والميزانية 4500 دولار.`;
+  assert.deepEqual(checkRewritePreview(DRAFT, text), { ok: true, text });
+  assert.deepEqual(checkRewritePreview(DRAFT, 'ا'.repeat(REWRITE_PREVIEW_MAX_CHARS)), { ok: true, text: 'ا'.repeat(REWRITE_PREVIEW_MAX_CHARS) });
+  assert.deepEqual(checkRewritePreview(DRAFT, 'ا'.repeat(REWRITE_PREVIEW_MAX_CHARS + 1)), { ok: false, reason: 'too_long' });
+  assert.deepEqual(checkRewritePreview(DRAFT, ' \n '), { ok: false, reason: 'empty' });
 });

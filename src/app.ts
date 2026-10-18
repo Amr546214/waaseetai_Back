@@ -49,6 +49,9 @@ import { createOpenApiDocument } from './config/swagger';
 
 // Load environment variables
 dotenv.config();
+// Waseet AI connection settings (WASEET_AI_BASE_URL, WASEET_AI_GATEWAY_ENABLED, WASEET_AI_AUTH_MODE, WASEET_AI_CLIENT_ID, WASEET_AI_ENVIRONMENT, WASEET_AI_CLIENT_SECRET)
+// come from the environment ONLY. Nothing is defaulted or forced here: without them the Waseet AI client reports NOT_CONFIGURED and its calls fail closed
+// (no network request) while the rest of the platform boots normally.
 
 // Initialize Express app
 const app = express();
@@ -357,6 +360,13 @@ mountAppRoute('/api/admin/analytics', adminAnalyticsRoutes);
 mountAppRoute('/admin/analytics', adminAnalyticsRoutes);
 mountAppRoute('/api/kyc-documents', kycDocumentsRoutes);
 mountAppRoute('/kyc-documents', kycDocumentsRoutes);
+
+import knowledgeRoutes from './routes/knowledge.routes';
+
+mountAppRoute('/api/knowledge', knowledgeRoutes);
+mountAppRoute('/knowledge', knowledgeRoutes);
+mountAppRoute('/api/faq', knowledgeRoutes);
+mountAppRoute('/faq', knowledgeRoutes);
 mountAppRoute('/api', apiRouter);
 mountAppRoute('/', apiRouter);
 

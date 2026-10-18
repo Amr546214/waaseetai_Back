@@ -35,11 +35,31 @@ function client(provider: LlmProvider, config: LlmConfig | null = CONFIG, extra:
 const base = { feature: 'project-fit', userId: 'user-1', schema: Schema, system: 'sys', input: { project: { title: 'متجر إلكتروني' } } };
 const ok = JSON.stringify({ summary: 'ملخص', score: 80 });
 
+test('durable client settles failed attempted turns conservatively despite known usage from another turn', async () => {
+  const reservations: any[] = [], settlements: any[] = [];
+  const durableGuard = { reserve: async (value: unknown) => { reservations.push(value); return { id: 'lease' }; },
+    settle: async (...args: any[]) => { settlements.push(args); }, close: async () => {} };
+  const c = client(fakeProvider(['invalid json', new LlmError(LlmErrorCode.TIMEOUT, 'lost response')]), CONFIG, { durableGuard });
+  await assert.rejects(c.generateJson(base));
+  assert.equal(reservations.length, 1); assert.equal(reservations[0].maxTokensOut, 6000);
+  assert.deepEqual(settlements, [['lease', { tokensIn: 100, tokensOut: 50, measured: false, attempted: true }]]);
+});
+
+test('cache identity changes when prompt, schema or effort changes', async () => {
+  const calls: LlmProviderRequest[] = [];
+  const c = client(fakeProvider([ok], calls));
+  await c.generateJson({ ...base, cache: true }); await c.generateJson({ ...base, cache: true });
+  await c.generateJson({ ...base, cache: true, system: 'new instruction' });
+  await c.generateJson({ ...base, cache: true, effort: 'high' });
+  await c.generateJson({ ...base, cache: true, schema: z.object({ summary: z.string(), score: z.number(), extra: z.string().optional() }) });
+  assert.equal(calls.length, 4);
+});
+
 test('success returns data, usage and source LLM (never a provider name)', async () => {
   const r = await client(fakeProvider([ok])).generateJson(base);
   assert.deepEqual(r.data, { summary: 'ملخص', score: 80 });
   assert.equal(r.source, 'LLM');
-  assert.deepEqual(r.usage, { tokensIn: 100, tokensOut: 50 });
+  assert.deepEqual(r.usage, { tokensIn: 100, tokensOut: 50, measured: true });
 });
 
 test('missing env → NOT_CONFIGURED (503, fixed Arabic message), no provider call', async () => {

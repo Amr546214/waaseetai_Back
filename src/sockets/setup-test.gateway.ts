@@ -107,7 +107,7 @@ export class SetupTestGateway {
         const graded = await waseetAiClient.submitAssessment(
           session.vendorAttemptId,
           { submittedAnswers: { ...session.answers }, timeSpentSeconds },
-          { timeoutMs: GRADING_TIMEOUT_MS }
+          { timeoutMs: GRADING_TIMEOUT_MS, actor: { userId, role: 'provider' } }
         );
         if (!graded || typeof graded.score !== 'number' || !Number.isFinite(graded.score) || graded.score < 0 || graded.score > 100) {
           throw new Error('WaseetAI returned an invalid grading result');
@@ -204,7 +204,7 @@ export class SetupTestGateway {
             specialtyName,
             questionCount: SETUP_TEST_QUESTION_COUNT,
             timeLimitMinutes: SETUP_TEST_TIME_LIMIT_MINUTES
-          }, { signal: abortController.signal, timeoutMs: GENERATION_TIMEOUT_MS })) {
+          }, { signal: abortController.signal, timeoutMs: GENERATION_TIMEOUT_MS, actor: { userId, role: 'provider' } })) {
             if (event.type === 'question') {
               const q = event.question;
               if (

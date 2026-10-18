@@ -25,6 +25,9 @@ function setup(t: TestContext, opts: { verify: 'ok' | 'throw'; user?: any; noUse
     findByEmail: async () => (opts.noUser ? null : user),
     createUserWithProfile: async (input: any, _hash: any, google: any) => { created.push({ input, google }); return { id: 'new-user', email: input.email }; },
     createOtp: async () => ({}),
+    findLatestOtpByPurpose: async () => null,
+    deleteOtpsByPurpose: async () => ({ count: 0 }),
+    invalidateOtpsByPurpose: async () => ({ count: 0 }),
   } } });
   t.mock.module('./notification.service', { namedExports: { notificationService: {
     sendEmailOtp: async () => ({ messageId: 'x', accepted: ['a'], rejected: [] }),
@@ -76,13 +79,13 @@ test('invalid Google token on POST /register (googleIdToken): 401, no account is
   assert.equal(created.length, 0);
 });
 
-test('valid Google login still works: a session is issued', async (t) => {
+test('valid Google login still works: triggers login OTP challenge', async (t) => {
   const { logs } = setup(t, { verify: 'ok' });
   const { authService } = await load();
   const result: any = await authService.googleAuth({ idToken: SECRET_TOKEN, intent: 'login' } as any, {});
-  assert.equal(result.verified, true);
-  assert.equal(typeof result.token, 'string');
-  assert.equal(result.user.email, 'g@example.com');
+  assert.equal(result.verified, false);
+  assert.equal(result.loginOtpRequired, true);
+  assert.equal(result.userId, 'user-1');
   assert.ok(logs.every(l => !l.includes(SECRET_TOKEN)), 'the token is never logged on the happy path either');
 });
 

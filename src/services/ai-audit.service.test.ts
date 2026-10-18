@@ -83,6 +83,16 @@ test('isApproved=false is still advisory (no status/rejection write)', async (t)
   assert.ok(!('status' in updates[0].data) && !('auditRejectionReason' in updates[0].data));
 });
 
+test('a human-review advisory audit with null approval persists the real score without approving publication', async (t) => {
+  const verdict = { ...VERDICT, isApproved: null, status: 'REQUIRES_HUMAN_REVIEW', scoreBasis: 'OFFERING_COMPLETENESS_RUBRIC' };
+  const { svc, updates } = await load(t, { audit: async () => verdict });
+  const result = await svc.executeAuditSync('svc-1');
+  assert.deepEqual(result, { outcome: 'audited', serviceId: 'svc-1', score: 87.6, isApproved: null });
+  assert.equal(updates[0].data.aiAuditScore, 87.6);
+  assert.deepEqual(updates[0].data.aiAuditReport, { source: 'WASEET_AI', ...verdict });
+  for (const key of ['status', 'approvedAt', 'auditRejectionReason']) assert.ok(!(key in updates[0].data));
+});
+
 test('no specialty -> skipped, no call, no write', async (t) => {
   const { svc, calls, updates } = await load(t, { model: makeModel({ specialty: null }) });
   const r = await svc.executeAuditSync('svc-1');

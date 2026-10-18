@@ -7,6 +7,9 @@ import { llmClient, type LlmClient } from '../llm/llm.client';
 import { buildPayload, type AllowRule } from '../llm/llm.payload';
 import { GROUNDING_RULES_AR, basedOnSchema, countNumbers, inputsUsed } from './ai-feature.shared';
 import { aiFailed, aiNotEnoughData, aiReady, parseStoredAiResult, type AiResult } from './ai-result';
+import { getLlmConfig } from '../llm/llm.config';
+import { waseetAiClient, type WaseetAiClient } from '../ai/waseet-ai/waseet-ai.client';
+import { currentWaseetActor } from '../ai/waseet-ai/waseet-ai.auth';
 
 // Advisory AI review of a provider's portfolio / work samples for ONE of their specialties (in-house LlmClient, text metadata only).
 //  - It reads the specialty's WorkSample rows (title, description, technologies, file type, number of proof files) and the specialty name.
@@ -34,7 +37,8 @@ export const PortfolioReviewSchema = z.object({
   recommendations: z.array(itemSchema).max(4),
 });
 export type PortfolioReviewOutput = z.infer<typeof PortfolioReviewSchema>;
-export interface PortfolioReviewDetails { strengths: { text: string; basedOn: string[] }[]; warnings: { text: string; basedOn: string[] }[]; recommendations: { text: string; basedOn: string[] }[] }
+export interface PortfolioReviewDetails { strengths: { text: string; basedOn: string[] }[]; warnings: { text: string; basedOn: string[] }[]; recommendations: { text: string; basedOn: string[] }[];
+  contentRead?: boolean; evidence?: unknown[]; unavailable?: string[]; executionVerified?: false }
 
 export const PORTFOLIO_REVIEW_SYSTEM = `أنت مراجع يقيّم نماذج أعمال مقدّم خدمة في تخصص محدد، اعتماداً على بيانات JSON المرسلة فقط (عناوين النماذج ووصفها والتقنيات المذكورة ونوع الملف وعدد ملفات الإثبات).
 المطلوب: ملخص قصير (summary)، ونقاط قوة (strengths)، وملاحظات تحتاج انتباهاً (warnings)، وتوصيات لتحسين النماذج (recommendations).
@@ -50,23 +54,29 @@ const withMeta = (r: AiResult<PortfolioReviewDetails>, samplesCount: number, una
 export class SpecialtyPortfolioReviewService {
   private readonly inFlight = new Map<string, Promise<PortfolioReviewResult>>();
 
-  constructor(private readonly llm: Pick<LlmClient, 'generateJson'> = llmClient, private readonly db: typeof prisma = prisma) {}
+  constructor(private readonly llm: Pick<LlmClient, 'generateJson'> = llmClient, private readonly db: typeof prisma = prisma,
+    private readonly inspection: { enabled?: () => boolean; client?: Pick<WaseetAiClient, 'reviewPortfolio'> } = {}) {}
+
+  private contentEnabled(): boolean { return (this.inspection.enabled ?? (() => process.env.WASEET_AI_GATEWAY_ENABLED === 'true'))(); }
 
   /** The specialty (with its samples) of THIS provider, or 404: another provider's specialty is indistinguishable from a missing one. */
   private async loadOwned(userId: string, providerSpecialtyId: string) {
     const row = await this.db.providerSpecialty.findFirst({
       where: { id: providerSpecialtyId, providerProfile: { userId } },
-      select: { id: true, specialty: { select: { nameAr: true, name: true } }, workSamples: { orderBy: { createdAt: 'asc' }, take: 20, select: { title: true, description: true, technologies: true, mimeType: true, proofs: { select: { id: true } } } } },
+      select: { id: true, specialty: { select: { nameAr: true, name: true } }, workSamples: { orderBy: { createdAt: 'asc' }, take: 20, select: { title: true, description: true, technologies: true, mimeType: true, publicSampleUrl: true, updatedAt: true, proofs: { select: { id: true, fileName: true, fileUrl: true, mimeType: true, createdAt: true } } } } },
     });
     if (!row) throw new AppError('التخصص غير موجود أو لا تملك صلاحية الوصول إليه', 404);
     return row;
   }
 
   private buildPayload(row: Awaited<ReturnType<SpecialtyPortfolioReviewService['loadOwned']>>) {
-    return buildPayload({
+    const payload = buildPayload({
       specialty: { name: row.specialty?.nameAr || row.specialty?.name || null },
       samples: row.workSamples.map((s) => ({ title: s.title, description: s.description, technologies: s.technologies, fileType: s.mimeType, proofFilesCount: s.proofs.length })),
     }, PORTFOLIO_REVIEW_ALLOW) as any;
+    if (this.contentEnabled()) payload.inspectionSources = row.workSamples.map(s => ({ projectUrl: s.publicSampleUrl,
+      updatedAt: s.updatedAt, attachments: s.proofs.map(p => ({ url: p.fileUrl, name: p.fileName, mimeType: p.mimeType, createdAt: p.createdAt })) }));
+    return payload;
   }
 
   private static hasEnoughData(payload: any): boolean {
@@ -80,37 +90,38 @@ export class SpecialtyPortfolioReviewService {
     const samplesCount = row.workSamples.length;
     if (inputsUsed(payload, PATHS).length < 2 || !SpecialtyPortfolioReviewService.hasEnoughData(payload)) return withMeta(aiNotEnoughData<PortfolioReviewDetails>(), samplesCount);
 
-    const inputHash = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
-    const running = this.inFlight.get(providerSpecialtyId);
+    const inputHash = this.inputHash(payload);
+    const jobKey = `${userId}:${providerSpecialtyId}:${inputHash}`;
+    const running = this.inFlight.get(jobKey);
     if (running) return running; // concurrent request for the same specialty: share the one evaluation
-    const job = this.run(providerSpecialtyId, userId, payload, inputHash, samplesCount).finally(() => this.inFlight.delete(providerSpecialtyId));
-    this.inFlight.set(providerSpecialtyId, job);
+    const job = this.run(providerSpecialtyId, userId, payload, inputHash, samplesCount).finally(() => this.inFlight.delete(jobKey));
+    this.inFlight.set(jobKey, job);
     return job;
   }
 
   private async run(providerSpecialtyId: string, userId: string, payload: any, inputHash: string, samplesCount: number): Promise<PortfolioReviewResult> {
     // same samples as the stored READY result: nothing new to evaluate
     const latest = await this.findLatestLog(providerSpecialtyId);
-    if (latest && (latest.rawRequest as any)?.inputHash === inputHash) {
+    if (latest && (latest.rawRequest as any)?.inputHash === inputHash && (!this.contentEnabled() || Date.now() - latest.createdAt.getTime() < 600_000)) {
       const stored = parseStoredAiResult(latest.rawResponse);
       if (stored?.status === 'READY') return withMeta(stored as AiResult<PortfolioReviewDetails>, samplesCount);
     }
     const started = Date.now();
     try {
-      const res = await this.llm.generateJson<PortfolioReviewOutput>({
+      const res = this.contentEnabled() ? await this.inspectPortfolio(providerSpecialtyId, userId, payload) : await this.llm.generateJson<PortfolioReviewOutput>({
         feature: 'specialty-portfolio-review', userId, schema: PortfolioReviewSchema, system: PORTFOLIO_REVIEW_SYSTEM, input: payload,
         timeoutMs: 30_000, maxOutputTokens: 1300, cache: false,
         grounding: { basedOn: ['strengths[].basedOn', 'warnings[].basedOn', 'recommendations[].basedOn'], freeText: ['summary', 'strengths[].text', 'warnings[].text', 'recommendations[].text'], allowedNumbers: countNumbers(payload) },
       });
       const result = aiReady<PortfolioReviewDetails>({
-        source: 'GEMINI', score: null, confidence: null, summary: res.data.summary, recommendation: null,
-        details: { strengths: res.data.strengths, warnings: res.data.warnings, recommendations: res.data.recommendations },
+        source: this.contentEnabled() ? 'WASEET_AI' : 'GEMINI', score: null, confidence: null, summary: res.data.summary, recommendation: null,
+        details: { strengths: res.data.strengths, warnings: res.data.warnings, recommendations: res.data.recommendations, ...('inspectionDetails' in res ? res.inspectionDetails as object : {}) },
       });
       try {
         await this.db.aiAuditLog.create({ data: {
           providerSpecialtyId, modelVersion: PORTFOLIO_REVIEW_MODEL_VERSION, promptTokens: res.usage.tokensIn, completionTokens: res.usage.tokensOut,
           totalTokens: res.usage.tokensIn + res.usage.tokensOut, latencyMs: Date.now() - started,
-          rawRequest: { inputHash, payload } as any, rawResponse: result as any, evaluationResult: 'READY',
+          rawRequest: { inputHash, payload, usageMeasured: res.usage.measured !== false, actualModel: res.model || null } as any, rawResponse: result as any, evaluationResult: 'READY',
         } });
       } catch (storeError) {
         // the review itself succeeded; failing to keep it only means it is not remembered after a refresh
@@ -124,14 +135,38 @@ export class SpecialtyPortfolioReviewService {
     }
   }
 
+  private async inspectPortfolio(providerSpecialtyId: string, userId: string, payload: any) {
+    const schema = z.object({ status: z.literal('PENDING_REVIEW'), inspected: z.boolean(),
+      feedback: z.object({ summary: z.string().min(1).max(4000), strengths: z.array(z.string().max(2000)).max(20), warnings: z.array(z.string().max(2000)).max(20), corrections: z.array(z.string().max(2000)).max(20) }),
+      evidence: z.array(z.object({ source: z.string().max(2000), sha256: z.string().regex(/^[a-f0-9]{64}$/), contentRead: z.boolean(), excerpt: z.string().max(24000), truncated: z.boolean(), basis: z.string().max(100) })).max(30),
+      unavailable: z.array(z.string().max(2500)).max(30) });
+    const raw = await (this.inspection.client ?? waseetAiClient).reviewPortfolio({ providerSpecialtyId, specialtyName: payload.specialty.name,
+      samples: payload.samples.map((sample: object, i: number) => ({ ...sample, ...payload.inspectionSources[i] })) },
+      { actor: currentWaseetActor() ?? { userId, role: 'provider' }, timeoutMs: 60_000 });
+    const data = schema.parse(raw);
+    if (data.inspected !== data.evidence.some(e => e.contentRead)) throw new Error('INVALID_INSPECTION_BASIS');
+    const items = (values: string[]) => values.map(text => ({ text, basedOn: ['samples'] }));
+    return { data: { summary: data.feedback.summary, strengths: items(data.feedback.strengths), warnings: items(data.feedback.warnings), recommendations: items(data.feedback.corrections) },
+      usage: { tokensIn: 0, tokensOut: 0, measured: false }, model: undefined,
+      inspectionDetails: { contentRead: data.inspected, evidence: data.evidence, unavailable: data.unavailable, executionVerified: false } };
+  }
+
   private findLatestLog(providerSpecialtyId: string) {
     return this.db.aiAuditLog.findFirst({ where: { providerSpecialtyId, modelVersion: PORTFOLIO_REVIEW_MODEL_VERSION, evaluationResult: 'READY' }, orderBy: { createdAt: 'desc' }, select: { rawRequest: true, rawResponse: true, createdAt: true } });
+  }
+
+  private inputHash(payload: unknown): string {
+    const config = getLlmConfig();
+    return createHash('sha256').update(JSON.stringify([payload, PORTFOLIO_REVIEW_MODEL_VERSION, PORTFOLIO_REVIEW_SYSTEM,
+      config?.provider ?? null, config?.model ?? null, config?.policyVersion ?? null])).digest('hex');
   }
 
   /** The latest stored READY evaluation, or NOT_ENOUGH_DATA with nothing in it when there is none. */
   async latest(userId: string, providerSpecialtyId: string): Promise<PortfolioReviewResult> {
     const row = await this.loadOwned(userId, providerSpecialtyId);
     const log = await this.findLatestLog(providerSpecialtyId);
+    if (log && ((log.rawRequest as { inputHash?: string } | null)?.inputHash !== this.inputHash(this.buildPayload(row)) || this.contentEnabled() && Date.now() - log.createdAt.getTime() >= 600_000))
+      return withMeta(aiNotEnoughData<PortfolioReviewDetails>(), row.workSamples.length);
     const stored = log ? parseStoredAiResult(log.rawResponse) : null;
     if (!stored || stored.status !== 'READY') return withMeta(aiNotEnoughData<PortfolioReviewDetails>(), row.workSamples.length);
     return withMeta({ ...(stored as AiResult<PortfolioReviewDetails>), generatedAt: stored.generatedAt ?? log!.createdAt.toISOString() }, row.workSamples.length);

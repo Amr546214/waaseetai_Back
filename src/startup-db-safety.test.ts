@@ -15,6 +15,15 @@ const PRESTART_SCRIPT = path.join(REPO_ROOT, 'scripts', 'prestart.sh');
 const ENTRYPOINT_SCRIPT = path.join(REPO_ROOT, 'scripts', 'docker-entrypoint.sh');
 const PACKAGE_JSON = path.join(REPO_ROOT, 'package.json');
 
+const hasBash = (() => {
+  try {
+    execFileSync(process.platform === 'win32' ? 'where' : 'which', ['bash'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 function runPrestartWithFakeNpx(env: Record<string, string>): string[] {
   const dir = mkdtempSync(path.join(tmpdir(), 'prestart-test-'));
   const logFile = path.join(dir, 'calls.log');
@@ -43,26 +52,26 @@ function runPrestartWithFakeNpx(env: Record<string, string>): string[] {
   return calls;
 }
 
-test('prestart.sh: RUN_DB_MIGRATIONS and RUN_DB_PUSH both explicitly false — never calls migrate deploy or db push', () => {
+test('prestart.sh: RUN_DB_MIGRATIONS and RUN_DB_PUSH both explicitly false — never calls migrate deploy or db push', { skip: !hasBash ? 'bash not installed on host' : false }, () => {
   const calls = runPrestartWithFakeNpx({ RUN_DB_MIGRATIONS: 'false', RUN_DB_PUSH: 'false' });
   assert.ok(calls.some(c => c.includes('prisma generate')), 'expected prisma generate to still run');
   assert.ok(!calls.some(c => c.includes('migrate deploy')), 'migrate deploy must NOT run when RUN_DB_MIGRATIONS=false');
   assert.ok(!calls.some(c => c.includes('db push')), 'db push must NOT run when RUN_DB_PUSH=false');
 });
 
-test('prestart.sh: both flags UNSET — defaults are fail-closed, never mutates schema', () => {
+test('prestart.sh: both flags UNSET — defaults are fail-closed, never mutates schema', { skip: !hasBash ? 'bash not installed on host' : false }, () => {
   const calls = runPrestartWithFakeNpx({});
   assert.ok(!calls.some(c => c.includes('migrate deploy')), 'migrate deploy must NOT run when RUN_DB_MIGRATIONS is unset');
   assert.ok(!calls.some(c => c.includes('db push')), 'db push must NOT run when RUN_DB_PUSH is unset');
 });
 
-test('prestart.sh: RUN_DB_MIGRATIONS=true calls migrate deploy, and never falls through to db push', () => {
+test('prestart.sh: RUN_DB_MIGRATIONS=true calls migrate deploy, and never falls through to db push', { skip: !hasBash ? 'bash not installed on host' : false }, () => {
   const calls = runPrestartWithFakeNpx({ RUN_DB_MIGRATIONS: 'true', RUN_DB_PUSH: 'true' });
   assert.ok(calls.some(c => c.includes('migrate deploy')), 'migrate deploy must run when RUN_DB_MIGRATIONS=true');
   assert.ok(!calls.some(c => c.includes('db push')), 'db push must not also run — migrate deploy takes precedence');
 });
 
-test('prestart.sh: RUN_DB_PUSH=true with RUN_DB_MIGRATIONS=false calls db push (not migrate deploy)', () => {
+test('prestart.sh: RUN_DB_PUSH=true with RUN_DB_MIGRATIONS=false calls db push (not migrate deploy)', { skip: !hasBash ? 'bash not installed on host' : false }, () => {
   const calls = runPrestartWithFakeNpx({ RUN_DB_MIGRATIONS: 'false', RUN_DB_PUSH: 'true' });
   assert.ok(calls.some(c => c.includes('db push')), 'db push must run when RUN_DB_PUSH=true and migrations is false');
   assert.ok(!calls.some(c => c.includes('migrate deploy')), 'migrate deploy must not run in this case');

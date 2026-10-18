@@ -34,6 +34,10 @@ interface UploadCloudFileOptions {
 
 export const DEFAULT_MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 
+function isLocalDevFallback(): boolean {
+	return process.env.CLOUDINARY_CLOUD_NAME === 'local-dev';
+}
+
 function ensureConfigured(): void {
 	const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
 	const apiKey = process.env.CLOUDINARY_API_KEY;
@@ -71,13 +75,29 @@ export async function uploadCloudFile(buffer: Buffer, options: UploadCloudFileOp
 	if (mimeType.toLowerCase().includes('svg') || looksLikeMarkup(buffer)) throw new AppError('ملفات SVG وملفات HTML غير مسموح برفعها', 400);
 	// The declared type is client-controlled: for the types we can recognise (png/jpeg/gif/webp/pdf) the first bytes must agree with it.
 	if (!contentMatchesDeclaredType(buffer, mimeType)) throw new AppError('محتوى الملف لا يطابق نوعه المعلن. ارفع صورة أو ملف PDF صالحاً.', 400);
-	ensureConfigured();
 	const resourceType = options.resourceType || cloudinaryResourceType(mimeType);
 	const extension = path.extname(options.fileName).replace('.', '');
 	const baseName = path.basename(options.fileName, path.extname(options.fileName));
+	const cleanFolder = options.folder.split('/').map(safeSegment).join('/');
+	const itemId = `${safeSegment(baseName)}-${Date.now()}`;
+	if (isLocalDevFallback()) {
+		const publicId = `${cleanFolder}/${itemId}`;
+		const cleanExt = extension.replace(/[^A-Za-z0-9]/g, '').slice(0, 10);
+		const fmt = cleanExt || (mimeType === 'image/png' ? 'png' : mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'application/pdf' ? 'pdf' : 'bin');
+		return {
+			url: `https://res.cloudinary.com/local-dev/${resourceType}/upload/${publicId}.${fmt}`,
+			fileName: options.fileName,
+			publicId,
+			resourceType,
+			mimeType,
+			bytes: buffer.length,
+			...(options.private ? { privateRef: buildPrivateRef({ resourceType, format: fmt, publicId }) } : {})
+		};
+	}
+	ensureConfigured();
 	const result = await uploadStream(buffer, {
-		folder: options.folder.split('/').map(safeSegment).join('/'),
-		public_id: `${safeSegment(baseName)}-${Date.now()}`,
+		folder: cleanFolder,
+		public_id: itemId,
 		resource_type: resourceType,
 		use_filename: false,
 		unique_filename: true,
@@ -123,8 +143,14 @@ export async function storeKycFileIfNeeded(value: string | null | undefined, fol
 export function createPrivateDownloadUrl(ref: string, ttlSeconds: number): { url: string; expiresAt: Date } | null {
 	const parsed = parsePrivateRef(ref);
 	if (!parsed) return null;
-	ensureConfigured();
 	const expiresAtSec = Math.floor(Date.now() / 1000) + ttlSeconds;
+	if (isLocalDevFallback()) {
+		return {
+			url: `https://res.cloudinary.com/local-dev/${parsed.resourceType}/authenticated/${parsed.publicId}.${parsed.format || 'bin'}`,
+			expiresAt: new Date(expiresAtSec * 1000)
+		};
+	}
+	ensureConfigured();
 	const url = cloudinary.utils.private_download_url(parsed.publicId, parsed.format || '', { resource_type: parsed.resourceType, type: 'authenticated', expires_at: expiresAtSec });
 	return { url, expiresAt: new Date(expiresAtSec * 1000) };
 }
@@ -136,6 +162,7 @@ export function createPrivateDownloadUrl(ref: string, ttlSeconds: number): { url
 export async function privateFileExists(ref: string): Promise<boolean> {
 	const parsed = parsePrivateRef(ref);
 	if (!parsed) return false;
+	if (isLocalDevFallback()) return true;
 	ensureConfigured();
 	try {
 		const res: any = await cloudinary.api.resource(parsed.publicId, { resource_type: parsed.resourceType, type: 'authenticated' });
@@ -167,6 +194,7 @@ export async function ensureCloudinaryUrl(value: string | null | undefined, fold
 export { isOwnCloudinaryUrl };
 
 export async function deleteCloudFile(publicId: string, resourceType: CloudinaryResourceType = 'image'): Promise<void> {
+	if (isLocalDevFallback()) return;
 	ensureConfigured();
 	await cloudinary.uploader.destroy(publicId, { resource_type: resourceType, invalidate: true });
 }

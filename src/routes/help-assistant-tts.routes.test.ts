@@ -152,7 +152,7 @@ test('TTS: authenticated request → mocked upstream → 200 audio/wav with the 
 	});
 });
 
-test('TTS: identity comes from the authenticated request — client-supplied userId/role/model are never trusted or forwarded', async () => {
+test('TTS: identity is authenticated; an allowlisted client model is forwarded without accepting identity injection', async () => {
 	const calls: Recorded[] = [];
 	const limitedFor: string[] = [];
 	const url = await start(authedRouter({ calls, limited: (id) => { limitedFor.push(id); return false; } }));
@@ -160,7 +160,7 @@ test('TTS: identity comes from the authenticated request — client-supplied use
 	assert.equal(res.status, 200);
 	assert.deepEqual(limitedFor, ['user-1']);
 	const sent = JSON.parse(String(calls[0].init.body));
-	assert.equal(sent.model, TTS_MODEL);
+  assert.equal(sent.model, 'gemini-3.8-flash-tts');
 	assert.equal('userId' in sent || 'role' in sent, false);
 });
 

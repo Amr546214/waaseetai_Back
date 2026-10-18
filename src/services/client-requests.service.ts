@@ -15,6 +15,7 @@ import type { RequestDraftResponse } from './ai/waseet-ai/waseet-ai.types';
 import { CreateClientRequestDto, ClientRequestAiSuggestDto } from '../dtos/create-client-request.dto';
 import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
+import { readProposalReview, proposalBudgetSuitability, proposalDeadlineSuitability, proposalRecommendationRanks } from './proposal-suitability';
 import { providerNotifications } from './provider-notifications.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import { listLifecycles, activeDisputeCounts } from './project-lifecycle.service';
@@ -55,6 +56,10 @@ export interface ClientRequestAiSuggestion {
 	suggestedTitle: string | null;
 	suggestedDescription: string | null;
 	suggestedSubSpecialties: string[] | null;
+	suggestedRequiredSkills?: string[] | null;
+	suggestedRequirements?: string[] | null;
+	suggestedOutputs?: string | null;
+	suggestedMilestones?: Array<{ name: string; pct: number }> | null;
 	recommendedMinBudget: number | null;
 	recommendedMaxBudget: number | null;
 	suggestedDurationDays: number | null;
@@ -82,6 +87,20 @@ export function mapRequestDraftToSuggestion(raw: Partial<RequestDraftResponse> |
 		? raw.suggestedSubSpecialties.map(nonEmptyString).filter((x): x is string => x !== null)
 		: [];
 
+	const skills = Array.isArray(raw.suggestedRequiredSkills)
+		? raw.suggestedRequiredSkills.map(nonEmptyString).filter((x): x is string => x !== null)
+		: [];
+
+	const reqs = Array.isArray(raw.suggestedRequirements)
+		? raw.suggestedRequirements.map(nonEmptyString).filter((x): x is string => x !== null)
+		: [];
+
+	const milestones = Array.isArray(raw.suggestedMilestones)
+		? raw.suggestedMilestones
+			.filter(m => m && typeof m.name === 'string' && m.name.trim().length >= 2 && typeof m.pct === 'number' && m.pct > 0)
+			.map(m => ({ name: m.name.trim(), pct: Math.round(m.pct) }))
+		: [];
+
 	let min = positiveNumber(raw.recommendedMinBudget);
 	let max = positiveNumber(raw.recommendedMaxBudget);
 	if (min !== null && max !== null && max < min) { min = null; max = null; }
@@ -95,6 +114,10 @@ export function mapRequestDraftToSuggestion(raw: Partial<RequestDraftResponse> |
 		suggestedTitle: nonEmptyString(raw.suggestedTitle),
 		suggestedDescription: nonEmptyString(raw.suggestedDescription),
 		suggestedSubSpecialties: subs.length > 0 ? subs : null,
+		...(skills.length > 0 ? { suggestedRequiredSkills: skills } : {}),
+		...(reqs.length > 0 ? { suggestedRequirements: reqs } : {}),
+		...(nonEmptyString(raw.suggestedOutputs) ? { suggestedOutputs: nonEmptyString(raw.suggestedOutputs) } : {}),
+		...(milestones.length >= 2 ? { suggestedMilestones: milestones } : {}),
 		recommendedMinBudget: min,
 		recommendedMaxBudget: max,
 		suggestedDurationDays: positiveNumber(raw.suggestedDurationDays),
@@ -189,25 +212,27 @@ export class ClientRequestsService {
 	}
 
 	/**
-	 * POST /api/client/my-requests/ai-suggest
-	 * WaseetAI request-draft (POST /v1/ai/request-draft). Only the verified
-	 * request fields {title, description, specialtyName, currency} are sent:
-	 * the selected sub-specialties and the client's past-request history have
-	 * no field in that contract and are NOT sent.
+	 * POST /api/client/requests/ai-suggest
 	 */
 	public async generateAiSuggest(_clientId: string, payload: ClientRequestAiSuggestDto): Promise<ClientRequestAiSuggestion> {
-		const title = payload.title?.trim() || undefined;
-		const description = payload.description?.trim() || undefined;
-		const specialtyName = payload.specialtyName?.trim() || undefined;
+		const specialtyName = payload.specialtyName?.trim() || 'عام';
+		const title = payload.title?.trim() || `مشروع في مجال ${specialtyName}`;
+		const description = payload.description?.trim() || `مطلوب تنفيذ ${title} في تخصص ${specialtyName}${payload.subSpecialties?.length ? ` (${payload.subSpecialties.join('، ')})` : ''}.`;
 
 		const unavailable = () => new AppError('تعذر توليد اقتراح ذكي لطلبك حالياً، يرجى المحاولة لاحقاً.', 503);
 
 		let draft: RequestDraftResponse;
 		try {
-			draft = await waseetAiClient.requestDraft({ title, description, specialtyName, currency: CLIENT_REQUEST_AI_CURRENCY });
+			draft = await waseetAiClient.requestDraft({
+				title,
+				description,
+				specialtyName,
+				...(payload.subSpecialties?.length ? { subSpecialties: payload.subSpecialties } : {}),
+				...(payload.availableSkills?.length ? { availableSkills: payload.availableSkills } : {}),
+				...(payload.deliveryDays ? { deliveryDays: payload.deliveryDays } : {}),
+				currency: CLIENT_REQUEST_AI_CURRENCY
+			});
 		} catch (error) {
-			// Honest failure: code/status only are logged, upstream text is never
-			// forwarded, and no fabricated suggestion is returned.
 			const e = normalizeWaseetAiError(error);
 			console.error(`[ClientRequests] WaseetAI request-draft failed code=${e.code} status=${e.status ?? '-'} requestId=${e.requestId ?? '-'}`);
 			throw unavailable();
@@ -1145,8 +1170,10 @@ export class ClientRequestsService {
 		// proposal's own plan/price/days only — never project fit or price
 		// fairness — so it is exposed under quality-specific names.
 		const qualityMap = new Map<string, { tag: string | null; summary: string | null }>();
+		const reviewMap = new Map<string, ReturnType<typeof readProposalReview>>();
 		for (const pp of projectProposals) {
 			milestonesMap.set(pp.providerId, pp.milestones || []);
+			reviewMap.set(pp.providerId, readProposalReview(pp.aiFeedback));
 			const fb = pp.aiFeedback as { source?: unknown; summary?: unknown } | null;
 			qualityMap.set(pp.providerId, {
 				tag: pp.aiQualityTag || null,
@@ -1208,6 +1235,7 @@ export class ClientRequestsService {
 
 			// Merge milestones from ProjectProposal if available
 			const realMilestones = milestonesMap.get(prop.providerId) || [];
+			const review = reviewMap.get(prop.providerId);
 
 			// What the client may do with this offer right now, and the server's reason when not (the page shows the reason, never a dead button).
 			const negotiation = negotiationByProvider.get(prop.providerId) || { state: 'NONE' as const, counter: null };
@@ -1230,7 +1258,13 @@ export class ClientRequestsService {
 				workPlan: prop.workPlan || '',
 				bidAmount: Number(prop.price || 0),
 				deliveryDays: prop.deliveryDays || 1,
-				aiMatchScore: prop.aiMatchScore || null,
+				aiMatchScore: prop.aiMatchScore ?? null,
+				aiQualityScore: review?.qualityScore ?? null,
+				aiProviderFit: review?.providerFit ?? null,
+				budgetSuitability: proposalBudgetSuitability(Number(prop.price), request.minBudget, request.maxBudget, request.budgetType),
+				deadlineSuitability: proposalDeadlineSuitability(prop.deliveryDays, request.expectedDurationDays),
+				aiRecommendationRank: null as number | null,
+				aiRecommendationBasis: [] as string[],
 				aiFairPriceMin: prop.aiFairPriceMin || null,
 				aiFairPriceMax: prop.aiFairPriceMax || null,
 				aiPriceTag: prop.aiPriceTag || null,
@@ -1269,6 +1303,20 @@ export class ClientRequestsService {
 				}))
 			};
 		});
+		// Every AI result was stored on submission. Viewing the page performs
+		// zero inference; ranks compare reviewed live offers without changing status.
+		const recommendationRanks = proposalRecommendationRanks(proposals);
+		for (const proposal of proposals) {
+			proposal.aiRecommendationRank = recommendationRanks.get(proposal.id) ?? null;
+			if (proposal.aiRecommendationRank !== null) {
+				const fitLabels = { HIGH: 'مرتفعة', MEDIUM: 'متوسطة', LOW: 'منخفضة' };
+				proposal.aiRecommendationBasis = [
+					`ملاءمة الملف والعرض لمتطلبات الطلب: ${fitLabels[proposal.aiProviderFit!.overallFit]}.`,
+					proposal.deadlineSuitability.summary, proposal.budgetSuitability.summary,
+					proposal.aiQualityScore !== null ? 'تقييم جودة نص العرض مسجل ومنفصل عن ملاءمة المقدم.' : 'تقييم جودة نص العرض غير متوفر.',
+				];
+			}
+		}
 
 		const stage = deriveRequestStage({ requestStatus: request.status, contractStatus: contract?.status ?? null, offerStatuses: request.proposals.map(p => p.status), settled: (await adminSettlementFor({ projectId: requestId })).settled });
 
@@ -1305,6 +1353,7 @@ export class ClientRequestsService {
 			attachments,
 			proposalsCount: proposals.length,
 			proposals,
+			aiRecommendationPolicy: 'الملاءمة الفنية للملف والعرض أولًا، ثم توافق المدة والميزانية، ثم جودة نص العرض. البيانات غير المتوفرة تبقى ظاهرة كغير متوفرة؛ الاختيار النهائي لك.',
 			aiAnalysis: readAiAnalysis(request.aiAnalyzedSummary, request.aiComplexityRating),
 			client: {
 				name: (request.clientProfile?.user?.firstName || '') + ' ' + (request.clientProfile?.user?.lastName || ''),
