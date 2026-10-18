@@ -340,3 +340,62 @@ test('setup: a VERIFIED identity is never downgraded by a re-save', async (t) =>
   assert.equal(res.statusCode, 200);
   assert.equal(x.getProviderProfileState().kycStatus, 'VERIFIED');
 });
+
+// ── G4 (file-link rejection): a value the user already has stored, echoed back unchanged, is "keep" — never re-validated as a new link ──
+const GOOGLE_PHOTO = 'https://lh3.googleusercontent.com/a/ACg8ocLabcDEF=s96-c';
+const FOREIGN_MSG = 'رابط الملف غير مسموح به؛ ارفع الملف مباشرة من الجهاز';
+
+test('G4 provider saveSetupData: the stored Google sign-in photo echoed back unchanged is accepted and kept (was a 400 «رابط الملف غير مسموح به»)', async (t) => {
+  process.env.CLOUDINARY_CLOUD_NAME = 'demo';
+  const { controller, getProviderProfileState } = await loadControllerWithFixture(t);
+  getProviderProfileState().avatarUrl = GOOGLE_PHOTO; // the real DEV shape: ProviderProfile.avatarUrl = lh3.googleusercontent.com/...
+  const res = createMockRes();
+  await controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ avatarUrl: GOOGLE_PHOTO }) } as any, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(getProviderProfileState().avatarUrl, GOOGLE_PHOTO);
+});
+
+test('G4 provider saveSetupData: a DIFFERENT external photo link is still refused with the same message, and so is a replaced-by-foreign value when a Google photo is stored', async (t) => {
+  process.env.CLOUDINARY_CLOUD_NAME = 'demo';
+  const { controller, getProviderProfileState } = await loadControllerWithFixture(t);
+  getProviderProfileState().avatarUrl = GOOGLE_PHOTO;
+  for (const bad of ['https://lh3.googleusercontent.com/a/OTHER=s96-c', 'https://evil.example.com/a.jpg', 'https://res.cloudinary.com/other-cloud/image/upload/v1/x.jpg', 'http://res.cloudinary.com/demo/image/upload/v1/x.jpg']) {
+    const res = createMockRes();
+    await controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ avatarUrl: bad }) } as any, res);
+    assert.equal(res.statusCode, 400, bad);
+  }
+  const res = createMockRes();
+  await controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ avatarUrl: 'https://evil.example.com/a.jpg' }) } as any, res);
+  assert.equal(res.statusCode, 400);
+  assert.equal(getProviderProfileState().avatarUrl, GOOGLE_PHOTO);
+  assert.match(JSON.stringify(res.body), /رابط الملف غير مسموح به/);
+});
+
+test('G4 provider saveSetupData: replacing the photo (direct upload → our storage URL) over a stored Google photo works', async (t) => {
+  process.env.CLOUDINARY_CLOUD_NAME = 'demo';
+  const { controller, getProviderProfileState } = await loadControllerWithFixture(t);
+  getProviderProfileState().avatarUrl = GOOGLE_PHOTO;
+  const url = 'https://res.cloudinary.com/demo/image/upload/v1/waseetai/users/user-1/avatar/avatar.jpg';
+  const res = createMockRes();
+  await controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ avatarUrl: url }) } as any, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(getProviderProfileState().avatarUrl, url);
+});
+
+test('G4 provider saveSetupData: a legacy identity value stored as a bare file name, re-sent unchanged, is kept', async (t) => {
+  process.env.CLOUDINARY_CLOUD_NAME = 'demo';
+  const legacy = 'IMG20260101_1234.jpg';
+  const a = await loadControllerWithFixture(t);
+  a.getProviderProfileState().frontIdUrl = legacy;
+  const ok = createMockRes();
+  await a.controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ identity: { frontId: legacy } }) } as any, ok);
+  assert.equal(ok.statusCode, 200);
+});
+
+test('G4 provider saveSetupData: the same bare value for an account that does not have it stored is refused (400)', async (t) => {
+  process.env.CLOUDINARY_CLOUD_NAME = 'demo';
+  const b = await loadControllerWithFixture(t);
+  const bad = createMockRes();
+  await b.controller.saveSetupData({ user: { id: 'user-1' }, body: setupBody({ identity: { frontId: 'IMG20260101_1234.jpg' } }) } as any, bad);
+  assert.equal(bad.statusCode, 400);
+});
