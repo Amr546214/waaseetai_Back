@@ -27,13 +27,22 @@ export const updateIdentitySchema = z.object({
   city: optionalText(80)
 });
 
+// WhatsApp / alternative phone: ONE string (E.164 from the client). The phone-input component's object {countryCode, dialCode, number, e164Number} is the
+// known client mistake (400 "expected string, received object" in English); a cached old bundle may still send it, so an object whose e164Number is a
+// well-formed E.164 string is read as that string. Any other non-string is a field-level 400 in Arabic.
+const E164 = /^\+\d{8,15}$/;
+const alternativePhone = z.preprocess(
+  (v) => (v && typeof v === 'object' && !Array.isArray(v) && typeof (v as { e164Number?: unknown }).e164Number === 'string' && E164.test((v as { e164Number: string }).e164Number) ? (v as { e164Number: string }).e164Number : v),
+  sanitizedText(z.string({ error: 'رقم WhatsApp غير صالح' }).trim().max(20, 'رقم WhatsApp طويل جدًا')).nullable().optional()
+);
+
 export const updateContactSchema = z.object({
   firstName: personName(),
   lastName: personName(),
   avatarUrl: avatarValue,
   email: z.string().trim().email('البريد الإلكتروني غير صحيح').max(254).optional(),
   phoneNumber: optionalText(20),
-  alternativePhone: nullableText(20),
+  alternativePhone,
   address: nullableText(300),
   region: nullableText(80),
   city: nullableText(80),
