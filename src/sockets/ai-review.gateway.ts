@@ -6,7 +6,7 @@ import { waseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
 import { WaseetAiErrorCode, normalizeWaseetAiError } from '../services/ai/waseet-ai/waseet-ai.errors';
 import type { WaseetAiStreamEvent } from '../services/ai/waseet-ai/waseet-ai.types';
 import { isMeaningfulProjectTitle } from '../utils/title-validator';
-import { AI_DESCRIPTION_MAX_CHARS, AI_DESCRIPTION_RAW_MAX_CHARS, buildDescriptionCandidates } from '../utils/ai-description-candidates';
+import { AI_DESCRIPTION_MAX_CHARS, AI_DESCRIPTION_RAW_MAX_CHARS, SEED_FACTS_MARKER, buildDescriptionCandidates } from '../utils/ai-description-candidates';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
 
 // AI text streaming (suggest / enhance) is a WaseetAI-linked feature and stays on WaseetAI (it does not use the internal LlmClient):
@@ -92,6 +92,7 @@ async function relayTextStream(
 	messages: { done: string; failed: string },
 	requestId: string | undefined,
 	active: ActiveStream,
+	seed?: string,
 ): Promise<void> {
 	const rid = requestId ? { requestId } : {};
 	if (!waseetAiClient.isConfigured()) {
@@ -142,7 +143,7 @@ async function relayTextStream(
 		}
 
 		// The result the user can approve is validated HERE, before it is announced as complete: discrete candidates, none over the limit.
-		const { candidates, rejectedTooLong } = buildDescriptionCandidates(raw, AI_DESCRIPTION_MAX_CHARS);
+		const { candidates, rejectedTooLong } = buildDescriptionCandidates(raw, AI_DESCRIPTION_MAX_CHARS, seed);
 		if (!candidates.length) {
 			logger.warn(`[AiReviewGateway] ${mode} reply rejected: no candidate within ${AI_DESCRIPTION_MAX_CHARS} chars (rawLength=${raw.length}, tooLong=${rejectedTooLong})`);
 			emitStreamError(
@@ -153,7 +154,7 @@ async function relayTextStream(
 			);
 			return;
 		}
-		socket.emit('ai_text_stream_end', { mode, message: messages.done, candidates, limit: AI_DESCRIPTION_MAX_CHARS, ...rid });
+		socket.emit('ai_text_stream_end', { mode, message: messages.done, candidates, limit: AI_DESCRIPTION_MAX_CHARS, ...(seed ? { fromContext: true } : {}), ...rid });
 	} catch (error) {
 		if (abortController.signal.aborted) return;
 		const e = normalizeWaseetAiError(error);
@@ -227,7 +228,7 @@ export class AiReviewGateway {
 		});
 
 		// Event 2: Real-time description enhancement stream
-		socket.on('stream_ai_enhance_description', async (payload: { title?: string; description?: string }) => {
+		socket.on('stream_ai_enhance_description', async (payload: { title?: string; description?: string; seeded?: boolean }) => {
 			console.log(`[AiReviewGateway] stream_ai_enhance_description from socket ${socket.id}`);
 			const mode = 'improve';
 			const requestId = readRequestId(payload);
@@ -282,6 +283,8 @@ export class AiReviewGateway {
 				{ done: AI_REVIEW_MESSAGES.ENHANCE_DONE, failed: AI_REVIEW_MESSAGES.ENHANCE_FAILED },
 				requestId,
 				active,
+				// A seeded request (empty-field generation) is checked against the seed's facts; the seed itself is never relayed or stored.
+				payload?.seeded === true && description.includes(SEED_FACTS_MARKER) ? description : undefined,
 			);
 		});
 	}

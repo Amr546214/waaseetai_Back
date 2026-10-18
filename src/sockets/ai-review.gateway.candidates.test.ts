@@ -188,3 +188,30 @@ test('ai_text_stream_cancel stops the running stream silently', async (t) => {
   await running;
   assert.equal(endOf(emitted).length, 0);
 });
+
+test('seeded enhance (empty-field generation): same enhance endpoint, seed sent as description, candidates flagged fromContext with unmentioned specifics', async (t) => {
+  const seed = 'تعليمات...\nالبيانات المقدمة:\nعنوان المشروع: تطوير متجر إلكتروني متكامل\nالمهارات: React';
+  const reply = 'مباشر وواضح\n\nنطوّر متجراً إلكترونياً باستخدام React خلال 30 يوماً بسعر 500 دولار.\n\nاحترافي\n\nنطوّر متجراً إلكترونياً متكاملاً وتُحدد التفاصيل بالاتفاق.';
+  const register = await loadGateway(t, { stream: () => fakeStream(okEvents([reply])) });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'u1' });
+  register(socket);
+  await handlers['stream_ai_enhance_description']({ title: TITLE, description: seed, seeded: true, requestId: 's1' });
+  assert.equal((register as any).calls[0].method, 'streamTextEnhancement');
+  assert.deepEqual((register as any).calls[0].body, { description: seed });
+  const [end] = endOf(emitted);
+  assert.equal(end.fromContext, true);
+  assert.equal(end.candidates.length, 2);
+  assert.deepEqual(end.candidates[0].unmentioned.sort(), ['30', '500']);
+  assert.equal(end.candidates[1].unmentioned, undefined);
+  assert.ok(end.candidates.every((c: any) => !c.text.includes('البيانات المقدمة')));
+});
+
+test('a normal (non-seeded) improve request carries no fromContext / unmentioned flags', async (t) => {
+  const register = await loadGateway(t, { stream: () => fakeStream(okEvents(['وصف محسن كامل يحتوي 30 يوماً.'])) });
+  const { socket, handlers, emitted } = createMockSocket({ userId: 'u1' });
+  register(socket);
+  await handlers['stream_ai_enhance_description']({ title: TITLE, description: 'وصف أصلي كتبه المستخدم' });
+  const [end] = endOf(emitted);
+  assert.equal(end.fromContext, undefined);
+  assert.equal(end.candidates[0].unmentioned, undefined);
+});

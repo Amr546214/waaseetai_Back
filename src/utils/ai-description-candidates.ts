@@ -133,7 +133,7 @@ function splitRaw(raw: string): string[] {
   return [(adviceAt > 0 ? body.slice(0, adviceAt) : body).join('\n')];
 }
 
-export function buildDescriptionCandidates(raw: string, max = AI_DESCRIPTION_MAX_CHARS): AiDescriptionCandidates {
+export function buildDescriptionCandidates(raw: string, max = AI_DESCRIPTION_MAX_CHARS, seed?: string): AiDescriptionCandidates {
   const seen = new Set<string>();
   const candidates: AiDescriptionCandidate[] = [];
   let rejectedTooLong = 0;
@@ -145,7 +145,28 @@ export function buildDescriptionCandidates(raw: string, max = AI_DESCRIPTION_MAX
     const fitted = cutAtSentenceBoundary(text, max);
     if (fitted === null) { rejectedTooLong++; continue; }
     if (candidates.length >= AI_DESCRIPTION_MAX_CANDIDATES) break;
-    candidates.push({ id: `option-${candidates.length + 1}`, text: fitted, length: fitted.length, trimmed: fitted.length < text.length, ...(label ? { label } : {}) });
+    candidates.push({ id: `option-${candidates.length + 1}`, text: fitted, length: fitted.length, trimmed: fitted.length < text.length, ...(label ? { label } : {}), ...(seed ? (() => { const u = findUnseededSpecifics(fitted, seed); return u.length ? { unmentioned: u } : {}; })() : {}) });
   }
   return { candidates, rejectedTooLong };
+}
+
+/** Marker preceding the user's real facts in a seeded (empty-field) request; the instruction lines before it are not facts. */
+export const SEED_FACTS_MARKER = 'البيانات المقدمة:';
+
+const ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
+const toLatinDigits = (t: string) => t.replace(/[٠-٩]/g, d => String(ARABIC_DIGITS.indexOf(d)));
+
+/**
+ * Cheap guard for seeded requests: numbers and Latin tool/technology names the candidate introduces although the user's data never mentioned them.
+ * LIMITATION: this is a heuristic (digits and Latin words only). It cannot detect invented Arabic-worded claims (experience, deliverables, guarantees);
+ * those rely on the instruction inside the seed and on the user reviewing the card.
+ */
+export function findUnseededSpecifics(candidateText: string, seed: string): string[] {
+  const at = seed.indexOf(SEED_FACTS_MARKER);
+  const facts = toLatinDigits(at >= 0 ? seed.slice(at + SEED_FACTS_MARKER.length) : seed).toLowerCase();
+  const text = toLatinDigits(candidateText);
+  const found = new Set<string>();
+  for (const n of text.match(/\d+(?:[.,]\d+)?/g) ?? []) if (!facts.includes(n.toLowerCase())) found.add(n);
+  for (const w of text.match(/[A-Za-z][A-Za-z0-9.+#-]{2,}/g) ?? []) if (!facts.includes(w.toLowerCase())) found.add(w);
+  return [...found].slice(0, 8);
 }
