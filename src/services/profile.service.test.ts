@@ -685,3 +685,19 @@ test('updateTab banking (CLIENT): clearing the PayPal email keeps a legacy bank 
   await profileService.updateTab('user-1', 'banking', { paypalPayoutEmail: null }, 'CLIENT');
   assert.equal('paymentType' in clientUpsertSpy.mock.calls[0].arguments[0].update, false);
 });
+
+test('updateTab (AFFILIATE active): contact saves alternativePhone on User only; no notification preference row is touched', async (t) => {
+  const { profileService, userUpdateSpy } = await loadProfileServiceForUpdate(t, activeUser);
+
+  await profileService.updateTab('user-1', 'contact', { alternativePhone: '+971501234567' }, 'AFFILIATE');
+
+  assert.equal(userUpdateSpy.mock.callCount(), 1);
+  assert.deepEqual(userUpdateSpy.mock.calls[0].arguments[0].data, { alternativePhone: '+971501234567' });
+});
+
+test('updateProfile (avatar only): never creates or modifies notification preferences', async (t) => {
+  const { profileService } = await loadProfileServiceForUpdate(t, activeUser);
+  // the mocked prisma has no notificationPreference model at all: any access would throw a TypeError and fail this test
+  const result = await profileService.updateProfile('user-1', 'CLIENT', { avatarUrl: 'https://new.example/a.png' } as any);
+  assert.ok(result);
+});
