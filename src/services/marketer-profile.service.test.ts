@@ -370,3 +370,13 @@ test('getProfile: the user select includes alternativePhone (the marketer WhatsA
 	assert.equal(findUniqueSpy.mock.calls[0].arguments[0].select.user.select.alternativePhone, true);
 	assert.equal(profile.user.alternativePhone, '+971501234567');
 });
+
+// K-2: an avatar-only PATCH /marketer/profile/marketing-info leaves the stored bio alone (absent field = unchanged, never written as empty).
+test('updateMarketingInfo: a body with only avatarUrl does not write bio (absent = unchanged); the avatar alone is cleared by ""', async (t) => {
+	const { marketerProfileService, updateSpy } = await loadPaypalService(t, (args) => ({ id: 'aff-1', ...args.data }));
+	await marketerProfileService.updateMarketingInfo('user-1', { avatarUrl: '' });
+	const data = updateSpy.mock.calls[0].arguments[0].data;
+	assert.equal(data.avatarUrl, '');
+	assert.equal(data.bio, undefined, 'bio must be left out of the update so Prisma keeps the stored value');
+	assert.equal('bio' in data && data.bio !== undefined, false);
+});
