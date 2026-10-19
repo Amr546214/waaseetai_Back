@@ -173,3 +173,75 @@ export async function assertLegacySpecialtyProofs(db: Db, input: { userId: strin
 	if (existing < PROOF_MIN_FILES) throw fieldError('files', PROOF_REQUIRED_MESSAGE);
 	return { fresh: 0, existing };
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// Admin review: ONE documented list of the proofs of a sample, covering BOTH storage shapes.
+//   UPLOAD          AccreditationProofUpload row (Batch B mechanism): private, opened through POST /api/kyc-documents/access-link {document:'accreditation_upload', id}
+//   LEGACY_PRIVATE  a private reference sitting in AccreditationSample.attachments with no upload row: access-link {document:'accreditation_sample_attachment', id: sampleId, index}
+//   LEGACY_URL      an old public http(s) URL (Cloudinary etc.): `url` is returned as is and opened directly
+//   LEGACY_INLINE   anything else stored in attachments (data: URI, bare file name): shown by name, cannot be opened
+// A private reference is NEVER put in the response (the scrub middleware would turn it into null: that was the `attachments:[null]` defect), only the
+// way to ask for a short-lived link. `available` is the result of a storage stat check: true / false (the file is missing) / null (unknown or not applicable).
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+export type AdminProofSource = 'UPLOAD' | 'LEGACY_PRIVATE' | 'LEGACY_URL' | 'LEGACY_INLINE';
+export interface AdminProofItem {
+	key: string;
+	source: AdminProofSource;
+	id: string | null;
+	fileName: string;
+	mimeType: string | null;
+	bytes: number | null;
+	createdAt: string | null;
+	url: string | null;
+	access: { document: 'accreditation_upload'; id: string } | { document: 'accreditation_sample_attachment'; id: string; index: number } | null;
+	available: boolean | null;
+}
+
+const EXISTS_TIMEOUT_MS = 5000;
+async function probe(ref: string): Promise<boolean | null> {
+	try {
+		return await Promise.race([proofStorage.exists(ref), new Promise<null>(resolve => setTimeout(() => resolve(null), EXISTS_TIMEOUT_MS).unref?.())]);
+	} catch { return null; }
+}
+
+const safeDecode = (v: string) => { try { return decodeURIComponent(v); } catch { return v; } };
+const MIME_BY_EXT: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', pdf: 'application/pdf', zip: 'application/zip' };
+const mimeFromName = (name: string) => MIME_BY_EXT[(name.split('.').pop() || '').toLowerCase()] ?? null;
+
+export async function buildAdminProofList(sample: { id: string; attachments?: unknown; proofUploads?: { id: string; privateRef: string; fileName: string; mimeType: string; bytes: number; createdAt: Date }[] | null }): Promise<AdminProofItem[]> {
+	const uploads = Array.isArray(sample.proofUploads) ? sample.proofUploads : [];
+	const attachments = Array.isArray(sample.attachments) ? sample.attachments : [];
+	const covered = new Set(uploads.map(u => u.privateRef));
+	const items: AdminProofItem[] = [];
+	for (const u of uploads) {
+		items.push({ key: `u:${u.id}`, source: 'UPLOAD', id: u.id, fileName: u.fileName || 'ملف إثبات', mimeType: u.mimeType || null, bytes: u.bytes ?? null, createdAt: u.createdAt ? new Date(u.createdAt).toISOString() : null, url: null, access: { document: 'accreditation_upload', id: u.id }, available: null });
+	}
+	attachments.forEach((raw, index) => {
+		if (typeof raw !== 'string' || !raw.trim()) return; // never an entry for null / empty values
+		if (isPrivateRef(raw)) {
+			if (covered.has(raw)) return; // already listed as an UPLOAD
+			const parsed = parsePrivateRef(raw);
+			const base = parsed?.publicId.split('/').pop() || `مرفق-${index + 1}`;
+			const fileName = parsed?.format ? `${base}.${parsed.format}` : base;
+			items.push({ key: `a:${index}`, source: 'LEGACY_PRIVATE', id: null, fileName, mimeType: mimeFromName(fileName), bytes: null, createdAt: null, url: null, access: parsed ? { document: 'accreditation_sample_attachment', id: sample.id, index } : null, available: null });
+		} else if (/^https?:\/\//i.test(raw)) {
+			const name = safeDecode((raw.split('?')[0].split('#')[0].split('/').pop() || '').trim()) || `مرفق-${index + 1}`;
+			items.push({ key: `a:${index}`, source: 'LEGACY_URL', id: null, fileName: name, mimeType: mimeFromName(name), bytes: null, createdAt: null, url: raw, access: null, available: null });
+		} else if (raw.startsWith('data:')) {
+			const m = /^data:([a-z0-9.+-]+\/[a-z0-9.+-]+)[;,]/i.exec(raw);
+			items.push({ key: `a:${index}`, source: 'LEGACY_INLINE', id: null, fileName: `مرفق-${index + 1}`, mimeType: m ? m[1].toLowerCase() : null, bytes: null, createdAt: null, url: null, access: null, available: null });
+		} else {
+			items.push({ key: `a:${index}`, source: 'LEGACY_INLINE', id: null, fileName: safeDecode(raw.split('/').pop() || '').slice(0, 120) || `مرفق-${index + 1}`, mimeType: null, bytes: null, createdAt: null, url: null, access: null, available: null });
+		}
+	});
+	// storage existence of the private files (bounded: at most PROOF_MAX_FILES uploads + legacy private refs, each probe has a timeout and never throws)
+	const refOf = new Map<string, string>();
+	uploads.forEach(u => refOf.set(`u:${u.id}`, u.privateRef));
+	attachments.forEach((raw, index) => { if (typeof raw === 'string' && isPrivateRef(raw) && !covered.has(raw)) refOf.set(`a:${index}`, raw); });
+	await Promise.all(items.map(async item => { const ref = refOf.get(item.key); if (ref) item.available = await probe(ref); }));
+	return items;
+}
+
+/** The legacy `attachments` field of the admin detail: public http(s) links only, so it can never hold a null / private reference / inline data. */
+export const publicLegacyAttachments = (attachments: unknown): string[] =>
+	(Array.isArray(attachments) ? attachments : []).filter((a): a is string => typeof a === 'string' && /^https?:\/\//i.test(a));

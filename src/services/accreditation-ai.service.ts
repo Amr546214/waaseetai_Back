@@ -5,7 +5,7 @@ import { AppError } from '../utils/app-error';
 import { aiFeatureUnavailablePayload } from './ai/ai-feature-unavailable';
 import { AdminActor, adminAuditData } from './admin-audit';
 import { providerNotifications } from './provider-notifications.service';
-import { resolveProofsForSubmission } from './accreditation-proof.service';
+import { resolveProofsForSubmission, buildAdminProofList, publicLegacyAttachments } from './accreditation-proof.service';
 
 // Accreditation sample submission. The AI evaluation of samples is DISABLED:
 // no documented WaseetAI contract exists for sample evaluation and it is not wired to the
@@ -40,6 +40,19 @@ const withoutInternalNote = <T extends { internalNote?: unknown }>(sample: T): O
   const { internalNote: _internal, ...rest } = sample;
   return rest;
 };
+
+/**
+ * Decision claim: exactly ONE concurrent approve / reject of a sample wins. Only an undecided sample (decidedAt null) in a decidable state matches; the loser
+ * matches zero rows and gets a 409, so a double click or two admins can never decide twice (and never duplicate the side effects below).
+ * Decidable: MANUAL_REVIEW, PENDING_AI_AUDIT, NEEDS_COMPLETION, and AI_VERIFIED without a decision (old stored AI result). A REJECTED sample is not decidable.
+ */
+async function claimForDecision(tx: any, id: string) {
+  const claimed = await tx.accreditationSample.updateMany({
+    where: { id, decidedAt: null, status: { in: [AccreditationStatus.MANUAL_REVIEW, AccreditationStatus.PENDING_AI_AUDIT, AccreditationStatus.NEEDS_COMPLETION, AccreditationStatus.AI_VERIFIED] } },
+    data: { decidedAt: new Date() },
+  });
+  if (claimed.count !== 1) throw new AppError('تمت معالجة هذا النموذج مسبقاً', 409);
+}
 
 export class AccreditationAiService {
   /**
@@ -256,7 +269,7 @@ export class AccreditationAiService {
       include: {
         // admin only: the review history INCLUDING the internal notes, and the proof documents (opened through the KYC access-link, never as a URL)
         events: { orderBy: { createdAt: 'asc' } },
-        proofUploads: { where: { status: 'COMPLETED' }, select: { id: true, fileName: true, mimeType: true, bytes: true, createdAt: true } },
+        proofUploads: { where: { status: 'COMPLETED' }, orderBy: { createdAt: 'asc' }, select: { id: true, privateRef: true, fileName: true, mimeType: true, bytes: true, createdAt: true } },
         providerProfile: {
           select: {
             id: true,
@@ -283,7 +296,11 @@ export class AccreditationAiService {
       ? await prisma.assessmentAttempt.findFirst({ where: { providerSpecialtyId: sample.providerSpecialty.id, status: { in: ['COMPLETED', 'FAILED'] } }, orderBy: { completedAt: 'desc' }, select: { id: true, score: true, status: true, completedAt: true, analyzedAssetsSnapshot: true } })
       : null;
     const review = (attempt?.analyzedAssetsSnapshot as { review?: unknown } | null)?.review ?? null;
-    return { ...sample, assessmentReview: attempt ? { attemptId: attempt.id, status: attempt.status, score: attempt.score, completedAt: attempt.completedAt, review } : null };
+    // Proof contract (admin detail): `proofs` lists BOTH shapes (upload rows + legacy attachments) with how to open each; the private reference never leaves the server.
+    const proofs = await buildAdminProofList(sample as any);
+    const { proofUploads: _uploads, ...rest } = sample as any;
+    const publicUploads = ((_uploads ?? []) as any[]).map(({ privateRef: _ref, ...u }) => u);
+    return { ...rest, attachments: publicLegacyAttachments(sample.attachments), proofUploads: publicUploads, proofs, assessmentReview: attempt ? { attemptId: attempt.id, status: attempt.status, score: attempt.score, completedAt: attempt.completedAt, review } : null };
   }
 
   async adminApproveSample(id: string, actor?: AdminActor) {
@@ -297,8 +314,11 @@ export class AccreditationAiService {
     // is labeled AI_VERIFIED, which only ever means "AI
     // recommends approval", never "approval already granted".
     if (sample.status === AccreditationStatus.AI_VERIFIED && sample.providerSpecialty?.status === 'APPROVED') throw new AppError('تم اعتماد هذا النموذج مسبقاً', 409);
+    if (sample.status === AccreditationStatus.REJECTED) throw new AppError('تم رفض هذا النموذج مسبقاً', 409);
+    const specialtyAlreadyApproved = sample.providerSpecialty?.status === 'APPROVED';
 
     const approved = await prisma.$transaction(async (tx) => {
+      await claimForDecision(tx, id);
       const updated = await tx.accreditationSample.update({
         where: { id },
         // `aiAuditedAt` records WHEN AN AI AUDITED the sample. A human approval must not stamp it: it is only set here (once) when the
@@ -311,15 +331,19 @@ export class AccreditationAiService {
       });
       await tx.accreditationSampleEvent.create({ data: { sampleId: id, kind: 'APPROVED', revision: sample.revision ?? 1, actorId: actor?.id ?? null } });
 
-      await tx.providerSpecialty.updateMany({
-        where: { id: sample.providerSpecialtyId },
-        data: {
-          status: 'APPROVED',
-          isPassed: true,
-          badgeGrantedAt: new Date(),
-          ...(sample.aiScore != null ? { aiScore: sample.aiScore, ownershipCredibility: Math.max(0, sample.aiScore) } : {}),
-        },
-      });
+      // An EXTRA sample of an already-approved specialty: the specialty stays APPROVED exactly as it is (badge date and score are not rewritten).
+      // The conditional where also keeps this idempotent when two different samples are approved at the same moment.
+      if (!specialtyAlreadyApproved) {
+        await tx.providerSpecialty.updateMany({
+          where: { id: sample.providerSpecialtyId, status: { not: 'APPROVED' } },
+          data: {
+            status: 'APPROVED',
+            isPassed: true,
+            badgeGrantedAt: new Date(),
+            ...(sample.aiScore != null ? { aiScore: sample.aiScore, ownershipCredibility: Math.max(0, sample.aiScore) } : {}),
+          },
+        });
+      }
 
       const providerId = (sample as { providerProfile?: { userId?: string } }).providerProfile?.userId;
       if (actor && providerId) {
@@ -334,14 +358,17 @@ export class AccreditationAiService {
   }
 
   async adminRejectSample(id: string, rejectionReason: string, actor?: AdminActor, internalNote?: string | null) {
-    const sample = await prisma.accreditationSample.findUnique({ where: { id }, include: { providerProfile: { select: { userId: true } } } });
+    const sample = await prisma.accreditationSample.findUnique({ where: { id }, include: { providerProfile: { select: { userId: true } }, providerSpecialty: { select: { status: true } } } });
     if (!sample) throw new AppError('نموذج الاعتماد غير موجود', 404);
     if (sample.status === AccreditationStatus.REJECTED) throw new AppError('تم رفض هذا النموذج مسبقاً', 409);
+    // an approved sample (AI_VERIFIED whose specialty is APPROVED) is a decided sample: no second decision
+    if (sample.status === AccreditationStatus.AI_VERIFIED && sample.providerSpecialty?.status === 'APPROVED') throw new AppError('تم اعتماد هذا النموذج مسبقاً', 409);
 
     const adminNote = `\n[مراجعة الإدارة] سبب الرفض: ${rejectionReason}`;
     const existingFeedback = sample.aiFeedbackAr || '';
 
     const rejected = await prisma.$transaction(async (tx) => {
+      await claimForDecision(tx, id);
       const updated = await tx.accreditationSample.update({
         where: { id },
         data: {
