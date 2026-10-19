@@ -361,3 +361,22 @@ test('addChannel: throws when no affiliate profile exists for this user', async 
 
 	await assert.rejects(() => marketerProfileService.addChannel('user-1', { platform: 'INSTAGRAM', handle: '@khalid' }));
 });
+
+test('getProfile: the user select includes alternativePhone (the marketer WhatsApp number) and returns it', async (t) => {
+	const findUniqueSpy = t.mock.fn(async () => fullProfileFixture({ user: { firstName: 'K', lastName: 'G', email: 'k@example.com', phoneNumber: '501234567', phoneCountryCode: '+966', alternativePhone: '+971501234567', idNumber: null, avatarUrl: null } }));
+	t.mock.module('../config/db', { namedExports: { prisma: { affiliateProfile: { findUnique: findUniqueSpy, update: async () => ({}) } } } });
+	const { marketerProfileService } = await import(`./marketer-profile.service.ts?fixture=${Date.now()}-${Math.random()}`);
+	const profile = await marketerProfileService.getProfile('user-1');
+	assert.equal(findUniqueSpy.mock.calls[0].arguments[0].select.user.select.alternativePhone, true);
+	assert.equal(profile.user.alternativePhone, '+971501234567');
+});
+
+// K-2: an avatar-only PATCH /marketer/profile/marketing-info leaves the stored bio alone (absent field = unchanged, never written as empty).
+test('updateMarketingInfo: a body with only avatarUrl does not write bio (absent = unchanged); the avatar alone is cleared by ""', async (t) => {
+	const { marketerProfileService, updateSpy } = await loadPaypalService(t, (args) => ({ id: 'aff-1', ...args.data }));
+	await marketerProfileService.updateMarketingInfo('user-1', { avatarUrl: '' });
+	const data = updateSpy.mock.calls[0].arguments[0].data;
+	assert.equal(data.avatarUrl, '');
+	assert.equal(data.bio, undefined, 'bio must be left out of the update so Prisma keeps the stored value');
+	assert.equal('bio' in data && data.bio !== undefined, false);
+});
