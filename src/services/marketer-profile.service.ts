@@ -50,6 +50,8 @@ export class MarketerProfileService {
             email: true,
             phoneNumber: true,
             phoneCountryCode: true,
+            // the optional WhatsApp number the marketer edits (PUT /profiles/update/contact, same column as client/provider)
+            alternativePhone: true,
             idNumber: true,
             avatarUrl: true
           }
