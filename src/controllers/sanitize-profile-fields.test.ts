@@ -47,9 +47,10 @@ function setup(t: TestContext) {
 	const prisma: any = {
 		skill: { findMany: async () => [] },
 		portfolioItem: { deleteMany: async () => ({}), createMany: async ({ data }: any) => { w.portfolio.push(...data); return {}; } },
+		profileModificationRequest: { findMany: async () => [] },
 		providerProfile: { findUnique: async () => ({ id: 'pp1', kycStatus: 'UNVERIFIED', skills: [], portfolioItems: [] }), upsert: async (a: any) => { w.upsert.push(a); return { id: 'pp1', ...a.create }; }, update: async ({ data }: any) => ({ id: 'pp1', ...data }), updateMany: async () => ({ count: 0 }) },
 		user: { findUnique: async () => ({ id: 'u1', status: 'ACTIVE' }) },
-		$transaction: async (ops: any) => Promise.all(ops)
+		$transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops(prisma))
 	};
 	t.mock.module('../config/db', { namedExports: { prisma } });
 	t.mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });

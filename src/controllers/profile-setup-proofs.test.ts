@@ -15,6 +15,7 @@ const prisma: any = {
 		deleteMany: async () => { store.writes++; if (store.provider) store.provider = { ...store.provider, portfolioItems: [] }; return {}; },
 		createMany: async ({ data }: any) => { store.writes++; store.provider = { ...store.provider, portfolioItems: [...(store.provider?.portfolioItems ?? []), ...data.map((d: any, i: number) => ({ id: `row-${i + 1}`, ...d }))] }; return {}; },
 	},
+	profileModificationRequest: { findMany: async () => [] },
 	providerProfile: {
 		findUnique: async () => (store.provider ? { id: 'pp1', skills: [], portfolioItems: [], ...store.provider } : null),
 		upsert: async (a: any) => { store.writes++; store.provider = merge(store.provider ?? { kycStatus: 'UNVERIFIED' }, a.update); return { id: 'pp1', ...store.provider }; },
@@ -22,7 +23,10 @@ const prisma: any = {
 		updateMany: async () => ({ count: 1 }),
 	},
 	user: { findUnique: async () => ({ id: 'u1', status: 'ACTIVE' }), update: async ({ data }: any) => ({ id: 'u1', ...data }) },
-	$transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops({})),
+	$transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops(prisma)),
+	// the specialty rows are now synced INSIDE the setup transaction (a failure rolls the save back), so the fake needs the models that sync reads
+  category: { findFirst: async () => null }, specialty: { findMany: async () => [] }, providerSpecialty: { findUnique: async () => null, upsert: async () => ({ id: 'ps1' }) },
+
 };
 const mocked = new WeakSet<object>();
 async function controller(t: TestContext, seed: any = null) {
@@ -80,11 +84,17 @@ test('a wizard submission without an identity front (nothing stored, no review r
 	}
 });
 
-test('the identity front already stored (or a review already running) satisfies the identity rule without re-sending it', async (t) => {
+test('the identity front already stored satisfies the identity rule without re-sending it; a PENDING account WITHOUT any document does NOT complete (message under the identity front)', async (t) => {
 	const c = await controller(t, { kycStatus: 'UNVERIFIED', frontIdUrl: FRONT });
 	assert.equal((await post(c, body({ identity: { certs: [] } }))).statusCode, 200);
+	// PENDING with nothing stored (the real case found on dev): refused, nothing written, never completed
 	const c2 = await controller(t, { kycStatus: 'PENDING' });
-	assert.equal((await post(c2, body({ identity: { certs: [] } }))).statusCode, 200);
+	refused(await post(c2, body({ identity: { certs: [] } })), 'identity.frontId', 'DOCUMENT_REQUIRED');
+	assert.notEqual(store.provider?.isProfileSetupComplete, true);
+	// ... and a partial save (no portfolio key) of that PENDING account never marks it complete either
+	const c3 = await controller(t, { kycStatus: 'PENDING' });
+	assert.equal((await post(c3, body({ portfolio: undefined, identity: { certs: [] } }))).statusCode, 200);
+	assert.equal(store.provider.isProfileSetupComplete, false);
 });
 
 test('a complete submission stores the models (file + proof) and ONLY then marks the setup complete', async (t) => {

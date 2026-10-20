@@ -15,6 +15,7 @@ const prisma: any = {
   skill: { findMany: async () => [] },
   // the stored models are kept in the fake store so the evidence rule (file + proof per chosen sub-specialty) is judged on what was really written
   portfolioItem: { deleteMany: async () => { if (store.provider) store.provider = { ...store.provider, portfolioItems: [] }; return {}; }, createMany: async ({ data }: any) => { store.provider = { ...store.provider, portfolioItems: [...(store.provider?.portfolioItems ?? []), ...data] }; return {}; } },
+  profileModificationRequest: { findMany: async () => [] },
   providerProfile: {
     findUnique: async () => (store.provider ? { id: 'pp1', skills: [], portfolioItems: [], ...store.provider } : null),
     upsert: async (a: any) => { store.provider = merge(store.provider ?? { kycStatus: 'UNVERIFIED' }, a.update); return { id: 'pp1', ...store.provider }; },
@@ -29,7 +30,10 @@ const prisma: any = {
   },
   clientOnboarding: { findUnique: async () => null, create: async ({ data }: any) => data, update: async ({ data }: any) => data },
   user: { findUnique: async () => ({ id: 'u1', status: 'ACTIVE' }), update: async ({ data }: any) => ({ id: 'u1', ...data }) },
-  $transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops({})),
+  $transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops(prisma)),
+  // the specialty rows are now synced INSIDE the setup transaction (a failure rolls the save back), so the fake needs the models that sync reads
+  category: { findFirst: async () => null }, specialty: { findMany: async () => [] }, providerSpecialty: { findUnique: async () => null, upsert: async () => ({ id: 'ps1' }) },
+
 };
 const mocked = new WeakSet<object>();
 function mockDb(t: TestContext) {

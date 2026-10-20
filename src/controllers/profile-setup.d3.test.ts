@@ -14,6 +14,7 @@ let cur: { w: W; stored: any; onboarding: any } = { w: null as any, stored: null
 const prisma: any = {
 	skill: { findMany: async () => [] },
 	portfolioItem: { deleteMany: async () => ({}), createMany: async () => ({}) },
+	profileModificationRequest: { findMany: async () => [] },
 	providerProfile: {
 		findUnique: async (a: any) => (a.include?.portfolioItems ? { id: 'pp1', portfolioItems: [{ id: 'i1', title: 't' }], skills: [] } : cur.stored),
 		upsert: async (a: any) => { cur.w.pUpsert.push(a); return { id: 'pp1', ...cur.stored, ...a.update }; },
@@ -32,7 +33,7 @@ const prisma: any = {
 		update: async ({ data }: any) => { cur.w.onbUpdate.push(data); return data; }
 	},
 	user: { findUnique: async () => ({ id: 'u1', status: 'ACTIVE' }), update: async () => ({}) },
-	$transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops({}))
+	$transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops(prisma))
 };
 const mockedFor = new WeakSet<object>();
 function setup(t: TestContext, stored: any = null, onboarding: any = null) {

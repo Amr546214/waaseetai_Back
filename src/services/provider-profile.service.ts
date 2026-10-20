@@ -25,6 +25,7 @@ import { MODEL_TITLE_PREFIX } from '../utils/setup-portfolio-proofs';
 
 /** Titles «نموذج أعمال - …» are the business models of the provider setup (file + proof, verified there): the free portfolio endpoints can neither create nor edit them. */
 const isSetupModelTitle = (title: unknown) => typeof title === 'string' && title.trim().startsWith(MODEL_TITLE_PREFIX.trim());
+const SETUP_MODEL_DELETE_BLOCKED = 'هذا نموذج مطلوب في استكمال بيانات حسابك ولا يمكن حذفه من هنا. استبدله من صفحة استكمال البيانات مع وثيقة إثبات الملكية.';
 const SETUP_MODEL_RESERVED = 'نماذج الأعمال المرتبطة بالتخصصات تُرفع وتُعدَّل من صفحة استكمال البيانات مع وثيقة إثبات الملكية';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
@@ -975,6 +976,9 @@ export class ProviderProfileService {
 	async deletePortfolioItem(userId: string, itemId: string) {
 		const profile = await prisma.providerProfile.findUnique({ where: { userId } });
 		if (!profile) throw new Error('Profile not found');
+		// A business model of the setup (file + proof) is REQUIRED evidence of the account: it cannot be deleted through the free portfolio endpoint; it is replaced from the setup wizard.
+		const existing = await prisma.portfolioItem.findFirst({ where: { id: itemId, providerProfileId: profile.id }, select: { title: true } });
+		if (existing && isSetupModelTitle(existing.title)) throw new AppError(SETUP_MODEL_DELETE_BLOCKED, 400);
 		const result = await prisma.portfolioItem.deleteMany({ where: { id: itemId, providerProfileId: profile.id } });
 		if (result.count !== 1) throw new Error('Portfolio item not found or unauthorized');
 

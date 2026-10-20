@@ -16,7 +16,8 @@ import { computeProviderCompletion } from '../utils/completion-calculators';
 import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
 import { normalizeProviderSetupPayload, isProviderSetupComplete } from '../utils/provider-setup-payload';
 import { resolveSetupPortfolio, MODEL_TITLE_PREFIX, type ResolvedPortfolioItem } from '../utils/setup-portfolio-proofs';
-import { assertSetupIdentityFront } from '../utils/setup-identity-required';
+import { assertSetupIdentityFront, identityDocumentOnFile } from '../utils/setup-identity-required';
+import { logger } from '../config/logger';
 import { providerSetupEvidenceComplete } from '../utils/provider-setup-payload';
 
 import { providerBioSuggestSchema, providerSkillsSuggestSchema, setupSkillsSchema } from '../dtos/provider-profile-suggest.dto';
@@ -163,132 +164,145 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		// A value the user already has stored in these fields and re-sends unchanged is "keep", not a new link (legacy file names / public URLs would otherwise be refused on every re-save).
 		const storedFileValues = [storedIdentity?.frontIdUrl, storedIdentity?.backIdUrl, storedIdentity?.supportingDocsUrl, ...(storedIdentity?.certUrls ?? [])];
 		assertKycFileValues([identity?.frontId, identity?.backId, documents?.supportingDocs, ...(identity?.certs || [])], userId, storedFileValues);
-		// The wizard submission needs the FRONT of the ID (stored earlier, an identity review already running / decided, or a valid new file): decided before any write.
-		if (wizardSubmission) await assertSetupIdentityFront({ userId, frontId: identity?.frontId, storedFront: storedIdentity?.frontIdUrl, kycStatus: storedIdentity?.kycStatus });
-		const [frontIdUrl, backIdUrl, supportingDocsUrl] = await Promise.all([
-			storeKycFileIfNeeded(identity?.frontId, `waseetai/providers/${userId}/identity`, 'front-id'),
-			storeKycFileIfNeeded(identity?.backId, `waseetai/providers/${userId}/identity`, 'back-id'),
-			storeKycFileIfNeeded(documents?.supportingDocs, `waseetai/providers/${userId}/documents`, 'supporting-document')
+		// The wizard submission needs the FRONT of the ID as a real, trusted document (stored earlier or a valid new file): a KYC status alone is never evidence. Decided before any write.
+		// Identity documents on file besides the stored front: the approved account document and the ID document of a DOCUMENTS change request waiting for the admin.
+		const [accountDoc, waitingDocs] = await Promise.all([
+			prisma.user.findUnique({ where: { id: userId }, select: { idDocumentUrl: true } }),
+			prisma.profileModificationRequest.findMany({ where: { providerId: userId, category: 'DOCUMENTS', fieldName: 'idDocumentUrl', status: 'PENDING_HUMAN_REVIEW' as any }, select: { requestedValue: true } })
 		]);
-		const certUrls = await Promise.all((identity?.certs || []).map((url: string, index: number) =>
-			storeKycFileIfNeeded(url, `waseetai/providers/${userId}/certificates`, `certificate-${index + 1}`)
-		));
+		const otherStored = [accountDoc?.idDocumentUrl, ...waitingDocs.map(r => r.requestedValue)];
+		if (wizardSubmission) await assertSetupIdentityFront({ userId, frontId: identity?.frontId, storedFront: storedIdentity?.frontIdUrl, otherStored });
+		// For the completion decision (also on a partial save): is there really a trusted identity document? A storage outage here is "not proven", never a failed save.
+		const hasIdentityDocument = await identityDocumentOnFile({ userId, storedFront: storedIdentity?.frontIdUrl, otherStored }).catch(() => false);
 
-		// The profile photo (ProviderProfile.avatarUrl is the one canonical column): only our own storage URL or an image data URI is stored; anything else is a 400 and nothing is saved.
-		// The photo already stored on the account (e.g. the Google sign-in picture) that the wizard echoes back unchanged is kept as it is: never re-validated as a new link, never rewritten.
-		const avatarUnchanged = isStoredValueUnchanged(normalized.value.avatarUrl, [storedIdentity?.avatarUrl, storedIdentity?.user?.avatarUrl]);
-		const avatarUrl = normalized.value.avatarUrl && !avatarUnchanged ? await ensureCloudinaryUrl(normalized.value.avatarUrl, `waseetai/users/${userId}/avatar`, 'avatar') : undefined;
-
-		// A document that really differs from the stored one is a NEW identity submission. While the admin has not decided the previous one, it is refused (409), never queued twice.
-		const newFront = frontIdUrl && frontIdUrl !== storedIdentity?.frontIdUrl ? frontIdUrl : undefined;
-		const newBack = backIdUrl && backIdUrl !== storedIdentity?.backIdUrl ? backIdUrl : undefined;
-		if (storedIdentity?.kycStatus === 'PENDING' && (newFront || newBack)) {
-			throw new AppError('مستندات الهوية قيد المراجعة بالفعل. انتظر قرار الإدارة قبل إرسال مستندات جديدة.', 409);
-		}
-
-		const providerData = {
-			userId,
-			avatarUrl: avatarUrl || undefined, // absent = keep the stored photo (a re-save never erases it)
-			idNumber: details?.idNumber || undefined,
-			dob: details?.dob ? new Date(details.dob) : undefined, // absent = keep the stored value (a re-save never erases it)
-			country: clean(details?.country, 60),
-			city: clean(details?.city, 80),
-			industry: clean(details?.occupation, 100),
-			// The job title the wizard collects ("occupation") is the profile headline the completion score and the public profile read:
-			// one value, stored in both columns (industry kept for older readers).
-			headline: typeof details?.occupation === 'string' && !isBlankText(sanitizeText(details.occupation)) ? sanitizeText(details.occupation).trim().slice(0, 100) : undefined,
-			address: clean(details?.address, 500),
-			bio: typeof details?.bio === 'string' ? sanitizeText(details.bio) : details?.bio,
-			// Batch B T1: the legacy languages value is never touched unless the request carries it (the wizard no longer sends it: step 1 is now «مهاراتي»)
-			...(Array.isArray(details?.languages) ? { languages: cleanList(details?.languages, 40, 20) } : {}),
-			yearsOfExperience: normalized.value.yearsOfExperience,
-			hourlyRate: normalized.value.hourlyRate,
-
-			mainSpecialty: clean(specialties?.mainSpec, 100),
-			subSpecialties: cleanList(specialties?.subSpecs, 100, 30),
-
-			// Empty/absent = "keep what is stored" (a stored private document is not visible to the client, so a re-save must not wipe it).
-			frontIdUrl: frontIdUrl || undefined,
-			backIdUrl: backIdUrl || undefined,
-			...(certUrls.filter(Boolean).length ? { certUrls: certUrls.filter(Boolean) as string[] } : {}),
-			// isNafathVerified / kycStatus / isVerified are NEVER written from this request (AUD-FND-000048): they are read-only here and
-			// change only through a real verification integration or the admin KYC decision (onboarding.service).
-
-			supportingDocsUrl: supportingDocsUrl || undefined,
-			notes: clean(documents?.notes, 1000),
-
-			accurateAgreed: agreements?.accurate,
-			termsAgreed: agreements?.terms,
-			privacyAgreed: agreements?.privacy,
-
-			// isProfileSetupComplete is decided below from what was really stored, not assumed from the POST.
-			...(skillConnections !== undefined && { skills: { connect: skillConnections } })
+		// ── PHASE 1: PREPARE every file (no application row is written yet). A failure here changes nothing in the database. ──
+		// Files that this request put into the storage (data: URIs) are remembered so that, if the save fails afterwards, they are REPORTED (never deleted: they can be
+		// reused by a retry, and older / shared files are never touched).
+		const uploaded: string[] = [];
+		const prepared = async <T extends string | null | undefined>(input: unknown, run: () => Promise<T>): Promise<T> => {
+			const out = await run();
+			if (typeof input === 'string' && input.startsWith('data:') && out) uploaded.push(String(out));
+			return out;
 		};
-
-		const result = await prisma.providerProfile.upsert({
-			where: { userId },
-			create: providerData,
-			// `set` on update: the saved list is exactly what was sent, so removing a skill really removes it (connect alone could never drop one)
-			update: { ...providerData, ...(skillConnections !== undefined && { skills: { set: skillConnections } }) }
-		});
-
-		// The specialties chosen in the wizard become the provider's ProviderSpecialty rows (create-only, no duplicates): the model-upload / market pages read those rows.
-		await specialtyService.trySyncProviderSpecialties(result.id);
-
-		if (resolvedPortfolio) {
-			// Files first (data: URIs are uploaded by us), then ONE transaction replaces the rows: a failure leaves the stored models exactly as they were.
-			const portfolioItems = [];
-			for (const item of resolvedPortfolio) {
-				const proofUrls = await Promise.all(item.proofs.map((url, index) => storeDataUriIfNeeded(url, `waseetai/providers/${userId}/portfolio`, `${item.spec}-${index + 1}`)));
-				const reviewUrl = await storeDataUriIfNeeded(item.review, `waseetai/providers/${userId}/portfolio`, `${item.spec}-model`);
-				portfolioItems.push({
-					providerProfileId: result.id,
-					title: `${MODEL_TITLE_PREFIX}${clean(item.spec, 100) ?? ""}`,
-					description: clean(reviewUrl, 2000) ?? null,
-					coverImage: proofUrls[0] || null,
-					tags: proofUrls.filter(Boolean) as string[]
-				});
-			}
-			await prisma.$transaction([
-				prisma.portfolioItem.deleteMany({ where: { providerProfileId: result.id } }),
-				...(portfolioItems.length > 0 ? [prisma.portfolioItem.createMany({ data: portfolioItems })] : [])
+		try {
+			const [frontIdUrl, backIdUrl, supportingDocsUrl] = await Promise.all([
+				prepared(identity?.frontId, () => storeKycFileIfNeeded(identity?.frontId, `waseetai/providers/${userId}/identity`, 'front-id')),
+				prepared(identity?.backId, () => storeKycFileIfNeeded(identity?.backId, `waseetai/providers/${userId}/identity`, 'back-id')),
+				prepared(documents?.supportingDocs, () => storeKycFileIfNeeded(documents?.supportingDocs, `waseetai/providers/${userId}/documents`, 'supporting-document'))
 			]);
+			const certUrls = await Promise.all((identity?.certs || []).map((url: string, index: number) =>
+				prepared(url, () => storeKycFileIfNeeded(url, `waseetai/providers/${userId}/certificates`, `certificate-${index + 1}`))
+			));
+
+			// The profile photo (ProviderProfile.avatarUrl is the one canonical column): only our own storage URL or an image data URI is stored; anything else is a 400 and nothing is saved.
+			// The photo already stored on the account (e.g. the Google sign-in picture) that the wizard echoes back unchanged is kept as it is: never re-validated as a new link, never rewritten.
+			const avatarUnchanged = isStoredValueUnchanged(normalized.value.avatarUrl, [storedIdentity?.avatarUrl, storedIdentity?.user?.avatarUrl]);
+			const avatarUrl = normalized.value.avatarUrl && !avatarUnchanged ? await prepared(normalized.value.avatarUrl, () => ensureCloudinaryUrl(normalized.value.avatarUrl, `waseetai/users/${userId}/avatar`, 'avatar')) : undefined;
+
+			// The business-model files (data: URIs are uploaded by us) are prepared now too, so no storage work happens between the database writes.
+			const preparedModels: Array<{ title: string; description: string | null; coverImage: string | null; tags: string[] }> | undefined = resolvedPortfolio
+				? await Promise.all(resolvedPortfolio.map(async item => {
+					const proofUrls = await Promise.all(item.proofs.map((url, index) => prepared(url, () => storeDataUriIfNeeded(url, `waseetai/providers/${userId}/portfolio`, `${item.spec}-${index + 1}`))));
+					const reviewUrl = await prepared(item.review, () => storeDataUriIfNeeded(item.review, `waseetai/providers/${userId}/portfolio`, `${item.spec}-model`));
+					return { title: `${MODEL_TITLE_PREFIX}${clean(item.spec, 100) ?? ''}`, description: clean(reviewUrl, 2000) ?? null, coverImage: proofUrls[0] || null, tags: proofUrls.filter(Boolean) as string[] };
+				}))
+				: undefined;
+
+			// A document that really differs from the stored one is a NEW identity submission. While the admin has not decided the previous one, it is refused (409), never queued twice.
+			const newFront = frontIdUrl && frontIdUrl !== storedIdentity?.frontIdUrl ? frontIdUrl : undefined;
+			const newBack = backIdUrl && backIdUrl !== storedIdentity?.backIdUrl ? backIdUrl : undefined;
+			if (storedIdentity?.kycStatus === 'PENDING' && (newFront || newBack)) {
+				throw new AppError('مستندات الهوية قيد المراجعة بالفعل. انتظر قرار الإدارة قبل إرسال مستندات جديدة.', 409);
+			}
+			const identityChanged = identitySubmissionChanged(storedIdentity, details ?? {}, { front: newFront, back: newBack });
+
+			const providerData = {
+				userId,
+				avatarUrl: avatarUrl || undefined, // absent = keep the stored photo (a re-save never erases it)
+				idNumber: details?.idNumber || undefined,
+				dob: details?.dob ? new Date(details.dob) : undefined, // absent = keep the stored value (a re-save never erases it)
+				country: clean(details?.country, 60),
+				city: clean(details?.city, 80),
+				industry: clean(details?.occupation, 100),
+				// The job title the wizard collects ("occupation") is the profile headline the completion score and the public profile read:
+				// one value, stored in both columns (industry kept for older readers).
+				headline: typeof details?.occupation === 'string' && !isBlankText(sanitizeText(details.occupation)) ? sanitizeText(details.occupation).trim().slice(0, 100) : undefined,
+				address: clean(details?.address, 500),
+				bio: typeof details?.bio === 'string' ? sanitizeText(details.bio) : details?.bio,
+				// Batch B T1: the legacy languages value is never touched unless the request carries it (the wizard no longer sends it: step 1 is now «مهاراتي»)
+				...(Array.isArray(details?.languages) ? { languages: cleanList(details?.languages, 40, 20) } : {}),
+				yearsOfExperience: normalized.value.yearsOfExperience,
+				hourlyRate: normalized.value.hourlyRate,
+
+				mainSpecialty: clean(specialties?.mainSpec, 100),
+				subSpecialties: cleanList(specialties?.subSpecs, 100, 30),
+
+				// Empty/absent = "keep what is stored" (a stored private document is not visible to the client, so a re-save must not wipe it).
+				frontIdUrl: frontIdUrl || undefined,
+				backIdUrl: backIdUrl || undefined,
+				...(certUrls.filter(Boolean).length ? { certUrls: certUrls.filter(Boolean) as string[] } : {}),
+				// isNafathVerified / kycStatus / isVerified are NEVER written from this request (AUD-FND-000048): they are read-only here and
+				// change only through a real verification integration or the admin KYC decision (onboarding.service).
+
+				supportingDocsUrl: supportingDocsUrl || undefined,
+				notes: clean(documents?.notes, 1000),
+
+				accurateAgreed: agreements?.accurate,
+				termsAgreed: agreements?.terms,
+				privacyAgreed: agreements?.privacy,
+
+				// isProfileSetupComplete is decided below from what was really stored, not assumed from the POST.
+				...(skillConnections !== undefined && { skills: { connect: skillConnections } })
+			};
+
+			// ── PHASE 2: ONE transaction for every database change of the request: profile, specialty rows, the setup models (ONLY the «نموذج أعمال - …» rows: the provider's
+			// ordinary portfolio works are never touched), the completion figures and the review state. Any failure rolls all of it back. ──
+			const updatedResult = await prisma.$transaction(async (tx) => {
+				const result = await tx.providerProfile.upsert({
+					where: { userId },
+					create: providerData,
+					// `set` on update: the saved list is exactly what was sent, so removing a skill really removes it (connect alone could never drop one)
+					update: { ...providerData, ...(skillConnections !== undefined && { skills: { set: skillConnections } }) }
+				});
+
+				// The specialties chosen in the wizard become the provider's ProviderSpecialty rows (create-only, no duplicates): the model-upload / market pages read those rows.
+				await specialtyService.syncProviderSpecialtiesFromProfile(result.id, tx as any);
+
+				if (preparedModels) {
+					await tx.portfolioItem.deleteMany({ where: { providerProfileId: result.id, title: { startsWith: MODEL_TITLE_PREFIX } } });
+					if (preparedModels.length > 0) await tx.portfolioItem.createMany({ data: preparedModels.map(m => ({ ...m, providerProfileId: result.id })) });
+				}
+
+				// Recalculate ProviderProfile.completionPercentage from the FINAL state (after the upsert and the models just created: portfolioItems.length is a scored factor).
+				const finalProfile = await tx.providerProfile.findUnique({ where: { userId }, include: { skills: true, portfolioItems: true } });
+				const currentUser = await tx.user.findUnique({ where: { id: userId } });
+				const completion = computeProviderCompletion({ providerProfile: finalProfile || result, user: currentUser || {} });
+
+				// User.status is NOT touched by the setup wizard (AUD-FND-000036): it changes only through OTP activation or an admin decision.
+				const updated = await tx.providerProfile.update({ where: { userId }, data: { completionPercentage: completion, isProfileSetupComplete: (isProviderSetupComplete(finalProfile) && providerSetupEvidenceComplete({ ...(finalProfile as any), hasIdentityDocument: hasIdentityDocument || !!frontIdUrl })) || (storedIdentity as any)?.isProfileSetupComplete === true } });
+				// Submitting a changed, complete identity (idNumber + front + back) marks an UNVERIFIED/REJECTED profile as PENDING review;
+				// a VERIFIED one is never downgraded and an unchanged re-save never re-opens a review.
+				if (identityChanged) {
+					await tx.providerProfile.updateMany({
+						// The wizard collects the front of the ID as the required evidence (the back and the number are optional): a stored front is a complete submission.
+						where: { userId, kycStatus: { in: ['UNVERIFIED', 'REJECTED'] }, frontIdUrl: { not: null } },
+						data: { kycStatus: 'PENDING' }
+					});
+				}
+				return updated;
+			}, { timeout: 20_000 });
+
+			res.status(200).json({
+				success: true,
+				message: 'تم حفظ البيانات بنجاح',
+				data: withoutInternalProviderNotes(updatedResult)
+			});
+			return;
+		} catch (failure) {
+			// Nothing of this request was written to the database. Files that were already put into the storage are listed here, apart from the error (never deleted).
+			if (uploaded.length) logger.warn(`[ProviderSetup] userId=${userId}: the save failed after ${uploaded.length} file(s) were uploaded; kept in the storage, not referenced by any row: ${uploaded.join(', ')}`);
+			throw failure;
 		}
-
-		// Phase 3D.2A: recalculate ProviderProfile.completionPercentage from the
-		// FINAL state — after the upsert above AND any portfolio items just
-		// created, since portfolioItems.length is a scored factor. Re-fetches
-		// with the relations the formula needs (skills/portfolioItems) rather
-		// than trusting `result`, which has neither (no `include` was used on
-		// the upsert above). No more User.profileCompletionPercent=100
-		// hardcode.
-		const finalProfile = await prisma.providerProfile.findUnique({
-			where: { userId },
-			include: { skills: true, portfolioItems: true }
-		});
-		const currentUser = await prisma.user.findUnique({ where: { id: userId } });
-		const completion = computeProviderCompletion({ providerProfile: finalProfile || result, user: currentUser || {} });
-
-		// User.status is NOT touched by the setup wizard (AUD-FND-000036): it changes only through OTP activation or an admin decision.
-		const identityChanged = identitySubmissionChanged(storedIdentity, details ?? {}, { front: newFront, back: newBack });
-		const [updatedResult] = await prisma.$transaction([
-			prisma.providerProfile.update({ where: { userId }, data: { completionPercentage: completion, isProfileSetupComplete: (isProviderSetupComplete(finalProfile) && providerSetupEvidenceComplete(finalProfile)) || (storedIdentity as any)?.isProfileSetupComplete === true } }),
-			// Submitting a changed, complete identity (idNumber + front + back) marks an UNVERIFIED/REJECTED profile as PENDING review;
-			// a VERIFIED one is never downgraded and an unchanged re-save never re-opens a review.
-			...(identityChanged
-				? [prisma.providerProfile.updateMany({
-					// The wizard collects the front of the ID as the required evidence (the back and the number are optional): a stored front is a complete submission.
-					where: { userId, kycStatus: { in: ['UNVERIFIED', 'REJECTED'] }, frontIdUrl: { not: null } },
-					data: { kycStatus: 'PENDING' }
-				})]
-				: [])
-		]);
-
-		res.status(200).json({
-			success: true,
-			message: 'تم حفظ البيانات بنجاح',
-			data: withoutInternalProviderNotes(updatedResult)
-		});
 	} catch (error) {
 		if (error instanceof AppError) return res.status(error.statusCode).json({ success: false, message: error.message, ...(error.errors?.length ? { errors: error.errors } : {}) });
 		console.error('Error saving provider setup data:', error);
@@ -515,6 +529,7 @@ export const deletePortfolioItem = async (req: Request, res: Response) => {
 		await providerProfileService.deletePortfolioItem(userId, req.params.id as string);
 		res.json({ message: 'Deleted successfully' });
 	} catch (error) {
+		if (error instanceof AppError) return res.status(error.statusCode).json({ success: false, message: error.message });
 		console.error('Error deleting portfolio item:', error);
 		res.status(500).json({ message: 'Internal server error' });
 	}

@@ -17,7 +17,7 @@ const prisma: any = {
 	},
 	user: { findUnique: async () => ({ id: 'u1' }) },
 	clientOnboarding: { findUnique: async () => null, create: async () => ({}), update: async () => ({}) },
-	$transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops({})),
+	$transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops(prisma)),
 };
 let loaded: Promise<any> | undefined;
 function controller() {
