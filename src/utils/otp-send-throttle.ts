@@ -90,6 +90,34 @@ export class OtpSendThrottle {
   }
 
   /**
+   * For a send that is AWAITED (the SMTP round-trip can take seconds): checks the three limits and, when they pass, takes the per-IP slot AT ONCE,
+   * synchronously, so concurrent requests from one address (any accounts) cannot all pass the check while the mail is in flight. The recipient
+   * cooldown / hourly allowance start later, with commitRecipient(), and only when the mail server accepted the message.
+   */
+  reserve(recipientKey: string, ip: string | undefined, now: number = Date.now()): OtpThrottleResult {
+    const result = this.evaluate(recipientKey, ip, now, false);
+    if (!result.allowed) return result;
+    const ipKey = (ip || 'unknown').trim();
+    const ipHits = this.prune(this.ips.get(ipKey), now); ipHits.push(now); this.ips.set(ipKey, ipHits);
+    this.sweep(now);
+    return result;
+  }
+
+  /** Second half of reserve(): the recipient cooldown and hourly allowance start only for a mail the server accepted. */
+  commitRecipient(recipientKey: string, delivered: boolean, now: number = Date.now()): void {
+    if (!delivered) return;
+    const key = recipientKey.trim().toLowerCase();
+    const hits = this.prune(this.recipients.get(key), now); hits.push(now); this.recipients.set(key, hits);
+  }
+
+  /** Gives back the per-IP slot taken by reserve() when the request never reached the mailer. */
+  releaseIp(ip: string | undefined, now: number = Date.now()): void {
+    const ipKey = (ip || 'unknown').trim();
+    const hits = this.prune(this.ips.get(ipKey), now); hits.pop();
+    if (hits.length) this.ips.set(ipKey, hits); else this.ips.delete(ipKey);
+  }
+
+  /**
    * Checks the three limits and, only when all pass, records this attempt. A rejected attempt is NOT recorded, so asking
    * again early never extends the wait.
    */

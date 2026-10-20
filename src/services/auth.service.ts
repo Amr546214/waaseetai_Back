@@ -18,6 +18,7 @@ import { initializeRoleState } from './account-management.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { otpSendThrottle, otpThrottleMessage, resendAvailableAtIso, canReuseOtp } from '../utils/otp-send-throttle';
 import { withKeyLock } from '../utils/key-lock';
+import { remainingMinutes } from '../utils/otp-validity';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { normalizeReferralIdentifier } from '../utils/referral-identifier';
 import { RESEND_GENERIC_MESSAGE, ACTIVATION_CODE_REJECTED_MESSAGE } from '../utils/auth-messages';
@@ -292,9 +293,9 @@ export class AuthService {
 	 * Sends an activation code and reports whether the SMTP server accepted it. Never throws: a failure is logged with the
 	 * server response by notificationService (never the code) and returned as `false`.
 	 */
-	private async sendActivationEmail(email: string, code: string, flow: string): Promise<boolean> {
+	private async sendActivationEmail(email: string, code: string, flow: string, validityMinutes: number = 10): Promise<boolean> {
 		try {
-			await notificationService.sendEmailOtp(email, code);
+			await notificationService.sendEmailOtp(email, code, validityMinutes);
 			return true;
 		} catch {
 			logger.error(`[Auth] Activation email was NOT delivered (flow=${flow}).`);
@@ -311,11 +312,11 @@ export class AuthService {
 		if (!user || user.status === UserStatus.ACTIVE) {
 			return { emailSent: true, reused: false };
 		}
-		const { otpCode, reused } = await this.prepareActivationCode(user.id);
+		const { otpCode, reused, validityMinutes } = await this.prepareActivationCode(user.id);
 		if (!reused && process.env.NODE_ENV === 'development') {
 			console.log(`\n======================================================\n🔑 [LOCAL DEV ACTIVATION OTP] Email: ${user.email} -> CODE: ${otpCode}\n======================================================\n`);
 		}
-		const emailSent = await this.sendActivationEmail(user.email, otpCode, reused ? 'resend-same-code' : 'resend-new-code');
+		const emailSent = await this.sendActivationEmail(user.email, otpCode, reused ? 'resend-same-code' : 'resend-new-code', validityMinutes);
 		return { emailSent, reused };
 	}
 
@@ -327,23 +328,23 @@ export class AuthService {
 	public async resendOtpByEmail(email: string): Promise<void> {
 		const user = await authRepository.findByEmail(email);
 		if (!user || user.status !== UserStatus.PENDING_VERIFICATION) return;
-		const { otpCode, reused } = await this.prepareActivationCode(user.id);
-		void this.sendActivationEmail(user.email, otpCode, reused ? 'resend-same-code' : 'resend-new-code');
+		const { otpCode, reused, validityMinutes } = await this.prepareActivationCode(user.id);
+		void this.sendActivationEmail(user.email, otpCode, reused ? 'resend-same-code' : 'resend-new-code', validityMinutes);
 	}
 
 	/**
 	 * A code that is still valid is RE-SENT as it is (not replaced): an older email that arrives late must not carry a
 	 * dead code. A new one is created only when there is none or the last one has expired.
 	 */
-	private async prepareActivationCode(userId: string): Promise<{ otpCode: string; reused: boolean }> {
+	private async prepareActivationCode(userId: string): Promise<{ otpCode: string; reused: boolean; validityMinutes: number }> {
 		const existing = await authRepository.findLatestActivationOtp(userId);
 		if (canReuseOtp(existing, OTP_MAX_ATTEMPTS)) {
-			return { otpCode: existing!.code, reused: true };
+			return { otpCode: existing!.code, reused: true, validityMinutes: remainingMinutes(existing!.expiresAt) };
 		}
 		const otpCode = crypto.randomInt(100000, 999999).toString();
 		await authRepository.deleteActivationOtps(userId);
 		await authRepository.createOtp(userId, otpCode, OtpType.EMAIL, new Date(Date.now() + EMAIL_OTP_EXPIRY_MS), OtpPurpose.ACTIVATION);
-		return { otpCode, reused: false };
+		return { otpCode, reused: false, validityMinutes: 10 };
 	}
 
 	/**
@@ -384,7 +385,7 @@ export class AuthService {
 		// Not awaited: the SMTP round-trip would make a registered address answer measurably slower than an unknown one. The failure
 		// (with the SMTP response) is logged by notificationService; the answer stays generic either way.
 		void Promise.resolve()
-			.then(() => notificationService.sendPasswordResetEmail(user.email, user.firstName, otpCode))
+			.then(() => notificationService.sendPasswordResetEmail(user.email, user.firstName, otpCode, remainingMinutes(resetExpiresAt)))
 			.catch(() => { logger.error('[Auth] Password reset email was NOT delivered.'); });
 
 		return { message: RESET_GENERIC_MESSAGE, expiresAt: resetExpiresAt.toISOString() };
@@ -619,13 +620,15 @@ export class AuthService {
 		const cid = crypto.randomBytes(4).toString('hex'); // correlates the log lines of this one attempt (never the code, the e-mail address or the password)
 		const startedAt = Date.now();
 		return withKeyLock(key, async () => {
-			const throttle = otpSendThrottle.peek(key, ipAddress);
+			// reserve: the per-IP slot is taken now (concurrent requests from one address cannot all pass while the mail is in flight); the recipient
+			// cooldown / allowance start only below, when the mail server accepted the message.
+			const throttle = otpSendThrottle.reserve(key, ipAddress);
 			if (!throttle.allowed) {
 				logger.info(`[OTP:login] cid=${cid} outcome=throttled reason=${throttle.reason} wait=${throttle.retryAfterSeconds}s ms=${Date.now() - startedAt}`);
 				return { ...base, emailSent: false, retryAfterSeconds: throttle.retryAfterSeconds, message: otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds) };
 			}
 			const { emailSent, expiresAt, reused } = await this.sendLoginOtp(userId, email);
-			otpSendThrottle.record(key, ipAddress, emailSent);
+			otpSendThrottle.commitRecipient(key, emailSent);
 			logger.info(`[OTP:login] cid=${cid} outcome=${emailSent ? 'sent' : 'send-failed'} reused=${reused} validForMs=${expiresAt.getTime() - Date.now()} ms=${Date.now() - startedAt}`);
 			return { ...base, emailSent, ...(emailSent ? { resendAvailableAt: resendAvailableAtIso(), expiresAt: expiresAt.toISOString() } : {}), message: emailSent ? 'أرسلنا رمز تسجيل الدخول إلى بريدك الإلكتروني' : 'تعذر إرسال رمز تسجيل الدخول الآن، حاول مرة أخرى بعد قليل أو تواصل مع الدعم' };
 		});
@@ -633,25 +636,23 @@ export class AuthService {
 
 	/** A still-valid LOGIN_EMAIL code is re-sent as it is (a late older email must not carry a dead code); otherwise a new one is created. */
 	private async sendLoginOtp(userId: string, email: string): Promise<{ emailSent: boolean; reused: boolean; expiresAt: Date }> {
-		const existing = await authRepository.findLatestOtpByPurpose(userId, OtpPurpose.LOGIN_EMAIL);
-		let code: string;
-		let reused = false;
-		let expiresAt: Date;
-		if (canReuseOtp(existing, OTP_MAX_ATTEMPTS)) {
-			code = existing!.code;
-			reused = true;
-			expiresAt = existing!.expiresAt;
-		} else {
-			code = crypto.randomInt(100000, 999999).toString();
-			expiresAt = new Date(Date.now() + EMAIL_OTP_EXPIRY_MS);
+		// The choose-or-create step of the code shares one short critical section with verifyLoginOtp, so a verification can never delete the code a
+		// resend has just created (or the other way round). The SMTP wait below is OUTSIDE it: a slow mail never blocks a verification.
+		const { code, reused, expiresAt } = await withKeyLock(`login-otp-db:${userId}`, async () => {
+			const existing = await authRepository.findLatestOtpByPurpose(userId, OtpPurpose.LOGIN_EMAIL);
+			if (canReuseOtp(existing, OTP_MAX_ATTEMPTS)) return { code: existing!.code, reused: true, expiresAt: existing!.expiresAt };
+			const fresh = crypto.randomInt(100000, 999999).toString();
+			const freshExpiry = new Date(Date.now() + EMAIL_OTP_EXPIRY_MS);
 			await authRepository.deleteOtpsByPurpose(userId, OtpPurpose.LOGIN_EMAIL);
-			await authRepository.createOtp(userId, code, OtpType.EMAIL, expiresAt, OtpPurpose.LOGIN_EMAIL);
-		}
+			await authRepository.createOtp(userId, fresh, OtpType.EMAIL, freshExpiry, OtpPurpose.LOGIN_EMAIL);
+			return { code: fresh, reused: false, expiresAt: freshExpiry };
+		});
 		if (process.env.NODE_ENV === 'development') {
 			console.log(`\n======================================================\n🔑 [LOCAL DEV LOGIN OTP] Email: ${email} -> CODE: ${code}\n======================================================\n`);
 		}
 		try {
-			await notificationService.sendLoginOtpEmail(email, code);
+			// the mail states the REAL time left (a re-sent code keeps its original expiry), never a fresh 10 minutes
+			await notificationService.sendLoginOtpEmail(email, code, remainingMinutes(expiresAt));
 			return { emailSent: true, reused, expiresAt };
 		} catch (error) {
 			logger.error(`[AuthService] Login OTP email failed (userId=${userId})`, error);
@@ -781,7 +782,7 @@ export class AuthService {
 	 */
 	public async verifyLoginOtp(input: VerifyLoginOtpInput, sessionContext: SessionContext = {}) {
 		// One verification at a time per account: the same right code sent twice at once (double click) opens ONE session, the second finds the code used.
-		return withKeyLock(`login-verify:${input.userId}`, () => this.verifyLoginOtpLocked(input, sessionContext));
+		return withKeyLock(`login-otp-db:${input.userId}`, () => this.verifyLoginOtpLocked(input, sessionContext));
 	}
 
 	private async verifyLoginOtpLocked(input: VerifyLoginOtpInput, sessionContext: SessionContext) {

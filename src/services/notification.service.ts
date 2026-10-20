@@ -304,8 +304,8 @@ export class NotificationService {
 	/**
 	 * Send an OTP verification code via email.
 	 */
-	public async sendEmailOtp(email: string, code: string): Promise<EmailDeliveryResult> {
-		return this.sendOtpMail('otp', email, code, process.env.OTP_EMAIL_SUBJECT ?? 'رمز التحقق لتفعيل حسابك - Waseet AI');
+	public async sendEmailOtp(email: string, code: string, validityMinutes: number = 10): Promise<EmailDeliveryResult> {
+		return this.sendOtpMail('otp', email, code, process.env.OTP_EMAIL_SUBJECT ?? 'رمز التحقق لتفعيل حسابك - Waseet AI', validityMinutes);
 	}
 
 	/**
@@ -313,7 +313,7 @@ export class NotificationService {
 	 * (distinct from the account-activation OTP email) so the two flows never
 	 * share wording.
 	 */
-	public async sendPasswordResetEmail(email: string, firstName: string, code: string): Promise<EmailDeliveryResult> {
+	public async sendPasswordResetEmail(email: string, firstName: string, code: string, validityMinutes: number = 10): Promise<EmailDeliveryResult> {
 		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
 		const emailSubject = process.env.RESET_PASSWORD_EMAIL_SUBJECT ?? 'رمز إعادة تعيين كلمة المرور - Waseet AI';
 		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
@@ -323,7 +323,7 @@ export class NotificationService {
 				from: `"${senderName}" <${from}>`,
 				to: email,
 				subject: emailSubject,
-				html: getPasswordResetEmailTemplate(firstName, code),
+				html: getPasswordResetEmailTemplate(firstName, code, validityMinutes),
 			});
 			return logEmailDelivery('password-reset', email, info);
 		} catch (error) {
@@ -338,8 +338,10 @@ export class NotificationService {
 	}
 
 	/** Code that completes a password login, sent to the ACCOUNT EMAIL (purpose LOGIN_EMAIL; SMS is never used for login). */
-	public async sendLoginOtpEmail(email: string, code: string): Promise<EmailDeliveryResult> {
-		return this.sendOtpMail('login', email, code, process.env.LOGIN_EMAIL_SUBJECT ?? 'رمز تسجيل الدخول - Waseet AI');
+	public sendLoginOtpEmail(email: string, code: string): Promise<EmailDeliveryResult>;
+	public sendLoginOtpEmail(email: string, code: string, validityMinutes: number): Promise<EmailDeliveryResult>;
+	public async sendLoginOtpEmail(email: string, code: string, validityMinutes: number = 10): Promise<EmailDeliveryResult> {
+		return this.sendOtpMail('login', email, code, process.env.LOGIN_EMAIL_SUBJECT ?? 'رمز تسجيل الدخول - Waseet AI', validityMinutes);
 	}
 
 	/** Code that confirms a change of the PayPal payout email, sent to the ACCOUNT EMAIL (never to the new, unverified address). */

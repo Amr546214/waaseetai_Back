@@ -206,7 +206,7 @@ export const otpSendGate = (recipient: (req: Request) => string | undefined) =>
     if (!RATE_LIMIT_ENABLED) return next();
     const key = recipient(req);
     if (!key) return next();
-    const result = otpSendThrottle.peek(key, req.ip);
+    const result = otpSendThrottle.reserve(key, req.ip);
     if (!result.allowed) {
       res.setHeader('Retry-After', String(result.retryAfterSeconds));
       return next(new AppError(otpThrottleMessage(result.reason!, result.retryAfterSeconds), 429, [
@@ -223,8 +223,11 @@ export const otpSendGate = (recipient: (req: Request) => string | undefined) =>
       }
       return sendJson(body);
     }) as typeof res.json;
+    // reserve() took the per-IP slot at once (concurrent requests from one address cannot all pass while mail is in flight): keep it for an attempt that reached the
+    // mailer, give it back for one that failed earlier (409, validation, crash); the recipient cooldown starts only for a delivered mail.
     res.once('finish', () => {
-      if (res.locals.otpEmailAttempted === true) otpSendThrottle.record(key, req.ip, res.locals.otpEmailSent === true);
+      if (res.locals.otpEmailAttempted === true) otpSendThrottle.commitRecipient(key, res.locals.otpEmailSent === true);
+      else otpSendThrottle.releaseIp(req.ip);
     });
     return next();
   };
