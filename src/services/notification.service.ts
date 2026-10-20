@@ -1,4 +1,5 @@
 import { NotificationCategory, Notification } from '@prisma/client';
+import { otpPurposeOfKind } from '../utils/otp-email-template';
 import { mailTransporter, getOtpEmailTemplate, getPasswordResetEmailTemplate } from '../utils/mail.transporter';
 import { otpValidityText } from '../utils/otp-validity';
 import { prisma } from '../config/db';
@@ -289,7 +290,7 @@ export class NotificationService {
 				from: `"${senderName}" <${from}>`,
 				to: email,
 				subject,
-				html: getOtpEmailTemplate(code, validityMinutes),
+				html: getOtpEmailTemplate(code, validityMinutes, otpPurposeOfKind(kind)),
 				// An HTML-only message is a spam signal: every OTP mail also carries a plain-text part.
 				text: `رمز التحقق الخاص بك في وسيط AI هو: ${code}\nالرمز صالح لمدة ${otpValidityText(validityMinutes)}. لا تشاركه مع أي أحد. إذا لم تطلبه فتجاهل هذه الرسالة.`,
 				headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },
