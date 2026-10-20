@@ -141,3 +141,19 @@ test('PG: a PENDING account whose ID document is a DOCUMENTS request waiting for
 	assert.equal(no.body.errors[0].field, 'identity.frontId');
 	assert.equal(await snapshot(prisma, b.id), before);
 });
+
+test('PG: a PENDING account with NO document can send the missing front (no 409 dead end) and then completes; with a document on file a NEW front is still refused (409)', opts, async (t) => {
+	const { prisma, controller } = await load(t);
+	const a = await seed(prisma, { kycStatus: 'PENDING' });
+	const ok = await save(controller, a.id, body(a.id));
+	assert.equal(ok.statusCode, 200);
+	const stored = await prisma.providerProfile.findUnique({ where: { userId: a.id } });
+	assert.ok(stored!.frontIdUrl, 'the missing document is stored');
+	assert.equal(stored!.isProfileSetupComplete, true);
+	const b = await seed(prisma, { kycStatus: 'PENDING', frontIdUrl: `private:image:png:waseetai/providers/__ID__/identity/old` });
+	await prisma.providerProfile.update({ where: { userId: b.id }, data: { frontIdUrl: `private:image:png:waseetai/providers/${b.id}/identity/old` } });
+	const before = await snapshot(prisma, b.id);
+	const refused = await save(controller, b.id, body(b.id));
+	assert.equal(refused.statusCode, 409);
+	assert.equal(await snapshot(prisma, b.id), before);
+});
