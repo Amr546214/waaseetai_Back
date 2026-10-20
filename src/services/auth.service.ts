@@ -91,6 +91,9 @@ function isSourceChannel(v: string | undefined): v is (typeof SOURCE_CHANNELS)[n
 	return !!v && (SOURCE_CHANNELS as readonly string[]).includes(v);
 }
 
+/** a***@example.com for operator logs (kept here: several tests replace notification.service wholesale). */
+const maskEmail = (email: string): string => `${String(email).split('@')[0].slice(0, 1)}***@${String(email).split('@')[1] ?? ''}`;
+
 export class AuthService {
 	private async verifyGoogleIdentity(idToken: string) {
 		let ticket;
@@ -240,6 +243,8 @@ export class AuthService {
 			// internal result is never visible to the caller. A pending owner gets a code through "resend" (by e-mail, throttled) or login; an
 			// active one logs in or recovers the password. The same bcrypt cost keeps the response time close.
 			if (input.password) await bcrypt.hash(input.password, 12);
+			// operator-only: the PUBLIC answer is identical, so this line is the only place that tells support why no code arrived (never the code, the address is masked)
+			logger.info(`[Register] outcome=in-use-nothing-created to=${maskEmail(input.email)} (email or phone already belongs to an account; no code, no mail)`);
 			return { userId: null as string | null, accountCreated: false };
 		}
 
@@ -282,6 +287,7 @@ export class AuthService {
 		//    would make a new registration measurably slower than an in-use one. A failed send is logged by sendActivationEmail (never the
 		//    code); the user then uses "resend code" on the code step (generic, throttled).
 		void this.sendActivationEmail(user.email, otpCode, 'register');
+		logger.info(`[Register] outcome=created to=${maskEmail(user.email)} activation mail queued`);
 
 		return {
 			userId: user.id as string | null,
