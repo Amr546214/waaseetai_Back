@@ -212,7 +212,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			const newFront = frontIdUrl && frontIdUrl !== storedIdentity?.frontIdUrl ? frontIdUrl : undefined;
 			const newBack = backIdUrl && backIdUrl !== storedIdentity?.backIdUrl ? backIdUrl : undefined;
 			// A PENDING account whose review has NO document on file (legacy state) is not "already under review": it must be able to send the missing document, otherwise it can neither complete the setup nor fix it.
-			if (storedIdentity?.kycStatus === 'PENDING' && hasIdentityDocument && (newFront || newBack)) {
+			if (storedIdentity?.kycStatus === 'PENDING' && (hasIdentityDocument || !!storedIdentity?.frontIdUrl) && (newFront || newBack)) {
 				throw new AppError('مستندات الهوية قيد المراجعة بالفعل. انتظر قرار الإدارة قبل إرسال مستندات جديدة.', 409);
 			}
 			const identityChanged = identitySubmissionChanged(storedIdentity, details ?? {}, { front: newFront, back: newBack });
