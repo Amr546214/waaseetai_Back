@@ -68,7 +68,7 @@ test('the exported mail.transporter template delegates to the same builder (old 
 	assert.equal(getOtpEmailTemplate('222222', 2, 'payment'), buildOtpEmailHtml('222222', 2, 'payment'));
 });
 
-test('image host and link host are independent: EMAIL_ASSET_BASE_URL moves only the logo, FRONTEND_URL decides the help link', () => {
+test('image host and link host are independent; with no configured site nothing host-less is ever emitted (logo and help link are left out)', () => {
 	const f = process.env.FRONTEND_URL, a = process.env.EMAIL_ASSET_BASE_URL;
 	const restore = () => { if (f === undefined) delete process.env.FRONTEND_URL; else process.env.FRONTEND_URL = f; if (a === undefined) delete process.env.EMAIL_ASSET_BASE_URL; else process.env.EMAIL_ASSET_BASE_URL = a; };
 	try {
@@ -81,13 +81,11 @@ test('image host and link host are independent: EMAIL_ASSET_BASE_URL moves only 
 		assert.match(h, /src="https:\/\/app\.example\.test\/images\/waseet-mark\.png"/);
 		delete process.env.FRONTEND_URL;
 		h = html();
-		assert.match(h, /src="https:\/\/waseetai\.com\/images\/waseet-mark\.png"/);
-		assert.match(h, /href="https:\/\/waseetai\.com\/support\/help-center"/);
-		assert.ok(!h.includes('waseet.ai/'));
+		assert.ok(!/<img/.test(h) && !/<a /.test(h), 'no logo, no link without a configured site');
 		process.env.FRONTEND_URL = 'not a url'; process.env.EMAIL_ASSET_BASE_URL = '/relative';
 		h = html();
-		assert.match(h, /href="https:\/\/waseetai\.com\/support\/help-center"/);
-		assert.match(h, /src="https:\/\/waseetai\.com\/images/);
-		assert.ok(!/href="\/\/|href="\/|src="\//.test(h), 'never a host-less URL');
+		assert.ok(!/<img/.test(h) && !/<a /.test(h));
+		assert.ok(!/href="\/|src="\//.test(h), 'never a host-less URL');
+		assert.ok(!h.includes('waseet.ai/'));
 	} finally { restore(); }
 });

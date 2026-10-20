@@ -1,5 +1,7 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+// e-mail links always carry the site host (utils/site-url): the tests that look at the link configure it
+process.env.FRONTEND_URL = 'https://dev.example.test';
 
 process.env.OPENAI_API_KEY = 'test-key';
 

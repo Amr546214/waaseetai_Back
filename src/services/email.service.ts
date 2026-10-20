@@ -1,3 +1,4 @@
+import { siteUrl } from '../utils/site-url';
 import nodemailer from 'nodemailer';
 import { logger } from '../config/logger';
 
@@ -223,8 +224,7 @@ export class EmailService {
     const providerName = escapeHtml(data.providerName);
     const projectTitle = escapeHtml(data.projectTitle);
     const points = Math.max(0, Math.trunc(data.pointsAwarded));
-    const frontendBaseUrl = (process.env.FRONTEND_URL || 'https://waseet.ai').replace(/\/$/, '');
-    const projectUrl = `${frontendBaseUrl}${data.projectUrl.startsWith('/') ? data.projectUrl : `/${data.projectUrl}`}`;
+    const projectUrl = siteUrl(data.projectUrl);
     const subject = `🎉 تم اعتماد مشروعك وإضافة +${points} نقطة - وسيط AI`;
     const htmlContent = `
       <!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -233,7 +233,7 @@ export class EmailService {
       </style></head><body><div class="card"><div class="header"><h1>مبروك إكمال المشروع 🎉</h1></div><div class="content">
       <h3>أهلاً ${providerName}</h3><p>وافق طالب الخدمة على التسليم النهائي لمشروع <strong>«${projectTitle}»</strong>، وتم إغلاق المشروع بنجاح.</p>
       <div class="points"><span>مكافأة إكمال المشروع</span><b>+${points} نقطة</b><small>أُضيفت مباشرة إلى رصيد نقاطك في المنصة</small></div>
-      <a class="button" href="${projectUrl}">عرض المشروع والنقاط</a></div><div class="footer">وسيط AI — منصة العمل والخدمات المحمية</div></div></body></html>`;
+      ${projectUrl ? `<a class="button" href="${projectUrl}">عرض المشروع والنقاط</a>` : ''}</div><div class="footer">وسيط AI — منصة العمل والخدمات المحمية</div></div></body></html>`;
 
     try {
       if (!process.env.SMTP_USER && !process.env.SMTP_HOST) {
