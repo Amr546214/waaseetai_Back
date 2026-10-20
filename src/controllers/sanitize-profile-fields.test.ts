@@ -47,13 +47,14 @@ function setup(t: TestContext) {
 	const prisma: any = {
 		skill: { findMany: async () => [] },
 		portfolioItem: { deleteMany: async () => ({}), createMany: async ({ data }: any) => { w.portfolio.push(...data); return {}; } },
+		profileModificationRequest: { findMany: async () => [] },
 		providerProfile: { findUnique: async () => ({ id: 'pp1', kycStatus: 'UNVERIFIED', skills: [], portfolioItems: [] }), upsert: async (a: any) => { w.upsert.push(a); return { id: 'pp1', ...a.create }; }, update: async ({ data }: any) => ({ id: 'pp1', ...data }), updateMany: async () => ({ count: 0 }) },
 		user: { findUnique: async () => ({ id: 'u1', status: 'ACTIVE' }) },
-		$transaction: async (ops: any) => Promise.all(ops)
+		$transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops(prisma))
 	};
 	t.mock.module('../config/db', { namedExports: { prisma } });
 	t.mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
-	t.mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (v: any) => v ?? null, storeKycFileIfNeeded: async (v: any) => v ?? null } });
+	t.mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (v: any) => v ?? null, storeKycFileIfNeeded: async (v: any) => v ?? null, privateFileExists: async () => true } });
 	t.mock.module('../utils/completion-calculators', { namedExports: { computeProviderCompletion: () => 80 } });
 	t.mock.module('../services/session.service', { namedExports: { sessionService: {} } });
 	t.mock.module('../services/provider-profile.service', { namedExports: { providerProfileService: {} } });
@@ -65,8 +66,8 @@ test('provider wizard: occupation, country, city, address, languages, specialtie
 	const { saveSetupData } = await import(`./provider-profile.controller.ts?f=${Date.now()}-${Math.random()}`);
 	const body = {
 		details: { occupation: XSS('مصمم'), country: XSS('السعودية'), city: XSS('جدة'), address: XSS('حي'), languages: [XSS('العربية')], bio: XSS('نبذة') },
-		identity: { certs: [] }, bank: {}, documents: { notes: XSS('ملاحظة') }, agreements: {},
-		specialties: { mainSpec: XSS('تصميم'), subSpecs: [XSS('شعارات')] }, portfolio: { [XSS('شعارات')]: [{ review: 'private:raw:pdf:waseetai/providers/u1/documents/work', proofs: [] }] }
+		identity: { frontId: 'private:image:png:waseetai/providers/u1/identity/front', certs: [] }, bank: {}, documents: { notes: XSS('ملاحظة') }, agreements: {},
+		specialties: { mainSpec: XSS('تصميم'), subSpecs: [XSS('شعارات')] }, portfolio: { [XSS('شعارات')]: [{ review: 'private:raw:pdf:waseetai/providers/u1/documents/work', proofs: ['private:raw:pdf:waseetai/providers/u1/documents/proof'] }] }
 	};
 	const res = mockRes();
 	await saveSetupData({ user: { id: 'u1' }, body } as any, res);

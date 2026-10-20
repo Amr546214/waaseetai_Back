@@ -13,7 +13,9 @@ const store: { provider: any; client: any } = { provider: null, client: null };
 const merge = (cur: any, patch: any) => { const next = { ...(cur ?? {}) }; for (const [k, v] of Object.entries(patch)) if (v !== undefined) next[k] = v; return next; };
 const prisma: any = {
   skill: { findMany: async () => [] },
-  portfolioItem: { deleteMany: async () => ({}), createMany: async () => ({}) },
+  // the stored models are kept in the fake store so the evidence rule (file + proof per chosen sub-specialty) is judged on what was really written
+  portfolioItem: { deleteMany: async () => { if (store.provider) store.provider = { ...store.provider, portfolioItems: [] }; return {}; }, createMany: async ({ data }: any) => { store.provider = { ...store.provider, portfolioItems: [...(store.provider?.portfolioItems ?? []), ...data] }; return {}; } },
+  profileModificationRequest: { findMany: async () => [] },
   providerProfile: {
     findUnique: async () => (store.provider ? { id: 'pp1', skills: [], portfolioItems: [], ...store.provider } : null),
     upsert: async (a: any) => { store.provider = merge(store.provider ?? { kycStatus: 'UNVERIFIED' }, a.update); return { id: 'pp1', ...store.provider }; },
@@ -28,7 +30,10 @@ const prisma: any = {
   },
   clientOnboarding: { findUnique: async () => null, create: async ({ data }: any) => data, update: async ({ data }: any) => data },
   user: { findUnique: async () => ({ id: 'u1', status: 'ACTIVE' }), update: async ({ data }: any) => ({ id: 'u1', ...data }) },
-  $transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops({})),
+  $transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops(prisma)),
+  // the specialty rows are now synced INSIDE the setup transaction (a failure rolls the save back), so the fake needs the models that sync reads
+  category: { findFirst: async () => null }, specialty: { findMany: async () => [] }, providerSpecialty: { findUnique: async () => null, upsert: async () => ({ id: 'ps1' }) },
+
 };
 const mocked = new WeakSet<object>();
 function mockDb(t: TestContext) {
@@ -36,12 +41,14 @@ function mockDb(t: TestContext) {
   if (mocked.has(t)) return; mocked.add(t);
   t.mock.module('../config/db', { namedExports: { prisma } });
   t.mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
-  t.mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (v: any) => v ?? null, storeKycFileIfNeeded: async (v: any) => v ?? null } });
+  t.mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (v: any) => v ?? null, storeKycFileIfNeeded: async (v: any) => v ?? null, privateFileExists: async () => true } });
   t.mock.module('../services/session.service', { namedExports: { sessionService: {} } });
   t.mock.module('../services/provider-profile.service', { namedExports: { providerProfileService: {} } });
   t.mock.module('../services/client-profile.service', { namedExports: { clientProfileService: {} } });
 }
 const AGREE = { accurate: true, terms: true, privacy: true };
+// a business model with its file AND a different proof of ownership, per chosen sub-specialty (setup completeness rests on stored documents)
+const MODELS = (...specs: string[]) => Object.fromEntries(specs.map(sp => [sp, [{ review: 'data:application/pdf;base64,AAAA', proofs: ['data:application/pdf;base64,BBBB'] }]]));
 
 // ───────────── provider ─────────────
 async function provider(t: TestContext) {
@@ -55,7 +62,7 @@ test('provider: the wizard\'s nested payload is stored (headline, years, mainSpe
   const res = mockRes();
   await c.saveSetupData({ user: { id: 'u1' }, body: {
     details: { occupation: 'مصمم واجهات', country: 'السعودية', city: 'الرياض', bio: 'خبرة طويلة في التصميم', languages: ['العربية'], expYears: '5 الى 10 سنوات' },
-    specialties: { mainSpec: 'التصميم', subSpecs: ['واجهات'] }, identity: { frontId: 'data:image/png;base64,AAAA', backId: 'data:image/png;base64,AAAA', certs: [] }, agreements: AGREE,
+    specialties: { mainSpec: 'التصميم', subSpecs: ['واجهات'] }, identity: { frontId: 'data:image/png;base64,AAAA', backId: 'data:image/png;base64,AAAA', certs: [] }, agreements: AGREE, portfolio: MODELS('واجهات'),
   } } as any, res);
   assert.equal(res.statusCode, 200);
   const got = await getProvider(c);
@@ -70,7 +77,7 @@ test('provider: the alternative names (headline / hourlyRate / yearsOfExperience
   await c.saveSetupData({ user: { id: 'u1' }, body: {
     headline: 'مطور ويب', hourlyRate: 45.5, yearsOfExperience: 6, mainSpecialty: 'البرمجة', subSpecialties: ['ويب'],
     details: { country: 'مصر', city: 'القاهرة', bio: 'نبذة مهنية كاملة' },
-    identity: { idNumber: '1234567890', dob: '1992-03-04', frontId: 'data:image/png;base64,AAAA', backId: 'data:image/png;base64,AAAA' }, agreements: AGREE,
+    identity: { idNumber: '1234567890', dob: '1992-03-04', frontId: 'data:image/png;base64,AAAA', backId: 'data:image/png;base64,AAAA' }, agreements: AGREE, portfolio: MODELS('ويب'),
   } } as any, res);
   assert.equal(res.statusCode, 200, JSON.stringify(res.body));
   const got = await getProvider(c);
@@ -106,7 +113,7 @@ test('provider: setup is NOT complete when a required field is missing (no mainS
   await c.saveSetupData({ user: { id: 'u1' }, body: base } as any, res);
   assert.equal(res.statusCode, 200);
   assert.equal((await getProvider(c)).isProfileSetupComplete, false);
-  await c.saveSetupData({ user: { id: 'u1' }, body: { ...base, details: { ...base.details, expYears: '1 الى 3 سنوات' }, specialties: { mainSpec: 'التصميم' } } } as any, mockRes());
+  await c.saveSetupData({ user: { id: 'u1' }, body: { ...base, details: { ...base.details, expYears: '1 الى 3 سنوات' }, specialties: { mainSpec: 'التصميم', subSpecs: ['شعارات'] }, identity: { frontId: 'data:image/png;base64,AAAA' }, portfolio: MODELS('شعارات') } } as any, mockRes());
   assert.equal((await getProvider(c)).isProfileSetupComplete, true);
   // a later partial save does not erase what is stored
   await c.saveSetupData({ user: { id: 'u1' }, body: { details: { city: 'جدة' }, agreements: AGREE } } as any, mockRes());

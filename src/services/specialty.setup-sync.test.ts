@@ -81,7 +81,8 @@ const src = (rel: string) => readFileSync(join(__dirname, '..', rel), 'utf8');
 
 test('wiring: the setup save, the specialty edit and the setup test all create / record the provider specialties', () => {
 	const ctrl = src('controllers/provider-profile.controller.ts');
-	assert.match(ctrl, /specialtyService\.trySyncProviderSpecialties\(result\.id\)/);
+	// the setup save syncs the specialty rows INSIDE its single transaction now (a failure rolls the whole save back) instead of best-effort afterwards
+	assert.match(ctrl, /specialtyService\.syncProviderSpecialtiesFromProfile\(result\.id, tx as any\)/);
 	assert.match(src('services/provider-profile.service.ts'), /specialtyService\.trySyncProviderSpecialties\(updatedProfile\.id\)/);
 	assert.match(src('sockets/setup-test.gateway.ts'), /completeSetupTest\(session\.profileId, score, passed\)/);
 	const done = src('services/setup-test-completion.service.ts');

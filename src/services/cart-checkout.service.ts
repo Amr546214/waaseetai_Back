@@ -368,8 +368,8 @@ export class CartCheckoutService {
     await prisma.otpVerification.deleteMany({ where: { userId, type: OtpType.EMAIL } });
     await prisma.otpVerification.create({ data: { userId, code, type: OtpType.EMAIL, expiresAt, context: this.paymentOtpContext(orderId, paymentReference, paymentMethod) } });
     if (process.env.NODE_ENV === 'development') console.info(`[DEV CHECKOUT OTP] ${order.user.email}: ${code}`);
-    notificationService.sendPaymentOtpEmail(order.user.email, code).catch(() => undefined);
-    return { paymentReference, otpSentTo: this.maskEmail(order.user.email), expiresAt: expiresAt.toISOString() };
+    const emailSent = await notificationService.sendPaymentOtpEmail(order.user.email, code).then(() => true, () => false);
+    return { paymentReference, otpSentTo: this.maskEmail(order.user.email), expiresAt: expiresAt.toISOString(), emailSent };
   }
 
   async resendPaymentOtp(userId: string, orderId: string) {
@@ -383,8 +383,8 @@ export class CartCheckoutService {
     const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
     await prisma.otpVerification.update({ where: { id: previous.id }, data: { code, expiresAt, attempts: 0 } });
     if (process.env.NODE_ENV === 'development') console.info(`[DEV CHECKOUT OTP] ${order.user.email}: ${code}`);
-    notificationService.sendPaymentOtpEmail(order.user.email, code).catch(() => undefined);
-    return { paymentReference: context.paymentReference, otpSentTo: this.maskEmail(order.user.email), expiresAt: expiresAt.toISOString() };
+    const emailSent = await notificationService.sendPaymentOtpEmail(order.user.email, code).then(() => true, () => false);
+    return { paymentReference: context.paymentReference, otpSentTo: this.maskEmail(order.user.email), expiresAt: expiresAt.toISOString(), emailSent };
   }
 
   async confirmPayment(userId: string, orderId: string, otpCode: string) {

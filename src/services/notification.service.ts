@@ -1,5 +1,6 @@
 import { NotificationCategory, Notification } from '@prisma/client';
 import { mailTransporter, getOtpEmailTemplate, getPasswordResetEmailTemplate } from '../utils/mail.transporter';
+import { otpValidityText } from '../utils/otp-validity';
 import { prisma } from '../config/db';
 import { getIO } from '../socket';
 import { AppError } from '../utils/app-error';
@@ -21,13 +22,15 @@ export const maskEmail = (email: string): string => {
 
 // No brand name in the subject: a third-party brand in the subject of a message that does not come from that brand is a classic phishing signal for mail providers.
 export const PAYMENT_OTP_DEFAULT_SUBJECT = 'رمز التحقق لتأكيد الدفع - Waseet AI';
+/** Validity of the payment codes (cart checkout and amendment funding), in minutes. Kept equal to the TTL constants of those services. */
+export const PAYMENT_OTP_VALIDITY_MINUTES = 2;
 export const PAYPAL_OTP_DEFAULT_SUBJECT = 'رمز التحقق لتأكيد بريد استلام المدفوعات - Waseet AI';
 
 const SMS_PROVIDER_IMPLEMENTED = false; // sendSmsViaTwilio() is a stub
 
 const asAddresses = (list: unknown): string[] => (Array.isArray(list) ? list.map(a => String((a as { address?: string })?.address ?? a)) : []);
 
-const logEmailDelivery = (kind: string, to: string, info: any): EmailDeliveryResult => {
+const logEmailDelivery = (kind: string, to: string, info: any, ms?: number): EmailDeliveryResult => {
 	const result: EmailDeliveryResult = {
 		messageId: info?.messageId ? String(info.messageId) : null,
 		accepted: asAddresses(info?.accepted).map(maskEmail),
@@ -36,14 +39,14 @@ const logEmailDelivery = (kind: string, to: string, info: any): EmailDeliveryRes
 	};
 	// A recipient the server rejected is a failed delivery even though sendMail resolved.
 	const level = result.rejected.length || !result.accepted.length ? 'warn' : 'info';
-	logger[level](`[Email:${kind}] to=${maskEmail(to)} messageId=${result.messageId} accepted=${JSON.stringify(result.accepted)} rejected=${JSON.stringify(result.rejected)} response=${JSON.stringify(result.response)}`);
+	logger[level](`[Email:${kind}] to=${maskEmail(to)} messageId=${result.messageId} accepted=${JSON.stringify(result.accepted)} rejected=${JSON.stringify(result.rejected)} response=${JSON.stringify(result.response)}${ms === undefined ? '' : ` ms=${ms}`}`);
 	if (result.rejected.length || !result.accepted.length) throw Object.assign(new Error('SMTP rejected the recipient'), { deliveryResult: result });
 	return result;
 };
 
-const logEmailFailure = (kind: string, to: string, error: unknown) => {
+const logEmailFailure = (kind: string, to: string, error: unknown, ms?: number) => {
 	const e = error as { code?: string; responseCode?: number; response?: string; message?: string };
-	logger.error(`[Email:${kind}] FAILED to=${maskEmail(to)} code=${e?.code ?? 'n/a'} responseCode=${e?.responseCode ?? 'n/a'} response=${JSON.stringify((e?.response ?? e?.message ?? '').toString().slice(0, 200))}`);
+	logger.error(`[Email:${kind}] FAILED to=${maskEmail(to)} code=${e?.code ?? 'n/a'} responseCode=${e?.responseCode ?? 'n/a'} response=${JSON.stringify((e?.response ?? e?.message ?? '').toString().slice(0, 200))}${ms === undefined ? '' : ` ms=${ms}`}`);
 };
 
 
@@ -277,22 +280,23 @@ export class NotificationService {
 	 * alternative and headers, so a code that arrives for one purpose is no different, for the mail provider, from a code for another. Only the subject differs.
 	 * Throws on an SMTP error or a rejected recipient; logs the server's answer (message id, accepted, rejected, response) and never the code.
 	 */
-	private async sendOtpMail(kind: string, email: string, code: string, subject: string): Promise<EmailDeliveryResult> {
+	private async sendOtpMail(kind: string, email: string, code: string, subject: string, validityMinutes: number = 10): Promise<EmailDeliveryResult> {
 		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
 		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
+		const startedAt = Date.now();
 		try {
 			const info = await mailTransporter.sendMail({
 				from: `"${senderName}" <${from}>`,
 				to: email,
 				subject,
-				html: getOtpEmailTemplate(code),
+				html: getOtpEmailTemplate(code, validityMinutes),
 				// An HTML-only message is a spam signal: every OTP mail also carries a plain-text part.
-				text: `رمز التحقق الخاص بك في وسيط AI هو: ${code}\nالرمز صالح لمدة 10 دقائق. لا تشاركه مع أي أحد. إذا لم تطلبه فتجاهل هذه الرسالة.`,
+				text: `رمز التحقق الخاص بك في وسيط AI هو: ${code}\nالرمز صالح لمدة ${otpValidityText(validityMinutes)}. لا تشاركه مع أي أحد. إذا لم تطلبه فتجاهل هذه الرسالة.`,
 				headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },
 			});
-			return logEmailDelivery(kind, email, info);
+			return logEmailDelivery(kind, email, info, Date.now() - startedAt);
 		} catch (error) {
-			logEmailFailure(kind, email, error);
+			logEmailFailure(kind, email, error, Date.now() - startedAt);
 			throw error;
 		}
 	}
@@ -300,8 +304,8 @@ export class NotificationService {
 	/**
 	 * Send an OTP verification code via email.
 	 */
-	public async sendEmailOtp(email: string, code: string): Promise<EmailDeliveryResult> {
-		return this.sendOtpMail('otp', email, code, process.env.OTP_EMAIL_SUBJECT ?? 'رمز التحقق لتفعيل حسابك - Waseet AI');
+	public async sendEmailOtp(email: string, code: string, validityMinutes: number = 10): Promise<EmailDeliveryResult> {
+		return this.sendOtpMail('otp', email, code, process.env.OTP_EMAIL_SUBJECT ?? 'رمز التحقق لتفعيل حسابك - Waseet AI', validityMinutes);
 	}
 
 	/**
@@ -309,21 +313,22 @@ export class NotificationService {
 	 * (distinct from the account-activation OTP email) so the two flows never
 	 * share wording.
 	 */
-	public async sendPasswordResetEmail(email: string, firstName: string, code: string): Promise<EmailDeliveryResult> {
+	public async sendPasswordResetEmail(email: string, firstName: string, code: string, validityMinutes: number = 10): Promise<EmailDeliveryResult> {
 		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
 		const emailSubject = process.env.RESET_PASSWORD_EMAIL_SUBJECT ?? 'رمز إعادة تعيين كلمة المرور - Waseet AI';
 		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
 
+		const startedAt = Date.now();
 		try {
 			const info = await mailTransporter.sendMail({
 				from: `"${senderName}" <${from}>`,
 				to: email,
 				subject: emailSubject,
-				html: getPasswordResetEmailTemplate(firstName, code),
+				html: getPasswordResetEmailTemplate(firstName, code, validityMinutes),
 			});
-			return logEmailDelivery('password-reset', email, info);
+			return logEmailDelivery('password-reset', email, info, Date.now() - startedAt);
 		} catch (error) {
-			logEmailFailure('password-reset', email, error);
+			logEmailFailure('password-reset', email, error, Date.now() - startedAt);
 			throw error;
 		}
 	}
@@ -334,8 +339,10 @@ export class NotificationService {
 	}
 
 	/** Code that completes a password login, sent to the ACCOUNT EMAIL (purpose LOGIN_EMAIL; SMS is never used for login). */
-	public async sendLoginOtpEmail(email: string, code: string): Promise<EmailDeliveryResult> {
-		return this.sendOtpMail('login', email, code, process.env.LOGIN_EMAIL_SUBJECT ?? 'رمز تسجيل الدخول - Waseet AI');
+	public sendLoginOtpEmail(email: string, code: string): Promise<EmailDeliveryResult>;
+	public sendLoginOtpEmail(email: string, code: string, validityMinutes: number): Promise<EmailDeliveryResult>;
+	public async sendLoginOtpEmail(email: string, code: string, validityMinutes: number = 10): Promise<EmailDeliveryResult> {
+		return this.sendOtpMail('login', email, code, process.env.LOGIN_EMAIL_SUBJECT ?? 'رمز تسجيل الدخول - Waseet AI', validityMinutes);
 	}
 
 	/** Code that confirms a change of the PayPal payout email, sent to the ACCOUNT EMAIL (never to the new, unverified address). */
@@ -345,7 +352,8 @@ export class NotificationService {
 
 	/** Code that confirms a payment (marketplace checkout): its own subject, never the account-activation one. */
 	public async sendPaymentOtpEmail(email: string, code: string): Promise<EmailDeliveryResult> {
-		return this.sendOtpMail('payment', email, code, process.env.PAYMENT_OTP_EMAIL_SUBJECT || PAYMENT_OTP_DEFAULT_SUBJECT);
+		// Payment codes (marketplace checkout, budget-increase authorization) are valid for 2 minutes: the mail says so.
+		return this.sendOtpMail('payment', email, code, process.env.PAYMENT_OTP_EMAIL_SUBJECT || PAYMENT_OTP_DEFAULT_SUBJECT, PAYMENT_OTP_VALIDITY_MINUTES);
 	}
 
 	/** True only when a real SMS sender exists. Today the only provider code is a Twilio stub, so this is false. */

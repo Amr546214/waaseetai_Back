@@ -90,6 +90,34 @@ export class OtpSendThrottle {
   }
 
   /**
+   * For a send that is AWAITED (the SMTP round-trip can take seconds): checks the three limits and, when they pass, takes the per-IP slot AT ONCE,
+   * synchronously, so concurrent requests from one address (any accounts) cannot all pass the check while the mail is in flight. The recipient
+   * cooldown / hourly allowance start later, with commitRecipient(), and only when the mail server accepted the message.
+   */
+  reserve(recipientKey: string, ip: string | undefined, now: number = Date.now()): OtpThrottleResult {
+    const result = this.evaluate(recipientKey, ip, now, false);
+    if (!result.allowed) return result;
+    const ipKey = (ip || 'unknown').trim();
+    const ipHits = this.prune(this.ips.get(ipKey), now); ipHits.push(now); this.ips.set(ipKey, ipHits);
+    this.sweep(now);
+    return result;
+  }
+
+  /** Second half of reserve(): the recipient cooldown and hourly allowance start only for a mail the server accepted. */
+  commitRecipient(recipientKey: string, delivered: boolean, now: number = Date.now()): void {
+    if (!delivered) return;
+    const key = recipientKey.trim().toLowerCase();
+    const hits = this.prune(this.recipients.get(key), now); hits.push(now); this.recipients.set(key, hits);
+  }
+
+  /** Gives back the per-IP slot taken by reserve() when the request never reached the mailer. */
+  releaseIp(ip: string | undefined, now: number = Date.now()): void {
+    const ipKey = (ip || 'unknown').trim();
+    const hits = this.prune(this.ips.get(ipKey), now); hits.pop();
+    if (hits.length) this.ips.set(ipKey, hits); else this.ips.delete(ipKey);
+  }
+
+  /**
    * Checks the three limits and, only when all pass, records this attempt. A rejected attempt is NOT recorded, so asking
    * again early never extends the wait.
    */
@@ -145,3 +173,14 @@ export class OtpSendThrottle {
 
 /** The process-wide instance used by the routes and by the login-while-unverified resend. */
 export const otpSendThrottle = new OtpSendThrottle();
+
+/**
+ * A still-valid code is RE-SENT as it is (an older mail that arrives late must not carry a dead code) only while at least this much of its
+ * validity is left. Closer to the end the mail could land after the code died (SMTP + the recipient's provider can take minutes), so a fresh code
+ * with the normal validity is issued instead. The validity itself (10 minutes) is never stretched.
+ */
+export const OTP_REUSE_MIN_REMAINING_MS = 3 * 60 * 1000;
+
+export function canReuseOtp(existing: { expiresAt: Date; attempts: number } | null | undefined, maxAttempts: number, now: number = Date.now()): boolean {
+  return !!existing && existing.attempts < maxAttempts && existing.expiresAt.getTime() - now >= OTP_REUSE_MIN_REMAINING_MS;
+}

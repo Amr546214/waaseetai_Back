@@ -21,6 +21,7 @@ let cur: { w: Writes; o: { userStatus?: string; providerKyc?: string; clientKyc?
 const prisma: any = {
   skill: { findMany: async () => [] },
   portfolioItem: { deleteMany: async () => ({}), createMany: async () => ({}) },
+  profileModificationRequest: { findMany: async () => [] },
   providerProfile: {
     upsert: async (a: any) => { cur.w.providerUpsert.push(a); return { id: 'pp1', ...a.create }; },
     findUnique: async () => ({ id: 'pp1', skills: [], portfolioItems: [], idNumber: '1234567890', kycStatus: cur.o.providerKyc ?? 'VERIFIED' }),
@@ -38,7 +39,7 @@ const prisma: any = {
     findUnique: async () => ({ id: 'u1', status: cur.o.userStatus ?? 'SUSPENDED_REVIEW' }),
     update: async (a: any) => { cur.w.userUpdate.push(a); return { id: 'u1', ...a.data }; },
   },
-  $transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops({})),
+  $transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops(prisma)),
 };
 function mockDb(t: TestContext, o: { userStatus?: string; providerKyc?: string; clientKyc?: string } = {}) {
   const w: Writes = { providerUpsert: [], providerUpdate: [], providerUpdateMany: [], clientUpsert: [], clientUpdate: [], clientUpdateMany: [], userUpdate: [] };

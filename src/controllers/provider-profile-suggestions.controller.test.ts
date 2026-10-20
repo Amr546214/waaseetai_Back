@@ -18,7 +18,9 @@ async function load(t: TestContext, accountType = AccountType.PROVIDER_INDIVIDUA
     },
     skill: { upsert: async ({ where }: any) => ({ id: `real-${String(where.name).toLowerCase()}-id` }) },
     category: { findFirst: async () => null },
-    $transaction: async (ops: any[]) => Promise.all(ops)
+    profileModificationRequest: { findMany: async () => [] },
+    specialty: { findMany: async () => [] }, providerSpecialty: { findUnique: async () => null, upsert: async () => ({ id: 'ps' }) },
+    async $transaction(ops: any) { return Array.isArray(ops) ? Promise.all(ops) : ops(this); }
   } } });
   t.mock.module('../services/session.service', { namedExports: { sessionService: { validateOrRegister: async () => ({ id: 'session' }) } } });
   t.mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (value: any) => value, storeKycFileIfNeeded: async (value: any) => value } });

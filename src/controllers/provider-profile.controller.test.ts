@@ -58,6 +58,7 @@ function createSetupDataMockPrisma(t: TestContext) {
   const userUpdateSpy = t.mock.fn((args: any) => ({ ...userFixture, ...args.data }));
 
   const prismaMock = {
+    profileModificationRequest: { findMany: async () => [] },
     providerProfile: {
       upsert: t.mock.fn((args: any) => {
         // Prisma semantics: an undefined field is left alone (it never erases the stored value)
@@ -79,7 +80,7 @@ function createSetupDataMockPrisma(t: TestContext) {
       findUnique: async () => ({ ...userFixture }),
       update: userUpdateSpy
     },
-    $transaction: async (ops: any) => Promise.all(ops)
+    $transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops(prismaMock))
   };
 
   return { prismaMock, providerProfileUpdateSpy, userUpdateSpy, updateManyCalls, getProviderProfileState: () => providerProfileState };

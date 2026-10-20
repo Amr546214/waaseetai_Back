@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { otpValidityText } from './otp-validity';
 
 // SMTP Configuration
 const smtpConfig = {
@@ -21,7 +22,7 @@ export const mailTransporter = nodemailer.createTransport({
 });
 
 // Waseet AI Verification Email Template
-export const getOtpEmailTemplate = (code: string) => {
+export const getOtpEmailTemplate = (code: string, validityMinutes: number = 10) => {
   return `
     <!DOCTYPE html>
     <html lang="ar" dir="rtl">
@@ -124,7 +125,7 @@ export const getOtpEmailTemplate = (code: string) => {
               ${code}
             </div>
             
-            <p class="warning">هذا الرمز صالح لمدة 10 دقائق فقط.<br>يرجى عدم مشاركته مع أي شخص، فريق وسيط AI لن يطلب منك هذا الرمز أبداً.</p>
+            <p class="warning">هذا الرمز صالح لمدة ${otpValidityText(validityMinutes)} فقط.<br>يرجى عدم مشاركته مع أي شخص، فريق وسيط AI لن يطلب منك هذا الرمز أبداً.</p>
           </div>
           <div class="footer">
             <p>&copy; ${new Date().getFullYear()} وسيط الذكاء الاصطناعي للتقنية. جميع الحقوق محفوظة.</p>
@@ -137,7 +138,7 @@ export const getOtpEmailTemplate = (code: string) => {
 };
 
 // Waseet AI Password Reset Email Template
-export const getPasswordResetEmailTemplate = (firstName: string, code: string) => {
+export const getPasswordResetEmailTemplate = (firstName: string, code: string, validityMinutes: number = 10) => {
   return `
     <!DOCTYPE html>
     <html lang="ar" dir="rtl">
@@ -240,7 +241,7 @@ export const getPasswordResetEmailTemplate = (firstName: string, code: string) =
               ${code}
             </div>
 
-            <p class="warning">هذا الرمز صالح لمدة 10 دقائق فقط.<br>إذا لم تطلب إعادة تعيين كلمة المرور، يمكنك تجاهل هذه الرسالة بأمان ولن يتم تغيير أي شيء في حسابك.</p>
+            <p class="warning">هذا الرمز صالح لمدة ${otpValidityText(validityMinutes)} فقط.<br>إذا لم تطلب إعادة تعيين كلمة المرور، يمكنك تجاهل هذه الرسالة بأمان ولن يتم تغيير أي شيء في حسابك.</p>
           </div>
           <div class="footer">
             <p>&copy; ${new Date().getFullYear()} وسيط الذكاء الاصطناعي للتقنية. جميع الحقوق محفوظة.</p>
