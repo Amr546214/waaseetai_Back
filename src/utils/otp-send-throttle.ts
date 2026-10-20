@@ -145,3 +145,14 @@ export class OtpSendThrottle {
 
 /** The process-wide instance used by the routes and by the login-while-unverified resend. */
 export const otpSendThrottle = new OtpSendThrottle();
+
+/**
+ * A still-valid code is RE-SENT as it is (an older mail that arrives late must not carry a dead code) only while at least this much of its
+ * validity is left. Closer to the end the mail could land after the code died (SMTP + the recipient's provider can take minutes), so a fresh code
+ * with the normal validity is issued instead. The validity itself (10 minutes) is never stretched.
+ */
+export const OTP_REUSE_MIN_REMAINING_MS = 3 * 60 * 1000;
+
+export function canReuseOtp(existing: { expiresAt: Date; attempts: number } | null | undefined, maxAttempts: number, now: number = Date.now()): boolean {
+  return !!existing && existing.attempts < maxAttempts && existing.expiresAt.getTime() - now >= OTP_REUSE_MIN_REMAINING_MS;
+}

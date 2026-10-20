@@ -410,8 +410,9 @@ export class ProjectAmendmentService {
     if (previous) await prisma.otpVerification.deleteMany({ where: { id: previous.id } });
     await prisma.otpVerification.create({ data: { userId: clientId, code, type: OtpType.EMAIL, expiresAt, context: { purpose: OtpPurpose.AMENDMENT_PAYMENT, amendmentId, amount: budget, terms: termsFingerprint(contractForTerms), paymentReference: `AMD-${crypto.randomBytes(6).toString('hex').toUpperCase()}` } } });
     if (process.env.NODE_ENV === 'development') console.info(`[DEV AMENDMENT OTP] ${user.email}: ${code}`);
-    notificationService.sendPaymentOtpEmail(user.email, code).catch(() => undefined);
-    return { otpSentTo: maskEmail(user.email), expiresAt: expiresAt.toISOString(), amount: budget };
+    // Awaited (the SMTP client has bounded timeouts): the answer says whether the mail server accepted the message, so the screen never claims "sent" after a known failure.
+    const emailSent = await notificationService.sendPaymentOtpEmail(user.email, code).then(() => true, () => false);
+    return { otpSentTo: maskEmail(user.email), expiresAt: expiresAt.toISOString(), amount: budget, emailSent };
   }
 
   // POST /client/projects/amendments/:id/authorize-funding {otpCode} — the CLIENT who raised a budget increase authorizes the payment. Nothing is charged here:

@@ -864,3 +864,16 @@ test('Phase 4 (stale cart item): a service added to the cart before any active c
   assert.deepEqual(error.errors, [{ serviceId: 'service-1', projectId: 'project-existing' }]);
   assert.equal(orderCreateSpy.mock.callCount(), 0, 'the stale cart item must not reach order creation');
 });
+
+test('initPayment: the answer says whether the OTP mail was accepted (emailSent), never "sent" after a known failure', async (t) => {
+  const order = { id: 'order-1', status: 'PENDING_PAYMENT', total: 100, items: [{ serviceId: 'service-1', providerId: 'provider-9' }], user: { email: 'client@example.com', phoneNumber: null, walletBalance: 250 } };
+  t.mock.module('../config/db', { namedExports: { prisma: { order: { findFirst: async () => order }, serviceCatalog: { findMany: liveServices('provider-9') }, otpVerification: { deleteMany: async () => ({ count: 0 }), create: async () => ({}) } } } });
+  let fail = true;
+  t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: async () => { if (fail) throw new Error('smtp down'); } } } });
+  const { cartCheckoutService } = await import(`./cart-checkout.service.ts?fixture=${Date.now()}-${Math.random()}`);
+  const failed = await cartCheckoutService.initPayment('user-1', 'order-1', 'wallet');
+  assert.equal(failed.emailSent, false);
+  fail = false;
+  const ok = await cartCheckoutService.initPayment('user-1', 'order-1', 'wallet');
+  assert.equal(ok.emailSent, true);
+});

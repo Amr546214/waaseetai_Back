@@ -16,7 +16,8 @@ import { sessionService, SessionContext } from './session.service';
 import { accountAuditLogService } from './account-logs.service';
 import { initializeRoleState } from './account-management.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
-import { otpSendThrottle, otpThrottleMessage, resendAvailableAtIso } from '../utils/otp-send-throttle';
+import { otpSendThrottle, otpThrottleMessage, resendAvailableAtIso, canReuseOtp } from '../utils/otp-send-throttle';
+import { withKeyLock } from '../utils/key-lock';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { normalizeReferralIdentifier } from '../utils/referral-identifier';
 import { RESEND_GENERIC_MESSAGE, ACTIVATION_CODE_REJECTED_MESSAGE } from '../utils/auth-messages';
@@ -336,8 +337,8 @@ export class AuthService {
 	 */
 	private async prepareActivationCode(userId: string): Promise<{ otpCode: string; reused: boolean }> {
 		const existing = await authRepository.findLatestActivationOtp(userId);
-		if (existing && existing.expiresAt > new Date() && existing.attempts < OTP_MAX_ATTEMPTS) {
-			return { otpCode: existing.code, reused: true };
+		if (canReuseOtp(existing, OTP_MAX_ATTEMPTS)) {
+			return { otpCode: existing!.code, reused: true };
 		}
 		const otpCode = crypto.randomInt(100000, 999999).toString();
 		await authRepository.deleteActivationOtps(userId);
@@ -366,19 +367,19 @@ export class AuthService {
 			return { message: RESET_GENERIC_MESSAGE, expiresAt: new Date(Date.now() + RESET_OTP_EXPIRY_MS).toISOString() };
 		}
 
-		// A reset code that is still valid (and not locked by wrong attempts) is re-sent as it is, not replaced.
-		const existingReset = await authRepository.findLatestPasswordResetOtp(user.id);
-		let otpCode: string;
-		let resetExpiresAt: Date;
-		if (existingReset && existingReset.expiresAt > new Date() && existingReset.attempts < RESET_OTP_MAX_ATTEMPTS) {
-			otpCode = existingReset.code;
-			resetExpiresAt = existingReset.expiresAt;
-		} else {
-			otpCode = crypto.randomInt(100000, 999999).toString();
-			resetExpiresAt = new Date(Date.now() + RESET_OTP_EXPIRY_MS);
+		// A reset code that is still valid (not locked by wrong attempts, and with enough validity left for the mail to arrive) is re-sent as it is,
+		// not replaced; one request at a time per account so simultaneous requests cannot delete each other's code.
+		const { otpCode, resetExpiresAt } = await withKeyLock(`reset:${user.id}`, async () => {
+			const existingReset = await authRepository.findLatestPasswordResetOtp(user.id);
+			if (canReuseOtp(existingReset, RESET_OTP_MAX_ATTEMPTS)) {
+				return { otpCode: existingReset!.code, resetExpiresAt: existingReset!.expiresAt };
+			}
+			const fresh = crypto.randomInt(100000, 999999).toString();
+			const freshExpiry = new Date(Date.now() + RESET_OTP_EXPIRY_MS);
 			await authRepository.deletePasswordResetOtps(user.id);
-			await authRepository.createPasswordResetOtp(user.id, otpCode, resetExpiresAt);
-		}
+			await authRepository.createPasswordResetOtp(user.id, fresh, freshExpiry);
+			return { otpCode: fresh, resetExpiresAt: freshExpiry };
+		});
 
 		// Not awaited: the SMTP round-trip would make a registered address answer measurably slower than an unknown one. The failure
 		// (with the SMTP response) is logged by notificationService; the answer stays generic either way.
@@ -611,12 +612,23 @@ export class AuthService {
 	/** Sends (or re-sends) the LOGIN_EMAIL code for an ACTIVE account; subject to the shared OTP send throttle. */
 	private async loginOtpChallengeResult(userId: string, email: string, ipAddress: string | undefined) {
 		const base = { verified: false as const, phoneOtpRequired: false, loginOtpRequired: true as const, userId };
-		const throttle = otpSendThrottle.consume(`login:${userId}`, ipAddress);
-		if (!throttle.allowed) {
-			return { ...base, emailSent: false, retryAfterSeconds: throttle.retryAfterSeconds, message: otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds) };
-		}
-		const { emailSent, expiresAt } = await this.sendLoginOtp(userId, email);
-		return { ...base, emailSent, ...(emailSent ? { resendAvailableAt: resendAvailableAtIso(), expiresAt: expiresAt.toISOString() } : {}), message: emailSent ? 'أرسلنا رمز تسجيل الدخول إلى بريدك الإلكتروني' : 'تعذر إرسال رمز تسجيل الدخول الآن، حاول مرة أخرى بعد قليل أو تواصل مع الدعم' };
+		const key = `login:${userId}`;
+		// One request at a time per account: two simultaneous requests (double click, two tabs) cannot create / delete the same code under each other.
+		// The cooldown and the hourly allowance start only when the mail server ACCEPTED the message (peek, send, record), so a failed send is never
+		// answered with "we already sent it" and failures never lock the recipient out.
+		const cid = crypto.randomBytes(4).toString('hex'); // correlates the log lines of this one attempt (never the code, the e-mail address or the password)
+		const startedAt = Date.now();
+		return withKeyLock(key, async () => {
+			const throttle = otpSendThrottle.peek(key, ipAddress);
+			if (!throttle.allowed) {
+				logger.info(`[OTP:login] cid=${cid} outcome=throttled reason=${throttle.reason} wait=${throttle.retryAfterSeconds}s ms=${Date.now() - startedAt}`);
+				return { ...base, emailSent: false, retryAfterSeconds: throttle.retryAfterSeconds, message: otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds) };
+			}
+			const { emailSent, expiresAt, reused } = await this.sendLoginOtp(userId, email);
+			otpSendThrottle.record(key, ipAddress, emailSent);
+			logger.info(`[OTP:login] cid=${cid} outcome=${emailSent ? 'sent' : 'send-failed'} reused=${reused} validForMs=${expiresAt.getTime() - Date.now()} ms=${Date.now() - startedAt}`);
+			return { ...base, emailSent, ...(emailSent ? { resendAvailableAt: resendAvailableAtIso(), expiresAt: expiresAt.toISOString() } : {}), message: emailSent ? 'أرسلنا رمز تسجيل الدخول إلى بريدك الإلكتروني' : 'تعذر إرسال رمز تسجيل الدخول الآن، حاول مرة أخرى بعد قليل أو تواصل مع الدعم' };
+		});
 	}
 
 	/** A still-valid LOGIN_EMAIL code is re-sent as it is (a late older email must not carry a dead code); otherwise a new one is created. */
@@ -625,10 +637,10 @@ export class AuthService {
 		let code: string;
 		let reused = false;
 		let expiresAt: Date;
-		if (existing && existing.expiresAt > new Date() && existing.attempts < OTP_MAX_ATTEMPTS) {
-			code = existing.code;
+		if (canReuseOtp(existing, OTP_MAX_ATTEMPTS)) {
+			code = existing!.code;
 			reused = true;
-			expiresAt = existing.expiresAt;
+			expiresAt = existing!.expiresAt;
 		} else {
 			code = crypto.randomInt(100000, 999999).toString();
 			expiresAt = new Date(Date.now() + EMAIL_OTP_EXPIRY_MS);
@@ -768,6 +780,11 @@ export class AuthService {
 	 * (a password-reset / activation / phone-change code never works here), 5 wrong guesses delete it, and the session is created only now.
 	 */
 	public async verifyLoginOtp(input: VerifyLoginOtpInput, sessionContext: SessionContext = {}) {
+		// One verification at a time per account: the same right code sent twice at once (double click) opens ONE session, the second finds the code used.
+		return withKeyLock(`login-verify:${input.userId}`, () => this.verifyLoginOtpLocked(input, sessionContext));
+	}
+
+	private async verifyLoginOtpLocked(input: VerifyLoginOtpInput, sessionContext: SessionContext) {
 		const user = await authRepository.findByIdForSession(input.userId);
 		const otp = user ? await authRepository.findLatestOtpByPurpose(input.userId, OtpPurpose.LOGIN_EMAIL) : null;
 		if (!user || !otp) throw new AppError('رمز التحقق غير صحيح', 400);
