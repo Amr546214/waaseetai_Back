@@ -19,7 +19,8 @@ const esc = (v: string): string => String(v).replace(/&/g, '&amp;').replace(/</g
 export const otpPurposeOfKind = (kind: string): OtpEmailPurpose =>
 	kind === 'login' ? 'login' : kind === 'otp' ? 'activation' : kind === 'payment' ? 'payment' : kind === 'phone-change' ? 'phone-change' : kind === 'paypal-email-change' ? 'paypal-change' : 'generic';
 
-const base = (): string => (process.env.FRONTEND_URL || 'https://waseet.ai').replace(/\/$/, '');
+/** Where the logo and the footer links live. FRONTEND_URL is unset on dev (same-origin proxy) and `waseet.ai` does not resolve, so the last resort is the real public site. */
+const base = (): string => (process.env.EMAIL_ASSET_BASE_URL || process.env.FRONTEND_URL || 'https://waseetai.com').replace(/\/$/, '');
 
 /**
  * ONE light, single-column OTP mail for every purpose (the design of the approved reference). Mail-client safe: table layout, inline styles, no web fonts, no

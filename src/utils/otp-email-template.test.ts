@@ -69,3 +69,15 @@ test('the exported mail.transporter template delegates to the same builder (old 
 	assert.equal(getOtpEmailTemplate('222222'), buildOtpEmailHtml('222222', 10, 'generic'));
 	assert.equal(getOtpEmailTemplate('222222', 2, 'payment'), buildOtpEmailHtml('222222', 2, 'payment'));
 });
+
+test('without FRONTEND_URL (dev) the logo and links use the real public site, never the non-resolving waseet.ai; EMAIL_ASSET_BASE_URL wins', () => {
+	const f = process.env.FRONTEND_URL, a = process.env.EMAIL_ASSET_BASE_URL; delete process.env.FRONTEND_URL; delete process.env.EMAIL_ASSET_BASE_URL;
+	try {
+		let h = html();
+		assert.match(h, /src="https:\/\/waseetai\.com\/images\/waseet-mark\.png"/);
+		assert.ok(!h.includes('waseet.ai/'));
+		process.env.EMAIL_ASSET_BASE_URL = 'https://dev.waseetai.com/';
+		h = html();
+		assert.match(h, /src="https:\/\/dev\.waseetai\.com\/images\/waseet-mark\.png"/);
+	} finally { if (f !== undefined) process.env.FRONTEND_URL = f; if (a === undefined) delete process.env.EMAIL_ASSET_BASE_URL; else process.env.EMAIL_ASSET_BASE_URL = a; }
+});
