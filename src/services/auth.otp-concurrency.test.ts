@@ -28,7 +28,7 @@ function setup(t: TestContext, hash: string, mail: Mail, users: number) {
 		findByEmail: async (e: string) => { const u = byEmail(e); return u ? { ...u } : null; },
 		findById: async (id: string) => { const u = byId(id); return u ? { ...u } : null; },
 		findByIdForSession: async (id: string) => { const u = byId(id); return u ? { ...u } : null; },
-		createOtp: async (userId: string, code: string, _t: string, expiresAt: Date, purpose: string) => { await new Promise(r => setImmediate(r)); rows.push({ id: `o${++seq}`, userId, code, attempts: 0, expiresAt, purpose, createdAt: seq }); return {}; },
+		createOtp: async (userId: string, code: string, _t: string, expiresAt: Date, purpose: string) => { try { t.mock.timers.tick(40); } catch { /* real clock: time passes by itself */ } await new Promise(r => setImmediate(r)); rows.push({ id: `o${++seq}`, userId, code, attempts: 0, expiresAt, purpose, createdAt: seq }); return {}; },
 		findLatestOtpByPurpose: async (userId: string, purpose: string) => { await new Promise(r => setImmediate(r)); const r = rows.filter(x => x.userId === userId && x.purpose === purpose).sort((a, b) => b.createdAt - a.createdAt)[0]; return r ? { ...r } : null; },
 		deleteOtpsByPurpose: async (userId: string, purpose: string) => { await new Promise(r => setImmediate(r)); for (let i = rows.length - 1; i >= 0; i--) if (rows[i].userId === userId && rows[i].purpose === purpose) rows.splice(i, 1); return { count: 0 }; },
 		incrementOtpAttempts: async (id: string) => { const r = rows.find(x => x.id === id); if (r) r.attempts++; return {}; },

@@ -318,6 +318,7 @@ export class NotificationService {
 		const emailSubject = process.env.RESET_PASSWORD_EMAIL_SUBJECT ?? 'رمز إعادة تعيين كلمة المرور - Waseet AI';
 		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
 
+		const startedAt = Date.now();
 		try {
 			const info = await mailTransporter.sendMail({
 				from: `"${senderName}" <${from}>`,
@@ -325,9 +326,9 @@ export class NotificationService {
 				subject: emailSubject,
 				html: getPasswordResetEmailTemplate(firstName, code, validityMinutes),
 			});
-			return logEmailDelivery('password-reset', email, info);
+			return logEmailDelivery('password-reset', email, info, Date.now() - startedAt);
 		} catch (error) {
-			logEmailFailure('password-reset', email, error);
+			logEmailFailure('password-reset', email, error, Date.now() - startedAt);
 			throw error;
 		}
 	}
