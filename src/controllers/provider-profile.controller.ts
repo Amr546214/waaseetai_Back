@@ -15,7 +15,9 @@ import { sessionService } from '../services/session.service';
 import { computeProviderCompletion } from '../utils/completion-calculators';
 import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
 import { normalizeProviderSetupPayload, isProviderSetupComplete } from '../utils/provider-setup-payload';
-import { assertSetupPortfolioProofs } from '../utils/setup-portfolio-proofs';
+import { resolveSetupPortfolio, MODEL_TITLE_PREFIX, type ResolvedPortfolioItem } from '../utils/setup-portfolio-proofs';
+import { assertSetupIdentityFront } from '../utils/setup-identity-required';
+import { providerSetupEvidenceComplete } from '../utils/provider-setup-payload';
 
 import { providerBioSuggestSchema, providerSkillsSuggestSchema, setupSkillsSchema } from '../dtos/provider-profile-suggest.dto';
 
@@ -134,10 +136,14 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		const normalized = normalizeProviderSetupPayload(payload);
 		if (!normalized.ok) return res.status(400).json({ success: false, message: 'بعض الحقول غير مدعومة أو غير صالحة ولم يُحفظ شيء', errors: normalized.errors });
 		const { details, identity, documents, agreements, specialties } = normalized.value;
-		// Batch B T1 (§3): the work-model files must be valid documents of THIS provider, one per chosen sub-specialty (checked only when `portfolio` is sent)
-		if (portfolio !== undefined) {
-			const stored = specialties?.subSpecs === undefined ? await prisma.providerProfile.findUnique({ where: { userId }, select: { subSpecialties: true } }) : null;
-			assertSetupPortfolioProofs(userId, portfolio, specialties?.subSpecs ?? stored?.subSpecialties ?? []);
+		// Business models (setup step 5): every chosen sub-specialty needs a model FILE and, for that model, at least one completed, owned, EXISTING proof of ownership
+		// that is a different file (checked only when `portfolio` is sent: the wizard submission). Decided BEFORE any write; stored files are kept through their stored row.
+		// `portfolio: null` (older callers) is not a submission, like an absent key.
+		const wizardSubmission = portfolio !== undefined && portfolio !== null;
+		let resolvedPortfolio: ResolvedPortfolioItem[] | undefined;
+		if (wizardSubmission) {
+			const held = await prisma.providerProfile.findUnique({ where: { userId }, select: { subSpecialties: true, portfolioItems: { select: { id: true, title: true, description: true, tags: true, coverImage: true } } } });
+			resolvedPortfolio = await resolveSetupPortfolio({ userId, portfolio, chosenSubSpecs: specialties?.subSpecs ?? held?.subSpecialties ?? [], stored: (held?.portfolioItems ?? []) as any[] });
 		}
 		// Only the explicit ordinary save connects accepted skill names. Resolve
 		// every name before any writes/uploads; never upsert taxonomy rows.
@@ -151,12 +157,14 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		}
 
 		// A VERIFIED account's identity (idNumber / dob) is frozen (409); '' / null never erase a stored value.
-		const storedIdentity = await prisma.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, dob: true, kycStatus: true, frontIdUrl: true, backIdUrl: true, supportingDocsUrl: true, certUrls: true, avatarUrl: true, user: { select: { avatarUrl: true } } } });
+		const storedIdentity = await prisma.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, dob: true, kycStatus: true, isProfileSetupComplete: true, frontIdUrl: true, backIdUrl: true, supportingDocsUrl: true, certUrls: true, avatarUrl: true, user: { select: { avatarUrl: true } } } });
 		assertVerifiedIdentityUnchanged(storedIdentity, details ?? {});
 
 		// A value the user already has stored in these fields and re-sends unchanged is "keep", not a new link (legacy file names / public URLs would otherwise be refused on every re-save).
 		const storedFileValues = [storedIdentity?.frontIdUrl, storedIdentity?.backIdUrl, storedIdentity?.supportingDocsUrl, ...(storedIdentity?.certUrls ?? [])];
 		assertKycFileValues([identity?.frontId, identity?.backId, documents?.supportingDocs, ...(identity?.certs || [])], userId, storedFileValues);
+		// The wizard submission needs the FRONT of the ID (stored earlier, an identity review already running / decided, or a valid new file): decided before any write.
+		if (wizardSubmission) await assertSetupIdentityFront({ userId, frontId: identity?.frontId, storedFront: storedIdentity?.frontIdUrl, kycStatus: storedIdentity?.kycStatus });
 		const [frontIdUrl, backIdUrl, supportingDocsUrl] = await Promise.all([
 			storeKycFileIfNeeded(identity?.frontId, `waseetai/providers/${userId}/identity`, 'front-id'),
 			storeKycFileIfNeeded(identity?.backId, `waseetai/providers/${userId}/identity`, 'back-id'),
@@ -227,28 +235,24 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		// The specialties chosen in the wizard become the provider's ProviderSpecialty rows (create-only, no duplicates): the model-upload / market pages read those rows.
 		await specialtyService.trySyncProviderSpecialties(result.id);
 
-		if (portfolio) {
-			await prisma.portfolioItem.deleteMany({ where: { providerProfileId: result.id } });
+		if (resolvedPortfolio) {
+			// Files first (data: URIs are uploaded by us), then ONE transaction replaces the rows: a failure leaves the stored models exactly as they were.
 			const portfolioItems = [];
-			for (const spec of Object.keys(portfolio)) {
-				for (const item of portfolio[spec]) {
-					if (item.review || (item.proofs && item.proofs.length > 0)) {
-						const proofUrls = await Promise.all((item.proofs || []).map((url: string, index: number) =>
-							storeDataUriIfNeeded(url, `waseetai/providers/${userId}/portfolio`, `${spec}-${index + 1}`)
-						));
-						portfolioItems.push({
-							providerProfileId: result.id,
-							title: `نموذج أعمال - ${clean(spec, 100) ?? ""}`,
-							description: clean(item.review, 2000) ?? null,
-							coverImage: proofUrls[0] || null,
-							tags: proofUrls.filter(Boolean) as string[]
-						});
-					}
-				}
+			for (const item of resolvedPortfolio) {
+				const proofUrls = await Promise.all(item.proofs.map((url, index) => storeDataUriIfNeeded(url, `waseetai/providers/${userId}/portfolio`, `${item.spec}-${index + 1}`)));
+				const reviewUrl = await storeDataUriIfNeeded(item.review, `waseetai/providers/${userId}/portfolio`, `${item.spec}-model`);
+				portfolioItems.push({
+					providerProfileId: result.id,
+					title: `${MODEL_TITLE_PREFIX}${clean(item.spec, 100) ?? ""}`,
+					description: clean(reviewUrl, 2000) ?? null,
+					coverImage: proofUrls[0] || null,
+					tags: proofUrls.filter(Boolean) as string[]
+				});
 			}
-			if (portfolioItems.length > 0) {
-				await prisma.portfolioItem.createMany({ data: portfolioItems });
-			}
+			await prisma.$transaction([
+				prisma.portfolioItem.deleteMany({ where: { providerProfileId: result.id } }),
+				...(portfolioItems.length > 0 ? [prisma.portfolioItem.createMany({ data: portfolioItems })] : [])
+			]);
 		}
 
 		// Phase 3D.2A: recalculate ProviderProfile.completionPercentage from the
@@ -268,7 +272,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		// User.status is NOT touched by the setup wizard (AUD-FND-000036): it changes only through OTP activation or an admin decision.
 		const identityChanged = identitySubmissionChanged(storedIdentity, details ?? {}, { front: newFront, back: newBack });
 		const [updatedResult] = await prisma.$transaction([
-			prisma.providerProfile.update({ where: { userId }, data: { completionPercentage: completion, isProfileSetupComplete: isProviderSetupComplete(finalProfile) } }),
+			prisma.providerProfile.update({ where: { userId }, data: { completionPercentage: completion, isProfileSetupComplete: (isProviderSetupComplete(finalProfile) && providerSetupEvidenceComplete(finalProfile)) || (storedIdentity as any)?.isProfileSetupComplete === true } }),
 			// Submitting a changed, complete identity (idNumber + front + back) marks an UNVERIFIED/REJECTED profile as PENDING review;
 			// a VERIFIED one is never downgraded and an unchanged re-save never re-opens a review.
 			...(identityChanged
@@ -483,6 +487,7 @@ export const addPortfolioItem = async (req: Request, res: Response) => {
 		const item = await providerProfileService.addPortfolioItem(userId, req.body);
 		res.status(201).json(item);
 	} catch (error) {
+		if (error instanceof AppError) return res.status(error.statusCode).json({ success: false, message: error.message });
 		console.error('Error adding portfolio item:', error);
 		res.status(500).json({ message: 'Internal server error' });
 	}
@@ -496,6 +501,7 @@ export const updatePortfolioItem = async (req: Request, res: Response) => {
 		const item = await providerProfileService.updatePortfolioItem(userId, req.params.id as string, req.body);
 		res.json(item);
 	} catch (error) {
+		if (error instanceof AppError) return res.status(error.statusCode).json({ success: false, message: error.message });
 		console.error('Error updating portfolio item:', error);
 		res.status(500).json({ message: 'Internal server error' });
 	}

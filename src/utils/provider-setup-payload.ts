@@ -121,3 +121,23 @@ export function isProviderSetupComplete(p: ProviderSetupCompletenessInput | null
   return !!p && filled(p.headline) && filled(p.country) && filled(p.city) && filled(p.bio) && filled(p.mainSpecialty)
     && typeof p.yearsOfExperience === 'number' && p.accurateAgreed === true && p.termsAgreed === true && p.privacyAgreed === true;
 }
+
+export interface ProviderSetupEvidenceInput {
+  subSpecialties?: string[] | null; frontIdUrl?: string | null; kycStatus?: string | null;
+  portfolioItems?: Array<{ title?: string | null; description?: string | null; tags?: string[] | null }> | null;
+}
+
+/**
+ * The stored EVIDENCE a finished setup rests on (read back from the saved profile, never from the request): at least one sub-specialty, the identity front on file
+ * (or a review already running / decided), and for EVERY chosen sub-specialty a stored model with its file and at least one stored proof of ownership.
+ * The setup is marked complete only when this holds as well, so no request shape (with or without `portfolio`) can complete it without documents.
+ */
+export function providerSetupEvidenceComplete(p: ProviderSetupEvidenceInput | null | undefined): boolean {
+  if (!p) return false;
+  const subs = (p.subSpecialties ?? []).filter(s => typeof s === 'string' && s.trim());
+  if (subs.length === 0) return false;
+  if (!(filled(p.frontIdUrl) || p.kycStatus === 'PENDING' || p.kycStatus === 'VERIFIED')) return false;
+  const specOf = (title?: string | null) => String(title ?? '').replace(/^نموذج أعمال\s*-\s*/, '').trim();
+  const withProof = new Set((p.portfolioItems ?? []).filter(i => filled(i?.description) && (i?.tags ?? []).some(t => filled(t))).map(i => specOf(i?.title)));
+  return subs.every(s => withProof.has(s.trim()));
+}

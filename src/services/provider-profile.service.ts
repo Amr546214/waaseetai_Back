@@ -21,6 +21,11 @@ import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { normalizeWaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
 import { aiFeatureUnavailableError } from './ai/ai-feature-unavailable';
 import { AppError } from '../utils/app-error';
+import { MODEL_TITLE_PREFIX } from '../utils/setup-portfolio-proofs';
+
+/** Titles «نموذج أعمال - …» are the business models of the provider setup (file + proof, verified there): the free portfolio endpoints can neither create nor edit them. */
+const isSetupModelTitle = (title: unknown) => typeof title === 'string' && title.trim().startsWith(MODEL_TITLE_PREFIX.trim());
+const SETUP_MODEL_RESERVED = 'نماذج الأعمال المرتبطة بالتخصصات تُرفع وتُعدَّل من صفحة استكمال البيانات مع وثيقة إثبات الملكية';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { deriveIdentityVerification, type IdentityVerification } from '../utils/identity-verification-status';
@@ -913,6 +918,7 @@ export class ProviderProfileService {
 	}
 
 	async addPortfolioItem(userId: string, data: any) {
+		if (isSetupModelTitle(data?.title)) throw new AppError(SETUP_MODEL_RESERVED, 400);
 		const profile = await prisma.providerProfile.findUnique({ where: { userId } });
 		if (!profile) throw new Error("Profile not found");
 
@@ -945,6 +951,7 @@ export class ProviderProfileService {
 
 		const ownedItem = await prisma.portfolioItem.findFirst({ where: { id: itemId, providerProfileId: profile.id } });
 		if (!ownedItem) throw new Error('Portfolio item not found or unauthorized');
+		if (isSetupModelTitle(ownedItem.title) || isSetupModelTitle(data?.title)) throw new AppError(SETUP_MODEL_RESERVED, 400);
 
 		const coverImage = await storeDataUriIfNeeded(data.coverImage, `waseetai/providers/${userId}/portfolio`, `cover-${itemId}`);
 		// Phase 3D.2B: no completion recompute here, deliberately — this only
