@@ -821,6 +821,7 @@ function createSensitiveFlowMockPrisma(t: TestContext, opts: { throwOnRecompute?
         const ors: any[] = (args?.where?.AND ?? []).flatMap((c: any) => c.OR ?? []);
         const ids = ors.map((c: any) => c.context?.equals);
         let count = 0;
+        if (args?.where?.id) { if (otpsById[args.where.id]) { delete otpsById[args.where.id]; return { count: 1 }; } return { count: 0 }; }
         for (const [k, o] of Object.entries(otpsById) as [string, any][]) if (ids.includes(o.context?.requestId)) { delete otpsById[k]; count++; }
         return { count };
       },
