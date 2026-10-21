@@ -5,6 +5,8 @@ import { AppError } from '../utils/app-error';
 import { RejectOnboardingInput } from '../dtos/onboarding.dto';
 import { AdminActor, adminAuditData } from './admin-audit';
 import { providerNotifications } from './provider-notifications.service';
+import { lockProviderProfile } from '../utils/provider-profile-lock';
+import { logger } from '../config/logger';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 
 type ListedUser = { id: string; firstName?: string | null; lastName?: string | null; email?: string | null; phoneNumber?: string | null; accountType?: string | null } | null | undefined;
@@ -29,14 +31,14 @@ const hasIdentityDocument = (metadata: unknown): boolean => {
   const changes = ((metadata ?? {}) as { changes?: Record<string, unknown> }).changes ?? {};
   return typeof changes.idDocumentUrl === 'string' && changes.idDocumentUrl.length > 0;
 };
-export const pendingIdentityRequests = async (providerIds: string[]): Promise<Map<string, string>> => {
+export const pendingIdentityRequests = async (providerIds: string[], db: any = prisma): Promise<Map<string, string>> => {
   const out = new Map<string, string>();
   if (!providerIds.length) return out;
-  const rows = await prisma.profileModificationRequest.findMany({
+  const rows = await db.profileModificationRequest.findMany({
     where: { providerId: { in: providerIds }, category: 'DOCUMENTS', status: 'PENDING_HUMAN_REVIEW' as any },
     orderBy: { createdAt: 'desc' }, select: { id: true, providerId: true, metadata: true }
   });
-  for (const r of rows) if (hasIdentityDocument(r.metadata) && !out.has(r.providerId)) out.set(r.providerId, r.id);
+  for (const r of rows as Array<{ id: string; providerId: string; metadata: unknown }>) if (hasIdentityDocument(r.metadata) && !out.has(r.providerId)) out.set(r.providerId, r.id);
   return out;
 };
 const IDENTITY_REQUEST_WAITING = 'يوجد مستند هوية جديد بانتظار المراجعة في طلبات تعديل الملف. راجِعه من هناك، ولا تُتخذ هنا خطوة على المستند السابق.';
@@ -195,32 +197,36 @@ export class OnboardingService {
   }
 
   async approveProviderKyc(userId: string, actor?: AdminActor) {
-    const profile = await prisma.providerProfile.findUnique({ where: { userId } });
-    if (!profile) throw new AppError('ملف المزود غير موجود', 404);
-    if (profile.kycStatus === KYCStatus.VERIFIED) throw new AppError('تم التحقق من هذا المزود مسبقاً', 409);
-    if ((await pendingIdentityRequests([userId])).has(userId)) throw new AppError(IDENTITY_REQUEST_WAITING, 409);
-    // nothing to verify: an approval needs at least one identity document on file
-    if (providerDocumentsCount(profile as any) === 0) throw new AppError('لا توجد مستندات هوية لدى المزود لاعتمادها', 400);
+    // Everything below runs in ONE transaction on the locked provider row: a provider confirming a corrected document at the same moment either commits first
+    // (this decision then sees the waiting request and is refused) or after (it then sees the decision). The checks are made on what the lock protects.
     const updated = await prisma.$transaction(async (tx) => {
+      await lockProviderProfile(tx, userId);
+      const profile = await tx.providerProfile.findUnique({ where: { userId } });
+      if (!profile) throw new AppError('ملف المزود غير موجود', 404);
+      if (profile.kycStatus === KYCStatus.VERIFIED) throw new AppError('تم التحقق من هذا المزود مسبقاً', 409);
+      if ((await pendingIdentityRequests([userId], tx)).has(userId)) throw new AppError(IDENTITY_REQUEST_WAITING, 409);
+      // nothing to verify: an approval needs at least one identity document on file
+      if (providerDocumentsCount(profile as any) === 0) throw new AppError('لا توجد مستندات هوية لدى المزود لاعتمادها', 400);
       const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.VERIFIED, isVerified: true, notes: null } });
       if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId, category: LogCategory.SYSTEM_AUDIT, eventType: 'KYC_APPROVED_BY_ADMIN', title: 'اعتماد توثيق الهوية', summary: 'اعتمدت الإدارة مستندات هوية مقدم الخدمة', status: LogStatus.APPROVED, before: { kycStatus: profile.kycStatus }, after: { kycStatus: KYCStatus.VERIFIED }, details: { party: 'PROVIDER' } }) });
       return row;
     });
-    await providerNotifications.kycDecided({ providerId: userId, decision: 'APPROVED' });
+    // after the commit: a failed notification never undoes the decision
+    await providerNotifications.kycDecided({ providerId: userId, decision: 'APPROVED' }).catch((error) => logger.error('[Onboarding] KYC approval notification failed (the decision stands)', error));
     return updated;
   }
-
   async rejectProviderKyc(userId: string, input: RejectOnboardingInput, actor?: AdminActor) {
-    const profile = await prisma.providerProfile.findUnique({ where: { userId } });
-    if (!profile) throw new AppError('ملف المزود غير موجود', 404);
-    if (profile.kycStatus === KYCStatus.REJECTED) throw new AppError('تم رفض هذا المزود مسبقاً', 409);
-    if ((await pendingIdentityRequests([userId])).has(userId)) throw new AppError(IDENTITY_REQUEST_WAITING, 409);
     const updated = await prisma.$transaction(async (tx) => {
+      await lockProviderProfile(tx, userId);
+      const profile = await tx.providerProfile.findUnique({ where: { userId } });
+      if (!profile) throw new AppError('ملف المزود غير موجود', 404);
+      if (profile.kycStatus === KYCStatus.REJECTED) throw new AppError('تم رفض هذا المزود مسبقاً', 409);
+      if ((await pendingIdentityRequests([userId], tx)).has(userId)) throw new AppError(IDENTITY_REQUEST_WAITING, 409);
       const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.REJECTED, isVerified: false, notes: `سبب الرفض: ${input.rejectionReason}` } });
       if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId, eventType: 'KYC_REJECTED_BY_ADMIN', title: 'رفض توثيق الهوية', summary: `رفضت الإدارة مستندات هوية مقدم الخدمة: ${input.rejectionReason}`, status: LogStatus.REJECTED, severity: 'WARNING', before: { kycStatus: profile.kycStatus }, after: { kycStatus: KYCStatus.REJECTED }, details: { party: 'PROVIDER', reason: input.rejectionReason } }) });
       return row;
     });
-    await providerNotifications.kycDecided({ providerId: userId, decision: 'REJECTED', reason: input.rejectionReason });
+    await providerNotifications.kycDecided({ providerId: userId, decision: 'REJECTED', reason: input.rejectionReason }).catch((error) => logger.error('[Onboarding] KYC rejection notification failed (the decision stands)', error));
     return updated;
   }
 }

@@ -97,3 +97,97 @@ test('PG: a VERIFIED account is never downgraded or re-opened by a document deci
 	const p = await prisma.providerProfile.findUnique({ where: { userId: user.id } });
 	assert.equal(p!.kycStatus, 'VERIFIED'); assert.equal(p!.isVerified, true); assert.ok(!(p!.notes ?? '').startsWith('سبب الرفض'));
 });
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+test('PG: a failure between the steps of the decision rolls EVERYTHING back (request still waiting, KYC unchanged, document not applied)', opts, async () => {
+	const { providerProfileService } = await import('./provider-profile.service');
+	const { prisma, user, req } = await seed('PENDING', { notes: null });
+	const svc: any = providerProfileService; const original = svc.applySensitivePayloadOn;
+	svc.applySensitivePayloadOn = async (db: any, ...rest: any[]) => { await db.user.update({ where: { id: user.id }, data: { idDocumentUrl: 'half-applied' } }); throw new Error('boom between steps'); };
+	try { await assert.rejects(providerProfileService.reviewSensitiveChange(req.id, true, undefined, { actorLabel: 'a' } as any), /boom between steps/); } finally { svc.applySensitivePayloadOn = original; }
+	const r = await prisma.profileModificationRequest.findUnique({ where: { id: req.id } });
+	const p = await prisma.providerProfile.findUnique({ where: { userId: user.id } });
+	assert.equal(r!.status, 'PENDING_HUMAN_REVIEW'); assert.equal(r!.reviewedByAdmin, false);
+	assert.equal(p!.kycStatus, 'PENDING');
+	assert.equal((await prisma.user.findUnique({ where: { id: user.id } }))!.idDocumentUrl, null, 'the half-applied write was rolled back');
+	// and the decision can then be taken normally
+	await providerProfileService.reviewSensitiveChange(req.id, true, undefined, { actorLabel: 'a' } as any);
+	assert.equal((await prisma.providerProfile.findUnique({ where: { userId: user.id } }))!.kycStatus, 'VERIFIED');
+});
+
+test('PG: a failing notification (or audit log) AFTER the commit never undoes the decision', opts, async () => {
+	const { providerProfileService } = await import('./provider-profile.service');
+	const { providerNotifications } = await import('./provider-notifications.service');
+	const { prisma, user, req } = await seed('PENDING', { notes: null });
+	const n: any = providerNotifications; const original = n.kycDecided;
+	n.kycDecided = async () => { throw new Error('notification service down'); };
+	try { await providerProfileService.reviewSensitiveChange(req.id, false, 'سبب صالح للاختبار', { actorLabel: 'a' } as any); } finally { n.kycDecided = original; }
+	assert.equal((await prisma.profileModificationRequest.findUnique({ where: { id: req.id } }))!.status, 'REJECTED');
+	assert.equal((await prisma.providerProfile.findUnique({ where: { userId: user.id } }))!.kycStatus, 'REJECTED');
+});
+
+test('PG: two concurrent decisions on the SAME request: exactly one wins and the states agree (never half approved / half refused)', opts, async () => {
+	const { providerProfileService } = await import('./provider-profile.service');
+	const { prisma, user, req } = await seed('PENDING', { notes: null });
+	const results = await Promise.allSettled([
+		providerProfileService.reviewSensitiveChange(req.id, true, undefined, { actorLabel: 'a' } as any),
+		providerProfileService.reviewSensitiveChange(req.id, false, 'رفض متزامن', { actorLabel: 'b' } as any),
+	]);
+	assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+	assert.ok(results.some(r => r.status === 'rejected' && /REQUEST_NOT_PENDING_REVIEW/.test(String((r as any).reason?.message))));
+	const r = await prisma.profileModificationRequest.findUnique({ where: { id: req.id } });
+	const p = await prisma.providerProfile.findUnique({ where: { userId: user.id } });
+	const u = await prisma.user.findUnique({ where: { id: user.id } });
+	if (r!.status === 'APPROVED') { assert.equal(p!.kycStatus, 'VERIFIED'); assert.ok(u!.idDocumentUrl); }
+	else { assert.equal(r!.status, 'REJECTED'); assert.equal(p!.kycStatus, 'REJECTED'); assert.equal(u!.idDocumentUrl, null); }
+});
+
+test('PG: a KYC decision on the OLD document that races a provider\'s re-submission waits for it and is then refused (the row lock), instead of approving the old file', opts, async () => {
+	const { onboardingService } = await import('./onboarding.service');
+	const { lockProviderProfile } = await import('../utils/provider-profile-lock');
+	const { prisma, user, req } = await seed('REJECTED', { notes: 'سبب الرفض: قديم' });
+	await prisma.profileModificationRequest.update({ where: { id: req.id }, data: { status: 'PENDING_OTP' as any } });
+	// the "confirmation" of the new document: holds the provider row lock, puts the request into review, commits 400 ms later
+	let locked!: () => void; const lockedP = new Promise<void>(r => { locked = r; });
+	const confirm = prisma.$transaction(async tx => {
+		await lockProviderProfile(tx, user.id); locked();
+		await sleep(400);
+		await tx.providerProfile.updateMany({ where: { userId: user.id, kycStatus: 'REJECTED' as any }, data: { kycStatus: 'PENDING' as any } });
+		await tx.profileModificationRequest.update({ where: { id: req.id }, data: { status: 'PENDING_HUMAN_REVIEW' as any } });
+	});
+	await lockedP;
+	const started = Date.now();
+	const decision = onboardingService.approveProviderKyc(user.id).then(() => 'approved', (e: any) => `refused: ${e.message}`);
+	await confirm;
+	const outcome = await decision;
+	assert.ok(Date.now() - started >= 300, 'the KYC decision had to wait for the re-submission to commit');
+	assert.match(outcome, /refused: .*مستند هوية جديد بانتظار المراجعة/);
+	const p = await prisma.providerProfile.findUnique({ where: { userId: user.id } });
+	assert.equal(p!.kycStatus, 'PENDING'); assert.equal(p!.isVerified, false);
+});
+
+test('PG: the confirmation of a corrected document is ONE transaction: a duplicate waiting request makes it fail with the code still usable (nothing consumed)', opts, async () => {
+	const { providerProfileService } = await import('./provider-profile.service');
+	const { prisma, user, req } = await seed('REJECTED', { notes: 'سبب الرفض: قديم' });
+	// req is already waiting; a second request is opened and its code confirmed
+	const second = await prisma.profileModificationRequest.create({ data: { id: id(), providerId: user.id, fieldName: 'DOCUMENTS', fieldLabel: 'المستندات الرسمية', currentValue: '{}', requestedValue: '{}', category: 'DOCUMENTS', requiresOtp: true, status: 'PENDING_OTP' as any, metadata: { requiresHumanReview: true, changes: { idDocumentUrl: `private:image:png:waseetai/providers/${user.id}/documents/second` } } as any } as any });
+	const otp = await prisma.otpVerification.create({ data: { id: id(), userId: user.id, code: '123456', type: 'EMAIL', expiresAt: new Date(Date.now() + 600000), context: { purpose: 'SENSITIVE_CHANGE', requestId: second.id } as any } as any });
+	await assert.rejects(providerProfileService.verifySensitiveChange(user.id, second.id, '123456'), /REQUEST_ALREADY_PENDING/);
+	assert.ok(await prisma.otpVerification.findUnique({ where: { id: otp.id } }), 'the code was NOT consumed by the failed confirmation');
+	assert.equal((await prisma.profileModificationRequest.findUnique({ where: { id: second.id } }))!.status, 'PENDING_OTP');
+	assert.equal((await prisma.providerProfile.findUnique({ where: { userId: user.id } }))!.kycStatus, 'REJECTED', 'the refusal state is untouched when the confirmation fails');
+	assert.ok(req.id);
+});
+
+test('PG: the whole confirmation (code consumed + KYC REJECTED->PENDING + refusal text cleared + request into review) happens together', opts, async () => {
+	const { providerProfileService } = await import('./provider-profile.service');
+	const { prisma, user, req } = await seed('REJECTED', { notes: 'سبب الرفض: قديم' });
+	await prisma.profileModificationRequest.update({ where: { id: req.id }, data: { status: 'PENDING_OTP' as any, otpVerifiedAt: null } });
+	const otp = await prisma.otpVerification.create({ data: { id: id(), userId: user.id, code: '654321', type: 'EMAIL', expiresAt: new Date(Date.now() + 600000), context: { purpose: 'SENSITIVE_CHANGE', requestId: req.id } as any } as any });
+	await providerProfileService.verifySensitiveChange(user.id, req.id, '654321');
+	assert.equal(await prisma.otpVerification.findUnique({ where: { id: otp.id } }), null);
+	const p = await prisma.providerProfile.findUnique({ where: { userId: user.id } });
+	assert.equal(p!.kycStatus, 'PENDING'); assert.equal(p!.notes, null);
+	assert.equal((await prisma.profileModificationRequest.findUnique({ where: { id: req.id } }))!.status, 'PENDING_HUMAN_REVIEW');
+});

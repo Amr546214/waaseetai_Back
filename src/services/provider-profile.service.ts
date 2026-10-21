@@ -45,6 +45,7 @@ import { initializeRoleState } from './account-management.service';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 import { buildAssessmentDetails, buildCompanySummary, withSpecialtyName } from './provider-public-profile.helpers';
 import { deliveryCompletedProject } from './settlement-state.service';
+import { lockProviderProfile } from '../utils/provider-profile-lock';
 import { providerNotifications } from './provider-notifications.service';
 
 // Cached values are always a real validated WaseetAI result, keyed by the
@@ -1190,33 +1191,39 @@ export class ProviderProfileService {
 			throw new Error('INVALID_OR_EXPIRED_OTP');
 		}
 
-		await prisma.otpVerification.delete({ where: { id: otp.id } });
 		const metadata = (request.metadata || {}) as any;
 		const needsReview = Boolean(metadata.requiresHumanReview);
-		if (needsReview) {
-			// a second request opened before the first was confirmed must not reach the admin as a duplicate
-			const waiting = await prisma.profileModificationRequest.findFirst({ where: { providerId, category: request.category, status: 'PENDING_HUMAN_REVIEW' as any, id: { not: request.id } }, orderBy: { createdAt: 'desc' }, select: { id: true, category: true, createdAt: true } });
-			if (waiting) throw Object.assign(new Error('REQUEST_ALREADY_PENDING'), { details: alreadyPendingDetails(waiting, request.category) });
-		}
-
-		if (!needsReview) {
-			await this.applySensitivePayload(providerId, request.category, metadata.changes || {});
-		} else if (request.category === 'DOCUMENTS' && (metadata.changes || {}).idDocumentUrl) {
-			// a new identity document after the admin refused the previous one starts a new review: the refusal (status + its text) is cleared,
-			// so the page shows "under review", never the old rejection
-			await prisma.providerProfile.updateMany({ where: { userId: providerId, kycStatus: 'REJECTED' as any }, data: { kycStatus: 'PENDING' as any } });
-			await prisma.providerProfile.updateMany({ where: { userId: providerId, notes: { startsWith: PROVIDER_KYC_REJECTION_PREFIX } }, data: { notes: null } });
-		}
-
-		const updated = await prisma.profileModificationRequest.update({
-			where: { id: request.id },
-			data: {
-				otpVerifiedAt: new Date(),
-				status: needsReview ? 'PENDING_HUMAN_REVIEW' : 'APPROVED',
-				// the e-mailed code only proves the account owner: no AI ran, so no aiAuditStatus / aiConfidence / aiRecommendation are written
-				appliedAt: needsReview ? null : new Date()
+		const identityDocument = needsReview && request.category === 'DOCUMENTS' && Boolean((metadata.changes || {}).idDocumentUrl);
+		// ONE transaction: the code is consumed, the duplicate check, the KYC review put back to PENDING (refusal text cleared) and the request moving to review all happen together or not at all
+		// (a failure keeps the code usable). For an identity document the provider row is locked first: an admin decision on the OLD document waits for this commit and then sees the new request.
+		const { updated, scored } = await prisma.$transaction(async tx => {
+			if (identityDocument) await lockProviderProfile(tx, providerId);
+			await tx.otpVerification.delete({ where: { id: otp.id } });
+			if (needsReview) {
+				// a second request opened before the first was confirmed must not reach the admin as a duplicate
+				const waiting = await tx.profileModificationRequest.findFirst({ where: { providerId, category: request.category, status: 'PENDING_HUMAN_REVIEW' as any, id: { not: request.id } }, orderBy: { createdAt: 'desc' }, select: { id: true, category: true, createdAt: true } as any });
+				if (waiting) throw Object.assign(new Error('REQUEST_ALREADY_PENDING'), { details: alreadyPendingDetails(waiting as any, request.category) });
 			}
-		});
+			let scoredChange = false;
+			if (!needsReview) {
+				scoredChange = await this.applySensitivePayloadOn(tx, providerId, request.category, metadata.changes || {});
+			} else if (identityDocument) {
+				// a new identity document after the admin refused the previous one starts a new review: the refusal (status + its text) is cleared, so the page shows "under review", never the old rejection
+				await tx.providerProfile.updateMany({ where: { userId: providerId, kycStatus: 'REJECTED' as any }, data: { kycStatus: 'PENDING' as any } });
+				await tx.providerProfile.updateMany({ where: { userId: providerId, notes: { startsWith: PROVIDER_KYC_REJECTION_PREFIX } }, data: { notes: null } });
+			}
+			const row = await tx.profileModificationRequest.update({
+				where: { id: request.id },
+				data: {
+					otpVerifiedAt: new Date(),
+					status: needsReview ? 'PENDING_HUMAN_REVIEW' : 'APPROVED',
+					// the e-mailed code only proves the account owner: no AI ran, so no aiAuditStatus / aiConfidence / aiRecommendation are written
+					appliedAt: needsReview ? null : new Date()
+				}
+			});
+			return { updated: row, scored: scoredChange };
+		}, { timeout: 20000 });
+		if (scored) await this.recomputeAfterSensitiveChange(providerId, request.category);
 		await accountAuditLogService.record({ userId: providerId, eventType: 'OTP_VERIFIED', category: 'PROFILE_COMPLETION', title: request.fieldLabel, summary: needsReview ? 'أُكِّد الطلب برمز البريد وأُحيل إلى مراجعة الفريق' : 'أُكِّد الطلب برمز البريد وتم تطبيقه', source: 'USER', status: needsReview ? 'IN_REVIEW' : 'APPROVED', statusText: needsReview ? 'بانتظار مراجعة الفريق' : undefined, requestId, context: auditContext });
 		return updated;
 	}
@@ -1227,6 +1234,32 @@ export class ProviderProfileService {
 		if (request.status !== 'PENDING_HUMAN_REVIEW') throw new Error('REQUEST_NOT_PENDING_REVIEW');
 		const metadata = (request.metadata || {}) as any;
 		const reason = approved ? null : (String(rejectionReason || '').trim().slice(0, 500) || 'لم يستوفِ الطلب متطلبات التحقق');
+
+		// A NEW IDENTITY DOCUMENT is decided in ONE transaction: the claim of the request, its application to the account and the KYC review it started either all happen
+		// or none does (a failure leaves the request waiting, untouched). The provider row is locked first, so a concurrent re-submission or KYC decision waits and then sees the result.
+		// Notifications go out AFTER the commit; a failed notification never undoes the decision.
+		if (request.category === 'DOCUMENTS' && (metadata.changes || {}).idDocumentUrl) {
+			const decided = await prisma.$transaction(async tx => {
+				await lockProviderProfile(tx, request.providerId);
+				const claimedTx = await tx.profileModificationRequest.updateMany({
+					where: { id: request.id, status: 'PENDING_HUMAN_REVIEW' },
+					data: { status: approved ? 'APPROVED' : 'REJECTED', reviewedByAdmin: true, rejectionReason: reason, appliedAt: approved ? new Date() : null }
+				});
+				if (!claimedTx.count) throw new Error('REQUEST_NOT_PENDING_REVIEW');
+				let scored = false;
+				if (approved) scored = await this.applySensitivePayloadOn(tx, request.providerId, request.category, metadata.changes || {});
+				// the KYC review that the submission put in the queue (PENDING) is decided too; VERIFIED / UNVERIFIED / REJECTED accounts are never touched here
+				const moved = approved
+					? await tx.providerProfile.updateMany({ where: { userId: request.providerId, kycStatus: 'PENDING' as any }, data: { kycStatus: 'VERIFIED' as any, isVerified: true, notes: null } })
+					: await tx.providerProfile.updateMany({ where: { userId: request.providerId, kycStatus: 'PENDING' as any }, data: { kycStatus: 'REJECTED' as any, isVerified: false, notes: `${PROVIDER_KYC_REJECTION_PREFIX} ${reason}` } });
+				const row = await tx.profileModificationRequest.findUniqueOrThrow({ where: { id: request.id } });
+				return { row, scored, kycMoved: moved.count > 0 };
+			}, { timeout: 20000 });
+			if (decided.scored) await this.recomputeAfterSensitiveChange(request.providerId, request.category);
+			if (decided.kycMoved) await providerNotifications.kycDecided({ providerId: request.providerId, decision: approved ? 'APPROVED' : 'REJECTED', reason: approved ? undefined : (reason ?? undefined) }).catch(error => logger.error('[ProviderProfileService] identity decision notification failed (the decision stands)', error));
+			await accountAuditLogService.record({ userId: request.providerId, eventType: 'HUMAN_REVIEW_COMPLETED', category: 'PROFILE_COMPLETION', title: request.fieldLabel, summary: approved ? 'اعتمد المراجع البشري طلب التعديل وتم تطبيقه' : 'رفض المراجع البشري طلب التعديل', source: 'ADMIN', severity: approved ? 'INFO' : 'WARNING', status: approved ? 'APPROVED' : 'REJECTED', statusText: decided.row.rejectionReason || undefined, requestId, context: auditContext }).catch(error => logger.error('[ProviderProfileService] audit log after an identity decision failed (the decision stands)', error));
+			return decided.row;
+		}
 
 		// Claim the request first (compare-and-set on the status): two admins, or a double click, can never apply the same change twice.
 		const claimed = await prisma.profileModificationRequest.updateMany({
@@ -1249,11 +1282,6 @@ export class ProviderProfileService {
 					await this.applyClientPasswordChange(request.providerId, String(metadata.pendingPasswordHash || ''), auditContext);
 				} else {
 					await this.applySensitivePayload(request.providerId, request.category, metadata.changes || {});
-					// the new identity document was approved: the KYC review that its submission put in the queue (PENDING) is decided too. VERIFIED / UNVERIFIED / REJECTED accounts are never touched here.
-					if (request.category === 'DOCUMENTS' && (metadata.changes || {}).idDocumentUrl) {
-						const moved = await prisma.providerProfile.updateMany({ where: { userId: request.providerId, kycStatus: 'PENDING' as any }, data: { kycStatus: 'VERIFIED' as any, isVerified: true, notes: null } });
-						if (moved.count) await providerNotifications.kycDecided({ providerId: request.providerId, decision: 'APPROVED' }).catch(() => undefined);
-					}
 				}
 			} catch (error) {
 				// nothing was applied: put the request back so the admin can retry, and report the failure (never a false APPROVED)
@@ -1263,11 +1291,6 @@ export class ProviderProfileService {
 				});
 				throw error;
 			}
-		}
-		if (!approved && request.category === 'DOCUMENTS' && (metadata.changes || {}).idDocumentUrl) {
-			// a refused new identity document: the KYC review in the queue (PENDING) is refused with the same reason, so both queues and the provider's page agree
-			const moved = await prisma.providerProfile.updateMany({ where: { userId: request.providerId, kycStatus: 'PENDING' as any }, data: { kycStatus: 'REJECTED' as any, isVerified: false, notes: `${PROVIDER_KYC_REJECTION_PREFIX} ${reason}` } });
-			if (moved.count) await providerNotifications.kycDecided({ providerId: request.providerId, decision: 'REJECTED', reason: reason ?? undefined }).catch(() => undefined);
 		}
 		if (request.category === CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY) {
 			// decided either way: the pending hash is never kept (approved = now the real password, rejected = discarded)
@@ -1341,7 +1364,8 @@ export class ProviderProfileService {
 		});
 	}
 
-	private async applySensitivePayload(providerId: string, category: string, changes: Record<string, unknown>) {
+	/** The writes of an approved sensitive change, on the given client (a transaction or prisma). Returns whether a SCORED field changed (the completion recompute then runs AFTER the commit). */
+	private async applySensitivePayloadOn(db: any, providerId: string, category: string, changes: Record<string, unknown>): Promise<boolean> {
 		const config = this.sensitiveConfig(category);
 		const updateData: Record<string, unknown> = {};
 		for (const key of config.allowed.filter(key => key !== 'certificatesUrl')) {
@@ -1349,40 +1373,32 @@ export class ProviderProfileService {
 		}
 		if (category === 'CONTACT' && updateData.email) updateData.email = String(updateData.email).trim().toLowerCase();
 		if (category === 'BANKING' && String(updateData.ibanNumber || '').includes('*')) delete updateData.ibanNumber;
-		await prisma.user.update({ where: { id: providerId }, data: updateData });
+		await db.user.update({ where: { id: providerId }, data: updateData });
 		if (category === 'DOCUMENTS' && Object.prototype.hasOwnProperty.call(changes, 'certificatesUrl')) {
 			const certificateUrl = String(changes.certificatesUrl || '');
-			await prisma.providerProfile.update({
+			await db.providerProfile.update({
 				where: { userId: providerId },
 				data: { certUrls: certificateUrl ? [certificateUrl] : [] }
 			});
 		}
-
-		// Phase 3D.2B: this is the real commit point for BANKING/DOCUMENTS
-		// sensitive changes (reached via reviewSensitiveChange for these two
-		// categories, since both require human review — see sensitiveConfig).
-		// Trigger recompute only when the FINAL committed updateData actually
-		// contains the one field each category's formula factor reads — never
-		// merely because of `category`, since e.g. a BANKING change can omit
-		// ibanNumber entirely, or have it stripped just above when it was a
-		// masked/redisplayed value. CONTACT is never scored, so it can never
-		// trigger this. The sensitive User update above has already committed
-		// by this point; a completion-recompute failure here must never be
-		// allowed to look like the sensitive change itself failed, so it's
-		// deliberately best-effort and logged, not rethrown, using the
-		// project's existing winston logger (never the raw changes/updateData,
-		// which could hold IBAN/document values).
-		const scoredFieldCommitted =
-			(category === 'BANKING' && 'ibanNumber' in updateData) ||
+		// Trigger the recompute only when the FINAL committed updateData contains the one field each category's formula reads (never merely because of `category`).
+		return (category === 'BANKING' && 'ibanNumber' in updateData) ||
 			(category === 'DOCUMENTS' && 'idDocumentUrl' in updateData) ||
 			(category === 'CONTACT' && ('email' in updateData || 'phoneNumber' in updateData));
-		if (scoredFieldCommitted) {
-			try {
-				await this.recalculateProviderCompletion(providerId);
-			} catch (error) {
-				logger.error(`[ProviderProfileService] Failed to recalculate provider completion after an applied sensitive ${category} change (userId=${providerId})`, error);
-			}
+	}
+
+	/** Best-effort completion recompute AFTER the change committed: a failure here must never look like the change failed (never logs the raw values). */
+	private async recomputeAfterSensitiveChange(providerId: string, category: string): Promise<void> {
+		try {
+			await this.recalculateProviderCompletion(providerId);
+		} catch (error) {
+			logger.error(`[ProviderProfileService] Failed to recalculate provider completion after an applied sensitive ${category} change (userId=${providerId})`, error);
 		}
+	}
+
+	private async applySensitivePayload(providerId: string, category: string, changes: Record<string, unknown>) {
+		const scored = await this.applySensitivePayloadOn(prisma, providerId, category, changes);
+		if (scored) await this.recomputeAfterSensitiveChange(providerId, category);
 	}
 
 	private maskEmail(email: string) {

@@ -313,6 +313,8 @@ function createPublicProfileMockPrisma(t: TestContext, opts: {
   const affiliateProfileSpy = t.mock.fn();
 
   const prismaMock = {
+    $queryRaw: async () => [],
+    $transaction: async (fn: any) => (typeof fn === 'function' ? fn(prismaMock) : Promise.all(fn)),
     providerProfile: { findUnique: async () => ({ ...profileFixture }) },
     project: { count: async () => 0 },
     serviceCatalog: { findMany: async () => [] },
@@ -539,6 +541,8 @@ function createSkillsPortfolioMockPrisma(t: TestContext) {
   const affiliateUpsertSpy = t.mock.fn((args: any) => ({ ...args.create, ...args.update }));
 
   const prismaMock = {
+    $queryRaw: async () => [],
+    $transaction: async (fn: any) => (typeof fn === 'function' ? fn(prismaMock) : Promise.all(fn)),
     providerProfile: {
       findUnique: async () => ({ ...providerProfileState, user: { ...userFixture } }),
       update: providerProfileUpdateSpy
@@ -827,7 +831,7 @@ function createSensitiveFlowMockPrisma(t: TestContext, opts: { throwOnRecompute?
       delete: async (args: any) => { delete otpsById[args.where.id]; return {}; }
     },
     accountAuditLog: { create: async () => ({}) },
-    $transaction: async (ops: any) => Promise.all(ops)
+    $transaction: async (ops: any) => (typeof ops === 'function' ? ops(prismaMock) : Promise.all(ops))
   };
 
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
