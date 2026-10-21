@@ -46,3 +46,16 @@ test('PG: the same client request sent 4 times at once (and again later) is ONE 
 	assert.equal(await prisma.clientRequest.count({ where: { clientProfileId: profile.id } }), 2);
 });
 
+
+test('PG: after the 5-minute window the identical request is a NEW request (limited rule, not a global uniqueness guarantee); a cancelled one is never returned', opts, async () => {
+	const { prisma, client, spec, profile } = await world();
+	const { clientRequestsService } = await import('./client-requests.service');
+	const first: any = await clientRequestsService.createRequest(client.id, dto(spec.id, 'طلب بعد انتهاء المدة'));
+	await prisma.clientRequest.update({ where: { id: first.id }, data: { createdAt: new Date(Date.now() - 6 * 60 * 1000) } });
+	const second: any = await clientRequestsService.createRequest(client.id, dto(spec.id, 'طلب بعد انتهاء المدة'));
+	assert.notEqual(second.id, first.id); assert.notEqual(second.deduplicated, true);
+	await prisma.clientRequest.update({ where: { id: second.id }, data: { status: 'CANCELLED' as any } });
+	const third: any = await clientRequestsService.createRequest(client.id, dto(spec.id, 'طلب بعد انتهاء المدة'));
+	assert.notEqual(third.id, second.id); assert.notEqual(third.deduplicated, true);
+	assert.equal(await prisma.clientRequest.count({ where: { clientProfileId: profile.id } }), 3);
+});
