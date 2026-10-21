@@ -1400,7 +1400,9 @@ test('static: the three profile GETs return reviewStatus and the controllers pas
   assert.match(read('marketer-profile.service.ts'), /reviewStatus: \{ basicInfo, documents \}/);
   assert.match(read('profile-requests.service.ts'), /alreadyPendingDetails\(waiting, 'MARKETER_BASIC_INFO'\)/);
   assert.match(read('profile.service.ts'), /alreadyPendingDetails\(existing, CLIENT_BASIC_INFO_REQUEST_CATEGORY\)/);
-  assert.match(read('../controllers/provider-profile.controller.ts'), /errors: error\.details/);
+  // the controllers answer through the shared contract helper, which passes the 409 details (errors[]) through
+  assert.match(read('../controllers/provider-profile.controller.ts'), /respondServiceError\(res, error\)/);
+  assert.match(read('../utils/known-service-errors.ts'), /errors: details/);
 });
 
 test('GET profile follows the DOCUMENTS lifecycle in identityVerification and reviewStatus: none, waiting, rejected with the reason, waiting, approved (stored)', async (t) => {

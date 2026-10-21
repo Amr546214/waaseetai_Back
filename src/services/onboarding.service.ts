@@ -204,7 +204,7 @@ export class OnboardingService {
       const profile = await tx.providerProfile.findUnique({ where: { userId } });
       if (!profile) throw new AppError('ملف المزود غير موجود', 404);
       if (profile.kycStatus === KYCStatus.VERIFIED) throw new AppError('تم التحقق من هذا المزود مسبقاً', 409);
-      if ((await pendingIdentityRequests([userId], tx)).has(userId)) throw new AppError(IDENTITY_REQUEST_WAITING, 409);
+      if ((await pendingIdentityRequests([userId], tx)).has(userId)) throw new AppError(IDENTITY_REQUEST_WAITING, 409, undefined, 'IDENTITY_REQUEST_WAITING');
       // nothing to verify: an approval needs at least one identity document on file
       if (providerDocumentsCount(profile as any) === 0) throw new AppError('لا توجد مستندات هوية لدى المزود لاعتمادها', 400);
       const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.VERIFIED, isVerified: true, notes: null } });
@@ -221,7 +221,7 @@ export class OnboardingService {
       const profile = await tx.providerProfile.findUnique({ where: { userId } });
       if (!profile) throw new AppError('ملف المزود غير موجود', 404);
       if (profile.kycStatus === KYCStatus.REJECTED) throw new AppError('تم رفض هذا المزود مسبقاً', 409);
-      if ((await pendingIdentityRequests([userId], tx)).has(userId)) throw new AppError(IDENTITY_REQUEST_WAITING, 409);
+      if ((await pendingIdentityRequests([userId], tx)).has(userId)) throw new AppError(IDENTITY_REQUEST_WAITING, 409, undefined, 'IDENTITY_REQUEST_WAITING');
       const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.REJECTED, isVerified: false, notes: `سبب الرفض: ${input.rejectionReason}` } });
       if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId, eventType: 'KYC_REJECTED_BY_ADMIN', title: 'رفض توثيق الهوية', summary: `رفضت الإدارة مستندات هوية مقدم الخدمة: ${input.rejectionReason}`, status: LogStatus.REJECTED, severity: 'WARNING', before: { kycStatus: profile.kycStatus }, after: { kycStatus: KYCStatus.REJECTED }, details: { party: 'PROVIDER', reason: input.rejectionReason } }) });
       return row;

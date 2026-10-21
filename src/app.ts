@@ -9,6 +9,7 @@ import { initSocketServer } from './socket';
 import { logger } from './config/logger';
 import { globalErrorHandler } from './middlewares/error.middleware';
 import { scrubPrivateRefs } from './middlewares/scrub-private-refs.middleware';
+import { safeServerErrors } from './middlewares/safe-server-errors.middleware';
 import { apiLimiter } from './middlewares/rate-limit.middleware';
 import { resolveTrustProxy } from './config/trust-proxy';
 import { AppError } from './utils/app-error';
@@ -157,6 +158,7 @@ app.use(express.json({
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // No JSON response may carry a raw private KYC reference (see the middleware's header comment).
 app.use(scrubPrivateRefs);
+app.use(safeServerErrors);
 
 // ==========================================
 // 2. LOGGING
