@@ -25,8 +25,10 @@ async function load(t: TestContext, service: Record<string, unknown>) {
 test('register: the public answer is identical whether the mail went out or not (201, neutral message, no emailSent, no id)', async (t) => {
   const { REGISTER_GENERIC_MESSAGE } = await import('../utils/auth-messages');
   const bodies: any[] = [];
+  let current: any = null;
+  const c = await load(t, { registerUser: async () => current });
   for (const result of [{ userId: 'u1', accountCreated: true, emailSent: true }, { userId: 'u1', accountCreated: true, emailSent: false }, { userId: null, accountCreated: false }]) {
-    const c = await load(t, { registerUser: async () => result });
+    current = result;
     const res = mockRes();
     await c.register({ body: {}, headers: {} } as any, res, () => {});
     assert.equal(res.statusCode, 201);
