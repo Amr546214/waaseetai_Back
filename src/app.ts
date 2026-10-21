@@ -399,7 +399,7 @@ app.use('/docs', swaggerUi.serve, swaggerUi.setup(openApiDocument, {
 
 // Catch-all route for unhandled requests
 app.use((req: Request, res: Response, next: NextFunction) => {
-	next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
+	next(new AppError('المسار المطلوب غير موجود. تأكد من الرابط أو ارجع إلى الصفحة الرئيسية.', 404, undefined, 'ROUTE_NOT_FOUND'));
 });
 
 // ==========================================
