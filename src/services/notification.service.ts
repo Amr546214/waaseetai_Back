@@ -1,4 +1,7 @@
 import { NotificationCategory, Notification } from '@prisma/client';
+import { siteUrl } from '../utils/site-url';
+import { buildNotificationEmailHtml } from '../utils/notification-email-template';
+import { otpPurposeOfKind } from '../utils/otp-email-template';
 import { mailTransporter, getOtpEmailTemplate, getPasswordResetEmailTemplate } from '../utils/mail.transporter';
 import { otpValidityText } from '../utils/otp-validity';
 import { prisma } from '../config/db';
@@ -250,15 +253,15 @@ export class NotificationService {
 		const copy = notificationMailCopy(lang);
 		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
 		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
-		const base = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
-		const link = dto.actionUrl ? `${base}${dto.actionUrl.startsWith('/') ? '' : '/'}${dto.actionUrl}` : '';
+		// central rule: an e-mail link always has a host; without a configured site address the link is left out (see utils/site-url)
+		const link = dto.actionUrl ? siteUrl(dto.actionUrl) : null;
 		try {
 			await mailTransporter.sendMail({
 				from: `"${senderName}" <${from}>`,
 				to: email,
 				subject: `${dto.title} - ${copy.subjectSuffix}`,
-				html: `<div dir="${copy.dir}" style="font-family:Tahoma,Arial,sans-serif"><p>${escapeMailHtml(copy.greeting(firstName || ''))}</p><h3>${escapeMailHtml(dto.title)}</h3><p>${escapeMailHtml(dto.message)}</p>${link ? `<p><a href="${escapeMailHtml(link)}">${escapeMailHtml(dto.actionText || copy.open)}</a></p>` : ''}<p style="color:#6b7699;font-size:12px">${escapeMailHtml(copy.footer)}</p></div>`,
-				text: `${dto.title}\n${dto.message}${link ? `\n${link}` : ''}`,
+				html: buildNotificationEmailHtml({ lang, greeting: copy.greeting(firstName || ''), title: dto.title, message: dto.message, linkUrl: link, ctaLabel: dto.actionText || copy.open, footerNote: copy.footer }),
+				text: `${dto.title}\n${dto.message}${link ? `\n${link}` : ''}\n\n${copy.footer}`,
 				headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },
 			});
 		} catch (error) {
@@ -289,7 +292,7 @@ export class NotificationService {
 				from: `"${senderName}" <${from}>`,
 				to: email,
 				subject,
-				html: getOtpEmailTemplate(code, validityMinutes),
+				html: getOtpEmailTemplate(code, validityMinutes, otpPurposeOfKind(kind)),
 				// An HTML-only message is a spam signal: every OTP mail also carries a plain-text part.
 				text: `رمز التحقق الخاص بك في وسيط AI هو: ${code}\nالرمز صالح لمدة ${otpValidityText(validityMinutes)}. لا تشاركه مع أي أحد. إذا لم تطلبه فتجاهل هذه الرسالة.`,
 				headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },

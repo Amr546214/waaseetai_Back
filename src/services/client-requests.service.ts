@@ -1623,7 +1623,7 @@ export class ClientRequestsService {
 				from: process.env.SMTP_USER || '"وسيط AI" <noreply@waseetai.com>',
 				to: user.email,
 				subject: 'رمز التحقق لتوقيع العقد وإيداع الضمان - وسيط AI',
-				html: getOtpEmailTemplate(otpCode)
+				html: getOtpEmailTemplate(otpCode, Math.round(CONTRACT_OTP_TTL_SECONDS / 60), 'contract-signature')
 			});
 		} catch (err) {
 			console.error('Failed to send email OTP', err);

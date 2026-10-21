@@ -1,3 +1,4 @@
+import { siteUrl } from '../utils/site-url';
 import { prisma } from '../config/db';
 import { logger } from '../config/logger';
 import { mailTransporter } from '../utils/mail.transporter';
@@ -48,8 +49,7 @@ async function sendDigestMail(email: string, firstName: string | null, lang: 'ar
 	const d = chatDigestMailCopy(lang, count);
 	const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
 	const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
-	const base = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
-	const link = actionUrl ? `${base}${actionUrl.startsWith('/') ? '' : '/'}${actionUrl}` : '';
+	const link = actionUrl ? siteUrl(actionUrl) ?? '' : '';
 	const short = preview.length > 140 ? `${preview.slice(0, 140)}...` : preview;
 	await mailTransporter.sendMail({
 		from: `"${senderName}" <${from}>`,

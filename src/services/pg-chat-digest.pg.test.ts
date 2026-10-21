@@ -1,6 +1,8 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+// e-mail links always carry the site host (utils/site-url): the tests that look at the link configure it
+process.env.FRONTEND_URL = 'https://dev.example.test';
 
 /**
  * Batch D / chat-digest - REAL PostgreSQL tests (isolated DB only, same guard as pg-project-messages.pg.test.ts) for
