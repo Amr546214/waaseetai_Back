@@ -89,7 +89,7 @@ class ProviderOfferNegotiationService {
 	// The ProjectProposal gate: only a row still in one of `from` and owned by this provider is touched, otherwise the whole transaction rolls back.
 	private async moveOffer(tx: Tx, offer: { id: string; projectId: string }, providerId: string, from: ProposalStatus[], to: ProposalStatus) {
 		const gate = await tx.projectProposal.updateMany({ where: { id: offer.id, providerId, status: { in: from } }, data: { status: to } });
-		if (gate.count !== 1) throw new AppError('حالة العرض تغيّرت، حدّث الصفحة وحاول مرة أخرى', 409);
+		if (gate.count !== 1) throw new AppError('حالة العرض تغيّرت، حدّث الصفحة وحاول مرة أخرى', 409, undefined, 'OFFER_STATE_CHANGED');
 		const mirrors = await tx.proposal.findMany({ where: mirrorWhere(providerId, offer.projectId), select: { id: true, status: true } });
 		if (mirrors.some((m) => !from.includes(m.status))) throw new AppError('حالة العرض غير متسقة، لا يمكن تنفيذ الإجراء', 409);
 		if (mirrors.length) await tx.proposal.updateMany({ where: { id: { in: mirrors.map((m) => m.id) } }, data: { status: to } });
@@ -98,7 +98,7 @@ class ProviderOfferNegotiationService {
 	// Locks the offer row for the rest of the transaction (same pattern as the amendment request) so two simultaneous counters cannot both pass the pending check.
 	private async lockOffer(tx: Tx, offerId: string, providerId: string, status: ProposalStatus) {
 		const lock = await tx.projectProposal.updateMany({ where: { id: offerId, providerId, status }, data: { updatedAt: new Date() } });
-		if (lock.count !== 1) throw new AppError('لا يمكن تنفيذ هذا الإجراء في الحالة الحالية للعرض', 409);
+		if (lock.count !== 1) throw new AppError('لا يمكن تنفيذ هذا الإجراء في الحالة الحالية للعرض', 409, undefined, 'OFFER_STATE_CHANGED');
 	}
 
 	async withdraw(providerId: string, offerId: string) {
@@ -117,12 +117,12 @@ class ProviderOfferNegotiationService {
 
 	async counter(providerId: string, offerId: string, input: { price?: unknown; deliveryDays?: unknown; note?: unknown }) {
 		const price = input.price;
-		if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0 || price > MAX_OFFER_PRICE) throw new AppError('أدخل سعرًا صحيحًا للعرض المضاد', 400);
+		if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0 || price > MAX_OFFER_PRICE) throw new AppError('أدخل سعرًا صحيحًا للعرض المضاد', 400, [{ field: 'price', path: 'price', message: 'أدخل سعرًا صحيحًا للعرض المضاد' }], 'COUNTER_PRICE_INVALID');
 		const days = input.deliveryDays;
-		if (typeof days !== 'number' || !Number.isInteger(days) || days < 1 || days > MAX_OFFER_DAYS) throw new AppError('أدخل مدة تنفيذ صحيحة بالأيام للعرض المضاد', 400);
-		if (input.note !== undefined && input.note !== null && typeof input.note !== 'string') throw new AppError('الملاحظة غير صالحة', 400);
+		if (typeof days !== 'number' || !Number.isInteger(days) || days < 1 || days > MAX_OFFER_DAYS) throw new AppError('أدخل مدة تنفيذ صحيحة بالأيام للعرض المضاد', 400, [{ field: 'deliveryDays', path: 'deliveryDays', message: 'أدخل مدة تنفيذ صحيحة بالأيام للعرض المضاد' }], 'COUNTER_DAYS_INVALID');
+		if (input.note !== undefined && input.note !== null && typeof input.note !== 'string') throw new AppError('الملاحظة غير صالحة', 400, [{ field: 'note', path: 'note', message: 'الملاحظة غير صالحة' }], 'COUNTER_NOTE_INVALID');
 		const note = (input.note as string | undefined)?.trim() || '';
-		if (note.length > MAX_COUNTER_NOTE) throw new AppError(`الملاحظة طويلة جدًا (الحد الأقصى ${MAX_COUNTER_NOTE} حرفًا)`, 400);
+		if (note.length > MAX_COUNTER_NOTE) throw new AppError(`الملاحظة طويلة جدًا (الحد الأقصى ${MAX_COUNTER_NOTE} حرفًا)`, 400, [{ field: 'note', path: 'note', message: `الملاحظة طويلة جدًا (الحد الأقصى ${MAX_COUNTER_NOTE} حرفًا)` }], 'COUNTER_NOTE_TOO_LONG');
 
 		const offer = await this.loadOffer(providerId, { offerId });
 		if (offer.status !== ProposalStatus.UNDER_NEGOTIATION) throw new AppError('لا يمكن إرسال عرض مضاد إلا بعد أن يبدأ العميل التفاوض على العرض', 409);
@@ -132,7 +132,7 @@ class ProviderOfferNegotiationService {
 			const { conversationId, entries } = await this.recentEntries(tx, offer.projectId, providerId);
 			if (!conversationId) throw new AppError('لا توجد محادثة تفاوض لهذا العرض بعد', 409);
 			const state = deriveNegotiationState(entries, offer.id);
-			if (state.counterPending) throw new AppError('لديك عرض مضاد معلّق بانتظار رد العميل', 409);
+			if (state.counterPending) throw new AppError('لديك عرض مضاد معلّق بانتظار رد العميل', 409, undefined, 'COUNTER_PENDING_EXISTS');
 			const message = await tx.message.create({
 				data: {
 					conversationId,
@@ -162,7 +162,7 @@ class ProviderOfferNegotiationService {
 			const { conversationId, entries } = await this.recentEntries(tx, offer.projectId, providerId);
 			if (!conversationId) throw new AppError('لا توجد محادثة تفاوض لهذا العرض', 409);
 			const open = deriveNegotiationState(entries, offer.id).openRequest;
-			if (!open || open.messageId !== input.messageId) throw new AppError('تم الرد على هذا الطلب مسبقًا أو توجد رسالة تفاوض أحدث', 409);
+			if (!open || open.messageId !== input.messageId) throw new AppError('تم الرد على هذا الطلب مسبقًا أو توجد رسالة تفاوض أحدث', 409, undefined, 'OFFER_STATE_CHANGED');
 			if (!isClearRequest(open)) throw new AppError(FREE_TEXT_MESSAGE, 422);
 			// the request must really be authored by this project's client (never trust a stray message)
 			const source = await tx.message.findFirst({ where: { id: open.messageId, conversationId }, select: { senderId: true, content: true } });
