@@ -11,7 +11,7 @@ function setup(t: TestContext) {
 		user: { findUnique: async () => ({ id: 'u1' }) },
 		specialty: { findUnique: async () => ({ id: 'sp1', categoryId: 'c1', nameAr: 'تطوير' }), findFirst: async () => null },
 		category: { findUnique: async () => ({ slug: 'programming-development' }) },
-		clientRequest: { create: async (a: any) => { created.push(a.data); throw new Error('STOP_AFTER_CREATE'); } }
+		clientRequest: { findFirst: async () => null, create: async (a: any) => { created.push(a.data); throw new Error('STOP_AFTER_CREATE'); } }
 	};
 	t.mock.module('../config/db', { namedExports: { prisma } });
 	return created;

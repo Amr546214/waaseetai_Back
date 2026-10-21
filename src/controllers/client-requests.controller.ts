@@ -61,12 +61,19 @@ export class ClientRequestsController {
       const parsed = createClientRequestSchema.safeParse(req.body);
       if (!parsed.success) {
         const errorMsg = parsed.error.issues.map(i => i.message).join(', ');
-        throw new AppError(errorMsg, 400);
+        // every refusal names its field (errors[]), the summary keeps the old joined text
+        const fields = parsed.error.issues.map(i => ({ field: String(i.path[0] ?? ''), path: i.path.join('.'), message: i.message })).filter(f => f.field);
+        throw new AppError(errorMsg, 400, fields, 'REQUEST_VALIDATION_FAILED');
       }
 
       const userId = req.user!.userId || req.user!.id;
       const result = await clientRequestsService.createRequest(userId, parsed.data);
 
+      // the same request sent again (double tap / retry after a lost answer) returns the request that already exists: 200, no second copy
+      if ((result as { deduplicated?: boolean }).deduplicated) {
+        res.status(200).json({ success: true, deduplicated: true, message: 'طلبك منشور بالفعل، فلم ننشئ نسخة ثانية منه.', data: result });
+        return;
+      }
       res.status(201).json({
         success: true,
         message: 'تم نشر طلبك بنجاح! جاري توجيهه لأفضل مقدمي الخدمات المعتمدين',
