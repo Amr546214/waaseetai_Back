@@ -13,6 +13,7 @@ let loaded: Promise<any> | undefined;
 const svc = () => (loaded ??= (async () => {
 	mock.module('../config/db', { namedExports: { prisma: {
 		providerProfile: { findMany: async (a: any) => { seen.where = a.where; return profiles; }, count: async () => profiles.length },
+		profileModificationRequest: { findMany: async () => [] },
 		clientOnboarding: { findMany: async () => [{ id: 'o1', userId: 'u9', user: { id: 'u9', firstName: 'ع', lastName: 'م', email: 'c@x.com', phoneNumber: '1', accountType: 'CLIENT_INDIVIDUAL' } }], count: async () => 1 },
 		clientProfile: { findUnique: async () => ({ kycStatus: 'PENDING' }) },
 	} } });

@@ -24,6 +24,23 @@ export function providerDocumentsCount(p: { frontIdUrl?: string | null; backIdUr
   return [p.frontIdUrl, p.backIdUrl, p.selfieUrl, p.supportingDocsUrl].filter(Boolean).length + (Array.isArray(p.certUrls) ? p.certUrls.filter(Boolean).length : 0);
 }
 
+/** The id of a provider's NEW identity document that waits in the change-request queue (DOCUMENTS + idDocumentUrl, PENDING_HUMAN_REVIEW), or null. */
+const hasIdentityDocument = (metadata: unknown): boolean => {
+  const changes = ((metadata ?? {}) as { changes?: Record<string, unknown> }).changes ?? {};
+  return typeof changes.idDocumentUrl === 'string' && changes.idDocumentUrl.length > 0;
+};
+export const pendingIdentityRequests = async (providerIds: string[]): Promise<Map<string, string>> => {
+  const out = new Map<string, string>();
+  if (!providerIds.length) return out;
+  const rows = await prisma.profileModificationRequest.findMany({
+    where: { providerId: { in: providerIds }, category: 'DOCUMENTS', status: 'PENDING_HUMAN_REVIEW' as any },
+    orderBy: { createdAt: 'desc' }, select: { id: true, providerId: true, metadata: true }
+  });
+  for (const r of rows) if (hasIdentityDocument(r.metadata) && !out.has(r.providerId)) out.set(r.providerId, r.id);
+  return out;
+};
+const IDENTITY_REQUEST_WAITING = 'يوجد مستند هوية جديد بانتظار المراجعة في طلبات تعديل الملف. راجِعه من هناك، ولا تُتخذ هنا خطوة على المستند السابق.';
+
 export class OnboardingService {
   async saveUpload(userId: string, input: { documentType: string; documentUrl: string; documentName: string }) {
     const record = await prisma.clientOnboarding.upsert({ where: { userId }, create: { userId, documentType: input.documentType, documentUrl: input.documentUrl, documentName: input.documentName, status: OnboardingStatus.PENDING }, update: { documentType: input.documentType, documentUrl: input.documentUrl, documentName: input.documentName, status: OnboardingStatus.PENDING, rejectionReason: null, reviewedAt: null } });
@@ -170,8 +187,9 @@ export class OnboardingService {
       }),
       prisma.providerProfile.count({ where }),
     ]);
+    const waiting = await pendingIdentityRequests(items.map((item) => item.userId));
     return {
-      items: items.map((item) => ({ ...item, userId: item.userId, ...flatOwnerFields(item.user), documentsCount: providerDocumentsCount(item as any) })),
+      items: items.map((item) => ({ ...item, userId: item.userId, ...flatOwnerFields(item.user), documentsCount: providerDocumentsCount(item as any), pendingIdentityRequestId: waiting.get(item.userId) ?? null })),
       pagination: { page: safePage, limit: safeLimit, total, totalPages: Math.ceil(total / safeLimit) },
     };
   }
@@ -180,6 +198,7 @@ export class OnboardingService {
     const profile = await prisma.providerProfile.findUnique({ where: { userId } });
     if (!profile) throw new AppError('ملف المزود غير موجود', 404);
     if (profile.kycStatus === KYCStatus.VERIFIED) throw new AppError('تم التحقق من هذا المزود مسبقاً', 409);
+    if ((await pendingIdentityRequests([userId])).has(userId)) throw new AppError(IDENTITY_REQUEST_WAITING, 409);
     // nothing to verify: an approval needs at least one identity document on file
     if (providerDocumentsCount(profile as any) === 0) throw new AppError('لا توجد مستندات هوية لدى المزود لاعتمادها', 400);
     const updated = await prisma.$transaction(async (tx) => {
@@ -195,6 +214,7 @@ export class OnboardingService {
     const profile = await prisma.providerProfile.findUnique({ where: { userId } });
     if (!profile) throw new AppError('ملف المزود غير موجود', 404);
     if (profile.kycStatus === KYCStatus.REJECTED) throw new AppError('تم رفض هذا المزود مسبقاً', 409);
+    if ((await pendingIdentityRequests([userId])).has(userId)) throw new AppError(IDENTITY_REQUEST_WAITING, 409);
     const updated = await prisma.$transaction(async (tx) => {
       const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.REJECTED, isVerified: false, notes: `سبب الرفض: ${input.rejectionReason}` } });
       if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId, eventType: 'KYC_REJECTED_BY_ADMIN', title: 'رفض توثيق الهوية', summary: `رفضت الإدارة مستندات هوية مقدم الخدمة: ${input.rejectionReason}`, status: LogStatus.REJECTED, severity: 'WARNING', before: { kycStatus: profile.kycStatus }, after: { kycStatus: KYCStatus.REJECTED }, details: { party: 'PROVIDER', reason: input.rejectionReason } }) });

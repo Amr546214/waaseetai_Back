@@ -45,6 +45,7 @@ import { initializeRoleState } from './account-management.service';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 import { buildAssessmentDetails, buildCompanySummary, withSpecialtyName } from './provider-public-profile.helpers';
 import { deliveryCompletedProject } from './settlement-state.service';
+import { providerNotifications } from './provider-notifications.service';
 
 // Cached values are always a real validated WaseetAI result, keyed by the
 // provider plus the exact counts sent (so any change in real data busts it).
@@ -1023,6 +1024,8 @@ export class ProviderProfileService {
 	private fileNameOnly(value: unknown): string {
 		if (typeof value !== 'string' || !value) return 'غير محدد';
 		if (value.startsWith('data:')) return 'ملف مرفق';
+		// a private reference never leaves the server as text (not even its folder or file name): the reviewer opens it through the access link
+		if (value.startsWith('private:')) return 'مستند محفوظ بشكل خاص';
 		try {
 			const pathname = new URL(value).pathname;
 			const lastPart = decodeURIComponent(pathname.split('/').filter(Boolean).pop() || 'ملف مرفق');
@@ -1246,6 +1249,11 @@ export class ProviderProfileService {
 					await this.applyClientPasswordChange(request.providerId, String(metadata.pendingPasswordHash || ''), auditContext);
 				} else {
 					await this.applySensitivePayload(request.providerId, request.category, metadata.changes || {});
+					// the new identity document was approved: the KYC review that its submission put in the queue (PENDING) is decided too. VERIFIED / UNVERIFIED / REJECTED accounts are never touched here.
+					if (request.category === 'DOCUMENTS' && (metadata.changes || {}).idDocumentUrl) {
+						const moved = await prisma.providerProfile.updateMany({ where: { userId: request.providerId, kycStatus: 'PENDING' as any }, data: { kycStatus: 'VERIFIED' as any, isVerified: true, notes: null } });
+						if (moved.count) await providerNotifications.kycDecided({ providerId: request.providerId, decision: 'APPROVED' }).catch(() => undefined);
+					}
 				}
 			} catch (error) {
 				// nothing was applied: put the request back so the admin can retry, and report the failure (never a false APPROVED)
@@ -1255,6 +1263,11 @@ export class ProviderProfileService {
 				});
 				throw error;
 			}
+		}
+		if (!approved && request.category === 'DOCUMENTS' && (metadata.changes || {}).idDocumentUrl) {
+			// a refused new identity document: the KYC review in the queue (PENDING) is refused with the same reason, so both queues and the provider's page agree
+			const moved = await prisma.providerProfile.updateMany({ where: { userId: request.providerId, kycStatus: 'PENDING' as any }, data: { kycStatus: 'REJECTED' as any, isVerified: false, notes: `${PROVIDER_KYC_REJECTION_PREFIX} ${reason}` } });
+			if (moved.count) await providerNotifications.kycDecided({ providerId: request.providerId, decision: 'REJECTED', reason: reason ?? undefined }).catch(() => undefined);
 		}
 		if (request.category === CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY) {
 			// decided either way: the pending hash is never kept (approved = now the real password, rejected = discarded)
@@ -1321,7 +1334,10 @@ export class ProviderProfileService {
 			if (row.category === CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY) return (({ metadata: _m, ...safe }) => ({ ...safe, aiAuditStatus: null, aiConfidence: null, aiRecommendation: null, aiReview: null }))(row);
 			// the admin keeps the metadata (the changes under review) but sees AI fields only when a real stored pre-review backs them
 			const honest = withHonestAiReview(row);
-			return { ...honest, metadata: row.metadata };
+			// The text of a file change is shown WITHOUT its private reference; `documentsAccess` tells the page which documents exist so it can open them (access link, key profile_request_document, id = this request).
+			const changes = ((row.metadata ?? {}) as { changes?: Record<string, unknown> }).changes ?? {};
+			const documentsAccess = row.category === 'DOCUMENTS' ? { idDocumentUrl: typeof changes.idDocumentUrl === 'string' && !!changes.idDocumentUrl } : undefined;
+			return { ...honest, currentValue: this.redactFileContent(row.currentValue), requestedValue: this.redactFileContent(row.requestedValue), documentsAccess, metadata: row.metadata };
 		});
 	}
 

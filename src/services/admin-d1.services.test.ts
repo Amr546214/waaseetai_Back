@@ -229,7 +229,7 @@ test('provider KYC approve: audited, provider notified with a real provider rout
 	const { onboardingService } = await fresh('./onboarding.service.ts');
 	const audit: any[] = []; notes.length = 0;
 	const profile = { userId: 'p1', kycStatus: 'PENDING', frontIdUrl: 'ref', backIdUrl: null, selfieUrl: null, supportingDocsUrl: null, certUrls: [] };
-	current = { providerProfile: { findUnique: async () => profile, update: async (a: any) => ({ ...profile, ...a.data }) }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
+	current = { providerProfile: { findUnique: async () => profile, update: async (a: any) => ({ ...profile, ...a.data }) }, profileModificationRequest: { findMany: async () => [] }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
 	await onboardingService.approveProviderKyc('p1', admin);
 	assert.equal(audit[0].eventType, 'KYC_APPROVED_BY_ADMIN'); assert.equal(audit[0].userId, 'p1');
 	assert.equal(notes[0].userId, 'p1'); assert.equal(notes[0].type, 'KYC_APPROVED'); assert.equal(notes[0].actionUrl, '/provider-overview/profile/data');
@@ -242,7 +242,7 @@ test('provider KYC approve: audited, provider notified with a real provider rout
 test('provider KYC reject: reason kept in audit + notification', async () => {
 	const { onboardingService } = await fresh('./onboarding.service.ts');
 	const audit: any[] = []; notes.length = 0;
-	current = { providerProfile: { findUnique: async () => ({ userId: 'p1', kycStatus: 'PENDING' }), update: async (a: any) => a.data }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
+	current = { providerProfile: { findUnique: async () => ({ userId: 'p1', kycStatus: 'PENDING' }), update: async (a: any) => a.data }, profileModificationRequest: { findMany: async () => [] }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
 	await onboardingService.rejectProviderKyc('p1', { rejectionReason: 'الصورة غير واضحة' }, admin);
 	assert.equal(audit[0].status, 'REJECTED'); assert.match(audit[0].summary, /الصورة غير واضحة/);
 	assert.equal(notes[0].type, 'KYC_REJECTED'); assert.match(notes[0].message, /الصورة غير واضحة/);
