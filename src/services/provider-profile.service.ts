@@ -1171,11 +1171,6 @@ export class ProviderProfileService {
 				}
 			});
 
-			// only the codes of OLDER requests of the SAME category are replaced (another category's pending code, and activation / reset / checkout codes, are left alone)
-			const olderIds = openRequests.map(r => r.id);
-			if (olderIds.length) {
-				await prisma.otpVerification.deleteMany({ where: { userId: providerId, type: 'EMAIL', AND: [{ context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } }, { OR: olderIds.map(id => ({ context: { path: ['requestId'], equals: id } })) }] } });
-			}
 			const code = crypto.randomInt(100000, 1000000).toString();
 			await prisma.otpVerification.create({
 				data: { userId: providerId, code, type: 'EMAIL', expiresAt: new Date(Date.now() + 10 * 60 * 1000), context: { purpose: OtpPurpose.SENSITIVE_CHANGE, requestId: request.id } }
@@ -1183,6 +1178,7 @@ export class ProviderProfileService {
 			try {
 				await notificationService.sendEmailOtp(user.email, code);
 				delivered = true;
+				otpSendThrottle.commitRecipient(throttleKey, true);
 			} catch (error) {
 				await prisma.$transaction([
 					prisma.otpVerification.deleteMany({ where: { userId: providerId, type: 'EMAIL', code, context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } } }),
@@ -1190,7 +1186,11 @@ export class ProviderProfileService {
 				]);
 				throw new Error('OTP_EMAIL_DELIVERY_FAILED');
 			}
-			otpSendThrottle.commitRecipient(throttleKey, true);
+			// delivered: only NOW are the codes of OLDER requests of the SAME category replaced (a failed mail leaves the previous valid code untouched; another category's code and activation / reset / checkout codes are never touched)
+			const olderIds = openRequests.map(r => r.id);
+			if (olderIds.length) try {
+				await prisma.otpVerification.deleteMany({ where: { userId: providerId, type: 'EMAIL', AND: [{ context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } }, { OR: olderIds.map(id => ({ context: { path: ['requestId'], equals: id } })) }] } });
+			} catch (e) { logger.warn('sensitive-change: older codes not cleaned', e); }
 			await accountAuditLogService.record({ userId: providerId, eventType: 'SENSITIVE_CHANGE_REQUESTED', category: 'PROFILE_COMPLETION', title: config.label, summary: `تم إنشاء طلب تعديل ${config.label} وبانتظار تأكيد الهوية`, source: 'USER', status: 'IN_REVIEW', before: current, after: cleanChanges, requestId: request.id, context: auditContext });
 			return { requestId: request.id, emailHint: this.maskEmail(user.email), expiresInSeconds: 600, reused: false as const, resendAvailableAt: resendAvailableAtIso() };
 		} finally {
@@ -1199,7 +1199,12 @@ export class ProviderProfileService {
 		}
 	}
 
+	/** Runs under the SAME per-user lock as initiateSensitiveChange (in-process: the backend is ONE Node process, a second instance would need a DB advisory lock), so a confirmation can never consume a code a concurrent request is replacing. */
 	async verifySensitiveChange(providerId: string, requestId: string, code: string, auditContext?: AuditContext) {
+		return withKeyLock(`sensitive-otp:${providerId}`, () => this.verifySensitiveChangeLocked(providerId, requestId, code, auditContext));
+	}
+
+	private async verifySensitiveChangeLocked(providerId: string, requestId: string, code: string, auditContext?: AuditContext) {
 		const request = await prisma.profileModificationRequest.findFirst({ where: { id: requestId, providerId } });
 		if (!request || request.status !== 'PENDING_OTP') throw new Error('REQUEST_NOT_PENDING_OTP');
 		if (request.category === 'CONTACT') {
@@ -1239,7 +1244,9 @@ export class ProviderProfileService {
 		// (a failure keeps the code usable). For an identity document the provider row is locked first: an admin decision on the OLD document waits for this commit and then sees the new request.
 		const { updated, scored } = await prisma.$transaction(async tx => {
 			if (identityDocument) await lockProviderProfile(tx, providerId);
-			await tx.otpVerification.delete({ where: { id: otp.id } });
+			// the code is consumed exactly once: a second confirmation with the same code finds nothing to consume
+			const consumed = await tx.otpVerification.deleteMany({ where: { id: otp.id } });
+			if (consumed.count !== 1) throw new Error('INVALID_OR_EXPIRED_OTP');
 			if (needsReview) {
 				// a second request opened before the first was confirmed must not reach the admin as a duplicate
 				const waiting = await tx.profileModificationRequest.findFirst({ where: { providerId, category: request.category, status: 'PENDING_HUMAN_REVIEW' as any, id: { not: request.id } }, orderBy: { createdAt: 'desc' }, select: { id: true, category: true, createdAt: true } as any });
