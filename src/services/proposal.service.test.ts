@@ -100,7 +100,8 @@ test('createProposal: a duplicate proposal from the same provider is still rejec
   await assert.rejects(
     () => service.createProposal('project-1', 'provider-1', baseProposalPayload()),
     (err: any) => {
-      assert.match(err.message, /عرض مسبق/);
+      assert.match(err.message, /وصلنا من قبل/);
+      assert.equal(err.code, 'PROPOSAL_ALREADY_SUBMITTED');
       return true;
     }
   );
