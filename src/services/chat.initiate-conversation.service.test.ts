@@ -21,7 +21,7 @@ async function load(t: TestContext, fx: Fx = {}) {
 			findUnique: async () => (fx.existing ? conversation({ projectId: 'req-1', providerId: 'prov-1', clientId: 'client-1' }) : null),
 			create: async ({ data }: any) => { created.conversations.push(data); return { id: 'conv-1', ...data }; }
 		},
-		message: { create: async ({ data }: any) => { created.messages.push(data); return data; } },
+		message: { findFirst: async () => null, create: async ({ data }: any) => { created.messages.push(data); return data; } },
 		$transaction: async (ops: any[]) => Promise.all(ops)
 	};
 	// refetch after create returns the shape the formatter needs

@@ -269,3 +269,22 @@ test('view: a SUBMITTED offer can be withdrawn but not countered/rejected; a CAN
 	assert.deepEqual([v.canWithdraw, v.canCounter, v.canReject], [false, false, false]);
 	await refused(l.svc.getView('other', { offerId: 'offer-1' }), 404);
 });
+
+test('counter: a bad price / duration / note is refused with the FIELD named and a fixed code (nothing is written)', async (t) => {
+	const { svc, calls } = await load(t, base());
+	const bad = async (input: any, field: string, code: string) => {
+		const e: any = await svc.counter('prov-1', 'offer-1', input).catch((x: any) => x);
+		assert.equal(e.statusCode, 400); assert.equal(e.code, code); assert.equal(e.errors[0].field, field);
+	};
+	await bad({ price: -5, deliveryDays: 10 }, 'price', 'COUNTER_PRICE_INVALID');
+	await bad({ price: 900, deliveryDays: 0 }, 'deliveryDays', 'COUNTER_DAYS_INVALID');
+	await bad({ price: 900, deliveryDays: 10, note: 'x'.repeat(5000) }, 'note', 'COUNTER_NOTE_TOO_LONG');
+	assert.equal(calls.created.length, 0);
+});
+
+test('counter: a second counter while one waits is refused 409 COUNTER_PENDING_EXISTS (server-side duplicate guard, not just a disabled button)', async (t) => {
+	const { svc } = await load(t, base());
+	await svc.counter('prov-1', 'offer-1', { price: 900, deliveryDays: 10 });
+	const e: any = await svc.counter('prov-1', 'offer-1', { price: 800, deliveryDays: 9 }).catch((x: any) => x);
+	assert.equal(e.statusCode, 409); assert.equal(e.code, 'COUNTER_PENDING_EXISTS');
+});

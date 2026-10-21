@@ -54,7 +54,7 @@ const createDb = (opts: { specialties?: any[]; created?: any[] } = {}) => {
 			create: async () => { throw new Error('must not create a specialty'); }
 		},
 		category: { findFirst: async () => null, create: async () => { throw new Error('must not create a category'); } },
-		clientRequest: { create: async ({ data }: any) => { created.push(data); return { id: 'new-req', ...data, specialty: {}, clientProfile: { user: {} } }; } },
+		clientRequest: { findFirst: async () => null, create: async ({ data }: any) => { created.push(data); return { id: 'new-req', ...data, specialty: {}, clientProfile: { user: {} } }; } },
 		project: { create: async () => ({}) },
 		user: { findUnique: async () => ({ id: 'user-1' }) },
 		notification: { createMany: async () => ({}) }

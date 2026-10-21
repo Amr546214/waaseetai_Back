@@ -6,6 +6,7 @@ import { aiProposalService } from './ai-proposal.service';
 import { getIO } from '../socket';
 import { WaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
 import { logger } from '../config/logger';
+import { withKeyLock } from '../utils/key-lock';
 import { projectFitService } from './ai-features/project-fit.service';
 import { proposalBudgetSuitability, proposalDeadlineSuitability } from './proposal-suitability';
 import { clientNotifications, clientNotificationFor, CLIENT_ROUTES } from './client-notifications.service';
@@ -89,12 +90,23 @@ export type ProjectProposalWithDetails = Prisma.ProjectProposalGetPayload<{
 	};
 }>;
 
+export const PROPOSAL_ALREADY_SUBMITTED_MESSAGE = 'عرضك على هذا المشروع وصلنا من قبل، ولا يمكن إرسال أكثر من عرض واحد لنفس المشروع. افتح «عروضي» لمتابعته.';
+
 export class ProposalService {
 	/**
 	 * Transactionally creates a ProjectProposal along with its associated ProposalMilestones.
 	 * Performs duplicate checks and computes preliminary AI match evaluations.
 	 */
+	/**
+	 * One provider + one project at a time (per-key lock, in-process: the backend is ONE Node process): two taps / two tabs / a retry after a lost answer
+	 * queue up, and the second finds the first one's offer and answers 409 PROPOSAL_ALREADY_SUBMITTED instead of racing it through the slow AI step.
+	 * The database unique (projectId, providerId) stays the last line of defence (also across instances).
+	 */
 	public async createProposal(projectId: string, providerId: string, data: CreateProposalDto) {
+		return withKeyLock(`proposal:${projectId}:${providerId}`, () => this.createProposalLocked(projectId, providerId, data));
+	}
+
+	private async createProposalLocked(projectId: string, providerId: string, data: CreateProposalDto) {
 		// 1. Verify target project or clientRequest exists and is eligible for proposals
 		let project = await prisma.project.findUnique({
 			where: { id: projectId }
@@ -106,14 +118,14 @@ export class ProposalService {
 		});
 
 		if (!project && !clientRequest) {
-			throw new AppError('المشروع المحدد غير موجود في النظام', 404);
+			throw new AppError('المشروع المحدد غير موجود في النظام', 404, undefined, 'PROJECT_NOT_FOUND');
 		}
 
 		const targetClientId = project?.clientId || clientRequest?.clientProfile?.userId;
 		const targetTitle = project?.title || clientRequest?.title || 'طلب مشروع';
 
 		if (!targetClientId) {
-			throw new AppError('تعذر العثور على طالب الخدمة لهذا المشروع', 400);
+			throw new AppError('تعذر العثور على طالب الخدمة لهذا المشروع', 400, undefined, 'PROJECT_OWNER_NOT_FOUND');
 		}
 
 		if (!project && clientRequest) {
@@ -152,13 +164,13 @@ export class ProposalService {
 		// ('PUBLISHED'/'UNDER_BIDDING' are not values of either status enum and
 		// were dead branches.)
 		if (project && project.status !== 'OPEN') {
-			throw new AppError('هذا المشروع غير متاح حالياً لاستقبال عروض جديدة', 422);
+			throw new AppError('هذا المشروع غير متاح حالياً لاستقبال عروض جديدة', 422, undefined, 'PROJECT_NOT_OPEN');
 		}
 		if (clientRequest && clientRequest.status !== 'OPEN') {
-			throw new AppError('هذا المشروع غير متاح حالياً لاستقبال عروض جديدة', 422);
+			throw new AppError('هذا المشروع غير متاح حالياً لاستقبال عروض جديدة', 422, undefined, 'PROJECT_NOT_OPEN');
 		}
 		if (targetClientId === providerId && process.env.NODE_ENV === 'production') {
-			throw new AppError('لا يمكنك تقديم عرض على طلبك الخاص', 403);
+			throw new AppError('لا يمكنك تقديم عرض على طلبك الخاص', 403, undefined, 'OWN_PROJECT_OFFER');
 		}
 
 		// 2. Check duplicate submission constraint across both ProjectProposal and Proposal tables
@@ -183,13 +195,13 @@ export class ProposalService {
 		]);
 
 		if (existingProjectProposal || existingProposal) {
-			throw new AppError('لقد قمت بإرسال عرض مسبق على هذا المشروع، لا يمكن تقديم أكثر من عرض واحد لنفس المشروع', 409);
+			throw new AppError(PROPOSAL_ALREADY_SUBMITTED_MESSAGE, 409, undefined, 'PROPOSAL_ALREADY_SUBMITTED');
 		}
 
 		// 3. Defensive check: verify milestone percentages sum to exactly 100%
 		const totalPct = data.milestones.reduce((sum, m) => sum + m.percentage, 0);
 		if (Math.abs(totalPct - 100) > 0.01) {
-			throw new AppError(`إجمالي نسب دفعات المراحل يجب أن يساوي 100% (المجموع الحالي: ${totalPct}%)`, 400);
+			throw new AppError(`إجمالي نسب دفعات المراحل يجب أن يساوي 100% (المجموع الحالي: ${totalPct}%)`, 400, [{ field: 'milestones', path: 'milestones', message: `إجمالي نسب دفعات المراحل يجب أن يساوي 100% (المجموع الحالي: ${totalPct}%)` }], 'MILESTONES_PERCENT_SUM');
 		}
 
 		// 4. Run instant AI Quality & Match Evaluation before creation.
@@ -346,6 +358,10 @@ export class ProposalService {
 			offerNotificationId = offerNotification.id;
 
 			return created;
+		}).catch((error: unknown) => {
+			// the unique (projectId, providerId) fired: another request (another instance) saved the offer first - the same answer as the early check
+			if ((error as { code?: string } | null)?.code === 'P2002') throw new AppError(PROPOSAL_ALREADY_SUBMITTED_MESSAGE, 409, undefined, 'PROPOSAL_ALREADY_SUBMITTED');
+			throw error;
 		});
 
 		// the stored notification goes through the client's saved channels (in-app push / e-mail) once the offer is committed
