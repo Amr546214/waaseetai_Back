@@ -15,7 +15,7 @@ export const requireApprovedProvider = async (req: Request, _res: Response, next
 		const acting = req.user.activeRole ?? UserRole.PROVIDER;
 		if (acting !== UserRole.PROVIDER) return next();
 		const access = await providerAccessStateService.get(req.user.id);
-		if (!access.canAccessDashboard) return next(new AppError(DASHBOARD_LOCKED_MESSAGE, 403));
+		if (!access.canAccessDashboard) return next(new AppError(DASHBOARD_LOCKED_MESSAGE, 403, undefined, 'PROVIDER_DASHBOARD_LOCKED'));
 		next();
 	} catch (error) { next(error); }
 };
