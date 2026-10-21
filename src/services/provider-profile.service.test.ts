@@ -1,4 +1,8 @@
-import { test, TestContext } from 'node:test';
+import { test, beforeEach, TestContext } from 'node:test';
+import { otpSendThrottle } from '../utils/otp-send-throttle';
+
+// the sensitive-change sender now follows the shared OTP send policy; every test starts with a clean counter
+beforeEach(() => otpSendThrottle.reset());
 
 // KYC document values must live inside our own Cloudinary account (or be an owned private reference).
 process.env.CLOUDINARY_CLOUD_NAME = 'testcloud';
@@ -812,7 +816,14 @@ function createSensitiveFlowMockPrisma(t: TestContext, opts: { throwOnRecompute?
       delete: async (args: any) => { const r = requestsById[args.where.id]; delete requestsById[args.where.id]; return r; }
     },
     otpVerification: {
-      deleteMany: async () => ({ count: 0 }),
+      // only the "replace the older requests' codes" shape is honoured (AND [purpose, {OR: requestIds}])
+      deleteMany: async (args: any) => {
+        const ors: any[] = (args?.where?.AND ?? []).flatMap((c: any) => c.OR ?? []);
+        const ids = ors.map((c: any) => c.context?.equals);
+        let count = 0;
+        for (const [k, o] of Object.entries(otpsById) as [string, any][]) if (ids.includes(o.context?.requestId)) { delete otpsById[k]; count++; }
+        return { count };
+      },
       create: async (args: any) => {
         const id = `otp-${++otpSeq}`;
         const record = { id, ...args.data };
@@ -1346,6 +1357,7 @@ test('initiateSensitiveChange (DOCUMENTS): a second request while one waits for 
   await providerProfileService.verifySensitiveChange('user-1', first.requestId, getLastOtpCode()!);
   await assert.rejects(() => providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', doc), /REQUEST_ALREADY_PENDING/);
   await providerProfileService.reviewSensitiveChange(first.requestId, false, 'الصورة غير واضحة');
+  otpSendThrottle.reset(); // a second request in the same test is not about the send limit
   const again = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', doc);
   assert.notEqual(again.requestId, first.requestId);
 });
@@ -1363,18 +1375,33 @@ test('409 REQUEST_ALREADY_PENDING names the waiting request (id, category, submi
   assert.equal(err.details[0].category, 'DOCUMENTS');
 });
 
-test('two requests opened before either was confirmed: only the first can reach the admin, the second confirmation is refused (409) and stays out of the queue', async (t) => {
+test('the same change asked for twice is ONE request (no 2nd mail, nothing invalidated); a different change replaces only the older code of that category', async (t) => {
   const { providerProfileService, getLastOtpCode } = await loadServiceForSensitiveFlow(t);
   const doc = { idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id.pdf' };
   const a = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', doc);
   const codeA = getLastOtpCode()!;
-  const b = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', doc);
+  const again: any = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', doc);
+  assert.equal(again.reused, true);
+  assert.equal(again.requestId, a.requestId);
+  assert.equal(getLastOtpCode(), codeA, 'no second mail went out');
+  otpSendThrottle.reset();
+  const other = { idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id2.pdf' };
+  const b = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', other);
+  assert.notEqual(b.requestId, a.requestId);
   const codeB = getLastOtpCode()!;
-  const okA: any = await providerProfileService.verifySensitiveChange('user-1', a.requestId, codeA);
-  assert.equal(okA.status, 'PENDING_HUMAN_REVIEW');
-  const err: any = await providerProfileService.verifySensitiveChange('user-1', b.requestId, codeB).catch((e) => e);
-  assert.equal(err.message, 'REQUEST_ALREADY_PENDING');
-  assert.equal(err.details[0].requestId, a.requestId);
+  const errA: any = await providerProfileService.verifySensitiveChange('user-1', a.requestId, codeA).catch((e) => e);
+  assert.ok(errA instanceof Error, 'the older request code was replaced');
+  const okB: any = await providerProfileService.verifySensitiveChange('user-1', b.requestId, codeB);
+  assert.equal(okB.status, 'PENDING_HUMAN_REVIEW');
+});
+
+test('sensitive change: a 2nd NEW request within 60 s is refused with OTP_THROTTLED and the exact wait; nothing is created', async (t) => {
+  const { providerProfileService } = await loadServiceForSensitiveFlow(t);
+  await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', { idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id.pdf' });
+  const err: any = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', { idDocumentUrl: 'https://res.cloudinary.com/testcloud/image/upload/id3.pdf' }).catch((e) => e);
+  assert.equal(err.code, 'OTP_THROTTLED');
+  assert.equal(err.statusCode, 429);
+  assert.ok(err.retryAfterSeconds > 0 && err.retryAfterSeconds <= 60);
 });
 
 test('creating a review request does not apply the value; rejection keeps the reason and applies nothing; approval applies it', async (t) => {
@@ -1386,6 +1413,7 @@ test('creating a review request does not apply the value; rejection keeps the re
   const rejected: any = await providerProfileService.reviewSensitiveChange(first.requestId, false, 'الصورة غير واضحة');
   assert.equal(rejected.status, 'REJECTED'); assert.equal(rejected.rejectionReason, 'الصورة غير واضحة');
   assert.notEqual(getUserState().idDocumentUrl, url, 'a rejection applies nothing');
+  otpSendThrottle.reset(); // a second request in the same test is not about the send limit
   const second = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', { idDocumentUrl: url });
   await providerProfileService.verifySensitiveChange('user-1', second.requestId, getLastOtpCode()!);
   const approved: any = await providerProfileService.reviewSensitiveChange(second.requestId, true);
@@ -1418,6 +1446,7 @@ test('GET profile follows the DOCUMENTS lifecycle in identityVerification and re
   await providerProfileService.reviewSensitiveChange(a.requestId, false, 'الصورة غير واضحة');
   const rejected = await read();
   assert.deepEqual([rejected.iv.status, rejected.iv.rejectionReason, rejected.rs.documents.status, rejected.rs.identity.rejectionReason], ['REJECTED', 'الصورة غير واضحة', 'REJECTED', 'الصورة غير واضحة']);
+  otpSendThrottle.reset(); // a second request in the same test is not about the send limit
   const b = await providerProfileService.initiateSensitiveChange('user-1', 'DOCUMENTS', { idDocumentUrl: url });
   await providerProfileService.verifySensitiveChange('user-1', b.requestId, getLastOtpCode()!);
   assert.equal((await read()).rs.documents.requestId, b.requestId);

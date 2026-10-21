@@ -390,6 +390,11 @@ export const initiateSensitiveChange = async (req: Request, res: Response) => {
 		const result = await providerProfileService.initiateSensitiveChange(userId, String(category || ''), changes || {}, auditContext(req));
 		res.status(201).json({ success: true, data: result });
 	} catch (error: any) {
+		if (error?.code === 'OTP_THROTTLED') {
+			const wait = Number(error.retryAfterSeconds) || 60;
+			res.setHeader('Retry-After', String(wait));
+			return res.status(429).json({ success: false, code: 'OTP_THROTTLED', message: error.message, retryAfterSeconds: wait, retryAt: new Date(Date.now() + wait * 1000).toISOString() });
+		}
 		if (error.message === CONTACT_IMMUTABLE) return res.status(403).json({ success: false, code: CONTACT_IMMUTABLE, message: CONTACT_IMMUTABLE_MESSAGE });
 		respondServiceError(res, error);
 	}

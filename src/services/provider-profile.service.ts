@@ -38,6 +38,9 @@ import { computeProviderCompletion, computeProviderMissingItems, computeClientCo
 import { CLIENT_IDENTITY_REQUEST_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY, CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY } from '../utils/profile-request-categories';
 import { logger } from '../config/logger';
 import { OtpPurpose, OTP_MAX_ATTEMPTS } from '../utils/otp-purpose';
+import { otpSendThrottle, canReuseOtp, otpThrottleMessage, resendAvailableAtIso } from '../utils/otp-send-throttle';
+import { withKeyLock } from '../utils/key-lock';
+import { OTP_THROTTLED_CODE } from '../utils/paypal-email-messages';
 import { sessionService } from './session.service';
 import { publicKycRejectionReason, withoutInternalProviderNotes, PROVIDER_KYC_REJECTION_PREFIX } from '../utils/provider-kyc-review';
 import { deriveReviewEntry, alreadyPendingDetails, NOT_SUBMITTED, type ReviewEntry } from '../utils/review-status';
@@ -1101,7 +1104,20 @@ export class ProviderProfileService {
 		return isAcceptableKycDocumentValue(value, providerId);
 	}
 
+	/**
+	 * Step 1 of a sensitive change: creates the request and e-mails the code. PROTECTED like every other OTP sender:
+	 *  - one request at a time per user (a per-user lock): two taps / two tabs / two devices are serialised, so they can never both create and delete each other's codes;
+	 *  - the SAME change asked for again while its code still has >= 3 minutes of its 10 is answered with the SAME request (no new mail, nothing invalidated) - this is also what makes
+	 *    a retry after a lost answer safe (it cannot create a second request);
+	 *  - a new code to the same recipient waits 60 s after the last one that really went out, max 5 per hour per recipient, 30 per hour per IP (the shared otpSendThrottle policy);
+	 *    the answer is 429 `OTP_THROTTLED` with the exact wait; a mail that failed records nothing (the user may retry at once);
+	 *  - a new request replaces only the code of an OLDER request of the SAME category (never another category's code); the 10-minute validity is untouched.
+	 */
 	async initiateSensitiveChange(providerId: string, category: string, changes: Record<string, unknown>, auditContext?: AuditContext) {
+		return withKeyLock(`sensitive-otp:${providerId}`, () => this.initiateSensitiveChangeLocked(providerId, category, changes, auditContext));
+	}
+
+	private async initiateSensitiveChangeLocked(providerId: string, category: string, changes: Record<string, unknown>, auditContext?: AuditContext) {
 		const config = this.sensitiveConfig(category);
 		const filtered = Object.fromEntries(Object.entries(changes || {}).filter(([key]) => config.allowed.includes(key)));
 		const idOmitted = category === 'DOCUMENTS' && !Object.prototype.hasOwnProperty.call(filtered, 'idDocumentUrl');
@@ -1124,38 +1140,63 @@ export class ProviderProfileService {
 			current.certificatesUrl = user.providerProfile?.certUrls?.[0] ?? null;
 		}
 
-		const request = await prisma.profileModificationRequest.create({
-			data: {
-				providerId,
-				category,
-				fieldName: category,
-				fieldLabel: config.label,
-				currentValue: this.toAuditValue(current),
-				requestedValue: this.toAuditValue(cleanChanges),
-				status: 'PENDING_OTP',
-				requiresOtp: true,
-				metadata: { changes: cleanChanges, requiresHumanReview: config.review } as any
+		// the SAME change is already waiting for its code and the code is still usable: answer with it (no new mail, no new request, nothing invalidated)
+		const openRequests = await prisma.profileModificationRequest.findMany({ where: { providerId, category, status: 'PENDING_OTP' as any }, orderBy: { createdAt: 'desc' }, take: 5 });
+		const sameChange = JSON.stringify(cleanChanges);
+		for (const open of openRequests) {
+			if (JSON.stringify(((open.metadata ?? {}) as { changes?: unknown }).changes ?? null) !== sameChange) continue;
+			const openOtp = await prisma.otpVerification.findFirst({ where: { userId: providerId, type: 'EMAIL', AND: [{ context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } }, { context: { path: ['requestId'], equals: open.id } }] }, orderBy: { createdAt: 'desc' } });
+			if (openOtp && canReuseOtp(openOtp, OTP_MAX_ATTEMPTS)) {
+				return { requestId: open.id, emailHint: this.maskEmail(user.email), expiresInSeconds: Math.max(1, Math.floor((openOtp.expiresAt.getTime() - Date.now()) / 1000)), reused: true as const };
 			}
-		});
-
-		// only this purpose's previous codes are replaced (activation / reset / checkout codes of the same user are left alone)
-		await prisma.otpVerification.deleteMany({ where: { userId: providerId, type: 'EMAIL', context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } } });
-		const code = crypto.randomInt(100000, 1000000).toString();
-		await prisma.otpVerification.create({
-			data: { userId: providerId, code, type: 'EMAIL', expiresAt: new Date(Date.now() + 10 * 60 * 1000), context: { purpose: OtpPurpose.SENSITIVE_CHANGE, requestId: request.id } }
-		});
-		try {
-			await notificationService.sendEmailOtp(user.email, code);
-		} catch (error) {
-			await prisma.$transaction([
-				prisma.otpVerification.deleteMany({ where: { userId: providerId, type: 'EMAIL', code, context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } } }),
-				prisma.profileModificationRequest.delete({ where: { id: request.id } })
-			]);
-			throw new Error('OTP_EMAIL_DELIVERY_FAILED');
 		}
-		await accountAuditLogService.record({ userId: providerId, eventType: 'SENSITIVE_CHANGE_REQUESTED', category: 'PROFILE_COMPLETION', title: config.label, summary: `تم إنشاء طلب تعديل ${config.label} وبانتظار تأكيد الهوية`, source: 'USER', status: 'IN_REVIEW', before: current, after: cleanChanges, requestId: request.id, context: auditContext });
 
-		return { requestId: request.id, emailHint: this.maskEmail(user.email), expiresInSeconds: 600 };
+		// the shared OTP send policy (60 s between codes to the same recipient, 5 / hour per recipient, 30 / hour per IP); the IP slot is taken now, the recipient cooldown only for a mail the server accepted
+		const throttleKey = `sensitive-change:${providerId}`;
+		const throttle = otpSendThrottle.reserve(throttleKey, auditContext?.ipAddress);
+		if (!throttle.allowed) throw Object.assign(new AppError(otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds), 429), { code: OTP_THROTTLED_CODE, retryAfterSeconds: throttle.retryAfterSeconds });
+		let delivered = false;
+		try {
+			const request = await prisma.profileModificationRequest.create({
+				data: {
+					providerId,
+					category,
+					fieldName: category,
+					fieldLabel: config.label,
+					currentValue: this.toAuditValue(current),
+					requestedValue: this.toAuditValue(cleanChanges),
+					status: 'PENDING_OTP',
+					requiresOtp: true,
+					metadata: { changes: cleanChanges, requiresHumanReview: config.review } as any
+				}
+			});
+
+			// only the codes of OLDER requests of the SAME category are replaced (another category's pending code, and activation / reset / checkout codes, are left alone)
+			const olderIds = openRequests.map(r => r.id);
+			if (olderIds.length) {
+				await prisma.otpVerification.deleteMany({ where: { userId: providerId, type: 'EMAIL', AND: [{ context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } }, { OR: olderIds.map(id => ({ context: { path: ['requestId'], equals: id } })) }] } });
+			}
+			const code = crypto.randomInt(100000, 1000000).toString();
+			await prisma.otpVerification.create({
+				data: { userId: providerId, code, type: 'EMAIL', expiresAt: new Date(Date.now() + 10 * 60 * 1000), context: { purpose: OtpPurpose.SENSITIVE_CHANGE, requestId: request.id } }
+			});
+			try {
+				await notificationService.sendEmailOtp(user.email, code);
+				delivered = true;
+			} catch (error) {
+				await prisma.$transaction([
+					prisma.otpVerification.deleteMany({ where: { userId: providerId, type: 'EMAIL', code, context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } } }),
+					prisma.profileModificationRequest.delete({ where: { id: request.id } })
+				]);
+				throw new Error('OTP_EMAIL_DELIVERY_FAILED');
+			}
+			otpSendThrottle.commitRecipient(throttleKey, true);
+			await accountAuditLogService.record({ userId: providerId, eventType: 'SENSITIVE_CHANGE_REQUESTED', category: 'PROFILE_COMPLETION', title: config.label, summary: `تم إنشاء طلب تعديل ${config.label} وبانتظار تأكيد الهوية`, source: 'USER', status: 'IN_REVIEW', before: current, after: cleanChanges, requestId: request.id, context: auditContext });
+			return { requestId: request.id, emailHint: this.maskEmail(user.email), expiresInSeconds: 600, reused: false as const, resendAvailableAt: resendAvailableAtIso() };
+		} finally {
+			// a request that never reached a delivered mail gives its per-IP slot back (the recipient cooldown never started)
+			if (!delivered) otpSendThrottle.releaseIp(auditContext?.ipAddress);
+		}
 	}
 
 	async verifySensitiveChange(providerId: string, requestId: string, code: string, auditContext?: AuditContext) {
