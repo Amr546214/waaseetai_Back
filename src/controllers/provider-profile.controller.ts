@@ -1,3 +1,4 @@
+import { respondServiceError } from '../utils/known-service-errors';
 import { updateProviderPreferencesSchema } from '../dtos/provider-preferences.dto';
 import { publicKycRejectionReason, withoutInternalProviderNotes } from '../utils/provider-kyc-review';
 import { Request, Response, NextFunction } from 'express';
@@ -384,14 +385,18 @@ export const cancelModificationRequest = async (req: Request, res: Response) => 
 export const initiateSensitiveChange = async (req: Request, res: Response) => {
 	try {
 		const userId = req.user?.id;
-		if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+		if (!userId) return res.status(401).json({ success: false, code: 'SESSION_REQUIRED', message: 'انتهت جلستك. سجّل الدخول مرة أخرى للمتابعة.' });
 		const { category, changes } = req.body || {};
 		const result = await providerProfileService.initiateSensitiveChange(userId, String(category || ''), changes || {}, auditContext(req));
 		res.status(201).json({ success: true, data: result });
 	} catch (error: any) {
+		if (error?.code === 'OTP_THROTTLED') {
+			const wait = Number(error.retryAfterSeconds) || 60;
+			res.setHeader('Retry-After', String(wait));
+			return res.status(429).json({ success: false, code: 'OTP_THROTTLED', message: error.message, retryAfterSeconds: wait, retryAt: new Date(Date.now() + wait * 1000).toISOString() });
+		}
 		if (error.message === CONTACT_IMMUTABLE) return res.status(403).json({ success: false, code: CONTACT_IMMUTABLE, message: CONTACT_IMMUTABLE_MESSAGE });
-		const status = error.message === 'EMAIL_ALREADY_USED' || error.message === 'REQUEST_ALREADY_PENDING' ? 409 : 400;
-		res.status(status).json({ success: false, message: error.message, ...(error.details ? { errors: error.details } : {}) });
+		respondServiceError(res, error);
 	}
 };
 
@@ -401,13 +406,13 @@ export const verifySensitiveChange = async (req: Request, res: Response) => {
 		if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
 		const { requestId, code } = req.body || {};
 		if (!requestId || !/^\d{6}$/.test(String(code || ''))) {
-			return res.status(400).json({ success: false, message: 'A valid requestId and six-digit OTP are required' });
+			return res.status(400).json({ success: false, code: 'OTP_FORMAT_INVALID', message: 'أدخل رمز التحقق المكوّن من 6 أرقام كما وصلك في بريدك.', errors: [{ field: 'code', path: 'code', message: 'أدخل رمز التحقق المكوّن من 6 أرقام' }] });
 		}
 		const result = await providerProfileService.verifySensitiveChange(userId, String(requestId), String(code), auditContext(req));
 		res.json({ success: true, data: result });
 	} catch (error: any) {
 		if (error.message === CONTACT_IMMUTABLE) return res.status(403).json({ success: false, code: CONTACT_IMMUTABLE, message: CONTACT_IMMUTABLE_MESSAGE });
-		res.status(error.message === 'REQUEST_ALREADY_PENDING' ? 409 : 400).json({ success: false, message: error.message, ...(error.details ? { errors: error.details } : {}) });
+		respondServiceError(res, error);
 	}
 };
 
@@ -419,9 +424,7 @@ export const reviewSensitiveChange = async (req: Request, res: Response) => {
 		const result = await providerProfileService.reviewSensitiveChange(req.params.id as string, approved, rejectionReason ?? undefined, { ...auditContext(req), actorLabel: req.user?.email });
 		res.json({ success: true, data: { ...result, metadata: undefined } });
 	} catch (error: any) {
-		const code = error?.message;
-		const status = code === 'REQUEST_NOT_FOUND' ? 404 : code === 'REQUEST_NOT_PENDING_REVIEW' ? 409 : 400;
-		res.status(status).json({ success: false, message: code });
+		respondServiceError(res, error);
 	}
 };
 

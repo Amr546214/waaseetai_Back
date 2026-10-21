@@ -39,7 +39,9 @@ test('Multer: size → 413, count / unexpected field → 400, other → 400', ()
 
 test('AppError and unknown errors behave as before (status kept; unknown → 500 generic)', () => {
 	const a = run(new AppError('ممنوع', 403)); assert.equal(a.statusCode, 403); assert.equal(a.body.message, 'ممنوع');
-	const u = run(new Error('boom')); assert.equal(u.statusCode, 500); assert.equal(u.body.message, 'Internal Server Error');
+	const u = run(new Error('boom')); assert.equal(u.statusCode, 500);
+	// honest Arabic message + fixed code + a trace id; the raw error text never reaches the client
+	assert.match(u.body.message, ARABIC); assert.equal(u.body.code, 'INTERNAL_ERROR'); assert.match(u.body.traceId, /^[0-9A-F]{8}$/); assert.doesNotMatch(JSON.stringify(u.body), /boom|Internal Server Error/);
 });
 
 async function call(app: express.Express, path: string, init: { body?: any; headers?: Record<string, string>; method?: string }) {
@@ -120,4 +122,19 @@ test('OTP attempts lock (429) carries a stable code and no duration; other statu
 	assert.equal(l.body.code, 'OTP_ATTEMPTS_LOCKED'); assert.equal(l.headers['Retry-After'], undefined);
 	const b = runWithHeaders(Object.assign(new AppError('x', 400), { retryAfterSeconds: 9 }));
 	assert.equal(b.headers['Retry-After'], undefined);
+});
+
+test('an AppError may carry its own fixed marker (forwarded); an invalid marker is not forwarded; an operational 5xx with a raw/English/leaky text is replaced and traced', () => {
+	assert.equal(run(Object.assign(new AppError('مستند بانتظار المراجعة', 409), { code: 'IDENTITY_REQUEST_WAITING' })).body.code, 'IDENTITY_REQUEST_WAITING');
+	assert.equal(run(new AppError('x', 409, undefined, 'IDENTITY_REQUEST_WAITING')).body.code, 'IDENTITY_REQUEST_WAITING');
+	assert.equal(run(Object.assign(new AppError('x', 409), { code: 'bad code <script>' })).body.code, undefined);
+	for (const msg of ['Internal Server Error', 'Invalid `prisma.user.findMany()` invocation', 'تعذر: relation "users" does not exist', 'فشل at Object.<anonymous> (/app/dist/x.js:10:5)', 'ECONNREFUSED']) {
+		const r = run(new AppError(msg, 500));
+		assert.equal(r.statusCode, 500); assert.equal(r.body.code, 'INTERNAL_ERROR'); assert.match(r.body.traceId, /^[0-9A-F]{8}$/);
+		assert.doesNotMatch(JSON.stringify(r.body), /prisma|relation|ECONN|dist\/x\.js|Internal Server Error/i);
+	}
+	// a deliberate Arabic 5xx explanation (e.g. a service that is not available) is kept, with a trace id
+	const keep = run(new AppError('خدمة التحقق غير متاحة حاليًا، حاول لاحقًا', 503)); assert.equal(keep.body.message, 'خدمة التحقق غير متاحة حاليًا، حاول لاحقًا'); assert.match(keep.body.traceId, /^[0-9A-F]{8}$/);
+	// 4xx never gets a trace id
+	assert.equal(run(new AppError('ممنوع', 403)).body.traceId, undefined);
 });

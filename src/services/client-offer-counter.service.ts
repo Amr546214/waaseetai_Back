@@ -119,12 +119,12 @@ class ClientOfferCounterService {
 
 		if (!OPEN_REQUEST_STATUSES.includes(request.status as RequestStatus)) throw new AppError('لا يمكن قبول عرض مضاد على هذا الطلب في حالته الحالية', 409);
 		if (offer.status === ProposalStatus.CANCELLED) throw new AppError('سحب مقدم الخدمة هذا العرض ولا يمكن قبول عرضه المضاد', 409);
-		if (offer.status !== ProposalStatus.UNDER_NEGOTIATION) throw new AppError('لا يوجد عرض مضاد معلّق على هذا العرض (ربما قُبل مسبقًا أو تغيّرت حالة العرض)، حدّث الصفحة', 409);
+		if (offer.status !== ProposalStatus.UNDER_NEGOTIATION) throw new AppError('لا يوجد عرض مضاد معلّق على هذا العرض (ربما قُبل مسبقًا أو تغيّرت حالة العرض)، حدّث الصفحة', 409, undefined, 'OFFER_STATE_CHANGED');
 
 		const result = await prisma.$transaction(async (tx) => {
 			// Locks the offer row for the rest of the transaction and gates on the status: two simultaneous accepts (or an accept racing a withdraw) cannot both win.
 			const lock = await tx.projectProposal.updateMany({ where: { id: offer.id, providerId: offer.providerId, status: ProposalStatus.UNDER_NEGOTIATION }, data: { updatedAt: new Date() } });
-			if (lock.count !== 1) throw new AppError('حالة العرض تغيّرت (سُحب أو قُبل العرض المضاد مسبقًا)، حدّث الصفحة', 409);
+			if (lock.count !== 1) throw new AppError('حالة العرض تغيّرت (سُحب أو قُبل العرض المضاد مسبقًا)، حدّث الصفحة', 409, undefined, 'OFFER_STATE_CHANGED');
 
 			const contract = await tx.contract.findUnique({ where: { projectId: requestId }, select: { status: true } });
 			if (contract && contract.status !== ContractStatus.PENDING_CLIENT_SIGNATURE) throw new AppError('تم توقيع العقد لهذا الطلب، ولا يمكن تغيير شروط العرض', 409);
@@ -132,8 +132,8 @@ class ClientOfferCounterService {
 			const { conversationId, entries } = await this.recentEntries(tx, offer.projectId, offer.providerId);
 			if (!conversationId) throw new AppError('لا توجد محادثة تفاوض لهذا العرض', 409);
 			const pending = deriveNegotiationState(entries, offer.id).pendingCounter;
-			if (!pending) throw new AppError('لا يوجد عرض مضاد معلّق على هذا العرض', 409);
-			if (pending.messageId !== messageId) throw new AppError('هذا العرض المضاد لم يعد الأحدث، راجع آخر عرض مضاد من مقدم الخدمة', 409);
+			if (!pending) throw new AppError('لا يوجد عرض مضاد معلّق على هذا العرض', 409, undefined, 'OFFER_STATE_CHANGED');
+			if (pending.messageId !== messageId) throw new AppError('هذا العرض المضاد لم يعد الأحدث، راجع آخر عرض مضاد من مقدم الخدمة', 409, undefined, 'OFFER_STATE_CHANGED');
 			if (!this.isClearCounter(pending)) throw new AppError('العرض المضاد لا يحتوي على سعر ومدة واضحين، اتفق مع مقدم الخدمة في المحادثة على عرض مضاد واضح', 422);
 			// the counter must really be the provider's own structured entry (readNegotiationEntries already ignores any other sender)
 			const source = await tx.message.findFirst({ where: { id: pending.messageId, conversationId }, select: { senderId: true } });
@@ -150,7 +150,7 @@ class ClientOfferCounterService {
 				where: { id: offer.id, providerId: offer.providerId, status: ProposalStatus.UNDER_NEGOTIATION },
 				data: { totalPrice: price, deliveryDays: days, status: ProposalStatus.SUBMITTED }
 			});
-			if (moved.count !== 1) throw new AppError('حالة العرض تغيّرت، حدّث الصفحة وحاول مرة أخرى', 409);
+			if (moved.count !== 1) throw new AppError('حالة العرض تغيّرت، حدّث الصفحة وحاول مرة أخرى', 409, undefined, 'OFFER_STATE_CHANGED');
 			// stages keep their proportions: amounts re-split so they sum EXACTLY to the new price, days so they sum to the new duration (percentages are unchanged)
 			if (offer.milestones.length) {
 				const byAmount = offer.milestones.some((x) => x.amount > 0);
@@ -181,16 +181,16 @@ class ClientOfferCounterService {
 
 		if (!OPEN_REQUEST_STATUSES.includes(request.status as RequestStatus)) throw new AppError('لا يمكن الرد على عرض مضاد لهذا الطلب في حالته الحالية', 409);
 		if (offer.status === ProposalStatus.CANCELLED) throw new AppError('سحب مقدم الخدمة هذا العرض', 409);
-		if (offer.status !== ProposalStatus.UNDER_NEGOTIATION) throw new AppError('لا يوجد عرض مضاد معلّق على هذا العرض (ربما تم الرد عليه مسبقًا)، حدّث الصفحة', 409);
+		if (offer.status !== ProposalStatus.UNDER_NEGOTIATION) throw new AppError('لا يوجد عرض مضاد معلّق على هذا العرض (ربما تم الرد عليه مسبقًا)، حدّث الصفحة', 409, undefined, 'OFFER_STATE_CHANGED');
 
 		await prisma.$transaction(async (tx) => {
 			const lock = await tx.projectProposal.updateMany({ where: { id: offer.id, providerId: offer.providerId, status: ProposalStatus.UNDER_NEGOTIATION }, data: { updatedAt: new Date() } });
-			if (lock.count !== 1) throw new AppError('حالة العرض تغيّرت (سُحب أو تم الرد على العرض المضاد مسبقًا)، حدّث الصفحة', 409);
+			if (lock.count !== 1) throw new AppError('حالة العرض تغيّرت (سُحب أو تم الرد على العرض المضاد مسبقًا)، حدّث الصفحة', 409, undefined, 'OFFER_STATE_CHANGED');
 			const { conversationId, entries } = await this.recentEntries(tx, offer.projectId, offer.providerId);
 			if (!conversationId) throw new AppError('لا توجد محادثة تفاوض لهذا العرض', 409);
 			const pending = deriveNegotiationState(entries, offer.id).pendingCounter;
-			if (!pending) throw new AppError('لا يوجد عرض مضاد معلّق على هذا العرض', 409);
-			if (pending.messageId !== messageId) throw new AppError('هذا العرض المضاد لم يعد الأحدث، راجع آخر عرض مضاد من مقدم الخدمة', 409);
+			if (!pending) throw new AppError('لا يوجد عرض مضاد معلّق على هذا العرض', 409, undefined, 'OFFER_STATE_CHANGED');
+			if (pending.messageId !== messageId) throw new AppError('هذا العرض المضاد لم يعد الأحدث، راجع آخر عرض مضاد من مقدم الخدمة', 409, undefined, 'OFFER_STATE_CHANGED');
 			const mirrors = await tx.proposal.findMany({ where: { providerId: offer.providerId, OR: [{ projectId: requestId }, { clientRequestId: requestId }] }, select: { id: true, status: true } });
 			if (mirrors.some((m) => m.status !== ProposalStatus.UNDER_NEGOTIATION)) throw new AppError('حالة العرض غير متسقة، لا يمكن تنفيذ الإجراء', 409);
 			await tx.projectProposal.update({ where: { id: offer.id }, data: { status: ProposalStatus.SUBMITTED } });

@@ -6,6 +6,10 @@ import { CreateConversationDto, SendMessageDto } from '../dtos/chat.dto';
 import { providerNotifications } from './provider-notifications.service';
 import { ConversationKind, MessageType, MessageStatus, UserRole } from '@prisma/client';
 import { offerActionBlock } from '../utils/request-lifecycle';
+import { withKeyLock } from '../utils/key-lock';
+
+/** the same negotiation request repeated inside this window (double tap / lost answer retry) is the same request */
+const NEGOTIATION_REPEAT_WINDOW_MS = 5 * 60 * 1000;
 
 /** Offer states a client can still open a negotiation on. Everything else (withdrawn, rejected, accepted, awaiting signature, draft, in review) is closed. */
 export const NEGOTIABLE_OFFER_STATUSES = ['SUBMITTED', 'PENDING', 'UNDER_NEGOTIATION'];
@@ -74,7 +78,16 @@ class ChatService {
   /**
    * Initiate or retrieve an existing conversation between a Client and a Provider for a specific Project
    */
+  /**
+   * A negotiation request (negotiationPayload) is serialised per client + offer (in-process lock: ONE Node process), and the IDENTICAL card sent again within
+   * NEGOTIATION_REPEAT_WINDOW_MS - a double tap or a retry after the answer was lost - is not stored or notified a second time: the conversation is returned as is.
+   */
   async initiateConversation(userId: string, data: CreateConversationDto) {
+    if (!data.negotiationPayload) return this.initiateConversationUnlocked(userId, data);
+    return withKeyLock(`negotiation-init:${userId}:${data.offerId ?? data.projectId}`, () => this.initiateConversationUnlocked(userId, data));
+  }
+
+  private async initiateConversationUnlocked(userId: string, data: CreateConversationDto) {
     const { projectId, offerId } = data;
 
     // Fetch user account type
@@ -324,6 +337,14 @@ class ChatService {
       // only the client's own card fields are stored: `kind` / `offerId` / `replyToMessageId` mark the provider's and the server's entries and are never taken from the client
       const { isNegotiation, negType, negTypeName, price, duration, notes, status } = data.negotiationPayload;
       const payloadContent = 'WS_NEGOTIATION::' + JSON.stringify({ isNegotiation, negType, negTypeName, price, duration, notes, status });
+      const repeated = await prisma.message.findFirst({
+        where: { conversationId: conversation.id, senderId: userId, content: payloadContent, createdAt: { gte: new Date(Date.now() - NEGOTIATION_REPEAT_WINDOW_MS) } },
+        select: { id: true }
+      });
+      if (repeated) {
+        // the same request is already stored (and the provider already told): answer with the conversation, create and notify nothing more
+        return this.formatConversationOutput(conversation, userId);
+      }
       await prisma.message.create({
         data: {
           conversationId: conversation.id,

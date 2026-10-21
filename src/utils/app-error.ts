@@ -2,13 +2,16 @@ export class AppError extends Error {
   public readonly statusCode: number;
   public readonly isOperational: boolean;
   public readonly errors?: any[];
+  /** A fixed, developer-defined marker (UPPER_SNAKE) the client can branch on; forwarded in the response body. Never built from user input. */
+  public readonly code?: string;
 
-  constructor(message: string, statusCode: number, errors?: any[]) {
+  constructor(message: string, statusCode: number, errors?: any[], code?: string) {
     super(message);
 
     this.statusCode = statusCode;
     this.isOperational = true;
     this.errors = errors;
+    if (code) this.code = code;
 
     // Capture the stack trace, excluding the constructor call from it
     Error.captureStackTrace(this, this.constructor);

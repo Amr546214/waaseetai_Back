@@ -20,6 +20,7 @@ import { providerNotifications } from './provider-notifications.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import { listLifecycles, activeDisputeCounts } from './project-lifecycle.service';
 import { adminAudit } from './admin-audit.service';
+import { withKeyLock } from '../utils/key-lock';
 import { settledProjectIds, deliveryCompletedProject, adminSettlementFor, adminSettledView, settlementsByProject, STAGE_CLOSED_BY_SETTLEMENT, SETTLED_LABEL_AR, SETTLED_STAGE_LABEL_AR } from './settlement-state.service';
 import {
 	mailTransporter,
@@ -70,6 +71,8 @@ export interface ClientRequestAiSuggestion {
 
 // The client wizard works in USD (platform wallet/budgets are USD-canonical).
 const CLIENT_REQUEST_AI_CURRENCY = 'USD';
+/** the same request sent again inside this window is the same request (double tap / lost answer retry) */
+const DUPLICATE_REQUEST_WINDOW_MS = 5 * 60 * 1000;
 
 const nonEmptyString = (v: unknown): string | null => (typeof v === 'string' && v.trim().length > 0 ? v.trim() : null);
 const positiveNumber = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
@@ -247,7 +250,16 @@ export class ClientRequestsService {
 	 * POST /api/client/requests
 	 * Creates a new ClientRequest record in PostgreSQL
 	 */
+	/**
+	 * One new request per client at a time (per-user lock, in-process: ONE Node process). The same request (same title, description, specialty, budget and duration)
+	 * sent again within DUPLICATE_REQUEST_WINDOW_MS - a double tap, a second tab, or a retry after the answer was lost on the network - is answered with the request that
+	 * already exists (`deduplicated: true`) instead of creating a second copy. (No stored idempotency key: that would need a schema change.)
+	 */
 	public async createRequest(userId: string, dto: CreateClientRequestDto) {
+		return withKeyLock(`client-request:${userId}`, () => this.createRequestLocked(userId, dto));
+	}
+
+	private async createRequestLocked(userId: string, dto: CreateClientRequestDto) {
 		// 1. Resolve Client Profile
 		let clientProfile = await prisma.clientProfile.findUnique({
 			where: { userId }
@@ -341,6 +353,17 @@ export class ClientRequestsService {
 		const files = (await Promise.all((Array.isArray(dto.attachments) ? dto.attachments : []).map((url, index) =>
 			ensureCloudinaryUrl(url, `waseetai/client-requests/${userId}`, `attachment-${index + 1}`)
 		))).filter((url): url is string => Boolean(url));
+
+		const recent = await prisma.clientRequest.findFirst({
+			where: {
+				clientProfileId: clientProfile.id, specialtyId: resolvedSpecialty.id, title: dto.title, description: dto.description,
+				minBudget: minB, maxBudget: maxB, expectedDurationDays: durationDays, status: RequestStatus.OPEN,
+				createdAt: { gte: new Date(Date.now() - DUPLICATE_REQUEST_WINDOW_MS) }
+			},
+			orderBy: { createdAt: 'desc' },
+			include: { specialty: true, clientProfile: { include: { user: { select: { firstName: true, lastName: true, avatarUrl: true } } } } }
+		});
+		if (recent) return Object.assign(recent, { deduplicated: true as const });
 
 		// 3b. Real WaseetAI project analysis (null fields on any failure — never blocks creation)
 		const analysis = await analyzeNewRequest({

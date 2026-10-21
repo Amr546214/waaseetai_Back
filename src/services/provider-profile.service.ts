@@ -38,6 +38,9 @@ import { computeProviderCompletion, computeProviderMissingItems, computeClientCo
 import { CLIENT_IDENTITY_REQUEST_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY, CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY } from '../utils/profile-request-categories';
 import { logger } from '../config/logger';
 import { OtpPurpose, OTP_MAX_ATTEMPTS } from '../utils/otp-purpose';
+import { otpSendThrottle, canReuseOtp, otpThrottleMessage, resendAvailableAtIso } from '../utils/otp-send-throttle';
+import { withKeyLock } from '../utils/key-lock';
+import { OTP_THROTTLED_CODE } from '../utils/paypal-email-messages';
 import { sessionService } from './session.service';
 import { publicKycRejectionReason, withoutInternalProviderNotes, PROVIDER_KYC_REJECTION_PREFIX } from '../utils/provider-kyc-review';
 import { deriveReviewEntry, alreadyPendingDetails, NOT_SUBMITTED, type ReviewEntry } from '../utils/review-status';
@@ -45,6 +48,8 @@ import { initializeRoleState } from './account-management.service';
 import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 import { buildAssessmentDetails, buildCompanySummary, withSpecialtyName } from './provider-public-profile.helpers';
 import { deliveryCompletedProject } from './settlement-state.service';
+import { lockProviderProfile } from '../utils/provider-profile-lock';
+import { providerNotifications } from './provider-notifications.service';
 
 // Cached values are always a real validated WaseetAI result, keyed by the
 // provider plus the exact counts sent (so any change in real data busts it).
@@ -1023,6 +1028,8 @@ export class ProviderProfileService {
 	private fileNameOnly(value: unknown): string {
 		if (typeof value !== 'string' || !value) return 'غير محدد';
 		if (value.startsWith('data:')) return 'ملف مرفق';
+		// a private reference never leaves the server as text (not even its folder or file name): the reviewer opens it through the access link
+		if (value.startsWith('private:')) return 'مستند محفوظ بشكل خاص';
 		try {
 			const pathname = new URL(value).pathname;
 			const lastPart = decodeURIComponent(pathname.split('/').filter(Boolean).pop() || 'ملف مرفق');
@@ -1097,7 +1104,20 @@ export class ProviderProfileService {
 		return isAcceptableKycDocumentValue(value, providerId);
 	}
 
+	/**
+	 * Step 1 of a sensitive change: creates the request and e-mails the code. PROTECTED like every other OTP sender:
+	 *  - one request at a time per user (a per-user lock): two taps / two tabs / two devices are serialised, so they can never both create and delete each other's codes;
+	 *  - the SAME change asked for again while its code still has >= 3 minutes of its 10 is answered with the SAME request (no new mail, nothing invalidated) - this is also what makes
+	 *    a retry after a lost answer safe (it cannot create a second request);
+	 *  - a new code to the same recipient waits 60 s after the last one that really went out, max 5 per hour per recipient, 30 per hour per IP (the shared otpSendThrottle policy);
+	 *    the answer is 429 `OTP_THROTTLED` with the exact wait; a mail that failed records nothing (the user may retry at once);
+	 *  - a new request replaces only the code of an OLDER request of the SAME category (never another category's code); the 10-minute validity is untouched.
+	 */
 	async initiateSensitiveChange(providerId: string, category: string, changes: Record<string, unknown>, auditContext?: AuditContext) {
+		return withKeyLock(`sensitive-otp:${providerId}`, () => this.initiateSensitiveChangeLocked(providerId, category, changes, auditContext));
+	}
+
+	private async initiateSensitiveChangeLocked(providerId: string, category: string, changes: Record<string, unknown>, auditContext?: AuditContext) {
 		const config = this.sensitiveConfig(category);
 		const filtered = Object.fromEntries(Object.entries(changes || {}).filter(([key]) => config.allowed.includes(key)));
 		const idOmitted = category === 'DOCUMENTS' && !Object.prototype.hasOwnProperty.call(filtered, 'idDocumentUrl');
@@ -1120,41 +1140,73 @@ export class ProviderProfileService {
 			current.certificatesUrl = user.providerProfile?.certUrls?.[0] ?? null;
 		}
 
-		const request = await prisma.profileModificationRequest.create({
-			data: {
-				providerId,
-				category,
-				fieldName: category,
-				fieldLabel: config.label,
-				currentValue: this.toAuditValue(current),
-				requestedValue: this.toAuditValue(cleanChanges),
-				status: 'PENDING_OTP',
-				requiresOtp: true,
-				metadata: { changes: cleanChanges, requiresHumanReview: config.review } as any
+		// the SAME change is already waiting for its code and the code is still usable: answer with it (no new mail, no new request, nothing invalidated)
+		const openRequests = await prisma.profileModificationRequest.findMany({ where: { providerId, category, status: 'PENDING_OTP' as any }, orderBy: { createdAt: 'desc' }, take: 5 });
+		// compared key-order-insensitively: the stored jsonb does not keep the order the keys were sent in
+		const stable = (v: unknown): string => JSON.stringify(v, (_k, val) => (val && typeof val === 'object' && !Array.isArray(val)) ? Object.fromEntries(Object.entries(val as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : val);
+		const sameChange = stable(cleanChanges);
+		for (const open of openRequests) {
+			if (stable(((open.metadata ?? {}) as { changes?: unknown }).changes ?? null) !== sameChange) continue;
+			const openOtp = await prisma.otpVerification.findFirst({ where: { userId: providerId, type: 'EMAIL', AND: [{ context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } }, { context: { path: ['requestId'], equals: open.id } }] }, orderBy: { createdAt: 'desc' } });
+			if (openOtp && canReuseOtp(openOtp, OTP_MAX_ATTEMPTS)) {
+				return { requestId: open.id, emailHint: this.maskEmail(user.email), expiresInSeconds: Math.max(1, Math.floor((openOtp.expiresAt.getTime() - Date.now()) / 1000)), reused: true as const };
 			}
-		});
-
-		// only this purpose's previous codes are replaced (activation / reset / checkout codes of the same user are left alone)
-		await prisma.otpVerification.deleteMany({ where: { userId: providerId, type: 'EMAIL', context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } } });
-		const code = crypto.randomInt(100000, 1000000).toString();
-		await prisma.otpVerification.create({
-			data: { userId: providerId, code, type: 'EMAIL', expiresAt: new Date(Date.now() + 10 * 60 * 1000), context: { purpose: OtpPurpose.SENSITIVE_CHANGE, requestId: request.id } }
-		});
-		try {
-			await notificationService.sendEmailOtp(user.email, code);
-		} catch (error) {
-			await prisma.$transaction([
-				prisma.otpVerification.deleteMany({ where: { userId: providerId, type: 'EMAIL', code, context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } } }),
-				prisma.profileModificationRequest.delete({ where: { id: request.id } })
-			]);
-			throw new Error('OTP_EMAIL_DELIVERY_FAILED');
 		}
-		await accountAuditLogService.record({ userId: providerId, eventType: 'SENSITIVE_CHANGE_REQUESTED', category: 'PROFILE_COMPLETION', title: config.label, summary: `تم إنشاء طلب تعديل ${config.label} وبانتظار تأكيد الهوية`, source: 'USER', status: 'IN_REVIEW', before: current, after: cleanChanges, requestId: request.id, context: auditContext });
 
-		return { requestId: request.id, emailHint: this.maskEmail(user.email), expiresInSeconds: 600 };
+		// the shared OTP send policy (60 s between codes to the same recipient, 5 / hour per recipient, 30 / hour per IP); the IP slot is taken now, the recipient cooldown only for a mail the server accepted
+		const throttleKey = `sensitive-change:${providerId}`;
+		const throttle = otpSendThrottle.reserve(throttleKey, auditContext?.ipAddress);
+		if (!throttle.allowed) throw Object.assign(new AppError(otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds), 429), { code: OTP_THROTTLED_CODE, retryAfterSeconds: throttle.retryAfterSeconds });
+		let delivered = false;
+		try {
+			const request = await prisma.profileModificationRequest.create({
+				data: {
+					providerId,
+					category,
+					fieldName: category,
+					fieldLabel: config.label,
+					currentValue: this.toAuditValue(current),
+					requestedValue: this.toAuditValue(cleanChanges),
+					status: 'PENDING_OTP',
+					requiresOtp: true,
+					metadata: { changes: cleanChanges, requiresHumanReview: config.review } as any
+				}
+			});
+
+			const code = crypto.randomInt(100000, 1000000).toString();
+			await prisma.otpVerification.create({
+				data: { userId: providerId, code, type: 'EMAIL', expiresAt: new Date(Date.now() + 10 * 60 * 1000), context: { purpose: OtpPurpose.SENSITIVE_CHANGE, requestId: request.id } }
+			});
+			try {
+				await notificationService.sendEmailOtp(user.email, code);
+				delivered = true;
+				otpSendThrottle.commitRecipient(throttleKey, true);
+			} catch (error) {
+				await prisma.$transaction([
+					prisma.otpVerification.deleteMany({ where: { userId: providerId, type: 'EMAIL', code, context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } } }),
+					prisma.profileModificationRequest.delete({ where: { id: request.id } })
+				]);
+				throw new Error('OTP_EMAIL_DELIVERY_FAILED');
+			}
+			// delivered: only NOW are the codes of OLDER requests of the SAME category replaced (a failed mail leaves the previous valid code untouched; another category's code and activation / reset / checkout codes are never touched)
+			const olderIds = openRequests.map(r => r.id);
+			if (olderIds.length) try {
+				await prisma.otpVerification.deleteMany({ where: { userId: providerId, type: 'EMAIL', AND: [{ context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } }, { OR: olderIds.map(id => ({ context: { path: ['requestId'], equals: id } })) }] } });
+			} catch (e) { logger.warn('sensitive-change: older codes not cleaned', e); }
+			await accountAuditLogService.record({ userId: providerId, eventType: 'SENSITIVE_CHANGE_REQUESTED', category: 'PROFILE_COMPLETION', title: config.label, summary: `تم إنشاء طلب تعديل ${config.label} وبانتظار تأكيد الهوية`, source: 'USER', status: 'IN_REVIEW', before: current, after: cleanChanges, requestId: request.id, context: auditContext });
+			return { requestId: request.id, emailHint: this.maskEmail(user.email), expiresInSeconds: 600, reused: false as const, resendAvailableAt: resendAvailableAtIso() };
+		} finally {
+			// a request that never reached a delivered mail gives its per-IP slot back (the recipient cooldown never started)
+			if (!delivered) otpSendThrottle.releaseIp(auditContext?.ipAddress);
+		}
 	}
 
+	/** Runs under the SAME per-user lock as initiateSensitiveChange (in-process: the backend is ONE Node process, a second instance would need a DB advisory lock), so a confirmation can never consume a code a concurrent request is replacing. */
 	async verifySensitiveChange(providerId: string, requestId: string, code: string, auditContext?: AuditContext) {
+		return withKeyLock(`sensitive-otp:${providerId}`, () => this.verifySensitiveChangeLocked(providerId, requestId, code, auditContext));
+	}
+
+	private async verifySensitiveChangeLocked(providerId: string, requestId: string, code: string, auditContext?: AuditContext) {
 		const request = await prisma.profileModificationRequest.findFirst({ where: { id: requestId, providerId } });
 		if (!request || request.status !== 'PENDING_OTP') throw new Error('REQUEST_NOT_PENDING_OTP');
 		if (request.category === 'CONTACT') {
@@ -1187,33 +1239,41 @@ export class ProviderProfileService {
 			throw new Error('INVALID_OR_EXPIRED_OTP');
 		}
 
-		await prisma.otpVerification.delete({ where: { id: otp.id } });
 		const metadata = (request.metadata || {}) as any;
 		const needsReview = Boolean(metadata.requiresHumanReview);
-		if (needsReview) {
-			// a second request opened before the first was confirmed must not reach the admin as a duplicate
-			const waiting = await prisma.profileModificationRequest.findFirst({ where: { providerId, category: request.category, status: 'PENDING_HUMAN_REVIEW' as any, id: { not: request.id } }, orderBy: { createdAt: 'desc' }, select: { id: true, category: true, createdAt: true } });
-			if (waiting) throw Object.assign(new Error('REQUEST_ALREADY_PENDING'), { details: alreadyPendingDetails(waiting, request.category) });
-		}
-
-		if (!needsReview) {
-			await this.applySensitivePayload(providerId, request.category, metadata.changes || {});
-		} else if (request.category === 'DOCUMENTS' && (metadata.changes || {}).idDocumentUrl) {
-			// a new identity document after the admin refused the previous one starts a new review: the refusal (status + its text) is cleared,
-			// so the page shows "under review", never the old rejection
-			await prisma.providerProfile.updateMany({ where: { userId: providerId, kycStatus: 'REJECTED' as any }, data: { kycStatus: 'PENDING' as any } });
-			await prisma.providerProfile.updateMany({ where: { userId: providerId, notes: { startsWith: PROVIDER_KYC_REJECTION_PREFIX } }, data: { notes: null } });
-		}
-
-		const updated = await prisma.profileModificationRequest.update({
-			where: { id: request.id },
-			data: {
-				otpVerifiedAt: new Date(),
-				status: needsReview ? 'PENDING_HUMAN_REVIEW' : 'APPROVED',
-				// the e-mailed code only proves the account owner: no AI ran, so no aiAuditStatus / aiConfidence / aiRecommendation are written
-				appliedAt: needsReview ? null : new Date()
+		const identityDocument = needsReview && request.category === 'DOCUMENTS' && Boolean((metadata.changes || {}).idDocumentUrl);
+		// ONE transaction: the code is consumed, the duplicate check, the KYC review put back to PENDING (refusal text cleared) and the request moving to review all happen together or not at all
+		// (a failure keeps the code usable). For an identity document the provider row is locked first: an admin decision on the OLD document waits for this commit and then sees the new request.
+		const { updated, scored } = await prisma.$transaction(async tx => {
+			if (identityDocument) await lockProviderProfile(tx, providerId);
+			// the code is consumed exactly once: a second confirmation with the same code finds nothing to consume
+			const consumed = await tx.otpVerification.deleteMany({ where: { id: otp.id } });
+			if (consumed.count !== 1) throw new Error('INVALID_OR_EXPIRED_OTP');
+			if (needsReview) {
+				// a second request opened before the first was confirmed must not reach the admin as a duplicate
+				const waiting = await tx.profileModificationRequest.findFirst({ where: { providerId, category: request.category, status: 'PENDING_HUMAN_REVIEW' as any, id: { not: request.id } }, orderBy: { createdAt: 'desc' }, select: { id: true, category: true, createdAt: true } as any });
+				if (waiting) throw Object.assign(new Error('REQUEST_ALREADY_PENDING'), { details: alreadyPendingDetails(waiting as any, request.category) });
 			}
-		});
+			let scoredChange = false;
+			if (!needsReview) {
+				scoredChange = await this.applySensitivePayloadOn(tx, providerId, request.category, metadata.changes || {});
+			} else if (identityDocument) {
+				// a new identity document after the admin refused the previous one starts a new review: the refusal (status + its text) is cleared, so the page shows "under review", never the old rejection
+				await tx.providerProfile.updateMany({ where: { userId: providerId, kycStatus: 'REJECTED' as any }, data: { kycStatus: 'PENDING' as any } });
+				await tx.providerProfile.updateMany({ where: { userId: providerId, notes: { startsWith: PROVIDER_KYC_REJECTION_PREFIX } }, data: { notes: null } });
+			}
+			const row = await tx.profileModificationRequest.update({
+				where: { id: request.id },
+				data: {
+					otpVerifiedAt: new Date(),
+					status: needsReview ? 'PENDING_HUMAN_REVIEW' : 'APPROVED',
+					// the e-mailed code only proves the account owner: no AI ran, so no aiAuditStatus / aiConfidence / aiRecommendation are written
+					appliedAt: needsReview ? null : new Date()
+				}
+			});
+			return { updated: row, scored: scoredChange };
+		}, { timeout: 20000 });
+		if (scored) await this.recomputeAfterSensitiveChange(providerId, request.category);
 		await accountAuditLogService.record({ userId: providerId, eventType: 'OTP_VERIFIED', category: 'PROFILE_COMPLETION', title: request.fieldLabel, summary: needsReview ? 'أُكِّد الطلب برمز البريد وأُحيل إلى مراجعة الفريق' : 'أُكِّد الطلب برمز البريد وتم تطبيقه', source: 'USER', status: needsReview ? 'IN_REVIEW' : 'APPROVED', statusText: needsReview ? 'بانتظار مراجعة الفريق' : undefined, requestId, context: auditContext });
 		return updated;
 	}
@@ -1224,6 +1284,32 @@ export class ProviderProfileService {
 		if (request.status !== 'PENDING_HUMAN_REVIEW') throw new Error('REQUEST_NOT_PENDING_REVIEW');
 		const metadata = (request.metadata || {}) as any;
 		const reason = approved ? null : (String(rejectionReason || '').trim().slice(0, 500) || 'لم يستوفِ الطلب متطلبات التحقق');
+
+		// A NEW IDENTITY DOCUMENT is decided in ONE transaction: the claim of the request, its application to the account and the KYC review it started either all happen
+		// or none does (a failure leaves the request waiting, untouched). The provider row is locked first, so a concurrent re-submission or KYC decision waits and then sees the result.
+		// Notifications go out AFTER the commit; a failed notification never undoes the decision.
+		if (request.category === 'DOCUMENTS' && (metadata.changes || {}).idDocumentUrl) {
+			const decided = await prisma.$transaction(async tx => {
+				await lockProviderProfile(tx, request.providerId);
+				const claimedTx = await tx.profileModificationRequest.updateMany({
+					where: { id: request.id, status: 'PENDING_HUMAN_REVIEW' },
+					data: { status: approved ? 'APPROVED' : 'REJECTED', reviewedByAdmin: true, rejectionReason: reason, appliedAt: approved ? new Date() : null }
+				});
+				if (!claimedTx.count) throw new Error('REQUEST_NOT_PENDING_REVIEW');
+				let scored = false;
+				if (approved) scored = await this.applySensitivePayloadOn(tx, request.providerId, request.category, metadata.changes || {});
+				// the KYC review that the submission put in the queue (PENDING) is decided too; VERIFIED / UNVERIFIED / REJECTED accounts are never touched here
+				const moved = approved
+					? await tx.providerProfile.updateMany({ where: { userId: request.providerId, kycStatus: 'PENDING' as any }, data: { kycStatus: 'VERIFIED' as any, isVerified: true, notes: null } })
+					: await tx.providerProfile.updateMany({ where: { userId: request.providerId, kycStatus: 'PENDING' as any }, data: { kycStatus: 'REJECTED' as any, isVerified: false, notes: `${PROVIDER_KYC_REJECTION_PREFIX} ${reason}` } });
+				const row = await tx.profileModificationRequest.findUniqueOrThrow({ where: { id: request.id } });
+				return { row, scored, kycMoved: moved.count > 0 };
+			}, { timeout: 20000 });
+			if (decided.scored) await this.recomputeAfterSensitiveChange(request.providerId, request.category);
+			if (decided.kycMoved) await providerNotifications.kycDecided({ providerId: request.providerId, decision: approved ? 'APPROVED' : 'REJECTED', reason: approved ? undefined : (reason ?? undefined) }).catch(error => logger.error('[ProviderProfileService] identity decision notification failed (the decision stands)', error));
+			await accountAuditLogService.record({ userId: request.providerId, eventType: 'HUMAN_REVIEW_COMPLETED', category: 'PROFILE_COMPLETION', title: request.fieldLabel, summary: approved ? 'اعتمد المراجع البشري طلب التعديل وتم تطبيقه' : 'رفض المراجع البشري طلب التعديل', source: 'ADMIN', severity: approved ? 'INFO' : 'WARNING', status: approved ? 'APPROVED' : 'REJECTED', statusText: decided.row.rejectionReason || undefined, requestId, context: auditContext }).catch(error => logger.error('[ProviderProfileService] audit log after an identity decision failed (the decision stands)', error));
+			return decided.row;
+		}
 
 		// Claim the request first (compare-and-set on the status): two admins, or a double click, can never apply the same change twice.
 		const claimed = await prisma.profileModificationRequest.updateMany({
@@ -1321,11 +1407,15 @@ export class ProviderProfileService {
 			if (row.category === CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY) return (({ metadata: _m, ...safe }) => ({ ...safe, aiAuditStatus: null, aiConfidence: null, aiRecommendation: null, aiReview: null }))(row);
 			// the admin keeps the metadata (the changes under review) but sees AI fields only when a real stored pre-review backs them
 			const honest = withHonestAiReview(row);
-			return { ...honest, metadata: row.metadata };
+			// The text of a file change is shown WITHOUT its private reference; `documentsAccess` tells the page which documents exist so it can open them (access link, key profile_request_document, id = this request).
+			const changes = ((row.metadata ?? {}) as { changes?: Record<string, unknown> }).changes ?? {};
+			const documentsAccess = row.category === 'DOCUMENTS' ? { idDocumentUrl: typeof changes.idDocumentUrl === 'string' && !!changes.idDocumentUrl } : undefined;
+			return { ...honest, currentValue: this.redactFileContent(row.currentValue), requestedValue: this.redactFileContent(row.requestedValue), documentsAccess, metadata: row.metadata };
 		});
 	}
 
-	private async applySensitivePayload(providerId: string, category: string, changes: Record<string, unknown>) {
+	/** The writes of an approved sensitive change, on the given client (a transaction or prisma). Returns whether a SCORED field changed (the completion recompute then runs AFTER the commit). */
+	private async applySensitivePayloadOn(db: any, providerId: string, category: string, changes: Record<string, unknown>): Promise<boolean> {
 		const config = this.sensitiveConfig(category);
 		const updateData: Record<string, unknown> = {};
 		for (const key of config.allowed.filter(key => key !== 'certificatesUrl')) {
@@ -1333,40 +1423,32 @@ export class ProviderProfileService {
 		}
 		if (category === 'CONTACT' && updateData.email) updateData.email = String(updateData.email).trim().toLowerCase();
 		if (category === 'BANKING' && String(updateData.ibanNumber || '').includes('*')) delete updateData.ibanNumber;
-		await prisma.user.update({ where: { id: providerId }, data: updateData });
+		await db.user.update({ where: { id: providerId }, data: updateData });
 		if (category === 'DOCUMENTS' && Object.prototype.hasOwnProperty.call(changes, 'certificatesUrl')) {
 			const certificateUrl = String(changes.certificatesUrl || '');
-			await prisma.providerProfile.update({
+			await db.providerProfile.update({
 				where: { userId: providerId },
 				data: { certUrls: certificateUrl ? [certificateUrl] : [] }
 			});
 		}
-
-		// Phase 3D.2B: this is the real commit point for BANKING/DOCUMENTS
-		// sensitive changes (reached via reviewSensitiveChange for these two
-		// categories, since both require human review — see sensitiveConfig).
-		// Trigger recompute only when the FINAL committed updateData actually
-		// contains the one field each category's formula factor reads — never
-		// merely because of `category`, since e.g. a BANKING change can omit
-		// ibanNumber entirely, or have it stripped just above when it was a
-		// masked/redisplayed value. CONTACT is never scored, so it can never
-		// trigger this. The sensitive User update above has already committed
-		// by this point; a completion-recompute failure here must never be
-		// allowed to look like the sensitive change itself failed, so it's
-		// deliberately best-effort and logged, not rethrown, using the
-		// project's existing winston logger (never the raw changes/updateData,
-		// which could hold IBAN/document values).
-		const scoredFieldCommitted =
-			(category === 'BANKING' && 'ibanNumber' in updateData) ||
+		// Trigger the recompute only when the FINAL committed updateData contains the one field each category's formula reads (never merely because of `category`).
+		return (category === 'BANKING' && 'ibanNumber' in updateData) ||
 			(category === 'DOCUMENTS' && 'idDocumentUrl' in updateData) ||
 			(category === 'CONTACT' && ('email' in updateData || 'phoneNumber' in updateData));
-		if (scoredFieldCommitted) {
-			try {
-				await this.recalculateProviderCompletion(providerId);
-			} catch (error) {
-				logger.error(`[ProviderProfileService] Failed to recalculate provider completion after an applied sensitive ${category} change (userId=${providerId})`, error);
-			}
+	}
+
+	/** Best-effort completion recompute AFTER the change committed: a failure here must never look like the change failed (never logs the raw values). */
+	private async recomputeAfterSensitiveChange(providerId: string, category: string): Promise<void> {
+		try {
+			await this.recalculateProviderCompletion(providerId);
+		} catch (error) {
+			logger.error(`[ProviderProfileService] Failed to recalculate provider completion after an applied sensitive ${category} change (userId=${providerId})`, error);
 		}
+	}
+
+	private async applySensitivePayload(providerId: string, category: string, changes: Record<string, unknown>) {
+		const scored = await this.applySensitivePayloadOn(prisma, providerId, category, changes);
+		if (scored) await this.recomputeAfterSensitiveChange(providerId, category);
 	}
 
 	private maskEmail(email: string) {

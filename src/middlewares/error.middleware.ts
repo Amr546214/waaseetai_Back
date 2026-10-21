@@ -1,11 +1,21 @@
 import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/app-error';
 import { ROLE_MISMATCH_CODE } from '../utils/role-mismatch';
+import { randomBytes } from 'node:crypto';
 import { logger } from '../config/logger';
 import { AI_FEATURE_UNAVAILABLE_CODE } from '../services/ai/ai-feature-unavailable';
 import { SELF_DEALING_CODES } from '../utils/self-dealing';
 import { OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { PAYPAL_EMAIL_FROZEN_CODE, PAYPAL_OTP_EMAIL_FAILED_CODE, OTP_THROTTLED_CODE } from '../utils/paypal-email-messages';
+
+/** What a client is told when something unexpected failed on our side: honest (the result is unknown), with a next step and a trace id that is also in our log. Never the raw error. */
+export const UNEXPECTED_ERROR_MESSAGE = 'تعذّر إكمال العملية بسبب خطأ غير متوقع من جهتنا. لا نستطيع تأكيد أن التغيير قد حُفظ، فتحقّق من الصفحة قبل تكرار العملية، وإن استمرت المشكلة تواصل مع الدعم وأرفق معرّف التتبع.';
+export const UNEXPECTED_ERROR_CODE = 'INTERNAL_ERROR';
+export const newTraceId = (): string => randomBytes(4).toString('hex').toUpperCase();
+const APP_CODE = /^[A-Z][A-Z0-9_]{2,63}$/;
+const ARABIC_TEXT = /[\u0600-\u06FF]/;
+/** Text that must never reach a user even inside an Arabic sentence: library / database / stack / path fragments. */
+const LEAKY = /prisma|invocation|\bSELECT\b|\bINSERT\b|\bUPDATE\b|\bFROM\b|constraint|relation "|ECONN|ETIMEDOUT|ENOTFOUND|\bat \S+ \(|\.(?:ts|js):\d+|node_modules|private:|secret|password/i;
 
 // Known library errors that are the caller's mistake (4xx), not a server fault: they must never surface as a 500 "Internal Server Error".
 // Messages are fixed Arabic text — nothing from the library error (field names, constraint targets, SQL) is echoed.
@@ -42,6 +52,7 @@ export const globalErrorHandler = (
   let errors: any[] | undefined = undefined;
   let code: string | undefined = undefined;
   let extra: Record<string, unknown> | undefined = undefined;
+  let traceId: string | undefined = undefined;
 
   const mapped = mapKnownError(err);
   if (mapped) {
@@ -75,13 +86,28 @@ export const globalErrorHandler = (
       extra = { requiredRoles: e.requiredRoles, activeRole: e.activeRole, canSwitch: e.canSwitch };
     }
   } else {
-    // Unhandled operational/programming errors
-    logger.error('Unhandled Exception:', err);
+    // Unhandled operational/programming errors: the full error goes to OUR log with a trace id; the client gets the honest fixed message and that id.
+    traceId = newTraceId();
+    logger.error(`Unhandled Exception: [trace ${traceId}]`, err);
+    message = UNEXPECTED_ERROR_MESSAGE;
+    code = UNEXPECTED_ERROR_CODE;
     if (process.env.NODE_ENV === 'development') {
       message = err.message;
       errors = [err.stack];
     }
   }
+  // A plain AppError may carry its own fixed marker (never user input); the specific markers above keep their dedicated fields.
+  const ownCode = (err as { code?: unknown }).code;
+  if (!code && typeof ownCode === 'string' && APP_CODE.test(ownCode)) code = ownCode;
+  // An operational 5xx without its own Arabic explanation (a bare "Internal Server Error", a library text) is replaced the same way as an unexpected one.
+  if (statusCode >= 500 && !traceId && !(typeof message === 'string' && ARABIC_TEXT.test(message) && !LEAKY.test(message))) {
+    traceId = newTraceId();
+    logger.error(`Operational 5xx replaced by the safe message [trace ${traceId}]: ${message}`);
+    message = UNEXPECTED_ERROR_MESSAGE;
+    code = code ?? UNEXPECTED_ERROR_CODE;
+    errors = undefined;
+  }
+  if (statusCode >= 500 && !traceId) traceId = newTraceId();
 
   // A wait (429) or lock (423) always says how long, in machine-readable form: Retry-After header + retryAfterSeconds + retryAt (additive).
   // The duration comes from the error itself (retryAfterSeconds / errors[].retryAfterSeconds) or the header a limiter already set; never invented.
@@ -101,15 +127,17 @@ export const globalErrorHandler = (
 
   // Log all non-4xx errors
   if (statusCode >= 500) {
-    logger.error(`[${req.method}] ${req.url} >> StatusCode:: ${statusCode}, Message:: ${message}`);
+    logger.error(`[${req.method}] ${req.url} >> StatusCode:: ${statusCode}, Message:: ${message}${traceId ? ` [trace ${traceId}]` : ''}`);
   } else {
     logger.warn(`[${req.method}] ${req.url} >> StatusCode:: ${statusCode}, Message:: ${message}`);
   }
 
+  if (res.locals) res.locals.errorContractApplied = true;
   res.status(statusCode).json({
     success: false,
     message,
     ...(code && { code }),
+    ...(traceId && { traceId }),
     ...(extra && extra),
     ...(errors && { errors })
   });

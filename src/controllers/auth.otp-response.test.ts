@@ -19,23 +19,34 @@ async function load(t: TestContext, service: Record<string, unknown>) {
   return authController;
 }
 
-test('register: emailSent=true keeps the normal message; emailSent=false says the email did NOT go out (still 201, the account exists)', async (t) => {
-  const ok = await load(t, { registerUser: async () => ({ userId: 'u1', emailSent: true }) });
-  const res1 = mockRes();
-  await ok.register({ body: {}, headers: {} } as any, res1, () => {});
-  assert.equal(res1.statusCode, 201);
-  assert.equal(res1.body.data.emailSent, true);
-  assert.match(res1.body.message, /يرجى تفعيل الحساب/);
+// Registration answers EVERY outcome with one identical public body (a new address, an address already in use, a failed or a successful mail), so the answer never discloses whether an account
+// exists: no `emailSent`, no account id, one neutral message. The honest delivery signal is the SEPARATE resend / login answer (emailSent + the wait). (These two tests used to assert the old
+// per-outcome `emailSent` body and had been failing since the uniform answer was introduced.)
+test('register: the public answer is identical whether the mail went out or not (201, neutral message, no emailSent, no id)', async (t) => {
+  const { REGISTER_GENERIC_MESSAGE } = await import('../utils/auth-messages');
+  const bodies: any[] = [];
+  let current: any = null;
+  const c = await load(t, { registerUser: async () => current });
+  for (const result of [{ userId: 'u1', accountCreated: true, emailSent: true }, { userId: 'u1', accountCreated: true, emailSent: false }, { userId: null, accountCreated: false }]) {
+    current = result;
+    const res = mockRes();
+    await c.register({ body: {}, headers: {} } as any, res, () => {});
+    assert.equal(res.statusCode, 201);
+    bodies.push(res.body);
+  }
+  assert.deepEqual(bodies[0], bodies[1]); assert.deepEqual(bodies[0], bodies[2]);
+  assert.equal(bodies[0].message, REGISTER_GENERIC_MESSAGE);
+  assert.ok(!('emailSent' in (bodies[0].data ?? {})) && !('userId' in (bodies[0].data ?? {})));
+  assert.doesNotMatch(bodies[0].message, /تم إرسال|تعذر إرسال/);
 });
 
-test('register with a failed email: the message says the code could not be sent', async (t) => {
-  const bad = await load(t, { registerUser: async () => ({ userId: 'u1', emailSent: false }) });
+test('register with a failed email: still the neutral answer (the failure is logged, never shown as a different body); the user resends from the code step', async (t) => {
+  const bad = await load(t, { registerUser: async () => ({ userId: 'u1', accountCreated: true, emailSent: false }) });
   const res = mockRes();
   await bad.register({ body: {}, headers: {} } as any, res, () => {});
   assert.equal(res.statusCode, 201);
-  assert.equal(res.body.data.emailSent, false);
-  assert.match(res.body.message, /تعذر إرسال رمز التحقق/);
-  assert.doesNotMatch(res.body.message, /تم إرسال/);
+  assert.equal(res.body.success, true);
+  assert.doesNotMatch(JSON.stringify(res.body), /emailSent|تعذر إرسال|تم إرسال/);
 });
 
 test('resend: success=true + emailSent=true when the email was sent', async (t) => {

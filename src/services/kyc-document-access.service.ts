@@ -10,7 +10,8 @@ export const KYC_DOCUMENT_KEYS = [
 	'client_front_id', 'client_back_id', 'client_supporting_docs',
 	'provider_front_id', 'provider_back_id', 'provider_supporting_docs', 'provider_certificate',
 	'onboarding_document', 'user_id_document', 'user_vat_certificate',
-	'specialty_proof', 'accreditation_proof', 'accreditation_upload', 'accreditation_sample_attachment', 'marketer_kyc_document'
+	'specialty_proof', 'accreditation_proof', 'accreditation_upload', 'accreditation_sample_attachment', 'marketer_kyc_document',
+	'profile_request_document'
 ] as const;
 export type KycDocumentKey = (typeof KYC_DOCUMENT_KEYS)[number];
 
@@ -88,6 +89,15 @@ async function resolve(input: KycAccessInput, target: string): Promise<Resolved>
 			if (!row || !owner) throw NOT_FOUND();
 			return { ownerUserId: owner, stored: row.attachments?.[input.index] ?? null };
 		}
+		case 'profile_request_document': {
+			// The identity document inside a DOCUMENTS change request (not applied to the account until an admin approves it): addressed by the REQUEST id.
+			// Without this the admin could only open the previous (refused) document while the new one waits for the decision.
+			if (!input.id) throw new AppError('معرّف الملف مطلوب', 400);
+			const row = await prisma.profileModificationRequest.findUnique({ where: { id: input.id }, select: { providerId: true, category: true, metadata: true } });
+			if (!row || row.category !== 'DOCUMENTS') throw NOT_FOUND();
+			const changes = ((row.metadata ?? {}) as { changes?: Record<string, unknown> }).changes ?? {};
+			return { ownerUserId: row.providerId, stored: typeof changes.idDocumentUrl === 'string' ? changes.idDocumentUrl : null };
+		}
 		case 'accreditation_proof': {
 			if (!input.id) throw new AppError('معرّف الملف مطلوب', 400);
 			const row = await prisma.accreditationProofFile.findUnique({ where: { id: input.id }, select: { fileUrl: true, submission: { select: { providerProfile: { select: { userId: true } } } } } });
@@ -105,7 +115,7 @@ async function resolve(input: KycAccessInput, target: string): Promise<Resolved>
 export async function createKycAccessLink(requester: Requester, input: KycAccessInput, context?: AuditContext): Promise<KycAccessLink> {
 	const admin = isAdminRequester(requester);
 	if (input.userId && !admin) throw FORBIDDEN();
-	const idKeyed = input.document === 'specialty_proof' || input.document === 'accreditation_proof' || input.document === 'accreditation_upload' || input.document === 'accreditation_sample_attachment' || (input.document === 'onboarding_document' && !!input.id);
+	const idKeyed = input.document === 'specialty_proof' || input.document === 'accreditation_proof' || input.document === 'accreditation_upload' || input.document === 'accreditation_sample_attachment' || input.document === 'profile_request_document' || (input.document === 'onboarding_document' && !!input.id);
 	if (admin && !input.userId && !idKeyed) throw new AppError('معرّف المستخدم مطلوب للمشرف', 400);
 	const target = admin ? (input.userId as string) : requester.id;
 
