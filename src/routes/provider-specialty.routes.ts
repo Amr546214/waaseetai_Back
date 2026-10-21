@@ -45,7 +45,7 @@ router.post(
       const files = (req.files as Express.Multer.File[]) || [];
 
       if (!providerSpecialtyId) {
-        res.status(400).json({ success: false, message: 'providerSpecialtyId is a required parameter.' });
+        res.status(400).json({ success: false, code: 'SPECIALTY_REQUIRED', message: 'اختر التخصص قبل رفع النماذج.', errors: [{ field: 'providerSpecialtyId', path: 'providerSpecialtyId', message: 'اختر التخصص قبل رفع النماذج.' }] });
         return;
       }
 
@@ -54,7 +54,7 @@ router.post(
       });
 
       if (!existingSpecialty) {
-        res.status(404).json({ success: false, message: 'Target ProviderSpecialty record not found.' });
+        res.status(404).json({ success: false, code: 'SPECIALTY_NOT_FOUND', message: 'هذا التخصص غير موجود ضمن حسابك.' });
         return;
       }
 
@@ -147,8 +147,8 @@ router.post(
       });
     } catch (error: any) {
       if (error instanceof AppError) { next(error); return; }
-      console.error('[Specialty Proof Upload Error]:', error);
-      res.status(500).json({ success: false, message: 'حدث خطأ داخلي أثناء معالجة الملفات المرفوعة.', error: error?.message });
+      // an unexpected failure goes to the global handler: honest fixed message + trace id, the raw text only in our log (it used to be returned in `error`)
+      next(error);
     }
   }
 );
