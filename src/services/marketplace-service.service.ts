@@ -740,7 +740,7 @@ export class MarketplaceService {
 		});
 
 		if (!s || !['PUBLISHED', 'APPROVED'].includes(s.status) || marketBlockReasons(s as any).length > 0) {
-			throw new AppError('هذه الخدمة غير متاحة أو لم تعد منشورة.', 404, undefined, 'SERVICE_NOT_AVAILABLE');
+			throw new AppError('الخدمة غير متوفرة أو غير منشورة', 404, undefined, 'SERVICE_NOT_AVAILABLE');
 		}
 
 		const providerCard = this.resolveProviderCardFields(s.provider);
@@ -931,7 +931,7 @@ export class MarketplaceService {
 
 	async setFavorite(userId: string, serviceId: string, favorite: boolean) {
 		const service = await prisma.serviceCatalog.findFirst({ where: { id: serviceId, ...MARKET_VISIBLE_WHERE }, select: { id: true } });
-		if (!service) throw new AppError('هذه الخدمة غير متاحة أو لم تعد منشورة.', 404, undefined, 'SERVICE_NOT_AVAILABLE');
+		if (!service) throw new AppError('الخدمة غير متوفرة', 404, undefined, 'SERVICE_NOT_AVAILABLE');
 		if (favorite) {
 			await prisma.marketplaceFavorite.upsert({
 				where: { userId_serviceId: { userId, serviceId } },
