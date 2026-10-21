@@ -1142,9 +1142,11 @@ export class ProviderProfileService {
 
 		// the SAME change is already waiting for its code and the code is still usable: answer with it (no new mail, no new request, nothing invalidated)
 		const openRequests = await prisma.profileModificationRequest.findMany({ where: { providerId, category, status: 'PENDING_OTP' as any }, orderBy: { createdAt: 'desc' }, take: 5 });
-		const sameChange = JSON.stringify(cleanChanges);
+		// compared key-order-insensitively: the stored jsonb does not keep the order the keys were sent in
+		const stable = (v: unknown): string => JSON.stringify(v, (_k, val) => (val && typeof val === 'object' && !Array.isArray(val)) ? Object.fromEntries(Object.entries(val as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : val);
+		const sameChange = stable(cleanChanges);
 		for (const open of openRequests) {
-			if (JSON.stringify(((open.metadata ?? {}) as { changes?: unknown }).changes ?? null) !== sameChange) continue;
+			if (stable(((open.metadata ?? {}) as { changes?: unknown }).changes ?? null) !== sameChange) continue;
 			const openOtp = await prisma.otpVerification.findFirst({ where: { userId: providerId, type: 'EMAIL', AND: [{ context: { path: ['purpose'], equals: OtpPurpose.SENSITIVE_CHANGE } }, { context: { path: ['requestId'], equals: open.id } }] }, orderBy: { createdAt: 'desc' } });
 			if (openOtp && canReuseOtp(openOtp, OTP_MAX_ATTEMPTS)) {
 				return { requestId: open.id, emailHint: this.maskEmail(user.email), expiresInSeconds: Math.max(1, Math.floor((openOtp.expiresAt.getTime() - Date.now()) / 1000)), reused: true as const };

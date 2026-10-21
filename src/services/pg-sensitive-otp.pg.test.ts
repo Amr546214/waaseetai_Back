@@ -137,3 +137,12 @@ test('PG: a new request of one category never deletes another category code or a
 	assert.equal(rows.length, 2);
 	assert.ok(rows.some((r: any) => r.code === '111111'));
 });
+
+test('PG: reuse works for a multi-key change whatever order the stored jsonb returns the keys in', opts, async () => {
+	const { svc, sent, mk } = await env();
+	const u = await mk();
+	const ch = { idDocumentUrl: docUrl('k'), certificatesUrl: '', vatCertificateUrl: '', commercialRegistration: '' };
+	const a = await svc.initiateSensitiveChange(u.id, 'DOCUMENTS', ch, { ipAddress: '10.0.0.10' } as any);
+	const b: any = await svc.initiateSensitiveChange(u.id, 'DOCUMENTS', ch, { ipAddress: '10.0.0.10' } as any);
+	assert.equal(b.reused, true); assert.equal(b.requestId, a.requestId); assert.equal(sent.length, 1);
+});
