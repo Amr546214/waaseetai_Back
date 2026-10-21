@@ -18,7 +18,7 @@ function setup(t: TestContext, offerStatus: string, o: { legacyOnly?: boolean } 
     proposal: { findFirst: async () => (o.legacyOnly ? offerRow : null), findUnique: async () => null, updateMany: () => { calls.txWrites++; return {}; } },
     $transaction: async (ops: any[]) => ops,
     conversation: { findUnique: async () => conv, create: async () => conv },
-    message: { create: async ({ data }: any) => { calls.messages.push(data); return data; } }
+    message: { findFirst: async () => null, create: async ({ data }: any) => { calls.messages.push(data); return data; } }
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { negotiationRequested: async (a: any) => { calls.negotiation.push(a); } } } });
