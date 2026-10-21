@@ -52,3 +52,18 @@ test('PG: the same negotiation request sent 3 times at once and again later is O
 	const notes = await prisma.notification.count({ where: { userId: provider.id, type: { contains: 'NEGOT' } } });
 	assert.ok(notes <= 2, `provider notified at most once per distinct request (got ${notes})`);
 });
+
+test('PG: after the 5-minute window the identical negotiation card is stored again (limited rule)', opts, async () => {
+	const { prisma, client, provider, spec } = await world();
+	const { clientRequestsService } = await import('./client-requests.service');
+	const { proposalService } = await import('./proposal.service');
+	const { chatService } = await import('./chat.service');
+	const req: any = await clientRequestsService.createRequest(client.id, dto(spec.id, 'طلب لانتهاء مدة التفاوض'));
+	const offer: any = await proposalService.createProposal(req.id, provider.id, payload());
+	const card = { isNegotiation: true, negType: 'price', negTypeName: 'السعر', price: '80', duration: '', notes: 'خصم؟', status: 'PENDING' };
+	const call = () => chatService.initiateConversation(client.id, { projectId: req.id, providerId: provider.id, offerId: offer.id, negotiationPayload: card } as any);
+	const conv: any = await call();
+	await prisma.message.updateMany({ where: { conversationId: conv.id, content: { startsWith: 'WS_NEGOTIATION::' } }, data: { createdAt: new Date(Date.now() - 6 * 60 * 1000) } });
+	await call();
+	assert.equal(await prisma.message.count({ where: { conversationId: conv.id, content: { startsWith: 'WS_NEGOTIATION::' } } }), 2);
+});
