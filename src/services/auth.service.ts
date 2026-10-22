@@ -1,3 +1,4 @@
+import { presentedIdentity } from '../utils/admin-identity';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
@@ -550,8 +551,7 @@ export class AuthService {
 				lastName: updatedUser.lastName,
 				email: updatedUser.email,
 				accountType: updatedUser.accountType,
-				activeRole: updatedUser.activeRole,
-				roles: updatedUser.roles
+				...presentedIdentity(updatedUser)
 			}
 		};
 	}
@@ -698,8 +698,7 @@ export class AuthService {
 				lastName,
 				email: user.email,
 				accountType: user.accountType,
-				activeRole: user.activeRole,
-				roles: user.roles
+				...presentedIdentity(user)
 			}
 		};
 	}
