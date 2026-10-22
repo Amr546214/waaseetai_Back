@@ -237,6 +237,7 @@ import clientDisputesRoutes from './routes/client-disputes.routes';
 import clientTicketsRoutes from './routes/client-tickets.routes';
 import newsletterRoutes from './routes/newsletter.routes';
 import paypalWebhookRoutes from './routes/paypal-webhook.routes';
+import arbPaymentsRoutes from './routes/arb-payments.routes';
 
 mountAppRoute('/api/provider/profile', providerProfileRoutes);
 mountAppRoute('/api/specialties', specialtyRoutes);
@@ -274,6 +275,9 @@ mountAppRoute('/newsletter', newsletterRoutes);
 // Dashboard: https://dev.waseetai.com/api/payments/paypal/webhook
 mountAppRoute('/api/payments/paypal', paypalWebhookRoutes);
 mountAppRoute('/payments/paypal', paypalWebhookRoutes);
+// ARB / Neoleap bank callbacks — public by design, verified server-side (see routes/arb-payments.routes.ts).
+mountAppRoute('/api/payments/arb', arbPaymentsRoutes);
+mountAppRoute('/payments/arb', arbPaymentsRoutes);
 
 import adminSpecialtiesRouter from './routes/admin-specialties.routes';
 import adminUsersRouter from './routes/admin-users.routes';

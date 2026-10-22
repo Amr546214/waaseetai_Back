@@ -1,0 +1,408 @@
+import { randomInt } from 'crypto';
+import { ArbPayment, ArbPaymentStatus, LogCategory, LogStatus, Prisma } from '@prisma/client';
+import { prisma as defaultPrisma } from '../config/db';
+import { AppError } from '../utils/app-error';
+import { depositGrossUp } from '../utils/fee-policy';
+import { ArbConfig, arbFeePercent, loadArbConfig, missingArbSettings } from '../config/arb.config';
+import { ArbHttp, BankTxn, InquiryBy, createHostedPayment, fetchArbHttp, inquire, readReturnTrandata } from './arb-client';
+import { CLIENT_ROUTES, ClientNotificationInput, clientNotifications } from './client-notifications.service';
+import { notifyAdmins } from './admin-notifications.service';
+import { logger } from '../config/logger';
+
+/**
+ * Wallet deposit by bank card through the ARB / Neoleap hosted payment page (Bank Hosted flow, guide p.16-31).
+ * Rules this service enforces (each is covered by arb-payment.pg.test.ts on an isolated PostgreSQL with a SIMULATED bank):
+ *  - the amount and currency are derived HERE from the requested net USD, the owner-approved rate and the fee class; the browser sends only the net amount
+ *  - the browser coming back (responseURL / errorURL / a success page) is only a hint: money is applied after a server-to-server Inquiry (guide p.17 step 6)
+ *  - only a verified CAPTURED purchase whose track id, payment id, amount, action code and echoed udf values match THIS attempt credits the wallet; APPROVED
+ *    (authorization) is never treated as a capture
+ *  - exactly-once: a conditional UPDATE (appliedAt IS NULL) + the unique wallet_transactions.referenceId inside ONE transaction; not an in-memory lock
+ *  - at most one open attempt per user (partial unique index in the migration); a doubt (lost answer, no verdict) is checked with Inquiry before a new attempt
+ *  - DECLINED / CAPTURED_APPLIED are terminal; CANCELLED / EXPIRED are soft (a later verified capture still wins, the bank may have taken the money)
+ */
+
+const OPEN: ArbPaymentStatus[] = ['CREATED', 'CREATE_UNKNOWN', 'REDIRECTED', 'VERIFYING', 'UNCONFIRMED'];
+const MIN_NET_USD = 50;
+const MAX_NET_USD = 100000;
+/** a create call older than this with no answer is considered lost (the bank call itself times out at 20 s) */
+const STALE_CREATE_MS = 90_000;
+/** a return / poll may trigger one Inquiry per this many ms per attempt */
+const INQUIRY_MIN_GAP_MS = 2_000;
+/** result words the bank uses for "no money moved"; anything not in this list and not CAPTURED/APPROVED stays UNCONFIRMED (never guessed) */
+const DECLINE_WORD = /^(NOT CAPTURED|DECLINED|DENIED.*|CANCEL(L)?ED|VOIDED|NOT APPROVED|FAILURE|FAILED|NOT PROCESSED|IPAY\d+.*)$/i;
+
+export type PublicArbState = 'WAITING_PAGE' | 'VERIFYING' | 'PAID' | 'DECLINED' | 'CANCELLED' | 'EXPIRED' | 'FAILED' | 'REVIEW';
+
+export interface PublicArbView {
+	reference: string;
+	state: PublicArbState;
+	message: string;
+	nextStep: string;
+	redirectUrl: string | null;
+	creditedUsd: number | null;
+	chargedSar: number | null;
+}
+
+const VIEW: Record<PublicArbState, { message: string; nextStep: string }> = {
+	WAITING_PAGE: { message: 'أكمل الدفع في صفحة البنك.', nextStep: 'لا تغلق هذه الصفحة، وسنؤكد لك النتيجة تلقائيًا.' },
+	VERIFYING: { message: 'جارٍ التحقق من الدفع مع البنك.', nextStep: 'لا تُعد الدفع الآن. سنؤكد لك النتيجة هنا، وقد يستغرق ذلك دقائق.' },
+	PAID: { message: 'تم الدفع وإضافة المبلغ إلى محفظتك.', nextStep: 'يمكنك الآن استخدام الرصيد لتمويل مشروعك.' },
+	DECLINED: { message: 'لم يقبل البنك عملية الدفع، ولم يُضف أي مبلغ إلى محفظتك.', nextStep: 'يمكنك المحاولة ببطاقة أخرى أو التواصل مع البنك المُصدر للبطاقة.' },
+	CANCELLED: { message: 'لم تكتمل عملية الدفع.', nextStep: 'إن ظهر خصم على بطاقتك فسنؤكده تلقائيًا ويُضاف إلى محفظتك. يمكنك المحاولة من جديد بعد قليل.' },
+	EXPIRED: { message: 'انتهت مهلة عملية الدفع قبل اكتمالها.', nextStep: 'إن ظهر خصم على بطاقتك فسنؤكده تلقائيًا. يمكنك بدء عملية جديدة.' },
+	FAILED: { message: 'تعذّر بدء عملية الدفع بالبطاقة، ولم يُخصم أي مبلغ.', nextStep: 'حاول مرة أخرى بعد قليل، أو استخدم طريقة دفع أخرى.' },
+	REVIEW: { message: 'عملية الدفع قيد المراجعة لدينا.', nextStep: 'لا تُعد الدفع. سنراجعها ونوافيك بالنتيجة، ويمكنك التواصل مع الدعم برقم العملية.' },
+};
+
+function stateOf(s: ArbPaymentStatus): PublicArbState {
+	switch (s) {
+		case 'REDIRECTED': return 'WAITING_PAGE';
+		case 'CREATED': case 'CREATE_UNKNOWN': case 'VERIFYING': case 'UNCONFIRMED': return 'VERIFYING';
+		case 'CAPTURED_APPLIED': return 'PAID';
+		case 'DECLINED': return 'DECLINED';
+		case 'CANCELLED': return 'CANCELLED';
+		case 'EXPIRED': return 'EXPIRED';
+		case 'AUTH_ONLY': return 'REVIEW';
+		default: return 'FAILED';
+	}
+}
+
+const dec = (v: string | number) => new Prisma.Decimal(v);
+
+export interface ArbDeps { prisma: typeof defaultPrisma; http: ArbHttp; config: () => ArbConfig; now: () => Date }
+
+export class ArbPaymentService {
+	constructor(private deps: ArbDeps = { prisma: defaultPrisma, http: fetchArbHttp, config: () => loadArbConfig(), now: () => new Date() }) {}
+
+	private get db() { return this.deps.prisma; }
+
+	/** The browser only learns whether the rail exists; never why (settings names stay server-side). */
+	isAvailable(): boolean {
+		const c = this.deps.config();
+		return c.enabled && missingArbSettings(c).length === 0;
+	}
+
+	private requireReady(): ArbConfig {
+		const c = this.deps.config();
+		if (!c.enabled || missingArbSettings(c).length > 0) {
+			const miss = missingArbSettings(c);
+			if (c.enabled && miss.length) logger.warn(`[ARB] enabled but not configured: ${miss.join(',')}`);
+			throw Object.assign(new AppError('الدفع بالبطاقة غير متاح حاليًا.', 503), { code: 'ARB_NOT_AVAILABLE' });
+		}
+		return c;
+	}
+
+	private view(p: ArbPayment, extra: Partial<PublicArbView> = {}): PublicArbView {
+		const state = stateOf(p.status);
+		return {
+			reference: p.id, state, ...VIEW[state],
+			redirectUrl: p.status === 'REDIRECTED' ? p.paymentPageUrl : null,
+			creditedUsd: p.status === 'CAPTURED_APPLIED' ? p.netUsd.toNumber() : null,
+			chargedSar: p.status === 'CAPTURED_APPLIED' ? p.amountSar.toNumber() : null,
+			...extra,
+		};
+	}
+
+	private newTrackId(): string {
+		return `${this.deps.now().getTime()}${String(randomInt(0, 100000)).padStart(5, '0')}`;
+	}
+
+	/** What a deposit would cost, derived exactly like initiate() does (read-only: no row, no bank call). Shown to the user BEFORE they are sent to the bank. */
+	quote(netUsd: number) {
+		const cfg = this.requireReady();
+		if (!Number.isFinite(netUsd) || netUsd < MIN_NET_USD || netUsd > MAX_NET_USD) throw new AppError(`المبلغ يجب أن يكون بين ${MIN_NET_USD} و ${MAX_NET_USD.toLocaleString('en-US')} دولار أمريكي`, 400);
+		const net = dec(netUsd).toDecimalPlaces(2);
+		const gross = dec(depositGrossUp(net.toNumber(), cfg.feeMethod)).toDecimalPlaces(2);
+		return {
+			netUsd: net.toNumber(), feePercent: arbFeePercent(cfg), feeUsd: gross.minus(net).toDecimalPlaces(2).toNumber(), grossUsd: gross.toNumber(),
+			chargedSar: gross.mul(dec(cfg.sarPerUsd)).toDecimalPlaces(2).toNumber(), currency: 'SAR', sarPerUsd: cfg.sarPerUsd,
+		};
+	}
+
+	/** The user's open attempt (if any), brought to a verdict when the bank can give one. Lets a refreshed / reopened page pick up where it was. */
+	async openAttemptFor(userId: string): Promise<PublicArbView | null> {
+		const open = await this.db.arbPayment.findFirst({ where: { userId, status: { in: [...OPEN, 'CANCELLED', 'EXPIRED'] }, createdAt: { gt: new Date(this.deps.now().getTime() - 24 * 3_600_000) } }, orderBy: { createdAt: 'desc' } });
+		if (!open) return null;
+		return this.statusFor(userId, open.id);
+	}
+
+	/** Start (or resume) the one open card attempt of this user. */
+	async initiate(userId: string, netUsd: number, customerIp: string): Promise<PublicArbView> {
+		const cfg = this.requireReady();
+		if (!Number.isFinite(netUsd) || netUsd < MIN_NET_USD || netUsd > MAX_NET_USD) {
+			throw new AppError(`المبلغ يجب أن يكون بين ${MIN_NET_USD} و ${MAX_NET_USD.toLocaleString('en-US')} دولار أمريكي`, 400);
+		}
+		if (!customerIp || customerIp === 'unknown') {
+			// the gateway declines a request without the customer address (guide p.13): refuse here with a clear reason instead
+			throw Object.assign(new AppError('تعذّر تحديد عنوانك لإتمام الدفع الآمن. حاول مرة أخرى.', 400), { code: 'CUSTOMER_IP_MISSING' });
+		}
+		const open = await this.settleOpenAttempt(userId);
+		if (open) return open;
+
+		const net = dec(netUsd).toDecimalPlaces(2);
+		const method = cfg.feeMethod;
+		const gross = dec(depositGrossUp(net.toNumber(), method)).toDecimalPlaces(2);
+		const fee = gross.minus(net).toDecimalPlaces(2);
+		const rate = dec(cfg.sarPerUsd);
+		const amountSar = gross.mul(rate).toDecimalPlaces(2);
+		const now = this.deps.now();
+
+		let attempt: ArbPayment;
+		try {
+			attempt = await this.db.arbPayment.create({
+				data: {
+					userId, trackId: this.newTrackId(), status: 'CREATED', netUsd: net, feeUsd: fee, feePercent: arbFeePercent(cfg), grossUsd: gross,
+					fxSarPerUsd: rate, amountSar, currencyCode: cfg.currencyCode, customerIp,
+					expiresAt: new Date(now.getTime() + cfg.attemptTtlMin * 60_000),
+				},
+			});
+		} catch (e) {
+			if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+				// a concurrent start (double click / two tabs) won the one-open-attempt index: answer with ITS state, never create a second
+				const winner = await this.settleOpenAttempt(userId);
+				if (winner) return winner;
+			}
+			throw e;
+		}
+
+		const result = await createHostedPayment(cfg, this.deps.http, {
+			amountSar: amountSar.toFixed(2), trackId: attempt.trackId,
+			responseUrl: `${cfg.publicBaseUrl}/api/payments/arb/response`, errorUrl: `${cfg.publicBaseUrl}/api/payments/arb/error`,
+			customerIp, udf1: attempt.id, udf2: cfg.currencyCode, udf3: userId,
+		});
+
+		if (result.kind === 'OK') {
+			const upd = await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: 'CREATED' }, data: { status: 'REDIRECTED', bankPaymentId: result.paymentId, paymentPageUrl: result.pageUrl } });
+			if (upd.count === 0) logger.warn(`[ARB] attempt ${attempt.id} changed while the page URL was issued`);
+		} else if (result.kind === 'REJECTED') {
+			await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: 'CREATED' }, data: { status: 'CREATE_REJECTED' } });
+			logger.warn(`[ARB] bank refused attempt ${attempt.id} code=${result.code ?? 'none'}`);
+		} else {
+			await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: 'CREATED' }, data: { status: 'CREATE_UNKNOWN' } });
+		}
+		return this.view(await this.db.arbPayment.findUniqueOrThrow({ where: { id: attempt.id } }));
+	}
+
+	/**
+	 * If the user already has an open attempt: bring it to a verdict when possible; return what to show if it must stay open, or null when a new attempt
+	 * may start (the old one is now terminal or provably empty at the bank).
+	 */
+	private async settleOpenAttempt(userId: string): Promise<PublicArbView | null> {
+		const open = await this.db.arbPayment.findFirst({ where: { userId, status: { in: OPEN } }, orderBy: { createdAt: 'desc' } });
+		if (!open) return null;
+		const now = this.deps.now();
+		if (open.status === 'REDIRECTED' && open.expiresAt > now && open.paymentPageUrl) return this.view(open);
+		// a create call that is still in flight in another request (or just started) must not be judged: the user may be about to receive its page URL
+		if ((open.status === 'CREATED' || open.status === 'CREATE_UNKNOWN') && now.getTime() - open.createdAt.getTime() < STALE_CREATE_MS) return this.view(open);
+		const { attempt, notFound } = await this.verifyDetailed(open.id);
+		if (!OPEN.includes(attempt.status)) {
+			// terminal now; a captured / under-review one is shown, any other lets the user start again
+			return attempt.status === 'CAPTURED_APPLIED' || attempt.status === 'AUTH_ONLY' ? this.view(attempt) : null;
+		}
+		// a stale create that the bank has no record of: nothing was ever shown to the user, so it can be closed and a new attempt may start
+		if ((attempt.status === 'CREATE_UNKNOWN' || attempt.status === 'CREATED') && !attempt.bankPaymentId && notFound) {
+			await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: { in: ['CREATE_UNKNOWN', 'CREATED'] }, bankPaymentId: null }, data: { status: 'CREATE_REJECTED' } });
+			return null;
+		}
+		// no verdict from the bank for a long time and no capture seen: close it as EXPIRED (soft — a later verified capture is still applied) so the
+		// user is never locked out forever by one stuck attempt; a new attempt is only ever started by the user, never automatically
+		const cfg = this.deps.config();
+		if (now.getTime() - attempt.createdAt.getTime() > 2 * cfg.attemptTtlMin * 60_000) {
+			await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: { in: OPEN } }, data: { status: 'EXPIRED' } });
+			return null;
+		}
+		return this.view(attempt);
+	}
+
+	async statusFor(userId: string, reference: string): Promise<PublicArbView> {
+		const p = await this.db.arbPayment.findUnique({ where: { id: reference } });
+		if (!p || p.userId !== userId) throw new AppError('عملية الدفع غير موجودة', 404);
+		if ((OPEN.includes(p.status) || p.status === 'CANCELLED' || p.status === 'EXPIRED') && (p.bankPaymentId || p.status !== 'CREATED')) {
+			try { return this.view(await this.verifyThrottled(p)); } catch (e) {
+				if ((e as any)?.code !== 'ARB_NOT_AVAILABLE') throw e; // the rail was switched off: still show what we stored
+			}
+		}
+		return this.view(p);
+	}
+
+	/** At most one Inquiry per INQUIRY_MIN_GAP_MS per attempt (a refreshing page or a hammered callback cannot flood the bank). */
+	private async verifyThrottled(p: ArbPayment): Promise<ArbPayment> {
+		if (p.lastInquiryAt && this.deps.now().getTime() - p.lastInquiryAt.getTime() < INQUIRY_MIN_GAP_MS) return p;
+		return this.verify(p.id);
+	}
+
+	/** Browser returned to responseURL: hint only. Find the attempt by the payment id, remember the arrival, then verify with the bank. */
+	async handleReturn(input: { paymentId?: unknown; trandata?: unknown; error?: unknown }): Promise<{ reference: string | null }> {
+		const cfg = this.requireReady();
+		const hint = readReturnTrandata(cfg, input.trandata);
+		const paymentId = typeof input.paymentId === 'string' && /^\d{10,25}$/.test(input.paymentId) ? input.paymentId : hint?.paymentId ?? null;
+		const trackId = hint?.trackId ?? null;
+		const attempt = await this.findAttempt(paymentId, trackId);
+		if (!attempt) return { reference: null };
+		if (OPEN.includes(attempt.status) || attempt.status === 'CANCELLED' || attempt.status === 'EXPIRED') {
+			await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: { in: ['REDIRECTED', 'UNCONFIRMED', 'CANCELLED', 'EXPIRED', 'CREATE_UNKNOWN'] } }, data: { status: 'VERIFYING' } });
+			await this.verifyThrottled(await this.db.arbPayment.findUniqueOrThrow({ where: { id: attempt.id } }));
+		}
+		return { reference: attempt.id };
+	}
+
+	/** errorURL: the bank page ended with an error or the user left. Soft CANCELLED, then still ask the bank (money may have moved). */
+	async handleError(input: { paymentId?: unknown; trandata?: unknown }): Promise<{ reference: string | null }> {
+		const cfg = this.requireReady();
+		const hint = readReturnTrandata(cfg, input.trandata);
+		const paymentId = typeof input.paymentId === 'string' && /^\d{10,25}$/.test(input.paymentId) ? input.paymentId : hint?.paymentId ?? null;
+		const attempt = await this.findAttempt(paymentId, hint?.trackId ?? null);
+		if (!attempt) return { reference: null };
+		await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: { in: ['REDIRECTED', 'UNCONFIRMED'] } }, data: { status: 'CANCELLED' } });
+		await this.verifyThrottled(await this.db.arbPayment.findUniqueOrThrow({ where: { id: attempt.id } }));
+		return { reference: attempt.id };
+	}
+
+	/**
+	 * Merchant notification (guide p.187-194). Returns true ONLY when it is safe for the bank to keep the transaction: the payload decrypts, belongs to a
+	 * known attempt and matches its amount/ids. A mismatch returns false (no acknowledgement) and the bank voids the transaction (p.187 step 4).
+	 */
+	async handleNotification(input: { paymentId?: unknown; trandata?: unknown }): Promise<{ ack: boolean; responseUrl: string | null }> {
+		const cfg = this.requireReady();
+		if (!cfg.notificationEnabled) return { ack: false, responseUrl: null };
+		const txn = readReturnTrandata(cfg, input.trandata);
+		if (!txn) return { ack: false, responseUrl: null };
+		const attempt = await this.findAttempt(txn.paymentId, txn.trackId);
+		if (!attempt) return { ack: false, responseUrl: null };
+		const bad = this.bindingProblem(attempt, txn);
+		if (bad) {
+			void notifyAdmins('SUSPICIOUS_PAYMENT', { ref: `ARB ${attempt.trackId}`, metadata: { arbPaymentId: attempt.id, problem: bad } });
+			return { ack: false, responseUrl: null };
+		}
+		// the acknowledgement is only sent once the arrival is durably recorded
+		await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: { in: ['REDIRECTED', 'UNCONFIRMED', 'CANCELLED', 'EXPIRED', 'CREATE_UNKNOWN'] } }, data: { status: 'VERIFYING', bankPaymentId: attempt.bankPaymentId ?? txn.paymentId } });
+		void this.verify(attempt.id).catch(e => logger.error(`[ARB] verify after notification failed: ${(e as Error).message}`));
+		return { ack: true, responseUrl: `${cfg.publicBaseUrl}/api/payments/arb/response` };
+	}
+
+	private async findAttempt(paymentId: string | null, trackId: string | null): Promise<ArbPayment | null> {
+		if (paymentId) { const a = await this.db.arbPayment.findUnique({ where: { bankPaymentId: paymentId } }); if (a) return a; }
+		if (trackId && /^\d{10,30}$/.test(trackId)) return this.db.arbPayment.findUnique({ where: { trackId } });
+		return null;
+	}
+
+	/** Every identifier the bank echoes must belong to THIS attempt; a missing optional echo is not a mismatch, a different one is. */
+	private bindingProblem(a: ArbPayment, t: BankTxn): string | null {
+		if (t.trackId !== null && t.trackId !== a.trackId) return 'track_id_mismatch';
+		if (t.trackId === null && !a.bankPaymentId) return 'no_track_id';
+		if (t.paymentId !== null && a.bankPaymentId && t.paymentId !== a.bankPaymentId) return 'payment_id_mismatch';
+		if (t.udf1 !== null && t.udf1 !== a.id) return 'udf1_mismatch';
+		if (t.udf2 !== null && t.udf2 !== a.currencyCode) return 'currency_mismatch';
+		if (t.udf3 !== null && t.udf3 !== a.userId) return 'user_mismatch';
+		if (t.amt === null) return 'amount_missing';
+		try { if (!dec(t.amt).equals(a.amountSar)) return 'amount_mismatch'; } catch { return 'amount_unreadable'; }
+		if (t.actionCode !== null && t.actionCode !== '1') return 'not_a_purchase';
+		return null;
+	}
+
+	/** Ask the bank (Inquiry) and move the attempt accordingly. Safe to call any number of times, from any path, in any order. */
+	async verify(id: string): Promise<ArbPayment> {
+		return (await this.verifyDetailed(id)).attempt;
+	}
+
+	/** Same as verify, plus whether the bank answered "no such transaction" for an attempt that never received a payment id (closes a lost create safely). */
+	async verifyDetailed(id: string): Promise<{ attempt: ArbPayment; notFound: boolean }> {
+		const cfg = this.requireReady();
+		const a = await this.db.arbPayment.findUniqueOrThrow({ where: { id } });
+		if (a.status === 'CAPTURED_APPLIED' || a.status === 'DECLINED' || a.status === 'CREATE_REJECTED') return { attempt: a, notFound: false };
+		const by: InquiryBy = a.bankTransId ? { by: 'TRANID', transId: a.bankTransId } : a.bankPaymentId ? { by: 'PaymentID', paymentId: a.bankPaymentId } : { by: 'TrackID', trackId: a.trackId };
+		await this.db.arbPayment.update({ where: { id }, data: { inquiryCount: { increment: 1 }, lastInquiryAt: this.deps.now() } });
+		const r = await inquire(cfg, this.deps.http, by, a.amountSar.toFixed(2), a.trackId);
+
+		const done = async (attempt: Promise<ArbPayment>, notFound = false) => ({ attempt: await attempt, notFound });
+		if (r.kind === 'UNKNOWN') return done(this.toUnconfirmed(a));
+		if (r.kind === 'BANK_ERROR') {
+			// the bank could not find / read the transaction: that is NOT a decline. For an attempt that never got a page URL it means nothing exists.
+			return done(this.toUnconfirmed(a), !a.bankPaymentId);
+		}
+		const t = r.txn;
+		const problem = this.bindingProblem(a, t);
+		if (problem) {
+			void notifyAdmins('SUSPICIOUS_PAYMENT', { ref: `ARB ${a.trackId}`, metadata: { arbPaymentId: a.id, problem } });
+			logger.warn(`[ARB] attempt ${a.id} not applied: ${problem}`);
+			return done(this.toUnconfirmed(a, { bankResult: t.result ?? undefined }));
+		}
+		const word = (t.result || '').trim();
+		if (/^CAPTURED$/i.test(word)) {
+			if (!t.transId) return done(this.toUnconfirmed(a));
+			return done(this.applyCapture(a, t));
+		}
+		if (/^APPROVED$/i.test(word)) {
+			await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: OPEN.concat(['CANCELLED', 'EXPIRED']) } }, data: { status: 'AUTH_ONLY', bankResult: word, bankTransId: t.transId ?? undefined, verifiedAt: this.deps.now() } });
+			void notifyAdmins('SUSPICIOUS_PAYMENT', { ref: `ARB ${a.trackId}`, metadata: { arbPaymentId: a.id, problem: 'authorization_only' } });
+			return done(this.db.arbPayment.findUniqueOrThrow({ where: { id } }));
+		}
+		if (word && DECLINE_WORD.test(word)) {
+			await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: OPEN.concat(['CANCELLED', 'EXPIRED']) } }, data: { status: 'DECLINED', bankResult: word, verifiedAt: this.deps.now() } });
+			return done(this.db.arbPayment.findUniqueOrThrow({ where: { id } }));
+		}
+		return done(this.toUnconfirmed(a, { bankResult: word || undefined }));
+	}
+
+	private async toUnconfirmed(a: ArbPayment, extra: Prisma.ArbPaymentUpdateManyMutationInput = {}): Promise<ArbPayment> {
+		const now = this.deps.now();
+		// a redirected attempt whose time ran out becomes EXPIRED (soft); everything else open stays/turns UNCONFIRMED. Never touches a terminal row.
+		const next: ArbPaymentStatus = a.status === 'REDIRECTED' && a.expiresAt <= now ? 'EXPIRED'
+			: a.status === 'REDIRECTED' ? 'REDIRECTED'
+			: a.status === 'CANCELLED' || a.status === 'EXPIRED' ? a.status
+			: a.status === 'CREATE_UNKNOWN' || a.status === 'CREATED' ? a.status
+			: 'UNCONFIRMED';
+		await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: OPEN.concat(['CANCELLED', 'EXPIRED']) } }, data: { ...extra, status: next } });
+		return this.db.arbPayment.findUniqueOrThrow({ where: { id: a.id } });
+	}
+
+	/** The single place that credits the wallet. One transaction: claim (appliedAt IS NULL) + wallet row (unique referenceId) + balance + audit + notification. */
+	private async applyCapture(a: ArbPayment, t: BankTxn): Promise<ArbPayment> {
+		const refId = `arb:${t.transId}`;
+		let notificationId: string | null = null;
+		try {
+			await this.db.$transaction(async tx => {
+				const claim = await tx.arbPayment.updateMany({
+					where: { id: a.id, appliedAt: null, status: { notIn: ['CAPTURED_APPLIED', 'DECLINED', 'CREATE_REJECTED'] } },
+					data: { status: 'CAPTURED_APPLIED', appliedAt: this.deps.now(), verifiedAt: this.deps.now(), bankTransId: t.transId, bankRef: t.ref, bankResult: 'CAPTURED', bankAuthCode: t.authCode, bankPaymentId: a.bankPaymentId ?? t.paymentId },
+				});
+				if (claim.count === 0) return; // someone else already applied / closed it: nothing to do, nothing duplicated
+				const wtx = await tx.walletTransaction.create({
+					data: {
+						userId: a.userId, type: 'DEPOSIT', amount: a.netUsd.toNumber(), currency: 'USD', status: 'COMPLETED', paymentMethod: 'ARB_CARD', referenceId: refId,
+						description: 'إيداع رصيد بالمحفظة بالبطاقة (البنك)',
+						metadata: { arbPaymentId: a.id, trackId: a.trackId, bankTransId: t.transId, netCredited: a.netUsd.toNumber(), grossUsd: a.grossUsd.toNumber(), feeUsd: a.feeUsd.toNumber(), feePercent: a.feePercent, chargedSar: a.amountSar.toNumber(), currencyCode: a.currencyCode, fxSarPerUsd: a.fxSarPerUsd.toNumber(), feePolicyVersion: 2 },
+					},
+				});
+				await tx.user.update({ where: { id: a.userId }, data: { walletBalance: { increment: a.netUsd.toNumber() } } });
+				await tx.arbPayment.update({ where: { id: a.id }, data: { walletTxId: wtx.id } });
+				await tx.accountAuditLog.create({
+					data: {
+						userId: a.userId, category: LogCategory.SYSTEM_AUDIT, title: 'إيداع رصيد بالمحفظة', actionText: `إيداع ${a.netUsd.toFixed(2)} دولار (صافي) بالبطاقة، المحصّل ${a.amountSar.toFixed(2)} ريال`,
+						status: LogStatus.COMPLETED, statusText: 'مكتمل بنجاح', summary: `تم شحن المحفظة بصافي ${a.netUsd.toFixed(2)} دولار - رقم عملية البنك: ${t.transId}`, source: 'USER', eventType: 'WALLET_DEPOSIT_COMPLETED', severity: 'INFO',
+					},
+				});
+				const note: ClientNotificationInput = {
+					userId: a.userId, title: 'تم إيداع الرصيد بنجاح', message: `أُضيف مبلغ ${a.netUsd.toFixed(2)} دولار إلى رصيد محفظتك عبر الدفع بالبطاقة.`, type: 'FINANCIAL',
+					category: 'FINANCIAL' as any, actionUrl: CLIENT_ROUTES.wallet, actionText: 'عرض المحفظة', metadata: { transactionId: wtx.id },
+				};
+				notificationId = (await tx.notification.create({ data: note as any })).id;
+			});
+		} catch (e) {
+			if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+				// the unique wallet reference / bank transaction id already exists: it was credited (or the id belongs to another row) — never credit twice
+				const now = await this.db.arbPayment.findUniqueOrThrow({ where: { id: a.id } });
+				if (now.status !== 'CAPTURED_APPLIED') {
+					void notifyAdmins('SUSPICIOUS_PAYMENT', { ref: `ARB ${a.trackId}`, metadata: { arbPaymentId: a.id, problem: 'bank_transaction_id_already_used' } });
+					return this.toUnconfirmed(now);
+				}
+				return now;
+			}
+			throw e; // a database failure: nothing was committed, the attempt stays open and the next verify retries
+		}
+		if (notificationId) await clientNotifications.deliverStored([notificationId]);
+		return this.db.arbPayment.findUniqueOrThrow({ where: { id: a.id } });
+	}
+}
+
+export const arbPaymentService = new ArbPaymentService();
