@@ -69,7 +69,7 @@ export class AccreditationAiService {
     });
 
     if (!providerProfile) {
-      throw new Error('Provider profile not found');
+      throw new AppError('لم نجد ملف مقدم الخدمة لحسابك. أكمل إعداد ملفك المهني أولًا.', 404, undefined, 'PROVIDER_PROFILE_NOT_FOUND');
     }
 
     // 2. Resolve ProviderSpecialty record
@@ -89,13 +89,13 @@ export class AccreditationAiService {
     });
 
     if (!providerSpecialty) {
-      throw new Error('التخصص غير مرتبط بحساب مقدم الخدمة');
+      throw new AppError('هذا التخصص غير مضاف إلى حسابك؛ أضفه من صفحة التخصصات أولًا.', 403, undefined, 'SPECIALTY_NOT_OWNED');
     }
 
     // Deterministic credential gate: `isPassed` is a real quiz-score outcome;
     // samples can only be submitted for a specialty that already passed.
     if (!providerSpecialty.isActive || !providerSpecialty.isPassed) {
-      throw new Error('يجب اجتياز الاختبار الفني قبل رفع نموذج الاعتماد');
+      throw new AppError('يجب اجتياز الاختبار الفني لهذا التخصص قبل رفع نموذج الاعتماد؛ أكمل الاختبار من صفحة التخصصات.', 403, undefined, 'SPECIALTY_TEST_NOT_PASSED');
     }
 
     // 3. Batch B T1 (§3): the proof documents are MANDATORY and must be completed uploads of THIS user for THIS request (a URL in the body is not a document).
@@ -195,7 +195,7 @@ export class AccreditationAiService {
     });
 
     if (!providerProfile) {
-      throw new Error('Provider profile not found');
+      throw new AppError('لم نجد ملف مقدم الخدمة لحسابك. أكمل إعداد ملفك المهني أولًا.', 404, undefined, 'PROVIDER_PROFILE_NOT_FOUND');
     }
 
     const sample = await prisma.accreditationSample.findFirst({
@@ -216,7 +216,7 @@ export class AccreditationAiService {
     });
 
     if (!sample) {
-      throw new Error('Accreditation sample not found');
+      throw new AppError('نموذج الاعتماد غير موجود ضمن طلباتك.', 404, undefined, 'ACCREDITATION_SAMPLE_NOT_FOUND');
     }
 
     return {

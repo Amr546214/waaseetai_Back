@@ -28,7 +28,7 @@ test('lengths are capped and non-string values are left to the validators', asyn
 
 test('markup-only title is judged as empty by the existing validation (create is refused)', async () => {
 	const svc = new (await mod()).MarketplaceService();
-	await assert.rejects(() => svc.createService('u1', { title: '<b></b>', description: 'وصف طويل بما يكفي للخدمة', stages: [stage()] }), /Title and description are required/);
+	await assert.rejects(() => svc.createService('u1', { title: '<b></b>', description: 'وصف طويل بما يكفي للخدمة', stages: [stage()] }), /اكتب اسم الخدمة/);
 });
 
 // service-level: what reaches prisma.create
@@ -36,12 +36,12 @@ const created: any[] = [];
 let loaded: Promise<any> | undefined;
 function load() {
 	loaded ??= (async () => {
-		const tx: any = { serviceCatalog: { create: async (a: any) => { created.push(a.data); return { id: 's1', ...a.data, stages: [] }; }, update: async (a: any) => { created.push(a.data); return { id: 's1', ...a.data, stages: [] }; } }, serviceStage: { deleteMany: async () => ({}) } };
+		const tx: any = { serviceCatalog: { findFirst: async () => null, create: async (a: any) => { created.push(a.data); return { id: 's1', ...a.data, stages: [] }; }, update: async (a: any) => { created.push(a.data); return { id: 's1', ...a.data, stages: [] }; } }, serviceStage: { deleteMany: async () => ({}) } };
 		const prisma: any = {
 			providerSpecialty: { findFirst: async () => ({ id: 'ps1', status: 'APPROVED', isPassed: true, isActive: true, specialty: { id: 'sp1' } }) },
 			accreditationSample: { findFirst: async () => ({ id: 'as1', status: 'AI_VERIFIED' }) },
 			portfolioItem: { findFirst: async () => null },
-			serviceCatalog: { findFirst: async () => ({ id: 's1', providerId: 'u1', approvedAt: new Date(), totalAmount: 100, totalDays: 5 }) },
+			serviceCatalog: { findFirst: async (a: any) => (a?.where?.id ? { id: 's1', providerId: 'u1', approvedAt: new Date(), totalAmount: 100, totalDays: 5 } : null) },
 			$transaction: async (fn: any) => fn(tx),
 		};
 		mock.module('../config/db', { namedExports: { prisma } });
