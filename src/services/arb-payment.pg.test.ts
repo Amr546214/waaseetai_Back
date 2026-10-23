@@ -554,7 +554,7 @@ test('PG: webhook hardening - never changes a status, bounded Inquiry load (per 
 	clock.t += 20_000; const n2 = bank.inquiries;
 	await Promise.all(refs.map(r => svc.handleWebhook(hook({ trackId: r.trackId }))));
 	await new Promise(r => setTimeout(r, 600));
-	assert.ok(bank.inquiries - n2 <= 31, `inquiries from a many-attempt flood: ${bank.inquiries - n2}`);
+	assert.ok(bank.inquiries - n2 <= 30, `inquiries from a many-attempt flood: ${bank.inquiries - n2}`);
 });
 
 test('PG: the acknowledgement never waits for the bank: a slow Inquiry does not delay the notification answer or the webhook answer', opts, async () => {
@@ -584,4 +584,80 @@ test('PG: the DATABASE also refuses a second open attempt while the bank holds a
 	const v = await svc.initiate(u.id, 100, IP); await payAndReturn(v.reference, 'APPROVED');
 	assert.equal((await row(v.reference)).status, 'AUTH_ONLY');
 	await assert.rejects(() => prisma.arbPayment.create({ data: { userId: u.id, trackId: `9${Date.now()}${Math.floor(Math.random() * 1000)}`, status: 'CREATED', netUsd: 100, feeUsd: 0, feePercent: 0, grossUsd: 100, fxSarPerUsd: 3.75, amountSar: 375, currencyCode: '682', customerIp: IP, expiresAt: new Date(Date.now() + 60_000) } as any }), /Unique constraint/);
+});
+
+test('PG: the flood budget is exactly 30 a minute (the earlier «≤ 31» was slack, not behaviour), and the hints that were NOT run are not lost: the attempts are made due and a RESTARTED service reconciles them at once', opts, async () => {
+	const { svc, bank, mkUser, row, clock, prisma, balance } = await env();
+	await prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED','AUTH_ONLY')`);
+	const users = await Promise.all(Array.from({ length: 40 }, () => mkUser()));
+	const refs: any[] = [];
+	for (const x of users) { const r = await svc.initiate(x.id, 100, IP); refs.push(await row(r.reference)); }
+	// every attempt was checked once (so a back-off is running), then a day passes: the daily back-off applies
+	clock.t += 3_600_000 * 30; await svc.reconcileOnce(100); await svc.reconcileOnce(100); await svc.reconcileOnce(100);
+	// the bank captures ALL of them; only hints arrive (no reconcile yet) - 40 hints, budget 30
+	for (const r of refs) bank.settle(r.bankPaymentId, 'CAPTURED');
+	clock.t += 20_000; const n0 = bank.inquiries;
+	await Promise.all(refs.map(r => svc.handleWebhook([{ type: 'PAYMENT', payLoad: [{ trackId: r.trackId }] }])));
+	await new Promise(r => setTimeout(r, 800));
+	assert.equal(bank.inquiries - n0, 30, 'exactly the budget, not 31');
+	const credited = (await Promise.all(users.map(u => balance(u.id)))).filter(b => b === 100).length;
+	assert.equal(credited, 30);
+	// the 10 that were over budget are due in the database ...
+	const due = await prisma.arbPayment.count({ where: { id: { in: refs.map(r => r.id) }, status: { not: 'CAPTURED_APPLIED' }, lastInquiryAt: null } });
+	assert.equal(due, 10);
+	// ... so a NEW service instance (restart: memory budget gone) applies them at its first run, no matter how old the attempts are
+	const { ArbPaymentService } = await import('./arb-payment.service'); const { testConfig } = await import('./arb-sim-bank.testutil');
+	const restarted = new ArbPaymentService({ prisma: prisma as any, http: bank, config: () => testConfig(), now: () => new Date(clock.t + 1000) });
+	await restarted.reconcileOnce(100);
+	assert.equal((await Promise.all(users.map(u => balance(u.id)))).filter(b => b === 100).length, 40);
+});
+
+test('PG: ids are TEXT end to end - the longest ids the guide allows keep every digit through JSON, the database, comparisons and logs; leading zeros are never normalised; a track-id collision between two users is retried', opts, async () => {
+	const { svc, bank, mkUser, row, prisma, clock } = await env(); const u = await mkUser();
+	await prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED','AUTH_ONLY')`);
+	const v = await svc.initiate(u.id, 100, IP); const a = await row(v.reference);
+	assert.match(a.trackId, /^[1-9]\d{15}$/); // text, 16 digits, never a leading zero
+	// the guide gives trackId as «Numeric» without a length (p.18) and as Alphanum[255] in the webhook table (p.179-181): the code accepts digits up to 30 and compares as text
+	const rnd = (n: number) => Array.from({ length: n }, () => Math.floor(Math.random() * 10)).join('');
+	const long = '8' + rnd(29); // unique per run: the test database is shared between runs
+	await prisma.arbPayment.update({ where: { id: a.id }, data: { trackId: long } });
+	const stored = await row(a.id); assert.equal(stored.trackId, long); assert.equal(typeof stored.trackId, 'string');
+	const hit = await (svc as any).findAttempt(null, long); assert.equal(hit.id, a.id);
+	assert.equal(await (svc as any).findAttempt(null, '0' + long.slice(1)), null); // a leading-zero variant is a DIFFERENT id, not a match
+	assert.equal(await (svc as any).findAttempt(null, long + '0'), null);
+	// the bank echoing a number rounded by a JS parser must not match: 9007199254740993 -> 9007199254740992
+	const big = '9007199254741' + rnd(2) + '1'; // above 2^53 and odd: a JS number rounds it to a different integer
+	await prisma.arbPayment.update({ where: { id: a.id }, data: { trackId: big } });
+	assert.notEqual(String(Number(big)), big);
+	assert.equal(await (svc as any).findAttempt(null, String(Number(big))), null);
+	assert.equal((await (svc as any).findAttempt(null, big)).id, a.id);
+	// collision: two users draw the same track id in the same millisecond -> the loser retries with a new one
+	const u2 = await mkUser(); const u3 = await mkUser(); const orig = (svc as any).newTrackId.bind(svc); let calls = 0;
+	const clash = '17' + rnd(14);
+	(svc as any).newTrackId = () => (calls++ < 2 ? clash : orig());
+	const r2 = await svc.initiate(u2.id, 100, IP); const r3 = await svc.initiate(u3.id, 100, IP);
+	const t2 = (await row(r2.reference)).trackId, t3 = (await row(r3.reference)).trackId;
+	assert.equal(t2, clash); assert.notEqual(t3, t2); assert.match(t3, /^[1-9]\d{15}$/); assert.ok(calls >= 3);
+	void bank; void clock;
+});
+
+test('PG: Bank Hosted notification - no acknowledgement on an internal / database failure, and whichever way the bank then behaves (it voids, or it keeps the money) the attempt ends correct', opts, async () => {
+	const e = await env(); const u = await e.mkUser();
+	await e.prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED','AUTH_ONLY')`);
+	const v = await e.svc.initiate(u.id, 100, IP); const a = await e.row(v.reference);
+	e.bank.settle(a.bankPaymentId!, 'CAPTURED');
+	const trandata = e.bank.trandataFor(e.bank.byPayment(a.bankPaymentId!));
+	// 1) the database fails while the arrival is recorded: the service THROWS (the controller answers 500 without status «1» = no acknowledgement)
+	const real = (e.prisma.arbPayment as any).updateMany; let fail = true;
+	(e.prisma.arbPayment as any).updateMany = async (...args: any[]) => { if (fail) throw new Error('simulated database failure'); return real.apply(e.prisma.arbPayment, args); };
+	await assert.rejects(e.svc.handleNotification({ paymentId: a.bankPaymentId!, trandata }), /simulated database failure/);
+	fail = false; (e.prisma.arbPayment as any).updateMany = real;
+	assert.equal(await e.balance(u.id), 0);
+	// 2a) the bank does what the guide says (p.187 step 4): it VOIDS -> Inquiry says VOIDED -> declined, nothing credited
+	e.bank.settle(a.bankPaymentId!, 'VOIDED'); e.clock.t += 10_000; await e.svc.verify(v.reference);
+	assert.equal((await e.row(v.reference)).status, 'DECLINED'); assert.equal(await e.balance(u.id), 0);
+	// 2b) the bank does NOT void and keeps the money (behaviour not proven): the same flow, another attempt, ends CREDITED by Inquiry once
+	const u2 = await e.mkUser(); const v2 = await e.svc.initiate(u2.id, 100, IP); const a2 = await e.row(v2.reference);
+	e.bank.settle(a2.bankPaymentId!, 'CAPTURED'); e.clock.t += 60_000; await e.svc.reconcileOnce(50);
+	assert.equal(await e.balance(u2.id), 100);
 });

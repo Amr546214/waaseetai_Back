@@ -3,6 +3,7 @@ import { arbPaymentService } from '../services/arb-payment.service';
 import { CLIENT_ROUTES } from '../services/client-notifications.service';
 import { logger } from '../config/logger';
 import { siteBaseUrl } from '../utils/site-url';
+import { parseBankJson } from '../services/arb-client';
 
 const userIdOf = (req: Request): string | null => ((req as any).user?.id as string | undefined) ?? null;
 
@@ -53,7 +54,13 @@ const frontendBase = () => siteBaseUrl() ?? '';
 const walletReturn = (ref: string | null) => `${frontendBase()}${CLIENT_ROUTES.wallet}?arb=${encodeURIComponent(ref ?? 'unknown')}`;
 /** the bank sends its notification as a JSON ARRAY with one object (`[{paymentId, trandata}]`, guide p.189), the browser redirect as form fields: accept both */
 const bodyObject = (b: unknown): Record<string, unknown> => { const x = Array.isArray(b) ? b[0] : b; return x && typeof x === 'object' ? (x as Record<string, unknown>) : {}; };
-const pick = (req: Request) => ({ ...(req.query as Record<string, unknown>), ...bodyObject(req.body) });
+/** the JSON body with long integers kept exact (as text). express.json has already parsed req.body through JS numbers, which rounds ids above 2^53; the raw bytes are parsed again. */
+const exactBody = (req: Request): unknown => {
+	const raw = (req as Request & { rawBody?: Buffer }).rawBody;
+	if (raw && raw.length > 0 && /json/i.test(req.headers['content-type'] ?? '')) { try { return parseBankJson(raw.toString('utf8')); } catch { /* fall back to the parsed body */ } }
+	return req.body;
+};
+const pick = (req: Request) => ({ ...(req.query as Record<string, unknown>), ...bodyObject(exactBody(req)) });
 
 /**
  * responseURL / errorURL: the BROWSER arrives here from the bank page (GET or POST). Nothing in the request is shown or trusted; it only tells us which
@@ -88,7 +95,7 @@ export const arbNotification = async (req: Request, res: Response) => {
 /** Webhook (guide p.179-186): plain JSON, hint only; the exact acknowledgement is `[{"status":"1"}]`. */
 export const arbWebhook = async (req: Request, res: Response) => {
 	try {
-		const out = await arbPaymentService.handleWebhook(req.body);
+		const out = await arbPaymentService.handleWebhook(exactBody(req));
 		if (out.ack) return res.status(200).json([{ status: '1' }]);
 		return res.status(400).json([{ status: '2' }]);
 	} catch (e) {

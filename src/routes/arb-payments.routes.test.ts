@@ -27,7 +27,7 @@ mock.module('../services/arb-payment.service', {
 async function call(method: string, url: string, body?: string, ctype?: string) {
 	const express = (await import('express')).default;
 	const router = (await import('./arb-payments.routes.ts')).default;
-	const app = express(); app.use(express.json()); app.use(express.urlencoded({ extended: true })); app.use('/api/payments/arb', router);
+	const app = express(); app.use(express.json({ verify: (req: any, _res: any, buf: Buffer) => { req.rawBody = buf; } })); app.use(express.urlencoded({ extended: true })); app.use('/api/payments/arb', router);
 	const server = http.createServer(app);
 	await new Promise<void>(r => server.listen(0, '127.0.0.1', () => r()));
 	try {
@@ -100,4 +100,13 @@ test('the browser request DTO carries only the net USD: extra fields (amount, cu
 	for (const bad of [{ netUsd: 100, amount: 1 }, { netUsd: 100, currency: 'USD' }, { netUsd: 100, currencyCode: '840', status: 'CAPTURED' }, { netUsd: 100, acknowledgePreviousRisk: true }, { netUsd: 49.99 }, { netUsd: 100001 }, { netUsd: '100' }, {}, { netUsd: NaN }]) {
 		assert.equal(s.safeParse(bad).success, false, JSON.stringify(bad));
 	}
+});
+
+test('long numeric ids in a JSON body reach the service digit for digit (as text), for both notification flows', async () => {
+	calls.length = 0; mode = 'ok'; ack = true;
+	await call('POST', '/api/payments/arb/webhook', '[{"type":"PAYMENT","payLoad":[{"paymentId":700202214780010325,"trackId":9007199254740993,"transId":202214720027040}]}]', 'application/json');
+	const w = calls.find(c => c[0] === 'webhook')![1] as any[];
+	assert.equal(w[0].payLoad[0].paymentId, '700202214780010325'); assert.equal(w[0].payLoad[0].trackId, '9007199254740993'); assert.equal(typeof w[0].payLoad[0].transId, 'number'); // 15 digits: exact as a number too
+	await call('POST', '/api/payments/arb/notify', '[{"paymentId":100201935044735860,"trandata":"AB"}]', 'application/json');
+	assert.deepEqual(calls.find(c => c[0] === 'notify')![1], { paymentId: '100201935044735860', trandata: 'AB' });
 });

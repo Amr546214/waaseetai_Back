@@ -378,9 +378,9 @@ export class ArbPaymentService {
 	 * `[{"status":"1"}]`, and without it the gateway keeps resending (p.186) — there is NO void in this protocol. Nothing in it can be authenticated, so it is only a HINT:
 	 *  - it NEVER changes an attempt's status and NEVER moves money (no status write at all); everything it says, including its own `responseURL`, is ignored;
 	 *  - it can only ask «please check this known attempt», and that check is bounded: one Inquiry in flight per attempt (shared), at most one per HINT_MIN_GAP_MS per attempt,
-	 *    at most HINT_BUDGET_PER_MIN for all hints together; beyond that the hint is dropped (the reconciler checks every unsettled attempt anyway);
+	 *    at most HINT_BUDGET_PER_MIN for all hints together; beyond that the hint is not run now but the attempt is made due for the reconciler (see makeDue);
 	 *  - the acknowledgement does not wait for the check;
-	 *  - ids are read exactly (trackId is a safe integer; a paymentId that arrived as a JSON number is ignored because it may have been rounded).
+	 *  - ids are TEXT: the controller parses the raw body so that a long numeric id is read digit for digit (never through a JS number); a bare JSON number that is not a safe integer is refused.
 	 * ack=true for any readable body (known or unknown attempt: resending changes nothing); ack=false only for an unreadable body so the gateway retries.
 	 */
 	async handleWebhook(body: unknown): Promise<{ ack: boolean }> {
@@ -391,15 +391,23 @@ export class ArbPaymentService {
 		const rec = asObj(first.payLoad);
 		if (!rec) return { ack: false };
 		const trackRaw = rec.trackId, payRaw = rec.paymentId;
-		const trackId = typeof trackRaw === 'string' || (typeof trackRaw === 'number' && Number.isSafeInteger(trackRaw)) ? String(trackRaw) : null;
-		const paymentId = typeof payRaw === 'string' && /^\d{10,25}$/.test(payRaw) ? payRaw : null;
+		const asId = (v: unknown): string | null => (typeof v === 'string' ? v : typeof v === 'number' && Number.isSafeInteger(v) ? String(v) : null);
+		const trackId = asId(trackRaw);
+		const paymentId = ((x) => (x && /^\d{10,25}$/.test(x) ? x : null))(asId(payRaw));
 		if (!trackId && !paymentId) return { ack: false };
 		const attempt = await this.findAttempt(paymentId, trackId);
 		if (!attempt || attempt.bankFinalAt || !UNRESOLVED.includes(attempt.status)) return { ack: true }; // not ours / already settled: nothing to do
-		if (attempt.lastInquiryAt && this.deps.now().getTime() - attempt.lastInquiryAt.getTime() < HINT_MIN_GAP_MS) return { ack: true }; // checked a moment ago
-		if (!this.inflight.has(attempt.id) && !this.takeHintBudget()) return { ack: true }; // budget spent: the reconciler will get to it
-		void this.verifyThrottled(attempt, HINT_MIN_GAP_MS).catch(e => logger.error(`[ARB] verify after webhook failed: ${(e as Error).message}`));
+		// A hint that is not turned into an Inquiry right now is NOT lost: the attempt is made «due» in the database (lastInquiryAt = null), so the reconciler - which also runs after a
+		// restart - asks the bank at its next tick instead of waiting out a back-off of up to a day. The write happens once per attempt (only while lastInquiryAt is set), so a flood cannot turn into writes.
+		if (attempt.lastInquiryAt && this.deps.now().getTime() - attempt.lastInquiryAt.getTime() < HINT_MIN_GAP_MS) { await this.makeDue(attempt.id); return { ack: true }; } // checked a moment ago, the news may be newer
+		if (!this.inflight.has(attempt.id) && !this.takeHintBudget()) { await this.makeDue(attempt.id); return { ack: true }; } // budget spent
+		void this.verifyThrottled(attempt, HINT_MIN_GAP_MS).catch(async e => { logger.error(`[ARB] verify after webhook failed: ${(e as Error).message}`); await this.makeDue(attempt.id).catch(() => undefined); });
 		return { ack: true };
+	}
+
+	/** Schedule the attempt for the reconciler's next run (no status change, no money). */
+	private async makeDue(id: string): Promise<void> {
+		await this.db.arbPayment.updateMany({ where: { id, lastInquiryAt: { not: null }, bankFinalAt: null, status: { in: UNRESOLVED } }, data: { lastInquiryAt: null } });
 	}
 
 	private async findAttempt(paymentId: string | null, trackId: string | null): Promise<ArbPayment | null> {
