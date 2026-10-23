@@ -25,8 +25,12 @@ async function env(cfgOver: any = {}) {
 	const { SimBank, testConfig } = await import('./arb-sim-bank.testutil');
 	// the migration's partial unique index (Prisma cannot express it; `db push` does not create it) — applied from the migration file itself
 	const sql = fs.readFileSync(path.join(__dirname, '../../prisma/migrations/20261023100000_arb_payments/migration.sql'), 'utf8');
-	const idx = sql.slice(sql.indexOf('CREATE UNIQUE INDEX "ux_arb_payments_one_open_per_user"')).trim().replace(/;$/, '').replace('CREATE UNIQUE INDEX', 'CREATE UNIQUE INDEX IF NOT EXISTS');
+	const idx = sql.slice(sql.indexOf('CREATE UNIQUE INDEX "ux_arb_payments_one_open_per_user"')).split(';')[0].trim().replace('CREATE UNIQUE INDEX', 'CREATE UNIQUE INDEX IF NOT EXISTS');
 	await prisma.$executeRawUnsafe(idx);
+	// the database-level financial invariant (also from the migration file)
+	const chk = sql.slice(sql.indexOf('ALTER TABLE "arb_payments" ADD CONSTRAINT "arb_payments_applied_consistent"')).split(';')[0].trim();
+	const have: any[] = await prisma.$queryRawUnsafe("SELECT 1 AS one FROM pg_constraint WHERE conname = 'arb_payments_applied_consistent'");
+	if (have.length === 0) await prisma.$executeRawUnsafe(chk);
 	const bank = new SimBank();
 	const clock = { t: Date.now() };
 	const svc = new ArbPaymentService({ prisma: prisma as any, http: bank, config: () => testConfig(cfgOver), now: () => new Date(clock.t) });
@@ -43,6 +47,7 @@ async function env(cfgOver: any = {}) {
 	return { prisma, svc, bank, clock, mkUser, balance, walletRows, row, payAndReturn };
 }
 const IP = '203.0.113.7';
+const fixtureNote = 'fixture numbers only (fee 2.5 %, 3.75 SAR/USD): no fee or rate is approved';
 
 test('PG: amount, currency and fee are derived on the server; the bank receives exactly amountSar in 682; the browser only sends net USD', opts, async () => {
 	const { svc, bank, mkUser, row } = await env();
@@ -51,9 +56,9 @@ test('PG: amount, currency and fee are derived on the server; the bank receives 
 	assert.equal(v.state, 'WAITING_PAGE');
 	assert.match(v.redirectUrl!, /^https:\/\/sim-bank\.test\/pg\/paymentpage\.htm\?PaymentID=\d+$/);
 	const a = await row(v.reference);
-	// mada 4.25 %: gross = 100 / (1 - 0.0425) = 104.44 ; x 3.75 (TEST fixture rate) = 391.65
-	assert.equal(a.grossUsd.toFixed(2), '104.44'); assert.equal(a.feeUsd.toFixed(2), '4.44'); assert.equal(a.amountSar.toFixed(2), '391.65'); assert.equal(a.currencyCode, '682');
-	assert.equal(bank.log[0].plain.amt, '391.65'); assert.equal(bank.log[0].plain.currencyCode, '682');
+	// FIXTURE inputs (no fee/rate is approved): fee 2.5 %, 3.75 SAR/USD: gross = 100 / 0.975 = 102.56 ; fee 2.56 ; x 3.75 = 384.60 SAR
+	assert.equal(a.grossUsd.toFixed(2), '102.56'); assert.equal(a.feeUsd.toFixed(2), '2.56'); assert.equal(a.amountSar.toFixed(2), '384.60'); assert.equal(a.currencyCode, '682');
+	assert.equal(bank.log[0].plain.amt, '384.60'); assert.equal(bank.log[0].plain.currencyCode, '682');
 	assert.equal(bank.log[0].plain.udf1, a.id); assert.equal(bank.log[0].plain.udf3, u.id);
 	assert.equal(bank.log[0].headers['X-FORWARDED-FOR'], IP);
 	assert.match(bank.log[0].plain.responseURL, /^https:\/\/app\.test\/api\/payments\/arb\/response$/);
@@ -64,7 +69,7 @@ test('PG: amount, currency and fee are derived on the server; the bank receives 
 });
 
 test('PG: not configured / switched off / no customer address -> clear refusal, no row, no bank call', opts, async () => {
-	for (const over of [{ enabled: false }, { sarPerUsd: 0 }, { resourceKey: 'short' }, { hostedTokenUrl: '' }]) {
+	for (const over of [{ enabled: false }, { sarPerUsd: 0 }, { feePercent: null }, { allowedUserIds: [] }, { resourceKey: 'short' }, { hostedTokenUrl: '' }]) {
 		const { svc, bank, mkUser, prisma } = await env(over); const u = await mkUser();
 		await assert.rejects(svc.initiate(u.id, 100, IP), (e: any) => e.statusCode === 503 || e.status === 503 || /غير متاح/.test(e.message));
 		assert.equal(bank.creates, 0); assert.equal(await prisma.arbPayment.count({ where: { userId: u.id } }), 0);
@@ -142,9 +147,9 @@ test('PG: happy path - return + verified CAPTURED credits the NET USD once, with
 	assert.equal(await balance(u.id), 100); assert.equal(await walletRows(u.id), 1);
 	const wt = await prisma.walletTransaction.findUniqueOrThrow({ where: { id: a.walletTxId! } });
 	assert.equal(wt.currency, 'USD'); assert.equal(wt.referenceId, `arb:${a.bankTransId}`);
-	const meta: any = wt.metadata; assert.equal(meta.chargedSar, 391.65); assert.equal(meta.currencyCode, '682'); assert.equal(meta.fxSarPerUsd, 3.75); assert.equal(meta.netCredited, 100);
+	const meta: any = wt.metadata; assert.equal(meta.chargedSar, 384.6); assert.equal(meta.currencyCode, '682'); assert.equal(meta.fxSarPerUsd, 3.75); assert.equal(meta.netCredited, 100);
 	const st = await svc.statusFor(u.id, v.reference);
-	assert.equal(st.state, 'PAID'); assert.equal(st.creditedUsd, 100); assert.equal(st.chargedSar, 391.65);
+	assert.equal(st.state, 'PAID'); assert.equal(st.creditedUsd, 100); assert.equal(st.chargedSar, 384.6);
 	assert.equal(await prisma.accountAuditLog.count({ where: { userId: u.id, eventType: 'WALLET_DEPOSIT_COMPLETED' } }), 1);
 });
 
@@ -152,7 +157,7 @@ test('PG: the browser coming back (even with a forged "success") is NOT proof: n
 	const { svc, bank, mkUser, balance, row } = await env(); const u = await mkUser();
 	const v = await svc.initiate(u.id, 100, IP); const a = await row(v.reference);
 	const { encryptTrandata } = await import('../utils/arb-crypto'); const { TEST_KEY } = await import('./arb-sim-bank.testutil');
-	const forged = encryptTrandata(JSON.stringify([{ paymentId: a.bankPaymentId, result: 'CAPTURED', transId: '999', trackId: a.trackId, amt: '391.65', udf1: a.id, actionCode: '1' }]), TEST_KEY);
+	const forged = encryptTrandata(JSON.stringify([{ paymentId: a.bankPaymentId, result: 'CAPTURED', transId: '999', trackId: a.trackId, amt: '384.60', udf1: a.id, actionCode: '1' }]), TEST_KEY);
 	await svc.handleReturn({ paymentId: a.bankPaymentId!, trandata: forged }); // even a perfectly formed trandata only triggers the Inquiry
 	assert.ok(bank.inquiries >= 1);
 	assert.equal(await balance(u.id), 0); assert.notEqual((await row(v.reference)).status, 'CAPTURED_APPLIED');
@@ -171,7 +176,7 @@ test('PG: someone else returning with my payment id credits only the attempt own
 });
 
 test('PG: amount / currency / ids that do not match THIS attempt are never credited', opts, async () => {
-	for (const bad of [{ amtOverride: '1.00' }, { amtOverride: '391.66' }, { udf1Override: 'another-attempt' }, { trackOverride: '111111111111111111' }, { paymentOverride: '999999999999999999' }, { actionOverride: '4' }]) {
+	for (const bad of [{ amtOverride: '1.00' }, { amtOverride: '384.61' }, { udf1Override: 'another-attempt' }, { trackOverride: '111111111111111111' }, { paymentOverride: '999999999999999999' }, { actionOverride: '4' }]) {
 		const { svc, bank, mkUser, balance, row } = await env(); const u = await mkUser();
 		const v = await svc.initiate(u.id, 100, IP); const a = await row(v.reference);
 		Object.assign(bank.byPayment(a.bankPaymentId!), bad);
@@ -343,12 +348,104 @@ test('PG: the migration file really contains the one-open-attempt partial index 
 
 test('PG: the quote is derived exactly like the charge, and openAttemptFor resumes the user\'s open attempt (refresh / reopen)', opts, async () => {
 	const { svc, mkUser, row } = await env(); const u = await mkUser();
-	const q = svc.quote(100);
-	assert.deepEqual(q, { netUsd: 100, feePercent: 4.25, feeUsd: 4.44, grossUsd: 104.44, chargedSar: 391.65, currency: 'SAR', sarPerUsd: 3.75 });
-	assert.throws(() => svc.quote(5), /بين 50/);
+	const q = svc.quote(u.id, 100);
+	assert.deepEqual(q, { netUsd: 100, feePercent: 2.5, feeUsd: 2.56, grossUsd: 102.56, chargedSar: 384.6, currency: 'SAR', sarPerUsd: 3.75 });
+	assert.throws(() => svc.quote(u.id, 5), /بين 50/);
 	assert.equal(await svc.openAttemptFor(u.id), null);
 	const v = await svc.initiate(u.id, 100, IP);
 	assert.equal((await row(v.reference)).amountSar.toNumber(), q.chargedSar); // the quote and the charge never disagree
 	const open = await svc.openAttemptFor(u.id);
 	assert.equal(open?.reference, v.reference); assert.equal(open?.state, 'WAITING_PAGE');
+});
+
+
+test('PG: the rail is open ONLY to the listed user ids (UAT = QA accounts); anyone else sees it unavailable and reaches no bank call', opts, async () => {
+	const { mkUser } = await env(); const qa = await mkUser(); const other = await mkUser();
+	const e = await env({ allowedUserIds: [qa.id] });
+	assert.equal(e.svc.isAvailable(qa.id), true); assert.equal(e.svc.isAvailable(other.id), false);
+	await assert.rejects(e.svc.initiate(other.id, 100, IP), /لحسابك/); await assert.rejects(async () => e.svc.quote(other.id, 100), /لحسابك/);
+	assert.equal(await e.svc.openAttemptFor(other.id), null); assert.equal(e.bank.creates, 0);
+	assert.equal((await e.svc.initiate(qa.id, 100, IP)).state, 'WAITING_PAGE'); assert.equal(e.bank.creates, 1);
+	// nobody listed = nobody
+	const none = await env({ allowedUserIds: [] }); assert.equal(none.svc.isAvailable(qa.id), false);
+});
+
+test('PG: a private / loopback / missing customer address is refused (the bank would decline it); a public one is passed first in X-FORWARDED-FOR', opts, async () => {
+	const { svc, bank, mkUser } = await env(); const u = await mkUser();
+	for (const ip of ['unknown', '', '127.0.0.1', '10.1.2.3', '172.23.0.1', '192.168.1.5', '::1', 'fd00::1', '100.64.0.1', 'not-an-ip']) await assert.rejects(svc.initiate(u.id, 100, ip), /عنوانك/, ip);
+	assert.equal(bank.creates, 0);
+	await svc.initiate(u.id, 100, '198.51.100.20'); assert.equal(bank.log[0].headers['X-FORWARDED-FOR'], '198.51.100.20');
+});
+
+test('PG: abandon - a user who left the bank page can start over; a later verified capture of the abandoned attempt is still applied once', opts, async () => {
+	const { svc, bank, mkUser, balance, walletRows, row, clock } = await env(); const u = await mkUser(); const x = await mkUser();
+	const v = await svc.initiate(u.id, 100, IP);
+	await assert.rejects(svc.abandon(x.id, v.reference), /غير موجودة/);
+	const ab = await svc.abandon(u.id, v.reference);
+	assert.equal(ab.state, 'CANCELLED'); assert.equal((await row(v.reference)).status, 'CANCELLED');
+	const w = await svc.initiate(u.id, 100, IP); assert.notEqual(w.reference, v.reference); assert.equal(bank.creates, 2);
+	const a = await row(v.reference); bank.settle(a.bankPaymentId!, 'CAPTURED'); clock.t += 10_000;
+	await svc.handleReturn({ paymentId: a.bankPaymentId! });
+	assert.equal(await balance(u.id), 100); assert.equal(await walletRows(u.id), 1);
+	// a non-REDIRECTED attempt cannot be abandoned
+	const again = await svc.abandon(u.id, v.reference); assert.equal(again.state, 'PAID');
+});
+
+test('PG: server-side reconciliation - no browser ever came back, a NEW service instance (restart) finds the capture and applies it once, also when two runs overlap', opts, async () => {
+	const e = await env(); const u = await e.mkUser();
+	await e.prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED')`); // the shared test database holds open rows of earlier tests
+	const v = await e.svc.initiate(u.id, 100, IP); const a = await e.row(v.reference);
+	e.bank.settle(a.bankPaymentId!, 'CAPTURED'); // paid at the bank; the user closed the browser, no callback arrived
+	const { ArbPaymentService } = await import('./arb-payment.service'); const { testConfig } = await import('./arb-sim-bank.testutil');
+	const restarted = new ArbPaymentService({ prisma: e.prisma as any, http: e.bank, config: () => testConfig(), now: () => new Date(e.clock.t) });
+	e.clock.t += 60_000;
+	const [r1, r2] = await Promise.all([restarted.reconcileOnce(), restarted.reconcileOnce()]);
+	assert.ok(r1.checked + r2.checked >= 1);
+	assert.equal(await e.balance(u.id), 100); assert.equal(await e.walletRows(u.id), 1); assert.equal((await e.row(v.reference)).status, 'CAPTURED_APPLIED');
+	const again = await restarted.reconcileOnce(); assert.equal(again.checked, 0); assert.equal(await e.walletRows(u.id), 1);
+});
+
+test('PG: reconciliation back-off, young in-flight creates skipped, nothing credited when the bank has no capture, expiry after the TTL', opts, async () => {
+	const e = await env(); const u = await e.mkUser(); const u2 = await e.mkUser();
+	await e.prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED')`); // the shared test database holds open rows of earlier tests
+	const v = await e.svc.initiate(u.id, 100, IP);
+	await e.svc.reconcileOnce(); const n1 = e.bank.inquiries; // just created: its last inquiry is "never" => checked once
+	await e.svc.reconcileOnce(); assert.equal(e.bank.inquiries, n1); // back-off: not asked again within 30 s
+	e.clock.t += 31 * 60_000;
+	await e.svc.reconcileOnce();
+	assert.equal(await e.balance(u.id), 0); assert.equal((await e.row(v.reference)).status, 'EXPIRED'); // soft: a later capture would still apply
+	// a lost create younger than 90 s is left alone
+	e.bank.dropCreateAnswer = true; const lost = await e.svc.initiate(u2.id, 100, IP); e.bank.dropCreateAnswer = false;
+	await e.svc.reconcileOnce(); assert.equal((await e.row(lost.reference)).inquiryCount, 0); assert.equal((await e.row(lost.reference)).status, 'CREATE_UNKNOWN'); // young lost create: not asked about
+});
+
+test('PG: the card brand reported by the bank is recorded after payment, and the charged amount never depends on it', opts, async () => {
+	const { svc, mkUser, row, payAndReturn, prisma } = await env(); const u = await mkUser();
+	const v = await svc.initiate(u.id, 100, IP); const before = (await row(v.reference)).amountSar.toFixed(2);
+	await payAndReturn(v.reference);
+	const a = await row(v.reference); assert.equal(a.bankCardType, 'Mada'); assert.equal(a.amountSar.toFixed(2), before);
+	assert.equal(((await prisma.walletTransaction.findUniqueOrThrow({ where: { id: a.walletTxId! } })).metadata as any).cardType, 'Mada');
+});
+
+test('PG: the DATABASE refuses an applied attempt without its wallet transaction / bank id (CHECK), and the wallet reference is unique across attempts', opts, async () => {
+	const { svc, mkUser, prisma, row } = await env(); const u = await mkUser();
+	const v = await svc.initiate(u.id, 100, IP);
+	await assert.rejects(prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'CAPTURED_APPLIED', "appliedAt" = now() WHERE id = '${v.reference}'`), /arb_payments_applied_consistent|check constraint/i);
+	assert.notEqual((await row(v.reference)).status, 'CAPTURED_APPLIED');
+});
+
+test('PG: logs never contain the resource key, the tranportal password or an encrypted payload', opts, async () => {
+	const { logger } = await import('../config/logger'); const { TEST_KEY } = await import('./arb-sim-bank.testutil');
+	const seen: string[] = []; const orig: Record<string, any> = {};
+	for (const k of ['info', 'warn', 'error', 'debug', 'log'] as const) { orig[k] = (logger as any)[k]; (logger as any)[k] = (...a: any[]) => { seen.push(a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ')); }; }
+	try {
+		const e = await env(); const u = await e.mkUser();
+		const v = await e.svc.initiate(u.id, 100, IP); const a = await e.row(v.reference);
+		Object.assign(e.bank.byPayment(a.bankPaymentId!), { amtOverride: '1.00' }); e.bank.settle(a.bankPaymentId!, 'CAPTURED');
+		await e.svc.handleReturn({ paymentId: a.bankPaymentId!, trandata: 'ZZ' + e.bank.trandataFor(e.bank.byPayment(a.bankPaymentId!)) });
+		e.bank.rejectCreate = 'IPAY0100024'; await e.svc.initiate((await e.mkUser()).id, 100, IP);
+	} finally { for (const k of Object.keys(orig)) (logger as any)[k] = orig[k]; }
+	const all = seen.join('\n');
+	assert.ok(all.length > 0);
+	assert.ok(!all.includes(TEST_KEY) && !all.includes('test-password') && !/[0-9A-F]{64,}/.test(all), 'a secret or an encrypted payload reached the log');
 });

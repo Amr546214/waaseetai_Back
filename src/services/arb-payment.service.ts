@@ -2,8 +2,9 @@ import { randomInt } from 'crypto';
 import { ArbPayment, ArbPaymentStatus, LogCategory, LogStatus, Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '../config/db';
 import { AppError } from '../utils/app-error';
-import { depositGrossUp } from '../utils/fee-policy';
-import { ArbConfig, arbFeePercent, loadArbConfig, missingArbSettings } from '../config/arb.config';
+import { isIP } from 'net';
+import { priceArbDeposit } from '../utils/arb-pricing';
+import { ArbConfig, arbAllowsUser, loadArbConfig, missingArbSettings } from '../config/arb.config';
 import { ArbHttp, BankTxn, InquiryBy, createHostedPayment, fetchArbHttp, inquire, readReturnTrandata } from './arb-client';
 import { CLIENT_ROUTES, ClientNotificationInput, clientNotifications } from './client-notifications.service';
 import { notifyAdmins } from './admin-notifications.service';
@@ -71,19 +72,37 @@ const dec = (v: string | number) => new Prisma.Decimal(v);
 
 export interface ArbDeps { prisma: typeof defaultPrisma; http: ArbHttp; config: () => ArbConfig; now: () => Date }
 
+/** a public, routable address (what the gateway needs as the customer IP); loopback / private / link-local / unspecified are not */
+export function isPublicIp(ip: string): boolean {
+	const v = isIP(ip);
+	if (!v) return false;
+	if (v === 4) {
+		const [a, b] = ip.split('.').map(Number);
+		return !(a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224);
+	}
+	const l = ip.toLowerCase();
+	return !(l === '::' || l === '::1' || l.startsWith('fe80') || l.startsWith('fc') || l.startsWith('fd') || l.startsWith('ff'));
+}
+
+class AlreadyClosed extends Error {}
+
 export class ArbPaymentService {
 	constructor(private deps: ArbDeps = { prisma: defaultPrisma, http: fetchArbHttp, config: () => loadArbConfig(), now: () => new Date() }) {}
 
 	private get db() { return this.deps.prisma; }
 
 	/** The browser only learns whether the rail exists; never why (settings names stay server-side). */
-	isAvailable(): boolean {
+	isAvailable(userId?: string): boolean {
 		const c = this.deps.config();
-		return c.enabled && missingArbSettings(c).length === 0;
+		return c.enabled && missingArbSettings(c).length === 0 && (userId === undefined || arbAllowsUser(c, userId));
 	}
 
-	private requireReady(): ArbConfig {
+	/** userId given = the call is on behalf of a user and the rail must be open to THAT user (UAT: QA accounts only). */
+	private requireReady(userId?: string): ArbConfig {
 		const c = this.deps.config();
+		if (userId !== undefined && c.enabled && missingArbSettings(c).length === 0 && !arbAllowsUser(c, userId)) {
+			throw Object.assign(new AppError('الدفع بالبطاقة غير متاح لحسابك حاليًا.', 403), { code: 'ARB_NOT_AVAILABLE' });
+		}
 		if (!c.enabled || missingArbSettings(c).length > 0) {
 			const miss = missingArbSettings(c);
 			if (c.enabled && miss.length) logger.warn(`[ARB] enabled but not configured: ${miss.join(',')}`);
@@ -108,19 +127,16 @@ export class ArbPaymentService {
 	}
 
 	/** What a deposit would cost, derived exactly like initiate() does (read-only: no row, no bank call). Shown to the user BEFORE they are sent to the bank. */
-	quote(netUsd: number) {
-		const cfg = this.requireReady();
+	quote(userId: string, netUsd: number) {
+		const cfg = this.requireReady(userId);
 		if (!Number.isFinite(netUsd) || netUsd < MIN_NET_USD || netUsd > MAX_NET_USD) throw new AppError(`المبلغ يجب أن يكون بين ${MIN_NET_USD} و ${MAX_NET_USD.toLocaleString('en-US')} دولار أمريكي`, 400);
-		const net = dec(netUsd).toDecimalPlaces(2);
-		const gross = dec(depositGrossUp(net.toNumber(), cfg.feeMethod)).toDecimalPlaces(2);
-		return {
-			netUsd: net.toNumber(), feePercent: arbFeePercent(cfg), feeUsd: gross.minus(net).toDecimalPlaces(2).toNumber(), grossUsd: gross.toNumber(),
-			chargedSar: gross.mul(dec(cfg.sarPerUsd)).toDecimalPlaces(2).toNumber(), currency: 'SAR', sarPerUsd: cfg.sarPerUsd,
-		};
+		const p = priceArbDeposit(netUsd, cfg.feePercent!, cfg.sarPerUsd);
+		return { netUsd: p.net.toNumber(), feePercent: cfg.feePercent!, feeUsd: p.fee.toNumber(), grossUsd: p.gross.toNumber(), chargedSar: p.chargeSar.toNumber(), currency: 'SAR', sarPerUsd: cfg.sarPerUsd };
 	}
 
 	/** The user's open attempt (if any), brought to a verdict when the bank can give one. Lets a refreshed / reopened page pick up where it was. */
 	async openAttemptFor(userId: string): Promise<PublicArbView | null> {
+		if (!this.isAvailable(userId)) return null;
 		const open = await this.db.arbPayment.findFirst({ where: { userId, status: { in: [...OPEN, 'CANCELLED', 'EXPIRED'] }, createdAt: { gt: new Date(this.deps.now().getTime() - 24 * 3_600_000) } }, orderBy: { createdAt: 'desc' } });
 		if (!open) return null;
 		return this.statusFor(userId, open.id);
@@ -128,32 +144,30 @@ export class ArbPaymentService {
 
 	/** Start (or resume) the one open card attempt of this user. */
 	async initiate(userId: string, netUsd: number, customerIp: string): Promise<PublicArbView> {
-		const cfg = this.requireReady();
+		const cfg = this.requireReady(userId);
 		if (!Number.isFinite(netUsd) || netUsd < MIN_NET_USD || netUsd > MAX_NET_USD) {
 			throw new AppError(`المبلغ يجب أن يكون بين ${MIN_NET_USD} و ${MAX_NET_USD.toLocaleString('en-US')} دولار أمريكي`, 400);
 		}
-		if (!customerIp || customerIp === 'unknown') {
-			// the gateway declines a request without the customer address (guide p.13): refuse here with a clear reason instead
-			throw Object.assign(new AppError('تعذّر تحديد عنوانك لإتمام الدفع الآمن. حاول مرة أخرى.', 400), { code: 'CUSTOMER_IP_MISSING' });
+		if (!isPublicIp(customerIp)) {
+			// the gateway declines a request without a real customer address (guide p.13). A private / loopback / missing address means the proxy
+			// setting is wrong or the call is internal: refuse here with a clear reason instead of sending the bank a bad address.
+			throw Object.assign(new AppError('تعذّر تحديد عنوانك لإتمام الدفع الآمن. حاول مرة أخرى.', 400), { code: 'CUSTOMER_IP_UNRELIABLE' });
 		}
 		const open = await this.settleOpenAttempt(userId);
 		if (open) return open;
 
-		const net = dec(netUsd).toDecimalPlaces(2);
-		const method = cfg.feeMethod;
-		const gross = dec(depositGrossUp(net.toNumber(), method)).toDecimalPlaces(2);
-		const fee = gross.minus(net).toDecimalPlaces(2);
+		const price = priceArbDeposit(netUsd, cfg.feePercent!, cfg.sarPerUsd);
+		const net = price.net, fee = price.fee, gross = price.gross, amountSar = price.chargeSar;
 		const rate = dec(cfg.sarPerUsd);
-		const amountSar = gross.mul(rate).toDecimalPlaces(2);
 		const now = this.deps.now();
 
 		let attempt: ArbPayment;
 		try {
 			attempt = await this.db.arbPayment.create({
 				data: {
-					userId, trackId: this.newTrackId(), status: 'CREATED', netUsd: net, feeUsd: fee, feePercent: arbFeePercent(cfg), grossUsd: gross,
+					userId, trackId: this.newTrackId(), status: 'CREATED', netUsd: net, feeUsd: fee, feePercent: cfg.feePercent!, grossUsd: gross,
 					fxSarPerUsd: rate, amountSar, currencyCode: cfg.currencyCode, customerIp,
-					expiresAt: new Date(now.getTime() + cfg.attemptTtlMin * 60_000),
+					createdAt: now, expiresAt: new Date(now.getTime() + cfg.attemptTtlMin * 60_000),
 				},
 			});
 		} catch (e) {
@@ -231,6 +245,47 @@ export class ArbPaymentService {
 		return this.verify(p.id);
 	}
 
+	/**
+	 * The user says they left the bank page and want to start over. Only a REDIRECTED attempt can be abandoned; it becomes the SOFT CANCELLED state
+	 * (a later verified capture is still applied) and then a new attempt may start. Never touches a paid / declined / verifying attempt.
+	 */
+	async abandon(userId: string, reference: string): Promise<PublicArbView> {
+		const p = await this.db.arbPayment.findUnique({ where: { id: reference } });
+		if (!p || p.userId !== userId) throw new AppError('عملية الدفع غير موجودة', 404);
+		if (p.status !== 'REDIRECTED') return this.view(p);
+		await this.db.arbPayment.updateMany({ where: { id: p.id, status: 'REDIRECTED' }, data: { status: 'CANCELLED' } });
+		try { return this.view(await this.verify(p.id)); } catch { return this.view(await this.db.arbPayment.findUniqueOrThrow({ where: { id: p.id } })); }
+	}
+
+	/**
+	 * Server-side reconciliation, independent of any browser or page: finds attempts that are open or soft-closed in the last 72 h and asks the bank
+	 * (Inquiry) with a back-off per attempt. Works after the browser was closed and after a server restart (it only reads the database).
+	 * Safe to run on several instances or twice at once: verify() is idempotent and the credit is exactly-once by the database.
+	 */
+	async reconcileOnce(limit = 25): Promise<{ checked: number; applied: number }> {
+		const cfg = this.deps.config();
+		if (!cfg.enabled || missingArbSettings(cfg).length > 0) return { checked: 0, applied: 0 };
+		const now = this.deps.now().getTime();
+		const rows = await this.db.arbPayment.findMany({
+			where: { status: { in: [...OPEN, 'CANCELLED', 'EXPIRED'] }, createdAt: { gt: new Date(now - 72 * 3_600_000) } },
+			orderBy: [{ lastInquiryAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'asc' }], take: limit * 4, // never-checked attempts first, then the longest-waiting
+		});
+		let checked = 0, applied = 0;
+		for (const a of rows) {
+			if (checked >= limit) break;
+			const age = now - a.createdAt.getTime();
+			if (!a.bankPaymentId && age < STALE_CREATE_MS) continue; // a create still in flight
+			const gap = age < 10 * 60_000 ? 30_000 : age < 3_600_000 ? 5 * 60_000 : 30 * 60_000;
+			if (a.lastInquiryAt && now - a.lastInquiryAt.getTime() < gap) continue;
+			checked++;
+			try { const r = await this.verify(a.id); if (r.status === 'CAPTURED_APPLIED') applied++; } catch (e) { logger.error(`[ARB] reconcile of ${a.id} failed: ${(e as Error).message}`); }
+		}
+		return { checked, applied };
+	}
+
+	// NOTE: CANCELLED / EXPIRED rows are never moved back to an OPEN state (VERIFYING): the user may already have a new open attempt, and the one-open-attempt
+	// index would refuse the move. They are verified in place and only ever move to CAPTURED_APPLIED / DECLINED / AUTH_ONLY.
+
 	/** Browser returned to responseURL: hint only. Find the attempt by the payment id, remember the arrival, then verify with the bank. */
 	async handleReturn(input: { paymentId?: unknown; trandata?: unknown; error?: unknown }): Promise<{ reference: string | null }> {
 		const cfg = this.requireReady();
@@ -240,7 +295,7 @@ export class ArbPaymentService {
 		const attempt = await this.findAttempt(paymentId, trackId);
 		if (!attempt) return { reference: null };
 		if (OPEN.includes(attempt.status) || attempt.status === 'CANCELLED' || attempt.status === 'EXPIRED') {
-			await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: { in: ['REDIRECTED', 'UNCONFIRMED', 'CANCELLED', 'EXPIRED', 'CREATE_UNKNOWN'] } }, data: { status: 'VERIFYING' } });
+			await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: { in: ['REDIRECTED', 'UNCONFIRMED', 'CREATE_UNKNOWN'] } }, data: { status: 'VERIFYING' } });
 			await this.verifyThrottled(await this.db.arbPayment.findUniqueOrThrow({ where: { id: attempt.id } }));
 		}
 		return { reference: attempt.id };
@@ -275,7 +330,7 @@ export class ArbPaymentService {
 			return { ack: false, responseUrl: null };
 		}
 		// the acknowledgement is only sent once the arrival is durably recorded
-		await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: { in: ['REDIRECTED', 'UNCONFIRMED', 'CANCELLED', 'EXPIRED', 'CREATE_UNKNOWN'] } }, data: { status: 'VERIFYING', bankPaymentId: attempt.bankPaymentId ?? txn.paymentId } });
+		await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: { in: ['REDIRECTED', 'UNCONFIRMED', 'CREATE_UNKNOWN'] } }, data: { status: 'VERIFYING', bankPaymentId: attempt.bankPaymentId ?? txn.paymentId } });
 		void this.verify(attempt.id).catch(e => logger.error(`[ARB] verify after notification failed: ${(e as Error).message}`));
 		return { ack: true, responseUrl: `${cfg.publicBaseUrl}/api/payments/arb/response` };
 	}
@@ -362,20 +417,21 @@ export class ArbPaymentService {
 		let notificationId: string | null = null;
 		try {
 			await this.db.$transaction(async tx => {
-				const claim = await tx.arbPayment.updateMany({
-					where: { id: a.id, appliedAt: null, status: { notIn: ['CAPTURED_APPLIED', 'DECLINED', 'CREATE_REJECTED'] } },
-					data: { status: 'CAPTURED_APPLIED', appliedAt: this.deps.now(), verifiedAt: this.deps.now(), bankTransId: t.transId, bankRef: t.ref, bankResult: 'CAPTURED', bankAuthCode: t.authCode, bankPaymentId: a.bankPaymentId ?? t.paymentId },
-				});
-				if (claim.count === 0) return; // someone else already applied / closed it: nothing to do, nothing duplicated
+				// 1) the money record first (unique referenceId = the exactly-once guard across ALL rails); 2) the claim carries its id, so the table CHECK
+				// (applied => appliedAt + walletTxId + bankTransId) holds in the same statement. A lost claim throws and rolls the wallet row back.
 				const wtx = await tx.walletTransaction.create({
 					data: {
 						userId: a.userId, type: 'DEPOSIT', amount: a.netUsd.toNumber(), currency: 'USD', status: 'COMPLETED', paymentMethod: 'ARB_CARD', referenceId: refId,
 						description: 'إيداع رصيد بالمحفظة بالبطاقة (البنك)',
-						metadata: { arbPaymentId: a.id, trackId: a.trackId, bankTransId: t.transId, netCredited: a.netUsd.toNumber(), grossUsd: a.grossUsd.toNumber(), feeUsd: a.feeUsd.toNumber(), feePercent: a.feePercent, chargedSar: a.amountSar.toNumber(), currencyCode: a.currencyCode, fxSarPerUsd: a.fxSarPerUsd.toNumber(), feePolicyVersion: 2 },
+						metadata: { arbPaymentId: a.id, trackId: a.trackId, bankTransId: t.transId, netCredited: a.netUsd.toNumber(), grossUsd: a.grossUsd.toNumber(), feeUsd: a.feeUsd.toNumber(), feePercent: a.feePercent, chargedSar: a.amountSar.toNumber(), currencyCode: a.currencyCode, fxSarPerUsd: a.fxSarPerUsd.toNumber(), cardType: t.cardType },
 					},
 				});
+				const claim = await tx.arbPayment.updateMany({
+					where: { id: a.id, appliedAt: null, status: { notIn: ['CAPTURED_APPLIED', 'DECLINED', 'CREATE_REJECTED'] } },
+					data: { status: 'CAPTURED_APPLIED', appliedAt: this.deps.now(), verifiedAt: this.deps.now(), bankTransId: t.transId, bankRef: t.ref, bankResult: 'CAPTURED', bankAuthCode: t.authCode, bankCardType: t.cardType, bankPaymentId: a.bankPaymentId ?? t.paymentId, walletTxId: wtx.id },
+				});
+				if (claim.count === 0) throw new AlreadyClosed(); // someone else applied / closed it: roll back our wallet row, nothing duplicated
 				await tx.user.update({ where: { id: a.userId }, data: { walletBalance: { increment: a.netUsd.toNumber() } } });
-				await tx.arbPayment.update({ where: { id: a.id }, data: { walletTxId: wtx.id } });
 				await tx.accountAuditLog.create({
 					data: {
 						userId: a.userId, category: LogCategory.SYSTEM_AUDIT, title: 'إيداع رصيد بالمحفظة', actionText: `إيداع ${a.netUsd.toFixed(2)} دولار (صافي) بالبطاقة، المحصّل ${a.amountSar.toFixed(2)} ريال`,
@@ -389,6 +445,7 @@ export class ArbPaymentService {
 				notificationId = (await tx.notification.create({ data: note as any })).id;
 			});
 		} catch (e) {
+			if (e instanceof AlreadyClosed) return this.db.arbPayment.findUniqueOrThrow({ where: { id: a.id } });
 			if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
 				// the unique wallet reference / bank transaction id already exists: it was credited (or the id belongs to another row) — never credit twice
 				const now = await this.db.arbPayment.findUniqueOrThrow({ where: { id: a.id } });
@@ -406,3 +463,12 @@ export class ArbPaymentService {
 }
 
 export const arbPaymentService = new ArbPaymentService();
+
+let reconcileTimer: ReturnType<typeof setInterval> | null = null;
+/** Starts the periodic reconciliation (60 s). No-op unless the rail is enabled and fully configured. */
+export function startArbReconciler(): boolean {
+	if (reconcileTimer || !arbPaymentService.isAvailable()) return false;
+	reconcileTimer = setInterval(() => { arbPaymentService.reconcileOnce().catch(e => logger.error(`[ARB] reconcile run failed: ${(e as Error).message}`)); }, 60_000);
+	reconcileTimer.unref();
+	return true;
+}

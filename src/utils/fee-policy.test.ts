@@ -88,8 +88,7 @@ test('affiliateCommission: 15 levels from the live config; level 7 = 2.75', () =
 
 // The ONLY importers: the read-only display endpoint (GET /levels serves the published percentage tables) and the PayPal DEPOSIT fee (7%, phase 1).
 // Nothing else is wired: no cashback, no marketer withdrawal fee, no provider withdrawal fee (the provider commission is taken at stage release, in utils/escrow-commission.ts).
-// + the bank-card deposit (ARB, feature-flagged off): its fee class comes from the same DEPOSIT_FEE_PERCENT table, nothing else of the policy.
-const READ_ONLY_DISPLAY_IMPORTERS = ['gamification.controller.ts', 'paypal-finance.service.ts', 'arb-payment.service.ts', 'arb.config.ts'];
+const READ_ONLY_DISPLAY_IMPORTERS = ['gamification.controller.ts', 'paypal-finance.service.ts'];
 test('fee-policy is wired only into the /levels display and the PayPal deposit fee, and BROKER_LEVEL_MATRIX is gone', () => {
   const root = join(__dirname, '..');
   const walk = (d: string, out: string[] = []): string[] => { for (const f of readdirSync(d)) { const p = join(d, f); statSync(p).isDirectory() ? walk(p, out) : out.push(p); } return out; };

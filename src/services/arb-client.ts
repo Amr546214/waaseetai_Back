@@ -33,6 +33,7 @@ export interface BankTxn {
 	actionCode: string | null;
 	ref: string | null;
 	authCode: string | null;
+	cardType: string | null;
 	udf1: string | null;
 	udf2: string | null;
 	udf3: string | null;
@@ -70,6 +71,7 @@ export function normalizeTxn(plain: any): BankTxn {
 		actionCode: str(plain?.actionCode),
 		ref: str(plain?.ref),
 		authCode: str(plain?.authCode),
+		cardType: str(plain?.cardType),
 		udf1: str(plain?.udf1),
 		udf2: str(plain?.udf2),
 		udf3: str(plain?.udf3),

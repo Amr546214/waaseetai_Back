@@ -2749,6 +2749,7 @@ model ArbPayment {
   bankRef         String?
   bankResult      String?          // raw result word from the bank (CAPTURED / APPROVED / ...), never shown to users
   bankAuthCode    String?
+  bankCardType    String?          // Visa / MasterCard / Mada as reported by the bank AFTER payment (reporting only; the fee does not depend on it)
   paymentPageUrl  String?
   customerIp      String?
   inquiryCount    Int              @default(0)

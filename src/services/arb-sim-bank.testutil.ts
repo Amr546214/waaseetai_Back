@@ -13,7 +13,7 @@ export const TEST_HOST = 'sim-bank.test';
 export const testConfig = (over: Partial<ArbConfig> = {}): ArbConfig => ({
 	enabled: true, tranportalId: 'TESTTRANPORTALID', tranportalPassword: 'test-password', resourceKey: TEST_KEY,
 	hostedTokenUrl: `https://${TEST_HOST}/pg/payment/hosted.htm`, inquiryUrl: `https://${TEST_HOST}/pg/payment/tranportal.htm`,
-	allowedHosts: [TEST_HOST], publicBaseUrl: 'https://app.test', sarPerUsd: 3.75 /* TEST FIXTURE ONLY — the real rate is an owner decision */, feeMethod: 'mada',
+	allowedHosts: [TEST_HOST], publicBaseUrl: 'https://app.test', sarPerUsd: 3.75 /* TEST FIXTURE ONLY — the real rate is an owner decision */, feePercent: 2.5 /* TEST FIXTURE ONLY — no fee is approved */, allowedUserIds: ['ALL'],
 	notificationEnabled: true, currencyCode: '682', httpTimeoutMs: 1000, attemptTtlMin: 30, ...over,
 });
 

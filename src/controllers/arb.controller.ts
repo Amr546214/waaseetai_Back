@@ -12,8 +12,8 @@ export function customerIpOf(req: Request): string {
 	return ip || 'unknown';
 }
 
-export const arbAvailability = (_req: Request, res: Response) => {
-	res.json({ success: true, data: { available: arbPaymentService.isAvailable() } });
+export const arbAvailability = (req: Request, res: Response) => {
+	res.json({ success: true, data: { available: arbPaymentService.isAvailable(userIdOf(req) ?? '') } });
 };
 
 export const initiateArbPayment = async (req: Request, res: Response, next: NextFunction) => {
@@ -28,7 +28,7 @@ export const initiateArbPayment = async (req: Request, res: Response, next: Next
 export const arbQuote = async (req: Request, res: Response, next: NextFunction) => {
 	try {
 		const n = Number(req.query.netUsd);
-		return res.status(200).json({ success: true, data: arbPaymentService.quote(n) });
+		return res.status(200).json({ success: true, data: arbPaymentService.quote(userIdOf(req) ?? '', n) });
 	} catch (error) { next(error); }
 };
 
@@ -37,6 +37,14 @@ export const arbOpenAttempt = async (req: Request, res: Response, next: NextFunc
 		const uid = userIdOf(req);
 		if (!uid) return res.status(401).json({ success: false, message: 'غير مصرح' });
 		return res.status(200).json({ success: true, data: await arbPaymentService.openAttemptFor(uid) });
+	} catch (error) { next(error); }
+};
+
+export const arbAbandon = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const uid = userIdOf(req);
+		if (!uid) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		return res.status(200).json({ success: true, data: await arbPaymentService.abandon(uid, String(req.params.reference)) });
 	} catch (error) { next(error); }
 };
 
