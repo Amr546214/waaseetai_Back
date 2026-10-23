@@ -33,9 +33,11 @@ Inventory of everything in the 50 migrations that is not plain table/enum/index 
 
 * empty database → `apply.sh` → `prisma migrate status` = up to date;
 * `prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma` = only the ARB partial index and CHECK (the two objects Prisma cannot read back; file 20);
-* the same schema compared with a schema-only restore of the existing bank backup plus the reviewed upgrade SQL (`bank-upgrade-REVIEW.sql`): no differences other than the known partial objects;
 * a probe migration (not in the repository, in a temporary copy of the migrations folder) applied with `prisma migrate deploy` on top of the baseline database, then the application booted and queried the new column;
-* the application boots on the empty database (health check) with `ARB_ENABLED=false`.
+* the 37 ARB PostgreSQL tests (`arb-payment.pg.test.ts`) pass on a database built by this baseline;
+* the application boots on the empty database (health check) with `ARB_ENABLED=false`, locally and in the UAT containers.
+
+Not done: a comparison against the schema of an existing environment's database (e.g. the bank backup) was deliberately not run, to keep every existing environment and its backups untouched.
 
 ## When this baseline is stale
 
