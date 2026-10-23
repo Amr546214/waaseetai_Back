@@ -41,7 +41,7 @@ export interface BankTxn {
 
 export type InquiryResult =
 	| { kind: 'TXN'; txn: BankTxn }
-	| { kind: 'BANK_ERROR'; code: string | null }
+	| { kind: 'BANK_ERROR'; code: string | null; text: string | null }
 	| { kind: 'UNKNOWN' };
 
 const first = (v: unknown): any => (Array.isArray(v) ? v[0] : v);
@@ -122,7 +122,7 @@ export async function inquire(cfg: ArbConfig, http: ArbHttp, by: InquiryBy, amou
 	}
 	const j = parseJson(res.text);
 	if (res.status !== 200 || !j) return { kind: 'UNKNOWN' };
-	if (!j.trandata) return String(j.status) === '2' || j.error ? { kind: 'BANK_ERROR', code: str(j.error) } : { kind: 'UNKNOWN' };
+	if (!j.trandata) return String(j.status) === '2' || j.error ? { kind: 'BANK_ERROR', code: str(j.error), text: str(j.errorText) } : { kind: 'UNKNOWN' };
 	try {
 		const txn = normalizeTxn(first(JSON.parse(decryptTrandata(String(j.trandata), cfg.resourceKey))));
 		return { kind: 'TXN', txn };

@@ -25,6 +25,8 @@ CREATE TABLE "arb_payments" (
   "customerIp" TEXT,
   "inquiryCount" INTEGER NOT NULL DEFAULT 0,
   "lastInquiryAt" TIMESTAMP(3),
+  "bankFinalAt" TIMESTAMP(3),
+  "replacesId" TEXT,
   "verifiedAt" TIMESTAMP(3),
   "appliedAt" TIMESTAMP(3),
   "walletTxId" TEXT,

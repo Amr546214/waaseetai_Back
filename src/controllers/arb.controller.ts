@@ -20,7 +20,8 @@ export const initiateArbPayment = async (req: Request, res: Response, next: Next
 	try {
 		const uid = userIdOf(req);
 		if (!uid) return res.status(401).json({ success: false, message: 'غير مصرح' });
-		const data = await arbPaymentService.initiate(uid, (req.body as { netUsd: number }).netUsd, customerIpOf(req));
+		const b = req.body as { netUsd: number; acknowledgePreviousRisk?: boolean };
+		const data = await arbPaymentService.initiate(uid, b.netUsd, customerIpOf(req), { acknowledgePreviousRisk: b.acknowledgePreviousRisk === true });
 		return res.status(200).json({ success: true, data });
 	} catch (error) { next(error); }
 };

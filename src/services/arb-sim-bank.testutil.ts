@@ -32,7 +32,7 @@ export class SimBank implements ArbHttp {
 	dropCreateAnswer = false; // processed at the bank, answer lost on the way back
 	rejectCreate: string | null = null;
 	badDestination: string | null = null;
-	failInquiry: 'none' | 'timeout' | 'garbage' | 'notfound' = 'none';
+	failInquiry: 'none' | 'timeout' | 'garbage' | 'notfound' | 'expired' = 'none';
 	private seq = 7_000_000_000_000 + Math.floor(Math.random() * 1_000_000_000);
 	constructor(private key = TEST_KEY) {}
 
@@ -59,6 +59,7 @@ export class SimBank implements ArbHttp {
 	private inquiry(plain: any) {
 		this.inquiries++;
 		if (this.failInquiry === 'timeout') throw new Error('timeout');
+		if (this.failInquiry === 'expired') return { status: 200, text: JSON.stringify([{ status: '2', error: 'IPAY0100042', errorText: 'PaymentId Expired.', trandata: null }]) };
 		if (this.failInquiry === 'garbage') return { status: 200, text: '<html>oops</html>' };
 		const t = this.txns.find(x => (plain.udf5 === 'PaymentID' && x.paymentId === plain.transId) || (plain.udf5 === 'TrackID' && x.trackId === plain.transId) || (plain.udf5 === 'TRANID' && x.transId === plain.transId));
 		if (this.failInquiry === 'notfound' || !t) return { status: 200, text: JSON.stringify([{ status: '2', error: 'IPAY0100054', errorText: 'Payment details not available.', trandata: null }]) };

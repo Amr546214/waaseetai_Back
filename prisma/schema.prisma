@@ -2754,6 +2754,11 @@ model ArbPayment {
   customerIp      String?
   inquiryCount    Int              @default(0)
   lastInquiryAt   DateTime?
+  // set ONLY when the BANK itself gave a final answer for this attempt (captured, declined, authorization-only, payment id expired, or no record of a create that never gave the user a URL).
+  // A local cancel / local expiry / elapsed time never sets it: such an attempt may still be collected and stays under reconciliation until the bank says final.
+  bankFinalAt     DateTime?
+  // the earlier, bank-unsettled attempt this one was started over, after the user explicitly acknowledged the duplicate-charge risk
+  replacesId      String?
   verifiedAt      DateTime?
   appliedAt       DateTime?
   walletTxId      String?          @unique
