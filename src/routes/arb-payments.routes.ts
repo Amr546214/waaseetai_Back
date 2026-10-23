@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { arbBrowserError, arbBrowserResponse, arbNotification } from '../controllers/arb.controller';
+import { arbBrowserError, arbBrowserResponse, arbNotification, arbWebhook } from '../controllers/arb.controller';
 
 const router = Router();
 
@@ -10,5 +10,6 @@ router.post('/response', arbBrowserResponse);
 router.get('/error', arbBrowserError);
 router.post('/error', arbBrowserError);
 router.post('/notify', arbNotification);
+router.post('/webhook', arbWebhook);
 
 export default router;

@@ -15,7 +15,7 @@
  *  ARB_DEPOSIT_FEE_PERCENT     ONE flat fee percent charged to the user on top of the net (may be 0). No default: it must come from an approved policy.
  *                              (The 4.25 / 5.5 % in utils/fee-policy.ts are the INTERNAL finance sheet's wallet-deposit classes, not a bank/merchant contract; this rail does not read them.)
  *  ARB_ALLOWED_USER_IDS        comma list of user ids that may use the rail (UAT: QA accounts only); 'ALL' opens it to everyone (a later, explicit decision)
- *  ARB_NOTIFICATION_ENABLED    'true' only if the bank enabled merchant notification (webhook) for this merchant
+ *  (no notification flag: both documented notification flows are always served when the rail is on — see arb-payment.service handleNotification / handleWebhook)
  */
 export interface ArbConfig {
 	enabled: boolean;
@@ -31,7 +31,6 @@ export interface ArbConfig {
 	feePercent: number | null;
 	/** user ids allowed to use the rail; 'ALL' = everyone (only by explicit decision) */
 	allowedUserIds: string[];
-	notificationEnabled: boolean;
 	currencyCode: '682';
 	/** ms, whole bank HTTP call */
 	httpTimeoutMs: number;
@@ -55,7 +54,6 @@ export function loadArbConfig(env: NodeJS.ProcessEnv = process.env): ArbConfig {
 		sarPerUsd: Number.isFinite(rate) && rate > 0 ? rate : 0,
 		feePercent: Number.isFinite(fee) && fee >= 0 && fee < 50 ? fee : null,
 		allowedUserIds: (env.ARB_ALLOWED_USER_IDS || '').split(',').map(x => x.trim()).filter(Boolean),
-		notificationEnabled: (env.ARB_NOTIFICATION_ENABLED || '').trim() === 'true',
 		currencyCode: '682',
 		httpTimeoutMs: 20_000,
 		attemptTtlMin: 30,
@@ -85,5 +83,5 @@ export function arbAllowsUser(c: ArbConfig, userId: string): boolean {
 
 /** Presence only: which settings exist, no values. Safe to log / print. */
 export function describeArbConfig(c: ArbConfig): Record<string, boolean | string[]> {
-	return { enabled: c.enabled, missing: missingArbSettings(c), notificationEnabled: c.notificationEnabled };
+	return { enabled: c.enabled, missing: missingArbSettings(c) };
 }

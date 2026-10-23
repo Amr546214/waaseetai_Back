@@ -314,7 +314,7 @@ test('PG: two attempts can never share one bank transaction id (unique) - the se
 	assert.notEqual((await row(v2.reference)).status, 'CAPTURED_APPLIED');
 });
 
-test('PG: notification (guide p.187-194): acknowledged only for a matching known attempt; mismatch / unknown / disabled are NOT acknowledged', opts, async () => {
+test('PG: notification (guide p.187-194): acknowledged only for a matching known attempt; mismatch / unknown are NOT acknowledged', opts, async () => {
 	const { svc, bank, mkUser, row, balance } = await env(); const u = await mkUser();
 	const v = await svc.initiate(u.id, 100, IP); const a = await row(v.reference);
 	bank.settle(a.bankPaymentId!, 'CAPTURED');
@@ -327,9 +327,6 @@ test('PG: notification (guide p.187-194): acknowledged only for a matching known
 	assert.equal((await svc.handleNotification({ paymentId: a.bankPaymentId!, trandata: 'zz' })).ack, false);
 	Object.assign(bank.byPayment(a.bankPaymentId!), { amtOverride: undefined, paymentOverride: '1234567890123456', trackOverride: '123456789012345678' });
 	assert.equal((await svc.handleNotification({ paymentId: '1234567890123456', trandata: bank.trandataFor(bank.byPayment(a.bankPaymentId!)) })).ack, false);
-	const off = await env({ notificationEnabled: false }); const u2 = await off.mkUser(); const v2 = await off.svc.initiate(u2.id, 100, IP); const a2 = await off.row(v2.reference);
-	off.bank.settle(a2.bankPaymentId!, 'CAPTURED');
-	assert.equal((await off.svc.handleNotification({ paymentId: a2.bankPaymentId!, trandata: off.bank.trandataFor(off.bank.byPayment(a2.bankPaymentId!)) })).ack, false);
 	assert.ok((await balance(u.id)) >= 0);
 });
 
@@ -483,4 +480,25 @@ test('PG: logs never contain the resource key, the tranportal password or an enc
 	const all = seen.join('\n');
 	assert.ok(all.length > 0);
 	assert.ok(!all.includes(TEST_KEY) && !all.includes('test-password') && !/[0-9A-F]{64,}/.test(all), 'a secret or an encrypted payload reached the log');
+});
+
+
+test('PG: webhook flow (guide p.179-186): plain JSON, acknowledged `[{status:1}]` once processed; it is only a HINT - a webhook that says CAPTURED credits nothing unless the bank confirms by Inquiry, then exactly once', opts, async () => {
+	const { svc, bank, mkUser, balance, walletRows, row, clock } = await env(); const u = await mkUser();
+	const v = await svc.initiate(u.id, 100, IP); const a = await row(v.reference);
+	const hook = (status: string, extra: any = {}) => [{ result: [{ status }], responseURL: 'https://app.test/x', type: 'PAYMENT', payLoad: [{ paymentId: Number(a.bankPaymentId), trackId: a.trackId, transId: 202110527755152, amt: 384.6, actionCode: '1', udf1: a.id, ...extra }] }];
+	// 1) the webhook SAYS captured but the bank has no capture: acknowledged, nothing credited
+	assert.deepEqual(await svc.handleWebhook(hook('CAPTURED')), { ack: true });
+	await new Promise(r => setTimeout(r, 150));
+	assert.equal(await balance(u.id), 0); assert.notEqual((await row(v.reference)).status, 'CAPTURED_APPLIED');
+	// 2) the bank really captured: the webhook wakes the verification, the credit happens ONCE even with repeated webhooks
+	bank.settle(a.bankPaymentId!, 'CAPTURED'); clock.t += 5_000;
+	await Promise.all([svc.handleWebhook(hook('CAPTURED')), svc.handleWebhook(hook('CAPTURED')), svc.handleWebhook(hook('CAPTURED'))]);
+	await new Promise(r => setTimeout(r, 400)); await svc.verify(v.reference);
+	assert.equal(await balance(u.id), 100); assert.equal(await walletRows(u.id), 1);
+	// 3) every documented status shape is accepted and acknowledged; an unknown attempt is acknowledged without effect; garbage is not acknowledged
+	for (const st of ['NOT CAPTURED', 'HOST TIMEOUT', 'VOIDED', 'APPROVED', 'NOT APPROVED']) assert.deepEqual(await svc.handleWebhook(hook(st)), { ack: true }, st);
+	assert.deepEqual(await svc.handleWebhook([{ type: 'RISK FAILURE', result: '[{"status":"IPAY0100045 - DENIED BY RISK"}]', payLoad: [{ paymentId: '999999999999999999', trackId: '1', amt: 35.0 }] }]), { ack: true });
+	assert.deepEqual(await svc.handleWebhook('<html>'), { ack: false }); assert.deepEqual(await svc.handleWebhook([]), { ack: false }); assert.deepEqual(await svc.handleWebhook([{ type: 'PAYMENT', payLoad: [{}] }]), { ack: false });
+	assert.equal(await balance(u.id), 100); assert.equal(await walletRows(u.id), 1);
 });

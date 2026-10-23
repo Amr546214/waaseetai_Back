@@ -331,7 +331,6 @@ export class ArbPaymentService {
 	 */
 	async handleNotification(input: { paymentId?: unknown; trandata?: unknown }): Promise<{ ack: boolean; responseUrl: string | null }> {
 		const cfg = this.requireReady();
-		if (!cfg.notificationEnabled) return { ack: false, responseUrl: null };
 		const txn = readReturnTrandata(cfg, input.trandata);
 		if (!txn) return { ack: false, responseUrl: null };
 		const attempt = await this.findAttempt(txn.paymentId, txn.trackId);
@@ -345,6 +344,32 @@ export class ArbPaymentService {
 		await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: { in: ['REDIRECTED', 'UNCONFIRMED', 'CREATE_UNKNOWN'] } }, data: { status: 'VERIFYING', bankPaymentId: attempt.bankPaymentId ?? txn.paymentId } });
 		void this.verify(attempt.id).catch(e => logger.error(`[ARB] verify after notification failed: ${(e as Error).message}`));
 		return { ack: true, responseUrl: `${cfg.publicBaseUrl}/api/payments/arb/response` };
+	}
+
+	/**
+	 * Webhook notification (guide p.179-186): a PLAIN (unencrypted, unsigned) JSON array `[{type, result:[{status,...}], responseURL, payLoad:[{...}]}]`; the merchant answers
+	 * `[{"status":"1"}]`, and without it the gateway keeps resending (p.186) — there is NO void in this protocol. Because nothing in it can be authenticated, it is only a
+	 * HINT: it can wake up the verification of a known attempt, it never moves money, and the attempt is verified with the bank (Inquiry) as for every other path.
+	 * Returns ack=true once the arrival is processed (known or unknown attempt: either way resending would change nothing); ack=false only for an unreadable body or a
+	 * storage failure (so the gateway retries).
+	 */
+	async handleWebhook(body: unknown): Promise<{ ack: boolean }> {
+		this.requireReady();
+		const first = Array.isArray(body) ? body[0] : body;
+		if (!first || typeof first !== 'object') return { ack: false };
+		const pl = (first as any).payLoad;
+		const rec = Array.isArray(pl) ? pl[0] : pl;
+		if (!rec || typeof rec !== 'object') return { ack: false };
+		const asStr = (v: unknown) => (v === undefined || v === null || v === '' ? null : String(v));
+		const paymentId = asStr((rec as any).paymentId), trackId = asStr((rec as any).trackId);
+		if (!paymentId && !trackId) return { ack: false };
+		const attempt = await this.findAttempt(paymentId && /^\d{10,25}$/.test(paymentId) ? paymentId : null, trackId);
+		if (!attempt) return { ack: true }; // not ours / not known: nothing to do, resending would not help
+		if (OPEN.includes(attempt.status) || attempt.status === 'CANCELLED' || attempt.status === 'EXPIRED') {
+			await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: { in: ['REDIRECTED', 'UNCONFIRMED', 'CREATE_UNKNOWN'] } }, data: { status: 'VERIFYING' } });
+			void this.verifyThrottled(await this.db.arbPayment.findUniqueOrThrow({ where: { id: attempt.id } })).catch(e => logger.error(`[ARB] verify after webhook failed: ${(e as Error).message}`));
+		}
+		return { ack: true };
 	}
 
 	private async findAttempt(paymentId: string | null, trackId: string | null): Promise<ArbPayment | null> {

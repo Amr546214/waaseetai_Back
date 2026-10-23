@@ -18,6 +18,7 @@ mock.module('../services/arb-payment.service', {
 			isAvailable: () => false,
 			handleReturn: async (i: any) => { calls.push(['return', i]); if (mode === 'throw') throw new Error('boom <script>'); return { reference: mode === 'unknown' ? null : 'ref-123' }; },
 			handleError: async (i: any) => { calls.push(['error', i]); return { reference: 'ref-err' }; },
+			handleWebhook: async (i: any) => { calls.push(['webhook', i]); if (mode === 'throw') throw new Error('boom'); return { ack: Array.isArray(i) && i.length > 0 }; },
 			handleNotification: async (i: any) => { calls.push(['notify', i]); if (mode === 'throw') throw new Error('boom'); return ack ? { ack: true, responseUrl: 'https://app.test/api/payments/arb/response' } : { ack: false, responseUrl: null }; },
 		},
 	},
@@ -74,6 +75,18 @@ test('notification: exact acknowledgement [{status:"1",result:<responseURL>}] (g
 	assert.equal(t.status, 500); assert.notEqual(JSON.parse(t.text)[0].status, '1'); assert.ok(!t.text.includes('boom'));
 	assert.equal((await call('GET', '/api/payments/arb/notify')).status, 404); // notification is POST only
 	mode = 'ok'; ack = true;
+});
+
+test('webhook (guide p.179-186): exact acknowledgement `[{status:"1"}]`; unreadable body or a storage failure is NOT acknowledged so the gateway resends', async () => {
+	mode = 'ok';
+	const a = await call('POST', '/api/payments/arb/webhook', JSON.stringify([{ type: 'PAYMENT', result: [{ status: 'CAPTURED' }], payLoad: [{ paymentId: '1' }] }]), 'application/json');
+	assert.equal(a.status, 200); assert.deepEqual(JSON.parse(a.text), [{ status: '1' }]);
+	const g = await call('POST', '/api/payments/arb/webhook', JSON.stringify([]), 'application/json');
+	assert.equal(g.status, 400); assert.notEqual(JSON.parse(g.text)[0].status, '1');
+	mode = 'throw';
+	const t = await call('POST', '/api/payments/arb/webhook', JSON.stringify([{ x: 1 }]), 'application/json');
+	assert.equal(t.status, 500); assert.notEqual(JSON.parse(t.text)[0].status, '1'); assert.ok(!t.text.includes('boom'));
+	mode = 'ok';
 });
 
 test('the browser request DTO carries only the net USD: extra fields (amount, currency, status) are refused, bounds enforced', async () => {

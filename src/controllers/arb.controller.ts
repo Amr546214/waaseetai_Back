@@ -82,3 +82,15 @@ export const arbNotification = async (req: Request, res: Response) => {
 		return res.status(500).json([{ status: '2', result: null }]); // no acknowledgement: the bank reverses (p.187 step 4); nothing was credited
 	}
 };
+
+/** Webhook (guide p.179-186): plain JSON, hint only; the exact acknowledgement is `[{"status":"1"}]`. */
+export const arbWebhook = async (req: Request, res: Response) => {
+	try {
+		const out = await arbPaymentService.handleWebhook(req.body);
+		if (out.ack) return res.status(200).json([{ status: '1' }]);
+		return res.status(400).json([{ status: '2' }]);
+	} catch (e) {
+		logger.error(`[ARB] webhook failed: ${(e as Error)?.message}`);
+		return res.status(500).json([{ status: '2' }]); // no acknowledgement: the gateway resends, nothing was changed
+	}
+};
