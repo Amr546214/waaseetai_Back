@@ -361,7 +361,7 @@ test('PG: statusFor is owner-only and shows safe Arabic text (no codes, no raw b
 
 test('PG: the migration file really contains the one-open-attempt partial index and no destructive statement', opts, async () => {
 	const sql = fs.readFileSync(path.join(__dirname, '../../prisma/migrations/20261023100000_arb_payments/migration.sql'), 'utf8');
-	assert.match(sql, /CREATE UNIQUE INDEX "ux_arb_payments_one_open_per_user"[\s\S]*WHERE "status" IN \('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED'\)/);
+	assert.match(sql, /CREATE UNIQUE INDEX "ux_arb_payments_one_open_per_user"[\s\S]*WHERE "status" IN \('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','AUTH_ONLY'\)/);
 	assert.ok(!/\b(DROP|DELETE|TRUNCATE|UPDATE|ALTER TABLE "(?!arb_payments)\w+")\b/i.test(sql.replace(/--.*$/gm, '').replace(/ON (DELETE|UPDATE) (CASCADE|RESTRICT|NO ACTION|SET NULL)/gi, '')));
 });
 
@@ -577,4 +577,11 @@ test('PG: a notification for an attempt we already declined is NOT acknowledged 
 	const a = await row(v.reference); assert.equal(a.status, 'DECLINED'); clock.t += 5_000;
 	const out = await svc.handleNotification({ paymentId: a.bankPaymentId!, trandata: bank.trandataFor(bank.byPayment(a.bankPaymentId!)) });
 	assert.equal(out.ack, false);
+});
+
+test('PG: the DATABASE also refuses a second open attempt while the bank holds an authorization (AUTH_ONLY is inside the one-open index)', opts, async () => {
+	const { svc, mkUser, row, payAndReturn, prisma } = await env(); const u = await mkUser();
+	const v = await svc.initiate(u.id, 100, IP); await payAndReturn(v.reference, 'APPROVED');
+	assert.equal((await row(v.reference)).status, 'AUTH_ONLY');
+	await assert.rejects(() => prisma.arbPayment.create({ data: { userId: u.id, trackId: `9${Date.now()}${Math.floor(Math.random() * 1000)}`, status: 'CREATED', netUsd: 100, feeUsd: 0, feePercent: 0, grossUsd: 100, fxSarPerUsd: 3.75, amountSar: 375, currencyCode: '682', customerIp: IP, expiresAt: new Date(Date.now() + 60_000) } as any }), /Unique constraint/);
 });

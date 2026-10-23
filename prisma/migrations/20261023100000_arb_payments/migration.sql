@@ -46,7 +46,7 @@ ALTER TABLE "arb_payments" ADD CONSTRAINT "arb_payments_userId_fkey" FOREIGN KEY
 
 -- The durable double-click / concurrent-start guarantee: at most ONE open attempt per user. (Prisma cannot express a partial index; it lives here.)
 CREATE UNIQUE INDEX "ux_arb_payments_one_open_per_user" ON "arb_payments"("userId")
-  WHERE "status" IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED');
+  WHERE "status" IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','AUTH_ONLY');
 
 -- The financial invariant at database level: an attempt can only be marked applied together with its applied time, the wallet transaction it created
 -- and the bank transaction id. (Together with wallet_transactions."referenceId" UNIQUE and arb_payments."bankTransId"/"walletTxId" UNIQUE this protects the
