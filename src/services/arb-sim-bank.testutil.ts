@@ -13,7 +13,7 @@ export const TEST_HOST = 'sim-bank.test';
 export const testConfig = (over: Partial<ArbConfig> = {}): ArbConfig => ({
 	enabled: true, tranportalId: 'TESTTRANPORTALID', tranportalPassword: 'test-password', resourceKey: TEST_KEY,
 	hostedTokenUrl: `https://${TEST_HOST}/pg/payment/hosted.htm`, inquiryUrl: `https://${TEST_HOST}/pg/payment/tranportal.htm`,
-	allowedHosts: [TEST_HOST], publicBaseUrl: 'https://app.test', sarPerUsd: 3.75 /* TEST FIXTURE ONLY — the real rate is an owner decision */, feePercent: 2.5 /* TEST FIXTURE ONLY — no fee is approved */, allowedUserIds: ['ALL'],
+	allowedHosts: [TEST_HOST], publicBaseUrl: 'https://app.test', sarPerUsd: 3.75 /* TEST FIXTURE ONLY — the real rate is an owner decision */, feePercent: 2.5 /* TEST FIXTURE ONLY — no fee is approved */, allowedUserIds: ['ALL'], releaseCodes: [],
 	currencyCode: '682', httpTimeoutMs: 1000, attemptTtlMin: 30, ...over,
 });
 
@@ -29,6 +29,8 @@ export class SimBank implements ArbHttp {
 	log: { url: string; headers: Record<string, string>; plain: any }[] = [];
 	// behaviours
 	delayCreateMs = 0;
+	/** every Inquiry answers after this many ms (a slow bank) */
+	delayMs = 0;
 	dropCreateAnswer = false; // processed at the bank, answer lost on the way back
 	rejectCreate: string | null = null;
 	badDestination: string | null = null;
@@ -41,7 +43,7 @@ export class SimBank implements ArbHttp {
 		const plain = JSON.parse(decryptTrandata(req.trandata, this.key))[0];
 		this.log.push({ url, headers, plain });
 		if (plain.action === '1') return this.create(req, plain);
-		if (plain.action === '8') return this.inquiry(plain);
+		if (plain.action === '8') return await this.inquiry(plain);
 		return { status: 200, text: JSON.stringify([{ status: '2', error: 'IPAY0100020', errorText: 'Invalid Action type.', result: null }]) };
 	}
 
@@ -56,8 +58,9 @@ export class SimBank implements ArbHttp {
 		return { status: 200, text: JSON.stringify([{ status: '1', result: `${paymentId}:${dest}`, error: null, errorText: null }]) };
 	}
 
-	private inquiry(plain: any) {
+	private async inquiry(plain: any) {
 		this.inquiries++;
+		if (this.delayMs) await new Promise(r => setTimeout(r, this.delayMs));
 		if (this.failInquiry === 'timeout') throw new Error('timeout');
 		if (this.failInquiry === 'expired') return { status: 200, text: JSON.stringify([{ status: '2', error: 'IPAY0100042', errorText: 'PaymentId Expired.', trandata: null }]) };
 		if (this.failInquiry === 'garbage') return { status: 200, text: '<html>oops</html>' };

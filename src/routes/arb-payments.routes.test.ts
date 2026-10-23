@@ -67,6 +67,11 @@ test('notification: exact acknowledgement [{status:"1",result:<responseURL>}] (g
 	mode = 'ok'; ack = true;
 	const a = await call('POST', '/api/payments/arb/notify', JSON.stringify({ paymentId: '100201931620827468', trandata: 'AB' }), 'application/json');
 	assert.equal(a.status, 200); assert.deepEqual(JSON.parse(a.text), [{ status: '1', result: 'https://app.test/api/payments/arb/response' }]);
+	// the bank really sends an ARRAY with one object (guide p.189): its fields must reach the service, and the redirect URL is ours, never taken from the request
+	calls.length = 0;
+	const arr = await call('POST', '/api/payments/arb/notify', JSON.stringify([{ paymentId: '100201931620827468', trandata: 'AB', responseURL: 'https://evil.example/x' }]), 'application/json');
+	assert.equal(arr.status, 200); assert.deepEqual(calls[0][1], { paymentId: '100201931620827468', trandata: 'AB' });
+	assert.deepEqual(JSON.parse(arr.text), [{ status: '1', result: 'https://app.test/api/payments/arb/response' }]); assert.ok(!arr.text.includes('evil'));
 	ack = false;
 	const n = await call('POST', '/api/payments/arb/notify', JSON.stringify({ paymentId: 'x', trandata: 'AB' }), 'application/json');
 	assert.equal(n.status, 400); assert.notEqual(JSON.parse(n.text)[0].status, '1');

@@ -57,8 +57,16 @@ export function isAllowedBankUrl(url: string, cfg: Pick<ArbConfig, 'allowedHosts
 	}
 }
 
+/**
+ * JSON.parse that keeps long integers exact. The gateway sometimes sends ids as JSON NUMBERS (guide p.182-190: paymentId 18-19 digits, transId, trackId); a JS number
+ * silently rounds anything above 2^53, which would turn an id into a different id. Integers of 16+ digits that stand as values (not inside a string) are read as strings.
+ */
+export function parseBankJson(text: string): any {
+	return JSON.parse(text.replace(/("(?:[^"\\]|\\.)*")|(-?\b\d{16,}\b)(?![.\deE])/g, (m, quoted, big) => (quoted ? quoted : `"${big}"`)));
+}
+
 function parseJson(text: string): any | null {
-	try { return first(JSON.parse(text)); } catch { return null; }
+	try { return first(parseBankJson(text)); } catch { return null; }
 }
 
 export function normalizeTxn(plain: any): BankTxn {
@@ -124,7 +132,7 @@ export async function inquire(cfg: ArbConfig, http: ArbHttp, by: InquiryBy, amou
 	if (res.status !== 200 || !j) return { kind: 'UNKNOWN' };
 	if (!j.trandata) return String(j.status) === '2' || j.error ? { kind: 'BANK_ERROR', code: str(j.error), text: str(j.errorText) } : { kind: 'UNKNOWN' };
 	try {
-		const txn = normalizeTxn(first(JSON.parse(decryptTrandata(String(j.trandata), cfg.resourceKey))));
+		const txn = normalizeTxn(first(parseBankJson(decryptTrandata(String(j.trandata), cfg.resourceKey))));
 		return { kind: 'TXN', txn };
 	} catch {
 		return { kind: 'UNKNOWN' };
@@ -134,5 +142,5 @@ export async function inquire(cfg: ArbConfig, http: ArbHttp, by: InquiryBy, amou
 /** Decrypts the browser-return / notification `trandata`. null = unreadable (treat as untrusted, never as a result). */
 export function readReturnTrandata(cfg: ArbConfig, trandata: unknown): BankTxn | null {
 	if (typeof trandata !== 'string' || !trandata) return null;
-	try { return normalizeTxn(first(JSON.parse(decryptTrandata(trandata, cfg.resourceKey)))); } catch { return null; }
+	try { return normalizeTxn(first(parseBankJson(decryptTrandata(trandata, cfg.resourceKey)))); } catch { return null; }
 }

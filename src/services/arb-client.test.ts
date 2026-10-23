@@ -98,3 +98,10 @@ test('return trandata: unreadable / wrong key / not a string = null (untrusted),
 	assert.equal(readReturnTrandata(cfg, encryptTrandata('[{"result":"CAPTURED"}]', 'ZZZZZZZZZZZZZZZZ')), null);
 	assert.equal(readReturnTrandata(cfg, encryptTrandata('[{"result":"CAPTURED","amt":"1.00","trackId":"5"}]', TEST_KEY))?.result, 'CAPTURED');
 });
+
+test('parseBankJson keeps 16+ digit ids exact (the gateway sends paymentId / transId as JSON numbers, guide p.182-190) and leaves strings and decimals alone', async () => {
+	const { parseBankJson } = await import('./arb-client');
+	const j = parseBankJson('[{"paymentId":100201935166676970,"transId":"201935166561122","amt":70.0,"note":"id 123456789012345678 inside a string","n":-1234567890123456789}]')[0];
+	assert.equal(j.paymentId, '100201935166676970'); assert.equal(j.transId, '201935166561122'); assert.equal(j.amt, 70);
+	assert.equal(j.note, 'id 123456789012345678 inside a string'); assert.equal(j.n, '-1234567890123456789');
+});

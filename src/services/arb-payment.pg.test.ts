@@ -63,7 +63,7 @@ test('PG: amount, currency and fee are derived on the server; the bank receives 
 	assert.equal(bank.log[0].headers['X-FORWARDED-FOR'], IP);
 	assert.match(bank.log[0].plain.responseURL, /^https:\/\/app\.test\/api\/payments\/arb\/response$/);
 	assert.match(bank.log[0].plain.errorURL, /^https:\/\/app\.test\/api\/payments\/arb\/error$/);
-	assert.match(a.trackId, /^\d{18}$/);
+	assert.match(a.trackId, /^\d{16}$/);
 	await assert.rejects(svc.initiate(u.id, 10, IP), /بين 50/); // bounds are enforced server-side too
 	await assert.rejects(svc.initiate(u.id, NaN, IP));
 });
@@ -105,9 +105,9 @@ test('PG: the bank refuses the create -> FAILED state, nothing to pay, a new att
 	assert.equal(w.state, 'WAITING_PAGE'); assert.notEqual(w.reference, v.reference); assert.equal(await balance(u.id), 0);
 });
 
-test('PG: LOST create answer: «verifying» while in flight; once our own call cannot be pending the USER may start again, but the old attempt stays TRACKED and reconciled (not trusted as «nothing can be collected»)', opts, async () => {
-	const { svc, bank, mkUser, clock, row, balance, prisma } = await env(); const u = await mkUser();
-	await prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED')`);
+test('PG: LOST create answer: «verifying» while in flight; afterwards it STILL blocks a new start (time and our own timeout prove nothing: the bank may have kept the payment payable); a late capture is applied once', opts, async () => {
+	const { svc, bank, mkUser, clock, row, balance, prisma, walletRows } = await env(); const u = await mkUser();
+	await prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED','AUTH_ONLY')`);
 	bank.dropCreateAnswer = true;
 	const v = await svc.initiate(u.id, 100, IP);
 	assert.equal(v.state, 'VERIFYING'); assert.equal(v.redirectUrl, null);
@@ -115,29 +115,39 @@ test('PG: LOST create answer: «verifying» while in flight; once our own call c
 	bank.dropCreateAnswer = false;
 	const again = await svc.initiate(u.id, 100, IP);
 	assert.equal(again.reference, v.reference); assert.equal(bank.creates, 1); // young unknown create: not judged, not duplicated
-	clock.t += 100_000;
-	const fresh = await svc.initiate(u.id, 100, IP);
-	assert.notEqual(fresh.reference, v.reference); assert.equal(bank.creates, 2);
-	const old = await row(v.reference); assert.equal(old.status, 'EXPIRED'); assert.equal(old.bankFinalAt, null); // tracked, NOT settled
-	// the bank DOES know it (processed, answer lost): it keeps being asked, and if it were ever captured it is applied once
+	for (const step of [100_000, 3_600_000, 24 * 3_600_000]) { // our call can no longer be pending, but the bank's processing may continue: still no new start
+		clock.t += step;
+		const blocked = await svc.initiate(u.id, 100, IP);
+		assert.equal(blocked.state, 'UNSETTLED', `after +${step} ms`); assert.equal(blocked.redirectUrl, null); assert.equal(bank.creates, 1);
+		assert.equal((await row(v.reference)).bankFinalAt, null);
+	}
+	// the bank DOES know it (processed, answer lost) and it is paid late: found by TrackID, applied once
 	bank.settle(bank.txns[0].paymentId, 'CAPTURED'); clock.t += 25 * 3_600_000;
 	await svc.reconcileOnce();
-	assert.equal((await row(v.reference)).status, 'CAPTURED_APPLIED'); assert.equal(await balance(u.id), 100);
+	assert.equal((await row(v.reference)).status, 'CAPTURED_APPLIED'); assert.equal(await balance(u.id), 100); assert.equal(await walletRows(u.id), 1);
+	assert.equal((await svc.initiate(u.id, 100, IP)).state, 'WAITING_PAGE'); // the bank spoke: a new start is possible
 });
 
-test('PG: lost create answer where the bank has NO record -> the stale attempt is closed and a new one starts', opts, async () => {
-	const { svc, bank, mkUser, clock, row } = await env(); const u = await mkUser();
-	bank.failInquiry = 'notfound';
-	// simulate: our request never reached the bank (timeout before processing)
-	(bank as any).create = async () => { throw new Error('ETIMEDOUT'); };
-	const v = await svc.initiate(u.id, 100, IP);
-	assert.equal((await row(v.reference)).status, 'CREATE_UNKNOWN');
-	clock.t += 100_000;
-	delete (bank as any).create; bank.failInquiry = 'notfound';
-	const w = await svc.initiate(u.id, 100, IP);
-	assert.equal((await row(v.reference)).status, 'EXPIRED'); assert.equal((await row(v.reference)).bankFinalAt, null); assert.notEqual(w.reference, v.reference); // allowed to start, old one tracked
-	clock.t += 31 * 60_000; bank.failInquiry = 'notfound'; await svc.reconcileOnce(); // a full window later the bank STILL has no record: now it is final «no record»
-	const closed = await row(v.reference); assert.equal(closed.status, 'CREATE_REJECTED'); assert.ok(closed.bankFinalAt);
+test('PG: lost create answer where the bank answers «no record»: NOT settled by time or by the bank\'s no-record error alone; it is released only when the bank has CONFIRMED that code (ARB_BANK_RELEASE_CODES) and a full window passed', opts, async () => {
+	const lostCreate = async (cfg: any) => {
+		const e = await env(cfg); const u = await e.mkUser();
+		await e.prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED','AUTH_ONLY')`);
+		(e.bank as any).create = async () => { throw new Error('ETIMEDOUT'); }; // our request may or may not have reached the bank
+		const v = await e.svc.initiate(u.id, 100, IP); assert.equal((await e.row(v.reference)).status, 'CREATE_UNKNOWN');
+		delete (e.bank as any).create; e.bank.failInquiry = 'notfound';
+		return { ...e, u, v };
+	};
+	// no confirmed code: forever unsettled, blocked, still reconciled
+	const n = await lostCreate({});
+	for (const step of [100_000, 31 * 60_000, 24 * 3_600_000]) { n.clock.t += step; assert.equal((await n.svc.initiate(n.u.id, 100, IP)).state, 'UNSETTLED'); }
+	await n.svc.reconcileOnce();
+	const still = await n.row(n.v.reference); assert.ok(['CREATE_UNKNOWN', 'UNCONFIRMED'].includes(still.status)); assert.equal(still.bankFinalAt, null); assert.equal(n.bank.creates, 0);
+	// code confirmed by the bank: released only after the full window
+	const c = await lostCreate({ releaseCodes: ['IPAY0100054'] });
+	c.clock.t += 100_000; assert.equal((await c.svc.initiate(c.u.id, 100, IP)).state, 'UNSETTLED'); // the window has not passed yet
+	c.clock.t += 31 * 60_000; c.bank.failInquiry = 'notfound';
+	const w = await c.svc.initiate(c.u.id, 100, IP);
+	assert.equal(w.state, 'WAITING_PAGE'); const closed = await c.row(c.v.reference); assert.equal(closed.status, 'CREATE_REJECTED'); assert.ok(closed.bankFinalAt);
 });
 
 test('PG: happy path - return + verified CAPTURED credits the NET USD once, with the full audit trail', opts, async () => {
@@ -201,6 +211,15 @@ test('PG: APPROVED (authorization) is not a capture; declined stays declined; a 
 	const v1 = await e1.svc.initiate(u1.id, 100, IP); await e1.payAndReturn(v1.reference, 'APPROVED');
 	assert.equal((await e1.row(v1.reference)).status, 'AUTH_ONLY'); assert.equal(await e1.balance(u1.id), 0);
 	assert.equal((await e1.svc.statusFor(u1.id, v1.reference)).state, 'REVIEW');
+	// an authorization the bank holds is NOT a release: it stays unsettled, blocks a new purchase (REVIEW, not permission to pay again) and keeps being reconciled
+	assert.equal((await e1.row(v1.reference)).bankFinalAt, null);
+	e1.clock.t += 5_000; const hold = await e1.svc.initiate(u1.id, 100, IP);
+	assert.equal(hold.state, 'REVIEW'); assert.equal(hold.reference, v1.reference); assert.equal(e1.bank.creates, 1);
+	for (const step of [3_600_000, 30 * 24 * 3_600_000]) { e1.clock.t += step; assert.equal((await e1.svc.initiate(u1.id, 100, IP)).state, 'REVIEW'); }
+	assert.equal(await e1.balance(u1.id), 0);
+	// when the bank itself later captures it, it is credited once; only then can a new payment start
+	e1.bank.settle((await e1.row(v1.reference)).bankPaymentId!, 'CAPTURED'); e1.clock.t += 25 * 3_600_000; await e1.svc.reconcileOnce();
+	assert.equal(await e1.balance(u1.id), 100); assert.equal((await e1.svc.initiate(u1.id, 100, IP)).state, 'WAITING_PAGE');
 	const e2 = await env(); const u2 = await e2.mkUser();
 	const v2 = await e2.svc.initiate(u2.id, 100, IP); await e2.payAndReturn(v2.reference, 'NOT CAPTURED');
 	assert.equal((await e2.row(v2.reference)).status, 'DECLINED'); assert.equal((await e2.svc.statusFor(u2.id, v2.reference)).state, 'DECLINED');
@@ -396,20 +415,26 @@ test('PG: while an attempt can still be collected a NEW one is BLOCKED (no overr
 	assert.equal(next.state, 'WAITING_PAGE'); assert.equal(bank.creates, 2);
 });
 
-test('PG: only the BANK settles an attempt: a bank decline or a bank-reported expired payment id unlocks a new start; elapsed time and local expiry do not', opts, async () => {
+test('PG: only the BANK settles an attempt: a bank decline (or an error code the bank confirmed) unlocks a new start; elapsed time, local expiry and an unconfirmed error code do not', opts, async () => {
 	const e1 = await env(); const u1 = await e1.mkUser();
 	const v1 = await e1.svc.initiate(u1.id, 100, IP); const a1 = await e1.row(v1.reference);
 	e1.bank.settle(a1.bankPaymentId!, 'NOT CAPTURED'); e1.clock.t += 5_000;
 	const n1 = await e1.svc.initiate(u1.id, 100, IP); // the bank gave a final refusal: no acknowledgement needed
 	assert.equal(n1.state, 'WAITING_PAGE'); assert.ok((await e1.row(v1.reference)).bankFinalAt);
+	// IPAY0100042 («PaymentId Expired», p.274) alone releases NOTHING: what it means for a payment that was already started is the bank's to confirm
 	const e2 = await env(); const u2 = await e2.mkUser();
 	const v2 = await e2.svc.initiate(u2.id, 100, IP); await e2.svc.handleError({ paymentId: (await e2.row(v2.reference)).bankPaymentId! });
-	e2.bank.failInquiry = 'expired'; e2.clock.t += 5_000; // the bank itself says the payment id is expired (IPAY0100042)
+	e2.bank.failInquiry = 'expired'; e2.clock.t += 5_000;
 	const n2 = await e2.svc.initiate(u2.id, 100, IP);
-	assert.equal(n2.state, 'WAITING_PAGE'); const r2 = await e2.row(v2.reference); assert.equal(r2.status, 'EXPIRED'); assert.ok(r2.bankFinalAt);
+	assert.equal(n2.state, 'UNSETTLED'); const r2 = await e2.row(v2.reference); assert.equal(r2.bankFinalAt, null); assert.equal(r2.bankResult, 'IPAY0100042');
+	// ...unless the bank confirmed that code as «never collectable» (ARB_BANK_RELEASE_CODES)
+	const e2b = await env({ releaseCodes: ['IPAY0100042'] }); const u2b = await e2b.mkUser();
+	const v2b = await e2b.svc.initiate(u2b.id, 100, IP); await e2b.svc.handleError({ paymentId: (await e2b.row(v2b.reference)).bankPaymentId! });
+	e2b.bank.failInquiry = 'expired'; e2b.clock.t += 5_000;
+	assert.equal((await e2b.svc.initiate(u2b.id, 100, IP)).state, 'WAITING_PAGE'); const r2b = await e2b.row(v2b.reference); assert.equal(r2b.status, 'EXPIRED'); assert.ok(r2b.bankFinalAt);
 	// TIME is not evidence: an hour, a day, a month later the previous attempt is still unsettled and a new start stays blocked
 	const e3 = await env(); const u3 = await e3.mkUser();
-	await e3.prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED')`); // rows of earlier tests in the shared test DB
+	await e3.prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED','AUTH_ONLY')`); // rows of earlier tests in the shared test DB
 	const v3 = await e3.svc.initiate(u3.id, 100, IP);
 	for (const step of [31 * 60_000, 3_600_000, 24 * 3_600_000, 30 * 24 * 3_600_000]) {
 		e3.clock.t += step;
@@ -425,7 +450,7 @@ test('PG: only the BANK settles an attempt: a bank decline or a bank-reported ex
 
 test('PG: server-side reconciliation - no browser ever came back, a NEW service instance (restart) finds the capture and applies it once, also when two runs overlap', opts, async () => {
 	const e = await env(); const u = await e.mkUser();
-	await e.prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED')`); // the shared test database holds open rows of earlier tests
+	await e.prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED','AUTH_ONLY')`); // the shared test database holds open rows of earlier tests
 	const v = await e.svc.initiate(u.id, 100, IP); const a = await e.row(v.reference);
 	e.bank.settle(a.bankPaymentId!, 'CAPTURED'); // paid at the bank; the user closed the browser, no callback arrived
 	const { ArbPaymentService } = await import('./arb-payment.service'); const { testConfig } = await import('./arb-sim-bank.testutil');
@@ -439,7 +464,7 @@ test('PG: server-side reconciliation - no browser ever came back, a NEW service 
 
 test('PG: reconciliation back-off, young in-flight creates skipped, nothing credited when the bank has no capture, expiry after the TTL', opts, async () => {
 	const e = await env(); const u = await e.mkUser(); const u2 = await e.mkUser();
-	await e.prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED')`); // the shared test database holds open rows of earlier tests
+	await e.prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED','AUTH_ONLY')`); // the shared test database holds open rows of earlier tests
 	const v = await e.svc.initiate(u.id, 100, IP);
 	await e.svc.reconcileOnce(); const n1 = e.bank.inquiries; // just created: its last inquiry is "never" => checked once
 	await e.svc.reconcileOnce(); assert.equal(e.bank.inquiries, n1); // back-off: not asked again within 30 s
@@ -486,7 +511,7 @@ test('PG: logs never contain the resource key, the tranportal password or an enc
 test('PG: webhook flow (guide p.179-186): plain JSON, acknowledged `[{status:1}]` once processed; it is only a HINT - a webhook that says CAPTURED credits nothing unless the bank confirms by Inquiry, then exactly once', opts, async () => {
 	const { svc, bank, mkUser, balance, walletRows, row, clock } = await env(); const u = await mkUser();
 	const v = await svc.initiate(u.id, 100, IP); const a = await row(v.reference);
-	const hook = (status: string, extra: any = {}) => [{ result: [{ status }], responseURL: 'https://app.test/x', type: 'PAYMENT', payLoad: [{ paymentId: Number(a.bankPaymentId), trackId: a.trackId, transId: 202110527755152, amt: 384.6, actionCode: '1', udf1: a.id, ...extra }] }];
+	const hook = (status: string, extra: any = {}) => [{ result: [{ status }], responseURL: 'https://app.test/x', type: 'PAYMENT', payLoad: [{ paymentId: a.bankPaymentId, trackId: Number(a.trackId), transId: 202110527755152, amt: 384.6, actionCode: '1', udf1: a.id, ...extra }] }];
 	// 1) the webhook SAYS captured but the bank has no capture: acknowledged, nothing credited
 	assert.deepEqual(await svc.handleWebhook(hook('CAPTURED')), { ack: true });
 	await new Promise(r => setTimeout(r, 150));
@@ -501,4 +526,55 @@ test('PG: webhook flow (guide p.179-186): plain JSON, acknowledged `[{status:1}]
 	assert.deepEqual(await svc.handleWebhook([{ type: 'RISK FAILURE', result: '[{"status":"IPAY0100045 - DENIED BY RISK"}]', payLoad: [{ paymentId: '999999999999999999', trackId: '1', amt: 35.0 }] }]), { ack: true });
 	assert.deepEqual(await svc.handleWebhook('<html>'), { ack: false }); assert.deepEqual(await svc.handleWebhook([]), { ack: false }); assert.deepEqual(await svc.handleWebhook([{ type: 'PAYMENT', payLoad: [{}] }]), { ack: false });
 	assert.equal(await balance(u.id), 100); assert.equal(await walletRows(u.id), 1);
+});
+
+test('PG: webhook hardening - never changes a status, bounded Inquiry load (per attempt + global), unknown/forged hints cost nothing, its own responseURL is ignored, ids are read exactly', opts, async () => {
+	const { svc, bank, mkUser, row, clock, prisma } = await env(); const u = await mkUser();
+	await prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED','AUTH_ONLY')`);
+	const v = await svc.initiate(u.id, 100, IP); const a = await row(v.reference);
+	const hook = (p: any) => [{ type: 'PAYMENT', result: [{ status: 'CAPTURED' }], responseURL: 'https://evil.example/steal', payLoad: [p] }];
+	// 1) unknown ids / numeric ids that may be rounded: acknowledged, NO Inquiry, NO row touched
+	const n0 = bank.inquiries;
+	for (let i = 0; i < 200; i++) await svc.handleWebhook(hook({ trackId: String(1_000_000_000_000 + i), paymentId: '700000000000000000' }));
+	await svc.handleWebhook(hook({ paymentId: Number(a.bankPaymentId) })); // a JSON number id: ignored (it may have been rounded)
+	assert.equal(bank.inquiries, n0);
+	// 2) a webhook never writes a status: REDIRECTED stays REDIRECTED even though the hook says CAPTURED
+	clock.t += 20_000; assert.deepEqual(await svc.handleWebhook(hook({ trackId: a.trackId })), { ack: true });
+	await new Promise(r => setTimeout(r, 200));
+	const after = await row(v.reference); assert.equal(after.status, 'REDIRECTED'); assert.equal(after.appliedAt, null);
+	// 3) a flood for the SAME attempt: at most one Inquiry per 15 s and one in flight
+	const n1 = bank.inquiries;
+	await Promise.all(Array.from({ length: 100 }, () => svc.handleWebhook(hook({ trackId: a.trackId }))));
+	await new Promise(r => setTimeout(r, 300));
+	assert.ok(bank.inquiries - n1 <= 1, `inquiries during flood: ${bank.inquiries - n1}`);
+	// 4) a flood across MANY attempts: bounded by the global budget (30 a minute)
+	const users = await Promise.all(Array.from({ length: 45 }, () => mkUser()));
+	const refs: any[] = [];
+	for (const x of users) { const r = await svc.initiate(x.id, 100, IP); refs.push(await row(r.reference)); }
+	clock.t += 20_000; const n2 = bank.inquiries;
+	await Promise.all(refs.map(r => svc.handleWebhook(hook({ trackId: r.trackId }))));
+	await new Promise(r => setTimeout(r, 600));
+	assert.ok(bank.inquiries - n2 <= 31, `inquiries from a many-attempt flood: ${bank.inquiries - n2}`);
+});
+
+test('PG: the acknowledgement never waits for the bank: a slow Inquiry does not delay the notification answer or the webhook answer', opts, async () => {
+	const { svc, bank, mkUser, row, clock } = await env(); const u = await mkUser();
+	const v = await svc.initiate(u.id, 100, IP); const a = await row(v.reference);
+	bank.settle(a.bankPaymentId!, 'CAPTURED'); bank.delayMs = 1500; clock.t += 20_000;
+	const trandata = bank.trandataFor(bank.byPayment(a.bankPaymentId!));
+	const t0 = Date.now(); const n = await svc.handleNotification({ paymentId: a.bankPaymentId!, trandata }); const dt = Date.now() - t0;
+	assert.equal(n.ack, true); assert.ok(dt < 700, `notification answered in ${dt} ms`);
+	const e = await env(); const u2 = await e.mkUser(); const v2 = await e.svc.initiate(u2.id, 100, IP); const a2 = await e.row(v2.reference);
+	e.bank.delayMs = 1500; e.clock.t += 20_000;
+	const t1 = Date.now(); const w = await e.svc.handleWebhook([{ type: 'PAYMENT', payLoad: [{ trackId: a2.trackId }] }]); const d2 = Date.now() - t1;
+	assert.equal(w.ack, true); assert.ok(d2 < 700, `webhook answered in ${d2} ms`);
+	await new Promise(r => setTimeout(r, 1800)); // let the background checks finish before the next test
+});
+
+test('PG: a notification for an attempt we already declined is NOT acknowledged (the bank voids it, so nothing is collected that would never be credited)', opts, async () => {
+	const { svc, bank, mkUser, row, payAndReturn, clock } = await env(); const u = await mkUser();
+	const v = await svc.initiate(u.id, 100, IP); await payAndReturn(v.reference, 'NOT CAPTURED');
+	const a = await row(v.reference); assert.equal(a.status, 'DECLINED'); clock.t += 5_000;
+	const out = await svc.handleNotification({ paymentId: a.bankPaymentId!, trandata: bank.trandataFor(bank.byPayment(a.bankPaymentId!)) });
+	assert.equal(out.ack, false);
 });

@@ -23,12 +23,20 @@ import { logger } from '../config/logger';
  */
 
 const OPEN: ArbPaymentStatus[] = ['CREATED', 'CREATE_UNKNOWN', 'REDIRECTED', 'VERIFYING', 'UNCONFIRMED'];
+/**
+ * Everything the bank has not finally answered: open attempts, locally closed ones (CANCELLED / EXPIRED are OUR word, not the bank's) and an authorization the bank
+ * still holds (AUTH_ONLY: nothing was captured and nothing was released). Each of these blocks a new start and keeps being reconciled.
+ */
+const UNRESOLVED: ArbPaymentStatus[] = [...OPEN, 'CANCELLED', 'EXPIRED', 'AUTH_ONLY'];
 const MIN_NET_USD = 50;
 const MAX_NET_USD = 100000;
 /** a create call older than this with no answer is considered lost (the bank call itself times out at 20 s) */
 const STALE_CREATE_MS = 90_000;
 /** a return / poll may trigger one Inquiry per this many ms per attempt */
 const INQUIRY_MIN_GAP_MS = 2_000;
+/** an UNAUTHENTICATED webhook hint may wake the same attempt at most this often, and all hints together at most HINT_BUDGET_PER_MIN Inquiries a minute */
+const HINT_MIN_GAP_MS = 15_000;
+const HINT_BUDGET_PER_MIN = 30;
 /** result words the bank uses for "no money moved"; anything not in this list and not CAPTURED/APPROVED stays UNCONFIRMED (never guessed) */
 const DECLINE_WORD = /^(NOT CAPTURED|DECLINED|DENIED.*|CANCEL(L)?ED|VOIDED|NOT APPROVED|FAILURE|FAILED|NOT PROCESSED|IPAY\d+.*)$/i;
 
@@ -59,7 +67,7 @@ const VIEW: Record<PublicArbState, { message: string; nextStep: string }> = {
 	EXPIRED: { message: 'انتهت مهلة عملية الدفع قبل اكتمالها.', nextStep: 'إن ظهر خصم على بطاقتك فسنؤكده تلقائيًا. يمكنك بدء عملية جديدة.' },
 	FAILED: { message: 'تعذّر بدء عملية الدفع بالبطاقة، ولم يُخصم أي مبلغ.', nextStep: 'حاول مرة أخرى بعد قليل، أو استخدم طريقة دفع أخرى.' },
 	UNSETTLED: { message: 'لم نتأكد بعد من مصير عملية الدفع السابقة لدى البنك.', nextStep: 'قد تُحصَّل حتى لو غادرت صفحة البنك، ونضيف مبلغها إلى محفظتك تلقائيًا عند تأكيد البنك. لا يمكن بدء عملية جديدة قبل أن يحسم البنك العملية السابقة. اضغط «تحديث الحالة» أو عد لاحقًا.' },
-	REVIEW: { message: 'عملية الدفع قيد المراجعة لدينا.', nextStep: 'لا تُعد الدفع. سنراجعها ونوافيك بالنتيجة، ويمكنك التواصل مع الدعم برقم العملية.' },
+	REVIEW: { message: 'لدى البنك تفويض قائم لعملية الدفع ولم يُحصَّل المبلغ، ولم يُضف أي مبلغ إلى محفظتك.', nextStep: 'لا تُعد الدفع. ننتظر إجراء البنك الصحيح لهذه الحالة (إنهاء التفويض أو تحصيله) ونوافيك بالنتيجة، ويمكنك التواصل مع الدعم برقم العملية.' },
 };
 
 function stateOf(s: ArbPaymentStatus): PublicArbState {
@@ -134,7 +142,8 @@ export class ArbPaymentService {
 	}
 
 	private newTrackId(): string {
-		return `${this.deps.now().getTime()}${String(randomInt(0, 100000)).padStart(5, '0')}`;
+		// 13-digit ms + 3 random digits = 16 digits: still an exact JS integer (< 2^53), so a bank that echoes the id as a JSON number cannot round it into another id
+		return `${this.deps.now().getTime()}${String(randomInt(0, 1000)).padStart(3, '0')}`;
 	}
 
 	/** What a deposit would cost, derived exactly like initiate() does (read-only: no row, no bank call). Shown to the user BEFORE they are sent to the bank. */
@@ -148,7 +157,7 @@ export class ArbPaymentService {
 	/** The user's open attempt (if any), brought to a verdict when the bank can give one. Lets a refreshed / reopened page pick up where it was. */
 	async openAttemptFor(userId: string): Promise<PublicArbView | null> {
 		if (!this.isAvailable(userId)) return null;
-		const open = await this.db.arbPayment.findFirst({ where: { userId, status: { in: [...OPEN, 'CANCELLED', 'EXPIRED'] }, bankFinalAt: null, OR: [{ bankPaymentId: { not: null } }, { status: { in: OPEN } }] }, orderBy: { createdAt: 'desc' } });
+		const open = await this.db.arbPayment.findFirst({ where: { userId, status: { in: UNRESOLVED }, bankFinalAt: null }, orderBy: { createdAt: 'desc' } });
 		if (!open) return null;
 		return this.statusFor(userId, open.id);
 	}
@@ -172,22 +181,26 @@ export class ArbPaymentService {
 		const rate = dec(cfg.sarPerUsd);
 		const now = this.deps.now();
 
-		let attempt: ArbPayment;
-		try {
-			attempt = await this.db.arbPayment.create({
-				data: {
-					userId, trackId: this.newTrackId(), status: 'CREATED', netUsd: net, feeUsd: fee, feePercent: cfg.feePercent!, grossUsd: gross,
-					fxSarPerUsd: rate, amountSar, currencyCode: cfg.currencyCode, customerIp,
-					createdAt: now, expiresAt: new Date(now.getTime() + cfg.attemptTtlMin * 60_000),
-				},
-			});
-		} catch (e) {
-			if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-				// a concurrent start (double click / two tabs) won the one-open-attempt index: answer with ITS state, never create a second
-				const winner = await this.gate(userId);
-				if (winner.block) return winner.block;
+		let attempt: ArbPayment | null = null;
+		for (let tries = 0; !attempt; tries++) {
+			try {
+				attempt = await this.db.arbPayment.create({
+					data: {
+						userId, trackId: this.newTrackId(), status: 'CREATED', netUsd: net, feeUsd: fee, feePercent: cfg.feePercent!, grossUsd: gross,
+						fxSarPerUsd: rate, amountSar, currencyCode: cfg.currencyCode, customerIp,
+						createdAt: now, expiresAt: new Date(now.getTime() + cfg.attemptTtlMin * 60_000),
+					},
+				});
+			} catch (e) {
+				if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+					// another start of the SAME user won the one-open-attempt index (double click / two tabs): answer with ITS state, never create a second
+					const winner = await this.gate(userId);
+					if (winner.block) return winner.block;
+					// otherwise two different users drew the same track id in the same millisecond: draw again
+					if (tries < 5 && /trackId|track_id/i.test(JSON.stringify((e.meta as any)?.target ?? e.message))) continue;
+				}
+				throw e;
 			}
-			throw e;
 		}
 
 		const result = await createHostedPayment(cfg, this.deps.http, {
@@ -209,15 +222,14 @@ export class ArbPaymentService {
 	}
 
 	/**
-	 * May a new attempt start? Time is NOT evidence that the bank did not collect: only the bank's own final answer (bankFinalAt) settles an attempt that has a URL,
-	 * and there is NO user override (a ticked box is not a bank-backed way out).
+	 * May a new attempt start? Time is NOT evidence that the bank did not collect, and neither is our own call timeout: our 20 s timeout only ends OUR wait, the bank may keep
+	 * processing the request. So an attempt is settled only by the bank's word (bankFinalAt): a result (paid / declined) or an error code the bank itself confirmed as
+	 * «never collectable» (ARB_BANK_RELEASE_CODES, empty until the bank answers). There is NO user override (a ticked box is not a bank-backed way out).
 	 *  - a page that is still live (REDIRECTED, inside its window) or a create call still in flight: show it, never a second one
-	 *  - an attempt WITH a payment id the bank has not finally answered (verifying, unconfirmed, locally cancelled / expired): re-ask the bank now; if it is still
-	 *    unsettled the new start is BLOCKED with the UNSETTLED state (message, «refresh status» in the UI). It lifts only when the bank answers: paid (credited),
-	 *    declined / authorization-only, or «payment id expired» (IPAY0100042, guide p.274).
-	 *  - an attempt WITHOUT a payment id (the create answer was lost, so no URL ever reached anyone): a new start is allowed once our own create call can no longer be
-	 *    in flight (STALE_CREATE_MS = 3 x the call timeout); that is a structural fact (only our API hands out the page URL), not a clock guarantee, so the old attempt
-	 *    stays TRACKED (soft EXPIRED, bankFinalAt null) and keeps being reconciled by TrackID; it is finalized only when the bank has no record of it after the window.
+	 *  - every other unsettled attempt (verifying, unconfirmed, no URL because the create answer was lost, locally cancelled / expired, authorization held by the bank): re-ask the
+	 *    bank now; if it is still unsettled the new start is BLOCKED with the UNSETTLED state (message + «refresh status» in the UI) and the attempt stays reconciled.
+	 *    An authorization the bank holds (APPROVED) blocks with the REVIEW state: it is neither money in the wallet nor permission to buy again.
+	 *  - an attempt WITHOUT a payment id is blocked too: nobody HAS its page URL, but the bank may have created it and keep it payable; only the bank can say it does not exist.
 	 */
 	private async gate(userId: string): Promise<{ block: PublicArbView | null }> {
 		const now = this.deps.now();
@@ -232,19 +244,11 @@ export class ArbPaymentService {
 			// a create call still in flight in another request (or just started): the user may be about to receive its page URL
 			if ((open.status === 'CREATED' || open.status === 'CREATE_UNKNOWN') && now.getTime() - open.createdAt.getTime() < STALE_CREATE_MS) return { block: this.view(open) };
 		}
-		// 1) attempts that never gave anyone a URL: tracked, not trusted. They leave the OPEN set (soft EXPIRED) so the index lets a new start in, but stay reconciled.
-		const noUrl = await this.db.arbPayment.findMany({ where: { userId, status: { in: ['CREATED', 'CREATE_UNKNOWN'] }, bankPaymentId: null, createdAt: { lt: new Date(now.getTime() - STALE_CREATE_MS) } } });
-		for (const a of noUrl) {
-			const { attempt } = await this.verifyDetailed(a.id);
-			if (attempt.status === 'CAPTURED_APPLIED' || attempt.status === 'AUTH_ONLY') return { block: this.view(attempt) };
-			await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: ['CREATED', 'CREATE_UNKNOWN'] }, bankPaymentId: null }, data: { status: 'EXPIRED' } });
-		}
-		// 2) attempts with a URL that the bank has not finally answered: block, no override
-		const prev = await this.db.arbPayment.findMany({ where: { userId, bankPaymentId: { not: null }, bankFinalAt: null, status: { in: [...OPEN, 'CANCELLED', 'EXPIRED'] } }, orderBy: { createdAt: 'desc' }, take: 5 });
+		const prev = await this.db.arbPayment.findMany({ where: { userId, bankFinalAt: null, status: { in: UNRESOLVED } }, orderBy: { createdAt: 'desc' }, take: 5 });
 		for (const row of prev) {
 			const after = await this.verifyThrottled(row);
 			if (after.status === 'CAPTURED_APPLIED' || after.status === 'AUTH_ONLY') return { block: this.view(after) };
-			if (!after.bankFinalAt && [...OPEN, 'CANCELLED', 'EXPIRED'].includes(after.status)) {
+			if (!after.bankFinalAt && UNRESOLVED.includes(after.status)) {
 				return { block: this.view(after, { state: 'UNSETTLED', ...VIEW.UNSETTLED, redirectUrl: null, requiresAcknowledgement: false, previousReference: after.id }) };
 			}
 		}
@@ -254,7 +258,7 @@ export class ArbPaymentService {
 	async statusFor(userId: string, reference: string): Promise<PublicArbView> {
 		const p = await this.db.arbPayment.findUnique({ where: { id: reference } });
 		if (!p || p.userId !== userId) throw new AppError('عملية الدفع غير موجودة', 404);
-		if ((OPEN.includes(p.status) || p.status === 'CANCELLED' || p.status === 'EXPIRED') && (p.bankPaymentId || p.status !== 'CREATED')) {
+		if (UNRESOLVED.includes(p.status) && !p.bankFinalAt && (p.bankPaymentId || p.status !== 'CREATED')) {
 			try { return this.view(await this.verifyThrottled(p)); } catch (e) {
 				if ((e as any)?.code !== 'ARB_NOT_AVAILABLE') throw e; // the rail was switched off: still show what we stored
 			}
@@ -263,9 +267,21 @@ export class ArbPaymentService {
 	}
 
 	/** At most one Inquiry per INQUIRY_MIN_GAP_MS per attempt (a refreshing page or a hammered callback cannot flood the bank). */
-	private async verifyThrottled(p: ArbPayment): Promise<ArbPayment> {
-		if (p.lastInquiryAt && this.deps.now().getTime() - p.lastInquiryAt.getTime() < INQUIRY_MIN_GAP_MS) return p;
+	private async verifyThrottled(p: ArbPayment, minGapMs = INQUIRY_MIN_GAP_MS): Promise<ArbPayment> {
+		if (p.lastInquiryAt && this.deps.now().getTime() - p.lastInquiryAt.getTime() < minGapMs) return p;
 		return this.verify(p.id);
+	}
+
+	/** one Inquiry in flight per attempt: concurrent callers (poll + webhook + reconciler) share its answer instead of each calling the bank */
+	private inflight = new Map<string, Promise<{ attempt: ArbPayment; notFound: boolean }>>();
+	/** timestamps (ms) of Inquiries started because of an unauthenticated hint, for the global budget */
+	private hintLog: number[] = [];
+	private takeHintBudget(): boolean {
+		const now = this.deps.now().getTime();
+		this.hintLog = this.hintLog.filter(t => now - t < 60_000);
+		if (this.hintLog.length >= HINT_BUDGET_PER_MIN) return false;
+		this.hintLog.push(now);
+		return true;
 	}
 
 	/**
@@ -279,7 +295,7 @@ export class ArbPaymentService {
 		const now = this.deps.now().getTime();
 		const rows = await this.db.arbPayment.findMany({
 			// no age cut-off: an attempt leaves this list only when the BANK gives a final answer (time is not evidence that nothing was collected)
-			where: { status: { in: [...OPEN, 'CANCELLED', 'EXPIRED'] }, bankFinalAt: null },
+			where: { status: { in: UNRESOLVED }, bankFinalAt: null },
 			orderBy: [{ lastInquiryAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'asc' }], take: limit * 4, // never-checked attempts first, then the longest-waiting
 		});
 		let checked = 0, applied = 0;
@@ -298,7 +314,10 @@ export class ArbPaymentService {
 	// NOTE: CANCELLED / EXPIRED rows are never moved back to an OPEN state (VERIFYING): the user may already have a new open attempt, and the one-open-attempt
 	// index would refuse the move. They are verified in place and only ever move to CAPTURED_APPLIED / DECLINED / AUTH_ONLY.
 
-	/** Browser returned to responseURL: hint only. Find the attempt by the payment id, remember the arrival, then verify with the bank. */
+	/**
+	 * Browser returned to responseURL: hint only. Find the attempt by the payment id (known only to the payer's browser and the bank), remember the arrival (VERIFYING = the
+	 * user is no longer on the bank page; never money), then verify with the bank. Unlike the webhook, this request comes from the payer's own browser.
+	 */
 	async handleReturn(input: { paymentId?: unknown; trandata?: unknown; error?: unknown }): Promise<{ reference: string | null }> {
 		const cfg = this.requireReady();
 		const hint = readReturnTrandata(cfg, input.trandata);
@@ -306,14 +325,14 @@ export class ArbPaymentService {
 		const trackId = hint?.trackId ?? null;
 		const attempt = await this.findAttempt(paymentId, trackId);
 		if (!attempt) return { reference: null };
-		if (OPEN.includes(attempt.status) || attempt.status === 'CANCELLED' || attempt.status === 'EXPIRED') {
+		if (UNRESOLVED.includes(attempt.status) && !attempt.bankFinalAt) {
 			await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: { in: ['REDIRECTED', 'UNCONFIRMED', 'CREATE_UNKNOWN'] } }, data: { status: 'VERIFYING' } });
 			await this.verifyThrottled(await this.db.arbPayment.findUniqueOrThrow({ where: { id: attempt.id } }));
 		}
 		return { reference: attempt.id };
 	}
 
-	/** errorURL: the bank page ended with an error or the user left. Soft CANCELLED, then still ask the bank (money may have moved). */
+	/** errorURL: the bank page ended with an error or the user left. Soft CANCELLED (our word only), then still ask the bank (money may have moved). */
 	async handleError(input: { paymentId?: unknown; trandata?: unknown }): Promise<{ reference: string | null }> {
 		const cfg = this.requireReady();
 		const hint = readReturnTrandata(cfg, input.trandata);
@@ -326,8 +345,12 @@ export class ArbPaymentService {
 	}
 
 	/**
-	 * Merchant notification (guide p.187-194). Returns true ONLY when it is safe for the bank to keep the transaction: the payload decrypts, belongs to a
-	 * known attempt and matches its amount/ids. A mismatch returns false (no acknowledgement) and the bank voids the transaction (p.187 step 4).
+	 * Merchant notification for Bank Hosted (guide p.187-194): body `[{paymentId, trandata}]`. The answer decides what the BANK does with the transaction: acknowledged = it keeps
+	 * and settles it, not acknowledged = it VOIDS (p.187 step 4). So the answer is exact and does NOT wait for any Inquiry (the bank waits a configured time for it):
+	 *  - ack only when the payload decrypts with our key, belongs to an attempt that can still be paid and matches its amount / ids / udf values (a purely local check + one write);
+	 *  - the Inquiry that follows runs in the background and is only what moves money;
+	 *  - a notification for an attempt we already declined / rejected is NOT acknowledged (the bank voids it, so nothing is collected that we would never credit).
+	 * The redirect URL we hand back is always OUR configured response URL, never a value taken from the request.
 	 */
 	async handleNotification(input: { paymentId?: unknown; trandata?: unknown }): Promise<{ ack: boolean; responseUrl: string | null }> {
 		const cfg = this.requireReady();
@@ -340,35 +363,42 @@ export class ArbPaymentService {
 			void notifyAdmins('SUSPICIOUS_PAYMENT', { ref: `ARB ${attempt.trackId}`, metadata: { arbPaymentId: attempt.id, problem: bad } });
 			return { ack: false, responseUrl: null };
 		}
+		if (attempt.status === 'DECLINED' || attempt.status === 'CREATE_REJECTED') {
+			void notifyAdmins('SUSPICIOUS_PAYMENT', { ref: `ARB ${attempt.trackId}`, metadata: { arbPaymentId: attempt.id, problem: 'notification_for_closed_attempt' } });
+			return { ack: false, responseUrl: null };
+		}
 		// the acknowledgement is only sent once the arrival is durably recorded
 		await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: { in: ['REDIRECTED', 'UNCONFIRMED', 'CREATE_UNKNOWN'] } }, data: { status: 'VERIFYING', bankPaymentId: attempt.bankPaymentId ?? txn.paymentId } });
-		void this.verify(attempt.id).catch(e => logger.error(`[ARB] verify after notification failed: ${(e as Error).message}`));
+		if (!attempt.bankFinalAt) void this.verifyThrottled(await this.db.arbPayment.findUniqueOrThrow({ where: { id: attempt.id } })).catch(e => logger.error(`[ARB] verify after notification failed: ${(e as Error).message}`));
 		return { ack: true, responseUrl: `${cfg.publicBaseUrl}/api/payments/arb/response` };
 	}
 
 	/**
 	 * Webhook notification (guide p.179-186): a PLAIN (unencrypted, unsigned) JSON array `[{type, result:[{status,...}], responseURL, payLoad:[{...}]}]`; the merchant answers
-	 * `[{"status":"1"}]`, and without it the gateway keeps resending (p.186) — there is NO void in this protocol. Because nothing in it can be authenticated, it is only a
-	 * HINT: it can wake up the verification of a known attempt, it never moves money, and the attempt is verified with the bank (Inquiry) as for every other path.
-	 * Returns ack=true once the arrival is processed (known or unknown attempt: either way resending would change nothing); ack=false only for an unreadable body or a
-	 * storage failure (so the gateway retries).
+	 * `[{"status":"1"}]`, and without it the gateway keeps resending (p.186) — there is NO void in this protocol. Nothing in it can be authenticated, so it is only a HINT:
+	 *  - it NEVER changes an attempt's status and NEVER moves money (no status write at all); everything it says, including its own `responseURL`, is ignored;
+	 *  - it can only ask «please check this known attempt», and that check is bounded: one Inquiry in flight per attempt (shared), at most one per HINT_MIN_GAP_MS per attempt,
+	 *    at most HINT_BUDGET_PER_MIN for all hints together; beyond that the hint is dropped (the reconciler checks every unsettled attempt anyway);
+	 *  - the acknowledgement does not wait for the check;
+	 *  - ids are read exactly (trackId is a safe integer; a paymentId that arrived as a JSON number is ignored because it may have been rounded).
+	 * ack=true for any readable body (known or unknown attempt: resending changes nothing); ack=false only for an unreadable body so the gateway retries.
 	 */
 	async handleWebhook(body: unknown): Promise<{ ack: boolean }> {
 		this.requireReady();
-		const first = Array.isArray(body) ? body[0] : body;
-		if (!first || typeof first !== 'object') return { ack: false };
-		const pl = (first as any).payLoad;
-		const rec = Array.isArray(pl) ? pl[0] : pl;
-		if (!rec || typeof rec !== 'object') return { ack: false };
-		const asStr = (v: unknown) => (v === undefined || v === null || v === '' ? null : String(v));
-		const paymentId = asStr((rec as any).paymentId), trackId = asStr((rec as any).trackId);
-		if (!paymentId && !trackId) return { ack: false };
-		const attempt = await this.findAttempt(paymentId && /^\d{10,25}$/.test(paymentId) ? paymentId : null, trackId);
-		if (!attempt) return { ack: true }; // not ours / not known: nothing to do, resending would not help
-		if (OPEN.includes(attempt.status) || attempt.status === 'CANCELLED' || attempt.status === 'EXPIRED') {
-			await this.db.arbPayment.updateMany({ where: { id: attempt.id, status: { in: ['REDIRECTED', 'UNCONFIRMED', 'CREATE_UNKNOWN'] } }, data: { status: 'VERIFYING' } });
-			void this.verifyThrottled(await this.db.arbPayment.findUniqueOrThrow({ where: { id: attempt.id } })).catch(e => logger.error(`[ARB] verify after webhook failed: ${(e as Error).message}`));
-		}
+		const asObj = (v: unknown): any => { const x = Array.isArray(v) ? v[0] : v; if (typeof x === 'string') { try { return asObj(JSON.parse(x)); } catch { return null; } } return x && typeof x === 'object' ? x : null; };
+		const first = asObj(body);
+		if (!first) return { ack: false };
+		const rec = asObj(first.payLoad);
+		if (!rec) return { ack: false };
+		const trackRaw = rec.trackId, payRaw = rec.paymentId;
+		const trackId = typeof trackRaw === 'string' || (typeof trackRaw === 'number' && Number.isSafeInteger(trackRaw)) ? String(trackRaw) : null;
+		const paymentId = typeof payRaw === 'string' && /^\d{10,25}$/.test(payRaw) ? payRaw : null;
+		if (!trackId && !paymentId) return { ack: false };
+		const attempt = await this.findAttempt(paymentId, trackId);
+		if (!attempt || attempt.bankFinalAt || !UNRESOLVED.includes(attempt.status)) return { ack: true }; // not ours / already settled: nothing to do
+		if (attempt.lastInquiryAt && this.deps.now().getTime() - attempt.lastInquiryAt.getTime() < HINT_MIN_GAP_MS) return { ack: true }; // checked a moment ago
+		if (!this.inflight.has(attempt.id) && !this.takeHintBudget()) return { ack: true }; // budget spent: the reconciler will get to it
+		void this.verifyThrottled(attempt, HINT_MIN_GAP_MS).catch(e => logger.error(`[ARB] verify after webhook failed: ${(e as Error).message}`));
 		return { ack: true };
 	}
 
@@ -397,31 +427,37 @@ export class ArbPaymentService {
 		return (await this.verifyDetailed(id)).attempt;
 	}
 
-	/** Same as verify, plus whether the bank answered "no such transaction" for an attempt that never received a payment id (closes a lost create safely). */
-	async verifyDetailed(id: string): Promise<{ attempt: ArbPayment; notFound: boolean }> {
+	/** Same as verify, plus whether the bank answered "no such transaction" for an attempt that never received a payment id. One Inquiry per attempt at a time: concurrent callers share it. */
+	verifyDetailed(id: string): Promise<{ attempt: ArbPayment; notFound: boolean }> {
+		const running = this.inflight.get(id);
+		if (running) return running;
+		const p = this.verifyNow(id).finally(() => { this.inflight.delete(id); });
+		this.inflight.set(id, p);
+		return p;
+	}
+
+	private async verifyNow(id: string): Promise<{ attempt: ArbPayment; notFound: boolean }> {
 		const cfg = this.requireReady();
 		const a = await this.db.arbPayment.findUniqueOrThrow({ where: { id } });
 		if (a.status === 'CAPTURED_APPLIED' || a.status === 'DECLINED' || a.status === 'CREATE_REJECTED') return { attempt: a, notFound: false };
-		const by: InquiryBy = a.bankTransId ? { by: 'TRANID', transId: a.bankTransId } : a.bankPaymentId ? { by: 'PaymentID', paymentId: a.bankPaymentId } : { by: 'TrackID', trackId: a.trackId };
+		// an authorization is followed through the PAYMENT (a later capture is a different transaction with its own id), everything else by the transaction id once known
+		const by: InquiryBy = a.bankTransId && a.status !== 'AUTH_ONLY' ? { by: 'TRANID', transId: a.bankTransId } : a.bankPaymentId ? { by: 'PaymentID', paymentId: a.bankPaymentId } : { by: 'TrackID', trackId: a.trackId };
 		await this.db.arbPayment.update({ where: { id }, data: { inquiryCount: { increment: 1 }, lastInquiryAt: this.deps.now() } });
 		const r = await inquire(cfg, this.deps.http, by, a.amountSar.toFixed(2), a.trackId);
 
 		const done = async (attempt: Promise<ArbPayment>, notFound = false) => ({ attempt: await attempt, notFound });
 		if (r.kind === 'UNKNOWN') return done(this.toUnconfirmed(a));
 		if (r.kind === 'BANK_ERROR') {
-			// the bank says the payment id itself has expired (guide p.274 IPAY0100042): no page can still be completed, so nothing can be collected on it. This is the bank's
-			// own final word (not our clock) and the only error that settles an attempt that has a URL.
-			if (a.bankPaymentId && (r.code === 'IPAY0100042' || /payment\s*id\s*expired/i.test(r.text ?? ''))) {
-				await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: OPEN.concat(['CANCELLED', 'EXPIRED']) } }, data: { status: 'EXPIRED', bankFinalAt: this.deps.now() } });
-				return { attempt: await this.db.arbPayment.findUniqueOrThrow({ where: { id: a.id } }), notFound: false };
+			const code = (r.code ?? '').toUpperCase();
+			// An error code settles an attempt ONLY if the bank itself confirmed that this code means «can never be collected» (ARB_BANK_RELEASE_CODES, empty by default).
+			// IPAY0100042 («PaymentId Expired», guide p.274) is recorded but is NOT assumed to release anything: what it means for a payment that was already started is the bank's to say.
+			const windowPassed = this.deps.now().getTime() - a.createdAt.getTime() > cfg.attemptTtlMin * 60_000; // a page that was never handed out is judged only after a full window AND the bank's confirmed code
+			if (code && cfg.releaseCodes.includes(code) && UNRESOLVED.includes(a.status) && a.status !== 'AUTH_ONLY' && (a.bankPaymentId || windowPassed)) {
+				const terminal: ArbPaymentStatus = a.bankPaymentId ? 'EXPIRED' : 'CREATE_REJECTED';
+				await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: UNRESOLVED.filter(x => x !== 'AUTH_ONLY') } }, data: { status: terminal, bankFinalAt: this.deps.now(), bankResult: code } });
+				return { attempt: await this.db.arbPayment.findUniqueOrThrow({ where: { id: a.id } }), notFound: !a.bankPaymentId };
 			}
-			// the bank could not find / read the transaction: that is NOT a decline. For an attempt that never got a page URL it means nothing exists.
-			if (!a.bankPaymentId && this.deps.now().getTime() - a.createdAt.getTime() > this.deps.config().attemptTtlMin * 60_000) {
-				// no URL ever reached anyone AND the bank still has no record after a full window (a late create could not be pending any more): final «no record»
-				await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: OPEN.concat(['CANCELLED', 'EXPIRED']) }, bankPaymentId: null }, data: { status: 'CREATE_REJECTED', bankFinalAt: this.deps.now() } });
-				return { attempt: await this.db.arbPayment.findUniqueOrThrow({ where: { id: a.id } }), notFound: true };
-			}
-			return done(this.toUnconfirmed(a), !a.bankPaymentId);
+			return done(this.toUnconfirmed(a, code ? { bankResult: code } : {}), !a.bankPaymentId);
 		}
 		const t = r.txn;
 		const problem = this.bindingProblem(a, t);
@@ -436,12 +472,14 @@ export class ArbPaymentService {
 			return done(this.applyCapture(a, t));
 		}
 		if (/^APPROVED$/i.test(word)) {
-			await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: OPEN.concat(['CANCELLED', 'EXPIRED']) } }, data: { status: 'AUTH_ONLY', bankFinalAt: this.deps.now(), bankResult: word, bankTransId: t.transId ?? undefined, verifiedAt: this.deps.now() } });
-			void notifyAdmins('SUSPICIOUS_PAYMENT', { ref: `ARB ${a.trackId}`, metadata: { arbPaymentId: a.id, problem: 'authorization_only' } });
+			// An authorization the bank HOLDS: not a capture (no wallet credit) and not a release either. bankFinalAt stays empty on purpose: the attempt keeps blocking a new purchase and keeps
+			// being reconciled until the bank captures it (credited then), voids it (declined below) or the team finishes it with the bank. Only the first time raises the alert.
+			const upd = await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: UNRESOLVED } }, data: { status: 'AUTH_ONLY', bankResult: word, bankTransId: t.transId ?? undefined, verifiedAt: this.deps.now() } });
+			if (upd.count > 0 && a.status !== 'AUTH_ONLY') void notifyAdmins('SUSPICIOUS_PAYMENT', { ref: `ARB ${a.trackId}`, metadata: { arbPaymentId: a.id, problem: 'authorization_only' } });
 			return done(this.db.arbPayment.findUniqueOrThrow({ where: { id } }));
 		}
 		if (word && DECLINE_WORD.test(word)) {
-			await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: OPEN.concat(['CANCELLED', 'EXPIRED']) } }, data: { status: 'DECLINED', bankFinalAt: this.deps.now(), bankResult: word, verifiedAt: this.deps.now() } });
+			await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: UNRESOLVED } }, data: { status: 'DECLINED', bankFinalAt: this.deps.now(), bankResult: word, verifiedAt: this.deps.now() } });
 			return done(this.db.arbPayment.findUniqueOrThrow({ where: { id } }));
 		}
 		return done(this.toUnconfirmed(a, { bankResult: word || undefined }));
@@ -452,10 +490,10 @@ export class ArbPaymentService {
 		// a redirected attempt whose time ran out becomes EXPIRED (soft); everything else open stays/turns UNCONFIRMED. Never touches a terminal row.
 		const next: ArbPaymentStatus = a.status === 'REDIRECTED' && a.expiresAt <= now ? 'EXPIRED'
 			: a.status === 'REDIRECTED' ? 'REDIRECTED'
-			: a.status === 'CANCELLED' || a.status === 'EXPIRED' ? a.status
+			: a.status === 'CANCELLED' || a.status === 'EXPIRED' || a.status === 'AUTH_ONLY' ? a.status
 			: a.status === 'CREATE_UNKNOWN' || a.status === 'CREATED' ? a.status
 			: 'UNCONFIRMED';
-		await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: OPEN.concat(['CANCELLED', 'EXPIRED']) } }, data: { ...extra, status: next } });
+		await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: UNRESOLVED } }, data: { ...extra, status: next } });
 		return this.db.arbPayment.findUniqueOrThrow({ where: { id: a.id } });
 	}
 

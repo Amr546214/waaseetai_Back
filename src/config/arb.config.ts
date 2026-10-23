@@ -15,6 +15,9 @@
  *  ARB_DEPOSIT_FEE_PERCENT     ONE flat fee percent charged to the user on top of the net (may be 0). No default: it must come from an approved policy.
  *                              (The 4.25 / 5.5 % in utils/fee-policy.ts are the INTERNAL finance sheet's wallet-deposit classes, not a bank/merchant contract; this rail does not read them.)
  *  ARB_ALLOWED_USER_IDS        comma list of user ids that may use the rail (UAT: QA accounts only); 'ALL' opens it to everyone (a later, explicit decision)
+ *  ARB_BANK_RELEASE_CODES      comma list of Inquiry error codes the BANK has confirmed in writing mean "this payment can never be collected" (e.g. IPAY0100042 for an expired
+ *                              Payment ID, or the «no such transaction» code for an attempt that never received a URL). EMPTY = no error code ever releases a blocked attempt:
+ *                              only a bank result (paid / declined) settles it. Nothing is guessed from time or from the meaning of a code the bank has not confirmed.
  *  (no notification flag: both documented notification flows are always served when the rail is on — see arb-payment.service handleNotification / handleWebhook)
  */
 export interface ArbConfig {
@@ -31,6 +34,8 @@ export interface ArbConfig {
 	feePercent: number | null;
 	/** user ids allowed to use the rail; 'ALL' = everyone (only by explicit decision) */
 	allowedUserIds: string[];
+	/** bank-confirmed Inquiry error codes that settle an attempt as never-collectable; empty = none */
+	releaseCodes: string[];
 	currencyCode: '682';
 	/** ms, whole bank HTTP call */
 	httpTimeoutMs: number;
@@ -54,6 +59,7 @@ export function loadArbConfig(env: NodeJS.ProcessEnv = process.env): ArbConfig {
 		sarPerUsd: Number.isFinite(rate) && rate > 0 ? rate : 0,
 		feePercent: Number.isFinite(fee) && fee >= 0 && fee < 50 ? fee : null,
 		allowedUserIds: (env.ARB_ALLOWED_USER_IDS || '').split(',').map(x => x.trim()).filter(Boolean),
+		releaseCodes: (env.ARB_BANK_RELEASE_CODES || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean),
 		currencyCode: '682',
 		httpTimeoutMs: 20_000,
 		attemptTtlMin: 30,

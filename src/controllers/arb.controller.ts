@@ -51,7 +51,9 @@ export const arbPaymentStatus = async (req: Request, res: Response, next: NextFu
 
 const frontendBase = () => siteBaseUrl() ?? '';
 const walletReturn = (ref: string | null) => `${frontendBase()}${CLIENT_ROUTES.wallet}?arb=${encodeURIComponent(ref ?? 'unknown')}`;
-const pick = (req: Request) => ({ ...(req.query as Record<string, unknown>), ...((req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>) });
+/** the bank sends its notification as a JSON ARRAY with one object (`[{paymentId, trandata}]`, guide p.189), the browser redirect as form fields: accept both */
+const bodyObject = (b: unknown): Record<string, unknown> => { const x = Array.isArray(b) ? b[0] : b; return x && typeof x === 'object' ? (x as Record<string, unknown>) : {}; };
+const pick = (req: Request) => ({ ...(req.query as Record<string, unknown>), ...bodyObject(req.body) });
 
 /**
  * responseURL / errorURL: the BROWSER arrives here from the bank page (GET or POST). Nothing in the request is shown or trusted; it only tells us which
