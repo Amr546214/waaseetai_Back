@@ -79,7 +79,7 @@ test('notification: exact acknowledgement [{status:"1",result:<responseURL>}] (g
 test('the browser request DTO carries only the net USD: extra fields (amount, currency, status) are refused, bounds enforced', async () => {
 	const { initiateArbPaymentSchema: s } = await import('../dtos/arb.dto');
 	assert.equal(s.safeParse({ netUsd: 100 }).success, true);
-	for (const bad of [{ netUsd: 100, amount: 1 }, { netUsd: 100, currency: 'USD' }, { netUsd: 100, currencyCode: '840', status: 'CAPTURED' }, { netUsd: 49.99 }, { netUsd: 100001 }, { netUsd: '100' }, {}, { netUsd: NaN }]) {
+	for (const bad of [{ netUsd: 100, amount: 1 }, { netUsd: 100, currency: 'USD' }, { netUsd: 100, currencyCode: '840', status: 'CAPTURED' }, { netUsd: 100, acknowledgePreviousRisk: true }, { netUsd: 49.99 }, { netUsd: 100001 }, { netUsd: '100' }, {}, { netUsd: NaN }]) {
 		assert.equal(s.safeParse(bad).success, false, JSON.stringify(bad));
 	}
 });

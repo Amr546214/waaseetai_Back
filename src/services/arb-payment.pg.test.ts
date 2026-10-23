@@ -105,8 +105,9 @@ test('PG: the bank refuses the create -> FAILED state, nothing to pay, a new att
 	assert.equal(w.state, 'WAITING_PAGE'); assert.notEqual(w.reference, v.reference); assert.equal(await balance(u.id), 0);
 });
 
-test('PG: LOST create answer (bank processed it, answer dropped): "verifying" while in flight, no second attempt; once stale it is closed (the user was never given a URL, so nothing can be paid) and the USER may start again', opts, async () => {
-	const { svc, bank, mkUser, clock, row, prisma } = await env(); const u = await mkUser();
+test('PG: LOST create answer: «verifying» while in flight; once our own call cannot be pending the USER may start again, but the old attempt stays TRACKED and reconciled (not trusted as «nothing can be collected»)', opts, async () => {
+	const { svc, bank, mkUser, clock, row, balance, prisma } = await env(); const u = await mkUser();
+	await prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED')`);
 	bank.dropCreateAnswer = true;
 	const v = await svc.initiate(u.id, 100, IP);
 	assert.equal(v.state, 'VERIFYING'); assert.equal(v.redirectUrl, null);
@@ -114,11 +115,14 @@ test('PG: LOST create answer (bank processed it, answer dropped): "verifying" wh
 	bank.dropCreateAnswer = false;
 	const again = await svc.initiate(u.id, 100, IP);
 	assert.equal(again.reference, v.reference); assert.equal(bank.creates, 1); // young unknown create: not judged, not duplicated
-	clock.t += 100_000; // stale: no URL was ever shown, so no money can move on it -> closed, the user may start again (never automatically)
+	clock.t += 100_000;
 	const fresh = await svc.initiate(u.id, 100, IP);
 	assert.notEqual(fresh.reference, v.reference); assert.equal(bank.creates, 2);
-	const old = await row(v.reference); assert.equal(old.status, 'CREATE_REJECTED'); assert.ok(old.bankFinalAt);
-	assert.equal(await prisma.arbPayment.count({ where: { userId: u.id, status: 'CAPTURED_APPLIED' } }), 0);
+	const old = await row(v.reference); assert.equal(old.status, 'EXPIRED'); assert.equal(old.bankFinalAt, null); // tracked, NOT settled
+	// the bank DOES know it (processed, answer lost): it keeps being asked, and if it were ever captured it is applied once
+	bank.settle(bank.txns[0].paymentId, 'CAPTURED'); clock.t += 25 * 3_600_000;
+	await svc.reconcileOnce();
+	assert.equal((await row(v.reference)).status, 'CAPTURED_APPLIED'); assert.equal(await balance(u.id), 100);
 });
 
 test('PG: lost create answer where the bank has NO record -> the stale attempt is closed and a new one starts', opts, async () => {
@@ -131,7 +135,9 @@ test('PG: lost create answer where the bank has NO record -> the stale attempt i
 	clock.t += 100_000;
 	delete (bank as any).create; bank.failInquiry = 'notfound';
 	const w = await svc.initiate(u.id, 100, IP);
-	assert.equal((await row(v.reference)).status, 'CREATE_REJECTED'); assert.notEqual(w.reference, v.reference);
+	assert.equal((await row(v.reference)).status, 'EXPIRED'); assert.equal((await row(v.reference)).bankFinalAt, null); assert.notEqual(w.reference, v.reference); // allowed to start, old one tracked
+	clock.t += 31 * 60_000; bank.failInquiry = 'notfound'; await svc.reconcileOnce(); // a full window later the bank STILL has no record: now it is final «no record»
+	const closed = await row(v.reference); assert.equal(closed.status, 'CREATE_REJECTED'); assert.ok(closed.bankFinalAt);
 });
 
 test('PG: happy path - return + verified CAPTURED credits the NET USD once, with the full audit trail', opts, async () => {
@@ -374,51 +380,44 @@ test('PG: a private / loopback / missing customer address is refused (the bank w
 	await svc.initiate(u.id, 100, '198.51.100.20'); assert.equal(bank.log[0].headers['X-FORWARDED-FOR'], '198.51.100.20');
 });
 
-test('PG: «I left the bank page» is a LOCAL cancel: no silent re-pay - the bank is asked, the user is warned and must acknowledge; a late capture of the old attempt is never ignored', opts, async () => {
-	const { svc, bank, mkUser, balance, walletRows, row, clock } = await env(); const u = await mkUser(); const x = await mkUser();
-	const v = await svc.initiate(u.id, 100, IP);
-	await assert.rejects(svc.abandon(x.id, v.reference), /غير موجودة/);
-	const ab = await svc.abandon(u.id, v.reference);
-	assert.equal(ab.state, 'CANCELLED'); assert.equal(ab.bankFinal, false); assert.match(ab.message + ab.nextStep, /لم يؤكد بعد|لا تُعد الدفع/);
-	assert.ok(bank.inquiries >= 1); // abandon asked the bank at once
-	// start over WITHOUT acknowledging: refused with a warning, no new bank call
+test('PG: while an attempt can still be collected a NEW one is BLOCKED (no override, no acknowledgement); the status can be refreshed; a late capture of the old one is credited; only then a new start is possible', opts, async () => {
+	const { svc, bank, mkUser, balance, walletRows, row, clock } = await env(); const u = await mkUser();
+	const v = await svc.initiate(u.id, 100, IP); const a = await row(v.reference);
+	await svc.handleError({ paymentId: a.bankPaymentId! }); // the browser left the bank page (errorURL): LOCAL cancel only
+	assert.equal((await row(v.reference)).status, 'CANCELLED'); assert.equal((await row(v.reference)).bankFinalAt, null);
 	clock.t += 5_000;
 	const blocked = await svc.initiate(u.id, 100, IP);
-	assert.equal(blocked.state, 'UNSETTLED'); assert.equal(blocked.requiresAcknowledgement, true); assert.equal(blocked.previousReference, v.reference); assert.equal(bank.creates, 1);
-	// acknowledged: the new attempt starts and records which attempt it replaces
-	const w = await svc.initiate(u.id, 100, IP, { acknowledgePreviousRisk: true });
-	assert.equal(w.state, 'WAITING_PAGE'); assert.notEqual(w.reference, v.reference); assert.equal(bank.creates, 2);
-	assert.equal((await row(w.reference)).replacesId, v.reference);
-	// the OLD page is paid late, AFTER the new attempt started: credited once, never ignored
-	const a = await row(v.reference); bank.settle(a.bankPaymentId!, 'CAPTURED'); clock.t += 10_000;
-	await svc.handleReturn({ paymentId: a.bankPaymentId! }); await svc.handleReturn({ paymentId: a.bankPaymentId! });
-	assert.equal(await balance(u.id), 100); assert.equal(await walletRows(u.id), 1); assert.equal((await row(v.reference)).status, 'CAPTURED_APPLIED');
-	// and the NEW attempt, if it is also paid, is credited separately (two real payments = two credits, none lost, none repeated)
-	const b2 = await row(w.reference); bank.settle(b2.bankPaymentId!, 'CAPTURED'); clock.t += 10_000;
-	await svc.handleReturn({ paymentId: b2.bankPaymentId! }); await svc.handleReturn({ paymentId: b2.bankPaymentId! });
-	assert.equal(await balance(u.id), 200); assert.equal(await walletRows(u.id), 2);
-	assert.equal((await svc.abandon(u.id, v.reference)).state, 'PAID'); // a paid attempt cannot be abandoned
+	assert.equal(blocked.state, 'UNSETTLED'); assert.equal(blocked.requiresAcknowledgement, false); assert.equal(blocked.previousReference, v.reference); assert.equal(bank.creates, 1);
+	assert.match(blocked.nextStep, /تحديث الحالة/);
+	assert.equal((await svc.initiate(u.id, 100, IP)).state, 'UNSETTLED'); assert.equal(bank.creates, 1); // asking again changes nothing
+	clock.t += 5_000; const refreshed = await svc.statusFor(u.id, v.reference); // the «refresh status» button
+	assert.equal(refreshed.bankFinal, false); assert.ok(['CANCELLED', 'EXPIRED', 'VERIFYING'].includes(refreshed.state));
+	bank.settle(a.bankPaymentId!, 'CAPTURED'); clock.t += 5_000; // the old page is paid late
+	const after = await svc.initiate(u.id, 100, IP);
+	assert.equal(after.state, 'PAID'); assert.equal(await balance(u.id), 100); assert.equal(await walletRows(u.id), 1);
+	const next = await svc.initiate(u.id, 100, IP); // the bank has spoken: a new start is now possible
+	assert.equal(next.state, 'WAITING_PAGE'); assert.equal(bank.creates, 2);
 });
 
-test('PG: only the BANK settles an attempt: a bank decline or a bank-reported expired payment id unlocks a new start silently; elapsed time and local expiry do not', opts, async () => {
+test('PG: only the BANK settles an attempt: a bank decline or a bank-reported expired payment id unlocks a new start; elapsed time and local expiry do not', opts, async () => {
 	const e1 = await env(); const u1 = await e1.mkUser();
 	const v1 = await e1.svc.initiate(u1.id, 100, IP); const a1 = await e1.row(v1.reference);
 	e1.bank.settle(a1.bankPaymentId!, 'NOT CAPTURED'); e1.clock.t += 5_000;
 	const n1 = await e1.svc.initiate(u1.id, 100, IP); // the bank gave a final refusal: no acknowledgement needed
 	assert.equal(n1.state, 'WAITING_PAGE'); assert.ok((await e1.row(v1.reference)).bankFinalAt);
 	const e2 = await env(); const u2 = await e2.mkUser();
-	const v2 = await e2.svc.initiate(u2.id, 100, IP); await e2.svc.abandon(u2.id, v2.reference);
+	const v2 = await e2.svc.initiate(u2.id, 100, IP); await e2.svc.handleError({ paymentId: (await e2.row(v2.reference)).bankPaymentId! });
 	e2.bank.failInquiry = 'expired'; e2.clock.t += 5_000; // the bank itself says the payment id is expired (IPAY0100042)
 	const n2 = await e2.svc.initiate(u2.id, 100, IP);
 	assert.equal(n2.state, 'WAITING_PAGE'); const r2 = await e2.row(v2.reference); assert.equal(r2.status, 'EXPIRED'); assert.ok(r2.bankFinalAt);
-	// TIME is not evidence: an hour, a day, a month later the previous attempt is still unsettled and still needs the acknowledgement
+	// TIME is not evidence: an hour, a day, a month later the previous attempt is still unsettled and a new start stays blocked
 	const e3 = await env(); const u3 = await e3.mkUser();
 	await e3.prisma.$executeRawUnsafe(`UPDATE arb_payments SET status = 'DECLINED' WHERE status IN ('CREATED','CREATE_UNKNOWN','REDIRECTED','VERIFYING','UNCONFIRMED','CANCELLED','EXPIRED')`); // rows of earlier tests in the shared test DB
 	const v3 = await e3.svc.initiate(u3.id, 100, IP);
 	for (const step of [31 * 60_000, 3_600_000, 24 * 3_600_000, 30 * 24 * 3_600_000]) {
 		e3.clock.t += step;
 		const r = await e3.svc.initiate(u3.id, 100, IP);
-		assert.equal(r.state, 'UNSETTLED', `after +${step} ms`); assert.equal(r.requiresAcknowledgement, true);
+		assert.equal(r.state, 'UNSETTLED', `after +${step} ms`); assert.equal(r.requiresAcknowledgement, false);
 		assert.equal((await e3.row(v3.reference)).bankFinalAt, null);
 	}
 	assert.equal(e3.bank.creates, 1);

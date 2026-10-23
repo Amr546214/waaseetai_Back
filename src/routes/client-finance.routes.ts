@@ -5,7 +5,7 @@ import { validateDto } from '../middlewares/validate-dto.middleware';
 import { getClientInvoice, getClientInvoices, getClientWallet } from '../controllers/client-finance.controller';
 import { createPaypalOrder, capturePaypalOrder } from '../controllers/paypal.controller';
 import { createPaypalOrderSchema, capturePaypalOrderSchema } from '../dtos/paypal.dto';
-import { arbAbandon, arbAvailability, arbOpenAttempt, arbPaymentStatus, arbQuote, initiateArbPayment } from '../controllers/arb.controller';
+import { arbAvailability, arbOpenAttempt, arbPaymentStatus, arbQuote, initiateArbPayment } from '../controllers/arb.controller';
 import { initiateArbPaymentSchema } from '../dtos/arb.dto';
 import { paymentLimiter } from '../middlewares/rate-limit.middleware';
 
@@ -31,6 +31,5 @@ router.post('/arb/initiate', paymentLimiter, validateDto(initiateArbPaymentSchem
 router.get('/arb/quote', arbQuote);
 router.get('/arb/open', arbOpenAttempt);
 router.get('/arb/:reference/status', arbPaymentStatus);
-router.post('/arb/:reference/abandon', paymentLimiter, arbAbandon);
 
 export default router;

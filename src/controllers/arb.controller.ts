@@ -20,8 +20,7 @@ export const initiateArbPayment = async (req: Request, res: Response, next: Next
 	try {
 		const uid = userIdOf(req);
 		if (!uid) return res.status(401).json({ success: false, message: 'غير مصرح' });
-		const b = req.body as { netUsd: number; acknowledgePreviousRisk?: boolean };
-		const data = await arbPaymentService.initiate(uid, b.netUsd, customerIpOf(req), { acknowledgePreviousRisk: b.acknowledgePreviousRisk === true });
+		const data = await arbPaymentService.initiate(uid, (req.body as { netUsd: number }).netUsd, customerIpOf(req));
 		return res.status(200).json({ success: true, data });
 	} catch (error) { next(error); }
 };
@@ -38,14 +37,6 @@ export const arbOpenAttempt = async (req: Request, res: Response, next: NextFunc
 		const uid = userIdOf(req);
 		if (!uid) return res.status(401).json({ success: false, message: 'غير مصرح' });
 		return res.status(200).json({ success: true, data: await arbPaymentService.openAttemptFor(uid) });
-	} catch (error) { next(error); }
-};
-
-export const arbAbandon = async (req: Request, res: Response, next: NextFunction) => {
-	try {
-		const uid = userIdOf(req);
-		if (!uid) return res.status(401).json({ success: false, message: 'غير مصرح' });
-		return res.status(200).json({ success: true, data: await arbPaymentService.abandon(uid, String(req.params.reference)) });
 	} catch (error) { next(error); }
 };
 

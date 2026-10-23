@@ -45,6 +45,7 @@ export interface PublicArbView {
 	/** the bank itself gave a final answer for this attempt */
 	bankFinal: boolean;
 	/** a new attempt may only start if the user acknowledges that the previous one may still be collected */
+	/** kept for the wire shape: always false, there is no override */
 	requiresAcknowledgement: boolean;
 	previousReference: string | null;
 }
@@ -57,7 +58,7 @@ const VIEW: Record<PublicArbState, { message: string; nextStep: string }> = {
 	CANCELLED: { message: 'لم تكتمل عملية الدفع.', nextStep: 'إن ظهر خصم على بطاقتك فسنؤكده تلقائيًا ويُضاف إلى محفظتك. يمكنك المحاولة من جديد بعد قليل.' },
 	EXPIRED: { message: 'انتهت مهلة عملية الدفع قبل اكتمالها.', nextStep: 'إن ظهر خصم على بطاقتك فسنؤكده تلقائيًا. يمكنك بدء عملية جديدة.' },
 	FAILED: { message: 'تعذّر بدء عملية الدفع بالبطاقة، ولم يُخصم أي مبلغ.', nextStep: 'حاول مرة أخرى بعد قليل، أو استخدم طريقة دفع أخرى.' },
-	UNSETTLED: { message: 'لم نتأكد بعد من مصير عملية الدفع السابقة لدى البنك.', nextStep: 'قد تُحصَّل لاحقًا حتى لو غادرت صفحة البنك، ونضيف مبلغها إلى محفظتك تلقائيًا عند تأكيد البنك. لا تبدأ عملية جديدة إلا إذا كنت تقبل احتمال الخصم مرتين.' },
+	UNSETTLED: { message: 'لم نتأكد بعد من مصير عملية الدفع السابقة لدى البنك.', nextStep: 'قد تُحصَّل حتى لو غادرت صفحة البنك، ونضيف مبلغها إلى محفظتك تلقائيًا عند تأكيد البنك. لا يمكن بدء عملية جديدة قبل أن يحسم البنك العملية السابقة. اضغط «تحديث الحالة» أو عد لاحقًا.' },
 	REVIEW: { message: 'عملية الدفع قيد المراجعة لدينا.', nextStep: 'لا تُعد الدفع. سنراجعها ونوافيك بالنتيجة، ويمكنك التواصل مع الدعم برقم العملية.' },
 };
 
@@ -153,7 +154,7 @@ export class ArbPaymentService {
 	}
 
 	/** Start (or resume) the one open card attempt of this user. */
-	async initiate(userId: string, netUsd: number, customerIp: string, opts: { acknowledgePreviousRisk?: boolean } = {}): Promise<PublicArbView> {
+	async initiate(userId: string, netUsd: number, customerIp: string): Promise<PublicArbView> {
 		const cfg = this.requireReady(userId);
 		if (!Number.isFinite(netUsd) || netUsd < MIN_NET_USD || netUsd > MAX_NET_USD) {
 			throw new AppError(`المبلغ يجب أن يكون بين ${MIN_NET_USD} و ${MAX_NET_USD.toLocaleString('en-US')} دولار أمريكي`, 400);
@@ -163,13 +164,8 @@ export class ArbPaymentService {
 			// setting is wrong or the call is internal: refuse here with a clear reason instead of sending the bank a bad address.
 			throw Object.assign(new AppError('تعذّر تحديد عنوانك لإتمام الدفع الآمن. حاول مرة أخرى.', 400), { code: 'CUSTOMER_IP_UNRELIABLE' });
 		}
-		const gate = await this.gate(userId, !!opts.acknowledgePreviousRisk);
-		if (gate.block) return gate.block;
-		if (gate.supersedeIds.length) {
-			// the user explicitly accepted the duplicate-charge risk: the earlier attempts leave the OPEN set LOCALLY (still unsettled at the bank, still reconciled, any later
-			// capture is applied) so the one-open-attempt index lets the new one in
-			await this.db.arbPayment.updateMany({ where: { id: { in: gate.supersedeIds }, status: { in: OPEN } }, data: { status: 'CANCELLED' } });
-		}
+		const gate = await this.gate(userId);
+		if (gate.block) return gate.block; // an attempt that can still be collected blocks a new one: no override, only the bank's answer lifts it
 
 		const price = priceArbDeposit(netUsd, cfg.feePercent!, cfg.sarPerUsd);
 		const net = price.net, fee = price.fee, gross = price.gross, amountSar = price.chargeSar;
@@ -182,13 +178,13 @@ export class ArbPaymentService {
 				data: {
 					userId, trackId: this.newTrackId(), status: 'CREATED', netUsd: net, feeUsd: fee, feePercent: cfg.feePercent!, grossUsd: gross,
 					fxSarPerUsd: rate, amountSar, currencyCode: cfg.currencyCode, customerIp,
-					createdAt: now, expiresAt: new Date(now.getTime() + cfg.attemptTtlMin * 60_000), replacesId: gate.supersedeIds[0] ?? null,
+					createdAt: now, expiresAt: new Date(now.getTime() + cfg.attemptTtlMin * 60_000),
 				},
 			});
 		} catch (e) {
 			if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
 				// a concurrent start (double click / two tabs) won the one-open-attempt index: answer with ITS state, never create a second
-				const winner = await this.gate(userId, false);
+				const winner = await this.gate(userId);
 				if (winner.block) return winner.block;
 			}
 			throw e;
@@ -213,46 +209,46 @@ export class ArbPaymentService {
 	}
 
 	/**
-	 * May a new attempt start? Time is NOT evidence that the bank did not collect: only the bank's own final answer (bankFinalAt) settles an attempt.
+	 * May a new attempt start? Time is NOT evidence that the bank did not collect: only the bank's own final answer (bankFinalAt) settles an attempt that has a URL,
+	 * and there is NO user override (a ticked box is not a bank-backed way out).
 	 *  - a page that is still live (REDIRECTED, inside its window) or a create call still in flight: show it, never a second one
-	 *  - an attempt WITHOUT a payment id (the user was never given a URL, so nothing can be paid): closed once it is older than our own bank-call timeout x3
-	 *  - an attempt WITH a payment id that the bank has not finally answered (verifying, unconfirmed, locally cancelled / expired): re-ask the bank now; if still
-	 *    unsettled the user gets a plain warning and must acknowledge the duplicate-charge risk before a new attempt starts. Nothing is ever started silently.
+	 *  - an attempt WITH a payment id the bank has not finally answered (verifying, unconfirmed, locally cancelled / expired): re-ask the bank now; if it is still
+	 *    unsettled the new start is BLOCKED with the UNSETTLED state (message, «refresh status» in the UI). It lifts only when the bank answers: paid (credited),
+	 *    declined / authorization-only, or «payment id expired» (IPAY0100042, guide p.274).
+	 *  - an attempt WITHOUT a payment id (the create answer was lost, so no URL ever reached anyone): a new start is allowed once our own create call can no longer be
+	 *    in flight (STALE_CREATE_MS = 3 x the call timeout); that is a structural fact (only our API hands out the page URL), not a clock guarantee, so the old attempt
+	 *    stays TRACKED (soft EXPIRED, bankFinalAt null) and keeps being reconciled by TrackID; it is finalized only when the bank has no record of it after the window.
 	 */
-	private async gate(userId: string, acknowledge: boolean): Promise<{ block: PublicArbView | null; supersedeIds: string[] }> {
+	private async gate(userId: string): Promise<{ block: PublicArbView | null }> {
 		const now = this.deps.now();
 		const open = await this.db.arbPayment.findFirst({ where: { userId, status: { in: OPEN } }, orderBy: { createdAt: 'desc' } });
 		if (open) {
 			if (open.status === 'REDIRECTED' && open.expiresAt > now && open.paymentPageUrl) {
 				// the page may already have a final answer at the bank (declined / paid): ask before offering the same page again
 				const after = await this.verifyThrottled(open);
-				if (after.status === 'REDIRECTED') return { block: this.view(after), supersedeIds: [] };
-				if (after.status === 'CAPTURED_APPLIED' || after.status === 'AUTH_ONLY') return { block: this.view(after), supersedeIds: [] };
+				if (after.status === 'REDIRECTED') return { block: this.view(after) };
+				if (after.status === 'CAPTURED_APPLIED' || after.status === 'AUTH_ONLY') return { block: this.view(after) };
 			}
 			// a create call still in flight in another request (or just started): the user may be about to receive its page URL
-			if ((open.status === 'CREATED' || open.status === 'CREATE_UNKNOWN') && now.getTime() - open.createdAt.getTime() < STALE_CREATE_MS) return { block: this.view(open), supersedeIds: [] };
+			if ((open.status === 'CREATED' || open.status === 'CREATE_UNKNOWN') && now.getTime() - open.createdAt.getTime() < STALE_CREATE_MS) return { block: this.view(open) };
 		}
-		// 1) attempts that never gave the user a URL: nothing can be paid on them
-		const noUrl = await this.db.arbPayment.findMany({ where: { userId, status: { in: ['CREATED', 'CREATE_UNKNOWN'] }, bankPaymentId: null, createdAt: { lt: new Date(now.getTime() - STALE_CREATE_MS) } } }); // never a create that may still be in flight
+		// 1) attempts that never gave anyone a URL: tracked, not trusted. They leave the OPEN set (soft EXPIRED) so the index lets a new start in, but stay reconciled.
+		const noUrl = await this.db.arbPayment.findMany({ where: { userId, status: { in: ['CREATED', 'CREATE_UNKNOWN'] }, bankPaymentId: null, createdAt: { lt: new Date(now.getTime() - STALE_CREATE_MS) } } });
 		for (const a of noUrl) {
 			const { attempt } = await this.verifyDetailed(a.id);
-			if (attempt.status === 'CAPTURED_APPLIED') return { block: this.view(attempt), supersedeIds: [] };
-			await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: ['CREATED', 'CREATE_UNKNOWN'] }, bankPaymentId: null }, data: { status: 'CREATE_REJECTED', bankFinalAt: now } });
+			if (attempt.status === 'CAPTURED_APPLIED' || attempt.status === 'AUTH_ONLY') return { block: this.view(attempt) };
+			await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: ['CREATED', 'CREATE_UNKNOWN'] }, bankPaymentId: null }, data: { status: 'EXPIRED' } });
 		}
-		// 2) attempts with a URL that the bank has not finally answered
+		// 2) attempts with a URL that the bank has not finally answered: block, no override
 		const prev = await this.db.arbPayment.findMany({ where: { userId, bankPaymentId: { not: null }, bankFinalAt: null, status: { in: [...OPEN, 'CANCELLED', 'EXPIRED'] } }, orderBy: { createdAt: 'desc' }, take: 5 });
-		const unsettled: ArbPayment[] = [];
 		for (const row of prev) {
 			const after = await this.verifyThrottled(row);
-			if (after.status === 'CAPTURED_APPLIED' || after.status === 'AUTH_ONLY') return { block: this.view(after), supersedeIds: [] };
-			if (!after.bankFinalAt && [...OPEN, 'CANCELLED', 'EXPIRED'].includes(after.status)) unsettled.push(after);
+			if (after.status === 'CAPTURED_APPLIED' || after.status === 'AUTH_ONLY') return { block: this.view(after) };
+			if (!after.bankFinalAt && [...OPEN, 'CANCELLED', 'EXPIRED'].includes(after.status)) {
+				return { block: this.view(after, { state: 'UNSETTLED', ...VIEW.UNSETTLED, redirectUrl: null, requiresAcknowledgement: false, previousReference: after.id }) };
+			}
 		}
-		if (unsettled.length === 0) return { block: null, supersedeIds: [] };
-		if (!acknowledge) {
-			const first = unsettled[0];
-			return { block: this.view(first, { state: 'UNSETTLED', ...VIEW.UNSETTLED, redirectUrl: null, requiresAcknowledgement: true, previousReference: first.id }), supersedeIds: [] };
-		}
-		return { block: null, supersedeIds: unsettled.map(u => u.id) };
+		return { block: null };
 	}
 
 	async statusFor(userId: string, reference: string): Promise<PublicArbView> {
@@ -270,19 +266,6 @@ export class ArbPaymentService {
 	private async verifyThrottled(p: ArbPayment): Promise<ArbPayment> {
 		if (p.lastInquiryAt && this.deps.now().getTime() - p.lastInquiryAt.getTime() < INQUIRY_MIN_GAP_MS) return p;
 		return this.verify(p.id);
-	}
-
-	/**
-	 * The user says they left the bank page. That is a LOCAL cancel only: the bank may still collect on the page they left. Only a REDIRECTED attempt can be abandoned;
-	 * it becomes the SOFT CANCELLED state, is asked about at once, and stays under reconciliation. A new attempt then needs the bank's final answer or the user's explicit
-	 * acknowledgement of the duplicate-charge risk (see gate()). Never touches a paid / declined / verifying attempt.
-	 */
-	async abandon(userId: string, reference: string): Promise<PublicArbView> {
-		const p = await this.db.arbPayment.findUnique({ where: { id: reference } });
-		if (!p || p.userId !== userId) throw new AppError('عملية الدفع غير موجودة', 404);
-		if (p.status !== 'REDIRECTED') return this.view(p);
-		await this.db.arbPayment.updateMany({ where: { id: p.id, status: 'REDIRECTED' }, data: { status: 'CANCELLED' } });
-		try { return this.view(await this.verify(p.id)); } catch { return this.view(await this.db.arbPayment.findUniqueOrThrow({ where: { id: p.id } })); }
 	}
 
 	/**
@@ -408,6 +391,11 @@ export class ArbPaymentService {
 				return { attempt: await this.db.arbPayment.findUniqueOrThrow({ where: { id: a.id } }), notFound: false };
 			}
 			// the bank could not find / read the transaction: that is NOT a decline. For an attempt that never got a page URL it means nothing exists.
+			if (!a.bankPaymentId && this.deps.now().getTime() - a.createdAt.getTime() > this.deps.config().attemptTtlMin * 60_000) {
+				// no URL ever reached anyone AND the bank still has no record after a full window (a late create could not be pending any more): final «no record»
+				await this.db.arbPayment.updateMany({ where: { id: a.id, status: { in: OPEN.concat(['CANCELLED', 'EXPIRED']) }, bankPaymentId: null }, data: { status: 'CREATE_REJECTED', bankFinalAt: this.deps.now() } });
+				return { attempt: await this.db.arbPayment.findUniqueOrThrow({ where: { id: a.id } }), notFound: true };
+			}
 			return done(this.toUnconfirmed(a), !a.bankPaymentId);
 		}
 		const t = r.txn;
