@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { arbPaymentService } from '../services/arb-payment.service';
 import { CLIENT_ROUTES } from '../services/client-notifications.service';
 import { logger } from '../config/logger';
+import { siteBaseUrl } from '../utils/site-url';
 
 const userIdOf = (req: Request): string | null => ((req as any).user?.id as string | undefined) ?? null;
 
@@ -48,7 +49,7 @@ export const arbPaymentStatus = async (req: Request, res: Response, next: NextFu
 	} catch (error) { next(error); }
 };
 
-const frontendBase = () => (process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+const frontendBase = () => siteBaseUrl() ?? '';
 const walletReturn = (ref: string | null) => `${frontendBase()}${CLIENT_ROUTES.wallet}?arb=${encodeURIComponent(ref ?? 'unknown')}`;
 const pick = (req: Request) => ({ ...(req.query as Record<string, unknown>), ...((req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>) });
 
