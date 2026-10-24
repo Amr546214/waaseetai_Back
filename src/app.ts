@@ -1,4 +1,5 @@
 import { startChatDigestScheduler } from './services/chat-digest.service';
+import { startArbReconciler } from './services/arb-payment.service';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -237,6 +238,7 @@ import clientDisputesRoutes from './routes/client-disputes.routes';
 import clientTicketsRoutes from './routes/client-tickets.routes';
 import newsletterRoutes from './routes/newsletter.routes';
 import paypalWebhookRoutes from './routes/paypal-webhook.routes';
+import arbPaymentsRoutes from './routes/arb-payments.routes';
 
 mountAppRoute('/api/provider/profile', providerProfileRoutes);
 mountAppRoute('/api/specialties', specialtyRoutes);
@@ -274,6 +276,9 @@ mountAppRoute('/newsletter', newsletterRoutes);
 // Dashboard: https://dev.waseetai.com/api/payments/paypal/webhook
 mountAppRoute('/api/payments/paypal', paypalWebhookRoutes);
 mountAppRoute('/payments/paypal', paypalWebhookRoutes);
+// ARB / Neoleap bank callbacks — public by design, verified server-side (see routes/arb-payments.routes.ts).
+mountAppRoute('/api/payments/arb', arbPaymentsRoutes);
+mountAppRoute('/payments/arb', arbPaymentsRoutes);
 
 import adminSpecialtiesRouter from './routes/admin-specialties.routes';
 import adminUsersRouter from './routes/admin-users.routes';
@@ -423,6 +428,7 @@ if (process.env.NODE_ENV !== 'test') {
 		logger.info(`🚀 Server is running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
 		logger.info(`👉 http://localhost:${PORT}/api`);
 		startChatDigestScheduler(); // no-op unless CHAT_DIGEST_EMAIL_ENABLED=true
+		startArbReconciler(); // no-op unless the bank-card rail is enabled and configured
 	});
 }
 

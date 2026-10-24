@@ -158,6 +158,7 @@ model User {
   pointTransactions       PointTransaction[]
   walletTransactions      WalletTransaction[]
   paypalPayments          PaypalPayment[]
+  arbPayments             ArbPayment[]
   accountAuditLogs        AccountAuditLog[]
   notifications           Notification[]
   sessions                UserSession[]
@@ -2709,6 +2710,63 @@ model PaypalPayment {
 
   @@index([userId, createdAt])
   @@map("paypal_payments")
+}
+
+// ARB / Neoleap (Al Rajhi) bank-hosted card payment attempt, wallet deposit. One row per attempt; the row is the durable idempotency anchor
+// (partial unique index ux_arb_payments_one_open_per_user in the migration allows ONE open attempt per user; wallet_transactions.referenceId is unique
+// per bank transaction id, so a credit can be written once). The browser return is a hint only: money is applied after a server-to-server Inquiry.
+// Migration 20261023100000_arb_payments is PREPARED and NOT EXECUTED anywhere (team applies it).
+enum ArbPaymentStatus {
+  CREATED          // row written, bank create call not answered yet
+  CREATE_UNKNOWN   // bank create call timed out / lost: nothing was given to the user, checked by Inquiry before a new attempt
+  CREATE_REJECTED  // bank refused the create call (no money possible)
+  REDIRECTED       // payment page URL issued to the user
+  VERIFYING        // a return/notification arrived; Inquiry in progress
+  UNCONFIRMED      // the bank could not confirm either way yet: never counted as paid or failed
+  CANCELLED        // the user left the bank page (soft: a later verified capture still wins)
+  EXPIRED          // no result in time (soft: a later verified capture still wins)
+  AUTH_ONLY        // bank says APPROVED (authorization), not a capture: not credited, needs a decision
+  DECLINED         // bank-confirmed refusal (terminal)
+  CAPTURED_APPLIED // bank-confirmed capture AND the wallet credit committed (terminal)
+}
+
+model ArbPayment {
+  id              String           @id @default(uuid())
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trackId         String           @unique // numeric merchant reference sent to the bank (doc p.18 trackId, Numeric)
+  status          ArbPaymentStatus @default(CREATED)
+  // what the user asked to add (USD, the wallet unit) and what is charged (derived on the server, never from the browser)
+  netUsd          Decimal          @db.Decimal(12, 2)
+  feeUsd          Decimal          @db.Decimal(12, 2)
+  feePercent      Float
+  grossUsd        Decimal          @db.Decimal(12, 2)
+  fxSarPerUsd     Decimal          @db.Decimal(12, 6) // snapshot of the configured owner-approved rate at creation
+  amountSar       Decimal          @db.Decimal(12, 2) // the amount sent to the bank
+  currencyCode    String           @default("682")
+  bankPaymentId   String?          @unique
+  bankTransId     String?          @unique
+  bankRef         String?
+  bankResult      String?          // raw result word from the bank (CAPTURED / APPROVED / ...), never shown to users
+  bankAuthCode    String?
+  bankCardType    String?          // Visa / MasterCard / Mada as reported by the bank AFTER payment (reporting only; the fee does not depend on it)
+  paymentPageUrl  String?
+  customerIp      String?
+  inquiryCount    Int              @default(0)
+  lastInquiryAt   DateTime?
+  // set ONLY when the BANK itself gave a final answer for this attempt (captured, declined, authorization-only, payment id expired, or no record of a create that never gave the user a URL).
+  // A local cancel / local expiry / elapsed time never sets it: such an attempt may still be collected and stays under reconciliation until the bank says final.
+  bankFinalAt     DateTime?
+  verifiedAt      DateTime?
+  appliedAt       DateTime?
+  walletTxId      String?          @unique
+  expiresAt       DateTime
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status, updatedAt])
+  @@map("arb_payments")
 }
 
 model NewsletterSubscriber {
