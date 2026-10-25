@@ -7,6 +7,9 @@ import type { AddressInfo } from 'node:net';
 // A 403 therefore comes from the real gate. Denied actors must get 403 on every sensitive route; allowed actors must pass the gate (anything but 401/403 — the controller itself
 // may then fail on missing DB, which is out of scope: a request that does not answer within 1.5s has certainly passed the gate, because the gate answers immediately).
 process.env.OPENAI_API_KEY = 'test-key';
+// Hermetic: no database may answer here. A DB-backed gate (requireApprovedProvider) answers 403 for the made-up provider id when a database IS reachable (the full serial run exports DATABASE_URL), which
+// this matrix would misread as a role denial; with no database the gate hangs and "no answer = passed the role gate" holds, as the test is written.
+process.env.DATABASE_URL = 'postgresql://nobody:nobody@127.0.0.1:1/none'; delete process.env.QA_ISOLATED_PG_URL;
 
 const A = {
   client: { id: 'c1', accountType: 'CLIENT_INDIVIDUAL', roles: ['CLIENT'], activeRole: 'CLIENT' },
