@@ -59,6 +59,7 @@ export const ADMIN_PERMISSIONS: readonly AdminPermissionDef[] = [
 	{ id: 'tasks.manage', label: 'إدارة المهام', group: 'team', sensitive: false },
 	{ id: 'performance.view', label: 'عرض الأداء', group: 'team', sensitive: false },
 	{ id: 'performance.export', label: 'تصدير الأداء', group: 'team', sensitive: false },
+	{ id: 'messages.use', label: 'مراسلة فريق الإدارة', group: 'team', sensitive: false },
 
 	{ id: 'settings.manage', label: 'إعدادات النظام', group: 'system', sensitive: true, designRow: 'تعديل الإعدادات' },
 	{ id: 'site_control.manage', label: 'التحكم بالموقع', group: 'system', sensitive: true },
@@ -86,19 +87,19 @@ export const SUPER_ADMIN_ONLY_CAPABILITIES = ['staff.invite', 'staff.role', 'sta
 export interface AdminRoleTemplate { key: string; name: string; description: string; color: string; permissions: string[]; notes?: string }
 export const ADMIN_ROLE_TEMPLATES: readonly AdminRoleTemplate[] = [
 	{ key: 'team_manager', name: 'مدير فريق', description: 'يدير الموظفين ويوزع المهام', color: '#D98A0B',
-		permissions: ['users.view', 'users.suspend', 'disputes.view', 'disputes.resolve', 'reports.view', 'support.review', 'specialties.approve', 'packages.manage', 'withdrawals.review', 'withdrawals.approve', 'finance.read', 'team.view', 'tasks.manage'],
+		permissions: ['users.view', 'users.suspend', 'disputes.view', 'disputes.resolve', 'reports.view', 'support.review', 'specialties.approve', 'packages.manage', 'withdrawals.review', 'withdrawals.approve', 'finance.read', 'team.view', 'tasks.manage', 'messages.use'],
 		notes: 'العمود في التصميم يضم 9 صفوف؛ بطاقة الدور تذكر 11 صلاحية (تعارض داخل التصميم). «الموافقة على السحوبات» في التصميم تُترجم إلى المراجعة والموافقة فقط، دون الرفض والصرف. لا يتضمن إدارة الأدوار أو الموظفين.' },
 	{ key: 'disputes_supervisor', name: 'مشرف نزاعات', description: 'يحل النزاعات ويراجع البلاغات', color: '#A56BE0',
-		permissions: ['users.view', 'users.suspend', 'disputes.view', 'disputes.resolve', 'reports.view'],
+		permissions: ['users.view', 'users.suspend', 'disputes.view', 'disputes.resolve', 'reports.view', 'messages.use'],
 		notes: 'بطاقة الدور في التصميم تذكر 8 صلاحيات والمصفوفة 5 فقط.' },
 	{ key: 'support_supervisor', name: 'مشرف دعم', description: 'يعالج تذاكر الدعم الفني', color: '#2BD4C7',
-		permissions: ['users.view', 'reports.view', 'support.review', 'support.reply'],
+		permissions: ['users.view', 'reports.view', 'support.review', 'support.reply', 'messages.use'],
 		notes: 'بطاقة الدور في التصميم تذكر 6 صلاحيات والمصفوفة 3 فقط. قرار وظيفي من صاحب القرار (2026-10-25): «مراجعة الدعم» تعني معالجة التذاكر، فيُمنح الرد وتغيير الحالة والأولوية والملاحظات الداخلية وتكليف التذكرة **لنفسه**. لا يُمنح توزيع المهام على الآخرين (tasks.manage) ولا إدارة الموظفين ولا الصرف ولا حل النزاعات.' },
 	{ key: 'content_supervisor', name: 'مشرف محتوى', description: 'يعتمد التخصصات والملفات', color: '#5DA0FF',
-		permissions: ['specialties.approve'],
+		permissions: ['specialties.approve', 'messages.use'],
 		notes: 'بطاقة الدور في التصميم تذكر 5 صلاحيات والمصفوفة صفًا واحدًا.' },
 	{ key: 'finance_supervisor', name: 'مشرف مالي', description: 'يراجع السحوبات والمعاملات', color: '#0FA99A',
-		permissions: ['withdrawals.review', 'withdrawals.approve', 'finance.read'],
+		permissions: ['withdrawals.review', 'withdrawals.approve', 'finance.read', 'messages.use'],
 		notes: 'بطاقة الدور في التصميم تذكر 4 صلاحيات والمصفوفة صفين. الرفض والصرف منفصلان ولا يُمنحان من القالب.' },
 ] as const;
 

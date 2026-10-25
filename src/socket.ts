@@ -8,6 +8,7 @@ import { registerAiAssistantGateway } from './sockets/ai-assistant.gateway';
 import { registerAssessmentGateway } from './sockets/assessment.gateway';
 import { registerSetupTestGateway } from './sockets/setup-test.gateway';
 import { registerHelpAssistantChatGateway } from './sockets/help-assistant-chat.gateway';
+import { registerAdminMessagesGateway } from './sockets/admin-messages.gateway';
 import { socketAuthMiddleware, verifySocketToken } from './utils/socket-auth';
 import { setSocketServer } from './utils/socket-registry';
 
@@ -76,6 +77,9 @@ export const initSocketServer = (httpServer: HttpServer, allowedOrigins: string[
 				}).catch(() => console.warn(`⚠️ Socket ${socket.id} join_user_room verification failed`));
 			}
 		});
+
+		// Admin team messaging: own room per account, permission re-checked from the database on every subscribe
+		registerAdminMessagesGateway(socket);
 
 		// Register Proposal AI Review Audit Gateway (Step 3: مراجعة AI)
 		registerProposalAuditGateway(socket);

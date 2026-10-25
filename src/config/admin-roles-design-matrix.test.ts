@@ -20,7 +20,8 @@ const DESIGN: Array<{ row: string; id: string | null; cols: number[] }> = [
 ];
 const COLUMN_NAMES = ['Super Admin', 'مدير فريق', 'مشرف نزاعات', 'مشرف دعم', 'مشرف محتوى', 'مشرف مالي'];
 // what a role needs in addition to the design row to be usable (reading the thing it acts on, or the team pages); never an action the design row does not show
-const SUPPORTING = new Set(['disputes.view', 'withdrawals.review', 'team.view', 'tasks.manage']);
+// messages.use: the owner's decision of 2026-10-25 - internal messaging for all five base roles (no read of others' conversations, nothing operational)
+const SUPPORTING = new Set(['disputes.view', 'withdrawals.review', 'team.view', 'tasks.manage', 'messages.use']);
 // functional decision of the decision-maker (2026-10-25): «مراجعة الدعم» of the design means PROCESSING tickets, so the support supervisor also holds support.reply (reply, status, priority, internal notes, taking a ticket for himself)
 const FUNCTIONAL = new Map<string, string[]>([['مشرف دعم', ['support.reply']]]);
 
