@@ -58,6 +58,11 @@ router.patch('/roles/:id', requireOwner, ok(req => adminRolesService.update(req.
 // --- staff ---
 router.get('/staff', requirePermission('team.view'), ok(req => adminStaffService.list({ search: String(req.query.search ?? ''), roleId: req.query.roleId ? String(req.query.roleId) : undefined, status: req.query.status ? String(req.query.status) : undefined, tab: req.query.tab ? String(req.query.tab) : undefined })));
 router.get('/staff/unplaced', requireOwner, ok(() => adminStaffService.unplacedAdminAccounts()));
+router.get('/staff/:id/activity', requireAdminMember, ok(async req => {
+	const actor = await loadAdminActor(req);
+	if (!actor.isOwner && actor.userId !== id(req) && !actor.permissions.has('tasks.manage')) throw new AppError('ليست لديك صلاحية تنفيذ هذا الإجراء.', 403, undefined, 'ADMIN_PERMISSION_DENIED');
+	return adminStaffService.activity(id(req));
+}));
 router.post('/staff/attach', requireOwner, ok(req => { const b = only(req.body, ['userId', 'roleId']); return adminStaffService.attachExisting(req.user!.id, String(b.userId ?? ''), b.roleId ? String(b.roleId) : null); }, 201));
 router.patch('/staff/:id/role', requireOwner, ok(req => { const b = only(req.body, ['roleId', 'expectedVersion']); return adminStaffService.setRole(req.user!.id, id(req), b.roleId ? String(b.roleId) : null, b.expectedVersion); }));
 router.post('/staff/:id/suspend', requireOwner, ok(req => adminStaffService.setStatus(req.user!.id, id(req), 'SUSPENDED')));

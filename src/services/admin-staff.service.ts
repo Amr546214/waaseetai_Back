@@ -1,3 +1,4 @@
+import { departmentsOf, isKnownPermission } from '../config/admin-permissions';
 import { AccountType, AdminStaffStatus, Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '../config/db';
 import { AppError, fieldError } from '../utils/app-error';
@@ -6,6 +7,9 @@ import { disconnectAdminSockets } from '../utils/socket-registry';
 
 export const STAFF_VERSION_CONFLICT = 'STAFF_VERSION_CONFLICT';
 const OPEN_TASK = ['NEW', 'IN_PROGRESS', 'PENDING'] as const;
+
+/** "Active now": the member's newest live-session activity is at most this old (sessions refresh at most once a minute). */
+export const ACTIVE_NOW_MS = 5 * 60_000;
 
 export class AdminStaffService {
 	constructor(private db: typeof defaultPrisma = defaultPrisma, private now: () => Date = () => new Date()) {}
@@ -22,7 +26,7 @@ export class AdminStaffService {
 		if (q.search?.trim()) { const s = q.search.trim(); where.user = { OR: [{ firstName: { contains: s, mode: 'insensitive' } }, { lastName: { contains: s, mode: 'insensitive' } }, { email: { contains: s, mode: 'insensitive' } }] }; }
 		const now = this.now();
 		const [staff, owner, invites, openByUser, lateByUser, doneByUser, totals] = await Promise.all([
-			this.db.adminStaff.findMany({ where, orderBy: { joinedAt: 'asc' }, include: { user: { select: { id: true, firstName: true, lastName: true, email: true, lastActiveAt: true, status: true } }, role: { select: { id: true, name: true, color: true } } } }),
+			this.db.adminStaff.findMany({ where, orderBy: { joinedAt: 'asc' }, include: { user: { select: { id: true, firstName: true, lastName: true, email: true, lastActiveAt: true, status: true } }, role: { select: { id: true, name: true, color: true, permissions: true } } } }),
 			this.db.platformOwner.findFirst({ select: { userId: true } }),
 			this.db.adminInvite.findMany({ where: { status: 'PENDING', expiresAt: { gt: now } }, orderBy: { createdAt: 'desc' }, include: { role: { select: { name: true } } } }),
 			this.db.adminTask.groupBy({ by: ['assigneeId'], where: { status: { in: [...OPEN_TASK] }, assigneeId: { not: null } }, _count: { _all: true } }),
@@ -30,20 +34,43 @@ export class AdminStaffService {
 			this.db.adminTask.groupBy({ by: ['assigneeId'], where: { status: 'DONE', assigneeId: { not: null } }, _count: { _all: true } }),
 			this.db.adminStaff.groupBy({ by: ['status'], _count: { _all: true } }),
 		]);
+		// presence = the newest authenticated activity of a live (not revoked, not expired) session; "active now" means within ACTIVE_NOW_MS. No session = no claim.
+		const sessions = await this.db.userSession.groupBy({ by: ['userId'], where: { userId: { in: staff.map(s => s.userId) }, revokedAt: null, expiresAt: { gt: now } }, _max: { lastActiveAt: true } });
+		const seen = new Map(sessions.map(r => [r.userId, r._max.lastActiveAt]));
+		const ids = staff.map(x => x.userId);
+		const [resolved, doneRows, logins] = await Promise.all([
+			this.db.dispute.groupBy({ by: ['resolvedById'], where: { resolvedById: { in: ids } }, _count: { _all: true } }),
+			this.db.adminTask.findMany({ where: { status: 'DONE', completedAt: { not: null }, assigneeId: { in: ids } }, select: { assigneeId: true, createdAt: true, completedAt: true } }),
+			this.db.userSession.groupBy({ by: ['userId'], where: { userId: { in: ids } }, _max: { createdAt: true } }),
+		]);
+		const resolvedBy = new Map(resolved.map(r => [r.resolvedById, r._count._all]));
+		const hours = new Map<string, number[]>();
+		for (const t of doneRows) { const l = hours.get(t.assigneeId!) ?? []; l.push(t.completedAt!.getTime() - t.createdAt.getTime()); hours.set(t.assigneeId!, l); }
+		const lastLogin = new Map(logins.map(r => [r.userId, r._max.createdAt]));
 		const m = (rows: Array<{ assigneeId: string | null; _count: { _all: number } }>) => new Map(rows.map(r => [r.assigneeId, r._count._all]));
 		const open = m(openByUser), late = m(lateByUser), done = m(doneByUser);
 		const members = staff.map(s => ({
 			userId: s.userId, name: `${s.user.firstName} ${s.user.lastName}`.trim(), email: s.user.email, status: s.status, isOwner: owner?.userId === s.userId,
-			role: s.role ? { id: s.role.id, name: s.role.name, color: s.role.color } : null, joinedAt: s.joinedAt, lastActiveAt: s.user.lastActiveAt, version: s.version,
+			role: s.role ? { id: s.role.id, name: s.role.name, color: s.role.color } : null, departments: s.role ? departmentsOf(s.role.permissions.filter(isKnownPermission)) : [], joinedAt: s.joinedAt, lastActiveAt: seen.get(s.userId) ?? null, activeNow: s.status === 'ACTIVE' && !!seen.get(s.userId) && now.getTime() - seen.get(s.userId)!.getTime() <= ACTIVE_NOW_MS, version: s.version,
+			resolvedDisputes: resolvedBy.get(s.userId) ?? 0, lastLoginAt: lastLogin.get(s.userId) ?? null,
+			avgCompletionHours: hours.get(s.userId)?.length ? Math.round(hours.get(s.userId)!.reduce((x, y) => x + y, 0) / hours.get(s.userId)!.length / 360_000) / 10 : null,
 			openTasks: open.get(s.userId) ?? 0, overdueTasks: late.get(s.userId) ?? 0, doneTasks: done.get(s.userId) ?? 0,
 		}));
+		const activeIds = (await this.db.adminStaff.findMany({ where: { status: 'ACTIVE' }, select: { userId: true } })).map(r => r.userId);
+		const activeNow = (await this.db.userSession.groupBy({ by: ['userId'], where: { userId: { in: activeIds }, revokedAt: null, expiresAt: { gt: now }, lastActiveAt: { gte: new Date(now.getTime() - ACTIVE_NOW_MS) } } })).length;
 		const active = totals.find(t => t.status === 'ACTIVE')?._count._all ?? 0, suspended = totals.find(t => t.status === 'SUSPENDED')?._count._all ?? 0;
 		const openTotal = [...open.values()].reduce((a, b) => a + b, 0), lateTotal = [...late.values()].reduce((a, b) => a + b, 0);
 		return {
 			members: q.tab === 'pending' ? [] : members,
 			pendingInvites: invites.map(i => ({ id: i.id, email: i.email, fullName: i.fullName, roleName: i.role.name, expiresAt: i.expiresAt, createdAt: i.createdAt, resendCount: i.resendCount })),
-			counts: { total: active + suspended, active, suspended, pendingInvites: invites.length, openTasks: openTotal, overdueTasks: lateTotal },
+			counts: { total: active + suspended, activeNow, active, suspended, pendingInvites: invites.length, openTasks: openTotal, overdueTasks: lateTotal },
 		};
+	}
+
+	/** The member's recent recorded task activity (what they created, reassigned, moved). Real events only; the caller's right to see them is checked by the route. */
+	async activity(userId: string, limit = 30) {
+		const rows = await this.db.adminTaskEvent.findMany({ where: { actorId: userId }, orderBy: { at: 'desc' }, take: Math.min(Math.max(limit, 1), 50), include: { task: { select: { number: true, title: true } } } });
+		return rows.map(r => ({ id: r.id, at: r.at, kind: r.kind, from: r.fromValue, to: r.toValue, taskNumber: r.task.number, taskTitle: r.task.title }));
 	}
 
 	async setRole(actorId: string, userId: string, roleId: string | null, expectedVersion: unknown) {

@@ -65,6 +65,13 @@ export const ADMIN_PERMISSIONS: readonly AdminPermissionDef[] = [
 	{ id: 'audit.view', label: 'عرض سجلات التدقيق', group: 'system', sensitive: false, designRow: 'Audit Trail' },
 ] as const;
 
+/** The department line of a role / member (design: «القسم»): the permission groups its permissions fall in, in registry order. Derived, never typed in, so it can never claim authority the role lacks. */
+export const departmentsOf = (ids: readonly string[]): string[] => {
+	const held = new Set(ids), seen: AdminPermissionGroup[] = [];
+	for (const p of ADMIN_PERMISSIONS) if (held.has(p.id) && !seen.includes(p.group)) seen.push(p.group);
+	return seen.map(g => ADMIN_GROUP_LABELS[g]);
+};
+
 export const ADMIN_PERMISSION_IDS: readonly string[] = ADMIN_PERMISSIONS.map(p => p.id);
 const KNOWN = new Set(ADMIN_PERMISSION_IDS);
 export const isKnownPermission = (id: string): boolean => KNOWN.has(id);
