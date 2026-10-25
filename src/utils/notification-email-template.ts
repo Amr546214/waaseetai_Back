@@ -1,4 +1,5 @@
 import { emailButton, escHtml, MAIL_FONT, renderEmailShell } from './email-shell';
+import { brandName } from './brand';
 
 export interface NotificationEmailInput {
 	lang: 'ar' | 'en';
@@ -20,5 +21,5 @@ export const buildNotificationEmailHtml = (i: NotificationEmailInput): string =>
       <div style="font-family:${MAIL_FONT};font-size:18px;line-height:28px;font-weight:700;color:#111827;margin:0 0 10px 0;">${escHtml(i.title)}</div>
       <div style="font-family:${MAIL_FONT};font-size:14px;line-height:23px;color:#374151;margin:0 0 ${i.linkUrl ? '24px' : '4px'} 0;">${escHtml(i.message)}</div>
       ${i.linkUrl ? emailButton(i.linkUrl, i.ctaLabel) : ''}`;
-	return renderEmailShell({ lang: i.lang, docTitle: `${i.title} - Waseet AI`, bodyHtml, footerNote: i.footerNote });
+	return renderEmailShell({ lang: i.lang, docTitle: `${i.title} - ${brandName()}`, bodyHtml, footerNote: i.footerNote });
 };

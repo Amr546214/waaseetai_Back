@@ -1,4 +1,6 @@
 import { deniedAdminNotificationTypes } from './admin-access.service';
+import { brandSubject, brandNameInArabicText } from '../utils/brand';
+import { systemSettingsService } from './system-settings.service';
 import { emailSenderName } from '../utils/email-sender-name';
 import { NotificationCategory, Notification } from '@prisma/client';
 import { siteUrl } from '../utils/site-url';
@@ -136,6 +138,17 @@ export const resolveCommunicationLanguage = (preferences: unknown): 'ar' | 'en' 
 	return lang === 'en' ? 'en' : 'ar';
 };
 
+/** A language the recipient SAVED themselves (null = nothing saved: the platform default language applies). */
+export const savedCommunicationLanguage = (preferences: unknown): 'ar' | 'en' | null => {
+	const lang = preferences && typeof preferences === 'object' && !Array.isArray(preferences) ? (preferences as Record<string, unknown>).preferredCommunicationLanguage : undefined;
+	return lang === 'en' || lang === 'ar' ? lang : null;
+};
+export const savedClientLanguage = (interfaceLanguage: unknown): 'ar' | 'en' | null => (typeof interfaceLanguage === 'string' && interfaceLanguage.trim() ? (interfaceLanguage === 'English' ? 'en' : 'ar') : null);
+export const savedMarketerLanguage = (settings: unknown): 'ar' | 'en' | null => {
+	const s = settings && typeof settings === 'object' && !Array.isArray(settings) ? (settings as Record<string, unknown>) : {};
+	return s.marketer_communication_language === 'en' || s.marketer_communication_language === 'ar' ? s.marketer_communication_language : null;
+};
+
 /** The e-mail's own wording (greeting, button, footer, subject suffix) in the provider's language. The notification's title / message are shown as authored. */
 export const notificationMailCopy = (lang: 'ar' | 'en') => lang === 'en'
 	? { dir: 'ltr', greeting: (n: string) => `Hello ${n}`.trim(), open: 'Open', footer: 'You are receiving this because you chose e-mail as a notification channel in your settings.', subjectSuffix: 'Waseet AI' }
@@ -206,6 +219,7 @@ export class NotificationService {
 		let channels = { push: true, email: false };
 		let recipient: { email: string; firstName: string | null } | null = null;
 		let lang: 'ar' | 'en' = 'ar';
+		let savedLang: 'ar' | 'en' | null = null; // what the recipient chose; null = the platform default language (setting) decides
 		// An account can hold both roles: a notification that points into /client-overview follows the CLIENT's settings, anything else the provider's (as before).
 		const forClient = !!actionUrl && actionUrl.startsWith('/client-overview');
 		// Same rule for the marketer side: a notification into /marketer-overview follows the marketer's shared switches (and communication language), never the provider profile's.
@@ -214,21 +228,21 @@ export class NotificationService {
 		try {
 			const profile = forClient || forMarketer ? null : await prisma.providerProfile.findUnique({ where: { userId }, select: { preferences: true, user: { select: { email: true, firstName: true } } } });
 			profileChannels = profile?.preferences ?? null;
-			if (profile) { channels = resolveNotificationChannels(profile.preferences); lang = resolveCommunicationLanguage(profile.preferences); recipient = profile.user; }
+			if (profile) { channels = resolveNotificationChannels(profile.preferences); lang = resolveCommunicationLanguage(profile.preferences); savedLang = savedCommunicationLanguage(profile.preferences); recipient = profile.user; }
 			else if (forClient) {
 				const [prefs, clientProfile, user] = await Promise.all([
 					prisma.notificationPreference.findUnique({ where: { userId }, select: { settings: true } }),
 					prisma.clientProfile.findUnique({ where: { userId }, select: { interfaceLanguage: true } }),
 					prisma.user.findUnique({ where: { id: userId }, select: { email: true, firstName: true } })
 				]);
-				channels = resolveClientNotificationChannels(prefs?.settings, type); lang = resolveClientLanguage(clientProfile?.interfaceLanguage); recipient = user;
+				channels = resolveClientNotificationChannels(prefs?.settings, type); lang = resolveClientLanguage(clientProfile?.interfaceLanguage); savedLang = savedClientLanguage(clientProfile?.interfaceLanguage); recipient = user;
 			}
 			else if (forMarketer) {
 				const [prefs, user] = await Promise.all([
 					prisma.notificationPreference.findUnique({ where: { userId }, select: { settings: true } }),
 					prisma.user.findUnique({ where: { id: userId }, select: { email: true, firstName: true } })
 				]);
-				channels = resolveMarketerNotificationChannels(prefs?.settings, type); lang = resolveMarketerLanguage(prefs?.settings); recipient = user;
+				channels = resolveMarketerNotificationChannels(prefs?.settings, type); lang = resolveMarketerLanguage(prefs?.settings); savedLang = savedMarketerLanguage(prefs?.settings); recipient = user;
 			}
 		} catch { /* default channels */ }
 		// No channels chosen on a provider profile: the account's shared preferences apply (Settings / profile page: channel_in_app, channel_email). Unsaved = push on, e-mail off.
@@ -240,6 +254,9 @@ export class NotificationService {
 				if (channels.email && !recipient) recipient = await prisma.user.findUnique({ where: { id: userId }, select: { email: true, firstName: true } });
 			} catch { /* default channels */ }
 		}
+		// the recipient's own choice always wins; only when nothing was saved does the platform default language (setting `defaultLanguage`) apply
+		if (!savedLang) lang = await systemSettingsService.get<'ar' | 'en'>('defaultLanguage');
+		else lang = savedLang;
 		return { channels, recipient, lang };
 	}
 
@@ -261,7 +278,7 @@ export class NotificationService {
 			await mailTransporter.sendMail({
 				from: `"${senderName}" <${from}>`,
 				to: email,
-				subject: `${dto.title} - ${copy.subjectSuffix}`,
+				subject: brandSubject(`${dto.title} - ${copy.subjectSuffix}`),
 				html: buildNotificationEmailHtml({ lang, greeting: copy.greeting(firstName || ''), title: dto.title, message: dto.message, linkUrl: link, ctaLabel: dto.actionText || copy.open, footerNote: copy.footer }),
 				text: `${dto.title}\n${dto.message}${link ? `\n${link}` : ''}\n\n${copy.footer}`,
 				headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },
@@ -293,10 +310,10 @@ export class NotificationService {
 			const info = await mailTransporter.sendMail({
 				from: `"${senderName}" <${from}>`,
 				to: email,
-				subject,
+				subject: brandSubject(subject),
 				html: getOtpEmailTemplate(code, validityMinutes, otpPurposeOfKind(kind)),
 				// An HTML-only message is a spam signal: every OTP mail also carries a plain-text part.
-				text: `رمز التحقق الخاص بك في وسيط AI هو: ${code}\nالرمز صالح لمدة ${otpValidityText(validityMinutes)}. لا تشاركه مع أي أحد. إذا لم تطلبه فتجاهل هذه الرسالة.`,
+				text: `رمز التحقق الخاص بك في ${brandNameInArabicText()} هو: ${code}\nالرمز صالح لمدة ${otpValidityText(validityMinutes)}. لا تشاركه مع أي أحد. إذا لم تطلبه فتجاهل هذه الرسالة.`,
 				headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },
 			});
 			return logEmailDelivery(kind, email, info, Date.now() - startedAt);
@@ -333,7 +350,7 @@ export class NotificationService {
 			const info = await mailTransporter.sendMail({
 				from: `"${senderName}" <${from}>`,
 				to: email,
-				subject: emailSubject,
+				subject: brandSubject(emailSubject),
 				html: getPasswordResetEmailTemplate(firstName, code, validityMinutes),
 			});
 			return logEmailDelivery('password-reset', email, info, Date.now() - startedAt);

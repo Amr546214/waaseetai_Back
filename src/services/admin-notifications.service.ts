@@ -3,6 +3,7 @@ import { logger } from '../config/logger';
 import { notificationService } from './notification.service';
 import { adminRecipientsHolding } from './admin-access.service';
 import { ADMIN_NOTIFY_EVENT_PERMISSION, adminNotifyType } from '../config/admin-notification-permissions';
+import { sendAdminMailboxAlert } from './admin-mailbox-alert.service';
 
 /**
  * In-app notifications for the staff who currently hold the permission for that kind of work (never every ADMIN / SUPER_ADMIN account). One inbox row per active admin goes through
@@ -56,6 +57,8 @@ export async function notifyAdmins(event: AdminNotifyEvent, payload: AdminNotify
 	try {
 		const copy = buildCopy(event, payload);
 		if (!copy) return;
+		// the institutional mailbox (setting `adminNotificationEmail`) is a separate channel from the permission-based staff inbox below; it never reads or changes who the staff recipients are
+		void sendAdminMailboxAlert(event, copy.actionUrl, payload.id);
 		const admins = (await adminRecipientsHolding(ADMIN_NOTIFY_EVENT_PERMISSION[event])).map(id => ({ id }));
 		const results = await Promise.allSettled(admins.map(admin => notificationService.createAndEmit({
 			userId: admin.id, title: copy.title, message: copy.message, category: copy.category, type: adminNotifyType(event),

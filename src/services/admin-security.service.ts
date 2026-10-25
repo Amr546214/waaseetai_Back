@@ -1,4 +1,5 @@
 import { prisma } from '../config/db';
+import { platformZone, startOfDayInZone } from '../utils/platform-time';
 
 // Implementation Batch 7 — replaces sa-security.ts's fully hardcoded
 // security event feed (5 fictional events: fake brute-force attempt, fake
@@ -58,8 +59,9 @@ export interface FlaggedAccountItem {
 
 class AdminSecurityService {
   async getSecurityEvents(limit = 100): Promise<SecurityEventsResult> {
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    const zone = await platformZone();
+    const startOfDay = zone ? startOfDayInZone(zone) : new Date();
+    if (!zone) startOfDay.setHours(0, 0, 0, 0);
 
     const [logs, totalEventsToday, criticalOrWarningToday, failedLoginAttemptsToday] = await Promise.all([
       prisma.accountAuditLog.findMany({

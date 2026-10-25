@@ -6,7 +6,8 @@ import type { AdminActor } from './admin-access.service';
 import { ENFORCED_KEYS, PUBLIC_KEYS, SETTINGS_CACHE_TTL_MS, SETTING_BY_KEY, SETTING_DEFS, SettingDef, SettingPerm } from '../config/system-settings.registry';
 import { currencyReadiness } from './currency-readiness.service';
 import { logger } from '../config/logger';
-import { sessionService } from './session.service'; // used only inside functions: the cycle with session.service is harmless
+import { sessionService } from './session.service';
+import { setBrandName } from '../utils/brand'; // used only inside functions: the cycle with session.service is harmless
 
 export const SETTINGS_VERSION_CONFLICT = 'SETTINGS_VERSION_CONFLICT';
 export const SETTING_NOT_AVAILABLE = 'SETTING_NOT_AVAILABLE';
@@ -44,6 +45,7 @@ export class SystemSettingsService {
 	private lastGood = new Map<string, { value: unknown; at: number }>();
 	private lastFailLog = 0;
 	private noteGood(s: Snapshot) {
+		{ const row = s.values.get('platformName'); const p = row ? SETTING_BY_KEY.get('platformName')!.schema!.safeParse(row.value) : null; setBrandName(p && p.success ? p.data : ''); }
 		for (const d of SETTING_DEFS) { if (d.status !== 'enforced' || !d.schema) continue; const row = s.values.get(d.key); const p = row ? d.schema.safeParse(row.value) : null; this.lastGood.set(d.key, { value: p && p.success ? p.data : d.default, at: s.at }); }
 	}
 	private logReadFailure(e: unknown) { if (Date.now() - this.lastFailLog > 60_000) { this.lastFailLog = Date.now(); logger.error(`[Settings] read failed, using last known good values where they exist: ${(e as Error)?.message ?? e}`); } }
@@ -76,7 +78,7 @@ export class SystemSettingsService {
 	async view(actor: AdminActor) {
 		const s = await this.snapshot(true);
 		const items = SETTING_DEFS.filter(d => this.mayRead(actor, d)).map(d => {
-			const base = { key: d.key, tab: d.tab, label: d.label, description: d.description, status: d.status, unit: d.unit ?? null, allowed: d.allowed ?? null, pages: d.pages, canWrite: d.status === 'enforced' && can(actor, d.write), effect: d.effect ?? null, reason: d.reason ?? null };
+			const base = { key: d.key, tab: d.tab, label: d.label, description: d.description, status: d.status, unit: d.unit ?? null, allowed: d.allowed ?? null, allowedLabels: d.labels ?? null, pages: d.pages, canWrite: d.status === 'enforced' && can(actor, d.write), effect: d.effect ?? null, reason: d.reason ?? null };
 			if (d.status === 'enforced') { const row = s.values.get(d.key); const p = row && d.schema!.safeParse(row.value); return { ...base, value: p && p.success ? p.data : d.default, version: row?.version ?? 0, source: row ? 'stored' : 'default' }; }
 			if (d.status === 'readonly' && d.current) { const c = d.current(); return { ...base, value: c.value, version: null, source: c.source }; }
 			return { ...base, value: null, version: null, source: null };

@@ -48,7 +48,7 @@ test('PG settings: saves are versioned (a stale save is refused 409 and shows th
 	for (const [changes, label] of [[{ platformName: '' }, 'empty name'], [{ sessionIdleMinutes: 3 }, 'idle too small'], [{ sessionIdleMinutes: 1.5 }, 'not integer'], [{ sessionIdleMinutes: 'x' }, 'string'], [{ registrationOpen: 'yes' }, 'not bool'], [{ supportEmail: 'nope' }, 'bad email'], [{ nonsense: 1 }, 'unknown key']] as const) {
 		const r = await put(e, e.sa.id, changes as any, Object.fromEntries(Object.keys(changes).map(k => [k, 0]))); assert.equal(r.status, 400, label);
 	}
-	for (const k of ['aiEngineEnabled', 'adminNotificationEmail', 'minWithdrawal', 'defaultTimezone', 'adminTwoFactor']) { const r = await put(e, e.sa.id, { [k]: true }, { [k]: 0 }); assert.equal(r.status, 422, k); assert.equal(r.json.code, 'SETTING_NOT_AVAILABLE'); assert.ok(r.json.message.length > 20); }
+	for (const k of ['aiEngineEnabled', 'channelPush', 'channelSms', 'adminTwoFactor', 'profanityFilter']) { const r = await put(e, e.sa.id, { [k]: true }, { [k]: 0 }); assert.equal(r.status, 422, k); assert.equal(r.json.code, 'SETTING_NOT_AVAILABLE'); assert.ok(r.json.message.length > 20); }
 	assert.equal((await e.call('PUT', S, e.sa.id, { changes: { platformName: 'ص' }, expected: { platformName: 2 }, extra: 1 })).status, 400);
 	const audits = async () => e.prisma.accountAuditLog.findMany({ where: { eventType: 'PLATFORM_SETTINGS_UPDATED', userId: e.sa.id }, orderBy: { occurredAt: 'desc' } });
 	const before = (await audits()).length;
@@ -174,7 +174,7 @@ test('PG settings: the platform name reaches the outgoing e-mail sender (setting
 	const e = await env(); await reset(e); const { emailSenderName } = await import('../utils/email-sender-name'); const { systemSettingsService } = await import('./system-settings.service');
 	delete process.env.EMAIL_SENDER_NAME; assert.equal(await emailSenderName(), 'Waseet AI');
 	process.env.EMAIL_SENDER_NAME = 'من البيئة'; assert.equal(await emailSenderName(), 'من البيئة');
-	assert.equal((await put(e, e.sa.id, { platformName: 'منصة الاختبار' }, { platformName: 0 })).status, 200); assert.equal(await emailSenderName(), 'منصة الاختبار');
+	assert.equal((await put(e, e.sa.id, { platformName: 'منصة الاختبار' }, { platformName: 0 })).status, 200); assert.equal(await emailSenderName(), 'منصة الاختبار'); const { brandName, setBrandName } = await import('../utils/brand'); await systemSettingsService.prime(); assert.equal(brandName(), 'منصة الاختبار', 'new e-mail shells / subjects carry the configured name'); setBrandName('');
 	assert.equal((await put(e, e.sa.id, { platformName: '' }, { platformName: 1 })).status, 400); // an empty name is refused, so the sender never goes blank
 	delete process.env.EMAIL_SENDER_NAME; systemSettingsService.invalidate();
 	// the legacy route writes the same table and bumps the same version, so a stale registry save is still detected
@@ -205,4 +205,54 @@ test('PG settings: read-only and blocked entries tell the truth (value + source,
 	for (const k of ['ai', 'cdn', 'backup']) assert.equal(h.items.find((x: any) => x.key === k).status, 'unavailable');
 	assert.ok(!JSON.stringify(h).match(/99\.8|95%|uptime|3:00/), 'no sample numbers from the design');
 	const st = await mkStaff(e, ['settings.view'], 'hv2'); assert.equal((await e.call('GET', `${S}/health`, st.user.id)).status, 200);
+});
+
+test('PG settings: regional settings are real - initial values keep today\'s behaviour, they are public for the UI, SUPER-only to write, and they reach the admin report windows, the CSV and the default e-mail language', opts, async () => {
+	const e = await env(); await reset(e); const { SystemSettingsService, systemSettingsService } = await import('./system-settings.service'); const { adminDashboardService } = await import('./admin-dashboard.service'); const { adminFinanceService } = await import('./admin-finance.service'); const { notificationService } = await import('./notification.service');
+	for (const [k, v] of [['defaultTimezone', 'browser'], ['dateFormat', 'legacy'], ['calendarSystem', 'gregorian'], ['defaultLanguage', 'ar']] as const) { const it = await one(e, e.sa.id, k); assert.equal(it.value, v, k); assert.equal(it.status, 'enforced'); assert.ok(it.allowedLabels, `${k} has human labels`); }
+	const pub = await new SystemSettingsService(e.prisma).publicValues(); assert.deepEqual([pub.defaultTimezone, pub.dateFormat, pub.calendarSystem, pub.defaultLanguage], ['browser', 'legacy', 'gregorian', 'ar']);
+	const manager = await mkStaff(e, ['settings.manage'], 'rg'); for (const [k, v] of [['defaultTimezone', 'UTC'], ['dateFormat', 'DD/MM/YYYY'], ['calendarSystem', 'hijri'], ['defaultLanguage', 'en']] as const) { assert.equal((await put(e, manager.user.id, { [k]: v }, { [k]: 0 })).status, 403, k); }
+	for (const bad of [{ defaultTimezone: 'Mars/Base' }, { dateFormat: 'MM/DD/YYYY' }, { calendarSystem: 'lunar' }, { defaultLanguage: 'fr' }]) assert.equal((await put(e, e.sa.id, bad, Object.fromEntries(Object.keys(bad).map(k => [k, 0])))).status, 400, JSON.stringify(bad));
+	// report window: a user created 1 Oct 01:00 Riyadh (30 Sep 22:00 UTC) is in OCTOBER for the Riyadh zone, in SEPTEMBER for UTC / browser
+	const mk = (iso: string, tag: string) => e.prisma.user.create({ data: { id: randomUUID(), accountType: 'CLIENT_INDIVIDUAL', status: 'ACTIVE', roles: ['CLIENT'], activeRole: 'CLIENT', firstName: tag, lastName: 'z', email: `${tag}-${randomUUID().slice(0, 6)}@pg.test`, password: 'x', agreedToTerms: true, createdAt: new Date(iso) } });
+	await mk('2026-09-30T22:00:00Z', 'edge'); await mk('2026-10-10T10:00:00Z', 'mid');
+	const now = new Date('2026-10-15T10:00:00Z'); 	const sumOf = async () => ((await adminDashboardService.getSummary(now)) as any);
+	const before = await sumOf(); const keyPath = (o: any) => o.kpis.users.newThisMonth;
+	assert.equal((await put(e, e.sa.id, { defaultTimezone: 'Asia/Riyadh' }, { defaultTimezone: 0 })).status, 200);
+	const edge = await e.prisma.user.count({ where: { accountType: { notIn: ['ADMIN', 'SUPER_ADMIN'] }, createdAt: { gte: new Date('2026-09-30T21:00:00Z'), lt: new Date('2026-10-01T00:00:00Z') } } }); assert.ok(edge >= 1);
+	const riyadh = await sumOf(); assert.equal(Number(keyPath(riyadh)) - Number(keyPath(before)), edge, 'users created 00:00-03:00 Riyadh on 1 Oct (21:00-24:00 UTC on 30 Sep) move into October under the Riyadh zone');
+	assert.equal((await put(e, e.sa.id, { defaultTimezone: 'browser' }, { defaultTimezone: 1 })).status, 200); assert.equal(Number(keyPath(await sumOf())), Number(keyPath(before)), 'back to the current behaviour');
+	// CSV: the reference column stays ISO UTC; a local column appears only when a zone is configured
+	const u = await mk('2026-10-01T09:00:00Z', 'csv'); await e.prisma.withdrawal.create({ data: { userId: u.id, amount: 5, currency: 'USD', method: 'paypal', status: 'PENDING', createdAt: new Date('2026-10-01T09:00:00Z') } as any });
+	const plain = await adminFinanceService.withdrawalsCsv(); assert.ok(!plain.split('\n')[0].includes('date_local'));
+	await put(e, e.sa.id, { defaultTimezone: 'Asia/Riyadh' }, { defaultTimezone: 2 }); const withZone = await adminFinanceService.withdrawalsCsv(); const header = withZone.split('\n')[0]; assert.ok(header.includes('date_local'));
+	const row = withZone.split('\n').find(l => l.includes('2026-10-01T09:00:00.000Z'))!; assert.ok(row.includes('2026-10-01 12:00'), row); await put(e, e.sa.id, { defaultTimezone: 'browser' }, { defaultTimezone: 3 });
+	// default e-mail language: nobody saved a choice -> the platform default; a saved choice always wins
+	const nobody = await e.mkUser('CLIENT_INDIVIDUAL', 'lang1'); assert.equal((await notificationService.resolveDelivery(nobody.id, '/client-overview/x')).lang, 'ar');
+	assert.equal((await put(e, e.sa.id, { defaultLanguage: 'en' }, { defaultLanguage: 0 })).status, 200); systemSettingsService.invalidate();
+	assert.equal((await notificationService.resolveDelivery(nobody.id, '/client-overview/x')).lang, 'en', 'no saved choice -> the platform default');
+	await e.prisma.clientProfile.create({ data: { userId: nobody.id, interfaceLanguage: 'العربية' } as any }).catch(() => undefined);
+	assert.equal((await notificationService.resolveDelivery(nobody.id, '/client-overview/x')).lang, 'ar', 'the recipient\'s own choice wins over the platform default');
+	await put(e, e.sa.id, { defaultLanguage: 'ar' }, { defaultLanguage: 1 });
+});
+
+test('PG settings: the admin mailbox gets a minimal alert for the four operational events only - no personal data, one per event per minute, nothing when empty, separate from the staff recipients, a failing mail never breaks the action', opts, async () => {
+	const e = await env(); await reset(e); const { mailTransporter } = await import('../utils/mail.transporter'); const { notifyAdmins } = await import('./admin-notifications.service'); const { resetMailboxThrottle } = await import('./admin-mailbox-alert.service'); const { systemSettingsService } = await import('./system-settings.service');
+	const sent: any[] = []; let fail = false; (mailTransporter as any).sendMail = async (m: any) => { if (fail) throw new Error('smtp down'); sent.push(m); return { accepted: [m.to], rejected: [], messageId: 't' }; };
+	const idle = async () => { await new Promise(r => setTimeout(r, 60)); };
+	const manager = await mkStaff(e, ['settings.manage'], 'mb'); assert.equal((await put(e, manager.user.id, { adminNotificationEmail: 'ops@pg.test' }, { adminNotificationEmail: 0 })).status, 403, 'directing mail outwards is SUPER-only');
+	assert.equal((await put(e, e.sa.id, { adminNotificationEmail: 'not-mail' }, { adminNotificationEmail: 0 })).status, 400);
+	resetMailboxThrottle(); await notifyAdmins('NEW_DISPUTE', { id: 'd1' }); await idle(); assert.equal(sent.length, 0, 'empty mailbox = nothing is sent');
+	assert.equal((await put(e, e.sa.id, { adminNotificationEmail: 'ops@pg.test' }, { adminNotificationEmail: 0 })).status, 200); systemSettingsService.invalidate();
+	await notifyAdmins('NEW_DISPUTE', { id: '11111111-aaaa', ref: 'اسم مشروع حساس', metadata: { secret: 'x' } } as any); await idle(); assert.equal(sent.length, 1); const m = sent[0];
+	assert.equal(m.to, 'ops@pg.test'); assert.match(m.subject, /تنبيه إداري: نزاع جديد/); const body = `${m.html}\n${m.text}`; assert.ok(body.includes('/supper-admin-overview/disputes/11111111-aaaa'), 'a link into the console');
+	for (const leak of ['اسم مشروع حساس', 'secret', '@', ' $', 'USD'].filter(x => x !== '@')) assert.ok(!body.includes(leak), `no leak: ${leak}`);
+	await notifyAdmins('NEW_DISPUTE', { id: 'd2' }); await idle(); assert.equal(sent.length, 1, 'one mail per event kind per minute');
+	for (const ev of ['NEW_TICKET', 'WITHDRAWAL_REQUESTED', 'KYC_SUBMITTED'] as const) await notifyAdmins(ev, { id: 'x1' }); await idle(); assert.equal(sent.length, 4);
+	for (const ev of ['SUSPICIOUS_PAYMENT', 'PAYOUT_FAILED'] as const) await notifyAdmins(ev, { id: 'x2' }); await idle(); assert.equal(sent.length, 4, 'money-incident events are not mailed');
+	// the staff inbox is built from permissions and is untouched by the mailbox
+	const holder = await mkStaff(e, ['disputes.view'], 'dv'); const none = await mkStaff(e, ['users.view'], 'nv'); resetMailboxThrottle(); await notifyAdmins('NEW_DISPUTE', { id: 'd9' }); await idle();
+	assert.equal(await e.prisma.notification.count({ where: { userId: holder.user.id, type: 'ADMIN_NEW_DISPUTE' } }) >= 1, true); assert.equal(await e.prisma.notification.count({ where: { userId: none.user.id, type: 'ADMIN_NEW_DISPUTE' } }), 0);
+	fail = true; resetMailboxThrottle(); await assert.doesNotReject(notifyAdmins('NEW_TICKET', { id: 't1' })); await idle();
+	await put(e, e.sa.id, { adminNotificationEmail: '' }, { adminNotificationEmail: 1 });
 });
