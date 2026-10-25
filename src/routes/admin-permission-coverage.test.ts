@@ -109,6 +109,7 @@ const ACCOUNT_TYPE_DECISIONS: Record<string, string> = {
 	'services/kyc-document-access.service.ts': 'the only caller (kyc-documents.controller) requires identity.review or specialties.approve first',
 	'services/provider-profile.service.ts': 'password-change rule for admin accounts (restriction, not access)',
 	'routes/knowledge.routes.ts': 'RESTRICTS: an admin-type account without access is read as a guest (adminHasAnyAccess)',
+	'middlewares/maintenance.middleware.ts': 'maintenance only: an ACTIVE SUPER_ADMIN (verified session + DB) may browse during maintenance; grants no permission and no staff exception',
 	'config/swagger.ts': 'documentation', 'dtos/account-management.dto.ts': 'validation enum',
 };
 test('every source file that decides by ADMIN / SUPER_ADMIN is reviewed (no unreviewed bypass around the permission system)', () => {
