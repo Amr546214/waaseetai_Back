@@ -1,68 +1,8 @@
-import { test, mock, after } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import http from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { env, opts, mkRole, mkStaff, closeEnv } from '../testing/admin-team.pgenv';
 
-/**
- * REAL PostgreSQL (isolated local :55432, database qa_team) + the REAL admin-team router, services and permission guard over HTTP. Only `authenticate` is replaced: it reads the user id from
- * a header and loads that user from the database (the session / JWT layer has its own tests). Nothing here touches money: the finance / dispute routes are only asked WHETHER they let a
- * caller in (a refusal is 403; a pass ends in the real handler failing on a missing id, which is "not 403").
- */
-const PG_URL = process.env.QA_ISOLATED_PG_URL;
-const enabled = !!PG_URL && PG_URL === process.env.DATABASE_URL && /@(127\.0\.0\.1|localhost):55432\//.test(PG_URL);
-const opts = { skip: enabled ? false : 'set QA_ISOLATED_PG_URL (isolated local PostgreSQL on :55432, database qa_team) to run' };
-process.env.JWT_SECRET ??= 'test-secret'; process.env.OPENAI_API_KEY ??= 'x'; process.env.FRONTEND_URL ??= 'https://front.test';
-process.env.CLOUDINARY_CLOUD_NAME ??= 'testcloud'; process.env.CLOUDINARY_API_KEY ??= '123456789012345'; process.env.CLOUDINARY_API_SECRET ??= 'fake-secret-for-signing-only';
-
-let setup: Promise<any> | null = null;
-async function env() {
-	if (setup) return setup;
-	setup = (async () => {
-		const { prisma } = await import('../config/db');
-		mock.module('../middlewares/auth.middleware', {
-			namedExports: {
-				authenticate: async (req: any, res: any, next: any) => {
-					const id = req.headers['x-test-user'];
-					const u = id ? await prisma.user.findUnique({ where: { id: String(id) } }) : null;
-					if (!u) return res.status(401).json({ success: false, message: 'غير مصرح' });
-					req.user = { id: u.id, userId: u.id, email: u.email, accountType: u.accountType, status: u.status, activeRole: u.activeRole, roles: u.roles, sessionId: 's' };
-					next();
-				},
-				requireActiveUser: (req: any, res: any, next: any) => (req.user?.status === 'ACTIVE' ? next() : res.status(403).json({ success: false, message: 'الحساب غير نشط' })),
-				authorize: () => (_q: any, _r: any, n: any) => n(), authorizeAdminActing: (_q: any, _r: any, n: any) => n(),
-			},
-		});
-		const express = (await import('express')).default;
-		const { globalErrorHandler } = await import('../middlewares/error.middleware');
-		const team = (await import('../routes/admin-team.routes')).default;
-		const pub = (await import('../routes/admin-team.routes')).adminInvitePublicRouter;
-		const withdrawals = (await import('../routes/admin-withdrawals.routes')).default;
-		const disputes = (await import('../routes/admin-disputes.routes')).default;
-		const users = (await import('../routes/admin-users.routes')).default;
-		const dashboard = (await import('../routes/admin-dashboard.routes')).default;
-		const app = express(); app.use(express.json());
-		app.use('/admin/team', team); app.use('/admin-invite', pub); app.use('/admin/withdrawals', withdrawals); app.use('/admin/disputes', disputes); app.use('/admin/users', users); app.use('/admin/dashboard', dashboard);
-		app.use(globalErrorHandler as any);
-		const server = http.createServer(app);
-		await new Promise<void>(r => server.listen(0, '127.0.0.1', () => r()));
-		const port = (server.address() as AddressInfo).port;
-		const call = async (method: string, url: string, who?: string | null, body?: any) => {
-			const res = await fetch(`http://127.0.0.1:${port}${url}`, { method, headers: { 'content-type': 'application/json', connection: 'close', ...(who ? { 'x-test-user': who } : {}) }, body: body === undefined || method === 'GET' || method === 'HEAD' ? undefined : JSON.stringify(body) });
-			const text = await res.text(); let json: any = null; try { json = JSON.parse(text); } catch { /* csv */ }
-			return { status: res.status, json, text };
-		};
-		const mkUser = async (accountType: string = 'ADMIN', tag = 'u') => prisma.user.create({ data: { id: randomUUID(), accountType: accountType as any, status: 'ACTIVE', roles: [accountType === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : accountType === 'ADMIN' ? 'ADMIN' : 'CLIENT'] as any, activeRole: (accountType === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : accountType === 'ADMIN' ? 'ADMIN' : 'CLIENT') as any, firstName: tag, lastName: 'T', email: `${tag}-${randomUUID().slice(0, 8)}@pg.test` } as any });
-		// the single owner of this database (a CHECK allows only id = 1)
-		await prisma.platformOwner.deleteMany({});
-		const owner = await mkUser('ADMIN', 'owner');
-		await prisma.platformOwner.create({ data: { userId: owner.id, designatedBy: 'test' } });
-		return { prisma, call, mkUser, owner, server };
-	})();
-	return setup;
-}
-const mkRole = async (e: any, perms: string[], name?: string) => { const r = await e.call('POST', '/admin/team/roles', e.owner.id, { name: name ?? `دور ${randomUUID().slice(0, 6)}`, permissions: perms }); assert.equal(r.status, 201, JSON.stringify(r.json)); return r.json.data; };
-const mkStaff = async (e: any, perms: string[], tag = 'staff') => { const role = await mkRole(e, perms); const u = await e.mkUser('ADMIN', tag); await e.prisma.adminStaff.create({ data: { userId: u.id, roleId: role.id } }); return { user: u, role }; };
 
 test('PG: only the owner creates / edits roles and grants permissions; staff, SUPER_ADMIN accounts and strangers are refused with a fixed code and nothing is written', opts, async () => {
 	const e = await env();
@@ -193,40 +133,73 @@ test('PG: existing admin accounts enter the team only when the OWNER places them
 	const client = await e.mkUser('CLIENT_INDIVIDUAL', 'cl'); assert.equal((await e.call('POST', '/admin/team/staff/attach', e.owner.id, { userId: client.id, roleId: role.id })).status, 400);
 });
 
-test('PG: invitations - one-time token, one pending per e-mail, expiry, cancel, resend replaces the token, concurrent acceptance has ONE winner, an existing e-mail is refused', opts, async () => {
+test('PG: invitations - the link alone accepts nothing: a code sent to the INVITED address is required; one-time token, one pending per e-mail, expiry, cancel, resend replaces the token and the code, ONE winner under concurrency', opts, async () => {
 	const e = await env(); const role = await mkRole(e, ['team.view']); const email = `inv-${randomUUID().slice(0, 8)}@pg.test`;
+	const tokenOf = (link: string) => link.split('#')[1];
 	const staff = (await mkStaff(e, ['team.view'])).user;
 	assert.equal((await e.call('POST', '/admin/team/invites', staff.id, { email, fullName: 'مدعو اختبار', roleId: role.id })).status, 403);
 	const c = await e.call('POST', '/admin/team/invites', e.owner.id, { email, fullName: 'مدعو اختبار', roleId: role.id }); assert.equal(c.status, 201);
-	const token = new URL(c.json.data.link, 'https://x.test').pathname.split('/').pop()!;
+	const token = tokenOf(c.json.data.link);
+	assert.match(c.json.data.link, /\/admin-invite#[A-Za-z0-9_-]{40,}$/); // fragment: never sent to a server, so never in an access log
 	assert.equal(c.json.data.emailed, false); // nothing is e-mailed unless a sender is wired
 	assert.equal((await e.call('POST', '/admin/team/invites', e.owner.id, { email: email.toUpperCase(), fullName: 'مكرر', roleId: role.id })).status, 409);
 	assert.equal(await e.prisma.user.count({ where: { email } }), 0); // no access before acceptance
-	const pv = await e.call('GET', `/admin-invite/preview?token=${token}`); assert.equal(pv.status, 200); assert.match(pv.json.data.email, /^in\*\*\*@pg\.test$/);
-	assert.equal((await e.call('GET', '/admin-invite/preview?token=short')).status, 400);
+	const pv = await e.call('POST', '/admin-invite/preview', null, { token }); assert.equal(pv.status, 200); assert.match(pv.json.data.email, /^in\*\*\*@pg\.test$/);
+	assert.equal((await e.call('POST', '/admin-invite/preview', null, { token: 'short' })).status, 400);
+	assert.equal((await e.call('GET', `/admin-invite/preview?token=${token}`)).status, 404); // the token is never accepted from a URL
+	// the link alone is not enough
+	const noCode = await e.call('POST', '/admin-invite/accept', null, { token, password: 'Strong#Pass1' }); assert.equal(noCode.status, 400); assert.equal(noCode.json.code, 'INVITE_CODE_INVALID');
+	assert.equal((await e.call('POST', '/admin-invite/accept', null, { token, password: 'Strong#Pass1', code: '123456' })).status, 400); // no code was ever issued
+	assert.equal(await e.prisma.user.count({ where: { email } }), 0);
 	// resend: the OLD link stops working, the new one works; the gap rule applies
 	assert.equal((await e.call('POST', `/admin/team/invites/${c.json.data.id}/resend`, e.owner.id)).status, 429);
 	await e.prisma.adminInvite.update({ where: { id: c.json.data.id }, data: { lastSentAt: new Date(Date.now() - 120_000) } });
 	const rs = await e.call('POST', `/admin/team/invites/${c.json.data.id}/resend`, e.owner.id); assert.equal(rs.status, 200);
-	const token2 = new URL(rs.json.data.link, 'https://x.test').pathname.split('/').pop()!; assert.notEqual(token2, token);
-	assert.equal((await e.call('GET', `/admin-invite/preview?token=${token}`)).status, 400);
-	// weak password refused, then two concurrent acceptances: exactly one account
-	assert.equal((await e.call('POST', '/admin-invite/accept', null, { token: token2, password: 'weak' })).status, 400);
-	const res = await Promise.all([1, 2, 3].map(() => e.call('POST', '/admin-invite/accept', null, { token: token2, password: 'Strong#Pass1' })));
+	const token2 = tokenOf(rs.json.data.link); assert.notEqual(token2, token);
+	assert.equal((await e.call('POST', '/admin-invite/preview', null, { token })).status, 400);
+	assert.equal((await e.call('POST', '/admin-invite/request-code', null, { token })).status, 400);       // old link: no code
+	assert.equal((await e.call('POST', '/admin-invite/accept', null, { token, password: 'Strong#Pass1', code: '000000' })).status, 400);
+	// the code goes ONLY to the invited address (a caller cannot name another)
+	const rq = await e.call('POST', '/admin-invite/request-code', null, { token: token2, email: 'attacker@evil.test' }); assert.equal(rq.status, 400); // unknown field refused
+	const rq2 = await e.call('POST', '/admin-invite/request-code', null, { token: token2 }); assert.equal(rq2.status, 200); assert.equal(rq2.text.includes(e.sentCodes.get(email)), false);
+	const code = e.sentCodes.get(email)!; assert.match(code, /^\d{6}$/); assert.equal([...e.sentCodes.keys()].includes('attacker@evil.test'), false);
+	assert.equal((await e.call('POST', '/admin-invite/request-code', null, { token: token2 })).status, 429); // 60 s gap
+	// weak password refused; a wrong code is refused and counted; the code dies after 5 wrong tries
+	assert.equal((await e.call('POST', '/admin-invite/accept', null, { token: token2, password: 'weak', code })).status, 400);
+	const wrong = code === '111111' ? '222222' : '111111';
+	for (let i = 0; i < 5; i++) assert.equal((await e.call('POST', '/admin-invite/accept', null, { token: token2, password: 'Strong#Pass1', code: wrong })).status, 400);
+	assert.equal((await e.call('POST', '/admin-invite/accept', null, { token: token2, password: 'Strong#Pass1', code })).status, 400, 'the right code is dead after 5 wrong attempts');
+	assert.equal(await e.prisma.user.count({ where: { email } }), 0);
+	await e.prisma.adminInvite.update({ where: { id: c.json.data.id }, data: { verifyCodeSentAt: new Date(Date.now() - 120_000) } });
+	assert.equal((await e.call('POST', '/admin-invite/request-code', null, { token: token2 })).status, 200); // a new code resets the attempts
+	const code2 = e.sentCodes.get(email)!;
+	// an expired code is refused
+	await e.prisma.adminInvite.update({ where: { id: c.json.data.id }, data: { verifyCodeExpiresAt: new Date(Date.now() - 1000) } });
+	assert.equal((await e.call('POST', '/admin-invite/accept', null, { token: token2, password: 'Strong#Pass1', code: code2 })).status, 400);
+	await e.prisma.adminInvite.update({ where: { id: c.json.data.id }, data: { verifyCodeSentAt: new Date(Date.now() - 120_000) } });
+	assert.equal((await e.call('POST', '/admin-invite/request-code', null, { token: token2 })).status, 200);
+	const code3 = e.sentCodes.get(email)!;
+	// two concurrent acceptances with the right code: exactly one account
+	const res = await Promise.all([1, 2, 3].map(() => e.call('POST', '/admin-invite/accept', null, { token: token2, password: 'Strong#Pass1', code: code3 })));
 	assert.equal(res.filter(r => r.status === 200).length, 1, JSON.stringify(res.map(r => r.status)));
 	assert.equal(await e.prisma.user.count({ where: { email } }), 1);
 	const u = await e.prisma.user.findUniqueOrThrow({ where: { email }, include: { adminStaff: true } });
 	assert.equal(u.accountType, 'ADMIN'); assert.equal(u.adminStaff?.roleId, role.id); assert.equal(u.adminStaff?.status, 'ACTIVE');
-	assert.equal((await e.call('POST', '/admin-invite/accept', null, { token: token2, password: 'Strong#Pass1' })).status, 400); // used twice
-	// cancelled and expired tokens never work; an existing account's e-mail is refused
+	assert.equal((await e.call('POST', '/admin-invite/accept', null, { token: token2, password: 'Strong#Pass1', code: code3 })).status, 400); // used twice
+	// cancelled and expired tokens never work (even with a code that had been issued); an existing account's e-mail is refused
 	const e2 = `inv2-${randomUUID().slice(0, 8)}@pg.test`; const c2 = await e.call('POST', '/admin/team/invites', e.owner.id, { email: e2, fullName: 'ملغاة', roleId: role.id });
+	const t2 = tokenOf(c2.json.data.link); await e.call('POST', '/admin-invite/request-code', null, { token: t2 }); const code4 = e.sentCodes.get(e2)!;
 	await e.call('POST', `/admin/team/invites/${c2.json.data.id}/cancel`, e.owner.id);
-	assert.equal((await e.call('POST', '/admin-invite/accept', null, { token: new URL(c2.json.data.link, 'https://x.test').pathname.split('/').pop(), password: 'Strong#Pass1' })).status, 400);
+	assert.equal((await e.call('POST', '/admin-invite/accept', null, { token: t2, password: 'Strong#Pass1', code: code4 })).status, 400);
 	const e3 = `inv3-${randomUUID().slice(0, 8)}@pg.test`; const c3 = await e.call('POST', '/admin/team/invites', e.owner.id, { email: e3, fullName: 'منتهية', roleId: role.id });
+	const t3 = tokenOf(c3.json.data.link); await e.call('POST', '/admin-invite/request-code', null, { token: t3 }); const code5 = e.sentCodes.get(e3)!;
 	await e.prisma.adminInvite.update({ where: { id: c3.json.data.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
-	assert.equal((await e.call('POST', '/admin-invite/accept', null, { token: new URL(c3.json.data.link, 'https://x.test').pathname.split('/').pop(), password: 'Strong#Pass1' })).status, 400);
+	assert.equal((await e.call('POST', '/admin-invite/accept', null, { token: t3, password: 'Strong#Pass1', code: code5 })).status, 400);
 	assert.equal((await e.call('POST', '/admin/team/invites', e.owner.id, { email: u.email, fullName: 'موجود', roleId: role.id })).status, 409);
 	assert.ok(await e.prisma.adminAccessAudit.findFirst({ where: { action: 'INVITE_ACCEPTED', subjectUserId: u.id } }));
+	// no token / code / full link in the audit trail
+	const audit = JSON.stringify(await e.prisma.adminAccessAudit.findMany({ where: { OR: [{ inviteId: c.json.data.id }, { inviteId: c2.json.data.id }] } }));
+	assert.equal(audit.includes(token2), false); assert.equal(audit.includes(code3), false); assert.equal(audit.includes('admin-invite#'), false);
 });
 
 test('PG: tasks - the assignee must already hold the permission the work needs (assigning grants nothing), linking needs access to the item, own-status updates work, scope is own vs team, stale edits conflict', opts, async () => {
@@ -296,4 +269,4 @@ test('PG: the access audit trail is readable only with audit.view and never cont
 	assert.ok(r.json.data.some((x: any) => x.action === 'INVITE_CREATED' || x.action === 'ROLE_CREATED'));
 });
 
-after(async () => { const e = await setup; if (e) { e.server.closeAllConnections?.(); await new Promise(r => e.server.close(r)); await e.prisma.$disconnect(); } });
+after(closeEnv);

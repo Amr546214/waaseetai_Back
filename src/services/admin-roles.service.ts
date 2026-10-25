@@ -1,3 +1,4 @@
+import { disconnectAdminSockets } from '../utils/socket-registry';
 import { Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '../config/db';
 import { ADMIN_PERMISSIONS, isKnownPermission } from '../config/admin-permissions';
@@ -78,12 +79,14 @@ export class AdminRolesService {
 			}
 		}
 		try {
-			return await this.db.$transaction(async tx => {
+			const saved = await this.db.$transaction(async tx => {
 				const res = await tx.adminRole.updateMany({ where: { id, version: input.expectedVersion }, data: { ...data, version: { increment: 1 } } });
 				if (res.count === 0) throw new AppError('عُدّل هذا الدور من جهة أخرى قبل حفظك. أعد التحميل وراجع التغيير.', 409, undefined, ROLE_VERSION_CONFLICT);
 				await writeAccessAudit(tx, { actorId, action: 'ROLE_UPDATED', roleId: id, before: { name: current.name, permissions: current.permissions }, after: { name: data.name ?? current.name, permissionsAdded: added, permissionsRemoved: removed, affectedMembers: current.staff.map(s => s.userId) } });
 				return tx.adminRole.findUniqueOrThrow({ where: { id } });
 			});
+			if (removed.length) void disconnectAdminSockets(current.staff.map(s => s.userId));
+			return saved;
 		} catch (e) {
 			if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') throw fieldError('name', 'يوجد دور بهذا الاسم', 409);
 			throw e;

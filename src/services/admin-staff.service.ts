@@ -2,6 +2,7 @@ import { AccountType, AdminStaffStatus, Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '../config/db';
 import { AppError, fieldError } from '../utils/app-error';
 import { writeAccessAudit } from './admin-roles.service';
+import { disconnectAdminSockets } from '../utils/socket-registry';
 
 export const STAFF_VERSION_CONFLICT = 'STAFF_VERSION_CONFLICT';
 const OPEN_TASK = ['NEW', 'IN_PROGRESS', 'PENDING'] as const;
@@ -49,7 +50,7 @@ export class AdminStaffService {
 		if (!Number.isInteger(expectedVersion)) throw fieldError('expectedVersion', 'رقم النسخة مطلوب');
 		await this.assertNotOwner(userId);
 		if (roleId) { const r = await this.db.adminRole.findUnique({ where: { id: roleId }, select: { id: true } }); if (!r) throw fieldError('roleId', 'الدور غير موجود', 404); }
-		return this.db.$transaction(async tx => {
+		const out = await this.db.$transaction(async tx => {
 			const cur = await tx.adminStaff.findUnique({ where: { userId } });
 			if (!cur) throw new AppError('الموظف غير موجود في الفريق', 404);
 			const res = await tx.adminStaff.updateMany({ where: { userId, version: expectedVersion as number }, data: { roleId, version: { increment: 1 } } });
@@ -57,11 +58,13 @@ export class AdminStaffService {
 			await writeAccessAudit(tx, { actorId, action: 'STAFF_ROLE_SET', subjectUserId: userId, before: { roleId: cur.roleId }, after: { roleId } });
 			return tx.adminStaff.findUniqueOrThrow({ where: { userId } });
 		});
+		void disconnectAdminSockets([userId]);
+		return out;
 	}
 
 	async setStatus(actorId: string, userId: string, status: AdminStaffStatus) {
 		await this.assertNotOwner(userId);
-		return this.db.$transaction(async tx => {
+		const out = await this.db.$transaction(async tx => {
 			const cur = await tx.adminStaff.findUnique({ where: { userId } });
 			if (!cur) throw new AppError('الموظف غير موجود في الفريق', 404);
 			if (cur.status === status) return cur;
@@ -69,6 +72,8 @@ export class AdminStaffService {
 			await writeAccessAudit(tx, { actorId, action: status === 'SUSPENDED' ? 'STAFF_SUSPENDED' : 'STAFF_REACTIVATED', subjectUserId: userId, before: { status: cur.status }, after: { status } });
 			return row;
 		});
+		if (status === 'SUSPENDED') void disconnectAdminSockets([userId]);
+		return out;
 	}
 
 	/** An EXISTING admin-type account (e.g. one of today's accounts) enters the team only when the owner places it, with a role chosen by the owner. */

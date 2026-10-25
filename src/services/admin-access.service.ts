@@ -1,6 +1,7 @@
 import { AccountType, AdminStaffStatus } from '@prisma/client';
 import { prisma as defaultPrisma } from '../config/db';
 import { ADMIN_PERMISSION_IDS, isKnownPermission } from '../config/admin-permissions';
+import { ADMIN_NOTIFY_EVENT_PERMISSION, adminNotifyType } from '../config/admin-notification-permissions';
 
 /**
  * Who may do what in the admin API. Read on EVERY admin request straight from the database (no cache, no token claim): withdrawing a permission, changing a role or suspending a
@@ -52,4 +53,44 @@ export async function assigneeHolds(userId: string, ids: string[], db: typeof de
 	if (!u || u.status !== 'ACTIVE') return false;
 	const actor = await resolveAdminActor(userId, u.accountType, db);
 	return actorHas(actor, ...ids);
+}
+
+/** The platform owner's account cannot be suspended, re-roled, deleted or demoted by ANY route (admin users list, brokers, team, public account paths). Independent of the account type. */
+export const OWNER_PROTECTED_CODE = 'OWNER_PROTECTED';
+export async function isPlatformOwner(userId: string, db: { platformOwner: { findUnique: (a: any) => Promise<unknown> } } = defaultPrisma): Promise<boolean> {
+	return !!(await db.platformOwner.findUnique({ where: { userId }, select: { userId: true } }));
+}
+
+/**
+ * Entry points outside /admin (assistant, knowledge) that treat an 'admin' actor as privileged ask this first: an ADMIN / SUPER_ADMIN account is privileged there only while it is the owner
+ * or an ACTIVE staff member holding at least one permission. Unplaced, suspended or access-less admin accounts get nothing, and so does a failed lookup.
+ */
+export async function adminHasAnyAccess(userId: string, db: typeof defaultPrisma = defaultPrisma): Promise<boolean> {
+	try {
+		const u = await db.user.findUnique({ where: { id: userId }, select: { accountType: true } });
+		const a = await resolveAdminActor(userId, u?.accountType, db);
+		return a.isOwner || a.permissions.size > 0;
+	} catch { return false; }
+}
+
+/** Active owner / staff who hold `permission` right now: the only people an admin notification about that kind of work may reach. */
+export async function adminRecipientsHolding(permission: string, db: typeof defaultPrisma = defaultPrisma): Promise<string[]> {
+	if (!isKnownPermission(permission)) return [];
+	const live = { status: 'ACTIVE' as const, isBanned: false };
+	const [owner, staff] = await Promise.all([
+		db.platformOwner.findFirst({ where: { user: live }, select: { userId: true } }),
+		db.adminStaff.findMany({ where: { status: AdminStaffStatus.ACTIVE, role: { permissions: { has: permission } }, user: live }, select: { userId: true } }),
+	]);
+	return [...new Set([...(owner ? [owner.userId] : []), ...staff.map(s => s.userId)])];
+}
+
+/** The admin notification types this user must NOT see now (they lack the permission, or access cannot be established: fail closed). */
+export async function deniedAdminNotificationTypes(userId: string, db: typeof defaultPrisma = defaultPrisma): Promise<string[]> {
+	const all = (Object.keys(ADMIN_NOTIFY_EVENT_PERMISSION) as Array<keyof typeof ADMIN_NOTIFY_EVENT_PERMISSION>);
+	try {
+		const u = await db.user.findUnique({ where: { id: userId }, select: { accountType: true } });
+		if (!isAdminType(u?.accountType)) return []; // only admin-type accounts ever receive these; nobody else pays for the lookup
+		const actor = await resolveAdminActor(userId, u?.accountType, db);
+		return all.filter(e => !actor.permissions.has(ADMIN_NOTIFY_EVENT_PERMISSION[e])).map(adminNotifyType);
+	} catch { return all.map(adminNotifyType); }
 }

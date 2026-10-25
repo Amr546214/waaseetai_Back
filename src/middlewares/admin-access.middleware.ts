@@ -4,6 +4,7 @@ import { AppError } from '../utils/app-error';
 import { logger } from '../config/logger';
 import { AdminActor, actorHas, actorHasAny, resolveAdminActor } from '../services/admin-access.service';
 import { isKnownPermission } from '../config/admin-permissions';
+import { mayReadOperation, OperationKind } from '../services/admin-operations-scope.service';
 
 declare module 'express-serve-static-core' {
 	interface Request { adminActor?: AdminActor }
@@ -89,3 +90,24 @@ export const requireAdminAccount = async (req: Request, _res: Response, next: Ne
 	} catch (e) { next(e); }
 };
 (requireAdminAccount as any).adminSelf = true;
+
+/**
+ * A DETAIL of an operational record (project / contract / request / offer): the owner, or a staff member who holds the case it belongs to (see admin-operations-scope.service). The id is read from
+ * `:id`. Refusal is the same 403 whether the record exists or not, so the answer leaks nothing.
+ */
+export const requireOperationScope = (kind: OperationKind) => {
+	const mw = async (req: Request, _res: Response, next: NextFunction) => {
+		try {
+			const actor = await loadAdminActor(req);
+			let ok = false;
+			try { ok = await mayReadOperation(actor, kind, String(req.params.id ?? '')); } catch (e) {
+				logger.error(`[admin-access] scope check failed for ${actor.userId}: ${(e as Error).message}`);
+				throw new AppError('تعذّر التحقق من صلاحياتك الآن، لم يُنفَّذ أي إجراء. حاول بعد قليل.', 503, undefined, ADMIN_ACCESS_UNAVAILABLE);
+			}
+			if (!ok) throw deny();
+			next();
+		} catch (e) { next(e); }
+	};
+	(mw as any).adminScoped = kind;
+	return mw;
+};

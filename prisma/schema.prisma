@@ -2981,6 +2981,12 @@ model AdminInvite {
   cancelledAt    DateTime?
   resendCount    Int               @default(0)
   lastSentAt     DateTime?
+  // e-mail ownership proof at acceptance: a short code sent to the invited address (hash only), limited attempts / sends / lifetime
+  verifyCodeHash      String?   @db.VarChar(64)
+  verifyCodeExpiresAt DateTime?
+  verifyCodeSentAt    DateTime?
+  verifySendCount     Int       @default(0)
+  verifyAttempts      Int       @default(0)
   createdAt      DateTime          @default(now())
   role           AdminRole         @relation(fields: [roleId], references: [id], onDelete: Restrict)
 

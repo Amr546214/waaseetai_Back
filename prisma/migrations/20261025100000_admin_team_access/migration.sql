@@ -73,6 +73,11 @@ CREATE TABLE "admin_invites" (
     "cancelledAt" TIMESTAMP(3),
     "resendCount" INTEGER NOT NULL DEFAULT 0,
     "lastSentAt" TIMESTAMP(3),
+    "verifyCodeHash" VARCHAR(64),
+    "verifyCodeExpiresAt" TIMESTAMP(3),
+    "verifyCodeSentAt" TIMESTAMP(3),
+    "verifySendCount" INTEGER NOT NULL DEFAULT 0,
+    "verifyAttempts" INTEGER NOT NULL DEFAULT 0,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "admin_invites_pkey" PRIMARY KEY ("id")
@@ -198,3 +203,25 @@ ALTER TABLE "admin_task_events" ADD CONSTRAINT "admin_task_events_taskId_fkey" F
 ALTER TABLE "platform_owner" ADD CONSTRAINT "platform_owner_single_row" CHECK ("id" = 1);
 -- One PENDING invitation per e-mail address (the e-mail is stored lower-cased by the application).
 CREATE UNIQUE INDEX "ux_admin_invites_one_pending_per_email" ON "admin_invites"("email") WHERE "status" = 'PENDING';
+
+-- Backstop for the single-owner rule, independent of any application route: the owner row cannot be changed or removed, and the owner's account cannot be suspended / banned /
+-- re-typed or deleted by any statement. Changing ownership is out of scope and needs a deliberate DBA action (drop the trigger, change, recreate it).
+CREATE OR REPLACE FUNCTION "waseet_protect_platform_owner"() RETURNS trigger AS $$
+BEGIN
+  IF TG_TABLE_NAME = 'platform_owner' THEN
+    IF TG_OP = 'INSERT' THEN RETURN NEW; END IF;
+    RAISE EXCEPTION 'OWNER_PROTECTED: platform_owner is immutable' USING ERRCODE = 'P0001';
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    IF EXISTS (SELECT 1 FROM "platform_owner" WHERE "userId" = OLD."id") THEN RAISE EXCEPTION 'OWNER_PROTECTED: the owner account cannot be deleted' USING ERRCODE = 'P0001'; END IF;
+    RETURN OLD;
+  END IF;
+  IF EXISTS (SELECT 1 FROM "platform_owner" WHERE "userId" = OLD."id")
+     AND (NEW."status" IS DISTINCT FROM OLD."status" OR NEW."isBanned" IS DISTINCT FROM OLD."isBanned" OR NEW."accountType" IS DISTINCT FROM OLD."accountType") THEN
+    RAISE EXCEPTION 'OWNER_PROTECTED: the owner account cannot be suspended, banned or re-typed' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "platform_owner_immutable" BEFORE UPDATE OR DELETE ON "platform_owner" FOR EACH ROW EXECUTE FUNCTION "waseet_protect_platform_owner"();
+CREATE TRIGGER "users_owner_protected" BEFORE UPDATE OR DELETE ON "users" FOR EACH ROW EXECUTE FUNCTION "waseet_protect_platform_owner"();

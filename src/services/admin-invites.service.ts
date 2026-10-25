@@ -6,6 +6,7 @@ import { AppError, fieldError } from '../utils/app-error';
 import { authPasswordSchema } from '../utils/auth-password-policy';
 import { writeAccessAudit } from './admin-roles.service';
 import { siteBaseUrl } from '../utils/site-url';
+import { notificationService } from './notification.service';
 
 export const INVITE_INVALID = 'INVITE_INVALID';
 const INVITE_TTL_MS = 72 * 3600_000;
@@ -20,10 +21,23 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 export interface InviteMailer { send(to: string, fullName: string, link: string, roleName: string): Promise<boolean> }
 export const noMailer: InviteMailer = { async send() { return false; } };
 
-export class AdminInvitesService {
-	constructor(private db: typeof defaultPrisma = defaultPrisma, private now: () => Date = () => new Date(), private mailer: InviteMailer = noMailer) {}
+/** Sends the verification code to the invited address. Default: the real e-mail service (only reached when the recipient asks for a code on an invitation the owner issued). */
+export interface CodeSender { send(to: string, code: string): Promise<void> }
+export const emailCodeSender: CodeSender = { async send(to, code) { await notificationService.sendAdminInviteCodeEmail(to, code); } };
 
-	private link(token: string) { return `${siteBaseUrl() ?? ''}/admin-invite/${token}`; }
+const CODE_TTL_MS = 10 * 60_000;
+const MAX_CODE_SENDS = 5;
+const MIN_CODE_GAP_MS = 60_000;
+const MAX_CODE_ATTEMPTS = 5;
+const codeHash = (inviteId: string, code: string) => crypto.createHash('sha256').update(`${inviteId}:${code}`).digest('hex');
+const sameHex = (a: string, b: string) => a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+export const INVITE_CODE_INVALID = 'INVITE_CODE_INVALID';
+
+export class AdminInvitesService {
+	constructor(private db: typeof defaultPrisma = defaultPrisma, private now: () => Date = () => new Date(), private mailer: InviteMailer = noMailer, private codes: CodeSender = emailCodeSender) {}
+
+	/** The token travels in the URL FRAGMENT: it is never sent to a server, so it cannot appear in web-server, proxy or access logs. */
+	private link(token: string) { return `${siteBaseUrl() ?? ''}/admin-invite#${token}`; }
 
 	async create(actorId: string, input: { email?: unknown; fullName?: unknown; roleId?: unknown }) {
 		const email = normEmail(input.email);
@@ -62,7 +76,7 @@ export class AdminInvitesService {
 		if (inv.lastSentAt && now.getTime() - inv.lastSentAt.getTime() < MIN_RESEND_GAP_MS) throw new AppError('انتظر دقيقة قبل إعادة الإرسال.', 429, undefined, 'INVITE_RESEND_TOO_SOON');
 		const token = newToken();
 		// a new token replaces the old one (the old link stops working), the expiry window restarts
-		const res = await this.db.adminInvite.updateMany({ where: { id, status: 'PENDING', resendCount: inv.resendCount }, data: { tokenHash: sha256(token), expiresAt: new Date(now.getTime() + INVITE_TTL_MS), lastSentAt: now, resendCount: { increment: 1 } } });
+		const res = await this.db.adminInvite.updateMany({ where: { id, status: 'PENDING', resendCount: inv.resendCount }, data: { tokenHash: sha256(token), expiresAt: new Date(now.getTime() + INVITE_TTL_MS), lastSentAt: now, verifyCodeHash: null, verifyCodeExpiresAt: null, verifyAttempts: 0, verifySendCount: 0, verifyCodeSentAt: null, resendCount: { increment: 1 } } });
 		if (res.count === 0) throw new AppError('تغيّرت الدعوة. أعد التحميل.', 409);
 		await writeAccessAudit(this.db, { actorId, action: 'INVITE_RESENT', inviteId: id });
 		const link = this.link(token);
@@ -75,6 +89,16 @@ export class AdminInvitesService {
 		if (res.count === 0) throw new AppError('لا توجد دعوة معلقة بهذا المعرّف', 404);
 		await writeAccessAudit(this.db, { actorId, action: 'INVITE_CANCELLED', inviteId: id });
 		return { id, status: 'CANCELLED' };
+	}
+
+	/** The code must be the one sent to the invited address, unexpired, within 5 attempts. Every wrong attempt is counted before the answer; at the limit the code is dead until a new one is requested. */
+	private async verifyCode(inv: { id: string; verifyCodeHash: string | null; verifyCodeExpiresAt: Date | null; verifyAttempts: number }, code: unknown) {
+		const bad = () => new AppError('رمز التحقق غير صحيح أو انتهت صلاحيته.', 400, undefined, INVITE_CODE_INVALID);
+		if (typeof code !== 'string' || !/^\d{6}$/.test(code.trim())) throw bad();
+		if (!inv.verifyCodeHash || !inv.verifyCodeExpiresAt || inv.verifyCodeExpiresAt <= this.now() || inv.verifyAttempts >= MAX_CODE_ATTEMPTS) throw bad();
+		const counted = await this.db.adminInvite.updateMany({ where: { id: inv.id, status: 'PENDING', verifyAttempts: { lt: MAX_CODE_ATTEMPTS }, verifyCodeHash: inv.verifyCodeHash }, data: { verifyAttempts: { increment: 1 } } });
+		if (counted.count === 0) throw bad();
+		if (!sameHex(codeHash(inv.id, code.trim()), inv.verifyCodeHash)) throw bad();
 	}
 
 	private async byToken(token: unknown) {
@@ -92,19 +116,40 @@ export class AdminInvitesService {
 	}
 
 	/**
+	 * Public: sends a one-time code to the INVITED ADDRESS (never to an address the caller supplies). Holding the link alone is therefore not enough to accept: the code proves the
+	 * recipient controls that mailbox. At most 5 codes per invitation, 60 s apart; a new code replaces the previous one and resets the attempts.
+	 */
+	async requestCode(token: unknown) {
+		const inv = await this.byToken(token);
+		const now = this.now();
+		if (inv.verifySendCount >= MAX_CODE_SENDS) throw new AppError('تم استهلاك عدد رموز التحقق لهذه الدعوة. اطلب من المالك إعادة إصدارها.', 429, undefined, 'INVITE_CODE_LIMIT');
+		if (inv.verifyCodeSentAt && now.getTime() - inv.verifyCodeSentAt.getTime() < MIN_CODE_GAP_MS) throw new AppError('انتظر دقيقة قبل طلب رمز جديد.', 429, undefined, 'INVITE_CODE_TOO_SOON');
+		const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+		const res = await this.db.adminInvite.updateMany({
+			where: { id: inv.id, status: 'PENDING', verifySendCount: inv.verifySendCount },
+			data: { verifyCodeHash: codeHash(inv.id, code), verifyCodeExpiresAt: new Date(now.getTime() + CODE_TTL_MS), verifyCodeSentAt: now, verifySendCount: { increment: 1 }, verifyAttempts: 0 },
+		});
+		if (res.count === 0) throw new AppError('الدعوة غير صالحة أو انتهت.', 400, undefined, INVITE_INVALID);
+		await this.codes.send(inv.email, code);
+		const [u, d] = inv.email.split('@');
+		return { sent: true, email: `${u.slice(0, 2)}***@${d}`, expiresInSeconds: CODE_TTL_MS / 1000 };
+	}
+
+	/**
 	 * Public: the recipient accepts. The one-time token proves control of the invited address; it is consumed in the same transaction that creates the account and the staff row
-	 * (a conditional claim of the PENDING row: two concurrent acceptances cannot both win, and a used / cancelled / expired token never works). An address that already has an account
+	 * (a conditional claim of the PENDING row, after the e-mail code was verified: two concurrent acceptances cannot both win, and a used / cancelled / expired token never works). An address that already has an account
 	 * is refused: this path never converts an existing account.
 	 */
-	async accept(token: unknown, input: { password?: unknown }) {
+	async accept(token: unknown, input: { password?: unknown; code?: unknown }) {
 		const pw = authPasswordSchema.safeParse(input.password);
 		if (!pw.success) throw fieldError('password', pw.error.issues[0]?.message ?? 'كلمة المرور غير صالحة');
 		const inv = await this.byToken(token);
+		await this.verifyCode(inv, input.code);
 		const hash = await bcrypt.hash(pw.data, 12);
 		const [first, ...rest] = inv.fullName.split(' ');
 		try {
 			return await this.db.$transaction(async tx => {
-				const claim = await tx.adminInvite.updateMany({ where: { id: inv.id, status: 'PENDING', expiresAt: { gt: this.now() } }, data: { status: 'ACCEPTED', acceptedAt: this.now() } });
+				const claim = await tx.adminInvite.updateMany({ where: { id: inv.id, status: 'PENDING', expiresAt: { gt: this.now() } }, data: { status: 'ACCEPTED', acceptedAt: this.now(), verifyCodeHash: null, verifyCodeExpiresAt: null } });
 				if (claim.count === 0) throw new AppError('الدعوة غير صالحة أو استُخدمت.', 400, undefined, INVITE_INVALID);
 				const user = await tx.user.create({ data: {
 					accountType: AccountType.ADMIN, status: UserStatus.ACTIVE, roles: [UserRole.ADMIN], activeRole: UserRole.ADMIN, firstName: first, lastName: rest.join(' ') || first,

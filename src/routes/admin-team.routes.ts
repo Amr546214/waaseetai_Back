@@ -99,8 +99,10 @@ router.get('/access-audit', requirePermission('audit.view'), ok(async req => {
 
 // --- public acceptance of an invitation (no login; one-time token; rate limited) ---
 publicInvites.use(authLimiter);
-publicInvites.get('/preview', ok(req => adminInvitesService.preview(req.query.token)));
-publicInvites.post('/accept', ok(req => { const b = only(req.body, ['token', 'password']); return adminInvitesService.accept(b.token, b); }));
+// every public step takes the token in the BODY (never in the URL or query string, which access logs record)
+publicInvites.post('/preview', ok(req => adminInvitesService.preview(only(req.body, ['token']).token)));
+publicInvites.post('/request-code', ok(req => adminInvitesService.requestCode(only(req.body, ['token']).token)));
+publicInvites.post('/accept', ok(req => { const b = only(req.body, ['token', 'password', 'code']); return adminInvitesService.accept(b.token, b); }));
 void AppError; void requireAnyPermission;
 
 export default router;
