@@ -130,11 +130,12 @@ test('PG settings: baseCurrency is USD, any change is REFUSED with the real bloc
 	const e = await env(); await reset(e);
 	const cur = await one(e, e.sa.id, 'baseCurrency'); assert.equal(cur.value, 'USD'); assert.deepEqual(cur.allowed, ['USD', 'SAR']);
 	const r = await put(e, e.sa.id, { baseCurrency: 'SAR' }, { baseCurrency: 0 }); assert.equal(r.status, 409); assert.equal(r.json.code, 'CURRENCY_CHANGE_NOT_READY');
-	const codes = r.json.errors.map((b: any) => b.code); for (const c of ['MONEY_TABLES_WITHOUT_CURRENCY', 'WALLET_BALANCE_PER_CURRENCY_MISSING', 'AGGREGATIONS_NOT_PER_CURRENCY', 'GATEWAY_CAPABILITY_MAP_MISSING', 'FX_RECORD_MISSING', 'CURRENCY_FORMATTER_MISSING']) assert.ok(codes.includes(c), c);
+	const codes = r.json.errors.map((b: any) => b.code); for (const c of ['WALLET_BALANCE_PER_CURRENCY_MISSING', 'AGGREGATIONS_NOT_PER_CURRENCY', 'GATEWAY_CAPABILITY_MAP_MISSING', 'FX_RECORD_MISSING', 'CURRENCY_FORMATTER_MISSING']) assert.ok(codes.includes(c), c);
+	assert.ok(!codes.includes('MONEY_TABLES_WITHOUT_CURRENCY'), 'phase A is in the schema of this database: every money table has its currency column');
 	assert.equal(await e.prisma.platformSetting.count({ where: { key: 'baseCurrency' } }), 0);
 	assert.equal((await put(e, e.sa.id, { baseCurrency: 'EUR' }, { baseCurrency: 0 })).status, 400);
 	assert.equal((await put(e, e.sa.id, { baseCurrency: 'USD' }, { baseCurrency: 0 })).status, 200); assert.equal(await e.prisma.platformSetting.count({ where: { key: 'baseCurrency' } }), 0);
-	const rd = (await e.call('GET', `${S}/currency-readiness`, e.sa.id)).json.data; assert.equal(rd.ready, false); assert.ok(rd.blockers.length >= 6);
+	const rd = (await e.call('GET', `${S}/currency-readiness`, e.sa.id)).json.data; assert.equal(rd.ready, false); assert.ok(rd.blockers.length >= 5);
 });
 
 test('PG settings: read-only and blocked entries tell the truth (value + source, or the reason), never expose secrets, and health reports only real facts', opts, async () => {
@@ -148,4 +149,21 @@ test('PG settings: read-only and blocked entries tell the truth (value + source,
 	for (const k of ['ai', 'cdn', 'backup']) assert.equal(h.items.find((x: any) => x.key === k).status, 'unavailable');
 	assert.ok(!JSON.stringify(h).match(/99\.8|95%|uptime|3:00/), 'no sample numbers from the design');
 	const st = await mkStaff(e, ['settings.view'], 'hv2'); assert.equal((await e.call('GET', `${S}/health`, st.user.id)).status, 200);
+});
+
+test('PG settings: the currency readiness check reads the REAL schema - a database without the currency columns is refused on that ground, and every phase-A table is named', opts, async () => {
+	const { currencyReadiness, MONEY_TABLES } = await import('./currency-readiness.service');
+	const fake = (tables: string[], wallet: boolean) => ({ $queryRaw: async (q: TemplateStringsArray) => (String(q[0]).includes('wallet_balances') ? (wallet ? [{ n: 'wallet_balances' }] : []) : tables.map(t => ({ table_name: t }))) }) as any;
+	const none = await currencyReadiness(fake([], false)); const b = none.blockers.find(x => x.code === 'MONEY_TABLES_WITHOUT_CURRENCY')!; assert.ok(b); for (const t of MONEY_TABLES) assert.ok(b.message.includes(t), t);
+	const some = await currencyReadiness(fake(MONEY_TABLES.slice(0, 5) as any, false)); assert.ok(some.blockers.find(x => x.code === 'MONEY_TABLES_WITHOUT_CURRENCY')!.message.includes(MONEY_TABLES[5]));
+	const all = await currencyReadiness(fake([...MONEY_TABLES], true)); assert.ok(!all.blockers.some(x => x.code === 'MONEY_TABLES_WITHOUT_CURRENCY' || x.code === 'WALLET_BALANCE_PER_CURRENCY_MISSING')); assert.equal(all.ready, false, 'the code-level blockers (aggregations, gateways, FX, formatter) still hold');
+	const broken = await currencyReadiness({ $queryRaw: async () => { throw new Error('db'); } } as any); assert.ok(broken.blockers.some(x => x.code === 'SCHEMA_UNREADABLE') && !broken.ready);
+	const e = await env(); const real = await currencyReadiness(e.prisma); assert.ok(!real.blockers.some(x => x.code === 'MONEY_TABLES_WITHOUT_CURRENCY'));
+});
+
+test('PG settings: money records written WITHOUT a currency are USD (the stored default), the three older tables no longer default to SAR, and an explicit currency is kept as written', opts, async () => {
+	const e = await env(); const cols = await e.prisma.$queryRaw<Array<{ table_name: string; column_default: string }>>`SELECT table_name, column_default FROM information_schema.columns WHERE column_name='currency' AND table_schema='public' AND table_name IN ('commission_logs','withdrawals','wallet_transactions','contracts','escrows','projects')`;
+	for (const c of cols) assert.match(c.column_default, /USD/, c.table_name);
+	const u = await e.mkUser('CLIENT_INDIVIDUAL', 'cur'); const t1 = await e.prisma.walletTransaction.create({ data: { userId: u.id, type: 'DEPOSIT', amount: 5, status: 'COMPLETED' } as any }); assert.equal(t1.currency, 'USD');
+	const t2 = await e.prisma.walletTransaction.create({ data: { userId: u.id, type: 'DEPOSIT', amount: 5, status: 'COMPLETED', currency: 'SAR' } as any }); assert.equal(t2.currency, 'SAR', 'an explicit currency is stored as written, never rewritten');
 });

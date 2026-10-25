@@ -804,6 +804,10 @@ model Project {
   @@index([clientId, status])
   @@index([status, createdAt])
   @@index([assignedEmployeeId])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("projects")
 }
 
@@ -849,6 +853,10 @@ model Proposal {
   @@index([providerId, status, createdAt])
   @@index([projectId, status])
   @@index([clientRequestId, status])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("proposals")
 }
 
@@ -887,6 +895,10 @@ model Escrow {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
 
   @@map("escrows")
 }
@@ -953,6 +965,10 @@ model ServiceCatalog {
   @@index([status])
   @@index([specialtyId])
   @@index([accreditationSampleId])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("service_catalogs")
 }
 
@@ -1052,6 +1068,10 @@ model Coupon {
   @@index([assignedToTeamMemberId])
   @@index([createdByTeamMemberId])
   @@index([providerId, approvalStatus])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("coupons")
 }
 
@@ -1088,6 +1108,10 @@ model Order {
 
   @@index([userId, createdAt])
   @@index([status])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("orders")
 }
 
@@ -1479,6 +1503,10 @@ model ProjectProposal {
   @@unique([projectId, providerId])
   @@index([projectId, status])
   @@index([providerId])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("project_proposals")
 }
 
@@ -1494,6 +1522,10 @@ model ProposalMilestone {
   amount      Float
 
   @@index([proposalId])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("proposal_milestones")
 }
 
@@ -1838,7 +1870,7 @@ model CommissionLog {
 
   type     CommissionType
   amount   Float
-  currency String           @default("SAR")
+  currency String           @default("USD")
   status   CommissionStatus @default(PENDING)
 
   createdAt DateTime @default(now())
@@ -1938,6 +1970,10 @@ model Contract {
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt
 
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("contracts")
 }
 
@@ -2013,6 +2049,10 @@ model ProjectAmendment {
   @@index([clientId, status])
   @@index([providerId, status])
   @@index([contractId])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("project_amendments")
 }
 
@@ -2066,6 +2106,10 @@ model ProjectStage {
 
   @@unique([contractId, stepOrder])
   @@index([contractId, status])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("project_stages")
 }
 
@@ -2343,7 +2387,7 @@ model Withdrawal {
   userId        String
   user          User    @relation("WithdrawalUser", fields: [userId], references: [id], onDelete: Cascade)
   amount        Float
-  currency      String  @default("SAR")
+  currency      String  @default("USD")
   method        String
   accountName   String?
   accountNumber String?
@@ -2660,6 +2704,10 @@ model ClientRequest {
   @@index([clientProfileId])
   @@index([specialtyId])
   @@index([status])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("client_requests")
 }
 
@@ -2669,7 +2717,7 @@ model WalletTransaction {
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   type          String // 'DEPOSIT', 'ESCROW_LOCK', 'ESCROW_RELEASE', 'REFUND'
   amount        Float
-  currency      String   @default("SAR")
+  currency      String   @default("USD")
   status        String   @default("COMPLETED") // 'PENDING', 'COMPLETED', 'FAILED'
   paymentMethod String? // 'MOYASAR_CARD', 'MOYASAR_APPLEPAY', 'BANK_TRANSFER'
   referenceId   String?  @unique // Moyasar payment id or bank ref; globally idempotent
