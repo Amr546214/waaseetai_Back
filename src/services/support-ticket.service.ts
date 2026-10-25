@@ -217,6 +217,8 @@ export class SupportTicketService {
   }
 
   async assign(id: string, adminId: string, assigneeId: string) {
+    // taking a ticket for yourself is part of handling it (support.reply, at the route); handing it to SOMEBODY ELSE is distributing the team's work: it needs tasks.manage (a SUPER_ADMIN holds it)
+    if (assigneeId !== adminId && !(await assigneeHolds(adminId, ['tasks.manage']))) throw new AppError('تكليف تذكرة لموظف آخر يحتاج صلاحية توزيع مهام الفريق. يمكنك تكليفها لنفسك.', 403, undefined, 'ADMIN_PERMISSION_DENIED');
     const ticket = await this.findAny(id);
     const assignee = await prisma.user.findUnique({ where: { id: assigneeId }, select: { id: true, firstName: true, lastName: true, accountType: true } });
     if (!assignee || (assignee.accountType !== AccountType.ADMIN && assignee.accountType !== AccountType.SUPER_ADMIN) || !(await assigneeHolds(assigneeId, ['support.review']))) throw fieldError('assigneeId', 'يمكن تكليف عضو فريق يملك صلاحية مراجعة الدعم فقط');

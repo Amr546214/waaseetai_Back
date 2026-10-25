@@ -21,6 +21,8 @@ const DESIGN: Array<{ row: string; id: string | null; cols: number[] }> = [
 const COLUMN_NAMES = ['Super Admin', 'مدير فريق', 'مشرف نزاعات', 'مشرف دعم', 'مشرف محتوى', 'مشرف مالي'];
 // what a role needs in addition to the design row to be usable (reading the thing it acts on, or the team pages); never an action the design row does not show
 const SUPPORTING = new Set(['disputes.view', 'withdrawals.review', 'team.view', 'tasks.manage']);
+// functional decision of the decision-maker (2026-10-25): «مراجعة الدعم» of the design means PROCESSING tickets, so the support supervisor also holds support.reply (reply, status, priority, internal notes, taking a ticket for himself)
+const FUNCTIONAL = new Map<string, string[]>([['مشرف دعم', ['support.reply']]]);
 
 test('the five job roles are exactly the design\'s columns (names, and nothing but them), Super Admin is the account type', () => {
 	assert.deepEqual(ADMIN_ROLE_TEMPLATES.map(t => t.name), COLUMN_NAMES.slice(1));
@@ -34,7 +36,7 @@ test('every template grants EXACTLY the design matrix of its column (plus only s
 			if (!r.id) { assert.equal(r.cols[col], 0, `${t.name}: ${r.row} is Super Admin only`); continue; }
 			assert.equal(t.permissions.includes(r.id), r.cols[col] === 1, `${t.name} / ${r.row} (${r.id})`);
 		}
-		for (const p of t.permissions) assert.ok(mapped.has(p) || SUPPORTING.has(p), `${t.name} holds ${p}, which is not a design row nor a supporting id`);
+		for (const p of t.permissions) assert.ok(mapped.has(p) || SUPPORTING.has(p) || (FUNCTIONAL.get(t.name) ?? []).includes(p), `${t.name} holds ${p}, which is not a design row, a supporting id nor a recorded functional decision`);
 	}
 	assert.equal(DESIGN.find(r => r.row === 'إدارة الصلاحيات')!.cols.slice(1).every(x => x === 0), true);
 	for (const c of SUPER_ADMIN_ONLY_CAPABILITIES) assert.ok(!ADMIN_PERMISSION_IDS.includes(c));
@@ -45,8 +47,9 @@ test('reading never carries approval or payout, and no job role carries money-mo
 		for (const never of ['payouts.send', 'withdrawals.reject', 'users.delete', 'settings.manage', 'audit.view', 'site_control.manage', 'marketing_assets.manage', 'performance.export']) assert.ok(!t.permissions.includes(never), `${t.name} must not carry ${never}`);
 		if (t.permissions.includes('withdrawals.review') && !t.permissions.includes('withdrawals.approve')) assert.fail(`${t.name}: review without approve is a read role only: fine, but not in the design`);
 	}
-	// the support supervisor can look at tickets but the design gives no reply / assignment: those stay absent until a SUPER_ADMIN grants them
-	const support = ADMIN_ROLE_TEMPLATES.find(t => t.name === 'مشرف دعم')!; assert.ok(support.permissions.includes('support.review') && !support.permissions.includes('support.reply'));
+	// the support supervisor processes tickets (decision 2026-10-25) but gets no team distribution, no people management, no money and no dispute resolution
+	const support = ADMIN_ROLE_TEMPLATES.find(t => t.name === 'مشرف دعم')!; assert.ok(support.permissions.includes('support.review') && support.permissions.includes('support.reply'));
+	for (const never of ['tasks.manage', 'team.view', 'disputes.resolve', 'withdrawals.approve', 'payouts.send', 'users.suspend', 'users.delete']) assert.ok(!support.permissions.includes(never), never);
 	// the team manager distributes tasks but holds nothing that manages roles / permissions / staff (those are not permissions at all)
 	const tm = ADMIN_ROLE_TEMPLATES.find(t => t.name === 'مدير فريق')!; assert.ok(tm.permissions.includes('tasks.manage') && tm.permissions.includes('team.view'));
 });

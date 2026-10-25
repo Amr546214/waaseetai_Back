@@ -85,3 +85,28 @@ test('PG: notifications and the team pages follow each role as well - an event r
 	for (const [m, url, body] of [['PUT', `/admin/team/staff/${colleague}/access`, { overrides: [{ permission: 'users.delete', effect: 'GRANT' }], expectedVersion: 1, confirmSensitive: true }], ['PATCH', `/admin/team/staff/${colleague}/role`, { roleId: null, expectedVersion: 1 }], ['POST', '/admin/team/roles', { name: 'x', permissions: ['users.delete'] }], ['POST', `/admin/team/staff/${colleague}/suspend`, undefined], ['POST', '/admin/team/invites', { email: 'q@pg.test', fullName: 'اسم ثلاثي', roleId: randomUUID() }]] as const) assert.equal((await e.call(m, url, tm, body as any)).status, 403, `${m} ${url}`);
 	assert.deepEqual((await e.call('GET', '/admin/team/access/me', colleague)).json.data.permissions, before);
 });
+
+test('PG: the support supervisor processes tickets within his scope - read, reply, status, priority, notes, taking a ticket for himself; handing one to somebody else needs tasks.manage; no people management, money or dispute resolution', opts, async () => {
+	const e = await env(); const { prisma } = e;
+	const mkRole = async (perms: string[], n: string) => (await e.call('POST', '/admin/team/roles', e.sa.id, { name: `${n} ${randomUUID().slice(0, 5)}`, permissions: perms })).json.data;
+	const support = ADMIN_ROLE_TEMPLATES.find(t => t.name === 'مشرف دعم')!;
+	const role = await mkRole([...support.permissions], 'ds'); const me = await e.mkUser('ADMIN', 'sup'); const colleague = await e.mkUser('ADMIN', 'sup2');
+	await prisma.adminStaff.create({ data: { userId: me.id, roleId: role.id } }); await prisma.adminStaff.create({ data: { userId: colleague.id, roleId: role.id } });
+	const owner = await prisma.user.create({ data: { id: randomUUID(), accountType: 'CLIENT_INDIVIDUAL', status: 'ACTIVE', roles: ['CLIENT'], activeRole: 'CLIENT', firstName: 'c', lastName: 'c', email: `t-${randomUUID().slice(0, 6)}@pg.test`, password: 'x', agreedToTerms: true } });
+	const ticket = await prisma.supportTicket.create({ data: { id: randomUUID(), ticketNumber: `T-${randomUUID().slice(0, 6)}`, userId: owner.id, subject: 's', category: 'c', description: 'd' } });
+	const t = (m: string, p: string, body?: any, who = me.id) => e.call(m, `/admin/tickets/${ticket.id}${p}`, who, body);
+	assert.equal((await e.call('GET', '/admin/tickets', me.id)).status, 200);                                                  // read
+	assert.equal((await t('GET', '')).status, 200);
+	assert.equal((await t('POST', '/reply', { body: 'تم استلام طلبك وسنعالجه' })).status, 201);                              // reply
+	assert.equal((await t('PATCH', '/status', { status: 'RESOLVED' })).status, 200);                                            // the status the handling needs
+	assert.equal((await t('PATCH', '/priority', { priority: 'عالية' })).status, 200);
+	assert.ok([200, 201].includes((await t('POST', '/notes', { body: 'ملاحظة داخلية للمعالجة' })).status));
+	assert.equal((await t('POST', '/assign', { assigneeId: me.id })).status, 200);                                              // for himself: yes
+	const others = await t('POST', '/assign', { assigneeId: colleague.id }); assert.equal(others.status, 403); assert.equal(others.json.code, 'ADMIN_PERMISSION_DENIED'); // for another: no
+	// a lead who does hold tasks.manage may hand it over (and the assignee must hold support.review)
+	const lead = await e.mkUser('ADMIN', 'lead'); await prisma.adminStaff.create({ data: { userId: lead.id, roleId: (await mkRole([...support.permissions, 'tasks.manage'], 'dl')).id } });
+	assert.equal((await t('POST', '/assign', { assigneeId: colleague.id }, lead.id)).status, 200);
+	assert.equal((await e.call('GET', '/admin/withdrawals', me.id)).status, 403);
+	// the same member still cannot manage people, move money or resolve a financial dispute
+	for (const [m, url, body] of [['POST', '/admin/team/roles', { name: 'x', permissions: [] }], ['PUT', `/admin/team/staff/${colleague.id}/access`, { overrides: [], expectedVersion: 1 }], ['POST', `/admin/team/staff/${colleague.id}/suspend`, undefined], ['POST', '/admin/withdrawals/x/approve', {}], ['POST', '/admin/withdrawals/x/send-payout', {}], ['POST', '/admin/disputes/x/resolve-financial', {}], ['POST', '/admin/disputes/x/resolve', {}], ['POST', '/admin/team/tasks', { title: 'x' }]] as const) assert.equal((await e.call(m, url, me.id, body as any)).status, 403, `${m} ${url}`);
+});

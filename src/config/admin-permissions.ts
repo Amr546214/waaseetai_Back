@@ -34,7 +34,7 @@ export const ADMIN_PERMISSIONS: readonly AdminPermissionDef[] = [
 
 	{ id: 'reports.view', label: 'عرض البلاغات', group: 'reports_support', sensitive: false, designRow: 'عرض البلاغات' },
 	{ id: 'support.review', label: 'مراجعة الدعم', group: 'reports_support', sensitive: false, designRow: 'مراجعة الدعم' },
-	{ id: 'support.reply', label: 'الرد على الدعم والتكليف', group: 'reports_support', sensitive: false },
+	{ id: 'support.reply', label: 'الرد على الدعم ومعالجة التذكرة', group: 'reports_support', sensitive: false },
 
 	{ id: 'disputes.view', label: 'عرض النزاعات', group: 'disputes', sensitive: false },
 	{ id: 'disputes.note', label: 'إضافة ملاحظات النزاع', group: 'disputes', sensitive: false },
@@ -92,8 +92,8 @@ export const ADMIN_ROLE_TEMPLATES: readonly AdminRoleTemplate[] = [
 		permissions: ['users.view', 'users.suspend', 'disputes.view', 'disputes.resolve', 'reports.view'],
 		notes: 'بطاقة الدور في التصميم تذكر 8 صلاحيات والمصفوفة 5 فقط.' },
 	{ key: 'support_supervisor', name: 'مشرف دعم', description: 'يعالج تذاكر الدعم الفني', color: '#2BD4C7',
-		permissions: ['users.view', 'reports.view', 'support.review'],
-		notes: 'بطاقة الدور في التصميم تذكر 6 صلاحيات والمصفوفة 3 فقط. «الرد والتكليف» لا يظهر في المصفوفة فلا يُمنح تلقائيًا.' },
+		permissions: ['users.view', 'reports.view', 'support.review', 'support.reply'],
+		notes: 'بطاقة الدور في التصميم تذكر 6 صلاحيات والمصفوفة 3 فقط. قرار وظيفي من صاحب القرار (2026-10-25): «مراجعة الدعم» تعني معالجة التذاكر، فيُمنح الرد وتغيير الحالة والأولوية والملاحظات الداخلية وتكليف التذكرة **لنفسه**. لا يُمنح توزيع المهام على الآخرين (tasks.manage) ولا إدارة الموظفين ولا الصرف ولا حل النزاعات.' },
 	{ key: 'content_supervisor', name: 'مشرف محتوى', description: 'يعتمد التخصصات والملفات', color: '#5DA0FF',
 		permissions: ['specialties.approve'],
 		notes: 'بطاقة الدور في التصميم تذكر 5 صلاحيات والمصفوفة صفًا واحدًا.' },
