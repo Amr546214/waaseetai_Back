@@ -26,7 +26,7 @@ const ALL = Object.keys(A) as Actor[];
 // anyone ACTING as CLIENT is a client (a provider/affiliate/super-admin who switched to the client role may buy and request — that is intended)
 const CLIENT_SIDE: Actor[] = ['client', 'clientCompany', 'providerActingAsClient', 'affiliateActingAsClient', 'superAdminActingAsClient'];
 const PROVIDER_SIDE: Actor[] = ['provider', 'providerCompany'];
-const ADMIN_SIDE: Actor[] = ['admin', 'superAdmin', 'superAdminActingAsClient'];
+const ADMIN_SIDE: Actor[] = []; // admin routers: see admin-guard.matrix.test.ts
 
 type Group = { name: string; file: string; routes: Array<[string, string]> | 'all'; allowed: Actor[] };
 const GROUPS: Group[] = [
@@ -34,6 +34,8 @@ const GROUPS: Group[] = [
   { name: 'marketplace cart + checkout', file: './cart-checkout.routes.ts', routes: 'all', allowed: CLIENT_SIDE },
   { name: 'affiliate dashboard (marketer-overview)', file: './marketer-overview.routes.ts', routes: 'all', allowed: ['affiliate'] },
   { name: 'affiliate profile (marketer/profile)', file: './marketer-profile.routes.ts', routes: 'all', allowed: ['affiliate'] },
+  // The admin routers are NOT in this matrix any more: access to them comes from permissions read in the database (an ADMIN / SUPER_ADMIN account type grants nothing), which is
+  // exercised with real roles in admin-guard.matrix.test.ts and admin-team.pg.test.ts.
   { name: 'provider AI assistant', file: './ai-assistant.routes.ts', routes: 'all', allowed: PROVIDER_SIDE },
   { name: 'provider services CRUD', file: './marketplace-service.routes.ts', routes: 'all', allowed: PROVIDER_SIDE },
   { name: 'provider company team (company only)', file: './company-team.routes.ts', routes: 'all', allowed: ['providerCompany'] },
@@ -43,17 +45,6 @@ const GROUPS: Group[] = [
   { name: 'provider finance / offers / disputes / coupons / amendments', file: './provider.routes.ts', allowed: PROVIDER_SIDE, routes: [['GET', '/finance/invoices'], ['GET', '/finance/sales'], ['POST', '/finance/withdrawals'], ['GET', '/reports'], ['GET', '/coupons'], ['POST', '/coupons'], ['GET', '/disputes'], ['POST', '/offers/x/counter'], ['POST', '/offers/x/withdraw'], ['GET', '/explore-requests'], ['POST', '/offers/x/sign'], ['POST', '/projects/x/amendments']] },
   { name: 'client requests (create, counter-offer, AI suggest)', file: './client-requests.routes.ts', allowed: CLIENT_SIDE, routes: [['POST', '/'], ['POST', '/ai-suggest'], ['POST', '/specialty-recommendations'], ['GET', '/x/offers/x/counter'], ['POST', '/x/offers/x/counter/accept'], ['POST', '/x/offers/x/counter/decline'], ['POST', '/x/offers/select'], ['GET', '/x/contract'], ['POST', '/x/contract/sign'], ['POST', '/x/escrow/deposit'], ['POST', '/x/disputes'], ['POST', '/x/rate'], ['POST', '/x/stages/x/review']] },
   { name: 'create project (client) / submit proposal (provider)', file: './project.routes.ts', allowed: [], routes: [] },
-  { name: 'admin: users', file: './admin-users.routes.ts', routes: 'all', allowed: ADMIN_SIDE },
-  { name: 'admin: withdrawals', file: './admin-withdrawals.routes.ts', routes: 'all', allowed: ADMIN_SIDE },
-  { name: 'admin: disputes', file: './admin-disputes.routes.ts', routes: 'all', allowed: ADMIN_SIDE },
-  { name: 'admin: tickets', file: './admin-tickets.routes.ts', routes: 'all', allowed: ADMIN_SIDE },
-  { name: 'admin: security', file: './admin-security.routes.ts', routes: 'all', allowed: ADMIN_SIDE },
-  { name: 'admin: brokers', file: './admin-brokers.routes.ts', routes: 'all', allowed: ADMIN_SIDE },
-  { name: 'admin: onboarding', file: './admin-onboarding.routes.ts', routes: 'all', allowed: ADMIN_SIDE },
-  { name: 'admin: accreditation', file: './admin-accreditation.routes.ts', routes: 'all', allowed: ADMIN_SIDE },
-  { name: 'admin: affiliate requests', file: './admin-affiliate-requests.routes.ts', routes: 'all', allowed: ADMIN_SIDE },
-  { name: 'admin: specialties', file: './admin-specialties.routes.ts', routes: 'all', allowed: ADMIN_SIDE },
-  { name: 'admin: AI summaries', file: './admin-ai-summaries.routes.ts', routes: 'all', allowed: ADMIN_SIDE }
 ];
 // Decision: a SUPER_ADMIN whose activeRole is CLIENT (the dev default) may buy / request — they ARE acting as a client. A SUPER_ADMIN acting as SUPER_ADMIN (or any admin) may not.
 // project.routes is split below because one router serves two sides.

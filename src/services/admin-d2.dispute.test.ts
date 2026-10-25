@@ -35,7 +35,7 @@ async function load(t: TestContext, overrides: Partial<any> = {}) {
 
 test('assign: only an admin / super-admin can be the assignee, and the assignment is audit-logged and shown on the detail', async (t) => {
 	const { svc, fx } = await load(t);
-	await assert.rejects(() => svc.assign('d1', 'admin-1', 'client-1'), /مشرف أو مدير/);
+	await assert.rejects(() => svc.assign('d1', 'admin-1', 'client-1'), /عضو فريق يملك صلاحية عرض النزاعات/);
 	assert.equal(fx.audit.length, 0);
 	const r = await svc.assign('d1', 'admin-1', 'admin-2');
 	assert.deepEqual(r.assignedTo, { id: 'admin-2', name: 'Sara A' });

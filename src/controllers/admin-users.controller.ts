@@ -123,12 +123,7 @@ export class AdminUsersController {
 		try {
 			const { id } = req.params;
 
-			const user = (req as any).user;
-			if (!user || user.accountType !== 'SUPER_ADMIN') {
-				res.status(403).json({ success: false, message: 'لا يملك هذه الصلاحية سوى SUPER_ADMIN' });
-				return;
-			}
-
+			// the route already requires the users.delete permission (admin-users.routes.ts); an account type grants nothing here
 			await usersService.deleteUser(String(id), adminActor(req));
 			res.status(200).json({
 				success: true,

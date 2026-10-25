@@ -117,9 +117,11 @@ function makeWorld(t: TestContext, init: WorldInit = {}) {
     },
     user: {
       update: async ({ where, data }: any) => { const u = st.users[where.id]; if (data.walletBalance?.increment !== undefined) u.walletBalance = Math.round((u.walletBalance + data.walletBalance.increment) * 100) / 100; return clone(u); },
-      // the acting admin of a financial decision: admin-1 is a SUPER_ADMIN, admin-2 a plain ADMIN (refused)
-      findUnique: async ({ where }: any) => (where.id === 'admin-1' ? { accountType: 'SUPER_ADMIN' } : where.id === 'admin-2' ? { accountType: 'ADMIN' } : null)
+      // the acting admin of a financial decision: admin-1 holds the permissions (it is the platform owner here), admin-2 is an ADMIN account that holds nothing (refused)
+      findUnique: async ({ where }: any) => (where.id === 'admin-1' ? { accountType: 'SUPER_ADMIN', status: 'ACTIVE' } : where.id === 'admin-2' ? { accountType: 'ADMIN', status: 'ACTIVE' } : null)
     },
+    platformOwner: { findUnique: async ({ where }: any) => (where.userId === 'admin-1' ? { userId: 'admin-1' } : null) },
+    adminStaff: { findUnique: async () => null },
     walletTransaction: { create: async ({ data }: any) => { if (st.walletTx.some((w: Row) => w.referenceId === data.referenceId)) throw Object.assign(new Error('Unique constraint failed on referenceId'), { code: 'P2002' }); st.walletTx.push(clone(data)); return data; } },
     accountAuditLog: {
       create: async ({ data }: any) => { if (failures.auditCreate) throw new Error('audit write failed'); const row = { id: `a${++seq}`, occurredAt: new Date(seq), ...clone(data) }; st.audit.push(row); return row; },
@@ -560,9 +562,9 @@ test('multiple active disputes + a financial decision on one: the escrow is sett
 
 test('permissions: the financial route is gated by authorizeAdminActing (acting role), the text route is not financial', () => {
   const routes = readFileSync(join(__dirname, '..', 'routes', 'admin-disputes.routes.ts'), 'utf8');
-  assert.match(routes, /router\.post\('\/:id\/resolve-financial', authorize\(AccountType\.SUPER_ADMIN\), authorizeAdminActing, resolveDisputeFinancial\)/);
-  assert.match(routes, /router\.use\(authenticate, requireActiveUser, authorize\(AccountType\.ADMIN, AccountType\.SUPER_ADMIN\)\)/);
-  assert.match(routes, /router\.post\('\/:id\/resolve', resolveDispute\)/);
+  assert.match(routes, /router\.post\('\/:id\/resolve-financial', requirePermission\('disputes\.resolve', 'payouts\.send'\), authorizeAdminActing, resolveDisputeFinancial\)/);
+  assert.match(routes, /router\.use\(authenticate, requireActiveUser, requirePermission\('disputes\.view'\)\)/);
+  assert.match(routes, /router\.post\('\/:id\/resolve', requirePermission\('disputes\.resolve'\), resolveDispute\)/);
 });
 
 test('permissions: authorizeAdminActing refuses an admin who is ACTING as client/provider, and a plain client/provider, and passes real admin accounts', async () => {
@@ -638,12 +640,12 @@ test('getForUser / getForAdmin carry the Arabic label, the financial outcome and
   assert.equal(admin.financialOutcome.outcome, 'REFUND_CLIENT');
 });
 
-test('SUPER_ADMIN only: a plain ADMIN (or an unknown actor) cannot execute a financial decision and nothing moves', async (t) => {
+test('a financial decision needs disputes.resolve AND payouts.send: an ADMIN account holding neither (or an unknown actor) cannot execute it and nothing moves', async (t) => {
   const w = makeWorld(t, { disputes: [dispute()] });
   const { disputeService } = await loadServices(t, w);
   const before = clone({ escrow: w.get().escrow, users: w.get().users, contract: w.get().contract });
   for (const actor of ['admin-2', 'ghost']) {
-    await assert.rejects(() => disputeService.resolveFinancial('disp-x', actor, { outcome: 'RELEASE_PROVIDER', refundToClient: 0, releaseToProvider: 50, expectedHeldAmount: 50, confirm: true } as any), (e: any) => e.statusCode === 403 && /SUPER_ADMIN/.test(e.message));
+    await assert.rejects(() => disputeService.resolveFinancial('disp-x', actor, { outcome: 'RELEASE_PROVIDER', refundToClient: 0, releaseToProvider: 50, expectedHeldAmount: 50, confirm: true } as any), (e: any) => e.statusCode === 403 && /إرسال الصرف/.test(e.message));
   }
   assert.deepEqual(clone({ escrow: w.get().escrow, users: w.get().users, contract: w.get().contract }), before);
   assert.equal(w.get().walletTx.length, 0);

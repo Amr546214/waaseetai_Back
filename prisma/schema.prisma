@@ -137,6 +137,8 @@ model User {
   providerProfile  ProviderProfile?
   affiliateProfile AffiliateProfile?
   referredBy       Referral?         @relation("ReferredUser")
+  platformOwner    PlatformOwner?    @relation("PlatformOwnerUser")
+  adminStaff       AdminStaff?       @relation("AdminStaffUser")
 
   clientProjects   Project[]         @relation("ClientProjects")
   providerProjects Project[]         @relation("ProviderProjects")
@@ -2870,4 +2872,177 @@ model ChatDigestActivation {
   enabledAt DateTime @map("enabled_at") @db.Timestamptz(3)
 
   @@map("chat_digest_activation")
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// Admin team: the platform owner, admin roles (permission templates), staff, invitations, tasks and the access audit trail.
+// Authorization for every admin route comes from these tables (see src/config/admin-permissions.ts); an ADMIN / SUPER_ADMIN account type alone grants NOTHING.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+enum AdminStaffStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum AdminInviteStatus {
+  PENDING
+  ACCEPTED
+  CANCELLED
+}
+
+enum AdminTaskStatus {
+  NEW
+  IN_PROGRESS
+  PENDING
+  DONE
+  CANCELLED
+}
+
+enum AdminTaskPriority {
+  URGENT
+  HIGH
+  MEDIUM
+  NORMAL
+  LOW
+}
+
+enum AdminTaskType {
+  DISPUTE
+  REPORT
+  SUPPORT
+  APPROVAL
+  FINANCE
+  DOCUMENT
+}
+
+/// The single platform owner. Exactly one row (id is fixed to 1 and CHECKed in the migration). Set only by scripts/set-platform-owner.ts after the owner confirms the account id.
+model PlatformOwner {
+  id           Int      @id @default(1)
+  userId       String   @unique
+  designatedAt DateTime @default(now())
+  designatedBy String   @db.VarChar(120)
+  user         User     @relation("PlatformOwnerUser", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("platform_owner")
+}
+
+/// A permission template. `permissions` holds ids from the registry in src/config/admin-permissions.ts; `version` makes concurrent edits detectable (compare-and-set).
+model AdminRole {
+  id          String   @id @default(uuid())
+  name        String   @db.VarChar(80)
+  nameKey     String   @unique @db.VarChar(80) // lower-cased, trimmed name: two roles cannot share a name
+  description String?  @db.VarChar(300)
+  color       String   @default("#2BD4C7") @db.VarChar(9)
+  permissions String[]
+  version     Int      @default(1)
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  staff       AdminStaff[]
+  invites     AdminInvite[]
+
+  @@map("admin_roles")
+}
+
+/// An admin-team member. Access = this row (ACTIVE) + the permissions of its role. Without a row (or with a SUSPENDED one) an ADMIN account can do nothing in the admin API.
+model AdminStaff {
+  id          String           @id @default(uuid())
+  userId      String           @unique
+  roleId      String?
+  status      AdminStaffStatus @default(ACTIVE)
+  title       String?          @db.VarChar(120)
+  invitedById String?
+  joinedAt    DateTime         @default(now())
+  suspendedAt DateTime?
+  version     Int              @default(1)
+  updatedAt   DateTime         @updatedAt
+  user        User             @relation("AdminStaffUser", fields: [userId], references: [id], onDelete: Cascade)
+  role        AdminRole?       @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  assigned    AdminTask[]      @relation("AdminTaskAssignee")
+
+  @@index([roleId])
+  @@index([status])
+  @@map("admin_staff")
+}
+
+/// A pending / used / cancelled invitation. Only the SHA-256 of the one-time token is stored. At most one PENDING invite per e-mail (partial unique index in the migration).
+model AdminInvite {
+  id             String            @id @default(uuid())
+  email          String            @db.VarChar(254)
+  fullName       String            @db.VarChar(120)
+  roleId         String
+  invitedById    String
+  tokenHash      String            @unique @db.VarChar(64)
+  status         AdminInviteStatus @default(PENDING)
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  acceptedUserId String?
+  cancelledAt    DateTime?
+  resendCount    Int               @default(0)
+  lastSentAt     DateTime?
+  createdAt      DateTime          @default(now())
+  role           AdminRole         @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@index([email])
+  @@index([status, expiresAt])
+  @@map("admin_invites")
+}
+
+model AdminTask {
+  id          String            @id @default(uuid())
+  number      Int               @unique @default(autoincrement())
+  title       String            @db.VarChar(200)
+  description String?           @db.VarChar(2000)
+  type        AdminTaskType
+  priority    AdminTaskPriority @default(NORMAL)
+  status      AdminTaskStatus   @default(NEW)
+  dueAt       DateTime?
+  assigneeId  String?
+  createdById String
+  linkType    String?           @db.VarChar(20) // 'TICKET' | 'DISPUTE'
+  linkId      String?           @db.VarChar(64)
+  startedAt   DateTime?
+  completedAt DateTime?
+  version     Int               @default(1)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  assignee    AdminStaff?       @relation("AdminTaskAssignee", fields: [assigneeId], references: [userId], onDelete: SetNull)
+  events      AdminTaskEvent[]
+
+  @@index([assigneeId, status])
+  @@index([status, dueAt])
+  @@map("admin_tasks")
+}
+
+model AdminTaskEvent {
+  id        String    @id @default(uuid())
+  taskId    String
+  actorId   String
+  kind      String    @db.VarChar(30) // CREATED | ASSIGNED | STATUS | EDITED
+  fromValue String?   @db.VarChar(60)
+  toValue   String?   @db.VarChar(60)
+  at        DateTime  @default(now())
+  task      AdminTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, at])
+  @@map("admin_task_events")
+}
+
+/// Who granted / withdrew what to whom, and when. No secrets (never a token, password or e-mail body).
+model AdminAccessAudit {
+  id            String   @id @default(uuid())
+  at            DateTime @default(now())
+  actorId       String
+  action        String   @db.VarChar(40)
+  subjectUserId String?
+  roleId        String?
+  inviteId      String?
+  before        Json?
+  after         Json?
+
+  @@index([at])
+  @@index([subjectUserId])
+  @@index([action])
+  @@map("admin_access_audit")
 }

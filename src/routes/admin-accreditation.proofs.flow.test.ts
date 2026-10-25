@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import jwt from 'jsonwebtoken';
+import { ownerModels } from '../testing/admin-owner.testutil';
 
 // J1 / D-B1: the admin accreditation detail must hand the reviewer a clean, documented proof contract that covers BOTH storage shapes, and the reviewer
 // must really be able to open each proof (short-lived signed link through POST /api/kyc-documents/access-link). Real Express, real authenticate /
@@ -39,6 +40,7 @@ const sampleRow = () => ({
 	providerSpecialty: { id: 'ps', status: 'UNDER_AI_REVIEW', specialty: { id: 's', nameAr: 'x' } },
 });
 const prisma: any = {
+	...ownerModels(),
 	user: { findUnique: async ({ where }: any) => users[where.id] ?? null },
 	accreditationSample: { findUnique: async ({ where, select }: any) => (where.id === SAMPLE ? (select ? { attachments: state.attachments, providerProfile: { userId: OWNER } } : sampleRow()) : null) },
 	accreditationProofUpload: { findUnique: async ({ where }: any) => state.uploads.find((u: any) => u.id === where.id) ?? null },
