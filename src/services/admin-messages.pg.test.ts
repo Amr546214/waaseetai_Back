@@ -74,7 +74,12 @@ test('PG messages: a double click / a lost reply + retry saves ONE row - the sam
 		for (const r of rs) assert.ok([200, 201].includes(r.status), JSON.stringify(r.json));
 		assert.equal(new Set(rs.map(r => r.json.data.message.id)).size, 1); assert.equal(await e.prisma.adminMessage.count({ where: { conversationId: conv } }), 1);
 		assert.equal(pushes.filter(p => p.endsWith(':admin_message_new')).length, 2); // once to each of the two members, not once per request
-		const again = await send(e, a.user.id, conv, 'نص مختلف عمدًا', key); assert.equal(again.json.data.message.body, 'مرة واحدة'); assert.equal(await e.prisma.adminMessage.count({ where: { conversationId: conv } }), 1);
+		// the same key with DIFFERENT text is a conflict: refused (409), never a misleading success, and the saved message is unchanged
+		const again = await send(e, a.user.id, conv, 'نص مختلف عمدًا', key); assert.equal(again.status, 409); assert.equal(again.json.code, 'CLIENT_MESSAGE_ID_CONFLICT'); assert.equal(again.json.data, undefined);
+		const stored = await e.prisma.adminMessage.findMany({ where: { conversationId: conv } }); assert.equal(stored.length, 1); assert.equal(stored[0].body, 'مرة واحدة'); assert.equal(stored[0].id, rs[0].json.data.message.id);
+		const mixed = await Promise.all([send(e, a.user.id, conv, 'نص آخر ١', cid()).then(r => r.status), ...[1, 2, 3].map(() => send(e, a.user.id, conv, 'سباق', 'race-key-0001').then(r => r.status))]);
+		assert.ok(mixed.slice(1).every(s => [200, 201].includes(s))); await e.prisma.adminMessage.deleteMany({ where: { conversationId: conv, body: 'نص آخر ١' } });
+		const raceRows = await e.prisma.adminMessage.count({ where: { conversationId: conv, clientMessageId: 'race-key-0001' } }); assert.equal(raceRows, 1); await e.prisma.adminMessage.deleteMany({ where: { conversationId: conv, clientMessageId: 'race-key-0001' } });
 		assert.equal((await send(e, a.user.id, conv, 'ثانية', cid())).status, 201); assert.equal(await e.prisma.adminMessage.count({ where: { conversationId: conv } }), 2);
 		// the same key from the OTHER member is a different message (keys are per sender)
 		assert.equal((await send(e, b.user.id, conv, 'من الطرف الآخر', key)).status, 201); assert.equal(await e.prisma.adminMessage.count({ where: { conversationId: conv } }), 3);
@@ -160,4 +165,48 @@ test('PG messages: live socket - subscribe only for the permitted own account; e
 		const offline = await member(e, 'ko'); const c2 = await start(e, a.user.id, offline.user.id); const last = (await send(e, a.user.id, c2, 'قبل الانقطاع')).json.data.message.seq;
 		await send(e, a.user.id, c2, 'أثناء الانقطاع'); const missed = (await e.call('GET', `${M}/conversations/${c2}/messages`, offline.user.id)).json.data.messages.filter((m: any) => BigInt(m.seq) > BigInt(last)); assert.deepEqual(missed.map((m: any) => m.body), ['أثناء الانقطاع']);
 	} finally { for (const c of clients) c.close(); setSocketServer(null); await new Promise<void>(r => io.close(() => r())); }
+});
+
+test('PG messages: addPermissionToBaseRoles adds messages.use to the base roles ONLY - existing permissions and edits stay, custom roles are untouched, a personal DENY still wins, nobody is placed, each change is versioned and audited, a re-run changes nothing', opts, async () => {
+	const e = await env(); const { ADMIN_ROLE_TEMPLATES } = await import('../config/admin-permissions'); const { adminRolesService } = await import('./admin-roles.service');
+	await adminRolesService.ensureBaseRoles(e.sa.id);
+	const names = ADMIN_ROLE_TEMPLATES.map(t => t.name);
+	// start from the state dev has: base roles WITHOUT messages.use; one edited, one custom role next to them
+	for (const n of names) { const r = await e.prisma.adminRole.findFirstOrThrow({ where: { name: n } }); await e.prisma.adminRole.update({ where: { id: r.id }, data: { permissions: r.permissions.filter(p => p !== 'messages.use') } }); }
+	const edited = await e.prisma.adminRole.findFirstOrThrow({ where: { name: 'مشرف مالي' } }); await e.prisma.adminRole.update({ where: { id: edited.id }, data: { permissions: ['finance.read'], color: '#123456' } });
+	const custom = await e.prisma.adminRole.create({ data: { name: `مخصص ${randomUUID().slice(0, 5)}`, nameKey: `custom-${randomUUID()}`, permissions: ['users.view'], createdById: e.sa.id } });
+	const person = await e.mkUser('ADMIN', 'dn'); const support = await e.prisma.adminRole.findFirstOrThrow({ where: { name: 'مشرف دعم' } });
+	const staff = await e.prisma.adminStaff.create({ data: { userId: person.id, roleId: support.id } }); await e.prisma.adminStaffOverride.create({ data: { staffId: staff.id, permission: 'messages.use', effect: 'DENY', createdById: e.sa.id } });
+	const before = await e.prisma.adminRole.findMany({ where: { name: { in: names } } }); const staffBefore = await e.prisma.adminStaff.count(); const overridesBefore = await e.prisma.adminStaffOverride.count();
+	const r1 = await adminRolesService.addPermissionToBaseRoles(e.sa.id, 'messages.use'); assert.equal(r1.updated.length, 5); assert.deepEqual(r1.missing, []);
+	for (const b of before) {
+		const a = await e.prisma.adminRole.findUniqueOrThrow({ where: { id: b.id } });
+		assert.deepEqual(a.permissions, [...b.permissions, 'messages.use'].sort(), b.name); assert.equal(a.version, b.version + 1); assert.equal(a.color, b.color); assert.equal(a.description, b.description);
+	}
+	assert.deepEqual((await e.prisma.adminRole.findUniqueOrThrow({ where: { id: edited.id } })).permissions, ['finance.read', 'messages.use']); // the edit survived, only the addition was made
+	assert.deepEqual((await e.prisma.adminRole.findUniqueOrThrow({ where: { id: custom.id } })).permissions, ['users.view']);
+	assert.equal(await e.prisma.adminStaff.count(), staffBefore); assert.equal(await e.prisma.adminStaffOverride.count(), overridesBefore);
+	assert.equal(await e.prisma.adminAccessAudit.count({ where: { action: 'ROLE_UPDATED', roleId: support.id } }) >= 1, true);
+	const r2 = await adminRolesService.addPermissionToBaseRoles(e.sa.id, 'messages.use'); assert.equal(r2.updated.length, 0);
+	for (const b of before) assert.equal((await e.prisma.adminRole.findUniqueOrThrow({ where: { id: b.id } })).version, b.version + 1);
+	// the personal DENY still removes it for that person, while a colleague on the same role may message
+	assert.equal((await e.call('GET', `${M}/directory`, person.id)).status, 403);
+	const colleague = await e.mkUser('ADMIN', 'dc'); await e.prisma.adminStaff.create({ data: { userId: colleague.id, roleId: support.id } }); assert.equal((await e.call('GET', `${M}/directory`, colleague.id)).status, 200);
+	await assert.rejects(adminRolesService.addPermissionToBaseRoles(e.sa.id, 'not.a.permission'));
+});
+
+test('PG messages: each of the five base roles can message and nothing more - same-role and cross-role conversations work, none of them reads another pair\'s conversation, and the directory / list expose only id, name and job title', opts, async () => {
+	const e = await env(); const { ADMIN_ROLE_TEMPLATES } = await import('../config/admin-permissions');
+	const people: Array<{ name: string; id: string }> = [];
+	for (const t of ADMIN_ROLE_TEMPLATES) { const role = await e.call('POST', '/admin/team/roles', e.sa.id, { name: `${t.name} ${randomUUID().slice(0, 5)}`, permissions: [...t.permissions] }); assert.equal(role.status, 201); const u = await e.mkUser('ADMIN', 'r5'); await e.prisma.adminStaff.create({ data: { userId: u.id, roleId: role.json.data.id } }); people.push({ name: t.name, id: u.id }); }
+	for (const p of people) assert.equal((await e.call('GET', `${M}/directory`, p.id)).status, 200, p.name);
+	const first = people[0], last = people[people.length - 1], mid = people[2];
+	const conv = await start(e, first.id, last.id); assert.equal((await send(e, first.id, conv, 'بين طرفين فقط')).status, 201);
+	for (const p of people.filter(x => x.id !== first.id && x.id !== last.id)) { assert.equal((await e.call('GET', `${M}/conversations/${conv}/messages`, p.id)).status, 404, p.name); assert.equal((await send(e, p.id, conv, 'x')).status, 404); }
+	const list = (await e.call('GET', `${M}/conversations`, mid.id)).json.data; assert.ok(!list.some((c: any) => c.id === conv));
+	const dir = (await e.call('GET', `${M}/directory`, mid.id)).json.data as any[]; for (const d of dir) assert.deepEqual(Object.keys(d).sort(), ['name', 'role', 'userId']);
+	const mine = (await e.call('GET', `${M}/conversations`, first.id)).json.data.find((c: any) => c.id === conv); assert.deepEqual(Object.keys(mine.counterpart).sort(), ['name', 'role', 'userId']);
+	assert.ok(!/@|password|phone|email/i.test(JSON.stringify(mine) + JSON.stringify(dir))); // no e-mail / phone / credential field anywhere
+	// none of them can use the team / roles / operations routes because of messaging
+	const x = await e.call('GET', '/admin/team/roles', first.id); assert.equal(x.status, 403);
 });

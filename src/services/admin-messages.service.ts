@@ -13,6 +13,7 @@ export const MAX_BODY = 4000;
 export const CLIENT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 export const adminMsgRoom = (userId: string) => `adminmsg_${userId}`;
 export const COUNTERPART_UNAVAILABLE = 'COUNTERPART_UNAVAILABLE';
+export const CLIENT_MESSAGE_ID_CONFLICT = 'CLIENT_MESSAGE_ID_CONFLICT';
 
 const pairKey = (a: string, b: string) => [a, b].sort().join(':');
 const NOT_FOUND = () => new AppError('المحادثة غير موجودة', 404);
@@ -110,7 +111,8 @@ export class AdminMessagesService {
 		const m = await this.membership(conversationId, me);
 		const other = m.conversation.members.find(x => x.userId !== me)!;
 		const existing = await this.db.adminMessage.findUnique({ where: { conversationId_senderId_clientMessageId: { conversationId, senderId: me, clientMessageId: cid } } });
-		if (existing) return { message: asMessage(existing), duplicate: true };
+		const conflict = () => new AppError('معرّف الإرسال هذا استُخدم لرسالة أخرى. أعد المحاولة بإرسال جديد.', 409, undefined, CLIENT_MESSAGE_ID_CONFLICT);
+		if (existing) { if (existing.body !== body) throw conflict(); return { message: asMessage(existing), duplicate: true }; }
 		if (!(await adminRecipientsHolding(MESSAGE_PERMISSION, this.db)).includes(other.userId)) throw new AppError('هذا الموظف لم يعد متاحًا للمراسلة', 409, undefined, COUNTERPART_UNAVAILABLE);
 		let saved; let duplicate = false;
 		try {
@@ -120,7 +122,7 @@ export class AdminMessagesService {
 				return row;
 			});
 		} catch (e) {
-			if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') { saved = await this.db.adminMessage.findUniqueOrThrow({ where: { conversationId_senderId_clientMessageId: { conversationId, senderId: me, clientMessageId: cid } } }); duplicate = true; }
+			if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') { saved = await this.db.adminMessage.findUniqueOrThrow({ where: { conversationId_senderId_clientMessageId: { conversationId, senderId: me, clientMessageId: cid } } }); if (saved.body !== body) throw conflict(); duplicate = true; }
 			else throw e;
 		}
 		if (!duplicate) {

@@ -55,6 +55,29 @@ export class AdminRolesService {
 		return { created, existing };
 	}
 
+	/**
+	 * Adds ONE permission to the existing base roles (matched by the template names) that do not hold it yet. It never replaces a role's permissions, never touches a custom role, never reads or changes
+	 * personal overrides (a personal DENY still wins), and places nobody. Each changed role is versioned and audited. Safe to run any number of times.
+	 */
+	async addPermissionToBaseRoles(actorId: string, permission: string) {
+		if (!isKnownPermission(permission)) throw fieldError('permission', 'صلاحية غير معروفة');
+		const updated: string[] = [], unchanged: string[] = [], missing: string[] = [];
+		for (const t of ADMIN_ROLE_TEMPLATES) {
+			const role = await this.db.adminRole.findUnique({ where: { nameKey: t.name.toLowerCase() } });
+			if (!role) { missing.push(t.name); continue; }
+			if (role.permissions.includes(permission)) { unchanged.push(t.name); continue; }
+			const res = await this.db.$transaction(async tx => {
+				const next = [...role.permissions, permission].sort();
+				const r = await tx.adminRole.updateMany({ where: { id: role.id, version: role.version }, data: { permissions: next, version: { increment: 1 } } });
+				if (r.count === 0) return false; // edited meanwhile: leave it, the next run sees the new state
+				await writeAccessAudit(tx, { actorId, action: 'ROLE_UPDATED', roleId: role.id, before: { name: role.name, permissions: role.permissions }, after: { name: role.name, permissionsAdded: [permission], permissionsRemoved: [], source: 'base-role-permission' } });
+				return true;
+			});
+			(res ? updated : unchanged).push(t.name);
+		}
+		return { updated, unchanged, missing };
+	}
+
 	async create(actorId: string, input: RoleInput) {
 		const name = cleanName(input.name), permissions = cleanPerms(input.permissions ?? []);
 		const description = input.description ? String(input.description).slice(0, 300) : null, color = cleanColor(input.color);
