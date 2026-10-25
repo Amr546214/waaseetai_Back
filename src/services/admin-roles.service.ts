@@ -1,7 +1,7 @@
 import { disconnectAdminSockets } from '../utils/socket-registry';
 import { Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '../config/db';
-import { ADMIN_PERMISSIONS, isKnownPermission } from '../config/admin-permissions';
+import { ADMIN_PERMISSIONS, ADMIN_ROLE_TEMPLATES, isKnownPermission } from '../config/admin-permissions';
 import { AppError, fieldError } from '../utils/app-error';
 
 export const ROLE_VERSION_CONFLICT = 'ROLE_VERSION_CONFLICT';
@@ -34,6 +34,25 @@ export class AdminRolesService {
 	async list() {
 		const roles = await this.db.adminRole.findMany({ orderBy: { createdAt: 'asc' }, include: { _count: { select: { staff: true } } } });
 		return roles.map(r => ({ id: r.id, name: r.name, description: r.description, color: r.color, permissions: r.permissions, permissionCount: r.permissions.length, memberCount: r._count.staff, version: r.version, updatedAt: r.updatedAt }));
+	}
+
+	/**
+	 * The five design roles as stored, assignable roles. INSERT-ONLY by name: a role that already exists (edited or not) is never touched, nothing is duplicated, nobody is placed in a role, and each
+	 * role actually created leaves a ROLE_CREATED audit row. Safe to run any number of times.
+	 */
+	async ensureBaseRoles(actorId: string) {
+		const created: string[] = [], existing: string[] = [];
+		for (const t of ADMIN_ROLE_TEMPLATES) {
+			const nameKey = t.name.toLowerCase();
+			const made = await this.db.$transaction(async tx => {
+				if (await tx.adminRole.findUnique({ where: { nameKey } })) return false;
+				const role = await tx.adminRole.create({ data: { name: t.name, nameKey, description: t.description, color: t.color, permissions: cleanPerms(t.permissions), createdById: actorId } });
+				await writeAccessAudit(tx, { actorId, action: 'ROLE_CREATED', roleId: role.id, after: { name: t.name, permissions: role.permissions, source: 'base-template' } });
+				return true;
+			}).catch(e => { if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') return false; throw e; });
+			(made ? created : existing).push(t.name);
+		}
+		return { created, existing };
 	}
 
 	async create(actorId: string, input: RoleInput) {
