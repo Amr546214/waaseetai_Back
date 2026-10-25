@@ -122,15 +122,16 @@ test('PG: withdrawing access with an old session and an open socket - a personal
 test('PG: base roles - ensureBaseRoles adds the five design roles once, never duplicates, never overwrites an edited role, places nobody; an invitation to each saves that roleId and the section scope', opts, async () => {
 	const e = await env(); const { ADMIN_ROLE_TEMPLATES } = await import('../config/admin-permissions'); const { adminRolesService } = await import('./admin-roles.service');
 	const names = ADMIN_ROLE_TEMPLATES.map(t => t.name);
-	await e.prisma.adminRole.deleteMany({ where: { name: { in: names } } });
-	// an existing, EDITED role with a template's name must survive untouched
-	const edited = await e.prisma.adminRole.create({ data: { name: 'مدير فريق', nameKey: 'مدير فريق', description: 'معدّل', color: '#112233', permissions: ['users.view'], createdById: e.sa.id } });
+	// the shared test database may already hold some of them (other tests): remove only the unreferenced ones, then make 'مدير فريق' an EDITED role that must survive untouched
+	for (const n of names.filter(n => n !== 'مدير فريق')) await e.prisma.adminRole.deleteMany({ where: { name: n, staff: { none: {} }, invites: { none: {} } } });
+	const edited = await e.prisma.adminRole.upsert({ where: { nameKey: 'مدير فريق' }, update: { description: 'معدّل', color: '#112233', permissions: ['users.view'] }, create: { name: 'مدير فريق', nameKey: 'مدير فريق', description: 'معدّل', color: '#112233', permissions: ['users.view'], createdById: e.sa.id } });
+	const editedVersion = edited.version;
 	const staffBefore = await e.prisma.adminStaff.count();
 	const r1 = await adminRolesService.ensureBaseRoles(e.sa.id);
-	assert.deepEqual(r1.existing, ['مدير فريق']); assert.equal(r1.created.length, 4);
+	assert.ok(r1.existing.includes('مدير فريق')); assert.equal(r1.created.length + r1.existing.length, 5);
 	const r2 = await adminRolesService.ensureBaseRoles(e.sa.id); assert.equal(r2.created.length, 0);
 	for (const n of names) assert.equal(await e.prisma.adminRole.count({ where: { name: n } }), 1, n);
-	const still = await e.prisma.adminRole.findUniqueOrThrow({ where: { id: edited.id } }); assert.deepEqual(still.permissions, ['users.view']); assert.equal(still.color, '#112233'); assert.equal(still.version, 1);
+	const still = await e.prisma.adminRole.findUniqueOrThrow({ where: { id: edited.id } }); assert.deepEqual(still.permissions, ['users.view']); assert.equal(still.color, '#112233'); assert.equal(still.version, editedVersion);
 	assert.equal(await e.prisma.adminStaff.count(), staffBefore);
 	for (const t of ADMIN_ROLE_TEMPLATES.filter(t => t.name !== 'مدير فريق')) assert.deepEqual((await e.prisma.adminRole.findFirstOrThrow({ where: { name: t.name } })).permissions, [...t.permissions].sort(), t.name);
 	// the roles API lists them all (what the invitation dialog shows) and none is a SUPER_ADMIN role
