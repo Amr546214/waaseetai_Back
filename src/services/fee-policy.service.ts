@@ -10,6 +10,9 @@ export const FEE_POLICY_CONFIRMATION_REQUIRED = 'FEE_POLICY_CONFIRMATION_REQUIRE
 export const FEE_POLICY_MIN_LEAD_MINUTES = 15;
 export const FEE_POLICY_MAX_LEAD_DAYS = 366;
 export const FEE_POLICY_CACHE_MS = 5000;
+/** Fields that are shown but have NO financial effect today (no cashback credit exists; no code deducts the marketer withdrawal fee): they cannot be changed until their path is built and tested, so a saved number never promises something that is not applied. */
+export const FEE_POLICY_DISPLAY_ONLY = ['clientCashbackByLevel', 'marketerWithdrawalFeePercent'] as const;
+const ADVISORY_LOCK = 7_260_001;
 
 export interface PolicyRow { id: string; version: number; effectiveFrom: Date; payload: FeePolicyPayload; note: string | null; createdById: string | null; createdAt: Date; cancelledAt: Date | null }
 const BASELINE_ROW = (): PolicyRow => ({ id: BASELINE_FEE_POLICY_ID, version: 1, effectiveFrom: new Date('2000-01-01T00:00:00Z'), payload: baselineFeePolicyPayload(), note: 'baseline (built-in fallback)', createdById: null, createdAt: new Date('2000-01-01T00:00:00Z'), cancelledAt: null });
@@ -80,6 +83,8 @@ export class FeePolicyService {
 		if (!b.changes || typeof b.changes !== 'object' || Array.isArray(b.changes) || !Object.keys(b.changes as object).length) errors.push({ field: 'changes', message: 'لا توجد تغييرات' });
 		if (!Number.isInteger(b.baseVersion)) errors.push({ field: 'baseVersion', message: 'رقم آخر نسخة مطلوب لمنع استبدال تعديل أحدث' });
 		if (errors.length) throw fieldErrors(errors[0].message, errors);
+		const blocked = Object.keys(b.changes as object).filter(k => (FEE_POLICY_DISPLAY_ONLY as readonly string[]).includes(k));
+		if (blocked.length) throw fieldErrors('هذه القيم للعرض فقط ولا تُطبَّق ماليًا حاليًا، فلا يمكن تعديلها.', blocked.map(f => ({ field: f, message: 'للعرض فقط: لا يوجد مسار مالي يطبّقها بعد' })));
 		const all = (await this.rows(true)).filter(r => !r.cancelledAt); const latest = all.reduce((m, r) => (r.version > m.version ? r : m), all[0]);
 		if (latest.version !== b.baseVersion) throw new AppError('تغيّرت سياسة الرسوم من جهة أخرى. أعد التحميل وراجع التغيير.', 409, [{ current: this.out(latest) }], FEE_POLICY_CONFLICT);
 		if ((await this.upcoming(now)).length) throw new AppError('توجد نسخة مجدولة لم تسرِ بعد: ألغِها أو انتظر سريانها قبل جدولة نسخة جديدة.', 409, undefined, FEE_POLICY_CONFLICT);
@@ -90,6 +95,11 @@ export class FeePolicyService {
 		let row;
 		try {
 			row = await this.db.$transaction(async tx => {
+				// one writer at a time: the "latest version" and "nothing pending" checks below must hold when the row is inserted, not when the request arrived
+				await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ADVISORY_LOCK})`;
+				const fresh = await tx.feePolicyVersion.findMany({ where: { cancelledAt: null }, select: { version: true, effectiveFrom: true } });
+				if (Math.max(1, ...fresh.map(r => r.version)) !== latest.version) throw new AppError('تغيّرت سياسة الرسوم من جهة أخرى. أعد التحميل وراجع التغيير.', 409, undefined, FEE_POLICY_CONFLICT);
+				if (fresh.some(r => r.effectiveFrom.getTime() > Date.now())) throw new AppError('توجد نسخة مجدولة لم تسرِ بعد: ألغِها أو انتظر سريانها قبل جدولة نسخة جديدة.', 409, undefined, FEE_POLICY_CONFLICT);
 				// a database created without the migration seed (db push in tests / a fresh environment) has no version 1 yet: store the baseline so that "the base" of every change is a real row
 				if (!(await tx.feePolicyVersion.findFirst({ where: { version: 1 }, select: { id: true } }))) await tx.feePolicyVersion.create({ data: { id: BASELINE_FEE_POLICY_ID, version: 1, effectiveFrom: new Date('2000-01-01T00:00:00Z'), payload: baselineFeePolicyPayload() as Prisma.InputJsonValue, note: 'baseline: the values in force before fee policies were managed (unchanged)' } });
 				const max = await tx.feePolicyVersion.aggregate({ _max: { version: true } });
