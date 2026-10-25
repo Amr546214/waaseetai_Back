@@ -94,22 +94,18 @@ test('PG: admin notifications reach only people who hold the permission NOW, and
 	assert.equal(await notificationService.countUnread(disp.user.id), 1);
 });
 
-test('PG: the assistant socket - an admin is privileged only while it holds access; the check runs on EVERY question, so withdrawal / suspension cuts an already-open connection', opts, async () => {
+test('PG: remote AI for administrators is SUPER_ADMIN-only - a staff member (any role, grants, sections) is refused on every question, an unplaced ADMIN too; a SUPER_ADMIN is served; nothing to withdraw on an open connection', opts, async () => {
 	const e = await env(); const { resolveHelpAssistantUser } = await import('../sockets/help-assistant-auth');
 	const socketFor = (u: any) => { const token = jwt.sign({ userId: u.id }, process.env.JWT_SECRET!, { expiresIn: '1h' }); return { userId: u.id, handshake: { auth: { token }, address: '127.0.0.1', headers: {} } } as any; };
-	const superSock = socketFor(e.sa), st = await mkStaff(e, ['users.view'], 'as'), stSock = socketFor(st.user), bare = await e.mkUser('ADMIN', 'ab'), bareSock = socketFor(bare), sa = await e.mkUser('SUPER_ADMIN', 'asa'), saSock = socketFor(sa);
+	const superSock = socketFor(e.sa), st = await mkStaff(e, ['users.view', 'disputes.view', 'support.review', 'finance.read'], 'as'), stSock = socketFor(st.user), bare = await e.mkUser('ADMIN', 'ab'), bareSock = socketFor(bare), sa = await e.mkUser('SUPER_ADMIN', 'asa'), saSock = socketFor(sa);
 	const ask = (s: any) => resolveHelpAssistantUser(s);
 	assert.deepEqual(await ask(superSock), { ok: true, userId: e.sa.id, role: 'admin' });
-	assert.equal((await ask(stSock) as any).ok, true);
-	assert.deepEqual(await ask(bareSock), { ok: false, reason: 'FORBIDDEN' });   // ADMIN account with no placement
 	assert.deepEqual(await ask(saSock), { ok: true, userId: sa.id, role: 'admin' }); // every SUPER_ADMIN account, with no staff row
-	// the same open connection (same socket object) after the permission is withdrawn / the member suspended / the role removed
-	await e.prisma.adminRole.update({ where: { id: st.role.id }, data: { permissions: [] } });
-	assert.deepEqual(await ask(stSock), { ok: false, reason: 'FORBIDDEN' });
-	await e.prisma.adminRole.update({ where: { id: st.role.id }, data: { permissions: ['users.view'] } });
-	assert.equal((await ask(stSock) as any).ok, true);
-	await e.prisma.adminStaff.update({ where: { userId: st.user.id }, data: { status: 'SUSPENDED' } });
-	assert.deepEqual(await ask(stSock), { ok: false, reason: 'FORBIDDEN' });
+	assert.deepEqual(await ask(stSock), { ok: false, reason: 'FORBIDDEN' });   // the remote service decides documents by the general admin role: not given to a limited member
+	assert.deepEqual(await ask(bareSock), { ok: false, reason: 'FORBIDDEN' });  // ADMIN account with no placement
+	// the type is read from the database on every question: an account that stops being SUPER_ADMIN is refused on the next question of the SAME open connection
+	await e.prisma.user.update({ where: { id: sa.id }, data: { accountType: 'ADMIN', roles: ['ADMIN'], activeRole: 'ADMIN' } });
+	assert.deepEqual(await ask(saSock), { ok: false, reason: 'FORBIDDEN' });
 	// a project in the assistant's page context follows the same scope as the admin API
 	const { resolveAssistantOptions } = await import('../services/ai/assistant-request');
 	const w = await world(e); const disp = await mkStaff(e, ['disputes.view'], 'ad');
@@ -118,6 +114,9 @@ test('PG: the assistant socket - an admin is privileged only while it holds acce
 	await assert.rejects(() => resolveAssistantOptions(ctx(w.plain.project.id), disp.user.id, 'admin'), (x: any) => x.code === 'FORBIDDEN');
 	await assert.rejects(() => resolveAssistantOptions(ctx(w.inDispute.project.id), bare.id, 'admin'), (x: any) => x.code === 'FORBIDDEN');
 	await assert.doesNotReject(() => resolveAssistantOptions(ctx(w.plain.project.id), e.sa.id, 'admin'));
+	// the HTTP voice / tools entry points answer 403 to a staff member before reaching the AI service
+	const { adminMayUseRemoteAi } = await import('../services/admin-access.service');
+	assert.equal(await adminMayUseRemoteAi(e.sa.id), true); assert.equal(await adminMayUseRemoteAi(disp.user.id), false); assert.equal(await adminMayUseRemoteAi(bare.id), false); assert.equal(await adminMayUseRemoteAi(randomUUID()), false);
 });
 
 test('PG: open connections are cut when access is suspended, re-roled or reduced (and only then)', opts, async () => {

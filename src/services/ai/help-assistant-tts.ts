@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { randomUUID } from 'node:crypto';
 import { logger } from '../../config/logger';
 import { mapHelpAssistantRole } from '../../sockets/help-assistant-auth';
+import { adminMayUseRemoteAi } from '../admin-access.service';
 import { WaseetAiErrorCode, normalizeWaseetAiError } from './waseet-ai/waseet-ai.errors';
 import type { TtsSynthesizeRequest } from './waseet-ai/waseet-ai.types';
 
@@ -115,6 +116,7 @@ export function createHelpAssistantTtsHandler(deps: HelpAssistantTtsDeps) {
 		if (!user || typeof userId !== 'string' || !userId) return fail(res, 401, 'AUTH_REQUIRED', TTS_MESSAGES.AUTH_REQUIRED);
 		const role = mapHelpAssistantRole(user.activeRole as string | undefined, user.accountType as string | undefined);
 		if (!role) return fail(res, 403, 'FORBIDDEN', TTS_MESSAGES.FORBIDDEN);
+		if (role === 'admin' && !(await adminMayUseRemoteAi(userId))) return fail(res, 403, 'FORBIDDEN', TTS_MESSAGES.FORBIDDEN); // remote AI is SUPER_ADMIN-only for administrators
 		try {
 			if (await deps.isBlocked(userId)) return fail(res, 403, 'FORBIDDEN', TTS_MESSAGES.FORBIDDEN);
 		} catch (error: any) {

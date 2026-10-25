@@ -61,6 +61,18 @@ export async function assigneeHolds(userId: string, ids: string[], db: typeof de
  * Entry points outside /admin (assistant, knowledge) that treat an 'admin' actor as privileged ask this first: an ADMIN / SUPER_ADMIN account is privileged there only while it is a SUPER_ADMIN
  * or an ACTIVE staff member holding at least one permission. Unplaced, suspended or access-less admin accounts get nothing, and so does a failed lookup.
  */
+/**
+ * The remote AI service (assistant chat / tools / voice / knowledge search) is given the general role `admin` for an administrator, and it decides document access by that role on ITS side where the
+ * staff member's permissions and sections cannot be enforced. So the privileged remote search is SUPER_ADMIN-only: a staff member (ADMIN account), whatever the role / grants / sections, is refused
+ * there until the scope can be enforced end to end. Reads the type from the database; any failure = refused.
+ */
+export async function adminMayUseRemoteAi(userId: string, db: typeof defaultPrisma = defaultPrisma): Promise<boolean> {
+	try {
+		const u = await db.user.findUnique({ where: { id: userId }, select: { accountType: true, status: true } });
+		return u?.accountType === AccountType.SUPER_ADMIN && u.status === 'ACTIVE';
+	} catch { return false; }
+}
+
 export async function adminHasAnyAccess(userId: string, db: typeof defaultPrisma = defaultPrisma): Promise<boolean> {
 	try {
 		const u = await db.user.findUnique({ where: { id: userId }, select: { accountType: true } });
