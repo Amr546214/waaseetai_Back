@@ -284,6 +284,7 @@ import adminTeamRoutes, { adminInvitePublicRouter } from './routes/admin-team.ro
 import adminMessagesRoutes from './routes/admin-messages.routes';
 import adminSystemSettingsRoutes from './routes/admin-system-settings.routes';
 import { maintenanceMiddleware } from './middlewares/maintenance.middleware';
+import { systemSettingsService } from './services/system-settings.service';
 import aiAssessmentRoutes from './routes/ai-assessment.routes';
 import accountManagementRoutes from './routes/account-management.routes';
 import adminDisputesRoutes from './routes/admin-disputes.routes';
@@ -438,6 +439,8 @@ if (process.env.NODE_ENV !== 'test') {
 		logger.info(`🚀 Server is running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
 		logger.info(`👉 http://localhost:${PORT}/api`);
 		startChatDigestScheduler(); // no-op unless CHAT_DIGEST_EMAIL_ENABLED=true
+		// warm the settings cache so the maintenance / registration policies have a trusted value as early as possible (a failure is logged; the cold-boot policy covers the gap)
+		void systemSettingsService.prime();
 	});
 }
 

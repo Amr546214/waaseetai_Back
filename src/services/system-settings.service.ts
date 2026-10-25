@@ -5,6 +5,8 @@ import { isMissingTableError } from '../utils/missing-table';
 import type { AdminActor } from './admin-access.service';
 import { ENFORCED_KEYS, PUBLIC_KEYS, SETTINGS_CACHE_TTL_MS, SETTING_BY_KEY, SETTING_DEFS, SettingDef, SettingPerm } from '../config/system-settings.registry';
 import { currencyReadiness } from './currency-readiness.service';
+import { logger } from '../config/logger';
+import { sessionService } from './session.service'; // used only inside functions: the cycle with session.service is harmless
 
 export const SETTINGS_VERSION_CONFLICT = 'SETTINGS_VERSION_CONFLICT';
 export const SETTING_NOT_AVAILABLE = 'SETTING_NOT_AVAILABLE';
@@ -34,19 +36,41 @@ export class SystemSettingsService {
 			for (const r of rows) values.set(r.key, { value: r.value, version: r.version });
 		} catch (e) { if (isMissingTableError(e)) storage = false; else throw e; }
 		this.cache = { at: Date.now(), values, storage };
+		this.noteGood(this.cache);
 		return this.cache;
 	}
 
-	/** typed value of an ENFORCED key: the stored value when it still passes the registry schema, otherwise the default. Never throws: an enforcement point must not take the platform down. */
-	async get<T = unknown>(key: string): Promise<T> {
+	/** every successful read refreshes the last KNOWN-GOOD value of every enforced key (what an outage falls back to - never a silent default) */
+	private lastGood = new Map<string, { value: unknown; at: number }>();
+	private lastFailLog = 0;
+	private noteGood(s: Snapshot) {
+		for (const d of SETTING_DEFS) { if (d.status !== 'enforced' || !d.schema) continue; const row = s.values.get(d.key); const p = row ? d.schema.safeParse(row.value) : null; this.lastGood.set(d.key, { value: p && p.success ? p.data : d.default, at: s.at }); }
+	}
+	private logReadFailure(e: unknown) { if (Date.now() - this.lastFailLog > 60_000) { this.lastFailLog = Date.now(); logger.error(`[Settings] read failed, using last known good values where they exist: ${(e as Error)?.message ?? e}`); } }
+	/** true once at least one read of the store has succeeded in this process (a "cold boot" without it has no trusted value) */
+	hasTrustedValues(): boolean { return this.lastGood.size > 0; }
+	/** warm the cache at boot; never throws */
+	async prime(): Promise<boolean> { try { await this.snapshot(true); return true; } catch (e) { this.logReadFailure(e); return false; } }
+
+	/**
+	 * The value of an ENFORCED key with its trust. Order: the stored value (or the registry default when nothing is stored - the table being readable is what makes that default trustworthy);
+	 * when the store cannot be read: the LAST KNOWN GOOD value of this process (logged, `stale`); with none (cold boot) the default but `trusted: false` so the caller applies its own boot policy.
+	 */
+	async getTrusted<T = unknown>(key: string): Promise<{ value: T; trusted: boolean; stale: boolean }> {
 		const def = SETTING_BY_KEY.get(key);
 		if (!def || def.status !== 'enforced' || !def.schema) throw new Error(`unknown enforced setting ${key}`);
 		try {
 			const s = await this.snapshot(); const row = s.values.get(key);
-			if (row) { const p = def.schema.safeParse(row.value); if (p.success) return p.data as T; }
-		} catch { /* fall through to the default */ }
-		return def.default as T;
+			if (row) { const p = def.schema.safeParse(row.value); if (p.success) return { value: p.data as T, trusted: true, stale: false }; }
+			return { value: def.default as T, trusted: true, stale: false };
+		} catch (e) {
+			this.logReadFailure(e);
+			const g = this.lastGood.get(key); if (g) return { value: g.value as T, trusted: true, stale: true };
+			return { value: def.default as T, trusted: false, stale: false };
+		}
 	}
+	/** typed value only (see getTrusted). Never throws: an enforcement point must not take the platform down. */
+	async get<T = unknown>(key: string): Promise<T> { return (await this.getTrusted<T>(key)).value; }
 
 	/** everything the actor may READ: enforced keys with value + version, read-only/blocked entries with their reason. */
 	async view(actor: AdminActor) {
@@ -132,6 +156,14 @@ export class SystemSettingsService {
 			return { id: r.id, at: r.occurredAt, severity: r.severity, ip: r.ipAddress, actor: [r.user?.firstName, r.user?.lastName].filter(Boolean).join(' ') || r.user?.email || null,
 				changes: keys.map(k => ({ key: k, label: SETTING_BY_KEY.get(k)!.label, from: bf[k] ?? null, to: a[k] ?? null })) };
 		}).filter(r => r.changes.length > 0);
+	}
+
+	/** how many live sessions a given idle limit would end right now (shown in the confirmation before saving; SUPER_ADMIN only at the route) */
+	async sessionsImpact(idleMinutes: unknown) {
+		const n = Number(idleMinutes);
+		const def = SETTING_BY_KEY.get('sessionIdleMinutes')!; const p = def.schema!.safeParse(n);
+		if (!p.success) throw fieldError('idleMinutes', p.error.issues[0]?.message || 'قيمة غير صالحة');
+		return { idleMinutes: n, ...(await sessionService.idleImpact(n)) };
 	}
 
 	/** real health facts only; anything without a real source is reported as unavailable with the reason */
