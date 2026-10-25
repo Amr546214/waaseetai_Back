@@ -1,3 +1,4 @@
+import { presentedIdentity, isAdminAccountType } from '../utils/admin-identity';
 import jwt from 'jsonwebtoken';
 import { UserRole, AccountType, Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
@@ -364,6 +365,11 @@ export class AccountManagementService {
     const ownedRoles = userRoles;
     const availableRoles = allRoles.filter(r => !ownedRoles.includes(r.role));
 
+    // an admin account presents its admin role (the stored one is CLIENT by default); it has no self-service accounts to add
+    if (isAdminAccountType(user.accountType)) {
+      const shown = presentedIdentity({ accountType: user.accountType, activeRole, roles: userRoles });
+      return { activeRole: shown.activeRole, roles: shown.roles, ownedRoles: shown.roles, availableRoles: [], allRoles };
+    }
     return {
       activeRole,
       roles: userRoles,
@@ -527,6 +533,11 @@ export class AccountManagementService {
 
     if (!user) {
       throw new AppError('حساب المستخدم غير موجود', 404);
+    }
+
+    // Admin accounts never switch roles: they always act as admin (no client / provider shell for them, and nothing is stored).
+    if (isAdminAccountType(user.accountType)) {
+      throw Object.assign(new AppError('حسابات الإدارة لا تبدّل الأدوار؛ تعمل دائمًا بصلاحية الإدارة.', 403), { code: 'ADMIN_ROLE_SWITCH_NOT_ALLOWED' });
     }
 
     const primaryRole = getRoleFromAccountType(user.accountType);

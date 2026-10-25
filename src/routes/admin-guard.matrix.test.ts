@@ -112,7 +112,7 @@ test('every /admin router: no token 401; client / provider / affiliate 403; admi
 	}
 });
 
-test('every non-GET route of every admin router is also behind the guard (a normal role gets 403, no token 401)', async () => {
+test('every non-GET route of every admin router is also behind the guard (client / provider / affiliate get 403, no token 401)', async () => {
 	const express = (await import('express')).default;
 	const imports = importedRouters();
 	const { globalErrorHandler: errorHandler } = await import('../middlewares/error.middleware');
@@ -129,6 +129,7 @@ test('every non-GET route of every admin router is also behind the guard (a norm
 				assert.equal(await request(app, method.toUpperCase(), url), 401, `${method} ${url}: no token`);
 				assert.equal(await request(app, method.toUpperCase(), url, tokenFor('client')), 403, `${method} ${url}: client`);
 				assert.equal(await request(app, method.toUpperCase(), url, tokenFor('provider')), 403, `${method} ${url}: provider`);
+				assert.equal(await request(app, method.toUpperCase(), url, tokenFor('affiliate')), 403, `${method} ${url}: affiliate`);
 			}
 		}
 	}
