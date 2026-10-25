@@ -1,11 +1,12 @@
 import { prisma } from '../config/db';
+import { feePolicyService } from './fee-policy.service';
 import { paypalService } from './paypal.service';
 import { clientFinanceService } from './client-finance.service';
 import { LogCategory, LogStatus, Prisma, PaypalPaymentStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { AppError } from '../utils/app-error';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
-import { DEPOSIT_FEE_PERCENT, depositGrossUp } from '../utils/fee-policy';
+import { DEPOSIT_FEE_PERCENT } from '../utils/fee-policy';
 import { notifyAdmins } from './admin-notifications.service';
 
 // USD deposit bounds: see dtos/paypal.dto.ts.
@@ -27,8 +28,10 @@ export class PaypalFinanceService {
 		}
 
 		const netAmount = new Prisma.Decimal(amount).toDecimalPlaces(2);
-		const feePercent = DEPOSIT_FEE_PERCENT.paypal;
-		const grossAmount = new Prisma.Decimal(depositGrossUp(netAmount.toNumber(), 'paypal')).toDecimalPlaces(2);
+		// the deposit fee percent of the fee policy in force NOW; it is stored on the payment row (with the policy id), so the later capture credits exactly what was quoted
+		const policy = await feePolicyService.active();
+		const feePercent = policy.payload.depositFeePercent.paypal;
+		const grossAmount = new Prisma.Decimal(Math.round((netAmount.toNumber() / (1 - feePercent / 100) + Number.EPSILON) * 100) / 100).toDecimalPlaces(2);
 		const feeAmount = grossAmount.minus(netAmount).toDecimalPlaces(2);
 		const reference = randomUUID();
 
@@ -52,6 +55,7 @@ export class PaypalFinanceService {
 				netAmount,
 				feeAmount,
 				feePercent,
+				feePolicyId: policy.id,
 				currency: 'USD',
 				status: PaypalPaymentStatus.PENDING
 			}

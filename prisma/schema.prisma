@@ -900,6 +900,8 @@ model Escrow {
   /// the currency of every amount on this record (never inferred from settings): existing rows are USD
   currency String @default("USD") @db.VarChar(3)
 
+  /// the fee policy version in force when this escrow was locked (NULL = the baseline version 1, i.e. every escrow created before policies were managed)
+  feePolicyId String?
   @@map("escrows")
 }
 
@@ -2419,6 +2421,9 @@ model Withdrawal {
 
   @@index([status, createdAt])
   @@index([userId, createdAt])
+  /// the fee policy version in force when the request was created, and the minimum payout it was checked against (NULL = created before policies were stored)
+  feePolicyId    String?
+  minimumApplied Float?
   @@map("withdrawals")
 }
 
@@ -2759,6 +2764,8 @@ model PaypalPayment {
   updatedAt       DateTime            @updatedAt
 
   @@index([userId, createdAt])
+  /// the fee policy version whose deposit fee percent was applied (NULL = baseline)
+  feePolicyId String?
   @@map("paypal_payments")
 }
 
@@ -3163,4 +3170,21 @@ model AdminMessage {
   @@unique([conversationId, senderId, clientMessageId])
   @@index([conversationId, seq])
   @@map("admin_messages")
+}
+
+/// Versioned financial terms (provider / marketer commission by level, client cashback by level, deposit fee by method, marketer withdrawal fee by method, minimum payouts). A version is
+/// IMMUTABLE once created; the one in force at an instant is the latest non-cancelled version whose effectiveFrom has passed. Operations store the id they were created under.
+model FeePolicyVersion {
+  id            String    @id @default(uuid())
+  version       Int       @unique
+  effectiveFrom DateTime
+  payload       Json
+  note          String?   @db.VarChar(300)
+  createdById   String?
+  createdAt     DateTime  @default(now())
+  cancelledAt   DateTime?
+  cancelledById String?
+
+  @@index([effectiveFrom])
+  @@map("fee_policy_versions")
 }
