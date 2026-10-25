@@ -6,8 +6,8 @@ export const createPaypalOrder = async (req: Request, res: Response, next: NextF
 	try {
 		const clientId = (req as any).user?.id;
 		if (!clientId) return res.status(401).json({ success: false, message: 'غير مصرح' });
-		const { amount } = req.body as CreatePaypalOrderDto;
-		const data = await paypalFinanceService.initiateDeposit(clientId, amount);
+		const { amount, currency } = req.body as CreatePaypalOrderDto;
+		const data = await paypalFinanceService.initiateDeposit(clientId, amount, currency);
 		return res.status(200).json({ success: true, data });
 	} catch (error) {
 		next(error);

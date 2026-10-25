@@ -215,6 +215,7 @@ export class ProjectAmendmentService {
         data: {
           projectId,
           contractId: contract.id,
+          currency: contract.currency, // an amendment is in its contract's currency
           clientId: contract.clientId,
           providerId: contract.providerId,
           requestedById: clientId,
@@ -294,6 +295,7 @@ export class ProjectAmendmentService {
         data: {
           projectId,
           contractId: contract.id,
+          currency: contract.currency, // an amendment is in its contract's currency
           clientId: contract.clientId,
           providerId: contract.providerId,
           requestedById: providerId,

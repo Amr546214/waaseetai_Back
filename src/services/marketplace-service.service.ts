@@ -14,6 +14,7 @@ import { findActiveServicePurchases } from '../utils/active-purchase.util';
 import { assertSkillsInCategory, listProviderSpecialtiesWithCatalog } from './skills-catalog.service';
 import { AppError } from '../utils/app-error';
 import { selfNegotiationError } from '../utils/self-dealing';
+import { platformCurrency } from './platform-currency';
 
 // Batch 4 — the minimal shape getMarketplaceModels/getMarketplaceModelById
 // need from req.user to read back the requesting Client's own
@@ -247,6 +248,7 @@ export class MarketplaceService {
 		const createdService = await prisma.$transaction(async (tx: any) => {
 			const service = await tx.serviceCatalog.create({
 				data: {
+					currency: await platformCurrency(),
 					provider: {
 						connect: { id: userId }
 					},
@@ -978,6 +980,7 @@ export class MarketplaceService {
 						deliveryDays: service.totalDays,
 						budgetType: 'fixed',
 						budgetFixed: Number(service.totalAmount),
+						currency: service.currency,
 						allowNegotiation: mode === 'negotiation',
 						status: 'OPEN'
 					}

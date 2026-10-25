@@ -10,6 +10,7 @@ import { toCsv } from '../utils/csv.util';
  * platform's money flow, so none is shown. Read-only: no money moves from here.
  */
 import { round2 } from '../utils/money';
+import { LEGACY_CURRENCY } from '../utils/currency';
 const fullName = (u?: { firstName?: string | null; lastName?: string | null } | null) => [u?.firstName, u?.lastName].filter(Boolean).join(' ').trim();
 const monthKey = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 const CSV_ROW_CAP = 5000;
@@ -28,9 +29,9 @@ export class AdminFinanceService {
 	async overview(months = 6, now = new Date()) {
 		const span = Math.min(12, Math.max(1, Math.floor(months) || 6));
 		const since = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (span - 1), 1));
-		const [heldEscrows, releasedEscrows, deposits, paypalFees, withdrawalGroups, commissionGroups, depositRows, approvedStages, paidWithdrawals, commissionRows] = await Promise.all([
-			prisma.escrow.aggregate({ where: { status: 'HELD' }, _sum: { amount: true, releasedAmount: true }, _count: { _all: true } }),
-			prisma.escrow.aggregate({ _sum: { releasedAmount: true, platformCommissionAmount: true, providerNetReleasedAmount: true } }),
+		const [heldEscrows, releasedEscrows, deposits, paypalFees, withdrawalGroups, commissionGroups, depositRows, approvedStages, paidWithdrawals, commissionRows, escrowHeldByCur, escrowReleasedByCur, depositsByCur] = await Promise.all([
+			prisma.escrow.aggregate({ where: { status: 'HELD', currency: LEGACY_CURRENCY }, _sum: { amount: true, releasedAmount: true }, _count: { _all: true } }),
+			prisma.escrow.aggregate({ where: { currency: LEGACY_CURRENCY }, _sum: { releasedAmount: true, platformCommissionAmount: true, providerNetReleasedAmount: true } }),
 			prisma.walletTransaction.aggregate({ where: { type: 'DEPOSIT', status: 'COMPLETED' }, _sum: { amount: true }, _count: { _all: true } }),
 			prisma.paypalPayment.aggregate({ where: { status: 'COMPLETED' }, _sum: { feeAmount: true } }),
 			prisma.withdrawal.groupBy({ by: ['status'], _sum: { amount: true }, _count: { _all: true } }),
@@ -38,8 +39,17 @@ export class AdminFinanceService {
 			prisma.walletTransaction.findMany({ where: { type: 'DEPOSIT', status: 'COMPLETED', createdAt: { gte: since } }, select: { amount: true, createdAt: true }, take: 20000 }),
 			prisma.projectStage.findMany({ where: { status: 'APPROVED', approvedAt: { gte: since } }, select: { amount: true, approvedAt: true }, take: 20000 }),
 			prisma.withdrawal.findMany({ where: { status: WithdrawalStatus.COMPLETED, updatedAt: { gte: since } }, select: { amount: true, updatedAt: true }, take: 20000 }),
-			prisma.commissionLog.findMany({ where: { createdAt: { gte: since } }, select: { amount: true, createdAt: true }, take: 20000 })
+			prisma.commissionLog.findMany({ where: { createdAt: { gte: since } }, select: { amount: true, createdAt: true }, take: 20000 }),
+			// the same totals PER CURRENCY: amounts of different currencies are never added together
+			prisma.escrow.groupBy({ by: ['currency'], where: { status: 'HELD' }, _sum: { amount: true, releasedAmount: true } }),
+			prisma.escrow.groupBy({ by: ['currency'], _sum: { releasedAmount: true, platformCommissionAmount: true, providerNetReleasedAmount: true } }),
+			prisma.walletTransaction.groupBy({ by: ['currency'], where: { type: 'DEPOSIT', status: 'COMPLETED' }, _sum: { amount: true } })
 		]);
+		const byCurrency: Record<string, Record<string, number>> = {};
+		const cur = (c: string) => (byCurrency[c] ??= { escrowHeldAmount: 0, releasedGross: 0, platformCommission: 0, providerNetReleased: 0, depositsAmount: 0 });
+		for (const g of escrowHeldByCur ?? []) cur(g.currency).escrowHeldAmount = round2((g._sum.amount ?? 0) - (g._sum.releasedAmount ?? 0));
+		for (const g of escrowReleasedByCur ?? []) { const c = cur(g.currency); c.releasedGross = round2(g._sum.releasedAmount ?? 0); c.platformCommission = round2(g._sum.platformCommissionAmount ?? 0); c.providerNetReleased = round2(g._sum.providerNetReleasedAmount ?? 0); }
+		for (const g of depositsByCur ?? []) cur(g.currency).depositsAmount = round2(g._sum.amount ?? 0);
 		const series = monthBuckets(span, now);
 		const bucket = (d: Date | null | undefined) => (d ? series.find(b => b.month === monthKey(d)) : undefined);
 		for (const r of depositRows) { const b = bucket(r.createdAt); if (b) b.deposits += r.amount; }
@@ -54,6 +64,9 @@ export class AdminFinanceService {
 		for (const g of commissionGroups) affiliateCommissions[g.status] = { count: g._count._all, amount: round2(g._sum.amount ?? 0) };
 		return {
 			currency: 'USD',
+			// the headline totals above are the USD-labelled escrows (and the wallet ledger as stored); byCurrency lists EVERY currency separately and mixedCurrencies says when more than one exists
+			byCurrency,
+			mixedCurrencies: Object.keys(byCurrency).filter(c => Object.values(byCurrency[c]).some(v => v !== 0)).length > 1,
 			totals: {
 				escrowHeldCount: heldEscrows._count._all,
 				escrowHeldAmount: round2((heldEscrows._sum.amount ?? 0) - (heldEscrows._sum.releasedAmount ?? 0)),

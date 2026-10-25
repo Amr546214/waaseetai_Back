@@ -29,6 +29,9 @@ import {
 	getDepositConfirmationTemplate,
 	getProviderContractSignatureTemplate
 } from '../utils/mail.transporter';
+import { debitWalletIfCovered, walletBalanceOf } from '../utils/wallet-balance';
+import { requireCurrency, assertSameCurrency } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 function generateSlug(text: string): string {
 	if (!text) return `slug-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -375,8 +378,10 @@ export class ClientRequestsService {
 		});
 
 		// 4. Create ClientRequest in PostgreSQL
+		const requestCurrency = await platformCurrency();
 		const clientRequest = await prisma.clientRequest.create({
 			data: {
+				currency: requestCurrency,
 				clientProfileId: clientProfile.id,
 				specialtyId: resolvedSpecialty.id,
 				title: dto.title,
@@ -416,6 +421,7 @@ export class ClientRequestsService {
 			await prisma.project.create({
 				data: {
 					id: clientRequest.id, // match ID
+					currency: requestCurrency,
 					title: dto.title,
 					description: dto.description,
 					specialty: resolvedSpecialty.nameAr || resolvedSpecialty.name || 'عام',
@@ -1441,9 +1447,14 @@ export class ClientRequestsService {
 		const durationDays = canonical?.deliveryDays ?? legacy?.deliveryDays ?? 0;
 		if (price <= 0 || durationDays <= 0) throw new AppError('بيانات العرض المالية أو الزمنية غير صالحة', 422);
 
+		// the contract is in the currency of the request AND of the chosen offer; an offer in another currency cannot be selected (no conversion in phase 1)
+		const contractCurrency = requireCurrency(request.currency ?? 'USD', 'عملة الطلب');
+		assertSameCurrency(canonical?.currency ?? legacy?.currency, contractCurrency, 'اختيار العرض');
+
 		const termsSnapshot = {
 			version: 1,
 			projectTitle: request.title,
+			currency: contractCurrency,
 			price,
 			durationDays,
 			milestones: canonical?.milestones || [],
@@ -1492,13 +1503,13 @@ export class ClientRequestsService {
 				where: { projectId: requestId },
 				create: {
 					projectId: requestId, clientId: userId, providerId,
-					offerId: canonical?.id || legacy!.id, price, durationDays,
+					offerId: canonical?.id || legacy!.id, price, currency: contractCurrency, durationDays,
 					phasesCount: canonical?.milestones.length || 1,
 					terms: termsSnapshot, termsVersion: 1,
 					status: ContractStatus.PENDING_CLIENT_SIGNATURE
 				},
 				update: {
-					providerId, offerId: canonical?.id || legacy!.id, price, durationDays,
+					providerId, offerId: canonical?.id || legacy!.id, price, currency: contractCurrency, durationDays,
 					phasesCount: canonical?.milestones.length || 1,
 					terms: termsSnapshot, termsVersion: 1,
 					status: ContractStatus.PENDING_CLIENT_SIGNATURE,
@@ -1841,14 +1852,12 @@ export class ClientRequestsService {
 			const txEscrowAmount = Math.round(contractBeforePayment.price * 100) / 100;
 			const providerGamification = await tx.providerGamification.findUnique({ where: { providerId: contractBeforePayment.providerId }, select: { currentLevelIndex: true } });
 			const escrowSnapshot = buildEscrowSnapshotFromPolicy(providerGamification?.currentLevelIndex, await feePolicyService.active());
-			const walletDebit = await tx.user.updateMany({
-				where: { id: userId, walletBalance: { gte: txEscrowAmount } },
-				data: { walletBalance: { decrement: txEscrowAmount } }
-			});
-			if (walletDebit.count !== 1) {
-				const wallet = await tx.user.findUnique({ where: { id: userId }, select: { walletBalance: true } });
-				const available = Number(wallet?.walletBalance || 0);
-				throw new AppError('رصيد المحفظة غير كافٍ لتمويل الضمان', 402, [{
+			// one currency end to end: the contract's own. The wallet debited is the client's balance IN that currency; there is no conversion in phase 1.
+			const money = requireCurrency(contractBeforePayment.currency, 'عملة العقد');
+			if (!(await debitWalletIfCovered(tx, userId, money, txEscrowAmount))) {
+				const available = await walletBalanceOf(tx, userId, money);
+				throw new AppError(`رصيد المحفظة بعملة العقد (${money}) غير كافٍ لتمويل الضمان`, 402, [{
+					currency: money,
 					required: txEscrowAmount,
 					available,
 					shortfall: Math.max(0, Math.round((txEscrowAmount - available) * 100) / 100)
@@ -1861,7 +1870,7 @@ export class ClientRequestsService {
 					userId,
 					type: 'ESCROW_LOCK',
 					amount: txEscrowAmount,
-					currency: 'USD', // active contract/escrow pricing pipeline is now USD-semantic
+					currency: money,
 					status: 'COMPLETED',
 					paymentMethod: 'WALLET',
 					referenceId: escrowReference,
@@ -1879,6 +1888,7 @@ export class ClientRequestsService {
 					paymentMethod: 'WALLET',
 					paymentReference: escrowReference,
 					fundedAt: new Date(),
+					currency: money,
 					...escrowSnapshot
 				},
 				update: {
@@ -1887,6 +1897,7 @@ export class ClientRequestsService {
 					paymentMethod: 'WALLET',
 					paymentReference: escrowReference,
 					fundedAt: new Date(),
+					currency: money,
 					...escrowSnapshot
 				}
 			});

@@ -13,6 +13,7 @@ import { clientNotifications, clientNotificationFor } from './client-notificatio
 import { adminAudit } from './admin-audit.service';
 import { notifyAdmins } from './admin-notifications.service';
 import { assigneeHolds } from './admin-access.service';
+import { creditWallet } from '../utils/wallet-balance';
 
 // Advisory-only dispute summary — never a verdict. Human admin resolution
 // via resolve() above remains the sole authority on status/fault/money;
@@ -353,9 +354,10 @@ export class DisputeService {
       if (escrowMoved.count !== 1) throw new AppError('تغيّر الضمان أثناء التنفيذ، لم يُنفَّذ أي مبلغ. أعد المحاولة', 409);
 
       if (refund > 0) {
-        await tx.user.update({ where: { id: contract.clientId }, data: { walletBalance: { increment: refund } } });
+        // the refund goes back into the wallet of the ESCROW's own currency (no conversion exists)
+        await creditWallet(tx, contract.clientId, escrow.currency, refund);
         await tx.walletTransaction.create({ data: {
-          userId: contract.clientId, type: 'REFUND', amount: refund, currency: 'USD', status: 'COMPLETED', paymentMethod: 'ESCROW',
+          userId: contract.clientId, type: 'REFUND', amount: refund, currency: escrow.currency, status: 'COMPLETED', paymentMethod: 'ESCROW',
           referenceId: `DISPUTE-REFUND-${id}`, description: 'استرداد من الضمان بقرار نزاع',
           metadata: { disputeId: id, projectId, contractId: contractRef.id, outcome: input.outcome, decidedBy: adminId }
         } });

@@ -198,6 +198,7 @@ model User {
   @@index([lastActiveAt])
   @@index([createdAt])
   @@map("users")
+  walletBalances WalletBalance[]
 }
 
 model UserSession {
@@ -3187,4 +3188,39 @@ model FeePolicyVersion {
 
   @@index([effectiveFrom])
   @@map("fee_policy_versions")
+}
+
+/// Wallet balance in a currency OTHER than USD. The USD balance stays in users.walletBalance (never renamed, never converted).
+model WalletBalance {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currency  String   @db.VarChar(3)
+  balance   Float    @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, currency])
+  @@map("wallet_balances")
+}
+
+/// A RECORDED conversion between two currencies: the rate is supplied by a person with its source and time; nothing in the code derives or invents one. No operation converts without a row here.
+model FxConversion {
+  id             String   @id @default(uuid())
+  fromCurrency   String   @db.VarChar(3)
+  toCurrency     String   @db.VarChar(3)
+  rate           Decimal  @db.Decimal(18, 8)
+  rateSource     String
+  rateAt         DateTime
+  fromAmount     Decimal  @db.Decimal(18, 2)
+  toAmount       Decimal  @db.Decimal(18, 2)
+  feeAmount      Decimal  @default(0) @db.Decimal(18, 2)
+  feeCurrency    String?  @db.VarChar(3)
+  roundingMode   String   @default("HALF_AWAY_FROM_ZERO")
+  referenceType  String
+  referenceId    String
+  recordedById   String
+  createdAt      DateTime @default(now())
+
+  @@index([referenceType, referenceId])
+  @@map("fx_conversions")
 }

@@ -18,11 +18,14 @@ const schema = fs.readFileSync(path.join(ROOT, 'prisma', 'schema.prisma'), 'utf8
 const MONEY = /(amount|price|budget|fee|balance|total|subtotal|discount|cost|payout|spend|gmv|gross|net)/i;
 const models = [...schema.matchAll(/^model (\w+) \{([\s\S]*?)^\}/gm)].map(m => ({ name: m[1], body: m[2] }));
 const fieldsOf = (body: string) => [...body.matchAll(/^[ ]{2}(\w+)[ \t]+(\w+)(\?|\[\])?[ \t]*(.*)$/gm)].map(f => ({ name: f[1], type: f[2], rest: f[4] }));
-const hasCurrency = (body: string) => fieldsOf(body).some(f => f.name === 'currency');
-const untracked = models.filter(m => !hasCurrency(m.body)).flatMap(m => fieldsOf(m.body).filter(f => (f.type === 'Float' || f.type === 'Decimal') && MONEY.test(f.name)).map(f => `${m.name}.${f.name}`)).sort();
+/** models whose every amount names its currency through a pair of currency fields instead of one `currency` column (a conversion row: fromAmount in fromCurrency, toAmount in toCurrency) */
+const CURRENCY_PAIR_MODELS = new Set(['FxConversion']);
+const hasCurrency = (body: string, name = '') => CURRENCY_PAIR_MODELS.has(name) || fieldsOf(body).some(f => f.name === 'currency');
+const untracked = models.filter(m => !hasCurrency(m.body, m.name)).flatMap(m => fieldsOf(m.body).filter(f => (f.type === 'Float' || f.type === 'Decimal') && MONEY.test(f.name)).map(f => `${m.name}.${f.name}`)).sort();
 const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap(e => (e.isDirectory() ? (e.name === 'testing' || e.name === 'e2e' ? [] : walk(path.join(d, e.name))) : e.name.endsWith('.ts') && !/\.(test|spec|pgenv|testutil)\.ts$/.test(e.name) ? [path.join(d, e.name)] : []));
 const literals: Record<string, number> = {};
-for (const f of walk(path.join(ROOT, 'src'))) { const n = (fs.readFileSync(f, 'utf8').match(/['"]USD['"]/g) ?? []).length; if (n) literals[path.relative(path.join(ROOT, 'src'), f)] = n; }
+// utils/currency.ts is where the currency codes are DEFINED (the single place a literal is allowed); every other file must use its constants
+for (const f of walk(path.join(ROOT, 'src')).filter(x => !x.endsWith(path.join('utils', 'currency.ts')))) { const n = (fs.readFileSync(f, 'utf8').match(/['"]USD['"]/g) ?? []).length; if (n) literals[path.relative(path.join(ROOT, 'src'), f)] = n; }
 const current = { moneyFieldsWithoutCurrency: untracked, usdLiteralsPerFile: literals };
 if (process.env.CURRENCY_BASELINE_UPDATE === '1') fs.writeFileSync(BASELINE, JSON.stringify(current, null, 1) + '\n');
 const base = JSON.parse(fs.readFileSync(BASELINE, 'utf8')) as typeof current;

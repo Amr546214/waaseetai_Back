@@ -154,7 +154,7 @@ export class ProjectProgressService {
     try {
       await prisma.projectStage.createMany({ data: items.map((item: any, index: number) => ({
         contractId, stepOrder: item.stepOrder || index + 1, title: item.title, description: item.description,
-        days: item.days, percentage: item.percentage, amount: item.amount,
+        days: item.days, percentage: item.percentage, amount: item.amount, currency: contract.currency,
         status: index === 0 && contract.status === ContractStatus.ACTIVE ? ProjectStageStatus.IN_PROGRESS : ProjectStageStatus.PENDING,
         startedAt: index === 0 && contract.status === ContractStatus.ACTIVE ? (contract.signedAt || new Date()) : null
       })) });

@@ -2,6 +2,7 @@ import { AccountType } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { NOT_CANCELLED, StatsPaging, customerName, distinctOrderRevenue, pageMeta, round2, weeklyTrend } from './marketing-stats.util';
+import { platformCurrency } from './platform-currency';
 
 const providerCouponInclude = { services: { select: { serviceId: true } } } as const;
 
@@ -65,6 +66,7 @@ export class ProviderCouponService {
     const pending = isCompany && needsCompanyApproval({ discountType: input.discountType, discountValue: input.discountValue, maxUses: input.maxUses ?? null });
 
     const coupon = await prisma.coupon.create({ data: {
+      currency: await platformCurrency(),
       providerId, code: input.code, discountType: input.discountType,
       discountValue: input.discountValue, minimumAmount: input.minimumAmount ?? null,
       maxDiscount: input.maxDiscount ?? null, maxUses: input.maxUses ?? null,

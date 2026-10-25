@@ -15,6 +15,8 @@ import { resolveProviderDisplayIdentity } from '../utils/provider-display';
 import { DUPLICATE_PURCHASE_MESSAGE, findActiveServicePurchases } from '../utils/active-purchase.util';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { LEVEL_MATRIX } from '../utils/progression-calculators';
+import { debitWalletIfCovered, walletBalanceOf, walletBalancesOf } from '../utils/wallet-balance';
+import { requireCurrency, assertSameCurrency } from '../utils/currency';
 
 const serviceWhere = MARKET_VISIBLE_WHERE;
 
@@ -288,10 +290,13 @@ export class CartCheckoutService {
     // authoritative, race-safe one is inside confirmPayment()'s transaction).
     const alreadyActive = await findActiveServicePurchases(prisma, userId, ids);
     if (alreadyActive.length) throw new AppError(DUPLICATE_PURCHASE_MESSAGE, 409, alreadyActive.map(p => ({ serviceId: p.serviceCatalogId, projectId: p.id })));
+    // one order, one currency: services priced in different currencies cannot share a cart (no conversion exists in phase 1)
+    const orderCurrency = requireCurrency(services[0]?.currency, 'عملة الخدمة');
+    for (const service of services) assertSameCurrency(service.currency, orderCurrency, 'سلة الطلب');
     const byId = new Map(services.map(service => [service.id, service]));
     const subtotal = services.reduce((sum, service) => sum + Number(service.totalAmount), 0);
     let discount = 0; let couponId: string | undefined; let couponCode: string | undefined; let couponDiscountType: string | undefined; let couponDiscountValue: number | undefined;
-    if (input.couponCode) { const calculated = await this.calculateCoupon(input.couponCode, ids, userId); discount = calculated.discountAmount; couponId = calculated.coupon.id; couponCode = calculated.coupon.code; couponDiscountType = calculated.coupon.discountType; couponDiscountValue = calculated.coupon.discountValue; }
+    if (input.couponCode) { const calculated = await this.calculateCoupon(input.couponCode, ids, userId); if (calculated.coupon.discountType !== 'percentage') assertSameCurrency(calculated.coupon.currency, orderCurrency, 'الكوبون'); discount = calculated.discountAmount; couponId = calculated.coupon.id; couponCode = calculated.coupon.code; couponDiscountType = calculated.coupon.discountType; couponDiscountValue = calculated.coupon.discountValue; }
     const order = await prisma.$transaction(async tx => {
       const count = await tx.order.count();
       const orderNumber = `WS-${new Date().getFullYear()}-${String(count + 1).padStart(6, '0')}`;
@@ -301,7 +306,7 @@ export class CartCheckoutService {
       // instead of the raw shared User columns. Once written, this row is
       // never re-resolved live; a future ProviderProfile name change does not
       // alter an already-created order.
-      const created = await tx.order.create({ data: { userId, orderNumber, status: OrderStatus.PENDING_PAYMENT, subtotal, discount, total: Number((subtotal - discount).toFixed(2)), couponId, couponCode, couponDiscountType, couponDiscountValue, items: { create: input.items.map(item => { const service: any = byId.get(item.modelId)!; const provider = service.provider; const providerCard = resolveProviderCardFields(provider); return { serviceId: service.id, modelId: service.id, title: service.title, providerId: provider.id, providerName: providerCard.name, initials: providerCard.initials, isVerified: providerCard.isVerified, packageId: item.packageId || 'basic', packageName: 'الباقة الأساسية', price: Number(service.totalAmount), deliveryDays: service.totalDays, aiScore: service.aiScore || 0 }; }) } }, include: { items: true } });
+      const created = await tx.order.create({ data: { userId, orderNumber, currency: orderCurrency, status: OrderStatus.PENDING_PAYMENT, subtotal, discount, total: Number((subtotal - discount).toFixed(2)), couponId, couponCode, couponDiscountType, couponDiscountValue, items: { create: input.items.map(item => { const service: any = byId.get(item.modelId)!; const provider = service.provider; const providerCard = resolveProviderCardFields(provider); return { serviceId: service.id, modelId: service.id, title: service.title, providerId: provider.id, providerName: providerCard.name, initials: providerCard.initials, isVerified: providerCard.isVerified, packageId: item.packageId || 'basic', packageName: 'الباقة الأساسية', price: Number(service.totalAmount), deliveryDays: service.totalDays, aiScore: service.aiScore || 0 }; }) } }, include: { items: true } });
       return created;
     });
     return { id: order.id, orderId: order.id, orderNumber: order.orderNumber, status: 'pending_payment', items: order.items.map(item => this.formatOrderItem(item)), subtotal: order.subtotal, discount: order.discount, total: order.total, couponCode: order.couponCode, createdAt: order.createdAt.toISOString() };
@@ -325,7 +330,7 @@ export class CartCheckoutService {
     if (!user) throw new AppError('المستخدم غير موجود', 404);
     const balance = Number(user.walletBalance);
     return [
-      { id: 'wallet', name: 'المحفظة', available: true, balance }
+      { id: 'wallet', name: 'المحفظة', available: true, balance, balances: await walletBalancesOf(prisma, userId) }
     ];
   }
 
@@ -441,11 +446,12 @@ export class CartCheckoutService {
       // dropped since initPayment() (e.g. a concurrent purchase) — nothing
       // created, whole transaction rolls back. Mirrors
       // client-requests.service.ts's depositEscrow() debit exactly.
-      const debited = await tx.user.updateMany({ where: { id: userId, walletBalance: { gte: order.total } }, data: { walletBalance: { decrement: order.total } } });
-      if (debited.count !== 1) {
-        const wallet = await tx.user.findUnique({ where: { id: userId }, select: { walletBalance: true } });
-        const available = Number(wallet?.walletBalance || 0);
-        throw new AppError('رصيد المحفظة غير كافٍ', 402, [{
+      // one currency end to end: the order's own. The wallet debited is the client's balance IN that currency (no conversion in phase 1).
+      const money = requireCurrency(order.currency, 'عملة الطلب');
+      if (!(await debitWalletIfCovered(tx, userId, money, order.total))) {
+        const available = await walletBalanceOf(tx, userId, money);
+        throw new AppError(`رصيد المحفظة بعملة الطلب (${money}) غير كافٍ`, 402, [{
+          currency: money,
           required: order.total,
           available,
           shortfall: Math.max(0, Math.round((order.total - available) * 100) / 100)
@@ -461,7 +467,7 @@ export class CartCheckoutService {
       const duplicate = await findActiveServicePurchases(tx, userId, serviceIds);
       if (duplicate.length) throw new AppError(DUPLICATE_PURCHASE_MESSAGE, 409, duplicate.map(p => ({ serviceId: p.serviceCatalogId, projectId: p.id })));
       try {
-        await tx.walletTransaction.create({ data: { userId, type: 'ORDER_PAYMENT', amount: -order.total, currency: 'USD', status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: context.paymentReference, description: `دفع الطلب ${order.orderNumber}`, metadata: { orderId: order.id } } });
+        await tx.walletTransaction.create({ data: { userId, type: 'ORDER_PAYMENT', amount: -order.total, currency: money, status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: context.paymentReference, description: `دفع الطلب ${order.orderNumber}`, metadata: { orderId: order.id } } });
       } catch (error) {
         if (isDuplicatePaymentReferenceConflict(error)) {
           // A concurrent confirmPayment() for this SAME order (sharing the
@@ -500,7 +506,7 @@ export class CartCheckoutService {
         const itemDiscount = round2(item.price - netPrice);
         const itemStages = allServiceStages.filter(s => s.serviceId === item.serviceId);
         const derived = deriveMarketplaceProjectFields(serviceFacts.find(f => f.id === item.serviceId), itemStages);
-        const projectData = { title: item.title, description: derived.description, specialty: derived.specialty, subSpecialties: [], requirements: derived.requirements, outputs: derived.outputs, attachments: [], deliveryDays: item.deliveryDays, budgetType: 'fixed', budgetFixed: netPrice, status: ProjectStatus.IN_PROGRESS, clientId: userId, providerId: item.providerId, serviceCatalogId: item.serviceId };
+        const projectData = { title: item.title, description: derived.description, specialty: derived.specialty, subSpecialties: [], requirements: derived.requirements, outputs: derived.outputs, attachments: [], deliveryDays: item.deliveryDays, budgetType: 'fixed', budgetFixed: netPrice, currency: money, status: ProjectStatus.IN_PROGRESS, clientId: userId, providerId: item.providerId, serviceCatalogId: item.serviceId };
         // The pre-contract negotiation (market «طلب تفاوض») already opened an OPEN project + room for this client / provider / service. When the order forms the real
         // project it BECOMES that project (same id), so the room, its messages and its notification links carry over: no second room, no lost log.
         const negotiation = await tx.project.findFirst({ where: { clientId: userId, providerId: item.providerId, serviceCatalogId: item.serviceId, status: ProjectStatus.OPEN, contract: { is: null } }, orderBy: { createdAt: 'desc' }, select: { id: true } });
@@ -509,24 +515,24 @@ export class CartCheckoutService {
         const stages = allServiceStages.filter(s => s.serviceId === item.serviceId);
         const phasesCount = stages.length || 1;
 
-        const contract = await tx.contract.create({ data: { projectId: project.id, clientId: userId, providerId: item.providerId, price: netPrice, durationDays: item.deliveryDays, phasesCount, status: ContractStatus.ACTIVE, signedAt: new Date(),
+        const contract = await tx.contract.create({ data: { projectId: project.id, clientId: userId, providerId: item.providerId, price: netPrice, currency: money, durationDays: item.deliveryDays, phasesCount, status: ContractStatus.ACTIVE, signedAt: new Date(),
           // only when a coupon applied: the invoice shows the service value, the coupon discount and the total paid
           ...(itemDiscount > 0 ? { terms: { source: 'marketplace_order', orderId: order.id, orderNumber: order.orderNumber, couponCode: order.couponCode ?? null, listPrice: item.price, discount: itemDiscount, netPrice } } : {}) } });
 
         // fee policy v2: the same snapshot as a request escrow (the provider's level + commission now), so marketplace orders release net too
         const itemProviderGamification = await tx.providerGamification.findUnique({ where: { providerId: item.providerId }, select: { currentLevelIndex: true } });
-        await tx.escrow.create({ data: { projectId: project.id, amount: netPrice, status: EscrowStatus.HELD, paymentMethod: 'WALLET', paymentReference: context.paymentReference || null, fundedAt: new Date(), ...buildEscrowSnapshotFromPolicy(itemProviderGamification?.currentLevelIndex, await feePolicyService.active()) } });
+        await tx.escrow.create({ data: { projectId: project.id, amount: netPrice, currency: money, status: EscrowStatus.HELD, paymentMethod: 'WALLET', paymentReference: context.paymentReference || null, fundedAt: new Date(), ...buildEscrowSnapshotFromPolicy(itemProviderGamification?.currentLevelIndex, await feePolicyService.active()) } });
 
         if (stages.length > 0) {
           const stageAmounts = splitByWeights(stages.map(st => Number(st.computedAmount)), netPrice);
           await tx.projectStage.createMany({ data: stages.map((stage, index) => ({
             contractId: contract.id, stepOrder: stage.stepOrder, title: stage.title, description: stage.description,
-            days: stage.deliveryDays, percentage: stage.percentage, amount: stageAmounts[index],
+            days: stage.deliveryDays, percentage: stage.percentage, amount: stageAmounts[index], currency: money,
             status: index === 0 ? ProjectStageStatus.IN_PROGRESS : ProjectStageStatus.PENDING,
             startedAt: index === 0 ? new Date() : null
           })) });
         } else {
-          await tx.projectStage.create({ data: { contractId: contract.id, stepOrder: 1, title: 'المرحلة الأولى', description: 'تسليم المشروع النهائي', days: item.deliveryDays, percentage: 100, amount: netPrice, status: ProjectStageStatus.IN_PROGRESS, startedAt: new Date() } });
+          await tx.projectStage.create({ data: { contractId: contract.id, stepOrder: 1, title: 'المرحلة الأولى', description: 'تسليم المشروع النهائي', days: item.deliveryDays, percentage: 100, amount: netPrice, currency: money, status: ProjectStageStatus.IN_PROGRESS, startedAt: new Date() } });
         }
 
         createdProjectIds.push(project.id);

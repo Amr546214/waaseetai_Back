@@ -3,6 +3,7 @@ import { CreateProjectDto } from '../dtos/project.dto';
 import { ProjectStatus } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
+import { platformCurrency } from './platform-currency';
 
 export class ProjectService {
   /**
@@ -15,6 +16,7 @@ export class ProjectService {
 	  ))).filter((url): url is string => Boolean(url));
       const project = await prisma.project.create({
         data: {
+          currency: await platformCurrency(),
           clientId,
           title: data.title,
           description: data.description,

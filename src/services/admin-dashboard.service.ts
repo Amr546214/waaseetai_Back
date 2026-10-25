@@ -2,6 +2,7 @@ import { AccountType, AccreditationStatus, DisputeStatus, EscrowStatus, KYCStatu
 import { platformZone, startOfMonthInZone, startOfPreviousMonthInZone } from '../utils/platform-time';
 import { prisma } from '../config/db';
 import { deliveryCompletedProject } from './settlement-state.service';
+import { LEGACY_CURRENCY } from '../utils/currency';
 
 // Admin dashboard aggregates. Every number comes from a COUNT / SUM / GROUP over the real tables — nothing is a fixed figure, a percentage with no
 // base, or a placeholder. With no rows every figure is 0 and every list is []. Revenue = the platform commission recorded on escrows
@@ -57,14 +58,14 @@ export class AdminDashboardService {
 			prisma.project.count({ where: { status: { in: ACTIVE_PROJECT_STATUSES } } }),
 			prisma.project.count({ where: deliveryCompletedProject() }),
 			prisma.clientRequest.count({ where: { status: 'OPEN' } }),
-			prisma.escrow.aggregate({ _sum: { platformCommissionAmount: true } }),
-			prisma.escrow.aggregate({ _sum: { platformCommissionAmount: true }, where: { platformCommissionAmount: { gt: 0 }, updatedAt: { gte: monthStart } } }),
-			prisma.escrow.aggregate({ _sum: { amount: true }, where: { status: EscrowStatus.HELD } }),
+			prisma.escrow.aggregate({ _sum: { platformCommissionAmount: true }, where: { currency: LEGACY_CURRENCY } }),
+			prisma.escrow.aggregate({ _sum: { platformCommissionAmount: true }, where: { currency: LEGACY_CURRENCY, platformCommissionAmount: { gt: 0 }, updatedAt: { gte: monthStart } } }),
+			prisma.escrow.aggregate({ _sum: { amount: true }, where: { status: EscrowStatus.HELD, currency: LEGACY_CURRENCY } }),
 			prisma.dispute.count({ where: { status: { in: OPEN_DISPUTES } } }),
 			prisma.dispute.count({ where: { status: { in: OPEN_DISPUTES }, createdAt: { lt: sevenDaysAgo } } }),
 			prisma.supportTicket.count({ where: { status: { in: OPEN_TICKETS } } }),
 			prisma.withdrawal.count({ where: { status: WithdrawalStatus.PENDING } }),
-			prisma.withdrawal.aggregate({ _sum: { amount: true }, where: { status: WithdrawalStatus.PENDING, currency: 'USD' } }),
+			prisma.withdrawal.aggregate({ _sum: { amount: true }, where: { status: WithdrawalStatus.PENDING, currency: LEGACY_CURRENCY } }),
 			prisma.profileModificationRequest.count({ where: { status: ModificationStatus.PENDING_HUMAN_REVIEW } }),
 			prisma.providerProfile.count({ where: { kycStatus: KYCStatus.PENDING } }),
 			prisma.clientOnboarding.count({ where: { status: OnboardingStatus.PENDING } }),

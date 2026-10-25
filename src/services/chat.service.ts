@@ -125,6 +125,7 @@ class ChatService {
         project = await prisma.project.create({
           data: {
             id: clientRequest.id,
+            currency: clientRequest.currency,
             title: clientRequest.title,
             description: clientRequest.description,
             specialty: 'عام',

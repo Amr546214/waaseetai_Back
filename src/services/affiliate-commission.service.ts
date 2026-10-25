@@ -146,7 +146,7 @@ export async function createCommissionsForStageReleaseEvent(
   if (activeDispute) return created;
 
   // the marketer table of the policy version the contract's escrow was locked under (a later policy version never changes an existing contract's marketer rates)
-  const escrowPolicy = await tx.escrow.findFirst({ where: { projectId: contract.projectId }, select: { feePolicyId: true, createdAt: true } });
+  const escrowPolicy = await tx.escrow.findFirst({ where: { projectId: contract.projectId }, select: { feePolicyId: true, createdAt: true, currency: true } });
   // An escrow without a stored policy id is read as the baseline (v1 = the ladder in force since the official workbooks, 2026-10-11). One locked BEFORE that date was created under an older ladder
   // that was never stored on the row, so its marketer terms cannot be proven: say so (the baseline is still what was always applied; nothing is invented or recomputed).
   if (escrowPolicy && !escrowPolicy.feePolicyId && escrowPolicy.createdAt && escrowPolicy.createdAt.getTime() < LADDER_FINAL_AT) logger.warn(`[affiliate] project ${contract.projectId}: escrow predates the final marketer ladder and stores no policy id; its marketer terms are not provable, the baseline ladder is applied`);
@@ -185,8 +185,8 @@ export async function createCommissionsForStageReleaseEvent(
           referredUserId: referral.referredUserId,
           type: CommissionType.STAGE_RELEASE,
           amount,
-          // Explicit per-row currency (USD), never the database default.
-          currency: 'USD',
+          // Explicit per-row currency: the ESCROW's own (the commission is a share of what that escrow released), never the database default.
+          currency: escrowPolicy?.currency ?? 'USD',
           // The eligibility check for this release event (stage actually
           // released, project not currently disputed) has already run
           // synchronously above — there is no separate manual-approval step
