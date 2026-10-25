@@ -118,3 +118,30 @@ test('PG: withdrawing access with an old session and an open socket - a personal
 	assert.equal((await e.call('GET', `/admin/projects/${w.id}`, st.user.id)).status, 403);
 	setSocketServer(null);
 });
+
+test('PG: base roles - ensureBaseRoles adds the five design roles once, never duplicates, never overwrites an edited role, places nobody; an invitation to each saves that roleId and the section scope', opts, async () => {
+	const e = await env(); const { ADMIN_ROLE_TEMPLATES } = await import('../config/admin-permissions'); const { adminRolesService } = await import('./admin-roles.service');
+	const names = ADMIN_ROLE_TEMPLATES.map(t => t.name);
+	await e.prisma.adminRole.deleteMany({ where: { name: { in: names } } });
+	// an existing, EDITED role with a template's name must survive untouched
+	const edited = await e.prisma.adminRole.create({ data: { name: 'مدير فريق', nameKey: 'مدير فريق', description: 'معدّل', color: '#112233', permissions: ['users.view'], createdById: e.sa.id } });
+	const staffBefore = await e.prisma.adminStaff.count();
+	const r1 = await adminRolesService.ensureBaseRoles(e.sa.id);
+	assert.deepEqual(r1.existing, ['مدير فريق']); assert.equal(r1.created.length, 4);
+	const r2 = await adminRolesService.ensureBaseRoles(e.sa.id); assert.equal(r2.created.length, 0);
+	for (const n of names) assert.equal(await e.prisma.adminRole.count({ where: { name: n } }), 1, n);
+	const still = await e.prisma.adminRole.findUniqueOrThrow({ where: { id: edited.id } }); assert.deepEqual(still.permissions, ['users.view']); assert.equal(still.color, '#112233'); assert.equal(still.version, 1);
+	assert.equal(await e.prisma.adminStaff.count(), staffBefore);
+	for (const t of ADMIN_ROLE_TEMPLATES.filter(t => t.name !== 'مدير فريق')) assert.deepEqual((await e.prisma.adminRole.findFirstOrThrow({ where: { name: t.name } })).permissions, [...t.permissions].sort(), t.name);
+	// the roles API lists them all (what the invitation dialog shows) and none is a SUPER_ADMIN role
+	const list = await e.call('GET', '/admin/team/roles', e.sa.id); assert.equal(list.status, 200);
+	for (const n of names) assert.ok(list.json.data.some((r: any) => r.name === n), n);
+	assert.ok(!list.json.data.some((r: any) => /super/i.test(r.name)));
+	// invitation per role: the saved roleId is the chosen one, and a section scope is kept
+	for (const n of names) {
+		const role = await e.prisma.adminRole.findFirstOrThrow({ where: { name: n } }); const email = `base-${randomUUID().slice(0, 8)}@pg.test`;
+		const c = await e.call('POST', '/admin/team/invites', e.sa.id, { email, fullName: 'مدعو اختبار', roleId: role.id, departments: ['users'] }); assert.equal(c.status, 201, n);
+		const inv = await e.prisma.adminInvite.findUniqueOrThrow({ where: { id: c.json.data.id } }); assert.equal(inv.roleId, role.id); assert.deepEqual(inv.departments, ['users']);
+	}
+	assert.equal(await e.prisma.adminStaff.count(), staffBefore);
+});
