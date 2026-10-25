@@ -205,7 +205,7 @@ test('depositEscrow (fee policy v2): the old 13% escrow-lock charge (VAT 7% + pl
 });
 
 test('depositEscrow (fee policy v2): the escrow row and the ESCROW_LOCK transaction carry the v2 snapshot and a zero escrow fee', () => {
-  assert.match(clientRequestsSource, /const escrowSnapshot = buildEscrowSnapshot\(providerGamification\?\.currentLevelIndex\);/);
+  assert.match(clientRequestsSource, /const escrowSnapshot = buildEscrowSnapshotFromPolicy\(providerGamification\?\.currentLevelIndex, await feePolicyService\.active\(\)\);/);
   assert.match(clientRequestsSource, /\.\.\.escrowSnapshot/);
   assert.match(clientRequestsSource, /feePolicyVersion: ESCROW_FEE_POLICY_V2, escrowFee: 0, contractPrice: txEscrowAmount/);
 });
