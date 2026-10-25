@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { logger } from '../config/logger';
 import { feePolicyService } from './fee-policy.service';
 import { Prisma, CommissionType, CommissionStatus, DisputeStatus } from '@prisma/client';
 import type { MarketerCommissionNotice } from './marketer-notifications.service';
@@ -71,6 +72,8 @@ function isDuplicateCommissionConflict(error: unknown): boolean {
   return COMMISSION_DEDUP_FIELDS.every(f => candidates.includes(f));
 }
 
+/** the day the official workbook ladders (#101) took effect */
+const LADDER_FINAL_AT = Date.parse('2026-10-11T00:00:00Z');
 export interface AffiliateCommissionCalculation {
   level: number;
   percentage: number;
@@ -143,7 +146,10 @@ export async function createCommissionsForStageReleaseEvent(
   if (activeDispute) return created;
 
   // the marketer table of the policy version the contract's escrow was locked under (a later policy version never changes an existing contract's marketer rates)
-  const escrowPolicy = await tx.escrow.findFirst({ where: { projectId: contract.projectId }, select: { feePolicyId: true } });
+  const escrowPolicy = await tx.escrow.findFirst({ where: { projectId: contract.projectId }, select: { feePolicyId: true, createdAt: true } });
+  // An escrow without a stored policy id is read as the baseline (v1 = the ladder in force since the official workbooks, 2026-10-11). One locked BEFORE that date was created under an older ladder
+  // that was never stored on the row, so its marketer terms cannot be proven: say so (the baseline is still what was always applied; nothing is invented or recomputed).
+  if (escrowPolicy && !escrowPolicy.feePolicyId && escrowPolicy.createdAt && escrowPolicy.createdAt.getTime() < LADDER_FINAL_AT) logger.warn(`[affiliate] project ${contract.projectId}: escrow predates the final marketer ladder and stores no policy id; its marketer terms are not provable, the baseline ladder is applied`);
   const ladder = (await feePolicyService.byId(escrowPolicy?.feePolicyId)).payload.marketerCommissionByLevel;
   const referrals = await tx.referral.findMany({
     where: { referredUserId: contract.clientId },

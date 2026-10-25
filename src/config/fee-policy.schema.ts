@@ -22,8 +22,8 @@ export const feePolicyPayloadSchema = z.object({
 	marketerCommissionByLevel: ladder(FEE_LIMITS.marketerCommission.min, FEE_LIMITS.marketerCommission.max, 'عمولة الوسيط', 'up'),
 	depositFeePercent: table(DEPOSIT_METHODS, FEE_LIMITS.depositFee.min, FEE_LIMITS.depositFee.max, 'رسوم الإيداع'),
 	marketerWithdrawalFeePercent: table(WITHDRAWAL_METHODS, FEE_LIMITS.withdrawalFee.min, FEE_LIMITS.withdrawalFee.max, 'رسوم سحب الوسيط'),
-	minMarketerPayout: z.number().finite().min(FEE_LIMITS.minPayout.min, 'الحد الأدنى لسحب الوسيط غير صالح').max(FEE_LIMITS.minPayout.max, 'الحد الأدنى لسحب الوسيط كبير جدًا'),
-	minProviderPayout: z.number().finite().min(FEE_LIMITS.minPayout.min, 'الحد الأدنى لسحب مقدم الخدمة غير صالح').max(FEE_LIMITS.minPayout.max, 'الحد الأدنى لسحب مقدم الخدمة كبير جدًا'),
+	minMarketerPayout: z.number().finite().min(FEE_LIMITS.minPayout.min, 'الحد الأدنى لسحب الوسيط غير صالح').max(FEE_LIMITS.minPayout.max, 'الحد الأدنى لسحب الوسيط كبير جدًا').refine(v => Math.abs(v * 100 - Math.round(v * 100)) < 1e-6, 'الحد الأدنى لسحب الوسيط: خانتان عشريتان كحد أقصى'),
+	minProviderPayout: z.number().finite().min(FEE_LIMITS.minPayout.min, 'الحد الأدنى لسحب مقدم الخدمة غير صالح').max(FEE_LIMITS.minPayout.max, 'الحد الأدنى لسحب مقدم الخدمة كبير جدًا').refine(v => Math.abs(v * 100 - Math.round(v * 100)) < 1e-6, 'الحد الأدنى لسحب مقدم الخدمة: خانتان عشريتان كحد أقصى'),
 }).strict();
 export type FeePolicyPayload = z.infer<typeof feePolicyPayloadSchema>;
 
