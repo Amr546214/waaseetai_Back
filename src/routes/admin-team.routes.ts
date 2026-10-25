@@ -47,6 +47,7 @@ router.get('/access/me', requireAdminAccount, ok(async req => {
 
 // --- registry (SUPER_ADMIN) ---
 router.get('/permissions', requireSuperAdmin, ok(async () => ({
+	superAdminCount: await prisma.user.count({ where: { accountType: 'SUPER_ADMIN', status: 'ACTIVE', isBanned: false } }),
 	permissions: ADMIN_PERMISSIONS, departments: ADMIN_DEPARTMENTS, permissionDepartment: PERMISSION_DEPARTMENT, groups: ADMIN_GROUP_LABELS, templates: ADMIN_ROLE_TEMPLATES, superAdminOnly: SUPER_ADMIN_ONLY_CAPABILITIES, ambiguities: AMBIGUITIES,
 })));
 
