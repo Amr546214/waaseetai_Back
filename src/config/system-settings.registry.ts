@@ -51,7 +51,6 @@ export const SESSION_IDLE_ALLOWED = { min: 5, max: 10080 } as const;
 export const SESSION_MAX_HOURS_ALLOWED = [8, 24, 48, 168] as const;
 
 const AI_SCOPE = 'تغييرات الذكاء الاصطناعي والمزوّد والمفاتيح و Cloud Run نطاق منفصل: يُجرد هنا فقط ولا يُعدَّل تشغيله من هذه الصفحة.';
-const FEE_POLICY = 'تُحدَّد بسياسة الرسوم v2 المثبتة في الكود (قرار مالي موثّق) وتُعرض في «الباقات والرسوم»؛ جعلها قابلة للتعديل من هنا يحتاج قرارًا بمصدر الحقيقة (الإعداد أم السياسة).';
 
 export const SETTING_DEFS: readonly SettingDef[] = [
 	// ───────────── general ─────────────
@@ -116,11 +115,7 @@ export const SETTING_DEFS: readonly SettingDef[] = [
 	{ key: 'baseCurrency', tab: 'finance', label: 'العملة الأساسية', description: 'عملة السجلات الجديدة. لا تغيّر مبالغ أو عملات سجلات قائمة.', status: 'enforced', schema: z.enum(['USD', 'SAR']), default: 'USD', allowed: ['USD', 'SAR'], labels: { USD: 'دولار أمريكي (USD)', SAR: 'ريال سعودي (SAR)' },
 		read: 'SUPER', write: 'SUPER', effect: 'immediate', consumers: ['فحص الجاهزية (currency-readiness) يرفض أي تغيير الآن'], proof: 'system-settings.pg.test: baseCurrency change refused with blockers', pages: ['P-AD-020', 'P-AD-021'] },
 	{ key: 'paymentGateway', tab: 'finance', label: 'بوابة الدفع', description: 'البوابة النشطة لمعالجة المدفوعات.', status: 'readonly', reason: 'PayPal هي البوابة الوحيدة المنفّذة؛ بوابات أخرى غير موجودة في الخادم.', read: 'SUPER', write: 'SUPER', consumers: ['paypal-finance.service'], pages: ['P-AD-020'], current: () => ({ value: 'PayPal', source: 'البوابة المنفّذة' }) },
-	{ key: 'transactionFee', tab: 'finance', label: 'رسوم إتمام الصفقة', description: 'نسبة تُخصم من قيمة المشروع.', status: 'blocked', reason: FEE_POLICY, unit: '%', read: 'SUPER', write: 'SUPER', consumers: [], pages: ['P-AD-021'] },
-	{ key: 'withdrawalFee', tab: 'finance', label: 'رسوم السحب', description: 'نسبة على كل سحب.', status: 'blocked', reason: FEE_POLICY, unit: '%', read: 'SUPER', write: 'SUPER', consumers: [], pages: ['P-AD-021'] },
-	{ key: 'minWithdrawal', tab: 'finance', label: 'الحد الأدنى للسحب', description: 'أدنى مبلغ للسحب.', status: 'blocked', reason: FEE_POLICY, read: 'SUPER', write: 'SUPER', consumers: [], pages: ['P-AD-021'] },
 	{ key: 'escrowHoldHours', tab: 'finance', label: 'مدة احتجاز الضمان / الإفراج التلقائي', description: 'ساعات من قبول التسليم.', status: 'blocked', reason: 'الإفراج في النظام يتم بالموافقة على كل مرحلة؛ لا توجد مهمة إفراج تلقائي بعد مدة، فلا يُحفظ مفتاح بلا أثر.', unit: 'ساعة', read: 'SUPER', write: 'SUPER', consumers: [], pages: ['P-AD-020', 'P-AD-021'] },
-	{ key: 'clientCashback', tab: 'finance', label: 'نسبة كاش باك (طالب)', description: 'على كل مشروع مكتمل.', status: 'blocked', reason: FEE_POLICY, unit: '%', read: 'SUPER', write: 'SUPER', consumers: [], pages: ['P-AD-021'] },
 	{ key: 'futureBilling', tab: 'finance', label: 'تجهيز فوترة مستقبلية (الزكاة / المرجع الحكومي)', description: 'غير مفعّل في V1.', status: 'blocked', reason: 'تجهيز مستقبلي (Phase 2) غير منفّذ.', read: 'SUPER', write: 'SUPER', consumers: [], pages: ['P-AD-020', 'P-AD-021'] },
 	// ───────────── regional ─────────────
 	{ key: 'defaultTimezone', tab: 'regional', label: 'المنطقة الزمنية', description: 'المنطقة التي تُعرض بها الأوقات في الواجهات (لمن لم يحفظ منطقة خاصة به) وتُقطع بها أيام وشهور تقارير الإدارة ويُكتب بها وقت ملفات CSV. الأوقات المخزّنة تبقى UTC. «حسب جهاز المستخدم» هو السلوك الحالي.', status: 'enforced',

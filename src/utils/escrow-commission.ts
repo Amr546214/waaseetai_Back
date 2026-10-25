@@ -11,6 +11,8 @@ export const ESCROW_FEE_POLICY_V2 = 2;
 const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
 
 export interface EscrowSnapshotFields {
+  /** the fee policy version in force when the escrow was locked (see fee_policy_versions) */
+  feePolicyId?: string;
   feePolicyVersion: number;
   providerCommissionRateSnapshot: number;
   providerCommissionLevelSnapshot: number;
@@ -22,6 +24,16 @@ export function buildEscrowSnapshot(providerLevelIndex: number | null | undefine
   const level = Number.isInteger(providerLevelIndex) ? (providerLevelIndex as number) : MIN_LEVEL;
   const def = levelDef('PROVIDER', level);
   return { feePolicyVersion: ESCROW_FEE_POLICY_V2, providerCommissionRateSnapshot: def.percent, providerCommissionLevelSnapshot: def.level, providerCommissionSnapshotAt: now };
+}
+
+/**
+ * The snapshot for a NEW escrow from the fee policy version in force now: the provider's level and that level's commission AS THE POLICY SAYS, plus the policy id so the contract can always
+ * be explained later. The rate is still frozen on the escrow row itself; a later policy version never touches it.
+ */
+export function buildEscrowSnapshotFromPolicy(providerLevelIndex: number | null | undefined, policy: { id: string; payload: { providerCommissionByLevel: readonly number[] } }, now: Date = new Date()): EscrowSnapshotFields {
+  const level = Number.isInteger(providerLevelIndex) ? (providerLevelIndex as number) : MIN_LEVEL;
+  const def = levelDef('PROVIDER', level);
+  return { feePolicyVersion: ESCROW_FEE_POLICY_V2, feePolicyId: policy.id, providerCommissionRateSnapshot: policy.payload.providerCommissionByLevel[def.level - 1], providerCommissionLevelSnapshot: def.level, providerCommissionSnapshotAt: now };
 }
 
 /** Commission on a cumulative gross released amount. */

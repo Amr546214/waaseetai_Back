@@ -1,10 +1,11 @@
 import { CommissionStatus, WithdrawalStatus } from '@prisma/client';
+import { feePolicyService } from './fee-policy.service';
 import { prisma } from '../config/db';
 import { readAffiliatePaypalEmail } from '../utils/affiliate-payout';
 import { IN_FLIGHT_WITHDRAWAL_STATUSES, RESERVING_WITHDRAWAL_STATUSES } from '../utils/withdrawal-reservation';
 import { isProviderIdentity, MARKETER_PAYPAL_REQUIRED_MESSAGE } from './withdrawal.service';
 
-/** The same 300 floor createForMarketer() enforces for everyone (a higher per-affiliate minimum wins). */
+/** The built-in baseline floor (the fee policy's minMarketerPayout starts at this value and may be rescheduled; this constant is only the fallback). */
 export const MARKETER_MIN_WITHDRAWAL_FLOOR = 300;
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -31,7 +32,9 @@ export const marketerWalletService = {
     const paidWithdrawals = withdrawn([WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED]);
     const holding = withdrawn(RESERVING_WITHDRAWAL_STATUSES);
     const withdrawableBalance = Math.max(0, round2(approvedEarnings - holding));
-    const minimumWithdrawal = Math.max(affiliate?.minimumPayoutAmount ?? MARKETER_MIN_WITHDRAWAL_FLOOR, MARKETER_MIN_WITHDRAWAL_FLOOR);
+    // the floor is the minimum marketer payout of the fee policy in force (baseline 300); a higher per-affiliate minimum still wins
+    const floor = (await feePolicyService.active()).payload.minMarketerPayout;
+    const minimumWithdrawal = Math.max(affiliate?.minimumPayoutAmount ?? floor, floor);
 
     // Why a withdrawal cannot be requested right now, shown next to the disabled button (null = it can).
     let withdrawBlockedReason: string | null = null;

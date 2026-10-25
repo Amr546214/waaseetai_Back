@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { feePolicyService } from './fee-policy.service';
 import { Prisma, CommissionType, CommissionStatus, DisputeStatus } from '@prisma/client';
 import type { MarketerCommissionNotice } from './marketer-notifications.service';
 import { resolveAffiliateCommissionPercentage } from '../config/affiliate-levels.config';
@@ -82,8 +83,10 @@ export interface AffiliateCommissionCalculation {
  * Rounds to 2 decimal places (currency-safe rounding), matching how money
  * amounts are already handled elsewhere in this codebase.
  */
-export function calculateAffiliateCommission(level: number, baseAmount: number): AffiliateCommissionCalculation {
-  const percentage = resolveAffiliateCommissionPercentage(level);
+export function calculateAffiliateCommission(level: number, baseAmount: number, ladder?: readonly number[]): AffiliateCommissionCalculation {
+  // `ladder` = the marketer commission table of the fee policy the contract's escrow was locked under; without one, today's built-in table
+  const valid = Number.isInteger(level) && level >= 1 && level <= (ladder?.length ?? 15);
+  const percentage = ladder ? ladder[valid ? level - 1 : 0] : resolveAffiliateCommissionPercentage(level);
   const amount = Math.round(baseAmount * (percentage / 100) * 100) / 100;
   return { level, percentage, amount };
 }
@@ -139,6 +142,9 @@ export async function createCommissionsForStageReleaseEvent(
   });
   if (activeDispute) return created;
 
+  // the marketer table of the policy version the contract's escrow was locked under (a later policy version never changes an existing contract's marketer rates)
+  const escrowPolicy = await tx.escrow.findFirst({ where: { projectId: contract.projectId }, select: { feePolicyId: true } });
+  const ladder = (await feePolicyService.byId(escrowPolicy?.feePolicyId)).payload.marketerCommissionByLevel;
   const referrals = await tx.referral.findMany({
     where: { referredUserId: contract.clientId },
     include: { affiliate: { select: { id: true, level: true, userId: true } } }
@@ -157,7 +163,7 @@ export async function createCommissionsForStageReleaseEvent(
     // has its own independent DB read of the Referral/AffiliateProfile rows.
     if (referral.affiliate.userId === referral.referredUserId) continue;
 
-    const { percentage, amount, level } = calculateAffiliateCommission(referral.affiliate.level, releasedAmount);
+    const { percentage, amount, level } = calculateAffiliateCommission(referral.affiliate.level, releasedAmount, ladder);
 
     // Exactly-once WITHOUT aborting the caller's transaction: a duplicate insert that raises a unique violation inside a PostgreSQL transaction puts the whole
     // transaction into the aborted state (25P02) even when the error is caught, so the rest of the stage approval would fail. INSERT ... ON CONFLICT DO NOTHING

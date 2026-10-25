@@ -22,8 +22,8 @@ test('PG: only a SUPER_ADMIN creates / edits roles and grants permissions - no o
 	assert.equal(ok.status, 201); assert.equal(ok.json.data.permissions[0], 'users.view');
 	// a SUPER_ADMIN works with no staff row and no other table: its type, read from the server, is the authority
 	assert.equal(await e.prisma.adminStaff.count({ where: { userId: e.sa.id } }), 0);
-	const reg = await e.call('GET', '/admin/team/permissions', e.sa.id); assert.equal(reg.status, 200); assert.ok(reg.json.data.superAdminCount >= 1); assert.equal(reg.json.data.permissions.length, 30);
-	const me = await e.call('GET', '/admin/team/access/me', e.sa.id); assert.equal(me.json.data.state, 'SUPER_ADMIN'); assert.equal(me.json.data.permissions.length, 30);
+	const reg = await e.call('GET', '/admin/team/permissions', e.sa.id); assert.equal(reg.status, 200); assert.ok(reg.json.data.superAdminCount >= 1); assert.equal(reg.json.data.permissions.length, 32);
+	const me = await e.call('GET', '/admin/team/access/me', e.sa.id); assert.equal(me.json.data.state, 'SUPER_ADMIN'); assert.equal(me.json.data.permissions.length, 32);
 });
 
 test('PG: no mass assignment and no escalation - privileged fields are refused, and nobody (staff or SUPER_ADMIN) can create a SUPER_ADMIN or promote an account type through these routes', opts, async () => {
@@ -59,6 +59,7 @@ test('PG: a refused caller never reaches a handler: an ADMIN account with no rol
 
 test('PG: read, approve, reject and payout are separate permissions; finance.read opens no withdrawal action; a read-only role writes nothing', opts, async () => {
 	const e = await env();
+	const wdBefore = await e.prisma.withdrawal.count();
 	const reader = (await mkStaff(e, ['withdrawals.review'], 'wr')).user, approver = (await mkStaff(e, ['withdrawals.review', 'withdrawals.approve'], 'wa')).user, finance = (await mkStaff(e, ['finance.read'], 'fr')).user;
 	const rejecter = (await mkStaff(e, ['withdrawals.review', 'withdrawals.reject'], 'wj')).user, payer = (await mkStaff(e, ['withdrawals.review', 'payouts.send'], 'wp')).user;
 	const status = async (who: string, m: string, url: string) => (await e.call(m, url, who, {})).status;
@@ -78,7 +79,7 @@ test('PG: read, approve, reject and payout are separate permissions; finance.rea
 	const onlyResolve = (await mkStaff(e, ['disputes.view', 'disputes.resolve'], 'dr')).user, both = (await mkStaff(e, ['disputes.view', 'disputes.resolve', 'payouts.send'], 'db')).user;
 	assert.equal(await status(onlyResolve.id, 'POST', '/admin/disputes/x/resolve-financial'), 403);
 	assert.notEqual(await status(both.id, 'POST', '/admin/disputes/x/resolve-financial'), 403);
-	assert.equal(await e.prisma.withdrawal.count(), 0); // nothing real was executed
+	assert.equal(await e.prisma.withdrawal.count(), wdBefore); // nothing real was executed
 });
 
 test('PG: withdrawing a permission, editing a role or suspending a member applies to the NEXT request (an old session / tab changes nothing)', opts, async () => {

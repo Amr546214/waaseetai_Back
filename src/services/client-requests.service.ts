@@ -1,5 +1,6 @@
 import { selfHireError } from '../utils/self-dealing';
-import { buildEscrowSnapshot, ESCROW_FEE_POLICY_V2 } from '../utils/escrow-commission';
+import { buildEscrowSnapshotFromPolicy, ESCROW_FEE_POLICY_V2 } from '../utils/escrow-commission';
+import { feePolicyService } from './fee-policy.service';
 import { prisma } from '../config/db';
 import { deriveRequestStage, offerActionBlock, REQUEST_STAGE_GROUP, REQUEST_STAGE_LABEL } from '../utils/request-lifecycle';
 import { clientOfferCounterService } from './client-offer-counter.service';
@@ -1839,7 +1840,7 @@ export class ClientRequestsService {
 			// so a later level change never alters this contract.
 			const txEscrowAmount = Math.round(contractBeforePayment.price * 100) / 100;
 			const providerGamification = await tx.providerGamification.findUnique({ where: { providerId: contractBeforePayment.providerId }, select: { currentLevelIndex: true } });
-			const escrowSnapshot = buildEscrowSnapshot(providerGamification?.currentLevelIndex);
+			const escrowSnapshot = buildEscrowSnapshotFromPolicy(providerGamification?.currentLevelIndex, await feePolicyService.active());
 			const walletDebit = await tx.user.updateMany({
 				where: { id: userId, walletBalance: { gte: txEscrowAmount } },
 				data: { walletBalance: { decrement: txEscrowAmount } }

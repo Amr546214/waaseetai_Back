@@ -71,6 +71,7 @@ function fakeTx(opts: { referrals?: any[]; dispute?: boolean; createImpl?: (a: a
   const calls = { dispute: 0, referral: [] as any[], create: [] as any[] };
   const tx: any = {
     dispute: { findFirst: async () => { calls.dispute++; return opts.dispute ? { id: 'd1' } : null; } },
+    escrow: { findFirst: async () => null }, // no policy id on the escrow = the baseline policy (today's marketer table)
     referral: { findMany: async (args: any) => { calls.referral.push(args); return (opts.referrals ?? []); }, updateMany: async () => ({ count: 1 }) }, // returns every fixture row regardless of the where, so the service's own guard is what is under test
     // createMany + skipDuplicates (INSERT ... ON CONFLICT DO NOTHING): count 1 = inserted, count 0 = the unique key already existed
     commissionLog: { createMany: async (args: any) => { assert.equal(args.skipDuplicates, true); calls.create.push(args.data[0]); if (opts.createImpl) return opts.createImpl(args); return { count: opts.duplicate ? 0 : 1 }; } },
@@ -186,6 +187,7 @@ function allowTx(referrals: any[]) {
   const created: any[] = [];
   const tx: any = {
     dispute: { findFirst: async () => null },
+    escrow: { findFirst: async () => null },
     referral: { findMany: async () => referrals, updateMany: async () => ({ count: 1 }) },
     commissionLog: { createMany: async ({ data }: any) => { created.push(data[0]); return { count: 1 }; } }
   };
