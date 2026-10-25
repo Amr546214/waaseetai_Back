@@ -11,29 +11,30 @@ process.env.JWT_SECRET = 'test-secret';
 const live = (u: any) => u.status === 'ACTIVE' && u.isBanned === false;
 const user = (id: string, accountType: string, over: any = {}) => ({ id, accountType, status: 'ACTIVE', isBanned: false, email: `${id}@x.com`, activeRole: 'CLIENT', roles: ['CLIENT'], ...over });
 const users = [
-	user('owner-1', 'ADMIN'), user('super-1', 'SUPER_ADMIN'), user('bare-admin', 'ADMIN'),
+	user('super-1', 'SUPER_ADMIN'), user('super-susp', 'SUPER_ADMIN', { status: 'SUSPENDED' }), user('bare-admin', 'ADMIN'),
 	user('st-disp', 'ADMIN'), user('st-sup', 'ADMIN'), user('st-wd', 'ADMIN'), user('st-idr', 'ADMIN'), user('st-fin', 'ADMIN'), user('st-pay', 'ADMIN'),
-	user('st-disp-susp', 'ADMIN'), user('st-disp-ban', 'ADMIN', { isBanned: true }), user('st-disp-userSusp', 'ADMIN', { status: 'SUSPENDED' }),
+	user('st-disp-susp', 'ADMIN'), user('st-disp-denied', 'ADMIN'), user('st-usr-granted', 'ADMIN'), user('st-disp-scoped-out', 'ADMIN'), user('st-disp-scoped-in', 'ADMIN'), user('st-disp-ban', 'ADMIN', { isBanned: true }), user('st-disp-userSusp', 'ADMIN', { status: 'SUSPENDED' }),
 	user('client-1', 'CLIENT_INDIVIDUAL'), user('prov-1', 'PROVIDER_INDIVIDUAL', { activeRole: 'PROVIDER', roles: ['PROVIDER'] }), user('emp-1', 'EMPLOYEE'),
 ];
-const roles: Record<string, string[]> = { disp: ['disputes.view'], sup: ['support.review'], wd: ['withdrawals.review'], idr: ['identity.review'], fin: ['finance.read'], pay: ['payouts.send'] };
+const roles: Record<string, string[]> = { usr: ['users.view'], disp: ['disputes.view'], sup: ['support.review'], wd: ['withdrawals.review'], idr: ['identity.review'], fin: ['finance.read'], pay: ['payouts.send'] };
 const staff: any[] = [
 	{ userId: 'st-disp', status: 'ACTIVE', roleKey: 'disp' }, { userId: 'st-sup', status: 'ACTIVE', roleKey: 'sup' }, { userId: 'st-wd', status: 'ACTIVE', roleKey: 'wd' }, { userId: 'st-idr', status: 'ACTIVE', roleKey: 'idr' },
 	{ userId: 'st-fin', status: 'ACTIVE', roleKey: 'fin' }, { userId: 'st-pay', status: 'ACTIVE', roleKey: 'pay' },
 	{ userId: 'st-disp-susp', status: 'SUSPENDED', roleKey: 'disp' }, { userId: 'st-disp-ban', status: 'ACTIVE', roleKey: 'disp' }, { userId: 'st-disp-userSusp', status: 'ACTIVE', roleKey: 'disp' },
+	// personal changes: a DENY beats the role, a GRANT adds one permission, a section scope narrows
+	{ userId: 'st-disp-denied', status: 'ACTIVE', roleKey: 'disp', overrides: [{ permission: 'disputes.view', effect: 'DENY' }] },
+	{ userId: 'st-usr-granted', status: 'ACTIVE', roleKey: 'usr', overrides: [{ permission: 'disputes.view', effect: 'GRANT' }] },
+	{ userId: 'st-disp-scoped-out', status: 'ACTIVE', roleKey: 'disp', scoped: true, departments: ['users'] },
+	{ userId: 'st-disp-scoped-in', status: 'ACTIVE', roleKey: 'disp', scoped: true, departments: ['disputes'] },
 ];
 const byId = (id: string) => users.find(u => u.id === id);
 const rows: any[] = [];
 let failCreate = false;
 const prisma: any = {
-	user: { findUnique: async ({ where }: any) => byId(where.id) ?? null },
-	platformOwner: {
-		findUnique: async ({ where }: any) => (where.userId === 'owner-1' ? { userId: 'owner-1' } : null),
-		findFirst: async ({ where }: any) => (live(byId('owner-1')!) && (!where?.user || live(byId('owner-1')!)) ? { userId: 'owner-1' } : null),
-	},
+	user: { findUnique: async ({ where }: any) => byId(where.id) ?? null, findMany: async ({ where }: any) => users.filter(u => u.accountType === where.accountType && u.status === where.status && u.isBanned === where.isBanned).map(u => ({ id: u.id })) },
 	adminStaff: {
-		findUnique: async ({ where }: any) => { const s = staff.find(x => x.userId === where.userId); return s ? { id: `sf-${s.userId}`, status: s.status, roleId: s.roleKey, role: { id: s.roleKey, name: s.roleKey, permissions: roles[s.roleKey] } } : null; },
-		findMany: async ({ where }: any) => staff.filter(s => s.status === where.status && roles[s.roleKey].includes(where.role.permissions.has) && live(byId(s.userId)!)).map(s => ({ userId: s.userId })),
+		findUnique: async ({ where }: any) => { const s = staff.find(x => x.userId === where.userId); return s ? { id: `sf-${s.userId}`, status: s.status, roleId: s.roleKey, scoped: s.scoped ?? false, departments: s.departments ?? [], overrides: s.overrides ?? [], role: { id: s.roleKey, name: s.roleKey, permissions: roles[s.roleKey] } } : null; },
+		findMany: async ({ where }: any) => staff.filter(s => s.status === where.status && live(byId(s.userId)!)).map(s => ({ userId: s.userId, scoped: s.scoped ?? false, departments: s.departments ?? [], overrides: s.overrides ?? [], role: { permissions: roles[s.roleKey] } })),
 	},
 	notification: {
 		create: async ({ data }: any) => { if (failCreate) throw new Error('db down'); const row = { id: `n${rows.length + 1}`, actionText: null, metadata: null, isRead: false, createdAt: new Date(), ...data }; rows.push(row); return row; },
@@ -76,17 +77,17 @@ test('admin notifications', async t => {
 		['PAYOUT_FAILED', { id: 'w2' }, /^\/supper-admin-overview\/withdrawals\/w2$/, 'st-pay']
 	];
 	for (const [event, payload, url, holder] of cases) {
-		await t.test(`${event}: only the owner and the ACTIVE staff who hold the permission now get one row, with a real admin actionUrl`, async () => {
+		await t.test(`${event}: only live SUPER_ADMIN accounts and the ACTIVE staff who hold the permission now (role + personal GRANT - DENY, inside their sections) get one row, with a real admin actionUrl`, async () => {
 			rows.length = 0;
 			await notifyAdmins(event, payload);
-			assert.deepEqual(rows.map(r => r.userId).sort(), ['owner-1', holder].sort());
+			assert.deepEqual(rows.map(r => r.userId).sort(), ['super-1', holder, ...(event === 'NEW_DISPUTE' ? ['st-usr-granted', 'st-disp-scoped-in'] : [])].sort());
 			for (const r of rows) {
 				assert.match(r.actionUrl, url);
 				assert.ok(REAL_ADMIN_ROUTES.some(x => x.test(r.actionUrl)));
 				assert.equal(r.type, `ADMIN_${event}`);
 				assert.ok(r.title && r.message && r.isRead === false);
 			}
-			for (const nonAdmin of ['super-1', 'bare-admin', 'client-1', 'prov-1', 'emp-1', 'st-disp-susp', 'st-disp-ban', 'st-disp-userSusp']) assert.ok(!rows.some(r => r.userId === nonAdmin));
+			for (const nonAdmin of ['super-susp', 'bare-admin', 'client-1', 'prov-1', 'emp-1', 'st-disp-susp', 'st-disp-ban', 'st-disp-userSusp', 'st-disp-denied', 'st-disp-scoped-out']) assert.ok(!rows.some(r => r.userId === nonAdmin));
 		});
 	}
 
@@ -117,24 +118,24 @@ test('admin notifications', async t => {
 		assert.equal((await call(port, 'PATCH', '/notifications/n1/read')).status, 401);
 	});
 
-	await t.test('routes: the owner lists, filters unread, marks one read and marks all read; a member sees only what their permission covers', async () => {
+	await t.test('routes: a SUPER_ADMIN lists, filters unread, marks one read and marks all read; a member sees only what their permission covers', async () => {
 		rows.length = 0;
 		await notifyAdmins('NEW_DISPUTE', { id: 'd1' });
 		await notifyAdmins('NEW_TICKET', { id: 't1' });
-		const list = await call(port, 'GET', '/notifications', token('owner-1'));
+		const list = await call(port, 'GET', '/notifications', token('super-1'));
 		assert.equal(list.status, 200);
 		assert.equal(list.body.data.length, 2);
 		const mine = list.body.data[0];
-		const read = await call(port, 'PATCH', `/notifications/${mine.id}/read`, token('owner-1'));
+		const read = await call(port, 'PATCH', `/notifications/${mine.id}/read`, token('super-1'));
 		assert.equal(read.status, 200);
 		assert.equal(read.body.data.isRead, true);
-		const unread = await call(port, 'GET', '/notifications?unreadOnly=true', token('owner-1'));
+		const unread = await call(port, 'GET', '/notifications?unreadOnly=true', token('super-1'));
 		assert.equal(unread.body.data.length, 1);
 		const byType = await call(port, 'GET', '/notifications?type=ADMIN_NEW_TICKET', token('st-sup'));
 		assert.deepEqual(byType.body.data.map((n: any) => n.type), ['ADMIN_NEW_TICKET']);
 		assert.deepEqual((await call(port, 'GET', '/notifications', token('st-sup'))).body.data.map((n: any) => n.type), ['ADMIN_NEW_TICKET']); // not the dispute
-		assert.equal((await call(port, 'PATCH', '/notifications/read-all', token('owner-1'))).status, 200);
-		assert.equal((await call(port, 'GET', '/notifications?unreadOnly=true', token('owner-1'))).body.data.length, 0);
+		assert.equal((await call(port, 'PATCH', '/notifications/read-all', token('super-1'))).status, 200);
+		assert.equal((await call(port, 'GET', '/notifications?unreadOnly=true', token('super-1'))).body.data.length, 0);
 	});
 
 	await t.test('routes: what was delivered is hidden once the permission is withdrawn (list and unread count), and comes back with it', async () => {
@@ -156,7 +157,7 @@ test('admin notifications', async t => {
 		rows.length = 0;
 		await notifyAdmins('NEW_DISPUTE', { id: 'd1' });
 		const holderRow = rows.find(r => r.userId === 'st-disp');
-		const res = await call(port, 'PATCH', `/notifications/${holderRow.id}/read`, token('owner-1'));
+		const res = await call(port, 'PATCH', `/notifications/${holderRow.id}/read`, token('super-1'));
 		assert.equal(res.status, 404);
 		assert.equal(holderRow.isRead, false);
 	});

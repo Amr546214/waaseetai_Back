@@ -2,8 +2,8 @@ import { prisma as defaultPrisma } from '../config/db';
 import { AdminActor, actorHas } from './admin-access.service';
 
 /**
- * Who may READ a project / contract / client request / offer through the admin API. There is no permission in the owner's list that means "read all operations", so:
- *  - the LISTS (and any export) are owner-only until the owner approves a dedicated permission (see OPERATIONS_MATRIX);
+ * Who may READ a project / contract / client request / offer through the admin API. There is no permission in the approved list that means "read all operations", so:
+ *  - the LISTS (and any export) are SUPER_ADMIN-only until a dedicated read permission is approved (see OPERATIONS_MATRIX);
  *  - a DETAIL is readable by a staff member only through the case they already hold:
  *      disputes.view  -> a project / contract / request / offer that has a dispute
  *      support.review -> a project / request named by a support ticket (relatedProject / relatedOrder are matched by exact id)
@@ -12,16 +12,16 @@ import { AdminActor, actorHas } from './admin-access.service';
  */
 export type OperationKind = 'PROJECT' | 'CONTRACT' | 'REQUEST' | 'OFFER';
 
-export const OPERATIONS_MATRIX: ReadonlyArray<{ surface: string; owner: string; disputesView: string; supportReview: string; others: string }> = [
-	{ surface: 'قائمة المشاريع / العقود / الطلبات / العروض + أي تصدير', owner: 'نعم', disputesView: 'لا', supportReview: 'لا', others: 'لا (مقترح: صلاحية قراءة عمليات مستقلة، بانتظار قرار المالك)' },
-	{ surface: 'تفصيل مشروع', owner: 'نعم', disputesView: 'إن كان له نزاع', supportReview: 'إن ذكرته تذكرة (relatedProject = المعرّف)', others: 'لا' },
-	{ surface: 'تفصيل عقد', owner: 'نعم', disputesView: 'إن كان لمشروعه نزاع', supportReview: 'إن ذكرت تذكرةٌ مشروعه', others: 'لا' },
-	{ surface: 'تفصيل طلب عميل', owner: 'نعم', disputesView: 'إن كان له نزاع', supportReview: 'إن ذكرته تذكرة (relatedOrder = المعرّف)', others: 'لا' },
-	{ surface: 'تفصيل عرض', owner: 'نعم', disputesView: 'إن كان لمشروعه نزاع', supportReview: 'إن ذكرت تذكرةٌ مشروعه', others: 'لا' },
+export const OPERATIONS_MATRIX: ReadonlyArray<{ surface: string; superAdmin: string; disputesView: string; supportReview: string; others: string }> = [
+	{ surface: 'قائمة المشاريع / العقود / الطلبات / العروض + أي تصدير', superAdmin: 'نعم', disputesView: 'لا', supportReview: 'لا', others: 'لا (مقترح: صلاحية قراءة عمليات مستقلة، بانتظار قرار المالك)' },
+	{ surface: 'تفصيل مشروع', superAdmin: 'نعم', disputesView: 'إن كان له نزاع', supportReview: 'إن ذكرته تذكرة (relatedProject = المعرّف)', others: 'لا' },
+	{ surface: 'تفصيل عقد', superAdmin: 'نعم', disputesView: 'إن كان لمشروعه نزاع', supportReview: 'إن ذكرت تذكرةٌ مشروعه', others: 'لا' },
+	{ surface: 'تفصيل طلب عميل', superAdmin: 'نعم', disputesView: 'إن كان له نزاع', supportReview: 'إن ذكرته تذكرة (relatedOrder = المعرّف)', others: 'لا' },
+	{ surface: 'تفصيل عرض', superAdmin: 'نعم', disputesView: 'إن كان لمشروعه نزاع', supportReview: 'إن ذكرت تذكرةٌ مشروعه', others: 'لا' },
 ];
 
 export async function mayReadOperation(actor: AdminActor, kind: OperationKind, id: string, db: typeof defaultPrisma = defaultPrisma): Promise<boolean> {
-	if (actor.isOwner) return true;
+	if (actor.isSuperAdmin) return true;
 	const viaDispute = actorHas(actor, 'disputes.view');
 	const viaTicket = actorHas(actor, 'support.review');
 	if (!viaDispute && !viaTicket) return false;

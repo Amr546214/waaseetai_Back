@@ -16,8 +16,6 @@ const USERS: Record<string, any> = {
 	superAdmin: { id: 'u-sa', email: 's@x.com', accountType: 'SUPER_ADMIN', status: 'ACTIVE', activeRole: 'SUPER_ADMIN', roles: ['SUPER_ADMIN'] },
 	// a real super admin keeps CLIENT as its default active role and must NOT be locked out
 	superAdminActingClient: { id: 'u-sa2', email: 's2@x.com', accountType: 'SUPER_ADMIN', status: 'ACTIVE', activeRole: 'CLIENT', roles: ['SUPER_ADMIN', 'CLIENT'] },
-	// the platform owner: an ADMIN-type account that has a row in platform_owner (holds every permission); the accounts above hold NOTHING because an account type grants no access
-	owner: { id: 'u-owner', email: 'o@x.com', accountType: 'ADMIN', status: 'ACTIVE', activeRole: 'ADMIN', roles: ['ADMIN'] },
 	client: { id: 'u-c', email: 'c@x.com', accountType: 'CLIENT_INDIVIDUAL', status: 'ACTIVE', activeRole: 'CLIENT', roles: ['CLIENT'] },
 	provider: { id: 'u-p', email: 'p@x.com', accountType: 'PROVIDER_INDIVIDUAL', status: 'ACTIVE', activeRole: 'PROVIDER', roles: ['PROVIDER', 'CLIENT'] },
 	affiliate: { id: 'u-m', email: 'm@x.com', accountType: 'MARKETING_BROKER', status: 'ACTIVE', activeRole: 'AFFILIATE', roles: ['AFFILIATE', 'CLIENT'] }
@@ -27,7 +25,7 @@ const byId = new Map(Object.values(USERS).map(u => [u.id, u]));
 
 // any other prisma call resolves to an empty-ish value, so an ALLOWED request just ends in a handler result (never 401/403)
 const emptyModel: any = new Proxy({}, { get: () => async () => null });
-const prisma: any = new Proxy({ user: { findUnique: async ({ where }: any) => byId.get(where.id) ?? null }, platformOwner: { findUnique: async ({ where }: any) => (where.userId === 'u-owner' ? { userId: 'u-owner' } : null) }, adminStaff: { findUnique: async () => null } }, { get: (t: any, k: string) => t[k] ?? emptyModel });
+const prisma: any = new Proxy({ user: { findUnique: async ({ where }: any) => byId.get(where.id) ?? null }, adminStaff: { findUnique: async () => null } }, { get: (t: any, k: string) => t[k] ?? emptyModel });
 mock.module('../config/db', { namedExports: { prisma } });
 mock.module('../services/session.service', { namedExports: { sessionService: { validateOrRegister: async () => ({ id: 'sess' }) } } });
 
@@ -87,7 +85,7 @@ async function request(handler: any, method: string, url: string, token?: string
 	}
 }
 
-test('every /admin router: no token 401; client / provider / affiliate 403; ADMIN / SUPER_ADMIN accounts WITHOUT a permission 403 (an account type grants nothing); the owner passes', async () => {
+test('every /admin router: no token 401; client / provider / affiliate 403; an ADMIN account WITHOUT a staff role 403 (the type ADMIN grants nothing); a SUPER_ADMIN passes (also while acting as client)', async () => {
 	const express = (await import('express')).default;
 	const imports = importedRouters();
 	const { globalErrorHandler: errorHandler } = await import('../middlewares/error.middleware');
@@ -107,15 +105,17 @@ test('every /admin router: no token 401; client / provider / affiliate 403; ADMI
 		const url = `/admin/${prefix}${String(layer.route.path === '/' ? '' : layer.route.path).replace(/:\w+/g, 'x')}`;
 		assert.equal(await request(app, 'GET', url), 401, `${prefix}: no token`);
 		for (const who of ['client', 'provider', 'affiliate']) assert.equal(await request(app, 'GET', url, tokenFor(who)), 403, `${prefix}: ${who}`);
-		// the dashboard is open to any TEAM member only, the account area to any admin-type account: those two are the only routers that may answer a permission-less admin account
-		for (const who of ['admin', 'superAdmin', 'superAdminActingClient']) {
+		// an ADMIN account with no staff role holds nothing: /team/access/me is the one route it may call (it only says who it is and why it sees nothing)
+		for (const who of ['admin']) {
 			const status = await request(app, 'GET', url, tokenFor(who));
 			// /team/access/me is the one route a permission-less admin account may call: it only tells the account who it is and why it sees nothing
 			if (prefix === 'team' && url.endsWith('/access/me')) { assert.equal(status, 200, `${prefix}: ${who} may read its own access state`); assert.equal(await request(app, 'GET', '/admin/team/staff', tokenFor(who)), 403, `team/staff: ${who}`); }
 			else assert.equal(status, 403, `${prefix}: ${who} holds no permission, must be refused (got ${status})`);
 		}
-		const ownerStatus = await request(app, 'GET', url, tokenFor('owner'));
-		assert.ok(ownerStatus !== 401 && ownerStatus !== 403, `${prefix}: the owner must pass the guard (got ${ownerStatus})`);
+		for (const who of ['superAdmin', 'superAdminActingClient']) {
+			const st = await request(app, 'GET', url, tokenFor(who));
+			assert.ok(st !== 401 && st !== 403, `${prefix}: ${who} (SUPER_ADMIN) must pass the guard (got ${st})`);
+		}
 	}
 });
 
@@ -142,7 +142,7 @@ test('every non-GET route of every admin router is also behind the guard (client
 	}
 });
 
-test('DELETE /admin/users/:id needs the users.delete permission: an ADMIN and a SUPER_ADMIN without it are refused', async () => {
+test('DELETE /admin/users/:id needs users.delete: an ADMIN without it is refused, a SUPER_ADMIN passes the guard', async () => {
 	const express = (await import('express')).default;
 	const { globalErrorHandler: errorHandler } = await import('../middlewares/error.middleware');
 	const router = ((await import('./admin-users.routes.ts')) as any).default;
@@ -150,5 +150,5 @@ test('DELETE /admin/users/:id needs the users.delete permission: an ADMIN and a 
 	app.use(`/admin/users`, router);
 	app.use(errorHandler as any);
 	assert.equal(await request(app, 'DELETE', '/admin/users/x', tokenFor('admin')), 403);
-	assert.equal(await request(app, 'DELETE', '/admin/users/x', tokenFor('superAdmin')), 403); // SUPER_ADMIN is not the owner and holds nothing by its type
+	assert.notEqual(await request(app, 'DELETE', '/admin/users/x', tokenFor('superAdmin')), 403); // a SUPER_ADMIN holds every permission by its (server-read) type
 });

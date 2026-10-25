@@ -2,11 +2,11 @@
  * The ONE registry of admin permissions. Every admin endpoint is bound to an id from here (see src/middlewares/admin-access.middleware.ts); the server never decides from a role NAME,
  * from the account type (ADMIN / SUPER_ADMIN grant nothing by themselves) or from anything the browser says.
  *
- * Source of the list: the platform owner's decision of 2026-10-25 (the fine-grained list in the task) read against the permission matrix of the design page P-AD-024 (13 rows x 6 roles).
- * Nothing here is invented beyond that: where the two differ it is noted in AMBIGUITIES and the owner decides. The ids are stable (stored in roles and in the audit trail): never rename one.
+ * Source of the list: the decision of 2026-10-25 (the fine-grained list in the task) read against the permission matrix of the design page P-AD-024 (13 rows x 6 roles).
+ * Nothing here is invented beyond that: where the two differ it is noted in AMBIGUITIES and the SUPER_ADMIN decides. The ids are stable (stored in roles and in the audit trail): never rename one.
  *
- * Owner-only capabilities are NOT permissions and cannot be granted to anybody: inviting staff, creating / editing roles, granting / withdrawing permissions, suspending / reactivating staff,
- * and everything about the owner record. They are exercised through `requireOwner` only.
+ * SUPER_ADMIN-only capabilities are NOT permissions and cannot be granted to anybody (not by a role, not by a per-person grant): inviting staff, creating / editing roles, granting /
+ * withdrawing permissions, suspending / reactivating staff. They are exercised through `requireSuperAdmin` only, and the authority comes from the account type read on the server.
  */
 
 export type AdminPermissionGroup =
@@ -76,11 +76,11 @@ export const ADMIN_PERMISSION_IDS: readonly string[] = ADMIN_PERMISSIONS.map(p =
 const KNOWN = new Set(ADMIN_PERMISSION_IDS);
 export const isKnownPermission = (id: string): boolean => KNOWN.has(id);
 
-/** Capabilities that are not permissions: only the platform owner has them. */
-export const OWNER_ONLY_CAPABILITIES = ['staff.invite', 'staff.role', 'staff.suspend', 'roles.manage', 'permissions.grant', 'ownership'] as const;
+/** Capabilities that are not permissions: only a SUPER_ADMIN account has them. */
+export const SUPER_ADMIN_ONLY_CAPABILITIES = ['staff.invite', 'staff.role', 'staff.suspend', 'roles.manage', 'permissions.grant', 'super_admin.create'] as const;
 
 /**
- * Starting points the owner can pick when creating a role (they are NOT stored roles and nobody holds them). Built ONLY from the design matrix P-AD-024: one design row maps to the
+ * Starting points a SUPER_ADMIN can pick when creating a role (they are NOT stored roles and nobody holds them). Built ONLY from the design matrix P-AD-024: one design row maps to the
  * ids that carry its name; where the design has a single row for several finer ids the template lists the read-side ids only and says so in `notes`.
  */
 export interface AdminRoleTemplate { key: string; name: string; description: string; color: string; permissions: string[]; notes?: string }
@@ -102,13 +102,41 @@ export const ADMIN_ROLE_TEMPLATES: readonly AdminRoleTemplate[] = [
 		notes: 'بطاقة الدور في التصميم تذكر 4 صلاحيات والمصفوفة صفين. الرفض والصرف منفصلان ولا يُمنحان من القالب.' },
 ] as const;
 
-/** Open points between the design pages and the owner's list: shown to the owner, never silently decided. */
+/** Open points between the design pages and the approved list: shown to the SUPER_ADMIN, never silently decided. */
 export const AMBIGUITIES: readonly string[] = [
 	'بطاقات الأدوار في P-AD-024 تذكر أعداد صلاحيات (15/11/8/6/5/4) لا تطابق عدد الصفوف المعلَّمة في المصفوفة نفسها.',
 	'صفحة الموظف P-AD-022-موظف تعرض 10 صلاحيات بأسماء لا ترد في مصفوفة P-AD-024 («حذف المحتوى المسيء»، «حل البلاغات»، «عرض سجلات المستخدمين»، «الوصول للمالية»، «حذف الحسابات نهائيًا»…). لم تُضف كصلاحيات.',
 	'نافذة الدعوة تعرض «الأقسام المتاحة» (المستخدمون، النزاعات، البلاغات، الدعم الفني، التخصصات) دون تعريف لعلاقتها بالصلاحيات. لم تُنفَّذ كي لا توحي بسلطة غير مطبّقة.',
-	'«الموافقة على السحوبات» صف واحد في التصميم، بينما قرار المالك يفصل المراجعة والموافقة والرفض والصرف.',
-	'«حل البلاغات» (صفحة الموظف) غير موجود في قائمة المالك: المتاح عرض البلاغات ومراجعة الدعم فقط.',
+	'«الموافقة على السحوبات» صف واحد في التصميم، بينما القرار المعتمد يفصل المراجعة والموافقة والرفض والصرف.',
+	'«حل البلاغات» (صفحة الموظف) غير موجود في القائمة المعتمدة: المتاح عرض البلاغات ومراجعة الدعم فقط.',
 ];
 
 export const ADMIN_PERMISSION_COUNT = ADMIN_PERMISSIONS.length;
+
+/**
+ * «الأقسام المتاحة» (design P-AD-022 invitation dialog): the five sections a member can be scoped to. A section is a DATA scope: when a staff member is scoped, a permission that belongs to a
+ * section only applies if that section is listed. It narrows and never grants; permissions without a section (finance, settings, team, identity review ...) are not affected by it.
+ */
+export const ADMIN_DEPARTMENTS = [
+	{ key: 'users', label: 'المستخدمون' },
+	{ key: 'disputes', label: 'النزاعات' },
+	{ key: 'reports', label: 'البلاغات' },
+	{ key: 'support', label: 'الدعم الفني' },
+	{ key: 'specialties', label: 'التخصصات' },
+] as const;
+export type AdminDepartmentKey = typeof ADMIN_DEPARTMENTS[number]['key'];
+export const ADMIN_DEPARTMENT_KEYS: readonly string[] = ADMIN_DEPARTMENTS.map(d => d.key);
+export const isKnownDepartment = (k: string): boolean => ADMIN_DEPARTMENT_KEYS.includes(k);
+export const PERMISSION_DEPARTMENT: Readonly<Record<string, AdminDepartmentKey>> = {
+	'users.view': 'users', 'users.suspend': 'users', 'users.delete': 'users',
+	'disputes.view': 'disputes', 'disputes.note': 'disputes', 'disputes.assign': 'disputes', 'disputes.resolve': 'disputes',
+	'reports.view': 'reports',
+	'support.review': 'support', 'support.reply': 'support',
+	'specialties.approve': 'specialties', 'content.manage': 'specialties', 'business_models.review': 'specialties',
+};
+/** the permissions of a scoped member: the ones outside the listed sections are removed (never added) */
+export const applyDepartmentScope = (ids: Iterable<string>, scoped: boolean, departments: readonly string[]): Set<string> => {
+	const out = new Set<string>();
+	for (const id of ids) { const d = PERMISSION_DEPARTMENT[id]; if (!scoped || !d || departments.includes(d)) out.add(id); }
+	return out;
+};

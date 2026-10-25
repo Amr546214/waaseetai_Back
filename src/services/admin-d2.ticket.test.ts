@@ -8,7 +8,7 @@ async function load(t: any, ownerType = 'PROVIDER_INDIVIDUAL') {
 	const ticket: any = { id: 't1', ticketNumber: 'TK-1', userId: 'owner', status: 'OPEN', priority: 'عادية', resolvedAt: null, closedAt: null };
 	const messages: any[] = [{ id: 'm0', ticketId: 't1', senderId: 'owner', body: 'original', createdAt: new Date(1) }];
 	const prisma: any = {
-		platformOwner: { findUnique: async ({ where }: any) => (where.userId === 'admin-2' ? { userId: 'admin-2' } : null) }, adminStaff: { findUnique: async () => null },
+		adminStaff: { findUnique: async ({ where }: any) => (where.userId === 'admin-2' ? { id: 's2', status: 'ACTIVE', roleId: 'r', scoped: false, departments: [], overrides: [], role: { id: 'r', name: 'r', permissions: ['support.review'] } } : null) },
 		user: { findUnique: async ({ where }: any) => (where.id === 'owner' ? { id: 'owner', accountType: ownerType, firstName: 'O', lastName: 'W', email: 'o@x' } : where.id === 'admin-2' ? { id: 'admin-2', firstName: 'Sara', lastName: 'A', accountType: 'ADMIN', status: 'ACTIVE' } : { id: where.id, accountType: 'PROVIDER_INDIVIDUAL' }) },
 		supportTicket: { findUnique: async ({ where }: any) => (where.id === 't1' ? { ...ticket } : null), update: async ({ data }: any) => { Object.assign(ticket, data); return { ...ticket }; } },
 		supportTicketMessage: {

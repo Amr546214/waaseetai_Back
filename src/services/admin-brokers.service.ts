@@ -1,4 +1,3 @@
-import { isPlatformOwner, OWNER_PROTECTED_CODE } from './admin-access.service';
 import { readAffiliateLevels, affiliateLevelInfo } from '../utils/affiliate-level-reader';
 import { LogCategory, UserStatus } from '@prisma/client';
 import { prisma } from '../config/db';
@@ -226,7 +225,6 @@ export class AdminBrokersService {
 
     const affiliate = await prisma.affiliateProfile.findUnique({ where: { userId }, select: { userId: true, user: { select: { status: true, accountType: true } } } });
     if (!affiliate) throw new AppError('الوسيط غير موجود', 404);
-    if (await isPlatformOwner(userId)) throw new AppError('حساب مالك المنصة محمي ولا يمكن تعديله أو إيقافه أو حذفه من هنا.', 403, undefined, OWNER_PROTECTED_CODE);
     if (affiliate.user.accountType === 'ADMIN' || affiliate.user.accountType === 'SUPER_ADMIN') throw new AppError('لا يمكن تغيير حالة حساب إداري من هنا', 403);
     const before = affiliate.user.status;
     if (before === status) return { id: userId, status };

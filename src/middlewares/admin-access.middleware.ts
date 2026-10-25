@@ -11,7 +11,7 @@ declare module 'express-serve-static-core' {
 }
 
 export const ADMIN_PERMISSION_DENIED = 'ADMIN_PERMISSION_DENIED';
-export const ADMIN_OWNER_REQUIRED = 'ADMIN_OWNER_REQUIRED';
+export const ADMIN_SUPER_ADMIN_REQUIRED = 'ADMIN_SUPER_ADMIN_REQUIRED';
 export const ADMIN_ACCESS_UNAVAILABLE = 'ADMIN_ACCESS_UNAVAILABLE';
 
 const deny = () => new AppError('ليست لديك صلاحية تنفيذ هذا الإجراء.', 403, undefined, ADMIN_PERMISSION_DENIED);
@@ -53,21 +53,21 @@ function requireWith(mode: 'all' | 'any', ids: string[]) {
 	return mw;
 }
 
-/** Owner-only capabilities (staff, roles, grants). Not a permission: nobody can be given it. */
-export const requireOwner = async (req: Request, _res: Response, next: NextFunction) => {
+/** SUPER_ADMIN-only capabilities (staff, roles, grants, personal permissions). Not a permission: nobody can be given it. The authority is the account TYPE read from the server, nothing else. */
+export const requireSuperAdmin = async (req: Request, _res: Response, next: NextFunction) => {
 	try {
 		const actor = await loadAdminActor(req);
-		if (!actor.isOwner) throw new AppError('هذا الإجراء لمالك المنصة وحده.', 403, undefined, ADMIN_OWNER_REQUIRED);
+		if (!actor.isSuperAdmin) throw new AppError('هذا الإجراء لمدير النظام (Super Admin) وحده.', 403, undefined, ADMIN_SUPER_ADMIN_REQUIRED);
 		next();
 	} catch (e) { next(e); }
 };
-(requireOwner as any).adminOwnerOnly = true;
+(requireSuperAdmin as any).adminSuperAdminOnly = true;
 
-/** Any admin-team member who currently holds at least one permission (or the owner): the minimum to enter the admin API at all (own tasks, own identity). */
+/** Any admin-team member who currently holds at least one permission (or a SUPER_ADMIN): the minimum to enter the admin API at all (own tasks, own identity). */
 export const requireAdminMember = async (req: Request, _res: Response, next: NextFunction) => {
 	try {
 		const actor = await loadAdminActor(req);
-		if (!actor.isOwner && actor.permissions.size === 0) throw deny();
+		if (!actor.isSuperAdmin && actor.permissions.size === 0) throw deny();
 		next();
 	} catch (e) { next(e); }
 };
@@ -92,7 +92,7 @@ export const requireAdminAccount = async (req: Request, _res: Response, next: Ne
 (requireAdminAccount as any).adminSelf = true;
 
 /**
- * A DETAIL of an operational record (project / contract / request / offer): the owner, or a staff member who holds the case it belongs to (see admin-operations-scope.service). The id is read from
+ * A DETAIL of an operational record (project / contract / request / offer): a SUPER_ADMIN, or a staff member who holds the case it belongs to (see admin-operations-scope.service). The id is read from
  * `:id`. Refusal is the same 403 whether the record exists or not, so the answer leaks nothing.
  */
 export const requireOperationScope = (kind: OperationKind) => {

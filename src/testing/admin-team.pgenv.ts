@@ -65,18 +65,13 @@ export async function env() {
 			return { status: res.status, json, text };
 		};
 		const mkUser = async (accountType: string = 'ADMIN', tag = 'u') => prisma.user.create({ data: { id: randomUUID(), accountType: accountType as any, status: 'ACTIVE', roles: [accountType === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : accountType === 'ADMIN' ? 'ADMIN' : 'CLIENT'] as any, activeRole: (accountType === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : accountType === 'ADMIN' ? 'ADMIN' : 'CLIENT') as any, firstName: tag, lastName: 'T', email: `${tag}-${randomUUID().slice(0, 8)}@pg.test` } as any });
-		// the single owner of this database (a CHECK allows only id = 1)
-		// the immutability trigger (part of the migration) is lifted for this test database only, to start every run from exactly one fresh owner
-		await prisma.$executeRawUnsafe('ALTER TABLE "platform_owner" DISABLE TRIGGER "platform_owner_immutable"');
-		await prisma.platformOwner.deleteMany({});
-		await prisma.$executeRawUnsafe('ALTER TABLE "platform_owner" ENABLE TRIGGER "platform_owner_immutable"');
-		const owner = await mkUser('ADMIN', 'owner');
-		await prisma.platformOwner.create({ data: { userId: owner.id, designatedBy: 'test' } });
-		return { prisma, call, mkUser, owner, server, sentCodes };
+		// a SUPER_ADMIN account: its authority comes from the account TYPE only (no other table, no flag)
+		const sa = await mkUser('SUPER_ADMIN', 'super');
+		return { prisma, call, mkUser, sa, server, sentCodes };
 	})();
 	return setup;
 }
-export const mkRole = async (e: any, perms: string[], name?: string) => { const r = await e.call('POST', '/admin/team/roles', e.owner.id, { name: name ?? `دور ${randomUUID().slice(0, 6)}`, permissions: perms }); assert.equal(r.status, 201, JSON.stringify(r.json)); return r.json.data; };
+export const mkRole = async (e: any, perms: string[], name?: string) => { const r = await e.call('POST', '/admin/team/roles', e.sa.id, { name: name ?? `دور ${randomUUID().slice(0, 6)}`, permissions: perms }); assert.equal(r.status, 201, JSON.stringify(r.json)); return r.json.data; };
 export const mkStaff = async (e: any, perms: string[], tag = 'staff') => { const role = await mkRole(e, perms); const u = await e.mkUser('ADMIN', tag); await e.prisma.adminStaff.create({ data: { userId: u.id, roleId: role.id } }); return { user: u, role }; };
 
 export async function closeEnv() { const e = await setup; if (e) { e.server.closeAllConnections?.(); await new Promise(r => e.server.close(r)); await e.prisma.$disconnect(); } }

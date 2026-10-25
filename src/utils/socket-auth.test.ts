@@ -32,7 +32,6 @@ let booted: Promise<{ url: string; close: () => void; auth: any; registry: any; 
 function boot() {
 	booted ??= (async () => {
 		const fakePrisma: any = {
-			platformOwner: { findUnique: async () => null },
 			conversation: { findFirst: async () => null, findUnique: async () => null },
 			accountAuditLog: { create: async () => ({}) },
 			user: { findUnique: async ({ where }: any) => (users[where.id] ? { ...users[where.id], activeRole: 'CLIENT' } : null), update: async ({ where, data }: any) => { Object.assign(users[where.id], data); return { ...users[where.id] }; } },

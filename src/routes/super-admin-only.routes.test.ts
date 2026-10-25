@@ -29,7 +29,6 @@ const emptyModel: any = new Proxy({}, { get: () => async () => null });
 const ROLE_OF: Record<string, string[]> = { 'u-hd': ['users.view', 'users.delete'], 'u-hv': ['users.view'], 'u-hm': ['disputes.view', 'disputes.resolve', 'payouts.send'], 'u-hr': ['disputes.view', 'disputes.resolve'] };
 const prisma: any = new Proxy({
 	user: { findUnique: async ({ where }: any) => byId.get(where.id) ?? null },
-	platformOwner: { findUnique: async () => null },
 	adminStaff: { findUnique: async ({ where }: any) => (ROLE_OF[where.userId] ? { id: `s-${where.userId}`, status: 'ACTIVE', roleId: 'r', role: { id: 'r', name: 'دور اختبار', permissions: ROLE_OF[where.userId] } } : null) },
 }, { get: (t: any, k: string) => t[k] ?? emptyModel });
 mock.module('../config/db', { namedExports: { prisma } });
@@ -74,14 +73,21 @@ const ROUTES = [
 ];
 
 for (const r of ROUTES) {
-	test(`${r.name}: no token 401; client / provider / affiliate get 403; an ADMIN or SUPER_ADMIN ACCOUNT without the permission(s) gets 403 (an account type grants nothing); a role with only part of them gets 403; the handler never runs`, async () => {
+	test(`${r.name}: no token 401; client / provider / affiliate get 403; an ADMIN ACCOUNT without the permission(s) gets 403 (the type ADMIN grants nothing); a role with only part of them gets 403; the handler never runs`, async () => {
 		const app = await r.build();
 		calls[r.counter] = 0;
 		assert.equal(await request(app, r.method, r.url), 401);
-		for (const who of ['client', 'provider', 'affiliate', 'admin', 'adminActingClient', 'superAdmin', ...r.refusedExtra]) {
+		for (const who of ['client', 'provider', 'affiliate', 'admin', 'adminActingClient', ...r.refusedExtra]) {
 			assert.equal(await request(app, r.method, r.url, tokenFor(who)), 403, `${who} must be refused`);
 		}
 		assert.equal(calls[r.counter], 0, 'no side effect for a refused caller');
+	});
+
+	test(`${r.name}: a SUPER_ADMIN (the type read from the server) reaches the handler without any role; staff cannot make themselves one`, async () => {
+		const app = await r.build();
+		calls[r.counter] = 0;
+		assert.equal(await request(app, r.method, r.url, tokenFor('superAdmin')), 200);
+		assert.equal(calls[r.counter], 1);
 	});
 
 	test(`${r.name}: a team member whose role holds the permission(s) passes the authorization check and reaches the handler (isolated, handler is a counter)`, async () => {

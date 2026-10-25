@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { AdminUsersController } from '../controllers/admin-users.controller';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import { AccountType } from '@prisma/client';
-import { requirePermission, requireOwner } from '../middlewares/admin-access.middleware';
+import { requirePermission, requireSuperAdmin } from '../middlewares/admin-access.middleware';
 
 const router = Router();
 
@@ -18,7 +18,7 @@ router.get('/', AdminUsersController.getUsers);
 router.get('/:id', AdminUsersController.getUserDetail);
 router.get('/:id/audit-log', AdminUsersController.getUserAuditLog);
 router.patch('/:id/status', requirePermission('users.suspend'), AdminUsersController.updateUserStatus);
-router.patch('/:id/roles', requireOwner, AdminUsersController.updateUserRoles);
+router.patch('/:id/roles', requireSuperAdmin, AdminUsersController.updateUserRoles);
 router.post('/:id/notify', requirePermission('support.reply'), AdminUsersController.notifyUser);
 
 // Only SUPER_ADMIN can delete users (enforced by the controller and middleware)

@@ -5,9 +5,7 @@ process.env.OPENAI_API_KEY = 'test-key';
 
 // D1 admin services with a swappable fake prisma (mock.module once; each test installs its own `current`). No database, no network.
 let current: any = {};
-// `platformOwner` defaults to «nobody is the owner»; the owner-protection tests install their own
-const NO_OWNER = { findUnique: async () => null };
-const prisma: any = new Proxy({}, { get: (_t, k: string) => (k === '$transaction' ? (fn: any) => fn(current) : (current[k] ?? (k === 'platformOwner' ? NO_OWNER : undefined))) });
+const prisma: any = new Proxy({}, { get: (_t, k: string) => (k === '$transaction' ? (fn: any) => fn(current) : current[k]) });
 const notes: any[] = [];
 mock.module('../config/db', { namedExports: { prisma } });
 mock.module('../config/logger', { namedExports: { logger: { info() {}, warn() {}, error() {}, debug() {} } } });
@@ -127,12 +125,12 @@ test('activate a suspended QA user: allowed, audited; invalid status / self / pe
 	await rejects(svc.updateUserStatus(admin, 'u1', 'ACTIVE'), 404);
 });
 
-test('NOBODY changes an admin account from the users list (an account type grants nothing): the owner suspends team members from the team page', async () => {
+test('NOBODY changes an admin account from the users list (an account type grants nothing): a SUPER_ADMIN suspends team members from the team page', async () => {
 	const { AdminUsersService } = await fresh('./admin-users.service.ts'); const svc = new AdminUsersService();
 	userFixture(userRow({ accountType: 'ADMIN' }));
 	await rejects(svc.updateUserStatus(admin, 'u1', 'SUSPENDED', 'سبب'), 403);
 	const f = userFixture(userRow({ accountType: 'ADMIN' }));
-	await rejects(svc.updateUserStatus(superAdmin, 'u1', 'SUSPENDED', 'سبب'), 403, /مالك المنصة/);
+	await rejects(svc.updateUserStatus(superAdmin, 'u1', 'SUSPENDED', 'سبب'), 403, /Super Admin/);
 	assert.equal(f.updates.length, 0);
 });
 

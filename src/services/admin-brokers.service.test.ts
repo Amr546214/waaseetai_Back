@@ -40,7 +40,6 @@ async function loadService(t: TestContext, opts: {
 	const commissionFindManySpy = t.mock.fn(async () => opts.recentCommissions ?? []);
 
 	const prismaMock: any = {
-		platformOwner: { findUnique: async () => null },
 		affiliateProfile: { findMany: findManySpy, count: countSpy, findUnique: findUniqueSpy },
 		commissionLog: { findMany: commissionFindManySpy },
 	};
@@ -235,7 +234,6 @@ async function loadStatusService(t: TestContext, opts: { affiliate?: any }) {
 	const update = t.mock.fn(async () => ({}));
 	const record = t.mock.fn(async () => ({}));
 	const prismaMock: any = {
-		platformOwner: { findUnique: async () => null },
 		affiliateProfile: { findUnique: t.mock.fn(async () => (opts.affiliate === undefined ? { userId: 'u1', user: { status: 'ACTIVE', accountType: 'AFFILIATE' } } : opts.affiliate)) },
 		user: { update },
 	};

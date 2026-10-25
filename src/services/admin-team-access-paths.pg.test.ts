@@ -5,8 +5,8 @@ import jwt from 'jsonwebtoken';
 import { env, opts, mkRole, mkStaff, closeEnv } from '../testing/admin-team.pgenv';
 
 /**
- * The access paths OUTSIDE the permission-guarded /admin routes: operations records, notifications, the assistant socket, open connections, the owner's account and its protection at the
- * database level, role / invitation contents. Real isolated PostgreSQL (:55432, qa_team); nothing touches money.
+ * The access paths OUTSIDE the permission-guarded /admin routes: operations records, notifications, the assistant socket, open connections, role / invitation contents and presence.
+ * Real isolated PostgreSQL (:55432, qa_team); nothing touches money. Protection of super-admin accounts: admin-team.pg.test.ts. Personal access and sections: admin-team-personal-access.pg.test.ts.
  */
 const tag = () => randomUUID().slice(0, 8);
 
@@ -44,13 +44,13 @@ test('PG: one permission opens only its own data - with a single permission ever
 	}
 });
 
-test('PG: operations records - the LISTS are owner-only; a DETAIL opens only through a held case (dispute / ticket); users.view and finance.read open nothing; unknown ids are the same 403', opts, async () => {
+test('PG: operations records - the LISTS are SUPER_ADMIN-only; a DETAIL opens only through a held case (dispute / ticket); users.view and finance.read open nothing; unknown ids are the same 403', opts, async () => {
 	const e = await env(); const w = await world(e);
 	const dispute = (await mkStaff(e, ['disputes.view'], 'od')).user, ticket = (await mkStaff(e, ['support.review'], 'os')).user, users = (await mkStaff(e, ['users.view'], 'ou')).user, fin = (await mkStaff(e, ['finance.read'], 'of')).user;
 	const bare = await e.mkUser('ADMIN', 'ob'); const sa = await e.mkUser('SUPER_ADMIN', 'osa');
 	for (const list of ['/admin/projects', '/admin/contracts', '/admin/requests', '/admin/offers']) {
-		for (const who of [dispute, ticket, users, fin, bare, sa]) assert.equal((await e.call('GET', list, who.id)).status, 403, `${list} for a non-owner`);
-		assert.notEqual((await e.call('GET', list, e.owner.id)).status, 403, `${list} for the owner`);
+		for (const who of [dispute, ticket, users, fin, bare]) assert.equal((await e.call('GET', list, who.id)).status, 403, `${list} for staff`);
+		for (const who of [e.sa, sa]) assert.notEqual((await e.call('GET', list, who.id)).status, 403, `${list} for a SUPER_ADMIN`);
 	}
 	const url = (k: string, kind: 'project' | 'contract' | 'offer') => ({ project: `/admin/projects/${w[k].project.id}`, contract: `/admin/contracts/${w[k].contract.id}`, offer: `/admin/offers/${w[k].offer.id}` }[kind]);
 	for (const kind of ['project', 'contract', 'offer'] as const) {
@@ -60,13 +60,13 @@ test('PG: operations records - the LISTS are owner-only; a DETAIL opens only thr
 		assert.notEqual((await e.call('GET', url('inTicket', kind), ticket.id)).status, 403, `ticket holder sees the ticketed ${kind}`);
 		assert.equal((await e.call('GET', url('inDispute', kind), ticket.id)).status, 403);
 		assert.equal((await e.call('GET', url('plain', kind), ticket.id)).status, 403);
-		for (const who of [users, fin, bare, sa]) for (const k of ['inDispute', 'inTicket', 'plain']) assert.equal((await e.call('GET', url(k, kind), who.id)).status, 403, `${kind} ${k}`);
-		assert.notEqual((await e.call('GET', url('plain', kind), e.owner.id)).status, 403);
+		for (const who of [users, fin, bare]) for (const k of ['inDispute', 'inTicket', 'plain']) assert.equal((await e.call('GET', url(k, kind), who.id)).status, 403, `${kind} ${k}`);
+		for (const k of ['inDispute', 'inTicket', 'plain']) assert.notEqual((await e.call('GET', url(k, kind), sa.id)).status, 403, `SUPER_ADMIN sees every ${kind}`);
 	}
 	const gone = await e.call('GET', `/admin/projects/${randomUUID()}`, dispute.id); const real = await e.call('GET', url('plain', 'project'), dispute.id);
 	assert.equal(gone.status, 403); assert.equal(gone.text, real.text); // an unknown id and a forbidden one are indistinguishable
 	// the operations records are read-only: there is no write route to open
-	for (const m of ['POST', 'PATCH', 'DELETE']) assert.equal((await e.call(m, url('plain', 'project'), e.owner.id, {})).status, 404);
+	for (const m of ['POST', 'PATCH', 'DELETE']) assert.equal((await e.call(m, url('plain', 'project'), e.sa.id, {})).status, 404);
 });
 
 test('PG: admin notifications reach only people who hold the permission NOW, and what was delivered is hidden once the permission is withdrawn', opts, async () => {
@@ -76,9 +76,9 @@ test('PG: admin notifications reach only people who hold the permission NOW, and
 	const suspended = await mkStaff(e, ['disputes.view'], 'nsu'); await e.prisma.adminStaff.update({ where: { userId: suspended.user.id }, data: { status: 'SUSPENDED' } });
 	await notifyAdmins('NEW_DISPUTE', { id: 'd1', ref: 'نزاع اختبار' });
 	const got = async (id: string, type: string) => e.prisma.notification.count({ where: { userId: id, type } });
-	assert.equal(await got(e.owner.id, 'ADMIN_NEW_DISPUTE') > 0, true);
+	assert.equal(await got(e.sa.id, 'ADMIN_NEW_DISPUTE') > 0, true); assert.equal(await got(sa.id, 'ADMIN_NEW_DISPUTE'), 1); // SUPER_ADMIN accounts are always recipients
 	assert.equal(await got(disp.user.id, 'ADMIN_NEW_DISPUTE'), 1);
-	for (const id of [sup.user.id, none.id, sa.id, suspended.user.id]) assert.equal(await got(id, 'ADMIN_NEW_DISPUTE'), 0, 'not a recipient');
+	for (const id of [sup.user.id, none.id, suspended.user.id]) assert.equal(await got(id, 'ADMIN_NEW_DISPUTE'), 0, 'not a recipient');
 	await notifyAdmins('NEW_TICKET', { id: 't1', ref: 'T-1' }); await notifyAdmins('WITHDRAWAL_REQUESTED', { id: 'w1', ref: '10 $' });
 	assert.equal(await got(sup.user.id, 'ADMIN_NEW_TICKET'), 1); assert.equal(await got(disp.user.id, 'ADMIN_NEW_TICKET'), 0);
 	assert.equal(await got(disp.user.id, 'ADMIN_WITHDRAWAL_REQUESTED'), 0); assert.equal(await got(sup.user.id, 'ADMIN_WITHDRAWAL_REQUESTED'), 0);
@@ -97,12 +97,12 @@ test('PG: admin notifications reach only people who hold the permission NOW, and
 test('PG: the assistant socket - an admin is privileged only while it holds access; the check runs on EVERY question, so withdrawal / suspension cuts an already-open connection', opts, async () => {
 	const e = await env(); const { resolveHelpAssistantUser } = await import('../sockets/help-assistant-auth');
 	const socketFor = (u: any) => { const token = jwt.sign({ userId: u.id }, process.env.JWT_SECRET!, { expiresIn: '1h' }); return { userId: u.id, handshake: { auth: { token }, address: '127.0.0.1', headers: {} } } as any; };
-	const ownerSock = socketFor(e.owner), st = await mkStaff(e, ['users.view'], 'as'), stSock = socketFor(st.user), bare = await e.mkUser('ADMIN', 'ab'), bareSock = socketFor(bare), sa = await e.mkUser('SUPER_ADMIN', 'asa'), saSock = socketFor(sa);
+	const superSock = socketFor(e.sa), st = await mkStaff(e, ['users.view'], 'as'), stSock = socketFor(st.user), bare = await e.mkUser('ADMIN', 'ab'), bareSock = socketFor(bare), sa = await e.mkUser('SUPER_ADMIN', 'asa'), saSock = socketFor(sa);
 	const ask = (s: any) => resolveHelpAssistantUser(s);
-	assert.deepEqual(await ask(ownerSock), { ok: true, userId: e.owner.id, role: 'admin' });
+	assert.deepEqual(await ask(superSock), { ok: true, userId: e.sa.id, role: 'admin' });
 	assert.equal((await ask(stSock) as any).ok, true);
 	assert.deepEqual(await ask(bareSock), { ok: false, reason: 'FORBIDDEN' });   // ADMIN account with no placement
-	assert.deepEqual(await ask(saSock), { ok: false, reason: 'FORBIDDEN' });     // SUPER_ADMIN is not an exception
+	assert.deepEqual(await ask(saSock), { ok: true, userId: sa.id, role: 'admin' }); // every SUPER_ADMIN account, with no staff row
 	// the same open connection (same socket object) after the permission is withdrawn / the member suspended / the role removed
 	await e.prisma.adminRole.update({ where: { id: st.role.id }, data: { permissions: [] } });
 	assert.deepEqual(await ask(stSock), { ok: false, reason: 'FORBIDDEN' });
@@ -117,7 +117,7 @@ test('PG: the assistant socket - an admin is privileged only while it holds acce
 	await assert.doesNotReject(() => resolveAssistantOptions(ctx(w.inDispute.project.id), disp.user.id, 'admin'));
 	await assert.rejects(() => resolveAssistantOptions(ctx(w.plain.project.id), disp.user.id, 'admin'), (x: any) => x.code === 'FORBIDDEN');
 	await assert.rejects(() => resolveAssistantOptions(ctx(w.inDispute.project.id), bare.id, 'admin'), (x: any) => x.code === 'FORBIDDEN');
-	await assert.doesNotReject(() => resolveAssistantOptions(ctx(w.plain.project.id), e.owner.id, 'admin'));
+	await assert.doesNotReject(() => resolveAssistantOptions(ctx(w.plain.project.id), e.sa.id, 'admin'));
 });
 
 test('PG: open connections are cut when access is suspended, re-roled or reduced (and only then)', opts, async () => {
@@ -127,53 +127,27 @@ test('PG: open connections are cut when access is suspended, re-roled or reduced
 	const st = await mkStaff(e, ['users.view', 'tasks.manage'], 'cs'), other = await mkStaff(e, ['users.view'], 'co');
 	const all = [fake(st.user.id), fake(other.user.id)];
 	setSocketServer({ of: () => ({ fetchSockets: async () => all }) } as any);
-	const r1 = await e.call('PATCH', `/admin/team/roles/${st.role.id}`, e.owner.id, { expectedVersion: st.role.version, permissions: ['users.view', 'tasks.manage', 'support.review'] });
+	const r1 = await e.call('PATCH', `/admin/team/roles/${st.role.id}`, e.sa.id, { expectedVersion: st.role.version, permissions: ['users.view', 'tasks.manage', 'support.review'] });
 	assert.equal(r1.status, 200); await new Promise(r => setTimeout(r, 30)); assert.deepEqual(cut, [], 'adding a permission cuts nothing');
-	const r2 = await e.call('PATCH', `/admin/team/roles/${st.role.id}`, e.owner.id, { expectedVersion: r1.json.data.version, permissions: ['users.view'] });
+	const r2 = await e.call('PATCH', `/admin/team/roles/${st.role.id}`, e.sa.id, { expectedVersion: r1.json.data.version, permissions: ['users.view'] });
 	assert.equal(r2.status, 200); await new Promise(r => setTimeout(r, 30)); assert.deepEqual([...new Set(cut)], [st.user.id], 'withdrawing one cuts that role members only');
 	cut.length = 0;
-	const sus = await e.call('POST', `/admin/team/staff/${other.user.id}/suspend`, e.owner.id); assert.equal(sus.status, 200);
+	const sus = await e.call('POST', `/admin/team/staff/${other.user.id}/suspend`, e.sa.id); assert.equal(sus.status, 200);
 	await new Promise(r => setTimeout(r, 30)); assert.deepEqual([...new Set(cut)], [other.user.id]); assert.ok(msgs.includes('admin_access_changed'));
 	setSocketServer(null);
 });
 
-test('PG: the owner cannot be changed, suspended, re-roled or deleted from ANY route - public, users list, brokers, team - nor by the database; and there can never be a second owner, even concurrently', opts, async () => {
-	const e = await env(); const { prisma } = e;
-	const mgr = (await mkStaff(e, ['users.view', 'users.suspend', 'users.delete', 'team.view', 'tasks.manage'], 'pm')).user; const sa = await e.mkUser('SUPER_ADMIN', 'psa');
-	const o = e.owner.id; const before = await prisma.user.findUniqueOrThrow({ where: { id: o } });
-	for (const who of [mgr.id, sa.id, o]) {
-		for (const [m, url, body] of [['PATCH', `/admin/users/${o}/status`, { status: 'SUSPENDED', reason: 'اختبار' }], ['PATCH', `/admin/users/${o}/roles`, { roles: ['CLIENT'] }], ['DELETE', `/admin/users/${o}`, {}], ['POST', `/admin/team/staff/${o}/suspend`, {}], ['POST', `/admin/team/staff/${o}/reactivate`, {}], ['PATCH', `/admin/team/staff/${o}/role`, { roleId: null, expectedVersion: 1 }], ['POST', `/admin/team/staff/attach`, { userId: o, roleId: null }]] as any[]) {
-			const r = await e.call(m, url, who, body); assert.equal(r.status, 403, `${who === o ? 'owner self' : 'non-owner'} ${m} ${url} -> ${r.status} ${r.text.slice(0, 120)}`);
-		}
-	}
-	const brokerCase = await e.call('PATCH', `/admin/brokers/${o}/status`, mgr.id, { status: 'SUSPENDED', reason: 'اختبار حماية المالك' }); assert.ok([400, 403, 404].includes(brokerCase.status), `broker route ${brokerCase.status}`);
-	const after_ = await prisma.user.findUniqueOrThrow({ where: { id: o } });
-	assert.equal(after_.status, before.status); assert.equal(after_.isBanned, before.isBanned); assert.equal(after_.accountType, before.accountType); assert.deepEqual(after_.roles, before.roles);
-	// the database itself refuses what a route might one day forget
-	for (const sql of [`UPDATE "users" SET "status" = 'SUSPENDED' WHERE "id" = '${o}'`, `UPDATE "users" SET "isBanned" = true WHERE "id" = '${o}'`, `UPDATE "users" SET "accountType" = 'CLIENT_INDIVIDUAL' WHERE "id" = '${o}'`, `DELETE FROM "users" WHERE "id" = '${o}'`, `UPDATE "platform_owner" SET "userId" = '${mgr.id}'`, `DELETE FROM "platform_owner"`]) {
-		await assert.rejects(() => prisma.$executeRawUnsafe(sql), (x: any) => /OWNER_PROTECTED|platform_owner|foreign key/i.test(String(x?.message)), sql);
-	}
-	assert.equal(await prisma.platformOwner.count(), 1);
-	// a second owner: a different id is refused by the CHECK; two concurrent inserts leave exactly one
-	await assert.rejects(() => prisma.$executeRawUnsafe(`INSERT INTO "platform_owner" ("id","userId","designatedAt","designatedBy") VALUES (2,'${mgr.id}', now(), 'x')`));
-	await assert.rejects(() => prisma.platformOwner.create({ data: { userId: mgr.id, designatedBy: 'x' } }));
-	const racers = await Promise.allSettled([sa.id, mgr.id].map(u => prisma.platformOwner.create({ data: { userId: u, designatedBy: 'race' } })));
-	assert.equal(racers.filter(r => r.status === 'fulfilled').length, 0); assert.equal(await prisma.platformOwner.count(), 1); assert.equal((await prisma.platformOwner.findFirstOrThrow()).userId, o);
-	// benign changes of the owner's own profile still work (the trigger guards only status / ban / type)
-	await prisma.user.update({ where: { id: o }, data: { lastName: 'اختبار' } });
-});
-
-test('PG: unknown permissions are refused everywhere (role create / edit, templates), owner-only powers are not grantable, an invitation needs an existing role, and a stale unknown id stored in a role is ignored', opts, async () => {
+test('PG: unknown permissions are refused everywhere (role create / edit, templates), SUPER_ADMIN-only powers are not grantable, an invitation needs an existing role, and a stale unknown id stored in a role is ignored', opts, async () => {
 	const e = await env();
-	for (const bad of ['bogus.perm', 'staff.invite', 'roles.manage', 'permissions.grant', 'ownership', '*', 'users.*', '']) {
-		const r = await e.call('POST', '/admin/team/roles', e.owner.id, { name: `سيئ ${tag()}`, permissions: ['users.view', bad] }); assert.equal(r.status, 400, `create with ${bad}`);
+	for (const bad of ['bogus.perm', 'staff.invite', 'roles.manage', 'permissions.grant', 'super_admin.create', '*', 'users.*', '']) {
+		const r = await e.call('POST', '/admin/team/roles', e.sa.id, { name: `سيئ ${tag()}`, permissions: ['users.view', bad] }); assert.equal(r.status, 400, `create with ${bad}`);
 	}
 	const role = await mkRole(e, ['users.view']);
-	const upd = await e.call('PATCH', `/admin/team/roles/${role.id}`, e.owner.id, { expectedVersion: role.version, permissions: ['users.view', 'nope.nope'] }); assert.equal(upd.status, 400);
+	const upd = await e.call('PATCH', `/admin/team/roles/${role.id}`, e.sa.id, { expectedVersion: role.version, permissions: ['users.view', 'nope.nope'] }); assert.equal(upd.status, 400);
 	assert.deepEqual((await e.prisma.adminRole.findUniqueOrThrow({ where: { id: role.id } })).permissions, ['users.view']);
-	assert.equal((await e.call('POST', '/admin/team/invites', e.owner.id, { email: `x-${tag()}@pg.test`, fullName: 'مدعو اختبار', roleId: randomUUID() })).status, 400);
-	assert.equal((await e.call('POST', '/admin/team/invites', e.owner.id, { email: `y-${tag()}@pg.test`, fullName: 'مدعو اختبار', roleId: role.id, permissions: ['users.delete'] })).status, 400); // no permissions can ride on an invitation
-	const raw = await e.prisma.adminRole.create({ data: { name: `خام ${tag()}`, nameKey: `raw-${tag()}`, permissions: ['users.view', 'legacy.gone', 'staff.invite'], createdById: e.owner.id } });
+	assert.equal((await e.call('POST', '/admin/team/invites', e.sa.id, { email: `x-${tag()}@pg.test`, fullName: 'مدعو اختبار', roleId: randomUUID() })).status, 400);
+	assert.equal((await e.call('POST', '/admin/team/invites', e.sa.id, { email: `y-${tag()}@pg.test`, fullName: 'مدعو اختبار', roleId: role.id, permissions: ['users.delete'] })).status, 400); // no permissions can ride on an invitation
+	const raw = await e.prisma.adminRole.create({ data: { name: `خام ${tag()}`, nameKey: `raw-${tag()}`, permissions: ['users.view', 'legacy.gone', 'staff.invite'], createdById: e.sa.id } });
 	const u = await e.mkUser('ADMIN', 'raw'); await e.prisma.adminStaff.create({ data: { userId: u.id, roleId: raw.id } });
 	const me = await e.call('GET', '/admin/team/access/me', u.id); assert.equal(me.status, 200); assert.deepEqual(me.json.data.permissions, ['users.view']);
 	assert.equal((await e.call('POST', '/admin/team/roles', u.id, { name: 'ترقية', permissions: [] })).status, 403);
@@ -184,15 +158,15 @@ test('PG: a custom role given to one member changes nobody else; editing a role 
 	const a = await mkStaff(e, ['users.view'], 'ca'), b = await mkStaff(e, ['users.view'], 'cb');
 	const custom = await mkRole(e, ['users.view', 'support.review'], `مخصص ${tag()}`);
 	const staffA = await e.prisma.adminStaff.findUniqueOrThrow({ where: { userId: a.user.id } });
-	const set = await e.call('PATCH', `/admin/team/staff/${a.user.id}/role`, e.owner.id, { roleId: custom.id, expectedVersion: staffA.version }); assert.equal(set.status, 200);
+	const set = await e.call('PATCH', `/admin/team/staff/${a.user.id}/role`, e.sa.id, { roleId: custom.id, expectedVersion: staffA.version }); assert.equal(set.status, 200);
 	const perms = async (id: string) => (await e.call('GET', '/admin/team/access/me', id)).json.data.permissions.slice().sort();
 	assert.deepEqual(await perms(a.user.id), ['support.review', 'users.view']); assert.deepEqual(await perms(b.user.id), ['users.view']);
 	// the member cannot touch their own or a colleague's access
 	for (const [m, url, body] of [['PATCH', `/admin/team/staff/${a.user.id}/role`, { roleId: b.role.id, expectedVersion: 99 }], ['PATCH', `/admin/team/staff/${b.user.id}/role`, { roleId: custom.id, expectedVersion: 1 }], ['PATCH', `/admin/team/roles/${custom.id}`, { expectedVersion: 1, permissions: ['users.delete'] }]] as any[]) assert.equal((await e.call(m, url, a.user.id, body)).status, 403, url);
 	// the role edit reaches the member at once and is listed with its member count
-	const edit = await e.call('PATCH', `/admin/team/roles/${custom.id}`, e.owner.id, { expectedVersion: custom.version, permissions: ['users.view'] }); assert.equal(edit.status, 200);
+	const edit = await e.call('PATCH', `/admin/team/roles/${custom.id}`, e.sa.id, { expectedVersion: custom.version, permissions: ['users.view'] }); assert.equal(edit.status, 200);
 	assert.deepEqual(await perms(a.user.id), ['users.view']);
-	const list = await e.call('GET', '/admin/team/roles', e.owner.id); assert.equal(list.json.data.find((r: any) => r.id === custom.id).memberCount, 1);
+	const list = await e.call('GET', '/admin/team/roles', e.sa.id); assert.equal(list.json.data.find((r: any) => r.id === custom.id).memberCount, 1);
 });
 
 test('PG: presence is real - «active now» only for a live session with activity in the last 5 minutes (revoked / expired / stale / suspended = not); departments are derived from the role; the activity feed is for the owner, the member, or tasks.manage', opts, async () => {
@@ -208,10 +182,10 @@ test('PG: presence is real - «active now» only for a live session with activit
 	assert.equal(by(none.user.id).lastActiveAt, null); // no session = no claim, never a made-up time
 	assert.ok(by(stale.user.id).lastActiveAt); assert.deepEqual(by(live.user.id).departments, ['المستخدمون', 'النزاعات']);
 	assert.ok(r.json.data.counts.activeNow >= 1);
-	// the activity feed: own, owner, tasks.manage - not a colleague with only team.view
+	// the activity feed: own, a SUPER_ADMIN, tasks.manage - not a colleague with only team.view
 	const mgr = (await mkStaff(e, ['tasks.manage', 'team.view'], 'pm2')).user;
 	assert.equal((await e.call('GET', `/admin/team/staff/${live.user.id}/activity`, live.user.id)).status, 200);
-	assert.equal((await e.call('GET', `/admin/team/staff/${live.user.id}/activity`, e.owner.id)).status, 200);
+	assert.equal((await e.call('GET', `/admin/team/staff/${live.user.id}/activity`, e.sa.id)).status, 200);
 	assert.equal((await e.call('GET', `/admin/team/staff/${live.user.id}/activity`, mgr.id)).status, 200);
 	const denied = await e.call('GET', `/admin/team/staff/${live.user.id}/activity`, viewer.id); assert.equal(denied.status, 403); assert.equal(denied.json.code, 'ADMIN_PERMISSION_DENIED');
 	assert.equal((await e.call('GET', `/admin/team/staff/${live.user.id}/activity`, (await e.mkUser('ADMIN', 'pbare')).id)).status, 403);

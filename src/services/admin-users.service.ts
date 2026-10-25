@@ -1,4 +1,3 @@
-import { isPlatformOwner, OWNER_PROTECTED_CODE } from './admin-access.service';
 import { prisma } from '../config/db';
 import { disconnectUserSockets } from '../utils/socket-registry';
 import { AccountType, UserStatus, UserRole, RiskLevel, Prisma, LogCategory, LogStatus, ProjectStatus } from '@prisma/client';
@@ -436,8 +435,7 @@ export class AdminUsersService {
 
     const target = await prisma.user.findUnique({ where: { id }, select: { id: true, accountType: true, status: true } });
     if (!target) throw new AppError('المستخدم غير موجود', 404);
-    if (await isPlatformOwner(id)) throw new AppError('حساب مالك المنصة محمي ولا يمكن تعديله أو إيقافه أو حذفه من هنا.', 403, undefined, OWNER_PROTECTED_CODE);
-    if (ADMIN_TYPES.includes(target.accountType)) throw new AppError('وصول موظفي الإدارة يوقفه مالك المنصة من صفحة فريق الإدارة، لا من قائمة المستخدمين', 403);
+    if (ADMIN_TYPES.includes(target.accountType)) throw new AppError('وصول موظفي الإدارة يوقفه Super Admin من صفحة فريق الإدارة، لا من قائمة المستخدمين', 403);
     if (target.status === UserStatus.PENDING_VERIFICATION) throw new AppError('الحساب لم يؤكد بريده بعد، ولا يمكن تغيير حالته يدوياً', 409);
     if (target.status === next) throw new AppError('الحساب بهذه الحالة بالفعل', 409);
 
@@ -480,7 +478,6 @@ export class AdminUsersService {
       select: { id: true, accountType: true, roles: true, activeRole: true, clientProfile: { select: { id: true } }, providerProfile: { select: { id: true } }, affiliateProfile: { select: { id: true } } }
     });
     if (!target) throw new AppError('المستخدم غير موجود', 404);
-    if (await isPlatformOwner(id)) throw new AppError('حساب مالك المنصة محمي ولا يمكن تعديله أو إيقافه أو حذفه من هنا.', 403, undefined, OWNER_PROTECTED_CODE);
     if (ADMIN_TYPES.includes(target.accountType)) throw new AppError('أدوار الحسابات الإدارية تُدار من صفحة فريق الإدارة', 403);
 
     const base = baseRoleOf(target.accountType);
@@ -686,7 +683,6 @@ export class AdminUsersService {
     if (actor && actor.id === id) throw new AppError('لا يمكنك حذف حسابك بنفسك', 403);
     const target = await prisma.user.findUnique({ where: { id }, select: { id: true, accountType: true, status: true } });
     if (!target) throw new AppError('المستخدم غير موجود', 404);
-    if (await isPlatformOwner(id)) throw new AppError('حساب مالك المنصة محمي ولا يمكن تعديله أو إيقافه أو حذفه من هنا.', 403, undefined, OWNER_PROTECTED_CODE);
     if (ADMIN_TYPES.includes(target.accountType)) throw new AppError('لا يمكن حذف حساب إداري من هنا', 403);
     return await prisma.$transaction(async (tx) => {
       // 1. Unassign provider from any projects to prevent constraint errors

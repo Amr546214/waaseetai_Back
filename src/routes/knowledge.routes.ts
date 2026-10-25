@@ -6,11 +6,12 @@ import { adminHasAnyAccess } from '../services/admin-access.service';
 
 const router = Router();
 router.use(optionalAuthenticate);
-// An ADMIN / SUPER_ADMIN account is privileged for knowledge (all audiences, other users' documents) only while it is the owner or active staff holding a permission; otherwise it is read as a guest.
+// Only a SUPER_ADMIN is privileged for knowledge (all audiences, other users' documents). A staff member (ADMIN account) is read as a guest here: no administrative permission is a license to read
+// documents that belong to users, and no finer policy exists yet (it would need an explicit delegation tied to a case).
 router.use(async (req, _res, next) => {
 	try {
 		const t = req.user?.accountType;
-		if ((t === 'ADMIN' || t === 'SUPER_ADMIN') && !(await adminHasAnyAccess(req.user!.id))) (req as any).knowledgeAdminDemoted = true;
+		if (t === 'ADMIN' || (t === 'SUPER_ADMIN' && !(await adminHasAnyAccess(req.user!.id)))) (req as any).knowledgeAdminDemoted = true;
 		next();
 	} catch (e) { next(e); }
 });

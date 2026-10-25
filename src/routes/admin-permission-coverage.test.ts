@@ -18,7 +18,7 @@ for (const m of appSource.matchAll(/import\s+(\w+)\s*,\s*\{([^}]+)\}\s+from\s+'(
 for (const m of appSource.matchAll(/import\s+\{([^}]+)\}\s+from\s+'(\.\/routes\/[^']+)'/g)) for (const n of m[1].split(',').map(x => x.trim().split(/\s+as\s+/).pop()!)) imports.set(n, { file: m[2], name: n });
 const mounts = [...appSource.matchAll(/mountAppRoute\('\/api\/admin\/([\w-]+)',\s*(\w+)\)/g)].map(m => ({ prefix: m[1], ident: m[2] }));
 
-const isGuard = (h: any) => !!(h && (h.adminPermissions || h.adminOwnerOnly || h.adminMember || h.adminSelf || h.adminScoped));
+const isGuard = (h: any) => !!(h && (h.adminPermissions || h.adminSuperAdminOnly || h.adminMember || h.adminSelf || h.adminScoped));
 
 test('every route of every /admin router is behind a permission / owner / member / self guard (deny by default)', async () => {
 	assert.ok(mounts.length >= 25, `found ${mounts.length} mounts`);
@@ -60,11 +60,11 @@ test('no admin route file still authorizes by ADMIN / SUPER_ADMIN account type (
 });
 
 test('registry: ids are unique and stable-looking, every template only uses known ids, owner-only capabilities are not permissions', async () => {
-	const { ADMIN_PERMISSIONS, ADMIN_ROLE_TEMPLATES, OWNER_ONLY_CAPABILITIES, isKnownPermission } = await import('../config/admin-permissions');
+	const { ADMIN_PERMISSIONS, ADMIN_ROLE_TEMPLATES, SUPER_ADMIN_ONLY_CAPABILITIES, isKnownPermission } = await import('../config/admin-permissions');
 	const ids = ADMIN_PERMISSIONS.map(p => p.id);
 	assert.equal(new Set(ids).size, ids.length); for (const id of ids) assert.match(id, /^[a-z_]+\.[a-z_]+$/);
 	for (const t of ADMIN_ROLE_TEMPLATES) for (const p of t.permissions) assert.ok(isKnownPermission(p), `${t.key}: ${p}`);
-	for (const c of OWNER_ONLY_CAPABILITIES) assert.ok(!isKnownPermission(c), `${c} must not be grantable`);
+	for (const c of SUPER_ADMIN_ONLY_CAPABILITIES) assert.ok(!isKnownPermission(c), `${c} must not be grantable`);
 	// read / approve / reject / payout are four distinct ids
 	for (const id of ['withdrawals.review', 'withdrawals.approve', 'withdrawals.reject', 'payouts.send', 'finance.read']) assert.ok(ids.includes(id));
 	// no template hands out the owner-only powers or the money-moving ids beyond what the design shows
@@ -73,7 +73,7 @@ test('registry: ids are unique and stable-looking, every template only uses know
 
 test('dashboard shaping removes (does not zero) what the caller cannot see', async () => {
 	const { shapeSummary, shapeCharts, shapeActivity } = await import('../utils/admin-dashboard-shaping');
-	const actor = (...p: string[]) => ({ userId: 'u', isOwner: false, staffId: 's', staffStatus: 'ACTIVE' as const, roleId: 'r', roleName: 'x', permissions: new Set(p) });
+	const actor = (...p: string[]) => ({ userId: 'u', isSuperAdmin: false, staffId: 's', staffStatus: 'ACTIVE' as const, roleId: 'r', roleName: 'x', permissions: new Set(p) });
 	const sum = { kpis: { users: { total: 5 }, revenue: { total: 9 }, disputes: { open: 1 }, tickets: { open: 2 }, withdrawals: { pending: 3 }, projects: { active: 1 } }, queues: [{ key: 'withdrawals' }, { key: 'tickets' }, { key: 'kyc' }], alerts: [{ key: 'pendingWithdrawals' }, { key: 'kycOver24h' }] };
 	const a = shapeSummary(sum, actor('support.review')); assert.deepEqual(Object.keys(a.kpis).sort(), ['projects', 'tickets']); assert.deepEqual(a.queues.map((q: any) => q.key), ['tickets']); assert.deepEqual(a.alerts, []);
 	const b = shapeSummary(sum, actor('finance.read', 'withdrawals.review', 'identity.review')); assert.ok(b.kpis.revenue && b.kpis.withdrawals && !b.kpis.users); assert.deepEqual(b.queues.map((q: any) => q.key), ['withdrawals', 'kyc']);

@@ -8,7 +8,7 @@ type Fx = { audit: any[]; providerNotes: any[]; clientNotes: any[]; dispute: any
 async function load(t: TestContext, overrides: Partial<any> = {}) {
 	const fx: Fx = { audit: [], providerNotes: [], clientNotes: [], dispute: { id: 'd1', requestId: null, projectId: 'p1', openedById: 'client-1', againstUserId: 'prov-1', status: 'OPEN', reason: 'r', description: 'd', evidence: [], ...overrides } };
 	const prisma: any = {
-		platformOwner: { findUnique: async ({ where }: any) => (where.userId === 'admin-2' ? { userId: 'admin-2' } : null) }, adminStaff: { findUnique: async () => null },
+		adminStaff: { findUnique: async ({ where }: any) => (where.userId === 'admin-2' ? { id: 's2', status: 'ACTIVE', roleId: 'r', scoped: false, departments: [], overrides: [], role: { id: 'r', name: 'r', permissions: ['disputes.view'] } } : null) },
 		dispute: {
 			findUnique: async ({ where }: any) => (where.id === 'd1' ? { ...fx.dispute, request: null, project: { id: 'p1' }, openedBy: { id: 'client-1' }, againstUser: { id: 'prov-1' }, resolvedBy: null } : null),
 			update: async ({ data }: any) => { Object.assign(fx.dispute, data); return { ...fx.dispute }; },

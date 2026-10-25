@@ -1,6 +1,9 @@
--- Admin team: platform owner, roles (permission templates), staff, invitations, tasks, access audit.
--- ADDITIVE ONLY: seven new tables and six new enums. No existing table or column is touched, nothing is backfilled, NO account is made owner and NO role is given to anybody here.
--- PREPARED, NOT EXECUTED on any shared database. The owner is designated separately (scripts/set-platform-owner.ts) after the owner confirms the account id.
+-- Admin team & permissions (additive only: new enums, new tables; no existing table or row is touched; no role, staff row or permission is created).
+-- SUPER_ADMIN accounts keep full admin access by account type; ADMIN accounts hold nothing until a SUPER_ADMIN places them in the team with a role.
+
+-- CreateEnum
+CREATE TYPE "AdminOverrideEffect" AS ENUM ('GRANT', 'DENY');
+
 -- CreateEnum
 CREATE TYPE "AdminStaffStatus" AS ENUM ('ACTIVE', 'SUSPENDED');
 
@@ -15,16 +18,6 @@ CREATE TYPE "AdminTaskPriority" AS ENUM ('URGENT', 'HIGH', 'MEDIUM', 'NORMAL', '
 
 -- CreateEnum
 CREATE TYPE "AdminTaskType" AS ENUM ('DISPUTE', 'REPORT', 'SUPPORT', 'APPROVAL', 'FINANCE', 'DOCUMENT');
-
--- CreateTable
-CREATE TABLE "platform_owner" (
-    "id" INTEGER NOT NULL DEFAULT 1,
-    "userId" TEXT NOT NULL,
-    "designatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "designatedBy" VARCHAR(120) NOT NULL,
-
-    CONSTRAINT "platform_owner_pkey" PRIMARY KEY ("id")
-);
 
 -- CreateTable
 CREATE TABLE "admin_roles" (
@@ -52,6 +45,8 @@ CREATE TABLE "admin_staff" (
     "invitedById" TEXT,
     "joinedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "suspendedAt" TIMESTAMP(3),
+    "scoped" BOOLEAN NOT NULL DEFAULT false,
+    "departments" TEXT[] DEFAULT ARRAY[]::TEXT[],
     "version" INTEGER NOT NULL DEFAULT 1,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -73,6 +68,7 @@ CREATE TABLE "admin_invites" (
     "cancelledAt" TIMESTAMP(3),
     "resendCount" INTEGER NOT NULL DEFAULT 0,
     "lastSentAt" TIMESTAMP(3),
+    "departments" TEXT[] DEFAULT ARRAY[]::TEXT[],
     "verifyCodeHash" VARCHAR(64),
     "verifyCodeExpiresAt" TIMESTAMP(3),
     "verifyCodeSentAt" TIMESTAMP(3),
@@ -134,8 +130,17 @@ CREATE TABLE "admin_access_audit" (
     CONSTRAINT "admin_access_audit_pkey" PRIMARY KEY ("id")
 );
 
--- CreateIndex
-CREATE UNIQUE INDEX "platform_owner_userId_key" ON "platform_owner"("userId");
+-- CreateTable
+CREATE TABLE "admin_staff_overrides" (
+    "id" TEXT NOT NULL,
+    "staffId" TEXT NOT NULL,
+    "permission" VARCHAR(60) NOT NULL,
+    "effect" "AdminOverrideEffect" NOT NULL,
+    "createdById" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "admin_staff_overrides_pkey" PRIMARY KEY ("id")
+);
 
 -- CreateIndex
 CREATE UNIQUE INDEX "admin_roles_nameKey_key" ON "admin_roles"("nameKey");
@@ -179,8 +184,8 @@ CREATE INDEX "admin_access_audit_subjectUserId_idx" ON "admin_access_audit"("sub
 -- CreateIndex
 CREATE INDEX "admin_access_audit_action_idx" ON "admin_access_audit"("action");
 
--- AddForeignKey
-ALTER TABLE "platform_owner" ADD CONSTRAINT "platform_owner_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+-- CreateIndex
+CREATE UNIQUE INDEX "admin_staff_overrides_staffId_permission_key" ON "admin_staff_overrides"("staffId", "permission");
 
 -- AddForeignKey
 ALTER TABLE "admin_staff" ADD CONSTRAINT "admin_staff_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -197,31 +202,9 @@ ALTER TABLE "admin_tasks" ADD CONSTRAINT "admin_tasks_assigneeId_fkey" FOREIGN K
 -- AddForeignKey
 ALTER TABLE "admin_task_events" ADD CONSTRAINT "admin_task_events_taskId_fkey" FOREIGN KEY ("taskId") REFERENCES "admin_tasks"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
+-- AddForeignKey
+ALTER TABLE "admin_staff_overrides" ADD CONSTRAINT "admin_staff_overrides_staffId_fkey" FOREIGN KEY ("staffId") REFERENCES "admin_staff"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
--- ── objects Prisma cannot express ──────────────────────────────────────────────────────────────────────────────────────────────────────
--- Exactly one platform owner: the single row must have id = 1.
-ALTER TABLE "platform_owner" ADD CONSTRAINT "platform_owner_single_row" CHECK ("id" = 1);
--- One PENDING invitation per e-mail address (the e-mail is stored lower-cased by the application).
+
+-- one PENDING invitation per e-mail address
 CREATE UNIQUE INDEX "ux_admin_invites_one_pending_per_email" ON "admin_invites"("email") WHERE "status" = 'PENDING';
-
--- Backstop for the single-owner rule, independent of any application route: the owner row cannot be changed or removed, and the owner's account cannot be suspended / banned /
--- re-typed or deleted by any statement. Changing ownership is out of scope and needs a deliberate DBA action (drop the trigger, change, recreate it).
-CREATE OR REPLACE FUNCTION "waseet_protect_platform_owner"() RETURNS trigger AS $$
-BEGIN
-  IF TG_TABLE_NAME = 'platform_owner' THEN
-    IF TG_OP = 'INSERT' THEN RETURN NEW; END IF;
-    RAISE EXCEPTION 'OWNER_PROTECTED: platform_owner is immutable' USING ERRCODE = 'P0001';
-  END IF;
-  IF TG_OP = 'DELETE' THEN
-    IF EXISTS (SELECT 1 FROM "platform_owner" WHERE "userId" = OLD."id") THEN RAISE EXCEPTION 'OWNER_PROTECTED: the owner account cannot be deleted' USING ERRCODE = 'P0001'; END IF;
-    RETURN OLD;
-  END IF;
-  IF EXISTS (SELECT 1 FROM "platform_owner" WHERE "userId" = OLD."id")
-     AND (NEW."status" IS DISTINCT FROM OLD."status" OR NEW."isBanned" IS DISTINCT FROM OLD."isBanned" OR NEW."accountType" IS DISTINCT FROM OLD."accountType") THEN
-    RAISE EXCEPTION 'OWNER_PROTECTED: the owner account cannot be suspended, banned or re-typed' USING ERRCODE = 'P0001';
-  END IF;
-  RETURN NEW;
-END $$ LANGUAGE plpgsql;
-
-CREATE TRIGGER "platform_owner_immutable" BEFORE UPDATE OR DELETE ON "platform_owner" FOR EACH ROW EXECUTE FUNCTION "waseet_protect_platform_owner"();
-CREATE TRIGGER "users_owner_protected" BEFORE UPDATE OR DELETE ON "users" FOR EACH ROW EXECUTE FUNCTION "waseet_protect_platform_owner"();

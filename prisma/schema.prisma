@@ -137,7 +137,6 @@ model User {
   providerProfile  ProviderProfile?
   affiliateProfile AffiliateProfile?
   referredBy       Referral?         @relation("ReferredUser")
-  platformOwner    PlatformOwner?    @relation("PlatformOwnerUser")
   adminStaff       AdminStaff?       @relation("AdminStaffUser")
 
   clientProjects   Project[]         @relation("ClientProjects")
@@ -2880,6 +2879,11 @@ model ChatDigestActivation {
 // Authorization for every admin route comes from these tables (see src/config/admin-permissions.ts); an ADMIN / SUPER_ADMIN account type alone grants NOTHING.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+enum AdminOverrideEffect {
+  GRANT
+  DENY
+}
+
 enum AdminStaffStatus {
   ACTIVE
   SUSPENDED
@@ -2917,16 +2921,6 @@ enum AdminTaskType {
 }
 
 /// The single platform owner. Exactly one row (id is fixed to 1 and CHECKed in the migration). Set only by scripts/set-platform-owner.ts after the owner confirms the account id.
-model PlatformOwner {
-  id           Int      @id @default(1)
-  userId       String   @unique
-  designatedAt DateTime @default(now())
-  designatedBy String   @db.VarChar(120)
-  user         User     @relation("PlatformOwnerUser", fields: [userId], references: [id], onDelete: Restrict)
-
-  @@map("platform_owner")
-}
-
 /// A permission template. `permissions` holds ids from the registry in src/config/admin-permissions.ts; `version` makes concurrent edits detectable (compare-and-set).
 model AdminRole {
   id          String   @id @default(uuid())
@@ -2955,11 +2949,15 @@ model AdminStaff {
   invitedById String?
   joinedAt    DateTime         @default(now())
   suspendedAt DateTime?
+  // real section scope («الأقسام المتاحة»): when `scoped`, the permissions of a section only apply if the section is listed here. Narrows, never grants.
+  scoped      Boolean          @default(false)
+  departments String[]         @default([])
   version     Int              @default(1)
   updatedAt   DateTime         @updatedAt
   user        User             @relation("AdminStaffUser", fields: [userId], references: [id], onDelete: Cascade)
   role        AdminRole?       @relation(fields: [roleId], references: [id], onDelete: Restrict)
   assigned    AdminTask[]      @relation("AdminTaskAssignee")
+  overrides   AdminStaffOverride[]
 
   @@index([roleId])
   @@index([status])
@@ -2982,6 +2980,7 @@ model AdminInvite {
   resendCount    Int               @default(0)
   lastSentAt     DateTime?
   // e-mail ownership proof at acceptance: a short code sent to the invited address (hash only), limited attempts / sends / lifetime
+  departments         String[]  @default([])
   verifyCodeHash      String?   @db.VarChar(64)
   verifyCodeExpiresAt DateTime?
   verifyCodeSentAt    DateTime?
@@ -3051,4 +3050,18 @@ model AdminAccessAudit {
   @@index([subjectUserId])
   @@index([action])
   @@map("admin_access_audit")
+}
+
+/// One person-specific change on top of the role of a staff member. effective = (role + GRANT) - DENY, then narrowed by the section scope. Written only by a SUPER_ADMIN.
+model AdminStaffOverride {
+  id          String                  @id @default(uuid())
+  staffId     String
+  permission  String                  @db.VarChar(60)
+  effect      AdminOverrideEffect
+  createdById String
+  createdAt   DateTime                @default(now())
+  staff       AdminStaff              @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@unique([staffId, permission])
+  @@map("admin_staff_overrides")
 }

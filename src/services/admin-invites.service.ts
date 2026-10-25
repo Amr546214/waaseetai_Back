@@ -5,6 +5,7 @@ import { prisma as defaultPrisma } from '../config/db';
 import { AppError, fieldError } from '../utils/app-error';
 import { authPasswordSchema } from '../utils/auth-password-policy';
 import { writeAccessAudit } from './admin-roles.service';
+import { isKnownDepartment } from '../config/admin-permissions';
 import { siteBaseUrl } from '../utils/site-url';
 import { notificationService } from './notification.service';
 
@@ -17,11 +18,11 @@ const newToken = () => crypto.randomBytes(32).toString('base64url');
 const normEmail = (e: unknown) => String(e ?? '').trim().toLowerCase();
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-/** Delivery of the invitation e-mail. The default sends NOTHING (the owner copies the link); a real sender is only wired when ADMIN_INVITE_EMAIL_ENABLED=true. */
+/** Delivery of the invitation e-mail. The default sends NOTHING (a SUPER_ADMIN copies the link); a real sender is only wired when ADMIN_INVITE_EMAIL_ENABLED=true. */
 export interface InviteMailer { send(to: string, fullName: string, link: string, roleName: string): Promise<boolean> }
 export const noMailer: InviteMailer = { async send() { return false; } };
 
-/** Sends the verification code to the invited address. Default: the real e-mail service (only reached when the recipient asks for a code on an invitation the owner issued). */
+/** Sends the verification code to the invited address. Default: the real e-mail service (only reached when the recipient asks for a code on an invitation a SUPER_ADMIN issued). */
 export interface CodeSender { send(to: string, code: string): Promise<void> }
 export const emailCodeSender: CodeSender = { async send(to, code) { await notificationService.sendAdminInviteCodeEmail(to, code); } };
 
@@ -39,7 +40,7 @@ export class AdminInvitesService {
 	/** The token travels in the URL FRAGMENT: it is never sent to a server, so it cannot appear in web-server, proxy or access logs. */
 	private link(token: string) { return `${siteBaseUrl() ?? ''}/admin-invite#${token}`; }
 
-	async create(actorId: string, input: { email?: unknown; fullName?: unknown; roleId?: unknown }) {
+	async create(actorId: string, input: { email?: unknown; fullName?: unknown; roleId?: unknown; departments?: unknown }) {
 		const email = normEmail(input.email);
 		if (!EMAIL.test(email) || email.length > 254) throw fieldError('email', 'صيغة البريد الإلكتروني غير صحيحة');
 		const fullName = String(input.fullName ?? '').trim().replace(/\s+/g, ' ');
@@ -48,6 +49,9 @@ export class AdminInvitesService {
 		const role = await this.db.adminRole.findUnique({ where: { id: roleId }, select: { id: true, name: true } });
 		if (!role) throw fieldError('roleId', 'اختر دورًا موجودًا');
 		if (await this.db.user.findUnique({ where: { email }, select: { id: true } })) throw fieldError('email', 'يوجد حساب بهذا البريد. أضفه إلى الفريق من «حسابات إدارية قائمة» إن كان حساب إدارة.', 409);
+		// the sections the member is scoped to (design: «الأقسام المتاحة»). Absent / empty = no section scope (the role decides); it can only narrow the role, never add to it
+		const departments = input.departments === undefined || input.departments === null ? [] : Array.isArray(input.departments) ? [...new Set(input.departments.map(String))] : null;
+		if (!departments || departments.some(d => !isKnownDepartment(d))) throw fieldError('departments', 'قسم غير معروف');
 		const token = newToken();
 		let inv;
 		try {
@@ -55,8 +59,8 @@ export class AdminInvitesService {
 				// one PENDING invitation per e-mail: a second one for the same address is refused (cancel the first, or resend it)
 				const open = await tx.adminInvite.findFirst({ where: { email, status: 'PENDING', expiresAt: { gt: this.now() } } });
 				if (open) throw fieldError('email', 'توجد دعوة معلقة لهذا البريد', 409);
-				const row = await tx.adminInvite.create({ data: { email, fullName, roleId, invitedById: actorId, tokenHash: sha256(token), expiresAt: new Date(this.now().getTime() + INVITE_TTL_MS), lastSentAt: this.now() } });
-				await writeAccessAudit(tx, { actorId, action: 'INVITE_CREATED', inviteId: row.id, after: { email, roleId } });
+				const row = await tx.adminInvite.create({ data: { email, fullName, roleId, invitedById: actorId, tokenHash: sha256(token), expiresAt: new Date(this.now().getTime() + INVITE_TTL_MS), lastSentAt: this.now(), departments } });
+				await writeAccessAudit(tx, { actorId, action: 'INVITE_CREATED', inviteId: row.id, after: { email, roleId, departments } });
 				return row;
 			});
 		} catch (e) {
@@ -65,7 +69,7 @@ export class AdminInvitesService {
 		}
 		const link = this.link(token);
 		const emailed = await this.mailer.send(email, fullName, link, role.name).catch(() => false);
-		return { id: inv.id, email, expiresAt: inv.expiresAt, emailed, link }; // the link is shown to the owner once, here
+		return { id: inv.id, email, expiresAt: inv.expiresAt, emailed, link }; // the link is shown to the SUPER_ADMIN once, here
 	}
 
 	async resend(actorId: string, id: string) {
@@ -156,8 +160,8 @@ export class AdminInvitesService {
 					email: inv.email, password: hash, agreedToTerms: true, authProvider: 'local',
 				} });
 				await tx.adminInvite.update({ where: { id: inv.id }, data: { acceptedUserId: user.id } });
-				await tx.adminStaff.create({ data: { userId: user.id, roleId: inv.roleId, invitedById: inv.invitedById } });
-				await writeAccessAudit(tx, { actorId: user.id, action: 'INVITE_ACCEPTED', subjectUserId: user.id, inviteId: inv.id, after: { roleId: inv.roleId } });
+				await tx.adminStaff.create({ data: { userId: user.id, roleId: inv.roleId, invitedById: inv.invitedById, scoped: inv.departments.length > 0, departments: inv.departments } });
+				await writeAccessAudit(tx, { actorId: user.id, action: 'INVITE_ACCEPTED', subjectUserId: user.id, inviteId: inv.id, after: { roleId: inv.roleId, departments: inv.departments } });
 				return { userId: user.id, email: user.email };
 			});
 		} catch (e) {
