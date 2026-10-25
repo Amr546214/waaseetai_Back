@@ -5,7 +5,9 @@ process.env.OPENAI_API_KEY = 'test-key';
 
 // D1 admin services with a swappable fake prisma (mock.module once; each test installs its own `current`). No database, no network.
 let current: any = {};
-const prisma: any = new Proxy({}, { get: (_t, k: string) => (k === '$transaction' ? (fn: any) => fn(current) : current[k]) });
+// `platformOwner` defaults to «nobody is the owner»; the owner-protection tests install their own
+const NO_OWNER = { findUnique: async () => null };
+const prisma: any = new Proxy({}, { get: (_t, k: string) => (k === '$transaction' ? (fn: any) => fn(current) : (current[k] ?? (k === 'platformOwner' ? NO_OWNER : undefined))) });
 const notes: any[] = [];
 mock.module('../config/db', { namedExports: { prisma } });
 mock.module('../config/logger', { namedExports: { logger: { info() {}, warn() {}, error() {}, debug() {} } } });
