@@ -9,7 +9,7 @@ async function load(t: any, ownerType = 'PROVIDER_INDIVIDUAL') {
 	const messages: any[] = [{ id: 'm0', ticketId: 't1', senderId: 'owner', body: 'original', createdAt: new Date(1) }];
 	const prisma: any = {
 		adminStaff: { findUnique: async ({ where }: any) => (where.userId === 'admin-2' ? { id: 's2', status: 'ACTIVE', roleId: 'r', scoped: false, departments: [], overrides: [], role: { id: 'r', name: 'r', permissions: ['support.review'] } } : null) },
-		user: { findUnique: async ({ where }: any) => (where.id === 'owner' ? { id: 'owner', accountType: ownerType, firstName: 'O', lastName: 'W', email: 'o@x' } : where.id === 'admin-2' ? { id: 'admin-2', firstName: 'Sara', lastName: 'A', accountType: 'ADMIN', status: 'ACTIVE' } : { id: where.id, accountType: 'PROVIDER_INDIVIDUAL' }) },
+		user: { findUnique: async ({ where }: any) => (where.id === 'owner' ? { id: 'owner', accountType: ownerType, firstName: 'O', lastName: 'W', email: 'o@x' } : where.id === 'admin-1' ? { id: 'admin-1', firstName: 'Lead', lastName: 'S', accountType: 'SUPER_ADMIN', status: 'ACTIVE' } : where.id === 'admin-2' ? { id: 'admin-2', firstName: 'Sara', lastName: 'A', accountType: 'ADMIN', status: 'ACTIVE' } : { id: where.id, accountType: 'PROVIDER_INDIVIDUAL' }) },
 		supportTicket: { findUnique: async ({ where }: any) => (where.id === 't1' ? { ...ticket } : null), update: async ({ data }: any) => { Object.assign(ticket, data); return { ...ticket }; } },
 		supportTicketMessage: {
 			create: async ({ data }: any) => { const m = { id: `m${messages.length}`, createdAt: new Date(), ...data, sender: { id: data.senderId, accountType: 'ADMIN' } }; messages.push(m); return m; },
@@ -66,6 +66,10 @@ test('status change: owner sees the new status + is notified; audit row has befo
 test('assign + priority: assignee must be staff; priority change is audited and visible to the owner ticket', async (t) => {
 	const { svc, audit } = await load(t);
 	await assert.rejects(() => svc.assign('t1', 'admin-1', 'owner'), /عضو فريق يملك صلاحية مراجعة الدعم/);
+	await svc.assign('t1', 'admin-1', 'admin-2');
+	// a support member (support.review + support.reply, no tasks.manage) takes a ticket for himself, but cannot hand one to somebody else
+	await svc.assign('t1', 'admin-2', 'admin-2');
+	await assert.rejects(() => svc.assign('t1', 'admin-2', 'admin-1'), /توزيع مهام الفريق/);
 	await svc.assign('t1', 'admin-1', 'admin-2');
 	assert.equal((await svc.getForAdmin('t1')).assignedTo.name, 'Sara A');
 	await svc.setPriority('t1', 'admin-1', 'عاجلة');
