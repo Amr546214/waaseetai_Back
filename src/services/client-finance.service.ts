@@ -1,6 +1,8 @@
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { round2, sumMoney } from '../utils/money';
+import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
+import { walletBalancesOf } from '../utils/wallet-balance';
 
 // No tax is recorded on invoices (legal policy s10: no VAT is charged). The old 15% line was display-only and never collected, so it is gone: the invoice
 // shows the stage amount, and tax is 0 / taxRate 0.
@@ -156,7 +158,10 @@ export class ClientFinanceService {
       .filter(p => p.escrow && p.escrow.status === 'HELD')
       .map(p => p.escrow!);
 
-    const escrowBalance = sumMoney(activeEscrows.map(esc => Math.max(0, esc.amount - esc.releasedAmount)));
+    // the headline escrow balance is the USD one; every currency is also listed on its own (never one total across currencies)
+    const escrowBalance = sumMoney(activeEscrows.filter(esc => (esc.currency ?? LEGACY_CURRENCY) === LEGACY_CURRENCY).map(esc => Math.max(0, esc.amount - esc.releasedAmount)));
+    const escrowBalances = sumByCurrency(activeEscrows, esc => esc.currency, esc => Math.max(0, esc.amount - esc.releasedAmount));
+    const balances = await walletBalancesOf(prisma, clientId);
     const availableBalance = round2(Number(user.walletBalance || 0));
 
     // Fetch all recorded wallet transactions
@@ -173,7 +178,7 @@ export class ClientFinanceService {
         id: `escrow-${p.escrow!.id}`,
         type: 'ESCROW_LOCK',
         amount: round2(p.escrow!.amount),
-        currency: 'USD', // active escrow pricing is now USD-semantic (not a stored WalletTransaction row)
+        currency: p.escrow!.currency, // the escrow's own currency (not a stored WalletTransaction row)
         status: p.escrow!.status === 'HELD' ? 'HELD' : 'COMPLETED',
         paymentMethod: p.escrow!.paymentMethod || 'محفظة وسيط AI',
         referenceId: p.escrow!.paymentReference || p.id,
@@ -225,7 +230,10 @@ export class ClientFinanceService {
         // and exposes its OWN stored currency (tx.currency, line ~174) — this
         // top-level field only describes the two summary aggregates, never
         // relabels historical per-transaction rows.
-        currency: 'USD'
+        currency: 'USD',
+        // every wallet balance and every held escrow amount in ITS OWN currency; availableBalance / escrowBalance above stay the USD figures
+        balances,
+        escrowBalances
       },
       transactions: allTransactions
     };
