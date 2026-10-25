@@ -6,6 +6,7 @@ import { AccountType } from '@prisma/client';
 import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
 import { blockCompanySetup } from '../middlewares/company-unavailable.middleware';
 import { passwordChangeLimiter, accountActionLimiter, aiLimiter } from '../middlewares/rate-limit.middleware';
+import { requirePermission } from '../middlewares/admin-access.middleware';
 
 const router = Router();
 const documentUpload = memoryUpload({
@@ -73,8 +74,8 @@ router.get('/public', requireProvider, aiLimiter, providerProfileController.getP
 router.get('/requests', requireProvider, providerProfileController.getModificationRequests);
 router.post('/requests', requireProvider, providerProfileController.createModificationRequest);
 router.post('/requests/:id/cancel', requireProvider, providerProfileController.cancelModificationRequest);
-router.post('/requests/:id/review', authorizeAdminActing, providerProfileController.reviewSensitiveChange);
-router.get('/admin/pending-reviews', authorizeAdminActing, providerProfileController.getPendingSensitiveReviews);
+router.post('/requests/:id/review', authorizeAdminActing, requirePermission('identity.review'), providerProfileController.reviewSensitiveChange);
+router.get('/admin/pending-reviews', authorizeAdminActing, requirePermission('identity.review'), providerProfileController.getPendingSensitiveReviews);
 router.get('/requests/:tabName', requireProvider, providerProfileController.getChangeRequests);
 router.post('/sensitive-change', requireProvider, providerProfileController.initiateSensitiveChange);
 router.post('/sensitive-change/verify', requireProvider, providerProfileController.verifySensitiveChange);

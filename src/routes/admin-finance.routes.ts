@@ -4,9 +4,10 @@ import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.
 import { adminFinanceService } from '../services/admin-finance.service';
 import { adminAudit } from '../services/admin-audit.service';
 import { AppError } from '../utils/app-error';
+import { requirePermission } from '../middlewares/admin-access.middleware';
 
 const router = Router();
-router.use(authenticate, requireActiveUser, authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN));
+router.use(authenticate, requireActiveUser, requirePermission('finance.read'));
 
 const wrap = (fn: (req: Request) => Promise<unknown>) => async (req: Request, res: Response, next: NextFunction) => {
 	try { res.json({ success: true, data: await fn(req) }); } catch (error) { next(error); }

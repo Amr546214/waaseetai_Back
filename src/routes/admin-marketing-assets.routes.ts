@@ -5,9 +5,10 @@ import { memoryUpload } from '../utils/cloudinary-storage';
 import { marketingAssetsService, MARKETING_ASSET_MIME_TYPES, MARKETING_ASSET_MAX_BYTES } from '../services/marketing-assets.service';
 import { recordAdminAudit } from '../utils/admin-audit';
 import { AppError } from '../utils/app-error';
+import { requirePermission } from '../middlewares/admin-access.middleware';
 
 const router = Router();
-router.use(authenticate, requireActiveUser, authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN));
+router.use(authenticate, requireActiveUser, requirePermission('marketing_assets.manage'));
 
 const upload = memoryUpload({ fileSize: MARKETING_ASSET_MAX_BYTES, files: 1, allowedMimeTypes: MARKETING_ASSET_MIME_TYPES });
 const brief = (a: any) => a && ({ title: a.title, kind: a.kind, audience: a.audience, active: a.active, sortOrder: a.sortOrder, hasFile: !!a.fileUrl, linkUrl: a.linkUrl, description: a.description });

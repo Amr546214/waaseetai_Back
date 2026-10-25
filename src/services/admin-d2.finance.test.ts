@@ -130,10 +130,11 @@ test('projects list / detail: escrow status and held amount from the DB, 404 for
 	await assert.rejects(() => adminOperationsService.getProject('nope'), /غير موجود/);
 });
 
-test('admin routes: every admin router is gated by ADMIN/SUPER_ADMIN and there is no escrow release / refund / hold route', () => {
+test('admin routes: every admin router is gated by a permission (never an account type) and there is no escrow release / refund / hold route', () => {
 	for (const f of ['admin-finance.routes.ts', 'admin-projects.routes.ts', 'admin-disputes.routes.ts', 'admin-withdrawals.routes.ts']) {
 		const src = fs.readFileSync(path.join(__dirname, '../routes', f), 'utf8');
-		assert.match(src, /authenticate,\s*requireActiveUser,\s*authorize\(AccountType\.ADMIN,\s*AccountType\.SUPER_ADMIN\)/, f);
+		assert.match(src, /authenticate,\s*requireActiveUser,\s*requirePermission\(/, f);
+		assert.doesNotMatch(src, /authorize\(AccountType\.(ADMIN|SUPER_ADMIN)/, f);
 		assert.doesNotMatch(src, /\/(release|refund|hold)\b/, f);
 	}
 });

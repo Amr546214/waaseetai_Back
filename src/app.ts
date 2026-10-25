@@ -277,6 +277,7 @@ mountAppRoute('/payments/paypal', paypalWebhookRoutes);
 
 import adminSpecialtiesRouter from './routes/admin-specialties.routes';
 import adminUsersRouter from './routes/admin-users.routes';
+import adminTeamRoutes, { adminInvitePublicRouter } from './routes/admin-team.routes';
 import aiAssessmentRoutes from './routes/ai-assessment.routes';
 import accountManagementRoutes from './routes/account-management.routes';
 import adminDisputesRoutes from './routes/admin-disputes.routes';
@@ -310,6 +311,10 @@ mountAppRoute('/api/assessments', aiAssessmentRoutes);
 mountAppRoute('/assessments', aiAssessmentRoutes);
 mountAppRoute('/api/admin/specialties', adminSpecialtiesRouter);
 mountAppRoute('/admin/specialties', adminSpecialtiesRouter);
+mountAppRoute('/api/admin/team', adminTeamRoutes);
+mountAppRoute('/admin/team', adminTeamRoutes);
+mountAppRoute('/api/admin-invite', adminInvitePublicRouter);
+mountAppRoute('/admin-invite', adminInvitePublicRouter);
 mountAppRoute('/api/admin/users', adminUsersRouter);
 mountAppRoute('/admin/users', adminUsersRouter);
 mountAppRoute('/api/admin/disputes', adminDisputesRoutes);

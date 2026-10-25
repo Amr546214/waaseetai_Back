@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import jwt from 'jsonwebtoken';
+import { fullAccessModels } from '../testing/admin-full-access.testutil';
 
 // Item 22: real Express + real authenticate/authorize + real multer + real services; only the DB, sessions, Cloudinary and the audit sink are replaced.
 process.env.JWT_SECRET = 'admin-content-secret';
@@ -22,6 +23,7 @@ const missing = () => Object.assign(new Error('The table `public.x` does not exi
 const guard = <T>(fn: () => T) => async (...a: any[]) => { if (tablesMissing) throw missing(); return (fn as any)(...a); };
 
 const prisma: any = {
+	...fullAccessModels(),
 	user: { findUnique: async ({ where }: any) => users[where.id] ?? null },
 	platformSetting: {
 		findMany: guard(() => settings.map(s => ({ ...s }))), count: guard(() => settings.length),

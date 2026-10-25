@@ -125,13 +125,13 @@ test('activate a suspended QA user: allowed, audited; invalid status / self / pe
 	await rejects(svc.updateUserStatus(admin, 'u1', 'ACTIVE'), 404);
 });
 
-test('an ADMIN cannot touch an admin account; a SUPER_ADMIN can', async () => {
+test('NOBODY changes an admin account from the users list (an account type grants nothing): a SUPER_ADMIN suspends team members from the team page', async () => {
 	const { AdminUsersService } = await fresh('./admin-users.service.ts'); const svc = new AdminUsersService();
 	userFixture(userRow({ accountType: 'ADMIN' }));
 	await rejects(svc.updateUserStatus(admin, 'u1', 'SUSPENDED', 'سبب'), 403);
 	const f = userFixture(userRow({ accountType: 'ADMIN' }));
-	await svc.updateUserStatus(superAdmin, 'u1', 'SUSPENDED', 'سبب');
-	assert.equal(f.updates.length, 1);
+	await rejects(svc.updateUserStatus(superAdmin, 'u1', 'SUSPENDED', 'سبب'), 403, /Super Admin/);
+	assert.equal(f.updates.length, 0);
 });
 
 test('role update validation: empty / unknown / admin roles / base role removal / role without profile / self are refused', async () => {

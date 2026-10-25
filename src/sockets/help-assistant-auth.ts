@@ -2,6 +2,7 @@ import type { Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../config/db';
 import { sessionService } from '../services/session.service';
+import { adminMayUseRemoteAi } from '../services/admin-access.service';
 
 // Per-request authentication for the dashboard Help Assistant / Avatar
 // (`help:ask`). The main Socket.IO namespace is soft-auth (a JWT in the
@@ -89,5 +90,7 @@ export async function resolveHelpAssistantUser(socket: Socket): Promise<HelpAssi
 
 	const role = mapHelpAssistantRole(user.activeRole as string | null, user.accountType as string | null);
 	if (!role) return { ok: false, reason: 'FORBIDDEN' };
+	// checked on EVERY question, so withdrawing access or suspending the staff member cuts an already-open assistant connection too
+	if (role === 'admin' && !(await adminMayUseRemoteAi(socketUserId))) return { ok: false, reason: 'FORBIDDEN' };
 	return { ok: true, userId: socketUserId, role };
 }

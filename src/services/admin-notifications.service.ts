@@ -1,10 +1,11 @@
 import { NotificationCategory } from '@prisma/client';
-import { prisma } from '../config/db';
 import { logger } from '../config/logger';
 import { notificationService } from './notification.service';
+import { adminRecipientsHolding } from './admin-access.service';
+import { ADMIN_NOTIFY_EVENT_PERMISSION, adminNotifyType } from '../config/admin-notification-permissions';
 
 /**
- * In-app notifications for the staff (ADMIN / SUPER_ADMIN) when something needs their attention. One inbox row per active admin goes through
+ * In-app notifications for the staff who currently hold the permission for that kind of work (never every ADMIN / SUPER_ADMIN account). One inbox row per active admin goes through
  * notificationService.createAndEmit, so the admin's saved channels (real-time push / e-mail copy) apply like for everyone else.
  * notifyAdmins NEVER throws: callers fire it as `void notifyAdmins(...)` and a failure is only logged, so it can never fail the business action.
  *
@@ -55,9 +56,9 @@ export async function notifyAdmins(event: AdminNotifyEvent, payload: AdminNotify
 	try {
 		const copy = buildCopy(event, payload);
 		if (!copy) return;
-		const admins = await prisma.user.findMany({ where: { accountType: { in: ['ADMIN', 'SUPER_ADMIN'] }, status: 'ACTIVE', isBanned: false }, select: { id: true } });
+		const admins = (await adminRecipientsHolding(ADMIN_NOTIFY_EVENT_PERMISSION[event])).map(id => ({ id }));
 		const results = await Promise.allSettled(admins.map(admin => notificationService.createAndEmit({
-			userId: admin.id, title: copy.title, message: copy.message, category: copy.category, type: `ADMIN_${event}`,
+			userId: admin.id, title: copy.title, message: copy.message, category: copy.category, type: adminNotifyType(event),
 			actionUrl: copy.actionUrl, actionText: copy.actionText, metadata: { event, ...(payload.id ? { id: payload.id } : {}), ...(payload.metadata ?? {}) }
 		})));
 		const failed = results.filter(r => r.status === 'rejected').length;

@@ -435,7 +435,7 @@ export class AdminUsersService {
 
     const target = await prisma.user.findUnique({ where: { id }, select: { id: true, accountType: true, status: true } });
     if (!target) throw new AppError('المستخدم غير موجود', 404);
-    if (ADMIN_TYPES.includes(target.accountType) && actor.accountType !== AccountType.SUPER_ADMIN) throw new AppError('تغيير حالة حساب إداري يتطلب صلاحية المدير العام', 403);
+    if (ADMIN_TYPES.includes(target.accountType)) throw new AppError('وصول موظفي الإدارة يوقفه Super Admin من صفحة فريق الإدارة، لا من قائمة المستخدمين', 403);
     if (target.status === UserStatus.PENDING_VERIFICATION) throw new AppError('الحساب لم يؤكد بريده بعد، ولا يمكن تغيير حالته يدوياً', 409);
     if (target.status === next) throw new AppError('الحساب بهذه الحالة بالفعل', 409);
 
@@ -676,7 +676,7 @@ export class AdminUsersService {
   }
 
   /**
-   * Permanent deletion (SUPER_ADMIN only, enforced by the route). Safeguards: never your own account, never an admin account. The audit row is
+   * Permanent deletion (the users.delete permission, enforced by the route). Safeguards: never your own account, never an admin account. The audit row is
    * written on the ACTOR's own log (the deleted account's logs go with it) and commits with the deletion.
    */
   async deleteUser(id: string, actor?: AdminActor) {

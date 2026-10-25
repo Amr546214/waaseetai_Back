@@ -25,7 +25,7 @@ const byId = new Map(Object.values(USERS).map(u => [u.id, u]));
 
 // any other prisma call resolves to an empty-ish value, so an ALLOWED request just ends in a handler result (never 401/403)
 const emptyModel: any = new Proxy({}, { get: () => async () => null });
-const prisma: any = new Proxy({ user: { findUnique: async ({ where }: any) => byId.get(where.id) ?? null } }, { get: (t: any, k: string) => t[k] ?? emptyModel });
+const prisma: any = new Proxy({ user: { findUnique: async ({ where }: any) => byId.get(where.id) ?? null }, adminStaff: { findUnique: async () => null } }, { get: (t: any, k: string) => t[k] ?? emptyModel });
 mock.module('../config/db', { namedExports: { prisma } });
 mock.module('../services/session.service', { namedExports: { sessionService: { validateOrRegister: async () => ({ id: 'sess' }) } } });
 
@@ -85,7 +85,7 @@ async function request(handler: any, method: string, url: string, token?: string
 	}
 }
 
-test('every /admin router: no token 401; client / provider / affiliate 403; admin, super admin and a super admin acting as CLIENT pass the guard', async () => {
+test('every /admin router: no token 401; client / provider / affiliate 403; an ADMIN account WITHOUT a staff role 403 (the type ADMIN grants nothing); a SUPER_ADMIN passes (also while acting as client)', async () => {
 	const express = (await import('express')).default;
 	const imports = importedRouters();
 	const { globalErrorHandler: errorHandler } = await import('../middlewares/error.middleware');
@@ -105,9 +105,16 @@ test('every /admin router: no token 401; client / provider / affiliate 403; admi
 		const url = `/admin/${prefix}${String(layer.route.path === '/' ? '' : layer.route.path).replace(/:\w+/g, 'x')}`;
 		assert.equal(await request(app, 'GET', url), 401, `${prefix}: no token`);
 		for (const who of ['client', 'provider', 'affiliate']) assert.equal(await request(app, 'GET', url, tokenFor(who)), 403, `${prefix}: ${who}`);
-		for (const who of ['admin', 'superAdmin', 'superAdminActingClient']) {
+		// an ADMIN account with no staff role holds nothing: /team/access/me is the one route it may call (it only says who it is and why it sees nothing)
+		for (const who of ['admin']) {
 			const status = await request(app, 'GET', url, tokenFor(who));
-			assert.ok(status !== 401 && status !== 403, `${prefix}: ${who} must pass the guard (got ${status})`);
+			// /team/access/me is the one route a permission-less admin account may call: it only tells the account who it is and why it sees nothing
+			if (prefix === 'team' && url.endsWith('/access/me')) { assert.equal(status, 200, `${prefix}: ${who} may read its own access state`); assert.equal(await request(app, 'GET', '/admin/team/staff', tokenFor(who)), 403, `team/staff: ${who}`); }
+			else assert.equal(status, 403, `${prefix}: ${who} holds no permission, must be refused (got ${status})`);
+		}
+		for (const who of ['superAdmin', 'superAdminActingClient']) {
+			const st = await request(app, 'GET', url, tokenFor(who));
+			assert.ok(st !== 401 && st !== 403, `${prefix}: ${who} (SUPER_ADMIN) must pass the guard (got ${st})`);
 		}
 	}
 });
@@ -135,7 +142,7 @@ test('every non-GET route of every admin router is also behind the guard (client
 	}
 });
 
-test('DELETE /admin/users/:id is SUPER_ADMIN only: an ADMIN is refused', async () => {
+test('DELETE /admin/users/:id needs users.delete: an ADMIN without it is refused, a SUPER_ADMIN passes the guard', async () => {
 	const express = (await import('express')).default;
 	const { globalErrorHandler: errorHandler } = await import('../middlewares/error.middleware');
 	const router = ((await import('./admin-users.routes.ts')) as any).default;
@@ -143,4 +150,5 @@ test('DELETE /admin/users/:id is SUPER_ADMIN only: an ADMIN is refused', async (
 	app.use(`/admin/users`, router);
 	app.use(errorHandler as any);
 	assert.equal(await request(app, 'DELETE', '/admin/users/x', tokenFor('admin')), 403);
+	assert.notEqual(await request(app, 'DELETE', '/admin/users/x', tokenFor('superAdmin')), 403); // a SUPER_ADMIN holds every permission by its (server-read) type
 });

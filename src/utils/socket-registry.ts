@@ -28,3 +28,27 @@ export async function disconnectUserSockets(userId: string): Promise<number> {
 	}
 	return cut;
 }
+
+export const ADMIN_ACCESS_CHANGED_CODE = 'ADMIN_ACCESS_CHANGED';
+
+/**
+ * Cuts the live sockets of staff whose admin access was just suspended, re-roled or reduced, after telling them (`admin_access_changed`). The client reconnects and starts again from what it now
+ * holds, so no subscription or open connection outlives the access that opened it. Best effort and never throws: the database already refuses the next request regardless.
+ */
+export async function disconnectAdminSockets(userIds: string[]): Promise<number> {
+	if (!server || userIds.length === 0) return 0;
+	const wanted = new Set(userIds);
+	let cut = 0;
+	try {
+		for (const namespace of [server.of('/'), server.of('/assessments')]) {
+			for (const s of await namespace.fetchSockets()) {
+				const owner = (s.data as { userId?: string } | undefined)?.userId;
+				if (!owner || !wanted.has(owner)) continue;
+				s.emit('admin_access_changed', { code: ADMIN_ACCESS_CHANGED_CODE, message: 'تغيّرت صلاحياتك. أُعيد الاتصال بما تملكه الآن.' });
+				s.disconnect(true);
+				cut++;
+			}
+		}
+	} catch { /* best effort */ }
+	return cut;
+}

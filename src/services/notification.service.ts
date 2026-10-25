@@ -1,3 +1,4 @@
+import { deniedAdminNotificationTypes } from './admin-access.service';
 import { NotificationCategory, Notification } from '@prisma/client';
 import { siteUrl } from '../utils/site-url';
 import { buildNotificationEmailHtml } from '../utils/notification-email-template';
@@ -311,6 +312,11 @@ export class NotificationService {
 		return this.sendOtpMail('otp', email, code, process.env.OTP_EMAIL_SUBJECT ?? 'رمز التحقق لتفعيل حسابك - Waseet AI', validityMinutes);
 	}
 
+	/** The one-time code that proves the invited person controls the invited address (admin invitation acceptance). Its own subject, never the account-activation wording. */
+	public async sendAdminInviteCodeEmail(email: string, code: string, validityMinutes: number = 10): Promise<EmailDeliveryResult> {
+		return this.sendOtpMail('admin-invite', email, code, 'رمز التحقق لقبول دعوة فريق الإدارة - Waseet AI', validityMinutes);
+	}
+
 	/**
 	 * Send a password-reset code via email. Uses its own subject/template
 	 * (distinct from the account-activation OTP email) so the two flows never
@@ -409,6 +415,7 @@ export class NotificationService {
 		options: { unreadOnly?: boolean; type?: string; since?: Date | null } = {},
 	): Promise<NotificationDto[]> {
 		const category = parseCategoryFilter(categoryFilter);
+		const hidden = await deniedAdminNotificationTypes(userId);
 
 		const notifications = await prisma.notification.findMany({
 			where: {
@@ -416,6 +423,7 @@ export class NotificationService {
 				...(category ? { category } : {}),
 				...(options.unreadOnly ? { isRead: false } : {}),
 				...(options.type ? { type: options.type } : {}),
+				...(hidden.length ? { AND: [{ type: { notIn: hidden } }] } : {}),
 				// recovery after a socket reconnection: what was stored at or after the newest notification the client already holds (the client de-duplicates by id, so a same-millisecond tie is never lost)
 				...(options.since ? { createdAt: { gte: options.since } } : {}),
 			},
@@ -427,7 +435,8 @@ export class NotificationService {
 
 	/** The real number of unread notifications of one user (what the bell shows); never derived from a page of the list. */
 	public async countUnread(userId: string): Promise<number> {
-		return prisma.notification.count({ where: { userId, isRead: false } });
+		const hidden = await deniedAdminNotificationTypes(userId);
+		return prisma.notification.count({ where: { userId, isRead: false, ...(hidden.length ? { type: { notIn: hidden } } : {}) } });
 	}
 
 	/**

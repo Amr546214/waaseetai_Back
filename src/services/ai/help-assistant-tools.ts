@@ -1,3 +1,4 @@
+import { adminMayUseRemoteAi } from '../admin-access.service';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../../config/db';
@@ -31,6 +32,7 @@ export function createAssistantToolsHandlers(deps: AssistantToolsDeps = {}) {
     const userId = user?.id || user?.userId;
     const role = mapHelpAssistantRole(user?.activeRole, user?.accountType);
     if (!userId || !role) { res.status(401).json({ success: false, code: 'AUTH_REQUIRED', message: 'يجب تسجيل الدخول لاستخدام المساعد.' }); return; }
+    if (role === 'admin' && !(await adminMayUseRemoteAi(userId))) { res.status(403).json({ success: false, code: 'FORBIDDEN', message: 'هذه الميزة غير متاحة للحساب.' }); return; } // remote AI is SUPER_ADMIN-only for administrators
     const controller = new AbortController();
     const abort = () => { if (!res.writableEnded) controller.abort(); };
     res.once('close', abort);
