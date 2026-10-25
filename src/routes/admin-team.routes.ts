@@ -40,7 +40,7 @@ router.get('/access/me', requireAdminAccount, ok(async req => {
 		userId: a.userId, isSuperAdmin: a.isSuperAdmin, staffStatus: a.staffStatus, roleName: a.roleName, permissions: [...a.permissions].sort(),
 		hasAnyPermission: a.isSuperAdmin || a.permissions.size > 0,
 		state: a.isSuperAdmin ? 'SUPER_ADMIN' : a.staffStatus === 'SUSPENDED' ? 'SUSPENDED' : !a.staffId ? 'NOT_IN_TEAM' : a.permissions.size === 0 ? 'NO_PERMISSIONS' : 'ACTIVE',
-		displayRole: a.isSuperAdmin ? 'Super Admin' : a.roleName ?? 'غير مُسند',
+		displayRole: a.isSuperAdmin ? 'مدير النظام' : a.roleName ?? 'غير مُسند',
 		sections: staff?.scoped ? staff.departments : null,
 	};
 }));
