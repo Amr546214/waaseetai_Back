@@ -8,6 +8,7 @@ type Fx = { audit: any[]; providerNotes: any[]; clientNotes: any[]; dispute: any
 async function load(t: TestContext, overrides: Partial<any> = {}) {
 	const fx: Fx = { audit: [], providerNotes: [], clientNotes: [], dispute: { id: 'd1', requestId: null, projectId: 'p1', openedById: 'client-1', againstUserId: 'prov-1', status: 'OPEN', reason: 'r', description: 'd', evidence: [], ...overrides } };
 	const prisma: any = {
+		adminStaff: { findUnique: async ({ where }: any) => (where.userId === 'admin-2' ? { id: 's2', status: 'ACTIVE', roleId: 'r', scoped: false, departments: [], overrides: [], role: { id: 'r', name: 'r', permissions: ['disputes.view'] } } : null) },
 		dispute: {
 			findUnique: async ({ where }: any) => (where.id === 'd1' ? { ...fx.dispute, request: null, project: { id: 'p1' }, openedBy: { id: 'client-1' }, againstUser: { id: 'prov-1' }, resolvedBy: null } : null),
 			update: async ({ data }: any) => { Object.assign(fx.dispute, data); return { ...fx.dispute }; },
@@ -15,7 +16,7 @@ async function load(t: TestContext, overrides: Partial<any> = {}) {
 			findFirst: async () => null,
 			groupBy: async () => [], findMany: async () => [], count: async () => 0
 		},
-		user: { findUnique: async ({ where }: any) => (where.id === 'admin-2' ? { id: 'admin-2', firstName: 'Sara', lastName: 'A', accountType: 'ADMIN' } : where.id === 'client-1' ? { id: 'client-1', accountType: 'CLIENT_INDIVIDUAL' } : null) },
+		user: { findUnique: async ({ where }: any) => (where.id === 'admin-2' ? { id: 'admin-2', firstName: 'Sara', lastName: 'A', accountType: 'ADMIN', status: 'ACTIVE' } : where.id === 'client-1' ? { id: 'client-1', accountType: 'CLIENT_INDIVIDUAL' } : null) },
 		project: { findUnique: async () => ({ providerId: 'prov-1', contract: { providerId: 'prov-1' } }) },
 		proposal: { findFirst: async () => null },
 		escrow: { findUnique: async () => ({ amount: 100, releasedAmount: 40, status: 'HELD', fundedAt: null, project: { contract: { price: 100, status: 'DISPUTED' } } }) },
@@ -35,7 +36,7 @@ async function load(t: TestContext, overrides: Partial<any> = {}) {
 
 test('assign: only an admin / super-admin can be the assignee, and the assignment is audit-logged and shown on the detail', async (t) => {
 	const { svc, fx } = await load(t);
-	await assert.rejects(() => svc.assign('d1', 'admin-1', 'client-1'), /مشرف أو مدير/);
+	await assert.rejects(() => svc.assign('d1', 'admin-1', 'client-1'), /عضو فريق يملك صلاحية عرض النزاعات/);
 	assert.equal(fx.audit.length, 0);
 	const r = await svc.assign('d1', 'admin-1', 'admin-2');
 	assert.deepEqual(r.assignedTo, { id: 'admin-2', name: 'Sara A' });

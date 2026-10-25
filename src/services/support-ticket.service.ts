@@ -6,6 +6,7 @@ import { notificationService } from './notification.service';
 import { CreateSupportTicketInput } from '../dtos/support-ticket.dto';
 import { adminAudit } from './admin-audit.service';
 import { notifyAdmins } from './admin-notifications.service';
+import { assigneeHolds } from './admin-access.service';
 
 const OPEN_STATUSES: SupportTicketStatus[] = [
   SupportTicketStatus.OPEN,
@@ -218,7 +219,7 @@ export class SupportTicketService {
   async assign(id: string, adminId: string, assigneeId: string) {
     const ticket = await this.findAny(id);
     const assignee = await prisma.user.findUnique({ where: { id: assigneeId }, select: { id: true, firstName: true, lastName: true, accountType: true } });
-    if (!assignee || (assignee.accountType !== AccountType.ADMIN && assignee.accountType !== AccountType.SUPER_ADMIN)) throw fieldError('assigneeId', 'يمكن تكليف مشرف أو مدير فقط');
+    if (!assignee || (assignee.accountType !== AccountType.ADMIN && assignee.accountType !== AccountType.SUPER_ADMIN) || !(await assigneeHolds(assigneeId, ['support.review']))) throw fieldError('assigneeId', 'يمكن تكليف عضو فريق يملك صلاحية مراجعة الدعم فقط');
     const name = [assignee.firstName, assignee.lastName].filter(Boolean).join(' ');
     await adminAudit.record({ adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_ASSIGNED', title: 'تكليف تذكرة', summary: `تكليف التذكرة ${ticket.ticketNumber} إلى ${name || 'مشرف'}`, details: { assigneeId: assignee.id, assigneeName: name } });
     return { id: ticket.id, assignedTo: { id: assignee.id, name } };

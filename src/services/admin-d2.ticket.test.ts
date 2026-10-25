@@ -8,7 +8,8 @@ async function load(t: any, ownerType = 'PROVIDER_INDIVIDUAL') {
 	const ticket: any = { id: 't1', ticketNumber: 'TK-1', userId: 'owner', status: 'OPEN', priority: 'عادية', resolvedAt: null, closedAt: null };
 	const messages: any[] = [{ id: 'm0', ticketId: 't1', senderId: 'owner', body: 'original', createdAt: new Date(1) }];
 	const prisma: any = {
-		user: { findUnique: async ({ where }: any) => (where.id === 'owner' ? { id: 'owner', accountType: ownerType, firstName: 'O', lastName: 'W', email: 'o@x' } : where.id === 'admin-2' ? { id: 'admin-2', firstName: 'Sara', lastName: 'A', accountType: 'ADMIN' } : { id: where.id, accountType: 'PROVIDER_INDIVIDUAL' }) },
+		adminStaff: { findUnique: async ({ where }: any) => (where.userId === 'admin-2' ? { id: 's2', status: 'ACTIVE', roleId: 'r', scoped: false, departments: [], overrides: [], role: { id: 'r', name: 'r', permissions: ['support.review'] } } : null) },
+		user: { findUnique: async ({ where }: any) => (where.id === 'owner' ? { id: 'owner', accountType: ownerType, firstName: 'O', lastName: 'W', email: 'o@x' } : where.id === 'admin-2' ? { id: 'admin-2', firstName: 'Sara', lastName: 'A', accountType: 'ADMIN', status: 'ACTIVE' } : { id: where.id, accountType: 'PROVIDER_INDIVIDUAL' }) },
 		supportTicket: { findUnique: async ({ where }: any) => (where.id === 't1' ? { ...ticket } : null), update: async ({ data }: any) => { Object.assign(ticket, data); return { ...ticket }; } },
 		supportTicketMessage: {
 			create: async ({ data }: any) => { const m = { id: `m${messages.length}`, createdAt: new Date(), ...data, sender: { id: data.senderId, accountType: 'ADMIN' } }; messages.push(m); return m; },
@@ -64,7 +65,7 @@ test('status change: owner sees the new status + is notified; audit row has befo
 
 test('assign + priority: assignee must be staff; priority change is audited and visible to the owner ticket', async (t) => {
 	const { svc, audit } = await load(t);
-	await assert.rejects(() => svc.assign('t1', 'admin-1', 'owner'), /مشرف أو مدير/);
+	await assert.rejects(() => svc.assign('t1', 'admin-1', 'owner'), /عضو فريق يملك صلاحية مراجعة الدعم/);
 	await svc.assign('t1', 'admin-1', 'admin-2');
 	assert.equal((await svc.getForAdmin('t1')).assignedTo.name, 'Sara A');
 	await svc.setPriority('t1', 'admin-1', 'عاجلة');
@@ -73,11 +74,12 @@ test('assign + priority: assignee must be staff; priority change is audited and 
 	await assert.rejects(() => svc.setPriority('t1', 'admin-1', 'عاجلة'), /مسبقًا/);
 });
 
-test('another user cannot read the ticket (404), and staff routes are gated to ADMIN / SUPER_ADMIN', async (t) => {
+test('another user cannot read the ticket (404), and staff routes are gated by permissions (support.review / support.reply)', async (t) => {
 	const { svc } = await load(t);
 	await assert.rejects(() => svc.getForUser('t1', 'stranger'), /غير موجودة/);
 	const fs = await import('node:fs'); const path = await import('node:path');
 	const src = fs.readFileSync(path.join(__dirname, '../routes/admin-tickets.routes.ts'), 'utf8');
-	assert.match(src, /router\.use\(authenticate,\s*requireActiveUser,\s*authorize\(AccountType\.ADMIN,\s*AccountType\.SUPER_ADMIN\)\)/);
+	assert.match(src, /router\.use\(authenticate,\s*requireActiveUser,\s*requirePermission\('support\.review'\)\)/);
+	assert.match(src, /router\.post\('\/:id\/reply',\s*requirePermission\('support\.reply'\)/);
 	for (const r of ["'/:id/assign'", "'/:id/notes'", "'/:id/priority'"]) assert.ok(src.indexOf(r) > src.indexOf('router.use('), r);
 });

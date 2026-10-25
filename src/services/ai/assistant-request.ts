@@ -23,6 +23,14 @@ export async function resolveAssistantOptions(raw: unknown, userId: string, role
   result.pageContext = { path: pageContext.path, role };
   if (!pageContext.projectId) return result;
   const { prisma } = await import('../../config/db.js');
+  if (role === 'admin') {
+    // an admin sees a project here only when the admin API would show it to them (owner, or the case they hold): never "any project because admin"
+    const { resolveAdminActor } = await import('../admin-access.service.js');
+    const { mayReadOperation } = await import('../admin-operations-scope.service.js');
+    const u = await prisma.user.findUnique({ where: { id: userId }, select: { accountType: true } });
+    const actor = await resolveAdminActor(userId, u?.accountType);
+    if (!(await mayReadOperation(actor, 'PROJECT', pageContext.projectId))) throw Object.assign(new Error('PROJECT_CONTEXT_DENIED'), { code: 'FORBIDDEN' });
+  }
   const row = await prisma.project.findFirst({
     where: { id: pageContext.projectId, ...(role === 'admin' ? {} : { OR: [{ clientId: userId }, { providerId: userId }, { contract: { OR: [{ clientId: userId }, { providerId: userId }] } }] }) },
     select: { id: true, title: true, description: true, requirements: true, status: true },

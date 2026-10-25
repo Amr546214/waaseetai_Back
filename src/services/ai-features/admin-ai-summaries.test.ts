@@ -187,7 +187,7 @@ test('sentiment: FAILED when the model is missing', async (t) => {
 // ---- routes ----
 test('routes: admin-only + requireActiveUser + aiLimiter, GET only; mounted under /api/admin/ai', () => {
   const src = fs.readFileSync(path.join(__dirname, '../../routes/admin-ai-summaries.routes.ts'), 'utf8');
-  assert.match(src, /router\.use\(authenticate,\s*requireActiveUser,\s*authorize\(AccountType\.ADMIN,\s*AccountType\.SUPER_ADMIN\),\s*aiLimiter\)/);
+  assert.match(src, /router\.use\(authenticate,\s*requireActiveUser,\s*requirePermission\('finance\.read'\),\s*aiLimiter\)/);
   for (const p of ['forecast-summary', 'anomaly-summary', 'sentiment-summary']) assert.match(src, new RegExp(`router\\.get\\('/${p}'`));
   assert.doesNotMatch(src, /router\.(post|put|patch|delete)/);
   const app = fs.readFileSync(path.join(__dirname, '../../app.ts'), 'utf8');

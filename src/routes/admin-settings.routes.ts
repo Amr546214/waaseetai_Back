@@ -3,9 +3,10 @@ import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import { platformSettingsService } from '../services/platform-settings.service';
 import { recordAdminAudit } from '../utils/admin-audit';
+import { requirePermission } from '../middlewares/admin-access.middleware';
 
 const router = Router();
-router.use(authenticate, requireActiveUser, authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN));
+router.use(authenticate, requireActiveUser, requirePermission('settings.manage'));
 
 router.get('/', async (_req, res, next) => {
 	try { const data = await platformSettingsService.getAll(); res.json({ success: true, data, storageReady: await platformSettingsService.storageReady() }); } catch (e) { next(e); }

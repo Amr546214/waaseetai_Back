@@ -4,9 +4,10 @@ import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.
 import { adminMarketplaceModerationService } from '../services/admin-marketplace-moderation.service';
 import { recordAdminAudit } from '../utils/admin-audit';
 import { AppError } from '../utils/app-error';
+import { requirePermission } from '../middlewares/admin-access.middleware';
 
 const router = Router();
-router.use(authenticate, requireActiveUser, authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN));
+router.use(authenticate, requireActiveUser, requirePermission('content.manage'));
 
 router.get('/', async (req, res, next) => {
 	try {

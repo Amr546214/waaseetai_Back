@@ -71,7 +71,7 @@ test('a reason is mandatory and the decision must be APPROVED or REJECTED', () =
 
 test('route sits under the admin/super-admin gate', () => {
   const src = readFileSync(new URL('../routes/admin-accreditation.routes.ts', import.meta.url), 'utf8');
-  assert.match(src, /router\.use\(authenticate, requireActiveUser, authorize\(AccountType\.ADMIN, AccountType\.SUPER_ADMIN\)\)/);
+  assert.match(src, /router\.use\(authenticate, requireActiveUser, requirePermission\('specialties\.approve'\)\)/);
   assert.match(src, /router\.post\('\/specialties\/:providerSpecialtyId\/decision'/);
 });
 

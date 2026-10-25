@@ -1,3 +1,4 @@
+import { adminHasAnyAccess } from '../admin-access.service';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../../config/db';
@@ -37,6 +38,7 @@ export function createAssistantHttpHandler(deps: {
     const onClose = () => { if (!res.writableEnded) controller.abort(); };
     res.once('close', onClose);
     try {
+      if (role === 'admin' && !(await adminHasAnyAccess(userId))) { res.status(403).json({ success: false, code: 'FORBIDDEN', message: 'المساعد غير متاح لهذا الحساب.' }); return; }
       if (await blocked(userId)) { res.status(403).json({ success: false, code: 'FORBIDDEN', message: 'المساعد غير متاح لهذا الحساب.' }); return; }
       const options = await (deps.resolveOptions ?? resolveAssistantOptions)(parsed.data, userId, role);
       if (controller.signal.aborted) return;

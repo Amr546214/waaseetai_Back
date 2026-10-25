@@ -94,8 +94,9 @@ test('audit log applies actor, event type, date range and pagination filters', a
   assert.deepEqual(r.eventTypes, ['LOGIN_REJECTED']);
 });
 
-test('admin routes: non-admin gets 403 (router gated by authorize ADMIN/SUPER_ADMIN)', () => {
+test('admin routes: non-admin gets 403 (router gated to admin-type accounts; audit log and roster need their own permission)', () => {
   const src = fs.readFileSync(path.join(__dirname, '../routes/admin-account.routes.ts'), 'utf8');
-  assert.match(src, /router\.use\(authenticate,\s*requireActiveUser,\s*authorize\(AccountType\.ADMIN,\s*AccountType\.SUPER_ADMIN\)\)/);
+  assert.match(src, /router\.use\(authenticate,\s*requireActiveUser,\s*requireAdminAccount\)/);
+  assert.match(src, /router\.get\('\/audit-log',\s*requirePermission\('audit\.view'\)/);
   for (const r of ["'/audit-log'", "'/admins'", "'/account/sessions/:id'"]) assert.ok(src.includes(r), r);
 });

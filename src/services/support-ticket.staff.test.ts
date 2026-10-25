@@ -112,9 +112,9 @@ test('other users cannot read a ticket through the owner path (404, like a missi
   await assert.rejects(() => svc.getForUser('t1', 'someone-else'), (e: any) => e.statusCode === 404);
 });
 
-test('admin-tickets router is guarded by authenticate + requireActiveUser + authorize(ADMIN, SUPER_ADMIN) before every route', () => {
+test('admin-tickets router is guarded by authenticate + requireActiveUser + the support.review permission before every route', () => {
   const source = fs.readFileSync(path.join(__dirname, '../routes/admin-tickets.routes.ts'), 'utf8');
-  assert.match(source, /router\.use\(authenticate,\s*requireActiveUser,\s*authorize\(AccountType\.ADMIN,\s*AccountType\.SUPER_ADMIN\)\)/);
+  assert.match(source, /router\.use\(authenticate,\s*requireActiveUser,\s*requirePermission\('support\.review'\)\)/);
   const guard = source.indexOf('router.use(authenticate');
   for (const r of ["router.get('/', ", "router.get('/:id', ", "router.post('/:id/reply', ", "router.patch('/:id/status', "]) {
     assert.ok(source.indexOf(r) > guard, r);

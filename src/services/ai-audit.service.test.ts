@@ -188,7 +188,7 @@ test('re-audit-all: not configured -> 503 AI_FEATURE_UNAVAILABLE, nothing read',
 
 test('route auth/limiter unchanged', () => {
   const src = readFileSync(new URL('../routes/business-models.routes.ts', import.meta.url), 'utf8');
-  assert.match(src, /router\.post\('\/re-audit-all', authenticate, requireActiveUser, authorize\(AccountType\.SUPER_ADMIN, AccountType\.ADMIN\), aiLimiter, controller\.reAuditAllPendingModels/);
+  assert.match(src, /router\.post\('\/re-audit-all', authenticate, requireActiveUser, requirePermission\('business_models\.review'\), aiLimiter, controller\.reAuditAllPendingModels/);
 });
 
 test('no Gemini reference in audit service/controller', () => {
