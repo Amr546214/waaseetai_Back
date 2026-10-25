@@ -1,4 +1,5 @@
 import { presentedIdentity } from '../utils/admin-identity';
+import { issueAccessToken } from '../utils/access-token';
 import { systemSettingsService } from './system-settings.service';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
@@ -215,13 +216,17 @@ export class AuthService {
 	/**
 	 * Register a new user
 	 */
-	/** Setting `registrationOpen`: the SERVER refuses new accounts while it is off (hiding the button is only the courtesy on top). Read-failure = open (a settings outage must not stop sign-ups silently either way: default is open). */
-	private async assertRegistrationOpen(): Promise<void> {
-		if (!(await systemSettingsService.get<boolean>('registrationOpen'))) throw new AppError('التسجيل بحسابات جديدة مغلق مؤقتًا. يمكنك المحاولة لاحقًا.', 403, undefined, 'REGISTRATION_CLOSED');
-	}
+	/**
+	 * Setting `registrationOpen` closes ONLY the creation of new accounts. Existing users (including Google users) keep signing in, completing activation and recovering their password: those
+	 * flows never call this. Closed answers are uniform for an unverified caller (no way to learn whether an address is in use); a caller who proved the address with a VERIFIED Google
+	 * credential still gets "the account exists, sign in", exactly as before.
+	 */
+	private async registrationClosed(): Promise<boolean> { return !(await systemSettingsService.get<boolean>('registrationOpen')); }
+	private closedError(): AppError { return new AppError('التسجيل بحسابات جديدة مغلق مؤقتًا. إن كان لديك حساب فيمكنك تسجيل الدخول.', 403, undefined, 'REGISTRATION_CLOSED'); }
 
 	public async registerUser(rawInput: RegisterInput, referralContext: Pick<ReferralAttributionContext, 'refCookieSlug' | 'refCookieSource'> = {}) {
-		await this.assertRegistrationOpen();
+		const closed = await this.registrationClosed();
+		if (closed && !rawInput.googleIdToken) throw this.closedError(); // uniform for an unverified caller: nothing about the address is revealed
 		// validateRequest only validates (it does not replace req.body with the parsed value), so the address is normalised here, where it is stored.
 		const input: RegisterInput = { ...rawInput, email: String(rawInput.email ?? '').trim().toLowerCase() };
 		const googleIdentity = input.googleIdToken ? await this.verifyGoogleIdentity(input.googleIdToken) : undefined;
@@ -255,6 +260,8 @@ export class AuthService {
 			logger.info(`[Register] outcome=in-use-nothing-created to=${maskEmail(input.email)} (email or phone already belongs to an account; no code, no mail)`);
 			return { userId: null as string | null, accountCreated: false };
 		}
+
+		if (closed) throw this.closedError(); // a verified Google caller whose account does not exist: creating it is what is closed
 
 		// 2. Hash Password
 		const saltRounds = 12;
@@ -539,15 +546,14 @@ export class AuthService {
 		if (!jwtSecret) {
 			throw new AppError('خطأ في إعدادات الخادم: مفتاح التشفير JWT_SECRET غير معرّف', 500);
 		}
-		const token = jwt.sign(
+		const { token, expiresAt: tokenExpiresAt } = await issueAccessToken(
 			{
 				userId: updatedUser.id,
 				accountType: updatedUser.accountType
 			},
-			jwtSecret,
-			{ expiresIn: '7d' }
+			jwtSecret
 		);
-		await sessionService.register(updatedUser.id, token, sessionContext);
+		await sessionService.register(updatedUser.id, token, sessionContext, tokenExpiresAt);
 
 		// 5. Return safe user data + token
 		return {
@@ -680,15 +686,14 @@ export class AuthService {
 		if (!jwtSecret) {
 			throw new AppError('خطأ في إعدادات الخادم: مفتاح التشفير JWT_SECRET غير معرّف', 500);
 		}
-		const token = jwt.sign(
+		const { token, expiresAt: tokenExpiresAt } = await issueAccessToken(
 			{
 				userId: user.id,
 				accountType: user.accountType
 			},
-			jwtSecret,
-			{ expiresIn: '7d' }
+			jwtSecret
 		);
-		await sessionService.register(user.id, token, sessionContext);
+		await sessionService.register(user.id, token, sessionContext, tokenExpiresAt);
 
 		const { firstName, lastName } = resolveAuthDisplayName(user, {
 			clientProfile: user.clientProfile,
@@ -732,11 +737,11 @@ export class AuthService {
 		// Older clients identify registration by supplying an account type.
 		const intent = input.intent ?? (input.accountType ? 'register' : 'login');
 		if (intent === 'register') {
-			await this.assertRegistrationOpen();
 			if (existingUser) {
 				// Reached only with a VERIFIED Google credential for this address: the caller proved they control it.
 				throw new AppError('هذا الحساب موجود بالفعل، يرجى تسجيل الدخول', 409);
 			}
+			if (await this.registrationClosed()) throw this.closedError(); // a NEW Google address cannot start a sign-up while registration is closed
 			// Only return verified identity fields. No user, session or access token
 			// is created until /register receives the completed form and consent.
 			return {

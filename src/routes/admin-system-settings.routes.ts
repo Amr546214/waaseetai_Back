@@ -18,6 +18,7 @@ router.get('/', ok(async req => systemSettingsService.view(await loadAdminActor(
 router.put('/', requirePermission('settings.manage'), ok(async req => systemSettingsService.update(await loadAdminActor(req), req.body, { ip: req.ip, device: String(req.headers['user-agent'] || '') })));
 router.get('/history', ok(async req => systemSettingsService.history(await loadAdminActor(req), Number(req.query.limit) || 20)));
 router.get('/health', ok(() => systemSettingsService.health()));
+router.get('/sessions-impact', requireSuperAdmin, ok(req => systemSettingsService.sessionsImpact(req.query.idleMinutes)));
 router.get('/currency-readiness', requireSuperAdmin, ok(() => currencyReadiness()));
 
 export default router;

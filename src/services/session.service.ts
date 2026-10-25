@@ -8,6 +8,23 @@ export interface SessionContext { ipAddress?: string; userAgent?: string }
 class SessionService {
   private tokenHash(token: string) { return crypto.createHash('sha256').update(token).digest('hex'); }
 
+  /** read-only: is this exact token a live (not revoked, not expired) session? */
+  async isActiveToken(token: string): Promise<boolean> {
+    const s = await prisma.userSession.findUnique({ where: { tokenHash: this.tokenHash(token) }, select: { revokedAt: true, expiresAt: true } });
+    return !!s && !s.revokedAt && s.expiresAt > new Date();
+  }
+
+  /** how many live sessions would end at their next request if the idle limit were `minutes` (preview shown before the setting is saved) */
+  async idleImpact(minutes: number): Promise<{ activeSessions: number; wouldEndNow: number }> {
+    const now = new Date();
+    const live = { revokedAt: null, expiresAt: { gt: now } };
+    const [activeSessions, wouldEndNow] = await Promise.all([
+      prisma.userSession.count({ where: live }),
+      minutes > 0 ? prisma.userSession.count({ where: { ...live, lastActiveAt: { lt: new Date(now.getTime() - minutes * 60000) } } }) : Promise.resolve(0),
+    ]);
+    return { activeSessions, wouldEndNow };
+  }
+
   private describe(userAgent = '') {
     const browser = /Edg\//.test(userAgent) ? 'Edge' : /OPR\//.test(userAgent) ? 'Opera' : /Chrome\//.test(userAgent) ? 'Chrome' : /Firefox\//.test(userAgent) ? 'Firefox' : /Safari\//.test(userAgent) ? 'Safari' : 'متصفح غير معروف';
     const os = /Windows NT 10/.test(userAgent) ? 'Windows' : /Android/.test(userAgent) ? 'Android' : /iPhone|iPad/.test(userAgent) ? 'iOS' : /Mac OS X/.test(userAgent) ? 'macOS' : /Linux/.test(userAgent) ? 'Linux' : 'نظام غير معروف';

@@ -73,32 +73,89 @@ test('PG settings: other session / refresh / restart see the saved value; the ca
 	await e.prisma.platformSetting.upsert({ where: { key: 'sessionIdleMinutes' }, create: { key: 'sessionIdleMinutes', value: 'garbage' as any }, update: { value: 'garbage' as any } }); assert.equal(await new SystemSettingsService(e.prisma).get('sessionIdleMinutes'), 0);
 });
 
-test('PG settings: registration closed is enforced by the SERVER (register and Google sign-up refused 403 REGISTRATION_CLOSED before anything is written); reopening restores it; other settings do not matter', opts, async () => {
-	const e = await env(); await reset(e); const { authService } = await import('./auth.service'); const { systemSettingsService } = await import('./system-settings.service');
+test('PG settings: closing registration stops ONLY new accounts - existing users (Google included) still sign in, activate and recover; a new Google address / new e-mail is refused; no bypass', opts, async () => {
+	const e = await env(); await reset(e); const { authService } = await import('./auth.service'); const { mailTransporter } = await import('../utils/mail.transporter'); const bcrypt = (await import('bcrypt')).default;
+	const sent: string[] = []; (mailTransporter as any).sendMail = async (m: any) => { sent.push(String(m.to)); return { accepted: [m.to], rejected: [], messageId: 'test' }; }; // nothing real is ever sent
+	const tag = randomUUID().slice(0, 6); const mk = (over: any) => e.prisma.user.create({ data: { id: randomUUID(), accountType: 'CLIENT_INDIVIDUAL', roles: ['CLIENT'], activeRole: 'CLIENT', firstName: 'a', lastName: 'b', agreedToTerms: true, ...over } });
+	const google = await mk({ status: 'ACTIVE', email: `g-${tag}@pg.test`, googleId: `gid-${tag}`, password: null });
+	const normal = await mk({ status: 'ACTIVE', email: `n-${tag}@pg.test`, password: await bcrypt.hash('Strong#Pass1', 4) });
+	const pending = await mk({ status: 'PENDING_VERIFICATION', email: `p-${tag}@pg.test`, password: await bcrypt.hash('Strong#Pass1', 4) });
+	const identities: Record<string, any> = { 'tok-existing': { email: google.email, sub: `gid-${tag}`, given_name: 'a', family_name: 'b' }, 'tok-new': { email: `new-${tag}@pg.test`, sub: `gid-new-${tag}`, given_name: 'n', family_name: 'w' } };
+	(authService as any).verifyGoogleIdentity = async (t: string) => { if (!identities[t]) throw new Error('bad token'); return identities[t]; };
 	assert.equal((await put(e, e.sa.id, { registrationOpen: false }, { registrationOpen: 0 })).status, 200);
-	const users = await e.prisma.user.count();
-	await assert.rejects(authService.registerUser({ email: `closed-${randomUUID().slice(0, 6)}@pg.test`, password: 'Strong#Pass1', firstName: 'a', lastName: 'b' } as any), (err: any) => err.statusCode === 403 && err.code === 'REGISTRATION_CLOSED');
-	await assert.rejects(authService.googleAuth({ idToken: 'x', intent: 'register' } as any), (err: any) => err.code !== 'REGISTRATION_CLOSED' ? true : true); // the token check may come first: it must never create anything
-	assert.equal(await e.prisma.user.count(), users);
-	assert.equal(await systemSettingsService.get('registrationOpen'), false);
+	const users = await e.prisma.user.count(); const code = async (fn: () => Promise<unknown>) => { try { await fn(); return 'OK'; } catch (er: any) { return `${er.statusCode} ${er.code ?? ''}`.trim(); } };
+	// existing accounts keep working
+	assert.notEqual(await code(() => authService.googleAuth({ idToken: 'tok-existing', intent: 'login' } as any)), '403 REGISTRATION_CLOSED');
+	assert.equal(await code(() => authService.loginUser({ email: normal.email, password: 'Strong#Pass1' } as any)), 'OK'); // starts the e-mail code challenge, as always
+	assert.equal(await code(() => authService.resendOtpByEmail(pending.email)), 'OK'); assert.equal(await code(() => authService.forgotPassword({ email: normal.email } as any)), 'OK');
+	assert.equal(await code(() => authService.loginUser({ email: pending.email, password: 'Strong#Pass1' } as any)), 'OK'); // a pending account is told to activate, not "registration closed"
+	// the verified owner of an existing Google address is told "exists - sign in", as before
+	assert.equal(await code(() => authService.googleAuth({ idToken: 'tok-existing', intent: 'register' } as any)), '409');
+	assert.equal(await code(() => authService.registerUser({ email: google.email, password: 'x', googleIdToken: 'tok-existing', phoneNumber: '500000001', phoneCountryCode: '+966' } as any)), '409');
+	// creation is closed: a NEW Google address, a new e-mail, and an existing e-mail typed by an unverified caller all get the SAME refusal
+	assert.equal(await code(() => authService.googleAuth({ idToken: 'tok-new', intent: 'register' } as any)), '403 REGISTRATION_CLOSED');
+	assert.equal(await code(() => authService.registerUser({ email: `new-${tag}@pg.test`, password: 'Strong#Pass1', googleIdToken: 'tok-new', phoneNumber: '500000002', phoneCountryCode: '+966' } as any)), '403 REGISTRATION_CLOSED');
+	for (const email of [`brand-${tag}@pg.test`, normal.email]) assert.equal(await code(() => authService.registerUser({ email, password: 'Strong#Pass1', phoneNumber: '500000003', phoneCountryCode: '+966' } as any)), '403 REGISTRATION_CLOSED', email);
+	assert.equal(await e.prisma.user.count(), users, 'nothing was created while registration was closed');
+	// reopening restores sign-up (the Google pre-step now proceeds)
 	assert.equal((await put(e, e.sa.id, { registrationOpen: true }, { registrationOpen: 1 })).status, 200);
-	await assert.rejects(authService.registerUser({ email: 'bad', password: 'x' } as any), (err: any) => err.code !== 'REGISTRATION_CLOSED'); // open again: it now fails on its own validation, not on the gate
+	const open = await authService.googleAuth({ idToken: 'tok-new', intent: 'register' } as any) as any; assert.equal(open.registrationRequired, true);
 });
 
-test('PG settings: maintenance is enforced on traffic (503 MAINTENANCE for the platform, never for health / sign-in / public settings / admin console / payment callbacks) and switching it off restores service', opts, async () => {
-	const e = await env(); await reset(e); const { maintenanceMiddleware } = await import('../middlewares/maintenance.middleware'); const { systemSettingsService } = await import('./system-settings.service');
+test('PG settings: maintenance is enforced on traffic - a SUPER_ADMIN session reaches everything, other staff / users get 503, explicit allowances (health, sign-in, webhook, capture, notifications) pass, a NEW payment does not; switching it off restores service', opts, async () => {
+	const e = await env(); await reset(e); const jwt = (await import('jsonwebtoken')).default; const { maintenanceMiddleware, resetMaintenanceCaches } = await import('../middlewares/maintenance.middleware'); const { sessionService } = await import('./session.service'); const { systemSettingsService } = await import('./system-settings.service');
+	process.env.JWT_SECRET ??= 'test-secret';
+	const mkTok = async (userId: string) => { const t = jwt.sign({ userId }, process.env.JWT_SECRET!, { expiresIn: '1h' }); await sessionService.register(userId, t, { ipAddress: '1.1.1.1' } as any, new Date(Date.now() + 3_600_000)); return t; };
+	const staff = await mkStaff(e, ['users.view', 'settings.manage'], 'mt'); const staffTok = await mkTok(staff.user.id); const saTok = await mkTok(e.sa.id); const client = await e.mkUser('CLIENT_INDIVIDUAL', 'mc'); const clientTok = await mkTok(client.id);
 	const app = express(); app.use(maintenanceMiddleware); app.all(/.*/, (_q, res) => res.json({ ok: true })); const server = http.createServer(app); await new Promise<void>(r => server.listen(0, '127.0.0.1', () => r()));
-	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`; const get = async (p: string, m = 'GET') => { const r = await fetch(base + p, { method: m }); return { status: r.status, body: await r.json() }; };
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`; const get = async (p: string, m = 'GET', tok?: string) => { const r = await fetch(base + p, { method: m, headers: tok ? { authorization: `Bearer ${tok}` } : {} }); return { status: r.status, body: await r.json() }; };
 	try {
 		assert.equal((await get('/api/projects')).status, 200);
 		assert.equal((await put(e, e.sa.id, { maintenanceMode: true, maintenanceBannerText: 'صيانة قصيرة' }, { maintenanceMode: 0, maintenanceBannerText: 0 })).status, 200);
 		const blocked = await get('/api/projects'); assert.equal(blocked.status, 503); assert.equal(blocked.body.code, 'MAINTENANCE'); assert.equal(blocked.body.message, 'صيانة قصيرة');
-		assert.equal((await get('/api/client/wallet', 'POST')).status, 503);
-		for (const p of ['/api/health', '/api/auth/login', '/api/public/settings', '/api/admin/system-settings', '/api/payments/paypal/webhook']) assert.equal((await get(p, 'POST')).status, 200, p);
-		assert.equal((await put(e, e.sa.id, { maintenanceMode: false }, { maintenanceMode: 1 })).status, 200);
-		assert.equal((await get('/api/projects')).status, 200);
+		for (const [p, m] of [['/api/client/wallet', 'POST'], ['/api/client/finance/paypal/order/create', 'POST'], ['/api/auth/register', 'POST'], ['/api/admin/users', 'GET']] as const) assert.equal((await get(p, m)).status, 503, `${m} ${p}`);
+		assert.equal((await get('/api/admin/users', 'GET', staffTok)).status, 503, 'staff of type ADMIN get no blanket exception'); assert.equal((await get('/api/projects', 'GET', clientTok)).status, 503);
+		for (const [p, m] of [['/api/health', 'GET'], ['/api/public/settings', 'GET'], ['/api/auth/login', 'POST'], ['/api/auth/google', 'POST'], ['/api/payments/paypal/webhook', 'POST'], ['/api/client/finance/paypal/order/capture', 'POST'], ['/api/notifications', 'GET']] as const) assert.equal((await get(p, m)).status, 200, `${m} ${p}`);
+		for (const p of ['/api/admin/users', '/api/projects', '/api/client/wallet']) assert.equal((await get(p, 'GET', saTok)).status, 200, `SUPER_ADMIN ${p}`);
+		await sessionService.revokeAll(e.sa.id, 'test'); resetMaintenanceCaches(); assert.equal((await get('/api/projects', 'GET', saTok)).status, 503, 'a revoked SUPER_ADMIN session is not an exception');
+		await put(e, e.sa.id, { maintenanceMode: false }, { maintenanceMode: 1 }); assert.equal((await get('/api/projects')).status, 200);
 		await e.prisma.platformSetting.deleteMany({ where: { key: 'maintenanceMode' } }); systemSettingsService.invalidate(); assert.equal((await get('/api/projects')).status, 200);
 	} finally { server.closeAllConnections?.(); await new Promise(r => server.close(r)); }
+});
+
+test('PG settings: a failing store never silently cancels maintenance - the last known good value keeps applying (and is logged); a cold boot has no trusted value and says so', opts, async () => {
+	const e = await env(); await reset(e); const { SystemSettingsService } = await import('./system-settings.service');
+	assert.equal((await put(e, e.sa.id, { maintenanceMode: true, registrationOpen: false }, { maintenanceMode: 0, registrationOpen: 0 })).status, 200);
+	let down = false; const flaky = new Proxy(e.prisma, { get: (t: any, k: string) => (k === 'platformSetting' && down ? { findMany: async () => { throw new Error('connection lost'); } } : t[k]) });
+	const svc = new SystemSettingsService(flaky as any);
+	const ok = await svc.getTrusted<boolean>('maintenanceMode'); assert.deepEqual(ok, { value: true, trusted: true, stale: false }); assert.ok(svc.hasTrustedValues());
+	down = true; svc.invalidate();
+	const stale = await svc.getTrusted<boolean>('maintenanceMode'); assert.deepEqual(stale, { value: true, trusted: true, stale: true }, 'still ON, flagged stale'); assert.equal((await svc.getTrusted<boolean>('registrationOpen')).value, false);
+	const cold = new SystemSettingsService(flaky as any); assert.equal(cold.hasTrustedValues(), false);
+	const unk = await cold.getTrusted<boolean>('maintenanceMode'); assert.equal(unk.trusted, false, 'no trusted value on a cold boot'); assert.equal(await cold.prime(), false);
+	down = false; assert.equal(await cold.prime(), true); assert.deepEqual(await cold.getTrusted<boolean>('maintenanceMode'), { value: true, trusted: true, stale: false });
+	await put(e, e.sa.id, { maintenanceMode: false, registrationOpen: true }, { maintenanceMode: 1, registrationOpen: 1 });
+});
+
+test('PG settings: sessionMaxHours (absolute) is separate from the idle limit, starts at 168 h = today\'s 7 days, reaches NEW tokens only and never signs anyone out; the idle preview says how many sessions would end', opts, async () => {
+	const e = await env(); await reset(e); const jwt = (await import('jsonwebtoken')).default; const { issueAccessToken } = await import('../utils/access-token'); const { sessionService } = await import('./session.service'); const secret = process.env.JWT_SECRET ?? 'test-secret'; process.env.JWT_SECRET = secret;
+	const hoursOf = (t: string) => { const d = jwt.decode(t) as any; return Math.round((d.exp - d.iat) / 3600); };
+	assert.equal((await one(e, e.sa.id, 'sessionMaxHours')).value, 168); assert.equal((await one(e, e.sa.id, 'sessionIdleMinutes')).value, 0); // documented initial values = current behaviour
+	const before = await issueAccessToken({ userId: 'x' }, secret); assert.equal(hoursOf(before.token), 168);
+	const u = await e.mkUser('ADMIN', 'ses'); const oldTok = jwt.sign({ userId: u.id }, secret, { expiresIn: '168h' }); await sessionService.register(u.id, oldTok, { ipAddress: '1.1.1.1' } as any, new Date(Date.now() + 168 * 3_600_000));
+	for (const bad of [0, 1, 12, 100, 'x', 24.5]) assert.equal((await put(e, e.sa.id, { sessionMaxHours: bad }, { sessionMaxHours: 0 })).status, 400, String(bad));
+	const manager = await mkStaff(e, ['settings.manage'], 'smh'); assert.equal((await put(e, manager.user.id, { sessionMaxHours: 24 }, { sessionMaxHours: 0 })).status, 403);
+	assert.equal((await put(e, e.sa.id, { sessionMaxHours: 24 }, { sessionMaxHours: 0 })).status, 200);
+	const after = await issueAccessToken({ userId: 'x' }, secret); assert.equal(hoursOf(after.token), 24); assert.ok(Math.abs(after.expiresAt.getTime() - (Date.now() + 24 * 3_600_000)) < 5000);
+	assert.ok(await sessionService.validateOrRegister(u.id, oldTok, { ipAddress: '1.1.1.1' } as any), 'an existing session keeps working with the expiry it was issued with');
+	assert.equal((await e.prisma.userSession.findFirstOrThrow({ where: { userId: u.id } })).revokedAt, null);
+	// idle preview: how many LIVE sessions would end right now for a given limit
+	const mk = async (minsAgo: number) => { const t = jwt.sign({ userId: u.id, n: Math.random() }, secret, { expiresIn: '168h' }); const s = await sessionService.register(u.id, t, { ipAddress: '1.1.1.1' } as any, new Date(Date.now() + 3_600_000)); await e.prisma.userSession.update({ where: { id: s.id }, data: { lastActiveAt: new Date(Date.now() - minsAgo * 60000) } }); };
+	await mk(500); await mk(90); await mk(2);
+	const imp = (await e.call('GET', `${S}/sessions-impact?idleMinutes=60`, e.sa.id)).json.data; assert.ok(imp.wouldEndNow >= 2 && imp.wouldEndNow < imp.activeSessions, JSON.stringify(imp));
+	assert.equal((await e.call('GET', `${S}/sessions-impact?idleMinutes=0`, e.sa.id)).json.data.wouldEndNow, 0); assert.equal((await e.call('GET', `${S}/sessions-impact?idleMinutes=2`, e.sa.id)).status, 400);
+	assert.equal((await e.call('GET', `${S}/sessions-impact?idleMinutes=60`, manager.user.id)).status, 403);
+	await put(e, e.sa.id, { sessionMaxHours: 168 }, { sessionMaxHours: 1 });
 });
 
 test('PG settings: idle session timeout is enforced on the next request, existing sessions included; 0 turns it off; an active session keeps working', opts, async () => {
