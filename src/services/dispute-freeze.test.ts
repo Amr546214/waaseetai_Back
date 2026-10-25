@@ -120,7 +120,6 @@ function makeWorld(t: TestContext, init: WorldInit = {}) {
       // the acting admin of a financial decision: admin-1 holds the permissions (it is the platform owner here), admin-2 is an ADMIN account that holds nothing (refused)
       findUnique: async ({ where }: any) => (where.id === 'admin-1' ? { accountType: 'SUPER_ADMIN', status: 'ACTIVE' } : where.id === 'admin-2' ? { accountType: 'ADMIN', status: 'ACTIVE' } : null)
     },
-    platformOwner: { findUnique: async ({ where }: any) => (where.userId === 'admin-1' ? { userId: 'admin-1' } : null) },
     adminStaff: { findUnique: async () => null },
     walletTransaction: { create: async ({ data }: any) => { if (st.walletTx.some((w: Row) => w.referenceId === data.referenceId)) throw Object.assign(new Error('Unique constraint failed on referenceId'), { code: 'P2002' }); st.walletTx.push(clone(data)); return data; } },
     accountAuditLog: {

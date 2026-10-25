@@ -2920,7 +2920,6 @@ enum AdminTaskType {
   DOCUMENT
 }
 
-/// The single platform owner. Exactly one row (id is fixed to 1 and CHECKed in the migration). Set only by scripts/set-platform-owner.ts after the owner confirms the account id.
 /// A permission template. `permissions` holds ids from the registry in src/config/admin-permissions.ts; `version` makes concurrent edits detectable (compare-and-set).
 model AdminRole {
   id          String   @id @default(uuid())
