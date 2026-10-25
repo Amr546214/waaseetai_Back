@@ -1,4 +1,5 @@
 import { Prisma, WithdrawalStatus } from '@prisma/client';
+import { platformZone, formatInZone } from '../utils/platform-time';
 import { prisma } from '../config/db';
 import { contractInclude, invoicesOf } from './provider-invoices.service';
 import { toCsv } from '../utils/csv.util';
@@ -155,7 +156,9 @@ export class AdminFinanceService {
 
 	async withdrawalsCsv(status?: WithdrawalStatus) {
 		const rows = await prisma.withdrawal.findMany({ where: status ? { status } : {}, orderBy: { createdAt: 'desc' }, take: CSV_ROW_CAP, include: { user: { select: { firstName: true, lastName: true, email: true } } } });
-		return toCsv(['id', 'date', 'user', 'email', 'amount', 'currency', 'method', 'paypal_email', 'status', 'reference', 'rejection_reason'], rows.map(w => [w.id, w.createdAt.toISOString(), fullName(w.user), w.user?.email, w.amount, w.currency, w.method, w.paypalEmail, w.status, w.referenceId, w.rejectionReason]));
+		// `date` stays the reference instant (ISO, UTC); when a platform time zone is configured a `date_local` column writes the same instant in that zone
+		const zone = await platformZone();
+		return toCsv(['id', 'date', ...(zone ? ['date_local'] : []), 'user', 'email', 'amount', 'currency', 'method', 'paypal_email', 'status', 'reference', 'rejection_reason'], rows.map(w => [w.id, w.createdAt.toISOString(), ...(zone ? [formatInZone(w.createdAt, zone)] : []), fullName(w.user), w.user?.email, w.amount, w.currency, w.method, w.paypalEmail, w.status, w.referenceId, w.rejectionReason]));
 	}
 }
 

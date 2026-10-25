@@ -1,4 +1,5 @@
 import { prisma } from '../config/db';
+import { platformZone, startOfMonthInZone } from '../utils/platform-time';
 import { disconnectUserSockets } from '../utils/socket-registry';
 import { AccountType, UserStatus, UserRole, RiskLevel, Prisma, LogCategory, LogStatus, ProjectStatus } from '@prisma/client';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
@@ -210,7 +211,7 @@ export class AdminUsersService {
     };
   }
 
-  private buildWhereClause(params: GetUsersQueryParams): Prisma.UserWhereInput {
+  private buildWhereClause(params: GetUsersQueryParams, zone: string | null = null): Prisma.UserWhereInput {
     const where: Prisma.UserWhereInput = {
       accountType: { not: AccountType.SUPER_ADMIN }
     };
@@ -289,7 +290,7 @@ export class AdminUsersService {
     if (params.joinedDate && params.joinedDate !== 'ALL' && params.joinedDate !== 'all') {
       const now = new Date();
       if (params.joinedDate === 'THIS_MONTH') {
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const startOfMonth = zone ? startOfMonthInZone(zone, now) : new Date(now.getFullYear(), now.getMonth(), 1);
         where.createdAt = { gte: startOfMonth };
       } else if (params.joinedDate === 'LAST_3_MONTHS') {
         const threeMonthsAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
@@ -320,7 +321,7 @@ export class AdminUsersService {
     const limit = Math.min(Math.max(Number(params.limit) || 15, 1), 100);
     const skip = (page - 1) * limit;
 
-    const where = this.buildWhereClause(params);
+    const where = this.buildWhereClause(params, await platformZone());
 
     const sortBy = params.sortBy || 'createdAt';
     const sortOrder = params.sortOrder || 'desc';
@@ -723,7 +724,7 @@ export class AdminUsersService {
   }
 
   async exportCsv(params: GetUsersQueryParams): Promise<string> {
-    const where = this.buildWhereClause(params);
+    const where = this.buildWhereClause(params, await platformZone());
     const BATCH_SIZE = 1000;
     let page = 0;
     let hasMore = true;

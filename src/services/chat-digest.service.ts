@@ -1,4 +1,5 @@
 import { siteUrl } from '../utils/site-url';
+import { brandSubject } from '../utils/brand';
 import { emailSenderName } from '../utils/email-sender-name';
 import { prisma } from '../config/db';
 import { logger } from '../config/logger';
@@ -55,7 +56,7 @@ async function sendDigestMail(email: string, firstName: string | null, lang: 'ar
 	await mailTransporter.sendMail({
 		from: `"${senderName}" <${from}>`,
 		to: email,
-		subject: d.subject,
+		subject: brandSubject(d.subject),
 		html: `<div dir="${copy.dir}" style="font-family:Tahoma,Arial,sans-serif"><p>${esc(copy.greeting(firstName || ''))}</p><h3>${esc(d.headline)}</h3><p>${esc(title.replace(/\s*\(\d+\)$/, ''))}</p><p>${esc(d.latest)}: ${esc(short)}</p>${link ? `<p><a href="${esc(link)}">${esc(actionText || copy.open)}</a></p>` : ''}<p style="color:#6b7699;font-size:12px">${esc(copy.footer)}</p></div>`,
 		text: `${d.headline}\n${d.latest}: ${short}${link ? `\n${link}` : ''}`,
 		headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },

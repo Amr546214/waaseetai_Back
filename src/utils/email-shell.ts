@@ -1,4 +1,5 @@
 import { emailAssetBaseUrl, siteUrl } from './site-url';
+import { brandName } from './brand';
 
 export const escHtml = (v: string): string => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -38,15 +39,15 @@ export const renderEmailShell = (o: { lang?: 'ar' | 'en'; docTitle: string; body
 <tr><td align="center" style="padding:20px 8px;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;background:#ffffff;border:1px solid #e3e7ee;border-radius:10px;">
     <tr><td align="center" style="padding:26px 20px 18px 20px;border-bottom:1px solid #eceff4;font-family:${MAIL_FONT};">
-      ${assets ? `<img src="${escHtml(assets)}/images/waseet-mark.png" width="34" alt="Waseet AI" style="display:block;margin:0 auto 14px auto;border:0;outline:none;height:auto;">` : ''}
-      <div style="font-family:${MAIL_FONT};font-size:12px;line-height:16px;font-weight:700;letter-spacing:1.2px;color:#4b5563;">WASEET AI</div>
+      ${assets ? `<img src="${escHtml(assets)}/images/waseet-mark.png" width="34" alt="${escHtml(brandName())}" style="display:block;margin:0 auto 14px auto;border:0;outline:none;height:auto;">` : ''}
+      <div style="font-family:${MAIL_FONT};font-size:12px;line-height:16px;font-weight:700;letter-spacing:1.2px;color:#4b5563;">${escHtml(brandName().toUpperCase())}</div>
     </td></tr>
     <tr><td class="ws-pad" align="center" style="${o.padStyle ?? 'padding:30px 24px 26px 24px;'}font-family:${MAIL_FONT};">
 ${o.bodyHtml}
     </td></tr>
     <tr><td align="center" style="padding:18px 20px 20px 20px;border-top:1px solid #eceff4;font-family:${MAIL_FONT};">
       ${o.footerNote ? `<div style="font-family:${MAIL_FONT};font-size:11px;line-height:17px;color:#9aa1ae;margin:0 0 8px 0;">${escHtml(o.footerNote)}</div>` : ''}
-      <div style="font-family:${MAIL_FONT};font-size:11px;line-height:16px;color:#9aa1ae;margin:0 0 6px 0;">&copy; Waseet AI ${year} &ndash; ${rights}</div>
+      <div style="font-family:${MAIL_FONT};font-size:11px;line-height:16px;color:#9aa1ae;margin:0 0 6px 0;">&copy; ${escHtml(brandName())} ${year} &ndash; ${rights}</div>
       ${help ? `<div style="font-family:${MAIL_FONT};font-size:11px;line-height:16px;margin:0;"><a href="${escHtml(help)}" style="color:#4b5563;text-decoration:none;font-weight:600;">${helpLabel}</a></div>` : ''}
     </td></tr>
   </table>

@@ -1,4 +1,5 @@
 import { AccountType, AccreditationStatus, DisputeStatus, EscrowStatus, KYCStatus, ModificationStatus, OnboardingStatus, ChangeRequestStatus, ProjectStatus, SpecialtyVerificationStatus, SupportTicketStatus, UserStatus, WithdrawalStatus } from '@prisma/client';
+import { platformZone, startOfMonthInZone, startOfPreviousMonthInZone } from '../utils/platform-time';
 import { prisma } from '../config/db';
 import { deliveryCompletedProject } from './settlement-state.service';
 
@@ -33,8 +34,10 @@ const ACCOUNT_LABEL: Record<string, string> = {
 
 export class AdminDashboardService {
 	async getSummary(now = new Date()) {
-		const monthStart = startOfMonth(now);
-		const prevMonthStart = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() - 1, 1));
+		// the month is cut in the platform time zone when one is configured (setting `defaultTimezone`); otherwise exactly as before (UTC)
+		const zone = await platformZone();
+		const monthStart = zone ? startOfMonthInZone(zone, now) : startOfMonth(now);
+		const prevMonthStart = zone ? startOfPreviousMonthInZone(zone, now) : new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() - 1, 1));
 		const sevenDaysAgo = new Date(now.getTime() - 7 * DAY);
 		const day = new Date(now.getTime() - DAY);
 		const memberWhere = { accountType: { notIn: ADMIN_TYPES } };
