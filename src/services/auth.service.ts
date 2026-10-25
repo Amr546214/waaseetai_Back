@@ -1,4 +1,5 @@
 import { presentedIdentity } from '../utils/admin-identity';
+import { systemSettingsService } from './system-settings.service';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
@@ -214,7 +215,13 @@ export class AuthService {
 	/**
 	 * Register a new user
 	 */
+	/** Setting `registrationOpen`: the SERVER refuses new accounts while it is off (hiding the button is only the courtesy on top). Read-failure = open (a settings outage must not stop sign-ups silently either way: default is open). */
+	private async assertRegistrationOpen(): Promise<void> {
+		if (!(await systemSettingsService.get<boolean>('registrationOpen'))) throw new AppError('التسجيل بحسابات جديدة مغلق مؤقتًا. يمكنك المحاولة لاحقًا.', 403, undefined, 'REGISTRATION_CLOSED');
+	}
+
 	public async registerUser(rawInput: RegisterInput, referralContext: Pick<ReferralAttributionContext, 'refCookieSlug' | 'refCookieSource'> = {}) {
+		await this.assertRegistrationOpen();
 		// validateRequest only validates (it does not replace req.body with the parsed value), so the address is normalised here, where it is stored.
 		const input: RegisterInput = { ...rawInput, email: String(rawInput.email ?? '').trim().toLowerCase() };
 		const googleIdentity = input.googleIdToken ? await this.verifyGoogleIdentity(input.googleIdToken) : undefined;
@@ -725,6 +732,7 @@ export class AuthService {
 		// Older clients identify registration by supplying an account type.
 		const intent = input.intent ?? (input.accountType ? 'register' : 'login');
 		if (intent === 'register') {
+			await this.assertRegistrationOpen();
 			if (existingUser) {
 				// Reached only with a VERIFIED Google credential for this address: the caller proved they control it.
 				throw new AppError('هذا الحساب موجود بالفعل، يرجى تسجيل الدخول', 409);

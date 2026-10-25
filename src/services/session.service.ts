@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { systemSettingsService } from './system-settings.service';
 import { prisma } from '../config/db';
 import { accountAuditLogService } from './account-logs.service';
 
@@ -32,6 +33,12 @@ class SessionService {
     const existing = await prisma.userSession.findUnique({ where: { tokenHash: hash } });
     if (existing?.revokedAt || (existing && existing.expiresAt <= new Date())) return null;
     if (!existing) return this.register(userId, token, context, expiresAt);
+    // Setting `sessionIdleMinutes` (0 = off): a session idle for longer is ended at its next request - sessions that already exist included. lastActiveAt is refreshed at most once a minute, hence the 5-minute floor.
+    const idleMinutes = await systemSettingsService.get<number>('sessionIdleMinutes');
+    if (idleMinutes > 0 && Date.now() - existing.lastActiveAt.getTime() > idleMinutes * 60000) {
+      await prisma.userSession.update({ where: { id: existing.id }, data: { revokedAt: new Date() } });
+      return null;
+    }
     if (Date.now() - existing.lastActiveAt.getTime() > 60000) await prisma.userSession.update({ where: { id: existing.id }, data: { lastActiveAt: new Date(), ipAddress: context.ipAddress } });
     return existing;
   }

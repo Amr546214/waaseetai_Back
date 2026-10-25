@@ -61,6 +61,7 @@ export const ADMIN_PERMISSIONS: readonly AdminPermissionDef[] = [
 	{ id: 'performance.export', label: 'تصدير الأداء', group: 'team', sensitive: false },
 	{ id: 'messages.use', label: 'مراسلة فريق الإدارة', group: 'team', sensitive: false },
 
+	{ id: 'settings.view', label: 'عرض إعدادات النظام', group: 'system', sensitive: false },
 	{ id: 'settings.manage', label: 'إعدادات النظام', group: 'system', sensitive: true, designRow: 'تعديل الإعدادات' },
 	{ id: 'site_control.manage', label: 'التحكم بالموقع', group: 'system', sensitive: true },
 	{ id: 'audit.view', label: 'عرض سجلات التدقيق', group: 'system', sensitive: false, designRow: 'Audit Trail' },

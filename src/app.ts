@@ -195,6 +195,9 @@ app.get('/api/health', (_req: Request, res: Response) => {
 	res.status(200).json({ success: true, status: 'ok', service: 'waseetai-backend' });
 });
 
+// Maintenance mode (setting `maintenanceMode`): refuses the platform's traffic except health, sign-in, public settings, the admin console and payment callbacks. After the health probes on purpose.
+app.use(maintenanceMiddleware);
+
 // Create a centralized API router
 const apiRouter = express.Router();
 
@@ -279,6 +282,8 @@ import adminSpecialtiesRouter from './routes/admin-specialties.routes';
 import adminUsersRouter from './routes/admin-users.routes';
 import adminTeamRoutes, { adminInvitePublicRouter } from './routes/admin-team.routes';
 import adminMessagesRoutes from './routes/admin-messages.routes';
+import adminSystemSettingsRoutes from './routes/admin-system-settings.routes';
+import { maintenanceMiddleware } from './middlewares/maintenance.middleware';
 import aiAssessmentRoutes from './routes/ai-assessment.routes';
 import accountManagementRoutes from './routes/account-management.routes';
 import adminDisputesRoutes from './routes/admin-disputes.routes';
@@ -316,6 +321,8 @@ mountAppRoute('/api/admin/team', adminTeamRoutes);
 mountAppRoute('/admin/team', adminTeamRoutes);
 mountAppRoute('/api/admin/messages', adminMessagesRoutes);
 mountAppRoute('/admin/messages', adminMessagesRoutes);
+mountAppRoute('/api/admin/system-settings', adminSystemSettingsRoutes);
+mountAppRoute('/admin/system-settings', adminSystemSettingsRoutes);
 mountAppRoute('/api/admin-invite', adminInvitePublicRouter);
 mountAppRoute('/admin-invite', adminInvitePublicRouter);
 mountAppRoute('/api/admin/users', adminUsersRouter);
