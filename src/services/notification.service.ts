@@ -1,4 +1,5 @@
 import { deniedAdminNotificationTypes } from './admin-access.service';
+import { emailSenderName } from '../utils/email-sender-name';
 import { NotificationCategory, Notification } from '@prisma/client';
 import { siteUrl } from '../utils/site-url';
 import { buildNotificationEmailHtml } from '../utils/notification-email-template';
@@ -253,7 +254,7 @@ export class NotificationService {
 	private async sendNotificationMail(email: string, firstName: string | null, dto: NotificationDto, lang: 'ar' | 'en' = 'ar'): Promise<void> {
 		const copy = notificationMailCopy(lang);
 		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
-		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
+		const senderName = await emailSenderName();
 		// central rule: an e-mail link always has a host; without a configured site address the link is left out (see utils/site-url)
 		const link = dto.actionUrl ? siteUrl(dto.actionUrl) : null;
 		try {
@@ -286,7 +287,7 @@ export class NotificationService {
 	 */
 	private async sendOtpMail(kind: string, email: string, code: string, subject: string, validityMinutes: number = 10): Promise<EmailDeliveryResult> {
 		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
-		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
+		const senderName = await emailSenderName();
 		const startedAt = Date.now();
 		try {
 			const info = await mailTransporter.sendMail({
@@ -325,7 +326,7 @@ export class NotificationService {
 	public async sendPasswordResetEmail(email: string, firstName: string, code: string, validityMinutes: number = 10): Promise<EmailDeliveryResult> {
 		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
 		const emailSubject = process.env.RESET_PASSWORD_EMAIL_SUBJECT ?? 'رمز إعادة تعيين كلمة المرور - Waseet AI';
-		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
+		const senderName = await emailSenderName();
 
 		const startedAt = Date.now();
 		try {

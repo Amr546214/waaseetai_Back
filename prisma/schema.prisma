@@ -2775,6 +2775,7 @@ model CompanyTeamMember {
 model PlatformSetting {
   key       String   @id
   value     Json
+  version   Int      @default(1)
   updatedBy String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
