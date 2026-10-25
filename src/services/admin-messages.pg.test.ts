@@ -34,8 +34,10 @@ test('PG messages: the directory lists only live staff holding the permission (n
 	const e = await env(); const a = await member(e, 'da'); const b = await member(e, 'db'); const c = await member(e, 'dc'); const np = await mkStaff(e, ['users.view'], 'dn'); const client = await e.mkUser('CLIENT_INDIVIDUAL', 'dcl');
 	await e.call('POST', `/admin/team/staff/${c.user.id}/suspend`, e.sa.id);
 	const d = (await e.call('GET', `${M}/directory`, a.user.id)).json.data as any[]; const ids = d.map(x => x.userId);
-	assert.ok(ids.includes(b.user.id)); assert.ok(ids.includes(e.sa.id)); assert.ok(!ids.includes(a.user.id)); assert.ok(!ids.includes(c.user.id)); assert.ok(!ids.includes(np.user.id)); assert.ok(!ids.includes(client.id));
-	assert.equal(d.find(x => x.userId === e.sa.id).role, 'مدير النظام');
+	// the list is capped (200, by name): on a crowded database ask for the specific people by name
+	const find = async (who: any) => ((await e.call('GET', `${M}/directory?q=${encodeURIComponent(who.firstName)}`, a.user.id)).json.data as any[]).map(x => x.userId);
+	assert.ok((await find(b.user)).includes(b.user.id)); assert.ok((await find(e.sa)).includes(e.sa.id)); assert.ok(!ids.includes(a.user.id)); assert.ok(!ids.includes(c.user.id)); assert.ok(!ids.includes(np.user.id)); assert.ok(!ids.includes(client.id));
+	assert.equal(((await e.call('GET', `${M}/directory?q=${encodeURIComponent(e.sa.firstName)}`, a.user.id)).json.data as any[]).find(x => x.userId === e.sa.id).role, 'مدير النظام');
 	assert.deepEqual(Object.keys(d[0]).sort(), ['name', 'role', 'userId']); // no e-mail, no phone
 	const q = (await e.call('GET', `${M}/directory?q=${encodeURIComponent(b.user.firstName)}`, a.user.id)).json.data as any[]; assert.ok(q.some(x => x.userId === b.user.id));
 });
