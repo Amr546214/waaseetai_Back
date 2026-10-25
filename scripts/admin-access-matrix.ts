@@ -14,7 +14,7 @@ for (const m of app.matchAll(/import\s+(\w+)\s*,\s*\{([^}]+)\}\s+from\s+'(\.\/ro
 for (const m of app.matchAll(/import\s+\{([^}]+)\}\s+from\s+'(\.\/routes\/[^']+)'/g)) for (const n of m[1].split(',').map(x => x.trim().split(/\s+as\s+/).pop()!)) imports.set(n, { file: m[2], name: n });
 const mounts = [...app.matchAll(/mountAppRoute\('\/api\/admin\/([\w-]+)',\s*(\w+)\)/g)].map(m => ({ prefix: m[1], ident: m[2] }));
 
-const label = (h: any): string | null => h.adminPermissions ? `${h.adminPermissions.length > 1 ? 'ALL OF ' : ''}${h.adminPermissions.join(' + ')}`.replace('ALL OF ', 'all of: ') : h.adminOwnerOnly ? 'OWNER ONLY' : h.adminScoped ? `scope: ${h.adminScoped} (owner, or the dispute / ticket case held)` : h.adminMember ? 'any team member (holds >= 1 permission)' : h.adminSelf ? 'own admin account only' : null;
+const label = (h: any): string | null => h.adminPermissions ? `${h.adminPermissions.length > 1 ? 'ALL OF ' : ''}${h.adminPermissions.join(' + ')}`.replace('ALL OF ', 'all of: ') : h.adminSuperAdminOnly ? 'SUPER_ADMIN ONLY' : h.adminScoped ? `scope: ${h.adminScoped} (SUPER_ADMIN, or the dispute / ticket case held)` : h.adminMember ? 'any team member (holds >= 1 permission)' : h.adminSelf ? 'own admin account only' : null;
 
 (async () => {
 	const rows: string[] = []; let total = 0;
