@@ -194,3 +194,25 @@ test('PG: a custom role given to one member changes nobody else; editing a role 
 	assert.deepEqual(await perms(a.user.id), ['users.view']);
 	const list = await e.call('GET', '/admin/team/roles', e.owner.id); assert.equal(list.json.data.find((r: any) => r.id === custom.id).memberCount, 1);
 });
+
+test('PG: presence is real - «active now» only for a live session with activity in the last 5 minutes (revoked / expired / stale / suspended = not); departments are derived from the role; the activity feed is for the owner, the member, or tasks.manage', opts, async () => {
+	const e = await env(); const { prisma } = e;
+	const live = await mkStaff(e, ['disputes.view', 'users.view'], 'pl'), stale = await mkStaff(e, ['users.view'], 'ps'), revoked = await mkStaff(e, ['users.view'], 'pr'), none = await mkStaff(e, ['users.view'], 'pn'), suspended = await mkStaff(e, ['users.view'], 'pu');
+	const sess = (userId: string, over: any = {}) => prisma.userSession.create({ data: { userId, tokenHash: randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, ''), expiresAt: new Date(Date.now() + 3600_000), lastActiveAt: new Date(), ...over } });
+	await sess(live.user.id); await sess(stale.user.id, { lastActiveAt: new Date(Date.now() - 10 * 60_000) }); await sess(revoked.user.id, { revokedAt: new Date() }); await sess(suspended.user.id);
+	await prisma.adminStaff.update({ where: { userId: suspended.user.id }, data: { status: 'SUSPENDED' } });
+	const viewer = (await mkStaff(e, ['team.view'], 'pv')).user;
+	const r = await e.call('GET', '/admin/team/staff', viewer.id); assert.equal(r.status, 200);
+	const by = (id: string) => r.json.data.members.find((m: any) => m.userId === id);
+	assert.equal(by(live.user.id).activeNow, true); for (const x of [stale, revoked, none, suspended]) assert.equal(by(x.user.id).activeNow, false, x.user.id);
+	assert.equal(by(none.user.id).lastActiveAt, null); // no session = no claim, never a made-up time
+	assert.ok(by(stale.user.id).lastActiveAt); assert.deepEqual(by(live.user.id).departments, ['المستخدمون', 'النزاعات']);
+	assert.ok(r.json.data.counts.activeNow >= 1);
+	// the activity feed: own, owner, tasks.manage - not a colleague with only team.view
+	const mgr = (await mkStaff(e, ['tasks.manage', 'team.view'], 'pm2')).user;
+	assert.equal((await e.call('GET', `/admin/team/staff/${live.user.id}/activity`, live.user.id)).status, 200);
+	assert.equal((await e.call('GET', `/admin/team/staff/${live.user.id}/activity`, e.owner.id)).status, 200);
+	assert.equal((await e.call('GET', `/admin/team/staff/${live.user.id}/activity`, mgr.id)).status, 200);
+	const denied = await e.call('GET', `/admin/team/staff/${live.user.id}/activity`, viewer.id); assert.equal(denied.status, 403); assert.equal(denied.json.code, 'ADMIN_PERMISSION_DENIED');
+	assert.equal((await e.call('GET', `/admin/team/staff/${live.user.id}/activity`, (await e.mkUser('ADMIN', 'pbare')).id)).status, 403);
+});
