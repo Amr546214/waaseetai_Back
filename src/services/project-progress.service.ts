@@ -227,7 +227,7 @@ export class ProjectProgressService {
     const state = contractDeliveryState(contract.status, persisted, contract.project.escrow, openDispute?.status || null);
     const escrow = escrowFacts(contract.project.escrow);
     // THE lifecycle (single source of truth, see project-lifecycle.service): state, closure, money and per-action eligibility with specific reasons.
-    const lifecycleInput = { viewer: { role: role as 'client' | 'provider', isOwner: true }, contractStatus: contract.status, contractPrice: contract.price, escrow: contract.project.escrow, stages: persisted, activeDisputes: { count: activeDisputeCount, latestId: openDispute?.id ?? null, latestStatus: openDispute?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId, adminAudit) : null };
+    const lifecycleInput = { viewer: { role: role as 'client' | 'provider', isOwner: true }, contractStatus: contract.status, contractPrice: contract.price, contractCurrency: contract.currency, escrow: contract.project.escrow, stages: persisted, activeDisputes: { count: activeDisputeCount, latestId: openDispute?.id ?? null, latestStatus: openDispute?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId, adminAudit) : null };
     const lifecycle = computeLifecycle(lifecycleInput);
     const lifecycleStage = new Map(lifecycle.stages.map(s => [s.stageId, s]));
     // Contract-level approval gate (any role's view): is approving a delivered stage possible right now, and if not, why.
@@ -537,7 +537,7 @@ export class ProjectProgressService {
                 stageTitle: stage.title,
                 releasedAmount: stage.amount,
                 ...(intermediateSplit ? { grossAmount: intermediateSplit.gross, platformCommission: intermediateSplit.commission, providerNet: intermediateSplit.net, commissionRatePercent: intermediateEscrow!.providerCommissionRateSnapshot, commissionLevel: intermediateEscrow!.providerCommissionLevelSnapshot, feePolicyVersion: 2 } : {}),
-                currency: 'USD',
+                currency: (contract.currency ?? LEGACY_CURRENCY) as string,
                 isFinalStage: false,
                 approvedByClientId: contract.clientId
               }
@@ -595,7 +595,7 @@ export class ProjectProgressService {
                 stageTitle: stage.title,
                 releasedAmount: stage.amount,
                 ...(finalSplit ? { grossAmount: finalSplit.gross, platformCommission: finalSplit.commission, providerNet: finalSplit.net, commissionRatePercent: finalEscrow!.providerCommissionRateSnapshot, commissionLevel: finalEscrow!.providerCommissionLevelSnapshot, feePolicyVersion: 2 } : {}),
-                currency: 'USD',
+                currency: (contract.currency ?? LEGACY_CURRENCY) as string,
                 isFinalStage: true,
                 approvedByClientId: contract.clientId
               }

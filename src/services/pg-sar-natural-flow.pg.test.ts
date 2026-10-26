@@ -49,6 +49,9 @@ test('pg SAR natural flow: request -> offer -> selection -> contract -> signatur
 	// 1. the Super Admin selects SAR through the settings API: the readiness gate allows it (nothing in the ledger is unverified, nothing is open), and no gateway is enabled by it
 	await setBase(w, 'SAR');
 	const { platformCurrency } = await import('./platform-currency'); const { gatewayAccepts } = await import('../config/payment-gateways');
+	// the DB is shared with earlier tests of the run: measure this flow as a difference against what was already released
+	const { adminFinanceService: adminFinance0 } = await import('./admin-finance.service'); const ov0: any = await adminFinance0.overview(1);
+	const sar0 = ov0.totals.releasedGross as number; const usd0 = (ov0.byCurrency?.USD?.releasedGross ?? 0) as number;
 	assert.equal(await platformCurrency(), 'SAR'); assert.equal(gatewayAccepts('arb', 'SAR'), false); assert.equal(gatewayAccepts('paypal', 'SAR'), false);
 
 	// 2. a NEW request: SAR (the platform currency at creation), and its mirrored project
@@ -100,14 +103,14 @@ test('pg SAR natural flow: request -> offer -> selection -> contract -> signatur
 	const { providerFinanceService } = await import('./provider-finance.service'); const wallet = await providerFinanceService.getWallet(w.provider.id);
 	assert.equal(wallet.summary.currency, 'SAR'); assert.equal(wallet.summary.availableBalance, done.providerNetReleasedAmount); assert.equal(wallet.summary.withdrawableBalance, 0); assert.equal(wallet.summary.byCurrency?.SAR?.payoutSupported, false);
 	const { adminFinanceService } = await import('./admin-finance.service'); const ov: any = await adminFinanceService.overview(1);
-	assert.equal(ov.currency, 'SAR'); assert.equal(ov.totals.releasedGross, 1000); assert.equal(ov.byCurrency.SAR.releasedGross, 1000);
+	assert.equal(ov.currency, 'SAR'); assert.equal(Math.round((ov.totals.releasedGross - sar0) * 100) / 100, 1000); assert.equal(Math.round((ov.byCurrency.SAR.releasedGross - sar0) * 100) / 100, 1000);
 	const { clientFinanceService } = await import('./client-finance.service'); const cw: any = await clientFinanceService.getWallet(w.client.id);
 	assert.equal(cw.summary.currency, 'SAR'); assert.equal(cw.summary.availableBalance, 500); assert.equal(cw.summary.balances.USD, 777);
 
 	// 9. the setting goes back to USD: nothing that exists changes currency; the headline is USD again and SAR is listed apart
 	await setBase(w, 'USD');
 	assert.equal((await prisma.contract.findUniqueOrThrow({ where: { projectId: req.id } })).currency, 'SAR'); assert.equal((await prisma.escrow.findUniqueOrThrow({ where: { projectId: req.id } })).currency, 'SAR');
-	const ov2: any = await adminFinanceService.overview(1); assert.equal(ov2.currency, 'USD'); assert.equal(ov2.totals.releasedGross, 0); assert.equal(ov2.byCurrency.SAR.releasedGross, 1000); assert.equal(ov2.mixedCurrencies, false);
+	const ov2: any = await adminFinanceService.overview(1); assert.equal(ov2.currency, 'USD'); assert.equal(ov2.totals.releasedGross, usd0); assert.equal(Math.round((ov2.byCurrency.SAR.releasedGross - sar0) * 100) / 100, 1000); assert.equal(ov2.mixedCurrencies, Object.values(ov2.byCurrency.USD ?? {}).some(v => v !== 0)); // mixed exactly when USD figures also exist (earlier tests of a shared run may have left some)
 });
 
 test('pg SAR natural flow: a SERVICE created while SAR is the platform currency is SAR, and its order, contract, escrow and stages follow it through checkout', opts, async () => {

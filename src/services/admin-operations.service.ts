@@ -98,7 +98,7 @@ export class AdminOperationsService {
 		const settlement = await adminSettlementFor({ projectId: id });
 		// The shared lifecycle (admin is a viewer: read-only, no operational action is ever allowed to it).
 		const lifecycle = computeLifecycle({
-			viewer: { role: 'admin', isOwner: false }, contractStatus: contract?.status ?? null, contractPrice: contract?.price ?? null, escrow: project.escrow as any,
+			viewer: { role: 'admin', isOwner: false }, contractStatus: contract?.status ?? null, contractPrice: contract?.price ?? null, contractCurrency: (contract as { currency?: string | null } | null)?.currency, escrow: project.escrow as any,
 			stages: (contract?.stages ?? []).map(s => ({ id: s.id, stepOrder: s.stepOrder, status: s.status, amount: s.amount, approvedAt: s.approvedAt, deliveries: [...s.deliveries].reverse().map(d => ({ status: d.status })) })),
 			activeDisputes: { count: disputes.filter(d => d.status === DisputeStatus.OPEN || d.status === DisputeStatus.UNDER_REVIEW).length, latestId: disputes.find(d => d.status === DisputeStatus.OPEN || d.status === DisputeStatus.UNDER_REVIEW)?.id ?? null },
 			settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId) : null

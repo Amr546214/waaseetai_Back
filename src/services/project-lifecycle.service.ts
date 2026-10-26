@@ -1,4 +1,5 @@
 import { prisma } from '../config/db';
+import { LEGACY_CURRENCY } from '../utils/currency';
 import { AppError } from '../utils/app-error';
 import { adminAudit } from './admin-audit.service';
 import { ACTIVE_DISPUTE_STATUSES, PROJECT_FROZEN_CODE, PROJECT_FROZEN_MESSAGE, countActiveDisputes, getActiveDisputeForProject } from './dispute-freeze.service';
@@ -51,6 +52,8 @@ export interface LifecycleInput {
   viewer: { role: LifecycleRole; isOwner: boolean };
   contractStatus: string | null;
   contractPrice: number | null;
+  /** the contract's own currency (a missing one reads as the legacy currency) */
+  contractCurrency?: string | null;
   escrow: LifecycleEscrowInput | null;
   stages: LifecycleStageInput[];
   activeDisputes: { count: number; latestId: string | null; latestStatus?: string | null };
@@ -127,7 +130,7 @@ export interface StageLifecycle {
 }
 
 export interface FinancialSummary {
-  currency: 'USD';
+  currency: string;
   contractValue: number;
   /** Shown next to the contract value when a settlement closed the project: the value is historical, not money awaiting release. */
   contractValueNote: string | null;
@@ -270,7 +273,7 @@ export function computeLifecycle(input: LifecycleInput): ProjectLifecycle {
     : escrow ? escrowReleased : approvedSum;
   const heldNow = !settled && escrow && escrow.status === 'HELD' ? Math.max(0, round2(escrow.amount - escrowReleased)) : 0;
   const financial: FinancialSummary = {
-    currency: 'USD', contractValue: price, contractValueNote: settled ? CONTRACT_VALUE_HISTORICAL_AR : null,
+    currency: (input.contractCurrency ?? (escrow as { currency?: string | null } | null)?.currency ?? LEGACY_CURRENCY) as string, contractValue: price, contractValueNote: settled ? CONTRACT_VALUE_HISTORICAL_AR : null,
     escrowStatus: escrow?.status ?? null, heldNow, releasedByStageApprovals,
     platformCommissionTotal: escrow?.platformCommissionAmount != null ? round2(escrow.platformCommissionAmount) : null,
     providerNetReleasedTotal: escrow?.providerNetReleasedAmount != null ? round2(escrow.providerNetReleasedAmount) : null,
@@ -353,7 +356,7 @@ export async function loadLifecycle(key: string, viewer: { userId: string | null
   if (!contract) return null;
   const isOwner = viewer.role === 'client' ? contract.clientId === viewer.userId : viewer.role === 'provider' ? contract.providerId === viewer.userId : false;
   const facts = await loadDisputeFacts(contract.projectId);
-  const lifecycle = computeLifecycle({ viewer: { role: viewer.role, isOwner }, contractStatus: contract.status, contractPrice: contract.price, escrow: contract.project?.escrow ?? null, stages: contract.stages, ...facts });
+  const lifecycle = computeLifecycle({ viewer: { role: viewer.role, isOwner }, contractStatus: contract.status, contractPrice: contract.price, contractCurrency: (contract as { currency?: string | null }).currency, escrow: contract.project?.escrow ?? null, stages: contract.stages, ...facts });
   return { lifecycle, contract: { id: contract.id, projectId: contract.projectId, clientId: contract.clientId, providerId: contract.providerId, status: contract.status, price: contract.price } };
 }
 

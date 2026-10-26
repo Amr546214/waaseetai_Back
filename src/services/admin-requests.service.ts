@@ -1,4 +1,5 @@
 import { DisputeStatus, Prisma, ProposalStatus, RequestStatus } from '@prisma/client';
+import { LEGACY_CURRENCY } from '../utils/currency';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { NEG_PREFIX, deriveNegotiationState, readNegotiationEntries } from '../utils/offer-negotiation';
@@ -68,7 +69,7 @@ export class AdminRequestsService {
 			items: rows.map(r => ({
 				id: r.id, title: r.title, status: r.status, projectStatus: projectBy.get(r.id) ?? null, contractStatus: contractBy.get(r.id) ?? null,
 				client: person((r as any).clientProfile?.user), specialty: r.specialty?.nameAr ?? null,
-				budget: { type: r.budgetType, min: r.minBudget, max: r.maxBudget, currency: 'USD' }, durationDays: r.expectedDurationDays,
+				budget: { type: r.budgetType, min: r.minBudget, max: r.maxBudget, currency: ((r as { currency?: string | null }).currency ?? LEGACY_CURRENCY) as string }, durationDays: r.expectedDurationDays,
 				offersCount: offersBy.get(r.id) ?? 0, openDisputes: r.disputes.length, createdAt: r.createdAt
 			})),
 			pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
@@ -112,7 +113,7 @@ export class AdminRequestsService {
 		return {
 			id: r.id, title: r.title, description: r.description, status: r.status, projectStatus: project?.status ?? null,
 			specialty: r.specialty?.nameAr ?? null, subSpecialties: r.subSpecialties, requiredSkills: r.requiredSkills,
-			budget: { type: r.budgetType, min: r.minBudget, max: r.maxBudget, currency: 'USD' }, durationDays: r.expectedDurationDays,
+			budget: { type: r.budgetType, min: r.minBudget, max: r.maxBudget, currency: ((r as { currency?: string | null }).currency ?? LEGACY_CURRENCY) as string }, durationDays: r.expectedDurationDays,
 			conditions: { preferredProviderType: r.preferredProviderType, requiresNda: r.requiresNda, ipRights: r.ipRights, allowNegotiation: r.allowNegotiation, splitMilestones: r.splitMilestones, outputs: r.outputs, customConditions: r.customConditions },
 			attachmentsCount: Array.isArray(r.attachments) ? r.attachments.length : 0,
 			// stored only when the WaseetAI analysis call succeeded at creation; null otherwise
@@ -153,7 +154,7 @@ export class AdminRequestsService {
 		const counts: Record<string, number> = { all: 0 };
 		for (const g of groups) { counts[g.status] = g._count._all; counts.all += g._count._all; }
 		return {
-			items: (rows as any[]).map(o => ({ id: o.id, requestId: o.projectId, requestTitle: o.project?.title ?? null, title: o.title, status: o.status, price: o.totalPrice, deliveryDays: o.deliveryDays, aiMatchScore: o.aiMatchScore, aiQualityTag: o.aiQualityTag, aiPriceTag: o.aiPriceTag, createdAt: o.createdAt, currency: 'USD', provider: person(o.provider), client: person(o.project?.client) })),
+			items: (rows as any[]).map(o => ({ id: o.id, requestId: o.projectId, requestTitle: o.project?.title ?? null, title: o.title, status: o.status, price: o.totalPrice, deliveryDays: o.deliveryDays, aiMatchScore: o.aiMatchScore, aiQualityTag: o.aiQualityTag, aiPriceTag: o.aiPriceTag, createdAt: o.createdAt, currency: (o.currency ?? o.project?.currency ?? LEGACY_CURRENCY) as string, provider: person(o.provider), client: person(o.project?.client) })),
 			pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
 			counts
 		};
@@ -181,7 +182,7 @@ export class AdminRequestsService {
 		const ai = o.aiFeedback && typeof o.aiFeedback === 'object' ? o.aiFeedback : null;
 		return {
 			id: o.id, requestId: o.projectId, requestTitle: o.project?.title ?? null, requestStatus: o.project?.status ?? null, title: o.title, message: o.message, advantages: o.advantages, outputs: o.outputs,
-			price: o.totalPrice, deliveryDays: o.deliveryDays, currency: 'USD', status: o.status, agreedToTerms: o.agreedToTerms, agreedToEscrow: o.agreedToEscrow,
+			price: o.totalPrice, deliveryDays: o.deliveryDays, currency: (o.currency ?? o.project?.currency ?? LEGACY_CURRENCY) as string, status: o.status, agreedToTerms: o.agreedToTerms, agreedToEscrow: o.agreedToEscrow,
 			// real fields of the offer's AI review; each is null when no review produced it
 			aiReview: o.aiMatchScore != null || o.aiQualityTag || o.aiPriceTag || ai ? { matchScore: o.aiMatchScore, qualityTag: o.aiQualityTag, priceTag: o.aiPriceTag, feedback: ai } : null,
 			milestones: o.milestones, provider: person(o.provider), client: person(o.project?.client),

@@ -1,6 +1,7 @@
 // Safe reading of Contract.terms (a Json column: the snapshot taken when the client selects the offer). Its shape is NOT guaranteed — legacy offers,
 import { commissionOn } from './escrow-commission';
 import { createHash } from 'node:crypto';
+import { LEGACY_CURRENCY } from './currency';
 // manual rows or future versions may store null, a string, an array, or an object with missing/odd fields — so this never throws and never invents data:
 // whatever cannot be read is simply absent (null / empty list).
 export interface ContractMilestoneView {
@@ -76,7 +77,7 @@ export function parseContractMilestones(terms: unknown): ContractMilestoneView[]
  * echoes this digest when the provider confirms; the server recomputes it from the LOCKED rows and refuses any confirmation whose digest no longer matches (terms changed after they were shown).
  */
 export function providerTermsDigest(c: { id: string; termsVersion: number; price: number; currency?: string | null }, escrow: { id?: string; providerCommissionRateSnapshot?: number | null; feePolicyVersion?: number | null } | null | undefined): string {
-	return createHash('sha256').update(JSON.stringify([c.id, c.termsVersion, Math.round(c.price * 100) / 100, c.currency ?? 'USD', escrow?.id ?? null, escrow?.feePolicyVersion ?? null, escrow?.providerCommissionRateSnapshot ?? null])).digest('hex');
+	return createHash('sha256').update(JSON.stringify([c.id, c.termsVersion, Math.round(c.price * 100) / 100, c.currency ?? LEGACY_CURRENCY, escrow?.id ?? null, escrow?.feePolicyVersion ?? null, escrow?.providerCommissionRateSnapshot ?? null])).digest('hex');
 }
 
 /** What the provider's sign-contract page may show: the contract's own values, the milestones of its saved terms, and its funded escrow. */

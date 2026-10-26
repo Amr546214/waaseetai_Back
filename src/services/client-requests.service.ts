@@ -1369,7 +1369,7 @@ export class ClientRequestsService {
 				type: request.budgetType,
 				min: request.minBudget,
 				max: request.maxBudget,
-				currency: 'USD' // active client-request budget pricing is now USD-semantic
+				currency: (request.currency ?? LEGACY_CURRENCY) as string // the request's own currency
 			},
 			category: {
 				id: request.specialty?.category?.id || null,
@@ -1596,7 +1596,7 @@ export class ClientRequestsService {
 			message: !offerMatches ? 'هذا العرض ليس العرض الذي جُهِّز له العقد. ارجع إلى العروض واختر العرض مجدداً.' : stateMessage[state],
 			status: contract.status,
 			price: contract.price,
-			currency: 'USD',
+			currency: (contract.currency ?? LEGACY_CURRENCY) as string,
 			durationDays: contract.durationDays,
 			milestones,
 			// No milestones in the frozen terms = the contract has one final delivery for the whole price.
