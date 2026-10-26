@@ -45,7 +45,7 @@ test('every template grants EXACTLY the design matrix of its column (plus only s
 
 test('reading never carries approval or payout, and no job role carries money-moving ids beyond the design (approve yes only where the design says; reject / payout never from a template)', () => {
 	for (const t of ADMIN_ROLE_TEMPLATES) {
-		for (const never of ['payouts.send', 'withdrawals.reject', 'users.delete', 'settings.manage', 'audit.view', 'site_control.manage', 'marketing_assets.manage', 'performance.export']) assert.ok(!t.permissions.includes(never), `${t.name} must not carry ${never}`);
+		for (const never of ['payouts.send', 'withdrawals.reject', 'users.delete', 'settings.manage', 'audit.view', 'site_control.manage', 'site.view', 'site.manage', 'marketing_assets.manage', 'performance.export']) assert.ok(!t.permissions.includes(never), `${t.name} must not carry ${never}`);
 		if (t.permissions.includes('withdrawals.review') && !t.permissions.includes('withdrawals.approve')) assert.fail(`${t.name}: review without approve is a read role only: fine, but not in the design`);
 	}
 	// the support supervisor processes tickets (decision 2026-10-25) but gets no team distribution, no people management, no money and no dispute resolution

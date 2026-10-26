@@ -66,6 +66,8 @@ export const ADMIN_PERMISSIONS: readonly AdminPermissionDef[] = [
 	{ id: 'settings.view', label: 'عرض إعدادات النظام', group: 'system', sensitive: false },
 	{ id: 'settings.manage', label: 'إعدادات النظام', group: 'system', sensitive: true, designRow: 'تعديل الإعدادات' },
 	{ id: 'site_control.manage', label: 'التحكم بالموقع', group: 'system', sensitive: true },
+	{ id: 'site.view', label: 'عرض هوية الموقع (الشعارات والأيقونات)', group: 'system', sensitive: false },
+	{ id: 'site.manage', label: 'إدارة هوية الموقع (رفع واعتماد واستعادة الشعارات والأيقونات)', group: 'system', sensitive: true },
 	{ id: 'audit.view', label: 'عرض سجلات التدقيق', group: 'system', sensitive: false, designRow: 'Audit Trail' },
 ] as const;
 

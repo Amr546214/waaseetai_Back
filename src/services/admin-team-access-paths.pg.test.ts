@@ -32,7 +32,7 @@ test('PG: one permission opens only its own data - with a single permission ever
 	const endpoints: Array<[string, string, string]> = [
 		['users.view', 'GET', '/admin/users'], ['withdrawals.review', 'GET', '/admin/withdrawals'], ['disputes.view', 'GET', '/admin/disputes'], ['support.review', 'GET', '/admin/tickets'],
 		['finance.read', 'GET', '/admin/finance/overview'], ['finance.read', 'GET', '/admin/finance/transactions.csv'], ['settings.manage', 'GET', '/admin/settings'], ['audit.view', 'GET', '/admin/team/access-audit'],
-		['team.view', 'GET', '/admin/team/staff'], ['performance.view', 'GET', '/admin/team/performance'],
+		['team.view', 'GET', '/admin/team/staff'], ['performance.view', 'GET', '/admin/team/performance'], ['site.view', 'GET', '/admin/site-identity'],
 	];
 	const perms = [...new Set(endpoints.map(x => x[0]))];
 	for (const p of perms) {
