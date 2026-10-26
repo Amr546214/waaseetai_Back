@@ -74,3 +74,12 @@ test('pg SAR: approving a stage releases from a SAR escrow with the frozen commi
 	assert.equal(r2(e.releasedAmount), 10, 'stage 1 (10 SAR) released once'); assert.equal(r2(e.platformCommissionAmount), 1, '10% of 10 SAR'); assert.equal(e.currency, 'SAR');
 	assert.ok(second?.statusCode >= 400 || second instanceof Error, 'a second approval of the same delivery is refused'); assert.deepEqual(await wallets(w), { usd: 100, sar: 0 });
 });
+
+test('pg SAR: a price INCREASE funded from the SAR wallet is NOT refused for a low USD balance (the check reads the escrow\'s currency wallet)', opts, async () => {
+	const { projectAmendmentService: svc } = await import('./project-amendment.service');
+	const w = await seed({ price: 20, sar: 100, usd: 0 });
+	const inc = await w.prisma.projectAmendment.create({ data: { id: id(), projectId: w.project.id, contractId: w.contract.id, currency: 'SAR', clientId: w.client.id, providerId: w.provider.id, requestedById: w.provider.id, requestedByRole: 'PROVIDER', title: 'زيادة', description: 'د', status: 'PENDING_OTHER_PARTY', type: 'BUDGET', budgetDelta: 5 } as any });
+	const e: any = await svc.respondToAmendment(w.client.id, inc.id, 'approve').catch((x: any) => x);
+	assert.doesNotMatch(String(e?.message ?? ''), /رصيد المحفظة غير كافٍ/, 'the SAR balance covers it: the refusal, if any, is about the payment code, not the balance');
+	if (!(e instanceof Error)) assert.deepEqual(await wallets(w), { usd: 0, sar: 95 });
+});
