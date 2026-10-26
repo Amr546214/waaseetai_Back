@@ -14,6 +14,7 @@ import { adminAudit } from './admin-audit.service';
 import { notifyAdmins } from './admin-notifications.service';
 import { assigneeHolds } from './admin-access.service';
 import { creditWallet } from '../utils/wallet-balance';
+import { requireCurrency } from '../utils/currency';
 
 // Advisory-only dispute summary — never a verdict. Human admin resolution
 // via resolve() above remains the sole authority on status/fault/money;
@@ -355,9 +356,9 @@ export class DisputeService {
 
       if (refund > 0) {
         // the refund goes back into the wallet of the ESCROW's own currency (no conversion exists)
-        await creditWallet(tx, contract.clientId, escrow.currency, refund);
+        await creditWallet(tx, contract.clientId, requireCurrency(escrow.currency), refund);
         await tx.walletTransaction.create({ data: {
-          userId: contract.clientId, type: 'REFUND', amount: refund, currency: escrow.currency, status: 'COMPLETED', paymentMethod: 'ESCROW',
+          userId: contract.clientId, type: 'REFUND', amount: refund, currency: requireCurrency(escrow.currency), status: 'COMPLETED', paymentMethod: 'ESCROW',
           referenceId: `DISPUTE-REFUND-${id}`, description: 'استرداد من الضمان بقرار نزاع',
           metadata: { disputeId: id, projectId, contractId: contractRef.id, outcome: input.outcome, decidedBy: adminId }
         } });

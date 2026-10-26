@@ -20,6 +20,8 @@ export const isSupportedCurrency = (c: unknown): c is Currency => typeof c === '
 
 /** a supported currency code, or a clear 400 (never a silent default) */
 export function requireCurrency(c: unknown, what = 'العملة'): Currency {
+	// a record that carries no currency at all is a legacy projection (the column is NOT NULL in the database): it is USD, never a guess from settings
+	if (c === undefined || c === null) return LEGACY_CURRENCY;
 	if (!isSupportedCurrency(c)) throw new AppError(`${what} غير مدعومة: ${String(c)}. المدعوم: ${SUPPORTED_CURRENCIES.join('، ')}.`, 400, undefined, CURRENCY_UNSUPPORTED);
 	return c;
 }

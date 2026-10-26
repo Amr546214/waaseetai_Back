@@ -45,5 +45,5 @@ test('withdrawal approval / rejection / payout never re-check the minimum or the
 test('sign + fund is ONE transaction: the escrow (with its policy snapshot) is created in the same transaction that debits the wallet and marks the contract signed', () => {
 	const src = read('services/client-requests.service.ts'); const i = src.indexOf('buildEscrowSnapshotFromPolicy(providerGamification'); assert.ok(i > 0);
 	const before = src.slice(0, i); const txStart = before.lastIndexOf('prisma.$transaction'); assert.ok(txStart > before.lastIndexOf('public async depositEscrow'), 'the read happens inside the deposit transaction');
-	const after = src.slice(i, i + 2500); assert.ok(/walletBalance: \{ decrement/.test(after) && /escrow\.upsert/.test(src.slice(i, i + 6000)), 'wallet debit and escrow creation follow in that transaction');
+	const after = src.slice(i, i + 2500); assert.ok(/debitWalletIfCovered\(tx, userId/.test(after) && /escrow\.upsert/.test(src.slice(i, i + 6000)), 'wallet debit and escrow creation follow in that transaction');
 });

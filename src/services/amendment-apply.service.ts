@@ -4,7 +4,7 @@ import { isV2Escrow } from '../utils/escrow-commission';
 import { round2 } from '../utils/money';
 import { hasActiveDispute } from './amendment-dispute-guard';
 import { debitWalletIfCovered, creditWallet, walletBalanceOf } from '../utils/wallet-balance';
-import { assertSameCurrency } from '../utils/currency';
+import { assertSameCurrency, requireCurrency } from '../utils/currency';
 
 // Making an approved amendment EFFECTIVE (docs/proposals/amendment-effects.md, "simplest variant").
 // `applyAmendment(tx, amendment, actor)` is the ONE place that changes the contract / escrow / stages / wallet for an amendment; both respond paths
@@ -113,7 +113,7 @@ export async function applyAmendment(tx: any, amendment: AmendmentToApply, actor
 	// one currency end to end: the contract, its escrow and the amendment; the wallet moved is the one in that currency. No conversion exists in phase 1.
 	assertSameCurrency(contract?.currency, escrow.currency, 'تعديل العقد');
 	assertSameCurrency((amendment as { currency?: string }).currency, escrow.currency, 'تعديل العقد');
-	const money = escrow.currency;
+	const money = requireCurrency(escrow.currency);
 	const needsMoney = budget !== 0;
 	const needsSchedule = needsMoney || days !== 0;
 	if (needsMoney && (!isV2Escrow(escrow) || escrow.providerCommissionRateSnapshot == null)) {

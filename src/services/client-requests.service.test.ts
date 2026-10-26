@@ -210,10 +210,10 @@ test('depositEscrow (fee policy v2): the escrow row and the ESCROW_LOCK transact
   assert.match(clientRequestsSource, /feePolicyVersion: ESCROW_FEE_POLICY_V2, escrowFee: 0, contractPrice: txEscrowAmount/);
 });
 
-test('signContract: the escrow-lock WalletTransaction it creates is explicitly USD (never the database default)', () => {
+test('signContract: the escrow-lock WalletTransaction it creates carries the contract's own currency (never the database default)', () => {
   const escrowLockBlock = clientRequestsSource.slice(
     clientRequestsSource.indexOf("type: 'ESCROW_LOCK'"),
     clientRequestsSource.indexOf("type: 'ESCROW_LOCK'") + 200
   );
-  assert.match(escrowLockBlock, /currency: 'USD'/);
+  assert.match(escrowLockBlock, /currency: money/); assert.match(clientRequestsSource, /const money = requireCurrency\(contractBeforePayment\.currency/); // the contract's own currency, never the database default
 });

@@ -9,7 +9,7 @@ import { clientNotifications, clientNotificationFor } from './client-notificatio
 import { DEPOSIT_FEE_PERCENT } from '../utils/fee-policy';
 import { notifyAdmins } from './admin-notifications.service';
 import { assertGatewayAccepts, gatewayAccepts, gatewayBounds } from '../config/payment-gateways';
-import { formatMoney } from '../utils/currency';
+import { formatMoney, requireCurrency } from '../utils/currency';
 import { creditWallet } from '../utils/wallet-balance';
 
 
@@ -119,7 +119,7 @@ export class PaypalFinanceService {
 			throw new AppError('طلب الدفع لا يخص هذا المستخدم', 403);
 		}
 
-		if (!capture.amount || capture.amount.currency_code !== payment.currency || !gatewayAccepts('paypal', payment.currency)) {
+		if (!capture.amount || capture.amount.currency_code !== requireCurrency(payment.currency) || !gatewayAccepts('paypal', requireCurrency(payment.currency))) {
 			await this.markFailedIfPending(payment.id);
 			throw new AppError(`عملة عملية الدفع لا تطابق عملة الإيداع (${payment.currency})`, 400);
 		}
@@ -164,7 +164,7 @@ export class PaypalFinanceService {
 		// mismatch here is us rejecting real captured money for a reason
 		// PayPal doesn't know about — the row must move to FAILED, not stay
 		// silently PENDING forever, indistinguishable from an abandoned order.
-		if (params.currency !== payment.currency || !gatewayAccepts('paypal', payment.currency)) {
+		if (params.currency !== requireCurrency(payment.currency) || !gatewayAccepts('paypal', requireCurrency(payment.currency))) {
 			await this.markFailedIfPending(payment.id);
 			return { handled: false as const };
 		}
@@ -236,7 +236,7 @@ export class PaypalFinanceService {
 						userId: payment.userId,
 						type: 'DEPOSIT',
 						amount: creditAmount.toNumber(),
-						currency: payment.currency,
+						currency: requireCurrency(payment.currency),
 						status: 'COMPLETED',
 						paymentMethod: 'PAYPAL',
 						referenceId: captureId,
@@ -248,7 +248,7 @@ export class PaypalFinanceService {
 					}
 				});
 
-				await creditWallet(tx, payment.userId, payment.currency, creditAmount.toNumber());
+				await creditWallet(tx, payment.userId, requireCurrency(payment.currency), creditAmount.toNumber());
 
 				await tx.paypalPayment.update({
 					where: { id: payment.id },
