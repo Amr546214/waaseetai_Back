@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { logger } from '../config/logger';
 import { notificationService } from './notification.service';
 import { resolutionLabelAr, type FinancialOutcomeSummary } from '../utils/dispute-resolution';
+import { LEGACY_CURRENCY, formatMoney } from '../utils/currency';
 
 /**
  * The provider-facing notifications for events that used to leave the provider with nothing (dispute, rating, withdrawal, PayPal email change,
@@ -65,7 +66,7 @@ export const providerNotifications = {
 		if (!p.providerId) return;
 		const resolved = p.action === 'resolve';
 		const decision = short(resolutionLabelAr(p.resolution, !!p.financial), 120);
-		const usd = (n: number) => `${Math.round(n * 100) / 100} $`;
+		const usd = (n: number) => formatMoney(n, p.financial?.currency ?? LEGACY_CURRENCY); // the settlement's own currency
 		const money = p.financial
 			? ` ${p.financial.releaseToProvider > 0 ? `صُرف لرصيدك ${usd(p.financial.providerNet)}${p.financial.platformCommission > 0 ? ` بعد خصم عمولة المنصة ${usd(p.financial.platformCommission)}` : ''}. ` : ''}${p.financial.refundToClient > 0 ? `أُعيد ${usd(p.financial.refundToClient)} إلى العميل من المبلغ المحتجز.` : ''}`.trimEnd()
 			: ' لم يتغيّر أي مبلغ مالي بهذا القرار.';
@@ -114,7 +115,7 @@ export const providerNotifications = {
 			if (!owner) return;
 			// a marketer's withdrawal is announced by marketerNotifications (called next to this one at every call site)
 			if (owner.affiliateProfile && !isProviderUser(owner)) return;
-			const amount = `${w.amount} ${w.currency === 'USD' ? '$' : w.currency}`;
+			const amount = formatMoney(w.amount, w.currency);
 			const copy: Record<ProviderWithdrawalEvent, { title: string; message: string }> = {
 				REQUESTED: { title: 'تم استلام طلب السحب', message: `طلب سحب ${amount} قيد مراجعة الإدارة، ولا يُخصم من رصيدك حتى تعتمده.` },
 				APPROVED: { title: 'تم اعتماد طلب السحب', message: `اعتمدت الإدارة طلب سحب ${amount}.` },

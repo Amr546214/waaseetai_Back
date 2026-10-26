@@ -2,6 +2,7 @@ import { NotificationCategory, Prisma } from '@prisma/client';
 import { logger } from '../config/logger';
 import { notificationService } from './notification.service';
 import { resolutionLabelAr, type FinancialOutcomeSummary } from '../utils/dispute-resolution';
+import { LEGACY_CURRENCY, formatMoney } from '../utils/currency';
 
 /**
  * The client-facing notifications, one builder per event (a pure function that returns the notification's type, title, message and destination), so the
@@ -37,7 +38,8 @@ const short = (text: string | null | undefined, max = 60) => {
 	return t.length > max ? `${t.slice(0, max)}…` : t;
 };
 const quoted = (text: string | null | undefined) => (short(text) ? ` «${short(text)}»` : '');
-const usd = (n: number) => `${Math.round(n * 100) / 100} $`;
+/** an amount with ITS OWN currency (a missing one reads as the legacy currency) */
+const amt = (n: number, currency?: string | null) => formatMoney(n, currency ?? LEGACY_CURRENCY);
 
 const PROJECTS = NotificationCategory.PROJECTS;
 const OFFERS = NotificationCategory.OFFERS;
@@ -57,8 +59,8 @@ export const clientNotificationFor = {
 		userId: p.clientId, title: 'تم سحب عرض على مشروعك', message: `سحب مقدم الخدمة عرضه على مشروعك${quoted(p.requestTitle)}.`,
 		type: 'OFFER_WITHDRAWN', category: OFFERS, actionUrl: CLIENT_ROUTES.request(p.requestId), actionText: 'عرض الطلب', metadata: { projectId: p.requestId, offerId: p.offerId }
 	}),
-	offerCounter: (p: { clientId: string; requestId: string; offerId: string; messageId: string; requestTitle?: string | null; price: number; deliveryDays: number }): ClientNotificationInput => ({
-		userId: p.clientId, title: 'عرض مضاد على مشروعك', message: `أرسل مقدم الخدمة عرضًا مضادًا على${quoted(p.requestTitle)}: ${usd(p.price)} خلال ${p.deliveryDays} يومًا.`,
+	offerCounter: (p: { clientId: string; requestId: string; offerId: string; messageId: string; requestTitle?: string | null; price: number; deliveryDays: number; currency?: string }): ClientNotificationInput => ({
+		userId: p.clientId, title: 'عرض مضاد على مشروعك', message: `أرسل مقدم الخدمة عرضًا مضادًا على${quoted(p.requestTitle)}: ${amt(p.price, p.currency)} خلال ${p.deliveryDays} يومًا.`,
 		type: 'OFFER_COUNTER', category: OFFERS, actionUrl: CLIENT_ROUTES.request(p.requestId), actionText: 'مراجعة العرض المضاد', metadata: { projectId: p.requestId, offerId: p.offerId, messageId: p.messageId }
 	}),
 	negotiationDeclined: (p: { clientId: string; requestId: string; offerId: string; messageId: string; requestTitle?: string | null }): ClientNotificationInput => ({
@@ -86,8 +88,8 @@ export const clientNotificationFor = {
 		type: 'STAGE_DELIVERY', category: PROJECTS, actionUrl: CLIENT_ROUTES.deliveryReview(p.projectId, p.stageId), actionText: 'مراجعة التسليم',
 		metadata: { projectId: p.projectId, stageId: p.stageId, ...(p.deliveryId ? { deliveryId: p.deliveryId } : {}) }
 	}),
-	stageApproved: (p: { clientId: string; projectId: string; stageId: string; stageTitle: string; amount: number }): ClientNotificationInput => ({
-		userId: p.clientId, title: 'تم اعتماد المرحلة', message: `اعتمدت مرحلة «${short(p.stageTitle)}» وأُفرج ${usd(p.amount)} من الضمان لمقدم الخدمة.`,
+	stageApproved: (p: { clientId: string; projectId: string; stageId: string; stageTitle: string; amount: number; currency?: string }): ClientNotificationInput => ({
+		userId: p.clientId, title: 'تم اعتماد المرحلة', message: `اعتمدت مرحلة «${short(p.stageTitle)}» وأُفرج ${amt(p.amount, p.currency)} من الضمان لمقدم الخدمة.`,
 		type: 'STAGE_APPROVED', category: PROJECTS, actionUrl: CLIENT_ROUTES.project(p.projectId), actionText: 'عرض المشروع', metadata: { projectId: p.projectId, stageId: p.stageId, amount: p.amount }
 	}),
 	projectCompleted: (p: { clientId: string; projectId: string; projectTitle?: string | null }): ClientNotificationInput => ({
@@ -104,7 +106,7 @@ export const clientNotificationFor = {
 		const resolved = p.action === 'resolve';
 		const decision = short(resolutionLabelAr(p.resolution, !!p.financial), 120);
 		const money = p.financial
-			? ` ${p.financial.refundToClient > 0 ? `أُضيف ${usd(p.financial.refundToClient)} إلى محفظتك. ` : ''}${p.financial.releaseToProvider > 0 ? `صُرف ${usd(p.financial.releaseToProvider)} لمقدم الخدمة من المبلغ المحتجز.` : ''}`.trimEnd()
+			? ` ${p.financial.refundToClient > 0 ? `أُضيف ${amt(p.financial.refundToClient, p.financial.currency)} إلى محفظتك. ` : ''}${p.financial.releaseToProvider > 0 ? `صُرف ${amt(p.financial.releaseToProvider, p.financial.currency)} لمقدم الخدمة من المبلغ المحتجز.` : ''}`.trimEnd()
 			: ' لم يتغيّر أي مبلغ مالي بهذا القرار.';
 		return {
 			userId: p.clientId, title: resolved ? 'تم حسم النزاع' : 'تم إغلاق النزاع دون قبوله',
@@ -112,16 +114,16 @@ export const clientNotificationFor = {
 			type: 'DISPUTE_RESOLVED', category: PROJECTS, actionUrl: CLIENT_ROUTES.dispute(p.disputeId), actionText: 'عرض النزاع', metadata: { disputeId: p.disputeId, action: p.action }
 		};
 	},
-	escrowFunded: (p: { clientId: string; requestId: string; amount: number; projectName?: string | null }): ClientNotificationInput => ({
-		userId: p.clientId, title: 'تم إيداع الضمان', message: `حُجز ${usd(p.amount)} من محفظتك في الضمان لمشروع${quoted(p.projectName)}. يبدأ التنفيذ عندما يوقّع مقدم الخدمة العقد.`,
+	escrowFunded: (p: { clientId: string; requestId: string; amount: number; projectName?: string | null; currency?: string }): ClientNotificationInput => ({
+		userId: p.clientId, title: 'تم إيداع الضمان', message: `حُجز ${amt(p.amount, p.currency)} من محفظتك في الضمان لمشروع${quoted(p.projectName)}. يبدأ التنفيذ عندما يوقّع مقدم الخدمة العقد.`,
 		type: 'ESCROW_FUNDED', category: FINANCIAL, actionUrl: CLIENT_ROUTES.activeProjects, actionText: 'عرض مشاريعي', metadata: { requestId: p.requestId, amount: p.amount }
 	}),
 	contractSigned: (p: { clientId: string; projectId: string; projectTitle?: string | null }): ClientNotificationInput => ({
 		userId: p.clientId, title: 'وقّع مقدم الخدمة العقد وبدأ مشروعك', message: `وقّع مقدم الخدمة العقد${quoted(p.projectTitle)} وأصبح المشروع قيد التنفيذ. يمكنك متابعة المراحل من صفحة المشروع.`,
 		type: 'CONTRACT_SIGNED', category: PROJECTS, actionUrl: CLIENT_ROUTES.project(p.projectId), actionText: 'عرض المشروع', metadata: { projectId: p.projectId }
 	}),
-	orderPaid: (p: { clientId: string; orderId: string; orderNumber?: string | null; total: number; projectIds: string[] }): ClientNotificationInput => ({
-		userId: p.clientId, title: 'تم دفع طلبك', message: `خُصم ${usd(p.total)} من محفظتك لطلب الخدمة${p.orderNumber ? ` رقم ${p.orderNumber}` : ''}، وبدأ المشروع.`,
+	orderPaid: (p: { clientId: string; orderId: string; orderNumber?: string | null; total: number; projectIds: string[]; currency?: string }): ClientNotificationInput => ({
+		userId: p.clientId, title: 'تم دفع طلبك', message: `خُصم ${amt(p.total, p.currency)} من محفظتك لطلب الخدمة${p.orderNumber ? ` رقم ${p.orderNumber}` : ''}، وبدأ المشروع.`,
 		type: 'ORDER_PAID', category: FINANCIAL, actionUrl: p.projectIds.length === 1 ? CLIENT_ROUTES.project(p.projectIds[0]) : CLIENT_ROUTES.activeProjects, actionText: 'عرض المشروع',
 		metadata: { orderId: p.orderId, projectIds: p.projectIds }
 	}),
@@ -135,9 +137,9 @@ export const clientNotificationFor = {
 		message: p.decision === 'APPROVED' ? 'اعتمدت الإدارة مستندات هويتك وأصبح حسابك موثّقًا.' : `رفضت الإدارة مستندات الهوية.${p.reason ? ` السبب: ${short(p.reason, 200)}` : ''} يمكنك رفع مستند جديد وإعادة الإرسال.`,
 		type: p.decision === 'APPROVED' ? 'KYC_APPROVED' : 'KYC_REJECTED', category: PROJECTS, actionUrl: CLIENT_ROUTES.profile, actionText: p.decision === 'APPROVED' ? 'عرض ملفي' : 'رفع مستند جديد', metadata: { decision: p.decision }
 	}),
-	depositCompleted: (p: { clientId: string; transactionId: string; credited: number; paid: number; fee: number }): ClientNotificationInput => ({
+	depositCompleted: (p: { clientId: string; transactionId: string; credited: number; paid: number; fee: number; currency?: string }): ClientNotificationInput => ({
 		userId: p.clientId, title: 'تم إيداع الرصيد بنجاح',
-		message: `أُضيف مبلغ ${p.credited.toFixed(2)} دولار إلى رصيد محفظتك عبر PayPal${p.fee ? ` (المدفوع ${p.paid.toFixed(2)} شاملًا رسوم PayPal ${p.fee.toFixed(2)})` : ''}، يمكنك الآن استخدامه لتمويل المشاريع.`,
+		message: `أُضيف مبلغ ${amt(p.credited, p.currency)} إلى رصيد محفظتك عبر PayPal${p.fee ? ` (المدفوع ${amt(p.paid, p.currency)} شاملًا رسوم PayPal ${amt(p.fee, p.currency)})` : ''}، يمكنك الآن استخدامه لتمويل المشاريع.`,
 		type: 'FINANCIAL', category: FINANCIAL, actionUrl: CLIENT_ROUTES.wallet, actionText: 'عرض المحفظة', metadata: { transactionId: p.transactionId }
 	})
 };

@@ -143,7 +143,7 @@ class ProviderOfferNegotiationService {
 				},
 				select: { id: true }
 			});
-			const notification = await tx.notification.create({ data: clientNotificationFor.offerCounter({ clientId: offer.project.clientId, requestId: offer.projectId, offerId: offer.id, messageId: message.id, requestTitle: offer.project.title, price, deliveryDays: days }) });
+			const notification = await tx.notification.create({ data: clientNotificationFor.offerCounter({ clientId: offer.project.clientId, requestId: offer.projectId, offerId: offer.id, messageId: message.id, requestTitle: offer.project.title, price, deliveryDays: days, currency: (offer as { currency?: string }).currency }) });
 			return { offerId: offer.id, messageId: message.id, price, deliveryDays: days, notificationId: notification.id };
 		});
 		await clientNotifications.deliverStored([result.notificationId]);

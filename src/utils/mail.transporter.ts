@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import { otpValidityText } from './otp-validity';
 import { buildOtpEmailHtml, type OtpEmailPurpose } from './otp-email-template';
+import { LEGACY_CURRENCY, formatMoney } from './currency';
 
 // SMTP Configuration
 const smtpConfig = {
@@ -142,7 +143,7 @@ export const getPasswordResetEmailTemplate = (firstName: string, code: string, v
 };
 
 // Waseet AI Escrow Deposit Confirmation Template
-export const getDepositConfirmationTemplate = (projectName: string, amount: number) => {
+export const getDepositConfirmationTemplate = (projectName: string, amount: number, currency: string = LEGACY_CURRENCY) => {
   return `
     <!DOCTYPE html>
     <html lang="ar" dir="rtl">
@@ -243,7 +244,7 @@ export const getDepositConfirmationTemplate = (projectName: string, amount: numb
             <p class="desc">أهلاً بك،<br>تم تأكيد استلام الدفعة وإيداعها في حساب الضمان الآمن الخاص بمنصة وسيط الذكاء الاصطناعي للمشروع التالي:</p>
             
             <div class="info-box">
-              <h3>${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $</h3>
+              <h3>${formatMoney(amount, currency)}</h3>
               <p>مشروع: ${projectName}</p>
             </div>
             
@@ -260,7 +261,7 @@ export const getDepositConfirmationTemplate = (projectName: string, amount: numb
 };
 
 // Waseet AI Provider Contract Signature Template
-export const getProviderContractSignatureTemplate = (projectName: string, clientName: string, amount: number) => {
+export const getProviderContractSignatureTemplate = (projectName: string, clientName: string, amount: number, currency: string = LEGACY_CURRENCY) => {
   return `
     <!DOCTYPE html>
     <html lang="ar" dir="rtl">
@@ -361,7 +362,7 @@ export const getProviderContractSignatureTemplate = (projectName: string, client
             <p class="desc">أهلاً بك،<br>لقد تم قبول عرضك وإيداع قيمة المشروع في حساب الضمان الآمن الخاص بمنصة وسيط الذكاء الاصطناعي.</p>
             
             <div class="info-box">
-              <h3>${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $</h3>
+              <h3>${formatMoney(amount, currency)}</h3>
               <p>مشروع: ${projectName}</p>
             </div>
             

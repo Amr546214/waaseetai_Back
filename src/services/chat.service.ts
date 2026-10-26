@@ -7,6 +7,7 @@ import { providerNotifications } from './provider-notifications.service';
 import { ConversationKind, MessageType, MessageStatus, UserRole } from '@prisma/client';
 import { offerActionBlock } from '../utils/request-lifecycle';
 import { withKeyLock } from '../utils/key-lock';
+import { formatMoney, budgetRange } from '../utils/currency';
 
 /** the same negotiation request repeated inside this window (double tap / lost answer retry) is the same request */
 const NEGOTIATION_REPEAT_WINDOW_MS = 5 * 60 * 1000;
@@ -612,9 +613,9 @@ class ChatService {
 
     let projectBudget = 'غير محدد';
     if (conv.project?.budgetMin && conv.project?.budgetMax) {
-      projectBudget = `${conv.project.budgetMin.toLocaleString()} - ${conv.project.budgetMax.toLocaleString()} $`;
+      projectBudget = budgetRange(conv.project.budgetMin, conv.project.budgetMax, conv.project.currency);
     } else if (conv.project?.budgetFixed) {
-      projectBudget = `${conv.project.budgetFixed.toLocaleString()} $`;
+      projectBudget = formatMoney(conv.project.budgetFixed, conv.project.currency);
     }
 
     const rawMessages = conv.messages || [];
@@ -628,7 +629,7 @@ class ChatService {
       if (lastMsgObj.type === 'AUDIO') lastMsgText = '🎤 رسالة صوتية';
       else if (lastMsgObj.type === 'IMAGE') lastMsgText = '📷 مرفق صورة';
       else if (lastMsgObj.type === 'FILE') lastMsgText = `📁 ${lastMsgObj.fileName || 'ملف مرفق'}`;
-      else lastMsgText = negotiationPreviewText(lastMsgObj.content, lastMsgObj.senderId === conv.providerId) ?? (lastMsgObj.content || lastMsgText);
+      else lastMsgText = negotiationPreviewText(lastMsgObj.content, lastMsgObj.senderId === conv.providerId, conv.project?.currency) ?? (lastMsgObj.content || lastMsgText);
     }
 
     const date = new Date(conv.updatedAt || conv.createdAt);

@@ -1,4 +1,5 @@
 import { prisma } from '../config/db';
+import { budgetRange } from '../utils/currency';
 
 // F15b (security follow-up batch): this list's "aiMatchScore"/"aiNote"/
 // "aiPriceEval" fields are, and always have been, a 100%-deterministic
@@ -215,13 +216,13 @@ export class ExploreRequestsService {
       if (minB > 0 && maxB > 0) {
         const avgBudget = (minB + maxB) / 2;
         if (avgBudget < 1500) {
-          aiSuggestedBudget = `${Math.round(minB * 1.1)} - ${Math.round(maxB * 1.25)} $`;
+          aiSuggestedBudget = budgetRange(Math.round(minB * 1.1), Math.round(maxB * 1.25), item.currency);
           aiPriceEval = 'أقل قليلاً من التقدير - يمكنك طلب تفاوض';
         } else if (avgBudget <= 8000) {
-          aiSuggestedBudget = `${minB} - ${maxB} $`;
+          aiSuggestedBudget = budgetRange(minB, maxB, item.currency);
           aiPriceEval = 'ميزانية عادلة ومطابقة للمواصفات';
         } else {
-          aiSuggestedBudget = `${Math.round(minB * 0.95)} - ${maxB} $`;
+          aiSuggestedBudget = budgetRange(Math.round(minB * 0.95), maxB, item.currency);
           aiPriceEval = 'ميزانية سخية وممتازة - فرصة كبرى';
         }
       } else if (minB > 0) {

@@ -1729,7 +1729,7 @@ export class ClientRequestsService {
 		}
 
 		// Execute all state-modifying operations inside a strict interactive transaction
-		const { bidAmount, providerUserId, providerEmail, escrowAmount, projectName, clientName, userEmail } = await prisma.$transaction(async (tx) => {
+		const { bidAmount, providerUserId, providerEmail, escrowAmount, escrowCurrency, projectName, clientName, userEmail } = await prisma.$transaction(async (tx) => {
 			// a. Mark OTP as used
 			await tx.otpVerification.delete({ where: { id: otpRecord.id } });
 
@@ -1913,6 +1913,7 @@ export class ClientRequestsService {
 				providerUserId: txProviderUserId,
 				providerEmail: txProviderEmail,
 				escrowAmount: txEscrowAmount,
+				escrowCurrency: money,
 				projectName: req?.title || 'مشروعك',
 				clientName: user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'العميل',
 				userEmail: user?.email || null
@@ -1927,7 +1928,7 @@ export class ClientRequestsService {
 					from: process.env.SMTP_USER || '"وسيط AI" <noreply@waseetai.com>',
 					to: userEmail,
 					subject: 'تم إيداع الضمان بنجاح - وسيط AI',
-					html: getDepositConfirmationTemplate(projectName, escrowAmount)
+					html: getDepositConfirmationTemplate(projectName, escrowAmount, escrowCurrency)
 				});
 			}
 
@@ -1937,12 +1938,12 @@ export class ClientRequestsService {
 					from: process.env.SMTP_USER || '"وسيط AI" <noreply@waseetai.com>',
 					to: providerEmail,
 					subject: 'دعوة لتوقيع العقد 📝 - وسيط AI',
-					html: getProviderContractSignatureTemplate(projectName, clientName, bidAmount)
+					html: getProviderContractSignatureTemplate(projectName, clientName, bidAmount, escrowCurrency)
 				});
 			}
 
 			// In-App confirmation to the client: the amount really held from the wallet
-			await clientNotifications.send(clientNotificationFor.escrowFunded({ clientId: userId, requestId, amount: Number(escrowAmount), projectName }));
+			await clientNotifications.send(clientNotificationFor.escrowFunded({ clientId: userId, requestId, amount: Number(escrowAmount), projectName, currency: escrowCurrency }));
 
 			if (providerUserId) {
 				// In-App Notification to Provider

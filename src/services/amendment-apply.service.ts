@@ -4,7 +4,7 @@ import { isV2Escrow } from '../utils/escrow-commission';
 import { round2 } from '../utils/money';
 import { hasActiveDispute } from './amendment-dispute-guard';
 import { debitWalletIfCovered, creditWallet, walletBalanceOf } from '../utils/wallet-balance';
-import { assertSameCurrency, requireCurrency } from '../utils/currency';
+import { assertSameCurrency, requireCurrency, formatMoney } from '../utils/currency';
 
 // Making an approved amendment EFFECTIVE (docs/proposals/amendment-effects.md, "simplest variant").
 // `applyAmendment(tx, amendment, actor)` is the ONE place that changes the contract / escrow / stages / wallet for an amendment; both respond paths
@@ -291,9 +291,9 @@ export async function applyAmendment(tx: any, amendment: AmendmentToApply, actor
 
 	// 12) Audit trail for both parties (same transaction).
 	const auditBase = { category: LogCategory.SYSTEM_AUDIT, status: LogStatus.COMPLETED, statusText: 'مكتمل بنجاح', source: 'USER', eventType: 'AMENDMENT_APPLIED', severity: 'INFO' };
-	const meta = { amendmentId: amendment.id, projectId: amendment.projectId, contractId: contract.id, type: String(amendment.type), priceBefore, priceAfter, durationBefore, durationAfter, walletDelta, addedStageId, termsVersion, currency: 'USD', appliedById: actor.id, appliedByRole: actor.role };
+	const meta = { amendmentId: amendment.id, projectId: amendment.projectId, contractId: contract.id, type: String(amendment.type), priceBefore, priceAfter, durationBefore, durationAfter, walletDelta, addedStageId, termsVersion, currency: money, appliedById: actor.id, appliedByRole: actor.role };
 	for (const userId of [amendment.clientId, amendment.providerId]) {
-		await tx.accountAuditLog.create({ data: { ...auditBase, userId, title: 'تطبيق تعديل على العقد', actionText: `طُبّق التعديل «${amendment.title}» على العقد`, summary: `طُبّق تعديل معتمد من الطرفين: السعر ${priceBefore} → ${priceAfter} دولار، المدة ${durationBefore} → ${durationAfter} يومًا.`, metaData: meta, beforeData: { price: priceBefore, durationDays: durationBefore }, afterData: { price: priceAfter, durationDays: durationAfter } } });
+		await tx.accountAuditLog.create({ data: { ...auditBase, userId, title: 'تطبيق تعديل على العقد', actionText: `طُبّق التعديل «${amendment.title}» على العقد`, summary: `طُبّق تعديل معتمد من الطرفين: السعر ${formatMoney(priceBefore, money)} → ${formatMoney(priceAfter, money)}، المدة ${durationBefore} → ${durationAfter} يومًا.`, metaData: meta, beforeData: { price: priceBefore, durationDays: durationBefore }, afterData: { price: priceAfter, durationDays: durationAfter } } });
 	}
 	return summary;
 }

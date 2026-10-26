@@ -370,7 +370,7 @@ export class DisputeService {
       await tx.project.update({ where: { id: projectId }, data: { status: toProvider ? ProjectStatus.COMPLETED : ProjectStatus.DISPUTED } });
       await tx.clientRequest.updateMany({ where: { proposals: { some: { projectId } } }, data: { status: toProvider ? RequestStatus.COMPLETED : RequestStatus.CANCELLED } });
 
-      const result: FinancialOutcomeSummary = { outcome: input.outcome, refundToClient: refund, releaseToProvider: release, platformCommission: split?.commission ?? 0, providerNet: split ? split.net : release };
+      const result: FinancialOutcomeSummary = { outcome: input.outcome, refundToClient: refund, releaseToProvider: release, platformCommission: split?.commission ?? 0, providerNet: split ? split.net : release, currency: requireCurrency(escrow.currency) };
       await tx.accountAuditLog.create({ data: {
         userId: adminId, category: LogCategory.SYSTEM_AUDIT, title: 'قرار مالي في نزاع', actionText: `تنفيذ قرار مالي (${input.outcome}) على نزاع`,
         summary: `تنفيذ قرار مالي (${input.outcome}) على نزاع`, status: LogStatus.COMPLETED, eventType: 'DISPUTE_FINANCIAL_RESOLVED', source: 'ADMIN', severity: 'CRITICAL',

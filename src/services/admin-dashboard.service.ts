@@ -58,9 +58,9 @@ export class AdminDashboardService {
 			prisma.project.count({ where: { status: { in: ACTIVE_PROJECT_STATUSES } } }),
 			prisma.project.count({ where: deliveryCompletedProject() }),
 			prisma.clientRequest.count({ where: { status: 'OPEN' } }),
-			prisma.escrow.aggregate({ _sum: { platformCommissionAmount: true }, where: { currency: LEGACY_CURRENCY } }),
-			prisma.escrow.aggregate({ _sum: { platformCommissionAmount: true }, where: { currency: LEGACY_CURRENCY, platformCommissionAmount: { gt: 0 }, updatedAt: { gte: monthStart } } }),
-			prisma.escrow.aggregate({ _sum: { amount: true }, where: { status: EscrowStatus.HELD, currency: LEGACY_CURRENCY } }),
+			prisma.escrow.groupBy({ by: ['currency'], _sum: { platformCommissionAmount: true } }),
+			prisma.escrow.groupBy({ by: ['currency'], _sum: { platformCommissionAmount: true }, where: { platformCommissionAmount: { gt: 0 }, updatedAt: { gte: monthStart } } }),
+			prisma.escrow.groupBy({ by: ['currency'], _sum: { amount: true }, where: { status: EscrowStatus.HELD } }),
 			prisma.dispute.count({ where: { status: { in: OPEN_DISPUTES } } }),
 			prisma.dispute.count({ where: { status: { in: OPEN_DISPUTES }, createdAt: { lt: sevenDaysAgo } } }),
 			prisma.supportTicket.count({ where: { status: { in: OPEN_TICKETS } } }),
@@ -76,6 +76,9 @@ export class AdminDashboardService {
 			prisma.clientOnboarding.count({ where: { status: OnboardingStatus.PENDING, createdAt: { lt: day } } })
 		]);
 
+		const commissionTotalBy = sumByCurrency(commissionTotal as any[], (g: any) => g.currency, (g: any) => g._sum.platformCommissionAmount);
+		const commissionMonthBy = sumByCurrency(commissionMonth as any[], (g: any) => g.currency, (g: any) => g._sum.platformCommissionAmount);
+		const escrowHeldBy = sumByCurrency(escrowHeld as any[], (g: any) => g.currency, (g: any) => g._sum.amount);
 		const pendingByCurrency = sumByCurrency(pendingWithdrawalsAmount as any[], (g: any) => g.currency, (g: any) => g._sum.amount);
 		const kycPending = providerKyc + clientKyc;
 		const queues = [
@@ -101,7 +104,8 @@ export class AdminDashboardService {
 			kpis: {
 				users: { total: usersTotal, active: usersActive, suspended: usersSuspended, newThisMonth: usersNewThisMonth, newPreviousMonth: usersNewPrevMonth, growthPercent: growth(usersNewThisMonth, usersNewPrevMonth) },
 				projects: { active: activeProjects, completed: completedProjects, openRequests },
-				revenue: { platformCommissionTotal: round2(num(commissionTotal._sum.platformCommissionAmount)), platformCommissionThisMonth: round2(num(commissionMonth._sum.platformCommissionAmount)), escrowHeld: round2(num(escrowHeld._sum.amount)) },
+				// the figures are the USD ones; *By lists every currency on its own (never added together)
+				revenue: { platformCommissionTotal: commissionTotalBy[LEGACY_CURRENCY] ?? 0, platformCommissionThisMonth: commissionMonthBy[LEGACY_CURRENCY] ?? 0, escrowHeld: escrowHeldBy[LEGACY_CURRENCY] ?? 0, platformCommissionTotalBy: commissionTotalBy, platformCommissionThisMonthBy: commissionMonthBy, escrowHeldBy },
 				disputes: { open: openDisputes, openOver7Days: disputesOver7Days },
 				tickets: { open: openTickets },
 				withdrawals: { pending: pendingWithdrawals, pendingAmount: round2(pendingByCurrency[LEGACY_CURRENCY] ?? 0), pendingAmountBy: pendingByCurrency }
@@ -118,7 +122,7 @@ export class AdminDashboardService {
 
 		const [users, escrows, statusGroups] = await Promise.all([
 			prisma.user.findMany({ where: { accountType: { notIn: ADMIN_TYPES }, createdAt: { gte: from } }, select: { createdAt: true } }),
-			prisma.escrow.findMany({ where: { platformCommissionAmount: { gt: 0 }, updatedAt: { gte: monthsBack } }, select: { platformCommissionAmount: true, updatedAt: true } }),
+			prisma.escrow.findMany({ where: { platformCommissionAmount: { gt: 0 }, updatedAt: { gte: monthsBack }, currency: LEGACY_CURRENCY }, select: { platformCommissionAmount: true, updatedAt: true } }), // the chart is the USD series; other currencies are in the summary's *By maps
 			prisma.project.groupBy({ by: ['status'], _count: { _all: true } })
 		]);
 

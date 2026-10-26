@@ -10,6 +10,8 @@ import { notificationService } from './notification.service';
 import { PROVIDER_ROUTES } from './provider-notifications.service';
 import { CLIENT_ROUTES } from './client-notifications.service';
 import { NotificationCategory } from '@prisma/client';
+import { LEGACY_CURRENCY } from '../utils/currency';
+import { walletBalancesOf } from '../utils/wallet-balance';
 
 export interface GetUsersQueryParams {
   page?: number;
@@ -654,9 +656,11 @@ export class AdminUsersService {
         reports: tickets.length,
         disputes: disputes.length,
         avgRating: user.ratingAverage ? Math.round(user.ratingAverage * 10) / 10 : null,
-        totalRevenue: `${Number(user.totalGmvAmount || 0).toLocaleString('en-US')} $`,
+        totalRevenue: null, // not tracked: users.totalGmvAmount is never written, so a figure here would be a misleading zero
         completedProjects: user.completedProjectsCount || 0,
-        walletBalance: Number(user.walletBalance || 0)
+        walletBalance: Number(user.walletBalance || 0),
+        currency: LEGACY_CURRENCY,
+        walletBalances: await walletBalancesOf(prisma, user.id)
       },
       revenueHistory,
       personalInfo: {
@@ -785,7 +789,7 @@ export class AdminUsersService {
           `"${u.phoneNumber || ''}"`,
           `"${u.accountType}"`,
           `"${u.status}"`,
-          Number(u.totalGmvAmount || 0).toFixed(2),
+          '', // GMV is not tracked (the column is never written)
           u.completedProjectsCount,
           u.ratingAverage || 0,
           `"${u.tierLevel || 'Bronze'}"`,

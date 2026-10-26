@@ -19,6 +19,7 @@ import { computeClientAiOfferRating } from '../services/client-ai-offer-rating';
 import { settledProjectIds, SETTLED_LABEL_AR } from '../services/settlement-state.service';
 import { listLifecycles } from '../services/project-lifecycle.service';
 import { clientNotifications, clientNotificationFor } from '../services/client-notifications.service';
+import { formatMoney } from '../utils/currency';
 
 export const getProviderStatistics = async (req: Request, res: Response, next: NextFunction) => {
 	try {
@@ -426,7 +427,8 @@ export const getActiveProjects = async (req: Request, res: Response, next: NextF
 					: c.status !== 'ACTIVE' ? 'لم تبدأ المراحل بعد'
 					: (currentStage?.title || (c.stages.length && approvedStages.length === c.stages.length ? 'اعتُمدت كل المراحل' : 'لم تُجهَّز مراحل المشروع بعد')),
 				// Only a funded escrow is "held". An unfunded contract shows its value, never a lock.
-				escrowAmount: `${(state.escrowFunded ? state.heldAmount : c.price).toLocaleString('en-US')} $`,
+				escrowAmount: formatMoney(state.escrowFunded ? state.heldAmount : c.price, c.currency),
+				currency: c.currency,
 				rawPrice: state.heldAmount,
 				escrowLabel: state.escrowFunded ? 'محتجز بالضمان' : 'قيمة العقد (غير ممولة بعد)',
 				contractRef: `CT-${c.id.slice(0, 6).toUpperCase()}`,
@@ -651,7 +653,8 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				displayId,
 				title: p.title,
 				clientName: clientName || 'عميل وسيط AI',
-				value: `${c.price.toLocaleString()} $`,
+				value: formatMoney(c.price, c.currency),
+				currency: c.currency,
 				date: settledIds.has(c.projectId) ? `${SETTLED_LABEL_AR} ${dateFormatted}` : (status === 'done' ? `أُغلق ${dateFormatted}` : (status === 'cancel' ? `ملغى ${dateFormatted}` : `مؤرشف ${dateFormatted}`)),
 				status,
 				icon: status === 'done' ? 'check' : (status === 'cancel' ? 'list' : 'doc'),
@@ -676,7 +679,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				displayId,
 				title: p.title,
 				clientName: clientName || 'عميل وسيط AI',
-				value: `${budgetVal.toLocaleString()} $`,
+				value: formatMoney(budgetVal, (p as { currency?: string }).currency),
 				date: settledIds.has(p.id) ? `${SETTLED_LABEL_AR} ${dateFormatted}` : (status === 'done' ? `أُغلق ${dateFormatted}` : `مؤرشف ${dateFormatted}`),
 				status,
 				icon: status === 'done' ? 'check' : 'doc',
@@ -700,7 +703,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				displayId,
 				title: prop.project.title,
 				clientName: clientName || 'عميل وسيط AI',
-				value: `${(prop.totalPrice || projectBudget).toLocaleString()} $`,
+				value: formatMoney(prop.totalPrice || projectBudget, (prop as { currency?: string }).currency),
 				date: `ملغى قبل التعاقد (${dateFormatted})`,
 				status: 'cancel',
 				icon: 'list'

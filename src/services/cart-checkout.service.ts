@@ -546,7 +546,7 @@ export class CartCheckoutService {
       return createdProjectIds;
     });
     // stored + delivered AFTER the payment committed; a notification failure never undoes the payment
-    await clientNotifications.send(clientNotificationFor.orderPaid({ clientId: userId, orderId: order.id, orderNumber: order.orderNumber, total: order.total, projectIds }));
+    await clientNotifications.send(clientNotificationFor.orderPaid({ clientId: userId, orderId: order.id, orderNumber: order.orderNumber, total: order.total, currency: order.currency, projectIds }));
     // each seller is told of the purchase once, after the payment committed (projectIds follow the order items one to one)
     for (const [index, item] of order.items.entries()) {
       if (projectIds[index]) await providerNotifications.servicePurchased({ providerId: item.providerId, projectId: projectIds[index], title: item.title });

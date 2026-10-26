@@ -1,4 +1,5 @@
 import { prisma } from '../config/db';
+import { formatMoney } from '../utils/currency';
 
 // Implementation Batch 7 — replaces team-deliveries.ts's fully hardcoded
 // "company deliveries" list (7 fictional stage deliveries with fabricated
@@ -59,7 +60,7 @@ class ProviderDeliveriesService {
         statusLabel: STATUS_LABELS[delivery.status] || delivery.status,
         submittedAt: delivery.submittedAt,
         contractRef: `CT-${contract.id.substring(0, 6).toUpperCase()}`,
-        amountLabel: `${stage.amount.toLocaleString('en-US')} $`,
+        amountLabel: formatMoney(stage.amount, stage.currency ?? contract.currency),
         files: delivery.files,
         note: delivery.note
       };

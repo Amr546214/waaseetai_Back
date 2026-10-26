@@ -51,9 +51,14 @@ export function singleCurrencyTotal<T>(rows: readonly T[], currencyOf: (r: T) =>
 	return { currency: requireCurrency(cs[0] ?? LEGACY_CURRENCY), total: by[cs[0] ?? LEGACY_CURRENCY] ?? 0 };
 }
 
-const LOCALES: Record<string, string> = { ar: 'ar-SA-u-nu-latn', en: 'en-US' };
-/** The ONE way an amount becomes text: the record's own currency, 2 digits, Latin numerals. (The FE has the same function; neither ever prints a bare "$".) */
-export function formatMoney(value: number, currency: string = LEGACY_CURRENCY, lang: 'ar' | 'en' = 'ar'): string {
+/** The ONE way an amount becomes text on the server: "1,234.50 USD" (the amount rounded to the currency's minor units, Latin digits, then the record's currency CODE). Same output as the FE formatter; never a bare "$". */
+export function formatMoney(value: number, currency: string = LEGACY_CURRENCY, _lang: 'ar' | 'en' = 'ar'): string {
 	const c = isSupportedCurrency(currency) ? currency : LEGACY_CURRENCY; const d = MINOR_UNITS[c];
-	return new Intl.NumberFormat(LOCALES[lang], { style: 'currency', currency: c, currencyDisplay: 'code', minimumFractionDigits: d, maximumFractionDigits: d }).format(value);
+	return `${new Intl.NumberFormat('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }).format(roundMoney(value, c))} ${c}`;
+}
+
+/** "100.00 - 250.00 USD": a range in ONE currency (the code printed once) */
+export function budgetRange(min: number, max: number, currency: string | null | undefined = LEGACY_CURRENCY): string {
+	const c = currency ?? LEGACY_CURRENCY;
+	return `${formatMoney(min, c).replace(/ [A-Z]{3}$/, '')} - ${formatMoney(max, c)}`;
 }

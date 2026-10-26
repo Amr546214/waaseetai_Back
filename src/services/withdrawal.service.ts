@@ -18,7 +18,7 @@ import { marketerNotifications } from './marketer-notifications.service';
 import { adminAudit } from './admin-audit.service';
 import { isPayoutAutomationEnabled } from '../utils/payout-automation.util';
 import { notifyAdmins } from './admin-notifications.service';
-import { LEGACY_CURRENCY } from '../utils/currency';
+import { LEGACY_CURRENCY, formatMoney } from '../utils/currency';
 
 export const MARKETER_PAYPAL_REQUIRED_MESSAGE = 'أضف بريد PayPal لاستلام الأرباح';
 
@@ -205,7 +205,7 @@ export class WithdrawalService {
           });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
         await providerNotifications.withdrawal(created.id, 'REQUESTED');
-        void notifyAdmins('WITHDRAWAL_REQUESTED', { id: created.id, ref: `${created.amount} $` });
+        void notifyAdmins('WITHDRAWAL_REQUESTED', { id: created.id, ref: formatMoney(created.amount, created.currency) });
         return created;
       } catch (error) {
         // Bounded retry, and ONLY for a recognized transaction-conflict
@@ -311,7 +311,7 @@ export class WithdrawalService {
           });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
         await marketerNotifications.withdrawal(created.id, 'REQUESTED');
-        void notifyAdmins('WITHDRAWAL_REQUESTED', { id: created.id, ref: `${created.amount} $` });
+        void notifyAdmins('WITHDRAWAL_REQUESTED', { id: created.id, ref: formatMoney(created.amount, created.currency) });
         return created;
       } catch (error) {
         if (isRetryableTransactionConflict(error) && attempt < MAX_SERIALIZATION_RETRIES) continue;

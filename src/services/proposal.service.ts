@@ -21,8 +21,7 @@ export interface GetProviderOffersFiltersDto {
 }
 
 import { buildProviderContractView, type ProviderContractView } from '../utils/contract-terms';
-import { requireCurrency, assertSameCurrency } from '../utils/currency';
-import { LEGACY_CURRENCY } from '../utils/currency';
+import { requireCurrency, assertSameCurrency, LEGACY_CURRENCY, formatMoney } from '../utils/currency';
 
 export type ProviderOfferStatusKey = 'pending' | 'pending_response' | 'pending_signature' | 'nego' | 'accepted' | 'rejected';
 
@@ -483,8 +482,8 @@ export class ProposalService {
 			projectTitle,
 			title: projectTitle,
 			offeredPrice: priceVal,
-			price: `${priceVal.toLocaleString('en-US')} $`,
-			currency: 'USD', // active proposal pricing is now USD-semantic
+			price: formatMoney(priceVal, item.currency),
+			currency: item.currency ?? LEGACY_CURRENCY, // the offer's own currency
 			status: statusEnum,
 			statusKey,
 			statusText,

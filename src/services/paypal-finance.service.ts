@@ -260,17 +260,17 @@ export class PaypalFinanceService {
 						userId: payment.userId,
 						category: LogCategory.SYSTEM_AUDIT,
 						title: 'إيداع رصيد بالمحفظة',
-						actionText: feeAmount ? `إيداع ${creditAmount.toFixed(2)} دولار (صافي) عبر PayPal، المدفوع ${verifiedAmount.toFixed(2)} شاملًا رسوم PayPal ${feeAmount.toFixed(2)}` : `إيداع بمبلغ ${verifiedAmount.toFixed(2)} دولار عبر PayPal`,
+						actionText: feeAmount ? `إيداع ${formatMoney(creditAmount.toNumber(), payment.currency)} (صافي) عبر PayPal، المدفوع ${formatMoney(verifiedAmount.toNumber(), payment.currency)} شاملًا رسوم PayPal ${formatMoney(feeAmount.toNumber(), payment.currency)}` : `إيداع بمبلغ ${formatMoney(verifiedAmount.toNumber(), payment.currency)} عبر PayPal`,
 						status: LogStatus.COMPLETED,
 						statusText: 'مكتمل بنجاح',
-						summary: feeAmount ? `تم شحن المحفظة بصافي ${creditAmount.toFixed(2)} دولار (دُفع ${verifiedAmount.toFixed(2)} شاملًا رسوم PayPal ${feeAmount.toFixed(2)}) - رقم عملية PayPal: ${captureId}` : `تم شحن المحفظة بمبلغ ${verifiedAmount.toFixed(2)} دولار - رقم عملية PayPal: ${captureId}`,
+						summary: feeAmount ? `تم شحن المحفظة بصافي ${formatMoney(creditAmount.toNumber(), payment.currency)} (دُفع ${formatMoney(verifiedAmount.toNumber(), payment.currency)} شاملًا رسوم PayPal ${formatMoney(feeAmount.toNumber(), payment.currency)}) - رقم عملية PayPal: ${captureId}` : `تم شحن المحفظة بمبلغ ${formatMoney(verifiedAmount.toNumber(), payment.currency)} - رقم عملية PayPal: ${captureId}`,
 						source: 'USER',
 						eventType: 'WALLET_DEPOSIT_COMPLETED',
 						severity: 'INFO'
 					}
 				});
 
-				notificationId = (await tx.notification.create({ data: clientNotificationFor.depositCompleted({ clientId: payment.userId, transactionId: walletTransaction.id, credited: creditAmount.toNumber(), paid: verifiedAmount.toNumber(), fee: feeAmount ? feeAmount.toNumber() : 0 }) })).id;
+				notificationId = (await tx.notification.create({ data: clientNotificationFor.depositCompleted({ clientId: payment.userId, transactionId: walletTransaction.id, credited: creditAmount.toNumber(), paid: verifiedAmount.toNumber(), fee: feeAmount ? feeAmount.toNumber() : 0, currency: requireCurrency(payment.currency) }) })).id;
 			});
 			// delivered through the client's saved channels once the credit is committed
 			await clientNotifications.deliverStored([notificationId]);

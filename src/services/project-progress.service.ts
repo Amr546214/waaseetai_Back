@@ -18,6 +18,7 @@ import { deliveryCompletedProject, adminSettlementFor, adminSettledView, stageDi
 import { adminAudit } from './admin-audit.service';
 import { ensureProjectRoom } from './project-conversation.service';
 import { computeLifecycle, evaluateAction, assertStageActionAllowed, settlementDistributionOf } from './project-lifecycle.service';
+import { formatMoney } from '../utils/currency';
 
 const PROJECT_COMPLETION_POINTS = 50;
 
@@ -522,10 +523,10 @@ export class ProjectProgressService {
               userId: contract.providerId,
               category: LogCategory.SYSTEM_AUDIT,
               title: 'إفراج دفعة مرحلة',
-              actionText: `اعتماد العميل لمرحلة "${stage.title}" وإفراج ${stage.amount} دولار من ضمان المشروع`,
+              actionText: `اعتماد العميل لمرحلة "${stage.title}" وإفراج ${formatMoney(stage.amount, contract.currency)} من ضمان المشروع`,
               status: LogStatus.COMPLETED,
               statusText: 'مكتمل بنجاح',
-              summary: `اعتمد العميل تسليم المرحلة "${stage.title}" في المشروع «${contract.project.title}»، وتم إفراج ${stage.amount} دولار من الضمان لصالح مقدم الخدمة.`,
+              summary: `اعتمد العميل تسليم المرحلة "${stage.title}" في المشروع «${contract.project.title}»، وتم إفراج ${formatMoney(stage.amount, contract.currency)} من الضمان لصالح مقدم الخدمة.`,
               source: 'USER',
               eventType: 'STAGE_FUND_RELEASED',
               severity: 'INFO',
@@ -580,10 +581,10 @@ export class ProjectProgressService {
               userId: contract.providerId,
               category: LogCategory.SYSTEM_AUDIT,
               title: 'إفراج دفعة مرحلة',
-              actionText: `اعتماد العميل للمرحلة النهائية "${stage.title}" وإفراج ${stage.amount} دولار من ضمان المشروع`,
+              actionText: `اعتماد العميل للمرحلة النهائية "${stage.title}" وإفراج ${formatMoney(stage.amount, contract.currency)} من ضمان المشروع`,
               status: LogStatus.COMPLETED,
               statusText: 'مكتمل بنجاح',
-              summary: `اعتمد العميل التسليم النهائي «${stage.title}» لمشروع «${contract.project.title}»، وتم إفراج ${stage.amount} دولار من الضمان لصالح مقدم الخدمة، وأُغلق العقد.`,
+              summary: `اعتمد العميل التسليم النهائي «${stage.title}» لمشروع «${contract.project.title}»، وتم إفراج ${formatMoney(stage.amount, contract.currency)} من الضمان لصالح مقدم الخدمة، وأُغلق العقد.`,
               source: 'USER',
               eventType: 'STAGE_FUND_RELEASED',
               severity: 'INFO',
@@ -687,7 +688,7 @@ export class ProjectProgressService {
       const clientNotification = decision === 'approve'
         ? await tx.notification.create({ data: isProjectCompleted
           ? clientNotificationFor.projectCompleted({ clientId, projectId: contract.projectId, projectTitle: contract.project.title })
-          : clientNotificationFor.stageApproved({ clientId, projectId: contract.projectId, stageId, stageTitle: stage.title, amount: stage.amount }) })
+          : clientNotificationFor.stageApproved({ clientId, projectId: contract.projectId, stageId, stageTitle: stage.title, amount: stage.amount, currency: contract.currency }) })
         : null;
       return {
         decision,

@@ -2,6 +2,7 @@ import { NotificationCategory } from '@prisma/client';
 import { prisma } from '../config/db';
 import { logger } from '../config/logger';
 import { notificationService } from './notification.service';
+import { formatMoney } from '../utils/currency';
 
 /**
  * The marketer-facing notifications (referral joined, commission approved, withdrawal states, PayPal email change). Every one goes through
@@ -45,7 +46,7 @@ export const marketerNotifications = {
 			if (!w) return;
 			const owner = await prisma.user.findUnique({ where: { id: w.userId }, select: { accountType: true, roles: true, activeRole: true, affiliateProfile: { select: { id: true } } } });
 			if (!owner || !owner.affiliateProfile || isProviderUser(owner)) return;
-			const amount = `${w.amount} ${w.currency === 'USD' ? '$' : w.currency}`;
+			const amount = formatMoney(w.amount, w.currency);
 			const copy: Record<MarketerWithdrawalEvent, { title: string; message: string }> = {
 				REQUESTED: { title: 'تم استلام طلب السحب', message: `طلب سحب ${amount} قيد مراجعة الإدارة.` },
 				APPROVED: { title: 'تم اعتماد طلب السحب', message: `اعتمدت الإدارة طلب سحب ${amount}.` },
@@ -96,7 +97,7 @@ export const marketerNotifications = {
 			await safely('commissionApproved', () => notificationService.createAndEmit({
 				userId: n.affiliateUserId,
 				title: 'عمولة جديدة',
-				message: `أُضيفت عمولة ${n.amount} ${n.currency === 'USD' ? '$' : n.currency} إلى رصيدك القابل للسحب.`,
+				message: `أُضيفت عمولة ${formatMoney(n.amount, n.currency)} إلى رصيدك القابل للسحب.`,
 				category: NotificationCategory.FINANCIAL,
 				type: 'COMMISSION_APPROVED',
 				actionUrl: MARKETER_ROUTES.commissions,
