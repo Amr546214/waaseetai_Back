@@ -13,7 +13,8 @@ import { projectProgressService } from './project-progress.service';
 import { providerNotifications } from './provider-notifications.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import { emitAmendmentEvent } from './amendment-events';
-import { LEGACY_CURRENCY } from '../utils/currency';
+import { LEGACY_CURRENCY, requireCurrency } from '../utils/currency';
+import { walletBalanceOf } from '../utils/wallet-balance';
 
 const AMENDMENT_TYPES: AmendmentType[] = ['SCOPE', 'BUDGET', 'DURATION', 'MIXED'];
 const TITLE_MAX_LENGTH = 200;
@@ -401,9 +402,10 @@ export class ProjectAmendmentService {
     if (await hasActiveDispute(amendment.projectId, prisma as any)) throw new AppError('لا يمكن تطبيق التعديل أثناء وجود نزاع مفتوح على المشروع', 409);
     const user = await prisma.user.findUnique({ where: { id: clientId }, select: { email: true, walletBalance: true } });
     if (!user) throw new AppError('المستخدم غير موجود', 404);
-    const available = Number(user.walletBalance);
+    // the wallet that pays is the one in the ESCROW's currency (never the USD balance for a SAR contract)
+    const available = await walletBalanceOf(prisma, clientId, requireCurrency(escrow.currency));
     if (available < budget) {
-      throw new AppError('رصيد المحفظة غير كافٍ لتمويل زيادة الميزانية، اشحن المحفظة ثم أعد المحاولة', 409, [{ required: budget, available, shortfall: Math.max(0, round2(budget - available)) }]);
+      throw new AppError('رصيد المحفظة غير كافٍ لتمويل زيادة الميزانية، اشحن المحفظة ثم أعد المحاولة', 409, [{ currency: escrow.currency, required: budget, available, shortfall: Math.max(0, round2(budget - available)) }]);
     }
 
     const contractForTerms = await prisma.contract.findUnique({ where: { id: amendment.contractId }, select: { termsVersion: true, price: true, durationDays: true } });

@@ -163,7 +163,7 @@ export async function applyAmendment(tx: any, amendment: AmendmentToApply, actor
 		const covered = await debitWalletIfCovered(tx, amendment.clientId, money, budget);
 		if (!covered) {
 			const available = await walletBalanceOf(tx, amendment.clientId, money);
-			throw fail('رصيد المحفظة غير كافٍ لتمويل زيادة الميزانية، اشحن المحفظة ثم أعد المحاولة', 409, [{ required: budget, available, shortfall: Math.max(0, round2(budget - available)) }]);
+			throw fail('رصيد المحفظة غير كافٍ لتمويل زيادة الميزانية، اشحن المحفظة ثم أعد المحاولة', 409, [{ currency: money, required: budget, available, shortfall: Math.max(0, round2(budget - available)) }]);
 		}
 		walletDelta = -budget;
 		await tx.walletTransaction.create({ data: { userId: amendment.clientId, type: AMENDMENT_TOPUP, amount: -budget, currency: money, status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: amendment.id, description: `زيادة ميزانية العقد: ${amendment.title}`, metadata: { amendmentId: amendment.id, contractId: contract.id, projectId: amendment.projectId } } });

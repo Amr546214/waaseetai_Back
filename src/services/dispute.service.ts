@@ -14,7 +14,8 @@ import { adminAudit } from './admin-audit.service';
 import { notifyAdmins } from './admin-notifications.service';
 import { assigneeHolds } from './admin-access.service';
 import { creditWallet } from '../utils/wallet-balance';
-import { requireCurrency } from '../utils/currency';
+
+import { LEGACY_CURRENCY, requireCurrency } from '../utils/currency';
 
 // Advisory-only dispute summary — never a verdict. Human admin resolution
 // via resolve() above remains the sole authority on status/fault/money;
@@ -206,19 +207,20 @@ export class DisputeService {
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
     if (dispute.openedById !== userId && dispute.againstUserId !== userId) throw new AppError('لا تملك صلاحية الوصول لهذا النزاع', 403);
     // New read-only field `heldEscrowAmount`: the escrow amount still held for the dispute's project (null when there is no project/escrow).
-    let held: number | null = null;
+    let held: number | null = null; let heldCurrency: string = LEGACY_CURRENCY;
     if (dispute.projectId) {
       const escrow = await prisma.escrow.findUnique({
         where: { projectId: dispute.projectId },
-        select: { amount: true, releasedAmount: true, status: true, project: { select: { contract: { select: { price: true } } } } }
+        select: { amount: true, currency: true, releasedAmount: true, status: true, project: { select: { contract: { select: { price: true } } } } }
       });
       held = heldEscrowAmount(escrow, escrow?.project?.contract?.price);
+      heldCurrency = escrow?.currency ?? LEGACY_CURRENCY;
     }
     const projectKey = dispute.projectId ?? dispute.requestId;
     const closed = dispute.status === DisputeStatus.RESOLVED || dispute.status === DisputeStatus.REJECTED;
     const financialOutcome = closed ? await this.financialOutcomeOf(dispute.id) : null;
     return {
-      ...dispute, heldEscrowAmount: held,
+      ...dispute, heldEscrowAmount: held, currency: heldCurrency, // heldEscrowAmount and the settlement amounts are in the escrow's currency
       resolutionLabel: resolutionLabelAr(dispute.resolution, !!financialOutcome), financialOutcome,
       projectFreeze: projectKey ? await getFreezeState(projectKey, prisma) : null
     };
