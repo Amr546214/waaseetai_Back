@@ -1,5 +1,11 @@
 import { siteUrl } from '../utils/site-url';
 import nodemailer from 'nodemailer';
+import { mailTransporter } from '../utils/mail.transporter';
+import { emailButton, MAIL_FONT, renderEmailShell } from '../utils/email-shell';
+import { brandName, brandSubject } from '../utils/brand';
+import { emailSenderName } from '../utils/email-sender-name';
+import { optionalEmailEnabled } from './optional-email-gate';
+import { notificationService, notificationMailCopy } from './notification.service';
 import { logger } from '../config/logger';
 
 export interface ProjectCompletionRewardEmailData {
@@ -8,6 +14,8 @@ export interface ProjectCompletionRewardEmailData {
   projectTitle: string;
   pointsAwarded: number;
   projectUrl: string;
+  /** the provider's user id: the optional-mail preference is read for this user (omitted = platform switch only) */
+  userId?: string;
 }
 
 const escapeHtml = (value: string): string => value.replace(/[&<>'"]/g, character => ({
@@ -173,6 +181,9 @@ export class EmailService {
    */
   public async sendModelApprovalEmail(to: string, firstName: string, modelTitle: string, score: number, isApproved: boolean, feedback: string): Promise<void> {
     try {
+      // OPTIONAL mail (no caller today): the platform switch applies; names / texts are escaped
+      if (!(await optionalEmailEnabled())) return;
+      firstName = escapeHtml(firstName); modelTitle = escapeHtml(modelTitle); feedback = escapeHtml(feedback);
       const subject = isApproved 
         ? `🎉 تم اعتماد نموذج العمل: ${modelTitle} - وسيط AI` 
         : `⚠️ مراجعة نموذج العمل: ${modelTitle} - وسيط AI`;
@@ -219,36 +230,44 @@ export class EmailService {
     }
   }
 
-  /** Notify a provider that the client accepted the final delivery and points were awarded. */
+  /**
+   * Notify a provider that the client accepted the final delivery and points were awarded. OPTIONAL mail: sent only when the platform's optional-mail switch is ON
+   * AND the provider chose e-mail in their notification settings (same resolver as every notification copy). Branded with the configured platform name, on the shared shell.
+   */
   public async sendProjectCompletionRewardEmail(data: ProjectCompletionRewardEmailData): Promise<void> {
-    const providerName = escapeHtml(data.providerName);
-    const projectTitle = escapeHtml(data.projectTitle);
     const points = Math.max(0, Math.trunc(data.pointsAwarded));
-    const projectUrl = siteUrl(data.projectUrl);
-    const subject = `🎉 تم اعتماد مشروعك وإضافة +${points} نقطة - وسيط AI`;
-    const htmlContent = `
-      <!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-      <style>
-        body{margin:0;padding:24px;background:#f6f8fc;color:#070d24;font-family:'Segoe UI',Tahoma,Arial,sans-serif}.card{max-width:600px;margin:auto;overflow:hidden;border:1px solid #e7eaf1;border-radius:18px;background:#fff}.header{padding:28px;text-align:center;background:linear-gradient(135deg,#2bd4c7,#2b7fff);color:#fff}.content{padding:32px}.points{margin:24px 0;padding:20px;text-align:center;border:1px solid rgba(43,212,199,.35);border-radius:14px;background:rgba(43,212,199,.08)}.points b{display:block;font-size:34px;color:#0fa99a}.button{display:block;padding:13px 18px;border-radius:11px;background:#2b7fff;color:#fff!important;text-align:center;text-decoration:none;font-weight:800}.footer{padding:18px;background:#f8fafc;color:#6b7699;text-align:center;font-size:12px}
-      </style></head><body><div class="card"><div class="header"><h1>مبروك إكمال المشروع 🎉</h1></div><div class="content">
-      <h3>أهلاً ${providerName}</h3><p>وافق طالب الخدمة على التسليم النهائي لمشروع <strong>«${projectTitle}»</strong>، وتم إغلاق المشروع بنجاح.</p>
-      <div class="points"><span>مكافأة إكمال المشروع</span><b>+${points} نقطة</b><small>أُضيفت مباشرة إلى رصيد نقاطك في المنصة</small></div>
-      ${projectUrl ? `<a class="button" href="${projectUrl}">عرض المشروع والنقاط</a>` : ''}</div><div class="footer">وسيط AI — منصة العمل والخدمات المحمية</div></div></body></html>`;
-
     try {
+      if (!(await optionalEmailEnabled())) return;
+      if (data.userId) {
+        const delivery = await notificationService.resolveDelivery(data.userId, data.projectUrl, 'PROJECT_COMPLETED');
+        if (!delivery.channels.email) return;
+      }
+      const projectUrl = siteUrl(data.projectUrl);
+      const font = MAIL_FONT;
+      const bodyHtml = `      <div style="font-family:${font};font-size:13px;line-height:20px;color:#6b7280;margin:0 0 10px 0;">أهلاً ${escapeHtml(data.providerName)}</div>
+      <div style="font-family:${font};font-size:18px;line-height:28px;font-weight:700;color:#111827;margin:0 0 10px 0;">مبروك إكمال المشروع</div>
+      <div style="font-family:${font};font-size:14px;line-height:23px;color:#374151;margin:0 0 18px 0;">وافق طالب الخدمة على التسليم النهائي لمشروع «${escapeHtml(data.projectTitle)}»، وتم إغلاق المشروع بنجاح.</div>
+      <table role="presentation" align="center" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto ${projectUrl ? '24px' : '4px'} auto;"><tr><td align="center" style="padding:14px 28px;border:1px solid #cfe9e6;border-radius:10px;background:#f2fbfa;font-family:${font};">
+        <div style="font-size:12px;line-height:18px;color:#4b5563;">مكافأة إكمال المشروع</div>
+        <div style="font-size:26px;line-height:34px;font-weight:800;color:#0f766e;">+${points} نقطة</div>
+        <div style="font-size:12px;line-height:18px;color:#6b7280;">أُضيفت إلى رصيد نقاطك في المنصة</div>
+      </td></tr></table>
+      ${projectUrl ? emailButton(projectUrl, 'عرض المشروع والنقاط') : ''}`;
+      const htmlContent = renderEmailShell({ lang: 'ar', docTitle: `مبروك إكمال المشروع - ${brandName()}`, bodyHtml, footerNote: notificationMailCopy('ar').footer });
       if (!process.env.SMTP_USER && !process.env.SMTP_HOST) {
-        logger.info(`[Email simulation] Project completion reward email prepared for ${data.email}. Points: ${points}`);
+        logger.info(`[Email simulation] Project completion reward email prepared (points ${points}).`);
         return;
       }
-      await this.transporter.sendMail({
-        from: `"وسيط AI" <${process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@waseet.ai'}>`,
+      await mailTransporter.sendMail({
+        from: `"${await emailSenderName()}" <${process.env.SMTP_FROM ?? 'no-reply@waseetai.com'}>`,
         to: data.email,
-        subject,
-        html: htmlContent
+        subject: brandSubject(`تم اعتماد مشروعك وإضافة +${points} نقطة - Waseet AI`),
+        html: htmlContent,
+        text: `مبروك إكمال المشروع «${data.projectTitle}». أُضيفت +${points} نقطة إلى رصيدك.${projectUrl ? `\n${projectUrl}` : ''}`,
+        headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },
       });
-      logger.info(`✅ Project completion reward email sent to ${data.email}`);
     } catch (error) {
-      logger.error(`❌ Failed to send project completion reward email to ${data.email}:`, error);
+      logger.error(`[Email:project-completion] FAILED: ${(error as Error)?.message ?? error}`);
     }
   }
 }

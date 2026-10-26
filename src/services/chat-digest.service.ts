@@ -1,9 +1,11 @@
+import { buildNotificationEmailHtml } from '../utils/notification-email-template';
 import { siteUrl } from '../utils/site-url';
 import { brandSubject } from '../utils/brand';
 import { emailSenderName } from '../utils/email-sender-name';
 import { prisma } from '../config/db';
 import { logger } from '../config/logger';
 import { mailTransporter } from '../utils/mail.transporter';
+import { optionalEmailEnabled } from './optional-email-gate';
 import { notificationService, notificationMailCopy, maskEmail } from './notification.service';
 
 /**
@@ -40,13 +42,15 @@ export async function resolveChatDigestActivation(now: Date = new Date()): Promi
 	return fromEnv && !Number.isNaN(fromEnv.getTime()) && fromEnv > row.enabledAt ? fromEnv : row.enabledAt;
 }
 
-const esc = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
 export const chatDigestMailCopy = (lang: 'ar' | 'en', count: number) => lang === 'en'
 	? { subject: 'Unread messages - Waseet AI', headline: count === 1 ? 'You have 1 unread message' : `You have ${count} unread messages`, latest: 'Latest message' }
 	: { subject: 'رسائل غير مقروءة - Waseet AI', headline: count === 1 ? 'لديك رسالة غير مقروءة' : `لديك ${count} رسائل غير مقروءة`, latest: 'آخر رسالة' };
 
+class DigestSuppressed extends Error { constructor() { super('optional e-mail is switched off by the platform'); } }
+
 async function sendDigestMail(email: string, firstName: string | null, lang: 'ar' | 'en', count: number, title: string, preview: string, actionUrl: string | null, actionText: string | null): Promise<void> {
+	// execution-time gate: the claim above was made while the channel looked ON; a switch-off in between sends nothing
+	if (!(await optionalEmailEnabled())) throw new DigestSuppressed();
 	const copy = notificationMailCopy(lang);
 	const d = chatDigestMailCopy(lang, count);
 	const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
@@ -57,7 +61,7 @@ async function sendDigestMail(email: string, firstName: string | null, lang: 'ar
 		from: `"${senderName}" <${from}>`,
 		to: email,
 		subject: brandSubject(d.subject),
-		html: `<div dir="${copy.dir}" style="font-family:Tahoma,Arial,sans-serif"><p>${esc(copy.greeting(firstName || ''))}</p><h3>${esc(d.headline)}</h3><p>${esc(title.replace(/\s*\(\d+\)$/, ''))}</p><p>${esc(d.latest)}: ${esc(short)}</p>${link ? `<p><a href="${esc(link)}">${esc(actionText || copy.open)}</a></p>` : ''}<p style="color:#6b7699;font-size:12px">${esc(copy.footer)}</p></div>`,
+		html: buildNotificationEmailHtml({ lang, greeting: copy.greeting(firstName || ''), title: d.headline, message: `${title.replace(/\s*\(\d+\)$/, '')}\n${d.latest}: ${short}`, linkUrl: link || null, ctaLabel: actionText || copy.open, footerNote: copy.footer }),
 		text: `${d.headline}\n${d.latest}: ${short}${link ? `\n${link}` : ''}`,
 		headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },
 	});
@@ -72,6 +76,8 @@ export async function runChatDigestOnce(opts: { now?: Date } = {}): Promise<Chat
 	const skip = (why: string) => { result.skipped[why] = (result.skipped[why] ?? 0) + 1; };
 	try {
 		const cfg = chatDigestConfig();
+		// platform switch OFF: the whole pass is a no-op (nothing claimed, nothing sent, nothing consumed); the unread backlog is still there when the channel is ON again
+		if (!(await optionalEmailEnabled())) { skip('platform-email-off'); return result; }
 		const enabledAt = await resolveChatDigestActivation(now);
 		const rows = await prisma.notification.findMany({ where: { type: 'CHAT', isRead: false, createdAt: { gt: enabledAt } }, orderBy: { createdAt: 'asc' }, take: cfg.batch });
 		for (const n of rows) {
@@ -101,11 +107,12 @@ export async function runChatDigestOnce(opts: { now?: Date } = {}): Promise<Chat
 					await sendDigestMail(recipient.email, recipient.firstName, lang, total, n.title, n.message, n.actionUrl, n.actionText);
 					result.sent++;
 				} catch (e) {
-					logger.error(`[ChatDigest] send failed to=${maskEmail(recipient.email)}: ${(e as Error)?.message ?? e}`);
+					if (e instanceof DigestSuppressed) { /* give the slot back below, count it as skipped */ }
+					else logger.error(`[ChatDigest] send failed to=${maskEmail(recipient.email)}: ${(e as Error)?.message ?? e}`);
 					// give the slot back so the next pass may retry
 					if (last) await prisma.$executeRaw`UPDATE chat_digest_state SET last_digest_at = ${last} WHERE user_id = ${n.userId} AND conversation_id = ${conversationId} AND last_digest_at = ${now}`;
 					else await prisma.$executeRaw`DELETE FROM chat_digest_state WHERE user_id = ${n.userId} AND conversation_id = ${conversationId} AND last_digest_at = ${now}`;
-					skip('send-failed');
+					skip(e instanceof DigestSuppressed ? 'email-off' : 'send-failed');
 				}
 			} catch (e) {
 				logger.error(`[ChatDigest] row failed: ${(e as Error)?.message ?? e}`);

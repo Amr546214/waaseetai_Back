@@ -30,6 +30,7 @@ import {
 	getProviderContractSignatureTemplate
 } from '../utils/mail.transporter';
 import { brandNameInArabicText } from '../utils/brand';
+import { transactionalFrom, AUTO_MAIL_HEADERS } from '../utils/email-sender-name';
 
 function generateSlug(text: string): string {
 	if (!text) return `slug-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -1645,10 +1646,11 @@ export class ClientRequestsService {
 		// Send Email dynamically
 		try {
 			await mailTransporter.sendMail({
-				from: process.env.SMTP_USER || `"${brandNameInArabicText()}" <noreply@waseetai.com>`,
+				from: await transactionalFrom(),
 				to: user.email,
 				subject: `رمز التحقق لتوقيع العقد وإيداع الضمان - ${brandNameInArabicText()}`,
-				html: getOtpEmailTemplate(otpCode, Math.round(CONTRACT_OTP_TTL_SECONDS / 60), 'contract-signature')
+				html: getOtpEmailTemplate(otpCode, Math.round(CONTRACT_OTP_TTL_SECONDS / 60), 'contract-signature'),
+				headers: AUTO_MAIL_HEADERS
 			});
 		} catch (err) {
 			console.error('Failed to send email OTP', err);
@@ -1914,20 +1916,24 @@ export class ClientRequestsService {
 			if (userEmail) {
 				// Email to Client
 				await mailTransporter.sendMail({
-					from: process.env.SMTP_USER || `"${brandNameInArabicText()}" <noreply@waseetai.com>`,
+					from: await transactionalFrom(),
 					to: userEmail,
 					subject: `تم إيداع الضمان بنجاح - ${brandNameInArabicText()}`,
-					html: getDepositConfirmationTemplate(projectName, escrowAmount)
+					html: getDepositConfirmationTemplate(projectName, escrowAmount),
+					text: `تم إيداع الضمان بنجاح للمشروع «${projectName}». سيبقى المبلغ محفوظًا حتى اعتمادك للتسليم النهائي.`,
+					headers: AUTO_MAIL_HEADERS
 				});
 			}
 
 			if (providerEmail) {
 				// Email to Provider
 				await mailTransporter.sendMail({
-					from: process.env.SMTP_USER || `"${brandNameInArabicText()}" <noreply@waseetai.com>`,
+					from: await transactionalFrom(),
 					to: providerEmail,
 					subject: `دعوة لتوقيع العقد 📝 - ${brandNameInArabicText()}`,
-					html: getProviderContractSignatureTemplate(projectName, clientName, bidAmount)
+					html: getProviderContractSignatureTemplate(projectName, clientName, bidAmount),
+					text: `تم قبول عرضك على المشروع «${projectName}» وإيداع قيمته في الضمان. يرجى تسجيل الدخول وتوقيع العقد.`,
+					headers: AUTO_MAIL_HEADERS
 				});
 			}
 
