@@ -125,10 +125,10 @@ export const getPasswordResetEmailTemplate = (firstName: string, code: string, v
           </div>
           <div class="content">
             <h2 class="title">طلب إعادة تعيين كلمة المرور</h2>
-            <p class="desc">أهلاً ${firstName || ''}،<br>وصلنا طلب لإعادة تعيين كلمة المرور الخاصة بحسابك في منصة ${escHtml(brandNameInArabicText())}. استخدم الرمز التالي لمتابعة العملية:</p>
+            <p class="desc">أهلاً ${escHtml(firstName || '')}،<br>وصلنا طلب لإعادة تعيين كلمة المرور الخاصة بحسابك في منصة ${escHtml(brandNameInArabicText())}. استخدم الرمز التالي لمتابعة العملية:</p>
 
             <div class="code-box">
-              ${code}
+              ${escHtml(code)}
             </div>
 
             <p class="warning">هذا الرمز صالح لمدة ${otpValidityText(validityMinutes)} فقط.<br>إذا لم تطلب إعادة تعيين كلمة المرور، يمكنك تجاهل هذه الرسالة بأمان ولن يتم تغيير أي شيء في حسابك.</p>
@@ -246,7 +246,7 @@ export const getDepositConfirmationTemplate = (projectName: string, amount: numb
             
             <div class="info-box">
               <h3>${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $</h3>
-              <p>مشروع: ${projectName}</p>
+              <p>مشروع: ${escHtml(projectName)}</p>
             </div>
             
             <p class="desc">تم تغيير حالة المشروع إلى "قيد التنفيذ". سيبقى المبلغ آمناً لدينا ولن يتم تحويله لمقدم الخدمة إلا بعد استلامك للمشروع واعتمادك النهائي له.</p>
@@ -364,7 +364,7 @@ export const getProviderContractSignatureTemplate = (projectName: string, client
             
             <div class="info-box">
               <h3>${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $</h3>
-              <p>مشروع: ${projectName}</p>
+              <p>مشروع: ${escHtml(projectName)}</p>
             </div>
             
             <p class="desc">يرجى الدخول إلى حسابك في المنصة وتوقيع العقد للبدء في تنفيذ المشروع.<br>تم تغيير حالة المشروع إلى "قيد التنفيذ". نتمنى لك التوفيق!</p>

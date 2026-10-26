@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
 import { notificationService, notificationPreferenceService } from '../services/notification.service';
+import { AppError } from '../utils/app-error';
+import { optionalEmailEnabled } from '../services/optional-email-gate';
 import { updateNotificationPreferencesSchema } from '../dtos/notification-preferences.dto';
 
 export class NotificationsController {
@@ -54,7 +56,8 @@ export class NotificationsController {
 		try {
 			const userId = (req as any).user?.id;
 			const settings = await notificationPreferenceService.getPreferences(userId);
-			return res.status(200).json({ success: true, data: { settings } }) as any;
+			// the platform state travels with the stored choices: the page shows the e-mail option disabled (choice kept) when the platform switched optional mail off
+			return res.status(200).json({ success: true, data: { settings, platform: { emailEnabled: await optionalEmailEnabled() } } }) as any;
 		} catch (error: any) {
 			console.error('[NotificationsController] Error getting preferences:', error);
 			return res.status(500).json({ success: false, error: error.message }) as any;
@@ -69,8 +72,9 @@ export class NotificationsController {
 				return res.status(400).json({ success: false, message: parsed.error.issues.map(i => i.message).join(', ') }) as any;
 			}
 			const settings = await notificationPreferenceService.updatePreferences(userId, parsed.data.settings);
-			return res.status(200).json({ success: true, data: { settings } }) as any;
+			return res.status(200).json({ success: true, data: { settings, platform: { emailEnabled: await optionalEmailEnabled() } } }) as any;
 		} catch (error: any) {
+			if (error instanceof AppError && error.code) return res.status(error.statusCode).json({ success: false, code: error.code, message: error.message }) as any;
 			console.error('[NotificationsController] Error updating preferences:', error);
 			return res.status(500).json({ success: false, error: error.message }) as any;
 		}

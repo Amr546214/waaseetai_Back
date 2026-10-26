@@ -1,6 +1,7 @@
 import { deniedAdminNotificationTypes } from './admin-access.service';
 import { brandSubject, brandNameInArabicText } from '../utils/brand';
 import { systemSettingsService } from './system-settings.service';
+import { optionalEmailEnabled, assertEmailOptionMayChange } from './optional-email-gate';
 import { emailSenderName } from '../utils/email-sender-name';
 import { NotificationCategory, Notification } from '@prisma/client';
 import { siteUrl } from '../utils/site-url';
@@ -257,6 +258,9 @@ export class NotificationService {
 		// the recipient's own choice always wins; only when nothing was saved does the platform default language (setting `defaultLanguage`) apply
 		if (!savedLang) lang = await systemSettingsService.get<'ar' | 'en'>('defaultLanguage');
 		else lang = savedLang;
+		// The platform's optional-mail switch (`channelEmail`) is evaluated HERE, at delivery time, and never written back into the user's choice: OFF = no optional mail,
+		// ON again = the user's stored choice applies again. (The chat digest scheduler reads this same resolver on every pass.)
+		if (channels.email && !(await optionalEmailEnabled())) channels = { ...channels, email: false };
 		return { channels, recipient, lang };
 	}
 
@@ -269,6 +273,8 @@ export class NotificationService {
 	}
 
 	private async sendNotificationMail(email: string, firstName: string | null, dto: NotificationDto, lang: 'ar' | 'en' = 'ar'): Promise<void> {
+		// last check right before the send (a mail prepared while the channel was ON is not sent once the platform switched it OFF)
+		if (!(await optionalEmailEnabled())) return;
 		const copy = notificationMailCopy(lang);
 		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
 		const senderName = await emailSenderName();
@@ -352,6 +358,9 @@ export class NotificationService {
 				to: email,
 				subject: brandSubject(emailSubject),
 				html: getPasswordResetEmailTemplate(firstName, code, validityMinutes),
+				// like every code mail: a plain-text alternative and auto-generated headers (an HTML-only message is a spam signal)
+				text: `رمز إعادة تعيين كلمة المرور في ${brandNameInArabicText()} هو: ${code}\nالرمز صالح لمدة ${otpValidityText(validityMinutes)}. إذا لم تطلبه فتجاهل هذه الرسالة.`,
+				headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },
 			});
 			return logEmailDelivery('password-reset', email, info, Date.now() - startedAt);
 		} catch (error) {
@@ -597,7 +606,12 @@ export const notificationPreferenceService = {
 
 	async updatePreferences(userId: string, patch: Record<string, boolean | string>): Promise<Record<string, boolean | string>> {
 		const existing = await prisma.notificationPreference.findUnique({ where: { userId } });
-		const merged = { ...(existing?.settings as Record<string, boolean | string> | undefined), ...patch };
+		const stored = (existing?.settings as Record<string, boolean | string> | undefined) ?? {};
+		// platform OFF: the e-mail option cannot be switched ON (409 EMAIL_CHANNEL_DISABLED_BY_PLATFORM). A request that repeats the stored value or turns it OFF passes; a refused one writes nothing.
+		for (const key of ['email', 'channel_email'] as const) {
+			if (typeof patch[key] === 'boolean') await assertEmailOptionMayChange(patch[key] === true, (stored.email ?? stored.channel_email) === true);
+		}
+		const merged = { ...stored, ...patch };
 		const row = await prisma.notificationPreference.upsert({
 			where: { userId },
 			create: { userId, settings: merged },
