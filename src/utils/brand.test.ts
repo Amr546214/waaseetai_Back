@@ -16,12 +16,12 @@ test('platform name in NEW e-mails: default unchanged, configured name replaces 
 	setBrandName(''); assert.equal(brandNameInArabicText(), 'وسيط AI'); assert.ok(typeof getOtpEmailTemplate === 'function');
 });
 
-test('the deposit, contract-signature and password-reset mails carry the configured platform name (not a fixed brand), with the record\'s currency', async () => {
+test('the deposit, contract-signature and password-reset mails carry the configured platform name (not a fixed brand); amounts keep today\'s format (currency rendering is deferred)', async () => {
 	const { setBrandName } = await import('./brand'); const t = await import('./mail.transporter');
 	setBrandName('منصة اختبار');
 	try {
-		const dep = t.getDepositConfirmationTemplate('مشروع', 100, 'SAR'); const sig = t.getProviderContractSignatureTemplate('مشروع', 'عميل', 250.5, 'USD'); const reset = t.getPasswordResetEmailTemplate('اسم', '1234');
+		const dep = t.getDepositConfirmationTemplate('مشروع', 100); const sig = t.getProviderContractSignatureTemplate('مشروع', 'عميل', 250.5); const reset = t.getPasswordResetEmailTemplate('اسم', '1234');
 		for (const html of [dep, sig, reset].filter(Boolean)) { assert.match(html, /منصة اختبار/); assert.doesNotMatch(html, /Waseet AI|وسيط الذكاء الاصطناعي للتقنية/); }
-		assert.match(dep, /100\.00 SAR/); assert.match(sig, /250\.50 USD/); assert.doesNotMatch(dep, /100\.00 \$/);
+		assert.match(dep, /100\.00 \$/); assert.match(sig, /250\.50 \$/);
 	} finally { setBrandName(''); }
 });
