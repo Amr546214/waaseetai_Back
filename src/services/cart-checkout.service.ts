@@ -262,8 +262,11 @@ export class CartCheckoutService {
     const now = new Date();
     if (!coupon || coupon.startAt > now || (coupon.expiresAt && coupon.expiresAt < now) || (coupon.maxUses !== null && coupon.usedCount >= coupon.maxUses)) throw new AppError('كوبون غير صالح', 400);
     if (userId && (await prisma.couponRedemption.count({ where: { couponId: coupon.id, userId } })) >= coupon.maxUsesPerUser) throw new AppError('لقد استعملت هذا الكوبون من قبل', 400);
-    const services = await prisma.serviceCatalog.findMany({ where: { id: { in: modelIds }, ...serviceWhere }, select: { id: true, totalAmount: true } });
+    const services = await prisma.serviceCatalog.findMany({ where: { id: { in: modelIds }, ...serviceWhere }, select: { id: true, totalAmount: true, currency: true } });
     if (services.length !== modelIds.length) throw new AppError('كوبون غير صالح', 400);
+    // one cart, one currency (a mixed cart cannot be discounted, let alone paid); a fixed-amount coupon is worth its own currency only
+    for (const service of services) assertSameCurrency(service.currency, services[0]?.currency, 'سلة الطلب');
+    if (coupon.discountType !== 'percentage') assertSameCurrency(coupon.currency, services[0]?.currency, 'الكوبون');
     const eligibleIds = new Set(coupon.services.map(item => item.serviceId));
     const excludedIds = new Set(coupon.excludedServiceIds ?? []);
     const inScopeServices = coupon.services.length ? services.filter(service => eligibleIds.has(service.id)) : services;

@@ -4,6 +4,7 @@ import { prisma } from '../config/db';
 import { AppError, fieldError } from '../utils/app-error';
 import { accountAuditLogService } from './account-logs.service';
 import { disconnectUserSockets } from '../utils/socket-registry';
+import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
 
 // Implementation Batch 3, Part B — replaces the fully mock sa-brokers
 // frontend page with real AffiliateProfile/Referral/CommissionLog/
@@ -31,19 +32,21 @@ const ALLOWED_STATUSES = new Set<UserStatus>([
 
 function computeAggregates(affiliate: {
   referrals: { status: string }[];
-  commissionLogs: { status: string; amount: number }[];
+  commissionLogs: { status: string; amount: number; currency?: string }[];
   marketingChannels: unknown[];
 }) {
   const totalReferrals = affiliate.referrals.length;
   const convertedReferrals = affiliate.referrals.filter((r) => r.status === 'CONVERTED').length;
   const conversionRate = totalReferrals > 0 ? Math.round((convertedReferrals / totalReferrals) * 1000) / 10 : 0;
 
-  const paidCommission = affiliate.commissionLogs
-    .filter((c) => c.status === 'APPROVED' || c.status === 'PAID')
-    .reduce((sum, c) => sum + c.amount, 0);
-  const pendingCommission = affiliate.commissionLogs
-    .filter((c) => c.status === 'PENDING')
-    .reduce((sum, c) => sum + c.amount, 0);
+  // USD figures; *By lists every currency on its own (commissions of different currencies are never added)
+  const paidLogs = affiliate.commissionLogs.filter((c) => c.status === 'APPROVED' || c.status === 'PAID');
+  const pendingLogs = affiliate.commissionLogs.filter((c) => c.status === 'PENDING');
+  const inUsd = (list: typeof paidLogs) => list.filter((c) => ((c as { currency?: string }).currency ?? LEGACY_CURRENCY) === LEGACY_CURRENCY).reduce((sum, c) => sum + c.amount, 0);
+  const paidCommission = inUsd(paidLogs);
+  const pendingCommission = inUsd(pendingLogs);
+  const paidCommissionBy = sumByCurrency(paidLogs, (c) => (c as { currency?: string }).currency, (c) => c.amount);
+  const pendingCommissionBy = sumByCurrency(pendingLogs, (c) => (c as { currency?: string }).currency, (c) => c.amount);
 
   return {
     totalReferrals,
@@ -51,6 +54,8 @@ function computeAggregates(affiliate: {
     conversionRate,
     paidCommission,
     pendingCommission,
+    paidCommissionBy,
+    pendingCommissionBy,
     channelCount: affiliate.marketingChannels.length,
   };
 }
@@ -98,7 +103,7 @@ export class AdminBrokersService {
           id: true,
           user: { select: { id: true, firstName: true, lastName: true, email: true, status: true, createdAt: true } },
           referrals: { select: { status: true } },
-          commissionLogs: { select: { status: true, amount: true } },
+          commissionLogs: { select: { status: true, amount: true, currency: true } },
           marketingChannels: { select: { id: true } },
         },
       }),
@@ -142,7 +147,7 @@ export class AdminBrokersService {
         referralSlug: true,
         user: { select: { id: true, firstName: true, lastName: true, email: true, status: true, createdAt: true } },
         referrals: { select: { status: true } },
-        commissionLogs: { select: { status: true, amount: true } },
+        commissionLogs: { select: { status: true, amount: true, currency: true } },
         marketingChannels: { select: { platform: true, handle: true, url: true } },
         channelMetrics: { select: { channel: true, visitors: true, clients: true, conversionPercentage: true } },
         customLinks: { select: { channelName: true, utmSource: true, customSlug: true, createdAt: true } },

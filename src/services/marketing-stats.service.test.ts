@@ -62,7 +62,7 @@ test('coupon getStats: totals, weekly trend and paginated orders for any owned c
   const calls: any[] = [];
   const { providerCouponService } = await load(t, 'provider-coupon', {
     coupon: { findFirst: async ({ where }: any) => (where.id === 'c1' && where.providerId === 'p1' ? { id: 'c1', maxUses: 50 } : null) },
-    couponRedemption: { findMany: redemptionFindMany(couponRows, calls) }
+    couponRedemption: { findMany: redemptionFindMany(couponRows, calls), count: async () => 0 }
   });
 
   const stats = await providerCouponService.getStats('p1', 'c1', { page: 1, pageSize: 2 }, NOW);
@@ -88,7 +88,7 @@ test('coupon getStats: totals, weekly trend and paginated orders for any owned c
   // Every redemption query is scoped to this coupon and excludes CANCELLED orders.
   for (const c of calls) {
     assert.equal(c.where.couponId, 'c1');
-    assert.deepEqual(c.where.order, { status: { not: 'CANCELLED' } });
+    assert.deepEqual(c.where.order, { status: { not: 'CANCELLED' }, currency: 'USD' }); // the USD view; other-currency uses are counted apart (otherCurrencyUses)
   }
 });
 
@@ -103,7 +103,7 @@ test('coupon getStats: a coupon of another provider (or unknown id) is 404', asy
 test('coupon getStats: unused coupon returns zeros and null averages', async (t) => {
   const { providerCouponService } = await load(t, 'provider-coupon', {
     coupon: { findFirst: async () => ({ id: 'c1', maxUses: null }) },
-    couponRedemption: { findMany: async () => [] }
+    couponRedemption: { findMany: async () => [], count: async () => 0 }
   });
   const stats = await providerCouponService.getStats('p1', 'c1', { page: 1, pageSize: 10 }, NOW);
   assert.equal(stats.totals.usageCount, 0);
@@ -130,7 +130,7 @@ test('offer getStats (BUNDLE): totals, discounted-model revenue and conversion w
   const orderItemCalls: any[] = [];
   const { providerSpecialOfferService } = await load(t, 'provider-special-offer', {
     specialOffer: { findFirst: async ({ where }: any) => (where.id === 'b1' && where.providerId === 'p1' ? bundleOffer : null) },
-    specialOfferRedemption: { findMany: redemptionFindMany(offerRows, calls) },
+    specialOfferRedemption: { findMany: redemptionFindMany(offerRows, calls), count: async () => 0 },
     orderItem: {
       findMany: async (args: any) => {
         orderItemCalls.push(args);
@@ -174,7 +174,7 @@ test('offer getStats (DIRECT_DISCOUNT): no bundle block, target model is the dis
   const calls: any[] = [];
   const { providerSpecialOfferService } = await load(t, 'provider-special-offer', {
     specialOffer: { findFirst: async () => ({ ...bundleOffer, id: 'd1', type: 'DIRECT_DISCOUNT', primaryServiceId: null, beneficiaryServiceId: null, targetServiceId: 'svc-z', validityDays: null }) },
-    specialOfferRedemption: { findMany: redemptionFindMany([], calls) },
+    specialOfferRedemption: { findMany: redemptionFindMany([], calls), count: async () => 0 },
     orderItem: { findMany: async () => { throw new Error('conversion is bundle-only'); } }
   });
   const stats = await providerSpecialOfferService.getStats('p1', 'd1', { page: 1, pageSize: 10 }, NOW);
@@ -196,6 +196,7 @@ test('offer getSummary: bundle extra revenue sums distinct order totals of BUNDL
   let where: any;
   const { providerSpecialOfferService } = await load(t, 'provider-special-offer', {
     specialOfferRedemption: {
+      count: async () => 0,
       findMany: async (args: any) => {
         where = args.where;
         return [

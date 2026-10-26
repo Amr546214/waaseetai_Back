@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { NOT_CANCELLED, StatsPaging, customerName, distinctOrderRevenue, pageMeta, round2, weeklyTrend } from './marketing-stats.util';
 import { platformCurrency } from './platform-currency';
+import { LEGACY_CURRENCY } from '../utils/currency';
 
 const providerCouponInclude = { services: { select: { serviceId: true } } } as const;
 
@@ -192,7 +193,9 @@ export class ProviderCouponService {
     const coupon = await prisma.coupon.findFirst({ where: { id, providerId }, select: { id: true, maxUses: true } });
     if (!coupon) throw new AppError('الكوبون غير موجود', 404);
 
-    const where = { couponId: id, order: NOT_CANCELLED };
+    // every figure below is the USD view (a redemption on an order in another currency is never added in: it is counted apart as otherCurrencyUses)
+    const where = { couponId: id, order: { ...NOT_CANCELLED, currency: LEGACY_CURRENCY } };
+    const otherCurrencyUses = await prisma.couponRedemption.count({ where: { couponId: id, order: { ...NOT_CANCELLED, currency: { not: LEGACY_CURRENCY } } } });
     const [all, page] = await Promise.all([
       prisma.couponRedemption.findMany({
         where,
@@ -218,6 +221,8 @@ export class ProviderCouponService {
 
     return {
       id: coupon.id,
+      currency: LEGACY_CURRENCY,
+      otherCurrencyUses,
       totals: {
         usageCount: all.length,
         maxUses: coupon.maxUses ?? null,

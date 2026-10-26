@@ -26,15 +26,18 @@ export async function currencyReadiness(db: typeof defaultPrisma = defaultPrisma
 	// the ledger tables had a stale 'SAR' default: a SAR label that no SAR rail produced is a LABEL error, and base-currency totals must not be built on unverified labels
 	const stale = await unverifiedLedgerLabels(db);
 	if (stale > 0) blockers.push({ code: 'LEDGER_CURRENCY_LABELS_UNVERIFIED', message: `يوجد ${stale} سجل مالي بعملة غير USD (سجلات المحفظة/السحب/العمولة). تحقق منها بـ scripts/currency-evidence-probe.sql واعتمد تصحيحها (scripts/currency-label-correction.sql) قبل أي تغيير للعملة الأساسية.` });
-	if (AGGREGATIONS_STILL_CURRENCY_BLIND.length) blockers.push({ code: 'AGGREGATIONS_NOT_PER_CURRENCY', message: `تجميعات لم تُفصل بالعملة بعد: ${AGGREGATIONS_STILL_CURRENCY_BLIND.join('، ')}.` });
+	for (const b of OPEN_CURRENCY_WORK) blockers.push(b);
 	return { ready: blockers.length === 0, blockers };
 }
 
-/** Aggregations that already separate currencies (admin finance overview; escrow-based dashboard figures) are not listed. Each one still listed shrinks only when it is converted AND tested. */
-export const AGGREGATIONS_STILL_CURRENCY_BLIND = [
-	'ملخص المشرف/التحليلات (admin-analytics)', 'لوحة العميل/مقدم الخدمة (dashboard.service)', 'تقارير مقدم الخدمة والعميل (provider/client-reports)',
-	'محفظة مقدم الخدمة (provider-finance)', 'محفظة الوسيط وملخصه (marketer-wallet / marketer-overview)', 'مجاميع السحب (withdrawal.service)', 'عمليات الإدارة (admin-operations)',
-] as const;
+/**
+ * Work that is NOT finished and therefore blocks changing the base currency. Server aggregations, exports, e-mails, notifications and audit text are per currency now (tests: currency-infrastructure,
+ * wallet-ledger, pg-sar-money-paths, admin-d2.finance, admin-d1.services...). What remains is the screens: many still print a hand-typed "$" / "دولار" next to an amount instead of the record's
+ * currency. The FE ratchet (core/utils/currency-literals.baseline.json) lists every file and can only shrink; this entry leaves only when that baseline is empty.
+ */
+export const OPEN_CURRENCY_WORK: CurrencyBlocker[] = [
+	{ code: 'UI_TYPED_CURRENCY', message: 'ما زالت شاشات تكتب «$» أو «دولار» يدويًا بجانب مبلغ بدل عملة السجل (القائمة في currency-literals.baseline.json بالواجهة وتنقص فقط)؛ لا يُغيَّر الأساس قبل أن تصبح فارغة.' },
+];
 
 async function tableExists(db: typeof defaultPrisma, name: string): Promise<boolean> {
 	try { return (await db.$queryRaw<Array<{ n: string }>>`SELECT table_name AS n FROM information_schema.tables WHERE table_name = ${name} AND table_schema = 'public'`).length > 0; } catch { return false; }

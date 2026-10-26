@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { specialOfferShapeIssues } from '../dtos/special-offer.dto';
 import { NOT_CANCELLED, StatsPaging, customerName, distinctOrderRevenue, pageMeta, round2, weeklyTrend } from './marketing-stats.util';
+import { LEGACY_CURRENCY } from '../utils/currency';
 
 // Phase 6 — special offers. Structure deliberately mirrors
 // provider-coupon.service.ts, including the company approval workflow.
@@ -206,7 +207,9 @@ export class ProviderSpecialOfferService {
     // If that service was deleted (FK SetNull) nothing can match: '' is never a uuid.
     const itemsOfDiscounted = { where: { serviceId: discountedServiceId ?? '' }, select: { serviceId: true, title: true, price: true } };
 
-    const where = { offerId: id, order: NOT_CANCELLED };
+    // every figure below is the USD view (a redemption on an order in another currency is never added in: it is counted apart as otherCurrencyUses)
+    const where = { offerId: id, order: { ...NOT_CANCELLED, currency: LEGACY_CURRENCY } };
+    const otherCurrencyUses = await prisma.specialOfferRedemption.count({ where: { offerId: id, order: { ...NOT_CANCELLED, currency: { not: LEGACY_CURRENCY } } } });
     const [all, page] = await Promise.all([
       prisma.specialOfferRedemption.findMany({
         where,
@@ -241,6 +244,8 @@ export class ProviderSpecialOfferService {
     const result: any = {
       id: offer.id,
       type: offer.type,
+      currency: LEGACY_CURRENCY,
+      otherCurrencyUses,
       totals: {
         usageCount: all.length,
         discountedValue: round2(all.reduce((a, r) => a + r.amount, 0)),
