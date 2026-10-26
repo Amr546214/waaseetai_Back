@@ -1,5 +1,6 @@
 import { startChatDigestScheduler } from './services/chat-digest.service';
 import express, { Request, Response, NextFunction } from 'express';
+import { maintenanceMiddleware } from './middlewares/maintenance.middleware';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -284,7 +285,6 @@ import adminTeamRoutes, { adminInvitePublicRouter } from './routes/admin-team.ro
 import adminMessagesRoutes from './routes/admin-messages.routes';
 import adminSystemSettingsRoutes from './routes/admin-system-settings.routes';
 import adminFeePolicyRoutes from './routes/admin-fee-policy.routes';
-import { maintenanceMiddleware } from './middlewares/maintenance.middleware';
 import { systemSettingsService } from './services/system-settings.service';
 import aiAssessmentRoutes from './routes/ai-assessment.routes';
 import accountManagementRoutes from './routes/account-management.routes';
