@@ -20,7 +20,7 @@ test('the deposit, contract-signature and password-reset mails carry the configu
 	const { setBrandName } = await import('./brand'); const t = await import('./mail.transporter');
 	setBrandName('منصة اختبار');
 	try {
-		const dep = t.getDepositConfirmationTemplate('مشروع', 100, 'SAR'); const sig = t.getProviderContractSignatureTemplate('مشروع', 'عميل', 250.5, 'USD'); const reset = t.getPasswordResetEmailTemplate?.('1234', 'اسم') ?? '';
+		const dep = t.getDepositConfirmationTemplate('مشروع', 100, 'SAR'); const sig = t.getProviderContractSignatureTemplate('مشروع', 'عميل', 250.5, 'USD'); const reset = t.getPasswordResetEmailTemplate('اسم', '1234');
 		for (const html of [dep, sig, reset].filter(Boolean)) { assert.match(html, /منصة اختبار/); assert.doesNotMatch(html, /Waseet AI|وسيط الذكاء الاصطناعي للتقنية/); }
 		assert.match(dep, /100\.00 SAR/); assert.match(sig, /250\.50 USD/); assert.doesNotMatch(dep, /100\.00 \$/);
 	} finally { setBrandName(''); }
