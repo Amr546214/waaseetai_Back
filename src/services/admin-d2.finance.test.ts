@@ -101,7 +101,7 @@ test('finance overview: totals and monthly series come from the aggregates / row
 	assert.equal(o.totals.escrowHeldAmount, 750);
 	assert.equal(o.totals.platformCommission, 60);
 	assert.equal(o.totals.paymentGatewayFees, 12.5);
-	assert.deepEqual(o.withdrawals.PENDING, { count: 1, amount: 80 });
+	assert.deepEqual(o.withdrawals.PENDING, { count: 1, amount: 80, amountByCurrency: { USD: 80 } });
 	assert.deepEqual(o.series.map((b: any) => b.month), ['2026-09', '2026-10']);
 	assert.equal(o.series[1].deposits, 100);
 	assert.equal(o.series[1].releasedGross, 200);
@@ -115,7 +115,7 @@ test('projects list / detail: escrow status and held amount from the DB, 404 for
 	const project = { id: 'p1', title: 'متجر', status: 'IN_PROGRESS', createdAt: new Date(), deliveryDays: 30, client: { id: 'c', firstName: 'A', lastName: 'B' }, provider: { id: 'v', firstName: 'C', lastName: 'D' }, escrow: { status: 'HELD', amount: 100, releasedAmount: 25, platformCommissionAmount: 0, providerNetReleasedAmount: 0 }, contract: { id: 'k1', price: 100, status: 'ACTIVE', stages: [{ status: 'APPROVED' }, { status: 'PENDING' }] } };
 	const prisma: any = {
 		project: { findMany: async () => [project], count: async () => 1, groupBy: async () => [{ status: 'IN_PROGRESS', _count: { _all: 1 } }], findUnique: async ({ where }: any) => (where.id === 'p1' ? { ...project, description: 'd', specialty: 's', contract: { ...project.contract, durationDays: 30, signedAt: null, clientSignedAt: null, providerSignedAt: null, stages: [], amendments: [] } } : null) },
-		escrow: { aggregate: async () => ({ _count: { _all: 1 }, _sum: { amount: 100, releasedAmount: 25 } }) },
+		escrow: { groupBy: async () => [{ currency: 'USD', _count: { _all: 1 }, _sum: { amount: 100, releasedAmount: 25 } }, { currency: 'SAR', _count: { _all: 1 }, _sum: { amount: 40, releasedAmount: 0 } }] },
 		dispute: { findMany: async () => [{ id: 'd1', status: 'OPEN' }], findFirst: async () => null }
 	};
 	t.mock.module('../config/db', { namedExports: { prisma } });
@@ -125,7 +125,7 @@ test('projects list / detail: escrow status and held amount from the DB, 404 for
 	assert.equal(list.items[0].escrow.status, 'HELD');
 	assert.equal(list.items[0].escrow.heldAmount, 75);
 	assert.equal(list.items[0].progress.percent, 50);
-	assert.equal(list.kpis.escrowHeldTotal, 75);
+	assert.equal(list.kpis.escrowHeldTotal, 75, 'the headline is the USD figure'); assert.deepEqual(list.kpis.escrowHeldTotalBy, { USD: 75, SAR: 40 }, 'SAR is listed on its own, never added'); assert.equal(list.kpis.escrowHeldCount, 2);
 	const detail = await adminOperationsService.getProject('p1');
 	assert.equal(detail.openDisputes, 1);
 	assert.equal(detail.adminSettled, null, 'not settled: no settlement label');

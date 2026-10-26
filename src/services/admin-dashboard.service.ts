@@ -2,7 +2,7 @@ import { AccountType, AccreditationStatus, DisputeStatus, EscrowStatus, KYCStatu
 import { platformZone, startOfMonthInZone, startOfPreviousMonthInZone } from '../utils/platform-time';
 import { prisma } from '../config/db';
 import { deliveryCompletedProject } from './settlement-state.service';
-import { LEGACY_CURRENCY } from '../utils/currency';
+import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
 
 // Admin dashboard aggregates. Every number comes from a COUNT / SUM / GROUP over the real tables — nothing is a fixed figure, a percentage with no
 // base, or a placeholder. With no rows every figure is 0 and every list is []. Revenue = the platform commission recorded on escrows
@@ -65,7 +65,7 @@ export class AdminDashboardService {
 			prisma.dispute.count({ where: { status: { in: OPEN_DISPUTES }, createdAt: { lt: sevenDaysAgo } } }),
 			prisma.supportTicket.count({ where: { status: { in: OPEN_TICKETS } } }),
 			prisma.withdrawal.count({ where: { status: WithdrawalStatus.PENDING } }),
-			prisma.withdrawal.aggregate({ _sum: { amount: true }, where: { status: WithdrawalStatus.PENDING, currency: LEGACY_CURRENCY } }),
+			prisma.withdrawal.groupBy({ by: ['currency'], _sum: { amount: true }, where: { status: WithdrawalStatus.PENDING } }),
 			prisma.profileModificationRequest.count({ where: { status: ModificationStatus.PENDING_HUMAN_REVIEW } }),
 			prisma.providerProfile.count({ where: { kycStatus: KYCStatus.PENDING } }),
 			prisma.clientOnboarding.count({ where: { status: OnboardingStatus.PENDING } }),
@@ -76,6 +76,7 @@ export class AdminDashboardService {
 			prisma.clientOnboarding.count({ where: { status: OnboardingStatus.PENDING, createdAt: { lt: day } } })
 		]);
 
+		const pendingByCurrency = sumByCurrency(pendingWithdrawalsAmount as any[], (g: any) => g.currency, (g: any) => g._sum.amount);
 		const kycPending = providerKyc + clientKyc;
 		const queues = [
 			{ key: 'modificationRequests', label: 'طلبات تعديل معلقة', count: modificationRequests, link: `${ADMIN_ROUTE}/modification-requests` },
@@ -103,7 +104,7 @@ export class AdminDashboardService {
 				revenue: { platformCommissionTotal: round2(num(commissionTotal._sum.platformCommissionAmount)), platformCommissionThisMonth: round2(num(commissionMonth._sum.platformCommissionAmount)), escrowHeld: round2(num(escrowHeld._sum.amount)) },
 				disputes: { open: openDisputes, openOver7Days: disputesOver7Days },
 				tickets: { open: openTickets },
-				withdrawals: { pending: pendingWithdrawals, pendingAmount: round2(num(pendingWithdrawalsAmount._sum.amount)) }
+				withdrawals: { pending: pendingWithdrawals, pendingAmount: round2(pendingByCurrency[LEGACY_CURRENCY] ?? 0), pendingAmountBy: pendingByCurrency }
 			},
 			queues,
 			alerts

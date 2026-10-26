@@ -1,5 +1,6 @@
 import { prisma } from '../config/db';
 import { SETTLED_DISPUTE_WHERE } from './settlement-state.service';
+import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
 
 // Batch (client reports real-data fix): the client-overview "تقاريري" page was
 // entirely hardcoded markup (no data binding at all). This service replaces
@@ -77,7 +78,8 @@ export class ClientReportsService {
 				orderBy: { createdAt: 'desc' },
 				take: 50
 			}),
-			prisma.escrow.aggregate({
+			prisma.escrow.groupBy({
+				by: ['currency'],
 				where: { project: { clientId: userId }, status: 'HELD' },
 				_sum: { amount: true }
 			})
@@ -88,7 +90,7 @@ export class ClientReportsService {
 		type OrderRow = {
 			id: string; title: string; specialty: string; budget: number;
 			proposalsCount: number; status: string; bucket: ReturnType<typeof statusBucket>;
-			createdAt: Date; accepted: boolean;
+			createdAt: Date; accepted: boolean; currency: string;
 		};
 
 		const orders: OrderRow[] = clientRequests.map((r: any) => ({
@@ -98,6 +100,7 @@ export class ClientReportsService {
 			budget: effectiveBudget(r),
 			proposalsCount: r.proposals?.length ?? r.proposalsCount ?? 0,
 			status: r.status,
+			currency: r.currency ?? LEGACY_CURRENCY,
 			bucket: statusBucket(r.status),
 			createdAt: r.createdAt,
 			accepted: (r.proposals || []).some((p: any) => p.status === 'ACCEPTED') || r.status === 'COMPLETED' || r.status === 'IN_PROGRESS'
@@ -112,6 +115,7 @@ export class ClientReportsService {
 				budget: effectiveBudget(p),
 				proposalsCount: p.proposalsCount ?? p.proposals?.length ?? 0,
 				status: p.status,
+				currency: p.currency ?? LEGACY_CURRENCY,
 				bucket: statusBucket(p.status),
 				createdAt: p.createdAt,
 				accepted: !!p.providerId
@@ -126,7 +130,9 @@ export class ClientReportsService {
 		const completedProjects = orders.filter(o => o.bucket === 'مكتمل');
 		const completedThisMonth = completedProjects.filter(o => o.createdAt >= monthStart).length;
 
-		const totalSpent = completedProjects.reduce((sum, o) => sum + o.budget, 0);
+		// per currency: totalSpent is the USD figure, totalSpentBy lists every currency (budgets of different currencies are never added)
+		const totalSpentBy = sumByCurrency(completedProjects, o => o.currency, o => o.budget);
+		const totalSpent = totalSpentBy[LEGACY_CURRENCY] ?? 0;
 
 		const avgRating = reviews.length
 			? Math.round((reviews.reduce((s, r) => s + r.rating, 0) / reviews.length) * 10) / 10
@@ -169,7 +175,8 @@ export class ClientReportsService {
 		const completedOnTime = projectDurations.filter(d => d.onTime).length;
 
 		// ── Finance tab ─────────────────────────────────────────────────────
-		const escrowHeld = escrowSum._sum.amount || 0;
+		const escrowHeldBy = sumByCurrency(escrowSum, (r: any) => r.currency, (r: any) => r._sum.amount);
+		const escrowHeld = escrowHeldBy[LEGACY_CURRENCY] ?? 0;
 
 		// ── Disputes tab ────────────────────────────────────────────────────
 		const disputeCounts = {
@@ -186,6 +193,7 @@ export class ClientReportsService {
 				completedProjectsCount: completedProjects.length,
 				completedDeltaThisMonth: completedThisMonth,
 				totalSpent,
+				totalSpentBy,
 				avgRating,
 				// additive: lets callers tell "no reviews" (avgRating 0) from a real rating, so AI features never treat 0 as data.
 				reviewsCount: reviews.length,
@@ -193,7 +201,7 @@ export class ClientReportsService {
 			},
 			orders: {
 				items: orders.map(o => ({
-					id: o.id, title: o.title, specialty: o.specialty, budget: o.budget,
+					id: o.id, title: o.title, specialty: o.specialty, budget: o.budget, currency: o.currency,
 					proposalsCount: o.proposalsCount, status: o.status, bucket: o.bucket, createdAt: o.createdAt
 				})),
 				statusDistribution,
@@ -217,6 +225,7 @@ export class ClientReportsService {
 			finance: {
 				totalSpent,
 				escrowHeld,
+				escrowHeldBy,
 				transactions: walletTransactions
 			},
 			disputes: {

@@ -144,16 +144,13 @@ export class AdminUsersService {
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
 
-    const [usersThisMonth, usersPrevMonth, activeThisMonth, newThisWeek, newPrevWeek, gmvAggregation] = await Promise.all([
+    const [usersThisMonth, usersPrevMonth, activeThisMonth, newThisWeek, newPrevWeek] = await Promise.all([
       prisma.user.count({ where: { createdAt: { gte: thirtyDaysAgo }, ...nonSuperAdminWhere } }),
       prisma.user.count({ where: { createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo }, ...nonSuperAdminWhere } }),
       prisma.user.count({ where: { status: UserStatus.ACTIVE, lastActiveAt: { gte: thirtyDaysAgo }, ...nonSuperAdminWhere } }),
       prisma.user.count({ where: { createdAt: { gte: sevenDaysAgo }, ...nonSuperAdminWhere } }),
-      prisma.user.count({ where: { createdAt: { gte: fourteenDaysAgo, lt: sevenDaysAgo }, ...nonSuperAdminWhere } }),
-      prisma.user.aggregate({ _sum: { totalGmvAmount: true }, where: nonSuperAdminWhere })
+      prisma.user.count({ where: { createdAt: { gte: fourteenDaysAgo, lt: sevenDaysAgo }, ...nonSuperAdminWhere } })
     ]);
-
-    const totalGmv = Number(gmvAggregation._sum.totalGmvAmount || 0);
 
     const monthlyGrowth = usersPrevMonth > 0
       ? (((usersThisMonth - usersPrevMonth) / usersPrevMonth) * 100).toFixed(1)
@@ -206,7 +203,7 @@ export class AdminUsersService {
         count: newThisWeek,
         growth: `${Number(weeklyGrowth) >= 0 ? '+' : ''}${weeklyGrowth}% من الأسبوع الماضي`
       },
-      totalGmvAmount: totalGmv,
+      totalGmvAmount: null, // not tracked: the column is never written (see the per-user note); a per-currency figure needs a real source
       tabCounts
     };
   }
@@ -351,7 +348,8 @@ export class AdminUsersService {
       const av = name ? name.charAt(0).toUpperCase() : u.email.charAt(0).toUpperCase();
       const avBg = AVATAR_GRADIENTS[index % AVATAR_GRADIENTS.length];
 
-      const formattedFinancial = Number(u.totalGmvAmount || 0).toLocaleString('en-US');
+      // users.totalGmvAmount has NO writer anywhere (it is always its default 0) and carries no currency: showing it would be a misleading zero, so spending / revenue are unknown (null -> the UI shows a dash)
+      const formattedFinancial: string | null = null;
 
       // Extract real specialty list if provider profile exists
       const specialtiesList = u.providerProfile?.providerSpecialties
@@ -584,7 +582,7 @@ export class AdminUsersService {
       topProviders: top.map((t: any) => ({
         userId: t.provider?.id, name: `${t.provider?.firstName ?? ''} ${t.provider?.lastName ?? ''}`.trim() || t.provider?.email, specialty: t.provider?.providerProfile?.headline ?? null,
         level: t.currentLevelIndex, levelName: PROVIDER_LEVELS[Math.min(15, Math.max(1, t.currentLevelIndex)) - 1].name, points: t.points, rating: t.avgRating, completedProjects: t.completedProjects,
-        revenue: Number(t.provider?.totalGmvAmount ?? 0), memberSince: t.provider?.createdAt ?? null
+        revenue: null, memberSince: t.provider?.createdAt ?? null
       }))
     };
   }

@@ -8,6 +8,7 @@ import { commissionOn, isV2Escrow, splitRelease } from '../utils/escrow-commissi
 // Commission: a fee-policy-v2 escrow replays the same cumulative split the release uses (splitRelease), so released stages show exactly what was kept; an unreleased stage shows
 // the expected figure at the snapshotted rate (`estimated: true`); a legacy escrow has no commission (released gross).
 import { round2 } from '../utils/money';
+import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
 
 type Row = { contract: any; stage: any; delivery: any; escrow: any; split: { gross: number; commission: number; net: number; estimated: boolean } | null };
 
@@ -37,7 +38,7 @@ export const buildProviderInvoice = ({ contract, stage, delivery, split }: Row) 
     tax: 0,
     status,
     paymentDate: status === 'paid' ? (stage.approvedAt || delivery.reviewedAt || null) : null,
-    currency: 'USD'
+    currency: (contract.currency ?? LEGACY_CURRENCY) as string // the contract's own currency
   };
 };
 
@@ -81,15 +82,20 @@ export class ProviderInvoicesService {
     const invoices = contracts.flatMap(invoicesOf).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
     const paid = invoices.filter((i: any) => i.status === 'paid');
     const due = invoices.filter((i: any) => i.status === 'due');
+    const usd = (list: any[]) => list.filter((i: any) => i.currency === LEGACY_CURRENCY);
     return {
       summary: {
         totalCount: invoices.length,
         paidCount: paid.length,
         dueCount: due.length,
-        paidNetTotal: round2(paid.reduce((s: number, i: any) => s + i.net, 0)),
-        dueNetTotal: round2(due.reduce((s: number, i: any) => s + i.net, 0)),
-        platformCommissionTotal: round2(paid.reduce((s: number, i: any) => s + i.platformCommission, 0)),
-        currency: 'USD'
+        // the totals are the USD ones; *By lists every currency on its own (invoices of different currencies are never added)
+        paidNetTotal: round2(usd(paid).reduce((s: number, i: any) => s + i.net, 0)),
+        dueNetTotal: round2(usd(due).reduce((s: number, i: any) => s + i.net, 0)),
+        platformCommissionTotal: round2(usd(paid).reduce((s: number, i: any) => s + i.platformCommission, 0)),
+        paidNetTotalBy: sumByCurrency(paid, (i: any) => i.currency, (i: any) => i.net),
+        dueNetTotalBy: sumByCurrency(due, (i: any) => i.currency, (i: any) => i.net),
+        platformCommissionTotalBy: sumByCurrency(paid, (i: any) => i.currency, (i: any) => i.platformCommission),
+        currency: LEGACY_CURRENCY
       },
       invoices
     };

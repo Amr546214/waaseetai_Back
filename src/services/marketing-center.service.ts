@@ -1,6 +1,7 @@
 import { AccountType, OrderStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
+import { LEGACY_CURRENCY } from '../utils/currency';
 
 // Phase 7 — مركز التسويق (Marketing Center) aggregation.
 // Every number here is derived from the real Coupon / CouponRedemption /
@@ -16,6 +17,8 @@ import { AppError } from '../utils/app-error';
 const TREND_MONTHS = 6;
 const TOP_TOOLS_LIMIT = 10;
 const NOT_CANCELLED = { status: { not: OrderStatus.CANCELLED } };
+/** the money figures here (discounted value, revenue, caps) are USD: redemptions on an order in another currency are never added in - they are counted separately (otherCurrencyRedemptions) */
+const USD_ORDER = { ...NOT_CANCELLED, currency: LEGACY_CURRENCY };
 
 export type ToolStatus = 'ACTIVE' | 'PAUSED' | 'EXPIRED' | 'PENDING' | 'REJECTED';
 
@@ -58,9 +61,9 @@ export class MarketingCenterService {
     const windowStart = monthStart(y, m - (TREND_MONTHS - 1));
 
     const assigneeSelect = { select: { id: true, name: true, avatarUrl: true } } as const;
-    const windowWhere = { createdAt: { gte: windowStart, lt: nextMonthStart }, order: NOT_CANCELLED };
+    const windowWhere = { createdAt: { gte: windowStart, lt: nextMonthStart }, order: USD_ORDER };
 
-    const [coupons, offers, couponWindow, offerWindow, couponGroups, offerGroups, teamMembers] = await Promise.all([
+    const [coupons, offers, couponWindow, offerWindow, couponGroups, offerGroups, teamMembers, otherCouponRedemptions, otherOfferRedemptions] = await Promise.all([
       prisma.coupon.findMany({
         where: { providerId },
         select: { id: true, code: true, active: true, expiresAt: true, approvalStatus: true, usedCount: true, maxUses: true, createdAt: true, assignedToTeamMemberId: true, assignedToTeamMember: assigneeSelect }
@@ -79,17 +82,19 @@ export class MarketingCenterService {
       }),
       prisma.couponRedemption.groupBy({
         by: ['couponId'],
-        where: { coupon: { providerId }, order: NOT_CANCELLED },
+        where: { coupon: { providerId }, order: USD_ORDER },
         _count: { _all: true }, _sum: { amount: true }, _max: { createdAt: true }
       }),
       prisma.specialOfferRedemption.groupBy({
         by: ['offerId'],
-        where: { offer: { providerId }, order: NOT_CANCELLED },
+        where: { offer: { providerId }, order: USD_ORDER },
         _count: { _all: true }, _sum: { amount: true }, _max: { createdAt: true }
       }),
       isCompany
         ? prisma.companyTeamMember.findMany({ where: { companyOwnerId: providerId }, select: { id: true, name: true, avatarUrl: true, jobTitle: true, status: true }, orderBy: { createdAt: 'asc' } })
-        : Promise.resolve([])
+        : Promise.resolve([]),
+      prisma.couponRedemption.count({ where: { coupon: { providerId }, order: { ...NOT_CANCELLED, currency: { not: LEGACY_CURRENCY } } } }),
+      prisma.specialOfferRedemption.count({ where: { offer: { providerId }, order: { ...NOT_CANCELLED, currency: { not: LEGACY_CURRENCY } } } })
     ]);
 
     // --- Monthly buckets (trend + this/previous month KPIs) ---------------
@@ -158,6 +163,8 @@ export class MarketingCenterService {
         discountedValue: kpi('discountedValue'),
         extraRevenue: kpi('revenue')
       },
+      currency: LEGACY_CURRENCY,
+      otherCurrencyRedemptions: (otherCouponRedemptions ?? 0) + (otherOfferRedemptions ?? 0),
       monthlyTrend,
       toolSummaries: {
         coupons: summarize(tools.filter(t => t.kind === 'COUPON').map(t => t.status)),

@@ -2,6 +2,7 @@ import { LogCategory, LogStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError, fieldError } from '../utils/app-error';
 import { StatsPaging, customerName, pageMeta, round2 } from './marketing-stats.util';
+import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
 
 // Admin oversight of provider coupons + special offers. Coupons/offers are
 // CREATED by providers (provider-coupon.service.ts / provider-special-offer
@@ -70,11 +71,11 @@ export class AdminCouponsService {
     const [items, total, redemptionAgg] = await Promise.all([
       prisma.coupon.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (paging.page - 1) * paging.pageSize, take: paging.pageSize, include: couponInclude }),
       prisma.coupon.count({ where }),
-      prisma.couponRedemption.aggregate({ where: { order: { status: { not: 'CANCELLED' } } }, _sum: { amount: true }, _count: { _all: true } })
+      prisma.order.groupBy({ by: ['currency'], where: { status: { not: 'CANCELLED' }, couponRedemption: { isNot: null } }, _sum: { discount: true }, _count: { _all: true } })
     ]);
     return {
       items: items.map((c: any) => formatCoupon(c, now)),
-      summary: { totalRedemptions: redemptionAgg._count._all, totalDiscountGiven: round2(redemptionAgg._sum.amount ?? 0) },
+      summary: { totalRedemptions: redemptionAgg.reduce((n: number, g: any) => n + g._count._all, 0), totalDiscountGiven: round2(redemptionAgg.filter((g: any) => g.currency === LEGACY_CURRENCY).reduce((a: number, g: any) => a + (g._sum.discount ?? 0), 0)), totalDiscountGivenBy: sumByCurrency(redemptionAgg, (g: any) => g.currency, (g: any) => g._sum.discount), currency: LEGACY_CURRENCY },
       ...pageMeta(paging, total)
     };
   }

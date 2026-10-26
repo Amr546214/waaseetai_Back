@@ -11,6 +11,7 @@ import { levelInfo } from '../utils/level-info';
 import { logger } from '../config/logger';
 import { getClientLevelInfo } from './gamification.service';
 import { deliveryCompletedProject, adminSettlementFor } from './settlement-state.service';
+import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
 
 // Offers the client can act on: the same ones the request page lists, minus drafts and closed ones.
 const CLIENT_ACTIONABLE_PROPOSAL_STATUSES = ['PENDING', 'SUBMITTED', 'UNDER_NEGOTIATION'] as const;
@@ -110,7 +111,9 @@ export class DashboardService {
       });
 
       // 3. Total Escrow Amount (sum of all amounts in Escrow where status = HELD for client's projects)
-      const escrowResult = await prisma.escrow.aggregate({
+      // per currency: the headline figure is the USD one, every currency is also listed on its own (never one total across currencies)
+      const escrowResult = await prisma.escrow.groupBy({
+        by: ['currency'],
         where: {
           project: {
             clientId: userId
@@ -121,10 +124,12 @@ export class DashboardService {
           amount: true
         }
       });
-      const totalEscrowAmount = round2(escrowResult._sum.amount || 0);
+      const totalEscrowAmounts = sumByCurrency(escrowResult, r => r.currency, r => r._sum.amount);
+      const totalEscrowAmount = totalEscrowAmounts[LEGACY_CURRENCY] ?? 0;
 
       // 4. Total Spent (sum of budgets of all client's COMPLETED projects)
-      const spentResult = await prisma.project.aggregate({
+      const spentResult = await prisma.project.groupBy({
+        by: ['currency'],
         // budget of the projects completed BY DELIVERY (a settled project's budget is not what was spent: its real money is in the wallet / finance reports)
         where: deliveryCompletedProject({ clientId: userId }),
         _sum: {
@@ -132,7 +137,8 @@ export class DashboardService {
           budgetMax: true
         }
       });
-      const totalSpent = round2((spentResult._sum.budgetFixed || 0) + (spentResult._sum.budgetMax || 0));
+      const totalSpents = sumByCurrency(spentResult, r => r.currency, r => (r._sum.budgetFixed || 0) + (r._sum.budgetMax || 0));
+      const totalSpent = totalSpents[LEGACY_CURRENCY] ?? 0;
 
       // 5. Latest Projects (Top 3 recent projects)
       const latestProjectsRaw = await prisma.project.findMany({
@@ -336,6 +342,9 @@ export class DashboardService {
           newOffersCount,
           totalEscrowAmount,
           totalSpent,
+          // the same figures in every currency the client has (totalEscrowAmount / totalSpent above are the USD ones)
+          totalEscrowAmounts,
+          totalSpents,
           ...aiOfferRating,
           humanRating,
           profileCompletionPercent: clientProfileCompletion ?? clientDisplayFields.profileCompletionPercent,
@@ -392,7 +401,8 @@ export class DashboardService {
           where: { providerId: userId, status: 'PENDING' }
         }),
         // 3. Monthly Earnings (Completed projects in current month)
-        prisma.project.aggregate({
+        prisma.project.groupBy({
+          by: ['currency'],
           where: deliveryCompletedProject({ providerId: userId, updatedAt: { gte: firstDayOfMonth } }),
           _sum: { budgetFixed: true, budgetMax: true }
         }),
@@ -444,7 +454,8 @@ export class DashboardService {
         })
       ]);
 
-      const monthlyEarnings = round2((monthlyEarningsAgg._sum.budgetFixed || 0) + (monthlyEarningsAgg._sum.budgetMax || 0));
+      const monthlyEarningsBy = sumByCurrency(monthlyEarningsAgg, r => r.currency, r => (r._sum.budgetFixed || 0) + (r._sum.budgetMax || 0));
+      const monthlyEarnings = monthlyEarningsBy[LEGACY_CURRENCY] ?? 0;
 
       // Phase 3C: profileCompletionPercent comes from ProviderProfile, and
       // currentPoints/currentLevel/pointsToNextLevel come from the provider's
@@ -500,6 +511,7 @@ export class DashboardService {
           newOffersCount: pendingOffersCount,
           pendingOffersCount,
           monthlyEarnings,
+          monthlyEarningsBy,
           totalEscrowAmount: 0, // Escrow calculation is currently omitted for provider
           totalSpent: 0,
           aiRating: 0,

@@ -5,6 +5,7 @@ import { heldEscrowAmount } from './dispute.service';
 import { adminAudit } from './admin-audit.service';
 import { computeLifecycle, listLifecycles, settlementDistributionOf } from './project-lifecycle.service';
 import { adminSettlementFor, adminSettledView, settlementsByProject, stageDisplayStatus, SETTLED_LABEL_AR, SETTLED_DISPUTE_WHERE } from './settlement-state.service';
+import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
 
 const settledProjectWhere = { disputes: { some: SETTLED_DISPUTE_WHERE } } as const;
 
@@ -21,7 +22,7 @@ const USER_SELECT = { id: true, firstName: true, lastName: true, email: true } a
 
 const escrowView = (escrow: any, price: number | null | undefined) =>
 	escrow
-		? { status: escrow.status as string, amount: escrow.amount as number, releasedAmount: escrow.releasedAmount as number, heldAmount: heldEscrowAmount(escrow, price), fundedAt: escrow.fundedAt ?? null, platformCommissionAmount: escrow.platformCommissionAmount ?? 0, providerNetReleasedAmount: escrow.providerNetReleasedAmount ?? 0, feePolicyVersion: escrow.feePolicyVersion ?? null }
+		? { status: escrow.status as string, currency: (escrow.currency ?? LEGACY_CURRENCY) as string, amount: escrow.amount as number, releasedAmount: escrow.releasedAmount as number, heldAmount: heldEscrowAmount(escrow, price), fundedAt: escrow.fundedAt ?? null, platformCommissionAmount: escrow.platformCommissionAmount ?? 0, providerNetReleasedAmount: escrow.providerNetReleasedAmount ?? 0, feePolicyVersion: escrow.feePolicyVersion ?? null }
 		: null;
 
 const progressOf = (stages: { status: string }[] | undefined) => {
@@ -48,12 +49,12 @@ export class AdminOperationsService {
 					id: true, title: true, status: true, createdAt: true, deliveryDays: true,
 					client: { select: USER_SELECT }, provider: { select: USER_SELECT },
 					escrow: true,
-					contract: { select: { id: true, price: true, status: true, stages: { select: { status: true } } } }
+					contract: { select: { id: true, price: true, currency: true, status: true, stages: { select: { status: true } } } }
 				}
 			}),
 			prisma.project.count({ where }),
 			prisma.project.groupBy({ by: ['status'], _count: { _all: true } }),
-			prisma.escrow.aggregate({ where: { status: 'HELD' }, _sum: { amount: true, releasedAmount: true }, _count: { _all: true } })
+			prisma.escrow.groupBy({ by: ['currency'], where: { status: 'HELD' }, _sum: { amount: true, releasedAmount: true }, _count: { _all: true } })
 		]);
 		const counts: Record<string, number> = {};
 		for (const g of grouped) counts[g.status] = g._count._all;
@@ -63,6 +64,7 @@ export class AdminOperationsService {
 		if (counts.COMPLETED !== undefined) counts.COMPLETED = Math.max(0, counts.COMPLETED - settledCompleted);
 		counts.CLOSED_BY_SETTLEMENT = settledCompleted;
 		const lifecycleMap = await listLifecycles(items.map(p => ({ projectId: p.id, contractStatus: p.contract?.status ?? null, price: p.contract?.price ?? null, escrow: p.escrow as any })), { db: prisma, audit: adminAudit });
+		const heldBy = sumByCurrency(activeEscrows, (g: any) => g.currency, (g: any) => (g._sum.amount ?? 0) - (g._sum.releasedAmount ?? 0));
 		const pages = Math.ceil(total / safeLimit);
 		return {
 			items: items.map(p => ({
@@ -70,12 +72,12 @@ export class AdminOperationsService {
 				lifecycle: lifecycleMap.get(p.id) ?? null,
 				id: p.id, title: p.title, status: p.status, createdAt: p.createdAt, deliveryDays: p.deliveryDays,
 				client: party(p.client), provider: party(p.provider),
-				contract: p.contract ? { id: p.contract.id, price: p.contract.price, status: p.contract.status } : null,
+				contract: p.contract ? { id: p.contract.id, price: p.contract.price, currency: p.contract.currency, status: p.contract.status } : null,
 				escrow: escrowView(p.escrow, p.contract?.price),
 				progress: progressOf(p.contract?.stages)
 			})),
 			counts,
-			kpis: { escrowHeldCount: activeEscrows._count._all, escrowHeldTotal: round2((activeEscrows._sum.amount ?? 0) - (activeEscrows._sum.releasedAmount ?? 0)), currency: 'USD' },
+			kpis: { escrowHeldCount: activeEscrows.reduce((n: number, g: any) => n + g._count._all, 0), escrowHeldTotal: heldBy[LEGACY_CURRENCY] ?? 0, escrowHeldTotalBy: heldBy, currency: LEGACY_CURRENCY },
 			pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages }
 		};
 	}
@@ -125,19 +127,20 @@ export class AdminOperationsService {
 		const [items, total, grouped, priceAgg] = await Promise.all([
 			prisma.contract.findMany({
 				where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit,
-				select: { id: true, projectId: true, price: true, durationDays: true, status: true, signedAt: true, createdAt: true, client: { select: USER_SELECT }, provider: { select: USER_SELECT }, project: { select: { title: true, escrow: true } } }
+				select: { id: true, projectId: true, price: true, currency: true, durationDays: true, status: true, signedAt: true, createdAt: true, client: { select: USER_SELECT }, provider: { select: USER_SELECT }, project: { select: { title: true, escrow: true } } }
 			}),
 			prisma.contract.count({ where }),
 			prisma.contract.groupBy({ by: ['status'], _count: { _all: true } }),
-			prisma.contract.aggregate({ where: { status: { in: [ContractStatus.ACTIVE, ContractStatus.DISPUTED] } }, _sum: { price: true } })
+			prisma.contract.groupBy({ by: ['currency'], where: { status: { in: [ContractStatus.ACTIVE, ContractStatus.DISPUTED] } }, _sum: { price: true } })
 		]);
+		const activeValueBy = sumByCurrency(priceAgg, (r: any) => r.currency, (r: any) => r._sum.price);
 		const counts: Record<string, number> = {};
 		for (const g of grouped) counts[g.status] = g._count._all;
 		const pages = Math.ceil(total / safeLimit);
 		return {
-			items: items.map(c => ({ id: c.id, projectId: c.projectId, projectTitle: c.project?.title ?? '', price: c.price, durationDays: c.durationDays, status: c.status, signedAt: c.signedAt, createdAt: c.createdAt, client: party(c.client), provider: party(c.provider), escrow: escrowView(c.project?.escrow, c.price) })),
+			items: items.map(c => ({ id: c.id, projectId: c.projectId, projectTitle: c.project?.title ?? '', price: c.price, currency: c.currency, durationDays: c.durationDays, status: c.status, signedAt: c.signedAt, createdAt: c.createdAt, client: party(c.client), provider: party(c.provider), escrow: escrowView(c.project?.escrow, c.price) })),
 			counts,
-			kpis: { activeContractsValue: round2(priceAgg._sum.price ?? 0), currency: 'USD' },
+			kpis: { activeContractsValue: activeValueBy[LEGACY_CURRENCY] ?? 0, activeContractsValueBy: activeValueBy, currency: LEGACY_CURRENCY },
 			pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages }
 		};
 	}

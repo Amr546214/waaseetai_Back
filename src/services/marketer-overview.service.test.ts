@@ -335,7 +335,7 @@ test('getSummary: getOrCreateProfile() selects AffiliateProfile scalars explicit
   // Nested CommissionLog relation must also be restricted — never the 6 new
   // scalars (referredUserId/sourceProjectId/sourceStageId/baseAmount/
   // appliedPercentage/level).
-  assert.deepEqual(args.select.commissionLogs.select, { amount: true });
+  assert.deepEqual(args.select.commissionLogs.select, { amount: true, currency: true }); // currency: a column CommissionLog has always had; amounts are never added across currencies
   assert.deepEqual(args.select.channelMetrics.select, { channel: true, visitors: true, conversionPercentage: true });
 });
 

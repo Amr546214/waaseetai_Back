@@ -4,6 +4,7 @@ import { IN_FLIGHT_WITHDRAWAL_STATUSES, SPENT_WITHDRAWAL_STATUSES, RESERVING_WIT
 import { round2, sumMoney } from '../utils/money';
 import { SETTLED_DISPUTE_WHERE } from './settlement-state.service';
 import { isV2Escrow, providerReleased, providerNetEntitlement, splitRelease } from '../utils/escrow-commission';
+import { LEGACY_CURRENCY } from '../utils/currency';
 
 export class ProviderFinanceService {
   /**
@@ -46,15 +47,23 @@ export class ProviderFinanceService {
       const price = escrow.project.contract?.price || escrow.amount;
       return isV2Escrow(escrow) && escrow.providerCommissionRateSnapshot != null ? providerNetEntitlement(price, escrow.providerCommissionRateSnapshot) : price;
     };
-    const availableBalance = sumMoney(escrows.map(escrow => providerReleased(escrow)));
-    const escrowBalance = sumMoney(escrows.map(escrow => Math.max(0, entitlementOf(escrow) - providerReleased(escrow))));
+    // The headline wallet is the USD one. An escrow in another currency is never added into it: it is listed on its own (byCurrency) and in the rows with its own currency.
+    // Payouts are PayPal/USD only, so the withdrawals below (all of them, whatever their stored label) reserve USD earnings and nothing else.
+    const usdEscrows = escrows.filter(escrow => (escrow.currency ?? LEGACY_CURRENCY) === LEGACY_CURRENCY);
+    const availableBalance = sumMoney(usdEscrows.map(escrow => providerReleased(escrow)));
+    const escrowBalance = sumMoney(usdEscrows.map(escrow => Math.max(0, entitlementOf(escrow) - providerReleased(escrow))));
     // availableBalance stays the total released earnings; withdrawableBalance is what a NEW request may still ask for (the server enforces the same figure).
     const reserved = await client.withdrawal.groupBy({ by: ['status'], where: { userId: providerId, status: { in: [...RESERVING_WITHDRAWAL_STATUSES] } }, _sum: { amount: true } });
     const sumOf = (statuses: readonly string[]) => round2(reserved.filter(r => statuses.includes(r.status)).reduce((sum, r) => sum + (r._sum.amount ?? 0), 0));
     const pendingWithdrawals = sumOf(IN_FLIGHT_WITHDRAWAL_STATUSES);
     const paidWithdrawals = sumOf(SPENT_WITHDRAWAL_STATUSES);
     const withdrawableBalance = round2(Math.max(0, availableBalance - pendingWithdrawals - paidWithdrawals));
-    const platformCommissionTotal = sumMoney(escrows.map(escrow => (isV2Escrow(escrow) ? escrow.platformCommissionAmount : 0)));
+    const platformCommissionTotal = sumMoney(usdEscrows.map(escrow => (isV2Escrow(escrow) ? escrow.platformCommissionAmount : 0)));
+    const byCurrency: Record<string, { availableBalance: number; escrowBalance: number; platformCommissionTotal: number; withdrawableBalance: number; payoutSupported: boolean }> = {};
+    for (const c of new Set(escrows.map(escrow => escrow.currency ?? LEGACY_CURRENCY))) {
+      const list = escrows.filter(escrow => (escrow.currency ?? LEGACY_CURRENCY) === c);
+      byCurrency[c] = { availableBalance: sumMoney(list.map(escrow => providerReleased(escrow))), escrowBalance: sumMoney(list.map(escrow => Math.max(0, entitlementOf(escrow) - providerReleased(escrow)))), platformCommissionTotal: sumMoney(list.map(escrow => (isV2Escrow(escrow) ? escrow.platformCommissionAmount : 0))), withdrawableBalance: c === LEGACY_CURRENCY ? withdrawableBalance : 0, payoutSupported: c === LEGACY_CURRENCY };
+    }
 
     const stageTransactions = escrows.flatMap(escrow => {
       const stages = escrow.project.contract?.stages || [];
@@ -77,7 +86,7 @@ export class ProviderFinanceService {
           category: 'STAGE_RELEASE' as const,
           amount: round2(split ? split.net : stage.amount),
           ...(split ? { grossAmount: round2(split.gross), platformCommission: round2(split.commission), commissionRatePercent: v2Rate } : {}),
-          currency: 'USD',
+          currency: escrow.currency ?? LEGACY_CURRENCY,
           title: 'إفراج دفعة مرحلة',
           description: split ? `${stage.title} · ${escrow.project.title} · بعد خصم عمولة المنصة ${v2Rate}%` : `${stage.title} · ${escrow.project.title}`,
           projectId: escrow.project.id,
@@ -98,7 +107,7 @@ export class ProviderFinanceService {
         type: 'credit' as const,
         category: 'ESCROW_RELEASE' as const,
         amount: round2(residual),
-        currency: 'USD',
+        currency: escrow.currency ?? LEGACY_CURRENCY,
         title: 'إفراج ضمان المشروع',
         description: escrow.project.title,
         projectId: escrow.project.id,
@@ -123,17 +132,19 @@ export class ProviderFinanceService {
         escrowBalance,
         // what the platform kept as commission on v2 escrows (the provider's availableBalance is already net of it)
         platformCommissionTotal,
-        releasedThisMonth: sumMoney(transactions.filter(tx => tx.createdAt >= monthStart).map(tx => tx.amount)),
+        releasedThisMonth: sumMoney(transactions.filter(tx => tx.createdAt >= monthStart && tx.currency === LEGACY_CURRENCY).map(tx => tx.amount)),
+        byCurrency,
         releasedTransactionsCount: transactions.length,
-        fundedProjectsCount: escrows.filter(escrow => escrow.status === 'HELD' && (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).length,
-        completedProjectsCount: escrows.filter(escrow => escrow.project.status === 'COMPLETED' && !(escrow.project.disputes?.length)).length,
-        currency: 'USD' // active escrow/contract pricing pipeline is now USD-semantic
+        fundedProjectsCount: usdEscrows.filter(escrow => escrow.status === 'HELD' && (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).length,
+        completedProjectsCount: usdEscrows.filter(escrow => escrow.project.status === 'COMPLETED' && !(escrow.project.disputes?.length)).length,
+        currency: LEGACY_CURRENCY // the headline figures are the USD ones; byCurrency lists every currency
       },
       transactions,
       escrows: escrows.filter(escrow => escrow.status === 'HELD' && (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).map(escrow => ({
         id: escrow.id,
         projectId: escrow.project.id,
         projectTitle: escrow.project.title,
+        currency: escrow.currency ?? LEGACY_CURRENCY,
         total: round2(entitlementOf(escrow)),
         released: round2(providerReleased(escrow)),
         held: round2(Math.max(0, entitlementOf(escrow) - providerReleased(escrow))),
@@ -156,7 +167,7 @@ export class ProviderFinanceService {
       type: 'hold' as const,
       category: 'ESCROW_FUNDED' as const,
       amount: round2(escrow.project.contract?.price || escrow.amount),
-      currency: 'USD' as const,
+      currency: (escrow.currency ?? LEGACY_CURRENCY) as string,
       title: 'تمويل ضمان المشروع',
       description: escrow.project.title,
       projectId: escrow.project.id,

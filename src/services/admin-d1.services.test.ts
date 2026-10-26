@@ -22,7 +22,7 @@ const counter = (n = 0) => async () => n;
 
 // ───────────── dashboard
 test('dashboard summary: empty database gives zeros, no alerts, never a fixed figure', async () => {
-	const zero = { count: counter(0), aggregate: async () => ({ _sum: {} }) };
+	const zero = { count: counter(0), aggregate: async () => ({ _sum: {} }), groupBy: async () => [] };
 	current = { user: zero, project: zero, clientRequest: zero, escrow: zero, dispute: zero, supportTicket: zero, withdrawal: zero, profileModificationRequest: zero, providerProfile: zero, clientOnboarding: zero, affiliateProfile: zero, profileChangeRequest: zero, accreditationSample: zero, providerSpecialty: zero };
 	const { adminDashboardService } = await fresh('./admin-dashboard.service.ts');
 	const s = await adminDashboardService.getSummary(new Date('2026-10-14T10:00:00Z'));
@@ -43,7 +43,7 @@ test('dashboard summary: aggregates with fixtures flow through (counts, sums, al
 		escrow: { aggregate: sum(125.456) },
 		dispute: { count: async (a: any) => (a.where.createdAt ? 1 : 5) },
 		supportTicket: { count: counter(7) },
-		withdrawal: { count: counter(2), aggregate: async () => ({ _sum: { amount: 300 } }) },
+		withdrawal: { count: counter(2), groupBy: async () => [{ currency: 'USD', _sum: { amount: 300 } }, { currency: 'SAR', _sum: { amount: 50 } }] },
 		profileModificationRequest: { count: counter(1) }, providerProfile: { count: counter(2) },
 		clientOnboarding: { count: async (a: any) => (a.where.createdAt ? 1 : 3) },
 		affiliateProfile: { count: counter(0) }, profileChangeRequest: { count: counter(0) }, accreditationSample: { count: counter(4) }, providerSpecialty: { count: counter(9) }
@@ -55,6 +55,7 @@ test('dashboard summary: aggregates with fixtures flow through (counts, sums, al
 	assert.equal(s.kpis.disputes.openOver7Days, 1);
 	assert.equal(s.kpis.tickets.open, 7);
 	assert.equal(s.kpis.withdrawals.pendingAmount, 300);
+	assert.deepEqual(s.kpis.withdrawals.pendingAmountBy, { USD: 300, SAR: 50 }, 'each currency on its own; the USD figure is the headline');
 	assert.equal(s.kpis.revenue.platformCommissionTotal, 125.46);
 	assert.equal(s.queues.find((q: any) => q.key === 'kyc').count, 2 + 3);
 	assert.ok(s.alerts.some((a: any) => a.key === 'disputesOver7Days' && a.severity === 'high'));

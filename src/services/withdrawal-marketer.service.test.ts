@@ -147,7 +147,7 @@ test('1. approve: a marketer (not a provider) withdrawal within APPROVED commiss
 	assert.equal(result.reviewedById, 'admin-1');
 	assert.equal(getWalletSpy.mock.callCount(), 0, 'provider wallet must never be consulted for a marketer withdrawal');
 	assert.equal(commissionAggregateSpy.mock.callCount(), 1);
-	assert.deepEqual(commissionAggregateSpy.mock.calls[0].arguments[0].where, { affiliateId: 'aff-1', status: 'APPROVED' });
+	assert.deepEqual(commissionAggregateSpy.mock.calls[0].arguments[0].where, { affiliateId: 'aff-1', status: 'APPROVED', currency: 'USD' }); // payouts are USD: earnings in another currency are never in this balance
 	assert.equal(transactionSpy.mock.calls[0].arguments[1]?.isolationLevel, 'Serializable');
 	assert.equal(walletTransactions.length, 1);
 	assert.equal(walletTransactions[0].amount, -400);

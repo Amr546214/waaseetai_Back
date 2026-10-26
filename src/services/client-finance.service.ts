@@ -46,6 +46,7 @@ const buildInvoice = (contract: any, stage: any, delivery: any) => {
     project: `${contract.project.title} · ${stage.title}`,
     projectTitle: contract.project.title,
     stageTitle: stage.title,
+    currency: (contract.currency ?? LEGACY_CURRENCY) as string, // the contract's own currency (subtotal / discount / total are in it)
     subtotal,
     discount,
     couponCode: coupon?.couponCode ?? null,
@@ -93,7 +94,9 @@ export class ClientFinanceService {
         averageVerificationScore: invoices.length
           ? Math.round(invoices.reduce((sum, invoice) => sum + invoice.verificationScore, 0) / invoices.length)
           : 0,
-        currency: 'USD' // contract/stage pricing pipeline is now USD-semantic
+        // tax is always 0; each invoice row carries the currency of its own contract and no total across currencies is formed here
+        currency: LEGACY_CURRENCY,
+        currencies: [...new Set(invoices.map(invoice => invoice.currency))]
       },
       invoices
     };
