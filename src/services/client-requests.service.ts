@@ -32,6 +32,7 @@ import {
 import { debitWalletIfCovered, walletBalanceOf } from '../utils/wallet-balance';
 import { requireCurrency, assertSameCurrency } from '../utils/currency';
 import { platformCurrency } from './platform-currency';
+import { brandNameInArabicText } from '../utils/brand';
 
 function generateSlug(text: string): string {
 	if (!text) return `slug-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -1655,9 +1656,9 @@ export class ClientRequestsService {
 		// Send Email dynamically
 		try {
 			await mailTransporter.sendMail({
-				from: process.env.SMTP_USER || '"وسيط AI" <noreply@waseetai.com>',
+				from: process.env.SMTP_USER || `"${brandNameInArabicText()}" <noreply@waseetai.com>`,
 				to: user.email,
-				subject: 'رمز التحقق لتوقيع العقد وإيداع الضمان - وسيط AI',
+				subject: `رمز التحقق لتوقيع العقد وإيداع الضمان - ${brandNameInArabicText()}`,
 				html: getOtpEmailTemplate(otpCode, Math.round(CONTRACT_OTP_TTL_SECONDS / 60), 'contract-signature')
 			});
 		} catch (err) {
@@ -1925,9 +1926,9 @@ export class ClientRequestsService {
 			if (userEmail) {
 				// Email to Client
 				await mailTransporter.sendMail({
-					from: process.env.SMTP_USER || '"وسيط AI" <noreply@waseetai.com>',
+					from: process.env.SMTP_USER || `"${brandNameInArabicText()}" <noreply@waseetai.com>`,
 					to: userEmail,
-					subject: 'تم إيداع الضمان بنجاح - وسيط AI',
+					subject: `تم إيداع الضمان بنجاح - ${brandNameInArabicText()}`,
 					html: getDepositConfirmationTemplate(projectName, escrowAmount, escrowCurrency)
 				});
 			}
@@ -1935,9 +1936,9 @@ export class ClientRequestsService {
 			if (providerEmail) {
 				// Email to Provider
 				await mailTransporter.sendMail({
-					from: process.env.SMTP_USER || '"وسيط AI" <noreply@waseetai.com>',
+					from: process.env.SMTP_USER || `"${brandNameInArabicText()}" <noreply@waseetai.com>`,
 					to: providerEmail,
-					subject: 'دعوة لتوقيع العقد 📝 - وسيط AI',
+					subject: `دعوة لتوقيع العقد 📝 - ${brandNameInArabicText()}`,
 					html: getProviderContractSignatureTemplate(projectName, clientName, bidAmount, escrowCurrency)
 				});
 			}
