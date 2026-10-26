@@ -1,3 +1,4 @@
+import { MAINTENANCE_DEFAULT_MESSAGE } from '../utils/platform-defaults';
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { AccountType, UserStatus } from '@prisma/client';
@@ -72,6 +73,6 @@ export async function maintenanceMiddleware(req: Request, res: Response, next: N
 		if (!m.trusted) logger.warn(`[Maintenance] no trusted value yet (cold boot): applying policy "${coldPolicy()}" to ${req.method} ${req.path}`);
 		const text = m.trusted ? String(await systemSettingsService.get<string>('maintenanceBannerText') || '').trim() : '';
 		res.set('Retry-After', '60');
-		return res.status(503).json({ success: false, code: MAINTENANCE_CODE, message: text || (m.trusted ? 'المنصة في صيانة مؤقتة. سنعود قريبًا.' : 'المنصة تتحقق من حالتها بعد التشغيل. حاول بعد لحظات.') });
+		return res.status(503).json({ success: false, code: MAINTENANCE_CODE, message: text || (m.trusted ? MAINTENANCE_DEFAULT_MESSAGE : 'المنصة تتحقق من حالتها بعد التشغيل. حاول بعد لحظات.') });
 	} catch (e) { logger.error(`[Maintenance] gate failed (${(e as Error)?.message}); request let through only because no state could be established at all`); return next(); }
 }

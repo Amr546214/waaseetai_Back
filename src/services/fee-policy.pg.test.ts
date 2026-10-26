@@ -18,7 +18,10 @@ const takeEffect = async (e: any, id: string) => { await e.prisma.feePolicyVersi
 test('PG fee policy: the baseline is today\'s constants; only fees.view reads, only fees.manage (or SUPER_ADMIN) schedules; a staff member without them is refused', opts, async () => {
 	const e = await env(); await reset(e); const none = await mkStaff(e, ['users.view'], 'fn'), viewer = await mkStaff(e, ['fees.view'], 'fv'), manager = await mkStaff(e, ['fees.manage'], 'fm');
 	assert.equal((await e.call('GET', F, none.user.id)).status, 403); assert.equal((await e.call('GET', F, null)).status, 401);
-	const v = await view(e, viewer.user.id); assert.equal(v.active.version, 1); assert.equal(v.active.state, 'EFFECTIVE'); assert.deepEqual(v.active.payload, baselineFeePolicyPayload()); assert.equal(v.active.id, BASELINE_FEE_POLICY_ID);
+	const v = await view(e, viewer.user.id); assert.equal(v.active.version, 1); assert.equal(v.active.state, 'EFFECTIVE'); assert.deepEqual(v.active.payload, baselineFeePolicyPayload()); assert.equal(v.active.id, BASELINE_FEE_POLICY_ID); assert.equal(v.activeSource, 'built-in fallback', 'empty table: the panel is told the values are the built-in ones');
+	await e.prisma.feePolicyVersion.create({ data: { id: BASELINE_FEE_POLICY_ID, version: 1, effectiveFrom: new Date('2000-01-01T00:00:00Z'), payload: baselineFeePolicyPayload() as any, note: 'baseline: the values in force before fee policies were managed (unchanged)' } }); (await import('./fee-policy.service')).feePolicyService.invalidate();
+	assert.equal((await view(e, viewer.user.id)).activeSource, 'stored', 'the seeded version 1 row (as on dev) is reported as stored'); assert.deepEqual((await view(e, viewer.user.id)).active.payload, baselineFeePolicyPayload());
+	await reset(e);
 	assert.deepEqual(v.active.payload.providerCommissionByLevel, PROVIDER_LEVELS.map(d => d.percent)); assert.equal(v.active.payload.minMarketerPayout, 300); assert.equal(v.active.payload.minProviderPayout, 0);
 	const body = { changes: { minProviderPayout: 50 }, effectiveFrom: soon(60), note: 'اختبار', baseVersion: 1, confirmSensitive: true };
 	assert.equal((await schedule(e, viewer.user.id, body)).status, 403, 'reading is not scheduling'); assert.equal((await schedule(e, none.user.id, body)).status, 403);

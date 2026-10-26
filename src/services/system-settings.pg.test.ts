@@ -253,3 +253,30 @@ test('PG settings: the admin mailbox gets a minimal alert for the four operation
 	fail = true; resetMailboxThrottle(); await assert.doesNotReject(notifyAdmins('NEW_TICKET', { id: 't1' })); await idle();
 	await put(e, e.sa.id, { adminNotificationEmail: '' }, { adminNotificationEmail: 1 });
 });
+
+test('PG settings: every enforced item says what is IN USE while it is unset (effective), and the stored value once set - from the same constants the consumers use', opts, async () => {
+	const e = await env(); await reset(e);
+	const { DEFAULT_BRAND, DEFAULT_BRAND_AR } = await import('../utils/brand');
+	const { DEFAULT_SUPPORT_EMAIL, MAINTENANCE_DEFAULT_MESSAGE } = await import('../utils/platform-defaults');
+	const eff = async (k: string) => (await one(e, e.sa.id, k)).effective;
+	// nothing stored: the value field is the empty registry default, effective is what the product really uses
+	assert.equal((await one(e, e.sa.id, 'platformName')).value, '');
+	assert.deepEqual(await eff('platformName'), { value: DEFAULT_BRAND_AR, source: 'built-in default', uses: [{ where: 'واجهة التطبيق ونصوص البريد العربية', value: DEFAULT_BRAND_AR }, { where: 'اسم المرسل وعناوين وتذييل البريد', value: DEFAULT_BRAND }] });
+	assert.deepEqual(await eff('supportEmail'), { value: DEFAULT_SUPPORT_EMAIL, source: 'built-in default', note: (await eff('supportEmail')).note });
+	assert.equal(DEFAULT_SUPPORT_EMAIL, 'support@waseet.ai');
+	assert.equal((await eff('maintenanceBannerEnabled')).value, false);
+	assert.ok((await eff('maintenanceBannerText')).note.includes(MAINTENANCE_DEFAULT_MESSAGE));
+	for (const k of ['termsVersion', 'privacyVersion', 'termsContent', 'privacyContent']) { const x = await eff(k); assert.equal(x.value, null); assert.equal(x.source, 'static page text'); }
+	assert.equal((await eff('supportPhone')).source, 'not consumed'); // nothing reads the phone
+	assert.equal((await eff('registrationOpen')).source, 'built-in default'); assert.equal((await eff('registrationOpen')).value, true);
+	// set: the stored value, source 'setting'; read-only / blocked rows carry no effective
+	assert.equal((await put(e, e.sa.id, { platformName: 'منصتي', supportEmail: 'help@pg.test' }, { platformName: 0, supportEmail: 0 })).status, 200);
+	assert.deepEqual(await eff('platformName'), { value: 'منصتي', source: 'setting' }); assert.deepEqual(await eff('supportEmail'), { value: 'help@pg.test', source: 'setting' });
+	// clearing a text setting returns to the built-in value (it is "not set" again) and the required name cannot be cleared at all
+	assert.equal((await put(e, e.sa.id, { supportEmail: '' }, { supportEmail: 1 })).status, 200);
+	assert.equal((await eff('supportEmail')).source, 'built-in default'); assert.equal((await eff('supportEmail')).value, DEFAULT_SUPPORT_EMAIL);
+	const clr = await put(e, e.sa.id, { platformName: '   ' }, { platformName: 1 }); assert.equal(clr.status, 400);
+	assert.equal((await eff('platformName')).value, 'منصتي');
+	assert.equal((await one(e, e.sa.id, 'smtp')).effective, null); assert.equal((await one(e, e.sa.id, 'baseCurrency')).effective, null);
+	await reset(e);
+});

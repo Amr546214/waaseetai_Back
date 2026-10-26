@@ -79,9 +79,9 @@ export class SystemSettingsService {
 		const s = await this.snapshot(true);
 		const items = SETTING_DEFS.filter(d => this.mayRead(actor, d)).map(d => {
 			const base = { key: d.key, tab: d.tab, label: d.label, description: d.description, status: d.status, unit: d.unit ?? null, allowed: d.allowed ?? null, allowedLabels: d.labels ?? null, pages: d.pages, canWrite: d.status === 'enforced' && can(actor, d.write), effect: d.effect ?? null, reason: d.reason ?? null };
-			if (d.status === 'enforced') { const row = s.values.get(d.key); const p = row && d.schema!.safeParse(row.value); return { ...base, value: p && p.success ? p.data : d.default, version: row?.version ?? 0, source: row ? 'stored' : 'default' }; }
-			if (d.status === 'readonly' && d.current) { const c = d.current(); return { ...base, value: c.value, version: null, source: c.source }; }
-			return { ...base, value: null, version: null, source: null };
+			if (d.status === 'enforced') { const row = s.values.get(d.key); const p = row && d.schema!.safeParse(row.value); const stored = !!(p && p.success); return { ...base, value: stored ? p.data : d.default, version: row?.version ?? 0, source: row ? 'stored' : 'default', effective: stored && !(p.data === '' && d.inUse) ? { value: p.data, source: 'setting' as const } : (d.inUse ? d.inUse() : { value: d.default, source: 'built-in default' as const }) }; }
+			if (d.status === 'readonly' && d.current) { const c = d.current(); return { ...base, value: c.value, version: null, source: c.source, effective: null }; }
+			return { ...base, value: null, version: null, source: null, effective: null };
 		});
 		return { storageReady: s.storage, items };
 	}

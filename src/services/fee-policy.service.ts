@@ -62,7 +62,7 @@ export class FeePolicyService {
 	async view(now: Date = new Date()) {
 		const rows = await this.rows(true); const active = await this.active(now);
 		return {
-			active: this.out(active), upcoming: rows.filter(r => !r.cancelledAt && r.effectiveFrom > now).map(r => this.out(r)),
+			active: this.out(active), activeSource: active.note === BASELINE_ROW().note && active.createdById === null && active.id === BASELINE_FEE_POLICY_ID ? 'built-in fallback' as const : 'stored' as const, upcoming: rows.filter(r => !r.cancelledAt && r.effectiveFrom > now).map(r => this.out(r)),
 			history: [...rows].sort((a, b) => b.version - a.version).slice(0, 30).map(r => this.out(r, now)),
 			limits: { ...FEE_LIMITS, minLeadMinutes: FEE_POLICY_MIN_LEAD_MINUTES, maxLeadDays: FEE_POLICY_MAX_LEAD_DAYS }, now: now.toISOString(),
 		};
