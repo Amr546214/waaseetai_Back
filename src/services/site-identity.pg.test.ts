@@ -157,6 +157,9 @@ test('PG site identity: lifecycle - upload (staged, invisible) -> publish -> pub
 	const codes = new Set(rows.map(r => r.eventType)); for (const c of ['SITE_IDENTITY_UPLOADED', 'SITE_IDENTITY_PUBLISHED', 'SITE_IDENTITY_RESTORED', 'SITE_IDENTITY_SET_RESTORED', 'SITE_IDENTITY_DISCARDED']) assert.ok(codes.has(c), c);
 	for (const r of rows) { assert.equal(r.userId, sa); assert.equal(r.source, 'ADMIN'); assert.equal(r.actorLabel, 'ADMIN'); assert.ok(r.ipAddress !== undefined); const blob = JSON.stringify([r.metaData, r.beforeData, r.afterData, r.summary, r.title]); assert.ok(!/[0-9a-f]{40,}/.test(blob), `no full hash in ${r.eventType}`); assert.ok(!/iVBOR|\bbytes\b/i.test(blob), blob); assert.ok((r.metaData as any).identityKey); }
 	const pubd = rows.find(r => r.eventType === 'SITE_IDENTITY_PUBLISHED' && (r.metaData as any).toVersion === 2)!; assert.deepEqual({ ...(pubd.metaData as any) }, { identityKey: 'logo.mark', fromVersion: 1, toVersion: 2, fromSha: A.sha256.slice(0, 12), toSha: B.sha256.slice(0, 12), stateVersion: 2 }); assert.equal(pubd.severity, 'WARNING');
+	// the central audit trail reads these rows with a proven actor, a target, an Arabic label, severity and short detail
+	const { listAuditTrail } = await import('./admin-audit-trail.service'); const trail = await listAuditTrail({ eventType: 'SITE_IDENTITY_PUBLISHED', limit: 10 });
+	assert.ok(trail.items.length >= 2); for (const it of trail.items) { assert.equal(it.actor.id, sa); assert.equal(it.target.type, 'SITE_IDENTITY'); assert.equal(it.severity, 'WARNING'); assert.equal(it.actionLabel, 'اعتماد نسخة من هوية الموقع'); assert.ok(!/[0-9a-f]{20,}/.test(it.detail ?? '')); }
 	await m.close();
 });
 

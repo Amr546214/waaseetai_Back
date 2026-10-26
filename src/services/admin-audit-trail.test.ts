@@ -62,3 +62,14 @@ test('details come from allow-listed metadata and stored sentences, always redac
 	assert.equal(accessDetail({ action: 'STAFF_SUSPENDED', before: { status: 'ACTIVE' }, after: { status: 'SUSPENDED' } }, rn), 'الحالة: نشط ← موقوف');
 	assert.equal(accessDetail({ action: 'UNKNOWN_X' }, rn), null);
 });
+
+test('site identity codes: the acting admin is proven, the target is the identity key (Arabic label), the detail names the versions only', () => {
+	for (const code of ['SITE_IDENTITY_UPLOADED', 'SITE_IDENTITY_PUBLISHED', 'SITE_IDENTITY_RESTORED', 'SITE_IDENTITY_SET_RESTORED', 'SITE_IDENTITY_DISCARDED']) assert.deepEqual(actorOfLog({ userId: A, eventType: code, source: 'ADMIN' }), { id: A, kind: 'USER' }, code);
+	const t = logTarget({ userId: A, eventType: 'SITE_IDENTITY_PUBLISHED', source: 'ADMIN', actorLabel: 'ADMIN', metaData: { identityKey: 'icon.ai' } }, { id: A, kind: 'USER' }, users);
+	assert.deepEqual(t, { type: 'SITE_IDENTITY', typeLabel: 'هوية الموقع', id: 'icon.ai', label: 'أيقونة الذكاء الاصطناعي' });
+	assert.equal(logTarget({ userId: A, eventType: 'SITE_IDENTITY_SET_RESTORED', source: 'ADMIN', actorLabel: 'ADMIN', metaData: { identityKey: 'icon.ai,logo.mark' } }, { id: A, kind: 'USER' }, users)?.id, null);
+	assert.equal(logDetail({ eventType: 'SITE_IDENTITY_PUBLISHED', metaData: { identityKey: 'logo.mark', fromVersion: 0, toVersion: 2 } }).detail, 'شعار وسيط AI (العلامة) · الافتراضي ← نسخة 2');
+	assert.equal(logDetail({ eventType: 'SITE_IDENTITY_RESTORED', metaData: { identityKey: 'logo.mark', fromVersion: 2, toVersion: 0 } }).detail, 'شعار وسيط AI (العلامة) · نسخة 2 ← الافتراضي');
+	assert.equal(logDetail({ eventType: 'SITE_IDENTITY_UPLOADED', metaData: { identityKey: 'logo.mark', version: 3, sha: 'abcdef012345' } }).detail, 'شعار وسيط AI (العلامة) · مسودة نسخة 3 · abcdef012345');
+	assert.equal(logDetail({ eventType: 'SITE_IDENTITY_SET_RESTORED', metaData: { identityKey: 'icon.ai,logo.mark', target: 'manifest 4' } }).detail, 'manifest 4 · 2 عنصر');
+});
