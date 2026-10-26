@@ -297,5 +297,6 @@ test('PG settings: EVERY enforced key reports an effective value while unset, an
 	assert.ok(n >= 15, 'registry enforced keys covered');
 	assert.equal(items.find(i => i.key === 'registrationOpen')!.effective.value, true); assert.equal(items.find(i => i.key === 'sessionMaxHours')!.effective.value, 168);
 	assert.equal(items.find(i => i.key === 'sessionIdleMinutes')!.effective.value, 0);
+	assert.equal(items.find(i => i.key === 'sessionMaxHours')!.writeBy, 'SUPER'); assert.equal(items.find(i => i.key === 'supportEmail')!.writeBy, 'settings.manage'); // who may change it, for the help text
 	await reset(e);
 });
