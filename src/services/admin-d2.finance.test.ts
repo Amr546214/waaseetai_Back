@@ -80,7 +80,7 @@ test('affiliate withdrawal notifications: paid / failed wording and the marketer
 	await affiliateWithdrawalNotifications.withdrawal('w1', 'PAID');
 	await affiliateWithdrawalNotifications.withdrawal('w1', 'FAILED');
 	assert.equal(sent[0].type, 'WITHDRAWAL_PAID');
-	assert.match(sent[0].message, /300 \$/);
+	assert.match(sent[0].message, /300\.00 USD/);
 	assert.equal(sent[1].type, 'WITHDRAWAL_FAILED');
 	assert.match(sent[1].message, /ولم يُخصم/);
 	assert.ok(sent.every(n => n.userId === 'aff' && n.actionUrl === '/marketer-overview/withdraw'));
