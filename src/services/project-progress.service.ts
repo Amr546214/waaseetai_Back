@@ -711,6 +711,8 @@ export class ProjectProgressService {
       await emailService.sendProjectCompletionRewardEmail({
         email: result.providerEmail,
         userId: contract.providerId,
+        projectId: contract.projectId,
+        notificationId: result.notificationId,
         providerName: result.providerName,
         projectTitle: result.projectTitle,
         pointsAwarded: PROJECT_COMPLETION_POINTS,

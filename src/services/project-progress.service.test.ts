@@ -851,6 +851,10 @@ test('reviewDelivery (final stage, approve): the provider gets the completion no
   assert.match(notificationCreates[0].actionUrl, PROVIDER_PROGRESS_URL);
   assert.equal(completionEmails.length, 1);
   assert.match(completionEmails[0].projectUrl, PROVIDER_PROGRESS_URL);
+  // one mail per event: the reward mail carries the event key (project) and the reward notification's id (its durable one-mail claim lives there);
+  // the notification's own e-mail copy is suppressed centrally (mail-dispatch COVERED_NOTIFICATIONS)
+  assert.ok(completionEmails[0].projectId);
+  assert.ok('notificationId' in completionEmails[0]);
 });
 
 test('reviewDelivery (revision): the provider is told a revision is requested, with the client note and a real route', async (t) => {

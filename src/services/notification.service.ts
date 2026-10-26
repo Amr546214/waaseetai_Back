@@ -2,6 +2,7 @@ import { deniedAdminNotificationTypes } from './admin-access.service';
 import { brandSubject, brandNameInArabicText } from '../utils/brand';
 import { systemSettingsService } from './system-settings.service';
 import { optionalEmailEnabled, assertEmailOptionMayChange } from './optional-email-gate';
+import { dispatchMail, coveringMailOf } from './mail-dispatch';
 import { emailSenderName } from '../utils/email-sender-name';
 import { NotificationCategory, Notification } from '@prisma/client';
 import { siteUrl } from '../utils/site-url';
@@ -269,29 +270,23 @@ export class NotificationService {
 		const { channels, recipient, lang } = await this.resolveDelivery(dto.userId, dto.actionUrl, dto.type);
 		if (channels.push) this.emitDto(dto, event);
 		// A chat message is never mailed one by one (a negotiation would flood the inbox): unread chat messages reach the e-mail channel only as the throttled digest (chat-digest.service).
-		if (channels.email && recipient?.email && dto.type !== 'CHAT') void this.sendNotificationMail(recipient.email, recipient.firstName, dto, lang);
+		// An event that has its own dedicated mail (deposit receipt, contract invitation, completion reward) is never mailed a second time as a notification copy: see COVERED_NOTIFICATIONS.
+		if (channels.email && recipient?.email && dto.type !== 'CHAT' && !coveringMailOf(dto.type)) void this.sendNotificationMail(recipient.email, recipient.firstName, dto, lang);
 	}
 
 	private async sendNotificationMail(email: string, firstName: string | null, dto: NotificationDto, lang: 'ar' | 'en' = 'ar'): Promise<void> {
-		// last check right before the send (a mail prepared while the channel was ON is not sent once the platform switched it OFF)
-		if (!(await optionalEmailEnabled())) return;
 		const copy = notificationMailCopy(lang);
-		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
-		const senderName = await emailSenderName();
 		// central rule: an e-mail link always has a host; without a configured site address the link is left out (see utils/site-url)
 		const link = dto.actionUrl ? siteUrl(dto.actionUrl) : null;
-		try {
-			await mailTransporter.sendMail({
-				from: `"${senderName}" <${from}>`,
-				to: email,
-				subject: brandSubject(`${dto.title} - ${copy.subjectSuffix}`),
-				html: buildNotificationEmailHtml({ lang, greeting: copy.greeting(firstName || ''), title: dto.title, message: dto.message, linkUrl: link, ctaLabel: dto.actionText || copy.open, footerNote: copy.footer }),
-				text: `${dto.title}\n${dto.message}${link ? `\n${link}` : ''}\n\n${copy.footer}`,
-				headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },
-			});
-		} catch (error) {
-			logEmailFailure('notification', email, error);
-		}
+		// OPTIONAL mail: dispatchMail re-checks the platform switch right before the send (a mail prepared while the channel was ON is not sent once it is OFF) and keeps
+		// ONE copy per notification (a re-delivery / retry of the same notification never mails twice)
+		const result = await dispatchMail({
+			transport: mailTransporter, purpose: 'notification-copy', to: email, recipientKey: dto.userId, eventKey: dto.id, anchorNotificationId: dto.id,
+			subject: brandSubject(`${dto.title} - ${copy.subjectSuffix}`),
+			html: buildNotificationEmailHtml({ lang, greeting: copy.greeting(firstName || ''), title: dto.title, message: dto.message, linkUrl: link, ctaLabel: dto.actionText || copy.open, footerNote: copy.footer }),
+			text: `${dto.title}\n${dto.message}${link ? `\n${link}` : ''}\n\n${copy.footer}`,
+		});
+		if (result.status === 'failed') logEmailFailure('notification', email, result.error);
 	}
 
 	/** Broadcast a notification persisted as part of another database transaction. */

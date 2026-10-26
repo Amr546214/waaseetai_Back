@@ -17,7 +17,10 @@ test('deposit + contract mails escape the project title', () => {
 test('no mail path builds its own From: contract / deposit mails use the shared sender (SMTP_FROM + platform name), never SMTP_USER', () => {
 	const src = fs.readFileSync(path.join(__dirname, '../services/client-requests.service.ts'), 'utf8');
 	assert.doesNotMatch(src, /from: process\.env\.SMTP_USER/);
-	assert.equal((src.match(/from: await transactionalFrom\(\)/g) ?? []).length, 3);
+	// round 2: the receipt and the invitation go through dispatchMail (whose sender is transactionalFrom()); the signature-code mail keeps its direct call
+	assert.equal((src.match(/from: await transactionalFrom\(\)/g) ?? []).length, 1);
+	assert.equal((src.match(/await dispatchMail\(/g) ?? []).length, 2);
+	assert.match(fs.readFileSync(path.join(__dirname, '../services/mail-dispatch.ts'), 'utf8'), /from: input\.from \?\? await transactionalFrom\(\)/);
 });
 test('the chat digest mail uses the shared branded shell (logo / brand / button), not an ad-hoc div', () => {
 	const src = fs.readFileSync(path.join(__dirname, '../services/chat-digest.service.ts'), 'utf8');

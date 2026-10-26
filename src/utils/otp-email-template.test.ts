@@ -21,7 +21,7 @@ test('the digits fit 320px WITHOUT any media query: fixed 240px box, 22px digits
 });
 
 test('the validity line states the REAL validity passed in (10 min default, 2 min payment, 1 min)', () => {
-	assert.match(html('123456', 10), /صالح لمدة 10 دقائق\. إذا لم تطلب هذا الرمز، تجاهل هذا البريد\./);
+	assert.match(html('123456', 10), /صالح لمدة 10 دقائق\. لا تشاركه مع أي أحد\. إذا لم تطلب هذا الرمز، تجاهل هذا البريد\./);
 	assert.match(html('123456', 2, 'payment'), /صالح لمدة دقيقتين\./);
 	assert.match(html('123456', 1), /صالح لمدة دقيقة واحدة\./);
 });
