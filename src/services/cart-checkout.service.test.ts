@@ -277,7 +277,7 @@ test('createOrder: falls back to legacy User identity when ProviderProfile displ
 
 test('getPaymentMethods: wallet is the ONLY method offered, with the balance exposed', async (t) => {
   t.mock.module('../config/db', {
-    namedExports: { prisma: { user: { findUnique: async () => ({ walletBalance: 250 }) } } }
+    namedExports: { prisma: { user: { findUnique: async () => ({ walletBalance: 250 }) }, walletBalance: { findMany: async () => [] } } }
   });
   t.mock.module('./notification.service', { namedExports: { notificationService: { sendPaymentOtpEmail: async () => {} } } });
 
@@ -450,7 +450,7 @@ test('confirmPayment: insufficient balance rejects with 402 + required/available
   const error: any = await cartCheckoutService.confirmPayment('user-1', 'order-1', '111111').catch((e: any) => e);
 
   assert.equal(error.statusCode, 402);
-  assert.deepEqual(error.errors, [{ required: 120, available: 80, shortfall: 40 }]);
+  assert.deepEqual(error.errors, [{ currency: 'USD', required: 120, available: 80, shortfall: 40 }]);
   assert.equal(users[0].walletBalance, 80, 'never debited');
   assert.equal(walletTransactions.length, 0);
   assert.equal(tx.escrow.create.mock.callCount(), 0, 'no paid resource of any kind is created before a successful debit');

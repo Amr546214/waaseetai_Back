@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { logger } from '../config/logger';
 import { notificationService } from './notification.service';
 import type { ProviderWithdrawalEvent } from './provider-notifications.service';
+import { formatMoney } from '../utils/currency';
 
 /**
  * The marketer (affiliate) side of a withdrawal notification: the provider helper deliberately skips commission withdrawals, so a marketer used to
@@ -16,7 +17,7 @@ export const affiliateWithdrawalNotifications = {
 		try {
 			const w = await prisma.withdrawal.findUnique({ where: { id: withdrawalId }, select: { id: true, userId: true, amount: true, currency: true, rejectionReason: true } });
 			if (!w) return;
-			const amount = `${w.amount} ${w.currency === 'USD' ? '$' : w.currency}`;
+			const amount = formatMoney(w.amount, w.currency);
 			const reason = w.rejectionReason ? ` السبب: ${w.rejectionReason.slice(0, 200)}` : '';
 			const copy: Record<ProviderWithdrawalEvent, { title: string; message: string }> = {
 				REQUESTED: { title: 'تم استلام طلب سحب العمولات', message: `طلب سحب ${amount} قيد مراجعة الإدارة.` },

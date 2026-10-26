@@ -169,7 +169,7 @@ class ClientOfferCounterService {
 		});
 
 		// the provider is told after the commit; a notification failure never fails the acceptance
-		await providerNotifications.counterAccepted({ providerId: offer.providerId, offerId: offer.id, projectId: requestId, projectTitle: request.title, price: result.price, deliveryDays: result.deliveryDays });
+		await providerNotifications.counterAccepted({ providerId: offer.providerId, offerId: offer.id, projectId: requestId, projectTitle: request.title, price: result.price, deliveryDays: result.deliveryDays, currency: (offer as { currency?: string }).currency });
 		return { offerId: offer.id, legacyOfferId: legacyId, status: ProposalStatus.SUBMITTED, price: result.price, deliveryDays: result.deliveryDays, messageId: result.messageId };
 	}
 

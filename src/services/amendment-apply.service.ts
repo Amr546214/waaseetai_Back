@@ -3,6 +3,8 @@ import { AppError } from '../utils/app-error';
 import { isV2Escrow } from '../utils/escrow-commission';
 import { round2 } from '../utils/money';
 import { hasActiveDispute } from './amendment-dispute-guard';
+import { debitWalletIfCovered, creditWallet, walletBalanceOf } from '../utils/wallet-balance';
+import { assertSameCurrency, requireCurrency, formatMoney } from '../utils/currency';
 
 // Making an approved amendment EFFECTIVE (docs/proposals/amendment-effects.md, "simplest variant").
 // `applyAmendment(tx, amendment, actor)` is the ONE place that changes the contract / escrow / stages / wallet for an amendment; both respond paths
@@ -108,6 +110,10 @@ export async function applyAmendment(tx: any, amendment: AmendmentToApply, actor
 	const escrow = await tx.escrow.findUnique({ where: { projectId: amendment.projectId } });
 	if (!contract || contract.status !== ContractStatus.ACTIVE) throw fail('لا يمكن تطبيق التعديل: العقد غير نشط');
 	if (!escrow || escrow.status !== EscrowStatus.HELD) throw fail('لا يمكن تطبيق التعديل: ضمان المشروع غير محجوز');
+	// one currency end to end: the contract, its escrow and the amendment; the wallet moved is the one in that currency. No conversion exists in phase 1.
+	assertSameCurrency(contract?.currency, escrow.currency, 'تعديل العقد');
+	assertSameCurrency((amendment as { currency?: string }).currency, escrow.currency, 'تعديل العقد');
+	const money = requireCurrency(escrow.currency);
 	const needsMoney = budget !== 0;
 	const needsSchedule = needsMoney || days !== 0;
 	if (needsMoney && (!isV2Escrow(escrow) || escrow.providerCommissionRateSnapshot == null)) {
@@ -154,14 +160,13 @@ export async function applyAmendment(tx: any, amendment: AmendmentToApply, actor
 
 	// 6) Money.
 	if (budget > 0) {
-		const debited = await tx.user.updateMany({ where: { id: amendment.clientId, walletBalance: { gte: budget } }, data: { walletBalance: { decrement: budget } } });
-		if (debited.count !== 1) {
-			const wallet = await tx.user.findUnique({ where: { id: amendment.clientId }, select: { walletBalance: true } });
-			const available = Number(wallet?.walletBalance || 0);
-			throw fail('رصيد المحفظة غير كافٍ لتمويل زيادة الميزانية، اشحن المحفظة ثم أعد المحاولة', 409, [{ required: budget, available, shortfall: Math.max(0, round2(budget - available)) }]);
+		const covered = await debitWalletIfCovered(tx, amendment.clientId, money, budget);
+		if (!covered) {
+			const available = await walletBalanceOf(tx, amendment.clientId, money);
+			throw fail('رصيد المحفظة غير كافٍ لتمويل زيادة الميزانية، اشحن المحفظة ثم أعد المحاولة', 409, [{ currency: money, required: budget, available, shortfall: Math.max(0, round2(budget - available)) }]);
 		}
 		walletDelta = -budget;
-		await tx.walletTransaction.create({ data: { userId: amendment.clientId, type: AMENDMENT_TOPUP, amount: -budget, currency: 'USD', status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: amendment.id, description: `زيادة ميزانية العقد: ${amendment.title}`, metadata: { amendmentId: amendment.id, contractId: contract.id, projectId: amendment.projectId } } });
+		await tx.walletTransaction.create({ data: { userId: amendment.clientId, type: AMENDMENT_TOPUP, amount: -budget, currency: money, status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: amendment.id, description: `زيادة ميزانية العقد: ${amendment.title}`, metadata: { amendmentId: amendment.id, contractId: contract.id, projectId: amendment.projectId } } });
 	} else if (budget < 0) {
 		const cut = round2(-budget);
 		// Never below what was already released (gross), and only from the unreleased balance.
@@ -178,9 +183,9 @@ export async function applyAmendment(tx: any, amendment: AmendmentToApply, actor
 			remaining = round2(remaining - take);
 		}
 		if (remaining > EPS) throw fail('لا تكفي المراحل غير المسلَّمة لاستيعاب هذا الخفض (المراحل المسلَّمة أو المعتمدة لا تُعدَّل)');
-		await tx.user.update({ where: { id: amendment.clientId }, data: { walletBalance: { increment: cut } } });
+		await creditWallet(tx, amendment.clientId, money, cut);
 		walletDelta = cut;
-		await tx.walletTransaction.create({ data: { userId: amendment.clientId, type: AMENDMENT_REFUND, amount: cut, currency: 'USD', status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: amendment.id, description: `استرداد خفض ميزانية العقد: ${amendment.title}`, metadata: { amendmentId: amendment.id, contractId: contract.id, projectId: amendment.projectId } } });
+		await tx.walletTransaction.create({ data: { userId: amendment.clientId, type: AMENDMENT_REFUND, amount: cut, currency: money, status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: amendment.id, description: `استرداد خفض ميزانية العقد: ${amendment.title}`, metadata: { amendmentId: amendment.id, contractId: contract.id, projectId: amendment.projectId } } });
 	}
 	if (budget !== 0) {
 		// Escrow: guarded on its previous amount, so a concurrent change makes this match nothing (aborts, nothing applied).
@@ -200,7 +205,7 @@ export async function applyAmendment(tx: any, amendment: AmendmentToApply, actor
 	if (budget > 0) {
 		const nextOrder = Math.max(0, ...work.map(s => s.stepOrder)) + 1;
 		newStageDays = days > 0 ? days : 0;
-		const created = await tx.projectStage.create({ data: { contractId: contract.id, stepOrder: nextOrder, title: `تعديل: ${amendment.title}`.slice(0, 200), description: amendment.description?.trim() || 'مرحلة إضافية ناتجة عن تعديل معتمد على العقد', days: newStageDays, percentage: 0, amount: budget, status: ProjectStageStatus.PENDING, amendmentId: amendment.id } });
+		const created = await tx.projectStage.create({ data: { contractId: contract.id, currency: money, stepOrder: nextOrder, title: `تعديل: ${amendment.title}`.slice(0, 200), description: amendment.description?.trim() || 'مرحلة إضافية ناتجة عن تعديل معتمد على العقد', days: newStageDays, percentage: 0, amount: budget, status: ProjectStageStatus.PENDING, amendmentId: amendment.id } });
 		addedStageId = created.id;
 		phasesCount = work.length + 1;
 		work.push({ id: created.id, stepOrder: nextOrder, status: ProjectStageStatus.PENDING, amount: budget, days: newStageDays, percentage: 0, deliveries: 0, dirtyAmount: false, dirtyDays: false, isNew: true });
@@ -286,9 +291,9 @@ export async function applyAmendment(tx: any, amendment: AmendmentToApply, actor
 
 	// 12) Audit trail for both parties (same transaction).
 	const auditBase = { category: LogCategory.SYSTEM_AUDIT, status: LogStatus.COMPLETED, statusText: 'مكتمل بنجاح', source: 'USER', eventType: 'AMENDMENT_APPLIED', severity: 'INFO' };
-	const meta = { amendmentId: amendment.id, projectId: amendment.projectId, contractId: contract.id, type: String(amendment.type), priceBefore, priceAfter, durationBefore, durationAfter, walletDelta, addedStageId, termsVersion, currency: 'USD', appliedById: actor.id, appliedByRole: actor.role };
+	const meta = { amendmentId: amendment.id, projectId: amendment.projectId, contractId: contract.id, type: String(amendment.type), priceBefore, priceAfter, durationBefore, durationAfter, walletDelta, addedStageId, termsVersion, currency: money, appliedById: actor.id, appliedByRole: actor.role };
 	for (const userId of [amendment.clientId, amendment.providerId]) {
-		await tx.accountAuditLog.create({ data: { ...auditBase, userId, title: 'تطبيق تعديل على العقد', actionText: `طُبّق التعديل «${amendment.title}» على العقد`, summary: `طُبّق تعديل معتمد من الطرفين: السعر ${priceBefore} → ${priceAfter} دولار، المدة ${durationBefore} → ${durationAfter} يومًا.`, metaData: meta, beforeData: { price: priceBefore, durationDays: durationBefore }, afterData: { price: priceAfter, durationDays: durationAfter } } });
+		await tx.accountAuditLog.create({ data: { ...auditBase, userId, title: 'تطبيق تعديل على العقد', actionText: `طُبّق التعديل «${amendment.title}» على العقد`, summary: `طُبّق تعديل معتمد من الطرفين: السعر ${formatMoney(priceBefore, money)} → ${formatMoney(priceAfter, money)}، المدة ${durationBefore} → ${durationAfter} يومًا.`, metaData: meta, beforeData: { price: priceBefore, durationDays: durationBefore }, afterData: { price: priceAfter, durationDays: durationAfter } } });
 	}
 	return summary;
 }

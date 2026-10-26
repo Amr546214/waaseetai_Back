@@ -1,9 +1,12 @@
 import { z } from 'zod';
+import { SUPPORTED_CURRENCIES } from '../utils/currency';
 
 // PayPal is the only wallet deposit rail and is denominated in USD. The 50 / 100,000 bounds are the existing limits
 // (no conversion); the owner may set the final USD values.
 export const createPaypalOrderSchema = z.object({
-  amount: z.number().finite().min(50, 'الحد الأدنى للإيداع عبر PayPal هو 50').max(100000, 'الحد الأقصى للإيداع عبر PayPal هو 100,000')
+  // the numeric bounds live in config/payment-gateways.ts (per gateway AND currency); the service enforces them. PayPal is enabled for USD only: any other currency is refused before a payment exists.
+  amount: z.number().finite().positive('المبلغ غير صالح'),
+  currency: z.enum(SUPPORTED_CURRENCIES).optional()
 });
 
 export const capturePaypalOrderSchema = z.object({

@@ -18,6 +18,7 @@ import { deliveryCompletedProject, adminSettlementFor, adminSettledView, stageDi
 import { adminAudit } from './admin-audit.service';
 import { ensureProjectRoom } from './project-conversation.service';
 import { computeLifecycle, evaluateAction, assertStageActionAllowed, settlementDistributionOf } from './project-lifecycle.service';
+import { LEGACY_CURRENCY, formatMoney } from '../utils/currency';
 
 const PROJECT_COMPLETION_POINTS = 50;
 
@@ -154,7 +155,7 @@ export class ProjectProgressService {
     try {
       await prisma.projectStage.createMany({ data: items.map((item: any, index: number) => ({
         contractId, stepOrder: item.stepOrder || index + 1, title: item.title, description: item.description,
-        days: item.days, percentage: item.percentage, amount: item.amount,
+        days: item.days, percentage: item.percentage, amount: item.amount, currency: contract.currency,
         status: index === 0 && contract.status === ContractStatus.ACTIVE ? ProjectStageStatus.IN_PROGRESS : ProjectStageStatus.PENDING,
         startedAt: index === 0 && contract.status === ContractStatus.ACTIVE ? (contract.signedAt || new Date()) : null
       })) });
@@ -226,7 +227,7 @@ export class ProjectProgressService {
     const state = contractDeliveryState(contract.status, persisted, contract.project.escrow, openDispute?.status || null);
     const escrow = escrowFacts(contract.project.escrow);
     // THE lifecycle (single source of truth, see project-lifecycle.service): state, closure, money and per-action eligibility with specific reasons.
-    const lifecycleInput = { viewer: { role: role as 'client' | 'provider', isOwner: true }, contractStatus: contract.status, contractPrice: contract.price, escrow: contract.project.escrow, stages: persisted, activeDisputes: { count: activeDisputeCount, latestId: openDispute?.id ?? null, latestStatus: openDispute?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId, adminAudit) : null };
+    const lifecycleInput = { viewer: { role: role as 'client' | 'provider', isOwner: true }, contractStatus: contract.status, contractPrice: contract.price, contractCurrency: contract.currency, escrow: contract.project.escrow, stages: persisted, activeDisputes: { count: activeDisputeCount, latestId: openDispute?.id ?? null, latestStatus: openDispute?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId, adminAudit) : null };
     const lifecycle = computeLifecycle(lifecycleInput);
     const lifecycleStage = new Map(lifecycle.stages.map(s => [s.stageId, s]));
     // Contract-level approval gate (any role's view): is approving a delivered stage possible right now, and if not, why.
@@ -240,7 +241,7 @@ export class ProjectProgressService {
       const stageReview = (stage as any).stageReviews?.[0] || null;
       return {
         id: stage.id, stageNumber: stage.stepOrder, title: stage.title, description: stage.description,
-        amount: stage.amount, percentage: stage.percentage, days: stage.days,
+        amount: stage.amount, currency: (stage.currency ?? contract.currency ?? LEGACY_CURRENCY) as string, percentage: stage.percentage, days: stage.days,
         isDone: stage.status === ProjectStageStatus.APPROVED,
         isWait: !settlement.settled && (stage.status === ProjectStageStatus.IN_PROGRESS || stage.status === ProjectStageStatus.SUBMITTED || stage.status === ProjectStageStatus.REVISION_REQUESTED),
         status, statusText, completedDate: stage.approvedAt, roundsCount: stage.deliveries.length,
@@ -297,7 +298,7 @@ export class ProjectProgressService {
     return {
       id: contract.id, projectId: contract.projectId, role, conversationId: conversation?.id || null, messageContext: room.kind === 'PROJECT' ? 'PROJECT' : 'GENERAL', legacyShared: room.legacyShared, unreadMessages,
       title: contract.project.title, clientName: otherName, clientInitial: otherName.charAt(0) || 'ع', contractRef: `CT-${contract.id.slice(0, 6).toUpperCase()}`,
-      price: contract.price, durationDays: contract.durationDays, daysLeft: Math.max(0, contract.durationDays - elapsed), progress,
+      price: contract.price, currency: (contract.currency ?? LEGACY_CURRENCY) as string, durationDays: contract.durationDays, daysLeft: Math.max(0, contract.durationDays - elapsed), progress,
       // escrowReleased = money released through STAGE APPROVALS only; for a settled project the settlement's own release is in financial.settlement (never mixed).
       escrowTotal: contract.project.escrow?.amount || contract.price, escrowHeld: lifecycle.financial.heldNow, escrowReleased: lifecycle.financial.releasedByStageApprovals,
       ...state, canUploadDelivery: lifecycle.eligibility.upload.allowed, canSubmitDelivery: lifecycle.eligibility.submit.allowed,
@@ -522,10 +523,10 @@ export class ProjectProgressService {
               userId: contract.providerId,
               category: LogCategory.SYSTEM_AUDIT,
               title: 'إفراج دفعة مرحلة',
-              actionText: `اعتماد العميل لمرحلة "${stage.title}" وإفراج ${stage.amount} دولار من ضمان المشروع`,
+              actionText: `اعتماد العميل لمرحلة "${stage.title}" وإفراج ${formatMoney(stage.amount, contract.currency)} من ضمان المشروع`,
               status: LogStatus.COMPLETED,
               statusText: 'مكتمل بنجاح',
-              summary: `اعتمد العميل تسليم المرحلة "${stage.title}" في المشروع «${contract.project.title}»، وتم إفراج ${stage.amount} دولار من الضمان لصالح مقدم الخدمة.`,
+              summary: `اعتمد العميل تسليم المرحلة "${stage.title}" في المشروع «${contract.project.title}»، وتم إفراج ${formatMoney(stage.amount, contract.currency)} من الضمان لصالح مقدم الخدمة.`,
               source: 'USER',
               eventType: 'STAGE_FUND_RELEASED',
               severity: 'INFO',
@@ -536,7 +537,7 @@ export class ProjectProgressService {
                 stageTitle: stage.title,
                 releasedAmount: stage.amount,
                 ...(intermediateSplit ? { grossAmount: intermediateSplit.gross, platformCommission: intermediateSplit.commission, providerNet: intermediateSplit.net, commissionRatePercent: intermediateEscrow!.providerCommissionRateSnapshot, commissionLevel: intermediateEscrow!.providerCommissionLevelSnapshot, feePolicyVersion: 2 } : {}),
-                currency: 'USD',
+                currency: (contract.currency ?? LEGACY_CURRENCY) as string,
                 isFinalStage: false,
                 approvedByClientId: contract.clientId
               }
@@ -580,10 +581,10 @@ export class ProjectProgressService {
               userId: contract.providerId,
               category: LogCategory.SYSTEM_AUDIT,
               title: 'إفراج دفعة مرحلة',
-              actionText: `اعتماد العميل للمرحلة النهائية "${stage.title}" وإفراج ${stage.amount} دولار من ضمان المشروع`,
+              actionText: `اعتماد العميل للمرحلة النهائية "${stage.title}" وإفراج ${formatMoney(stage.amount, contract.currency)} من ضمان المشروع`,
               status: LogStatus.COMPLETED,
               statusText: 'مكتمل بنجاح',
-              summary: `اعتمد العميل التسليم النهائي «${stage.title}» لمشروع «${contract.project.title}»، وتم إفراج ${stage.amount} دولار من الضمان لصالح مقدم الخدمة، وأُغلق العقد.`,
+              summary: `اعتمد العميل التسليم النهائي «${stage.title}» لمشروع «${contract.project.title}»، وتم إفراج ${formatMoney(stage.amount, contract.currency)} من الضمان لصالح مقدم الخدمة، وأُغلق العقد.`,
               source: 'USER',
               eventType: 'STAGE_FUND_RELEASED',
               severity: 'INFO',
@@ -594,7 +595,7 @@ export class ProjectProgressService {
                 stageTitle: stage.title,
                 releasedAmount: stage.amount,
                 ...(finalSplit ? { grossAmount: finalSplit.gross, platformCommission: finalSplit.commission, providerNet: finalSplit.net, commissionRatePercent: finalEscrow!.providerCommissionRateSnapshot, commissionLevel: finalEscrow!.providerCommissionLevelSnapshot, feePolicyVersion: 2 } : {}),
-                currency: 'USD',
+                currency: (contract.currency ?? LEGACY_CURRENCY) as string,
                 isFinalStage: true,
                 approvedByClientId: contract.clientId
               }
@@ -687,7 +688,7 @@ export class ProjectProgressService {
       const clientNotification = decision === 'approve'
         ? await tx.notification.create({ data: isProjectCompleted
           ? clientNotificationFor.projectCompleted({ clientId, projectId: contract.projectId, projectTitle: contract.project.title })
-          : clientNotificationFor.stageApproved({ clientId, projectId: contract.projectId, stageId, stageTitle: stage.title, amount: stage.amount }) })
+          : clientNotificationFor.stageApproved({ clientId, projectId: contract.projectId, stageId, stageTitle: stage.title, amount: stage.amount, currency: contract.currency }) })
         : null;
       return {
         decision,

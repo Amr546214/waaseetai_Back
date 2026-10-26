@@ -62,7 +62,7 @@ test('getCompanyDeliveries: maps real StageDelivery rows with no fabricated AI m
   assert.equal(item.status, 'SUBMITTED');
   assert.equal(item.statusLabel, 'بانتظار رد العميل');
   assert.equal(item.contractRef, 'CT-CONTRA');
-  assert.equal(item.amountLabel, '4,500 $');
+  assert.equal(item.amountLabel, '4,500.00 USD');
   assert.deepEqual(item.files, ['file-a.zip']);
   assert.equal(item.note, 'تم رفع الملفات النهائية.');
 

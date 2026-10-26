@@ -6,7 +6,7 @@ const base = { id: 'am1', contractId: 'c1', projectId: 'p1', title: 'مدة', re
 
 test('created: states the real change against the contract (duration 4 -> 6)', () => {
   assert.equal(amendmentEventText('created', base, { price: 100, durationDays: 4 }), 'طلب العميل تعديل المدة من 4 إلى 6 أيام — «مدة»');
-  assert.match(amendmentEventText('created', { ...base, requestedByRole: 'PROVIDER', type: 'BUDGET', durationDeltaDays: null, budgetDelta: 50 }, { price: 200, durationDays: 4 })!, /طلب مقدم الخدمة تعديل الميزانية من 200 إلى 250 \$/);
+  assert.match(amendmentEventText('created', { ...base, requestedByRole: 'PROVIDER', type: 'BUDGET', durationDeltaDays: null, budgetDelta: 50 }, { price: 200, durationDays: 4 })!, /طلب مقدم الخدمة تعديل الميزانية من 200\.00 USD إلى 250\.00 USD/);
 });
 
 test('applied is never produced for a row the transaction did not apply', () => {

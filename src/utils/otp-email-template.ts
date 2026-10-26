@@ -1,4 +1,5 @@
 import { otpValidityText } from './otp-validity';
+import { brandName } from './brand';
 import { escHtml, MAIL_FONT, renderEmailShell } from './email-shell';
 
 /** What a code is for: the title/subtitle of the mail. `generic` keeps the old, purpose-less wording. */
@@ -35,5 +36,5 @@ export const buildOtpEmailHtml = (code: string, validityMinutes: number = 10, pu
         </td></tr>
       </table>
       <div style="font-family:${MAIL_FONT};font-size:12px;line-height:18px;color:#8b93a1;margin:0;">صالح لمدة ${otpValidityText(validityMinutes)}. إذا لم تطلب هذا الرمز، تجاهل هذا البريد.</div>`;
-	return renderEmailShell({ lang: 'ar', docTitle: `${copy.title} - Waseet AI`, bodyHtml });
+	return renderEmailShell({ lang: 'ar', docTitle: `${copy.title} - ${brandName()}`, bodyHtml });
 };

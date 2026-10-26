@@ -1,4 +1,5 @@
 import { prisma } from '../config/db';
+import { platformZone, startOfMonthInZone } from '../utils/platform-time';
 import { disconnectUserSockets } from '../utils/socket-registry';
 import { AccountType, UserStatus, UserRole, RiskLevel, Prisma, LogCategory, LogStatus, ProjectStatus } from '@prisma/client';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
@@ -9,6 +10,8 @@ import { notificationService } from './notification.service';
 import { PROVIDER_ROUTES } from './provider-notifications.service';
 import { CLIENT_ROUTES } from './client-notifications.service';
 import { NotificationCategory } from '@prisma/client';
+import { LEGACY_CURRENCY } from '../utils/currency';
+import { walletBalancesOf } from '../utils/wallet-balance';
 
 export interface GetUsersQueryParams {
   page?: number;
@@ -143,16 +146,13 @@ export class AdminUsersService {
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
 
-    const [usersThisMonth, usersPrevMonth, activeThisMonth, newThisWeek, newPrevWeek, gmvAggregation] = await Promise.all([
+    const [usersThisMonth, usersPrevMonth, activeThisMonth, newThisWeek, newPrevWeek] = await Promise.all([
       prisma.user.count({ where: { createdAt: { gte: thirtyDaysAgo }, ...nonSuperAdminWhere } }),
       prisma.user.count({ where: { createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo }, ...nonSuperAdminWhere } }),
       prisma.user.count({ where: { status: UserStatus.ACTIVE, lastActiveAt: { gte: thirtyDaysAgo }, ...nonSuperAdminWhere } }),
       prisma.user.count({ where: { createdAt: { gte: sevenDaysAgo }, ...nonSuperAdminWhere } }),
-      prisma.user.count({ where: { createdAt: { gte: fourteenDaysAgo, lt: sevenDaysAgo }, ...nonSuperAdminWhere } }),
-      prisma.user.aggregate({ _sum: { totalGmvAmount: true }, where: nonSuperAdminWhere })
+      prisma.user.count({ where: { createdAt: { gte: fourteenDaysAgo, lt: sevenDaysAgo }, ...nonSuperAdminWhere } })
     ]);
-
-    const totalGmv = Number(gmvAggregation._sum.totalGmvAmount || 0);
 
     const monthlyGrowth = usersPrevMonth > 0
       ? (((usersThisMonth - usersPrevMonth) / usersPrevMonth) * 100).toFixed(1)
@@ -205,12 +205,12 @@ export class AdminUsersService {
         count: newThisWeek,
         growth: `${Number(weeklyGrowth) >= 0 ? '+' : ''}${weeklyGrowth}% من الأسبوع الماضي`
       },
-      totalGmvAmount: totalGmv,
+      totalGmvAmount: null, // not tracked: the column is never written (see the per-user note); a per-currency figure needs a real source
       tabCounts
     };
   }
 
-  private buildWhereClause(params: GetUsersQueryParams): Prisma.UserWhereInput {
+  private buildWhereClause(params: GetUsersQueryParams, zone: string | null = null): Prisma.UserWhereInput {
     const where: Prisma.UserWhereInput = {
       accountType: { not: AccountType.SUPER_ADMIN }
     };
@@ -289,7 +289,7 @@ export class AdminUsersService {
     if (params.joinedDate && params.joinedDate !== 'ALL' && params.joinedDate !== 'all') {
       const now = new Date();
       if (params.joinedDate === 'THIS_MONTH') {
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const startOfMonth = zone ? startOfMonthInZone(zone, now) : new Date(now.getFullYear(), now.getMonth(), 1);
         where.createdAt = { gte: startOfMonth };
       } else if (params.joinedDate === 'LAST_3_MONTHS') {
         const threeMonthsAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
@@ -320,7 +320,7 @@ export class AdminUsersService {
     const limit = Math.min(Math.max(Number(params.limit) || 15, 1), 100);
     const skip = (page - 1) * limit;
 
-    const where = this.buildWhereClause(params);
+    const where = this.buildWhereClause(params, await platformZone());
 
     const sortBy = params.sortBy || 'createdAt';
     const sortOrder = params.sortOrder || 'desc';
@@ -350,7 +350,8 @@ export class AdminUsersService {
       const av = name ? name.charAt(0).toUpperCase() : u.email.charAt(0).toUpperCase();
       const avBg = AVATAR_GRADIENTS[index % AVATAR_GRADIENTS.length];
 
-      const formattedFinancial = Number(u.totalGmvAmount || 0).toLocaleString('en-US');
+      // users.totalGmvAmount has NO writer anywhere (it is always its default 0) and carries no currency: showing it would be a misleading zero, so spending / revenue are unknown (null -> the UI shows a dash)
+      const formattedFinancial: string | null = null;
 
       // Extract real specialty list if provider profile exists
       const specialtiesList = u.providerProfile?.providerSpecialties
@@ -583,7 +584,7 @@ export class AdminUsersService {
       topProviders: top.map((t: any) => ({
         userId: t.provider?.id, name: `${t.provider?.firstName ?? ''} ${t.provider?.lastName ?? ''}`.trim() || t.provider?.email, specialty: t.provider?.providerProfile?.headline ?? null,
         level: t.currentLevelIndex, levelName: PROVIDER_LEVELS[Math.min(15, Math.max(1, t.currentLevelIndex)) - 1].name, points: t.points, rating: t.avgRating, completedProjects: t.completedProjects,
-        revenue: Number(t.provider?.totalGmvAmount ?? 0), memberSince: t.provider?.createdAt ?? null
+        revenue: null, memberSince: t.provider?.createdAt ?? null
       }))
     };
   }
@@ -606,10 +607,10 @@ export class AdminUsersService {
     const sessionAgg = prisma.userSession.findFirst({ where: { userId: id }, orderBy: { lastActiveAt: 'desc' }, select: { device: true, lastActiveAt: true } });
     const [requests, orders, disputes, tickets, contracts, payments, audit, lastSession, releasedEscrows, onboarding] = await Promise.all([
       user.clientProfile ? prisma.clientRequest.findMany({ where: { clientProfileId: user.clientProfile.id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, title: true, status: true, proposalsCount: true, createdAt: true } }) : Promise.resolve([]),
-      prisma.order.findMany({ where: { userId: id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, orderNumber: true, total: true, status: true, createdAt: true } }),
+      prisma.order.findMany({ where: { userId: id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, orderNumber: true, total: true, currency: true, status: true, createdAt: true } }),
       prisma.dispute.findMany({ where: { OR: [{ openedById: id }, { againstUserId: id }] }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, reason: true, status: true, openedById: true, createdAt: true } }),
       prisma.supportTicket.findMany({ where: { userId: id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, ticketNumber: true, subject: true, status: true, createdAt: true } }),
-      prisma.contract.findMany({ where: { OR: [{ clientId: id }, { providerId: id }] }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, projectId: true, status: true, price: true, clientId: true, createdAt: true } }),
+      prisma.contract.findMany({ where: { OR: [{ clientId: id }, { providerId: id }] }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, projectId: true, status: true, price: true, currency: true, clientId: true, createdAt: true } }),
       prisma.walletTransaction.findMany({ where: { userId: id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, type: true, amount: true, currency: true, status: true, createdAt: true } }),
       prisma.accountAuditLog.findMany({ where: { userId: id }, orderBy: { occurredAt: 'desc' }, take: 15, select: { id: true, eventType: true, title: true, summary: true, source: true, severity: true, occurredAt: true } }),
       sessionAgg,
@@ -655,9 +656,11 @@ export class AdminUsersService {
         reports: tickets.length,
         disputes: disputes.length,
         avgRating: user.ratingAverage ? Math.round(user.ratingAverage * 10) / 10 : null,
-        totalRevenue: `${Number(user.totalGmvAmount || 0).toLocaleString('en-US')} $`,
+        totalRevenue: null, // not tracked: users.totalGmvAmount is never written, so a figure here would be a misleading zero
         completedProjects: user.completedProjectsCount || 0,
-        walletBalance: Number(user.walletBalance || 0)
+        walletBalance: Number(user.walletBalance || 0),
+        currency: LEGACY_CURRENCY,
+        walletBalances: await walletBalancesOf(prisma, user.id)
       },
       revenueHistory,
       personalInfo: {
@@ -723,7 +726,7 @@ export class AdminUsersService {
   }
 
   async exportCsv(params: GetUsersQueryParams): Promise<string> {
-    const where = this.buildWhereClause(params);
+    const where = this.buildWhereClause(params, await platformZone());
     const BATCH_SIZE = 1000;
     let page = 0;
     let hasMore = true;
@@ -786,7 +789,7 @@ export class AdminUsersService {
           `"${u.phoneNumber || ''}"`,
           `"${u.accountType}"`,
           `"${u.status}"`,
-          Number(u.totalGmvAmount || 0).toFixed(2),
+          '', // GMV is not tracked (the column is never written)
           u.completedProjectsCount,
           u.ratingAverage || 0,
           `"${u.tierLevel || 'Bronze'}"`,

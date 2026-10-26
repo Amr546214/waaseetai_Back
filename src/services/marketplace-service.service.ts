@@ -14,6 +14,8 @@ import { findActiveServicePurchases } from '../utils/active-purchase.util';
 import { assertSkillsInCategory, listProviderSpecialtiesWithCatalog } from './skills-catalog.service';
 import { AppError } from '../utils/app-error';
 import { selfNegotiationError } from '../utils/self-dealing';
+import { platformCurrency } from './platform-currency';
+import { LEGACY_CURRENCY } from '../utils/currency';
 
 // Batch 4 — the minimal shape getMarketplaceModels/getMarketplaceModelById
 // need from req.user to read back the requesting Client's own
@@ -247,6 +249,7 @@ export class MarketplaceService {
 		const createdService = await prisma.$transaction(async (tx: any) => {
 			const service = await tx.serviceCatalog.create({
 				data: {
+					currency: await platformCurrency(),
 					provider: {
 						connect: { id: userId }
 					},
@@ -654,6 +657,7 @@ export class MarketplaceService {
 				specialtySlug: s.specialty?.slug || '',
 				status: s.status,
 				totalAmount: Number(s.totalAmount),
+				currency: (s.currency ?? LEGACY_CURRENCY) as string, // the service's own currency
 				totalDays: s.totalDays,
 				aiScore: s.aiScore ?? s.aiAuditScore ?? null,
 				aiClarityScore: s.aiClarityScore ?? null,
@@ -769,6 +773,7 @@ export class MarketplaceService {
 			specialtySlug: s.specialty?.slug || '',
 			status: s.status,
 			totalAmount: Number(s.totalAmount),
+			currency: (s.currency ?? LEGACY_CURRENCY) as string, // the service's own currency
 			totalDays: s.totalDays,
 			aiScore: s.aiScore ?? s.aiAuditScore ?? null,
 			aiClarityScore: s.aiClarityScore ?? null,
@@ -978,6 +983,7 @@ export class MarketplaceService {
 						deliveryDays: service.totalDays,
 						budgetType: 'fixed',
 						budgetFixed: Number(service.totalAmount),
+						currency: service.currency,
 						allowNegotiation: mode === 'negotiation',
 						status: 'OPEN'
 					}
@@ -1134,6 +1140,7 @@ export class MarketplaceService {
 				categorySlug: catSlug,
 				specialtyName: model.specialty?.nameAr || '',
 				totalAmount: Number(model.totalAmount) || 0,
+				currency: (model.currency ?? LEGACY_CURRENCY) as string,
 				viewsCount: views,
 				salesCount: model.salesCount || 0,
 				offersCount: model.salesCount || 0,

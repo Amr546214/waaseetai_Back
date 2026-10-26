@@ -1,4 +1,5 @@
 import { presentedIdentity, isAdminAccountType } from '../utils/admin-identity';
+import { issueAccessToken } from '../utils/access-token';
 import jwt from 'jsonwebtoken';
 import { UserRole, AccountType, Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
@@ -498,15 +499,14 @@ export class AccountManagementService {
 
     const jwtSecret = process.env.JWT_SECRET;
     if (!jwtSecret) throw new AppError('JWT_SECRET غير معرّف', 500);
-    const token = jwt.sign(
+    const { token } = await issueAccessToken(
       {
         userId: user.id,
         accountType: user.accountType,
         activeRole: targetRole,
         roles: updatedRoles
       },
-      jwtSecret,
-      { expiresIn: '7d' }
+      jwtSecret
     );
 
     return {
@@ -557,15 +557,14 @@ export class AccountManagementService {
 
     const jwtSecret = process.env.JWT_SECRET;
     if (!jwtSecret) throw new AppError('JWT_SECRET غير معرّف', 500);
-    const token = jwt.sign(
+    const { token } = await issueAccessToken(
       {
         userId: updatedUser.id,
         accountType: updatedUser.accountType,
         activeRole: targetRole,
         roles: currentRoles
       },
-      jwtSecret,
-      { expiresIn: '7d' }
+      jwtSecret
     );
 
     await accountAuditLogService.record({ userId, eventType: 'ROLE_SWITCHED', category: 'SYSTEM_AUDIT', title: 'تبديل الحساب النشط', summary: `تم الانتقال إلى دور ${targetRole}`, source: 'USER', status: 'COMPLETED', after: { activeRole: targetRole }, context: auditContext });

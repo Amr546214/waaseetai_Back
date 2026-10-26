@@ -87,7 +87,7 @@ test('exportCsv: rows keep every legitimate field and carry no risk values', asy
 		'"+966500000000"',
 		'"CLIENT"',
 		'"ACTIVE"',
-		'1234.50',
+		'', // GMV is not tracked: the column has no writer and no currency, so it is unknown, not 1234.50
 		'3',
 		'4.5',
 		'"Gold"',

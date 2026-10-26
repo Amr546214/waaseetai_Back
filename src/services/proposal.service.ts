@@ -21,6 +21,7 @@ export interface GetProviderOffersFiltersDto {
 }
 
 import { buildProviderContractView, type ProviderContractView } from '../utils/contract-terms';
+import { requireCurrency, assertSameCurrency, LEGACY_CURRENCY, formatMoney } from '../utils/currency';
 
 export type ProviderOfferStatusKey = 'pending' | 'pending_response' | 'pending_signature' | 'nego' | 'accepted' | 'rejected';
 
@@ -134,6 +135,7 @@ export class ProposalService {
 				project = await prisma.project.create({
 					data: {
 						id: clientRequest.id,
+						currency: clientRequest.currency,
 						title: clientRequest.title,
 						description: clientRequest.description,
 						specialty: 'عام',
@@ -266,11 +268,15 @@ export class ProposalService {
 
 		// 5. Transactional execution saving ProjectProposal & ProposalMilestone entries
 		let offerNotificationId: string | null = null;
+		// an offer is in the currency of the request / project it answers; there is no cross-currency offer in phase 1
+		const offerCurrency = requireCurrency(clientRequest?.currency ?? project?.currency ?? LEGACY_CURRENCY, 'عملة الطلب');
+		if (project && clientRequest) assertSameCurrency(project.currency, clientRequest.currency, 'العرض');
 		const newProposal = await prisma.$transaction(async (tx) => {
 			const created = await tx.projectProposal.create({
 				data: {
 					projectId,
 					providerId,
+					currency: offerCurrency,
 					title: data.title,
 					message: data.message,
 					advantages: data.advantages || [],
@@ -292,7 +298,8 @@ export class ProposalService {
 							description: m.description,
 							days: m.days,
 							percentage: m.percentage,
-							amount: m.amount
+							amount: m.amount,
+							currency: offerCurrency
 						}))
 					}
 				},
@@ -323,6 +330,7 @@ export class ProposalService {
 						clientRequestId: clientRequest.id,
 						projectId: project?.id,
 						providerId,
+						currency: offerCurrency,
 						price: data.totalPrice,
 						deliveryDays: data.deliveryDays,
 						coverLetter: data.message,
@@ -474,8 +482,8 @@ export class ProposalService {
 			projectTitle,
 			title: projectTitle,
 			offeredPrice: priceVal,
-			price: `${priceVal.toLocaleString('en-US')} $`,
-			currency: 'USD', // active proposal pricing is now USD-semantic
+			price: formatMoney(priceVal, item.currency),
+			currency: item.currency ?? LEGACY_CURRENCY, // the offer's own currency
 			status: statusEnum,
 			statusKey,
 			statusText,

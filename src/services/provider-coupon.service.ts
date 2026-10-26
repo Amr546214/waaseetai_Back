@@ -2,6 +2,8 @@ import { AccountType } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { NOT_CANCELLED, StatsPaging, customerName, distinctOrderRevenue, pageMeta, round2, weeklyTrend } from './marketing-stats.util';
+import { platformCurrency } from './platform-currency';
+import { LEGACY_CURRENCY } from '../utils/currency';
 
 const providerCouponInclude = { services: { select: { serviceId: true } } } as const;
 
@@ -65,6 +67,7 @@ export class ProviderCouponService {
     const pending = isCompany && needsCompanyApproval({ discountType: input.discountType, discountValue: input.discountValue, maxUses: input.maxUses ?? null });
 
     const coupon = await prisma.coupon.create({ data: {
+      currency: await platformCurrency(),
       providerId, code: input.code, discountType: input.discountType,
       discountValue: input.discountValue, minimumAmount: input.minimumAmount ?? null,
       maxDiscount: input.maxDiscount ?? null, maxUses: input.maxUses ?? null,
@@ -187,10 +190,13 @@ export class ProviderCouponService {
   // this provider (not just the marketing center's top-10). Same data rules
   // as marketing-center.service.ts: CANCELLED orders excluded.
   async getStats(providerId: string, id: string, paging: StatsPaging = { page: 1, pageSize: 10 }, now: Date = new Date()) {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
     const coupon = await prisma.coupon.findFirst({ where: { id, providerId }, select: { id: true, maxUses: true } });
     if (!coupon) throw new AppError('الكوبون غير موجود', 404);
 
-    const where = { couponId: id, order: NOT_CANCELLED };
+    // every figure below is the USD view (a redemption on an order in another currency is never added in: it is counted apart as otherCurrencyUses)
+    const where = { couponId: id, order: { ...NOT_CANCELLED, currency: base } };
+    const otherCurrencyUses = await prisma.couponRedemption.count({ where: { couponId: id, order: { ...NOT_CANCELLED, currency: { not: base } } } });
     const [all, page] = await Promise.all([
       prisma.couponRedemption.findMany({
         where,
@@ -203,7 +209,7 @@ export class ProviderCouponService {
         take: paging.pageSize,
         select: {
           id: true, amount: true, createdAt: true, orderId: true,
-          order: { select: { orderNumber: true, status: true, subtotal: true, total: true } },
+          order: { select: { orderNumber: true, status: true, subtotal: true, total: true, currency: true } },
           user: { select: { id: true, firstName: true, lastName: true } }
         }
       })
@@ -216,6 +222,8 @@ export class ProviderCouponService {
 
     return {
       id: coupon.id,
+      currency: base,
+      otherCurrencyUses,
       totals: {
         usageCount: all.length,
         maxUses: coupon.maxUses ?? null,
@@ -238,6 +246,7 @@ export class ProviderCouponService {
           orderValue: r.order?.subtotal ?? null,
           discountApplied: round2(r.amount),
           netValue: r.order?.total ?? null,
+          currency: r.order?.currency ?? LEGACY_CURRENCY,
           createdAt: r.createdAt
         })),
         ...pageMeta(paging, all.length)

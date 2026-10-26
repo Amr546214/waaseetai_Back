@@ -8,9 +8,9 @@ import assert from 'node:assert/strict';
 async function loadService(t: TestContext, opts: { contractsPendingPayment?: number; proposalCount?: number; reviews?: { count: number; avg: number | null }; stages?: { total: number; approved: number }; pendingCount?: number; throwReviews?: boolean; activeContract?: any } = {}) {
   const calls: { proposalCount: any[]; contractCount: any[]; review: any[]; stageCount: any[] } = { proposalCount: [], contractCount: [], review: [], stageCount: [] };
   const prismaMock: any = {
-    project: { count: async () => 0, aggregate: async () => ({ _sum: { budgetFixed: 0, budgetMax: 0 } }), findMany: async () => [] },
+    project: { count: async () => 0, groupBy: async () => [], findMany: async () => [] },
     proposal: { count: async (a: any) => { calls.proposalCount.push(a); return opts.proposalCount ?? 0; }, findMany: async () => [] },
-    escrow: { aggregate: async () => ({ _sum: { amount: 0 } }) },
+    escrow: { groupBy: async () => [] },
     user: { findUnique: async () => ({ activeRole: 'CLIENT', profileCompletionPercent: 0, currentLevel: null, currentPoints: 0, pointsToNextLevel: 100, clientProfile: null }) },
     contract: {
       findFirst: async () => opts.activeContract ?? null,

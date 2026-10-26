@@ -50,6 +50,8 @@ export const ADMIN_PERMISSIONS: readonly AdminPermissionDef[] = [
 	{ id: 'packages.manage', label: 'تعديل الباقات', group: 'content', sensitive: true, designRow: 'تعديل الباقات' },
 
 	{ id: 'finance.read', label: 'قراءة المالية', group: 'finance', sensitive: false, designRow: 'عرض التقارير المالية' },
+	{ id: 'fees.view', label: 'عرض سياسة الرسوم والعمولات', group: 'finance', sensitive: false },
+	{ id: 'fees.manage', label: 'جدولة تعديل الرسوم والعمولات والحدود الدنيا', group: 'finance', sensitive: true },
 	{ id: 'withdrawals.review', label: 'مراجعة طلبات السحب', group: 'finance', sensitive: false },
 	{ id: 'withdrawals.approve', label: 'الموافقة على السحب', group: 'finance', sensitive: true, designRow: 'الموافقة على السحوبات' },
 	{ id: 'withdrawals.reject', label: 'رفض السحب', group: 'finance', sensitive: true },
@@ -61,6 +63,7 @@ export const ADMIN_PERMISSIONS: readonly AdminPermissionDef[] = [
 	{ id: 'performance.export', label: 'تصدير الأداء', group: 'team', sensitive: false },
 	{ id: 'messages.use', label: 'مراسلة فريق الإدارة', group: 'team', sensitive: false },
 
+	{ id: 'settings.view', label: 'عرض إعدادات النظام', group: 'system', sensitive: false },
 	{ id: 'settings.manage', label: 'إعدادات النظام', group: 'system', sensitive: true, designRow: 'تعديل الإعدادات' },
 	{ id: 'site_control.manage', label: 'التحكم بالموقع', group: 'system', sensitive: true },
 	{ id: 'audit.view', label: 'عرض سجلات التدقيق', group: 'system', sensitive: false, designRow: 'Audit Trail' },

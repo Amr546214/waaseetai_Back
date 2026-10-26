@@ -22,13 +22,13 @@ const counter = (n = 0) => async () => n;
 
 // ───────────── dashboard
 test('dashboard summary: empty database gives zeros, no alerts, never a fixed figure', async () => {
-	const zero = { count: counter(0), aggregate: async () => ({ _sum: {} }) };
+	const zero = { count: counter(0), aggregate: async () => ({ _sum: {} }), groupBy: async () => [] };
 	current = { user: zero, project: zero, clientRequest: zero, escrow: zero, dispute: zero, supportTicket: zero, withdrawal: zero, profileModificationRequest: zero, providerProfile: zero, clientOnboarding: zero, affiliateProfile: zero, profileChangeRequest: zero, accreditationSample: zero, providerSpecialty: zero };
 	const { adminDashboardService } = await fresh('./admin-dashboard.service.ts');
 	const s = await adminDashboardService.getSummary(new Date('2026-10-14T10:00:00Z'));
 	assert.equal(s.kpis.users.total, 0);
 	assert.equal(s.kpis.users.growthPercent, null);
-	assert.deepEqual(s.kpis.revenue, { platformCommissionTotal: 0, platformCommissionThisMonth: 0, escrowHeld: 0 });
+	assert.deepEqual(s.kpis.revenue, { platformCommissionTotal: 0, platformCommissionThisMonth: 0, escrowHeld: 0, platformCommissionTotalBy: {}, platformCommissionThisMonthBy: {}, escrowHeldBy: {} });
 	assert.equal(s.kpis.withdrawals.pendingAmount, 0);
 	assert.deepEqual(s.alerts, []);
 	assert.ok(s.queues.every((q: any) => q.count === 0 && q.link.startsWith('/supper-admin-overview/')));
@@ -40,10 +40,10 @@ test('dashboard summary: aggregates with fixtures flow through (counts, sums, al
 	current = {
 		user: { count: async (a: any) => (a.where.createdAt?.lt ? 4 : a.where.createdAt?.gte ? (a.where.createdAt.lt === undefined && a.where.createdAt.gte.getUTCMonth() === 9 ? 6 : 4) : 10) },
 		project: { count: counter(3) }, clientRequest: { count: counter(2) },
-		escrow: { aggregate: sum(125.456) },
+		escrow: { groupBy: async () => [{ currency: 'USD', _sum: { platformCommissionAmount: 125.456, amount: 125.456 } }, { currency: 'SAR', _sum: { platformCommissionAmount: 9, amount: 40 } }] },
 		dispute: { count: async (a: any) => (a.where.createdAt ? 1 : 5) },
 		supportTicket: { count: counter(7) },
-		withdrawal: { count: counter(2), aggregate: async () => ({ _sum: { amount: 300 } }) },
+		withdrawal: { count: counter(2), groupBy: async () => [{ currency: 'USD', _sum: { amount: 300 } }, { currency: 'SAR', _sum: { amount: 50 } }] },
 		profileModificationRequest: { count: counter(1) }, providerProfile: { count: counter(2) },
 		clientOnboarding: { count: async (a: any) => (a.where.createdAt ? 1 : 3) },
 		affiliateProfile: { count: counter(0) }, profileChangeRequest: { count: counter(0) }, accreditationSample: { count: counter(4) }, providerSpecialty: { count: counter(9) }
@@ -55,7 +55,8 @@ test('dashboard summary: aggregates with fixtures flow through (counts, sums, al
 	assert.equal(s.kpis.disputes.openOver7Days, 1);
 	assert.equal(s.kpis.tickets.open, 7);
 	assert.equal(s.kpis.withdrawals.pendingAmount, 300);
-	assert.equal(s.kpis.revenue.platformCommissionTotal, 125.46);
+	assert.deepEqual(s.kpis.withdrawals.pendingAmountBy, { USD: 300, SAR: 50 }, 'each currency on its own; the USD figure is the headline');
+	assert.equal(s.kpis.revenue.platformCommissionTotal, 125.46); assert.deepEqual(s.kpis.revenue.platformCommissionTotalBy, { USD: 125.46, SAR: 9 }, 'SAR is listed on its own, never added to the USD figure');
 	assert.equal(s.queues.find((q: any) => q.key === 'kyc').count, 2 + 3);
 	assert.ok(s.alerts.some((a: any) => a.key === 'disputesOver7Days' && a.severity === 'high'));
 	void by;
@@ -164,10 +165,11 @@ test('user detail: 404 for an unknown id; otherwise tabs/kpis/audit come from ro
 	const user = { id: 'u1', accountType: 'CLIENT_INDIVIDUAL', status: 'ACTIVE', roles: ['CLIENT'], activeRole: 'CLIENT', firstName: 'م', lastName: 'ح', accountHolderName: null, email: 'a@x.com', phoneNumber: null, city: null, idNumber: '1234567890', lastActiveAt: null, createdAt: new Date('2026-01-01'), totalGmvAmount: 1200, completedProjectsCount: 2, ratingAverage: 4.5, tierLevel: 'Gold', walletBalance: 5, clientProfile: { id: 'c1', kycStatus: 'VERIFIED', companyName: null }, providerProfile: null, affiliateProfile: null };
 	current = { user: { findUnique: async () => null } };
 	await rejects(svc.getUserDetail('nope'), 404);
-	current = { user: { findUnique: async () => user }, clientRequest: { findMany: async () => [{ id: 'r1', title: 'طلب', status: 'OPEN', proposalsCount: 0, createdAt: new Date() }] }, order: empty, dispute: { findMany: async () => [{ id: 'd1' }] }, supportTicket: empty, contract: empty, walletTransaction: empty, accountAuditLog: { findMany: async () => [{ id: 'a1', eventType: 'X', title: 't', summary: 's', source: 'ADMIN', severity: 'INFO', occurredAt: new Date() }] }, userSession: { findFirst: async () => null }, escrow: empty, clientOnboarding: { findUnique: async () => ({ status: 'APPROVED' }) } };
+	current = { walletBalance: { findMany: async () => [] }, user: { findUnique: async () => user }, clientRequest: { findMany: async () => [{ id: 'r1', title: 'طلب', status: 'OPEN', proposalsCount: 0, createdAt: new Date() }] }, order: empty, dispute: { findMany: async () => [{ id: 'd1' }] }, supportTicket: empty, contract: empty, walletTransaction: empty, accountAuditLog: { findMany: async () => [{ id: 'a1', eventType: 'X', title: 't', summary: 's', source: 'ADMIN', severity: 'INFO', occurredAt: new Date() }] }, userSession: { findFirst: async () => null }, escrow: empty, clientOnboarding: { findUnique: async () => ({ status: 'APPROVED' }) } };
 	const d = await svc.getUserDetail('u1');
 	assert.equal(d.kpis.disputes, 1);
-	assert.equal(d.kpis.totalRevenue, '1,200 $');
+	// users.totalGmvAmount has no writer in the application and carries no currency: a value read from it would be a number of unknown currency, so the figure is unknown (null), not '1,200 $'
+	assert.equal(d.kpis.totalRevenue, null);
 	assert.deepEqual(d.revenueHistory, []);
 	assert.equal(d.tabs.requests.length, 1);
 	assert.deepEqual(d.tabs.payments, []);

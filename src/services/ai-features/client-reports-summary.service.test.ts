@@ -17,7 +17,7 @@ mock.module('../../config/db', { namedExports: { prisma: {
   review: { findMany: async () => state.reviews },
   dispute: { findMany: async () => [] },
   walletTransaction: { findMany: async () => [{ id: 'tx-secret', amount: 5 }] },
-  escrow: { aggregate: async () => ({ _sum: { amount: null } }) },
+  escrow: { groupBy: async () => [] },
 } } });
 
 async function load(_t: TestContext, o: { requests?: any[]; reviews?: any[] } = {}) {

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { aiProposalService, type ProposalEvaluation, type ProposalEvaluationInput } from '../services/ai-proposal.service';
 import { AppError } from '../utils/app-error';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
+import { LEGACY_CURRENCY, formatMoney } from '../utils/currency';
 
 // Proposal quality review. The only AI input is WaseetAI `proposals/enrich`
 // (via aiProposalService.evaluate): a PROPOSAL-QUALITY score, tag and summary
@@ -96,7 +97,7 @@ export function buildQualityAuditResult(
     }],
     triPartyComparison: {
       client: { budget: UNAVAILABLE, duration: UNAVAILABLE, milestones: UNAVAILABLE },
-      provider: { budget: `${draft.price} $`, duration: `${draft.durationDays} يوم`, milestones: `${draft.milestonesCount} مرحلة` },
+      provider: { budget: formatMoney(Number(draft.price), (draft as { currency?: string }).currency ?? LEGACY_CURRENCY), duration: `${draft.durationDays} يوم`, milestones: `${draft.milestonesCount} مرحلة` },
       aiRecommendation: { budget: UNSUPPORTED, duration: UNSUPPORTED, milestones: UNSUPPORTED }
     },
     triPartyNote: QUALITY_SCOPE_NOTE,

@@ -1,6 +1,9 @@
 import nodemailer from 'nodemailer';
 import { otpValidityText } from './otp-validity';
 import { buildOtpEmailHtml, type OtpEmailPurpose } from './otp-email-template';
+import { LEGACY_CURRENCY, formatMoney } from './currency';
+import { escHtml } from './email-shell';
+import { brandName, brandNameInArabicText } from './brand';
 
 // SMTP Configuration
 const smtpConfig = {
@@ -33,7 +36,7 @@ export const getPasswordResetEmailTemplate = (firstName: string, code: string, v
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>إعادة تعيين كلمة المرور - وسيط AI</title>
+      <title>إعادة تعيين كلمة المرور - ${escHtml(brandNameInArabicText())}</title>
       <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
       <style>
         body {
@@ -119,11 +122,11 @@ export const getPasswordResetEmailTemplate = (firstName: string, code: string, v
       <div class="wrapper">
         <div class="container">
           <div class="header">
-            <h1>Waseet AI</h1>
+            <h1>${escHtml(brandName())}</h1>
           </div>
           <div class="content">
             <h2 class="title">طلب إعادة تعيين كلمة المرور</h2>
-            <p class="desc">أهلاً ${firstName || ''}،<br>وصلنا طلب لإعادة تعيين كلمة المرور الخاصة بحسابك في منصة وسيط AI. استخدم الرمز التالي لمتابعة العملية:</p>
+            <p class="desc">أهلاً ${firstName || ''}،<br>وصلنا طلب لإعادة تعيين كلمة المرور الخاصة بحسابك في منصة ${escHtml(brandNameInArabicText())}. استخدم الرمز التالي لمتابعة العملية:</p>
 
             <div class="code-box">
               ${code}
@@ -132,7 +135,7 @@ export const getPasswordResetEmailTemplate = (firstName: string, code: string, v
             <p class="warning">هذا الرمز صالح لمدة ${otpValidityText(validityMinutes)} فقط.<br>إذا لم تطلب إعادة تعيين كلمة المرور، يمكنك تجاهل هذه الرسالة بأمان ولن يتم تغيير أي شيء في حسابك.</p>
           </div>
           <div class="footer">
-            <p>&copy; ${new Date().getFullYear()} وسيط الذكاء الاصطناعي للتقنية. جميع الحقوق محفوظة.</p>
+            <p>&copy; ${new Date().getFullYear()} ${escHtml(brandNameInArabicText())}. جميع الحقوق محفوظة.</p>
           </div>
         </div>
       </div>
@@ -142,14 +145,14 @@ export const getPasswordResetEmailTemplate = (firstName: string, code: string, v
 };
 
 // Waseet AI Escrow Deposit Confirmation Template
-export const getDepositConfirmationTemplate = (projectName: string, amount: number) => {
+export const getDepositConfirmationTemplate = (projectName: string, amount: number, currency: string = LEGACY_CURRENCY) => {
   return `
     <!DOCTYPE html>
     <html lang="ar" dir="rtl">
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>تأكيد إيداع الضمان - وسيط AI</title>
+      <title>تأكيد إيداع الضمان - ${escHtml(brandNameInArabicText())}</title>
       <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
       <style>
         body {
@@ -236,21 +239,21 @@ export const getDepositConfirmationTemplate = (projectName: string, amount: numb
       <div class="wrapper">
         <div class="container">
           <div class="header">
-            <h1>Waseet AI</h1>
+            <h1>${escHtml(brandName())}</h1>
           </div>
           <div class="content">
             <h2 class="title">تم إيداع الضمان بنجاح 🎉</h2>
-            <p class="desc">أهلاً بك،<br>تم تأكيد استلام الدفعة وإيداعها في حساب الضمان الآمن الخاص بمنصة وسيط الذكاء الاصطناعي للمشروع التالي:</p>
+            <p class="desc">أهلاً بك،<br>تم تأكيد استلام الدفعة وإيداعها في حساب الضمان الآمن الخاص بمنصة ${escHtml(brandNameInArabicText())} للمشروع التالي:</p>
             
             <div class="info-box">
-              <h3>${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $</h3>
+              <h3>${formatMoney(amount, currency)}</h3>
               <p>مشروع: ${projectName}</p>
             </div>
             
             <p class="desc">تم تغيير حالة المشروع إلى "قيد التنفيذ". سيبقى المبلغ آمناً لدينا ولن يتم تحويله لمقدم الخدمة إلا بعد استلامك للمشروع واعتمادك النهائي له.</p>
           </div>
           <div class="footer">
-            <p>&copy; ${new Date().getFullYear()} وسيط الذكاء الاصطناعي للتقنية. جميع الحقوق محفوظة.</p>
+            <p>&copy; ${new Date().getFullYear()} ${escHtml(brandNameInArabicText())}. جميع الحقوق محفوظة.</p>
           </div>
         </div>
       </div>
@@ -260,14 +263,14 @@ export const getDepositConfirmationTemplate = (projectName: string, amount: numb
 };
 
 // Waseet AI Provider Contract Signature Template
-export const getProviderContractSignatureTemplate = (projectName: string, clientName: string, amount: number) => {
+export const getProviderContractSignatureTemplate = (projectName: string, clientName: string, amount: number, currency: string = LEGACY_CURRENCY) => {
   return `
     <!DOCTYPE html>
     <html lang="ar" dir="rtl">
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>توقيع عقد مشروع جديد - وسيط AI</title>
+      <title>توقيع عقد مشروع جديد - ${escHtml(brandNameInArabicText())}</title>
       <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
       <style>
         body {
@@ -354,21 +357,21 @@ export const getProviderContractSignatureTemplate = (projectName: string, client
       <div class="wrapper">
         <div class="container">
           <div class="header">
-            <h1>Waseet AI</h1>
+            <h1>${escHtml(brandName())}</h1>
           </div>
           <div class="content">
             <h2 class="title">دعوة لتوقيع العقد 📝</h2>
-            <p class="desc">أهلاً بك،<br>لقد تم قبول عرضك وإيداع قيمة المشروع في حساب الضمان الآمن الخاص بمنصة وسيط الذكاء الاصطناعي.</p>
+            <p class="desc">أهلاً بك،<br>لقد تم قبول عرضك وإيداع قيمة المشروع في حساب الضمان الآمن الخاص بمنصة ${escHtml(brandNameInArabicText())}.</p>
             
             <div class="info-box">
-              <h3>${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $</h3>
+              <h3>${formatMoney(amount, currency)}</h3>
               <p>مشروع: ${projectName}</p>
             </div>
             
             <p class="desc">يرجى الدخول إلى حسابك في المنصة وتوقيع العقد للبدء في تنفيذ المشروع.<br>تم تغيير حالة المشروع إلى "قيد التنفيذ". نتمنى لك التوفيق!</p>
           </div>
           <div class="footer">
-            <p>&copy; ${new Date().getFullYear()} وسيط الذكاء الاصطناعي للتقنية. جميع الحقوق محفوظة.</p>
+            <p>&copy; ${new Date().getFullYear()} ${escHtml(brandNameInArabicText())}. جميع الحقوق محفوظة.</p>
           </div>
         </div>
       </div>

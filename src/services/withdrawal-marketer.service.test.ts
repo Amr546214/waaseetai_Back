@@ -28,6 +28,8 @@ function createMock(t: TestContext, opts: {
 	// Throws a P2034 at commit for the given attempts; `onConflict` runs just
 	// before throwing, after the doomed attempt's writes were rolled back.
 	conflict?: { attempts: number; onConflict?: (withdrawals: any[]) => void };
+	/** the fee policy in force (minimum payouts); omitted = the real service, which falls back to the baseline (marketer 300, provider none) */
+	policy?: { id: string; minMarketerPayout: number; minProviderPayout: number };
 }) {
 	const withdrawals: any[] = (opts.withdrawals ?? []).map(w => ({ currency: 'USD', method: 'bank_transfer', ...w }));
 	const commissions = opts.commissions ?? [];
@@ -115,6 +117,7 @@ function createMock(t: TestContext, opts: {
 		}
 	};
 	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+	if (opts.policy) t.mock.module('./fee-policy.service', { namedExports: { feePolicyService: { active: async () => ({ id: opts.policy!.id, version: 2, payload: { minMarketerPayout: opts.policy!.minMarketerPayout, minProviderPayout: opts.policy!.minProviderPayout } }) } } });
 
 	const getWalletSpy = t.mock.fn(async () => ({ summary: { availableBalance: opts.providerWalletBalance ?? 0, currency: 'USD' } }));
 	t.mock.module('./provider-finance.service', { namedExports: { providerFinanceService: { getWallet: getWalletSpy } } });
@@ -144,7 +147,7 @@ test('1. approve: a marketer (not a provider) withdrawal within APPROVED commiss
 	assert.equal(result.reviewedById, 'admin-1');
 	assert.equal(getWalletSpy.mock.callCount(), 0, 'provider wallet must never be consulted for a marketer withdrawal');
 	assert.equal(commissionAggregateSpy.mock.callCount(), 1);
-	assert.deepEqual(commissionAggregateSpy.mock.calls[0].arguments[0].where, { affiliateId: 'aff-1', status: 'APPROVED' });
+	assert.deepEqual(commissionAggregateSpy.mock.calls[0].arguments[0].where, { affiliateId: 'aff-1', status: 'APPROVED', currency: 'USD' }); // payouts are USD: earnings in another currency are never in this balance
 	assert.equal(transactionSpy.mock.calls[0].arguments[1]?.isolationLevel, 'Serializable');
 	assert.equal(walletTransactions.length, 1);
 	assert.equal(walletTransactions[0].amount, -400);
@@ -398,4 +401,19 @@ test('PayPal only: the marketer history never returns a legacy bank destination 
 	const out = await svc.listForMarketer('marketer-1');
 	for (const item of out.items) for (const k of ['iban', 'accountName', 'accountNumber']) assert.equal(k in item, false, k);
 	assert.equal(out.items[1].paypalEmail, 'm@example.com');
+});
+
+// ── fee policy: the minimum payout comes from the policy in force and is stored on the request ──────────────
+test('12. marketer minimum payout = the policy in force (raised floor wins over a lower per-affiliate minimum); the request stores the policy id and the minimum it was checked against', async (t) => {
+	const { withdrawalService, createSpy } = await load(t, { owner: MARKETER, providerWalletBalance: 0, policy: { id: 'pol-2', minMarketerPayout: 500, minProviderPayout: 0 }, commissions: [{ affiliateId: 'aff-1', amount: 900, status: 'APPROVED' }] });
+	await assert.rejects(withdrawalService.createForMarketer('marketer-1', { amount: 450 }), (e: any) => e.statusCode === 400 && e.message.includes('500'));
+	assert.equal(createSpy.mock.callCount(), 0);
+	const ok = await withdrawalService.createForMarketer('marketer-1', { amount: 600 });
+	assert.equal(ok.feePolicyId, 'pol-2'); assert.equal(ok.minimumApplied, 500);
+});
+
+test('13. marketer minimum without a managed policy is today\'s 300 (a per-affiliate minimum above it still wins) and the stored minimum says so', async (t) => {
+	const { withdrawalService } = await load(t, { owner: MARKETER, providerWalletBalance: 0, commissions: [{ affiliateId: 'aff-1', amount: 900, status: 'APPROVED' }] });
+	await assert.rejects(withdrawalService.createForMarketer('marketer-1', { amount: 250 }), (e: any) => e.statusCode === 400 && e.message.includes('300'));
+	const ok = await withdrawalService.createForMarketer('marketer-1', { amount: 300 }); assert.equal(ok.minimumApplied, 300);
 });

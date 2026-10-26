@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { getProviderStatistics, getProviderOffers, getProviderOfferById, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, uploadStageDeliveryFiles, getDeliveryAiReview, getProjectHealthAnalysis, getProviderWallet, getProviderTransactions, getCompanyDeliveries, getProviderInvoices, getProviderInvoice, getProviderSales } from '../controllers/provider.controller';
+import { getProviderStatistics, getProviderOffers, getProviderOfferById, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, uploadStageDeliveryFiles, getDeliveryAiReview, getProjectHealthAnalysis, getProviderWallet, getProviderFeePreview, getProviderTransactions, getCompanyDeliveries, getProviderInvoices, getProviderInvoice, getProviderSales } from '../controllers/provider.controller';
 import { submitWithdrawal, listMyWithdrawals } from '../controllers/withdrawal.controller';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, authorizeActiveRole, requireActiveUser } from '../middlewares/auth.middleware';
@@ -131,6 +131,8 @@ router.post('/projects/:id/health', authenticate, requireActiveUser, providerOnl
 router.get('/company/deliveries', authenticate, requireActiveUser, providerOnly, getCompanyDeliveries);
 
 router.get('/finance/wallet', authenticate, requireActiveUser, providerOnly, getProviderWallet);
+// the provider's commission and net for a price, BEFORE signing/funding (an estimate; the rate is frozen on the escrow at funding)
+router.get('/finance/fee-preview', authenticate, requireActiveUser, providerOnly, getProviderFeePreview);
 router.get('/finance/transactions', authenticate, requireActiveUser, providerOnly, getProviderTransactions);
 router.get('/finance/invoices', authenticate, requireActiveUser, providerOnly, getProviderInvoices);
 router.get('/finance/invoices/:id', authenticate, requireActiveUser, providerOnly, getProviderInvoice);

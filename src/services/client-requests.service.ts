@@ -1,5 +1,6 @@
 import { selfHireError } from '../utils/self-dealing';
-import { buildEscrowSnapshot, ESCROW_FEE_POLICY_V2 } from '../utils/escrow-commission';
+import { buildEscrowSnapshotFromPolicy, ESCROW_FEE_POLICY_V2 } from '../utils/escrow-commission';
+import { feePolicyService } from './fee-policy.service';
 import { prisma } from '../config/db';
 import { deriveRequestStage, offerActionBlock, REQUEST_STAGE_GROUP, REQUEST_STAGE_LABEL } from '../utils/request-lifecycle';
 import { clientOfferCounterService } from './client-offer-counter.service';
@@ -28,6 +29,11 @@ import {
 	getDepositConfirmationTemplate,
 	getProviderContractSignatureTemplate
 } from '../utils/mail.transporter';
+import { debitWalletIfCovered, walletBalanceOf } from '../utils/wallet-balance';
+import { requireCurrency, assertSameCurrency } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
+import { brandNameInArabicText } from '../utils/brand';
+import { LEGACY_CURRENCY } from '../utils/currency';
 
 function generateSlug(text: string): string {
 	if (!text) return `slug-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -374,8 +380,10 @@ export class ClientRequestsService {
 		});
 
 		// 4. Create ClientRequest in PostgreSQL
+		const requestCurrency = await platformCurrency();
 		const clientRequest = await prisma.clientRequest.create({
 			data: {
+				currency: requestCurrency,
 				clientProfileId: clientProfile.id,
 				specialtyId: resolvedSpecialty.id,
 				title: dto.title,
@@ -415,6 +423,7 @@ export class ClientRequestsService {
 			await prisma.project.create({
 				data: {
 					id: clientRequest.id, // match ID
+					currency: requestCurrency,
 					title: dto.title,
 					description: dto.description,
 					specialty: resolvedSpecialty.nameAr || resolvedSpecialty.name || 'عام',
@@ -859,6 +868,7 @@ export class ClientRequestsService {
 				},
 				contractReference: `CT-${c.id.substring(0, 4).toUpperCase()}`,
 				// totalPrice = the contract value (historical for a settled project); releasedAmount = released through stage approvals ONLY; heldAmount = money really in the escrow now.
+				currency: (c.currency ?? LEGACY_CURRENCY) as string, // totalPrice / releasedAmount / heldAmount below are in the contract's currency
 				totalPrice: lc.financial.contractValue || totalPrice,
 				releasedAmount: lc.financial.releasedByStageApprovals,
 				heldAmount: lc.financial.heldNow,
@@ -1070,7 +1080,7 @@ export class ClientRequestsService {
 
 		// Only money really sitting in an escrow counts as held. The branches above work from the offer price and can only ESTIMATE; a project that is not funded holds nothing,
 		// and without real milestones there is no honest progress figure (0, or 100 once completed). This endpoint must never report estimated held amounts.
-		const escrowRow = await prisma.escrow.findUnique({ where: { projectId: requestId }, select: { status: true, amount: true, releasedAmount: true, platformCommissionAmount: true, providerNetReleasedAmount: true } });
+		const escrowRow = await prisma.escrow.findUnique({ where: { projectId: requestId }, select: { currency: true, status: true, amount: true, releasedAmount: true, platformCommissionAmount: true, providerNetReleasedAmount: true } });
 		heldAmount = escrowRow && String(escrowRow.status) === 'HELD' ? Math.max(0, Number(escrowRow.amount) - Number(escrowRow.releasedAmount || 0)) : 0;
 		if (realMilestones.length === 0 || timelines.length === 0) progress = rawStatus === 'COMPLETED' && !settlement.settled ? 100 : 0;
 		if (settlement.settled && stageRows.length === 0) {
@@ -1112,6 +1122,7 @@ export class ClientRequestsService {
 				completedMilestones: completedMilestones,
 				heldAmount: heldAmount,
 				releasedAmount: releasedAmount,
+				currency: ((contractRow as { currency?: string } | null | undefined)?.currency ?? (escrowRow as { currency?: string } | null | undefined)?.currency ?? LEGACY_CURRENCY) as string,
 				provider: {
 					name: providerName,
 					initial: providerInitial
@@ -1280,6 +1291,7 @@ export class ClientRequestsService {
 				coverLetter: prop.coverLetter || '',
 				workPlan: prop.workPlan || '',
 				bidAmount: Number(prop.price || 0),
+				currency: ((prop as { currency?: string }).currency ?? LEGACY_CURRENCY) as string,
 				deliveryDays: prop.deliveryDays || 1,
 				aiMatchScore: prop.aiMatchScore ?? null,
 				aiQualityScore: review?.qualityScore ?? null,
@@ -1357,7 +1369,7 @@ export class ClientRequestsService {
 				type: request.budgetType,
 				min: request.minBudget,
 				max: request.maxBudget,
-				currency: 'USD' // active client-request budget pricing is now USD-semantic
+				currency: (request.currency ?? LEGACY_CURRENCY) as string // the request's own currency
 			},
 			category: {
 				id: request.specialty?.category?.id || null,
@@ -1440,9 +1452,14 @@ export class ClientRequestsService {
 		const durationDays = canonical?.deliveryDays ?? legacy?.deliveryDays ?? 0;
 		if (price <= 0 || durationDays <= 0) throw new AppError('بيانات العرض المالية أو الزمنية غير صالحة', 422);
 
+		// the contract is in the currency of the request AND of the chosen offer; an offer in another currency cannot be selected (no conversion in phase 1)
+		const contractCurrency = requireCurrency(request.currency ?? 'USD', 'عملة الطلب');
+		assertSameCurrency(canonical?.currency ?? legacy?.currency, contractCurrency, 'اختيار العرض');
+
 		const termsSnapshot = {
 			version: 1,
 			projectTitle: request.title,
+			currency: contractCurrency,
 			price,
 			durationDays,
 			milestones: canonical?.milestones || [],
@@ -1491,13 +1508,13 @@ export class ClientRequestsService {
 				where: { projectId: requestId },
 				create: {
 					projectId: requestId, clientId: userId, providerId,
-					offerId: canonical?.id || legacy!.id, price, durationDays,
+					offerId: canonical?.id || legacy!.id, price, currency: contractCurrency, durationDays,
 					phasesCount: canonical?.milestones.length || 1,
 					terms: termsSnapshot, termsVersion: 1,
 					status: ContractStatus.PENDING_CLIENT_SIGNATURE
 				},
 				update: {
-					providerId, offerId: canonical?.id || legacy!.id, price, durationDays,
+					providerId, offerId: canonical?.id || legacy!.id, price, currency: contractCurrency, durationDays,
 					phasesCount: canonical?.milestones.length || 1,
 					terms: termsSnapshot, termsVersion: 1,
 					status: ContractStatus.PENDING_CLIENT_SIGNATURE,
@@ -1579,7 +1596,7 @@ export class ClientRequestsService {
 			message: !offerMatches ? 'هذا العرض ليس العرض الذي جُهِّز له العقد. ارجع إلى العروض واختر العرض مجدداً.' : stateMessage[state],
 			status: contract.status,
 			price: contract.price,
-			currency: 'USD',
+			currency: (contract.currency ?? LEGACY_CURRENCY) as string,
 			durationDays: contract.durationDays,
 			milestones,
 			// No milestones in the frozen terms = the contract has one final delivery for the whole price.
@@ -1643,9 +1660,9 @@ export class ClientRequestsService {
 		// Send Email dynamically
 		try {
 			await mailTransporter.sendMail({
-				from: process.env.SMTP_USER || '"وسيط AI" <noreply@waseetai.com>',
+				from: process.env.SMTP_USER || `"${brandNameInArabicText()}" <noreply@waseetai.com>`,
 				to: user.email,
-				subject: 'رمز التحقق لتوقيع العقد وإيداع الضمان - وسيط AI',
+				subject: `رمز التحقق لتوقيع العقد وإيداع الضمان - ${brandNameInArabicText()}`,
 				html: getOtpEmailTemplate(otpCode, Math.round(CONTRACT_OTP_TTL_SECONDS / 60), 'contract-signature')
 			});
 		} catch (err) {
@@ -1717,7 +1734,7 @@ export class ClientRequestsService {
 		}
 
 		// Execute all state-modifying operations inside a strict interactive transaction
-		const { bidAmount, providerUserId, providerEmail, escrowAmount, projectName, clientName, userEmail } = await prisma.$transaction(async (tx) => {
+		const { bidAmount, providerUserId, providerEmail, escrowAmount, escrowCurrency, projectName, clientName, userEmail } = await prisma.$transaction(async (tx) => {
 			// a. Mark OTP as used
 			await tx.otpVerification.delete({ where: { id: otpRecord.id } });
 
@@ -1839,15 +1856,13 @@ export class ClientRequestsService {
 			// so a later level change never alters this contract.
 			const txEscrowAmount = Math.round(contractBeforePayment.price * 100) / 100;
 			const providerGamification = await tx.providerGamification.findUnique({ where: { providerId: contractBeforePayment.providerId }, select: { currentLevelIndex: true } });
-			const escrowSnapshot = buildEscrowSnapshot(providerGamification?.currentLevelIndex);
-			const walletDebit = await tx.user.updateMany({
-				where: { id: userId, walletBalance: { gte: txEscrowAmount } },
-				data: { walletBalance: { decrement: txEscrowAmount } }
-			});
-			if (walletDebit.count !== 1) {
-				const wallet = await tx.user.findUnique({ where: { id: userId }, select: { walletBalance: true } });
-				const available = Number(wallet?.walletBalance || 0);
-				throw new AppError('رصيد المحفظة غير كافٍ لتمويل الضمان', 402, [{
+			const escrowSnapshot = buildEscrowSnapshotFromPolicy(providerGamification?.currentLevelIndex, await feePolicyService.active());
+			// one currency end to end: the contract's own. The wallet debited is the client's balance IN that currency; there is no conversion in phase 1.
+			const money = requireCurrency(contractBeforePayment.currency, 'عملة العقد');
+			if (!(await debitWalletIfCovered(tx, userId, money, txEscrowAmount))) {
+				const available = await walletBalanceOf(tx, userId, money);
+				throw new AppError(`رصيد المحفظة بعملة العقد (${money}) غير كافٍ لتمويل الضمان`, 402, [{
+					currency: money,
 					required: txEscrowAmount,
 					available,
 					shortfall: Math.max(0, Math.round((txEscrowAmount - available) * 100) / 100)
@@ -1860,7 +1875,7 @@ export class ClientRequestsService {
 					userId,
 					type: 'ESCROW_LOCK',
 					amount: txEscrowAmount,
-					currency: 'USD', // active contract/escrow pricing pipeline is now USD-semantic
+					currency: money,
 					status: 'COMPLETED',
 					paymentMethod: 'WALLET',
 					referenceId: escrowReference,
@@ -1878,6 +1893,7 @@ export class ClientRequestsService {
 					paymentMethod: 'WALLET',
 					paymentReference: escrowReference,
 					fundedAt: new Date(),
+					currency: money,
 					...escrowSnapshot
 				},
 				update: {
@@ -1886,6 +1902,7 @@ export class ClientRequestsService {
 					paymentMethod: 'WALLET',
 					paymentReference: escrowReference,
 					fundedAt: new Date(),
+					currency: money,
 					...escrowSnapshot
 				}
 			});
@@ -1901,6 +1918,7 @@ export class ClientRequestsService {
 				providerUserId: txProviderUserId,
 				providerEmail: txProviderEmail,
 				escrowAmount: txEscrowAmount,
+				escrowCurrency: money,
 				projectName: req?.title || 'مشروعك',
 				clientName: user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'العميل',
 				userEmail: user?.email || null
@@ -1912,25 +1930,25 @@ export class ClientRequestsService {
 			if (userEmail) {
 				// Email to Client
 				await mailTransporter.sendMail({
-					from: process.env.SMTP_USER || '"وسيط AI" <noreply@waseetai.com>',
+					from: process.env.SMTP_USER || `"${brandNameInArabicText()}" <noreply@waseetai.com>`,
 					to: userEmail,
-					subject: 'تم إيداع الضمان بنجاح - وسيط AI',
-					html: getDepositConfirmationTemplate(projectName, escrowAmount)
+					subject: `تم إيداع الضمان بنجاح - ${brandNameInArabicText()}`,
+					html: getDepositConfirmationTemplate(projectName, escrowAmount, escrowCurrency)
 				});
 			}
 
 			if (providerEmail) {
 				// Email to Provider
 				await mailTransporter.sendMail({
-					from: process.env.SMTP_USER || '"وسيط AI" <noreply@waseetai.com>',
+					from: process.env.SMTP_USER || `"${brandNameInArabicText()}" <noreply@waseetai.com>`,
 					to: providerEmail,
-					subject: 'دعوة لتوقيع العقد 📝 - وسيط AI',
-					html: getProviderContractSignatureTemplate(projectName, clientName, bidAmount)
+					subject: `دعوة لتوقيع العقد 📝 - ${brandNameInArabicText()}`,
+					html: getProviderContractSignatureTemplate(projectName, clientName, bidAmount, escrowCurrency)
 				});
 			}
 
 			// In-App confirmation to the client: the amount really held from the wallet
-			await clientNotifications.send(clientNotificationFor.escrowFunded({ clientId: userId, requestId, amount: Number(escrowAmount), projectName }));
+			await clientNotifications.send(clientNotificationFor.escrowFunded({ clientId: userId, requestId, amount: Number(escrowAmount), projectName, currency: escrowCurrency }));
 
 			if (providerUserId) {
 				// In-App Notification to Provider

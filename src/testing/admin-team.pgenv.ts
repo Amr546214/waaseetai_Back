@@ -49,12 +49,14 @@ export async function env() {
 		const finance = (await import('../routes/admin-finance.routes')).default;
 		const settings = (await import('../routes/admin-settings.routes')).default;
 		const messages = (await import('../routes/admin-messages.routes')).default;
+		const systemSettings = (await import('../routes/admin-system-settings.routes')).default;
+		const feePolicy = (await import('../routes/admin-fee-policy.routes')).default;
 		const { notificationService } = await import('../services/notification.service');
 		// the e-mail service never sends here: the invitation code is captured per address
 		const sentCodes = new Map<string, string>();
 		(notificationService as any).sendAdminInviteCodeEmail = async (to: string, code: string) => { sentCodes.set(to, code); return {}; };
 		const app = express(); app.use(express.json());
-		app.use('/admin/team', team); app.use('/admin/messages', messages); app.use('/admin-invite', pub); app.use('/admin/withdrawals', withdrawals); app.use('/admin/disputes', disputes); app.use('/admin/users', users); app.use('/admin/dashboard', dashboard);
+		app.use('/admin/team', team); app.use('/admin/messages', messages); app.use('/admin/system-settings', systemSettings); app.use('/admin/fee-policy', feePolicy); app.use('/admin-invite', pub); app.use('/admin/withdrawals', withdrawals); app.use('/admin/disputes', disputes); app.use('/admin/users', users); app.use('/admin/dashboard', dashboard);
 		app.use('/admin/projects', projects.adminProjectsRouter); app.use('/admin/contracts', projects.adminContractsRouter); app.use('/admin/requests', requests.adminRequestsRouter); app.use('/admin/offers', requests.adminOffersRouter); app.use('/admin/brokers', brokers); app.use('/admin/tickets', tickets); app.use('/admin/finance', finance); app.use('/admin/settings', settings);
 		app.use(globalErrorHandler as any);
 		const server = http.createServer(app);

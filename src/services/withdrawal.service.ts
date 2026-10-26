@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { feePolicyService } from './fee-policy.service';
 import { Prisma, WithdrawalStatus, CommissionStatus, AccountType, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
 import { readAffiliatePaypalEmail } from '../utils/affiliate-payout';
@@ -17,6 +18,8 @@ import { marketerNotifications } from './marketer-notifications.service';
 import { adminAudit } from './admin-audit.service';
 import { isPayoutAutomationEnabled } from '../utils/payout-automation.util';
 import { notifyAdmins } from './admin-notifications.service';
+import { LEGACY_CURRENCY, PAYOUT_CURRENCY, formatMoney } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 export const MARKETER_PAYPAL_REQUIRED_MESSAGE = 'أضف بريد PayPal لاستلام الأرباح';
 
@@ -134,6 +137,11 @@ export class WithdrawalService {
     // PayPal is the only withdrawal method: nothing else is ever created (defence in depth behind the DTO).
     if (input.method !== 'paypal') throw new AppError(PAYPAL_ONLY_MESSAGE, 400);
 
+    // The minimum payout of the fee policy in force now (0 = no minimum, which is how the platform behaved before policies were managed). The policy id and the minimum applied are stored on the request.
+    const policy = await feePolicyService.active();
+    const providerMinimum = policy.payload.minProviderPayout;
+    if (providerMinimum > 0 && input.amount < providerMinimum) throw new AppError(`الحد الأدنى لطلب السحب ${providerMinimum}`, 400);
+
     // Generated ONCE per call, outside the retry loop — every retry attempt
     // of THIS creation call reuses the identical id/referenceId pair. Only
     // one attempt's INSERT can ever actually commit (Postgres rolls back
@@ -152,7 +160,7 @@ export class WithdrawalService {
           // computation must be part of the same serializable snapshot as
           // the outstanding-withdrawals read and the insert below, not a
           // read taken from outside the transaction.
-          const wallet = await providerFinanceService.getWallet(userId, tx);
+          const wallet = await providerFinanceService.getWallet(userId, tx, PAYOUT_CURRENCY);
           const availableBalance = wallet.summary.availableBalance;
           if (input.amount > availableBalance) {
             throw new AppError(`المبلغ المطلوب يتجاوز رصيدك المتاح (${availableBalance} $)`, 400);
@@ -186,6 +194,8 @@ export class WithdrawalService {
               userId,
               amount: input.amount,
               currency: 'USD', // all withdrawals are USD — never rely on the database default.
+              feePolicyId: policy.id,
+              minimumApplied: providerMinimum,
               method: input.method,
               // The IMMUTABLE destination snapshot — resolved once, above,
               // outside this transaction/retry loop. Always null for a
@@ -196,7 +206,7 @@ export class WithdrawalService {
           });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
         await providerNotifications.withdrawal(created.id, 'REQUESTED');
-        void notifyAdmins('WITHDRAWAL_REQUESTED', { id: created.id, ref: `${created.amount} $` });
+        void notifyAdmins('WITHDRAWAL_REQUESTED', { id: created.id, ref: formatMoney(created.amount, created.currency) });
         return created;
       } catch (error) {
         // Bounded retry, and ONLY for a recognized transaction-conflict
@@ -257,7 +267,8 @@ export class WithdrawalService {
     // set higher than 300) while enforcing 300 as an absolute floor for
     // everyone — touches no historical AffiliateProfile data, only this
     // validation check.
-    const effectiveMinimumPayout = Math.max(affiliate.minimumPayoutAmount, 300);
+    const marketerPolicy = await feePolicyService.active();
+    const effectiveMinimumPayout = Math.max(affiliate.minimumPayoutAmount, marketerPolicy.payload.minMarketerPayout); // the floor comes from the fee policy in force (baseline 300)
     if (input.amount < effectiveMinimumPayout) {
       throw new AppError(`الحد الأدنى لطلب السحب ${effectiveMinimumPayout}`, 400); // numeric limit shown without a currency symbol: the USD value is pending the owner
     }
@@ -269,7 +280,7 @@ export class WithdrawalService {
       try {
         const created = await prisma.$transaction(async tx => {
           const approvedCommissions = await tx.commissionLog.aggregate({
-            where: { affiliateId: affiliate.id, status: CommissionStatus.APPROVED },
+            where: { affiliateId: affiliate.id, status: CommissionStatus.APPROVED, currency: PAYOUT_CURRENCY }, // payouts are USD (PayPal): earnings in another currency are never part of this balance
             _sum: { amount: true },
           });
           const availableBalance = approvedCommissions._sum.amount || 0;
@@ -292,6 +303,8 @@ export class WithdrawalService {
               userId,
               amount: input.amount,
               currency: 'USD',
+              feePolicyId: marketerPolicy.id,
+              minimumApplied: effectiveMinimumPayout,
               method: 'paypal',
               paypalEmail,
               status: WithdrawalStatus.PENDING,
@@ -299,7 +312,7 @@ export class WithdrawalService {
           });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
         await marketerNotifications.withdrawal(created.id, 'REQUESTED');
-        void notifyAdmins('WITHDRAWAL_REQUESTED', { id: created.id, ref: `${created.amount} $` });
+        void notifyAdmins('WITHDRAWAL_REQUESTED', { id: created.id, ref: formatMoney(created.amount, created.currency) });
         return created;
       } catch (error) {
         if (isRetryableTransactionConflict(error) && attempt < MAX_SERIALIZATION_RETRIES) continue;
@@ -336,6 +349,7 @@ export class WithdrawalService {
 
   /** Admin list. `owner` narrows to provider or marketer (affiliate) withdrawals; `counts` is per status over the whole table. */
   async list(status?: WithdrawalStatus, page = 1, limit = 20, owner?: 'provider' | 'affiliate') {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
     const safePage = Math.max(1, page); const safeLimit = Math.min(100, Math.max(1, limit));
     const ownerWhere = owner === 'affiliate' ? { user: { affiliateProfile: { isNot: null }, accountType: { notIn: [AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY] } } }
       : owner === 'provider' ? { NOT: { user: { affiliateProfile: { isNot: null }, accountType: { notIn: [AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY] } } } } : {};
@@ -343,10 +357,15 @@ export class WithdrawalService {
     const [items, total, grouped] = await Promise.all([
       prisma.withdrawal.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { user: { select: { id: true, firstName: true, lastName: true, email: true, accountType: true, affiliateProfile: { select: { id: true } } } }, reviewedBy: { select: { id: true, firstName: true, lastName: true } } } }),
       prisma.withdrawal.count({ where }),
-      prisma.withdrawal.groupBy({ by: ['status'], _sum: { amount: true }, _count: { _all: true } })
+      prisma.withdrawal.groupBy({ by: ['status', 'currency'], _sum: { amount: true }, _count: { _all: true } })
     ]);
-    const counts: Record<string, { count: number; amount: number }> = {};
-    for (const g of grouped) counts[g.status] = { count: g._count._all, amount: g._sum.amount ?? 0 };
+    // count = every withdrawal of the status; amount = the USD ones; amountByCurrency lists each currency on its own (amounts of different currencies are never added)
+    const counts: Record<string, { count: number; amount: number; amountByCurrency: Record<string, number> }> = {};
+    for (const g of grouped) {
+      const c = (counts[g.status] ??= { count: 0, amount: 0, amountByCurrency: {} });
+      c.count += g._count._all; c.amountByCurrency[g.currency] = (c.amountByCurrency[g.currency] ?? 0) + (g._sum.amount ?? 0);
+      if (g.currency === base) c.amount += g._sum.amount ?? 0;
+    }
     const pages = Math.ceil(total / safeLimit);
     return { items: items.map(withoutLegacyWithdrawalBankFields), counts, pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages } };
   }
@@ -380,7 +399,7 @@ export class WithdrawalService {
     const ledger = await this.resolveApprovalLedger(userId);
     if (ledger.kind === 'AFFILIATE_COMMISSION') {
       const approvedCommissions = await prisma.commissionLog.aggregate({
-        where: { affiliateId: ledger.affiliateId, status: CommissionStatus.APPROVED },
+        where: { affiliateId: ledger.affiliateId, status: CommissionStatus.APPROVED, currency: PAYOUT_CURRENCY },
         _sum: { amount: true },
       });
       const alreadyWithdrawn = await prisma.withdrawal.aggregate({
@@ -389,7 +408,7 @@ export class WithdrawalService {
       });
       return (approvedCommissions._sum.amount || 0) - (alreadyWithdrawn._sum.amount || 0);
     }
-    const wallet = await providerFinanceService.getWallet(userId);
+    const wallet = await providerFinanceService.getWallet(userId, undefined, PAYOUT_CURRENCY);
     const alreadyWithdrawn = await prisma.withdrawal.aggregate({
       where: { userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
       _sum: { amount: true },
@@ -460,7 +479,7 @@ export class WithdrawalService {
             // same marketer cannot together exceed the commission balance.
             // PENDING/REJECTED rows never consume balance here.
             const approvedCommissions = await tx.commissionLog.aggregate({
-              where: { affiliateId: ledger.affiliateId, status: CommissionStatus.APPROVED },
+              where: { affiliateId: ledger.affiliateId, status: CommissionStatus.APPROVED, currency: PAYOUT_CURRENCY },
               _sum: { amount: true },
             });
             const commissionBalance = approvedCommissions._sum.amount || 0;
@@ -477,7 +496,7 @@ export class WithdrawalService {
           // eligibility check must be part of the SAME serializable
           // snapshot as the conditional status transition below, not a
           // read taken from outside the transaction.
-          const wallet = await providerFinanceService.getWallet(item.userId, tx);
+          const wallet = await providerFinanceService.getWallet(item.userId, tx, PAYOUT_CURRENCY);
           const availableBalance = wallet.summary.availableBalance;
           const alreadyWithdrawn = await tx.withdrawal.aggregate({
             where: { userId: item.userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },

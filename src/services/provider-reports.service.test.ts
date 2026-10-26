@@ -8,7 +8,7 @@ function mockPrisma(o: any = {}) {
 		proposal: { findMany: async () => o.proposals || [] },
 		project: { findMany: async () => o.projects || [] },
 		dispute: { findMany: async () => o.disputes || [] },
-		escrow: { aggregate: async (a: any) => ({ _sum: a._sum.releasedAmount ? { releasedAmount: o.released ?? null } : { amount: o.held ?? null } }) },
+		escrow: { groupBy: async (a: any) => (a._sum.releasedAmount ? (o.released == null ? [] : [{ currency: 'USD', _sum: { releasedAmount: o.released } }]) : a._sum.amount ? (o.held == null ? [] : [{ currency: 'USD', _sum: { amount: o.held } }]) : []) },
 		walletTransaction: { findMany: async () => o.txs || [] }
 	};
 }

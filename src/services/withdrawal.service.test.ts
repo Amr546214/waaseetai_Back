@@ -1377,3 +1377,19 @@ test('#33 the freeze is checked BEFORE the balance: a frozen account with enough
 	await assert.rejects(() => withdrawalService.createForProvider('provider-1', { amount: 1, method: 'paypal' } as any), (e: any) => e.code === 'PAYPAL_EMAIL_FROZEN' && e.retryAfterSeconds > 0);
 	assert.equal(createSpy.mock.callCount(), 0);
 });
+
+// ── fee policy: the provider minimum payout (baseline 0 = none) ────────────────────────────────────
+test('createForProvider: no minimum by default (the baseline policy), and the request stores the policy id + the minimum applied (0)', async (t) => {
+	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 500 });
+	await withdrawalService.createForProvider('provider-1', { amount: 1, method: 'paypal' });
+	const data = createSpy.mock.calls[0].arguments[0].data; assert.equal(data.minimumApplied, 0); assert.equal(typeof data.feePolicyId, 'string'); assert.ok(data.feePolicyId.length > 8);
+});
+
+test('createForProvider: a minimum set by the fee policy in force is enforced (below it: 400 and nothing is created) and is stored with the request', async (t) => {
+	t.mock.module('./fee-policy.service', { namedExports: { feePolicyService: { active: async () => ({ id: 'pol-9', version: 9, payload: { minProviderPayout: 100, minMarketerPayout: 300 } }) } } });
+	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 500 });
+	await assert.rejects(() => withdrawalService.createForProvider('provider-1', { amount: 50, method: 'paypal' }), (e: any) => e.statusCode === 400 && e.message.includes('100'));
+	assert.equal(createSpy.mock.callCount(), 0);
+	await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' });
+	const data = createSpy.mock.calls[0].arguments[0].data; assert.equal(data.feePolicyId, 'pol-9'); assert.equal(data.minimumApplied, 100);
+});

@@ -3,6 +3,8 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { specialOfferShapeIssues } from '../dtos/special-offer.dto';
 import { NOT_CANCELLED, StatsPaging, customerName, distinctOrderRevenue, pageMeta, round2, weeklyTrend } from './marketing-stats.util';
+import { LEGACY_CURRENCY } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 // Phase 6 — special offers. Structure deliberately mirrors
 // provider-coupon.service.ts, including the company approval workflow.
@@ -192,6 +194,7 @@ export class ProviderSpecialOfferService {
   // screen (P-PR-041-تفاصيل / P-CO-MK-007-تفاصيل), for ANY offer of this
   // provider (not just the marketing center's top-10).
   async getStats(providerId: string, id: string, paging: StatsPaging = { page: 1, pageSize: 10 }, now: Date = new Date()) {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
     const offer = await prisma.specialOffer.findFirst({
       where: { id, providerId },
       select: {
@@ -206,7 +209,9 @@ export class ProviderSpecialOfferService {
     // If that service was deleted (FK SetNull) nothing can match: '' is never a uuid.
     const itemsOfDiscounted = { where: { serviceId: discountedServiceId ?? '' }, select: { serviceId: true, title: true, price: true } };
 
-    const where = { offerId: id, order: NOT_CANCELLED };
+    // every figure below is the USD view (a redemption on an order in another currency is never added in: it is counted apart as otherCurrencyUses)
+    const where = { offerId: id, order: { ...NOT_CANCELLED, currency: base } };
+    const otherCurrencyUses = await prisma.specialOfferRedemption.count({ where: { offerId: id, order: { ...NOT_CANCELLED, currency: { not: base } } } });
     const [all, page] = await Promise.all([
       prisma.specialOfferRedemption.findMany({
         where,
@@ -241,6 +246,8 @@ export class ProviderSpecialOfferService {
     const result: any = {
       id: offer.id,
       type: offer.type,
+      currency: base,
+      otherCurrencyUses,
       totals: {
         usageCount: all.length,
         discountedValue: round2(all.reduce((a, r) => a + r.amount, 0)),

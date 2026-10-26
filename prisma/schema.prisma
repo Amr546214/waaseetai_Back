@@ -198,6 +198,7 @@ model User {
   @@index([lastActiveAt])
   @@index([createdAt])
   @@map("users")
+  walletBalances WalletBalance[]
 }
 
 model UserSession {
@@ -804,6 +805,10 @@ model Project {
   @@index([clientId, status])
   @@index([status, createdAt])
   @@index([assignedEmployeeId])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("projects")
 }
 
@@ -849,6 +854,10 @@ model Proposal {
   @@index([providerId, status, createdAt])
   @@index([projectId, status])
   @@index([clientRequestId, status])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("proposals")
 }
 
@@ -888,6 +897,12 @@ model Escrow {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
+  /// the fee policy version in force when this escrow was locked (NULL = the baseline version 1, i.e. every escrow created before policies were managed)
+  feePolicyId String?
   @@map("escrows")
 }
 
@@ -953,6 +968,10 @@ model ServiceCatalog {
   @@index([status])
   @@index([specialtyId])
   @@index([accreditationSampleId])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("service_catalogs")
 }
 
@@ -1052,6 +1071,10 @@ model Coupon {
   @@index([assignedToTeamMemberId])
   @@index([createdByTeamMemberId])
   @@index([providerId, approvalStatus])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("coupons")
 }
 
@@ -1088,6 +1111,10 @@ model Order {
 
   @@index([userId, createdAt])
   @@index([status])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("orders")
 }
 
@@ -1479,6 +1506,10 @@ model ProjectProposal {
   @@unique([projectId, providerId])
   @@index([projectId, status])
   @@index([providerId])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("project_proposals")
 }
 
@@ -1494,6 +1525,10 @@ model ProposalMilestone {
   amount      Float
 
   @@index([proposalId])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("proposal_milestones")
 }
 
@@ -1838,7 +1873,7 @@ model CommissionLog {
 
   type     CommissionType
   amount   Float
-  currency String           @default("SAR")
+  currency String           @default("USD")
   status   CommissionStatus @default(PENDING)
 
   createdAt DateTime @default(now())
@@ -1938,6 +1973,10 @@ model Contract {
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt
 
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("contracts")
 }
 
@@ -2013,6 +2052,10 @@ model ProjectAmendment {
   @@index([clientId, status])
   @@index([providerId, status])
   @@index([contractId])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("project_amendments")
 }
 
@@ -2066,6 +2109,10 @@ model ProjectStage {
 
   @@unique([contractId, stepOrder])
   @@index([contractId, status])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("project_stages")
 }
 
@@ -2343,7 +2390,7 @@ model Withdrawal {
   userId        String
   user          User    @relation("WithdrawalUser", fields: [userId], references: [id], onDelete: Cascade)
   amount        Float
-  currency      String  @default("SAR")
+  currency      String  @default("USD")
   method        String
   accountName   String?
   accountNumber String?
@@ -2375,6 +2422,9 @@ model Withdrawal {
 
   @@index([status, createdAt])
   @@index([userId, createdAt])
+  /// the fee policy version in force when the request was created, and the minimum payout it was checked against (NULL = created before policies were stored)
+  feePolicyId    String?
+  minimumApplied Float?
   @@map("withdrawals")
 }
 
@@ -2660,6 +2710,10 @@ model ClientRequest {
   @@index([clientProfileId])
   @@index([specialtyId])
   @@index([status])
+
+  /// the currency of every amount on this record (never inferred from settings): existing rows are USD
+  currency String @default("USD") @db.VarChar(3)
+
   @@map("client_requests")
 }
 
@@ -2669,7 +2723,7 @@ model WalletTransaction {
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   type          String // 'DEPOSIT', 'ESCROW_LOCK', 'ESCROW_RELEASE', 'REFUND'
   amount        Float
-  currency      String   @default("SAR")
+  currency      String   @default("USD")
   status        String   @default("COMPLETED") // 'PENDING', 'COMPLETED', 'FAILED'
   paymentMethod String? // 'MOYASAR_CARD', 'MOYASAR_APPLEPAY', 'BANK_TRANSFER'
   referenceId   String?  @unique // Moyasar payment id or bank ref; globally idempotent
@@ -2711,6 +2765,8 @@ model PaypalPayment {
   updatedAt       DateTime            @updatedAt
 
   @@index([userId, createdAt])
+  /// the fee policy version whose deposit fee percent was applied (NULL = baseline)
+  feePolicyId String?
   @@map("paypal_payments")
 }
 
@@ -2775,6 +2831,7 @@ model CompanyTeamMember {
 model PlatformSetting {
   key       String   @id
   value     Json
+  version   Int      @default(1)
   updatedBy String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3114,4 +3171,56 @@ model AdminMessage {
   @@unique([conversationId, senderId, clientMessageId])
   @@index([conversationId, seq])
   @@map("admin_messages")
+}
+
+/// Versioned financial terms (provider / marketer commission by level, client cashback by level, deposit fee by method, marketer withdrawal fee by method, minimum payouts). A version is
+/// IMMUTABLE once created; the one in force at an instant is the latest non-cancelled version whose effectiveFrom has passed. Operations store the id they were created under.
+model FeePolicyVersion {
+  id            String    @id @default(uuid())
+  version       Int       @unique
+  effectiveFrom DateTime
+  payload       Json
+  note          String?   @db.VarChar(300)
+  createdById   String?
+  createdAt     DateTime  @default(now())
+  cancelledAt   DateTime?
+  cancelledById String?
+
+  @@index([effectiveFrom])
+  @@map("fee_policy_versions")
+}
+
+/// Wallet balance in a currency OTHER than USD. The USD balance stays in users.walletBalance (never renamed, never converted).
+model WalletBalance {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currency  String   @db.VarChar(3)
+  balance   Float    @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, currency])
+  @@map("wallet_balances")
+}
+
+/// A RECORDED conversion between two currencies: the rate is supplied by a person with its source and time; nothing in the code derives or invents one. No operation converts without a row here.
+model FxConversion {
+  id             String   @id @default(uuid())
+  fromCurrency   String   @db.VarChar(3)
+  toCurrency     String   @db.VarChar(3)
+  rate           Decimal  @db.Decimal(18, 8)
+  rateSource     String
+  rateAt         DateTime
+  fromAmount     Decimal  @db.Decimal(18, 2)
+  toAmount       Decimal  @db.Decimal(18, 2)
+  feeAmount      Decimal  @default(0) @db.Decimal(18, 2)
+  feeCurrency    String?  @db.VarChar(3)
+  roundingMode   String   @default("HALF_AWAY_FROM_ZERO")
+  referenceType  String
+  referenceId    String
+  recordedById   String
+  createdAt      DateTime @default(now())
+
+  @@index([referenceType, referenceId])
+  @@map("fx_conversions")
 }

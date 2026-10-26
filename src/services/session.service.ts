@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { systemSettingsService } from './system-settings.service';
 import { prisma } from '../config/db';
 import { accountAuditLogService } from './account-logs.service';
 
@@ -6,6 +7,23 @@ export interface SessionContext { ipAddress?: string; userAgent?: string }
 
 class SessionService {
   private tokenHash(token: string) { return crypto.createHash('sha256').update(token).digest('hex'); }
+
+  /** read-only: is this exact token a live (not revoked, not expired) session? */
+  async isActiveToken(token: string): Promise<boolean> {
+    const s = await prisma.userSession.findUnique({ where: { tokenHash: this.tokenHash(token) }, select: { revokedAt: true, expiresAt: true } });
+    return !!s && !s.revokedAt && s.expiresAt > new Date();
+  }
+
+  /** how many live sessions would end at their next request if the idle limit were `minutes` (preview shown before the setting is saved) */
+  async idleImpact(minutes: number): Promise<{ activeSessions: number; wouldEndNow: number }> {
+    const now = new Date();
+    const live = { revokedAt: null, expiresAt: { gt: now } };
+    const [activeSessions, wouldEndNow] = await Promise.all([
+      prisma.userSession.count({ where: live }),
+      minutes > 0 ? prisma.userSession.count({ where: { ...live, lastActiveAt: { lt: new Date(now.getTime() - minutes * 60000) } } }) : Promise.resolve(0),
+    ]);
+    return { activeSessions, wouldEndNow };
+  }
 
   private describe(userAgent = '') {
     const browser = /Edg\//.test(userAgent) ? 'Edge' : /OPR\//.test(userAgent) ? 'Opera' : /Chrome\//.test(userAgent) ? 'Chrome' : /Firefox\//.test(userAgent) ? 'Firefox' : /Safari\//.test(userAgent) ? 'Safari' : 'متصفح غير معروف';
@@ -32,6 +50,12 @@ class SessionService {
     const existing = await prisma.userSession.findUnique({ where: { tokenHash: hash } });
     if (existing?.revokedAt || (existing && existing.expiresAt <= new Date())) return null;
     if (!existing) return this.register(userId, token, context, expiresAt);
+    // Setting `sessionIdleMinutes` (0 = off): a session idle for longer is ended at its next request - sessions that already exist included. lastActiveAt is refreshed at most once a minute, hence the 5-minute floor.
+    const idleMinutes = await systemSettingsService.get<number>('sessionIdleMinutes');
+    if (idleMinutes > 0 && Date.now() - existing.lastActiveAt.getTime() > idleMinutes * 60000) {
+      await prisma.userSession.update({ where: { id: existing.id }, data: { revokedAt: new Date() } });
+      return null;
+    }
     if (Date.now() - existing.lastActiveAt.getTime() > 60000) await prisma.userSession.update({ where: { id: existing.id }, data: { lastActiveAt: new Date(), ipAddress: context.ipAddress } });
     return existing;
   }

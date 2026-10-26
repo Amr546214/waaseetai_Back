@@ -69,6 +69,7 @@ function createPrismaMock(t: TestContext, opts: { seedPayments?: any[]; seedWall
 				return { count: matches.length };
 			}
 		},
+		walletBalance: { findMany: async () => [] },
 		walletTransaction: {
 			findFirst: async (args: any) => (walletTxRefs.has(args.where.referenceId) ? { referenceId: args.where.referenceId } : null),
 			create: walletTransactionCreateSpy,

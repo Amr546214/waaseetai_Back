@@ -2,6 +2,8 @@ import { LogCategory, LogStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError, fieldError } from '../utils/app-error';
 import { StatsPaging, customerName, pageMeta, round2 } from './marketing-stats.util';
+import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 // Admin oversight of provider coupons + special offers. Coupons/offers are
 // CREATED by providers (provider-coupon.service.ts / provider-special-offer
@@ -39,7 +41,7 @@ function couponStatusWhere(status: CouponStatus | undefined, now: Date): any {
 
 function formatCoupon(c: any, now: Date) {
   return {
-    id: c.id, code: c.code,
+    id: c.id, code: c.code, currency: c.currency ?? LEGACY_CURRENCY, // the currency of the fixed amounts below (discountValue for a fixed coupon, minimumAmount, maxDiscount)
     provider: c.provider ? { id: c.provider.id, name: providerName(c.provider), email: c.provider.email, accountType: c.provider.accountType } : null,
     discountType: c.discountType, discountValue: c.discountValue, minimumAmount: c.minimumAmount, maxDiscount: c.maxDiscount,
     maxUses: c.maxUses, usedCount: c.usedCount, maxUsesPerUser: c.maxUsesPerUser,
@@ -61,6 +63,7 @@ export interface AdminCouponListQuery { status?: string; providerId?: string; q?
 
 export class AdminCouponsService {
   async list(query: AdminCouponListQuery, paging: StatsPaging, now = new Date()) {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
     if (query.status && !COUPON_STATUSES.includes(query.status as CouponStatus)) throw new AppError('حالة الكوبون غير صالحة', 400);
     const and: any[] = [couponStatusWhere(query.status as CouponStatus | undefined, now)];
     if (query.providerId) and.push({ providerId: query.providerId });
@@ -70,11 +73,11 @@ export class AdminCouponsService {
     const [items, total, redemptionAgg] = await Promise.all([
       prisma.coupon.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (paging.page - 1) * paging.pageSize, take: paging.pageSize, include: couponInclude }),
       prisma.coupon.count({ where }),
-      prisma.couponRedemption.aggregate({ where: { order: { status: { not: 'CANCELLED' } } }, _sum: { amount: true }, _count: { _all: true } })
+      prisma.order.groupBy({ by: ['currency'], where: { status: { not: 'CANCELLED' }, couponRedemption: { isNot: null } }, _sum: { discount: true }, _count: { _all: true } })
     ]);
     return {
       items: items.map((c: any) => formatCoupon(c, now)),
-      summary: { totalRedemptions: redemptionAgg._count._all, totalDiscountGiven: round2(redemptionAgg._sum.amount ?? 0) },
+      summary: { totalRedemptions: redemptionAgg.reduce((n: number, g: any) => n + g._count._all, 0), totalDiscountGiven: round2(redemptionAgg.filter((g: any) => g.currency === base).reduce((a: number, g: any) => a + (g._sum.discount ?? 0), 0)), totalDiscountGivenBy: sumByCurrency(redemptionAgg, (g: any) => g.currency, (g: any) => g._sum.discount), currency: base },
       ...pageMeta(paging, total)
     };
   }
@@ -87,7 +90,7 @@ export class AdminCouponsService {
         where: { couponId: id }, orderBy: { createdAt: 'desc' }, take: 50,
         select: {
           id: true, amount: true, createdAt: true, orderId: true,
-          order: { select: { orderNumber: true, status: true, subtotal: true, total: true } },
+          order: { select: { orderNumber: true, status: true, subtotal: true, total: true, currency: true } },
           user: { select: { id: true, firstName: true, lastName: true } }
         }
       }),
@@ -100,7 +103,7 @@ export class AdminCouponsService {
       redemptions: redemptions.map((r: any) => ({
         id: r.id, orderId: r.orderId, orderNumber: r.order?.orderNumber ?? null, orderStatus: r.order?.status ?? null,
         customer: r.user ? { id: r.user.id, name: customerName(r.user) } : null,
-        orderValue: r.order?.subtotal ?? null, discountApplied: round2(r.amount), netValue: r.order?.total ?? null, createdAt: r.createdAt
+        orderValue: r.order?.subtotal ?? null, discountApplied: round2(r.amount), netValue: r.order?.total ?? null, currency: r.order?.currency ?? LEGACY_CURRENCY, createdAt: r.createdAt
       }))
     };
   }

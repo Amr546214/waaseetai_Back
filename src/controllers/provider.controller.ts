@@ -19,6 +19,9 @@ import { computeClientAiOfferRating } from '../services/client-ai-offer-rating';
 import { settledProjectIds, SETTLED_LABEL_AR } from '../services/settlement-state.service';
 import { listLifecycles } from '../services/project-lifecycle.service';
 import { clientNotifications, clientNotificationFor } from '../services/client-notifications.service';
+import { formatMoney } from '../utils/currency';
+import { providerFeePreviewService } from '../services/provider-fee-preview.service';
+import { buildProviderContractView, providerTermsDigest } from '../utils/contract-terms';
 
 export const getProviderStatistics = async (req: Request, res: Response, next: NextFunction) => {
 	try {
@@ -315,6 +318,14 @@ export const getPassedSpecialties = async (req: Request, res: Response, next: Ne
 			if (!pendingContract) return res.status(409).json({ success: false, message: 'العقد غير موقع من العميل أو غير جاهز لتوقيع مقدم الخدمة' });
 			if (!heldEscrow) return res.status(409).json({ success: false, message: 'لا يمكن بدء المشروع قبل تأكيد تمويل الضمان' });
 
+			// The provider signs the terms HE WAS SHOWN (price, currency, the commission frozen on the escrow and what it leaves him): the page echoes the fingerprint of what it displayed. A missing fingerprint
+			// means the terms were never shown and confirmed; a different one means they changed after they were shown - both are refused, and the current terms come back so they can be shown again.
+			const shownDigest = typeof agreedTerms?.termsDigest === 'string' ? agreedTerms.termsDigest : '';
+			if (!shownDigest) return res.status(400).json({ success: false, code: 'TERMS_CONFIRMATION_REQUIRED', message: 'راجع شروط العقد (السعر والعمولة وصافي ما تستلمه) ثم أكّدها قبل التوقيع' });
+			if (shownDigest !== providerTermsDigest(pendingContract, heldEscrow)) {
+				return res.status(409).json({ success: false, code: 'TERMS_CHANGED', message: 'تغيّرت شروط العقد بعد أن عُرضت عليك. راجع السعر والعمولة والصافي الحاليين ثم أكّد من جديد', data: { contract: buildProviderContractView(pendingContract, heldEscrow) } });
+			}
+
 			const signedAt = new Date();
 			const signatureHash = createHash('sha256')
 				.update(`${pendingContract.id}:${providerId}:${pendingContract.termsVersion}:${signedAt.toISOString()}`)
@@ -336,6 +347,9 @@ export const getPassedSpecialties = async (req: Request, res: Response, next: Ne
 				const escrowStillHeld = await tx.escrow.count({ where: { projectId: targetProjectId, status: EscrowStatus.HELD } });
 				if (escrowStillHeld !== 1) throw new AppError('لا يمكن بدء المشروع قبل تأكيد تمويل الضمان', 409);
 				const updated = await tx.contract.findUniqueOrThrow({ where: { id: pendingContract.id } });
+				// the same check against the rows as they are INSIDE the transaction (the contract row was just locked by the transition): a change that slipped in after the pre-check still rolls everything back
+				const escrowNow = await tx.escrow.findFirstOrThrow({ where: { projectId: targetProjectId, status: EscrowStatus.HELD } });
+				if (shownDigest !== providerTermsDigest(updated, escrowNow)) throw new AppError('تغيّرت شروط العقد بعد أن عُرضت عليك. راجع السعر والعمولة والصافي الحاليين ثم أكّد من جديد', 409, [{ contract: buildProviderContractView(updated, escrowNow) }], 'TERMS_CHANGED');
 				await tx.projectProposal.updateMany({ where: { projectId: targetProjectId, providerId }, data: { status: ProposalStatus.ACCEPTED } });
 				await tx.proposal.updateMany({ where: { OR: [{ projectId: targetProjectId }, { clientRequestId: targetProjectId }], providerId }, data: { status: ProposalStatus.ACCEPTED } });
 				await tx.project.updateMany({ where: { id: targetProjectId }, data: { status: ProjectStatus.IN_PROGRESS, providerId } });
@@ -426,7 +440,8 @@ export const getActiveProjects = async (req: Request, res: Response, next: NextF
 					: c.status !== 'ACTIVE' ? 'لم تبدأ المراحل بعد'
 					: (currentStage?.title || (c.stages.length && approvedStages.length === c.stages.length ? 'اعتُمدت كل المراحل' : 'لم تُجهَّز مراحل المشروع بعد')),
 				// Only a funded escrow is "held". An unfunded contract shows its value, never a lock.
-				escrowAmount: `${(state.escrowFunded ? state.heldAmount : c.price).toLocaleString('en-US')} $`,
+				escrowAmount: formatMoney(state.escrowFunded ? state.heldAmount : c.price, c.currency),
+				currency: c.currency,
 				rawPrice: state.heldAmount,
 				escrowLabel: state.escrowFunded ? 'محتجز بالضمان' : 'قيمة العقد (غير ممولة بعد)',
 				contractRef: `CT-${c.id.slice(0, 6).toUpperCase()}`,
@@ -528,6 +543,15 @@ export const getProjectHealthAnalysis = async (req: Request, res: Response, next
 			message: 'تعذر إجراء تحليل صحة المشروع بالذكاء الاصطناعي حالياً. يمكنك متابعة المشروع كالمعتاد.'
 		});
 	}
+};
+
+export const getProviderFeePreview = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		const data = await providerFeePreviewService.preview(providerId, req.query.price, req.query.currency);
+		res.status(200).json({ success: true, data });
+	} catch (error) { next(error); }
 };
 
 export const getProviderWallet = async (req: Request, res: Response, next: NextFunction) => {
@@ -651,7 +675,8 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				displayId,
 				title: p.title,
 				clientName: clientName || 'عميل وسيط AI',
-				value: `${c.price.toLocaleString()} $`,
+				value: formatMoney(c.price, c.currency),
+				currency: c.currency,
 				date: settledIds.has(c.projectId) ? `${SETTLED_LABEL_AR} ${dateFormatted}` : (status === 'done' ? `أُغلق ${dateFormatted}` : (status === 'cancel' ? `ملغى ${dateFormatted}` : `مؤرشف ${dateFormatted}`)),
 				status,
 				icon: status === 'done' ? 'check' : (status === 'cancel' ? 'list' : 'doc'),
@@ -676,7 +701,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				displayId,
 				title: p.title,
 				clientName: clientName || 'عميل وسيط AI',
-				value: `${budgetVal.toLocaleString()} $`,
+				value: formatMoney(budgetVal, (p as { currency?: string }).currency),
 				date: settledIds.has(p.id) ? `${SETTLED_LABEL_AR} ${dateFormatted}` : (status === 'done' ? `أُغلق ${dateFormatted}` : `مؤرشف ${dateFormatted}`),
 				status,
 				icon: status === 'done' ? 'check' : 'doc',
@@ -700,7 +725,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 				displayId,
 				title: prop.project.title,
 				clientName: clientName || 'عميل وسيط AI',
-				value: `${(prop.totalPrice || projectBudget).toLocaleString()} $`,
+				value: formatMoney(prop.totalPrice || projectBudget, (prop as { currency?: string }).currency),
 				date: `ملغى قبل التعاقد (${dateFormatted})`,
 				status: 'cancel',
 				icon: 'list'

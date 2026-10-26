@@ -30,8 +30,8 @@ async function loadService(t: TestContext, fx: {
     user: { findUnique: async () => ({ accountType: fx.accountType, marketingMonthlySpendCap: fx.cap ?? null }), update: userUpdate },
     coupon: { findMany: async () => fx.coupons ?? [] },
     specialOffer: { findMany: async () => fx.offers ?? [] },
-    couponRedemption: { findMany: couponRedemptionFindMany, groupBy: async () => fx.couponGroups ?? [] },
-    specialOfferRedemption: { findMany: async () => fx.offerWindow ?? [], groupBy: async () => fx.offerGroups ?? [] },
+    couponRedemption: { findMany: couponRedemptionFindMany, groupBy: async () => fx.couponGroups ?? [], count: async () => fx.otherCouponUses ?? 0 },
+    specialOfferRedemption: { findMany: async () => fx.offerWindow ?? [], groupBy: async () => fx.offerGroups ?? [], count: async () => fx.otherOfferUses ?? 0 },
     companyTeamMember: { findMany: async () => fx.team ?? [] }
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
@@ -77,7 +77,7 @@ test('monthly usage / discounted value / revenue with real month-over-month delt
   // Cancelled orders excluded + provider scoping at the query level
   const where = (couponRedemptionFindMany.mock.calls[0].arguments as any)[0].where;
   assert.deepEqual(where.coupon, { providerId: 'p1' });
-  assert.deepEqual(where.order, { status: { not: 'CANCELLED' } });
+  assert.deepEqual(where.order, { status: { not: 'CANCELLED' }, currency: 'USD' }, 'USD view only: redemptions on orders in another currency are counted apart (otherCurrencyRedemptions), never added');
 });
 
 test('delta is null (not fabricated) when previous month has no baseline', async t => {

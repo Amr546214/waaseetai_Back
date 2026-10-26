@@ -61,10 +61,10 @@ test('every client event: right type, a title, a message and a REAL client route
 
 test('wording: no invented numbers, the amounts shown are the real ones passed in', async t => {
 	const { clientNotificationFor: f } = await load(t);
-	assert.match(f.stageApproved({ clientId: 'c', projectId: 'p', stageId: 's', stageTitle: 'المرحلة', amount: 250 }).message, /250 \$/);
-	assert.match(f.escrowFunded({ clientId: 'c', requestId: 'r', amount: 500.5 }).message, /500.5 \$/);
-	assert.match(f.offerCounter({ clientId: 'c', requestId: 'r', offerId: 'o', messageId: 'm', price: 120, deliveryDays: 5 }).message, /120 \$ خلال 5 يومًا/);
-	assert.match(f.depositCompleted({ clientId: 'c', transactionId: 't', credited: 100, paid: 104, fee: 4 }).message, /100\.00 دولار.*104\.00.*4\.00/);
+	assert.match(f.stageApproved({ clientId: 'c', projectId: 'p', stageId: 's', stageTitle: 'المرحلة', amount: 250 }).message, /250\.00 USD/);
+	assert.match(f.escrowFunded({ clientId: 'c', requestId: 'r', amount: 500.5 }).message, /500\.50 USD/);
+	assert.match(f.offerCounter({ clientId: 'c', requestId: 'r', offerId: 'o', messageId: 'm', price: 120, deliveryDays: 5 }).message, /120\.00 USD خلال 5 يومًا/);
+	assert.match(f.depositCompleted({ clientId: 'c', transactionId: 't', credited: 100, paid: 104, fee: 4 }).message, /100\.00 USD.*104\.00.*4\.00/);
 	assert.doesNotMatch(f.depositCompleted({ clientId: 'c', transactionId: 't', credited: 100, paid: 100, fee: 0 }).message, /رسوم/);
 });
 

@@ -420,7 +420,7 @@ test('RELEASE_PROVIDER (v2 escrow): commission uses the escrow snapshot rate, cu
   const { disputeService, providerNotes, clientNotes } = await loadServices(t, w);
   const out = await disputeService.resolveFinancial('disp-x', 'admin-1', fin({ releaseToProvider: 600, expectedHeldAmount: 600 }));
   const st = w.get();
-  assert.deepEqual(out.financialOutcome, { outcome: 'RELEASE_PROVIDER', refundToClient: 0, releaseToProvider: 600, platformCommission: 60, providerNet: 540 });
+  assert.deepEqual(out.financialOutcome, { outcome: 'RELEASE_PROVIDER', refundToClient: 0, releaseToProvider: 600, platformCommission: 60, providerNet: 540, currency: 'USD' }); // the summary now names the currency of its amounts
   assert.equal(st.escrow.status, 'RELEASED');
   assert.equal(st.escrow.releasedAmount, 1000);
   assert.equal(st.escrow.platformCommissionAmount, 100);
@@ -604,7 +604,7 @@ test('notifications: the client and the provider read Arabic (never the raw code
   const opened = clientNotificationFor.disputeOpened({ clientId: 'c1', disputeId: 'D-2', openedBy: 'provider', requestTitle: 'م' });
   assert.equal(opened.actionUrl, '/client-overview/disputes?dispute=D-2');
   const money = clientNotificationFor.disputeResolved({ clientId: 'c1', disputeId: 'D-1', action: 'resolve', resolution: 'SPLIT', financial: { outcome: 'SPLIT', refundToClient: 300, releaseToProvider: 700, platformCommission: 70, providerNet: 630 } });
-  assert.match(money.message, /أُضيف 300 \$ إلى محفظتك/);
+  assert.match(money.message, /أُضيف 300\.00 USD إلى محفظتك/);
   assert.match(money.message, /تقسيم المبلغ المحتجز/);
 });
 
@@ -618,7 +618,7 @@ test('notifications (provider): Arabic label, net-after-commission wording, link
   assert.equal(created[0].actionUrl, '/provider-overview/disputes/D-9');
   assert.ok(!created[0].message.includes('RELEASE_PROVIDER'));
   assert.match(created[0].message, /صرف المبلغ المحتجز لمقدم الخدمة/);
-  assert.match(created[0].message, /900 \$ بعد خصم عمولة المنصة 100 \$/);
+  assert.match(created[0].message, /900\.00 USD بعد خصم عمولة المنصة 100\.00 USD/);
   assert.ok(!created[1].message.includes('MUTUAL_CLOSE'));
   assert.match(created[1].message, /لم يتغيّر أي مبلغ مالي/);
 });

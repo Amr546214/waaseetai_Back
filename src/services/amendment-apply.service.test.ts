@@ -570,7 +570,7 @@ test('static: both respond paths go through applyAmendment; there is no other wr
 	assert.match(svc, /this\.approve\('PROVIDER'/);
 	assert.doesNotMatch(svc, /walletBalance: \{ (decrement|increment|gte)/, 'the service never moves the wallet; only applyAmendment does, inside the transaction');
 	const apply = readFileSync(new URL('./amendment-apply.service.ts', import.meta.url), 'utf8');
-	assert.match(apply, /walletBalance: \{ gte: budget \}/, 'guarded decrement');
+	assert.match(apply, /debitWalletIfCovered\(tx, amendment\.clientId, money, budget\)/, 'guarded decrement through the one wallet helper'); assert.match(readFileSync(new URL('../utils/wallet-balance.ts', import.meta.url), 'utf8'), /walletBalance: \{ gte: amount \}/, 'the helper keeps the conditional (guarded) decrement');
 	assert.match(apply, /AMENDMENT_TOPUP/);
 });
 

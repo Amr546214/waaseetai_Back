@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { prisma } from '../config/db';
 import { AppError, fieldErrors } from '../utils/app-error';
 import { withTableGuard, isMissingTableError } from '../utils/missing-table';
+import { SETTING_BY_KEY } from '../config/system-settings.registry';
+import { systemSettingsService } from './system-settings.service';
 
 const text = (max: number) => z.string().trim().max(max);
 const optionalPhone = text(30).regex(/^[0-9+()\-\s]*$/, 'رقم الهاتف غير صالح');
@@ -64,6 +66,8 @@ export class PlatformSettingsService {
 		for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
 			const def = SETTING_DEFS[key as SettingKey];
 			if (!def || !Object.prototype.hasOwnProperty.call(SETTING_DEFS, key)) { errors.push({ field: key, message: `إعداد غير معروف: ${key}` }); continue; }
+			const reg = SETTING_BY_KEY.get(key);
+			if (reg && reg.status !== 'enforced') { errors.push({ field: key, message: `هذا الإعداد غير متاح للتعديل: ${reg.reason ?? ''}`.trim() }); continue; } // one registry decides what may be saved
 			const parsed = def.schema.safeParse(value);
 			if (!parsed.success) errors.push({ field: key, message: parsed.error.issues[0]?.message || `قيمة غير صالحة: ${key}` });
 			else clean[key] = parsed.data as string | boolean;
@@ -79,8 +83,9 @@ export class PlatformSettingsService {
 		const changed = Object.keys(clean).filter(k => before[k as SettingKey] !== clean[k]);
 		if (!changed.length) return { changed: [] as string[], before: {}, after: {}, settings: before };
 		await withTableGuard(() => prisma.$transaction(changed.map(key => prisma.platformSetting.upsert({
-			where: { key }, create: { key, value: clean[key], updatedBy: adminId }, update: { value: clean[key], updatedBy: adminId }
+			where: { key }, create: { key, value: clean[key], updatedBy: adminId }, update: { value: clean[key], updatedBy: adminId, version: { increment: 1 } } // same version counter as the registry service
 		}))), 'مخزن الإعدادات');
+		systemSettingsService.invalidate();
 		const pick = (src: Record<string, unknown>) => Object.fromEntries(changed.map(k => [k, src[k]]));
 		// long legal text is not copied whole into the audit entry
 		const brief = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === 'string' && v.length > 200 ? `${v.slice(0, 200)}… (${v.length} حرف)` : v]));

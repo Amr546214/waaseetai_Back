@@ -60,4 +60,6 @@ export interface FinancialOutcomeSummary {
   releaseToProvider: number;
   platformCommission: number;
   providerNet: number;
+  /** the currency of every amount above (the escrow's own) */
+  currency?: string;
 }

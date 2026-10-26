@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 
 function createWalletMockPrisma(t: TestContext, opts: { walletBalance?: number; transactions?: any[]; projects?: any[]; failedDeposits?: any[] } = {}) {
 	const prismaMock: any = {
+		walletBalance: { findMany: async () => [] },
 		user: {
 			findUnique: async () => ({ id: 'client-1', firstName: 'Amr', lastName: 'Okasha', walletBalance: opts.walletBalance ?? 0 })
 		},

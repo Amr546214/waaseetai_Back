@@ -14,7 +14,7 @@ async function loadService(t: TestContext, opts: { proposalsWithPriceTag?: Array
   const prismaMock: any = {
     project: {
       count: async () => 0,
-      aggregate: async () => ({ _sum: { budgetFixed: 0, budgetMax: 0 } }),
+      groupBy: async () => [],
       findMany: async () => [],
     },
     proposal: {
@@ -30,7 +30,7 @@ async function loadService(t: TestContext, opts: { proposalsWithPriceTag?: Array
         return [];
       },
     },
-    escrow: { aggregate: async () => ({ _sum: { amount: 0 } }) },
+    escrow: { groupBy: async () => [] },
     user: { findUnique: async () => ({ activeRole: 'CLIENT', profileCompletionPercent: 0, currentLevel: null, currentPoints: 0, pointsToNextLevel: 100, clientProfile: null }) },
     contract: { findFirst: async () => null },
   };

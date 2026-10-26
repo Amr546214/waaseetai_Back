@@ -1,4 +1,5 @@
 // Structured negotiation messages (`WS_NEGOTIATION::{json}` in a project conversation) — the ONLY source of negotiation state; there is no table.
+import { LEGACY_CURRENCY, formatMoney } from './currency';
 // The client's card is written by chat.service (free-typed strings, no ids). The provider's own entries (counter / reply) are written by
 // provider-offer-negotiation.service with `kind` + `offerId`. Nothing here trusts free text: a number is only accepted when the whole string is a plain number.
 
@@ -167,11 +168,11 @@ export function buildClientDeclineEntry(input: { offerId: string; counterMessage
  * Human text for a conversation-list preview. A negotiation card is stored as `WS_NEGOTIATION::{json}` (internal state): that raw text must never reach the
  * list. The wording follows the entry kind; the price is shown only when it is a clear number.
  */
-export function negotiationPreviewText(content: string | null | undefined, senderIsProvider: boolean): string | null {
+export function negotiationPreviewText(content: string | null | undefined, senderIsProvider: boolean, currency?: string | null): string | null {
 	if (!content || !content.startsWith(NEG_PREFIX)) return null;
 	const p = parseNegotiationMessage(content, senderIsProvider) ?? parseNegotiationMessage(content, !senderIsProvider);
 	if (!p) return 'رسالة تفاوض';
-	const price = p.price !== null ? ` — ${p.price} $` : '';
+	const price = p.price !== null ? ` — ${formatMoney(Number(p.price), currency ?? LEGACY_CURRENCY)}` : '';
 	switch (p.kind) {
 		case 'CLIENT_REQUEST': return `طلب تفاوض على العرض${price}`;
 		case 'PROVIDER_COUNTER': return `عرض مضاد من مقدم الخدمة${price}`;

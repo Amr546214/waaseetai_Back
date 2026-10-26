@@ -1,6 +1,8 @@
 import { prisma } from '../config/db';
 import { SETTLED_DISPUTE_WHERE } from './settlement-state.service';
 import { ReportDateRange } from './client-reports.service';
+import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 // BE-2(a): provider-side "تقاريري". Same conventions as client-reports.service.ts, applied to the provider's own rows.
 // Nothing here is invented: a figure with no source is null (never 0 pretending to be data) and lists are empty.
@@ -30,6 +32,7 @@ const pct = (part: number, whole: number): number | null => (whole > 0 ? Math.ro
 
 export class ProviderReportsService {
 	public async getReports(providerId: string, range: ReportDateRange = 'month') {
+		const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
 		const since = rangeStart(range);
 		const inRange = since ? { createdAt: { gte: since } } : {};
 
@@ -37,7 +40,7 @@ export class ProviderReportsService {
 			prisma.proposal.findMany({
 				where: { providerId, ...inRange },
 				select: {
-					id: true, price: true, status: true, createdAt: true,
+					id: true, price: true, currency: true, status: true, createdAt: true,
 					project: { select: { title: true, specialty: true } },
 					clientRequest: { select: { title: true, specialty: { select: { nameAr: true, name: true } } } }
 				},
@@ -54,8 +57,8 @@ export class ProviderReportsService {
 				orderBy: { createdAt: 'desc' }
 			}),
 			// legacy escrows: the gross released (unchanged); fee-policy-v2 escrows are counted net, below
-			prisma.escrow.aggregate({ where: { project: { providerId, ...inRange }, feePolicyVersion: null }, _sum: { releasedAmount: true } }),
-			prisma.escrow.aggregate({ where: { project: { providerId }, status: 'HELD' }, _sum: { amount: true } }),
+			prisma.escrow.groupBy({ by: ['currency'], where: { project: { providerId, ...inRange }, feePolicyVersion: null }, _sum: { releasedAmount: true } }),
+			prisma.escrow.groupBy({ by: ['currency'], where: { project: { providerId }, status: 'HELD' }, _sum: { amount: true } }),
 			prisma.walletTransaction.findMany({
 				where: { userId: providerId, ...inRange },
 				// each transaction keeps its OWN stored currency; the UI must not relabel it
@@ -63,8 +66,11 @@ export class ProviderReportsService {
 				orderBy: { createdAt: 'desc' },
 				take: 50
 			}),
-			prisma.escrow.aggregate({ where: { project: { providerId, ...inRange }, feePolicyVersion: { not: null } }, _sum: { providerNetReleasedAmount: true } })
+			prisma.escrow.groupBy({ by: ['currency'], where: { project: { providerId, ...inRange }, feePolicyVersion: { not: null } }, _sum: { providerNetReleasedAmount: true } })
 		]);
+
+		const releasedBy = sumByCurrency([...(releasedAgg ?? []).map((r: any) => ({ c: r.currency, v: r._sum.releasedAmount })), ...(releasedNetAgg ?? []).map((r: any) => ({ c: r.currency, v: r._sum.providerNetReleasedAmount }))], r => r.c, r => r.v);
+		const heldBy = sumByCurrency(heldAgg ?? [], (r: any) => r.currency, (r: any) => r._sum.amount);
 
 		// ── incoming requests / offers and their statuses ────────────────────
 		const items = (proposals as any[]).map(p => ({
@@ -72,6 +78,7 @@ export class ProviderReportsService {
 			title: p.project?.title ?? p.clientRequest?.title ?? null,
 			specialty: p.project?.specialty ?? p.clientRequest?.specialty?.nameAr ?? p.clientRequest?.specialty?.name ?? null,
 			price: p.price,
+			currency: p.currency ?? base,
 			status: p.status,
 			bucket: offerBucket(p.status),
 			createdAt: p.createdAt
@@ -128,8 +135,11 @@ export class ProviderReportsService {
 			},
 			payments: {
 				// what the provider actually received: legacy gross + v2 net (after the platform commission)
-				releasedTotal: releasedAgg._sum.releasedAmount == null && releasedNetAgg?._sum?.providerNetReleasedAmount == null ? null : (releasedAgg._sum.releasedAmount ?? 0) + (releasedNetAgg?._sum?.providerNetReleasedAmount ?? 0),
-				heldInEscrow: heldAgg._sum.amount ?? null,
+				// per currency, never one total across currencies: releasedTotal / heldInEscrow are the USD figures (null = nothing in USD), the *By maps list every currency
+				releasedTotal: releasedBy[base] ?? null,
+				heldInEscrow: heldBy[base] ?? null,
+				releasedTotalBy: releasedBy,
+				heldInEscrowBy: heldBy,
 				transactions
 			},
 			disputes: {

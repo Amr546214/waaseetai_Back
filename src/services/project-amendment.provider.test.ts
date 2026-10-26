@@ -33,10 +33,10 @@ test('the provider of an ACTIVE contract creates a request: recorded PENDING_OTH
   const { svc, state } = await load(t);
   const out = await svc.createProviderAmendment('provider-1', 'project-1', VALID);
   assert.equal(state.created.length, 1);
-  assert.deepEqual({ ...state.created[0], createdAt: undefined, updatedAt: undefined, respondedAt: undefined, project: undefined, provider: undefined, id: undefined }, {
+  assert.deepEqual({ ...state.created[0], createdAt: undefined, updatedAt: undefined, respondedAt: undefined, project: undefined, provider: undefined, id: undefined, currency: undefined }, {
     projectId: 'project-1', contractId: CONTRACT.id, clientId: 'client-1', providerId: 'provider-1', requestedById: 'provider-1', requestedByRole: 'PROVIDER',
     type: 'BUDGET', title: 'زيادة الميزانية', description: 'توسيع النطاق', budgetDelta: 200, durationDeltaDays: null, status: 'PENDING_OTHER_PARTY',
-    createdAt: undefined, updatedAt: undefined, respondedAt: undefined, project: undefined, provider: undefined, id: undefined
+    createdAt: undefined, updatedAt: undefined, respondedAt: undefined, project: undefined, provider: undefined, id: undefined, currency: undefined
   });
   assert.equal(out.requestedByRole, 'PROVIDER');
   assert.equal(out.status, 'PENDING_OTHER_PARTY');
@@ -111,5 +111,5 @@ test('list: only THIS provider\'s requests for THIS project (ownership in the WH
   assert.deepEqual(state.listArgs[0].where, { providerId: 'provider-1', projectId: 'project-1' });
   assert.deepEqual(state.listArgs[0].orderBy, [{ createdAt: 'desc' }, { id: 'desc' }]);
   assert.equal(out.length, 1);
-  assert.deepEqual(Object.keys(out[0]).sort(), ['actionBlockedReason', 'actionable', 'addedStageId', 'appliedAt', 'budgetDelta', 'contractId', 'contractRef', 'contractDurationDays', 'contractPrice', 'contractStatus', 'conversationId', 'createdAt', 'description', 'durationAfter', 'durationBefore', 'durationDeltaDays', 'effect', 'effectNote', 'fundingAuthorized', 'fundingAuthorizedUntil', 'id', 'needsClientPayment', 'priceAfter', 'priceBefore', 'projectId', 'projectTitle', 'providerId', 'providerName', 'requestedByRole', 'respondedAt', 'status', 'title', 'type', 'updatedAt'].sort());
+  assert.deepEqual(Object.keys(out[0]).sort(), ['actionBlockedReason', 'actionable', 'addedStageId', 'appliedAt', 'budgetDelta', 'contractId', 'contractRef', 'contractDurationDays', 'contractPrice', 'contractStatus', 'conversationId', 'createdAt', 'currency', 'description', 'durationAfter', 'durationBefore', 'durationDeltaDays', 'effect', 'effectNote', 'fundingAuthorized', 'fundingAuthorizedUntil', 'id', 'needsClientPayment', 'priceAfter', 'priceBefore', 'projectId', 'projectTitle', 'providerId', 'providerName', 'requestedByRole', 'respondedAt', 'status', 'title', 'type', 'updatedAt'].sort());
 });

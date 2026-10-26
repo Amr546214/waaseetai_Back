@@ -80,7 +80,7 @@ test('affiliate withdrawal notifications: paid / failed wording and the marketer
 	await affiliateWithdrawalNotifications.withdrawal('w1', 'PAID');
 	await affiliateWithdrawalNotifications.withdrawal('w1', 'FAILED');
 	assert.equal(sent[0].type, 'WITHDRAWAL_PAID');
-	assert.match(sent[0].message, /300 \$/);
+	assert.match(sent[0].message, /300\.00 USD/);
 	assert.equal(sent[1].type, 'WITHDRAWAL_FAILED');
 	assert.match(sent[1].message, /ولم يُخصم/);
 	assert.ok(sent.every(n => n.userId === 'aff' && n.actionUrl === '/marketer-overview/withdraw'));
@@ -88,8 +88,8 @@ test('affiliate withdrawal notifications: paid / failed wording and the marketer
 
 test('finance overview: totals and monthly series come from the aggregates / rows (no fixed numbers)', async (t) => {
 	const prisma: any = {
-		escrow: { aggregate: async (a: any) => (a.where?.status === 'HELD' ? { _count: { _all: 2 }, _sum: { amount: 1000, releasedAmount: 250 } } : { _sum: { releasedAmount: 400, platformCommissionAmount: 60, providerNetReleasedAmount: 340 } }) },
-		walletTransaction: { aggregate: async () => ({ _count: { _all: 3 }, _sum: { amount: 700 } }), findMany: async () => [{ amount: 100, createdAt: new Date('2026-10-02') }, { amount: 50, createdAt: new Date('2026-09-02') }] },
+		escrow: { groupBy: async (a: any) => (a.where?.status === 'HELD' ? [{ currency: 'USD', _sum: { amount: 1000, releasedAmount: 250 } }, { currency: 'SAR', _sum: { amount: 500, releasedAmount: 0 } }] : [{ currency: 'USD', _sum: { releasedAmount: 400, platformCommissionAmount: 60, providerNetReleasedAmount: 340 } }]), aggregate: async (a: any) => (a.where?.status === 'HELD' ? { _count: { _all: 2 }, _sum: { amount: 1000, releasedAmount: 250 } } : { _sum: { releasedAmount: 400, platformCommissionAmount: 60, providerNetReleasedAmount: 340 } }) },
+		walletTransaction: { groupBy: async () => [{ currency: 'USD', _sum: { amount: 700 } }], aggregate: async () => ({ _count: { _all: 3 }, _sum: { amount: 700 } }), findMany: async () => [{ amount: 100, createdAt: new Date('2026-10-02') }, { amount: 50, createdAt: new Date('2026-09-02') }] },
 		paypalPayment: { aggregate: async () => ({ _sum: { feeAmount: '12.5' } }) },
 		withdrawal: { groupBy: async () => [{ status: 'PENDING', _count: { _all: 1 }, _sum: { amount: 80 } }], findMany: async () => [{ amount: 30, updatedAt: new Date('2026-10-05') }] },
 		commissionLog: { groupBy: async () => [{ status: 'APPROVED', _count: { _all: 2 }, _sum: { amount: 40 } }], findMany: async () => [] },
@@ -101,19 +101,21 @@ test('finance overview: totals and monthly series come from the aggregates / row
 	assert.equal(o.totals.escrowHeldAmount, 750);
 	assert.equal(o.totals.platformCommission, 60);
 	assert.equal(o.totals.paymentGatewayFees, 12.5);
-	assert.deepEqual(o.withdrawals.PENDING, { count: 1, amount: 80 });
+	assert.deepEqual(o.withdrawals.PENDING, { count: 1, amount: 80, amountByCurrency: { USD: 80 } });
 	assert.deepEqual(o.series.map((b: any) => b.month), ['2026-09', '2026-10']);
 	assert.equal(o.series[1].deposits, 100);
 	assert.equal(o.series[1].releasedGross, 200);
 	assert.equal(o.series[1].withdrawalsPaid, 30);
 	assert.equal(o.series[0].deposits, 50);
+	// per currency: SAR is listed on its own, never added into the USD headline
+	assert.equal(o.byCurrency.USD.escrowHeldAmount, 750); assert.equal(o.byCurrency.SAR.escrowHeldAmount, 500); assert.equal(o.mixedCurrencies, true); assert.equal(o.totals.escrowHeldAmount, 750);
 });
 
 test('projects list / detail: escrow status and held amount from the DB, 404 for an unknown project', async (t) => {
 	const project = { id: 'p1', title: 'متجر', status: 'IN_PROGRESS', createdAt: new Date(), deliveryDays: 30, client: { id: 'c', firstName: 'A', lastName: 'B' }, provider: { id: 'v', firstName: 'C', lastName: 'D' }, escrow: { status: 'HELD', amount: 100, releasedAmount: 25, platformCommissionAmount: 0, providerNetReleasedAmount: 0 }, contract: { id: 'k1', price: 100, status: 'ACTIVE', stages: [{ status: 'APPROVED' }, { status: 'PENDING' }] } };
 	const prisma: any = {
 		project: { findMany: async () => [project], count: async () => 1, groupBy: async () => [{ status: 'IN_PROGRESS', _count: { _all: 1 } }], findUnique: async ({ where }: any) => (where.id === 'p1' ? { ...project, description: 'd', specialty: 's', contract: { ...project.contract, durationDays: 30, signedAt: null, clientSignedAt: null, providerSignedAt: null, stages: [], amendments: [] } } : null) },
-		escrow: { aggregate: async () => ({ _count: { _all: 1 }, _sum: { amount: 100, releasedAmount: 25 } }) },
+		escrow: { groupBy: async () => [{ currency: 'USD', _count: { _all: 1 }, _sum: { amount: 100, releasedAmount: 25 } }, { currency: 'SAR', _count: { _all: 1 }, _sum: { amount: 40, releasedAmount: 0 } }] },
 		dispute: { findMany: async () => [{ id: 'd1', status: 'OPEN' }], findFirst: async () => null }
 	};
 	t.mock.module('../config/db', { namedExports: { prisma } });
@@ -123,7 +125,7 @@ test('projects list / detail: escrow status and held amount from the DB, 404 for
 	assert.equal(list.items[0].escrow.status, 'HELD');
 	assert.equal(list.items[0].escrow.heldAmount, 75);
 	assert.equal(list.items[0].progress.percent, 50);
-	assert.equal(list.kpis.escrowHeldTotal, 75);
+	assert.equal(list.kpis.escrowHeldTotal, 75, 'the headline is the USD figure'); assert.deepEqual(list.kpis.escrowHeldTotalBy, { USD: 75, SAR: 40 }, 'SAR is listed on its own, never added'); assert.equal(list.kpis.escrowHeldCount, 2);
 	const detail = await adminOperationsService.getProject('p1');
 	assert.equal(detail.openDisputes, 1);
 	assert.equal(detail.adminSettled, null, 'not settled: no settlement label');

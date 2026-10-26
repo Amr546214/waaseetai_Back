@@ -13,6 +13,9 @@ import { clientNotifications, clientNotificationFor } from './client-notificatio
 import { adminAudit } from './admin-audit.service';
 import { notifyAdmins } from './admin-notifications.service';
 import { assigneeHolds } from './admin-access.service';
+import { creditWallet } from '../utils/wallet-balance';
+
+import { LEGACY_CURRENCY, requireCurrency } from '../utils/currency';
 
 // Advisory-only dispute summary — never a verdict. Human admin resolution
 // via resolve() above remains the sole authority on status/fault/money;
@@ -204,19 +207,20 @@ export class DisputeService {
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
     if (dispute.openedById !== userId && dispute.againstUserId !== userId) throw new AppError('لا تملك صلاحية الوصول لهذا النزاع', 403);
     // New read-only field `heldEscrowAmount`: the escrow amount still held for the dispute's project (null when there is no project/escrow).
-    let held: number | null = null;
+    let held: number | null = null; let heldCurrency: string = LEGACY_CURRENCY;
     if (dispute.projectId) {
       const escrow = await prisma.escrow.findUnique({
         where: { projectId: dispute.projectId },
-        select: { amount: true, releasedAmount: true, status: true, project: { select: { contract: { select: { price: true } } } } }
+        select: { amount: true, currency: true, releasedAmount: true, status: true, project: { select: { contract: { select: { price: true } } } } }
       });
       held = heldEscrowAmount(escrow, escrow?.project?.contract?.price);
+      heldCurrency = escrow?.currency ?? LEGACY_CURRENCY;
     }
     const projectKey = dispute.projectId ?? dispute.requestId;
     const closed = dispute.status === DisputeStatus.RESOLVED || dispute.status === DisputeStatus.REJECTED;
     const financialOutcome = closed ? await this.financialOutcomeOf(dispute.id) : null;
     return {
-      ...dispute, heldEscrowAmount: held,
+      ...dispute, heldEscrowAmount: held, currency: heldCurrency, // heldEscrowAmount and the settlement amounts are in the escrow's currency
       resolutionLabel: resolutionLabelAr(dispute.resolution, !!financialOutcome), financialOutcome,
       projectFreeze: projectKey ? await getFreezeState(projectKey, prisma) : null
     };
@@ -353,9 +357,10 @@ export class DisputeService {
       if (escrowMoved.count !== 1) throw new AppError('تغيّر الضمان أثناء التنفيذ، لم يُنفَّذ أي مبلغ. أعد المحاولة', 409);
 
       if (refund > 0) {
-        await tx.user.update({ where: { id: contract.clientId }, data: { walletBalance: { increment: refund } } });
+        // the refund goes back into the wallet of the ESCROW's own currency (no conversion exists)
+        await creditWallet(tx, contract.clientId, requireCurrency(escrow.currency), refund);
         await tx.walletTransaction.create({ data: {
-          userId: contract.clientId, type: 'REFUND', amount: refund, currency: 'USD', status: 'COMPLETED', paymentMethod: 'ESCROW',
+          userId: contract.clientId, type: 'REFUND', amount: refund, currency: requireCurrency(escrow.currency), status: 'COMPLETED', paymentMethod: 'ESCROW',
           referenceId: `DISPUTE-REFUND-${id}`, description: 'استرداد من الضمان بقرار نزاع',
           metadata: { disputeId: id, projectId, contractId: contractRef.id, outcome: input.outcome, decidedBy: adminId }
         } });
@@ -367,7 +372,7 @@ export class DisputeService {
       await tx.project.update({ where: { id: projectId }, data: { status: toProvider ? ProjectStatus.COMPLETED : ProjectStatus.DISPUTED } });
       await tx.clientRequest.updateMany({ where: { proposals: { some: { projectId } } }, data: { status: toProvider ? RequestStatus.COMPLETED : RequestStatus.CANCELLED } });
 
-      const result: FinancialOutcomeSummary = { outcome: input.outcome, refundToClient: refund, releaseToProvider: release, platformCommission: split?.commission ?? 0, providerNet: split ? split.net : release };
+      const result: FinancialOutcomeSummary = { outcome: input.outcome, refundToClient: refund, releaseToProvider: release, platformCommission: split?.commission ?? 0, providerNet: split ? split.net : release, currency: requireCurrency(escrow.currency) };
       await tx.accountAuditLog.create({ data: {
         userId: adminId, category: LogCategory.SYSTEM_AUDIT, title: 'قرار مالي في نزاع', actionText: `تنفيذ قرار مالي (${input.outcome}) على نزاع`,
         summary: `تنفيذ قرار مالي (${input.outcome}) على نزاع`, status: LogStatus.COMPLETED, eventType: 'DISPUTE_FINANCIAL_RESOLVED', source: 'ADMIN', severity: 'CRITICAL',

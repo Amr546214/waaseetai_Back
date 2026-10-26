@@ -205,15 +205,15 @@ test('depositEscrow (fee policy v2): the old 13% escrow-lock charge (VAT 7% + pl
 });
 
 test('depositEscrow (fee policy v2): the escrow row and the ESCROW_LOCK transaction carry the v2 snapshot and a zero escrow fee', () => {
-  assert.match(clientRequestsSource, /const escrowSnapshot = buildEscrowSnapshot\(providerGamification\?\.currentLevelIndex\);/);
+  assert.match(clientRequestsSource, /const escrowSnapshot = buildEscrowSnapshotFromPolicy\(providerGamification\?\.currentLevelIndex, await feePolicyService\.active\(\)\);/);
   assert.match(clientRequestsSource, /\.\.\.escrowSnapshot/);
   assert.match(clientRequestsSource, /feePolicyVersion: ESCROW_FEE_POLICY_V2, escrowFee: 0, contractPrice: txEscrowAmount/);
 });
 
-test('signContract: the escrow-lock WalletTransaction it creates is explicitly USD (never the database default)', () => {
+test('signContract: the escrow-lock WalletTransaction it creates carries the own currency of the contract (never the database default)', () => {
   const escrowLockBlock = clientRequestsSource.slice(
     clientRequestsSource.indexOf("type: 'ESCROW_LOCK'"),
     clientRequestsSource.indexOf("type: 'ESCROW_LOCK'") + 200
   );
-  assert.match(escrowLockBlock, /currency: 'USD'/);
+  assert.match(escrowLockBlock, /currency: money/); assert.match(clientRequestsSource, /const money = requireCurrency\(contractBeforePayment\.currency/); // the contract's own currency, never the database default
 });

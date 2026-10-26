@@ -22,7 +22,7 @@ function makeMockPrisma(opts: {
 		review: { findMany: async () => opts.reviews || [] },
 		dispute: { findMany: async () => opts.disputes || [] },
 		walletTransaction: { findMany: async () => opts.walletTransactions || [] },
-		escrow: { aggregate: async () => ({ _sum: { amount: opts.escrowSum ?? null } }) }
+		escrow: { groupBy: async () => (opts.escrowSum == null ? [] : [{ currency: 'USD', _sum: { amount: opts.escrowSum } }]) }
 	};
 }
 

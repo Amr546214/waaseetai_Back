@@ -121,7 +121,7 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
       count: async () => opts.completedProjectsCount ?? 1
     },
     // a legacy escrow by default (no fee-policy snapshot): released gross exactly as before. A test can pass `escrowRow` for a v2 escrow.
-    escrow: { updateMany: escrowUpdateManySpy, findUnique: async () => opts.escrowRow ?? null },
+    escrow: { updateMany: escrowUpdateManySpy, findUnique: async () => opts.escrowRow ?? null, findFirst: async () => null },
     clientRequest: { updateMany: clientRequestUpdateManySpy },
     // the first updateMany is the amendment/stage-approval row LOCK (an updatedAt touch); only the completion guard is counted by the spy
     contract: { updateMany: async (args: any) => ('updatedAt' in (args?.data ?? {}) ? { count: 1 } : (contractUpdateManySpy as any)(args)), findUnique: async () => ({ price: contract.price }) },

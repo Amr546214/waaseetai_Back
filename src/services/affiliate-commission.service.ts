@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { logger } from '../config/logger';
+import { feePolicyService } from './fee-policy.service';
 import { Prisma, CommissionType, CommissionStatus, DisputeStatus } from '@prisma/client';
 import type { MarketerCommissionNotice } from './marketer-notifications.service';
 import { resolveAffiliateCommissionPercentage } from '../config/affiliate-levels.config';
@@ -70,6 +72,8 @@ function isDuplicateCommissionConflict(error: unknown): boolean {
   return COMMISSION_DEDUP_FIELDS.every(f => candidates.includes(f));
 }
 
+/** the day the official workbook ladders (#101) took effect */
+const LADDER_FINAL_AT = Date.parse('2026-10-11T00:00:00Z');
 export interface AffiliateCommissionCalculation {
   level: number;
   percentage: number;
@@ -82,8 +86,10 @@ export interface AffiliateCommissionCalculation {
  * Rounds to 2 decimal places (currency-safe rounding), matching how money
  * amounts are already handled elsewhere in this codebase.
  */
-export function calculateAffiliateCommission(level: number, baseAmount: number): AffiliateCommissionCalculation {
-  const percentage = resolveAffiliateCommissionPercentage(level);
+export function calculateAffiliateCommission(level: number, baseAmount: number, ladder?: readonly number[]): AffiliateCommissionCalculation {
+  // `ladder` = the marketer commission table of the fee policy the contract's escrow was locked under; without one, today's built-in table
+  const valid = Number.isInteger(level) && level >= 1 && level <= (ladder?.length ?? 15);
+  const percentage = ladder ? ladder[valid ? level - 1 : 0] : resolveAffiliateCommissionPercentage(level);
   const amount = Math.round(baseAmount * (percentage / 100) * 100) / 100;
   return { level, percentage, amount };
 }
@@ -139,6 +145,12 @@ export async function createCommissionsForStageReleaseEvent(
   });
   if (activeDispute) return created;
 
+  // the marketer table of the policy version the contract's escrow was locked under (a later policy version never changes an existing contract's marketer rates)
+  const escrowPolicy = await tx.escrow.findFirst({ where: { projectId: contract.projectId }, select: { feePolicyId: true, createdAt: true, currency: true } });
+  // An escrow without a stored policy id is read as the baseline (v1 = the ladder in force since the official workbooks, 2026-10-11). One locked BEFORE that date was created under an older ladder
+  // that was never stored on the row, so its marketer terms cannot be proven: say so (the baseline is still what was always applied; nothing is invented or recomputed).
+  if (escrowPolicy && !escrowPolicy.feePolicyId && escrowPolicy.createdAt && escrowPolicy.createdAt.getTime() < LADDER_FINAL_AT) logger.warn(`[affiliate] project ${contract.projectId}: escrow predates the final marketer ladder and stores no policy id; its marketer terms are not provable, the baseline ladder is applied`);
+  const ladder = (await feePolicyService.byId(escrowPolicy?.feePolicyId)).payload.marketerCommissionByLevel;
   const referrals = await tx.referral.findMany({
     where: { referredUserId: contract.clientId },
     include: { affiliate: { select: { id: true, level: true, userId: true } } }
@@ -157,7 +169,7 @@ export async function createCommissionsForStageReleaseEvent(
     // has its own independent DB read of the Referral/AffiliateProfile rows.
     if (referral.affiliate.userId === referral.referredUserId) continue;
 
-    const { percentage, amount, level } = calculateAffiliateCommission(referral.affiliate.level, releasedAmount);
+    const { percentage, amount, level } = calculateAffiliateCommission(referral.affiliate.level, releasedAmount, ladder);
 
     // Exactly-once WITHOUT aborting the caller's transaction: a duplicate insert that raises a unique violation inside a PostgreSQL transaction puts the whole
     // transaction into the aborted state (25P02) even when the error is caught, so the rest of the stage approval would fail. INSERT ... ON CONFLICT DO NOTHING
@@ -173,8 +185,8 @@ export async function createCommissionsForStageReleaseEvent(
           referredUserId: referral.referredUserId,
           type: CommissionType.STAGE_RELEASE,
           amount,
-          // Explicit per-row currency (USD), never the database default.
-          currency: 'USD',
+          // Explicit per-row currency: the ESCROW's own (the commission is a share of what that escrow released), never the database default.
+          currency: escrowPolicy?.currency ?? 'USD',
           // The eligibility check for this release event (stage actually
           // released, project not currently disputed) has already run
           // synchronously above — there is no separate manual-approval step
@@ -191,7 +203,7 @@ export async function createCommissionsForStageReleaseEvent(
       });
       // 0 = this (affiliate, referral, type, stage) was already processed: a replay or a concurrent twin. Nothing to add, nothing to notify, and the transaction is intact.
       if (count === 0) continue;
-      created.push({ affiliateUserId: referral.affiliate.userId, commissionId: commissionId, amount, currency: 'USD' });
+      created.push({ affiliateUserId: referral.affiliate.userId, commissionId: commissionId, amount, currency: escrowPolicy?.currency ?? 'USD' });
       // The first real due commission makes the referral SUCCESSFUL (owner definition): forward-only, in the same transaction (the counters derive from the commissions too).
       await tx.referral.updateMany({ where: { id: referral.id, status: { not: 'CONVERTED' } }, data: { status: 'CONVERTED' } });
     }
