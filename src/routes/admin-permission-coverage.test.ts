@@ -99,6 +99,7 @@ const ACCOUNT_TYPE_DECISIONS: Record<string, string> = {
 	'services/ai/waseet-ai/waseet-ai.auth.ts': 'identity label sent to the AI service; every entry point that grants admin-level data is gated (help assistant, knowledge, assistant project context)',
 	'sockets/ai-review.gateway.ts': 'EXCLUDES admin accounts (providers only)',
 	'sockets/ai-assistant.gateway.ts': 'EXCLUDES admin accounts (clients only)',
+	'services/admin-audit-trail.service.ts': 'the audit-trail list (moved out of admin-account.service) is behind audit.view in the route; the admin-type filter only narrows which rows that permission shows (scope), it grants nothing',
 	'services/admin-account.service.ts': 'the audit-log list is behind audit.view; the admin-type filter only narrows what that permission shows',
 	'services/admin-dashboard.service.ts': 'excludes staff from member statistics; the controller shapes the response by permission',
 	'services/admin-operations.service.ts': 'lists staff for assignment (behind team.view) and builds an admin view of a project (behind the scope rule)',
