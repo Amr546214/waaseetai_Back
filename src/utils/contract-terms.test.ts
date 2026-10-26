@@ -34,7 +34,15 @@ test('text is sanitised and capped; at most 20 milestones', () => {
 
 test('the provider view carries the contract\'s own values, the saved milestones and the funded escrow', () => {
 	const view = buildProviderContractView({ id: 'c1', status: 'PENDING_PROVIDER_SIGNATURE', termsVersion: 1, price: 1000, durationDays: 14, phasesCount: 2, terms: { milestones: [M()] } }, { amount: 1000, status: 'HELD' });
-	assert.deepEqual({ ...view, milestones: view.milestones.length }, { id: 'c1', status: 'PENDING_PROVIDER_SIGNATURE', termsVersion: 1, price: 1000, currency: 'USD', durationDays: 14, phasesCount: 2, milestones: 1, escrow: { amount: 1000, status: 'HELD' } });
+	assert.deepEqual({ ...view, milestones: view.milestones.length }, { id: 'c1', status: 'PENDING_PROVIDER_SIGNATURE', termsVersion: 1, price: 1000, currency: 'USD', durationDays: 14, phasesCount: 2, milestones: 1, escrow: { amount: 1000, status: 'HELD' }, providerTerms: null });
 	assert.equal(buildProviderContractView({ id: 'c', status: 'S', termsVersion: 1, price: 5, durationDays: 3, phasesCount: 1, terms: 'garbage' }, null).escrow, null);
 	assert.deepEqual(buildProviderContractView({ id: 'c', status: 'S', termsVersion: 1, price: 5, durationDays: 3, phasesCount: 1, terms: 'garbage' }, undefined).milestones, []);
+});
+
+test('once the client funded, the provider sees the FINAL commission and net frozen on the escrow; before that, none (the fee preview is the estimate)', () => {
+	const c = { id: 'c1', status: 'PENDING_PROVIDER_SIGNATURE', termsVersion: 1, price: 1000, currency: 'SAR', durationDays: 14, phasesCount: 1, terms: {} };
+	const funded = buildProviderContractView(c, { amount: 1000, status: 'HELD', feePolicyVersion: 2, providerCommissionRateSnapshot: 12.75 });
+	assert.deepEqual(funded.providerTerms, { ratePercent: 12.75, commission: 127.5, net: 872.5, final: true }); assert.equal(funded.currency, 'SAR');
+	assert.equal(buildProviderContractView(c, null).providerTerms, null);
+	assert.equal(buildProviderContractView(c, { amount: 1000, status: 'HELD', feePolicyVersion: null }).providerTerms, null, 'a legacy escrow has no frozen rate');
 });

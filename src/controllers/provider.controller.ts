@@ -20,6 +20,7 @@ import { settledProjectIds, SETTLED_LABEL_AR } from '../services/settlement-stat
 import { listLifecycles } from '../services/project-lifecycle.service';
 import { clientNotifications, clientNotificationFor } from '../services/client-notifications.service';
 import { formatMoney } from '../utils/currency';
+import { providerFeePreviewService } from '../services/provider-fee-preview.service';
 
 export const getProviderStatistics = async (req: Request, res: Response, next: NextFunction) => {
 	try {
@@ -530,6 +531,15 @@ export const getProjectHealthAnalysis = async (req: Request, res: Response, next
 			message: 'تعذر إجراء تحليل صحة المشروع بالذكاء الاصطناعي حالياً. يمكنك متابعة المشروع كالمعتاد.'
 		});
 	}
+};
+
+export const getProviderFeePreview = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		const data = await providerFeePreviewService.preview(providerId, req.query.price, req.query.currency);
+		res.status(200).json({ success: true, data });
+	} catch (error) { next(error); }
 };
 
 export const getProviderWallet = async (req: Request, res: Response, next: NextFunction) => {

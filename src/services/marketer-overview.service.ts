@@ -118,6 +118,9 @@ export class MarketerOverviewService {
       pendingCommissions,
       currency: LEGACY_CURRENCY,
       commissionsByCurrency,
+      // flat per-currency maps for the KPI cards (totalCommissions = approved + paid, as above)
+      totalCommissionsBy: Object.fromEntries(Object.entries(commissionsByCurrency).map(([c, v]) => [c, v.approved + v.paid])),
+      pendingCommissionsBy: Object.fromEntries(Object.entries(commissionsByCurrency).map(([c, v]) => [c, v.pending])),
     };
   }
 

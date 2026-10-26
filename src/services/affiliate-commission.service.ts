@@ -203,7 +203,7 @@ export async function createCommissionsForStageReleaseEvent(
       });
       // 0 = this (affiliate, referral, type, stage) was already processed: a replay or a concurrent twin. Nothing to add, nothing to notify, and the transaction is intact.
       if (count === 0) continue;
-      created.push({ affiliateUserId: referral.affiliate.userId, commissionId: commissionId, amount, currency: 'USD' });
+      created.push({ affiliateUserId: referral.affiliate.userId, commissionId: commissionId, amount, currency: escrowPolicy?.currency ?? 'USD' });
       // The first real due commission makes the referral SUCCESSFUL (owner definition): forward-only, in the same transaction (the counters derive from the commissions too).
       await tx.referral.updateMany({ where: { id: referral.id, status: { not: 'CONVERTED' } }, data: { status: 'CONVERTED' } });
     }
