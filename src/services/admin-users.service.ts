@@ -607,10 +607,10 @@ export class AdminUsersService {
     const sessionAgg = prisma.userSession.findFirst({ where: { userId: id }, orderBy: { lastActiveAt: 'desc' }, select: { device: true, lastActiveAt: true } });
     const [requests, orders, disputes, tickets, contracts, payments, audit, lastSession, releasedEscrows, onboarding] = await Promise.all([
       user.clientProfile ? prisma.clientRequest.findMany({ where: { clientProfileId: user.clientProfile.id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, title: true, status: true, proposalsCount: true, createdAt: true } }) : Promise.resolve([]),
-      prisma.order.findMany({ where: { userId: id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, orderNumber: true, total: true, status: true, createdAt: true } }),
+      prisma.order.findMany({ where: { userId: id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, orderNumber: true, total: true, currency: true, status: true, createdAt: true } }),
       prisma.dispute.findMany({ where: { OR: [{ openedById: id }, { againstUserId: id }] }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, reason: true, status: true, openedById: true, createdAt: true } }),
       prisma.supportTicket.findMany({ where: { userId: id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, ticketNumber: true, subject: true, status: true, createdAt: true } }),
-      prisma.contract.findMany({ where: { OR: [{ clientId: id }, { providerId: id }] }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, projectId: true, status: true, price: true, clientId: true, createdAt: true } }),
+      prisma.contract.findMany({ where: { OR: [{ clientId: id }, { providerId: id }] }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, projectId: true, status: true, price: true, currency: true, clientId: true, createdAt: true } }),
       prisma.walletTransaction.findMany({ where: { userId: id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, type: true, amount: true, currency: true, status: true, createdAt: true } }),
       prisma.accountAuditLog.findMany({ where: { userId: id }, orderBy: { occurredAt: 'desc' }, take: 15, select: { id: true, eventType: true, title: true, summary: true, source: true, severity: true, occurredAt: true } }),
       sessionAgg,
