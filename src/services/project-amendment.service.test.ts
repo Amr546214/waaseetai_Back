@@ -59,6 +59,7 @@ test('listAmendments: returns real fields mapped from the DB row, including a re
     title: 'تمديد المدة',
     description: 'بسبب توسيع النطاق',
     budgetDelta: null,
+    currency: 'USD',
     durationDeltaDays: 7,
     status: 'PENDING_OTHER_PARTY',
     createdAt: new Date('2026-01-01T00:00:00Z'),
