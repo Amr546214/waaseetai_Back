@@ -33,10 +33,10 @@ test('the provider of an ACTIVE contract creates a request: recorded PENDING_OTH
   const { svc, state } = await load(t);
   const out = await svc.createProviderAmendment('provider-1', 'project-1', VALID);
   assert.equal(state.created.length, 1);
-  assert.deepEqual({ ...state.created[0], createdAt: undefined, updatedAt: undefined, respondedAt: undefined, project: undefined, provider: undefined, id: undefined }, {
+  assert.deepEqual({ ...state.created[0], createdAt: undefined, updatedAt: undefined, respondedAt: undefined, project: undefined, provider: undefined, id: undefined, currency: undefined }, {
     projectId: 'project-1', contractId: CONTRACT.id, clientId: 'client-1', providerId: 'provider-1', requestedById: 'provider-1', requestedByRole: 'PROVIDER',
     type: 'BUDGET', title: 'زيادة الميزانية', description: 'توسيع النطاق', budgetDelta: 200, durationDeltaDays: null, status: 'PENDING_OTHER_PARTY',
-    createdAt: undefined, updatedAt: undefined, respondedAt: undefined, project: undefined, provider: undefined, id: undefined
+    createdAt: undefined, updatedAt: undefined, respondedAt: undefined, project: undefined, provider: undefined, id: undefined, currency: undefined
   });
   assert.equal(out.requestedByRole, 'PROVIDER');
   assert.equal(out.status, 'PENDING_OTHER_PARTY');

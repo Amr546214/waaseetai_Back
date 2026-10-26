@@ -230,8 +230,7 @@ export class ProposalService {
 							description: m.description,
 							days: m.days,
 							percentage: m.percentage,
-							amount: m.amount,
-							currency: offerCurrency
+							amount: m.amount
 						}))
 						: undefined
 				}),
@@ -300,7 +299,8 @@ export class ProposalService {
 							description: m.description,
 							days: m.days,
 							percentage: m.percentage,
-							amount: m.amount
+							amount: m.amount,
+							currency: offerCurrency
 						}))
 					}
 				},
