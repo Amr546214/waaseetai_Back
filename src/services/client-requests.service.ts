@@ -18,7 +18,7 @@ import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { readProposalReview, proposalBudgetSuitability, proposalDeadlineSuitability, proposalRecommendationRanks } from './proposal-suitability';
 import { providerNotifications } from './provider-notifications.service';
-import { clientNotifications, clientNotificationFor } from './client-notifications.service';
+import { clientNotifications, clientNotificationFor, CLIENT_ROUTES } from './client-notifications.service';
 import { listLifecycles, activeDisputeCounts } from './project-lifecycle.service';
 import { adminAudit } from './admin-audit.service';
 import { withKeyLock } from '../utils/key-lock';
@@ -29,6 +29,10 @@ import {
 	getDepositConfirmationTemplate,
 	getProviderContractSignatureTemplate
 } from '../utils/mail.transporter';
+import { mailAmountText } from '../utils/email-shell';
+import { dispatchMail } from './mail-dispatch';
+import { siteUrl } from '../utils/site-url';
+import { otpValidityText } from '../utils/otp-validity';
 import { brandNameInArabicText } from '../utils/brand';
 import { transactionalFrom, AUTO_MAIL_HEADERS } from '../utils/email-sender-name';
 
@@ -1650,6 +1654,7 @@ export class ClientRequestsService {
 				to: user.email,
 				subject: `رمز التحقق لتوقيع العقد وإيداع الضمان - ${brandNameInArabicText()}`,
 				html: getOtpEmailTemplate(otpCode, Math.round(CONTRACT_OTP_TTL_SECONDS / 60), 'contract-signature'),
+				text: `رمز توقيع العقد وإيداع الضمان في ${brandNameInArabicText()} هو: ${otpCode}\nالرمز صالح لمدة ${otpValidityText(Math.round(CONTRACT_OTP_TTL_SECONDS / 60))}. لا تشاركه مع أي أحد. إذا لم تطلبه فتجاهل هذه الرسالة.`,
 				headers: AUTO_MAIL_HEADERS
 			});
 		} catch (err) {
@@ -1912,31 +1917,33 @@ export class ClientRequestsService {
 		});
 
 		// 4. Send Confirmation Emails & Notifications OUTSIDE transaction block
+		// TRANSACTIONAL mails (the operation's receipt and the provider's contract invitation): never gated by the optional-mail switch nor by preferences, one each per contract
+		// (dispatchMail keeps ONE mail per purpose / recipient / event). Each in its own guard: a failing receipt must not skip the invitation or the in-app notifications.
+		// These two mails ARE the e-mail of the ESCROW_FUNDED / OFFER_ACCEPTED notifications below, whose e-mail copies are suppressed (mail-dispatch COVERED_NOTIFICATIONS).
+		const signRoute = `/provider-overview/offers/${contractBeforePayment.offerId || offerId}/sign-contract`;
 		try {
 			if (userEmail) {
-				// Email to Client
-				await mailTransporter.sendMail({
-					from: await transactionalFrom(),
-					to: userEmail,
+				const myProjects = siteUrl(CLIENT_ROUTES.activeProjects);
+				await dispatchMail({ transport: mailTransporter,
+					purpose: 'escrow-deposit-receipt', to: userEmail, recipientKey: userId, eventKey: contractBeforePayment.id,
 					subject: `تم إيداع الضمان بنجاح - ${brandNameInArabicText()}`,
-					html: getDepositConfirmationTemplate(projectName, escrowAmount),
-					text: `تم إيداع الضمان بنجاح للمشروع «${projectName}». سيبقى المبلغ محفوظًا حتى اعتمادك للتسليم النهائي.`,
-					headers: AUTO_MAIL_HEADERS
+					html: getDepositConfirmationTemplate(projectName, escrowAmount, myProjects),
+					text: `تم إيداع الضمان بنجاح للمشروع «${projectName}» بمبلغ ${mailAmountText(Number(escrowAmount))}. يبدأ التنفيذ عندما يوقّع مقدّم الخدمة العقد، وسيبقى المبلغ محفوظًا حتى اعتمادك للتسليم النهائي.${myProjects ? `\n${myProjects}` : ''}`
 				});
 			}
-
+		} catch (err) { console.error('Failed to send deposit receipt email:', err); }
+		try {
 			if (providerEmail) {
-				// Email to Provider
-				await mailTransporter.sendMail({
-					from: await transactionalFrom(),
-					to: providerEmail,
-					subject: `دعوة لتوقيع العقد 📝 - ${brandNameInArabicText()}`,
-					html: getProviderContractSignatureTemplate(projectName, clientName, bidAmount),
-					text: `تم قبول عرضك على المشروع «${projectName}» وإيداع قيمته في الضمان. يرجى تسجيل الدخول وتوقيع العقد.`,
-					headers: AUTO_MAIL_HEADERS
+				const signLink = siteUrl(signRoute);
+				await dispatchMail({ transport: mailTransporter,
+					purpose: 'provider-contract-invitation', to: providerEmail, recipientKey: providerUserId ?? providerEmail, eventKey: contractBeforePayment.id,
+					subject: `دعوة لتوقيع العقد - ${brandNameInArabicText()}`,
+					html: getProviderContractSignatureTemplate(projectName, clientName, bidAmount, signLink),
+					text: `تم قبول عرضك على المشروع «${projectName}» من العميل ${clientName} وإيداع قيمته (${mailAmountText(Number(bidAmount))}) في الضمان. يرجى تسجيل الدخول وتوقيع العقد.${signLink ? `\n${signLink}` : ''}`
 				});
 			}
-
+		} catch (err) { console.error('Failed to send contract invitation email:', err); }
+		try {
 			// In-App confirmation to the client: the amount really held from the wallet
 			await clientNotifications.send(clientNotificationFor.escrowFunded({ clientId: userId, requestId, amount: Number(escrowAmount), projectName }));
 
@@ -1955,7 +1962,7 @@ export class ClientRequestsService {
 						// canonical offer id (falls back to the submitted id only for a
 						// legacy-only proposal), not the client-side legacy mirror id,
 						// which that list never contains.
-						actionUrl: `/provider-overview/offers/${contractBeforePayment.offerId || offerId}/sign-contract`,
+						actionUrl: signRoute,
 						actionText: 'عرض وتوقيع العقد',
 						metadata: { offerId: contractBeforePayment.offerId || offerId, requestId }
 					}

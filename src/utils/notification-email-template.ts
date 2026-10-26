@@ -18,8 +18,8 @@ export interface NotificationEmailInput {
  */
 export const buildNotificationEmailHtml = (i: NotificationEmailInput): string => {
 	const bodyHtml = `      ${i.greeting ? `<div style="font-family:${MAIL_FONT};font-size:13px;line-height:20px;color:#6b7280;margin:0 0 10px 0;">${escHtml(i.greeting)}</div>` : ''}
-      <div style="font-family:${MAIL_FONT};font-size:18px;line-height:28px;font-weight:700;color:#111827;margin:0 0 10px 0;">${escHtml(i.title)}</div>
-      <div style="font-family:${MAIL_FONT};font-size:14px;line-height:23px;color:#374151;white-space:pre-line;margin:0 0 ${i.linkUrl ? '24px' : '4px'} 0;">${escHtml(i.message)}</div>
+      <div dir="auto" style="font-family:${MAIL_FONT};font-size:18px;line-height:28px;font-weight:700;color:#111827;margin:0 0 10px 0;">${escHtml(i.title)}</div>
+      <div dir="auto" style="font-family:${MAIL_FONT};font-size:14px;line-height:23px;color:#374151;white-space:pre-line;margin:0 0 ${i.linkUrl ? '24px' : '4px'} 0;">${escHtml(i.message)}</div>
       ${i.linkUrl ? emailButton(i.linkUrl, i.ctaLabel) : ''}`;
 	return renderEmailShell({ lang: i.lang, docTitle: `${i.title} - ${brandName()}`, bodyHtml, footerNote: i.footerNote });
 };
