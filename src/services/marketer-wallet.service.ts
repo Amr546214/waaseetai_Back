@@ -4,7 +4,7 @@ import { prisma } from '../config/db';
 import { readAffiliatePaypalEmail } from '../utils/affiliate-payout';
 import { IN_FLIGHT_WITHDRAWAL_STATUSES, RESERVING_WITHDRAWAL_STATUSES } from '../utils/withdrawal-reservation';
 import { isProviderIdentity, MARKETER_PAYPAL_REQUIRED_MESSAGE } from './withdrawal.service';
-import { LEGACY_CURRENCY } from '../utils/currency';
+import { LEGACY_CURRENCY, PAYOUT_CURRENCY } from '../utils/currency';
 
 /** The built-in baseline floor (the fee policy's minMarketerPayout starts at this value and may be rescheduled; this constant is only the fallback). */
 export const MARKETER_MIN_WITHDRAWAL_FLOOR = 300;
@@ -26,10 +26,10 @@ export const marketerWalletService = {
       prisma.user.findUnique({ where: { id: userId }, select: { accountType: true, roles: true, activeRole: true } })
     ]);
     // earnings per currency: the figures below are the USD ones (payouts are PayPal/USD); other currencies are listed on their own and are never added in
-    const commissionIn = (cur: string, status: CommissionStatus) => commissionGroups.filter(g => g.status === status && (g.currency ?? LEGACY_CURRENCY) === cur).reduce((sum, g) => sum + (g._sum.amount ?? 0), 0);
-    const commission = (status: CommissionStatus) => commissionIn(LEGACY_CURRENCY, status);
+    const commissionIn = (cur: string, status: CommissionStatus) => commissionGroups.filter(g => g.status === status && (g.currency ?? PAYOUT_CURRENCY) === cur).reduce((sum, g) => sum + (g._sum.amount ?? 0), 0);
+    const commission = (status: CommissionStatus) => commissionIn(PAYOUT_CURRENCY, status);
     const earningsByCurrency: Record<string, { approved: number; pending: number }> = {};
-    for (const g of commissionGroups) { const c = g.currency ?? LEGACY_CURRENCY; earningsByCurrency[c] ??= { approved: round2(commissionIn(c, CommissionStatus.APPROVED)), pending: round2(commissionIn(c, CommissionStatus.PENDING)) }; }
+    for (const g of commissionGroups) { const c = g.currency ?? PAYOUT_CURRENCY; earningsByCurrency[c] ??= { approved: round2(commissionIn(c, CommissionStatus.APPROVED)), pending: round2(commissionIn(c, CommissionStatus.PENDING)) }; }
     const withdrawn = (statuses: readonly WithdrawalStatus[]) => withdrawalGroups.filter(g => statuses.includes(g.status)).reduce((sum, g) => sum + (g._sum.amount ?? 0), 0);
 
     const approvedEarnings = commission(CommissionStatus.APPROVED);
@@ -49,7 +49,7 @@ export const marketerWalletService = {
     else if (withdrawableBalance < minimumWithdrawal) withdrawBlockedReason = `رصيدك القابل للسحب أقل من الحد الأدنى (${minimumWithdrawal} $)`;
 
     return {
-      currency: LEGACY_CURRENCY,
+      currency: PAYOUT_CURRENCY,
       earningsByCurrency,
       approvedEarnings: round2(approvedEarnings),
       pendingEarnings: round2(commission(CommissionStatus.PENDING)),

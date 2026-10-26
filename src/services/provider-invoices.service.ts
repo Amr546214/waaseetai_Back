@@ -9,6 +9,7 @@ import { commissionOn, isV2Escrow, splitRelease } from '../utils/escrow-commissi
 // the expected figure at the snapshotted rate (`estimated: true`); a legacy escrow has no commission (released gross).
 import { round2 } from '../utils/money';
 import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 type Row = { contract: any; stage: any; delivery: any; escrow: any; split: { gross: number; commission: number; net: number; estimated: boolean } | null };
 
@@ -78,11 +79,12 @@ export const invoicesOf = (contract: any) => {
 
 export class ProviderInvoicesService {
   async list(providerId: string) {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
     const contracts = await prisma.contract.findMany({ where: { providerId }, orderBy: { updatedAt: 'desc' }, include: contractInclude });
     const invoices = contracts.flatMap(invoicesOf).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
     const paid = invoices.filter((i: any) => i.status === 'paid');
     const due = invoices.filter((i: any) => i.status === 'due');
-    const usd = (list: any[]) => list.filter((i: any) => i.currency === LEGACY_CURRENCY);
+    const usd = (list: any[]) => list.filter((i: any) => i.currency === base);
     return {
       summary: {
         totalCount: invoices.length,
@@ -95,7 +97,7 @@ export class ProviderInvoicesService {
         paidNetTotalBy: sumByCurrency(paid, (i: any) => i.currency, (i: any) => i.net),
         dueNetTotalBy: sumByCurrency(due, (i: any) => i.currency, (i: any) => i.net),
         platformCommissionTotalBy: sumByCurrency(paid, (i: any) => i.currency, (i: any) => i.platformCommission),
-        currency: LEGACY_CURRENCY
+        currency: base
       },
       invoices
     };

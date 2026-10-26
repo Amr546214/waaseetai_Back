@@ -9,6 +9,7 @@ import { initializeRoleState } from './account-management.service';
 import { metricSummaryEngine, type MetricSummaryEngine, type MetricSummaryResult } from './ai-features/metric-summary';
 import { MARKETER_INSIGHTS_AI_FEATURE, MARKETER_INSIGHTS_ALLOW, MARKETER_INSIGHTS_PATHS, MARKETER_INSIGHTS_SYSTEM, MARKETER_TREND_DAYS, buildMarketerInsightsMetrics, marketerHasEnoughData } from './ai-features/marketer-insights.service';
 import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 const MAX_CUSTOM_LINKS = 20;
 
@@ -70,6 +71,7 @@ export class MarketerOverviewService {
    * 1. Get Dashboard Summary
    */
   async getSummary(userId: string) {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
     const affiliate = await this.getOrCreateProfile(userId);
 
 
@@ -84,10 +86,10 @@ export class MarketerOverviewService {
     const referralCount = (status: string) => effective.filter((st) => st === status).length;
     const successfulReferrals = successfulIds.size;
     // the figures are the USD ones (payouts are PayPal/USD); commissionsByCurrency lists every currency on its own and nothing is added across currencies
-    const commissionSum = (status: string, cur: string = LEGACY_CURRENCY) => commissionGroups.filter((g) => g.status === status && (g.currency ?? LEGACY_CURRENCY) === cur).reduce((acc, g) => acc + (g._sum.amount ?? 0), 0);
-    const approvedCommissions = affiliate.commissionLogs.filter((log) => (log.currency ?? LEGACY_CURRENCY) === LEGACY_CURRENCY).reduce((acc, log) => acc + log.amount, 0);
+    const commissionSum = (status: string, cur: string = base) => commissionGroups.filter((g) => g.status === status && (g.currency ?? base) === cur).reduce((acc, g) => acc + (g._sum.amount ?? 0), 0);
+    const approvedCommissions = affiliate.commissionLogs.filter((log) => (log.currency ?? base) === base).reduce((acc, log) => acc + log.amount, 0);
     const commissionsByCurrency: Record<string, { approved: number; paid: number; pending: number }> = {};
-    for (const c of new Set([...commissionGroups.map((g) => g.currency ?? LEGACY_CURRENCY), ...affiliate.commissionLogs.map((l) => l.currency ?? LEGACY_CURRENCY)])) commissionsByCurrency[c] = { approved: affiliate.commissionLogs.filter((l) => (l.currency ?? LEGACY_CURRENCY) === c).reduce((a, l) => a + l.amount, 0), paid: commissionSum('PAID', c), pending: commissionSum('PENDING', c) };
+    for (const c of new Set([...commissionGroups.map((g) => g.currency ?? base), ...affiliate.commissionLogs.map((l) => l.currency ?? base)])) commissionsByCurrency[c] = { approved: affiliate.commissionLogs.filter((l) => (l.currency ?? base) === c).reduce((a, l) => a + l.amount, 0), paid: commissionSum('PAID', c), pending: commissionSum('PENDING', c) };
     const paidCommissions = commissionSum('PAID');
     const pendingCommissions = commissionSum('PENDING');
     // Earned = approved + already paid out; pending commissions are reported separately and never counted as earned.
@@ -116,7 +118,7 @@ export class MarketerOverviewService {
       approvedCommissions,
       paidCommissions,
       pendingCommissions,
-      currency: LEGACY_CURRENCY,
+      currency: base,
       commissionsByCurrency,
       // flat per-currency maps for the KPI cards (totalCommissions = approved + paid, as above)
       totalCommissionsBy: Object.fromEntries(Object.entries(commissionsByCurrency).map(([c, v]) => [c, v.approved + v.paid])),
@@ -201,6 +203,7 @@ export class MarketerOverviewService {
    * little data (the model is never called); FAILED when the model is unavailable. Nothing is rule-generated or static.
    */
   async getAiInsights(userId: string, engine: Pick<MetricSummaryEngine, 'summarise'> = metricSummaryEngine): Promise<MetricSummaryResult> {
+    const base = await platformCurrency();
     const affiliate = await this.getOrCreateProfile(userId);
     const day = 86_400_000;
     const now = Date.now();
@@ -218,7 +221,7 @@ export class MarketerOverviewService {
       referralsByStatus: grouped.map((g) => ({ status: g.status, count: g._count._all })),
       referralsLast30Days: last30,
       referralsPrevious30Days: previous30,
-      approvedCommissionAmounts: affiliate.commissionLogs.filter((c) => (c.currency ?? LEGACY_CURRENCY) === LEGACY_CURRENCY).map((c) => c.amount),
+      approvedCommissionAmounts: affiliate.commissionLogs.filter((c) => (c.currency ?? LEGACY_CURRENCY) === base).map((c) => c.amount),
     });
 
     return engine.summarise({
@@ -243,6 +246,7 @@ export class MarketerOverviewService {
    * balance, which likewise only sums APPROVED commissions).
    */
   async getReferredUsers(userId: string, page = 1, limit = 20) {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
     const affiliate = await this.getOrCreateProfile(userId);
     const safePage = Number.isInteger(page) && page > 0 ? page : 1;
     const safeLimit = Number.isInteger(limit) && limit > 0 && limit <= 100 ? limit : 20;
@@ -271,7 +275,7 @@ export class MarketerOverviewService {
         displayName: `${r.referredUser.firstName || ''} ${r.referredUser.lastName || ''}`.trim() || 'مستخدم وسيط',
         status: effectiveReferralStatus(r.status, r.commissionLogs.some(isRealDueCommission)),
         joinedAt: r.createdAt,
-        totalCommissionEarned: r.commissionLogs.filter((log) => (log.currency ?? LEGACY_CURRENCY) === LEGACY_CURRENCY).reduce((sum, log) => sum + log.amount, 0),
+        totalCommissionEarned: r.commissionLogs.filter((log) => (log.currency ?? base) === base).reduce((sum, log) => sum + log.amount, 0),
         totalCommissionEarnedBy: sumByCurrency(r.commissionLogs, (log) => log.currency, (log) => log.amount)
       })),
       pagination: {

@@ -3,6 +3,7 @@ import { AppError } from '../utils/app-error';
 import { round2, sumMoney } from '../utils/money';
 import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
 import { walletBalancesOf } from '../utils/wallet-balance';
+import { platformCurrency } from './platform-currency';
 
 // No tax is recorded on invoices (legal policy s10: no VAT is charged). The old 15% line was display-only and never collected, so it is gone: the invoice
 // shows the stage amount, and tax is 0 / taxRate 0.
@@ -64,6 +65,7 @@ const buildInvoice = (contract: any, stage: any, delivery: any) => {
 export class ClientFinanceService {
   /** Returns invoices derived from real contracted stage deliveries for the authenticated client. */
   async getInvoices(clientId: string) {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
     const contracts = await prisma.contract.findMany({
       where: { clientId },
       orderBy: { updatedAt: 'desc' },
@@ -95,7 +97,7 @@ export class ClientFinanceService {
           ? Math.round(invoices.reduce((sum, invoice) => sum + invoice.verificationScore, 0) / invoices.length)
           : 0,
         // tax is always 0; each invoice row carries the currency of its own contract and no total across currencies is formed here
-        currency: LEGACY_CURRENCY,
+        currency: base,
         currencies: [...new Set(invoices.map(invoice => invoice.currency))]
       },
       invoices
@@ -127,6 +129,7 @@ export class ClientFinanceService {
    * Retrieves the client's wallet overview, balances, and transaction history
    */
   async getWallet(clientId: string) {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
     const user = await prisma.user.findUnique({
       where: { id: clientId },
       select: {
@@ -162,10 +165,11 @@ export class ClientFinanceService {
       .map(p => p.escrow!);
 
     // the headline escrow balance is the USD one; every currency is also listed on its own (never one total across currencies)
-    const escrowBalance = sumMoney(activeEscrows.filter(esc => (esc.currency ?? LEGACY_CURRENCY) === LEGACY_CURRENCY).map(esc => Math.max(0, esc.amount - esc.releasedAmount)));
+    const escrowBalance = sumMoney(activeEscrows.filter(esc => (esc.currency ?? base) === base).map(esc => Math.max(0, esc.amount - esc.releasedAmount)));
     const escrowBalances = sumByCurrency(activeEscrows, esc => esc.currency, esc => Math.max(0, esc.amount - esc.releasedAmount));
     const balances = await walletBalancesOf(prisma, clientId);
-    const availableBalance = round2(Number(user.walletBalance || 0));
+    // the headline balance is the wallet in the platform base currency (USD = the legacy column); every currency is also listed in `balances`
+    const availableBalance = round2(base === LEGACY_CURRENCY ? Number(user.walletBalance || 0) : (balances[base] ?? 0));
 
     // Fetch all recorded wallet transactions
     const walletTransactions = await prisma.walletTransaction.findMany({
@@ -219,7 +223,7 @@ export class ClientFinanceService {
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
     const totalDeposited = sumMoney(walletTransactions
-      .filter(tx => tx.type === 'DEPOSIT' && tx.status === 'COMPLETED')
+      .filter(tx => tx.type === 'DEPOSIT' && tx.status === 'COMPLETED' && tx.currency === base)
       .map(tx => tx.amount));
 
     return {
@@ -233,8 +237,8 @@ export class ClientFinanceService {
         // and exposes its OWN stored currency (tx.currency, line ~174) — this
         // top-level field only describes the two summary aggregates, never
         // relabels historical per-transaction rows.
-        currency: 'USD',
-        // every wallet balance and every held escrow amount in ITS OWN currency; availableBalance / escrowBalance above stay the USD figures
+        currency: base,
+        // every wallet balance and every held escrow amount in ITS OWN currency; availableBalance / escrowBalance above are the headline (base currency) figures
         balances,
         escrowBalances
       },

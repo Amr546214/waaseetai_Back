@@ -12,6 +12,7 @@ import { logger } from '../config/logger';
 import { getClientLevelInfo } from './gamification.service';
 import { deliveryCompletedProject, adminSettlementFor } from './settlement-state.service';
 import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 // Offers the client can act on: the same ones the request page lists, minus drafts and closed ones.
 const CLIENT_ACTIONABLE_PROPOSAL_STATUSES = ['PENDING', 'SUBMITTED', 'UNDER_NEGOTIATION'] as const;
@@ -90,6 +91,7 @@ export class DashboardService {
    * Retrieves dashboard statistics tailored for a Client.
    */
   public async getClientStats(userId: string): Promise<DashboardStatsPayload> {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
     try {
       // 1. Active Projects Count (projects where status = IN_PROGRESS)
       const activeProjectsCount = await prisma.project.count({
@@ -125,7 +127,7 @@ export class DashboardService {
         }
       });
       const totalEscrowAmounts = sumByCurrency(escrowResult, r => r.currency, r => r._sum.amount);
-      const totalEscrowAmount = totalEscrowAmounts[LEGACY_CURRENCY] ?? 0;
+      const totalEscrowAmount = totalEscrowAmounts[base] ?? 0;
 
       // 4. Total Spent (sum of budgets of all client's COMPLETED projects)
       const spentResult = await prisma.project.groupBy({
@@ -138,7 +140,7 @@ export class DashboardService {
         }
       });
       const totalSpents = sumByCurrency(spentResult, r => r.currency, r => (r._sum.budgetFixed || 0) + (r._sum.budgetMax || 0));
-      const totalSpent = totalSpents[LEGACY_CURRENCY] ?? 0;
+      const totalSpent = totalSpents[base] ?? 0;
 
       // 5. Latest Projects (Top 3 recent projects)
       const latestProjectsRaw = await prisma.project.findMany({
@@ -370,6 +372,7 @@ export class DashboardService {
    * STRICT DB MODE: Returns only true data, zero values for empty states.
    */
   public async getProviderStats(userId: string): Promise<DashboardStatsPayload> {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
     try {
       const now = new Date();
       const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -455,7 +458,7 @@ export class DashboardService {
       ]);
 
       const monthlyEarningsBy = sumByCurrency(monthlyEarningsAgg, r => r.currency, r => (r._sum.budgetFixed || 0) + (r._sum.budgetMax || 0));
-      const monthlyEarnings = monthlyEarningsBy[LEGACY_CURRENCY] ?? 0;
+      const monthlyEarnings = monthlyEarningsBy[base] ?? 0;
 
       // Phase 3C: profileCompletionPercent comes from ProviderProfile, and
       // currentPoints/currentLevel/pointsToNextLevel come from the provider's

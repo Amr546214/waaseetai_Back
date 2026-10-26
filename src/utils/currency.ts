@@ -16,6 +16,9 @@ export const CURRENCY_UNSUPPORTED = 'CURRENCY_UNSUPPORTED';
 export const CROSS_CURRENCY_UNSUPPORTED = 'CROSS_CURRENCY_UNSUPPORTED';
 export const GATEWAY_CURRENCY_UNSUPPORTED = 'GATEWAY_CURRENCY_UNSUPPORTED';
 
+/** the currency every payout (PayPal withdrawal) is made in: the only payout rail is USD, whatever the platform base currency is */
+export const PAYOUT_CURRENCY: Currency = 'USD';
+
 export const isSupportedCurrency = (c: unknown): c is Currency => typeof c === 'string' && (SUPPORTED_CURRENCIES as readonly string[]).includes(c);
 
 /** a supported currency code, or a clear 400 (never a silent default) */

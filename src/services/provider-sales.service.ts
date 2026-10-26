@@ -1,6 +1,7 @@
 import { prisma } from '../config/db';
 import { allocateOrderDiscount, round2 } from '../utils/order-discount';
 import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 // Provider sales = the provider's marketplace order items whose order has been paid (PAID / PROCESSING / COMPLETED). A provider coupon discounts the service value itself,
 // so `amount` is the NET the client really paid for the item (list price − its share of the order discount, the same allocation checkout used).
@@ -11,6 +12,7 @@ const saleStatus = (orderStatus: string): SaleStatus => (orderStatus === 'COMPLE
 
 export class ProviderSalesService {
   async getSales(providerId: string) {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
     const orders = await prisma.order.findMany({
       where: { status: { in: [...PAID_STATUSES] as any }, items: { some: { providerId } } },
       orderBy: { createdAt: 'desc' },
@@ -26,7 +28,7 @@ export class ProviderSalesService {
         model: i.title,
         client: `${order.user?.firstName || ''} ${order.user?.lastName || ''}`.trim() || 'عميل',
         amount: round2(i.price - (shares.get(i.id) ?? 0)),
-        currency: (order.currency ?? LEGACY_CURRENCY) as string,
+        currency: (order.currency ?? base) as string,
         date: order.createdAt.toISOString().slice(0, 10),
         createdAt: order.createdAt.toISOString(),
         status: saleStatus(order.status)
@@ -35,7 +37,7 @@ export class ProviderSalesService {
     const counted = sales.filter(s => s.status !== 'refunded');
     const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
     // the headline figures are the USD sales; every currency is also listed on its own (sales of different currencies are never added)
-    const usdSales = counted.filter(s => s.currency === LEGACY_CURRENCY);
+    const usdSales = counted.filter(s => s.currency === base);
     const totalBy = sumByCurrency(counted, s => s.currency, s => s.amount);
     const total = round2(usdSales.reduce((s, x) => s + x.amount, 0));
     const byModel = new Map<string, { name: string; sales: number; revenue: number }>();
@@ -53,7 +55,7 @@ export class ProviderSalesService {
         monthRevenueBy: sumByCurrency(counted.filter(s => new Date(s.createdAt) >= monthStart), s => s.currency, s => s.amount),
         salesCount: counted.length,
         averageOrderValue: usdSales.length ? round2(total / usdSales.length) : 0,
-        currency: LEGACY_CURRENCY
+        currency: base
       },
       topModels,
       sales: sales.slice(0, 50)

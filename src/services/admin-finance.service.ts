@@ -11,6 +11,7 @@ import { toCsv } from '../utils/csv.util';
  */
 import { round2 } from '../utils/money';
 import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 const fullName = (u?: { firstName?: string | null; lastName?: string | null } | null) => [u?.firstName, u?.lastName].filter(Boolean).join(' ').trim();
 const monthKey = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 const CSV_ROW_CAP = 5000;
@@ -27,13 +28,14 @@ function monthBuckets(months: number, now = new Date()) {
 
 export class AdminFinanceService {
 	async overview(months = 6, now = new Date()) {
+		const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
 		const span = Math.min(12, Math.max(1, Math.floor(months) || 6));
 		const since = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (span - 1), 1));
 		const [heldEscrows, releasedEscrows, deposits, paypalFees, withdrawalGroups, commissionGroups, depositRows, approvedStages, paidWithdrawals, commissionRows, escrowHeldByCur, escrowReleasedByCur, depositsByCur] = await Promise.all([
-			prisma.escrow.aggregate({ where: { status: 'HELD', currency: LEGACY_CURRENCY }, _sum: { amount: true, releasedAmount: true }, _count: { _all: true } }),
-			prisma.escrow.aggregate({ where: { currency: LEGACY_CURRENCY }, _sum: { releasedAmount: true, platformCommissionAmount: true, providerNetReleasedAmount: true } }),
-			prisma.walletTransaction.aggregate({ where: { type: 'DEPOSIT', status: 'COMPLETED', currency: LEGACY_CURRENCY }, _sum: { amount: true }, _count: { _all: true } }),
-			prisma.paypalPayment.aggregate({ where: { status: 'COMPLETED', currency: LEGACY_CURRENCY }, _sum: { feeAmount: true } }),
+			prisma.escrow.aggregate({ where: { status: 'HELD', currency: base }, _sum: { amount: true, releasedAmount: true }, _count: { _all: true } }),
+			prisma.escrow.aggregate({ where: { currency: base }, _sum: { releasedAmount: true, platformCommissionAmount: true, providerNetReleasedAmount: true } }),
+			prisma.walletTransaction.aggregate({ where: { type: 'DEPOSIT', status: 'COMPLETED', currency: base }, _sum: { amount: true }, _count: { _all: true } }),
+			prisma.paypalPayment.aggregate({ where: { status: 'COMPLETED', currency: base }, _sum: { feeAmount: true } }),
 			prisma.withdrawal.groupBy({ by: ['status', 'currency'], _sum: { amount: true }, _count: { _all: true } }),
 			prisma.commissionLog.groupBy({ by: ['status', 'currency'], _sum: { amount: true }, _count: { _all: true } }),
 			prisma.walletTransaction.findMany({ where: { type: 'DEPOSIT', status: 'COMPLETED', createdAt: { gte: since } }, select: { amount: true, currency: true, createdAt: true }, take: 20000 }),
@@ -53,22 +55,22 @@ export class AdminFinanceService {
 		// one monthly series PER CURRENCY: `series` is the USD one, seriesByCurrency has every currency (rows of different currencies are never added into one bucket)
 		const seriesByCurrency: Record<string, ReturnType<typeof monthBuckets>> = {};
 		const seriesOf = (c: string) => (seriesByCurrency[c] ??= monthBuckets(span, now));
-		const put = (c: string | null | undefined, d: Date | null | undefined, key: 'deposits' | 'releasedGross' | 'withdrawalsPaid' | 'affiliateCommissions', amount: number) => { const cc = c ?? LEGACY_CURRENCY; const b = d ? seriesOf(cc).find(x => x.month === monthKey(d)) : undefined; if (b) b[key] += amount; };
-		seriesOf(LEGACY_CURRENCY);
+		const put = (c: string | null | undefined, d: Date | null | undefined, key: 'deposits' | 'releasedGross' | 'withdrawalsPaid' | 'affiliateCommissions', amount: number) => { const cc = c ?? base; const b = d ? seriesOf(cc).find(x => x.month === monthKey(d)) : undefined; if (b) b[key] += amount; };
+		seriesOf(base);
 		for (const r of depositRows) put((r as any).currency, r.createdAt, 'deposits', r.amount);
 		for (const r of approvedStages) put((r as any).currency, r.approvedAt, 'releasedGross', r.amount);
 		for (const r of paidWithdrawals) put((r as any).currency, r.updatedAt, 'withdrawalsPaid', r.amount);
 		for (const r of commissionRows) put((r as any).currency, r.createdAt, 'affiliateCommissions', r.amount);
 		for (const list of Object.values(seriesByCurrency)) for (const b of list) { b.deposits = round2(b.deposits); b.releasedGross = round2(b.releasedGross); b.withdrawalsPaid = round2(b.withdrawalsPaid); b.affiliateCommissions = round2(b.affiliateCommissions); }
-		const series = seriesByCurrency[LEGACY_CURRENCY];
-		const otherSeries = Object.fromEntries(Object.entries(seriesByCurrency).filter(([c, l]) => c !== LEGACY_CURRENCY && l.some(b => b.deposits || b.releasedGross || b.withdrawalsPaid || b.affiliateCommissions)));
+		const series = seriesByCurrency[base];
+		const otherSeries = Object.fromEntries(Object.entries(seriesByCurrency).filter(([c, l]) => c !== base && l.some(b => b.deposits || b.releasedGross || b.withdrawalsPaid || b.affiliateCommissions)));
 
 		// count = every row of the status; amount = the USD ones; amountByCurrency lists each currency on its own
-		const fold = (groups: any[]) => { const out: Record<string, { count: number; amount: number; amountByCurrency: Record<string, number> }> = {}; for (const g of groups) { const c = g.currency ?? LEGACY_CURRENCY; const t = (out[g.status] ??= { count: 0, amount: 0, amountByCurrency: {} }); t.count += g._count._all; t.amountByCurrency[c] = round2((t.amountByCurrency[c] ?? 0) + (g._sum.amount ?? 0)); if (c === LEGACY_CURRENCY) t.amount = round2(t.amount + (g._sum.amount ?? 0)); } return out; };
+		const fold = (groups: any[]) => { const out: Record<string, { count: number; amount: number; amountByCurrency: Record<string, number> }> = {}; for (const g of groups) { const c = g.currency ?? base; const t = (out[g.status] ??= { count: 0, amount: 0, amountByCurrency: {} }); t.count += g._count._all; t.amountByCurrency[c] = round2((t.amountByCurrency[c] ?? 0) + (g._sum.amount ?? 0)); if (c === base) t.amount = round2(t.amount + (g._sum.amount ?? 0)); } return out; };
 		const withdrawals = fold(withdrawalGroups);
 		const affiliateCommissions = fold(commissionGroups);
 		return {
-			currency: 'USD',
+			currency: base,
 			// the headline totals above are the USD-labelled escrows (and the wallet ledger as stored); byCurrency lists EVERY currency separately and mixedCurrencies says when more than one exists
 			byCurrency,
 			mixedCurrencies: Object.keys(byCurrency).filter(c => Object.values(byCurrency[c]).some(v => v !== 0)).length > 1,
@@ -121,6 +123,7 @@ export class AdminFinanceService {
 
 	/** Platform commission per project (fee-policy-v2 escrows) + the affiliate commission ledger totals. */
 	async commissions(pageNo = 1, limit = 20) {
+		const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
 		const safePage = Math.max(1, pageNo); const safeLimit = Math.min(100, Math.max(1, limit));
 		const where: Prisma.EscrowWhereInput = { feePolicyVersion: 2, releasedAmount: { gt: 0 } };
 		const [items, total, sums, affiliate] = await Promise.all([
@@ -132,11 +135,11 @@ export class AdminFinanceService {
 		const pages = Math.ceil(total / safeLimit);
 		// count = every ledger row of the status; amount = the USD ones; amountByCurrency lists each currency on its own
 		const affiliateTotals: Record<string, { count: number; amount: number; amountByCurrency: Record<string, number> }> = {};
-		for (const g of affiliate) { const t = (affiliateTotals[g.status] ??= { count: 0, amount: 0, amountByCurrency: {} }); t.count += g._count._all; t.amountByCurrency[g.currency] = round2((t.amountByCurrency[g.currency] ?? 0) + (g._sum.amount ?? 0)); if (g.currency === LEGACY_CURRENCY) t.amount = round2(t.amount + (g._sum.amount ?? 0)); }
+		for (const g of affiliate) { const t = (affiliateTotals[g.status] ??= { count: 0, amount: 0, amountByCurrency: {} }); t.count += g._count._all; t.amountByCurrency[g.currency] = round2((t.amountByCurrency[g.currency] ?? 0) + (g._sum.amount ?? 0)); if (g.currency === base) t.amount = round2(t.amount + (g._sum.amount ?? 0)); }
 		const sumsBy = (k: 'releasedAmount' | 'platformCommissionAmount' | 'providerNetReleasedAmount') => sumByCurrency(sums, (r: any) => r.currency, (r: any) => r._sum[k]);
 		return {
-			currency: 'USD',
-			totals: { releasedGross: sumsBy('releasedAmount')[LEGACY_CURRENCY] ?? 0, platformCommission: sumsBy('platformCommissionAmount')[LEGACY_CURRENCY] ?? 0, providerNet: sumsBy('providerNetReleasedAmount')[LEGACY_CURRENCY] ?? 0 },
+			currency: base,
+			totals: { releasedGross: sumsBy('releasedAmount')[base] ?? 0, platformCommission: sumsBy('platformCommissionAmount')[base] ?? 0, providerNet: sumsBy('providerNetReleasedAmount')[base] ?? 0 },
 			totalsByCurrency: { releasedGross: sumsBy('releasedAmount'), platformCommission: sumsBy('platformCommissionAmount'), providerNet: sumsBy('providerNetReleasedAmount') },
 			affiliate: affiliateTotals,
 			items: items.map(e => ({ id: e.id, projectId: e.projectId, projectTitle: e.project?.title ?? '', provider: fullName(e.project?.provider), escrowStatus: e.status, releasedGross: round2(e.releasedAmount), platformCommission: round2(e.platformCommissionAmount), providerNet: round2(e.providerNetReleasedAmount), ratePercent: e.providerCommissionRateSnapshot, level: e.providerCommissionLevelSnapshot, updatedAt: e.updatedAt })),
@@ -157,15 +160,16 @@ export class AdminFinanceService {
 	}
 
 	async invoices(status: 'paid' | 'due' | undefined, pageNo = 1, limit = 20) {
+		const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
 		const safePage = Math.max(1, pageNo); const safeLimit = Math.min(100, Math.max(1, limit));
 		const all = await this.allInvoices();
 		const filtered = status ? all.filter((i: any) => i.status === status) : all;
-		const sum = (list: any[], key: string) => round2(list.filter((i: any) => i.currency === LEGACY_CURRENCY).reduce((s, i) => s + (i[key] || 0), 0));
+		const sum = (list: any[], key: string) => round2(list.filter((i: any) => i.currency === base).reduce((s, i) => s + (i[key] || 0), 0));
 		const sumBy = (list: any[], key: string) => sumByCurrency(list, (i: any) => i.currency, (i: any) => i[key] || 0);
 		const paid = all.filter((i: any) => i.status === 'paid'); const due = all.filter((i: any) => i.status === 'due');
 		const pages = Math.ceil(filtered.length / safeLimit);
 		return {
-			currency: 'USD',
+			currency: base,
 			summary: { totalCount: all.length, paidCount: paid.length, dueCount: due.length, paidTotal: sum(paid, 'stageValue'), dueTotal: sum(due, 'stageValue'), platformCommission: sum(paid, 'platformCommission'), paidTotalBy: sumBy(paid, 'stageValue'), dueTotalBy: sumBy(due, 'stageValue'), platformCommissionBy: sumBy(paid, 'platformCommission') },
 			items: filtered.slice((safePage - 1) * safeLimit, safePage * safeLimit),
 			pagination: { page: safePage, limit: safeLimit, total: filtered.length, pages, totalPages: pages }

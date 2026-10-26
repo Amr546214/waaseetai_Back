@@ -6,6 +6,7 @@ import { adminAudit } from './admin-audit.service';
 import { computeLifecycle, listLifecycles, settlementDistributionOf } from './project-lifecycle.service';
 import { adminSettlementFor, adminSettledView, settlementsByProject, stageDisplayStatus, SETTLED_LABEL_AR, SETTLED_DISPUTE_WHERE } from './settlement-state.service';
 import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 const settledProjectWhere = { disputes: { some: SETTLED_DISPUTE_WHERE } } as const;
 
@@ -36,6 +37,7 @@ const page = (n: number | undefined, limit: number | undefined) => ({ safePage: 
 
 export class AdminOperationsService {
 	async listProjects(filters: { status?: ProjectStatus; q?: string }, pageNo?: number, limit?: number) {
+		const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
 		const { safePage, safeLimit } = page(pageNo, limit);
 		const q = filters.q?.trim();
 		const where: Prisma.ProjectWhereInput = {
@@ -77,7 +79,7 @@ export class AdminOperationsService {
 				progress: progressOf(p.contract?.stages)
 			})),
 			counts,
-			kpis: { escrowHeldCount: activeEscrows.reduce((n: number, g: any) => n + g._count._all, 0), escrowHeldTotal: heldBy[LEGACY_CURRENCY] ?? 0, escrowHeldTotalBy: heldBy, currency: LEGACY_CURRENCY },
+			kpis: { escrowHeldCount: activeEscrows.reduce((n: number, g: any) => n + g._count._all, 0), escrowHeldTotal: heldBy[base] ?? 0, escrowHeldTotalBy: heldBy, currency: base },
 			pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages }
 		};
 	}
@@ -113,11 +115,12 @@ export class AdminOperationsService {
 			progress: progressOf(contract?.stages),
 			disputes,
 			openDisputes: disputes.filter(d => d.status === DisputeStatus.OPEN || d.status === DisputeStatus.UNDER_REVIEW).length,
-			currency: 'USD'
+			currency: (project.contract?.currency ?? project.currency ?? LEGACY_CURRENCY) as string
 		};
 	}
 
 	async listContracts(filters: { status?: ContractStatus; q?: string }, pageNo?: number, limit?: number) {
+		const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
 		const { safePage, safeLimit } = page(pageNo, limit);
 		const q = filters.q?.trim();
 		const where: Prisma.ContractWhereInput = {
@@ -140,7 +143,7 @@ export class AdminOperationsService {
 		return {
 			items: items.map(c => ({ id: c.id, projectId: c.projectId, projectTitle: c.project?.title ?? '', price: c.price, currency: c.currency, durationDays: c.durationDays, status: c.status, signedAt: c.signedAt, createdAt: c.createdAt, client: party(c.client), provider: party(c.provider), escrow: escrowView(c.project?.escrow, c.price) })),
 			counts,
-			kpis: { activeContractsValue: activeValueBy[LEGACY_CURRENCY] ?? 0, activeContractsValueBy: activeValueBy, currency: LEGACY_CURRENCY },
+			kpis: { activeContractsValue: activeValueBy[base] ?? 0, activeContractsValueBy: activeValueBy, currency: base },
 			pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages }
 		};
 	}

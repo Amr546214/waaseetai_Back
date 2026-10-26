@@ -16,7 +16,8 @@ import { DUPLICATE_PURCHASE_MESSAGE, findActiveServicePurchases } from '../utils
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { LEVEL_MATRIX } from '../utils/progression-calculators';
 import { debitWalletIfCovered, walletBalanceOf, walletBalancesOf } from '../utils/wallet-balance';
-import { requireCurrency, assertSameCurrency } from '../utils/currency';
+import { requireCurrency, assertSameCurrency, LEGACY_CURRENCY } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 const serviceWhere = MARKET_VISIBLE_WHERE;
 
@@ -331,9 +332,12 @@ export class CartCheckoutService {
   async getPaymentMethods(userId: string) {
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { walletBalance: true } });
     if (!user) throw new AppError('المستخدم غير موجود', 404);
-    const balance = Number(user.walletBalance);
+    const balances = await walletBalancesOf(prisma, userId);
+    const base = await platformCurrency();
+    // `balance` is the wallet in the platform base currency (the one new orders are paid from); `balances` lists every currency on its own
+    const balance = base === LEGACY_CURRENCY ? Number(user.walletBalance) : (balances[base] ?? 0);
     return [
-      { id: 'wallet', name: 'المحفظة', available: true, balance, balances: await walletBalancesOf(prisma, userId) }
+      { id: 'wallet', name: 'المحفظة', available: true, balance, currency: base, balances }
     ];
   }
 

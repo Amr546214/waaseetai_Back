@@ -2,7 +2,8 @@ import { AccountType, AccreditationStatus, DisputeStatus, EscrowStatus, KYCStatu
 import { platformZone, startOfMonthInZone, startOfPreviousMonthInZone } from '../utils/platform-time';
 import { prisma } from '../config/db';
 import { deliveryCompletedProject } from './settlement-state.service';
-import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
+import { LEGACY_CURRENCY, formatMoney, sumByCurrency } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 // Admin dashboard aggregates. Every number comes from a COUNT / SUM / GROUP over the real tables — nothing is a fixed figure, a percentage with no
 // base, or a placeholder. With no rows every figure is 0 and every list is []. Revenue = the platform commission recorded on escrows
@@ -35,6 +36,7 @@ const ACCOUNT_LABEL: Record<string, string> = {
 
 export class AdminDashboardService {
 	async getSummary(now = new Date()) {
+		const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
 		// the month is cut in the platform time zone when one is configured (setting `defaultTimezone`); otherwise exactly as before (UTC)
 		const zone = await platformZone();
 		const monthStart = zone ? startOfMonthInZone(zone, now) : startOfMonth(now);
@@ -100,15 +102,15 @@ export class AdminDashboardService {
 
 		return {
 			generatedAt: now.toISOString(),
-			currency: 'USD',
+			currency: base,
 			kpis: {
 				users: { total: usersTotal, active: usersActive, suspended: usersSuspended, newThisMonth: usersNewThisMonth, newPreviousMonth: usersNewPrevMonth, growthPercent: growth(usersNewThisMonth, usersNewPrevMonth) },
 				projects: { active: activeProjects, completed: completedProjects, openRequests },
 				// the figures are the USD ones; *By lists every currency on its own (never added together)
-				revenue: { platformCommissionTotal: commissionTotalBy[LEGACY_CURRENCY] ?? 0, platformCommissionThisMonth: commissionMonthBy[LEGACY_CURRENCY] ?? 0, escrowHeld: escrowHeldBy[LEGACY_CURRENCY] ?? 0, platformCommissionTotalBy: commissionTotalBy, platformCommissionThisMonthBy: commissionMonthBy, escrowHeldBy },
+				revenue: { platformCommissionTotal: commissionTotalBy[base] ?? 0, platformCommissionThisMonth: commissionMonthBy[base] ?? 0, escrowHeld: escrowHeldBy[base] ?? 0, platformCommissionTotalBy: commissionTotalBy, platformCommissionThisMonthBy: commissionMonthBy, escrowHeldBy },
 				disputes: { open: openDisputes, openOver7Days: disputesOver7Days },
 				tickets: { open: openTickets },
-				withdrawals: { pending: pendingWithdrawals, pendingAmount: round2(pendingByCurrency[LEGACY_CURRENCY] ?? 0), pendingAmountBy: pendingByCurrency }
+				withdrawals: { pending: pendingWithdrawals, pendingAmount: round2(pendingByCurrency[base] ?? 0), pendingAmountBy: pendingByCurrency }
 			},
 			queues,
 			alerts
@@ -116,13 +118,14 @@ export class AdminDashboardService {
 	}
 
 	async getCharts(rawDays?: number, now = new Date()) {
+		const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
 		const days = rawDays === 30 ? 30 : 7;
 		const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - (days - 1)));
 		const monthsBack = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 5, 1));
 
 		const [users, escrows, statusGroups] = await Promise.all([
 			prisma.user.findMany({ where: { accountType: { notIn: ADMIN_TYPES }, createdAt: { gte: from } }, select: { createdAt: true } }),
-			prisma.escrow.findMany({ where: { platformCommissionAmount: { gt: 0 }, updatedAt: { gte: monthsBack }, currency: LEGACY_CURRENCY }, select: { platformCommissionAmount: true, updatedAt: true } }), // the chart is the USD series; other currencies are in the summary's *By maps
+			prisma.escrow.findMany({ where: { platformCommissionAmount: { gt: 0 }, updatedAt: { gte: monthsBack }, currency: base }, select: { platformCommissionAmount: true, updatedAt: true } }), // the chart is the USD series; other currencies are in the summary's *By maps
 			prisma.project.groupBy({ by: ['status'], _count: { _all: true } })
 		]);
 
@@ -142,7 +145,7 @@ export class AdminDashboardService {
 
 		return {
 			days,
-			currency: 'USD',
+			currency: base,
 			registrations,
 			registrationsTotal: registrations.reduce((s, r) => s + r.count, 0),
 			commission,
@@ -166,7 +169,7 @@ export class AdminDashboardService {
 		const items: ActivityItem[] = [
 			...users.map(u => ({ id: `u:${u.id}`, kind: 'USER_REGISTERED' as const, title: 'تسجيل حساب جديد', actor: fullName(u), actorType: ACCOUNT_LABEL[u.accountType] ?? null, at: u.createdAt, status: u.status, link: `${ADMIN_ROUTE}/users/${u.id}` })),
 			...disputes.map(d => ({ id: `d:${d.id}`, kind: 'DISPUTE_OPENED' as const, title: `فتح نزاع: ${d.reason}`, actor: fullName(d.openedBy), actorType: ACCOUNT_LABEL[d.openedBy?.accountType ?? ''] ?? null, at: d.createdAt, status: d.status, link: `${ADMIN_ROUTE}/disputes/${d.id}` })),
-			...withdrawals.map(w => ({ id: `w:${w.id}`, kind: 'WITHDRAWAL_REQUESTED' as const, title: `طلب سحب ${w.amount} ${w.currency === 'USD' ? '$' : w.currency}`, actor: fullName(w.user), actorType: ACCOUNT_LABEL[w.user?.accountType ?? ''] ?? null, at: w.createdAt, status: w.status, link: `${ADMIN_ROUTE}/withdrawals/${w.id}` })),
+			...withdrawals.map(w => ({ id: `w:${w.id}`, kind: 'WITHDRAWAL_REQUESTED' as const, title: `طلب سحب ${formatMoney(w.amount, w.currency)}`, actor: fullName(w.user), actorType: ACCOUNT_LABEL[w.user?.accountType ?? ''] ?? null, at: w.createdAt, status: w.status, link: `${ADMIN_ROUTE}/withdrawals/${w.id}` })),
 			...tickets.map(t => ({ id: `t:${t.id}`, kind: 'TICKET_OPENED' as const, title: `تذكرة دعم: ${t.subject}`, actor: fullName(t.user), actorType: ACCOUNT_LABEL[t.user?.accountType ?? ''] ?? null, at: t.createdAt, status: t.status, link: `${ADMIN_ROUTE}/support/${t.id}` })),
 			...samples.map(s => ({ id: `s:${s.id}`, kind: 'ACCREDITATION_SUBMITTED' as const, title: `نموذج اعتماد: ${s.title}`, actor: fullName(s.providerProfile?.user), actorType: ACCOUNT_LABEL[s.providerProfile?.user?.accountType ?? ''] ?? null, at: s.createdAt, status: s.status, link: `${ADMIN_ROUTE}/accreditations/${s.id}` })),
 			...adminLogs.map(a => ({ id: `a:${a.id}`, kind: 'ADMIN_ACTION' as const, title: a.title, actor: fullName(a.user), actorType: ACCOUNT_LABEL[a.user?.accountType ?? ''] ?? null, at: a.occurredAt, status: a.status, link: `${ADMIN_ROUTE}/audit-trail` }))

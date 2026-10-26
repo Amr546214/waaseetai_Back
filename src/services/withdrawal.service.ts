@@ -18,7 +18,8 @@ import { marketerNotifications } from './marketer-notifications.service';
 import { adminAudit } from './admin-audit.service';
 import { isPayoutAutomationEnabled } from '../utils/payout-automation.util';
 import { notifyAdmins } from './admin-notifications.service';
-import { LEGACY_CURRENCY, formatMoney } from '../utils/currency';
+import { LEGACY_CURRENCY, PAYOUT_CURRENCY, formatMoney } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 export const MARKETER_PAYPAL_REQUIRED_MESSAGE = 'أضف بريد PayPal لاستلام الأرباح';
 
@@ -159,7 +160,7 @@ export class WithdrawalService {
           // computation must be part of the same serializable snapshot as
           // the outstanding-withdrawals read and the insert below, not a
           // read taken from outside the transaction.
-          const wallet = await providerFinanceService.getWallet(userId, tx);
+          const wallet = await providerFinanceService.getWallet(userId, tx, PAYOUT_CURRENCY);
           const availableBalance = wallet.summary.availableBalance;
           if (input.amount > availableBalance) {
             throw new AppError(`المبلغ المطلوب يتجاوز رصيدك المتاح (${availableBalance} $)`, 400);
@@ -279,7 +280,7 @@ export class WithdrawalService {
       try {
         const created = await prisma.$transaction(async tx => {
           const approvedCommissions = await tx.commissionLog.aggregate({
-            where: { affiliateId: affiliate.id, status: CommissionStatus.APPROVED, currency: LEGACY_CURRENCY }, // payouts are USD (PayPal): earnings in another currency are never part of this balance
+            where: { affiliateId: affiliate.id, status: CommissionStatus.APPROVED, currency: PAYOUT_CURRENCY }, // payouts are USD (PayPal): earnings in another currency are never part of this balance
             _sum: { amount: true },
           });
           const availableBalance = approvedCommissions._sum.amount || 0;
@@ -348,6 +349,7 @@ export class WithdrawalService {
 
   /** Admin list. `owner` narrows to provider or marketer (affiliate) withdrawals; `counts` is per status over the whole table. */
   async list(status?: WithdrawalStatus, page = 1, limit = 20, owner?: 'provider' | 'affiliate') {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
     const safePage = Math.max(1, page); const safeLimit = Math.min(100, Math.max(1, limit));
     const ownerWhere = owner === 'affiliate' ? { user: { affiliateProfile: { isNot: null }, accountType: { notIn: [AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY] } } }
       : owner === 'provider' ? { NOT: { user: { affiliateProfile: { isNot: null }, accountType: { notIn: [AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY] } } } } : {};
@@ -362,7 +364,7 @@ export class WithdrawalService {
     for (const g of grouped) {
       const c = (counts[g.status] ??= { count: 0, amount: 0, amountByCurrency: {} });
       c.count += g._count._all; c.amountByCurrency[g.currency] = (c.amountByCurrency[g.currency] ?? 0) + (g._sum.amount ?? 0);
-      if (g.currency === LEGACY_CURRENCY) c.amount += g._sum.amount ?? 0;
+      if (g.currency === base) c.amount += g._sum.amount ?? 0;
     }
     const pages = Math.ceil(total / safeLimit);
     return { items: items.map(withoutLegacyWithdrawalBankFields), counts, pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages } };
@@ -397,7 +399,7 @@ export class WithdrawalService {
     const ledger = await this.resolveApprovalLedger(userId);
     if (ledger.kind === 'AFFILIATE_COMMISSION') {
       const approvedCommissions = await prisma.commissionLog.aggregate({
-        where: { affiliateId: ledger.affiliateId, status: CommissionStatus.APPROVED, currency: LEGACY_CURRENCY },
+        where: { affiliateId: ledger.affiliateId, status: CommissionStatus.APPROVED, currency: PAYOUT_CURRENCY },
         _sum: { amount: true },
       });
       const alreadyWithdrawn = await prisma.withdrawal.aggregate({
@@ -406,7 +408,7 @@ export class WithdrawalService {
       });
       return (approvedCommissions._sum.amount || 0) - (alreadyWithdrawn._sum.amount || 0);
     }
-    const wallet = await providerFinanceService.getWallet(userId);
+    const wallet = await providerFinanceService.getWallet(userId, undefined, PAYOUT_CURRENCY);
     const alreadyWithdrawn = await prisma.withdrawal.aggregate({
       where: { userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
       _sum: { amount: true },
@@ -477,7 +479,7 @@ export class WithdrawalService {
             // same marketer cannot together exceed the commission balance.
             // PENDING/REJECTED rows never consume balance here.
             const approvedCommissions = await tx.commissionLog.aggregate({
-              where: { affiliateId: ledger.affiliateId, status: CommissionStatus.APPROVED, currency: LEGACY_CURRENCY },
+              where: { affiliateId: ledger.affiliateId, status: CommissionStatus.APPROVED, currency: PAYOUT_CURRENCY },
               _sum: { amount: true },
             });
             const commissionBalance = approvedCommissions._sum.amount || 0;
@@ -494,7 +496,7 @@ export class WithdrawalService {
           // eligibility check must be part of the SAME serializable
           // snapshot as the conditional status transition below, not a
           // read taken from outside the transaction.
-          const wallet = await providerFinanceService.getWallet(item.userId, tx);
+          const wallet = await providerFinanceService.getWallet(item.userId, tx, PAYOUT_CURRENCY);
           const availableBalance = wallet.summary.availableBalance;
           const alreadyWithdrawn = await tx.withdrawal.aggregate({
             where: { userId: item.userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },

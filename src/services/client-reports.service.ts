@@ -1,6 +1,7 @@
 import { prisma } from '../config/db';
 import { SETTLED_DISPUTE_WHERE } from './settlement-state.service';
 import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 // Batch (client reports real-data fix): the client-overview "تقاريري" page was
 // entirely hardcoded markup (no data binding at all). This service replaces
@@ -46,6 +47,7 @@ function statusBucket(status: string): 'مكتمل' | 'ملغي' | 'نشط' | '�
 
 export class ClientReportsService {
 	public async getReports(userId: string, range: ReportDateRange = 'month') {
+		const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
 		const since = rangeStart(range);
 		const monthStart = startOfThisMonth();
 
@@ -100,7 +102,7 @@ export class ClientReportsService {
 			budget: effectiveBudget(r),
 			proposalsCount: r.proposals?.length ?? r.proposalsCount ?? 0,
 			status: r.status,
-			currency: r.currency ?? LEGACY_CURRENCY,
+			currency: r.currency ?? base,
 			bucket: statusBucket(r.status),
 			createdAt: r.createdAt,
 			accepted: (r.proposals || []).some((p: any) => p.status === 'ACCEPTED') || r.status === 'COMPLETED' || r.status === 'IN_PROGRESS'
@@ -115,7 +117,7 @@ export class ClientReportsService {
 				budget: effectiveBudget(p),
 				proposalsCount: p.proposalsCount ?? p.proposals?.length ?? 0,
 				status: p.status,
-				currency: p.currency ?? LEGACY_CURRENCY,
+				currency: p.currency ?? base,
 				bucket: statusBucket(p.status),
 				createdAt: p.createdAt,
 				accepted: !!p.providerId
@@ -132,7 +134,7 @@ export class ClientReportsService {
 
 		// per currency: totalSpent is the USD figure, totalSpentBy lists every currency (budgets of different currencies are never added)
 		const totalSpentBy = sumByCurrency(completedProjects, o => o.currency, o => o.budget);
-		const totalSpent = totalSpentBy[LEGACY_CURRENCY] ?? 0;
+		const totalSpent = totalSpentBy[base] ?? 0;
 
 		const avgRating = reviews.length
 			? Math.round((reviews.reduce((s, r) => s + r.rating, 0) / reviews.length) * 10) / 10
@@ -176,7 +178,7 @@ export class ClientReportsService {
 
 		// ── Finance tab ─────────────────────────────────────────────────────
 		const escrowHeldBy = sumByCurrency(escrowSum, (r: any) => r.currency, (r: any) => r._sum.amount);
-		const escrowHeld = escrowHeldBy[LEGACY_CURRENCY] ?? 0;
+		const escrowHeld = escrowHeldBy[base] ?? 0;
 
 		// ── Disputes tab ────────────────────────────────────────────────────
 		const disputeCounts = {

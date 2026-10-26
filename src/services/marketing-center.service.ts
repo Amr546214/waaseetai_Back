@@ -2,6 +2,7 @@ import { AccountType, OrderStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { LEGACY_CURRENCY } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 // Phase 7 — مركز التسويق (Marketing Center) aggregation.
 // Every number here is derived from the real Coupon / CouponRedemption /
@@ -17,8 +18,7 @@ import { LEGACY_CURRENCY } from '../utils/currency';
 const TREND_MONTHS = 6;
 const TOP_TOOLS_LIMIT = 10;
 const NOT_CANCELLED = { status: { not: OrderStatus.CANCELLED } };
-/** the money figures here (discounted value, revenue, caps) are USD: redemptions on an order in another currency are never added in - they are counted separately (otherCurrencyRedemptions) */
-const USD_ORDER = { ...NOT_CANCELLED, currency: LEGACY_CURRENCY };
+/** the money figures here (discounted value, revenue, caps) are in the platform BASE currency: redemptions on an order in another currency are never added in - they are counted separately (otherCurrencyRedemptions) */
 
 export type ToolStatus = 'ACTIVE' | 'PAUSED' | 'EXPIRED' | 'PENDING' | 'REJECTED';
 
@@ -49,6 +49,8 @@ type ToolStats = { usageCount: number; discountedValue: number; lastUsedAt: Date
 
 export class MarketingCenterService {
   async getCenter(providerId: string, now: Date = new Date()) {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
+    const baseOrder = { ...NOT_CANCELLED, currency: base };
     const user = await prisma.user.findUnique({ where: { id: providerId }, select: { accountType: true, marketingMonthlySpendCap: true } });
     if (!user) throw new AppError('المستخدم غير موجود', 404);
     const isCompany = user.accountType === AccountType.PROVIDER_COMPANY;
@@ -61,7 +63,7 @@ export class MarketingCenterService {
     const windowStart = monthStart(y, m - (TREND_MONTHS - 1));
 
     const assigneeSelect = { select: { id: true, name: true, avatarUrl: true } } as const;
-    const windowWhere = { createdAt: { gte: windowStart, lt: nextMonthStart }, order: USD_ORDER };
+    const windowWhere = { createdAt: { gte: windowStart, lt: nextMonthStart }, order: baseOrder };
 
     const [coupons, offers, couponWindow, offerWindow, couponGroups, offerGroups, teamMembers, otherCouponRedemptions, otherOfferRedemptions] = await Promise.all([
       prisma.coupon.findMany({
@@ -82,19 +84,19 @@ export class MarketingCenterService {
       }),
       prisma.couponRedemption.groupBy({
         by: ['couponId'],
-        where: { coupon: { providerId }, order: USD_ORDER },
+        where: { coupon: { providerId }, order: baseOrder },
         _count: { _all: true }, _sum: { amount: true }, _max: { createdAt: true }
       }),
       prisma.specialOfferRedemption.groupBy({
         by: ['offerId'],
-        where: { offer: { providerId }, order: USD_ORDER },
+        where: { offer: { providerId }, order: baseOrder },
         _count: { _all: true }, _sum: { amount: true }, _max: { createdAt: true }
       }),
       isCompany
         ? prisma.companyTeamMember.findMany({ where: { companyOwnerId: providerId }, select: { id: true, name: true, avatarUrl: true, jobTitle: true, status: true }, orderBy: { createdAt: 'asc' } })
         : Promise.resolve([]),
-      prisma.couponRedemption.count({ where: { coupon: { providerId }, order: { ...NOT_CANCELLED, currency: { not: LEGACY_CURRENCY } } } }),
-      prisma.specialOfferRedemption.count({ where: { offer: { providerId }, order: { ...NOT_CANCELLED, currency: { not: LEGACY_CURRENCY } } } })
+      prisma.couponRedemption.count({ where: { coupon: { providerId }, order: { ...NOT_CANCELLED, currency: { not: base } } } }),
+      prisma.specialOfferRedemption.count({ where: { offer: { providerId }, order: { ...NOT_CANCELLED, currency: { not: base } } } })
     ]);
 
     // --- Monthly buckets (trend + this/previous month KPIs) ---------------
@@ -163,7 +165,7 @@ export class MarketingCenterService {
         discountedValue: kpi('discountedValue'),
         extraRevenue: kpi('revenue')
       },
-      currency: LEGACY_CURRENCY,
+      currency: base,
       otherCurrencyRedemptions: (otherCouponRedemptions ?? 0) + (otherOfferRedemptions ?? 0),
       monthlyTrend,
       toolSummaries: {

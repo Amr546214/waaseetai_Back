@@ -190,12 +190,13 @@ export class ProviderCouponService {
   // this provider (not just the marketing center's top-10). Same data rules
   // as marketing-center.service.ts: CANCELLED orders excluded.
   async getStats(providerId: string, id: string, paging: StatsPaging = { page: 1, pageSize: 10 }, now: Date = new Date()) {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
     const coupon = await prisma.coupon.findFirst({ where: { id, providerId }, select: { id: true, maxUses: true } });
     if (!coupon) throw new AppError('الكوبون غير موجود', 404);
 
     // every figure below is the USD view (a redemption on an order in another currency is never added in: it is counted apart as otherCurrencyUses)
-    const where = { couponId: id, order: { ...NOT_CANCELLED, currency: LEGACY_CURRENCY } };
-    const otherCurrencyUses = await prisma.couponRedemption.count({ where: { couponId: id, order: { ...NOT_CANCELLED, currency: { not: LEGACY_CURRENCY } } } });
+    const where = { couponId: id, order: { ...NOT_CANCELLED, currency: base } };
+    const otherCurrencyUses = await prisma.couponRedemption.count({ where: { couponId: id, order: { ...NOT_CANCELLED, currency: { not: base } } } });
     const [all, page] = await Promise.all([
       prisma.couponRedemption.findMany({
         where,
@@ -221,7 +222,7 @@ export class ProviderCouponService {
 
     return {
       id: coupon.id,
-      currency: LEGACY_CURRENCY,
+      currency: base,
       otherCurrencyUses,
       totals: {
         usageCount: all.length,

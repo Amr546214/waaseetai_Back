@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { AppError, fieldError } from '../utils/app-error';
 import { StatsPaging, customerName, pageMeta, round2 } from './marketing-stats.util';
 import { LEGACY_CURRENCY, sumByCurrency } from '../utils/currency';
+import { platformCurrency } from './platform-currency';
 
 // Admin oversight of provider coupons + special offers. Coupons/offers are
 // CREATED by providers (provider-coupon.service.ts / provider-special-offer
@@ -62,6 +63,7 @@ export interface AdminCouponListQuery { status?: string; providerId?: string; q?
 
 export class AdminCouponsService {
   async list(query: AdminCouponListQuery, paging: StatsPaging, now = new Date()) {
+    const base = await platformCurrency(); // the headline currency: the platform base currency (other currencies are listed separately)
     if (query.status && !COUPON_STATUSES.includes(query.status as CouponStatus)) throw new AppError('حالة الكوبون غير صالحة', 400);
     const and: any[] = [couponStatusWhere(query.status as CouponStatus | undefined, now)];
     if (query.providerId) and.push({ providerId: query.providerId });
@@ -75,7 +77,7 @@ export class AdminCouponsService {
     ]);
     return {
       items: items.map((c: any) => formatCoupon(c, now)),
-      summary: { totalRedemptions: redemptionAgg.reduce((n: number, g: any) => n + g._count._all, 0), totalDiscountGiven: round2(redemptionAgg.filter((g: any) => g.currency === LEGACY_CURRENCY).reduce((a: number, g: any) => a + (g._sum.discount ?? 0), 0)), totalDiscountGivenBy: sumByCurrency(redemptionAgg, (g: any) => g.currency, (g: any) => g._sum.discount), currency: LEGACY_CURRENCY },
+      summary: { totalRedemptions: redemptionAgg.reduce((n: number, g: any) => n + g._count._all, 0), totalDiscountGiven: round2(redemptionAgg.filter((g: any) => g.currency === base).reduce((a: number, g: any) => a + (g._sum.discount ?? 0), 0)), totalDiscountGivenBy: sumByCurrency(redemptionAgg, (g: any) => g.currency, (g: any) => g._sum.discount), currency: base },
       ...pageMeta(paging, total)
     };
   }
