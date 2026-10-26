@@ -56,7 +56,7 @@ test('withdrawal: every state (requested / approved / rejected / paid / failed /
     assert.equal(n.actionUrl, '/marketer-overview/withdraw');
     assert.ok(isRealMarketerRoute(n.actionUrl));
     assert.ok(n.actionText);
-    assert.match(n.message, /350 \$/);
+    assert.match(n.message, /350\.00 USD/);
   }
   assert.match(f.notifications[2].message, /بيانات غير مكتملة/);
 });
@@ -114,7 +114,7 @@ test('commission approved: one notification per commission, to the affiliate use
   assert.deepEqual(f.notifications.map(n => n.userId), ['mkt-1', 'mkt-2']);
   assert.equal(f.notifications[0].type, 'COMMISSION_APPROVED');
   assert.equal(f.notifications[0].actionUrl, '/marketer-overview/commissions');
-  assert.match(f.notifications[0].message, /12.5 \$/);
+  assert.match(f.notifications[0].message, /12\.50 USD/);
   assert.ok(isRealMarketerRoute(f.notifications[0].actionUrl));
 });
 

@@ -29,7 +29,7 @@ test('an offer the provider can sign carries the real contract: price, duration,
 	assert.equal(o.status, 'PENDING_SIGNATURE');
 	assert.deepEqual({ ...o.contract, milestones: o.contract.milestones.map((m: any) => [m.order, m.title, m.days, m.percentage, m.amount]) }, {
 		id: 'ctr-1', status: 'PENDING_PROVIDER_SIGNATURE', termsVersion: 1, price: 950, currency: 'USD', durationDays: 12, phasesCount: 2,
-		milestones: [[1, 'مسودة', 5, 40, 380], [2, 'نهائي', 7, 60, 570]], escrow: { amount: 950, status: 'HELD' }
+		milestones: [[1, 'مسودة', 5, 40, 380], [2, 'نهائي', 7, 60, 570]], escrow: { amount: 950, status: 'HELD' }, providerTerms: null // no frozen rate on this fixture's escrow
 	});
 });
 

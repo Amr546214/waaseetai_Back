@@ -103,7 +103,7 @@ test('every withdrawal state produces its own FINANCIAL notification with a real
 	assert.equal(new Set(f.notifications.map(n => n.title)).size, 6);
 	assert.ok(f.notifications.every(n => n.userId === 'prov-1' && n.category === 'FINANCIAL' && n.actionText && isRealProviderRoute(n.actionUrl)));
 	assert.match(f.notifications[2].message, /بيانات غير مكتملة/);
-	assert.match(f.notifications[0].message, /120 \$/);
+	assert.match(f.notifications[0].message, /120\.00 USD/);
 });
 
 test('a marketer (commission) withdrawal is handed to the marketer helper: the provider helper stays silent (no duplicate), the marketer helper sends marketer wording and the marketer withdraw route', async t => {
@@ -323,7 +323,7 @@ test('counter accepted: the provider gets a stored notification with the new ter
 	assert.equal(n.userId, 'prov-1');
 	assert.equal(n.type, 'OFFER_COUNTER_ACCEPTED');
 	assert.equal(n.category, 'OFFERS');
-	assert.match(n.message, /880 \$ خلال 18 يومًا/);
+	assert.match(n.message, /880\.00 USD خلال 18 يومًا/);
 	assert.equal(n.actionUrl, '/provider-overview/offers/offer-1/negotiate');
 	assert.ok(isRealProviderRoute(n.actionUrl));
 });

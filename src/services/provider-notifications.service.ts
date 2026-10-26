@@ -201,12 +201,12 @@ export const providerNotifications = {
 	},
 
 	/** The client accepted the provider's counter-offer: the offer now carries the counter's price and duration. */
-	async counterAccepted(p: { providerId: string; offerId: string; projectId: string; projectTitle?: string | null; price: number; deliveryDays: number }) {
+	async counterAccepted(p: { providerId: string; offerId: string; projectId: string; projectTitle?: string | null; price: number; deliveryDays: number; currency?: string }) {
 		const title = short(p.projectTitle);
 		await safely('counterAccepted', () => notificationService.createAndEmit({
 			userId: p.providerId,
 			title: 'قبل العميل عرضك المضاد',
-			message: `قبل العميل عرضك المضاد${title ? ` على «${title}»` : ''}: ${p.price} $ خلال ${p.deliveryDays} يومًا. أصبحت هذه شروط عرضك، وبانتظار اختيار العميل لك والتوقيع.`,
+			message: `قبل العميل عرضك المضاد${title ? ` على «${title}»` : ''}: ${formatMoney(p.price, p.currency ?? LEGACY_CURRENCY)} خلال ${p.deliveryDays} يومًا. أصبحت هذه شروط عرضك، وبانتظار اختيار العميل لك والتوقيع.`,
 			category: NotificationCategory.OFFERS,
 			type: 'OFFER_COUNTER_ACCEPTED',
 			actionUrl: PROVIDER_ROUTES.offerNegotiate(p.offerId),

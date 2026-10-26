@@ -29,9 +29,9 @@ test('out-of-range / non-numeric scores are ignored', () => {
 async function loadService(t: TestContext, scored: Array<{ aiMatchScore: number; createdAt: Date }>) {
   const findManyCalls: any[] = [];
   const prismaMock: any = {
-    project: { count: async () => 0, aggregate: async () => ({ _sum: { budgetFixed: 0, budgetMax: 0 } }), findMany: async () => [] },
+    project: { count: async () => 0, groupBy: async () => [], findMany: async () => [] },
     proposal: { count: async () => 0, findMany: async (args: any) => { findManyCalls.push(args); return args?.where?.aiMatchScore ? scored : []; } },
-    escrow: { aggregate: async () => ({ _sum: { amount: 0 } }) },
+    escrow: { groupBy: async () => [] },
     user: { findUnique: async () => ({ activeRole: 'CLIENT', profileCompletionPercent: 0, currentLevel: null, currentPoints: 0, pointsToNextLevel: 100, clientProfile: null }) },
     contract: { findFirst: async () => null },
   };

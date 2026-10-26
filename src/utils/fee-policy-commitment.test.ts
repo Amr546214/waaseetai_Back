@@ -20,6 +20,7 @@ test('policy readers: only creation points, display, the marketer ladder of the 
 		'services/client-requests.service.ts',              // escrow creation (sign + fund are ONE transaction)
 		'services/marketer-wallet.service.ts',              // display of the current floor
 		'services/paypal-finance.service.ts',               // deposit quote (creation)
+		'services/provider-fee-preview.service.ts',         // an ESTIMATE shown before anyone signs (nothing is stored from it)
 		'services/withdrawal.service.ts',                   // withdrawal request (creation)
 	].sort());
 });

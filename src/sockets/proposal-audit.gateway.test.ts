@@ -78,7 +78,7 @@ test('buildQualityAuditResult: status follows the vendor score; provider column 
   assert.equal(mk(90).profileAudit[0].status, 'EXCELLENT');
   assert.equal(mk(60).profileAudit[0].status, 'GOOD');
   assert.equal(mk(10).profileAudit[0].status, 'WARNING');
-  assert.deepEqual(mk(90).triPartyComparison.provider, { budget: '250 $', duration: '7 يوم', milestones: '3 مرحلة' });
+  assert.deepEqual(mk(90).triPartyComparison.provider, { budget: '250.00 USD', duration: '7 يوم', milestones: '3 مرحلة' });
 });
 
 test('trigger_ai_audit: unauthenticated socket is rejected and the evaluator is not called', async () => {

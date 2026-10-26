@@ -35,6 +35,7 @@ const prisma: any = {
 		findUnique: async ({ where }: any) => (where.id === store.id ? store : null),
 		update: async ({ data }: any) => { store = { ...store, ...data }; return store; }
 	},
+	order: { groupBy: async () => [{ currency: 'USD', _count: { _all: 2 }, _sum: { discount: 30 } }] },
 	couponRedemption: {
 		aggregate: async () => ({ _count: { _all: 2 }, _sum: { amount: 30 } }),
 		count: async () => 1,
@@ -100,7 +101,7 @@ test('ADMIN and SUPER_ADMIN can list coupons: real fields, derived status, provi
 		assert.equal(c.provider.name, 'Sara K');
 		assert.deepEqual([c.usedCount, c.maxUses], [2, 10]);
 		assert.deepEqual(c.services, [{ id: 's1', title: 'Logo' }]);
-		assert.deepEqual(r.body.data.summary, { totalRedemptions: 2, totalDiscountGiven: 30 });
+		assert.deepEqual(r.body.data.summary, { totalRedemptions: 2, totalDiscountGiven: 30, totalDiscountGivenBy: { USD: 30 }, currency: 'USD' });
 	}
 	const and = JSON.stringify(lastFindManyWhere.AND);
 	assert.match(and, /"providerId":"prov"/);
