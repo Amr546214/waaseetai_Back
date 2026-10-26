@@ -1,3 +1,4 @@
+import { PLATFORM_CURRENCY } from './platform-currency';
 // Safe reading of Contract.terms (a Json column: the snapshot taken when the client selects the offer). Its shape is NOT guaranteed — legacy offers,
 // manual rows or future versions may store null, a string, an array, or an object with missing/odd fields — so this never throws and never invents data:
 // whatever cannot be read is simply absent (null / empty list).
@@ -15,7 +16,7 @@ export interface ProviderContractView {
 	status: string;
 	termsVersion: number;
 	price: number;
-	currency: 'USD';
+	currency: typeof PLATFORM_CURRENCY;
 	durationDays: number;
 	phasesCount: number;
 	/** Only what the saved terms really contain ([] when they hold no milestones). */
@@ -74,7 +75,7 @@ export function buildProviderContractView(
 		status: contract.status,
 		termsVersion: contract.termsVersion,
 		price: contract.price,
-		currency: 'USD',
+		currency: PLATFORM_CURRENCY,
 		durationDays: contract.durationDays,
 		phasesCount: contract.phasesCount,
 		milestones: parseContractMilestones(contract.terms),

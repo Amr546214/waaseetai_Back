@@ -56,7 +56,8 @@ export function linearNextValue(values: (number | null)[], minPoints = FORECAST_
   return Number.isFinite(next) && next >= 0 ? round(next, 2) : null;
 }
 
-export const PLATFORM_CURRENCY = 'USD';
+export { PLATFORM_CURRENCY } from '../../utils/platform-currency';
+import { PLATFORM_CURRENCY } from '../../utils/platform-currency';
 
 export interface ForecastMetrics {
   currency: string | null;
