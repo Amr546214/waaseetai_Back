@@ -1,0 +1,23 @@
+{
+ "logo.mark": "images/waseet-mark.png",
+ "logo.boot": "assets/brand/waseet-mark.png",
+ "logo.email": "images/waseet-mark.png",
+ "favicon.tab": "assets/brand/waseet-mark.png",
+ "favicon.ico": "favicon.ico",
+ "social.og": "assets/social/waseetai-og-v3.jpg",
+ "icon.ai": "tools/02-الايقونات/svg/i-ai.svg",
+ "character.bebo.classic.sprites": "bebo/robot-sprites.png",
+ "character.bebo.classic.actions": "bebo/robot-actions.png",
+ "character.bebo.classic.speaking": "bebo/robot-speaking.png",
+ "character.bebo.classic.antics": "bebo/robot-antics.png",
+ "character.bebo.classic.emotions": "bebo/robot-emotions.png",
+ "character.bebo.classic.kitten": "bebo/kitten-sprites.png",
+ "character.bebo.scout.sprites": "bebo/scout/guide-sprites.png",
+ "character.bebo.scout.actions": "bebo/scout/guide-actions.png",
+ "character.bebo.scout.speaking": "bebo/scout/guide-speaking.png",
+ "character.bebo.scout.antics": "bebo/scout/guide-antics.png",
+ "character.bebo.scout.emotions": "bebo/scout/guide-emotions.png",
+ "character.bebo.scout.kitten": "bebo/scout/kitten-sprites.png",
+ "character.bebo.traffic": "bebo/scout/guide-traffic.png",
+ "character.bebo.expressions": "bebo/scout/guide-expressions.png"
+}

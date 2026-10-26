@@ -3141,3 +3141,56 @@ model FeePolicyVersion {
   @@index([effectiveFrom])
   @@map("fee_policy_versions")
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+// Site identity («التحكم بالموقع» > الهوية): the platform's logos / favicon / AI icon / characters as managed, versioned, rollback-able assets stored IN the database (bytea).
+// ADDITIVE ONLY (three new tables, nothing existing is touched). The migration is NOT executed by workers: see prisma/migrations/20261027150000_site_identity/migration.sql.
+// Rules enforced in the service (and, where Prisma cannot express them, in the migration SQL as CHECK / partial unique index):
+//   * status is STAGED | PUBLISHED | SUPERSEDED | DISCARDED; PUBLISHED / SUPERSEDED rows are NEVER deleted (rollback needs the bytes); only a DISCARDED staged upload may drop its bytes.
+//   * at most ONE PUBLISHED row per key (the one `site_identity_state.activeAssetId` points at); a key with no state row / a NULL pointer = the built-in default asset.
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+model SiteIdentityAsset {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String
+  version     Int
+  status      String
+  mime        String
+  bytes       Bytes?
+  sha256      String
+  width       Int?
+  height      Int?
+  byteSize    Int
+  note        String?
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  activeFor SiteIdentityState[] @relation("SiteIdentityActiveAsset")
+
+  @@unique([key, version])
+  @@index([key, status])
+  @@index([key, sha256])
+  @@map("site_identity_assets")
+}
+
+model SiteIdentityState {
+  key           String   @id
+  activeAssetId String?  @db.Uuid
+  version       Int      @default(0)
+  updatedAt     DateTime @default(now()) @db.Timestamptz(3)
+  updatedById   String?
+
+  activeAsset SiteIdentityAsset? @relation("SiteIdentityActiveAsset", fields: [activeAssetId], references: [id], onDelete: Restrict)
+
+  @@map("site_identity_state")
+}
+
+/// One row per publish / restore: `snapshot` = {key: assetId | null} for EVERY key that has a state row at that moment. `version` is the global manifest counter (public manifest version).
+model SiteIdentityManifest {
+  version     Int      @id
+  snapshot    Json
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  createdById String?
+  reason      String
+
+  @@map("site_identity_manifest")
+}
