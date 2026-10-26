@@ -90,7 +90,7 @@ test('listAmendments: exposes only whitelisted fields — no private/internal da
 
   const result = await service.listAmendments('client-1');
   const keys = Object.keys(result[0]).sort();
-  assert.deepEqual(keys, ['actionBlockedReason', 'actionable', 'addedStageId', 'appliedAt', 'budgetDelta', 'contractId', 'contractRef', 'contractDurationDays', 'contractPrice', 'contractStatus', 'conversationId', 'createdAt', 'description', 'durationAfter', 'durationBefore', 'durationDeltaDays', 'effect', 'effectNote', 'fundingAuthorized', 'fundingAuthorizedUntil', 'id', 'needsClientPayment', 'priceAfter', 'priceBefore', 'projectId', 'projectTitle', 'providerId', 'providerName', 'requestedByRole', 'respondedAt', 'status', 'title', 'type', 'updatedAt'].sort());
+  assert.deepEqual(keys, ['actionBlockedReason', 'actionable', 'addedStageId', 'appliedAt', 'budgetDelta', 'contractId', 'contractRef', 'contractDurationDays', 'contractPrice', 'contractStatus', 'conversationId', 'createdAt', 'currency', 'description', 'durationAfter', 'durationBefore', 'durationDeltaDays', 'effect', 'effectNote', 'fundingAuthorized', 'fundingAuthorizedUntil', 'id', 'needsClientPayment', 'priceAfter', 'priceBefore', 'projectId', 'projectTitle', 'providerId', 'providerName', 'requestedByRole', 'respondedAt', 'status', 'title', 'type', 'updatedAt'].sort());
 });
 
 test('listAmendments: query is scoped to the calling client only (never another client\'s data)', async (t) => {

@@ -152,6 +152,7 @@ export class DashboardService {
           title: true,
           budgetFixed: true,
           budgetMax: true,
+          currency: true,
           status: true,
           createdAt: true
         }
@@ -161,6 +162,7 @@ export class DashboardService {
         id: p.id,
         title: p.title,
         budget: p.budgetFixed || p.budgetMax || 0,
+        currency: p.currency ?? LEGACY_CURRENCY,
         status: p.status,
         createdAt: p.createdAt
       }));
@@ -440,6 +442,7 @@ export class DashboardService {
                 title: true,
                 budgetFixed: true,
                 budgetMax: true,
+                currency: true,
                 specialty: true,
                 createdAt: true
               }
@@ -486,6 +489,7 @@ export class DashboardService {
           id: p.id,
           title: p.title,
           budget: p.budgetFixed || p.budgetMax || 0,
+          currency: p.currency ?? LEGACY_CURRENCY,
           specialty: p.specialty,
           // Batch 5: was a hardcoded 0 placeholder. This list is a plain
           // specialty filter ordered createdAt desc — no score exists, so

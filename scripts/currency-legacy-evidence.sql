@@ -1,3 +1,6 @@
+BEGIN READ ONLY;
+SET LOCAL statement_timeout = '60s';
+-- ROW-LEVEL detail (contains user and record ids: for the team's own review, NOT to be pasted into a ticket; use currency-evidence-summary.sql for anything shared). Runs before or after the phase-A migration.
 -- READ-ONLY. Evidence per AMBIGUOUS group of old money rows. Run on dev with the existing read permission; NEVER run on production from here, never modify anything.
 -- Two different problems, kept apart on purpose:
 --   (A) a WRONG DEFAULT LABEL: the column said 'SAR' because nobody set it (wallet_transactions / withdrawals / commission_logs defaulted to 'SAR' until 2026-10); the AMOUNT came from a USD flow.
@@ -24,7 +27,7 @@ WHERE w."userId" IN (SELECT "userId" FROM wallet_transactions WHERE "paymentMeth
 GROUP BY w."userId", w.type, w.currency ORDER BY w."userId", w.type;
 
 -- G1c. escrows / contracts funded by those accounts (cannot be proven pure USD from their own data)
-SELECT e.id escrow_id, e."projectId", e.amount, e.currency escrow_currency, e."fundedAt", c.id contract_id, c.price, c.currency contract_currency, c."clientId"
+SELECT e.id escrow_id, e."projectId", e.amount, to_jsonb(e)->>'currency' AS escrow_currency, e."fundedAt", c.id contract_id, c.price, to_jsonb(c)->>'currency' AS contract_currency, c."clientId"
 FROM escrows e JOIN contracts c ON c."projectId" = e."projectId"
 WHERE c."clientId" IN (SELECT "userId" FROM wallet_transactions WHERE "paymentMethod" ILIKE 'MOYASAR%') ORDER BY e."fundedAt";
 
@@ -42,7 +45,7 @@ FROM withdrawals wd WHERE wd.currency <> 'USD' ORDER BY wd."createdAt";
 
 -- G4 (A). commissions labelled SAR: the base amount came from a released stage; the escrow's currency is the source of truth
 SELECT cl.id commission_id, cl."affiliateId", cl.currency AS commission_label, cl.amount, cl."baseAmount", cl.status, cl."sourceProjectId",
-       e.currency AS source_escrow_currency, e."feePolicyVersion", cl."createdAt"
+       to_jsonb(e)->>'currency' AS source_escrow_currency, e."feePolicyVersion", cl."createdAt"
 FROM commission_logs cl LEFT JOIN escrows e ON e."projectId" = cl."sourceProjectId" WHERE cl.currency <> 'USD' ORDER BY cl."createdAt";
 
 -- G5. gateway requests (PayPal): currency and amount collected vs what the wallet got (a mismatch would show here)
@@ -53,3 +56,5 @@ FROM paypal_payments p LEFT JOIN wallet_transactions w ON w."referenceId" = p."p
 SELECT 'contracts' t, COUNT(*) n FROM contracts c WHERE c."createdAt" < '2026-09-28' AND c."clientId" IN (SELECT "userId" FROM wallet_transactions WHERE "paymentMethod" ILIKE 'MOYASAR%')
 UNION ALL SELECT 'escrows', COUNT(*) FROM escrows e JOIN contracts c ON c."projectId" = e."projectId" WHERE e."createdAt" < '2026-09-28' AND c."clientId" IN (SELECT "userId" FROM wallet_transactions WHERE "paymentMethod" ILIKE 'MOYASAR%')
 UNION ALL SELECT 'orders', COUNT(*) FROM orders o WHERE o."createdAt" < '2026-09-28' AND o."userId" IN (SELECT "userId" FROM wallet_transactions WHERE "paymentMethod" ILIKE 'MOYASAR%');
+
+ROLLBACK;

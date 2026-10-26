@@ -25,26 +25,30 @@ export async function currencyReadiness(db: typeof defaultPrisma = defaultPrisma
 	if (!fx) blockers.push({ code: 'FX_RECORD_MISSING', message: 'لا يوجد سجل تحويل (fx_conversions)؛ لا يُسمح بأي معاملة عابرة للعملات.' });
 	// the ledger tables had a stale 'SAR' default: a SAR label that no SAR rail produced is a LABEL error, and base-currency totals must not be built on unverified labels
 	const stale = await unverifiedLedgerLabels(db);
-	if (stale > 0) blockers.push({ code: 'LEDGER_CURRENCY_LABELS_UNVERIFIED', message: `يوجد ${stale} سجل مالي بعملة غير USD (سجلات المحفظة/السحب/العمولة). تحقق منها بـ scripts/currency-evidence-probe.sql واعتمد تصحيحها (scripts/currency-label-correction.sql) قبل أي تغيير للعملة الأساسية.` });
+	if (stale > 0) blockers.push({ code: 'LEDGER_CURRENCY_LABELS_UNVERIFIED', message: `يوجد ${stale} سجل مالي قديم (قبل 2026-10-01) بعملة غير USD (سجلات المحفظة/السحب/العمولة). تحقق منها بـ scripts/currency-evidence-probe.sql واعتمد تصحيحها (scripts/currency-label-correction.sql) قبل أي تغيير للعملة الأساسية.` });
 	for (const b of OPEN_CURRENCY_WORK) blockers.push(b);
 	return { ready: blockers.length === 0, blockers };
 }
 
 /**
- * Work that is NOT finished and therefore blocks changing the base currency. Server aggregations, exports, e-mails, notifications and audit text are per currency now (tests: currency-infrastructure,
- * wallet-ledger, pg-sar-money-paths, admin-d2.finance, admin-d1.services...). What remains is the screens: many still print a hand-typed "$" / "دولار" next to an amount instead of the record's
- * currency. The FE ratchet (core/utils/currency-literals.baseline.json) lists every file and can only shrink; this entry leaves only when that baseline is empty.
+ * Work that is NOT finished and therefore blocks changing the base currency (empty = nothing known). Server aggregations, exports, e-mails, notifications and audit text are per currency; the screens
+ * print every amount through the central formatter with the record's currency (the FE zero-tolerance specs currency-literals / date-formats fail the build otherwise). Add an entry here the day a gap is found.
  */
-export const OPEN_CURRENCY_WORK: CurrencyBlocker[] = [
-	{ code: 'UI_TYPED_CURRENCY', message: 'ما زالت شاشات تكتب «$» أو «دولار» يدويًا بجانب مبلغ بدل عملة السجل (القائمة في currency-literals.baseline.json بالواجهة وتنقص فقط)؛ لا يُغيَّر الأساس قبل أن تصبح فارغة.' },
-];
+export const OPEN_CURRENCY_WORK: CurrencyBlocker[] = [];
+
 
 async function tableExists(db: typeof defaultPrisma, name: string): Promise<boolean> {
 	try { return (await db.$queryRaw<Array<{ n: string }>>`SELECT table_name AS n FROM information_schema.tables WHERE table_name = ${name} AND table_schema = 'public'`).length > 0; } catch { return false; }
 }
+/**
+ * Every code path writes the currency EXPLICITLY since 2026-10-01 (cart / escrow / refund / amendment / PayPal / withdrawal / commission - see git history and the "explicit per-row currency" comments), so a
+ * non-USD label on a row created AFTER that day is a real amount in that currency. The rows that can carry the stale DATABASE DEFAULT label are the ones older than that day: only those are "unverified".
+ */
+export const LEDGER_LABELS_EXPLICIT_SINCE = '2026-10-01T00:00:00Z';
 async function unverifiedLedgerLabels(db: typeof defaultPrisma): Promise<number> {
 	try {
-		const r = await db.$queryRaw<Array<{ n: bigint }>>`SELECT (SELECT COUNT(*) FROM wallet_transactions WHERE currency <> ${LEGACY_CURRENCY}) + (SELECT COUNT(*) FROM withdrawals WHERE currency <> ${LEGACY_CURRENCY}) + (SELECT COUNT(*) FROM commission_logs WHERE currency <> ${LEGACY_CURRENCY}) AS n`;
+		const since = new Date(LEDGER_LABELS_EXPLICIT_SINCE);
+		const r = await db.$queryRaw<Array<{ n: bigint }>>`SELECT (SELECT COUNT(*) FROM wallet_transactions WHERE currency <> ${LEGACY_CURRENCY} AND "createdAt" < ${since}) + (SELECT COUNT(*) FROM withdrawals WHERE currency <> ${LEGACY_CURRENCY} AND "createdAt" < ${since}) + (SELECT COUNT(*) FROM commission_logs WHERE currency <> ${LEGACY_CURRENCY} AND "createdAt" < ${since}) AS n`;
 		return Number(r[0]?.n ?? 0);
 	} catch { return 0; }
 }

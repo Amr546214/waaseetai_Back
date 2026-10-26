@@ -67,7 +67,7 @@ test('PG settings: other session / refresh / restart see the saved value; the ca
 	assert.equal((await put(e, e.sa.id, { maintenanceBannerText: 'نص البنر', maintenanceBannerEnabled: true }, { maintenanceBannerText: 0, maintenanceBannerEnabled: 0 })).status, 200);
 	const pub = await e.call('GET', '/admin/system-settings', e.sa.id); assert.equal(pub.status, 200);
 	const restarted = new SystemSettingsService(e.prisma); assert.equal(await restarted.get('maintenanceBannerText'), 'نص البنر'); assert.equal(await restarted.get('maintenanceBannerEnabled'), true);
-	const values = await restarted.publicValues(); assert.equal(values.maintenanceBannerText, 'نص البنر'); for (const k of ['maintenanceMode', 'baseCurrency', 'sessionIdleMinutes', 'adminNotificationEmail']) assert.equal(k in values, false, `${k} is not public`);
+	const values = await restarted.publicValues(); assert.equal(values.maintenanceBannerText, 'نص البنر'); assert.ok('baseCurrency' in values, 'the base currency is public: the screens need it to print new entries and headline figures'); for (const k of ['maintenanceMode', 'sessionIdleMinutes', 'adminNotificationEmail']) assert.equal(k in values, false, `${k} is not public`);
 	assert.equal(values.registrationOpen, true);
 	// invalid stored data never breaks enforcement: it falls back to the default
 	await e.prisma.platformSetting.upsert({ where: { key: 'sessionIdleMinutes' }, create: { key: 'sessionIdleMinutes', value: 'garbage' as any }, update: { value: 'garbage' as any } }); assert.equal(await new SystemSettingsService(e.prisma).get('sessionIdleMinutes'), 0);
@@ -183,17 +183,25 @@ test('PG settings: the platform name reaches the outgoing e-mail sender (setting
 	assert.equal((await put(e, e.sa.id, { supportEmail: 'b@pg.test' }, { supportEmail: v0 })).status, 409);
 });
 
-test('PG settings: baseCurrency is USD, any change is REFUSED with the real blockers (409 CURRENCY_CHANGE_NOT_READY), nothing is stored, an invalid code is rejected, and the same value is a no-op', opts, async () => {
+test('PG settings: baseCurrency is USD; a change is allowed only when the readiness check passes (versioned + audited, activates no gateway), refused with the real blocker when old unverified labels exist, an invalid code is rejected, the same value is a no-op', opts, async () => {
 	const e = await env(); await reset(e);
 	const cur = await one(e, e.sa.id, 'baseCurrency'); assert.equal(cur.value, 'USD'); assert.deepEqual(cur.allowed, ['USD', 'SAR']);
+	// an OLD ledger row (before 2026-10-01, when every writer started naming the currency) labelled SAR may be the stale database default: it blocks the change and names itself
+	const u = await e.mkUser('CLIENT_INDIVIDUAL', 'cur-old');
+	const old = await e.prisma.walletTransaction.create({ data: { userId: u.id, type: 'DEPOSIT', amount: 5, currency: 'SAR', status: 'COMPLETED', createdAt: new Date('2026-09-01T00:00:00Z') } });
 	const r = await put(e, e.sa.id, { baseCurrency: 'SAR' }, { baseCurrency: 0 }); assert.equal(r.status, 409); assert.equal(r.json.code, 'CURRENCY_CHANGE_NOT_READY');
-	const codes = r.json.errors.map((b: any) => b.code); for (const c of ['UI_TYPED_CURRENCY']) assert.ok(codes.includes(c), c);
+	const codes = r.json.errors.map((b: any) => b.code); assert.ok(codes.includes('LEDGER_CURRENCY_LABELS_UNVERIFIED'));
 	assert.ok(!codes.includes('MONEY_TABLES_WITHOUT_CURRENCY'), 'phase A is in the schema of this database: every money table has its currency column');
-	for (const gone of ['WALLET_BALANCE_PER_CURRENCY_MISSING', 'FX_RECORD_MISSING', 'GATEWAY_CAPABILITY_MAP_MISSING', 'CURRENCY_FORMATTER_MISSING']) assert.ok(!codes.includes(gone), `${gone} is implemented (schema + code), so it is no longer a blocker`);
-	assert.equal(await e.prisma.platformSetting.count({ where: { key: 'baseCurrency' } }), 0);
+	for (const gone of ['WALLET_BALANCE_PER_CURRENCY_MISSING', 'FX_RECORD_MISSING', 'GATEWAY_CAPABILITY_MAP_MISSING', 'CURRENCY_FORMATTER_MISSING', 'AGGREGATIONS_NOT_PER_CURRENCY', 'UI_TYPED_CURRENCY']) assert.ok(!codes.includes(gone), `${gone} is implemented, so it is no longer a blocker`);
+	assert.equal(await e.prisma.platformSetting.count({ where: { key: 'baseCurrency' } }), 0, 'a refused change stores nothing');
 	assert.equal((await put(e, e.sa.id, { baseCurrency: 'EUR' }, { baseCurrency: 0 })).status, 400);
-	assert.equal((await put(e, e.sa.id, { baseCurrency: 'USD' }, { baseCurrency: 0 })).status, 200); assert.equal(await e.prisma.platformSetting.count({ where: { key: 'baseCurrency' } }), 0);
-	const rd = (await e.call('GET', `${S}/currency-readiness`, e.sa.id)).json.data; assert.equal(rd.ready, false); assert.ok(rd.blockers.length >= 1);
+	assert.equal((await put(e, e.sa.id, { baseCurrency: 'USD' }, { baseCurrency: 0 })).status, 200); assert.equal(await e.prisma.platformSetting.count({ where: { key: 'baseCurrency' } }), 0, 'the same value is a no-op');
+	// the old row is gone (decided/corrected by the team): the change is allowed, stored with a version, and it enables nothing else
+	await e.prisma.walletTransaction.delete({ where: { id: old.id } });
+	const ok = await put(e, e.sa.id, { baseCurrency: 'SAR' }, { baseCurrency: 0 }); assert.equal(ok.status, 200, JSON.stringify(ok.json));
+	assert.equal((await one(e, e.sa.id, 'baseCurrency')).value, 'SAR'); assert.equal((await e.prisma.platformSetting.findUniqueOrThrow({ where: { key: 'baseCurrency' } })).version, 1);
+	const { gatewayAccepts } = await import('../config/payment-gateways'); assert.equal(gatewayAccepts('arb', 'SAR'), false); assert.equal(gatewayAccepts('paypal', 'SAR'), false);
+	assert.equal((await put(e, e.sa.id, { baseCurrency: 'USD' }, { baseCurrency: 1 })).status, 200, 'and back');
 });
 
 test('PG settings: read-only and blocked entries tell the truth (value + source, or the reason), never expose secrets, and health reports only real facts', opts, async () => {
@@ -214,7 +222,7 @@ test('PG settings: the currency readiness check reads the REAL schema - a databa
 	const fake = (tables: string[], wallet: boolean) => ({ $queryRaw: async (q: TemplateStringsArray) => (String(q[0]).includes('information_schema.tables') ? (wallet ? [{ n: 'x' }] : []) : String(q[0]).includes('information_schema.columns') ? tables.map(t => ({ table_name: t })) : [{ n: 0n }]) }) as any;
 	const none = await currencyReadiness(fake([], false)); const b = none.blockers.find(x => x.code === 'MONEY_TABLES_WITHOUT_CURRENCY')!; assert.ok(b); for (const t of MONEY_TABLES) assert.ok(b.message.includes(t), t);
 	const some = await currencyReadiness(fake(MONEY_TABLES.slice(0, 5) as any, false)); assert.ok(some.blockers.find(x => x.code === 'MONEY_TABLES_WITHOUT_CURRENCY')!.message.includes(MONEY_TABLES[5]));
-	const all = await currencyReadiness(fake([...MONEY_TABLES], true)); assert.ok(!all.blockers.some(x => x.code === 'MONEY_TABLES_WITHOUT_CURRENCY' || x.code === 'WALLET_BALANCE_PER_CURRENCY_MISSING')); assert.equal(all.ready, false, 'the remaining blocker (screens that still type a currency by hand) still holds'); assert.ok(all.blockers.some(x => x.code === 'UI_TYPED_CURRENCY')); assert.ok(!all.blockers.some(x => x.code === 'AGGREGATIONS_NOT_PER_CURRENCY'), 'aggregations are per currency now');
+	const all = await currencyReadiness(fake([...MONEY_TABLES], true)); assert.ok(!all.blockers.some(x => x.code === 'MONEY_TABLES_WITHOUT_CURRENCY' || x.code === 'WALLET_BALANCE_PER_CURRENCY_MISSING')); assert.equal(all.ready, true, 'with the schema present and nothing unverified there is no known blocker');
 	const broken = await currencyReadiness({ $queryRaw: async () => { throw new Error('db'); } } as any); assert.ok(broken.blockers.some(x => x.code === 'SCHEMA_UNREADABLE') && !broken.ready);
 	const e = await env(); const real = await currencyReadiness(e.prisma); assert.ok(!real.blockers.some(x => x.code === 'MONEY_TABLES_WITHOUT_CURRENCY'));
 });

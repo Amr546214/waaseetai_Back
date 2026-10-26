@@ -41,7 +41,7 @@ function couponStatusWhere(status: CouponStatus | undefined, now: Date): any {
 
 function formatCoupon(c: any, now: Date) {
   return {
-    id: c.id, code: c.code,
+    id: c.id, code: c.code, currency: c.currency ?? LEGACY_CURRENCY, // the currency of the fixed amounts below (discountValue for a fixed coupon, minimumAmount, maxDiscount)
     provider: c.provider ? { id: c.provider.id, name: providerName(c.provider), email: c.provider.email, accountType: c.provider.accountType } : null,
     discountType: c.discountType, discountValue: c.discountValue, minimumAmount: c.minimumAmount, maxDiscount: c.maxDiscount,
     maxUses: c.maxUses, usedCount: c.usedCount, maxUsesPerUser: c.maxUsesPerUser,
@@ -90,7 +90,7 @@ export class AdminCouponsService {
         where: { couponId: id }, orderBy: { createdAt: 'desc' }, take: 50,
         select: {
           id: true, amount: true, createdAt: true, orderId: true,
-          order: { select: { orderNumber: true, status: true, subtotal: true, total: true } },
+          order: { select: { orderNumber: true, status: true, subtotal: true, total: true, currency: true } },
           user: { select: { id: true, firstName: true, lastName: true } }
         }
       }),
@@ -103,7 +103,7 @@ export class AdminCouponsService {
       redemptions: redemptions.map((r: any) => ({
         id: r.id, orderId: r.orderId, orderNumber: r.order?.orderNumber ?? null, orderStatus: r.order?.status ?? null,
         customer: r.user ? { id: r.user.id, name: customerName(r.user) } : null,
-        orderValue: r.order?.subtotal ?? null, discountApplied: round2(r.amount), netValue: r.order?.total ?? null, createdAt: r.createdAt
+        orderValue: r.order?.subtotal ?? null, discountApplied: round2(r.amount), netValue: r.order?.total ?? null, currency: r.order?.currency ?? LEGACY_CURRENCY, createdAt: r.createdAt
       }))
     };
   }

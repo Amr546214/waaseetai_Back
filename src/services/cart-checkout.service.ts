@@ -179,6 +179,7 @@ export class CartCheckoutService {
       categorySlug: service.specialty?.slug || '',
       specializationSlug: service.specialty?.slug || '',
       totalAmount: Number(service.totalAmount),
+      currency: (service.currency ?? LEGACY_CURRENCY) as string, // the service's own currency
       totalDays: service.totalDays,
       aiScore: service.aiScore || 0,
       level: providerCard.level,
@@ -313,13 +314,13 @@ export class CartCheckoutService {
       const created = await tx.order.create({ data: { userId, orderNumber, currency: orderCurrency, status: OrderStatus.PENDING_PAYMENT, subtotal, discount, total: Number((subtotal - discount).toFixed(2)), couponId, couponCode, couponDiscountType, couponDiscountValue, items: { create: input.items.map(item => { const service: any = byId.get(item.modelId)!; const provider = service.provider; const providerCard = resolveProviderCardFields(provider); return { serviceId: service.id, modelId: service.id, title: service.title, providerId: provider.id, providerName: providerCard.name, initials: providerCard.initials, isVerified: providerCard.isVerified, packageId: item.packageId || 'basic', packageName: 'الباقة الأساسية', price: Number(service.totalAmount), deliveryDays: service.totalDays, aiScore: service.aiScore || 0 }; }) } }, include: { items: true } });
       return created;
     });
-    return { id: order.id, orderId: order.id, orderNumber: order.orderNumber, status: 'pending_payment', items: order.items.map(item => this.formatOrderItem(item)), subtotal: order.subtotal, discount: order.discount, total: order.total, couponCode: order.couponCode, createdAt: order.createdAt.toISOString() };
+    return { id: order.id, orderId: order.id, orderNumber: order.orderNumber, status: 'pending_payment', items: order.items.map(item => this.formatOrderItem(item, order.currency)), subtotal: order.subtotal, discount: order.discount, total: order.total, currency: order.currency ?? LEGACY_CURRENCY, couponCode: order.couponCode, createdAt: order.createdAt.toISOString() };
   }
 
   async getOrder(userId: string, id: string) {
     const order = await prisma.order.findFirst({ where: { id, userId }, include: { items: true } });
     if (!order) throw new AppError('الطلب غير موجود', 404);
-    return { id: order.id, orderId: order.id, orderNumber: order.orderNumber, status: order.status.toLowerCase(), items: order.items.map(item => this.formatOrderItem(item)), subtotal: order.subtotal, discount: order.discount, total: order.total, couponCode: order.couponCode, createdAt: order.createdAt.toISOString() };
+    return { id: order.id, orderId: order.id, orderNumber: order.orderNumber, status: order.status.toLowerCase(), items: order.items.map(item => this.formatOrderItem(item, order.currency)), subtotal: order.subtotal, discount: order.discount, total: order.total, currency: order.currency ?? LEGACY_CURRENCY, couponCode: order.couponCode, createdAt: order.createdAt.toISOString() };
   }
 
   /**
@@ -561,8 +562,8 @@ export class CartCheckoutService {
     return { orderId: order.id, orderNumber: order.orderNumber, status: 'paid', total: order.total, projectIds };
   }
 
-  private formatOrderItem(item: any) {
-    return { id: item.id, modelId: item.modelId, title: item.title, provider: { id: item.providerId, name: item.providerName, initials: item.initials, isVerified: item.isVerified }, packageName: item.packageName, price: item.price, deliveryDays: item.deliveryDays, aiScore: item.aiScore };
+  private formatOrderItem(item: any, currency?: string | null) {
+    return { currency: currency ?? LEGACY_CURRENCY, id: item.id, modelId: item.modelId, title: item.title, provider: { id: item.providerId, name: item.providerName, initials: item.initials, isVerified: item.isVerified }, packageName: item.packageName, price: item.price, deliveryDays: item.deliveryDays, aiScore: item.aiScore };
   }
 }
 

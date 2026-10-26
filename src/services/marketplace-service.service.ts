@@ -15,6 +15,7 @@ import { assertSkillsInCategory, listProviderSpecialtiesWithCatalog } from './sk
 import { AppError } from '../utils/app-error';
 import { selfNegotiationError } from '../utils/self-dealing';
 import { platformCurrency } from './platform-currency';
+import { LEGACY_CURRENCY } from '../utils/currency';
 
 // Batch 4 — the minimal shape getMarketplaceModels/getMarketplaceModelById
 // need from req.user to read back the requesting Client's own
@@ -656,6 +657,7 @@ export class MarketplaceService {
 				specialtySlug: s.specialty?.slug || '',
 				status: s.status,
 				totalAmount: Number(s.totalAmount),
+				currency: (s.currency ?? LEGACY_CURRENCY) as string, // the service's own currency
 				totalDays: s.totalDays,
 				aiScore: s.aiScore ?? s.aiAuditScore ?? null,
 				aiClarityScore: s.aiClarityScore ?? null,
@@ -771,6 +773,7 @@ export class MarketplaceService {
 			specialtySlug: s.specialty?.slug || '',
 			status: s.status,
 			totalAmount: Number(s.totalAmount),
+			currency: (s.currency ?? LEGACY_CURRENCY) as string, // the service's own currency
 			totalDays: s.totalDays,
 			aiScore: s.aiScore ?? s.aiAuditScore ?? null,
 			aiClarityScore: s.aiClarityScore ?? null,
@@ -1137,6 +1140,7 @@ export class MarketplaceService {
 				categorySlug: catSlug,
 				specialtyName: model.specialty?.nameAr || '',
 				totalAmount: Number(model.totalAmount) || 0,
+				currency: (model.currency ?? LEGACY_CURRENCY) as string,
 				viewsCount: views,
 				salesCount: model.salesCount || 0,
 				offersCount: model.salesCount || 0,

@@ -13,6 +13,7 @@ import { projectProgressService } from './project-progress.service';
 import { providerNotifications } from './provider-notifications.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import { emitAmendmentEvent } from './amendment-events';
+import { LEGACY_CURRENCY } from '../utils/currency';
 
 const AMENDMENT_TYPES: AmendmentType[] = ['SCOPE', 'BUDGET', 'DURATION', 'MIXED'];
 const TITLE_MAX_LENGTH = 200;
@@ -116,6 +117,7 @@ const toPublicAmendment = (row: any, conversationId: string | null) => {
     title: row.title,
     description: row.description,
     budgetDelta: row.budgetDelta,
+    currency: (row.currency ?? LEGACY_CURRENCY) as string, // budgetDelta and the prices below are in the contract's currency
     durationDeltaDays: row.durationDeltaDays,
     status: row.status,
     createdAt: row.createdAt,

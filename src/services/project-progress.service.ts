@@ -18,7 +18,7 @@ import { deliveryCompletedProject, adminSettlementFor, adminSettledView, stageDi
 import { adminAudit } from './admin-audit.service';
 import { ensureProjectRoom } from './project-conversation.service';
 import { computeLifecycle, evaluateAction, assertStageActionAllowed, settlementDistributionOf } from './project-lifecycle.service';
-import { formatMoney } from '../utils/currency';
+import { LEGACY_CURRENCY, formatMoney } from '../utils/currency';
 
 const PROJECT_COMPLETION_POINTS = 50;
 
@@ -241,7 +241,7 @@ export class ProjectProgressService {
       const stageReview = (stage as any).stageReviews?.[0] || null;
       return {
         id: stage.id, stageNumber: stage.stepOrder, title: stage.title, description: stage.description,
-        amount: stage.amount, percentage: stage.percentage, days: stage.days,
+        amount: stage.amount, currency: (stage.currency ?? contract.currency ?? LEGACY_CURRENCY) as string, percentage: stage.percentage, days: stage.days,
         isDone: stage.status === ProjectStageStatus.APPROVED,
         isWait: !settlement.settled && (stage.status === ProjectStageStatus.IN_PROGRESS || stage.status === ProjectStageStatus.SUBMITTED || stage.status === ProjectStageStatus.REVISION_REQUESTED),
         status, statusText, completedDate: stage.approvedAt, roundsCount: stage.deliveries.length,
@@ -298,7 +298,7 @@ export class ProjectProgressService {
     return {
       id: contract.id, projectId: contract.projectId, role, conversationId: conversation?.id || null, messageContext: room.kind === 'PROJECT' ? 'PROJECT' : 'GENERAL', legacyShared: room.legacyShared, unreadMessages,
       title: contract.project.title, clientName: otherName, clientInitial: otherName.charAt(0) || 'ع', contractRef: `CT-${contract.id.slice(0, 6).toUpperCase()}`,
-      price: contract.price, durationDays: contract.durationDays, daysLeft: Math.max(0, contract.durationDays - elapsed), progress,
+      price: contract.price, currency: (contract.currency ?? LEGACY_CURRENCY) as string, durationDays: contract.durationDays, daysLeft: Math.max(0, contract.durationDays - elapsed), progress,
       // escrowReleased = money released through STAGE APPROVALS only; for a settled project the settlement's own release is in financial.settlement (never mixed).
       escrowTotal: contract.project.escrow?.amount || contract.price, escrowHeld: lifecycle.financial.heldNow, escrowReleased: lifecycle.financial.releasedByStageApprovals,
       ...state, canUploadDelivery: lifecycle.eligibility.upload.allowed, canSubmitDelivery: lifecycle.eligibility.submit.allowed,

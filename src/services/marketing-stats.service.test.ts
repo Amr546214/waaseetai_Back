@@ -82,7 +82,7 @@ test('coupon getStats: totals, weekly trend and paginated orders for any owned c
   assert.equal(stats.redemptions.items.length, 2);
   assert.deepEqual(stats.redemptions.items[0], {
     redemptionId: 'r1', orderId: 'o1', orderNumber: 'ORD-1', orderStatus: 'COMPLETED',
-    customer: { id: 'u1', name: 'Nour Test' }, orderValue: 600, discountApplied: 150, netValue: 450, createdAt: daysAgo(2)
+    customer: { id: 'u1', name: 'Nour Test' }, orderValue: 600, discountApplied: 150, netValue: 450, currency: 'USD', createdAt: daysAgo(2)
   });
 
   // Every redemption query is scoped to this coupon and excludes CANCELLED orders.

@@ -33,6 +33,7 @@ import { debitWalletIfCovered, walletBalanceOf } from '../utils/wallet-balance';
 import { requireCurrency, assertSameCurrency } from '../utils/currency';
 import { platformCurrency } from './platform-currency';
 import { brandNameInArabicText } from '../utils/brand';
+import { LEGACY_CURRENCY } from '../utils/currency';
 
 function generateSlug(text: string): string {
 	if (!text) return `slug-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -867,6 +868,7 @@ export class ClientRequestsService {
 				},
 				contractReference: `CT-${c.id.substring(0, 4).toUpperCase()}`,
 				// totalPrice = the contract value (historical for a settled project); releasedAmount = released through stage approvals ONLY; heldAmount = money really in the escrow now.
+				currency: (c.currency ?? LEGACY_CURRENCY) as string, // totalPrice / releasedAmount / heldAmount below are in the contract's currency
 				totalPrice: lc.financial.contractValue || totalPrice,
 				releasedAmount: lc.financial.releasedByStageApprovals,
 				heldAmount: lc.financial.heldNow,
@@ -1078,7 +1080,7 @@ export class ClientRequestsService {
 
 		// Only money really sitting in an escrow counts as held. The branches above work from the offer price and can only ESTIMATE; a project that is not funded holds nothing,
 		// and without real milestones there is no honest progress figure (0, or 100 once completed). This endpoint must never report estimated held amounts.
-		const escrowRow = await prisma.escrow.findUnique({ where: { projectId: requestId }, select: { status: true, amount: true, releasedAmount: true, platformCommissionAmount: true, providerNetReleasedAmount: true } });
+		const escrowRow = await prisma.escrow.findUnique({ where: { projectId: requestId }, select: { currency: true, status: true, amount: true, releasedAmount: true, platformCommissionAmount: true, providerNetReleasedAmount: true } });
 		heldAmount = escrowRow && String(escrowRow.status) === 'HELD' ? Math.max(0, Number(escrowRow.amount) - Number(escrowRow.releasedAmount || 0)) : 0;
 		if (realMilestones.length === 0 || timelines.length === 0) progress = rawStatus === 'COMPLETED' && !settlement.settled ? 100 : 0;
 		if (settlement.settled && stageRows.length === 0) {
@@ -1120,6 +1122,7 @@ export class ClientRequestsService {
 				completedMilestones: completedMilestones,
 				heldAmount: heldAmount,
 				releasedAmount: releasedAmount,
+				currency: ((contractRow as { currency?: string } | null | undefined)?.currency ?? (escrowRow as { currency?: string } | null | undefined)?.currency ?? LEGACY_CURRENCY) as string,
 				provider: {
 					name: providerName,
 					initial: providerInitial
@@ -1288,6 +1291,7 @@ export class ClientRequestsService {
 				coverLetter: prop.coverLetter || '',
 				workPlan: prop.workPlan || '',
 				bidAmount: Number(prop.price || 0),
+				currency: ((prop as { currency?: string }).currency ?? LEGACY_CURRENCY) as string,
 				deliveryDays: prop.deliveryDays || 1,
 				aiMatchScore: prop.aiMatchScore ?? null,
 				aiQualityScore: review?.qualityScore ?? null,

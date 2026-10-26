@@ -209,7 +209,7 @@ export class ProviderCouponService {
         take: paging.pageSize,
         select: {
           id: true, amount: true, createdAt: true, orderId: true,
-          order: { select: { orderNumber: true, status: true, subtotal: true, total: true } },
+          order: { select: { orderNumber: true, status: true, subtotal: true, total: true, currency: true } },
           user: { select: { id: true, firstName: true, lastName: true } }
         }
       })
@@ -246,6 +246,7 @@ export class ProviderCouponService {
           orderValue: r.order?.subtotal ?? null,
           discountApplied: round2(r.amount),
           netValue: r.order?.total ?? null,
+          currency: r.order?.currency ?? LEGACY_CURRENCY,
           createdAt: r.createdAt
         })),
         ...pageMeta(paging, all.length)
