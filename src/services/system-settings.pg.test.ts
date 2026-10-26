@@ -26,7 +26,7 @@ test('PG settings: who can read and change what - no permission = 403; settings.
 	const m = (await one(e, manager.user.id, 'platformName')); assert.equal(m.canWrite, true); assert.equal(await one(e, manager.user.id, 'registrationOpen'), undefined); // settings.manage alone does not even show a SUPER_ADMIN-only key
 	const both = await mkStaff(e, ['settings.view', 'settings.manage'], 'both'); assert.equal((await one(e, both.user.id, 'registrationOpen')).canWrite, false); assert.equal((await one(e, both.user.id, 'platformName')).canWrite, true);
 	assert.equal((await put(e, manager.user.id, { platformName: 'وسيط الجديد' }, { platformName: 0 })).status, 200);
-	for (const [k, v] of [['maintenanceMode', true], ['registrationOpen', false], ['sessionIdleMinutes', 30], ['baseCurrency', 'SAR']] as const) {
+	for (const [k, v] of [['maintenanceMode', true], ['registrationOpen', false], ['sessionIdleMinutes', 30]] as const) {
 		const r = await put(e, manager.user.id, { [k]: v }, { [k]: 0 }); assert.equal(r.status, 403, k); assert.equal(r.json.code, 'SETTING_PERMISSION_DENIED');
 	}
 	assert.equal((await e.call('GET', `${S}/currency-readiness`, manager.user.id)).status, 403);
@@ -183,14 +183,11 @@ test('PG settings: the platform name reaches the outgoing e-mail sender (setting
 	assert.equal((await put(e, e.sa.id, { supportEmail: 'b@pg.test' }, { supportEmail: v0 })).status, 409);
 });
 
-test('PG settings: baseCurrency is USD, any change is REFUSED with the real blockers (409 CURRENCY_CHANGE_NOT_READY), nothing is stored, an invalid code is rejected, and the same value is a no-op', opts, async () => {
+test('PG settings: baseCurrency is shown as USD and BLOCKED (multi-currency is deferred): every change is refused on the server (422 SETTING_NOT_AVAILABLE), nothing is stored', opts, async () => {
 	const e = await env(); await reset(e);
-	const cur = await one(e, e.sa.id, 'baseCurrency'); assert.equal(cur.value, 'USD'); assert.deepEqual(cur.allowed, ['USD', 'SAR']);
-	const r = await put(e, e.sa.id, { baseCurrency: 'SAR' }, { baseCurrency: 0 }); assert.equal(r.status, 409); assert.equal(r.json.code, 'CURRENCY_CHANGE_NOT_READY');
-	const codes = r.json.errors.map((b: any) => b.code); for (const c of ['MONEY_TABLES_WITHOUT_CURRENCY', 'WALLET_BALANCE_PER_CURRENCY_MISSING', 'AGGREGATIONS_NOT_PER_CURRENCY', 'GATEWAY_CAPABILITY_MAP_MISSING', 'FX_RECORD_MISSING', 'CURRENCY_FORMATTER_MISSING']) assert.ok(codes.includes(c), c);
+	const cur = await one(e, e.sa.id, 'baseCurrency'); assert.equal(cur.status, 'blocked'); assert.match(cur.reason, /مؤجَّل/); assert.equal(cur.canWrite, false);
+	for (const v of ['SAR', 'EUR', 'USD']) { const r = await put(e, e.sa.id, { baseCurrency: v }, { baseCurrency: 0 }); assert.equal(r.status, 422, v); assert.equal(r.json.code, 'SETTING_NOT_AVAILABLE', v); }
 	assert.equal(await e.prisma.platformSetting.count({ where: { key: 'baseCurrency' } }), 0);
-	assert.equal((await put(e, e.sa.id, { baseCurrency: 'EUR' }, { baseCurrency: 0 })).status, 400);
-	assert.equal((await put(e, e.sa.id, { baseCurrency: 'USD' }, { baseCurrency: 0 })).status, 200); assert.equal(await e.prisma.platformSetting.count({ where: { key: 'baseCurrency' } }), 0);
 	const rd = (await e.call('GET', `${S}/currency-readiness`, e.sa.id)).json.data; assert.equal(rd.ready, false); assert.ok(rd.blockers.length >= 6);
 });
 
