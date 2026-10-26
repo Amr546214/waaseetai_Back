@@ -34,7 +34,7 @@ test('text is sanitised and capped; at most 20 milestones', () => {
 
 test('the provider view carries the contract\'s own values, the saved milestones and the funded escrow', () => {
 	const view = buildProviderContractView({ id: 'c1', status: 'PENDING_PROVIDER_SIGNATURE', termsVersion: 1, price: 1000, durationDays: 14, phasesCount: 2, terms: { milestones: [M()] } }, { amount: 1000, status: 'HELD' });
-	assert.deepEqual({ ...view, milestones: view.milestones.length }, { id: 'c1', status: 'PENDING_PROVIDER_SIGNATURE', termsVersion: 1, price: 1000, currency: 'USD', durationDays: 14, phasesCount: 2, milestones: 1, escrow: { amount: 1000, status: 'HELD' }, providerTerms: null });
+	assert.deepEqual({ ...view, milestones: view.milestones.length }, { id: 'c1', status: 'PENDING_PROVIDER_SIGNATURE', termsVersion: 1, price: 1000, currency: 'USD', durationDays: 14, phasesCount: 2, milestones: 1, escrow: { amount: 1000, status: 'HELD' }, providerTerms: null, termsDigest: view.termsDigest });
 	assert.equal(buildProviderContractView({ id: 'c', status: 'S', termsVersion: 1, price: 5, durationDays: 3, phasesCount: 1, terms: 'garbage' }, null).escrow, null);
 	assert.deepEqual(buildProviderContractView({ id: 'c', status: 'S', termsVersion: 1, price: 5, durationDays: 3, phasesCount: 1, terms: 'garbage' }, undefined).milestones, []);
 });
@@ -45,4 +45,13 @@ test('once the client funded, the provider sees the FINAL commission and net fro
 	assert.deepEqual(funded.providerTerms, { ratePercent: 12.75, commission: 127.5, net: 872.5, final: true }); assert.equal(funded.currency, 'SAR');
 	assert.equal(buildProviderContractView(c, null).providerTerms, null);
 	assert.equal(buildProviderContractView(c, { amount: 1000, status: 'HELD', feePolicyVersion: null }).providerTerms, null, 'a legacy escrow has no frozen rate');
+});
+
+test('the terms digest changes with the price, the currency and the frozen commission, and is absent before funding', () => {
+	const c = { id: 'c1', status: 'S', termsVersion: 1, price: 1000, currency: 'USD', durationDays: 14, phasesCount: 1, terms: {} };
+	const e = { id: 'e1', amount: 1000, status: 'HELD', feePolicyVersion: 2, providerCommissionRateSnapshot: 12.75 };
+	const base = buildProviderContractView(c, e).termsDigest!; assert.match(base, /^[0-9a-f]{64}$/);
+	assert.notEqual(buildProviderContractView({ ...c, price: 1001 }, e).termsDigest, base); assert.notEqual(buildProviderContractView({ ...c, currency: 'SAR' }, e).termsDigest, base);
+	assert.notEqual(buildProviderContractView(c, { ...e, providerCommissionRateSnapshot: 10 }).termsDigest, base); assert.notEqual(buildProviderContractView({ ...c, termsVersion: 2 }, e).termsDigest, base);
+	assert.equal(buildProviderContractView(c, { ...e }).termsDigest, base, 'stable for the same terms'); assert.equal(buildProviderContractView(c, null).termsDigest, null);
 });

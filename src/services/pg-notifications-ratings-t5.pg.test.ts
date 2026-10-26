@@ -191,10 +191,12 @@ test('pg: the provider signing the contract notifies the client ONCE (after comm
 	const w = await seed({ completed: false });
 	const prisma = w.prisma;
 	await prisma.contract.update({ where: { id: w.contract.id }, data: { status: 'PENDING_PROVIDER_SIGNATURE', providerSignedAt: null, signedAt: null } });
-	await prisma.escrow.create({ data: { id: id(), projectId: w.project.id, amount: 20, status: 'HELD', fundedAt: new Date() } });
+	const escrowRow = await prisma.escrow.create({ data: { id: id(), projectId: w.project.id, amount: 20, status: 'HELD', fundedAt: new Date() } });
 	const proposal = await prisma.projectProposal.create({ data: { id: id(), projectId: w.project.id, providerId: w.provider.id, title: 't', message: 'm', totalPrice: 20, deliveryDays: 10, status: 'PENDING_SIGNATURE' } });
 	const { signContract } = await import('../controllers/provider.controller');
-	const run = async () => { let status = 200; let body: any; await signContract({ user: { id: w.provider.id }, params: { id: proposal.id }, body: { agreedTerms: { accepted: true } } } as any, { status(s: number) { status = s; return this; }, json(b: any) { body = b; return this; } } as any, (e: any) => { status = e?.statusCode ?? 500; body = e; }); return status; };
+	const { providerTermsDigest } = await import('../utils/contract-terms');
+	const termsDigest = providerTermsDigest(await prisma.contract.findUniqueOrThrow({ where: { id: w.contract.id } }), escrowRow); // the terms the page showed
+	const run = async () => { let status = 200; let body: any; await signContract({ user: { id: w.provider.id }, params: { id: proposal.id }, body: { agreedTerms: { accepted: true, termsDigest } } } as any, { status(s: number) { status = s; return this; }, json(b: any) { body = b; return this; } } as any, (e: any) => { status = e?.statusCode ?? 500; body = e; }); return status; };
 	const statuses = await Promise.all([run(), run(), run()]);
 	assert.equal(statuses.filter(s => s === 200).length, 1, JSON.stringify(statuses));
 	const rows = await prisma.notification.findMany({ where: { userId: w.client.id, type: 'CONTRACT_SIGNED' } });
@@ -281,4 +283,23 @@ test('pg: PUBLIC readers ignore the unpublished counterpart review (client publi
 	assert.equal(await w.prisma.review.count({ where: publicProviderReviewsWhere(w.provider.id) }), 0);
 	const user = await w.prisma.user.findUnique({ where: { id: w.provider.id }, select: { ratingAverage: true } });
 	assert.equal(user.ratingAverage, 2, 'internal average (level gate) keeps counting it by design');
+});
+
+test('pg: the provider cannot sign terms that were not shown and confirmed - no digest is refused (400), a digest of changed terms is refused (409 TERMS_CHANGED with the current terms), and nothing is signed', opts, async () => {
+	const w = await seed({ completed: false }); const prisma = w.prisma;
+	await prisma.contract.update({ where: { id: w.contract.id }, data: { status: 'PENDING_PROVIDER_SIGNATURE', providerSignedAt: null, signedAt: null } });
+	const escrowRow = await prisma.escrow.create({ data: { id: id(), projectId: w.project.id, amount: 20, status: 'HELD', fundedAt: new Date(), feePolicyVersion: 2, providerCommissionRateSnapshot: 12.75, providerCommissionLevelSnapshot: 1, providerCommissionSnapshotAt: new Date() } });
+	const proposal = await prisma.projectProposal.create({ data: { id: id(), projectId: w.project.id, providerId: w.provider.id, title: 't', message: 'm', totalPrice: 20, deliveryDays: 10, status: 'PENDING_SIGNATURE' } });
+	const { signContract } = await import('../controllers/provider.controller'); const { providerTermsDigest } = await import('../utils/contract-terms');
+	const call = async (agreedTerms: any) => { let status = 200; let body: any; await signContract({ user: { id: w.provider.id }, params: { id: proposal.id }, body: { agreedTerms } } as any, { status(s: number) { status = s; return this; }, json(b: any) { body = b; return this; } } as any, (e: any) => { status = e?.statusCode ?? 500; body = { code: e?.code, errors: e?.errors, message: e?.message }; }); return { status, body }; };
+	const state = async () => (await prisma.contract.findUniqueOrThrow({ where: { id: w.contract.id } })).status;
+	assert.deepEqual((await call({ accepted: true })).status, 400); assert.equal((await call({ accepted: true })).body.code, 'TERMS_CONFIRMATION_REQUIRED'); assert.equal(await state(), 'PENDING_PROVIDER_SIGNATURE');
+	const shown = providerTermsDigest(await prisma.contract.findUniqueOrThrow({ where: { id: w.contract.id } }), escrowRow);
+	// the terms change after they were shown (the commission frozen on the escrow differs)
+	await prisma.escrow.update({ where: { id: escrowRow.id }, data: { providerCommissionRateSnapshot: 9 } });
+	const stale = await call({ accepted: true, termsDigest: shown }); assert.equal(stale.status, 409); assert.equal(stale.body.code, 'TERMS_CHANGED'); assert.equal(stale.body.data.contract.providerTerms.ratePercent, 9, 'the CURRENT commission comes back to be shown again');
+	assert.equal(await state(), 'PENDING_PROVIDER_SIGNATURE');
+	// confirming the terms as they are NOW signs
+	const now = providerTermsDigest(await prisma.contract.findUniqueOrThrow({ where: { id: w.contract.id } }), await prisma.escrow.findUniqueOrThrow({ where: { id: escrowRow.id } }));
+	assert.equal((await call({ accepted: true, termsDigest: now })).status, 200); assert.equal(await state(), 'ACTIVE');
 });
