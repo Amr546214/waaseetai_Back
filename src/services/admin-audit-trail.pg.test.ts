@@ -80,18 +80,67 @@ test('PG audit trail: every event shows its OWN code, Arabic name, actor, target
 	const opt = r.json.data.eventTypeOptions.find((o: any) => o.value === 'STAFF_ROLE_SET'); assert.equal(opt.label, 'تغيير دور موظف');
 });
 
-test('PG audit trail: seq is a separate stable creation-order number; adding newer events never changes the number of an existing one', opts, async () => {
+test('PG audit trail: identity is the real row id (prefixed by its table); no event number; display order is deterministic under identical timestamps and pages never overlap', opts, async () => {
 	const e = await env(); const t = await mount(e); await produce(e);
-	const first = (await t.get('limit=100', e.sa.id)).json.data.items as any[];
-	assert.ok(first.every(i => Number.isInteger(i.seq) && i.seq >= 1)); assert.equal(new Set(first.map(i => i.seq)).size, first.length, 'unique');
-	const sorted = [...first].sort((a, b) => +new Date(b.occurredAt) - +new Date(a.occurredAt)); // newest first => seq descending (creation order)
-	for (let i = 1; i < sorted.length; i++) assert.ok(sorted[i - 1].seq >= sorted[i].seq, `seq follows creation order at ${i}`);
-	await produce(e);
-	const second = (await t.get('limit=100', e.sa.id)).json.data.items as any[];
-	for (const old of first) assert.equal(second.find(x => x.id === old.id)?.seq, old.seq, 'unchanged after newer events');
-	// the running position under a filter is NOT the seq: a filtered page keeps the real numbers
-	const only = (await t.get('eventType=STAFF_SUSPENDED&limit=100', e.sa.id)).json.data.items as any[]; assert.ok(only.length >= 2);
-	for (const o of only) assert.equal(first.find(x => x.id === o.id)?.seq ?? o.seq, o.seq);
+	const all = (await t.get('limit=100', e.sa.id)).json.data.items as any[];
+	assert.ok(all.every(i => /^(LOG|ACCESS):[0-9a-f-]{36}$/.test(i.id) && i.eventId === i.id && !('seq' in i)));
+	assert.equal(new Set(all.map(i => i.id)).size, all.length, 'ids are unique');
+	// force ties: ten rows of both tables share ONE timestamp
+	const when = new Date(); const staff = await e.mkUser('ADMIN', 'tie');
+	for (let i = 0; i < 5; i++) await e.prisma.accountAuditLog.create({ data: { userId: staff.id, category: 'SYSTEM_AUDIT', title: 't', actionText: 'a', summary: `tie ${i}`, eventType: 'SESSION_STARTED', source: 'USER', createdAt: new Date(when.getTime() + 60_000), occurredAt: new Date(when.getTime() + 60_000) } });
+	for (let i = 0; i < 5; i++) await e.prisma.adminAccessAudit.create({ data: { actorId: e.sa.id, action: 'INVITE_RESENT', at: new Date(when.getTime() + 60_000) } });
+	const full = (await t.get('limit=100', e.sa.id)).json.data.items as any[];
+	const tied = full.filter(i => +new Date(i.createdAt) === when.getTime() + 60_000);
+	assert.equal(tied.length, 10);
+	assert.deepEqual(tied.map(i => i.origin), [...Array(5).fill('ACCESS'), ...Array(5).fill('LOG')], 'ties: ACCESS before LOG');
+	const ids = (rows: any[]) => rows.map(r => r.id);
+	// walking the list page by page (size 3) gives exactly the unpaged order, no repeat, no gap
+	const walked: string[] = []; for (let p = 1; p <= Math.ceil(full.length / 3); p++) walked.push(...ids((await t.get(`limit=3&page=${p}`, e.sa.id)).json.data.items));
+	assert.deepEqual(walked.slice(0, full.length), ids(full)); assert.equal(new Set(walked).size, walked.length, "no repeat across pages");
+	assert.deepEqual(ids((await t.get('limit=100', e.sa.id)).json.data.items), ids(full), 'repeatable');
+});
+
+test('PG audit trail: the same action recorded in BOTH tables is listed once (the access trail is the system of record); a real pair', opts, async () => {
+	const e = await env(); const t = await mount(e); const p = await produce(e);
+	const before = (await t.get('eventType=STAFF_SUSPENDED&limit=100', e.sa.id)).json.data;
+	const n = before.items.filter((i: any) => i.target?.id === p.staff.id).length; assert.ok(n >= 1);
+	// a mirror of the real suspension written into account_audit_logs with the access-trail code
+	await e.prisma.accountAuditLog.create({ data: { userId: p.staff.id, category: 'SYSTEM_AUDIT', title: 'إيقاف موظف', actionText: 'mirror', summary: 'mirror', eventType: 'STAFF_SUSPENDED', source: 'ADMIN', actorLabel: `SUPER_ADMIN:${e.sa.id}`, metaData: { adminId: e.sa.id } } });
+	const after = (await t.get('eventType=STAFF_SUSPENDED&limit=100', e.sa.id)).json.data;
+	assert.equal(after.items.filter((i: any) => i.target?.id === p.staff.id).length, n, 'listed once');
+	assert.ok(after.items.every((i: any) => i.origin === 'ACCESS'));
+	assert.equal(after.pagination.total, before.pagination.total, 'the count does not double');
+	const everything = (await t.get('limit=100', e.sa.id)).json.data; assert.equal(everything.pagination.total, everything.items.length < 100 ? everything.items.length : everything.pagination.total);
+});
+
+test('PG audit trail: severity = class table; stored WARNING honoured; an unclassified code is «UNCLASSIFIED»; the filter agrees; actors that nothing proves are «غير معروف»', opts, async () => {
+	const e = await env(); const t = await mount(e); const p = await produce(e);
+	const items = (await t.get('limit=100', e.sa.id)).json.data.items as any[]; const by = (c: string) => items.filter(i => i.eventType === c);
+	assert.equal(by('SESSION_STARTED')[0].severity, 'INFO'); assert.equal(by('STAFF_SUSPENDED')[0].severity, 'WARNING'); assert.equal(by('ROLE_CREATED')[0].severity, 'WARNING');
+	assert.equal(by('PLATFORM_SETTINGS_UPDATED')[0].severity, 'WARNING'); assert.equal(by('LOGIN_REJECTED')[0].severity, 'WARNING');
+	const unk = by('BRAND_NEW_UNMAPPED_EVENT')[0]; assert.equal(unk.severity, 'UNCLASSIFIED'); assert.equal(unk.severitySource, 'none');
+	// no proof of the actor: failed login and the unmapped ADMIN row
+	assert.deepEqual([by('LOGIN_REJECTED')[0].actor.kind, by('LOGIN_REJECTED')[0].actor.name, by('LOGIN_REJECTED')[0].actor.id], ['UNKNOWN', 'غير معروف', null]);
+	assert.equal(unk.actor.name, 'غير معروف');
+	assert.equal(by('LOGIN_REJECTED')[0].target.type, 'USER');
+	for (const sev of ['INFO', 'WARNING', 'CRITICAL', 'UNCLASSIFIED']) {
+		const f = (await t.get(`severity=${sev}&limit=100`, e.sa.id)).json.data.items as any[];
+		assert.ok(f.every(i => i.severity === sev), `${sev}: ${f.map(i => i.severity)}`);
+	}
+	// the four severities partition the list
+	const totals = await Promise.all(['INFO', 'WARNING', 'CRITICAL', 'UNCLASSIFIED'].map(async sev => (await t.get(`severity=${sev}&limit=1`, e.sa.id)).json.data.pagination.total));
+	assert.equal(totals.reduce((a: number, b: number) => a + b, 0), (await t.get('limit=1', e.sa.id)).json.data.pagination.total);
+	await e.prisma.accountAuditLog.create({ data: { userId: p.other.id, category: 'SYSTEM_AUDIT', title: 't', actionText: 'a', summary: 'stored', eventType: 'SESSION_STARTED', source: 'USER', severity: 'CRITICAL' } });
+	assert.ok((await t.get('severity=CRITICAL&limit=100', e.sa.id)).json.data.items.some((i: any) => i.eventType === 'SESSION_STARTED' && i.severitySource === 'stored'));
+});
+
+test('PG audit trail: details never expose secrets, whatever the stored summary / metadata holds', opts, async () => {
+	const e = await env(); const t = await mount(e); const p = await produce(e);
+	await e.prisma.accountAuditLog.create({ data: { userId: p.other.id, category: 'SYSTEM_AUDIT', title: 'x', actionText: 'x', summary: 'token=abcdef123456 password: Hunter2! https://x.test/reset?token=zzz 4111 1111 1111 1111 رقم عملية PayPal: 5TY05013RG002845M', eventType: 'PROFILE_UPDATED', source: 'USER', metaData: { otp: '123456', passwordHash: '$2b$10$abcdefghijklmnopqrstuv', sessionId: 'sess-secret-777', reason: 'سبب عادي' } } });
+	await e.prisma.accountAuditLog.create({ data: { userId: p.other.id, category: 'SYSTEM_AUDIT', title: 'x', actionText: '', summary: '', eventType: 'SPECIALTY_ADMIN_DECISION', source: 'ADMIN', metaData: { adminId: p.staff.id, otp: '123456', apiKey: 'sk_live_abcdefghijklmnop', reason: 'مطابق للشروط' } } });
+	const body = JSON.stringify((await t.get('limit=100', e.sa.id)).json.data.items);
+	for (const leak of ['abcdef123456', 'Hunter2', 'token=zzz', '4111 1111', '5TY05013RG002845M', '$2b$10$', 'sess-secret-777', 'sk_live_abcdefghijklmnop', '"123456"']) assert.ok(!body.includes(leak), `leaked ${leak}`);
+	assert.ok(body.includes('مطابق للشروط'));
 });
 
 test('PG audit trail: filters work on the real data - event type (also access actions), actor (both row layouts), severity, text (code, Arabic name, person) and pagination', opts, async () => {

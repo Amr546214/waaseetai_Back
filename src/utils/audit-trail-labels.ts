@@ -58,6 +58,20 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 	WITHDRAWAL_REJECTED: 'رفض طلب سحب',
 	WITHDRAWAL_PAYOUT_SENT: 'إرسال تحويل سحب',
 	FINANCE_EXPORT: 'تصدير بيانات مالية',
+	ACCOUNT_SUSPENDED_BY_ADMIN: 'إيقاف حساب من الإدارة',
+	ACCOUNT_ACTIVATED_BY_ADMIN: 'إعادة تفعيل حساب من الإدارة',
+	BROKER_SUSPENDED: 'إيقاف حساب وسيط',
+	BROKER_REACTIVATED: 'إعادة تفعيل حساب وسيط',
+	COUPON_ADMIN_DEACTIVATED: 'إيقاف كوبون من الإدارة',
+	COUPON_ADMIN_REACTIVATED: 'إعادة تفعيل كوبون من الإدارة',
+	CATEGORY_ENABLED: 'تفعيل قسم', CATEGORY_DISABLED: 'تعطيل قسم', SPECIALTY_ENABLED: 'تفعيل تخصص', SPECIALTY_DISABLED: 'تعطيل تخصص',
+	MARKETING_ASSET_UPDATED: 'تعديل مادة تسويقية', MARKETING_ASSET_ENABLED: 'تفعيل مادة تسويقية', MARKETING_ASSET_DISABLED: 'تعطيل مادة تسويقية',
+	MARKETPLACE_SERVICE_APPROVE: 'اعتماد خدمة في السوق', MARKETPLACE_SERVICE_REJECT: 'رفض خدمة في السوق', MARKETPLACE_SERVICE_HIDE: 'إخفاء خدمة في السوق',
+	DISPUTE_RESOLVED: 'حسم نزاع', DISPUTE_REJECTED: 'رفض نزاع',
+	HUMAN_REVIEW_COMPLETED: 'اكتمال مراجعة بشرية',
+	WALLET_DEPOSIT_COMPLETED: 'اكتمال شحن المحفظة',
+	STAGE_FUND_RELEASED: 'إفراج عن مبلغ مرحلة', AMENDMENT_APPLIED: 'تطبيق تعديل على عقد',
+	PROJECT_EMPLOYEE_ASSIGNED: 'تعيين موظف مسؤول عن مشروع', PROJECT_EMPLOYEE_UNASSIGNED: 'إلغاء تعيين موظف مسؤول عن مشروع', PROJECT_EMPLOYEE_REASSIGNED: 'تغيير الموظف المسؤول عن مشروع',
 	// admin access trail (AdminAccessAudit.action)
 	ROLE_CREATED: 'إنشاء دور إداري',
 	ROLE_UPDATED: 'تعديل دور إداري',
@@ -75,12 +89,14 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 
 export const AUDIT_ENTITY_LABELS: Record<string, string> = {
 	DISPUTE: 'نزاع', TICKET: 'تذكرة', WITHDRAWAL: 'طلب سحب', ESCROW: 'ضمان', PROJECT: 'مشروع', CONTRACT: 'عقد', FINANCE: 'مالية',
-	USER: 'حساب', ROLE: 'دور', INVITE: 'دعوة', SETTINGS: 'إعدادات', FEE_POLICY: 'سياسة الرسوم'
+	USER: 'حساب', ROLE: 'دور', INVITE: 'دعوة', SETTINGS: 'إعدادات', FEE_POLICY: 'سياسة الرسوم', COUPON: 'كوبون'
 };
 
 /** the Arabic name of an event code; an unknown code is returned unchanged (honest, never replaced by a generic label) */
 export const auditActionLabel = (code: string): string => AUDIT_ACTION_LABELS[code] ?? code;
 
-/** actions of the admin access trail (they carry no severity of their own; this table is the only place it is decided) */
-export const ACCESS_ACTION_SEVERITY: Record<string, 'INFO' | 'WARNING' | 'CRITICAL'> = { STAFF_SUSPENDED: 'WARNING' };
-export const accessActionSeverity = (action: string): 'INFO' | 'WARNING' | 'CRITICAL' => ACCESS_ACTION_SEVERITY[action] ?? 'INFO';
+/** actions written to admin_access_audit: that table is the system of record for them; an account_audit_logs row carrying one of these codes is a mirror and is not listed twice */
+export const ACCESS_ACTION_CODES = ['ROLE_CREATED', 'ROLE_UPDATED', 'INVITE_CREATED', 'INVITE_RESENT', 'INVITE_CANCELLED', 'INVITE_ACCEPTED', 'STAFF_ATTACHED', 'STAFF_ROLE_SET', 'STAFF_SUSPENDED', 'STAFF_REACTIVATED', 'STAFF_ACCESS_SET', 'STAFF_ACCESS_RESET'];
+
+/** events a person does on their OWN account (the owner of the row is the actor) when the row's source is USER */
+export const SELF_ACTED_CODES = ['SESSION_STARTED', 'SESSION_LOGOUT', 'SESSION_REVOKED', 'SESSIONS_REVOKED_OTHERS', 'SESSIONS_REVOKED_ALL', 'PASSWORD_CHANGED', 'PASSWORD_CHANGE_REQUESTED', 'PASSWORD_CHANGE_REJECTED', 'OTP_VERIFIED', 'OTP_VERIFICATION_REJECTED', 'SENSITIVE_CHANGE_REQUESTED', 'PROFILE_UPDATED', 'ROLE_SWITCHED', 'ROLE_ADDED', 'PAYPAL_EMAIL_CHANGED', 'WALLET_DEPOSIT_COMPLETED', 'MARKETER_KYC_DOCUMENT_SUBMITTED', 'PROJECT_EMPLOYEE_ASSIGNED', 'PROJECT_EMPLOYEE_UNASSIGNED', 'PROJECT_EMPLOYEE_REASSIGNED'];
