@@ -5,7 +5,7 @@ import path from 'node:path';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { randomUUID, createHash } from 'node:crypto';
-import { env, opts, mkStaff, closeEnv } from '../testing/admin-team.pgenv';
+import { env, opts, mkStaff } from '../testing/admin-team.pgenv';
 import { png } from '../testing/site-identity.pgenv';
 import { SITE_IDENTITY_REGISTRY } from '../config/site-identity.registry';
 
@@ -15,7 +15,7 @@ import { SITE_IDENTITY_REGISTRY } from '../config/site-identity.registry';
  */
 process.env.RATE_LIMIT_ENABLED = 'false';
 const opened: Array<{ close: () => Promise<void> }> = [];
-after(async () => { for (const m of opened) await m.close().catch(() => undefined); await closeEnv(); });
+after(async () => { for (const m of opened) await m.close().catch(() => undefined); });
 const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 const FX = path.join(__dirname, '..', 'testing', 'fixtures', 'site-identity');
 const fx = (n: string) => fs.readFileSync(path.join(FX, n));
