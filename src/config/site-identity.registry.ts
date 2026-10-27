@@ -127,8 +127,8 @@ export const SITE_IDENTITY_REGISTRY: readonly SiteIdentityKeyDef[] = [
 		description: 'الشعار في رأس كل رسالة بريد عن العمليات (قالب email-shell). الرسائل المرسلة سابقًا لا تُعاد كتابتها أبدًا.',
 		kind: 'raster', allowedMimes: ['image/png'], maxBytes: 200 * 1024, dimensions: { minWidth: 68, minHeight: 32, maxWidth: 1024, maxHeight: 1024, aspectMin: 1, aspectMax: 3 },
 		defaultAsset: { type: 'file', path: '/images/waseet-mark.png' }, defaultFingerprint: MARK_FP,
-		usages: [{ where: 'رأس قالب البريد: <img src="{EMAIL_ASSET_BASE_URL|site}/images/waseet-mark.png" width="34">', ref: 'src/utils/email-shell.ts:70' }],
-		notWiredReason: 'قالب البريد في الخادم يبني العنوان من EMAIL_ASSET_BASE_URL/images/waseet-mark.png ولم يُربط بالهوية بعد؛ بريد PNG فقط (عملاء البريد لا يعرضون SVG / WebP).',
+		usages: [{ where: 'رأس قالب البريد: <img src="{EMAIL_ASSET_BASE_URL|site}/images/waseet-mark.png" width="34">', ref: 'src/utils/email-shell.ts (renderEmailShell) <- src/services/site-identity-cache.ts' }],
+		notWiredReason: 'قالب البريد في الخادم يقرأ الشعار من ذاكرة الهوية (site-identity-cache) ويرجع إلى EMAIL_ASSET_BASE_URL/images/waseet-mark.png؛ الربط جاهز في الخادم وينتظر تفعيل المفتاح في WIRED_KEYS؛ بريد PNG فقط (عملاء البريد لا يعرضون SVG / WebP).',
 		notes: ['PNG فقط لأن Gmail/Outlook لا يعرضان SVG ولا WebP بشكل موثوق.'],
 	},
 	{

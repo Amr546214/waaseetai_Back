@@ -20,7 +20,7 @@ const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 const FX = path.join(__dirname, '..', 'testing', 'fixtures', 'site-identity');
 const fx = (n: string) => fs.readFileSync(path.join(FX, n));
 const ALL_ROUTES: Array<[string, string]> = [
-	['GET', '/'], ['GET', '/history'], ['GET', `/logo.mark/versions/${randomUUID()}/preview`], ['POST', '/logo.mark/upload'], ['POST', '/logo.mark/publish'], ['POST', '/logo.mark/restore'], ['POST', '/restore-set'], ['DELETE', `/logo.mark/versions/${randomUUID()}`],
+	['GET', '/'], ['GET', '/history'], ['GET', '/restore-set/0/preview'], ['GET', `/logo.mark/versions/${randomUUID()}/preview`], ['POST', '/logo.mark/upload'], ['POST', '/logo.mark/publish'], ['POST', '/logo.mark/restore'], ['POST', '/restore-set'], ['DELETE', `/logo.mark/versions/${randomUUID()}`],
 ];
 const WRITE_ROUTES = ALL_ROUTES.filter(r => r[0] !== 'GET');
 
@@ -47,6 +47,8 @@ async function mount(e: any, serviceOpts: { isWired?: (k: string) => boolean; fa
 const reset = async (e: any) => { await e.prisma.siteIdentityState.deleteMany({}); await e.prisma.siteIdentityManifest.deleteMany({}); await e.prisma.siteIdentityAsset.deleteMany({}); await e.prisma.accountAuditLog.deleteMany({ where: { eventType: { startsWith: 'SITE_IDENTITY_' } } }); };
 const staged = async (m: any, who: string, key: string, tag: string, w = 300, h = 200) => { const r = await m.upload(who, key, png(w, h, { text: tag })); assert.equal(r.status, 201, JSON.stringify(r.json)); return r.json.data; };
 const stateOf = async (m: any, who: string, key: string) => (await m.adm('GET', '/', who)).json.data.items.find((i: any) => i.key === key).state;
+/** a restore-set body with the digest of a fresh preview (what the page does); `digest` overrides it */
+const setBody = async (m: any, who: string, manifestVersion: number, expectedManifestVersion: number, digest?: string) => ({ manifestVersion, expectedManifestVersion, previewDigest: digest ?? (await m.adm('GET', `/restore-set/${manifestVersion}/preview`, who)).json?.data?.previewDigest ?? 'f'.repeat(64) });
 const publish = (m: any, who: string, key: string, versionId: string, expectedVersion: number) => m.adm('POST', `/${key}/publish`, who, { versionId, expectedVersion });
 
 test('PG site identity: permissions - EVERY admin route is 403 without site.view / site.manage (direct request), view-only reads but cannot write, manage does everything, others 403, anonymous 401', opts, async () => {
@@ -138,12 +140,12 @@ test('PG site identity: lifecycle - upload (staged, invisible) -> publish -> pub
 	assert.equal((await m.pub(`/assets/logo.mark/${A.sha256}`)).status, 200, 'rows are never deleted: even after a restore to default the old bytes are served');
 	// restore a whole manifest snapshot: manifest 1 = {logo.mark: A} only
 	const hist = (await m.adm('GET', '/history', sa)).json.data; assert.ok(hist.manifest.length >= 5); assert.ok(hist.versions.every((v: any) => !('bytes' in v)));
-	const cur = (await m.adm('GET', '/', sa)).json.data.manifestVersion; assert.equal((await m.adm('POST', '/restore-set', sa, { manifestVersion: 1, expectedManifestVersion: cur - 1 })).status, 409);
-	const rs = await m.adm('POST', '/restore-set', sa, { manifestVersion: 1, expectedManifestVersion: cur }); assert.equal(rs.status, 200, JSON.stringify(rs.json)); assert.deepEqual(rs.json.data.changedKeys.sort(), ['icon.ai', 'logo.mark']);
+	const cur = (await m.adm('GET', '/', sa)).json.data.manifestVersion; assert.equal((await m.adm('POST', '/restore-set', sa, await setBody(m, sa, 1, cur - 1))).status, 409);
+	const rs = await m.adm('POST', '/restore-set', sa, await setBody(m, sa, 1, cur)); assert.equal(rs.status, 200, JSON.stringify(rs.json)); assert.deepEqual(rs.json.data.changedKeys.sort(), ['icon.ai', 'logo.mark']);
 	const after = (await m.pub('')).json.data; assert.deepEqual(Object.keys(after.items), ['logo.mark']); assert.equal(after.items['logo.mark'].sha256, A.sha256, 'icon.ai was default at manifest 1, logo.mark was A');
-	assert.equal((await m.adm('POST', '/restore-set', sa, { manifestVersion: rs.json.data.manifestVersion, expectedManifestVersion: rs.json.data.manifestVersion })).status, 409, 'already identical');
-	assert.equal((await m.adm('POST', '/restore-set', sa, { manifestVersion: 999, expectedManifestVersion: rs.json.data.manifestVersion })).status, 404);
-	assert.equal((await m.adm('POST', '/restore-set', sa, { manifestVersion: 'x', expectedManifestVersion: 1 })).status, 400);
+	assert.equal((await m.adm('POST', '/restore-set', sa, await setBody(m, sa, rs.json.data.manifestVersion, rs.json.data.manifestVersion))).status, 409, 'already identical');
+	assert.equal((await m.adm('POST', '/restore-set', sa, await setBody(m, sa, 999, rs.json.data.manifestVersion))).status, 404);
+	assert.equal((await m.adm('POST', '/restore-set', sa, { manifestVersion: 'x', expectedManifestVersion: 1, previewDigest: 'f'.repeat(64) })).status, 400);
 	// discard: only drafts; the bytes are dropped; published / superseded rows are refused
 	const D = await staged(m, sa, 'logo.mark', 'variant-d'); assert.equal((await m.adm('DELETE', `/logo.mark/versions/${A.versionId}`, sa)).status, 409);
 	const dd = await m.adm('DELETE', `/logo.mark/versions/${D.versionId}`, sa); assert.equal(dd.status, 200); assert.equal(dd.json.data.status, 'DISCARDED'); const dr = await e.prisma.siteIdentityAsset.findUniqueOrThrow({ where: { id: D.versionId } }); assert.equal(dr.bytes, null); assert.equal(dr.status, 'DISCARDED');
@@ -196,7 +198,7 @@ test('PG site identity: atomicity - a failure inside the transaction (after the 
 		const r = await publish(boom, sa, 'logo.mark', next.versionId, 1); assert.equal(r.status, 500, step); assert.ok(!/injected/.test(JSON.stringify(r.json)), 'no internals leaked');
 		assert.deepEqual(await snapshot(), before, `publish: nothing changed after a failure at ${step}`);
 		const r2 = await boom.adm('POST', '/logo.mark/restore', sa, { target: 'default', expectedVersion: 1 }); assert.equal(r2.status, 500); assert.deepEqual(await snapshot(), before, `restore: untouched (${step})`);
-		const r3 = await boom.adm('POST', '/restore-set', sa, { manifestVersion: 0, expectedManifestVersion: before.manifests }); assert.equal(r3.status, 500); assert.deepEqual(await snapshot(), before, `restore-set: untouched (${step})`);
+		const r3 = await boom.adm('POST', '/restore-set', sa, await setBody(boom, sa, 0, before.manifests)); assert.equal(r3.status, 500); assert.deepEqual(await snapshot(), before, `restore-set: untouched (${step})`);
 		await boom.close();
 	}
 	// the read-back finds corrupted bytes: refuse BEFORE the commit
@@ -238,7 +240,7 @@ test('PG site identity: concurrency - restore-set vs publish on the same key: ex
 		await reset(e);
 		const A = await staged(m, sa, 'logo.mark', `r${round}A`); assert.equal((await publish(m, sa, 'logo.mark', A.versionId, 0)).status, 200); // manifest 1, key version 1
 		const B = await staged(m, a2.id, 'logo.mark', `r${round}B`);
-		const pubP = () => publish(m, a2.id, 'logo.mark', B.versionId, 1), setP = () => m.adm('POST', '/restore-set', sa, { manifestVersion: 0, expectedManifestVersion: 1 });
+		const pubP = () => publish(m, a2.id, 'logo.mark', B.versionId, 1), setBodyNow = await setBody(m, sa, 0, 1), setP = () => m.adm('POST', '/restore-set', sa, setBodyNow);
 		const [x, y] = round % 2 ? await Promise.all([pubP(), setP()]) : (await Promise.all([setP(), pubP()])).reverse();
 		const [rp, rs] = [x, y]; assert.deepEqual([rp.status, rs.status].sort(), [200, 409], `round ${round}: publish ${rp.status} restore-set ${rs.status}`); seen.add(rp.status === 200 ? 'publish-first' : 'restore-first');
 		const loser = rp.status === 200 ? rs : rp; assert.equal(loser.json.code, 'SITE_IDENTITY_VERSION_CONFLICT'); assert.ok(loser.json.current, 'conflict carries the current state');

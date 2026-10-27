@@ -4,6 +4,8 @@ import { logger } from '../config/logger';
 import { AppError, fieldError } from '../utils/app-error';
 import { isMissingTableError } from '../utils/missing-table';
 import { accountAuditLogService } from './account-logs.service';
+import { createHash } from 'node:crypto';
+import { EMAIL_LOGO_KEY, refreshSiteIdentityCache, registerSiteIdentityCacheLoader } from './site-identity-cache';
 import { sha256Of, validateIdentityUpload } from '../utils/site-identity-upload';
 import {
 	IDENTITY_GROUPS, KEY_PATTERN, NOT_IDENTITY_NOTES, SITE_IDENTITY_REGISTRY, UNREGISTERED_PRESENT_ASSETS, WIRED_KEYS, SiteIdentityKeyDef, describeRules, identityDef, isWiredKey,
@@ -25,7 +27,7 @@ export const SITE_IDENTITY_VERSION_CONFLICT = 'SITE_IDENTITY_VERSION_CONFLICT';
 export const SITE_IDENTITY_ERRORS = {
 	UNKNOWN_KEY: 'SITE_IDENTITY_UNKNOWN_KEY', NOT_WIRED: 'SITE_IDENTITY_KEY_NOT_WIRED', VERSION_NOT_FOUND: 'SITE_IDENTITY_VERSION_NOT_FOUND', NOT_STAGED: 'SITE_IDENTITY_VERSION_NOT_STAGED',
 	NOT_RESTORABLE: 'SITE_IDENTITY_VERSION_NOT_RESTORABLE', NO_CHANGE: 'SITE_IDENTITY_NO_CHANGE', TOO_MANY_STAGED: 'SITE_IDENTITY_TOO_MANY_STAGED', VERIFY_FAILED: 'SITE_IDENTITY_VERIFY_FAILED',
-	UNAVAILABLE: 'SITE_IDENTITY_UNAVAILABLE', MANIFEST_NOT_FOUND: 'SITE_IDENTITY_MANIFEST_NOT_FOUND',
+	UNAVAILABLE: 'SITE_IDENTITY_UNAVAILABLE', MANIFEST_NOT_FOUND: 'SITE_IDENTITY_MANIFEST_NOT_FOUND', PREVIEW_STALE: 'SITE_IDENTITY_PREVIEW_STALE', DRAFT_NOT_YOURS: 'SITE_IDENTITY_DRAFT_NOT_YOURS',
 } as const;
 export const MAX_STAGED_PER_KEY = 5;
 export const HISTORY_PER_KEY = 10;
@@ -58,6 +60,38 @@ const short = (sha: string) => sha.slice(0, 12);
 const assetOut = (a: AssetMeta) => ({ versionId: a.id, key: a.key, version: a.version, status: a.status, mime: a.mime, sha256: a.sha256, width: a.width, height: a.height, byteSize: a.byteSize, note: a.note, createdById: a.createdById, createdAt: a.createdAt.toISOString(),
 	url: a.status === 'PUBLISHED' || a.status === 'SUPERSEDED' ? publicPath(a.key, a.sha256) : null, previewUrl: a.status === 'DISCARDED' ? null : `/admin/site-identity/${a.key}/versions/${a.id}/preview` });
 
+/**
+ * ACTORS: every `createdById` / `updatedById` leaving the admin API becomes `createdBy` / `updatedBy` = { id, name } (name: first + last, or the company name of a company account; null for a deleted /
+ * unknown user). ONE batched query per response (no N+1); nothing else about the person is selected, let alone returned. Never applied to public responses.
+ */
+export interface ActorRef { id: string; name: string | null }
+export const actorName = (u: { firstName?: string | null; lastName?: string | null; accountType?: string; clientProfile?: { companyName: string | null } | null; providerProfile?: { companyName: string | null } | null }): string | null => {
+	const company = u.accountType === 'CLIENT_COMPANY' ? u.clientProfile?.companyName : u.accountType === 'PROVIDER_COMPANY' ? u.providerProfile?.companyName : null;
+	const n = (company && company.trim()) || `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim();
+	return n ? n.replace(/[\u0000-\u001F\u007F]/g, ' ').slice(0, 120) : null;
+};
+async function withActors<T>(db: Tx | Db, payload: T): Promise<T> {
+	const ids = new Set<string>();
+	const FIELDS: Record<string, string> = { createdById: 'createdBy', updatedById: 'updatedBy' };
+	const collect = (v: unknown) => { if (Array.isArray(v)) v.forEach(collect); else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { if (FIELDS[k] && typeof x === 'string') ids.add(x); else collect(x); } };
+	collect(payload);
+	const names = new Map<string, string | null>();
+	if (ids.size) {
+		const users = await db.user.findMany({ where: { id: { in: [...ids] } }, select: { id: true, firstName: true, lastName: true, accountType: true, clientProfile: { select: { companyName: true } }, providerProfile: { select: { companyName: true } } } });
+		for (const u of users) names.set(u.id, actorName(u));
+	}
+	const walk = (v: unknown): unknown => {
+		if (Array.isArray(v)) return v.map(walk);
+		if (v && typeof v === 'object') {
+			const out: Record<string, unknown> = {};
+			for (const [k, x] of Object.entries(v)) { if (FIELDS[k]) out[FIELDS[k]] = typeof x === 'string' ? ({ id: x, name: names.get(x) ?? null } as ActorRef) : null; else out[k] = walk(x); }
+			return out;
+		}
+		return v;
+	};
+	return walk(payload) as T;
+}
+
 export class SiteIdentityService {
 	private db: Db; private isWiredFn: (key: string) => boolean; private faults: SiteIdentityFaults;
 	constructor(opts: SiteIdentityOptions = {}) { this.db = opts.db ?? defaultPrisma; this.isWiredFn = opts.isWired ?? ((k) => isWiredKey(k, WIRED_KEYS)); this.faults = opts.faults ?? {}; }
@@ -81,7 +115,7 @@ export class SiteIdentityService {
 
 	// ------------------------------------------------------------------------------------------------------------------ reads
 	/** the whole page: registry + state + per-key history summary */
-	async overview(canManage: boolean) {
+	async overview(canManage: boolean, callerId: string | null = null) {
 		return this.guard(async () => {
 			const [states, assets, mv] = await Promise.all([
 				this.db.siteIdentityState.findMany(),
@@ -97,11 +131,11 @@ export class SiteIdentityService {
 					key: d.key, group: d.group, label: d.label, description: d.description, kind: d.kind, allowedMimes: d.allowedMimes, maxBytes: d.maxBytes, dimensions: d.dimensions, rules: describeRules(d),
 					defaultAsset: d.defaultAsset, defaultFingerprint: d.defaultFingerprint, usages: d.usages, notes: d.notes ?? [], wired, editable: wired, notWiredReason: wired ? null : d.notWiredReason,
 					state: { stateVersion: st?.version ?? 0, isDefault: !active, active: active ? assetOut(active) : null, updatedAt: st?.updatedAt?.toISOString() ?? null, updatedById: st?.updatedById ?? null },
-					staged: rows.filter(r => r.status === 'STAGED').map(assetOut),
+					staged: rows.filter(r => r.status === 'STAGED').map(r => ({ ...assetOut(r), isMine: !!callerId && r.createdById === callerId })),
 					history: rows.filter(r => r.status !== 'STAGED').slice(0, HISTORY_PER_KEY).map(assetOut),
 				};
 			});
-			return { manifestVersion: mv._max.version ?? 0, canManage, groups: IDENTITY_GROUPS, items, notIdentity: NOT_IDENTITY_NOTES, unregisteredAssets: UNREGISTERED_PRESENT_ASSETS };
+			return withActors(this.db, { manifestVersion: mv._max.version ?? 0, canManage, groups: IDENTITY_GROUPS, items, notIdentity: NOT_IDENTITY_NOTES, unregisteredAssets: UNREGISTERED_PRESENT_ASSETS });
 		});
 	}
 
@@ -119,7 +153,7 @@ export class SiteIdentityService {
 				return { manifestVersion: r.version, reason: r.reason, createdAt: r.createdAt.toISOString(), createdById: r.createdById, changedKeys: key ? changedKeys.filter(k => k === key) : changedKeys };
 			}).filter(r => !key || r.changedKeys.length > 0);
 			const versions = await this.db.siteIdentityAsset.findMany({ where: key ? { key } : {}, select: META, orderBy: [{ createdAt: 'desc' }], take: 200 });
-			return { manifest: out, hasMore: rows.length > limit, nextBefore: rows.length > limit ? page[page.length - 1].version : null, versions: (versions as AssetMeta[]).map(assetOut) };
+			return withActors(this.db, { manifest: out, hasMore: rows.length > limit, nextBefore: rows.length > limit ? page[page.length - 1].version : null, versions: (versions as AssetMeta[]).map(assetOut) });
 		});
 	}
 
@@ -163,12 +197,12 @@ export class SiteIdentityService {
 	private async keyState(db: Tx | Db, key: string) {
 		const st = await db.siteIdentityState.findUnique({ where: { key }, include: { activeAsset: { select: META } } });
 		const mv = await db.siteIdentityManifest.aggregate({ _max: { version: true } });
-		return { key, stateVersion: st?.version ?? 0, manifestVersion: mv._max.version ?? 0, isDefault: !st?.activeAsset, active: st?.activeAsset ? assetOut(st.activeAsset as AssetMeta) : null, updatedAt: st?.updatedAt?.toISOString() ?? null, updatedById: st?.updatedById ?? null };
+		return withActors(db, { key, stateVersion: st?.version ?? 0, manifestVersion: mv._max.version ?? 0, isDefault: !st?.activeAsset, active: st?.activeAsset ? assetOut(st.activeAsset as AssetMeta) : null, updatedAt: st?.updatedAt?.toISOString() ?? null, updatedById: st?.updatedById ?? null });
 	}
 	private async fullState(db: Tx | Db) {
 		const [states, mv] = await Promise.all([db.siteIdentityState.findMany({ include: { activeAsset: { select: META } } }), db.siteIdentityManifest.aggregate({ _max: { version: true } })]);
 		const snap = await db.siteIdentityManifest.findUnique({ where: { version: mv._max.version ?? -1 } });
-		return { manifestVersion: mv._max.version ?? 0, snapshot: (snap?.snapshot ?? {}) as Record<string, string | null>, keys: states.map(s => ({ key: s.key, stateVersion: s.version, isDefault: !s.activeAsset, active: s.activeAsset ? assetOut(s.activeAsset as AssetMeta) : null })) };
+		return withActors(db, { manifestVersion: mv._max.version ?? 0, snapshot: (snap?.snapshot ?? {}) as Record<string, string | null>, keys: states.map(s => ({ key: s.key, stateVersion: s.version, isDefault: !s.activeAsset, active: s.activeAsset ? assetOut(s.activeAsset as AssetMeta) : null })) });
 	}
 
 	// ------------------------------------------------------------------------------------------------------------------ stage (upload)
@@ -190,7 +224,7 @@ export class SiteIdentityService {
 						await accountAuditLogService.record({ userId: actorId, eventType: 'SITE_IDENTITY_UPLOADED', category: LogCategory.SYSTEM_AUDIT, source: 'ADMIN', severity: 'INFO', title: 'رفع نسخة جديدة من هوية الموقع',
 							summary: `رفع مسودة ${def.label} (نسخة ${row.version}) بانتظار الاعتماد`, details: { identityKey: key, version: row.version, sha: short(v.sha256), mime: v.mime, byteSize: v.byteSize, sanitizedRemoved: v.sanitized.removed },
 							context: { ipAddress: ctx.ip, device: ctx.device, actorLabel: 'ADMIN' } }, tx);
-						return { ...assetOut(row as AssetMeta), sanitized: v.sanitized, current: await this.keyState(tx, key) };
+						return { ...(await withActors(tx, assetOut(row as AssetMeta))), sanitized: v.sanitized, current: await this.keyState(tx, key) };
 					});
 				} catch (e) { if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002' && retries++ < 3) continue; throw e; }
 			}
@@ -208,7 +242,7 @@ export class SiteIdentityService {
 			const row = await tx.siteIdentityAsset.update({ where: { id: a.id }, data: { status: 'DISCARDED', bytes: null }, select: META });
 			await accountAuditLogService.record({ userId: actorId, eventType: 'SITE_IDENTITY_DISCARDED', category: LogCategory.SYSTEM_AUDIT, source: 'ADMIN', severity: 'INFO', title: 'حذف مسودة هوية',
 				summary: `حذف مسودة ${def.label} (نسخة ${a.version}) قبل اعتمادها`, details: { identityKey: key, version: a.version, sha: short(a.sha256) }, context: { ipAddress: ctx.ip, device: ctx.device, actorLabel: 'ADMIN' } }, tx);
-			return { ...assetOut(row as AssetMeta), current: await this.keyState(tx, key) };
+			return { ...(await withActors(tx, assetOut(row as AssetMeta))), current: await this.keyState(tx, key) };
 		}));
 	}
 
@@ -289,11 +323,21 @@ export class SiteIdentityService {
 
 	private async run(actorId: string, ctx: AuditCtx, work: (tx: Tx) => Promise<{ manifestVersion: number; applied: Applied[] }>, result: (r: { manifestVersion: number; applied: Applied[] }) => Promise<unknown>) {
 		const done = await this.guard(() => this.db.$transaction(async tx => { await this.lock(tx, LOCK_NAME); return work(tx); }, { timeout: 20_000, maxWait: 20_000 }));
+		const touchesCache = done.applied.some(a => a.key === EMAIL_LOGO_KEY);
 		if (!(await this.verifyCommitted(done.applied, done.manifestVersion))) {
 			await this.revert(done.applied, actorId, ctx);
+			if (touchesCache) await refreshSiteIdentityCache();
 			throw new AppError('تم الحفظ لكن تعذّر التحقق من النتيجة بعد الحفظ، فأُعيدت الهوية إلى حالتها السابقة. لم يتغيّر شيء على الموقع. أعد المحاولة.', 500, undefined, SITE_IDENTITY_ERRORS.VERIFY_FAILED);
 		}
+		if (touchesCache) await refreshSiteIdentityCache(); // the synchronous e-mail shell sees the new logo from the next mail on (this process); other instances follow within the cache TTL
 		return result(done);
+	}
+
+	/** publish / restore result: the new key state + everything the confirmation text needs (label, usages, from -> to version; 0 = the built-in default) */
+	private async keyResult(def: SiteIdentityKeyDef, r: { manifestVersion: number; applied: Applied[] }) {
+		const a = r.applied[0];
+		return withActors(this.db, { ...(await this.keyState(this.db, def.key)), manifestVersion: r.manifestVersion, label: def.label, usages: def.usages, fromVersion: a.from?.version ?? 0, toVersion: a.to?.version ?? 0,
+			previous: a.from ? assetOut({ ...a.from, status: 'SUPERSEDED' }) : null });
 	}
 
 	private checkVersion(expected: unknown, field = 'expectedVersion'): number {
@@ -312,10 +356,12 @@ export class SiteIdentityService {
 			const a = await tx.siteIdentityAsset.findFirst({ where: { id: versionId, key }, select: META });
 			if (!a) throw new AppError('المسودة غير موجودة.', 404, undefined, SITE_IDENTITY_ERRORS.VERSION_NOT_FOUND);
 			if (a.status !== 'STAGED') throw new AppError('لا يمكن اعتماد هذه النسخة: ليست مسودة. للعودة إلى نسخة سابقة استخدم «استعادة».', 409, undefined, SITE_IDENTITY_ERRORS.NOT_STAGED);
+			// you apply what YOU previewed: a draft uploaded by another admin is theirs to apply (the stored row is activated as it is; nobody publishes a file they did not upload and look at)
+			if (a.createdById !== actorId) throw new AppError('هذه المسودة رفعها مشرف آخر؛ يعتمدها من رفعها بعد معاينتها. يمكنك معاينتها أو حذفها فقط.', 409, undefined, SITE_IDENTITY_ERRORS.DRAFT_NOT_YOURS);
 			return this.applyChanges(tx, [{ key, toAssetId: a.id }], actorId, `publish ${key} v${a.version}${note ? ` | ${note}` : ''}`, (applied) => ({ userId: actorId, eventType: 'SITE_IDENTITY_PUBLISHED', category: LogCategory.SYSTEM_AUDIT, source: 'ADMIN', severity: 'WARNING',
 				title: 'اعتماد نسخة جديدة من هوية الموقع', summary: `اعتماد ${def.label}: من ${applied[0].from ? `نسخة ${applied[0].from.version}` : 'الافتراضي'} إلى نسخة ${a.version}`,
 				details: { identityKey: key, fromVersion: applied[0].from?.version ?? 0, toVersion: a.version, fromSha: applied[0].from ? short(applied[0].from.sha256) : 'default', toSha: short(a.sha256), stateVersion: applied[0].stateVersion }, context: { ipAddress: ctx.ip, device: ctx.device, actorLabel: 'ADMIN' } }));
-		}, async r => ({ ...(await this.keyState(this.db, key)), manifestVersion: r.manifestVersion, previous: r.applied[0].from ? assetOut({ ...r.applied[0].from, status: 'SUPERSEDED' }) : null }));
+		}, r => this.keyResult(def, r));
 	}
 
 	// ------------------------------------------------------------------------------------------------------------------ restore one key
@@ -337,32 +383,67 @@ export class SiteIdentityService {
 			return this.applyChanges(tx, [{ key, toAssetId: toId }], actorId, `restore ${key} -> ${to ? `v${to.version}` : 'default'}`, (applied) => ({ userId: actorId, eventType: 'SITE_IDENTITY_RESTORED', category: LogCategory.SYSTEM_AUDIT, source: 'ADMIN', severity: 'WARNING',
 				title: 'استعادة نسخة سابقة من هوية الموقع', summary: `استعادة ${def.label}: من ${applied[0].from ? `نسخة ${applied[0].from.version}` : 'الافتراضي'} إلى ${to ? `نسخة ${to.version}` : 'الأصل الافتراضي'}`,
 				details: { identityKey: key, fromVersion: applied[0].from?.version ?? 0, toVersion: to?.version ?? 0, fromSha: applied[0].from ? short(applied[0].from.sha256) : 'default', toSha: to ? short(to.sha256) : 'default', target: to ? 'version' : 'default', stateVersion: applied[0].stateVersion }, context: { ipAddress: ctx.ip, device: ctx.device, actorLabel: 'ADMIN' } }));
-		}, async r => ({ ...(await this.keyState(this.db, key)), manifestVersion: r.manifestVersion, previous: r.applied[0].from ? assetOut({ ...r.applied[0].from, status: 'SUPERSEDED' }) : null }));
+		}, r => this.keyResult(def, r));
 	}
 
 	// ------------------------------------------------------------------------------------------------------------------ restore a whole manifest snapshot
-	async restoreSet(body: { manifestVersion?: unknown; expectedManifestVersion?: unknown }, actorId: string, ctx: AuditCtx = {}) {
+	private side(def: SiteIdentityKeyDef, a: AssetMeta | null): SetSide {
+		if (!a) return { source: 'default', versionId: null, version: 0, sha256: def.defaultFingerprint.sha256, mime: def.defaultFingerprint.mime, width: def.defaultFingerprint.width ?? null, height: def.defaultFingerprint.height ?? null, previewUrl: null };
+		return { source: 'custom', versionId: a.id, version: a.version, sha256: a.sha256, mime: a.mime, width: a.width, height: a.height, previewUrl: `/admin/site-identity/${a.key}/versions/${a.id}/preview` };
+	}
+
+	/**
+	 * The EXACT diff between the live identity and manifest `targetVersion` (0 = every key back to its built-in default), for every WIRED key, plus the digest that binds a later apply to this very diff.
+	 * Used read-only by the preview route and again, inside the locked transaction, by the apply (so the two can never disagree). Refuses what the apply would refuse (unknown manifest, an unwired key
+	 * that would change, a target version that is no longer restorable).
+	 */
+	private async setDiff(db: Tx, targetVersion: number) {
+		const mv = await db.siteIdentityManifest.aggregate({ _max: { version: true } }); const current = mv._max.version ?? 0;
+		let snap: Record<string, string | null> = {};
+		if (targetVersion > 0) {
+			const row = await db.siteIdentityManifest.findUnique({ where: { version: targetVersion } });
+			if (!row) throw new AppError('نسخة المجموعة المطلوبة غير موجودة.', 404, undefined, SITE_IDENTITY_ERRORS.MANIFEST_NOT_FOUND);
+			snap = row.snapshot as Record<string, string | null>;
+		}
+		const states = new Map((await db.siteIdentityState.findMany()).map(s => [s.key, s.activeAssetId]));
+		const ids = [...new Set([...states.values(), ...Object.values(snap)].filter((x): x is string => !!x))];
+		const metas = new Map(((ids.length ? await db.siteIdentityAsset.findMany({ where: { id: { in: ids } }, select: META }) : []) as AssetMeta[]).map(a => [a.id, a]));
+		const items: SetPreviewItem[] = []; const changes: Array<{ key: string; toAssetId: string | null }> = [];
+		for (const d of SITE_IDENTITY_REGISTRY) {
+			const want = snap[d.key] ?? null; const have = states.get(d.key) ?? null; const wired = this.isWired(d.key);
+			if (want !== have) {
+				if (!wired) throw new AppError(`لا يمكن الاستعادة: العنصر ${d.key} غير مرتبط بالموقع بعد.`, 409, undefined, SITE_IDENTITY_ERRORS.NOT_WIRED);
+				if (want) { const a = metas.get(want); if (!a || a.key !== d.key || (a.status !== 'PUBLISHED' && a.status !== 'SUPERSEDED')) throw new AppError(`تعذّرت الاستعادة: نسخة العنصر ${d.key} في تلك المجموعة غير متاحة.`, 409, undefined, SITE_IDENTITY_ERRORS.NOT_RESTORABLE); }
+				changes.push({ key: d.key, toAssetId: want });
+			}
+			if (!wired) continue;
+			const cur = have ? metas.get(have) ?? null : null; const tgt = want ? metas.get(want) ?? null : null;
+			items.push({ key: d.key, label: d.label, group: d.group, current: this.side(d, cur), target: this.side(d, tgt), change: want === have ? 'unchanged' : want ? 'replace' : 'to-default' });
+		}
+		const digest = createHash('sha256').update(JSON.stringify({ c: current, t: targetVersion, k: items.map(i => [i.key, i.current.version, i.current.sha256, i.target.version, i.target.sha256]) })).digest('hex');
+		const preview = { currentManifestVersion: current, targetManifestVersion: targetVersion, previewDigest: digest, changedCount: changes.length, canApply: changes.length > 0, items };
+		return { preview, changes };
+	}
+
+	/** GET /restore-set/:manifestVersion/preview - read-only, one consistent snapshot */
+	async previewRestoreSet(manifestVersion: unknown) {
+		const n = typeof manifestVersion === 'string' && /^\d{1,9}$/.test(manifestVersion) ? Number(manifestVersion) : typeof manifestVersion === 'number' ? manifestVersion : NaN;
+		if (!Number.isInteger(n) || n < 0) throw fieldError('manifestVersion', 'رقم نسخة المجموعة (manifestVersion) عدد صحيح ≥ 0 (0 = كل العناصر الافتراضية).');
+		return this.guard(() => this.db.$transaction(async tx => (await this.setDiff(tx, n)).preview, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead }));
+	}
+
+	async restoreSet(body: { manifestVersion?: unknown; expectedManifestVersion?: unknown; previewDigest?: unknown }, actorId: string, ctx: AuditCtx = {}) {
 		const target = body.manifestVersion;
 		if (!Number.isInteger(target) || (target as number) < 0) throw fieldError('manifestVersion', 'رقم نسخة المجموعة (manifestVersion) مطلوب (0 = كل العناصر الافتراضية).');
 		const expected = this.checkVersion(body.expectedManifestVersion, 'expectedManifestVersion'); const targetVersion = target as number;
+		if (typeof body.previewDigest !== 'string' || !SHA_RE.test(body.previewDigest)) throw fieldError('previewDigest', 'بصمة المعاينة (previewDigest) مطلوبة: عاين الاستعادة أولًا ثم أرسل البصمة كما وصلتك.');
+		const digest = body.previewDigest;
 		return this.run(actorId, ctx, async tx => {
-			const mv = await tx.siteIdentityManifest.aggregate({ _max: { version: true } }); const current = mv._max.version ?? 0;
-			if (current !== expected) throw new SiteIdentityConflict('تغيّرت هوية الموقع من جهة أخرى بعد أن فتحت الصفحة. راجع الحالة الحالية ثم أعد المحاولة.', await this.fullState(tx));
-			let snap: Record<string, string | null> = {};
-			if (targetVersion > 0) {
-				const row = await tx.siteIdentityManifest.findUnique({ where: { version: targetVersion } });
-				if (!row) throw new AppError('نسخة المجموعة المطلوبة غير موجودة.', 404, undefined, SITE_IDENTITY_ERRORS.MANIFEST_NOT_FOUND);
-				snap = row.snapshot as Record<string, string | null>;
-			}
-			const states = new Map((await tx.siteIdentityState.findMany()).map(s => [s.key, s.activeAssetId]));
-			const changes: Array<{ key: string; toAssetId: string | null }> = [];
-			for (const d of SITE_IDENTITY_REGISTRY) {
-				const want = snap[d.key] ?? null; const have = states.get(d.key) ?? null;
-				if (want === have) continue;
-				if (!this.isWired(d.key)) throw new AppError(`لا يمكن الاستعادة: العنصر ${d.key} غير مرتبط بالموقع بعد.`, 409, undefined, SITE_IDENTITY_ERRORS.NOT_WIRED);
-				if (want) { const a = await tx.siteIdentityAsset.findFirst({ where: { id: want, key: d.key }, select: { id: true, status: true } }); if (!a || (a.status !== 'PUBLISHED' && a.status !== 'SUPERSEDED')) throw new AppError(`تعذّرت الاستعادة: نسخة العنصر ${d.key} في تلك المجموعة غير متاحة.`, 409, undefined, SITE_IDENTITY_ERRORS.NOT_RESTORABLE); }
-				changes.push({ key: d.key, toAssetId: want });
-			}
+			const diff = await this.setDiff(tx, targetVersion);
+			// what is about to be applied must be EXACTLY what the admin was shown: anything that moved since (a publish, a restore, a changed target) gives a fresh preview and changes nothing
+			if (diff.preview.previewDigest !== digest) throw new SiteIdentityConflict('تغيّرت الهوية منذ أن عاينت الاستعادة، فلم يُطبَّق شيء. راجع المعاينة المحدّثة ثم أعد المحاولة.', diff.preview, SITE_IDENTITY_ERRORS.PREVIEW_STALE);
+			if (diff.preview.currentManifestVersion !== expected) throw new SiteIdentityConflict('تغيّرت هوية الموقع من جهة أخرى بعد أن فتحت الصفحة. راجع الحالة الحالية ثم أعد المحاولة.', await this.fullState(tx));
+			const changes = diff.changes;
 			if (!changes.length) throw new AppError('الهوية الحالية مطابقة لتلك المجموعة؛ لا يوجد ما يُستعاد.', 409, undefined, SITE_IDENTITY_ERRORS.NO_CHANGE);
 			return this.applyChanges(tx, changes, actorId, `restore-set -> manifest ${targetVersion}`, (applied) => ({ userId: actorId, eventType: 'SITE_IDENTITY_SET_RESTORED', category: LogCategory.SYSTEM_AUDIT, source: 'ADMIN', severity: 'WARNING',
 				title: 'استعادة مجموعة هوية كاملة', summary: `استعادة مجموعة الهوية رقم ${targetVersion}: تغيّر ${applied.length} عنصر`,
@@ -371,7 +452,14 @@ export class SiteIdentityService {
 	}
 }
 
+export interface SetSide { source: 'default' | 'custom'; versionId: string | null; version: number; sha256: string; mime: string; width: number | null; height: number | null; previewUrl: string | null }
+export interface SetPreviewItem { key: string; label: string; group: string; current: SetSide; target: SetSide; change: 'replace' | 'to-default' | 'unchanged' }
+
 interface Applied { key: string; fromAssetId: string | null; toAssetId: string | null; from: AssetMeta | null; to: AssetMeta | null; stateVersion: number }
 const verifyFailed = (what: string) => new AppError(`فشل التحقق من سلامة الحفظ (${what}); لم يُغيَّر شيء.`, 500, undefined, SITE_IDENTITY_ERRORS.VERIFY_FAILED);
 
 export const siteIdentityService = new SiteIdentityService();
+registerSiteIdentityCacheLoader(async () => {
+	const st = await defaultPrisma.siteIdentityState.findUnique({ where: { key: EMAIL_LOGO_KEY }, include: { activeAsset: { select: { sha256: true, status: true } } } });
+	const a = st?.activeAsset; return a && (a.status === 'PUBLISHED' || a.status === 'SUPERSEDED') ? a.sha256 : null;
+});

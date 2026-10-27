@@ -49,3 +49,13 @@ export const siteUrl = (path: string | null | undefined): string | null => {
 	if (!base) return null;
 	return `${base}${p.startsWith('/') ? '' : '/'}${p}`;
 };
+
+/**
+ * An absolute URL on the PUBLIC API of this environment (`<site origin>/api<path>`; the API is served under /api of the site host). Never localhost unless FRONTEND_URL itself says so,
+ * never a double slash; null when the site address is not configured (the caller falls back to its default).
+ */
+export const apiPublicUrl = (path: string): string | null => {
+	const base = siteBaseUrl();
+	if (!base || /[\s\u0000-\u001f\\]/.test(path)) return null;
+	return `${base}/api/${String(path).replace(/^\/+/, '')}`;
+};

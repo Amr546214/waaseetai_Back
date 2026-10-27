@@ -28,8 +28,9 @@ export function buildAdminSiteIdentityRouter(service: SiteIdentityService = site
 
 	router.use(authenticate, requireActiveUser, requireAnyPermission(...SITE_IDENTITY_READ_PERMISSIONS));
 
-	router.get('/', ok(async req => service.overview(actorHas(await loadAdminActor(req), 'site.manage'))));
+	router.get('/', ok(async req => service.overview(actorHas(await loadAdminActor(req), 'site.manage'), req.user!.id)));
 	router.get('/history', ok(req => service.history(req.query as Record<string, unknown>)));
+	router.get('/restore-set/:manifestVersion/preview', ok(req => service.previewRestoreSet(req.params.manifestVersion)));
 	router.get('/:key/versions/:id/preview', knownKey, async (req, res, next) => {
 		try {
 			const r = await service.previewBytes(String(req.params.key), String(req.params.id));
