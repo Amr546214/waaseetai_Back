@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { env, opts, mkStaff } from '../testing/admin-team.pgenv';
 import { chunk } from '../testing/site-identity.pgenv';
 import { SITE_IDENTITY_REGISTRY, WIRED_KEYS, identityDef } from '../config/site-identity.registry';
+import { LIGHT_SELECTOR } from '../utils/site-identity-tokens';
 import { validateIdentityUpload } from '../utils/site-identity-upload';
 import { mount, reset, staged, publish, dbState } from './site-identity-round2.pgenv';
 
@@ -32,12 +33,12 @@ test('PG round5 tokens: json upload (body and multipart) -> staged with value ->
 	const dark = ov.items.find((i: any) => i.key === 'tokens.colors.dark'), light = ov.items.find((i: any) => i.key === 'tokens.colors.light');
 	assert.equal(dark.kind, 'json'); assert.equal(dark.group, 'token'); assert.equal(dark.wired, true); assert.equal(dark.tokens.length, 34); assert.equal(light.tokens.length, 34);
 	assert.equal(dark.tokens.find((t: any) => t.name === '--pg').default, '#070d24'); assert.equal(light.tokens.find((t: any) => t.name === '--pg').default, '#eef2fa');
-	assert.equal(light.tokens.find((t: any) => t.name === '--teal').sharedWithDark, true); assert.equal(light.tokens.find((t: any) => t.name === '--txt').sharedWithDark, false);
+	assert.equal(light.tokens.find((t: any) => t.name === '--grad').sharedWithDark, true); assert.equal(light.tokens.find((t: any) => t.name === '--teal').default, '#0f8a7f'); assert.equal(light.tokens.find((t: any) => t.name === '--txt').sharedWithDark, false);
 	assert.equal(ov.items.find((i: any) => i.key === 'tokens.layout').tokens.length, 3);
-	const ty = ov.items.find((i: any) => i.key === 'tokens.typography'); assert.equal(ty.wired, false); assert.equal(ty.editable, false); assert.ok(ty.notWiredReason.length > 20);
+	const ty = ov.items.find((i: any) => i.key === 'tokens.typography'); assert.equal(ty.wired, true); assert.equal(ty.editable, true); assert.equal(ty.tokens[0].default, "'Tajawal'");
 	assert.equal(dark.defaultFingerprint.sha256, sha('{}')); assert.equal(dark.state.isDefault, true);
-	// typography cannot be changed while unwired
-	const tw = await tok(m, mg.id, 'tokens.typography', { '--font-family': "'Cairo',sans-serif" }); assert.equal(tw.status, 409); assert.equal(tw.json.code, 'SITE_IDENTITY_KEY_NOT_WIRED');
+	// typography is wired: a draft is accepted (and discarded again)
+	const tw = await tok(m, mg.id, 'tokens.typography', { '--font-family': "'Cairo',sans-serif" }); assert.equal(tw.status, 201); assert.deepEqual(tw.json.data.value, { '--font-family': "'Cairo',sans-serif" }); assert.equal((await m.adm('DELETE', `/tokens.typography/versions/${tw.json.data.versionId}`, mg.id)).status, 200);
 
 	// upload by JSON body
 	const up = await tok(m, mg.id, 'tokens.colors.dark', { '--teal': '#14B8A6', '--pg': '#070D24', '--header-bg': 'rgba(7, 13, 36, 0.80)' });
@@ -52,7 +53,7 @@ test('PG round5 tokens: json upload (body and multipart) -> staged with value ->
 	assert.deepEqual(pb.json.data.active.value, v1.value); assert.equal(pb.json.data.isDefault, false);
 	const man = await m.pub(''); const item = man.json.data.items['tokens.colors.dark'];
 	assert.deepEqual(item.value, v1.value); assert.equal(item.mime, 'application/json'); assert.equal(item.width, null); assert.equal(item.sha256, v1.sha256);
-	assert.equal(man.json.data.tokensCss, ':root:not(.theme-light):not(.light-theme){--teal:#14b8a6;--header-bg:rgba(7,13,36,.8)}\n.theme-light.theme-light,.light-theme.light-theme{--teal:#2bd4c7}', 'ready CSS: dark rule + the shared --teal pinned in light');
+	assert.equal(man.json.data.tokensCss, ':root:not(.theme-light):not(.light-theme){--teal:#14b8a6;--header-bg:rgba(7,13,36,.8)}', 'ready CSS: only the dark rule (light redefines --teal itself, nothing is restated)');
 	assert.equal(man.headers.get('cache-control'), 'public, max-age=60'); assert.ok(man.headers.get('etag'));
 	// immutable JSON asset
 	const asset = await m.pub(`/assets/tokens.colors.dark/${v1.sha256}`); assert.equal(asset.status, 200); assert.equal(asset.headers.get('content-type')?.startsWith('application/json'), true); assert.equal(asset.headers.get('x-content-type-options'), 'nosniff'); assert.match(asset.headers.get('cache-control')!, /immutable/);
@@ -65,7 +66,7 @@ test('PG round5 tokens: json upload (body and multipart) -> staged with value ->
 	await pubTok(m, mg.id, 'tokens.colors.light', { '--pg': '#ffffff', '--txt': '#111111' });
 	await pubTok(m, mg.id, 'tokens.layout', { '--container': '1100px', '--radius': '12px' });
 	const css = (await m.pub('')).json.data.tokensCss as string;
-	assert.equal(css, [':root{--container:1100px;--radius:12px}', ':root:not(.theme-light):not(.light-theme){--teal:#0d9488;--red:#ff0000}', '.theme-light.theme-light,.light-theme.light-theme{--pg:#ffffff;--txt:#111111;--teal:#2bd4c7}'].join('\n'));
+	assert.equal(css, [':root{--container:1100px;--radius:12px}', ':root:not(.theme-light):not(.light-theme){--teal:#0d9488;--red:#ff0000}', LIGHT_SELECTOR + '{--pg:#ffffff;--txt:#111111}'].join('\n'));
 	// persistence: a brand-new service object (restart) on the same database answers identically
 	const { SiteIdentityService } = await import('./site-identity.service');
 	const again = await new SiteIdentityService({ isWired: (k) => WIRED_KEYS.includes(k) }).publicManifest(); assert.equal(again.tokensCss, css); assert.deepEqual(again.items['tokens.layout'].value, { '--container': '1100px', '--radius': '12px' });
@@ -135,7 +136,7 @@ test('PG round5 tokens: hostile uploads over HTTP are refused with the offending
 	const pv = await m.adm('GET', '/restore-set/0/preview', mg.id); assert.equal(pv.status, 200);
 	const row = pv.json.data.items.find((i: any) => i.key === 'tokens.colors.dark'); assert.equal(row.change, 'to-default'); assert.ok(row.current.value['--teal']); assert.deepEqual(row.target.value, {}); assert.equal(row.target.source, 'default');
 	assert.equal(pv.json.data.items.find((i: any) => i.key === 'tokens.layout').current.value['--radius'], '8px');
-	assert.ok(!pv.json.data.items.some((i: any) => i.key === 'tokens.typography'), 'unwired keys are not part of a set preview');
+	assert.equal(pv.json.data.items.find((i: any) => i.key === 'tokens.typography').change, 'unchanged', 'typography is wired: listed, nothing to change');
 	const stale = await m.adm('POST', '/restore-set', mg.id, { manifestVersion: 0, expectedManifestVersion: pv.json.data.currentManifestVersion, previewDigest: 'f'.repeat(64) }); assert.equal(stale.status, 409); assert.equal(stale.json.code, 'SITE_IDENTITY_PREVIEW_STALE'); assert.deepEqual(stale.json.current.items.find((i: any) => i.key === 'tokens.layout').target.value, {});
 	const ok = await m.adm('POST', '/restore-set', mg.id, { manifestVersion: 0, expectedManifestVersion: pv.json.data.currentManifestVersion, previewDigest: pv.json.data.previewDigest }); assert.equal(ok.status, 200, JSON.stringify(ok.json));
 	assert.deepEqual((await m.pub('')).json.data, { version: ok.json.data.manifestVersion, items: {} }, 'everything default again: no items, no tokensCss');

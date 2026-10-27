@@ -96,7 +96,7 @@ const PNG_ATLAS = (sha256: string, byteSize: number): DefaultFingerprint => ({ m
 const EMPTY_JSON_SHA = createHash('sha256').update('{}').digest('hex');
 const TOKENS_SOURCE = 'src/styles.css (:root = الداكن، .theme-light = الفاتح) - مرآة في TOKEN_REGISTRY (src/config/site-identity-tokens.ts)';
 /** the unwired reason of tokens.typography (the only token key that is not in WIRED_KEYS by default) */
-const TYPOGRAPHY_REASON = 'يُفعَّل بعد أن تثبت الواجهة أن توجيه الخط الحرفي \'Tajawal\' عبر المتغيّر --font-family يعرض الخط الافتراضي مطابقًا تمامًا؛ حتى ذلك الحين لا يقرأ أي مكوّن هذا المفتاح.';
+const TYPOGRAPHY_REASON = 'يقرأ الخط العام من المتغيّر --font-family (يُوجَّه إليه --font-body و --font-heading و --font-numeric في النظام التصميمي)؛ لا تُعرض هذه الرسالة إلا إن أُلغي ربط المفتاح.';
 const tokenKey = (o: { key: string; label: string; description: string; wired: boolean }): SiteIdentityKeyDef => ({
 	key: o.key, group: 'token', label: o.label, description: o.description, kind: 'json', allowedMimes: ['application/json'], maxBytes: 8 * 1024, dimensions: {},
 	defaultAsset: { type: 'tokens', source: TOKENS_SOURCE },
@@ -119,7 +119,6 @@ export const SITE_IDENTITY_REGISTRY: readonly SiteIdentityKeyDef[] = [
 			{ where: 'القائمة الجانبية للوحات', ref: 'src/app/sheards/dashboard/sidebar/sidebar.html:6' },
 			{ where: 'شريط لوحات التحكم', ref: 'src/app/sheards/dashboard/nav-dashboard/nav-dashboard.html:3' },
 			{ where: 'شاشة تحميل الصفحات', ref: 'src/app/sheards/page-loader/page-loader.html:7' },
-			{ where: 'شاشة تحميل التطبيق (app.ts)', ref: 'src/app/app.ts:27' },
 			{ where: 'صفحة الدخول', ref: 'src/app/pages/auth/login/login.html:16' },
 			{ where: 'صفحة التسجيل (موضعان)', ref: 'src/app/pages/auth/register/register.html:104,367' },
 			{ where: 'صفحة التحقق من الرمز', ref: 'src/app/pages/auth/verify-otp/verify-otp.html:24' },
@@ -136,7 +135,7 @@ export const SITE_IDENTITY_REGISTRY: readonly SiteIdentityKeyDef[] = [
 		description: 'الشعار الذي تعرضه صفحة index.html قبل أن يبدأ التطبيق (يُرسم قبل تشغيل أي JavaScript).',
 		kind: 'raster', allowedMimes: ['image/png', 'image/webp', 'image/svg+xml'], maxBytes: RASTER_MAX_BYTES, dimensions: MARK_DIMS,
 		defaultAsset: { type: 'file', path: '/assets/brand/waseet-mark.png' }, defaultFingerprint: MARK_FP,
-		usages: [{ where: 'شاشة التحميل الساكنة داخل الصفحة الأولى', ref: 'src/index.html:222' }],
+		usages: [{ where: 'شاشة التحميل الساكنة داخل الصفحة الأولى', ref: 'src/index.html:222' }, { where: 'شاشة تحميل التطبيق (app.ts) - نفس المفتاح، لا ملف مختلف', ref: 'src/app/app.ts:27' }],
 		notWiredReason: 'تُرسم شاشة التحميل الأولى من index.html قبل تشغيل JavaScript، أي قبل أن يتوفر ملف الهوية؛ لا يمكن تبديلها من الهوية المخزّنة دون تغيير آلية الإقلاع.',
 	},
 	{
@@ -209,7 +208,7 @@ export const SITE_IDENTITY_REGISTRY: readonly SiteIdentityKeyDef[] = [
 	tokenKey({ key: 'tokens.colors.light', label: 'ألوان الوضع الفاتح', wired: true, description: 'ألوان المتغيّرات المركزية (CSS custom properties) في الوضع الفاتح: الخلفيات والنصوص والحدود وألوان العلامة. تُحقن كطبقة تجاوز فوق styles.css ولا تُغيّر الألوان المكتوبة حرفيًا داخل المكوّنات.' }),
 	tokenKey({ key: 'tokens.colors.dark', label: 'ألوان الوضع الداكن', wired: true, description: 'ألوان المتغيّرات المركزية (CSS custom properties) في الوضع الداكن (الافتراضي). طبقة تجاوز فوق styles.css؛ لا تمسّ الألوان المكتوبة حرفيًا داخل المكوّنات.' }),
 	tokenKey({ key: 'tokens.layout', label: 'الأبعاد العامة', wired: true, description: 'العرض الأقصى للمحتوى واستدارة الزوايا (--container --radius --radius-sm).' }),
-	tokenKey({ key: 'tokens.typography', label: 'الخط العام', wired: false, description: 'عائلة الخط العامة (--font-family). الافتراضي Tajawal المضمّن في الموقع؛ لا يحمّل الموقع خطوطًا خارجية، فيعمل أي اسم آخر فقط إن كان الخط مثبّتًا على جهاز الزائر.' }),
+	tokenKey({ key: 'tokens.typography', label: 'الخط العام', wired: true, description: 'عائلة الخط العامة (--font-family). الافتراضي Tajawal المضمّن في الموقع؛ لا يحمّل الموقع خطوطًا خارجية، فيعمل أي اسم آخر فقط إن كان الخط مثبّتًا على جهاز الزائر.' }),
 ];
 
 /**
@@ -221,8 +220,8 @@ export const WIRED_KEYS: readonly string[] = [
 	'character.bebo.classic.sprites', 'character.bebo.classic.actions', 'character.bebo.classic.speaking', 'character.bebo.classic.antics', 'character.bebo.classic.emotions', 'character.bebo.classic.kitten',
 	'character.bebo.scout.sprites', 'character.bebo.scout.actions', 'character.bebo.scout.speaking', 'character.bebo.scout.antics', 'character.bebo.scout.emotions', 'character.bebo.scout.kitten',
 	'character.bebo.traffic', 'character.bebo.expressions',
-	// design tokens (round 5): tokens.typography is deliberately NOT here until the FE proves the identical default rendering of the --font-family routing (one-line flip by the coordinator)
-	'tokens.colors.light', 'tokens.colors.dark', 'tokens.layout',
+	// design tokens (round 5). tokens.typography joined after the FE proved the identical default rendering of the --font-family routing (design-system --font-body/heading/numeric)
+	'tokens.colors.light', 'tokens.colors.dark', 'tokens.layout', 'tokens.typography',
 ];
 
 const BY_KEY: ReadonlyMap<string, SiteIdentityKeyDef> = new Map(SITE_IDENTITY_REGISTRY.map(d => [d.key, d]));

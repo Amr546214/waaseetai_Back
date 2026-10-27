@@ -4,24 +4,24 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { TOKEN_COUNTS, TOKEN_KEYS, TOKEN_REGISTRY, tokenDefault, tokensOfKey } from '../config/site-identity-tokens';
 import { SITE_IDENTITY_REGISTRY, WIRED_KEYS, identityDef, describeRules } from '../config/site-identity.registry';
-import { TOKEN_MAX_BYTES, TokenRejected, buildTokensCss, canonValue, validateTokenBytes, validateTokenUpload, validateTokenValue } from './site-identity-tokens';
+import { TOKEN_MAX_BYTES, TokenRejected, buildTokensCss, LIGHT_SELECTOR, canonValue, validateTokenBytes, validateTokenUpload, validateTokenValue } from './site-identity-tokens';
 import { validateIdentityUpload } from './site-identity-upload';
 
 const reasonOf = (fn: () => unknown): string => { try { fn(); } catch (e) { assert.ok(e instanceof TokenRejected, `expected TokenRejected, got ${String(e)}`); return (e as TokenRejected).reason; } return 'ACCEPTED'; };
 const val = (key: string, v: unknown) => validateTokenValue(key, v);
 const bytes = (o: unknown) => Buffer.from(typeof o === 'string' ? o : JSON.stringify(o), 'utf8');
 
-test('tokens: registry shape and exact counts (37 declared in :root + the new --font-family, 34 colour-like of which 29 redefined by .theme-light and 5 shared, 3 layout, 1 typography)', () => {
-	assert.deepEqual(TOKEN_COUNTS, { declaredInRoot: 37, colorLike: 34, redefinedByThemeLight: 29, sharedWithDark: 5, layout: 3, typography: 1 });
-	assert.deepEqual(TOKEN_REGISTRY.filter(t => t.scope === 'color' && t.light === undefined).map(t => t.name).sort(), ['--ai', '--ai-bg', '--blue', '--grad', '--teal']);
+test('tokens: registry shape and exact counts (37 declared in :root + the new --font-family, 34 colour-like of which 33 redefined in light (styles.css + design system) and only --grad shared, 3 layout, 1 typography)', () => {
+	assert.deepEqual(TOKEN_COUNTS, { declaredInRoot: 37, colorLike: 34, redefinedByThemeLight: 33, sharedWithDark: 1, layout: 3, typography: 1 });
+	assert.deepEqual(TOKEN_REGISTRY.filter(t => t.scope === 'color' && t.light === undefined).map(t => t.name).sort(), ['--grad']);
 	assert.equal(new Set(TOKEN_REGISTRY.map(t => t.name)).size, TOKEN_REGISTRY.length, 'names unique');
 	for (const t of TOKEN_REGISTRY) assert.match(t.name, /^--[a-z0-9-]{1,40}$/);
-	// registry keys: group token, kind json, 4 keys, only typography unwired
+	// registry keys: group token, kind json, 4 keys, all four wired
 	const keys = SITE_IDENTITY_REGISTRY.filter(d => d.group === 'token');
 	assert.deepEqual(keys.map(d => d.key), [...TOKEN_KEYS]);
 	for (const d of keys) { assert.equal(d.kind, 'json'); assert.deepEqual(d.allowedMimes, ['application/json']); assert.equal(d.maxBytes, TOKEN_MAX_BYTES); assert.equal(d.defaultFingerprint.byteSize, 2); assert.equal(d.defaultFingerprint.mime, 'application/json'); assert.ok(describeRules(d).length >= 2); }
-	assert.deepEqual(keys.filter(d => WIRED_KEYS.includes(d.key)).map(d => d.key), ['tokens.colors.light', 'tokens.colors.dark', 'tokens.layout']);
-	assert.ok(keys.find(d => d.key === 'tokens.typography')!.notWiredReason.length > 20);
+	assert.deepEqual(keys.filter(d => WIRED_KEYS.includes(d.key)).map(d => d.key), ['tokens.colors.light', 'tokens.colors.dark', 'tokens.layout', 'tokens.typography']);
+	assert.ok(keys.every(d => d.notWiredReason.length > 20));
 	assert.equal(tokensOfKey('tokens.colors.light').length, 34); assert.equal(tokensOfKey('tokens.colors.dark').length, 34); assert.equal(tokensOfKey('tokens.layout').length, 3); assert.equal(tokensOfKey('tokens.typography').length, 1);
 });
 
@@ -29,32 +29,16 @@ test('tokens: every default is already in canonical form and satisfies its own g
 	for (const t of TOKEN_REGISTRY) for (const v of [t.dark, t.light]) if (v !== undefined) assert.equal(canonValue(t, v), v, `${t.name}: ${v}`);
 });
 
-/** the FE styles.css is the source of the defaults: when it is reachable (sibling worktree or SITE_IDENTITY_FE_STYLES) the registry must equal it; otherwise this test reports a skip, never a pass */
-const FE_STYLES = [process.env.SITE_IDENTITY_FE_STYLES, path.resolve(__dirname, '../../../wt-fe-id/src/styles.css'), path.resolve(__dirname, '../../../sc-fe-team/src/styles.css')].filter(Boolean) as string[];
-const stylesPath = FE_STYLES.find(p => fs.existsSync(p));
-const norm = (v: string) => v.toLowerCase().replace(/\s+/g, '').replace(/(\.\d*?)0+(?!\d)/g, '$1');
-function block(css: string, start: RegExp): Record<string, string> {
-	const m = start.exec(css); assert.ok(m, `block ${start} not found`);
-	let i = css.indexOf('{', m!.index) + 1; let depth = 1; let body = '';
-	for (; i < css.length && depth > 0; i++) { const ch = css[i]; if (ch === '{') depth++; if (ch === '}') { depth--; if (!depth) break; } body += ch; }
-	const out: Record<string, string> = {}; let cur = ''; let paren = 0;
-	for (const ch of body.replace(/\/\*[\s\S]*?\*\//g, '')) { if (ch === '(') paren++; if (ch === ')') paren--; if (ch === ';' && !paren) { push(cur); cur = ''; } else cur += ch; }
-	push(cur);
-	function push(d: string) { const k = d.indexOf(':'); if (k > 0 && d.trim().startsWith('--')) out[d.slice(0, k).trim()] = d.slice(k + 1).trim(); }
-	return out;
-}
-test('tokens: defaults mirror the FE src/styles.css :root (dark) and .theme-light (light) exactly', { skip: stylesPath ? false : 'FE styles.css is not reachable from this checkout (set SITE_IDENTITY_FE_STYLES)' }, () => {
-	const css = fs.readFileSync(stylesPath!, 'utf8');
-	const root = block(css, /\n:root\s*\{\s*\n\s*--pop-bg/); const light = block(css, /\n\.theme-light\s*\{\s*\n\s*--pop-bg/);
-	assert.equal(Object.keys(root).length, TOKEN_COUNTS.declaredInRoot, `:root declares ${Object.keys(root).length} custom properties`);
-	assert.equal(Object.keys(light).length, TOKEN_COUNTS.redefinedByThemeLight, '.theme-light redefines 29');
+/** the SOURCE of the defaults is the EFFECTIVE computed value of the production build (FE golden: styles.css + waseet-design-system.css, default state, per theme). Skipped (never passed) when unreachable. */
+const GOLDEN = [process.env.SITE_IDENTITY_FE_GOLDEN, path.resolve(__dirname, '../../../wt-fe-id/src/app/core/identity/identity-tokens.effective.golden.json'), path.resolve(__dirname, '../../../sc-fe-team/src/app/core/identity/identity-tokens.effective.golden.json')].filter(Boolean) as string[];
+const goldenPath = GOLDEN.find(p => fs.existsSync(p));
+const norm = (v: string) => v.toLowerCase().replace(/\s+/g, '').replace(/(\.\d*?)0+(?![\d])/g, '$1').replace(/^"tajawal"$/, "'tajawal'");
+test('tokens: EVERY default (dark and light) equals the effective computed value of the production build', { skip: goldenPath ? false : 'FE effective golden is not reachable (set SITE_IDENTITY_FE_GOLDEN)' }, () => {
+	const g = JSON.parse(fs.readFileSync(goldenPath!, 'utf8')) as { dark: Record<string, string>; light: Record<string, string> };
+	assert.equal(Object.keys(g.dark).length, TOKEN_REGISTRY.length); assert.equal(Object.keys(g.light).length, TOKEN_REGISTRY.length);
 	for (const t of TOKEN_REGISTRY) {
-		if (t.name === '--font-family') { assert.equal(root[t.name], undefined, '--font-family is not declared in :root yet (the FE adds it when it routes Tajawal through it)'); continue; }
-		assert.equal(norm(root[t.name] ?? '<missing>'), norm(t.dark), `${t.name} dark`);
-		if (t.scope === 'color') {
-			if (t.light === undefined) assert.equal(light[t.name], undefined, `${t.name} must be shared (not redefined in .theme-light)`);
-			else assert.equal(norm(light[t.name] ?? '<missing>'), norm(t.light), `${t.name} light`);
-		}
+		assert.equal(norm(g.dark[t.name] ?? '<missing>'), norm(t.dark), `${t.name} dark`);
+		if (t.scope === 'color') assert.equal(norm(g.light[t.name] ?? '<missing>'), norm(t.light ?? t.dark), `${t.name} light`);
 	}
 });
 
@@ -68,9 +52,10 @@ test('tokens: accepted values are canonicalised (case, spaces, alpha) and entrie
 	assert.deepEqual(val('tokens.layout', { '--container': '1100px', '--radius': '1rem', '--radius-sm': '10px' }).value, { '--container': '1100px', '--radius': '1rem' });
 	assert.deepEqual(val('tokens.typography', { '--font-family': 'Cairo, "IBM Plex Sans Arabic", sans-serif' }).value, { '--font-family': "'Cairo','IBM Plex Sans Arabic',sans-serif" });
 	assert.deepEqual(val('tokens.typography', { '--font-family': "'خط عربي',serif" }).value, { '--font-family': "'خط عربي',serif" });
-	// a light-theme "default" of a shared name is the DARK default
-	assert.equal(tokenDefault('tokens.colors.light', TOKEN_REGISTRY.find(t => t.name === '--teal')!), '#2bd4c7');
-	assert.equal(reasonOf(() => val('tokens.colors.light', { '--teal': '#2BD4C7' })), 'EMPTY_OVERRIDES');
+	// a light-theme "default" of a shared name (--grad) is the DARK default; --teal has its own light value
+	assert.equal(tokenDefault('tokens.colors.light', TOKEN_REGISTRY.find(t => t.name === '--grad')!), 'linear-gradient(135deg,#2bd4c7,#2b7fff)');
+	assert.equal(tokenDefault('tokens.colors.light', TOKEN_REGISTRY.find(t => t.name === '--teal')!), '#0f8a7f');
+	assert.equal(reasonOf(() => val('tokens.colors.light', { '--teal': '#0F8A7F' })), 'EMPTY_OVERRIDES');
 	assert.equal(val('tokens.colors.light', { '--teal': '#14b8a6' }).value['--teal'], '#14b8a6');
 });
 
@@ -90,7 +75,7 @@ test('tokens: attacks are rejected (url(), expression(), var() injection, ;, bra
 	for (const [label, v] of [['url in shadow', '0 0 1px url(x)'], ['inset', 'inset 0 0 1px #000'], ['unitless', '1 2 3 #000'], ['4 layers', '0 0 1px #000,0 0 1px #000,0 0 1px #000,0 0 1px #000'], ['huge', '0 0 999px #000'], ['negative blur', '0 0 -2px #000'], ['no colour', '0 2px 3px'], ['semicolon', '0 0 1px #000;x']] as const) assert.notEqual(reasonOf(() => val('tokens.colors.dark', { '--card-shadow': v })), 'ACCEPTED', `shadow ${label}`);
 	for (const [label, v] of [['em', '1em'], ['vw', '90vw'], ['percent', '50%'], ['var', 'var(--x)'], ['calc', 'calc(1px)'], ['too big', '9999px'], ['too small container', '100px'], ['negative', '-4px'], ['no unit', '16']] as const) assert.notEqual(reasonOf(() => val('tokens.layout', { '--container': v })), 'ACCEPTED', `length ${label}`);
 	assert.equal(reasonOf(() => val('tokens.layout', { '--radius': '65px' })), 'OUT_OF_RANGE');
-	for (const [label, v] of [['url', "url(x),sans-serif"], ['no generic fallback', "'Cairo'"], ['inherit', 'inherit,sans-serif'], ['7 entries', 'a,b,c,d,e,f,serif'], ['brace', "'a{',serif"], ['semicolon', "Cairo;color:red,serif"], ['quote break', "'a\\'b',serif"], ['digit first', "'9x',serif"], ['empty entry', "a,,serif"], ['long name', `'${'x'.repeat(41)}',serif`]] as const) assert.notEqual(reasonOf(() => val('tokens.typography', { '--font-family': v })), 'ACCEPTED', `font ${label}`);
+	for (const [label, v] of [['url', "url(x),sans-serif"], ['inherit', 'inherit,sans-serif'], ['7 entries', 'a,b,c,d,e,f,serif'], ['brace', "'a{',serif"], ['semicolon', "Cairo;color:red,serif"], ['quote break', "'a\\'b',serif"], ['digit first', "'9x',serif"], ['empty entry', "a,,serif"], ['long name', `'${'x'.repeat(41)}',serif`]] as const) assert.notEqual(reasonOf(() => val('tokens.typography', { '--font-family': v })), 'ACCEPTED', `font ${label}`);
 	// names / structure
 	assert.equal(reasonOf(() => val('tokens.colors.dark', { '--nope': '#fff' })), 'UNKNOWN_TOKEN');
 	assert.equal(reasonOf(() => val('tokens.colors.dark', { '--radius': '10px' })), 'UNKNOWN_TOKEN', 'a layout token is not valid in a colour set');
@@ -135,17 +120,19 @@ test('tokens: CSS builder - empty = "", exact shape, dark scoped away from light
 	assert.equal(buildTokensCss({}), ''); assert.equal(buildTokensCss({ 'tokens.colors.dark': {}, 'tokens.layout': {} }), '');
 	const css = buildTokensCss({
 		'tokens.layout': { '--container': '1100px' }, 'tokens.typography': { '--font-family': "'Cairo',sans-serif" },
-		'tokens.colors.dark': { '--pg': '#0b1020', '--teal': '#14b8a6' }, 'tokens.colors.light': { '--pg': '#ffffff' },
+		'tokens.colors.dark': { '--pg': '#0b1020', '--grad': 'linear-gradient(90deg,#111,#222)' }, 'tokens.colors.light': { '--pg': '#ffffff' },
 	});
 	assert.equal(css, [
 		":root{--container:1100px;--font-family:'Cairo',sans-serif}",
-		':root:not(.theme-light):not(.light-theme){--pg:#0b1020;--teal:#14b8a6}',
-		'.theme-light.theme-light,.light-theme.light-theme{--pg:#ffffff;--teal:#2bd4c7}', // --teal is shared: light keeps the platform value when only dark overrides it
+		':root:not(.theme-light):not(.light-theme){--pg:#0b1020;--grad:linear-gradient(90deg,#111,#222)}',
+		`${LIGHT_SELECTOR}{--pg:#ffffff;--grad:linear-gradient(135deg,#2bd4c7,#2b7fff)}`, // --grad is the one name light does not redefine: light keeps the platform value when only dark overrides it
 	].join('\n'));
 	// light override of a shared name wins over the pin
-	assert.match(buildTokensCss({ 'tokens.colors.dark': { '--teal': '#14b8a6' }, 'tokens.colors.light': { '--teal': '#0f766e' } }), /\.theme-light\.theme-light,\.light-theme\.light-theme\{--teal:#0f766e\}/);
+	assert.equal(buildTokensCss({ 'tokens.colors.dark': { '--grad': 'linear-gradient(90deg,#111,#222)' }, 'tokens.colors.light': { '--grad': 'linear-gradient(90deg,#333,#444)' } }).split('\n')[1], `${LIGHT_SELECTOR}{--grad:linear-gradient(90deg,#333,#444)}`);
+	// a dark-only override of a name light DOES redefine never restates a light value
+	assert.equal(buildTokensCss({ 'tokens.colors.dark': { '--teal': '#14b8a6' } }), ':root:not(.theme-light):not(.light-theme){--teal:#14b8a6}');
 	// only-light override: no dark rule, no pins
-	assert.equal(buildTokensCss({ 'tokens.colors.light': { '--txt': '#111111' } }), '.theme-light.theme-light,.light-theme.light-theme{--txt:#111111}');
+	assert.equal(buildTokensCss({ 'tokens.colors.light': { '--txt': '#111111' } }), `${LIGHT_SELECTOR}{--txt:#111111}`);
 	// poisoned input (as if read from a tampered row) is dropped block-wise
 	const poisoned = buildTokensCss({ 'tokens.colors.dark': { '--teal': 'url(x);}body{x:y' }, 'tokens.layout': { '--radius': '8px' } });
 	assert.equal(poisoned, ':root{--radius:8px}');

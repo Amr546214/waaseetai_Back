@@ -1,8 +1,8 @@
 /**
  * TOKEN_REGISTRY - the design tokens (CSS custom properties) that the identity manager may override («التحكم بالموقع» > الهوية > الألوان والخطوط).
  *
- * Source of the defaults: the FE `src/styles.css` (wt-fe-id @ 66ad2972) `:root` block (= DARK, the default theme) and `.theme-light` block (= LIGHT). Only variables that REALLY are the central layer are listed:
- * 37 declared in `:root` (+ the new `--font-family`); 29 of them are redefined by `.theme-light`; 5 colour-like ones (--teal --blue --ai --ai-bg --grad) are NOT redefined by `.theme-light`, so their light default IS the dark default
+ * Source of the defaults: the EFFECTIVE computed values of the production build (FE `identity-tokens.effective.golden.json`: styles.css + waseet-design-system.css, default state) - styles.css alone is NOT enough, the design system redefines --teal/--blue/--ai/--ai-bg/--card-shadow/--font-family. Originally read from `src/styles.css` (wt-fe-id @ 66ad2972) `:root` block (= DARK, the default theme) and `.theme-light` block (= LIGHT). Only variables that REALLY are the central layer are listed:
+ * 37 declared in `:root` (+ the new `--font-family`); 29 of them are redefined by `.theme-light`; only --grad is NOT redefined in light, so their light default IS the dark default
  * (`sharedWithDark`). Literal colours written directly in components / override blocks are NOT tokens and stay unbound.
  *
  * The strings below are in the CANONICAL form of src/utils/site-identity-tokens.ts (lower-case hex, no spaces after commas, alpha without a leading zero or trailing zeros, `0` lengths with a unit-less shadow zero);
@@ -27,7 +27,7 @@ const p = (name: string, label: string, dark: string, light?: string): TokenDef 
 export const TOKEN_REGISTRY: readonly TokenDef[] = [
 	c('--pg', 'خلفية الصفحة', '#070d24', '#eef2fa'),
 	c('--pop-bg', 'خلفية القوائم المنبثقة والأدراج', 'rgba(9,18,48,.98)', '#ffffff'),
-	p('--surface', 'سطح البطاقات الزجاجية', 'linear-gradient(135deg,rgba(255,255,255,.04),rgba(255,255,255,.01))', '#ffffff'),
+	p('--surface', 'سطح البطاقات الزجاجية', 'linear-gradient(135deg,rgba(255,255,255,.04),rgba(255,255,255,.01))', '#fff'),
 	c('--border', 'الحدود العامة', 'rgba(255,255,255,.08)', '#e7eaf1'),
 	c('--crd-bd', 'حدود البطاقات', 'rgba(255,255,255,.08)', '#e2e8f4'),
 	c('--crd-bg', 'خلفية البطاقات', 'rgba(255,255,255,.03)', '#ffffff'),
@@ -36,20 +36,20 @@ export const TOKEN_REGISTRY: readonly TokenDef[] = [
 	c('--sec-bd', 'حدود الأقسام', 'rgba(255,255,255,.07)', '#e2e8f4'),
 	c('--sec-bd-hover', 'حدود الأقسام عند المرور', 'rgba(0,210,255,.35)', 'rgba(43,127,255,.35)'),
 	c('--sec-bg-hover', 'خلفية الأقسام عند المرور', 'rgba(255,255,255,.07)', '#fafbff'),
-	{ name: '--card-shadow', type: 'shadow', scope: 'color', label: 'ظل البطاقات', dark: 'none', light: '0 2px 10px rgba(15,23,42,.07),0 1px 3px rgba(15,23,42,.05)' },
-	c('--txt', 'لون النص الأساسي', '#ffffff', '#0f172a'),
+	{ name: '--card-shadow', type: 'shadow', scope: 'color', label: 'ظل البطاقات', dark: 'none', light: '0 2px 10px rgba(15,23,42,.08),0 1px 3px rgba(15,23,42,.05)' },
+	c('--txt', 'لون النص الأساسي', '#fff', '#0f172a'),
 	c('--txt-2', 'لون النص الثانوي', '#a8b2d1', '#475569'),
 	c('--txt-3', 'لون النص الخافت', '#6b7699', '#5b6472'),
-	c('--teal', 'اللون التيل (العلامة)', '#2bd4c7'),
+	c('--teal', 'اللون التيل (العلامة)', '#2bd4c7', '#0f8a7f'),
 	c('--teal-txt', 'نص باللون التيل', '#2bd4c7', '#0f8a7f'),
-	c('--blue', 'اللون الأزرق (العلامة)', '#2b7fff'),
+	c('--blue', 'اللون الأزرق (العلامة)', '#2b7fff', '#1d6fe0'),
 	c('--blue-txt', 'نص باللون الأزرق', '#5da0ff', '#1d6fe0'),
 	c('--green', 'اللون الأخضر (النجاح)', '#0fa99a', '#0a6f64'),
 	c('--kahr', 'اللون الكهرماني (التنبيه)', '#d98a0b', '#9a6700'),
 	c('--red', 'اللون الأحمر (الخطأ)', '#ff8c69', '#b42318'),
-	c('--ai', 'لون الذكاء الاصطناعي', '#7b2fbe'),
+	c('--ai', 'لون الذكاء الاصطناعي', '#7b2fbe', '#6b27a5'),
 	c('--ai-txt', 'نص الذكاء الاصطناعي', '#a56be0', '#6b27a5'),
-	c('--ai-bg', 'خلفية عناصر الذكاء الاصطناعي', 'rgba(123,47,190,.1)'),
+	c('--ai-bg', 'خلفية عناصر الذكاء الاصطناعي', 'rgba(123,47,190,.15)', 'rgba(123,47,190,.1)'),
 	c('--ai-border', 'حدود عناصر الذكاء الاصطناعي', 'rgba(123,47,190,.22)', 'rgba(123,47,190,.28)'),
 	c('--ai-nte-bd', 'حدود ملاحظة الذكاء الاصطناعي', 'rgba(123,47,190,.22)', 'rgba(123,47,190,.28)'),
 	p('--ai-nte-bg', 'خلفية ملاحظة الذكاء الاصطناعي', 'linear-gradient(135deg,rgba(123,47,190,.09),rgba(43,127,255,.06))', 'rgba(123,47,190,.06)'),
@@ -62,7 +62,7 @@ export const TOKEN_REGISTRY: readonly TokenDef[] = [
 	{ name: '--container', type: 'length', scope: 'layout', label: 'العرض الأقصى للمحتوى', dark: '1240px', min: { px: 320, rem: 20 }, max: { px: 2400, rem: 150 } },
 	{ name: '--radius', type: 'length', scope: 'layout', label: 'استدارة الزوايا', dark: '16px', min: { px: 0, rem: 0 }, max: { px: 64, rem: 4 } },
 	{ name: '--radius-sm', type: 'length', scope: 'layout', label: 'استدارة الزوايا الصغيرة', dark: '10px', min: { px: 0, rem: 0 }, max: { px: 64, rem: 4 } },
-	{ name: '--font-family', type: 'font-family', scope: 'typography', label: 'الخط العام', dark: "'Tajawal',system-ui,sans-serif" },
+	{ name: '--font-family', type: 'font-family', scope: 'typography', label: 'الخط العام', dark: "'Tajawal'" },
 ];
 
 export const TOKEN_KEYS = ['tokens.colors.light', 'tokens.colors.dark', 'tokens.layout', 'tokens.typography'] as const;

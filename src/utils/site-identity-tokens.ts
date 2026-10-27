@@ -120,7 +120,7 @@ export function canonFontFamily(raw: string, name: string): string {
 		if (!/^[\p{L}][\p{L}\p{N} _-]{0,39}$/u.test(nm)) return reject('BAD_VALUE', 'اسم الخط يقبل حروفًا وأرقامًا ومسافة وشرطة فقط (حتى 40 حرفًا).', name);
 		return `'${nm}'`;
 	});
-	if (!GENERIC_FAMILIES.includes(out[out.length - 1])) return reject('BAD_VALUE', 'يجب أن يكون آخر عنصر في قائمة الخطوط عائلة عامة (sans-serif أو serif أو system-ui ...).', name);
+	// no generic fallback is demanded: the site's --font-body/--font-heading/--font-numeric append `, system-ui, sans-serif` themselves
 	return out.join(',');
 }
 
@@ -190,13 +190,15 @@ export function validateTokenUpload(key: string, buf: Buffer): ValidatedUpload {
 
 // ---------------------------------------------------------------------------------------------------- CSS
 export type TokenSets = Partial<Record<TokenKey, Record<string, string>>>;
+/** (0,2,x) specificity on every element that may carry the light class (html, body, any): beats the html.theme-light / body.theme-light base rules and the dark :root rule */
+export const LIGHT_SELECTOR = 'html.theme-light.theme-light,html.light-theme.light-theme,body.theme-light.theme-light,body.light-theme.light-theme,.theme-light.theme-light,.light-theme.light-theme';
 const decl = (o: Record<string, string>) => Object.entries(o).map(([k, v]) => `${k}:${v}`).join(';');
 
 /**
  * The ready-to-inject CSS for the ACTIVE override sets ('' when there is nothing to inject). Values must already be validated (they are re-checked here: anything unsafe aborts with '' for that block).
  *   :root{layout + typography}
  *   :root:not(.theme-light):not(.light-theme){dark overrides}
- *   .theme-light.theme-light,.light-theme.light-theme{light overrides + pins of the shared names a dark override would otherwise leak into light}
+ *   LIGHT_SELECTOR{light overrides + pins of the shared names (today only --grad) a dark override would otherwise leak into light}
  */
 export function buildTokensCss(sets: TokenSets): string {
 	const safe = (key: TokenKey): Record<string, string> => {
@@ -213,7 +215,7 @@ export function buildTokensCss(sets: TokenSets): string {
 	const rules = [
 		Object.keys(layout).length ? `:root{${decl(layout)}}` : '',
 		Object.keys(dark).length ? `:root:not(.theme-light):not(.light-theme){${decl(dark)}}` : '',
-		Object.keys(lightSorted).length ? `.theme-light.theme-light,.light-theme.light-theme{${decl(lightSorted)}}` : '',
+		Object.keys(lightSorted).length ? `${LIGHT_SELECTOR}{${decl(lightSorted)}}` : '',
 	].filter(Boolean);
 	return rules.join('\n');
 }
