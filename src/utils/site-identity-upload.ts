@@ -52,9 +52,39 @@ export function sniffKind(buf: Buffer): SniffedKind | 'gif' | 'pdf' | 'markup' |
 
 // Words that have no business inside a bitmap: a polyglot (an image that is also a page / script) is refused, whatever its header says.
 const POLYGLOT_MARKERS = [/<\s*script/i, /<\s*html/i, /<\s*iframe/i, /<\s*svg/i, /<\?php/i, /javascript\s*:/i, /<\s*body/i, /onerror\s*=/i, /onload\s*=/i, /<!DOCTYPE/i];
-function assertNoPolyglot(buf: Buffer): void {
-	const text = buf.toString('latin1');
-	for (const re of POLYGLOT_MARKERS) if (re.test(text)) throw new UploadRejected('الملف يحتوي نصًا برمجيًا أو صفحة مضمّنة داخل الصورة، وهذا غير مسموح.', 'POLYGLOT');
+const refusePolyglot = () => new UploadRejected('الملف يحتوي نصًا برمجيًا أو صفحة مضمّنة داخل الصورة، وهذا غير مسموح.', 'POLYGLOT');
+
+/**
+ * The byte ranges [start, end) of the DATA of every `caBX` chunk of a PNG (the C2PA / "Content Credentials" manifest store). The REAL default Bebo atlases carry one, and it embeds a small <svg> thumbnail as plain text,
+ * so a naive whole-file scan refuses the platform's own default files (and every export of the same tool). Walks the chunk list only as far as it is well formed; a malformed list yields what was found so far
+ * (the structural validation of parsePng refuses the file later anyway).
+ */
+function pngCaBxRanges(b: Buffer): Array<[number, number]> {
+	const out: Array<[number, number]> = []; let off = 8;
+	while (off + 12 <= b.length) {
+		const len = b.readUInt32BE(off); const type = b.toString('latin1', off + 4, off + 8);
+		if (len > 0x7fffffff || off + 12 + len > b.length) break;
+		if (type === 'caBX') out.push([off + 8, off + 8 + len]);
+		off += 12 + len;
+		if (type === 'IEND') break;
+	}
+	return out;
+}
+
+/**
+ * Polyglot guard. Everything is scanned with every marker EXCEPT the data of a PNG `caBX` chunk, which is scanned with every marker except `<svg` (an embedded thumbnail is not a page: the file is served as
+ * image/png with nosniff, and the SVG sanitiser path is never used for it). A script / html / iframe / php / javascript: / event-handler / doctype inside caBX is still refused.
+ */
+function assertNoPolyglot(buf: Buffer, kind?: SniffedKind): void {
+	const ranges = kind === 'png' ? pngCaBxRanges(buf) : [];
+	if (!ranges.length) { const text = buf.toString('latin1'); for (const re of POLYGLOT_MARKERS) if (re.test(text)) throw refusePolyglot(); return; }
+	const parts: Buffer[] = []; let at = 0;
+	for (const [s, e] of ranges) { parts.push(buf.subarray(at, s)); at = e; }
+	parts.push(buf.subarray(at));
+	const outside = Buffer.concat(parts).toString('latin1');
+	for (const re of POLYGLOT_MARKERS) if (re.test(outside)) throw refusePolyglot();
+	const inside = Buffer.concat(ranges.map(([s, e]) => buf.subarray(s, e))).toString('latin1');
+	for (const re of POLYGLOT_MARKERS) if (re !== POLYGLOT_MARKERS[3] && re.test(inside)) throw refusePolyglot();
 }
 
 interface Parsed { width: number; height: number }
@@ -203,7 +233,7 @@ export async function validateIdentityUpload(def: SiteIdentityKeyDef, input: Buf
 			note: r.changed ? `نُظِّف ملف SVG: أُزيل ${r.removed} عنصر/خاصية غير مسموحة (${r.removedDetail.slice(0, 6).join('؛ ')})` : null, sanitized: { changed: r.changed, removed: r.removed } };
 	}
 
-	assertNoPolyglot(input);
+	assertNoPolyglot(input, kind);
 	const p = kind === 'png' ? parsePng(input) : kind === 'jpeg' ? parseJpeg(input) : kind === 'webp' ? parseWebp(input) : parseIco(input);
 	assertDimensions(def, mime, p.width, p.height);
 	return { mime, bytes: input, sha256: sha256Of(input), byteSize: input.length, width: p.width, height: p.height, note: null, sanitized: { changed: false, removed: 0 } };

@@ -20,7 +20,7 @@ const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 const FX = path.join(__dirname, '..', 'testing', 'fixtures', 'site-identity');
 const fx = (n: string) => fs.readFileSync(path.join(FX, n));
 
-async function mount(e: any, serviceOpts: { isWired?: (k: string) => boolean; faults?: any; db?: any } = {}) {
+export async function mount(e: any, serviceOpts: { isWired?: (k: string) => boolean; faults?: any; db?: any } = {}) {
 	const express = (await import('express')).default; const { globalErrorHandler } = await import('../middlewares/error.middleware');
 	const { buildAdminSiteIdentityRouter } = await import('../routes/admin-site-identity.routes'); const { buildPublicSiteIdentityRouter } = await import('../routes/public-site-identity.routes');
 	const { SiteIdentityService } = await import('./site-identity.service');
@@ -39,11 +39,11 @@ async function mount(e: any, serviceOpts: { isWired?: (k: string) => boolean; fa
 	const upload = (who: string, key: string, bytes: Uint8Array, mime = 'image/png', name = 'a.png') => { const f = new FormData(); f.append('file', new Blob([bytes], { type: mime }), name); return adm('POST', `/${key}/upload`, who, f); };
 	const handle = { service, raw, adm, pub, upload, close: async () => { server.closeAllConnections?.(); await new Promise(r => server.close(r)); } }; opened.push(handle); return handle;
 }
-const reset = async (e: any) => { await e.prisma.siteIdentityState.deleteMany({}); await e.prisma.siteIdentityManifest.deleteMany({}); await e.prisma.siteIdentityAsset.deleteMany({}); await e.prisma.accountAuditLog.deleteMany({ where: { eventType: { startsWith: 'SITE_IDENTITY_' } } }); };
-const staged = async (m: any, who: string, key: string, tag: string, w = 300, h = 200) => { const r = await m.upload(who, key, png(w, h, { text: tag })); assert.equal(r.status, 201, JSON.stringify(r.json)); return r.json.data; };
-const publish = (m: any, who: string, key: string, versionId: string, expectedVersion: number) => m.adm('POST', `/${key}/publish`, who, { versionId, expectedVersion });
+export const reset = async (e: any) => { await e.prisma.siteIdentityState.deleteMany({}); await e.prisma.siteIdentityManifest.deleteMany({}); await e.prisma.siteIdentityAsset.deleteMany({}); await e.prisma.accountAuditLog.deleteMany({ where: { eventType: { startsWith: 'SITE_IDENTITY_' } } }); };
+export const staged = async (m: any, who: string, key: string, tag: string, w = 300, h = 200) => { const r = await m.upload(who, key, png(w, h, { text: tag })); assert.equal(r.status, 201, JSON.stringify(r.json)); return r.json.data; };
+export const publish = (m: any, who: string, key: string, versionId: string, expectedVersion: number) => m.adm('POST', `/${key}/publish`, who, { versionId, expectedVersion });
 const manifestNow = async (m: any, who: string) => (await m.adm('GET', '/', who)).json.data.manifestVersion as number;
-const dbState = async (e: any) => JSON.stringify({ s: await e.prisma.siteIdentityState.findMany({ orderBy: { key: 'asc' } }), m: await e.prisma.siteIdentityManifest.count(), a: (await e.prisma.siteIdentityAsset.findMany({ select: { id: true, status: true, sha256: true }, orderBy: { id: 'asc' } })), l: await e.prisma.accountAuditLog.count({ where: { eventType: { startsWith: 'SITE_IDENTITY_' } } }) });
+export const dbState = async (e: any) => JSON.stringify({ s: await e.prisma.siteIdentityState.findMany({ orderBy: { key: 'asc' } }), m: await e.prisma.siteIdentityManifest.count(), a: (await e.prisma.siteIdentityAsset.findMany({ select: { id: true, status: true, sha256: true }, orderBy: { id: 'asc' } })), l: await e.prisma.accountAuditLog.count({ where: { eventType: { startsWith: 'SITE_IDENTITY_' } } }) });
 const body = (j: any) => (j.data ?? j);
 
 // ---------------------------------------------------------------------------------------------------------------- A

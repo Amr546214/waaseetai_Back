@@ -266,7 +266,7 @@ export class SiteIdentityService {
 						const max = await tx.siteIdentityAsset.aggregate({ where: { key }, _max: { version: true } });
 						const row = await tx.siteIdentityAsset.create({ data: { key, version: (max._max.version ?? 0) + 1, status: 'STAGED', mime: v.mime, bytes: Uint8Array.from(v.bytes), sha256: v.sha256, width: v.width, height: v.height, byteSize: v.byteSize, note: v.note, createdById: actorId }, select: META });
 						await accountAuditLogService.record({ userId: actorId, eventType: 'SITE_IDENTITY_UPLOADED', category: LogCategory.SYSTEM_AUDIT, source: 'ADMIN', severity: 'INFO', title: 'رفع نسخة جديدة من هوية الموقع',
-							summary: `رفع مسودة ${def.label} (نسخة ${row.version}) بانتظار الاعتماد`, details: { identityKey: key, version: row.version, sha: short(v.sha256), mime: v.mime, byteSize: v.byteSize, sanitizedRemoved: v.sanitized.removed, ...(def.kind === 'json' ? { tokenNames: Object.keys(JSON.parse(v.bytes.toString('utf8'))).join(' ').slice(0, 480) } : {}) },
+							summary: `رفع مسودة ${def.label} (نسخة ${row.version}) بانتظار الاعتماد`, details: { identityKey: key, version: row.version, sha: short(v.sha256), mime: v.mime, byteSize: v.byteSize, sanitizedRemoved: v.sanitized.removed, ...(def.kind === 'json' ? { overrideNames: Object.keys(JSON.parse(v.bytes.toString('utf8'))).join(' ').slice(0, 480) } : {}) },
 							context: { ipAddress: ctx.ip, device: ctx.device, actorLabel: 'ADMIN' } }, tx);
 						return { ...(await withActors(tx, assetOut(row as AssetMeta))), sanitized: v.sanitized, current: await this.keyState(tx, key) };
 					});
@@ -319,8 +319,8 @@ export class SiteIdentityService {
 		await tx.siteIdentityManifest.create({ data: { version: manifestVersion, snapshot: snapshot as Prisma.InputJsonValue, createdById: actorId, reason: reason.slice(0, 300) } });
 		await this.faults.insideTx?.(tx, 'after-manifest');
 		const rec = audit(applied);
-		const tokenNames = await this.tokenNamesOf(tx, applied);
-		await accountAuditLogService.record(tokenNames ? { ...rec, details: { ...(rec.details as object), tokenNames } } : rec, tx);
+		const overrideNames = await this.overrideNamesOf(tx, applied);
+		await accountAuditLogService.record(overrideNames ? { ...rec, details: { ...(rec.details as object), overrideNames } } : rec, tx);
 		await this.faults.insideTx?.(tx, 'after-audit');
 		// 4. read back INSIDE the transaction: what is about to be committed must be what the caller asked for, byte for byte
 		for (const a of applied) {
@@ -340,7 +340,7 @@ export class SiteIdentityService {
 	}
 
 	/** audit detail for token keys: which override NAMES the new active sets hold (never the values) */
-	private async tokenNamesOf(tx: Tx, applied: Applied[]): Promise<string> {
+	private async overrideNamesOf(tx: Tx, applied: Applied[]): Promise<string> {
 		const ts = applied.filter(a => isTokenKey(a.key)); if (!ts.length) return '';
 		const parts: string[] = [];
 		for (const a of ts) {
