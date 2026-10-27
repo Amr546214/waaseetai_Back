@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response, Router } from 'express';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { loadAdminActor, requireAnyPermission, requirePermission } from '../middlewares/admin-access.middleware';
+import { SITE_IDENTITY_READ_PERMISSIONS } from '../config/admin-permissions';
 import { actorHas } from '../services/admin-access.service';
 import { memoryUpload } from '../utils/cloudinary-storage';
 import { AppError } from '../utils/app-error';
@@ -8,7 +9,7 @@ import { ATLAS_MAX_BYTES, KEY_PATTERN, isKnownIdentityKey } from '../config/site
 import { SiteIdentityConflict, SiteIdentityService, SITE_IDENTITY_ERRORS, siteIdentityService } from '../services/site-identity.service';
 
 /**
- * /api/admin/site-identity - the identity manager of «التحكم بالموقع». Reading (the page, history, previews) needs `site.view` (or `site.manage`); uploading, publishing, restoring and discarding need
+ * /api/admin/site-identity - the identity manager of «التحكم بالموقع». Reading (the page, history, previews) needs `site.view`, `site.manage` or the legacy section id `site_control.manage` (read-only alias, never write: see SITE_IDENTITY_READ_PERMISSIONS); uploading, publishing, restoring and discarding need
  * `site.manage`. SUPER_ADMIN holds every permission; no base role holds either. The guard sits on the router (every route, before any body is read) and the write routes add the stricter id themselves.
  * Success bodies are `{success:true, data}`; a version conflict is `409 {success:false, message, code:'SITE_IDENTITY_VERSION_CONFLICT', current}` where `current` is the winner's state.
  */
@@ -25,7 +26,7 @@ export function buildAdminSiteIdentityRouter(service: SiteIdentityService = site
 	const knownKey = (req: Request, _res: Response, next: NextFunction) => (KEY_PATTERN.test(String(req.params.key)) && isKnownIdentityKey(String(req.params.key)) ? next() : next(new AppError('عنصر الهوية غير موجود.', 404, undefined, SITE_IDENTITY_ERRORS.UNKNOWN_KEY)));
 	const upload = memoryUpload({ fileSize: ATLAS_MAX_BYTES, files: 1 });
 
-	router.use(authenticate, requireActiveUser, requireAnyPermission('site.view', 'site.manage'));
+	router.use(authenticate, requireActiveUser, requireAnyPermission(...SITE_IDENTITY_READ_PERMISSIONS));
 
 	router.get('/', ok(async req => service.overview(actorHas(await loadAdminActor(req), 'site.manage'))));
 	router.get('/history', ok(req => service.history(req.query as Record<string, unknown>)));

@@ -9,6 +9,13 @@
  * withdrawing permissions, suspending / reactivating staff. They are exercised through `requireSuperAdmin` only, and the authority comes from the account type read on the server.
  */
 
+/**
+ * ALIAS RULE (site identity, 2026-10-27): the older id `site_control.manage` («التحكم بالموقع», section access) is NOT renamed, converted or migrated. Whoever holds it (by role or by personal grant) keeps
+ * access to the section and may READ the identity admin API (overview, history, version previews) exactly like `site.view`. It NEVER implies `site.manage`: uploading, publishing, restoring, restoring a set
+ * and discarding drafts need `site.manage` explicitly (the write routes use requirePermission('site.manage') only). The alias lives in ONE place: SITE_IDENTITY_READ_PERMISSIONS below, used by the router guard.
+ */
+export const SITE_IDENTITY_READ_PERMISSIONS: readonly string[] = ['site.view', 'site.manage', 'site_control.manage'];
+
 export type AdminPermissionGroup =
 	| 'users' | 'reports_support' | 'disputes' | 'reviews' | 'content' | 'finance' | 'team' | 'system';
 
