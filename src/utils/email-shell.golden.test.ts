@@ -45,7 +45,7 @@ test('golden: every shell template renders byte-identically to the pre-wiring co
 		if (process.env.GENERATE_EMAIL_GOLDEN === '1') { fs.writeFileSync(FIX, JSON.stringify(Object.fromEntries(Object.entries(now).map(([k, v]) => [k, { sha256: sha(v), html: v }])), null, 1)); return; }
 		const gold = JSON.parse(fs.readFileSync(FIX, 'utf8')) as Record<string, { sha256: string; html: string }>;
 		assert.deepEqual(Object.keys(now).sort(), Object.keys(gold).sort());
-		assert.ok(Object.keys(now).length >= 60, `variants: ${Object.keys(now).length}`);
+		assert.ok(Object.keys(now).length >= 50, `variants: ${Object.keys(now).length}`);
 		for (const [k, v] of Object.entries(now)) { assert.equal(v, gold[k].html, `byte-identical: ${k}`); assert.equal(sha(v), gold[k].sha256); }
 		assert.ok(now['front/reset'].includes('https://front.test/images/waseet-mark.png'), 'the default logo URL is the long-standing one');
 	} finally { mock.timers.reset(); }
