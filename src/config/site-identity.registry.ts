@@ -102,7 +102,7 @@ const tokenKey = (o: { key: string; label: string; description: string; wired: b
 	defaultAsset: { type: 'tokens', source: TOKENS_SOURCE },
 	defaultFingerprint: { mime: 'application/json', width: null, height: null, byteSize: 2, sha256: EMPTY_JSON_SHA, note: 'الافتراضي = لا تجاوزات ({}) ؛ القيم الافتراضية الفعلية لكل رمز في TOKEN_REGISTRY' },
 	usages: [{ where: 'طبقة <style id="ws-identity-tokens"> تُحقن في <head> فقط عند وجود تجاوزات (وإلا لا شيء)', ref: 'src/styles.css :root / .theme-light' }],
-	notWiredReason: o.wired ? '' : TYPOGRAPHY_REASON,
+	notWiredReason: o.wired ? 'لا يقرأ أي مكوّن في الواجهة طبقة الرموز هذه إلا بعد ربط حاقن الرموز (ws-identity-tokens)؛ لا تُعرض هذه الرسالة إلا إن أُلغي ربط المفتاح.' : TYPOGRAPHY_REASON,
 	notes: ['تُخزَّن كائنًا متفرقًا {"--اسم":"قيمة"}: الرموز المعدّلة فقط؛ الألوان والخطوط المكتوبة حرفيًا في المكوّنات غير مرتبطة.'],
 });
 

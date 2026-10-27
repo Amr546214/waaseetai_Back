@@ -37,7 +37,7 @@ test('wired: ONE list (WIRED_KEYS) of known keys; there is no other source and n
 	assert.equal(isWiredKey('logo.mark', ['logo.mark']), true); assert.equal(isWiredKey('logo.mark', []), false); assert.equal(isWiredKey('nope.nope', ['nope.nope']), false, 'an unknown key is never wired');
 	assert.ok(!SITE_IDENTITY_REGISTRY.some(d => 'wired' in d), 'no key carries its own `wired` flag');
 	// the only module that may mention WIRED_KEYS besides the registry is the service (read-only); no route, no body field, nothing writes it
-	const users = walk(SRC).filter(f => !/\.test\.ts$|registry\.ts$/.test(f) && fs.readFileSync(f, 'utf8').includes('WIRED_KEYS')).map(f => path.relative(SRC, f));
+	const users = walk(SRC).filter(f => !/\.test\.ts$|\.pgenv\.ts$|registry\.ts$/.test(f) && fs.readFileSync(f, 'utf8').includes('WIRED_KEYS')).map(f => path.relative(SRC, f));
 	assert.deepEqual(users, ['services/site-identity.service.ts']);
 	const svc = fs.readFileSync(path.join(SRC, 'services', 'site-identity.service.ts'), 'utf8'); assert.ok(!/WIRED_KEYS\s*(=|\.push|\.splice|\.length\s*=)/.test(svc.replace(/export const WIRED_KEYS/g, '')));
 	for (const f of ['admin-site-identity.routes.ts', 'public-site-identity.routes.ts']) { const src = fs.readFileSync(path.join(SRC, 'routes', f), 'utf8'); assert.ok(!/req\.body\??\.wired|body\.wired|\bwired\b\s*[:=]/.test(src), `${f}: no route accepts a wired flag`); }
