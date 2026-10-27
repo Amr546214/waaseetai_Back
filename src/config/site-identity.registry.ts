@@ -195,7 +195,12 @@ export const SITE_IDENTITY_REGISTRY: readonly SiteIdentityKeyDef[] = [
  * KEYS THAT REALLY HAVE A CONSUMER READING THEM THROUGH THE IDENTITY SERVICE. The ONLY place `wired` comes from: edited by the coordinator when an FE (or BE) consumer lands, never through an API.
  * Empty on purpose: today nothing reads the identity service yet, so no key is editable (the page shows every key, its default, its usages and why it is not wired).
  */
-export const WIRED_KEYS: readonly string[] = ['logo.mark', 'favicon.tab', 'icon.ai'];
+export const WIRED_KEYS: readonly string[] = [
+	'logo.mark', 'logo.boot', 'logo.email', 'favicon.tab', 'icon.ai',
+	'character.bebo.classic.sprites', 'character.bebo.classic.actions', 'character.bebo.classic.speaking', 'character.bebo.classic.antics', 'character.bebo.classic.emotions', 'character.bebo.classic.kitten',
+	'character.bebo.scout.sprites', 'character.bebo.scout.actions', 'character.bebo.scout.speaking', 'character.bebo.scout.antics', 'character.bebo.scout.emotions', 'character.bebo.scout.kitten',
+	'character.bebo.traffic', 'character.bebo.expressions',
+];
 
 const BY_KEY: ReadonlyMap<string, SiteIdentityKeyDef> = new Map(SITE_IDENTITY_REGISTRY.map(d => [d.key, d]));
 export const IDENTITY_KEYS: readonly string[] = SITE_IDENTITY_REGISTRY.map(d => d.key);
