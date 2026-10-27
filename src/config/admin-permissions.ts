@@ -10,11 +10,15 @@
  */
 
 /**
- * ALIAS RULE (site identity, 2026-10-27): the older id `site_control.manage` («التحكم بالموقع», section access) is NOT renamed, converted or migrated. Whoever holds it (by role or by personal grant) keeps
- * access to the section and may READ the identity admin API (overview, history, version previews) exactly like `site.view`. It NEVER implies `site.manage`: uploading, publishing, restoring, restoring a set
- * and discarding drafts need `site.manage` explicitly (the write routes use requirePermission('site.manage') only). The alias lives in ONE place: SITE_IDENTITY_READ_PERMISSIONS below, used by the router guard.
+ * ALIAS RULE (site identity, 2026-10-27, revised round 5): the older id `site_control.manage` («التحكم بالموقع», "manage the site-control section") is NOT renamed, converted or migrated - it is mapped at RUNTIME onto the
+ * identity EDIT capability: whoever holds it (by role or by personal grant) can read AND write the identity admin API (upload, publish, restore, restore a set, discard drafts) exactly like `site.manage`, because that is what the
+ * grant always meant ("manage التحكم بالموقع"). The two NEW ids keep their meaning: `site.view` is read-only and NEVER writes; `site.manage` writes. No other role/permission is touched; a role without any of the three gets 403 everywhere.
+ * Drafts stay private to their uploader whatever the permission (SITE_IDENTITY_DRAFT_NOT_YOURS applies to SUPER_ADMIN too). The mapping lives in ONE place (the two lists below), used by the router guards.
  */
-export const SITE_IDENTITY_READ_PERMISSIONS: readonly string[] = ['site.view', 'site.manage', 'site_control.manage'];
+export const SITE_IDENTITY_EDIT_PERMISSIONS: readonly string[] = ['site.manage', 'site_control.manage'];
+export const SITE_IDENTITY_READ_PERMISSIONS: readonly string[] = ['site.view', ...SITE_IDENTITY_EDIT_PERMISSIONS];
+/** @deprecated name kept for readers of the round-2 code: the write routes accept exactly SITE_IDENTITY_EDIT_PERMISSIONS */
+export const SITE_IDENTITY_WRITE_PERMISSIONS = SITE_IDENTITY_EDIT_PERMISSIONS;
 
 export type AdminPermissionGroup =
 	| 'users' | 'reports_support' | 'disputes' | 'reviews' | 'content' | 'finance' | 'team' | 'system';
@@ -72,7 +76,7 @@ export const ADMIN_PERMISSIONS: readonly AdminPermissionDef[] = [
 
 	{ id: 'settings.view', label: 'عرض إعدادات النظام', group: 'system', sensitive: false },
 	{ id: 'settings.manage', label: 'إعدادات النظام', group: 'system', sensitive: true, designRow: 'تعديل الإعدادات' },
-	{ id: 'site_control.manage', label: 'التحكم بالموقع', group: 'system', sensitive: true },
+	{ id: 'site_control.manage', label: 'التحكم بالموقع', group: 'system', sensitive: true }, // also = edit capability of the identity manager (see SITE_IDENTITY_EDIT_PERMISSIONS)
 	{ id: 'site.view', label: 'عرض هوية الموقع (الشعارات والأيقونات)', group: 'system', sensitive: false },
 	{ id: 'site.manage', label: 'إدارة هوية الموقع (رفع واعتماد واستعادة الشعارات والأيقونات)', group: 'system', sensitive: true },
 	{ id: 'audit.view', label: 'عرض سجلات التدقيق', group: 'system', sensitive: false, designRow: 'Audit Trail' },

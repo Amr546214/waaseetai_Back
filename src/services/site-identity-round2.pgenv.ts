@@ -47,7 +47,7 @@ const dbState = async (e: any) => JSON.stringify({ s: await e.prisma.siteIdentit
 const body = (j: any) => (j.data ?? j);
 
 // ---------------------------------------------------------------------------------------------------------------- A
-test('PG round2 A: legacy site_control.manage reads every GET like site.view and NEVER writes; site.view same; site.manage full; none 403; SUPER_ADMIN full; public untouched', opts, async () => {
+test('PG round2 A (revised round 5): legacy site_control.manage MAPS TO EDIT (reads every GET and writes like site.manage); site.view stays read-only (403 on every write); none 403; SUPER_ADMIN full; public untouched', opts, async () => {
 	const e = await env(); await reset(e);
 	const legacy = (await mkStaff(e, ['site_control.manage'], 'lg')).user, viewer = (await mkStaff(e, ['site.view'], 'vw')).user, manager = (await mkStaff(e, ['site.manage'], 'mg')).user, none = (await mkStaff(e, ['users.view', 'settings.manage'], 'nn')).user;
 	const personal = (await mkStaff(e, ['users.view'], 'ps')).user; const st = await e.prisma.adminStaff.findUnique({ where: { userId: personal.id } });
@@ -55,23 +55,38 @@ test('PG round2 A: legacy site_control.manage reads every GET like site.view and
 	const GETS: Array<[string, string]> = [['GET', '/'], ['GET', '/history'], ['GET', `/logo.mark/versions/${randomUUID()}/preview`], ['GET', '/restore-set/0/preview']];
 	const WRITES: Array<[string, string, any?]> = [['POST', '/logo.mark/upload', {}], ['POST', '/logo.mark/publish', {}], ['POST', '/logo.mark/restore', {}], ['POST', '/restore-set', {}], ['DELETE', `/logo.mark/versions/${randomUUID()}`]];
 	const url = (p: string) => `/admin/site-identity${p}`;
-	for (const [who, label] of [[legacy, 'legacy role holder'], [personal, 'legacy personal grant'], [viewer, 'site.view']] as const) {
+	for (const [who, label] of [[legacy, 'legacy role holder'], [personal, 'legacy personal grant'], [manager, 'site.manage']] as const) {
 		for (const [m, p] of GETS) { const r = await e.call(m, url(p), who.id); assert.notEqual(r.status, 403, `${label} ${p}`); assert.notEqual(r.status, 401); }
-		assert.equal((await e.call('GET', url('/'), who.id)).json.data.canManage, false, `${label}: canManage false`);
+		assert.equal((await e.call('GET', url('/'), who.id)).json.data.canManage, true, `${label}: canManage true`);
 		assert.equal((await e.call('GET', url('/restore-set/0/preview'), who.id)).status, 200, `${label}: set preview readable`);
-		for (const [m, p, b] of WRITES) assert.equal((await e.call(m, url(p), who.id, b)).status, 403, `${label} must not ${m} ${p}`);
+		for (const [m, p, b] of WRITES) assert.notEqual((await e.call(m, url(p), who.id, b)).status, 403, `${label} may ${m} ${p} (the guard passes; the body decides)`);
 	}
-	for (const [m, p] of GETS) { const r = await e.call(m, url(p), manager.id); assert.notEqual(r.status, 403, `manager ${p}`); }
-	for (const [m, p, b] of WRITES) assert.notEqual((await e.call(m, url(p), manager.id, b)).status, 403, `manager ${m} ${p}`);
-	assert.equal((await e.call('GET', url('/'), manager.id)).json.data.canManage, true);
+	// site.view is read-only: it is NOT widened by the mapping
+	for (const [m, p] of GETS) { const r = await e.call(m, url(p), viewer.id); assert.notEqual(r.status, 403, `viewer ${p}`); }
+	assert.equal((await e.call('GET', url('/'), viewer.id)).json.data.canManage, false, 'site.view: canManage false');
+	for (const [m, p, b] of WRITES) assert.equal((await e.call(m, url(p), viewer.id, b)).status, 403, `site.view must not ${m} ${p}`);
 	for (const [m, p] of GETS) { const r = await e.call(m, url(p), none.id); assert.equal(r.status, 403, `none ${p}`); assert.ok(!/"data"/.test(r.text)); assert.equal(r.json.code, 'ADMIN_PERMISSION_DENIED'); }
 	for (const [m, p, b] of WRITES) assert.equal((await e.call(m, url(p), none.id, b)).status, 403);
 	for (const [m, p] of GETS) assert.notEqual((await e.call(m, url(p), e.sa.id)).status, 403, `SUPER_ADMIN ${p}`);
 	assert.equal((await e.call('GET', url('/'), e.sa.id)).json.data.canManage, true);
 	assert.equal((await e.call('GET', '/public/site-identity', null)).status, 200, 'public stays public');
 	assert.equal((await e.call('GET', url('/restore-set/0/preview'), null)).status, 401);
-	// the alias must not leak into the write guard: an alias holder cannot write even with a perfectly valid body through a wired service
-	const m = await mount(e); for (const [mm, p, b] of WRITES) assert.equal((await m.raw(mm, url(p), legacy.id, mm === 'DELETE' ? undefined : b)).status, 403);
+	// the legacy holder REALLY does the whole cycle through a wired service (upload -> publish -> second version -> restore -> restore-set -> discard); site.view still cannot with perfectly valid bodies
+	const m = await mount(e);
+	const v1 = await staged(m, legacy.id, 'logo.mark', 'legacy-1'); const p1 = await publish(m, legacy.id, 'logo.mark', v1.versionId, 0); assert.equal(p1.status, 200, JSON.stringify(p1.json));
+	const v2 = await staged(m, personal.id, 'logo.mark', 'legacy-2'); const p2 = await publish(m, personal.id, 'logo.mark', v2.versionId, p1.json.data.stateVersion); assert.equal(p2.status, 200, JSON.stringify(p2.json));
+	const rs = await m.adm('POST', '/logo.mark/restore', legacy.id, { target: v1.versionId, expectedVersion: p2.json.data.stateVersion }); assert.equal(rs.status, 200, JSON.stringify(rs.json));
+	const prev = await m.adm('GET', '/restore-set/0/preview', legacy.id); assert.equal(prev.status, 200);
+	const set = await m.adm('POST', '/restore-set', legacy.id, { manifestVersion: 0, expectedManifestVersion: prev.json.data.currentManifestVersion, previewDigest: prev.json.data.previewDigest }); assert.equal(set.status, 200, JSON.stringify(set.json));
+	const v3 = await staged(m, legacy.id, 'logo.mark', 'legacy-3'); assert.equal((await m.adm('DELETE', `/logo.mark/versions/${v3.versionId}`, legacy.id)).status, 200);
+	const vv = await m.upload(viewer.id, 'logo.mark', png(300, 200, { text: 'v' })); assert.equal(vv.status, 403);
+	assert.equal((await m.adm('POST', '/logo.mark/publish', viewer.id, { versionId: v1.versionId, expectedVersion: 0 })).status, 403);
+	assert.equal((await m.adm('POST', '/logo.mark/restore', viewer.id, { target: 'default', expectedVersion: 0 })).status, 403);
+	assert.equal((await m.adm('DELETE', `/logo.mark/versions/${v1.versionId}`, viewer.id)).status, 403);
+	// a draft stays private to its uploader even for SUPER_ADMIN (and for a legacy holder against a manager's draft)
+	const mine = await staged(m, manager.id, 'logo.mark', 'private'); const sv = (await m.adm('GET', '/', e.sa.id)).json.data.items.find((i: any) => i.key === 'logo.mark').state.stateVersion;
+	const dn = await publish(m, e.sa.id, 'logo.mark', mine.versionId, sv); assert.equal(dn.status, 409); assert.equal(dn.json.code, 'SITE_IDENTITY_DRAFT_NOT_YOURS', 'SUPER_ADMIN cannot publish another admin\'s draft');
+	const dl = await publish(m, legacy.id, 'logo.mark', mine.versionId, sv); assert.equal(dl.status, 409); assert.equal(dl.json.code, 'SITE_IDENTITY_DRAFT_NOT_YOURS');
 	await m.close();
 });
 

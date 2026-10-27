@@ -7,6 +7,8 @@ import { accountAuditLogService } from './account-logs.service';
 import { createHash } from 'node:crypto';
 import { EMAIL_LOGO_KEY, refreshSiteIdentityCache, registerSiteIdentityCacheLoader } from './site-identity-cache';
 import { sha256Of, validateIdentityUpload } from '../utils/site-identity-upload';
+import { buildTokensCss, validateTokenBytes, TokenSets } from '../utils/site-identity-tokens';
+import { TOKEN_KEYS, TokenKey, isTokenKey, tokenSpecOut } from '../config/site-identity-tokens';
 import {
 	IDENTITY_GROUPS, KEY_PATTERN, NOT_IDENTITY_NOTES, SITE_IDENTITY_REGISTRY, UNREGISTERED_PRESENT_ASSETS, WIRED_KEYS, SiteIdentityKeyDef, describeRules, identityDef, isWiredKey,
 } from '../config/site-identity.registry';
@@ -89,7 +91,32 @@ async function withActors<T>(db: Tx | Db, payload: T): Promise<T> {
 		}
 		return v;
 	};
-	return walk(payload) as T;
+	return withValues(db, walk(payload) as T);
+}
+
+/**
+ * TOKEN VALUES: every version object of a json (design-token) key (an object carrying `versionId` and mime application/json) gets `value` = its sparse override object; a default side (`source:'default'`) gets `{}`.
+ * One batched query; the stored canonical JSON is validated again (never trusted blindly: a row that fails validation yields `{}`). Files (png/svg/ico) are untouched. Mutates the freshly built payload in place.
+ */
+export async function withValues<T>(db: Tx | Db, payload: T): Promise<T> {
+	const ids = new Set<string>(); const targets: Array<Record<string, unknown>> = [];
+	const visit = (v: unknown) => {
+		if (Array.isArray(v)) { v.forEach(visit); return; }
+		if (!v || typeof v !== 'object') return;
+		const o = v as Record<string, unknown>;
+		if (o.mime === 'application/json' && (typeof o.versionId === 'string' || o.source === 'default')) { targets.push(o); if (typeof o.versionId === 'string') ids.add(o.versionId); }
+		for (const x of Object.values(o)) visit(x);
+	};
+	visit(payload);
+	if (!targets.length) return payload;
+	const rows = ids.size ? await db.siteIdentityAsset.findMany({ where: { id: { in: [...ids] } }, select: { id: true, key: true, bytes: true } }) : [];
+	const by = new Map(rows.map(r => [r.id, r]));
+	for (const o of targets) {
+		const r = typeof o.versionId === 'string' ? by.get(o.versionId) : null;
+		if (!r || !r.bytes || !isTokenKey(r.key)) { o.value = {}; continue; }
+		try { o.value = validateTokenBytes(r.key, r.bytes, { allowEmpty: true }).value; } catch { o.value = {}; }
+	}
+	return payload;
 }
 
 export class SiteIdentityService {
@@ -129,7 +156,7 @@ export class SiteIdentityService {
 				const active = st?.activeAssetId ? rows.find(r => r.id === st.activeAssetId) ?? null : null;
 				return {
 					key: d.key, group: d.group, label: d.label, description: d.description, kind: d.kind, allowedMimes: d.allowedMimes, maxBytes: d.maxBytes, dimensions: d.dimensions, rules: describeRules(d),
-					defaultAsset: d.defaultAsset, defaultFingerprint: d.defaultFingerprint, usages: d.usages, notes: d.notes ?? [], wired, editable: wired, notWiredReason: wired ? null : d.notWiredReason,
+					defaultAsset: d.defaultAsset, defaultFingerprint: d.defaultFingerprint, ...(d.kind === 'json' ? { tokens: tokenSpecOut(d.key) } : {}), usages: d.usages, notes: d.notes ?? [], wired, editable: wired, notWiredReason: wired ? null : d.notWiredReason,
 					state: { stateVersion: st?.version ?? 0, isDefault: !active, active: active ? assetOut(active) : null, updatedAt: st?.updatedAt?.toISOString() ?? null, updatedById: st?.updatedById ?? null },
 					staged: rows.filter(r => r.status === 'STAGED').map(r => ({ ...assetOut(r), isMine: !!callerId && r.createdById === callerId })),
 					history: rows.filter(r => r.status !== 'STAGED').slice(0, HISTORY_PER_KEY).map(assetOut),
@@ -167,17 +194,34 @@ export class SiteIdentityService {
 		});
 	}
 
-	/** PUBLIC: ONLY the keys that have an active custom version (and are wired). Nothing about history, storage, uploaders. */
-	async publicManifest(): Promise<{ version: number; items: Record<string, { url: string; sha256: string; mime: string; width: number | null; height: number | null; version: number }> }> {
+	/**
+	 * PUBLIC: ONLY the keys that have an active custom version (and are wired). Nothing about history, storage, uploaders.
+	 * Design-token items carry their validated sparse `value` inline (no second request) and `tokensCss` is the ready-to-inject CSS built from them ('' = nothing to inject = today's look).
+	 */
+	async publicManifest(): Promise<PublicManifest> {
 		try {
 			const states = await this.db.siteIdentityState.findMany({ where: { activeAssetId: { not: null } }, include: { activeAsset: { select: META } } });
 			const mv = await this.db.siteIdentityManifest.aggregate({ _max: { version: true } });
-			const items: Record<string, { url: string; sha256: string; mime: string; width: number | null; height: number | null; version: number }> = {};
+			const items: PublicManifest['items'] = {};
+			const tokenIds: string[] = [];
 			for (const s of [...states].sort((a, b) => a.key.localeCompare(b.key))) {
 				const a = s.activeAsset; if (!a || !identityDef(s.key) || !this.isWired(s.key)) continue;
 				items[s.key] = { url: publicPath(s.key, a.sha256), sha256: a.sha256, mime: a.mime, width: a.width, height: a.height, version: a.version };
+				if (isTokenKey(s.key)) tokenIds.push(a.id);
 			}
-			return { version: mv._max.version ?? 0, items };
+			const sets: TokenSets = {};
+			if (tokenIds.length) {
+				const rows = await this.db.siteIdentityAsset.findMany({ where: { id: { in: tokenIds } }, select: { id: true, key: true, bytes: true } });
+				for (const r of rows) {
+					try {
+						if (!r.bytes || !isTokenKey(r.key)) throw new Error('no bytes');
+						const value = validateTokenBytes(r.key, r.bytes, { allowEmpty: true }).value;
+						items[r.key].value = value; sets[r.key as TokenKey] = value;
+					} catch (e) { delete items[r.key]; logger.warn(`[SiteIdentity] stored token set ${r.key} failed validation and is ignored (default shown): ${(e as Error)?.message ?? e}`); }
+				}
+			}
+			const tokensCss = buildTokensCss(sets);
+			return tokensCss ? { version: mv._max.version ?? 0, items, tokensCss } : { version: mv._max.version ?? 0, items }; // the key is ABSENT when there is nothing to inject: the empty manifest stays byte-identical to the one deployed before tokens existed
 		} catch (e) {
 			if (isMissingTableError(e)) return { version: 0, items: {} }; // migration not applied here: everything is the built-in default
 			throw e;
@@ -222,7 +266,7 @@ export class SiteIdentityService {
 						const max = await tx.siteIdentityAsset.aggregate({ where: { key }, _max: { version: true } });
 						const row = await tx.siteIdentityAsset.create({ data: { key, version: (max._max.version ?? 0) + 1, status: 'STAGED', mime: v.mime, bytes: Uint8Array.from(v.bytes), sha256: v.sha256, width: v.width, height: v.height, byteSize: v.byteSize, note: v.note, createdById: actorId }, select: META });
 						await accountAuditLogService.record({ userId: actorId, eventType: 'SITE_IDENTITY_UPLOADED', category: LogCategory.SYSTEM_AUDIT, source: 'ADMIN', severity: 'INFO', title: 'رفع نسخة جديدة من هوية الموقع',
-							summary: `رفع مسودة ${def.label} (نسخة ${row.version}) بانتظار الاعتماد`, details: { identityKey: key, version: row.version, sha: short(v.sha256), mime: v.mime, byteSize: v.byteSize, sanitizedRemoved: v.sanitized.removed },
+							summary: `رفع مسودة ${def.label} (نسخة ${row.version}) بانتظار الاعتماد`, details: { identityKey: key, version: row.version, sha: short(v.sha256), mime: v.mime, byteSize: v.byteSize, sanitizedRemoved: v.sanitized.removed, ...(def.kind === 'json' ? { tokenNames: Object.keys(JSON.parse(v.bytes.toString('utf8'))).join(' ').slice(0, 480) } : {}) },
 							context: { ipAddress: ctx.ip, device: ctx.device, actorLabel: 'ADMIN' } }, tx);
 						return { ...(await withActors(tx, assetOut(row as AssetMeta))), sanitized: v.sanitized, current: await this.keyState(tx, key) };
 					});
@@ -274,7 +318,9 @@ export class SiteIdentityService {
 		const manifestVersion = (max._max.version ?? 0) + 1;
 		await tx.siteIdentityManifest.create({ data: { version: manifestVersion, snapshot: snapshot as Prisma.InputJsonValue, createdById: actorId, reason: reason.slice(0, 300) } });
 		await this.faults.insideTx?.(tx, 'after-manifest');
-		await accountAuditLogService.record(audit(applied), tx);
+		const rec = audit(applied);
+		const tokenNames = await this.tokenNamesOf(tx, applied);
+		await accountAuditLogService.record(tokenNames ? { ...rec, details: { ...(rec.details as object), tokenNames } } : rec, tx);
 		await this.faults.insideTx?.(tx, 'after-audit');
 		// 4. read back INSIDE the transaction: what is about to be committed must be what the caller asked for, byte for byte
 		for (const a of applied) {
@@ -291,6 +337,18 @@ export class SiteIdentityService {
 		const ms = man?.snapshot as Record<string, string | null> | undefined;
 		if (!ms || applied.some(a => (ms[a.key] ?? null) !== a.toAssetId)) throw verifyFailed('manifest row');
 		return { manifestVersion, applied };
+	}
+
+	/** audit detail for token keys: which override NAMES the new active sets hold (never the values) */
+	private async tokenNamesOf(tx: Tx, applied: Applied[]): Promise<string> {
+		const ts = applied.filter(a => isTokenKey(a.key)); if (!ts.length) return '';
+		const parts: string[] = [];
+		for (const a of ts) {
+			let names: string[] = [];
+			if (a.toAssetId) { const r = await tx.siteIdentityAsset.findUnique({ where: { id: a.toAssetId }, select: { bytes: true } }); try { names = r?.bytes ? Object.keys(validateTokenBytes(a.key, r.bytes, { allowEmpty: true }).value) : []; } catch { names = []; } }
+			parts.push(`${a.key}=[${names.join(' ')}]`);
+		}
+		return parts.join('; ').slice(0, 480);
 	}
 
 	/** AFTER the commit: read the result again through a fresh query; false = what is stored is not what was committed */
@@ -429,7 +487,7 @@ export class SiteIdentityService {
 	async previewRestoreSet(manifestVersion: unknown) {
 		const n = typeof manifestVersion === 'string' && /^\d{1,9}$/.test(manifestVersion) ? Number(manifestVersion) : typeof manifestVersion === 'number' ? manifestVersion : NaN;
 		if (!Number.isInteger(n) || n < 0) throw fieldError('manifestVersion', 'رقم نسخة المجموعة (manifestVersion) عدد صحيح ≥ 0 (0 = كل العناصر الافتراضية).');
-		return this.guard(() => this.db.$transaction(async tx => (await this.setDiff(tx, n)).preview, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead }));
+		return this.guard(() => this.db.$transaction(async tx => withValues(tx, (await this.setDiff(tx, n)).preview), { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead }));
 	}
 
 	async restoreSet(body: { manifestVersion?: unknown; expectedManifestVersion?: unknown; previewDigest?: unknown }, actorId: string, ctx: AuditCtx = {}) {
@@ -441,7 +499,7 @@ export class SiteIdentityService {
 		return this.run(actorId, ctx, async tx => {
 			const diff = await this.setDiff(tx, targetVersion);
 			// what is about to be applied must be EXACTLY what the admin was shown: anything that moved since (a publish, a restore, a changed target) gives a fresh preview and changes nothing
-			if (diff.preview.previewDigest !== digest) throw new SiteIdentityConflict('تغيّرت الهوية منذ أن عاينت الاستعادة، فلم يُطبَّق شيء. راجع المعاينة المحدّثة ثم أعد المحاولة.', diff.preview, SITE_IDENTITY_ERRORS.PREVIEW_STALE);
+			if (diff.preview.previewDigest !== digest) throw new SiteIdentityConflict('تغيّرت الهوية منذ أن عاينت الاستعادة، فلم يُطبَّق شيء. راجع المعاينة المحدّثة ثم أعد المحاولة.', await withValues(tx, diff.preview), SITE_IDENTITY_ERRORS.PREVIEW_STALE);
 			if (diff.preview.currentManifestVersion !== expected) throw new SiteIdentityConflict('تغيّرت هوية الموقع من جهة أخرى بعد أن فتحت الصفحة. راجع الحالة الحالية ثم أعد المحاولة.', await this.fullState(tx));
 			const changes = diff.changes;
 			if (!changes.length) throw new AppError('الهوية الحالية مطابقة لتلك المجموعة؛ لا يوجد ما يُستعاد.', 409, undefined, SITE_IDENTITY_ERRORS.NO_CHANGE);
@@ -452,6 +510,7 @@ export class SiteIdentityService {
 	}
 }
 
+export interface PublicManifest { version: number; items: Record<string, { url: string; sha256: string; mime: string; width: number | null; height: number | null; version: number; /** design-token keys only */ value?: Record<string, string> }>; /** present only when at least one token set is active */ tokensCss?: string }
 export interface SetSide { source: 'default' | 'custom'; versionId: string | null; version: number; sha256: string; mime: string; width: number | null; height: number | null; previewUrl: string | null }
 export interface SetPreviewItem { key: string; label: string; group: string; current: SetSide; target: SetSide; change: 'replace' | 'to-default' | 'unchanged' }
 

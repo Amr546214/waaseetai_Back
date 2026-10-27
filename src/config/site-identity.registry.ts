@@ -17,12 +17,14 @@
  *  - everything a user uploads (avatars, portfolio, KYC documents, service images, marketing assets managed by admin-marketing-assets);
  *  - content / marketing imagery (public/assets/images/*: service-*.png, dashboard-mockup, contract-*, message*, image*, avatar-1, traingl) and the unreferenced robot illustrations among them;
  *  - the design-system documentation under public/tools/** (reference material, not served as the site's identity);
- *  - watermarks / "logo-xs..xl" sizes (derived at render time from the logo by CSS, no separate asset); colours / fonts / tokens (not bound to the site in this batch).
+ *  - watermarks / "logo-xs..xl" sizes (derived at render time from the logo by CSS, no separate asset); literal colours / fonts written inside components (only the central CSS variables are token keys: group `token`, see site-identity-tokens.ts).
  */
 
-export const IDENTITY_GROUPS = ['logo', 'favicon', 'icon', 'character'] as const;
+import { createHash } from 'node:crypto';
+
+export const IDENTITY_GROUPS = ['logo', 'favicon', 'icon', 'character', 'token'] as const;
 export type IdentityGroup = typeof IDENTITY_GROUPS[number];
-export type IdentityKind = 'raster' | 'svg' | 'ico';
+export type IdentityKind = 'raster' | 'svg' | 'ico' | 'json';
 
 /** current limits of the design (decision 3): raster / ico <= 512 KB, svg <= 64 KB */
 export const RASTER_MAX_BYTES = 512 * 1024;
@@ -43,7 +45,9 @@ export interface DimensionRule {
 
 export type DefaultAsset =
 	| { type: 'file'; /** path under the FE `public/` folder as the browser requests it */ path: string }
-	| { type: 'inline-symbol'; symbolId: string; /** where the markup lives */ source: string };
+	| { type: 'inline-symbol'; symbolId: string; /** where the markup lives */ source: string }
+	/** design tokens: the default is "no override" (the value `{}`), the real defaults live in TOKEN_REGISTRY (site-identity-tokens.ts) */
+	| { type: 'tokens'; source: string };
 
 export interface DefaultFingerprint { mime: string; width: number | null; height: number | null; byteSize: number; sha256: string; /** ico: how many images the file holds */ entries?: number; note?: string }
 
@@ -88,6 +92,19 @@ const atlas = (o: { key: string; label: string; file: string; fp: DefaultFingerp
 });
 
 const PNG_ATLAS = (sha256: string, byteSize: number): DefaultFingerprint => ({ mime: 'image/png', width: 1774, height: 887, byteSize, sha256 });
+
+const EMPTY_JSON_SHA = createHash('sha256').update('{}').digest('hex');
+const TOKENS_SOURCE = 'src/styles.css (:root = الداكن، .theme-light = الفاتح) - مرآة في TOKEN_REGISTRY (src/config/site-identity-tokens.ts)';
+/** the unwired reason of tokens.typography (the only token key that is not in WIRED_KEYS by default) */
+const TYPOGRAPHY_REASON = 'يُفعَّل بعد أن تثبت الواجهة أن توجيه الخط الحرفي \'Tajawal\' عبر المتغيّر --font-family يعرض الخط الافتراضي مطابقًا تمامًا؛ حتى ذلك الحين لا يقرأ أي مكوّن هذا المفتاح.';
+const tokenKey = (o: { key: string; label: string; description: string; wired: boolean }): SiteIdentityKeyDef => ({
+	key: o.key, group: 'token', label: o.label, description: o.description, kind: 'json', allowedMimes: ['application/json'], maxBytes: 8 * 1024, dimensions: {},
+	defaultAsset: { type: 'tokens', source: TOKENS_SOURCE },
+	defaultFingerprint: { mime: 'application/json', width: null, height: null, byteSize: 2, sha256: EMPTY_JSON_SHA, note: 'الافتراضي = لا تجاوزات ({}) ؛ القيم الافتراضية الفعلية لكل رمز في TOKEN_REGISTRY' },
+	usages: [{ where: 'طبقة <style id="ws-identity-tokens"> تُحقن في <head> فقط عند وجود تجاوزات (وإلا لا شيء)', ref: 'src/styles.css :root / .theme-light' }],
+	notWiredReason: o.wired ? '' : TYPOGRAPHY_REASON,
+	notes: ['تُخزَّن كائنًا متفرقًا {"--اسم":"قيمة"}: الرموز المعدّلة فقط؛ الألوان والخطوط المكتوبة حرفيًا في المكوّنات غير مرتبطة.'],
+});
 
 /** the order here is the order shown in the admin page */
 export const SITE_IDENTITY_REGISTRY: readonly SiteIdentityKeyDef[] = [
@@ -189,6 +206,10 @@ export const SITE_IDENTITY_REGISTRY: readonly SiteIdentityKeyDef[] = [
 	atlas({ key: 'character.bebo.scout.kitten', label: 'بيبو الكشّاف: القطة', file: '/bebo/scout/kitten-sprites.png', fp: PNG_ATLAS('bf5849a6902c7f8bf02404bd8e3e390b666ec78a7ec4d16eec511bbbaeee9147', 1024088), line: 22, skin: 'scout', pose: 'القطة المرافقة (نفس بايتات القطة الكلاسيكية)' }),
 	atlas({ key: 'character.bebo.traffic', label: 'بيبو: لوحة إشارات المرور', file: '/bebo/scout/guide-traffic.png', fp: PNG_ATLAS('fc975b8d41a646abff3890401c9b9eb290a5ade3a6ae5f0b7cf64d1806572d61', 1595275), line: 13, skin: 'both', pose: 'إشارات المرور' }),
 	atlas({ key: 'character.bebo.expressions', label: 'بيبو: لوحة التعبيرات', file: '/bebo/scout/guide-expressions.png', fp: PNG_ATLAS('fdbdac15de8ae1ea32a3aeeca3c600c850d832eadb382e23b27fc7c51ca59e0b', 1402278), line: 14, skin: 'both', pose: 'تعبيرات الوجه' }),
+	tokenKey({ key: 'tokens.colors.light', label: 'ألوان الوضع الفاتح', wired: true, description: 'ألوان المتغيّرات المركزية (CSS custom properties) في الوضع الفاتح: الخلفيات والنصوص والحدود وألوان العلامة. تُحقن كطبقة تجاوز فوق styles.css ولا تُغيّر الألوان المكتوبة حرفيًا داخل المكوّنات.' }),
+	tokenKey({ key: 'tokens.colors.dark', label: 'ألوان الوضع الداكن', wired: true, description: 'ألوان المتغيّرات المركزية (CSS custom properties) في الوضع الداكن (الافتراضي). طبقة تجاوز فوق styles.css؛ لا تمسّ الألوان المكتوبة حرفيًا داخل المكوّنات.' }),
+	tokenKey({ key: 'tokens.layout', label: 'الأبعاد العامة', wired: true, description: 'العرض الأقصى للمحتوى واستدارة الزوايا (--container --radius --radius-sm).' }),
+	tokenKey({ key: 'tokens.typography', label: 'الخط العام', wired: false, description: 'عائلة الخط العامة (--font-family). الافتراضي Tajawal المضمّن في الموقع؛ لا يحمّل الموقع خطوطًا خارجية، فيعمل أي اسم آخر فقط إن كان الخط مثبّتًا على جهاز الزائر.' }),
 ];
 
 /**
@@ -200,6 +221,8 @@ export const WIRED_KEYS: readonly string[] = [
 	'character.bebo.classic.sprites', 'character.bebo.classic.actions', 'character.bebo.classic.speaking', 'character.bebo.classic.antics', 'character.bebo.classic.emotions', 'character.bebo.classic.kitten',
 	'character.bebo.scout.sprites', 'character.bebo.scout.actions', 'character.bebo.scout.speaking', 'character.bebo.scout.antics', 'character.bebo.scout.emotions', 'character.bebo.scout.kitten',
 	'character.bebo.traffic', 'character.bebo.expressions',
+	// design tokens (round 5): tokens.typography is deliberately NOT here until the FE proves the identical default rendering of the --font-family routing (one-line flip by the coordinator)
+	'tokens.colors.light', 'tokens.colors.dark', 'tokens.layout',
 ];
 
 const BY_KEY: ReadonlyMap<string, SiteIdentityKeyDef> = new Map(SITE_IDENTITY_REGISTRY.map(d => [d.key, d]));
@@ -215,6 +238,9 @@ export const maxBytesFor = (def: SiteIdentityKeyDef, mime: string): number => (m
 /** Arabic one-liners describing what a replacement must satisfy (shown on the page, derived so they can never disagree with the rule) */
 export function describeRules(def: SiteIdentityKeyDef): string[] {
 	const out: string[] = [];
+	if (def.kind === 'json') {
+		return ['الصيغة: كائن JSON متفرّق {"--اسم":"قيمة"} (أسماء الرموز المعرّفة لهذا العنصر فقط)', `الحجم الأقصى: ${Math.round(def.maxBytes / 1024)}KB`, 'القيم: ألوان (hex/rgb/rgba/hsl/hsla) أو تدرّج خطي أو ظل أو طول (px/rem) أو قائمة خطوط، دون url أو var أو ; أو أقواس معقوفة أو @ أو تعليقات', 'القيم المطابقة للافتراضي تُسقط تلقائيًا؛ كائن فارغ مرفوض (للعودة للافتراضي استخدم «استعادة الافتراضي»)'];
+	}
 	const names: Record<string, string> = { 'image/png': 'PNG', 'image/jpeg': 'JPEG', 'image/webp': 'WebP', 'image/svg+xml': 'SVG', 'image/x-icon': 'ICO' };
 	out.push(`الصيغ المسموحة: ${def.allowedMimes.map(m => names[m] ?? m).join('، ')}`);
 	const kb = (n: number) => (n >= 1024 * 1024 ? `${(n / 1048576).toString().replace(/\.0+$/, '')}MB` : `${Math.round(n / 1024)}KB`);
@@ -252,5 +278,5 @@ export const NOT_IDENTITY_NOTES: readonly string[] = [
 	'كل ما يرفعه المستخدمون (صور الحسابات، الأعمال، وثائق الهوية، صور الخدمات، المواد التسويقية) ليس هوية المنصة.',
 	'صور المحتوى والتسويق في public/assets/images (service-*، dashboard-mockup، contract-*، message* ...) ليست هوية.',
 	'العلامات المائية ومقاسات الشعار (logo-xs..xl) تُشتق من الشعار بـ CSS ولا ملف مستقل لها.',
-	'الألوان والخطوط والرموز (tokens) غير مرتبطة بالموقع في هذه الدفعة.',
+	'الألوان والخطوط تُدار هنا فقط عبر المتغيّرات المركزية في styles.css (:root و .theme-light)؛ الألوان والخطوط المكتوبة حرفيًا داخل المكوّنات و Tailwind غير مرتبطة ولا تتغيّر.',
 ];

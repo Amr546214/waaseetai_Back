@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { AppError } from './app-error';
 import { detectFileKind } from './file-signature';
 import { sanitizeSvg, SvgRejected } from './svg-sanitizer';
+import { validateTokenUpload } from './site-identity-tokens';
 import { ABSOLUTE_MAX_PIXELS, ABSOLUTE_MAX_SIDE, SiteIdentityKeyDef, maxBytesFor } from '../config/site-identity.registry';
 
 /**
@@ -178,6 +179,7 @@ function assertDimensions(def: SiteIdentityKeyDef, mime: string, width: number |
 /** Validates (and, for SVG, sanitises) an upload against the registry rules of its key. Throws UploadRejected / SvgRejected (both 400 with code SITE_IDENTITY_FILE_REJECTED). */
 export async function validateIdentityUpload(def: SiteIdentityKeyDef, input: Buffer, declaredMime?: string): Promise<ValidatedUpload> {
 	if (!input || input.length === 0) throw new UploadRejected('الملف فارغ.', 'EMPTY');
+	if (def.kind === 'json') return validateTokenUpload(def.key, input); // design tokens: a sparse JSON object, validated by grammar (site-identity-tokens.ts)
 	const ceiling = Math.max(def.maxBytes, 1);
 	if (input.length > ceiling) throw new UploadRejected(`حجم الملف (${Math.round(input.length / 1024)}KB) أكبر من الحد المسموح لهذا العنصر (${Math.round(ceiling / 1024)}KB).`, 'TOO_BIG', 413);
 	const kind = sniffKind(input);

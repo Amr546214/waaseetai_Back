@@ -1,6 +1,6 @@
 import { logger } from '../config/logger';
 import { isWiredKey } from '../config/site-identity.registry';
-import { apiPublicUrl } from '../utils/site-url';
+import { emailPublicApiUrl } from '../utils/site-url';
 
 /**
  * A small SYNCHRONOUS in-process view of the identity for code that cannot await (the e-mail shell is a synchronous renderer): today only `logo.email`.
@@ -8,7 +8,7 @@ import { apiPublicUrl } from '../utils/site-url';
  *  - is refreshed by the identity service right after every publish / restore / restore-set / automatic revert committed in THIS process, and by a short TTL (30 s, never more than 60 s)
  *    so other instances catch up; a read that finds the value older than the TTL answers with what it has and refreshes in the background;
  *  - a later refresh failure keeps the last good value (the database being down must not change the logo of outgoing mail);
- *  - the answer is an ABSOLUTE URL `<site origin>/api/public/site-identity/assets/logo.email/<sha256>`, or null = "use the built-in default" (also when the key is not wired, or no site address is configured).
+ *  - the answer is an ABSOLUTE URL `<emailAssetBaseUrl()>/api/public/site-identity/assets/logo.email/<sha256>` (EMAIL_ASSET_BASE_URL, else the site origin; a separate asset host is used only when it can serve /api: see emailPublicApiUrl), or null = "use the built-in default" (also when the key is not wired, or no site address is configured).
  * Mails already sent keep the URL they were produced with: the bytes of superseded versions stay served by the public route.
  */
 export const EMAIL_LOGO_KEY = 'logo.email';
@@ -39,7 +39,7 @@ export function startSiteIdentityCache(): void { started = true; void refreshSit
 export function getEmailLogoUrl(): string | null {
 	if (started && (loadedAt === 0 || Date.now() - loadedAt > CACHE_TTL_MS) && !inflight) void refreshSiteIdentityCache();
 	if (!sha || !isWired(EMAIL_LOGO_KEY)) return null;
-	return apiPublicUrl(`/public/site-identity/assets/${EMAIL_LOGO_KEY}/${sha}`);
+	return emailPublicApiUrl(`/public/site-identity/assets/${EMAIL_LOGO_KEY}/${sha}`);
 }
 
 /** test seams (never used by the app) */

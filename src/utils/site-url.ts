@@ -59,3 +59,23 @@ export const apiPublicUrl = (path: string): string | null => {
 	if (!base || /[\s\u0000-\u001f\\]/.test(path)) return null;
 	return `${base}/api/${String(path).replace(/^\/+/, '')}`;
 };
+
+let warnedAssetHost = false;
+/** Test hook: lets a test observe the one-time "asset host cannot serve /api" warning again. */
+export const resetEmailAssetHostWarning = () => { warnedAssetHost = false; };
+/**
+ * An absolute URL for a PUBLIC API asset (`/public/...`) that a MAIL recipient's client will fetch with no cookie and no Authorization header: `<emailAssetBaseUrl()>/api<path>`.
+ * EMAIL_ASSET_BASE_URL is honoured (moving images never moves a user link), BUT only when that host can really serve the API: it is the site's own origin, or EMAIL_ASSET_SERVES_API=true says the
+ * asset host proxies `/api/public/**` (a CDN that only mirrors the static `/images/*` files cannot). Otherwise null = the caller keeps its built-in default image (and one warning is logged).
+ */
+export const emailPublicApiUrl = (path: string): string | null => {
+	const base = emailAssetBaseUrl();
+	if (!base || /[\s\u0000-\u001f\\]/.test(path)) return null;
+	const site = parseBase(process.env.FRONTEND_URL);
+	const serves = base === site || /^(?:1|true|yes)$/i.test(String(process.env.EMAIL_ASSET_SERVES_API ?? '').trim());
+	if (!serves) {
+		if (!warnedAssetHost) { warnedAssetHost = true; logger.warn('[SiteUrl] EMAIL_ASSET_BASE_URL is a different host than the site and EMAIL_ASSET_SERVES_API is not set: the custom e-mail logo is not used (the built-in default image stays).'); }
+		return null;
+	}
+	return `${base}/api/${String(path).replace(/^\/+/, '')}`;
+};
