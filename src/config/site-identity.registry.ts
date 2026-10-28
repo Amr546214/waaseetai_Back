@@ -170,7 +170,7 @@ export const SITE_IDENTITY_REGISTRY: readonly SiteIdentityKeyDef[] = [
 		kind: 'raster', allowedMimes: ['image/png', 'image/jpeg'], maxBytes: RASTER_MAX_BYTES, dimensions: { exact: { width: 1200, height: 630 } },
 		defaultAsset: { type: 'file', path: '/assets/social/waseetai-og-v3.jpg' },
 		defaultFingerprint: { mime: 'image/jpeg', width: 1200, height: 630, byteSize: 39921, sha256: '72243b991d6431c08174182031cd912640c2f9530525439e5a2c3f4381c32f41' },
-		usages: [{ where: 'og:image / og:image:url / og:image:secure_url / twitter:image (عنوان مطلق ثابت)', ref: 'src/index.html:49-51,59' }, { where: 'اختبار ثابت يحرس أن الصورة ليست الشعار', ref: 'src/app/og-link-preview.static.spec.ts:49' }],
+		usages: [{ where: 'og:image / og:image:url / og:image:secure_url / twitter:image (عنوان مطلق ثابت)', ref: 'src/index.html:49-51,59' }, { where: 'اختبار ثابت يحرس أن الصورة ليست الشعار', ref: 'src/app/og-link-preview.static.spec.ts:49' }, { where: 'الخادم الثابت (nginx) يطلب /api/public/site-identity/social/og عند تفعيل WS_IDENTITY_UPSTREAM ويرجع إلى الملف الثابت عند أي تعذّر؛ برامج المعاينة تحتفظ بصورتها المخزّنة حتى تحدّثها', ref: 'nginx/identity.inc.template (FE)' }],
 		notWiredReason: 'وسوم og:image ثابتة في index.html وبعنوان مطلق: تقرؤها برامج المعاينة دون تشغيل JavaScript، فلا يمكن تبديلها من الهوية المخزّنة.',
 	},
 	{
@@ -188,7 +188,7 @@ export const SITE_IDENTITY_REGISTRY: readonly SiteIdentityKeyDef[] = [
 		kind: 'ico', allowedMimes: ['image/x-icon'], maxBytes: 256 * 1024, dimensions: { minWidth: 16, minHeight: 16, maxWidth: 256, maxHeight: 256, aspectMin: 1, aspectMax: 1 },
 		defaultAsset: { type: 'file', path: '/favicon.ico' },
 		defaultFingerprint: { mime: 'image/x-icon', width: 48, height: 48, byteSize: 15086, sha256: 'f9102be80297c0529207607be5277b4f90bca89d65988fa1771b91c7894e815f', entries: 3 },
-		usages: [{ where: 'ملف ثابت في public/ يقدّمه الخادم الثابت؛ لا يُشار إليه في الشيفرة (يطلبه المتصفح مباشرة)', ref: 'public/favicon.ico' }],
+		usages: [{ where: 'ملف ثابت في public/ يقدّمه الخادم الثابت؛ لا يُشار إليه في الشيفرة (يطلبه المتصفح مباشرة)', ref: 'public/favicon.ico' }, { where: 'الخادم الثابت (nginx) يطلب /api/public/site-identity/favicon.ico عند تفعيل WS_IDENTITY_UPSTREAM ويرجع إلى الملف الثابت عند أي تعذّر', ref: 'nginx/identity.inc.template (FE)' }],
 		notWiredReason: 'يطلبه المتصفح مباشرة من الملف الثابت /favicon.ico ولا يمرّ بالتطبيق؛ تبديله يحتاج مسارًا في الخادم الثابت لا في الواجهة.',
 	},
 	{
@@ -239,6 +239,8 @@ export const WIRED_KEYS: readonly string[] = [
 	'character.bebo.traffic', 'character.bebo.expressions',
 	// design tokens (round 5). tokens.typography joined after the FE proved the identical default rendering of the --font-family routing (design-system --font-body/heading/numeric)
 	'tokens.colors.light', 'tokens.colors.dark', 'tokens.layout', 'tokens.typography',
+	// round 7: the FE static host (nginx identity include, enabled by WS_IDENTITY_UPSTREAM) asks the public alias routes for /favicon.ico and the OG image
+	'social.og', 'favicon.ico',
 ];
 
 const BY_KEY: ReadonlyMap<string, SiteIdentityKeyDef> = new Map(SITE_IDENTITY_REGISTRY.map(d => [d.key, d]));
