@@ -7,7 +7,8 @@ import { memoryUpload } from '../utils/cloudinary-storage';
 import { AppError } from '../utils/app-error';
 import { ATLAS_MAX_BYTES, KEY_PATTERN, isKnownIdentityKey } from '../config/site-identity.registry';
 import { isTokenKey } from '../config/site-identity-tokens';
-import { SiteIdentityConflict, SiteIdentityService, SITE_IDENTITY_ERRORS, siteIdentityService } from '../services/site-identity.service';
+import { ICON_PREFIX } from '../config/site-identity-icons';
+import { SiteIdentityConflict, SiteIdentityService, SITE_IDENTITY_ERRORS, iconUnknownMessage, siteIdentityService } from '../services/site-identity.service';
 
 /**
  * /api/admin/site-identity - the identity manager of «التحكم بالموقع». Reading (the page, history, previews) needs `site.view`, `site.manage` or the legacy section id `site_control.manage`; uploading, publishing, restoring and
@@ -26,17 +27,24 @@ export function buildAdminSiteIdentityRouter(service: SiteIdentityService = site
 		}
 	};
 	/** an unknown key is refused BEFORE a file is buffered */
-	const knownKey = (req: Request, _res: Response, next: NextFunction) => (KEY_PATTERN.test(String(req.params.key)) && isKnownIdentityKey(String(req.params.key)) ? next() : next(new AppError('عنصر الهوية غير موجود.', 404, undefined, SITE_IDENTITY_ERRORS.UNKNOWN_KEY)));
+	const knownKey = (req: Request, _res: Response, next: NextFunction) => {
+		const key = String(req.params.key);
+		if (KEY_PATTERN.test(key) && isKnownIdentityKey(key)) return next();
+		const id = key.startsWith(ICON_PREFIX) ? key.slice(ICON_PREFIX.length) : null;
+		next(new AppError(id !== null ? iconUnknownMessage(id) : 'عنصر الهوية غير موجود.', 404, undefined, SITE_IDENTITY_ERRORS.UNKNOWN_KEY));
+	};
 	const upload = memoryUpload({ fileSize: ATLAS_MAX_BYTES, files: 1 });
 
 	const edit = requireAnyPermission(...SITE_IDENTITY_EDIT_PERMISSIONS);
 	/** the uploaded file, or (token keys only) the JSON `value` of the body turned into the same kind of in-memory file */
 	const fileOf = (req: Request) => req.file ?? (isTokenKey(String(req.params.key)) && req.body && typeof req.body === 'object' && !Array.isArray(req.body) && (req.body as Record<string, unknown>).value !== undefined
-		? { buffer: Buffer.from(JSON.stringify((req.body as Record<string, unknown>).value) ?? '', 'utf8'), mimetype: 'application/json' } : undefined);
+		? { buffer: Buffer.from(JSON.stringify((req.body as Record<string, unknown>).value) ?? '', 'utf8'), mimetype: 'application/json', fromValue: true } : undefined);
 
 	router.use(authenticate, requireActiveUser, requireAnyPermission(...SITE_IDENTITY_READ_PERMISSIONS));
 
 	router.get('/', ok(async req => service.overview(actorHasAny(await loadAdminActor(req), ...SITE_IDENTITY_EDIT_PERMISSIONS), req.user!.id)));
+	router.get('/icons', ok(req => service.iconList(req.query as Record<string, unknown>)));
+	router.get('/icons/:symbolId', ok(async req => service.iconItem(String(req.params.symbolId), actorHasAny(await loadAdminActor(req), ...SITE_IDENTITY_EDIT_PERMISSIONS), req.user!.id)));
 	router.get('/history', ok(req => service.history(req.query as Record<string, unknown>)));
 	router.get('/restore-set/:manifestVersion/preview', ok(req => service.previewRestoreSet(req.params.manifestVersion)));
 	router.get('/:key/versions/:id/preview', knownKey, async (req, res, next) => {

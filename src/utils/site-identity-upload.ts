@@ -206,10 +206,23 @@ function assertDimensions(def: SiteIdentityKeyDef, mime: string, width: number |
 	}
 }
 
+/**
+ * Extra rules of a function icon (family `icon.fn`), applied to the SANITISED markup: the FE turns the file into a <symbol>, so the root must declare a viewBox, and the icon must be self-contained geometry
+ * (no raster <image>/<feImage>, no <use> that could point at a page id or recurse into the very symbol it replaces).
+ */
+export function assertIconSvg(svg: string): void {
+	const rootTag = /^<svg\b[^>]*>/i.exec(svg)?.[0] ?? '';
+	const vb = /\sviewBox="([^"]*)"/.exec(rootTag)?.[1];
+	const nums = vb ? vb.trim().split(/[\s,]+/).map(Number) : [];
+	if (nums.length !== 4 || !nums.every(Number.isFinite) || !(nums[2] > 0) || !(nums[3] > 0)) throw new UploadRejected('أيقونة الواجهة تحتاج viewBox على عنصر <svg> الجذر (مثل viewBox="0 0 24 24")؛ الاكتفاء بـ width و height غير مقبول.', 'ICON_NO_VIEWBOX');
+	const bad = /<(image|feimage|use)[\s>/]/i.exec(svg);
+	if (bad) throw new UploadRejected(`أيقونة الواجهة يجب أن تكون أشكالًا متجهية مستقلة: عنصر <${bad[1].toLowerCase()}> غير مسموح داخلها.`, 'ICON_FORBIDDEN_ELEMENT');
+}
+
 /** Validates (and, for SVG, sanitises) an upload against the registry rules of its key. Throws UploadRejected / SvgRejected (both 400 with code SITE_IDENTITY_FILE_REJECTED). */
-export async function validateIdentityUpload(def: SiteIdentityKeyDef, input: Buffer, declaredMime?: string): Promise<ValidatedUpload> {
-	if (!input || input.length === 0) throw new UploadRejected('الملف فارغ.', 'EMPTY');
-	if (def.kind === 'json') return validateTokenUpload(def.key, input); // design tokens: a sparse JSON object, validated by grammar (site-identity-tokens.ts)
+export async function validateIdentityUpload(def: SiteIdentityKeyDef, input: Buffer, declaredMime?: string, opts: { source?: 'value' | 'file' } = {}): Promise<ValidatedUpload> {
+	if (!input || input.length === 0) throw new UploadRejected(opts.source === 'value' ? 'لم تُرسَل أي قيمة للرموز.' : 'الملف فارغ.', 'EMPTY');
+	if (def.kind === 'json') return validateTokenUpload(def.key, input, opts.source ?? 'file'); // design tokens: a sparse JSON object, validated by grammar (site-identity-tokens.ts)
 	const ceiling = Math.max(def.maxBytes, 1);
 	if (input.length > ceiling) throw new UploadRejected(`حجم الملف (${Math.round(input.length / 1024)}KB) أكبر من الحد المسموح لهذا العنصر (${Math.round(ceiling / 1024)}KB).`, 'TOO_BIG', 413);
 	const kind = sniffKind(input);
@@ -229,6 +242,7 @@ export async function validateIdentityUpload(def: SiteIdentityKeyDef, input: Buf
 		const out = Buffer.from(r.svg, 'utf8');
 		if (out.length > maxBytesFor(def, mime)) throw new UploadRejected('حجم ملف SVG بعد التنظيف أكبر من الحد المسموح.', 'TOO_BIG', 413);
 		assertDimensions(def, mime, r.width, r.height);
+		if (def.family === 'icon.fn') assertIconSvg(r.svg);
 		return { mime, bytes: out, sha256: sha256Of(out), byteSize: out.length, width: r.width === null ? null : Math.round(r.width), height: r.height === null ? null : Math.round(r.height),
 			note: r.changed ? `نُظِّف ملف SVG: أُزيل ${r.removed} عنصر/خاصية غير مسموحة (${r.removedDetail.slice(0, 6).join('؛ ')})` : null, sanitized: { changed: r.changed, removed: r.removed } };
 	}

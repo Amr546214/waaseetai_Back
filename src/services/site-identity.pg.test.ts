@@ -11,6 +11,7 @@ import { SITE_IDENTITY_REGISTRY, WIRED_KEYS } from '../config/site-identity.regi
 // round 2 cases run in THIS file's process, after the round-1 cases: both reset the same tables, so they must never run as two parallel test files
 import './site-identity-round2.pgenv';
 import './site-identity-round5.pgenv';
+import './site-identity-round6.pgenv';
 
 /**
  * Site identity on REAL PostgreSQL over HTTP: permissions on EVERY admin route, the upload -> publish -> restore lifecycle, the public manifest / immutable bytes, audit rows, restarts, injected failures

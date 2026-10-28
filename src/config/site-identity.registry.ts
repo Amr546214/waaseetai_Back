@@ -21,6 +21,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { ICON_ROOT_ASPECT, ICON_REASON_TEXT, iconEntryOfKey, symbolIdOf } from './site-identity-icons';
 
 export const IDENTITY_GROUPS = ['logo', 'favicon', 'icon', 'character', 'token'] as const;
 export type IdentityGroup = typeof IDENTITY_GROUPS[number];
@@ -70,6 +71,10 @@ export interface SiteIdentityKeyDef {
 	notWiredReason: string;
 	/** extra facts the FE worker needs (differences between inline copies, etc.) */
 	notes?: readonly string[];
+	/** set for the members of a dynamic key family (today only `icon.fn`: one key per function-icon symbol, see site-identity-icons.ts) */
+	family?: 'icon.fn';
+	/** family members: the id of the symbol the key replaces */
+	symbolId?: string;
 }
 
 const MARK_FP: DefaultFingerprint = { mime: 'image/png', width: 614, height: 371, byteSize: 14651, sha256: 'e4cb6ce7a96c05632e1b75e1d3b0f20ebdae27a1c8d5d9ff633922b118443c1b' };
@@ -78,6 +83,18 @@ const NOT_READ = 'لا يقرأ أي مكوّن في الواجهة هذا ال�
 const ROBOT_JS = 'public/bebo/robot.js';
 const ATLAS_REASON = 'تبني robot.js عناوين صور الشخصية بنفسها نسبةً إلى موقع السكربت (new URL) وإحداثيات الإطارات ثابتة داخلها؛ لا يوجد قارئ للهوية، واستبدال اللوحة يتطلب إعادة رسم كل الإطارات بالمقاس نفسه.';
 
+/** what each atlas REALLY drives, read from public/bebo/robot.js (poses -> atlas; _activeAssets(): skin scout|safety -> scout set, anything else -> classic set). Reviewed 2026-10-28 (round 6): every cross-effect below is by design, not an accident. */
+const ROBOT_POSES_NOTE = 'مرجع: public/bebo/robot.js (جدول poses + _activeAssets)';
+const BEBO_LINKS: Record<string, string[]> = {
+	sprites: ['اللوحة الأساسية (base) ترسم الروبوت نفسه في: idle و blink و wave و happy و thinking و listening و sleep، وكذلك وضعية catrest («بيسلّم على القطة»): الإطاران 2 و3 من هذه اللوحة هما الروبوت وهو يسلّم؛ أما القطة فتُرسم من لوحة القطة (kitten) وحدها. لذلك تغيير هذه اللوحة يغيّر روبوت مشهد القطة ولا يغيّر القطة. مقصود: جسم الروبوت كله في اللوحة الأساسية.', ROBOT_POSES_NOTE],
+	actions: ['لوحة الحركات (action) تُرسم في: crosswalk و walk و typing و jump و land و drag و rest. لا تأثير على القطة. crosswalk وضعية إضافية (راجع traffic).', ROBOT_POSES_NOTE],
+	speaking: ['لوحة التحدث (speech) تُرسم في: speaking و map و report و chart.', ROBOT_POSES_NOTE],
+	antics: ['لوحة الحركات الاستعراضية (antics) في: scratch و dance و fly و catch و chew.', ROBOT_POSES_NOTE],
+	emotions: ['لوحة المشاعر (emotions) في: laugh و cry و plead، وكذلك وضعية chase («بيجري ورا القطة»): الإطاران 6 و7 منها هما الروبوت وهو يجري؛ القطة نفسها من لوحة kitten. مقصود: الروبوت كله في لوحة المشاعر.', ROBOT_POSES_NOTE],
+	traffic: ['ملف واحد مشترك بين الشكلين بقصد: robot.js يوجّه الكلاسيكي والكشّاف معًا إلى scout/guide-traffic.png (لا لوحة إشارات خاصة بالكلاسيكي). ترسمه الوضعيات drive و crash و seatbelt و traffic، وهي وضعيات إضافية (BEBO_EXTRA_POSES) يعيدها bebo-avatar فورًا إلى idle في الشكل الكلاسيكي؛ فالتغيير يظهر عمليًا في شكل الكشّاف فقط.', ROBOT_POSES_NOTE],
+	expressions: ['ملف واحد مشترك بين الشكلين بقصد: robot.js يوجّه الكلاسيكي والكشّاف معًا إلى scout/guide-expressions.png. ترسمه الوضعيات amazed و whisper و shout و idea، وهي وضعيات إضافية يعيدها bebo-avatar إلى idle في الشكل الكلاسيكي؛ فالتغيير يظهر عمليًا في شكل الكشّاف فقط.', ROBOT_POSES_NOTE],
+	kitten: ['لوحة القطة (cat): تُرسم القطة فقط في وضعيتي chase و catrest، لكل شكل (skin) لوحته؛ بايتات القطتين متطابقة اليوم لكن المفتاحان مستقلان: تغيير قطة الكلاسيكي لا يغيّر قطة الكشّاف.', ROBOT_POSES_NOTE],
+};
 const atlas = (o: { key: string; label: string; file: string; fp: DefaultFingerprint; line: number; skin: 'classic' | 'scout' | 'both'; pose: string }): SiteIdentityKeyDef => ({
 	key: o.key, group: 'character', label: o.label, kind: 'raster',
 	description: `لوحة إطارات (sprite atlas) لشخصية بيبو: ${o.pose}. مقاسها ثابت 1774×887 لأن robot.js يقصّ الإطارات بإحداثيات مطلقة.`,
@@ -88,7 +105,7 @@ const atlas = (o: { key: string; label: string; file: string; fp: DefaultFingerp
 		{ where: 'المساعد الذكي: المكوّن <app-bebo-avatar> ينشئ <cute-robot> (واجهة المساعد العائمة)', ref: 'src/app/sheards/bebo-avatar/bebo-avatar.ts:61' },
 	],
 	notWiredReason: ATLAS_REASON,
-	notes: ['حجم الملف الحالي أكبر من 512KB؛ سقف هذا المفتاح 2MB (استثناء موثّق: لا يمكن أن تكون اللوحة البديلة أصغر من اللوحة الحالية بكثير)'],
+	notes: ['حجم الملف الحالي أكبر من 512KB؛ سقف هذا المفتاح 2MB (استثناء موثّق: لا يمكن أن تكون اللوحة البديلة أصغر من اللوحة الحالية بكثير)', ...(BEBO_LINKS[o.key.split('.').pop()!] ?? [])],
 });
 
 const PNG_ATLAS = (sha256: string, byteSize: number): DefaultFingerprint => ({ mime: 'image/png', width: 1774, height: 887, byteSize, sha256 });
@@ -226,9 +243,28 @@ export const WIRED_KEYS: readonly string[] = [
 
 const BY_KEY: ReadonlyMap<string, SiteIdentityKeyDef> = new Map(SITE_IDENTITY_REGISTRY.map(d => [d.key, d]));
 export const IDENTITY_KEYS: readonly string[] = SITE_IDENTITY_REGISTRY.map(d => d.key);
-export const identityDef = (key: string): SiteIdentityKeyDef | null => BY_KEY.get(key) ?? null;
-export const isKnownIdentityKey = (key: string): boolean => BY_KEY.has(key);
-export const isWiredKey = (key: string, wired: readonly string[] = WIRED_KEYS): boolean => wired.includes(key) && BY_KEY.has(key);
+
+/** the key definition of one member of the `icon.fn.<symbolId>` family (null when the id is not on the generated allow-list). Built lazily and cached; never part of SITE_IDENTITY_REGISTRY (the page payload must not grow with the number of icons). */
+const ICON_DEFS = new Map<string, SiteIdentityKeyDef>();
+function iconDef(key: string): SiteIdentityKeyDef | null {
+	const hit = ICON_DEFS.get(key); if (hit) return hit;
+	const e = iconEntryOfKey(key), id = symbolIdOf(key); if (!e || !id) return null;
+	const where = e.files.length ? e.files.join('; ') : 'src/app';
+	const def: SiteIdentityKeyDef = {
+		key, group: 'icon', family: 'icon.fn', symbolId: id, label: `أيقونة «${e.label ?? id}»`,
+		description: `أيقونة وظيفية (${id}) تُرسم بـ <use href="#${id}"> في الواجهة؛ تبديلها يغيّر كل مكان يستخدمها. ليست أيقونة الذكاء الاصطناعي الرسمية (icon.ai).`,
+		kind: 'svg', allowedMimes: ['image/svg+xml'], maxBytes: SVG_MAX_BYTES, dimensions: { aspectMin: ICON_ROOT_ASPECT.min, aspectMax: ICON_ROOT_ASPECT.max },
+		defaultAsset: { type: 'inline-symbol', symbolId: id, source: `<symbol id="${id}"> في ${e.defs} قالب (${where}${e.files.length < e.defs ? ' …' : ''})` },
+		defaultFingerprint: { mime: 'image/svg+xml', width: e.width, height: e.height, byteSize: e.byteSize, sha256: e.sha256, note: `بصمة المحتوى الداخلي المطبَّع للرمز (viewBox|inner) وليست بصمة ملف${e.variants > 1 ? `؛ للرمز ${e.variants} أشكال هندسية مختلفة في القوالب وسيستبدلها الملف المخصّص كلها بشكل واحد` : ''}` },
+		usages: [{ where: `<use href="#${id}"> (يشير إليه مكوّن واحد على الأقل في الواجهة)`, ref: where }],
+		notWiredReason: ICON_REASON_TEXT[e.reason ?? 'NO_CONSUMER'],
+		notes: ['SVG مستقل بـ viewBox إلزامي (يُحقن كـ <symbol> بنفس قواعد أيقونة الذكاء الاصطناعي: currentColor يتبع لون الموقع، وما يعلنه الجذر من fill/stroke يُطبَّق كما هو).', 'لا يُسمح بـ <image> ولا <use> داخل الأيقونة.', ...(e.variants > 1 ? [`تحذير: للرمز ${e.variants} أشكال مختلفة في قوالب مختلفة؛ الأيقونة المخصّصة توحّدها كلها.`] : [])],
+	};
+	ICON_DEFS.set(key, def); return def;
+}
+export const identityDef = (key: string): SiteIdentityKeyDef | null => BY_KEY.get(key) ?? iconDef(key);
+export const isKnownIdentityKey = (key: string): boolean => BY_KEY.has(key) || iconDef(key) !== null;
+export const isWiredKey = (key: string, wired: readonly string[] = WIRED_KEYS): boolean => (wired.includes(key) && BY_KEY.has(key)) || (iconEntryOfKey(key)?.reason === null);
 export const KEY_PATTERN = /^[a-z]+(?:\.[a-z0-9-]+)+$/;
 
 /** the size ceiling that applies to an upload for this key and this (sniffed) mime */
@@ -251,6 +287,7 @@ export function describeRules(def: SiteIdentityKeyDef): string[] {
 		if (d.maxWidth || d.maxHeight) out.push(`أكبر مقاس: ${d.maxWidth ?? ABSOLUTE_MAX_SIDE}×${d.maxHeight ?? ABSOLUTE_MAX_SIDE}`);
 		if (d.aspectMin !== undefined || d.aspectMax !== undefined) out.push(d.aspectMin !== undefined && d.aspectMax !== undefined && d.aspectMax - d.aspectMin <= 0.02 ? 'يجب أن تكون الصورة مربّعة' : `نسبة العرض إلى الارتفاع بين ${d.aspectMin ?? 0} و${d.aspectMax ?? '∞'}`);
 	}
+	if (def.family === 'icon.fn') out.push('يجب أن يحمل الجذر viewBox (مثل viewBox="0 0 24 24")', 'لا يُسمح بعناصر <image> أو <use> داخل الأيقونة', 'لون الأيقونة: استخدم currentColor لتتبع لون الموقع');
 	return out;
 }
 
@@ -272,7 +309,7 @@ export const UNREGISTERED_PRESENT_ASSETS: ReadonlyArray<{ path: string; reason: 
 /** shown on the page so nobody expects these in the identity manager */
 export const NOT_IDENTITY_NOTES: readonly string[] = [
 	'اسم المنصة ليس مفتاح هوية: يبقى إعداد «اسم المنصة» الحالي.',
-	'أيقونات الوظائف (الجرس، العين، البرق، التنبيه، المحفظة ...) وأيقونات مكتبة الذكاء الاصطناعي الشبيهة (#ws-trust-ai و #ws-ai-*) ليست «أيقونة الذكاء الاصطناعي» الرسمية #i-ai ولا تُدار هنا.',
+	'أيقونات الوظائف (الجرس، العين، البرق، التنبيه، المحفظة ...) تُدار الآن مفتاحًا مفتاحًا بصيغة icon.fn.<معرّف الرمز> فقط حين يرسمها مكوّن فعلًا عبر <symbol>/<use>؛ ما لا يتبعه أي مكوّن يظهر «غير مرتبط». الأيقونات المبنية داخل نصوص TypeScript أو خلفيات CSS أو <img> ليست مشمولة. أيقونات مكتبة الذكاء الاصطناعي الشبيهة (#ws-trust-ai و #ws-ai-*) ليست «أيقونة الذكاء الاصطناعي» الرسمية #i-ai ولا تُدار هنا.',
 	'شعارات المنصات الاجتماعية وشعارات الدفع والبنوك وأعلام الدول علامات تجارية لأطراف أخرى ولا تُستبدل.',
 	'كل ما يرفعه المستخدمون (صور الحسابات، الأعمال، وثائق الهوية، صور الخدمات، المواد التسويقية) ليس هوية المنصة.',
 	'صور المحتوى والتسويق في public/assets/images (service-*، dashboard-mockup، contract-*، message* ...) ليست هوية.',

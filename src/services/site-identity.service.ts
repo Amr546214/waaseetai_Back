@@ -10,6 +10,9 @@ import { sha256Of, validateIdentityUpload } from '../utils/site-identity-upload'
 import { buildTokensCss, validateTokenBytes, TokenSets } from '../utils/site-identity-tokens';
 import { TOKEN_KEYS, TokenKey, isTokenKey, tokenSpecOut } from '../config/site-identity-tokens';
 import {
+	ICON_PREFIX, ICON_REASON_TEXT, IconReasonCode, MAX_CUSTOM_ICONS, MAX_ICON_DRAFTS_TOTAL, allowlistRevision, iconCounts, iconEntry, iconExcluded, iconKeyOf, iconLibraryOnly, iconSymbols, isIconFamilyKey, symbolIdOf, iconExcludedReason,
+} from '../config/site-identity-icons';
+import {
 	IDENTITY_GROUPS, KEY_PATTERN, NOT_IDENTITY_NOTES, SITE_IDENTITY_REGISTRY, UNREGISTERED_PRESENT_ASSETS, WIRED_KEYS, SiteIdentityKeyDef, describeRules, identityDef, isWiredKey,
 } from '../config/site-identity.registry';
 
@@ -29,7 +32,7 @@ export const SITE_IDENTITY_VERSION_CONFLICT = 'SITE_IDENTITY_VERSION_CONFLICT';
 export const SITE_IDENTITY_ERRORS = {
 	UNKNOWN_KEY: 'SITE_IDENTITY_UNKNOWN_KEY', NOT_WIRED: 'SITE_IDENTITY_KEY_NOT_WIRED', VERSION_NOT_FOUND: 'SITE_IDENTITY_VERSION_NOT_FOUND', NOT_STAGED: 'SITE_IDENTITY_VERSION_NOT_STAGED',
 	NOT_RESTORABLE: 'SITE_IDENTITY_VERSION_NOT_RESTORABLE', NO_CHANGE: 'SITE_IDENTITY_NO_CHANGE', TOO_MANY_STAGED: 'SITE_IDENTITY_TOO_MANY_STAGED', VERIFY_FAILED: 'SITE_IDENTITY_VERIFY_FAILED',
-	UNAVAILABLE: 'SITE_IDENTITY_UNAVAILABLE', MANIFEST_NOT_FOUND: 'SITE_IDENTITY_MANIFEST_NOT_FOUND', PREVIEW_STALE: 'SITE_IDENTITY_PREVIEW_STALE', DRAFT_NOT_YOURS: 'SITE_IDENTITY_DRAFT_NOT_YOURS',
+	UNAVAILABLE: 'SITE_IDENTITY_UNAVAILABLE', MANIFEST_NOT_FOUND: 'SITE_IDENTITY_MANIFEST_NOT_FOUND', PREVIEW_STALE: 'SITE_IDENTITY_PREVIEW_STALE', DRAFT_NOT_YOURS: 'SITE_IDENTITY_DRAFT_NOT_YOURS', TOO_MANY_ICONS: 'SITE_IDENTITY_TOO_MANY_ICONS',
 } as const;
 export const MAX_STAGED_PER_KEY = 5;
 export const HISTORY_PER_KEY = 10;
@@ -123,7 +126,8 @@ export class SiteIdentityService {
 	private db: Db; private isWiredFn: (key: string) => boolean; private faults: SiteIdentityFaults;
 	constructor(opts: SiteIdentityOptions = {}) { this.db = opts.db ?? defaultPrisma; this.isWiredFn = opts.isWired ?? ((k) => isWiredKey(k, WIRED_KEYS)); this.faults = opts.faults ?? {}; }
 
-	isWired(key: string) { return this.isWiredFn(key); }
+	/** icon family members are wired exactly when the generated allow-list says something follows them (never overridable); every other key asks the registry list (or the injected test seam) */
+	isWired(key: string) { return isIconFamilyKey(key) ? isWiredKey(key) : this.isWiredFn(key); }
 	/** the registry entry or a 404 / 400 */
 	private def(key: string): SiteIdentityKeyDef {
 		const d = KEY_PATTERN.test(String(key)) ? identityDef(String(key)) : null;
@@ -151,18 +155,75 @@ export class SiteIdentityService {
 			]);
 			const stateBy = new Map(states.map(s => [s.key, s])); const byKey = new Map<string, AssetMeta[]>();
 			for (const a of assets as AssetMeta[]) { const l = byKey.get(a.key) ?? []; l.push(a); byKey.set(a.key, l); }
-			const items = SITE_IDENTITY_REGISTRY.map(d => {
-				const st = stateBy.get(d.key); const rows = byKey.get(d.key) ?? []; const wired = this.isWired(d.key);
-				const active = st?.activeAssetId ? rows.find(r => r.id === st.activeAssetId) ?? null : null;
-				return {
-					key: d.key, group: d.group, label: d.label, description: d.description, kind: d.kind, allowedMimes: d.allowedMimes, maxBytes: d.maxBytes, dimensions: d.dimensions, rules: describeRules(d),
-					defaultAsset: d.defaultAsset, defaultFingerprint: d.defaultFingerprint, ...(d.kind === 'json' ? { tokens: tokenSpecOut(d.key) } : {}), usages: d.usages, notes: d.notes ?? [], wired, editable: wired, notWiredReason: wired ? null : d.notWiredReason,
-					state: { stateVersion: st?.version ?? 0, isDefault: !active, active: active ? assetOut(active) : null, updatedAt: st?.updatedAt?.toISOString() ?? null, updatedById: st?.updatedById ?? null },
-					staged: rows.filter(r => r.status === 'STAGED').map(r => ({ ...assetOut(r), isMine: !!callerId && r.createdById === callerId })),
-					history: rows.filter(r => r.status !== 'STAGED').slice(0, HISTORY_PER_KEY).map(assetOut),
-				};
-			});
-			return withActors(this.db, { manifestVersion: mv._max.version ?? 0, canManage, groups: IDENTITY_GROUPS, items, notIdentity: NOT_IDENTITY_NOTES, unregisteredAssets: UNREGISTERED_PRESENT_ASSETS });
+			const items: Array<ReturnType<SiteIdentityService['itemOf']>> = SITE_IDENTITY_REGISTRY.map(d => this.itemOf(d, stateBy.get(d.key), byKey.get(d.key) ?? [], callerId));
+			// icon family: a full item ONLY for icons that have a state row or any non-discarded version (customised, or with history/drafts); untouched icons stay out of the page payload (see GET /icons)
+			const touched = new Set<string>(); for (const k of stateBy.keys()) if (isIconFamilyKey(k)) touched.add(k);
+			for (const [k, rows] of byKey) if (isIconFamilyKey(k) && rows.some(r => r.status !== 'DISCARDED')) touched.add(k);
+			for (const k of [...touched].sort()) { const d = identityDef(k); if (d) items.push(this.itemOf(d, stateBy.get(k), byKey.get(k) ?? [], callerId)); }
+			const iconRowsAll = this.iconSummary(stateBy, byKey);
+			const iconFamily = { prefix: ICON_PREFIX, listUrl: '/admin/site-identity/icons', maxCustom: MAX_CUSTOM_ICONS, maxDraftsTotal: MAX_ICON_DRAFTS_TOTAL, allowlistRevision: allowlistRevision(),
+				counts: { ...iconCounts(), custom: iconRowsAll.counts.custom, withDraft: iconRowsAll.counts.withDraft } };
+			return withActors(this.db, { manifestVersion: mv._max.version ?? 0, canManage, groups: IDENTITY_GROUPS, items, iconFamily, notIdentity: NOT_IDENTITY_NOTES, unregisteredAssets: UNREGISTERED_PRESENT_ASSETS });
+		});
+	}
+
+	/** one admin item (the page payload shape) of a key */
+	private itemOf(d: SiteIdentityKeyDef, st: { version: number; activeAssetId: string | null; updatedAt: Date; updatedById: string | null } | undefined, rows: AssetMeta[], callerId: string | null) {
+		const wired = this.isWired(d.key);
+		const active = st?.activeAssetId ? rows.find(r => r.id === st.activeAssetId) ?? null : null;
+		return {
+			key: d.key, group: d.group, label: d.label, description: d.description, kind: d.kind, allowedMimes: d.allowedMimes, maxBytes: d.maxBytes, dimensions: d.dimensions, rules: describeRules(d),
+			defaultAsset: d.defaultAsset, defaultFingerprint: d.defaultFingerprint, ...(d.kind === 'json' ? { tokens: tokenSpecOut(d.key) } : {}), usages: d.usages, notes: d.notes ?? [], wired, editable: wired, notWiredReason: wired ? null : d.notWiredReason,
+			...(d.family ? { family: d.family, symbolId: d.symbolId ?? null, status: !wired ? 'not-wired' : active ? 'custom' : 'default' } : {}),
+			state: { stateVersion: st?.version ?? 0, isDefault: !active, active: active ? assetOut(active) : null, updatedAt: st?.updatedAt?.toISOString() ?? null, updatedById: st?.updatedById ?? null },
+			staged: rows.filter(r => r.status === 'STAGED').map(r => ({ ...assetOut(r), isMine: !!callerId && r.createdById === callerId })),
+			history: rows.filter(r => r.status !== 'STAGED').slice(0, HISTORY_PER_KEY).map(assetOut),
+		};
+	}
+
+	/** compact status of every icon (allow-list + library-only + excluded), from the already loaded state/asset rows */
+	private iconSummary(stateBy: Map<string, { version: number; activeAssetId: string | null }>, byKey: Map<string, AssetMeta[]>) {
+		const reason = (code: IconReasonCode) => ({ code, text: ICON_REASON_TEXT[code] });
+		const rows: IconRow[] = [];
+		for (const e of iconSymbols()) {
+			const key = iconKeyOf(e.id); const st = stateBy.get(key); const list = byKey.get(key) ?? [];
+			const active = st?.activeAssetId ? list.find(r => r.id === st.activeAssetId) ?? null : null;
+			const wired = e.reason === null;
+			rows.push({ id: e.id, key, label: e.label ?? e.id, library: null, status: !wired ? 'not-wired' : active ? 'custom' : 'default', reason: wired ? null : reason('NO_CONSUMER'),
+				hasDraft: list.some(r => r.status === 'STAGED'), stateVersion: st?.version ?? 0, activeVersion: active?.version ?? null, defs: e.defs, variants: e.variants, viewBox: e.viewBox });
+		}
+		for (const e of iconLibraryOnly()) rows.push({ id: e.id, key: null, label: e.label, library: e.library, status: 'not-wired', reason: reason(e.reason), ...(e.reason === 'MANAGED_BY_ICON_AI' ? { managedBy: 'icon.ai' } : {}), hasDraft: false, stateVersion: 0, activeVersion: null, defs: 0, variants: 0, viewBox: null });
+		for (const e of iconExcluded()) rows.push({ id: e.id, key: null, label: e.id, library: null, status: 'not-wired', reason: reason(e.reason), ...(e.reason === 'MANAGED_BY_ICON_AI' ? { managedBy: 'icon.ai' } : {}), hasDraft: false, stateVersion: 0, activeVersion: null, defs: 0, variants: 0, viewBox: null });
+		// the library slots that also have a symbol carry their library id
+		const lib = new Map(iconLibraryOnly().map(l => [l.id, l.library]));
+		for (const r of rows) if (r.library === null && lib.has(r.id)) r.library = lib.get(r.id)!;
+		rows.sort((a, b) => a.id.localeCompare(b.id) || (a.key ? -1 : 1));
+		return { rows, counts: { default: rows.filter(r => r.status === 'default').length, custom: rows.filter(r => r.status === 'custom').length, notWired: rows.filter(r => r.status === 'not-wired').length, withDraft: rows.filter(r => r.hasDraft).length } };
+	}
+
+	/** GET /icons - the lightweight status list of the icon library (no versions, no bytes) */
+	async iconList(query: { status?: unknown; q?: unknown }) {
+		const status = query.status === undefined || query.status === '' ? null : String(query.status);
+		if (status !== null && !['default', 'custom', 'not-wired', 'draft'].includes(status)) throw fieldError('status', 'الحالة يجب أن تكون default أو custom أو not-wired أو draft.');
+		const q = typeof query.q === 'string' ? query.q.trim().toLowerCase().slice(0, 60) : '';
+		return this.guard(async () => {
+			const [states, assets] = await Promise.all([this.db.siteIdentityState.findMany({ where: { key: { startsWith: ICON_PREFIX } } }),
+				this.db.siteIdentityAsset.findMany({ where: { key: { startsWith: ICON_PREFIX }, status: { not: 'DISCARDED' } }, select: META })]);
+			const stateBy = new Map(states.map(s => [s.key, s])); const byKey = new Map<string, AssetMeta[]>();
+			for (const a of assets as AssetMeta[]) { const l = byKey.get(a.key) ?? []; l.push(a); byKey.set(a.key, l); }
+			const all = this.iconSummary(stateBy, byKey);
+			const rows = all.rows.filter(r => (status === null || (status === 'draft' ? r.hasDraft : r.status === status)) && (!q || r.id.includes(q) || r.label.toLowerCase().includes(q)));
+			return { total: rows.length, counts: all.counts, limits: { maxCustom: MAX_CUSTOM_ICONS, maxDraftsTotal: MAX_ICON_DRAFTS_TOTAL }, rows };
+		});
+	}
+
+	/** GET /icons/:symbolId - the full admin item of one icon key */
+	async iconItem(symbolId: string, canManage: boolean, callerId: string | null = null) {
+		const d = identityDef(iconKeyOf(String(symbolId)));
+		if (!d || !d.family) throw new AppError(iconUnknownMessage(String(symbolId)), 404, undefined, SITE_IDENTITY_ERRORS.UNKNOWN_KEY);
+		return this.guard(async () => {
+			const [st, rows] = await Promise.all([this.db.siteIdentityState.findUnique({ where: { key: d.key } }), this.db.siteIdentityAsset.findMany({ where: { key: d.key }, select: META, orderBy: [{ version: 'desc' }] })]);
+			return withActors(this.db, { ...this.itemOf(d, st ?? undefined, rows as AssetMeta[], callerId), canManage });
 		});
 	}
 
@@ -250,10 +311,10 @@ export class SiteIdentityService {
 	}
 
 	// ------------------------------------------------------------------------------------------------------------------ stage (upload)
-	async stage(key: string, file: { buffer: Buffer; mimetype?: string } | undefined, actorId: string, ctx: AuditCtx = {}) {
+	async stage(key: string, file: { buffer: Buffer; mimetype?: string; fromValue?: boolean } | undefined, actorId: string, ctx: AuditCtx = {}) {
 		const def = this.writable(key);
-		if (!file || !file.buffer) throw fieldError('file', 'اختر ملفًا لرفعه (الحقل file).');
-		const v = await validateIdentityUpload(def, file.buffer, file.mimetype); // throws UploadRejected / SvgRejected (400, SITE_IDENTITY_FILE_REJECTED)
+		if (!file || !file.buffer) throw def.kind === 'json' ? fieldError('value', 'أرسل قيم الرموز في الحقل value (كائن {"--اسم":"قيمة"})، أو ملف JSON في الحقل file.') : fieldError('file', 'اختر ملفًا لرفعه (الحقل file).');
+		const v = await validateIdentityUpload(def, file.buffer, file.mimetype, { source: file.fromValue ? 'value' : 'file' }); // throws UploadRejected / SvgRejected (400, SITE_IDENTITY_FILE_REJECTED)
 		return this.guard(async () => {
 			let retries = 0;
 			for (;;) {
@@ -262,7 +323,8 @@ export class SiteIdentityService {
 						await this.lock(tx, stageLock(key));
 						const st = await tx.siteIdentityState.findUnique({ where: { key }, include: { activeAsset: { select: { sha256: true, version: true } } } });
 						if (st?.activeAsset?.sha256 === v.sha256) throw new AppError('الملف مطابق تمامًا للنسخة المعتمدة حاليًا لهذا العنصر.', 409, undefined, SITE_IDENTITY_ERRORS.NO_CHANGE);
-						if ((await tx.siteIdentityAsset.count({ where: { key, status: 'STAGED' } })) >= MAX_STAGED_PER_KEY) throw new AppError(`لهذا العنصر ${MAX_STAGED_PER_KEY} مسودات غير معتمدة؛ اعتمد إحداها أو احذفها قبل رفع مسودة جديدة.`, 409, undefined, SITE_IDENTITY_ERRORS.TOO_MANY_STAGED);
+						if (def.family && (await tx.siteIdentityAsset.count({ where: { key: { startsWith: ICON_PREFIX }, status: 'STAGED' } })) >= MAX_ICON_DRAFTS_TOTAL) throw new AppError(`في الأيقونات ${MAX_ICON_DRAFTS_TOTAL} مسودة غير معتمدة؛ اعتمد بعضها أو احذفها قبل رفع مسودة جديدة.`, 409, undefined, SITE_IDENTITY_ERRORS.TOO_MANY_STAGED);
+							if ((await tx.siteIdentityAsset.count({ where: { key, status: 'STAGED' } })) >= MAX_STAGED_PER_KEY) throw new AppError(`لهذا العنصر ${MAX_STAGED_PER_KEY} مسودات غير معتمدة؛ اعتمد إحداها أو احذفها قبل رفع مسودة جديدة.`, 409, undefined, SITE_IDENTITY_ERRORS.TOO_MANY_STAGED);
 						const max = await tx.siteIdentityAsset.aggregate({ where: { key }, _max: { version: true } });
 						const row = await tx.siteIdentityAsset.create({ data: { key, version: (max._max.version ?? 0) + 1, status: 'STAGED', mime: v.mime, bytes: Uint8Array.from(v.bytes), sha256: v.sha256, width: v.width, height: v.height, byteSize: v.byteSize, note: v.note, createdById: actorId }, select: META });
 						await accountAuditLogService.record({ userId: actorId, eventType: 'SITE_IDENTITY_UPLOADED', category: LogCategory.SYSTEM_AUDIT, source: 'ADMIN', severity: 'INFO', title: 'رفع نسخة جديدة من هوية الموقع',
@@ -297,6 +359,7 @@ export class SiteIdentityService {
 	 */
 	private async applyChanges(tx: Tx, changes: Array<{ key: string; toAssetId: string | null }>, actorId: string, reason: string, audit: (applied: Applied[]) => Parameters<typeof accountAuditLogService.record>[0]): Promise<{ manifestVersion: number; applied: Applied[] }> {
 		const applied: Applied[] = [];
+		await this.assertIconCap(tx, changes);
 		const states = new Map((await tx.siteIdentityState.findMany({ where: { key: { in: changes.map(c => c.key) } } })).map(s => [s.key, s]));
 		const ids = [...new Set([...changes.map(c => c.toAssetId), ...[...states.values()].map(s => s.activeAssetId)].filter((x): x is string => !!x))];
 		const assets = new Map((await tx.siteIdentityAsset.findMany({ where: { id: { in: ids } }, select: META })).map(a => [a.id, a as AssetMeta]));
@@ -337,6 +400,15 @@ export class SiteIdentityService {
 		const ms = man?.snapshot as Record<string, string | null> | undefined;
 		if (!ms || applied.some(a => (ms[a.key] ?? null) !== a.toAssetId)) throw verifyFailed('manifest row');
 		return { manifestVersion, applied };
+	}
+
+	/** at most MAX_CUSTOM_ICONS icons may be customised at once: a change that would push the active count of the family over the cap (and increases it) is refused before anything is written */
+	private async assertIconCap(tx: Tx, changes: Array<{ key: string; toAssetId: string | null }>) {
+		const fam = changes.filter(c => isIconFamilyKey(c.key)); if (!fam.length) return;
+		const active = new Set((await tx.siteIdentityState.findMany({ where: { key: { startsWith: ICON_PREFIX }, activeAssetId: { not: null } }, select: { key: true } })).map(s => s.key));
+		const before = active.size;
+		for (const c of fam) { if (c.toAssetId) active.add(c.key); else active.delete(c.key); }
+		if (active.size > MAX_CUSTOM_ICONS && active.size > before) throw new AppError(`لا يمكن تخصيص أكثر من ${MAX_CUSTOM_ICONS} أيقونة في الوقت نفسه. أعد أيقونة مخصّصة إلى الافتراضي أولًا ثم أعد المحاولة.`, 409, undefined, SITE_IDENTITY_ERRORS.TOO_MANY_ICONS);
 	}
 
 	/** audit detail for token keys: which override NAMES the new active sets hold (never the values) */
@@ -467,17 +539,22 @@ export class SiteIdentityService {
 		const ids = [...new Set([...states.values(), ...Object.values(snap)].filter((x): x is string => !!x))];
 		const metas = new Map(((ids.length ? await db.siteIdentityAsset.findMany({ where: { id: { in: ids } }, select: META }) : []) as AssetMeta[]).map(a => [a.id, a]));
 		const items: SetPreviewItem[] = []; const changes: Array<{ key: string; toAssetId: string | null }> = [];
-		for (const d of SITE_IDENTITY_REGISTRY) {
-			const want = snap[d.key] ?? null; const have = states.get(d.key) ?? null; const wired = this.isWired(d.key);
+		const visit = (d: SiteIdentityKeyDef | null, key: string, onlyIfInvolved: boolean) => {
+			const want = snap[key] ?? null; const have = states.get(key) ?? null; const wired = this.isWired(key);
+			if (onlyIfInvolved && !want && !have) return; // icon family: default icons never add rows
 			if (want !== have) {
-				if (!wired) throw new AppError(`لا يمكن الاستعادة: العنصر ${d.key} غير مرتبط بالموقع بعد.`, 409, undefined, SITE_IDENTITY_ERRORS.NOT_WIRED);
-				if (want) { const a = metas.get(want); if (!a || a.key !== d.key || (a.status !== 'PUBLISHED' && a.status !== 'SUPERSEDED')) throw new AppError(`تعذّرت الاستعادة: نسخة العنصر ${d.key} في تلك المجموعة غير متاحة.`, 409, undefined, SITE_IDENTITY_ERRORS.NOT_RESTORABLE); }
-				changes.push({ key: d.key, toAssetId: want });
+				if (!d || !wired) throw new AppError(`لا يمكن الاستعادة: العنصر ${key} غير مرتبط بالموقع بعد.`, 409, undefined, SITE_IDENTITY_ERRORS.NOT_WIRED);
+				if (want) { const a = metas.get(want); if (!a || a.key !== key || (a.status !== 'PUBLISHED' && a.status !== 'SUPERSEDED')) throw new AppError(`تعذّرت الاستعادة: نسخة العنصر ${key} في تلك المجموعة غير متاحة.`, 409, undefined, SITE_IDENTITY_ERRORS.NOT_RESTORABLE); }
+				changes.push({ key, toAssetId: want });
 			}
-			if (!wired) continue;
+			if (!d || !wired) return;
 			const cur = have ? metas.get(have) ?? null : null; const tgt = want ? metas.get(want) ?? null : null;
-			items.push({ key: d.key, label: d.label, group: d.group, current: this.side(d, cur), target: this.side(d, tgt), change: want === have ? 'unchanged' : want ? 'replace' : 'to-default' });
-		}
+			items.push({ key, label: d.label, group: d.group, current: this.side(d, cur), target: this.side(d, tgt), change: want === have ? 'unchanged' : want ? 'replace' : 'to-default' });
+		};
+		for (const d of SITE_IDENTITY_REGISTRY) visit(d, d.key, false);
+		const iconKeys = new Set<string>(); for (const k of states.keys()) if (isIconFamilyKey(k)) iconKeys.add(k); for (const k of Object.keys(snap)) if (isIconFamilyKey(k)) iconKeys.add(k);
+		for (const k of [...iconKeys].sort()) visit(identityDef(k), k, true);
+		await this.assertIconCap(db, changes);
 		const digest = createHash('sha256').update(JSON.stringify({ c: current, t: targetVersion, k: items.map(i => [i.key, i.current.version, i.current.sha256, i.target.version, i.target.sha256]) })).digest('hex');
 		const preview = { currentManifestVersion: current, targetManifestVersion: targetVersion, previewDigest: digest, changedCount: changes.length, canApply: changes.length > 0, items };
 		return { preview, changes };
@@ -513,6 +590,13 @@ export class SiteIdentityService {
 export interface PublicManifest { version: number; items: Record<string, { url: string; sha256: string; mime: string; width: number | null; height: number | null; version: number; /** design-token keys only */ value?: Record<string, string> }>; /** present only when at least one token set is active */ tokensCss?: string }
 export interface SetSide { source: 'default' | 'custom'; versionId: string | null; version: number; sha256: string; mime: string; width: number | null; height: number | null; previewUrl: string | null }
 export interface SetPreviewItem { key: string; label: string; group: string; current: SetSide; target: SetSide; change: 'replace' | 'to-default' | 'unchanged' }
+
+export interface IconRow { id: string; key: string | null; label: string; library: string | null; status: 'default' | 'custom' | 'not-wired'; reason: { code: IconReasonCode; text: string } | null; managedBy?: string; hasDraft: boolean; stateVersion: number; activeVersion: number | null; defs: number; variants: number; viewBox: string | null }
+/** 404 message for an icon id that is not a key (explains the AI / library-only cases) */
+export const iconUnknownMessage = (symbolId: string): string => {
+	const why = iconExcludedReason(symbolId);
+	return why ? `هذه الأيقونة ليست من أيقونات الواجهة القابلة للتبديل: ${ICON_REASON_TEXT[why]}` : 'عنصر الهوية غير موجود.';
+};
 
 interface Applied { key: string; fromAssetId: string | null; toAssetId: string | null; from: AssetMeta | null; to: AssetMeta | null; stateVersion: number }
 const verifyFailed = (what: string) => new AppError(`فشل التحقق من سلامة الحفظ (${what}); لم يُغيَّر شيء.`, 500, undefined, SITE_IDENTITY_ERRORS.VERIFY_FAILED);

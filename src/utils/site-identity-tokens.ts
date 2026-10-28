@@ -18,7 +18,17 @@ export class TokenRejected extends AppError {
 	}
 }
 
-const reject = (reason: string, message: string, name?: string, status = 400): never => { throw new TokenRejected(message, reason, name, status); };
+/**
+ * Every rejection is worded about the VALUE (or, for an uploaded token file, about the file's content) and names the token it is about: «<label> (--name): <what is wrong / what is accepted>».
+ * It never tells the admin to pick another file for a bad value.
+ */
+const LABELS: ReadonlyMap<string, string> = new Map(TOKEN_REGISTRY.map(d => [d.name, d.label]));
+const reject = (reason: string, message: string, name?: string, status = 400): never => {
+	const label = name ? LABELS.get(name) : undefined;
+	const prefix = name ? (label ? `«${label} (${name})»: ` : `الرمز «${name}»: `) : '';
+	throw new TokenRejected(`${prefix}${message}`, reason, name, status);
+};
+export type TokenSource = 'value' | 'file';
 
 // ---------------------------------------------------------------------------------------------------- value grammars
 const FORBIDDEN = /[;{}<>\\@!/\u0000-\u001f\u007f]|\b(?:url|expression|var|calc|attr|env|image-set|element|paint|src|min|max|clamp)\s*\(|(?:^|[^a-z])import(?:$|[^a-z])/i;
@@ -139,47 +149,48 @@ export interface ValidatedTokens { value: Record<string, string>; canonicalJson:
 /** validates a parsed value for one key; the result is sparse, in registry order, canonical and without entries equal to the default */
 export function validateTokenValue(key: string, input: unknown, opts: { allowEmpty?: boolean } = {}): ValidatedTokens {
 	if (!isTokenKey(key)) return reject('UNKNOWN_TOKEN', 'مفتاح الرموز غير معروف.');
-	if (input === null || typeof input !== 'object' || Array.isArray(input)) return reject('NOT_OBJECT', 'القيمة يجب أن تكون كائنًا من أزواج {"--اسم":"قيمة"}.');
+	if (input === null || typeof input !== 'object' || Array.isArray(input)) return reject('NOT_OBJECT', 'يجب أن تكون القيم المرسلة كائنًا من أزواج {"--اسم":"قيمة"} (وليست نصًا أو قائمة أو رقمًا).');
 	const entries = Object.entries(input as Record<string, unknown>);
-	if (entries.length > TOKEN_REGISTRY.length) return reject('TOO_MANY_ENTRIES', 'عدد العناصر أكبر من عدد الرموز المعرّفة.');
+	if (entries.length > TOKEN_REGISTRY.length) return reject('TOO_MANY_ENTRIES', 'عدد القيم المرسلة أكبر من عدد الرموز المعرّفة لهذا العنصر.');
 	const defs = new Map(tokensOfKey(key).map(d => [d.name, d]));
 	const out = new Map<string, string>(); const dropped: string[] = []; let changed = false;
 	for (const [name, raw] of entries) {
-		if (!/^--[a-z0-9-]{1,40}$/.test(name)) return reject('BAD_NAME', 'اسم الرمز غير صالح (يجب أن يكون --اسم بحروف صغيرة وأرقام وشرطات).', name.slice(0, 60));
+		if (!/^--[a-z0-9-]{1,40}$/.test(name)) return reject('BAD_NAME', 'اسم الرمز غير صالح؛ الصيغة المطلوبة --اسم بحروف إنجليزية صغيرة وأرقام وشرطات.', name.slice(0, 60));
 		const def = defs.get(name);
-		if (!def) return reject('UNKNOWN_TOKEN', 'هذا الرمز غير معرّف لهذا العنصر.', name);
-		if (typeof raw !== 'string') return reject('NOT_STRING', 'قيمة الرمز يجب أن تكون نصًا.', name);
-		if (raw.length > TOKEN_MAX_VALUE_LENGTH) return reject('VALUE_TOO_LONG', `قيمة الرمز أطول من ${TOKEN_MAX_VALUE_LENGTH} حرفًا.`, name);
-		if (FORBIDDEN.test(raw)) return reject('FORBIDDEN_SYNTAX', 'القيمة تحتوي صياغة غير مسموحة (url أو var أو ; أو أقواس معقوفة أو @ أو تعليقات ...).', name);
+		if (!def) return reject('UNKNOWN_TOKEN', 'هذا الرمز غير معرّف ضمن رموز هذا العنصر، فتم رفض القيمة.', name);
+		if (typeof raw !== 'string') return reject('NOT_STRING', 'قيمة الرمز يجب أن تكون نصًا (مثل "#14b8a6").', name);
+		if (raw.length > TOKEN_MAX_VALUE_LENGTH) return reject('VALUE_TOO_LONG', `القيمة أطول من ${TOKEN_MAX_VALUE_LENGTH} حرفًا؛ اختصرها.`, name);
+		if (FORBIDDEN.test(raw)) return reject('FORBIDDEN_SYNTAX', 'القيمة تحتوي صياغة غير مسموحة (url أو var أو calc أو ; أو أقواس معقوفة أو @ أو تعليقات ...)؛ اكتب القيمة المجرّدة فقط.', name);
 		const canon = canonValue(def, raw);
 		if (canon !== raw) changed = true;
 		if (canon === tokenDefault(key, def)) { dropped.push(name); changed = true; continue; }
 		out.set(name, canon);
 	}
-	if (!out.size && !opts.allowEmpty) return reject('EMPTY_OVERRIDES', 'لا توجد قيم مختلفة عن الافتراضي. للعودة إلى الافتراضي استخدم «استعادة الافتراضي».');
+	if (!out.size && !opts.allowEmpty) return reject('EMPTY_OVERRIDES', 'كل القيم المرسلة مطابقة للافتراضي فلا يوجد ما يُحفظ. غيّر قيمة واحدة على الأقل، أو للعودة إلى الافتراضي استخدم «استعادة الافتراضي».');
 	const value: Record<string, string> = {};
 	for (const d of defs.values()) if (out.has(d.name)) value[d.name] = out.get(d.name)!;
 	return { value, canonicalJson: JSON.stringify(value), dropped, changed };
 }
 
 /** validates uploaded BYTES (a JSON object) - the path used by the upload pipeline and by the public manifest when it re-reads stored rows */
-export function validateTokenBytes(key: string, bytes: Uint8Array, opts: { allowEmpty?: boolean } = {}): ValidatedTokens {
-	if (bytes.length > TOKEN_MAX_BYTES) return reject('TOO_BIG', `ملف الرموز أكبر من الحد الأقصى (${TOKEN_MAX_BYTES / 1024}KB).`, undefined, 413);
+export function validateTokenBytes(key: string, bytes: Uint8Array, opts: { allowEmpty?: boolean; source?: TokenSource } = {}): ValidatedTokens {
+	const fromValue = opts.source === 'value'; // the JSON body {value:{…}} of the editor, as opposed to an uploaded .json file
+	if (bytes.length > TOKEN_MAX_BYTES) return reject('TOO_BIG', fromValue ? `القيم المرسلة أكبر من الحد الأقصى (${TOKEN_MAX_BYTES / 1024}KB).` : `ملف الرموز أكبر من الحد الأقصى (${TOKEN_MAX_BYTES / 1024}KB).`, undefined, 413);
 	let text: string;
-	try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { return reject('NOT_UTF8', 'الملف ليس نصًا بترميز UTF-8.'); }
-	if (text.charCodeAt(0) === 0xfeff) return reject('NOT_JSON', 'الملف يبدأ بعلامة BOM؛ احفظه JSON عاديًا بترميز UTF-8.');
+	try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { return reject('NOT_UTF8', fromValue ? 'القيم المرسلة ليست نصًا بترميز UTF-8.' : 'محتوى الملف ليس نصًا بترميز UTF-8.'); }
+	if (text.charCodeAt(0) === 0xfeff) return reject('NOT_JSON', 'يبدأ المحتوى بعلامة BOM؛ احفظه JSON عاديًا بترميز UTF-8.');
 	let parsed: unknown;
-	try { parsed = JSON.parse(text); } catch { return reject('NOT_JSON', 'الملف ليس JSON صالحًا.'); }
+	try { parsed = JSON.parse(text); } catch { return reject('NOT_JSON', fromValue ? 'القيم المرسلة ليست JSON صالحًا.' : 'محتوى الملف ليس JSON صالحًا.'); }
 	if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
 		const names = text.match(/"[^"\\]*"\s*:/g) ?? [];
-		if (names.length !== Object.keys(parsed as object).length) return reject('BAD_NAME', 'يوجد اسم رمز مكرر أو بنية غير مسطّحة.');
+		if (names.length !== Object.keys(parsed as object).length) return reject('BAD_NAME', 'يوجد اسم رمز مكرر أو بنية غير مسطّحة (القيم يجب أن تكون نصوصًا مباشرة).');
 	}
 	return validateTokenValue(key, parsed, opts);
 }
 
 /** upload branch used by validateIdentityUpload for kind 'json' */
-export function validateTokenUpload(key: string, buf: Buffer): ValidatedUpload {
-	const v = validateTokenBytes(key, buf);
+export function validateTokenUpload(key: string, buf: Buffer, source: TokenSource = 'file'): ValidatedUpload {
+	const v = validateTokenBytes(key, buf, { source });
 	const bytes = Buffer.from(v.canonicalJson, 'utf8');
 	return {
 		mime: TOKEN_JSON_MIME, bytes, sha256: sha256Of(bytes), byteSize: bytes.length, width: null, height: null,

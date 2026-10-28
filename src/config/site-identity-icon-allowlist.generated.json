@@ -1,0 +1,5573 @@
+{
+ "generatedBy": "scripts/site-identity-icon-allowlist.cjs",
+ "note": "GENERATED - do not edit by hand. Regenerate with: node scripts/site-identity-icon-allowlist.cjs <FE-repo> --write",
+ "counts": {
+  "symbols": 337,
+  "wired": 287,
+  "noConsumer": 50,
+  "excluded": 15,
+  "libraryOnly": 84
+ },
+ "symbols": [
+  {
+   "id": "at-i-download",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "81caf7fd2a1d56b08b375bbb035992e39fe9f5b46c1f3208681d2126a9d5e968",
+   "byteSize": 128,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-audit-trail/sa-audit-trail.html"
+   ]
+  },
+  {
+   "id": "at-i-list",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "717196374b07ccb0ecb3e482147dc4b1232dfceba91b95cd0a898da729aa03a0",
+   "byteSize": 230,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-audit-trail/sa-audit-trail.html"
+   ]
+  },
+  {
+   "id": "at-i-search",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c7335e37cc7bf9134e92f42ba56be9980577a4f477ae956a3ae237c3729c482",
+   "byteSize": 76,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-audit-trail/sa-audit-trail.html"
+   ]
+  },
+  {
+   "id": "at-i-warn",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a9fb96e8c7f64a28fe972c7dfc127403ea68eb0afe128a7277ed98d4b77019e9",
+   "byteSize": 180,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-audit-trail/sa-audit-trail.html"
+   ]
+  },
+  {
+   "id": "bart-broker",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c3480dd7fbdb885f37c04195b779bdf741c3a2b282824e6b20150817a44defbd",
+   "byteSize": 166,
+   "files": [
+    "src/app/pages/website/blog/article/article.html"
+   ]
+  },
+  {
+   "id": "bart-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/blog/article/article.html"
+   ]
+  },
+  {
+   "id": "bart-chevron",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/blog/article/article.html"
+   ]
+  },
+  {
+   "id": "bart-client",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c24f232a216197cd9b9bad331ec78ca9a009310c9acaa0cfe49244247ceb4279",
+   "byteSize": 83,
+   "files": [
+    "src/app/pages/website/blog/article/article.html"
+   ]
+  },
+  {
+   "id": "bart-clock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cf23e5a26bf125e25777496e396af9780d6748c4892666095d80c1ef6028bd81",
+   "byteSize": 69,
+   "files": [
+    "src/app/pages/website/blog/article/article.html"
+   ]
+  },
+  {
+   "id": "bart-file",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4af228f707cb860cc988b6e2d488c7890ab1099eb7a2b93bfe19901f4e400a7d",
+   "byteSize": 105,
+   "files": [
+    "src/app/pages/website/blog/article/article.html"
+   ]
+  },
+  {
+   "id": "bart-provider",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2a9775722213df40a724a4cf00a44cc0be2676f6ed259be1156b4fc9c5fefa22",
+   "byteSize": 133,
+   "files": [
+    "src/app/pages/website/blog/article/article.html"
+   ]
+  },
+  {
+   "id": "bart-social-linkedin",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a4a25916af8fde239bcd4c9c6c9362b0066220863e658da4ac56b82b9d6e4047",
+   "byteSize": 131,
+   "files": [
+    "src/app/pages/website/blog/article/article.html"
+   ]
+  },
+  {
+   "id": "bart-social-whatsapp",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "522583310566bfeb3d9b3fbd8aa62928ea60cd1d997bf644dac8d580fea82c83",
+   "byteSize": 196,
+   "files": [
+    "src/app/pages/website/blog/article/article.html"
+   ]
+  },
+  {
+   "id": "bart-social-x",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "80cda945e489f1dc246ffc696374be7eacb660c9a8951d0f49076301d730184a",
+   "byteSize": 169,
+   "files": [
+    "src/app/pages/website/blog/article/article.html"
+   ]
+  },
+  {
+   "id": "bart-star",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9fa7a309732a5a12585ab201e86daa6be822662e079076d08ab5d46570066623",
+   "byteSize": 114,
+   "files": [
+    "src/app/pages/website/blog/article/article.html"
+   ]
+  },
+  {
+   "id": "bart-tag",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "aa5fa3d4875e53c6d0c158dcf634cee60788bf93c876ee6189107107492ed251",
+   "byteSize": 109,
+   "files": [
+    "src/app/pages/website/blog/article/article.html"
+   ]
+  },
+  {
+   "id": "bl-broker",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c3480dd7fbdb885f37c04195b779bdf741c3a2b282824e6b20150817a44defbd",
+   "byteSize": 166,
+   "files": [
+    "src/app/pages/website/blog/blog.html"
+   ]
+  },
+  {
+   "id": "bl-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/blog/blog.html"
+   ]
+  },
+  {
+   "id": "bl-chevron",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/blog/blog.html"
+   ]
+  },
+  {
+   "id": "bl-client",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c24f232a216197cd9b9bad331ec78ca9a009310c9acaa0cfe49244247ceb4279",
+   "byteSize": 83,
+   "files": [
+    "src/app/pages/website/blog/blog.html"
+   ]
+  },
+  {
+   "id": "bl-clock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cf23e5a26bf125e25777496e396af9780d6748c4892666095d80c1ef6028bd81",
+   "byteSize": 69,
+   "files": [
+    "src/app/pages/website/blog/blog.html"
+   ]
+  },
+  {
+   "id": "bl-file",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4af228f707cb860cc988b6e2d488c7890ab1099eb7a2b93bfe19901f4e400a7d",
+   "byteSize": 105,
+   "files": [
+    "src/app/pages/website/blog/blog.html"
+   ]
+  },
+  {
+   "id": "bl-provider",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2a9775722213df40a724a4cf00a44cc0be2676f6ed259be1156b4fc9c5fefa22",
+   "byteSize": 133,
+   "files": [
+    "src/app/pages/website/blog/blog.html"
+   ]
+  },
+  {
+   "id": "bl-search",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c7335e37cc7bf9134e92f42ba56be9980577a4f477ae956a3ae237c3729c482",
+   "byteSize": 76,
+   "files": [
+    "src/app/pages/website/blog/blog.html"
+   ]
+  },
+  {
+   "id": "bl-star",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9fa7a309732a5a12585ab201e86daa6be822662e079076d08ab5d46570066623",
+   "byteSize": 114,
+   "files": [
+    "src/app/pages/website/blog/blog.html"
+   ]
+  },
+  {
+   "id": "bl-tag",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "aa5fa3d4875e53c6d0c158dcf634cee60788bf93c876ee6189107107492ed251",
+   "byteSize": 109,
+   "files": [
+    "src/app/pages/website/blog/blog.html"
+   ]
+  },
+  {
+   "id": "hiw-broker",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "39b1392c4e2c6e2666466a16693e066475382c21bd9efe8f542bdf0365f68bd7",
+   "byteSize": 157,
+   "files": [
+    "src/app/pages/website/how-it-works/how-it-works.html"
+   ]
+  },
+  {
+   "id": "hiw-building",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "59882bd8da5aba94fdfb5a473ef6bb0cabc0ddcc03a801ea47fc9ae51d3060be",
+   "byteSize": 186,
+   "files": [
+    "src/app/pages/website/how-it-works/how-it-works.html"
+   ]
+  },
+  {
+   "id": "hiw-cart",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0e35c9bb7bcbdf46dfa4f9de1b0e0d8d9e8c09c8e953c1a9b4a2448f833af1f5",
+   "byteSize": 136,
+   "files": [
+    "src/app/pages/website/how-it-works/how-it-works.html"
+   ]
+  },
+  {
+   "id": "hiw-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/how-it-works/how-it-works.html"
+   ]
+  },
+  {
+   "id": "hiw-chevron",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/how-it-works/how-it-works.html"
+   ]
+  },
+  {
+   "id": "hiw-client",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c24f232a216197cd9b9bad331ec78ca9a009310c9acaa0cfe49244247ceb4279",
+   "byteSize": 83,
+   "files": [
+    "src/app/pages/website/how-it-works/how-it-works.html"
+   ]
+  },
+  {
+   "id": "hiw-file",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "4af228f707cb860cc988b6e2d488c7890ab1099eb7a2b93bfe19901f4e400a7d",
+   "byteSize": 105,
+   "files": [
+    "src/app/pages/website/how-it-works/how-it-works.html"
+   ]
+  },
+  {
+   "id": "hiw-info",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ce54fc85ea28c6ee4f1aaa1a78de049850ba92bddeb93d3dc391422bf1a6f949",
+   "byteSize": 111,
+   "files": [
+    "src/app/pages/website/how-it-works/how-it-works.html"
+   ]
+  },
+  {
+   "id": "hiw-lock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "0fd232cf6659c77638c80265aa6cd11a581e94bfff993aa831b0e3d80715a9f6",
+   "byteSize": 86,
+   "files": [
+    "src/app/pages/website/how-it-works/how-it-works.html"
+   ]
+  },
+  {
+   "id": "hiw-provider",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "b7f27feda71ca431e61ce4b9a955d0b7372adffec182e9ed6991dacc65d5abe7",
+   "byteSize": 179,
+   "files": [
+    "src/app/pages/website/how-it-works/how-it-works.html"
+   ]
+  },
+  {
+   "id": "hiw-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
+   "byteSize": 55,
+   "files": [
+    "src/app/pages/website/how-it-works/how-it-works.html"
+   ]
+  },
+  {
+   "id": "hwc-broker",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "39b1392c4e2c6e2666466a16693e066475382c21bd9efe8f542bdf0365f68bd7",
+   "byteSize": 157,
+   "files": [
+    "src/app/pages/website/how-it-works/client/client.html"
+   ]
+  },
+  {
+   "id": "hwc-building",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "59882bd8da5aba94fdfb5a473ef6bb0cabc0ddcc03a801ea47fc9ae51d3060be",
+   "byteSize": 186,
+   "files": [
+    "src/app/pages/website/how-it-works/client/client.html"
+   ]
+  },
+  {
+   "id": "hwc-cart",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0e35c9bb7bcbdf46dfa4f9de1b0e0d8d9e8c09c8e953c1a9b4a2448f833af1f5",
+   "byteSize": 136,
+   "files": [
+    "src/app/pages/website/how-it-works/client/client.html"
+   ]
+  },
+  {
+   "id": "hwc-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/how-it-works/client/client.html"
+   ]
+  },
+  {
+   "id": "hwc-chevron",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/how-it-works/client/client.html"
+   ]
+  },
+  {
+   "id": "hwc-client",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c24f232a216197cd9b9bad331ec78ca9a009310c9acaa0cfe49244247ceb4279",
+   "byteSize": 83,
+   "files": [
+    "src/app/pages/website/how-it-works/client/client.html"
+   ]
+  },
+  {
+   "id": "hwc-file",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4af228f707cb860cc988b6e2d488c7890ab1099eb7a2b93bfe19901f4e400a7d",
+   "byteSize": 105,
+   "files": [
+    "src/app/pages/website/how-it-works/client/client.html"
+   ]
+  },
+  {
+   "id": "hwc-lock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0fd232cf6659c77638c80265aa6cd11a581e94bfff993aa831b0e3d80715a9f6",
+   "byteSize": 86,
+   "files": [
+    "src/app/pages/website/how-it-works/client/client.html"
+   ]
+  },
+  {
+   "id": "hwc-provider",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b7f27feda71ca431e61ce4b9a955d0b7372adffec182e9ed6991dacc65d5abe7",
+   "byteSize": 179,
+   "files": [
+    "src/app/pages/website/how-it-works/client/client.html"
+   ]
+  },
+  {
+   "id": "hwc-search",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c7335e37cc7bf9134e92f42ba56be9980577a4f477ae956a3ae237c3729c482",
+   "byteSize": 76,
+   "files": [
+    "src/app/pages/website/how-it-works/client/client.html"
+   ]
+  },
+  {
+   "id": "hwc-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
+   "byteSize": 55,
+   "files": [
+    "src/app/pages/website/how-it-works/client/client.html"
+   ]
+  },
+  {
+   "id": "hwm-broker",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "39b1392c4e2c6e2666466a16693e066475382c21bd9efe8f542bdf0365f68bd7",
+   "byteSize": 157,
+   "files": [
+    "src/app/pages/website/how-it-works/marketer/marketer.html"
+   ]
+  },
+  {
+   "id": "hwm-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/how-it-works/marketer/marketer.html"
+   ]
+  },
+  {
+   "id": "hwm-chevron",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/how-it-works/marketer/marketer.html"
+   ]
+  },
+  {
+   "id": "hwm-client",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c24f232a216197cd9b9bad331ec78ca9a009310c9acaa0cfe49244247ceb4279",
+   "byteSize": 83,
+   "files": [
+    "src/app/pages/website/how-it-works/marketer/marketer.html"
+   ]
+  },
+  {
+   "id": "hwm-file",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4af228f707cb860cc988b6e2d488c7890ab1099eb7a2b93bfe19901f4e400a7d",
+   "byteSize": 105,
+   "files": [
+    "src/app/pages/website/how-it-works/marketer/marketer.html"
+   ]
+  },
+  {
+   "id": "hwm-lock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0fd232cf6659c77638c80265aa6cd11a581e94bfff993aa831b0e3d80715a9f6",
+   "byteSize": 86,
+   "files": [
+    "src/app/pages/website/how-it-works/marketer/marketer.html"
+   ]
+  },
+  {
+   "id": "hwm-provider",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b7f27feda71ca431e61ce4b9a955d0b7372adffec182e9ed6991dacc65d5abe7",
+   "byteSize": 179,
+   "files": [
+    "src/app/pages/website/how-it-works/marketer/marketer.html"
+   ]
+  },
+  {
+   "id": "hwm-search",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c7335e37cc7bf9134e92f42ba56be9980577a4f477ae956a3ae237c3729c482",
+   "byteSize": 76,
+   "files": [
+    "src/app/pages/website/how-it-works/marketer/marketer.html"
+   ]
+  },
+  {
+   "id": "hwm-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
+   "byteSize": 55,
+   "files": [
+    "src/app/pages/website/how-it-works/marketer/marketer.html"
+   ]
+  },
+  {
+   "id": "hwm-social-instagram",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2eb37883a588354a2430b9bffbe51dc5340a3fcb8298efc071c11c2e0183dcde",
+   "byteSize": 150,
+   "files": [
+    "src/app/pages/website/how-it-works/marketer/marketer.html"
+   ]
+  },
+  {
+   "id": "hwm-tag",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "aa5fa3d4875e53c6d0c158dcf634cee60788bf93c876ee6189107107492ed251",
+   "byteSize": 109,
+   "files": [
+    "src/app/pages/website/how-it-works/marketer/marketer.html"
+   ]
+  },
+  {
+   "id": "hwp-bell",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "31ed40f62b244944456d9eb631b88b32d7112df3061e47143a2c14fa6bd6c9a5",
+   "byteSize": 93,
+   "files": [
+    "src/app/pages/website/how-it-works/provider/provider.html"
+   ]
+  },
+  {
+   "id": "hwp-broker",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "39b1392c4e2c6e2666466a16693e066475382c21bd9efe8f542bdf0365f68bd7",
+   "byteSize": 157,
+   "files": [
+    "src/app/pages/website/how-it-works/provider/provider.html"
+   ]
+  },
+  {
+   "id": "hwp-building",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "59882bd8da5aba94fdfb5a473ef6bb0cabc0ddcc03a801ea47fc9ae51d3060be",
+   "byteSize": 186,
+   "files": [
+    "src/app/pages/website/how-it-works/provider/provider.html"
+   ]
+  },
+  {
+   "id": "hwp-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/how-it-works/provider/provider.html"
+   ]
+  },
+  {
+   "id": "hwp-chevron",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/how-it-works/provider/provider.html"
+   ]
+  },
+  {
+   "id": "hwp-client",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c24f232a216197cd9b9bad331ec78ca9a009310c9acaa0cfe49244247ceb4279",
+   "byteSize": 83,
+   "files": [
+    "src/app/pages/website/how-it-works/provider/provider.html"
+   ]
+  },
+  {
+   "id": "hwp-file",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4af228f707cb860cc988b6e2d488c7890ab1099eb7a2b93bfe19901f4e400a7d",
+   "byteSize": 105,
+   "files": [
+    "src/app/pages/website/how-it-works/provider/provider.html"
+   ]
+  },
+  {
+   "id": "hwp-lock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0fd232cf6659c77638c80265aa6cd11a581e94bfff993aa831b0e3d80715a9f6",
+   "byteSize": 86,
+   "files": [
+    "src/app/pages/website/how-it-works/provider/provider.html"
+   ]
+  },
+  {
+   "id": "hwp-provider",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b7f27feda71ca431e61ce4b9a955d0b7372adffec182e9ed6991dacc65d5abe7",
+   "byteSize": 179,
+   "files": [
+    "src/app/pages/website/how-it-works/provider/provider.html"
+   ]
+  },
+  {
+   "id": "hwp-search",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c7335e37cc7bf9134e92f42ba56be9980577a4f477ae956a3ae237c3729c482",
+   "byteSize": 76,
+   "files": [
+    "src/app/pages/website/how-it-works/provider/provider.html"
+   ]
+  },
+  {
+   "id": "hwp-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
+   "byteSize": 55,
+   "files": [
+    "src/app/pages/website/how-it-works/provider/provider.html"
+   ]
+  },
+  {
+   "id": "i-activity",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "3df4ca423ee1e7a5d21f2c428a024363983bb6197d83b8584bf60d894aab4a3c",
+   "byteSize": 53,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html"
+   ],
+   "label": "نشاط"
+  },
+  {
+   "id": "i-add-user",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 2,
+   "reason": null,
+   "sha256": "b23993901035401dc3cf5104931a3ae7add263793d403fa8450537c35fadabcb",
+   "byteSize": 151,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "إضافة مستخدم"
+  },
+  {
+   "id": "i-arrow",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7faa2a487f5baf10a4428fdd1e9664c9e8b2c8071e070760ff5ca17e16b80a12",
+   "byteSize": 77,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html"
+   ],
+   "label": "سهم"
+  },
+  {
+   "id": "i-arrow-l",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a6f1310f0e2820d3a458c86fbea4bd88808122fb3e91ecb1725718b15722bda6",
+   "byteSize": 74,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/explore-requests/applay-request/applay-request.html"
+   ]
+  },
+  {
+   "id": "i-arrow-r",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ]
+  },
+  {
+   "id": "i-bell",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 6,
+   "variants": 2,
+   "reason": null,
+   "sha256": "80c505e46b51b2202be5bd875b09fde519458c29807a4b8ceabeaf36638df603",
+   "byteSize": 95,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "إشعارات"
+  },
+  {
+   "id": "i-brief",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 1,
+   "reason": null,
+   "sha256": "d3b93ca3fa616a76b3cb8ef346fff7c9db03a82d39f52dcb3f6e298c03d4b8d0",
+   "byteSize": 143,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "ملف/عرض"
+  },
+  {
+   "id": "i-camera",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "fddf9c31320756a66bf28cce2b7884b3b99d63e789dd50b0c0c55b795bb65392",
+   "byteSize": 126,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "كاميرا"
+  },
+  {
+   "id": "i-chart",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0f5049dbbb44e7fa8172041c11d65a97504ec21fcab0d9db45f6681270d1abab",
+   "byteSize": 117,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html"
+   ],
+   "label": "رسم بياني"
+  },
+  {
+   "id": "i-chat",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 7,
+   "variants": 2,
+   "reason": null,
+   "sha256": "8be2d9502a58aa2eb5842fc7ac29341150cb1d8f8190b8f1a6902df348837dc6",
+   "byteSize": 74,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "محادثة"
+  },
+  {
+   "id": "i-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 8,
+   "variants": 2,
+   "reason": null,
+   "sha256": "b15f530bd82456d1ba6d6db4a1724dad813703968503dda8c723e2eceefaa41e",
+   "byteSize": 36,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/explore-requests/applay-request/applay-request.html"
+   ],
+   "label": "تحقق"
+  },
+  {
+   "id": "i-check-sm",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b15f530bd82456d1ba6d6db4a1724dad813703968503dda8c723e2eceefaa41e",
+   "byteSize": 36,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html"
+   ]
+  },
+  {
+   "id": "i-chevron-left",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e7c0fa8fe7bd5fa848254bf8dd99117a547b25ae749e2d6451bb16a6bb80da0c",
+   "byteSize": 36,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-users.html"
+   ]
+  },
+  {
+   "id": "i-chevron-right",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-users.html"
+   ]
+  },
+  {
+   "id": "i-clock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 1,
+   "reason": null,
+   "sha256": "19e1e565d8fcfea60cd05826f92d1d391f30d3625cdac5a51280abbbcb496f61",
+   "byteSize": 68,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "وقت"
+  },
+  {
+   "id": "i-close",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 2,
+   "reason": null,
+   "sha256": "7ec3160333275219e7a90c7e56578e4aa8471a713060a2de45865cb4e803746b",
+   "byteSize": 76,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ]
+  },
+  {
+   "id": "i-dispute",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 2,
+   "reason": null,
+   "sha256": "b75c34ad18477cc24144269dde849fbe1b5f01c758642dbcd02d9c69f95e836c",
+   "byteSize": 115,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "نزاع"
+  },
+  {
+   "id": "i-doc",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 6,
+   "variants": 2,
+   "reason": null,
+   "sha256": "3719eed2e79fab8bcb9c9f81fab6a6d9a73ff57e51321548b261314892156cd2",
+   "byteSize": 107,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/explore-requests/applay-request/applay-request.html"
+   ],
+   "label": "مستند"
+  },
+  {
+   "id": "i-dots",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "800df9e240871f48703a7a6104448971663f56af2913ac7b325ccdfb8a9ae742",
+   "byteSize": 92,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-users.html"
+   ]
+  },
+  {
+   "id": "i-edit",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "d389ee66426a257060a75818b61912b96814deeb4d99958524912cd1d1d97a62",
+   "byteSize": 129,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/supper-admin-overview/supper-admin-overview/supper-admin-overview.html"
+   ],
+   "label": "تعديل"
+  },
+  {
+   "id": "i-escrow",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 6,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c5772ef516ea1904ab6416d95299136002d1cb399c001d40989aea688f2a1fa5",
+   "byteSize": 139,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/finance/wallet/wallet.html"
+   ],
+   "label": "ضمان/إسكرو"
+  },
+  {
+   "id": "i-export",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "81caf7fd2a1d56b08b375bbb035992e39fe9f5b46c1f3208681d2126a9d5e968",
+   "byteSize": 128,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-users.html"
+   ]
+  },
+  {
+   "id": "i-eye",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e1f8933d548718b9acbc773ccfdb0cde37ae3b18a421ca3d62de9b9282d240c0",
+   "byteSize": 87,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html",
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-users.html"
+   ]
+  },
+  {
+   "id": "i-file",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4af228f707cb860cc988b6e2d488c7890ab1099eb7a2b93bfe19901f4e400a7d",
+   "byteSize": 105,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ]
+  },
+  {
+   "id": "i-globe",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2ba4a2b9b39064c138819d2ef2fa77cb6665ea90180a034d6a90feb3152f5440",
+   "byteSize": 172,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ]
+  },
+  {
+   "id": "i-help",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 2,
+   "reason": "NO_CONSUMER",
+   "sha256": "e439f433d873c3a53892358a47567926d723b0eac86d3b360b543062e75c110b",
+   "byteSize": 125,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "مساعدة"
+  },
+  {
+   "id": "i-home",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 5,
+   "variants": 2,
+   "reason": "NO_CONSUMER",
+   "sha256": "37437ef9db931a6d178e1e7ba7f4ff114e3c4c551b2e2f7c0b000230cbd1ab65",
+   "byteSize": 102,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "رئيسية"
+  },
+  {
+   "id": "i-id",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "260952b486994d20f395f06a6d6530602caccb70784e6f6ec13a2a108b55d3f6",
+   "byteSize": 157,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "هوية — اسم بديل بالسبرايت لنفس شكل i-id-card تمامًا — سبرايت الهوية ic-id"
+  },
+  {
+   "id": "i-id-card",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "260952b486994d20f395f06a6d6530602caccb70784e6f6ec13a2a108b55d3f6",
+   "byteSize": 157,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "بطاقة هوية"
+  },
+  {
+   "id": "i-inbox",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "2edac6b485b5de354b161a42f8e6f1ceeceb61324dd1a13c7a8591898db88fe3",
+   "byteSize": 174,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/supper-admin-overview/supper-admin-overview/supper-admin-overview.html"
+   ],
+   "label": "صندوق وارد"
+  },
+  {
+   "id": "i-info",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ce54fc85ea28c6ee4f1aaa1a78de049850ba92bddeb93d3dc391422bf1a6f949",
+   "byteSize": 111,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "معلومة"
+  },
+  {
+   "id": "i-link",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "68e185977a9efe616ee960d587361644ad466c04b5e3272fd9f153fa089d9221",
+   "byteSize": 145,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "رابط/ربط"
+  },
+  {
+   "id": "i-list",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 6,
+   "variants": 2,
+   "reason": null,
+   "sha256": "e9dee33f07604877981d341d71bcd04c4d6b43e9fb3891a9a34eb34223ed10c0",
+   "byteSize": 236,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/explore-requests/applay-request/applay-request.html"
+   ],
+   "label": "قائمة"
+  },
+  {
+   "id": "i-lock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0fd232cf6659c77638c80265aa6cd11a581e94bfff993aa831b0e3d80715a9f6",
+   "byteSize": 86,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "قفل/أمان"
+  },
+  {
+   "id": "i-logout",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 5,
+   "variants": 2,
+   "reason": "NO_CONSUMER",
+   "sha256": "05dbade7a673ccaccd1e797bce37eafe88d5e35c5e4d45aef913ba55da03c816",
+   "byteSize": 129,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "خروج"
+  },
+  {
+   "id": "i-mail",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c9b03f4e1804cccf6b546bc49ab666986e49f37aebbe054e659a111d7788cdd8",
+   "byteSize": 122,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html",
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-users.html"
+   ],
+   "label": "بريد"
+  },
+  {
+   "id": "i-market",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 2,
+   "reason": null,
+   "sha256": "f5f6362f00f82dc99c1604fa2c1e435eaf2797c7e24c746b2d99e1fb2090ce84",
+   "byteSize": 131,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-users.html"
+   ],
+   "label": "سوق"
+  },
+  {
+   "id": "i-menu",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 5,
+   "variants": 2,
+   "reason": null,
+   "sha256": "f993f70b61355d192139ce6c76341d796c0dac7dd4eb43ec89de1daa9ffe9a62",
+   "byteSize": 115,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "قائمة جانبية"
+  },
+  {
+   "id": "i-pause",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "34f76bd9153413f02f3705f6f90b89ab94e8ce64616768e51f1cb90aa2955aa0",
+   "byteSize": 83,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-users.html"
+   ]
+  },
+  {
+   "id": "i-person",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 5,
+   "variants": 2,
+   "reason": null,
+   "sha256": "cdaabba61611c9922f9cab7e25924d7ddddf1d18a45cf5b4690d64674eaff677",
+   "byteSize": 69,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "شخص"
+  },
+  {
+   "id": "i-plus",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 5,
+   "variants": 2,
+   "reason": null,
+   "sha256": "f9cd86897bfdd234ff856e13ea6fea66d3ad318cfa46d927273ca4db4dfe9a07",
+   "byteSize": 78,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/business-models/accreditation/list/list.html"
+   ],
+   "label": "إضافة"
+  },
+  {
+   "id": "i-search",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "779773c679bee4c49815a935d9513fd33e1ed43f1fb53f596e59bcaa65b3c852",
+   "byteSize": 78,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/provider-overview/provider-overview/provider-overview.html"
+   ],
+   "label": "بحث"
+  },
+  {
+   "id": "i-selfie",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "411a65b2a4cf8ddb805703460cf449c3ad49c1f0cffb7443a376e7f291a86412",
+   "byteSize": 132,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ]
+  },
+  {
+   "id": "i-settings",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 5,
+   "variants": 2,
+   "reason": null,
+   "sha256": "0e99067119e8641e703380f31ff0aebdaac9eb490a18fcba45d09e57208eb214",
+   "byteSize": 659,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "إعدادات"
+  },
+  {
+   "id": "i-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 2,
+   "reason": null,
+   "sha256": "d9a0cc2299993f61f79ae02117244f571679a791541b54d00101638bf476c436",
+   "byteSize": 56,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html",
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-users.html"
+   ],
+   "label": "حماية"
+  },
+  {
+   "id": "i-star",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 2,
+   "reason": "NO_CONSUMER",
+   "sha256": "8aafd3b1d2bd3a47830740104a9a30cd77a885300a4c54593e1ff8dd85d98bd7",
+   "byteSize": 115,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "تقييم"
+  },
+  {
+   "id": "i-tag",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4acef68ab3a67472b828652bf7b1c8ae2d8947bdf91342bac22929d911551143",
+   "byteSize": 174,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ]
+  },
+  {
+   "id": "i-trash",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "1d9c93d58f45271326c02d0b3e87d5dbd1d97562ec2c292d138dd40fef8b91df",
+   "byteSize": 180,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-users.html"
+   ],
+   "label": "حذف"
+  },
+  {
+   "id": "i-upload",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0f3c657252ef4f13543865e9f3f51343653f7375917f8e344211d00d3ede93fd",
+   "byteSize": 125,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/profile-setup/profile-setup.html"
+   ],
+   "label": "رفع ملف"
+  },
+  {
+   "id": "i-user-switch",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "b9235bcd52aca2b52607c4fc1bcacb58456ff856bd62a94466268bc89140cd73",
+   "byteSize": 148,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html"
+   ]
+  },
+  {
+   "id": "i-wallet",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 8,
+   "variants": 2,
+   "reason": null,
+   "sha256": "92e04264cc89cafc44f4f40e1027030b9f580b383fa92fde41bcb72325780eb4",
+   "byteSize": 139,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/explore-requests/applay-request/applay-request.html"
+   ],
+   "label": "محفظة"
+  },
+  {
+   "id": "i-warn",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 5,
+   "variants": 2,
+   "reason": null,
+   "sha256": "93183447f132d6500477d540d992370f3978f53dea7b3b7909c2d45b283faef6",
+   "byteSize": 183,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/clients-overview/client-overview/client-overview.component.html",
+    "src/app/pages/dashboard/provider-overview/explore-requests/applay-request/applay-request.html"
+   ],
+   "label": "تحذير"
+  },
+  {
+   "id": "i-x",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "95421cf9af02c68930b85262e16aeb107c53f85b71ca7e15053faef273a44655",
+   "byteSize": 76,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html",
+    "src/app/pages/dashboard/supper-admin-overview/supper-admin-overview/supper-admin-overview.html"
+   ],
+   "label": "إغلاق"
+  },
+  {
+   "id": "i-zap",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "19c467ba555db54a4612836493584cf7a5c61ac43aac646f5beec52ee6e19195",
+   "byteSize": 59,
+   "files": [
+    "src/app/layouts/dashboard-layout/dashboard-layout.html"
+   ],
+   "label": "سريع/فوري"
+  },
+  {
+   "id": "ic-bell",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "80c505e46b51b2202be5bd875b09fde519458c29807a4b8ceabeaf36638df603",
+   "byteSize": 95,
+   "files": [
+    "src/app/pages/dashboard/clients-overview/profile/profile.html"
+   ]
+  },
+  {
+   "id": "ic-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b15f530bd82456d1ba6d6db4a1724dad813703968503dda8c723e2eceefaa41e",
+   "byteSize": 36,
+   "files": [
+    "src/app/pages/dashboard/clients-overview/profile/profile.html"
+   ]
+  },
+  {
+   "id": "ic-clock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "19e1e565d8fcfea60cd05826f92d1d391f30d3625cdac5a51280abbbcb496f61",
+   "byteSize": 68,
+   "files": [
+    "src/app/pages/dashboard/clients-overview/profile/profile.html"
+   ]
+  },
+  {
+   "id": "ic-doc",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3719eed2e79fab8bcb9c9f81fab6a6d9a73ff57e51321548b261314892156cd2",
+   "byteSize": 107,
+   "files": [
+    "src/app/pages/dashboard/clients-overview/profile/profile.html"
+   ]
+  },
+  {
+   "id": "ic-edit",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "d389ee66426a257060a75818b61912b96814deeb4d99958524912cd1d1d97a62",
+   "byteSize": 129,
+   "files": [
+    "src/app/pages/dashboard/clients-overview/profile/profile.html"
+   ]
+  },
+  {
+   "id": "ic-link",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "68e185977a9efe616ee960d587361644ad466c04b5e3272fd9f153fa089d9221",
+   "byteSize": 145,
+   "files": [
+    "src/app/pages/dashboard/clients-overview/profile/profile.html"
+   ]
+  },
+  {
+   "id": "ic-person",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cdaabba61611c9922f9cab7e25924d7ddddf1d18a45cf5b4690d64674eaff677",
+   "byteSize": 69,
+   "files": [
+    "src/app/pages/dashboard/clients-overview/profile/profile.html"
+   ]
+  },
+  {
+   "id": "ic-pin",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e97d733d51980f5d9e8bba648bc5a0927bfc17cee3c866420614e85bfc41cd47",
+   "byteSize": 91,
+   "files": [
+    "src/app/pages/dashboard/clients-overview/profile/profile.html"
+   ]
+  },
+  {
+   "id": "ic-star",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9fa7a309732a5a12585ab201e86daa6be822662e079076d08ab5d46570066623",
+   "byteSize": 114,
+   "files": [
+    "src/app/pages/dashboard/clients-overview/profile/profile.html"
+   ]
+  },
+  {
+   "id": "ic-warn",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a9fb96e8c7f64a28fe972c7dfc127403ea68eb0afe128a7277ed98d4b77019e9",
+   "byteSize": 180,
+   "files": [
+    "src/app/pages/dashboard/clients-overview/profile/profile.html"
+   ]
+  },
+  {
+   "id": "ic-x",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7ec3160333275219e7a90c7e56578e4aa8471a713060a2de45865cb4e803746b",
+   "byteSize": 76,
+   "files": [
+    "src/app/pages/dashboard/clients-overview/profile/profile.html"
+   ]
+  },
+  {
+   "id": "pa-clock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "19e1e565d8fcfea60cd05826f92d1d391f30d3625cdac5a51280abbbcb496f61",
+   "byteSize": 68,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/projects/active/active.html"
+   ]
+  },
+  {
+   "id": "pa-flag",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "6e2e9c41a8da138be085536ba1a70c54fe4d18b17e8c566d6dcab9e0b8217a53",
+   "byteSize": 37,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/projects/active/active.html"
+   ]
+  },
+  {
+   "id": "pa-inbox",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "5e2743ba08c8cc7faad6fa8f5efb7b2b0a8f30c33e05e5dfbf99206ec3711cf5",
+   "byteSize": 172,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/projects/active/active.html"
+   ]
+  },
+  {
+   "id": "pa-list",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "717196374b07ccb0ecb3e482147dc4b1232dfceba91b95cd0a898da729aa03a0",
+   "byteSize": 230,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/projects/active/active.html"
+   ]
+  },
+  {
+   "id": "pa-lock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b77ce6d473711bfd8075447e606dbd550da6901cd5d198e7baef60041188596d",
+   "byteSize": 86,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/projects/active/active.html"
+   ]
+  },
+  {
+   "id": "pr-building",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "9d64f52396833c33bb13770ab2f003f98c1e7f801069a5b6eb60fa79b22252a4",
+   "byteSize": 91,
+   "files": [
+    "src/app/pages/website/pricing/pricing.html"
+   ]
+  },
+  {
+   "id": "pr-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/pricing/pricing.html"
+   ]
+  },
+  {
+   "id": "pr-chevron",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/pricing/pricing.html"
+   ]
+  },
+  {
+   "id": "pr-provider",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2a9775722213df40a724a4cf00a44cc0be2676f6ed259be1156b4fc9c5fefa22",
+   "byteSize": 133,
+   "files": [
+    "src/app/pages/website/pricing/pricing.html"
+   ]
+  },
+  {
+   "id": "pr-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
+   "byteSize": 55,
+   "files": [
+    "src/app/pages/website/pricing/pricing.html"
+   ]
+  },
+  {
+   "id": "pr-star",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9fa7a309732a5a12585ab201e86daa6be822662e079076d08ab5d46570066623",
+   "byteSize": 114,
+   "files": [
+    "src/app/pages/website/pricing/pricing.html"
+   ]
+  },
+  {
+   "id": "pr-tag",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "aa5fa3d4875e53c6d0c158dcf634cee60788bf93c876ee6189107107492ed251",
+   "byteSize": 109,
+   "files": [
+    "src/app/pages/website/pricing/pricing.html"
+   ]
+  },
+  {
+   "id": "pr-user",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "c24f232a216197cd9b9bad331ec78ca9a009310c9acaa0cfe49244247ceb4279",
+   "byteSize": 83,
+   "files": [
+    "src/app/pages/website/pricing/pricing.html"
+   ]
+  },
+  {
+   "id": "pss-building",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9d64f52396833c33bb13770ab2f003f98c1e7f801069a5b6eb60fa79b22252a4",
+   "byteSize": 91,
+   "files": [
+    "src/app/pages/website/press/press.html"
+   ]
+  },
+  {
+   "id": "pss-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/press/press.html"
+   ]
+  },
+  {
+   "id": "pss-chevron",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/press/press.html"
+   ]
+  },
+  {
+   "id": "pss-clock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cf23e5a26bf125e25777496e396af9780d6748c4892666095d80c1ef6028bd81",
+   "byteSize": 69,
+   "files": [
+    "src/app/pages/website/press/press.html"
+   ]
+  },
+  {
+   "id": "pss-email",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "30831a14a011098ef3e51e1297079ce9fe9c7a2d9723faaeb1e7e2fa2fdeda73",
+   "byteSize": 122,
+   "files": [
+    "src/app/pages/website/press/press.html"
+   ]
+  },
+  {
+   "id": "pss-file",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4af228f707cb860cc988b6e2d488c7890ab1099eb7a2b93bfe19901f4e400a7d",
+   "byteSize": 105,
+   "files": [
+    "src/app/pages/website/press/press.html"
+   ]
+  },
+  {
+   "id": "pss-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
+   "byteSize": 55,
+   "files": [
+    "src/app/pages/website/press/press.html"
+   ]
+  },
+  {
+   "id": "ptn-broker",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c3480dd7fbdb885f37c04195b779bdf741c3a2b282824e6b20150817a44defbd",
+   "byteSize": 166,
+   "files": [
+    "src/app/pages/website/partners/partners.html"
+   ]
+  },
+  {
+   "id": "ptn-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/partners/partners.html"
+   ]
+  },
+  {
+   "id": "ptn-chevron",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/partners/partners.html"
+   ]
+  },
+  {
+   "id": "ptn-file",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4af228f707cb860cc988b6e2d488c7890ab1099eb7a2b93bfe19901f4e400a7d",
+   "byteSize": 105,
+   "files": [
+    "src/app/pages/website/partners/partners.html"
+   ]
+  },
+  {
+   "id": "ptn-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
+   "byteSize": 55,
+   "files": [
+    "src/app/pages/website/partners/partners.html"
+   ]
+  },
+  {
+   "id": "ptn-tag",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "aa5fa3d4875e53c6d0c158dcf634cee60788bf93c876ee6189107107492ed251",
+   "byteSize": 109,
+   "files": [
+    "src/app/pages/website/partners/partners.html"
+   ]
+  },
+  {
+   "id": "pv-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
+   "byteSize": 55,
+   "files": [
+    "src/app/pages/website/privacy/privacy.component.html"
+   ]
+  },
+  {
+   "id": "rc-i-eye",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "e1f8933d548718b9acbc773ccfdb0cde37ae3b18a421ca3d62de9b9282d240c0",
+   "byteSize": 87,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-risk-center/sa-risk-center.html"
+   ]
+  },
+  {
+   "id": "rc-i-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
+   "byteSize": 55,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-risk-center/sa-risk-center.html"
+   ]
+  },
+  {
+   "id": "rc-i-warn",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a9fb96e8c7f64a28fe972c7dfc127403ea68eb0afe128a7277ed98d4b77019e9",
+   "byteSize": 180,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-risk-center/sa-risk-center.html"
+   ]
+  },
+  {
+   "id": "rp-i-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/auth/rest-password/rest-password.html"
+   ]
+  },
+  {
+   "id": "rp-i-warn",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a9fb96e8c7f64a28fe972c7dfc127403ea68eb0afe128a7277ed98d4b77019e9",
+   "byteSize": 180,
+   "files": [
+    "src/app/pages/auth/rest-password/rest-password.html"
+   ]
+  },
+  {
+   "id": "rp-ws-chevron-right",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/auth/rest-password/rest-password.html"
+   ]
+  },
+  {
+   "id": "rp-ws-eye-off",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3720b23ab9c7e5c935917bab1b29d5d9c7707f5f5808f97fa56d4139365b8392",
+   "byteSize": 229,
+   "files": [
+    "src/app/pages/auth/rest-password/rest-password.html"
+   ]
+  },
+  {
+   "id": "rp-ws-eye-on",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e1f8933d548718b9acbc773ccfdb0cde37ae3b18a421ca3d62de9b9282d240c0",
+   "byteSize": 87,
+   "files": [
+    "src/app/pages/auth/rest-password/rest-password.html"
+   ]
+  },
+  {
+   "id": "rp-ws-lock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0fd232cf6659c77638c80265aa6cd11a581e94bfff993aa831b0e3d80715a9f6",
+   "byteSize": 86,
+   "files": [
+    "src/app/pages/auth/rest-password/rest-password.html"
+   ]
+  },
+  {
+   "id": "rp-ws-mail",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "30831a14a011098ef3e51e1297079ce9fe9c7a2d9723faaeb1e7e2fa2fdeda73",
+   "byteSize": 122,
+   "files": [
+    "src/app/pages/auth/rest-password/rest-password.html"
+   ]
+  },
+  {
+   "id": "rp-ws-phone",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cd37d08f595beca10f945de4cd7b72a7762321716b837e4c9b237fd6f270f442",
+   "byteSize": 305,
+   "files": [
+    "src/app/pages/auth/rest-password/rest-password.html"
+   ]
+  },
+  {
+   "id": "spa-i-bell2",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "31ed40f62b244944456d9eb631b88b32d7112df3061e47143a2c14fa6bd6c9a5",
+   "byteSize": 93,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-super-admins/sa-super-admins.html"
+   ]
+  },
+  {
+   "id": "spa-i-export",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "81caf7fd2a1d56b08b375bbb035992e39fe9f5b46c1f3208681d2126a9d5e968",
+   "byteSize": 128,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-super-admins/sa-super-admins.html"
+   ]
+  },
+  {
+   "id": "spa-i-eye",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "e1f8933d548718b9acbc773ccfdb0cde37ae3b18a421ca3d62de9b9282d240c0",
+   "byteSize": 87,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-super-admins/sa-super-admins.html"
+   ]
+  },
+  {
+   "id": "spa-i-globe",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "2ba4a2b9b39064c138819d2ef2fa77cb6665ea90180a034d6a90feb3152f5440",
+   "byteSize": 172,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-super-admins/sa-super-admins.html"
+   ]
+  },
+  {
+   "id": "spa-i-key",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "1bba02353132d62c08d01e9c0f47b776d28d843c3c491c5b4a803600418ba996",
+   "byteSize": 131,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-super-admins/sa-super-admins.html"
+   ]
+  },
+  {
+   "id": "spa-i-list",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "717196374b07ccb0ecb3e482147dc4b1232dfceba91b95cd0a898da729aa03a0",
+   "byteSize": 230,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-super-admins/sa-super-admins.html"
+   ]
+  },
+  {
+   "id": "spa-i-save",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "379af64a6dd589c229004eff61f3301a568f20fd86085df66205d87b9d10321c",
+   "byteSize": 150,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-super-admins/sa-super-admins.html"
+   ]
+  },
+  {
+   "id": "spa-i-settings",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "85b9a7faaf4718f499e2c41f996f518e281728bfd0b7977db051b1a8dd6ab7dd",
+   "byteSize": 657,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-super-admins/sa-super-admins.html"
+   ]
+  },
+  {
+   "id": "spa-i-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
+   "byteSize": 55,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-super-admins/sa-super-admins.html"
+   ]
+  },
+  {
+   "id": "spa-i-wallet",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e4b6a2322f7f3dc2db66649e3d1bb8263e4b9318a74df2350d16c58c5b4bde72",
+   "byteSize": 137,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-super-admins/sa-super-admins.html"
+   ]
+  },
+  {
+   "id": "spa-i-warn",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a9fb96e8c7f64a28fe972c7dfc127403ea68eb0afe128a7277ed98d4b77019e9",
+   "byteSize": 180,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-super-admins/sa-super-admins.html"
+   ]
+  },
+  {
+   "id": "spb-admin",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "6859c1f3dc929b767b967875c28f0f530cf2a252b76015d8752e7064063e166a",
+   "byteSize": 159,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-audio",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "b65bf2d25bd94c83cfa28d04971970e5320e8af95c0f0cc3f510fca1abc496b8",
+   "byteSize": 57,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-business",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "9ed9a008f823906f5206fec990b672ca8e7c93416dd0e712e2320cf33733f610",
+   "byteSize": 103,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-code",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "dde63c2cb59c56c27dca500ce130ebcd37f831fc50fcb040e697bd7774c25870",
+   "byteSize": 71,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-consult",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "a1413305682a7dde14b168a4f482f8261aaf56f90f104eff7c134fa5699db508",
+   "byteSize": 73,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-data",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "8f68088b333e0e0116085a531392a8f0fbb517e37a0da579714a4f27a6584961",
+   "byteSize": 114,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-design",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "0335dacdf7a57e69a82c5f68a04bf49946ff489d5481515c3deeb84fcd22baf8",
+   "byteSize": 144,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-legal",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "3d1ae035f6c47408533f2cdff2d6e89b86e1d750cb6b3af5a5985b2317df9008",
+   "byteSize": 52,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-marketing",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "7245023d28c4c2007da5563855e5517df0544535e9602ce34e4039435b2c45bd",
+   "byteSize": 37,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-mobile",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "49c4d6705243b96cdad3de09f7de485f63486a2cddc3fd50f5331048f38b5c6d",
+   "byteSize": 133,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-photo",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "ce41f82bcfc4d70479b4fd2797277816bea95f8f28132c9503995eca522b98b8",
+   "byteSize": 121,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-search",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a14086710bd2c315cde5b7faf9974ba33db405fd35d8fb6fac6785901f0efdb5",
+   "byteSize": 59,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-sound",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "95b767402e150c7217bf15c1a59d77c16d0d1c1b3c49601351020bc0e58b84f9",
+   "byteSize": 88,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-tag",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "58446f972b7a42f91c1db1c279c1903b6ea78c4e4d681ed6da7c95b803832b82",
+   "byteSize": 208,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-training",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "e124f654e8461e296c54028b0bf9a78ab4e352cf8897623e782ee29fde2c9554",
+   "byteSize": 76,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-translate",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "3fe6ea4d4759c3a61ca8367d8e78a1174490e7a4bbed2ab7bdfffffecf5829fb",
+   "byteSize": 130,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-video",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "e7efae004fb39d489e853a799e4b2ff9e7519f37b955e6ec4d2ed779d66a0e8c",
+   "byteSize": 90,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "spb-writing",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "85983a62dfa2869e5016a0020453f70dad03dfbef9552f9119c06cc8e259eaeb",
+   "byteSize": 87,
+   "files": [
+    "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "ud-chat",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a1413305682a7dde14b168a4f482f8261aaf56f90f104eff7c134fa5699db508",
+   "byteSize": 73,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-user-detail/sa-user-detail.html"
+   ]
+  },
+  {
+   "id": "ud-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-user-detail/sa-user-detail.html"
+   ]
+  },
+  {
+   "id": "ud-chevron-right",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-user-detail/sa-user-detail.html"
+   ]
+  },
+  {
+   "id": "ud-doc",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "4af228f707cb860cc988b6e2d488c7890ab1099eb7a2b93bfe19901f4e400a7d",
+   "byteSize": 105,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-user-detail/sa-user-detail.html"
+   ]
+  },
+  {
+   "id": "ud-edit",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "554ed5ac152becde424dcdfec3fcee83c5fcebe9417e57ac986a90213b7e7ba4",
+   "byteSize": 127,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-user-detail/sa-user-detail.html"
+   ]
+  },
+  {
+   "id": "ud-home",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2e1a2899458db9220e4b1cf4bde4cd5fbd44a65fd614030038ba916be0805bed",
+   "byteSize": 100,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-user-detail/sa-user-detail.html"
+   ]
+  },
+  {
+   "id": "ud-mail",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "81a0c4103599e08142c2a89fa4ad3aebde22189386994aa5d33638a2890b1300",
+   "byteSize": 76,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-user-detail/sa-user-detail.html"
+   ]
+  },
+  {
+   "id": "ud-pause",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "34f76bd9153413f02f3705f6f90b89ab94e8ce64616768e51f1cb90aa2955aa0",
+   "byteSize": 83,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-user-detail/sa-user-detail.html"
+   ]
+  },
+  {
+   "id": "ud-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
+   "byteSize": 55,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-user-detail/sa-user-detail.html"
+   ]
+  },
+  {
+   "id": "ud-star",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9fa7a309732a5a12585ab201e86daa6be822662e079076d08ab5d46570066623",
+   "byteSize": 114,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-user-detail/sa-user-detail.html"
+   ]
+  },
+  {
+   "id": "ud-trash",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "f1f97ff57867696a94c7bb58e63925149cdea11e1f6ecb574ee529a31ee11ff1",
+   "byteSize": 128,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-user-detail/sa-user-detail.html"
+   ]
+  },
+  {
+   "id": "ud-wallet",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "78e28678808e37716daabc6f08b2e675b4d55d63dd4beb246e64d627a8347579",
+   "byteSize": 118,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-user-detail/sa-user-detail.html"
+   ]
+  },
+  {
+   "id": "ud-warn",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a9fb96e8c7f64a28fe972c7dfc127403ea68eb0afe128a7277ed98d4b77019e9",
+   "byteSize": 180,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-user-detail/sa-user-detail.html"
+   ]
+  },
+  {
+   "id": "wd-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/finance/withdraw/withdraw.html"
+   ]
+  },
+  {
+   "id": "wd-earn",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0c4bb7390dbd8bb2a06ab83f6930a4e9c3d300f4ff71b0f69026183749a82b1a",
+   "byteSize": 99,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/finance/withdraw/withdraw.html"
+   ]
+  },
+  {
+   "id": "wd-escrow",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c5772ef516ea1904ab6416d95299136002d1cb399c001d40989aea688f2a1fa5",
+   "byteSize": 139,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/finance/withdraw/withdraw.html"
+   ]
+  },
+  {
+   "id": "wd-paypal",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c4629b4f78e9241a310097593d31dcad5114914381d9ccb10184412c90e9131e",
+   "byteSize": 75,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/finance/withdraw/withdraw.html"
+   ]
+  },
+  {
+   "id": "wd-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
+   "byteSize": 55,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/finance/withdraw/withdraw.html"
+   ]
+  },
+  {
+   "id": "wd-wallet",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e4b6a2322f7f3dc2db66649e3d1bb8263e4b9318a74df2350d16c58c5b4bde72",
+   "byteSize": 137,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/finance/withdraw/withdraw.html"
+   ]
+  },
+  {
+   "id": "ws-action-next",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/explore-requests/applay-request/applay-request.html"
+   ]
+  },
+  {
+   "id": "ws-ai-alert",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "9ad6e46ff18a3a57684d680295079477768087f8dd1faf7fcebb276a6ce4facb",
+   "byteSize": 154,
+   "files": [
+    "src/app/pages/website/home/home.component.html"
+   ],
+   "label": "تنبيه الذكاء"
+  },
+  {
+   "id": "ws-ai-bolt",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "39ab4b7eec110aedb552c8629593d0579ddb1dd828a9067a0576bc04007cea4b",
+   "byteSize": 38,
+   "files": [
+    "src/app/pages/website/home/home.component.html"
+   ],
+   "label": "صاعقة الذكاء (سرعة/أداء)"
+  },
+  {
+   "id": "ws-ai-eye",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e374bd0965a00de4875aa67d38b6a9dce477d6ccac48d9c566ff9d82f22baeec",
+   "byteSize": 113,
+   "files": [
+    "src/app/pages/website/home/home.component.html"
+   ],
+   "label": "عين الذكاء (مراقبة/تحقق)"
+  },
+  {
+   "id": "ws-ai-spark",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 2,
+   "reason": null,
+   "sha256": "411700efaa72b67c565503824f7a7d2018777210835d3eab9ae7f63607b6468d",
+   "byteSize": 69,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/explore-requests/applay-request/applay-request.html",
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/category-guide/category-guide.html"
+   ],
+   "label": "شرارة الذكاء (نجمة معينية 8 رؤوس)"
+  },
+  {
+   "id": "ws-alert",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 2,
+   "reason": null,
+   "sha256": "f65692c8058260fabe7e75784bd0af82ee24af90e45f1174bc74dbaa778c04cc",
+   "byteSize": 205,
+   "files": [
+    "src/app/pages/system-errors/error-page/error-page.html",
+    "src/app/pages/website/support/help-article/help-article.component.html",
+    "src/app/pages/website/support/help-center/help-center.component.html"
+   ],
+   "label": "alert (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-arrow-left",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 2,
+   "reason": null,
+   "sha256": "60875edb5bbd58e608676246989b341d9da051b9b8449073cbd5ae2c10c7ec5f",
+   "byteSize": 90,
+   "files": [
+    "src/app/pages/auth/welcome/welcome.html",
+    "src/app/pages/website/checkout/cart/cart.html",
+    "src/app/pages/website/checkout/payment/payment.html"
+   ]
+  },
+  {
+   "id": "ws-bell",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "31ed40f62b244944456d9eb631b88b32d7112df3061e47143a2c14fa6bd6c9a5",
+   "byteSize": 93,
+   "files": [
+    "src/app/pages/website/contact/contact.html"
+   ]
+  },
+  {
+   "id": "ws-bolt",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b683d32e146917d89c9410aec7e2a16d0abb4441b8010205cade94787d1ca27b",
+   "byteSize": 58,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/data/data.html"
+   ]
+  },
+  {
+   "id": "ws-broker",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 5,
+   "variants": 4,
+   "reason": null,
+   "sha256": "745dc7182b727e8a783b14db43c2939d325ceeeb5a262abcb6a4d1f81919df27",
+   "byteSize": 184,
+   "files": [
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/marketer-profile/marketer-profile.html",
+    "src/app/pages/website/support/help-article/help-article.component.html"
+   ],
+   "label": "broker (الأطراف والأدوار)"
+  },
+  {
+   "id": "ws-building",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c8a073c6e9ea94116d1fb53d9f6dfc72d65bc9c42c26fdeec097237f16c51f2b",
+   "byteSize": 225,
+   "files": [
+    "src/app/pages/website/home/home.component.html"
+   ],
+   "label": "building (الأطراف والأدوار)"
+  },
+  {
+   "id": "ws-camera",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "776ca30e8b033f6e6045bc38889c7db5471a51fee7b2650c495b5e6e360edb79",
+   "byteSize": 124,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/data/data.html"
+   ]
+  },
+  {
+   "id": "ws-cart",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 5,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0e35c9bb7bcbdf46dfa4f9de1b0e0d8d9e8c09c8e953c1a9b4a2448f833af1f5",
+   "byteSize": 136,
+   "files": [
+    "src/app/pages/website/checkout/cart/cart.html",
+    "src/app/pages/website/checkout/failure/failure.html",
+    "src/app/pages/website/checkout/payment/payment.html"
+   ],
+   "label": "cart (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-cat-admin",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 1,
+   "reason": null,
+   "sha256": "6859c1f3dc929b767b967875c28f0f530cf2a252b76015d8752e7064063e166a",
+   "byteSize": 159,
+   "files": [
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/marketplace.html",
+    "src/app/pages/website/marketplace/slug/slug.html"
+   ]
+  },
+  {
+   "id": "ws-cat-audio",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 2,
+   "reason": null,
+   "sha256": "b65bf2d25bd94c83cfa28d04971970e5320e8af95c0f0cc3f510fca1abc496b8",
+   "byteSize": 57,
+   "files": [
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/marketplace.html",
+    "src/app/pages/website/marketplace/slug/slug.html"
+   ]
+  },
+  {
+   "id": "ws-cat-business",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 2,
+   "reason": null,
+   "sha256": "9ed9a008f823906f5206fec990b672ca8e7c93416dd0e712e2320cf33733f610",
+   "byteSize": 103,
+   "files": [
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/marketplace.html",
+    "src/app/pages/website/marketplace/slug/slug.html"
+   ]
+  },
+  {
+   "id": "ws-cat-code",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 1,
+   "reason": null,
+   "sha256": "dde63c2cb59c56c27dca500ce130ebcd37f831fc50fcb040e697bd7774c25870",
+   "byteSize": 71,
+   "files": [
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/marketplace.html"
+   ],
+   "label": "cat-code (فئات الخدمات)"
+  },
+  {
+   "id": "ws-cat-consult",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a1413305682a7dde14b168a4f482f8261aaf56f90f104eff7c134fa5699db508",
+   "byteSize": 73,
+   "files": [
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/marketplace.html"
+   ],
+   "label": "cat-consult (فئات الخدمات)"
+  },
+  {
+   "id": "ws-cat-data",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8f68088b333e0e0116085a531392a8f0fbb517e37a0da579714a4f27a6584961",
+   "byteSize": 114,
+   "files": [
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/marketplace.html",
+    "src/app/pages/website/marketplace/slug/slug.html"
+   ],
+   "label": "cat-data (فئات الخدمات)"
+  },
+  {
+   "id": "ws-cat-design",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 2,
+   "reason": null,
+   "sha256": "231493dbc1559ab50c7b650e027ff0100383afc955ddfe284174f7338285ad87",
+   "byteSize": 124,
+   "files": [
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/marketplace.html"
+   ],
+   "label": "cat-design (فئات الخدمات)"
+  },
+  {
+   "id": "ws-cat-legal",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 2,
+   "reason": null,
+   "sha256": "3d1ae035f6c47408533f2cdff2d6e89b86e1d750cb6b3af5a5985b2317df9008",
+   "byteSize": 52,
+   "files": [
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/marketplace.html",
+    "src/app/pages/website/marketplace/slug/slug.html"
+   ]
+  },
+  {
+   "id": "ws-cat-marketing",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 2,
+   "reason": null,
+   "sha256": "6436aea85545bb5a35460be68212a2cc32f4ea378cc8936a016cc0f8ef4249df",
+   "byteSize": 126,
+   "files": [
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/marketplace.html"
+   ],
+   "label": "cat-marketing (فئات الخدمات)"
+  },
+  {
+   "id": "ws-cat-mobile",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "49c4d6705243b96cdad3de09f7de485f63486a2cddc3fd50f5331048f38b5c6d",
+   "byteSize": 133,
+   "files": [
+    "src/app/pages/website/marketplace/slug/slug.html"
+   ],
+   "label": "cat-mobile (فئات الخدمات)"
+  },
+  {
+   "id": "ws-cat-pen",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 1,
+   "reason": null,
+   "sha256": "5bc6763bb812899b37584b5175f1b3c8f467846c883093533a99a6abf508e4c5",
+   "byteSize": 85,
+   "files": [
+    "src/app/pages/website/marketplace/offer/offer.html",
+    "src/app/pages/website/marketplace/provider-profile/provider-profile.html"
+   ]
+  },
+  {
+   "id": "ws-cat-photo",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ce41f82bcfc4d70479b4fd2797277816bea95f8f28132c9503995eca522b98b8",
+   "byteSize": 121,
+   "files": [
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/marketplace.html",
+    "src/app/pages/website/marketplace/slug/slug.html"
+   ]
+  },
+  {
+   "id": "ws-cat-sound",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 1,
+   "reason": null,
+   "sha256": "95b767402e150c7217bf15c1a59d77c16d0d1c1b3c49601351020bc0e58b84f9",
+   "byteSize": 88,
+   "files": [
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/marketplace.html",
+    "src/app/pages/website/marketplace/slug/slug.html"
+   ]
+  },
+  {
+   "id": "ws-cat-training",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 2,
+   "reason": null,
+   "sha256": "e124f654e8461e296c54028b0bf9a78ab4e352cf8897623e782ee29fde2c9554",
+   "byteSize": 76,
+   "files": [
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/marketplace.html",
+    "src/app/pages/website/marketplace/slug/slug.html"
+   ]
+  },
+  {
+   "id": "ws-cat-translate",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3fe6ea4d4759c3a61ca8367d8e78a1174490e7a4bbed2ab7bdfffffecf5829fb",
+   "byteSize": 130,
+   "files": [
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/marketplace.html",
+    "src/app/pages/website/marketplace/slug/slug.html"
+   ],
+   "label": "cat-translate (فئات الخدمات)"
+  },
+  {
+   "id": "ws-cat-video",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e7efae004fb39d489e853a799e4b2ff9e7519f37b955e6ec4d2ed779d66a0e8c",
+   "byteSize": 90,
+   "files": [
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/marketplace.html"
+   ],
+   "label": "cat-video (فئات الخدمات)"
+  },
+  {
+   "id": "ws-cat-writing",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85983a62dfa2869e5016a0020453f70dad03dfbef9552f9119c06cc8e259eaeb",
+   "byteSize": 87,
+   "files": [
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/marketplace.html"
+   ],
+   "label": "cat-writing (فئات الخدمات)"
+  },
+  {
+   "id": "ws-chart",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8f68088b333e0e0116085a531392a8f0fbb517e37a0da579714a4f27a6584961",
+   "byteSize": 114,
+   "files": [
+    "src/app/pages/website/marketplace/curated/curated.html",
+    "src/app/pages/website/marketplace/marketer-profile/marketer-profile.html"
+   ]
+  },
+  {
+   "id": "ws-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 27,
+   "variants": 2,
+   "reason": null,
+   "sha256": "6542a98621764c7b16eaffa727dff21999cb4da8077faa630dea4f7bd4322c61",
+   "byteSize": 33,
+   "files": [
+    "src/app/pages/auth/register/register.html",
+    "src/app/pages/auth/verify-otp/verify-otp.html",
+    "src/app/pages/auth/welcome/welcome.html"
+   ],
+   "label": "check (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-check-circle",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "aa0806a14ec5a4fbffb0a928fae720265eb3ad7809bed4290a9feb0c838b79d7",
+   "byteSize": 80,
+   "files": [
+    "src/app/pages/auth/login/login.html"
+   ]
+  },
+  {
+   "id": "ws-chevron",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 23,
+   "variants": 2,
+   "reason": null,
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/checkout/cart/cart.html",
+    "src/app/pages/website/checkout/custom-request/custom-request.html",
+    "src/app/pages/website/checkout/payment/payment.html"
+   ],
+   "label": "chevron (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-chevron-l",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e7c0fa8fe7bd5fa848254bf8dd99117a547b25ae749e2d6451bb16a6bb80da0c",
+   "byteSize": 36,
+   "files": [
+    "src/app/pages/website/marketplace/marketplace.html"
+   ],
+   "label": "chevron-l (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-chevron-r",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "7c81b7acba0846fde1fbe535ef72eab02867f01730909b1ef2f64070d5386afb",
+   "byteSize": 35,
+   "files": [
+    "src/app/pages/website/marketplace/marketplace.html",
+    "src/app/pages/website/marketplace/slug/slug.html"
+   ],
+   "label": "chevron-r (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-chevron-right",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 1,
+   "reason": null,
+   "sha256": "79643e275aa2fffba23d93b094645323353bbf9e2249318d336687183e03674a",
+   "byteSize": 31,
+   "files": [
+    "src/app/pages/auth/register/register.html",
+    "src/app/pages/auth/verify-otp/verify-otp.html"
+   ]
+  },
+  {
+   "id": "ws-client",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "4c1962b3526172a1c73e952d66588ecf0f5615bdfa9a9fee2c0f75f3eaf944f9",
+   "byteSize": 177,
+   "files": [
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/client-profile/client-profile.html"
+   ],
+   "label": "client (الأطراف والأدوار)"
+  },
+  {
+   "id": "ws-clock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 18,
+   "variants": 2,
+   "reason": null,
+   "sha256": "cf23e5a26bf125e25777496e396af9780d6748c4892666095d80c1ef6028bd81",
+   "byteSize": 69,
+   "files": [
+    "src/app/pages/system-errors/error-page/error-page.html",
+    "src/app/pages/website/checkout/cart/cart.html",
+    "src/app/pages/website/checkout/review/review.html"
+   ],
+   "label": "clock (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-close",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 7,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a5864b28fcde265184a7abd1c475d46f8ed15d8c5ae74920f8509b59b88ddbfd",
+   "byteSize": 74,
+   "files": [
+    "src/app/pages/website/checkout/custom-request/custom-request.html",
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/compare-providers/compare-providers.html"
+   ],
+   "label": "close (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-compare",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 6,
+   "variants": 3,
+   "reason": null,
+   "sha256": "23ca696b475a78b682d8d7e45a6820c6074b49895093d350529e10b2c1658e47",
+   "byteSize": 89,
+   "files": [
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/compare-providers/compare-providers.html",
+    "src/app/pages/website/marketplace/compare-services/compare-services.html"
+   ],
+   "label": "compare (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-dollar",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb77dc7b0b4124be43cda26b34ae92896c662fd9e38ad754b892f9ffb51a167c",
+   "byteSize": 99,
+   "files": [
+    "src/app/pages/website/support/join-marketer/join-marketer.component.html",
+    "src/app/pages/website/support/join-provider/join-provider.component.html",
+    "src/app/pages/website/support/report-problem/report-problem.component.html"
+   ]
+  },
+  {
+   "id": "ws-download",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "81caf7fd2a1d56b08b375bbb035992e39fe9f5b46c1f3208681d2126a9d5e968",
+   "byteSize": 128,
+   "files": [
+    "src/app/pages/website/marketplace/provider-profile/provider-profile.html"
+   ],
+   "label": "download (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)"
+  },
+  {
+   "id": "ws-edit",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "dc58f243dba79d53bae41c5946f3f626210860e0b8093e310b3c76986989f326",
+   "byteSize": 137,
+   "files": [
+    "src/app/pages/website/checkout/review/review.html"
+   ]
+  },
+  {
+   "id": "ws-eye",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "e374bd0965a00de4875aa67d38b6a9dce477d6ccac48d9c566ff9d82f22baeec",
+   "byteSize": 113,
+   "files": [
+    "src/app/pages/website/cookies/cookies.component.html",
+    "src/app/pages/website/marketplace/provider-profile/provider-profile.html"
+   ]
+  },
+  {
+   "id": "ws-eye-off",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 1,
+   "reason": null,
+   "sha256": "23c1c3efb6bfe446eab5369074a804a55c60c9bb90bd33d15f080ff53227424c",
+   "byteSize": 241,
+   "files": [
+    "src/app/pages/auth/login/login.html",
+    "src/app/pages/auth/register/register.html"
+   ],
+   "label": "eye-off (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-eye-on",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e374bd0965a00de4875aa67d38b6a9dce477d6ccac48d9c566ff9d82f22baeec",
+   "byteSize": 113,
+   "files": [
+    "src/app/pages/auth/login/login.html",
+    "src/app/pages/auth/register/register.html"
+   ],
+   "label": "eye-on (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-file",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 14,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4af228f707cb860cc988b6e2d488c7890ab1099eb7a2b93bfe19901f4e400a7d",
+   "byteSize": 105,
+   "files": [
+    "src/app/pages/website/checkout/cart/cart.html",
+    "src/app/pages/website/checkout/custom-request/custom-request.html",
+    "src/app/pages/website/checkout/payment/payment.html"
+   ],
+   "label": "file (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-filter",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 5,
+   "variants": 2,
+   "reason": null,
+   "sha256": "1eef501a30ceeeb852df80d33ac69222ab772b28653e732450fb2bb81ecb8e68",
+   "byteSize": 63,
+   "files": [
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/curated/curated.html",
+    "src/app/pages/website/marketplace/marketplace.html"
+   ],
+   "label": "filter (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-folder",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e17c7eb67c2272c280da9e8b51709411d77cc7f0513d56d7455f9197b4e79e76",
+   "byteSize": 87,
+   "files": [
+    "src/app/pages/website/marketplace/favorites/favorites.html"
+   ],
+   "label": "folder (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)"
+  },
+  {
+   "id": "ws-globe",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2ba4a2b9b39064c138819d2ef2fa77cb6665ea90180a034d6a90feb3152f5440",
+   "byteSize": 172,
+   "files": [
+    "src/app/pages/website/about/about.html"
+   ],
+   "label": "globe (الأطراف والأدوار)"
+  },
+  {
+   "id": "ws-grid",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b2ccbe71057c4fe577619446354982d0604ac34d127304b6bd1fbb36aa170fb4",
+   "byteSize": 192,
+   "files": [
+    "src/app/pages/website/marketplace/curated/curated.html"
+   ],
+   "label": "grid (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)"
+  },
+  {
+   "id": "ws-heart",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 10,
+   "variants": 2,
+   "reason": null,
+   "sha256": "f4e458902e876aa38c36e974aab74534ef6bdfef25d78a9140c8658b2d26070c",
+   "byteSize": 148,
+   "files": [
+    "src/app/pages/website/about/about.html",
+    "src/app/pages/website/checkout/cart/cart.html",
+    "src/app/pages/website/home/home.component.html"
+   ],
+   "label": "heart (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-home",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "2e1a2899458db9220e4b1cf4bde4cd5fbd44a65fd614030038ba916be0805bed",
+   "byteSize": 100,
+   "files": [
+    "src/app/pages/system-errors/error-page/error-page.html"
+   ],
+   "label": "home (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-image",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 8,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c38a003f498cf8cf99c759fb56baf6fefd013fa5b43695c23a15c6d051583298",
+   "byteSize": 121,
+   "files": [
+    "src/app/pages/website/checkout/cart/cart.html",
+    "src/app/pages/website/checkout/payment/payment.html",
+    "src/app/pages/website/checkout/review/review.html"
+   ],
+   "label": "image (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)"
+  },
+  {
+   "id": "ws-info",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 7,
+   "variants": 2,
+   "reason": null,
+   "sha256": "ce54fc85ea28c6ee4f1aaa1a78de049850ba92bddeb93d3dc391422bf1a6f949",
+   "byteSize": 111,
+   "files": [
+    "src/app/pages/website/checkout/confirm/confirm.html",
+    "src/app/pages/website/checkout/custom-request/custom-request.html",
+    "src/app/pages/website/checkout/failure/failure.html"
+   ],
+   "label": "info (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-layout",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "16d794588e11a207fbc63467c84edfe83f8d5e4478aa2f4ac30849102008a333",
+   "byteSize": 121,
+   "files": [
+    "src/app/pages/website/checkout/success/success.html"
+   ],
+   "label": "layout (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-lightning",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b683d32e146917d89c9410aec7e2a16d0abb4441b8010205cade94787d1ca27b",
+   "byteSize": 58,
+   "files": [
+    "src/app/pages/website/about/about.html"
+   ],
+   "label": "lightning (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-link",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 1,
+   "reason": null,
+   "sha256": "adc58b87d9a2639fb8d2c777dc416101b58e96e5dd2783361f16d7198bba00d8",
+   "byteSize": 143,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/data/data.html",
+    "src/app/pages/website/support/join-marketer/join-marketer.component.html"
+   ]
+  },
+  {
+   "id": "ws-list",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ce71232520b984d940ab610d828928da80ed0a71ddb4f87f07dfa672b28dce70",
+   "byteSize": 309,
+   "files": [
+    "src/app/pages/website/marketplace/curated/curated.html"
+   ]
+  },
+  {
+   "id": "ws-lock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 10,
+   "variants": 3,
+   "reason": null,
+   "sha256": "ea2752774e3777b56aa81d1eb0106039fd698b5de34bdbf3d203510f7953d0e8",
+   "byteSize": 105,
+   "files": [
+    "src/app/pages/auth/login/login.html",
+    "src/app/pages/auth/register/register.html",
+    "src/app/pages/auth/welcome/welcome.html"
+   ],
+   "label": "lock (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-mail",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "b54f7ef0450993f926658406ea82237f944b9e2ad388c3f13e06c098e387678d",
+   "byteSize": 87,
+   "files": [
+    "src/app/pages/auth/register/register.html",
+    "src/app/pages/website/support/report-problem/report-problem.component.html"
+   ]
+  },
+  {
+   "id": "ws-menu",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "720c5dc140e58aa1fa274d6da8045ff24bf9321b1aff85139906b5d8484fbe56",
+   "byteSize": 112,
+   "files": [
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/marketplace.html"
+   ],
+   "label": "menu (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-milestone",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "bed7ea45fc249832f1c9787d9609ec2a966962156530b32ab51ffb357b859085",
+   "byteSize": 183,
+   "files": [
+    "src/app/pages/website/marketplace/offer/offer.html"
+   ]
+  },
+  {
+   "id": "ws-msg",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a1413305682a7dde14b168a4f482f8261aaf56f90f104eff7c134fa5699db508",
+   "byteSize": 73,
+   "files": [
+    "src/app/pages/website/marketplace/client-profile/client-profile.html",
+    "src/app/pages/website/marketplace/marketer-profile/marketer-profile.html",
+    "src/app/pages/website/marketplace/offer/offer.html"
+   ],
+   "label": "msg (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-negotiate",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e995d5eddb2f6a126361c5f593002460a4a22467a874be39a285492cd36f73cc",
+   "byteSize": 123,
+   "files": [
+    "src/app/pages/website/marketplace/offer/offer.html"
+   ]
+  },
+  {
+   "id": "ws-person",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "158b127b364a699e0dea597da0b6245f3f177725accffcaae6aaaebceb18755a",
+   "byteSize": 69,
+   "files": [
+    "src/app/pages/website/marketplace/marketplace.html"
+   ],
+   "label": "person (الأطراف والأدوار)"
+  },
+  {
+   "id": "ws-phone",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "80f021c99626bb66bc2420207d5ded2c668e5a2aef6cdb027132bb799012b5e5",
+   "byteSize": 108,
+   "files": [
+    "src/app/pages/auth/register/register.html",
+    "src/app/pages/website/checkout/confirm/confirm.html"
+   ],
+   "label": "phone (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)"
+  },
+  {
+   "id": "ws-plus",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3fbff289ca206d26a75dc4e527dff2f69da01aae031732dddcaae83399f34dbe",
+   "byteSize": 76,
+   "files": [
+    "src/app/pages/website/marketplace/compare-providers/compare-providers.html",
+    "src/app/pages/website/marketplace/compare-services/compare-services.html"
+   ],
+   "label": "plus (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-provider",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 4,
+   "reason": null,
+   "sha256": "363a6601a9eb331a704f6632571d519144bb7997f962af69922ffc83d3c5cc1a",
+   "byteSize": 150,
+   "files": [
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/legal/legal-page.component.html",
+    "src/app/pages/website/marketplace/compare-providers/compare-providers.html"
+   ],
+   "label": "provider (الأطراف والأدوار)"
+  },
+  {
+   "id": "ws-refresh",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 3,
+   "reason": null,
+   "sha256": "22dae39ed8f702dd4a5a2e68bafbad2960072385f63a8cd4f2396c792072a962",
+   "byteSize": 70,
+   "files": [
+    "src/app/pages/system-errors/error-page/error-page.html",
+    "src/app/pages/website/checkout/failure/failure.html",
+    "src/app/pages/website/marketplace/curated/curated.html"
+   ],
+   "label": "refresh (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-role-broker",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "f1f6d5e58d075f14894683e551ca6aaf0e7f815674a3356e568abf63ed5d7663",
+   "byteSize": 255,
+   "files": [
+    "src/app/pages/auth/register/register.html",
+    "src/app/pages/auth/welcome/welcome.html"
+   ]
+  },
+  {
+   "id": "ws-role-building",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c8a073c6e9ea94116d1fb53d9f6dfc72d65bc9c42c26fdeec097237f16c51f2b",
+   "byteSize": 225,
+   "files": [
+    "src/app/pages/auth/welcome/welcome.html"
+   ]
+  },
+  {
+   "id": "ws-role-client-company",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "72cfbb4b24863a05ec51f2fd534d2566662b9194dc3715e68a2b1a7cc0795c06",
+   "byteSize": 294,
+   "files": [
+    "src/app/pages/auth/register/register.html"
+   ]
+  },
+  {
+   "id": "ws-role-client-person",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cc6490402dab7b896e6f2a9c7c8502da1742701769927c336990fecd852df933",
+   "byteSize": 145,
+   "files": [
+    "src/app/pages/auth/register/register.html"
+   ]
+  },
+  {
+   "id": "ws-role-provider",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "363a6601a9eb331a704f6632571d519144bb7997f962af69922ffc83d3c5cc1a",
+   "byteSize": 150,
+   "files": [
+    "src/app/pages/auth/welcome/welcome.html"
+   ]
+  },
+  {
+   "id": "ws-role-provider-company",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "f11acd2978df882bf15a8243692bf51a76d47166dd4987995497a8d4dc786b09",
+   "byteSize": 329,
+   "files": [
+    "src/app/pages/auth/register/register.html"
+   ]
+  },
+  {
+   "id": "ws-role-provider-person",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0976dc7c8204e16e1c491dfb77100e072b354aee25360cfd7bb1c5aec4f045dd",
+   "byteSize": 221,
+   "files": [
+    "src/app/pages/auth/register/register.html"
+   ]
+  },
+  {
+   "id": "ws-role-user",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "76a7902a3644fd7ea87e61cb4e450cf9221ee8882bc41c194ecbe41ad85aa191",
+   "byteSize": 87,
+   "files": [
+    "src/app/pages/auth/welcome/welcome.html"
+   ]
+  },
+  {
+   "id": "ws-save",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "379af64a6dd589c229004eff61f3301a568f20fd86085df66205d87b9d10321c",
+   "byteSize": 150,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/explore-requests/applay-request/applay-request.html"
+   ]
+  },
+  {
+   "id": "ws-search",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 5,
+   "variants": 2,
+   "reason": null,
+   "sha256": "7c7335e37cc7bf9134e92f42ba56be9980577a4f477ae956a3ae237c3729c482",
+   "byteSize": 76,
+   "files": [
+    "src/app/pages/system-errors/error-page/error-page.html",
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/category-guide/category-guide.html"
+   ],
+   "label": "search (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-send",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e588e9c5e720f3342406e5d2e89b6673f56574b8b17bd0b3c2ba9f8c74d4d628",
+   "byteSize": 83,
+   "files": [
+    "src/app/pages/website/checkout/custom-request/custom-request.html"
+   ],
+   "label": "send (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-settings",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "97df236f7ba5327e112d4f825ba10f8960505488b2e65b1d71cb90bbf85d3356",
+   "byteSize": 671,
+   "files": [
+    "src/app/pages/website/cookies/cookies.component.html",
+    "src/app/pages/website/support/report-problem/report-problem.component.html"
+   ]
+  },
+  {
+   "id": "ws-share",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 1,
+   "reason": null,
+   "sha256": "08e4720f0f45e7d921494273ad0e49a6749166fb2cff09205030e3ed44e03e36",
+   "byteSize": 190,
+   "files": [
+    "src/app/pages/website/marketplace/marketer-profile/marketer-profile.html",
+    "src/app/pages/website/marketplace/offer/offer.html",
+    "src/app/pages/website/marketplace/provider-profile/provider-profile.html"
+   ],
+   "label": "share (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)"
+  },
+  {
+   "id": "ws-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 27,
+   "variants": 3,
+   "reason": null,
+   "sha256": "eb483ca173e9cf17a7d375ebd9c207c025ad1fb7dfa67b5774b64d6034ee6979",
+   "byteSize": 121,
+   "files": [
+    "src/app/pages/auth/login/login.html",
+    "src/app/pages/auth/register/register.html",
+    "src/app/pages/auth/verify-otp/verify-otp.html"
+   ],
+   "label": "shield (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-shield-x",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7c651ae0685972971759c2906a453321e5a0b05fe5c672406f5f07efb06a2598",
+   "byteSize": 182,
+   "files": [
+    "src/app/pages/auth/login/login.html"
+   ]
+  },
+  {
+   "id": "ws-social-email",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "30831a14a011098ef3e51e1297079ce9fe9c7a2d9723faaeb1e7e2fa2fdeda73",
+   "byteSize": 122,
+   "files": [
+    "src/app/pages/website/contact/contact.html"
+   ],
+   "label": "social-email (التواصل الاجتماعي)"
+  },
+  {
+   "id": "ws-social-globe",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2ba4a2b9b39064c138819d2ef2fa77cb6665ea90180a034d6a90feb3152f5440",
+   "byteSize": 172,
+   "files": [
+    "src/app/pages/website/marketplace/marketer-profile/marketer-profile.html"
+   ]
+  },
+  {
+   "id": "ws-social-instagram",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 2,
+   "reason": null,
+   "sha256": "2eb37883a588354a2430b9bffbe51dc5340a3fcb8298efc071c11c2e0183dcde",
+   "byteSize": 150,
+   "files": [
+    "src/app/pages/website/contact/contact.html",
+    "src/app/pages/website/marketplace/marketer-profile/marketer-profile.html",
+    "src/app/pages/website/support/join-marketer/join-marketer.component.html"
+   ]
+  },
+  {
+   "id": "ws-social-linkedin",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 2,
+   "reason": null,
+   "sha256": "a4a25916af8fde239bcd4c9c6c9362b0066220863e658da4ac56b82b9d6e4047",
+   "byteSize": 131,
+   "files": [
+    "src/app/pages/website/about/about.html",
+    "src/app/pages/website/contact/contact.html",
+    "src/app/pages/website/marketplace/marketer-profile/marketer-profile.html"
+   ]
+  },
+  {
+   "id": "ws-social-snapchat",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 3,
+   "reason": null,
+   "sha256": "e8207c5954a775b054476a1ab547ff9e37ee1166ccfdfdcf8e64cb066625e1db",
+   "byteSize": 189,
+   "files": [
+    "src/app/pages/website/contact/contact.html",
+    "src/app/pages/website/marketplace/marketer-profile/marketer-profile.html",
+    "src/app/pages/website/support/join-marketer/join-marketer.component.html"
+   ]
+  },
+  {
+   "id": "ws-social-telegram",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "f81021afe158b998b65316a5b9e499c61d2411df1d6ae3f17a5ad5406ae58914",
+   "byteSize": 68,
+   "files": [
+    "src/app/pages/website/marketplace/marketer-profile/marketer-profile.html",
+    "src/app/pages/website/support/join-marketer/join-marketer.component.html"
+   ]
+  },
+  {
+   "id": "ws-social-tiktok",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "14407e016cbdf9a340a9aa192c0c576a94b486a51c2f588d75e307f1d7d53b7b",
+   "byteSize": 87,
+   "files": [
+    "src/app/pages/website/marketplace/marketer-profile/marketer-profile.html",
+    "src/app/pages/website/support/join-marketer/join-marketer.component.html"
+   ]
+  },
+  {
+   "id": "ws-social-whatsapp",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 3,
+   "variants": 2,
+   "reason": null,
+   "sha256": "522583310566bfeb3d9b3fbd8aa62928ea60cd1d997bf644dac8d580fea82c83",
+   "byteSize": 196,
+   "files": [
+    "src/app/pages/website/contact/contact.html",
+    "src/app/pages/website/marketplace/marketer-profile/marketer-profile.html",
+    "src/app/pages/website/support/join-marketer/join-marketer.component.html"
+   ]
+  },
+  {
+   "id": "ws-social-x",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 2,
+   "reason": null,
+   "sha256": "80cda945e489f1dc246ffc696374be7eacb660c9a8951d0f49076301d730184a",
+   "byteSize": 169,
+   "files": [
+    "src/app/pages/website/about/about.html",
+    "src/app/pages/website/contact/contact.html",
+    "src/app/pages/website/marketplace/marketer-profile/marketer-profile.html"
+   ]
+  },
+  {
+   "id": "ws-social-youtube",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "9d5e1a6389d0c3d31e9af28ffb9f130c6a651736db78a5c5a5adeda31f5b8ba9",
+   "byteSize": 139,
+   "files": [
+    "src/app/pages/website/marketplace/marketer-profile/marketer-profile.html",
+    "src/app/pages/website/support/join-marketer/join-marketer.component.html"
+   ]
+  },
+  {
+   "id": "ws-sparkle",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3fb2e5cc766bac1d336dff4228e4d2ca99210216c74f7f8ad532a21d42605bbf",
+   "byteSize": 199,
+   "files": [
+    "src/app/pages/website/marketplace/curated/curated.html"
+   ]
+  },
+  {
+   "id": "ws-star",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 11,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9fa7a309732a5a12585ab201e86daa6be822662e079076d08ab5d46570066623",
+   "byteSize": 114,
+   "files": [
+    "src/app/pages/website/about/about.html",
+    "src/app/pages/website/marketplace/category-guide/category-guide.html",
+    "src/app/pages/website/marketplace/client-profile/client-profile.html"
+   ],
+   "label": "star (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-step1",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "6e66fac2912181cde451eef8fbdb9b8d93ff0005c8638922a2fcd427b7577d01",
+   "byteSize": 247,
+   "files": [
+    "src/app/pages/website/home/home.component.html"
+   ]
+  },
+  {
+   "id": "ws-step2",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "5783ed9f9114dce180896cfc362ebacb2a0b7138a8e85792828bb9860aa8b748",
+   "byteSize": 140,
+   "files": [
+    "src/app/pages/website/home/home.component.html"
+   ]
+  },
+  {
+   "id": "ws-step3",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "251215a3d930cd619d7bd05ad4a2a1b26d6427b58d806abff9f1ae36b5d09ad4",
+   "byteSize": 109,
+   "files": [
+    "src/app/pages/website/home/home.component.html"
+   ]
+  },
+  {
+   "id": "ws-step4",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "650c7be4cb93d56003c6502230cbacc169fe4495ea8322ec433347c2b419d670",
+   "byteSize": 56,
+   "files": [
+    "src/app/pages/website/home/home.component.html"
+   ]
+  },
+  {
+   "id": "ws-support",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a1413305682a7dde14b168a4f482f8261aaf56f90f104eff7c134fa5699db508",
+   "byteSize": 73,
+   "files": [
+    "src/app/pages/website/checkout/failure/failure.html"
+   ]
+  },
+  {
+   "id": "ws-tag",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 6,
+   "variants": 3,
+   "reason": null,
+   "sha256": "aa5fa3d4875e53c6d0c158dcf634cee60788bf93c876ee6189107107492ed251",
+   "byteSize": 109,
+   "files": [
+    "src/app/pages/website/checkout/cart/cart.html",
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/category-guide/category-guide.html"
+   ],
+   "label": "tag (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-target",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "f2432d92025da1c352c1b086b194cd09d42a1c15402fd2169a94f1e6e17338f0",
+   "byteSize": 94,
+   "files": [
+    "src/app/pages/website/about/about.html"
+   ],
+   "label": "target (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-trash",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "f54fb541de7b82e3e70cdff9f6945f3f1feac60ce40e5c9f667b6d91624555b8",
+   "byteSize": 168,
+   "files": [
+    "src/app/pages/website/checkout/cart/cart.html"
+   ],
+   "label": "trash (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)"
+  },
+  {
+   "id": "ws-trust-doc",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "02aeab965265824efcba2a2f4065328bf647998b06cb2a9f0266e193b7cd4315",
+   "byteSize": 121,
+   "files": [
+    "src/app/pages/website/home/home.component.html",
+    "src/app/pages/website/marketplace/provider-profile/provider-profile.html"
+   ]
+  },
+  {
+   "id": "ws-trust-free",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3c52d0f7aebcc6c88cf0712ca15d918454845a5c3e0792adfe331d3f68aa861b",
+   "byteSize": 197,
+   "files": [
+    "src/app/pages/website/home/home.component.html"
+   ]
+  },
+  {
+   "id": "ws-trust-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c7523c905889c88d9be3564185057f88a70efeb9df01dd453d3711e337c5ecfa",
+   "byteSize": 138,
+   "files": [
+    "src/app/pages/website/home/home.component.html"
+   ]
+  },
+  {
+   "id": "ws-upload",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 1,
+   "reason": null,
+   "sha256": "33b344ca7ebff8d051c6d55051f2e23f4b575dd5b790c14d91f7e7411a0fee09",
+   "byteSize": 138,
+   "files": [
+    "src/app/pages/website/checkout/custom-request/custom-request.html",
+    "src/app/pages/website/support/report-problem/report-problem.component.html"
+   ]
+  },
+  {
+   "id": "ws-user",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 7,
+   "variants": 2,
+   "reason": null,
+   "sha256": "76a7902a3644fd7ea87e61cb4e450cf9221ee8882bc41c194ecbe41ad85aa191",
+   "byteSize": 87,
+   "files": [
+    "src/app/pages/auth/register/register.html",
+    "src/app/pages/system-errors/error-page/error-page.html",
+    "src/app/pages/website/checkout/review/review.html"
+   ],
+   "label": "user (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-users",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "75c7949baa0157cdedc47a701d394c92ea74afd2025846926898ffc166e5b6b3",
+   "byteSize": 145,
+   "files": [
+    "src/app/pages/website/about/about.html",
+    "src/app/pages/website/marketplace/marketer-profile/marketer-profile.html"
+   ],
+   "label": "users (الأطراف والأدوار)"
+  },
+  {
+   "id": "ws-wallet",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cd270d320835ba943891e8c027e91aeda24d2bb6e380462cab5990ba811b6b84",
+   "byteSize": 137,
+   "files": [
+    "src/app/pages/website/checkout/payment/payment.html"
+   ],
+   "label": "wallet (واجهة عامة — مؤكدة)"
+  },
+  {
+   "id": "ws-warn",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 4,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ee5f72098fb789689710a265de999f281a1fd1462e9490324889e8ebc87e4daf",
+   "byteSize": 198,
+   "files": [
+    "src/app/pages/auth/login/login.html",
+    "src/app/pages/auth/register/register.html",
+    "src/app/pages/auth/verify-otp/verify-otp.html"
+   ]
+  },
+  {
+   "id": "ws-x",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 2,
+   "variants": 2,
+   "reason": null,
+   "sha256": "a5864b28fcde265184a7abd1c475d46f8ed15d8c5ae74920f8509b59b88ddbfd",
+   "byteSize": 74,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/explore-requests/applay-request/applay-request.html",
+    "src/app/pages/website/cookies/cookies.component.html"
+   ]
+  },
+  {
+   "id": "ws-x-circle",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "fefcac89f746bee83bec0702de60a4e8bf04ce18b727ebad2756729eb6a975cb",
+   "byteSize": 106,
+   "files": [
+    "src/app/pages/website/checkout/failure/failure.html"
+   ]
+  }
+ ],
+ "excluded": [
+  {
+   "id": "bart-trust-ai",
+   "reason": "MANAGED_BY_ICON_AI"
+  },
+  {
+   "id": "bl-trust-ai",
+   "reason": "MANAGED_BY_ICON_AI"
+  },
+  {
+   "id": "hiw-ai",
+   "reason": "MANAGED_BY_ICON_AI"
+  },
+  {
+   "id": "hiw-trust-ai",
+   "reason": "MANAGED_BY_ICON_AI"
+  },
+  {
+   "id": "hwc-trust-ai",
+   "reason": "MANAGED_BY_ICON_AI"
+  },
+  {
+   "id": "hwm-trust-ai",
+   "reason": "MANAGED_BY_ICON_AI"
+  },
+  {
+   "id": "hwp-trust-ai",
+   "reason": "MANAGED_BY_ICON_AI"
+  },
+  {
+   "id": "i-ai",
+   "reason": "MANAGED_BY_ICON_AI"
+  },
+  {
+   "id": "ic-ai",
+   "reason": "MANAGED_BY_ICON_AI"
+  },
+  {
+   "id": "pr-trust-ai",
+   "reason": "MANAGED_BY_ICON_AI"
+  },
+  {
+   "id": "pss-trust-ai",
+   "reason": "MANAGED_BY_ICON_AI"
+  },
+  {
+   "id": "ptn-trust-ai",
+   "reason": "MANAGED_BY_ICON_AI"
+  },
+  {
+   "id": "rp-i-ai",
+   "reason": "MANAGED_BY_ICON_AI"
+  },
+  {
+   "id": "spa-i-ai",
+   "reason": "MANAGED_BY_ICON_AI"
+  },
+  {
+   "id": "ws-trust-ai",
+   "reason": "MANAGED_BY_ICON_AI"
+  }
+ ],
+ "libraryOnly": [
+  {
+   "id": "ai-anticheat",
+   "library": "ai",
+   "label": "كشف الإجابات المولّدة آليًا (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-chat",
+   "library": "ai",
+   "label": "محادثة الذكاء (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-dispute",
+   "library": "ai",
+   "label": "تحليل النزاعات ومخالفات العقد (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-doc",
+   "library": "ai",
+   "label": "تحليل مستندات الذكاء (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-eligibility",
+   "library": "ai",
+   "label": "تقييم الأهلية باختبار قصير (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-flag",
+   "library": "ai",
+   "label": "رصد مخاطر الذكاء (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-guard",
+   "library": "ai",
+   "label": "حماية الذكاء (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-insights",
+   "library": "ai",
+   "label": "تحليلات الذكاء (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-monitor",
+   "library": "ai",
+   "label": "مراقبة الأداء والانحرافات (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-price",
+   "library": "ai",
+   "label": "اقتراح نطاق السعر (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-recommend",
+   "library": "ai",
+   "label": "توصية الذكاء (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-screen",
+   "library": "ai",
+   "label": "فحص جودة الإعلانات قبل النشر (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-search",
+   "library": "ai",
+   "label": "بحث الذكاء (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-sentiment",
+   "library": "ai",
+   "label": "تحليل مشاعر التقييمات (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-timing",
+   "library": "ai",
+   "label": "أفضل توقيت ومحتوى تسويقي (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-translate",
+   "library": "ai",
+   "label": "الترجمة الفورية (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ai-voice",
+   "library": "ai",
+   "label": "المساعد الصوتي (مقترح — يحتاج اعتماد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-ai-spark-b",
+   "library": "general",
+   "label": "شرارة ذكاء بديلة B (صاعقة نجمية) — سبرايت الهوية ic-ai-spark-b",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-ai-spark-c",
+   "library": "general",
+   "label": "شرارة ذكاء بديلة C (نجمة خماسية مفرغة) — سبرايت الهوية ic-ai-spark-c",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-attach",
+   "library": "general",
+   "label": "مرفق",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-bank",
+   "library": "general",
+   "label": "حساب بنكي",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-calendar",
+   "library": "general",
+   "label": "تقويم/موعد",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-card",
+   "library": "general",
+   "label": "بطاقة دفع",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-certificate",
+   "library": "general",
+   "label": "شهادة اعتماد",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-clipboard",
+   "library": "general",
+   "label": "قائمة مهام",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-coin",
+   "library": "general",
+   "label": "عملة/رصيد",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-copy",
+   "library": "general",
+   "label": "نسخ الرابط",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-dispute-alt",
+   "library": "general",
+   "label": "نزاع (نسخة الموقع — تعارض شكل، انظر القواعد)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-download",
+   "library": "general",
+   "label": "تنزيل",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-external",
+   "library": "general",
+   "label": "رابط خارجي",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-filter",
+   "library": "general",
+   "label": "فلترة",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-folder",
+   "library": "general",
+   "label": "مجلد ملفات",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-gauge",
+   "library": "general",
+   "label": "مؤشر أداء",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-gavel",
+   "library": "general",
+   "label": "فض نزاع",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-grid",
+   "library": "general",
+   "label": "عرض شبكي",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-group",
+   "library": "general",
+   "label": "فريق/مجموعة",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-handshake",
+   "library": "general",
+   "label": "اتفاق/صفقة",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-heart",
+   "library": "general",
+   "label": "مفضلة",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-image",
+   "library": "general",
+   "label": "صورة/معرض",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-key",
+   "library": "general",
+   "label": "كلمة المرور",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-language",
+   "library": "general",
+   "label": "اللغة",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-moon",
+   "library": "general",
+   "label": "قمر — مبدّل الوضع الداكن — سبرايت الهوية ic-moon",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-more",
+   "library": "general",
+   "label": "المزيد",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-msg-circle",
+   "library": "general",
+   "label": "محادثة سريعة",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-percent",
+   "library": "general",
+   "label": "نسبة",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-phone",
+   "library": "general",
+   "label": "اتصال هاتفي",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-pin",
+   "library": "general",
+   "label": "الموقع/العنوان",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-print",
+   "library": "general",
+   "label": "طباعة",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-receipt",
+   "library": "general",
+   "label": "فاتورة",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-share",
+   "library": "general",
+   "label": "مشاركة",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-sliders",
+   "library": "general",
+   "label": "ضبط تفضيلات",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-sort",
+   "library": "general",
+   "label": "ترتيب",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-star-half",
+   "library": "general",
+   "label": "تقييم جزئي",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-sun",
+   "library": "general",
+   "label": "شمس — مبدّل الوضع الفاتح — سبرايت الهوية ic-sun",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-trust-star",
+   "library": "general",
+   "label": "نجمة ثقة (نجمة بإطار خارجي — تختلف عن i-star المصمتة) — سبرايت الهوية ic-trust-star",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-verified",
+   "library": "general",
+   "label": "حساب موثّق",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "i-view",
+   "library": "general",
+   "label": "استعراض",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-attach",
+   "library": "ws-site",
+   "label": "attach (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-bank",
+   "library": "ws-site",
+   "label": "bank (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-briefcase",
+   "library": "ws-site",
+   "label": "briefcase (الأطراف والأدوار)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-calendar",
+   "library": "ws-site",
+   "label": "calendar (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-card",
+   "library": "ws-site",
+   "label": "card (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-certificate",
+   "library": "ws-site",
+   "label": "certificate (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-clipboard",
+   "library": "ws-site",
+   "label": "clipboard (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-coin",
+   "library": "ws-site",
+   "label": "coin (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-copy",
+   "library": "ws-site",
+   "label": "copy (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-external",
+   "library": "ws-site",
+   "label": "external (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-flag",
+   "library": "ws-site",
+   "label": "flag (واجهة عامة — مؤكدة)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-gauge",
+   "library": "ws-site",
+   "label": "gauge (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-gavel",
+   "library": "ws-site",
+   "label": "gavel (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-group",
+   "library": "ws-site",
+   "label": "group (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-handshake",
+   "library": "ws-site",
+   "label": "handshake (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-key",
+   "library": "ws-site",
+   "label": "key (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-language",
+   "library": "ws-site",
+   "label": "language (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-more",
+   "library": "ws-site",
+   "label": "more (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-msg-circle",
+   "library": "ws-site",
+   "label": "msg-circle (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-pin",
+   "library": "ws-site",
+   "label": "pin (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-print",
+   "library": "ws-site",
+   "label": "print (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-receipt",
+   "library": "ws-site",
+   "label": "receipt (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-sliders",
+   "library": "ws-site",
+   "label": "sliders (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-social-phone",
+   "library": "ws-site",
+   "label": "social-phone (التواصل الاجتماعي)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-sort",
+   "library": "ws-site",
+   "label": "sort (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-star-half",
+   "library": "ws-site",
+   "label": "star-half (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  },
+  {
+   "id": "ws-verified",
+   "library": "ws-site",
+   "label": "verified (متوقع الاستخدام مستقبلاً — لم تُرصد بعد بصفحة فعلية، مضافة استباقًا)",
+   "reason": "LIBRARY_ONLY"
+  }
+ ],
+ "dynamicSymbolDefinitionFiles": []
+}
