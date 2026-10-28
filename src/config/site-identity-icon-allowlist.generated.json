@@ -3,8 +3,8 @@
  "note": "GENERATED - do not edit by hand. Regenerate with: node scripts/site-identity-icon-allowlist.cjs <FE-repo> --write",
  "counts": {
   "symbols": 341,
-  "wired": 291,
-  "noConsumer": 50,
+  "wired": 296,
+  "noConsumer": 45,
   "excluded": 15,
   "libraryOnly": 84
  },
@@ -1387,7 +1387,7 @@
    "height": 24,
    "defs": 3,
    "variants": 2,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "e439f433d873c3a53892358a47567926d723b0eac86d3b360b543062e75c110b",
    "byteSize": 125,
    "files": [
@@ -1709,7 +1709,7 @@
    "height": 24,
    "defs": 3,
    "variants": 2,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "8aafd3b1d2bd3a47830740104a9a30cd77a885300a4c54593e1ff8dd85d98bd7",
    "byteSize": 115,
    "files": [
@@ -2704,7 +2704,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "6859c1f3dc929b767b967875c28f0f530cf2a252b76015d8752e7064063e166a",
    "byteSize": 159,
    "files": [
@@ -2732,7 +2732,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "9ed9a008f823906f5206fec990b672ca8e7c93416dd0e712e2320cf33733f610",
    "byteSize": 103,
    "files": [
@@ -2844,7 +2844,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "ce41f82bcfc4d70479b4fd2797277816bea95f8f28132c9503995eca522b98b8",
    "byteSize": 121,
    "files": [
