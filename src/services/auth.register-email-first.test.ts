@@ -13,24 +13,43 @@ const PASSWORD = 'Str0ng!Pass1';
 const BODY = { email: 'new.person@example.com', phoneNumber: '01000000001', phoneCountryCode: '+20', firstName: 'Sample', lastName: 'Person', accountType: 'CLIENT_INDIVIDUAL', agreedToTerms: true as const };
 const OWNER = { id: '55555555-5555-4555-8555-555555555555', email: 'owner@example.com', phoneNumber: '1000000001', phoneCountryCode: '+20', firstName: 'Own', lastName: 'Er', accountType: 'CLIENT_INDIVIDUAL', status: 'ACTIVE', password: 'x', activeRole: 'CLIENT', roles: ['CLIENT'] };
 
-async function world(t: TestContext, o: { users?: any[]; smtpFails?: boolean } = {}) {
+// The durable ticket table, modelled with the same atomic rules as the SQL (each method is one synchronous step, like one UPDATE ... WHERE).
+type ProofRow = { emailHash: string; wrong: number; tries: number; consumedAt: Date | null; expiresAt: Date };
+const PROOFS = new Map<string, ProofRow>();
+const hash = (e: string) => `h:${e}`;
+const proofRepo = {
+	create: async (nonce: string, email: string, expiresAt: Date) => { PROOFS.set(nonce, { emailHash: hash(email), wrong: 0, tries: 0, consumedAt: null, expiresAt }); },
+	claim: async (nonce: string, email: string) => {
+		const r = PROOFS.get(nonce);
+		if (!r || r.emailHash !== hash(email) || r.consumedAt || r.expiresAt.getTime() <= Date.now() || r.wrong >= 5 || r.tries >= 3) return false;
+		r.wrong++; r.tries++; return true;
+	},
+	settleWrongCode: async (nonce: string) => { const r = PROOFS.get(nonce); if (r && r.tries > 0) r.tries--; },
+	settleRightCode: async (nonce: string) => { const r = PROOFS.get(nonce); if (r && r.wrong > 0) r.wrong--; },
+	consumeInTx: async (_tx: unknown, nonce: string) => { const r = PROOFS.get(nonce); if (!r || r.consumedAt || r.expiresAt.getTime() <= Date.now()) return false; r.consumedAt = new Date(); return true; },
+};
+
+async function world(t: TestContext, o: { users?: any[]; smtpFails?: boolean; signInFails?: boolean } = {}) {
 	const store = { users: [...(o.users ?? [])] as any[], proofMails: [] as { to: string; code: string }[], sessions: 0, otherMails: 0 };
+	const gates = { signInFails: !!o.signInFails };
 	t.mock.module('../config/logger', { namedExports: { logger: { info() {}, warn() {}, error() {}, debug() {} } } });
 	t.mock.module('../config/db', { namedExports: { prisma: { user: { update: async () => ({}), findUnique: async () => null }, $transaction: async () => ({}) } } });
-	t.mock.module('./session.service', { namedExports: { sessionService: { register: async () => { store.sessions++; return {}; } } } });
+	t.mock.module('./session.service', { namedExports: { sessionService: { register: async () => { if (gates.signInFails) throw new Error('session store down'); store.sessions++; return {}; } } } });
 	t.mock.module('./account-logs.service', { namedExports: { accountAuditLogService: { record: async () => ({}) } } });
 	const clash = (email: string, phone: string) => store.users.find((u) => u.email.toLowerCase() === email.toLowerCase() || (u.phoneNumber && u.phoneNumber === phone));
 	t.mock.module('../repositories/auth.repository', { namedExports: { authRepository: {
 		findByEmailOrPhone: async (email: string, phone: string) => { await new Promise((r) => setImmediate(r)); return clash(email, phone) ?? null; },
 		findByEmail: async () => null,
 		findById: async () => null,
-		createUserWithProfile: async (input: any, hash: string, _g: unknown, status: string) => {
+		createUserWithProfile: async (input: any, hash: string, _g: unknown, status: string, inTx?: (tx: unknown) => Promise<void>) => {
+			if (inTx) await inTx({});
 			if (clash(input.email, input.phoneNumber)) throw Object.assign(new Error('unique'), { code: 'P2002' });
 			const u = { id: `new-${store.users.length}`, email: input.email, phoneNumber: input.phoneNumber, phoneCountryCode: input.phoneCountryCode, firstName: input.firstName, lastName: input.lastName, accountType: input.accountType, status: status ?? 'PENDING_VERIFICATION', password: hash, activeRole: 'CLIENT', roles: ['CLIENT'] };
 			store.users.push(u);
 			return u;
 		},
 	} } });
+	t.mock.module('../repositories/registration-proof.repository', { namedExports: { registrationProofRepository: proofRepo } });
 	t.mock.module('./notification.service', { namedExports: { notificationService: {
 		sendRegistrationProofEmail: async (to: string, code: string) => { if (o.smtpFails) throw new Error('smtp'); store.proofMails.push({ to, code }); },
 		sendEmailOtp: async () => { store.otherMails++; },
@@ -40,9 +59,7 @@ async function world(t: TestContext, o: { users?: any[]; smtpFails?: boolean } =
 	const { authService } = await import(`./auth.service.ts?fx=${Date.now()}-${Math.random()}`);
 	t.mock.module('./auth.service', { namedExports: { authService } });
 	const { authController } = await import(`../controllers/auth.controller.ts?fx=${Date.now()}-${Math.random()}`);
-	const proof = await import('../utils/registration-proof');
-	proof.proofAttempts.reset();
-	return { authService, authController, store, proof };
+	return { authService, authController, store };
 }
 
 async function call(handler: any, body: any) {
@@ -203,4 +220,77 @@ test('controller: complete answers 201 with a token only on success; a conflict 
 	const bad = await call(w.authController.registerComplete.bind(w.authController), completeBody(s, w.store.proofMails[0].code));
 	assert.equal(bad.error?.statusCode, 409);
 	assert.equal(bad.body, undefined);
+});
+
+test('parallel wrong guesses on ONE ticket: never more than five are evaluated in total, then even the right code is refused', async (t) => {
+	const w = await world(t);
+	const s = await w.authService.startRegistration({ ...BODY });
+	const good = w.store.proofMails[0].code;
+	const wrong = good === '000000' ? '111111' : '000000';
+	const nonce = [...PROOFS.keys()].at(-1)!;
+	for (let burst = 0; burst < 4; burst++) {
+		const guesses = await Promise.all(Array.from({ length: 40 }, () => errOf(w.authService.completeRegistration(completeBody(s, wrong) as any))));
+		assert.ok(guesses.every((r) => r?.status === 400 && r.message === REGISTER_PROOF_REJECTED_MESSAGE), 'every refusal is the same answer');
+		assert.ok(PROOFS.get(nonce)!.wrong <= 5, 'the limit holds under parallel load');
+	}
+	assert.equal(PROOFS.get(nonce)!.wrong, 5, 'five wrong codes in total lock the ticket');
+	const late = await errOf(w.authService.completeRegistration(completeBody(s, good) as any));
+	assert.equal(late?.status, 400);
+	assert.equal(w.store.users.length, 0);
+});
+
+test('the counters live in the database table: wrong guesses made before a restart still count in a fresh service instance', async (t) => {
+	let ticket: any; let good = ''; let wrong = '';
+	await t.test('before restart', async (st) => {
+		const w1 = await world(st);
+		ticket = await w1.authService.startRegistration({ ...BODY });
+		good = w1.store.proofMails[0].code;
+		wrong = good === '000000' ? '111111' : '000000';
+		for (let i = 0; i < 4; i++) await errOf(w1.authService.completeRegistration(completeBody(ticket, wrong) as any));
+	});
+	let late: any;
+	await t.test('after restart', async (st) => {
+		const w2 = await world(st); // a new service instance: only the table (PROOFS) is shared
+		await errOf(w2.authService.completeRegistration(completeBody(ticket, wrong) as any)); // the fifth
+		late = await errOf(w2.authService.completeRegistration(completeBody(ticket, good) as any));
+	});
+	assert.equal(late?.status, 400, 'locked by the attempts made before the restart');
+});
+
+test('a spent ticket stays spent: reuse after success is refused even if the account no longer exists (e-mail uniqueness is not the guard)', async (t) => {
+	const w = await world(t);
+	const s = await w.authService.startRegistration({ ...BODY });
+	const code = w.store.proofMails[0].code;
+	await w.authService.completeRegistration(completeBody(s, code) as any);
+	w.store.users.length = 0; // the account is gone: only the ticket's own state can refuse now
+	const again = await errOf(w.authService.completeRegistration(completeBody(s, code) as any));
+	assert.deepEqual(again, { status: 400, message: REGISTER_PROOF_REJECTED_MESSAGE, code: undefined });
+	assert.equal(w.store.users.length, 0);
+});
+
+test('the same ticket completed twice in parallel creates exactly one account', async (t) => {
+	const w = await world(t);
+	const s = await w.authService.startRegistration({ ...BODY });
+	const code = w.store.proofMails[0].code;
+	const r = await Promise.all([errOf(w.authService.completeRegistration(completeBody(s, code) as any)), errOf(w.authService.completeRegistration(completeBody(s, code) as any))]);
+	assert.equal(w.store.users.length, 1);
+	assert.equal(r.filter((x) => x === null).length, 1);
+	assert.equal(w.store.sessions, 1);
+});
+
+test('account created but the sign-in step fails: a clear "sign in normally" result (not an error, not a re-register prompt); the ticket is spent and re-registering is refused', async (t) => {
+	const w = await world(t, { signInFails: true });
+	const s = await w.authService.startRegistration({ ...BODY });
+	const code = w.store.proofMails[0].code;
+	const r = await call(w.authController.registerComplete.bind(w.authController), completeBody(s, code));
+	assert.equal(r.error, undefined);
+	assert.equal(r.status, 201);
+	assert.equal(r.body.data.signInRequired, true);
+	assert.equal(r.body.data.token, undefined, 'no session was issued');
+	assert.match(r.body.message, /سجّل الدخول/);
+	assert.equal(w.store.users.length, 1);
+	assert.equal(w.store.users[0].status, 'ACTIVE');
+	const again = await errOf(w.authService.completeRegistration(completeBody(s, code) as any));
+	assert.equal(again?.status, 400);
+	assert.equal(w.store.users.length, 1);
 });

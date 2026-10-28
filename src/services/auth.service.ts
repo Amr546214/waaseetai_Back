@@ -11,7 +11,11 @@ import { OAuth2Client } from 'google-auth-library';
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 import { AppError } from '../utils/app-error';
-import { issueRegistrationProof, checkRegistrationProof, nonceOfTicket, proofAttempts, REGISTER_PROOF_VALIDITY_MS } from '../utils/registration-proof';
+import { issueRegistrationProof, checkRegistrationProof, nonceOfTicket, REGISTER_PROOF_VALIDITY_MS } from '../utils/registration-proof';
+import { registrationProofRepository } from '../repositories/registration-proof.repository';
+
+/** Thrown inside the creating transaction when the ticket was consumed by a concurrent request: the whole transaction rolls back. */
+class ProofAlreadyUsed extends Error {}
 import { normalizePhone } from '../utils/phone-countries';
 import { logger } from '../config/logger';
 import { notificationService } from './notification.service';
@@ -227,6 +231,8 @@ export class AuthService {
 			throw new AppError('رقم الجوال غير صالح أو لا يطابق رمز الدولة المختار', 400);
 		}
 		const proof = issueRegistrationProof(email);
+		// the durable record of the ticket (attempts / lock / single use) exists before the mail goes out; it reserves no account and no phone
+		await registrationProofRepository.create(proof.nonce, email, proof.expiresAt);
 		try {
 			await notificationService.sendRegistrationProofEmail(email, proof.code, Math.round(REGISTER_PROOF_VALIDITY_MS / 60000));
 		} catch {
@@ -238,19 +244,24 @@ export class AuthService {
 	}
 
 	/**
-	 * E-mail-first registration, step 2. Needs the ticket + code that prove the address. Uniqueness (e-mail and phone) is checked only now,
-	 * and again by the unique indexes inside the creating transaction, so two simultaneous completions cannot both win. A proven caller whose
-	 * data cannot be used gets ONE generic 409 (no field, no owner); the same ticket may try corrected data a few times before a new code is needed.
+	 * E-mail-first registration, step 2. Needs the ticket + code that prove the address. Order of checks:
+	 *  1. signed ticket for THIS address; 2. one atomic reservation of an attempt in the database (unknown / expired / used / locked / out of data
+	 *  tries are all refused here, whatever the code); 3. the code; 4. uniqueness (e-mail and phone) -- and again by the unique indexes inside the
+	 *  creating transaction, which also consumes the ticket, so the account and the single use commit together and two simultaneous completions
+	 *  cannot both win. A proven caller whose data cannot be used gets ONE generic 409 (no field, no owner); the ticket allows a few such tries.
+	 * After the account exists a failure of the sign-in step never looks like a failed registration: see `signInRequired`.
 	 */
 	public async completeRegistration(rawInput: RegisterCompleteInput, referralContext: Pick<ReferralAttributionContext, 'refCookieSlug' | 'refCookieSource'> = {}, sessionContext: SessionContext = {}) {
 		const input = { ...rawInput, email: String(rawInput.email ?? '').trim().toLowerCase() } as RegisterCompleteInput & RegisterInput;
 		const rejectProof = (): never => { throw new AppError(REGISTER_PROOF_REJECTED_MESSAGE, 400); };
 		const nonce = nonceOfTicket(input.ticket, input.email);
-		if (!nonce || proofAttempts.isLocked(nonce)) return rejectProof();
+		if (!nonce) return rejectProof();
+		if (!(await registrationProofRepository.claim(nonce, input.email))) return rejectProof();
 		if (!checkRegistrationProof(input.ticket, input.email, input.code).ok) {
-			proofAttempts.recordWrongCode(nonce);
+			await registrationProofRepository.settleWrongCode(nonce);
 			return rejectProof();
 		}
+		await registrationProofRepository.settleRightCode(nonce);
 		try {
 			const phone = normalizePhone(input.phoneNumber, input.phoneCountryCode);
 			input.phoneNumber = phone.nationalNumber;
@@ -258,10 +269,7 @@ export class AuthService {
 		} catch {
 			throw new AppError('رقم الجوال غير صالح أو لا يطابق رمز الدولة المختار', 400);
 		}
-		const unavailable = (): never => {
-			proofAttempts.recordRejectedCompletion(nonce);
-			throw new AppError(REGISTER_DATA_UNAVAILABLE_MESSAGE, 409, undefined, 'REGISTRATION_DATA_UNAVAILABLE');
-		};
+		const unavailable = (): never => { throw new AppError(REGISTER_DATA_UNAVAILABLE_MESSAGE, 409, undefined, 'REGISTRATION_DATA_UNAVAILABLE'); };
 		if (await authRepository.findByEmailOrPhone(input.email, input.phoneNumber)) {
 			logger.info(`[Register] outcome=data-unavailable-after-proof to=${maskEmail(input.email)} (nothing created)`);
 			return unavailable();
@@ -269,21 +277,28 @@ export class AuthService {
 		const hashedPassword = await bcrypt.hash(input.password, 12);
 		let user: PrismaUser;
 		try {
-			user = await authRepository.createUserWithProfile(input as RegisterInput, hashedPassword, undefined, UserStatus.ACTIVE);
+			user = await authRepository.createUserWithProfile(input as RegisterInput, hashedPassword, undefined, UserStatus.ACTIVE, async (tx) => {
+				if (!(await registrationProofRepository.consumeInTx(tx, nonce))) throw new ProofAlreadyUsed();
+			});
 		} catch (error: any) {
+			if (error instanceof ProofAlreadyUsed) return rejectProof();
 			if (error?.code === 'P2002') {
 				logger.info(`[Register] outcome=data-unavailable-after-proof to=${maskEmail(input.email)} (unique index; nothing created)`);
 				return unavailable();
 			}
 			throw error;
 		}
-		// the proof is spent: the address now has its account, so the same ticket+code can only ever meet the generic 409
-		proofAttempts.recordRejectedCompletion(nonce); proofAttempts.recordRejectedCompletion(nonce); proofAttempts.recordRejectedCompletion(nonce);
+		// From here the account EXISTS and the ticket is spent: nothing below may turn into a "registration failed" answer that sends the user to register again.
 		if (input.accountType !== AccountType.MARKETING_BROKER) {
-			await this.resolveReferralAttribution(user.id, { affiliateIdentifier: input.affiliateIdentifier, refCookieSlug: referralContext.refCookieSlug, refCookieSource: referralContext.refCookieSource });
+			await this.resolveReferralAttribution(user.id, { affiliateIdentifier: input.affiliateIdentifier, refCookieSlug: referralContext.refCookieSlug, refCookieSource: referralContext.refCookieSource }).catch(() => undefined);
 		}
 		logger.info(`[Register] outcome=created-verified to=${maskEmail(input.email)} (e-mail proven before the account existed)`);
-		return this.signInActivatedUser(user, sessionContext);
+		try {
+			return await this.signInActivatedUser(user, sessionContext);
+		} catch {
+			logger.error(`[Register] account created but the automatic sign-in failed (to=${maskEmail(input.email)}); the user is told to sign in normally.`);
+			return { signInRequired: true as const, email: user.email };
+		}
 	}
 
 	/**

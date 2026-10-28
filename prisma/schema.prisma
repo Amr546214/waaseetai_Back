@@ -3194,3 +3194,19 @@ model SiteIdentityManifest {
 
   @@map("site_identity_manifest")
 }
+
+// E-mail-first registration: the durable state of one proof ticket (attempts, lock, single use). One row per code request; it reserves nothing
+// (no account, no phone). Counters are bumped by single atomic UPDATEs whose WHERE clause enforces the limits, so parallel requests and
+// several processes share one truth, and a restart loses nothing. The address is stored only as a hash.
+model RegistrationEmailProof {
+  nonce               String    @id
+  emailHash           String    @map("email_hash")
+  wrongAttempts       Int       @default(0) @map("wrong_attempts")
+  dataTries           Int       @default(0) @map("data_tries")
+  consumedAt          DateTime? @map("consumed_at") @db.Timestamptz(3)
+  expiresAt           DateTime  @map("expires_at") @db.Timestamptz(3)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([expiresAt])
+  @@map("registration_email_proofs")
+}

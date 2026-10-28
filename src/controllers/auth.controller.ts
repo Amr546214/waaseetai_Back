@@ -74,7 +74,13 @@ export class AuthController {
 			const refCookieSlug = getRequestCookie(req, 'waseet_ref_code');
 			const refCookieSource = getRequestCookie(req, 'waseet_ref_src');
 			const result = await authService.completeRegistration(req.body, { refCookieSlug, refCookieSource }, { ipAddress: req.ip, userAgent: req.get('user-agent') });
-			res.status(201).json({ success: true, message: 'تم إنشاء الحساب وتأكيد البريد بنجاح', data: result });
+			// The account exists in both cases. `signInRequired`: only the automatic sign-in failed, so the user is told to sign in normally (never to register again).
+			const signInRequired = 'signInRequired' in result;
+			res.status(201).json({
+				success: true,
+				message: signInRequired ? 'تم إنشاء حسابك وتأكيد بريدك. تعذّر تسجيل الدخول تلقائيًا، سجّل الدخول ببريدك وكلمة مرورك' : 'تم إنشاء الحساب وتأكيد البريد بنجاح',
+				data: result
+			});
 		} catch (error) {
 			next(error);
 		}
