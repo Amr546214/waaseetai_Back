@@ -61,13 +61,13 @@ export function buildAdminSiteIdentityRouter(service: SiteIdentityService = site
 		} catch (e) { next(e); }
 	});
 
-	router.post('/families/:id/upload', edit, upload.single('file'), ok(req => service.familyUpload(String(req.params.id), req.file, (req.body as Record<string, unknown> | undefined)?.keys, req.user!.id, ctx(req)), 201));
+	router.post('/families/:id/upload', edit, upload.single('file'), ok(req => service.familyUpload(String(req.params.id), req.file, (req.body as Record<string, unknown> | undefined)?.keys, req.user!.id, ctx(req), (req.body as Record<string, unknown> | undefined)?.sourceRef), 201));
 	router.post('/families/:id/preview', edit, ok(req => service.familyPreview(String(req.params.id), req.body ?? {}, req.user!.id)));
 	router.post('/families/:id/publish', edit, ok(req => service.familyApply(String(req.params.id), 'publish', req.body ?? {}, req.user!.id, ctx(req))));
 	router.post('/families/:id/restore', edit, ok(req => service.familyApply(String(req.params.id), 'restore', req.body ?? {}, req.user!.id, ctx(req))));
 	router.delete('/families/:id/drafts', edit, ok(req => service.familyDiscard(String(req.params.id), req.body ?? {}, req.user!.id, ctx(req))));
 	router.post('/restore-set', edit, ok(req => service.restoreSet(req.body ?? {}, req.user!.id, ctx(req))));
-	router.post('/:key/upload', edit, knownKey, upload.single('file'), ok(req => service.stage(String(req.params.key), fileOf(req), req.user!.id, ctx(req)), 201));
+	router.post('/:key/upload', edit, knownKey, upload.single('file'), ok(req => service.stage(String(req.params.key), fileOf(req), req.user!.id, ctx(req), (req.body as Record<string, unknown> | undefined)?.sourceRef), 201));
 	router.post('/:key/publish', edit, knownKey, ok(req => service.publish(String(req.params.key), req.body ?? {}, req.user!.id, ctx(req))));
 	router.post('/:key/restore', edit, knownKey, ok(req => service.restore(String(req.params.key), req.body ?? {}, req.user!.id, ctx(req))));
 	router.delete('/:key/versions/:id', edit, knownKey, ok(req => service.discard(String(req.params.key), String(req.params.id), req.user!.id, ctx(req))));

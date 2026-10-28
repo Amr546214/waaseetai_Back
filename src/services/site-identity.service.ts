@@ -11,7 +11,7 @@ import { sha256Of, validateIdentityUpload } from '../utils/site-identity-upload'
 import { buildTokensCss, validateTokenBytes, TokenSets } from '../utils/site-identity-tokens';
 import { TOKEN_KEYS, TokenKey, isTokenKey, tokenSpecOut } from '../config/site-identity-tokens';
 import {
-	ICON_PREFIX, ICON_REASON_TEXT, IconReasonCode, MAX_CUSTOM_ICONS, MAX_ICON_DRAFTS_TOTAL, allowlistRevision, iconCounts, iconEntry, iconExcluded, iconKeyOf, iconLibraryOnly, iconSymbols, isIconFamilyKey, symbolIdOf, iconExcludedReason,
+	ICON_PREFIX, ICON_REASON_TEXT, IconReasonCode, MAX_CUSTOM_ICONS, MAX_ICON_DRAFTS_TOTAL, allowlistRevision, iconCounts, iconEntry, iconExcluded, iconKeyOf, iconLibraryOnly, iconSymbols, iconSourceStatus, isIconFamilyKey, symbolIdOf, iconExcludedReason,
 } from '../config/site-identity-icons';
 import { IconFamily, familiesRevision, familyOfKey, iconFamilies, iconFamily } from '../config/site-identity-icon-families';
 import {
@@ -68,7 +68,17 @@ export interface SiteIdentityOptions { db?: Db; isWired?: (key: string) => boole
 
 const publicPath = (key: string, sha: string) => `/public/site-identity/assets/${key}/${sha}`;
 const short = (sha: string) => sha.slice(0, 12);
-const assetOut = (a: AssetMeta) => ({ versionId: a.id, key: a.key, version: a.version, status: a.status, mime: a.mime, sha256: a.sha256, width: a.width, height: a.height, byteSize: a.byteSize, note: a.note, createdById: a.createdById, createdAt: a.createdAt.toISOString(),
+/** Round 8: the pick metadata rides in the existing `note` column as a trailing machine tag (no migration); the API shows the human note and `sourceRef` separately */
+export type SourceRef = { kind: 'library'; symbolId: string } | { kind: 'upload' };
+const SRC_TAG = /\n?\[\[sourceRef:(\{[^\]]*\})\]\]$/;
+export const splitNote = (raw: string | null): { note: string | null; sourceRef: SourceRef | null } => {
+	if (!raw) return { note: null, sourceRef: null };
+	const m = SRC_TAG.exec(raw); if (!m) return { note: raw, sourceRef: null };
+	let ref: SourceRef | null = null; try { const o = JSON.parse(m[1]); if (o?.kind === 'upload') ref = { kind: 'upload' }; else if (o?.kind === 'library' && typeof o.symbolId === 'string') ref = { kind: 'library', symbolId: o.symbolId }; } catch { ref = null; }
+	return { note: raw.slice(0, m.index) || null, sourceRef: ref };
+};
+const joinNote = (note: string | null, ref: SourceRef | null): string | null => (ref ? `${note ?? ''}${note ? '\n' : ''}[[sourceRef:${JSON.stringify(ref)}]]` : note);
+const assetOut = (a: AssetMeta) => ({ versionId: a.id, key: a.key, version: a.version, status: a.status, mime: a.mime, sha256: a.sha256, width: a.width, height: a.height, byteSize: a.byteSize, ...splitNote(a.note), createdById: a.createdById, createdAt: a.createdAt.toISOString(),
 	url: a.status === 'PUBLISHED' || a.status === 'SUPERSEDED' ? publicPath(a.key, a.sha256) : null, previewUrl: a.status === 'DISCARDED' ? null : `/admin/site-identity/${a.key}/versions/${a.id}/preview` });
 
 /**
@@ -334,8 +344,9 @@ export class SiteIdentityService {
 	}
 
 	// ------------------------------------------------------------------------------------------------------------------ stage (upload)
-	async stage(key: string, file: { buffer: Buffer; mimetype?: string; fromValue?: boolean } | undefined, actorId: string, ctx: AuditCtx = {}) {
+	async stage(key: string, file: { buffer: Buffer; mimetype?: string; fromValue?: boolean } | undefined, actorId: string, ctx: AuditCtx = {}, sourceRefRaw?: unknown) {
 		const def = this.writable(key);
+		const sourceRef = this.parseSourceRef(def, sourceRefRaw);
 		if (!file || !file.buffer) throw def.kind === 'json' ? fieldError('value', 'أرسل قيم الرموز في الحقل value (كائن {"--اسم":"قيمة"})، أو ملف JSON في الحقل file.') : fieldError('file', 'اختر ملفًا لرفعه (الحقل file).');
 		const v = await validateIdentityUpload(def, file.buffer, file.mimetype, { source: file.fromValue ? 'value' : 'file' }); // throws UploadRejected / SvgRejected (400, SITE_IDENTITY_FILE_REJECTED)
 		return this.guard(async () => {
@@ -345,7 +356,7 @@ export class SiteIdentityService {
 					return await this.db.$transaction(async tx => {
 						if (def.family) await this.lock(tx, FAMILY_STAGE_LOCK);
 						await this.lock(tx, stageLock(key));
-						const row = await this.stageRow(tx, def, v, actorId, ctx, 0);
+						const row = await this.stageRow(tx, def, v, actorId, ctx, 0, sourceRef ? { sourceRef } : {}, sourceRef);
 						if (!row) throw new AppError('الملف مطابق تمامًا للنسخة المعتمدة حاليًا لهذا العنصر.', 409, undefined, SITE_IDENTITY_ERRORS.NO_CHANGE);
 						return { ...(await withActors(tx, assetOut(row as AssetMeta))), sanitized: v.sanitized, current: await this.keyState(tx, key) };
 					});
@@ -354,15 +365,36 @@ export class SiteIdentityService {
 		});
 	}
 
+	/**
+	 * Round 8: the optional `sourceRef` of an icon upload: absent -> null (no metadata), `{kind:'upload'}`, or `{kind:'library', symbolId}` with a symbolId the allow-list knows as a drawing. Icons only; nothing else is accepted.
+	 * It is METADATA: the staged bytes are always the sanitised file that came with the request, so no reference is ever followed and no cycle can form.
+	 */
+	private parseSourceRef(def: SiteIdentityKeyDef, raw: unknown): SourceRef | null {
+		if (raw === undefined || raw === null || raw === '') return null;
+		if (!def.family) throw fieldError('sourceRef', 'مصدر الاختيار (sourceRef) مسموح للأيقونات فقط.');
+		let o: unknown = raw;
+		if (typeof raw === 'string') { if (raw.length > 200) throw fieldError('sourceRef', 'قيمة مصدر الاختيار طويلة جدًا.'); try { o = JSON.parse(raw); } catch { throw fieldError('sourceRef', 'قيمة مصدر الاختيار يجب أن تكون كائن JSON مثل {"kind":"library","symbolId":"i-bell"} أو {"kind":"upload"}.'); } }
+		if (!o || typeof o !== 'object' || Array.isArray(o)) throw fieldError('sourceRef', 'قيمة مصدر الاختيار يجب أن تكون كائنًا: {"kind":"library","symbolId":"..."} أو {"kind":"upload"}.');
+		const r = o as Record<string, unknown>; const extra = Object.keys(r).filter(k => k !== 'kind' && k !== 'symbolId');
+		if (extra.length) throw fieldError('sourceRef', `حقول غير مسموحة في مصدر الاختيار: ${extra.slice(0, 3).join('، ')}.`);
+		if (r.kind === 'upload') { if (r.symbolId !== undefined) throw fieldError('sourceRef', 'مصدر «رفع من الجهاز» لا يحمل معرّف أيقونة.'); return { kind: 'upload' }; }
+		if (r.kind !== 'library') throw fieldError('sourceRef', 'نوع المصدر يجب أن يكون library (من المكتبة) أو upload (من الجهاز).');
+		const id = typeof r.symbolId === 'string' ? r.symbolId : '';
+		const st = iconSourceStatus(id);
+		if (st === 'unknown') throw fieldError('sourceRef', 'الأيقونة المختارة من المكتبة غير موجودة في قائمة الأيقونات المعروفة.');
+		if (st === 'ai') throw fieldError('sourceRef', 'أيقونة الذكاء الاصطناعي الرسمية لا تُستخدم بديلًا لأيقونة وظيفية.');
+		return { kind: 'library', symbolId: id };
+	}
+
 	/** inside a transaction that already holds the stage lock(s): the same-as-active check, the draft limits and the insert + audit row of ONE draft. null = identical to the active version (nothing staged). `pending` = drafts already added in this transaction */
-	private async stageRow(tx: Tx, def: SiteIdentityKeyDef, v: Awaited<ReturnType<typeof validateIdentityUpload>>, actorId: string, ctx: AuditCtx, pending: number, extra: Record<string, unknown> = {}): Promise<AssetMeta | null> {
+	private async stageRow(tx: Tx, def: SiteIdentityKeyDef, v: Awaited<ReturnType<typeof validateIdentityUpload>>, actorId: string, ctx: AuditCtx, pending: number, extra: Record<string, unknown> = {}, sourceRef: SourceRef | null = null): Promise<AssetMeta | null> {
 		const key = def.key;
 		const st = await tx.siteIdentityState.findUnique({ where: { key }, include: { activeAsset: { select: { sha256: true, version: true } } } });
 		if (st?.activeAsset?.sha256 === v.sha256) return null;
 		if (def.family && (await tx.siteIdentityAsset.count({ where: { key: { startsWith: ICON_PREFIX }, status: 'STAGED' } })) + pending >= this.maxDrafts) throw new AppError(`في الأيقونات ${this.maxDrafts} مسودة غير معتمدة؛ اعتمد بعضها أو احذفها قبل رفع مسودة جديدة.`, 409, undefined, SITE_IDENTITY_ERRORS.TOO_MANY_STAGED);
 		if ((await tx.siteIdentityAsset.count({ where: { key, status: 'STAGED' } })) >= MAX_STAGED_PER_KEY) throw new AppError(`لهذا العنصر ${MAX_STAGED_PER_KEY} مسودات غير معتمدة؛ اعتمد إحداها أو احذفها قبل رفع مسودة جديدة.`, 409, undefined, SITE_IDENTITY_ERRORS.TOO_MANY_STAGED);
 		const max = await tx.siteIdentityAsset.aggregate({ where: { key }, _max: { version: true } });
-		const row = await tx.siteIdentityAsset.create({ data: { key, version: (max._max.version ?? 0) + 1, status: 'STAGED', mime: v.mime, bytes: Uint8Array.from(v.bytes), sha256: v.sha256, width: v.width, height: v.height, byteSize: v.byteSize, note: v.note, createdById: actorId }, select: META });
+		const row = await tx.siteIdentityAsset.create({ data: { key, version: (max._max.version ?? 0) + 1, status: 'STAGED', mime: v.mime, bytes: Uint8Array.from(v.bytes), sha256: v.sha256, width: v.width, height: v.height, byteSize: v.byteSize, note: joinNote(v.note, sourceRef), createdById: actorId }, select: META });
 		await accountAuditLogService.record({ userId: actorId, eventType: 'SITE_IDENTITY_UPLOADED', category: LogCategory.SYSTEM_AUDIT, source: 'ADMIN', severity: 'INFO', title: 'رفع نسخة جديدة من هوية الموقع',
 			summary: `رفع مسودة ${def.label} (نسخة ${row.version}) بانتظار الاعتماد`, details: { identityKey: key, version: row.version, sha: short(v.sha256), mime: v.mime, byteSize: v.byteSize, sanitizedRemoved: v.sanitized.removed, ...extra, ...(def.kind === 'json' ? { overrideNames: Object.keys(JSON.parse(v.bytes.toString('utf8'))).join(' ').slice(0, 480) } : {}) },
 			context: { ipAddress: ctx.ip, device: ctx.device, actorLabel: 'ADMIN' } }, tx);
@@ -522,7 +554,7 @@ export class SiteIdentityService {
 			if (a.createdById !== actorId) throw new AppError('هذه المسودة رفعها مشرف آخر؛ يعتمدها من رفعها بعد معاينتها. يمكنك معاينتها أو حذفها فقط.', 409, undefined, SITE_IDENTITY_ERRORS.DRAFT_NOT_YOURS);
 			return this.applyChanges(tx, [{ key, toAssetId: a.id }], actorId, `publish ${key} v${a.version}${note ? ` | ${note}` : ''}`, (applied) => ({ userId: actorId, eventType: 'SITE_IDENTITY_PUBLISHED', category: LogCategory.SYSTEM_AUDIT, source: 'ADMIN', severity: 'WARNING',
 				title: 'اعتماد نسخة جديدة من هوية الموقع', summary: `اعتماد ${def.label}: من ${applied[0].from ? `نسخة ${applied[0].from.version}` : 'الافتراضي'} إلى نسخة ${a.version}`,
-				details: { identityKey: key, fromVersion: applied[0].from?.version ?? 0, toVersion: a.version, fromSha: applied[0].from ? short(applied[0].from.sha256) : 'default', toSha: short(a.sha256), stateVersion: applied[0].stateVersion }, context: { ipAddress: ctx.ip, device: ctx.device, actorLabel: 'ADMIN' } }));
+				details: { identityKey: key, fromVersion: applied[0].from?.version ?? 0, toVersion: a.version, fromSha: applied[0].from ? short(applied[0].from.sha256) : 'default', toSha: short(a.sha256), stateVersion: applied[0].stateVersion, ...(splitNote(a.note).sourceRef ? { sourceRef: splitNote(a.note).sourceRef } : {}) }, context: { ipAddress: ctx.ip, device: ctx.device, actorLabel: 'ADMIN' } }));
 		}, r => this.keyResult(def, r));
 	}
 
@@ -550,8 +582,8 @@ export class SiteIdentityService {
 
 	// ------------------------------------------------------------------------------------------------------------------ restore a whole manifest snapshot
 	private side(def: SiteIdentityKeyDef, a: AssetMeta | null): SetSide {
-		if (!a) return { source: 'default', versionId: null, version: 0, sha256: def.defaultFingerprint.sha256, mime: def.defaultFingerprint.mime, width: def.defaultFingerprint.width ?? null, height: def.defaultFingerprint.height ?? null, previewUrl: null };
-		return { source: 'custom', versionId: a.id, version: a.version, sha256: a.sha256, mime: a.mime, width: a.width, height: a.height, previewUrl: `/admin/site-identity/${a.key}/versions/${a.id}/preview` };
+		if (!a) return { source: 'default', versionId: null, version: 0, sha256: def.defaultFingerprint.sha256, mime: def.defaultFingerprint.mime, width: def.defaultFingerprint.width ?? null, height: def.defaultFingerprint.height ?? null, sourceRef: null, previewUrl: null };
+		return { source: 'custom', versionId: a.id, version: a.version, sha256: a.sha256, mime: a.mime, width: a.width, height: a.height, sourceRef: splitNote(a.note).sourceRef, previewUrl: `/admin/site-identity/${a.key}/versions/${a.id}/preview` };
 	}
 
 	/**
@@ -672,7 +704,7 @@ export class SiteIdentityService {
 	}
 
 	/** POST /families/:id/upload - the SAME sanitised bytes staged as a draft under each selected member, one transaction */
-	async familyUpload(id: string, file: { buffer: Buffer; mimetype?: string } | undefined, keysRaw: unknown, actorId: string, ctx: AuditCtx = {}) {
+	async familyUpload(id: string, file: { buffer: Buffer; mimetype?: string } | undefined, keysRaw: unknown, actorId: string, ctx: AuditCtx = {}, sourceRefRaw?: unknown) {
 		const fam = this.family(id);
 		let keys = fam.members.map(m => m.key);
 		if (keysRaw !== undefined && keysRaw !== null && keysRaw !== '') {
@@ -682,6 +714,7 @@ export class SiteIdentityService {
 		for (const k of keys) this.writable(k);
 		if (!file || !file.buffer) throw fieldError('file', 'اختر ملفًا لرفعه (الحقل file).');
 		const first = this.writable(keys[0]);
+		const sourceRef = this.parseSourceRef(first, sourceRefRaw);
 		const v = await validateIdentityUpload(first, file.buffer, file.mimetype, { source: 'file' }); // one validation + one sanitising for every member
 		const sorted = [...keys].sort();
 		return this.guard(async () => {
@@ -693,13 +726,13 @@ export class SiteIdentityService {
 						for (const k of sorted) await this.lock(tx, stageLock(k));
 						const drafts: Array<Record<string, unknown>> = []; const skipped: Array<{ key: string; reason: string }> = []; let pending = 0;
 						for (const k of keys) {
-							const row = await this.stageRow(tx, this.writable(k), v, actorId, ctx, pending, { familyId: fam.id });
+							const row = await this.stageRow(tx, this.writable(k), v, actorId, ctx, pending, { familyId: fam.id, ...(sourceRef ? { sourceRef } : {}) }, sourceRef);
 							if (!row) { skipped.push({ key: k, reason: 'SAME_AS_ACTIVE' }); continue; }
 							pending++; const st = await tx.siteIdentityState.findUnique({ where: { key: k }, select: { version: true } });
-							drafts.push({ key: k, symbolId: symbolIdOf(k), versionId: row.id, version: row.version, previewUrl: `/admin/site-identity/${k}/versions/${row.id}/preview`, isMine: true, stateVersion: st?.version ?? 0, createdAt: row.createdAt.toISOString() });
+							drafts.push({ key: k, symbolId: symbolIdOf(k), sourceRef, versionId: row.id, version: row.version, previewUrl: `/admin/site-identity/${k}/versions/${row.id}/preview`, isMine: true, stateVersion: st?.version ?? 0, createdAt: row.createdAt.toISOString() });
 						}
 						if (!drafts.length) throw new AppError('الملف مطابق تمامًا للنسخة المعتمدة حاليًا لكل عناصر العائلة المحددة.', 409, undefined, SITE_IDENTITY_ERRORS.NO_CHANGE);
-						return { familyId: fam.id, sha256: v.sha256, mime: v.mime, width: v.width, height: v.height, byteSize: v.byteSize, note: v.note, sanitized: v.sanitized, drafts, skipped };
+						return { familyId: fam.id, sha256: v.sha256, mime: v.mime, width: v.width, height: v.height, byteSize: v.byteSize, note: v.note, sourceRef, sanitized: v.sanitized, drafts, skipped };
 					});
 				} catch (e) { if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002' && retries++ < 3) continue; throw e; }
 			}
@@ -799,7 +832,7 @@ export class SiteIdentityService {
 			if (!diff.changes.length) throw new AppError('لا يوجد ما يتغيّر: عناصر العائلة المحددة مطابقة لما هو معتمد.', 409, undefined, SITE_IDENTITY_ERRORS.NO_CHANGE);
 			return this.applyChanges(tx, diff.changes, actorId, `family ${mode} ${fam.id} (${diff.changes.length} keys)`, (applied, mv) => applied.map(a => {
 				const def = this.def(a.key); const fromV = a.from?.version ?? 0, toV = a.to?.version ?? 0;
-				const common = { identityKey: a.key, familyId: fam.id, batch: mv, fromVersion: fromV, toVersion: toV, fromSha: a.from ? short(a.from.sha256) : 'default', toSha: a.to ? short(a.to.sha256) : 'default', stateVersion: a.stateVersion };
+				const common = { identityKey: a.key, familyId: fam.id, batch: mv, fromVersion: fromV, toVersion: toV, fromSha: a.from ? short(a.from.sha256) : 'default', toSha: a.to ? short(a.to.sha256) : 'default', stateVersion: a.stateVersion, ...(a.to && splitNote(a.to.note).sourceRef ? { sourceRef: splitNote(a.to.note).sourceRef } : {}) };
 				const from = a.from ? `نسخة ${fromV}` : 'الافتراضي';
 				return mode === 'publish'
 					? { userId: actorId, eventType: 'SITE_IDENTITY_PUBLISHED', category: LogCategory.SYSTEM_AUDIT, source: 'ADMIN', severity: 'WARNING', title: 'اعتماد نسخة جديدة من هوية الموقع', summary: `اعتماد ${def.label} (عائلة «${fam.label}»): من ${from} إلى نسخة ${toV}`, details: common, context: { ipAddress: ctx.ip, device: ctx.device, actorLabel: 'ADMIN' } }
@@ -820,7 +853,7 @@ export class SiteIdentityService {
 }
 
 export interface PublicManifest { version: number; items: Record<string, { url: string; sha256: string; mime: string; width: number | null; height: number | null; version: number; /** design-token keys only */ value?: Record<string, string> }>; /** present only when at least one token set is active */ tokensCss?: string }
-export interface SetSide { source: 'default' | 'custom'; versionId: string | null; version: number; sha256: string; mime: string; width: number | null; height: number | null; previewUrl: string | null }
+export interface SetSide { source: 'default' | 'custom'; versionId: string | null; version: number; sha256: string; mime: string; width: number | null; height: number | null; sourceRef: SourceRef | null; previewUrl: string | null }
 export type FamilyPreviewItem = SetPreviewItem & { symbolId: string | null; stateVersion: number };
 export interface SetPreviewItem { key: string; label: string; group: string; current: SetSide; target: SetSide; change: 'replace' | 'to-default' | 'unchanged' }
 

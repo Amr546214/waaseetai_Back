@@ -134,7 +134,7 @@ test('PG round2 C: exact set-restore preview (default->custom, custom->default, 
 	assert.equal(d1.currentManifestVersion, 3); assert.equal(d1.targetManifestVersion, 1); assert.match(d1.previewDigest, /^[0-9a-f]{64}$/); assert.equal(d1.items.length, SITE_IDENTITY_REGISTRY.length, 'one row per wired registry key'); assert.equal(d1.changedCount, 2); assert.equal(d1.canApply, true);
 	const row = (d: any, k: string) => d.items.find((i: any) => i.key === k);
 	assert.equal(row(d1, 'logo.mark').change, 'replace'); assert.equal(row(d1, 'logo.mark').current.version, 2); assert.equal(row(d1, 'logo.mark').current.sha256, B.sha256); assert.equal(row(d1, 'logo.mark').target.version, 1); assert.equal(row(d1, 'logo.mark').target.sha256, A.sha256);
-	assert.deepEqual(Object.keys(row(d1, 'logo.mark').current).sort(), ['height', 'mime', 'previewUrl', 'sha256', 'source', 'version', 'versionId', 'width']);
+	assert.deepEqual(Object.keys(row(d1, 'logo.mark').current).sort(), ['height', 'mime', 'previewUrl', 'sha256', 'source', 'sourceRef', 'version', 'versionId', 'width']);
 	assert.equal(row(d1, 'logo.mark').target.source, 'custom'); assert.equal(row(d1, 'logo.mark').current.previewUrl, `/admin/site-identity/logo.mark/versions/${B.versionId}/preview`);
 	assert.equal(row(d1, 'icon.ai').change, 'to-default'); assert.equal(row(d1, 'icon.ai').current.source, 'custom'); assert.equal(row(d1, 'icon.ai').target.source, 'default'); assert.equal(row(d1, 'icon.ai').target.version, 0); assert.equal(row(d1, 'icon.ai').target.previewUrl, null);
 	const def = SITE_IDENTITY_REGISTRY.find(d => d.key === 'icon.ai')!.defaultFingerprint; assert.equal(row(d1, 'icon.ai').target.sha256, def.sha256); assert.equal(row(d1, 'icon.ai').target.mime, def.mime);

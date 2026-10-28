@@ -13,6 +13,7 @@ import './site-identity-round2.pgenv';
 import './site-identity-round5.pgenv';
 import './site-identity-round6.pgenv';
 import './site-identity-round7.pgenv';
+import './site-identity-round8.pgenv';
 
 /**
  * Site identity on REAL PostgreSQL over HTTP: permissions on EVERY admin route, the upload -> publish -> restore lifecycle, the public manifest / immutable bytes, audit rows, restarts, injected failures
