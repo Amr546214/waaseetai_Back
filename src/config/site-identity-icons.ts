@@ -49,3 +49,15 @@ export const iconExcludedReason = (symbolId: string): IconReasonCode | null => E
 /** at most this many icons may be customised (active) at the same time = every wired id + margin; the public manifest stays bounded by the allow-list, not by a magic number */
 export const MAX_CUSTOM_ICONS: number = DATA.symbols.filter(s => !s.reason).length + ICON_CAP_MARGIN;
 export const iconCounts = () => ({ symbols: DATA.symbols.length, wired: DATA.symbols.filter(s => !s.reason).length, notWired: DATA.symbols.filter(s => s.reason).length + DATA.libraryOnly.length + DATA.excluded.length, libraryOnly: DATA.libraryOnly.length, excluded: DATA.excluded.length });
+
+/**
+ * Round 8: may this id be named as the SOURCE DRAWING of a library pick (`sourceRef:{kind:'library', symbolId}`)? Any drawing the FE can show: a defined symbol (wired or NO_CONSUMER) or a library-only slot.
+ * Not the AI-managed ids and not unknown / malformed ids. The reference is metadata; the applied asset is always the uploaded sanitised bytes.
+ */
+export const iconSourceStatus = (symbolId: string): 'symbol' | 'library-only' | 'ai' | 'unknown' => {
+	if (typeof symbolId !== 'string' || !ICON_ID_PATTERN.test(symbolId)) return 'unknown';
+	if (EXCLUDED.get(symbolId)?.reason === 'MANAGED_BY_ICON_AI' || LIBRARY_ONLY.get(symbolId)?.reason === 'MANAGED_BY_ICON_AI') return 'ai';
+	if (SYMBOLS.has(symbolId)) return 'symbol';
+	if (LIBRARY_ONLY.has(symbolId)) return 'library-only';
+	return 'unknown';
+};
