@@ -36,7 +36,7 @@ test('icon family keys: definition shape, not part of the static registry, unkno
 	assert.equal(identityDef('icon.fn.nope-not-a-symbol'), null); assert.equal(identityDef('icon.fn.'), null); assert.equal(identityDef('icon.fn.I-BELL'), null); assert.equal(identityDef('icon.fn.i-bell/../x'), null); assert.equal(identityDef('icon.fn.i-ai'), null);
 	const nc = iconSymbols().find(s => s.reason === 'NO_CONSUMER')!; assert.ok(nc, 'there is at least one id nothing references today');
 	assert.ok(identityDef(iconKeyOf(nc.id))); assert.equal(isWiredKey(iconKeyOf(nc.id)), false);
-	assert.ok(MAX_CUSTOM_ICONS >= 10 && MAX_CUSTOM_ICONS <= 100);
+	assert.ok(MAX_CUSTOM_ICONS >= iconSymbols().filter(x => !x.reason).length + 64, 'the cap covers EVERY wired icon id plus a margin');
 });
 
 test('GUARD: the checked-in icon allow-list equals what the generator reads from the REAL FE sprite right now', { skip: FE ? false : 'FE worktree not reachable (set SITE_IDENTITY_FE_ROOT)' }, () => {
@@ -95,4 +95,30 @@ test('token value errors over the upload entry point: the JSON body source never
 	assert.equal(await msg(Buffer.alloc(0), 'value'), 'لم تُرسَل أي قيمة للرموز.');
 	assert.equal(await msg(Buffer.alloc(0), 'file'), 'الملف فارغ.');
 	assert.ok(!/الملف/.test(await msg(Buffer.from('{"--teal":"nope"}'), 'value')));
+});
+
+// ---------------------------------------------------------------- Round 7: families
+import { parseFamilies, iconFamilies, familyOfKey, iconFamily } from './site-identity-icon-families';
+import { DEFAULT_ASSETS } from './site-identity-default-assets.generated';
+import { createHash } from 'node:crypto';
+test('icon families: the shipped definition is valid (every member on the allow-list and wired, one family per symbol, one primary), the notifications bell is a family', () => {
+	const fams = iconFamilies(); assert.ok(fams.length >= 1);
+	for (const f of fams) { assert.ok(f.members.length >= 2); assert.equal(f.members.filter(m => m.role === 'primary').length, 1); for (const m of f.members) { assert.equal(isIconWired(m.key), true, m.key); assert.equal(familyOfKey(m.key)?.id, f.id); } }
+	const bell = iconFamily('notifications-bell')!; assert.ok(bell.members.some(m => m.symbolId === 'i-bell' && m.role === 'primary'));
+});
+test('icon families: a hostile / inconsistent definition throws instead of being dropped silently', () => {
+	const ok = (over: any = {}) => ({ families: [{ id: 'f-one', label: 'L', description: 'D', members: [{ symbolId: 'i-bell', role: 'primary' }, { symbolId: 'ws-bell', role: 'copy' }], ...over }] });
+	assert.equal(parseFamilies(ok()).length, 1);
+	const bad = (raw: unknown, re: RegExp) => assert.throws(() => parseFamilies(raw), re);
+	bad(null, /families/); bad({ families: 'x' }, /array/); bad(ok({ id: 'Bad Id' }), /bad family id/); bad(ok({ label: '' }), /label/);
+	bad(ok({ members: [{ symbolId: 'i-bell', role: 'primary' }] }), /members/); bad(ok({ members: [{ symbolId: 'i-bell', role: 'primary' }, { symbolId: 'zzz-nope', role: 'copy' }] }), /allow-list/);
+	bad(ok({ members: [{ symbolId: 'i-bell', role: 'primary' }, { symbolId: iconSymbols().find(s => s.reason === 'NO_CONSUMER')!.id, role: 'copy' }] }), /not wired/);
+	bad(ok({ members: [{ symbolId: 'i-bell', role: 'primary' }, { symbolId: 'i-bell', role: 'copy' }] }), /two families/);
+	bad(ok({ members: [{ symbolId: 'i-bell', role: 'copy' }, { symbolId: 'ws-bell', role: 'copy' }] }), /primary/); bad(ok({ members: [{ symbolId: 'i-bell', role: 'primary' }, { symbolId: 'ws-bell', role: 'primary' }] }), /primary/);
+	bad(ok({ members: [{ symbolId: 'i-bell', role: 'boss' }, { symbolId: 'ws-bell', role: 'primary' }] }), /role/); bad(ok({ members: [{ symbolId: 'I BELL', role: 'primary' }, { symbolId: 'ws-bell', role: 'copy' }] }), /symbolId/);
+	const two = ok(); two.families.push({ ...two.families[0], members: [{ symbolId: 'ws-bell', role: 'primary' }, { symbolId: 'hwp-bell', role: 'copy' }] }); bad(two, /duplicate family|two families/);
+	bad(ok({ members: [{ symbolId: 'i-ai', role: 'primary' }, { symbolId: 'ws-bell', role: 'copy' }] }), /allow-list/);
+});
+test('alias defaults: the embedded copies of the social image and favicon.ico are byte-identical to the registry fingerprints', () => {
+	for (const k of ['social.og', 'favicon.ico'] as const) { const d = DEFAULT_ASSETS[k]; const fp = identityDef(k)!.defaultFingerprint; const b = Buffer.from(d.base64, 'base64'); assert.equal(createHash('sha256').update(b).digest('hex'), fp.sha256); assert.equal(d.sha256, fp.sha256); assert.equal(b.length, fp.byteSize); assert.equal(d.mime, fp.mime); }
 });

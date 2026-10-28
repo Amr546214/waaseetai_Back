@@ -188,3 +188,27 @@ test('realistic exporter files (Illustrator with <style> classes + gradient + us
 	const b = await sanitizeSvg(Buffer.from(ink)); assert.equal(b.changed, true); assert.ok(!/inkscape|sodipodi|rdf|metadata|purl/i.test(b.svg)); assert.match(b.svg, /<circle style="fill:#ff0000;stroke:none" cx="24" cy="24" r="10" id="c1"><\/circle>/);
 	const up = await validateIdentityUpload(def('icon.ai'), Buffer.from(ink)); assert.equal(up.width, 48); assert.match(up.note ?? '', /أُزيل/);
 });
+
+// ---------------------------------------------------------------- Round 7: favicon.ico / social.og hostile files
+test('favicon.ico: every image must be square, >= 16 px, and match the size the directory announces; counts, truncation and trailing data are refused; the real default passes', async () => {
+	const d = def('favicon.ico');
+	await validateIdentityUpload(d, ico(48, { entries: 3 }), 'image/x-icon');
+	await rejects(validateIdentityUpload(d, ico(8), 'image/x-icon'), /ICO_ENTRY_SIZE|TOO_SMALL/);
+	await rejects(validateIdentityUpload(d, ico(300), 'image/x-icon'), /ICO_SIZE_MISMATCH|TOO_LARGE/);
+	await rejects(validateIdentityUpload(d, ico(48, { entries: 17 }), 'image/x-icon'), 'ICO_COUNT');
+	await rejects(validateIdentityUpload(d, ico(48, { extra: Buffer.from('tail') }), 'image/x-icon'), /TRAILING/);
+	await rejects(validateIdentityUpload(d, ico(48).subarray(0, 60), 'image/x-icon'), /TRUNCATED/);
+	// a directory that announces 48x48 over a 32x32 png
+	const lie = ico(48); const inner = png(32, 32); const dir = Buffer.from(lie.subarray(0, 22)); dir.writeUInt32LE(inner.length, 14); await rejects(validateIdentityUpload(d, Buffer.concat([dir, inner]), 'image/x-icon'), 'ICO_SIZE_MISMATCH');
+	// a non-square directory entry
+	const ns = Buffer.from(ico(48)); ns[7] = 32; await rejects(validateIdentityUpload(d, ns, 'image/x-icon'), /ICO_ENTRY_SIZE|WRONG_ASPECT/);
+});
+
+test('social.og: exactly 1200x630 PNG or JPEG, nothing else', async () => {
+	const d = def('social.og');
+	await validateIdentityUpload(d, png(1200, 630), 'image/png'); await validateIdentityUpload(d, jpeg(1200, 630), 'image/jpeg');
+	await rejects(validateIdentityUpload(d, png(1200, 629), 'image/png'), 'WRONG_DIMENSIONS'); await rejects(validateIdentityUpload(d, png(630, 1200), 'image/png'), 'WRONG_DIMENSIONS');
+	await rejects(validateIdentityUpload(d, webpLossless(1200, 630), 'image/webp'), 'FORMAT_NOT_ALLOWED');
+	await rejects(validateIdentityUpload(d, jpeg(1200, 630, { noEoi: true }), 'image/jpeg'), /TRUNCATED/);
+	await rejects(validateIdentityUpload(d, Buffer.concat([png(1200, 630), Buffer.from('x')]), 'image/png'), /TRAILING/);
+});

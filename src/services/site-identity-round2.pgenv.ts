@@ -20,11 +20,11 @@ const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 const FX = path.join(__dirname, '..', 'testing', 'fixtures', 'site-identity');
 const fx = (n: string) => fs.readFileSync(path.join(FX, n));
 
-export async function mount(e: any, serviceOpts: { isWired?: (k: string) => boolean; faults?: any; db?: any } = {}) {
+export async function mount(e: any, serviceOpts: { isWired?: (k: string) => boolean; faults?: any; db?: any; maxCustomIcons?: number; maxIconDrafts?: number } = {}) {
 	const express = (await import('express')).default; const { globalErrorHandler } = await import('../middlewares/error.middleware');
 	const { buildAdminSiteIdentityRouter } = await import('../routes/admin-site-identity.routes'); const { buildPublicSiteIdentityRouter } = await import('../routes/public-site-identity.routes');
 	const { SiteIdentityService } = await import('./site-identity.service');
-	const service = new SiteIdentityService({ isWired: serviceOpts.isWired ?? (() => true), faults: serviceOpts.faults, db: serviceOpts.db });
+	const service = new SiteIdentityService({ isWired: serviceOpts.isWired ?? (() => true), faults: serviceOpts.faults, db: serviceOpts.db, maxCustomIcons: serviceOpts.maxCustomIcons, maxIconDrafts: serviceOpts.maxIconDrafts });
 	const app = express(); app.use(express.json()); app.use('/admin/site-identity', buildAdminSiteIdentityRouter(service)); app.use('/public', buildPublicSiteIdentityRouter(service)); app.use(globalErrorHandler as any);
 	const server = http.createServer(app); await new Promise<void>(r => server.listen(0, '127.0.0.1', () => r()));
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -37,7 +37,7 @@ export async function mount(e: any, serviceOpts: { isWired?: (k: string) => bool
 	const adm = (method: string, p: string, who: string, body?: any) => raw(method, `/admin/site-identity${p}`, who, body);
 	const pub = (p: string) => raw('GET', `/public/site-identity${p}`);
 	const upload = (who: string, key: string, bytes: Uint8Array, mime = 'image/png', name = 'a.png') => { const f = new FormData(); f.append('file', new Blob([bytes], { type: mime }), name); return adm('POST', `/${key}/upload`, who, f); };
-	const handle = { service, raw, adm, pub, upload, close: async () => { server.closeAllConnections?.(); await new Promise(r => server.close(r)); } }; opened.push(handle); return handle;
+	const handle = { service, base, raw, adm, pub, upload, close: async () => { server.closeAllConnections?.(); await new Promise(r => server.close(r)); } }; opened.push(handle); return handle;
 }
 export const reset = async (e: any) => { await e.prisma.siteIdentityState.deleteMany({}); await e.prisma.siteIdentityManifest.deleteMany({}); await e.prisma.siteIdentityAsset.deleteMany({}); await e.prisma.accountAuditLog.deleteMany({ where: { eventType: { startsWith: 'SITE_IDENTITY_' } } }); };
 export const staged = async (m: any, who: string, key: string, tag: string, w = 300, h = 200) => { const r = await m.upload(who, key, png(w, h, { text: tag })); assert.equal(r.status, 201, JSON.stringify(r.json)); return r.json.data; };

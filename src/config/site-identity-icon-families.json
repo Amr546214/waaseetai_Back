@@ -1,0 +1,51 @@
+{
+	"families": [
+		{
+			"id": "notifications-bell",
+			"label": "جرس الإشعارات",
+			"description": "أيقونة الإشعارات (الجرس) نفسها كما تُرسم في كل مكان في الموقع: شريط الرأس، ولوحات العميل والمزوّد والإدارة، وصفحة الإشعارات. تبديلها كعائلة يغيّر كل نسخة منها دفعة واحدة، ويمكن تعديل كل نسخة على حدة.",
+			"members": [
+				{
+					"symbolId": "i-bell",
+					"role": "primary",
+					"note": "الرمز الأساسي المستخدم في معظم القوالب"
+				},
+				{
+					"symbolId": "ws-bell",
+					"role": "copy",
+					"note": "نسخة قوالب الموقع العام"
+				},
+				{
+					"symbolId": "hwp-bell",
+					"role": "copy",
+					"note": "نسخة رأس الصفحة الرئيسية"
+				},
+				{
+					"symbolId": "ic-bell",
+					"role": "copy",
+					"note": "نسخة أيقونات الأدوات"
+				},
+				{
+					"symbolId": "pf-pro-data-bell",
+					"role": "adapter",
+					"note": "محوّل (adapter) لنسخة في صفحة بيانات المزوّد"
+				},
+				{
+					"symbolId": "ss-alert-bell",
+					"role": "adapter",
+					"note": "محوّل (adapter) لنسخة في إعدادات النظام"
+				},
+				{
+					"symbolId": "su-stat-bell",
+					"role": "adapter",
+					"note": "محوّل (adapter) لنسخة في إحصاءات المستخدمين"
+				},
+				{
+					"symbolId": "td-pending-bell",
+					"role": "adapter",
+					"note": "محوّل (adapter) لنسخة في تسليمات الفريق"
+				}
+			]
+		}
+	]
+}

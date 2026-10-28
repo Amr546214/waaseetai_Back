@@ -42,7 +42,12 @@ export function buildAdminSiteIdentityRouter(service: SiteIdentityService = site
 
 	router.use(authenticate, requireActiveUser, requireAnyPermission(...SITE_IDENTITY_READ_PERMISSIONS));
 
-	router.get('/', ok(async req => service.overview(actorHasAny(await loadAdminActor(req), ...SITE_IDENTITY_EDIT_PERMISSIONS), req.user!.id)));
+	router.get('/', ok(async req => {
+		const actor = await loadAdminActor(req);
+		return service.overview(actorHasAny(actor, ...SITE_IDENTITY_EDIT_PERMISSIONS), req.user!.id, !actor.isSuperAdmin && actorHasAny(actor, 'site_control.manage') && !actorHasAny(actor, 'site.manage', 'site.view'));
+	}));
+	router.get('/families', ok(() => service.familyList()));
+	router.get('/families/:id', ok(async req => service.familyItem(String(req.params.id), actorHasAny(await loadAdminActor(req), ...SITE_IDENTITY_EDIT_PERMISSIONS), req.user!.id)));
 	router.get('/icons', ok(req => service.iconList(req.query as Record<string, unknown>)));
 	router.get('/icons/:symbolId', ok(async req => service.iconItem(String(req.params.symbolId), actorHasAny(await loadAdminActor(req), ...SITE_IDENTITY_EDIT_PERMISSIONS), req.user!.id)));
 	router.get('/history', ok(req => service.history(req.query as Record<string, unknown>)));
@@ -56,6 +61,11 @@ export function buildAdminSiteIdentityRouter(service: SiteIdentityService = site
 		} catch (e) { next(e); }
 	});
 
+	router.post('/families/:id/upload', edit, upload.single('file'), ok(req => service.familyUpload(String(req.params.id), req.file, (req.body as Record<string, unknown> | undefined)?.keys, req.user!.id, ctx(req)), 201));
+	router.post('/families/:id/preview', edit, ok(req => service.familyPreview(String(req.params.id), req.body ?? {}, req.user!.id)));
+	router.post('/families/:id/publish', edit, ok(req => service.familyApply(String(req.params.id), 'publish', req.body ?? {}, req.user!.id, ctx(req))));
+	router.post('/families/:id/restore', edit, ok(req => service.familyApply(String(req.params.id), 'restore', req.body ?? {}, req.user!.id, ctx(req))));
+	router.delete('/families/:id/drafts', edit, ok(req => service.familyDiscard(String(req.params.id), req.body ?? {}, req.user!.id, ctx(req))));
 	router.post('/restore-set', edit, ok(req => service.restoreSet(req.body ?? {}, req.user!.id, ctx(req))));
 	router.post('/:key/upload', edit, knownKey, upload.single('file'), ok(req => service.stage(String(req.params.key), fileOf(req), req.user!.id, ctx(req)), 201));
 	router.post('/:key/publish', edit, knownKey, ok(req => service.publish(String(req.params.key), req.body ?? {}, req.user!.id, ctx(req))));

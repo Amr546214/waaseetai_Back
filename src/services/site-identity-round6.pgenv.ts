@@ -174,27 +174,27 @@ test('PG round6 icons: restore-set with icons - preview rows only for involved i
 	void a; void b; void c; await m.close();
 });
 
-test('PG round6 icons: limits - at most MAX_CUSTOM_ICONS customised at once (restore to default frees a slot), the public manifest stays bounded, family-wide draft cap', opts, async () => {
-	const e = await env(); await reset(e); const mg = (await mkStaff(e, ['site.manage'], 'ic5')).user; const m = await mount(e);
-	assert.ok(WIRED_IDS.length > MAX_ICON_DRAFTS_TOTAL + 2);
-	for (let i = 0; i < MAX_CUSTOM_ICONS; i++) await pubIcon(m, mg.id, WIRED_IDS[i], icon(i));
-	const man = await m.pub(''); assert.equal(Object.keys(man.json.data.items).length, MAX_CUSTOM_ICONS); assert.ok(man.buf.length < 20_000, `manifest ${man.buf.length} bytes for ${MAX_CUSTOM_ICONS} icons`);
-	const extra = WIRED_IDS[MAX_CUSTOM_ICONS]; const up = await svgUp(m, mg.id, extra, icon(99)); assert.equal(up.status, 201);
-	const over = await publish(m, mg.id, key(extra), up.json.data.versionId, 0); assert.equal(over.status, 409); assert.equal(over.json.code, 'SITE_IDENTITY_TOO_MANY_ICONS'); assert.equal(Object.keys((await m.pub('')).json.data.items).length, MAX_CUSTOM_ICONS);
+test('PG round6 icons: limits - at most a cap on customised icons (injected small cap here; the real cap is in round7 tests) (restore to default frees a slot), the public manifest stays bounded, family-wide draft cap', opts, async () => {
+	const e = await env(); await reset(e); const mg = (await mkStaff(e, ['site.manage'], 'ic5')).user; const CAP = 6, DRAFTS = 9; const m = await mount(e, { maxCustomIcons: CAP, maxIconDrafts: DRAFTS });
+	assert.ok(WIRED_IDS.length > DRAFTS + 2);
+	for (let i = 0; i < CAP; i++) await pubIcon(m, mg.id, WIRED_IDS[i], icon(i));
+	const man = await m.pub(''); assert.equal(Object.keys(man.json.data.items).length, CAP); assert.ok(man.buf.length < 20_000, `manifest ${man.buf.length} bytes for ${CAP} icons`);
+	const extra = WIRED_IDS[CAP]; const up = await svgUp(m, mg.id, extra, icon(99)); assert.equal(up.status, 201);
+	const over = await publish(m, mg.id, key(extra), up.json.data.versionId, 0); assert.equal(over.status, 409); assert.equal(over.json.code, 'SITE_IDENTITY_TOO_MANY_ICONS'); assert.equal(Object.keys((await m.pub('')).json.data.items).length, CAP);
 	// replacing an already customised icon is not "one more"
 	const again = await svgUp(m, mg.id, WIRED_IDS[0], icon(77)); assert.equal((await publish(m, mg.id, key(WIRED_IDS[0]), again.json.data.versionId, 1)).status, 200);
 	// free one slot -> now it fits
 	assert.equal((await m.adm('POST', `/${key(WIRED_IDS[1])}/restore`, mg.id, { target: 'default', expectedVersion: 1 })).status, 200);
 	assert.equal((await publish(m, mg.id, key(extra), up.json.data.versionId, 0)).status, 200);
 	// a restore-set that would exceed the cap is refused (manifest 50 has WIRED_IDS[0..49] incl. [1]; current has [1] default and extra custom)
-	const pv = await m.adm('GET', `/restore-set/${MAX_CUSTOM_ICONS}/preview`, mg.id); assert.equal(pv.status, 200, JSON.stringify(pv.json).slice(0, 200));
+	const pv = await m.adm('GET', `/restore-set/${CAP}/preview`, mg.id); assert.equal(pv.status, 200, JSON.stringify(pv.json).slice(0, 200));
 	// draft cap family-wide: drafts exist for `extra`? no; fill up to the cap on distinct ids
 	const have = await e.prisma.siteIdentityAsset.count({ where: { key: { startsWith: ICON_PREFIX }, status: 'STAGED' } });
-	let n = 0; for (let i = 0; have + n < MAX_ICON_DRAFTS_TOTAL; i++, n++) assert.equal((await svgUp(m, mg.id, WIRED_IDS[i], icon(200 + i))).status, 201);
-	const full = await svgUp(m, mg.id, WIRED_IDS[MAX_ICON_DRAFTS_TOTAL + 1], icon(500)); assert.equal(full.status, 409); assert.equal(full.json.code, 'SITE_IDENTITY_TOO_MANY_STAGED');
+	let n = 0; for (let i = 0; have + n < DRAFTS; i++, n++) assert.equal((await svgUp(m, mg.id, WIRED_IDS[i], icon(200 + i))).status, 201);
+	const full = await svgUp(m, mg.id, WIRED_IDS[DRAFTS + 1], icon(500)); assert.equal(full.status, 409); assert.equal(full.json.code, 'SITE_IDENTITY_TOO_MANY_STAGED');
 	// discarding one frees a draft slot
 	const anyDraft = await e.prisma.siteIdentityAsset.findFirstOrThrow({ where: { key: { startsWith: ICON_PREFIX }, status: 'STAGED' } });
-	assert.equal((await m.adm('DELETE', `/${anyDraft.key}/versions/${anyDraft.id}`, mg.id)).status, 200); assert.equal((await svgUp(m, mg.id, WIRED_IDS[MAX_ICON_DRAFTS_TOTAL + 1], icon(500))).status, 201);
+	assert.equal((await m.adm('DELETE', `/${anyDraft.key}/versions/${anyDraft.id}`, mg.id)).status, 200); assert.equal((await svgUp(m, mg.id, WIRED_IDS[DRAFTS + 1], icon(500))).status, 201);
 	await m.close();
 });
 

@@ -2,8 +2,8 @@
  "generatedBy": "scripts/site-identity-icon-allowlist.cjs",
  "note": "GENERATED - do not edit by hand. Regenerate with: node scripts/site-identity-icon-allowlist.cjs <FE-repo> --write",
  "counts": {
-  "symbols": 337,
-  "wired": 287,
+  "symbols": 341,
+  "wired": 291,
   "noConsumer": 50,
   "excluded": 15,
   "libraryOnly": 84
@@ -2068,6 +2068,20 @@
    ]
   },
   {
+   "id": "pf-pro-data-bell",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "31ed40f62b244944456d9eb631b88b32d7112df3061e47143a2c14fa6bd6c9a5",
+   "byteSize": 93,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/profile/public/public.html"
+   ]
+  },
+  {
    "id": "pr-building",
    "viewBox": "0 0 24 24",
    "width": 24,
@@ -2933,6 +2947,48 @@
    "byteSize": 87,
    "files": [
     "src/app/pages/website/marketplace/specialties-bar/specialties-bar.html"
+   ]
+  },
+  {
+   "id": "ss-alert-bell",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "31ed40f62b244944456d9eb631b88b32d7112df3061e47143a2c14fa6bd6c9a5",
+   "byteSize": 93,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-system-settings/sa-system-settings.html"
+   ]
+  },
+  {
+   "id": "su-stat-bell",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "31ed40f62b244944456d9eb631b88b32d7112df3061e47143a2c14fa6bd6c9a5",
+   "byteSize": 93,
+   "files": [
+    "src/app/pages/dashboard/supper-admin-overview/sa-users/sa-users.html"
+   ]
+  },
+  {
+   "id": "td-pending-bell",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "31ed40f62b244944456d9eb631b88b32d7112df3061e47143a2c14fa6bd6c9a5",
+   "byteSize": 93,
+   "files": [
+    "src/app/pages/dashboard/provider-overview/company/team-deliveries/team-deliveries.html"
    ]
   },
   {

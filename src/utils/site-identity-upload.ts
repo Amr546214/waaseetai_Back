@@ -175,8 +175,15 @@ export function parseIco(b: Buffer): Parsed {
 		const e = 6 + i * 16; const w = b[e] || 256, h = b[e + 1] || 256; const size = b.readUInt32LE(e + 8), off = b.readUInt32LE(e + 12);
 		if (off < dirEnd || size < 8 || off + size > b.length) throw truncated();
 		const png = b.subarray(off, off + 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-		if (png) { try { parsePng(b.subarray(off, off + size)); } catch (err) { throw err instanceof UploadRejected ? err : bad('ICO_PNG'); } }
-		else if (b.readUInt32LE(off) !== 40) throw bad('ICO_IMAGE', 'إحدى صور ملف ICO بصيغة غير مدعومة.');
+		if (w !== h || w < 16) throw bad('ICO_ENTRY_SIZE', `كل صور ملف ICO يجب أن تكون مربّعة وبمقاس ${16} بكسل على الأقل (وُجدت ${w}×${h}).`);
+		if (png) {
+			let inner: Parsed; try { inner = parsePng(b.subarray(off, off + size)); } catch (err) { throw err instanceof UploadRejected ? err : bad('ICO_PNG'); }
+			if (inner.width !== w || inner.height !== h) throw bad('ICO_SIZE_MISMATCH', 'مقاس إحدى صور ملف ICO لا يطابق ما يعلنه دليل الملف.');
+		} else {
+			if (size < 40 || b.readUInt32LE(off) !== 40) throw bad('ICO_IMAGE', 'إحدى صور ملف ICO بصيغة غير مدعومة.');
+			const bw = b.readInt32LE(off + 4), bh = b.readInt32LE(off + 8); // BMP header: height counts the XOR + AND masks
+			if (bw !== w || (Math.abs(bh) !== h * 2 && Math.abs(bh) !== h)) throw bad('ICO_SIZE_MISMATCH', 'مقاس إحدى صور ملف ICO لا يطابق ما يعلنه دليل الملف.');
+		}
 		end = Math.max(end, off + size);
 		if (w * h > best.width * best.height) best = { width: w, height: h };
 	}

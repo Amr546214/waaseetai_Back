@@ -7,10 +7,10 @@ import ALLOWLIST_JSON from './site-identity-icon-allowlist.generated.json';
  * Contract: qa-final-2026-10-14/site-control/IDENTITY-ICONS-CONTRACT-2026-10-28.md
  */
 export const ICON_PREFIX = 'icon.fn.';
-/** at most this many icons may be customised (active) at the same time: bounds the public manifest and what a browser fetches */
-export const MAX_CUSTOM_ICONS = 50;
-/** at most this many STAGED drafts across the whole family (on top of the per-key limit) */
-export const MAX_ICON_DRAFTS_TOTAL = 60;
+/** the cap on customised icons is "every wired icon id + this margin" (computed below): it can never be lower than the number of icons that really have a consumer */
+export const ICON_CAP_MARGIN = 64;
+/** at most this many STAGED drafts across the whole family (on top of the per-key limit of 5): a family of ~40 keys can be staged; 240 x 64 KB = 15 MB worst case, discard frees the bytes */
+export const MAX_ICON_DRAFTS_TOTAL = 240;
 export const ICON_ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
 export const ICON_ROOT_ASPECT = { min: 0.5, max: 2 } as const;
 
@@ -46,4 +46,6 @@ export const iconSymbols = (): readonly IconSymbolEntry[] => DATA.symbols;
 export const iconExcluded = (): readonly IconExcludedEntry[] => DATA.excluded;
 export const iconLibraryOnly = (): readonly IconLibraryOnlyEntry[] => DATA.libraryOnly;
 export const iconExcludedReason = (symbolId: string): IconReasonCode | null => EXCLUDED.get(symbolId)?.reason ?? LIBRARY_ONLY.get(symbolId)?.reason ?? null;
+/** at most this many icons may be customised (active) at the same time = every wired id + margin; the public manifest stays bounded by the allow-list, not by a magic number */
+export const MAX_CUSTOM_ICONS: number = DATA.symbols.filter(s => !s.reason).length + ICON_CAP_MARGIN;
 export const iconCounts = () => ({ symbols: DATA.symbols.length, wired: DATA.symbols.filter(s => !s.reason).length, notWired: DATA.symbols.filter(s => s.reason).length + DATA.libraryOnly.length + DATA.excluded.length, libraryOnly: DATA.libraryOnly.length, excluded: DATA.excluded.length });
