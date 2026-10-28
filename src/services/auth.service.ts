@@ -257,7 +257,12 @@ export class AuthService {
 			// active one logs in or recovers the password. The same bcrypt cost keeps the response time close.
 			if (input.password) await bcrypt.hash(input.password, 12);
 			// operator-only: the PUBLIC answer is identical, so this line is the only place that tells support why no code arrived (never the code, the address is masked)
-			logger.info(`[Register] outcome=in-use-nothing-created to=${maskEmail(input.email)} (email or phone already belongs to an account; no code, no mail)`);
+			// `conflict` names WHICH field matched (the phone is compared as the local number only, as the unique index on users.phoneNumber does)
+			// and `status` the state of that account: enough for support to tell "wrong phone" from "pending owner" without the number or the owner.
+			const sameEmail = String(existingUser.email ?? '').trim().toLowerCase() === input.email;
+			const samePhone = !!existingUser.phoneNumber && existingUser.phoneNumber === input.phoneNumber;
+			const conflict = sameEmail && samePhone ? 'email+phone' : sameEmail ? 'email' : samePhone ? 'phone' : 'unknown';
+			logger.info(`[Register] outcome=in-use-nothing-created to=${maskEmail(input.email)} conflict=${conflict} status=${existingUser.status} (email or phone already belongs to an account; no code, no mail)`);
 			return { userId: null as string | null, accountCreated: false };
 		}
 
@@ -348,8 +353,13 @@ export class AuthService {
 	 */
 	public async resendOtpByEmail(email: string): Promise<void> {
 		const user = await authRepository.findByEmail(email);
-		if (!user || user.status !== UserStatus.PENDING_VERIFICATION) return;
+		// operator-only (the public answer is identical): tells support why no code arrived after "resend", never the code
+		if (!user || user.status !== UserStatus.PENDING_VERIFICATION) {
+			logger.info(`[Resend] outcome=nothing-sent to=${maskEmail(email)} reason=${user ? `account-${String(user.status).toLowerCase()}` : 'no-account-for-this-email'}`);
+			return;
+		}
 		const { otpCode, reused, validityMinutes } = await this.prepareActivationCode(user.id);
+		logger.info(`[Resend] outcome=queued to=${maskEmail(user.email)} code=${reused ? 'same' : 'new'}`);
 		void this.sendActivationEmail(user.email, otpCode, reused ? 'resend-same-code' : 'resend-new-code', validityMinutes);
 	}
 
