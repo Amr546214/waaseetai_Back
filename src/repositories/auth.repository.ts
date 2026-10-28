@@ -51,19 +51,19 @@ export class AuthRepository {
   /**
    * Create User and their corresponding Profile in a Transaction
    */
-  public async createUserWithProfile(data: RegisterInput, hashedPassword: string | null, googleIdentity?: { sub: string; picture?: string }) {
+  public async createUserWithProfile(data: RegisterInput, hashedPassword: string | null, googleIdentity?: { sub: string; picture?: string }, initialStatus?: UserStatus) {
     // The user and ALL of their role profiles (incl. the affiliate profile) are created in one transaction. A referralSlug collision
     // rolls the whole transaction back, so it is simply retried with a new random slug: no account is ever left without its profile.
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.createUserWithProfileOnce(data, hashedPassword, googleIdentity);
+        return await this.createUserWithProfileOnce(data, hashedPassword, googleIdentity, initialStatus);
       } catch (error) {
         if (attempt >= 3 || !isReferralSlugConflict(error)) throw error;
       }
     }
   }
 
-  private async createUserWithProfileOnce(data: RegisterInput, hashedPassword: string | null, googleIdentity?: { sub: string; picture?: string }) {
+  private async createUserWithProfileOnce(data: RegisterInput, hashedPassword: string | null, googleIdentity?: { sub: string; picture?: string }, initialStatus?: UserStatus) {
     const roles = getInitialRolesForAccountType(data.accountType);
 
     return prisma.$transaction(async (tx) => {
@@ -83,6 +83,8 @@ export class AuthRepository {
           phoneCountryCode: data.phoneCountryCode,
           phoneNumber: data.phoneNumber,
           password: hashedPassword,
+          // e-mail-first registration creates the account already verified; every other path keeps the schema default (PENDING_VERIFICATION)
+          ...(initialStatus ? { status: initialStatus } : {}),
           ...(googleIdentity ? {
             authProvider: 'google',
             googleId: googleIdentity.sub,

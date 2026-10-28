@@ -336,6 +336,11 @@ export class NotificationService {
 		return this.sendOtpMail('admin-invite', email, code, 'رمز التحقق لقبول دعوة فريق الإدارة - Waseet AI', validityMinutes);
 	}
 
+	/** Code that proves the typed address belongs to the person registering. No account exists yet; the code activates nothing. */
+	public async sendRegistrationProofEmail(email: string, code: string, validityMinutes: number = 10): Promise<EmailDeliveryResult> {
+		return this.sendOtpMail('register-proof', email, code, process.env.REGISTER_PROOF_EMAIL_SUBJECT ?? 'رمز تأكيد بريدك لإنشاء الحساب - Waseet AI', validityMinutes);
+	}
+
 	/**
 	 * Send a password-reset code via email. Uses its own subject/template
 	 * (distinct from the account-activation OTP email) so the two flows never
