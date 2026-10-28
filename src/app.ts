@@ -285,7 +285,10 @@ import adminTeamRoutes, { adminInvitePublicRouter } from './routes/admin-team.ro
 import adminMessagesRoutes from './routes/admin-messages.routes';
 import adminSystemSettingsRoutes from './routes/admin-system-settings.routes';
 import adminFeePolicyRoutes from './routes/admin-fee-policy.routes';
+import adminSiteIdentityRoutes from './routes/admin-site-identity.routes';
+import publicSiteIdentityRoutes from './routes/public-site-identity.routes';
 import { systemSettingsService } from './services/system-settings.service';
+import { startSiteIdentityCache } from './services/site-identity-cache';
 import aiAssessmentRoutes from './routes/ai-assessment.routes';
 import accountManagementRoutes from './routes/account-management.routes';
 import adminDisputesRoutes from './routes/admin-disputes.routes';
@@ -327,6 +330,8 @@ mountAppRoute('/api/admin/system-settings', adminSystemSettingsRoutes);
 mountAppRoute('/admin/system-settings', adminSystemSettingsRoutes);
 mountAppRoute('/api/admin/fee-policy', adminFeePolicyRoutes);
 mountAppRoute('/admin/fee-policy', adminFeePolicyRoutes);
+mountAppRoute('/api/admin/site-identity', adminSiteIdentityRoutes);
+mountAppRoute('/admin/site-identity', adminSiteIdentityRoutes);
 mountAppRoute('/api/admin-invite', adminInvitePublicRouter);
 mountAppRoute('/admin-invite', adminInvitePublicRouter);
 mountAppRoute('/api/admin/users', adminUsersRouter);
@@ -373,6 +378,8 @@ mountAppRoute('/api/admin/settings', adminSettingsRoutes);
 mountAppRoute('/admin/settings', adminSettingsRoutes);
 mountAppRoute('/api/public', publicSettingsRoutes);
 mountAppRoute('/public', publicSettingsRoutes);
+mountAppRoute('/api/public', publicSiteIdentityRoutes);
+mountAppRoute('/public', publicSiteIdentityRoutes);
 mountAppRoute('/api/admin/marketing-assets', adminMarketingAssetsRoutes);
 mountAppRoute('/admin/marketing-assets', adminMarketingAssetsRoutes);
 mountAppRoute('/api/admin/marketplace-services', adminMarketplaceServicesRoutes);
@@ -444,6 +451,7 @@ if (process.env.NODE_ENV !== 'test') {
 		startChatDigestScheduler(); // no-op unless CHAT_DIGEST_EMAIL_ENABLED=true
 		// warm the settings cache so the maintenance / registration policies have a trusted value as early as possible (a failure is logged; the cold-boot policy covers the gap)
 		void systemSettingsService.prime();
+		startSiteIdentityCache(); // non-blocking: the replaced e-mail logo (if any) for the synchronous mail shell; a failure leaves the default
 	});
 }
 

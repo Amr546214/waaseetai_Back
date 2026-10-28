@@ -22,8 +22,8 @@ test('PG: only a SUPER_ADMIN creates / edits roles and grants permissions - no o
 	assert.equal(ok.status, 201); assert.equal(ok.json.data.permissions[0], 'users.view');
 	// a SUPER_ADMIN works with no staff row and no other table: its type, read from the server, is the authority
 	assert.equal(await e.prisma.adminStaff.count({ where: { userId: e.sa.id } }), 0);
-	const reg = await e.call('GET', '/admin/team/permissions', e.sa.id); assert.equal(reg.status, 200); assert.ok(reg.json.data.superAdminCount >= 1); assert.equal(reg.json.data.permissions.length, 32);
-	const me = await e.call('GET', '/admin/team/access/me', e.sa.id); assert.equal(me.json.data.state, 'SUPER_ADMIN'); assert.equal(me.json.data.permissions.length, 32);
+	const reg = await e.call('GET', '/admin/team/permissions', e.sa.id); assert.equal(reg.status, 200); assert.ok(reg.json.data.superAdminCount >= 1); assert.equal(reg.json.data.permissions.length, 34);
+	const me = await e.call('GET', '/admin/team/access/me', e.sa.id); assert.equal(me.json.data.state, 'SUPER_ADMIN'); assert.equal(me.json.data.permissions.length, 34);
 });
 
 test('PG: no mass assignment and no escalation - privileged fields are refused, and nobody (staff or SUPER_ADMIN) can create a SUPER_ADMIN or promote an account type through these routes', opts, async () => {

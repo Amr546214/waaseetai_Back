@@ -24,6 +24,11 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 	PLATFORM_SETTINGS_UPDATED: 'تعديل إعدادات المنصة',
 	FEE_POLICY_SCHEDULED: 'جدولة تعديل سياسة الرسوم',
 	FEE_POLICY_CANCELLED: 'إلغاء نسخة مجدولة من سياسة الرسوم',
+	SITE_IDENTITY_UPLOADED: 'رفع مسودة هوية الموقع',
+	SITE_IDENTITY_PUBLISHED: 'اعتماد نسخة من هوية الموقع',
+	SITE_IDENTITY_RESTORED: 'استعادة نسخة من هوية الموقع',
+	SITE_IDENTITY_SET_RESTORED: 'استعادة مجموعة هوية الموقع كاملة',
+	SITE_IDENTITY_DISCARDED: 'حذف مسودة هوية الموقع',
 	// back-office actions
 	ADMIN_MESSAGE_SENT: 'رسالة من الإدارة',
 	USER_DELETED_BY_ADMIN: 'حذف حساب مستخدم نهائيًا',
@@ -89,7 +94,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 
 export const AUDIT_ENTITY_LABELS: Record<string, string> = {
 	DISPUTE: 'نزاع', TICKET: 'تذكرة', WITHDRAWAL: 'طلب سحب', ESCROW: 'ضمان', PROJECT: 'مشروع', CONTRACT: 'عقد', FINANCE: 'مالية',
-	USER: 'حساب', ROLE: 'دور', INVITE: 'دعوة', SETTINGS: 'إعدادات', FEE_POLICY: 'سياسة الرسوم', COUPON: 'كوبون'
+	USER: 'حساب', ROLE: 'دور', INVITE: 'دعوة', SETTINGS: 'إعدادات', FEE_POLICY: 'سياسة الرسوم', SITE_IDENTITY: 'هوية الموقع', COUPON: 'كوبون'
 };
 
 /** the Arabic name of an event code; an unknown code is returned unchanged (honest, never replaced by a generic label) */

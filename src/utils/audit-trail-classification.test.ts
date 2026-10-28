@@ -42,8 +42,8 @@ test('the table is consistent: a code is in exactly one class, every class has a
 
 test('natures: deletion / payout / financial resolution CRITICAL; suspension, roles, settings, fee policy, failed logins, finance WARNING; sessions INFO', () => {
 	for (const c of ['USER_DELETED_BY_ADMIN', 'WITHDRAWAL_PAYOUT_SENT', 'DISPUTE_FINANCIAL_RESOLVED']) assert.equal(classifiedSeverity(c), 'CRITICAL', c);
-	for (const c of ['STAFF_SUSPENDED', 'ACCOUNT_SUSPENDED_BY_ADMIN', 'ROLE_UPDATED', 'STAFF_ROLE_SET', 'PLATFORM_SETTINGS_UPDATED', 'FEE_POLICY_SCHEDULED', 'LOGIN_REJECTED', 'WITHDRAWAL_APPROVED', 'FINANCE_EXPORT', 'CATEGORY_DELETED', 'KYC_DOCUMENT_VIEWED_BY_ADMIN']) assert.equal(classifiedSeverity(c), 'WARNING', c);
-	for (const c of ['SESSION_STARTED', 'TICKET_REPLIED', 'ROLE_CREATED'.replace('ROLE_CREATED', 'INVITE_RESENT')]) assert.equal(classifiedSeverity(c), 'INFO', c);
+	for (const c of ['STAFF_SUSPENDED', 'ACCOUNT_SUSPENDED_BY_ADMIN', 'ROLE_UPDATED', 'STAFF_ROLE_SET', 'PLATFORM_SETTINGS_UPDATED', 'FEE_POLICY_SCHEDULED', 'LOGIN_REJECTED', 'WITHDRAWAL_APPROVED', 'FINANCE_EXPORT', 'CATEGORY_DELETED', 'KYC_DOCUMENT_VIEWED_BY_ADMIN', 'SITE_IDENTITY_PUBLISHED', 'SITE_IDENTITY_RESTORED', 'SITE_IDENTITY_SET_RESTORED']) assert.equal(classifiedSeverity(c), 'WARNING', c);
+	for (const c of ['SITE_IDENTITY_UPLOADED', 'SITE_IDENTITY_DISCARDED', 'SESSION_STARTED', 'TICKET_REPLIED', 'ROLE_CREATED'.replace('ROLE_CREATED', 'INVITE_RESENT')]) assert.equal(classifiedSeverity(c), 'INFO', c);
 });
 
 test('effective severity: stored WARNING / CRITICAL is honoured, a stored INFO never lowers a class, an unlisted code is UNCLASSIFIED (never guessed)', () => {

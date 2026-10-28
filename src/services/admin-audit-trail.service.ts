@@ -4,6 +4,7 @@ import { SETTING_BY_KEY } from '../config/system-settings.registry';
 import { ACCESS_ACTION_CODES, AUDIT_ACTION_LABELS, AUDIT_ENTITY_LABELS, SELF_ACTED_CODES, auditActionLabel } from '../utils/audit-trail-labels';
 import { ALL_CLASSIFIED_CODES, codesOf, effectiveSeverity } from '../utils/audit-trail-classification';
 import { metaFacts, redact } from '../utils/audit-detail-sanitizer';
+import { identityDef } from '../config/site-identity.registry';
 
 /**
  * The admin audit trail: ONE list over the two places that really record administrative events
@@ -34,7 +35,7 @@ const ACTOR_LABEL = /^(?:(?:ADMIN|SUPER_ADMIN):)?([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-
 /** metadata keys that, when they hold a user id, prove who acted */
 const ACTOR_META_KEYS = ['adminId', 'reviewerUserId', 'viewerUserId', 'appliedById'] as const;
 /** codes whose row is written on the ACTING admin by a writer that does not set a context entity (settings, fee policy) */
-const OWNER_ACTS_CODES = ['PLATFORM_SETTINGS_UPDATED', 'FEE_POLICY_SCHEDULED', 'FEE_POLICY_CANCELLED'];
+const OWNER_ACTS_CODES = ['PLATFORM_SETTINGS_UPDATED', 'FEE_POLICY_SCHEDULED', 'FEE_POLICY_CANCELLED', 'SITE_IDENTITY_UPLOADED', 'SITE_IDENTITY_PUBLISHED', 'SITE_IDENTITY_RESTORED', 'SITE_IDENTITY_SET_RESTORED', 'SITE_IDENTITY_DISCARDED'];
 
 export interface AuditTrailQuery {
 	page?: unknown; limit?: unknown; q?: string; eventType?: string; severity?: string; source?: string;
@@ -124,6 +125,10 @@ export function logDetail(r: { eventType: string; summary?: string | null; actio
 			const n = Object.keys(obj(r.afterData)).length;
 			return { detail: `نسخة ${redact(m.version ?? '—', 10)}${n ? ` · ${n} تغيير` : ''} · تسري من`, detailDate: str(m.effectiveFrom) };
 		}
+		case 'SITE_IDENTITY_UPLOADED': return { detail: `${identityLabel(m.identityKey)} · مسودة نسخة ${redact(m.version ?? '—', 10)}${str(m.sha) ? ` · ${redact(m.sha, 16)}` : ''}`, detailDate: null };
+		case 'SITE_IDENTITY_DISCARDED': return { detail: `${identityLabel(m.identityKey)} · مسودة نسخة ${redact(m.version ?? '—', 10)}`, detailDate: null };
+		case 'SITE_IDENTITY_PUBLISHED': case 'SITE_IDENTITY_RESTORED': return { detail: `${identityLabel(m.identityKey)} · ${m.fromVersion ? `نسخة ${redact(m.fromVersion, 10)}` : 'الافتراضي'} ← ${m.toVersion ? `نسخة ${redact(m.toVersion, 10)}` : 'الافتراضي'}`, detailDate: null };
+		case 'SITE_IDENTITY_SET_RESTORED': return { detail: `${str(m.target) ? redact(m.target, 40) : 'مجموعة سابقة'} · ${String(str(m.identityKey) ?? '').split(',').filter(Boolean).length} عنصر`, detailDate: null };
 		case 'FEE_POLICY_CANCELLED': return { detail: `النسخة المجدولة ${redact(m.version ?? '—', 10)}`, detailDate: null };
 		default: return { detail: fallback, detailDate: null };
 	}
@@ -137,6 +142,7 @@ export function logTarget(r: LogLike & { userId: string }, actor: { id: string |
 	if (entity) return { type: entity, typeLabel: AUDIT_ENTITY_LABELS[entity] ?? entity, id: str(ctx.entityId), label: null };
 	if (c === 'PLATFORM_SETTINGS_UPDATED') return { type: 'SETTINGS', typeLabel: AUDIT_ENTITY_LABELS.SETTINGS, id: null, label: 'إعدادات المنصة' };
 	if (c.startsWith('FEE_POLICY_')) return { type: 'FEE_POLICY', typeLabel: AUDIT_ENTITY_LABELS.FEE_POLICY, id: m.version != null ? String(m.version) : null, label: m.version != null ? `نسخة ${redact(m.version, 10)}` : null };
+	if (c.startsWith('SITE_IDENTITY_')) { const k = str(m.identityKey); const one = k && !k.includes(','); return { type: 'SITE_IDENTITY', typeLabel: AUDIT_ENTITY_LABELS.SITE_IDENTITY, id: one ? k : null, label: one ? identityLabel(k) : 'مجموعة هوية الموقع' }; }
 	if (c === 'USER_DELETED_BY_ADMIN') { const d = str(m.deletedUserId); return d ? { type: 'USER', typeLabel: AUDIT_ENTITY_LABELS.USER, id: d, label: null } : null; }
 	if (c.startsWith('COUPON_ADMIN_')) { const id = str(m.couponId); return id ? { type: 'COUPON', typeLabel: AUDIT_ENTITY_LABELS.COUPON, id, label: str(m.code) ? redact(m.code, 40) : null } : null; }
 	if (c === 'AMENDMENT_APPLIED' || c === 'STAGE_FUND_RELEASED') { const id = str(m.contractId); return id ? { type: 'CONTRACT', typeLabel: AUDIT_ENTITY_LABELS.CONTRACT, id, label: null } : null; }
@@ -144,6 +150,9 @@ export function logTarget(r: LogLike & { userId: string }, actor: { id: string |
 	if (actor.id && actor.id !== r.userId) return user(r.userId); // an admin acting on the affected account
 	return null;
 }
+
+/** the Arabic name of an identity key (the key itself when it is not in the registry) */
+const identityLabel = (k: unknown): string => { const key = str(k); return key ? redact(identityDef(key)?.label ?? key, 60) : 'هوية الموقع'; };
 
 const sourceRank = (k: 'LOG' | 'ACCESS') => (k === 'ACCESS' ? 0 : 1);
 
