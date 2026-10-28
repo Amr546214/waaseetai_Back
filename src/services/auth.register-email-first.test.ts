@@ -29,7 +29,7 @@ const proofRepo = {
 	consumeInTx: async (_tx: unknown, nonce: string) => { const r = PROOFS.get(nonce); if (!r || r.consumedAt || r.expiresAt.getTime() <= Date.now()) return false; r.consumedAt = new Date(); return true; },
 };
 
-async function world(t: TestContext, o: { users?: any[]; smtpFails?: boolean; signInFails?: boolean } = {}) {
+async function world(t: TestContext, o: { users?: any[]; smtpFails?: boolean; signInFails?: boolean; closed?: boolean } = {}) {
 	const store = { users: [...(o.users ?? [])] as any[], proofMails: [] as { to: string; code: string }[], sessions: 0, otherMails: 0 };
 	const gates = { signInFails: !!o.signInFails };
 	t.mock.module('../config/logger', { namedExports: { logger: { info() {}, warn() {}, error() {}, debug() {} } } });
@@ -49,6 +49,7 @@ async function world(t: TestContext, o: { users?: any[]; smtpFails?: boolean; si
 			return u;
 		},
 	} } });
+	t.mock.module('./system-settings.service', { namedExports: { systemSettingsService: { get: async (k: string) => (k === 'registrationOpen' ? !o.closed : k === 'sessionMaxHours' ? 168 : undefined) } } });
 	t.mock.module('../repositories/registration-proof.repository', { namedExports: { registrationProofRepository: proofRepo } });
 	t.mock.module('./notification.service', { namedExports: { notificationService: {
 		sendRegistrationProofEmail: async (to: string, code: string) => { if (o.smtpFails) throw new Error('smtp'); store.proofMails.push({ to, code }); },
@@ -293,4 +294,43 @@ test('account created but the sign-in step fails: a clear "sign in normally" res
 	const again = await errOf(w.authService.completeRegistration(completeBody(s, code) as any));
 	assert.equal(again?.status, 400);
 	assert.equal(w.store.users.length, 1);
+});
+
+test('registration CLOSED: start sends no mail and issues no ticket (403 REGISTRATION_CLOSED)', async (t) => {
+	const w = await world(t, { closed: true });
+	const e = await errOf(w.authService.startRegistration({ ...BODY }));
+	assert.equal(e?.status, 403);
+	assert.equal(e?.code, 'REGISTRATION_CLOSED');
+	assert.equal(w.store.proofMails.length, 0);
+	assert.equal(w.store.users.length, 0);
+});
+
+test('registration closed AFTER the ticket was issued: complete creates nothing and does not burn the ticket; reopening lets the same ticket finish', async (t) => {
+	let ticket: any; let code = '';
+	await t.test('open: ticket issued', async (st) => {
+		const w = await world(st);
+		ticket = await w.authService.startRegistration({ ...BODY });
+		code = w.store.proofMails[0].code;
+	});
+	await t.test('closed: refused, nothing created, attempts untouched', async (st) => {
+		const w = await world(st, { closed: true });
+		const e = await errOf(w.authService.completeRegistration(completeBody(ticket, code) as any));
+		assert.equal(e?.status, 403);
+		assert.equal(e?.code, 'REGISTRATION_CLOSED');
+		assert.equal(w.store.users.length, 0);
+		const row = PROOFS.get([...PROOFS.keys()].at(-1)!)!;
+		assert.equal(row.wrong, 0); assert.equal(row.tries, 0); assert.equal(row.consumedAt, null);
+	});
+	await t.test('reopened: the same ticket completes', async (st) => {
+		const w = await world(st);
+		const r: any = await w.authService.completeRegistration(completeBody(ticket, code) as any);
+		assert.ok(r.token);
+	});
+});
+
+test('registration closed never blocks existing users: pending activation by code, resend and login do not consult the guard', async (t) => {
+	// the guard is only wired into startRegistration / completeRegistration / registerUser / new Google sign-up (see auth.service.ts)
+	const src = (await import('node:fs')).readFileSync(new URL('./auth.service.ts', import.meta.url), 'utf8');
+	const callers = [...src.matchAll(/await this\.registrationClosed\(\)/g)].length;
+	assert.equal(callers, 4, 'register, google new sign-up, start and complete -- nowhere else');
 });

@@ -224,6 +224,8 @@ export class AuthService {
 	 * longer depends on the account, which lets the answer say truthfully whether the SMTP server accepted it.
 	 */
 	public async startRegistration(rawInput: RegisterStartInput): Promise<{ emailSent: boolean; ticket?: string; expiresAt?: string }> {
+		// registration closed: no code is sent and no ticket is issued (the answer is uniform, it reveals nothing about the address)
+		if (await this.registrationClosed()) throw this.closedError();
 		const email = String(rawInput.email ?? '').trim().toLowerCase();
 		try {
 			normalizePhone(rawInput.phoneNumber, rawInput.phoneCountryCode);
@@ -252,6 +254,9 @@ export class AuthService {
 	 * After the account exists a failure of the sign-in step never looks like a failed registration: see `signInRequired`.
 	 */
 	public async completeRegistration(rawInput: RegisterCompleteInput, referralContext: Pick<ReferralAttributionContext, 'refCookieSlug' | 'refCookieSource'> = {}, sessionContext: SessionContext = {}) {
+		// Closing registration AFTER the ticket was issued also stops the completion, before anything is reserved or created: the ticket's attempts are
+		// untouched, so it is still usable if registration reopens. Existing users, pending activations and password recovery never pass through here.
+		if (await this.registrationClosed()) throw this.closedError();
 		const input = { ...rawInput, email: String(rawInput.email ?? '').trim().toLowerCase() } as RegisterCompleteInput & RegisterInput;
 		const rejectProof = (): never => { throw new AppError(REGISTER_PROOF_REJECTED_MESSAGE, 400); };
 		const nonce = nonceOfTicket(input.ticket, input.email);
