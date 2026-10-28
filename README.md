@@ -55,16 +55,19 @@ flowchart LR
 ```bash
 git clone https://github.com/Amr546214/waaseetai_Back.git
 cd waaseetai_Back
-npm install
+npm ci
 cp .env.example .env        # then replace every placeholder; never commit .env
 # set at least DATABASE_URL, JWT_SECRET, OTP_SECRET, FRONTEND_URL, CORS_ORIGINS
 npm run prisma:generate
 npx prisma db push          # fresh database only — see "Database" below
+npm run db:seed             # optional: creates a SUPER_ADMIN from SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD
 npm start                   # nodemon + tsx on http://localhost:5009
 curl http://localhost:5009/health
 ```
 
-Optional: `npm run db:seed` creates the initial admin from `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`; `npm run seed:taxonomy` loads categories and specialties.
+`npm run seed:taxonomy` loads categories and specialties.
+
+<sub>Verified on 2026-10-28 against a throwaway local PostgreSQL 16 container: `prisma generate`, `prisma db push` (83 tables), `db:seed`, `npm start`, `/health`, `/api/openapi.json` all worked with only the variables listed above. Docker Compose, uploads, PayPal, SMTP and LLM paths were not exercised.</sub>
 
 **Docker:** `docker compose up -d --build` starts PostgreSQL 16 and the API (production image). The container never changes the schema unless you opt in with `RUN_DB_PUSH=true` or `RUN_DB_MIGRATIONS=true` in `.env`.
 
@@ -77,6 +80,8 @@ Optional: `npm run db:seed` creates the initial admin from `SEED_ADMIN_EMAIL` / 
 | New, empty local database | `npx prisma db push` (add `RUN_DB_PUSH=true` for Docker) |
 | Database whose history is already tracked | `npm run prisma:migrate:deploy` (`RUN_DB_MIGRATIONS=true` for Docker) |
 | Production or shared servers | Follow [DEPLOYMENT.md](DEPLOYMENT.md) and [docs/prod-deploy-checklist.md](docs/prod-deploy-checklist.md); take a backup first |
+
+**Verified:** on an empty PostgreSQL 16, `prisma migrate deploy` fails (`type "ContractStatus" does not exist`) while `prisma db push` succeeds.
 
 Review any SQL under `docs/` marked *NOT EXECUTED* before applying it; those files are prepared plans, not applied changes. Browse data with `npm run db:studio`.
 
@@ -92,7 +97,7 @@ Review any SQL under `docs/` marked *NOT EXECUTED* before applying it; those fil
 | `npm run db:seed` · `db:seed:e2e` · `seed:taxonomy` | Admin account · manual-QA data · taxonomy |
 | `npm run db:studio` | Prisma Studio |
 
-**Tests** use mocked Prisma and I/O (`--experimental-test-module-mocks`), so they need **no database or network** — only `npm install`. There is no automated integration/E2E layer.
+**Tests:** most suites mock Prisma and I/O (`--experimental-test-module-mocks`) and need no database. Some open loopback listeners, and the `*.pg.test.ts` suites need an isolated local PostgreSQL (`QA_ISOLATED_PG_URL`, see the header of each file) — they are skipped when it is not set. There is no CI-integrated E2E layer. The full suite was not run for this documentation change.
 
 ## API and health
 
@@ -106,9 +111,9 @@ Use the `/api/...` paths; routers are also mounted without the prefix to support
 ## Auth, roles and integrations
 
 - **Auth:** email/password with OTP verification, Google sign-in, JWT bearer tokens validated against a server-side session record (revocable); Socket.IO uses the same check.
-- **Roles:** one user can hold `CLIENT`, `PROVIDER` and `AFFILIATE` roles and switch the active one. `ADMIN` and `SUPER_ADMIN` are never self-service and are provisioned out of band.
+- **Roles:** through `/switch-active-role` a user can hold and switch `CLIENT`, `PROVIDER` and `AFFILIATE`; the account-management service deliberately excludes `ADMIN` and `SUPER_ADMIN`. Admin accounts come from the seed script, and admin routes (e.g. `/admin/users/:id/roles`) are guarded separately.
 - **Payments:** wallet deposits through PayPal (USD only); payout automation and the affiliate commission engine are flag-gated and default to off.
-- **AI:** provider-neutral LLM layer and WaseetAI gateway for matching, review and the help assistant; features answer `503 NOT_CONFIGURED` without keys.
+- **AI:** an in-house LLM layer (`LLM_*`; answers `503 NOT_CONFIGURED` when unset) and a WaseetAI gateway (`WASEET_AI_*`; the help assistant and AI-review sockets report "not configured"). Other features are ordinary application code.
 - **Secrets:** environment variables only. `.env.example` (local) and `.env.production.example` (VPS) hold placeholders.
 
 ## Documentation

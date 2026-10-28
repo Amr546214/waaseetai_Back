@@ -34,7 +34,7 @@ Identity is modeled as a single `User` record that can own multiple roles:
 
 **Self-service roles**: `CLIENT`, `PROVIDER`, and `AFFILIATE` can be added to an account and switched between by the authenticated user themselves.
 
-**Internal/operator roles**: `ADMIN` and `SUPER_ADMIN` are not obtainable through any self-service endpoint. They are provisioned out-of-band (e.g. via the admin seed script) and are validated against explicitly wherever administrative access is required.
+**Internal/operator roles**: `ADMIN` and `SUPER_ADMIN` are excluded from the self-service role endpoints (`src/services/account-management.service.ts`). Admin accounts are provisioned out-of-band (the admin seed script creates a `SUPER_ADMIN`), and admin routes are guarded separately.
 
 Each self-service role has its own profile record (`ClientProfile`, `ProviderProfile`, `AffiliateProfile`) with role-specific display and progression fields, so switching roles changes what a user sees without losing their other role's data.
 
@@ -110,7 +110,7 @@ This section describes the authorization *model*; it intentionally does not enum
 - **Secrets management**: all secrets (JWT signing key, OTP secret, database credentials, third-party API keys) are supplied exclusively through environment variables and must never be committed to source control or written into documentation.
 - **Password storage**: hashed with `bcrypt`; plaintext passwords are never persisted or logged.
 - **Session revocation**: authentication tokens are validated against a server-side session record, allowing sessions to be invalidated rather than remaining valid for their full lifetime unconditionally.
-- **Role-based access control**: endpoints are gated by role/account-type checks appropriate to the sensitivity of the data or action; internal roles (ADMIN/SUPER_ADMIN) are not reachable through any self-service flow.
+- **Role-based access control**: endpoints are gated by role/account-type checks appropriate to the sensitivity of the data or action; internal roles (ADMIN/SUPER_ADMIN) are excluded from the self-service role-switching endpoints.
 - **Transport & header hardening**: `helmet` is used for standard security headers, and CORS is restricted to an explicit allowlist of origins plus any origins configured via environment variables.
 - **Rate limiting**: general API traffic and authentication endpoints are both rate-limited, with a stricter limit on authentication.
 - **Development-only flags**: at least one environment flag (`ALLOW_TEST_CHECKOUT_WITHOUT_BALANCE`) exists purely to ease local/manual testing of the checkout flow. It must remain unset (or `false`) outside local development — treat any environment where it might be enabled as non-production.
@@ -139,6 +139,6 @@ Most of the platform (CRUD, marketplace, payments, chat transport, dashboards) i
 
 - **Fresh-database migrations are not safe.** `prisma/migrations` cannot be replayed on an empty database because later migrations reference objects missing from the initial one. New databases are created with `prisma db push`; `RUN_DB_MIGRATIONS` is only for databases whose migration history is already the source of truth. See [DEPLOYMENT.md](../DEPLOYMENT.md).
 - **SMS delivery is not implemented.** `SMS_*` configuration exists, but the code path only logs; email (OTP, password reset) is sent through SMTP.
-- **No automated integration/E2E layer.** `npm test` runs against mocked dependencies; `db:seed:e2e` only prepares data for manual scenarios.
+- **No CI-integrated E2E layer.** Most tests mock their dependencies; the `*.pg.test.ts` suites run only against an isolated local PostgreSQL and are skipped otherwise. `db:seed:e2e` prepares data for manual scenarios.
 - **Some endpoints intentionally answer "not implemented"** for account-type/tab combinations without dedicated logic.
 - **Wallet deposits are PayPal-only (USD).** Other rails are not part of the default branch.
