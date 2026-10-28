@@ -3,11 +3,12 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { OtpType, UserStatus, UserRole, ReferralStatus, AccountType, User as PrismaUser } from '@prisma/client';
 import { authRepository } from '../repositories/auth.repository';
-import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput, VerifyLoginOtpInput } from '../routes/auth/auth.schema';
+import { RegisterInput, RegisterStartInput, RegisterCompleteInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput, VerifyLoginOtpInput } from '../routes/auth/auth.schema';
 import { OAuth2Client } from 'google-auth-library';
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 import { AppError } from '../utils/app-error';
+import { issueRegistrationProof, checkRegistrationProof, nonceOfTicket, proofAttempts, REGISTER_PROOF_VALIDITY_MS } from '../utils/registration-proof';
 import { normalizePhone } from '../utils/phone-countries';
 import { logger } from '../config/logger';
 import { notificationService } from './notification.service';
@@ -21,7 +22,7 @@ import { withKeyLock } from '../utils/key-lock';
 import { remainingMinutes } from '../utils/otp-validity';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { normalizeReferralIdentifier } from '../utils/referral-identifier';
-import { RESEND_GENERIC_MESSAGE, ACTIVATION_CODE_REJECTED_MESSAGE } from '../utils/auth-messages';
+import { RESEND_GENERIC_MESSAGE, ACTIVATION_CODE_REJECTED_MESSAGE, REGISTER_PROOF_REJECTED_MESSAGE, REGISTER_DATA_UNAVAILABLE_MESSAGE } from '../utils/auth-messages';
 import { marketerNotifications } from './marketer-notifications.service';
 
 /**
@@ -208,6 +209,78 @@ export class AuthService {
 			// The account already exists at this point: a failed attribution write is logged, never turned into a failed signup.
 			logger.warn(`[Referral] attribution write failed (code=${error?.code ?? 'unknown'}); registration continues`);
 		}
+	}
+
+	/**
+	 * E-mail-first registration, step 1. Sends a proof code to the typed address and returns a signed ticket. NOTHING is created or reserved
+	 * (no account, no phone), so the answer is identical for a new address, one in use and any phone; the mail is awaited because the timing no
+	 * longer depends on the account, which lets the answer say truthfully whether the SMTP server accepted it.
+	 */
+	public async startRegistration(rawInput: RegisterStartInput): Promise<{ emailSent: boolean; ticket?: string; expiresAt?: string }> {
+		const email = String(rawInput.email ?? '').trim().toLowerCase();
+		try {
+			normalizePhone(rawInput.phoneNumber, rawInput.phoneCountryCode);
+		} catch {
+			throw new AppError('رقم الجوال غير صالح أو لا يطابق رمز الدولة المختار', 400);
+		}
+		const proof = issueRegistrationProof(email);
+		try {
+			await notificationService.sendRegistrationProofEmail(email, proof.code, Math.round(REGISTER_PROOF_VALIDITY_MS / 60000));
+		} catch {
+			logger.error('[Register] proof mail was NOT delivered (flow=start).');
+			return { emailSent: false };
+		}
+		logger.info(`[Register] outcome=proof-sent to=${maskEmail(email)} (no account created, nothing reserved)`);
+		return { emailSent: true, ticket: proof.ticket, expiresAt: proof.expiresAt.toISOString() };
+	}
+
+	/**
+	 * E-mail-first registration, step 2. Needs the ticket + code that prove the address. Uniqueness (e-mail and phone) is checked only now,
+	 * and again by the unique indexes inside the creating transaction, so two simultaneous completions cannot both win. A proven caller whose
+	 * data cannot be used gets ONE generic 409 (no field, no owner); the same ticket may try corrected data a few times before a new code is needed.
+	 */
+	public async completeRegistration(rawInput: RegisterCompleteInput, referralContext: Pick<ReferralAttributionContext, 'refCookieSlug' | 'refCookieSource'> = {}, sessionContext: SessionContext = {}) {
+		const input = { ...rawInput, email: String(rawInput.email ?? '').trim().toLowerCase() } as RegisterCompleteInput & RegisterInput;
+		const rejectProof = (): never => { throw new AppError(REGISTER_PROOF_REJECTED_MESSAGE, 400); };
+		const nonce = nonceOfTicket(input.ticket, input.email);
+		if (!nonce || proofAttempts.isLocked(nonce)) return rejectProof();
+		if (!checkRegistrationProof(input.ticket, input.email, input.code).ok) {
+			proofAttempts.recordWrongCode(nonce);
+			return rejectProof();
+		}
+		try {
+			const phone = normalizePhone(input.phoneNumber, input.phoneCountryCode);
+			input.phoneNumber = phone.nationalNumber;
+			input.phoneCountryCode = phone.countryCode;
+		} catch {
+			throw new AppError('رقم الجوال غير صالح أو لا يطابق رمز الدولة المختار', 400);
+		}
+		const unavailable = (): never => {
+			proofAttempts.recordRejectedCompletion(nonce);
+			throw new AppError(REGISTER_DATA_UNAVAILABLE_MESSAGE, 409, undefined, 'REGISTRATION_DATA_UNAVAILABLE');
+		};
+		if (await authRepository.findByEmailOrPhone(input.email, input.phoneNumber)) {
+			logger.info(`[Register] outcome=data-unavailable-after-proof to=${maskEmail(input.email)} (nothing created)`);
+			return unavailable();
+		}
+		const hashedPassword = await bcrypt.hash(input.password, 12);
+		let user: PrismaUser;
+		try {
+			user = await authRepository.createUserWithProfile(input as RegisterInput, hashedPassword, undefined, UserStatus.ACTIVE);
+		} catch (error: any) {
+			if (error?.code === 'P2002') {
+				logger.info(`[Register] outcome=data-unavailable-after-proof to=${maskEmail(input.email)} (unique index; nothing created)`);
+				return unavailable();
+			}
+			throw error;
+		}
+		// the proof is spent: the address now has its account, so the same ticket+code can only ever meet the generic 409
+		proofAttempts.recordRejectedCompletion(nonce); proofAttempts.recordRejectedCompletion(nonce); proofAttempts.recordRejectedCompletion(nonce);
+		if (input.accountType !== AccountType.MARKETING_BROKER) {
+			await this.resolveReferralAttribution(user.id, { affiliateIdentifier: input.affiliateIdentifier, refCookieSlug: referralContext.refCookieSlug, refCookieSource: referralContext.refCookieSource });
+		}
+		logger.info(`[Register] outcome=created-verified to=${maskEmail(input.email)} (e-mail proven before the account existed)`);
+		return this.signInActivatedUser(user, sessionContext);
 	}
 
 	/**
@@ -536,7 +609,12 @@ export class AuthService {
 			});
 		}
 
-		// 4. Generate JWT Access Token
+		return this.signInActivatedUser(updatedUser, sessionContext);
+	}
+
+	/** Signs in an account that was just activated (token + session + the safe user payload). Shared by code activation and e-mail-first registration. */
+	private async signInActivatedUser(updatedUser: PrismaUser, sessionContext: SessionContext) {
+		// Generate JWT Access Token
 		const jwtSecret = process.env.JWT_SECRET;
 		if (!jwtSecret) {
 			throw new AppError('خطأ في إعدادات الخادم: مفتاح التشفير JWT_SECRET غير معرّف', 500);
