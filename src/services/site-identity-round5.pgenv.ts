@@ -31,7 +31,7 @@ test('PG round5 tokens: json upload (body and multipart) -> staged with value ->
 	const ov = (await m.adm('GET', '/', mg.id)).json.data;
 	assert.ok(ov.groups.includes('token'));
 	const dark = ov.items.find((i: any) => i.key === 'tokens.colors.dark'), light = ov.items.find((i: any) => i.key === 'tokens.colors.light');
-	assert.equal(dark.kind, 'json'); assert.equal(dark.group, 'token'); assert.equal(dark.wired, true); assert.equal(dark.tokens.length, 34); assert.equal(light.tokens.length, 34);
+	assert.equal(dark.kind, 'json'); assert.equal(dark.group, 'token'); assert.equal(dark.wired, true); assert.equal(dark.tokens.length, 58); assert.equal(light.tokens.length, 58);
 	assert.equal(dark.tokens.find((t: any) => t.name === '--pg').default, '#070d24'); assert.equal(light.tokens.find((t: any) => t.name === '--pg').default, '#eef2fa');
 	assert.equal(light.tokens.find((t: any) => t.name === '--grad').sharedWithDark, true); assert.equal(light.tokens.find((t: any) => t.name === '--teal').default, '#0f8a7f'); assert.equal(light.tokens.find((t: any) => t.name === '--txt').sharedWithDark, false);
 	assert.equal(ov.items.find((i: any) => i.key === 'tokens.layout').tokens.length, 3);
