@@ -2,8 +2,8 @@
  "generatedBy": "scripts/site-identity-icon-allowlist.cjs",
  "note": "GENERATED - do not edit by hand. Regenerate with: node scripts/site-identity-icon-allowlist.cjs <FE-repo> --write",
  "counts": {
-  "symbols": 756,
-  "wired": 737,
+  "symbols": 789,
+  "wired": 770,
   "noConsumer": 19,
   "excluded": 15,
   "libraryOnly": 84
@@ -2202,6 +2202,141 @@
    "label": "تنزيل في صندوق — لوحة الإدارة"
   },
   {
+   "id": "pl-admin-kpi-chart",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8f68088b333e0e0116085a531392a8f0fbb517e37a0da579714a4f27a6584961",
+   "byteSize": 114,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة بطاقة مؤشر في مركز التحليلات: «أعمدة»"
+  },
+  {
+   "id": "pl-admin-kpi-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة بطاقة مؤشر في مركز التحليلات: «تم»"
+  },
+  {
+   "id": "pl-admin-kpi-clock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e7271bd12867409e98747c57ee1e2b26d61e5eaa4e561620f765b7e7d301629e",
+   "byteSize": 69,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة بطاقة مؤشر في مركز التحليلات: «ساعة»"
+  },
+  {
+   "id": "pl-admin-kpi-escrow",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0fd232cf6659c77638c80265aa6cd11a581e94bfff993aa831b0e3d80715a9f6",
+   "byteSize": 86,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة بطاقة مؤشر في مركز التحليلات: «ضمان»"
+  },
+  {
+   "id": "pl-admin-kpi-market",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "10688a0ec9c774ed569afe8af8d232eccae83cbd991c2d9a2afdd3001379593d",
+   "byteSize": 130,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة بطاقة مؤشر في مركز التحليلات: «سوق»"
+  },
+  {
+   "id": "pl-admin-kpi-person",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "94d95c89adbf499461dd9a897c52b60be35c0aa603acc84f9253b848e5c0804f",
+   "byteSize": 67,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة بطاقة مؤشر في مركز التحليلات: «مستخدم»"
+  },
+  {
+   "id": "pl-admin-kpi-star",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9fa7a309732a5a12585ab201e86daa6be822662e079076d08ab5d46570066623",
+   "byteSize": 114,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة بطاقة مؤشر في مركز التحليلات: «نجمة»"
+  },
+  {
+   "id": "pl-admin-kpi-wallet",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e4b6a2322f7f3dc2db66649e3d1bb8263e4b9318a74df2350d16c58c5b4bde72",
+   "byteSize": 137,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة بطاقة مؤشر في مركز التحليلات: «محفظة»"
+  },
+  {
+   "id": "pl-admin-kpi-warn",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "f80e4a727a50d1ac4842de7819c74118a74eff6595fa52bc68fb50d9fcb06a5d",
+   "byteSize": 180,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة بطاقة مؤشر في مركز التحليلات: «تحذير»"
+  },
+  {
    "id": "pl-admin-note",
    "viewBox": "0 0 24 24",
    "width": 24,
@@ -2937,6 +3072,36 @@
    "label": "درع مع علامة صح — تسجيل الدخول والتسجيل"
   },
   {
+   "id": "pl-auth-social-apple",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "aa9a825b95d2c92577b6c7770f27354b471421f89ad1676e81d70abee6bf454b",
+   "byteSize": 452,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "Apple (تسجيل الدخول) — تسجيل الدخول والتسجيل"
+  },
+  {
+   "id": "pl-auth-social-google",
+   "viewBox": "0 0 18 18",
+   "width": 18,
+   "height": 18,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "1949ad857f9c472e1da56db2100b9a04d4c56ba007f5c8ffd432f520c3bdec5f",
+   "byteSize": 569,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "Google (تسجيل الدخول) — تسجيل الدخول والتسجيل"
+  },
+  {
    "id": "pl-client-alert-circle",
    "viewBox": "0 0 24 24",
    "width": 24,
@@ -3237,6 +3402,51 @@
    "label": "ساعة — لوحة العميل"
   },
   {
+   "id": "pl-client-decision-approved",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "bdcbc293448edd49daa50b75a2419df345de639f595390b0b2de1f96be65121a",
+   "byteSize": 27,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سجل طلبات الملف — قرار إداري: مقبول"
+  },
+  {
+   "id": "pl-client-decision-pending",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ac88c4f0f75d9c1310b985105fbdc53416b4a307e6e11f3600e544177e1a449d",
+   "byteSize": 26,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سجل طلبات الملف — قرار إداري: قيد المراجعة"
+  },
+  {
+   "id": "pl-client-decision-rejected",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "bf2a2a1996507a48e0c2aae09c837bd9cec5a75b0e59f36426a40d4087297971",
+   "byteSize": 32,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سجل طلبات الملف — قرار إداري: مرفوض"
+  },
+  {
    "id": "pl-client-dollar",
    "viewBox": "0 0 24 24",
    "width": 24,
@@ -3477,6 +3687,81 @@
    "label": "ميكروفون — لوحة العميل"
   },
   {
+   "id": "pl-client-modif-done",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "طلبات التعديل — صف طلب تعديل: منجز"
+  },
+  {
+   "id": "pl-client-modif-edit",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "554ed5ac152becde424dcdfec3fcee83c5fcebe9417e57ac986a90213b7e7ba4",
+   "byteSize": 127,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "طلبات التعديل — صف طلب تعديل: قيد التنفيذ"
+  },
+  {
+   "id": "pl-client-modif-stat-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "طلبات التعديل — بطاقة إحصاء: منجز"
+  },
+  {
+   "id": "pl-client-modif-stat-contract",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "14dfdb7c4a19e14f6a391697c0763e413bdf6ac888e6f919a26fa1d45d124287",
+   "byteSize": 71,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "طلبات التعديل — بطاقة إحصاء: عقد"
+  },
+  {
+   "id": "pl-client-modif-stat-edit",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "554ed5ac152becde424dcdfec3fcee83c5fcebe9417e57ac986a90213b7e7ba4",
+   "byteSize": 127,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "طلبات التعديل — بطاقة إحصاء: تعديل"
+  },
+  {
    "id": "pl-client-paperclip",
    "viewBox": "0 0 24 24",
    "width": 24,
@@ -3685,6 +3970,51 @@
     "src/app/core/identity/identity-inline-icons.ts"
    ],
    "label": "إنجاز مهمة — لوحة العميل"
+  },
+  {
+   "id": "pl-client-ticket-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة تذكرة دعم: نوع «تم»"
+  },
+  {
+   "id": "pl-client-ticket-doc",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4af228f707cb860cc988b6e2d488c7890ab1099eb7a2b93bfe19901f4e400a7d",
+   "byteSize": 105,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة تذكرة دعم: نوع «مستند»"
+  },
+  {
+   "id": "pl-client-ticket-list",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "717196374b07ccb0ecb3e482147dc4b1232dfceba91b95cd0a898da729aa03a0",
+   "byteSize": 230,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة تذكرة دعم: نوع «قائمة»"
   },
   {
    "id": "pl-client-trend-up",
@@ -6882,6 +7212,51 @@
    "label": "نسخ — لوحة مقدّم الخدمة"
   },
   {
+   "id": "pl-provider-decision-approved",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "bdcbc293448edd49daa50b75a2419df345de639f595390b0b2de1f96be65121a",
+   "byteSize": 27,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سجل طلبات الملف — قرار إداري: مقبول"
+  },
+  {
+   "id": "pl-provider-decision-pending",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ac88c4f0f75d9c1310b985105fbdc53416b4a307e6e11f3600e544177e1a449d",
+   "byteSize": 26,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سجل طلبات الملف — قرار إداري: قيد المراجعة"
+  },
+  {
+   "id": "pl-provider-decision-rejected",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "bf2a2a1996507a48e0c2aae09c837bd9cec5a75b0e59f36426a40d4087297971",
+   "byteSize": 32,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سجل طلبات الملف — قرار إداري: مرفوض"
+  },
+  {
    "id": "pl-provider-dollar",
    "viewBox": "0 0 24 24",
    "width": 24,
@@ -7377,6 +7752,96 @@
    "label": "إنجاز مهمة — لوحة مقدّم الخدمة"
   },
   {
+   "id": "pl-provider-ticket-ai-review",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "59e5d76e00c9534a585817762ba002099e070246a93a160611f21f1ebf7c9847",
+   "byteSize": 79,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة تذكرة دعم: نوع «مراجعة»"
+  },
+  {
+   "id": "pl-provider-ticket-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة تذكرة دعم: نوع «تم»"
+  },
+  {
+   "id": "pl-provider-ticket-doc",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4af228f707cb860cc988b6e2d488c7890ab1099eb7a2b93bfe19901f4e400a7d",
+   "byteSize": 105,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة تذكرة دعم: نوع «مستند»"
+  },
+  {
+   "id": "pl-provider-ticket-escrow",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c5772ef516ea1904ab6416d95299136002d1cb399c001d40989aea688f2a1fa5",
+   "byteSize": 139,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة تذكرة دعم: نوع «ضمان»"
+  },
+  {
+   "id": "pl-provider-ticket-list",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "717196374b07ccb0ecb3e482147dc4b1232dfceba91b95cd0a898da729aa03a0",
+   "byteSize": 230,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة تذكرة دعم: نوع «قائمة»"
+  },
+  {
+   "id": "pl-provider-ticket-wallet",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e4b6a2322f7f3dc2db66649e3d1bb8263e4b9318a74df2350d16c58c5b4bde72",
+   "byteSize": 137,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة تذكرة دعم: نوع «محفظة»"
+  },
+  {
    "id": "pl-provider-trash",
    "viewBox": "0 0 24 24",
    "width": 24,
@@ -7810,6 +8275,36 @@
     "src/app/core/identity/identity-inline-icons.ts"
    ],
    "label": "شاشة — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-navbar-menu",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "720c5dc140e58aa1fa274d6da8045ff24bf9321b1aff85139906b5d8484fbe56",
+   "byteSize": 112,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "زر قائمة الجوال في الشريط العلوي: حالة «مغلقة» (ثلاثة خطوط)"
+  },
+  {
+   "id": "pl-shared-navbar-menu-close",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a5864b28fcde265184a7abd1c475d46f8ed15d8c5ae74920f8509b59b88ddbfd",
+   "byteSize": 74,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "زر قائمة الجوال في الشريط العلوي: حالة «مفتوحة» (إغلاق)"
   },
   {
    "id": "pl-shared-notebook",
