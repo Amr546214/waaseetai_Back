@@ -97,11 +97,12 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
   const commissionLogs: any[] = [];
   const notificationCreates: any[] = [];
   const completionEmails: any[] = [];
+  // The engine inserts with createMany + skipDuplicates (INSERT ... ON CONFLICT DO NOTHING): the spy keeps its historical name; count 1 = inserted.
   const commissionLogCreateSpy = t.mock.fn(async (args: any) => {
     if (opts.commissionCreateImpl) return opts.commissionCreateImpl(args);
-    const row = { id: `commission-${commissionLogs.length + 1}`, ...args.data };
+    const row = { ...args.data[0] };
     commissionLogs.push(row);
-    return row;
+    return { count: 1 };
   });
 
   const tx = {
@@ -140,7 +141,7 @@ function createReviewDeliveryMockPrisma(t: TestContext, opts: {
     $queryRaw: async () => { order.push('lock'); return [{ id: 'contract-1' }]; },
     dispute: { findFirst: disputeFindFirstSpy, count: async () => { order.push('count'); return opts.freezeActive ? 1 : 0; } },
     referral: { findMany: referralFindManySpy, updateMany: async () => ({ count: 1 }) },
-    commissionLog: { create: commissionLogCreateSpy }
+    commissionLog: { createMany: commissionLogCreateSpy }
   };
 
   const prismaMock = {
@@ -738,25 +739,21 @@ test('commission engine (flag enabled, self-referral defense-in-depth): an affil
   assert.equal(commissionLogCreateSpy.mock.callCount(), 0);
 });
 
-test('commission engine (flag enabled, duplicate/retried release event): a P2002 on the exactly-once dedup constraint is swallowed as a safe no-op, never a fatal error', async (t) => {
+test('commission engine (flag enabled, duplicate/retried release event): ON CONFLICT DO NOTHING (count 0) is a safe no-op that adds nothing and does not fail the approval', async (t) => {
   withCommissionEngineFlag(t, 'true');
-  const { Prisma } = await import('@prisma/client');
-  const duplicateError = new Prisma.PrismaClientKnownRequestError(
-    'duplicate key value violates unique constraint "commission_logs_affiliateId_referralId_type_sourceStageId_key"',
-    { code: 'P2002', clientVersion: 'test', meta: { target: ['commission_logs_affiliateId_referralId_type_sourceStageId_key'] } }
-  );
-  const { projectProgressService, commissionLogCreateSpy } = await loadProjectProgressServiceWithFixture(t, {
+  const { projectProgressService, commissionLogCreateSpy, getCommissionLogs } = await loadProjectProgressServiceWithFixture(t, {
     referrals: [referralFixture()],
-    commissionCreateImpl: () => { throw duplicateError; }
+    commissionCreateImpl: () => ({ count: 0 })
   });
 
   // Must resolve successfully (the duplicate is a safe no-op), not reject.
   await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
 
   assert.equal(commissionLogCreateSpy.mock.callCount(), 1);
+  assert.equal(getCommissionLogs().length, 0);
 });
 
-test('commission engine (flag enabled, an UNRELATED P2002): propagates unmodified, never silently swallowed as "already processed"', async (t) => {
+test('commission engine (flag enabled, any database error on the insert): propagates unmodified, never silently swallowed as "already processed"', async (t) => {
   withCommissionEngineFlag(t, 'true');
   const { Prisma } = await import('@prisma/client');
   const unrelatedError = new Prisma.PrismaClientKnownRequestError(

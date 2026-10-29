@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Prisma, CommissionType, CommissionStatus, DisputeStatus } from '@prisma/client';
 import type { MarketerCommissionNotice } from './marketer-notifications.service';
 import { resolveAffiliateCommissionPercentage } from '../config/affiliate-levels.config';
@@ -158,9 +159,15 @@ export async function createCommissionsForStageReleaseEvent(
 
     const { percentage, amount, level } = calculateAffiliateCommission(referral.affiliate.level, releasedAmount);
 
-    try {
-      const row = await tx.commissionLog.create({
-        data: {
+    // Exactly-once WITHOUT aborting the caller's transaction: a duplicate insert that raises a unique violation inside a PostgreSQL transaction puts the whole
+    // transaction into the aborted state (25P02) even when the error is caught, so the rest of the stage approval would fail. INSERT ... ON CONFLICT DO NOTHING
+    // (createMany + skipDuplicates) on the same unique index reports "already processed" as count 0 and leaves the transaction healthy.
+    {
+      const commissionId = randomUUID();
+      const { count } = await tx.commissionLog.createMany({
+        skipDuplicates: true,
+        data: [{
+          id: commissionId,
           affiliateId: referral.affiliate.id,
           referralId: referral.id,
           referredUserId: referral.referredUserId,
@@ -180,14 +187,13 @@ export async function createCommissionsForStageReleaseEvent(
           baseAmount: releasedAmount,
           appliedPercentage: percentage,
           level
-        }
+        }]
       });
-      created.push({ affiliateUserId: referral.affiliate.userId, commissionId: row.id, amount: row.amount, currency: row.currency });
+      // 0 = this (affiliate, referral, type, stage) was already processed: a replay or a concurrent twin. Nothing to add, nothing to notify, and the transaction is intact.
+      if (count === 0) continue;
+      created.push({ affiliateUserId: referral.affiliate.userId, commissionId: commissionId, amount, currency: 'USD' });
       // The first real due commission makes the referral SUCCESSFUL (owner definition): forward-only, in the same transaction (the counters derive from the commissions too).
       await tx.referral.updateMany({ where: { id: referral.id, status: { not: 'CONVERTED' } }, data: { status: 'CONVERTED' } });
-    } catch (error) {
-      if (isDuplicateCommissionConflict(error)) continue;
-      throw error;
     }
   }
   return created;
