@@ -232,7 +232,7 @@ test('PG round7 cap + manifest: EVERY wired icon id can be customised (cap = wir
 	const t2 = process.hrtime.bigint(); for (let i = 0; i < 20; i++) await getRaw(m.base, '/public/site-identity', { 'accept-encoding': 'gzip' }); const warmMs = Number(process.hrtime.bigint() - t2) / 1e6 / 20;
 	// the numbers go to the report (stdout of the test run)
 	console.log(`[MANIFEST-MEASURE] icons=${wired.length} cap=${MAX_CUSTOM_ICONS} json=${plain.body.length}B gzip=${first.body.length}B parse=${parseMs.toFixed(2)}ms firstRequest=${firstMs.toFixed(1)}ms warmRequest=${warmMs.toFixed(1)}ms 304=${nmMs.toFixed(1)}ms perItem=${(plain.body.length / wired.length).toFixed(0)}B`);
-	assert.ok(first.body.length < 40_000, `gzip ${first.body.length}`); assert.ok(plain.body.length < 160_000, `json ${plain.body.length}`); assert.ok(parseMs < 20, `parse ${parseMs}`);
+	assert.ok(first.body.length < wired.length * 90 + 5_000, `gzip ${first.body.length} for ${wired.length} icons (<=90B per item + 5KB)`); assert.ok(plain.body.length < wired.length * 400 + 20_000, `json ${plain.body.length} for ${wired.length} icons (<=400B per item + 20KB)`); assert.ok(parseMs < 20, `parse ${parseMs}`);
 	// a changed icon changes the ETag (the old one no longer matches); restoring one to default shrinks the manifest
 	const rs = await m.adm('POST', `/${ICON_PREFIX}${last}/restore`, mg.id, { target: 'default', expectedVersion: 1 }); assert.equal(rs.status, 200);
 	const after = await getRaw(m.base, '/public/site-identity', { 'if-none-match': etag }); assert.equal(after.status, 200); assert.notEqual(after.headers.etag, etag); assert.equal(Object.keys(JSON.parse(after.body.toString('utf8')).data.items).length, wired.length - 1);

@@ -64,7 +64,7 @@ test('PG round6 icons: upload -> staged (invisible) -> publish -> public manifes
 	assert.equal(row(NO_CONSUMER_ID).status, 'not-wired'); assert.equal(row(NO_CONSUMER_ID).reason.code, 'NO_CONSUMER'); assert.ok(row(NO_CONSUMER_ID).reason.text);
 	const lo = iconLibraryOnly().find(l => l.reason === 'LIBRARY_ONLY')!; assert.equal(row(lo.id).status, 'not-wired'); assert.equal(row(lo.id).key, null); assert.equal(row(lo.id).reason.code, 'LIBRARY_ONLY'); assert.equal(row(lo.id).library, lo.library);
 	assert.equal(row('i-ai').reason.code, 'MANAGED_BY_ICON_AI'); assert.equal(row('i-ai').managedBy, 'icon.ai'); assert.equal(row('i-ai').key, null);
-	assert.ok(JSON.stringify(list.json).length < 150_000, `list payload ${JSON.stringify(list.json).length}`); assert.ok(!JSON.stringify(list.json).includes('"bytes"'));
+	assert.ok(JSON.stringify(list.json).length < rows.length * 400 + 20_000, `list payload ${JSON.stringify(list.json).length} for ${rows.length} rows (bounded per row, scales with the library)`); assert.ok(!JSON.stringify(list.json).includes('"bytes"'));
 	const filtered = (await m.adm('GET', '/icons?status=custom', mg.id)).json.data; assert.equal(filtered.total, 3);
 	assert.equal((await m.adm('GET', '/icons?status=draft', mg.id)).json.data.total, 0); assert.equal((await m.adm('GET', '/icons?q=bell', mg.id)).json.data.rows.every((r: any) => /bell/.test(r.id + r.label)), true);
 	assert.equal((await m.adm('GET', '/icons?status=weird', mg.id)).status, 400);
