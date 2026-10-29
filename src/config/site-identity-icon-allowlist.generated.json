@@ -2,8 +2,8 @@
  "generatedBy": "scripts/site-identity-icon-allowlist.cjs",
  "note": "GENERATED - do not edit by hand. Regenerate with: node scripts/site-identity-icon-allowlist.cjs <FE-repo> --write",
  "counts": {
-  "symbols": 789,
-  "wired": 770,
+  "symbols": 786,
+  "wired": 767,
   "noConsumer": 19,
   "excluded": 15,
   "libraryOnly": 84
@@ -7752,21 +7752,6 @@
    "label": "إنجاز مهمة — لوحة مقدّم الخدمة"
   },
   {
-   "id": "pl-provider-ticket-ai-review",
-   "viewBox": "0 0 24 24",
-   "width": 24,
-   "height": 24,
-   "defs": 1,
-   "variants": 1,
-   "reason": null,
-   "sha256": "59e5d76e00c9534a585817762ba002099e070246a93a160611f21f1ebf7c9847",
-   "byteSize": 79,
-   "files": [
-    "src/app/core/identity/identity-inline-icons.ts"
-   ],
-   "label": "أيقونة تذكرة دعم: نوع «مراجعة»"
-  },
-  {
    "id": "pl-provider-ticket-check",
    "viewBox": "0 0 24 24",
    "width": 24,
@@ -7797,21 +7782,6 @@
    "label": "أيقونة تذكرة دعم: نوع «مستند»"
   },
   {
-   "id": "pl-provider-ticket-escrow",
-   "viewBox": "0 0 24 24",
-   "width": 24,
-   "height": 24,
-   "defs": 1,
-   "variants": 1,
-   "reason": null,
-   "sha256": "c5772ef516ea1904ab6416d95299136002d1cb399c001d40989aea688f2a1fa5",
-   "byteSize": 139,
-   "files": [
-    "src/app/core/identity/identity-inline-icons.ts"
-   ],
-   "label": "أيقونة تذكرة دعم: نوع «ضمان»"
-  },
-  {
    "id": "pl-provider-ticket-list",
    "viewBox": "0 0 24 24",
    "width": 24,
@@ -7825,21 +7795,6 @@
     "src/app/core/identity/identity-inline-icons.ts"
    ],
    "label": "أيقونة تذكرة دعم: نوع «قائمة»"
-  },
-  {
-   "id": "pl-provider-ticket-wallet",
-   "viewBox": "0 0 24 24",
-   "width": 24,
-   "height": 24,
-   "defs": 1,
-   "variants": 1,
-   "reason": null,
-   "sha256": "e4b6a2322f7f3dc2db66649e3d1bb8263e4b9318a74df2350d16c58c5b4bde72",
-   "byteSize": 137,
-   "files": [
-    "src/app/core/identity/identity-inline-icons.ts"
-   ],
-   "label": "أيقونة تذكرة دعم: نوع «محفظة»"
   },
   {
    "id": "pl-provider-trash",
