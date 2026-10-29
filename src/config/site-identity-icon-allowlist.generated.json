@@ -2,9 +2,9 @@
  "generatedBy": "scripts/site-identity-icon-allowlist.cjs",
  "note": "GENERATED - do not edit by hand. Regenerate with: node scripts/site-identity-icon-allowlist.cjs <FE-repo> --write",
  "counts": {
-  "symbols": 341,
-  "wired": 296,
-  "noConsumer": 45,
+  "symbols": 755,
+  "wired": 737,
+  "noConsumer": 18,
   "excluded": 15,
   "libraryOnly": 84
  },
@@ -380,7 +380,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "39b1392c4e2c6e2666466a16693e066475382c21bd9efe8f542bdf0365f68bd7",
    "byteSize": 157,
    "files": [
@@ -394,7 +394,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "59882bd8da5aba94fdfb5a473ef6bb0cabc0ddcc03a801ea47fc9ae51d3060be",
    "byteSize": 186,
    "files": [
@@ -464,7 +464,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "4af228f707cb860cc988b6e2d488c7890ab1099eb7a2b93bfe19901f4e400a7d",
    "byteSize": 105,
    "files": [
@@ -492,7 +492,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "0fd232cf6659c77638c80265aa6cd11a581e94bfff993aa831b0e3d80715a9f6",
    "byteSize": 86,
    "files": [
@@ -506,7 +506,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "b7f27feda71ca431e61ce4b9a955d0b7372adffec182e9ed6991dacc65d5abe7",
    "byteSize": 179,
    "files": [
@@ -520,7 +520,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
    "byteSize": 55,
    "files": [
@@ -2082,13 +2082,6223 @@
    ]
   },
   {
+   "id": "pl-admin-alert-circle",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8cfa414526d8ee88050767138a2df8fe8615450ae6786c4b54b3519294211d3c",
+   "byteSize": 112,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تنبيه دائري — لوحة الإدارة"
+  },
+  {
+   "id": "pl-admin-ban",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "271fb3e1c248230538fa9d3bcff9aa4f9b073bc536237f4cac1f7d18328ae3c0",
+   "byteSize": 77,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "حظر — لوحة الإدارة"
+  },
+  {
+   "id": "pl-admin-bar-chart",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7db3b22556d2851ac1d079a98059f9b7e5ef1bd811aa7ff06b44ad373f3c18bf",
+   "byteSize": 37,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أعمدة بيانية — لوحة الإدارة"
+  },
+  {
+   "id": "pl-admin-check-circle",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ccfeec7f05e5f4d1e02e5d8d65087e400352a61098217d03f644dd105c9db121",
+   "byteSize": 104,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "علامة نجاح دائرية — لوحة الإدارة"
+  },
+  {
+   "id": "pl-admin-check-square",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9bf88e10984f136ef3b561398508c9af785245f0b6992a87766287667fe62ac7",
+   "byteSize": 95,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مربع مع علامة — لوحة الإدارة"
+  },
+  {
+   "id": "pl-admin-chevron-right",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "fb0a14619b0a54a7cfa6df32f0af087c67cfa407bd7402300c50407a1ecd50f3",
+   "byteSize": 35,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لليمين — لوحة الإدارة"
+  },
+  {
+   "id": "pl-admin-clock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e7271bd12867409e98747c57ee1e2b26d61e5eaa4e561620f765b7e7d301629e",
+   "byteSize": 69,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ساعة — لوحة الإدارة"
+  },
+  {
+   "id": "pl-admin-download-tray",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "fec7e6336ec90af6566cab8c43c8f65a59bb18ca6f3f2224263ccc88da4b0854",
+   "byteSize": 74,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تنزيل في صندوق — لوحة الإدارة"
+  },
+  {
+   "id": "pl-admin-note",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a237bb4d36e2382aa21c905725ea024f2db2f29bccbe61f142022c3e87ce901a",
+   "byteSize": 75,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ملاحظة — لوحة الإدارة"
+  },
+  {
+   "id": "pl-admin-shield-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "59e5d76e00c9534a585817762ba002099e070246a93a160611f21f1ebf7c9847",
+   "byteSize": 79,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "درع مع علامة صح — لوحة الإدارة"
+  },
+  {
+   "id": "pl-admin-slider-toggles",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "d2a4fe7328698b2aff298b199b3f18980b84730f26eda8bb12e88d341bd85d5d",
+   "byteSize": 100,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مفاتيح ضبط — لوحة الإدارة"
+  },
+  {
+   "id": "pl-admin-spinner-arc",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "99781e1f44a27e3976a4a20771a60aba9b9135efd199e0dc982c3b5dd7927e02",
+   "byteSize": 38,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تحميل (قوس) — لوحة الإدارة"
+  },
+  {
+   "id": "pl-admin-ss-currency-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "bdcbc293448edd49daa50b75a2419df345de639f595390b0b2de1f96be65121a",
+   "byteSize": 27,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إدارة النظام: عنوان بطاقة «العملة الأساسية»"
+  },
+  {
+   "id": "pl-admin-ss-section-finance",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cfa4e4f9e2dbf915ba3699769e0d1ab5c58d60feca54f92c980dbab40ff1ec81",
+   "byteSize": 129,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إدارة النظام: عنوان بطاقة «الإعدادات المالية»"
+  },
+  {
+   "id": "pl-admin-ss-section-general",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "20ab94988cc115aa9f3a23130610496caee99823a3b2020c342218ed8b288728",
+   "byteSize": 660,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إدارة النظام: عنوان بطاقة «الإعدادات العامة»"
+  },
+  {
+   "id": "pl-admin-ss-section-legal",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
+   "byteSize": 55,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إدارة النظام: عنوان بطاقة «الشروط والخصوصية»"
+  },
+  {
+   "id": "pl-admin-ss-section-regional",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "58b423da6d42583cc2b56de249fcf66133ddb8d45d88c28ed3769a11dfbfe6c2",
+   "byteSize": 150,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إدارة النظام: عنوان بطاقة «الإعدادات الإقليمية»"
+  },
+  {
+   "id": "pl-admin-ss-section-security",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
+   "byteSize": 55,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إدارة النظام: عنوان بطاقة «الأمان والمصادقة»"
+  },
+  {
+   "id": "pl-admin-ss-tab-finance",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cfa4e4f9e2dbf915ba3699769e0d1ab5c58d60feca54f92c980dbab40ff1ec81",
+   "byteSize": 129,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إدارة النظام: تبويب «المالية»"
+  },
+  {
+   "id": "pl-admin-ss-tab-general",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "20ab94988cc115aa9f3a23130610496caee99823a3b2020c342218ed8b288728",
+   "byteSize": 660,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إدارة النظام: تبويب «عام»"
+  },
+  {
+   "id": "pl-admin-ss-tab-health",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "bdcbc293448edd49daa50b75a2419df345de639f595390b0b2de1f96be65121a",
+   "byteSize": 27,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إدارة النظام: تبويب «صحة النظام»"
+  },
+  {
+   "id": "pl-admin-ss-tab-regional",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "58b423da6d42583cc2b56de249fcf66133ddb8d45d88c28ed3769a11dfbfe6c2",
+   "byteSize": 150,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إدارة النظام: تبويب «الإقليمية»"
+  },
+  {
+   "id": "pl-admin-ss-tab-security",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "026d8e9c01578649451c03227966f53ea673a1ea5e4bdf897bbe51230e7c32de",
+   "byteSize": 55,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إدارة النظام: تبويب «الأمان»"
+  },
+  {
+   "id": "pl-admin-trash",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "09b91b7712049146c4e464d38fea081b57d38e0c98a78e07f61e6d374c007dd1",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سلة محذوفات — لوحة الإدارة"
+  },
+  {
+   "id": "pl-admin-wallet",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "825e30e24c5d73b938a4cdd77f95d0fcb56bf78e1be007d4be26238ab0467580",
+   "byteSize": 82,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "محفظة — لوحة الإدارة"
+  },
+  {
+   "id": "pl-assistant-alert-circle",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8cfa414526d8ee88050767138a2df8fe8615450ae6786c4b54b3519294211d3c",
+   "byteSize": 112,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تنبيه دائري — المساعد"
+  },
+  {
+   "id": "pl-assistant-arrow-up",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9a449c554dc885c92005226b1ead2d101a2f29190dcc1e1f55a4a2b3028628a8",
+   "byteSize": 33,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لأعلى — المساعد"
+  },
+  {
+   "id": "pl-assistant-arrows-up-down",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "bb936e71309601f7e7f08bb3792a2107f0b49dd21acc0d4af83344478ab50112",
+   "byteSize": 54,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ترتيب تصاعدي/تنازلي — المساعد"
+  },
+  {
+   "id": "pl-assistant-chat-bubble",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0d7ad0e0de419a74a88a0469ff4a19728763b9f0cffbcbbbfd10f851d68c6105",
+   "byteSize": 42,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "فقاعة محادثة — المساعد"
+  },
+  {
+   "id": "pl-assistant-chevron-down",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "af90879b3e75ecbbd268978a759bbeddb0fb1a1fae46a2958071b860efc17c5f",
+   "byteSize": 35,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لأسفل — المساعد"
+  },
+  {
+   "id": "pl-assistant-clock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "fc308b4d87520453c238a7bebfc1580c2ba8ec4a40afae86ca0eb764f73065e6",
+   "byteSize": 69,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ساعة — المساعد"
+  },
+  {
+   "id": "pl-assistant-compass",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "14261b5963053270af2a754a75100b37127d7783b12554600c3e2b93d0c5e62e",
+   "byteSize": 106,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "بوصلة — المساعد"
+  },
+  {
+   "id": "pl-assistant-download-tray",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "fec7e6336ec90af6566cab8c43c8f65a59bb18ca6f3f2224263ccc88da4b0854",
+   "byteSize": 74,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تنزيل في صندوق — المساعد"
+  },
+  {
+   "id": "pl-assistant-edit-square",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "6ac56816dd68b7d05ef331489278405d03871ba7930e61736dbea1c5dccbafb4",
+   "byteSize": 133,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تحرير في مربع — المساعد"
+  },
+  {
+   "id": "pl-assistant-gear",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8c5a9615da5337a5dd0c7ff8b43ac374a284f090326348b2e275ab84cf427ab5",
+   "byteSize": 777,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ترس — المساعد"
+  },
+  {
+   "id": "pl-assistant-globe",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "da65456e5caf020a02cc8a8cb1b9dc4cc4f4632d1fbf891046e463e82e865d7b",
+   "byteSize": 99,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "كرة أرضية — المساعد"
+  },
+  {
+   "id": "pl-assistant-map",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "d13d9b8e10411990bdcffa1807282ff8da7e9e0e56e257a6dfbd96bca230f68b",
+   "byteSize": 137,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "خريطة — المساعد"
+  },
+  {
+   "id": "pl-assistant-mic",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2a372a0c58862a59f14cd4c9c9080994abf1be60534c404b00023d3563ecb6de",
+   "byteSize": 100,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ميكروفون — المساعد"
+  },
+  {
+   "id": "pl-assistant-more-dots",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad87ca19965db0ae236fc91727b1b22b5c9c9a58ad83774eec42ad3dad8f3d62",
+   "byteSize": 92,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "المزيد (ثلاث نقاط) — المساعد"
+  },
+  {
+   "id": "pl-assistant-paperclip",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "1750ecd4d0452bdccabb49c854bf5448af462099ee4076cece7c69b5a6438f1a",
+   "byteSize": 123,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مشبك مرفق — المساعد"
+  },
+  {
+   "id": "pl-assistant-pencil",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "bdc8135a52b8fa6360306c9907ff470344bc5329ad6ee674c72317ad21db63bb",
+   "byteSize": 140,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "قلم — المساعد"
+  },
+  {
+   "id": "pl-assistant-pin",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "06499d582cb3d3a25b3b1782a1417b1e55bc56e30737bf3163ad4701c69b91b1",
+   "byteSize": 162,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "دبوس تثبيت — المساعد"
+  },
+  {
+   "id": "pl-assistant-plus",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "95a189db6ce7c7bb9d4c19ef033872d67b6fea0d78a8fae99f4773111b7cafed",
+   "byteSize": 28,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إضافة — المساعد"
+  },
+  {
+   "id": "pl-assistant-printer",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "1049514b11411237e25600c412fad5f348991ef8039a34b828580a13a33284dc",
+   "byteSize": 166,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "طابعة — المساعد"
+  },
+  {
+   "id": "pl-assistant-refresh",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "6835067b8fb51afa0be4d4d95a9428a5c50809790278f0bee0174cefe0c1eacb",
+   "byteSize": 81,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إعادة تحميل — المساعد"
+  },
+  {
+   "id": "pl-assistant-search",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "18f25e473c2ff389714abac1f9a9770e8fbccc9581b92d443a3c83ec08df5994",
+   "byteSize": 57,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "بحث — المساعد"
+  },
+  {
+   "id": "pl-assistant-sidebar-collapse",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "fa5fa0d8c05f3b1afacfe9f402d8f1a6f6efbc8302f62b8197eaa335a478794e",
+   "byteSize": 83,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "طي الشريط الجانبي — المساعد"
+  },
+  {
+   "id": "pl-assistant-sliders",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c39690b789b293f3aa43f54203dfe5c7bd1e3f8a8d7c4cc6f554fbfdb550ad42",
+   "byteSize": 338,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ضبط وتصفية — المساعد"
+  },
+  {
+   "id": "pl-assistant-smile",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ac11d337c5f410a04ef54441f27dd9d504b0309f280210a7db97f6c577f7fe8b",
+   "byteSize": 145,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "وجه مبتسم — المساعد"
+  },
+  {
+   "id": "pl-assistant-square",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "5e0ffb7f919c40fa55a15f1ea0b4f5148b8a35920d10e48856b650e41ec7d7b0",
+   "byteSize": 49,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مربع — المساعد"
+  },
+  {
+   "id": "pl-assistant-sun",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "dad5553d1733cf96f00e03a8f19a1a90b9e2f23ab1b5b9fff921ddc1247b035d",
+   "byteSize": 159,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "شمس — المساعد"
+  },
+  {
+   "id": "pl-assistant-trash",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e8e22e6c3278015bb563a71cc9bb42717459c380b6fd05fa4983db7c7c51c388",
+   "byteSize": 106,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سلة محذوفات — المساعد"
+  },
+  {
+   "id": "pl-assistant-upload-tray",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8ff4efa1ba822ed68c729c15a6057ef08f5d40e4d7a61f0078d449756cc4fa53",
+   "byteSize": 75,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "رفع من صندوق — المساعد"
+  },
+  {
+   "id": "pl-assistant-volume",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c11ad46dd4073e8733e54e6e30ff4af27ad47252aec176bda834745fb121071e",
+   "byteSize": 87,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "صوت — المساعد"
+  },
+  {
+   "id": "pl-assistant-waveform",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "5dce8829f81031c88312d8a678044cdbb7933c9bac0faabaade2a5ac668cc3af",
+   "byteSize": 57,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "موجة صوت — المساعد"
+  },
+  {
+   "id": "pl-assistant-x",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4965d27500a969af87dff9f118e6618d647dfde1507012214cb841cf3a56b2c7",
+   "byteSize": 32,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إغلاق — المساعد"
+  },
+  {
+   "id": "pl-auth-shield-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "59e5d76e00c9534a585817762ba002099e070246a93a160611f21f1ebf7c9847",
+   "byteSize": 79,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "درع مع علامة صح — تسجيل الدخول والتسجيل"
+  },
+  {
+   "id": "pl-client-alert-circle",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8cfa414526d8ee88050767138a2df8fe8615450ae6786c4b54b3519294211d3c",
+   "byteSize": 112,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تنبيه دائري — لوحة العميل"
+  },
+  {
+   "id": "pl-client-aperture",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "aa36733f985ce992a48780a2c2c8fb3fd41c9b5ef98b99ee8fa9dae4bc5fd9ec",
+   "byteSize": 145,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عدسة — لوحة العميل"
+  },
+  {
+   "id": "pl-client-arrow-left",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "94637c904b3d26f1adb9cc0bf1a1813c2455e37a61bb9ebce47b6a23377ea6f8",
+   "byteSize": 74,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لليسار — لوحة العميل"
+  },
+  {
+   "id": "pl-client-arrow-up",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "d6b368566a3aa82127a8efb0265c3d711cb190537a87b7fb269163f99c7f1c44",
+   "byteSize": 33,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لأعلى — لوحة العميل"
+  },
+  {
+   "id": "pl-client-bar-chart",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "155fd66991479bf90701b18c680d355e21df0ad5dc6b82336230e37f5967a6cb",
+   "byteSize": 44,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أعمدة بيانية — لوحة العميل"
+  },
+  {
+   "id": "pl-client-bolt",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "77c20a9fb87582782cc35aa907897eddabb645ad279452d01260aabfc18f3bad",
+   "byteSize": 43,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "برق — لوحة العميل"
+  },
+  {
+   "id": "pl-client-briefcase",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ac6bb2d5cc7067c2846fffb57b76bf5e45a4f23475038a2c11ba17c04bacccd1",
+   "byteSize": 101,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "حقيبة أعمال — لوحة العميل"
+  },
+  {
+   "id": "pl-client-building",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c64bda85b322dc4129d18ae46637d96247b162ac17d68dedb9ae5424682a6f24",
+   "byteSize": 49,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مبنى — لوحة العميل"
+  },
+  {
+   "id": "pl-client-calendar",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad31e1c4b71c063ef89289f0923acb16c0f5f55194de77dbe62524fecf416d8c",
+   "byteSize": 121,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تقويم — لوحة العميل"
+  },
+  {
+   "id": "pl-client-card",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a7c3c31a8443ff8b76491d60c4e89e3ae60b69eea60cae80ccb6e2fb695812e2",
+   "byteSize": 87,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "بطاقة — لوحة العميل"
+  },
+  {
+   "id": "pl-client-cart",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0a88e3085b1df745487b3bdfdce146e4a2a9e27456cad9e51f8530a06384d968",
+   "byteSize": 131,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سلة التسوق — لوحة العميل"
+  },
+  {
+   "id": "pl-client-chat-bubble",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "43aa54db9ecfe4ad3adbd034823694b5b5ae01670c011acc26696d355da05159",
+   "byteSize": 73,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "فقاعة محادثة — لوحة العميل"
+  },
+  {
+   "id": "pl-client-chat-text",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "6025de32761f54c67f181dd2b6890f82f18fcebef8cf763361de36e8c58c8641",
+   "byteSize": 58,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "رسالة نصية — لوحة العميل"
+  },
+  {
+   "id": "pl-client-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3c909be66400488570e36cd5ad312a1407623e6819494a2fa531ffb6d079e29f",
+   "byteSize": 27,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "علامة صح — لوحة العميل"
+  },
+  {
+   "id": "pl-client-check-circle",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "56af3ef7b89fd6c3f3f4d7c7705df7d2c46b47527cdf5da63735def002631301",
+   "byteSize": 57,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "علامة نجاح دائرية — لوحة العميل"
+  },
+  {
+   "id": "pl-client-check-square",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9bf88e10984f136ef3b561398508c9af785245f0b6992a87766287667fe62ac7",
+   "byteSize": 95,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مربع مع علامة — لوحة العميل"
+  },
+  {
+   "id": "pl-client-chevron-down",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "af90879b3e75ecbbd268978a759bbeddb0fb1a1fae46a2958071b860efc17c5f",
+   "byteSize": 35,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لأسفل — لوحة العميل"
+  },
+  {
+   "id": "pl-client-chevron-left",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a3d871c3769bc1dbb23a981ac9d2a8d36fc30c40a955c56ed5f0fe9a784b0755",
+   "byteSize": 46,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لليسار — لوحة العميل"
+  },
+  {
+   "id": "pl-client-chevron-right",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "314e23df65042b41ebc349fdc697a2a0b081d49c7278611b612c101715f5b4bd",
+   "byteSize": 71,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لليمين — لوحة العميل"
+  },
+  {
+   "id": "pl-client-clock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e7271bd12867409e98747c57ee1e2b26d61e5eaa4e561620f765b7e7d301629e",
+   "byteSize": 69,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ساعة — لوحة العميل"
+  },
+  {
+   "id": "pl-client-dollar",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "aa11f14527143dd89d73cb4cf66066141d88036de0bfb02f9347f88b94726387",
+   "byteSize": 69,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "دولار — لوحة العميل"
+  },
+  {
+   "id": "pl-client-dollar-circle",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "21c3a069cd9a1628a52143977246daa949aef493b7448b287b744bfa2c1e0a16",
+   "byteSize": 124,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "دولار دائري — لوحة العميل"
+  },
+  {
+   "id": "pl-client-dot-ring",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "20a33bce54f0142c731be0aadd143519325c766f8fbd2d80ef5d78a941ac2a85",
+   "byteSize": 33,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "نقطة — لوحة العميل"
+  },
+  {
+   "id": "pl-client-download",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "140d690d3ac4737657a1e4cffd3fde7a25cfe9139abcd403221d22ab21628c23",
+   "byteSize": 41,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تنزيل — لوحة العميل"
+  },
+  {
+   "id": "pl-client-file",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "f77e86624c367686e6a2d0ec29ac158a74b9ad50cdec407a747d8d2e70764806",
+   "byteSize": 91,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ملف — لوحة العميل"
+  },
+  {
+   "id": "pl-client-file-text",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "d7fdf552da1eacf6c9f7a343972a7169a840deefc78be20200d5c16967b71d74",
+   "byteSize": 214,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مستند نصي — لوحة العميل"
+  },
+  {
+   "id": "pl-client-gear",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "142598583fe4ada996c03c3c043763f0724d07642047c3d171465b68288262ad",
+   "byteSize": 665,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ترس — لوحة العميل"
+  },
+  {
+   "id": "pl-client-hexagons",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "14dfdb7c4a19e14f6a391697c0763e413bdf6ac888e6f919a26fa1d45d124287",
+   "byteSize": 71,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سداسيات — لوحة العميل"
+  },
+  {
+   "id": "pl-client-home",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "258904f014f2a7adfdd83489071d27003e20845a3aaf9d8f5d62bf0a49d64048",
+   "byteSize": 100,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "الرئيسية — لوحة العميل"
+  },
+  {
+   "id": "pl-client-id-card",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "61be02b053e385e8104b7e9ea66c06e530906e41e0ddd65ff93466978ec5d6bc",
+   "byteSize": 159,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "بطاقة هوية — لوحة العميل"
+  },
+  {
+   "id": "pl-client-inbox",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "5f88b53cca71912768761bf12300c5a01d0c5b9d3dda29977695e10258e4ab43",
+   "byteSize": 159,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "صندوق وارد — لوحة العميل"
+  },
+  {
+   "id": "pl-client-info-circle",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9922ee94eef10c99819ecfec773e14fb1661b075eb50224ed5adc9c2b11d98df",
+   "byteSize": 62,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "معلومة — لوحة العميل"
+  },
+  {
+   "id": "pl-client-lightbulb",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a5f2d6fe5424437d0faa4e024807743304bc0ef1f23bb56484d13fed6009e6f2",
+   "byteSize": 104,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مصباح — لوحة العميل"
+  },
+  {
+   "id": "pl-client-list-bullets",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ba4be9d48e9c91781f15faae6596cf10eb2fb9039a252dbaaf3d258a3ae44abb",
+   "byteSize": 61,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "قائمة نقطية — لوحة العميل"
+  },
+  {
+   "id": "pl-client-lock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "840b9a18887341b22b67b04b9953eb144add7c56d56399ad7b993cd71f6a5a0b",
+   "byteSize": 93,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "قفل — لوحة العميل"
+  },
+  {
+   "id": "pl-client-mic",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "f2ca7c83e5553f50451659364158ae9aeea17292b2d47ad0716898dfdb854a6d",
+   "byteSize": 179,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ميكروفون — لوحة العميل"
+  },
+  {
+   "id": "pl-client-paperclip",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ce7e323b5b0d5c3eaba48ce3228e5b658edf6c5b6f7e9ba242ea9276067aec3d",
+   "byteSize": 125,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مشبك مرفق — لوحة العميل"
+  },
+  {
+   "id": "pl-client-pause",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "54fa973d2faa0f8b93c9ff1b270a88f5aaf465be49cd3acb7cf2db01b2dc3db6",
+   "byteSize": 97,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إيقاف مؤقت — لوحة العميل"
+  },
+  {
+   "id": "pl-client-pencil",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0c0b6e08cc0a2e8ac63e8e3a43e0ca8932ffe148c9d41b9a9eee3d5dfbf46485",
+   "byteSize": 60,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "قلم — لوحة العميل"
+  },
+  {
+   "id": "pl-client-pencil-line",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8b0fd04bc67ab16144b5734fa674643e657cba191ade974152afbe4cccdde75f",
+   "byteSize": 75,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "قلم مع خط — لوحة العميل"
+  },
+  {
+   "id": "pl-client-phone",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "5aa47112cc8f699d849984dfb4147f1ac05b4d7f45b6d48ba10cd8f97ba96752",
+   "byteSize": 296,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "هاتف — لوحة العميل"
+  },
+  {
+   "id": "pl-client-play",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "27edc1a904b85ceb00d7ef0850b7bb0700bb5330417c7fe3b3ee9975baf8f010",
+   "byteSize": 38,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تشغيل — لوحة العميل"
+  },
+  {
+   "id": "pl-client-rating-star",
+   "viewBox": "0 0 100 100",
+   "width": 100,
+   "height": 100,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4b283b844c4122ee783b41f8389cff6e8ad48e6d689fccb98344e75f7593b01b",
+   "byteSize": 115,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "نجمة التقييم — لوحة العميل"
+  },
+  {
+   "id": "pl-client-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb50d868f82da55bfc66daaed98602640551183c8babce466a6211f22ad21160",
+   "byteSize": 55,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "درع — لوحة العميل"
+  },
+  {
+   "id": "pl-client-shield-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "59e5d76e00c9534a585817762ba002099e070246a93a160611f21f1ebf7c9847",
+   "byteSize": 79,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "درع مع علامة صح — لوحة العميل"
+  },
+  {
+   "id": "pl-client-smile",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ac11d337c5f410a04ef54441f27dd9d504b0309f280210a7db97f6c577f7fe8b",
+   "byteSize": 145,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "وجه مبتسم — لوحة العميل"
+  },
+  {
+   "id": "pl-client-spinner",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3a816304c00c43a092f72297fe138ab5bfe2695107a592391c7a4e6ce7b6a9f9",
+   "byteSize": 256,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مؤشر التحميل — لوحة العميل"
+  },
+  {
+   "id": "pl-client-star",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "f3e060c517ac828b902228b4f67829915da38c76172a133922d6a2e777050a08",
+   "byteSize": 104,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "نجمة — لوحة العميل"
+  },
+  {
+   "id": "pl-client-star-outline",
+   "viewBox": "0 0 100 100",
+   "width": 100,
+   "height": 100,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "f7488f9a6c760bb58dd620233dd0f86e0e1ab6eac5a2d0e0da2d88fc33585e86",
+   "byteSize": 95,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "نجمة مفرّغة — لوحة العميل"
+  },
+  {
+   "id": "pl-client-task-done",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "fc00c2f4878562010933aebc26362d9b1af23ea72333522d9e630a4941190141",
+   "byteSize": 88,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إنجاز مهمة — لوحة العميل"
+  },
+  {
+   "id": "pl-client-trend-up",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "61a9d235df6358b9b8cf3b500828dec1bf40770b8bec85bc0856803117471546",
+   "byteSize": 77,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "اتجاه صاعد — لوحة العميل"
+  },
+  {
+   "id": "pl-client-user",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "69aa2eb399265d3d27b902fcdb02bb9d09ecb8edd434f2ef5651200c85e7d741",
+   "byteSize": 82,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مستخدم — لوحة العميل"
+  },
+  {
+   "id": "pl-client-user-add",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9392f8159abf4e3918db2c3a0361ca73e5e2ae7d7f9b466bdb166869c354f1c2",
+   "byteSize": 159,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إضافة مستخدم — لوحة العميل"
+  },
+  {
+   "id": "pl-client-warning",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "446eb277954963e2cf72395e3799229481847e470cafac0fd8f6129046b5bfbf",
+   "byteSize": 65,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تحذير مثلث — لوحة العميل"
+  },
+  {
+   "id": "pl-marketer-alert-circle",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8cfa414526d8ee88050767138a2df8fe8615450ae6786c4b54b3519294211d3c",
+   "byteSize": 112,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تنبيه دائري — لوحة المسوّق"
+  },
+  {
+   "id": "pl-marketer-briefcase",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ac6bb2d5cc7067c2846fffb57b76bf5e45a4f23475038a2c11ba17c04bacccd1",
+   "byteSize": 101,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "حقيبة أعمال — لوحة المسوّق"
+  },
+  {
+   "id": "pl-marketer-card-numbers",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2c74197f31463f54c1a9ef984b1deb435ebed2a79e279fbed6d77488477ab23b",
+   "byteSize": 170,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "بطاقة بأرقام — لوحة المسوّق"
+  },
+  {
+   "id": "pl-marketer-chevron-down",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "af90879b3e75ecbbd268978a759bbeddb0fb1a1fae46a2958071b860efc17c5f",
+   "byteSize": 35,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لأسفل — لوحة المسوّق"
+  },
+  {
+   "id": "pl-marketer-chevron-right",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "314e23df65042b41ebc349fdc697a2a0b081d49c7278611b612c101715f5b4bd",
+   "byteSize": 71,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لليمين — لوحة المسوّق"
+  },
+  {
+   "id": "pl-marketer-globe",
+   "viewBox": "0 0 24 16",
+   "width": 24,
+   "height": 16,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "bd616331f090ade883afb5054bf245b5150138a4e95168aa8bcc0d9fe3fb1a2e",
+   "byteSize": 104,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "كرة أرضية — لوحة المسوّق"
+  },
+  {
+   "id": "pl-marketer-link",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b080634bba71102c18409f38af4651fdc56ba67242dfcfdfeb045aa315f4bf18",
+   "byteSize": 247,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "رابط — لوحة المسوّق"
+  },
+  {
+   "id": "pl-marketer-mic",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "f2ca7c83e5553f50451659364158ae9aeea17292b2d47ad0716898dfdb854a6d",
+   "byteSize": 179,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ميكروفون — لوحة المسوّق"
+  },
+  {
+   "id": "pl-marketer-paperclip",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ce7e323b5b0d5c3eaba48ce3228e5b658edf6c5b6f7e9ba242ea9276067aec3d",
+   "byteSize": 125,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مشبك مرفق — لوحة المسوّق"
+  },
+  {
+   "id": "pl-marketer-pause",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "54fa973d2faa0f8b93c9ff1b270a88f5aaf465be49cd3acb7cf2db01b2dc3db6",
+   "byteSize": 97,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إيقاف مؤقت — لوحة المسوّق"
+  },
+  {
+   "id": "pl-marketer-play",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "27edc1a904b85ceb00d7ef0850b7bb0700bb5330417c7fe3b3ee9975baf8f010",
+   "byteSize": 38,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تشغيل — لوحة المسوّق"
+  },
+  {
+   "id": "pl-marketer-rating-star",
+   "viewBox": "0 0 100 100",
+   "width": 100,
+   "height": 100,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4b283b844c4122ee783b41f8389cff6e8ad48e6d689fccb98344e75f7593b01b",
+   "byteSize": 115,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "نجمة التقييم — لوحة المسوّق"
+  },
+  {
+   "id": "pl-marketer-shield-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "59e5d76e00c9534a585817762ba002099e070246a93a160611f21f1ebf7c9847",
+   "byteSize": 79,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "درع مع علامة صح — لوحة المسوّق"
+  },
+  {
+   "id": "pl-marketer-smile",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ac11d337c5f410a04ef54441f27dd9d504b0309f280210a7db97f6c577f7fe8b",
+   "byteSize": 145,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "وجه مبتسم — لوحة المسوّق"
+  },
+  {
+   "id": "pl-marketer-user-add",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "5a267d3433505414b20a9ff61d477d6cdb8792091f75681f5e572dadf80fe0ed",
+   "byteSize": 144,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إضافة مستخدم — لوحة المسوّق"
+  },
+  {
+   "id": "pl-nav-action-logout",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "d23fcf1e123645fc4d34deb61298427a1d2766c37ed86ac3ad3f7173b14c859d",
+   "byteSize": 122,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: تسجيل الخروج"
+  },
+  {
+   "id": "pl-nav-action-logout-2",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9a90556d6fc4c54ef4e829f10fa6ffc1e618ac9f9c0cec50c84d72e944cfd1d3",
+   "byteSize": 148,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: تسجيل الخروج"
+  },
+  {
+   "id": "pl-nav-admin",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "53eea317fb8dcdd2b9625067731e5bc92c3e4481e12564fd88a677a2b23cfd4c",
+   "byteSize": 118,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: لوحة التحكم"
+  },
+  {
+   "id": "pl-nav-admin-accreditations",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a691eb51cf481fd9c613bb2e1ffcfe73a0069d4cba486b7276c0720733bf183e",
+   "byteSize": 102,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الاعتمادات"
+  },
+  {
+   "id": "pl-nav-admin-ai-audit",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a691eb51cf481fd9c613bb2e1ffcfe73a0069d4cba486b7276c0720733bf183e",
+   "byteSize": 102,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: التوصيات والتدقيق"
+  },
+  {
+   "id": "pl-nav-admin-ai-dashboard",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b0d5ed14818351420ca66fe9178da37f040b5818be6a7091acb843a083b900c0",
+   "byteSize": 84,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: لوحة الذكاء الاصطناعي"
+  },
+  {
+   "id": "pl-nav-admin-ai-match-engine",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8df8f4dc3ef4da526493319563446bbe785e231b17a42bd32d47e85b5c4eeffe",
+   "byteSize": 74,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: محرك المطابقة"
+  },
+  {
+   "id": "pl-nav-admin-analytics-coupons",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3c7aa2d71ecfa178b8a83eb6043fcd272e61640521f560adbd5d5b5f83ad80c1",
+   "byteSize": 145,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الكوبونات"
+  },
+  {
+   "id": "pl-nav-admin-analytics-providers",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c643c3c6929b45639a56cb0ab564bc20b4af830a9844484cd422a3c12f258fdc",
+   "byteSize": 112,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: تقارير المقدمين"
+  },
+  {
+   "id": "pl-nav-admin-analytics-quality",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3242a59620a086aa8b5b160cf7e3cec15fd507f322f2560abf516e78ca90d330",
+   "byteSize": 151,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: جودة الخدمة"
+  },
+  {
+   "id": "pl-nav-admin-audit-trail",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a691eb51cf481fd9c613bb2e1ffcfe73a0069d4cba486b7276c0720733bf183e",
+   "byteSize": 102,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: Audit Trail"
+  },
+  {
+   "id": "pl-nav-admin-brokers",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "5cba444385be2d3200b95b542fbdd59ce22346f5e2fd848f7dd002681925098d",
+   "byteSize": 177,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الوسطاء"
+  },
+  {
+   "id": "pl-nav-admin-business-models",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: نماذج الأعمال"
+  },
+  {
+   "id": "pl-nav-admin-categories",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3242a59620a086aa8b5b160cf7e3cec15fd507f322f2560abf516e78ca90d330",
+   "byteSize": 151,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: التصنيفات"
+  },
+  {
+   "id": "pl-nav-admin-communication-broadcast",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "6253dbbdb13e7202dd119a8a017adf3901beb14bfce7b178ff4b42c1c8c3c4c6",
+   "byteSize": 95,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: Broadcast"
+  },
+  {
+   "id": "pl-nav-admin-communication-content",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9eee431cb0d0e2a6f46c772aaf28a3c57e973b78339b9726af4959079b198652",
+   "byteSize": 126,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: إدارة المحتوى"
+  },
+  {
+   "id": "pl-nav-admin-contracts",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9eee431cb0d0e2a6f46c772aaf28a3c57e973b78339b9726af4959079b198652",
+   "byteSize": 126,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: العقود"
+  },
+  {
+   "id": "pl-nav-admin-disputes",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8f2a1bf8acd7b84249783796d6f0ed5cfeed018c85ee174b7632031c8588eafb",
+   "byteSize": 97,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: النزاعات"
+  },
+  {
+   "id": "pl-nav-admin-fees",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cc033aa17fbc57c6eb29403446e1541cdcd07342faaf40aeae35c682b8933e89",
+   "byteSize": 174,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الباقات والرسوم"
+  },
+  {
+   "id": "pl-nav-admin-finance-reports",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b0d5ed14818351420ca66fe9178da37f040b5818be6a7091acb843a083b900c0",
+   "byteSize": 84,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: التقارير"
+  },
+  {
+   "id": "pl-nav-admin-it-apis",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: إدارة APIs"
+  },
+  {
+   "id": "pl-nav-admin-it-backups",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9eee431cb0d0e2a6f46c772aaf28a3c57e973b78339b9726af4959079b198652",
+   "byteSize": 126,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: النسخ الاحتياطي"
+  },
+  {
+   "id": "pl-nav-admin-it-cdn",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "dda9f1647efd8a95b57dfb28ccbb412a85dd89f2942075d9da748d0bd744245c",
+   "byteSize": 198,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: CDN + الأصول"
+  },
+  {
+   "id": "pl-nav-admin-it-database",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: قاعدة البيانات"
+  },
+  {
+   "id": "pl-nav-admin-it-monitoring",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b0d5ed14818351420ca66fe9178da37f040b5818be6a7091acb843a083b900c0",
+   "byteSize": 84,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: Monitoring"
+  },
+  {
+   "id": "pl-nav-admin-it-performance",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b0d5ed14818351420ca66fe9178da37f040b5818be6a7091acb843a083b900c0",
+   "byteSize": 84,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: إدارة Performance"
+  },
+  {
+   "id": "pl-nav-admin-it-security",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a691eb51cf481fd9c613bb2e1ffcfe73a0069d4cba486b7276c0720733bf183e",
+   "byteSize": 102,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الأمان"
+  },
+  {
+   "id": "pl-nav-admin-it-servers",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8df8f4dc3ef4da526493319563446bbe785e231b17a42bd32d47e85b5c4eeffe",
+   "byteSize": 74,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الخوادم والصحة"
+  },
+  {
+   "id": "pl-nav-admin-kyc",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a691eb51cf481fd9c613bb2e1ffcfe73a0069d4cba486b7276c0720733bf183e",
+   "byteSize": 102,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: KYC / KYB"
+  },
+  {
+   "id": "pl-nav-admin-marketing-assets",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المواد التسويقية"
+  },
+  {
+   "id": "pl-nav-admin-messages",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b30ff8a0238f994b32ecb78e28fb0a32fc7f0ce61d3a964b5d83b80982621e0b",
+   "byteSize": 120,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الرسائل"
+  },
+  {
+   "id": "pl-nav-admin-modification-requests",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "62b8bd28c1c7333d1d374a497adf2bc3d169fc28d7ac6d620ffb030e99564ac5",
+   "byteSize": 162,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: طلبات التعديل"
+  },
+  {
+   "id": "pl-nav-admin-my-account",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c643c3c6929b45639a56cb0ab564bc20b4af830a9844484cd422a3c12f258fdc",
+   "byteSize": 112,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: حسابي وأمان الدخول"
+  },
+  {
+   "id": "pl-nav-admin-offers",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3c7aa2d71ecfa178b8a83eb6043fcd272e61640521f560adbd5d5b5f83ad80c1",
+   "byteSize": 145,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: العروض"
+  },
+  {
+   "id": "pl-nav-admin-projects",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8f2a1bf8acd7b84249783796d6f0ed5cfeed018c85ee174b7632031c8588eafb",
+   "byteSize": 97,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المشاريع"
+  },
+  {
+   "id": "pl-nav-admin-reports",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3f5ce6ff0c8dade47269e16ed27c36a9d94904c8544956726fa7f4c4afb5345e",
+   "byteSize": 164,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: البلاغات"
+  },
+  {
+   "id": "pl-nav-admin-requests",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الطلبات"
+  },
+  {
+   "id": "pl-nav-admin-revenues",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b0d5ed14818351420ca66fe9178da37f040b5818be6a7091acb843a083b900c0",
+   "byteSize": 84,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الإيرادات"
+  },
+  {
+   "id": "pl-nav-admin-risk-center",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3f5ce6ff0c8dade47269e16ed27c36a9d94904c8544956726fa7f4c4afb5345e",
+   "byteSize": 164,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: Risk Center"
+  },
+  {
+   "id": "pl-nav-admin-roles",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a691eb51cf481fd9c613bb2e1ffcfe73a0069d4cba486b7276c0720733bf183e",
+   "byteSize": 102,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الصلاحيات والأدوار"
+  },
+  {
+   "id": "pl-nav-admin-site-control-accounts",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b0d5ed14818351420ca66fe9178da37f040b5818be6a7091acb843a083b900c0",
+   "byteSize": 84,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المستويات والنقاط"
+  },
+  {
+   "id": "pl-nav-admin-site-control-export",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "6253dbbdb13e7202dd119a8a017adf3901beb14bfce7b178ff4b42c1c8c3c4c6",
+   "byteSize": 95,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: تصدير CSS"
+  },
+  {
+   "id": "pl-nav-admin-site-control-health",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8df8f4dc3ef4da526493319563446bbe785e231b17a42bd32d47e85b5c4eeffe",
+   "byteSize": 74,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: صحة الهوية"
+  },
+  {
+   "id": "pl-nav-admin-site-control-icons",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3242a59620a086aa8b5b160cf7e3cec15fd507f322f2560abf516e78ca90d330",
+   "byteSize": 151,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: مكتبة الأيقونات"
+  },
+  {
+   "id": "pl-nav-admin-site-control-identity",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a691eb51cf481fd9c613bb2e1ffcfe73a0069d4cba486b7276c0720733bf183e",
+   "byteSize": 102,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الهوية"
+  },
+  {
+   "id": "pl-nav-admin-site-control-live-preview",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "dda9f1647efd8a95b57dfb28ccbb412a85dd89f2942075d9da748d0bd744245c",
+   "byteSize": 198,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المعاينة الشاملة"
+  },
+  {
+   "id": "pl-nav-admin-site-control-style-guide",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: دليل الأنماط"
+  },
+  {
+   "id": "pl-nav-admin-site-control-templates",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9eee431cb0d0e2a6f46c772aaf28a3c57e973b78339b9726af4959079b198652",
+   "byteSize": 126,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: القوالب"
+  },
+  {
+   "id": "pl-nav-admin-site-control-tokens",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "989384a37beeff8c3cc0486c9ff468ad88d05434b22da5b626541967ebc10ae1",
+   "byteSize": 672,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: القيم والألوان"
+  },
+  {
+   "id": "pl-nav-admin-site-control-typography",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "62b8bd28c1c7333d1d374a497adf2bc3d169fc28d7ac6d620ffb030e99564ac5",
+   "byteSize": 162,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الخطوط"
+  },
+  {
+   "id": "pl-nav-admin-specialties",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8df8f4dc3ef4da526493319563446bbe785e231b17a42bd32d47e85b5c4eeffe",
+   "byteSize": 74,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: التخصصات"
+  },
+  {
+   "id": "pl-nav-admin-specialties-accreditation",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a691eb51cf481fd9c613bb2e1ffcfe73a0069d4cba486b7276c0720733bf183e",
+   "byteSize": 102,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: اعتماد التخصصات"
+  },
+  {
+   "id": "pl-nav-admin-sub-finance",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b0d5ed14818351420ca66fe9178da37f040b5818be6a7091acb843a083b900c0",
+   "byteSize": 84,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: لوحة المالية"
+  },
+  {
+   "id": "pl-nav-admin-sub-finance-cashback",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cc033aa17fbc57c6eb29403446e1541cdcd07342faaf40aeae35c682b8933e89",
+   "byteSize": 174,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الكاش باك"
+  },
+  {
+   "id": "pl-nav-admin-sub-finance-commissions",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3c7aa2d71ecfa178b8a83eb6043fcd272e61640521f560adbd5d5b5f83ad80c1",
+   "byteSize": 145,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: العمولات"
+  },
+  {
+   "id": "pl-nav-admin-sub-finance-future-billing",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8df8f4dc3ef4da526493319563446bbe785e231b17a42bd32d47e85b5c4eeffe",
+   "byteSize": 74,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الفوترة المستقبلية"
+  },
+  {
+   "id": "pl-nav-admin-sub-finance-gov-fees",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a691eb51cf481fd9c613bb2e1ffcfe73a0069d4cba486b7276c0720733bf183e",
+   "byteSize": 102,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الرسوم الحكومية"
+  },
+  {
+   "id": "pl-nav-admin-sub-finance-invoices-in",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9eee431cb0d0e2a6f46c772aaf28a3c57e973b78339b9726af4959079b198652",
+   "byteSize": 126,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الفواتير الواردة"
+  },
+  {
+   "id": "pl-nav-admin-sub-finance-invoices-out",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9eee431cb0d0e2a6f46c772aaf28a3c57e973b78339b9726af4959079b198652",
+   "byteSize": 126,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الفواتير الصادرة"
+  },
+  {
+   "id": "pl-nav-admin-sub-finance-reports",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b0d5ed14818351420ca66fe9178da37f040b5818be6a7091acb843a083b900c0",
+   "byteSize": 84,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: التقارير المالية"
+  },
+  {
+   "id": "pl-nav-admin-subscriptions-active",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الاشتراكات النشطة"
+  },
+  {
+   "id": "pl-nav-admin-subscriptions-ads",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "5cba444385be2d3200b95b542fbdd59ce22346f5e2fd848f7dd002681925098d",
+   "byteSize": 177,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الإعلانات"
+  },
+  {
+   "id": "pl-nav-admin-subscriptions-boost",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3c7aa2d71ecfa178b8a83eb6043fcd272e61640521f560adbd5d5b5f83ad80c1",
+   "byteSize": 145,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: Boost الظهور"
+  },
+  {
+   "id": "pl-nav-admin-subscriptions-invoices",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9eee431cb0d0e2a6f46c772aaf28a3c57e973b78339b9726af4959079b198652",
+   "byteSize": 126,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: فواتير الاشتراك"
+  },
+  {
+   "id": "pl-nav-admin-subscriptions-plan-details",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3242a59620a086aa8b5b160cf7e3cec15fd507f322f2560abf516e78ca90d330",
+   "byteSize": 151,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: تفاصيل الباقة"
+  },
+  {
+   "id": "pl-nav-admin-subscriptions-plans",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3242a59620a086aa8b5b160cf7e3cec15fd507f322f2560abf516e78ca90d330",
+   "byteSize": 151,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الباقات والخطط"
+  },
+  {
+   "id": "pl-nav-admin-subscriptions-promotions",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b0d5ed14818351420ca66fe9178da37f040b5818be6a7091acb843a083b900c0",
+   "byteSize": 84,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الخدمات الترويجية"
+  },
+  {
+   "id": "pl-nav-admin-subscriptions-upgrade",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b0d5ed14818351420ca66fe9178da37f040b5818be6a7091acb843a083b900c0",
+   "byteSize": 84,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: ترقية الاشتراك"
+  },
+  {
+   "id": "pl-nav-admin-super-admins",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a691eb51cf481fd9c613bb2e1ffcfe73a0069d4cba486b7276c0720733bf183e",
+   "byteSize": 102,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: Super Admin"
+  },
+  {
+   "id": "pl-nav-admin-support",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b30ff8a0238f994b32ecb78e28fb0a32fc7f0ce61d3a964b5d83b80982621e0b",
+   "byteSize": 120,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الدعم الفني"
+  },
+  {
+   "id": "pl-nav-admin-system-settings",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "989384a37beeff8c3cc0486c9ff468ad88d05434b22da5b626541967ebc10ae1",
+   "byteSize": 672,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: إعدادات النظام"
+  },
+  {
+   "id": "pl-nav-admin-tasks",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المهام"
+  },
+  {
+   "id": "pl-nav-admin-team",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c643c3c6929b45639a56cb0ab564bc20b4af830a9844484cd422a3c12f258fdc",
+   "byteSize": 112,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: فريق الإدارة"
+  },
+  {
+   "id": "pl-nav-admin-team-performance",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b0d5ed14818351420ca66fe9178da37f040b5818be6a7091acb843a083b900c0",
+   "byteSize": 84,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: أداء الفريق"
+  },
+  {
+   "id": "pl-nav-admin-users",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c643c3c6929b45639a56cb0ab564bc20b4af830a9844484cd422a3c12f258fdc",
+   "byteSize": 112,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المستخدمون"
+  },
+  {
+   "id": "pl-nav-admin-withdrawals",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cc033aa17fbc57c6eb29403446e1541cdcd07342faaf40aeae35c682b8933e89",
+   "byteSize": 174,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: طلبات السحب"
+  },
+  {
+   "id": "pl-nav-client",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "499029f4daca474ca102d00855407f9778c407a7ae1279ce86acaf7afcec48ba",
+   "byteSize": 203,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: لوحة التحكم"
+  },
+  {
+   "id": "pl-nav-client-create-request",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b479e9d8ec6d7826d6874a4bb56610247bd30d8f16c1cfa7d9ab7e54c359d17b",
+   "byteSize": 73,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: إنشاء طلب"
+  },
+  {
+   "id": "pl-nav-client-disputes",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "852c221c9be57fe6366bde3ac2d6e59e909aca62585cbea104433285900724dc",
+   "byteSize": 249,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: النزاعات"
+  },
+  {
+   "id": "pl-nav-client-finance",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0f34c77858fc0d36f33b31cc7a946f8f365c9aaa4060f2f2c36ff4b5941c4160",
+   "byteSize": 141,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المالية"
+  },
+  {
+   "id": "pl-nav-client-finance-invoices",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad115631db8447a652b926682b223289dc05ff742e49c5f9a2b1eb42b4f077fe",
+   "byteSize": 175,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الفواتير المستلمة"
+  },
+  {
+   "id": "pl-nav-client-finance-wallet",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3e3544997241a53a50d0038ef586b749ac873e003e56eb5e98adc41b0e1d585e",
+   "byteSize": 145,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: /client-overview/finance/wallet"
+  },
+  {
+   "id": "pl-nav-client-help",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "77c49c9b940d8ebf86d1cc6836efd228eb11444292665c12df5cac50d396a078",
+   "byteSize": 212,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: مركز المساعدة"
+  },
+  {
+   "id": "pl-nav-client-help-ai-assistant",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "fe6baf452a1110751f129f2470d5de11b2eac7cc07c1aa764b8ed16f82ddd1a9",
+   "byteSize": 161,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المساعد الذكي"
+  },
+  {
+   "id": "pl-nav-client-help-live-support",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b30ff8a0238f994b32ecb78e28fb0a32fc7f0ce61d3a964b5d83b80982621e0b",
+   "byteSize": 120,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الدعم المباشر"
+  },
+  {
+   "id": "pl-nav-client-help-tickets",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "686e352e957b7ef7aff9c2b5a900bc0f229f5dbed1f56df281de8138a7f5f4cb",
+   "byteSize": 93,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: تذاكر الدعم"
+  },
+  {
+   "id": "pl-nav-client-messages",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "527c7d50d7d7b0f0fa1fe66c102f42bcda472c25f54600d16fc2bf475f117c7a",
+   "byteSize": 164,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الرسائل"
+  },
+  {
+   "id": "pl-nav-client-my-requests",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: طلباتي"
+  },
+  {
+   "id": "pl-nav-client-profile",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "818db514b6a2501e5564647be8cf3f78e044216a2673745ec5de704e1fe8007e",
+   "byteSize": 126,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: بيانات الملف"
+  },
+  {
+   "id": "pl-nav-client-profile-add-account",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "10bb186fa03b8a1170fcd5d61a1f0fbf804aa03d3623e42f3071b7688cc5320b",
+   "byteSize": 143,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: إضافة حساب"
+  },
+  {
+   "id": "pl-nav-client-profile-edit",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2b981db3b9e751c5744ee90ff136fb64303281627bd93d6aee70eb23ead08390",
+   "byteSize": 542,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: تعديل الملف الشخصي"
+  },
+  {
+   "id": "pl-nav-client-profile-level",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b510e40b086ac050e0bd9b42b8b2d4f46c58da3cd2149075ba039043ae670126",
+   "byteSize": 73,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: مستوى التصنيف"
+  },
+  {
+   "id": "pl-nav-client-profile-logs",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: سجل النشاط والأمان"
+  },
+  {
+   "id": "pl-nav-client-profile-requests",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad115631db8447a652b926682b223289dc05ff742e49c5f9a2b1eb42b4f077fe",
+   "byteSize": 175,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: طلبات تعديل الملف"
+  },
+  {
+   "id": "pl-nav-client-profile-setup",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b510e40b086ac050e0bd9b42b8b2d4f46c58da3cd2149075ba039043ae670126",
+   "byteSize": 73,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: استكمال البيانات"
+  },
+  {
+   "id": "pl-nav-client-projects",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad115631db8447a652b926682b223289dc05ff742e49c5f9a2b1eb42b4f077fe",
+   "byteSize": 175,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المشاريع"
+  },
+  {
+   "id": "pl-nav-client-projects-active",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المشاريع النشطة"
+  },
+  {
+   "id": "pl-nav-client-projects-amendments",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad115631db8447a652b926682b223289dc05ff742e49c5f9a2b1eb42b4f077fe",
+   "byteSize": 175,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: طلبات التعديل"
+  },
+  {
+   "id": "pl-nav-client-projects-archived",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad115631db8447a652b926682b223289dc05ff742e49c5f9a2b1eb42b4f077fe",
+   "byteSize": 175,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المكتملة والأرشيف"
+  },
+  {
+   "id": "pl-nav-client-projects-review",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ccfeec7f05e5f4d1e02e5d8d65087e400352a61098217d03f644dd105c9db121",
+   "byteSize": 104,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: مراجعة التسليم"
+  },
+  {
+   "id": "pl-nav-client-reports",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "933dfe34c505fee7d431265ce18df0750fa4c7b5db712c32110d6faa41c7ed8e",
+   "byteSize": 184,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: تقاريري"
+  },
+  {
+   "id": "pl-nav-client-settings-account",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2b981db3b9e751c5744ee90ff136fb64303281627bd93d6aee70eb23ead08390",
+   "byteSize": 542,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: إعدادات الحساب"
+  },
+  {
+   "id": "pl-nav-group-explore",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b5b0ac086bb048c717b9f943a334d11377e1e181895df4df2f4c529453a360ed",
+   "byteSize": 102,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: طلبات العملاء والعروض"
+  },
+  {
+   "id": "pl-nav-group-help",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "77c49c9b940d8ebf86d1cc6836efd228eb11444292665c12df5cac50d396a078",
+   "byteSize": 212,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المساعدة والدعم"
+  },
+  {
+   "id": "pl-nav-group-marketing",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8d1d7ab8ff47b05d25f37344ec657d2ed20666405e0b364e74518176f7d6b3c7",
+   "byteSize": 257,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: التسويق"
+  },
+  {
+   "id": "pl-nav-group-profile",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "818db514b6a2501e5564647be8cf3f78e044216a2673745ec5de704e1fe8007e",
+   "byteSize": 126,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: حسابي"
+  },
+  {
+   "id": "pl-nav-group-requests",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الطلبات"
+  },
+  {
+   "id": "pl-nav-group-sa-ai-nav",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b0d5ed14818351420ca66fe9178da37f040b5818be6a7091acb843a083b900c0",
+   "byteSize": 84,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: محركات الذكاء"
+  },
+  {
+   "id": "pl-nav-group-sa-analytics",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b0d5ed14818351420ca66fe9178da37f040b5818be6a7091acb843a083b900c0",
+   "byteSize": 84,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: التحليلات والجودة"
+  },
+  {
+   "id": "pl-nav-group-sa-comm",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b30ff8a0238f994b32ecb78e28fb0a32fc7f0ce61d3a964b5d83b80982621e0b",
+   "byteSize": 120,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: التواصل والمحتوى"
+  },
+  {
+   "id": "pl-nav-group-sa-disputes",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3f5ce6ff0c8dade47269e16ed27c36a9d94904c8544956726fa7f4c4afb5345e",
+   "byteSize": 164,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: النزاعات والشكاوى"
+  },
+  {
+   "id": "pl-nav-group-sa-finance",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cc033aa17fbc57c6eb29403446e1541cdcd07342faaf40aeae35c682b8933e89",
+   "byteSize": 174,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المالية والتقارير"
+  },
+  {
+   "id": "pl-nav-group-sa-it",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "989384a37beeff8c3cc0486c9ff468ad88d05434b22da5b626541967ebc10ae1",
+   "byteSize": 672,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: البنية التقنية"
+  },
+  {
+   "id": "pl-nav-group-sa-projects",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8f2a1bf8acd7b84249783796d6f0ed5cfeed018c85ee174b7632031c8588eafb",
+   "byteSize": 97,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المشاريع والعقود"
+  },
+  {
+   "id": "pl-nav-group-sa-requests",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الطلبات والعروض"
+  },
+  {
+   "id": "pl-nav-group-sa-risk",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3f5ce6ff0c8dade47269e16ed27c36a9d94904c8544956726fa7f4c4afb5345e",
+   "byteSize": 164,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: مراقبة وأمان"
+  },
+  {
+   "id": "pl-nav-group-sa-site-control",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "989384a37beeff8c3cc0486c9ff468ad88d05434b22da5b626541967ebc10ae1",
+   "byteSize": 672,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: التحكم بالموقع"
+  },
+  {
+   "id": "pl-nav-group-sa-specialties",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8df8f4dc3ef4da526493319563446bbe785e231b17a42bd32d47e85b5c4eeffe",
+   "byteSize": 74,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: التخصصات والمحتوى"
+  },
+  {
+   "id": "pl-nav-group-sa-sub-finance",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cc033aa17fbc57c6eb29403446e1541cdcd07342faaf40aeae35c682b8933e89",
+   "byteSize": 174,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المالية الإدارية"
+  },
+  {
+   "id": "pl-nav-group-sa-subs",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3242a59620a086aa8b5b160cf7e3cec15fd507f322f2560abf516e78ca90d330",
+   "byteSize": 151,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الاشتراكات"
+  },
+  {
+   "id": "pl-nav-group-sa-system",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "989384a37beeff8c3cc0486c9ff468ad88d05434b22da5b626541967ebc10ae1",
+   "byteSize": 672,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: إدارة النظام"
+  },
+  {
+   "id": "pl-nav-group-sa-team",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c643c3c6929b45639a56cb0ab564bc20b4af830a9844484cd422a3c12f258fdc",
+   "byteSize": 112,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: إدارة الفريق"
+  },
+  {
+   "id": "pl-nav-group-sa-users",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c643c3c6929b45639a56cb0ab564bc20b4af830a9844484cd422a3c12f258fdc",
+   "byteSize": 112,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المستخدمون والاعتمادات"
+  },
+  {
+   "id": "pl-nav-group-settings",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2b981db3b9e751c5744ee90ff136fb64303281627bd93d6aee70eb23ead08390",
+   "byteSize": 542,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الإعدادات"
+  },
+  {
+   "id": "pl-nav-group-templates",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad115631db8447a652b926682b223289dc05ff742e49c5f9a2b1eb42b4f077fe",
+   "byteSize": 175,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: نماذجي وخدماتي"
+  },
+  {
+   "id": "pl-nav-marketer",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "499029f4daca474ca102d00855407f9778c407a7ae1279ce86acaf7afcec48ba",
+   "byteSize": 203,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: لوحة التحكم"
+  },
+  {
+   "id": "pl-nav-marketer-assets",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a43b1b3e1583c4f0c8f4d9bdc332e8076ffe78f22918dd9da7e5f366bfd14bb7",
+   "byteSize": 212,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المواد التسويقية"
+  },
+  {
+   "id": "pl-nav-marketer-commissions",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3e3544997241a53a50d0038ef586b749ac873e003e56eb5e98adc41b0e1d585e",
+   "byteSize": 145,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: العمولات"
+  },
+  {
+   "id": "pl-nav-marketer-help",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "77c49c9b940d8ebf86d1cc6836efd228eb11444292665c12df5cac50d396a078",
+   "byteSize": 212,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المساعدة"
+  },
+  {
+   "id": "pl-nav-marketer-messages",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "527c7d50d7d7b0f0fa1fe66c102f42bcda472c25f54600d16fc2bf475f117c7a",
+   "byteSize": 164,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الرسائل"
+  },
+  {
+   "id": "pl-nav-marketer-profile-add-account",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "10bb186fa03b8a1170fcd5d61a1f0fbf804aa03d3623e42f3071b7688cc5320b",
+   "byteSize": 143,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: إضافة حساب"
+  },
+  {
+   "id": "pl-nav-marketer-profile-data",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "818db514b6a2501e5564647be8cf3f78e044216a2673745ec5de704e1fe8007e",
+   "byteSize": 126,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: ملفي التسويقي"
+  },
+  {
+   "id": "pl-nav-marketer-profile-public",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad115631db8447a652b926682b223289dc05ff742e49c5f9a2b1eb42b4f077fe",
+   "byteSize": 175,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الملف العام"
+  },
+  {
+   "id": "pl-nav-marketer-profile-requests",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c56f62099bf8f09f15414704881b8bd3501d2db70505e78029047eca4e751425",
+   "byteSize": 177,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: طلبات التعديل"
+  },
+  {
+   "id": "pl-nav-marketer-profile-setup",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ccfeec7f05e5f4d1e02e5d8d65087e400352a61098217d03f644dd105c9db121",
+   "byteSize": 104,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: استكمال البيانات"
+  },
+  {
+   "id": "pl-nav-marketer-ref-links",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "bf311079a4d2460b7e08db7afba5ab2a053c38a1d8a8662cbdc8f5287cc701f0",
+   "byteSize": 189,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: روابط الإحالة"
+  },
+  {
+   "id": "pl-nav-marketer-referrals",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "10bb186fa03b8a1170fcd5d61a1f0fbf804aa03d3623e42f3071b7688cc5320b",
+   "byteSize": 143,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الإحالات"
+  },
+  {
+   "id": "pl-nav-marketer-withdraw",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "812b8f48f05c242da58747f34f687907437b99bcfcbfaf2d218f9139200bc36a",
+   "byteSize": 159,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: السحب"
+  },
+  {
+   "id": "pl-nav-provider",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "499029f4daca474ca102d00855407f9778c407a7ae1279ce86acaf7afcec48ba",
+   "byteSize": 203,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: لوحة التحكم"
+  },
+  {
+   "id": "pl-nav-provider-business-models-accreditation-list",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: طلبات الاعتماد"
+  },
+  {
+   "id": "pl-nav-provider-business-models-accreditation-new",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b510e40b086ac050e0bd9b42b8b2d4f46c58da3cd2149075ba039043ae670126",
+   "byteSize": 73,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: رفع نموذج للاعتماد"
+  },
+  {
+   "id": "pl-nav-provider-business-models-center",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad115631db8447a652b926682b223289dc05ff742e49c5f9a2b1eb42b4f077fe",
+   "byteSize": 175,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: مركز النماذج والخدمات"
+  },
+  {
+   "id": "pl-nav-provider-business-models-market",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "548c91b9574ae8a1f54ba7a65be60c31578d39233facf4dae74e9243136fbe6a",
+   "byteSize": 101,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: نماذجي في السوق"
+  },
+  {
+   "id": "pl-nav-provider-business-models-new-project",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b479e9d8ec6d7826d6874a4bb56610247bd30d8f16c1cfa7d9ab7e54c359d17b",
+   "byteSize": 73,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: رفع مشروع للسوق"
+  },
+  {
+   "id": "pl-nav-provider-disputes",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "852c221c9be57fe6366bde3ac2d6e59e909aca62585cbea104433285900724dc",
+   "byteSize": 249,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: النزاعات"
+  },
+  {
+   "id": "pl-nav-provider-explore-requests",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b5b0ac086bb048c717b9f943a334d11377e1e181895df4df2f4c529453a360ed",
+   "byteSize": 102,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: استكشاف الطلبات"
+  },
+  {
+   "id": "pl-nav-provider-finance",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0f34c77858fc0d36f33b31cc7a946f8f365c9aaa4060f2f2c36ff4b5941c4160",
+   "byteSize": 141,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المالية"
+  },
+  {
+   "id": "pl-nav-provider-finance-transactions",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad115631db8447a652b926682b223289dc05ff742e49c5f9a2b1eb42b4f077fe",
+   "byteSize": 175,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: سجل المعاملات"
+  },
+  {
+   "id": "pl-nav-provider-finance-wallet",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3e3544997241a53a50d0038ef586b749ac873e003e56eb5e98adc41b0e1d585e",
+   "byteSize": 145,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الأرباح والمحفظة"
+  },
+  {
+   "id": "pl-nav-provider-help",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "77c49c9b940d8ebf86d1cc6836efd228eb11444292665c12df5cac50d396a078",
+   "byteSize": 212,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: مركز المساعدة"
+  },
+  {
+   "id": "pl-nav-provider-marketing-approvals",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "689c3963fe7eafc9f4fbdeff518b6f53f0159c6544c6dfba156fa34b01d4ab78",
+   "byteSize": 130,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: طلبات الموافقة"
+  },
+  {
+   "id": "pl-nav-provider-marketing-center",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b0d5ed14818351420ca66fe9178da37f040b5818be6a7091acb843a083b900c0",
+   "byteSize": 84,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: مركز التسويق"
+  },
+  {
+   "id": "pl-nav-provider-marketing-coupons",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3c7aa2d71ecfa178b8a83eb6043fcd272e61640521f560adbd5d5b5f83ad80c1",
+   "byteSize": 145,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: كوبونات الخصم"
+  },
+  {
+   "id": "pl-nav-provider-marketing-offers",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b07dcea0f7119866a84feb64f37eb339db4898e0cf3ae9e0f298410b78a49ee5",
+   "byteSize": 179,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: العروض الخاصة"
+  },
+  {
+   "id": "pl-nav-provider-messages",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "527c7d50d7d7b0f0fa1fe66c102f42bcda472c25f54600d16fc2bf475f117c7a",
+   "byteSize": 164,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الرسائل"
+  },
+  {
+   "id": "pl-nav-provider-notifications-favorite",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "1377646d7423b4376abfb558358b8d2cc22055049f468bf5166c98dae52b03f1",
+   "byteSize": 91,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: تفضيلات الإشعارات"
+  },
+  {
+   "id": "pl-nav-provider-offers",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad115631db8447a652b926682b223289dc05ff742e49c5f9a2b1eb42b4f077fe",
+   "byteSize": 175,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: عروضي المرسلة"
+  },
+  {
+   "id": "pl-nav-provider-profile-add-account",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "10bb186fa03b8a1170fcd5d61a1f0fbf804aa03d3623e42f3071b7688cc5320b",
+   "byteSize": 143,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: إضافة حساب"
+  },
+  {
+   "id": "pl-nav-provider-profile-data",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2b981db3b9e751c5744ee90ff136fb64303281627bd93d6aee70eb23ead08390",
+   "byteSize": 542,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: تعديل الملف المهني"
+  },
+  {
+   "id": "pl-nav-provider-profile-level",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b510e40b086ac050e0bd9b42b8b2d4f46c58da3cd2149075ba039043ae670126",
+   "byteSize": 73,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: مستوى التصنيف"
+  },
+  {
+   "id": "pl-nav-provider-profile-logs",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: سجل النشاط والأمان"
+  },
+  {
+   "id": "pl-nav-provider-profile-public",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "818db514b6a2501e5564647be8cf3f78e044216a2673745ec5de704e1fe8007e",
+   "byteSize": 126,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: الملف العام"
+  },
+  {
+   "id": "pl-nav-provider-profile-requests",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad115631db8447a652b926682b223289dc05ff742e49c5f9a2b1eb42b4f077fe",
+   "byteSize": 175,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: طلبات تعديل الملف"
+  },
+  {
+   "id": "pl-nav-provider-profile-setup",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2b981db3b9e751c5744ee90ff136fb64303281627bd93d6aee70eb23ead08390",
+   "byteSize": 542,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: استكمال البيانات"
+  },
+  {
+   "id": "pl-nav-provider-profile-specialties",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad115631db8447a652b926682b223289dc05ff742e49c5f9a2b1eb42b4f077fe",
+   "byteSize": 175,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: إدارة التخصصات"
+  },
+  {
+   "id": "pl-nav-provider-projects",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المشاريع"
+  },
+  {
+   "id": "pl-nav-provider-projects-active",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "85070b60f2296c279653ea8b2bf338c2cc082f4e2a600d2023a01a56b44494ab",
+   "byteSize": 90,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المشاريع النشطة"
+  },
+  {
+   "id": "pl-nav-provider-projects-archived",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad115631db8447a652b926682b223289dc05ff742e49c5f9a2b1eb42b4f077fe",
+   "byteSize": 175,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: المكتملة والأرشيف"
+  },
+  {
+   "id": "pl-nav-provider-reports",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "933dfe34c505fee7d431265ce18df0750fa4c7b5db712c32110d6faa41c7ed8e",
+   "byteSize": 184,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: تقاريري"
+  },
+  {
+   "id": "pl-nav-provider-settings-account",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2b981db3b9e751c5744ee90ff136fb64303281627bd93d6aee70eb23ead08390",
+   "byteSize": 542,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: إعدادات الحساب"
+  },
+  {
+   "id": "pl-nav-x-14",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "852c221c9be57fe6366bde3ac2d6e59e909aca62585cbea104433285900724dc",
+   "byteSize": 249,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "عنصر القائمة الجانبية: إجراءات الحساب"
+  },
+  {
+   "id": "pl-notify-commission",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "1642fbf64d249b7a4dd6aab595dc0efa153d4953198ae0c870de25f36cf6c23e",
+   "byteSize": 118,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إشعار عمولات (إشعارات المسوّق)"
+  },
+  {
+   "id": "pl-notify-finance",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4a1729b6a0d7df1840f75d0a7f493d13ad35d2c2815e75591b883d56fd4feb0c",
+   "byteSize": 127,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إشعار مالي (قائمة الإشعارات)"
+  },
+  {
+   "id": "pl-notify-message",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a1413305682a7dde14b168a4f482f8261aaf56f90f104eff7c134fa5699db508",
+   "byteSize": 73,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إشعار رسالة (قائمة الإشعارات)"
+  },
+  {
+   "id": "pl-notify-offer",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "baaef27c67656e0247bd3982a25135348f43ccd44c5407ef0b4f9f6288e379e5",
+   "byteSize": 79,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إشعار عرض (قائمة الإشعارات)"
+  },
+  {
+   "id": "pl-notify-project",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4517414fbcfc2dad14e3e7fce8227103fa320f4b887ff47d63eaf19c0b1f2cea",
+   "byteSize": 50,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إشعار مشروع (قائمة الإشعارات)"
+  },
+  {
+   "id": "pl-provider-alert-circle",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8cfa414526d8ee88050767138a2df8fe8615450ae6786c4b54b3519294211d3c",
+   "byteSize": 112,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تنبيه دائري — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-apps",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ab27fb57686baa7484012f5ba0a6663f848190eb9be4db571e8d82e9a698ef12",
+   "byteSize": 180,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تطبيقات — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-arrow-left",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "94637c904b3d26f1adb9cc0bf1a1813c2455e37a61bb9ebce47b6a23377ea6f8",
+   "byteSize": 74,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لليسار — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-arrow-right",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "44518610ffe74f7e3d2e92cfa770504b814dd3ec22084643ba51faf1bc7e7f07",
+   "byteSize": 33,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لليمين — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-book",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7bef289adde1c029e41cf71a2291d5e502ecb366b15261b179c29999f196b05d",
+   "byteSize": 117,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "كتاب — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-bookmark",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9f60dc8d31d9120fc82e6e1415a4adc58c1f3d235a223ae8b64a825439d9e964",
+   "byteSize": 61,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "علامة مرجعية — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-briefcase",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ac6bb2d5cc7067c2846fffb57b76bf5e45a4f23475038a2c11ba17c04bacccd1",
+   "byteSize": 101,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "حقيبة أعمال — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-building",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c64bda85b322dc4129d18ae46637d96247b162ac17d68dedb9ae5424682a6f24",
+   "byteSize": 49,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مبنى — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-card",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a7c3c31a8443ff8b76491d60c4e89e3ae60b69eea60cae80ccb6e2fb695812e2",
+   "byteSize": 87,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "بطاقة — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb5b9b28ef556d048bc1e51e11491ce1127472459bad5ae54274ec79c943d725",
+   "byteSize": 35,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "علامة صح — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-check-square",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "9bf88e10984f136ef3b561398508c9af785245f0b6992a87766287667fe62ac7",
+   "byteSize": 95,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مربع مع علامة — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-chevron-down",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "af90879b3e75ecbbd268978a759bbeddb0fb1a1fae46a2958071b860efc17c5f",
+   "byteSize": 35,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لأسفل — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-chevron-right",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "314e23df65042b41ebc349fdc697a2a0b081d49c7278611b612c101715f5b4bd",
+   "byteSize": 71,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لليمين — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-chevron-up",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a2478900cea99e826168d9efceb801d6b732c67abde77cc28e47cdeb62cedbb7",
+   "byteSize": 36,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لأعلى — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-chevrons-right",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "79b282e2a8000c6d58ddfb06175a3a42d1d77252fd8c1ee91820a28c0cc230ba",
+   "byteSize": 72,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهمان لليمين — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-clock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b93864dc736ed631248fce1a96d1928cc763f5f0bec4b5120205bbeef7700163",
+   "byteSize": 55,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ساعة — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-cloud-upload",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cce72b3303f18ff4bd38f4f1febdcd383b47d61968c28c4ea4a7715b0303de2a",
+   "byteSize": 116,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "رفع سحابي — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-copy",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8205bad016b98a7bb7315e015ccd6d3e869a6dacf66fe1fe88bbb8eb8f96f1bd",
+   "byteSize": 116,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "نسخ — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-dollar",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "095fc64a136331468e1ded6ec292b2cf2641b86e1e5e3d2545cd0e0a4307dc7a",
+   "byteSize": 69,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "دولار — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-dot-ring",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "20a33bce54f0142c731be0aadd143519325c766f8fbd2d80ef5d78a941ac2a85",
+   "byteSize": 33,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "نقطة — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-download",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "140d690d3ac4737657a1e4cffd3fde7a25cfe9139abcd403221d22ab21628c23",
+   "byteSize": 41,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تنزيل — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-file",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "f77e86624c367686e6a2d0ec29ac158a74b9ad50cdec407a747d8d2e70764806",
+   "byteSize": 91,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ملف — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-file-plus",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "20ad87da67bdff7d56caffb8adf11eb829e1d9ac9138a8f3e493922b43c018b1",
+   "byteSize": 182,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ملف جديد — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-gift",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0872391f7c9cec31ac203743375aeb1108c6decf2ec43e58bc0091ab93365941",
+   "byteSize": 132,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "هدية — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-globe",
+   "viewBox": "0 0 24 16",
+   "width": 24,
+   "height": 16,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "bd616331f090ade883afb5054bf245b5150138a4e95168aa8bcc0d9fe3fb1a2e",
+   "byteSize": 104,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "كرة أرضية — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-hexagons",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "14dfdb7c4a19e14f6a391697c0763e413bdf6ac888e6f919a26fa1d45d124287",
+   "byteSize": 71,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سداسيات — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-layers",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "0413deb53f884e4b6daae6d84ab062ec7bc65b79363073be43ae1ba28b22bec6",
+   "byteSize": 118,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "طبقات — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-layout-panel",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b831cd46093e92f95ef621ff109593f78f30b282c202eeb74cdadc488a511f74",
+   "byteSize": 75,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تخطيط لوحة — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-lightbulb",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a5f2d6fe5424437d0faa4e024807743304bc0ef1f23bb56484d13fed6009e6f2",
+   "byteSize": 104,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مصباح — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-lock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "840b9a18887341b22b67b04b9953eb144add7c56d56399ad7b993cd71f6a5a0b",
+   "byteSize": 93,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "قفل — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-mic",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "f2ca7c83e5553f50451659364158ae9aeea17292b2d47ad0716898dfdb854a6d",
+   "byteSize": 179,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ميكروفون — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-minus",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "824ed406536a2449eebdb0693d1847b56e9f0096fc6994c5ad04b2dc302afba6",
+   "byteSize": 38,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "طرح — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-monitor",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2ef5d705fbcb2719e30f48290b841c9552a502aabf9bd07a57109afb59189dba",
+   "byteSize": 126,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "شاشة — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-more-dots",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ad87ca19965db0ae236fc91727b1b22b5c9c9a58ad83774eec42ad3dad8f3d62",
+   "byteSize": 92,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "المزيد (ثلاث نقاط) — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-paperclip",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ce7e323b5b0d5c3eaba48ce3228e5b658edf6c5b6f7e9ba242ea9276067aec3d",
+   "byteSize": 125,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مشبك مرفق — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-pause",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "54fa973d2faa0f8b93c9ff1b270a88f5aaf465be49cd3acb7cf2db01b2dc3db6",
+   "byteSize": 97,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إيقاف مؤقت — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-play",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "27edc1a904b85ceb00d7ef0850b7bb0700bb5330417c7fe3b3ee9975baf8f010",
+   "byteSize": 38,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تشغيل — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-rating-star",
+   "viewBox": "0 0 100 100",
+   "width": 100,
+   "height": 100,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4b283b844c4122ee783b41f8389cff6e8ad48e6d689fccb98344e75f7593b01b",
+   "byteSize": 115,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "نجمة التقييم — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-rectangle",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c009ab77e02af47c7ff5eaa00e4d858a6b0bb779a95a6f0deb50e8263c341c41",
+   "byteSize": 49,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مستطيل — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-refresh",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8e9f823a7561f627627a23893f9e7d0246e77b196d099c022501f1e142396e29",
+   "byteSize": 73,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إعادة تحميل — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-send",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "bb46c15652090684a6405b5b10d33c285a0a125c25b186da3de4a577fbc09928",
+   "byteSize": 76,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إرسال — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-shield",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eb50d868f82da55bfc66daaed98602640551183c8babce466a6211f22ad21160",
+   "byteSize": 55,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "درع — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-shield-alert",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8eb442c34a86b2b4f0dee53a3c0a2d29278539d532ad8472f7ced357d0e3408a",
+   "byteSize": 135,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "درع تنبيه — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-shield-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "59e5d76e00c9534a585817762ba002099e070246a93a160611f21f1ebf7c9847",
+   "byteSize": 79,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "درع مع علامة صح — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-smile",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ac11d337c5f410a04ef54441f27dd9d504b0309f280210a7db97f6c577f7fe8b",
+   "byteSize": 145,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "وجه مبتسم — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-sort-lines",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c491afb8ae637f2ebf379b031cf0948042493f399fe5d22a8e2d2d92edd53338",
+   "byteSize": 111,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ترتيب — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-specialty-category",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b134927ca57e47ac7892ce0a58e567d95a3dd898e77aea239067df77c8f319c2",
+   "byteSize": 74,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أيقونة بطاقة التخصص الرئيسي (إعداد ملف مقدّم الخدمة)"
+  },
+  {
+   "id": "pl-provider-spinner",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3a816304c00c43a092f72297fe138ab5bfe2695107a592391c7a4e6ce7b6a9f9",
+   "byteSize": 256,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مؤشر التحميل — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-star",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "f3e060c517ac828b902228b4f67829915da38c76172a133922d6a2e777050a08",
+   "byteSize": 104,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "نجمة — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-tag",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "502d3b2ef655a28e820bd94c2325e86fe5b2e6687d2b6f60484e2a7f96501c57",
+   "byteSize": 128,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "وسم — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-task-done",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "fc00c2f4878562010933aebc26362d9b1af23ea72333522d9e630a4941190141",
+   "byteSize": 88,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إنجاز مهمة — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-trash",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "26285ee7f03dba9f663d2ca4317f435cba9abb0eb78514452d511eb5b4982f0b",
+   "byteSize": 121,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سلة محذوفات — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-trend-down",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8e9c21033a74246a7a95294683b412900798c82fd9f4ed4c642faa6dd0439800",
+   "byteSize": 86,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "اتجاه هابط — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-trend-up",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ea681fb5699aaa9829a0ee41676ffbdf4689af3152913a8c3e9feeb8c97ef780",
+   "byteSize": 85,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "اتجاه صاعد — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-triangle",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "6a640eefd99d7d0156d257f07b8932c52ce0b8fc80ff013fd0534bb67d7d26cc",
+   "byteSize": 100,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مثلث — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-upload-arrow",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e6dc97a651d7bf27cad04708ea6ca8d0f008cbf7f3d5a2353862d3d84e6d94dc",
+   "byteSize": 40,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "رفع — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-user",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a3a6ea39e8a92d05687e3da4ecfc0d50becc2d6a2225b1427d994f116d952bd7",
+   "byteSize": 67,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مستخدم — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-user-add",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "5a267d3433505414b20a9ff61d477d6cdb8792091f75681f5e572dadf80fe0ed",
+   "byteSize": 144,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إضافة مستخدم — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-wallet",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "8533bd11dc940babb2adffa7f7c571dbb478810f9213d5d1ffb38e8f1abdd534",
+   "byteSize": 136,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "محفظة — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-provider-warning",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "143d6a2233f81b1b78b82dcf2659ea9b9f0918c42c73afc53dbb7eea12115498",
+   "byteSize": 66,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تحذير مثلث — لوحة مقدّم الخدمة"
+  },
+  {
+   "id": "pl-shared-alert-circle",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cbcb995ae11d192c01ceb2a7f8d654fa6e55ff525f9563219462af2dbebecc1f",
+   "byteSize": 75,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تنبيه دائري — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-bar-chart",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "155fd66991479bf90701b18c680d355e21df0ad5dc6b82336230e37f5967a6cb",
+   "byteSize": 44,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "أعمدة بيانية — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-chat-typing",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "527c7d50d7d7b0f0fa1fe66c102f42bcda472c25f54600d16fc2bf475f117c7a",
+   "byteSize": 164,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "محادثة جارية — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3c909be66400488570e36cd5ad312a1407623e6819494a2fa531ffb6d079e29f",
+   "byteSize": 27,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "علامة صح — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-chevron-down",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "af90879b3e75ecbbd268978a759bbeddb0fb1a1fae46a2958071b860efc17c5f",
+   "byteSize": 35,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لأسفل — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-chevron-left",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "72f5c3430c5139eb99f0b1153143484aacf98c0e4795a59fa350f45054e6b416",
+   "byteSize": 27,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لليسار — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-clock",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e7271bd12867409e98747c57ee1e2b26d61e5eaa4e561620f765b7e7d301629e",
+   "byteSize": 69,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ساعة — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-compass",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "14261b5963053270af2a754a75100b37127d7783b12554600c3e2b93d0c5e62e",
+   "byteSize": 106,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "بوصلة — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-confirm-alert",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "194c1199dc4fc513cf9ed8f5888fb773fd161711da828aeea4e5b99eb74f363e",
+   "byteSize": 58,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "نافذة التأكيد: تحذير / حذف"
+  },
+  {
+   "id": "pl-shared-confirm-info",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "78363b1f7385530ba7b6c70afa082e4f3e18754dc16779956753300865dd25e3",
+   "byteSize": 60,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "نافذة التأكيد: معلومة"
+  },
+  {
+   "id": "pl-shared-confirm-success",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "35025f99bb19ef8b08ee9ce5df47e5a28f43be1107ceafac25754cfc3e2eb804",
+   "byteSize": 66,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "نافذة التأكيد: نجاح"
+  },
+  {
+   "id": "pl-shared-gear",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2d10246f75b386f75ce3033d3d507cdf9b4ebdbbba1359bca1d714699cda54bc",
+   "byteSize": 539,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ترس — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-globe",
+   "viewBox": "0 0 24 16",
+   "width": 24,
+   "height": 16,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "bd616331f090ade883afb5054bf245b5150138a4e95168aa8bcc0d9fe3fb1a2e",
+   "byteSize": 104,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "كرة أرضية — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-layers",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "5f54cd0c80406f372bffbcc519c4d02968267c29a2d4cf7dde5e72abacc516ee",
+   "byteSize": 67,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "طبقات — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-level-star",
+   "viewBox": "0 0 100 100",
+   "width": 100,
+   "height": 100,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4b283b844c4122ee783b41f8389cff6e8ad48e6d689fccb98344e75f7593b01b",
+   "byteSize": 115,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "نجمة المستوى (شارة المستوى وسلّم المستويات)"
+  },
+  {
+   "id": "pl-shared-link",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "277d8d139a22995c688bf334a1ac9e44c12183a838ca67841ec34faf259af612",
+   "byteSize": 137,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "رابط — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-logout",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "88e093e98d5bb4b278361ce995738c580a2b78319d82873bc58cf8896ea45029",
+   "byteSize": 75,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تسجيل الخروج — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-mic",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "88210272d4dab58bef6994f774adaccf6685e7d35caf6fa2987f1424abffd14a",
+   "byteSize": 203,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ميكروفون — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-mic-off",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "1a65d41c309777cbf4a9b463501c2d219ef65dac62ee2b1050cb470862048029",
+   "byteSize": 275,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "كتم الميكروفون — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-monitor",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "2f680a7a2e424779f27284519f05c6e9f3a2a2fb5e4611cf553605f702df6e2d",
+   "byteSize": 151,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "شاشة — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-notebook",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ebd1c9dbca6855b2a12bc6a74c2c60094479a9d7ed81a8fe5fb2f4b1c7faf528",
+   "byteSize": 91,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "دفتر — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-paperclip",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "eaf3be37c10a20d97aeb986e5f8e5885667b82fa0a591e141ca12a3d6c8e471a",
+   "byteSize": 111,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مشبك مرفق — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-phone",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "548988c8049c2e3eaf81925dff5117424be20ddae0c5397dac45ee3e18ab58e0",
+   "byteSize": 297,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "هاتف — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-phone-off",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "f345c0b3d711c59985ddb584cc4d74795763a83f9391ba82098a6893adc6d12c",
+   "byteSize": 359,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إنهاء المكالمة — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-rating-star",
+   "viewBox": "0 0 100 100",
+   "width": 100,
+   "height": 100,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "4b283b844c4122ee783b41f8389cff6e8ad48e6d689fccb98344e75f7593b01b",
+   "byteSize": 115,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "نجمة التقييم — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-send",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "b5b21b1ca465589a8c1c69e5025fca724e114ac933922df9f981f8453a99fe58",
+   "byteSize": 50,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إرسال — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-shield-alert",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "283377c9c9d6ec0a99a990742f86af184542acd4632eeb63af057d5a82e4c454",
+   "byteSize": 83,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "درع تنبيه — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-shield-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "59e5d76e00c9534a585817762ba002099e070246a93a160611f21f1ebf7c9847",
+   "byteSize": 79,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "درع مع علامة صح — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-social-instagram",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "243b3babae67e793c1a64212951fc7765bc883dbbffd99adbfad1bb3e66a065f",
+   "byteSize": 148,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "Instagram — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-social-linkedin",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "158866da3dd22655792668bb7f028f17348937ca65dd95e4fdfa566b650b4620",
+   "byteSize": 203,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "LinkedIn — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-social-snapchat",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "978f427675c6235b28ea752cb9b7f43b10a0b06af8da2653648647dd2b04d5e7",
+   "byteSize": 193,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "Snapchat — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-social-tiktok",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "727abb6ac7419ed18ebd78e178263f04e39a1717139257690dde200ca9cd3a90",
+   "byteSize": 45,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "TikTok — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-social-x",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "15e679ac09be428820b48f74562b38220ef282ee450863a03ca65e0251e0d00e",
+   "byteSize": 181,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "X (تويتر) — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-social-youtube",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e2c023e3f14c0b082efc9052db3779e4ca4d26e1f3c95c8602cbc8bac0c0c150",
+   "byteSize": 119,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "YouTube — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-store",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "ae80c63221319478bcd4b8d9b87db7e9e2ab43f8f2add5069474d469581cc7bc",
+   "byteSize": 107,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "متجر — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-user",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "d47c81708f9e58fd430c2deecda45b38ffc9317a9722523fd1276bbf0a1a99db",
+   "byteSize": 79,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "مستخدم — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-video",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7e516198f94856ba9c2149cbea15e409ec4ee2cf63e421a9a991969f52c24833",
+   "byteSize": 97,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "فيديو — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-video-off",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cdc2b679898f7d267f353b9a54d9c31234866b8f550ca395543c60faf15eaf52",
+   "byteSize": 158,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إيقاف الكاميرا — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-wallet",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cfa4e4f9e2dbf915ba3699769e0d1ab5c58d60feca54f92c980dbab40ff1ec81",
+   "byteSize": 129,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "محفظة — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-warning",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e55230808363bf9cb5b20a7b478f34d0afa0cce1a05c77a77c30ccbf2e3c586b",
+   "byteSize": 112,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "تحذير مثلث — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-x",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "e56f0ca55b9d69111856fefaf22fd375c63e69e6ac66fc11e19f262c696977e9",
+   "byteSize": 96,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إغلاق — العناصر المشتركة"
+  },
+  {
+   "id": "pl-site-arrow-left",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "94637c904b3d26f1adb9cc0bf1a1813c2455e37a61bb9ebce47b6a23377ea6f8",
+   "byteSize": 74,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لليسار — الموقع العام"
+  },
+  {
+   "id": "pl-site-cart",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "04477e67b7c267d84e4f3f46f137e8a9aff5ed2562bc1934abdc85f5e657ed9e",
+   "byteSize": 264,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سلة التسوق — الموقع العام"
+  },
+  {
+   "id": "pl-site-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "5455bb685eced3fada4de2d29a7ab400ea28888767a8180ebbb58596c6789186",
+   "byteSize": 123,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "علامة صح — الموقع العام"
+  },
+  {
+   "id": "pl-site-chevron-down",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "af90879b3e75ecbbd268978a759bbeddb0fb1a1fae46a2958071b860efc17c5f",
+   "byteSize": 35,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم لأسفل — الموقع العام"
+  },
+  {
+   "id": "pl-site-circle",
+   "viewBox": "0 0 50 50",
+   "width": 50,
+   "height": 50,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "3210d044beb5e151d9728e43fafd151cff07ebf1a66b1547a93cfd68bfae8a84",
+   "byteSize": 231,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "دائرة — الموقع العام"
+  },
+  {
+   "id": "pl-site-filter",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "1eef501a30ceeeb852df80d33ac69222ab772b28653e732450fb2bb81ecb8e68",
+   "byteSize": 63,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "فلترة — الموقع العام"
+  },
+  {
+   "id": "pl-site-menu-lines",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "11efad344d1388597ae01d189d266331b3afe51281aa0c2cf70c7cddd030fe00",
+   "byteSize": 112,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "قائمة (خطوط) — الموقع العام"
+  },
+  {
+   "id": "pl-site-shield-check",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "59e5d76e00c9534a585817762ba002099e070246a93a160611f21f1ebf7c9847",
+   "byteSize": 79,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "درع مع علامة صح — الموقع العام"
+  },
+  {
+   "id": "pl-site-social-paypal",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "89cbf0da2f084db3e7b4b24c4fe53c1a5d86605fee64000029485c7375a6cda6",
+   "byteSize": 49,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "PayPal — الموقع العام"
+  },
+  {
+   "id": "pl-site-sort-lines",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c491afb8ae637f2ebf379b031cf0948042493f399fe5d22a8e2d2d92edd53338",
+   "byteSize": 111,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "ترتيب — الموقع العام"
+  },
+  {
+   "id": "pl-site-x",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "a5864b28fcde265184a7abd1c475d46f8ed15d8c5ae74920f8509b59b88ddbfd",
+   "byteSize": 74,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "إغلاق — الموقع العام"
+  },
+  {
    "id": "pr-building",
    "viewBox": "0 0 24 24",
    "width": 24,
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "9d64f52396833c33bb13770ab2f003f98c1e7f801069a5b6eb60fa79b22252a4",
    "byteSize": 91,
    "files": [
@@ -2186,7 +8396,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "c24f232a216197cd9b9bad331ec78ca9a009310c9acaa0cfe49244247ceb4279",
    "byteSize": 83,
    "files": [
@@ -2550,7 +8760,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "31ed40f62b244944456d9eb631b88b32d7112df3061e47143a2c14fa6bd6c9a5",
    "byteSize": 93,
    "files": [
@@ -2592,7 +8802,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "2ba4a2b9b39064c138819d2ef2fa77cb6665ea90180a034d6a90feb3152f5440",
    "byteSize": 172,
    "files": [
@@ -2606,7 +8816,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "1bba02353132d62c08d01e9c0f47b776d28d843c3c491c5b4a803600418ba996",
    "byteSize": 131,
    "files": [
@@ -2620,7 +8830,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "717196374b07ccb0ecb3e482147dc4b1232dfceba91b95cd0a898da729aa03a0",
    "byteSize": 230,
    "files": [
@@ -2648,7 +8858,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "85b9a7faaf4718f499e2c41f996f518e281728bfd0b7977db051b1a8dd6ab7dd",
    "byteSize": 657,
    "files": [
@@ -2718,7 +8928,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "b65bf2d25bd94c83cfa28d04971970e5320e8af95c0f0cc3f510fca1abc496b8",
    "byteSize": 57,
    "files": [
@@ -2746,7 +8956,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "dde63c2cb59c56c27dca500ce130ebcd37f831fc50fcb040e697bd7774c25870",
    "byteSize": 71,
    "files": [
@@ -2760,7 +8970,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "a1413305682a7dde14b168a4f482f8261aaf56f90f104eff7c134fa5699db508",
    "byteSize": 73,
    "files": [
@@ -2774,7 +8984,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "8f68088b333e0e0116085a531392a8f0fbb517e37a0da579714a4f27a6584961",
    "byteSize": 114,
    "files": [
@@ -2788,7 +8998,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "0335dacdf7a57e69a82c5f68a04bf49946ff489d5481515c3deeb84fcd22baf8",
    "byteSize": 144,
    "files": [
@@ -2802,7 +9012,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "3d1ae035f6c47408533f2cdff2d6e89b86e1d750cb6b3af5a5985b2317df9008",
    "byteSize": 52,
    "files": [
@@ -2816,7 +9026,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "7245023d28c4c2007da5563855e5517df0544535e9602ce34e4039435b2c45bd",
    "byteSize": 37,
    "files": [
@@ -2830,7 +9040,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "49c4d6705243b96cdad3de09f7de485f63486a2cddc3fd50f5331048f38b5c6d",
    "byteSize": 133,
    "files": [
@@ -2872,7 +9082,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "95b767402e150c7217bf15c1a59d77c16d0d1c1b3c49601351020bc0e58b84f9",
    "byteSize": 88,
    "files": [
@@ -2886,7 +9096,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "58446f972b7a42f91c1db1c279c1903b6ea78c4e4d681ed6da7c95b803832b82",
    "byteSize": 208,
    "files": [
@@ -2900,7 +9110,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "e124f654e8461e296c54028b0bf9a78ab4e352cf8897623e782ee29fde2c9554",
    "byteSize": 76,
    "files": [
@@ -2914,7 +9124,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "3fe6ea4d4759c3a61ca8367d8e78a1174490e7a4bbed2ab7bdfffffecf5829fb",
    "byteSize": 130,
    "files": [
@@ -2928,7 +9138,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "e7efae004fb39d489e853a799e4b2ff9e7519f37b955e6ec4d2ed779d66a0e8c",
    "byteSize": 90,
    "files": [
@@ -2942,7 +9152,7 @@
    "height": 24,
    "defs": 1,
    "variants": 1,
-   "reason": "NO_CONSUMER",
+   "reason": null,
    "sha256": "85983a62dfa2869e5016a0020453f70dad03dfbef9552f9119c06cc8e259eaeb",
    "byteSize": 87,
    "files": [
