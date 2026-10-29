@@ -11,8 +11,8 @@ const reasonOf = (fn: () => unknown): string => { try { fn(); } catch (e) { asse
 const val = (key: string, v: unknown) => validateTokenValue(key, v);
 const bytes = (o: unknown) => Buffer.from(typeof o === 'string' ? o : JSON.stringify(o), 'utf8');
 
-test('tokens: registry shape and exact counts (37 declared in :root + the new --font-family, 34 colour-like of which 33 redefined in light (styles.css + design system) and only --grad shared, 3 layout, 1 typography)', () => {
-	assert.deepEqual(TOKEN_COUNTS, { declaredInRoot: 37, colorLike: 34, redefinedByThemeLight: 33, sharedWithDark: 1, layout: 3, typography: 1 });
+test('tokens: registry shape and exact counts (37 declared in :root + 24 round-9 semantic variables + --font-family: 58 colour-like of which 57 redefined in light and only --grad shared, 3 layout, 1 typography)', () => {
+	assert.deepEqual(TOKEN_COUNTS, { declaredInRoot: 61, colorLike: 58, redefinedByThemeLight: 57, sharedWithDark: 1, layout: 3, typography: 1 });
 	assert.deepEqual(TOKEN_REGISTRY.filter(t => t.scope === 'color' && t.light === undefined).map(t => t.name).sort(), ['--grad']);
 	assert.equal(new Set(TOKEN_REGISTRY.map(t => t.name)).size, TOKEN_REGISTRY.length, 'names unique');
 	for (const t of TOKEN_REGISTRY) assert.match(t.name, /^--[a-z0-9-]{1,40}$/);
@@ -22,7 +22,7 @@ test('tokens: registry shape and exact counts (37 declared in :root + the new --
 	for (const d of keys) { assert.equal(d.kind, 'json'); assert.deepEqual(d.allowedMimes, ['application/json']); assert.equal(d.maxBytes, TOKEN_MAX_BYTES); assert.equal(d.defaultFingerprint.byteSize, 2); assert.equal(d.defaultFingerprint.mime, 'application/json'); assert.ok(describeRules(d).length >= 2); }
 	assert.deepEqual(keys.filter(d => WIRED_KEYS.includes(d.key)).map(d => d.key), ['tokens.colors.light', 'tokens.colors.dark', 'tokens.layout', 'tokens.typography']);
 	assert.ok(keys.every(d => d.notWiredReason.length > 20));
-	assert.equal(tokensOfKey('tokens.colors.light').length, 34); assert.equal(tokensOfKey('tokens.colors.dark').length, 34); assert.equal(tokensOfKey('tokens.layout').length, 3); assert.equal(tokensOfKey('tokens.typography').length, 1);
+	assert.equal(tokensOfKey('tokens.colors.light').length, 58); assert.equal(tokensOfKey('tokens.colors.dark').length, 58); assert.equal(tokensOfKey('tokens.layout').length, 3); assert.equal(tokensOfKey('tokens.typography').length, 1);
 });
 
 test('tokens: every default is already in canonical form and satisfies its own grammar (so a default can never be "changed" by canonicalisation)', () => {
@@ -35,10 +35,14 @@ const goldenPath = GOLDEN.find(p => fs.existsSync(p));
 const norm = (v: string) => v.toLowerCase().replace(/\s+/g, '').replace(/(\.\d*?)0+(?![\d])/g, '$1').replace(/^"tajawal"$/, "'tajawal'");
 test('tokens: EVERY default (dark and light) equals the effective computed value of the production build', { skip: goldenPath ? false : 'FE effective golden is not reachable (set SITE_IDENTITY_FE_GOLDEN)' }, () => {
 	const g = JSON.parse(fs.readFileSync(goldenPath!, 'utf8')) as { dark: Record<string, string>; light: Record<string, string> };
-	assert.equal(Object.keys(g.dark).length, TOKEN_REGISTRY.length); assert.equal(Object.keys(g.light).length, TOKEN_REGISTRY.length);
+	// the golden holds the platform :root tokens; the 24 round-9 semantic variables live in the FE manifest identity-semantic-tokens.json (measured defaults), checked below
+	const semPath = goldenPath!.replace(/identity-tokens\.effective\.golden\.json$/, 'identity-semantic-tokens.json');
+	const sem = new Map((JSON.parse(fs.readFileSync(semPath, 'utf8')) as { tokens: Array<{ name: string; dark: string; light: string }> }).tokens.map(t => [t.name, t]));
+	assert.equal(Object.keys(g.dark).length + sem.size, TOKEN_REGISTRY.length);
 	for (const t of TOKEN_REGISTRY) {
-		assert.equal(norm(g.dark[t.name] ?? '<missing>'), norm(t.dark), `${t.name} dark`);
-		if (t.scope === 'color') assert.equal(norm(g.light[t.name] ?? '<missing>'), norm(t.light ?? t.dark), `${t.name} light`);
+		const s = sem.get(t.name);
+		assert.equal(norm((s ? s.dark : g.dark[t.name]) ?? '<missing>'), norm(t.dark), `${t.name} dark`);
+		if (t.scope === 'color') assert.equal(norm((s ? s.light : g.light[t.name]) ?? '<missing>'), norm(t.light ?? t.dark), `${t.name} light`);
 	}
 });
 

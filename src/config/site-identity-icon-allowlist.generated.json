@@ -2,9 +2,9 @@
  "generatedBy": "scripts/site-identity-icon-allowlist.cjs",
  "note": "GENERATED - do not edit by hand. Regenerate with: node scripts/site-identity-icon-allowlist.cjs <FE-repo> --write",
  "counts": {
-  "symbols": 755,
+  "symbols": 756,
   "wired": 737,
-  "noConsumer": 18,
+  "noConsumer": 19,
   "excluded": 15,
   "libraryOnly": 84
  },
@@ -7885,6 +7885,21 @@
     "src/app/core/identity/identity-inline-icons.ts"
    ],
    "label": "نجمة التقييم — العناصر المشتركة"
+  },
+  {
+   "id": "pl-shared-select-arrow",
+   "viewBox": "0 0 24 24",
+   "width": 24,
+   "height": 24,
+   "defs": 1,
+   "variants": 1,
+   "reason": "NO_CONSUMER",
+   "sha256": "af90879b3e75ecbbd268978a759bbeddb0fb1a1fae46a2958071b860efc17c5f",
+   "byteSize": 35,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "سهم القوائم المنسدلة (select) في كل الموقع"
   },
   {
    "id": "pl-shared-send",
