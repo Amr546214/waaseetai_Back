@@ -5,23 +5,7 @@ import { mapHelpAssistantRole } from '../../sockets/help-assistant-auth';
 import { WaseetAiErrorCode, normalizeWaseetAiError } from './waseet-ai/waseet-ai.errors';
 import type { TtsSynthesizeRequest } from './waseet-ai/waseet-ai.types';
 
-// Help Assistant / Bebo text-to-speech — authenticated server-side relay.
-//
-//   Angular (JWT, REST)  ──POST /api/help-assistant/tts──▶  this handler
-//     ──▶ waseetAiClient.synthesizeSpeech (the only holder of the WaseetAI
-//         bearer token) ──▶ WaseetAI POST /v1/ai/tts/synthesize
-//     ◀── audio/wav bytes (never the upstream JSON, never an upstream error)
-//
-// Identity comes ONLY from the authenticated request (`req.user`, set by the
-// `authenticate` middleware from a verified JWT + live session). Nothing in
-// the body is ever treated as identity: only `text`, `voice` and `dialect`
-// are read, each strictly validated. The model is fixed server-side.
-//
-// Allowlists are the exact option lists of the Bebo v4 handoff
-// (cute-robot/server.mjs VOICES, bebo-core.mjs DIALECTS); unlike the demo
-// proxy (which silently fell back to defaults) an unknown value is rejected.
-
-export const TTS_VOICES = ['Puck', 'Kore', 'Fenrir', 'Aoede', 'Zephyr', 'Sulafat', 'Charon', 'Leda'] as const;
+export const TTS_VOICES = ['Puck', 'Kore', 'Fenrir', 'Aoede', 'Zephyr', 'Sulafat', 'Charon', 'Leda', 'Orus', 'Callirrhoe'] as const;
 export const TTS_DIALECTS = ['egyptian', 'saudi', 'gulf', 'msa', 'english'] as const;
 /** Handoff default ("Flash-Lite · سريع"); the client cannot choose a model. */
 export const TTS_MODEL = 'gemini-3.8-flash-lite-tts';
@@ -30,7 +14,7 @@ export const TTS_MODELS = [TTS_MODEL, 'gemini-3.8-flash-tts'] as const;
 export const MAX_TTS_TEXT_LENGTH = 1500;
 const TTS_TIMEOUT_MS = 45_000;
 const USER_WINDOW_MS = 10 * 60 * 1000;
-const USER_MAX_REQUESTS = 20;
+const USER_MAX_REQUESTS = 120;
 
 export type TtsVoice = (typeof TTS_VOICES)[number];
 export type TtsDialect = (typeof TTS_DIALECTS)[number];

@@ -6,10 +6,19 @@ import { waseetAiClient, type WaseetAiClient } from './waseet-ai/waseet-ai.clien
 import { normalizeWaseetAiError, WaseetAiErrorCode } from './waseet-ai/waseet-ai.errors';
 
 const liveSchema = z.object({ model: z.literal('gemini-3.8-live').optional(),
-  voice: z.enum(['Puck', 'Kore', 'Fenrir', 'Aoede', 'Zephyr', 'Sulafat', 'Charon', 'Leda']).optional(),
+  voice: z.enum(['Puck', 'Kore', 'Fenrir', 'Aoede', 'Zephyr', 'Sulafat', 'Charon', 'Leda', 'Orus', 'Callirrhoe']).optional(),
   language: z.enum(['ar-EG', 'ar', 'en']).optional() }).strict();
 const sttSchema = z.object({ audioBase64: z.string().min(8).max(8_000_000).regex(/^[A-Za-z0-9+/]+={0,2}$/),
-  mimeType: z.enum(['audio/webm', 'audio/webm;codecs=opus', 'audio/wav', 'audio/mpeg', 'audio/mp4', 'audio/ogg', 'audio/ogg;codecs=opus', 'audio/flac']),
+  mimeType: z.preprocess(
+    (val) => {
+      if (typeof val !== 'string') return val;
+      const base = val.split(';')[0]?.trim().toLowerCase() ?? val;
+      if (base === 'audio/mp3') return 'audio/mpeg';
+      if (base === 'audio/x-wav' || base === 'audio/wave') return 'audio/wav';
+      return base;
+    },
+    z.enum(['audio/webm', 'audio/wav', 'audio/mpeg', 'audio/mp4', 'audio/m4a', 'audio/ogg', 'audio/flac'])
+  ),
   languageCodes: z.array(z.enum(['ar-EG', 'ar', 'en', 'en-US'])).max(3).optional(),
   mode: z.enum(['smart', 'verbatim']).optional(), timestamps: z.boolean().optional(), diarization: z.boolean().optional(),
   customVocabulary: z.array(z.string().min(1).max(100)).max(50).optional(),

@@ -238,8 +238,8 @@ test('TTS: empty or oversized text is rejected 400 without an upstream call', as
 	assert.equal(calls.length, 1);
 });
 
-test('TTS: allowlists are exactly the Bebo v4 handoff voice/dialect lists', () => {
-	assert.deepEqual([...TTS_VOICES], ['Puck', 'Kore', 'Fenrir', 'Aoede', 'Zephyr', 'Sulafat', 'Charon', 'Leda']);
+test('TTS: allowlists are the Bebo v4 handoff voice/dialect lists', () => {
+	assert.deepEqual([...TTS_VOICES], ['Puck', 'Kore', 'Fenrir', 'Aoede', 'Zephyr', 'Sulafat', 'Charon', 'Leda', 'Orus', 'Callirrhoe']);
 	assert.deepEqual([...TTS_DIALECTS], ['egyptian', 'saudi', 'gulf', 'msa', 'english']);
 	assert.equal(validateTtsInput([VALID]).ok, false);
 	assert.equal(validateTtsInput('text').ok, false);

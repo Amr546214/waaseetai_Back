@@ -22,6 +22,8 @@ export interface QuizQuestionItem {
   attemptId?: string;
 }
 
+const POP_CULTURE_TRIVIA_PATTERN = /(?:سوبر\s*ماريو|ماريو\s*برذرز|بلايستيشن\s*\d|تاريخ\s*إصدار\s*لعبة|تاريخ\s*اصدار\s*لعبه|نينتندو|أول\s*لعبة\s*فيديو|شخصية\s*ماريو|باك\s*مان|super\s*mario|playstation\s*\d|nintendo|pac-?man|pong)/i;
+
 export class AssessmentService {
   /**
    * Helper to randomly shuffle an array and pick a specific number of unique items
@@ -65,9 +67,10 @@ export class AssessmentService {
         const availableQuestions = await prisma.question.findMany({
           where: { specialtyId, isActive: true },
         });
+        const technicalPool = availableQuestions.filter((q) => !POP_CULTURE_TRIVIA_PATTERN.test(q.text));
 
-        if (availableQuestions.length >= quizSize) {
-          const uniqueQuestions = this.shuffleAndPickUnique(availableQuestions, quizSize);
+        if (technicalPool.length >= quizSize) {
+          const uniqueQuestions = this.shuffleAndPickUnique(technicalPool, quizSize);
           return uniqueQuestions.map((q) => ({
             id: String(q.id),
             subSpecialtyTag: q.subSpecialtyTag || subSpecialties[0] || 'عام',
@@ -96,11 +99,14 @@ export class AssessmentService {
       } catch {
         // Use fallback specialty name if DB lookup is unavailable
       }
+      const enrichedSpecialtyName = subSpecialties.length > 0
+        ? `${specialtyName} (${subSpecialties.join('، ')})`
+        : specialtyName;
 
       try {
         const aiResponse = await waseetAiClient.createAssessment({
           providerSpecialtyId: specialtyId,
-          specialtyName,
+          specialtyName: enrichedSpecialtyName,
           questionCount: quizSize,
           timeLimitMinutes: opts?.timeLimitMinutes ?? 30,
         });
@@ -123,9 +129,9 @@ export class AssessmentService {
 
     // 3. Fallback: if AI failed or not configured, return any available local questions
     try {
-      const fallbackQuestions = await prisma.question.findMany({
+      const fallbackQuestions = (await prisma.question.findMany({
         where: { specialtyId, isActive: true },
-      });
+      })).filter((q) => !POP_CULTURE_TRIVIA_PATTERN.test(q.text));
       if (fallbackQuestions.length > 0) {
         const count = Math.min(fallbackQuestions.length, quizSize);
         const picked = this.shuffleAndPickUnique(fallbackQuestions, count);
@@ -145,9 +151,6 @@ export class AssessmentService {
     return [];
   }
 
-  /**
-   * Generates a new assessment attempt directly via Waseet AI Assessment Engine (POST /v1/ai/assessments)
-   */
   async generateAssessment(
     input: CreateAssessmentRequest,
     opts?: WaseetAiCallOptions
@@ -155,9 +158,6 @@ export class AssessmentService {
     return waseetAiClient.createAssessment(input, opts);
   }
 
-  /**
-   * Streams assessment questions in real-time from Waseet AI (POST /v1/ai/assessments/stream)
-   */
   streamAssessmentQuestions(
     input: AssessmentStreamRequest,
     opts?: WaseetAiCallOptions
@@ -165,9 +165,6 @@ export class AssessmentService {
     return waseetAiClient.streamAssessmentQuestions(input, opts);
   }
 
-  /**
-   * Submits candidate answers for grading to Waseet AI Assessment Engine (POST /v1/ai/assessments/:attemptId/submit)
-   */
   async submitAssessment(
     attemptId: string,
     input: SubmitAssessmentRequest,
@@ -176,9 +173,6 @@ export class AssessmentService {
     return waseetAiClient.submitAssessment(attemptId, input, opts);
   }
 
-  /**
-   * Checks the current status of an assessment attempt (GET /v1/ai/assessments/:attemptId/status)
-   */
   async getAssessmentStatus(
     attemptId: string,
     opts?: WaseetAiCallOptions

@@ -11,6 +11,7 @@ import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { AppError } from '../utils/app-error';
 import { assertLegacySpecialtyProofs } from '../services/accreditation-proof.service';
 import { requireOwnedProviderSpecialtyFromBody, requireOwnedProviderSpecialtyFromParam } from '../utils/provider-specialty-access';
+import { checkMultipleContentPolicy } from '../utils/content-policy-guard';
 
 const router = Router();
 
@@ -21,8 +22,6 @@ const providerAuth = [
   authorize(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY)
 ] as const;
 
-// Rule-based specialty suggestion for the "choose your specialty" step (provider history / profile / open demand). Registered before the
-// /:id routes. A failure answers 500: the page then shows no suggestion (no error toast).
 router.get('/recommendations', ...providerAuth, async (req: Request, res: Response): Promise<void> => {
   try {
     const data = await providerSpecialtyRecommendationService.getForProvider((req as any).user.id);
@@ -49,6 +48,19 @@ router.post(
         return;
       }
 
+      for (let i = 0; i < sampleCount; i++) {
+        const sampleTitle = String(req.body[`sampleTitle_${i}`] || '');
+        const sampleDesc = String(req.body[`sampleDescription_${i}`] || '');
+        const policy = checkMultipleContentPolicy([sampleTitle, sampleDesc]);
+        if (policy.blocked) {
+          res.status(400).json({
+            success: false,
+            message: policy.reasonAr || 'نموذج العمل المدخل يخالف سياسات منصة وسيط والأنظمة المرعية.',
+          });
+          return;
+        }
+      }
+
       const existingSpecialty = await prisma.providerSpecialty.findUnique({
         where: { id: providerSpecialtyId },
       });
@@ -67,12 +79,10 @@ router.post(
       const cloudFiles = new Map<Express.Multer.File, Awaited<ReturnType<typeof uploadMulterFile>>>();
       await Promise.all(files.map(async file => {
         const isProof = file.fieldname.startsWith('proofFiles_');
-        // Ownership proofs are confidential: uploaded private, stored as a private reference, opened only through /api/kyc-documents/access-link.
         const stored = await uploadMulterFile(file, `waseetai/specialties/${providerSpecialtyId}/${isProof ? 'proofs' : 'samples'}`, undefined, isProof);
         cloudFiles.set(file, stored);
       }));
 
-      // The proof documents are mandatory: a stored, owned proof of this request (new in this call, or already completed) must exist BEFORE anything is replaced.
       await assertLegacySpecialtyProofs(prisma as any, {
         userId: req.user!.id, providerSpecialtyId,
         proofRefs: files.filter(f => f.fieldname.startsWith('proofFiles_')).map(f => cloudFiles.get(f)?.privateRef)
