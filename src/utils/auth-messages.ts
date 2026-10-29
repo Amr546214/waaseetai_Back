@@ -8,3 +8,11 @@ export const REGISTER_GENERIC_MESSAGE = 'إن كان الحساب يحتاج ت�
 // Answer of POST /auth/verify-otp when the caller identifies the account by e-mail: the same words and status for an unknown address, an
 // active / blocked account, a missing, expired, wrong or locked code. It tells the legitimate user what to do without telling anyone which case it is.
 export const ACTIVATION_CODE_REJECTED_MESSAGE = 'رمز التحقق غير صحيح أو منتهي. إن لم يصلك رمز فاطلب إرسال رمز جديد';
+
+/** The code step of e-mail-first registration: unknown / expired / wrong / used / locked ticket or code are ONE answer. */
+export const REGISTER_PROOF_REJECTED_MESSAGE = 'رمز التحقق غير صحيح أو منتهي. اطلب رمزًا جديدًا ثم أعد المحاولة';
+/**
+ * After the e-mail is PROVEN, registration data that cannot be used is answered with this one message: it does not say whether the e-mail or the phone
+ * matched, and nothing about the other account (owner, e-mail, state) is shown.
+ */
+export const REGISTER_DATA_UNAVAILABLE_MESSAGE = 'تعذّر إنشاء حساب بهذه البيانات لأن البريد الإلكتروني أو رقم الجوال مرتبط بحساب قائم. صحّح البيانات، أو سجّل الدخول، أو استعد كلمة المرور، أو تواصل مع الدعم';

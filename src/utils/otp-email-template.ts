@@ -2,11 +2,12 @@ import { otpValidityText } from './otp-validity';
 import { escHtml, MAIL_FONT, renderEmailShell } from './email-shell';
 
 /** What a code is for: the title/subtitle of the mail. `generic` keeps the old, purpose-less wording. */
-export type OtpEmailPurpose = 'login' | 'activation' | 'payment' | 'phone-change' | 'paypal-change' | 'contract-signature' | 'generic';
+export type OtpEmailPurpose = 'login' | 'activation' | 'register-proof' | 'payment' | 'phone-change' | 'paypal-change' | 'contract-signature' | 'generic';
 
 const COPY: Record<OtpEmailPurpose, { title: string; sub: string }> = {
 	login: { title: 'رمز الدخول الخاص بك', sub: 'أدخل الرمز التالي لإتمام تسجيل الدخول' },
 	activation: { title: 'رمز تفعيل حسابك', sub: 'أدخل الرمز التالي لتأكيد بريدك الإلكتروني وتفعيل حسابك' },
+	'register-proof': { title: 'رمز تأكيد بريدك الإلكتروني', sub: 'أدخل الرمز التالي لتأكيد بريدك وإكمال إنشاء حسابك. لم يُنشأ حساب بعد.' },
 	payment: { title: 'رمز تأكيد الدفع', sub: 'أدخل الرمز التالي لتأكيد عملية الدفع' },
 	'phone-change': { title: 'رمز تأكيد تغيير رقم الجوال', sub: 'أدخل الرمز التالي لتأكيد تغيير رقم جوالك' },
 	'paypal-change': { title: 'رمز تأكيد تغيير بريد PayPal', sub: 'أدخل الرمز التالي لتأكيد تغيير بريد استلام الأرباح' },
@@ -17,7 +18,7 @@ const COPY: Record<OtpEmailPurpose, { title: string; sub: string }> = {
 
 /** The e-mail kinds of notification.service.sendOtpMail -> the purpose wording. */
 export const otpPurposeOfKind = (kind: string): OtpEmailPurpose =>
-	kind === 'login' ? 'login' : kind === 'otp' ? 'activation' : kind === 'payment' ? 'payment' : kind === 'phone-change' ? 'phone-change' : kind === 'paypal-email-change' ? 'paypal-change' : 'generic';
+	kind === 'login' ? 'login' : kind === 'otp' ? 'activation' : kind === 'register-proof' ? 'register-proof' : kind === 'payment' ? 'payment' : kind === 'phone-change' ? 'phone-change' : kind === 'paypal-email-change' ? 'paypal-change' : 'generic';
 
 /**
  * ONE light, single-column OTP mail for every purpose (the design of the approved reference), built on the shared mail shell. Mail-client safe: table layout,

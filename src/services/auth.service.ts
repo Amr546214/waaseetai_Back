@@ -3,11 +3,16 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { OtpType, UserStatus, UserRole, ReferralStatus, AccountType, User as PrismaUser } from '@prisma/client';
 import { authRepository } from '../repositories/auth.repository';
-import { RegisterInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput, VerifyLoginOtpInput } from '../routes/auth/auth.schema';
+import { RegisterInput, RegisterStartInput, RegisterCompleteInput, VerifyOtpInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, VerifyResetCodeInput, ResetPasswordInput, VerifyLoginOtpInput } from '../routes/auth/auth.schema';
 import { OAuth2Client } from 'google-auth-library';
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 import { AppError } from '../utils/app-error';
+import { issueRegistrationProof, checkRegistrationProof, nonceOfTicket, REGISTER_PROOF_VALIDITY_MS } from '../utils/registration-proof';
+import { registrationProofRepository } from '../repositories/registration-proof.repository';
+
+/** Thrown inside the creating transaction when the ticket was consumed by a concurrent request: the whole transaction rolls back. */
+class ProofAlreadyUsed extends Error {}
 import { normalizePhone } from '../utils/phone-countries';
 import { logger } from '../config/logger';
 import { notificationService } from './notification.service';
@@ -21,7 +26,7 @@ import { withKeyLock } from '../utils/key-lock';
 import { remainingMinutes } from '../utils/otp-validity';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { normalizeReferralIdentifier } from '../utils/referral-identifier';
-import { RESEND_GENERIC_MESSAGE, ACTIVATION_CODE_REJECTED_MESSAGE } from '../utils/auth-messages';
+import { RESEND_GENERIC_MESSAGE, ACTIVATION_CODE_REJECTED_MESSAGE, REGISTER_PROOF_REJECTED_MESSAGE, REGISTER_DATA_UNAVAILABLE_MESSAGE } from '../utils/auth-messages';
 import { marketerNotifications } from './marketer-notifications.service';
 
 /**
@@ -211,6 +216,89 @@ export class AuthService {
 	}
 
 	/**
+	 * E-mail-first registration, step 1. Sends a proof code to the typed address and returns a signed ticket. NOTHING is created or reserved
+	 * (no account, no phone), so the answer is identical for a new address, one in use and any phone; the mail is awaited because the timing no
+	 * longer depends on the account, which lets the answer say truthfully whether the SMTP server accepted it.
+	 */
+	public async startRegistration(rawInput: RegisterStartInput): Promise<{ emailSent: boolean; ticket?: string; expiresAt?: string }> {
+		const email = String(rawInput.email ?? '').trim().toLowerCase();
+		try {
+			normalizePhone(rawInput.phoneNumber, rawInput.phoneCountryCode);
+		} catch {
+			throw new AppError('رقم الجوال غير صالح أو لا يطابق رمز الدولة المختار', 400);
+		}
+		const proof = issueRegistrationProof(email);
+		// the durable record of the ticket (attempts / lock / single use) exists before the mail goes out; it reserves no account and no phone
+		await registrationProofRepository.create(proof.nonce, email, proof.expiresAt);
+		try {
+			await notificationService.sendRegistrationProofEmail(email, proof.code, Math.round(REGISTER_PROOF_VALIDITY_MS / 60000));
+		} catch {
+			logger.error('[Register] proof mail was NOT delivered (flow=start).');
+			return { emailSent: false };
+		}
+		logger.info(`[Register] outcome=proof-sent to=${maskEmail(email)} (no account created, nothing reserved)`);
+		return { emailSent: true, ticket: proof.ticket, expiresAt: proof.expiresAt.toISOString() };
+	}
+
+	/**
+	 * E-mail-first registration, step 2. Needs the ticket + code that prove the address. Order of checks:
+	 *  1. signed ticket for THIS address; 2. one atomic reservation of an attempt in the database (unknown / expired / used / locked / out of data
+	 *  tries are all refused here, whatever the code); 3. the code; 4. uniqueness (e-mail and phone) -- and again by the unique indexes inside the
+	 *  creating transaction, which also consumes the ticket, so the account and the single use commit together and two simultaneous completions
+	 *  cannot both win. A proven caller whose data cannot be used gets ONE generic 409 (no field, no owner); the ticket allows a few such tries.
+	 * After the account exists a failure of the sign-in step never looks like a failed registration: see `signInRequired`.
+	 */
+	public async completeRegistration(rawInput: RegisterCompleteInput, referralContext: Pick<ReferralAttributionContext, 'refCookieSlug' | 'refCookieSource'> = {}, sessionContext: SessionContext = {}) {
+		const input = { ...rawInput, email: String(rawInput.email ?? '').trim().toLowerCase() } as RegisterCompleteInput & RegisterInput;
+		const rejectProof = (): never => { throw new AppError(REGISTER_PROOF_REJECTED_MESSAGE, 400); };
+		const nonce = nonceOfTicket(input.ticket, input.email);
+		if (!nonce) return rejectProof();
+		if (!(await registrationProofRepository.claim(nonce, input.email))) return rejectProof();
+		if (!checkRegistrationProof(input.ticket, input.email, input.code).ok) {
+			await registrationProofRepository.settleWrongCode(nonce);
+			return rejectProof();
+		}
+		await registrationProofRepository.settleRightCode(nonce);
+		try {
+			const phone = normalizePhone(input.phoneNumber, input.phoneCountryCode);
+			input.phoneNumber = phone.nationalNumber;
+			input.phoneCountryCode = phone.countryCode;
+		} catch {
+			throw new AppError('رقم الجوال غير صالح أو لا يطابق رمز الدولة المختار', 400);
+		}
+		const unavailable = (): never => { throw new AppError(REGISTER_DATA_UNAVAILABLE_MESSAGE, 409, undefined, 'REGISTRATION_DATA_UNAVAILABLE'); };
+		if (await authRepository.findByEmailOrPhone(input.email, input.phoneNumber)) {
+			logger.info(`[Register] outcome=data-unavailable-after-proof to=${maskEmail(input.email)} (nothing created)`);
+			return unavailable();
+		}
+		const hashedPassword = await bcrypt.hash(input.password, 12);
+		let user: PrismaUser;
+		try {
+			user = await authRepository.createUserWithProfile(input as RegisterInput, hashedPassword, undefined, UserStatus.ACTIVE, async (tx) => {
+				if (!(await registrationProofRepository.consumeInTx(tx, nonce))) throw new ProofAlreadyUsed();
+			});
+		} catch (error: any) {
+			if (error instanceof ProofAlreadyUsed) return rejectProof();
+			if (error?.code === 'P2002') {
+				logger.info(`[Register] outcome=data-unavailable-after-proof to=${maskEmail(input.email)} (unique index; nothing created)`);
+				return unavailable();
+			}
+			throw error;
+		}
+		// From here the account EXISTS and the ticket is spent: nothing below may turn into a "registration failed" answer that sends the user to register again.
+		if (input.accountType !== AccountType.MARKETING_BROKER) {
+			await this.resolveReferralAttribution(user.id, { affiliateIdentifier: input.affiliateIdentifier, refCookieSlug: referralContext.refCookieSlug, refCookieSource: referralContext.refCookieSource }).catch(() => undefined);
+		}
+		logger.info(`[Register] outcome=created-verified to=${maskEmail(input.email)} (e-mail proven before the account existed)`);
+		try {
+			return await this.signInActivatedUser(user, sessionContext);
+		} catch {
+			logger.error(`[Register] account created but the automatic sign-in failed (to=${maskEmail(input.email)}); the user is told to sign in normally.`);
+			return { signInRequired: true as const, email: user.email };
+		}
+	}
+
+	/**
 	 * Register a new user
 	 */
 	public async registerUser(rawInput: RegisterInput, referralContext: Pick<ReferralAttributionContext, 'refCookieSlug' | 'refCookieSource'> = {}) {
@@ -244,7 +332,12 @@ export class AuthService {
 			// active one logs in or recovers the password. The same bcrypt cost keeps the response time close.
 			if (input.password) await bcrypt.hash(input.password, 12);
 			// operator-only: the PUBLIC answer is identical, so this line is the only place that tells support why no code arrived (never the code, the address is masked)
-			logger.info(`[Register] outcome=in-use-nothing-created to=${maskEmail(input.email)} (email or phone already belongs to an account; no code, no mail)`);
+			// `conflict` names WHICH field matched (the phone is compared as the local number only, as the unique index on users.phoneNumber does)
+			// and `status` the state of that account: enough for support to tell "wrong phone" from "pending owner" without the number or the owner.
+			const sameEmail = String(existingUser.email ?? '').trim().toLowerCase() === input.email;
+			const samePhone = !!existingUser.phoneNumber && existingUser.phoneNumber === input.phoneNumber;
+			const conflict = sameEmail && samePhone ? 'email+phone' : sameEmail ? 'email' : samePhone ? 'phone' : 'unknown';
+			logger.info(`[Register] outcome=in-use-nothing-created to=${maskEmail(input.email)} conflict=${conflict} status=${existingUser.status} (email or phone already belongs to an account; no code, no mail)`);
 			return { userId: null as string | null, accountCreated: false };
 		}
 
@@ -333,8 +426,13 @@ export class AuthService {
 	 */
 	public async resendOtpByEmail(email: string): Promise<void> {
 		const user = await authRepository.findByEmail(email);
-		if (!user || user.status !== UserStatus.PENDING_VERIFICATION) return;
+		// operator-only (the public answer is identical): tells support why no code arrived after "resend", never the code
+		if (!user || user.status !== UserStatus.PENDING_VERIFICATION) {
+			logger.info(`[Resend] outcome=nothing-sent to=${maskEmail(email)} reason=${user ? `account-${String(user.status).toLowerCase()}` : 'no-account-for-this-email'}`);
+			return;
+		}
 		const { otpCode, reused, validityMinutes } = await this.prepareActivationCode(user.id);
+		logger.info(`[Resend] outcome=queued to=${maskEmail(user.email)} code=${reused ? 'same' : 'new'}`);
 		void this.sendActivationEmail(user.email, otpCode, reused ? 'resend-same-code' : 'resend-new-code', validityMinutes);
 	}
 
@@ -526,7 +624,12 @@ export class AuthService {
 			});
 		}
 
-		// 4. Generate JWT Access Token
+		return this.signInActivatedUser(updatedUser, sessionContext);
+	}
+
+	/** Signs in an account that was just activated (token + session + the safe user payload). Shared by code activation and e-mail-first registration. */
+	private async signInActivatedUser(updatedUser: PrismaUser, sessionContext: SessionContext) {
+		// Generate JWT Access Token
 		const jwtSecret = process.env.JWT_SECRET;
 		if (!jwtSecret) {
 			throw new AppError('خطأ في إعدادات الخادم: مفتاح التشفير JWT_SECRET غير معرّف', 500);

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authController } from '../../controllers/auth.controller';
 import { validateRequest } from '../../middlewares/validation.middleware';
-import { registerSchema, verifyOtpSchema, loginSchema, resendOtpSchema, googleAuthSchema, forgotPasswordSchema, verifyResetCodeSchema, resetPasswordSchema, verifyLoginOtpSchema, resendLoginOtpSchema } from './auth.schema';
+import { registerStartSchema, registerCompleteSchema, registerSchema, verifyOtpSchema, loginSchema, resendOtpSchema, googleAuthSchema, forgotPasswordSchema, verifyResetCodeSchema, resetPasswordSchema, verifyLoginOtpSchema, resendLoginOtpSchema } from './auth.schema';
 import { loginLimiters, otpSendLimiter, otpSendGate, otpVerifyLimiters, normalizeOtpIdentifier } from '../../middlewares/rate-limit.middleware';
 
 // Who is receiving the code, for the send limiter (sending is limited per recipient and per IP, apart from authLimiter).
@@ -31,6 +31,21 @@ router.post(
   validateRequest(registerSchema),
   otpSendGate(byEmail),
   authController.register
+);
+
+// E-mail-first registration: the address is proven BEFORE any account exists (see auth.service.ts::startRegistration / completeRegistration).
+router.post(
+  '/register/start',
+  validateRequest(registerStartSchema),
+  otpSendGate(byEmail),
+  authController.registerStart
+);
+
+router.post(
+  '/register/complete',
+  validateRequest(registerCompleteSchema),
+  ...otpVerifyLimiters((req) => req.body?.email),
+  authController.registerComplete
 );
 
 router.post(

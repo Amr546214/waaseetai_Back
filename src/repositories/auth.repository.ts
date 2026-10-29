@@ -1,4 +1,4 @@
-import { OtpType, UserStatus, PrismaClient } from '@prisma/client';
+import { OtpType, UserStatus, PrismaClient, Prisma } from '@prisma/client';
 import { OtpPurpose, type OtpPurposeValue } from '../utils/otp-purpose';
 import { prisma } from '../config/db';
 import { isReferralSlugConflict } from '../utils/slug.util';
@@ -51,22 +51,24 @@ export class AuthRepository {
   /**
    * Create User and their corresponding Profile in a Transaction
    */
-  public async createUserWithProfile(data: RegisterInput, hashedPassword: string | null, googleIdentity?: { sub: string; picture?: string }) {
+  public async createUserWithProfile(data: RegisterInput, hashedPassword: string | null, googleIdentity?: { sub: string; picture?: string }, initialStatus?: UserStatus, inTx?: (tx: Prisma.TransactionClient) => Promise<void>) {
     // The user and ALL of their role profiles (incl. the affiliate profile) are created in one transaction. A referralSlug collision
     // rolls the whole transaction back, so it is simply retried with a new random slug: no account is ever left without its profile.
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.createUserWithProfileOnce(data, hashedPassword, googleIdentity);
+        return await this.createUserWithProfileOnce(data, hashedPassword, googleIdentity, initialStatus, inTx);
       } catch (error) {
         if (attempt >= 3 || !isReferralSlugConflict(error)) throw error;
       }
     }
   }
 
-  private async createUserWithProfileOnce(data: RegisterInput, hashedPassword: string | null, googleIdentity?: { sub: string; picture?: string }) {
+  private async createUserWithProfileOnce(data: RegisterInput, hashedPassword: string | null, googleIdentity?: { sub: string; picture?: string }, initialStatus?: UserStatus, inTx?: (tx: Prisma.TransactionClient) => Promise<void>) {
     const roles = getInitialRolesForAccountType(data.accountType);
 
     return prisma.$transaction(async (tx) => {
+      // e-mail-first registration: the proof ticket is consumed in THIS transaction, so the account and the single use commit (or roll back) together
+      if (inTx) await inTx(tx);
       // 1. Create User
       const user = await tx.user.create({
         data: {
@@ -83,6 +85,8 @@ export class AuthRepository {
           phoneCountryCode: data.phoneCountryCode,
           phoneNumber: data.phoneNumber,
           password: hashedPassword,
+          // e-mail-first registration creates the account already verified; every other path keeps the schema default (PENDING_VERIFICATION)
+          ...(initialStatus ? { status: initialStatus } : {}),
           ...(googleIdentity ? {
             authProvider: 'google',
             googleId: googleIdentity.sub,
