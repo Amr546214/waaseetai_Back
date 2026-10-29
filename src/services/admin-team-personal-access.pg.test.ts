@@ -133,7 +133,7 @@ test('PG: base roles - ensureBaseRoles adds the five design roles once, never du
 	for (const n of names) assert.equal(await e.prisma.adminRole.count({ where: { name: n } }), 1, n);
 	const still = await e.prisma.adminRole.findUniqueOrThrow({ where: { id: edited.id } }); assert.deepEqual(still.permissions, ['users.view']); assert.equal(still.color, '#112233'); assert.equal(still.version, editedVersion);
 	assert.equal(await e.prisma.adminStaff.count(), staffBefore);
-	for (const t of ADMIN_ROLE_TEMPLATES.filter(t => t.name !== 'مدير فريق')) assert.deepEqual((await e.prisma.adminRole.findFirstOrThrow({ where: { name: t.name } })).permissions, [...t.permissions].sort(), t.name);
+	for (const t of ADMIN_ROLE_TEMPLATES.filter(t => r1.created.includes(t.name))) assert.deepEqual((await e.prisma.adminRole.findFirstOrThrow({ where: { name: t.name } })).permissions, [...t.permissions].sort(), t.name);
 	// the roles API lists them all (what the invitation dialog shows) and none is a SUPER_ADMIN role
 	const list = await e.call('GET', '/admin/team/roles', e.sa.id); assert.equal(list.status, 200);
 	for (const n of names) assert.ok(list.json.data.some((r: any) => r.name === n), n);

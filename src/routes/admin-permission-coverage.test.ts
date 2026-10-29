@@ -88,6 +88,7 @@ const ACCOUNT_TYPE_DECISIONS: Record<string, string> = {
 	'middlewares/admin-access.middleware.ts': 'the permission system itself',
 	'services/admin-access.service.ts': 'the permission system itself (an admin-type account is only the precondition for a lookup)',
 	'services/admin-operations-scope.service.ts': 'scope rule for operations records',
+	'services/admin-messages.service.ts': 'display only: a SUPER_ADMIN is shown as «مدير النظام» in the directory; eligibility to message is decided by the messages.use permission (adminRecipientsHolding), never by the type',
 	'services/admin-staff.service.ts': 'the account must be an admin-type account to be placed in the team',
 	'services/admin-invites.service.ts': 'creates the ADMIN account of an accepted invitation',
 	'routes/admin-team.routes.ts': 'display label of the signed-in staff member',
