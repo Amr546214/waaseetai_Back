@@ -12,6 +12,7 @@ import { globalErrorHandler } from './middlewares/error.middleware';
 import { scrubPrivateRefs } from './middlewares/scrub-private-refs.middleware';
 import { safeServerErrors } from './middlewares/safe-server-errors.middleware';
 import { apiLimiter } from './middlewares/rate-limit.middleware';
+import { responseGzip } from './middlewares/response-gzip.middleware';
 import { resolveTrustProxy } from './config/trust-proxy';
 import { AppError } from './utils/app-error';
 import authRouter from './routes/auth/auth.routes';
@@ -141,6 +142,9 @@ app.use(
 		exposedHeaders: ['Retry-After'],
 	})
 );
+
+// gzip for JSON answers (see middlewares/response-gzip.middleware.ts); before the limiter so a 429 body is encoded the same way
+app.use(responseGzip);
 
 // Apply rate limiting to both /api-prefixed and reverse-proxy unprefixed routes.
 app.use(apiLimiter);
