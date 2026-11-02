@@ -253,7 +253,10 @@ export class SetupTestGateway {
       }
     });
 
-    socket.on('setup_test:answer', async (payload: { token: string; questionId: string; selectedIndex: number }) => {
+    // Preserve answer arrival order even when token/session validation resolves out of order.
+    let answerQueue: Promise<void> = Promise.resolve();
+    socket.on('setup_test:answer', (payload: { token: string; questionId: string; selectedIndex: number }) => {
+      answerQueue = answerQueue.then(async () => {
       try {
         const userId = await this.getUserIdFromToken(payload?.token);
         if (!userId) return;
@@ -282,6 +285,8 @@ export class SetupTestGateway {
       } catch (e) {
         console.error('[SetupTestGateway answer Error]:', e);
       }
+      });
+      return answerQueue;
     });
 
     socket.on('setup_test:anti_cheat', async (payload: { token: string; type: string }) => {

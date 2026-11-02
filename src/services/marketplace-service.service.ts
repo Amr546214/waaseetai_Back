@@ -1,3 +1,4 @@
+import { withKeyLock } from '../utils/key-lock';
 import { PUBLIC_SERVICE_REVIEWS_RELATION, publicServiceReviewsWhere } from './review-visibility';
 import { AccountType, Prisma } from '@prisma/client';
 import { businessModelAuditResult } from './ai-features/business-model-audit-result';
@@ -73,6 +74,25 @@ export function sanitizeServiceInput(data: any): any {
 	};
 }
 
+/** the same service published again inside this window is the same service (double tap / lost-answer retry) */
+const DUPLICATE_SERVICE_WINDOW_MS = 5 * 60 * 1000;
+
+/** A refusal that names its field and carries a fixed code (the page shows it under the field; nothing English reaches the user). */
+const serviceRefusal = (field: string, message: string, code: string, status = 400) => new AppError(message, status, [{ path: field, field, message, code }], code);
+
+/** The part of a service that every create / edit must satisfy: title, description, stages (percent sum 100, each stage valid), positive totals. */
+function assertServiceCore(title: unknown, description: unknown, stages: unknown, totals?: { amount: number; days: number }) {
+	if (typeof title !== 'string' || title.trim().length < 3) throw serviceRefusal('title', 'اكتب اسم الخدمة (3 أحرف على الأقل)', 'SERVICE_TITLE_INVALID');
+	if (typeof description !== 'string' || description.trim().length < 10) throw serviceRefusal('description', 'اكتب وصف الخدمة (10 أحرف على الأقل)', 'SERVICE_DESCRIPTION_INVALID');
+	if (!Array.isArray(stages) || stages.length === 0) throw serviceRefusal('stages', 'أضف مرحلة واحدة على الأقل للخدمة', 'SERVICE_STAGES_REQUIRED');
+	const sum = stages.reduce((acc: number, stage: any) => acc + Number(stage?.percentage), 0);
+	if (!Number.isFinite(sum) || Math.abs(sum - 100) > 0.01) throw serviceRefusal('stages', 'مجموع نسب المراحل يجب أن يساوي 100% بالضبط', 'SERVICE_STAGES_PERCENT');
+	if (stages.some((stage: any) => !stage?.title?.trim() || Number(stage.percentage) <= 0 || Number(stage.deliveryDays || stage.days) <= 0 || Number(stage.computedAmount) < 0)) {
+		throw serviceRefusal('stages', 'كل مرحلة تحتاج عنوانًا ومدة بالأيام أكبر من صفر ونسبة صحيحة', 'SERVICE_STAGE_INVALID');
+	}
+	if (totals && (totals.amount <= 0 || totals.days <= 0)) throw serviceRefusal('stages', 'إجمالي المبلغ ومدة التنفيذ يجب أن يكونا أكبر من صفر', 'SERVICE_TOTAL_INVALID');
+}
+
 export class MarketplaceService {
 	/**
 	 * Phase 3E.1: resolves a marketplace/detail card's provider name/avatar/
@@ -121,7 +141,7 @@ export class MarketplaceService {
 		});
 
 		if (!providerProfile) {
-			throw new Error('Provider profile not found');
+			throw new AppError('لم نجد ملف مقدم الخدمة لحسابك. أكمل إعداد ملفك المهني أولًا.', 404, undefined, 'PROVIDER_PROFILE_NOT_FOUND');
 		}
 
 		// Each approved specialty carries the catalog skills of its Category (the only skills a service of that specialty may use).
@@ -193,29 +213,23 @@ export class MarketplaceService {
 	/**
 	 * Creates a new ServiceCatalog and its related ServiceStages within a Prisma transaction.
 	 */
+	/**
+	 * One new service per provider at a time (per-provider lock, in-process: ONE Node process). The SAME service (title, specialty, model, total price and duration) published
+	 * again within DUPLICATE_SERVICE_WINDOW_MS - a double tap, a second tab, a retry after the answer was lost - is answered with the service that already exists
+	 * (`deduplicated: true`) instead of a second copy. A limited rule, not a global uniqueness guarantee (no stored idempotency key: that needs a schema change).
+	 */
 	async createService(userId: string, rawData: any) {
+		return withKeyLock(`service-create:${userId}`, () => this.createServiceLocked(userId, rawData));
+	}
+
+	private async createServiceLocked(userId: string, rawData: any) {
 		const data = sanitizeServiceInput(rawData);
 		const { title, description, specialtyId, subSpecialty, portfolioItemId, accreditationSampleId, stages, gallery } = data;
 		const storedGallery = Array.isArray(gallery) ? (await Promise.all(gallery.map((url: string, index: number) =>
 			ensureCloudinaryUrl(url, `waseetai/providers/${userId}/services`, `gallery-${index + 1}`)
 		))).filter(Boolean) : undefined;
 
-		// Validation
-		if (typeof title !== 'string' || title.trim().length < 3 || typeof description !== 'string' || description.trim().length < 10) {
-			throw new Error('Title and description are required.');
-		}
-
-		if (!stages || !Array.isArray(stages) || stages.length === 0) {
-			throw new Error('At least one service stage is required.');
-		}
-
-		const totalPercentage = stages.reduce((sum: number, stage: any) => sum + Number(stage.percentage), 0);
-		if (Math.abs(totalPercentage - 100) > 0.01) {
-			throw new Error('Stage percentages must sum exactly to 100%.');
-		}
-		if (stages.some((stage: any) => !stage?.title?.trim() || Number(stage.percentage) <= 0 || Number(stage.deliveryDays || stage.days) <= 0 || Number(stage.computedAmount) < 0)) {
-			throw new Error('Each stage requires a title, a positive duration, and a valid percentage.');
-		}
+		assertServiceCore(title, description, stages);
 
 		// Validate optional portfolioItemId / accreditationSampleId
 		let validPortfolioItemId: string | undefined = undefined;
@@ -237,11 +251,20 @@ export class MarketplaceService {
 		// Compute derived total fields
 		const totalAmount = stages.reduce((sum: number, stage: any) => sum + Number(stage.computedAmount || 0), 0);
 		const totalDays = stages.reduce((sum: number, stage: any) => sum + Number(stage.deliveryDays || stage.days || 0), 0);
-		if (totalAmount <= 0 || totalDays <= 0) {
-			throw new Error('Total amount and delivery duration must be greater than zero.');
-		}
+		assertServiceCore(title, description, stages, { amount: totalAmount, days: totalDays });
 
 		const fullDescription = description;
+
+		const recent = await prisma.serviceCatalog.findFirst({
+			where: {
+				providerId: userId, title, specialtyId: validSkillId, accreditationSampleId: accreditationSample.id, totalAmount, totalDays,
+				status: { in: ['PUBLISHED', 'APPROVED', 'ARCHIVED', 'DRAFT'] as any },
+				createdAt: { gte: new Date(Date.now() - DUPLICATE_SERVICE_WINDOW_MS) }
+			},
+			orderBy: { createdAt: 'desc' },
+			include: { stages: true }
+		});
+		if (recent) return Object.assign(recent, { deduplicated: true as const });
 
 		// Create Service and Stages inside a transaction
 		const createdService = await prisma.$transaction(async (tx: any) => {
@@ -304,7 +327,7 @@ export class MarketplaceService {
 		});
 
 		if (!service) {
-			throw new Error('نموذج العمل المطلوب غير موجود');
+			throw new AppError('هذه الخدمة غير موجودة ضمن خدماتك.', 404, undefined, 'SERVICE_NOT_FOUND');
 		}
 
 		return service;
@@ -326,12 +349,10 @@ export class MarketplaceService {
 		});
 
 		if (!existing) {
-			throw new Error('نموذج العمل غير موجود');
+			throw new AppError('هذه الخدمة غير موجودة ضمن خدماتك.', 404, undefined, 'SERVICE_NOT_FOUND');
 		}
 
-		if (typeof title !== 'string' || title.trim().length < 3 || typeof description !== 'string' || description.trim().length < 10) {
-			throw new Error('Title and description are required.');
-		}
+		assertServiceCore(title, description, Array.isArray(stages) ? stages : []);
 
 		// Batch B T1: editing re-validates everything against the CURRENT state (an edit or a manual API call cannot publish into a specialty that is no
 		// longer approved, nor keep skills / a model of another specialty).
@@ -360,14 +381,9 @@ export class MarketplaceService {
 		const accreditationSample = await this.resolveApprovalModel(userId, validSkillId, accreditationSampleId || keepSample, keepSample);
 
 		const stageList = Array.isArray(stages) ? stages : [];
-		if (stageList.length === 0) throw new Error('At least one service stage is required.');
-		const totalPercentage = stageList.reduce((sum: number, stage: any) => sum + Number(stage.percentage), 0);
-		if (Math.abs(totalPercentage - 100) > 0.01 || stageList.some((stage: any) => !stage?.title?.trim() || Number(stage.percentage) <= 0 || Number(stage.deliveryDays || stage.days) <= 0 || Number(stage.computedAmount) < 0)) {
-			throw new Error('Service stages are invalid or percentages do not sum to 100%.');
-		}
 		const totalAmount = stageList.reduce((sum: number, stage: any) => sum + Number(stage.computedAmount || 0), 0);
 		const totalDays = stageList.reduce((sum: number, stage: any) => sum + Number(stage.deliveryDays || stage.days || 0), 0);
-		if (totalAmount <= 0 || totalDays <= 0) throw new Error('Total amount and delivery duration must be greater than zero.');
+		assertServiceCore(title, description, stageList, { amount: totalAmount, days: totalDays });
 
 		const fullDescription = description;
 
@@ -436,10 +452,13 @@ export class MarketplaceService {
 
 	async setServiceVisibility(userId: string, serviceId: string, visible: boolean) {
 		const existing = await prisma.serviceCatalog.findFirst({ where: { id: serviceId, providerId: userId } });
-		if (!existing) throw new Error('نموذج العمل غير موجود');
-		if (visible && existing.status !== 'ARCHIVED') throw new Error('لا يمكن إظهار نموذج غير مخفي');
+		if (!existing) throw new AppError('هذه الخدمة غير موجودة ضمن خدماتك.', 404, undefined, 'SERVICE_NOT_FOUND');
+		// asking for the state the service is ALREADY in is a success (a repeat after a lost answer must not turn into a false failure)
+		if (visible && ['PUBLISHED', 'APPROVED'].includes(existing.status)) return existing;
+		if (!visible && existing.status === 'ARCHIVED') return existing;
+		if (visible && existing.status !== 'ARCHIVED') throw new AppError('لا يمكن إظهار هذه الخدمة لأنها ليست مخفية؛ حالتها الحالية لا تسمح بذلك.', 409, undefined, 'SERVICE_NOT_HIDDEN');
 		if (visible) await this.assertServicePublishable(userId, existing);
-		if (!visible && !['PUBLISHED', 'APPROVED'].includes(existing.status)) throw new Error('لا يمكن إخفاء نموذج غير منشور');
+		if (!visible && !['PUBLISHED', 'APPROVED'].includes(existing.status)) throw new AppError('لا يمكن إخفاء خدمة غير منشورة؛ حالتها الحالية: قيد المراجعة أو غير معتمدة.', 409, undefined, 'SERVICE_NOT_PUBLISHED');
 		return prisma.serviceCatalog.update({
 			where: { id: existing.id },
 			data: { status: visible ? 'PUBLISHED' : 'ARCHIVED' }
@@ -721,7 +740,7 @@ export class MarketplaceService {
 		});
 
 		if (!s || !['PUBLISHED', 'APPROVED'].includes(s.status) || marketBlockReasons(s as any).length > 0) {
-			throw new Error('الخدمة غير متوفرة أو غير منشورة');
+			throw new AppError('الخدمة غير متوفرة أو غير منشورة', 404, undefined, 'SERVICE_NOT_AVAILABLE');
 		}
 
 		const providerCard = this.resolveProviderCardFields(s.provider);
@@ -912,7 +931,7 @@ export class MarketplaceService {
 
 	async setFavorite(userId: string, serviceId: string, favorite: boolean) {
 		const service = await prisma.serviceCatalog.findFirst({ where: { id: serviceId, ...MARKET_VISIBLE_WHERE }, select: { id: true } });
-		if (!service) throw new Error('الخدمة غير متوفرة');
+		if (!service) throw new AppError('الخدمة غير متوفرة', 404, undefined, 'SERVICE_NOT_AVAILABLE');
 		if (favorite) {
 			await prisma.marketplaceFavorite.upsert({
 				where: { userId_serviceId: { userId, serviceId } },

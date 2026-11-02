@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import jwt from 'jsonwebtoken';
+import { fullAccessModels } from '../testing/admin-full-access.testutil';
 
 // Real Express + real authenticate / requireActiveUser / authorize; only the database and the session store are replaced.
 process.env.JWT_SECRET = 'admin-coupons-secret';
@@ -25,6 +26,7 @@ const audits: any[] = [];
 let lastFindManyWhere: any;
 
 const prisma: any = {
+	...fullAccessModels(),
 	user: { findUnique: async ({ where }: any) => users[where.id] ?? null },
 	coupon: {
 		fields: { maxUses: '__maxUses' },

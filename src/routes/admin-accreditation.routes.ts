@@ -6,9 +6,10 @@ import { rejectAccreditationSchema, requestCompletionSchema, specialtyReviewDeci
 import { specialtyAdminReviewService, specialtyReviewQueryService } from '../services/specialty-admin-review.service';
 import { AppError, zodAppError } from '../utils/app-error';
 import { adminActor } from '../utils/admin-actor';
+import { requirePermission } from '../middlewares/admin-access.middleware';
 
 const router = Router();
-router.use(authenticate, requireActiveUser, authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN));
+router.use(authenticate, requireActiveUser, requirePermission('specialties.approve'));
 
 router.get('/samples', async (req: Request, res: Response, next: NextFunction) => {
   try {

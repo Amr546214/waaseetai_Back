@@ -6,6 +6,7 @@ import { normalizeWaseetAiError } from '../services/ai/waseet-ai/waseet-ai.error
 
 function verifiedActor(req: Request): WaseetActor | undefined {
   const user = req.user;
+  if ((req as any).knowledgeAdminDemoted) return undefined;
   if (!user || user.status !== 'ACTIVE' || !(user.id || user.userId)) return undefined;
   return { userId: user.id || user.userId, role: waseetActorRole(user.activeRole, user.accountType) };
 }

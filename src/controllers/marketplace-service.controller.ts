@@ -10,14 +10,17 @@ import { AppError } from '../utils/app-error';
 
 const marketplaceService = new MarketplaceService();
 
-/** A validation refusal (AppError) keeps its status and names the field(s); anything else stays the previous plain 400. */
-const statusOf = (error: any) => (error instanceof AppError ? error.statusCode : 400);
+/** A refusal (AppError) keeps its status, code and field names; anything else is an UNEXPECTED failure: 500 (the safe-server-errors net turns its raw text into the honest fixed message + trace id). */
+const statusOf = (error: any) => (error instanceof AppError ? error.statusCode : 500);
 const failureBody = (error: any) => ({
 	success: false,
 	error: error.message,
 	message: error.message,
-	...(error instanceof AppError && error.errors?.length ? { errors: error.errors, code: (error.errors[0] as any)?.code } : {})
+	...(error instanceof AppError && error.errors?.length ? { errors: error.errors, code: error.code ?? (error.errors[0] as any)?.code } : (error instanceof AppError && error.code ? { code: error.code } : {}))
 });
+
+/** Answers a failure of a service call: a refusal as written, anything else as an unexpected 500. */
+const fail = (res: Response, error: any) => res.status(statusOf(error)).json(failureBody(error));
 
 const RE_AUDIT_STATUSES = ['PENDING_APPROVAL', 'UNDER_REVIEW', 'DRAFT', 'PUBLISHED'];
 const RE_AUDIT_BATCH_SIZE = 25;
@@ -32,7 +35,7 @@ export class MarketplaceServiceController {
 			const data = await marketplaceService.getProviderPreData(userId);
 			res.status(200).json(data);
 		} catch (error: any) {
-			res.status(400).json({ error: error.message });
+			fail(res, error);
 		}
 	}
 
@@ -40,7 +43,8 @@ export class MarketplaceServiceController {
 		try {
 			const userId = (req as any).user.id;
 			const service = await marketplaceService.createService(userId, req.body);
-			res.status(201).json(service);
+			// the same service sent again (double tap / lost answer) returns the one that already exists: 200, no second copy
+			res.status((service as any).deduplicated ? 200 : 201).json(service);
 		} catch (error: any) {
 			res.status(statusOf(error)).json(failureBody(error));
 		}
@@ -53,7 +57,7 @@ export class MarketplaceServiceController {
 			const service = await marketplaceService.getServiceById(userId, serviceId);
 			res.status(200).json({ success: true, data: service });
 		} catch (error: any) {
-			res.status(400).json({ success: false, error: error.message });
+			fail(res, error);
 		}
 	}
 
@@ -74,7 +78,7 @@ export class MarketplaceServiceController {
 			const serviceId = req.params.id as string;
 			const visible = req.body?.visible;
 			if (typeof visible !== 'boolean') {
-				return res.status(400).json({ success: false, error: 'visible must be a boolean' }) as any;
+				return res.status(400).json({ success: false, code: 'VISIBILITY_VALUE_INVALID', message: 'حدّد هل تريد إظهار الخدمة أم إخفاءها.', error: 'حدّد هل تريد إظهار الخدمة أم إخفاءها.' }) as any;
 			}
 			const updated = await marketplaceService.setServiceVisibility(userId, serviceId, visible);
 			return res.status(200).json({ success: true, data: updated }) as any;
@@ -91,7 +95,7 @@ export class MarketplaceServiceController {
 			const models = await marketplaceService.getMarketplaceModels(req.query, req.user);
 			res.status(200).json({ success: true, data: models });
 		} catch (error: any) {
-			res.status(400).json({ success: false, error: error.message });
+			fail(res, error);
 		}
 	}
 
@@ -100,7 +104,7 @@ export class MarketplaceServiceController {
 			const model = await marketplaceService.getMarketplaceModelById(req.params.id as string, req.user);
 			res.status(200).json({ success: true, data: model });
 		} catch (error: any) {
-			res.status(404).json({ success: false, error: error.message });
+			fail(res, error);
 		}
 	}
 
@@ -109,7 +113,7 @@ export class MarketplaceServiceController {
 			const result = await marketplaceService.getAiRecommendations(req.body, req.user);
 			res.status(200).json(result);
 		} catch (error: any) {
-			res.status(400).json({ success: false, error: error.message });
+			fail(res, error);
 		}
 	}
 
@@ -118,7 +122,7 @@ export class MarketplaceServiceController {
 			const result = await marketplaceService.getMarketplaceCategories();
 			res.status(200).json(result);
 		} catch (error: any) {
-			res.status(400).json({ success: false, error: error.message });
+			fail(res, error);
 		}
 	}
 
@@ -127,17 +131,17 @@ export class MarketplaceServiceController {
 			const data = await marketplaceService.getFavorites(req.user!.id);
 			return res.status(200).json({ success: true, data }) as any;
 		} catch (error: any) {
-			return res.status(400).json({ success: false, error: error.message }) as any;
+			return fail(res, error) as any;
 		}
 	}
 
 	async setFavorite(req: Request, res: Response) {
 		try {
-			if (typeof req.body?.favorite !== 'boolean') return res.status(400).json({ success: false, error: 'favorite must be boolean' }) as any;
+			if (typeof req.body?.favorite !== 'boolean') return res.status(400).json({ success: false, code: 'FAVORITE_VALUE_INVALID', message: 'قيمة المفضلة غير صحيحة.', error: 'قيمة المفضلة غير صحيحة.' }) as any;
 			const data = await marketplaceService.setFavorite(req.user!.id, req.params.id as string, req.body.favorite);
 			return res.status(200).json({ success: true, data }) as any;
 		} catch (error: any) {
-			return res.status(400).json({ success: false, error: error.message }) as any;
+			return fail(res, error) as any;
 		}
 	}
 
@@ -146,7 +150,7 @@ export class MarketplaceServiceController {
 			const data = await marketplaceService.getMyPurchaseStatus(req.user!.id, req.params.id as string);
 			return res.status(200).json({ success: true, data }) as any;
 		} catch (error: any) {
-			return res.status(400).json({ success: false, error: error.message }) as any;
+			return fail(res, error) as any;
 		}
 	}
 
@@ -170,17 +174,17 @@ export class MarketplaceServiceController {
 
 			if (req.body.title && req.body.stages) {
 				const service = await marketplaceService.createService(userId, req.body);
-				return res.status(201).json({ success: true, data: service, message: 'Model published successfully' }) as any;
+				return res.status((service as any).deduplicated ? 200 : 201).json({ success: true, deduplicated: (service as any).deduplicated === true, data: service, message: (service as any).deduplicated ? 'خدمتك منشورة بالفعل، فلم ننشئ نسخة ثانية منها.' : 'تم نشر الخدمة بنجاح' }) as any;
 			} else if (req.body.modelId || req.body.id) {
 				const id = req.body.modelId || req.body.id;
 				const existing = await prisma.serviceCatalog.findFirst({ where: { id, providerId: userId } });
 				if (!existing) {
-					return res.status(404).json({ success: false, error: 'Model not found' }) as any;
+					return res.status(404).json({ success: false, code: 'SERVICE_NOT_FOUND', message: 'هذه الخدمة غير موجودة ضمن خدماتك.', error: 'هذه الخدمة غير موجودة ضمن خدماتك.' }) as any;
 				}
 				// Only a model that is already allowed to be live can be (re)published by its owner: a REJECTED / UNDER_REVIEW / PENDING_* /
 				// ARCHIVED (hidden: use the visibility toggle) model must not be flipped to PUBLISHED by the provider.
 				if (!PUBLISHABLE_BY_ID_STATUSES.includes(existing.status as any)) {
-					return res.status(409).json({ success: false, error: 'لا يمكن نشر هذا النموذج في حالته الحالية، تواصل مع الدعم أو انتظر قرار المراجعة' }) as any;
+					return res.status(409).json({ success: false, code: 'SERVICE_NOT_PUBLISHABLE', message: 'لا يمكن نشر هذه الخدمة في حالتها الحالية؛ انتظر قرار المراجعة أو تواصل مع الدعم.', error: 'لا يمكن نشر هذه الخدمة في حالتها الحالية؛ انتظر قرار المراجعة أو تواصل مع الدعم.' }) as any;
 				}
 				// Batch B T1: the specialty must still be approved and the linked model valid before the service goes live again
 				await marketplaceService.assertServicePublishable(userId, existing);
@@ -190,7 +194,7 @@ export class MarketplaceServiceController {
 				});
 				return res.status(200).json({ success: true, data: updated, message: 'Model published successfully' }) as any;
 			}
-			return res.status(400).json({ success: false, error: 'Invalid model payload provided' }) as any;
+			return res.status(400).json({ success: false, code: 'SERVICE_PAYLOAD_INVALID', message: 'بيانات الخدمة غير مكتملة: أرسل العنوان والمراحل أو معرّف الخدمة.', error: 'بيانات الخدمة غير مكتملة: أرسل العنوان والمراحل أو معرّف الخدمة.' }) as any;
 		} catch (error: any) {
 			return res.status(statusOf(error)).json(failureBody(error)) as any;
 		}

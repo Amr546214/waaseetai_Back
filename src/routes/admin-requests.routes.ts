@@ -2,6 +2,7 @@ import { NextFunction, Request, Response, Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import { adminRequestsService } from '../services/admin-requests.service';
+import { requireSuperAdmin, requireOperationScope } from '../middlewares/admin-access.middleware';
 
 const handler = (fn: (req: Request) => Promise<unknown>) => async (req: Request, res: Response, next: NextFunction) => {
 	try { res.json({ success: true, data: await fn(req) }); } catch (error) { next(error); }
@@ -14,13 +15,13 @@ const query = (req: Request) => ({
 
 // Read-only admin view of client requests (/admin/requests) and of the offers on them (/admin/offers).
 export const adminRequestsRouter = Router();
-adminRequestsRouter.use(authenticate, requireActiveUser, authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN));
-adminRequestsRouter.get('/', handler(req => adminRequestsService.listRequests(query(req))));
-adminRequestsRouter.get('/:id', handler(req => adminRequestsService.getRequest(String(req.params.id))));
+adminRequestsRouter.use(authenticate, requireActiveUser);
+adminRequestsRouter.get('/', requireSuperAdmin, handler(req => adminRequestsService.listRequests(query(req))));
+adminRequestsRouter.get('/:id', requireOperationScope('REQUEST'), handler(req => adminRequestsService.getRequest(String(req.params.id))));
 
 export const adminOffersRouter = Router();
-adminOffersRouter.use(authenticate, requireActiveUser, authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN));
-adminOffersRouter.get('/', handler(req => adminRequestsService.listOffers(query(req))));
-adminOffersRouter.get('/:id', handler(req => adminRequestsService.getOffer(String(req.params.id))));
+adminOffersRouter.use(authenticate, requireActiveUser);
+adminOffersRouter.get('/', requireSuperAdmin, handler(req => adminRequestsService.listOffers(query(req))));
+adminOffersRouter.get('/:id', requireOperationScope('OFFER'), handler(req => adminRequestsService.getOffer(String(req.params.id))));
 
 export default adminRequestsRouter;

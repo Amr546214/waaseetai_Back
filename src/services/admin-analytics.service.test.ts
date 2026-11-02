@@ -5,8 +5,8 @@ import path from 'node:path';
 
 const routeSource = fs.readFileSync(path.join(__dirname, '../routes/admin-analytics.routes.ts'), 'utf8');
 
-test('admin-analytics router is gated by authenticate + requireActiveUser + authorize(ADMIN, SUPER_ADMIN) before the route', () => {
-	assert.match(routeSource, /router\.use\(authenticate,\s*requireActiveUser,\s*authorize\(AccountType\.ADMIN,\s*AccountType\.SUPER_ADMIN\)\)/);
+test('admin-analytics router is gated by authenticate + requireActiveUser + the finance.read permission before the route', () => {
+	assert.match(routeSource, /router\.use\(authenticate,\s*requireActiveUser,\s*requirePermission\('finance\.read'\)\)/);
 	assert.ok(routeSource.indexOf("router.get('/overview'") > routeSource.indexOf('router.use(authenticate'));
 	assert.doesNotMatch(routeSource, /router\.(post|put|patch|delete)/);
 });

@@ -95,14 +95,14 @@ export class SpecialtyPortfolioReviewService {
     if (policy.blocked) {
       return withMeta(
         aiReady<PortfolioReviewDetails>({
-          source: 'GEMINI',
+          source: 'RULES',
           score: null,
           confidence: null,
           summary: policy.reasonAr || 'عذراً، يحتوي نموذج العمل على محتوى يخالف الأنظمة وسياسات منصة وسيط ولا يمكن اعتماده.',
           recommendation: null,
           details: {
             strengths: [],
-            warnings: [{ text: policy.reasonAr || 'نموذج العمل يتضمن نشاطاً محظوراً نظاماً وسيتم رفضه من الإدارة.', basedOn: ['samples'] }],
+            warnings: [{ text: policy.reasonAr || 'نموذج العمل يطابق قاعدة محتوى محظور؛ هذا التنبيه لا يغيّر حالة طلب الاعتماد.', basedOn: ['samples'] }],
             recommendations: [{ text: 'يرجى استبدال نموذج العمل بنموذج مهني مشروع يلتزم بالأنظمة والقوانين المعتمدة.', basedOn: ['samples'] }],
           },
         }),

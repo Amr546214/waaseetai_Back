@@ -82,7 +82,7 @@ test('submitAccreditationSample: stores the sample as MANUAL_REVIEW with no AI f
 
 test('submitAccreditationSample: throws when the provider profile does not exist, writing nothing', async (t) => {
   const { accreditationAiService, accreditationCreateSpy } = await loadService(t, { providerProfile: null });
-  await assert.rejects(() => accreditationAiService.submitAccreditationSample(BASE_DTO), /Provider profile not found/);
+  await assert.rejects(() => accreditationAiService.submitAccreditationSample(BASE_DTO), /لم نجد ملف مقدم الخدمة/);
   assert.equal(accreditationCreateSpy.mock.callCount(), 0);
 });
 
@@ -277,4 +277,10 @@ test('adminApproveSample: aiAuditedAt is stamped only when a stored AI score exi
 test('adminApproveSample: an existing aiAuditedAt is never overwritten', async (t) => {
   const kept = await approveWith(t, { id: 's3', status: 'PENDING_AI_AUDIT', providerSpecialtyId: 'sp', aiScore: 70, aiAuditedAt: new Date('2026-01-01'), providerSpecialty: { status: 'PENDING_TEST' } });
   assert.equal('aiAuditedAt' in kept, false);
+});
+
+test('refusals that block the provider carry a fixed code and an Arabic text (they used to reach the page as an unexpected 500): not owned = 403 SPECIALTY_NOT_OWNED', async (t) => {
+  const { accreditationAiService } = await loadService(t, { providerSpecialty: null });
+  const e: any = await accreditationAiService.submitAccreditationSample(BASE_DTO).catch((x: any) => x);
+  assert.equal(e.statusCode, 403); assert.equal(e.code, 'SPECIALTY_NOT_OWNED'); assert.match(e.message, /[؀-ۿ]/);
 });

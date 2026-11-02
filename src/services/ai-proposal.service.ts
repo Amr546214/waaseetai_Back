@@ -38,13 +38,7 @@ function ensureArabicProposalSummary(rawSummary: string, score: number, mileston
   const trimmed = rawSummary.trim();
   const hasArabic = /[\u0600-\u06FF]/.test(trimmed);
   if (hasArabic) return trimmed;
-  if (score >= 80) {
-    return `عرض فني قوي ومفصل (درجة الجودة ${score}%) يتضمن خطة عمل واضحة${milestonesCount > 0 ? ` موزعة على ${milestonesCount} مراحل تسليم` : ''} مع تحديد دقيق للمخرجات والمدة الزمنية.`;
-  }
-  if (score >= 60) {
-    return `عرض فني جيد (درجة الجودة ${score}%) يغطي المتطلبات الأساسية للمشروع، ويُنصح بإضافة مزيد من التفاصيل حول منهجية التنفيذ والمخرجات المتوقعة لكل مرحلة.`;
-  }
-  return `عرض فني مبدئي (درجة الجودة ${score}%) يحتاج إلى توضيح أعمق لخطة العمل وتفصيل المخرجات الفنية ومراحل التسليم لرفع فرص قبوله.`;
+  return `درجة جودة العرض الواردة من خدمة التحليل: ${score}%. لم تُرجع الخدمة شرحاً باللغة العربية؛ لا يمكن استنتاج استيفاء متطلبات المشروع من الدرجة وحدها.`;
 }
 
 class AiProposalService {

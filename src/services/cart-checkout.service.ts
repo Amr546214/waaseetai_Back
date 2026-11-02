@@ -1,4 +1,5 @@
-import { buildEscrowSnapshot } from '../utils/escrow-commission';
+import { buildEscrowSnapshotFromPolicy } from '../utils/escrow-commission';
+import { feePolicyService } from './fee-policy.service';
 import { allocateOrderDiscount, splitByWeights, round2 } from '../utils/order-discount';
 import crypto from 'crypto';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
@@ -514,7 +515,7 @@ export class CartCheckoutService {
 
         // fee policy v2: the same snapshot as a request escrow (the provider's level + commission now), so marketplace orders release net too
         const itemProviderGamification = await tx.providerGamification.findUnique({ where: { providerId: item.providerId }, select: { currentLevelIndex: true } });
-        await tx.escrow.create({ data: { projectId: project.id, amount: netPrice, status: EscrowStatus.HELD, paymentMethod: 'WALLET', paymentReference: context.paymentReference || null, fundedAt: new Date(), ...buildEscrowSnapshot(itemProviderGamification?.currentLevelIndex) } });
+        await tx.escrow.create({ data: { projectId: project.id, amount: netPrice, status: EscrowStatus.HELD, paymentMethod: 'WALLET', paymentReference: context.paymentReference || null, fundedAt: new Date(), ...buildEscrowSnapshotFromPolicy(itemProviderGamification?.currentLevelIndex, await feePolicyService.active()) } });
 
         if (stages.length > 0) {
           const stageAmounts = splitByWeights(stages.map(st => Number(st.computedAmount)), netPrice);

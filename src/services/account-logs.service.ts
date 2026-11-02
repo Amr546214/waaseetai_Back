@@ -6,9 +6,10 @@ export interface AuditEventInput { userId: string; eventType: string; category: 
 export interface AuditQuery { page?: number; limit?: number; category?: string; status?: string; source?: string; eventType?: string; search?: string; from?: string; to?: string }
 
 export class AccountAuditLogService {
-  async record(input: AuditEventInput) {
+  /** `client` lets a caller write the audit row INSIDE its own transaction (the row then commits or rolls back with the change it describes); default: the shared client. */
+  async record(input: AuditEventInput, client: { accountAuditLog: { create: typeof prisma.accountAuditLog.create } } = prisma) {
     const context = input.context || {};
-    return prisma.accountAuditLog.create({ data: {
+    return client.accountAuditLog.create({ data: {
       userId: input.userId, category: input.category, title: this.cleanText(input.title, 140), actionText: this.cleanText(input.summary, 500), summary: this.cleanText(input.summary, 500), eventType: this.cleanCode(input.eventType), source: input.source || 'SYSTEM', severity: input.severity || 'INFO', status: input.status || LogStatus.COMPLETED, statusText: input.statusText ? this.cleanText(input.statusText, 180) : undefined, canResubmit: Boolean(input.canResubmit), beforeData: this.toJson(this.sanitize(input.before)), afterData: this.toJson(this.sanitize(input.after)), metaData: this.toJson(this.sanitize(input.details)), context: this.toJson(this.sanitize({ correlationId: context.correlationId })), requestId: input.requestId, sessionId: context.sessionId, ipAddress: context.ipAddress ? this.cleanText(context.ipAddress, 80) : undefined, device: context.device ? this.cleanText(context.device, 120) : undefined, actorLabel: context.actorLabel ? this.cleanText(context.actorLabel, 120) : undefined, occurredAt: new Date()
     } });
   }

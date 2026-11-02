@@ -12,8 +12,8 @@ import path from 'node:path';
 
 const source = fs.readFileSync(path.join(__dirname, 'admin-affiliate-requests.routes.ts'), 'utf8');
 
-test('admin-affiliate-requests router is gated by authenticate + requireActiveUser + authorize(ADMIN, SUPER_ADMIN)', () => {
-	assert.match(source, /router\.use\(authenticate,\s*requireActiveUser,\s*authorize\(AccountType\.ADMIN,\s*AccountType\.SUPER_ADMIN\)\)/);
+test('admin-affiliate-requests router is gated by authenticate + requireActiveUser + the identity.review permission', () => {
+	assert.match(source, /router\.use\(authenticate,\s*requireActiveUser,\s*requirePermission\('identity\.review'\)\)/);
 });
 
 test('all four expected routes are registered', () => {
@@ -26,6 +26,6 @@ test('all four expected routes are registered', () => {
 const brokersSource = fs.readFileSync(path.join(__dirname, 'admin-brokers.routes.ts'), 'utf8');
 
 test('admin-brokers router (incl. the new status mutation) is admin-only and registers PATCH /:id/status', () => {
-	assert.match(brokersSource, /router\.use\(authenticate,\s*requireActiveUser,\s*authorize\(AccountType\.ADMIN,\s*AccountType\.SUPER_ADMIN\)\)/);
-	assert.match(brokersSource, /router\.patch\('\/:id\/status',\s*setBrokerStatus\)/);
+	assert.match(brokersSource, /router\.use\(authenticate,\s*requireActiveUser\);/);
+	assert.match(brokersSource, /router\.patch\('\/:id\/status',\s*requirePermission\('users\.suspend'\),\s*setBrokerStatus\)/);
 });

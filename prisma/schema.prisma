@@ -137,6 +137,9 @@ model User {
   providerProfile  ProviderProfile?
   affiliateProfile AffiliateProfile?
   referredBy       Referral?         @relation("ReferredUser")
+  adminStaff       AdminStaff?       @relation("AdminStaffUser")
+  adminConvMemberships AdminConversationMember[] @relation("AdminConvMemberUser")
+  adminMessagesSent    AdminMessage[]            @relation("AdminMessageSender")
 
   clientProjects   Project[]         @relation("ClientProjects")
   providerProjects Project[]         @relation("ProviderProjects")
@@ -885,6 +888,9 @@ model Escrow {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+
+  /// the fee policy version in force when this escrow was locked (NULL = the baseline version 1, i.e. every escrow created before policies were managed)
+  feePolicyId String?
   @@map("escrows")
 }
 
@@ -2372,6 +2378,9 @@ model Withdrawal {
 
   @@index([status, createdAt])
   @@index([userId, createdAt])
+  /// the fee policy version in force when the request was created, and the minimum payout it was checked against (NULL = created before policies were stored)
+  feePolicyId    String?
+  minimumApplied Float?
   @@map("withdrawals")
 }
 
@@ -2708,6 +2717,8 @@ model PaypalPayment {
   updatedAt       DateTime            @updatedAt
 
   @@index([userId, createdAt])
+  /// the fee policy version whose deposit fee percent was applied (NULL = baseline)
+  feePolicyId String?
   @@map("paypal_payments")
 }
 
@@ -2772,6 +2783,7 @@ model CompanyTeamMember {
 model PlatformSetting {
   key       String   @id
   value     Json
+  version   Int      @default(1)
   updatedBy String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2870,4 +2882,315 @@ model ChatDigestActivation {
   enabledAt DateTime @map("enabled_at") @db.Timestamptz(3)
 
   @@map("chat_digest_activation")
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// Admin team: the platform owner, admin roles (permission templates), staff, invitations, tasks and the access audit trail.
+// Authorization for every admin route comes from these tables (see src/config/admin-permissions.ts); an ADMIN / SUPER_ADMIN account type alone grants NOTHING.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+enum AdminOverrideEffect {
+  GRANT
+  DENY
+}
+
+enum AdminStaffStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum AdminInviteStatus {
+  PENDING
+  ACCEPTED
+  CANCELLED
+}
+
+enum AdminTaskStatus {
+  NEW
+  IN_PROGRESS
+  PENDING
+  DONE
+  CANCELLED
+}
+
+enum AdminTaskPriority {
+  URGENT
+  HIGH
+  MEDIUM
+  NORMAL
+  LOW
+}
+
+enum AdminTaskType {
+  DISPUTE
+  REPORT
+  SUPPORT
+  APPROVAL
+  FINANCE
+  DOCUMENT
+}
+
+/// A permission template. `permissions` holds ids from the registry in src/config/admin-permissions.ts; `version` makes concurrent edits detectable (compare-and-set).
+model AdminRole {
+  id          String   @id @default(uuid())
+  name        String   @db.VarChar(80)
+  nameKey     String   @unique @db.VarChar(80) // lower-cased, trimmed name: two roles cannot share a name
+  description String?  @db.VarChar(300)
+  color       String   @default("#2BD4C7") @db.VarChar(9)
+  permissions String[]
+  version     Int      @default(1)
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  staff       AdminStaff[]
+  invites     AdminInvite[]
+
+  @@map("admin_roles")
+}
+
+/// An admin-team member. Access = this row (ACTIVE) + the permissions of its role. Without a row (or with a SUSPENDED one) an ADMIN account can do nothing in the admin API.
+model AdminStaff {
+  id          String           @id @default(uuid())
+  userId      String           @unique
+  roleId      String?
+  status      AdminStaffStatus @default(ACTIVE)
+  title       String?          @db.VarChar(120)
+  invitedById String?
+  joinedAt    DateTime         @default(now())
+  suspendedAt DateTime?
+  // real section scope («الأقسام المتاحة»): when `scoped`, the permissions of a section only apply if the section is listed here. Narrows, never grants.
+  scoped      Boolean          @default(false)
+  departments String[]         @default([])
+  version     Int              @default(1)
+  updatedAt   DateTime         @updatedAt
+  user        User             @relation("AdminStaffUser", fields: [userId], references: [id], onDelete: Cascade)
+  role        AdminRole?       @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  assigned    AdminTask[]      @relation("AdminTaskAssignee")
+  overrides   AdminStaffOverride[]
+
+  @@index([roleId])
+  @@index([status])
+  @@map("admin_staff")
+}
+
+/// A pending / used / cancelled invitation. Only the SHA-256 of the one-time token is stored. At most one PENDING invite per e-mail (partial unique index in the migration).
+model AdminInvite {
+  id             String            @id @default(uuid())
+  email          String            @db.VarChar(254)
+  fullName       String            @db.VarChar(120)
+  roleId         String
+  invitedById    String
+  tokenHash      String            @unique @db.VarChar(64)
+  status         AdminInviteStatus @default(PENDING)
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  acceptedUserId String?
+  cancelledAt    DateTime?
+  resendCount    Int               @default(0)
+  lastSentAt     DateTime?
+  // e-mail ownership proof at acceptance: a short code sent to the invited address (hash only), limited attempts / sends / lifetime
+  departments         String[]  @default([])
+  verifyCodeHash      String?   @db.VarChar(64)
+  verifyCodeExpiresAt DateTime?
+  verifyCodeSentAt    DateTime?
+  verifySendCount     Int       @default(0)
+  verifyAttempts      Int       @default(0)
+  createdAt      DateTime          @default(now())
+  role           AdminRole         @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@index([email])
+  @@index([status, expiresAt])
+  @@map("admin_invites")
+}
+
+model AdminTask {
+  id          String            @id @default(uuid())
+  number      Int               @unique @default(autoincrement())
+  title       String            @db.VarChar(200)
+  description String?           @db.VarChar(2000)
+  type        AdminTaskType
+  priority    AdminTaskPriority @default(NORMAL)
+  status      AdminTaskStatus   @default(NEW)
+  dueAt       DateTime?
+  assigneeId  String?
+  createdById String
+  linkType    String?           @db.VarChar(20) // 'TICKET' | 'DISPUTE'
+  linkId      String?           @db.VarChar(64)
+  startedAt   DateTime?
+  completedAt DateTime?
+  version     Int               @default(1)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  assignee    AdminStaff?       @relation("AdminTaskAssignee", fields: [assigneeId], references: [userId], onDelete: SetNull)
+  events      AdminTaskEvent[]
+
+  @@index([assigneeId, status])
+  @@index([status, dueAt])
+  @@map("admin_tasks")
+}
+
+model AdminTaskEvent {
+  id        String    @id @default(uuid())
+  taskId    String
+  actorId   String
+  kind      String    @db.VarChar(30) // CREATED | ASSIGNED | STATUS | EDITED
+  fromValue String?   @db.VarChar(60)
+  toValue   String?   @db.VarChar(60)
+  at        DateTime  @default(now())
+  task      AdminTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, at])
+  @@map("admin_task_events")
+}
+
+/// Who granted / withdrew what to whom, and when. No secrets (never a token, password or e-mail body).
+model AdminAccessAudit {
+  id            String   @id @default(uuid())
+  at            DateTime @default(now())
+  actorId       String
+  action        String   @db.VarChar(40)
+  subjectUserId String?
+  roleId        String?
+  inviteId      String?
+  before        Json?
+  after         Json?
+
+  @@index([at])
+  @@index([subjectUserId])
+  @@index([action])
+  @@map("admin_access_audit")
+}
+
+/// One person-specific change on top of the role of a staff member. effective = (role + GRANT) - DENY, then narrowed by the section scope. Written only by a SUPER_ADMIN.
+model AdminStaffOverride {
+  id          String                  @id @default(uuid())
+  staffId     String
+  permission  String                  @db.VarChar(60)
+  effect      AdminOverrideEffect
+  createdById String
+  createdAt   DateTime                @default(now())
+  staff       AdminStaff              @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@unique([staffId, permission])
+  @@map("admin_staff_overrides")
+}
+
+// ==========================================
+// Admin team messaging (internal, staff <-> staff). Isolated from the customer / project chat above: its own tables, its own routes, its own socket room.
+// ==========================================
+
+/// One direct conversation between two staff accounts. `pairKey` = the two user ids sorted and joined, UNIQUE: a pair can never have two conversations, even under a race.
+model AdminConversation {
+  id            String                    @id @default(uuid())
+  pairKey       String                    @unique @db.VarChar(80)
+  createdAt     DateTime                  @default(now())
+  lastMessageAt DateTime?
+  members       AdminConversationMember[]
+  messages      AdminMessage[]
+
+  @@index([lastMessageAt])
+  @@map("admin_conversations")
+}
+
+/// Membership = the only thing that lets an account read or write a conversation. `lastReadSeq` is what the member has actually read (never set by a message merely arriving).
+model AdminConversationMember {
+  id             String            @id @default(uuid())
+  conversationId String
+  userId         String
+  lastReadSeq    BigInt            @default(0)
+  joinedAt       DateTime          @default(now())
+  conversation   AdminConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User              @relation("AdminConvMemberUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@map("admin_conversation_members")
+}
+
+/// A saved message. `clientMessageId` is generated by the sender once per message: the unique key makes a double click or a retried request return the SAME row. `seq` orders messages and drives unread.
+model AdminMessage {
+  id              String            @id @default(uuid())
+  conversationId  String
+  senderId        String
+  clientMessageId String            @db.VarChar(64)
+  body            String            @db.Text
+  seq             BigInt            @unique @default(autoincrement())
+  createdAt       DateTime          @default(now())
+  conversation    AdminConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender          User              @relation("AdminMessageSender", fields: [senderId], references: [id])
+
+  @@unique([conversationId, senderId, clientMessageId])
+  @@index([conversationId, seq])
+  @@map("admin_messages")
+}
+
+/// Versioned financial terms (provider / marketer commission by level, client cashback by level, deposit fee by method, marketer withdrawal fee by method, minimum payouts). A version is
+/// IMMUTABLE once created; the one in force at an instant is the latest non-cancelled version whose effectiveFrom has passed. Operations store the id they were created under.
+model FeePolicyVersion {
+  id            String    @id @default(uuid())
+  version       Int       @unique
+  effectiveFrom DateTime
+  payload       Json
+  note          String?   @db.VarChar(300)
+  createdById   String?
+  createdAt     DateTime  @default(now())
+  cancelledAt   DateTime?
+  cancelledById String?
+
+  @@index([effectiveFrom])
+  @@map("fee_policy_versions")
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+// Site identity («التحكم بالموقع» > الهوية): the platform's logos / favicon / AI icon / characters as managed, versioned, rollback-able assets stored IN the database (bytea).
+// ADDITIVE ONLY (three new tables, nothing existing is touched). The migration is NOT executed by workers: see prisma/migrations/20261027150000_site_identity/migration.sql.
+// Rules enforced in the service (and, where Prisma cannot express them, in the migration SQL as CHECK / partial unique index):
+//   * status is STAGED | PUBLISHED | SUPERSEDED | DISCARDED; PUBLISHED / SUPERSEDED rows are NEVER deleted (rollback needs the bytes); only a DISCARDED staged upload may drop its bytes.
+//   * at most ONE PUBLISHED row per key (the one `site_identity_state.activeAssetId` points at); a key with no state row / a NULL pointer = the built-in default asset.
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+model SiteIdentityAsset {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String
+  version     Int
+  status      String
+  mime        String
+  bytes       Bytes?
+  sha256      String
+  width       Int?
+  height      Int?
+  byteSize    Int
+  note        String?
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  activeFor SiteIdentityState[] @relation("SiteIdentityActiveAsset")
+
+  @@unique([key, version])
+  @@index([key, status])
+  @@index([key, sha256])
+  @@map("site_identity_assets")
+}
+
+model SiteIdentityState {
+  key           String   @id
+  activeAssetId String?  @db.Uuid
+  version       Int      @default(0)
+  updatedAt     DateTime @default(now()) @db.Timestamptz(3)
+  updatedById   String?
+
+  activeAsset SiteIdentityAsset? @relation("SiteIdentityActiveAsset", fields: [activeAssetId], references: [id], onDelete: Restrict)
+
+  @@map("site_identity_state")
+}
+
+/// One row per publish / restore: `snapshot` = {key: assetId | null} for EVERY key that has a state row at that moment. `version` is the global manifest counter (public manifest version).
+model SiteIdentityManifest {
+  version     Int      @id
+  snapshot    Json
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  createdById String?
+  reason      String
+
+  @@map("site_identity_manifest")
 }

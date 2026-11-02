@@ -26,7 +26,7 @@ async function seed(over: { price?: number; contractStatus?: string; stages?: St
 	const client = await prisma.user.create({ data: { id: id(), accountType: 'CLIENT_INDIVIDUAL', firstName: 'QA', lastName: 'Client', email: `life-client-${tag}@pg.test`, walletBalance: 100, roles: ['CLIENT'], activeRole: 'CLIENT' } });
 	const provider = await prisma.user.create({ data: { id: id(), accountType: 'PROVIDER_INDIVIDUAL', firstName: 'QA', lastName: 'Provider', email: `life-prov-${tag}@pg.test`, roles: ['PROVIDER'], activeRole: 'PROVIDER' } });
 	const stranger = await prisma.user.create({ data: { id: id(), accountType: 'CLIENT_INDIVIDUAL', firstName: 'QA', lastName: 'Stranger', email: `life-str-${tag}@pg.test`, roles: ['CLIENT'], activeRole: 'CLIENT' } });
-	const admin = await prisma.user.create({ data: { id: id(), accountType: 'SUPER_ADMIN', firstName: 'QA', lastName: 'Admin', email: `life-admin-${tag}@pg.test`, roles: ['SUPER_ADMIN'], activeRole: 'SUPER_ADMIN' } });
+	const admin = await prisma.user.create({ data: { id: id(), accountType: 'SUPER_ADMIN', status: 'ACTIVE', firstName: 'QA', lastName: 'Admin', email: `life-admin-${tag}@pg.test`, roles: ['SUPER_ADMIN'], activeRole: 'SUPER_ADMIN' } });
 	const project = await prisma.project.create({ data: { id: id(), title: `QA lifecycle ${tag}`, description: 'synthetic', specialty: 'x', deliveryDays: 10, clientId: client.id, providerId: provider.id, status: 'IN_PROGRESS' } });
 	const contract = await prisma.contract.create({ data: { id: id(), projectId: project.id, clientId: client.id, providerId: provider.id, price, durationDays: 14, phasesCount: 2, status: over.contractStatus ?? 'ACTIVE', signedAt: new Date() } });
 	const rate = over.rate ?? 12.4;

@@ -1,6 +1,7 @@
 import { prisma } from '../config/db';
 import { TIMEZONES } from '../dtos/provider-preferences.dto';
 import type { UpdateMarketerSettingsInput } from '../dtos/marketer-settings.dto';
+import { assertEmailOptionMayChange } from './optional-email-gate';
 
 /**
  * The marketer's settings live in the account's single notification_preferences.settings JSON (no migration), under keys that cannot collide with the client or provider
@@ -43,6 +44,8 @@ export const marketerSettingsService = {
   async update(userId: string, input: UpdateMarketerSettingsInput) {
     const row = await prisma.notificationPreference.findUnique({ where: { userId }, select: { settings: true } });
     const merged: Record<string, unknown> = { ...asRecord(row?.settings) };
+    // platform OFF: the e-mail option cannot be switched ON (409); the stored value is not touched by a refused request
+    if (typeof input.email === 'boolean') await assertEmailOptionMayChange(input.email, toMarketerSettings(row?.settings).email);
     for (const [field, key] of Object.entries(MARKETER_SETTINGS_KEYS)) {
       const value = (input as Record<string, unknown>)[field];
       if (value === null) delete merged[key]; // timezone back to "حسب جهازي": no value saved

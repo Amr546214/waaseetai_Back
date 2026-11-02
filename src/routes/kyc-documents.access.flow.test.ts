@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import jwt from 'jsonwebtoken';
+import { fullAccessModels } from '../testing/admin-full-access.testutil';
 
 // POST /api/kyc-documents/access-link end to end: real Express, real authenticate/requireActiveUser, real service, real Cloudinary URL signer
 // (pure computation, fake credentials); only the database, the session store and the audit log are replaced.
@@ -27,6 +28,7 @@ const db = {
 const audit: any[] = [];
 
 const prisma: any = {
+	...fullAccessModels(),
 	user: { findUnique: async ({ where, select }: any) => (select?.idDocumentUrl || select?.vatCertificateUrl ? { idDocumentUrl: null, vatCertificateUrl: users[where.id]?.vat ? REF(where.id) : null } : users[where.id] ?? null) },
 	clientProfile: { findUnique: async ({ where }: any) => db.client[where.userId] ?? null },
 	providerProfile: { findUnique: async () => null },

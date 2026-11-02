@@ -133,3 +133,11 @@ test('latest cannot return a stale review after an owned work sample changes', a
   await svc.evaluate('u1', 'ps1');
   assert.equal(calls.length, 2);
 });
+
+
+test('local policy refusal is labelled RULES, makes no AI call and changes no approval state', async (t) => {
+ const { svc, calls, logs } = await load(t, { samples: [{ ...SAMPLE, title: 'متجر خمور' }] });
+ const result = await svc.evaluate('u1','ps1');
+ assert.equal(result.source,'RULES'); assert.equal(calls.length,0); assert.equal(logs.length,0);
+ assert.doesNotMatch(JSON.stringify(result), /سيتم رفضه من الإدارة/);
+});

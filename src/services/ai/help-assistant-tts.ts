@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { randomUUID } from 'node:crypto';
 import { logger } from '../../config/logger';
 import { mapHelpAssistantRole } from '../../sockets/help-assistant-auth';
+import { adminMayUseRemoteAi } from '../admin-access.service';
 import { WaseetAiErrorCode, normalizeWaseetAiError } from './waseet-ai/waseet-ai.errors';
 import type { TtsSynthesizeRequest } from './waseet-ai/waseet-ai.types';
 
@@ -14,7 +15,7 @@ export const TTS_MODELS = [TTS_MODEL, 'gemini-3.8-flash-tts'] as const;
 export const MAX_TTS_TEXT_LENGTH = 1500;
 const TTS_TIMEOUT_MS = 45_000;
 const USER_WINDOW_MS = 10 * 60 * 1000;
-const USER_MAX_REQUESTS = 120;
+const USER_MAX_REQUESTS = 20;
 
 export type TtsVoice = (typeof TTS_VOICES)[number];
 export type TtsDialect = (typeof TTS_DIALECTS)[number];
@@ -99,6 +100,7 @@ export function createHelpAssistantTtsHandler(deps: HelpAssistantTtsDeps) {
 		if (!user || typeof userId !== 'string' || !userId) return fail(res, 401, 'AUTH_REQUIRED', TTS_MESSAGES.AUTH_REQUIRED);
 		const role = mapHelpAssistantRole(user.activeRole as string | undefined, user.accountType as string | undefined);
 		if (!role) return fail(res, 403, 'FORBIDDEN', TTS_MESSAGES.FORBIDDEN);
+		if (role === 'admin' && !(await adminMayUseRemoteAi(userId))) return fail(res, 403, 'FORBIDDEN', TTS_MESSAGES.FORBIDDEN); // remote AI is SUPER_ADMIN-only for administrators
 		try {
 			if (await deps.isBlocked(userId)) return fail(res, 403, 'FORBIDDEN', TTS_MESSAGES.FORBIDDEN);
 		} catch (error: any) {

@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { feePolicyService } from './fee-policy.service';
 import { Prisma, WithdrawalStatus, CommissionStatus, AccountType, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
 import { readAffiliatePaypalEmail } from '../utils/affiliate-payout';
@@ -134,6 +135,11 @@ export class WithdrawalService {
     // PayPal is the only withdrawal method: nothing else is ever created (defence in depth behind the DTO).
     if (input.method !== 'paypal') throw new AppError(PAYPAL_ONLY_MESSAGE, 400);
 
+    // The minimum payout of the fee policy in force now (0 = no minimum, which is how the platform behaved before policies were managed). The policy id and the minimum applied are stored on the request.
+    const policy = await feePolicyService.active();
+    const providerMinimum = policy.payload.minProviderPayout;
+    if (providerMinimum > 0 && input.amount < providerMinimum) throw new AppError(`الحد الأدنى لطلب السحب ${providerMinimum}`, 400);
+
     // Generated ONCE per call, outside the retry loop — every retry attempt
     // of THIS creation call reuses the identical id/referenceId pair. Only
     // one attempt's INSERT can ever actually commit (Postgres rolls back
@@ -186,6 +192,8 @@ export class WithdrawalService {
               userId,
               amount: input.amount,
               currency: 'USD', // all withdrawals are USD — never rely on the database default.
+              feePolicyId: policy.id,
+              minimumApplied: providerMinimum,
               method: input.method,
               // The IMMUTABLE destination snapshot — resolved once, above,
               // outside this transaction/retry loop. Always null for a
@@ -257,7 +265,8 @@ export class WithdrawalService {
     // set higher than 300) while enforcing 300 as an absolute floor for
     // everyone — touches no historical AffiliateProfile data, only this
     // validation check.
-    const effectiveMinimumPayout = Math.max(affiliate.minimumPayoutAmount, 300);
+    const marketerPolicy = await feePolicyService.active();
+    const effectiveMinimumPayout = Math.max(affiliate.minimumPayoutAmount, marketerPolicy.payload.minMarketerPayout); // the floor comes from the fee policy in force (baseline 300)
     if (input.amount < effectiveMinimumPayout) {
       throw new AppError(`الحد الأدنى لطلب السحب ${effectiveMinimumPayout}`, 400); // numeric limit shown without a currency symbol: the USD value is pending the owner
     }
@@ -292,6 +301,8 @@ export class WithdrawalService {
               userId,
               amount: input.amount,
               currency: 'USD',
+              feePolicyId: marketerPolicy.id,
+              minimumApplied: effectiveMinimumPayout,
               method: 'paypal',
               paypalEmail,
               status: WithdrawalStatus.PENDING,

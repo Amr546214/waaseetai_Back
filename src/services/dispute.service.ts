@@ -12,6 +12,7 @@ import { providerNotifications } from './provider-notifications.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import { adminAudit } from './admin-audit.service';
 import { notifyAdmins } from './admin-notifications.service';
+import { assigneeHolds } from './admin-access.service';
 
 // Advisory-only dispute summary — never a verdict. Human admin resolution
 // via resolve() above remains the sole authority on status/fault/money;
@@ -257,7 +258,7 @@ export class DisputeService {
   async assign(id: string, adminId: string, assigneeId: string) {
     const dispute = await this.openDisputeForAdmin(id);
     const assignee = await prisma.user.findUnique({ where: { id: assigneeId }, select: { id: true, firstName: true, lastName: true, accountType: true } });
-    if (!assignee || (assignee.accountType !== AccountType.ADMIN && assignee.accountType !== AccountType.SUPER_ADMIN)) throw fieldError('assigneeId', 'يمكن إسناد النزاع إلى مشرف أو مدير فقط');
+    if (!assignee || (assignee.accountType !== AccountType.ADMIN && assignee.accountType !== AccountType.SUPER_ADMIN) || !(await assigneeHolds(assigneeId, ['disputes.view']))) throw fieldError('assigneeId', 'يمكن إسناد النزاع إلى عضو فريق يملك صلاحية عرض النزاعات فقط');
     const name = [assignee.firstName, assignee.lastName].filter(Boolean).join(' ');
     await adminAudit.record({ adminId, entity: 'DISPUTE', entityId: dispute.id, eventType: 'DISPUTE_ASSIGNED', title: 'إسناد نزاع', summary: `إسناد النزاع إلى ${name || 'مشرف'}`, details: { assigneeId: assignee.id, assigneeName: name } });
     return { id: dispute.id, assignedTo: { id: assignee.id, name } };
@@ -317,9 +318,8 @@ export class DisputeService {
    * Money already released earlier (earned stages, or a COMPLETED project) is never touched: a settled escrow has held = 0 and is refused.
    */
   async resolveFinancial(id: string, adminId: string, input: ResolveDisputeFinancialInput) {
-    // Owner decision: only a SUPER_ADMIN account moves money. The route enforces it too; this is the last line of defence at the service.
-    const actor = await prisma.user.findUnique({ where: { id: adminId }, select: { accountType: true } });
-    if (!actor || actor.accountType !== AccountType.SUPER_ADMIN) throw new AppError('القرار المالي في النزاعات من صلاحية المدير الأعلى (SUPER_ADMIN) فقط', 403);
+    // Money moves only for somebody who holds BOTH disputes.resolve and payouts.send (an account type grants neither). The route enforces it too; this is the last line of defence at the service.
+    if (!(await assigneeHolds(adminId, ['disputes.resolve', 'payouts.send']))) throw new AppError('القرار المالي في النزاعات يتطلب صلاحيتي «حل النزاعات» و«إرسال الصرف» معًا', 403);
     const dispute = await prisma.dispute.findUnique({ where: { id } });
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
     if (dispute.status !== DisputeStatus.OPEN && dispute.status !== DisputeStatus.UNDER_REVIEW) throw new AppError('تمت معالجة النزاع مسبقاً', 409);

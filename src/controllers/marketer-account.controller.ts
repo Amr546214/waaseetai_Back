@@ -4,6 +4,7 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { marketerWalletService } from '../services/marketer-wallet.service';
 import { marketerSettingsService } from '../services/marketer-settings.service';
+import { optionalEmailEnabled } from '../services/optional-email-gate';
 import { marketerAssetsService } from '../services/marketer-assets.service';
 import { withdrawalService } from '../services/withdrawal.service';
 import { updateMarketerSettingsSchema } from '../dtos/marketer-settings.dto';
@@ -30,14 +31,14 @@ export async function getMarketerAssets(_req: Request, res: Response, next: Next
 }
 
 export async function getMarketerSettings(req: Request, res: Response, next: NextFunction) {
-  try { res.json({ success: true, data: await marketerSettingsService.get(userId(req)) }); } catch (error) { next(error); }
+  try { res.json({ success: true, data: { ...(await marketerSettingsService.get(userId(req))), emailEnabledByPlatform: await optionalEmailEnabled() } }); } catch (error) { next(error); }
 }
 
 export async function updateMarketerSettings(req: Request, res: Response, next: NextFunction) {
   try {
     const parsed = updateMarketerSettingsSchema.safeParse(req.body);
     if (!parsed.success) throw new AppError(parsed.error.issues.map(i => i.message).join(', '), 400);
-    res.json({ success: true, message: 'تم حفظ الإعدادات', data: await marketerSettingsService.update(userId(req), parsed.data) });
+    res.json({ success: true, message: 'تم حفظ الإعدادات', data: { ...(await marketerSettingsService.update(userId(req), parsed.data)), emailEnabledByPlatform: await optionalEmailEnabled() } });
   } catch (error) { next(error); }
 }
 
