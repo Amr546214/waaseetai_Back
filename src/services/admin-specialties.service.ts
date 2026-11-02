@@ -1,4 +1,5 @@
 import { prisma } from '../config/db';
+import { platformZone, startOfMonthInZone } from '../utils/platform-time';
 import { AppError } from '../utils/app-error';
 
 export class AdminSpecialtiesService {
@@ -20,9 +21,9 @@ export class AdminSpecialtiesService {
     }
 
     // Total AccreditationSubmission records created this month
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
+    const zone = await platformZone();
+    const startOfMonth = zone ? startOfMonthInZone(zone) : new Date();
+    if (!zone) { startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0); }
 
     let monthlyAccreditationRequests = 0;
     try {

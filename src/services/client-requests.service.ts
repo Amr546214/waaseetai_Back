@@ -1,5 +1,6 @@
 import { selfHireError } from '../utils/self-dealing';
-import { buildEscrowSnapshot, ESCROW_FEE_POLICY_V2 } from '../utils/escrow-commission';
+import { buildEscrowSnapshotFromPolicy, ESCROW_FEE_POLICY_V2 } from '../utils/escrow-commission';
+import { feePolicyService } from './fee-policy.service';
 import { prisma } from '../config/db';
 import { deriveRequestStage, offerActionBlock, REQUEST_STAGE_GROUP, REQUEST_STAGE_LABEL } from '../utils/request-lifecycle';
 import { clientOfferCounterService } from './client-offer-counter.service';
@@ -17,7 +18,7 @@ import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { readProposalReview, proposalBudgetSuitability, proposalDeadlineSuitability, proposalRecommendationRanks } from './proposal-suitability';
 import { providerNotifications } from './provider-notifications.service';
-import { clientNotifications, clientNotificationFor } from './client-notifications.service';
+import { clientNotifications, clientNotificationFor, CLIENT_ROUTES } from './client-notifications.service';
 import { listLifecycles, activeDisputeCounts } from './project-lifecycle.service';
 import { adminAudit } from './admin-audit.service';
 import { withKeyLock } from '../utils/key-lock';
@@ -28,6 +29,12 @@ import {
 	getDepositConfirmationTemplate,
 	getProviderContractSignatureTemplate
 } from '../utils/mail.transporter';
+import { mailAmountText } from '../utils/email-shell';
+import { dispatchMail } from './mail-dispatch';
+import { siteUrl } from '../utils/site-url';
+import { otpValidityText } from '../utils/otp-validity';
+import { brandNameInArabicText } from '../utils/brand';
+import { transactionalFrom, AUTO_MAIL_HEADERS } from '../utils/email-sender-name';
 
 function generateSlug(text: string): string {
 	if (!text) return `slug-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -1643,10 +1650,12 @@ export class ClientRequestsService {
 		// Send Email dynamically
 		try {
 			await mailTransporter.sendMail({
-				from: process.env.SMTP_USER || '"وسيط AI" <noreply@waseetai.com>',
+				from: await transactionalFrom(),
 				to: user.email,
-				subject: 'رمز التحقق لتوقيع العقد وإيداع الضمان - وسيط AI',
-				html: getOtpEmailTemplate(otpCode, Math.round(CONTRACT_OTP_TTL_SECONDS / 60), 'contract-signature')
+				subject: `رمز التحقق لتوقيع العقد وإيداع الضمان - ${brandNameInArabicText()}`,
+				html: getOtpEmailTemplate(otpCode, Math.round(CONTRACT_OTP_TTL_SECONDS / 60), 'contract-signature'),
+				text: `رمز توقيع العقد وإيداع الضمان في ${brandNameInArabicText()} هو: ${otpCode}\nالرمز صالح لمدة ${otpValidityText(Math.round(CONTRACT_OTP_TTL_SECONDS / 60))}. لا تشاركه مع أي أحد. إذا لم تطلبه فتجاهل هذه الرسالة.`,
+				headers: AUTO_MAIL_HEADERS
 			});
 		} catch (err) {
 			console.error('Failed to send email OTP', err);
@@ -1839,7 +1848,7 @@ export class ClientRequestsService {
 			// so a later level change never alters this contract.
 			const txEscrowAmount = Math.round(contractBeforePayment.price * 100) / 100;
 			const providerGamification = await tx.providerGamification.findUnique({ where: { providerId: contractBeforePayment.providerId }, select: { currentLevelIndex: true } });
-			const escrowSnapshot = buildEscrowSnapshot(providerGamification?.currentLevelIndex);
+			const escrowSnapshot = buildEscrowSnapshotFromPolicy(providerGamification?.currentLevelIndex, await feePolicyService.active());
 			const walletDebit = await tx.user.updateMany({
 				where: { id: userId, walletBalance: { gte: txEscrowAmount } },
 				data: { walletBalance: { decrement: txEscrowAmount } }
@@ -1908,27 +1917,33 @@ export class ClientRequestsService {
 		});
 
 		// 4. Send Confirmation Emails & Notifications OUTSIDE transaction block
+		// TRANSACTIONAL mails (the operation's receipt and the provider's contract invitation): never gated by the optional-mail switch nor by preferences, one each per contract
+		// (dispatchMail keeps ONE mail per purpose / recipient / event). Each in its own guard: a failing receipt must not skip the invitation or the in-app notifications.
+		// These two mails ARE the e-mail of the ESCROW_FUNDED / OFFER_ACCEPTED notifications below, whose e-mail copies are suppressed (mail-dispatch COVERED_NOTIFICATIONS).
+		const signRoute = `/provider-overview/offers/${contractBeforePayment.offerId || offerId}/sign-contract`;
 		try {
 			if (userEmail) {
-				// Email to Client
-				await mailTransporter.sendMail({
-					from: process.env.SMTP_USER || '"وسيط AI" <noreply@waseetai.com>',
-					to: userEmail,
-					subject: 'تم إيداع الضمان بنجاح - وسيط AI',
-					html: getDepositConfirmationTemplate(projectName, escrowAmount)
+				const myProjects = siteUrl(CLIENT_ROUTES.activeProjects);
+				await dispatchMail({ transport: mailTransporter,
+					purpose: 'escrow-deposit-receipt', to: userEmail, recipientKey: userId, eventKey: contractBeforePayment.id,
+					subject: `تم إيداع الضمان بنجاح - ${brandNameInArabicText()}`,
+					html: getDepositConfirmationTemplate(projectName, escrowAmount, myProjects),
+					text: `تم إيداع الضمان بنجاح للمشروع «${projectName}» بمبلغ ${mailAmountText(Number(escrowAmount))}. يبدأ التنفيذ عندما يوقّع مقدّم الخدمة العقد، وسيبقى المبلغ محفوظًا حتى اعتمادك للتسليم النهائي.${myProjects ? `\n${myProjects}` : ''}`
 				});
 			}
-
+		} catch (err) { console.error('Failed to send deposit receipt email:', err); }
+		try {
 			if (providerEmail) {
-				// Email to Provider
-				await mailTransporter.sendMail({
-					from: process.env.SMTP_USER || '"وسيط AI" <noreply@waseetai.com>',
-					to: providerEmail,
-					subject: 'دعوة لتوقيع العقد 📝 - وسيط AI',
-					html: getProviderContractSignatureTemplate(projectName, clientName, bidAmount)
+				const signLink = siteUrl(signRoute);
+				await dispatchMail({ transport: mailTransporter,
+					purpose: 'provider-contract-invitation', to: providerEmail, recipientKey: providerUserId ?? providerEmail, eventKey: contractBeforePayment.id,
+					subject: `دعوة لتوقيع العقد - ${brandNameInArabicText()}`,
+					html: getProviderContractSignatureTemplate(projectName, clientName, bidAmount, signLink),
+					text: `تم قبول عرضك على المشروع «${projectName}» من العميل ${clientName} وإيداع قيمته (${mailAmountText(Number(bidAmount))}) في الضمان. يرجى تسجيل الدخول وتوقيع العقد.${signLink ? `\n${signLink}` : ''}`
 				});
 			}
-
+		} catch (err) { console.error('Failed to send contract invitation email:', err); }
+		try {
 			// In-App confirmation to the client: the amount really held from the wallet
 			await clientNotifications.send(clientNotificationFor.escrowFunded({ clientId: userId, requestId, amount: Number(escrowAmount), projectName }));
 
@@ -1947,7 +1962,7 @@ export class ClientRequestsService {
 						// canonical offer id (falls back to the submitted id only for a
 						// legacy-only proposal), not the client-side legacy mirror id,
 						// which that list never contains.
-						actionUrl: `/provider-overview/offers/${contractBeforePayment.offerId || offerId}/sign-contract`,
+						actionUrl: signRoute,
 						actionText: 'عرض وتوقيع العقد',
 						metadata: { offerId: contractBeforePayment.offerId || offerId, requestId }
 					}

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import jwt from 'jsonwebtoken';
+import { fullAccessModels } from '../testing/admin-full-access.testutil';
 
 // Item 22: real Express + real authenticate/authorize + real multer + real services; only the DB, sessions, Cloudinary and the audit sink are replaced.
 process.env.JWT_SECRET = 'admin-content-secret';
@@ -22,6 +23,7 @@ const missing = () => Object.assign(new Error('The table `public.x` does not exi
 const guard = <T>(fn: () => T) => async (...a: any[]) => { if (tablesMissing) throw missing(); return (fn as any)(...a); };
 
 const prisma: any = {
+	...fullAccessModels(),
 	user: { findUnique: async ({ where }: any) => users[where.id] ?? null },
 	platformSetting: {
 		findMany: guard(() => settings.map(s => ({ ...s }))), count: guard(() => settings.length),
@@ -100,11 +102,17 @@ test('settings: only admins; defaults, save, read back, audit entry, unknown key
 
 test('public settings: no auth, only public keys (admin-only key never leaks)', async () => {
 	reset();
-	await call(ADMIN, 'PUT', '/admin/settings', { json: { supportEmail: 's@x.com', adminNotificationEmail: 'secret@x.com' } });
+	await call(ADMIN, 'PUT', '/admin/settings', { json: { supportEmail: 's@x.com' } });
+	// the admin mailbox is a real, SUPER-only setting now: it saves through the legacy route too, and is never part of the public values
+	assert.equal((await call(ADMIN, 'PUT', '/admin/settings', { json: { adminNotificationEmail: 'secret@x.com' } })).status, 200);
+	// a key the registry marks "blocked" is refused by the legacy route: one registry decides what may be saved
+	const blocked = await call(ADMIN, 'PUT', '/admin/settings', { json: { defaultTimezoneX: 'x' } });
+	assert.equal(blocked.status, 400);
 	const r = await call(null, 'GET', '/public/settings');
 	assert.equal(r.status, 200);
 	assert.equal(r.body.data.supportEmail, 's@x.com');
 	assert.equal('adminNotificationEmail' in r.body.data, false);
+	assert.equal('maintenanceMode' in r.body.data, false); // enforcement switches are not public values
 });
 
 test('missing tables: visible reads answer 200 with defaults / an empty list (storageReady=false); only a save / upload is a clear 503', async () => {

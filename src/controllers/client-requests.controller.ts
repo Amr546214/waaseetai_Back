@@ -4,6 +4,7 @@ import { clientOfferCounterService } from '../services/client-offer-counter.serv
 import { createClientRequestSchema, clientRequestAiSuggestSchema } from '../dtos/create-client-request.dto';
 import { AppError } from '../utils/app-error';
 import { canRewrite, REWRITE_INPUT_REQUIRED_MESSAGE } from '../utils/description-rewrite-guard';
+import { checkMultipleContentPolicy } from '../utils/content-policy-guard';
 import { uploadMulterFile } from '../utils/cloudinary-storage';
 import { projectProgressService } from '../services/project-progress.service';
 
@@ -35,6 +36,11 @@ export class ClientRequestsController {
       const desc = parsed.data.description?.trim() ?? '';
       const specName = parsed.data.specialtyName?.trim() ?? '';
 
+      const policy = checkMultipleContentPolicy([title, desc, specName]);
+      if (policy.blocked) {
+        throw new AppError(policy.reasonAr || 'المحتوى المدخل يخالف سياسات منصة وسيط.', 400);
+      }
+
       if (parsed.data.fullDraft) {
         if (title.length < 3 && desc.length < 5 && !specName) {
           throw new AppError('يرجى كتابة عنوان مبدئي للطلب أو اختيار التخصص أولاً لتوليد الطلب بالذكاء الاصطناعي.', 400);
@@ -64,6 +70,11 @@ export class ClientRequestsController {
         // every refusal names its field (errors[]), the summary keeps the old joined text
         const fields = parsed.error.issues.map(i => ({ field: String(i.path[0] ?? ''), path: i.path.join('.'), message: i.message })).filter(f => f.field);
         throw new AppError(errorMsg, 400, fields, 'REQUEST_VALIDATION_FAILED');
+      }
+
+      const policy = checkMultipleContentPolicy([parsed.data.title, parsed.data.description, parsed.data.outputs]);
+      if (policy.blocked) {
+        throw new AppError(policy.reasonAr || 'المحتوى المدخل يخالف سياسات منصة وسيط.', 400);
       }
 
       const userId = req.user!.userId || req.user!.id;
@@ -126,9 +137,6 @@ export class ClientRequestsController {
   }
 
   // GET /api/client/requests/active-projects
-  // Batch 6 — optional ?employeeId=<id> scopes the list to one of the
-  // CALLER's OWN company employees; validated server-side in the service
-  // (never trusts the query param as a cross-company discovery oracle).
   public async getActiveProjects(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.userId || req.user!.id;
@@ -148,7 +156,6 @@ export class ClientRequestsController {
     try {
       const userId = req.user!.userId || req.user!.id;
       const page = parseInt(req.query.page as string) || 1;
-      // The archive screen counts what it loads: allow a full page of up to 100 rows (still bounded).
       const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
       const result = await clientRequestsService.getCompletedProjects(userId, page, limit);
       res.status(200).json({
@@ -202,10 +209,6 @@ export class ClientRequestsController {
   }
 
   // POST /api/client/requests/:id/stages/:stageId/ai-review
-  // Advisory-only — never approves/rejects the delivery, never touches
-  // status or escrow. The AI review is currently disabled (503 AI_FEATURE_UNAVAILABLE via AppError); any other failure returns an honest 502, not
-  // a fabricated review; the manual approve/revision workflow above
-  // (reviewStageDelivery) is completely unaffected either way.
   public async getDeliveryAiReview(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.userId || req.user!.id;
@@ -221,10 +224,6 @@ export class ClientRequestsController {
     }
   }
 
-  // Batch 8 — advisory-only project health analysis (Contract
-  // Monitoring / Project Health / Predictive Delay Risk / Predictive
-  // Dispute Risk — one real feature). Read-only, never
-  // approves/rejects/releases funds/changes status.
   public async getProjectHealthAnalysis(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.userId || req.user!.id;
@@ -304,8 +303,6 @@ export class ClientRequestsController {
     }
   }
 
-  // POST /api/client/requests/:id/contract/sign
-  // GET /api/client/my-requests/:id/contract — the frozen contract the client is about to sign (price/duration/stages) and whether signing is possible.
   public async getContractForSignature(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.userId || req.user!.id;

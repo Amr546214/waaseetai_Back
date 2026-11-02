@@ -3,6 +3,7 @@ import { updateProviderPreferencesSchema } from '../dtos/provider-preferences.dt
 import { publicKycRejectionReason, withoutInternalProviderNotes } from '../utils/provider-kyc-review';
 import { Request, Response, NextFunction } from 'express';
 import { AppError, fieldErrorItem } from '../utils/app-error';
+import { optionalEmailEnabled } from '../services/optional-email-gate';
 import { providerProfileService } from '../services/provider-profile.service';
 import { prisma } from '../config/db';
 import { CONTACT_IMMUTABLE, CONTACT_IMMUTABLE_MESSAGE } from '../services/provider-profile.service';
@@ -118,7 +119,7 @@ export const getSetupData = async (req: Request, res: Response) => {
 		// The same identity state the profile page and the dashboard use (NOT_SUBMITTED / PENDING_REVIEW / VERIFIED / REJECTED + category), so a document sent in the setup is "under review" here too.
 		let identityVerification: Awaited<ReturnType<typeof providerProfileService.getIdentityVerification>> = null;
 		try { identityVerification = await providerProfileService.getIdentityVerification(userId); } catch { /* the status is extra information: the setup read never fails because of it */ }
-		res.status(200).json({ success: true, data: profile ? { ...withoutInternalProviderNotes(profile), kycRejectionReason, identityVerification } : {} });
+		res.status(200).json({ success: true, data: profile ? { ...withoutInternalProviderNotes(profile), kycRejectionReason, identityVerification, emailEnabledByPlatform: await optionalEmailEnabled() } : {} });
 	} catch (error) {
 		res.status(500).json({ message: 'Internal server error' });
 	}
@@ -558,6 +559,7 @@ export const updatePreferences = async (req: Request, res: Response) => {
 		const data = await providerProfileService.updatePreferences(userId, parsed.data);
 		res.json({ success: true, message: 'تم حفظ التفضيلات', data });
 	} catch (error: any) {
+		if (error instanceof AppError && error.code) return res.status(error.statusCode).json({ success: false, code: error.code, message: error.message });
 		if (error?.message === 'PROFILE_NOT_FOUND') return res.status(404).json({ success: false, message: 'ملف مقدم الخدمة غير موجود' });
 		res.status(500).json({ success: false, message: 'Internal server error' });
 	}

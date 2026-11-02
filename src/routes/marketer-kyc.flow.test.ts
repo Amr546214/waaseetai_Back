@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import jwt from 'jsonwebtoken';
+import { fullAccessModels } from '../testing/admin-full-access.testutil';
 
 // #51 end to end: real Express, real authenticate / requireActiveUser / authorize, real multer + service; only the database, the session store,
 // Cloudinary and the notification / audit side effects are replaced.
@@ -28,6 +29,7 @@ const byUser = (userId: string) => Object.values(aff).find(a => a.userId === use
 const match = (a: Aff, w: any) => (w.id === undefined || w.id === a.id) && (w.userId === undefined || w.userId === a.userId) && (w.identityVerified === undefined || w.identityVerified === a.identityVerified)
 	&& (w.kycDocumentUrl === undefined || (w.kycDocumentUrl && typeof w.kycDocumentUrl === 'object' && 'not' in w.kycDocumentUrl ? a.kycDocumentUrl !== w.kycDocumentUrl.not : a.kycDocumentUrl === w.kycDocumentUrl));
 const prisma: any = {
+	...fullAccessModels(),
 	user: { findUnique: async ({ where }: any) => users[where.id] ?? null },
 	affiliateProfile: {
 		findUnique: async ({ where }: any) => { const a = where.id ? aff[where.id] : byUser(where.userId); return a ? { ...a, user: users[a.userId] } : null; },

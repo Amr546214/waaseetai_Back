@@ -8,6 +8,9 @@ import { accreditationAiService } from '../services/accreditation-ai.service';
 import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
 import { PROOF_ALLOWED_MIME_TYPES, PROOF_MAX_BYTES, PROOF_MAX_FILES, completeUpload, failUpload, listUploads, proofRequirements, publicUpload, removeUpload, startUpload } from '../services/accreditation-proof.service';
 import { ProofFileType } from '@prisma/client';
+import { checkMultipleContentPolicy } from '../utils/content-policy-guard';
+import { z } from 'zod';
+import { llmClient } from '../services/llm/llm.client';
 
 const router = express.Router();
 router.use(authenticate, requireActiveUser, authorizeActiveRole(AccountType.PROVIDER_INDIVIDUAL, AccountType.PROVIDER_COMPANY));
@@ -27,7 +30,7 @@ const asStringList = (value: unknown): string[] => {
 
 /**
  * Primary Endpoint: POST /api/provider/accreditation/submit or /api/accreditation/submit
- * Submits work sample for technical accreditation & stores it for human review (AI evaluation is paused until WaseetAI supports it)
+ * Submits work sample for technical accreditation & stores it for human review
  */
 router.post('/submit', aiLimiter, upload.array('files', PROOF_MAX_FILES), async (req: Request, res: Response, next) => {
   try {
@@ -36,7 +39,12 @@ router.post('/submit', aiLimiter, upload.array('files', PROOF_MAX_FILES), async 
 
     title = typeof title === 'string' ? title.trim() : '';
     description = typeof description === 'string' ? description.trim() : '';
-    // every invalid field is named (the form shows each one at its input)
+
+    const policy = checkMultipleContentPolicy([title, description]);
+    if (policy.blocked) {
+      throw fieldErrors([['description', policy.reasonAr || 'المحتوى المدخل يخالف سياسات منصة وسيط.']]);
+    }
+
     const invalid: Array<[string, string]> = [];
     if (!providerSpecialtyId) invalid.push(['providerSpecialtyId', 'اختر التخصص']);
     if (title.length < 3) invalid.push(['title', 'عنوان النموذج مطلوب (3 أحرف على الأقل)']);
@@ -76,8 +84,6 @@ router.post('/submit', aiLimiter, upload.array('files', PROOF_MAX_FILES), async 
     const specialty = await prisma.providerSpecialty.findFirst({ where: { OR: [{ id: String(providerSpecialtyId) }, { specialtyId: String(providerSpecialtyId) }], providerProfile: { userId: user.id } }, select: { id: true } });
     if (!specialty) throw new AppError('التخصص غير مرتبط بحساب مقدم الخدمة', 403);
 
-    // files sent WITH the request are uploaded private and recorded as completed uploads of this user for this request; the ids of files uploaded earlier
-    // (upload-proof) are verified by the service. A URL in `attachments` is accepted only when it is the private reference of one of the user's own uploads.
     const ids: string[] = asStringList(proofIds);
     if (req.files && Array.isArray(req.files)) {
       for (const file of req.files) {
@@ -113,9 +119,6 @@ router.post('/submit', aiLimiter, upload.array('files', PROOF_MAX_FILES), async 
   }
 });
 
-/**
- * GET /api/accreditation/samples or /api/provider/accreditation/samples
- */
 router.get('/samples', async (req: Request, res: Response, next) => {
   try {
     const user = req.user!;
@@ -126,9 +129,6 @@ router.get('/samples', async (req: Request, res: Response, next) => {
   }
 });
 
-/**
- * GET /api/accreditation/samples/:id or /api/provider/accreditation/samples/:id
- */
 router.get('/samples/:id', async (req: Request, res: Response, next) => {
   try {
     const user = req.user!;
@@ -140,9 +140,6 @@ router.get('/samples/:id', async (req: Request, res: Response, next) => {
   }
 });
 
-/**
- * Proof file uploader endpoint (backward compatibility & instant file upload)
- */
 router.post('/upload-proof', upload.single('file'), async (req: Request, res: Response, next) => {
   try {
     const { specialtyId, providerSpecialtyId } = req.body;
@@ -156,12 +153,10 @@ router.post('/upload-proof', upload.single('file'), async (req: Request, res: Re
     const profile = await prisma.providerProfile.findUnique({ where: { userId: user.id } });
     if (!profile) throw new AppError('Provider profile not found', 404);
 
-    // The file is recorded against THIS user and THIS request before it is stored; it counts only once the upload is COMPLETED.
     const row = await startUpload(prisma, { userId: user.id, providerSpecialtyId: target, fileName: file.originalname, mimeType: file.mimetype, bytes: file.size, kind: ProofFileType.WORK_SAMPLE });
     try {
       const stored = await uploadMulterFile(file, `waseetai/accreditation/${user.id}/proofs`, undefined, true);
       const done = await completeUpload(prisma, row.id, stored.privateRef!, stored.bytes ?? file.size);
-      // The private reference is never returned: the caller keeps the upload id and the metadata only.
       res.status(200).json({ success: true, proofId: done.id, data: publicUpload(done), fileName: stored.fileName, fileSize: (stored.bytes / 1024 / 1024).toFixed(2) + ' MB' });
     } catch (error) { await failUpload(prisma, row.id); throw error; }
   } catch (error) {
@@ -169,10 +164,8 @@ router.post('/upload-proof', upload.single('file'), async (req: Request, res: Re
   }
 });
 
-/** What this path requires (types, sizes, count): the form shows it before the user uploads. */
 router.get('/proof-requirements', (_req: Request, res: Response) => { res.json({ success: true, data: proofRequirements() }); });
 
-/** The caller's completed proof documents for one request (provider specialty) that are not attached to a decided request. */
 router.get('/proofs', async (req: Request, res: Response, next) => {
   try {
     const target = String(req.query.providerSpecialtyId || '');
@@ -182,22 +175,18 @@ router.get('/proofs', async (req: Request, res: Response, next) => {
   } catch (error) { next(error); }
 });
 
-/** Deleting a required document restores the "missing" state (the row is cancelled and no longer counts). */
 router.delete('/proofs/:id', async (req: Request, res: Response, next) => {
   try {
     res.json({ success: true, data: await removeUpload(prisma, req.user!.id, String(req.params['id'])) });
   } catch (error) { next(error); }
 });
 
-import { z } from 'zod';
-import { llmClient } from '../services/llm/llm.client';
-
 const AccreditationDraftSchema = z.object({
   title: z.string().min(5).max(160),
   overview: z.string().min(20).max(500),
   architecturePoints: z.array(z.string().min(10).max(300)).min(2).max(5),
   performanceAndSecurityPoints: z.array(z.string().min(10).max(300)).min(2).max(4),
-  technologiesUsed: z.array(z.string().min(1).max(50)).min(3).max(8),
+  technologiesUsed: z.array(z.string().min(1).max(50)).min(2).max(8),
 });
 
 const cleanLine = (s: string): string =>
@@ -205,35 +194,50 @@ const cleanLine = (s: string): string =>
 
 /**
  * POST /api/provider/accreditation/ai-suggest
- * Generates or enhances the technical work sample draft (title, multi-line architectural description, and tech stack) for Step 2.
+ * Generates or enhances the work sample draft (title, multi-line description, and tools/methods) for Step 2, tailored to the exact specialty domain.
  */
 router.post('/ai-suggest', aiLimiter, async (req: Request, res: Response, next) => {
   try {
     const user = req.user!;
-    const specialtyName = typeof req.body?.specialtyName === 'string' ? req.body.specialtyName.trim() : 'تطوير البرمجيات';
+    const specialtyName = typeof req.body?.specialtyName === 'string' ? req.body.specialtyName.trim() : 'تخصص مهني';
     const subSpecialties = asStringList(req.body?.subSpecialties);
     const currentTitle = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
     const currentDescription = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
     const currentTechs = asStringList(req.body?.technologiesUsed);
 
+    const policy = checkMultipleContentPolicy([currentTitle, currentDescription, specialtyName, ...subSpecialties]);
+    if (policy.blocked) {
+      throw new AppError(policy.reasonAr || 'المحتوى المدخل يخالف سياسات منصة وسيط.', 400);
+    }
+
     const profile = await prisma.providerProfile.findUnique({
       where: { userId: user.id },
-      select: { skills: true, headline: true },
+      select: { skills: true, headline: true, mainSpecialty: true },
     });
     const profileSkills = Array.isArray(profile?.skills)
       ? (profile!.skills as unknown[]).filter((s): s is string => typeof s === 'string' && s.trim().length > 0).slice(0, 15)
       : [];
 
-    const system = `أنت مستشار تقني ومعماري خبير على منصة "وسيط AI".
-مهمتك مساعدة مقدم الخدمة في صياغة أو تحسين بيانات نموذج العمل الفني للاعتماد باللغة العربية الاحترافية والمنسقة (بدون رموز ماركداون مثل ** أو ##).
-القواعد:
-1. إذا كان المستخدم قد كتب عنواناً أو وصفاً مبدئياً، قم بتحسينه وتوسيعه تقنياً ومعمارياً مع الحفاظ على فكرته الأساسية.
-2. إذا لم يكتب المستخدم عنواناً أو وصفاً، اقترح نموذج عمل فني احترافي ومتكامل يناسب التخصص المختار (${specialtyName}${subSpecialties.length ? ' - ' + subSpecialties.join('، ') : ''}).
-3. قسّم الوصف الفني المعماري إلى:
-   - overview: فقرة تمهيدية واضحة تشرح فكرة المشروع والهدف منه (جملتين إلى 3 جمل).
-   - architecturePoints: من 3 إلى 4 نقاط تفصيلية تشرح البنية المعمارية، تقسيم المكونات، أنماط التصميم (Design Patterns)، وإدارة الحالة أو البيانات.
-   - performanceAndSecurityPoints: من 2 إلى 3 نقاط تشرح تحسينات الأداء، الأمان، إمكانية الوصول (Accessibility)، واختبارات الجودة.
-4. اقترح في technologiesUsed من 4 إلى 7 تقنيات ومكتبات حقيقية ومناسبة جداً للتخصص والمشروع (بأسمائها القياسية بالإنجليزية).`;
+    const combinedDomain = `${specialtyName} ${subSpecialties.join(' ')}`.toLowerCase();
+    const isNonTechDomain = /(?:قانون|ضريب|محام|عقود|تشريع|مالي|محاسب|زكا|استشار|إدار|ادار|ترجم|كتاب|محتو|تسويق|مبيعات|ديكور|معمار|هندس)/.test(combinedDomain) && !/(?:برمج|تطوير|ويب|تطبيق|ألعاب|العاب|unity|unreal|ذكاء|سحاب|أمن|سيبران)/.test(combinedDomain);
+
+    const section2Heading = isNonTechDomain ? 'منهجية العمل والإطار المهني والتنظيمي:' : 'البنية المعمارية وأنماط التصميم:';
+    const section3Heading = isNonTechDomain ? 'الامتثال المهني وتدقيق الجودة والنتائج:' : 'الأداء والأمان وضمان الجودة:';
+
+    const system = `أنت مستشار مهني وتقني خبير على منصة "وسيط AI".
+مهمتك مساعدة مقدم الخدمة في صياغة أو تحسين بيانات نموذج العمل للاعتماد باللغة العربية الاحترافية والمنسقة (بدون رموز ماركداون مثل ** أو ##).
+التخصص المستهدف: (${specialtyName}${subSpecialties.length ? ' - ' + subSpecialties.join('، ') : ''}).
+القواعد الصارمة:
+1. التزم التزاماً تاماً بطبيعة التخصص (${specialtyName}${subSpecialties.length ? ' / ' + subSpecialties.join('، ') : ''}):
+   - إذا كان التخصص قانونياً أو ضريبياً أو مالياً أو استشارياً أو تسويقياً، فاكتب عنواناً ووصفاً مهنياً واقعياً يخص هذا المجال تحديداً (مثل صياغة المذكرات والعقود والامتثال الضريبي أو الخطط التسويقية أو الدراسات المالية)، ويُمنع منعاً باتاً ذكر مصطلحات برمجية مثل Node.js أو Microservices أو قواعد البيانات لتخصص غير برمجي!
+   - إذا كان التخصص تطوير ألعاب (مثل Unity أو Unreal)، فاكتب نموذج عمل متخصص في هندسة الألعاب (محرك الفيزياء، C#، إدارة المشاهد، تحسين الأداء وDraw Calls).
+   - يحظر اقتراح أي أنشطة مخالفة للقانون مثل التهرب الضريبي أو التحايل المالي.
+2. إذا كان المستخدم قد كتب عنواناً أو وصفاً مبدئياً مشروعاً، قم بتحسينه وتوسيعه مهنياً مع الحفاظ على فكرته الأساسية.
+3. قسّم الوصف إلى:
+   - overview: فقرة تمهيدية واضحة تشرح فكرة النموذج والهدف المهني منه (جملتين إلى 3 جمل).
+   - architecturePoints: من 3 إلى 4 نقاط تفصيلية تشرح منهجية التنفيذ والخطوات المهنية أو المعمارية المتبعة.
+   - performanceAndSecurityPoints: من 2 إلى 3 نقاط تشرح معايير الجودة والامتثال والدقة والمخرجات النهائية.
+4. اقترح في technologiesUsed من 3 إلى 6 أدوات أو أطر عمل أو منهجيات حقيقية ومطابقة تماماً للتخصص (مثلاً في القانون الضريبي: الأنظمة الضريبية، لوائح الزكاة والضريبة، صياغة العقود، التدقيق القانوني؛ وفي البرمجة: التقنيات المناسبة للتخصص).`;
 
     const result = await llmClient.generateJson({
       feature: 'accreditation-sample-draft',
@@ -254,13 +258,13 @@ router.post('/ai-suggest', aiLimiter, async (req: Request, res: Response, next) 
     });
 
     const formattedDescription = [
-      'نظرة عامة على المشروع:',
+      'نظرة عامة على نموذج العمل:',
       result.data.overview.replace(/\*\*/g, '').trim(),
       '',
-      'البنية المعمارية وأنماط التصميم:',
+      section2Heading,
       ...result.data.architecturePoints.map((p) => `• ${cleanLine(p)}`),
       '',
-      'الأداء والأمان وضمان الجودة:',
+      section3Heading,
       ...result.data.performanceAndSecurityPoints.map((p) => `• ${cleanLine(p)}`),
     ].join('\n');
 
@@ -278,4 +282,3 @@ router.post('/ai-suggest', aiLimiter, async (req: Request, res: Response, next) 
 });
 
 export default router;
-

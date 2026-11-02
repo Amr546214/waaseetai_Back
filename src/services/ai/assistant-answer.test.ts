@@ -105,3 +105,13 @@ test('legacy message is bounded and credentials/private identifiers in history a
   assert.match(generalFallback, /مختصر ومباشر/);
   assert.doesNotMatch(generalFallback, /Waseet policy/);
 });
+
+
+test('exam refusal stops before either AI transport while learning outside tests still works', async () => {
+ let calls = 0;
+ const client = { async *streamHelpChat() { calls++; yield {type:'delta' as const,chunk:'شرح'}; yield {type:'completed' as const}; }, async avatarChat() { calls++; return {text:'شرح'}; } };
+ const blocked = await Array.fromAsync(streamAssistantAnswer({mode:'general',question:'اختر الإجابة الصحيحة'}, {},client,false));
+ assert.equal(calls,0); assert.match(blocked.filter(e => e.type==='delta').map(e => e.chunk).join(''),/نزاهة/);
+ await Array.fromAsync(streamAssistantAnswer({mode:'general',question:'اشرح معنى قواعد البيانات'}, {},client,false));
+ assert.equal(calls,1);
+});

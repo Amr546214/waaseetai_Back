@@ -1,5 +1,6 @@
 import { startChatDigestScheduler } from './services/chat-digest.service';
 import express, { Request, Response, NextFunction } from 'express';
+import { maintenanceMiddleware } from './middlewares/maintenance.middleware';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -11,6 +12,7 @@ import { globalErrorHandler } from './middlewares/error.middleware';
 import { scrubPrivateRefs } from './middlewares/scrub-private-refs.middleware';
 import { safeServerErrors } from './middlewares/safe-server-errors.middleware';
 import { apiLimiter } from './middlewares/rate-limit.middleware';
+import { responseGzip } from './middlewares/response-gzip.middleware';
 import { resolveTrustProxy } from './config/trust-proxy';
 import { AppError } from './utils/app-error';
 import authRouter from './routes/auth/auth.routes';
@@ -141,6 +143,9 @@ app.use(
 	})
 );
 
+// gzip for JSON answers (see middlewares/response-gzip.middleware.ts); before the limiter so a 429 body is encoded the same way
+app.use(responseGzip);
+
 // Apply rate limiting to both /api-prefixed and reverse-proxy unprefixed routes.
 app.use(apiLimiter);
 
@@ -194,6 +199,9 @@ app.get('/health', (_req: Request, res: Response) => {
 app.get('/api/health', (_req: Request, res: Response) => {
 	res.status(200).json({ success: true, status: 'ok', service: 'waseetai-backend' });
 });
+
+// Maintenance mode (setting `maintenanceMode`): refuses the platform's traffic except health, sign-in, public settings, the admin console and payment callbacks. After the health probes on purpose.
+app.use(maintenanceMiddleware);
 
 // Create a centralized API router
 const apiRouter = express.Router();
@@ -277,6 +285,14 @@ mountAppRoute('/payments/paypal', paypalWebhookRoutes);
 
 import adminSpecialtiesRouter from './routes/admin-specialties.routes';
 import adminUsersRouter from './routes/admin-users.routes';
+import adminTeamRoutes, { adminInvitePublicRouter } from './routes/admin-team.routes';
+import adminMessagesRoutes from './routes/admin-messages.routes';
+import adminSystemSettingsRoutes from './routes/admin-system-settings.routes';
+import adminFeePolicyRoutes from './routes/admin-fee-policy.routes';
+import adminSiteIdentityRoutes from './routes/admin-site-identity.routes';
+import publicSiteIdentityRoutes from './routes/public-site-identity.routes';
+import { systemSettingsService } from './services/system-settings.service';
+import { startSiteIdentityCache } from './services/site-identity-cache';
 import aiAssessmentRoutes from './routes/ai-assessment.routes';
 import accountManagementRoutes from './routes/account-management.routes';
 import adminDisputesRoutes from './routes/admin-disputes.routes';
@@ -310,6 +326,18 @@ mountAppRoute('/api/assessments', aiAssessmentRoutes);
 mountAppRoute('/assessments', aiAssessmentRoutes);
 mountAppRoute('/api/admin/specialties', adminSpecialtiesRouter);
 mountAppRoute('/admin/specialties', adminSpecialtiesRouter);
+mountAppRoute('/api/admin/team', adminTeamRoutes);
+mountAppRoute('/admin/team', adminTeamRoutes);
+mountAppRoute('/api/admin/messages', adminMessagesRoutes);
+mountAppRoute('/admin/messages', adminMessagesRoutes);
+mountAppRoute('/api/admin/system-settings', adminSystemSettingsRoutes);
+mountAppRoute('/admin/system-settings', adminSystemSettingsRoutes);
+mountAppRoute('/api/admin/fee-policy', adminFeePolicyRoutes);
+mountAppRoute('/admin/fee-policy', adminFeePolicyRoutes);
+mountAppRoute('/api/admin/site-identity', adminSiteIdentityRoutes);
+mountAppRoute('/admin/site-identity', adminSiteIdentityRoutes);
+mountAppRoute('/api/admin-invite', adminInvitePublicRouter);
+mountAppRoute('/admin-invite', adminInvitePublicRouter);
 mountAppRoute('/api/admin/users', adminUsersRouter);
 mountAppRoute('/admin/users', adminUsersRouter);
 mountAppRoute('/api/admin/disputes', adminDisputesRoutes);
@@ -354,6 +382,8 @@ mountAppRoute('/api/admin/settings', adminSettingsRoutes);
 mountAppRoute('/admin/settings', adminSettingsRoutes);
 mountAppRoute('/api/public', publicSettingsRoutes);
 mountAppRoute('/public', publicSettingsRoutes);
+mountAppRoute('/api/public', publicSiteIdentityRoutes);
+mountAppRoute('/public', publicSiteIdentityRoutes);
 mountAppRoute('/api/admin/marketing-assets', adminMarketingAssetsRoutes);
 mountAppRoute('/admin/marketing-assets', adminMarketingAssetsRoutes);
 mountAppRoute('/api/admin/marketplace-services', adminMarketplaceServicesRoutes);
@@ -423,6 +453,9 @@ if (process.env.NODE_ENV !== 'test') {
 		logger.info(`🚀 Server is running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
 		logger.info(`👉 http://localhost:${PORT}/api`);
 		startChatDigestScheduler(); // no-op unless CHAT_DIGEST_EMAIL_ENABLED=true
+		// warm the settings cache so the maintenance / registration policies have a trusted value as early as possible (a failure is logged; the cold-boot policy covers the gap)
+		void systemSettingsService.prime();
+		startSiteIdentityCache(); // non-blocking: the replaced e-mail logo (if any) for the synchronous mail shell; a failure leaves the default
 	});
 }
 

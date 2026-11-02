@@ -1,3 +1,4 @@
+import { adminMayUseRemoteAi } from '../admin-access.service';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../../config/db';
@@ -6,10 +7,19 @@ import { waseetAiClient, type WaseetAiClient } from './waseet-ai/waseet-ai.clien
 import { normalizeWaseetAiError, WaseetAiErrorCode } from './waseet-ai/waseet-ai.errors';
 
 const liveSchema = z.object({ model: z.literal('gemini-3.8-live').optional(),
-  voice: z.enum(['Puck', 'Kore', 'Fenrir', 'Aoede', 'Zephyr', 'Sulafat', 'Charon', 'Leda']).optional(),
+  voice: z.enum(['Puck', 'Kore', 'Fenrir', 'Aoede', 'Zephyr', 'Sulafat', 'Charon', 'Leda', 'Orus', 'Callirrhoe']).optional(),
   language: z.enum(['ar-EG', 'ar', 'en']).optional() }).strict();
 const sttSchema = z.object({ audioBase64: z.string().min(8).max(8_000_000).regex(/^[A-Za-z0-9+/]+={0,2}$/),
-  mimeType: z.enum(['audio/webm', 'audio/webm;codecs=opus', 'audio/wav', 'audio/mpeg', 'audio/mp4', 'audio/ogg', 'audio/ogg;codecs=opus', 'audio/flac']),
+  mimeType: z.preprocess(
+    (val) => {
+      if (typeof val !== 'string') return val;
+      const base = val.split(';')[0]?.trim().toLowerCase() ?? val;
+      if (base === 'audio/mp3') return 'audio/mpeg';
+      if (base === 'audio/x-wav' || base === 'audio/wave') return 'audio/wav';
+      return base;
+    },
+    z.enum(['audio/webm', 'audio/wav', 'audio/mpeg', 'audio/mp4', 'audio/m4a', 'audio/ogg', 'audio/flac'])
+  ),
   languageCodes: z.array(z.enum(['ar-EG', 'ar', 'en', 'en-US'])).max(3).optional(),
   mode: z.enum(['smart', 'verbatim']).optional(), timestamps: z.boolean().optional(), diarization: z.boolean().optional(),
   customVocabulary: z.array(z.string().min(1).max(100)).max(50).optional(),
@@ -31,6 +41,7 @@ export function createAssistantToolsHandlers(deps: AssistantToolsDeps = {}) {
     const userId = user?.id || user?.userId;
     const role = mapHelpAssistantRole(user?.activeRole, user?.accountType);
     if (!userId || !role) { res.status(401).json({ success: false, code: 'AUTH_REQUIRED', message: 'يجب تسجيل الدخول لاستخدام المساعد.' }); return; }
+    if (role === 'admin' && !(await adminMayUseRemoteAi(userId))) { res.status(403).json({ success: false, code: 'FORBIDDEN', message: 'هذه الميزة غير متاحة للحساب.' }); return; } // remote AI is SUPER_ADMIN-only for administrators
     const controller = new AbortController();
     const abort = () => { if (!res.writableEnded) controller.abort(); };
     res.once('close', abort);

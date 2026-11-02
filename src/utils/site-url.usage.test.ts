@@ -9,6 +9,6 @@ const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true })
 
 test('no mail builder reads FRONTEND_URL directly', () => {
 	const root = path.join(__dirname, '..');
-	const offenders = walk(root).filter(f => f.endsWith('.ts') && !f.endsWith('.test.ts')).filter(f => fs.readFileSync(f, 'utf8').includes('process.env.FRONTEND_URL')).map(f => path.relative(root, f)).filter(f => !ALLOWED.has(f));
+	const offenders = walk(root).filter(f => f.endsWith('.ts') && !f.endsWith('.test.ts') && !f.endsWith('.pgenv.ts') /* test harness, never shipped */).filter(f => fs.readFileSync(f, 'utf8').includes('process.env.FRONTEND_URL')).map(f => path.relative(root, f)).filter(f => !ALLOWED.has(f));
 	assert.deepEqual(offenders, []);
 });

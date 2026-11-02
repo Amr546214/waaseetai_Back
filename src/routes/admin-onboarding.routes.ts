@@ -2,9 +2,10 @@ import { Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import { adminListOnboarding, adminGetOnboarding, adminApproveOnboarding, adminRejectOnboarding, adminListProviderKyc, adminApproveProviderKyc, adminRejectProviderKyc } from '../controllers/onboarding.controller';
+import { requirePermission } from '../middlewares/admin-access.middleware';
 
 const router = Router();
-router.use(authenticate, requireActiveUser, authorize(AccountType.ADMIN, AccountType.SUPER_ADMIN));
+router.use(authenticate, requireActiveUser, requirePermission('identity.review'));
 
 // Provider KYC review (must be before /:id to avoid path conflict)
 router.get('/kyc/providers', adminListProviderKyc);

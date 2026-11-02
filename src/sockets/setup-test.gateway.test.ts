@@ -11,6 +11,7 @@ const tokenFor = (userId: string) => jwt.sign({ userId }, process.env.JWT_SECRET
 const state: any = {};
 function resetState(over: Partial<any> = {}) {
   Object.assign(state, {
+    userStatus: 'ACTIVE', authDelay: undefined,
     profile: { id: 'profile-1', userId: 'u', mainSpecialty: 'تطوير الويب', industry: null, subSpecialties: ['React', 'Node'], setupTestStatus: 'PENDING', setupTestBannedUntil: null },
     updates: [] as any[],
     streamCalls: [] as any[],
@@ -23,7 +24,7 @@ function resetState(over: Partial<any> = {}) {
 
 const prismaMock: any = {
   // the token in each event now passes the shared handshake check (valid JWT + live session + ACTIVE account)
-  user: { findUnique: async ({ where }: any) => ({ id: where.id, status: state.userStatus ?? 'ACTIVE', accountType: 'PROVIDER_INDIVIDUAL', isBanned: false }) },
+  user: { findUnique: async ({ where }: any) => { await state.authDelay?.(); return { id: where.id, status: state.userStatus ?? 'ACTIVE', accountType: 'PROVIDER_INDIVIDUAL', isBanned: false }; } },
   providerProfile: {
     findUnique: async () => state.profile,
     update: async (args: any) => { state.updates.push(args); return {}; }
@@ -313,4 +314,19 @@ test('a suspended / pending / under-review account\'s token is refused: no profi
     assert.equal(state.updates.length, 0, status);
   }
   resetState({});
+});
+
+
+test('rapid answers keep arrival order across delayed authentication; ready has all questions without answer keys', async () => {
+  resetState({ authDelay: undefined, stream: goodStream(3), submit: async () => ({ score: 60, isPassed: true }) });
+  const m = await setup(); const { token } = newUser(); await startTest(m, token);
+  const ready = m.emitted.find(e => e.event === 'setup_test:ready')!.payload;
+  assert.equal(ready.questions.length, 3);
+  assert.deepEqual(Object.keys(ready.questions[0]).sort(), ['id','index','options','text','total']);
+  let first = true;
+  state.authDelay = async () => { if (first) { first = false; await new Promise(r => setTimeout(r, 25)); } };
+  await Promise.all([101,102,103].map(id => m.handlers['setup_test:answer']({ token, questionId: String(id), selectedIndex: 0 })));
+  state.authDelay = undefined;
+  assert.equal(state.submitCalls.length, 1);
+  assert.deepEqual(state.submitCalls[0].body.submittedAnswers, {'101':'a','102':'a','103':'a'});
 });

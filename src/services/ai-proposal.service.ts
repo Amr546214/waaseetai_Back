@@ -4,19 +4,6 @@ import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import type { EnrichProposalRequest } from './ai/waseet-ai/waseet-ai.types';
 import { normalizeWaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
 
-// Proposal AI feedback — served exclusively by WaseetAI
-// (POST /v1/ai/proposals/suggest via waseetAiClient.suggestProposal).
-//
-// VERIFIED LIMITATION: the WaseetAI service cannot see Waseet's projects
-// (`projectId` is an opaque string to it). Its `priceAudit` (recommended
-// price range / price tag / justification) is therefore NOT grounded in the
-// real project budget. It is deliberately DROPPED here: never returned to
-// the browser, never stored, never shown as a price recommendation. Only the
-// title / message / advantages / quality fields are mapped.
-//
-// The request contract has no field for the draft's advantages, so they are
-// not sent.
-
 export interface AiProposalFeedback {
   suggestedTitle: string;
   suggestedMessage: string;
@@ -24,9 +11,7 @@ export interface AiProposalFeedback {
   suggestedTotalPrice?: number | null;
   suggestedMilestones?: Array<{ name: string; desc: string; days: number; pct: number }>;
   qualityScore: number;
-  // Free-form tag as returned by the service (not an enum we control).
   qualityTag: string;
-  // Canonical application field name — the frontend reads `suggestedAdvantages`.
   suggestedAdvantages: string[];
 }
 
@@ -39,10 +24,6 @@ export interface ProposalEvaluationInput {
   milestones?: Array<{ stepOrder: number; title: string; description: string; days: number; percentage: number; amount: number }>;
 }
 
-// Evaluation of a SUBMITTED proposal (POST /v1/ai/proposals/enrich).
-// LIMITATION: WaseetAI cannot see Waseet's projects, so `qualityScore` is a
-// PROPOSAL-QUALITY score (not a match against the real project) and the
-// returned price tag is deliberately dropped (not relative to the real budget).
 export interface ProposalEvaluation {
   qualityScore: number;
   qualityTag: string;
@@ -52,6 +33,13 @@ export interface ProposalEvaluation {
 const PROPOSAL_AI_CURRENCY = 'USD';
 
 const UNAVAILABLE_MESSAGE = 'تعذر تحليل العرض بالذكاء الاصطناعي حالياً. لم يتم تغيير عرضك، يمكنك المتابعة يدوياً.';
+
+function ensureArabicProposalSummary(rawSummary: string, score: number, milestonesCount: number): string {
+  const trimmed = rawSummary.trim();
+  const hasArabic = /[\u0600-\u06FF]/.test(trimmed);
+  if (hasArabic) return trimmed;
+  return `درجة جودة العرض الواردة من خدمة التحليل: ${score}%. لم تُرجع الخدمة شرحاً باللغة العربية؛ لا يمكن استنتاج استيفاء متطلبات المشروع من الدرجة وحدها.`;
+}
 
 class AiProposalService {
   public async evaluate(input: ProposalEvaluationInput): Promise<ProposalEvaluation> {
@@ -81,11 +69,12 @@ class AiProposalService {
     }
 
     const qualityTag = typeof raw?.aiQualityTag === 'string' ? raw.aiQualityTag.trim() : '';
-    const summary = typeof raw?.aiFeedback?.summary === 'string' ? raw.aiFeedback.summary.trim() : '';
+    const rawSummary = typeof raw?.aiFeedback?.summary === 'string' ? raw.aiFeedback.summary.trim() : '';
     const score = raw?.qualityScore ?? raw?.aiMatchScore;
-    if (typeof score !== 'number' || !Number.isFinite(score) || score < 0 || score > 100 || !qualityTag || !summary) {
+    if (typeof score !== 'number' || !Number.isFinite(score) || score < 0 || score > 100 || !qualityTag || !rawSummary) {
       throw new AppError(UNAVAILABLE_MESSAGE, 503);
     }
+    const summary = ensureArabicProposalSummary(rawSummary, score, input.milestones?.length ?? 0);
     return { qualityScore: score, qualityTag, summary };
   }
 
@@ -151,7 +140,6 @@ class AiProposalService {
         ...(projectContext ? { project: projectContext } : {})
       });
     } catch (error) {
-      // Code/status only — upstream text and credentials are never surfaced.
       const e = normalizeWaseetAiError(error);
       console.error(`[AiProposal] WaseetAI proposal suggestion failed code=${e.code} status=${e.status ?? '-'} requestId=${e.requestId ?? '-'}`);
       throw new AppError(UNAVAILABLE_MESSAGE, 503);

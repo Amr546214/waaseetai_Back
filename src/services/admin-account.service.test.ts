@@ -16,6 +16,9 @@ async function load(t: TestContext, over: any = {}) {
       count: async () => cur.over.total ?? 0,
       groupBy: async () => cur.over.kinds ?? [],
     },
+    adminAccessAudit: { findMany: async () => cur.over.access ?? [], count: async () => (cur.over.access ?? []).length, groupBy: async () => [] },
+    adminRole: { findMany: async () => [] },
+    $queryRaw: async () => [],
     userSession: {
       updateMany: async (a: any) => { cur.updates.push(a); return { count: cur.over.revokeCount ?? 0 }; },
     },
@@ -88,14 +91,16 @@ test('audit log applies actor, event type, date range and pagination filters', a
   assert.match(where, /"userId":"u1"/);
   assert.match(where, /LOGIN_REJECTED/);
   assert.match(where, /gte/);
-  assert.equal(o.findManyArgs.skip, 20);
+  // the trail merges two sources, so each fetches page*limit rows and the merged list is sliced to the page
+  assert.equal(o.findManyArgs.take, 40);
+  assert.equal(r.items.length, 0);
   assert.equal(r.pagination.pages, 3);
-  assert.equal(r.items[0].account.name, 'A B');
   assert.deepEqual(r.eventTypes, ['LOGIN_REJECTED']);
 });
 
-test('admin routes: non-admin gets 403 (router gated by authorize ADMIN/SUPER_ADMIN)', () => {
+test('admin routes: non-admin gets 403 (router gated to admin-type accounts; audit log and roster need their own permission)', () => {
   const src = fs.readFileSync(path.join(__dirname, '../routes/admin-account.routes.ts'), 'utf8');
-  assert.match(src, /router\.use\(authenticate,\s*requireActiveUser,\s*authorize\(AccountType\.ADMIN,\s*AccountType\.SUPER_ADMIN\)\)/);
+  assert.match(src, /router\.use\(authenticate,\s*requireActiveUser,\s*requireAdminAccount\)/);
+  assert.match(src, /router\.get\('\/audit-log',\s*requirePermission\('audit\.view'\)/);
   for (const r of ["'/audit-log'", "'/admins'", "'/account/sessions/:id'"]) assert.ok(src.includes(r), r);
 });

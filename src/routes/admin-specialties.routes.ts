@@ -2,12 +2,13 @@ import { Router } from 'express';
 import { AdminSpecialtiesController } from '../controllers/admin-specialties.controller';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import { AccountType } from '@prisma/client';
+import { requirePermission } from '../middlewares/admin-access.middleware';
 
 const router = Router();
 
 // Apply Authentication & Admin Authorization to all admin specialties endpoints
 router.use(authenticate, requireActiveUser);
-router.use(authorize(AccountType.SUPER_ADMIN, AccountType.ADMIN));
+router.use(requirePermission('content.manage'));
 
 // Stats and Read
 router.get('/stats', AdminSpecialtiesController.getStats);

@@ -1,3 +1,9 @@
+import { deniedAdminNotificationTypes } from './admin-access.service';
+import { brandSubject, brandNameInArabicText } from '../utils/brand';
+import { systemSettingsService } from './system-settings.service';
+import { optionalEmailEnabled, assertEmailOptionMayChange } from './optional-email-gate';
+import { dispatchMail, coveringMailOf } from './mail-dispatch';
+import { emailSenderName } from '../utils/email-sender-name';
 import { NotificationCategory, Notification } from '@prisma/client';
 import { siteUrl } from '../utils/site-url';
 import { buildNotificationEmailHtml } from '../utils/notification-email-template';
@@ -134,6 +140,17 @@ export const resolveCommunicationLanguage = (preferences: unknown): 'ar' | 'en' 
 	return lang === 'en' ? 'en' : 'ar';
 };
 
+/** A language the recipient SAVED themselves (null = nothing saved: the platform default language applies). */
+export const savedCommunicationLanguage = (preferences: unknown): 'ar' | 'en' | null => {
+	const lang = preferences && typeof preferences === 'object' && !Array.isArray(preferences) ? (preferences as Record<string, unknown>).preferredCommunicationLanguage : undefined;
+	return lang === 'en' || lang === 'ar' ? lang : null;
+};
+export const savedClientLanguage = (interfaceLanguage: unknown): 'ar' | 'en' | null => (typeof interfaceLanguage === 'string' && interfaceLanguage.trim() ? (interfaceLanguage === 'English' ? 'en' : 'ar') : null);
+export const savedMarketerLanguage = (settings: unknown): 'ar' | 'en' | null => {
+	const s = settings && typeof settings === 'object' && !Array.isArray(settings) ? (settings as Record<string, unknown>) : {};
+	return s.marketer_communication_language === 'en' || s.marketer_communication_language === 'ar' ? s.marketer_communication_language : null;
+};
+
 /** The e-mail's own wording (greeting, button, footer, subject suffix) in the provider's language. The notification's title / message are shown as authored. */
 export const notificationMailCopy = (lang: 'ar' | 'en') => lang === 'en'
 	? { dir: 'ltr', greeting: (n: string) => `Hello ${n}`.trim(), open: 'Open', footer: 'You are receiving this because you chose e-mail as a notification channel in your settings.', subjectSuffix: 'Waseet AI' }
@@ -204,6 +221,7 @@ export class NotificationService {
 		let channels = { push: true, email: false };
 		let recipient: { email: string; firstName: string | null } | null = null;
 		let lang: 'ar' | 'en' = 'ar';
+		let savedLang: 'ar' | 'en' | null = null; // what the recipient chose; null = the platform default language (setting) decides
 		// An account can hold both roles: a notification that points into /client-overview follows the CLIENT's settings, anything else the provider's (as before).
 		const forClient = !!actionUrl && actionUrl.startsWith('/client-overview');
 		// Same rule for the marketer side: a notification into /marketer-overview follows the marketer's shared switches (and communication language), never the provider profile's.
@@ -212,21 +230,21 @@ export class NotificationService {
 		try {
 			const profile = forClient || forMarketer ? null : await prisma.providerProfile.findUnique({ where: { userId }, select: { preferences: true, user: { select: { email: true, firstName: true } } } });
 			profileChannels = profile?.preferences ?? null;
-			if (profile) { channels = resolveNotificationChannels(profile.preferences); lang = resolveCommunicationLanguage(profile.preferences); recipient = profile.user; }
+			if (profile) { channels = resolveNotificationChannels(profile.preferences); lang = resolveCommunicationLanguage(profile.preferences); savedLang = savedCommunicationLanguage(profile.preferences); recipient = profile.user; }
 			else if (forClient) {
 				const [prefs, clientProfile, user] = await Promise.all([
 					prisma.notificationPreference.findUnique({ where: { userId }, select: { settings: true } }),
 					prisma.clientProfile.findUnique({ where: { userId }, select: { interfaceLanguage: true } }),
 					prisma.user.findUnique({ where: { id: userId }, select: { email: true, firstName: true } })
 				]);
-				channels = resolveClientNotificationChannels(prefs?.settings, type); lang = resolveClientLanguage(clientProfile?.interfaceLanguage); recipient = user;
+				channels = resolveClientNotificationChannels(prefs?.settings, type); lang = resolveClientLanguage(clientProfile?.interfaceLanguage); savedLang = savedClientLanguage(clientProfile?.interfaceLanguage); recipient = user;
 			}
 			else if (forMarketer) {
 				const [prefs, user] = await Promise.all([
 					prisma.notificationPreference.findUnique({ where: { userId }, select: { settings: true } }),
 					prisma.user.findUnique({ where: { id: userId }, select: { email: true, firstName: true } })
 				]);
-				channels = resolveMarketerNotificationChannels(prefs?.settings, type); lang = resolveMarketerLanguage(prefs?.settings); recipient = user;
+				channels = resolveMarketerNotificationChannels(prefs?.settings, type); lang = resolveMarketerLanguage(prefs?.settings); savedLang = savedMarketerLanguage(prefs?.settings); recipient = user;
 			}
 		} catch { /* default channels */ }
 		// No channels chosen on a provider profile: the account's shared preferences apply (Settings / profile page: channel_in_app, channel_email). Unsaved = push on, e-mail off.
@@ -238,6 +256,12 @@ export class NotificationService {
 				if (channels.email && !recipient) recipient = await prisma.user.findUnique({ where: { id: userId }, select: { email: true, firstName: true } });
 			} catch { /* default channels */ }
 		}
+		// the recipient's own choice always wins; only when nothing was saved does the platform default language (setting `defaultLanguage`) apply
+		if (!savedLang) lang = await systemSettingsService.get<'ar' | 'en'>('defaultLanguage');
+		else lang = savedLang;
+		// The platform's optional-mail switch (`channelEmail`) is evaluated HERE, at delivery time, and never written back into the user's choice: OFF = no optional mail,
+		// ON again = the user's stored choice applies again. (The chat digest scheduler reads this same resolver on every pass.)
+		if (channels.email && !(await optionalEmailEnabled())) channels = { ...channels, email: false };
 		return { channels, recipient, lang };
 	}
 
@@ -246,27 +270,23 @@ export class NotificationService {
 		const { channels, recipient, lang } = await this.resolveDelivery(dto.userId, dto.actionUrl, dto.type);
 		if (channels.push) this.emitDto(dto, event);
 		// A chat message is never mailed one by one (a negotiation would flood the inbox): unread chat messages reach the e-mail channel only as the throttled digest (chat-digest.service).
-		if (channels.email && recipient?.email && dto.type !== 'CHAT') void this.sendNotificationMail(recipient.email, recipient.firstName, dto, lang);
+		// An event that has its own dedicated mail (deposit receipt, contract invitation, completion reward) is never mailed a second time as a notification copy: see COVERED_NOTIFICATIONS.
+		if (channels.email && recipient?.email && dto.type !== 'CHAT' && !coveringMailOf(dto.type)) void this.sendNotificationMail(recipient.email, recipient.firstName, dto, lang);
 	}
 
 	private async sendNotificationMail(email: string, firstName: string | null, dto: NotificationDto, lang: 'ar' | 'en' = 'ar'): Promise<void> {
 		const copy = notificationMailCopy(lang);
-		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
-		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
 		// central rule: an e-mail link always has a host; without a configured site address the link is left out (see utils/site-url)
 		const link = dto.actionUrl ? siteUrl(dto.actionUrl) : null;
-		try {
-			await mailTransporter.sendMail({
-				from: `"${senderName}" <${from}>`,
-				to: email,
-				subject: `${dto.title} - ${copy.subjectSuffix}`,
-				html: buildNotificationEmailHtml({ lang, greeting: copy.greeting(firstName || ''), title: dto.title, message: dto.message, linkUrl: link, ctaLabel: dto.actionText || copy.open, footerNote: copy.footer }),
-				text: `${dto.title}\n${dto.message}${link ? `\n${link}` : ''}\n\n${copy.footer}`,
-				headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },
-			});
-		} catch (error) {
-			logEmailFailure('notification', email, error);
-		}
+		// OPTIONAL mail: dispatchMail re-checks the platform switch right before the send (a mail prepared while the channel was ON is not sent once it is OFF) and keeps
+		// ONE copy per notification (a re-delivery / retry of the same notification never mails twice)
+		const result = await dispatchMail({
+			transport: mailTransporter, purpose: 'notification-copy', to: email, recipientKey: dto.userId, eventKey: dto.id, anchorNotificationId: dto.id,
+			subject: brandSubject(`${dto.title} - ${copy.subjectSuffix}`),
+			html: buildNotificationEmailHtml({ lang, greeting: copy.greeting(firstName || ''), title: dto.title, message: dto.message, linkUrl: link, ctaLabel: dto.actionText || copy.open, footerNote: copy.footer }),
+			text: `${dto.title}\n${dto.message}${link ? `\n${link}` : ''}\n\n${copy.footer}`,
+		});
+		if (result.status === 'failed') logEmailFailure('notification', email, result.error);
 	}
 
 	/** Broadcast a notification persisted as part of another database transaction. */
@@ -285,16 +305,16 @@ export class NotificationService {
 	 */
 	private async sendOtpMail(kind: string, email: string, code: string, subject: string, validityMinutes: number = 10): Promise<EmailDeliveryResult> {
 		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
-		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
+		const senderName = await emailSenderName();
 		const startedAt = Date.now();
 		try {
 			const info = await mailTransporter.sendMail({
 				from: `"${senderName}" <${from}>`,
 				to: email,
-				subject,
+				subject: brandSubject(subject),
 				html: getOtpEmailTemplate(code, validityMinutes, otpPurposeOfKind(kind)),
 				// An HTML-only message is a spam signal: every OTP mail also carries a plain-text part.
-				text: `رمز التحقق الخاص بك في وسيط AI هو: ${code}\nالرمز صالح لمدة ${otpValidityText(validityMinutes)}. لا تشاركه مع أي أحد. إذا لم تطلبه فتجاهل هذه الرسالة.`,
+				text: `رمز التحقق الخاص بك في ${brandNameInArabicText()} هو: ${code}\nالرمز صالح لمدة ${otpValidityText(validityMinutes)}. لا تشاركه مع أي أحد. إذا لم تطلبه فتجاهل هذه الرسالة.`,
 				headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },
 			});
 			return logEmailDelivery(kind, email, info, Date.now() - startedAt);
@@ -311,6 +331,11 @@ export class NotificationService {
 		return this.sendOtpMail('otp', email, code, process.env.OTP_EMAIL_SUBJECT ?? 'رمز التحقق لتفعيل حسابك - Waseet AI', validityMinutes);
 	}
 
+	/** The one-time code that proves the invited person controls the invited address (admin invitation acceptance). Its own subject, never the account-activation wording. */
+	public async sendAdminInviteCodeEmail(email: string, code: string, validityMinutes: number = 10): Promise<EmailDeliveryResult> {
+		return this.sendOtpMail('admin-invite', email, code, 'رمز التحقق لقبول دعوة فريق الإدارة - Waseet AI', validityMinutes);
+	}
+
 	/**
 	 * Send a password-reset code via email. Uses its own subject/template
 	 * (distinct from the account-activation OTP email) so the two flows never
@@ -319,15 +344,18 @@ export class NotificationService {
 	public async sendPasswordResetEmail(email: string, firstName: string, code: string, validityMinutes: number = 10): Promise<EmailDeliveryResult> {
 		const from = process.env.SMTP_FROM ?? 'no-reply@waseetai.com';
 		const emailSubject = process.env.RESET_PASSWORD_EMAIL_SUBJECT ?? 'رمز إعادة تعيين كلمة المرور - Waseet AI';
-		const senderName = process.env.EMAIL_SENDER_NAME ?? 'Waseet AI';
+		const senderName = await emailSenderName();
 
 		const startedAt = Date.now();
 		try {
 			const info = await mailTransporter.sendMail({
 				from: `"${senderName}" <${from}>`,
 				to: email,
-				subject: emailSubject,
+				subject: brandSubject(emailSubject),
 				html: getPasswordResetEmailTemplate(firstName, code, validityMinutes),
+				// like every code mail: a plain-text alternative and auto-generated headers (an HTML-only message is a spam signal)
+				text: `رمز إعادة تعيين كلمة المرور في ${brandNameInArabicText()} هو: ${code}\nالرمز صالح لمدة ${otpValidityText(validityMinutes)}. إذا لم تطلبه فتجاهل هذه الرسالة.`,
+				headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },
 			});
 			return logEmailDelivery('password-reset', email, info, Date.now() - startedAt);
 		} catch (error) {
@@ -409,6 +437,7 @@ export class NotificationService {
 		options: { unreadOnly?: boolean; type?: string; since?: Date | null } = {},
 	): Promise<NotificationDto[]> {
 		const category = parseCategoryFilter(categoryFilter);
+		const hidden = await deniedAdminNotificationTypes(userId);
 
 		const notifications = await prisma.notification.findMany({
 			where: {
@@ -416,6 +445,7 @@ export class NotificationService {
 				...(category ? { category } : {}),
 				...(options.unreadOnly ? { isRead: false } : {}),
 				...(options.type ? { type: options.type } : {}),
+				...(hidden.length ? { AND: [{ type: { notIn: hidden } }] } : {}),
 				// recovery after a socket reconnection: what was stored at or after the newest notification the client already holds (the client de-duplicates by id, so a same-millisecond tie is never lost)
 				...(options.since ? { createdAt: { gte: options.since } } : {}),
 			},
@@ -427,7 +457,8 @@ export class NotificationService {
 
 	/** The real number of unread notifications of one user (what the bell shows); never derived from a page of the list. */
 	public async countUnread(userId: string): Promise<number> {
-		return prisma.notification.count({ where: { userId, isRead: false } });
+		const hidden = await deniedAdminNotificationTypes(userId);
+		return prisma.notification.count({ where: { userId, isRead: false, ...(hidden.length ? { type: { notIn: hidden } } : {}) } });
 	}
 
 	/**
@@ -570,7 +601,12 @@ export const notificationPreferenceService = {
 
 	async updatePreferences(userId: string, patch: Record<string, boolean | string>): Promise<Record<string, boolean | string>> {
 		const existing = await prisma.notificationPreference.findUnique({ where: { userId } });
-		const merged = { ...(existing?.settings as Record<string, boolean | string> | undefined), ...patch };
+		const stored = (existing?.settings as Record<string, boolean | string> | undefined) ?? {};
+		// platform OFF: the e-mail option cannot be switched ON (409 EMAIL_CHANNEL_DISABLED_BY_PLATFORM). A request that repeats the stored value or turns it OFF passes; a refused one writes nothing.
+		for (const key of ['email', 'channel_email'] as const) {
+			if (typeof patch[key] === 'boolean') await assertEmailOptionMayChange(patch[key] === true, (stored.email ?? stored.channel_email) === true);
+		}
+		const merged = { ...stored, ...patch };
 		const row = await prisma.notificationPreference.upsert({
 			where: { userId },
 			create: { userId, settings: merged },

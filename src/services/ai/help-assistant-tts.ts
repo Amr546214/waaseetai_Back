@@ -2,26 +2,11 @@ import type { Request, Response } from 'express';
 import { randomUUID } from 'node:crypto';
 import { logger } from '../../config/logger';
 import { mapHelpAssistantRole } from '../../sockets/help-assistant-auth';
+import { adminMayUseRemoteAi } from '../admin-access.service';
 import { WaseetAiErrorCode, normalizeWaseetAiError } from './waseet-ai/waseet-ai.errors';
 import type { TtsSynthesizeRequest } from './waseet-ai/waseet-ai.types';
 
-// Help Assistant / Bebo text-to-speech — authenticated server-side relay.
-//
-//   Angular (JWT, REST)  ──POST /api/help-assistant/tts──▶  this handler
-//     ──▶ waseetAiClient.synthesizeSpeech (the only holder of the WaseetAI
-//         bearer token) ──▶ WaseetAI POST /v1/ai/tts/synthesize
-//     ◀── audio/wav bytes (never the upstream JSON, never an upstream error)
-//
-// Identity comes ONLY from the authenticated request (`req.user`, set by the
-// `authenticate` middleware from a verified JWT + live session). Nothing in
-// the body is ever treated as identity: only `text`, `voice` and `dialect`
-// are read, each strictly validated. The model is fixed server-side.
-//
-// Allowlists are the exact option lists of the Bebo v4 handoff
-// (cute-robot/server.mjs VOICES, bebo-core.mjs DIALECTS); unlike the demo
-// proxy (which silently fell back to defaults) an unknown value is rejected.
-
-export const TTS_VOICES = ['Puck', 'Kore', 'Fenrir', 'Aoede', 'Zephyr', 'Sulafat', 'Charon', 'Leda'] as const;
+export const TTS_VOICES = ['Puck', 'Kore', 'Fenrir', 'Aoede', 'Zephyr', 'Sulafat', 'Charon', 'Leda', 'Orus', 'Callirrhoe'] as const;
 export const TTS_DIALECTS = ['egyptian', 'saudi', 'gulf', 'msa', 'english'] as const;
 /** Handoff default ("Flash-Lite · سريع"); the client cannot choose a model. */
 export const TTS_MODEL = 'gemini-3.8-flash-lite-tts';
@@ -115,6 +100,7 @@ export function createHelpAssistantTtsHandler(deps: HelpAssistantTtsDeps) {
 		if (!user || typeof userId !== 'string' || !userId) return fail(res, 401, 'AUTH_REQUIRED', TTS_MESSAGES.AUTH_REQUIRED);
 		const role = mapHelpAssistantRole(user.activeRole as string | undefined, user.accountType as string | undefined);
 		if (!role) return fail(res, 403, 'FORBIDDEN', TTS_MESSAGES.FORBIDDEN);
+		if (role === 'admin' && !(await adminMayUseRemoteAi(userId))) return fail(res, 403, 'FORBIDDEN', TTS_MESSAGES.FORBIDDEN); // remote AI is SUPER_ADMIN-only for administrators
 		try {
 			if (await deps.isBlocked(userId)) return fail(res, 403, 'FORBIDDEN', TTS_MESSAGES.FORBIDDEN);
 		} catch (error: any) {

@@ -157,3 +157,11 @@ for (const bad of [{ aiMatchScore: 101 }, { aiMatchScore: -1 }, { aiMatchScore: 
     await assert.rejects(() => svc.evaluate(input()), (e: any) => e.statusCode === 503);
   });
 }
+
+test('English upstream feedback is not replaced by invented Arabic praise', async (t) => {
+ const svc = await load(t, undefined, async () => enriched({ aiFeedback: { summary: 'The proposal discusses several points.' } }));
+ const result = await svc.evaluate({ projectId: 'p1', title: 'عنوان', message: 'رسالة', totalPrice: 100, deliveryDays: 7 });
+ assert.match(result.summary, /لم تُرجع الخدمة شرحاً باللغة العربية/);
+ assert.doesNotMatch(result.summary, /يغطي المتطلبات|مع تحديد دقيق|عرض فني قوي/);
+ assert.equal(result.qualityScore, 92);
+});

@@ -21,6 +21,7 @@ import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { normalizeWaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
 import { aiFeatureUnavailableError } from './ai/ai-feature-unavailable';
 import { AppError } from '../utils/app-error';
+import { assertEmailOptionMayChange } from './optional-email-gate';
 import { MODEL_TITLE_PREFIX } from '../utils/setup-portfolio-proofs';
 
 /** Titles «نموذج أعمال - …» are the business models of the provider setup (file + proof, verified there): the free portfolio endpoints can neither create nor edit them. */
@@ -875,6 +876,11 @@ export class ProviderProfileService {
 		const profile = await prisma.providerProfile.findUnique({ where: { userId }, select: { preferences: true } });
 		if (!profile) throw new Error('PROFILE_NOT_FOUND');
 		const current = profile.preferences && typeof profile.preferences === 'object' && !Array.isArray(profile.preferences) ? (profile.preferences as Record<string, unknown>) : {};
+		// platform OFF: 'email' cannot be ADDED to the channels (409); repeating a stored choice, or removing e-mail, passes. A refused request writes nothing.
+		if (Array.isArray(input.notifChannels)) {
+			const was = Array.isArray(current.notifChannels) && (current.notifChannels as unknown[]).includes('email');
+			await assertEmailOptionMayChange(input.notifChannels.includes('email'), was);
+		}
 		const next = { ...current, ...input };
 		await prisma.providerProfile.update({ where: { userId }, data: { preferences: next as any } });
 		return next;

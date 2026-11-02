@@ -15,8 +15,12 @@ import path from 'node:path';
 
 const source = fs.readFileSync(path.join(__dirname, 'admin-withdrawals.routes.ts'), 'utf8');
 
-test('admin-withdrawals router is gated by authenticate + requireActiveUser + authorize(ADMIN, SUPER_ADMIN)', () => {
-	assert.match(source, /router\.use\(authenticate,\s*requireActiveUser,\s*authorize\(AccountType\.ADMIN,\s*AccountType\.SUPER_ADMIN\)\)/);
+test('admin-withdrawals router is gated by authenticate + requireActiveUser + the withdrawals.review permission; approve / reject / send-payout each need their own permission', () => {
+	assert.match(source, /router\.use\(authenticate,\s*requireActiveUser,\s*requirePermission\('withdrawals\.review'\)\)/);
+	assert.match(source, /router\.post\('\/:id\/approve',\s*requirePermission\('withdrawals\.approve'\),\s*approveWithdrawal\)/);
+	assert.match(source, /router\.post\('\/:id\/reject',\s*requirePermission\('withdrawals\.reject'\),\s*rejectWithdrawal\)/);
+	assert.match(source, /router\.post\('\/:id\/send-payout',\s*requirePermission\('payouts\.send'\),\s*sendWithdrawalPayout\)/);
+	assert.doesNotMatch(source, /authorize\(AccountType/);
 });
 
 test('the router.use(...) guard line appears BEFORE every route registration, including send-payout — no route is registered ahead of the guard', () => {
@@ -26,9 +30,9 @@ test('the router.use(...) guard line appears BEFORE every route registration, in
 	for (const routeSnippet of [
 		"router.get('/', listWithdrawals)",
 		"router.get('/:id', getWithdrawal)",
-		"router.post('/:id/approve', approveWithdrawal)",
-		"router.post('/:id/reject', rejectWithdrawal)",
-		"router.post('/:id/send-payout', sendWithdrawalPayout)"
+		"router.post('/:id/approve', requirePermission('withdrawals.approve'), approveWithdrawal)",
+		"router.post('/:id/reject', requirePermission('withdrawals.reject'), rejectWithdrawal)",
+		"router.post('/:id/send-payout', requirePermission('payouts.send'), sendWithdrawalPayout)"
 	]) {
 		const routeIndex = source.indexOf(routeSnippet);
 		assert.notEqual(routeIndex, -1, `expected to find: ${routeSnippet}`);
@@ -37,10 +41,10 @@ test('the router.use(...) guard line appears BEFORE every route registration, in
 });
 
 test('send-payout is a distinct route/action from approve — they are never combined into one handler', () => {
-	assert.match(source, /router\.post\('\/:id\/approve',\s*approveWithdrawal\)/);
-	assert.match(source, /router\.post\('\/:id\/send-payout',\s*sendWithdrawalPayout\)/);
+	assert.match(source, /router\.post\('\/:id\/approve',\s*requirePermission\('withdrawals\.approve'\),\s*approveWithdrawal\)/);
+	assert.match(source, /router\.post\('\/:id\/send-payout',\s*requirePermission\('payouts\.send'\),\s*sendWithdrawalPayout\)/);
 	// Two different handler functions imported and wired to two different
 	// paths — not the same function reused, and not send-payout folded into
 	// approve's own path.
-	assert.notEqual(source.match(/router\.post\('\/:id\/approve',\s*(\w+)\)/)?.[1], source.match(/router\.post\('\/:id\/send-payout',\s*(\w+)\)/)?.[1]);
+	assert.notEqual(source.match(/router\.post\('\/:id\/approve',[^)]*\),\s*(\w+)\)/)?.[1], source.match(/router\.post\('\/:id\/send-payout',[^)]*\),\s*(\w+)\)/)?.[1]);
 });

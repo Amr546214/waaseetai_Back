@@ -23,6 +23,14 @@ export async function resolveAssistantOptions(raw: unknown, userId: string, role
   result.pageContext = { path: pageContext.path, role };
   if (!pageContext.projectId) return result;
   const { prisma } = await import('../../config/db.js');
+  if (role === 'admin') {
+    // an admin sees a project here only when the admin API would show it to them (owner, or the case they hold): never "any project because admin"
+    const { resolveAdminActor } = await import('../admin-access.service.js');
+    const { mayReadOperation } = await import('../admin-operations-scope.service.js');
+    const u = await prisma.user.findUnique({ where: { id: userId }, select: { accountType: true } });
+    const actor = await resolveAdminActor(userId, u?.accountType);
+    if (!(await mayReadOperation(actor, 'PROJECT', pageContext.projectId))) throw Object.assign(new Error('PROJECT_CONTEXT_DENIED'), { code: 'FORBIDDEN' });
+  }
   const row = await prisma.project.findFirst({
     where: { id: pageContext.projectId, ...(role === 'admin' ? {} : { OR: [{ clientId: userId }, { providerId: userId }, { contract: { OR: [{ clientId: userId }, { providerId: userId }] } }] }) },
     select: { id: true, title: true, description: true, requirements: true, status: true },
@@ -55,13 +63,24 @@ export function resolveAssistantMode(question: string, requested?: HelpChatReque
 }
 
 const GREETING_PHRASE = '(?:عامل\\s*ايه(?:\\s*يا\\s*(?:غالي|باشا|هندسة|كبير|صاحبي|فنان|نديم|بيبو|كابتن|برنس|عمنا|سيدي|زعيم|دكتور|حبيبي|محترم))?|ازيك(?:\\s*يا\\s*(?:غالي|باشا|هندسة|كبير|صاحبي|فنان|نديم|بيبو|كابتن|برنس|عمنا|سيدي|زعيم|دكتور|حبيبي|محترم))?|ازي\\s*حضرتك|اخبارك|شخبارك|كيف\\s*حالك|كيفك|شلونك|كيف\\s*الصحه|صباح\\s*(?:الخير|الورد|النور|الفل|الجمال)|مساء\\s*(?:الخير|الورد|النور|الفل|الجمال)|(?:السلام|سلام)\\s*عليكم(?:\\s*ورحمة\\s*الله(?:\\s*وبركاته)?)?|سلامات|مرحبا|هلا|هاي|اهلا(?:\\s*وسهلا)?|(?:شكرا|مشكور|تسلم)(?:\\s*يا\\s*(?:غالي|باشا|هندسة|كبير|صاحبي|فنان|نديم|بيبو|كابتن|برنس|عمنا|سيدي|زعيم|دكتور|حبيبي|محترم))?|يعطيك\\s*العافية|يسطا|يا\\s*(?:هندسة|كابتن|عمنا|عم|سيدي|برنس|زعيم|دكتور|حبيبي|حبيب\\s*قلبي|طيب|محترم|ذوق|زوق|بطل|اسط[ىي]|اسطا|سط[ةه]|باشا|كبير|غالي|صاحبي|فنان|نديم|بيبو)|hello|hi|hey|good\\s*(?:morning|evening)|thanks|thank\\s*you)';
-const IDENTITY_PHRASE = '(?:(?:(?:هو|هي)\\s+)?(?:انت|انتا|انتي)\\s*(?:مين|منو|ايه)|(?:مين|من|منو)\\s*(?:انت|انتا|انتي|حضرتك|معايا)|(?:عرفني|عرف)\\s*بنفسك|(?:وش|ايش|شنو)\\s*اسمك|اسمك\\s*(?:ايه|ايش|شنو)|بتعمل\\s*ايه|وظيفتك\\s*ايه|مين\\s*معايا|من\\s*تكون|who\\s+are\\s+you|what(?:\\s+is|[’\\x27]s)\\s+your\\s+name)(?:\\s*(?:اصلا|بالظبط|بالضبط))?';
+const IDENTITY_PHRASE = '(?:(?:(?:هو|هي)\\s+)?(?:انت|انتا|انتي)\\s*(?:مين|منو|ايه|اي)|(?:مين|من|منو)\\s*(?:انت|انتا|انتي|حضرتك|معايا)|(?:عرفني|عرف)\\s*بنفسك|(?:وش|ايش|شنو|ما(?:\\s+هو)?)\\s*اسمك|اسمك\\s*(?:ايه|اي|ايش|شنو|منو)|(?:ايه|اي)\\s*اسمك|بتعمل\\s*(?:ايه|اي)|وظيفتك\\s*(?:ايه|اي)|دورك\\s*(?:ايه|اي)|مين\\s*معايا|من\\s*تكون|who\\s+are\\s+you|what(?:\\s+is|[’\\x27]s)\\s+your\\s+name)(?:\\s*(?:اصلا|بالظبط|بالضبط|يا\\s*(?:غالي|باشا|نديم|بيبو|كبير|صاحبي)))?';
 const INTENT_SEPARATOR = '[؟?!.،,؛;…\\s]*';
 const GREETING_PATTERN = new RegExp(`^(?:(?:${GREETING_PHRASE}|${IDENTITY_PHRASE})${INTENT_SEPARATOR})+$`, 'i');
 
 /** Match only a complete pleasantry/identity request; a following question always reaches AI. */
 export function isGreetingIntent(text: string): boolean {
   return GREETING_PATTERN.test(normalizedIntentText(text));
+}
+
+export const EXAM_INTEGRITY_REFUSAL_AR =
+  'عذراً، لا يمكنني الإجابة على أسئلة الاختبارات التقنية أو التقييمات المهنية حفاظاً على نزاهة وعدالة التقييم في منصة وسيط. يمكنك إتمام الاختبار بنفسك أولاً ثم الاستفسار عن أي مفهوم تقني للتعلم لاحقاً.';
+
+export function isExamSolvingIntent(question: string, pagePath?: string): boolean {
+  const norm = normalizedIntentText(question);
+  if (pagePath && /setup-test|assessment|quiz|exam/i.test(pagePath)) {
+    return true;
+  }
+  return /(?:حل\s+(?:لي\s+)?(?:هذا\s+)?السؤال|ما\s+هي\s+الاجاب[ةه]\s+الصحيح[ةه]|اختر\s+الاجاب[ةه]\s+الصحيح[ةه]|سؤال\s+في\s+اختبار\s+التخصص|امتحان\s+القبول|اختبار\s+الاعتماد)/i.test(norm);
 }
 
 export function assistantGreetingResponse(options: Partial<HelpChatRequest>): string {

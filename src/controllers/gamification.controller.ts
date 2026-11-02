@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
+import { feePolicyService } from '../services/fee-policy.service';
 import { gamificationService, getClientLevelDetails } from '../services/gamification.service';
 import { publicLevelsPayload } from '../config/levels.config';
-import { DEPOSIT_FEE_PERCENT, MARKETER_WITHDRAWAL_FEE_PERCENT } from '../utils/fee-policy';
 
 class GamificationController {
   async getLevelDetails(req: Request, res: Response) {
@@ -32,15 +32,26 @@ class ClientLevelController {
 }
 
 /** GET /api/levels — the single, public, read-only level table (names, thresholds, percentages, colours) for every page that shows levels. */
-export const getLevelsTable = (_req: Request, res: Response) => {
-  res.json({
-    success: true,
-    data: {
-      ...publicLevelsPayload(),
-      // the payment-percentage tables of نسب الدفع.xlsx: the provider's final deduction IS the PROVIDER commission above (no extra fee on top)
-      payments: { clientDeposit: { ...DEPOSIT_FEE_PERCENT }, marketerWithdrawal: { ...MARKETER_WITHDRAWAL_FEE_PERCENT } },
-    },
-  });
+export const getLevelsTable = async (_req: Request, res: Response) => {
+  try {
+    const policy = await feePolicyService.active();
+    const base = publicLevelsPayload();
+    // the percentages shown come from the fee policy IN FORCE now (the same values new contracts / deposits / payouts use); names, thresholds and colours stay in code
+    const roles = base.roles as Record<string, { levels: Array<{ level: number; percent: number }> }>;
+    const tables: Record<string, readonly number[]> = { PROVIDER: policy.payload.providerCommissionByLevel, CLIENT: policy.payload.clientCashbackByLevel, MARKETER: policy.payload.marketerCommissionByLevel };
+    for (const role of Object.keys(roles)) roles[role].levels = roles[role].levels.map(l => ({ ...l, percent: tables[role][l.level - 1] ?? l.percent }));
+    res.json({
+      success: true,
+      data: {
+        ...base,
+        feePolicy: { version: policy.version, effectiveFrom: policy.effectiveFrom },
+        // the payment-percentage tables: the provider's final deduction IS the PROVIDER commission above (no extra fee on top)
+        payments: { clientDeposit: { ...policy.payload.depositFeePercent }, marketerWithdrawal: { ...policy.payload.marketerWithdrawalFeePercent }, minMarketerPayout: policy.payload.minMarketerPayout, minProviderPayout: policy.payload.minProviderPayout },
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 };
 
 export const gamificationController = new GamificationController();
