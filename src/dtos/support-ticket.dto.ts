@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export const createSupportTicketSchema = z.object({
+  submissionKey: z.string().uuid().optional(),
   subject: z.string().trim().min(5, 'عنوان التذكرة قصير جدًا').max(200),
   category: z.string().trim().min(1, 'اختر التصنيف'),
   priority: z.string().trim().max(30).optional(),

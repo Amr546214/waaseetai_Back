@@ -124,7 +124,7 @@ export class DisputeService {
       if (existing) throw new AppError('لديك نزاع مفتوح مسبقاً لهذا الطلب', 409);
       return tx.dispute.create({
         data: { requestId: target.requestId, projectId: target.projectId, openedById: userId, againstUserId: target.againstUserId, reason: input.reason, description: input.description, evidence: input.evidence || [], status: DisputeStatus.OPEN },
-        include: { request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } } }
+        include: { _count: { select: { attachments: true } }, request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } } }
       });
     });
     // The provider is the opener (confirmation) or the party the client opened it against.
@@ -159,7 +159,7 @@ export class DisputeService {
     const safePage = Math.max(1, page); const safeLimit = Math.min(100, Math.max(1, limit));
     const where = status ? { status } : {};
     const [items, total, grouped] = await Promise.all([
-      prisma.dispute.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } }, openedBy: { select: { id: true, firstName: true, lastName: true, email: true } }, againstUser: { select: { id: true, firstName: true, lastName: true, email: true } } } }),
+      prisma.dispute.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { _count: { select: { attachments: true } }, request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } }, openedBy: { select: { id: true, firstName: true, lastName: true, email: true } }, againstUser: { select: { id: true, firstName: true, lastName: true, email: true } } } }),
       prisma.dispute.count({ where }),
       prisma.dispute.groupBy({ by: ['status'], _count: { _all: true } })
     ]);
@@ -193,14 +193,14 @@ export class DisputeService {
     const safePage = Math.max(1, page); const safeLimit = Math.min(100, Math.max(1, limit));
     const where = { OR: [{ openedById: userId }, { againstUserId: userId }], ...(status ? { status } : {}) };
     const [items, total] = await Promise.all([
-      prisma.dispute.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } }, openedBy: { select: { id: true, firstName: true, lastName: true } }, againstUser: { select: { id: true, firstName: true, lastName: true } } } }),
+      prisma.dispute.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { _count: { select: { attachments: true } }, request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } }, openedBy: { select: { id: true, firstName: true, lastName: true } }, againstUser: { select: { id: true, firstName: true, lastName: true } } } }),
       prisma.dispute.count({ where })
     ]);
     return { items, pagination: { page: safePage, limit: safeLimit, total, pages: Math.ceil(total / safeLimit) } };
   }
 
   async getForUser(id: string, userId: string) {
-    const dispute = await prisma.dispute.findUnique({ where: { id }, include: { request: true, project: true, openedBy: { select: { id: true, firstName: true, lastName: true } }, againstUser: { select: { id: true, firstName: true, lastName: true } }, resolvedBy: { select: { id: true, firstName: true, lastName: true } } } });
+    const dispute = await prisma.dispute.findUnique({ where: { id }, include: { _count: { select: { attachments: true } }, request: true, project: true, openedBy: { select: { id: true, firstName: true, lastName: true } }, againstUser: { select: { id: true, firstName: true, lastName: true } }, resolvedBy: { select: { id: true, firstName: true, lastName: true } } } });
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
     if (dispute.openedById !== userId && dispute.againstUserId !== userId) throw new AppError('لا تملك صلاحية الوصول لهذا النزاع', 403);
     // New read-only field `heldEscrowAmount`: the escrow amount still held for the dispute's project (null when there is no project/escrow).
@@ -223,7 +223,7 @@ export class DisputeService {
   }
 
   async getForAdmin(id: string) {
-    const dispute = await prisma.dispute.findUnique({ where: { id }, include: { request: true, project: true, openedBy: { select: { id: true, firstName: true, lastName: true, email: true } }, againstUser: { select: { id: true, firstName: true, lastName: true, email: true } }, resolvedBy: { select: { id: true, firstName: true, lastName: true } } } });
+    const dispute = await prisma.dispute.findUnique({ where: { id }, include: { _count: { select: { attachments: true } }, request: true, project: true, openedBy: { select: { id: true, firstName: true, lastName: true, email: true } }, againstUser: { select: { id: true, firstName: true, lastName: true, email: true } }, resolvedBy: { select: { id: true, firstName: true, lastName: true } } } });
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
     const projectId = dispute.projectId ?? dispute.requestId;
     const [escrow, audit] = await Promise.all([
@@ -418,6 +418,7 @@ export class DisputeService {
     const dispute = await prisma.dispute.findUnique({
       where: { id },
       include: {
+        attachments: { select: { ownerId: true } },
         request: { select: { id: true, clientProfile: { select: { userId: true } } } },
         project: {
           select: {
@@ -447,6 +448,10 @@ export class DisputeService {
     const evidenceList: string[] = [];
     const attachmentCount = dispute.evidence?.length ?? 0;
     if (attachmentCount > 0) evidenceList.push(`${attachmentCount} مرفق(ات) مقدمة من ${openerIsClient ? 'العميل' : 'مقدم الخدمة'} (لم يُفحص محتواها)`);
+    for (const party of ['client', 'provider'] as const) {
+      const count = (dispute.attachments ?? []).filter(f => (f.ownerId === clientUserId) === (party === 'client')).length;
+      if (count) evidenceList.push(`${count} مرفق(ات) إضافية مقدمة من ${party === 'client' ? 'العميل' : 'مقدم الخدمة'} (لم يُفحص محتواها)`);
+    }
     for (const stage of dispute.project?.contract?.stages ?? []) {
       const delivery = stage.deliveries[0];
       evidenceList.push(`المرحلة ${stage.stepOrder}: ${cap(stage.title, 150)} — الحالة: ${stage.status}${delivery ? ` — آخر تسليم: ${delivery.status}` : ' — لا تسليم'}`);

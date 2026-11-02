@@ -1,3 +1,4 @@
+import { mountCaseAttachments, caseFilesUpload } from './case-attachments.routes';
 import { Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, authorizeAdminActing, requireActiveUser } from '../middlewares/auth.middleware';
@@ -9,6 +10,7 @@ import { requirePermission } from '../middlewares/admin-access.middleware';
 const router = Router();
 router.use(authenticate, requireActiveUser, requirePermission('disputes.view'));
 router.get('/', listDisputes);
+mountCaseAttachments(router, '/:id/attachments', 'dispute', true);
 router.get('/:id', getDispute);
 router.post('/:id/resolve', requirePermission('disputes.resolve'), resolveDispute);
 // Moves money from the HELD escrow: needs BOTH disputes.resolve and payouts.send (never an account type), and, and on the ACTING role (an admin account that is acting as a client/provider is refused), on top of the router gate.

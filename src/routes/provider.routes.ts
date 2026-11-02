@@ -1,3 +1,4 @@
+import { mountCaseAttachments, caseFilesUpload } from './case-attachments.routes';
 import { Router, Request, Response, NextFunction } from 'express';
 import { getProviderStatistics, getProviderOffers, getProviderOfferById, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, uploadStageDeliveryFiles, getDeliveryAiReview, getProjectHealthAnalysis, getProviderWallet, getProviderTransactions, getCompanyDeliveries, getProviderInvoices, getProviderInvoice, getProviderSales } from '../controllers/provider.controller';
 import { submitWithdrawal, listMyWithdrawals } from '../controllers/withdrawal.controller';
@@ -215,12 +216,14 @@ router.post('/requests/:id/cancel', authenticate, requireActiveUser, providerOnl
 // Provider's own disputes — list/detail, scoped to disputes where this
 // provider is the opener or the respondent (see DisputeService.listForUser).
 router.get('/disputes', authenticate, requireActiveUser, providerOnly, listMyDisputes);
+mountCaseAttachments(router, '/disputes/:id/attachments', 'dispute', false, authenticate, requireActiveUser, providerOnly);
 router.get('/disputes/:id', authenticate, requireActiveUser, providerOnly, getMyDispute);
 
 // Provider's own support tickets — same generic, userId-scoped model and
 // service the client-side tickets router uses (see SupportTicketService).
-router.post('/tickets', authenticate, requireActiveUser, providerOnly, createTicket);
+router.post('/tickets', authenticate, requireActiveUser, providerOnly, caseFilesUpload, createTicket);
 router.get('/tickets', authenticate, requireActiveUser, providerOnly, listMyTickets);
+mountCaseAttachments(router, '/tickets/:id/attachments', 'ticket', false, authenticate, requireActiveUser, providerOnly);
 router.get('/tickets/:id', authenticate, requireActiveUser, providerOnly, getMyTicket);
 router.post('/tickets/:id/reply', authenticate, requireActiveUser, providerOnly, replyToTicket);
 router.post('/tickets/:id/close', authenticate, requireActiveUser, providerOnly, closeMyTicket);

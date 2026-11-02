@@ -53,6 +53,7 @@ export class DisputeSummaryService {
         reason: true,
         description: true,
         evidence: true,
+        attachments: { select: { ownerId: true } },
         request: { select: { id: true, clientProfile: { select: { userId: true } } } },
         project: {
           select: {
@@ -89,6 +90,10 @@ export class DisputeSummaryService {
     const attachmentCount = dispute.evidence?.length ?? 0;
     if (attachmentCount > 0) {
       evidenceList.push(`${attachmentCount} مرفق(ات) مقدمة من ${openerIsClient ? 'العميل' : 'مقدم الخدمة'} (لم يُفحص محتواها)`);
+    }
+    for (const party of ['client', 'provider'] as const) {
+      const count = (dispute.attachments ?? []).filter(f => (f.ownerId === clientUserId) === (party === 'client')).length;
+      if (count) evidenceList.push(`${count} مرفق(ات) إضافية مقدمة من ${party === 'client' ? 'العميل' : 'مقدم الخدمة'} (لم يُفحص محتواها)`);
     }
     for (const stage of dispute.project?.contract?.stages ?? []) {
       const delivery = stage.deliveries[0];

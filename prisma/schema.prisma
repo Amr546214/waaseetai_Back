@@ -1561,6 +1561,8 @@ enum SupportTicketStatus {
 model SupportTicket {
   id             String              @id @default(uuid())
   ticketNumber   String              @unique
+  submissionKey String? @unique
+  submissionDigest String?
   userId         String
   user           User                @relation("SupportTicketOwner", fields: [userId], references: [id], onDelete: Cascade)
   subject        String
@@ -1577,6 +1579,7 @@ model SupportTicket {
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
 
+  attachments CaseAttachment[]
   messages SupportTicketMessage[]
 
   @@index([userId, status])
@@ -2316,6 +2319,8 @@ model Dispute {
   @@index([projectId])
   @@index([openedById])
   @@map("disputes")
+  attachments CaseAttachment[]
+
 }
 
 enum WithdrawalStatus {
@@ -3193,4 +3198,25 @@ model SiteIdentityManifest {
   reason      String
 
   @@map("site_identity_manifest")
+}
+
+// Confidential case files: access is checked on each list/download request.
+model CaseAttachment {
+  id String @id @default(uuid())
+  ticketId String?
+  ticket SupportTicket? @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  disputeId String?
+  dispute Dispute? @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  requestKey String?
+  digest String?
+  ownerId String
+  name String
+  mimeType String
+  bytes Int
+  privateRef String
+  createdAt DateTime @default(now())
+  @@index([ticketId])
+  @@index([disputeId])
+  @@index([disputeId, requestKey])
+  @@map("case_attachments")
 }

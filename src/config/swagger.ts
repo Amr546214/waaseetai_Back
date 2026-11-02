@@ -73,6 +73,7 @@ function operationFor(method: string, path: string) {
 	};
 	if (path === '/api' || path === '/ref/:slug') operation.security = [];
 
+
 	const marketplacePath = path.endsWith('/marketplace/models') || path.endsWith('/marketplace');
 	if (method === 'get' && marketplacePath) {
 		(operation.parameters as unknown[]).push(
@@ -106,10 +107,27 @@ function operationFor(method: string, path: string) {
 		);
 	}
 
+  const caseUpload = method === 'post' && /\/(?:tickets|disputes\/[^/]+\/attachments)$/.test(path);
+  if (caseUpload) {
+    const ticket = path.endsWith('/tickets');
+    const fields = ticket
+      ? Object.fromEntries(['subject','category','priority','description','relatedOrder','relatedProject','relatedMember','ccEmail','submissionKey'].map(name => [name, {type:'string'}]))
+      : {requestKey:{type:'string',format:'uuid'}};
+    operation.requestBody = {required:true,content:{
+      ...(ticket ? {'application/json':{schema:{type:'object',properties:fields,required:['subject','category','description']}}} : {}),
+      'multipart/form-data':{schema:{type:'object',properties:{...fields,attachments:{type:'array',maxItems:5,items:{type:'string',format:'binary'},description:'JPEG/PNG/PDF, up to 10 MiB each'}},required:ticket ? ['subject','category','description'] : ['requestKey','attachments']}}
+    }};
+    const responses = operation.responses as Record<string,unknown>;
+    responses['201'] = responses['200']; delete responses['200'];
+    responses['413'] = {description:'File exceeds 10 MiB'};
+    responses['415'] = {description:'Unsupported or forged file type'};
+  }
+
 	return operation;
 }
 
 function responseSchemaFor(path: string, method: string): string | undefined {
+  if (/\/attachments(?:\/[^/]+\/download)?$/.test(path)) return undefined;
 	if (path === '/api/cart' && method === 'get') return 'CartResponse';
 	if (/^\/api\/cart\/items(?:\/[^/]+)?$/.test(path) || path === '/api/cart/sync') return 'CartResponse';
 	if (path === '/api/checkout/coupon/validate' && method === 'post') return 'CouponValidationResponse';

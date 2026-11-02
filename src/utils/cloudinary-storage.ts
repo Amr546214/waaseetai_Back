@@ -193,10 +193,10 @@ export async function ensureCloudinaryUrl(value: string | null | undefined, fold
 
 export { isOwnCloudinaryUrl };
 
-export async function deleteCloudFile(publicId: string, resourceType: CloudinaryResourceType = 'image'): Promise<void> {
+export async function deleteCloudFile(publicId: string, resourceType: CloudinaryResourceType = 'image', isPrivate = false): Promise<void> {
 	if (isLocalDevFallback()) return;
 	ensureConfigured();
-	await cloudinary.uploader.destroy(publicId, { resource_type: resourceType, invalidate: true });
+	await cloudinary.uploader.destroy(publicId, { resource_type: resourceType, type: isPrivate ? 'authenticated' : 'upload', invalidate: true });
 }
 
 /** Puts the upload tier (per account, then per address) in front of a multer handler, so a refused request never buffers a file. */
