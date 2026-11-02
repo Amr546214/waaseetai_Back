@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { ICON_ID_PATTERN, ICON_PREFIX, MAX_CUSTOM_ICONS, iconEntry, iconExcluded, iconKeyOf, iconLibraryOnly, iconSymbols, isIconWired, symbolIdOf, allowlistRevision } from './site-identity-icons';
-import { KEY_PATTERN, SITE_IDENTITY_REGISTRY, describeRules, identityDef, isKnownIdentityKey, isWiredKey } from './site-identity.registry';
+import { KEY_PATTERN, SITE_IDENTITY_REGISTRY, iconAspect, describeRules, identityDef, isKnownIdentityKey, isWiredKey } from './site-identity.registry';
 import { validateIdentityUpload, UploadRejected } from '../utils/site-identity-upload';
 import { validateTokenBytes, validateTokenValue, TokenRejected } from '../utils/site-identity-tokens';
 import { SvgRejected } from '../utils/svg-sanitizer';
@@ -121,4 +121,13 @@ test('icon families: a hostile / inconsistent definition throws instead of being
 });
 test('alias defaults: the embedded copies of the social image and favicon.ico are byte-identical to the registry fingerprints', () => {
 	for (const k of ['social.og', 'favicon.ico'] as const) { const d = DEFAULT_ASSETS[k]; const fp = identityDef(k)!.defaultFingerprint; const b = Buffer.from(d.base64, 'base64'); assert.equal(createHash('sha256').update(b).digest('hex'), fp.sha256); assert.equal(d.sha256, fp.sha256); assert.equal(b.length, fp.byteSize); assert.equal(d.mime, fp.mime); }
+});
+
+test('icon aspect window: generic 0.5-2 for square drawings, widened (never narrowed) for a banner illustration whose own default is wider', () => {
+	assert.deepEqual(iconAspect(24, 24), { aspectMin: 0.5, aspectMax: 2 });
+	assert.deepEqual(iconAspect(null, null), { aspectMin: 0.5, aspectMax: 2 });
+	const wide = iconAspect(900, 220); assert.ok(wide.aspectMax > 8 && wide.aspectMin === 0.5);
+	const tall = iconAspect(100, 900); assert.ok(tall.aspectMin < 0.06 && tall.aspectMax === 2);
+	assert.deepEqual(identityDef('icon.fn.pl-site-art-network-bg')!.dimensions, iconAspect(900, 220), 'the marketer-profile network background accepts a replacement of its own banner format');
+	assert.deepEqual(identityDef('icon.fn.pl-site-art-slide-design')!.dimensions, { aspectMin: 0.5, aspectMax: 2 });
 });

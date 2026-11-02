@@ -2,8 +2,8 @@
  "generatedBy": "scripts/site-identity-icon-allowlist.cjs",
  "note": "GENERATED - do not edit by hand. Regenerate with: node scripts/site-identity-icon-allowlist.cjs <FE-repo> --write",
  "counts": {
-  "symbols": 786,
-  "wired": 768,
+  "symbols": 794,
+  "wired": 776,
   "noConsumer": 18,
   "excluded": 15,
   "libraryOnly": 84
@@ -8605,6 +8605,126 @@
     "src/app/core/identity/identity-inline-icons.ts"
    ],
    "label": "سهم لليسار — الموقع العام"
+  },
+  {
+   "id": "pl-site-art-card-1",
+   "viewBox": "0 0 60 60",
+   "width": 60,
+   "height": 60,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "aa381014419530483b98b3a47b9587c26934f69333dba8d4a3ee37aba7bd37db",
+   "byteSize": 236,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "زخرفة بطاقة الخدمة: النمط 1 (مربعان) — الموقع العام"
+  },
+  {
+   "id": "pl-site-art-card-2",
+   "viewBox": "0 0 60 60",
+   "width": 60,
+   "height": 60,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "6bc752f6c2cf33ae80ada65e8d497492b341032b82ac8b81a3d909273d48bbb7",
+   "byteSize": 176,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "زخرفة بطاقة الخدمة: النمط 2 (دائرة بخط) — الموقع العام"
+  },
+  {
+   "id": "pl-site-art-card-3",
+   "viewBox": "0 0 60 60",
+   "width": 60,
+   "height": 60,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "c2f7778fcfea53a901caea97fe929493d2b33e5945e0a8007b64e177a195e646",
+   "byteSize": 199,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "زخرفة بطاقة الخدمة: النمط 3 (دائرة ومعين) — الموقع العام"
+  },
+  {
+   "id": "pl-site-art-card-4",
+   "viewBox": "0 0 60 60",
+   "width": 60,
+   "height": 60,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "7bbddb6f2e3da5f1fdc17028b7e4a34981ca8c19a22f4d49d2ac5c9791dd83b6",
+   "byteSize": 281,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "زخرفة بطاقة الخدمة: النمط 4 (مستند) — الموقع العام"
+  },
+  {
+   "id": "pl-site-art-network-bg",
+   "viewBox": "0 0 900 220",
+   "width": 900,
+   "height": 220,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "08491ac783c65ff1c90d73ece8fc9af47cecae9b576592e9ec30b09699eb0c7d",
+   "byteSize": 531,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "خلفية شبكة صفحة المسوّق العام — الموقع العام"
+  },
+  {
+   "id": "pl-site-art-slide-code",
+   "viewBox": "0 0 260 260",
+   "width": 260,
+   "height": 260,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "6fe56563202e1aa30bda2776a280a5e1ded213ea5b296efb12dce393b8ab87b2",
+   "byteSize": 768,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "رسم شريحة «البرمجة» في بانر السوق — الموقع العام"
+  },
+  {
+   "id": "pl-site-art-slide-design",
+   "viewBox": "0 0 260 260",
+   "width": 260,
+   "height": 260,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "f53f9db5d4988d53a244775f1ba6a6098791e8262a6abf4790fe21a77a170b10",
+   "byteSize": 588,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "رسم شريحة «التصميم» في بانر السوق — الموقع العام"
+  },
+  {
+   "id": "pl-site-art-slide-discount",
+   "viewBox": "0 0 240 240",
+   "width": 240,
+   "height": 240,
+   "defs": 1,
+   "variants": 1,
+   "reason": null,
+   "sha256": "cd495acd4eccc2868ebc2d269d5b5503020aaae3ce694f1da7688acf8ad0c4b3",
+   "byteSize": 436,
+   "files": [
+    "src/app/core/identity/identity-inline-icons.ts"
+   ],
+   "label": "رسم شريحة «الخصومات» في بانر السوق — الموقع العام"
   },
   {
    "id": "pl-site-cart",
