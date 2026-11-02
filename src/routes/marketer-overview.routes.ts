@@ -1,3 +1,4 @@
+import { mountCaseAttachments, caseFilesUpload } from './case-attachments.routes';
 import { Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { marketerOverviewController } from '../controllers/marketer-overview.controller';
@@ -48,8 +49,9 @@ router.patch('/settings', updateMarketerSettings);
 router.get('/settings/data-export', exportMarketerData);
 
 // Support tickets: the same role-agnostic ticket system the other sides use, scoped to req.user (someone else's ticket is a 404)
-router.post('/tickets', createTicket);
+router.post('/tickets', caseFilesUpload, createTicket);
 router.get('/tickets', listMyTickets);
+mountCaseAttachments(router, '/tickets/:id/attachments', 'ticket');
 router.get('/tickets/:id', getMyTicket);
 router.post('/tickets/:id/reply', replyToTicket);
 router.post('/tickets/:id/close', closeMyTicket);

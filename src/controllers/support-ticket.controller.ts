@@ -10,7 +10,7 @@ export async function createTicket(req: Request, res: Response, next: NextFuncti
   try {
     const parsed = createSupportTicketSchema.safeParse(req.body);
     if (!parsed.success) throw new AppError(parsed.error.issues.map(i => i.message).join(', '), 400);
-    const data = await supportTicketService.create(userId(req), parsed.data);
+    const data = await supportTicketService.create(userId(req), parsed.data, (req.files || []) as Express.Multer.File[]);
     res.status(201).json({ success: true, message: 'تم فتح تذكرتك بنجاح', data });
   } catch (error) { next(error); }
 }

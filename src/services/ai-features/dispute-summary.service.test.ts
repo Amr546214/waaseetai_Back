@@ -90,3 +90,13 @@ test('generateFromPayload: rejects responses containing forbidden verdict keys',
     (err: any) => err.code === 'INVALID_RESPONSE'
   );
 });
+
+
+test('new private evidence is counted by party without forwarding names, references or file contents to AI', async t => {
+  const {disputeSummaryService, summarizeSpy} = await loadService(t, {dispute: disputeFixture({attachments:[{ownerId:CLIENT_ID},{ownerId:PROVIDER_ID}]})});
+  await disputeSummaryService.generateSummary('dispute-101');
+  const sent = summarizeSpy.mock.calls[0].arguments[0];
+  assert.ok(sent.evidenceList.some((x: string)=>x.includes('إضافية مقدمة من العميل')));
+  assert.ok(sent.evidenceList.some((x: string)=>x.includes('إضافية مقدمة من مقدم الخدمة')));
+  assert.ok(!JSON.stringify(sent).includes(CLIENT_ID)); assert.ok(!JSON.stringify(sent).includes(PROVIDER_ID));
+});

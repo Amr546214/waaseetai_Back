@@ -14,7 +14,7 @@ function makeFixture(status = 'OPEN') {
     supportTicket: {
       findUnique: async ({ where }: any) => (where.id === 't1' ? { ...ticket } : null),
       update: async ({ data }: any) => { Object.assign(ticket, data); return { ...ticket }; },
-      create: async ({ data }: any) => { created.push(data); return { ...ticket, ...data, id: 't1' }; },
+      create: async ({ data }: any) => { if (data.messages?.create) messages.push({ id: 'initial', ticketId: 'new1', ...data.messages.create }); created.push(data); return { ...ticket, ...data, id: 't1' }; },
       findMany: async ({ where }: any) => (where.userId === 'mkt' ? [{ ...ticket }] : []),
       count: async ({ where }: any) => (where.userId === 'mkt' ? 1 : 0),
     },

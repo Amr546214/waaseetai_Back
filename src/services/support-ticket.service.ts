@@ -1,3 +1,4 @@
+import { storeCaseFiles, cleanupCaseFiles, caseSubmissionDigest } from './case-attachments.service';
 import { randomUUID } from 'crypto';
 import { AccountType, SupportTicketStatus } from '@prisma/client';
 import { prisma } from '../config/db';
@@ -61,27 +62,44 @@ export class SupportTicketService {
     }
   }
 
-  async create(userId: string, input: CreateSupportTicketInput) {
-    const ticket = await prisma.supportTicket.create({
-      data: {
-        ticketNumber: generateTicketNumber(),
-        userId,
-        subject: input.subject,
-        category: input.category,
-        priority: input.priority || 'عادية',
-        description: input.description,
-        relatedOrder: input.relatedOrder || null,
-        relatedProject: input.relatedProject || null,
-        relatedMember: input.relatedMember || null,
-        ccEmail: input.ccEmail || null,
-        status: SupportTicketStatus.OPEN,
-      },
-    });
-    // Seed the reply thread with the ticket owner's own original message,
-    // so the detail page's thread always starts from something real.
-    await prisma.supportTicketMessage.create({
-      data: { ticketId: ticket.id, senderId: userId, body: input.description },
-    });
+  async create(userId: string, input: CreateSupportTicketInput, files: Express.Multer.File[] = []) {
+    const digest = caseSubmissionDigest({ userId, ...input }, files);
+    const existing = input.submissionKey ? await prisma.supportTicket.findUnique({ where: { submissionKey: input.submissionKey } }) : null;
+    const reuse = (row: typeof existing) => {
+      if (!row || row.userId !== userId || row.submissionDigest !== digest) throw new AppError('معرّف الإرسال مستخدم لبيانات مختلفة؛ راجع قائمة تذاكرك', 409);
+      return row;
+    };
+    if (existing) return reuse(existing);
+    const batch = await storeCaseFiles(files, userId);
+    let ticket;
+    try {
+      ticket = await prisma.supportTicket.create({
+        data: {
+          ticketNumber: generateTicketNumber(),
+          submissionKey: input.submissionKey,
+          submissionDigest: input.submissionKey ? digest : undefined,
+          userId,
+          subject: input.subject,
+          category: input.category,
+          priority: input.priority || 'عادية',
+          description: input.description,
+          relatedOrder: input.relatedOrder || null,
+          relatedProject: input.relatedProject || null,
+          relatedMember: input.relatedMember || null,
+          ccEmail: input.ccEmail || null,
+          status: SupportTicketStatus.OPEN,
+          attachments: batch.rows.length ? { create: batch.rows } : undefined,
+          messages: { create: { senderId: userId, body: input.description } },
+        },
+      });
+    } catch (e) {
+      await cleanupCaseFiles(batch.stored);
+      if (input.submissionKey && (e as {code?: string})?.code === 'P2002') {
+        const saved = await prisma.supportTicket.findUnique({ where: { submissionKey: input.submissionKey } });
+        if (saved) return reuse(saved);
+      }
+      throw e;
+    }
     await this.notifyOwner(ticket, 'تم استلام تذكرتك', `فُتحت التذكرة ${ticket.ticketNumber}. سنُبلغك هنا عند ردّ فريق الدعم.`, 'created');
     void notifyAdmins('NEW_TICKET', { id: ticket.id, ref: ticket.ticketNumber });
     return ticket;

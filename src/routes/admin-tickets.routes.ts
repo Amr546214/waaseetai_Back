@@ -1,3 +1,4 @@
+import { mountCaseAttachments, caseFilesUpload } from './case-attachments.routes';
 import { Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
@@ -7,6 +8,7 @@ import { requirePermission } from '../middlewares/admin-access.middleware';
 const router = Router();
 router.use(authenticate, requireActiveUser, requirePermission('support.review'));
 router.get('/', adminListTickets);
+mountCaseAttachments(router, '/:id/attachments', 'ticket', true);
 router.get('/:id', adminGetTicket);
 router.post('/:id/reply', requirePermission('support.reply'), adminReplyToTicket);
 router.patch('/:id/status', requirePermission('support.reply'), adminSetTicketStatus);

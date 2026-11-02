@@ -17,7 +17,7 @@ function makeFixture(status = 'OPEN', accountType = 'CLIENT_INDIVIDUAL') {
       findUnique: async ({ where }: any) => tickets.find(t => t.id === where.id) ?? null,
       findMany: async ({ where }: any) => { listWheres.push(where); return tickets.filter(t => t.userId === where.userId); },
       count: async () => 1,
-      create: async ({ data }: any) => { const t = { id: 'new1', createdAt: new Date(), ...data }; tickets.push(t); return t; },
+      create: async ({ data }: any) => { if (data.messages?.create) messages.push({ id: 'initial', ticketId: 'new1', ...data.messages.create }); const t = { id: 'new1', createdAt: new Date(), ...data }; tickets.push(t); return t; },
       update: async ({ where, data }: any) => { const t = tickets.find(x => x.id === where.id); Object.assign(t, data); return { ...t }; },
     },
     supportTicketMessage: {
