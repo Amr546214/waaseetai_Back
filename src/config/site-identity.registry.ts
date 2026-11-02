@@ -247,6 +247,14 @@ const BY_KEY: ReadonlyMap<string, SiteIdentityKeyDef> = new Map(SITE_IDENTITY_RE
 export const IDENTITY_KEYS: readonly string[] = SITE_IDENTITY_REGISTRY.map(d => d.key);
 
 /** the key definition of one member of the `icon.fn.<symbolId>` family (null when the id is not on the generated allow-list). Built lazily and cached; never part of SITE_IDENTITY_REGISTRY (the page payload must not grow with the number of icons). */
+/**
+ * The accepted root aspect of an icon file: the generic 0.5 - 2 window, widened (never narrowed) when the key's OWN default drawing is wider / taller than that (a banner illustration such as
+ * 900x220): a replacement may then be up to 2x as wide / tall as the default is, so a constant illustration can be replaced by a drawing of its own format. Square icons keep exactly 0.5 - 2.
+ */
+export const iconAspect = (width: number | null, height: number | null): { aspectMin: number; aspectMax: number } => {
+	const ar = width && height && width > 0 && height > 0 ? width / height : 1;
+	return { aspectMin: Math.min(ICON_ROOT_ASPECT.min, ar / 2), aspectMax: Math.max(ICON_ROOT_ASPECT.max, ar * 2) };
+};
 const ICON_DEFS = new Map<string, SiteIdentityKeyDef>();
 function iconDef(key: string): SiteIdentityKeyDef | null {
 	const hit = ICON_DEFS.get(key); if (hit) return hit;
@@ -255,7 +263,7 @@ function iconDef(key: string): SiteIdentityKeyDef | null {
 	const def: SiteIdentityKeyDef = {
 		key, group: 'icon', family: 'icon.fn', symbolId: id, label: `أيقونة «${e.label ?? id}»`,
 		description: `أيقونة وظيفية (${id}) تُرسم بـ <use href="#${id}"> في الواجهة؛ تبديلها يغيّر كل مكان يستخدمها. ليست أيقونة الذكاء الاصطناعي الرسمية (icon.ai).`,
-		kind: 'svg', allowedMimes: ['image/svg+xml'], maxBytes: SVG_MAX_BYTES, dimensions: { aspectMin: ICON_ROOT_ASPECT.min, aspectMax: ICON_ROOT_ASPECT.max },
+		kind: 'svg', allowedMimes: ['image/svg+xml'], maxBytes: SVG_MAX_BYTES, dimensions: iconAspect(e.width, e.height),
 		defaultAsset: { type: 'inline-symbol', symbolId: id, source: `<symbol id="${id}"> في ${e.defs} قالب (${where}${e.files.length < e.defs ? ' …' : ''})` },
 		defaultFingerprint: { mime: 'image/svg+xml', width: e.width, height: e.height, byteSize: e.byteSize, sha256: e.sha256, note: `بصمة المحتوى الداخلي المطبَّع للرمز (viewBox|inner) وليست بصمة ملف${e.variants > 1 ? `؛ للرمز ${e.variants} أشكال هندسية مختلفة في القوالب وسيستبدلها الملف المخصّص كلها بشكل واحد` : ''}` },
 		usages: [{ where: `<use href="#${id}"> (يشير إليه مكوّن واحد على الأقل في الواجهة)`, ref: where }],
