@@ -256,13 +256,27 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 		});
 
 		// 5. WebRTC Video Call Signaling Events (Scoped strictly to conversation room)
-		socket.on('call_user', async (data: { conversationId: string; callerId: string; callerName: string; offer: any; isVideo?: boolean }) => {
-			if (!data?.conversationId) return;
-			const roomName = await participantRoom(data.conversationId);
-			if (!roomName) return;
-			const userId = (socket as any).userId as string;
-			console.log(`📹 [VideoCall] Call initiated by ${userId} in room ${roomName}`);
-			socket.to(roomName).emit('incoming_call', { ...data, callerId: userId });
+
+		socket.on('call_user', async (data: { conversationId: string; callerName: string; offer: { type?: string; sdp?: string }; isVideo?: boolean }) => {
+			const userId = (socket as Socket & { userId?: string }).userId;
+			if (!userId || typeof data?.conversationId !== 'string' || data.offer?.type !== 'offer' ||
+				typeof data.offer.sdp !== 'string' || !data.offer.sdp || data.offer.sdp.length > 256_000) return;
+			try {
+				const role = await resolveActiveRole(userId);
+				const conv = await authorizeConversationForRole(data.conversationId, userId, role);
+				if (!conv || !socket.connected) return;
+				socket.to(roomNameFor(conv)).emit('incoming_call', { ...data, callerId: userId });
+				const recipientRole = role === 'CLIENT' ? 'PROVIDER' : 'CLIENT';
+				const recipientId = role === 'CLIENT' ? conv.providerId : conv.clientId;
+				if (!recipientId || recipientId === userId) return;
+				const base = recipientRole === 'CLIENT' ? '/client-overview/messages' : '/provider-overview/messages';
+				const actionUrl = conv.kind === 'PROJECT' && conv.contractId
+					? projectMessagesUrl(recipientRole, conv.contractId)
+					: `${base}?conversationId=${encodeURIComponent(conv.id)}`;
+				await notificationService.notifyMeetingRequest(recipientId, userId, conv.id, actionUrl);
+			} catch (err) {
+				console.error('[ChatGateway] Meeting request failed:', err);
+			}
 		});
 
 		socket.on('answer_call', async (data: { conversationId: string; answer: any; responderId: string }) => {
