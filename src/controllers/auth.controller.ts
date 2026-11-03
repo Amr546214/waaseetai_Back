@@ -50,6 +50,43 @@ export class AuthController {
 	}
 
 	/**
+	 * E-mail-first registration, step 1: a proof code goes to the typed address. Nothing is created; the answer is the same for every address.
+	 * `emailSent` is true only when the SMTP server accepted the mail (the recipient cooldown starts only then, see otpSendGate).
+	 */
+	public async registerStart(req: Request, res: Response, next: NextFunction) {
+		try {
+			const result = await authService.startRegistration(req.body);
+			res.locals.otpEmailAttempted = true;
+			res.locals.otpEmailSent = result.emailSent;
+			res.status(200).json({
+				success: result.emailSent,
+				message: result.emailSent ? 'أرسلنا رمز التحقق إلى بريدك الإلكتروني. لم يُنشأ حساب بعد، أدخل الرمز لإكمال التسجيل' : 'تعذر إرسال رمز التحقق الآن، تحقق من البريد وحاول مرة أخرى بعد قليل أو تواصل مع الدعم',
+				data: result
+			});
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	/** E-mail-first registration, step 2: ticket + code prove the address, then the account is created and the user is signed in. */
+	public async registerComplete(req: Request, res: Response, next: NextFunction) {
+		try {
+			const refCookieSlug = getRequestCookie(req, 'waseet_ref_code');
+			const refCookieSource = getRequestCookie(req, 'waseet_ref_src');
+			const result = await authService.completeRegistration(req.body, { refCookieSlug, refCookieSource }, { ipAddress: req.ip, userAgent: req.get('user-agent') });
+			// The account exists in both cases. `signInRequired`: only the automatic sign-in failed, so the user is told to sign in normally (never to register again).
+			const signInRequired = 'signInRequired' in result;
+			res.status(201).json({
+				success: true,
+				message: signInRequired ? 'تم إنشاء حسابك وتأكيد بريدك. تعذّر تسجيل الدخول تلقائيًا، سجّل الدخول ببريدك وكلمة مرورك' : 'تم إنشاء الحساب وتأكيد البريد بنجاح',
+				data: result
+			});
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	/**
 	 * Handle OTP verification
 	 */
 	public async verifyOtp(req: Request, res: Response, next: NextFunction) {
