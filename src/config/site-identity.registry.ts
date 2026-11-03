@@ -115,7 +115,7 @@ const TOKENS_SOURCE = 'src/styles.css (:root = الداكن، .theme-light = ا�
 /** the unwired reason of tokens.typography (the only token key that is not in WIRED_KEYS by default) */
 const TYPOGRAPHY_REASON = 'يقرأ الخط العام من المتغيّر --font-family (يُوجَّه إليه --font-body و --font-heading و --font-numeric في النظام التصميمي)؛ لا تُعرض هذه الرسالة إلا إن أُلغي ربط المفتاح.';
 const tokenKey = (o: { key: string; label: string; description: string; wired: boolean }): SiteIdentityKeyDef => ({
-	key: o.key, group: 'token', label: o.label, description: o.description, kind: 'json', allowedMimes: ['application/json'], maxBytes: 8 * 1024, dimensions: {},
+	key: o.key, group: 'token', label: o.label, description: o.description, kind: 'json', allowedMimes: ['application/json'], maxBytes: o.key.startsWith('tokens.palette.')?128*1024:o.key==='tokens.components'?64*1024:8*1024, dimensions: {},
 	defaultAsset: { type: 'tokens', source: TOKENS_SOURCE },
 	defaultFingerprint: { mime: 'application/json', width: null, height: null, byteSize: 2, sha256: EMPTY_JSON_SHA, note: 'الافتراضي = لا تجاوزات ({}) ؛ القيم الافتراضية الفعلية لكل رمز في TOKEN_REGISTRY' },
 	usages: [{ where: 'طبقة <style id="ws-identity-tokens"> تُحقن في <head> فقط عند وجود تجاوزات (وإلا لا شيء)', ref: 'src/styles.css :root / .theme-light' }],
@@ -226,6 +226,9 @@ export const SITE_IDENTITY_REGISTRY: readonly SiteIdentityKeyDef[] = [
 	tokenKey({ key: 'tokens.colors.dark', label: 'ألوان الوضع الداكن', wired: true, description: 'ألوان المتغيّرات المركزية (CSS custom properties) في الوضع الداكن (الافتراضي). طبقة تجاوز فوق styles.css؛ لا تمسّ الألوان المكتوبة حرفيًا داخل المكوّنات.' }),
 	tokenKey({ key: 'tokens.layout', label: 'الأبعاد العامة', wired: true, description: 'العرض الأقصى للمحتوى واستدارة الزوايا (--container --radius --radius-sm).' }),
 	tokenKey({ key: 'tokens.typography', label: 'الخط العام', wired: true, description: 'عائلة الخط العامة (--font-family). الافتراضي Tajawal المضمّن في الموقع؛ لا يحمّل الموقع خطوطًا خارجية، فيعمل أي اسم آخر فقط إن كان الخط مثبّتًا على جهاز الزائر.' }),
+	tokenKey({key:'tokens.components',label:'هوية المكوّنات',wired:true,description:'قيم مظهر المكوّنات وشارات المستويات فقط؛ لا تعدّل سياسة مالية أو نقاطًا.'}),
+	tokenKey({key:'tokens.palette.dark',label:'ألوان مواضع الموقع — داكن',wired:true,description:'ألوان مجرودة من الكود، مرتبطة وقت التشغيل عند نشر تخصيص فقط.'}),
+	tokenKey({key:'tokens.palette.light',label:'ألوان مواضع الموقع — فاتح',wired:true,description:'ألوان مجرودة من الكود، مرتبطة وقت التشغيل عند نشر تخصيص فقط.'}),
 ];
 
 /**
@@ -238,7 +241,7 @@ export const WIRED_KEYS: readonly string[] = [
 	'character.bebo.scout.sprites', 'character.bebo.scout.actions', 'character.bebo.scout.speaking', 'character.bebo.scout.antics', 'character.bebo.scout.emotions', 'character.bebo.scout.kitten',
 	'character.bebo.traffic', 'character.bebo.expressions',
 	// design tokens (round 5). tokens.typography joined after the FE proved the identical default rendering of the --font-family routing (design-system --font-body/heading/numeric)
-	'tokens.colors.light', 'tokens.colors.dark', 'tokens.layout', 'tokens.typography',
+	'tokens.colors.light', 'tokens.colors.dark', 'tokens.layout', 'tokens.typography', 'tokens.components', 'tokens.palette.dark', 'tokens.palette.light',
 	// round 7: the FE static host (nginx identity include, enabled by WS_IDENTITY_UPSTREAM) asks the public alias routes for /favicon.ico and the OG image
 	'social.og', 'favicon.ico',
 ];

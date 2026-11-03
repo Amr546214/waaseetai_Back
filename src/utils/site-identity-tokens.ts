@@ -9,6 +9,7 @@ import { TOKEN_REGISTRY, TokenDef, TokenKey, TokenType, isTokenKey, tokenDefault
  * contain `url(`, `expression(`, `var(`, `calc(`, `@`, `;`, braces, comments, `\`, `<`, `>`, `!important` or a newline, and the generated CSS is safe to embed in a <style> element.
  */
 export const TOKEN_MAX_BYTES = 8 * 1024;
+export const tokenMaxBytes=(key:string)=>key.startsWith('tokens.palette.')?128*1024:key==='tokens.components'?64*1024:TOKEN_MAX_BYTES;
 export const TOKEN_MAX_VALUE_LENGTH = 200;
 export const TOKEN_JSON_MIME = 'application/json';
 
@@ -135,7 +136,10 @@ export function canonFontFamily(raw: string, name: string): string {
 }
 
 export function canonValue(def: TokenDef, raw: string): string {
-	const t: TokenType = def.type;
+	if(def.preservesDefault && raw.trim()==='inherit')return 'inherit';
+ const t: TokenType = def.type;
+ if(t==='number'){const v=raw.trim();if(!/^(?:\d{1,3}(?:\.\d{1,3})?|\.\d{1,3})$/.test(v)||!Number.isFinite(Number(v))||Number(v)<def.numberMin!||Number(v)>def.numberMax!||(def.integer&&!Number.isInteger(Number(v))))return reject('BAD_VALUE','القيمة الرقمية خارج الحدود المسموحة.',def.name);return String(Number(v));}
+ if(t==='spacing'){const v=raw.trim();if(v==='normal')return v;const m=v.match(/^(-?\d+(?:\.\d{1,3})?)(px|em)$/);if(!m||Number(m[1])<(m[2]==='px'?-4:-.2)||Number(m[1])>(m[2]==='px'?8:.5))return reject('BAD_VALUE','تباعد الأحرف خارج الحدود المسموحة.',def.name);return String(Number(m[1]))+m[2];}
 	if (t === 'color') return canonColor(raw, def.name);
 	if (t === 'paint') return canonPaint(raw, def.name);
 	if (t === 'shadow') return canonShadow(raw, def.name);
@@ -151,7 +155,7 @@ export function validateTokenValue(key: string, input: unknown, opts: { allowEmp
 	if (!isTokenKey(key)) return reject('UNKNOWN_TOKEN', 'مفتاح الرموز غير معروف.');
 	if (input === null || typeof input !== 'object' || Array.isArray(input)) return reject('NOT_OBJECT', 'يجب أن تكون القيم المرسلة كائنًا من أزواج {"--اسم":"قيمة"} (وليست نصًا أو قائمة أو رقمًا).');
 	const entries = Object.entries(input as Record<string, unknown>);
-	if (entries.length > TOKEN_REGISTRY.length) return reject('TOO_MANY_ENTRIES', 'عدد القيم المرسلة أكبر من عدد الرموز المعرّفة لهذا العنصر.');
+	if (entries.length > tokensOfKey(key).length) return reject('TOO_MANY_ENTRIES', 'عدد القيم المرسلة أكبر من عدد الرموز المعرّفة لهذا العنصر.');
 	const defs = new Map(tokensOfKey(key).map(d => [d.name, d]));
 	const out = new Map<string, string>(); const dropped: string[] = []; let changed = false;
 	for (const [name, raw] of entries) {
@@ -175,7 +179,7 @@ export function validateTokenValue(key: string, input: unknown, opts: { allowEmp
 /** validates uploaded BYTES (a JSON object) - the path used by the upload pipeline and by the public manifest when it re-reads stored rows */
 export function validateTokenBytes(key: string, bytes: Uint8Array, opts: { allowEmpty?: boolean; source?: TokenSource } = {}): ValidatedTokens {
 	const fromValue = opts.source === 'value'; // the JSON body {value:{…}} of the editor, as opposed to an uploaded .json file
-	if (bytes.length > TOKEN_MAX_BYTES) return reject('TOO_BIG', fromValue ? `القيم المرسلة أكبر من الحد الأقصى (${TOKEN_MAX_BYTES / 1024}KB).` : `ملف الرموز أكبر من الحد الأقصى (${TOKEN_MAX_BYTES / 1024}KB).`, undefined, 413);
+	if (bytes.length > tokenMaxBytes(key)) return reject('TOO_BIG', fromValue ? `القيم المرسلة أكبر من الحد الأقصى (${tokenMaxBytes(key) / 1024}KB).` : `ملف الرموز أكبر من الحد الأقصى (${tokenMaxBytes(key) / 1024}KB).`, undefined, 413);
 	let text: string;
 	try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { return reject('NOT_UTF8', fromValue ? 'القيم المرسلة ليست نصًا بترميز UTF-8.' : 'محتوى الملف ليس نصًا بترميز UTF-8.'); }
 	if (text.charCodeAt(0) === 0xfeff) return reject('NOT_JSON', 'يبدأ المحتوى بعلامة BOM؛ احفظه JSON عاديًا بترميز UTF-8.');
@@ -216,9 +220,9 @@ export function buildTokensCss(sets: TokenSets): string {
 		const s = sets[key]; if (!s) return {};
 		try { return validateTokenValue(key, s, { allowEmpty: true }).value; } catch { return {}; }
 	};
-	const layout = { ...safe('tokens.layout'), ...safe('tokens.typography') };
-	const dark = safe('tokens.colors.dark'); const light = { ...safe('tokens.colors.light') };
-	const darkDefs = new Map(tokensOfKey('tokens.colors.dark').map(d => [d.name, d]));
+	const layout = { ...safe('tokens.layout'), ...safe('tokens.typography'), ...safe('tokens.components') };
+	const dark = {...safe('tokens.colors.dark'),...safe('tokens.palette.dark')}; const light = { ...safe('tokens.colors.light'),...safe('tokens.palette.light') };
+	const darkDefs = new Map([...tokensOfKey('tokens.colors.dark'),...tokensOfKey('tokens.palette.dark')].map(d => [d.name, d]));
 	for (const name of Object.keys(dark)) { const d = darkDefs.get(name)!; if (d.light === undefined && !(name in light)) light[name] = d.dark; }
 	// keep registry order for the light block
 	const order = new Map(TOKEN_REGISTRY.map((d, i) => [d.name, i]));

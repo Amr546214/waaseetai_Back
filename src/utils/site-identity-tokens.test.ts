@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { TOKEN_COUNTS, TOKEN_KEYS, TOKEN_REGISTRY, tokenDefault, tokensOfKey } from '../config/site-identity-tokens';
 import { SITE_IDENTITY_REGISTRY, WIRED_KEYS, identityDef, describeRules } from '../config/site-identity.registry';
-import { TOKEN_MAX_BYTES, TokenRejected, buildTokensCss, LIGHT_SELECTOR, canonValue, validateTokenBytes, validateTokenUpload, validateTokenValue } from './site-identity-tokens';
+import { TOKEN_MAX_BYTES, tokenMaxBytes, TokenRejected, buildTokensCss, LIGHT_SELECTOR, canonValue, validateTokenBytes, validateTokenUpload, validateTokenValue } from './site-identity-tokens';
 import { validateIdentityUpload } from './site-identity-upload';
 
 const reasonOf = (fn: () => unknown): string => { try { fn(); } catch (e) { assert.ok(e instanceof TokenRejected, `expected TokenRejected, got ${String(e)}`); return (e as TokenRejected).reason; } return 'ACCEPTED'; };
@@ -12,17 +12,17 @@ const val = (key: string, v: unknown) => validateTokenValue(key, v);
 const bytes = (o: unknown) => Buffer.from(typeof o === 'string' ? o : JSON.stringify(o), 'utf8');
 
 test('tokens: registry shape and exact counts (37 declared in :root + 24 round-9 semantic variables + --font-family: 58 colour-like of which 57 redefined in light and only --grad shared, 3 layout, 1 typography)', () => {
-	assert.deepEqual(TOKEN_COUNTS, { declaredInRoot: 61, colorLike: 58, redefinedByThemeLight: 57, sharedWithDark: 1, layout: 3, typography: 1 });
+	assert.deepEqual(TOKEN_COUNTS, { declaredInRoot: 61, colorLike: 58, redefinedByThemeLight: 57, sharedWithDark: 1, layout: 3, typography: 71, components: 181, palette: 1188 });
 	assert.deepEqual(TOKEN_REGISTRY.filter(t => t.scope === 'color' && t.light === undefined).map(t => t.name).sort(), ['--grad']);
 	assert.equal(new Set(TOKEN_REGISTRY.map(t => t.name)).size, TOKEN_REGISTRY.length, 'names unique');
 	for (const t of TOKEN_REGISTRY) assert.match(t.name, /^--[a-z0-9-]{1,40}$/);
 	// registry keys: group token, kind json, 4 keys, all four wired
 	const keys = SITE_IDENTITY_REGISTRY.filter(d => d.group === 'token');
 	assert.deepEqual(keys.map(d => d.key), [...TOKEN_KEYS]);
-	for (const d of keys) { assert.equal(d.kind, 'json'); assert.deepEqual(d.allowedMimes, ['application/json']); assert.equal(d.maxBytes, TOKEN_MAX_BYTES); assert.equal(d.defaultFingerprint.byteSize, 2); assert.equal(d.defaultFingerprint.mime, 'application/json'); assert.ok(describeRules(d).length >= 2); }
-	assert.deepEqual(keys.filter(d => WIRED_KEYS.includes(d.key)).map(d => d.key), ['tokens.colors.light', 'tokens.colors.dark', 'tokens.layout', 'tokens.typography']);
+	for (const d of keys) { assert.equal(d.kind, 'json'); assert.deepEqual(d.allowedMimes, ['application/json']); assert.equal(d.maxBytes, tokenMaxBytes(d.key)); assert.equal(d.defaultFingerprint.byteSize, 2); assert.equal(d.defaultFingerprint.mime, 'application/json'); assert.ok(describeRules(d).length >= 2); }
+	assert.deepEqual(keys.filter(d => WIRED_KEYS.includes(d.key)).map(d => d.key), [...TOKEN_KEYS]);
 	assert.ok(keys.every(d => d.notWiredReason.length > 20));
-	assert.equal(tokensOfKey('tokens.colors.light').length, 58); assert.equal(tokensOfKey('tokens.colors.dark').length, 58); assert.equal(tokensOfKey('tokens.layout').length, 3); assert.equal(tokensOfKey('tokens.typography').length, 1);
+	assert.equal(tokensOfKey('tokens.colors.light').length, 58); assert.equal(tokensOfKey('tokens.colors.dark').length, 58); assert.equal(tokensOfKey('tokens.layout').length, 3); assert.equal(tokensOfKey('tokens.typography').length, 71);
 });
 
 test('tokens: every default is already in canonical form and satisfies its own grammar (so a default can never be "changed" by canonicalisation)', () => {
@@ -38,8 +38,8 @@ test('tokens: EVERY default (dark and light) equals the effective computed value
 	// the golden holds the platform :root tokens; the 24 round-9 semantic variables live in the FE manifest identity-semantic-tokens.json (measured defaults), checked below
 	const semPath = goldenPath!.replace(/identity-tokens\.effective\.golden\.json$/, 'identity-semantic-tokens.json');
 	const sem = new Map((JSON.parse(fs.readFileSync(semPath, 'utf8')) as { tokens: Array<{ name: string; dark: string; light: string }> }).tokens.map(t => [t.name, t]));
-	assert.equal(Object.keys(g.dark).length + sem.size, TOKEN_REGISTRY.length);
-	for (const t of TOKEN_REGISTRY) {
+	assert.equal(Object.keys(g.dark).length + sem.size, TOKEN_REGISTRY.filter(t=>!t.preservesDefault&&!t.sourceLiteral).length);
+	for (const t of TOKEN_REGISTRY.filter(t=>!t.preservesDefault&&!t.sourceLiteral)) {
 		const s = sem.get(t.name);
 		assert.equal(norm((s ? s.dark : g.dark[t.name]) ?? '<missing>'), norm(t.dark), `${t.name} dark`);
 		if (t.scope === 'color') assert.equal(norm((s ? s.light : g.light[t.name]) ?? '<missing>'), norm(t.light ?? t.dark), `${t.name} light`);

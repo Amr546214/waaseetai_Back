@@ -1,0 +1,2232 @@
+[
+  {
+    "key": "tokens.typography",
+    "id": "h1",
+    "label": "عنوان رئيسي H1",
+    "selector": "h1",
+    "fields": [
+      {
+        "name": "--type-h1-size",
+        "property": "font-size",
+        "type": "length",
+        "label": "الحجم",
+        "min": 8,
+        "max": 128
+      },
+      {
+        "name": "--type-h1-weight",
+        "property": "font-weight",
+        "type": "number",
+        "label": "الوزن",
+        "min": 100,
+        "max": 900,
+        "integer": true
+      },
+      {
+        "name": "--type-h1-height",
+        "property": "line-height",
+        "type": "number",
+        "label": "ارتفاع السطر",
+        "min": 0.8,
+        "max": 3
+      },
+      {
+        "name": "--type-h1-spacing",
+        "property": "letter-spacing",
+        "type": "spacing",
+        "label": "تباعد الحروف"
+      },
+      {
+        "name": "--type-h1-family",
+        "property": "font-family",
+        "type": "font-family",
+        "label": "الخط"
+      }
+    ]
+  },
+  {
+    "key": "tokens.typography",
+    "id": "h2",
+    "label": "عنوان فرعي H2",
+    "selector": "h2",
+    "fields": [
+      {
+        "name": "--type-h2-size",
+        "property": "font-size",
+        "type": "length",
+        "label": "الحجم",
+        "min": 8,
+        "max": 128
+      },
+      {
+        "name": "--type-h2-weight",
+        "property": "font-weight",
+        "type": "number",
+        "label": "الوزن",
+        "min": 100,
+        "max": 900,
+        "integer": true
+      },
+      {
+        "name": "--type-h2-height",
+        "property": "line-height",
+        "type": "number",
+        "label": "ارتفاع السطر",
+        "min": 0.8,
+        "max": 3
+      },
+      {
+        "name": "--type-h2-spacing",
+        "property": "letter-spacing",
+        "type": "spacing",
+        "label": "تباعد الحروف"
+      },
+      {
+        "name": "--type-h2-family",
+        "property": "font-family",
+        "type": "font-family",
+        "label": "الخط"
+      }
+    ]
+  },
+  {
+    "key": "tokens.typography",
+    "id": "h3",
+    "label": "عنوان H3",
+    "selector": "h3",
+    "fields": [
+      {
+        "name": "--type-h3-size",
+        "property": "font-size",
+        "type": "length",
+        "label": "الحجم",
+        "min": 8,
+        "max": 128
+      },
+      {
+        "name": "--type-h3-weight",
+        "property": "font-weight",
+        "type": "number",
+        "label": "الوزن",
+        "min": 100,
+        "max": 900,
+        "integer": true
+      },
+      {
+        "name": "--type-h3-height",
+        "property": "line-height",
+        "type": "number",
+        "label": "ارتفاع السطر",
+        "min": 0.8,
+        "max": 3
+      },
+      {
+        "name": "--type-h3-spacing",
+        "property": "letter-spacing",
+        "type": "spacing",
+        "label": "تباعد الحروف"
+      },
+      {
+        "name": "--type-h3-family",
+        "property": "font-family",
+        "type": "font-family",
+        "label": "الخط"
+      }
+    ]
+  },
+  {
+    "key": "tokens.typography",
+    "id": "h4",
+    "label": "عنوان H4",
+    "selector": "h4",
+    "fields": [
+      {
+        "name": "--type-h4-size",
+        "property": "font-size",
+        "type": "length",
+        "label": "الحجم",
+        "min": 8,
+        "max": 128
+      },
+      {
+        "name": "--type-h4-weight",
+        "property": "font-weight",
+        "type": "number",
+        "label": "الوزن",
+        "min": 100,
+        "max": 900,
+        "integer": true
+      },
+      {
+        "name": "--type-h4-height",
+        "property": "line-height",
+        "type": "number",
+        "label": "ارتفاع السطر",
+        "min": 0.8,
+        "max": 3
+      },
+      {
+        "name": "--type-h4-spacing",
+        "property": "letter-spacing",
+        "type": "spacing",
+        "label": "تباعد الحروف"
+      },
+      {
+        "name": "--type-h4-family",
+        "property": "font-family",
+        "type": "font-family",
+        "label": "الخط"
+      }
+    ]
+  },
+  {
+    "key": "tokens.typography",
+    "id": "h5",
+    "label": "عنوان H5",
+    "selector": "h5",
+    "fields": [
+      {
+        "name": "--type-h5-size",
+        "property": "font-size",
+        "type": "length",
+        "label": "الحجم",
+        "min": 8,
+        "max": 128
+      },
+      {
+        "name": "--type-h5-weight",
+        "property": "font-weight",
+        "type": "number",
+        "label": "الوزن",
+        "min": 100,
+        "max": 900,
+        "integer": true
+      },
+      {
+        "name": "--type-h5-height",
+        "property": "line-height",
+        "type": "number",
+        "label": "ارتفاع السطر",
+        "min": 0.8,
+        "max": 3
+      },
+      {
+        "name": "--type-h5-spacing",
+        "property": "letter-spacing",
+        "type": "spacing",
+        "label": "تباعد الحروف"
+      },
+      {
+        "name": "--type-h5-family",
+        "property": "font-family",
+        "type": "font-family",
+        "label": "الخط"
+      }
+    ]
+  },
+  {
+    "key": "tokens.typography",
+    "id": "h6",
+    "label": "عنوان H6",
+    "selector": "h6",
+    "fields": [
+      {
+        "name": "--type-h6-size",
+        "property": "font-size",
+        "type": "length",
+        "label": "الحجم",
+        "min": 8,
+        "max": 128
+      },
+      {
+        "name": "--type-h6-weight",
+        "property": "font-weight",
+        "type": "number",
+        "label": "الوزن",
+        "min": 100,
+        "max": 900,
+        "integer": true
+      },
+      {
+        "name": "--type-h6-height",
+        "property": "line-height",
+        "type": "number",
+        "label": "ارتفاع السطر",
+        "min": 0.8,
+        "max": 3
+      },
+      {
+        "name": "--type-h6-spacing",
+        "property": "letter-spacing",
+        "type": "spacing",
+        "label": "تباعد الحروف"
+      },
+      {
+        "name": "--type-h6-family",
+        "property": "font-family",
+        "type": "font-family",
+        "label": "الخط"
+      }
+    ]
+  },
+  {
+    "key": "tokens.typography",
+    "id": "body-lg",
+    "label": "نص أساسي كبير",
+    "selector": ".body-lg,.hero-sub,.hero-desc,.lead",
+    "fields": [
+      {
+        "name": "--type-body-lg-size",
+        "property": "font-size",
+        "type": "length",
+        "label": "الحجم",
+        "min": 8,
+        "max": 128
+      },
+      {
+        "name": "--type-body-lg-weight",
+        "property": "font-weight",
+        "type": "number",
+        "label": "الوزن",
+        "min": 100,
+        "max": 900,
+        "integer": true
+      },
+      {
+        "name": "--type-body-lg-height",
+        "property": "line-height",
+        "type": "number",
+        "label": "ارتفاع السطر",
+        "min": 0.8,
+        "max": 3
+      },
+      {
+        "name": "--type-body-lg-spacing",
+        "property": "letter-spacing",
+        "type": "spacing",
+        "label": "تباعد الحروف"
+      },
+      {
+        "name": "--type-body-lg-family",
+        "property": "font-family",
+        "type": "font-family",
+        "label": "الخط"
+      }
+    ]
+  },
+  {
+    "key": "tokens.typography",
+    "id": "body-md",
+    "label": "نص أساسي",
+    "selector": "p,.body-md",
+    "fields": [
+      {
+        "name": "--type-body-md-size",
+        "property": "font-size",
+        "type": "length",
+        "label": "الحجم",
+        "min": 8,
+        "max": 128
+      },
+      {
+        "name": "--type-body-md-weight",
+        "property": "font-weight",
+        "type": "number",
+        "label": "الوزن",
+        "min": 100,
+        "max": 900,
+        "integer": true
+      },
+      {
+        "name": "--type-body-md-height",
+        "property": "line-height",
+        "type": "number",
+        "label": "ارتفاع السطر",
+        "min": 0.8,
+        "max": 3
+      },
+      {
+        "name": "--type-body-md-spacing",
+        "property": "letter-spacing",
+        "type": "spacing",
+        "label": "تباعد الحروف"
+      },
+      {
+        "name": "--type-body-md-family",
+        "property": "font-family",
+        "type": "font-family",
+        "label": "الخط"
+      }
+    ]
+  },
+  {
+    "key": "tokens.typography",
+    "id": "body-sm",
+    "label": "نص أساسي صغير",
+    "selector": ".body-sm,.sub,.hint,.helper,.stat-sub",
+    "fields": [
+      {
+        "name": "--type-body-sm-size",
+        "property": "font-size",
+        "type": "length",
+        "label": "الحجم",
+        "min": 8,
+        "max": 128
+      },
+      {
+        "name": "--type-body-sm-weight",
+        "property": "font-weight",
+        "type": "number",
+        "label": "الوزن",
+        "min": 100,
+        "max": 900,
+        "integer": true
+      },
+      {
+        "name": "--type-body-sm-height",
+        "property": "line-height",
+        "type": "number",
+        "label": "ارتفاع السطر",
+        "min": 0.8,
+        "max": 3
+      },
+      {
+        "name": "--type-body-sm-spacing",
+        "property": "letter-spacing",
+        "type": "spacing",
+        "label": "تباعد الحروف"
+      },
+      {
+        "name": "--type-body-sm-family",
+        "property": "font-family",
+        "type": "font-family",
+        "label": "الخط"
+      }
+    ]
+  },
+  {
+    "key": "tokens.typography",
+    "id": "caption",
+    "label": "شرح مصغّر",
+    "selector": "small,.caption",
+    "fields": [
+      {
+        "name": "--type-caption-size",
+        "property": "font-size",
+        "type": "length",
+        "label": "الحجم",
+        "min": 8,
+        "max": 128
+      },
+      {
+        "name": "--type-caption-weight",
+        "property": "font-weight",
+        "type": "number",
+        "label": "الوزن",
+        "min": 100,
+        "max": 900,
+        "integer": true
+      },
+      {
+        "name": "--type-caption-height",
+        "property": "line-height",
+        "type": "number",
+        "label": "ارتفاع السطر",
+        "min": 0.8,
+        "max": 3
+      },
+      {
+        "name": "--type-caption-spacing",
+        "property": "letter-spacing",
+        "type": "spacing",
+        "label": "تباعد الحروف"
+      },
+      {
+        "name": "--type-caption-family",
+        "property": "font-family",
+        "type": "font-family",
+        "label": "الخط"
+      }
+    ]
+  },
+  {
+    "key": "tokens.typography",
+    "id": "overline",
+    "label": "نص فوقي (Overline)",
+    "selector": ".overline,.kpi-l,.kpi-lbl,.stat-lbl",
+    "fields": [
+      {
+        "name": "--type-overline-size",
+        "property": "font-size",
+        "type": "length",
+        "label": "الحجم",
+        "min": 8,
+        "max": 128
+      },
+      {
+        "name": "--type-overline-weight",
+        "property": "font-weight",
+        "type": "number",
+        "label": "الوزن",
+        "min": 100,
+        "max": 900,
+        "integer": true
+      },
+      {
+        "name": "--type-overline-height",
+        "property": "line-height",
+        "type": "number",
+        "label": "ارتفاع السطر",
+        "min": 0.8,
+        "max": 3
+      },
+      {
+        "name": "--type-overline-spacing",
+        "property": "letter-spacing",
+        "type": "spacing",
+        "label": "تباعد الحروف"
+      },
+      {
+        "name": "--type-overline-family",
+        "property": "font-family",
+        "type": "font-family",
+        "label": "الخط"
+      }
+    ]
+  },
+  {
+    "key": "tokens.typography",
+    "id": "page-title",
+    "label": "عنوان صفحة داخلي",
+    "selector": "h1:not(.hero-title):not(.blog-hero-title),.page-title",
+    "fields": [
+      {
+        "name": "--type-page-title-size",
+        "property": "font-size",
+        "type": "length",
+        "label": "الحجم",
+        "min": 8,
+        "max": 128
+      },
+      {
+        "name": "--type-page-title-weight",
+        "property": "font-weight",
+        "type": "number",
+        "label": "الوزن",
+        "min": 100,
+        "max": 900,
+        "integer": true
+      },
+      {
+        "name": "--type-page-title-height",
+        "property": "line-height",
+        "type": "number",
+        "label": "ارتفاع السطر",
+        "min": 0.8,
+        "max": 3
+      },
+      {
+        "name": "--type-page-title-spacing",
+        "property": "letter-spacing",
+        "type": "spacing",
+        "label": "تباعد الحروف"
+      },
+      {
+        "name": "--type-page-title-family",
+        "property": "font-family",
+        "type": "font-family",
+        "label": "الخط"
+      }
+    ]
+  },
+  {
+    "key": "tokens.typography",
+    "id": "section-title",
+    "label": "عنوان قسم",
+    "selector": ".section-title",
+    "fields": [
+      {
+        "name": "--type-section-title-size",
+        "property": "font-size",
+        "type": "length",
+        "label": "الحجم",
+        "min": 8,
+        "max": 128
+      },
+      {
+        "name": "--type-section-title-weight",
+        "property": "font-weight",
+        "type": "number",
+        "label": "الوزن",
+        "min": 100,
+        "max": 900,
+        "integer": true
+      },
+      {
+        "name": "--type-section-title-height",
+        "property": "line-height",
+        "type": "number",
+        "label": "ارتفاع السطر",
+        "min": 0.8,
+        "max": 3
+      },
+      {
+        "name": "--type-section-title-spacing",
+        "property": "letter-spacing",
+        "type": "spacing",
+        "label": "تباعد الحروف"
+      },
+      {
+        "name": "--type-section-title-family",
+        "property": "font-family",
+        "type": "font-family",
+        "label": "الخط"
+      }
+    ]
+  },
+  {
+    "key": "tokens.typography",
+    "id": "kpi-number",
+    "label": "رقم KPI",
+    "selector": ".kpi-number,.kpi-v,.kpi-val,.stat-val,.stat-num,.hstat-n",
+    "fields": [
+      {
+        "name": "--type-kpi-number-size",
+        "property": "font-size",
+        "type": "length",
+        "label": "الحجم",
+        "min": 8,
+        "max": 128
+      },
+      {
+        "name": "--type-kpi-number-weight",
+        "property": "font-weight",
+        "type": "number",
+        "label": "الوزن",
+        "min": 100,
+        "max": 900,
+        "integer": true
+      },
+      {
+        "name": "--type-kpi-number-height",
+        "property": "line-height",
+        "type": "number",
+        "label": "ارتفاع السطر",
+        "min": 0.8,
+        "max": 3
+      },
+      {
+        "name": "--type-kpi-number-spacing",
+        "property": "letter-spacing",
+        "type": "spacing",
+        "label": "تباعد الحروف"
+      },
+      {
+        "name": "--type-kpi-number-family",
+        "property": "font-family",
+        "type": "font-family",
+        "label": "الخط"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "button",
+    "label": "الأزرار",
+    "selector": "button,.btn,[data-site-component=\"button\"]",
+    "fields": [
+      {
+        "name": "--comp-button-radius",
+        "property": "border-radius",
+        "type": "length",
+        "label": "الزوايا",
+        "min": 0,
+        "max": 128
+      },
+      {
+        "name": "--comp-button-padding-x",
+        "property": "padding-inline",
+        "type": "length",
+        "label": "الحشو الأفقي",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-button-padding-y",
+        "property": "padding-block",
+        "type": "length",
+        "label": "الحشو الرأسي",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-button-height",
+        "property": "min-height",
+        "type": "length",
+        "label": "أقل ارتفاع",
+        "min": 16,
+        "max": 128
+      },
+      {
+        "name": "--comp-button-gap",
+        "property": "gap",
+        "type": "length",
+        "label": "المسافة",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-button-shadow",
+        "property": "box-shadow",
+        "type": "shadow",
+        "label": "الظل"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "button-disabled",
+    "label": "الأزرار المعطّلة",
+    "selector": "button:disabled,button[aria-disabled=\"true\"]",
+    "fields": [
+      {
+        "name": "--comp-button-disabled-opacity",
+        "property": "opacity",
+        "type": "number",
+        "label": "الشفافية",
+        "min": 0.1,
+        "max": 1
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "card",
+    "label": "البطاقات",
+    "selector": ".card,.project-card,.model-card,.service-card,.kpi-card,.kpi-c,.stat-card",
+    "fields": [
+      {
+        "name": "--comp-card-radius",
+        "property": "border-radius",
+        "type": "length",
+        "label": "الزوايا",
+        "min": 0,
+        "max": 128
+      },
+      {
+        "name": "--comp-card-padding",
+        "property": "padding",
+        "type": "length",
+        "label": "الحشو",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-card-gap",
+        "property": "gap",
+        "type": "length",
+        "label": "المسافة",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-card-shadow",
+        "property": "box-shadow",
+        "type": "shadow",
+        "label": "الظل"
+      },
+      {
+        "name": "--comp-card-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-card-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "field",
+    "label": "الحقول",
+    "selector": "input:not([type=\"hidden\"]):not([type=\"checkbox\"]):not([type=\"radio\"]):not([type=\"range\"]):not([type=\"color\"]):not([type=\"file\"]),textarea,select,.ws-sel-trigger",
+    "fields": [
+      {
+        "name": "--comp-field-radius",
+        "property": "border-radius",
+        "type": "length",
+        "label": "الزوايا",
+        "min": 0,
+        "max": 128
+      },
+      {
+        "name": "--comp-field-padding-x",
+        "property": "padding-inline",
+        "type": "length",
+        "label": "الحشو الأفقي",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-field-padding-y",
+        "property": "padding-block",
+        "type": "length",
+        "label": "الحشو الرأسي",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-field-height",
+        "property": "min-height",
+        "type": "length",
+        "label": "أقل ارتفاع",
+        "min": 16,
+        "max": 128
+      },
+      {
+        "name": "--comp-field-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-field-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "field-disabled",
+    "label": "الحقول المعطّلة",
+    "selector": "input:disabled,textarea:disabled,select:disabled,.ws-sel-trigger:disabled",
+    "fields": [
+      {
+        "name": "--comp-field-disabled-opacity",
+        "property": "opacity",
+        "type": "number",
+        "label": "الشفافية",
+        "min": 0.1,
+        "max": 1
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "modal",
+    "label": "النوافذ",
+    "selector": ".modal-panel,.dialog-panel,.confirm-dialog,[role=\"dialog\"]",
+    "fields": [
+      {
+        "name": "--comp-modal-radius",
+        "property": "border-radius",
+        "type": "length",
+        "label": "الزوايا",
+        "min": 0,
+        "max": 128
+      },
+      {
+        "name": "--comp-modal-padding",
+        "property": "padding",
+        "type": "length",
+        "label": "الحشو",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-modal-shadow",
+        "property": "box-shadow",
+        "type": "shadow",
+        "label": "الظل"
+      },
+      {
+        "name": "--comp-modal-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-modal-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "dropdown",
+    "label": "القوائم المنسدلة",
+    "selector": ".dropdown-menu,.ws-sel-panel,[role=\"listbox\"]",
+    "fields": [
+      {
+        "name": "--comp-dropdown-radius",
+        "property": "border-radius",
+        "type": "length",
+        "label": "الزوايا",
+        "min": 0,
+        "max": 128
+      },
+      {
+        "name": "--comp-dropdown-padding",
+        "property": "padding",
+        "type": "length",
+        "label": "الحشو",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-dropdown-shadow",
+        "property": "box-shadow",
+        "type": "shadow",
+        "label": "الظل"
+      },
+      {
+        "name": "--comp-dropdown-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-dropdown-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "badge",
+    "label": "الشارات",
+    "selector": ".badge,.chip,.status-badge,.status-pill",
+    "fields": [
+      {
+        "name": "--comp-badge-radius",
+        "property": "border-radius",
+        "type": "length",
+        "label": "الزوايا",
+        "min": 0,
+        "max": 128
+      },
+      {
+        "name": "--comp-badge-padding-x",
+        "property": "padding-inline",
+        "type": "length",
+        "label": "الحشو الأفقي",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-badge-padding-y",
+        "property": "padding-block",
+        "type": "length",
+        "label": "الحشو الرأسي",
+        "min": 0,
+        "max": 64
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "table-cell",
+    "label": "خلايا الجداول",
+    "selector": "table th,table td",
+    "fields": [
+      {
+        "name": "--comp-table-cell-padding-x",
+        "property": "padding-inline",
+        "type": "length",
+        "label": "الحشو الأفقي",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-table-cell-padding-y",
+        "property": "padding-block",
+        "type": "length",
+        "label": "الحشو الرأسي",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-table-cell-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "tabs",
+    "label": "التبويبات",
+    "selector": "[role=\"tab\"],.tab-btn",
+    "fields": [
+      {
+        "name": "--comp-tabs-radius",
+        "property": "border-radius",
+        "type": "length",
+        "label": "الزوايا",
+        "min": 0,
+        "max": 128
+      },
+      {
+        "name": "--comp-tabs-padding-x",
+        "property": "padding-inline",
+        "type": "length",
+        "label": "الحشو الأفقي",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-tabs-padding-y",
+        "property": "padding-block",
+        "type": "length",
+        "label": "الحشو الرأسي",
+        "min": 0,
+        "max": 64
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "tooltip",
+    "label": "التلميحات",
+    "selector": "[role=\"tooltip\"],.tooltip",
+    "fields": [
+      {
+        "name": "--comp-tooltip-radius",
+        "property": "border-radius",
+        "type": "length",
+        "label": "الزوايا",
+        "min": 0,
+        "max": 128
+      },
+      {
+        "name": "--comp-tooltip-padding",
+        "property": "padding",
+        "type": "length",
+        "label": "الحشو",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-tooltip-shadow",
+        "property": "box-shadow",
+        "type": "shadow",
+        "label": "الظل"
+      },
+      {
+        "name": "--comp-tooltip-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "sidebar",
+    "label": "القائمة الجانبية",
+    "selector": "aside.sidebar",
+    "fields": [
+      {
+        "name": "--comp-sidebar-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-sidebar-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      },
+      {
+        "name": "--comp-sidebar-padding",
+        "property": "padding",
+        "type": "length",
+        "label": "الحشو",
+        "min": 0,
+        "max": 64
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-provider-1",
+    "label": "مقدّم الخدمة — المستوى 1",
+    "selector": ".wlb[data-role=\"PROVIDER\"][data-level-index=\"1\"]",
+    "fields": [
+      {
+        "name": "--comp-level-provider-1-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-provider-1-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-provider-1-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-provider-2",
+    "label": "مقدّم الخدمة — المستوى 2",
+    "selector": ".wlb[data-role=\"PROVIDER\"][data-level-index=\"2\"]",
+    "fields": [
+      {
+        "name": "--comp-level-provider-2-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-provider-2-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-provider-2-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-provider-3",
+    "label": "مقدّم الخدمة — المستوى 3",
+    "selector": ".wlb[data-role=\"PROVIDER\"][data-level-index=\"3\"]",
+    "fields": [
+      {
+        "name": "--comp-level-provider-3-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-provider-3-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-provider-3-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-provider-4",
+    "label": "مقدّم الخدمة — المستوى 4",
+    "selector": ".wlb[data-role=\"PROVIDER\"][data-level-index=\"4\"]",
+    "fields": [
+      {
+        "name": "--comp-level-provider-4-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-provider-4-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-provider-4-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-provider-5",
+    "label": "مقدّم الخدمة — المستوى 5",
+    "selector": ".wlb[data-role=\"PROVIDER\"][data-level-index=\"5\"]",
+    "fields": [
+      {
+        "name": "--comp-level-provider-5-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-provider-5-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-provider-5-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-provider-6",
+    "label": "مقدّم الخدمة — المستوى 6",
+    "selector": ".wlb[data-role=\"PROVIDER\"][data-level-index=\"6\"]",
+    "fields": [
+      {
+        "name": "--comp-level-provider-6-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-provider-6-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-provider-6-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-provider-7",
+    "label": "مقدّم الخدمة — المستوى 7",
+    "selector": ".wlb[data-role=\"PROVIDER\"][data-level-index=\"7\"]",
+    "fields": [
+      {
+        "name": "--comp-level-provider-7-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-provider-7-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-provider-7-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-provider-8",
+    "label": "مقدّم الخدمة — المستوى 8",
+    "selector": ".wlb[data-role=\"PROVIDER\"][data-level-index=\"8\"]",
+    "fields": [
+      {
+        "name": "--comp-level-provider-8-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-provider-8-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-provider-8-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-provider-9",
+    "label": "مقدّم الخدمة — المستوى 9",
+    "selector": ".wlb[data-role=\"PROVIDER\"][data-level-index=\"9\"]",
+    "fields": [
+      {
+        "name": "--comp-level-provider-9-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-provider-9-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-provider-9-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-provider-10",
+    "label": "مقدّم الخدمة — المستوى 10",
+    "selector": ".wlb[data-role=\"PROVIDER\"][data-level-index=\"10\"]",
+    "fields": [
+      {
+        "name": "--comp-level-provider-10-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-provider-10-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-provider-10-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-provider-11",
+    "label": "مقدّم الخدمة — المستوى 11",
+    "selector": ".wlb[data-role=\"PROVIDER\"][data-level-index=\"11\"]",
+    "fields": [
+      {
+        "name": "--comp-level-provider-11-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-provider-11-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-provider-11-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-provider-12",
+    "label": "مقدّم الخدمة — المستوى 12",
+    "selector": ".wlb[data-role=\"PROVIDER\"][data-level-index=\"12\"]",
+    "fields": [
+      {
+        "name": "--comp-level-provider-12-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-provider-12-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-provider-12-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-provider-13",
+    "label": "مقدّم الخدمة — المستوى 13",
+    "selector": ".wlb[data-role=\"PROVIDER\"][data-level-index=\"13\"]",
+    "fields": [
+      {
+        "name": "--comp-level-provider-13-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-provider-13-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-provider-13-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-provider-14",
+    "label": "مقدّم الخدمة — المستوى 14",
+    "selector": ".wlb[data-role=\"PROVIDER\"][data-level-index=\"14\"]",
+    "fields": [
+      {
+        "name": "--comp-level-provider-14-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-provider-14-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-provider-14-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-provider-15",
+    "label": "مقدّم الخدمة — المستوى 15",
+    "selector": ".wlb[data-role=\"PROVIDER\"][data-level-index=\"15\"]",
+    "fields": [
+      {
+        "name": "--comp-level-provider-15-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-provider-15-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-provider-15-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-client-1",
+    "label": "العميل — المستوى 1",
+    "selector": ".wlb[data-role=\"CLIENT\"][data-level-index=\"1\"]",
+    "fields": [
+      {
+        "name": "--comp-level-client-1-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-client-1-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-client-1-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-client-2",
+    "label": "العميل — المستوى 2",
+    "selector": ".wlb[data-role=\"CLIENT\"][data-level-index=\"2\"]",
+    "fields": [
+      {
+        "name": "--comp-level-client-2-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-client-2-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-client-2-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-client-3",
+    "label": "العميل — المستوى 3",
+    "selector": ".wlb[data-role=\"CLIENT\"][data-level-index=\"3\"]",
+    "fields": [
+      {
+        "name": "--comp-level-client-3-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-client-3-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-client-3-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-client-4",
+    "label": "العميل — المستوى 4",
+    "selector": ".wlb[data-role=\"CLIENT\"][data-level-index=\"4\"]",
+    "fields": [
+      {
+        "name": "--comp-level-client-4-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-client-4-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-client-4-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-client-5",
+    "label": "العميل — المستوى 5",
+    "selector": ".wlb[data-role=\"CLIENT\"][data-level-index=\"5\"]",
+    "fields": [
+      {
+        "name": "--comp-level-client-5-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-client-5-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-client-5-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-client-6",
+    "label": "العميل — المستوى 6",
+    "selector": ".wlb[data-role=\"CLIENT\"][data-level-index=\"6\"]",
+    "fields": [
+      {
+        "name": "--comp-level-client-6-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-client-6-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-client-6-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-client-7",
+    "label": "العميل — المستوى 7",
+    "selector": ".wlb[data-role=\"CLIENT\"][data-level-index=\"7\"]",
+    "fields": [
+      {
+        "name": "--comp-level-client-7-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-client-7-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-client-7-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-client-8",
+    "label": "العميل — المستوى 8",
+    "selector": ".wlb[data-role=\"CLIENT\"][data-level-index=\"8\"]",
+    "fields": [
+      {
+        "name": "--comp-level-client-8-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-client-8-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-client-8-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-client-9",
+    "label": "العميل — المستوى 9",
+    "selector": ".wlb[data-role=\"CLIENT\"][data-level-index=\"9\"]",
+    "fields": [
+      {
+        "name": "--comp-level-client-9-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-client-9-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-client-9-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-client-10",
+    "label": "العميل — المستوى 10",
+    "selector": ".wlb[data-role=\"CLIENT\"][data-level-index=\"10\"]",
+    "fields": [
+      {
+        "name": "--comp-level-client-10-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-client-10-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-client-10-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-client-11",
+    "label": "العميل — المستوى 11",
+    "selector": ".wlb[data-role=\"CLIENT\"][data-level-index=\"11\"]",
+    "fields": [
+      {
+        "name": "--comp-level-client-11-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-client-11-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-client-11-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-client-12",
+    "label": "العميل — المستوى 12",
+    "selector": ".wlb[data-role=\"CLIENT\"][data-level-index=\"12\"]",
+    "fields": [
+      {
+        "name": "--comp-level-client-12-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-client-12-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-client-12-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-client-13",
+    "label": "العميل — المستوى 13",
+    "selector": ".wlb[data-role=\"CLIENT\"][data-level-index=\"13\"]",
+    "fields": [
+      {
+        "name": "--comp-level-client-13-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-client-13-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-client-13-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-client-14",
+    "label": "العميل — المستوى 14",
+    "selector": ".wlb[data-role=\"CLIENT\"][data-level-index=\"14\"]",
+    "fields": [
+      {
+        "name": "--comp-level-client-14-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-client-14-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-client-14-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-client-15",
+    "label": "العميل — المستوى 15",
+    "selector": ".wlb[data-role=\"CLIENT\"][data-level-index=\"15\"]",
+    "fields": [
+      {
+        "name": "--comp-level-client-15-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-client-15-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-client-15-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-marketer-1",
+    "label": "المسوّق — المستوى 1",
+    "selector": ".wlb[data-role=\"MARKETER\"][data-level-index=\"1\"]",
+    "fields": [
+      {
+        "name": "--comp-level-marketer-1-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-marketer-1-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-marketer-1-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-marketer-2",
+    "label": "المسوّق — المستوى 2",
+    "selector": ".wlb[data-role=\"MARKETER\"][data-level-index=\"2\"]",
+    "fields": [
+      {
+        "name": "--comp-level-marketer-2-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-marketer-2-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-marketer-2-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-marketer-3",
+    "label": "المسوّق — المستوى 3",
+    "selector": ".wlb[data-role=\"MARKETER\"][data-level-index=\"3\"]",
+    "fields": [
+      {
+        "name": "--comp-level-marketer-3-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-marketer-3-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-marketer-3-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-marketer-4",
+    "label": "المسوّق — المستوى 4",
+    "selector": ".wlb[data-role=\"MARKETER\"][data-level-index=\"4\"]",
+    "fields": [
+      {
+        "name": "--comp-level-marketer-4-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-marketer-4-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-marketer-4-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-marketer-5",
+    "label": "المسوّق — المستوى 5",
+    "selector": ".wlb[data-role=\"MARKETER\"][data-level-index=\"5\"]",
+    "fields": [
+      {
+        "name": "--comp-level-marketer-5-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-marketer-5-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-marketer-5-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-marketer-6",
+    "label": "المسوّق — المستوى 6",
+    "selector": ".wlb[data-role=\"MARKETER\"][data-level-index=\"6\"]",
+    "fields": [
+      {
+        "name": "--comp-level-marketer-6-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-marketer-6-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-marketer-6-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-marketer-7",
+    "label": "المسوّق — المستوى 7",
+    "selector": ".wlb[data-role=\"MARKETER\"][data-level-index=\"7\"]",
+    "fields": [
+      {
+        "name": "--comp-level-marketer-7-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-marketer-7-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-marketer-7-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-marketer-8",
+    "label": "المسوّق — المستوى 8",
+    "selector": ".wlb[data-role=\"MARKETER\"][data-level-index=\"8\"]",
+    "fields": [
+      {
+        "name": "--comp-level-marketer-8-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-marketer-8-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-marketer-8-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-marketer-9",
+    "label": "المسوّق — المستوى 9",
+    "selector": ".wlb[data-role=\"MARKETER\"][data-level-index=\"9\"]",
+    "fields": [
+      {
+        "name": "--comp-level-marketer-9-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-marketer-9-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-marketer-9-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-marketer-10",
+    "label": "المسوّق — المستوى 10",
+    "selector": ".wlb[data-role=\"MARKETER\"][data-level-index=\"10\"]",
+    "fields": [
+      {
+        "name": "--comp-level-marketer-10-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-marketer-10-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-marketer-10-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-marketer-11",
+    "label": "المسوّق — المستوى 11",
+    "selector": ".wlb[data-role=\"MARKETER\"][data-level-index=\"11\"]",
+    "fields": [
+      {
+        "name": "--comp-level-marketer-11-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-marketer-11-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-marketer-11-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-marketer-12",
+    "label": "المسوّق — المستوى 12",
+    "selector": ".wlb[data-role=\"MARKETER\"][data-level-index=\"12\"]",
+    "fields": [
+      {
+        "name": "--comp-level-marketer-12-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-marketer-12-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-marketer-12-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-marketer-13",
+    "label": "المسوّق — المستوى 13",
+    "selector": ".wlb[data-role=\"MARKETER\"][data-level-index=\"13\"]",
+    "fields": [
+      {
+        "name": "--comp-level-marketer-13-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-marketer-13-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-marketer-13-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-marketer-14",
+    "label": "المسوّق — المستوى 14",
+    "selector": ".wlb[data-role=\"MARKETER\"][data-level-index=\"14\"]",
+    "fields": [
+      {
+        "name": "--comp-level-marketer-14-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-marketer-14-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-marketer-14-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "level-marketer-15",
+    "label": "المسوّق — المستوى 15",
+    "selector": ".wlb[data-role=\"MARKETER\"][data-level-index=\"15\"]",
+    "fields": [
+      {
+        "name": "--comp-level-marketer-15-color",
+        "property": "color",
+        "type": "color",
+        "label": "النص والأيقونة"
+      },
+      {
+        "name": "--comp-level-marketer-15-background",
+        "property": "background",
+        "type": "paint",
+        "label": "الخلفية"
+      },
+      {
+        "name": "--comp-level-marketer-15-border",
+        "property": "border-color",
+        "type": "color",
+        "label": "الحدود"
+      }
+    ]
+  }
+]
