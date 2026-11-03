@@ -1,3 +1,5 @@
+import PRESENTATION from './site-identity-presentation.json';
+import PALETTE from './site-identity-palette.generated.json';
 /**
  * TOKEN_REGISTRY - the design tokens (CSS custom properties) that the identity manager may override («التحكم بالموقع» > الهوية > الألوان والخطوط).
  *
@@ -8,11 +10,12 @@
  * The strings below are in the CANONICAL form of src/utils/site-identity-tokens.ts (lower-case hex, no spaces after commas, alpha without a leading zero or trailing zeros, `0` lengths with a unit-less shadow zero);
  * the FE guard spec compares them to styles.css after the same normalisation, and a BE test (site-identity-tokens.test.ts) re-reads styles.css when it is reachable.
  */
-export type TokenType = 'color' | 'paint' | 'shadow' | 'length' | 'font-family';
-export type TokenScope = 'color' | 'layout' | 'typography';
+export type TokenType = 'color' | 'paint' | 'shadow' | 'length' | 'font-family' | 'number' | 'spacing';
+export type TokenScope = 'color' | 'layout' | 'typography' | 'component' | 'palette';
 
 export interface TokenDef {
 	name: string; type: TokenType; scope: TokenScope; label: string;
+ preservesDefault?: boolean; numberMin?: number; numberMax?: number; integer?: boolean; sourceLiteral?: boolean;
 	/** default in the DARK theme (= the `:root` value) */
 	dark: string;
 	/** default in the LIGHT theme (`.theme-light`); undefined = not redefined there (light default = dark default) */
@@ -24,6 +27,7 @@ export interface TokenDef {
 const c = (name: string, label: string, dark: string, light?: string): TokenDef => ({ name, type: 'color', scope: 'color', label, dark, light });
 const p = (name: string, label: string, dark: string, light?: string): TokenDef => ({ name, type: 'paint', scope: 'color', label, dark, light });
 
+const PRESENTATION_TOKENS: TokenDef[] = PRESENTATION.flatMap(g=>g.fields.map(f=>({name:f.name,type:f.type as TokenType,scope:(g.key==='tokens.typography'?'typography':'component') as TokenScope,label:g.label+' — '+f.label,dark:'inherit',preservesDefault:true,...(f.type==='length'?{min:{px:f.min!,rem:f.min!/16},max:{px:f.max!,rem:f.max!/16}}:{}),...(f.type==='number'?{numberMin:f.min,numberMax:f.max,integer:'integer' in f?f.integer:false}:{})})));
 export const TOKEN_REGISTRY: readonly TokenDef[] = [
 	c('--pg', 'خلفية الصفحة', '#070d24', '#eef2fa'),
 	c('--pop-bg', 'خلفية القوائم المنبثقة والأدراج', 'rgba(9,18,48,.98)', '#ffffff'),
@@ -88,32 +92,36 @@ export const TOKEN_REGISTRY: readonly TokenDef[] = [
 	{ name: '--radius', type: 'length', scope: 'layout', label: 'استدارة الزوايا', dark: '16px', min: { px: 0, rem: 0 }, max: { px: 64, rem: 4 } },
 	{ name: '--radius-sm', type: 'length', scope: 'layout', label: 'استدارة الزوايا الصغيرة', dark: '10px', min: { px: 0, rem: 0 }, max: { px: 64, rem: 4 } },
 	{ name: '--font-family', type: 'font-family', scope: 'typography', label: 'الخط العام', dark: "'Tajawal'" },
+ ...PRESENTATION_TOKENS,
+ ...PALETTE.map(t=>({...t,type:'color' as const,scope:'palette' as const,sourceLiteral:true})),
 ];
 
-export const TOKEN_KEYS = ['tokens.colors.light', 'tokens.colors.dark', 'tokens.layout', 'tokens.typography'] as const;
+export const TOKEN_KEYS = ['tokens.colors.light', 'tokens.colors.dark', 'tokens.layout', 'tokens.typography', 'tokens.components', 'tokens.palette.dark', 'tokens.palette.light'] as const;
 export type TokenKey = typeof TOKEN_KEYS[number];
 export const isTokenKey = (key: string): key is TokenKey => (TOKEN_KEYS as readonly string[]).includes(key);
 
-const SCOPE_OF_KEY: Record<TokenKey, TokenScope> = { 'tokens.colors.light': 'color', 'tokens.colors.dark': 'color', 'tokens.layout': 'layout', 'tokens.typography': 'typography' };
+const SCOPE_OF_KEY: Record<TokenKey, TokenScope> = { 'tokens.colors.light': 'color', 'tokens.colors.dark': 'color', 'tokens.layout': 'layout', 'tokens.typography': 'typography', 'tokens.components': 'component', 'tokens.palette.dark': 'palette', 'tokens.palette.light': 'palette' };
 
 /** the token definitions a key may hold, in registry order */
 export const tokensOfKey = (key: string): readonly TokenDef[] => (isTokenKey(key) ? TOKEN_REGISTRY.filter(t => t.scope === SCOPE_OF_KEY[key]) : []);
 /** the default of one token as seen by one key (light key -> light value, falling back to the dark value for the shared ones) */
-export const tokenDefault = (key: string, t: TokenDef): string => (key === 'tokens.colors.light' ? t.light ?? t.dark : t.dark);
+export const tokenDefault = (key: string, t: TokenDef): string => (key.endsWith('.light') ? t.light ?? t.dark : t.dark);
 
 /** shape for the admin API (items[].tokens) */
 export const tokenSpecOut = (key: string) => tokensOfKey(key).map(t => ({
-	name: t.name, type: t.type, label: t.label, default: tokenDefault(key, t), sharedWithDark: key === 'tokens.colors.light' && t.scope === 'color' && t.light === undefined,
+	name: t.name, type: t.type, label: t.label, preservesDefault: t.preservesDefault, default: tokenDefault(key, t), sharedWithDark: key === 'tokens.colors.light' && t.scope === 'color' && t.light === undefined,
 	...(t.min ? { min: t.min, max: t.max } : {}),
 }));
 
 /** counts shown on the page and asserted by tests */
 export const TOKEN_COUNTS = {
 	/** custom properties the FE `:root` block declares today (--font-family is NEW: the FE adds it only if it routes Tajawal through it) */
-	declaredInRoot: TOKEN_REGISTRY.filter(t => t.scope !== 'typography').length,
+	declaredInRoot: TOKEN_REGISTRY.filter(t => !t.preservesDefault && !t.sourceLiteral && t.scope !== 'typography').length,
 	colorLike: TOKEN_REGISTRY.filter(t => t.scope === 'color').length,
 	redefinedByThemeLight: TOKEN_REGISTRY.filter(t => t.scope === 'color' && t.light !== undefined).length,
 	sharedWithDark: TOKEN_REGISTRY.filter(t => t.scope === 'color' && t.light === undefined).length,
 	layout: TOKEN_REGISTRY.filter(t => t.scope === 'layout').length,
 	typography: TOKEN_REGISTRY.filter(t => t.scope === 'typography').length,
+ components: TOKEN_REGISTRY.filter(t=>t.scope==='component').length,
+ palette: TOKEN_REGISTRY.filter(t=>t.scope==='palette').length,
 } as const;
