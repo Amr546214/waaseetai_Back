@@ -165,3 +165,13 @@ test('English upstream feedback is not replaced by invented Arabic praise', asyn
  assert.doesNotMatch(result.summary, /يغطي المتطلبات|مع تحديد دقيق|عرض فني قوي/);
  assert.equal(result.qualityScore, 92);
 });
+
+test('long AI drafts respect the submission limits without splitting emoji', async (t) => {
+  const svc = await load(t, async () => upstream({
+    suggestedTitle: 'ع'.repeat(79) + '😀',
+    suggestedMessage: 'م'.repeat(1999) + '😀'
+  }));
+  const result = await svc.evaluateAndSuggestProposal('p1', 't', 'm');
+  assert.equal(result.suggestedTitle, 'ع'.repeat(79));
+  assert.equal(result.suggestedMessage, 'م'.repeat(1999));
+});

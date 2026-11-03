@@ -1,3 +1,4 @@
+import { PROPOSAL_TITLE_MAX, PROPOSAL_MESSAGE_MAX } from '../dtos/create-proposal.dto';
 import { AppError } from '../utils/app-error';
 import { prisma } from '../utils/prisma.client';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
@@ -145,8 +146,8 @@ class AiProposalService {
       throw new AppError(UNAVAILABLE_MESSAGE, 503);
     }
 
-    const suggestedTitle = typeof raw?.suggestedTitle === 'string' ? raw.suggestedTitle.trim() : '';
-    const suggestedMessage = typeof raw?.suggestedMessage === 'string' ? raw.suggestedMessage.trim() : '';
+    const suggestedTitle = typeof raw?.suggestedTitle === 'string' ? boundedDraftText(raw.suggestedTitle, PROPOSAL_TITLE_MAX) : '';
+    const suggestedMessage = typeof raw?.suggestedMessage === 'string' ? boundedDraftText(raw.suggestedMessage, PROPOSAL_MESSAGE_MAX) : '';
     const qualityTag = typeof raw?.qualityTag === 'string' ? raw.qualityTag.trim() : '';
     if (!suggestedTitle || !suggestedMessage || !qualityTag || typeof raw.qualityScore !== 'number' || !Number.isFinite(raw.qualityScore)) {
       throw new AppError(UNAVAILABLE_MESSAGE, 503);
@@ -169,3 +170,7 @@ class AiProposalService {
 
 export const aiProposalService = new AiProposalService();
 export default aiProposalService;
+
+function boundedDraftText(value: string, max: number): string {
+  return value.trim().slice(0, max).replace(/[\uD800-\uDBFF]$/, "").trimEnd();
+}
