@@ -83,3 +83,17 @@ test('stagesMatchContract: tolerance 0.01, unique orders, finite numbers', async
 	assert.equal(stagesMatchContract([], 20), false);
 	assert.equal(stagesMatchContract([{ stepOrder: 1, amount: 20.02, percentage: 100 }], 20), false);
 });
+
+test('an explicitly empty frozen schedule never resurrects stages from the old offer', async t => {
+  const { db, rows } = fakeDb({ price: 50, terms: { milestones: [] }, proposalMilestones: two });
+  const { projectProgressService } = await load(t, db);
+  await projectProgressService.ensureStages('c1');
+  assert.deepEqual(rows.map(r => [r.stepOrder, r.amount, r.status]), [[1, 50, 'IN_PROGRESS']]);
+});
+
+test('the lowest frozen step starts first even if the stored list is out of order', async t => {
+  const { db, rows } = fakeDb({ price: 50, terms: { milestones: [...two].reverse() } });
+  const { projectProgressService } = await load(t, db);
+  await projectProgressService.ensureStages('c1');
+  assert.deepEqual(rows.map(r => [r.stepOrder, r.status]), [[1, 'IN_PROGRESS'], [2, 'PENDING']]);
+});
