@@ -26,12 +26,12 @@ function baseProposalPayload(overrides: any = {}) {
   };
 }
 
-function createProposalMockPrisma(t: TestContext, opts: { existingProposal?: any; aiEvaluationError?: unknown; evalCalls?: any[]; fitError?: unknown; fitResult?: any; fitCalls?: any[] } = {}) {
+function createProposalMockPrisma(t: TestContext, opts: { projectStatus?: string; existingProposal?: any; aiEvaluationError?: unknown; evalCalls?: any[]; fitError?: unknown; fitResult?: any; fitCalls?: any[] } = {}) {
   const projectFixture = {
     id: 'project-1',
     clientId: 'client-1',
     title: 'مشروع تجريبي',
-    status: 'OPEN',
+    status: opts.projectStatus ?? 'OPEN',
     budgetMin: 500,
     budgetMax: 1500
   };
@@ -239,4 +239,20 @@ test('proposal.service.ts (WaseetAI-linked) has no internal LlmClient dependency
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('./proposal.service.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /gemini\.client|geminiClient|generateStructured|generateStream/);
+});
+
+test('createProposal: a closed project distinguishes an existing submission from a new offer', async t => {
+  const { service, projectProposalCreateSpy } = await loadService(t, {
+    projectStatus: 'IN_PROGRESS', existingProposal: { id: 'existing-proposal' }
+  });
+  await assert.rejects(() => service.createProposal('project-1', 'provider-1', baseProposalPayload()),
+    { code: 'PROPOSAL_ALREADY_SUBMITTED' });
+  assert.equal(projectProposalCreateSpy.mock.callCount(), 0);
+});
+
+test('createProposal: a closed project still refuses a new submission', async t => {
+  const { service, projectProposalCreateSpy } = await loadService(t, { projectStatus: 'IN_PROGRESS' });
+  await assert.rejects(() => service.createProposal('project-1', 'provider-1', baseProposalPayload()),
+    { code: 'PROJECT_NOT_OPEN' });
+  assert.equal(projectProposalCreateSpy.mock.callCount(), 0);
 });
