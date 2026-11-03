@@ -60,6 +60,38 @@ export const registerSchema = z.object({
 
 export type RegisterInput = z.infer<typeof registerSchema>['body'];
 
+// E-mail-proof-first registration (no account exists until the address is proven):
+//  1. start: the form data WITHOUT the password -> a code goes to the typed address and a signed ticket comes back (no account, no phone reserved);
+//  2. complete: the same data + password + ticket + code -> the account is created (uniqueness re-checked inside the transaction) and the user is signed in.
+const registerIdentityBody = {
+  accountType: PublicAccountTypeEnum,
+  firstName: sanitizedText(z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل')),
+  lastName: sanitizedText(z.string().min(2, 'اسم العائلة يجب أن يكون حرفين على الأقل')),
+  email: normalizedEmail,
+  phoneCountryCode: z.string().default('+966'),
+  phoneNumber: z.string().regex(/^\d+$/, 'رقم الجوال يجب أن يحتوي على أرقام فقط').min(9, 'رقم الجوال غير صحيح'),
+  agreedToTerms: z.literal(true, { message: 'يجب الموافقة على الشروط والأحكام' })
+};
+
+export const registerStartSchema = z.object({ body: z.object(registerIdentityBody) });
+export type RegisterStartInput = z.infer<typeof registerStartSchema>['body'];
+
+export const registerCompleteSchema = z.object({
+  body: z.object({
+    ...registerIdentityBody,
+    password: authPasswordSchema,
+    ticket: z.string().min(20).max(2000),
+    code: z.string().regex(/^\d{6}$/, 'رمز التحقق يجب أن يكون 6 أرقام'),
+    affiliateIdentifier: z.string().optional(),
+    referralSlug: z.string().optional(),
+    referralCode: z.string().optional()
+  }).transform(({ referralSlug, referralCode, ...rest }) => ({
+    ...rest,
+    affiliateIdentifier: rest.affiliateIdentifier ?? referralSlug ?? referralCode
+  }))
+});
+export type RegisterCompleteInput = z.infer<typeof registerCompleteSchema>['body'];
+
 // Activation by account id (the login-while-pending path, which is after the password check and may keep returning the id) OR by the
 // e-mail the caller typed at registration (the public register answer carries no id). Exactly one of the two.
 const exactlyOneAccountRef = (v: { userId?: string; email?: string }, ctx: z.RefinementCtx) => {
