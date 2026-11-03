@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+export const PROPOSAL_TITLE_MAX = 80;
+export const PROPOSAL_MESSAGE_MAX = 2000;
+
 export const createProposalMilestoneSchema = z.object({
   stepOrder: z.number().int().min(1, 'رقم المرحلة يجب أن يكون 1 على الأقل'),
   title: z.string().min(2, 'عنوان المرحلة يجب أن يكون حرفين على الأقل').max(100, 'عنوان المرحلة يتجاوز الحد الأقصى'),
@@ -12,10 +15,10 @@ export const createProposalMilestoneSchema = z.object({
 export const createProposalSchema = z.object({
   title: z.string()
     .min(3, 'يجب أن يكون عنوان العرض 3 أحرف على الأقل')
-    .max(80, 'يجب ألا يتجاوز عنوان العرض 80 حرفاً'),
+    .max(PROPOSAL_TITLE_MAX, 'يجب ألا يتجاوز عنوان العرض 80 حرفاً'),
   message: z.string()
     .min(30, 'يجب أن يكون وصف العرض 30 حرفاً على الأقل')
-    .max(2000, 'يجب ألا يتجاوز وصف العرض 2000 حرف'),
+    .max(PROPOSAL_MESSAGE_MAX, 'يجب ألا يتجاوز وصف العرض 2000 حرف'),
   advantages: z.array(z.string()).max(10, 'لا يمكن إضافة أكثر من 10 نقاط قوة').optional().default([]),
   outputs: z.string().optional().default(''),
   portfolioIds: z.array(z.string()).optional().default([]),
