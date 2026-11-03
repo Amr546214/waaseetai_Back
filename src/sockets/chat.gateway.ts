@@ -1,7 +1,6 @@
 import { Socket, Server as SocketIOServer } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { chatService, authorizeConversationForRole, resolveActiveRole } from '../services/chat.service';
-import { prisma } from '../config/db';
 import { notificationService } from '../services/notification.service';
 import { projectMessagesUrl, roomNameFor } from '../services/project-conversation.service';
 import { JoinRoomDto, SendMessageDto } from '../dtos/chat.dto';
@@ -73,7 +72,21 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 			return conv ? roomNameFor(conv) : null;
 		};
 
+		const joined = new Map<string, string>();
+		const peers = (room: string): string[] => [...(socket.nsp.adapter.rooms.get(room) ?? [])]
+			.filter(id => id !== socket.id)
+			.map(id => (socket.nsp.sockets.get(id) as (Socket & { userId?: string }) | undefined)?.userId)
+			.filter((id): id is string => Boolean(id));
+		const announceDeparture = (conversationId: string, room: string) => {
+			const userId = (socket as Socket & { userId?: string }).userId;
+			if (!userId || peers(room).includes(userId)) return;
+			socket.nsp.to(room).emit('typing_indicator', { conversationId, userId, isTyping: false });
+			socket.nsp.to(room).emit('user_online_status', { conversationId, userId, isOnline: false });
+		};
+
 		socket.on('disconnect', () => {
+			for (const [conversationId, room] of joined) announceDeparture(conversationId, room);
+			joined.clear();
 			this.handleDisconnect(socket);
 		});
 
@@ -100,14 +113,17 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 					socket.emit('chat_error', { message: 'غير مصرح لك بالوصول إلى هذه المحادثة' });
 					return;
 				}
-				socket.join(roomName);
-				console.log(`💬 Socket ${socket.id} joined conversation room: ${roomName}`);
-
-				// Notify room participants that user is online
+				if (!socket.connected) return;
+				await socket.join(roomName);
+				if (!socket.connected) return;
+				joined.set(data.conversationId, roomName);
+				for (const userId of new Set(peers(roomName))) {
+					if (userId !== authenticatedUserId) socket.emit('user_online_status', {
+						conversationId: data.conversationId, userId, isOnline: true
+					});
+				}
 				socket.to(roomName).emit('user_online_status', {
-					conversationId: data.conversationId,
-					userId: authenticatedUserId,
-					isOnline: true
+					conversationId: data.conversationId, userId: authenticatedUserId, isOnline: true
 				});
 			} catch (err) {
 				console.error('[ChatGateway] Error in join_conversation:', err);
@@ -115,19 +131,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 		});
 
 		// Leave conversation room
-		socket.on('leave_conversation', async (data: { conversationId: string; userId: string }) => {
-			if (data?.conversationId) {
-				const authenticatedUserId = (socket as any).userId as string | undefined;
-				// Leaving needs no membership (a socket can only leave rooms it joined); the room name still depends on the context.
-				const conv = await prisma.conversation.findUnique({ where: { id: data.conversationId }, select: { id: true, kind: true, contractId: true } }).catch(() => null);
-				const roomName = roomNameFor(conv ?? { id: data.conversationId });
-				socket.leave(roomName);
-				socket.to(roomName).emit('user_online_status', {
-					conversationId: data.conversationId,
-					userId: authenticatedUserId,
-					isOnline: false
-				});
-			}
+		socket.on('leave_conversation', async (data: { conversationId: string }) => {
+			const room = joined.get(data?.conversationId);
+			if (!room) return;
+			joined.delete(data.conversationId);
+			await socket.leave(room);
+			announceDeparture(data.conversationId, room);
 		});
 
 		// 2. send_message: Persists message via Prisma, emits `new_message` to room, and pushes notification
@@ -211,18 +220,22 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 		});
 
 		// 3. typing_status: Emits real-time "typing..." indicator
-		socket.on('typing_status', async (data: { conversationId: string; userId: string; isTyping: boolean; userName?: string }) => {
-			if (!data?.conversationId) return;
-			const authenticatedUserId = (socket as any).userId as string | undefined;
-			if (!authenticatedUserId) return;
-			const roomName = await participantRoom(data.conversationId);
-			if (!roomName) return;
-			socket.to(roomName).emit('typing_indicator', {
-				conversationId: data.conversationId,
-				userId: authenticatedUserId,
-				userName: data.userName || 'مستخدم',
-				isTyping: data.isTyping
-			});
+		socket.on('typing_status', async (data: { conversationId: string; isTyping: boolean; userName?: string }) => {
+			if (!data?.conversationId || typeof data.isTyping !== 'boolean') return;
+			const authenticatedUserId = (socket as Socket & { userId?: string }).userId;
+			if (!authenticatedUserId || !joined.has(data.conversationId)) return;
+			try {
+				const roomName = await participantRoom(data.conversationId);
+				if (!socket.connected || !roomName || joined.get(data.conversationId) !== roomName || !socket.rooms.has(roomName)) return;
+				socket.to(roomName).emit('typing_indicator', {
+					conversationId: data.conversationId,
+					userId: authenticatedUserId,
+					userName: typeof data.userName === 'string' ? data.userName.slice(0, 120) : 'مستخدم',
+					isTyping: data.isTyping
+				});
+			} catch (err) {
+				console.error('[ChatGateway] Error in typing_status:', err);
+			}
 		});
 
 		// 4. mark_as_read: Updates message statuses
