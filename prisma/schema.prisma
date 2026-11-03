@@ -143,6 +143,7 @@ model User {
 
   clientProjects   Project[]         @relation("ClientProjects")
   providerProjects Project[]         @relation("ProviderProjects")
+  savedClientRequests SavedClientRequest[]
   savedProjects    SavedProject[]    @relation("ProviderSavedProjects")
   proposals        Proposal[]
   projectProposals ProjectProposal[]
@@ -817,6 +818,18 @@ model SavedProject {
 
   @@unique([providerId, projectId])
   @@map("saved_projects")
+}
+
+model SavedClientRequest {
+  providerId String
+  requestId  String
+  createdAt  DateTime @default(now())
+  provider User @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  request ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@id([providerId, requestId])
+  @@index([requestId])
+  @@map("saved_client_requests")
 }
 
 model Proposal {
@@ -2664,6 +2677,7 @@ model ClientRequest {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  savedBy SavedClientRequest[]
   proposals Proposal[]
   reviews   Review[]
   disputes  Dispute[]

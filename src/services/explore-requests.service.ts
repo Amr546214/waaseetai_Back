@@ -62,7 +62,7 @@ export class ExploreRequestsService {
     ])).map(k => k.toLowerCase().trim()).filter(k => k.length > 0);
 
     // 2. Fetch active projects & client requests from DB
-    const [clientRequests, legacyProjects] = await Promise.all([
+    const [clientRequests, legacyProjects, legacySaved] = await Promise.all([
       prisma.clientRequest.findMany({
         where: {
           status: 'OPEN'
@@ -72,7 +72,8 @@ export class ExploreRequestsService {
           clientProfile: {
             include: { user: true }
           },
-          proposals: { where: { providerId } }
+          proposals: { where: { providerId } },
+          savedBy: { where: { providerId }, select: { providerId: true } }
         }
       }),
       prisma.project.findMany({
@@ -83,8 +84,10 @@ export class ExploreRequestsService {
           projectProposals: { where: { providerId } },
           savedBy: { where: { providerId } }
         }
-      })
+      }),
+      prisma.savedProject.findMany({ where: { providerId }, select: { projectId: true } })
     ]);
+    const legacySavedIds = new Set(legacySaved.map(row => row.projectId));
 
     // Process ClientRequests first (Primary source of truth)
     const unifiedList: any[] = [];
@@ -94,7 +97,7 @@ export class ExploreRequestsService {
       seenProjectIds.add(cr.id); // Mark ID as seen regardless of match result to prevent fallback to stale Project records
 
       const hasApplied = cr.proposals.length > 0;
-      const isSaved = false;
+      const isSaved = cr.savedBy.length > 0 || legacySavedIds.has(cr.id);
 
       const projectSpecialty = cr.specialty?.nameAr || cr.specialty?.name || '';
       const subSpecs = cr.subSpecialties || [];
@@ -328,36 +331,36 @@ export class ExploreRequestsService {
   }
 
   public async toggleSave(providerId: string, projectId: string) {
-    const existing = await prisma.savedProject.findUnique({
-      where: {
-        providerId_projectId: {
-          providerId,
-          projectId
-        }
-      }
-    });
-
-    let isSaved = false;
-    if (existing) {
-      await prisma.savedProject.delete({ where: { id: existing.id } });
-      isSaved = false;
-    } else {
-      await prisma.savedProject.create({
-        data: { providerId, projectId }
+    return prisma.$transaction(async tx => {
+      const request = await tx.clientRequest.findUnique({ where: { id: projectId }, select: { id: true } });
+      const legacyKey = { providerId, projectId };
+      const nativeKey = { providerId, requestId: projectId };
+      const legacy = await tx.savedProject.findUnique({ where: { providerId_projectId: legacyKey } });
+      const native = request && await tx.savedClientRequest.findUnique({
+        where: { providerId_requestId: nativeKey }
       });
-      isSaved = true;
-    }
 
-    // Recalculate updated total saved count
-    const savedCount = await prisma.savedProject.count({
-      where: { providerId }
+      const isSaved = !legacy && !native;
+      if (!isSaved) {
+        if (legacy) await tx.savedProject.deleteMany({ where: legacyKey });
+        if (native) await tx.savedClientRequest.deleteMany({ where: nativeKey });
+      } else if (request) {
+        await tx.savedClientRequest.upsert({
+          where: { providerId_requestId: nativeKey }, create: nativeKey, update: {}
+        });
+      } else {
+        await tx.savedProject.upsert({
+          where: { providerId_projectId: legacyKey }, create: legacyKey, update: {}
+        });
+      }
+
+      const [projects, requests] = await Promise.all([
+        tx.savedProject.findMany({ where: { providerId }, select: { projectId: true } }),
+        tx.savedClientRequest.findMany({ where: { providerId }, select: { requestId: true } })
+      ]);
+      const savedCount = new Set([...projects.map(row => row.projectId), ...requests.map(row => row.requestId)]).size;
+      return { projectId, isSaved, savedCount };
     });
-
-    return {
-      projectId,
-      isSaved,
-      savedCount
-    };
   }
 }
 
