@@ -140,17 +140,20 @@ export class ProjectProgressService {
     if (found.length) return;
     const contract = await prisma.contract.findUnique({ where: { id: contractId }, include: { project: true } });
     if (!contract) throw new AppError('العقد غير موجود', 404);
-    const proposal = contract.offerId
+    const frozen = (contract.terms as { milestones?: unknown } | null)?.milestones;
+    // An explicitly frozen list, even an empty one, is the signed source of truth.
+    // Never resurrect milestones from an earlier offer after negotiation.
+    const proposal = Array.isArray(frozen) ? null : contract.offerId
       ? await prisma.projectProposal.findUnique({ where: { id: contract.offerId }, include: { milestones: { orderBy: { stepOrder: 'asc' } } } })
       : await prisma.projectProposal.findFirst({ where: { projectId: contract.projectId, providerId: contract.providerId }, include: { milestones: { orderBy: { stepOrder: 'asc' } } } });
-    const frozen = Array.isArray((contract.terms as any)?.milestones) ? ((contract.terms as any).milestones as any[]) : [];
-    const candidates = [frozen, proposal?.milestones ?? []].filter(list => list.length > 0);
-    const source = candidates.find(list => stagesMatchContract(list, contract.price)) ?? null;
+    const candidates = Array.isArray(frozen) ? frozen : proposal?.milestones ?? [];
+    const source = stagesMatchContract(candidates, contract.price) ? candidates : null;
     if (candidates.length && !source) console.warn(`[ensureStages] contract ${contractId}: milestones do not add up to the price (${contract.price}); using one stage for the whole price`);
-    const items = source ?? [{
+    const items = (source ?? [{
       stepOrder: 1, title: 'تسليم المشروع النهائي', description: contract.project.description,
       days: contract.durationDays, percentage: 100, amount: contract.price
-    }];
+    }]).map((item, index) => ({ ...item, stepOrder: item.stepOrder || index + 1 }))
+      .sort((a, b) => a.stepOrder - b.stepOrder);
     try {
       await prisma.projectStage.createMany({ data: items.map((item: any, index: number) => ({
         contractId, stepOrder: item.stepOrder || index + 1, title: item.title, description: item.description,
