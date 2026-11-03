@@ -52,8 +52,9 @@ function createExploreMockPrisma(t: TestContext, opts: { providerSpecialties?: a
     providerProfile: {
       findUnique: async () => ({ providerSpecialties: opts.providerSpecialties ?? [] })
     },
+    savedProject: { findMany: async () => [] },
     clientRequest: {
-      findMany: async (args: any) => fixtures.filter(cr => cr.status === args?.where?.status)
+      findMany: async (args: any) => fixtures.filter(cr => cr.status === args?.where?.status).map(cr => ({ ...cr, savedBy: [] }))
     },
     project: {
       findMany: async () => []
@@ -149,7 +150,8 @@ function makeRequest(id: string, overrides: any = {}) {
 async function loadWith(t: TestContext, requests: any[], providerSpecialties: any[] = []) {
   t.mock.module('../config/db', { namedExports: { prisma: {
     providerProfile: { findUnique: async () => ({ providerSpecialties }) },
-    clientRequest: { findMany: async () => requests },
+    savedProject: { findMany: async () => [] },
+    clientRequest: { findMany: async () => requests.map(cr => ({ savedBy: [], ...cr })) },
     project: { findMany: async () => [] }
   } } });
   const { exploreRequestsService } = await import(`./explore-requests.service.ts?fixture=${Date.now()}-${Math.random()}`);
@@ -200,4 +202,42 @@ test('Batch 5: NEWEST sort is unchanged (createdAt desc)', async (t) => {
   ], DESIGN_SPECIALTY);
   const result = await service.getExploreRequests('provider-1', { sortBy: 'NEWEST' });
   assert.deepEqual(result.projects.map((p: any) => p.id), ['new', 'old']);
+});
+
+test('native and legacy bookmarks appear in the saved tab for the owning provider', async t => {
+  const native = new Set<string>();
+  const legacy = new Set(['other', 'provider']);
+  const mock = {
+    providerProfile: { findUnique: async () => null },
+    project: { findMany: async () => [] },
+    clientRequest: {
+      findUnique: async ({ where }: any) => ({ id: where.id }),
+      findMany: async (args: any) => {
+        const owner = args.include.savedBy.where.providerId;
+        return [
+          makeRequest('native', { savedBy: native.has(owner) ? [{ providerId: owner }] : [] }),
+          makeRequest('mirrored', { savedBy: [] })
+        ];
+      }
+    },
+    savedProject: {
+      findUnique: async ({ where }: any) =>
+        where.providerId_projectId.projectId === 'mirrored' && legacy.has(where.providerId_projectId.providerId) ? {} : null,
+      findMany: async ({ where }: any) => legacy.has(where.providerId) ? [{ projectId: 'mirrored' }] : [],
+      deleteMany: async ({ where }: any) => { legacy.delete(where.providerId); }
+    },
+    savedClientRequest: {
+      findUnique: async ({ where }: any) => where.providerId_requestId.requestId === 'native' && native.has(where.providerId_requestId.providerId) ? {} : null,
+      upsert: async ({ create }: any) => { native.add(create.providerId); },
+      findMany: async ({ where }: any) => native.has(where.providerId) ? [{ requestId: 'native' }] : []
+    },
+    $transaction: async (fn: (tx: unknown) => unknown) => fn(mock)
+  };
+  t.mock.module('../config/db', { namedExports: { prisma: mock } });
+  const { exploreRequestsService: service } = await import(`./explore-requests.service.ts?fixture=${Date.now()}-bookmarks`);
+  assert.deepEqual(await service.toggleSave('provider', 'native'), { projectId: 'native', isSaved: true, savedCount: 2 });
+  assert.equal((await service.getExploreRequests('provider', { tab: 'SAVED' })).projects.length, 2);
+  assert.deepEqual(await service.toggleSave('provider', 'mirrored'), { projectId: 'mirrored', isSaved: false, savedCount: 1 });
+  assert.equal((await service.getExploreRequests('provider', { tab: 'SAVED' })).projects.length, 1);
+  assert.equal((await service.getExploreRequests('other', { tab: 'SAVED' })).projects.length, 1);
 });
