@@ -524,6 +524,30 @@ export class NotificationService {
 		return dto;
 	}
 
+	/** Limit call reminders across server instances. A ringing call never waits for mail. */
+	public async notifyMeetingRequest(userId: string, senderId: string, conversationId: string, actionUrl: string): Promise<void> {
+		const lockKey = `meeting-request:${senderId}:${userId}`;
+		const row = await prisma.$transaction(async tx => {
+			await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+			const recent = await tx.notification.findFirst({
+				where: {
+					userId, type: 'MEETING_REQUEST',
+					createdAt: { gte: new Date(Date.now() - 5 * 60_000) },
+					metadata: { path: ['senderId'], equals: senderId }
+				}, select: { id: true }
+			});
+			if (recent) return null;
+			return tx.notification.create({
+				data: {
+					userId, title: 'دعوة اجتماع', message: 'لديك طلب اجتماع جديد. افتح المحادثة للاطلاع عليه.',
+					type: 'MEETING_REQUEST', category: 'PROJECTS', actionUrl,
+					actionText: 'فتح المحادثة', metadata: { senderId, conversationId }
+				}
+			});
+		});
+		if (row) await this.deliver(toDto(row));
+	}
+
 	/**
 	 * A chat message's notification. At most ONE unread CHAT notification exists per (recipient, conversation): while the recipient has not read it, the next messages of the
 	 * same conversation update that row (latest text, running count in metadata.unreadCount, createdAt bumped so it sorts first, same link) and push it as `notification_updated`

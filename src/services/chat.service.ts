@@ -68,10 +68,10 @@ export async function authorizeConversationForRole(
   conversationId: string,
   userId: string,
   activeRole: UserRole | string | null | undefined
-): Promise<{ id: string; kind: ConversationKind; contractId: string | null; projectId: string } | null> {
+): Promise<{ id: string; kind: ConversationKind; contractId: string | null; projectId: string; clientId: string; providerId: string } | null> {
   const roleFilter = conversationRoleFilter(userId, activeRole);
   if (!roleFilter) return null;
-  return prisma.conversation.findFirst({ where: { id: conversationId, ...roleFilter }, select: { id: true, kind: true, contractId: true, projectId: true } });
+  return prisma.conversation.findFirst({ where: { id: conversationId, ...roleFilter }, select: { id: true, kind: true, contractId: true, projectId: true, clientId: true, providerId: true } });
 }
 
 class ChatService {
