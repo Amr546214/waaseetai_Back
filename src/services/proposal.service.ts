@@ -154,21 +154,6 @@ export class ProposalService {
 			}
 		}
 
-		// Phase 4 — offers are only accepted while the request is genuinely open
-		// for bidding. IN_PROGRESS used to be accepted too, but in this lifecycle
-		// IN_PROGRESS means "both parties signed, escrow funded" (provider
-		// signContract / marketplace checkout) — letting new offers land on an
-		// already-contracted project (reachable by direct API call even though
-		// explore-requests only lists OPEN) re-opened comparison on a running
-		// project. Both mirrored records must agree the request is OPEN.
-		// ('PUBLISHED'/'UNDER_BIDDING' are not values of either status enum and
-		// were dead branches.)
-		if (project && project.status !== 'OPEN') {
-			throw new AppError('هذا المشروع غير متاح حالياً لاستقبال عروض جديدة', 422, undefined, 'PROJECT_NOT_OPEN');
-		}
-		if (clientRequest && clientRequest.status !== 'OPEN') {
-			throw new AppError('هذا المشروع غير متاح حالياً لاستقبال عروض جديدة', 422, undefined, 'PROJECT_NOT_OPEN');
-		}
 		if (targetClientId === providerId && process.env.NODE_ENV === 'production') {
 			throw new AppError('لا يمكنك تقديم عرض على طلبك الخاص', 403, undefined, 'OWN_PROJECT_OFFER');
 		}
@@ -196,6 +181,22 @@ export class ProposalService {
 
 		if (existingProjectProposal || existingProposal) {
 			throw new AppError(PROPOSAL_ALREADY_SUBMITTED_MESSAGE, 409, undefined, 'PROPOSAL_ALREADY_SUBMITTED');
+		}
+
+		// Phase 4 — offers are only accepted while the request is genuinely open
+		// for bidding. IN_PROGRESS used to be accepted too, but in this lifecycle
+		// IN_PROGRESS means "both parties signed, escrow funded" (provider
+		// signContract / marketplace checkout) — letting new offers land on an
+		// already-contracted project (reachable by direct API call even though
+		// explore-requests only lists OPEN) re-opened comparison on a running
+		// project. Both mirrored records must agree the request is OPEN.
+		// ('PUBLISHED'/'UNDER_BIDDING' are not values of either status enum and
+		// were dead branches.)
+		if (project && project.status !== 'OPEN') {
+			throw new AppError('هذا المشروع غير متاح حالياً لاستقبال عروض جديدة', 422, undefined, 'PROJECT_NOT_OPEN');
+		}
+		if (clientRequest && clientRequest.status !== 'OPEN') {
+			throw new AppError('هذا المشروع غير متاح حالياً لاستقبال عروض جديدة', 422, undefined, 'PROJECT_NOT_OPEN');
 		}
 
 		// 3. Defensive check: verify milestone percentages sum to exactly 100%

@@ -60,8 +60,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 		// event (join, send, typing, read receipts, calls). activeRole is always
 		// resolved fresh from the DB here rather than cached at connect time,
 		// since a long-lived socket can outlive a role switch made elsewhere.
-		const isConversationParticipant = async (conversationId: string): Promise<boolean> => Boolean(await participantRoom(conversationId));
-
 		// The Socket.IO room of a conversation the socket's user is a member of (null for a non-member / wrong role). A project room and a general
 		// room have different names, so a message of one context never reaches a listener of the other.
 		const participantRoom = async (conversationId: string): Promise<string | null> => {
@@ -265,17 +263,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 			const userId = (socket as any).userId as string;
 			console.log(`📹 [VideoCall] Call initiated by ${userId} in room ${roomName}`);
 			socket.to(roomName).emit('incoming_call', { ...data, callerId: userId });
-		});
-
-		// Fallback for direct user call signaling
-		socket.on('call_direct_user', async (data: { recipientId: string; callerId: string; callerName: string; offer: any; conversationId?: string; isVideo?: boolean }) => {
-			if (!data?.recipientId) return;
-			if (data.conversationId && !(await isConversationParticipant(data.conversationId))) return;
-			const userId = (socket as any).userId as string | undefined;
-			if (!userId) return;
-			if (io) {
-				io.to(`user_${data.recipientId}`).emit('incoming_call', { ...data, callerId: userId });
-			}
 		});
 
 		socket.on('answer_call', async (data: { conversationId: string; answer: any; responderId: string }) => {
