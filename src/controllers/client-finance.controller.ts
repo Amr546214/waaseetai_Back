@@ -32,3 +32,12 @@ export const getClientWallet = async (req: Request, res: Response, next: NextFun
     next(error);
   }
 };
+
+export const getClientWalletTransaction = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const clientId = (req as any).user?.id;
+    if (!clientId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+    const data = await clientFinanceService.getTransaction(clientId, String(req.params.id || ''));
+    return res.status(200).json({ success: true, data });
+  } catch (error) { next(error); }
+};
