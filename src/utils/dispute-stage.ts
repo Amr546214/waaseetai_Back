@@ -18,13 +18,13 @@ export const STAGE_DISPUTE_MIN_DESCRIPTION = 100;
 
 /** What the opener asks for. A request only: the admin decides, and nothing here moves money. */
 export const REQUESTED_RESOLUTIONS = {
-  REDELIVER_WITH_FIXES: 'إعادة التسليم بالتعديلات المطلوبة',
-  PARTIAL_REFUND: 'استرداد جزئي من الضمان',
-  FULL_REFUND: 'استرداد كامل للمرحلة',
-  ACCEPT_DELIVERY: 'اعتماد التسليم وصرف المرحلة',
-  EXTEND_DEADLINE: 'تمديد مدة المرحلة',
-  CLARIFY_SCOPE: 'توضيح نطاق العمل المتفق عليه',
-  OTHER: 'حل آخر تقترحه الإدارة'
+  REDELIVER_WITH_FIXES: 'طلب إعادة التسليم بالتعديلات المطلوبة',
+  PARTIAL_REFUND: 'طلب استرداد جزئي',
+  FULL_REFUND: 'طلب استرداد كامل للمرحلة',
+  ACCEPT_DELIVERY: 'طلب اعتماد التسليم',
+  EXTEND_DEADLINE: 'طلب تمديد مدة المرحلة',
+  CLARIFY_SCOPE: 'طلب توضيح نطاق العمل المتفق عليه',
+  OTHER: 'طلب حل آخر تقرره الإدارة'
 } as const;
 export type RequestedResolutionCode = keyof typeof REQUESTED_RESOLUTIONS;
 export const requestedResolutionLabel = (code: string | null | undefined) => (code && code in REQUESTED_RESOLUTIONS ? REQUESTED_RESOLUTIONS[code as RequestedResolutionCode] : null);

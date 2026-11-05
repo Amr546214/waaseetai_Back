@@ -88,7 +88,7 @@ test('pg: stage dispute is persisted (stage, reason, description, requested reso
 	assert.equal(row.stageId, w.stages[0].id); assert.equal(row.requestedResolution, 'REDELIVER_WITH_FIXES'); assert.equal(row.openedById, w.client.id); assert.equal(row.againstUserId, w.provider.id);
 	assert.equal(row.attachments.length, 2); assert.ok(row.attachments.every((a: any) => a.ownerId === w.client.id && a.requestKey === row.submissionKey && a.digest === row.submissionDigest));
 	const got = await e.call('GET', `/client/disputes/${row.id}`, w.client.id);
-	assert.equal(got.status, 200); assert.equal(got.json.data.stage.id, w.stages[0].id); assert.equal(got.json.data.requestedResolutionLabel, 'إعادة التسليم بالتعديلات المطلوبة'); assert.equal(got.json.data._count.attachments, 2);
+	assert.equal(got.status, 200); assert.equal(got.json.data.stage.id, w.stages[0].id); assert.equal(got.json.data.requestedResolutionLabel, 'طلب إعادة التسليم بالتعديلات المطلوبة'); assert.equal(got.json.data._count.attachments, 2);
 	// money untouched, project frozen
 	const esc = await w.prisma.escrow.findUnique({ where: { id: w.escrow.id } }); assert.equal(esc.status, 'HELD'); assert.equal(esc.releasedAmount ?? 0, 0);
 	assert.equal(got.json.data.projectFreeze.frozen, true);
