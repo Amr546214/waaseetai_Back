@@ -22,5 +22,7 @@ export const cancellationController = (side: CancellationViewer['side']) => {
 
 export const adminCancellationController = {
 	list: handler(async req => ({ data: await contractCancellationService.listForAdmin(typeof req.query.status === 'string' ? req.query.status : undefined, Number(req.query.page) || 1, Number(req.query.limit) || 20) })),
-	get: handler(async req => ({ data: await contractCancellationService.getForAdmin(String(req.params.id)) }))
+	get: handler(async req => ({ data: await contractCancellationService.getForAdmin(String(req.params.id), uid(req)) })),
+	/** Executes the agreed settlement (money + closing). The service re-checks disputes.resolve + payouts.send. */
+	settle: handler(async req => ({ data: await contractCancellationService.settle(uid(req), String(req.params.id), { releaseToProvider: req.body?.releaseToProvider, expectedHeldAmount: req.body?.expectedHeldAmount, reason: req.body?.reason }) }))
 };

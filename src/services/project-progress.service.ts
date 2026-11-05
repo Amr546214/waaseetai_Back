@@ -1,3 +1,4 @@
+import { assertNoAgreedCancellation, hasAgreedCancellation, CANCELLATION_FROZEN_MESSAGE } from './cancellation-freeze';
 import { isV2Escrow, splitRelease } from '../utils/escrow-commission';
 import { AmendmentStatus, ContractStatus, EscrowStatus, LogCategory, LogStatus, ProjectStageStatus, ProjectStatus, RequestStatus, StageDeliveryStatus } from '@prisma/client';
 import { prisma } from '../config/db';
@@ -224,6 +225,9 @@ export class ProjectProgressService {
     const released = contract.project.escrow?.releasedAmount || 0;
     const [openDispute, activeDisputeCount] = await Promise.all([getActiveDisputeForProject(contract.projectId, prisma), countActiveDisputes(contract.projectId, prisma)]);
     const disputeFreeze = freezeStateOf(activeDisputeCount, openDispute);
+    // Agreed mutual cancellation freezes approvals of NEW stages too (read model; the approval itself is refused server-side with 423).
+    const cancellationFrozen = await hasAgreedCancellation({ contractId: contract.id, projectId: contract.projectId });
+    const cancellationFreeze = { frozen: cancellationFrozen, reason: cancellationFrozen ? CANCELLATION_FROZEN_MESSAGE : null };
     // Derived end state: closed by an admin financial dispute decision (nothing stored, progress still counts only approved stages).
     const settlement = await adminSettlementFor({ projectId: contract.projectId });
     const state = contractDeliveryState(contract.status, persisted, contract.project.escrow, openDispute?.status || null);
@@ -307,7 +311,7 @@ export class ProjectProgressService {
       uploadBlockedReason: lifecycle.eligibility.upload.reason,
       lifecycle, financial: lifecycle.financial, operationalStatus: lifecycle.operationalStatus, closureReason: lifecycle.closureReason, completedByDelivery: lifecycle.completedByDelivery, closedBySettlement: lifecycle.closedBySettlement, hasActiveDispute: lifecycle.hasActiveDispute, eligibility: lifecycle.eligibility,
       // Dispute freeze (read model shared by both apps): approvals and releases are refused by the backend while `frozen`; the screens show `reason`.
-      disputeFreeze, activeDisputeCount: disputeFreeze.activeDisputeCount, activeDisputeId: disputeFreeze.disputeId, canApproveStage: approveProbe.allowed, approvalBlockedReason: approveProbe.reason,
+      disputeFreeze, activeDisputeCount: disputeFreeze.activeDisputeCount, activeDisputeId: disputeFreeze.disputeId, cancellationFreeze, canApproveStage: approveProbe.allowed && !cancellationFrozen, approvalBlockedReason: cancellationFrozen && approveProbe.allowed ? CANCELLATION_FROZEN_MESSAGE : approveProbe.reason,
       status: contract.status, statusLabel: settlement.settled ? SETTLED_LABEL_AR : (role === 'client' ? clientContractStatusLabel(contract.status, escrow.escrowFunded) : (contractStatusLabel[contract.status] || 'غير نشط')),
       adminSettled: adminSettledView(settlement),
       employee: contract.project.assignedEmployee ? { id: contract.project.assignedEmployee.id, name: contract.project.assignedEmployee.name, jobTitle: contract.project.assignedEmployee.jobTitle } : null,
@@ -464,6 +468,8 @@ export class ProjectProgressService {
         // its release are complete before the dispute exists). No money can be released past an open dispute.
         if (!(await lockProjectForFreezeCheck(tx, contract.projectId))) throw new AppError('تغيّرت حالة العقد أثناء المراجعة ولم يعد نشطًا. حدّث الصفحة', 409);
         await assertProjectNotFrozen(contract.projectId, tx);
+        // Mutual cancellation agreed: approving NEW stages (and releasing their payments) stops until the administration settles. Same lock order as the agreement.
+        await assertNoAgreedCancellation({ contractId: contract.id, projectId: contract.projectId }, tx);
       }
       if (decision === 'revision') {
         // Guarded the same way the approve path below is: an unconditional

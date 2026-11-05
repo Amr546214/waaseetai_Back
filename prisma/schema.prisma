@@ -3254,18 +3254,22 @@ model RegistrationEmailProof {
 
 enum CancellationRequestStatus {
   PENDING_OTHER_PARTY
-  ACCEPTED
+  /// both parties agreed: «تم الاتفاق — بانتظار التسوية». New stage approvals / releases are frozen; no money has moved yet.
+  AGREED_PENDING_SETTLEMENT
+  /// the administration executed the settlement and the contract and project were closed in the same transaction
+  SETTLED
   REJECTED
   WITHDRAWN
 }
 
-/// Where the money side of an ACCEPTED mutual cancellation stands. There is no approved settlement rule yet, so an accepted request only ever reaches PENDING_ADMIN_DECISION: nothing is refunded, released or closed by it.
+/// Where the money side of an agreed mutual cancellation stands: PENDING_ADMIN_DECISION until an administrator holding disputes.resolve + payouts.send executes the settlement (SETTLED).
 enum CancellationSettlementStatus {
   NOT_APPLICABLE
   PENDING_ADMIN_DECISION
+  SETTLED
 }
 
-/// «الإلغاء بالتراضي»: ONE party asks to end an ACTIVE contract by agreement and the other party accepts or rejects. Recorded only; it never moves escrow or changes the contract. At most one PENDING or ACCEPTED request per contract (partial unique index in the migration).
+/// «الإلغاء بالتراضي»: ONE party asks to end an ACTIVE contract by agreement and the other party accepts or rejects. Agreement alone moves no money (it freezes new stage approvals); the settlement is an explicit admin action. At most one PENDING or AGREED_PENDING_SETTLEMENT request per contract (partial unique index in the migration).
 model ContractCancellationRequest {
   id String @id @default(uuid())
 
@@ -3289,6 +3293,16 @@ model ContractCancellationRequest {
   respondedAt   DateTime?
   responseNote  String?   @db.Text
   withdrawnAt   DateTime?
+
+  /// Settlement (set once, in the same transaction that moves the money and closes the contract). USD only.
+  settledAt                DateTime?
+  settledById              String?
+  settlementReason         String?   @db.Text
+  settlementHeldBefore     Float?
+  settlementRefundToClient Float?
+  settlementReleaseToProvider Float?
+  settlementPlatformCommission Float?
+  settlementProviderNet    Float?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
