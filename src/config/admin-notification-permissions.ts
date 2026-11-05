@@ -4,6 +4,7 @@
  */
 export const ADMIN_NOTIFY_EVENT_PERMISSION = {
 	NEW_DISPUTE: 'disputes.view',
+	CANCELLATION_REQUESTED: 'disputes.view',
 	NEW_TICKET: 'support.review',
 	WITHDRAWAL_REQUESTED: 'withdrawals.review',
 	KYC_SUBMITTED: 'identity.review',
