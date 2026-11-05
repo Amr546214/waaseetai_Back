@@ -35,6 +35,7 @@ import { siteUrl } from '../utils/site-url';
 import { otpValidityText } from '../utils/otp-validity';
 import { brandNameInArabicText } from '../utils/brand';
 import { transactionalFrom, AUTO_MAIL_HEADERS } from '../utils/email-sender-name';
+import { readOfferTerms } from '../utils/contract-terms';
 
 function generateSlug(text: string): string {
 	if (!text) return `slug-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -1453,6 +1454,12 @@ export class ClientRequestsService {
 			price,
 			durationDays,
 			milestones: canonical?.milestones || [],
+			// The offer's own written terms, frozen with the contract so the signing page shows what the provider really wrote (nothing is invented or templated).
+			offerTerms: {
+				summary: canonical?.message ?? legacy?.coverLetter ?? null,
+				deliverables: canonical?.outputs ?? legacy?.workPlan ?? null,
+				advantages: canonical?.advantages ?? []
+			},
 			selectedAt: new Date().toISOString()
 		};
 
@@ -1574,6 +1581,7 @@ export class ClientRequestsService {
 		const providerName = contract.provider.providerProfile?.companyName
 			|| [contract.provider.firstName, contract.provider.lastName].filter(Boolean).join(' ')
 			|| 'مقدم الخدمة';
+		const offerTerms = readOfferTerms((contract.terms ?? null) as unknown);
 
 		return {
 			requestId,
@@ -1591,6 +1599,8 @@ export class ClientRequestsService {
 			milestones,
 			// No milestones in the frozen terms = the contract has one final delivery for the whole price.
 			singleDelivery: milestones.length === 0,
+			// What the provider wrote in the offer (frozen at selection); null for contracts frozen before this existed. Never templated text.
+			offerTerms,
 			provider: { id: contract.provider.id, name: providerName },
 			escrowFunded: escrow?.status === 'HELD',
 			otpTtlSeconds: CONTRACT_OTP_TTL_SECONDS
@@ -1728,7 +1738,9 @@ export class ClientRequestsService {
 		// Execute all state-modifying operations inside a strict interactive transaction
 		const { bidAmount, providerUserId, providerEmail, escrowAmount, projectName, clientName, userEmail } = await prisma.$transaction(async (tx) => {
 			// a. Mark OTP as used
-			await tx.otpVerification.delete({ where: { id: otpRecord.id } });
+			// A second tab / double submit with the same code finds it already consumed: a clean 409 (nothing debited), not a raw "record not found".
+			const consumed = await tx.otpVerification.deleteMany({ where: { id: otpRecord.id } });
+			if (consumed.count !== 1) throw new AppError('تم استخدام رمز التوقيع هذا مسبقاً أو تم توقيع العقد وتمويله. لم يتم خصم أي مبلغ', 409);
 
 			// a2. Authoritative contract transition (Phase 4). Guarded on the exact
 			// commercial snapshot read above (status, provider, price, terms
