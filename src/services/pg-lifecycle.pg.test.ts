@@ -51,7 +51,10 @@ const services = async () => ({
 });
 const openDispute = async (w: World, by: 'client' | 'provider' = 'client') => {
 	const { disputes } = await services();
-	return disputes.createForRequest(w.project.id, by === 'client' ? w.client.id : w.provider.id, by, { reason: 'نزاع QA', description: 'نزاع اختباري لحالة دورة الحياة', evidence: [] } as any);
+	// case 2: a project with a disputable stage needs that stage (and a 100+ char description); a project with none keeps the project-level dispute
+	const live = await w.prisma.projectStage.findMany({ where: { contractId: w.contract.id }, orderBy: { stepOrder: 'asc' } });
+	const eligible = live.find((s: any) => ['IN_PROGRESS', 'SUBMITTED', 'REVISION_REQUESTED'].includes(s.status));
+	return disputes.createForRequest(w.project.id, by === 'client' ? w.client.id : w.provider.id, by, { reason: 'نزاع QA', description: 'نزاع اختباري لحالة دورة الحياة. '.repeat(5), evidence: [], ...(eligible ? { stageId: eligible.id } : {}) } as any);
 };
 const snapshot = async (w: World) => {
 	const [stages, contract, project, escrow] = await Promise.all([
