@@ -1,10 +1,15 @@
 import { z } from 'zod';
 import { isFinancialCode } from '../utils/dispute-resolution';
+import { REQUESTED_RESOLUTIONS } from '../utils/dispute-stage';
 
 export const createDisputeSchema = z.object({
   reason: z.string().trim().min(2).max(120),
   description: z.string().trim().min(10).max(10000),
-  evidence: z.array(z.string().url()).max(10).optional().default([])
+  evidence: z.array(z.string().url()).max(10).optional().default([]),
+  // Case 2: the stage the dispute is about, what the opener asks for, and the UUID that makes a repeated submit return the same dispute.
+  stageId: z.string().trim().min(1).max(64).optional(),
+  requestedResolution: z.enum(Object.keys(REQUESTED_RESOLUTIONS) as [keyof typeof REQUESTED_RESOLUTIONS, ...Array<keyof typeof REQUESTED_RESOLUTIONS>]).optional(),
+  submissionKey: z.string().uuid().optional()
 });
 
 // The decision text is the short, public headline (<=120); the details go in the optional note. An EMPTY note is "no note", never a validation failure, and every

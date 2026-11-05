@@ -187,6 +187,7 @@ async function loadCreate(t: TestContext, opts: { request?: any; project?: any; 
     clientRequest: { findUnique: async () => opts.request ?? null },
     project: { findUnique: async () => opts.project ?? null, findFirst: async () => opts.project ?? null },
     proposal: { findFirst: async () => null },
+    projectStage: { findMany: async () => [] },
     dispute: { findFirst: async () => opts.existingDispute ?? null, create: createSpy },
     $queryRaw: async () => [{ id: 'c-1' }],
     $transaction: async (fn: any) => fn(prismaMock),
@@ -303,7 +304,7 @@ test('createForRequest: the marketplace project can be opened by its CONTRACT id
     clientRequest: { findUnique: async () => null },
     project: { findFirst: async ({ where }: any) => { seenWhere = where; return { id: 'proj-9', clientId: 'client-9', providerId: 'prov-9', contract: { id: 'contract-9', status: 'ACTIVE', clientId: 'client-9', providerId: 'prov-9' } }; } },
     dispute: { findFirst: async () => null, create: async ({ data }: any) => { created.push(data); return { id: 'd9', ...data, request: null, project: { id: 'proj-9', title: 'x' } }; } },
-    $transaction: async (fn: any) => fn({ $queryRaw: async () => [{ id: 'contract-9' }], dispute: { findFirst: async () => null, create: async ({ data }: any) => { created.push(data); return { id: 'd9', ...data, request: null, project: { id: 'proj-9', title: 'x' } }; } } })
+    $transaction: async (fn: any) => fn({ $queryRaw: async () => [{ id: 'contract-9' }], projectStage: { findMany: async () => [] }, dispute: { findFirst: async () => null, create: async ({ data }: any) => { created.push(data); return { id: 'd9', ...data, request: null, project: { id: 'proj-9', title: 'x' } }; } } })
   } } });
   t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { disputeOpened: async () => undefined } } });
   t.mock.module('./client-notifications.service', { namedExports: { clientNotifications: { send: async () => undefined }, clientNotificationFor: new Proxy({}, { get: () => () => ({}) }), CLIENT_ROUTES: {} } });

@@ -206,7 +206,7 @@ router.post(
   exploreRequestsController.toggleSave
 );
 
-router.post('/requests/:id/disputes', authenticate, requireActiveUser, providerOnly, openProviderDispute);
+router.post('/requests/:id/disputes', authenticate, requireActiveUser, providerOnly, caseFilesUpload, openProviderDispute);
 router.post('/requests/:id/rate', authenticate, requireActiveUser, providerOnly, rateAsProvider);
 router.get('/requests/:id/rating-status', authenticate, requireActiveUser, providerOnly, ratingStatusAsProvider);
 // the client's rating of ONE stage, read-only for the provider (the provider never rates a stage)

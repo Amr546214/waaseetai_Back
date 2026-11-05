@@ -1,9 +1,12 @@
+import { randomUUID } from 'node:crypto';
 import { AccountType, ContractStatus, DisputeStatus, EscrowStatus, LogCategory, LogStatus, Prisma, ProjectStatus, RequestStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError, fieldError, fieldErrorItem } from '../utils/app-error';
 import { CreateDisputeInput, ResolveDisputeFinancialInput, ResolveDisputeInput } from '../dtos/dispute.dto';
 import { isV2Escrow, splitRelease } from '../utils/escrow-commission';
 import { round2 } from '../utils/money';
+import { STAGE_DISPUTE_MIN_DESCRIPTION, stageDisputeBlockedReason, requestedResolutionLabel } from '../utils/dispute-stage';
+import { caseSubmissionDigest, cleanupCaseFiles, storeCaseFiles } from './case-attachments.service';
 import { resolutionLabelAr, type FinancialOutcomeSummary } from '../utils/dispute-resolution';
 import { ACTIVE_DISPUTE_STATUSES, getFreezeState, lockProjectForFreezeCheck } from './dispute-freeze.service';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
@@ -60,6 +63,9 @@ function toDisputeAiSummary(value: unknown): DisputeAiSummary | null {
   return { summary: v.summary, clientPerspective: v.clientPerspective, providerPerspective: v.providerPerspective };
 }
 
+const stageInclude = { select: { id: true, stepOrder: true, title: true, status: true, amount: true } } as const;
+const disputeCreateInclude = { _count: { select: { attachments: true } }, stage: stageInclude, request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } } } as const;
+
 const cap = (text: string | null | undefined, max = 1500) => (text ? text.slice(0, max) : '');
 
 export class DisputeService {
@@ -110,23 +116,62 @@ export class DisputeService {
     return { projectId: project.id, againstUserId: actor === 'client' ? (contract.providerId ?? project.providerId) : (contract.clientId ?? project.clientId) };
   }
 
-  async createForRequest(requestId: string, userId: string, actor: 'client' | 'provider', input: CreateDisputeInput) {
+  async createForRequest(requestId: string, userId: string, actor: 'client' | 'provider', input: CreateDisputeInput, files: Express.Multer.File[] = []) {
+    // One submit = one dispute. A repeated submit with the same key (double click, retry, second tab) returns the dispute it created; the same key with
+    // different content is refused. The digest covers the files too.
+    const digest = caseSubmissionDigest({ userId, requestId, reason: input.reason, description: input.description, evidence: input.evidence ?? [], stageId: input.stageId ?? null, requestedResolution: input.requestedResolution ?? null }, files);
+    const replay = async (key: string) => {
+      const saved = await prisma.dispute.findUnique({ where: { submissionKey: key }, include: disputeCreateInclude });
+      if (!saved) return null;
+      if (saved.openedById !== userId || saved.submissionDigest !== digest) throw new AppError('معرّف الإرسال مستخدم لنزاع مختلف؛ راجع قائمة نزاعاتك', 409);
+      return { ...saved, replayed: true as const };
+    };
+    if (input.submissionKey) { const saved = await replay(input.submissionKey); if (saved) return saved; }
     const legacyRequest = await prisma.clientRequest.findUnique({ where: { id: requestId }, select: { id: true } });
     const target = legacyRequest
       ? { requestId, projectId: (await prisma.project.findUnique({ where: { id: requestId }, select: { id: true } }))?.id, againstUserId: (await this.requestForActor(requestId, userId, actor)).againstUserId }
       : { requestId: undefined as string | undefined, ...(await this.projectForActor(requestId, userId, actor)) };
     const where = target.projectId ? { projectId: target.projectId } : { requestId };
+    const stageProjectId = target.projectId ?? requestId;
+    const batch = await storeCaseFiles(files, userId);
     // Same contract-row lock the stage approval takes before it releases money: a dispute opened "at the same moment" as an approval either
     // is seen by that approval (refused) or is created after the approval fully committed. Also closes the duplicate-open race.
-    const dispute = await prisma.$transaction(async tx => {
-      if (target.projectId) await lockProjectForFreezeCheck(tx, target.projectId);
-      const existing = await tx.dispute.findFirst({ where: { ...where, openedById: userId, status: { in: ACTIVE_DISPUTE_STATUSES } } });
-      if (existing) throw new AppError('لديك نزاع مفتوح مسبقاً لهذا الطلب', 409);
-      return tx.dispute.create({
-        data: { requestId: target.requestId, projectId: target.projectId, openedById: userId, againstUserId: target.againstUserId, reason: input.reason, description: input.description, evidence: input.evidence || [], status: DisputeStatus.OPEN },
-        include: { _count: { select: { attachments: true } }, request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } } }
+    let dispute;
+    try {
+      dispute = await prisma.$transaction(async tx => {
+        if (target.projectId) await lockProjectForFreezeCheck(tx, target.projectId);
+        // Stage rules run under that lock, so a stage approved a moment ago is seen as approved here.
+        const stages = await tx.projectStage.findMany({ where: { contract: { projectId: stageProjectId } }, select: { id: true, status: true } });
+        let stageId: string | undefined;
+        if (input.stageId) {
+          const stage = stages.find(item => item.id === input.stageId);
+          if (!stage) throw fieldError('stageId', 'المرحلة المختارة لا تتبع هذا المشروع');
+          const blocked = stageDisputeBlockedReason(stage.status);
+          if (blocked) throw fieldError('stageId', blocked);
+          if (input.description.length < STAGE_DISPUTE_MIN_DESCRIPTION) throw fieldError('description', `اشرح المشكلة بما لا يقل عن ${STAGE_DISPUTE_MIN_DESCRIPTION} حرف ليتمكن فريق الدعم من فهم موقفك`);
+          stageId = stage.id;
+        } else if (stages.some(item => stageDisputeBlockedReason(item.status) === null)) {
+          throw fieldError('stageId', 'اختر المرحلة المعنية بالنزاع');
+        }
+        const existing = await tx.dispute.findFirst({ where: { ...where, openedById: userId, status: { in: ACTIVE_DISPUTE_STATUSES } } });
+        if (existing) throw new AppError('لديك نزاع مفتوح مسبقاً لهذا الطلب', 409);
+        const requestKey = input.submissionKey ?? randomUUID();
+        return tx.dispute.create({
+          data: {
+            requestId: target.requestId, projectId: target.projectId, openedById: userId, againstUserId: target.againstUserId, reason: input.reason, description: input.description, evidence: input.evidence || [], status: DisputeStatus.OPEN,
+            stageId, requestedResolution: input.requestedResolution, submissionKey: input.submissionKey, submissionDigest: input.submissionKey ? digest : undefined,
+            attachments: batch.rows.length ? { create: batch.rows.map(row => ({ ...row, requestKey, digest })) } : undefined
+          },
+          include: disputeCreateInclude
+        });
       });
-    });
+    } catch (e) {
+      await cleanupCaseFiles(batch.stored);
+      // Two parallel submits with one key: the loser hits the unique key and answers with the winner's dispute.
+      // (or hits the open-dispute rule because the winner committed first: the winner IS this submit)
+      if (input.submissionKey && ((e as { code?: string })?.code === 'P2002' || (e instanceof AppError && e.statusCode === 409))) { const saved = await replay(input.submissionKey); if (saved) return saved; }
+      throw e;
+    }
     // The provider is the opener (confirmation) or the party the client opened it against.
     const disputedTitle = dispute.request?.title ?? dispute.project?.title ?? '';
     await providerNotifications.disputeOpened({ disputeId: dispute.id, providerId: actor === 'provider' ? userId : target.againstUserId, openedBy: actor, requestTitle: disputedTitle });
@@ -159,7 +204,7 @@ export class DisputeService {
     const safePage = Math.max(1, page); const safeLimit = Math.min(100, Math.max(1, limit));
     const where = status ? { status } : {};
     const [items, total, grouped] = await Promise.all([
-      prisma.dispute.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { _count: { select: { attachments: true } }, request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } }, openedBy: { select: { id: true, firstName: true, lastName: true, email: true } }, againstUser: { select: { id: true, firstName: true, lastName: true, email: true } } } }),
+      prisma.dispute.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { _count: { select: { attachments: true } }, stage: stageInclude, request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } }, openedBy: { select: { id: true, firstName: true, lastName: true, email: true } }, againstUser: { select: { id: true, firstName: true, lastName: true, email: true } } } }),
       prisma.dispute.count({ where }),
       prisma.dispute.groupBy({ by: ['status'], _count: { _all: true } })
     ]);
@@ -193,14 +238,14 @@ export class DisputeService {
     const safePage = Math.max(1, page); const safeLimit = Math.min(100, Math.max(1, limit));
     const where = { OR: [{ openedById: userId }, { againstUserId: userId }], ...(status ? { status } : {}) };
     const [items, total] = await Promise.all([
-      prisma.dispute.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { _count: { select: { attachments: true } }, request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } }, openedBy: { select: { id: true, firstName: true, lastName: true } }, againstUser: { select: { id: true, firstName: true, lastName: true } } } }),
+      prisma.dispute.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { _count: { select: { attachments: true } }, stage: stageInclude, request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } }, openedBy: { select: { id: true, firstName: true, lastName: true } }, againstUser: { select: { id: true, firstName: true, lastName: true } } } }),
       prisma.dispute.count({ where })
     ]);
     return { items, pagination: { page: safePage, limit: safeLimit, total, pages: Math.ceil(total / safeLimit) } };
   }
 
   async getForUser(id: string, userId: string) {
-    const dispute = await prisma.dispute.findUnique({ where: { id }, include: { _count: { select: { attachments: true } }, request: true, project: true, openedBy: { select: { id: true, firstName: true, lastName: true } }, againstUser: { select: { id: true, firstName: true, lastName: true } }, resolvedBy: { select: { id: true, firstName: true, lastName: true } } } });
+    const dispute = await prisma.dispute.findUnique({ where: { id }, include: { _count: { select: { attachments: true } }, stage: stageInclude, request: true, project: true, openedBy: { select: { id: true, firstName: true, lastName: true } }, againstUser: { select: { id: true, firstName: true, lastName: true } }, resolvedBy: { select: { id: true, firstName: true, lastName: true } } } });
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
     if (dispute.openedById !== userId && dispute.againstUserId !== userId) throw new AppError('لا تملك صلاحية الوصول لهذا النزاع', 403);
     // New read-only field `heldEscrowAmount`: the escrow amount still held for the dispute's project (null when there is no project/escrow).
@@ -216,14 +261,14 @@ export class DisputeService {
     const closed = dispute.status === DisputeStatus.RESOLVED || dispute.status === DisputeStatus.REJECTED;
     const financialOutcome = closed ? await this.financialOutcomeOf(dispute.id) : null;
     return {
-      ...dispute, heldEscrowAmount: held,
+      ...dispute, requestedResolutionLabel: requestedResolutionLabel(dispute.requestedResolution), heldEscrowAmount: held,
       resolutionLabel: resolutionLabelAr(dispute.resolution, !!financialOutcome), financialOutcome,
       projectFreeze: projectKey ? await getFreezeState(projectKey, prisma) : null
     };
   }
 
   async getForAdmin(id: string) {
-    const dispute = await prisma.dispute.findUnique({ where: { id }, include: { _count: { select: { attachments: true } }, request: true, project: true, openedBy: { select: { id: true, firstName: true, lastName: true, email: true } }, againstUser: { select: { id: true, firstName: true, lastName: true, email: true } }, resolvedBy: { select: { id: true, firstName: true, lastName: true } } } });
+    const dispute = await prisma.dispute.findUnique({ where: { id }, include: { _count: { select: { attachments: true } }, stage: stageInclude, request: true, project: true, openedBy: { select: { id: true, firstName: true, lastName: true, email: true } }, againstUser: { select: { id: true, firstName: true, lastName: true, email: true } }, resolvedBy: { select: { id: true, firstName: true, lastName: true } } } });
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
     const projectId = dispute.projectId ?? dispute.requestId;
     const [escrow, audit] = await Promise.all([
@@ -235,7 +280,7 @@ export class DisputeService {
     const assignment = audit.find(e => e.eventType === 'DISPUTE_ASSIGNED');
     const financialOutcome = (audit.find(e => e.eventType === 'DISPUTE_FINANCIAL_RESOLVED')?.context?.outcomeSummary as FinancialOutcomeSummary | undefined) ?? null;
     return {
-      ...dispute,
+      ...dispute, requestedResolutionLabel: requestedResolutionLabel(dispute.requestedResolution),
       resolutionLabel: resolutionLabelAr(dispute.resolution, !!financialOutcome), financialOutcome,
       projectFreeze: projectId ? await getFreezeState(projectId, prisma) : null,
       heldEscrowAmount: heldEscrowAmount(escrow, escrow?.project?.contract?.price),
