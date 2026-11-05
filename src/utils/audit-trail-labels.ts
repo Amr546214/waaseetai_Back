@@ -54,6 +54,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 	DISPUTE_NOTE: 'ملاحظة داخلية على نزاع',
 	DISPUTE_STATUS_CHANGED: 'تغيير حالة نزاع',
 	DISPUTE_FINANCIAL_RESOLVED: 'تسوية مالية لنزاع',
+	CANCELLATION_SETTLED: 'تسوية مالية لإلغاء بالتراضي',
 	TICKET_ASSIGNED: 'تكليف تذكرة',
 	TICKET_INTERNAL_NOTE: 'ملاحظة داخلية على تذكرة',
 	TICKET_PRIORITY_CHANGED: 'تغيير أولوية تذكرة',

@@ -330,7 +330,10 @@ test('STATIC: the only escrow/stage/contract money writers are project-progress 
   const root = join(__dirname, '..');
   const walk = (dir: string): string[] => readdirSync(dir).flatMap(n => { const p = join(dir, n); return statSync(p).isDirectory() ? walk(p) : p.endsWith('.ts') && !/\.test\.ts$/.test(p) ? [p] : []; });
   const writers = walk(root).filter(f => /(escrow|projectStage)\.(update|updateMany|upsert)\(/.test(readFileSync(f, 'utf8'))).map(f => f.slice(root.length + 1)).sort();
-  assert.deepEqual(writers, ['services/amendment-apply.service.ts', 'services/client-requests.service.ts', 'services/dispute.service.ts', 'services/project-progress.service.ts']);
+  assert.deepEqual(writers, ['services/amendment-apply.service.ts', 'services/client-requests.service.ts', 'services/contract-cancellation.service.ts', 'services/dispute.service.ts', 'services/project-progress.service.ts']);
+  // the mutual-cancellation settlement is the 5th writer: contract lock + dispute freeze check + financial permission pair, inside its single transaction
+  const cancel = readFileSync(join(root, 'services/contract-cancellation.service.ts'), 'utf8');
+  assert.match(cancel, /lockProjectForFreezeCheck/); assert.match(cancel, /assertProjectNotFrozen/); assert.match(cancel, /disputes\.resolve', 'payouts\.send/);
   // the amendment applier is the 4th writer: it must refuse while a dispute is active (inside its own transaction, after taking the contract lock)
   const amend = readFileSync(join(root, 'services/amendment-apply.service.ts'), 'utf8');
   assert.match(amend, /hasActiveDispute/);
