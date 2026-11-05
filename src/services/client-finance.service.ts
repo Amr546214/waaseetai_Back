@@ -54,6 +54,9 @@ const failedDepositRow = (p: any) => ({
   createdAt: p.createdAt
 });
 
+// the counterpart's name as the project room already shows it to the client; null when no provider is assigned yet
+const providerName = (u: { firstName?: string | null; lastName?: string | null } | null | undefined) => (u ? `${u.firstName || ''} ${u.lastName || ''}`.trim() || null : null);
+
 const NOT_FOUND = 'المعاملة غير موجودة أو لا تملك صلاحية الوصول إليها';
 
 const buildInvoice = (contract: any, stage: any, delivery: any) => {
@@ -169,11 +172,11 @@ export class ClientFinanceService {
 
     if (id.startsWith('escrow-')) {
       const escrowId = id.slice('escrow-'.length);
-      const project = await prisma.project.findFirst({ where: { clientId, escrow: { is: { id: escrowId } } }, include: { escrow: true } });
+      const project = await prisma.project.findFirst({ where: { clientId, escrow: { is: { id: escrowId } } }, include: { escrow: true, provider: { select: { firstName: true, lastName: true } } } });
       if (!project || !project.escrow) throw new AppError(NOT_FOUND, 404);
       return {
         ...escrowRow(project),
-        project: { id: project.id, title: project.title },
+        project: { id: project.id, title: project.title, providerName: providerName(project.provider) },
         escrow: { amount: round2(project.escrow.amount), releasedAmount: round2(project.escrow.releasedAmount), status: project.escrow.status }
       };
     }
@@ -189,8 +192,8 @@ export class ClientFinanceService {
     // The project is shown only when the stored metadata names one that is THIS client's.
     const meta = tx.metadata && typeof tx.metadata === 'object' && !Array.isArray(tx.metadata) ? (tx.metadata as Record<string, unknown>) : {};
     const projectId = typeof meta.projectId === 'string' ? meta.projectId : null;
-    const project = projectId ? await prisma.project.findFirst({ where: { id: projectId, clientId }, select: { id: true, title: true } }) : null;
-    return { ...walletRow(tx), project, escrow: null };
+    const project = projectId ? await prisma.project.findFirst({ where: { id: projectId, clientId }, select: { id: true, title: true, provider: { select: { firstName: true, lastName: true } } } }) : null;
+    return { ...walletRow(tx), project: project ? { id: project.id, title: project.title, providerName: providerName(project.provider) } : null, escrow: null };
   }
 
   /**

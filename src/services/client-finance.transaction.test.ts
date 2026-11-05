@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 const OWN = 'client-1';
 const wtx = { id: 'tx-1', userId: OWN, type: 'DEPOSIT', amount: 50, currency: 'USD', status: 'COMPLETED', paymentMethod: 'PAYPAL', referenceId: 'CAP-1', description: null, metadata: null, createdAt: new Date('2026-02-01') };
 const amend = { id: 'tx-2', userId: OWN, type: 'AMENDMENT_TOPUP', amount: -20, currency: 'USD', status: 'COMPLETED', paymentMethod: 'WALLET', referenceId: 'am-1', description: 'x', metadata: { projectId: 'p-1' }, createdAt: new Date('2026-02-02') };
-const escrowProject = { id: 'p-1', clientId: OWN, title: 'مشروع', escrow: { id: 'e-1', amount: 300, releasedAmount: 100, status: 'HELD', paymentMethod: null, paymentReference: 'REF-E', fundedAt: new Date('2026-03-01'), createdAt: new Date('2026-03-01') } };
+const escrowProject = { id: 'p-1', clientId: OWN, title: 'مشروع', provider: { firstName: 'سارة', lastName: 'م' }, escrow: { id: 'e-1', amount: 300, releasedAmount: 100, status: 'HELD', paymentMethod: null, paymentReference: 'REF-E', fundedAt: new Date('2026-03-01'), createdAt: new Date('2026-03-01') } };
 const failedPay = { id: 'pp-1', userId: OWN, status: 'FAILED', amount: 10, netAmount: null, currency: 'USD', reference: 'R-F', createdAt: new Date('2026-04-01') };
 
 async function load(t: TestContext) {
@@ -14,7 +14,7 @@ async function load(t: TestContext) {
 		walletTransaction: { findFirst: async ({ where }: any) => [wtx, amend].find(r => r.id === where.id && r.userId === where.userId) ?? null },
 		project: { findFirst: async ({ where }: any) => {
 			if (where.escrow) return where.clientId === OWN && where.escrow.is.id === 'e-1' ? escrowProject : null;
-			return where.id === 'p-1' && where.clientId === OWN ? { id: 'p-1', title: 'مشروع' } : null;
+			return where.id === 'p-1' && where.clientId === OWN ? { id: 'p-1', title: 'مشروع', provider: null } : null;
 		} },
 		paypalPayment: { findFirst: async ({ where }: any) => where.id === failedPay.id && where.userId === OWN && where.status === 'FAILED' ? failedPay : null }
 	};
@@ -34,13 +34,13 @@ test('getTransaction: the owner reads a stored wallet transaction with its real 
 
 test('getTransaction: a stored row whose metadata names the client\'s project returns that project', async (t) => {
 	const s = await load(t);
-	assert.deepEqual((await s.getTransaction(OWN, 'tx-2')).project, { id: 'p-1', title: 'مشروع' });
+	assert.deepEqual((await s.getTransaction(OWN, 'tx-2')).project, { id: 'p-1', title: 'مشروع', providerName: null });
 });
 
 test('getTransaction: an escrow-<id> row returns the held / released amounts and the project', async (t) => {
 	const s = await load(t);
 	const r = await s.getTransaction(OWN, 'escrow-e-1');
-	assert.equal(r.type, 'ESCROW_LOCK'); assert.equal(r.status, 'HELD'); assert.equal(r.project.id, 'p-1');
+	assert.equal(r.type, 'ESCROW_LOCK'); assert.equal(r.status, 'HELD'); assert.equal(r.project.id, 'p-1'); assert.equal(r.project.providerName, 'سارة م');
 	assert.deepEqual(r.escrow, { amount: 300, releasedAmount: 100, status: 'HELD' });
 });
 
