@@ -82,3 +82,17 @@ export function buildProviderContractView(
 		escrow: escrow ? { amount: escrow.amount, status: escrow.status } : null
 	};
 }
+
+export interface OfferTermsView { summary: string | null; deliverables: string | null; advantages: string[] }
+
+/** The offer's own written terms frozen in Contract.terms.offerTerms; null when absent (older contracts) or empty. Never throws, never invents text. */
+export function readOfferTerms(terms: unknown): OfferTermsView | null {
+	const obj = asObject(terms);
+	const raw = obj && obj.offerTerms && typeof obj.offerTerms === 'object' && !Array.isArray(obj.offerTerms) ? (obj.offerTerms as Record<string, unknown>) : null;
+	if (!raw) return null;
+	const long = (v: unknown) => (typeof v === 'string' ? v.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').trim().slice(0, 4000) : '');
+	const summary = long(raw.summary) || null;
+	const deliverables = long(raw.deliverables) || null;
+	const advantages = (Array.isArray(raw.advantages) ? raw.advantages : []).map(a => text(a, 200)).filter(Boolean).slice(0, 10);
+	return summary || deliverables || advantages.length ? { summary, deliverables, advantages } : null;
+}

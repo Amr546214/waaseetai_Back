@@ -77,3 +77,19 @@ test('the legacy mirror id of the selected offer matches the contract', async t 
   const ok: any = await read(t, { offerId: 'legacy-1', mirror: true });
   assert.equal(ok.ready, true);
 });
+
+test('the offer\'s own written terms are returned when frozen with the contract', async t => {
+  const r: any = await read(t, { contract: contract({ terms: { ...terms, offerTerms: { summary: 'نطاق العمل: هوية كاملة', deliverables: 'شعار + دليل', advantages: ['سرعة'] } } }) });
+  assert.deepEqual(r.offerTerms, { summary: 'نطاق العمل: هوية كاملة', deliverables: 'شعار + دليل', advantages: ['سرعة'] });
+});
+
+test('no offer terms are invented for an older contract, and no AI / accuracy / discount field exists', async t => {
+  const r: any = await read(t, {});
+  assert.equal(r.offerTerms, null);
+  for (const k of ['aiCheck', 'aiAccuracy', 'discount', 'accuracy']) assert.equal(k in r, false);
+});
+
+test('blank offer terms collapse to null', async t => {
+  const r: any = await read(t, { contract: contract({ terms: { ...terms, offerTerms: { summary: '  ', deliverables: null, advantages: [] } } }) });
+  assert.equal(r.offerTerms, null);
+});

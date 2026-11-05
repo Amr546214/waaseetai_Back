@@ -16,7 +16,7 @@ function setup(t: TestContext, o: { price?: number; wallet?: number; contractSta
   const contractRow = () => ({ id: CONTRACT, projectId: REQUEST, clientId: o.contractClient ?? CLIENT, providerId: PROVIDER, price, status: state.contractStatus, offerId: OFFER, termsVersion: 1 });
   const otp = { id: 'otp-1', attempts: 0, code: createHmac('sha256', process.env.OTP_SECRET!).update(`${CONTRACT}:${CODE}`).digest('hex') };
   const tx: any = {
-    otpVerification: { delete: async () => { state.otpDeleted++; return {}; } },
+    otpVerification: { delete: async () => { state.otpDeleted++; return {}; }, deleteMany: async () => { state.otpDeleted++; return { count: 1 }; } },
     contract: { updateMany: async () => { if (state.contractStatus !== 'PENDING_CLIENT_SIGNATURE') return { count: 0 }; state.contractStatus = 'PENDING_PROVIDER_SIGNATURE'; return { count: 1 }; } },
     proposal: { findFirst: async () => ({ id: OFFER, price, providerId: PROVIDER, clientRequestId: REQUEST, provider: { email: 'p@x.co' } }), update: async () => ({}), updateMany: async () => ({}) },
     projectProposal: { updateMany: async () => ({}) },
