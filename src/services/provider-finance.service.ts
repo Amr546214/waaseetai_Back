@@ -47,7 +47,8 @@ export class ProviderFinanceService {
       return isV2Escrow(escrow) && escrow.providerCommissionRateSnapshot != null ? providerNetEntitlement(price, escrow.providerCommissionRateSnapshot) : price;
     };
     const availableBalance = sumMoney(escrows.map(escrow => providerReleased(escrow)));
-    const escrowBalance = sumMoney(escrows.map(escrow => Math.max(0, entitlementOf(escrow) - providerReleased(escrow))));
+    // only a HELD escrow still has money waiting: a RELEASED / REFUNDED one (e.g. closed by a mutual-cancellation settlement) has nothing left for the provider
+    const escrowBalance = sumMoney(escrows.map(escrow => (escrow.status === 'HELD' ? Math.max(0, entitlementOf(escrow) - providerReleased(escrow)) : 0)));
     // availableBalance stays the total released earnings; withdrawableBalance is what a NEW request may still ask for (the server enforces the same figure).
     const reserved = await client.withdrawal.groupBy({ by: ['status'], where: { userId: providerId, status: { in: [...RESERVING_WITHDRAWAL_STATUSES] } }, _sum: { amount: true } });
     const sumOf = (statuses: readonly string[]) => round2(reserved.filter(r => statuses.includes(r.status)).reduce((sum, r) => sum + (r._sum.amount ?? 0), 0));
@@ -108,7 +109,25 @@ export class ProviderFinanceService {
         createdAt: escrow.updatedAt
       }] : [];
     });
-    const transactions = [...stageTransactions, ...legacyTransactions]
+    // A mutual-cancellation settlement credits the provider through the escrow (providerNetReleasedAmount, already in availableBalance above); this line makes that
+    // credit visible in the history with the same gross / commission / net split a stage release shows. Nothing is added to any balance here.
+    const settledCancellations = (await (client as any).contractCancellationRequest?.findMany({ where: { providerId, status: 'SETTLED', settlementReleaseToProvider: { gt: 0 } }, include: { contract: { select: { project: { select: { id: true, title: true } } } } } })) ?? [];
+    const cancellationTransactions = settledCancellations.map((r: any) => ({
+      id: `cancellation-settlement-${r.id}`,
+      type: 'credit' as const,
+      category: 'ESCROW_RELEASE' as const,
+      amount: round2(r.settlementProviderNet ?? r.settlementReleaseToProvider),
+      grossAmount: round2(r.settlementReleaseToProvider), platformCommission: round2(r.settlementPlatformCommission ?? 0),
+      currency: 'USD',
+      title: 'تسوية إلغاء بالتراضي',
+      description: `${r.contract?.project?.title ?? ''} · نصيبك من المتبقي في الضمان بعد خصم العمولة`.trim(),
+      projectId: r.projectId,
+      projectTitle: r.contract?.project?.title ?? null,
+      stageId: null,
+      status: 'COMPLETED' as const,
+      createdAt: r.settledAt ?? r.updatedAt
+    }));
+    const transactions = [...stageTransactions, ...legacyTransactions, ...cancellationTransactions]
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     const monthStart = new Date();
     monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);

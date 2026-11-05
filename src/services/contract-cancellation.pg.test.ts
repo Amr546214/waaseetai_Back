@@ -19,7 +19,7 @@ async function world(over: { contractStatus?: string; released?: number; submitt
 	const client = await mk('CLIENT_INDIVIDUAL', 'CLIENT', 'client'); const provider = await mk('PROVIDER_INDIVIDUAL', 'PROVIDER', 'prov'); const outsider = await mk('CLIENT_INDIVIDUAL', 'CLIENT', 'out');
 	const project = await prisma.project.create({ data: { id: id(), title: `QA cancel ${tag}`, description: 'synthetic', specialty: 'x', deliveryDays: 10, clientId: client.id, providerId: provider.id, status: 'IN_PROGRESS' } });
 	const contract = await prisma.contract.create({ data: { id: id(), projectId: project.id, clientId: client.id, providerId: provider.id, price: 20, durationDays: 14, phasesCount: 2, status: over.contractStatus ?? 'ACTIVE', signedAt: new Date() } });
-	const escrow = await prisma.escrow.create({ data: { id: id(), projectId: project.id, amount: 20, releasedAmount: over.released ?? 0, status: 'HELD', feePolicyVersion: 2, providerCommissionRateSnapshot: 12.75, providerCommissionLevelSnapshot: 1, providerCommissionSnapshotAt: new Date(), paymentMethod: 'WALLET', paymentReference: `PG-${tag}`, fundedAt: new Date() } });
+	const escrow = await prisma.escrow.create({ data: { id: id(), projectId: project.id, amount: 20, releasedAmount: over.released ?? 0, platformCommissionAmount: over.released ? Math.round(over.released * 12.75) / 100 : 0, providerNetReleasedAmount: over.released ? over.released - Math.round(over.released * 12.75) / 100 : 0, status: 'HELD', feePolicyVersion: 2, providerCommissionRateSnapshot: 12.75, providerCommissionLevelSnapshot: 1, providerCommissionSnapshotAt: new Date(), paymentMethod: 'WALLET', paymentReference: `PG-${tag}`, fundedAt: new Date() } });
 	const s1 = await prisma.projectStage.create({ data: { id: id(), contractId: contract.id, stepOrder: 1, title: 'S1', days: 7, percentage: 50, amount: 10, status: over.released ? 'APPROVED' : over.submitted ? 'SUBMITTED' : 'IN_PROGRESS' } });
 	if (over.submitted) await prisma.stageDelivery.create({ data: { id: id(), stageId: s1.id, providerId: provider.id, note: 'synthetic delivery note', status: 'SUBMITTED' } });
 	await prisma.projectStage.create({ data: { id: id(), contractId: contract.id, stepOrder: 2, title: 'S2', days: 7, percentage: 50, amount: 10, status: 'PENDING' } });
@@ -243,4 +243,68 @@ test('pg: views - parties see the new state, settlement amounts and frozen flag;
 	assert.equal(sp.paidStagesTotal, 10); assert.equal(sp.unapprovedStagesTotal, 10); assert.equal(sp.heldAmount, 10); assert.equal(sp.escrowReleased, 10); assert.equal(sp.stages.filter((x: any) => x.paid).length, 1); assert.equal(sp.canSettle, true); assert.equal(sp.commissionRatePercent, 12.75);
 	await s.settle(w.sa.id, id, { releaseToProvider: 2.5, expectedHeldAmount: 10, reason: 'تسوية بعد مرحلة واحدة' });
 	const cv: any = (await s.listForContract(w.V.c, w.contract.id)).requests[0]; assert.equal(cv.status, 'SETTLED'); assert.equal(cv.settlement.refundToClient, 7.5); assert.equal(cv.frozen, false);
+});
+
+
+// ───────────────────────── provider entitlement: the settled NET must become withdrawable, exactly once ─────────────────────────
+import { providerFinanceService } from './provider-finance.service';
+import { withdrawalService } from './withdrawal.service';
+import { commissionOn } from '../utils/escrow-commission';
+const wallet = async (w: Awaited<ReturnType<typeof world>>) => (await providerFinanceService.getWallet(w.provider.id)).summary;
+const withPaypal = async (w: Awaited<ReturnType<typeof world>>) => { await w.prisma.providerProfile.upsert({ where: { userId: w.provider.id }, update: { paypalPayoutEmail: `qa-${w.provider.id.slice(0, 6)}@pg.test` }, create: { userId: w.provider.id, paypalPayoutEmail: `qa-${w.provider.id.slice(0, 6)}@pg.test` } as any }); };
+const asProv = (w: Awaited<ReturnType<typeof world>>, amount: number) => withdrawalService.createForProvider(w.provider.id, { amount, method: 'paypal' } as any);
+
+test('pg: provider entitlement - the settled NET (after commission) lands in the REAL provider wallet read model exactly once: before 8.72 -> after 12.21', opts, async () => {
+	const s = await svc(); const w = await world({ released: 10 }); const id = await agree(w);
+	const before = await wallet(w);
+	assert.equal(before.availableBalance, 8.72, 'stage 1 (10 gross, 12.75%) = 1.28 commission, 8.72 net'); assert.equal(before.withdrawableBalance, 8.72); assert.equal(before.escrowBalance, 8.73, 'net entitlement 17.45 - 8.72 still waiting in escrow');
+	const out: any = await s.settle(w.sa.id, id, { releaseToProvider: 4, expectedHeldAmount: 10, reason: 'تسوية بعد المرحلة الأولى' });
+	const cumulative = commissionOn(14, 12.75); const expectedCommission = r2(cumulative - 1.28); const expectedNet = r2(4 - expectedCommission);
+	assert.equal(out.settlement.platformCommission, expectedCommission); assert.equal(out.settlement.providerNet, expectedNet); assert.equal(expectedNet, 3.49);
+	const after = await wallet(w);
+	assert.equal(r2(after.availableBalance - before.availableBalance), expectedNet, 'available balance rose by the provider NET share'); assert.equal(after.availableBalance, 12.21); assert.equal(after.withdrawableBalance, 12.21);
+	assert.equal(after.escrowBalance, 0, 'nothing is left "in escrow" for the provider once the engagement is settled');
+	const esc = await w.prisma.escrow.findUnique({ where: { id: w.escrow.id } }); assert.equal(esc.providerNetReleasedAmount, 12.21); assert.equal(esc.platformCommissionAmount, cumulative);
+	const tx = (await providerFinanceService.getWallet(w.provider.id)).transactions.find((x: any) => x.id === `cancellation-settlement-${id}`); assert.equal(tx.amount, 3.49); assert.equal(tx.grossAmount, 4); assert.equal(tx.currency, 'USD');
+});
+
+test('pg: replay and concurrent second admin never raise the provider balance again', opts, async () => {
+	const s = await svc(); const w = await world({ released: 10 }); const id = await agree(w); const a2 = await staff(w, FIN);
+	const input = { releaseToProvider: 4, expectedHeldAmount: 10, reason: 'تسوية بعد المرحلة الأولى' };
+	await s.settle(w.sa.id, id, input); const once = await wallet(w); assert.equal(once.availableBalance, 12.21);
+	await s.settle(w.sa.id, id, input); assert.deepEqual(await wallet(w), once, 're-confirm (same request, same amount)');
+	await Promise.all([code(s.settle(a2.id, id, input)), code(s.settle(w.sa.id, id, input)), code(s.settle(a2.id, id, { ...input, releaseToProvider: 5 }))]);
+	assert.deepEqual(await wallet(w), once, 'concurrent second admin: balance unchanged'); assert.equal((await w.prisma.escrow.findUnique({ where: { id: w.escrow.id } })).providerNetReleasedAmount, 12.21);
+	const w2 = await world({ released: 10 }); const id2 = await agree(w2); const a3 = await staff(w2, FIN);
+	await Promise.all([code(s.settle(w2.sa.id, id2, input)), code(s.settle(a3.id, id2, input))]); assert.equal((await wallet(w2)).availableBalance, 12.21, 'two admins at the same moment: credited once');
+});
+
+test('pg: refund-only (share 0) credits the provider NOTHING and leaves no phantom escrow balance', opts, async () => {
+	const s = await svc(); const w = await world({ released: 10 }); const id = await agree(w); const before = await wallet(w);
+	await s.settle(w.sa.id, id, { releaseToProvider: 0, expectedHeldAmount: 10, reason: 'استرداد كامل للعميل' }); const after = await wallet(w);
+	assert.equal(after.availableBalance, before.availableBalance); assert.equal(after.withdrawableBalance, 8.72); assert.equal(after.escrowBalance, 0);
+	assert.equal((await providerFinanceService.getWallet(w.provider.id)).transactions.some((x: any) => String(x.id).startsWith('cancellation-settlement-')), false);
+	assert.equal(Number((await w.prisma.user.findUnique({ where: { id: w.provider.id } })).walletBalance), 0);
+});
+
+test('pg: the settled net is withdrawable through the REAL withdrawal service: exactly that amount works, one cent more is refused, and nothing above the available amount ever passes', opts, async () => {
+	const s = await svc(); const w = await world({ released: 10 }); await withPaypal(w); const id = await agree(w);
+	await assert.rejects(() => asProv(w, 8.73), (e: any) => e.statusCode === 400, 'before settlement: more than the 8.72 available is refused');
+	const first: any = await asProv(w, 8.72); assert.equal(first.amount, 8.72);
+	assert.equal((await wallet(w)).withdrawableBalance, 0);
+	await s.settle(w.sa.id, id, { releaseToProvider: 4, expectedHeldAmount: 10, reason: 'تسوية بعد المرحلة الأولى' });
+	const mid = await wallet(w); assert.equal(mid.availableBalance, 12.21); assert.equal(mid.pendingWithdrawals, 8.72); assert.equal(mid.withdrawableBalance, 3.49, 'exactly the settled net is what is left to withdraw');
+	await assert.rejects(() => asProv(w, 3.5), (e: any) => e.statusCode === 400); await assert.rejects(() => asProv(w, 3.49 + 0.01), (e: any) => e.statusCode === 400);
+	const second: any = await asProv(w, 3.49); assert.equal(second.amount, 3.49);
+	const end = await wallet(w); assert.equal(end.withdrawableBalance, 0); assert.equal(end.pendingWithdrawals, 12.21);
+	await assert.rejects(() => asProv(w, 0.01), (e: any) => e.statusCode === 400, 'nothing above the available amount');
+	await s.settle(w.sa.id, id, { releaseToProvider: 4, expectedHeldAmount: 10, reason: 'تسوية بعد المرحلة الأولى' }); assert.equal((await wallet(w)).withdrawableBalance, 0, 're-confirm does not re-open withdrawable money');
+});
+
+test('pg: a normal stage approval and a settlement credit the provider through the SAME balance source (the escrow net), same commission rule', opts, async () => {
+	const a = await world({ submitted: true }); await projectProgressService.reviewDelivery(a.client.id, a.contract.id, a.s1.id, 'approve'); const viaStage = await wallet(a);
+	const b = await world(); const id = await agree(b); await (await svc()).settle(b.sa.id, id, { releaseToProvider: 10, expectedHeldAmount: 20, reason: 'نصيب يعادل مرحلة كاملة' }); const viaSettle = await wallet(b);
+	assert.equal(viaStage.availableBalance, 8.72); assert.equal(viaSettle.availableBalance, 8.72, 'a 10 gross share = the same 8.72 net a 10 stage approval gives');
+	const ea = await a.prisma.escrow.findUnique({ where: { id: a.escrow.id } }), eb = await b.prisma.escrow.findUnique({ where: { id: b.escrow.id } });
+	for (const k of ['releasedAmount', 'platformCommissionAmount', 'providerNetReleasedAmount', 'feePolicyVersion', 'providerCommissionRateSnapshot', 'providerCommissionLevelSnapshot']) assert.equal(eb[k], ea[k], k);
 });
