@@ -456,3 +456,23 @@ export interface KnowledgeSearchResponse {
   documents: KnowledgeSearchDocument[];
   retrievalMode: 'hybrid' | 'lexical';
 }
+
+// ── Identity field comparison (ID-compare brief 2026-11-06) ───────────────
+// CONTRACT ASSUMED FROM THE BRIEF — the real service endpoint is NOT available to verify against (owner's feat/identity-field-ocr work is missing).
+// Registered values go to the service only so ITS CODE can compare; the service passes ONLY the image to the model. The BE never logs the image.
+export type IdentityFieldName = 'fullName' | 'birthDate' | 'nationalId';
+export type IdentityFieldStatus = 'MATCH' | 'MISMATCH' | 'COULD_NOT_VERIFY';
+export interface IdentityCompareFieldsRequest {
+  requestId: string;
+  /** Base64 of the ID image (never logged). */
+  image: string;
+  imageMimeType: string;
+  registered: { fullName: string; birthDate: string; nationalId: string };
+}
+export interface IdentityFieldResult { status: IdentityFieldStatus; reason?: string }
+export interface IdentityCompareFieldsResponse {
+  requestId: string;
+  fields: Record<IdentityFieldName, IdentityFieldResult>;
+  model: { name: string; version: string };
+  readAt: string;
+}

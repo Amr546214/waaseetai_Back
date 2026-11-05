@@ -1,4 +1,5 @@
 import { UserRole } from '@prisma/client';
+import { identityFieldCheckService } from '../services/identity-field-check.service';
 import { prisma } from '../config/db';
 import { notifyAdmins } from './admin-notifications.service';
 import { ProfileSetupDto } from '../dtos/profile-setup.dto';
@@ -140,6 +141,7 @@ export class ProfileSetupService {
         identitySubmitted = true;
       }
     }
+    identityFieldCheckService.triggerSafe(userId, activeRole === UserRole.CLIENT ? 'CLIENT' : 'PROVIDER'); // advisory ID field check (flag off by default)
     return { ...result, identitySubmitted };
   }
 }
