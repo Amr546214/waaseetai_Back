@@ -1,4 +1,5 @@
 import { respondServiceError } from '../utils/known-service-errors';
+import { identityFieldCheckService } from '../services/identity-field-check.service';
 import { updateProviderPreferencesSchema } from '../dtos/provider-preferences.dto';
 import { publicKycRejectionReason, withoutInternalProviderNotes } from '../utils/provider-kyc-review';
 import { Request, Response, NextFunction } from 'express';
@@ -295,6 +296,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 				return updated;
 			}, { timeout: 20_000 });
 
+			identityFieldCheckService.triggerSafe(userId, 'PROVIDER'); // advisory ID field check (flag off by default); never blocks or decides
 			res.status(200).json({
 				success: true,
 				message: 'تم حفظ البيانات بنجاح',

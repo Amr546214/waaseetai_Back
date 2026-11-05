@@ -43,6 +43,8 @@ import type {
   TtsSynthesizeRequest,
   WaseetAiCitation,
   WaseetAiStreamEvent,
+  IdentityCompareFieldsRequest,
+  IdentityCompareFieldsResponse,
 } from './waseet-ai.types';
 
 // Centralized WaseetAI microservice client — the ONLY module in the backend
@@ -225,6 +227,18 @@ export class WaseetAiClient {
       isObject(d) && typeof d.attemptId === 'string' && typeof d.status === 'string',
       'GET'
     );
+  }
+
+  /** POST /v1/ai/identity/compare-fields — advisory per-field comparison of an ID image with the registered data (contract from the ID-compare brief;
+   *  NOT verified against a live service). Strict response validation: anything off is INVALID_RESPONSE, never guessed. The image is never logged. */
+  compareIdentityFields(body: IdentityCompareFieldsRequest, opts?: WaseetAiCallOptions): Promise<IdentityCompareFieldsResponse> {
+    const okField = (f: unknown) => isObject(f) && ['MATCH', 'MISMATCH', 'COULD_NOT_VERIFY'].includes(String(f.status)) &&
+      (f.reason === undefined || (typeof f.reason === 'string' && /^[A-Z0-9_]{1,40}$/.test(f.reason)));
+    return this.postJson('/v1/ai/identity/compare-fields', body, { ...opts, requestId: opts?.requestId ?? body.requestId }, (d) =>
+      isObject(d) && d.requestId === body.requestId && isObject(d.fields) &&
+      okField(d.fields.fullName) && okField(d.fields.birthDate) && okField(d.fields.nationalId) &&
+      isObject(d.model) && typeof d.model.name === 'string' && !!d.model.name && typeof d.model.version === 'string' && !!d.model.version &&
+      typeof d.readAt === 'string' && !Number.isNaN(Date.parse(d.readAt)));
   }
 
   /** AI-20 — POST /v1/ai/disputes/summary (routed to the paid/sensitive

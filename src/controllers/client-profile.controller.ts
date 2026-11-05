@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { identityFieldCheckService } from '../services/identity-field-check.service';
 import { prisma } from '../config/db';
 import { storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { assertKycFileValues } from '../utils/kyc-value-guard';
@@ -166,6 +167,7 @@ export class ClientProfileController {
       ]);
       // complete identity documents → a PENDING review record the admin can see (AUD-FND-000044); kycStatus follows it (never downgraded)
       await onboardingService.submitSetupDocuments(userId, { idNumber: result.idNumber, frontIdUrl: result.frontIdUrl, backIdUrl: result.backIdUrl }, { identityChanged: identitySubmissionChanged(stored, details, { front: frontIdUrl, back: backIdUrl }) });
+      identityFieldCheckService.triggerSafe(userId, 'CLIENT'); // advisory ID field check (flag IDENTITY_AUTO_CHECK, off by default); never blocks or decides
       const completion = computeClientCompletion({ user: currentUser || {}, clientProfile: result });
       const finalResult = await prisma.clientProfile.update({
         where: { userId },
@@ -251,6 +253,7 @@ export class ClientProfileController {
       if (identityArgs) {
         // a complete identity (id number + both documents) -> a PENDING review record the admin can see; never re-opened by an unchanged save
         await onboardingService.submitSetupDocuments(userId, { idNumber: result.idNumber, frontIdUrl: result.frontIdUrl, backIdUrl: result.backIdUrl }, { identityChanged: identitySubmissionChanged(stored, identityArgs.details, { front: identityArgs.front, back: identityArgs.back }) });
+        identityFieldCheckService.triggerSafe(userId, 'CLIENT');
       }
       const input = { user: currentUser || {}, clientProfile: result };
       const completionPercentage = computeClientCompletion(input);
