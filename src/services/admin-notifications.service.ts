@@ -14,6 +14,7 @@ import { sendAdminMailboxAlert } from './admin-mailbox-alert.service';
  */
 export const ADMIN_ROUTES = {
 	dispute: (id: string) => `/supper-admin-overview/disputes/${id}`,
+	cancellation: (id: string) => `/supper-admin-overview/cancellation-requests/${id}`,
 	ticket: (id: string) => `/supper-admin-overview/support/${id}`,
 	withdrawal: (id: string) => `/supper-admin-overview/withdrawals/${id}`,
 	kyc: '/supper-admin-overview/kyc',
@@ -21,7 +22,7 @@ export const ADMIN_ROUTES = {
 	risk: '/supper-admin-overview/risk-center'
 } as const;
 
-export type AdminNotifyEvent = 'NEW_DISPUTE' | 'NEW_TICKET' | 'WITHDRAWAL_REQUESTED' | 'KYC_SUBMITTED' | 'SUSPICIOUS_PAYMENT' | 'PAYOUT_FAILED';
+export type AdminNotifyEvent = 'NEW_DISPUTE' | 'CANCELLATION_REQUESTED' | 'NEW_TICKET' | 'WITHDRAWAL_REQUESTED' | 'KYC_SUBMITTED' | 'SUSPICIOUS_PAYMENT' | 'PAYOUT_FAILED';
 
 export interface AdminNotifyPayload {
 	/** Id of the dispute / ticket / withdrawal the link opens. */
@@ -38,6 +39,8 @@ const buildCopy = (event: AdminNotifyEvent, p: AdminNotifyPayload): { title: str
 	switch (event) {
 		case 'NEW_DISPUTE':
 			return { title: 'نزاع جديد', message: withRef('تم فتح نزاع جديد ويحتاج إلى مراجعة', p.ref), category: NotificationCategory.PROJECTS, actionUrl: p.id ? ADMIN_ROUTES.dispute(p.id) : '/supper-admin-overview/disputes', actionText: 'فتح النزاع' };
+		case 'CANCELLATION_REQUESTED':
+			return { title: 'طلب إلغاء بالتراضي', message: withRef('طلب إلغاء بالتراضي على عقد نشط، لم يُنقل أي مبلغ بعد', p.ref), category: NotificationCategory.PROJECTS, actionUrl: p.id ? ADMIN_ROUTES.cancellation(p.id) : '/supper-admin-overview/cancellation-requests', actionText: 'عرض الطلب' };
 		case 'NEW_TICKET':
 			return { title: 'تذكرة دعم جديدة', message: withRef('وصلت تذكرة دعم جديدة', p.ref), category: NotificationCategory.ALL, actionUrl: p.id ? ADMIN_ROUTES.ticket(p.id) : '/supper-admin-overview/support', actionText: 'فتح التذكرة' };
 		case 'WITHDRAWAL_REQUESTED':

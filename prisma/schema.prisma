@@ -1952,6 +1952,7 @@ model Contract {
   signedAt              DateTime?
   stages                ProjectStage[]
   amendments            ProjectAmendment[]
+  cancellationRequests  ContractCancellationRequest[]
   termsVersions         ContractTermsVersion[]
   projectConversation   Conversation?
   createdAt             DateTime               @default(now())
@@ -3249,4 +3250,53 @@ model RegistrationEmailProof {
 
   @@index([expiresAt])
   @@map("registration_email_proofs")
+}
+
+enum CancellationRequestStatus {
+  PENDING_OTHER_PARTY
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
+}
+
+/// Where the money side of an ACCEPTED mutual cancellation stands. There is no approved settlement rule yet, so an accepted request only ever reaches PENDING_ADMIN_DECISION: nothing is refunded, released or closed by it.
+enum CancellationSettlementStatus {
+  NOT_APPLICABLE
+  PENDING_ADMIN_DECISION
+}
+
+/// «الإلغاء بالتراضي»: ONE party asks to end an ACTIVE contract by agreement and the other party accepts or rejects. Recorded only; it never moves escrow or changes the contract. At most one PENDING or ACCEPTED request per contract (partial unique index in the migration).
+model ContractCancellationRequest {
+  id String @id @default(uuid())
+
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  projectId  String
+  clientId   String
+  providerId String
+
+  requestedById   String
+  requestedByRole AmendmentRequesterRole
+  reason          String
+  note            String?                @db.Text
+  /// Client-generated key: the same key from the same user returns the existing request instead of a second one.
+  requestKey      String?
+
+  status           CancellationRequestStatus    @default(PENDING_OTHER_PARTY)
+  settlementStatus CancellationSettlementStatus @default(NOT_APPLICABLE)
+
+  respondedById String?
+  respondedAt   DateTime?
+  responseNote  String?   @db.Text
+  withdrawnAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([requestedById, requestKey])
+  @@index([contractId, status])
+  @@index([clientId])
+  @@index([providerId])
+  @@index([status, createdAt])
+  @@map("contract_cancellation_requests")
 }
