@@ -52,12 +52,23 @@ export async function getDisputeAiSummary(req: Request, res: Response, next: Nex
   }
 }
 
+// JSON or multipart (fields + `attachments` files). Field problems answer with the field name so the modal can put the message under it.
+const DISPUTE_CREATE_FIELD_TEXT = { reason: 'اكتب سبب النزاع (حرفان على الأقل)', description: 'اشرح المشكلة بتفصيل كافٍ (10 أحرف على الأقل)', requestedResolution: 'اختر الحل الذي تطلبه', stageId: 'اختر المرحلة المعنية بالنزاع', submissionKey: 'معرّف الإرسال غير صالح', evidence: 'روابط الأدلة غير صالحة' };
+async function createDispute(req: Request, res: Response, actor: 'client' | 'provider') {
+  // multipart delivers one repeated field as a plain string
+  const raw = req.body && typeof req.body.evidence === 'string' ? { ...req.body, evidence: [req.body.evidence] } : req.body;
+  const parsed = createDisputeSchema.safeParse(raw);
+  if (!parsed.success) throw zodAppError(parsed.error.issues, 'بيانات النزاع غير صحيحة', DISPUTE_CREATE_FIELD_TEXT);
+  const data = await disputeService.createForRequest(String(req.params.id), actorId(req), actor, parsed.data, (req.files || []) as Express.Multer.File[]);
+  res.status('replayed' in data && data.replayed ? 200 : 201).json({ success: true, data });
+}
+
 export async function openClientDispute(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = createDisputeSchema.safeParse(req.body); if (!parsed.success) throw new AppError('بيانات النزاع غير صحيحة', 400); res.status(201).json({ success: true, data: await disputeService.createForRequest(String(req.params.id), actorId(req), 'client', parsed.data) }); } catch (error) { next(error); }
+  try { await createDispute(req, res, 'client'); } catch (error) { next(error); }
 }
 
 export async function openProviderDispute(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = createDisputeSchema.safeParse(req.body); if (!parsed.success) throw new AppError('بيانات النزاع غير صحيحة', 400); res.status(201).json({ success: true, data: await disputeService.createForRequest(String(req.params.id), actorId(req), 'provider', parsed.data) }); } catch (error) { next(error); }
+  try { await createDispute(req, res, 'provider'); } catch (error) { next(error); }
 }
 
 export async function cancelProviderRequest(req: Request, res: Response, next: NextFunction) {

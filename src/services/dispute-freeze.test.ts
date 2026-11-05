@@ -96,6 +96,7 @@ function makeWorld(t: TestContext, init: WorldInit = {}) {
     clientRequest: { findUnique: async () => null, updateMany: async ({ data }: any) => { st.requests.push(data.status); return { count: 1 }; } },
     proposal: { findFirst: async () => null },
     projectStage: {
+      findMany: async () => clone(st.stages),
       findFirst: async ({ where }: any) => {
         const found = where.stepOrder?.gt !== undefined ? st.stages.filter((s: Row) => s.stepOrder > where.stepOrder.gt).sort((a: Row, b: Row) => a.stepOrder - b.stepOrder)[0] : st.stages.find((s: Row) => s.id === where.id);
         return found ? clone(found) : null;
@@ -165,7 +166,7 @@ async function loadServices(t: TestContext, world: ReturnType<typeof makeWorld>)
 const dispute = (over: Row = {}): Row => ({ id: 'disp-x', projectId: 'project-1', requestId: null, openedById: 'client-1', againstUserId: 'provider-1', status: 'OPEN', createdAt: new Date(), ...over });
 const approve = (svc: any) => svc.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
 const frozen = (e: any) => e.statusCode === 423 && e.errors?.[0]?.code === 'PROJECT_FROZEN_BY_DISPUTE';
-const openInput = { reason: 'تأخر في التسليم', description: 'لم يتم التسليم في الموعد المتفق عليه' };
+const openInput = { reason: 'تأخر في التسليم', description: 'لم يتم التسليم في الموعد المتفق عليه. '.repeat(5), stageId: 'stage-1' };
 
 // ───────────────────────── freeze: helper semantics ─────────────────────────
 
@@ -287,7 +288,7 @@ test('RACE: the approval commits first (holds the lock) while a dispute is opene
   const g = w.gate('escrow.update');
   const approving = approve(projectProgressService);
   await g.reached;                                  // the approval holds the lock and is about to move money
-  const opening = disputeService.createForRequest('project-1', 'client-1', 'client', openInput);
+  const opening = disputeService.createForRequest('project-1', 'client-1', 'client', { ...openInput, stageId: 'stage-2' });
   await new Promise(r => setTimeout(r, 25));
   assert.equal(w.get().disputes.length, 0, 'the dispute cannot be inserted while the approval transaction is open');
   g.open();

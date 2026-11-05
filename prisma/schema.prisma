@@ -2080,6 +2080,7 @@ model ProjectStage {
   amendmentId  String?
   deliveries   StageDelivery[]
   stageReviews Review[]
+  disputes     Dispute[]
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
 
@@ -2321,12 +2322,19 @@ model Dispute {
   reason         String
   description    String         @db.Text
   evidence       String[]       @default([])
+  // Case 2 (stage dispute): the stage the dispute is about, what the opener asks for (a request only, never a settlement), and the idempotency key/digest of the submit.
+  stageId             String?
+  stage               ProjectStage?  @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  requestedResolution String?
+  submissionKey       String?        @unique
+  submissionDigest    String?
   resolution     String?
   resolutionNote String?        @db.Text
   resolvedAt     DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
+  @@index([stageId])
   @@index([status, createdAt])
   @@index([requestId])
   @@index([projectId])

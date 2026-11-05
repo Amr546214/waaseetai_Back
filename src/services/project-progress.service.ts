@@ -1,5 +1,6 @@
 import { isV2Escrow, splitRelease } from '../utils/escrow-commission';
 import { AmendmentStatus, ContractStatus, EscrowStatus, LogCategory, LogStatus, ProjectStageStatus, ProjectStatus, RequestStatus, StageDeliveryStatus } from '@prisma/client';
+import { stageDisputeBlockedReason } from '../utils/dispute-stage';
 import { prisma } from '../config/db';
 import { contractDeliveryState, editState, escrowFacts, stageDeliveryState } from '../utils/delivery-state';
 import { AppError } from '../utils/app-error';
@@ -236,6 +237,11 @@ export class ProjectProgressService {
     const approveProbe = evaluateAction({ ...lifecycleInput, viewer: { role: 'client', isOwner: true } }, 'approve', { id: 'probe', stepOrder: 1, status: 'SUBMITTED', amount: 0, deliveries: [{ status: 'SUBMITTED' }] });
     // Only the provider uploads; the client side of this shared endpoint never gets an upload permission.
     const mayUpload = role === 'provider';
+    const stageDisputability = (contractStatus: ContractStatus, settled: boolean, stageStatus: ProjectStageStatus) => {
+      const running = contractStatus === ContractStatus.ACTIVE || contractStatus === ContractStatus.DISPUTED;
+      const reason = settled || !running ? 'المشروع مغلق ولا يُفتح عليه نزاع جديد' : stageDisputeBlockedReason(stageStatus);
+      return { canDispute: reason === null, disputeBlockedReason: reason };
+    };
     const stages = persisted.map(stage => {
       const [status, statusText0] = stageLabels[stage.status];
       const ss = stageDeliveryState(contract.status, stage);
@@ -253,6 +259,8 @@ export class ProjectProgressService {
         lifecycle: lifecycleStage.get(stage.id),
         // The stage amount is "held" only while a funded escrow still holds it: never for a stage a settlement closed (its value is historical).
         amountHeld: lifecycleStage.get(stage.id)!.amountState === 'HELD',
+        // Case 2: may a dispute be opened on THIS stage (server rule; the modal only lists these). Never offered on a closed / settled project.
+        ...stageDisputability(contract.status, settlement.settled, stage.status),
         hasClientRating: !!stageReview,
         clientRating: stageReview?.rating || null,
         clientRatingComment: stageReview?.comment || null,
