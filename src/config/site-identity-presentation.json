@@ -2228,5 +2228,113 @@
         "label": "الحدود"
       }
     ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "client-wallet-deposit",
+    "label": "محفظة طالب الخدمة — إيداع رصيد",
+    "selector": "[data-site-action=\"client-wallet-deposit\"]",
+    "fields": [
+      {
+        "name": "--comp-client-wallet-deposit-radius",
+        "property": "border-radius",
+        "type": "length",
+        "label": "الزوايا",
+        "min": 0,
+        "max": 128
+      },
+      {
+        "name": "--comp-client-wallet-deposit-padding-x",
+        "property": "padding-inline",
+        "type": "length",
+        "label": "الحشو الأفقي",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-client-wallet-deposit-padding-y",
+        "property": "padding-block",
+        "type": "length",
+        "label": "الحشو الرأسي",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-client-wallet-deposit-height",
+        "property": "min-height",
+        "type": "length",
+        "label": "أقل ارتفاع",
+        "min": 16,
+        "max": 128
+      },
+      {
+        "name": "--comp-client-wallet-deposit-gap",
+        "property": "gap",
+        "type": "length",
+        "label": "المسافة",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-client-wallet-deposit-shadow",
+        "property": "box-shadow",
+        "type": "shadow",
+        "label": "الظل"
+      }
+    ]
+  },
+  {
+    "key": "tokens.components",
+    "id": "provider-wallet-withdraw",
+    "label": "محفظة مقدّم الخدمة — سحب الأرباح",
+    "selector": "[data-site-action=\"provider-wallet-withdraw\"]",
+    "fields": [
+      {
+        "name": "--comp-provider-wallet-withdraw-radius",
+        "property": "border-radius",
+        "type": "length",
+        "label": "الزوايا",
+        "min": 0,
+        "max": 128
+      },
+      {
+        "name": "--comp-provider-wallet-withdraw-padding-x",
+        "property": "padding-inline",
+        "type": "length",
+        "label": "الحشو الأفقي",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-provider-wallet-withdraw-padding-y",
+        "property": "padding-block",
+        "type": "length",
+        "label": "الحشو الرأسي",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-provider-wallet-withdraw-height",
+        "property": "min-height",
+        "type": "length",
+        "label": "أقل ارتفاع",
+        "min": 16,
+        "max": 128
+      },
+      {
+        "name": "--comp-provider-wallet-withdraw-gap",
+        "property": "gap",
+        "type": "length",
+        "label": "المسافة",
+        "min": 0,
+        "max": 64
+      },
+      {
+        "name": "--comp-provider-wallet-withdraw-shadow",
+        "property": "box-shadow",
+        "type": "shadow",
+        "label": "الظل"
+      }
+    ]
   }
 ]
