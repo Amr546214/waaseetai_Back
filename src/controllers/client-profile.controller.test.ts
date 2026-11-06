@@ -1,5 +1,6 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { identityGateTestDouble } from '../testing/identity-gate.test-double';
 
 // Phase 3D.2A: client-profile.controller.ts#saveSetupData() must recalculate
 // ClientProfile.completionPercentage from the FINAL post-write state after
@@ -65,6 +66,7 @@ function createSetupDataMockPrisma(t: TestContext) {
 
 async function loadControllerWithFixture(t: TestContext) {
   const mocks = createSetupDataMockPrisma(t);
+  t.mock.module('../services/identity-gate.service', { namedExports: identityGateTestDouble });
   t.mock.module('../config/db', { namedExports: { prisma: mocks.prismaMock } });
   const moduleUrl = `./client-profile.controller.ts?fixture=${Date.now()}-${Math.random()}`;
   const { clientProfileController } = await import(moduleUrl);

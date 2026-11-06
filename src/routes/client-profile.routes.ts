@@ -16,6 +16,8 @@ router.get('/public/:id', apiLimiter, clientProfileController.getPublicProfile);
 router.use(authenticate, requireActiveUser);
 
 router.get('/setup', clientProfileController.getSetupData);
+router.get('/setup/identity', clientProfileController.getIdentityState);
+router.put('/setup/identity', blockCompanySetup, clientProfileController.saveIdentityStep);
 router.post('/setup', blockCompanySetup, clientProfileController.saveSetupData);
 router.put('/setup/step/:step', blockCompanySetup, clientProfileController.saveSetupStep);
 router.post('/nafath-verify', clientProfileController.nafathVerify);

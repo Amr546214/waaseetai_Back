@@ -13,6 +13,7 @@ import { onboardingService } from '../services/onboarding.service';
 import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE, withoutLegacyPayoutFields } from '../utils/client-payout-fields';
 import { normalizeClientSetupBody, isClientSetupComplete } from '../utils/client-setup-payload';
 import { clientSetupSchema, clientSetupStepSchemas, ClientSetupStep } from '../dtos/client-profile-setup.dto';
+import { identityGateService, identityDigest } from '../services/identity-gate.service';
 import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
 
 export class ClientProfileController {
@@ -91,14 +92,15 @@ export class ClientProfileController {
         return res.status(400).json({ success: false, message: 'بيانات غير صحيحة، يرجى مراجعة الحقول المحددة', errors });
       }
       const payload = parsed.data;
+      await identityGateService.assertApproved(userId, 'CLIENT'); // the final submission needs the identity approved (server-side, not only the «التالي» button)
 
       // Extract specific group payloads
       const { details, identity, documents, agreements } = payload;
       const bank: any = payload.bank ?? {};
 
       // A VERIFIED account's identity (idNumber / dob) is frozen.
-      const stored = await prisma.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, kycStatus: true } });
-      assertVerifiedIdentityUnchanged(stored, details);
+      const stored = await prisma.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, kycStatus: true, frontIdUrl: true, backIdUrl: true, identityApprovedDigest: true } });
+      if (!stored?.identityApprovedDigest) assertVerifiedIdentityUnchanged(stored, details);
         const doc = documentUpdate(details, stored);
       
       // PayPal payout (PayPal-only platform): optional in setup for backward
@@ -168,6 +170,7 @@ export class ClientProfileController {
         }),
         prisma.user.findUnique({ where: { id: userId } })
       ]);
+      await identityGateService.cancelIfChanged('CLIENT', userId, identityDigest(stored)); // changed image/data cancels an approval
       // complete identity documents → a PENDING review record the admin can see (AUD-FND-000044); kycStatus follows it (never downgraded)
       await onboardingService.submitSetupDocuments(userId, { idNumber: result.idNumber, frontIdUrl: result.frontIdUrl, backIdUrl: result.backIdUrl }, { identityChanged: identitySubmissionChanged(stored, details, { front: frontIdUrl, back: backIdUrl }) });
       identityFieldCheckService.triggerSafe(userId, 'CLIENT'); // advisory ID field check (flag IDENTITY_AUTO_CHECK, off by default); never blocks or decides
@@ -196,6 +199,7 @@ export class ClientProfileController {
       const step = Number(req.params.step) as ClientSetupStep;
       const schema = clientSetupStepSchemas[step];
       if (!schema) return res.status(400).json({ success: false, message: 'خطوة غير معروفة' });
+      if (step > 2) await identityGateService.assertApproved(userId, 'CLIENT'); // steps after the identity step are closed until the identity is approved
       // PayPal is the only financial method: a bank / IBAN / account holder / wallet value is refused, never silently dropped.
       const forbidden = [...nonPaypalPayoutKeys(req.body), ...nonPaypalPayoutKeys((req.body as any)?.bank)];
       if (forbidden.length) {
@@ -210,13 +214,13 @@ export class ClientProfileController {
         return res.status(400).json({ success: false, message: 'بيانات غير صحيحة، يرجى مراجعة الحقول المحددة', errors });
       }
       const body: any = parsed.data;
-      const stored = await prisma.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, kycStatus: true } });
+      const stored = await prisma.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, kycStatus: true, frontIdUrl: true, backIdUrl: true, identityApprovedDigest: true } });
       const data: Record<string, unknown> = {};
       let identityArgs: { details: { idNumber?: string | null; dob?: string | null; idIssuingCountry?: string | null; idDocumentType?: string | null }; front?: string | null; back?: string | null } | null = null;
 
       if (step === 1) {
         const d = body.details;
-        assertVerifiedIdentityUnchanged(stored, d);
+        if (!stored?.identityApprovedDigest) assertVerifiedIdentityUnchanged(stored, d);
         const doc = documentUpdate(d, stored);
         // '' / null = not provided: a stored value is kept
         Object.assign(data, {
@@ -256,6 +260,7 @@ export class ClientProfileController {
         prisma.user.findUnique({ where: { id: userId } })
       ]);
       if (identityArgs) {
+        await identityGateService.cancelIfChanged('CLIENT', userId, identityDigest(stored));
         // a complete identity (id number + both documents) -> a PENDING review record the admin can see; never re-opened by an unchanged save
         await onboardingService.submitSetupDocuments(userId, { idNumber: result.idNumber, frontIdUrl: result.frontIdUrl, backIdUrl: result.backIdUrl }, { identityChanged: identitySubmissionChanged(stored, identityArgs.details, { front: identityArgs.front, back: identityArgs.back }) });
         identityFieldCheckService.triggerSafe(userId, 'CLIENT');
@@ -267,6 +272,19 @@ export class ClientProfileController {
     } catch (error) {
       next(error);
     }
+  }
+
+  // GET /api/client/profile/setup/identity — the identity-gate state of the caller (own data only)
+  public async getIdentityState(req: Request, res: Response, next: NextFunction) {
+    try { res.status(200).json({ success: true, data: await identityGateService.getState(req.user!.userId, 'CLIENT') }); } catch (error) { next(error); }
+  }
+
+  // PUT /api/client/profile/setup/identity — the identity step: saves data + files and STARTS the review (never advances anything)
+  public async saveIdentityStep(req: Request, res: Response, next: NextFunction) {
+    try {
+      const data = await identityGateService.saveIdentity(req.user!.userId, 'CLIENT', req.body);
+      res.status(200).json({ success: true, message: data.status === 'UNDER_REVIEW' ? 'الوثيقة قيد المراجعة' : 'تم حفظ بيانات الهوية', data });
+    } catch (error) { next(error); }
   }
 
   // C) POST /api/client/profile/nafath-verify

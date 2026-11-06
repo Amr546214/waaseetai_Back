@@ -1,5 +1,6 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { identityGateTestDouble } from '../testing/identity-gate.test-double';
 
 // provider-profile.controller.ts imports providerProfileService, which
 // transitively imports notification.service -> ../socket, which constructs
@@ -88,6 +89,7 @@ function createSetupDataMockPrisma(t: TestContext) {
 
 async function loadControllerWithFixture(t: TestContext) {
   const mocks = createSetupDataMockPrisma(t);
+  t.mock.module('../services/identity-gate.service', { namedExports: identityGateTestDouble });
   t.mock.module('../config/db', {
     namedExports: { prisma: mocks.prismaMock }
   });
