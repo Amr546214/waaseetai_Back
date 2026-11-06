@@ -38,3 +38,28 @@ test('run event cursor is validated and forwarded so later pages are reachable',
   await h.events(req, res); assert.equal(res.statusCode, 200); assert.deepEqual(calls[0][2], { after: 201 });
   const invalid = fixture({}, { after: '-1' }); await h.events(invalid.req, invalid.res); assert.equal(invalid.res.statusCode, 400); assert.equal(calls.length, 1);
 });
+
+function capabilitiesFixture(role = 'CLIENT') {
+  const { req, res } = fixture({});
+  req.user = { id: `verified-${role}`, activeRole: role, accountType: role === 'CLIENT' ? 'CLIENT_INDIVIDUAL' : 'PROVIDER_INDIVIDUAL' };
+  return { req, res };
+}
+test('capabilities: the AI service is asked once per role per cache window, and a ban is still checked on every request', async () => {
+  let calls = 0, banned = false, clock = 1_000;
+  const { createAssistantToolsHandlers: make, CAPABILITIES_CACHE_TTL_MS } = await import('./help-assistant-tools');
+  const h = make({ now: () => clock, isBlocked: async () => banned, client: { getCapabilities: async () => { calls++; return { models: [], voices: [] }; }, transcribe: async () => ({}), liveToken: async () => ({}), createRun: async () => ({}), runOperation: async () => ({}) } as any });
+  for (let i = 0; i < 40; i++) { const f = capabilitiesFixture(); await h.capabilities(f.req, f.res); assert.equal(f.res.statusCode, 200); assert.deepEqual(f.res.body, { success: true, data: { models: [], voices: [] } }); }
+  assert.equal(calls, 1);
+  const other = capabilitiesFixture('PROVIDER'); await h.capabilities(other.req, other.res); assert.equal(calls, 2, 'another role has its own entry');
+  banned = true; const b = capabilitiesFixture(); await h.capabilities(b.req, b.res); assert.equal(b.res.statusCode, 403); assert.equal(calls, 2, 'a banned account never reads the cache');
+  banned = false; clock += CAPABILITIES_CACHE_TTL_MS + 1; const again = capabilitiesFixture(); await h.capabilities(again.req, again.res); assert.equal(calls, 3, 'asked again once the window passed');
+});
+test('capabilities: a failed answer is not cached, concurrent first requests share one upstream call', async () => {
+  let calls = 0, fail = true;
+  const { createAssistantToolsHandlers: make } = await import('./help-assistant-tools');
+  const h = make({ isBlocked: async () => false, client: { getCapabilities: async () => { calls++; await new Promise(r => setTimeout(r, 15)); if (fail) throw new Error('upstream down'); return { models: [], voices: [] }; }, transcribe: async () => ({}), liveToken: async () => ({}), createRun: async () => ({}), runOperation: async () => ({}) } as any });
+  const first = capabilitiesFixture(); await h.capabilities(first.req, first.res); assert.equal(first.res.statusCode, 503);
+  fail = false; calls = 0;
+  const fs = [capabilitiesFixture(), capabilitiesFixture(), capabilitiesFixture()]; await Promise.all(fs.map(f => h.capabilities(f.req, f.res)));
+  assert.equal(calls, 1); for (const f of fs) assert.equal(f.res.statusCode, 200);
+});

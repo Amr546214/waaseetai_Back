@@ -24,6 +24,10 @@ export interface HelpAssistantTtsRouterOptions extends Partial<HelpAssistantTtsD
 export function createHelpAssistantTtsRouter(options: HelpAssistantTtsRouterOptions = {}): Router {
 	const router = Router();
 	const guards = options.guards ?? [authenticate, requireActiveUser, aiLimiter];
+	// GET /capabilities is configuration the dashboard asks for once per page load. It makes no model call (the answer is cached per role in
+	// help-assistant-tools), so it must not spend the account's 30 / 15 min AI budget: that starved the AI-bound routes (admin AI summaries,
+	// chat, tts) after a handful of page loads. It stays behind the global read tier and the same authentication.
+	const readGuards = options.guards ?? [authenticate, requireActiveUser];
 	const handler = createHelpAssistantTtsHandler({
 		client: options.client ?? waseetAiClient,
 		isBlocked:
@@ -37,7 +41,7 @@ export function createHelpAssistantTtsRouter(options: HelpAssistantTtsRouterOpti
 	router.post('/tts', ...guards, handler);
 	router.post('/chat', ...guards, createAssistantHttpHandler());
 	const tools = createAssistantToolsHandlers();
-	router.get('/capabilities', ...guards, tools.capabilities);
+	router.get('/capabilities', ...readGuards, tools.capabilities);
 	router.post('/stt', ...guards, tools.stt);
 	router.post('/live-token', ...guards, tools.live);
 	router.post('/runs', ...guards, tools.run);
