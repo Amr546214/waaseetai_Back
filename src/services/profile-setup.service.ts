@@ -47,7 +47,7 @@ export class ProfileSetupService {
     // Anything beyond the identity fields is a step after the identity step: closed until the CURRENT identity is approved (an identity-only save stays allowed).
     const identityKeys = new Set(['idNumber', 'idIssuingCountry', 'idDocumentType', 'frontId', 'backId', 'dob']);
     const beyondIdentity = Object.entries(dto as Record<string, unknown>).some(([k, v]) => !identityKeys.has(k) && v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && v.length === 0));
-    if (beyondIdentity) await identityGateService.assertApproved(userId, activeRole === UserRole.CLIENT ? 'CLIENT' : 'PROVIDER');
+    if (beyondIdentity) await identityGateService.assertApprovedForSubmission(userId, activeRole === UserRole.CLIENT ? 'CLIENT' : 'PROVIDER', dto);
     const doc = documentUpdate(dto, storedIdentity);
     if (!storedIdentity?.identityApprovedDigest) assertVerifiedIdentityUnchanged(storedIdentity, dto);
     assertKycFileValues([dto.frontId, dto.backId, dto.supportingDocs], userId);

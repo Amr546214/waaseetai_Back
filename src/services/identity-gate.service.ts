@@ -4,7 +4,7 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { documentUpdate } from '../utils/identity-document-context';
 import { assertKycFileValues } from '../utils/kyc-value-guard';
-import { assertVerifiedIdentityUnchanged } from '../utils/kyc-identity-guard';
+import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
 import { storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { publicKycRejectionReason } from '../utils/provider-kyc-review';
 import { notifyAdmins } from './admin-notifications.service';
@@ -24,6 +24,7 @@ export interface IdentityGateState {
   data: { idNumber: string | null; idIssuingCountry: string | null; idDocumentType: string | null; dob: string | null; hasFront: boolean; hasBack: boolean };
 }
 export const IDENTITY_NOT_APPROVED_MESSAGE = 'وثيقة الهوية لم تُعتمد بعد؛ لا يمكن المتابعة قبل اعتماد صورة الهوية وبياناتها الحالية';
+export const IDENTITY_EVIDENCE_CHANGED_MESSAGE = 'لا يمكن تغيير صورة الهوية أو بياناتها ضمن الإرسال النهائي؛ احفظ التغيير من خطوة الهوية وانتظر اعتماده ثم أرسل';
 export const IDENTITY_CHANGED_MESSAGE = 'تغيّرت صورة الهوية أو بياناتها أثناء المراجعة؛ راجع المستند الحالي ثم أعد القرار';
 
 const day = (v: unknown): string | null => { if (!v) return null; const d = v instanceof Date ? v : new Date(String(v)); return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10); };
@@ -96,6 +97,20 @@ export class IdentityGateService {
     const state = await this.getState(userId, party, db);
     if (state.canAdvance) return;
     throw new AppError(IDENTITY_NOT_APPROVED_MESSAGE, 409, [{ path: 'identity', field: 'identity', code: 'IDENTITY_NOT_APPROVED', message: IDENTITY_NOT_APPROVED_MESSAGE, status: state.status, rejectionReason: state.rejectionReason }], 'IDENTITY_NOT_APPROVED');
+  }
+
+  /**
+   * Gate for a SUBMISSION (a request that carries steps after the identity step): the CURRENT evidence must be approved AND the request must not change it
+   * (a new image, a different reference, or different identity data). Evaluated BEFORE any write: a refused submission persists nothing and leaves the approval as it was.
+   * Echoing the stored references / data unchanged is not a change.
+   */
+  async assertApprovedForSubmission(userId: string, party: GateParty, incoming: { idNumber?: unknown; idIssuingCountry?: unknown; idDocumentType?: unknown; dob?: unknown; frontId?: unknown; backId?: unknown }, db: any = prisma): Promise<void> {
+    await this.assertApproved(userId, party, db);
+    const stored = await model(db, party).findUnique({ where: { userId }, select: SELECT });
+    const differs = (value: unknown, current: string | null | undefined) => typeof value === 'string' && value.trim() !== '' && value !== current;
+    const changed = identitySubmissionChanged(stored, incoming, { front: differs(incoming.frontId, stored?.frontIdUrl), back: differs(incoming.backId, stored?.backIdUrl) });
+    if (!changed) return;
+    throw new AppError(IDENTITY_EVIDENCE_CHANGED_MESSAGE, 409, [{ path: 'identity', field: 'identity', code: 'IDENTITY_NOT_APPROVED', message: IDENTITY_EVIDENCE_CHANGED_MESSAGE, status: 'APPROVED', reason: 'EVIDENCE_CHANGED_IN_SUBMISSION', rejectionReason: null }], 'IDENTITY_NOT_APPROVED');
   }
 
   /** The approval digest to store when the admin approves (computed on the locked row by the caller); throws 409 when the admin reviewed older evidence. */

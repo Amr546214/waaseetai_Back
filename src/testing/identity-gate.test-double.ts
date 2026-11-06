@@ -3,7 +3,7 @@
  * The gate itself is tested over HTTP on real PostgreSQL in routes/identity-gate.pg.test.ts. Never imported by production code.
  */
 export const identityGateTestDouble = {
-  identityGateService: { assertApproved: async () => undefined, cancelIfChanged: async () => false, approvalDigest: () => 'test-digest', getState: async () => ({ status: 'APPROVED', canAdvance: true }), saveIdentity: async () => ({ status: 'UNDER_REVIEW', canAdvance: false }) },
+  identityGateService: { assertApproved: async () => undefined, assertApprovedForSubmission: async () => undefined, cancelIfChanged: async () => false, approvalDigest: () => 'test-digest', getState: async () => ({ status: 'APPROVED', canAdvance: true }), saveIdentity: async () => ({ status: 'UNDER_REVIEW', canAdvance: false }) },
   identityDigest: () => 'test-digest',
   deriveGateState: () => ({ status: 'APPROVED', canAdvance: true }),
   missingIdentityItems: () => [] as string[],
@@ -13,4 +13,5 @@ export const identityGateTestDouble = {
 export async function openIdentityGate(): Promise<void> {
   const { identityGateService } = await import('../services/identity-gate.service');
   identityGateService.assertApproved = async () => undefined;
+  identityGateService.assertApprovedForSubmission = async () => undefined;
 }

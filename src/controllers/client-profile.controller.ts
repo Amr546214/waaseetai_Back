@@ -83,6 +83,10 @@ export class ClientProfileController {
       // Known alternative names are mapped onto the canonical fields; an unknown field is a 400 (never accepted and silently dropped).
       const normalized = normalizeClientSetupBody(req.body);
       if (!normalized.ok) return res.status(400).json({ success: false, message: 'بعض الحقول غير مدعومة ولم يُحفظ شيء', errors: normalized.errors });
+      // The gate is answered BEFORE the field-level validation (a body that skips the identity step gets IDENTITY_NOT_APPROVED even if it is otherwise incomplete); only the structural
+      // check above (unknown / unsupported fields) comes first. The request's own identity changes are part of the evaluation (nothing is written when it changes approved evidence).
+      const rawBody: any = normalized.body ?? {};
+      await identityGateService.assertApprovedForSubmission(userId, 'CLIENT', { ...(rawBody.details && typeof rawBody.details === 'object' ? rawBody.details : {}), frontId: rawBody.identity?.frontId, backId: rawBody.identity?.backId });
       const parsed = clientSetupSchema.safeParse(normalized.body);
       if (!parsed.success) {
         const errors = parsed.error.issues.map(issue => {
@@ -92,7 +96,6 @@ export class ClientProfileController {
         return res.status(400).json({ success: false, message: 'بيانات غير صحيحة، يرجى مراجعة الحقول المحددة', errors });
       }
       const payload = parsed.data;
-      await identityGateService.assertApproved(userId, 'CLIENT'); // the final submission needs the identity approved (server-side, not only the «التالي» button)
 
       // Extract specific group payloads
       const { details, identity, documents, agreements } = payload;

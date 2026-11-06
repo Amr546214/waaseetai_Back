@@ -38,8 +38,9 @@ async function env() {
 		const client = (await import('./client-profile.routes')).default;
 		const provider = (await import('./provider-profile.routes')).default;
 		const admin = (await import('./admin-onboarding.routes')).default;
+		const profileRoutes = (await import('./profile/profile.routes')).default;
 		const app = express(); app.use(express.json({ limit: '30mb' }));
-		app.use('/client/profile', client); app.use('/provider/profile', provider); app.use('/admin/onboarding', admin);
+		app.use('/client/profile', client); app.use('/provider/profile', provider); app.use('/admin/onboarding', admin); app.use('/profile', profileRoutes);
 		app.use(globalErrorHandler as any);
 		const server = http.createServer(app); await new Promise<void>(r => server.listen(0, '127.0.0.1', () => r()));
 		const port = (server.address() as AddressInfo).port;
@@ -240,3 +241,86 @@ test('PG PROVIDER: pre-identity content (details / specialties) is still saved w
 	const r = await call('POST', '/provider/profile/setup', w.owner.id, { details: { country: 'EG', city: 'القاهرة' } });
 	assert.equal(r.status, 200, JSON.stringify(r.json));
 });
+
+/** What a FINAL submission sends for each party, with the identity echoed (stored refs / data unchanged) or changed. */
+const finalBody = (party: Party, identity: { frontId?: string; backId?: string }, over: Record<string, unknown> = {}) => party === 'CLIENT'
+	? { details: { ...DATA, country: 'مصر', city: 'القاهرة', occupation: 'مهندس', address: 'عنوان', bio: 'نبذة', ...over }, identity, documents: {}, agreements: { accurate: true, terms: true, privacy: true } }
+	: { details: { ...DATA, country: 'EG', city: 'القاهرة', ...over }, identity, agreements: { accurate: true, terms: true, privacy: true } };
+const finalUrl = (party: Party) => `${base(party)}/setup`;
+const approvedWorld = async (party: Party) => {
+	const w = await seed(party); await submit(w); await approve(w);
+	const p = await profile(w);
+	assert.equal((await state(w)).status, 'APPROVED');
+	return { w, p };
+};
+const unchanged = async (w: W, before: any) => {
+	const after = await profile(w);
+	assert.equal(after.kycStatus, 'VERIFIED'); assert.equal(after.identityApprovedDigest, before.identityApprovedDigest);
+	assert.equal(after.frontIdUrl, before.frontIdUrl); assert.equal(after.backIdUrl, before.backIdUrl); assert.equal(after.idNumber, before.idNumber);
+	assert.equal((await state(w)).status, 'APPROVED');
+};
+
+for (const party of ['CLIENT', 'PROVIDER'] as Party[]) {
+	test(`PG ${party}: the FINAL submission re-sending the identical stored refs/data keeps the approval (200)`, opts, async () => {
+		const { call } = await env(); const { w, p } = await approvedWorld(party);
+		const r = await call('POST', finalUrl(party), w.owner.id, finalBody(party, { frontId: p.frontIdUrl, backId: p.backIdUrl }));
+		assert.equal(r.status, 200, JSON.stringify(r.json));
+		await unchanged(w, p);
+		// no identity sent at all (empty = keep) also keeps it
+		const r2 = await call('POST', finalUrl(party), w.owner.id, finalBody(party, {}));
+		assert.equal(r2.status, 200, JSON.stringify(r2.json)); await unchanged(w, p);
+	});
+
+	test(`PG ${party}: a FINAL submission that changes the image refs or the identity data is refused (409 IDENTITY_NOT_APPROVED), nothing persisted, approval unchanged`, opts, async () => {
+		const { call } = await env(); const { w, p } = await approvedWorld(party);
+		const folder = party === 'CLIENT' ? 'clients' : 'providers';
+		const attempts: Array<[string, any]> = [
+			['new uploaded front', finalBody(party, { frontId: PNG(51), backId: p.backIdUrl })],
+			['new uploaded back', finalBody(party, { frontId: p.frontIdUrl, backId: PNG(52) })],
+			['a different stored-style ref', finalBody(party, { frontId: `private:image:png:waseetai/${folder}/${w.owner.id}/identity/other-ref` })],
+			['changed id number', finalBody(party, { frontId: p.frontIdUrl, backId: p.backIdUrl }, { idNumber: '29001011234568', bio: 'تغيير' })],
+			['changed document type', finalBody(party, {}, { idDocumentType: 'PASSPORT', idNumber: 'A1234567' })],
+			['changed dob', finalBody(party, {}, { dob: '1991-02-02' })]
+		];
+		for (const [label, body] of attempts) {
+			const r = await call('POST', finalUrl(party), w.owner.id, body);
+			assert.equal(r.status, 409, `${label}: ${JSON.stringify(r.json)}`);
+			assert.equal(r.json.code, 'IDENTITY_NOT_APPROVED', label); assert.equal(r.json.errors[0].reason, 'EVIDENCE_CHANGED_IN_SUBMISSION', label);
+			await unchanged(w, p);
+		}
+		const after = await profile(w);
+		assert.equal(after.dob?.toISOString().slice(0, 10), '1990-01-01', 'dob not written');
+		assert.notEqual(after.bio, 'تغيير', 'no other field of the refused submission was written');
+		assert.equal(after.agreedAt ?? null, null);
+	});
+
+	test(`PG ${party}: order of checks: a body that skips the identity step gets the gate error; structurally invalid -> 400; approved but incomplete -> 400 validation`, opts, async () => {
+		const { call } = await env(); const w = await seed(party);
+		const minimal = party === 'CLIENT' ? {} : { agreements: { accurate: true } };
+		let r = await call('POST', finalUrl(party), w.owner.id, minimal);
+		assert.equal(r.status, 409, JSON.stringify(r.json)); assert.equal(r.json.code, 'IDENTITY_NOT_APPROVED');
+		r = await call('POST', finalUrl(party), w.owner.id, { notAField: 1 });
+		assert.equal(r.status, 400, JSON.stringify(r.json)); assert.notEqual(r.json.code, 'IDENTITY_NOT_APPROVED'); // structural errors come first
+		await submit(w); await approve(w);
+		if (party === 'CLIENT') { r = await call('POST', finalUrl(party), w.owner.id, {}); assert.equal(r.status, 400, JSON.stringify(r.json)); assert.notEqual(r.json.code, 'IDENTITY_NOT_APPROVED'); }
+		else { r = await call('POST', finalUrl(party), w.owner.id, { agreements: { accurate: true } }); assert.notEqual(r.json?.code, 'IDENTITY_NOT_APPROVED'); }
+	});
+
+	test(`PG ${party}: /api/profile/setup beyond identity: unapproved 409, approved + unchanged evidence ok, approved + changed evidence 409 (nothing written)`, opts, async () => {
+		const { call } = await env(); const w = await seed(party);
+		const url = '/profile/setup';
+		let r = await call('POST', url, w.owner.id, { bio: 'نبذة' });
+		assert.equal(r.status, 409, JSON.stringify(r.json)); assert.equal(r.json.code, 'IDENTITY_NOT_APPROVED');
+		await submit(w); await approve(w); const p = await profile(w);
+		r = await call('POST', url, w.owner.id, { bio: 'نبذة', frontId: p.frontIdUrl, idNumber: p.idNumber, idIssuingCountry: 'EG', idDocumentType: 'NATIONAL_ID' });
+		assert.equal(r.status, 200, JSON.stringify(r.json)); await unchanged(w, p);
+		for (const body of [{ bio: 'x', frontId: PNG(61) }, { bio: 'x', idNumber: '29001011234569', idIssuingCountry: 'EG', idDocumentType: 'NATIONAL_ID' }]) {
+			r = await call('POST', url, w.owner.id, body);
+			assert.equal(r.status, 409, JSON.stringify(r.json)); assert.equal(r.json.code, 'IDENTITY_NOT_APPROVED'); await unchanged(w, p);
+		}
+		assert.notEqual((await profile(w)).bio, 'x');
+		// an identity-only save through this route is the identity step: it starts a review (no gate error)
+		r = await call('POST', url, w.owner.id, { frontId: PNG(62) });
+		assert.equal(r.status, 200, JSON.stringify(r.json)); assert.equal((await state(w)).status, 'UNDER_REVIEW');
+	});
+}

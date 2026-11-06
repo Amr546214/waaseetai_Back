@@ -168,7 +168,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		const { details, identity, documents, agreements, specialties } = normalized.value;
 		// Steps after the identity step (documents / agreements / business models / the final submission) are closed until the CURRENT identity is approved.
 		const postIdentityContent = (portfolio !== undefined && portfolio !== null) || Object.keys(documents ?? {}).length > 0 || Object.keys(agreements ?? {}).length > 0;
-		if (postIdentityContent) await identityGateService.assertApproved(userId, 'PROVIDER');
+		if (postIdentityContent) await identityGateService.assertApprovedForSubmission(userId, 'PROVIDER', { ...(details ?? {}), frontId: identity?.frontId, backId: identity?.backId });
 		// Business models (setup step 5): every chosen sub-specialty needs a model FILE and, for that model, at least one completed, owned, EXISTING proof of ownership
 		// that is a different file (checked only when `portfolio` is sent: the wizard submission). Decided BEFORE any write; stored files are kept through their stored row.
 		// `portfolio: null` (older callers) is not a submission, like an absent key.
