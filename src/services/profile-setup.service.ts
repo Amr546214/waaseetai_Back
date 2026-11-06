@@ -10,6 +10,7 @@ import { CONTACT_IMMUTABLE_MESSAGE } from '../utils/contact-policy';
 import { resolveSkillIdsFromCatalog } from './skills-catalog.service';
 import { assertKycFileValues } from '../utils/kyc-value-guard';
 import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
+import { identityGateService, identityDigest } from './identity-gate.service';
 import { onboardingService } from './onboarding.service';
 import { computeClientCompletion, computeProviderCompletion } from '../utils/completion-calculators';
 
@@ -42,9 +43,13 @@ export class ProfileSetupService {
     // Same identity handling as the main wizards (provider/client profile setup): a VERIFIED identity is frozen (409), KYC files are validated
     // and stored PRIVATE, and an unchanged re-save never re-opens a review.
     const profileModel: any = activeRole === UserRole.PROVIDER ? prisma.providerProfile : prisma.clientProfile;
-    const storedIdentity = await profileModel.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, kycStatus: true } });
+    const storedIdentity = await profileModel.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, kycStatus: true, frontIdUrl: true, backIdUrl: true, identityApprovedDigest: true } });
+    // Anything beyond the identity fields is a step after the identity step: closed until the CURRENT identity is approved (an identity-only save stays allowed).
+    const identityKeys = new Set(['idNumber', 'idIssuingCountry', 'idDocumentType', 'frontId', 'backId', 'dob']);
+    const beyondIdentity = Object.entries(dto as Record<string, unknown>).some(([k, v]) => !identityKeys.has(k) && v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && v.length === 0));
+    if (beyondIdentity) await identityGateService.assertApprovedForSubmission(userId, activeRole === UserRole.CLIENT ? 'CLIENT' : 'PROVIDER', dto);
     const doc = documentUpdate(dto, storedIdentity);
-    assertVerifiedIdentityUnchanged(storedIdentity, dto);
+    if (!storedIdentity?.identityApprovedDigest) assertVerifiedIdentityUnchanged(storedIdentity, dto);
     assertKycFileValues([dto.frontId, dto.backId, dto.supportingDocs], userId);
     const folder = activeRole === UserRole.PROVIDER ? 'providers' : 'clients';
     const [frontIdUrl, backIdUrl, supportingDocsUrl] = await Promise.all([
@@ -132,6 +137,7 @@ export class ProfileSetupService {
     });
 
     // Submitting a changed, complete identity opens (or refreshes) the same review the main wizards open; an unchanged re-save does not.
+    await identityGateService.cancelIfChanged(activeRole === UserRole.CLIENT ? 'CLIENT' : 'PROVIDER', userId, identityDigest(storedIdentity));
     const changed = identitySubmissionChanged(storedIdentity, dto, { front: frontIdUrl, back: backIdUrl });
     let identitySubmitted = false;
     if (changed && identityProfile) {

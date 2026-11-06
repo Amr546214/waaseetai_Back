@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 /**
  * REAL PostgreSQL (isolated local :55432, migration 20261106100000 applied). The AI side is IdentityCompareTestDouble (src/testing/identity-compare.test-double.ts):
@@ -13,6 +13,7 @@ const opts = { skip: enabled ? false : 'set QA_ISOLATED_PG_URL (isolated local P
 process.env.JWT_SECRET ??= 'test-secret';
 process.env.OPENAI_API_KEY ??= 'x';
 const id = () => randomUUID();
+const sha256 = (v: string) => createHash('sha256').update(v).digest('hex');
 const NID = '29001011234567';
 const ref = (uid: string, tag: string) => `private:image:jpg:waseetai/providers/${uid}/identity/front-id-${tag}`;
 
@@ -104,7 +105,7 @@ test('PG: idempotency — the same (user, image, data) never repeats the AI call
 	assert.equal((await rows(prisma, user.id)).length, 1); assert.equal(ai.calls.length, 1);
 	assert.equal(((await svc.trigger(user.id, 'PROVIDER')) as any).action, 'DUPLICATE'); assert.equal(ai.calls.length, 1);
 	// concurrent runners on one QUEUED row: only one wins the claim
-	const q = await prisma.identityFieldCheck.create({ data: { userId: user.id, party: 'PROVIDER', seq: 99, imageVersion: 1, imageRefDigest: 'x', dataDigest: 'y', idempotencyKey: id(), registeredSnapshot: { fullName: name, birthDate: '1990-01-01', nationalId: NID, imageRef: front } } });
+	const q = await prisma.identityFieldCheck.create({ data: { userId: user.id, party: 'PROVIDER', seq: 99, imageVersion: 1, imageRefDigest: sha256(front), dataDigest: sha256(JSON.stringify({ n: name.trim().replace(/\s+/g, ' ').toLowerCase(), b: '1990-01-01', i: NID })), idempotencyKey: id() } }); // QUEUED row with the REAL digests of the current image + data (run() re-reads the profile and skips a row whose digests do not match)
 	const before = ai.calls.length;
 	await Promise.all([svc.run(q.id), svc.run(q.id), svc.run(q.id)]);
 	assert.equal(ai.calls.length - before, 1);

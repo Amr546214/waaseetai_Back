@@ -352,6 +352,7 @@ model ClientProfile {
   idNumber String? // National ID / Iqama (10 digits)
   idIssuingCountry String?
   idDocumentType   String?
+  identityApprovedDigest String?
   dob      DateTime? // Date of Birth
   country  String?   @default("السعودية")
   city     String?
@@ -451,6 +452,7 @@ model ProviderProfile {
   idNumber String? // National ID / Iqama (10 digits)
   idIssuingCountry String?
   idDocumentType   String?
+  identityApprovedDigest String?
   dob      DateTime? // Date of Birth
   industry String? // Occupation/Industry
   address  String?   @db.Text

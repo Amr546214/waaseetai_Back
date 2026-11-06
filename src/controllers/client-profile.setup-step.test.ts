@@ -1,5 +1,6 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { identityGateTestDouble } from '../testing/identity-gate.test-double';
 
 // PUT /api/client/profile/setup/step/:step — each wizard step is stored the moment the user moves on. One in-memory database behind mocked
 // prisma / storage; the real controller, DTO schemas, identity guard and onboarding service run.
@@ -32,6 +33,7 @@ async function createDb(t: TestContext, initial: Record<string, unknown> = {}) {
     },
     $transaction: async (ops: any[]) => Promise.all(ops),
   };
+  t.mock.module('../services/identity-gate.service', { namedExports: identityGateTestDouble });
   t.mock.module('../config/db', { namedExports: { prisma: db } });
   t.mock.module('../utils/cloudinary-storage', { namedExports: { storeKycFileIfNeeded: async (v: any) => (v ? `private:${String(v).slice(0, 12)}` : undefined), storeDataUriIfNeeded: async (v: any) => v } });
   t.mock.module('../utils/kyc-value-guard', { namedExports: { assertKycFileValues: () => undefined, isAcceptableKycDocumentValue: () => true } });

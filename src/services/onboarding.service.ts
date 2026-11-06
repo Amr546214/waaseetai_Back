@@ -7,6 +7,7 @@ import { AdminActor, adminAuditData } from './admin-audit';
 import { providerNotifications } from './provider-notifications.service';
 import { lockProviderProfile } from '../utils/provider-profile-lock';
 import { logger } from '../config/logger';
+import { identityGateService, identityDigest } from './identity-gate.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 
 type ListedUser = { id: string; firstName?: string | null; lastName?: string | null; email?: string | null; phoneNumber?: string | null; accountType?: string | null } | null | undefined;
@@ -107,9 +108,9 @@ export class OnboardingService {
     const enrichedItems = await Promise.all(items.map(async (item) => {
       const clientProfile = await prisma.clientProfile.findUnique({
         where: { userId: item.userId },
-        select: { kycStatus: true },
+        select: { kycStatus: true, frontIdUrl: true, backIdUrl: true, idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true },
       });
-      return { ...item, ...flatOwnerFields(item.user), clientProfileKycStatus: clientProfile?.kycStatus || null };
+      return { ...item, ...flatOwnerFields(item.user), clientProfileKycStatus: clientProfile?.kycStatus || null, identityDigest: clientProfile ? identityDigest(clientProfile) : null };
     }));
     return {
       items: enrichedItems,
@@ -125,20 +126,24 @@ export class OnboardingService {
     if (!item) throw new AppError('سجل التحقق غير موجود', 404);
     const clientProfile = await prisma.clientProfile.findUnique({
       where: { userId: item.userId },
-      select: { kycStatus: true, idNumber: true, frontIdUrl: true, backIdUrl: true, isNafathVerified: true },
+      select: { kycStatus: true, idNumber: true, frontIdUrl: true, backIdUrl: true, isNafathVerified: true, idIssuingCountry: true, idDocumentType: true, dob: true },
     });
-    return { ...item, clientProfile };
+    return { ...item, clientProfile, identityDigest: clientProfile ? identityDigest(clientProfile) : null };
   }
 
-  async approveOnboarding(id: string, actor?: AdminActor) {
+  async approveOnboarding(id: string, actor?: AdminActor, expectedDigest?: string | null) {
     const item = await prisma.clientOnboarding.findUnique({ where: { id } });
     if (!item) throw new AppError('سجل التحقق غير موجود', 404);
     if (item.status !== OnboardingStatus.PENDING) throw new AppError('تمت معالجة هذا الطلب مسبقاً', 409);
     const updated = await prisma.$transaction(async (tx) => {
+      if (typeof (tx as any).$queryRaw === 'function') await (tx as any).$queryRaw`SELECT 1 FROM client_profiles WHERE "userId" = ${item.userId} FOR UPDATE`;
       // conditional transition: a concurrent decision matches zero rows
       const moved = await tx.clientOnboarding.updateMany({ where: { id, status: OnboardingStatus.PENDING }, data: { status: OnboardingStatus.APPROVED, reviewedAt: new Date() } });
       if (moved.count !== 1) throw new AppError('تمت معالجة هذا الطلب مسبقاً', 409);
-      await tx.clientProfile.updateMany({ where: { userId: item.userId }, data: { kycStatus: KYCStatus.VERIFIED } });
+      const evidence = await tx.clientProfile.findUnique({ where: { userId: item.userId }, select: { frontIdUrl: true, backIdUrl: true, idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true } });
+      // approval is bound to the evidence as it is NOW (and, when the admin page sent its digest, to what the admin actually reviewed)
+      const approvedDigest = evidence ? identityGateService.approvalDigest(evidence, expectedDigest) : null;
+      await tx.clientProfile.updateMany({ where: { userId: item.userId }, data: { kycStatus: KYCStatus.VERIFIED, identityApprovedDigest: approvedDigest } });
       await tx.user.update({ where: { id: item.userId }, data: { idDocumentUrl: item.documentUrl } });
       if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId: item.userId, eventType: 'KYC_APPROVED_BY_ADMIN', title: 'اعتماد توثيق الهوية', summary: 'اعتمدت الإدارة مستندات هوية العميل', status: LogStatus.APPROVED, before: { status: item.status }, after: { status: OnboardingStatus.APPROVED }, details: { onboardingId: id, party: 'CLIENT' } }) });
       return tx.clientOnboarding.findUnique({ where: { id } });
@@ -191,12 +196,12 @@ export class OnboardingService {
     ]);
     const waiting = await pendingIdentityRequests(items.map((item) => item.userId));
     return {
-      items: items.map((item) => ({ ...item, userId: item.userId, ...flatOwnerFields(item.user), documentsCount: providerDocumentsCount(item as any), pendingIdentityRequestId: waiting.get(item.userId) ?? null })),
+      items: items.map((item) => ({ ...item, userId: item.userId, ...flatOwnerFields(item.user), documentsCount: providerDocumentsCount(item as any), identityDigest: identityDigest(item as any), pendingIdentityRequestId: waiting.get(item.userId) ?? null })),
       pagination: { page: safePage, limit: safeLimit, total, totalPages: Math.ceil(total / safeLimit) },
     };
   }
 
-  async approveProviderKyc(userId: string, actor?: AdminActor) {
+  async approveProviderKyc(userId: string, actor?: AdminActor, expectedDigest?: string | null) {
     // Everything below runs in ONE transaction on the locked provider row: a provider confirming a corrected document at the same moment either commits first
     // (this decision then sees the waiting request and is refused) or after (it then sees the decision). The checks are made on what the lock protects.
     const updated = await prisma.$transaction(async (tx) => {
@@ -207,7 +212,7 @@ export class OnboardingService {
       if ((await pendingIdentityRequests([userId], tx)).has(userId)) throw new AppError(IDENTITY_REQUEST_WAITING, 409, undefined, 'IDENTITY_REQUEST_WAITING');
       // nothing to verify: an approval needs at least one identity document on file
       if (providerDocumentsCount(profile as any) === 0) throw new AppError('لا توجد مستندات هوية لدى المزود لاعتمادها', 400);
-      const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.VERIFIED, isVerified: true, notes: null } });
+      const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.VERIFIED, isVerified: true, notes: null, identityApprovedDigest: identityGateService.approvalDigest(profile as any, expectedDigest) } });
       if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId, category: LogCategory.SYSTEM_AUDIT, eventType: 'KYC_APPROVED_BY_ADMIN', title: 'اعتماد توثيق الهوية', summary: 'اعتمدت الإدارة مستندات هوية مقدم الخدمة', status: LogStatus.APPROVED, before: { kycStatus: profile.kycStatus }, after: { kycStatus: KYCStatus.VERIFIED }, details: { party: 'PROVIDER' } }) });
       return row;
     });
