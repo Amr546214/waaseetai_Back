@@ -9,7 +9,7 @@ const err = (path: string, message: string): SetupFieldError => ({ path, field: 
 
 const TOP_KEYS = ['details', 'specialties', 'identity', 'documents', 'agreements', 'portfolio', 'skills', 'bank',
   'headline', 'hourlyRate', 'yearsOfExperience', 'mainSpecialty', 'subSpecialties', 'idNumber', 'dob', 'avatarUrl'];
-const DETAILS_KEYS = ['occupation', 'headline', 'country', 'city', 'address', 'bio', 'languages', 'expYears', 'yearsOfExperience', 'hourlyRate', 'idNumber', 'dob'];
+const DETAILS_KEYS = ['occupation', 'headline', 'country', 'city', 'address', 'bio', 'languages', 'expYears', 'yearsOfExperience', 'hourlyRate', 'idNumber', 'dob', 'idIssuingCountry', 'idDocumentType'];
 const IDENTITY_KEYS = ['frontId', 'backId', 'certs', 'idNumber', 'dob'];
 const SPECIALTY_KEYS = ['mainSpec', 'subSpecs', 'mainSpecialty', 'subSpecialties'];
 const DOCUMENT_KEYS = ['supportingDocs', 'notes'];
@@ -89,7 +89,7 @@ export function normalizeProviderSetupPayload(body: unknown): { ok: true; value:
   // identity number / date of birth: accepted under details, identity or top level; one canonical place (the KYC-guarded profile columns)
   const idNumber = firstPresent(details.idNumber, identity.idNumber, raw.idNumber);
   if (present(idNumber)) {
-    if (typeof idNumber !== 'string' || !ID_NUMBER_RE.test(idNumber.trim())) errors.push(err('idNumber', 'رقم الهوية يجب أن يكون 10 أرقام ويبدأ بـ 1 أو 2'));
+    if (typeof idNumber !== 'string' || !(details.idIssuingCountry || details.idDocumentType ? /^[\p{L}\p{Nd}][\p{L}\p{Nd} /.-]{0,39}$/u : ID_NUMBER_RE).test(idNumber.trim())) errors.push(err('idNumber', 'رقم الهوية يجب أن يكون 10 أرقام ويبدأ بـ 1 أو 2'));
     else out.idNumber = idNumber.trim();
   }
   const dob = firstPresent(details.dob, identity.dob, raw.dob);

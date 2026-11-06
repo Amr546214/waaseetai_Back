@@ -229,16 +229,27 @@ export class WaseetAiClient {
     );
   }
 
-  /** POST /v1/ai/identity/compare-fields — advisory per-field comparison of an ID image with the registered data (contract from the ID-compare brief;
-   *  NOT verified against a live service). Strict response validation: anything off is INVALID_RESPONSE, never guessed. The image is never logged. */
-  compareIdentityFields(body: IdentityCompareFieldsRequest, opts?: WaseetAiCallOptions): Promise<IdentityCompareFieldsResponse> {
-    const okField = (f: unknown) => isObject(f) && ['MATCH', 'MISMATCH', 'COULD_NOT_VERIFY'].includes(String(f.status)) &&
-      (f.reason === undefined || (typeof f.reason === 'string' && /^[A-Z0-9_]{1,40}$/.test(f.reason)));
-    return this.postJson('/v1/ai/identity/compare-fields', body, { ...opts, requestId: opts?.requestId ?? body.requestId }, (d) =>
-      isObject(d) && d.requestId === body.requestId && isObject(d.fields) &&
-      okField(d.fields.fullName) && okField(d.fields.birthDate) && okField(d.fields.nationalId) &&
-      isObject(d.model) && typeof d.model.name === 'string' && !!d.model.name && typeof d.model.version === 'string' && !!d.model.version &&
-      typeof d.readAt === 'string' && !Number.isNaN(Date.parse(d.readAt)));
+  /** Advisory identity-field comparison. Never forwards a user actor. */
+  async compareIdentityFields(body: IdentityCompareFieldsRequest, opts?: WaseetAiCallOptions): Promise<IdentityCompareFieldsResponse> {
+    const keys = ['name', 'birthDate', 'nationalId'] as const;
+    const data = await this.postJson<{ fields: Record<typeof keys[number], string> }>('/v1/ai/identity/compare-fields', {
+      image: { mimeType: body.imageMimeType, data: body.image },
+      declared: { name: body.registered.fullName, birthDate: body.registered.birthDate, nationalId: body.registered.nationalId },
+      ...(body.document ? { document: body.document } : {})
+    }, { ...opts, requestId: body.requestId, actor: { userId: 'identity-field-check', role: 'system' } }, (d) => {
+      if (!isObject(d) || !isObject(d.fields)) return false;
+      const fields = d.fields;
+      return keys.every(key => {
+        const field = fields[key];
+        return typeof field === 'string' && ['MATCH', 'MISMATCH', 'UNREADABLE'].includes(field);
+      }) && ['faceMatch', 'liveness', 'documentAuthenticity'].every(key => d[key] === 'NOT_CHECKED');
+    }, 'POST', body.requestId);
+    const status = (value: string) => value === 'MATCH' ? 'MATCH' as const : value === 'MISMATCH' ? 'MISMATCH' as const : 'COULD_NOT_VERIFY' as const;
+    return { requestId: body.requestId, readAt: new Date().toISOString(), fields: {
+      fullName: { status: status(data.fields.name) },
+      birthDate: { status: status(data.fields.birthDate) },
+      nationalId: { status: status(data.fields.nationalId) }
+    } };
   }
 
   /** AI-20 — POST /v1/ai/disputes/summary (routed to the paid/sensitive
@@ -449,7 +460,7 @@ export class WaseetAiClient {
     };
   }
 
-  private async postJson<T>(path: string, body: unknown, opts: WaseetAiCallOptions = {}, validate?: (data: unknown) => boolean, method: 'POST' | 'GET' = 'POST'): Promise<T> {
+  private async postJson<T>(path: string, body: unknown, opts: WaseetAiCallOptions = {}, validate?: (data: unknown) => boolean, method: 'POST' | 'GET' = 'POST', expectedResponseId?: string): Promise<T> {
     const requestId = opts.requestId ?? randomUUID();
     const config = this.configProvider();
     const { signal, clear } = composeSignal(opts.timeoutMs ?? config.restTimeoutMs, opts.signal);
@@ -474,7 +485,7 @@ export class WaseetAiClient {
         throw new WaseetAiError(WaseetAiErrorCode.INVALID_RESPONSE, 'WaseetAI returned malformed JSON', { status: response.status, requestId, cause: e });
       }
 
-      if (!isObject(parsed) || parsed.success !== true || !('data' in parsed)) {
+      if (!isObject(parsed) || parsed.success !== true || !('data' in parsed) || (expectedResponseId !== undefined && parsed.requestId !== expectedResponseId)) {
         throw new WaseetAiError(WaseetAiErrorCode.INVALID_RESPONSE, 'WaseetAI returned an unsuccessful or malformed envelope', { status: response.status, requestId });
       }
       if (validate && !validate(parsed.data)) {

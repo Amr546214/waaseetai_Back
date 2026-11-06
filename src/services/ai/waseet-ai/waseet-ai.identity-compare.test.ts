@@ -10,29 +10,33 @@ import { logger } from '../../../config/logger';
 const cfg = (): WaseetAiConfig => ({ baseUrl: 'https://ai.example.test', bearerToken: ['unit', 'test', 'marker'].join('-'), restTimeoutMs: 5000, streamTimeoutMs: 5000, authMode: 'legacy', clientId: 'waseet_core_backend', environment: 'dev' });
 const ID = '29001011234567'; const IMG = Buffer.from('SYNTHETIC-IMAGE-BYTES').toString('base64');
 const body = { requestId: 'r-1', image: IMG, imageMimeType: 'image/jpeg', registered: { fullName: 'اسم تجريبي', birthDate: '1990-01-01', nationalId: ID } };
-const okData = (over: any = {}) => ({ requestId: 'r-1', fields: { fullName: { status: 'MATCH' }, birthDate: { status: 'MISMATCH', reason: 'DIGIT_DIFF' }, nationalId: { status: 'COULD_NOT_VERIFY', reason: 'LOW_CONFIDENCE' } }, model: { name: 'm', version: '1' }, readAt: new Date().toISOString(), ...over });
+const okData = (over: any = {}) => ({ fields: { name: 'MATCH', birthDate: 'MISMATCH', nationalId: 'UNREADABLE' }, faceMatch: 'NOT_CHECKED', liveness: 'NOT_CHECKED', documentAuthenticity: 'NOT_CHECKED', ...over });
+const envelope = (data = okData(), requestId = 'r-1') => ({ success: true, requestId, data });
 const mk = (status: number, payload: unknown, calls: any[] = []): FetchLike => async (url, init) => { calls.push({ url, init }); return new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } }); };
 
 test('sends the contract request with the standard headers and returns the validated response', async () => {
 	const calls: any[] = [];
-	const res = await new WaseetAiClient(mk(200, { success: true, data: okData() }, calls), cfg).compareIdentityFields(body);
+	const res = await new WaseetAiClient(mk(200, envelope(), calls), cfg).compareIdentityFields(body);
 	assert.equal(calls[0].url, 'https://ai.example.test/v1/ai/identity/compare-fields');
 	assert.equal(calls[0].init.method, 'POST');
 	assert.equal(calls[0].init.headers['X-Request-Id'], 'r-1');
 	assert.equal(calls[0].init.headers['X-Client-Id'], 'waseet_core_backend');
 	assert.match(calls[0].init.headers.Authorization, /^Bearer /);
-	assert.equal(JSON.parse(calls[0].init.body).registered.nationalId, ID);
+	assert.equal(JSON.parse(calls[0].init.body).declared.nationalId, ID);
 	assert.equal(res.fields.birthDate.status, 'MISMATCH');
+	assert.equal(res.fields.nationalId.status, 'COULD_NOT_VERIFY');
+	const document = { country: 'GB', type: 'PASSPORT' } as const;
+	await new WaseetAiClient(mk(200, envelope(), calls), cfg).compareIdentityFields({ ...body, document });
+	assert.deepEqual(JSON.parse(calls[1].init.body).document, document);
 });
 
-test('garbage / partial / wrong-requestId / bad-status / free-text-reason responses are INVALID_RESPONSE (never guessed)', async () => {
-	const bad = [
-		{ success: true, data: { nonsense: 1 } }, { success: true, data: okData({ fields: { fullName: { status: 'MATCH' } } }) },
-		{ success: true, data: okData({ requestId: 'other' }) },
-		{ success: true, data: okData({ fields: { ...okData().fields, fullName: { status: 'YES' } } }) },
-		{ success: true, data: okData({ fields: { ...okData().fields, fullName: { status: 'MATCH', reason: 'raw text read: ' + ID } } }) },
-		{ success: true, data: okData({ model: {} }) }, { success: false }, 'not-json-envelope'
-	];
+test('garbage / partial / wrong-requestId / bad-status responses are INVALID_RESPONSE (never guessed)', async () => {
+  const bad = [
+    envelope({ nonsense: 1 }), envelope(okData({ fields: { name: 'MATCH' } })),
+    envelope(okData(), 'other'),
+    envelope(okData({ fields: { ...okData().fields, name: 'YES' } })),
+    envelope(okData({ faceMatch: 'MATCH' })), { success: false }, 'not-json-envelope'
+  ];
 	for (const payload of bad) await assert.rejects(new WaseetAiClient(mk(200, payload), cfg).compareIdentityFields(body), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
 });
 
@@ -48,7 +52,7 @@ test('the client never writes the image or the national id to any log level, suc
 	const orig = ['debug', 'info', 'warn', 'error'].map(l => [l, (logger as any)[l]] as const);
 	for (const [l] of orig) (logger as any)[l] = (m: any) => { lines.push(String(m)); return logger; };
 	try {
-		await new WaseetAiClient(mk(200, { success: true, data: okData() }), cfg).compareIdentityFields(body);
+		await new WaseetAiClient(mk(200, envelope()), cfg).compareIdentityFields(body);
 		await new WaseetAiClient(mk(500, {}), cfg).compareIdentityFields(body).catch(() => undefined);
 		await new WaseetAiClient(mk(200, { success: true, data: { x: 1 } }), cfg).compareIdentityFields(body).catch(() => undefined);
 	} finally { for (const [l, f] of orig) (logger as any)[l] = f; }

@@ -1,3 +1,4 @@
+import { documentUpdate } from '../utils/identity-document-context';
 import { Request, Response, NextFunction } from 'express';
 import { identityFieldCheckService } from '../services/identity-field-check.service';
 import { prisma } from '../config/db';
@@ -96,8 +97,9 @@ export class ClientProfileController {
       const bank: any = payload.bank ?? {};
 
       // A VERIFIED account's identity (idNumber / dob) is frozen.
-      const stored = await prisma.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, dob: true, kycStatus: true } });
+      const stored = await prisma.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, kycStatus: true } });
       assertVerifiedIdentityUnchanged(stored, details);
+        const doc = documentUpdate(details, stored);
       
       // PayPal payout (PayPal-only platform): optional in setup for backward
       // compatibility, but when the client chooses PayPal (paymentType='paypal')
@@ -123,7 +125,8 @@ export class ClientProfileController {
       const clientData = {
         userId,
         // '' / null = not provided: a stored idNumber / dob is kept (a VERIFIED identity is never erased by a re-save)
-        idNumber: details.idNumber || undefined,
+        ...doc,
+          idNumber: details.idNumber || undefined,
         dob: details.dob ? new Date(details.dob) : undefined, // absent = keep the stored value (a re-save never erases it)
         country: details.country,
         city: details.city,
@@ -207,15 +210,17 @@ export class ClientProfileController {
         return res.status(400).json({ success: false, message: 'بيانات غير صحيحة، يرجى مراجعة الحقول المحددة', errors });
       }
       const body: any = parsed.data;
-      const stored = await prisma.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, dob: true, kycStatus: true } });
+      const stored = await prisma.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, kycStatus: true } });
       const data: Record<string, unknown> = {};
-      let identityArgs: { details: { idNumber?: string | null; dob?: string | null }; front?: string | null; back?: string | null } | null = null;
+      let identityArgs: { details: { idNumber?: string | null; dob?: string | null; idIssuingCountry?: string | null; idDocumentType?: string | null }; front?: string | null; back?: string | null } | null = null;
 
       if (step === 1) {
         const d = body.details;
         assertVerifiedIdentityUnchanged(stored, d);
+        const doc = documentUpdate(d, stored);
         // '' / null = not provided: a stored value is kept
         Object.assign(data, {
+          ...doc,
           idNumber: d.idNumber || undefined,
           dob: d.dob ? new Date(d.dob) : undefined,
           country: d.country || undefined,
