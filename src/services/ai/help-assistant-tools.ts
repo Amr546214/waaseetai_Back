@@ -33,8 +33,25 @@ export interface AssistantToolsDeps {
   isBlocked?: (id: string) => Promise<boolean>;
 }
 
-export function createAssistantToolsHandlers(deps: AssistantToolsDeps = {}) {
+/** What the AI service reports as available (models, voices, speech, search) is the same for every account of a role, so it is kept briefly. */
+export const CAPABILITIES_CACHE_TTL_MS = 5 * 60_000;
+
+export function createAssistantToolsHandlers(deps: AssistantToolsDeps & { now?: () => number } = {}) {
   const client = deps.client || waseetAiClient;
+  const now = deps.now || Date.now;
+  const capabilitiesCache = new Map<string, { at: number; value: Record<string, unknown> }>();
+  const capabilitiesInFlight = new Map<string, Promise<Record<string, unknown>>>();
+  const cachedCapabilities = (role: string, opts: Parameters<typeof client.getCapabilities>[0]): Promise<Record<string, unknown>> => {
+    const hit = capabilitiesCache.get(role);
+    if (hit && now() - hit.at < CAPABILITIES_CACHE_TTL_MS) return Promise.resolve(hit.value);
+    const pending = capabilitiesInFlight.get(role);
+    if (pending) return pending;
+    const request = Promise.resolve(client.getCapabilities(opts) as Promise<Record<string, unknown>>)
+      .then((value) => { capabilitiesCache.set(role, { at: now(), value }); return value; })
+      .finally(() => { capabilitiesInFlight.delete(role); });
+    capabilitiesInFlight.set(role, request);
+    return request;
+  };
   const blocked = deps.isBlocked || (async (id: string) => { const u = await prisma.user.findUnique({ where: { id }, select: { isBanned: true } }); return !u || u.isBanned; });
   const handler = (operation: 'capabilities' | 'stt' | 'live' | 'run' | 'status' | 'cancel' | 'resume' | 'events') => async (req: Request, res: Response) => {
     const user = req.user;
@@ -49,7 +66,7 @@ export function createAssistantToolsHandlers(deps: AssistantToolsDeps = {}) {
     try {
       if (await blocked(userId)) { res.status(403).json({ success: false, code: 'FORBIDDEN', message: 'هذه الميزة غير متاحة للحساب.' }); return; }
       let result: Record<string, unknown>;
-      if (operation === 'capabilities') result = await client.getCapabilities(opts);
+      if (operation === 'capabilities') result = await cachedCapabilities(role, opts);
       else if (operation === 'stt') {
         const parsed = sttSchema.safeParse(req.body);
         if (!parsed.success) { res.status(400).json({ success: false, code: 'INVALID_INPUT', message: 'ملف الصوت أو إعدادات التفريغ غير صالحة.' }); return; }
