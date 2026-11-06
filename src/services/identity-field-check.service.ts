@@ -1,3 +1,4 @@
+import { identityDocumentContext, validDocumentNumber, type IdentityDocument } from '../utils/identity-document-context';
 import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
@@ -9,7 +10,7 @@ import { createPrivateDownloadUrl } from '../utils/cloudinary-storage';
 import { isPrivateRef, parsePrivateRef } from '../utils/kyc-private-ref';
 
 /**
- * Automatic, ADVISORY field check of the uploaded Egyptian ID image against the data registered at submission time.
+ * Automatic, ADVISORY field check of the uploaded identity document image against the data registered at submission time.
  *  - It never approves, rejects or changes any KYC/onboarding state: it only records per-field statuses for the admin.
  *  - Behind IDENTITY_AUTO_CHECK (default OFF): when off nothing is written and nothing is sent anywhere.
  *  - Stored per check: statuses + short reason codes + model name/version + timestamps. NO image, NO read card text. The registered snapshot
@@ -23,7 +24,7 @@ export const ADVISORY_NOTE_AR = 'نتائج الفحص الآلي استرشاد
 export const MAX_ATTEMPTS = 3;
 export const STALE_RUNNING_MS = 5 * 60 * 1000;
 const FIELD_NAMES: IdentityFieldName[] = ['fullName', 'birthDate', 'nationalId'];
-const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 105_000;
 
 export function isIdentityAutoCheckEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 	return ['on', 'true', '1', 'yes'].includes(String(env.IDENTITY_AUTO_CHECK ?? '').trim().toLowerCase());
@@ -39,7 +40,9 @@ export function maskNationalId(v: string | null | undefined): string {
 }
 const isoDate = (d: Date) => d.toISOString().slice(0, 10);
 
-export interface RegisteredSnapshot { fullName: string; birthDate: string; nationalId: string; imageRef: string }
+export interface RegisteredSnapshot { fullName: string; birthDate: string; nationalId: string; imageRef: string; document?: IdentityDocument }
+
+const registeredDigest = (reg: RegisteredSnapshot) => sha256(JSON.stringify({ n: reg.fullName.trim().replace(/\s+/g, ' ').toLowerCase(), b: reg.birthDate, i: reg.nationalId, ...(reg.document ? { d: reg.document } : {}) }));
 
 export interface IdentityCheckDeps {
 	db: typeof prisma;
@@ -54,11 +57,25 @@ async function fetchPrivateImage(ref: string): Promise<{ bytes: Buffer; mimeType
 	if (!link) throw new Error('NO_LINK');
 	const res = await globalThis.fetch(link.url, { signal: AbortSignal.timeout(20_000) });
 	if (!res.ok) throw new Error(`HTTP_${res.status}`);
-	const bytes = Buffer.from(await res.arrayBuffer());
+	if (!res.body) throw new Error('NO_IMAGE');
+	const reader = res.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	try {
+		for (;;) {
+			const chunk = await reader.read();
+			if (chunk.done) break;
+			size += chunk.value.length;
+			if (size > MAX_IMAGE_BYTES) { await reader.cancel(); throw new Error('BAD_SIZE'); }
+			chunks.push(chunk.value);
+		}
+	} finally { reader.releaseLock(); }
+	const bytes = Buffer.concat(chunks);
 	if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) throw new Error('BAD_SIZE');
 	const parsed = parsePrivateRef(ref);
 	const fmt = (parsed?.format || '').toLowerCase();
-	const mimeType = fmt === 'png' ? 'image/png' : fmt === 'webp' ? 'image/webp' : fmt === 'pdf' ? 'application/pdf' : 'image/jpeg';
+	if (!['png', 'jpg', 'jpeg'].includes(fmt)) throw new Error('UNSUPPORTED_IMAGE');
+	const mimeType = fmt === 'png' ? 'image/png' : 'image/jpeg';
 	return { bytes, mimeType };
 }
 
@@ -111,10 +128,10 @@ export class IdentityFieldCheckService {
 		const reg = await this.loadRegistered(userId, party);
 		if (!reg) return { action: 'INCOMPLETE' };
 		const imageRefDigest = sha256(reg.imageRef);
-		const dataDigest = sha256(JSON.stringify({ n: reg.fullName.trim().replace(/\s+/g, ' ').toLowerCase(), b: reg.birthDate, i: reg.nationalId }));
+		const dataDigest = registeredDigest(reg);
 		const idempotencyKey = sha256(`${userId}|${party}|${imageRefDigest}|${dataDigest}`);
 		const nationalIdMasked = maskNationalId(reg.nationalId);
-		const skipReason = !/^\d{14}$/.test(reg.nationalId) ? 'NOT_EGYPTIAN_ID_FORMAT' : !isPrivateRef(reg.imageRef) ? 'IMAGE_NOT_IN_PRIVATE_STORAGE' : null;
+		const skipReason = !validDocumentNumber(reg.nationalId, reg.document) ? (reg.document ? 'INVALID_DOCUMENT_NUMBER' : 'NOT_EGYPTIAN_ID_FORMAT') : !isPrivateRef(reg.imageRef) ? 'IMAGE_NOT_IN_PRIVATE_STORAGE' : null;
 		const now = this.deps.now();
 
 		const outcome = await this.deps.db.$transaction(async (tx) => {
@@ -131,7 +148,7 @@ export class IdentityFieldCheckService {
 				// same image + same data seen again: no new check. If an other image/data came in between, this one becomes the current (highest seq) again.
 				const data: Prisma.IdentityFieldCheckUpdateInput = {
 					...(notLatest ? { seq: latest!.seq + 1, imageVersion: nextVersion } : {}),
-					...(retryable ? { status: 'QUEUED', stateReason: null, registeredSnapshot: reg as any } : {})
+					...(retryable ? { status: 'QUEUED', stateReason: null, registeredSnapshot: Prisma.JsonNull } : {})
 				};
 				await tx.identityFieldCheck.update({ where: { id: existing.id }, data });
 				if (notLatest) await this.supersedeQueued(tx, userId, party, existing.id);
@@ -142,7 +159,7 @@ export class IdentityFieldCheckService {
 					data: {
 						userId, party, seq: (latest?.seq ?? 0) + 1, imageVersion: nextVersion, imageRefDigest, dataDigest, idempotencyKey, nationalIdMasked,
 						status: skipReason ? 'SKIPPED' : 'QUEUED', stateReason: skipReason, finishedAt: skipReason ? now : null,
-						registeredSnapshot: skipReason ? Prisma.JsonNull : (reg as any)
+						registeredSnapshot: Prisma.JsonNull
 					}
 				});
 				await this.supersedeQueued(tx, userId, party, row.id);
@@ -171,12 +188,16 @@ export class IdentityFieldCheckService {
 		const user = await this.deps.db.user.findUnique({ where: { id: userId }, select: { firstName: true, lastName: true } });
 		if (!user) return null;
 		const p: any = party === 'CLIENT'
-			? await this.deps.db.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, dob: true, frontIdUrl: true } })
-			: await this.deps.db.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, dob: true, frontIdUrl: true } });
+			? await this.deps.db.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, frontIdUrl: true } })
+			: await this.deps.db.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, frontIdUrl: true } });
 		const fullName = `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim();
-		const nationalId = normalizeDigits(String(p?.idNumber ?? ''));
+		const document = p?.idIssuingCountry && p?.idDocumentType ? identityDocumentContext(p) : undefined;
+		const raw = String(p?.idNumber ?? '').trim();
+		const nationalId = document && !(document.country === 'EG' && document.type === 'NATIONAL_ID')
+			? raw.replace(/[٠-٩۰-۹]/g, digit => String(digit.charCodeAt(0) & 15))
+			: normalizeDigits(raw.replace(/[۰-۹]/g, digit => String(digit.charCodeAt(0) & 15)));
 		if (!p || !fullName || !nationalId || !(p.dob instanceof Date) || Number.isNaN(p.dob.getTime()) || !p.frontIdUrl) return null;
-		return { fullName, birthDate: isoDate(p.dob), nationalId, imageRef: String(p.frontIdUrl) };
+		return { fullName, birthDate: isoDate(p.dob), nationalId, imageRef: String(p.frontIdUrl), ...(document ? { document } : {}) };
 	}
 
 	/** Runs one QUEUED check. Claim is a conditional update (one runner wins); the result is written ONLY to this row while it is still RUNNING. */
@@ -188,8 +209,11 @@ export class IdentityFieldCheckService {
 		if (!row) return;
 		const finish = async (data: Prisma.IdentityFieldCheckUpdateManyMutationInput) =>
 			db.identityFieldCheck.updateMany({ where: { id: checkId, status: 'RUNNING' }, data: { ...data, finishedAt: this.deps.now(), registeredSnapshot: Prisma.JsonNull } });
-		const snap = row.registeredSnapshot as unknown as RegisteredSnapshot | null;
-		if (!snap?.imageRef) { await finish({ status: 'SKIPPED', stateReason: 'NO_SNAPSHOT' }); return; }
+		// Read the private profile just in time. Do not duplicate raw identity data in the check table.
+		const snap = await this.loadRegistered(row.userId, row.party);
+		if (!snap || sha256(snap.imageRef) !== row.imageRefDigest || registeredDigest(snap) !== row.dataDigest) {
+			await finish({ status: 'SKIPPED', stateReason: 'SUPERSEDED' }); return;
+		}
 		// a newer check for this user appeared meanwhile: do not spend an AI call on a superseded image
 		const newer = await db.identityFieldCheck.findFirst({ where: { userId: row.userId, party: row.party, seq: { gt: row.seq } }, select: { id: true } });
 		if (newer) { await finish({ status: 'SKIPPED', stateReason: 'SUPERSEDED' }); return; }
@@ -202,13 +226,14 @@ export class IdentityFieldCheckService {
 				requestId: row.id,
 				image: image.bytes.toString('base64'),
 				imageMimeType: image.mimeType,
+                ...(snap.document ? { document: snap.document } : {}),
 				registered: { fullName: snap.fullName, birthDate: snap.birthDate, nationalId: snap.nationalId }
 			}, { timeoutMs: 45_000, requestId: row.id });
 			const fields = sanitizeFieldResults(res.fields);
 			if (!fields || res.requestId !== row.id) { await finish({ status: 'UNAVAILABLE', stateReason: 'AI_BAD_RESPONSE' }); return; }
 			await finish({
 				status: 'DONE', stateReason: null, fieldResults: fields as any, imageSha256: sha256(image.bytes),
-				modelName: String(res.model.name).slice(0, 120), modelVersion: String(res.model.version).slice(0, 120), aiRequestId: row.id
+				modelName: res.model?.name.slice(0, 120) ?? null, modelVersion: res.model?.version.slice(0, 120) ?? null, aiRequestId: row.id
 			});
 		} catch (e) {
 			await finish({ status: 'UNAVAILABLE', stateReason: failureReason(e) });
