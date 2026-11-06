@@ -1,4 +1,6 @@
 import { documentUpdate } from '../utils/identity-document-context';
+import { lockProviderProfile } from '../utils/provider-profile-lock';
+import { identityGateService, identityDigest } from '../services/identity-gate.service';
 import { respondServiceError } from '../utils/known-service-errors';
 import { identityFieldCheckService } from '../services/identity-field-check.service';
 import { updateProviderPreferencesSchema } from '../dtos/provider-preferences.dto';
@@ -127,6 +129,29 @@ export const getSetupData = async (req: Request, res: Response) => {
 	}
 };
 
+export const getIdentityState = async (req: Request, res: Response) => {
+	try {
+		const userId = req.user?.id;
+		if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+		res.status(200).json({ success: true, data: await identityGateService.getState(userId, 'PROVIDER') });
+	} catch (error) { return sendGateError(res, error); }
+};
+
+export const saveIdentityStep = async (req: Request, res: Response) => {
+	try {
+		const userId = req.user?.id;
+		if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+		const data = await identityGateService.saveIdentity(userId, 'PROVIDER', req.body);
+		res.status(200).json({ success: true, message: data.status === 'UNDER_REVIEW' ? 'الوثيقة قيد المراجعة' : 'تم حفظ بيانات الهوية', data });
+	} catch (error) { return sendGateError(res, error); }
+};
+
+const sendGateError = (res: Response, error: unknown) => {
+	if (error instanceof AppError) return res.status(error.statusCode).json({ success: false, message: error.message, ...(error.code ? { code: error.code } : {}), ...(error.errors?.length ? { errors: error.errors } : {}) });
+	console.error('Provider identity step failed:', error);
+	return res.status(500).json({ message: 'Internal server error' });
+};
+
 export const saveSetupData = async (req: Request, res: Response) => {
 	try {
 		const userId = req.user?.id;
@@ -141,6 +166,9 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		const normalized = normalizeProviderSetupPayload(payload);
 		if (!normalized.ok) return res.status(400).json({ success: false, message: 'بعض الحقول غير مدعومة أو غير صالحة ولم يُحفظ شيء', errors: normalized.errors });
 		const { details, identity, documents, agreements, specialties } = normalized.value;
+		// Steps after the identity step (documents / agreements / business models / the final submission) are closed until the CURRENT identity is approved.
+		const postIdentityContent = (portfolio !== undefined && portfolio !== null) || Object.keys(documents ?? {}).length > 0 || Object.keys(agreements ?? {}).length > 0;
+		if (postIdentityContent) await identityGateService.assertApprovedForSubmission(userId, 'PROVIDER', { ...(details ?? {}), frontId: identity?.frontId, backId: identity?.backId });
 		// Business models (setup step 5): every chosen sub-specialty needs a model FILE and, for that model, at least one completed, owned, EXISTING proof of ownership
 		// that is a different file (checked only when `portfolio` is sent: the wizard submission). Decided BEFORE any write; stored files are kept through their stored row.
 		// `portfolio: null` (older callers) is not a submission, like an absent key.
@@ -162,8 +190,8 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		}
 
 		// A VERIFIED account's identity (idNumber / dob) is frozen (409); '' / null never erase a stored value.
-		const storedIdentity = await prisma.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, kycStatus: true, isProfileSetupComplete: true, frontIdUrl: true, backIdUrl: true, supportingDocsUrl: true, certUrls: true, avatarUrl: true, user: { select: { avatarUrl: true } } } });
-		assertVerifiedIdentityUnchanged(storedIdentity, details ?? {});
+		const storedIdentity = await prisma.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, kycStatus: true, identityApprovedDigest: true, isProfileSetupComplete: true, frontIdUrl: true, backIdUrl: true, supportingDocsUrl: true, certUrls: true, avatarUrl: true, user: { select: { avatarUrl: true } } } });
+		if (!storedIdentity?.identityApprovedDigest) assertVerifiedIdentityUnchanged(storedIdentity, details ?? {});
         const doc = documentUpdate(details ?? {}, storedIdentity);
 
 		// A value the user already has stored in these fields and re-sends unchanged is "keep", not a new link (legacy file names / public URLs would otherwise be refused on every re-save).
@@ -265,6 +293,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			// ── PHASE 2: ONE transaction for every database change of the request: profile, specialty rows, the setup models (ONLY the «نموذج أعمال - …» rows: the provider's
 			// ordinary portfolio works are never touched), the completion figures and the review state. Any failure rolls all of it back. ──
 			const updatedResult = await prisma.$transaction(async (tx) => {
+				await lockProviderProfile(tx, userId);
 				const result = await tx.providerProfile.upsert({
 					where: { userId },
 					create: providerData,
@@ -298,6 +327,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 				}
 				return updated;
 			}, { timeout: 20_000 });
+			await identityGateService.cancelIfChanged('PROVIDER', userId, identityDigest(storedIdentity)); // a changed image/data cancels an approval
 
 			identityFieldCheckService.triggerSafe(userId, 'PROVIDER'); // advisory ID field check (flag off by default); never blocks or decides
 			res.status(200).json({
@@ -312,7 +342,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			throw failure;
 		}
 	} catch (error) {
-		if (error instanceof AppError) return res.status(error.statusCode).json({ success: false, message: error.message, ...(error.errors?.length ? { errors: error.errors } : {}) });
+		if (error instanceof AppError) return res.status(error.statusCode).json({ success: false, message: error.message, ...(error.code ? { code: error.code } : {}), ...(error.errors?.length ? { errors: error.errors } : {}) });
 		console.error('Error saving provider setup data:', error);
 		res.status(500).json({ message: 'Internal server error' });
 	}

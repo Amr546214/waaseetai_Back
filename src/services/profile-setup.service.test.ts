@@ -1,5 +1,6 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { identityGateTestDouble } from '../testing/identity-gate.test-double';
 
 // Phase 3D.2A: the generic /profiles/setup endpoint (profile-setup.service.ts)
 // used to unconditionally write `User.profileCompletionPercent = 100` for
@@ -27,6 +28,8 @@ function createSetupMockPrisma(t: TestContext) {
     clientProfile: { upsert: clientUpsertSpy, update: clientUpdateSpy, findUnique: async () => null },
     providerProfile: { upsert: providerUpsertSpy, update: providerUpdateSpy, findUnique: async () => null, updateMany: async () => ({ count: 0 }) }
   };
+
+  t.mock.module('../services/identity-gate.service', { namedExports: identityGateTestDouble });
 
   t.mock.module('../config/db', {
     namedExports: {

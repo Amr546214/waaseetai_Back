@@ -1,5 +1,6 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { identityGateTestDouble } from '../testing/identity-gate.test-double';
 
 process.env.OPENAI_API_KEY = 'test-key';
 process.env.JWT_SECRET = 'test-secret';
@@ -40,6 +41,7 @@ function setup(t: TestContext, stored: any = null, onboarding: any = null) {
 	cur = { w: { cUpsert: [], cUpdateMany: [], pUpsert: [], pUpdateMany: [], onbCreate: [], onbUpdate: [] }, stored, onboarding };
 	if (mockedFor.has(t)) return cur.w;
 	mockedFor.add(t);
+	t.mock.module('../services/identity-gate.service', { namedExports: identityGateTestDouble });
 	t.mock.module('../config/db', { namedExports: { prisma } });
 	t.mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
 	t.mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (v: any) => v ?? null, storeKycFileIfNeeded: async (v: any) => (v ? 'private:image:png:x' : null) } });

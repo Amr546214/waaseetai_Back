@@ -22,7 +22,8 @@
     "node_modules",
     "**/*.spec.ts",
     "**/*.test.ts",
-    "**/*.pgenv.ts"
+    "**/*.pgenv.ts",
+    "**/*.test-double.ts"
   ],
   "ts-node": {
     "files": true

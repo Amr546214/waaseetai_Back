@@ -42,7 +42,7 @@ export async function adminGetOnboarding(req: Request, res: Response, next: Next
 
 export async function adminApproveOnboarding(req: Request, res: Response, next: NextFunction) {
   try {
-    const data = await onboardingService.approveOnboarding(String(req.params.id), adminActor(req));
+    const data = await onboardingService.approveOnboarding(String(req.params.id), adminActor(req), typeof req.body?.identityDigest === 'string' ? req.body.identityDigest : undefined);
     res.json({ success: true, message: 'تم اعتماد طلب التحقق بنجاح', data });
   } catch (error) { next(error); }
 }
@@ -70,7 +70,7 @@ export async function adminListProviderKyc(req: Request, res: Response, next: Ne
 
 export async function adminApproveProviderKyc(req: Request, res: Response, next: NextFunction) {
   try {
-    const data = await onboardingService.approveProviderKyc(String(req.params.userId), adminActor(req));
+    const data = await onboardingService.approveProviderKyc(String(req.params.userId), adminActor(req), typeof req.body?.identityDigest === 'string' ? req.body.identityDigest : undefined);
     res.json({ success: true, message: 'تم اعتماد التحقق من المزود بنجاح', data });
   } catch (error) { next(error); }
 }
