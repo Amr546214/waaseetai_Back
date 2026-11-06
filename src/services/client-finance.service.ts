@@ -1,7 +1,7 @@
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { round2, sumMoney } from '../utils/money';
-import { escrowFundingBreakdown, failedDepositBreakdown, grossCard, NOT_FOUND_TX, pageOf, stateCard, valueCard, walletTxBreakdown } from './wallet-breakdown';
+import { escrowFundingBreakdown, failedDepositBreakdown, grossCard, NOT_FOUND_TX, pageOf, stateCard, valueCard, walletTxBreakdown, clientDirection } from './wallet-breakdown';
 
 // No tax is recorded on invoices (legal policy s10: no VAT is charged). The old 15% line was display-only and never collected, so it is gone: the invoice
 // shows the stage amount, and tax is 0 / taxRate 0.
@@ -29,6 +29,8 @@ const escrowRow = (p: any) => ({
   referenceId: p.escrow!.paymentReference || p.id,
   description: `تمويل ضمان المشروع: ${p.title}`,
   createdAt: p.escrow!.fundedAt || p.escrow!.createdAt,
+  displayAmount: round2(p.escrow!.amount),
+  direction: 'HOLD' as const,
   breakdown: escrowFundingBreakdown(p.escrow!)
 });
 
@@ -42,6 +44,8 @@ const walletRow = (tx: any) => ({
   referenceId: tx.referenceId,
   description: tx.description || (tx.type === 'DEPOSIT' ? 'إيداع رصيد بالمحفظة' : 'معاملة مالية'),
   createdAt: tx.createdAt,
+  displayAmount: round2(Math.abs(tx.amount)),
+  direction: clientDirection(tx.type, tx.amount, tx.status),
   breakdown: walletTxBreakdown(tx)
 });
 
@@ -55,6 +59,8 @@ const failedDepositRow = (p: any) => ({
   referenceId: p.reference,
   description: 'محاولة إيداع عبر PayPal لم تكتمل، ولم يُضف أي مبلغ إلى رصيدك',
   createdAt: p.createdAt,
+  displayAmount: round2(Number(p.netAmount ?? p.amount)),
+  direction: 'NONE' as const,
   breakdown: failedDepositBreakdown(p.currency || 'USD')
 });
 

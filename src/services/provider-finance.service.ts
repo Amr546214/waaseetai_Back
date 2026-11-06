@@ -119,7 +119,7 @@ export class ProviderFinanceService {
     const cancellationTransactions = settledCancellations.map((r: any) => ({
       id: `cancellation-settlement-${r.id}`,
       type: 'credit' as const,
-      category: 'ESCROW_RELEASE' as const,
+      category: 'CANCELLATION_SETTLEMENT' as const,
       amount: round2(r.settlementProviderNet ?? r.settlementReleaseToProvider),
       grossAmount: round2(r.settlementReleaseToProvider), platformCommission: round2(r.settlementPlatformCommission ?? 0),
       currency: 'USD',
