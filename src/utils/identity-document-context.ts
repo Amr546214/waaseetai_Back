@@ -21,17 +21,32 @@ const nationalIdFormats: Readonly<Record<string, { pattern: RegExp; message: str
   BH: { pattern: /^\d{9}$/, message: 'الرقم الشخصي البحريني لازم يكون 9 أرقام' },
 };
 
-function egyptianIdStructure(value: string): 'CENTURY' | 'DATE' | null {
+const egyptianBirthCodes = new Set('01 02 03 04 11 12 13 14 15 16 17 18 19 21 22 23 24 25 26 27 28 29 31 32 33 34 35 88'.split(' '));
+
+// Turkish T.C. Kimlik No: the last two digits are computed from the first nine.
+function validTurkishNationalId(value: string): boolean {
+  if (!/^[1-9]\d{10}$/.test(value)) return false;
+  const digits = Array.from(value, Number);
+  const odd = digits[0] + digits[2] + digits[4] + digits[6] + digits[8];
+  const even = digits[1] + digits[3] + digits[5] + digits[7];
+  return digits[9] === ((7 * odd - even) % 10 + 10) % 10 &&
+    digits[10] === digits.slice(0, 10).reduce((sum, d) => sum + d, 0) % 10;
+}
+
+function egyptianIdStructure(value: string): 'CENTURY' | 'DATE' | 'BIRTH_CODE' | null {
   if (!/^[23]/.test(value)) return 'CENTURY';
   const year = (value[0] === '2' ? 1900 : 2000) + Number(value.slice(1, 3));
   const month = Number(value.slice(3, 5));
   const day = Number(value.slice(5, 7));
   const date = new Date(Date.UTC(year, month - 1, day));
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day && date.getTime() <= Date.now() ? null : 'DATE';
+    date.getUTCDate() === day && date.getTime() <= Date.now() ? (egyptianBirthCodes.has(value.slice(7, 9)) ? null : 'BIRTH_CODE') : 'DATE';
 }
 
 export function validDocumentNumber(value: string, doc?: IdentityDocument): boolean {
+  if (doc?.country === 'TR' && doc.type === 'NATIONAL_ID') {
+    return validTurkishNationalId(value.replace(/[٠-٩۰-۹]/g, digit => String(digit.charCodeAt(0) & 15)));
+  }
   const format = doc?.type === 'NATIONAL_ID' ? nationalIdFormats[doc.country] : undefined;
   if (format) return format.pattern.test(value.replace(/[٠-٩۰-۹]/g, digit => String(digit.charCodeAt(0) & 15)));
   if (doc?.country === 'SA' && (doc.type === 'NATIONAL_ID' || doc.type === 'RESIDENCE_PERMIT')) {
