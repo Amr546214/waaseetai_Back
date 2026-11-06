@@ -12,6 +12,14 @@ import { readAffiliatePaypalEmail } from '../utils/affiliate-payout';
 
 const userId = (req: Request) => req.user!.userId || req.user!.id;
 
+export async function getMarketerWalletHistory(req: Request, res: Response, next: NextFunction) {
+  try { res.json({ success: true, data: await marketerWalletService.getHistory(userId(req), { page: req.query.page, limit: req.query.limit, type: req.query.type }) }); } catch (error) { next(error); }
+}
+
+export async function getMarketerWalletTransaction(req: Request, res: Response, next: NextFunction) {
+  try { res.json({ success: true, data: await marketerWalletService.getTransaction(userId(req), String(req.params.id || '')) }); } catch (error) { next(error); }
+}
+
 export async function getMarketerWallet(req: Request, res: Response, next: NextFunction) {
   try { res.json({ success: true, data: await marketerWalletService.getWallet(userId(req)) }); } catch (error) { next(error); }
 }

@@ -8,7 +8,7 @@ import { validateDto } from '../middlewares/validate-dto.middleware';
 import { createCustomLinkSchema, updateRefSettingsSchema } from '../dtos/marketer-overview.dto';
 import { authenticate, authorizeActiveRoleWithMessage, requireActiveUser } from '../middlewares/auth.middleware';
 import { createTicket, listMyTickets, getMyTicket, replyToTicket, closeMyTicket } from '../controllers/support-ticket.controller';
-import { getMarketerWallet, getMyMarketerWithdrawal, getMarketerAssets, getMarketerSettings, updateMarketerSettings, exportMarketerData } from '../controllers/marketer-account.controller';
+import { getMarketerWallet, getMarketerWalletHistory, getMarketerWalletTransaction, getMyMarketerWithdrawal, getMarketerAssets, getMarketerSettings, updateMarketerSettings, exportMarketerData } from '../controllers/marketer-account.controller';
 
 const router = Router();
 
@@ -39,6 +39,8 @@ router.get('/withdrawals', listMyMarketerWithdrawals);
 router.get('/withdrawals/:id', getMyMarketerWithdrawal);
 // The marketer's money in one read: approved earnings, reserved / paid withdrawals and the withdrawable balance the server enforces. Never the client wallet.
 router.get('/wallet', getMarketerWallet);
+router.get('/wallet/history', getMarketerWalletHistory);
+router.get('/wallet/history/:id', getMarketerWalletTransaction);
 
 // Files an admin published for marketers (empty until something is published)
 router.get('/assets', getMarketerAssets);

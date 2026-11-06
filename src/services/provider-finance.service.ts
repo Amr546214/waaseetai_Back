@@ -3,6 +3,8 @@ import { prisma } from '../config/db';
 import { IN_FLIGHT_WITHDRAWAL_STATUSES, SPENT_WITHDRAWAL_STATUSES, RESERVING_WITHDRAWAL_STATUSES } from '../utils/withdrawal-reservation';
 import { round2, sumMoney } from '../utils/money';
 import { SETTLED_DISPUTE_WHERE } from './settlement-state.service';
+import { cancellationSettlementBreakdown, escrowFundedBreakdown, grossCard, legacyEscrowReleaseBreakdown, NOT_FOUND_TX, pageOf, stageReleaseBreakdown, stateCard, valueCard } from './wallet-breakdown';
+import { AppError } from '../utils/app-error';
 import { isV2Escrow, providerReleased, providerNetEntitlement, splitRelease } from '../utils/escrow-commission';
 
 export class ProviderFinanceService {
@@ -85,7 +87,8 @@ export class ProviderFinanceService {
           projectTitle: escrow.project.title,
           stageId: stage.id,
           status: 'COMPLETED' as const,
-          createdAt: stage.approvedAt || escrow.updatedAt
+          createdAt: stage.approvedAt || escrow.updatedAt,
+          breakdown: stageReleaseBreakdown(escrow, split, stage)
         };
       });
     });
@@ -106,7 +109,8 @@ export class ProviderFinanceService {
         projectTitle: escrow.project.title,
         stageId: null,
         status: 'COMPLETED' as const,
-        createdAt: escrow.updatedAt
+        createdAt: escrow.updatedAt,
+        breakdown: legacyEscrowReleaseBreakdown(residual)
       }] : [];
     });
     // A mutual-cancellation settlement credits the provider through the escrow (providerNetReleasedAmount, already in availableBalance above); this line makes that
@@ -125,16 +129,35 @@ export class ProviderFinanceService {
       projectTitle: r.contract?.project?.title ?? null,
       stageId: null,
       status: 'COMPLETED' as const,
-      createdAt: r.settledAt ?? r.updatedAt
+      createdAt: r.settledAt ?? r.updatedAt,
+      breakdown: cancellationSettlementBreakdown(r, escrows.find(e => e.project.id === r.projectId))
     }));
     const transactions = [...stageTransactions, ...legacyTransactions, ...cancellationTransactions]
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     const monthStart = new Date();
     monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
 
+    // Cards: availableToWithdraw is the SAME figure the withdrawal path enforces (withdrawableBalance). The gross is computed only over the itemised release lines; a part of
+    // availableBalance that has no line (e.g. a dispute-resolution release) is reported, not hidden.
+    const itemisedNet = sumMoney(transactions.map(tx => tx.amount));
+    const releasedWithoutLine = round2(Math.max(0, availableBalance - itemisedNet));
+    const gross = grossCard('المبلغ قبل الخصومات', ['STAGE_RELEASE', 'ESCROW_RELEASE', 'CANCELLATION_SETTLEMENT'], transactions,
+      releasedWithoutLine > 0.005 ? `لا يشمل ${releasedWithoutLine} $ أُفرجت بقرار نزاع ولا يوجد لها بند تفصيلي` : 'مجموع الدفعات المُفرَجة قبل عمولة المنصة');
+    if (releasedWithoutLine > 0.005) gross.complete = false;
+    const cards = {
+      availableToWithdraw: valueCard('المتاح للسحب', withdrawableBalance, { covers: ['STAGE_RELEASE', 'ESCROW_RELEASE', 'CANCELLATION_SETTLEMENT'], note: 'بعد خصم طلبات السحب المعلّقة والمدفوعة' }),
+      pendingWithdrawals: valueCard('طلبات سحب معلّقة', pendingWithdrawals),
+      grossBeforeDeductions: gross,
+      heldInEscrow: valueCard('محجوز في الضمان', escrowBalance, { covers: ['ESCROW_FUNDED'] }),
+      cashback: stateCard('NOT_APPLICABLE', 'الكاش باك', 'الكاش باك ميزة لطالب الخدمة')
+    };
+
     return {
       summary: {
         availableBalance,
+        releasedWithoutLine,
+        canWithdraw: true,
+        cards,
         pendingWithdrawals,
         paidWithdrawals,
         withdrawableBalance,
@@ -182,11 +205,32 @@ export class ProviderFinanceService {
       projectTitle: escrow.project.title,
       stageId: null,
       status: escrow.status === 'REFUNDED' ? 'REFUNDED' as const : escrow.status === 'RELEASED' ? 'RELEASED' as const : 'HELD' as const,
-      createdAt: escrow.fundedAt || escrow.createdAt
+      createdAt: escrow.fundedAt || escrow.createdAt,
+      breakdown: escrowFundedBreakdown(escrow.project.contract?.price || escrow.amount)
     }));
     const events = [...wallet.transactions, ...fundingEvents]
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     return { summary: wallet.summary, events };
+  }
+
+  /** Full paged history (release lines + funding events), each with its breakdown, and the same summary (cards). */
+  async getHistory(providerId: string, query: { page?: unknown; limit?: unknown; type?: unknown }) {
+    const { summary, events } = await this.getTransactions(providerId);
+    const type = typeof query.type === 'string' && query.type ? query.type.toUpperCase() : null;
+    const rows = type ? events.filter(e => e.category === type) : events;
+    return { summary, ...pageOf(rows, query.page, query.limit) };
+  }
+
+  /** One history row by the id the list shows. Owner only: someone else's row answers 404 exactly like an unknown id. */
+  async getTransaction(providerId: string, rawId: string) {
+    const id = String(rawId || '').trim();
+    if (!id || id.length > 200) throw new AppError(NOT_FOUND_TX, 404);
+    const { events } = await this.getTransactions(providerId);
+    const row = events.find(e => e.id === id);
+    if (!row) throw new AppError(NOT_FOUND_TX, 404);
+    const wallet = await this.getWallet(providerId);
+    const escrow = wallet.escrows.find(e => e.projectId === row.projectId) ?? null;
+    return { ...row, project: row.projectId ? { id: row.projectId, title: row.projectTitle } : null, escrow: escrow ? { total: escrow.total, released: escrow.released, held: escrow.held, status: escrow.status } : null };
   }
 }
 

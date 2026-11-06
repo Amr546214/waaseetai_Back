@@ -41,3 +41,12 @@ export const getClientWalletTransaction = async (req: Request, res: Response, ne
     return res.status(200).json({ success: true, data });
   } catch (error) { next(error); }
 };
+
+export const getClientWalletHistory = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const clientId = (req as any).user?.id;
+    if (!clientId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+    const data = await clientFinanceService.getHistory(clientId, { page: req.query.page, limit: req.query.limit, type: req.query.type });
+    return res.status(200).json({ success: true, data });
+  } catch (error) { next(error); }
+};
