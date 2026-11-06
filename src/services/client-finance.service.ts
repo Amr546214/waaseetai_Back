@@ -1,6 +1,7 @@
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { round2, sumMoney } from '../utils/money';
+import { escrowFundingBreakdown, failedDepositBreakdown, grossCard, NOT_FOUND_TX, pageOf, stateCard, valueCard, walletTxBreakdown } from './wallet-breakdown';
 
 // No tax is recorded on invoices (legal policy s10: no VAT is charged). The old 15% line was display-only and never collected, so it is gone: the invoice
 // shows the stage amount, and tax is 0 / taxRate 0.
@@ -27,7 +28,8 @@ const escrowRow = (p: any) => ({
   paymentMethod: p.escrow!.paymentMethod || 'محفظة وسيط AI',
   referenceId: p.escrow!.paymentReference || p.id,
   description: `تمويل ضمان المشروع: ${p.title}`,
-  createdAt: p.escrow!.fundedAt || p.escrow!.createdAt
+  createdAt: p.escrow!.fundedAt || p.escrow!.createdAt,
+  breakdown: escrowFundingBreakdown(p.escrow!)
 });
 
 const walletRow = (tx: any) => ({
@@ -39,7 +41,8 @@ const walletRow = (tx: any) => ({
   paymentMethod: tx.paymentMethod,
   referenceId: tx.referenceId,
   description: tx.description || (tx.type === 'DEPOSIT' ? 'إيداع رصيد بالمحفظة' : 'معاملة مالية'),
-  createdAt: tx.createdAt
+  createdAt: tx.createdAt,
+  breakdown: walletTxBreakdown(tx)
 });
 
 const failedDepositRow = (p: any) => ({
@@ -51,13 +54,14 @@ const failedDepositRow = (p: any) => ({
   paymentMethod: 'PAYPAL',
   referenceId: p.reference,
   description: 'محاولة إيداع عبر PayPal لم تكتمل، ولم يُضف أي مبلغ إلى رصيدك',
-  createdAt: p.createdAt
+  createdAt: p.createdAt,
+  breakdown: failedDepositBreakdown(p.currency || 'USD')
 });
 
 // the counterpart's name as the project room already shows it to the client; null when no provider is assigned yet
 const providerName = (u: { firstName?: string | null; lastName?: string | null } | null | undefined) => (u ? `${u.firstName || ''} ${u.lastName || ''}`.trim() || null : null);
 
-const NOT_FOUND = 'المعاملة غير موجودة أو لا تملك صلاحية الوصول إليها';
+const NOT_FOUND = NOT_FOUND_TX;
 
 const buildInvoice = (contract: any, stage: any, delivery: any) => {
   const total = round2(Number(stage.amount || 0));
@@ -200,6 +204,18 @@ export class ClientFinanceService {
    * Retrieves the client's wallet overview, balances, and transaction history
    */
   async getWallet(clientId: string) {
+    return (await this.buildWallet(clientId)).wallet;
+  }
+
+  /** The paged full history page: the same rows the wallet lists (same builders), plus the same summary (cards) so the page header needs one call. */
+  async getHistory(clientId: string, query: { page?: unknown; limit?: unknown; type?: unknown }) {
+    const { wallet } = await this.buildWallet(clientId);
+    const type = typeof query.type === 'string' && query.type ? query.type.toUpperCase() : null;
+    const rows = type ? wallet.transactions.filter(row => row.type === type) : wallet.transactions;
+    return { summary: wallet.summary, ...pageOf(rows, query.page, query.limit) };
+  }
+
+  private async buildWallet(clientId: string) {
     const user = await prisma.user.findUnique({
       where: { id: clientId },
       select: {
@@ -262,7 +278,15 @@ export class ClientFinanceService {
       .filter(tx => tx.type === 'DEPOSIT' && tx.status === 'COMPLETED')
       .map(tx => tx.amount));
 
-    return {
+    const depositRows = formattedWalletTx.filter(row => row.type === 'DEPOSIT' && row.status === 'COMPLETED');
+    const cards = {
+      availableBalance: valueCard('الرصيد المتاح', availableBalance),
+      grossBeforeDeductions: grossCard('المبلغ قبل الخصومات', ['DEPOSIT'], depositRows, 'مجموع المدفوع فعليًا في الإيداعات المكتملة قبل رسوم الإيداع'),
+      heldInEscrow: valueCard('محجوز في الضمان', escrowBalance, { covers: ['ESCROW_LOCK'] }),
+      cashback: stateCard('NOT_ENABLED', 'الكاش باك', 'الكاش باك غير مفعّل حاليًا')
+    };
+
+    const wallet = {
       summary: {
         availableBalance,
         escrowBalance,
@@ -273,10 +297,13 @@ export class ClientFinanceService {
         // and exposes its OWN stored currency (tx.currency, line ~174) — this
         // top-level field only describes the two summary aggregates, never
         // relabels historical per-transaction rows.
-        currency: 'USD'
+        currency: 'USD',
+        canWithdraw: false,
+        cards
       },
       transactions: allTransactions
     };
+    return { wallet };
   }
 }
 

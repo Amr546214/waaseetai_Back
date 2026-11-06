@@ -13,6 +13,7 @@ import { providerOverviewService } from '../services/provider-overview.service';
 import { accreditationService } from '../services/accreditation.service';
 import { projectProgressService } from '../services/project-progress.service';
 import { providerFinanceService } from '../services/provider-finance.service';
+import { feePolicyService } from '../services/fee-policy.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
 import { providerDeliveriesService } from '../services/provider-deliveries.service';
 import { computeClientAiOfferRating } from '../services/client-ai-offer-rating';
@@ -535,6 +536,27 @@ export const getProviderWallet = async (req: Request, res: Response, next: NextF
 		const providerId = (req as any).user?.id;
 		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
 		const data = await providerFinanceService.getWallet(providerId);
+		res.status(200).json({ success: true, data: withMinimumWithdrawal(data, await feePolicyService.active()) });
+	} catch (error) { next(error); }
+};
+
+// The minimum payout of the fee policy in force (the same value createForProvider checks), shown next to the available-to-withdraw card. Display only.
+const withMinimumWithdrawal = <T extends { summary: object }>(data: T, policy: { payload: { minProviderPayout: number } }) => ({ ...data, summary: { ...data.summary, minimumWithdrawal: policy.payload.minProviderPayout } });
+
+export const getProviderFinanceHistory = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		const data = await providerFinanceService.getHistory(providerId, { page: req.query.page, limit: req.query.limit, type: req.query.type });
+		res.status(200).json({ success: true, data: withMinimumWithdrawal(data, await feePolicyService.active()) });
+	} catch (error) { next(error); }
+};
+
+export const getProviderFinanceTransaction = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const providerId = (req as any).user?.id;
+		if (!providerId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+		const data = await providerFinanceService.getTransaction(providerId, String(req.params.id || ''));
 		res.status(200).json({ success: true, data });
 	} catch (error) { next(error); }
 };
