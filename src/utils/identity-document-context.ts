@@ -21,6 +21,16 @@ const nationalIdFormats: Readonly<Record<string, { pattern: RegExp; message: str
   BH: { pattern: /^\d{9}$/, message: 'الرقم الشخصي البحريني لازم يكون 9 أرقام' },
 };
 
+function egyptianIdStructure(value: string): 'CENTURY' | 'DATE' | null {
+  if (!/^[23]/.test(value)) return 'CENTURY';
+  const year = (value[0] === '2' ? 1900 : 2000) + Number(value.slice(1, 3));
+  const month = Number(value.slice(3, 5));
+  const day = Number(value.slice(5, 7));
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day && date.getTime() <= Date.now() ? null : 'DATE';
+}
+
 export function validDocumentNumber(value: string, doc?: IdentityDocument): boolean {
   const format = doc?.type === 'NATIONAL_ID' ? nationalIdFormats[doc.country] : undefined;
   if (format) return format.pattern.test(value.replace(/[٠-٩۰-۹]/g, digit => String(digit.charCodeAt(0) & 15)));
@@ -29,7 +39,8 @@ export function validDocumentNumber(value: string, doc?: IdentityDocument): bool
     return (doc.type === 'NATIONAL_ID' ? /^1\d{9}$/ : /^2\d{9}$/).test(normalized);
   }
   return !doc || (doc.country === 'EG' && doc.type === 'NATIONAL_ID')
-    ? /^\d{14}$/.test(value.replace(/[٠-٩۰-۹]/g, digit => String(digit.charCodeAt(0) & 15)))
+    ? /^\d{14}$/.test(value.replace(/[٠-٩۰-۹]/g, digit => String(digit.charCodeAt(0) & 15))) &&
+      egyptianIdStructure(value.replace(/[٠-٩۰-۹]/g, digit => String(digit.charCodeAt(0) & 15))) === null
     : /^[\p{L}\p{Nd}][\p{L}\p{Nd} /.-]{0,39}$/u.test(value);
 }
 
