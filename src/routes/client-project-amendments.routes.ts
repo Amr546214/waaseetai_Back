@@ -4,6 +4,7 @@ import { authenticate, authorize, requireActiveUser , authorizeActiveRole } from
 import { clientProjectAmendmentsController } from '../controllers/client-project-amendments.controller';
 import { setProjectAssignedEmployee } from '../controllers/client-project-assignment.controller';
 import { paymentLimiter } from '../middlewares/rate-limit.middleware';
+import { cancellationController } from '../controllers/contract-cancellation.controller';
 import { requireClientCompanyAccount } from './client-company-team.routes';
 
 const router = Router();
@@ -19,6 +20,12 @@ router.post('/amendments/:id/respond', clientOnly, clientProjectAmendmentsContro
 router.post('/amendments/:id/payment-otp', clientOnly, paymentLimiter, clientProjectAmendmentsController.initPaymentAuthorization);
 router.post('/amendments/:id/authorize-funding', clientOnly, paymentLimiter, clientProjectAmendmentsController.authorizeFunding);
 router.post('/amendments/:id/cancel', clientOnly, clientProjectAmendmentsController.cancelAmendment);
+// «الإلغاء بالتراضي»: a recorded request answered by the provider; it never moves money (see contract-cancellation.service.ts).
+const cancel = cancellationController('CLIENT');
+router.post('/cancellation-requests/:id/respond', clientOnly, cancel.respond);
+router.post('/cancellation-requests/:id/withdraw', clientOnly, cancel.withdraw);
+router.get('/:projectId/cancellation-requests', clientOnly, cancel.list);
+router.post('/:projectId/cancellation-requests', clientOnly, cancel.create);
 router.post('/:projectId/amendments', clientOnly, clientProjectAmendmentsController.createAmendment);
 
 // Batch 6 — Client Company "responsible employee" assignment. Company-only

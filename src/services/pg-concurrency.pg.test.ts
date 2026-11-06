@@ -107,12 +107,21 @@ test('pg: stage approval racing a dispute opening never releases money past the 
 	for (let round = 0; round < 40; round++) {
 		const w = await seedWorld();
 		const approve = () => jitter(() => projectProgressService.reviewDelivery(w.client.id, w.contract.id, w.s1.id, 'approve'));
-		const dispute = () => jitter(() => disputeService.createForRequest(w.project.id, w.provider.id, 'provider', { reason: 'نزاع QA', description: 'نزاع اختباري متزامن مع الاعتماد', evidence: [] }));
+		const dispute = () => jitter(() => disputeService.createForRequest(w.project.id, w.provider.id, 'provider', { reason: 'نزاع QA', description: 'نزاع اختباري متزامن مع الاعتماد. '.repeat(5), stageId: w.s1.id, evidence: [] }));
 		const [a, d] = await Promise.allSettled([approve(), dispute()]);
 		const m = await money(w);
 		const disputeRow = await w.prisma.dispute.findFirst({ where: { projectId: w.project.id } });
+		if (a.status === 'fulfilled' && d.status === 'rejected') {
+			// Stage dispute (case 2): the approval committed first, so the stage is APPROVED and its money is already released: a dispute on it is refused (400 on stageId), nothing else changes.
+			approvedFirst++;
+			assert.equal((d.reason as any).statusCode, 400);
+			assert.equal((d.reason as any).errors?.[0]?.field, 'stageId');
+			assert.equal(disputeRow, null);
+			assert.equal(m.escrow.releasedAmount, 10);
+			continue;
+		}
 		assert.ok(disputeRow, 'the dispute was opened');
-		assert.equal(d.status, 'fulfilled', 'opening a dispute is never refused by the race');
+		assert.equal(d.status, 'fulfilled', 'opening a dispute is refused only because the stage was already approved');
 		if (a.status === 'fulfilled') {
 			approvedFirst++;
 			// the approval committed BEFORE the dispute existed: its release is complete and exact

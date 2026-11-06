@@ -16,6 +16,49 @@ const couponTerms = (terms: unknown): { listPrice: number; netPrice: number; cou
   return { listPrice, netPrice, couponCode: typeof t.couponCode === 'string' ? t.couponCode : null };
 };
 
+// One wallet-history row. The list (getWallet) and the single-transaction read (getTransaction) build rows through the SAME functions, so a row opened by id is
+// exactly the row the list showed.
+const escrowRow = (p: any) => ({
+  id: `escrow-${p.escrow!.id}`,
+  type: 'ESCROW_LOCK',
+  amount: round2(p.escrow!.amount),
+  currency: 'USD', // active escrow pricing is now USD-semantic (not a stored WalletTransaction row)
+  status: p.escrow!.status === 'HELD' ? 'HELD' : 'COMPLETED',
+  paymentMethod: p.escrow!.paymentMethod || 'محفظة وسيط AI',
+  referenceId: p.escrow!.paymentReference || p.id,
+  description: `تمويل ضمان المشروع: ${p.title}`,
+  createdAt: p.escrow!.fundedAt || p.escrow!.createdAt
+});
+
+const walletRow = (tx: any) => ({
+  id: tx.id,
+  type: tx.type,
+  amount: round2(tx.amount),
+  currency: tx.currency,
+  status: tx.status,
+  paymentMethod: tx.paymentMethod,
+  referenceId: tx.referenceId,
+  description: tx.description || (tx.type === 'DEPOSIT' ? 'إيداع رصيد بالمحفظة' : 'معاملة مالية'),
+  createdAt: tx.createdAt
+});
+
+const failedDepositRow = (p: any) => ({
+  id: `paypal-failed-${p.id}`,
+  type: 'DEPOSIT',
+  amount: round2(Number(p.netAmount ?? p.amount)),
+  currency: p.currency || 'USD',
+  status: 'FAILED',
+  paymentMethod: 'PAYPAL',
+  referenceId: p.reference,
+  description: 'محاولة إيداع عبر PayPal لم تكتمل، ولم يُضف أي مبلغ إلى رصيدك',
+  createdAt: p.createdAt
+});
+
+// the counterpart's name as the project room already shows it to the client; null when no provider is assigned yet
+const providerName = (u: { firstName?: string | null; lastName?: string | null } | null | undefined) => (u ? `${u.firstName || ''} ${u.lastName || ''}`.trim() || null : null);
+
+const NOT_FOUND = 'المعاملة غير موجودة أو لا تملك صلاحية الوصول إليها';
+
 const buildInvoice = (contract: any, stage: any, delivery: any) => {
   const total = round2(Number(stage.amount || 0));
   const coupon = couponTerms(contract.terms);
@@ -119,6 +162,41 @@ export class ClientFinanceService {
   }
 
   /**
+   * One wallet transaction by the id the wallet list shows. Owner only: a row that is not the caller's answers 404 exactly like a row that does not exist.
+   * Ids: a stored WalletTransaction id, `escrow-<escrowId>` (an escrow funding with no wallet row) or `paypal-failed-<id>` (a denied PayPal attempt).
+   * Besides the list row it returns what the backend really has: the project it belongs to and, for an escrow, the held / released amounts.
+   */
+  async getTransaction(clientId: string, rawId: string) {
+    const id = String(rawId || '').trim();
+    if (!id || id.length > 200) throw new AppError(NOT_FOUND, 404);
+
+    if (id.startsWith('escrow-')) {
+      const escrowId = id.slice('escrow-'.length);
+      const project = await prisma.project.findFirst({ where: { clientId, escrow: { is: { id: escrowId } } }, include: { escrow: true, provider: { select: { firstName: true, lastName: true } } } });
+      if (!project || !project.escrow) throw new AppError(NOT_FOUND, 404);
+      return {
+        ...escrowRow(project),
+        project: { id: project.id, title: project.title, providerName: providerName(project.provider) },
+        escrow: { amount: round2(project.escrow.amount), releasedAmount: round2(project.escrow.releasedAmount), status: project.escrow.status }
+      };
+    }
+
+    if (id.startsWith('paypal-failed-')) {
+      const payment = await prisma.paypalPayment.findFirst({ where: { id: id.slice('paypal-failed-'.length), userId: clientId, status: 'FAILED' } });
+      if (!payment) throw new AppError(NOT_FOUND, 404);
+      return { ...failedDepositRow(payment), project: null, escrow: null };
+    }
+
+    const tx = await prisma.walletTransaction.findFirst({ where: { id, userId: clientId } });
+    if (!tx) throw new AppError(NOT_FOUND, 404);
+    // The project is shown only when the stored metadata names one that is THIS client's.
+    const meta = tx.metadata && typeof tx.metadata === 'object' && !Array.isArray(tx.metadata) ? (tx.metadata as Record<string, unknown>) : {};
+    const projectId = typeof meta.projectId === 'string' ? meta.projectId : null;
+    const project = projectId ? await prisma.project.findFirst({ where: { id: projectId, clientId }, select: { id: true, title: true, provider: { select: { firstName: true, lastName: true } } } }) : null;
+    return { ...walletRow(tx), project: project ? { id: project.id, title: project.title, providerName: providerName(project.provider) } : null, escrow: null };
+  }
+
+  /**
    * Retrieves the client's wallet overview, balances, and transaction history
    */
   async getWallet(clientId: string) {
@@ -169,43 +247,13 @@ export class ClientFinanceService {
     // Also include escrow deposits for complete history
     const escrowTransactions = clientProjects
 	  .filter(p => p.escrow && !recordedReferences.has(p.escrow.paymentReference))
-      .map(p => ({
-        id: `escrow-${p.escrow!.id}`,
-        type: 'ESCROW_LOCK',
-        amount: round2(p.escrow!.amount),
-        currency: 'USD', // active escrow pricing is now USD-semantic (not a stored WalletTransaction row)
-        status: p.escrow!.status === 'HELD' ? 'HELD' : 'COMPLETED',
-        paymentMethod: p.escrow!.paymentMethod || 'محفظة وسيط AI',
-        referenceId: p.escrow!.paymentReference || p.id,
-        description: `تمويل ضمان المشروع: ${p.title}`,
-        createdAt: p.escrow!.fundedAt || p.escrow!.createdAt
-      }));
+      .map(p => escrowRow(p));
 
-    const formattedWalletTx = walletTransactions.map(tx => ({
-      id: tx.id,
-      type: tx.type,
-      amount: round2(tx.amount),
-      currency: tx.currency,
-      status: tx.status,
-      paymentMethod: tx.paymentMethod,
-      referenceId: tx.referenceId,
-      description: tx.description || (tx.type === 'DEPOSIT' ? 'إيداع رصيد بالمحفظة' : 'معاملة مالية'),
-      createdAt: tx.createdAt
-    }));
+    const formattedWalletTx = walletTransactions.map(tx => walletRow(tx));
 
     // A deposit attempt that PayPal denied / that failed validation is never credited and has no WalletTransaction: show it as a FAILED row so the client sees what happened.
     const failedDeposits = await prisma.paypalPayment.findMany({ where: { userId: clientId, status: 'FAILED' }, orderBy: { createdAt: 'desc' }, take: 50 });
-    const failedDepositRows = failedDeposits.map(p => ({
-      id: `paypal-failed-${p.id}`,
-      type: 'DEPOSIT',
-      amount: round2(Number(p.netAmount ?? p.amount)),
-      currency: p.currency || 'USD',
-      status: 'FAILED',
-      paymentMethod: 'PAYPAL',
-      referenceId: p.reference,
-      description: 'محاولة إيداع عبر PayPal لم تكتمل، ولم يُضف أي مبلغ إلى رصيدك',
-      createdAt: p.createdAt
-    }));
+    const failedDepositRows = failedDeposits.map(p => failedDepositRow(p));
 
     const allTransactions = [...formattedWalletTx, ...escrowTransactions, ...failedDepositRows]
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());

@@ -8,6 +8,7 @@ import { aiLimiter, dashboardLimiter, withdrawalLimiter } from '../middlewares/r
 import providerProfileRouter from './provider-profile.routes';
 import marketplaceServiceRouter from './marketplace-service.routes';
 import { exploreRequestsController } from '../controllers/explore-requests.controller';
+import { cancellationController } from '../controllers/contract-cancellation.controller';
 import { openProviderDispute, cancelProviderRequest, listMyDisputes, getMyDispute } from '../controllers/dispute.controller';
 import { createTicket, listMyTickets, getMyTicket, replyToTicket, closeMyTicket } from '../controllers/support-ticket.controller';
 import { rateAsProvider, ratingStatusAsProvider, stageRatingStatusAsProvider } from '../controllers/rating.controller';
@@ -113,6 +114,12 @@ router.post('/projects/:projectId/amendments', authenticate, requireActiveUser, 
 router.post('/amendments/:id/respond', authenticate, requireActiveUser, providerOnly, providerProjectAmendmentsController.respond);
 // The provider withdraws a request they raised while it is still pending.
 router.post('/amendments/:id/cancel', authenticate, requireActiveUser, providerOnly, providerProjectAmendmentsController.cancel);
+// «الإلغاء بالتراضي» (provider side): same recorded request, answered by the client; it never moves money.
+const cancel = cancellationController('PROVIDER');
+router.get('/projects/:projectId/cancellation-requests', authenticate, requireActiveUser, providerOnly, cancel.list);
+router.post('/projects/:projectId/cancellation-requests', authenticate, requireActiveUser, providerOnly, cancel.create);
+router.post('/cancellation-requests/:id/respond', authenticate, requireActiveUser, providerOnly, cancel.respond);
+router.post('/cancellation-requests/:id/withdraw', authenticate, requireActiveUser, providerOnly, cancel.withdraw);
 router.post('/projects/:projectId/stages/:stageId/deliveries/files', authenticate, requireActiveUser, providerOnly, deliveryUpload.array('files', DELIVERY_MAX_UPLOADED_FILES), uploadStageDeliveryFiles);
 router.post('/projects/:id/stages/:stageId/deliveries', authenticate, requireActiveUser, providerOnly, submitStageDelivery);
 // Advisory-only Gemini review of the provider's own stage delivery —
@@ -206,7 +213,7 @@ router.post(
   exploreRequestsController.toggleSave
 );
 
-router.post('/requests/:id/disputes', authenticate, requireActiveUser, providerOnly, openProviderDispute);
+router.post('/requests/:id/disputes', authenticate, requireActiveUser, providerOnly, caseFilesUpload, openProviderDispute);
 router.post('/requests/:id/rate', authenticate, requireActiveUser, providerOnly, rateAsProvider);
 router.get('/requests/:id/rating-status', authenticate, requireActiveUser, providerOnly, ratingStatusAsProvider);
 // the client's rating of ONE stage, read-only for the provider (the provider never rates a stage)

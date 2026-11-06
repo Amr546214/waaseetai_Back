@@ -1,3 +1,4 @@
+import { hasAgreedCancellation } from './cancellation-freeze';
 import { AmendmentRequesterRole, AmendmentStatus, AmendmentType, ContractStatus, EscrowStatus, LogCategory, LogStatus, ProjectStageStatus } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 import { isV2Escrow } from '../utils/escrow-commission';
@@ -104,6 +105,7 @@ export async function applyAmendment(tx: any, amendment: AmendmentToApply, actor
 
 	// 3) Refusal rules.
 	if (await hasActiveDispute(amendment.projectId, tx)) throw fail('لا يمكن تطبيق التعديل أثناء وجود نزاع مفتوح على المشروع');
+	if (await hasAgreedCancellation({ contractId: amendment.contractId, projectId: amendment.projectId }, tx as any)) throw fail('لا يمكن تطبيق التعديل بعد اتفاق الطرفين على الإلغاء بالتراضي');
 	const contract = await tx.contract.findUnique({ where: { id: amendment.contractId } });
 	const escrow = await tx.escrow.findUnique({ where: { projectId: amendment.projectId } });
 	if (!contract || contract.status !== ContractStatus.ACTIVE) throw fail('لا يمكن تطبيق التعديل: العقد غير نشط');

@@ -1952,6 +1952,7 @@ model Contract {
   signedAt              DateTime?
   stages                ProjectStage[]
   amendments            ProjectAmendment[]
+  cancellationRequests  ContractCancellationRequest[]
   termsVersions         ContractTermsVersion[]
   projectConversation   Conversation?
   createdAt             DateTime               @default(now())
@@ -2080,6 +2081,7 @@ model ProjectStage {
   amendmentId  String?
   deliveries   StageDelivery[]
   stageReviews Review[]
+  disputes     Dispute[]
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
 
@@ -2321,12 +2323,19 @@ model Dispute {
   reason         String
   description    String         @db.Text
   evidence       String[]       @default([])
+  // Case 2 (stage dispute): the stage the dispute is about, what the opener asks for (a request only, never a settlement), and the idempotency key/digest of the submit.
+  stageId             String?
+  stage               ProjectStage?  @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  requestedResolution String?
+  submissionKey       String?        @unique
+  submissionDigest    String?
   resolution     String?
   resolutionNote String?        @db.Text
   resolvedAt     DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
+  @@index([stageId])
   @@index([status, createdAt])
   @@index([requestId])
   @@index([projectId])
@@ -3249,4 +3258,67 @@ model RegistrationEmailProof {
 
   @@index([expiresAt])
   @@map("registration_email_proofs")
+}
+
+enum CancellationRequestStatus {
+  PENDING_OTHER_PARTY
+  /// both parties agreed: «تم الاتفاق — بانتظار التسوية». New stage approvals / releases are frozen; no money has moved yet.
+  AGREED_PENDING_SETTLEMENT
+  /// the administration executed the settlement and the contract and project were closed in the same transaction
+  SETTLED
+  REJECTED
+  WITHDRAWN
+}
+
+/// Where the money side of an agreed mutual cancellation stands: PENDING_ADMIN_DECISION until an administrator holding disputes.resolve + payouts.send executes the settlement (SETTLED).
+enum CancellationSettlementStatus {
+  NOT_APPLICABLE
+  PENDING_ADMIN_DECISION
+  SETTLED
+}
+
+/// «الإلغاء بالتراضي»: ONE party asks to end an ACTIVE contract by agreement and the other party accepts or rejects. Agreement alone moves no money (it freezes new stage approvals); the settlement is an explicit admin action. At most one PENDING or AGREED_PENDING_SETTLEMENT request per contract (partial unique index in the migration).
+model ContractCancellationRequest {
+  id String @id @default(uuid())
+
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  projectId  String
+  clientId   String
+  providerId String
+
+  requestedById   String
+  requestedByRole AmendmentRequesterRole
+  reason          String
+  note            String?                @db.Text
+  /// Client-generated key: the same key from the same user returns the existing request instead of a second one.
+  requestKey      String?
+
+  status           CancellationRequestStatus    @default(PENDING_OTHER_PARTY)
+  settlementStatus CancellationSettlementStatus @default(NOT_APPLICABLE)
+
+  respondedById String?
+  respondedAt   DateTime?
+  responseNote  String?   @db.Text
+  withdrawnAt   DateTime?
+
+  /// Settlement (set once, in the same transaction that moves the money and closes the contract). USD only.
+  settledAt                DateTime?
+  settledById              String?
+  settlementReason         String?   @db.Text
+  settlementHeldBefore     Float?
+  settlementRefundToClient Float?
+  settlementReleaseToProvider Float?
+  settlementPlatformCommission Float?
+  settlementProviderNet    Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([requestedById, requestKey])
+  @@index([contractId, status])
+  @@index([clientId])
+  @@index([providerId])
+  @@index([status, createdAt])
+  @@map("contract_cancellation_requests")
 }
