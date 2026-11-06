@@ -1,3 +1,4 @@
+import { documentUpdate } from '../utils/identity-document-context';
 import { respondServiceError } from '../utils/known-service-errors';
 import { identityFieldCheckService } from '../services/identity-field-check.service';
 import { updateProviderPreferencesSchema } from '../dtos/provider-preferences.dto';
@@ -161,8 +162,9 @@ export const saveSetupData = async (req: Request, res: Response) => {
 		}
 
 		// A VERIFIED account's identity (idNumber / dob) is frozen (409); '' / null never erase a stored value.
-		const storedIdentity = await prisma.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, dob: true, kycStatus: true, isProfileSetupComplete: true, frontIdUrl: true, backIdUrl: true, supportingDocsUrl: true, certUrls: true, avatarUrl: true, user: { select: { avatarUrl: true } } } });
+		const storedIdentity = await prisma.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, kycStatus: true, isProfileSetupComplete: true, frontIdUrl: true, backIdUrl: true, supportingDocsUrl: true, certUrls: true, avatarUrl: true, user: { select: { avatarUrl: true } } } });
 		assertVerifiedIdentityUnchanged(storedIdentity, details ?? {});
+        const doc = documentUpdate(details ?? {}, storedIdentity);
 
 		// A value the user already has stored in these fields and re-sends unchanged is "keep", not a new link (legacy file names / public URLs would otherwise be refused on every re-save).
 		const storedFileValues = [storedIdentity?.frontIdUrl, storedIdentity?.backIdUrl, storedIdentity?.supportingDocsUrl, ...(storedIdentity?.certUrls ?? [])];
@@ -223,7 +225,8 @@ export const saveSetupData = async (req: Request, res: Response) => {
 			const providerData = {
 				userId,
 				avatarUrl: avatarUrl || undefined, // absent = keep the stored photo (a re-save never erases it)
-				idNumber: details?.idNumber || undefined,
+				...doc,
+          idNumber: details?.idNumber || undefined,
 				dob: details?.dob ? new Date(details.dob) : undefined, // absent = keep the stored value (a re-save never erases it)
 				country: clean(details?.country, 60),
 				city: clean(details?.city, 80),

@@ -15,7 +15,9 @@ export const profileSetupSchema = z.object({
   hourlyRate: z.number().positive().optional().nullable(),
 
   // Identity (Sensitive)
-  idNumber: z.string().trim().regex(/^[12]\d{9}$/, 'رقم الهوية يجب أن يكون 10 أرقام ويبدأ بـ 1 أو 2').optional().nullable(),
+  idNumber: z.string().trim().max(40).refine(v => !v || /^(?:[12]\d{9}|[\p{L}\p{Nd}][\p{L}\p{Nd} /.-]{0,39})$/u.test(v), 'رقم الوثيقة غير صالح').nullable().optional(),
+  idIssuingCountry: z.string().max(2).nullable().optional(),
+  idDocumentType: z.string().max(20).nullable().optional(),
   idExpiryDate: z.string().datetime().or(z.date()).optional().nullable(),
   nationality: sanitizedText(z.string().trim().max(60)).optional().nullable(),
   city: sanitizedText(z.string().trim().max(80)).optional().nullable(),
@@ -26,6 +28,9 @@ export const profileSetupSchema = z.object({
   supportingDocs: z.string().max(15_000_000).optional().nullable().or(z.literal('')),
 
 }).catchall(z.unknown()).superRefine((data, ctx) => {
+  if (!data.idIssuingCountry && !data.idDocumentType && data.idNumber && !/^[12]\d{9}$/.test(data.idNumber)) {
+    ctx.addIssue({ code: 'custom', path: ['idNumber'], message: 'رقم الهوية يجب أن يكون 10 أرقام ويبدأ بـ 1 أو 2' });
+  }
   for (const key of nonPaypalPayoutKeys(data)) ctx.addIssue({ code: 'custom', path: [key], message: PAYPAL_ONLY_MESSAGE });
 });
 

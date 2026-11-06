@@ -1,3 +1,4 @@
+import { documentUpdate } from '../utils/identity-document-context';
 import { UserRole } from '@prisma/client';
 import { identityFieldCheckService } from '../services/identity-field-check.service';
 import { prisma } from '../config/db';
@@ -41,8 +42,9 @@ export class ProfileSetupService {
     // Same identity handling as the main wizards (provider/client profile setup): a VERIFIED identity is frozen (409), KYC files are validated
     // and stored PRIVATE, and an unchanged re-save never re-opens a review.
     const profileModel: any = activeRole === UserRole.PROVIDER ? prisma.providerProfile : prisma.clientProfile;
-    const storedIdentity = await profileModel.findUnique({ where: { userId }, select: { idNumber: true, dob: true, kycStatus: true } });
-    assertVerifiedIdentityUnchanged(storedIdentity, { idNumber: dto.idNumber });
+    const storedIdentity = await profileModel.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, kycStatus: true } });
+    const doc = documentUpdate(dto, storedIdentity);
+    assertVerifiedIdentityUnchanged(storedIdentity, dto);
     assertKycFileValues([dto.frontId, dto.backId, dto.supportingDocs], userId);
     const folder = activeRole === UserRole.PROVIDER ? 'providers' : 'clients';
     const [frontIdUrl, backIdUrl, supportingDocsUrl] = await Promise.all([
@@ -59,6 +61,7 @@ export class ProfileSetupService {
     const avatarUrl = dto.avatarUrl === undefined ? undefined : await storeDataUriIfNeeded(dto.avatarUrl, `waseetai/users/${userId}/avatar`, 'avatar');
     // Role-profile columns, identical to the main wizards: empty = keep what is stored (a stored private document is never wiped by a re-save).
     const identityAndBankData = () => ({
+      ...doc,
       ...(dto.idNumber ? { idNumber: dto.idNumber } : {}),
       ...(dto.country ? { country: dto.country } : {}),
       ...(dto.city ? { city: dto.city } : {}),
@@ -129,7 +132,7 @@ export class ProfileSetupService {
     });
 
     // Submitting a changed, complete identity opens (or refreshes) the same review the main wizards open; an unchanged re-save does not.
-    const changed = identitySubmissionChanged(storedIdentity, { idNumber: dto.idNumber }, { front: frontIdUrl, back: backIdUrl });
+    const changed = identitySubmissionChanged(storedIdentity, dto, { front: frontIdUrl, back: backIdUrl });
     let identitySubmitted = false;
     if (changed && identityProfile) {
       const p = identityProfile as { idNumber?: string | null; frontIdUrl?: string | null; backIdUrl?: string | null };
