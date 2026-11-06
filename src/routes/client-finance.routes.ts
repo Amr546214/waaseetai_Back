@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorizeActiveRoleWithMessage, requireActiveUser } from '../middlewares/auth.middleware';
 import { validateDto } from '../middlewares/validate-dto.middleware';
-import { getClientInvoice, getClientInvoices, getClientWallet, getClientWalletTransaction } from '../controllers/client-finance.controller';
+import { getClientInvoice, getClientInvoices, getClientWallet, getClientWalletHistory, getClientWalletTransaction } from '../controllers/client-finance.controller';
 import { createPaypalOrder, capturePaypalOrder } from '../controllers/paypal.controller';
 import { createPaypalOrderSchema, capturePaypalOrderSchema } from '../dtos/paypal.dto';
 import { paymentLimiter } from '../middlewares/rate-limit.middleware';
@@ -16,6 +16,7 @@ router.use(requireActiveUser);
 router.use(authorizeActiveRoleWithMessage('بدّل إلى حساب طالب الخدمة لاستخدام المحفظة والدفع', AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL));
 
 router.get('/wallet', getClientWallet);
+router.get('/wallet/history', getClientWalletHistory);
 router.get('/wallet/transactions/:id', getClientWalletTransaction);
 router.get('/invoices', getClientInvoices);
 router.get('/invoices/:id', getClientInvoice);

@@ -1,6 +1,6 @@
 import { mountCaseAttachments, caseFilesUpload } from './case-attachments.routes';
 import { Router, Request, Response, NextFunction } from 'express';
-import { getProviderStatistics, getProviderOffers, getProviderOfferById, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, uploadStageDeliveryFiles, getDeliveryAiReview, getProjectHealthAnalysis, getProviderWallet, getProviderTransactions, getCompanyDeliveries, getProviderInvoices, getProviderInvoice, getProviderSales } from '../controllers/provider.controller';
+import { getProviderStatistics, getProviderOffers, getProviderOfferById, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, uploadStageDeliveryFiles, getDeliveryAiReview, getProjectHealthAnalysis, getProviderWallet, getProviderTransactions, getProviderFinanceHistory, getProviderFinanceTransaction, getCompanyDeliveries, getProviderInvoices, getProviderInvoice, getProviderSales } from '../controllers/provider.controller';
 import { submitWithdrawal, listMyWithdrawals } from '../controllers/withdrawal.controller';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, authorizeActiveRole, requireActiveUser } from '../middlewares/auth.middleware';
@@ -140,6 +140,8 @@ router.get('/company/deliveries', authenticate, requireActiveUser, providerOnly,
 
 router.get('/finance/wallet', authenticate, requireActiveUser, providerOnly, getProviderWallet);
 router.get('/finance/transactions', authenticate, requireActiveUser, providerOnly, getProviderTransactions);
+router.get('/finance/history', authenticate, requireActiveUser, providerOnly, getProviderFinanceHistory);
+router.get('/finance/transactions/:id', authenticate, requireActiveUser, providerOnly, getProviderFinanceTransaction);
 router.get('/finance/invoices', authenticate, requireActiveUser, providerOnly, getProviderInvoices);
 router.get('/finance/invoices/:id', authenticate, requireActiveUser, providerOnly, getProviderInvoice);
 router.get('/finance/sales', authenticate, requireActiveUser, providerOnly, getProviderSales);
