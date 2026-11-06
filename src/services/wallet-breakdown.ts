@@ -136,8 +136,11 @@ export function commissionBreakdown(c: { amount: number; currency: string; type?
 	return { ...b, gross: amount, net: amount, note: `${pct}% من ${round2(baseAmount)} (المبلغ المُفرَج)${level != null ? ` · المستوى ${level} وقت الاستحقاق` : ''} · المنصة تتحمل العمولة ولا يوجد خصم` };
 }
 
+// the same wording the marketer withdraw page shows for a withdrawal status
+export const WITHDRAWAL_STATUS_AR: Record<string, string> = { PENDING: 'بانتظار مراجعة الإدارة', APPROVED: 'معتمد', PROCESSING: 'قيد التحويل', COMPLETED: 'مدفوع', REJECTED: 'مرفوض', REVERSED: 'أُعيد من PayPal' };
+
 export function withdrawalBreakdown(w: { amount: number; currency: string; status: string }): Breakdown {
-	return { ...base('WITHDRAWAL', 'طلب سحب', w.currency, 'DEBITED_FROM_WALLET'), gross: round2(w.amount), net: round2(w.amount), note: `الحالة: ${w.status}` };
+	return { ...base('WITHDRAWAL', 'طلب سحب', w.currency, 'DEBITED_FROM_WALLET'), gross: round2(w.amount), net: round2(w.amount), note: `الحالة: ${WITHDRAWAL_STATUS_AR[w.status] ?? 'غير معروفة'}` };
 }
 
 export const NOT_FOUND_TX = 'المعاملة غير موجودة أو لا تملك صلاحية الوصول إليها';
@@ -147,3 +150,13 @@ export const pageOf = <T>(rows: T[], rawPage: unknown, rawLimit: unknown) => {
 	const limit = Math.min(100, Math.max(1, Math.floor(Number(rawLimit)) || 20));
 	return { items: rows.slice((page - 1) * limit, page * limit), pagination: { page, limit, total: rows.length, totalPages: Math.ceil(rows.length / limit) } };
 };
+
+export type Direction = 'IN' | 'OUT' | 'HOLD' | 'NONE';
+/** Display convention for client rows: `amount` stays the STORED signed value; `displayAmount` is its absolute value and `direction` says which way the money moved. */
+export function clientDirection(type: string, amount: number, status?: string): Direction {
+	if (status === 'FAILED') return 'NONE';
+	if (type === 'ESCROW_LOCK') return 'HOLD';
+	if (type === 'DEPOSIT' || type === 'REFUND' || type === 'AMENDMENT_REFUND') return 'IN';
+	if (type === 'WITHDRAWAL' || type === 'ORDER_PAYMENT' || type === 'AMENDMENT_TOPUP') return 'OUT';
+	return amount < 0 ? 'OUT' : 'IN';
+}

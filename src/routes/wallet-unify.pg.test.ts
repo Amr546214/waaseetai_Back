@@ -107,6 +107,10 @@ test('pg client: empty history, held escrow card, v2 escrow lock = no fee, legac
 	const v2Row = rows.find((x: any) => x.id === `escrow-${v2.escrow.id}`); const lgRow = rows.find((x: any) => x.id === `escrow-${legacy.escrow.id}`);
 	assert.equal(v2Row.breakdown.detailsRecorded, true); assert.equal(v2Row.breakdown.net, 100); assert.equal(v2Row.breakdown.deductions.length, 0);
 	assert.equal(lgRow.breakdown.detailsRecorded, false); assert.equal(lgRow.breakdown.missingNote, MISSING);
+	// a legacy wallet ESCROW_LOCK stores a NEGATIVE amount: amount stays as stored, displayAmount is absolute, direction says HOLD
+	await prisma.walletTransaction.create({ data: { userId: client.id, type: 'ESCROW_LOCK', amount: -150, currency: 'USD', paymentMethod: 'WALLET', referenceId: `ESCROW-${uid()}`, metadata: {} } });
+	const neg = (await call('/client/finance/wallet/history', client.id)).json.data.items.find((x: any) => x.amount === -150);
+	assert.deepEqual({ d: neg.displayAmount, dir: neg.direction, g: neg.breakdown.detailsRecorded }, { d: 150, dir: 'HOLD', g: false });
 	const det = await call(`/client/finance/wallet/transactions/escrow-${v2.escrow.id}`, client.id); assert.equal(det.status, 200); assert.equal(det.json.data.breakdown.operation, 'ESCROW_LOCK');
 	assert.equal((await call(`/client/finance/wallet/transactions/escrow-${v2.escrow.id}`, empty.id)).status, 404);
 	// a provider acting as provider cannot reach the client wallet
@@ -172,7 +176,7 @@ test('pg provider: mutual-cancellation settlement line shows gross -> commission
 	const req = await prisma.contractCancellationRequest.create({ data: { contractId: w.contract.id, projectId: w.project.id, clientId: client.id, providerId: prov.id, requestedById: client.id, requestedByRole: 'CLIENT', reason: 'x', status: 'SETTLED', settlementStatus: 'SETTLED' as any, settledAt: new Date(), settlementHeldBefore: 60, settlementRefundToClient: 30, settlementReleaseToProvider: settle, settlementPlatformCommission: settleCommission, settlementProviderNet: settleNet } as any });
 	const r = await call('/provider/finance/wallet', prov.id); assert.equal(r.status, 200, JSON.stringify(r.json));
 	const line = r.json.data.transactions.find((x: any) => x.id === `cancellation-settlement-${req.id}`);
-	assert.ok(line, 'history line id cancellation-settlement-<id>'); assert.equal(line.amount, settleNet);
+	assert.ok(line, 'history line id cancellation-settlement-<id>'); assert.equal(line.amount, settleNet); assert.equal(line.category, 'CANCELLATION_SETTLEMENT');
 	assert.deepEqual({ g: line.breakdown.gross, n: line.breakdown.net, c: line.breakdown.deductions[0].amount, rate: line.breakdown.deductions[0].ratePercent, lv: line.breakdown.deductions[0].level, op: line.breakdown.operation }, { g: settle, n: settleNet, c: settleCommission, rate, lv: 2, op: 'CANCELLATION_SETTLEMENT' });
 	const sm = r.json.data.summary; assert.equal(sm.releasedWithoutLine, 0); assert.equal(sm.cards.grossBeforeDeductions.value, 70); assert.equal(sm.cards.grossBeforeDeductions.complete, true);
 	assert.equal(sm.cards.heldInEscrow.value, 0); // RELEASED escrow holds nothing
@@ -203,11 +207,47 @@ test('pg marketer: cards use the withdrawal-enforced figure; commission history 
 	const h = await call('/marketer-overview/wallet/history?limit=10', mk.id); assert.equal(h.status, 200, JSON.stringify(h.json)); assert.equal(h.json.data.pagination.total, 3);
 	const c = h.json.data.items.find((x: any) => x.id === `commission-${c1.id}`);
 	assert.deepEqual({ g: c.breakdown.gross, n: c.breakdown.net, d: c.breakdown.deductions.length, rec: c.breakdown.detailsRecorded }, { g: 10, n: 10, d: 0, rec: true }); assert.match(c.breakdown.note, /5% من 200/); assert.match(c.breakdown.note, /المستوى 2/);
-	assert.equal(h.json.data.items.find((x: any) => x.id === `withdrawal-${wd.id}`).breakdown.netMeaning, 'DEBITED_FROM_WALLET');
+	const wl = h.json.data.items.find((x: any) => x.id === `withdrawal-${wd.id}`); assert.equal(wl.breakdown.netMeaning, 'DEBITED_FROM_WALLET'); assert.equal(wl.status, 'PENDING'); assert.equal(wl.breakdown.note, 'الحالة: بانتظار مراجعة الإدارة'); assert.ok(!/PENDING/.test(wl.breakdown.note));
 	assert.equal((await call(`/marketer-overview/wallet/history/commission-${c1.id}`, mk.id)).status, 200);
 	assert.equal((await call(`/marketer-overview/wallet/history/commission-${c1.id}`, other.id)).status, 404);
 	assert.equal((await call(`/marketer-overview/wallet/history/withdrawal-${wd.id}`, other.id)).status, 404);
 	assert.equal((await call('/marketer-overview/wallet/history', referred.id)).status, 403);
 	assert.equal((await call('/marketer-overview/wallet/history?type=WITHDRAWAL', mk.id)).json.data.items.length, 1);
 	assert.equal((await call('/marketer-overview/wallet/history', other.id)).json.data.pagination.total, 0);
+});
+
+test('pg paging beyond one page: 25 client rows and 22 provider rows, both pages, no duplicates and no gaps', opts, async () => {
+	const { prisma, call } = await env();
+	const client = await mkUser(prisma, 'CLIENT_INDIVIDUAL', 'CLIENT', 'pg25'); const prov = await mkUser(prisma, 'PROVIDER_COMPANY', 'PROVIDER', 'pg22');
+	const base = Date.now();
+	for (let i = 0; i < 25; i++) await prisma.walletTransaction.create({ data: { userId: client.id, type: 'REFUND', amount: 1 + i, currency: 'USD', referenceId: `pg-${uid()}`, createdAt: new Date(base - i * 1000) } });
+	const all: string[] = [];
+	for (const page of [1, 2, 3]) { const r = await call(`/client/finance/wallet/history?page=${page}&limit=20`, client.id); assert.equal(r.json.data.pagination.total, 25); assert.equal(r.json.data.pagination.totalPages, 2); all.push(...r.json.data.items.map((x: any) => x.id)); if (page === 1) assert.equal(r.json.data.items.length, 20); if (page === 2) assert.equal(r.json.data.items.length, 5); if (page === 3) assert.equal(r.json.data.items.length, 0); }
+	assert.equal(all.length, 25); assert.equal(new Set(all).size, 25);
+	const full = (await call('/client/finance/wallet', client.id)).json.data.transactions.map((x: any) => x.id); assert.deepEqual(all, full); // same order as the wallet list
+	const stages = Array.from({ length: 22 }, (_, i) => ({ amount: 10, status: 'APPROVED' as const, approvedAt: new Date(base - i * 1000) }));
+	await mkProject(prisma, client, prov, 220, { feePolicyVersion: 2, providerCommissionRateSnapshot: 10, providerCommissionLevelSnapshot: 1, releasedAmount: 220, platformCommissionAmount: 22, providerNetReleasedAmount: 198, status: 'RELEASED' }, stages);
+	const ids: string[] = [];
+	for (const page of [1, 2]) { const r = await call(`/provider/finance/history?page=${page}&limit=20`, prov.id); assert.equal(r.status, 200); assert.equal(r.json.data.pagination.total, 23); ids.push(...r.json.data.items.map((x: any) => x.id)); }
+	assert.equal(ids.length, 23); assert.equal(new Set(ids).size, 23);
+});
+
+test('pg individual provider: wallet / history / details reachable once a specialty is APPROVED; PROVIDER_DASHBOARD_LOCKED unchanged before; old /transactions list unchanged', opts, async () => {
+	const { prisma, call } = await env();
+	const client = await mkUser(prisma, 'CLIENT_INDIVIDUAL', 'CLIENT', 'ci'); const prov = await mkUser(prisma, 'PROVIDER_INDIVIDUAL', 'PROVIDER', 'pi');
+	for (const url of ['/provider/finance/wallet', '/provider/finance/history', '/provider/finance/transactions/x', '/provider/finance/transactions']) { const r = await call(url, prov.id); assert.equal(r.status, 403, url); assert.equal(r.json.code, 'PROVIDER_DASHBOARD_LOCKED', url); }
+	const tag = uid().slice(0, 6);
+	const cat = await prisma.category.create({ data: { id: uid(), slug: `c-${tag}`, nameAr: 'تصنيف' } }); const spec = await prisma.specialty.create({ data: { id: uid(), slug: `s-${tag}`, categoryId: cat.id, nameAr: 'تخصص' } });
+	const pp = await prisma.providerProfile.create({ data: { id: uid(), userId: prov.id } });
+	const ps = await prisma.providerSpecialty.create({ data: { id: uid(), providerProfileId: pp.id, specialtyId: spec.id, subSpecialties: [], status: 'PENDING_PROOF' } });
+	assert.equal((await call('/provider/finance/history', prov.id)).status, 403); // not approved yet
+	const w = await mkProject(prisma, client, prov, 100, { feePolicyVersion: 2, providerCommissionRateSnapshot: 10, providerCommissionLevelSnapshot: 2, releasedAmount: 40, platformCommissionAmount: 4, providerNetReleasedAmount: 36 }, [{ amount: 40, status: 'APPROVED', approvedAt: new Date() }, { amount: 60, status: 'IN_PROGRESS' }]);
+	await prisma.providerSpecialty.update({ where: { id: ps.id }, data: { status: 'APPROVED' } });
+	const wal = await call('/provider/finance/wallet', prov.id); assert.equal(wal.status, 200, JSON.stringify(wal.json)); assert.equal(wal.json.data.summary.cards.availableToWithdraw.value, 36);
+	const hist = await call('/provider/finance/history', prov.id); assert.equal(hist.status, 200); assert.equal(hist.json.data.pagination.total, 2);
+	const det = await call(`/provider/finance/transactions/stage-release-${w.stages[0].id}`, prov.id); assert.equal(det.status, 200); assert.equal(det.json.data.breakdown.deductions[0].level, 2);
+	assert.equal((await call(`/provider/finance/transactions/stage-release-${w.stages[0].id}`, client.id)).status, 403);
+	// the old unpaged list (the only export-style consumer of /transactions) keeps its shape: summary + events, each event with its old fields
+	const old = await call('/provider/finance/transactions', prov.id); assert.equal(old.status, 200); assert.deepEqual(Object.keys(old.json.data).sort(), ['events', 'summary']);
+	for (const k of ['id', 'type', 'category', 'amount', 'currency', 'title', 'description', 'projectId', 'status', 'createdAt']) assert.ok(k in old.json.data.events[0], k);
 });
