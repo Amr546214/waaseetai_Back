@@ -64,7 +64,8 @@ export class AdminTasksService {
 	async list(actor: AdminActor, q: { tab?: string; assigneeId?: string; type?: string; search?: string }) {
 		const now = this.now();
 		const where: Prisma.AdminTaskWhereInput = { ...this.scope(actor) };
-		if (q.tab === 'open') where.status = 'IN_PROGRESS'; else if (q.tab === 'pending') where.status = { in: ['NEW', 'PENDING'] }; else if (q.tab === 'done') where.status = 'DONE';
+		// «open» = every open task (NEW + IN_PROGRESS + PENDING), the same set the «مهام مفتوحة» counter shows, so a task just created is in the default view. «active» = only those being worked on.
+		if (q.tab === 'open') where.status = { in: OPEN }; else if (q.tab === 'active') where.status = 'IN_PROGRESS'; else if (q.tab === 'pending') where.status = { in: ['NEW', 'PENDING'] }; else if (q.tab === 'done') where.status = 'DONE';
 		if (q.assigneeId) where.assigneeId = q.assigneeId;
 		if (q.type && (TASK_TYPES as readonly string[]).includes(q.type)) where.type = q.type as AdminTaskType;
 		if (q.search?.trim()) where.title = { contains: q.search.trim(), mode: 'insensitive' };
