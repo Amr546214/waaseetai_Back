@@ -277,7 +277,9 @@ export class DisputeService {
         : Promise.resolve(null),
       adminAudit.listForEntity('DISPUTE', id)
     ]);
-    const assignment = audit.find(e => e.eventType === 'DISPUTE_ASSIGNED');
+    // The display history is capped; the current assignee can be older than all visible entries.
+    const assignment = audit.find(e => e.eventType === 'DISPUTE_ASSIGNED')
+      ?? (await adminAudit.listForEntity('DISPUTE', id, ['DISPUTE_ASSIGNED'], 1))[0];
     const financialOutcome = (audit.find(e => e.eventType === 'DISPUTE_FINANCIAL_RESOLVED')?.context?.outcomeSummary as FinancialOutcomeSummary | undefined) ?? null;
     return {
       ...dispute, requestedResolutionLabel: requestedResolutionLabel(dispute.requestedResolution),
@@ -305,7 +307,8 @@ export class DisputeService {
     const assignee = await prisma.user.findUnique({ where: { id: assigneeId }, select: { id: true, firstName: true, lastName: true, accountType: true } });
     if (!assignee || (assignee.accountType !== AccountType.ADMIN && assignee.accountType !== AccountType.SUPER_ADMIN) || !(await assigneeHolds(assigneeId, ['disputes.view']))) throw fieldError('assigneeId', 'يمكن إسناد النزاع إلى عضو فريق يملك صلاحية عرض النزاعات فقط');
     const name = [assignee.firstName, assignee.lastName].filter(Boolean).join(' ');
-    await adminAudit.record({ adminId, entity: 'DISPUTE', entityId: dispute.id, eventType: 'DISPUTE_ASSIGNED', title: 'إسناد نزاع', summary: `إسناد النزاع إلى ${name || 'مشرف'}`, details: { assigneeId: assignee.id, assigneeName: name } });
+    const row = await adminAudit.record({ adminId, entity: 'DISPUTE', entityId: dispute.id, eventType: 'DISPUTE_ASSIGNED', title: 'إسناد نزاع', summary: `إسناد النزاع إلى ${name || 'مشرف'}`, details: { assigneeId: assignee.id, assigneeName: name } });
+    if (!row) throw new AppError('تعذّر حفظ إسناد النزاع. حاول مرة أخرى.', 500);
     return { id: dispute.id, assignedTo: { id: assignee.id, name } };
   }
 
