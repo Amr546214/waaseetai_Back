@@ -10,7 +10,9 @@ process.env.JWT_SECRET = 'admin-content-secret';
 process.env.OPENAI_API_KEY = 'x';
 
 const ADMIN = '99999999-9999-4999-8999-999999999999', CLIENT = '33333333-3333-4333-8333-333333333333';
+const REVIEWER = '44444444-4444-4444-8444-444444444444';
 const users: Record<string, any> = {
+	[REVIEWER]: { id: REVIEWER, accountType: 'ADMIN', status: 'ACTIVE', activeRole: 'ADMIN', roles: ['ADMIN'] },
 	[ADMIN]: { id: ADMIN, email: 'a@x.com', accountType: 'ADMIN', status: 'ACTIVE', activeRole: 'ADMIN', roles: ['ADMIN'] },
 	[CLIENT]: { id: CLIENT, email: 'c@x.com', accountType: 'CLIENT_INDIVIDUAL', status: 'ACTIVE', activeRole: 'CLIENT', roles: ['CLIENT'] }
 };
@@ -22,8 +24,14 @@ let tablesMissing = false;
 const missing = () => Object.assign(new Error('The table `public.x` does not exist'), { code: 'P2021' });
 const guard = <T>(fn: () => T) => async (...a: any[]) => { if (tablesMissing) throw missing(); return (fn as any)(...a); };
 
+const accessModels = fullAccessModels();
 const prisma: any = {
-	...fullAccessModels(),
+	...accessModels,
+	adminStaff: { findUnique: async (args: any) => {
+		const staff = await accessModels.adminStaff.findUnique(args);
+		if (staff && args.where.userId === REVIEWER) staff.role.permissions = ['business_models.review'] as typeof staff.role.permissions;
+		return staff;
+	} },
 	user: { findUnique: async ({ where }: any) => users[where.id] ?? null },
 	platformSetting: {
 		findMany: guard(() => settings.map(s => ({ ...s }))), count: guard(() => settings.length),
@@ -36,7 +44,10 @@ const prisma: any = {
 		update: guard(function ({ where, data }: any) { const a = assets.find(x => x.id === where.id); Object.assign(a, data); return { ...a }; })
 	},
 	serviceCatalog: {
-		findMany: async () => services, count: async () => services.length,
+		findMany: async ({ select }: any) => services.map(s => ({
+			...s, provider: { firstName: 'مقدم', ...(select.provider.select.email ? { email: 'private@example.test' } : {}) },
+		})), count: async () => services.length,
+		findFirst: async ({ where }: any) => services.find(s => s.id === where.id && where.status.in.includes(s.status)) ?? null,
 		findUnique: async ({ where }: any) => services.find(s => s.id === where.id) ?? null,
 		update: async ({ where, data }: any) => { const s = services.find(x => x.id === where.id); Object.assign(s, data); return s; }
 	},
@@ -167,4 +178,23 @@ test('marketplace service moderation: reject needs a reason, state machine enfor
 	assert.equal(services[0].status, 'ARCHIVED');
 	assert.equal((await call(ADMIN, 'PATCH', `/admin/marketplace-services/${SVC}/moderation`, { json: { action: 'REJECT', reason: 'مخالف' } })).status, 409);
 	assert.equal((await call(ADMIN, 'GET', '/admin/marketplace-services')).status, 200);
+});
+
+
+test('business model reads respect scoped permission and never grant moderation', async () => {
+	reset();
+	const path = '/admin/marketplace-services';
+	assert.equal((await call(null, 'GET', path + '/' + SVC)).status, 401);
+	assert.equal((await call(CLIENT, 'GET', path + '/' + SVC)).status, 403);
+	const list = await call(REVIEWER, 'GET', path);
+	assert.equal(list.status, 200);
+	assert.equal(list.body.data.items[0].provider.email, undefined);
+	assert.equal((await call(REVIEWER, 'GET', path + '?page=1.5')).status, 400);
+	const detail = await call(REVIEWER, 'GET', path + '/' + SVC);
+	assert.equal(detail.status, 200);
+	assert.deepEqual(detail.body.data.actions, ['APPROVE', 'REJECT']);
+	assert.equal((await call(REVIEWER, 'GET', path + '/' + ADMIN)).status, 404);
+	assert.equal((await call(REVIEWER, 'PATCH', path + '/' + SVC + '/moderation', { json: { action: 'REJECT', reason: 'سبب' } })).status, 403);
+	assert.equal((await call(ADMIN, 'PATCH', path + '/' + SVC + '/moderation', { json: { action: 'REJECT', reason: 'سبب', expectedStatus: 'PUBLISHED' } })).status, 409);
+	assert.equal(services[0].status, 'PENDING_APPROVAL');
 });
