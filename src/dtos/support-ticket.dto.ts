@@ -28,7 +28,7 @@ export const setTicketStatusSchema = z.object({
 });
 
 export const TICKET_PRIORITIES = ['منخفضة', 'عادية', 'عالية', 'عاجلة'] as const;
-export const assignTicketSchema = z.object({ assigneeId: z.string().trim().min(1).max(64) });
+export const assignTicketSchema = z.object({ assigneeId: z.string().trim().min(1).max(64), escalationReason: z.string().trim().min(1).max(1000).optional() });
 export const ticketPrioritySchema = z.object({ priority: z.enum(TICKET_PRIORITIES, { message: 'أولوية التذكرة غير صحيحة' }) });
 export const internalNoteSchema = z.object({ body: z.string().trim().min(1, 'أدخل نص الملاحظة').max(5000) });
 

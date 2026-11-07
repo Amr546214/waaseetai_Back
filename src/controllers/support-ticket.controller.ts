@@ -91,8 +91,8 @@ export async function adminSetTicketStatus(req: Request, res: Response, next: Ne
 export async function adminAssignTicket(req: Request, res: Response, next: NextFunction) {
   try {
     const parsed = assignTicketSchema.safeParse(req.body);
-    if (!parsed.success) throw zodAppError(parsed.error.issues, 'حدد المشرف المكلَّف بالتذكرة', { assigneeId: 'حدد المشرف المكلَّف بالتذكرة' });
-    res.json({ success: true, message: 'تم تكليف التذكرة', data: await supportTicketService.assign(String(req.params.id), userId(req), parsed.data.assigneeId) });
+    if (!parsed.success) throw zodAppError(parsed.error.issues, 'حدد المشرف المكلَّف بالتذكرة', { assigneeId: 'حدد المشرف المكلَّف بالتذكرة', escalationReason: 'اكتب سبب التصعيد في حدود ١٠٠٠ حرف' });
+    res.json({ success: true, message: 'تم تكليف التذكرة', data: await supportTicketService.assign(String(req.params.id), userId(req), parsed.data.assigneeId, parsed.data.escalationReason) });
   } catch (error) { next(error); }
 }
 

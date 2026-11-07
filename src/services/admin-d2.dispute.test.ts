@@ -5,11 +5,11 @@ import assert from 'node:assert/strict';
 // prisma, the notification helpers are mocked; the audit store is an in-memory stand-in for account_audit_logs.
 type Fx = { audit: any[]; providerNotes: any[]; clientNotes: any[]; dispute: any };
 
-async function load(t: TestContext, overrides: Partial<any> = {}) {
+async function load(t: TestContext, overrides: Partial<any> = {}, canResolve = false) {
 	const fx: Fx = { audit: [], providerNotes: [], clientNotes: [], dispute: { id: 'd1', requestId: null, projectId: 'p1', openedById: 'client-1', againstUserId: 'prov-1', status: 'OPEN', reason: 'r', description: 'd', evidence: [], ...overrides } };
 	let assignmentWriteFails = false;
 	const prisma: any = {
-		adminStaff: { findUnique: async ({ where }: any) => (where.userId === 'admin-2' ? { id: 's2', status: 'ACTIVE', roleId: 'r', scoped: false, departments: [], overrides: [], role: { id: 'r', name: 'r', permissions: ['disputes.view'] } } : null) },
+		adminStaff: { findUnique: async ({ where }: any) => (where.userId === 'admin-2' ? { id: 's2', status: 'ACTIVE', roleId: 'r', scoped: false, departments: [], overrides: [], role: { id: 'r', name: 'r', permissions: ['disputes.view', ...(canResolve ? ['disputes.resolve'] : [])] } } : null) },
 		dispute: {
 			findUnique: async ({ where }: any) => (where.id === 'd1' ? { ...fx.dispute, request: null, project: { id: 'p1' }, openedBy: { id: 'client-1' }, againstUser: { id: 'prov-1' }, resolvedBy: null } : null),
 			update: async ({ data }: any) => { Object.assign(fx.dispute, data); return { ...fx.dispute }; },
@@ -27,6 +27,7 @@ async function load(t: TestContext, overrides: Partial<any> = {}) {
 		}
 	};
 	t.mock.module('../config/db', { namedExports: { prisma } });
+	t.mock.module('./admin-access.service', { namedExports: await import(`./admin-access.service.ts?fixture=${Date.now()}-${Math.random()}`) });
 	// the audit module is cached across tests: load a fresh copy bound to THIS test's prisma mock
 	t.mock.module('./admin-audit.service', { namedExports: { adminAudit: (await import(`./admin-audit.service.ts?fixture=${Date.now()}-${Math.random()}`)).adminAudit } });
 	t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { disputeOpened: async () => {}, disputeResolved: async (n: any) => { fx.providerNotes.push(n); } } } });
@@ -105,4 +106,19 @@ test('admin detail retains the assignee after 200 newer audit entries', async (t
 	}
 	const detail = await svc.getForAdmin('d1');
 	assert.equal(detail.assignedTo?.id, 'admin-2');
+});
+
+test('manual escalation refuses staff without the handling permission', async (t) => {
+	const { svc } = await load(t);
+	await assert.rejects(() => svc.assign('d1', 'admin-1', 'admin-2', 'يحتاج متابعة'), /صلاحية معالجة/);
+});
+
+test('manual escalation persists a private reason without changing the case status', async (t) => {
+	const { svc, fx } = await load(t, {}, true);
+	await svc.assign('d1', 'admin-1', 'admin-2', '  يحتاج متابعة  ');
+	assert.equal(fx.audit[0].context.escalationReason, 'يحتاج متابعة');
+	assert.ok(!fx.audit[0].summary.includes('يحتاج متابعة'));
+	const detail = await svc.getForAdmin('d1');
+	assert.equal(detail.assignedTo?.escalationReason, 'يحتاج متابعة');
+	assert.equal(detail.status, 'OPEN');
 });

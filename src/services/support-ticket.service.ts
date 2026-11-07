@@ -233,17 +233,26 @@ export class SupportTicketService {
       ?? (await adminAudit.listForEntity('TICKET', ticket.id, ['TICKET_ASSIGNED'], 1))[0];
     // Internal notes live ONLY in the admin audit store, never in support_ticket_messages, so the owner's thread (getForUser) cannot contain them.
     const internalNotes = audit.filter(e => e.eventType === 'TICKET_INTERNAL_NOTE').map(e => ({ id: e.id, body: String(e.context.body ?? ''), createdAt: e.occurredAt, admin: e.admin }));
-    return { ticket, user, messages, assignedTo: assignment ? { id: assignment.context.assigneeId, name: assignment.context.assigneeName ?? '' } : null, internalNotes };
+    return { ticket, user, messages, assignedTo: assignment ? { id: assignment.context.assigneeId, name: assignment.context.assigneeName ?? '', ...(typeof assignment.context.escalationReason === 'string' ? { escalationReason: assignment.context.escalationReason } : {}) } : null, internalNotes };
   }
 
-  async assign(id: string, adminId: string, assigneeId: string) {
+  async assign(id: string, adminId: string, assigneeId: string, escalationReason?: string) {
     // taking a ticket for yourself is part of handling it (support.reply, at the route); handing it to SOMEBODY ELSE is distributing the team's work: it needs tasks.manage (a SUPER_ADMIN holds it)
     if (assigneeId !== adminId && !(await assigneeHolds(adminId, ['tasks.manage']))) throw new AppError('تكليف تذكرة لموظف آخر يحتاج صلاحية توزيع مهام الفريق. يمكنك تكليفها لنفسك.', 403, undefined, 'ADMIN_PERMISSION_DENIED');
     const ticket = await this.findAny(id);
+    if (escalationReason !== undefined) {
+      escalationReason = escalationReason.trim();
+      if (!escalationReason || escalationReason.length > 1000) throw fieldError('escalationReason', 'اكتب سبب التصعيد في حدود ١٠٠٠ حرف');
+      if (assigneeId === adminId) throw fieldError('assigneeId', 'اختر مسؤولًا آخر لتصعيد الحالة إليه');
+      if (ticket.status === SupportTicketStatus.CLOSED || ticket.status === SupportTicketStatus.RESOLVED) throw new AppError('لا يمكن تصعيد تذكرة مغلقة أو محلولة', 409);
+    }
     const assignee = await prisma.user.findUnique({ where: { id: assigneeId }, select: { id: true, firstName: true, lastName: true, accountType: true } });
     if (!assignee || (assignee.accountType !== AccountType.ADMIN && assignee.accountType !== AccountType.SUPER_ADMIN) || !(await assigneeHolds(assigneeId, ['support.review']))) throw fieldError('assigneeId', 'يمكن تكليف عضو فريق يملك صلاحية مراجعة الدعم فقط');
+    if (escalationReason !== undefined && !(await assigneeHolds(assigneeId, ['support.reply']))) {
+      throw fieldError('assigneeId', 'المسؤول المختار لا يملك صلاحية معالجة التذكرة');
+    }
     const name = [assignee.firstName, assignee.lastName].filter(Boolean).join(' ');
-    const row = await adminAudit.record({ adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_ASSIGNED', title: 'تكليف تذكرة', summary: `تكليف التذكرة ${ticket.ticketNumber} إلى ${name || 'مشرف'}`, details: { assigneeId: assignee.id, assigneeName: name } });
+    const row = await adminAudit.record({ adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_ASSIGNED', title: escalationReason ? 'تصعيد تذكرة' : 'تكليف تذكرة', summary: escalationReason ? 'تصعيد داخلي إلى المسؤول المختار' : `تكليف التذكرة ${ticket.ticketNumber} إلى ${name || 'مشرف'}`, details: { assigneeId: assignee.id, assigneeName: name, ...(escalationReason ? { escalationReason } : {}) } });
     if (!row) throw new AppError('تعذّر حفظ تكليف التذكرة. حاول مرة أخرى.', 500);
     return { id: ticket.id, assignedTo: { id: assignee.id, name } };
   }
