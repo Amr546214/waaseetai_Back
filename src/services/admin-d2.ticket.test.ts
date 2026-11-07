@@ -9,6 +9,8 @@ async function load(t: any, ownerType = 'PROVIDER_INDIVIDUAL', canReply = false)
 	const messages: any[] = [{ id: 'm0', ticketId: 't1', senderId: 'owner', body: 'original', createdAt: new Date(1) }];
 	let assignmentWriteFails = false;
 	const prisma: any = {
+    $queryRaw: async () => [],
+    $transaction: async (fn: (tx: any) => unknown) => fn(prisma),
 		adminStaff: { findUnique: async ({ where }: any) => (where.userId === 'admin-2' ? { id: 's2', status: 'ACTIVE', roleId: 'r', scoped: false, departments: [], overrides: [], role: { id: 'r', name: 'r', permissions: ['support.review', ...(canReply ? ['support.reply'] : [])] } } : null) },
 		user: { findUnique: async ({ where }: any) => (where.id === 'owner' ? { id: 'owner', accountType: ownerType, firstName: 'O', lastName: 'W', email: 'o@x' } : where.id === 'admin-1' ? { id: 'admin-1', firstName: 'Lead', lastName: 'S', accountType: 'SUPER_ADMIN', status: 'ACTIVE' } : where.id === 'admin-2' ? { id: 'admin-2', firstName: 'Sara', lastName: 'A', accountType: 'ADMIN', status: 'ACTIVE' } : { id: where.id, accountType: 'PROVIDER_INDIVIDUAL' }) },
 		supportTicket: { findUnique: async ({ where }: any) => (where.id === 't1' ? { ...ticket } : null), update: async ({ data }: any) => { Object.assign(ticket, data); return { ...ticket }; } },

@@ -62,6 +62,8 @@ enum UserRole {
 
 // user proffile
 model User {
+  filedPlatformReports PlatformReport[] @relation("FiledPlatformReports")
+  reviewedPlatformReports PlatformReport[] @relation("ReviewedPlatformReports")
   disputeMessages DisputeMessage[]
   id          String      @id @default(uuid())
   accountType AccountType
@@ -1601,6 +1603,9 @@ model SupportTicket {
 }
 
 model SupportTicketMessage {
+  attachments CaseAttachment[]
+  replyKey String? @unique
+  replyDigest String?
   id        String        @id @default(uuid())
   ticketId  String
   ticket    SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
@@ -3227,6 +3232,9 @@ model SiteIdentityManifest {
 
 // Confidential case files: access is checked on each list/download request.
 model CaseAttachment {
+  messageId String?
+  message SupportTicketMessage? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  @@index([messageId])
   id String @id @default(uuid())
   ticketId String?
   ticket SupportTicket? @relation(fields: [ticketId], references: [id], onDelete: Cascade)
@@ -3337,4 +3345,35 @@ model DisputeMessage {
 
   @@index([disputeId, createdAt, id])
   @@map("dispute_messages")
+}
+
+enum PlatformReportTarget {
+  ACCOUNT
+  SERVICE
+}
+
+enum PlatformReportStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+model PlatformReport {
+  id String @id @default(uuid())
+  reporterId String
+  reporter User @relation("FiledPlatformReports", fields: [reporterId], references: [id], onDelete: Cascade)
+  targetType PlatformReportTarget
+  targetId String
+  targetLabel String
+  reason String @db.Text
+  status PlatformReportStatus @default(OPEN)
+  resolution String? @db.Text
+  reviewerId String?
+  reviewer User? @relation("ReviewedPlatformReports", fields: [reviewerId], references: [id], onDelete: SetNull)
+  reviewedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([status, createdAt, id])
+  @@index([reporterId, targetType, targetId])
+  @@map("platform_reports")
 }

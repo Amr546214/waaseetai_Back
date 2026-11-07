@@ -28,7 +28,7 @@ export function supportEscalationQuery(page?: EscalationPage) {
       SELECT DISTINCT ON (context->>'entityId')
         context->>'entityId' AS "ticketId", context
       FROM account_audit_logs
-      WHERE source = 'ADMIN' AND "eventType" = 'TICKET_ASSIGNED' AND context->>'entity' = 'TICKET'
+      WHERE source IN ('ADMIN', 'SYSTEM') AND "eventType" = 'TICKET_ASSIGNED' AND context->>'entity' = 'TICKET'
       ORDER BY context->>'entityId', "occurredAt" DESC, id DESC
     ), active_escalations AS (
       SELECT t.id, t."createdAt", t."userId", t."ticketNumber", t.subject, t.status

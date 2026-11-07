@@ -44,6 +44,7 @@ export const ADMIN_PERMISSIONS: readonly AdminPermissionDef[] = [
 	{ id: 'users.delete', label: 'حذف الحسابات', group: 'users', sensitive: true, designRow: 'حذف الحسابات' },
 
 	{ id: 'reports.view', label: 'عرض البلاغات', group: 'reports_support', sensitive: false, designRow: 'عرض البلاغات' },
+	{ id: 'reports.manage', label: 'اتخاذ قرار في البلاغات', group: 'reports_support', sensitive: true },
 	{ id: 'support.review', label: 'مراجعة الدعم', group: 'reports_support', sensitive: false, designRow: 'مراجعة الدعم' },
 	{ id: 'support.reply', label: 'الرد على الدعم ومعالجة التذكرة', group: 'reports_support', sensitive: false },
 
@@ -147,7 +148,7 @@ export const isKnownDepartment = (k: string): boolean => ADMIN_DEPARTMENT_KEYS.i
 export const PERMISSION_DEPARTMENT: Readonly<Record<string, AdminDepartmentKey>> = {
 	'users.view': 'users', 'users.suspend': 'users', 'users.delete': 'users',
 	'disputes.view': 'disputes', 'disputes.note': 'disputes', 'disputes.assign': 'disputes', 'disputes.resolve': 'disputes',
-	'reports.view': 'reports',
+	'reports.view': 'reports', 'reports.manage': 'reports',
 	'support.review': 'support', 'support.reply': 'support',
 	'specialties.approve': 'specialties', 'content.manage': 'specialties', 'business_models.review': 'specialties',
 };

@@ -7,6 +7,7 @@ import { notificationService } from './notification.service';
 import { CreateSupportTicketInput } from '../dtos/support-ticket.dto';
 import { adminAudit } from './admin-audit.service';
 import { notifyAdmins } from './admin-notifications.service';
+import { supportSlaSnapshot } from './case-sla.service';
 import { assigneeHolds } from './admin-access.service';
 import { supportEscalationQuery } from './support-escalation-query';
 
@@ -131,7 +132,7 @@ export class SupportTicketService {
     const messages = await prisma.supportTicketMessage.findMany({
       where: { ticketId: ticket.id },
       orderBy: { createdAt: 'asc' },
-      include: { sender: { select: SENDER_SELECT } },
+      select: { id: true, ticketId: true, senderId: true, body: true, createdAt: true, sender: { select: SENDER_SELECT } },
     });
     return { ticket, messages };
   }
@@ -143,7 +144,7 @@ export class SupportTicketService {
     }
     const message = await prisma.supportTicketMessage.create({
       data: { ticketId: ticket.id, senderId: userId, body },
-      include: { sender: { select: SENDER_SELECT } },
+      select: { id: true, ticketId: true, senderId: true, body: true, createdAt: true, sender: { select: SENDER_SELECT } },
     });
     // Owner replies drive the status: RESOLVED reopens (OPEN), and a reply to
     // a staff question (AWAITING_CUSTOMER) hands the ball back to staff
@@ -224,7 +225,7 @@ export class SupportTicketService {
     const result = new Map<string, { id: string; name: string; isEscalated: boolean }>();
     if (!ids.length) return result;
     const rows = await prisma.accountAuditLog.findMany({
-      where: { source: 'ADMIN', eventType: 'TICKET_ASSIGNED', OR: ids.map(id => ({ context: { path: ['entityId'], equals: id } })) },
+      where: { source: { in: ['ADMIN', 'SYSTEM'] }, eventType: 'TICKET_ASSIGNED', OR: ids.map(id => ({ context: { path: ['entityId'], equals: id } })) },
       orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
       select: { context: true }
     });
@@ -241,7 +242,7 @@ export class SupportTicketService {
       prisma.supportTicketMessage.findMany({
         where: { ticketId: ticket.id },
         orderBy: { createdAt: 'asc' },
-        include: { sender: { select: SENDER_SELECT } },
+        select: { id: true, ticketId: true, senderId: true, body: true, createdAt: true, sender: { select: SENDER_SELECT } },
       }),
       prisma.user.findUnique({
         where: { id: ticket.userId },
@@ -250,11 +251,10 @@ export class SupportTicketService {
       adminAudit.listForEntity('TICKET', ticket.id),
     ]);
     // The display history is capped; the current assignee can be older than all visible entries.
-    const assignment = audit.find(e => e.eventType === 'TICKET_ASSIGNED')
-      ?? (await adminAudit.listForEntity('TICKET', ticket.id, ['TICKET_ASSIGNED'], 1))[0];
+    const assignment = (await adminAudit.listForEntity('TICKET', ticket.id, ['TICKET_ASSIGNED'], 1, ['ADMIN', 'SYSTEM']))[0];
     // Internal notes live ONLY in the admin audit store, never in support_ticket_messages, so the owner's thread (getForUser) cannot contain them.
     const internalNotes = audit.filter(e => e.eventType === 'TICKET_INTERNAL_NOTE').map(e => ({ id: e.id, body: String(e.context.body ?? ''), createdAt: e.occurredAt, admin: e.admin }));
-    return { ticket, user, messages, assignedTo: assignment ? { id: assignment.context.assigneeId, name: assignment.context.assigneeName ?? '', ...(typeof assignment.context.escalationReason === 'string' ? { escalationReason: assignment.context.escalationReason } : {}) } : null, internalNotes };
+    return { ticket, user, messages, sla: supportSlaSnapshot(ticket, messages), assignedTo: assignment ? { id: assignment.context.assigneeId, name: assignment.context.assigneeName ?? '', ...(typeof assignment.context.escalationReason === 'string' ? { escalationReason: assignment.context.escalationReason } : {}) } : null, internalNotes };
   }
 
   async assign(id: string, adminId: string, assigneeId: string, escalationReason?: string) {
@@ -297,23 +297,52 @@ export class SupportTicketService {
   // OPEN/IN_PROGRESS ticket moves it to AWAITING_CUSTOMER (the ball is with
   // the owner now); any other status is left as-is. CLOSED tickets can't be
   // replied to — reopen them via setStatus first.
-  async replyAsStaff(id: string, staffId: string, body: string, status?: SupportTicketStatus) {
-    const ticket = await this.findAny(id);
-    if (ticket.status === SupportTicketStatus.CLOSED) throw new AppError('لا يمكن الرد على تذكرة مغلقة', 400);
-    const message = await prisma.supportTicketMessage.create({
-      data: { ticketId: ticket.id, senderId: staffId, body },
-      include: { sender: { select: SENDER_SELECT } },
-    });
-    const next = status
-      ?? (ticket.status === SupportTicketStatus.OPEN || ticket.status === SupportTicketStatus.IN_PROGRESS
-        ? SupportTicketStatus.AWAITING_CUSTOMER : ticket.status);
-    if (next !== ticket.status) {
-      await prisma.supportTicket.update({ where: { id: ticket.id }, data: this.statusData(next) });
-    } else {
-      await prisma.supportTicket.update({ where: { id: ticket.id }, data: { updatedAt: new Date() } });
+  async replyAsStaff(id: string, staffId: string, body: string, status?: SupportTicketStatus, files: Express.Multer.File[] = [], replyKey?: string) {
+    const initial = await this.findAny(id);
+    if (initial.status === SupportTicketStatus.CLOSED) throw new AppError('لا يمكن الرد على تذكرة مغلقة', 400);
+    if (files.length && !replyKey) throw new AppError('معرّف إرسال الرد مطلوب', 400);
+    if (replyKey && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(replyKey)) throw new AppError('معرّف إرسال الرد غير صالح', 400);
+    const digest = replyKey ? caseSubmissionDigest({ id, staffId, body, status }, files) : null;
+    const batch = files.length ? await storeCaseFiles(files, staffId) : { stored: [], rows: [] };
+    let result;
+    try {
+      result = await prisma.$transaction(async tx => {
+        await tx.$queryRaw`SELECT id FROM support_tickets WHERE id = ${id} FOR UPDATE`;
+        const ticket = await tx.supportTicket.findUnique({ where: { id } });
+        if (!ticket) throw new AppError('التذكرة غير موجودة', 404);
+        if (replyKey) {
+          const existing = await tx.supportTicketMessage.findUnique({ where: { replyKey }, include: { sender: { select: SENDER_SELECT } } });
+          if (existing) {
+            if (existing.replyDigest !== digest) throw new AppError('معرّف الإرسال مستخدم لرد مختلف', 409);
+            return { ticket, message: existing, next: ticket.status, reused: true };
+          }
+        }
+        if (ticket.status === SupportTicketStatus.CLOSED) throw new AppError('لا يمكن الرد على تذكرة مغلقة', 400);
+        if (batch.rows.length) {
+          const count = await tx.caseAttachment.count({ where: { ticketId: id } });
+          if (count + batch.rows.length > 30) throw new AppError('الحد الأقصى ثلاثون مرفقًا للتذكرة', 409);
+        }
+        const message = await tx.supportTicketMessage.create({
+          data: { ticketId: id, senderId: staffId, body, ...(replyKey ? { replyKey, replyDigest: digest } : {}) },
+          include: { sender: { select: SENDER_SELECT } },
+        });
+        if (batch.rows.length) await tx.caseAttachment.createMany({ data: batch.rows.map(row => ({ ...row, ticketId: id, messageId: message.id })) });
+        const next = status ?? (ticket.status === SupportTicketStatus.OPEN || ticket.status === SupportTicketStatus.IN_PROGRESS
+          ? SupportTicketStatus.AWAITING_CUSTOMER : ticket.status);
+        await tx.supportTicket.update({ where: { id }, data: next !== ticket.status ? this.statusData(next) : { updatedAt: new Date() } });
+        return { ticket, message, next, reused: false };
+      });
+    } catch (error) {
+      await cleanupCaseFiles(batch.stored);
+      throw error;
     }
-    await adminAudit.record({ adminId: staffId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_REPLIED', title: 'ردّ على تذكرة', summary: `ردّ فريق الدعم على التذكرة ${ticket.ticketNumber}`, after: { status: next } });
-    await this.notifyOwner(ticket, 'ردّ جديد على تذكرتك', `ردّ فريق الدعم على التذكرة ${ticket.ticketNumber}.`, 'replied');
+    const { ticket, next, reused, message: saved } = result;
+    if (reused) await cleanupCaseFiles(batch.stored);
+    else {
+      await adminAudit.record({ adminId: staffId, entity: 'TICKET', entityId: id, eventType: 'TICKET_REPLIED', title: 'ردّ على تذكرة', summary: `ردّ فريق الدعم على التذكرة ${ticket.ticketNumber}`, after: { status: next } });
+      await this.notifyOwner(ticket, 'ردّ جديد على تذكرتك', `ردّ فريق الدعم على التذكرة ${ticket.ticketNumber}.`, 'replied');
+    }
+    const { replyKey: _key, replyDigest: _digest, ...message } = saved;
     return { message, status: next };
   }
 
