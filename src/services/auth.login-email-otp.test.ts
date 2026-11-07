@@ -69,6 +69,25 @@ test('a wrong password never starts a challenge', async (t) => {
 	assert.equal(sent.length, 0);
 });
 
+test('an account under suspension review never starts a login challenge', async (t) => {
+	const { user, rows, sent, sessions } = setup(t, await hashed());
+	Object.assign(user, { status: 'SUSPENDED_REVIEW' });
+	const auth = await load();
+	await assert.rejects(() => auth.loginUser({ email: 'amr@example.com', password: PW }, {}), (e: any) => e.statusCode === 403 && /مراجعة الإيقاف/.test(e.message));
+	assert.deepEqual([rows.length, sent.length, sessions.length], [0, 0, 0]);
+});
+
+test('suspension review after send refuses even the right code before consuming it', async (t) => {
+	const { user, rows, sessions } = setup(t, await hashed());
+	const auth = await load();
+	await auth.loginUser({ email: 'amr@example.com', password: PW }, {});
+	const code = rows[0].code;
+	Object.assign(user, { status: 'SUSPENDED_REVIEW' });
+	await assert.rejects(() => auth.verifyLoginOtp({ userId: 'user-1', code }, {}), (e: any) => e.statusCode === 403 && /مراجعة الإيقاف/.test(e.message));
+	assert.equal(rows[0].code, code);
+	assert.deepEqual(sessions, []);
+});
+
 test('a wrong code is refused (400) and creates no session; the 5th wrong guess locks the code (429)', async (t) => {
 	const { sessions, rows } = setup(t, await hashed());
 	const auth = await load();

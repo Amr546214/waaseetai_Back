@@ -731,6 +731,9 @@ export class AuthService {
 		if (user.status === UserStatus.SUSPENDED) {
 			throw new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403);
 		}
+		if (user.status === UserStatus.SUSPENDED_REVIEW) {
+			throw new AppError('هذا الحساب قيد مراجعة الإيقاف حالياً، يرجى التواصل مع الدعم', 403);
+		}
 
 		// Email OTP is mandatory at login (owner decision #4): a correct password only starts the challenge, no token is issued here.
 		// Phone/SMS is never used (`phoneOtpEnabled` is ignored). The session is created by verifyLoginOtp().
@@ -897,6 +900,9 @@ export class AuthService {
 		if (user.status === UserStatus.SUSPENDED) {
 			throw new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403);
 		}
+		if (user.status === UserStatus.SUSPENDED_REVIEW) {
+			throw new AppError('هذا الحساب قيد مراجعة الإيقاف حالياً، يرجى التواصل مع الدعم', 403);
+		}
 
 		// Owner decision #4: Google proves the identity but does not create the session. The same mandatory LOGIN_EMAIL challenge as the
 		// password login is started for the account email; the session comes only from POST /auth/login/verify-otp. (A brand-new Google
@@ -917,6 +923,11 @@ export class AuthService {
 		const user = await authRepository.findByIdForSession(input.userId);
 		const otp = user ? await authRepository.findLatestOtpByPurpose(input.userId, OtpPurpose.LOGIN_EMAIL) : null;
 		if (!user || !otp) throw new AppError('رمز التحقق غير صحيح', 400);
+		if (user.status === UserStatus.SUSPENDED) throw new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403);
+		if (user.status === UserStatus.SUSPENDED_REVIEW) {
+			throw new AppError('هذا الحساب قيد مراجعة الإيقاف حالياً، يرجى التواصل مع الدعم', 403);
+		}
+		if (user.status === UserStatus.PENDING_VERIFICATION) throw new AppError('رمز التحقق غير صحيح', 400);
 		if (otp.attempts >= OTP_MAX_ATTEMPTS) {
 			throw new AppError(OTP_LOCKED_MESSAGE, 429);
 		}
@@ -928,8 +939,6 @@ export class AuthService {
 			}
 			throw new AppError('رمز التحقق غير صحيح', 400);
 		}
-		if (user.status === UserStatus.SUSPENDED) throw new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403);
-		if (user.status === UserStatus.PENDING_VERIFICATION) throw new AppError('رمز التحقق غير صحيح', 400);
 		const session = await this.startSession(user, sessionContext);
 		await authRepository.deleteOtpsByPurpose(input.userId, OtpPurpose.LOGIN_EMAIL);
 		return session;
