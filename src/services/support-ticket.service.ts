@@ -8,6 +8,7 @@ import { CreateSupportTicketInput } from '../dtos/support-ticket.dto';
 import { adminAudit } from './admin-audit.service';
 import { notifyAdmins } from './admin-notifications.service';
 import { assigneeHolds } from './admin-access.service';
+import { supportEscalationQuery } from './support-escalation-query';
 
 const OPEN_STATUSES: SupportTicketStatus[] = [
   SupportTicketStatus.OPEN,
@@ -165,9 +166,9 @@ export class SupportTicketService {
   }
   // ─── Staff / admin (ADMIN, SUPER_ADMIN — enforced by the route guard) ───────
 
-  async listForAdmin(filters: { status?: SupportTicketStatus; q?: string; userId?: string }, page = 1, limit = 20) {
-    const safePage = Math.max(1, page);
-    const safeLimit = Math.min(100, Math.max(1, limit));
+  async listForAdmin(filters: { status?: SupportTicketStatus; q?: string; userId?: string; escalated?: boolean }, page = 1, limit = 20) {
+    const safePage = Number.isFinite(page) ? Math.min(1_000_000, Math.max(1, Math.trunc(page))) : 1;
+    const safeLimit = Number.isFinite(limit) ? Math.min(100, Math.max(1, Math.trunc(limit))) : 20;
     const q = filters.q?.trim();
     const where = {
       ...(filters.status ? { status: filters.status } : {}),
@@ -177,19 +178,39 @@ export class SupportTicketService {
         { subject: { contains: q, mode: 'insensitive' as const } },
       ] } : {}),
     };
-    const [items, total, grouped] = await Promise.all([
-      prisma.supportTicket.findMany({
-        where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit,
+    const offset = (safePage - 1) * safeLimit;
+    const scope = filters.escalated
+      ? await prisma.$queryRaw<{ escalatedCount: number; total: number; ids: string[] }[]>(
+        supportEscalationQuery({ status: filters.status, q, userId: filters.userId, offset, limit: safeLimit })
+      ).then(rows => rows[0] ?? { escalatedCount: 0, total: 0, ids: [] })
+      : null;
+    const [items, total, grouped, escalationCount] = await Promise.all([
+      scope && !scope.ids.length ? [] : prisma.supportTicket.findMany({
+        where: scope ? { id: { in: scope.ids } } : where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        ...(scope ? {} : { skip: offset, take: safeLimit }),
         include: { user: { select: { id: true, firstName: true, lastName: true, email: true, accountType: true } } },
       }),
-      prisma.supportTicket.count({ where }),
+      scope ? scope.total : prisma.supportTicket.count({ where }),
       prisma.supportTicket.groupBy({ by: ['status'], _count: { _all: true } }),
+      scope ? scope.escalatedCount : filters.userId ? undefined
+        : prisma.$queryRaw<{ escalatedCount: number }[]>(supportEscalationQuery()).then(rows => rows[0]?.escalatedCount ?? 0),
     ]);
     const counts: Record<string, number> = {};
     for (const g of grouped) counts[g.status] = g._count._all;
     const assignees = await this.assigneesFor(items.map(i => i.id));
     const pages = Math.ceil(total / safeLimit);
-    return { items: items.map(i => ({ ...i, assignedTo: assignees.get(i.id) ?? null })), counts, pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages } };
+    return {
+      items: items.map(i => {
+        const assignment = assignees.get(i.id);
+        return {
+          ...i, assignedTo: assignment ? { id: assignment.id, name: assignment.name } : null,
+          isEscalated: OPEN_STATUSES.includes(i.status) && (assignment?.isEscalated ?? false),
+        };
+      }),
+      counts, ...(escalationCount === undefined ? {} : { escalationCount }),
+      pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages },
+    };
   }
 
   private async findAny(id: string) {
@@ -200,16 +221,16 @@ export class SupportTicketService {
 
   /** Current assignee per ticket = the newest TICKET_ASSIGNED audit row (the schema has no assignee column). */
   private async assigneesFor(ids: string[]) {
-    const result = new Map<string, { id: string; name: string }>();
+    const result = new Map<string, { id: string; name: string; isEscalated: boolean }>();
     if (!ids.length) return result;
     const rows = await prisma.accountAuditLog.findMany({
       where: { source: 'ADMIN', eventType: 'TICKET_ASSIGNED', OR: ids.map(id => ({ context: { path: ['entityId'], equals: id } })) },
-      orderBy: { occurredAt: 'desc' },
+      orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
       select: { context: true }
     });
     for (const row of rows) {
       const ctx = (row.context ?? {}) as Record<string, any>;
-      if (ctx.entityId && !result.has(ctx.entityId) && ctx.assigneeId) result.set(ctx.entityId, { id: ctx.assigneeId, name: ctx.assigneeName ?? '' });
+      if (ctx.entityId && !result.has(ctx.entityId) && ctx.assigneeId) result.set(ctx.entityId, { id: ctx.assigneeId, name: ctx.assigneeName ?? '', isEscalated: typeof ctx.escalationReason === 'string' && !!ctx.escalationReason.trim() });
     }
     return result;
   }
