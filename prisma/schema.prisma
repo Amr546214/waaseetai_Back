@@ -62,6 +62,7 @@ enum UserRole {
 
 // user proffile
 model User {
+  disputeMessages DisputeMessage[]
   id          String      @id @default(uuid())
   identityFieldChecks IdentityFieldCheck[]
   accountType AccountType
@@ -2315,6 +2316,7 @@ enum DisputeStatus {
 }
 
 model Dispute {
+  messages DisputeMessage[]
   id             String         @id @default(uuid())
   requestId      String?
   request        ClientRequest? @relation(fields: [requestId], references: [id], onDelete: Cascade)
@@ -3373,4 +3375,18 @@ model ContractCancellationRequest {
   @@index([providerId])
   @@index([status, createdAt])
   @@map("contract_cancellation_requests")
+}
+
+model DisputeMessage {
+  id String @id @default(uuid())
+  disputeId String
+  dispute Dispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  authorId String?
+  author User? @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  authorKind String
+  body String @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([disputeId, createdAt, id])
+  @@map("dispute_messages")
 }
