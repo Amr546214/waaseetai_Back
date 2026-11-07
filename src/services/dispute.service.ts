@@ -223,8 +223,8 @@ export class DisputeService {
     const result = new Map<string, { id: string; name: string }>();
     if (!ids.length) return result;
     const rows = await prisma.accountAuditLog.findMany({
-      where: { source: 'ADMIN', eventType: 'DISPUTE_ASSIGNED', OR: ids.map(id => ({ context: { path: ['entityId'], equals: id } })) },
-      orderBy: { occurredAt: 'desc' },
+      where: { source: { in: ['ADMIN', 'SYSTEM'] }, eventType: 'DISPUTE_ASSIGNED', OR: ids.map(id => ({ context: { path: ['entityId'], equals: id } })) },
+      orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
       select: { context: true }
     });
     for (const row of rows) {
@@ -281,8 +281,7 @@ export class DisputeService {
       adminAudit.listForEntity('DISPUTE', id)
     ]);
     // The display history is capped; the current assignee can be older than all visible entries.
-    const assignment = audit.find(e => e.eventType === 'DISPUTE_ASSIGNED')
-      ?? (await adminAudit.listForEntity('DISPUTE', id, ['DISPUTE_ASSIGNED'], 1))[0];
+    const assignment = (await adminAudit.listForEntity('DISPUTE', id, ['DISPUTE_ASSIGNED'], 1, ['ADMIN', 'SYSTEM']))[0];
     const financialOutcome = (audit.find(e => e.eventType === 'DISPUTE_FINANCIAL_RESOLVED')?.context?.outcomeSummary as FinancialOutcomeSummary | undefined) ?? null;
     return {
       ...dispute, requestedResolutionLabel: requestedResolutionLabel(dispute.requestedResolution),
