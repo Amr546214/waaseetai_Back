@@ -228,7 +228,9 @@ export class SupportTicketService {
       }),
       adminAudit.listForEntity('TICKET', ticket.id),
     ]);
-    const assignment = audit.find(e => e.eventType === 'TICKET_ASSIGNED');
+    // The display history is capped; the current assignee can be older than all visible entries.
+    const assignment = audit.find(e => e.eventType === 'TICKET_ASSIGNED')
+      ?? (await adminAudit.listForEntity('TICKET', ticket.id, ['TICKET_ASSIGNED'], 1))[0];
     // Internal notes live ONLY in the admin audit store, never in support_ticket_messages, so the owner's thread (getForUser) cannot contain them.
     const internalNotes = audit.filter(e => e.eventType === 'TICKET_INTERNAL_NOTE').map(e => ({ id: e.id, body: String(e.context.body ?? ''), createdAt: e.occurredAt, admin: e.admin }));
     return { ticket, user, messages, assignedTo: assignment ? { id: assignment.context.assigneeId, name: assignment.context.assigneeName ?? '' } : null, internalNotes };
@@ -241,7 +243,8 @@ export class SupportTicketService {
     const assignee = await prisma.user.findUnique({ where: { id: assigneeId }, select: { id: true, firstName: true, lastName: true, accountType: true } });
     if (!assignee || (assignee.accountType !== AccountType.ADMIN && assignee.accountType !== AccountType.SUPER_ADMIN) || !(await assigneeHolds(assigneeId, ['support.review']))) throw fieldError('assigneeId', 'يمكن تكليف عضو فريق يملك صلاحية مراجعة الدعم فقط');
     const name = [assignee.firstName, assignee.lastName].filter(Boolean).join(' ');
-    await adminAudit.record({ adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_ASSIGNED', title: 'تكليف تذكرة', summary: `تكليف التذكرة ${ticket.ticketNumber} إلى ${name || 'مشرف'}`, details: { assigneeId: assignee.id, assigneeName: name } });
+    const row = await adminAudit.record({ adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_ASSIGNED', title: 'تكليف تذكرة', summary: `تكليف التذكرة ${ticket.ticketNumber} إلى ${name || 'مشرف'}`, details: { assigneeId: assignee.id, assigneeName: name } });
+    if (!row) throw new AppError('تعذّر حفظ تكليف التذكرة. حاول مرة أخرى.', 500);
     return { id: ticket.id, assignedTo: { id: assignee.id, name } };
   }
 
