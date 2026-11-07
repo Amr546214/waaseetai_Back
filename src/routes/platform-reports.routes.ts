@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../config/db';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { requirePermission } from '../middlewares/admin-access.middleware';
+import { MARKET_VISIBLE_WHERE } from '../utils/market-visibility';
 import { AppError, zodAppError } from '../utils/app-error';
 
 const filing = z.object({ targetType: z.enum(['ACCOUNT', 'SERVICE']), targetId: z.string().uuid(), reason: z.string().trim().min(10).max(2000) }).strict();
@@ -33,7 +34,7 @@ userPlatformReports.post('/', async (req, res, next) => {
       if (target.id === reporterId) throw new AppError('لا يمكنك الإبلاغ عن حسابك', 400);
       targetLabel = [target.firstName, target.lastName].filter(Boolean).join(' ') || 'حساب مستخدم';
     } else {
-      const target = await prisma.serviceCatalog.findFirst({ where: { id: targetId, status: { in: ['PUBLISHED', 'APPROVED'] } }, select: { title: true, providerId: true } });
+      const target = await prisma.serviceCatalog.findFirst({ where: { id: targetId, ...MARKET_VISIBLE_WHERE }, select: { title: true, providerId: true } });
       if (!target) throw new AppError('الخدمة غير متاحة للإبلاغ', 404);
       if (target.providerId === reporterId) throw new AppError('لا يمكنك الإبلاغ عن خدمتك', 400);
       targetLabel = target.title;
