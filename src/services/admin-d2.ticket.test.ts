@@ -2,14 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 // Admin ticket back office: owner-visible reply / status, ownership, and INTERNAL notes that the ticket owner can never read.
-async function load(t: any, ownerType = 'PROVIDER_INDIVIDUAL') {
+async function load(t: any, ownerType = 'PROVIDER_INDIVIDUAL', canReply = false) {
 	const audit: any[] = [];
 	const notifications: any[] = [];
 	const ticket: any = { id: 't1', ticketNumber: 'TK-1', userId: 'owner', status: 'OPEN', priority: 'عادية', resolvedAt: null, closedAt: null };
 	const messages: any[] = [{ id: 'm0', ticketId: 't1', senderId: 'owner', body: 'original', createdAt: new Date(1) }];
 	let assignmentWriteFails = false;
 	const prisma: any = {
-		adminStaff: { findUnique: async ({ where }: any) => (where.userId === 'admin-2' ? { id: 's2', status: 'ACTIVE', roleId: 'r', scoped: false, departments: [], overrides: [], role: { id: 'r', name: 'r', permissions: ['support.review'] } } : null) },
+		adminStaff: { findUnique: async ({ where }: any) => (where.userId === 'admin-2' ? { id: 's2', status: 'ACTIVE', roleId: 'r', scoped: false, departments: [], overrides: [], role: { id: 'r', name: 'r', permissions: ['support.review', ...(canReply ? ['support.reply'] : [])] } } : null) },
 		user: { findUnique: async ({ where }: any) => (where.id === 'owner' ? { id: 'owner', accountType: ownerType, firstName: 'O', lastName: 'W', email: 'o@x' } : where.id === 'admin-1' ? { id: 'admin-1', firstName: 'Lead', lastName: 'S', accountType: 'SUPER_ADMIN', status: 'ACTIVE' } : where.id === 'admin-2' ? { id: 'admin-2', firstName: 'Sara', lastName: 'A', accountType: 'ADMIN', status: 'ACTIVE' } : { id: where.id, accountType: 'PROVIDER_INDIVIDUAL' }) },
 		supportTicket: { findUnique: async ({ where }: any) => (where.id === 't1' ? { ...ticket } : null), update: async ({ data }: any) => { Object.assign(ticket, data); return { ...ticket }; } },
 		supportTicketMessage: {
@@ -22,6 +22,7 @@ async function load(t: any, ownerType = 'PROVIDER_INDIVIDUAL') {
 		}
 	};
 	t.mock.module('../config/db', { namedExports: { prisma } });
+	t.mock.module('./admin-access.service', { namedExports: await import(`./admin-access.service.ts?fixture=${Date.now()}-${Math.random()}`) });
 	// the audit module is cached across tests: load a fresh copy bound to THIS test's prisma mock
 	t.mock.module('./admin-audit.service', { namedExports: { adminAudit: (await import(`./admin-audit.service.ts?fixture=${Date.now()}-${Math.random()}`)).adminAudit } });
 	t.mock.module('./notification.service', { namedExports: { notificationService: { createAndEmit: async (n: any) => { notifications.push(n); } } } });
@@ -104,4 +105,19 @@ test('admin detail retains the assignee after 200 newer audit entries', async (t
 	}
 	const detail = await svc.getForAdmin('t1');
 	assert.equal(detail.assignedTo?.id, 'admin-2');
+});
+
+test('manual escalation refuses staff without the handling permission', async (t) => {
+	const { svc } = await load(t);
+	await assert.rejects(() => svc.assign('t1', 'admin-1', 'admin-2', 'يحتاج متابعة'), /صلاحية معالجة/);
+});
+
+test('manual escalation persists a private reason without changing the case status', async (t) => {
+	const { svc, audit } = await load(t, 'PROVIDER_INDIVIDUAL', true);
+	await svc.assign('t1', 'admin-1', 'admin-2', '  يحتاج متابعة  ');
+	assert.equal(audit[0].context.escalationReason, 'يحتاج متابعة');
+	assert.ok(!audit[0].summary.includes('يحتاج متابعة'));
+	const detail = await svc.getForAdmin('t1');
+	assert.equal(detail.assignedTo?.escalationReason, 'يحتاج متابعة');
+	assert.equal(detail.ticket.status, 'OPEN');
 });

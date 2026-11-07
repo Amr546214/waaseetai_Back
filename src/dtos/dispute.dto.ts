@@ -28,7 +28,7 @@ export const resolveDisputeSchema = z.object({
   )
 });
 
-export const assignDisputeSchema = z.object({ assigneeId: z.string().trim().min(1).max(64) });
+export const assignDisputeSchema = z.object({ assigneeId: z.string().trim().min(1).max(64), escalationReason: z.string().trim().min(1).max(1000).optional() });
 export const disputeNoteSchema = z.object({ body: z.string().trim().min(1).max(5000) });
 export const disputeStatusSchema = z.object({ status: z.enum(['OPEN', 'UNDER_REVIEW']) });
 

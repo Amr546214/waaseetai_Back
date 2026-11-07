@@ -288,7 +288,7 @@ export class DisputeService {
       heldEscrowAmount: heldEscrowAmount(escrow, escrow?.project?.contract?.price),
       escrow: escrow ? { status: escrow.status, amount: escrow.amount, releasedAmount: escrow.releasedAmount, fundedAt: escrow.fundedAt } : null,
       contractStatus: escrow?.project?.contract?.status ?? null,
-      assignedTo: assignment ? { id: assignment.context.assigneeId, name: assignment.context.assigneeName ?? '' } : null,
+      assignedTo: assignment ? { id: assignment.context.assigneeId, name: assignment.context.assigneeName ?? '', ...(typeof assignment.context.escalationReason === 'string' ? { escalationReason: assignment.context.escalationReason } : {}) } : null,
       // Internal admin notes: returned by this admin-only endpoint ONLY — the parties' own detail (getForUser) never carries them.
       notes: audit.filter(e => e.eventType === 'DISPUTE_NOTE').map(e => ({ id: e.id, body: String(e.context.body ?? ''), createdAt: e.occurredAt, admin: e.admin })),
       timeline: audit.map(e => ({ id: e.id, eventType: e.eventType, title: e.title, summary: e.summary, occurredAt: e.occurredAt, admin: e.admin }))
@@ -302,12 +302,20 @@ export class DisputeService {
     return dispute;
   }
 
-  async assign(id: string, adminId: string, assigneeId: string) {
+  async assign(id: string, adminId: string, assigneeId: string, escalationReason?: string) {
     const dispute = await this.openDisputeForAdmin(id);
+    if (escalationReason !== undefined) {
+      escalationReason = escalationReason.trim();
+      if (!escalationReason || escalationReason.length > 1000) throw fieldError('escalationReason', 'اكتب سبب التصعيد في حدود ١٠٠٠ حرف');
+      if (assigneeId === adminId) throw fieldError('assigneeId', 'اختر مسؤولًا آخر لتصعيد الحالة إليه');
+    }
     const assignee = await prisma.user.findUnique({ where: { id: assigneeId }, select: { id: true, firstName: true, lastName: true, accountType: true } });
     if (!assignee || (assignee.accountType !== AccountType.ADMIN && assignee.accountType !== AccountType.SUPER_ADMIN) || !(await assigneeHolds(assigneeId, ['disputes.view']))) throw fieldError('assigneeId', 'يمكن إسناد النزاع إلى عضو فريق يملك صلاحية عرض النزاعات فقط');
+    if (escalationReason !== undefined && !(await assigneeHolds(assigneeId, ['disputes.resolve']))) {
+      throw fieldError('assigneeId', 'المسؤول المختار لا يملك صلاحية معالجة النزاع');
+    }
     const name = [assignee.firstName, assignee.lastName].filter(Boolean).join(' ');
-    const row = await adminAudit.record({ adminId, entity: 'DISPUTE', entityId: dispute.id, eventType: 'DISPUTE_ASSIGNED', title: 'إسناد نزاع', summary: `إسناد النزاع إلى ${name || 'مشرف'}`, details: { assigneeId: assignee.id, assigneeName: name } });
+    const row = await adminAudit.record({ adminId, entity: 'DISPUTE', entityId: dispute.id, eventType: 'DISPUTE_ASSIGNED', title: escalationReason ? 'تصعيد نزاع' : 'إسناد نزاع', summary: escalationReason ? 'تصعيد داخلي إلى المسؤول المختار' : `إسناد النزاع إلى ${name || 'مشرف'}`, details: { assigneeId: assignee.id, assigneeName: name, ...(escalationReason ? { escalationReason } : {}) } });
     if (!row) throw new AppError('تعذّر حفظ إسناد النزاع. حاول مرة أخرى.', 500);
     return { id: dispute.id, assignedTo: { id: assignee.id, name } };
   }

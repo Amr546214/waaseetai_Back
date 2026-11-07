@@ -76,7 +76,7 @@ export async function cancelProviderRequest(req: Request, res: Response, next: N
 }
 
 export async function assignAdminDispute(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = assignDisputeSchema.safeParse(req.body); if (!parsed.success) throw zodAppError(parsed.error.issues, 'حدد المشرف المسؤول عن النزاع', { assigneeId: 'حدد المشرف المسؤول عن النزاع' }); res.json({ success: true, data: await disputeService.assign(String(req.params.id), actorId(req), parsed.data.assigneeId) }); } catch (error) { next(error); }
+  try { const parsed = assignDisputeSchema.safeParse(req.body); if (!parsed.success) throw zodAppError(parsed.error.issues, 'حدد المشرف المسؤول عن النزاع', { assigneeId: 'حدد المشرف المسؤول عن النزاع', escalationReason: 'اكتب سبب التصعيد في حدود ١٠٠٠ حرف' }); res.json({ success: true, data: await disputeService.assign(String(req.params.id), actorId(req), parsed.data.assigneeId, parsed.data.escalationReason) }); } catch (error) { next(error); }
 }
 
 export async function addAdminDisputeNote(req: Request, res: Response, next: NextFunction) {
