@@ -155,9 +155,9 @@ function createGoogleAuthMockPrisma(t: TestContext, opts: {
       }
     }
   });
-  const createOtpSpy = t.mock.fn(async (..._a: any[]) => ({}));
+  const createOtpSpy = t.mock.fn(async (...args: any[]) => ({ id: 'o1', code: args[1] }));
   t.mock.module('../repositories/auth.repository', {
-    namedExports: { authRepository: { findByEmail: findByEmailSpy, findLatestOtpByPurpose: async () => null, deleteOtpsByPurpose: async () => ({ count: 0 }), createOtp: createOtpSpy } }
+    namedExports: { authRepository: { findByEmail: findByEmailSpy, rotateLoginEmailOtp: async () => ({ count: 1 }), findLatestOtpByPurpose: async () => null, deleteOtpsByPurpose: async () => ({ count: 0 }), createOtp: createOtpSpy } }
   });
   t.mock.module('./notification.service', { namedExports: { notificationService: { sendLoginOtpEmail: async () => ({}) } } });
   t.mock.module('../config/db', {

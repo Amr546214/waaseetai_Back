@@ -31,7 +31,8 @@ function setup(t: TestContext, opts: {
   t.mock.module('../repositories/auth.repository', { namedExports: { authRepository: {
     findByEmailOrPhone: async () => null,
     createUserWithProfile: async () => ({ id: 'user-1', email: 'amr@example.com' }),
-    createOtp: async (userId: string, code: string, type: string, expiresAt: Date) => { created.push({ userId, code, type, expiresAt, at: Date.now() }); return {}; },
+    createOtp: async (userId: string, code: string, type: string, expiresAt: Date) => { created.push({ userId, code, type, expiresAt, at: Date.now() }); return { id: 'o1', code }; },
+    rotateLoginEmailOtp: async () => ({ count: 1 }),
     findById: async () => user,
     findByEmail: async () => ({ ...user, password: user.password }),
     findLatestActivationOtp: async () => opts.latestActivation ?? null,

@@ -28,7 +28,13 @@ function setup(t: TestContext, hash: string, mail: Mail, users: number) {
 		findByEmail: async (e: string) => { const u = byEmail(e); return u ? { ...u } : null; },
 		findById: async (id: string) => { const u = byId(id); return u ? { ...u } : null; },
 		findByIdForSession: async (id: string) => { const u = byId(id); return u ? { ...u } : null; },
-		createOtp: async (userId: string, code: string, _t: string, expiresAt: Date, purpose: string) => { try { t.mock.timers.tick(40); } catch { /* real clock: time passes by itself */ } await new Promise(r => setImmediate(r)); rows.push({ id: `o${++seq}`, userId, code, attempts: 0, expiresAt, purpose, createdAt: seq }); return {}; },
+		createOtp: async (userId: string, code: string, _t: string, expiresAt: Date, purpose: string) => { try { t.mock.timers.tick(40); } catch { /* real clock: time passes by itself */ } await new Promise(r => setImmediate(r)); rows.push({ id: `o${++seq}`, userId, code, attempts: 0, expiresAt, purpose, createdAt: seq }); return { id: `o${seq}`, code }; },
+		rotateLoginEmailOtp: async (userId: string, id: string, expectedCode: string, code: string, expiresAt: Date) => {
+			const row = rows.find(x => x.id === id && x.userId === userId && x.purpose === 'LOGIN_EMAIL' && x.code === expectedCode);
+			if (!row) return { count: 0 };
+			Object.assign(row, { code, expiresAt, attempts: 0 });
+			return { count: 1 };
+		},
 		findLatestOtpByPurpose: async (userId: string, purpose: string) => { await new Promise(r => setImmediate(r)); const r = rows.filter(x => x.userId === userId && x.purpose === purpose).sort((a, b) => b.createdAt - a.createdAt)[0]; return r ? { ...r } : null; },
 		deleteOtpsByPurpose: async (userId: string, purpose: string) => { await new Promise(r => setImmediate(r)); for (let i = rows.length - 1; i >= 0; i--) if (rows[i].userId === userId && rows[i].purpose === purpose) rows.splice(i, 1); return { count: 0 }; },
 		incrementOtpAttempts: async (id: string) => { const r = rows.find(x => x.id === id); if (r) r.attempts++; return {}; },
@@ -112,7 +118,7 @@ test('a slow mail never blocks a verification of the code that is already valid'
 	const auth = await load();
 	await loginAs(auth, 0);
 	const code = rows[0].code;
-	t.mock.timers.tick(61_000); // resend allowed again, plenty of validity left (reuse)
+	t.mock.timers.tick(61_000); // resend allowed again, plenty of validity left
 	mail.delayMs = 400; // SMTP is slow now (real timers from here)
 	const slowResend = auth.resendLoginOtp('user-0', '10.0.0.1');
 	await new Promise(r => setTimeout(r, 30));
@@ -120,21 +126,19 @@ test('a slow mail never blocks a verification of the code that is already valid'
 	await auth.verifyLoginOtp({ userId: 'user-0', code }, {});
 	assert.ok(Date.now() - t0 < 250, 'verification did not wait for the 400 ms mail');
 	assert.equal(sessions.length, 1);
-	await slowResend;
+	assert.equal((await slowResend).emailSent, false);
+	assert.equal(rows.length, 0, 'a consumed challenge was not reopened');
 });
 
-test('a re-sent code (3+ minutes left) is mailed with the time really left; a fresh code with 10 minutes', async (t) => {
+test('a newly sent login code always states ten minutes and has that lifetime', async (t) => {
 	t.mock.timers.enable({ apis: ['Date'], now: 1_000_000_000_000 });
 	const { mails, rows } = setup(t, await hashed(), { fail: false, delayMs: 0 }, 1);
 	const auth = await load();
 	await loginAs(auth, 0);
-	assert.equal(mails[0].minutes, 10);
-	t.mock.timers.tick(5 * 60_000 + 30_000); // 4 min 30 s left -> "4 minutes", never a new 10
-	const second: any = await loginAs(auth, 0);
-	assert.equal(mails[1].code, mails[0].code);
-	assert.equal(mails[1].minutes, 4);
-	t.mock.timers.tick(5 * 60_000); // 0 min 0 s left -> expired -> fresh
-	await loginAs(auth, 0);
-	assert.notEqual(rows[0].code, mails[0].code === rows[0].code ? '' : mails[0].code);
-	assert.equal(mails[2].minutes, 10);
+	t.mock.timers.tick(5 * 60_000 + 30_000);
+	const second = await auth.resendLoginOtp('user-0', '10.0.0.1');
+	assert.notEqual(mails[1].code, mails[0].code);
+	assert.deepEqual(mails.map(mail => mail.minutes), [10, 10]);
+	assert.equal(rows[0].expiresAt.getTime(), Date.now() + 600_000);
+	assert.equal(second.expiresAt, rows[0].expiresAt.toISOString());
 });

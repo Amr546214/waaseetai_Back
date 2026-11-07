@@ -738,7 +738,7 @@ export class AuthService {
 	}
 
 	/** Sends (or re-sends) the LOGIN_EMAIL code for an ACTIVE account; subject to the shared OTP send throttle. */
-	private async loginOtpChallengeResult(userId: string, email: string, ipAddress: string | undefined) {
+	private async loginOtpChallengeResult(userId: string, email: string, ipAddress: string | undefined, resend = false) {
 		const base = { verified: false as const, phoneOtpRequired: false, loginOtpRequired: true as const, userId };
 		const key = `login:${userId}`;
 		// One request at a time per account: two simultaneous requests (double click, two tabs) cannot create / delete the same code under each other.
@@ -754,37 +754,39 @@ export class AuthService {
 				logger.info(`[OTP:login] cid=${cid} outcome=throttled reason=${throttle.reason} wait=${throttle.retryAfterSeconds}s ms=${Date.now() - startedAt}`);
 				return { ...base, emailSent: false, retryAfterSeconds: throttle.retryAfterSeconds, message: otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds) };
 			}
-			const { emailSent, expiresAt, reused } = await this.sendLoginOtp(userId, email);
-			otpSendThrottle.commitRecipient(key, emailSent);
-			logger.info(`[OTP:login] cid=${cid} outcome=${emailSent ? 'sent' : 'send-failed'} reused=${reused} validForMs=${expiresAt.getTime() - Date.now()} ms=${Date.now() - startedAt}`);
-			return { ...base, emailSent, ...(emailSent ? { resendAvailableAt: resendAvailableAtIso(), expiresAt: expiresAt.toISOString() } : {}), message: emailSent ? 'أرسلنا رمز تسجيل الدخول إلى بريدك الإلكتروني' : 'تعذر إرسال رمز تسجيل الدخول الآن، حاول مرة أخرى بعد قليل أو تواصل مع الدعم' };
+			const expiresAt = await this.sendLoginOtp(userId, email, resend);
+			otpSendThrottle.commitRecipient(key, expiresAt !== null);
+			logger.info(`[OTP:login] cid=${cid} outcome=${expiresAt ? 'sent' : 'send-failed'} ms=${Date.now() - startedAt}`);
+			return { ...base, emailSent: expiresAt !== null, ...(expiresAt ? { resendAvailableAt: resendAvailableAtIso(), expiresAt: expiresAt.toISOString() } : {}), message: expiresAt ? 'أرسلنا رمز تسجيل الدخول إلى بريدك الإلكتروني' : 'تعذر إرسال رمز تسجيل الدخول الآن، حاول مرة أخرى بعد قليل أو تواصل مع الدعم' };
 		});
 	}
 
-	/** A still-valid LOGIN_EMAIL code is re-sent as it is (a late older email must not carry a dead code); otherwise a new one is created. */
-	private async sendLoginOtp(userId: string, email: string): Promise<{ emailSent: boolean; reused: boolean; expiresAt: Date }> {
-		// The choose-or-create step of the code shares one short critical section with verifyLoginOtp, so a verification can never delete the code a
-		// resend has just created (or the other way round). The SMTP wait below is OUTSIDE it: a slow mail never blocks a verification.
-		const { code, reused, expiresAt } = await withKeyLock(`login-otp-db:${userId}`, async () => {
+	/** Rotate only after the mailer accepts the new code. A failed send leaves the old code as it was. */
+	private async sendLoginOtp(userId: string, email: string, resend: boolean): Promise<Date | null> {
+		const dbKey = `login-otp-db:${userId}`;
+		const previous = await withKeyLock(dbKey, async () => {
 			const existing = await authRepository.findLatestOtpByPurpose(userId, OtpPurpose.LOGIN_EMAIL);
-			if (canReuseOtp(existing, OTP_MAX_ATTEMPTS)) return { code: existing!.code, reused: true, expiresAt: existing!.expiresAt };
-			const fresh = crypto.randomInt(100000, 999999).toString();
-			const freshExpiry = new Date(Date.now() + EMAIL_OTP_EXPIRY_MS);
-			await authRepository.deleteOtpsByPurpose(userId, OtpPurpose.LOGIN_EMAIL);
-			await authRepository.createOtp(userId, fresh, OtpType.EMAIL, freshExpiry, OtpPurpose.LOGIN_EMAIL);
-			return { code: fresh, reused: false, expiresAt: freshExpiry };
+			if (existing || resend) return existing;
+			// Preserve a challenge that can be retried even if the first send fails. The marker is never valid.
+			return authRepository.createOtp(userId, '', OtpType.EMAIL, new Date(0), OtpPurpose.LOGIN_EMAIL);
 		});
-		if (process.env.NODE_ENV === 'development') {
-			console.log(`\n======================================================\n🔑 [LOCAL DEV LOGIN OTP] Email: ${email} -> CODE: ${code}\n======================================================\n`);
-		}
+		if (!previous) return null;
+
+		let code: string;
+		do { code = crypto.randomInt(100000, 1000000).toString(); } while (code === previous.code);
 		try {
-			// the mail states the REAL time left (a re-sent code keeps its original expiry), never a fresh 10 minutes
-			await notificationService.sendLoginOtpEmail(email, code, remainingMinutes(expiresAt));
-			return { emailSent: true, reused, expiresAt };
+			await notificationService.sendLoginOtpEmail(email, code, EMAIL_OTP_EXPIRY_MS / 60_000);
 		} catch (error) {
 			logger.error(`[AuthService] Login OTP email failed (userId=${userId})`, error);
-			return { emailSent: false, reused, expiresAt };
+			return null;
 		}
+
+		return withKeyLock(dbKey, async () => {
+			const expiresAt = new Date(Date.now() + EMAIL_OTP_EXPIRY_MS);
+			// If verification used the previous code while SMTP was in flight, never reopen that challenge.
+			const rotated = await authRepository.rotateLoginEmailOtp(userId, previous.id, previous.code, code, expiresAt);
+			return rotated.count === 1 ? expiresAt : null;
+		});
 	}
 
 	/** Creates the session (JWT + registered session row) for an account whose password AND login code were verified. */
@@ -904,7 +906,7 @@ export class AuthService {
 
 	/**
 	 * Second step of every password login: the LOGIN_EMAIL code sent to the account email. Only a code issued for this purpose is accepted
-	 * (a password-reset / activation / phone-change code never works here), 5 wrong guesses delete it, and the session is created only now.
+	 * (a password-reset / activation / phone-change code never works here), 5 wrong guesses lock it, and the session is created only now.
 	 */
 	public async verifyLoginOtp(input: VerifyLoginOtpInput, sessionContext: SessionContext = {}) {
 		// One verification at a time per account: the same right code sent twice at once (double click) opens ONE session, the second finds the code used.
@@ -916,22 +918,21 @@ export class AuthService {
 		const otp = user ? await authRepository.findLatestOtpByPurpose(input.userId, OtpPurpose.LOGIN_EMAIL) : null;
 		if (!user || !otp) throw new AppError('رمز التحقق غير صحيح', 400);
 		if (otp.attempts >= OTP_MAX_ATTEMPTS) {
-			await authRepository.deleteOtpsByPurpose(input.userId, OtpPurpose.LOGIN_EMAIL);
 			throw new AppError(OTP_LOCKED_MESSAGE, 429);
 		}
-		if (otp.expiresAt < new Date()) throw new AppError('رمز التحقق انتهت صلاحيته، يرجى إعادة الإرسال', 400);
+		if (otp.expiresAt.getTime() <= Date.now()) throw new AppError('رمز التحقق انتهت صلاحيته، يرجى إعادة الإرسال', 400);
 		if (otp.code !== input.code) {
 			await authRepository.incrementOtpAttempts(otp.id);
 			if (otp.attempts + 1 >= OTP_MAX_ATTEMPTS) {
-				await authRepository.deleteOtpsByPurpose(input.userId, OtpPurpose.LOGIN_EMAIL);
 				throw new AppError(OTP_LOCKED_MESSAGE, 429);
 			}
 			throw new AppError('رمز التحقق غير صحيح', 400);
 		}
 		if (user.status === UserStatus.SUSPENDED) throw new AppError('هذا الحساب معطل حالياً، يرجى التواصل مع الدعم', 403);
 		if (user.status === UserStatus.PENDING_VERIFICATION) throw new AppError('رمز التحقق غير صحيح', 400);
+		const session = await this.startSession(user, sessionContext);
 		await authRepository.deleteOtpsByPurpose(input.userId, OtpPurpose.LOGIN_EMAIL);
-		return this.startSession(user, sessionContext);
+		return session;
 	}
 
 	/** Re-sends the login code (same throttle as the first send). Only an ACTIVE account that is mid-login has anything to resend. */
@@ -944,7 +945,7 @@ export class AuthService {
 			if (!throttle.allowed) return { emailSent: false, retryAfterSeconds: throttle.retryAfterSeconds, message: otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds) };
 			return { emailSent: true, resendAvailableAt: resendAvailableAtIso(), message: RESEND_GENERIC_MESSAGE };
 		}
-		const result = await this.loginOtpChallengeResult(userId, user.email, ipAddress);
+		const result = await this.loginOtpChallengeResult(userId, user.email, ipAddress, true);
 		return { emailSent: result.emailSent, message: result.message, ...('retryAfterSeconds' in result ? { retryAfterSeconds: result.retryAfterSeconds } : {}), ...('resendAvailableAt' in result ? { resendAvailableAt: result.resendAvailableAt, expiresAt: result.expiresAt } : {}) };
 	}
 }
