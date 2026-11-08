@@ -60,7 +60,7 @@ let sa: any, sa2: any, plainAdmin: any, client: any;
 beforeEach(async () => {
 	if (!enabled) return;
 	const { prisma, svc } = await env();
-	svc.broadcastDeps.chunkSize = 200; svc.broadcastDeps.createNotifications = async (tx: any, rows: any[]) => { await tx.notification.createMany({ data: rows }); };
+	svc.broadcastDeps.chunkSize = 200; svc.broadcastDeps.leaseMs = 60_000; svc.broadcastDeps.afterChunk = undefined; delete process.env.ADMIN_BROADCAST_WORKER_ENABLED; svc.broadcastDeps.createNotifications = async (tx: any, rows: any[]) => { await tx.notification.createMany({ data: rows }); };
 	await prisma.notification.deleteMany({}); await prisma.broadcast.deleteMany({}); await prisma.broadcastDraft.deleteMany({});
 	await prisma.user.deleteMany({ where: { accountType: { in: ['MARKETING_BROKER'] } } });
 	sa ??= await mkUser('SUPER_ADMIN', 'sa'); sa2 ??= await mkUser('SUPER_ADMIN', 'sa2'); plainAdmin ??= await mkUser('ADMIN', 'adm'); client ??= await mkUser('CLIENT_INDIVIDUAL', 'cl');
@@ -75,6 +75,7 @@ const newDraft = async (over: any = {}, who = sa) => {
 const preview = async (draftId: string, who = sa) => { const { call } = await env(); const r = await call('POST', `/drafts/${draftId}/preview`, who.id, {}); assert.equal(r.status, 200); return r.data; };
 const send = async (draftId: string, token: string, key: string, who: any = sa) => (await env()).call('POST', `/drafts/${draftId}/send`, who.id, { previewToken: token }, { 'Idempotency-Key': key });
 const notes = async () => (await env()).prisma.notification.findMany({ where: { type: 'ADMIN_BROADCAST' }, orderBy: { id: 'asc' } });
+const drain = async (owner = 'w-test') => (await env()).svc.runBroadcastWorkerOnce(owner);
 const key = () => `key-${id()}`;
 
 test('pg: the isolated database is a throw-away qa_iso_bcast_ one', opts, async () => {
@@ -176,7 +177,7 @@ test('PREVIEW_STALE when the audience or the draft changed after the preview', o
 	const cur2 = (await call('GET', `/drafts/${d.id}`, sa.id)).data;
 	await call('PATCH', `/drafts/${d.id}`, sa.id, { version: cur2.version, audience: 'MARKETERS' });
 	p = await preview(d.id); r = await send(d.id, p.previewToken, key());
-	assert.equal(r.status, 201); assert.equal(r.data.broadcast.status, 'COMPLETED');
+	assert.equal(r.status, 202); assert.equal(r.data.broadcast.status, 'QUEUED');
 	d = null as any;
 });
 
@@ -184,8 +185,12 @@ test('send: in-platform notification rows only, once per recipient; sender/audit
 	const { prisma } = await env(); const ms = await marketers(3);
 	const d = await newDraft({ category: 'OFFERS', title: 'عرض', message: 'تفاصيل' }); const p = await preview(d.id);
 	const r = await send(d.id, p.previewToken, key());
-	assert.equal(r.status, 201); assert.equal(r.data.replayed, false);
-	assert.deepEqual(r.data.broadcast.totals, { audience: 3, sent: 3, failed: 0, pending: 0 });
+	assert.equal(r.status, 202); assert.equal(r.data.replayed, false);
+	assert.equal(r.data.broadcast.status, 'QUEUED');
+	assert.deepEqual(r.data.broadcast.totals, { audience: 3, sent: 0, failed: 0, pending: 3 });
+	assert.equal((await notes()).length, 0, 'confirm returned before any notification exists');
+	await drain();
+	assert.deepEqual((await (await env()).call('GET', `/${r.data.broadcast.id}`, sa.id)).data.totals, { audience: 3, sent: 3, failed: 0, pending: 0 });
 	const rows = await notes();
 	assert.equal(rows.length, 3); assert.deepEqual(rows.map(x => x.userId).sort(), ms.map(m => m.id).sort());
 	for (const n of rows) { assert.equal(n.title, 'عرض'); assert.equal(n.message, 'تفاصيل'); assert.equal(n.category, 'OFFERS'); assert.equal(n.isRead, false); assert.equal((n.metadata as any).broadcastId, r.data.broadcast.id); }
@@ -205,7 +210,8 @@ test('duplicate send: same key twice, parallel same key, parallel different keys
 	const { prisma } = await env(); await marketers(5);
 	const d = await newDraft(); const p = await preview(d.id); const k = key();
 	const [a, b] = await Promise.all([send(d.id, p.previewToken, k), send(d.id, p.previewToken, k)]);
-	assert.ok([a.status, b.status].every(s => s === 200 || s === 201), `${a.status}/${b.status}`);
+	assert.ok([a.status, b.status].every(s => s === 200 || s === 202), `${a.status}/${b.status}`);
+	await drain();
 	assert.equal(a.data.broadcast.id, b.data.broadcast.id);
 	assert.equal((await notes()).length, 5); assert.equal(await prisma.broadcast.count(), 1);
 	const again = await send(d.id, p.previewToken, k);
@@ -222,7 +228,8 @@ test('duplicate send: same key twice, parallel same key, parallel different keys
 	// parallel different keys on one fresh draft: exactly one broadcast
 	const d3 = await newDraft(); const p3 = await preview(d3.id);
 	const race = await Promise.all([send(d3.id, p3.previewToken, key()), send(d3.id, p3.previewToken, key()), send(d3.id, p3.previewToken, key())]);
-	assert.equal(race.filter(r => r.status === 201).length, 1);
+	assert.equal(race.filter(r => r.status === 202).length, 1);
+	await drain();
 	assert.equal(await prisma.broadcast.count(), 2); assert.equal((await notes()).length, 10);
 });
 
@@ -238,9 +245,11 @@ test('partial failure is recorded per recipient and retry completes only the rem
 	};
 	const d = await newDraft(); const p = await preview(d.id);
 	const r = await send(d.id, p.previewToken, key());
-	assert.equal(r.status, 201); assert.equal(r.data.broadcast.status, 'PARTIAL');
-	assert.deepEqual(r.data.broadcast.totals, { audience: 7, sent: 5, failed: 2, pending: 0 });
+	assert.equal(r.status, 202);
 	const id1 = r.data.broadcast.id;
+	await drain();
+	const fin = (await call('GET', `/${id1}`, sa.id)).data;
+	assert.equal(fin.status, 'PARTIAL'); assert.deepEqual(fin.totals, { audience: 7, sent: 5, failed: 2, pending: 0 });
 	const before = await notes();
 	assert.equal(before.length, 5); assert.ok(before.every(n => !failing.has(n.userId)));
 	const detail = await call('GET', `/${id1}`, sa.id);
@@ -249,11 +258,14 @@ test('partial failure is recorded per recipient and retry completes only the rem
 	assert.deepEqual(recs.map(x => x.userId).sort(), [...failing].sort()); assert.ok(recs.every(x => x.errorCode === 'INJECTED_FAULT'));
 	// retry while the fault persists: still failed, still no duplicate
 	const still = await call('POST', `/${id1}/retry`, sa.id);
-	assert.equal(still.data.status, 'PARTIAL'); assert.equal((await notes()).length, 5);
+	assert.equal(still.data.status, 'QUEUED'); await drain(); assert.equal((await call('GET', `/${id1}`, sa.id)).data.status, 'PARTIAL'); assert.equal((await notes()).length, 5);
 	// fault cleared: retry completes ONLY the remaining two
 	failing.clear(); const callsBefore = attempts; const createdIds = new Set(before.map(n => n.id));
-	const done = await call('POST', `/${id1}/retry`, sa.id);
-	assert.equal(done.status, 200); assert.equal(done.data.status, 'COMPLETED');
+	assert.equal((await call('POST', `/${id1}/retry`, sa.id)).status, 200);
+	assert.equal((await call('POST', `/${id1}/retry`, sa.id)).json.code, 'BROADCAST_IN_PROGRESS');
+	await drain();
+	const done = await call('GET', `/${id1}`, sa.id);
+	assert.equal(done.data.status, 'COMPLETED');
 	assert.deepEqual(done.data.totals, { audience: 7, sent: 7, failed: 0, pending: 0 });
 	assert.equal(attempts - callsBefore, 1, 'only one delivery call, for the two remaining recipients');
 	const after = await notes();
@@ -269,11 +281,15 @@ test('everything failing ends FAILED; the database refuses a second notification
 	svc.broadcastDeps.createNotifications = async () => { throw new Error('down'); };
 	const d = await newDraft(); const p = await preview(d.id);
 	const r = await send(d.id, p.previewToken, key());
-	assert.equal(r.data.broadcast.status, 'FAILED'); assert.deepEqual(r.data.broadcast.totals, { audience: 2, sent: 0, failed: 2, pending: 0 });
+	await drain();
+	const { call: call0 } = await env();
+	const st = (await call0('GET', `/${r.data.broadcast.id}`, sa.id)).data;
+	assert.equal(st.status, 'FAILED'); assert.deepEqual(st.totals, { audience: 2, sent: 0, failed: 2, pending: 0 });
 	assert.equal((await notes()).length, 0);
 	svc.broadcastDeps.createNotifications = async (tx: any, rows: any[]) => { await tx.notification.createMany({ data: rows }); };
 	const { call } = await env();
-	assert.equal((await call('POST', `/${r.data.broadcast.id}/retry`, sa.id)).data.status, 'COMPLETED');
+	assert.equal((await call('POST', `/${r.data.broadcast.id}/retry`, sa.id)).data.status, 'QUEUED'); await drain();
+	assert.equal((await call('GET', `/${r.data.broadcast.id}`, sa.id)).data.status, 'COMPLETED');
 	const n = (await notes())[0];
 	await assert.rejects(prisma.notification.create({ data: { userId: n.userId, title: 'dup', message: 'dup', type: 'ADMIN_BROADCAST', metadata: n.metadata as any } }));
 });
@@ -285,10 +301,11 @@ test('history: newest first, paginated, sender + totals, detail has the body, li
 		const d = await newDraft({ title: `إشعار ${i}`, message: `سر-الجسم-${i}` }); const p = await preview(d.id);
 		const r = await send(d.id, p.previewToken, key()); ids.push(r.data.broadcast.id);
 	}
+	await drain();
 	const p1 = await call('GET', '/', sa.id);
 	assert.equal(p1.data.items.length, 20); assert.equal(p1.data.hasNext, true); assert.equal(p1.data.items[0].id, ids[21]); assert.equal(p1.data.items[0].title, 'إشعار 21');
 	const item = p1.data.items[0];
-	assert.deepEqual(Object.keys(item).sort(), ['audience', 'category', 'completedAt', 'createdAt', 'id', 'sender', 'status', 'title', 'totals']);
+	assert.deepEqual(Object.keys(item).sort(), ['audience', 'category', 'completedAt', 'createdAt', 'id', 'lastProgressAt', 'sender', 'status', 'title', 'totals']);
 	assert.equal(item.sender.id, sa.id); assert.match(item.sender.name, /^QA /); assert.deepEqual(item.totals, { audience: 2, sent: 2, failed: 0, pending: 0 });
 	assert.doesNotMatch(JSON.stringify(p1.json), /سر-الجسم/);
 	const p2 = await call('GET', '/?page=2', sa.id);
@@ -298,4 +315,140 @@ test('history: newest first, paginated, sender + totals, detail has the body, li
 	assert.equal((await call('GET', `/${id()}`, sa.id)).status, 404);
 	assert.equal((await call('GET', '/?page=0', sa.id)).status, 400);
 	assert.equal((await call('GET', '/', sa2.id)).data.items.length, 20); // any Super Admin sees the shared history
+});
+
+const queued = async (n: number, over: any = {}) => {
+	const ms = await marketers(n);
+	const d = await newDraft(over); const p = await preview(d.id);
+	const r = await send(d.id, p.previewToken, key());
+	assert.equal(r.status, 202);
+	return { ms, id: r.data.broadcast.id as string, r };
+};
+const perUser = async (broadcastId?: string) => {
+	const rows = (await notes()).filter(n => !broadcastId || (n.metadata as any).broadcastId === broadcastId); const m = new Map<string, number>();
+	for (const n of rows) m.set(n.userId, (m.get(n.userId) ?? 0) + 1);
+	return m;
+};
+
+test('worker: off by default; a queued job waits (counters show pending) and the active endpoint restores it', opts, async () => {
+	const { call, svc } = await env();
+	assert.equal(svc.broadcastWorkerEnabled(), false);
+	assert.equal(svc.startBroadcastWorkerFromEnv(), null);
+	const { id } = await queued(4);
+	assert.equal((await notes()).length, 0);
+	const d = (await call('GET', `/${id}`, sa.id)).data;
+	assert.equal(d.status, 'QUEUED'); assert.deepEqual(d.totals, { audience: 4, sent: 0, failed: 0, pending: 4 }); assert.equal(d.lastProgressAt, null);
+	assert.equal((await call('GET', '/active', sa.id)).data.id, id);
+	assert.equal((await call('GET', '/active', sa2.id)).data, null);
+	assert.equal((await call('POST', `/${id}/retry`, sa.id)).json.code, 'BROADCAST_IN_PROGRESS');
+	process.env.ADMIN_BROADCAST_WORKER_ENABLED = 'true'; assert.equal(svc.broadcastWorkerEnabled(), true); delete process.env.ADMIN_BROADCAST_WORKER_ENABLED;
+});
+
+test('worker: completes a queued job; progress and lastProgressAt are visible; nothing mailed or pushed', opts, async () => {
+	const { call, svc } = await env();
+	const { id, ms } = await queued(5);
+	svc.broadcastDeps.chunkSize = 2;
+	const seen: any[] = [];
+	svc.broadcastDeps.afterChunk = async (bid: string) => { seen.push((await call('GET', `/${bid}`, sa.id)).data); };
+	assert.deepEqual(await drain(), [id]);
+	assert.deepEqual(seen.map(x => [x.status, x.totals.sent, x.totals.pending]), [['SENDING', 2, 3], ['SENDING', 4, 1], ['SENDING', 5, 0]]);
+	assert.ok(seen[0].lastProgressAt);
+	const d = (await call('GET', `/${id}`, sa.id)).data;
+	assert.equal(d.status, 'COMPLETED'); assert.deepEqual(d.totals, { audience: 5, sent: 5, failed: 0, pending: 0 });
+	assert.equal((await call('GET', '/active', sa.id)).data, null);
+	assert.deepEqual([...(await perUser()).values()], [1, 1, 1, 1, 1]); assert.equal((await perUser()).size, ms.length);
+	assert.deepEqual(await drain(), []);
+	assert.deepEqual(pushed, []); assert.deepEqual(mailed, []);
+});
+
+test('worker: a job interrupted mid-way is resumed by a fresh worker; total == audience, nobody notified twice', opts, async () => {
+	const { call, svc, prisma } = await env();
+	const { id, ms } = await queued(9);
+	svc.broadcastDeps.chunkSize = 2;
+	let chunks = 0;
+	svc.broadcastDeps.afterChunk = () => { if (++chunks === 2) throw new svc.WorkerCrash('process died'); };
+	await assert.rejects(drain('w-dead'), svc.WorkerCrash);
+	assert.equal((await notes()).length, 4);
+	let mid = (await call('GET', `/${id}`, sa.id)).data;
+	assert.equal(mid.status, 'SENDING'); assert.deepEqual(mid.totals, { audience: 9, sent: 4, failed: 0, pending: 5 });
+	// the dead worker still holds a valid lease: nobody else may touch it yet
+	assert.deepEqual(await drain('w-late'), []);
+	await prisma.broadcast.update({ where: { id }, data: { leaseUntil: new Date(Date.now() - 1000) } }); // lease expiry
+	svc.broadcastDeps.afterChunk = undefined;
+	assert.deepEqual(await drain('w-fresh'), [id]);
+	mid = (await call('GET', `/${id}`, sa.id)).data;
+	assert.equal(mid.status, 'COMPLETED'); assert.deepEqual(mid.totals, { audience: 9, sent: 9, failed: 0, pending: 0 });
+	const counts = await perUser();
+	assert.equal(counts.size, 9); assert.ok([...counts.values()].every(n => n === 1)); assert.deepEqual([...counts.keys()].sort(), ms.map(m => m.id).sort());
+	assert.equal((await notes()).length, 9);
+});
+
+test('worker: a crash between creating a notification and marking the recipient cannot exist (one transaction): a failing mark leaves no notification', opts, async () => {
+	const { svc, prisma } = await env();
+	const { id } = await queued(3);
+	// a chunk whose notification insert succeeds but whose transaction then aborts must leave zero rows and zero SENT marks
+	svc.broadcastDeps.createNotifications = async (tx: any, rows: any[]) => { await tx.notification.createMany({ data: rows }); throw new svc.WorkerCrash('died after insert, before commit'); };
+	await assert.rejects(drain('w-x'), svc.WorkerCrash);
+	assert.equal((await notes()).length, 0);
+	assert.equal(await prisma.broadcastRecipient.count({ where: { broadcastId: id, status: 'SENT' } }), 0);
+});
+
+test('worker: two workers started simultaneously deliver every recipient exactly once with correct counters', opts, async () => {
+	const { call, svc } = await env();
+	const a = await queued(12);
+	svc.broadcastDeps.chunkSize = 3;
+	const [h1, h2] = await Promise.all([drain('w-1'), drain('w-2')]);
+	const handled = [...h1, ...h2];
+	assert.ok(handled.includes(a.id));
+	const counts = await perUser();
+	assert.ok([...counts.values()].every(n => n === 1));
+	const d = (await call('GET', `/${a.id}`, sa.id)).data;
+	assert.equal(d.status, 'COMPLETED'); assert.equal(d.totals.sent, d.totals.audience); assert.equal(d.totals.pending, 0);
+	assert.equal((await notes()).length, counts.size);
+});
+
+test('worker: two workers racing on the SAME broadcast (lease ignored) cannot double deliver; a worker that lost its lease stops', opts, async () => {
+	const { svc, prisma, call } = await env();
+	const { id } = await queued(10);
+	svc.broadcastDeps.chunkSize = 2;
+	// w-old claims, then its lease expires and w-new takes over mid-job
+	const claimed = await svc.claimBroadcast('w-old'); assert.equal(claimed, id);
+	assert.equal(await svc.claimBroadcast('w-other'), null, 'a live lease blocks other workers');
+	await prisma.broadcast.update({ where: { id }, data: { leaseUntil: new Date(Date.now() - 1000) } });
+	assert.equal(await svc.claimBroadcast('w-new'), id, 'expired lease can be taken over');
+	// the old worker (still running its loop in memory) now tries to deliver: it must stop at its first chunk
+	const lateRun = await (svc as any).processBroadcastForTest(id, 'w-old');
+	assert.equal(lateRun, 'lost'); assert.equal((await notes()).length, 0);
+	const newRun = await (svc as any).processBroadcastForTest(id, 'w-new');
+	assert.equal(newRun, 'done');
+	const counts = await perUser(); assert.equal(counts.size, 10); assert.ok([...counts.values()].every(n => n === 1));
+	assert.equal((await call('GET', `/${id}`, sa.id)).data.status, 'COMPLETED');
+	// concurrent processing under two different owners: only the lease holder delivers
+	const second = await queued(6); await svc.claimBroadcast('w-a');
+	const [r1, r2] = await Promise.all([(svc as any).processBroadcastForTest(second.id, 'w-a'), (svc as any).processBroadcastForTest(second.id, 'w-b')]);
+	assert.deepEqual([r1, r2], ['done', 'lost']);
+	const sc = await perUser(second.id); assert.equal(sc.size, 16); assert.ok([...sc.values()].every(n => n === 1));
+});
+
+test('worker: empty and changed audience behave as before and enqueue nothing; replay returns the same broadcast', opts, async () => {
+	const { prisma } = await env();
+	const d0 = await newDraft(); const p0 = await preview(d0.id);
+	assert.equal((await send(d0.id, p0.previewToken, key())).json.code, 'AUDIENCE_EMPTY');
+	await marketers(2);
+	const d = await newDraft(); const p = await preview(d.id); await marketers(1);
+	assert.equal((await send(d.id, p.previewToken, key())).json.code, 'PREVIEW_STALE');
+	assert.equal(await prisma.broadcast.count(), 0);
+	const p2 = await preview(d.id); const k = key();
+	const first = await send(d.id, p2.previewToken, k); const again = await send(d.id, p2.previewToken, k);
+	assert.equal(first.status, 202); assert.equal(again.status, 200); assert.equal(again.data.replayed, true);
+	assert.equal(again.data.broadcast.id, first.data.broadcast.id); assert.equal(await prisma.broadcast.count(), 1);
+});
+
+test('worker: the background timer starts only when asked, resumes queued jobs by itself and stops', opts, async () => {
+	const { svc, call } = await env();
+	const { id } = await queued(3);
+	const w = svc.startBroadcastWorker({ intervalMs: 20, owner: 'w-timer' });
+	for (let i = 0; i < 100 && (await call('GET', `/${id}`, sa.id)).data.status !== 'COMPLETED'; i++) await new Promise(r => setTimeout(r, 50));
+	w.stop();
+	assert.equal((await call('GET', `/${id}`, sa.id)).data.status, 'COMPLETED'); assert.equal((await notes()).length, 3);
 });

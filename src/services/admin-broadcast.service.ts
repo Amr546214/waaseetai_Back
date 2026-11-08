@@ -2,6 +2,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto
 import type { AccountType, BroadcastAudience, NotificationCategory, Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
+import { logger } from '../config/logger';
 import { adminAudit } from './admin-audit.service';
 
 /**
@@ -21,6 +22,9 @@ type Tx = Prisma.TransactionClient;
 /** Seam for tests (fault injection). Production never reassigns it. */
 export const broadcastDeps = {
 	chunkSize: 200,
+	leaseMs: 60_000,
+	/** test seam: runs after each committed chunk; WorkerCrash simulates a death holding the lease */
+	afterChunk: undefined as undefined | ((broadcastId: string) => void | Promise<void>),
 	createNotifications: async (tx: Tx, rows: Prisma.NotificationCreateManyInput[]): Promise<void> => { await tx.notification.createMany({ data: rows }); },
 };
 
@@ -128,51 +132,119 @@ async function recipientCounts(ids: string[]) {
 	for (const r of rows) map.get(r.broadcastId)![r.status] = r._count._all;
 	return map;
 }
-const listSelect = { id: true, senderId: true, senderName: true, title: true, category: true, audience: true, audienceCount: true, status: true, createdAt: true, completedAt: true } as const;
+const listSelect = { id: true, senderId: true, senderName: true, title: true, category: true, audience: true, audienceCount: true, status: true, createdAt: true, completedAt: true, heartbeatAt: true } as const;
 type ListRow = Prisma.BroadcastGetPayload<{ select: typeof listSelect }>;
 const view = (b: ListRow, c: { SENT: number; FAILED: number; PENDING: number }) => ({
 	id: b.id, sender: { id: b.senderId, name: b.senderName }, title: b.title, category: b.category, audience: b.audience, status: b.status,
-	totals: { audience: b.audienceCount, sent: c.SENT, failed: c.FAILED, pending: c.PENDING }, createdAt: b.createdAt, completedAt: b.completedAt,
+	totals: { audience: b.audienceCount, sent: c.SENT, failed: c.FAILED, pending: c.PENDING }, createdAt: b.createdAt, completedAt: b.completedAt, lastProgressAt: b.heartbeatAt,
 });
 
-async function finalize(id: string) {
+/** Thrown by the test seam to simulate a worker that dies mid-job (holding its lease). Never caught by the worker loop. */
+export class WorkerCrash extends Error {}
+
+async function ownsLease(tx: Tx, id: string, owner: string): Promise<boolean> {
+	const rows = await tx.$queryRaw<{ leaseOwner: string | null; status: string }[]>`SELECT "leaseOwner", "status" FROM broadcasts WHERE id = ${id} FOR UPDATE`;
+	return rows.length === 1 && rows[0].leaseOwner === owner && (rows[0].status === 'SENDING');
+}
+
+async function finish(id: string, owner: string) {
 	await prisma.$transaction(async tx => {
-		await lock(tx, id);
+		if (!(await ownsLease(tx, id, owner))) return;
 		const grouped = await tx.broadcastRecipient.groupBy({ by: ['status'], where: { broadcastId: id }, _count: { _all: true } });
 		const n = (s: string) => grouped.find(g => g.status === s)?._count._all ?? 0;
-		const status = n('PENDING') > 0 ? 'SENDING' : n('FAILED') === 0 ? 'COMPLETED' : n('SENT') === 0 ? 'FAILED' : 'PARTIAL';
-		await tx.broadcast.update({ where: { id }, data: { status, completedAt: status === 'SENDING' ? null : new Date() } });
+		if (n('PENDING') > 0) return;
+		const status = n('FAILED') === 0 ? 'COMPLETED' : n('SENT') === 0 ? 'FAILED' : 'PARTIAL';
+		await tx.broadcast.update({ where: { id }, data: { status, completedAt: new Date(), leaseOwner: null, leaseUntil: null, heartbeatAt: new Date() } });
 	});
 }
 
-/** Delivers every PENDING recipient in chunks. Each chunk is one transaction under a row lock on the broadcast, so notifications + recipient status commit together and a parallel run can never repeat a recipient. */
-async function processBroadcast(id: string) {
+/**
+ * Delivers the PENDING recipients of a broadcast THIS worker has leased, in chunks. Each chunk is one transaction under a row lock that first re-checks the lease owner,
+ * so notifications + recipient status + lease renewal commit together and a worker that lost its lease (expired, taken over) stops without delivering anything.
+ */
+async function processBroadcast(id: string, owner: string): Promise<'done' | 'lost'> {
 	for (;;) {
 		const batch = await prisma.broadcastRecipient.findMany({ where: { broadcastId: id, status: 'PENDING' }, orderBy: { id: 'asc' }, take: broadcastDeps.chunkSize, select: { id: true } });
 		if (!batch.length) break;
+		const renew = (tx: Tx) => tx.broadcast.update({ where: { id }, data: { leaseUntil: new Date(Date.now() + broadcastDeps.leaseMs), heartbeatAt: new Date() } });
 		const deliver = (ids: string[]) => prisma.$transaction(async tx => {
-			await lock(tx, id);
+			if (!(await ownsLease(tx, id, owner))) return 'lost' as const;
 			const b = await tx.broadcast.findUniqueOrThrow({ where: { id }, select: { title: true, message: true, category: true } });
 			const rows = await tx.broadcastRecipient.findMany({ where: { id: { in: ids }, status: 'PENDING' }, select: { id: true, userId: true } });
-			if (!rows.length) return;
-			await broadcastDeps.createNotifications(tx, rows.map(r => ({
-				id: randomUUID(), userId: r.userId, title: b.title, message: b.message, type: BROADCAST_NOTIFICATION_TYPE, category: b.category, metadata: { broadcastId: id },
-			})));
-			await tx.broadcastRecipient.updateMany({ where: { id: { in: rows.map(r => r.id) } }, data: { status: 'SENT', errorCode: null, attempts: { increment: 1 }, updatedAt: new Date() } });
+			if (rows.length) {
+				await broadcastDeps.createNotifications(tx, rows.map(r => ({
+					id: randomUUID(), userId: r.userId, title: b.title, message: b.message, type: BROADCAST_NOTIFICATION_TYPE, category: b.category, metadata: { broadcastId: id },
+				})));
+				await tx.broadcastRecipient.updateMany({ where: { id: { in: rows.map(r => r.id) } }, data: { status: 'SENT', errorCode: null, attempts: { increment: 1 }, updatedAt: new Date() } });
+			}
+			await renew(tx);
+			return 'ok' as const;
 		}, { timeout: 60_000 });
-		try { await deliver(batch.map(r => r.id)); } catch {
+		let outcome: 'ok' | 'lost' | 'failed' = 'failed';
+		try { outcome = await deliver(batch.map(r => r.id)); } catch (e) { if (e instanceof WorkerCrash) throw e; }
+		if (outcome === 'lost') return 'lost';
+		if (outcome === 'failed') {
 			for (const r of batch) {
-				try { await deliver([r.id]); } catch (e) {
+				try { if ((await deliver([r.id])) === 'lost') return 'lost'; } catch (e) {
+					if (e instanceof WorkerCrash) throw e;
 					const errorCode = errorCodeOf(e);
-					await prisma.$transaction(async tx => {
-						await lock(tx, id);
+					const lost = await prisma.$transaction(async tx => {
+						if (!(await ownsLease(tx, id, owner))) return true;
 						await tx.broadcastRecipient.updateMany({ where: { id: r.id, status: 'PENDING' }, data: { status: 'FAILED', errorCode, attempts: { increment: 1 }, updatedAt: new Date() } });
+						await renew(tx);
+						return false;
 					});
+					if (lost) return 'lost';
 				}
 			}
 		}
+		await broadcastDeps.afterChunk?.(id);
 	}
-	await finalize(id);
+	await finish(id, owner);
+	return 'done';
+}
+
+/** Leases one QUEUED/SENDING broadcast whose lease is free or expired. SKIP LOCKED: two workers never claim the same row. */
+export async function claimBroadcast(owner: string): Promise<string | null> {
+	return prisma.$transaction(async tx => {
+		const now = new Date();
+		const rows = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM broadcasts WHERE "status" IN ('QUEUED', 'SENDING') AND ("leaseUntil" IS NULL OR "leaseUntil" < ${now}) ORDER BY "createdAt", id LIMIT 1 FOR UPDATE SKIP LOCKED`;
+		if (!rows.length) return null;
+		await tx.broadcast.update({ where: { id: rows[0].id }, data: { status: 'SENDING', leaseOwner: owner, leaseUntil: new Date(now.getTime() + broadcastDeps.leaseMs), heartbeatAt: now } });
+		return rows[0].id;
+	});
+}
+
+/** One pass: claim and deliver jobs until none is free. Returns the ids this worker finished or stopped on. */
+export async function runBroadcastWorkerOnce(owner: string): Promise<string[]> {
+	const handled: string[] = [];
+	for (;;) {
+		const id = await claimBroadcast(owner);
+		if (!id) return handled;
+		handled.push(id);
+		await processBroadcast(id, owner);
+	}
+}
+
+/** Background worker. Disabled unless ADMIN_BROADCAST_WORKER_ENABLED=true (see startBroadcastWorkerFromEnv). Resumes unfinished jobs on start and then every `intervalMs`. */
+export function startBroadcastWorker(opts: { intervalMs?: number; owner?: string } = {}) {
+	const owner = opts.owner ?? `w-${randomUUID().slice(0, 12)}`;
+	let running = false; let stopped = false;
+	const tick = async () => {
+		if (running || stopped) return;
+		running = true;
+		try { await runBroadcastWorkerOnce(owner); } catch (e) { logger.error(`[admin-broadcast] worker pass failed: ${(e as Error)?.message}`); } finally { running = false; }
+	};
+	const timer = setInterval(() => { void tick(); }, opts.intervalMs ?? 5000);
+	timer.unref?.();
+	void tick();
+	return { owner, tick, stop: () => { stopped = true; clearInterval(timer); } };
+}
+export const BROADCAST_WORKER_FLAG = 'ADMIN_BROADCAST_WORKER_ENABLED';
+export const broadcastWorkerEnabled = () => process.env[BROADCAST_WORKER_FLAG] === 'true';
+export function startBroadcastWorkerFromEnv() {
+	if (!broadcastWorkerEnabled()) { logger.info(`[admin-broadcast] background delivery is OFF (${BROADCAST_WORKER_FLAG} is not "true"); confirmed broadcasts wait in the queue`); return null; }
+	return startBroadcastWorker();
 }
 
 async function summary(id: string) {
@@ -222,10 +294,9 @@ export async function sendBroadcast(input: { adminId: string; draftId: string; i
 		if (raced) return raced;
 		throw e;
 	}
-	await processBroadcast(broadcastId);
-	const result = await summary(broadcastId);
-	await adminAudit.record({ adminId, entity: 'BROADCAST', entityId: broadcastId, eventType: 'BROADCAST_SENT', title: 'إرسال إشعار جماعي داخل المنصة', summary: 'أرسل مدير النظام إشعارًا جماعيًا داخل المنصة.', severity: 'WARNING',
-		details: { audience: draft.audience, category: draft.category, audienceCount: snap.count, sent: result.totals.sent, failed: result.totals.failed, status: result.status } });
+	const result = await summary(broadcastId); // confirm = enqueue: delivery belongs to the worker
+	await adminAudit.record({ adminId, entity: 'BROADCAST', entityId: broadcastId, eventType: 'BROADCAST_SENT', title: 'تأكيد إرسال إشعار جماعي داخل المنصة', summary: 'أكّد مدير النظام إرسال إشعار جماعي داخل المنصة (يُسلَّم في الخلفية).', severity: 'WARNING',
+		details: { audience: draft.audience, category: draft.category, audienceCount: snap.count } });
 	return { broadcast: result, replayed: false };
 }
 
@@ -236,14 +307,18 @@ export async function retryRemaining(adminId: string, id: string) {
 		await lock(tx, id);
 		const b = await tx.broadcast.findUniqueOrThrow({ where: { id }, select: { status: true } });
 		if (b.status === 'COMPLETED') throw new AppError('اكتمل الإرسال لكل المستلمين. لا يوجد ما يُعاد.', 409, undefined, 'BROADCAST_NOTHING_TO_RETRY');
+		if (b.status === 'QUEUED' || b.status === 'SENDING') throw new AppError('الإرسال جارٍ أو في قائمة الانتظار. انتظر انتهاءه.', 409, undefined, 'BROADCAST_IN_PROGRESS');
 		await tx.broadcastRecipient.updateMany({ where: { broadcastId: id, status: 'FAILED' }, data: { status: 'PENDING' } });
-		await tx.broadcast.update({ where: { id }, data: { status: 'SENDING', completedAt: null } });
+		await tx.broadcast.update({ where: { id }, data: { status: 'QUEUED', completedAt: null, leaseOwner: null, leaseUntil: null } });
 	});
-	await processBroadcast(id);
-	const result = await summary(id);
-	await adminAudit.record({ adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_RETRIED', title: 'إعادة إرسال المتبقي من إشعار جماعي', summary: 'أعاد مدير النظام إرسال المستلمين المتبقين من إشعار جماعي.', severity: 'WARNING',
-		details: { sent: result.totals.sent, failed: result.totals.failed, status: result.status } });
-	return result;
+	await adminAudit.record({ adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_RETRIED', title: 'إعادة إرسال المتبقي من إشعار جماعي', summary: 'أعاد مدير النظام المستلمين الفاشلين إلى قائمة الانتظار.', severity: 'WARNING' });
+	return summary(id);
+}
+
+/** The caller's newest broadcast that is still QUEUED/SENDING (restores the running screen after a refresh). */
+export async function activeBroadcast(adminId: string) {
+	const b = await prisma.broadcast.findFirst({ where: { senderId: adminId, status: { in: ['QUEUED', 'SENDING'] } }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], select: { id: true } });
+	return b ? summary(b.id) : null;
 }
 
 // ---- history ----------------------------------------------------------------------------------------------------------------------------------------
@@ -261,3 +336,6 @@ export async function historyDetail(id: string) {
 	const failures = await prisma.broadcastRecipient.groupBy({ by: ['errorCode'], where: { broadcastId: id, status: 'FAILED' }, _count: { _all: true } });
 	return { ...view(b, counts), message: b.message, failureCodes: failures.map(f => ({ code: f.errorCode ?? 'DELIVERY_ERROR', count: f._count._all })) };
 }
+
+/** test seam: deliver as a given owner without claiming (to prove a non-owner stops) */
+export const processBroadcastForTest = processBroadcast;

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { requireSuperAdmin } from '../middlewares/admin-access.middleware';
 import { AppError, zodAppError } from '../utils/app-error';
-import { DraftConflict, drafts, historyDetail, listHistory, previewDraft, retryRemaining, sendBroadcast, validIdempotencyKey } from '../services/admin-broadcast.service';
+import { activeBroadcast, DraftConflict, drafts, historyDetail, listHistory, previewDraft, retryRemaining, sendBroadcast, validIdempotencyKey } from '../services/admin-broadcast.service';
 
 // Permission choice: Super Admin only (requireSuperAdmin), like the audience preview (#227), templates and notification history. No registry permission fits "message a whole audience",
 // and a broadcast is irreversible, so it is not delegable to staff roles.
@@ -76,7 +76,7 @@ router.post('/drafts/:id/send', async (req, res, next) => {
 		const parsed = sendBody.safeParse(req.body);
 		if (!parsed.success) throw new AppError('أرسل رمز المعاينة. اعمل معاينة جديدة أولًا.', 400, undefined, 'PREVIEW_TOKEN_REQUIRED');
 		const result = await sendBroadcast({ adminId: me(req), draftId: id, idempotencyKey: key, previewToken: parsed.data.previewToken });
-		res.status(result.replayed ? 200 : 201).json({ success: true, data: result });
+		res.status(result.replayed ? 200 : 202).json({ success: true, data: result });
 	} catch (e) { next(e); }
 });
 router.get('/', async (req, res, next) => {
@@ -85,6 +85,9 @@ router.get('/', async (req, res, next) => {
 		if (!q.success) throw new AppError('رقم الصفحة غير صالح.', 400);
 		res.json({ success: true, data: await listHistory(q.data.page) });
 	} catch (e) { next(e); }
+});
+router.get('/active', async (req, res, next) => {
+	try { res.json({ success: true, data: await activeBroadcast(me(req)) }); } catch (e) { next(e); }
 });
 router.get('/:id', async (req, res, next) => {
 	try { res.json({ success: true, data: await historyDetail(uuid(req.params.id, 'الإشعار الجماعي غير موجود.')) }); } catch (e) { next(e); }

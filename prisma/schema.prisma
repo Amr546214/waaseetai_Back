@@ -3401,6 +3401,7 @@ enum BroadcastAudience {
 }
 
 enum BroadcastStatus {
+  QUEUED
   SENDING
   PARTIAL
   COMPLETED
@@ -3450,13 +3451,17 @@ model Broadcast {
   previewCheckedAt DateTime
   idempotencyKey   String               @db.VarChar(100)
   requestDigest    String               @db.VarChar(64)
-  status           BroadcastStatus      @default(SENDING)
+  status           BroadcastStatus      @default(QUEUED)
+  leaseOwner       String?              @db.VarChar(64)
+  leaseUntil       DateTime?
+  heartbeatAt      DateTime?
   createdAt        DateTime             @default(now())
   completedAt      DateTime?
   recipients       BroadcastRecipient[]
 
   @@unique([senderId, idempotencyKey])
   @@index([createdAt, id])
+  @@index([status, leaseUntil])
   @@map("broadcasts")
 }
 

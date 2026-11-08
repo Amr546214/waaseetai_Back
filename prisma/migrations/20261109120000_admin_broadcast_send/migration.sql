@@ -1,6 +1,6 @@
 -- Admin broadcast: server-side drafts, confirmed idempotent in-platform sends, per-recipient status. Additive only.
 CREATE TYPE "BroadcastAudience" AS ENUM ('CLIENTS', 'PROVIDERS', 'MARKETERS');
-CREATE TYPE "BroadcastStatus" AS ENUM ('SENDING', 'PARTIAL', 'COMPLETED', 'FAILED');
+CREATE TYPE "BroadcastStatus" AS ENUM ('QUEUED', 'SENDING', 'PARTIAL', 'COMPLETED', 'FAILED');
 CREATE TYPE "BroadcastRecipientStatus" AS ENUM ('PENDING', 'SENT', 'FAILED');
 
 CREATE TABLE "broadcast_drafts" (
@@ -31,13 +31,17 @@ CREATE TABLE "broadcasts" (
   "previewCheckedAt" TIMESTAMP(3) NOT NULL,
   "idempotencyKey" VARCHAR(100) NOT NULL,
   "requestDigest" VARCHAR(64) NOT NULL,
-  "status" "BroadcastStatus" NOT NULL DEFAULT 'SENDING',
+  "status" "BroadcastStatus" NOT NULL DEFAULT 'QUEUED',
+  "leaseOwner" VARCHAR(64),
+  "leaseUntil" TIMESTAMP(3),
+  "heartbeatAt" TIMESTAMP(3),
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "completedAt" TIMESTAMP(3)
 );
 CREATE UNIQUE INDEX "broadcasts_draftId_key" ON "broadcasts" ("draftId");
 CREATE UNIQUE INDEX "broadcasts_senderId_idempotencyKey_key" ON "broadcasts" ("senderId", "idempotencyKey");
 CREATE INDEX "broadcasts_createdAt_id_idx" ON "broadcasts" ("createdAt", "id");
+CREATE INDEX "broadcasts_status_leaseUntil_idx" ON "broadcasts" ("status", "leaseUntil");
 
 CREATE TABLE "broadcast_recipients" (
   "id" TEXT PRIMARY KEY,
