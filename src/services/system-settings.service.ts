@@ -180,8 +180,6 @@ export class SystemSettingsService {
 				{ key: 'paypal', label: 'بوابة الدفع (PayPal)', status: process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_SECRET ? 'configured' : 'unconfigured', detail: 'حالة التهيئة فقط، دون اتصال فعلي بالبوابة' },
 				{ key: 'mail', label: 'خدمة البريد الإلكتروني', status: process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS ? 'configured' : 'unconfigured', detail: 'حالة التهيئة فقط، دون إرسال تجريبي' },
 				{ key: 'ai', label: 'محرك AI', status: 'unavailable', detail: 'خارج نطاق هذه الصفحة (مراقبته نطاق منفصل)' },
-				{ key: 'cdn', label: 'CDN وتسليم الملفات', status: 'unavailable', detail: 'لا يوجد مصدر مراقبة مرتبط' },
-				{ key: 'backup', label: 'النسخ الاحتياطي', status: 'unavailable', detail: 'لا يوجد مصدر مراقبة مرتبط (النسخ تتم خارج التطبيق)' },
 			],
 		};
 	}

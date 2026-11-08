@@ -119,3 +119,10 @@ test('escalation readiness: closed by default, lists exactly which preconditions
 		const on = await svc.escalationReadiness({ CASE_SLA_ENABLED: 'true' } as any); assert.equal(on.automaticEscalation, 'configured_on'); assert.equal(on.ready, false);
 	} finally { for (const k of Object.keys(process.env)) if (!(k in keep)) delete process.env[k]; Object.assign(process.env, keep); }
 });
+
+test('the old /health no longer carries cdn/backup placeholders: those two indicators have ONE source (technical-metrics)', opts, async () => {
+	const { e } = await fresh();
+	const keys = (await e.call('GET', '/admin/system-settings/health', e.sa.id)).json.data.items.map((i: any) => i.key);
+	assert.ok(!keys.includes('cdn') && !keys.includes('backup'), keys.join());
+	assert.ok(keys.includes('database') && keys.includes('app'));
+});

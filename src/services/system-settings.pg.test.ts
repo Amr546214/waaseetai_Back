@@ -199,7 +199,7 @@ test('PG settings: read-only and blocked entries tell the truth (value + source,
 	assert.ok(!/SMTP_PASS|SMTP_USER|CLIENT_SECRET|CLIENT_ID/.test(JSON.stringify(items)), 'no secret names or values in the response');
 	assert.equal(items.find((i: any) => i.key === 'minPasswordLength').value, 8); assert.equal(items.find((i: any) => i.key === 'auditLogging').value, true); assert.equal(items.find((i: any) => i.key === 'paymentGateway').value, 'PayPal');
 	const h = (await e.call('GET', `${S}/health`, e.sa.id)).json.data; const db = h.items.find((x: any) => x.key === 'database'); assert.equal(db.status, 'ok'); assert.match(db.detail, /ms/);
-	for (const k of ['ai', 'cdn', 'backup']) assert.equal(h.items.find((x: any) => x.key === k).status, 'unavailable');
+	assert.equal(h.items.find((x: any) => x.key === 'ai').status, 'unavailable'); assert.ok(!h.items.some((x: any) => x.key === 'cdn' || x.key === 'backup'), 'cdn/backup live in technical-metrics only');
 	assert.ok(!JSON.stringify(h).match(/99\.8|95%|uptime|3:00/), 'no sample numbers from the design');
 	const st = await mkStaff(e, ['settings.view'], 'hv2'); assert.equal((await e.call('GET', `${S}/health`, st.user.id)).status, 200);
 });
