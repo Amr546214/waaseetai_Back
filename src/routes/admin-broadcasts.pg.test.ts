@@ -187,10 +187,10 @@ test('send: in-platform notification rows only, once per recipient; sender/audit
 	const r = await send(d.id, p.previewToken, key());
 	assert.equal(r.status, 202); assert.equal(r.data.replayed, false);
 	assert.equal(r.data.broadcast.status, 'QUEUED');
-	assert.deepEqual(r.data.broadcast.totals, { audience: 3, sent: 0, failed: 0, pending: 3, cancelled: 0 });
+	assert.deepEqual(r.data.broadcast.totals, { audience: 3, sent: 0, failed: 0, pending: 3, cancelled: 0, skipped: 0 });
 	assert.equal((await notes()).length, 0, 'confirm returned before any notification exists');
 	await drain();
-	assert.deepEqual((await (await env()).call('GET', `/${r.data.broadcast.id}`, sa.id)).data.totals, { audience: 3, sent: 3, failed: 0, pending: 0, cancelled: 0 });
+	assert.deepEqual((await (await env()).call('GET', `/${r.data.broadcast.id}`, sa.id)).data.totals, { audience: 3, sent: 3, failed: 0, pending: 0, cancelled: 0, skipped: 0 });
 	const rows = await notes();
 	assert.equal(rows.length, 3); assert.deepEqual(rows.map(x => x.userId).sort(), ms.map(m => m.id).sort());
 	for (const n of rows) { assert.equal(n.title, 'عرض'); assert.equal(n.message, 'تفاصيل'); assert.equal(n.category, 'OFFERS'); assert.equal(n.isRead, false); assert.equal((n.metadata as any).broadcastId, r.data.broadcast.id); }
@@ -249,7 +249,7 @@ test('partial failure is recorded per recipient and retry completes only the rem
 	const id1 = r.data.broadcast.id;
 	await drain();
 	const fin = (await call('GET', `/${id1}`, sa.id)).data;
-	assert.equal(fin.status, 'PARTIAL'); assert.deepEqual(fin.totals, { audience: 7, sent: 5, failed: 2, pending: 0, cancelled: 0 });
+	assert.equal(fin.status, 'PARTIAL'); assert.deepEqual(fin.totals, { audience: 7, sent: 5, failed: 2, pending: 0, cancelled: 0, skipped: 0 });
 	const before = await notes();
 	assert.equal(before.length, 5); assert.ok(before.every(n => !failing.has(n.userId)));
 	const detail = await call('GET', `/${id1}`, sa.id);
@@ -266,7 +266,7 @@ test('partial failure is recorded per recipient and retry completes only the rem
 	await drain();
 	const done = await call('GET', `/${id1}`, sa.id);
 	assert.equal(done.data.status, 'COMPLETED');
-	assert.deepEqual(done.data.totals, { audience: 7, sent: 7, failed: 0, pending: 0, cancelled: 0 });
+	assert.deepEqual(done.data.totals, { audience: 7, sent: 7, failed: 0, pending: 0, cancelled: 0, skipped: 0 });
 	assert.equal(attempts - callsBefore, 1, 'only one delivery call, for the two remaining recipients');
 	const after = await notes();
 	assert.equal(after.length, 7); assert.equal(new Set(after.map(n => n.userId)).size, 7);
@@ -284,7 +284,7 @@ test('everything failing ends FAILED; the database refuses a second notification
 	await drain();
 	const { call: call0 } = await env();
 	const st = (await call0('GET', `/${r.data.broadcast.id}`, sa.id)).data;
-	assert.equal(st.status, 'FAILED'); assert.deepEqual(st.totals, { audience: 2, sent: 0, failed: 2, pending: 0, cancelled: 0 });
+	assert.equal(st.status, 'FAILED'); assert.deepEqual(st.totals, { audience: 2, sent: 0, failed: 2, pending: 0, cancelled: 0, skipped: 0 });
 	assert.equal((await notes()).length, 0);
 	svc.broadcastDeps.createNotifications = async (tx: any, rows: any[]) => { await tx.notification.createMany({ data: rows }); };
 	const { call } = await env();
@@ -306,7 +306,7 @@ test('history: newest first, paginated, sender + totals, detail has the body, li
 	assert.equal(p1.data.items.length, 20); assert.equal(p1.data.hasNext, true); assert.equal(p1.data.items[0].id, ids[21]); assert.equal(p1.data.items[0].title, 'إشعار 21');
 	const item = p1.data.items[0];
 	assert.deepEqual(Object.keys(item).sort(), ['audience', 'category', 'completedAt', 'createdAt', 'id', 'lastProgressAt', 'sender', 'status', 'title', 'totals']);
-	assert.equal(item.sender.id, sa.id); assert.match(item.sender.name, /^QA /); assert.deepEqual(item.totals, { audience: 2, sent: 2, failed: 0, pending: 0, cancelled: 0 });
+	assert.equal(item.sender.id, sa.id); assert.match(item.sender.name, /^QA /); assert.deepEqual(item.totals, { audience: 2, sent: 2, failed: 0, pending: 0, cancelled: 0, skipped: 0 });
 	assert.doesNotMatch(JSON.stringify(p1.json), /سر-الجسم/);
 	const p2 = await call('GET', '/?page=2', sa.id);
 	assert.equal(p2.data.items.length, 2); assert.equal(p2.data.hasNext, false); assert.equal(p2.data.items[1].id, ids[0]);
@@ -339,7 +339,7 @@ test('worker: off by default; a queued job waits (counters show pending) and the
 	const { id } = await queued(4);
 	assert.equal((await notes()).length, 0);
 	const d = (await call('GET', `/${id}`, sa.id)).data;
-	assert.equal(d.status, 'QUEUED'); assert.deepEqual(d.totals, { audience: 4, sent: 0, failed: 0, pending: 4, cancelled: 0 }); assert.equal(d.lastProgressAt, null);
+	assert.equal(d.status, 'QUEUED'); assert.deepEqual(d.totals, { audience: 4, sent: 0, failed: 0, pending: 4, cancelled: 0, skipped: 0 }); assert.equal(d.lastProgressAt, null);
 	assert.equal((await call('GET', '/active', sa.id)).data.id, id);
 	assert.equal((await call('GET', '/active', sa2.id)).data, null);
 	assert.equal((await call('POST', `/${id}/retry`, sa.id)).json.code, 'BROADCAST_IN_PROGRESS');
@@ -356,7 +356,7 @@ test('worker: completes a queued job; progress and lastProgressAt are visible; n
 	assert.deepEqual(seen.map(x => [x.status, x.totals.sent, x.totals.pending]), [['SENDING', 2, 3], ['SENDING', 4, 1], ['SENDING', 5, 0]]);
 	assert.ok(seen[0].lastProgressAt);
 	const d = (await call('GET', `/${id}`, sa.id)).data;
-	assert.equal(d.status, 'COMPLETED'); assert.deepEqual(d.totals, { audience: 5, sent: 5, failed: 0, pending: 0, cancelled: 0 });
+	assert.equal(d.status, 'COMPLETED'); assert.deepEqual(d.totals, { audience: 5, sent: 5, failed: 0, pending: 0, cancelled: 0, skipped: 0 });
 	assert.equal((await call('GET', '/active', sa.id)).data, null);
 	assert.deepEqual([...(await perUser()).values()], [1, 1, 1, 1, 1]); assert.equal((await perUser()).size, ms.length);
 	assert.deepEqual(await drain(), []);
@@ -372,14 +372,14 @@ test('worker: a job interrupted mid-way is resumed by a fresh worker; total == a
 	await assert.rejects(drain('w-dead'), svc.WorkerCrash);
 	assert.equal((await notes()).length, 4);
 	let mid = (await call('GET', `/${id}`, sa.id)).data;
-	assert.equal(mid.status, 'SENDING'); assert.deepEqual(mid.totals, { audience: 9, sent: 4, failed: 0, pending: 5, cancelled: 0 });
+	assert.equal(mid.status, 'SENDING'); assert.deepEqual(mid.totals, { audience: 9, sent: 4, failed: 0, pending: 5, cancelled: 0, skipped: 0 });
 	// the dead worker still holds a valid lease: nobody else may touch it yet
 	assert.deepEqual(await drain('w-late'), []);
 	await prisma.broadcast.update({ where: { id }, data: { leaseUntil: new Date(Date.now() - 1000) } }); // lease expiry
 	svc.broadcastDeps.afterChunk = undefined;
 	assert.deepEqual(await drain('w-fresh'), [id]);
 	mid = (await call('GET', `/${id}`, sa.id)).data;
-	assert.equal(mid.status, 'COMPLETED'); assert.deepEqual(mid.totals, { audience: 9, sent: 9, failed: 0, pending: 0, cancelled: 0 });
+	assert.equal(mid.status, 'COMPLETED'); assert.deepEqual(mid.totals, { audience: 9, sent: 9, failed: 0, pending: 0, cancelled: 0, skipped: 0 });
 	const counts = await perUser();
 	assert.equal(counts.size, 9); assert.ok([...counts.values()].every(n => n === 1)); assert.deepEqual([...counts.keys()].sort(), ms.map(m => m.id).sort());
 	assert.equal((await notes()).length, 9);
@@ -536,7 +536,7 @@ test('queue: each queueState is classified apart (worker off is never "stopped m
 	flagOn(false);
 	let it = await item(a.id);
 	assert.equal(it.queueState, 'WAITING_WORKER_DISABLED'); assert.equal(it.status, 'QUEUED'); assert.equal(it.stale, false); assert.ok(it.waitingSeconds >= 0);
-	assert.equal(it.sender.id, sa.id); assert.deepEqual(it.totals, { audience: 4, sent: 0, failed: 0, pending: 4, cancelled: 0 });
+	assert.equal(it.sender.id, sa.id); assert.deepEqual(it.totals, { audience: 4, sent: 0, failed: 0, pending: 4, cancelled: 0, skipped: 0 });
 	let sum = (await call('GET', '/queue/summary', sa.id)).data; assert.equal(sum.waitingDisabled, 1); assert.equal(sum.workerEnabled, false);
 	// old and queued, worker OFF: still "waiting because disabled", not stuck
 	await prisma.broadcast.update({ where: { id: a.id }, data: { createdAt: ago(3 * 3600_000) } });
@@ -556,7 +556,7 @@ test('queue: each queueState is classified apart (worker off is never "stopped m
 	await prisma.broadcast.update({ where: { id: a.id }, data: { leaseUntil: ago(1000), heartbeatAt: ago(2 * 60_000) } });
 	assert.equal((await item(a.id)).queueState, 'WAITING_FOR_WORKER', 'recently stopped: the worker will take it over');
 	await prisma.broadcast.update({ where: { id: a.id }, data: { heartbeatAt: ago(20 * 60_000) } });
-	it = await item(a.id); assert.equal(it.queueState, 'STUCK_STOPPED_MID_RUN'); assert.equal(it.stale, true); assert.deepEqual(it.totals, { audience: 4, sent: 2, failed: 0, pending: 2, cancelled: 0 });
+	it = await item(a.id); assert.equal(it.queueState, 'STUCK_STOPPED_MID_RUN'); assert.equal(it.stale, true); assert.deepEqual(it.totals, { audience: 4, sent: 2, failed: 0, pending: 2, cancelled: 0, skipped: 0 });
 	flagOn(false);
 	assert.equal((await item(a.id)).queueState, 'STUCK_STOPPED_MID_RUN', 'a job that really stopped mid-run is reported as such even with the worker off');
 	sum = (await call('GET', '/queue/summary', sa.id)).data; assert.equal(sum.stuckMidRun, 1);
@@ -597,7 +597,7 @@ test('cancel: a stuck mid-run job keeps its SENT recipients and cancels only the
 	assert.equal((await prisma.broadcast.findUniqueOrThrow({ where: { id: a.id } })).status, 'SENDING');
 	await prisma.broadcast.update({ where: { id: a.id }, data: { leaseUntil: ago(1000), heartbeatAt: ago(30 * 60_000) } });
 	const done = await call('POST', `/${a.id}/cancel`, sa.id, {});
-	assert.equal(done.status, 200); assert.deepEqual(done.data.totals, { audience: 6, sent: 2, failed: 0, pending: 0, cancelled: 4 });
+	assert.equal(done.status, 200); assert.deepEqual(done.data.totals, { audience: 6, sent: 2, failed: 0, pending: 0, cancelled: 4, skipped: 0 });
 	assert.equal(await prisma.broadcastRecipient.count({ where: { broadcastId: a.id, status: 'SENT' } }), 2);
 	assert.equal((await notes()).length, 2);
 	flagOn(true); assert.deepEqual(await drain('w-after'), []); assert.equal((await notes()).length, 2, 'cancelled job is never delivered');
@@ -609,6 +609,8 @@ test('cancel: a stuck mid-run job keeps its SENT recipients and cancels only the
 
 // ---- preflight, max-age guard, review, re-approval ------------------------------------------------------------------------------------------------
 const makeOld = async (id: string, hours: number) => (await env()).prisma.broadcast.update({ where: { id }, data: { createdAt: ago(hours * 3600_000) } });
+const rePreview = async (id: string, who = sa) => (await env()).call('GET', `/${id}/reapproval-preview`, who.id);
+const approve = async (id: string, reason: string, who = sa) => { const p = await rePreview(id, who); assert.equal(p.status, 200); return (await env()).call('POST', `/${id}/approve-send`, who.id, { reason, reapprovalToken: p.data.reapprovalToken }); };
 const preflight = async () => (await (await env()).call('GET', '/queue/preflight', sa.id)).data;
 
 test('max age env override: invalid, zero, negative and absurd values fall back to 24 h', opts, async () => {
@@ -661,10 +663,12 @@ test('max-age guard: a started worker never claims an expired job; approve-send 
 	assert.equal((await call('GET', '/queue/summary', sa.id)).data.expiredNeedsReview, 1);
 	// approval: reason required, audited, idempotent, only for expired
 	assert.equal((await call('POST', `/${a.id}/approve-send`, sa.id, {})).json.code, 'APPROVE_REASON_REQUIRED');
-	assert.equal((await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'ab' })).status, 400);
-	const ok = await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'مراجعة: ما زالت مطلوبة' });
+	assert.equal((await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'مراجعة: ما زالت مطلوبة' })).json.code, 'APPROVE_REASON_REQUIRED', 'token is required');
+	const rp = await rePreview(a.id);
+	assert.equal((await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'ab', reapprovalToken: rp.data.reapprovalToken })).status, 400);
+	const ok = await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'مراجعة: ما زالت مطلوبة', reapprovalToken: rp.data.reapprovalToken });
 	assert.equal(ok.status, 200);
-	assert.equal((await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'مرة ثانية' })).status, 200);
+	assert.equal((await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'مرة ثانية', reapprovalToken: rp.data.reapprovalToken })).status, 200, 'replay with the same token');
 	assert.equal(await prisma.accountAuditLog.count({ where: { eventType: 'BROADCAST_REAPPROVED', context: { path: ['entityId'], equals: a.id } } }), 1);
 	const aud = await prisma.accountAuditLog.findFirstOrThrow({ where: { eventType: 'BROADCAST_REAPPROVED', context: { path: ['entityId'], equals: a.id } } });
 	assert.doesNotMatch(JSON.stringify(aud), /نص الرسالة/);
@@ -672,14 +676,14 @@ test('max-age guard: a started worker never claims an expired job; approve-send 
 	assert.deepEqual(await drain('w-ok'), [a.id]);
 	const counts = await perUser(a.id); assert.equal(counts.size, 4); assert.ok([...counts.values()].every(n => n === 1));
 	assert.equal((await call('GET', `/${a.id}`, sa.id)).data.status, 'COMPLETED');
-	assert.equal((await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'بعد الانتهاء' })).json.code, 'BROADCAST_NOT_APPROVABLE');
+	assert.equal((await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'بعد الانتهاء', reapprovalToken: rp.data.reapprovalToken })).status, 200, 'replay after completion is still the same answer');
 	// a fresh job is not "expired": approval refused; review works and is idempotent
 	const b = await queued(1);
-	assert.equal((await call('POST', `/${b.id}/approve-send`, sa.id, { reason: 'غير لازم' })).json.code, 'BROADCAST_NOT_EXPIRED');
+	assert.equal((await rePreview(b.id)).json.code, 'BROADCAST_NOT_EXPIRED');
 	assert.equal((await call('POST', `/${b.id}/review`, sa.id)).status, 200); assert.equal((await call('POST', `/${b.id}/review`, sa.id)).status, 200);
 	assert.equal(await prisma.accountAuditLog.count({ where: { eventType: 'BROADCAST_REVIEWED', context: { path: ['entityId'], equals: b.id } } }), 1);
 	assert.equal((await item(b.id)).reviewed, true);
-	for (const [m, u, bd] of [['POST', `/${b.id}/review`], ['POST', `/${b.id}/approve-send`, { reason: 'abc' }]] as any[]) { assert.equal((await call(m, u, null, bd)).status, 401); assert.equal((await call(m, u, plainAdmin.id, bd)).status, 403); }
+	for (const [m, u, bd] of [['POST', `/${b.id}/review`], ['POST', `/${b.id}/approve-send`, { reason: 'abc', reapprovalToken: 'x'.repeat(12) }], ['GET', `/${b.id}/reapproval-preview`]] as any[]) { assert.equal((await call(m, u, null, bd)).status, 401); assert.equal((await call(m, u, plainAdmin.id, bd)).status, 403); }
 });
 
 test('expired job: cancel still works, review/approve refused afterwards, and the env limit applies live', opts, async () => {
@@ -688,11 +692,93 @@ test('expired job: cancel still works, review/approve refused afterwards, and th
 	assert.equal((await call('POST', `/${a.id}/cancel`, sa.id, { reason: 'قديمة' })).data.status, 'CANCELLED');
 	assert.equal(await prisma.broadcastRecipient.count({ where: { broadcastId: a.id, status: 'CANCELLED' } }), 2);
 	assert.equal((await call('POST', `/${a.id}/review`, sa.id)).json.code, 'BROADCAST_NOT_REVIEWABLE');
-	assert.equal((await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'بعد الإلغاء' })).json.code, 'BROADCAST_NOT_APPROVABLE');
+	assert.equal((await rePreview(a.id)).json.code, 'BROADCAST_NOT_APPROVABLE');
 	// a 30 min job is fine at 24 h, expired once the limit is lowered to 15 min
 	const b = await queued(1); await makeOld(b.id, 0.5); flagOn(true);
 	assert.equal((await item(b.id)).queueState, 'WAITING_FOR_WORKER');
 	process.env.BROADCAST_MAX_QUEUE_AGE_HOURS = '0.25'; assert.equal((await item(b.id)).queueState, 'EXPIRED_NEEDS_REVIEW');
 	assert.deepEqual(await drain('w-lim'), []); delete process.env.BROADCAST_MAX_QUEUE_AGE_HOURS;
 	assert.deepEqual(await drain('w-lim2'), [b.id]);
+});
+
+// ---- re-approval with live re-validation ---------------------------------------------------------------------------------------------------------
+test('re-approval preview: live numbers by reason, hygiene, permissions', opts, async () => {
+	const { call, prisma } = await env();
+	const a = await queued(6); await makeOld(a.id, 48);
+	const recs = await prisma.broadcastRecipient.findMany({ where: { broadcastId: a.id }, orderBy: { userId: 'asc' } });
+	await prisma.broadcastRecipient.update({ where: { id: recs[0].id }, data: { status: 'SENT' } }); // already delivered
+	await prisma.user.update({ where: { id: recs[1].userId }, data: { isBanned: true } });
+	await prisma.user.update({ where: { id: recs[2].userId }, data: { status: 'SUSPENDED' } });
+	await prisma.user.update({ where: { id: recs[3].userId }, data: { accountType: 'CLIENT_INDIVIDUAL' } });
+	await prisma.broadcastRecipient.create({ data: { id: id(), broadcastId: a.id, userId: id() } }); // user that no longer exists
+	const r = await rePreview(a.id);
+	assert.equal(r.status, 200);
+	const d = r.data;
+	assert.equal(d.originalAudienceCount, 6); assert.equal(d.alreadyDelivered, 1); assert.equal(d.pendingEligibleCount, 2);
+	assert.deepEqual(d.ineligibleNow, { total: 4, byReason: { BANNED: 1, NOT_ACTIVE: 1, WRONG_AUDIENCE: 1, USER_MISSING: 1 } });
+	assert.match(d.recipientSetHash, /^[0-9a-f]{64}$/); assert.ok(d.reapprovalToken); assert.ok(d.checkedAt);
+	const text = JSON.stringify(r.json);
+	for (const rec of recs) assert.ok(!text.includes(rec.userId), 'no user id');
+	assert.doesNotMatch(text, /@pg\.test|نص الرسالة|ADMIN_BROADCAST_WORKER_ENABLED|JWT_SECRET|DATABASE_URL/);
+	for (const who of [null, client.id, plainAdmin.id]) assert.equal((await call('GET', `/${a.id}/reapproval-preview`, who)).status, who ? 403 : 401);
+	assert.equal((await call('GET', `/${id()}/reapproval-preview`, sa.id)).status, 404);
+});
+
+test('re-approval confirm: stale when eligibility changed (fresh numbers returned), then a new review succeeds; token tampering, expiry, other admin or broadcast refused', opts, async () => {
+	const { call, prisma, svc } = await env();
+	const a = await queued(5); await makeOld(a.id, 48);
+	const p1 = (await rePreview(a.id)).data;
+	const victim = (await prisma.broadcastRecipient.findFirstOrThrow({ where: { broadcastId: a.id } })).userId;
+	await prisma.user.update({ where: { id: victim }, data: { isBanned: true } }); // banned between review and confirm
+	const stale = await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'بعد المراجعة', reapprovalToken: p1.reapprovalToken });
+	assert.equal(stale.status, 409); assert.equal(stale.json.code, 'REAPPROVAL_STALE');
+	assert.equal(stale.data.fresh.pendingEligibleCount, 4); assert.equal(stale.data.fresh.ineligibleNow.total, 1); assert.ok(!('reapprovalToken' in stale.data.fresh));
+	assert.equal((await prisma.broadcast.findUniqueOrThrow({ where: { id: a.id } })).approvedAt, null, 'nothing stored');
+	// refused tokens
+	const p2 = (await rePreview(a.id)).data; const tok: string = p2.reapprovalToken;
+	const go = (t: string, who = sa, bid = a.id) => call('POST', `/${bid}/approve-send`, who.id, { reason: 'سبب كاف', reapprovalToken: t });
+	assert.equal((await go(tok.slice(0, -2) + 'xx')).json.code, 'REAPPROVAL_TOKEN_INVALID');
+	assert.equal((await go('abc.def' + 'x'.repeat(10))).json.code, 'REAPPROVAL_TOKEN_INVALID');
+	assert.equal((await go(tok, sa2)).json.code, 'REAPPROVAL_TOKEN_INVALID', 'other admin');
+	const other = await queued(1); await makeOld(other.id, 48);
+	assert.equal((await go(tok, sa, other.id)).json.code, 'REAPPROVAL_TOKEN_INVALID', 'other broadcast');
+	const realNow = Date.now; Date.now = () => realNow() + 16 * 60_000;
+	try { assert.equal((await go(tok)).json.code, 'REAPPROVAL_STALE', 'expired token'); } finally { Date.now = realNow; }
+	// unchanged set -> stored; replay is idempotent
+	const ok = await go(tok); assert.equal(ok.status, 200);
+	const row = await prisma.broadcast.findUniqueOrThrow({ where: { id: a.id } }); assert.ok(row.approvedAt); assert.equal(row.approvedById, sa.id); assert.equal(row.approveReason, 'سبب كاف');
+	assert.equal((await go(tok)).status, 200);
+	assert.equal(await prisma.accountAuditLog.count({ where: { eventType: 'BROADCAST_REAPPROVED', context: { path: ['entityId'], equals: a.id } } }), 1);
+	void svc;
+});
+
+test('re-approval delivery: never widens, never repeats, skips anyone ineligible at delivery time and counts them apart', opts, async () => {
+	const { call, prisma, svc } = await env();
+	svc.broadcastDeps.chunkSize = 3;
+	const a = await queued(7); await makeOld(a.id, 48);
+	const recs = await prisma.broadcastRecipient.findMany({ where: { broadcastId: a.id }, orderBy: { userId: 'asc' } });
+	// two were delivered before the interruption (real notifications exist for them)
+	for (const r of recs.slice(0, 2)) {
+		await prisma.notification.create({ data: { userId: r.userId, title: 'عنوان', message: 'نص الرسالة', type: 'ADMIN_BROADCAST', metadata: { broadcastId: a.id } } });
+		await prisma.broadcastRecipient.update({ where: { id: r.id }, data: { status: 'SENT' } });
+	}
+	await prisma.user.update({ where: { id: recs[2].userId }, data: { isBanned: true } }); // ineligible at review time
+	const rp = (await rePreview(a.id)).data;
+	assert.deepEqual([rp.alreadyDelivered, rp.pendingEligibleCount, rp.ineligibleNow.total], [2, 4, 1]);
+	assert.equal((await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'ما زالت مطلوبة', reapprovalToken: rp.reapprovalToken })).status, 200);
+	await prisma.user.update({ where: { id: recs[3].userId }, data: { status: 'SUSPENDED' } }); // becomes ineligible AFTER approval, before delivery
+	const newcomer = await mkUser('MARKETING_BROKER', 'late'); // eligible user added after confirm: not in the frozen list
+	flagOn(true);
+	assert.deepEqual(await drain('w-re'), [a.id]);
+	const got = await perUser(a.id);
+	assert.equal(got.size, 5);
+	assert.ok([...got.values()].every(n => n === 1), 'nobody twice');
+	assert.deepEqual([...got.keys()].sort(), [recs[0], recs[1], recs[4], recs[5], recs[6]].map(r => r.userId).sort());
+	assert.ok(!got.has(recs[2].userId) && !got.has(recs[3].userId), 'ineligible users were not notified');
+	assert.ok(!got.has(newcomer.id), 'nobody outside the frozen list');
+	const d = (await call('GET', `/${a.id}`, sa.id)).data;
+	assert.equal(d.status, 'COMPLETED'); assert.deepEqual(d.totals, { audience: 7, sent: 5, failed: 0, pending: 0, cancelled: 0, skipped: 2 });
+	const skipped = await prisma.broadcastRecipient.findMany({ where: { broadcastId: a.id, status: 'SKIPPED' }, orderBy: { userId: 'asc' } });
+	assert.deepEqual(skipped.map(x => x.errorCode).sort(), ['BANNED', 'NOT_ACTIVE']);
+	assert.deepEqual(await drain('w-again'), []); assert.equal((await notes()).length, 5);
 });

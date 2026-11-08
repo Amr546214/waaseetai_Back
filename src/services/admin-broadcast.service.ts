@@ -51,12 +51,12 @@ export async function audienceSnapshot(audience: BroadcastAudience, db: Pick<typ
 
 // ---- preview token ---------------------------------------------------------------------------------------------------------------------------------
 interface PreviewClaims { a: string; d: string; v: number; f: BroadcastAudience; c: number; h: string; t: string; x: number }
-function secret(): string {
+function secret(purpose = 'admin-broadcast-preview-v1'): string {
 	const s = process.env.JWT_SECRET;
 	if (!s) throw new AppError('تعذّر توقيع المعاينة الآن. لم يُرسل شيء.', 503);
-	return createHmac('sha256', s).update('admin-broadcast-preview-v1').digest('hex');
+	return createHmac('sha256', s).update(purpose).digest('hex');
 }
-const sign = (body: string) => createHmac('sha256', secret()).update(body).digest('base64url');
+const sign = (body: string, purpose?: string) => createHmac('sha256', secret(purpose)).update(body).digest('base64url');
 export function issuePreviewToken(claims: Omit<PreviewClaims, 'x'>): string {
 	const body = Buffer.from(JSON.stringify({ ...claims, x: Date.now() + TOKEN_TTL_MS })).toString('base64url');
 	return `${body}.${sign(body)}`;
@@ -140,17 +140,37 @@ const errorCodeOf = (e: unknown): string => {
 
 async function recipientCounts(ids: string[]) {
 	const rows = ids.length ? await prisma.broadcastRecipient.groupBy({ by: ['broadcastId', 'status'], where: { broadcastId: { in: ids } }, _count: { _all: true } }) : [];
-	const map = new Map<string, { SENT: number; FAILED: number; PENDING: number; CANCELLED: number }>();
-	for (const id of ids) map.set(id, { SENT: 0, FAILED: 0, PENDING: 0, CANCELLED: 0 });
+	const map = new Map<string, { SENT: number; FAILED: number; PENDING: number; CANCELLED: number; SKIPPED: number }>();
+	for (const id of ids) map.set(id, { SENT: 0, FAILED: 0, PENDING: 0, CANCELLED: 0, SKIPPED: 0 });
 	for (const r of rows) map.get(r.broadcastId)![r.status] = r._count._all;
 	return map;
 }
 const listSelect = { id: true, senderId: true, senderName: true, title: true, category: true, audience: true, audienceCount: true, status: true, createdAt: true, completedAt: true, heartbeatAt: true } as const;
 type ListRow = Prisma.BroadcastGetPayload<{ select: typeof listSelect }>;
-const view = (b: ListRow, c: { SENT: number; FAILED: number; PENDING: number; CANCELLED: number }) => ({
+const view = (b: ListRow, c: { SENT: number; FAILED: number; PENDING: number; CANCELLED: number; SKIPPED: number }) => ({
 	id: b.id, sender: { id: b.senderId, name: b.senderName }, title: b.title, category: b.category, audience: b.audience, status: b.status,
-	totals: { audience: b.audienceCount, sent: c.SENT, failed: c.FAILED, pending: c.PENDING, cancelled: c.CANCELLED }, createdAt: b.createdAt, completedAt: b.completedAt, lastProgressAt: b.heartbeatAt,
+	totals: { audience: b.audienceCount, sent: c.SENT, failed: c.FAILED, pending: c.PENDING, cancelled: c.CANCELLED, skipped: c.SKIPPED }, createdAt: b.createdAt, completedAt: b.completedAt, lastProgressAt: b.heartbeatAt,
 });
+
+export type SkipReason = 'USER_MISSING' | 'BANNED' | 'NOT_ACTIVE' | 'WRONG_AUDIENCE';
+/** Why a frozen recipient may no longer be notified (same rules as the audience count in #227: ACTIVE, not banned, account type of the audience). null = still eligible. */
+export function ineligibleReason(u: { status: string; isBanned: boolean; accountType: AccountType } | undefined, audience: BroadcastAudience): SkipReason | null {
+	if (!u) return 'USER_MISSING';
+	if (u.isBanned) return 'BANNED';
+	if (u.status !== 'ACTIVE') return 'NOT_ACTIVE';
+	if (!AUDIENCE_TYPES[audience].includes(u.accountType)) return 'WRONG_AUDIENCE';
+	return null;
+}
+async function eligibility(db: Tx, userIds: string[], audience: BroadcastAudience): Promise<Map<string, SkipReason | null>> {
+	const out = new Map<string, SkipReason | null>();
+	for (let i = 0; i < userIds.length; i += 1000) {
+		const slice = userIds.slice(i, i + 1000);
+		const users = await db.user.findMany({ where: { id: { in: slice } }, select: { id: true, status: true, isBanned: true, accountType: true } });
+		const byId = new Map(users.map(u => [u.id, u]));
+		for (const id of slice) out.set(id, ineligibleReason(byId.get(id), audience));
+	}
+	return out;
+}
 
 /** Thrown by the test seam to simulate a worker that dies mid-job (holding its lease). Never caught by the worker loop. */
 export class WorkerCrash extends Error {}
@@ -182,8 +202,15 @@ async function processBroadcast(id: string, owner: string): Promise<'done' | 'lo
 		const renew = (tx: Tx) => tx.broadcast.update({ where: { id }, data: { leaseUntil: new Date(Date.now() + broadcastDeps.leaseMs), heartbeatAt: new Date() } });
 		const deliver = (ids: string[]) => prisma.$transaction(async tx => {
 			if (!(await ownsLease(tx, id, owner))) return 'lost' as const;
-			const b = await tx.broadcast.findUniqueOrThrow({ where: { id }, select: { title: true, message: true, category: true } });
-			const rows = await tx.broadcastRecipient.findMany({ where: { id: { in: ids }, status: 'PENDING' }, select: { id: true, userId: true } });
+			const b = await tx.broadcast.findUniqueOrThrow({ where: { id }, select: { title: true, message: true, category: true, audience: true } });
+			const pending = await tx.broadcastRecipient.findMany({ where: { id: { in: ids }, status: 'PENDING' }, select: { id: true, userId: true } });
+			// defence in depth: eligibility is re-checked at the moment of delivery, in the same transaction
+			const elig = await eligibility(tx, pending.map(r => r.userId), b.audience);
+			for (const r of pending) {
+				const reason = elig.get(r.userId);
+				if (reason) await tx.broadcastRecipient.update({ where: { id: r.id }, data: { status: 'SKIPPED', errorCode: reason, updatedAt: new Date() } });
+			}
+			const rows = pending.filter(r => !elig.get(r.userId));
 			if (rows.length) {
 				await broadcastDeps.createNotifications(tx, rows.map(r => ({
 					id: randomUUID(), userId: r.userId, title: b.title, message: b.message, type: BROADCAST_NOTIFICATION_TYPE, category: b.category, metadata: { broadcastId: id },
@@ -388,7 +415,7 @@ async function queueRows(limit = 100) {
 	const counts = await recipientCounts(rows.map(r => r.id));
 	const now = new Date(); const enabled = isBroadcastWorkerEnabled();
 	return rows.map(b => {
-		const c = counts.get(b.id)!; const queueState = classifyQueueState(b, c.SENT + c.FAILED > 0, now, enabled);
+		const c = counts.get(b.id)!; const queueState = classifyQueueState(b, c.SENT + c.FAILED + c.SKIPPED > 0, now, enabled);
 		const { title: _t, ...rest } = view(b, c);
 		return { ...rest, title: b.title, queueState, stale: queueState.startsWith('STUCK'), waitingSeconds: b.status === 'QUEUED' ? Math.max(0, Math.floor((now.getTime() - b.createdAt.getTime()) / 1000)) : null, heartbeatAt: b.heartbeatAt, leaseUntil: b.leaseUntil, ageSeconds: Math.max(0, Math.floor((now.getTime() - b.createdAt.getTime()) / 1000)), reviewed: !!b.reviewedAt, approved: !!b.approvedAt };
 	});
@@ -440,28 +467,87 @@ export async function queuePreflight() {
 	};
 }
 
-async function ackTransition(adminId: string, id: string, kind: 'review' | 'approve', reason?: string) {
+const REAPPROVAL_PURPOSE = 'admin-broadcast-reapproval-v1';
+const REAPPROVAL_TTL_MS = 15 * 60_000;
+export const REAPPROVAL_STALE = 'REAPPROVAL_STALE';
+
+/** Counts only: never ids, e-mails, names, bodies or env values. */
+async function reapprovalFacts(db: Tx, id: string) {
+	const b = await db.broadcast.findUniqueOrThrow({ where: { id }, select: { audience: true, audienceCount: true } });
+	const alreadyDelivered = await db.broadcastRecipient.count({ where: { broadcastId: id, status: 'SENT' } });
+	const pending = await db.broadcastRecipient.findMany({ where: { broadcastId: id, status: 'PENDING' }, select: { userId: true }, orderBy: { userId: 'asc' } });
+	const elig = await eligibility(db, pending.map(p => p.userId), b.audience);
+	const eligibleIds = pending.map(p => p.userId).filter(u => !elig.get(u));
+	const byReason: Record<string, number> = {};
+	for (const r of elig.values()) if (r) byReason[r] = (byReason[r] ?? 0) + 1;
+	const ineligibleTotal = Object.values(byReason).reduce((x, y) => x + y, 0);
+	return {
+		originalAudienceCount: b.audienceCount, alreadyDelivered, pendingEligibleCount: eligibleIds.length,
+		ineligibleNow: { total: ineligibleTotal, byReason }, recipientSetHash: createHash('sha256').update(eligibleIds.join('\n')).digest('hex'),
+	};
+}
+type Facts = Awaited<ReturnType<typeof reapprovalFacts>>;
+export class ReapprovalStale extends Error { constructor(public readonly fresh: Facts & { checkedAt: string }) { super(REAPPROVAL_STALE); } }
+
+function assertApprovable(b: { status: string; createdAt: Date }) {
+	if (b.status !== 'QUEUED' && b.status !== 'SENDING') throw new AppError(b.status === 'CANCELLED' ? 'أُلغي هذا الإرسال.' : 'انتهى هذا الإرسال.', 409, undefined, 'BROADCAST_NOT_APPROVABLE');
+	if (Date.now() - b.createdAt.getTime() <= maxQueueAgeMs()) throw new AppError('هذا الإرسال لم تنتهِ صلاحيته ولا يحتاج اعتمادًا.', 409, undefined, 'BROADCAST_NOT_EXPIRED');
+}
+
+/** Read-only: who would receive this expired job if it were approved NOW (live facts + a signed token that binds them). */
+export async function reapprovalPreview(adminId: string, id: string) {
+	const b = await prisma.broadcast.findUnique({ where: { id }, select: { status: true, createdAt: true, approvedAt: true } });
+	if (!b) throw new AppError('الإشعار الجماعي غير موجود.', 404);
+	assertApprovable(b);
+	const facts = await prisma.$transaction(tx => reapprovalFacts(tx, id));
+	const checkedAt = new Date().toISOString();
+	const body = Buffer.from(JSON.stringify({ b: id, a: adminId, c: facts.pendingEligibleCount, h: facts.recipientSetHash, i: facts.ineligibleNow.total, t: checkedAt, x: Date.now() + REAPPROVAL_TTL_MS })).toString('base64url');
+	return { ...facts, ageSeconds: Math.floor((Date.now() - b.createdAt.getTime()) / 1000), alreadyApproved: !!b.approvedAt, checkedAt, reapprovalToken: `${body}.${sign(body, REAPPROVAL_PURPOSE)}` };
+}
+function readReapprovalToken(token: string): { b: string; a: string; c: number; h: string; i: number; t: string; x: number } {
+	const [body, mac] = token.split('.');
+	const bad = () => new AppError('رمز المراجعة غير صالح. راجِع المستلمين من جديد.', 400, undefined, 'REAPPROVAL_TOKEN_INVALID');
+	if (!body || !mac) throw bad();
+	const expected = Buffer.from(sign(body, REAPPROVAL_PURPOSE)); const got = Buffer.from(mac);
+	if (expected.length !== got.length || !timingSafeEqual(expected, got)) throw bad();
+	try { return JSON.parse(Buffer.from(body, 'base64url').toString('utf8')); } catch { throw bad(); }
+}
+
+/** Re-approves an expired job ONLY if, under the broadcast row lock, the facts still equal the ones the admin reviewed. Never adds a recipient; the frozen list is the only list. */
+export async function approveExpiredBroadcast(adminId: string, id: string, reason: string, token: string) {
+	const found = await prisma.broadcast.findUnique({ where: { id }, select: { id: true } });
+	if (!found) throw new AppError('الإشعار الجماعي غير موجود.', 404);
+	const claims = readReapprovalToken(token);
+	const changed = await prisma.$transaction(async tx => {
+		await lock(tx, id);
+		const b = await tx.broadcast.findUniqueOrThrow({ where: { id }, select: { status: true, createdAt: true, approvedAt: true, reviewedAt: true } });
+		if (b.approvedAt) return false; // idempotent replay
+		assertApprovable(b);
+		if (claims.b !== id || claims.a !== adminId) throw new AppError('رمز المراجعة لا يخص هذا الإرسال أو هذا المدير.', 400, undefined, 'REAPPROVAL_TOKEN_INVALID');
+		const facts = await reapprovalFacts(tx, id);
+		if (!(claims.x > Date.now()) || facts.pendingEligibleCount !== claims.c || facts.recipientSetHash !== claims.h || facts.ineligibleNow.total !== claims.i)
+			throw new ReapprovalStale({ ...facts, checkedAt: new Date().toISOString() });
+		const now = new Date();
+		await tx.broadcast.update({ where: { id }, data: { approvedAt: now, approvedById: adminId, approveReason: reason, reviewedAt: b.reviewedAt ?? now, reviewedById: adminId } });
+		return facts;
+	}, { timeout: 60_000 });
+	if (changed) await adminAudit.record({ adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_REAPPROVED', title: 'إعادة اعتماد إرسال جماعي منتهي الصلاحية', summary: 'أعاد مدير النظام اعتماد إرسال جماعي تجاوز مدة الطابور بعد مراجعة المستلمين.', severity: 'WARNING',
+		details: { reason, pendingEligible: changed.pendingEligibleCount, ineligible: changed.ineligibleNow.total, alreadyDelivered: changed.alreadyDelivered } });
+	return summary(id);
+}
+
+async function reviewOnly(adminId: string, id: string) {
 	const found = await prisma.broadcast.findUnique({ where: { id }, select: { id: true } });
 	if (!found) throw new AppError('الإشعار الجماعي غير موجود.', 404);
 	const changed = await prisma.$transaction(async tx => {
 		await lock(tx, id);
-		const b = await tx.broadcast.findUniqueOrThrow({ where: { id }, select: { status: true, createdAt: true, reviewedAt: true, approvedAt: true } });
-		if (b.status !== 'QUEUED' && b.status !== 'SENDING') throw new AppError(b.status === 'CANCELLED' ? 'أُلغي هذا الإرسال.' : 'انتهى هذا الإرسال.', 409, undefined, kind === 'review' ? 'BROADCAST_NOT_REVIEWABLE' : 'BROADCAST_NOT_APPROVABLE');
-		const now = new Date();
-		if (kind === 'review') {
-			if (b.reviewedAt) return false;
-			await tx.broadcast.update({ where: { id }, data: { reviewedAt: now, reviewedById: adminId } });
-			return true;
-		}
-		if (b.approvedAt) return false;
-		if (now.getTime() - b.createdAt.getTime() <= maxQueueAgeMs()) throw new AppError('هذا الإرسال لم تنتهِ صلاحيته ولا يحتاج اعتمادًا.', 409, undefined, 'BROADCAST_NOT_EXPIRED');
-		await tx.broadcast.update({ where: { id }, data: { approvedAt: now, approvedById: adminId, approveReason: reason ?? null, reviewedAt: b.reviewedAt ?? now, reviewedById: adminId } });
+		const b = await tx.broadcast.findUniqueOrThrow({ where: { id }, select: { status: true, reviewedAt: true } });
+		if (b.status !== 'QUEUED' && b.status !== 'SENDING') throw new AppError(b.status === 'CANCELLED' ? 'أُلغي هذا الإرسال.' : 'انتهى هذا الإرسال.', 409, undefined, 'BROADCAST_NOT_REVIEWABLE');
+		if (b.reviewedAt) return false;
+		await tx.broadcast.update({ where: { id }, data: { reviewedAt: new Date(), reviewedById: adminId } });
 		return true;
 	});
-	if (changed) await adminAudit.record(kind === 'review'
-		? { adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_REVIEWED', title: 'مراجعة إرسال جماعي', summary: 'راجع مدير النظام إرسالًا جماعيًا في الطابور وقبله.', severity: 'INFO' }
-		: { adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_REAPPROVED', title: 'إعادة اعتماد إرسال جماعي منتهي الصلاحية', summary: 'أعاد مدير النظام اعتماد إرسال جماعي تجاوز مدة الطابور.', severity: 'WARNING', details: { reason } });
+	if (changed) await adminAudit.record({ adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_REVIEWED', title: 'مراجعة إرسال جماعي', summary: 'راجع مدير النظام إرسالًا جماعيًا في الطابور وقبله.', severity: 'INFO' });
 	return summary(id);
 }
-export const reviewBroadcast = (adminId: string, id: string) => ackTransition(adminId, id, 'review');
-export const approveExpiredBroadcast = (adminId: string, id: string, reason: string) => ackTransition(adminId, id, 'approve', reason);
+export const reviewBroadcast = reviewOnly;

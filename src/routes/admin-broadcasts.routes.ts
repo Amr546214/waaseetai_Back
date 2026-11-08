@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { requireSuperAdmin } from '../middlewares/admin-access.middleware';
 import { AppError, zodAppError } from '../utils/app-error';
-import { activeBroadcast, approveExpiredBroadcast, cancelBroadcast, queuePreflight, reviewBroadcast, DraftConflict, queueReview, queueSummary, isBroadcastWorkerEnabled, drafts, historyDetail, listHistory, previewDraft, retryRemaining, sendBroadcast, validIdempotencyKey } from '../services/admin-broadcast.service';
+import { activeBroadcast, approveExpiredBroadcast, reapprovalPreview, ReapprovalStale, cancelBroadcast, queuePreflight, reviewBroadcast, DraftConflict, queueReview, queueSummary, isBroadcastWorkerEnabled, drafts, historyDetail, listHistory, previewDraft, retryRemaining, sendBroadcast, validIdempotencyKey } from '../services/admin-broadcast.service';
 
 // Permission choice: Super Admin only (requireSuperAdmin), like the audience preview (#227), templates and notification history. No registry permission fits "message a whole audience",
 // and a broadcast is irreversible, so it is not delegable to staff roles.
@@ -105,7 +105,10 @@ router.post('/:id/cancel', async (req, res, next) => {
 		res.json({ success: true, data: await cancelBroadcast(me(req), id, parsed.data.reason) });
 	} catch (e) { next(e); }
 });
-const approveBody = z.object({ reason: z.string().trim().min(3).max(200) }).strict();
+const approveBody = z.object({ reason: z.string().trim().min(3).max(200), reapprovalToken: z.string().min(10).max(2000) }).strict();
+router.get('/:id/reapproval-preview', async (req, res, next) => {
+	try { res.json({ success: true, data: await reapprovalPreview(me(req), uuid(req.params.id, 'الإشعار الجماعي غير موجود.')) }); } catch (e) { next(e); }
+});
 router.post('/:id/review', async (req, res, next) => {
 	try { res.json({ success: true, data: await reviewBroadcast(me(req), uuid(req.params.id, 'الإشعار الجماعي غير موجود.')) }); } catch (e) { next(e); }
 });
@@ -113,9 +116,12 @@ router.post('/:id/approve-send', async (req, res, next) => {
 	try {
 		const id = uuid(req.params.id, 'الإشعار الجماعي غير موجود.');
 		const parsed = approveBody.safeParse(req.body ?? {});
-		if (!parsed.success) throw new AppError('اكتب سبب إعادة الاعتماد (3 إلى 200 حرف).', 400, undefined, 'APPROVE_REASON_REQUIRED');
-		res.json({ success: true, data: await approveExpiredBroadcast(me(req), id, parsed.data.reason) });
-	} catch (e) { next(e); }
+		if (!parsed.success) throw new AppError('اكتب سبب إعادة الاعتماد (3 إلى 200 حرف) وراجِع المستلمين أولًا.', 400, undefined, 'APPROVE_REASON_REQUIRED');
+		res.json({ success: true, data: await approveExpiredBroadcast(me(req), id, parsed.data.reason, parsed.data.reapprovalToken) });
+	} catch (e) {
+		if (e instanceof ReapprovalStale) { res.status(409).json({ success: false, code: 'REAPPROVAL_STALE', message: 'تغيّر المستلمون بعد المراجعة. راجِع من جديد.', data: { fresh: e.fresh } }); return; }
+		next(e);
+	}
 });
 router.post('/:id/retry', async (req, res, next) => {
 	try { res.json({ success: true, data: await retryRemaining(me(req), uuid(req.params.id, 'الإشعار الجماعي غير موجود.')) }); } catch (e) { next(e); }

@@ -3414,6 +3414,7 @@ enum BroadcastRecipientStatus {
   SENT
   FAILED
   CANCELLED
+  SKIPPED
 }
 
 // A Super Admin's server-side broadcast draft. Private to its owner; `version` is the optimistic-concurrency token.

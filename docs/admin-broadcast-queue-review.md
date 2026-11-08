@@ -20,7 +20,7 @@ A job confirmed while the worker was ON and then left unfinished stays QUEUED/SE
 2. **Review or cancel everything not yet sent.**
    - `POST /:id/review` (button "تمت المراجعة") = "I saw it and accept it being sent". Audited (`BROADCAST_REVIEWED`).
    - `POST /:id/cancel {reason?}` = drop it. Only PENDING recipients become CANCELLED; recipients already SENT are never touched; nothing is sent; refused (409) while a worker holds a live lease; idempotent; audited (`BROADCAST_CANCELLED`).
-   - `POST /:id/approve-send {reason}` (3-200 chars) = explicit re-approval of an EXPIRED job after review. Audited (`BROADCAST_REAPPROVED`, no body). Only then can a worker claim it.
+   - **Re-approval of an EXPIRED job is two steps** (see "Re-approval flow" below): `GET /:id/reapproval-preview` then `POST /:id/approve-send {reason, reapprovalToken}`. Audited (`BROADCAST_REAPPROVED`, counts only, no body). Only then can a worker claim it.
 3. **Confirm the preflight is green**: `canEnableSafely=true`, `blockers=[]`. Blockers: `EXPIRED_JOBS`, `STUCK_MID_RUN`, `STUCK_NO_PROGRESS`, `UNREVIEWED_JOBS`.
 4. **Confirm what the max-age guard will skip.** `counts.EXPIRED_NEEDS_REVIEW` in preflight = jobs the worker will leave alone (it logs one line with the COUNT only when it skips). Anything you still want must be re-approved (step 2); the rest cancelled.
 5. **Enable the flag in a controlled window**: set `ADMIN_BROADCAST_WORKER_ENABLED=true`, restart the backend.
@@ -33,3 +33,9 @@ A job confirmed while the worker was ON and then left unfinished stays QUEUED/SE
 - Preflight looks at the first 1000 queued jobs.
 - Messages are not re-validated against current audience/draft: the audience was frozen at confirm time, so age and the explicit reason are the safeguards.
 - No alert outside the broadcast page (banner + `queue/summary`).
+
+## Re-approval flow / مسار إعادة الاعتماد
+1. **Review recipients** (`GET /:id/reapproval-preview`, read-only; UI «مراجعة المستلمين»). Live numbers: `originalAudienceCount` (frozen at first confirm), `alreadyDelivered` (SENT), `pendingEligibleCount` (still PENDING and STILL eligible now: user exists, ACTIVE, not banned, account type still in the audience), `ineligibleNow` (counts by reason: `USER_MISSING`, `BANNED`, `NOT_ACTIVE`, `WRONG_AUDIENCE`), `recipientSetHash`, plus a signed token (15 min) binding those facts, the broadcast and the admin. No user ids, e-mails, names, body or env values are returned.
+2. **Confirm** (`POST /:id/approve-send` with a reason of 3-200 chars and the token). Inside one transaction (broadcast row locked) the same facts are recomputed. If the eligible count, the set hash or the ineligible total differ, or the token is expired / tampered / from another admin or broadcast: 409 `REAPPROVAL_STALE` (or 400 `REAPPROVAL_TOKEN_INVALID`) with the fresh numbers and NOTHING is stored; review again. Replaying an already accepted approval is idempotent.
+3. **Never widens, never repeats.** The recipient list is the original frozen one: nobody is ever added. Recipients already SENT are never notified again (one transaction per chunk + unique indexes). Recipients who are ineligible at delivery time (checked again inside every delivery chunk, for every job) are NOT notified: they become `SKIPPED` with the reason in `errorCode` and are counted apart (`skipped`) from `failed`. Skipped recipients are not retried by "retry remaining".
+4. Approval only marks the job claimable; nothing is sent while the worker is off.
