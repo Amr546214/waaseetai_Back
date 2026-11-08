@@ -192,14 +192,17 @@ test('PG settings: baseCurrency is shown as USD and BLOCKED (multi-currency is d
 });
 
 test('PG settings: read-only and blocked entries tell the truth (value + source, or the reason), never expose secrets, and health reports only real facts', opts, async () => {
-	const e = await env(); await reset(e); const items = await view(e, e.sa.id);
+	const e = await env(); await reset(e);
+	const { technicalMonitoring } = await import('./technical-monitoring.service'); technicalMonitoring.reset(); technicalMonitoring.deps = { ...technicalMonitoring.deps, cdnConfigured: () => false }; // never call the provider from a test
+	const items = await view(e, e.sa.id);
 	for (const i of items.filter((x: any) => x.status !== 'enforced')) { assert.equal(i.canWrite, false, i.key); assert.ok(i.reason && i.reason.length > 15, `${i.key} explains why`); }
 	const ro = items.find((i: any) => i.key === 'smtp'); assert.deepEqual(Object.keys(ro.value).sort(), ['configured', 'senderConfigured']); assert.equal(typeof ro.value.configured, 'boolean');
 	const keys = items.find((i: any) => i.key === 'apiKeys'); assert.deepEqual(Object.keys(keys.value).sort(), ['billingGateway', 'paypal', 'smsProvider']); for (const v of Object.values(keys.value)) assert.equal(typeof v, 'boolean');
 	assert.ok(!/SMTP_PASS|SMTP_USER|CLIENT_SECRET|CLIENT_ID/.test(JSON.stringify(items)), 'no secret names or values in the response');
 	assert.equal(items.find((i: any) => i.key === 'minPasswordLength').value, 8); assert.equal(items.find((i: any) => i.key === 'auditLogging').value, true); assert.equal(items.find((i: any) => i.key === 'paymentGateway').value, 'PayPal');
 	const h = (await e.call('GET', `${S}/health`, e.sa.id)).json.data; const db = h.items.find((x: any) => x.key === 'database'); assert.equal(db.status, 'ok'); assert.match(db.detail, /ms/);
-	assert.equal(h.items.find((x: any) => x.key === 'ai').status, 'unavailable'); assert.ok(!h.items.some((x: any) => x.key === 'cdn' || x.key === 'backup'), 'cdn/backup live in technical-metrics only');
+	assert.equal(h.items.find((x: any) => x.key === 'ai').status, 'unavailable');
+	for (const k of ['cdn', 'backup']) { const it = h.items.find((x: any) => x.key === k); assert.equal(it.status, 'unavailable'); assert.equal(it.deprecated, true); }
 	assert.ok(!JSON.stringify(h).match(/99\.8|95%|uptime|3:00/), 'no sample numbers from the design');
 	const st = await mkStaff(e, ['settings.view'], 'hv2'); assert.equal((await e.call('GET', `${S}/health`, st.user.id)).status, 200);
 });

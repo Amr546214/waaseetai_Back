@@ -131,6 +131,9 @@ export class TechnicalMonitoringService {
 		return out;
 	}
 
+	/** the two indicators the deprecated /health items mirror: no database queries, the provider reading comes from the same 5-minute cache as technical-metrics */
+	async cdnAndBackup(): Promise<Indicator[]> { return [...(await this.cdn()), ...this.backup()]; }
+
 	private backup(): Indicator[] {
 		const reason = 'مهمة النسخ الاحتياطي تعمل خارج التطبيق ولا تنشر وقت آخر نجاح؛ المطلوب ملف حالة أو نقطة قراءة من مهمة النسخ (وقت آخر نجاح، الحجم، نتيجة اختبار الاستعادة)';
 		return [

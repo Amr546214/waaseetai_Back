@@ -120,9 +120,22 @@ test('escalation readiness: closed by default, lists exactly which preconditions
 	} finally { for (const k of Object.keys(process.env)) if (!(k in keep)) delete process.env[k]; Object.assign(process.env, keep); }
 });
 
-test('the old /health no longer carries cdn/backup placeholders: those two indicators have ONE source (technical-metrics)', opts, async () => {
-	const { e } = await fresh();
-	const keys = (await e.call('GET', '/admin/system-settings/health', e.sa.id)).json.data.items.map((i: any) => i.key);
-	assert.ok(!keys.includes('cdn') && !keys.includes('backup'), keys.join());
-	assert.ok(keys.includes('database') && keys.includes('app'));
+test('deprecated /health items cdn/backup are derived from the SAME reading as technical-metrics (old and new consumers cannot disagree)', opts, async () => {
+	const { e, svc, base } = await fresh();
+	const health = async () => (await e.call('GET', '/admin/system-settings/health', e.sa.id)).json.data.items as any[];
+	const item = (items: any[], k: string) => items.find(x => x.key === k);
+	// not configured: unavailable + the same reason
+	let m = (await e.call('GET', P, e.sa.id)).json; let h = await health();
+	for (const [k, ik] of [['cdn', 'cdn_storage'], ['backup', 'backup_last_success']] as const) {
+		assert.equal(item(h, k).deprecated, true); assert.equal(item(h, k).replacedBy, 'technical-metrics'); assert.equal(item(h, k).status, 'unavailable'); assert.equal(item(h, k).detail, get(m, ik).reason);
+	}
+	// measured: the health item carries the same value and the same readAt
+	svc.reset(); svc.deps = { ...base, cdnConfigured: () => true, cdnUsage: async () => ({ storageBytes: 7 * 1048576, bandwidthBytes: null, transformations: null, resources: null, plan: null }) };
+	m = (await e.call('GET', P, e.sa.id)).json; h = await health();
+	assert.equal(item(h, 'cdn').status, 'ok'); assert.ok(item(h, 'cdn').detail.includes('7 MB')); assert.equal(item(h, 'cdn').readAt, get(m, 'cdn_storage').readAt);
+	// provider failure: unavailable with the same reason, never ok
+	svc.reset(); svc.deps = { ...base, cdnConfigured: () => true, cdnUsage: async () => { throw new Error('x'); } };
+	m = (await e.call('GET', P, e.sa.id)).json; h = await health(); assert.equal(item(h, 'cdn').status, 'unavailable'); assert.equal(item(h, 'cdn').detail, get(m, 'cdn_storage').reason);
+	assert.ok(item(h, 'database') && item(h, 'app') && !item(h, 'database').deprecated);
+	svc.reset();
 });
