@@ -25,7 +25,13 @@ function setup(t: TestContext, hash: string, mail: { fail: boolean; delayMs: num
 		findByEmail: async () => ({ ...user }),
 		findById: async () => ({ ...user }),
 		findByIdForSession: async () => ({ ...user }),
-		createOtp: async (userId: string, code: string, _type: string, expiresAt: Date, purpose: string) => { await new Promise(r => setImmediate(r)); rows.push({ id: `o${++seq}`, userId, code, attempts: 0, expiresAt, purpose, createdAt: seq }); return {}; },
+		createOtp: async (userId: string, code: string, _type: string, expiresAt: Date, purpose: string) => { await new Promise(r => setImmediate(r)); rows.push({ id: `o${++seq}`, userId, code, attempts: 0, expiresAt, purpose, createdAt: seq }); return { id: `o${seq}`, code }; },
+		rotateLoginEmailOtp: async (userId: string, id: string, expectedCode: string, code: string, expiresAt: Date) => {
+			const row = rows.find(x => x.id === id && x.userId === userId && x.purpose === 'LOGIN_EMAIL' && x.code === expectedCode);
+			if (!row) return { count: 0 };
+			Object.assign(row, { code, expiresAt, attempts: 0 });
+			return { count: 1 };
+		},
 		findLatestOtpByPurpose: async (userId: string, purpose: string) => { await new Promise(r => setImmediate(r)); const r = rows.filter(x => x.userId === userId && x.purpose === purpose).sort((a, b) => b.createdAt - a.createdAt)[0]; return r ? { ...r } : null; },
 		deleteOtpsByPurpose: async (userId: string, purpose: string) => { for (let i = rows.length - 1; i >= 0; i--) if (rows[i].userId === userId && rows[i].purpose === purpose) rows.splice(i, 1); return { count: 0 }; },
 		incrementOtpAttempts: async (id: string) => { rows.find(r => r.id === id)!.attempts++; return {}; },
@@ -56,7 +62,7 @@ test('a failed send does not start the cooldown: the immediate retry really trie
 	assert.equal(first.loginOtpRequired, true);
 	assert.equal(first.emailSent, false);
 	mail.fail = false; // the mail server recovers
-	const second: any = await login(auth);
+	const second = await auth.resendLoginOtp('user-1');
 	assert.equal(second.emailSent, true, 'the retry went out; it was not answered with the interval message');
 	assert.equal(attempts.length, 2);
 	assert.doesNotMatch(String(second.message), /أرسلنا الرمز بالفعل/);
@@ -84,20 +90,21 @@ test('two simultaneous password logins: the stored code is the code that was e-m
 	assert.equal([a, b].filter(x => x.emailSent === true).length >= 1, true);
 });
 
-test('resend with plenty of validity left re-sends the SAME code with its original expiry', async (t) => {
+test('a failed resend preserves the previous code and its original expiry', async (t) => {
 	t.mock.timers.enable({ apis: ['Date'], now: 1_000_000_000_000 });
-	const { rows, attempts } = setup(t, await hashed(), { fail: false, delayMs: 0 });
+	const mail = { fail: false, delayMs: 0 };
+	const { rows, attempts } = setup(t, await hashed(), mail);
 	const auth = await load();
-	const first: any = await login(auth);
-	const code = rows[0].code, exp = rows[0].expiresAt.getTime();
-	t.mock.timers.tick(5 * 60_000); // 5 min left
-	const again: any = await login(auth);
-	assert.equal(again.emailSent, true);
-	assert.equal(rows.length, 1);
+	await login(auth);
+	const { code, expiresAt } = rows[0];
+	t.mock.timers.tick(60_000);
+	mail.fail = true;
+	const resend = await auth.resendLoginOtp('user-1');
+	assert.equal(resend.emailSent, false);
+	assert.notEqual(attempts[1].code, code);
 	assert.equal(rows[0].code, code);
-	assert.equal(rows[0].expiresAt.getTime(), exp, 'the validity is not stretched');
-	assert.deepEqual(attempts.map(a => a.code), [code, code]);
-	assert.equal(new Date(first.expiresAt).getTime(), exp);
+	assert.equal(rows[0].expiresAt.getTime(), expiresAt.getTime());
+	await auth.verifyLoginOtp({ userId: 'user-1', code }, {});
 });
 
 test('resend close to expiry issues a FRESH code (the mail must not arrive carrying a code that already died)', async (t) => {
@@ -111,7 +118,7 @@ test('resend close to expiry issues a FRESH code (the mail must not arrive carry
 	assert.equal(again.emailSent, true);
 	assert.equal(rows.length, 1, 'the old code is replaced, never two live codes');
 	const fresh = rows[0];
-	assert.notEqual(fresh.code, oldCode === fresh.code ? '' : oldCode);
+	assert.notEqual(fresh.code, oldCode);
 	assert.equal(fresh.expiresAt.getTime(), Date.now() + 10 * 60_000, 'a normal 10-minute validity, not a stretched one');
 	assert.equal(attempts[1].code, fresh.code);
 	assert.equal(new Date(again.expiresAt).getTime(), fresh.expiresAt.getTime());
@@ -123,7 +130,7 @@ test('a code that already expired is refused, and so is the replaced old code', 
 	const auth = await load();
 	await login(auth);
 	const old = rows[0].code;
-	t.mock.timers.tick(10 * 60_000 + 1000);
+	t.mock.timers.tick(10 * 60_000);
 	await assert.rejects(() => auth.verifyLoginOtp({ userId: 'user-1', code: old }, {}), (e: any) => e.statusCode === 400 && /انتهت صلاحيته/.test(e.message));
 });
 

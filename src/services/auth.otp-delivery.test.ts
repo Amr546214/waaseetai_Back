@@ -31,7 +31,8 @@ function setup(t: TestContext, opts: {
   t.mock.module('../repositories/auth.repository', { namedExports: { authRepository: {
     findByEmailOrPhone: async () => null,
     createUserWithProfile: async () => ({ id: 'user-1', email: 'amr@example.com' }),
-    createOtp: async (userId: string, code: string, type: string, expiresAt: Date) => { created.push({ userId, code, type, expiresAt, at: Date.now() }); return {}; },
+    createOtp: async (userId: string, code: string, type: string, expiresAt: Date) => { created.push({ userId, code, type, expiresAt, at: Date.now() }); return { id: 'o1', code }; },
+    rotateLoginEmailOtp: async () => ({ count: 1 }),
     findById: async () => user,
     findByEmail: async () => ({ ...user, password: user.password }),
     findLatestActivationOtp: async () => opts.latestActivation ?? null,
@@ -229,7 +230,9 @@ test('login resend / verify with no pending LOGIN_EMAIL code create and send not
   const { created, sent, smsSent } = setup(t, { smsAvailable: true, user: ACTIVE_LEGACY_PHONE_OTP_USER('x') });
   const { authService } = await load();
 
-  assert.equal((await authService.resendLoginOtp('user-1')).emailSent, true); // generic no-op answer, nothing sent
+  const resend = await authService.resendLoginOtp('user-1');
+  assert.equal(resend.emailSent, false);
+  assert.match(resend.message, /لم يُرسل رمز جديد/);
   await assert.rejects(() => authService.verifyLoginOtp({ userId: 'user-1', code: '123456' }, {}), (e: any) => e.statusCode === 400);
   assert.equal(created.length, 0);
   assert.equal(sent.length, 0);
