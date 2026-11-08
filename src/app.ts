@@ -1,5 +1,6 @@
 import { startCaseSlaScheduler } from './services/case-sla.service';
 import { adminPlatformReports, userPlatformReports } from './routes/platform-reports.routes';
+import adminNotificationHistory from './routes/admin-notification-history.routes';
 import { startChatDigestScheduler } from './services/chat-digest.service';
 import express, { Request, Response, NextFunction } from 'express';
 import { maintenanceMiddleware } from './middlewares/maintenance.middleware';
@@ -367,6 +368,7 @@ mountAppRoute('/api/admin/special-offers', adminSpecialOffersRouter);
 mountAppRoute('/admin/special-offers', adminSpecialOffersRouter);
 mountAppRoute('/api/reports', userPlatformReports);
 mountAppRoute('/api/admin/reports', adminPlatformReports);
+mountAppRoute('/api/admin/notification-history', adminNotificationHistory);
 mountAppRoute('/admin/reports', adminPlatformReports);
 mountAppRoute('/api/admin/tickets', adminTicketsRoutes);
 mountAppRoute('/admin/tickets', adminTicketsRoutes);

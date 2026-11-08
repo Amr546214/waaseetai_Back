@@ -1539,6 +1539,7 @@ model Notification {
   createdAt  DateTime             @default(now())
 
   @@index([userId, isRead])
+  @@index([createdAt, id])
   @@map("notifications")
 }
 
