@@ -7,16 +7,44 @@ const HOUR = 3_600_000;
 const DEFAULT_HOURS = [48, 24, 8, 2] as const; // low, normal, high, urgent
 type Config = { from: Date; hours: number[]; supportTo?: string; disputesTo?: string };
 
-export function readCaseSlaConfig(env: NodeJS.ProcessEnv = process.env): Config | null {
-  if (env.CASE_SLA_ENABLED !== 'true' || !env.CASE_SLA_FROM?.match(/^\d{4}-\d{2}-\d{2}T/)) return null;
-  const from = new Date(env.CASE_SLA_FROM);
-  if (!Number.isFinite(from.getTime())) return null;
+type ConfigResult = { state: 'disabled' } | { state: 'invalid'; setting: string } | { state: 'configured'; config: Config };
+const SUPPORT_PERMISSIONS = ['support.review', 'support.reply'];
+const DISPUTE_PERMISSIONS = ['disputes.view', 'disputes.resolve'];
+
+function parseCaseSlaConfig(env: NodeJS.ProcessEnv): ConfigResult {
+  if (env.CASE_SLA_ENABLED !== 'true') return { state: 'disabled' };
+  const rawFrom = env.CASE_SLA_FROM ?? '';
+  const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?Z$/.exec(rawFrom);
+  const from = new Date(rawFrom);
+  if (!m || !Number.isFinite(from.getTime()) || from.toISOString() !== `${m[1]}.${(m[2] ?? '').padEnd(3, '0')}Z`) {
+    return { state: 'invalid', setting: 'CASE_SLA_FROM' };
+  }
   const hours = env.SUPPORT_SLA_FIRST_REPLY_HOURS
     ? env.SUPPORT_SLA_FIRST_REPLY_HOURS.split(',').map(Number) : [...DEFAULT_HOURS];
-  if (hours.length !== 4 || hours.some(h => !Number.isFinite(h) || h < 1 || h > 720)) return null;
+  if (hours.length !== 4 || hours.some(h => !Number.isFinite(h) || h < 1 || h > 720)) {
+    return { state: 'invalid', setting: 'SUPPORT_SLA_FIRST_REPLY_HOURS' };
+  }
   const supportTo = env.SUPPORT_SLA_TARGET_ADMIN_ID?.trim();
   const disputesTo = env.DISPUTE_SLA_TARGET_ADMIN_ID?.trim();
-  return supportTo || disputesTo ? { from, hours, supportTo, disputesTo } : null;
+  if (!supportTo && !disputesTo) return { state: 'invalid', setting: 'SUPPORT_SLA_TARGET_ADMIN_ID / DISPUTE_SLA_TARGET_ADMIN_ID' };
+  return { state: 'configured', config: { from, hours, supportTo, disputesTo } };
+}
+
+export function readCaseSlaConfig(env: NodeJS.ProcessEnv = process.env): Config | null {
+  const result = parseCaseSlaConfig(env);
+  return result.state === 'configured' ? result.config : null;
+}
+
+/** Check settings and permissions without assigning anything or starting the worker. */
+export async function checkCaseSlaReadiness(env: NodeJS.ProcessEnv = process.env, now = new Date()) {
+  const result = parseCaseSlaConfig(env);
+  if (result.state !== 'configured') return result;
+  const { from, hours, supportTo, disputesTo } = result.config;
+  const check = async (target: string | undefined, permissions: string[]) =>
+    !target ? 'not-configured' : await assigneeHolds(target, permissions) ? 'eligible' : 'ineligible';
+  const [support, disputes] = await Promise.all([check(supportTo, SUPPORT_PERMISSIONS), check(disputesTo, DISPUTE_PERMISSIONS)]);
+  const state = support === 'ineligible' || disputes === 'ineligible' ? 'ineligible' : now < from ? 'scheduled' : 'ready';
+  return { state, from: from.toISOString(), hours, support, disputes };
 }
 
 type Ticket = { createdAt: Date; priority: string; status: string; userId: string };
@@ -40,7 +68,7 @@ type CaseKind = 'TICKET' | 'DISPUTE';
 async function sweepCaseKind(cfg: Config, kind: CaseKind, now: Date) {
   const ticket = kind === 'TICKET';
   const target = ticket ? cfg.supportTo : cfg.disputesTo;
-  if (!target || !await assigneeHolds(target, ticket ? ['support.review', 'support.reply'] : ['disputes.view', 'disputes.resolve'])) return 0;
+  if (!target || !await assigneeHolds(target, ticket ? SUPPORT_PERMISSIONS : DISPUTE_PERMISSIONS)) return 0;
   const recipient = await prisma.user.findUnique({ where: { id: target }, select: { firstName: true, lastName: true } });
   if (!recipient) return 0;
   const assigneeName = [recipient.firstName, recipient.lastName].filter(Boolean).join(' ');

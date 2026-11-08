@@ -8,19 +8,25 @@ test('report intake, duplicates, private reading and one authorized decision', a
   const reportId = '22222222-2222-4222-8222-222222222222';
   let report: Record<string, unknown> | null = null;
   const audit: any[] = [];
-  let failAudit = false;
+  const notifications: any[] = [], emitted: string[] = [];
+  let failAudit = false, failNotification = false;
   const listQueries: any[] = [], countQueries: any[] = [];
   const prisma = {
     $transaction: async (work: Promise<unknown>[] | ((tx: any) => Promise<unknown>)) => {
       if (Array.isArray(work)) return Promise.all(work);
       const snapshot = report && { ...report };
-      const entries = audit.length;
+      const entries = audit.length, messages = notifications.length;
       try { return await work(prisma); }
-      catch (error) { report = snapshot; audit.length = entries; throw error; }
+      catch (error) { report = snapshot; audit.length = entries; notifications.length = messages; throw error; }
     },
     accountAuditLog: { create: async ({ data }: any) => {
       if (failAudit) throw new Error('audit store failed');
       audit.push(data);
+    } },
+    notification: { create: async ({ data }: any) => {
+      if (failNotification) throw new Error('notification store failed');
+      notifications.push(data);
+      return { id: 'notice-1' };
     } },
     user: { findFirst: async () => ({ id: targetId, firstName: 'Test', lastName: 'Account' }) },
     platformReport: {
@@ -51,6 +57,9 @@ test('report intake, duplicates, private reading and one authorized decision', a
     } as NonNullable<typeof req.adminActor>;
     next();
   };
+  t.mock.module('../services/notification.service', { namedExports: { notificationService: {
+    emitStored: async (id: string) => { emitted.push(id); throw new Error('live transport unavailable'); },
+  } } });
   t.mock.module('../config/db', { namedExports: { prisma } });
   t.mock.module('../middlewares/auth.middleware', { namedExports: { authenticate: auth, requireActiveUser: (_req: unknown, _res: unknown, next: () => void) => next() } });
   const { userPlatformReports, adminPlatformReports } = await import('./platform-reports.routes');
@@ -97,11 +106,25 @@ test('report intake, duplicates, private reading and one authorized decision', a
     assert.equal((await (await call('viewer', 'GET', detail)).json()).data.status, 'OPEN');
     assert.equal(audit.length, 0);
     failAudit = false;
+    assert.deepEqual(notifications, []);
+    assert.deepEqual(emitted, []);
+    failNotification = true;
+    assert.equal((await call('manager', 'PATCH', detail, decision)).status, 500);
+    assert.equal((await (await call('viewer', 'GET', detail)).json()).data.status, 'OPEN');
+    assert.equal(audit.length, 0);
+    assert.deepEqual(emitted, []);
+    failNotification = false;
     const result = await call('manager', 'PATCH', detail, decision);
     assert.equal(result.status, 200);
-    assert.equal((await result.json()).data.reviewerId, 'manager');
+    const saved = (await result.json()).data;
+    assert.equal(saved.reviewerId, 'manager');
     assert.equal((await call('manager', 'PATCH', detail, decision)).status, 409);
     assert.equal(audit.length, 1);
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].userId, 'user');
+    assert.deepEqual(notifications[0].metadata, { reportId, status: 'RESOLVED' });
+    assert.doesNotMatch(JSON.stringify(notifications[0]), /Reviewed internally|Detailed abuse report|Test Account|manager/);
+    assert.deepEqual(emitted, ['notice-1']);
     assert.equal(audit[0].userId, 'manager');
     assert.equal(audit[0].eventType, 'PLATFORM_REPORT_DECIDED');
     assert.equal(audit[0].source, 'ADMIN');

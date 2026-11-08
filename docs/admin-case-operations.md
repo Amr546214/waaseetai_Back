@@ -41,3 +41,11 @@ Only open/in-progress tickets without a staff reply can escalate; unresolved
 open or under-review disputes escalate after seven elapsed days. Cases with a
 previous manual escalation are skipped. Automatic assignment and its reason
 are recorded once in the audit log; no public reply or case-state change is made.
+
+## Preflight and final QA
+
+Run `node --import tsx src/scripts/check-case-sla.ts` with the intended settings and database before activation. The command only reads configuration and staff access; it never assigns cases, starts the scheduler, or prints staff IDs. Use a UTC cutoff ending in `Z` (for example `2026-11-08T15:00:00Z`). It reports `disabled`, `invalid` (with the setting name), `ineligible`, `scheduled`, or `ready`. Invalid or ineligible exits nonzero. A future cutoff is scheduled, not active. Leave the worker off until operations has selected eligible staff and approved the rollout cutoff.
+
+A saved report decision also creates one notification addressed to the reporter. The report decision, audit entry and notification commit together; the report text and private staff notes are not copied into the notification. Socket and optional mail delivery follow the existing notification preferences.
+
+After a separately approved dev deploy, sign in as a reporter, a report viewer, and a decision manager. File a report, verify that the viewer cannot decide, decide as the manager, verify the audit entry and one notification on the reporter's own account, then repeat the decision and verify it conflicts without a second notification. Check support attachment download as the ticket owner versus an outsider. Confirm the escalation queue and seven-day dispute filter with QA cases. Verify the scheduler with approved test assignees and the intended cutoff before leaving it enabled.

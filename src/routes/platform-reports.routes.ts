@@ -5,6 +5,8 @@ import { prisma } from '../config/db';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { requirePermission } from '../middlewares/admin-access.middleware';
 import { MARKET_VISIBLE_WHERE } from '../utils/market-visibility';
+import { logger } from '../config/logger';
+import { notificationService } from '../services/notification.service';
 import { adminAuditData } from '../services/admin-audit';
 import { AppError, zodAppError } from '../utils/app-error';
 
@@ -91,7 +93,7 @@ adminPlatformReports.patch('/:id', requirePermission('reports.manage'), async (r
     if (!input.success) throw zodAppError(input.error.issues, 'اختر القرار واكتب سببه.');
     const actor = req.user!;
     const { status, resolution } = input.data;
-    const data = await prisma.$transaction(async tx => {
+    const { data, notificationId } = await prisma.$transaction(async tx => {
       const saved = await tx.platformReport.updateMany({
         where: { id, status: 'OPEN' }, data: { status, resolution, reviewerId: actor.id, reviewedAt: new Date() },
       });
@@ -99,14 +101,25 @@ adminPlatformReports.patch('/:id', requirePermission('reports.manage'), async (r
         if (!(await tx.platformReport.findUnique({ where: { id }, select: { id: true } }))) throw errMissing();
         throw new AppError('تم اتخاذ قرار في البلاغ بالفعل. حدّث الصفحة.', 409);
       }
-      const report = await tx.platformReport.findUniqueOrThrow({ where: { id }, select: adminSelect });
+      const report = await tx.platformReport.findUniqueOrThrow({ where: { id }, select: { ...adminSelect, reporterId: true } });
       await tx.accountAuditLog.create({ data: adminAuditData({
         actor, userId: actor.id, eventType: 'PLATFORM_REPORT_DECIDED', title: 'قرار في بلاغ',
         summary: status === 'RESOLVED' ? 'تمت معالجة البلاغ' : 'تم رفض البلاغ',
         before: { status: 'OPEN' }, after: { status }, details: { reportId: id },
       }) });
-      return report;
+      const { reporterId, ...data } = report;
+      const notification = await tx.notification.create({ data: {
+        userId: reporterId, category: 'ALL', type: 'PLATFORM_REPORT_DECIDED',
+        title: status === 'RESOLVED' ? 'تمت مراجعة بلاغك' : 'تم إغلاق بلاغك',
+        message: status === 'RESOLVED'
+          ? 'تمت معالجة البلاغ الذي أرسلته.'
+          : 'تمت مراجعة البلاغ الذي أرسلته، ولم يُقبل البلاغ.',
+        metadata: { reportId: id, status },
+      }, select: { id: true } });
+      return { data, notificationId: notification.id };
     });
     res.json({ success: true, data });
+    // A real-time/mail delivery failure does not undo a durable in-app notification.
+    void notificationService.emitStored(notificationId).catch(() => logger.warn('[platform-reports] stored notification delivery failed'));
   } catch (error) { next(error); }
 });
