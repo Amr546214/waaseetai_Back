@@ -121,6 +121,8 @@ export async function runCaseSlaOnce(now = new Date()) {
 }
 
 let timer: ReturnType<typeof setInterval> | undefined;
+/** read-only: whether the escalation worker is running in this process */
+export const caseSlaSchedulerRunning = () => !!timer;
 export function startCaseSlaScheduler() {
   if (timer || !readCaseSlaConfig()) return;
   let running = false;

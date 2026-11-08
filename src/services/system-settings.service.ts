@@ -175,17 +175,19 @@ export class SystemSettingsService {
 	 */
 	private async deprecatedItems() {
 		const pick = (all: any[], key: string, label: string, fallback: string) => {
-			const i = all.find(x => x.key === key);
-			if (!i) return { key: key === 'cdn_storage' ? 'cdn' : 'backup', label, status: 'unavailable', detail: fallback, deprecated: true, replacedBy: 'technical-metrics' };
+			const i = all.find(x => x.key === key); const out = key === 'cdn_storage' ? 'cdn' : 'backup';
+			if (!i) return { key: out, label, status: 'unavailable', detail: fallback, deprecated: true, replacedBy: 'technical-metrics' };
 			const measured = i.status === 'measured';
-			return { key: key === 'cdn_storage' ? 'cdn' : 'backup', label, status: measured ? 'ok' : 'unavailable',
-				detail: measured ? `${i.value} ${i.unit} (آخر قراءة ${i.readAt})` : (i.reason || fallback), readAt: i.readAt, deprecated: true, replacedBy: 'technical-metrics' };
+			// backup: ok only when the job's own record is fresh; a stale or failed record is `down`; no data / unreadable is `unavailable`
+			const status = out === 'backup' ? (i.state === 'OK' ? 'ok' : i.state === 'STALE' || i.state === 'LAST_ATTEMPT_FAILED' ? 'down' : 'unavailable') : measured ? 'ok' : 'unavailable';
+			const detail = out === 'backup' ? (measured ? `${i.valueText}${i.detail ? ` — ${i.detail}` : ''}` : (i.reason || fallback)) : measured ? `${i.value} ${i.unit} (آخر قراءة ${i.readAt})` : (i.reason || fallback);
+			return { key: out, label, status, detail, readAt: i.readAt, deprecated: true, replacedBy: 'technical-metrics' };
 		};
 		let all: any[] = [];
 		try { all = await technicalMonitoring.cdnAndBackup(); } catch { /* fall back to the generic reason */ }
 		return [
 			pick(all, 'cdn_storage', 'CDN وتسليم الملفات', 'تعذّرت قراءة مؤشرات CDN؛ راجع صفحة CDN'),
-			pick(all, 'backup_last_success', 'النسخ الاحتياطي', 'مهمة النسخ لا تنشر حالتها للتطبيق؛ المطلوب ملف/نقطة حالة من المهمة'),
+			pick(all, 'backup_status', 'النسخ الاحتياطي', 'مهمة النسخ لا تنشر حالتها للتطبيق؛ المطلوب ملف/نقطة حالة من المهمة'),
 		];
 	}
 

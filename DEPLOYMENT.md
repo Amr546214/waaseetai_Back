@@ -73,6 +73,8 @@ Create a database backup before schema changes or upgrades:
 docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > backup-$(date +%F).sql
 ```
 
+After a scripted backup, record its outcome for the admin monitoring page with `scripts/backup-status.cjs` (contract: [docs/backup-status-contract.md](docs/backup-status-contract.md)); nothing records it automatically today.
+
 Keep `.env`, database backups, and uploaded secrets outside Git. The PostgreSQL data is stored in the `waseetai_postgres_data` Docker volume.
 
 ## Firewall / reverse proxy

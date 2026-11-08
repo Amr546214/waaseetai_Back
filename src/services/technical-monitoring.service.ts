@@ -1,7 +1,11 @@
 import { prisma } from '../config/db';
-import { assigneeHolds } from './admin-access.service';
-import { DISPUTE_PERMISSIONS, SUPPORT_PERMISSIONS } from './case-sla.service';
+import { actorHas, resolveAdminActor } from './admin-access.service';
+import { DISPUTE_PERMISSIONS, SUPPORT_PERMISSIONS, caseSlaSchedulerRunning } from './case-sla.service';
 import { LATENCY_EDGES, WINDOW_MINUTES, eventLoopDelay, requestMetrics } from './request-metrics';
+import { createHash } from 'node:crypto';
+import { hostname } from 'node:os';
+import { readBackupStatus, type Section } from './backup-status';
+import { infraSources } from './infra-sources';
 import { cloudinaryUsageConfigured, fetchCloudinaryUsage } from '../utils/cloudinary-storage';
 
 /**
@@ -9,9 +13,19 @@ import { cloudinaryUsageConfigured, fetchCloudinaryUsage } from '../utils/cloudi
  * Read-only: the database part only reads statistics views (bounded by a statement timeout); the provider part is one read-only usage call.
  */
 export type Indicator = {
-	key: string; group: 'api' | 'database' | 'backup' | 'cdn'; label: string; value: number | null; unit: string;
+	key: string; group: 'api' | 'database' | 'backup' | 'cdn' | 'infra'; label: string; value: number | null; unit: string;
 	status: 'measured' | 'unavailable' | 'error'; readAt: string; source: string; reason?: string;
+	/** WHAT exactly was measured (never "the server" for a single-process or single-container reading) */
+	scope: string;
+	/** categorical / date readings (state, last success time); `kind: 'datetime'` means valueText is an ISO time */
+	valueText?: string | null; kind?: 'datetime'; state?: string; detail?: string;
 };
+const SCOPES: Record<Indicator['group'], string> = {
+	api: 'عملية الخادم الحالية فقط (نسخة واحدة؛ لا تجميع بين النسخ)', database: 'قاعدة البيانات التي يتصل بها هذا الخادم', backup: 'آخر ما سجّلته مهمة النسخ في ملف الحالة',
+	cdn: 'حساب Cloudinary المرتبط', infra: 'حسب المصدر',
+};
+const INSTANCE_ID = createHash('sha256').update(hostname()).digest('hex').slice(0, 6); // an opaque label, never the host name
+type Extra = { scope?: string; valueText?: string | null; kind?: 'datetime'; state?: string; detail?: string };
 const CACHE_MS = 15_000, CDN_CACHE_MS = 5 * 60_000, QUERY_TIMEOUT_MS = 3_000, PROVIDER_TIMEOUT_MS = 6_000;
 
 const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T> => new Promise((res, rej) => {
@@ -48,8 +62,11 @@ export class TechnicalMonitoringService {
 		if (this.inflight) return this.inflight;
 		this.inflight = (async () => {
 			try {
-				const [database, cdn] = await Promise.all([this.database(), this.cdn()]);
-				const data = { generatedAt: this.deps.now().toISOString(), cacheSeconds: CACHE_MS / 1000, windowMinutes: WINDOW_MINUTES, indicators: [...this.api(), ...database, ...this.backup(), ...cdn] };
+				const [database, cdn, backup, own, ext] = await Promise.all([this.database(), this.cdn(), this.backup(), infraSources.container(), infraSources.external()]);
+				const infra = [...own, ...ext].map(r => ({ ...r } as Indicator));
+				const data = { generatedAt: this.deps.now().toISOString(), cacheSeconds: CACHE_MS / 1000, windowMinutes: WINDOW_MINUTES,
+					instance: { id: INSTANCE_ID, startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(), note: 'قراءات API والحاوية تخص هذه النسخة وحدها؛ لا يوجد تجميع بين النسخ ولا سجل تاريخي (يلزم مخزن سلاسل زمنية)' },
+					indicators: [...this.api(), ...database, ...backup, ...cdn, ...infra] };
 				this.cache = { at: this.deps.now().getTime(), data };
 				return data;
 			} finally { this.inflight = null; }
@@ -57,9 +74,10 @@ export class TechnicalMonitoringService {
 		return this.inflight;
 	}
 
-	private ind(key: string, group: Indicator['group'], label: string, unit: string, value: number | null, source: string, reason?: string, status?: Indicator['status']): Indicator {
-		const st = status ?? (value === null ? 'unavailable' : 'measured');
-		return { key, group, label, value, unit, status: st, readAt: this.deps.now().toISOString(), source, ...(reason ? { reason } : {}) };
+	private ind(key: string, group: Indicator['group'], label: string, unit: string, value: number | null, source: string, reason?: string, status?: Indicator['status'], x: Extra = {}): Indicator {
+		const st = status ?? (value === null && !x.valueText ? 'unavailable' : 'measured');
+		const { scope, ...rest } = x;
+		return { key, group, label, value, unit, status: st, readAt: this.deps.now().toISOString(), source, scope: scope ?? SCOPES[group], ...(reason ? { reason } : {}), ...rest };
 	}
 
 	private api(): Indicator[] {
@@ -132,15 +150,35 @@ export class TechnicalMonitoringService {
 	}
 
 	/** the two indicators the deprecated /health items mirror: no database queries, the provider reading comes from the same 5-minute cache as technical-metrics */
-	async cdnAndBackup(): Promise<Indicator[]> { return [...(await this.cdn()), ...this.backup()]; }
+	async cdnAndBackup(): Promise<Indicator[]> {
+		if (this.cache && this.deps.now().getTime() - this.cache.at < CACHE_MS) return (this.cache.data.indicators as Indicator[]).filter(i => i.group === 'cdn' || i.group === 'backup');
+		return [...(await this.cdn()), ...(await this.backup())]; }
 
-	private backup(): Indicator[] {
-		const reason = 'مهمة النسخ الاحتياطي تعمل خارج التطبيق ولا تنشر وقت آخر نجاح؛ المطلوب ملف حالة أو نقطة قراءة من مهمة النسخ (وقت آخر نجاح، الحجم، نتيجة اختبار الاستعادة)';
-		return [
-			this.ind('backup_last_success', 'backup', 'وقت آخر نسخة احتياطية ناجحة', 'تاريخ', null, 'لا يوجد سجل نسخ يقرأه التطبيق', reason),
-			this.ind('backup_size', 'backup', 'حجم آخر نسخة', 'MB', null, 'لا يوجد سجل نسخ يقرأه التطبيق', reason),
-			this.ind('backup_restore_test', 'backup', 'نتيجة آخر اختبار استعادة', 'تاريخ', null, 'لا يوجد سجل نسخ يقرأه التطبيق', reason),
-		];
+	private async backup(): Promise<Indicator[]> {
+		const B = 'backup' as const, S = 'ملف حالة تكتبه مهمة النسخ (BACKUP_STATUS_FILE)';
+		const r = await readBackupStatus(process.env, this.deps.now());
+		const label: Record<string, string> = { OK: 'سليمة', STALE: 'قديمة', LAST_ATTEMPT_FAILED: 'آخر محاولة فشلت', NO_DATA: 'لا بيانات', UNREADABLE: 'ملف الحالة غير صالح' };
+		const FAILS: Record<string, string> = { DUMP_FAILED: 'فشل أخذ النسخة', DISK_FULL: 'امتلاء القرص', DB_UNREACHABLE: 'تعذّر الوصول لقاعدة البيانات', UPLOAD_FAILED: 'فشل رفع النسخة', UNKNOWN: 'سبب غير مصنَّف' };
+		const CHECKS: Record<string, string> = { SCHEMA_OK: 'سلامة المخطط', ROW_COUNTS_OK: 'تطابق أعداد الصفوف', CHECKSUM_OK: 'تطابق المجموع الاختباري', RESTORE_FAILED: 'فشلت الاستعادة', COUNT_MISMATCH: 'عدم تطابق الأعداد', UNKNOWN: 'غير مصنَّف' };
+		const contract = 'مهمة النسخ لا تنشر حالتها بعد؛ المطلوب أن تكتب ملف الحالة (docs/backup-status-contract.md) وأن تُضبط BACKUP_STATUS_FILE';
+		const out: Indicator[] = [];
+		const section = (pre: 'backup' | 'restore', title: string, sec: Section, staleUnit: string) => {
+			const none = sec.state === 'NO_DATA', bad = sec.state === 'UNREADABLE';
+			const reason = none ? contract : bad ? 'ملف الحالة تالف أو غير صالح أو أكبر من الحد أو غير قابل للقراءة' : undefined;
+			const detail = sec.state === 'STALE' ? `آخر نجاح أقدم من ${staleUnit}` : sec.state === 'LAST_ATTEMPT_FAILED' ? (pre === 'backup' ? `فشلت المحاولة الأخيرة: ${FAILS[sec.failureCode ?? 'UNKNOWN']}` : `فشل اختبار الاستعادة: ${CHECKS[sec.check ?? 'UNKNOWN']}`) : sec.state === 'OK' && sec.check ? CHECKS[sec.check] : undefined;
+			out.push(this.ind(`${pre}_status`, B, `حالة ${title}`, '', null, S, reason, none || bad ? 'unavailable' : 'measured', { valueText: none || bad ? null : label[sec.state], state: sec.state, ...(detail ? { detail } : {}) }));
+			const dt = (key: string, lab: string, v: string | null, why: string) => out.push(this.ind(key, B, lab, '', null, S, v ? undefined : why, v ? 'measured' : 'unavailable', v ? { valueText: v, kind: 'datetime' } : {}));
+			return { dt };
+		};
+		const b = section('backup', 'النسخ الاحتياطي', r.backup, `${r.backup.staleAfterHours} ساعة`);
+		b.dt('backup_last_success', 'وقت آخر نسخة ناجحة', r.backup.lastSuccessAt, r.backup.state === 'UNREADABLE' ? 'ملف الحالة غير صالح' : 'لا نسخة ناجحة مسجّلة؛ ' + contract);
+		const ageH = r.backup.lastSuccessAt ? Math.max(0, round((this.deps.now().getTime() - Date.parse(r.backup.lastSuccessAt)) / 3_600_000)) : null;
+		out.push(this.ind('backup_age', B, 'عمر آخر نسخة ناجحة', 'ساعة', ageH, S, ageH === null ? 'لا نسخة ناجحة مسجّلة' : undefined));
+		out.push(this.ind('backup_size', B, 'حجم آخر نسخة ناجحة', 'MB', r.backup.sizeBytes != null ? round(r.backup.sizeBytes / 1048576) : null, S, r.backup.sizeBytes != null ? undefined : r.backup.state === 'NO_DATA' ? contract : 'الحجم غير مسجّل في ملف الحالة'));
+		b.dt('backup_last_attempt', 'وقت آخر محاولة نسخ', r.backup.attemptAt, 'لا محاولة مسجّلة في ملف الحالة');
+		const rs = section('restore', 'اختبار الاستعادة', r.restoreTest, `${Math.round(r.restoreTest.staleAfterHours / 24)} أيام`);
+		rs.dt('restore_last_success', 'وقت آخر اختبار استعادة ناجح', r.restoreTest.lastSuccessAt, 'لا اختبار استعادة ناجح مسجّل؛ يلزم أن تسجّله مهمة النسخ');
+		return out;
 	}
 
 	private async cdn(): Promise<Indicator[]> {
@@ -175,26 +213,55 @@ export class TechnicalMonitoringService {
 		const hoursRaw = env.SUPPORT_SLA_FIRST_REPLY_HOURS;
 		const hoursList = hoursRaw ? hoursRaw.split(',').map(Number) : null;
 		const hoursOk = !!hoursList && hoursList.length === 4 && hoursList.every(h => Number.isFinite(h) && h >= 1 && h <= 720);
-		const owner = async (id: string | undefined, perms: string[]) => {
+		const DEFAULT_HOURS = [48, 24, 8, 2];
+		/** why an assignee would (not) be accepted: the same rule as assigneeHolds, with the precise reason; never echoes the id or any account detail */
+		const owner = async (id: string | undefined, perms: string[]): Promise<{ defined: boolean; state: string; missing: string[] }> => {
 			const t = id?.trim();
-			if (!t) return { defined: false, holds: null as boolean | null };
-			try { return { defined: true, holds: await assigneeHolds(t, perms) }; } catch { return { defined: true, holds: null }; }
+			if (!t) return { defined: false, state: 'MISSING', missing: [] };
+			try {
+				const u = await prisma.user.findUnique({ where: { id: t }, select: { accountType: true, status: true } });
+				if (!u) return { defined: true, state: 'NOT_FOUND', missing: [] };
+				if (u.status !== 'ACTIVE') return { defined: true, state: 'INACTIVE', missing: [] };
+				if (u.accountType !== 'ADMIN' && u.accountType !== 'SUPER_ADMIN') return { defined: true, state: 'NOT_STAFF', missing: [] };
+				const actor = await resolveAdminActor(t, u.accountType);
+				if (actor.isSuperAdmin) return { defined: true, state: 'ELIGIBLE', missing: [] };
+				if (!actor.staffId) return { defined: true, state: 'NOT_STAFF', missing: [] };
+				if (actor.staffStatus !== 'ACTIVE') return { defined: true, state: 'STAFF_INACTIVE', missing: [] };
+				const missing = perms.filter(p => !actorHas(actor, p));
+				return { defined: true, state: missing.length ? 'LACKS_PERMISSION' : 'ELIGIBLE', missing };
+			} catch { return { defined: true, state: 'UNKNOWN', missing: [] }; }
 		};
 		const [sup, dis] = await Promise.all([owner(env.SUPPORT_SLA_TARGET_ADMIN_ID, SUPPORT_PERMISSIONS), owner(env.DISPUTE_SLA_TARGET_ADMIN_ID, DISPUTE_PERMISSIONS)]);
+		const REASON: Record<string, string> = { MISSING: 'لم يُحدَّد مسؤول', NOT_FOUND: 'الحساب المحدد غير موجود', INACTIVE: 'الحساب غير نشط', NOT_STAFF: 'الحساب ليس عضو فريق إداري', STAFF_INACTIVE: 'عضو الفريق غير نشط', ELIGIBLE: 'نشط ويملك الصلاحيات المطلوبة', UNKNOWN: 'تعذّر التحقق' };
+		const assignee = (o: { state: string; missing: string[] }) => ({ state: o.state, reason: o.state === 'LACKS_PERMISSION' ? `لا يملك الصلاحية: ${o.missing.join('، ')}` : REASON[o.state], missingPermissions: o.missing });
+		const hoursSource = !hoursRaw ? 'default' : hoursOk ? 'explicit' : 'invalid';
+		const hours = hoursSource === 'explicit' ? hoursList! : DEFAULT_HOURS;
 		const pre = (key: string, label: string, met: boolean | null, detail: string) => ({ key, label, met, detail });
-		const holdsDetail = (o: { defined: boolean; holds: boolean | null }, perms: string[]) => !o.defined ? 'لا يوجد مسؤول معرّف' : o.holds === null ? 'تعذّر التحقق من الصلاحيات' : o.holds ? 'نشط ويملك الصلاحيات المطلوبة' : `غير نشط أو لا يملك: ${perms.join('، ')}`;
 		const preconditions = [
 			pre('support_owner', 'مسؤول تذاكر الدعم معرّف', sup.defined, sup.defined ? 'معرّف' : 'غير معرّف (SUPPORT_SLA_TARGET_ADMIN_ID)'),
-			pre('support_perms', 'مسؤول الدعم يملك الصلاحيات المطلوبة', sup.defined ? sup.holds : false, holdsDetail(sup, SUPPORT_PERMISSIONS)),
+			pre('support_perms', 'مسؤول الدعم موجود ونشط ويملك الصلاحيات المطلوبة', sup.state === 'UNKNOWN' ? null : sup.state === 'ELIGIBLE', assignee(sup).reason),
 			pre('disputes_owner', 'مسؤول النزاعات معرّف', dis.defined, dis.defined ? 'معرّف' : 'غير معرّف (DISPUTE_SLA_TARGET_ADMIN_ID)'),
-			pre('disputes_perms', 'مسؤول النزاعات يملك الصلاحيات المطلوبة', dis.defined ? dis.holds : false, holdsDetail(dis, DISPUTE_PERMISSIONS)),
-			pre('hours', 'مهل أول رد محددة صراحةً لكل أولوية', hoursOk, hoursOk ? 'محددة' : hoursRaw ? 'قيمة غير صالحة (أربع قيم بين 1 و720 ساعة)' : 'غير محددة؛ ستُطبَّق القيم الافتراضية 48/24/8/2 ساعة ما لم تُحدَّد'),
-			pre('start_date', 'تاريخ بدء الاحتساب محدد', fromOk, fromOk ? 'محدد' : 'غير محدد أو غير صالح (CASE_SLA_FROM)'),
+			pre('disputes_perms', 'مسؤول النزاعات موجود ونشط ويملك الصلاحيات المطلوبة', dis.state === 'UNKNOWN' ? null : dis.state === 'ELIGIBLE', assignee(dis).reason),
+			pre('hours', 'مهل أول رد محددة صراحةً لكل أولوية', hoursSource === 'explicit', hoursSource === 'explicit' ? 'محددة صراحةً' : hoursSource === 'invalid' ? 'قيمة غير صالحة (أربع قيم بين 1 و720 ساعة)؛ لن تُقبل' : 'غير محددة؛ ستُطبَّق القيم الافتراضية 48/24/8/2 ساعة ما لم تُحدَّد'),
+			pre('start_date', 'تاريخ بدء الاحتساب (UTC) محدد', fromOk, fromOk ? 'محدد' : 'غير محدد أو غير صالح (CASE_SLA_FROM)'),
 		];
+		const decisions = [
+			['support_assignee', 'من هو مسؤول تذاكر الدعم الذي تُسند إليه التذاكر المتأخرة؟'], ['disputes_assignee', 'من هو مسؤول النزاعات الذي تُسند إليه النزاعات المتأخرة؟'],
+			['hours', 'مهل أول رد لكل أولوية (منخفضة / عادية / عالية / عاجلة)؟ الافتراضي 48/24/8/2 ساعة'], ['start_date', 'تاريخ بدء الاحتساب بتوقيت UTC (لا تُصعَّد الحالات الأقدم منه)؟'],
+			['disputes_168', 'هل تبقى قاعدة النزاعات 168 ساعة (7 أيام) ثابتة لكل الأولويات؟'], ['open_at_all', 'هل يُفتح التصعيد الآلي أصلًا؟'],
+		].map(([key, label]) => ({ key, label, status: 'open' as const }));
 		return {
-			readAt, automaticEscalation: enabled ? 'configured_on' : 'closed', enabled,
+			readAt, automaticEscalation: enabled ? 'configured_on' : 'closed', enabled, schedulerRunning: caseSlaSchedulerRunning(),
 			summary: enabled ? 'التصعيد الآلي مفعّل بإعدادات الخادم (لا يمكن تغييره من هذه الصفحة)' : 'التصعيد الآلي مقفول',
+			statement: 'لا يُسند شيء ولا يُرسل أي إشعار من هذه الصفحة؛ هذه قراءة فقط.',
 			ready: preconditions.every(p => p.met === true), preconditions,
+			assignees: { support: assignee(sup), disputes: assignee(dis) },
+			startDate: { valid: fromOk, utc: fromOk ? new Date(fromRaw).toISOString() : null },
+			rules: {
+				supportFirstReply: { source: hoursSource, hours: { low: hours[0], normal: hours[1], high: hours[2], urgent: hours[3] }, note: hoursSource === 'explicit' ? 'من إعداد صريح' : hoursSource === 'invalid' ? 'الإعداد غير صالح؛ لا يُقبل ولا يُفتح التصعيد به' : 'القيم الافتراضية المضمّنة في الكود (لم يُحدَّد إعداد)' },
+				disputes: { hours: 168, fixed: true, note: '7 أيام، ثابتة في الكود ولا تتغير بحسب الأولوية' },
+			},
+			decisions,
 			supportPermissions: SUPPORT_PERMISSIONS, disputePermissions: DISPUTE_PERMISSIONS,
 			source: 'قراءة فقط من إعدادات الخادم وصلاحيات الحسابات؛ لا يُسند ولا يُجدول شيئًا',
 		};
