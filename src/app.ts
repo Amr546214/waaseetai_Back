@@ -1,6 +1,7 @@
 import { startCaseSlaScheduler } from './services/case-sla.service';
 import { adminPlatformReports, userPlatformReports } from './routes/platform-reports.routes';
 import adminNotificationHistory from './routes/admin-notification-history.routes';
+import adminNotificationTemplates from './routes/admin-notification-templates.routes';
 import { startChatDigestScheduler } from './services/chat-digest.service';
 import express, { Request, Response, NextFunction } from 'express';
 import { maintenanceMiddleware } from './middlewares/maintenance.middleware';
@@ -369,6 +370,7 @@ mountAppRoute('/admin/special-offers', adminSpecialOffersRouter);
 mountAppRoute('/api/reports', userPlatformReports);
 mountAppRoute('/api/admin/reports', adminPlatformReports);
 mountAppRoute('/api/admin/notification-history', adminNotificationHistory);
+mountAppRoute('/api/admin/notification-templates', adminNotificationTemplates);
 mountAppRoute('/admin/reports', adminPlatformReports);
 mountAppRoute('/api/admin/tickets', adminTicketsRoutes);
 mountAppRoute('/admin/tickets', adminTicketsRoutes);
