@@ -4,6 +4,7 @@
  */
 export const AUDIT_ACTION_LABELS: Record<string, string> = {
 	BROADCAST_SENT: 'إشعار جماعي داخل المنصة',
+	BROADCAST_CANCELLED: 'إلغاء إرسال جماعي',
 	BROADCAST_RETRIED: 'إعادة إرسال إشعار جماعي',
 	PLATFORM_REPORT_DECIDED: 'قرار في بلاغ',
 	// sessions / own account

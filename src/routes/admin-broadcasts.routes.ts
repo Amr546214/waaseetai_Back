@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { requireSuperAdmin } from '../middlewares/admin-access.middleware';
 import { AppError, zodAppError } from '../utils/app-error';
-import { activeBroadcast, DraftConflict, isBroadcastWorkerEnabled, drafts, historyDetail, listHistory, previewDraft, retryRemaining, sendBroadcast, validIdempotencyKey } from '../services/admin-broadcast.service';
+import { activeBroadcast, cancelBroadcast, DraftConflict, queueReview, queueSummary, isBroadcastWorkerEnabled, drafts, historyDetail, listHistory, previewDraft, retryRemaining, sendBroadcast, validIdempotencyKey } from '../services/admin-broadcast.service';
 
 // Permission choice: Super Admin only (requireSuperAdmin), like the audience preview (#227), templates and notification history. No registry permission fits "message a whole audience",
 // and a broadcast is irreversible, so it is not delegable to staff roles.
@@ -87,11 +87,22 @@ router.get('/', async (req, res, next) => {
 	} catch (e) { next(e); }
 });
 router.get('/status', (_req, res) => { res.json({ success: true, data: { deliveryEnabled: isBroadcastWorkerEnabled() } }); });
+router.get('/queue/summary', async (_req, res, next) => { try { res.json({ success: true, data: await queueSummary() }); } catch (e) { next(e); } });
+router.get('/queue', async (_req, res, next) => { try { res.json({ success: true, data: await queueReview() }); } catch (e) { next(e); } });
 router.get('/active', async (req, res, next) => {
 	try { res.json({ success: true, data: await activeBroadcast(me(req)) }); } catch (e) { next(e); }
 });
 router.get('/:id', async (req, res, next) => {
 	try { res.json({ success: true, data: await historyDetail(uuid(req.params.id, 'الإشعار الجماعي غير موجود.')) }); } catch (e) { next(e); }
+});
+const cancelBody = z.object({ reason: z.string().trim().max(200).optional() }).strict();
+router.post('/:id/cancel', async (req, res, next) => {
+	try {
+		const id = uuid(req.params.id, 'الإشعار الجماعي غير موجود.');
+		const parsed = cancelBody.safeParse(req.body ?? {});
+		if (!parsed.success) throw new AppError('سبب الإلغاء أطول من 200 حرفًا.', 400);
+		res.json({ success: true, data: await cancelBroadcast(me(req), id, parsed.data.reason) });
+	} catch (e) { next(e); }
 });
 router.post('/:id/retry', async (req, res, next) => {
 	try { res.json({ success: true, data: await retryRemaining(me(req), uuid(req.params.id, 'الإشعار الجماعي غير موجود.')) }); } catch (e) { next(e); }

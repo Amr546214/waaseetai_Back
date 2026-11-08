@@ -22,6 +22,10 @@ type Tx = Prisma.TransactionClient;
 /** Seam for tests (fault injection). Production never reassigns it. */
 export const broadcastDeps = {
 	chunkSize: 200,
+	/** QUEUED/SENDING with progress and no heartbeat for this long = stopped mid-run */
+	stuckMidRunMs: 10 * 60_000,
+	/** QUEUED this long with the worker ON and no progress = stuck without progress */
+	stuckNoProgressMs: 60 * 60_000,
 	leaseMs: 60_000,
 	/** test seam: runs after each committed chunk; WorkerCrash simulates a death holding the lease */
 	afterChunk: undefined as undefined | ((broadcastId: string) => void | Promise<void>),
@@ -127,16 +131,16 @@ const errorCodeOf = (e: unknown): string => {
 
 async function recipientCounts(ids: string[]) {
 	const rows = ids.length ? await prisma.broadcastRecipient.groupBy({ by: ['broadcastId', 'status'], where: { broadcastId: { in: ids } }, _count: { _all: true } }) : [];
-	const map = new Map<string, { SENT: number; FAILED: number; PENDING: number }>();
-	for (const id of ids) map.set(id, { SENT: 0, FAILED: 0, PENDING: 0 });
+	const map = new Map<string, { SENT: number; FAILED: number; PENDING: number; CANCELLED: number }>();
+	for (const id of ids) map.set(id, { SENT: 0, FAILED: 0, PENDING: 0, CANCELLED: 0 });
 	for (const r of rows) map.get(r.broadcastId)![r.status] = r._count._all;
 	return map;
 }
 const listSelect = { id: true, senderId: true, senderName: true, title: true, category: true, audience: true, audienceCount: true, status: true, createdAt: true, completedAt: true, heartbeatAt: true } as const;
 type ListRow = Prisma.BroadcastGetPayload<{ select: typeof listSelect }>;
-const view = (b: ListRow, c: { SENT: number; FAILED: number; PENDING: number }) => ({
+const view = (b: ListRow, c: { SENT: number; FAILED: number; PENDING: number; CANCELLED: number }) => ({
 	id: b.id, sender: { id: b.senderId, name: b.senderName }, title: b.title, category: b.category, audience: b.audience, status: b.status,
-	totals: { audience: b.audienceCount, sent: c.SENT, failed: c.FAILED, pending: c.PENDING }, createdAt: b.createdAt, completedAt: b.completedAt, lastProgressAt: b.heartbeatAt,
+	totals: { audience: b.audienceCount, sent: c.SENT, failed: c.FAILED, pending: c.PENDING, cancelled: c.CANCELLED }, createdAt: b.createdAt, completedAt: b.completedAt, lastProgressAt: b.heartbeatAt,
 });
 
 /** Thrown by the test seam to simulate a worker that dies mid-job (holding its lease). Never caught by the worker loop. */
@@ -312,6 +316,7 @@ export async function retryRemaining(adminId: string, id: string) {
 	await prisma.$transaction(async tx => {
 		await lock(tx, id);
 		const b = await tx.broadcast.findUniqueOrThrow({ where: { id }, select: { status: true } });
+		if (b.status === 'CANCELLED') throw new AppError('أُلغي هذا الإرسال ولا يمكن إعادته.', 409, undefined, 'BROADCAST_CANCELLED');
 		if (b.status === 'COMPLETED') throw new AppError('اكتمل الإرسال لكل المستلمين. لا يوجد ما يُعاد.', 409, undefined, 'BROADCAST_NOTHING_TO_RETRY');
 		if (b.status === 'QUEUED' || b.status === 'SENDING') throw new AppError('الإرسال جارٍ أو في قائمة الانتظار. انتظر انتهاءه.', 409, undefined, 'BROADCAST_IN_PROGRESS');
 		await tx.broadcastRecipient.updateMany({ where: { broadcastId: id, status: 'FAILED' }, data: { status: 'PENDING' } });
@@ -345,3 +350,52 @@ export async function historyDetail(id: string) {
 
 /** test seam: deliver as a given owner without claiming (to prove a non-owner stops) */
 export const processBroadcastForTest = processBroadcast;
+
+// ---- queue review ---------------------------------------------------------------------------------------------------------------------------------
+export type QueueState = 'WAITING_WORKER_DISABLED' | 'WAITING_FOR_WORKER' | 'RUNNING' | 'STUCK_STOPPED_MID_RUN' | 'STUCK_NO_PROGRESS';
+export function classifyQueueState(b: { status: string; createdAt: Date; heartbeatAt: Date | null; leaseUntil: Date | null }, progressed: boolean, now: Date, workerEnabled: boolean): QueueState {
+	const t = now.getTime();
+	const quiet = t - (b.heartbeatAt ?? b.createdAt).getTime(); // time since the last sign of life
+	if (b.status === 'SENDING' && b.leaseUntil && b.leaseUntil.getTime() > t) return 'RUNNING';
+	if ((b.status === 'SENDING' || progressed) && quiet > broadcastDeps.stuckMidRunMs) return 'STUCK_STOPPED_MID_RUN';
+	if (!workerEnabled) return 'WAITING_WORKER_DISABLED';
+	if (b.status === 'QUEUED' && !progressed && t - b.createdAt.getTime() > broadcastDeps.stuckNoProgressMs) return 'STUCK_NO_PROGRESS';
+	return 'WAITING_FOR_WORKER';
+}
+const queueSelect = { ...listSelect, leaseUntil: true } as const;
+async function queueRows() {
+	const rows = await prisma.broadcast.findMany({ where: { status: { in: ['QUEUED', 'SENDING'] } }, select: queueSelect, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 100 });
+	const counts = await recipientCounts(rows.map(r => r.id));
+	const now = new Date(); const enabled = isBroadcastWorkerEnabled();
+	return rows.map(b => {
+		const c = counts.get(b.id)!; const queueState = classifyQueueState(b, c.SENT + c.FAILED > 0, now, enabled);
+		const { title: _t, ...rest } = view(b, c);
+		return { ...rest, title: b.title, queueState, stale: queueState.startsWith('STUCK'), waitingSeconds: b.status === 'QUEUED' ? Math.max(0, Math.floor((now.getTime() - b.createdAt.getTime()) / 1000)) : null, heartbeatAt: b.heartbeatAt, leaseUntil: b.leaseUntil };
+	});
+}
+function summarizeQueue(items: Awaited<ReturnType<typeof queueRows>>) {
+	const n = (s: QueueState) => items.filter(i => i.queueState === s).length;
+	const waiting = items.filter(i => i.queueState === 'WAITING_WORKER_DISABLED' || i.queueState === 'WAITING_FOR_WORKER' || i.status === 'QUEUED');
+	const ages = waiting.map(i => i.waitingSeconds).filter((x): x is number => x !== null);
+	return { waitingDisabled: n('WAITING_WORKER_DISABLED'), waitingForWorker: n('WAITING_FOR_WORKER'), running: n('RUNNING'), stuckMidRun: n('STUCK_STOPPED_MID_RUN'), stuckNoProgress: n('STUCK_NO_PROGRESS'), oldestWaitingSeconds: ages.length ? Math.max(...ages) : null, workerEnabled: isBroadcastWorkerEnabled() };
+}
+export async function queueReview() { const items = await queueRows(); return { items, summary: summarizeQueue(items) }; }
+export async function queueSummary() { return summarizeQueue(await queueRows()); }
+
+/** Cancels a QUEUED job or a stuck/stopped SENDING job. SENT recipients are never touched; a live lease is respected. Idempotent. */
+export async function cancelBroadcast(adminId: string, id: string, reason?: string) {
+	const found = await prisma.broadcast.findUnique({ where: { id }, select: { id: true } });
+	if (!found) throw new AppError('الإشعار الجماعي غير موجود.', 404);
+	const changed = await prisma.$transaction(async tx => {
+		await lock(tx, id);
+		const b = await tx.broadcast.findUniqueOrThrow({ where: { id }, select: { status: true, leaseUntil: true } });
+		if (b.status === 'CANCELLED') return false;
+		if (b.status !== 'QUEUED' && b.status !== 'SENDING') throw new AppError('لا يمكن إلغاء إرسال انتهى.', 409, undefined, 'BROADCAST_NOT_CANCELLABLE');
+		if (b.status === 'SENDING' && b.leaseUntil && b.leaseUntil.getTime() > Date.now()) throw new AppError('الإرسال يعمل الآن بواسطة العامل. لا يمكن إلغاؤه أثناء التنفيذ.', 409, undefined, 'BROADCAST_RUNNING');
+		await tx.broadcastRecipient.updateMany({ where: { broadcastId: id, status: 'PENDING' }, data: { status: 'CANCELLED', updatedAt: new Date() } });
+		await tx.broadcast.update({ where: { id }, data: { status: 'CANCELLED', completedAt: new Date(), cancelledAt: new Date(), cancelledById: adminId, cancelReason: reason || null, leaseOwner: null, leaseUntil: null } });
+		return true;
+	});
+	if (changed) await adminAudit.record({ adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_CANCELLED', title: 'إلغاء إرسال جماعي', summary: 'ألغى مدير النظام إرسالًا جماعيًا لم يكتمل.', severity: 'WARNING', details: reason ? { reason } : undefined });
+	return summary(id);
+}

@@ -1,7 +1,7 @@
 -- Admin broadcast: server-side drafts, confirmed idempotent in-platform sends, per-recipient status. Additive only.
 CREATE TYPE "BroadcastAudience" AS ENUM ('CLIENTS', 'PROVIDERS', 'MARKETERS');
-CREATE TYPE "BroadcastStatus" AS ENUM ('QUEUED', 'SENDING', 'PARTIAL', 'COMPLETED', 'FAILED');
-CREATE TYPE "BroadcastRecipientStatus" AS ENUM ('PENDING', 'SENT', 'FAILED');
+CREATE TYPE "BroadcastStatus" AS ENUM ('QUEUED', 'SENDING', 'PARTIAL', 'COMPLETED', 'FAILED', 'CANCELLED');
+CREATE TYPE "BroadcastRecipientStatus" AS ENUM ('PENDING', 'SENT', 'FAILED', 'CANCELLED');
 
 CREATE TABLE "broadcast_drafts" (
   "id" TEXT PRIMARY KEY,
@@ -35,6 +35,9 @@ CREATE TABLE "broadcasts" (
   "leaseOwner" VARCHAR(64),
   "leaseUntil" TIMESTAMP(3),
   "heartbeatAt" TIMESTAMP(3),
+  "cancelledAt" TIMESTAMP(3),
+  "cancelledById" VARCHAR(64),
+  "cancelReason" VARCHAR(200),
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "completedAt" TIMESTAMP(3)
 );

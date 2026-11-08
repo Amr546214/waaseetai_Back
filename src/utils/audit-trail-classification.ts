@@ -21,7 +21,7 @@ export const AUDIT_CLASSES: AuditClass[] = [
 	{ id: 'credential-change', severity: 'WARNING', reason: 'تغيير وسيلة دخول أو استلام أموال، أو إنهاء كل الجلسات', codes: ['PASSWORD_CHANGED', 'PAYPAL_EMAIL_CHANGED', 'SESSIONS_REVOKED_ALL'] },
 	{ id: 'financial-decision', severity: 'WARNING', reason: 'قرار أو حركة مالية أو تصدير بيانات مالية', codes: ['WITHDRAWAL_APPROVED', 'WITHDRAWAL_REJECTED', 'STAGE_FUND_RELEASED', 'FINANCE_EXPORT', 'AMENDMENT_APPLIED'] },
 	{ id: 'sensitive-access-delete', severity: 'WARNING', reason: 'اطلاع على وثيقة هوية أو حذف عنصر من الدليل', codes: ['KYC_DOCUMENT_VIEWED_BY_ADMIN', 'CATEGORY_DELETED', 'SPECIALTY_DELETED', 'MARKETPLACE_SERVICE_REJECT', 'MARKETPLACE_SERVICE_HIDE'] },
-	{ id: 'mass-notification', severity: 'WARNING', reason: 'إشعار جماعي يصل إلى فئة كاملة من المستخدمين', codes: ['BROADCAST_SENT', 'BROADCAST_RETRIED'] },
+	{ id: 'mass-notification', severity: 'WARNING', reason: 'إشعار جماعي يصل إلى فئة كاملة من المستخدمين', codes: ['BROADCAST_SENT', 'BROADCAST_RETRIED', 'BROADCAST_CANCELLED'] },
 	{ id: 'case-decision', severity: 'INFO', reason: 'قرار إداري يغلق البلاغ دون إجراء تلقائي على العنصر المبلّغ عنه', codes: ['PLATFORM_REPORT_DECIDED'] },
 	{ id: 'routine', severity: 'INFO', reason: 'نشاط اعتيادي أو قابل للتراجع أو قراءة فقط', codes: [
 		'SESSION_STARTED', 'SESSION_LOGOUT', 'SESSION_REVOKED', 'SESSIONS_REVOKED_OTHERS', 'OTP_VERIFIED', 'PASSWORD_CHANGE_REQUESTED', 'SENSITIVE_CHANGE_REQUESTED', 'PROFILE_UPDATED', 'ROLE_SWITCHED', 'ROLE_ADDED', 'WALLET_DEPOSIT_COMPLETED',

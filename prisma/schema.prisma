@@ -3406,12 +3406,14 @@ enum BroadcastStatus {
   PARTIAL
   COMPLETED
   FAILED
+  CANCELLED
 }
 
 enum BroadcastRecipientStatus {
   PENDING
   SENT
   FAILED
+  CANCELLED
 }
 
 // A Super Admin's server-side broadcast draft. Private to its owner; `version` is the optimistic-concurrency token.
@@ -3455,6 +3457,9 @@ model Broadcast {
   leaseOwner       String?              @db.VarChar(64)
   leaseUntil       DateTime?
   heartbeatAt      DateTime?
+  cancelledAt      DateTime?
+  cancelledById    String?              @db.VarChar(64)
+  cancelReason     String?              @db.VarChar(200)
   createdAt        DateTime             @default(now())
   completedAt      DateTime?
   recipients       BroadcastRecipient[]

@@ -187,10 +187,10 @@ test('send: in-platform notification rows only, once per recipient; sender/audit
 	const r = await send(d.id, p.previewToken, key());
 	assert.equal(r.status, 202); assert.equal(r.data.replayed, false);
 	assert.equal(r.data.broadcast.status, 'QUEUED');
-	assert.deepEqual(r.data.broadcast.totals, { audience: 3, sent: 0, failed: 0, pending: 3 });
+	assert.deepEqual(r.data.broadcast.totals, { audience: 3, sent: 0, failed: 0, pending: 3, cancelled: 0 });
 	assert.equal((await notes()).length, 0, 'confirm returned before any notification exists');
 	await drain();
-	assert.deepEqual((await (await env()).call('GET', `/${r.data.broadcast.id}`, sa.id)).data.totals, { audience: 3, sent: 3, failed: 0, pending: 0 });
+	assert.deepEqual((await (await env()).call('GET', `/${r.data.broadcast.id}`, sa.id)).data.totals, { audience: 3, sent: 3, failed: 0, pending: 0, cancelled: 0 });
 	const rows = await notes();
 	assert.equal(rows.length, 3); assert.deepEqual(rows.map(x => x.userId).sort(), ms.map(m => m.id).sort());
 	for (const n of rows) { assert.equal(n.title, 'عرض'); assert.equal(n.message, 'تفاصيل'); assert.equal(n.category, 'OFFERS'); assert.equal(n.isRead, false); assert.equal((n.metadata as any).broadcastId, r.data.broadcast.id); }
@@ -249,7 +249,7 @@ test('partial failure is recorded per recipient and retry completes only the rem
 	const id1 = r.data.broadcast.id;
 	await drain();
 	const fin = (await call('GET', `/${id1}`, sa.id)).data;
-	assert.equal(fin.status, 'PARTIAL'); assert.deepEqual(fin.totals, { audience: 7, sent: 5, failed: 2, pending: 0 });
+	assert.equal(fin.status, 'PARTIAL'); assert.deepEqual(fin.totals, { audience: 7, sent: 5, failed: 2, pending: 0, cancelled: 0 });
 	const before = await notes();
 	assert.equal(before.length, 5); assert.ok(before.every(n => !failing.has(n.userId)));
 	const detail = await call('GET', `/${id1}`, sa.id);
@@ -266,7 +266,7 @@ test('partial failure is recorded per recipient and retry completes only the rem
 	await drain();
 	const done = await call('GET', `/${id1}`, sa.id);
 	assert.equal(done.data.status, 'COMPLETED');
-	assert.deepEqual(done.data.totals, { audience: 7, sent: 7, failed: 0, pending: 0 });
+	assert.deepEqual(done.data.totals, { audience: 7, sent: 7, failed: 0, pending: 0, cancelled: 0 });
 	assert.equal(attempts - callsBefore, 1, 'only one delivery call, for the two remaining recipients');
 	const after = await notes();
 	assert.equal(after.length, 7); assert.equal(new Set(after.map(n => n.userId)).size, 7);
@@ -284,7 +284,7 @@ test('everything failing ends FAILED; the database refuses a second notification
 	await drain();
 	const { call: call0 } = await env();
 	const st = (await call0('GET', `/${r.data.broadcast.id}`, sa.id)).data;
-	assert.equal(st.status, 'FAILED'); assert.deepEqual(st.totals, { audience: 2, sent: 0, failed: 2, pending: 0 });
+	assert.equal(st.status, 'FAILED'); assert.deepEqual(st.totals, { audience: 2, sent: 0, failed: 2, pending: 0, cancelled: 0 });
 	assert.equal((await notes()).length, 0);
 	svc.broadcastDeps.createNotifications = async (tx: any, rows: any[]) => { await tx.notification.createMany({ data: rows }); };
 	const { call } = await env();
@@ -306,7 +306,7 @@ test('history: newest first, paginated, sender + totals, detail has the body, li
 	assert.equal(p1.data.items.length, 20); assert.equal(p1.data.hasNext, true); assert.equal(p1.data.items[0].id, ids[21]); assert.equal(p1.data.items[0].title, 'إشعار 21');
 	const item = p1.data.items[0];
 	assert.deepEqual(Object.keys(item).sort(), ['audience', 'category', 'completedAt', 'createdAt', 'id', 'lastProgressAt', 'sender', 'status', 'title', 'totals']);
-	assert.equal(item.sender.id, sa.id); assert.match(item.sender.name, /^QA /); assert.deepEqual(item.totals, { audience: 2, sent: 2, failed: 0, pending: 0 });
+	assert.equal(item.sender.id, sa.id); assert.match(item.sender.name, /^QA /); assert.deepEqual(item.totals, { audience: 2, sent: 2, failed: 0, pending: 0, cancelled: 0 });
 	assert.doesNotMatch(JSON.stringify(p1.json), /سر-الجسم/);
 	const p2 = await call('GET', '/?page=2', sa.id);
 	assert.equal(p2.data.items.length, 2); assert.equal(p2.data.hasNext, false); assert.equal(p2.data.items[1].id, ids[0]);
@@ -339,7 +339,7 @@ test('worker: off by default; a queued job waits (counters show pending) and the
 	const { id } = await queued(4);
 	assert.equal((await notes()).length, 0);
 	const d = (await call('GET', `/${id}`, sa.id)).data;
-	assert.equal(d.status, 'QUEUED'); assert.deepEqual(d.totals, { audience: 4, sent: 0, failed: 0, pending: 4 }); assert.equal(d.lastProgressAt, null);
+	assert.equal(d.status, 'QUEUED'); assert.deepEqual(d.totals, { audience: 4, sent: 0, failed: 0, pending: 4, cancelled: 0 }); assert.equal(d.lastProgressAt, null);
 	assert.equal((await call('GET', '/active', sa.id)).data.id, id);
 	assert.equal((await call('GET', '/active', sa2.id)).data, null);
 	assert.equal((await call('POST', `/${id}/retry`, sa.id)).json.code, 'BROADCAST_IN_PROGRESS');
@@ -356,7 +356,7 @@ test('worker: completes a queued job; progress and lastProgressAt are visible; n
 	assert.deepEqual(seen.map(x => [x.status, x.totals.sent, x.totals.pending]), [['SENDING', 2, 3], ['SENDING', 4, 1], ['SENDING', 5, 0]]);
 	assert.ok(seen[0].lastProgressAt);
 	const d = (await call('GET', `/${id}`, sa.id)).data;
-	assert.equal(d.status, 'COMPLETED'); assert.deepEqual(d.totals, { audience: 5, sent: 5, failed: 0, pending: 0 });
+	assert.equal(d.status, 'COMPLETED'); assert.deepEqual(d.totals, { audience: 5, sent: 5, failed: 0, pending: 0, cancelled: 0 });
 	assert.equal((await call('GET', '/active', sa.id)).data, null);
 	assert.deepEqual([...(await perUser()).values()], [1, 1, 1, 1, 1]); assert.equal((await perUser()).size, ms.length);
 	assert.deepEqual(await drain(), []);
@@ -372,14 +372,14 @@ test('worker: a job interrupted mid-way is resumed by a fresh worker; total == a
 	await assert.rejects(drain('w-dead'), svc.WorkerCrash);
 	assert.equal((await notes()).length, 4);
 	let mid = (await call('GET', `/${id}`, sa.id)).data;
-	assert.equal(mid.status, 'SENDING'); assert.deepEqual(mid.totals, { audience: 9, sent: 4, failed: 0, pending: 5 });
+	assert.equal(mid.status, 'SENDING'); assert.deepEqual(mid.totals, { audience: 9, sent: 4, failed: 0, pending: 5, cancelled: 0 });
 	// the dead worker still holds a valid lease: nobody else may touch it yet
 	assert.deepEqual(await drain('w-late'), []);
 	await prisma.broadcast.update({ where: { id }, data: { leaseUntil: new Date(Date.now() - 1000) } }); // lease expiry
 	svc.broadcastDeps.afterChunk = undefined;
 	assert.deepEqual(await drain('w-fresh'), [id]);
 	mid = (await call('GET', `/${id}`, sa.id)).data;
-	assert.equal(mid.status, 'COMPLETED'); assert.deepEqual(mid.totals, { audience: 9, sent: 9, failed: 0, pending: 0 });
+	assert.equal(mid.status, 'COMPLETED'); assert.deepEqual(mid.totals, { audience: 9, sent: 9, failed: 0, pending: 0, cancelled: 0 });
 	const counts = await perUser();
 	assert.equal(counts.size, 9); assert.ok([...counts.values()].every(n => n === 1)); assert.deepEqual([...counts.keys()].sort(), ms.map(m => m.id).sort());
 	assert.equal((await notes()).length, 9);
@@ -504,4 +504,105 @@ test('flag OFF: confirm and retry are refused before any write; everything else 
 	const d2 = await newDraft(); const p3 = await preview(d2.id); const before = await rowCounts();
 	assert.equal((await send(d2.id, p3.previewToken, key())).status, 503); assert.deepEqual(await rowCounts(), before);
 	assert.equal((await send(d.id, p2.previewToken, k)).status, 200, 'replay of an already accepted confirm stays a harmless read');
+});
+
+// ---- queue review + cancel ------------------------------------------------------------------------------------------------------------------------
+const flagOn = (on: boolean) => { if (on) process.env.ADMIN_BROADCAST_WORKER_ENABLED = 'true'; else delete process.env.ADMIN_BROADCAST_WORKER_ENABLED; };
+const item = async (id: string) => ((await (await env()).call('GET', '/queue', sa.id)).data.items as any[]).find(i => i.id === id);
+const ago = (ms: number) => new Date(Date.now() - ms);
+
+test('queue: permissions, and payloads carry no message body and no env values', opts, async () => {
+	const { call } = await env(); const { id } = await queued(2);
+	for (const [m, u, b] of [['GET', '/queue'], ['GET', '/queue/summary'], ['POST', `/${id}/cancel`, {}]] as any[]) {
+		assert.equal((await call(m, u, null, b)).status, 401); assert.equal((await call(m, u, client.id, b)).status, 403); assert.equal((await call(m, u, plainAdmin.id, b)).status, 403);
+	}
+	flagOn(false);
+	const q = await call('GET', '/queue', sa.id); const s = await call('GET', '/queue/summary', sa.id);
+	assert.equal(q.status, 200); assert.equal(s.status, 200);
+	const text = JSON.stringify([q.json, s.json]);
+	assert.doesNotMatch(text, /نص الرسالة|ADMIN_BROADCAST_WORKER_ENABLED|JWT_SECRET|DATABASE_URL/);
+	assert.deepEqual(Object.keys(s.data).sort(), ['oldestWaitingSeconds', 'running', 'stuckMidRun', 'stuckNoProgress', 'waitingDisabled', 'waitingForWorker', 'workerEnabled']);
+	assert.equal(s.data.workerEnabled, false); assert.equal(typeof s.data.workerEnabled, 'boolean');
+	const it = q.data.items[0];
+	assert.ok(['id', 'status', 'sender', 'category', 'audience', 'totals', 'createdAt', 'waitingSeconds', 'lastProgressAt', 'heartbeatAt', 'leaseUntil', 'stale', 'queueState'].every(k => k in it));
+	assert.ok(!('message' in it));
+	flagOn(true);
+});
+
+test('queue: each queueState is classified apart (worker off is never "stopped mid-run")', opts, async () => {
+	const { call, svc, prisma } = await env();
+	svc.broadcastDeps.chunkSize = 2;
+	const a = await queued(4); // QUEUED
+	flagOn(false);
+	let it = await item(a.id);
+	assert.equal(it.queueState, 'WAITING_WORKER_DISABLED'); assert.equal(it.status, 'QUEUED'); assert.equal(it.stale, false); assert.ok(it.waitingSeconds >= 0);
+	assert.equal(it.sender.id, sa.id); assert.deepEqual(it.totals, { audience: 4, sent: 0, failed: 0, pending: 4, cancelled: 0 });
+	let sum = (await call('GET', '/queue/summary', sa.id)).data; assert.equal(sum.waitingDisabled, 1); assert.equal(sum.workerEnabled, false);
+	// old and queued, worker OFF: still "waiting because disabled", not stuck
+	await prisma.broadcast.update({ where: { id: a.id }, data: { createdAt: ago(3 * 3600_000) } });
+	assert.equal((await item(a.id)).queueState, 'WAITING_WORKER_DISABLED');
+	flagOn(true);
+	assert.equal((await item(a.id)).queueState, 'STUCK_NO_PROGRESS'); assert.equal((await item(a.id)).stale, true);
+	await prisma.broadcast.update({ where: { id: a.id }, data: { createdAt: ago(5 * 60_000) } });
+	assert.equal((await item(a.id)).queueState, 'WAITING_FOR_WORKER');
+	sum = (await call('GET', '/queue/summary', sa.id)).data; assert.equal(sum.waitingForWorker, 1); assert.ok(sum.oldestWaitingSeconds >= 300);
+	// running with a live lease
+	assert.equal(await svc.claimBroadcast('w-q'), a.id);
+	assert.equal((await item(a.id)).queueState, 'RUNNING');
+	assert.equal((await call('GET', '/queue/summary', sa.id)).data.running, 1);
+	// stopped mid-run: partial progress, lease expired, no heartbeat for 20 min
+	let chunks = 0; svc.broadcastDeps.afterChunk = () => { if (++chunks === 1) throw new svc.WorkerCrash('died'); };
+	await assert.rejects(svc.processBroadcastForTest(a.id, 'w-q'), svc.WorkerCrash);
+	await prisma.broadcast.update({ where: { id: a.id }, data: { leaseUntil: ago(1000), heartbeatAt: ago(2 * 60_000) } });
+	assert.equal((await item(a.id)).queueState, 'WAITING_FOR_WORKER', 'recently stopped: the worker will take it over');
+	await prisma.broadcast.update({ where: { id: a.id }, data: { heartbeatAt: ago(20 * 60_000) } });
+	it = await item(a.id); assert.equal(it.queueState, 'STUCK_STOPPED_MID_RUN'); assert.equal(it.stale, true); assert.deepEqual(it.totals, { audience: 4, sent: 2, failed: 0, pending: 2, cancelled: 0 });
+	flagOn(false);
+	assert.equal((await item(a.id)).queueState, 'STUCK_STOPPED_MID_RUN', 'a job that really stopped mid-run is reported as such even with the worker off');
+	sum = (await call('GET', '/queue/summary', sa.id)).data; assert.equal(sum.stuckMidRun, 1);
+	flagOn(true);
+});
+
+test('cancel: QUEUED job cancelled with the worker off; idempotent; audited; never delivered later', opts, async () => {
+	const { call, svc, prisma } = await env();
+	const a = await queued(3); flagOn(false);
+	assert.equal((await call('POST', `/${a.id}/cancel`, sa.id, { reason: 'رسالة قديمة' })).data.status, 'CANCELLED');
+	const b = await prisma.broadcast.findUniqueOrThrow({ where: { id: a.id } });
+	assert.equal(b.cancelledById, sa.id); assert.equal(b.cancelReason, 'رسالة قديمة'); assert.ok(b.cancelledAt);
+	assert.equal(await prisma.broadcastRecipient.count({ where: { broadcastId: a.id, status: 'CANCELLED' } }), 3);
+	const again = await call('POST', `/${a.id}/cancel`, sa.id, {});
+	assert.equal(again.status, 200); assert.equal(again.data.status, 'CANCELLED');
+	assert.equal(await prisma.accountAuditLog.count({ where: { eventType: 'BROADCAST_CANCELLED', context: { path: ['entityId'], equals: a.id } } }), 1);
+	const audit = await prisma.accountAuditLog.findFirstOrThrow({ where: { eventType: 'BROADCAST_CANCELLED', context: { path: ['entityId'], equals: a.id } } });
+	assert.doesNotMatch(JSON.stringify(audit), /نص الرسالة/);
+	assert.equal(await item(a.id), undefined); assert.equal((await call('GET', '/active', sa.id)).data, null);
+	flagOn(true);
+	assert.deepEqual(await drain('w-late'), []); assert.equal((await notes()).length, 0);
+	assert.equal((await call('POST', `/${a.id}/retry`, sa.id)).json.code, 'BROADCAST_CANCELLED');
+	assert.equal((await call('POST', `/${a.id}/cancel`, sa.id, { reason: 'x'.repeat(201) })).status, 400);
+	assert.equal((await call('POST', `/${id()}/cancel`, sa.id, {})).status, 404);
+	void svc;
+});
+
+test('cancel: a stuck mid-run job keeps its SENT recipients and cancels only the PENDING ones; a live lease refuses; finished jobs refuse', opts, async () => {
+	const { call, svc, prisma } = await env();
+	svc.broadcastDeps.chunkSize = 2;
+	const a = await queued(6);
+	let chunks = 0; svc.broadcastDeps.afterChunk = () => { if (++chunks === 1) throw new svc.WorkerCrash('died'); };
+	await assert.rejects(drain('w-dead'), svc.WorkerCrash);
+	svc.broadcastDeps.afterChunk = undefined;
+	assert.equal((await notes()).length, 2);
+	const refused = await call('POST', `/${a.id}/cancel`, sa.id, {});
+	assert.equal(refused.status, 409); assert.equal(refused.json.code, 'BROADCAST_RUNNING'); // live lease
+	assert.equal((await prisma.broadcast.findUniqueOrThrow({ where: { id: a.id } })).status, 'SENDING');
+	await prisma.broadcast.update({ where: { id: a.id }, data: { leaseUntil: ago(1000), heartbeatAt: ago(30 * 60_000) } });
+	const done = await call('POST', `/${a.id}/cancel`, sa.id, {});
+	assert.equal(done.status, 200); assert.deepEqual(done.data.totals, { audience: 6, sent: 2, failed: 0, pending: 0, cancelled: 4 });
+	assert.equal(await prisma.broadcastRecipient.count({ where: { broadcastId: a.id, status: 'SENT' } }), 2);
+	assert.equal((await notes()).length, 2);
+	flagOn(true); assert.deepEqual(await drain('w-after'), []); assert.equal((await notes()).length, 2, 'cancelled job is never delivered');
+	// finished job cannot be cancelled
+	const b = await queued(1); await drain();
+	const fin = await call('POST', `/${b.id}/cancel`, sa.id, {});
+	assert.equal(fin.status, 409); assert.equal(fin.json.code, 'BROADCAST_NOT_CANCELLABLE');
 });
