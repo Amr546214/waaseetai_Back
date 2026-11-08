@@ -1,3 +1,4 @@
+import { followUpDisputesWhere } from './dispute-follow-up';
 import { randomUUID } from 'node:crypto';
 import { AccountType, ContractStatus, DisputeStatus, EscrowStatus, LogCategory, LogStatus, Prisma, ProjectStatus, RequestStatus } from '@prisma/client';
 import { prisma } from '../config/db';
@@ -200,19 +201,21 @@ export class DisputeService {
     return prisma.clientRequest.update({ where: { id: requestId }, data: { status: RequestStatus.CANCELLED } });
   }
 
-  async listForAdmin(status?: DisputeStatus, page = 1, limit = 20) {
+  async listForAdmin(status?: DisputeStatus, page = 1, limit = 20, followUp = false) {
     const safePage = Math.max(1, page); const safeLimit = Math.min(100, Math.max(1, limit));
-    const where = status ? { status } : {};
-    const [items, total, grouped] = await Promise.all([
+    const followUpWhere = followUpDisputesWhere();
+    const where = followUp ? { AND: [followUpWhere, ...(status ? [{ status }] : [])] } : status ? { status } : {};
+    const [items, total, grouped, followUpCount] = await Promise.all([
       prisma.dispute.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { _count: { select: { attachments: true } }, stage: stageInclude, request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } }, openedBy: { select: { id: true, firstName: true, lastName: true, email: true } }, againstUser: { select: { id: true, firstName: true, lastName: true, email: true } } } }),
       prisma.dispute.count({ where }),
-      prisma.dispute.groupBy({ by: ['status'], _count: { _all: true } })
+      prisma.dispute.groupBy({ by: ['status'], _count: { _all: true } }),
+      followUp && !status ? null : prisma.dispute.count({ where: followUpWhere })
     ]);
     const counts: Record<string, number> = {};
     for (const g of grouped) counts[g.status] = g._count._all;
     const assignees = await this.assigneesFor(items.map(i => i.id));
     const pages = Math.ceil(total / safeLimit);
-    return { items: items.map(i => ({ ...i, assignedTo: assignees.get(i.id) ?? null })), counts, pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages } };
+    return { items: items.map(i => ({ ...i, assignedTo: assignees.get(i.id) ?? null })), counts, followUpCount: followUpCount ?? total, pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages } };
   }
 
   /** Current assignee per dispute = the newest DISPUTE_ASSIGNED audit row (no schema column exists for it). */
@@ -220,8 +223,8 @@ export class DisputeService {
     const result = new Map<string, { id: string; name: string }>();
     if (!ids.length) return result;
     const rows = await prisma.accountAuditLog.findMany({
-      where: { source: 'ADMIN', eventType: 'DISPUTE_ASSIGNED', OR: ids.map(id => ({ context: { path: ['entityId'], equals: id } })) },
-      orderBy: { occurredAt: 'desc' },
+      where: { source: { in: ['ADMIN', 'SYSTEM'] }, eventType: 'DISPUTE_ASSIGNED', OR: ids.map(id => ({ context: { path: ['entityId'], equals: id } })) },
+      orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
       select: { context: true }
     });
     for (const row of rows) {
@@ -278,8 +281,7 @@ export class DisputeService {
       adminAudit.listForEntity('DISPUTE', id)
     ]);
     // The display history is capped; the current assignee can be older than all visible entries.
-    const assignment = audit.find(e => e.eventType === 'DISPUTE_ASSIGNED')
-      ?? (await adminAudit.listForEntity('DISPUTE', id, ['DISPUTE_ASSIGNED'], 1))[0];
+    const assignment = (await adminAudit.listForEntity('DISPUTE', id, ['DISPUTE_ASSIGNED'], 1, ['ADMIN', 'SYSTEM']))[0];
     const financialOutcome = (audit.find(e => e.eventType === 'DISPUTE_FINANCIAL_RESOLVED')?.context?.outcomeSummary as FinancialOutcomeSummary | undefined) ?? null;
     return {
       ...dispute, requestedResolutionLabel: requestedResolutionLabel(dispute.requestedResolution),

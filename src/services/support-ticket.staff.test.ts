@@ -11,6 +11,8 @@ function makeFixture(status = 'OPEN', accountType = 'PROVIDER_INDIVIDUAL') {
   const messages: any[] = [{ id: 'm0', ticketId: 't1', senderId: 'owner', body: 'original', createdAt: new Date(1) }];
   const notifications: any[] = [];
   const prisma = {
+    $queryRaw: async () => [],
+    $transaction: async (fn: (tx: any) => unknown) => fn(prisma),
     user: {
       findUnique: async ({ where }: any) => where.id === 'owner'
         ? { id: 'owner', firstName: 'P', lastName: 'Q', email: 'p@x', accountType } : { id: where.id, accountType: 'ADMIN' },

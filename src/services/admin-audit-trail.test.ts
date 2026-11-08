@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { actorOfLog, logTarget, logDetail, accessDetail } from './admin-audit-trail.service';
+import { actorOfLog, logTarget, logDetail, accessDetail, listAuditTrail } from './admin-audit-trail.service';
 
 const A = '11111111-1111-4111-8111-111111111111', U = '22222222-2222-4222-8222-222222222222';
 const users = new Map([[U, { id: U, name: 'نورة', accountType: 'CLIENT_INDIVIDUAL' }], [A, { id: A, name: 'سارة', accountType: 'ADMIN' }]]);
@@ -45,6 +45,8 @@ test('target per event type: back-office actions point at the affected account, 
 	assert.equal(logTarget({ userId: A, eventType: 'PLATFORM_SETTINGS_UPDATED', source: 'ADMIN', actorLabel: 'ADMIN' }, { id: A, kind: 'USER' }, users)?.type, 'SETTINGS');
 	assert.equal(logTarget({ userId: A, eventType: 'FEE_POLICY_CANCELLED', source: 'ADMIN', actorLabel: 'ADMIN', metaData: { version: 4 } }, { id: A, kind: 'USER' }, users)?.label, 'نسخة 4');
 	assert.deepEqual(logTarget({ userId: U, eventType: 'AMENDMENT_APPLIED', source: 'USER', metaData: { appliedById: U, contractId: 'k1' } }, { id: U, kind: 'USER' }, users), { type: 'CONTRACT', typeLabel: 'عقد', id: 'k1', label: null });
+	assert.deepEqual(tgt({ eventType: 'PLATFORM_REPORT_DECIDED', ...admin, metaData: { reportId: U } }), { type: 'PLATFORM_REPORT', typeLabel: 'بلاغ', id: U, label: null });
+	assert.equal(tgt({ eventType: 'PLATFORM_REPORT_DECIDED', ...admin, metaData: { reportId: 'invalid' } }), null);
 	// own-account events have no target; a failed login targets the account but names no actor
 	assert.equal(logTarget({ userId: A, eventType: 'SESSION_STARTED', source: 'USER' }, { id: A, kind: 'USER' }, users), null);
 	assert.equal(tgt({ eventType: 'LOGIN_REJECTED', source: 'USER' })?.id, U);
@@ -72,4 +74,32 @@ test('site identity codes: the acting admin is proven, the target is the identit
 	assert.equal(logDetail({ eventType: 'SITE_IDENTITY_RESTORED', metaData: { identityKey: 'logo.mark', fromVersion: 2, toVersion: 0 } }).detail, 'شعار وسيط AI (العلامة) · نسخة 2 ← الافتراضي');
 	assert.equal(logDetail({ eventType: 'SITE_IDENTITY_UPLOADED', metaData: { identityKey: 'logo.mark', version: 3, sha: 'abcdef012345' } }).detail, 'شعار وسيط AI (العلامة) · مسودة نسخة 3 · abcdef012345');
 	assert.equal(logDetail({ eventType: 'SITE_IDENTITY_SET_RESTORED', metaData: { identityKey: 'icon.ai,logo.mark', target: 'manifest 4' } }).detail, 'manifest 4 · 2 عنصر');
+});
+
+test('audit search matches the exact report id without needing the private report or decision text', async () => {
+	const reportId = 'abcdef01-1111-4111-8111-111111111111';
+	const row = {
+		id: U, eventType: 'PLATFORM_REPORT_DECIDED', category: 'SYSTEM_AUDIT', title: 'قرار في بلاغ',
+		summary: 'تمت معالجة البلاغ', severity: 'INFO', source: 'ADMIN', status: 'COMPLETED',
+		userId: A, actorLabel: `ADMIN:${A}`, metaData: { adminId: A, reportId },
+		createdAt: new Date('2026-11-08T09:00:00Z'),
+	};
+	const exact = { eventType: row.eventType, metaData: { path: ['reportId'], equals: reportId } };
+	const matches = (where: any) => where.AND.some((and: any) => and.OR?.some((clause: any) => {
+		try { assert.deepEqual(clause, exact); return true; } catch { return false; }
+	}));
+	const db = {
+		user: { findMany: async () => [{ id: A, firstName: 'سارة', lastName: '', accountType: 'ADMIN' }] },
+		accountAuditLog: {
+			findMany: async ({ where }: any) => matches(where) ? [row] : [],
+			count: async ({ where }: any) => matches(where) ? 1 : 0,
+			groupBy: async () => [{ eventType: row.eventType }],
+		},
+		adminAccessAudit: { findMany: async () => [], count: async () => 0, groupBy: async () => [] },
+	};
+	const result = await listAuditTrail({ q: reportId.toUpperCase(), eventType: row.eventType }, db);
+	assert.equal(result.pagination.total, 1);
+	assert.equal(result.items[0]?.target?.id, reportId);
+	assert.equal(result.items[0]?.actor.name, 'سارة');
+	assert.deepEqual(result.eventTypeOptions, [{ value: row.eventType, label: 'قرار في بلاغ' }]);
 });

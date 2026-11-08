@@ -8,7 +8,7 @@ export const CASE_FILE_BYTES = 10 * 1024 * 1024;
 export const CASE_FILE_COUNT = 5;
 export const CASE_MIMES = new Set(['image/jpeg', 'image/png', 'application/pdf']);
 export type CaseKind = 'ticket' | 'dispute';
-const publicFields = { id: true, name: true, mimeType: true, bytes: true, ownerId: true, createdAt: true } as const;
+const publicFields = { id: true, name: true, mimeType: true, bytes: true, ownerId: true, messageId: true, createdAt: true } as const;
 export function validateCaseFiles(files: Express.Multer.File[]) {
   if (files.length > CASE_FILE_COUNT) throw new AppError('الحد الأقصى خمسة ملفات في الطلب', 400);
   for (const file of files) {

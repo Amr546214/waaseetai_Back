@@ -55,14 +55,14 @@ export const adminAudit = {
 	},
 
 	/** Newest-first audit rows about one entity, with the acting admin. Optionally limited to some event types. */
-	async listForEntity(entity: AdminAuditEntity, entityId: string, eventTypes?: string[], limit = 200) {
+	async listForEntity(entity: AdminAuditEntity, entityId: string, eventTypes?: string[], limit = 200, sources = ['ADMIN']) {
 		const rows = await prisma.accountAuditLog.findMany({
 			where: {
-				source: 'ADMIN',
+				source: { in: sources },
 				AND: [{ context: { path: ['entity'], equals: entity } }, { context: { path: ['entityId'], equals: entityId } }],
 				...(eventTypes?.length ? { eventType: { in: eventTypes } } : {})
 			},
-			orderBy: { occurredAt: 'desc' },
+			orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
 			take: limit,
 			include: { user: { select: { id: true, firstName: true, lastName: true } } }
 		});

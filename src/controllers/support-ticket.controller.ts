@@ -55,8 +55,10 @@ export async function adminListTickets(req: Request, res: Response, next: NextFu
     const rawStatus = req.query.status ? String(req.query.status).toUpperCase() : undefined;
     const status = rawStatus && Object.values(SupportTicketStatus).includes(rawStatus as SupportTicketStatus) ? rawStatus as SupportTicketStatus : undefined;
     if (rawStatus && !status) throw new AppError('حالة التذكرة غير صحيحة', 400);
+    const escalated = req.query.escalated;
+    if (escalated !== undefined && escalated !== 'true' && escalated !== 'false') throw new AppError('فلتر التصعيد غير صحيح', 400);
     const data = await supportTicketService.listForAdmin(
-      { status, q: req.query.q ? String(req.query.q) : undefined, userId: req.query.userId ? String(req.query.userId) : undefined },
+      { status, q: req.query.q ? String(req.query.q) : undefined, userId: req.query.userId ? String(req.query.userId) : undefined, ...(escalated === 'true' ? { escalated: true } : {}) },
       Number(req.query.page) || 1, Number(req.query.limit) || 20,
     );
     res.json({ success: true, data });
@@ -74,7 +76,9 @@ export async function adminReplyToTicket(req: Request, res: Response, next: Next
   try {
     const parsed = staffReplySchema.safeParse(req.body);
     if (!parsed.success) throw zodAppError(parsed.error.issues, parsed.error.issues.map(i => i.message).join(', '), { body: 'أدخل نص الرد', status: 'حالة التذكرة غير صحيحة' });
-    const data = await supportTicketService.replyAsStaff(String(req.params.id), userId(req), parsed.data.body, parsed.data.status);
+    const files = (req.files || []) as Express.Multer.File[];
+    const key = typeof req.body.replyKey === 'string' ? req.body.replyKey : undefined;
+    const data = await supportTicketService.replyAsStaff(String(req.params.id), userId(req), parsed.data.body, parsed.data.status, files, key);
     res.status(201).json({ success: true, data });
   } catch (error) { next(error); }
 }

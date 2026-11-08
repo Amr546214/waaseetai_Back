@@ -1,3 +1,7 @@
+import { startCaseSlaScheduler } from './services/case-sla.service';
+import { adminPlatformReports, userPlatformReports } from './routes/platform-reports.routes';
+import adminNotificationHistory from './routes/admin-notification-history.routes';
+import adminNotificationTemplates from './routes/admin-notification-templates.routes';
 import { startChatDigestScheduler } from './services/chat-digest.service';
 import express, { Request, Response, NextFunction } from 'express';
 import { maintenanceMiddleware } from './middlewares/maintenance.middleware';
@@ -364,6 +368,11 @@ mountAppRoute('/api/admin/coupons', adminCouponsRoutes);
 mountAppRoute('/admin/coupons', adminCouponsRoutes);
 mountAppRoute('/api/admin/special-offers', adminSpecialOffersRouter);
 mountAppRoute('/admin/special-offers', adminSpecialOffersRouter);
+mountAppRoute('/api/reports', userPlatformReports);
+mountAppRoute('/api/admin/reports', adminPlatformReports);
+mountAppRoute('/api/admin/notification-history', adminNotificationHistory);
+mountAppRoute('/api/admin/notification-templates', adminNotificationTemplates);
+mountAppRoute('/admin/reports', adminPlatformReports);
 mountAppRoute('/api/admin/tickets', adminTicketsRoutes);
 mountAppRoute('/admin/tickets', adminTicketsRoutes);
 mountAppRoute('/api/admin/requests', adminRequestsRouter);
@@ -459,6 +468,7 @@ if (process.env.NODE_ENV !== 'test') {
 		logger.info(`🚀 Server is running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
 		logger.info(`👉 http://localhost:${PORT}/api`);
 		startChatDigestScheduler(); // no-op unless CHAT_DIGEST_EMAIL_ENABLED=true
+		startCaseSlaScheduler();
 		// warm the settings cache so the maintenance / registration policies have a trusted value as early as possible (a failure is logged; the cold-boot policy covers the gap)
 		void systemSettingsService.prime();
 		startSiteIdentityCache(); // non-blocking: the replaced e-mail logo (if any) for the synchronous mail shell; a failure leaves the default
