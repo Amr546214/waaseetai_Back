@@ -2,6 +2,9 @@ import { startCaseSlaScheduler } from './services/case-sla.service';
 import { adminPlatformReports, userPlatformReports } from './routes/platform-reports.routes';
 import adminNotificationHistory from './routes/admin-notification-history.routes';
 import adminNotificationTemplates from './routes/admin-notification-templates.routes';
+import adminBroadcastPreview from './routes/admin-broadcast-preview.routes';
+import adminBroadcasts from './routes/admin-broadcasts.routes';
+import { startBroadcastWorkerFromEnv } from './services/admin-broadcast.service';
 import { startChatDigestScheduler } from './services/chat-digest.service';
 import express, { Request, Response, NextFunction } from 'express';
 import { maintenanceMiddleware } from './middlewares/maintenance.middleware';
@@ -371,6 +374,8 @@ mountAppRoute('/api/reports', userPlatformReports);
 mountAppRoute('/api/admin/reports', adminPlatformReports);
 mountAppRoute('/api/admin/notification-history', adminNotificationHistory);
 mountAppRoute('/api/admin/notification-templates', adminNotificationTemplates);
+mountAppRoute('/api/admin/broadcast-preview', adminBroadcastPreview);
+mountAppRoute('/api/admin/broadcasts', adminBroadcasts);
 mountAppRoute('/admin/reports', adminPlatformReports);
 mountAppRoute('/api/admin/tickets', adminTicketsRoutes);
 mountAppRoute('/admin/tickets', adminTicketsRoutes);
@@ -466,6 +471,7 @@ if (process.env.NODE_ENV !== 'test') {
 		logger.info(`👉 http://localhost:${PORT}/api`);
 		startChatDigestScheduler(); // no-op unless CHAT_DIGEST_EMAIL_ENABLED=true
 		startCaseSlaScheduler();
+		startBroadcastWorkerFromEnv(); // OFF unless ADMIN_BROADCAST_WORKER_ENABLED=true
 		// warm the settings cache so the maintenance / registration policies have a trusted value as early as possible (a failure is logged; the cold-boot policy covers the gap)
 		void systemSettingsService.prime();
 		startSiteIdentityCache(); // non-blocking: the replaced e-mail logo (if any) for the synchronous mail shell; a failure leaves the default

@@ -9,7 +9,7 @@ import { logger } from '../config/logger';
  * `summary` is a generic sentence only — a free-text body (an internal note) goes in `context.body`, never in `summary`/`title`, because the
  * security audit screen lists those two for every event.
  */
-export type AdminAuditEntity = 'DISPUTE' | 'TICKET' | 'WITHDRAWAL' | 'ESCROW' | 'PROJECT' | 'CONTRACT' | 'FINANCE' | 'NOTIFICATION_TEMPLATE';
+export type AdminAuditEntity = 'DISPUTE' | 'TICKET' | 'WITHDRAWAL' | 'ESCROW' | 'PROJECT' | 'CONTRACT' | 'FINANCE' | 'BROADCAST' | 'NOTIFICATION_TEMPLATE';
 
 export interface AdminAuditInput {
 	adminId: string;
