@@ -199,7 +199,7 @@ export class SystemSettingsService {
 		return {
 			checkedAt: new Date().toISOString(),
 			items: [
-				{ key: 'app', label: 'خادم التطبيق', status: 'ok', detail: `يعمل منذ ${Math.floor(process.uptime() / 60)} دقيقة (عمر هذه العملية)` },
+				{ key: 'app', label: 'عملية خادم التطبيق (هذه النسخة فقط)', status: 'ok', detail: `يعمل منذ ${Math.floor(process.uptime() / 60)} دقيقة (عمر هذه العملية، لا يخص بقية النسخ ولا المضيف)` },
 				{ key: 'database', label: 'قاعدة البيانات', status: db.ok ? 'ok' : 'down', detail: db.ok ? `استجابة ${db.ms} ms` : 'لا تستجيب' },
 				{ key: 'paypal', label: 'بوابة الدفع (PayPal)', status: process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_SECRET ? 'configured' : 'unconfigured', detail: 'حالة التهيئة فقط، دون اتصال فعلي بالبوابة' },
 				{ key: 'mail', label: 'خدمة البريد الإلكتروني', status: process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS ? 'configured' : 'unconfigured', detail: 'حالة التهيئة فقط، دون إرسال تجريبي' },

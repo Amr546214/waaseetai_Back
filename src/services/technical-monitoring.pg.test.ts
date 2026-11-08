@@ -139,7 +139,7 @@ test('deprecated /health items cdn/backup are derived from the SAME reading as t
 	// provider failure: unavailable with the same reason, never ok
 	svc.reset(); svc.deps = { ...base, cdnConfigured: () => true, cdnUsage: async () => { throw new Error('x'); } };
 	m = (await e.call('GET', P, e.sa.id)).json; h = await health(); assert.equal(item(h, 'cdn').status, 'unavailable'); assert.equal(item(h, 'cdn').detail, get(m, 'cdn_storage').reason);
-	assert.ok(item(h, 'database') && item(h, 'app') && !item(h, 'database').deprecated);
+	assert.match(item(h, 'app').label, /هذه النسخة فقط/); assert.ok(item(h, 'database') && item(h, 'app') && !item(h, 'database').deprecated);
 	svc.reset();
 });
 
