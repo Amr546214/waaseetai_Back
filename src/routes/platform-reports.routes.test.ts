@@ -7,9 +7,21 @@ test('report intake, duplicates, private reading and one authorized decision', a
   const targetId = '11111111-1111-4111-8111-111111111111';
   const reportId = '22222222-2222-4222-8222-222222222222';
   let report: Record<string, unknown> | null = null;
+  const audit: any[] = [];
+  let failAudit = false;
   const listQueries: any[] = [], countQueries: any[] = [];
   const prisma = {
-    $transaction: (queries: Promise<unknown>[]) => Promise.all(queries),
+    $transaction: async (work: Promise<unknown>[] | ((tx: any) => Promise<unknown>)) => {
+      if (Array.isArray(work)) return Promise.all(work);
+      const snapshot = report && { ...report };
+      const entries = audit.length;
+      try { return await work(prisma); }
+      catch (error) { report = snapshot; audit.length = entries; throw error; }
+    },
+    accountAuditLog: { create: async ({ data }: any) => {
+      if (failAudit) throw new Error('audit store failed');
+      audit.push(data);
+    } },
     user: { findFirst: async () => ({ id: targetId, firstName: 'Test', lastName: 'Account' }) },
     platformReport: {
       findMany: async (q: any) => { listQueries.push(q); return []; },
@@ -20,8 +32,12 @@ test('report intake, duplicates, private reading and one authorized decision', a
         return { id: reportId, status: 'OPEN' };
       },
       findUnique: async ({ where }: any) => where.id === reportId ? report : null,
-      updateMany: async ({ data }: any) => {
-        if (!report || report.status !== 'OPEN') return { count: 0 };
+      findUniqueOrThrow: async ({ where }: any) => {
+        if (!report || where.id !== reportId) throw new Error('not found');
+        return report;
+      },
+      updateMany: async ({ where, data }: any) => {
+        if (!report || where.id !== reportId || report.status !== where.status) return { count: 0 };
         Object.assign(report, data);
         return { count: 1 };
       },
@@ -74,9 +90,24 @@ test('report intake, duplicates, private reading and one authorized decision', a
     assert.deepEqual(listQueries[1].where.OR.slice(1), [{ id: reportId }, { targetId: reportId }]);
     const decision = { status: 'RESOLVED', resolution: 'Reviewed internally' };
     assert.equal((await call('viewer', 'PATCH', detail, decision)).status, 403);
+    assert.equal(audit.length, 0);
+    assert.equal((await call('manager', 'PATCH', '/admin/reports/' + targetId, decision)).status, 404);
+    failAudit = true;
+    assert.equal((await call('manager', 'PATCH', detail, decision)).status, 500);
+    assert.equal((await (await call('viewer', 'GET', detail)).json()).data.status, 'OPEN');
+    assert.equal(audit.length, 0);
+    failAudit = false;
     const result = await call('manager', 'PATCH', detail, decision);
     assert.equal(result.status, 200);
     assert.equal((await result.json()).data.reviewerId, 'manager');
     assert.equal((await call('manager', 'PATCH', detail, decision)).status, 409);
+    assert.equal(audit.length, 1);
+    assert.equal(audit[0].userId, 'manager');
+    assert.equal(audit[0].eventType, 'PLATFORM_REPORT_DECIDED');
+    assert.equal(audit[0].source, 'ADMIN');
+    assert.deepEqual(audit[0].beforeData, { status: 'OPEN' });
+    assert.deepEqual(audit[0].afterData, { status: 'RESOLVED' });
+    assert.deepEqual(audit[0].metaData, { adminId: 'manager', reportId });
+    assert.doesNotMatch(JSON.stringify(audit[0]), /Reviewed internally|Detailed abuse report|Test Account/);
   } finally { server.close(); }
 });

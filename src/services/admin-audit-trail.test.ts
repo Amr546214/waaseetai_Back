@@ -45,6 +45,8 @@ test('target per event type: back-office actions point at the affected account, 
 	assert.equal(logTarget({ userId: A, eventType: 'PLATFORM_SETTINGS_UPDATED', source: 'ADMIN', actorLabel: 'ADMIN' }, { id: A, kind: 'USER' }, users)?.type, 'SETTINGS');
 	assert.equal(logTarget({ userId: A, eventType: 'FEE_POLICY_CANCELLED', source: 'ADMIN', actorLabel: 'ADMIN', metaData: { version: 4 } }, { id: A, kind: 'USER' }, users)?.label, 'نسخة 4');
 	assert.deepEqual(logTarget({ userId: U, eventType: 'AMENDMENT_APPLIED', source: 'USER', metaData: { appliedById: U, contractId: 'k1' } }, { id: U, kind: 'USER' }, users), { type: 'CONTRACT', typeLabel: 'عقد', id: 'k1', label: null });
+	assert.deepEqual(tgt({ eventType: 'PLATFORM_REPORT_DECIDED', ...admin, metaData: { reportId: U } }), { type: 'PLATFORM_REPORT', typeLabel: 'بلاغ', id: U, label: null });
+	assert.equal(tgt({ eventType: 'PLATFORM_REPORT_DECIDED', ...admin, metaData: { reportId: 'invalid' } }), null);
 	// own-account events have no target; a failed login targets the account but names no actor
 	assert.equal(logTarget({ userId: A, eventType: 'SESSION_STARTED', source: 'USER' }, { id: A, kind: 'USER' }, users), null);
 	assert.equal(tgt({ eventType: 'LOGIN_REJECTED', source: 'USER' })?.id, U);

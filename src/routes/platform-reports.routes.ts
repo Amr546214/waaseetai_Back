@@ -5,6 +5,7 @@ import { prisma } from '../config/db';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { requirePermission } from '../middlewares/admin-access.middleware';
 import { MARKET_VISIBLE_WHERE } from '../utils/market-visibility';
+import { adminAuditData } from '../services/admin-audit';
 import { AppError, zodAppError } from '../utils/app-error';
 
 const filing = z.object({ targetType: z.enum(['ACCOUNT', 'SERVICE']), targetId: z.string().uuid(), reason: z.string().trim().min(10).max(2000) }).strict();
@@ -88,13 +89,24 @@ adminPlatformReports.patch('/:id', requirePermission('reports.manage'), async (r
     const id = knownId(req.params.id);
     const input = decision.safeParse(req.body);
     if (!input.success) throw zodAppError(input.error.issues, 'اختر القرار واكتب سببه.');
-    const saved = await prisma.platformReport.updateMany({
-      where: { id, status: 'OPEN' }, data: { ...input.data, reviewerId: req.user!.id, reviewedAt: new Date() },
+    const actor = req.user!;
+    const { status, resolution } = input.data;
+    const data = await prisma.$transaction(async tx => {
+      const saved = await tx.platformReport.updateMany({
+        where: { id, status: 'OPEN' }, data: { status, resolution, reviewerId: actor.id, reviewedAt: new Date() },
+      });
+      if (!saved.count) {
+        if (!(await tx.platformReport.findUnique({ where: { id }, select: { id: true } }))) throw errMissing();
+        throw new AppError('تم اتخاذ قرار في البلاغ بالفعل. حدّث الصفحة.', 409);
+      }
+      const report = await tx.platformReport.findUniqueOrThrow({ where: { id }, select: adminSelect });
+      await tx.accountAuditLog.create({ data: adminAuditData({
+        actor, userId: actor.id, eventType: 'PLATFORM_REPORT_DECIDED', title: 'قرار في بلاغ',
+        summary: status === 'RESOLVED' ? 'تمت معالجة البلاغ' : 'تم رفض البلاغ',
+        before: { status: 'OPEN' }, after: { status }, details: { reportId: id },
+      }) });
+      return report;
     });
-    if (!saved.count) {
-      if (!(await prisma.platformReport.findUnique({ where: { id }, select: { id: true } }))) throw errMissing();
-      throw new AppError('تم اتخاذ قرار في البلاغ بالفعل. حدّث الصفحة.', 409);
-    }
-    res.json({ success: true, data: await prisma.platformReport.findUnique({ where: { id }, select: adminSelect }) });
+    res.json({ success: true, data });
   } catch (error) { next(error); }
 });
