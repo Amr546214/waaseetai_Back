@@ -3,6 +3,9 @@ import { DisputeStatus } from '@prisma/client';
 import { disputeService } from '../services/dispute.service';
 import { assignDisputeSchema, createDisputeSchema, disputeNoteSchema, disputeStatusSchema, resolveDisputeFinancialSchema, resolveDisputeSchema } from '../dtos/dispute.dto';
 import { AppError, zodAppError } from '../utils/app-error';
+import { loadAdminActor } from '../middlewares/admin-access.middleware';
+import { actorHas } from '../services/admin-access.service';
+import { parseDisputeQueueFilters } from '../services/dispute-queue-filters';
 
 const actorId = (req: Request) => req.user?.id || req.user?.userId!;
 
@@ -10,7 +13,7 @@ const actorId = (req: Request) => req.user?.id || req.user?.userId!;
 const DISPUTE_FIELD_TEXT = { action: 'نوع القرار غير صالح', resolution: 'اكتب قرار النزاع', outcome: 'نوع القرار المالي غير صالح', refundToClient: 'أدخل مبلغ الاسترداد للعميل', releaseToProvider: 'أدخل المبلغ المصروف لمقدم الخدمة', expectedHeldAmount: 'المبلغ المحتجز المعروض غير صالح، حدّث الصفحة', confirm: 'يجب تأكيد تنفيذ القرار المالي صراحةً', resolutionNote: 'الملاحظة غير صالحة' };
 
 export async function listDisputes(req: Request, res: Response, next: NextFunction) {
-  try { const rawStatus = req.query.status ? String(req.query.status).toUpperCase() : undefined; const status = rawStatus && Object.values(DisputeStatus).includes(rawStatus as DisputeStatus) ? rawStatus as DisputeStatus : undefined; if (rawStatus && !status) throw new AppError('حالة النزاع غير صحيحة', 400); const followUp = req.query.followUp; if (followUp !== undefined && followUp !== 'true' && followUp !== 'false') throw new AppError('فلتر المتابعة غير صحيح', 400); const data = await disputeService.listForAdmin(status, Number(req.query.page) || 1, Number(req.query.limit) || 20, followUp === 'true'); res.json({ success: true, data }); } catch (error) { next(error); }
+  try { const rawStatus = req.query.status ? String(req.query.status).toUpperCase() : undefined; const status = rawStatus && Object.values(DisputeStatus).includes(rawStatus as DisputeStatus) ? rawStatus as DisputeStatus : undefined; if (rawStatus && !status) throw new AppError('حالة النزاع غير صحيحة', 400); const followUp = req.query.followUp; if (followUp !== undefined && followUp !== 'true' && followUp !== 'false') throw new AppError('فلتر المتابعة غير صحيح', 400); const actor = await loadAdminActor(req); const filters = parseDisputeQueueFilters(req.query as Record<string, unknown>, { canPickStaff: actorHas(actor, 'team.view') }); const data = await disputeService.listForAdmin(status, Number(req.query.page) || 1, Number(req.query.limit) || 20, followUp === 'true', filters, actorId(req)); res.json({ success: true, data }); } catch (error) { next(error); }
 }
 
 export async function listMyDisputes(req: Request, res: Response, next: NextFunction) {
