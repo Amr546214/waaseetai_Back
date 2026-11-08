@@ -106,6 +106,7 @@ const ACCOUNT_TYPE_DECISIONS: Record<string, string> = {
 	'services/admin-users.service.ts': 'refuses to change admin-type accounts from the users list (restriction)',
 	'services/admin-brokers.service.ts': 'refuses to change an admin-type account from the brokers list (restriction)',
 	'services/support-ticket.service.ts': 'assignee must be an admin-type account that holds support.review (assigneeHolds)',
+	'services/technical-monitoring.service.ts': 'escalation-readiness (behind settings.view, read-only) only REPORTS whether a configured assignee is an admin-type staff account (state NOT_STAFF) and which permissions they lack; it grants no access, assigns nothing and enables nothing',
 	'services/case-sla.service.ts': 'account type classifies an existing reply for first-response timing; auto-assignees must hold existing permissions (assigneeHolds)',
 	'services/dispute.service.ts': 'assignee must be an admin-type account that holds disputes.view (assigneeHolds)',
 	'services/kyc-document-access.service.ts': 'the only caller (kyc-documents.controller) requires identity.review or specialties.approve first',
