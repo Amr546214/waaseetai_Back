@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { requireSuperAdmin } from '../middlewares/admin-access.middleware';
 import { AppError, zodAppError } from '../utils/app-error';
-import { activeBroadcast, DraftConflict, drafts, historyDetail, listHistory, previewDraft, retryRemaining, sendBroadcast, validIdempotencyKey } from '../services/admin-broadcast.service';
+import { activeBroadcast, DraftConflict, isBroadcastWorkerEnabled, drafts, historyDetail, listHistory, previewDraft, retryRemaining, sendBroadcast, validIdempotencyKey } from '../services/admin-broadcast.service';
 
 // Permission choice: Super Admin only (requireSuperAdmin), like the audience preview (#227), templates and notification history. No registry permission fits "message a whole audience",
 // and a broadcast is irreversible, so it is not delegable to staff roles.
@@ -86,6 +86,7 @@ router.get('/', async (req, res, next) => {
 		res.json({ success: true, data: await listHistory(q.data.page) });
 	} catch (e) { next(e); }
 });
+router.get('/status', (_req, res) => { res.json({ success: true, data: { deliveryEnabled: isBroadcastWorkerEnabled() } }); });
 router.get('/active', async (req, res, next) => {
 	try { res.json({ success: true, data: await activeBroadcast(me(req)) }); } catch (e) { next(e); }
 });

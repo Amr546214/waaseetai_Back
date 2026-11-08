@@ -112,7 +112,7 @@ export async function previewDraft(ownerId: string, id: string) {
 	const snap = await audienceSnapshot(draft.audience);
 	const checkedAt = new Date().toISOString();
 	const previewToken = issuePreviewToken({ a: ownerId, d: draft.id, v: draft.version, f: draft.audience, c: snap.count, h: snap.hash, t: checkedAt });
-	return { draftId: draft.id, version: draft.version, audience: draft.audience, count: snap.count, checkedAt, canSend: snap.count > 0, previewToken };
+	return { draftId: draft.id, version: draft.version, audience: draft.audience, count: snap.count, checkedAt, canSend: snap.count > 0, deliveryEnabled: isBroadcastWorkerEnabled(), previewToken };
 }
 
 // ---- send -------------------------------------------------------------------------------------------------------------------------------------------
@@ -241,9 +241,13 @@ export function startBroadcastWorker(opts: { intervalMs?: number; owner?: string
 	return { owner, tick, stop: () => { stopped = true; clearInterval(timer); } };
 }
 export const BROADCAST_WORKER_FLAG = 'ADMIN_BROADCAST_WORKER_ENABLED';
-export const broadcastWorkerEnabled = () => process.env[BROADCAST_WORKER_FLAG] === 'true';
+/** Read on EVERY call (never cached): the one source for startup, confirm, retry and the UI state. */
+export const isBroadcastWorkerEnabled = (): boolean => process.env[BROADCAST_WORKER_FLAG] === 'true';
+export const broadcastWorkerEnabled = isBroadcastWorkerEnabled;
+export const BROADCAST_WORKER_DISABLED = 'BROADCAST_WORKER_DISABLED';
+const workerDisabled = () => new AppError('الإرسال الجماعي غير مفعّل في هذه البيئة، لذلك لم يُنشأ أي إرسال ولم يُحفظ شيء. المسودة باقية ويمكن إرسالها لاحقًا عند التفعيل.', 503, undefined, BROADCAST_WORKER_DISABLED);
 export function startBroadcastWorkerFromEnv() {
-	if (!broadcastWorkerEnabled()) { logger.info(`[admin-broadcast] background delivery is OFF (${BROADCAST_WORKER_FLAG} is not "true"); confirmed broadcasts wait in the queue`); return null; }
+	if (!isBroadcastWorkerEnabled()) { logger.info(`[admin-broadcast] background delivery is OFF (${BROADCAST_WORKER_FLAG} is not "true"); confirmed broadcasts wait in the queue`); return null; }
 	return startBroadcastWorker();
 }
 
@@ -263,6 +267,7 @@ export async function sendBroadcast(input: { adminId: string; draftId: string; i
 	};
 	const prior = await replay();
 	if (prior) return prior;
+	if (!isBroadcastWorkerEnabled()) throw workerDisabled(); // before ANY write: no job, no recipients, no key consumed, draft untouched
 
 	const draft = await drafts.get(adminId, draftId); // owner-only first: someone else's draft is a 404 whatever the token says
 	const claims = readToken(previewToken);
@@ -301,6 +306,7 @@ export async function sendBroadcast(input: { adminId: string; draftId: string; i
 }
 
 export async function retryRemaining(adminId: string, id: string) {
+	if (!isBroadcastWorkerEnabled()) throw workerDisabled();
 	const found = await prisma.broadcast.findUnique({ where: { id }, select: { id: true } });
 	if (!found) throw new AppError('الإشعار الجماعي غير موجود.', 404);
 	await prisma.$transaction(async tx => {

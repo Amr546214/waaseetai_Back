@@ -60,7 +60,7 @@ let sa: any, sa2: any, plainAdmin: any, client: any;
 beforeEach(async () => {
 	if (!enabled) return;
 	const { prisma, svc } = await env();
-	svc.broadcastDeps.chunkSize = 200; svc.broadcastDeps.leaseMs = 60_000; svc.broadcastDeps.afterChunk = undefined; delete process.env.ADMIN_BROADCAST_WORKER_ENABLED; svc.broadcastDeps.createNotifications = async (tx: any, rows: any[]) => { await tx.notification.createMany({ data: rows }); };
+	svc.broadcastDeps.chunkSize = 200; svc.broadcastDeps.leaseMs = 60_000; svc.broadcastDeps.afterChunk = undefined; process.env.ADMIN_BROADCAST_WORKER_ENABLED = 'true'; svc.broadcastDeps.createNotifications = async (tx: any, rows: any[]) => { await tx.notification.createMany({ data: rows }); };
 	await prisma.notification.deleteMany({}); await prisma.broadcast.deleteMany({}); await prisma.broadcastDraft.deleteMany({});
 	await prisma.user.deleteMany({ where: { accountType: { in: ['MARKETING_BROKER'] } } });
 	sa ??= await mkUser('SUPER_ADMIN', 'sa'); sa2 ??= await mkUser('SUPER_ADMIN', 'sa2'); plainAdmin ??= await mkUser('ADMIN', 'adm'); client ??= await mkUser('CLIENT_INDIVIDUAL', 'cl');
@@ -332,8 +332,10 @@ const perUser = async (broadcastId?: string) => {
 
 test('worker: off by default; a queued job waits (counters show pending) and the active endpoint restores it', opts, async () => {
 	const { call, svc } = await env();
-	assert.equal(svc.broadcastWorkerEnabled(), false);
+	delete process.env.ADMIN_BROADCAST_WORKER_ENABLED;
+	assert.equal(svc.isBroadcastWorkerEnabled(), false);
 	assert.equal(svc.startBroadcastWorkerFromEnv(), null);
+	process.env.ADMIN_BROADCAST_WORKER_ENABLED = 'true';
 	const { id } = await queued(4);
 	assert.equal((await notes()).length, 0);
 	const d = (await call('GET', `/${id}`, sa.id)).data;
@@ -451,4 +453,55 @@ test('worker: the background timer starts only when asked, resumes queued jobs b
 	for (let i = 0; i < 100 && (await call('GET', `/${id}`, sa.id)).data.status !== 'COMPLETED'; i++) await new Promise(r => setTimeout(r, 50));
 	w.stop();
 	assert.equal((await call('GET', `/${id}`, sa.id)).data.status, 'COMPLETED'); assert.equal((await notes()).length, 3);
+});
+
+test('flag OFF: confirm and retry are refused before any write; everything else works; flag ON: same draft and same key succeed', opts, async () => {
+	const { call, svc, prisma } = await env();
+	await marketers(3);
+	const rowCounts = async () => [await prisma.broadcast.count(), await prisma.broadcastRecipient.count(), await prisma.notification.count()];
+	const flag = (v?: string) => { if (v === undefined) delete process.env.ADMIN_BROADCAST_WORKER_ENABLED; else process.env.ADMIN_BROADCAST_WORKER_ENABLED = v; };
+	// a finished broadcast exists to test retry against
+	const old = await queued(0); await drain();
+	await prisma.broadcastRecipient.updateMany({ where: { broadcastId: old.id }, data: { status: 'FAILED', errorCode: 'X' } });
+	await prisma.broadcast.update({ where: { id: old.id }, data: { status: 'PARTIAL' } });
+	await prisma.notification.deleteMany({}); 
+	const d = await newDraft(); const k = key();
+	for (const off of [undefined, 'false', 'TRUE', '1', '']) {
+		flag(off);
+		const p = await preview(d.id);
+		assert.equal(p.deliveryEnabled, false); assert.equal(p.canSend, true);
+		const before = await rowCounts();
+		const r = await send(d.id, p.previewToken, k);
+		assert.equal(r.status, 503); assert.equal(r.json.code, 'BROADCAST_WORKER_DISABLED'); assert.match(r.json.message, /غير مفعّل/);
+		assert.deepEqual(await rowCounts(), before);
+		assert.equal((await call('POST', `/${old.id}/retry`, sa.id)).json.code, 'BROADCAST_WORKER_DISABLED');
+		assert.equal(await prisma.broadcastRecipient.count({ where: { broadcastId: old.id, status: 'FAILED' } }), 3, 'retry changed nothing');
+		assert.equal((await prisma.broadcastDraft.findUniqueOrThrow({ where: { id: d.id } })).sentAt, null, 'draft state unchanged');
+	}
+	flag('false');
+	// reads and drafts stay fully working
+	assert.equal((await call('GET', '/status', sa.id)).data.deliveryEnabled, false);
+	assert.equal((await call('GET', '/drafts/latest', sa.id)).data.id, d.id);
+	assert.equal((await call('PATCH', `/drafts/${d.id}`, sa.id, { version: 1, title: 'ما زال قابلًا للتعديل' })).status, 200);
+	assert.equal((await call('GET', '/', sa.id)).status, 200); assert.equal((await call('GET', `/${old.id}`, sa.id)).status, 200); assert.equal((await call('GET', '/active', sa.id)).status, 200);
+	const status = await call('GET', '/status', sa.id);
+	assert.deepEqual(Object.keys(status.data), ['deliveryEnabled']);
+	const p = await preview(d.id);
+	assert.doesNotMatch(JSON.stringify([status.json, p, (await call('POST', `/drafts/${d.id}/send`, sa.id, { previewToken: p.previewToken }, { 'Idempotency-Key': k })).json]), /ADMIN_BROADCAST_WORKER_ENABLED|JWT_SECRET|DATABASE_URL/);
+	// flag ON: the SAME draft and SAME key now confirm
+	flag('true');
+	assert.equal((await call('GET', '/status', sa.id)).data.deliveryEnabled, true);
+	const p2 = await preview(d.id); assert.equal(p2.deliveryEnabled, true);
+	const ok = await send(d.id, p2.previewToken, k);
+	assert.equal(ok.status, 202); assert.equal(await prisma.broadcast.count({ where: { idempotencyKey: k } }), 1);
+	const w = svc.startBroadcastWorker({ intervalMs: 20, owner: 'w-flag' });
+	for (let i = 0; i < 100 && (await call('GET', `/${ok.data.broadcast.id}`, sa.id)).data.status !== 'COMPLETED'; i++) await new Promise(r => setTimeout(r, 50));
+	w.stop();
+	const counts = await perUser(ok.data.broadcast.id);
+	assert.equal(counts.size, 3); assert.ok([...counts.values()].every(n => n === 1));
+	// flip off again: a second draft is refused without side effects
+	flag('false');
+	const d2 = await newDraft(); const p3 = await preview(d2.id); const before = await rowCounts();
+	assert.equal((await send(d2.id, p3.previewToken, key())).status, 503); assert.deepEqual(await rowCounts(), before);
+	assert.equal((await send(d.id, p2.previewToken, k)).status, 200, 'replay of an already accepted confirm stays a harmless read');
 });
