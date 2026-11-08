@@ -3,6 +3,7 @@ import { adminPlatformReports, userPlatformReports } from './routes/platform-rep
 import adminNotificationHistory from './routes/admin-notification-history.routes';
 import adminNotificationTemplates from './routes/admin-notification-templates.routes';
 import adminBroadcastPreview from './routes/admin-broadcast-preview.routes';
+import adminBroadcasts from './routes/admin-broadcasts.routes';
 import { startChatDigestScheduler } from './services/chat-digest.service';
 import express, { Request, Response, NextFunction } from 'express';
 import { maintenanceMiddleware } from './middlewares/maintenance.middleware';
@@ -373,6 +374,7 @@ mountAppRoute('/api/admin/reports', adminPlatformReports);
 mountAppRoute('/api/admin/notification-history', adminNotificationHistory);
 mountAppRoute('/api/admin/notification-templates', adminNotificationTemplates);
 mountAppRoute('/api/admin/broadcast-preview', adminBroadcastPreview);
+mountAppRoute('/api/admin/broadcasts', adminBroadcasts);
 mountAppRoute('/admin/reports', adminPlatformReports);
 mountAppRoute('/api/admin/tickets', adminTicketsRoutes);
 mountAppRoute('/admin/tickets', adminTicketsRoutes);

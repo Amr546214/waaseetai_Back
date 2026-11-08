@@ -3,6 +3,8 @@
  * an unknown code is shown as the code itself, never guessed or replaced by a generic phrase.
  */
 export const AUDIT_ACTION_LABELS: Record<string, string> = {
+	BROADCAST_SENT: 'إشعار جماعي داخل المنصة',
+	BROADCAST_RETRIED: 'إعادة إرسال إشعار جماعي',
 	PLATFORM_REPORT_DECIDED: 'قرار في بلاغ',
 	// sessions / own account
 	SESSION_STARTED: 'تسجيل دخول جديد',
@@ -96,6 +98,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 
 export const AUDIT_ENTITY_LABELS: Record<string, string> = {
 	PLATFORM_REPORT: 'بلاغ',
+	BROADCAST: 'إشعار جماعي',
 	DISPUTE: 'نزاع', TICKET: 'تذكرة', WITHDRAWAL: 'طلب سحب', ESCROW: 'ضمان', PROJECT: 'مشروع', CONTRACT: 'عقد', FINANCE: 'مالية',
 	USER: 'حساب', ROLE: 'دور', INVITE: 'دعوة', SETTINGS: 'إعدادات', FEE_POLICY: 'سياسة الرسوم', SITE_IDENTITY: 'هوية الموقع', COUPON: 'كوبون'
 };

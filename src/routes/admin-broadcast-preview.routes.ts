@@ -1,17 +1,13 @@
 import { Router } from 'express';
-import type { AccountType } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '../config/db';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { requireSuperAdmin } from '../middlewares/admin-access.middleware';
+import { AUDIENCE_TYPES } from '../services/admin-broadcast.service';
 import { AppError } from '../utils/app-error';
 
 const query = z.object({ audience: z.enum(['CLIENTS', 'PROVIDERS', 'MARKETERS']) }).strict();
-const audiences: Record<z.infer<typeof query>['audience'], AccountType[]> = {
-  CLIENTS: ['CLIENT_INDIVIDUAL', 'CLIENT_COMPANY'],
-  PROVIDERS: ['PROVIDER_INDIVIDUAL', 'PROVIDER_COMPANY'],
-  MARKETERS: ['MARKETING_BROKER'],
-};
+const audiences = AUDIENCE_TYPES;
 
 const router = Router();
 router.use(authenticate, requireActiveUser, requireSuperAdmin);

@@ -202,6 +202,8 @@ model User {
   @@index([lastActiveAt])
   @@index([createdAt])
   @@map("users")
+  broadcastDrafts BroadcastDraft[] @relation("BroadcastDraftOwner")
+  broadcastsSent  Broadcast[]      @relation("BroadcastSender")
 }
 
 model UserSession {
@@ -3390,4 +3392,85 @@ model NotificationTemplate {
 
   @@index([updatedAt, id])
   @@map("notification_templates")
+}
+
+enum BroadcastAudience {
+  CLIENTS
+  PROVIDERS
+  MARKETERS
+}
+
+enum BroadcastStatus {
+  SENDING
+  PARTIAL
+  COMPLETED
+  FAILED
+}
+
+enum BroadcastRecipientStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// A Super Admin's server-side broadcast draft. Private to its owner; `version` is the optimistic-concurrency token.
+// Once sent (`sentAt`) it is frozen: a draft version can be sent exactly once.
+model BroadcastDraft {
+  id        String               @id @default(uuid())
+  ownerId   String
+  owner     User                 @relation("BroadcastDraftOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  title     String               @db.VarChar(150)
+  message   String               @db.Text
+  category  NotificationCategory @default(ALL)
+  audience  BroadcastAudience?
+  version   Int                  @default(1)
+  sentAt    DateTime?
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+  broadcast Broadcast?
+
+  @@index([ownerId, updatedAt])
+  @@map("broadcast_drafts")
+}
+
+// One confirmed in-platform send. Title/message/category/audience are a frozen snapshot of the draft at confirm time.
+model Broadcast {
+  id               String               @id @default(uuid())
+  draftId          String?              @unique
+  draft            BroadcastDraft?      @relation(fields: [draftId], references: [id], onDelete: SetNull)
+  senderId         String
+  sender           User                 @relation("BroadcastSender", fields: [senderId], references: [id], onDelete: Restrict)
+  senderName       String               @db.VarChar(160)
+  title            String               @db.VarChar(150)
+  message          String               @db.Text
+  category         NotificationCategory
+  audience         BroadcastAudience
+  audienceCount    Int
+  audienceHash     String               @db.VarChar(64)
+  previewCheckedAt DateTime
+  idempotencyKey   String               @db.VarChar(100)
+  requestDigest    String               @db.VarChar(64)
+  status           BroadcastStatus      @default(SENDING)
+  createdAt        DateTime             @default(now())
+  completedAt      DateTime?
+  recipients       BroadcastRecipient[]
+
+  @@unique([senderId, idempotencyKey])
+  @@index([createdAt, id])
+  @@map("broadcasts")
+}
+
+model BroadcastRecipient {
+  id          String                   @id @default(uuid())
+  broadcastId String
+  broadcast   Broadcast                @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  userId      String
+  status      BroadcastRecipientStatus @default(PENDING)
+  errorCode   String?                  @db.VarChar(64)
+  attempts    Int                      @default(0)
+  updatedAt   DateTime                 @default(now())
+
+  @@unique([broadcastId, userId])
+  @@index([broadcastId, status, id])
+  @@map("broadcast_recipients")
 }
