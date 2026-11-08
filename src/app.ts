@@ -18,6 +18,7 @@ import { logger } from './config/logger';
 import { globalErrorHandler } from './middlewares/error.middleware';
 import { scrubPrivateRefs } from './middlewares/scrub-private-refs.middleware';
 import { safeServerErrors } from './middlewares/safe-server-errors.middleware';
+import { requestMetricsMiddleware, startEventLoopSampling } from './services/request-metrics';
 import { apiLimiter } from './middlewares/rate-limit.middleware';
 import { responseGzip } from './middlewares/response-gzip.middleware';
 import { resolveTrustProxy } from './config/trust-proxy';
@@ -149,6 +150,10 @@ app.use(
 		exposedHeaders: ['Retry-After'],
 	})
 );
+
+// aggregate-only request counters for the technical monitoring page (no paths, no users); before the limiter so a 429 is counted
+app.use(requestMetricsMiddleware);
+startEventLoopSampling();
 
 // gzip for JSON answers (see middlewares/response-gzip.middleware.ts); before the limiter so a 429 body is encoded the same way
 app.use(responseGzip);

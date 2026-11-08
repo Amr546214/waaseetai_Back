@@ -6,6 +6,7 @@ import type { AdminActor } from './admin-access.service';
 import { ENFORCED_KEYS, PUBLIC_KEYS, SETTINGS_CACHE_TTL_MS, SETTING_BY_KEY, SETTING_DEFS, SettingDef, SettingPerm } from '../config/system-settings.registry';
 import { currencyReadiness } from './currency-readiness.service';
 import { logger } from '../config/logger';
+import { technicalMonitoring } from './technical-monitoring.service';
 import { sessionService } from './session.service';
 import { setBrandName } from '../utils/brand'; // used only inside functions: the cycle with session.service is harmless
 
@@ -168,20 +169,42 @@ export class SystemSettingsService {
 		return { idleMinutes: n, ...(await sessionService.idleImpact(n)) };
 	}
 
+	/**
+	 * `cdn` / `backup` stay in this payload ONLY for older consumers (the previous admin frontend lists every item; the system-settings health card renders one row per key). They are derived from the
+	 * SAME reading as technical-metrics (same cache, same readAt), flagged `deprecated`, and never carry anything the new endpoint does not.
+	 */
+	private async deprecatedItems() {
+		const pick = (all: any[], key: string, label: string, fallback: string) => {
+			const i = all.find(x => x.key === key); const out = key === 'cdn_storage' ? 'cdn' : 'backup';
+			if (!i) return { key: out, label, status: 'unavailable', detail: fallback, deprecated: true, replacedBy: 'technical-metrics' };
+			const measured = i.status === 'measured';
+			// backup: ok only when the job's own record is fresh; a stale or failed record is `down`; no data / unreadable is `unavailable`
+			const status = out === 'backup' ? (i.state === 'OK' ? 'ok' : i.state === 'STALE' || i.state === 'LAST_ATTEMPT_FAILED' ? 'down' : 'unavailable') : measured ? 'ok' : 'unavailable';
+			const detail = out === 'backup' ? (measured ? `${i.valueText}${i.detail ? ` — ${i.detail}` : ''}` : (i.reason || fallback)) : measured ? `${i.value} ${i.unit} (آخر قراءة ${i.readAt})` : (i.reason || fallback);
+			return { key: out, label, status, detail, readAt: i.readAt, deprecated: true, replacedBy: 'technical-metrics' };
+		};
+		let all: any[] = [];
+		try { all = await technicalMonitoring.cdnAndBackup(); } catch { /* fall back to the generic reason */ }
+		return [
+			pick(all, 'cdn_storage', 'CDN وتسليم الملفات', 'تعذّرت قراءة مؤشرات CDN؛ راجع صفحة CDN'),
+			pick(all, 'backup_status', 'النسخ الاحتياطي', 'مهمة النسخ لا تنشر حالتها للتطبيق؛ المطلوب ملف/نقطة حالة من المهمة'),
+		];
+	}
+
 	/** real health facts only; anything without a real source is reported as unavailable with the reason */
 	async health() {
+		const compat = await this.deprecatedItems();
 		const t0 = Date.now(); let db = { ok: false as boolean, ms: null as number | null };
 		try { await this.db.$queryRaw`SELECT 1`; db = { ok: true, ms: Date.now() - t0 }; } catch { db = { ok: false, ms: null }; }
 		return {
 			checkedAt: new Date().toISOString(),
 			items: [
-				{ key: 'app', label: 'خادم التطبيق', status: 'ok', detail: `يعمل منذ ${Math.floor(process.uptime() / 60)} دقيقة (عمر هذه العملية)` },
+				{ key: 'app', label: 'عملية خادم التطبيق (هذه النسخة فقط)', status: 'ok', detail: `يعمل منذ ${Math.floor(process.uptime() / 60)} دقيقة (عمر هذه العملية، لا يخص بقية النسخ ولا المضيف)` },
 				{ key: 'database', label: 'قاعدة البيانات', status: db.ok ? 'ok' : 'down', detail: db.ok ? `استجابة ${db.ms} ms` : 'لا تستجيب' },
 				{ key: 'paypal', label: 'بوابة الدفع (PayPal)', status: process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_SECRET ? 'configured' : 'unconfigured', detail: 'حالة التهيئة فقط، دون اتصال فعلي بالبوابة' },
 				{ key: 'mail', label: 'خدمة البريد الإلكتروني', status: process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS ? 'configured' : 'unconfigured', detail: 'حالة التهيئة فقط، دون إرسال تجريبي' },
 				{ key: 'ai', label: 'محرك AI', status: 'unavailable', detail: 'خارج نطاق هذه الصفحة (مراقبته نطاق منفصل)' },
-				{ key: 'cdn', label: 'CDN وتسليم الملفات', status: 'unavailable', detail: 'لا يوجد مصدر مراقبة مرتبط' },
-				{ key: 'backup', label: 'النسخ الاحتياطي', status: 'unavailable', detail: 'لا يوجد مصدر مراقبة مرتبط (النسخ تتم خارج التطبيق)' },
+				...compat,
 			],
 		};
 	}
