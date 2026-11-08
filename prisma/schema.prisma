@@ -3460,6 +3460,11 @@ model Broadcast {
   cancelledAt      DateTime?
   cancelledById    String?              @db.VarChar(64)
   cancelReason     String?              @db.VarChar(200)
+  reviewedAt       DateTime?
+  reviewedById     String?              @db.VarChar(64)
+  approvedAt       DateTime?
+  approvedById     String?              @db.VarChar(64)
+  approveReason    String?              @db.VarChar(200)
   createdAt        DateTime             @default(now())
   completedAt      DateTime?
   recipients       BroadcastRecipient[]

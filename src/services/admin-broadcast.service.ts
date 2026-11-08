@@ -32,6 +32,15 @@ export const broadcastDeps = {
 	createNotifications: async (tx: Tx, rows: Prisma.NotificationCreateManyInput[]): Promise<void> => { await tx.notification.createMany({ data: rows }); },
 };
 
+export const DEFAULT_MAX_QUEUE_AGE_HOURS = 24;
+/** BROADCAST_MAX_QUEUE_AGE_HOURS: a finite number > 0 (max one year); anything else (unset, 0, negative, text) falls back to 24 h. Read on every call. */
+export function parseMaxQueueAgeHours(raw: string | undefined): number {
+	if (raw === undefined || raw.trim() === '') return DEFAULT_MAX_QUEUE_AGE_HOURS;
+	const n = Number(raw);
+	return Number.isFinite(n) && n > 0 && n <= 24 * 365 ? n : DEFAULT_MAX_QUEUE_AGE_HOURS;
+}
+export const maxQueueAgeMs = (): number => parseMaxQueueAgeHours(process.env.BROADCAST_MAX_QUEUE_AGE_HOURS) * 3_600_000;
+
 export const eligibleWhere = (audience: BroadcastAudience): Prisma.UserWhereInput => ({ accountType: { in: AUDIENCE_TYPES[audience] }, status: 'ACTIVE', isBanned: false });
 
 export async function audienceSnapshot(audience: BroadcastAudience, db: Pick<typeof prisma, 'user'> = prisma) {
@@ -212,7 +221,8 @@ async function processBroadcast(id: string, owner: string): Promise<'done' | 'lo
 export async function claimBroadcast(owner: string): Promise<string | null> {
 	return prisma.$transaction(async tx => {
 		const now = new Date();
-		const rows = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM broadcasts WHERE "status" IN ('QUEUED', 'SENDING') AND ("leaseUntil" IS NULL OR "leaseUntil" < ${now}) ORDER BY "createdAt", id LIMIT 1 FOR UPDATE SKIP LOCKED`;
+		const cutoff = new Date(now.getTime() - maxQueueAgeMs());
+		const rows = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM broadcasts WHERE "status" IN ('QUEUED', 'SENDING') AND ("leaseUntil" IS NULL OR "leaseUntil" < ${now}) AND ("approvedAt" IS NOT NULL OR "createdAt" > ${cutoff}) ORDER BY "createdAt", id LIMIT 1 FOR UPDATE SKIP LOCKED`;
 		if (!rows.length) return null;
 		await tx.broadcast.update({ where: { id: rows[0].id }, data: { status: 'SENDING', leaseOwner: owner, leaseUntil: new Date(now.getTime() + broadcastDeps.leaseMs), heartbeatAt: now } });
 		return rows[0].id;
@@ -220,8 +230,16 @@ export async function claimBroadcast(owner: string): Promise<string | null> {
 }
 
 /** One pass: claim and deliver jobs until none is free. Returns the ids this worker finished or stopped on. */
+let lastSkippedLogged = 0;
+async function logSkippedExpired() {
+	const cutoff = new Date(Date.now() - maxQueueAgeMs());
+	const n = await prisma.broadcast.count({ where: { status: { in: ['QUEUED', 'SENDING'] }, approvedAt: null, createdAt: { lte: cutoff } } });
+	if (n > 0 && n !== lastSkippedLogged) logger.warn(`[admin-broadcast] worker skipped ${n} expired job(s) older than ${Math.round(maxQueueAgeMs() / 3_600_000)}h awaiting admin approval`);
+	lastSkippedLogged = n;
+}
 export async function runBroadcastWorkerOnce(owner: string): Promise<string[]> {
 	const handled: string[] = [];
+	await logSkippedExpired();
 	for (;;) {
 		const id = await claimBroadcast(owner);
 		if (!id) return handled;
@@ -315,12 +333,12 @@ export async function retryRemaining(adminId: string, id: string) {
 	if (!found) throw new AppError('الإشعار الجماعي غير موجود.', 404);
 	await prisma.$transaction(async tx => {
 		await lock(tx, id);
-		const b = await tx.broadcast.findUniqueOrThrow({ where: { id }, select: { status: true } });
+		const b = await tx.broadcast.findUniqueOrThrow({ where: { id }, select: { status: true, createdAt: true, approvedAt: true } });
 		if (b.status === 'CANCELLED') throw new AppError('أُلغي هذا الإرسال ولا يمكن إعادته.', 409, undefined, 'BROADCAST_CANCELLED');
 		if (b.status === 'COMPLETED') throw new AppError('اكتمل الإرسال لكل المستلمين. لا يوجد ما يُعاد.', 409, undefined, 'BROADCAST_NOTHING_TO_RETRY');
 		if (b.status === 'QUEUED' || b.status === 'SENDING') throw new AppError('الإرسال جارٍ أو في قائمة الانتظار. انتظر انتهاءه.', 409, undefined, 'BROADCAST_IN_PROGRESS');
 		await tx.broadcastRecipient.updateMany({ where: { broadcastId: id, status: 'FAILED' }, data: { status: 'PENDING' } });
-		await tx.broadcast.update({ where: { id }, data: { status: 'QUEUED', completedAt: null, leaseOwner: null, leaseUntil: null } });
+		await tx.broadcast.update({ where: { id }, data: { status: 'QUEUED', completedAt: null, leaseOwner: null, leaseUntil: null, ...(!b.approvedAt && Date.now() - b.createdAt.getTime() > maxQueueAgeMs() ? { approvedAt: new Date(), approvedById: adminId, approveReason: 'إعادة المحاولة بقرار صريح من مدير النظام' } : {}) } });
 	});
 	await adminAudit.record({ adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_RETRIED', title: 'إعادة إرسال المتبقي من إشعار جماعي', summary: 'أعاد مدير النظام المستلمين الفاشلين إلى قائمة الانتظار.', severity: 'WARNING' });
 	return summary(id);
@@ -352,32 +370,34 @@ export async function historyDetail(id: string) {
 export const processBroadcastForTest = processBroadcast;
 
 // ---- queue review ---------------------------------------------------------------------------------------------------------------------------------
-export type QueueState = 'WAITING_WORKER_DISABLED' | 'WAITING_FOR_WORKER' | 'RUNNING' | 'STUCK_STOPPED_MID_RUN' | 'STUCK_NO_PROGRESS';
-export function classifyQueueState(b: { status: string; createdAt: Date; heartbeatAt: Date | null; leaseUntil: Date | null }, progressed: boolean, now: Date, workerEnabled: boolean): QueueState {
+export type QueueState = 'WAITING_WORKER_DISABLED' | 'WAITING_FOR_WORKER' | 'RUNNING' | 'STUCK_STOPPED_MID_RUN' | 'STUCK_NO_PROGRESS' | 'EXPIRED_NEEDS_REVIEW';
+/** EXPIRED_NEEDS_REVIEW is DERIVED (age > max age, not re-approved), not a stored status: no enum value is needed and it follows the env limit live. */
+export function classifyQueueState(b: { status: string; createdAt: Date; heartbeatAt: Date | null; leaseUntil: Date | null; approvedAt?: Date | null }, progressed: boolean, now: Date, workerEnabled: boolean): QueueState {
 	const t = now.getTime();
 	const quiet = t - (b.heartbeatAt ?? b.createdAt).getTime(); // time since the last sign of life
 	if (b.status === 'SENDING' && b.leaseUntil && b.leaseUntil.getTime() > t) return 'RUNNING';
+	if (!b.approvedAt && t - b.createdAt.getTime() > maxQueueAgeMs()) return 'EXPIRED_NEEDS_REVIEW';
 	if ((b.status === 'SENDING' || progressed) && quiet > broadcastDeps.stuckMidRunMs) return 'STUCK_STOPPED_MID_RUN';
 	if (!workerEnabled) return 'WAITING_WORKER_DISABLED';
 	if (b.status === 'QUEUED' && !progressed && t - b.createdAt.getTime() > broadcastDeps.stuckNoProgressMs) return 'STUCK_NO_PROGRESS';
 	return 'WAITING_FOR_WORKER';
 }
-const queueSelect = { ...listSelect, leaseUntil: true } as const;
-async function queueRows() {
-	const rows = await prisma.broadcast.findMany({ where: { status: { in: ['QUEUED', 'SENDING'] } }, select: queueSelect, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 100 });
+const queueSelect = { ...listSelect, leaseUntil: true, reviewedAt: true, approvedAt: true } as const;
+async function queueRows(limit = 100) {
+	const rows = await prisma.broadcast.findMany({ where: { status: { in: ['QUEUED', 'SENDING'] } }, select: queueSelect, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit });
 	const counts = await recipientCounts(rows.map(r => r.id));
 	const now = new Date(); const enabled = isBroadcastWorkerEnabled();
 	return rows.map(b => {
 		const c = counts.get(b.id)!; const queueState = classifyQueueState(b, c.SENT + c.FAILED > 0, now, enabled);
 		const { title: _t, ...rest } = view(b, c);
-		return { ...rest, title: b.title, queueState, stale: queueState.startsWith('STUCK'), waitingSeconds: b.status === 'QUEUED' ? Math.max(0, Math.floor((now.getTime() - b.createdAt.getTime()) / 1000)) : null, heartbeatAt: b.heartbeatAt, leaseUntil: b.leaseUntil };
+		return { ...rest, title: b.title, queueState, stale: queueState.startsWith('STUCK'), waitingSeconds: b.status === 'QUEUED' ? Math.max(0, Math.floor((now.getTime() - b.createdAt.getTime()) / 1000)) : null, heartbeatAt: b.heartbeatAt, leaseUntil: b.leaseUntil, ageSeconds: Math.max(0, Math.floor((now.getTime() - b.createdAt.getTime()) / 1000)), reviewed: !!b.reviewedAt, approved: !!b.approvedAt };
 	});
 }
 function summarizeQueue(items: Awaited<ReturnType<typeof queueRows>>) {
 	const n = (s: QueueState) => items.filter(i => i.queueState === s).length;
 	const waiting = items.filter(i => i.queueState === 'WAITING_WORKER_DISABLED' || i.queueState === 'WAITING_FOR_WORKER' || i.status === 'QUEUED');
 	const ages = waiting.map(i => i.waitingSeconds).filter((x): x is number => x !== null);
-	return { waitingDisabled: n('WAITING_WORKER_DISABLED'), waitingForWorker: n('WAITING_FOR_WORKER'), running: n('RUNNING'), stuckMidRun: n('STUCK_STOPPED_MID_RUN'), stuckNoProgress: n('STUCK_NO_PROGRESS'), oldestWaitingSeconds: ages.length ? Math.max(...ages) : null, workerEnabled: isBroadcastWorkerEnabled() };
+	return { waitingDisabled: n('WAITING_WORKER_DISABLED'), waitingForWorker: n('WAITING_FOR_WORKER'), running: n('RUNNING'), stuckMidRun: n('STUCK_STOPPED_MID_RUN'), stuckNoProgress: n('STUCK_NO_PROGRESS'), expiredNeedsReview: n('EXPIRED_NEEDS_REVIEW'), oldestWaitingSeconds: ages.length ? Math.max(...ages) : null, workerEnabled: isBroadcastWorkerEnabled() };
 }
 export async function queueReview() { const items = await queueRows(); return { items, summary: summarizeQueue(items) }; }
 export async function queueSummary() { return summarizeQueue(await queueRows()); }
@@ -399,3 +419,49 @@ export async function cancelBroadcast(adminId: string, id: string, reason?: stri
 	if (changed) await adminAudit.record({ adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_CANCELLED', title: 'إلغاء إرسال جماعي', summary: 'ألغى مدير النظام إرسالًا جماعيًا لم يكتمل.', severity: 'WARNING', details: reason ? { reason } : undefined });
 	return summary(id);
 }
+
+// ---- pre-activation check, review, re-approval ----------------------------------------------------------------------------------------------------
+export async function queuePreflight() {
+	const items = await queueRows(1000);
+	const count = (s: QueueState) => items.filter(i => i.queueState === s).length;
+	const counts = { WAITING_WORKER_DISABLED: count('WAITING_WORKER_DISABLED'), WAITING_FOR_WORKER: count('WAITING_FOR_WORKER'), RUNNING: count('RUNNING'), STUCK_STOPPED_MID_RUN: count('STUCK_STOPPED_MID_RUN'), STUCK_NO_PROGRESS: count('STUCK_NO_PROGRESS'), EXPIRED_NEEDS_REVIEW: count('EXPIRED_NEEDS_REVIEW') };
+	const blockers: { code: string; count: number; message: string }[] = [];
+	const hours = Math.round(maxQueueAgeMs() / 3_600_000 * 100) / 100;
+	if (counts.EXPIRED_NEEDS_REVIEW) blockers.push({ code: 'EXPIRED_JOBS', count: counts.EXPIRED_NEEDS_REVIEW, message: `إرسالات أقدم من ${hours} ساعة ولم يُعاد اعتمادها. العامل لن يرسلها قبل الاعتماد؛ ألغِها أو اعتمدها.` });
+	if (counts.STUCK_STOPPED_MID_RUN) blockers.push({ code: 'STUCK_MID_RUN', count: counts.STUCK_STOPPED_MID_RUN, message: 'إرسالات توقفت أثناء التنفيذ. راجعها: استكمالها آمن بلا تكرار، أو ألغِها.' });
+	if (counts.STUCK_NO_PROGRESS) blockers.push({ code: 'STUCK_NO_PROGRESS', count: counts.STUCK_NO_PROGRESS, message: 'إرسالات عالقة بلا تقدّم. راجعها أو ألغِها.' });
+	const unreviewed = items.filter(i => !i.reviewed && i.queueState !== 'RUNNING').length;
+	if (unreviewed) blockers.push({ code: 'UNREVIEWED_JOBS', count: unreviewed, message: 'إرسالات في الطابور لم تُراجَع بعد. راجعها واقبلها أو ألغِها قبل تفعيل العامل.' });
+	const ages = items.map(i => i.ageSeconds);
+	return {
+		canEnableSafely: blockers.length === 0, blockers, counts, jobs: items.length, oldestAgeSeconds: ages.length ? Math.max(...ages) : null,
+		thresholds: { maxQueueAgeSeconds: Math.round(maxQueueAgeMs() / 1000), stuckMidRunSeconds: Math.round(broadcastDeps.stuckMidRunMs / 1000), stuckNoProgressSeconds: Math.round(broadcastDeps.stuckNoProgressMs / 1000) },
+		workerEnabled: isBroadcastWorkerEnabled(),
+	};
+}
+
+async function ackTransition(adminId: string, id: string, kind: 'review' | 'approve', reason?: string) {
+	const found = await prisma.broadcast.findUnique({ where: { id }, select: { id: true } });
+	if (!found) throw new AppError('الإشعار الجماعي غير موجود.', 404);
+	const changed = await prisma.$transaction(async tx => {
+		await lock(tx, id);
+		const b = await tx.broadcast.findUniqueOrThrow({ where: { id }, select: { status: true, createdAt: true, reviewedAt: true, approvedAt: true } });
+		if (b.status !== 'QUEUED' && b.status !== 'SENDING') throw new AppError(b.status === 'CANCELLED' ? 'أُلغي هذا الإرسال.' : 'انتهى هذا الإرسال.', 409, undefined, kind === 'review' ? 'BROADCAST_NOT_REVIEWABLE' : 'BROADCAST_NOT_APPROVABLE');
+		const now = new Date();
+		if (kind === 'review') {
+			if (b.reviewedAt) return false;
+			await tx.broadcast.update({ where: { id }, data: { reviewedAt: now, reviewedById: adminId } });
+			return true;
+		}
+		if (b.approvedAt) return false;
+		if (now.getTime() - b.createdAt.getTime() <= maxQueueAgeMs()) throw new AppError('هذا الإرسال لم تنتهِ صلاحيته ولا يحتاج اعتمادًا.', 409, undefined, 'BROADCAST_NOT_EXPIRED');
+		await tx.broadcast.update({ where: { id }, data: { approvedAt: now, approvedById: adminId, approveReason: reason ?? null, reviewedAt: b.reviewedAt ?? now, reviewedById: adminId } });
+		return true;
+	});
+	if (changed) await adminAudit.record(kind === 'review'
+		? { adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_REVIEWED', title: 'مراجعة إرسال جماعي', summary: 'راجع مدير النظام إرسالًا جماعيًا في الطابور وقبله.', severity: 'INFO' }
+		: { adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_REAPPROVED', title: 'إعادة اعتماد إرسال جماعي منتهي الصلاحية', summary: 'أعاد مدير النظام اعتماد إرسال جماعي تجاوز مدة الطابور.', severity: 'WARNING', details: { reason } });
+	return summary(id);
+}
+export const reviewBroadcast = (adminId: string, id: string) => ackTransition(adminId, id, 'review');
+export const approveExpiredBroadcast = (adminId: string, id: string, reason: string) => ackTransition(adminId, id, 'approve', reason);

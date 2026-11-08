@@ -38,6 +38,11 @@ CREATE TABLE "broadcasts" (
   "cancelledAt" TIMESTAMP(3),
   "cancelledById" VARCHAR(64),
   "cancelReason" VARCHAR(200),
+  "reviewedAt" TIMESTAMP(3),
+  "reviewedById" VARCHAR(64),
+  "approvedAt" TIMESTAMP(3),
+  "approvedById" VARCHAR(64),
+  "approveReason" VARCHAR(200),
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "completedAt" TIMESTAMP(3)
 );

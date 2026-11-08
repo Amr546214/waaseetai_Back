@@ -60,7 +60,7 @@ let sa: any, sa2: any, plainAdmin: any, client: any;
 beforeEach(async () => {
 	if (!enabled) return;
 	const { prisma, svc } = await env();
-	svc.broadcastDeps.chunkSize = 200; svc.broadcastDeps.leaseMs = 60_000; svc.broadcastDeps.afterChunk = undefined; process.env.ADMIN_BROADCAST_WORKER_ENABLED = 'true'; svc.broadcastDeps.createNotifications = async (tx: any, rows: any[]) => { await tx.notification.createMany({ data: rows }); };
+	svc.broadcastDeps.chunkSize = 200; svc.broadcastDeps.leaseMs = 60_000; svc.broadcastDeps.afterChunk = undefined; process.env.ADMIN_BROADCAST_WORKER_ENABLED = 'true'; delete process.env.BROADCAST_MAX_QUEUE_AGE_HOURS; svc.broadcastDeps.createNotifications = async (tx: any, rows: any[]) => { await tx.notification.createMany({ data: rows }); };
 	await prisma.notification.deleteMany({}); await prisma.broadcast.deleteMany({}); await prisma.broadcastDraft.deleteMany({});
 	await prisma.user.deleteMany({ where: { accountType: { in: ['MARKETING_BROKER'] } } });
 	sa ??= await mkUser('SUPER_ADMIN', 'sa'); sa2 ??= await mkUser('SUPER_ADMIN', 'sa2'); plainAdmin ??= await mkUser('ADMIN', 'adm'); client ??= await mkUser('CLIENT_INDIVIDUAL', 'cl');
@@ -521,10 +521,10 @@ test('queue: permissions, and payloads carry no message body and no env values',
 	assert.equal(q.status, 200); assert.equal(s.status, 200);
 	const text = JSON.stringify([q.json, s.json]);
 	assert.doesNotMatch(text, /نص الرسالة|ADMIN_BROADCAST_WORKER_ENABLED|JWT_SECRET|DATABASE_URL/);
-	assert.deepEqual(Object.keys(s.data).sort(), ['oldestWaitingSeconds', 'running', 'stuckMidRun', 'stuckNoProgress', 'waitingDisabled', 'waitingForWorker', 'workerEnabled']);
+	assert.deepEqual(Object.keys(s.data).sort(), ['expiredNeedsReview', 'oldestWaitingSeconds', 'running', 'stuckMidRun', 'stuckNoProgress', 'waitingDisabled', 'waitingForWorker', 'workerEnabled']);
 	assert.equal(s.data.workerEnabled, false); assert.equal(typeof s.data.workerEnabled, 'boolean');
 	const it = q.data.items[0];
-	assert.ok(['id', 'status', 'sender', 'category', 'audience', 'totals', 'createdAt', 'waitingSeconds', 'lastProgressAt', 'heartbeatAt', 'leaseUntil', 'stale', 'queueState'].every(k => k in it));
+	assert.ok(['id', 'status', 'sender', 'category', 'audience', 'totals', 'createdAt', 'waitingSeconds', 'lastProgressAt', 'heartbeatAt', 'leaseUntil', 'stale', 'queueState', 'ageSeconds', 'reviewed', 'approved'].every(k => k in it));
 	assert.ok(!('message' in it));
 	flagOn(true);
 });
@@ -605,4 +605,94 @@ test('cancel: a stuck mid-run job keeps its SENT recipients and cancels only the
 	const b = await queued(1); await drain();
 	const fin = await call('POST', `/${b.id}/cancel`, sa.id, {});
 	assert.equal(fin.status, 409); assert.equal(fin.json.code, 'BROADCAST_NOT_CANCELLABLE');
+});
+
+// ---- preflight, max-age guard, review, re-approval ------------------------------------------------------------------------------------------------
+const makeOld = async (id: string, hours: number) => (await env()).prisma.broadcast.update({ where: { id }, data: { createdAt: ago(hours * 3600_000) } });
+const preflight = async () => (await (await env()).call('GET', '/queue/preflight', sa.id)).data;
+
+test('max age env override: invalid, zero, negative and absurd values fall back to 24 h', opts, async () => {
+	const { svc } = await env();
+	assert.equal(svc.parseMaxQueueAgeHours(undefined), 24);
+	for (const bad of ['', '0', '-3', 'abc', 'NaN', 'Infinity', '100000', '  ']) assert.equal(svc.parseMaxQueueAgeHours(bad), 24, bad);
+	assert.equal(svc.parseMaxQueueAgeHours('6'), 6); assert.equal(svc.parseMaxQueueAgeHours('0.5'), 0.5);
+	delete process.env.BROADCAST_MAX_QUEUE_AGE_HOURS; assert.equal(svc.maxQueueAgeMs(), 24 * 3600_000);
+	process.env.BROADCAST_MAX_QUEUE_AGE_HOURS = '0'; assert.equal(svc.maxQueueAgeMs(), 24 * 3600_000);
+	process.env.BROADCAST_MAX_QUEUE_AGE_HOURS = '2'; assert.equal(svc.maxQueueAgeMs(), 2 * 3600_000); delete process.env.BROADCAST_MAX_QUEUE_AGE_HOURS;
+});
+
+test('preflight: permissions, empty queue is safe, blockers per condition, no env values', opts, async () => {
+	const { call, svc, prisma } = await env();
+	assert.equal((await call('GET', '/queue/preflight', null)).status, 401); assert.equal((await call('GET', '/queue/preflight', client.id)).status, 403); assert.equal((await call('GET', '/queue/preflight', plainAdmin.id)).status, 403);
+	let pf = await preflight();
+	assert.equal(pf.canEnableSafely, true); assert.deepEqual(pf.blockers, []); assert.equal(pf.jobs, 0); assert.equal(pf.oldestAgeSeconds, null);
+	assert.deepEqual(pf.thresholds, { maxQueueAgeSeconds: 86400, stuckMidRunSeconds: 600, stuckNoProgressSeconds: 3600 });
+	const a = await queued(3); flagOn(false);
+	pf = await preflight(); // fresh but unreviewed
+	assert.equal(pf.canEnableSafely, false); assert.deepEqual(pf.blockers.map((b: any) => [b.code, b.count]), [['UNREVIEWED_JOBS', 1]]); assert.equal(pf.counts.WAITING_WORKER_DISABLED, 1); assert.equal(pf.workerEnabled, false);
+	assert.equal((await call('POST', `/${a.id}/review`, sa.id)).status, 200);
+	pf = await preflight(); assert.equal(pf.canEnableSafely, true); assert.deepEqual(pf.blockers, []);
+	await makeOld(a.id, 30);
+	pf = await preflight(); assert.deepEqual(pf.blockers.map((b: any) => b.code), ['EXPIRED_JOBS']); assert.equal(pf.counts.EXPIRED_NEEDS_REVIEW, 1); assert.ok(pf.oldestAgeSeconds >= 30 * 3600);
+	await makeOld(a.id, 1);
+	await prisma.broadcast.update({ where: { id: a.id }, data: { heartbeatAt: ago(30 * 60_000) } });
+	await prisma.broadcastRecipient.updateMany({ where: { broadcastId: a.id }, data: { status: 'SENT' } });
+	await prisma.broadcastRecipient.updateMany({ where: { broadcastId: a.id, id: { in: (await prisma.broadcastRecipient.findMany({ where: { broadcastId: a.id }, take: 1 })).map(r => r.id) } }, data: { status: 'PENDING' } });
+	pf = await preflight(); assert.deepEqual(pf.blockers.map((b: any) => b.code), ['STUCK_MID_RUN']);
+	assert.doesNotMatch(JSON.stringify(pf), /ADMIN_BROADCAST_WORKER_ENABLED|BROADCAST_MAX_QUEUE_AGE_HOURS|JWT_SECRET|DATABASE_URL|نص الرسالة/);
+	flagOn(true); void svc;
+});
+
+test('max-age guard: a started worker never claims an expired job; approve-send makes it claimable; delivered once; skip log has counts only', opts, async () => {
+	const { call, svc, prisma } = await env();
+	const a = await queued(4); await makeOld(a.id, 48);
+	flagOn(true);
+	const logs: string[] = []; const logger = (await import('../config/logger')).logger as any; const orig = logger.warn; logger.warn = (m: string) => { logs.push(String(m)); };
+	try {
+		assert.deepEqual(await drain('w-old'), []);
+		const w = svc.startBroadcastWorker({ intervalMs: 20, owner: 'w-timer2' }); await new Promise(r => setTimeout(r, 300)); w.stop();
+	} finally { logger.warn = orig; }
+	assert.equal((await notes()).length, 0);
+	const row = await prisma.broadcast.findUniqueOrThrow({ where: { id: a.id } });
+	assert.equal(row.status, 'QUEUED'); assert.equal(row.leaseOwner, null); assert.equal(await prisma.broadcastRecipient.count({ where: { broadcastId: a.id, status: 'PENDING' } }), 4);
+	const skipLogs = logs.filter(l => l.includes('skipped'));
+	assert.equal(skipLogs.length, 1, 'one line, not one per poll'); assert.match(skipLogs[0], /skipped 1 expired job/); assert.doesNotMatch(skipLogs[0], new RegExp(a.id));
+	assert.equal((await item(a.id)).queueState, 'EXPIRED_NEEDS_REVIEW');
+	assert.equal((await call('GET', '/queue/summary', sa.id)).data.expiredNeedsReview, 1);
+	// approval: reason required, audited, idempotent, only for expired
+	assert.equal((await call('POST', `/${a.id}/approve-send`, sa.id, {})).json.code, 'APPROVE_REASON_REQUIRED');
+	assert.equal((await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'ab' })).status, 400);
+	const ok = await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'مراجعة: ما زالت مطلوبة' });
+	assert.equal(ok.status, 200);
+	assert.equal((await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'مرة ثانية' })).status, 200);
+	assert.equal(await prisma.accountAuditLog.count({ where: { eventType: 'BROADCAST_REAPPROVED', context: { path: ['entityId'], equals: a.id } } }), 1);
+	const aud = await prisma.accountAuditLog.findFirstOrThrow({ where: { eventType: 'BROADCAST_REAPPROVED', context: { path: ['entityId'], equals: a.id } } });
+	assert.doesNotMatch(JSON.stringify(aud), /نص الرسالة/);
+	const r = await prisma.broadcast.findUniqueOrThrow({ where: { id: a.id } }); assert.ok(r.approvedAt && r.reviewedAt); assert.equal(r.approvedById, sa.id);
+	assert.deepEqual(await drain('w-ok'), [a.id]);
+	const counts = await perUser(a.id); assert.equal(counts.size, 4); assert.ok([...counts.values()].every(n => n === 1));
+	assert.equal((await call('GET', `/${a.id}`, sa.id)).data.status, 'COMPLETED');
+	assert.equal((await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'بعد الانتهاء' })).json.code, 'BROADCAST_NOT_APPROVABLE');
+	// a fresh job is not "expired": approval refused; review works and is idempotent
+	const b = await queued(1);
+	assert.equal((await call('POST', `/${b.id}/approve-send`, sa.id, { reason: 'غير لازم' })).json.code, 'BROADCAST_NOT_EXPIRED');
+	assert.equal((await call('POST', `/${b.id}/review`, sa.id)).status, 200); assert.equal((await call('POST', `/${b.id}/review`, sa.id)).status, 200);
+	assert.equal(await prisma.accountAuditLog.count({ where: { eventType: 'BROADCAST_REVIEWED', context: { path: ['entityId'], equals: b.id } } }), 1);
+	assert.equal((await item(b.id)).reviewed, true);
+	for (const [m, u, bd] of [['POST', `/${b.id}/review`], ['POST', `/${b.id}/approve-send`, { reason: 'abc' }]] as any[]) { assert.equal((await call(m, u, null, bd)).status, 401); assert.equal((await call(m, u, plainAdmin.id, bd)).status, 403); }
+});
+
+test('expired job: cancel still works, review/approve refused afterwards, and the env limit applies live', opts, async () => {
+	const { call, prisma } = await env();
+	const a = await queued(2); await makeOld(a.id, 50);
+	assert.equal((await call('POST', `/${a.id}/cancel`, sa.id, { reason: 'قديمة' })).data.status, 'CANCELLED');
+	assert.equal(await prisma.broadcastRecipient.count({ where: { broadcastId: a.id, status: 'CANCELLED' } }), 2);
+	assert.equal((await call('POST', `/${a.id}/review`, sa.id)).json.code, 'BROADCAST_NOT_REVIEWABLE');
+	assert.equal((await call('POST', `/${a.id}/approve-send`, sa.id, { reason: 'بعد الإلغاء' })).json.code, 'BROADCAST_NOT_APPROVABLE');
+	// a 30 min job is fine at 24 h, expired once the limit is lowered to 15 min
+	const b = await queued(1); await makeOld(b.id, 0.5); flagOn(true);
+	assert.equal((await item(b.id)).queueState, 'WAITING_FOR_WORKER');
+	process.env.BROADCAST_MAX_QUEUE_AGE_HOURS = '0.25'; assert.equal((await item(b.id)).queueState, 'EXPIRED_NEEDS_REVIEW');
+	assert.deepEqual(await drain('w-lim'), []); delete process.env.BROADCAST_MAX_QUEUE_AGE_HOURS;
+	assert.deepEqual(await drain('w-lim2'), [b.id]);
 });

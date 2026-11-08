@@ -1,34 +1,35 @@
-# Broadcast queue review and pre-activation checklist / مراجعة طابور البث وخطوات ما قبل التفعيل
+# Broadcast pre-activation runbook / دليل ما قبل تفعيل عامل البث
 
-## Why stale queued jobs are dangerous / لماذا الطابور القديم خطر
-A broadcast confirmed while `ADMIN_BROADCAST_WORKER_ENABLED` is not `true` is refused (nothing queued). But a job confirmed while the worker was ON and later left unfinished (worker stopped, flag turned off) stays QUEUED/SENDING. The moment the worker is turned on again it would deliver that old message to real users. Always review and cancel stale jobs BEFORE turning the flag on.
+Goal: when `ADMIN_BROADCAST_WORKER_ENABLED=true` is set, NO old message may be sent by accident. / الهدف: عند تفعيل العامل لا تُرسل رسالة قديمة بالخطأ.
 
-## 1. Review the queue / راجع الطابور
-Super Admin only: page "البث الجماعي" -> tab "الطابور" (API: `GET /api/admin/broadcasts/queue`, cheap check: `GET /api/admin/broadcasts/queue/summary`). Each job shows sender, category, audience, counters (audience / sent / failed / pending), age and last progress. No message bodies are listed.
+## Why / لماذا
+A job confirmed while the worker was ON and then left unfinished stays QUEUED/SENDING. Turning the worker on later would deliver that old message to real users. Three guards exist: (a) the **max-age guard** (a job older than `BROADCAST_MAX_QUEUE_AGE_HOURS`, default 24, invalid/0/negative values fall back to 24, is never claimed by the worker unless an admin re-approves it), (b) the **preflight check**, (c) **cancel**.
 
-## 2. queueState meanings / معاني الحالات
+## queueState meanings / الحالات
 | queueState | Arabic | Meaning |
 |---|---|---|
-| `WAITING_WORKER_DISABLED` | في الانتظار — العامل مقفول | QUEUED (or resumable) and the worker flag is OFF. Normal while the flag is off; it will be delivered the moment the flag is turned on. |
-| `WAITING_FOR_WORKER` | في الانتظار — بانتظار العامل | Flag ON, waiting for the next worker pass (seconds). |
-| `RUNNING` | يعمل الآن | SENDING with a live lease. Do not touch. |
-| `STUCK_STOPPED_MID_RUN` | توقفت أثناء التنفيذ | Some recipients already handled, lease expired and no heartbeat for more than 10 minutes. Reported even with the flag OFF. |
-| `STUCK_NO_PROGRESS` | عالقة بلا تقدّم | QUEUED for more than 60 minutes with the flag ON and nothing delivered. |
-Thresholds are the constants `stuckMidRunMs` (10 min) and `stuckNoProgressMs` (60 min) in `admin-broadcast.service.ts`.
+| `WAITING_WORKER_DISABLED` | في الانتظار — العامل مقفول | flag OFF, job waits. Nothing is sent while the worker is off. |
+| `WAITING_FOR_WORKER` | في الانتظار — بانتظار العامل | flag ON, next worker pass will take it. |
+| `RUNNING` | يعمل الآن | live lease. Do not touch. |
+| `STUCK_STOPPED_MID_RUN` | توقفت أثناء التنفيذ | progress made, lease expired, no heartbeat > 10 min. |
+| `STUCK_NO_PROGRESS` | عالقة بلا تقدّم | QUEUED > 60 min, flag ON, nothing delivered. |
+| `EXPIRED_NEEDS_REVIEW` | منتهية الصلاحية — تحتاج مراجعة | older than the max age and not re-approved. DERIVED from age (no database status), so the env limit applies live. The worker skips it. |
 
-## 3. Cancel stale jobs / إلغاء القديم
-Per job: "إلغاء" with an optional reason (<= 200 chars), or `POST /api/admin/broadcasts/:id/cancel {"reason": "..."}`. Allowed for QUEUED jobs and for SENDING jobs whose lease expired. Refused (409 `BROADCAST_RUNNING`) while a worker holds a live lease; refused (409 `BROADCAST_NOT_CANCELLABLE`) for finished jobs. It marks the job and its still-PENDING recipients CANCELLED, never touches recipients already SENT, never sends anything, is idempotent (second call = same result) and writes an audit row `BROADCAST_CANCELLED` (no message body). A cancelled job is never claimed by any worker.
+## Runbook / خطوات التنفيذ
+1. **Identify old/stuck messages.** Queue screen (page "البث الجماعي" -> "طابور البث") and `GET /api/admin/broadcasts/queue`; `GET /queue/preflight` gives counts per state and blockers.
+2. **Review or cancel everything not yet sent.**
+   - `POST /:id/review` (button "تمت المراجعة") = "I saw it and accept it being sent". Audited (`BROADCAST_REVIEWED`).
+   - `POST /:id/cancel {reason?}` = drop it. Only PENDING recipients become CANCELLED; recipients already SENT are never touched; nothing is sent; refused (409) while a worker holds a live lease; idempotent; audited (`BROADCAST_CANCELLED`).
+   - `POST /:id/approve-send {reason}` (3-200 chars) = explicit re-approval of an EXPIRED job after review. Audited (`BROADCAST_REAPPROVED`, no body). Only then can a worker claim it.
+3. **Confirm the preflight is green**: `canEnableSafely=true`, `blockers=[]`. Blockers: `EXPIRED_JOBS`, `STUCK_MID_RUN`, `STUCK_NO_PROGRESS`, `UNREVIEWED_JOBS`.
+4. **Confirm what the max-age guard will skip.** `counts.EXPIRED_NEEDS_REVIEW` in preflight = jobs the worker will leave alone (it logs one line with the COUNT only when it skips). Anything you still want must be re-approved (step 2); the rest cancelled.
+5. **Enable the flag in a controlled window**: set `ADMIN_BROADCAST_WORKER_ENABLED=true`, restart the backend.
+6. **Verify the first job end to end with a harmless audience**: confirm a short test message to a small internal audience, watch the progress on the queue screen, check history counters (sent = audience) and that nobody got two (the database enforces one notification per broadcast and user).
+7. **Rollback**: set the flag to anything but `true`, restart. New confirms and retries are refused, existing jobs wait (`WAITING_WORKER_DISABLED`), nothing is lost. If a job stopped mid-run, resume is safe and duplicate-free (notification + SENT mark are one transaction, unique indexes are the last guard); otherwise cancel it.
 
-## 4. Before setting the flag / قبل التفعيل
-1. Open the queue: it must be empty, or contain only jobs you deliberately accept (their message and audience are still wanted).
-2. Cancel everything else (step 3). `queue/summary` must show `waitingDisabled=0`, `stuckMidRun=0`, `stuckNoProgress=0` except accepted jobs.
-3. Only then set `ADMIN_BROADCAST_WORKER_ENABLED=true` and restart the backend.
-
-## 5. After enabling / بعد التفعيل
-`queue/summary` shows `workerEnabled=true`; accepted jobs move to RUNNING then leave the queue (history shows COMPLETED/PARTIAL). Check history counters: sent = audience, no recipient twice (the database enforces one notification per broadcast and user).
-
-## 6. A job stuck mid-run / مهمة توقفت أثناء التنفيذ
-Resume is safe: with the flag ON the next worker pass takes over an expired lease and continues only recipients still PENDING; recipients already SENT are never notified again (notification + SENT mark are one transaction, and unique indexes are the last guard). If the message is no longer wanted, cancel it instead (SENT recipients stay SENT).
-
-## 7. Rollback / التراجع
-Set the flag back to anything but `true` and restart. New confirms and retries are refused, existing jobs simply wait (state `WAITING_WORKER_DISABLED`), nothing is lost, and they can be cancelled from the queue screen.
+## NOT automated / ما لا يتم تلقائيًا
+- Nothing cancels or approves jobs on its own; every decision is an explicit Super Admin action.
+- The flag itself is changed by hand in the environment; the app never flips it.
+- Preflight looks at the first 1000 queued jobs.
+- Messages are not re-validated against current audience/draft: the audience was frozen at confirm time, so age and the explicit reason are the safeguards.
+- No alert outside the broadcast page (banner + `queue/summary`).
