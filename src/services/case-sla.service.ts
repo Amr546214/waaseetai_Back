@@ -8,8 +8,8 @@ const DEFAULT_HOURS = [48, 24, 8, 2] as const; // low, normal, high, urgent
 type Config = { from: Date; hours: number[]; supportTo?: string; disputesTo?: string };
 
 type ConfigResult = { state: 'disabled' } | { state: 'invalid'; setting: string } | { state: 'configured'; config: Config };
-const SUPPORT_PERMISSIONS = ['support.review', 'support.reply'];
-const DISPUTE_PERMISSIONS = ['disputes.view', 'disputes.resolve'];
+export const SUPPORT_PERMISSIONS = ['support.review', 'support.reply'];
+export const DISPUTE_PERMISSIONS = ['disputes.view', 'disputes.resolve'];
 
 function parseCaseSlaConfig(env: NodeJS.ProcessEnv): ConfigResult {
   if (env.CASE_SLA_ENABLED !== 'true') return { state: 'disabled' };
