@@ -5,6 +5,7 @@ import { prisma } from '../config/db';
 import { requirePermission } from '../middlewares/admin-access.middleware';
 import { actorHas } from '../services/admin-access.service';
 import { AppError } from '../utils/app-error';
+import { adminAudit } from '../services/admin-audit.service';
 
 const pageSize = 30;
 const idSchema = z.string().uuid();
@@ -73,10 +74,13 @@ export function disputeMessagesRouter(staff: boolean, db = prisma) {
         `;
         const dispute = assertAccess(rows[0] ?? null, userId, staff);
         if (!isOpen(dispute.status)) throw new AppError('النزاع مغلق؛ يمكنك قراءة الرسائل السابقة فقط', 409);
-        return tx.disputeMessage.create({
+        const saved = await tx.disputeMessage.create({
           data: { disputeId, authorId: userId, authorKind: staff ? 'STAFF' : 'PARTICIPANT', body: input.data.body },
           select: messageFields,
         });
+        // a staff message to the parties is an administrative act: one row in the same transaction, the message id only, never its text
+        if (staff) await adminAudit.recordTx(tx, { adminId: userId, entity: 'DISPUTE', entityId: disputeId, eventType: 'DISPUTE_STAFF_MESSAGE_SENT', title: 'رسالة من الإدارة في نزاع', summary: 'أرسل موظف رسالة إلى أطراف النزاع', details: { messageId: saved.id } });
+        return saved;
       });
       res.status(201).json({ data: present(message, userId) });
     } catch (error) { next(error); }

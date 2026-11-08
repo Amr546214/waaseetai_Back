@@ -24,11 +24,12 @@ test('templates require Super Admin, validate drafts and preserve the winning ed
   const auth: RequestHandler = (req, res, next) => {
     const role = req.header('x-role');
     if (!role) { res.sendStatus(401); return; }
+    req.user = { id: 'super-1' } as typeof req.user;
     req.adminActor = { isSuperAdmin: role === 'super' } as NonNullable<typeof req.adminActor>;
     next();
   };
   t.mock.module('../config/db', { namedExports: { prisma: {
-    notificationTemplate: model, $transaction: async (fn: (tx: { notificationTemplate: typeof model }) => unknown) => fn({ notificationTemplate: model }),
+    notificationTemplate: model, $transaction: async (fn: (tx: any) => unknown) => fn({ notificationTemplate: model, accountAuditLog: { create: async () => ({}) } }),
   } } });
   t.mock.module('../middlewares/auth.middleware', { namedExports: { authenticate: auth, requireActiveUser: (_r: unknown, _s: unknown, next: () => void) => next() } });
   const app = express();

@@ -238,6 +238,7 @@ test('disputeService: client opens -> provider (against) notified; provider open
 			update: async () => ({ id: 'd1', status: 'RESOLVED' }),
 			updateMany: async () => ({ count: 1 })
 		},
+		accountAuditLog: { create: async ({ data }: any) => ({ id: 'a1', ...data }) },
 		$queryRaw: async () => [{ id: 'c1' }],
 		$transaction: async (fn: any) => fn(prismaMock)
 	});

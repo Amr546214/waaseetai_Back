@@ -334,9 +334,11 @@ export class DisputeService {
   async setStatus(id: string, adminId: string, status: 'OPEN' | 'UNDER_REVIEW') {
     const dispute = await this.openDisputeForAdmin(id);
     if (dispute.status === status) throw new AppError('النزاع بهذه الحالة مسبقاً', 409);
-    const updated = await prisma.dispute.update({ where: { id }, data: { status } });
-    await adminAudit.record({ adminId, entity: 'DISPUTE', entityId: id, eventType: 'DISPUTE_STATUS_CHANGED', title: 'تغيير حالة نزاع', summary: `تغيير حالة النزاع من ${dispute.status} إلى ${status}`, before: { status: dispute.status }, after: { status } });
+    return prisma.$transaction(async tx => {
+    const updated = await tx.dispute.update({ where: { id }, data: { status } });
+    await adminAudit.recordTx(tx, { adminId, entity: 'DISPUTE', entityId: id, eventType: 'DISPUTE_STATUS_CHANGED', title: 'تغيير حالة نزاع', summary: `تغيير حالة النزاع من ${dispute.status} إلى ${status}`, before: { status: dispute.status }, after: { status } });
     return updated;
+    });
   }
 
   /**
@@ -349,10 +351,14 @@ export class DisputeService {
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
     if (dispute.status !== DisputeStatus.OPEN && dispute.status !== DisputeStatus.UNDER_REVIEW) throw new AppError('تمت معالجة النزاع مسبقاً', 409);
     const nextStatus = input.action === 'resolve' ? DisputeStatus.RESOLVED : DisputeStatus.REJECTED;
-    const claimed = await prisma.dispute.updateMany({ where: { id, status: { in: ACTIVE_DISPUTE_STATUSES } }, data: { status: nextStatus, resolution: input.resolution, resolutionNote: input.resolutionNote, resolvedById: adminId, resolvedAt: new Date() } });
-    if (claimed.count !== 1) throw new AppError('تمت معالجة النزاع مسبقاً', 409);
-    const updated = (await prisma.dispute.findUnique({ where: { id } })) ?? { ...dispute, status: nextStatus, resolution: input.resolution, resolutionNote: input.resolutionNote ?? null };
-    await adminAudit.record({ adminId, entity: 'DISPUTE', entityId: id, eventType: input.action === 'resolve' ? 'DISPUTE_RESOLVED' : 'DISPUTE_REJECTED', title: input.action === 'resolve' ? 'حل نزاع' : 'رفض نزاع', summary: `قرار النزاع: ${input.resolution}`, severity: 'WARNING', before: { status: dispute.status }, after: { status: updated.status, resolution: input.resolution }, details: { resolutionNote: input.resolutionNote ?? null, financialEffect: 'NONE' } });
+    // the status flip and its audit row commit together (a failed audit rolls the decision back); the note text stays on the dispute row, not in the audit row
+    const updated = await prisma.$transaction(async tx => {
+      const claimed = await tx.dispute.updateMany({ where: { id, status: { in: ACTIVE_DISPUTE_STATUSES } }, data: { status: nextStatus, resolution: input.resolution, resolutionNote: input.resolutionNote, resolvedById: adminId, resolvedAt: new Date() } });
+      if (claimed.count !== 1) throw new AppError('تمت معالجة النزاع مسبقاً', 409);
+      const row = (await tx.dispute.findUnique({ where: { id } })) ?? { ...dispute, status: nextStatus, resolution: input.resolution, resolutionNote: input.resolutionNote ?? null };
+      await adminAudit.recordTx(tx, { adminId, entity: 'DISPUTE', entityId: id, eventType: input.action === 'resolve' ? 'DISPUTE_RESOLVED' : 'DISPUTE_REJECTED', title: input.action === 'resolve' ? 'حل نزاع' : 'رفض نزاع', summary: input.action === 'resolve' ? 'حسم النزاع بقرار نصي دون أثر مالي' : 'رفض النزاع بقرار نصي دون أثر مالي', severity: 'WARNING', before: { status: dispute.status }, after: { status: row.status }, details: { decision: input.action, hasResolutionNote: !!input.resolutionNote, financialEffect: 'NONE' } });
+      return row;
+    });
     await this.notifyParties(dispute, id, input.action, input.resolution, null);
     return updated;
   }
@@ -431,7 +437,7 @@ export class DisputeService {
         summary: `تنفيذ قرار مالي (${input.outcome}) على نزاع`, status: LogStatus.COMPLETED, eventType: 'DISPUTE_FINANCIAL_RESOLVED', source: 'ADMIN', severity: 'CRITICAL',
         beforeData: { disputeStatus: dispute.status, escrowStatus: escrow.status, heldAmount: held, escrowReleasedBefore: escrow.releasedAmount } as Prisma.InputJsonObject,
         afterData: { disputeStatus: DisputeStatus.RESOLVED, escrowStatus: release > 0 ? EscrowStatus.RELEASED : EscrowStatus.REFUNDED } as Prisma.InputJsonObject,
-        context: { entity: 'DISPUTE', entityId: id, projectId, contractId: contractRef.id, escrowId: escrow.id, outcomeSummary: { ...result }, feePolicyVersion: escrow.feePolicyVersion ?? null, commissionRatePercent: escrow.providerCommissionRateSnapshot ?? null, resolutionNote: input.resolutionNote ?? null } as Prisma.InputJsonObject
+        context: { entity: 'DISPUTE', entityId: id, projectId, contractId: contractRef.id, escrowId: escrow.id, outcomeSummary: { ...result }, feePolicyVersion: escrow.feePolicyVersion ?? null, commissionRatePercent: escrow.providerCommissionRateSnapshot ?? null, hasResolutionNote: !!input.resolutionNote } as Prisma.InputJsonObject
       } });
       return result;
     });

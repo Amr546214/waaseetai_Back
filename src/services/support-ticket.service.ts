@@ -281,9 +281,12 @@ export class SupportTicketService {
   async setPriority(id: string, adminId: string, priority: string) {
     const ticket = await this.findAny(id);
     if (ticket.priority === priority) throw new AppError('التذكرة بهذه الأولوية مسبقًا', 409);
-    const updated = await prisma.supportTicket.update({ where: { id: ticket.id }, data: { priority } });
-    await adminAudit.record({ adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_PRIORITY_CHANGED', title: 'تغيير أولوية تذكرة', summary: `تغيير أولوية التذكرة ${ticket.ticketNumber}`, before: { priority: ticket.priority }, after: { priority } });
-    return updated;
+    // the audit row is written in the SAME transaction: a failed audit rolls the change back, a rolled-back change leaves no row
+    return prisma.$transaction(async tx => {
+      const updated = await tx.supportTicket.update({ where: { id: ticket.id }, data: { priority } });
+      await adminAudit.recordTx(tx, { adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_PRIORITY_CHANGED', title: 'تغيير أولوية تذكرة', summary: `تغيير أولوية التذكرة ${ticket.ticketNumber}`, before: { priority: ticket.priority }, after: { priority } });
+      return updated;
+    });
   }
 
   async addInternalNote(id: string, adminId: string, body: string) {
@@ -330,6 +333,8 @@ export class SupportTicketService {
         const next = status ?? (ticket.status === SupportTicketStatus.OPEN || ticket.status === SupportTicketStatus.IN_PROGRESS
           ? SupportTicketStatus.AWAITING_CUSTOMER : ticket.status);
         await tx.supportTicket.update({ where: { id }, data: next !== ticket.status ? this.statusData(next) : { updatedAt: new Date() } });
+        // same transaction as the reply: ids and counts only, never the reply text
+        await adminAudit.recordTx(tx, { adminId: staffId, entity: 'TICKET', entityId: id, eventType: 'TICKET_REPLIED', title: 'ردّ على تذكرة', summary: `ردّ فريق الدعم على التذكرة ${ticket.ticketNumber}`, before: { status: ticket.status }, after: { status: next }, details: { messageId: message.id, attachmentCount: batch.rows.length } });
         return { ticket, message, next, reused: false };
       });
     } catch (error) {
@@ -339,7 +344,6 @@ export class SupportTicketService {
     const { ticket, next, reused, message: saved } = result;
     if (reused) await cleanupCaseFiles(batch.stored);
     else {
-      await adminAudit.record({ adminId: staffId, entity: 'TICKET', entityId: id, eventType: 'TICKET_REPLIED', title: 'ردّ على تذكرة', summary: `ردّ فريق الدعم على التذكرة ${ticket.ticketNumber}`, after: { status: next } });
       await this.notifyOwner(ticket, 'ردّ جديد على تذكرتك', `ردّ فريق الدعم على التذكرة ${ticket.ticketNumber}.`, 'replied');
     }
     const { replyKey: _key, replyDigest: _digest, ...message } = saved;
@@ -357,8 +361,11 @@ export class SupportTicketService {
   async setStatus(id: string, status: SupportTicketStatus, adminId?: string) {
     const ticket = await this.findAny(id);
     if (ticket.status === status) throw new AppError('التذكرة بهذه الحالة مسبقًا', 409);
-    const updated = await prisma.supportTicket.update({ where: { id: ticket.id }, data: this.statusData(status) });
-    if (adminId) await adminAudit.record({ adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_STATUS_CHANGED', title: 'تغيير حالة تذكرة', summary: `تغيير حالة التذكرة ${ticket.ticketNumber}`, before: { status: ticket.status }, after: { status } });
+    const updated = await prisma.$transaction(async tx => {
+      const row = await tx.supportTicket.update({ where: { id: ticket.id }, data: this.statusData(status) });
+      if (adminId) await adminAudit.recordTx(tx, { adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_STATUS_CHANGED', title: 'تغيير حالة تذكرة', summary: `تغيير حالة التذكرة ${ticket.ticketNumber}`, before: { status: ticket.status }, after: { status } });
+      return row;
+    });
     await this.notifyOwner(ticket, 'تحديث حالة تذكرتك', `أصبحت حالة التذكرة ${ticket.ticketNumber}: ${STATUS_LABELS_AR[status]}.`, 'status_changed');
     return updated;
   }

@@ -22,6 +22,7 @@ async function load(t: TestContext, o: { disputeFor?: any } = {}) {
 			update: async () => ({ id: 'd1' }),
 			updateMany: async () => ({ count: 1 })
 		},
+		accountAuditLog: { create: async ({ data }: any) => ({ id: 'a1', ...data }) },
 		projectStage: { findMany: async () => [] },
 		$queryRaw: async () => [{ id: 'c1' }],
 		$transaction: async (fn: any) => fn(prisma)
