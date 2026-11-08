@@ -209,3 +209,21 @@ test('payload states scope for every indicator and labels the instance (no aggre
 	assert.match(get({ data: j }, 'api_p95').scope, /نسخة واحدة/); assert.match(get({ data: j }, 'ctr_mem_used').scope, /حاوية/);
 	assert.ok(!JSON.stringify(j).includes(require('node:os').hostname()), 'host name is never exposed');
 });
+
+test('the single decision sheet uses the SAME wording as the readiness endpoint (preconditions, reason texts) and states the fixed rules; no person or date is chosen', opts, async () => {
+	const { e } = await fresh(); const { readFileSync } = await import('node:fs'); const pth = await import('node:path');
+	const sheet = readFileSync(pth.join(__dirname, '../../docs/escalation-decision-sheet.md'), 'utf8');
+	const keep = { ...process.env }; for (const k of ['CASE_SLA_ENABLED', 'CASE_SLA_FROM', 'SUPPORT_SLA_FIRST_REPLY_HOURS', 'SUPPORT_SLA_TARGET_ADMIN_ID', 'DISPUTE_SLA_TARGET_ADMIN_ID']) delete process.env[k];
+	try {
+		const r = (await e.call('GET', R, e.sa.id)).json.data;
+		for (const p of r.preconditions) assert.ok(sheet.includes(p.label), `sheet must contain: ${p.label}`);
+		const partial = await mkStaff(e, ['support.review'], 'shs'); process.env.SUPPORT_SLA_TARGET_ADMIN_ID = partial.user.id;
+		const reasons = new Set<string>(); for (const id of [undefined, partial.user.id, '00000000-0000-0000-0000-000000000000', (await e.mkUser('CLIENT_INDIVIDUAL', 'shc')).id, e.sa.id]) { if (id) process.env.SUPPORT_SLA_TARGET_ADMIN_ID = id; else delete process.env.SUPPORT_SLA_TARGET_ADMIN_ID; reasons.add((await e.call('GET', R, e.sa.id)).json.data.assignees.support.reason.replace(/:.*$/, ':')); }
+		for (const t of reasons) assert.ok(sheet.includes(t.replace(/:$/, '')), `sheet must contain reason: ${t}`);
+		for (const t of ['الحساب غير نشط', 'عضو الفريق غير نشط', 'تعذّر التحقق']) assert.ok(sheet.includes(t), t);
+	} finally { for (const k of Object.keys(process.env)) if (!(k in keep)) delete process.env[k]; Object.assign(process.env, keep); }
+	for (const t of ['48 / 24 / 8 / 2', '168', 'support.review', 'support.reply', 'disputes.view', 'disputes.resolve', 'SUPPORT_SLA_TARGET_ADMIN_ID', 'DISPUTE_SLA_TARGET_ADMIN_ID', 'SUPPORT_SLA_FIRST_REPLY_HOURS', 'CASE_SLA_FROM', 'CASE_SLA_ENABLED', 'NOT EXECUTED']) assert.ok(sheet.includes(t), t);
+	assert.equal((sheet.match(/______/g) ?? []).length >= 8, true, 'fill-ins are left blank');
+	assert.ok(!/20\d\d-\d\d-\d\dT\d\d:\d\d:\d\dZ`?\s*\|\s*$/m.test(sheet.split('\n').filter(l => l.startsWith('| 5 ')).join('\n')), 'no date is pre-filled');
+	const { existsSync } = await import('node:fs'); assert.equal(existsSync(pth.join(__dirname, '../../docs/escalation-readiness-decisions.md')), false, 'only ONE decision paper');
+});

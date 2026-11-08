@@ -26,7 +26,7 @@ function record(file, kind, outcome, arg, now = new Date()) {
 		Object.assign(cur, { lastRestoreTestAt: at, lastRestoreTestOutcome: outcome, lastRestoreTestCheck: CHECK.includes(arg) ? arg : 'UNKNOWN' });
 	} else throw new Error('usage: backup success <bytes> | backup failure <CODE> | restore pass|fail <CHECK>');
 	const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.tmp`);
-	fs.writeFileSync(tmp, JSON.stringify(cur), { mode: 0o640 });
+	fs.writeFileSync(tmp, JSON.stringify(cur), { mode: 0o644 });
 	fs.renameSync(tmp, file);
 	return cur;
 }

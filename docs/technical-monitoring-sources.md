@@ -1,5 +1,7 @@
 # مصادر المؤشرات الفنية في لوحة الإدارة
 
+> قائمة التسليم المجمّعة لكل مسؤول: [infra-handoff-checklist.md](infra-handoff-checklist.md) (مصدر الحقيقة لما يُطلب؛ لا تعارض مع هذا الملف). لا يوجد أي مخزن مقاييس قائم يمكن الاعتماد عليه (انظر نتيجة البحث هناك).
+
 API: `GET /api/admin/system-settings/technical-metrics` (صلاحية `settings.view` أو `settings.manage`)، ذاكرة مؤقتة 15 ثانية في الخادم. كل مؤشر: `value | valueText`, `unit`, `status` (measured / unavailable / error), `readAt`, `source`, `scope`, `reason`. لا قيمة تقديرية ولا صفر بدل المجهول. التحديث التلقائي في الواجهة اختياري وبحد أدنى 60 ثانية.
 
 ## 1. الجدول الكامل
