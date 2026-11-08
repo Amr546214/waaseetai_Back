@@ -4,6 +4,7 @@ import { prisma } from '../config/db';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { requireSuperAdmin } from '../middlewares/admin-access.middleware';
 import { AppError, zodAppError } from '../utils/app-error';
+import { adminAudit } from '../services/admin-audit.service';
 
 const fields = z.object({
   name: z.string().trim().min(1).max(80),
@@ -39,7 +40,13 @@ router.post('/', async (req, res, next) => {
   try {
     const parsed = fields.safeParse(req.body);
     if (!parsed.success) throw zodAppError(parsed.error.issues, 'راجع اسم القالب والعنوان والنص.');
-    res.status(201).json({ success: true, data: await prisma.notificationTemplate.create({ data: parsed.data, select }) });
+    // the row and its audit entry commit together; the audit keeps the template id and version only, never its name, title or text
+    const data = await prisma.$transaction(async tx => {
+      const created = await tx.notificationTemplate.create({ data: parsed.data, select });
+      await adminAudit.recordTx(tx, { adminId: req.user!.id, entity: 'NOTIFICATION_TEMPLATE', entityId: created.id, eventType: 'NOTIFICATION_TEMPLATE_CREATED', title: 'إنشاء قالب إشعار', summary: 'أنشأ مدير النظام قالب إشعار', after: { version: created.version } });
+      return created;
+    });
+    res.status(201).json({ success: true, data });
   } catch (error) { next(mutationError(error)); }
 });
 
@@ -56,7 +63,9 @@ router.patch('/:id', async (req, res, next) => {
         if (!(await tx.notificationTemplate.findUnique({ where: { id: id.data }, select: { id: true } }))) throw notFound();
         throw new AppError('القالب اتعدّل من جلسة أخرى. افتح النسخة الأخيرة قبل الحفظ.', 409, undefined, 'NOTIFICATION_TEMPLATE_CHANGED');
       }
-      return tx.notificationTemplate.findUniqueOrThrow({ where: { id: id.data }, select });
+      const updated = await tx.notificationTemplate.findUniqueOrThrow({ where: { id: id.data }, select });
+      await adminAudit.recordTx(tx, { adminId: req.user!.id, entity: 'NOTIFICATION_TEMPLATE', entityId: id.data, eventType: 'NOTIFICATION_TEMPLATE_UPDATED', title: 'تعديل قالب إشعار', summary: 'عدّل مدير النظام قالب إشعار', before: { version }, after: { version: updated.version }, details: { changedFields: Object.keys(changes).sort() } });
+      return updated;
     });
     res.json({ success: true, data });
   } catch (error) { next(mutationError(error)); }

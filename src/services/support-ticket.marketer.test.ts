@@ -12,6 +12,7 @@ function makeFixture(status = 'OPEN') {
   const prisma = {
     $queryRaw: async () => [],
     $transaction: async (fn: (tx: any) => unknown) => fn(prisma),
+    accountAuditLog: { create: async ({ data }: any) => ({ id: 'a1', occurredAt: new Date(), ...data }) },
     user: { findUnique: async ({ where }: any) => (where.id === 'mkt' ? { id: 'mkt', accountType: 'MARKETING_BROKER' } : { id: where.id, accountType: 'ADMIN' }) },
     supportTicket: {
       findUnique: async ({ where }: any) => (where.id === 't1' ? { ...ticket } : null),

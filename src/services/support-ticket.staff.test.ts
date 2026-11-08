@@ -13,6 +13,7 @@ function makeFixture(status = 'OPEN', accountType = 'PROVIDER_INDIVIDUAL') {
   const prisma = {
     $queryRaw: async () => [],
     $transaction: async (fn: (tx: any) => unknown) => fn(prisma),
+    accountAuditLog: { create: async ({ data }: any) => ({ id: 'a1', occurredAt: new Date(), ...data }) },
     user: {
       findUnique: async ({ where }: any) => where.id === 'owner'
         ? { id: 'owner', firstName: 'P', lastName: 'Q', email: 'p@x', accountType } : { id: where.id, accountType: 'ADMIN' },

@@ -20,6 +20,7 @@ test('dispute thread shares messages with parties and scoped staff, and refuses 
     },
     $transaction: async (work: (tx: any) => unknown) => work({
       $queryRaw: async (_: TemplateStringsArray, disputeId: string) => disputeId === id ? [dispute] : [],
+      accountAuditLog: { create: async () => ({}) },
       disputeMessage: { create: async ({ data }: any) => {
         const message = { id: messageId, authorId: data.authorId, authorKind: data.authorKind, body: data.body, createdAt: new Date() };
         messages.push(message);
