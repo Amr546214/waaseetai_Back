@@ -34,8 +34,20 @@ export const registrationProofRepository = {
   },
 
   /** The code was wrong: the data try is given back, the wrong-code count stays. */
-  async settleWrongCode(nonce: string): Promise<void> {
-    await prisma.registrationEmailProof.updateMany({ where: { nonce, dataTries: { gt: 0 } }, data: { dataTries: { decrement: 1 } } });
+  async settleWrongCode(nonce: string): Promise<boolean> {
+    const [row] = await prisma.registrationEmailProof.updateManyAndReturn({
+      where: { nonce, dataTries: { gt: 0 } },
+      data: { dataTries: { decrement: 1 } },
+      select: { wrongAttempts: true }
+    });
+    return (row?.wrongAttempts ?? 0) >= PROOF_MAX_WRONG_CODES;
+  },
+
+  async isLocked(nonce: string, email: string): Promise<boolean> {
+    return !!(await prisma.registrationEmailProof.findFirst({
+      where: { nonce, emailHash: hashEmail(email), consumedAt: null, expiresAt: { gt: new Date() }, wrongAttempts: { gte: PROOF_MAX_WRONG_CODES } },
+      select: { nonce: true }
+    }));
   },
 
   /** The code was right: the provisional wrong-code count is given back; the data try stays until the account exists. */

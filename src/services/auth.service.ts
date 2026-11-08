@@ -29,7 +29,7 @@ import { withKeyLock } from '../utils/key-lock';
 import { remainingMinutes } from '../utils/otp-validity';
 import { OtpPurpose, OTP_MAX_ATTEMPTS, OTP_LOCKED_MESSAGE } from '../utils/otp-purpose';
 import { normalizeReferralIdentifier } from '../utils/referral-identifier';
-import { RESEND_GENERIC_MESSAGE, ACTIVATION_CODE_REJECTED_MESSAGE, REGISTER_PROOF_REJECTED_MESSAGE, REGISTER_DATA_UNAVAILABLE_MESSAGE } from '../utils/auth-messages';
+import { ACTIVATION_CODE_REJECTED_MESSAGE, REGISTER_PROOF_REJECTED_MESSAGE, REGISTER_DATA_UNAVAILABLE_MESSAGE } from '../utils/auth-messages';
 import { marketerNotifications } from './marketer-notifications.service';
 
 /**
@@ -220,17 +220,20 @@ export class AuthService {
 
 	/**
 	 * E-mail-first registration, step 1. Sends a proof code to the typed address and returns a signed ticket. NOTHING is created or reserved
-	 * (no account, no phone), so the answer is identical for a new address, one in use and any phone; the mail is awaited because the timing no
-	 * longer depends on the account, which lets the answer say truthfully whether the SMTP server accepted it.
+	 * (no account, no phone). Reject conflicting contact details before the code step; await SMTP to report whether mail was accepted.
 	 */
 	public async startRegistration(rawInput: RegisterStartInput): Promise<{ emailSent: boolean; ticket?: string; expiresAt?: string }> {
 		// registration closed: no code is sent and no ticket is issued (the answer is uniform, it reveals nothing about the address)
 		if (await this.registrationClosed()) throw this.closedError();
 		const email = String(rawInput.email ?? '').trim().toLowerCase();
+		let phone: ReturnType<typeof normalizePhone>;
 		try {
-			normalizePhone(rawInput.phoneNumber, rawInput.phoneCountryCode);
+			phone = normalizePhone(rawInput.phoneNumber, rawInput.phoneCountryCode);
 		} catch {
 			throw new AppError('رقم الجوال غير صالح أو لا يطابق رمز الدولة المختار', 400);
+		}
+		if (await authRepository.findByEmailOrPhone(email, phone.nationalNumber)) {
+			throw new AppError(REGISTER_DATA_UNAVAILABLE_MESSAGE, 409, undefined, 'REGISTRATION_DATA_UNAVAILABLE');
 		}
 		const proof = issueRegistrationProof(email);
 		// the durable record of the ticket (attempts / lock / single use) exists before the mail goes out; it reserves no account and no phone
@@ -261,9 +264,14 @@ export class AuthService {
 		const rejectProof = (): never => { throw new AppError(REGISTER_PROOF_REJECTED_MESSAGE, 400); };
 		const nonce = nonceOfTicket(input.ticket, input.email);
 		if (!nonce) return rejectProof();
-		if (!(await registrationProofRepository.claim(nonce, input.email))) return rejectProof();
+		const rejectLocked = (): never => { throw new AppError('تجاوزت ٥ محاولات لإدخال رمز التحقق. اطلب رمزًا جديدًا.', 429, undefined, 'OTP_ATTEMPTS_LOCKED'); };
+		if (!(await registrationProofRepository.claim(nonce, input.email))) {
+			if (await registrationProofRepository.isLocked(nonce, input.email)) return rejectLocked();
+			return rejectProof();
+		}
 		if (!checkRegistrationProof(input.ticket, input.email, input.code).ok) {
-			await registrationProofRepository.settleWrongCode(nonce);
+			const locked = await registrationProofRepository.settleWrongCode(nonce);
+			if (locked) return rejectLocked();
 			return rejectProof();
 		}
 		await registrationProofRepository.settleRightCode(nonce);
@@ -949,10 +957,10 @@ export class AuthService {
 		const user = await authRepository.findById(userId);
 		const pending = user ? await authRepository.findLatestOtpByPurpose(userId, OtpPurpose.LOGIN_EMAIL) : null;
 		if (!user || user.status !== UserStatus.ACTIVE || !pending) {
-			// Unauthenticated endpoint: unknown id / not mid-login looks like a real send (same throttle bucket, same shape); nothing is sent.
+			// Do not identify the account or its state, and never claim a send happened without a pending challenge.
 			const throttle = otpSendThrottle.consume(`login:${userId}`, ipAddress);
 			if (!throttle.allowed) return { emailSent: false, retryAfterSeconds: throttle.retryAfterSeconds, message: otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds) };
-			return { emailSent: true, resendAvailableAt: resendAvailableAtIso(), message: RESEND_GENERIC_MESSAGE };
+			return { emailSent: false, message: 'لم يُرسل رمز جديد. ارجع إلى تسجيل الدخول وابدأ المحاولة من جديد.' };
 		}
 		const result = await this.loginOtpChallengeResult(userId, user.email, ipAddress, true);
 		return { emailSent: result.emailSent, message: result.message, ...('retryAfterSeconds' in result ? { retryAfterSeconds: result.retryAfterSeconds } : {}), ...('resendAvailableAt' in result ? { resendAvailableAt: result.resendAvailableAt, expiresAt: result.expiresAt } : {}) };

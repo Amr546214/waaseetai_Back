@@ -227,7 +227,7 @@ export const otpSendGate = (recipient: (req: Request) => string | undefined) =>
     // mailer, give it back for one that failed earlier (409, validation, crash); the recipient cooldown starts only for a delivered mail.
     res.once('finish', () => {
       if (res.locals.otpEmailAttempted === true) otpSendThrottle.commitRecipient(key, res.locals.otpEmailSent === true);
-      else otpSendThrottle.releaseIp(req.ip);
+      else if (res.locals.otpRetainIpSlot !== true) otpSendThrottle.releaseIp(req.ip);
     });
     return next();
   };

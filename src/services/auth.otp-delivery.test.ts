@@ -230,7 +230,9 @@ test('login resend / verify with no pending LOGIN_EMAIL code create and send not
   const { created, sent, smsSent } = setup(t, { smsAvailable: true, user: ACTIVE_LEGACY_PHONE_OTP_USER('x') });
   const { authService } = await load();
 
-  assert.equal((await authService.resendLoginOtp('user-1')).emailSent, true); // generic no-op answer, nothing sent
+  const resend = await authService.resendLoginOtp('user-1');
+  assert.equal(resend.emailSent, false);
+  assert.match(resend.message, /لم يُرسل رمز جديد/);
   await assert.rejects(() => authService.verifyLoginOtp({ userId: 'user-1', code: '123456' }, {}), (e: any) => e.statusCode === 400);
   assert.equal(created.length, 0);
   assert.equal(sent.length, 0);

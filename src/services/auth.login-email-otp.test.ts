@@ -143,11 +143,12 @@ test('a forgot-password / activation / phone-change code cannot be used to log i
 	assert.equal(sessions.length, 0);
 });
 
-test('resend replaces the still-valid login code (no new row) and answers generically (sends nothing) when no login is in progress', async (t) => {
+test('resend replaces the still-valid login code (no new row) and reports no send when no login is in progress', async (t) => {
 	const { rows, sent } = setup(t, await hashed());
 	const auth = await load();
 	const none = await auth.resendLoginOtp('user-1');
-	assert.equal(none.emailSent, true, 'no login in progress: the generic answer, nothing is sent');
+	assert.equal(none.emailSent, false, 'no login in progress: nothing is sent');
+	assert.match(none.message, /ارجع إلى تسجيل الدخول/);
 	assert.equal(sent.length, 0);
 	auth.__throttle.reset();
 	await auth.loginUser({ email: 'amr@example.com', password: PW }, {});
