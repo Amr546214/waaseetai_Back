@@ -340,6 +340,9 @@ export async function sendBroadcast(input: { adminId: string; draftId: string; i
 				audienceCount: snap.count, audienceHash: snap.hash, previewCheckedAt: new Date(claims.t), idempotencyKey, requestDigest: digest,
 			}, select: { id: true } });
 			for (let i = 0; i < snap.ids.length; i += 1000) await tx.broadcastRecipient.createMany({ data: snap.ids.slice(i, i + 1000).map(userId => ({ id: randomUUID(), broadcastId: b.id, userId })) });
+			// the audit row commits WITH the confirm: no broadcast is queued without it, and a rolled-back confirm leaves no row
+			await adminAudit.recordTx(tx, { adminId, entity: 'BROADCAST', entityId: b.id, eventType: 'BROADCAST_SENT', title: 'تأكيد إرسال إشعار جماعي داخل المنصة', summary: 'أكّد مدير النظام إرسال إشعار جماعي داخل المنصة (يُسلَّم في الخلفية).', severity: 'WARNING',
+				details: { audience: draft.audience, category: draft.category, audienceCount: snap.count, draftId } });
 			return b.id;
 		}, { timeout: 60_000 });
 	} catch (e) {
@@ -349,8 +352,6 @@ export async function sendBroadcast(input: { adminId: string; draftId: string; i
 		throw e;
 	}
 	const result = await summary(broadcastId); // confirm = enqueue: delivery belongs to the worker
-	await adminAudit.record({ adminId, entity: 'BROADCAST', entityId: broadcastId, eventType: 'BROADCAST_SENT', title: 'تأكيد إرسال إشعار جماعي داخل المنصة', summary: 'أكّد مدير النظام إرسال إشعار جماعي داخل المنصة (يُسلَّم في الخلفية).', severity: 'WARNING',
-		details: { audience: draft.audience, category: draft.category, audienceCount: snap.count } });
 	return { broadcast: result, replayed: false };
 }
 
@@ -364,10 +365,10 @@ export async function retryRemaining(adminId: string, id: string) {
 		if (b.status === 'CANCELLED') throw new AppError('أُلغي هذا الإرسال ولا يمكن إعادته.', 409, undefined, 'BROADCAST_CANCELLED');
 		if (b.status === 'COMPLETED') throw new AppError('اكتمل الإرسال لكل المستلمين. لا يوجد ما يُعاد.', 409, undefined, 'BROADCAST_NOTHING_TO_RETRY');
 		if (b.status === 'QUEUED' || b.status === 'SENDING') throw new AppError('الإرسال جارٍ أو في قائمة الانتظار. انتظر انتهاءه.', 409, undefined, 'BROADCAST_IN_PROGRESS');
-		await tx.broadcastRecipient.updateMany({ where: { broadcastId: id, status: 'FAILED' }, data: { status: 'PENDING' } });
+		const requeued = await tx.broadcastRecipient.updateMany({ where: { broadcastId: id, status: 'FAILED' }, data: { status: 'PENDING' } });
 		await tx.broadcast.update({ where: { id }, data: { status: 'QUEUED', completedAt: null, leaseOwner: null, leaseUntil: null, ...(!b.approvedAt && Date.now() - b.createdAt.getTime() > maxQueueAgeMs() ? { approvedAt: new Date(), approvedById: adminId, approveReason: 'إعادة المحاولة بقرار صريح من مدير النظام' } : {}) } });
+		await adminAudit.recordTx(tx, { adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_RETRIED', title: 'إعادة إرسال المتبقي من إشعار جماعي', summary: 'أعاد مدير النظام المستلمين الفاشلين إلى قائمة الانتظار.', severity: 'WARNING', before: { status: b.status }, after: { status: 'QUEUED' }, details: { requeuedCount: requeued.count } });
 	});
-	await adminAudit.record({ adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_RETRIED', title: 'إعادة إرسال المتبقي من إشعار جماعي', summary: 'أعاد مدير النظام المستلمين الفاشلين إلى قائمة الانتظار.', severity: 'WARNING' });
 	return summary(id);
 }
 
@@ -439,11 +440,12 @@ export async function cancelBroadcast(adminId: string, id: string, reason?: stri
 		if (b.status === 'CANCELLED') return false;
 		if (b.status !== 'QUEUED' && b.status !== 'SENDING') throw new AppError('لا يمكن إلغاء إرسال انتهى.', 409, undefined, 'BROADCAST_NOT_CANCELLABLE');
 		if (b.status === 'SENDING' && b.leaseUntil && b.leaseUntil.getTime() > Date.now()) throw new AppError('الإرسال يعمل الآن بواسطة العامل. لا يمكن إلغاؤه أثناء التنفيذ.', 409, undefined, 'BROADCAST_RUNNING');
-		await tx.broadcastRecipient.updateMany({ where: { broadcastId: id, status: 'PENDING' }, data: { status: 'CANCELLED', updatedAt: new Date() } });
+		const cancelled = await tx.broadcastRecipient.updateMany({ where: { broadcastId: id, status: 'PENDING' }, data: { status: 'CANCELLED', updatedAt: new Date() } });
 		await tx.broadcast.update({ where: { id }, data: { status: 'CANCELLED', completedAt: new Date(), cancelledAt: new Date(), cancelledById: adminId, cancelReason: reason || null, leaseOwner: null, leaseUntil: null } });
+		// the reason text stays on the broadcast row (cancelReason); the audit row only says whether one was given
+		await adminAudit.recordTx(tx, { adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_CANCELLED', title: 'إلغاء إرسال جماعي', summary: 'ألغى مدير النظام إرسالًا جماعيًا لم يكتمل.', severity: 'WARNING', before: { status: b.status }, after: { status: 'CANCELLED' }, details: { hasReason: !!reason, cancelledPending: cancelled.count } });
 		return true;
 	});
-	if (changed) await adminAudit.record({ adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_CANCELLED', title: 'إلغاء إرسال جماعي', summary: 'ألغى مدير النظام إرسالًا جماعيًا لم يكتمل.', severity: 'WARNING', details: reason ? { reason } : undefined });
 	return summary(id);
 }
 
@@ -529,10 +531,11 @@ export async function approveExpiredBroadcast(adminId: string, id: string, reaso
 			throw new ReapprovalStale({ ...facts, checkedAt: new Date().toISOString() });
 		const now = new Date();
 		await tx.broadcast.update({ where: { id }, data: { approvedAt: now, approvedById: adminId, approveReason: reason, reviewedAt: b.reviewedAt ?? now, reviewedById: adminId } });
+		// the reason text stays on the broadcast row (approveReason); counts only here
+		await adminAudit.recordTx(tx, { adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_REAPPROVED', title: 'إعادة اعتماد إرسال جماعي منتهي الصلاحية', summary: 'أعاد مدير النظام اعتماد إرسال جماعي تجاوز مدة الطابور بعد مراجعة المستلمين.', severity: 'WARNING',
+			details: { hasReason: true, pendingEligible: facts.pendingEligibleCount, ineligible: facts.ineligibleNow.total, alreadyDelivered: facts.alreadyDelivered } });
 		return facts;
 	}, { timeout: 60_000 });
-	if (changed) await adminAudit.record({ adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_REAPPROVED', title: 'إعادة اعتماد إرسال جماعي منتهي الصلاحية', summary: 'أعاد مدير النظام اعتماد إرسال جماعي تجاوز مدة الطابور بعد مراجعة المستلمين.', severity: 'WARNING',
-		details: { reason, pendingEligible: changed.pendingEligibleCount, ineligible: changed.ineligibleNow.total, alreadyDelivered: changed.alreadyDelivered } });
 	return summary(id);
 }
 
@@ -545,9 +548,9 @@ async function reviewOnly(adminId: string, id: string) {
 		if (b.status !== 'QUEUED' && b.status !== 'SENDING') throw new AppError(b.status === 'CANCELLED' ? 'أُلغي هذا الإرسال.' : 'انتهى هذا الإرسال.', 409, undefined, 'BROADCAST_NOT_REVIEWABLE');
 		if (b.reviewedAt) return false;
 		await tx.broadcast.update({ where: { id }, data: { reviewedAt: new Date(), reviewedById: adminId } });
+		await adminAudit.recordTx(tx, { adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_REVIEWED', title: 'مراجعة إرسال جماعي', summary: 'راجع مدير النظام إرسالًا جماعيًا في الطابور وقبله.', severity: 'INFO', before: { status: b.status } });
 		return true;
 	});
-	if (changed) await adminAudit.record({ adminId, entity: 'BROADCAST', entityId: id, eventType: 'BROADCAST_REVIEWED', title: 'مراجعة إرسال جماعي', summary: 'راجع مدير النظام إرسالًا جماعيًا في الطابور وقبله.', severity: 'INFO' });
 	return summary(id);
 }
 export const reviewBroadcast = reviewOnly;
