@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../config/db';
@@ -8,7 +9,12 @@ import { AppError, zodAppError } from '../utils/app-error';
 
 const filing = z.object({ targetType: z.enum(['ACCOUNT', 'SERVICE']), targetId: z.string().uuid(), reason: z.string().trim().min(10).max(2000) }).strict();
 const decision = z.object({ status: z.enum(['RESOLVED', 'DISMISSED']), resolution: z.string().trim().min(5).max(2000) }).strict();
-const listing = z.object({ status: z.enum(['OPEN', 'RESOLVED', 'DISMISSED']).optional(), page: z.coerce.number().int().min(1).max(100_000).default(1) });
+const listing = z.object({
+  status: z.enum(['OPEN', 'RESOLVED', 'DISMISSED']).optional(),
+  targetType: z.enum(['ACCOUNT', 'SERVICE']).optional(),
+  search: z.string().trim().max(100).optional(),
+  page: z.coerce.number().int().min(1).max(100_000).default(1),
+});
 const publicPerson = { select: { firstName: true, lastName: true } } as const;
 const adminSelect = { id: true, targetType: true, targetId: true, targetLabel: true, reason: true, status: true, resolution: true, reporter: publicPerson, reviewer: publicPerson, reviewedAt: true, createdAt: true } as const;
 const errMissing = () => new AppError('البلاغ غير موجود', 404);
@@ -55,8 +61,14 @@ adminPlatformReports.get('/', async (req, res, next) => {
   try {
     const query = listing.safeParse(req.query);
     if (!query.success) throw new AppError('فلتر البلاغات غير صالح', 400);
-    const { status, page } = query.data;
-    const where = status ? { status } : {};
+    const { status, targetType, search, page } = query.data;
+    const where: Prisma.PlatformReportWhereInput = { ...(status ? { status } : {}), ...(targetType ? { targetType } : {}) };
+    if (search) {
+      // Prisma uses LIKE for contains. Treat wildcard characters as literal text.
+      const literal = search.replace(/[\\%_]/g, '\\$&');
+      where.OR = [{ targetLabel: { contains: literal, mode: 'insensitive' } }];
+      if (z.string().uuid().safeParse(search).success) where.OR.push({ id: search.toLowerCase() }, { targetId: search.toLowerCase() });
+    }
     const [items, total] = await prisma.$transaction([
       prisma.platformReport.findMany({ where, select: { id: true, targetLabel: true, targetType: true, status: true, createdAt: true }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (page - 1) * 20, take: 20 }),
       prisma.platformReport.count({ where }),

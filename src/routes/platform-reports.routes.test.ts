@@ -7,9 +7,13 @@ test('report intake, duplicates, private reading and one authorized decision', a
   const targetId = '11111111-1111-4111-8111-111111111111';
   const reportId = '22222222-2222-4222-8222-222222222222';
   let report: Record<string, unknown> | null = null;
+  const listQueries: any[] = [], countQueries: any[] = [];
   const prisma = {
+    $transaction: (queries: Promise<unknown>[]) => Promise.all(queries),
     user: { findFirst: async () => ({ id: targetId, firstName: 'Test', lastName: 'Account' }) },
     platformReport: {
+      findMany: async (q: any) => { listQueries.push(q); return []; },
+      count: async (q: any) => { countQueries.push(q); return 41; },
       create: async ({ data }: any) => {
         if (report?.status === 'OPEN') throw Object.assign(new Error('duplicate'), { code: 'P2002' });
         report = { id: reportId, status: 'OPEN', ...data };
@@ -54,6 +58,20 @@ test('report intake, duplicates, private reading and one authorized decision', a
     const detail = '/admin/reports/' + reportId;
     assert.equal((await call('user', 'GET', detail)).status, 403);
     assert.equal((await call('viewer', 'GET', detail)).status, 200);
+    const list = '/admin/reports';
+    assert.equal((await call('user', 'GET', list + '?search=Private')).status, 403);
+    assert.equal(listQueries.length, 0);
+    assert.equal((await call('viewer', 'GET', list + '?targetType=OTHER')).status, 400);
+    const filtered = await call('viewer', 'GET', list + '?targetType=SERVICE&status=OPEN&page=2&search=' + encodeURIComponent('  A%_  '));
+    assert.equal(filtered.status, 200);
+    assert.equal(filtered.headers.get('cache-control'), 'no-store');
+    assert.deepEqual((await filtered.json()).data, { items: [], total: 41, page: 2, pages: 3 });
+    const expected = { status: 'OPEN', targetType: 'SERVICE', OR: [{ targetLabel: { contains: 'A\\%\\_', mode: 'insensitive' } }] };
+    assert.deepEqual(listQueries[0].where, expected);
+    assert.deepEqual(countQueries[0].where, expected);
+    assert.equal(listQueries[0].skip, 20);
+    assert.equal((await call('viewer', 'GET', list + '?search=' + reportId)).status, 200);
+    assert.deepEqual(listQueries[1].where.OR.slice(1), [{ id: reportId }, { targetId: reportId }]);
     const decision = { status: 'RESOLVED', resolution: 'Reviewed internally' };
     assert.equal((await call('viewer', 'PATCH', detail, decision)).status, 403);
     const result = await call('manager', 'PATCH', detail, decision);
