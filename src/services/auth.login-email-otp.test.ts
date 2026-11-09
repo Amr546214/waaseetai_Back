@@ -16,13 +16,19 @@ function setup(t: TestContext, hash: string) {
 	let seq = 0;
 	t.mock.module('../config/logger', { namedExports: { logger: { info() {}, warn() {}, error() {}, debug() {} } } });
 	t.mock.module('../config/db', { namedExports: { prisma: {} } });
-	t.mock.module('./session.service', { namedExports: { sessionService: { register: async (id: string) => { sessions.push(id); return {}; } } } });
+	t.mock.module('./session.service', { namedExports: { sessionService: { register: async (id: string, _token: string, context: { ipAddress?: string }) => { if (context.ipAddress === 'session-write-fails') throw new Error('session write failed'); sessions.push(id); return {}; } } } });
 	t.mock.module('./account-logs.service', { namedExports: { accountAuditLogService: { record: async () => ({}) } } });
 	t.mock.module('../repositories/auth.repository', { namedExports: { authRepository: {
 		findByEmail: async () => ({ ...user }),
 		findById: async () => ({ ...user }),
 		findByIdForSession: async () => ({ ...user }),
-		createOtp: async (userId: string, code: string, _type: string, expiresAt: Date, purpose: string) => { rows.push({ id: `o${++seq}`, userId, code, attempts: 0, expiresAt, purpose, createdAt: seq }); return {}; },
+		createOtp: async (userId: string, code: string, _type: string, expiresAt: Date, purpose: string) => { rows.push({ id: `o${++seq}`, userId, code, attempts: 0, expiresAt, purpose, createdAt: seq }); return { id: `o${seq}`, code }; },
+		rotateLoginEmailOtp: async (userId: string, id: string, expectedCode: string, code: string, expiresAt: Date) => {
+			const row = rows.find(x => x.id === id && x.userId === userId && x.purpose === 'LOGIN_EMAIL' && x.code === expectedCode);
+			if (!row) return { count: 0 };
+			Object.assign(row, { code, expiresAt, attempts: 0 });
+			return { count: 1 };
+		},
 		findLatestOtpByPurpose: async (userId: string, purpose: string) => (() => { const r = rows.filter(x => x.userId === userId && x.purpose === purpose).sort((a, b) => b.createdAt - a.createdAt)[0]; return r ? { ...r } : null; })(),
 		deleteOtpsByPurpose: async (userId: string, purpose: string) => { for (let i = rows.length - 1; i >= 0; i--) if (rows[i].userId === userId && rows[i].purpose === purpose) rows.splice(i, 1); return { count: 0 }; },
 		incrementOtpAttempts: async (id: string) => { rows.find(r => r.id === id)!.attempts++; return {}; },
@@ -63,6 +69,25 @@ test('a wrong password never starts a challenge', async (t) => {
 	assert.equal(sent.length, 0);
 });
 
+test('an account under suspension review never starts a login challenge', async (t) => {
+	const { user, rows, sent, sessions } = setup(t, await hashed());
+	Object.assign(user, { status: 'SUSPENDED_REVIEW' });
+	const auth = await load();
+	await assert.rejects(() => auth.loginUser({ email: 'amr@example.com', password: PW }, {}), (e: any) => e.statusCode === 403 && /مراجعة الإيقاف/.test(e.message));
+	assert.deepEqual([rows.length, sent.length, sessions.length], [0, 0, 0]);
+});
+
+test('suspension review after send refuses even the right code before consuming it', async (t) => {
+	const { user, rows, sessions } = setup(t, await hashed());
+	const auth = await load();
+	await auth.loginUser({ email: 'amr@example.com', password: PW }, {});
+	const code = rows[0].code;
+	Object.assign(user, { status: 'SUSPENDED_REVIEW' });
+	await assert.rejects(() => auth.verifyLoginOtp({ userId: 'user-1', code }, {}), (e: any) => e.statusCode === 403 && /مراجعة الإيقاف/.test(e.message));
+	assert.equal(rows[0].code, code);
+	assert.deepEqual(sessions, []);
+});
+
 test('a wrong code is refused (400) and creates no session; the 5th wrong guess locks the code (429)', async (t) => {
 	const { sessions, rows } = setup(t, await hashed());
 	const auth = await load();
@@ -72,8 +97,15 @@ test('a wrong code is refused (400) and creates no session; the 5th wrong guess 
 	for (let i = 0; i < 4; i++) await assert.rejects(() => auth.verifyLoginOtp({ userId: 'user-1', code: wrong }, {}), (e: any) => e.statusCode === 400 && e.message === 'رمز التحقق غير صحيح');
 	await assert.rejects(() => auth.verifyLoginOtp({ userId: 'user-1', code: wrong }, {}), (e: any) => e.statusCode === 429);
 	assert.equal(sessions.length, 0);
-	assert.equal(rows.length, 0, 'the locked code is deleted: even the right code no longer works');
+	assert.equal(rows[0].attempts, 5);
+	await assert.rejects(() => auth.verifyLoginOtp({ userId: 'user-1', code }, {}), (e: any) => e.statusCode === 429);
+	auth.__throttle.reset();
+	assert.equal((await auth.resendLoginOtp('user-1')).emailSent, true);
+	assert.notEqual(rows[0].code, code);
+	assert.equal(rows[0].attempts, 0);
 	await assert.rejects(() => auth.verifyLoginOtp({ userId: 'user-1', code }, {}), (e: any) => e.statusCode === 400);
+	await auth.verifyLoginOtp({ userId: 'user-1', code: rows[0].code }, {});
+	assert.deepEqual(sessions, ['user-1']);
 });
 
 test('the right code creates the session (token + registered session) and is single-use', async (t) => {
@@ -88,6 +120,19 @@ test('the right code creates the session (token + registered session) and is sin
 	await assert.rejects(() => auth.verifyLoginOtp({ userId: 'user-1', code }, {}), (e: any) => e.statusCode === 400);
 });
 
+test('a failed session write does not consume the correct login code', async (t) => {
+	const { sessions, rows } = setup(t, await hashed());
+	const auth = await load();
+	await auth.loginUser({ email: 'amr@example.com', password: PW }, {});
+	const code = rows[0].code;
+	await assert.rejects(() => auth.verifyLoginOtp({ userId: 'user-1', code }, { ipAddress: 'session-write-fails' }), /session write failed/);
+	assert.equal(rows[0].code, code);
+	assert.deepEqual(sessions, []);
+	const result = await auth.verifyLoginOtp({ userId: 'user-1', code }, {});
+	assert.ok(result.token);
+	assert.deepEqual(sessions, ['user-1']);
+});
+
 test('a forgot-password / activation / phone-change code cannot be used to log in', async (t) => {
 	const { rows, sessions } = setup(t, await hashed());
 	const auth = await load();
@@ -98,11 +143,12 @@ test('a forgot-password / activation / phone-change code cannot be used to log i
 	assert.equal(sessions.length, 0);
 });
 
-test('resend re-sends the same still-valid login code (no new row) and answers generically (sends nothing) when no login is in progress', async (t) => {
+test('resend replaces the still-valid login code (no new row) and reports no send when no login is in progress', async (t) => {
 	const { rows, sent } = setup(t, await hashed());
 	const auth = await load();
 	const none = await auth.resendLoginOtp('user-1');
-	assert.equal(none.emailSent, true, 'no login in progress: the generic answer, nothing is sent');
+	assert.equal(none.emailSent, false, 'no login in progress: nothing is sent');
+	assert.match(none.message, /ارجع إلى تسجيل الدخول/);
 	assert.equal(sent.length, 0);
 	auth.__throttle.reset();
 	await auth.loginUser({ email: 'amr@example.com', password: PW }, {});
@@ -114,7 +160,8 @@ test('resend re-sends the same still-valid login code (no new row) and answers g
 	assert.equal(res.emailSent, true);
 	assert.equal(rows.length, 1);
 	assert.equal(sent.length, 2);
-	assert.equal(sent[0].code, sent[1].code);
+	assert.notEqual(sent[0].code, sent[1].code);
+	assert.equal(rows[0].code, sent[1].code);
 });
 
 test('an expired login code is refused with the Arabic expiry message', async (t) => {

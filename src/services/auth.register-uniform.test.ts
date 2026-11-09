@@ -24,13 +24,19 @@ async function world(t: TestContext, o: { activeOwner?: boolean; smtpFails?: boo
 		findByEmail: async (e: string) => (store.user && store.user.email === e.trim().toLowerCase() ? store.user : null),
 		findById: async (id: string) => (store.user?.id === id ? store.user : null),
 		createUserWithProfile: async (input: any, hash: string) => { store.user = { id: '22222222-2222-4222-8222-222222222222', email: input.email, firstName: 'Amr', accountType: 'CLIENT_INDIVIDUAL', status: 'PENDING_VERIFICATION', password: hash }; return store.user; },
-		createOtp: async (_u: string, code: string, _t: string, expiresAt: Date, purpose: string) => { store.otps.push({ id: String(store.otps.length), code, expiresAt, purpose, attempts: 0 }); return {}; },
+		createOtp: async (_u: string, code: string, _t: string, expiresAt: Date, purpose: string) => { const row = { id: String(store.otps.length), code, expiresAt, purpose, attempts: 0 }; store.otps.push(row); return { ...row }; },
 		findLatestActivationOtp: async () => store.otps.filter((x) => x.purpose === 'ACTIVATION').at(-1) ?? null,
 		deleteActivationOtps: async () => { store.otps = store.otps.filter((x) => x.purpose !== 'ACTIVATION'); return { count: 0 }; },
 		deleteUserOtps: async () => { store.otps = []; return { count: 0 }; },
 		updateUserStatus: async (_id: string, status: string) => { store.user = { ...store.user, status }; return store.user; },
 		incrementOtpAttempts: async (id: string) => { const x = store.otps.find((q) => q.id === id); if (x) x.attempts++; return {}; },
 		findLatestPasswordResetOtp: async () => null,
+		rotateLoginEmailOtp: async (_u: string, id: string, expectedCode: string, code: string, expiresAt: Date) => {
+			const row = store.otps.find(otp => otp.id === id && otp.purpose === 'LOGIN_EMAIL' && otp.code === expectedCode);
+			if (!row) return { count: 0 };
+			Object.assign(row, { code, expiresAt, attempts: 0 });
+			return { count: 1 };
+		},
 		findLatestOtpByPurpose: async () => null,
 		deleteOtpsByPurpose: async () => ({ count: 0 }),
 		deletePasswordResetOtps: async () => ({ count: 0 }),

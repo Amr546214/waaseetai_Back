@@ -24,7 +24,11 @@ const proofRepo = {
 		if (!r || r.emailHash !== hash(email) || r.consumedAt || r.expiresAt.getTime() <= Date.now() || r.wrong >= 5 || r.tries >= 3) return false;
 		r.wrong++; r.tries++; return true;
 	},
-	settleWrongCode: async (nonce: string) => { const r = PROOFS.get(nonce); if (r && r.tries > 0) r.tries--; },
+	settleWrongCode: async (nonce: string) => { const r = PROOFS.get(nonce); if (r && r.tries > 0) r.tries--; return (r?.wrong ?? 0) >= 5; },
+	isLocked: async (nonce: string, email: string) => {
+		const r = PROOFS.get(nonce);
+		return !!r && r.emailHash === hash(email) && !r.consumedAt && r.expiresAt.getTime() > Date.now() && r.wrong >= 5;
+	},
 	settleRightCode: async (nonce: string) => { const r = PROOFS.get(nonce); if (r && r.wrong > 0) r.wrong--; },
 	consumeInTx: async (_tx: unknown, nonce: string) => { const r = PROOFS.get(nonce); if (!r || r.consumedAt || r.expiresAt.getTime() <= Date.now()) return false; r.consumedAt = new Date(); return true; },
 };
@@ -95,31 +99,33 @@ test('Egyptian number with the trunk zero, without it and with the country digit
 		await t.test(typed, async (st) => {
 			const w = await world(st, { users: [{ ...OWNER }] });
 			const b = { ...BODY, phoneNumber: typed };
-			const s = await w.authService.startRegistration(b);
-			const e = await errOf(w.authService.completeRegistration({ ...b, password: PASSWORD, ticket: s.ticket!, code: w.store.proofMails[0].code } as any));
+			const e = await errOf(w.authService.startRegistration(b));
 			assert.equal(e?.status, 409, `${typed} is the same phone as the existing account`);
 			assert.equal(w.store.users.length, 1);
 		});
 	}
 });
 
-test('phone in use + new e-mail: start answers like a free phone; complete -> ONE generic 409, no account, no session, nothing about the owner', async (t) => {
+test('phone in use + new e-mail: start refuses with one generic 409 and sends no code', async (t) => {
 	const w = await world(t, { users: [{ ...OWNER }] });
-	const a = await w.authService.startRegistration({ ...BODY });
-	assert.deepEqual(Object.keys(a).sort(), ['emailSent', 'expiresAt', 'ticket'], 'the start answer has the same shape as for a free phone (see the first test)');
-	const e = await errOf(w.authService.completeRegistration(completeBody(a, w.store.proofMails[0].code) as any));
+	const result = await call(w.authController.registerStart.bind(w.authController), BODY);
+	assert.equal(result.body, undefined);
+	assert.equal(result.locals.otpRetainIpSlot, true);
+	assert.equal(result.locals.otpEmailSent, undefined);
+	const e = { status: result.error?.statusCode, message: result.error?.message, code: result.error?.code };
+	assert.equal(w.store.proofMails.length, 0);
 	assert.deepEqual(e, { status: 409, message: REGISTER_DATA_UNAVAILABLE_MESSAGE, code: 'REGISTRATION_DATA_UNAVAILABLE' });
 	assert.equal(w.store.users.length, 1, 'the existing account is untouched, no second one');
 	assert.equal(w.store.sessions, 0);
 	assert.doesNotMatch(JSON.stringify(e), /owner@|Own|1000000001|ACTIVE/);
 });
 
-test('e-mail in use (ACTIVE or PENDING_VERIFICATION owner): the same generic 409, nothing created, no mail to the owner beyond the proof code', async (t) => {
+test('e-mail in use (ACTIVE or PENDING_VERIFICATION owner): the same generic 409, nothing created and no mail is sent', async (t) => {
 	for (const status of ['ACTIVE', 'PENDING_VERIFICATION']) {
 		await t.test(status, async (st) => {
 			const w = await world(st, { users: [{ ...OWNER, email: BODY.email, phoneNumber: '1999999999', status }] });
-			const s = await w.authService.startRegistration({ ...BODY });
-			const e = await errOf(w.authService.completeRegistration(completeBody(s, w.store.proofMails[0].code) as any));
+			const e = await errOf(w.authService.startRegistration({ ...BODY }));
+			assert.equal(w.store.proofMails.length, 0);
 			assert.equal(e?.status, 409);
 			assert.equal(e?.message, REGISTER_DATA_UNAVAILABLE_MESSAGE);
 			assert.equal(w.store.users.length, 1);
@@ -139,9 +145,12 @@ test('wrong, other-address, forged and malformed tickets/codes are ONE answer; f
 		await errOf(w.authService.completeRegistration(completeBody({ ticket: 'x'.repeat(40) }, good) as any)),
 	];
 	for (const r of results) assert.deepEqual(r, { status: 400, message: REGISTER_PROOF_REJECTED_MESSAGE, code: undefined });
-	for (let i = 0; i < 4; i++) await errOf(w.authService.completeRegistration(completeBody(s, wrong) as any));
+	for (let i = 0; i < 3; i++) assert.equal((await errOf(w.authService.completeRegistration(completeBody(s, wrong) as any)))?.status, 400);
+	const fifth = await errOf(w.authService.completeRegistration(completeBody(s, wrong) as any));
+	assert.equal(fifth?.code, 'OTP_ATTEMPTS_LOCKED');
 	const locked = await errOf(w.authService.completeRegistration(completeBody(s, good) as any));
-	assert.equal(locked?.status, 400, 'locked after the allowed wrong codes');
+	assert.equal(locked?.status, 429, 'locked after the allowed wrong codes');
+	assert.equal(locked?.code, 'OTP_ATTEMPTS_LOCKED');
 	assert.equal(w.store.users.length, 0);
 });
 
@@ -167,8 +176,9 @@ test('a used proof cannot create a second account (replay -> generic 409) and ne
 });
 
 test('a proven address may retry corrected data with the same code, but only a few times; then a new code is required', async (t) => {
-	const w = await world(t, { users: [{ ...OWNER }] });
+	const w = await world(t);
 	const s = await w.authService.startRegistration({ ...BODY });
+	w.store.users.push({ ...OWNER }); // data can become unavailable while the user is reading the e-mail
 	const code = w.store.proofMails[0].code;
 	const same = completeBody(s, code);
 	for (let i = 0; i < 3; i++) assert.equal((await errOf(w.authService.completeRegistration(same as any)))?.status, 409);
@@ -215,9 +225,10 @@ test('invalid phone for the chosen country is a plain 400 at start and at comple
 	assert.equal(w.store.proofMails.length, 0);
 });
 
-test('controller: complete answers 201 with a token only on success; a conflict is 409 with no token', async (t) => {
-	const w = await world(t, { users: [{ ...OWNER }] });
+test('controller: a conflict that appeared after sending the code is 409 with no token', async (t) => {
+	const w = await world(t);
 	const s = await w.authService.startRegistration({ ...BODY });
+	w.store.users.push({ ...OWNER });
 	const bad = await call(w.authController.registerComplete.bind(w.authController), completeBody(s, w.store.proofMails[0].code));
 	assert.equal(bad.error?.statusCode, 409);
 	assert.equal(bad.body, undefined);
@@ -231,12 +242,13 @@ test('parallel wrong guesses on ONE ticket: never more than five are evaluated i
 	const nonce = [...PROOFS.keys()].at(-1)!;
 	for (let burst = 0; burst < 4; burst++) {
 		const guesses = await Promise.all(Array.from({ length: 40 }, () => errOf(w.authService.completeRegistration(completeBody(s, wrong) as any))));
-		assert.ok(guesses.every((r) => r?.status === 400 && r.message === REGISTER_PROOF_REJECTED_MESSAGE), 'every refusal is the same answer');
+		assert.ok(guesses.every((r) => (r?.status === 400 && r.message === REGISTER_PROOF_REJECTED_MESSAGE) || (r?.status === 429 && r.code === 'OTP_ATTEMPTS_LOCKED')), 'every guess is refused with a proof error or the lock');
 		assert.ok(PROOFS.get(nonce)!.wrong <= 5, 'the limit holds under parallel load');
 	}
 	assert.equal(PROOFS.get(nonce)!.wrong, 5, 'five wrong codes in total lock the ticket');
 	const late = await errOf(w.authService.completeRegistration(completeBody(s, good) as any));
-	assert.equal(late?.status, 400);
+	assert.equal(late?.status, 429);
+	assert.equal(late?.code, 'OTP_ATTEMPTS_LOCKED');
 	assert.equal(w.store.users.length, 0);
 });
 
@@ -255,7 +267,8 @@ test('the counters live in the database table: wrong guesses made before a resta
 		await errOf(w2.authService.completeRegistration(completeBody(ticket, wrong) as any)); // the fifth
 		late = await errOf(w2.authService.completeRegistration(completeBody(ticket, good) as any));
 	});
-	assert.equal(late?.status, 400, 'locked by the attempts made before the restart');
+	assert.equal(late?.status, 429, 'locked by the attempts made before the restart');
+	assert.equal(late?.code, 'OTP_ATTEMPTS_LOCKED');
 });
 
 test('a spent ticket stays spent: reuse after success is refused even if the account no longer exists (e-mail uniqueness is not the guard)', async (t) => {

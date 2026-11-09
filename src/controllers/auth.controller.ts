@@ -1,3 +1,4 @@
+import { AppError } from '../utils/app-error';
 import { Request, Response, NextFunction } from 'express';
 import { authService } from '../services/auth.service';
 import { RESEND_GENERIC_MESSAGE, REGISTER_GENERIC_MESSAGE } from '../utils/auth-messages';
@@ -64,6 +65,8 @@ export class AuthController {
 				data: result
 			});
 		} catch (error) {
+			// A conflict did not send mail, but it is still an attempted lookup and counts against the IP budget.
+			if (error instanceof AppError && error.code === 'REGISTRATION_DATA_UNAVAILABLE') res.locals.otpRetainIpSlot = true;
 			next(error);
 		}
 	}

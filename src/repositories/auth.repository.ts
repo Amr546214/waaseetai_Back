@@ -264,6 +264,13 @@ export class AuthRepository {
     });
   }
 
+  public async rotateLoginEmailOtp(userId: string, id: string, expectedCode: string, code: string, expiresAt: Date) {
+    return prisma.otpVerification.updateMany({
+      where: { id, userId, code: expectedCode, type: OtpType.EMAIL, context: { path: ['purpose'], equals: OtpPurpose.LOGIN_EMAIL } },
+      data: { code, expiresAt, attempts: 0 }
+    });
+  }
+
   public async deleteOtpsByPurpose(userId: string, purpose: OtpPurposeValue) {
     return prisma.otpVerification.deleteMany({
       where: { userId, type: OtpType.EMAIL, context: { path: ['purpose'], equals: purpose } }
