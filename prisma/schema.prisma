@@ -62,6 +62,7 @@ enum UserRole {
 
 // user proffile
 model User {
+  adminSavedReports AdminSavedReport[]
   filedPlatformReports PlatformReport[] @relation("FiledPlatformReports")
   reviewedPlatformReports PlatformReport[] @relation("ReviewedPlatformReports")
   disputeMessages DisputeMessage[]
@@ -3390,4 +3391,20 @@ model NotificationTemplate {
 
   @@index([updatedAt, id])
   @@map("notification_templates")
+}
+
+model AdminSavedReport {
+  id        String   @id @default(uuid())
+  ownerId   String
+  name      String   @db.VarChar(80)
+  section   String   @db.VarChar(20)
+  period    String   @db.VarChar(10)
+  from      String?  @db.VarChar(10)
+  to        String?  @db.VarChar(10)
+  compare   Boolean
+  createdAt DateTime @default(now())
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, createdAt, id])
+  @@map("admin_saved_reports")
 }
