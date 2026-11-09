@@ -1,3 +1,4 @@
+import { followUpDisputesWhere } from './dispute-follow-up';
 import { AccountType, AccreditationStatus, DisputeStatus, EscrowStatus, KYCStatus, ModificationStatus, OnboardingStatus, ChangeRequestStatus, ProjectStatus, SpecialtyVerificationStatus, SupportTicketStatus, UserStatus, WithdrawalStatus } from '@prisma/client';
 import { platformZone, startOfMonthInZone, startOfPreviousMonthInZone } from '../utils/platform-time';
 import { prisma } from '../config/db';
@@ -38,7 +39,6 @@ export class AdminDashboardService {
 		const zone = await platformZone();
 		const monthStart = zone ? startOfMonthInZone(zone, now) : startOfMonth(now);
 		const prevMonthStart = zone ? startOfPreviousMonthInZone(zone, now) : new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() - 1, 1));
-		const sevenDaysAgo = new Date(now.getTime() - 7 * DAY);
 		const day = new Date(now.getTime() - DAY);
 		const memberWhere = { accountType: { notIn: ADMIN_TYPES } };
 
@@ -61,7 +61,7 @@ export class AdminDashboardService {
 			prisma.escrow.aggregate({ _sum: { platformCommissionAmount: true }, where: { platformCommissionAmount: { gt: 0 }, updatedAt: { gte: monthStart } } }),
 			prisma.escrow.aggregate({ _sum: { amount: true }, where: { status: EscrowStatus.HELD } }),
 			prisma.dispute.count({ where: { status: { in: OPEN_DISPUTES } } }),
-			prisma.dispute.count({ where: { status: { in: OPEN_DISPUTES }, createdAt: { lt: sevenDaysAgo } } }),
+			prisma.dispute.count({ where: followUpDisputesWhere(now) }),
 			prisma.supportTicket.count({ where: { status: { in: OPEN_TICKETS } } }),
 			prisma.withdrawal.count({ where: { status: WithdrawalStatus.PENDING } }),
 			prisma.withdrawal.aggregate({ _sum: { amount: true }, where: { status: WithdrawalStatus.PENDING, currency: 'USD' } }),

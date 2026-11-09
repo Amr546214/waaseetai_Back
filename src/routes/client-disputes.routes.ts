@@ -1,3 +1,4 @@
+import { mountDisputeMessages } from './dispute-messages.routes';
 import { mountCaseAttachments, caseFilesUpload } from './case-attachments.routes';
 import { Router } from 'express';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
@@ -13,6 +14,7 @@ router.use(requireActiveUser);
 // client is the opener or the respondent (see DisputeService.listForUser).
 router.get('/', listMyDisputes);
 mountCaseAttachments(router, '/:id/attachments', 'dispute', false);
+mountDisputeMessages(router, '/:id/messages', false);
 router.get('/:id', getMyDispute);
 
 export default router;

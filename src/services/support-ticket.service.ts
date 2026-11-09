@@ -7,7 +7,9 @@ import { notificationService } from './notification.service';
 import { CreateSupportTicketInput } from '../dtos/support-ticket.dto';
 import { adminAudit } from './admin-audit.service';
 import { notifyAdmins } from './admin-notifications.service';
+import { supportSlaSnapshot } from './case-sla.service';
 import { assigneeHolds } from './admin-access.service';
+import { supportEscalationQuery } from './support-escalation-query';
 
 const OPEN_STATUSES: SupportTicketStatus[] = [
   SupportTicketStatus.OPEN,
@@ -130,7 +132,7 @@ export class SupportTicketService {
     const messages = await prisma.supportTicketMessage.findMany({
       where: { ticketId: ticket.id },
       orderBy: { createdAt: 'asc' },
-      include: { sender: { select: SENDER_SELECT } },
+      select: { id: true, ticketId: true, senderId: true, body: true, createdAt: true, sender: { select: SENDER_SELECT } },
     });
     return { ticket, messages };
   }
@@ -142,7 +144,7 @@ export class SupportTicketService {
     }
     const message = await prisma.supportTicketMessage.create({
       data: { ticketId: ticket.id, senderId: userId, body },
-      include: { sender: { select: SENDER_SELECT } },
+      select: { id: true, ticketId: true, senderId: true, body: true, createdAt: true, sender: { select: SENDER_SELECT } },
     });
     // Owner replies drive the status: RESOLVED reopens (OPEN), and a reply to
     // a staff question (AWAITING_CUSTOMER) hands the ball back to staff
@@ -165,9 +167,9 @@ export class SupportTicketService {
   }
   // ─── Staff / admin (ADMIN, SUPER_ADMIN — enforced by the route guard) ───────
 
-  async listForAdmin(filters: { status?: SupportTicketStatus; q?: string; userId?: string }, page = 1, limit = 20) {
-    const safePage = Math.max(1, page);
-    const safeLimit = Math.min(100, Math.max(1, limit));
+  async listForAdmin(filters: { status?: SupportTicketStatus; q?: string; userId?: string; escalated?: boolean }, page = 1, limit = 20) {
+    const safePage = Number.isFinite(page) ? Math.min(1_000_000, Math.max(1, Math.trunc(page))) : 1;
+    const safeLimit = Number.isFinite(limit) ? Math.min(100, Math.max(1, Math.trunc(limit))) : 20;
     const q = filters.q?.trim();
     const where = {
       ...(filters.status ? { status: filters.status } : {}),
@@ -177,19 +179,39 @@ export class SupportTicketService {
         { subject: { contains: q, mode: 'insensitive' as const } },
       ] } : {}),
     };
-    const [items, total, grouped] = await Promise.all([
-      prisma.supportTicket.findMany({
-        where, orderBy: { createdAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit,
+    const offset = (safePage - 1) * safeLimit;
+    const scope = filters.escalated
+      ? await prisma.$queryRaw<{ escalatedCount: number; total: number; ids: string[] }[]>(
+        supportEscalationQuery({ status: filters.status, q, userId: filters.userId, offset, limit: safeLimit })
+      ).then(rows => rows[0] ?? { escalatedCount: 0, total: 0, ids: [] })
+      : null;
+    const [items, total, grouped, escalationCount] = await Promise.all([
+      scope && !scope.ids.length ? [] : prisma.supportTicket.findMany({
+        where: scope ? { id: { in: scope.ids } } : where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        ...(scope ? {} : { skip: offset, take: safeLimit }),
         include: { user: { select: { id: true, firstName: true, lastName: true, email: true, accountType: true } } },
       }),
-      prisma.supportTicket.count({ where }),
+      scope ? scope.total : prisma.supportTicket.count({ where }),
       prisma.supportTicket.groupBy({ by: ['status'], _count: { _all: true } }),
+      scope ? scope.escalatedCount : filters.userId ? undefined
+        : prisma.$queryRaw<{ escalatedCount: number }[]>(supportEscalationQuery()).then(rows => rows[0]?.escalatedCount ?? 0),
     ]);
     const counts: Record<string, number> = {};
     for (const g of grouped) counts[g.status] = g._count._all;
     const assignees = await this.assigneesFor(items.map(i => i.id));
     const pages = Math.ceil(total / safeLimit);
-    return { items: items.map(i => ({ ...i, assignedTo: assignees.get(i.id) ?? null })), counts, pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages } };
+    return {
+      items: items.map(i => {
+        const assignment = assignees.get(i.id);
+        return {
+          ...i, assignedTo: assignment ? { id: assignment.id, name: assignment.name } : null,
+          isEscalated: OPEN_STATUSES.includes(i.status) && (assignment?.isEscalated ?? false),
+        };
+      }),
+      counts, ...(escalationCount === undefined ? {} : { escalationCount }),
+      pagination: { page: safePage, limit: safeLimit, total, pages, totalPages: pages },
+    };
   }
 
   private async findAny(id: string) {
@@ -200,16 +222,16 @@ export class SupportTicketService {
 
   /** Current assignee per ticket = the newest TICKET_ASSIGNED audit row (the schema has no assignee column). */
   private async assigneesFor(ids: string[]) {
-    const result = new Map<string, { id: string; name: string }>();
+    const result = new Map<string, { id: string; name: string; isEscalated: boolean }>();
     if (!ids.length) return result;
     const rows = await prisma.accountAuditLog.findMany({
-      where: { source: 'ADMIN', eventType: 'TICKET_ASSIGNED', OR: ids.map(id => ({ context: { path: ['entityId'], equals: id } })) },
-      orderBy: { occurredAt: 'desc' },
+      where: { source: { in: ['ADMIN', 'SYSTEM'] }, eventType: 'TICKET_ASSIGNED', OR: ids.map(id => ({ context: { path: ['entityId'], equals: id } })) },
+      orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
       select: { context: true }
     });
     for (const row of rows) {
       const ctx = (row.context ?? {}) as Record<string, any>;
-      if (ctx.entityId && !result.has(ctx.entityId) && ctx.assigneeId) result.set(ctx.entityId, { id: ctx.assigneeId, name: ctx.assigneeName ?? '' });
+      if (ctx.entityId && !result.has(ctx.entityId) && ctx.assigneeId) result.set(ctx.entityId, { id: ctx.assigneeId, name: ctx.assigneeName ?? '', isEscalated: typeof ctx.escalationReason === 'string' && !!ctx.escalationReason.trim() });
     }
     return result;
   }
@@ -220,7 +242,7 @@ export class SupportTicketService {
       prisma.supportTicketMessage.findMany({
         where: { ticketId: ticket.id },
         orderBy: { createdAt: 'asc' },
-        include: { sender: { select: SENDER_SELECT } },
+        select: { id: true, ticketId: true, senderId: true, body: true, createdAt: true, sender: { select: SENDER_SELECT } },
       }),
       prisma.user.findUnique({
         where: { id: ticket.userId },
@@ -228,29 +250,43 @@ export class SupportTicketService {
       }),
       adminAudit.listForEntity('TICKET', ticket.id),
     ]);
-    const assignment = audit.find(e => e.eventType === 'TICKET_ASSIGNED');
+    // The display history is capped; the current assignee can be older than all visible entries.
+    const assignment = (await adminAudit.listForEntity('TICKET', ticket.id, ['TICKET_ASSIGNED'], 1, ['ADMIN', 'SYSTEM']))[0];
     // Internal notes live ONLY in the admin audit store, never in support_ticket_messages, so the owner's thread (getForUser) cannot contain them.
     const internalNotes = audit.filter(e => e.eventType === 'TICKET_INTERNAL_NOTE').map(e => ({ id: e.id, body: String(e.context.body ?? ''), createdAt: e.occurredAt, admin: e.admin }));
-    return { ticket, user, messages, assignedTo: assignment ? { id: assignment.context.assigneeId, name: assignment.context.assigneeName ?? '' } : null, internalNotes };
+    return { ticket, user, messages, sla: supportSlaSnapshot(ticket, messages), assignedTo: assignment ? { id: assignment.context.assigneeId, name: assignment.context.assigneeName ?? '', ...(typeof assignment.context.escalationReason === 'string' ? { escalationReason: assignment.context.escalationReason } : {}) } : null, internalNotes };
   }
 
-  async assign(id: string, adminId: string, assigneeId: string) {
+  async assign(id: string, adminId: string, assigneeId: string, escalationReason?: string) {
     // taking a ticket for yourself is part of handling it (support.reply, at the route); handing it to SOMEBODY ELSE is distributing the team's work: it needs tasks.manage (a SUPER_ADMIN holds it)
     if (assigneeId !== adminId && !(await assigneeHolds(adminId, ['tasks.manage']))) throw new AppError('تكليف تذكرة لموظف آخر يحتاج صلاحية توزيع مهام الفريق. يمكنك تكليفها لنفسك.', 403, undefined, 'ADMIN_PERMISSION_DENIED');
     const ticket = await this.findAny(id);
+    if (escalationReason !== undefined) {
+      escalationReason = escalationReason.trim();
+      if (!escalationReason || escalationReason.length > 1000) throw fieldError('escalationReason', 'اكتب سبب التصعيد في حدود ١٠٠٠ حرف');
+      if (assigneeId === adminId) throw fieldError('assigneeId', 'اختر مسؤولًا آخر لتصعيد الحالة إليه');
+      if (ticket.status === SupportTicketStatus.CLOSED || ticket.status === SupportTicketStatus.RESOLVED) throw new AppError('لا يمكن تصعيد تذكرة مغلقة أو محلولة', 409);
+    }
     const assignee = await prisma.user.findUnique({ where: { id: assigneeId }, select: { id: true, firstName: true, lastName: true, accountType: true } });
     if (!assignee || (assignee.accountType !== AccountType.ADMIN && assignee.accountType !== AccountType.SUPER_ADMIN) || !(await assigneeHolds(assigneeId, ['support.review']))) throw fieldError('assigneeId', 'يمكن تكليف عضو فريق يملك صلاحية مراجعة الدعم فقط');
+    if (escalationReason !== undefined && !(await assigneeHolds(assigneeId, ['support.reply']))) {
+      throw fieldError('assigneeId', 'المسؤول المختار لا يملك صلاحية معالجة التذكرة');
+    }
     const name = [assignee.firstName, assignee.lastName].filter(Boolean).join(' ');
-    await adminAudit.record({ adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_ASSIGNED', title: 'تكليف تذكرة', summary: `تكليف التذكرة ${ticket.ticketNumber} إلى ${name || 'مشرف'}`, details: { assigneeId: assignee.id, assigneeName: name } });
+    const row = await adminAudit.record({ adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_ASSIGNED', title: escalationReason ? 'تصعيد تذكرة' : 'تكليف تذكرة', summary: escalationReason ? 'تصعيد داخلي إلى المسؤول المختار' : `تكليف التذكرة ${ticket.ticketNumber} إلى ${name || 'مشرف'}`, details: { assigneeId: assignee.id, assigneeName: name, ...(escalationReason ? { escalationReason } : {}) } });
+    if (!row) throw new AppError('تعذّر حفظ تكليف التذكرة. حاول مرة أخرى.', 500);
     return { id: ticket.id, assignedTo: { id: assignee.id, name } };
   }
 
   async setPriority(id: string, adminId: string, priority: string) {
     const ticket = await this.findAny(id);
     if (ticket.priority === priority) throw new AppError('التذكرة بهذه الأولوية مسبقًا', 409);
-    const updated = await prisma.supportTicket.update({ where: { id: ticket.id }, data: { priority } });
-    await adminAudit.record({ adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_PRIORITY_CHANGED', title: 'تغيير أولوية تذكرة', summary: `تغيير أولوية التذكرة ${ticket.ticketNumber}`, before: { priority: ticket.priority }, after: { priority } });
-    return updated;
+    // the audit row is written in the SAME transaction: a failed audit rolls the change back, a rolled-back change leaves no row
+    return prisma.$transaction(async tx => {
+      const updated = await tx.supportTicket.update({ where: { id: ticket.id }, data: { priority } });
+      await adminAudit.recordTx(tx, { adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_PRIORITY_CHANGED', title: 'تغيير أولوية تذكرة', summary: `تغيير أولوية التذكرة ${ticket.ticketNumber}`, before: { priority: ticket.priority }, after: { priority } });
+      return updated;
+    });
   }
 
   async addInternalNote(id: string, adminId: string, body: string) {
@@ -264,23 +300,53 @@ export class SupportTicketService {
   // OPEN/IN_PROGRESS ticket moves it to AWAITING_CUSTOMER (the ball is with
   // the owner now); any other status is left as-is. CLOSED tickets can't be
   // replied to — reopen them via setStatus first.
-  async replyAsStaff(id: string, staffId: string, body: string, status?: SupportTicketStatus) {
-    const ticket = await this.findAny(id);
-    if (ticket.status === SupportTicketStatus.CLOSED) throw new AppError('لا يمكن الرد على تذكرة مغلقة', 400);
-    const message = await prisma.supportTicketMessage.create({
-      data: { ticketId: ticket.id, senderId: staffId, body },
-      include: { sender: { select: SENDER_SELECT } },
-    });
-    const next = status
-      ?? (ticket.status === SupportTicketStatus.OPEN || ticket.status === SupportTicketStatus.IN_PROGRESS
-        ? SupportTicketStatus.AWAITING_CUSTOMER : ticket.status);
-    if (next !== ticket.status) {
-      await prisma.supportTicket.update({ where: { id: ticket.id }, data: this.statusData(next) });
-    } else {
-      await prisma.supportTicket.update({ where: { id: ticket.id }, data: { updatedAt: new Date() } });
+  async replyAsStaff(id: string, staffId: string, body: string, status?: SupportTicketStatus, files: Express.Multer.File[] = [], replyKey?: string) {
+    const initial = await this.findAny(id);
+    if (initial.status === SupportTicketStatus.CLOSED) throw new AppError('لا يمكن الرد على تذكرة مغلقة', 400);
+    if (files.length && !replyKey) throw new AppError('معرّف إرسال الرد مطلوب', 400);
+    if (replyKey && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(replyKey)) throw new AppError('معرّف إرسال الرد غير صالح', 400);
+    const digest = replyKey ? caseSubmissionDigest({ id, staffId, body, status }, files) : null;
+    const batch = files.length ? await storeCaseFiles(files, staffId) : { stored: [], rows: [] };
+    let result;
+    try {
+      result = await prisma.$transaction(async tx => {
+        await tx.$queryRaw`SELECT id FROM support_tickets WHERE id = ${id} FOR UPDATE`;
+        const ticket = await tx.supportTicket.findUnique({ where: { id } });
+        if (!ticket) throw new AppError('التذكرة غير موجودة', 404);
+        if (replyKey) {
+          const existing = await tx.supportTicketMessage.findUnique({ where: { replyKey }, include: { sender: { select: SENDER_SELECT } } });
+          if (existing) {
+            if (existing.replyDigest !== digest) throw new AppError('معرّف الإرسال مستخدم لرد مختلف', 409);
+            return { ticket, message: existing, next: ticket.status, reused: true };
+          }
+        }
+        if (ticket.status === SupportTicketStatus.CLOSED) throw new AppError('لا يمكن الرد على تذكرة مغلقة', 400);
+        if (batch.rows.length) {
+          const count = await tx.caseAttachment.count({ where: { ticketId: id } });
+          if (count + batch.rows.length > 30) throw new AppError('الحد الأقصى ثلاثون مرفقًا للتذكرة', 409);
+        }
+        const message = await tx.supportTicketMessage.create({
+          data: { ticketId: id, senderId: staffId, body, ...(replyKey ? { replyKey, replyDigest: digest } : {}) },
+          include: { sender: { select: SENDER_SELECT } },
+        });
+        if (batch.rows.length) await tx.caseAttachment.createMany({ data: batch.rows.map(row => ({ ...row, ticketId: id, messageId: message.id })) });
+        const next = status ?? (ticket.status === SupportTicketStatus.OPEN || ticket.status === SupportTicketStatus.IN_PROGRESS
+          ? SupportTicketStatus.AWAITING_CUSTOMER : ticket.status);
+        await tx.supportTicket.update({ where: { id }, data: next !== ticket.status ? this.statusData(next) : { updatedAt: new Date() } });
+        // same transaction as the reply: ids and counts only, never the reply text
+        await adminAudit.recordTx(tx, { adminId: staffId, entity: 'TICKET', entityId: id, eventType: 'TICKET_REPLIED', title: 'ردّ على تذكرة', summary: `ردّ فريق الدعم على التذكرة ${ticket.ticketNumber}`, before: { status: ticket.status }, after: { status: next }, details: { messageId: message.id, attachmentCount: batch.rows.length } });
+        return { ticket, message, next, reused: false };
+      });
+    } catch (error) {
+      await cleanupCaseFiles(batch.stored);
+      throw error;
     }
-    await adminAudit.record({ adminId: staffId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_REPLIED', title: 'ردّ على تذكرة', summary: `ردّ فريق الدعم على التذكرة ${ticket.ticketNumber}`, after: { status: next } });
-    await this.notifyOwner(ticket, 'ردّ جديد على تذكرتك', `ردّ فريق الدعم على التذكرة ${ticket.ticketNumber}.`, 'replied');
+    const { ticket, next, reused, message: saved } = result;
+    if (reused) await cleanupCaseFiles(batch.stored);
+    else {
+      await this.notifyOwner(ticket, 'ردّ جديد على تذكرتك', `ردّ فريق الدعم على التذكرة ${ticket.ticketNumber}.`, 'replied');
+    }
+    const { replyKey: _key, replyDigest: _digest, ...message } = saved;
     return { message, status: next };
   }
 
@@ -295,8 +361,11 @@ export class SupportTicketService {
   async setStatus(id: string, status: SupportTicketStatus, adminId?: string) {
     const ticket = await this.findAny(id);
     if (ticket.status === status) throw new AppError('التذكرة بهذه الحالة مسبقًا', 409);
-    const updated = await prisma.supportTicket.update({ where: { id: ticket.id }, data: this.statusData(status) });
-    if (adminId) await adminAudit.record({ adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_STATUS_CHANGED', title: 'تغيير حالة تذكرة', summary: `تغيير حالة التذكرة ${ticket.ticketNumber}`, before: { status: ticket.status }, after: { status } });
+    const updated = await prisma.$transaction(async tx => {
+      const row = await tx.supportTicket.update({ where: { id: ticket.id }, data: this.statusData(status) });
+      if (adminId) await adminAudit.recordTx(tx, { adminId, entity: 'TICKET', entityId: ticket.id, eventType: 'TICKET_STATUS_CHANGED', title: 'تغيير حالة تذكرة', summary: `تغيير حالة التذكرة ${ticket.ticketNumber}`, before: { status: ticket.status }, after: { status } });
+      return row;
+    });
     await this.notifyOwner(ticket, 'تحديث حالة تذكرتك', `أصبحت حالة التذكرة ${ticket.ticketNumber}: ${STATUS_LABELS_AR[status]}.`, 'status_changed');
     return updated;
   }

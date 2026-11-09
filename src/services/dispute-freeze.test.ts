@@ -152,6 +152,7 @@ async function loadServices(t: TestContext, world: ReturnType<typeof makeWorld>)
   t.mock.module('./ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: {} } });
   t.mock.module('./admin-audit.service', { namedExports: { adminAudit: {
     record: async (i: any) => { const row = { id: `rec${world.get().audit.length}`, occurredAt: new Date(), eventType: i.eventType, context: { entity: i.entity, entityId: i.entityId, ...(i.details ?? {}) }, title: i.title, summary: i.summary, admin: null }; world.get().audit.push(row); return row; },
+    recordTx: async (_tx: any, i: any) => { const row = { id: `rec${world.get().audit.length}`, occurredAt: new Date(), eventType: i.eventType, context: { entity: i.entity, entityId: i.entityId, ...(i.details ?? {}) }, title: i.title, summary: i.summary, admin: null }; world.get().audit.push(row); return row; },
     listForEntity: async (_e: string, id: string, types?: string[]) => world.get().audit.filter((r: Row) => r.context?.entityId === id && (!types || types.includes(r.eventType))).slice().reverse().map((r: Row) => ({ ...r, admin: null }))
   } } });
   t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { disputeOpened: async () => {}, disputeResolved: async (n: any) => { providerNotes.push(n); } } } });

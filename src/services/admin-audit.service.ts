@@ -9,7 +9,7 @@ import { logger } from '../config/logger';
  * `summary` is a generic sentence only — a free-text body (an internal note) goes in `context.body`, never in `summary`/`title`, because the
  * security audit screen lists those two for every event.
  */
-export type AdminAuditEntity = 'DISPUTE' | 'TICKET' | 'WITHDRAWAL' | 'ESCROW' | 'PROJECT' | 'CONTRACT' | 'FINANCE';
+export type AdminAuditEntity = 'DISPUTE' | 'TICKET' | 'WITHDRAWAL' | 'ESCROW' | 'PROJECT' | 'CONTRACT' | 'FINANCE' | 'NOTIFICATION_TEMPLATE';
 
 export interface AdminAuditInput {
 	adminId: string;
@@ -28,42 +28,50 @@ export interface AdminAuditInput {
 
 const asJson = (value: Record<string, unknown> | undefined) => (value ? (value as Prisma.InputJsonObject) : undefined);
 
+const rowData = (input: AdminAuditInput): Prisma.AccountAuditLogUncheckedCreateInput => ({
+	userId: input.adminId,
+	category: LogCategory.SYSTEM_AUDIT,
+	title: input.title,
+	actionText: input.summary,
+	summary: input.summary,
+	status: LogStatus.COMPLETED,
+	eventType: input.eventType,
+	source: 'ADMIN',
+	severity: input.severity ?? 'INFO',
+	beforeData: asJson(input.before),
+	afterData: asJson(input.after),
+	context: { entity: input.entity, entityId: input.entityId, ...(input.details ?? {}) } as Prisma.InputJsonObject
+});
+
 export const adminAudit = {
-	/** Writes one audit row. A financial / state-changing action calls this and lets a failure propagate-free: the action already happened. */
+	/** Writes one audit row AFTER the action, outside its transaction, and swallows a write failure (returns null). Use recordTx for a state change. */
 	async record(input: AdminAuditInput) {
 		try {
-			return await prisma.accountAuditLog.create({
-				data: {
-					userId: input.adminId,
-					category: LogCategory.SYSTEM_AUDIT,
-					title: input.title,
-					actionText: input.summary,
-					summary: input.summary,
-					status: LogStatus.COMPLETED,
-					eventType: input.eventType,
-					source: 'ADMIN',
-					severity: input.severity ?? 'INFO',
-					beforeData: asJson(input.before),
-					afterData: asJson(input.after),
-					context: { entity: input.entity, entityId: input.entityId, ...(input.details ?? {}) } as Prisma.InputJsonObject
-				}
-			});
+			return await prisma.accountAuditLog.create({ data: rowData(input) });
 		} catch (error) {
 			logger.error(`[admin-audit] failed to write ${input.eventType} for ${input.entityId}: ${(error as Error)?.message}`);
 			return null;
 		}
 	},
 
+	/**
+	 * Writes the audit row INSIDE the transaction of the change: it throws on failure, so the change rolls back with it, and a rolled-back change leaves
+	 * no success row. Only identifiers, statuses, counts and short codes go in `details` (never a body, an e-mail or a token).
+	 */
+	recordTx(tx: Prisma.TransactionClient, input: AdminAuditInput) {
+		return tx.accountAuditLog.create({ data: rowData(input) });
+	},
+
 	/** Newest-first audit rows about one entity, with the acting admin. Optionally limited to some event types. */
-	async listForEntity(entity: AdminAuditEntity, entityId: string, eventTypes?: string[]) {
+	async listForEntity(entity: AdminAuditEntity, entityId: string, eventTypes?: string[], limit = 200, sources = ['ADMIN']) {
 		const rows = await prisma.accountAuditLog.findMany({
 			where: {
-				source: 'ADMIN',
+				source: { in: sources },
 				AND: [{ context: { path: ['entity'], equals: entity } }, { context: { path: ['entityId'], equals: entityId } }],
 				...(eventTypes?.length ? { eventType: { in: eventTypes } } : {})
 			},
-			orderBy: { occurredAt: 'desc' },
-			take: 200,
+			orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+			take: limit,
 			include: { user: { select: { id: true, firstName: true, lastName: true } } }
 		});
 		return rows.map(row => ({

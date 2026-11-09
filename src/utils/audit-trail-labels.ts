@@ -3,6 +3,7 @@
  * an unknown code is shown as the code itself, never guessed or replaced by a generic phrase.
  */
 export const AUDIT_ACTION_LABELS: Record<string, string> = {
+	PLATFORM_REPORT_DECIDED: 'قرار في بلاغ',
 	// sessions / own account
 	SESSION_STARTED: 'تسجيل دخول جديد',
 	SESSION_LOGOUT: 'تسجيل خروج',
@@ -52,6 +53,9 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 	MARKETING_ASSET_CREATED: 'إضافة مادة تسويقية',
 	DISPUTE_ASSIGNED: 'إسناد نزاع',
 	DISPUTE_NOTE: 'ملاحظة داخلية على نزاع',
+	DISPUTE_STAFF_MESSAGE_SENT: 'رسالة من الإدارة في نزاع',
+	NOTIFICATION_TEMPLATE_CREATED: 'إنشاء قالب إشعار',
+	NOTIFICATION_TEMPLATE_UPDATED: 'تعديل قالب إشعار',
 	DISPUTE_STATUS_CHANGED: 'تغيير حالة نزاع',
 	DISPUTE_FINANCIAL_RESOLVED: 'تسوية مالية لنزاع',
 	CANCELLATION_SETTLED: 'تسوية مالية لإلغاء بالتراضي',
@@ -94,6 +98,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 };
 
 export const AUDIT_ENTITY_LABELS: Record<string, string> = {
+	PLATFORM_REPORT: 'بلاغ', NOTIFICATION_TEMPLATE: 'قالب إشعار',
 	DISPUTE: 'نزاع', TICKET: 'تذكرة', WITHDRAWAL: 'طلب سحب', ESCROW: 'ضمان', PROJECT: 'مشروع', CONTRACT: 'عقد', FINANCE: 'مالية',
 	USER: 'حساب', ROLE: 'دور', INVITE: 'دعوة', SETTINGS: 'إعدادات', FEE_POLICY: 'سياسة الرسوم', SITE_IDENTITY: 'هوية الموقع', COUPON: 'كوبون'
 };

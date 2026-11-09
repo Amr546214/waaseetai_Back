@@ -1,22 +1,41 @@
 import { Router } from 'express';
-import { AccountType } from '@prisma/client';
-import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
+import { z } from 'zod';
+import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { adminMarketplaceModerationService } from '../services/admin-marketplace-moderation.service';
+import { actorHas } from '../services/admin-access.service';
 import { recordAdminAudit } from '../utils/admin-audit';
 import { AppError } from '../utils/app-error';
-import { requirePermission } from '../middlewares/admin-access.middleware';
+import { requireAnyPermission, requirePermission } from '../middlewares/admin-access.middleware';
 
 const router = Router();
-router.use(authenticate, requireActiveUser, requirePermission('content.manage'));
+router.use(authenticate, requireActiveUser);
+const mayRead = requireAnyPermission('content.manage', 'business_models.review');
+const pageQuery = z.object({
+	status: z.string().max(32).optional(),
+	search: z.string().trim().max(150).optional(),
+	page: z.coerce.number().int().min(1).max(1_000_000).default(1),
+	limit: z.coerce.number().int().min(1).max(100).default(20),
+});
 
-router.get('/', async (req, res, next) => {
+router.get('/', mayRead, async (req, res, next) => {
 	try {
-		const q = req.query as Record<string, string | undefined>;
-		res.json({ success: true, data: await adminMarketplaceModerationService.list({ status: q.status, search: q.search, page: Number(q.page), limit: Number(q.limit) }) });
+		const parsed = pageQuery.safeParse(req.query);
+		if (!parsed.success) throw new AppError('فلاتر البحث أو رقم الصفحة غير صالحة', 400);
+		res.set('Cache-Control', 'no-store');
+		res.json({ success: true, data: await adminMarketplaceModerationService.list(parsed.data, !!req.adminActor && actorHas(req.adminActor, 'content.manage')) });
 	} catch (e) { next(e); }
 });
 
-router.patch('/:id/moderation', async (req, res, next) => {
+router.get('/:id', mayRead, async (req, res, next) => {
+	try {
+		const id = z.string().uuid().safeParse(req.params.id);
+		if (!id.success) throw new AppError('معرّف غير صالح', 400);
+		res.set('Cache-Control', 'no-store');
+		res.json({ success: true, data: await adminMarketplaceModerationService.detail(id.data) });
+	} catch (e) { next(e); }
+});
+
+router.patch('/:id/moderation', requirePermission('content.manage'), async (req, res, next) => {
 	try {
 		const id = String(req.params.id);
 		if (!/^[0-9a-f-]{36}$/i.test(id)) throw new AppError('معرّف غير صالح', 400);

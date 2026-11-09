@@ -5,10 +5,12 @@ import assert from 'node:assert/strict';
 // prisma, the notification helpers are mocked; the audit store is an in-memory stand-in for account_audit_logs.
 type Fx = { audit: any[]; providerNotes: any[]; clientNotes: any[]; dispute: any };
 
-async function load(t: TestContext, overrides: Partial<any> = {}) {
+async function load(t: TestContext, overrides: Partial<any> = {}, canResolve = false) {
 	const fx: Fx = { audit: [], providerNotes: [], clientNotes: [], dispute: { id: 'd1', requestId: null, projectId: 'p1', openedById: 'client-1', againstUserId: 'prov-1', status: 'OPEN', reason: 'r', description: 'd', evidence: [], ...overrides } };
+	let assignmentWriteFails = false;
 	const prisma: any = {
-		adminStaff: { findUnique: async ({ where }: any) => (where.userId === 'admin-2' ? { id: 's2', status: 'ACTIVE', roleId: 'r', scoped: false, departments: [], overrides: [], role: { id: 'r', name: 'r', permissions: ['disputes.view'] } } : null) },
+		$transaction: async (fn: any) => fn(prisma),
+		adminStaff: { findUnique: async ({ where }: any) => (where.userId === 'admin-2' ? { id: 's2', status: 'ACTIVE', roleId: 'r', scoped: false, departments: [], overrides: [], role: { id: 'r', name: 'r', permissions: ['disputes.view', ...(canResolve ? ['disputes.resolve'] : [])] } } : null) },
 		dispute: {
 			findUnique: async ({ where }: any) => (where.id === 'd1' ? { ...fx.dispute, request: null, project: { id: 'p1' }, openedBy: { id: 'client-1' }, againstUser: { id: 'prov-1' }, resolvedBy: null } : null),
 			update: async ({ data }: any) => { Object.assign(fx.dispute, data); return { ...fx.dispute }; },
@@ -21,17 +23,18 @@ async function load(t: TestContext, overrides: Partial<any> = {}) {
 		proposal: { findFirst: async () => null },
 		escrow: { findUnique: async () => ({ amount: 100, releasedAmount: 40, status: 'HELD', fundedAt: null, project: { contract: { price: 100, status: 'DISPUTED' } } }) },
 		accountAuditLog: {
-			create: async ({ data }: any) => { const row = { id: `a${fx.audit.length + 1}`, occurredAt: new Date(fx.audit.length + 1), user: { id: data.userId, firstName: 'Ad', lastName: 'Min' }, ...data }; fx.audit.push(row); return row; },
-			findMany: async ({ where }: any) => fx.audit.filter(r => (!where.eventType || where.eventType === r.eventType || where.eventType.in?.includes(r.eventType)) && (!where.AND || where.AND.every((c: any) => r.context[c.context.path[0]] === c.context.equals))).slice().reverse()
+			create: async ({ data }: any) => { if (assignmentWriteFails) throw new Error('audit write unavailable'); const row = { id: `a${fx.audit.length + 1}`, occurredAt: new Date(fx.audit.length + 1), user: { id: data.userId, firstName: 'Ad', lastName: 'Min' }, ...data }; fx.audit.push(row); return row; },
+			findMany: async ({ where, take }: any) => fx.audit.filter(r => (!where.eventType || where.eventType === r.eventType || where.eventType.in?.includes(r.eventType)) && (!where.AND || where.AND.every((c: any) => r.context[c.context.path[0]] === c.context.equals))).slice().reverse().slice(0, take)
 		}
 	};
 	t.mock.module('../config/db', { namedExports: { prisma } });
+	t.mock.module('./admin-access.service', { namedExports: await import(`./admin-access.service.ts?fixture=${Date.now()}-${Math.random()}`) });
 	// the audit module is cached across tests: load a fresh copy bound to THIS test's prisma mock
 	t.mock.module('./admin-audit.service', { namedExports: { adminAudit: (await import(`./admin-audit.service.ts?fixture=${Date.now()}-${Math.random()}`)).adminAudit } });
 	t.mock.module('./provider-notifications.service', { namedExports: { providerNotifications: { disputeOpened: async () => {}, disputeResolved: async (n: any) => { fx.providerNotes.push(n); } } } });
 	t.mock.module('./client-notifications.service', { namedExports: { clientNotifications: { send: async (n: any) => { fx.clientNotes.push(n); } }, clientNotificationFor: { disputeOpened: () => ({}), disputeResolved: (p: any) => ({ userId: p.clientId, type: 'DISPUTE_RESOLVED', ...p }) } } });
 	const { disputeService } = await import(`./dispute.service.ts?fixture=${Date.now()}-${Math.random()}`);
-	return { svc: disputeService, fx };
+	return { svc: disputeService, fx, failAssignmentWrite: () => { assignmentWriteFails = true; } };
 }
 
 test('assign: only an admin / super-admin can be the assignee, and the assignment is audit-logged and shown on the detail', async (t) => {
@@ -87,4 +90,36 @@ test('detail: escrow status and held amount come from the database; unknown disp
 	assert.equal(d.escrow.status, 'HELD');
 	assert.equal(d.heldEscrowAmount, 60);
 	await assert.rejects(() => svc.getForAdmin('nope'), /غير موجود/);
+});
+
+test('assignment fails if the audit store is unavailable', async (t) => {
+	const { svc, fx, failAssignmentWrite } = await load(t);
+	failAssignmentWrite();
+	await assert.rejects(() => svc.assign('d1', 'admin-1', 'admin-2'), { statusCode: 500 });
+	assert.equal(fx.audit.length, 0);
+});
+
+test('admin detail retains the assignee after 200 newer audit entries', async (t) => {
+	const { svc, fx } = await load(t);
+	await svc.assign('d1', 'admin-1', 'admin-2');
+	for (let i = 0; i < 200; i++) {
+		fx.audit.push({ id: `note-${i}`, occurredAt: new Date(i + 2), eventType: 'DISPUTE_NOTE', context: { entity: 'DISPUTE', entityId: 'd1' } });
+	}
+	const detail = await svc.getForAdmin('d1');
+	assert.equal(detail.assignedTo?.id, 'admin-2');
+});
+
+test('manual escalation refuses staff without the handling permission', async (t) => {
+	const { svc } = await load(t);
+	await assert.rejects(() => svc.assign('d1', 'admin-1', 'admin-2', 'يحتاج متابعة'), /صلاحية معالجة/);
+});
+
+test('manual escalation persists a private reason without changing the case status', async (t) => {
+	const { svc, fx } = await load(t, {}, true);
+	await svc.assign('d1', 'admin-1', 'admin-2', '  يحتاج متابعة  ');
+	assert.equal(fx.audit[0].context.escalationReason, 'يحتاج متابعة');
+	assert.ok(!fx.audit[0].summary.includes('يحتاج متابعة'));
+	const detail = await svc.getForAdmin('d1');
+	assert.equal(detail.assignedTo?.escalationReason, 'يحتاج متابعة');
+	assert.equal(detail.status, 'OPEN');
 });

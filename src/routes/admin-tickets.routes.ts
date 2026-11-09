@@ -10,7 +10,7 @@ router.use(authenticate, requireActiveUser, requirePermission('support.review'))
 router.get('/', adminListTickets);
 mountCaseAttachments(router, '/:id/attachments', 'ticket', true);
 router.get('/:id', adminGetTicket);
-router.post('/:id/reply', requirePermission('support.reply'), adminReplyToTicket);
+router.post('/:id/reply', requirePermission('support.reply'), caseFilesUpload, adminReplyToTicket);
 router.patch('/:id/status', requirePermission('support.reply'), adminSetTicketStatus);
 router.patch('/:id/priority', requirePermission('support.reply'), adminSetTicketPriority);
 router.post('/:id/assign', requirePermission('support.reply'), adminAssignTicket);

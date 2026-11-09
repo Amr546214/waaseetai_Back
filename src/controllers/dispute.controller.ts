@@ -10,7 +10,7 @@ const actorId = (req: Request) => req.user?.id || req.user?.userId!;
 const DISPUTE_FIELD_TEXT = { action: 'نوع القرار غير صالح', resolution: 'اكتب قرار النزاع', outcome: 'نوع القرار المالي غير صالح', refundToClient: 'أدخل مبلغ الاسترداد للعميل', releaseToProvider: 'أدخل المبلغ المصروف لمقدم الخدمة', expectedHeldAmount: 'المبلغ المحتجز المعروض غير صالح، حدّث الصفحة', confirm: 'يجب تأكيد تنفيذ القرار المالي صراحةً', resolutionNote: 'الملاحظة غير صالحة' };
 
 export async function listDisputes(req: Request, res: Response, next: NextFunction) {
-  try { const rawStatus = req.query.status ? String(req.query.status).toUpperCase() : undefined; const status = rawStatus && Object.values(DisputeStatus).includes(rawStatus as DisputeStatus) ? rawStatus as DisputeStatus : undefined; if (rawStatus && !status) throw new AppError('حالة النزاع غير صحيحة', 400); const data = await disputeService.listForAdmin(status, Number(req.query.page) || 1, Number(req.query.limit) || 20); res.json({ success: true, data }); } catch (error) { next(error); }
+  try { const rawStatus = req.query.status ? String(req.query.status).toUpperCase() : undefined; const status = rawStatus && Object.values(DisputeStatus).includes(rawStatus as DisputeStatus) ? rawStatus as DisputeStatus : undefined; if (rawStatus && !status) throw new AppError('حالة النزاع غير صحيحة', 400); const followUp = req.query.followUp; if (followUp !== undefined && followUp !== 'true' && followUp !== 'false') throw new AppError('فلتر المتابعة غير صحيح', 400); const data = await disputeService.listForAdmin(status, Number(req.query.page) || 1, Number(req.query.limit) || 20, followUp === 'true'); res.json({ success: true, data }); } catch (error) { next(error); }
 }
 
 export async function listMyDisputes(req: Request, res: Response, next: NextFunction) {
@@ -76,7 +76,7 @@ export async function cancelProviderRequest(req: Request, res: Response, next: N
 }
 
 export async function assignAdminDispute(req: Request, res: Response, next: NextFunction) {
-  try { const parsed = assignDisputeSchema.safeParse(req.body); if (!parsed.success) throw zodAppError(parsed.error.issues, 'حدد المشرف المسؤول عن النزاع', { assigneeId: 'حدد المشرف المسؤول عن النزاع' }); res.json({ success: true, data: await disputeService.assign(String(req.params.id), actorId(req), parsed.data.assigneeId) }); } catch (error) { next(error); }
+  try { const parsed = assignDisputeSchema.safeParse(req.body); if (!parsed.success) throw zodAppError(parsed.error.issues, 'حدد المشرف المسؤول عن النزاع', { assigneeId: 'حدد المشرف المسؤول عن النزاع', escalationReason: 'اكتب سبب التصعيد في حدود ١٠٠٠ حرف' }); res.json({ success: true, data: await disputeService.assign(String(req.params.id), actorId(req), parsed.data.assigneeId, parsed.data.escalationReason) }); } catch (error) { next(error); }
 }
 
 export async function addAdminDisputeNote(req: Request, res: Response, next: NextFunction) {

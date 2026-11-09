@@ -140,6 +140,10 @@ export function logTarget(r: LogLike & { userId: string }, actor: { id: string |
 	const user = (id: string): Target => ({ type: 'USER', typeLabel: AUDIT_ENTITY_LABELS.USER, id, label: users.get(id)?.name || null });
 	const entity = str(ctx.entity);
 	if (entity) return { type: entity, typeLabel: AUDIT_ENTITY_LABELS[entity] ?? entity, id: str(ctx.entityId), label: null };
+	if (c === 'PLATFORM_REPORT_DECIDED') {
+		const id = str(m.reportId);
+		return id && UUID_RE.test(id) ? { type: 'PLATFORM_REPORT', typeLabel: AUDIT_ENTITY_LABELS.PLATFORM_REPORT, id, label: null } : null;
+	}
 	if (c === 'PLATFORM_SETTINGS_UPDATED') return { type: 'SETTINGS', typeLabel: AUDIT_ENTITY_LABELS.SETTINGS, id: null, label: 'إعدادات المنصة' };
 	if (c.startsWith('FEE_POLICY_')) return { type: 'FEE_POLICY', typeLabel: AUDIT_ENTITY_LABELS.FEE_POLICY, id: m.version != null ? String(m.version) : null, label: m.version != null ? `نسخة ${redact(m.version, 10)}` : null };
 	if (c.startsWith('SITE_IDENTITY_')) { const k = str(m.identityKey); const one = k && !k.includes(','); return { type: 'SITE_IDENTITY', typeLabel: AUDIT_ENTITY_LABELS.SITE_IDENTITY, id: one ? k : null, label: one ? identityLabel(k) : 'مجموعة هوية الموقع' }; }
@@ -196,7 +200,7 @@ export async function listAuditTrail(query: AuditTrailQuery, db: any = prisma) {
 	if (eventType) and.push({ eventType });
 	const sevLog = logSeverity(); if (sevLog) and.push(sevLog);
 	if (sourceFilter) and.push({ source: sourceFilter });
-	if (text) and.push({ OR: [{ title: { contains: text, mode: 'insensitive' } }, { summary: { contains: text, mode: 'insensitive' } }, { eventType: { contains: text, mode: 'insensitive' } }, ...(matchCodes.length ? [{ eventType: { in: matchCodes } }] : []), ...(matchUserIds.length ? [{ userId: { in: matchUserIds } }] : [])] });
+	if (text) and.push({ OR: [{ title: { contains: text, mode: 'insensitive' } }, { summary: { contains: text, mode: 'insensitive' } }, { eventType: { contains: text, mode: 'insensitive' } }, ...(matchCodes.length ? [{ eventType: { in: matchCodes } }] : []), ...(UUID_RE.test(text) ? [{ eventType: 'PLATFORM_REPORT_DECIDED', metaData: { path: ['reportId'], equals: text.toLowerCase() } }] : []), ...(matchUserIds.length ? [{ userId: { in: matchUserIds } }] : [])] });
 	if (hasRange) and.push({ occurredAt: range });
 	const logWhere: Prisma.AccountAuditLogWhereInput = { AND: and };
 

@@ -1,3 +1,4 @@
+import { mountDisputeMessages } from './dispute-messages.routes';
 import { mountCaseAttachments, caseFilesUpload } from './case-attachments.routes';
 import { Router, Request, Response, NextFunction } from 'express';
 import { getProviderStatistics, getProviderOffers, getProviderOfferById, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, uploadStageDeliveryFiles, getDeliveryAiReview, getProjectHealthAnalysis, getProviderWallet, getProviderTransactions, getProviderFinanceHistory, getProviderFinanceTransaction, getCompanyDeliveries, getProviderInvoices, getProviderInvoice, getProviderSales } from '../controllers/provider.controller';
@@ -226,6 +227,7 @@ router.post('/requests/:id/cancel', authenticate, requireActiveUser, providerOnl
 // provider is the opener or the respondent (see DisputeService.listForUser).
 router.get('/disputes', authenticate, requireActiveUser, providerOnly, listMyDisputes);
 mountCaseAttachments(router, '/disputes/:id/attachments', 'dispute', false, authenticate, requireActiveUser, providerOnly);
+mountDisputeMessages(router, '/disputes/:id/messages', false, authenticate, requireActiveUser, providerOnly);
 router.get('/disputes/:id', authenticate, requireActiveUser, providerOnly, getMyDispute);
 
 // Provider's own support tickets — same generic, userId-scoped model and

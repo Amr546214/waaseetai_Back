@@ -7,6 +7,7 @@ let state: any;
 let gate: Promise<unknown> = Promise.resolve();
 const db: any = {
   supportTicket: { findUnique: async ({ where }: any) => state.tickets.find((r: any) => Object.entries(where).every(([k,v]) => r[k] === v)) ?? null,
+    update: async ({ where, data }: any) => Object.assign(state.tickets.find((r: any) => matches(r, where)), data),
     create: async ({ data }: any) => {
       if (state.failDb) throw new Error('database unavailable');
       if (data.submissionKey && state.tickets.some((r: any) => r.submissionKey === data.submissionKey)) throw Object.assign(new Error('unique'), { code: 'P2002' });
@@ -16,6 +17,11 @@ const db: any = {
       (attachments?.create || []).forEach((f: any) => state.files.push({ ...f, id: randomUUID(), ticketId: row.id }));
       state.messages.push({ ...messages.create, ticketId: row.id }); return row;
     } },
+  supportTicketMessage: {
+    findUnique: async ({ where }: any) => state.messages.find((r: any) => matches(r, where)) ?? null,
+    create: async ({ data }: any) => { const row = { ...data, id: randomUUID(), createdAt: new Date() }; state.messages.push(row); return row; },
+  },
+  accountAuditLog: { create: async ({ data }: any) => data },
   dispute: { findUnique: async ({ where }: any) => state.disputes.find((r: any) => r.id === where.id) ?? null },
   caseAttachment: {
     findMany: async ({ where, select }: any) => state.files.filter((r: any) => matches(r, where)).map((r: any) => select ? Object.fromEntries(Object.keys(select).map(k => [k, r[k]])) : r),
@@ -29,7 +35,8 @@ const db: any = {
   $transaction: async (fn: any) => {
     const previous = gate; let release!: () => void; gate = new Promise<void>(r => { release = r; });
     await previous;
-    try { return await fn(db); } finally { release(); }
+    const messages = [...state.messages], files = [...state.files];
+    try { return await fn(db); } catch (error) { state.messages = messages; state.files = files; throw error; } finally { release(); }
   },
 };
 function matches(row: any, where: any) { return Object.entries(where).every(([k,v]) => row[k] === v); }
@@ -217,4 +224,30 @@ test('OpenAPI preserves nested case paths and documents real multipart fields, w
   assert.ok(paths['/api/provider/tickets/:id/attachments/:attachmentId/download'].get);
   assert.ok(paths['/api/provider/disputes/:id/attachments'].post.requestBody.content['multipart/form-data'].schema.required.includes('requestKey'));
   assert.ok(paths['/api/provider/tickets'].post.requestBody.content['application/json']);
+});
+
+test('staff reply files belong to the saved message and a retry sends only once', async () => {
+  state.tickets[0].status = 'OPEN';
+  const key = randomUUID();
+  const first = await supportTicketService.replyAsStaff('t1', 'staff', 'رد مع مرفق', undefined, [file()], key);
+  const second = await supportTicketService.replyAsStaff('t1', 'staff', 'رد مع مرفق', undefined, [file()], key);
+  assert.equal(first.message.id, second.message.id);
+  assert.equal(state.messages.length, 1);
+  assert.equal(state.files.length, 1);
+  assert.equal(state.files[0].messageId, first.message.id);
+  assert.equal(state.files[0].ticketId, 't1');
+  assert.equal(state.deleted.length, 1);
+  assert.equal('replyDigest' in first.message, false);
+  const files = await service.listCaseFiles('ticket', 't1');
+  assert.equal(files[0].messageId, first.message.id);
+  assert.equal('privateRef' in files[0], false);
+});
+
+test('staff reply file persistence failure rolls back the message and removes the uploaded object', async () => {
+  state.tickets[0].status = 'OPEN';
+  state.failDb = true;
+  await assert.rejects(supportTicketService.replyAsStaff('t1', 'staff', 'رد مع مرفق', undefined, [file()], randomUUID()));
+  assert.equal(state.messages.length, 0);
+  assert.equal(state.files.length, 0);
+  assert.equal(state.deleted.length, 1);
 });
