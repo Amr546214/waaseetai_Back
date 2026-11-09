@@ -223,3 +223,14 @@ export function memoryUpload(options: { fileSize?: number; files?: number; allow
 		none: () => limitedFirst(m.none())
 	}) as multer.Multer;
 }
+
+/** Account usage figures from the provider's Admin API (read-only). Callers check `cloudinaryUsageConfigured()` first; throws on a provider failure. */
+export function cloudinaryUsageConfigured(): boolean {
+	return !!process.env.CLOUDINARY_CLOUD_NAME && !!process.env.CLOUDINARY_API_KEY && !!process.env.CLOUDINARY_API_SECRET && !isLocalDevFallback();
+}
+export async function fetchCloudinaryUsage(): Promise<{ storageBytes: number | null; bandwidthBytes: number | null; transformations: number | null; resources: number | null; plan: string | null }> {
+	ensureConfigured();
+	const u: any = await cloudinary.api.usage();
+	const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+	return { storageBytes: num(u?.storage?.usage), bandwidthBytes: num(u?.bandwidth?.usage), transformations: num(u?.transformations?.usage), resources: num(u?.resources), plan: typeof u?.plan === 'string' ? u.plan : null };
+}
