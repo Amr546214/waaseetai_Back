@@ -1,5 +1,8 @@
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
+import { AppError } from '../utils/app-error';
+import { parseAdminAvatar } from '../utils/admin-avatar';
+import { uploadDataUri } from '../utils/cloudinary-storage';
 import { prisma } from '../config/db';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
 import { sessionService } from './session.service';
@@ -69,6 +72,34 @@ class AdminAccountService {
       before, after: Object.fromEntries(keys.map((k) => [k, (updated as any)[k]])), details: { changedFields: keys }, context: ctx
     });
     return updated;
+  }
+
+  async updateAvatar(userId: string, input: unknown) {
+    const body = z.object({ image: z.unknown() }).strict().parse(input);
+    let data: string | null;
+    try { data = parseAdminAvatar(body.image); }
+    catch { throw new AppError('ارفع صورة PNG أو JPEG أو WebP لا تتجاوز 2 ميجا.', 400); }
+    const exists = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+    if (!exists) throw new AppError('الحساب غير موجود.', 404);
+    const avatarUrl = data === null ? null : (await uploadDataUri(data, {
+      folder: `waseetai/users/${userId}/avatar`, fileName: 'admin-avatar',
+      maxBytes: 2 * 1024 * 1024,
+    })).url;
+    return prisma.$transaction(async tx => {
+      const updated = await tx.user.update({
+        where: { id: userId }, data: { avatarUrl }, select: {
+          id: true, firstName: true, lastName: true, email: true, accountType: true,
+          phoneCountryCode: true, phoneNumber: true, avatarUrl: true,
+        },
+      });
+      await tx.accountAuditLog.create({ data: {
+        userId, category: 'PROFILE_COMPLETION', status: 'COMPLETED',
+        eventType: 'ADMIN_AVATAR_UPDATED', source: 'USER', severity: 'INFO',
+        title: 'تعديل الصورة الشخصية', actionText: 'عدّل المسؤول صورته الشخصية',
+        summary: 'عدّل المسؤول صورته الشخصية', context: { removed: data === null },
+      } });
+      return updated;
+    });
   }
 
   listSessions(userId: string, currentSessionId?: string) {

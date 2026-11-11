@@ -8,6 +8,8 @@ import { adminStaffService } from '../services/admin-staff.service';
 import { adminInvitesService } from '../services/admin-invites.service';
 import { adminTasksService, TASK_PRIORITIES, TASK_STATUSES, TASK_TYPES } from '../services/admin-tasks.service';
 import { adminPerformanceService } from '../services/admin-performance.service';
+import { z } from 'zod';
+import { supportPerformance } from '../services/admin-support-performance.service';
 import { prisma } from '../config/db';
 import { AppError, fieldError } from '../utils/app-error';
 
@@ -95,6 +97,12 @@ router.get('/performance/export', requirePermission('performance.view', 'perform
 		res.status(200).send(csv);
 	} catch (e) { next(e); }
 });
+
+router.get('/performance/support-response', requirePermission('performance.view'), ok(async req => {
+  const query = z.object({ period: z.enum(['month', 'quarter', 'year']).default('month') }).strict().safeParse(req.query);
+  if (!query.success) throw new AppError('الفترة غير صالحة.', 400);
+  return supportPerformance(query.data.period);
+}));
 
 // --- who granted what to whom (audit.view; a SUPER_ADMIN holds it) ---
 router.get('/access-audit', requirePermission('audit.view'), ok(async req => {

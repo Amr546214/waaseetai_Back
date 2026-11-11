@@ -1,7 +1,8 @@
+import { adminAccountService } from '../services/admin-account.service';
 import { Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
-import { accountActionLimiter } from '../middlewares/rate-limit.middleware';
+import { accountActionLimiter, uploadLimiter } from '../middlewares/rate-limit.middleware';
 import * as c from '../controllers/admin-account.controller';
 import { requirePermission, requireAdminAccount } from '../middlewares/admin-access.middleware';
 
@@ -14,6 +15,14 @@ router.get('/admins', requirePermission('team.view'), c.getAdmins);
 // The admin's own account: profile + sessions (password change: PUT /api/provider/profile/password, identity-level)
 router.get('/account/me', c.getMe);
 router.patch('/account/me', accountActionLimiter, c.updateMe);
+router.post('/account/avatar', uploadLimiter, async (req, res, next) => {
+  try { res.json({ success: true, data: await adminAccountService.updateAvatar(req.user!.id, req.body) }); }
+  catch (error) { next(error); }
+});
+router.get('/account/security-policy', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ success: true, data: { emailCodeRequired: true, authenticatorAppAvailable: false, editable: false } });
+});
 router.get('/account/sessions', c.getSessions);
 router.delete('/account/sessions', accountActionLimiter, c.deleteOtherSessions);
 router.delete('/account/sessions/:id', accountActionLimiter, c.deleteSession);
