@@ -320,6 +320,7 @@ import publicSettingsRoutes from './routes/public-settings.routes';
 import adminMarketingAssetsRoutes from './routes/admin-marketing-assets.routes';
 import adminMarketplaceServicesRoutes from './routes/admin-marketplace-services.routes';
 import adminAnalyticsRoutes from './routes/admin-analytics.routes';
+import adminAiConsoleRoutes from './routes/admin-ai-console.routes';
 import kycDocumentsRoutes from './routes/kyc-documents.routes';
 
 // Support BOTH prefixed and unprefixed paths.
@@ -401,6 +402,7 @@ mountAppRoute('/admin/marketing-assets', adminMarketingAssetsRoutes);
 mountAppRoute('/api/admin/marketplace-services', adminMarketplaceServicesRoutes);
 mountAppRoute('/admin/marketplace-services', adminMarketplaceServicesRoutes);
 mountAppRoute('/api/admin/analytics', adminAnalyticsRoutes);
+mountAppRoute('/api/admin/ai-console', adminAiConsoleRoutes);
 mountAppRoute('/admin/analytics', adminAnalyticsRoutes);
 mountAppRoute('/api/kyc-documents', kycDocumentsRoutes);
 mountAppRoute('/kyc-documents', kycDocumentsRoutes);
