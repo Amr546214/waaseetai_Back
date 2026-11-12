@@ -38,7 +38,9 @@ export const SETTLED_DISPUTE_WHERE = { status: DisputeStatus.RESOLVED, resolutio
 export const NOT_SETTLED_PROJECT = { disputes: { none: SETTLED_DISPUTE_WHERE } } as const;
 
 /** `where` for projects genuinely completed by delivery approval (status COMPLETED and not closed by a settlement). */
-export const deliveryCompletedProject = <T extends Record<string, unknown> = {}>(extra?: T) => ({ ...(extra ?? ({} as T)), status: 'COMPLETED' as const, ...NOT_SETTLED_PROJECT });
+export const NOT_ADMIN_CLOSED_PROJECT = { engagementClosure: { is: null } } as const;
+/** A project closed by an ADMINISTRATIVE RELEASE is COMPLETED but was not completed by delivery: it is never a delivery achievement (counters, levels, rating). */
+export const deliveryCompletedProject = <T extends Record<string, unknown> = {}>(extra?: T) => ({ ...(extra ?? ({} as T)), status: 'COMPLETED' as const, ...NOT_SETTLED_PROJECT, ...NOT_ADMIN_CLOSED_PROJECT });
 
 /** True when a loaded project's disputes (already fetched) contain a financial settlement. For rows loaded with `disputes` included. */
 export const hasFinancialSettlement = (disputes: Array<{ status?: string | null; resolution?: string | null }> | null | undefined): boolean =>

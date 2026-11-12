@@ -145,15 +145,18 @@ export class DashboardService {
           budgetFixed: true,
           budgetMax: true,
           status: true,
-          createdAt: true
+          createdAt: true,
+          engagementClosure: { select: { kind: true } }
         }
       });
 
-      const latestProjectsData = latestProjectsRaw.map(p => ({
+      const latestProjectsData = latestProjectsRaw.map((p: any) => ({
         id: p.id,
         title: p.title,
         budget: p.budgetFixed || p.budgetMax || 0,
         status: p.status,
+        // how a NEW decision closed it (administrative release / refund / cancel, consensual cancellation); null otherwise. The client card words it instead of guessing from `status`.
+        closureKind: p.engagementClosure?.kind ?? null,
         createdAt: p.createdAt
       }));
 

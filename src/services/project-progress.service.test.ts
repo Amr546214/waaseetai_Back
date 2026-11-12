@@ -892,7 +892,8 @@ for (const [label, nextStage] of [['final stage', undefined], ['intermediate sta
 test('dispute freeze: the contract row is locked BEFORE the disputes are counted, and both happen before any money moves (race-safe order)', async (t) => {
   const fx = await loadProjectProgressServiceWithFixture(t);
   await fx.projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'approve');
-  assert.deepEqual(fx.order.slice(0, 2), ['lock', 'count']);
+  // canonical order (services/lock-order.ts): the request row lock, then the contract row lock, THEN the disputes are counted
+  assert.deepEqual(fx.order.slice(0, 3), ['lock', 'lock', 'count']);
   assert.ok(fx.order.indexOf('escrow') > fx.order.indexOf('count'));
 });
 

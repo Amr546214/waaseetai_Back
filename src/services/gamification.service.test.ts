@@ -141,5 +141,5 @@ test('client level view: level 1 "زائر" with 1% cashback for a new client, t
   assert.equal(r.roadmap[0].color.dark, '#97F7C7');
   assert.deepEqual([r.nextLevelProgress.title, r.nextLevelProgress.pointsGap, r.nextLevelProgress.projectsGap, r.nextLevelProgress.nextCashbackRate], ['مستكشف', 51, 2, 1.5]);
   assert.equal(r.currentStats.avgRating, null);
-  assert.deepEqual(r.limitations, ['CLIENT_POINTS_NOT_AWARDED', 'CLIENT_RATING_NOT_AVAILABLE', 'CASHBACK_NOT_CREDITED_YET']);
+  assert.deepEqual(r.limitations, ['CLIENT_POINTS_NOT_AWARDED', 'CLIENT_NO_RATINGS_YET', 'CASHBACK_NOT_CREDITED_YET']);
 });

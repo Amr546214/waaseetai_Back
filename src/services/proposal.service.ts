@@ -1,4 +1,5 @@
 import { prisma } from '../utils/prisma.client';
+import { assertRequestNotSuspended, lockAndAssertNotSuspended } from './admin-hold';
 import { CreateProposalDto } from '../dtos/create-proposal.dto';
 import { AccountType, Prisma, ProposalStatus } from '@prisma/client';
 import { AppError } from '../utils/app-error';
@@ -198,6 +199,8 @@ export class ProposalService {
 		if (clientRequest && clientRequest.status !== 'OPEN') {
 			throw new AppError('هذا المشروع غير متاح حالياً لاستقبال عروض جديدة', 422, undefined, 'PROJECT_NOT_OPEN');
 		}
+		// an admin-suspended request keeps its data and offers but receives no NEW offer
+		assertRequestNotSuspended(clientRequest);
 
 		// 3. Defensive check: verify milestone percentages sum to exactly 100%
 		const totalPct = data.milestones.reduce((sum, m) => sum + m.percentage, 0);
@@ -268,6 +271,8 @@ export class ProposalService {
 		// 5. Transactional execution saving ProjectProposal & ProposalMilestone entries
 		let offerNotificationId: string | null = null;
 		const newProposal = await prisma.$transaction(async (tx) => {
+			// admin suspension / cancellation, authoritative: same lock order as the admin actions; the request must still be OPEN and not suspended when the offer row is written
+			await lockAndAssertNotSuspended(tx, projectId, { requireOpen: true });
 			const created = await tx.projectProposal.create({
 				data: {
 					projectId,

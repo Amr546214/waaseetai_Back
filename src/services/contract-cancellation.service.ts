@@ -1,4 +1,8 @@
 import { AmendmentRequesterRole, CancellationRequestStatus, CancellationSettlementStatus, ContractStatus, EscrowStatus, LogCategory, LogStatus, NotificationCategory, Prisma, ProjectStatus, RequestStatus } from '@prisma/client';
+import { lockRequestRow } from './lock-order';
+import { assertNoAdminFreeze } from './admin-hold';
+import { recordEngagementClosure } from './engagement-closure.service';
+import { marketerNotifications, type MarketerCommissionNotice } from './marketer-notifications.service';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { logger } from '../config/logger';
@@ -254,11 +258,14 @@ export class ContractCancellationService {
 		}
 		if (pre.status !== CancellationRequestStatus.AGREED_PENDING_SETTLEMENT) throw new AppError('لا تُنفَّذ التسوية قبل اتفاق الطرفين', 409);
 
+		let commissionNotices: MarketerCommissionNotice[] = [];
 		const summary = await prisma.$transaction(async tx => {
+			await lockRequestRow(tx, pre.projectId); // canonical lock order (lock-order.ts): request row before the contract row (the settlement closes the request)
 			if (!(await lockProjectForFreezeCheck(tx, pre.projectId))) throw new AppError('لا يوجد عقد وضمان لهذا الطلب', 409);
 			const contract = await tx.contract.findUniqueOrThrow({ where: { id: pre.contractId }, select: { status: true, price: true, clientId: true, providerId: true } });
 			if (contract.status !== ContractStatus.ACTIVE) throw new AppError('العقد لم يعد نشطًا: لا يوجد مبلغ محتجز لتسويته', 409);
 			await assertProjectNotFrozen(pre.projectId, tx);
+			await assertNoAdminFreeze({ contractId: pre.contractId, projectId: pre.projectId }, tx);
 			const escrow = await tx.escrow.findUnique({ where: { projectId: pre.projectId } });
 			const held = round2(heldEscrowAmount(escrow, contract.price) ?? 0);
 			if (!escrow || escrow.status !== EscrowStatus.HELD || held <= 0) throw new AppError('لا يوجد مبلغ محتجز لتسويته', 409);
@@ -281,11 +288,17 @@ export class ContractCancellationService {
 				await tx.walletTransaction.create({ data: { userId: contract.clientId, type: 'REFUND', amount: refund, currency: 'USD', status: 'COMPLETED', paymentMethod: 'ESCROW', referenceId: `CANCEL-REFUND-${id}`, description: 'استرداد من الضمان بالإلغاء بالتراضي', metadata: { cancellationRequestId: id, projectId: pre.projectId, contractId: pre.contractId, decidedBy: adminId } } });
 			}
 			await hooks?.afterMoney?.(); // test seam: a failure here must leave NOTHING moved
-			const toProvider = release > 0;
+			// A mutual cancellation ENDS AS A CANCELLATION: request, project and contract are all explicitly CANCELLED whatever share was paid out to the provider (never COMPLETED, never DISPUTED).
 			await tx.contract.update({ where: { id: pre.contractId }, data: { status: ContractStatus.CANCELLED } });
-			await tx.project.update({ where: { id: pre.projectId }, data: { status: toProvider ? ProjectStatus.COMPLETED : ProjectStatus.DISPUTED } });
-			await tx.clientRequest.updateMany({ where: { proposals: { some: { projectId: pre.projectId } } }, data: { status: toProvider ? RequestStatus.COMPLETED : RequestStatus.CANCELLED } });
+			await tx.project.update({ where: { id: pre.projectId }, data: { status: ProjectStatus.CANCELLED } });
+			await tx.clientRequest.updateMany({ where: { id: pre.projectId }, data: { status: RequestStatus.CANCELLED } });
 			const result = { heldBefore: held, refundToClient: refund, releaseToProvider: release, platformCommission: split?.commission ?? 0, providerNet: split ? split.net : release };
+			// the closure (reason / source / outcome stored apart from the cancellation request's own state) + the partner commission on the newly released provider share through the shared engine
+			const rec = await recordEngagementClosure(tx, {
+				projectId: pre.projectId, contractId: pre.contractId, requestId: pre.projectId, kind: 'CONSENSUAL_CANCEL', source: 'MUTUAL_AGREEMENT', reason, decidedById: adminId, cancellationRequestId: id,
+				escrowId: escrow.id, feePolicyVersion: escrow.feePolicyVersion ?? null, ...result
+			}, { id: pre.contractId, projectId: pre.projectId, clientId: contract.clientId, providerId: contract.providerId });
+			commissionNotices = rec.commissionNotices;
 			const claimed = await tx.contractCancellationRequest.updateMany({ where: { id, status: CancellationRequestStatus.AGREED_PENDING_SETTLEMENT }, data: { status: CancellationRequestStatus.SETTLED, settlementStatus: CancellationSettlementStatus.SETTLED, settledAt: new Date(), settledById: adminId, settlementReason: reason, settlementHeldBefore: held, settlementRefundToClient: refund, settlementReleaseToProvider: release, settlementPlatformCommission: result.platformCommission, settlementProviderNet: result.providerNet } });
 			if (claimed.count !== 1) throw new AppError('نُفّذت تسوية هذا الطلب مسبقًا ولم يُنفَّذ أي مبلغ جديد', 409);
 			await tx.accountAuditLog.create({ data: {
@@ -300,6 +313,7 @@ export class ContractCancellationService {
 
 		const row = await prisma.contractCancellationRequest.findUniqueOrThrow({ where: { id }, include: INCLUDE });
 		await this.afterSettle(row, adminId, summary);
+		try { await marketerNotifications.commissionsApproved(commissionNotices); } catch (e) { logger.error(`[Cancellation] partner commission notice failed: ${(e as Error)?.message}`); }
 		return { ...toPublic(row, 'STAFF'), replayed: false };
 	}
 

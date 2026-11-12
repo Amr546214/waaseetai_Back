@@ -95,6 +95,8 @@ export class ExploreRequestsService {
 
     for (const cr of clientRequests) {
       seenProjectIds.add(cr.id); // Mark ID as seen regardless of match result to prevent fallback to stale Project records
+      // an admin-suspended request is hidden from browsing (it is still "seen", so its Project mirror cannot resurface through the legacy fallback below)
+      if ((cr as { adminSuspendedAt?: Date | null }).adminSuspendedAt) continue;
 
       const hasApplied = cr.proposals.length > 0;
       const isSaved = cr.savedBy.length > 0 || legacySavedIds.has(cr.id);

@@ -7,6 +7,7 @@ import { clientNotificationFor, clientNotifications } from './client-notificatio
 import type { Prisma } from '@prisma/client';
 import { adminSettlementFor, deliveryCompletedProject, SETTLED_NO_RATING_AR, SETTLED_LABEL_AR } from './settlement-state.service';
 import { adminAudit } from './admin-audit.service';
+import { ADMIN_RELEASE_NO_DELIVERY_AR } from './engagement-closure.service';
 import type { FinancialOutcomeSummary } from '../utils/dispute-resolution';
 
 export const ADMIN_SETTLED_MESSAGE = SETTLED_NO_RATING_AR;
@@ -14,6 +15,10 @@ export const ADMIN_SETTLED_MESSAGE = SETTLED_NO_RATING_AR;
 /** A project whose escrow an admin settled through a FINANCIAL dispute decision did not complete through delivery approval: no rating (and no points) for it. */
 async function assertNotAdminSettled(db: { dispute: { findFirst: (args: any) => Promise<any> } }, projectId: string | null, requestId: string | null) {
   if ((await adminSettlementFor({ projectId, requestId }, db as any)).settled) throw new AppError(ADMIN_SETTLED_MESSAGE, 409);
+  // an administrative release closed the project without a delivery approval: nothing to rate
+  const pid = projectId ?? requestId;
+  const closure = pid && (db as any).engagementClosure?.findUnique ? await (db as any).engagementClosure.findUnique({ where: { projectId: pid }, select: { kind: true } }) : null;
+  if (closure) throw new AppError(ADMIN_RELEASE_NO_DELIVERY_AR, 409, undefined, 'ADMIN_CLOSED_NO_RATING');
 }
 
 /** The tags a side may attach: only its own list, no duplicates, in the order chosen. Anything else is a 400. */
@@ -149,10 +154,13 @@ export class RatingService {
     if (settlement.settled) {
       try { distribution = ((await adminAudit.listForEntity('DISPUTE', settlement.disputeId, ['DISPUTE_FINANCIAL_RESOLVED']))[0]?.context?.outcomeSummary as FinancialOutcomeSummary | undefined) ?? null; } catch { distribution = null; }
     }
+    const closedPid = projectId ?? requestId;
+    const closed = closedPid ? !!(await (prisma as any).engagementClosure?.findUnique?.({ where: { projectId: closedPid }, select: { id: true } })) : false;
     const what = scope === 'STAGE' ? 'هذه المرحلة' : 'هذا المشروع';
-    let canRate = false; let reason: 'ALREADY_RATED' | 'ADMIN_SETTLED' | 'NOT_COMPLETED' | 'STAGE_NOT_APPROVED' | 'NOT_RATER' | null = null; let message = '';
+    let canRate = false; let reason: 'ALREADY_RATED' | 'ADMIN_SETTLED' | 'ADMIN_CLOSED' | 'NOT_COMPLETED' | 'STAGE_NOT_APPROVED' | 'NOT_RATER' | null = null; let message = '';
     if (saved) { reason = 'ALREADY_RATED'; message = `قيّمتَ ${what} مسبقًا`; }
     else if (settlement.settled) { reason = 'ADMIN_SETTLED'; message = SETTLED_NO_RATING_AR; }
+    else if (closed) { reason = 'ADMIN_CLOSED'; message = ADMIN_RELEASE_NO_DELIVERY_AR; }
     else if (blocked) { reason = blocked.reason; message = blocked.message; }
     else canRate = true;
     return {

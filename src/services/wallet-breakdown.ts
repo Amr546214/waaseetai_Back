@@ -61,7 +61,7 @@ const commissionDeduction = (amount: number, escrow: any): Deduction => {
 
 const CLIENT_LABELS: Record<string, string> = {
 	DEPOSIT: 'إيداع في المحفظة', ESCROW_LOCK: 'تمويل ضمان المشروع', REFUND: 'استرداد إلى المحفظة', WITHDRAWAL: 'سحب', ORDER_PAYMENT: 'دفع طلب',
-	AMENDMENT_TOPUP: 'زيادة ميزانية العقد', AMENDMENT_REFUND: 'استرداد خفض ميزانية العقد'
+	AMENDMENT_TOPUP: 'زيادة ميزانية العقد', AMENDMENT_REFUND: 'استرداد خفض ميزانية العقد', CASHBACK: 'كاش باك مشروع مكتمل'
 };
 const NO_DEDUCTION_TYPES = new Set(['REFUND', 'WITHDRAWAL', 'ORDER_PAYMENT', 'AMENDMENT_TOPUP', 'AMENDMENT_REFUND']);
 
@@ -80,6 +80,12 @@ export function walletTxBreakdown(tx: { type: string; amount: number; currency: 
 		const b = base('ESCROW_LOCK', label, tx.currency, 'LOCKED_IN_ESCROW');
 		if (num(m.feePolicyVersion) === 2 && num(m.escrowFee) === 0) return { ...b, gross: abs, net: abs, note: 'لا رسوم على تمويل الضمان' };
 		return unrecorded(b, abs);
+	}
+	if (tx.type === 'CASHBACK') {
+		// basis recorded on the wallet row itself (eligible value actually paid, level, rate, factors): nothing is recomputed here
+		const b = base('CASHBACK', label, tx.currency, 'ADDED_TO_WALLET');
+		const eligible = num(m.eligibleValue); const rate = num(m.ratePercent); const level = num(m.level);
+		return { ...b, gross: abs, net: abs, note: eligible != null && rate != null ? `${rate}% من ${round2(eligible)} (القيمة المدفوعة فعليًا للمشروع)${level != null ? ` · المستوى ${level} وقت الاستحقاق` : ''}` : null };
 	}
 	if (NO_DEDUCTION_TYPES.has(tx.type)) {
 		const meaning: NetMeaning = tx.type === 'REFUND' || tx.type === 'AMENDMENT_REFUND' ? 'RETURNED_TO_WALLET' : 'DEBITED_FROM_WALLET';
@@ -120,6 +126,15 @@ export function cancellationSettlementBreakdown(r: { settlementReleaseToProvider
 	if (gross == null || net == null) return unrecorded(b, net ?? gross);
 	const commissionAmount = commission ?? round2(gross - net);
 	return { ...b, gross: round2(gross), net: round2(net), deductions: commissionAmount > 0 ? [commissionDeduction(commissionAmount, escrow)] : [] };
+}
+
+/** An administrative release of the held balance: gross, commission (the escrow's own snapshot), net, the decision's source and reason. No stage is involved and none is invented. */
+export function adminReleaseBreakdown(c: { releaseToProvider: number; platformCommission: number; providerNet: number; reason: string | null }, escrow: any): Breakdown {
+	const b = base('ADMIN_RELEASE', 'صرف إداري للضمان', 'USD', 'WITHDRAWABLE');
+	const gross = num(c.releaseToProvider); const net = num(c.providerNet); const commission = num(c.platformCommission);
+	if (gross == null || net == null) return unrecorded(b, net ?? gross);
+	const commissionAmount = commission ?? round2(gross - net);
+	return { ...b, gross: round2(gross), net: round2(net), deductions: commissionAmount > 0 ? [commissionDeduction(commissionAmount, escrow)] : [], note: `قرار إداري بصرف المبلغ المحتجز${c.reason ? ` · السبب: ${c.reason}` : ''}` };
 }
 
 export function escrowFundedBreakdown(price: number): Breakdown {

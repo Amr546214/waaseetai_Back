@@ -21,7 +21,7 @@ export const SITE_IDENTITY_READ_PERMISSIONS: readonly string[] = ['site.view', .
 export const SITE_IDENTITY_WRITE_PERMISSIONS = SITE_IDENTITY_EDIT_PERMISSIONS;
 
 export type AdminPermissionGroup =
-	| 'users' | 'reports_support' | 'disputes' | 'reviews' | 'content' | 'finance' | 'team' | 'system';
+	| 'users' | 'reports_support' | 'disputes' | 'reviews' | 'content' | 'finance' | 'operations' | 'team' | 'system';
 
 export interface AdminPermissionDef {
 	id: string;
@@ -35,7 +35,7 @@ export interface AdminPermissionDef {
 
 export const ADMIN_GROUP_LABELS: Record<AdminPermissionGroup, string> = {
 	users: 'المستخدمون', reports_support: 'البلاغات والدعم', disputes: 'النزاعات', reviews: 'المراجعات والاعتماد', content: 'المحتوى والباقات',
-	finance: 'المالية', team: 'الفريق والمهام', system: 'النظام',
+	finance: 'المالية', operations: 'الطلبات والعروض والعقود', team: 'الفريق والمهام', system: 'النظام',
 };
 
 export const ADMIN_PERMISSIONS: readonly AdminPermissionDef[] = [
@@ -68,6 +68,12 @@ export const ADMIN_PERMISSIONS: readonly AdminPermissionDef[] = [
 	{ id: 'withdrawals.approve', label: 'الموافقة على السحب', group: 'finance', sensitive: true, designRow: 'الموافقة على السحوبات' },
 	{ id: 'withdrawals.reject', label: 'رفض السحب', group: 'finance', sensitive: true },
 	{ id: 'payouts.send', label: 'إرسال الصرف', group: 'finance', sensitive: true },
+
+	// Admin control over requests / offers / contracts (2026-11-12). Held by NO default role or template: a SUPER_ADMIN grants them explicitly. They never carry a FINANCIAL decision:
+	// refund / release / cancelling a contract that holds money are SUPER_ADMIN-only capabilities enforced on the server (requireSuperAdmin), whatever these three say.
+	{ id: 'requests.manage', label: 'تعليق الطلبات واستئنافها وإلغاؤها', group: 'operations', sensitive: true },
+	{ id: 'offers.manage', label: 'تعليق العروض واستئنافها', group: 'operations', sensitive: true },
+	{ id: 'contracts.manage', label: 'تجميد العقود وفكّ تجميدها وإلغاء العقود غير الممولة', group: 'operations', sensitive: true },
 
 	{ id: 'team.view', label: 'عرض الفريق', group: 'team', sensitive: false },
 	{ id: 'tasks.manage', label: 'إدارة المهام', group: 'team', sensitive: false },

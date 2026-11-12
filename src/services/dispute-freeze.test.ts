@@ -331,7 +331,11 @@ test('STATIC: the only escrow/stage/contract money writers are project-progress 
   const root = join(__dirname, '..');
   const walk = (dir: string): string[] => readdirSync(dir).flatMap(n => { const p = join(dir, n); return statSync(p).isDirectory() ? walk(p) : p.endsWith('.ts') && !/\.test\.ts$/.test(p) ? [p] : []; });
   const writers = walk(root).filter(f => /(escrow|projectStage)\.(update|updateMany|upsert)\(/.test(readFileSync(f, 'utf8'))).map(f => f.slice(root.length + 1)).sort();
-  assert.deepEqual(writers, ['services/amendment-apply.service.ts', 'services/client-requests.service.ts', 'services/contract-cancellation.service.ts', 'services/dispute.service.ts', 'services/project-progress.service.ts']);
+  assert.deepEqual(writers, ['services/admin-order-controls.service.ts', 'services/amendment-apply.service.ts', 'services/client-requests.service.ts', 'services/contract-cancellation.service.ts', 'services/dispute.service.ts', 'services/project-progress.service.ts']);
+  // the admin controls (2026-11-12) are a writer too: refund / release / cancel under the contract row lock, refused while a dispute is open, an agreed cancellation awaits settlement or the contract is frozen,
+  // and the money decision is SUPER_ADMIN-only (rule table evalContract), all inside ONE transaction with the audit row
+  const ctl = readFileSync(join(root, 'services/admin-order-controls.service.ts'), 'utf8');
+  assert.match(ctl, /lockProjectForFreezeCheck/); assert.match(ctl, /activeDisputes > 0/); assert.match(ctl, /agreedCancellation/); assert.match(ctl, /!actor\.isSuperAdmin\) return blockOf\('SUPER_ADMIN_REQUIRED'/); assert.match(ctl, /recordTx/);
   // the mutual-cancellation settlement is the 5th writer: contract lock + dispute freeze check + financial permission pair, inside its single transaction
   const cancel = readFileSync(join(root, 'services/contract-cancellation.service.ts'), 'utf8');
   assert.match(cancel, /lockProjectForFreezeCheck/); assert.match(cancel, /assertProjectNotFrozen/); assert.match(cancel, /disputes\.resolve', 'payouts\.send/);

@@ -1,4 +1,5 @@
 import { ContractStatus, DisputeStatus, Prisma, ProjectStatus } from '@prisma/client';
+import { ADMIN_RELEASE_NO_DELIVERY_AR, CLOSURE_LABEL_AR, CLOSURE_SOURCE_LABEL_AR, type ClosureKind, type ClosureSource } from './engagement-closure.service';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { heldEscrowAmount } from './dispute.service';
@@ -9,9 +10,8 @@ import { adminSettlementFor, adminSettledView, settlementsByProject, stageDispla
 const settledProjectWhere = { disputes: { some: SETTLED_DISPUTE_WHERE } } as const;
 
 /**
- * Read-only admin view of projects, contracts and their escrow. Every number comes from the database; the escrow status is Escrow.status as stored
- * (HELD / RELEASED / REFUNDED). There is deliberately NO release / hold / refund action here: the fee-policy documents do not define refund or manual
- * release semantics, so those stay a product decision (the UI shows them disabled with that reason). Money only moves through the stage-approval flow.
+ * Admin view of projects, contracts and their escrow. Every number comes from the database; the escrow status is Escrow.status as stored (HELD / RELEASED / REFUNDED). This service only READS.
+ * The admin actions (freeze / unfreeze / cancel / refund / release) live in admin-order-controls.service (2026-11-12): one rule table, SUPER_ADMIN-only for money, audited in the same transaction.
  */
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const fullName = (u?: { firstName?: string | null; lastName?: string | null } | null) => [u?.firstName, u?.lastName].filter(Boolean).join(' ').trim();
@@ -93,7 +93,10 @@ export class AdminOperationsService {
 		const contract = project.contract;
 		const settlement = await adminSettlementFor({ projectId: id });
 		// The shared lifecycle (admin is a viewer: read-only, no operational action is ever allowed to it).
+		const closureRow = await (prisma as any).engagementClosure?.findUnique?.({ where: { projectId: id } }) ?? null;
+		const closureKind = closureRow?.kind ?? null;
 		const lifecycle = computeLifecycle({
+			closureKind,
 			viewer: { role: 'admin', isOwner: false }, contractStatus: contract?.status ?? null, contractPrice: contract?.price ?? null, escrow: project.escrow as any,
 			stages: (contract?.stages ?? []).map(s => ({ id: s.id, stepOrder: s.stepOrder, status: s.status, amount: s.amount, approvedAt: s.approvedAt, deliveries: [...s.deliveries].reverse().map(d => ({ status: d.status })) })),
 			activeDisputes: { count: disputes.filter(d => d.status === DisputeStatus.OPEN || d.status === DisputeStatus.UNDER_REVIEW).length, latestId: disputes.find(d => d.status === DisputeStatus.OPEN || d.status === DisputeStatus.UNDER_REVIEW)?.id ?? null },
@@ -101,6 +104,8 @@ export class AdminOperationsService {
 		});
 		return {
 			lifecycle, financial: lifecycle.financial,
+			// how a NEW decision closed the engagement (stored apart from the dispute / cancellation request); null for everything else
+			closure: closureRow ? { kind: closureRow.kind, label: CLOSURE_LABEL_AR[closureRow.kind as ClosureKind] ?? closureRow.kind, source: closureRow.source, sourceLabel: CLOSURE_SOURCE_LABEL_AR[closureRow.source as ClosureSource] ?? closureRow.source, reason: closureRow.reason, decidedById: closureRow.decidedById, cancellationRequestId: closureRow.cancellationRequestId, heldBefore: closureRow.heldBefore, refundToClient: closureRow.refundToClient, releaseToProvider: closureRow.releaseToProvider, platformCommission: closureRow.platformCommission, providerNet: closureRow.providerNet, createdAt: closureRow.createdAt, note: closureRow.kind === 'ADMIN_RELEASE' ? ADMIN_RELEASE_NO_DELIVERY_AR : null } : null,
 			adminSettled: adminSettledView(settlement), statusLabel: settlement.settled ? SETTLED_LABEL_AR : null,
 			id: project.id, title: project.title, description: project.description, status: project.status, createdAt: project.createdAt, deliveryDays: project.deliveryDays, specialty: project.specialty,
 			client: party(project.client), provider: party(project.provider),
@@ -158,7 +163,7 @@ export class AdminOperationsService {
 		return users.map(u => ({ id: u.id, name: fullName(u) || u.email, email: u.email, accountType: u.accountType }));
 	}
 
-	/** Audit trail of everything an admin did on one project / contract / escrow (empty today: this area is read-only). */
+	/** Audit trail of everything an admin did on one project / contract / escrow (freeze, cancel, refund, release). */
 	async auditFor(entity: 'PROJECT' | 'CONTRACT' | 'ESCROW', id: string) {
 		return adminAudit.listForEntity(entity, id);
 	}

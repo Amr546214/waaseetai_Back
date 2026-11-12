@@ -1,4 +1,5 @@
 import { prisma } from '../config/db';
+import { CLOSURE_LABEL_AR } from './engagement-closure.service';
 import { AppError } from '../utils/app-error';
 import { adminAudit } from './admin-audit.service';
 import { ACTIVE_DISPUTE_STATUSES, PROJECT_FROZEN_CODE, PROJECT_FROZEN_MESSAGE, countActiveDisputes, getActiveDisputeForProject } from './dispute-freeze.service';
@@ -16,8 +17,8 @@ import { AdminSettlement, SETTLED_DISPUTE_WHERE, SETTLED_LABEL_AR, SETTLED_STAGE
  */
 
 export type LifecycleRole = 'client' | 'provider' | 'admin' | 'none';
-export type OperationalStatus = 'NOT_STARTED' | 'PENDING_START' | 'ACTIVE' | 'COMPLETED_BY_DELIVERY' | 'CLOSED_BY_SETTLEMENT' | 'CANCELLED' | 'ENDED';
-export type ClosureReason = 'DELIVERY_COMPLETED' | 'DISPUTE_SETTLEMENT' | 'CANCELLED' | null;
+export type OperationalStatus = 'NOT_STARTED' | 'PENDING_START' | 'ACTIVE' | 'COMPLETED_BY_DELIVERY' | 'CLOSED_BY_SETTLEMENT' | 'CLOSED_BY_ADMIN_RELEASE' | 'CANCELLED' | 'ENDED';
+export type ClosureReason = 'DELIVERY_COMPLETED' | 'DISPUTE_SETTLEMENT' | 'ADMIN_RELEASE' | 'CANCELLED' | null;
 export type ActionName = 'upload' | 'submit' | 'review' | 'approve' | 'requestRevision' | 'amend';
 export const ACTION_NAMES: ActionName[] = ['upload', 'submit', 'review', 'approve', 'requestRevision', 'amend'];
 
@@ -56,6 +57,8 @@ export interface LifecycleInput {
   activeDisputes: { count: number; latestId: string | null; latestStatus?: string | null };
   settlement: AdminSettlement;
   settlementDistribution?: SettlementDistribution | null;
+  /** the stored EngagementClosure.kind of a NEW decision (ADMIN_RELEASE | ADMIN_REFUND | ADMIN_CANCEL | CONSENSUAL_CANCEL), or null */
+  closureKind?: string | null;
 }
 
 // ---------------------------------------------------------------------------------------------------------- wording
@@ -218,20 +221,22 @@ export function computeLifecycle(input: LifecycleInput): ProjectLifecycle {
   const settled = settlement.settled;
   const approved = stages.filter(s => s.status === 'APPROVED');
   const allStagesApproved = stages.length > 0 && approved.length === stages.length;
-  const completedByDelivery = contractStatus === 'COMPLETED' && !settled;
+  const adminRelease = input.closureKind === 'ADMIN_RELEASE' && contractStatus === 'COMPLETED' && !settled;
+  const completedByDelivery = contractStatus === 'COMPLETED' && !settled && !adminRelease;
   const frozen = input.activeDisputes.count > 0;
 
   let operationalStatus: OperationalStatus;
   let closureReason: ClosureReason = null;
   if (settled) { operationalStatus = 'CLOSED_BY_SETTLEMENT'; closureReason = 'DISPUTE_SETTLEMENT'; }
   else if (!contractStatus) operationalStatus = 'NOT_STARTED';
+  else if (adminRelease) { operationalStatus = 'CLOSED_BY_ADMIN_RELEASE'; closureReason = 'ADMIN_RELEASE'; }
   else if (contractStatus === 'COMPLETED') { operationalStatus = 'COMPLETED_BY_DELIVERY'; closureReason = 'DELIVERY_COMPLETED'; }
   else if (contractStatus === 'CANCELLED') { operationalStatus = 'CANCELLED'; closureReason = 'CANCELLED'; }
   else if (contractStatus === 'ACTIVE') operationalStatus = 'ACTIVE';
   else if (CONTRACT_NOT_STARTED_AR[contractStatus]) operationalStatus = 'PENDING_START';
   else operationalStatus = 'ENDED';
-  const operationalLabel = ({ NOT_STARTED: 'لم يبدأ العقد بعد', PENDING_START: 'بانتظار بدء العقد', ACTIVE: 'مشروع نشط', COMPLETED_BY_DELIVERY: 'مكتمل بالتسليم', CLOSED_BY_SETTLEMENT: SETTLED_LABEL_AR, CANCELLED: 'ملغى', ENDED: 'منتهٍ' } as Record<OperationalStatus, string>)[operationalStatus];
-  const closureLabel = closureReason === 'DISPUTE_SETTLEMENT' ? SETTLED_LABEL_AR : closureReason === 'DELIVERY_COMPLETED' ? 'اكتمل باعتماد جميع المراحل' : closureReason === 'CANCELLED' ? 'أُلغي العقد' : null;
+  const operationalLabel = ({ NOT_STARTED: 'لم يبدأ العقد بعد', PENDING_START: 'بانتظار بدء العقد', ACTIVE: 'مشروع نشط', COMPLETED_BY_DELIVERY: 'مكتمل بالتسليم', CLOSED_BY_SETTLEMENT: SETTLED_LABEL_AR, CLOSED_BY_ADMIN_RELEASE: CLOSURE_LABEL_AR.ADMIN_RELEASE, CANCELLED: 'ملغى', ENDED: 'منتهٍ' } as Record<OperationalStatus, string>)[operationalStatus];
+  const closureLabel = closureReason === 'DISPUTE_SETTLEMENT' ? SETTLED_LABEL_AR : closureReason === 'DELIVERY_COMPLETED' ? 'اكتمل باعتماد جميع المراحل' : closureReason === 'ADMIN_RELEASE' ? CLOSURE_LABEL_AR.ADMIN_RELEASE : closureReason === 'CANCELLED' ? (input.closureKind === 'CONSENSUAL_CANCEL' ? CLOSURE_LABEL_AR.CONSENSUAL_CANCEL : input.closureKind === 'ADMIN_REFUND' ? CLOSURE_LABEL_AR.ADMIN_REFUND : input.closureKind === 'ADMIN_CANCEL' ? CLOSURE_LABEL_AR.ADMIN_CANCEL : 'أُلغي العقد') : null;
 
   const ordered = [...stages].sort((a, b) => a.stepOrder - b.stepOrder);
   const heldStageAmount = !!escrow && escrow.status === 'HELD' && !settled;
@@ -336,9 +341,10 @@ export async function settlementDistributionOf(disputeId: string, audit: Pick<ty
 }
 
 /** Gathers the dispute-side inputs of one project: active disputes + settlement (+ its distribution when settled). */
-export async function loadDisputeFacts(projectId: string, db: any = prisma): Promise<Pick<LifecycleInput, 'activeDisputes' | 'settlement' | 'settlementDistribution'>> {
+export async function loadDisputeFacts(projectId: string, db: any = prisma): Promise<Pick<LifecycleInput, 'activeDisputes' | 'settlement' | 'settlementDistribution' | 'closureKind'>> {
   const [count, latest, settlement] = await Promise.all([countActiveDisputes(projectId, db), getActiveDisputeForProject(projectId, db), adminSettlementFor({ projectId }, db)]);
-  return { activeDisputes: { count, latestId: latest?.id ?? null, latestStatus: latest?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId) : null };
+  const closure = db.engagementClosure?.findUnique ? await db.engagementClosure.findUnique({ where: { projectId }, select: { kind: true } }) : null;
+  return { closureKind: closure?.kind ?? null, activeDisputes: { count, latestId: latest?.id ?? null, latestStatus: latest?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId) : null };
 }
 
 /**
@@ -401,13 +407,14 @@ export async function listLifecycles(rows: ListLifecycleRow[], deps: { db?: any;
     db.dispute.findMany({ where: { projectId: { in: clean }, ...SETTLED_DISPUTE_WHERE }, orderBy: { resolvedAt: 'desc' }, select: { id: true, projectId: true, resolution: true, resolvedAt: true } }) as Promise<Array<{ id: string; projectId: string | null; resolution: string | null; resolvedAt: Date | null }>>,
     activeDisputeCounts(clean, db)
   ]);
+  const closureBy = db.engagementClosure?.findMany ? new Map<string, string>((await db.engagementClosure.findMany({ where: { projectId: { in: clean } }, select: { projectId: true, kind: true } })).map((r: any) => [r.projectId, r.kind])) : new Map<string, string>();
   const settledBy = new Map<string, { id: string; resolution: string | null; resolvedAt: Date | null }>();
   for (const r of settledRows) if (r.projectId && !settledBy.has(r.projectId)) settledBy.set(r.projectId, r);
   for (const row of rows) {
     const st = settledBy.get(row.projectId);
     const settlement: AdminSettlement = st ? { settled: true, disputeId: st.id, outcome: String(st.resolution), outcomeLabel: String(st.resolution), settledAt: st.resolvedAt } : { settled: false };
     const distribution = st ? await settlementDistributionOf(st.id, deps.audit) : null;
-    const lc = computeLifecycle({ viewer: { role: 'none', isOwner: false }, contractStatus: row.contractStatus, contractPrice: row.price, escrow: row.escrow, stages: [], activeDisputes: { count: active.get(row.projectId) ?? 0, latestId: null }, settlement, settlementDistribution: distribution });
+    const lc = computeLifecycle({ viewer: { role: 'none', isOwner: false }, contractStatus: row.contractStatus, contractPrice: row.price, escrow: row.escrow, stages: [], activeDisputes: { count: active.get(row.projectId) ?? 0, latestId: null }, closureKind: closureBy.get(row.projectId) ?? null, settlement, settlementDistribution: distribution });
     out.set(row.projectId, { operationalStatus: lc.operationalStatus, operationalLabel: lc.operationalLabel, closureReason: lc.closureReason, closureLabel: lc.closureLabel, completedByDelivery: lc.completedByDelivery, closedBySettlement: lc.closedBySettlement, hasActiveDispute: lc.hasActiveDispute, financial: lc.financial });
   }
   return out;

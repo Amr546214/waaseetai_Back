@@ -59,6 +59,16 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 	DISPUTE_STATUS_CHANGED: 'تغيير حالة نزاع',
 	DISPUTE_FINANCIAL_RESOLVED: 'تسوية مالية لنزاع',
 	CANCELLATION_SETTLED: 'تسوية مالية لإلغاء بالتراضي',
+	REQUEST_SUSPENDED: 'تعليق طلب من الإدارة',
+	REQUEST_RESUMED: 'استئناف طلب معلّق',
+	REQUEST_CANCELLED_BY_ADMIN: 'إلغاء طلب من الإدارة',
+	OFFER_SUSPENDED: 'تعليق عرض من الإدارة',
+	OFFER_RESUMED: 'استئناف عرض معلّق',
+	CONTRACT_FROZEN: 'تجميد عقد',
+	CONTRACT_UNFROZEN: 'فكّ تجميد عقد',
+	CONTRACT_CANCELLED_BY_ADMIN: 'إلغاء عقد من الإدارة',
+	ESCROW_REFUNDED_BY_ADMIN: 'إعادة الضمان للعميل بقرار إداري',
+	ESCROW_RELEASED_BY_ADMIN: 'صرف الضمان لمقدم الخدمة بقرار إداري',
 	TICKET_ASSIGNED: 'تكليف تذكرة',
 	TICKET_INTERNAL_NOTE: 'ملاحظة داخلية على تذكرة',
 	TICKET_PRIORITY_CHANGED: 'تغيير أولوية تذكرة',
@@ -99,7 +109,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 
 export const AUDIT_ENTITY_LABELS: Record<string, string> = {
 	PLATFORM_REPORT: 'بلاغ', NOTIFICATION_TEMPLATE: 'قالب إشعار',
-	DISPUTE: 'نزاع', TICKET: 'تذكرة', WITHDRAWAL: 'طلب سحب', ESCROW: 'ضمان', PROJECT: 'مشروع', CONTRACT: 'عقد', FINANCE: 'مالية',
+	DISPUTE: 'نزاع', TICKET: 'تذكرة', WITHDRAWAL: 'طلب سحب', ESCROW: 'ضمان', PROJECT: 'مشروع', CONTRACT: 'عقد', REQUEST: 'طلب', OFFER: 'عرض', FINANCE: 'مالية',
 	USER: 'حساب', ROLE: 'دور', INVITE: 'دعوة', SETTINGS: 'إعدادات', FEE_POLICY: 'سياسة الرسوم', SITE_IDENTITY: 'هوية الموقع', COUPON: 'كوبون'
 };
 

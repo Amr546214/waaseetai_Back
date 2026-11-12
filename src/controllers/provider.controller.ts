@@ -1,4 +1,5 @@
 import { providerInvoicesService } from '../services/provider-invoices.service';
+import { lockRequestRow } from '../services/lock-order';
 import { providerSalesService } from '../services/provider-sales.service';
 import { levelInfo } from '../utils/level-info';
 import { providerProfileService } from '../services/provider-profile.service';
@@ -321,6 +322,7 @@ export const getPassedSpecialties = async (req: Request, res: Response, next: Ne
 				.update(`${pendingContract.id}:${providerId}:${pendingContract.termsVersion}:${signedAt.toISOString()}`)
 				.digest('hex');
 			const contract = await prisma.$transaction(async tx => {
+				await lockRequestRow(tx, targetProjectId); // canonical lock order (services/lock-order.ts): request row before the contract row
 				// Phase 4 — conditional transition (row-locked): a second concurrent
 				// signature, or a contract that left PENDING_PROVIDER_SIGNATURE in the
 				// meantime, matches zero rows and nothing below is written.
@@ -648,7 +650,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 			if (!p) continue;
 
 			const isDone = c.status === ContractStatus.COMPLETED || p.status === ProjectStatus.COMPLETED;
-			const isCancel = c.status === ContractStatus.CANCELLED;
+			const isCancel = c.status === ContractStatus.CANCELLED || p.status === ProjectStatus.CANCELLED;
 			const isArch = c.status === ContractStatus.DISPUTED || p.status === ProjectStatus.DISPUTED;
 
 			// Only include if it belongs to completed, cancelled, or archived states

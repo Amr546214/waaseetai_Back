@@ -1,0 +1,32 @@
+import { randomUUID as id } from 'node:crypto';
+import jwt from 'jsonwebtoken';
+import { writeFileSync } from 'node:fs';
+const BE = '/Users/amrokasha/Desktop/Waseet-Audit/wta/adm-oc-be/src';
+(async () => {
+	const { prisma } = await import(`${BE}/config/db`);
+	const tag = id().slice(0, 6); const secret = 'live-test-secret';
+	const mkUser = (type: string, role: string, n: string, extra: any = {}) => prisma.user.create({ data: { id: id(), accountType: type as any, status: 'ACTIVE', firstName: n, lastName: 'Live', email: `live-${n}-${tag}@pg.test`, roles: [role] as any, activeRole: role as any, walletBalance: 0, ...extra } });
+	const client = await mkUser('CLIENT_INDIVIDUAL', 'CLIENT', 'client'); const provider = await mkUser('PROVIDER_INDIVIDUAL', 'PROVIDER', 'prov'); const sa = await mkUser('SUPER_ADMIN', 'SUPER_ADMIN', 'sa');
+	const cat = await prisma.category.create({ data: { id: id(), slug: `c-${tag}`, nameAr: 'تصنيف' } }); const spec = await prisma.specialty.create({ data: { id: id(), slug: `s-${tag}`, categoryId: cat.id, nameAr: 'تخصص' } });
+	const profile = await prisma.clientProfile.create({ data: { id: id(), userId: client.id, firstName: 'Live', lastName: 'Client', kycStatus: 'APPROVED' } as any }).catch(async () => prisma.clientProfile.create({ data: { id: id(), userId: client.id } as any }));
+	await prisma.providerProfile.create({ data: { id: id(), userId: provider.id, isProfileSetupComplete: true, setupTestStatus: 'COMPLETED' } as any }).catch(() => null);
+	const mk = async (title: string, o: { contract: string; escrow: string; released: number; v2: boolean }) => {
+		const rid = id();
+		const req = await prisma.clientRequest.create({ data: { id: rid, clientProfileId: profile.id, specialtyId: spec.id, title, description: 'وصف تجريبي كافٍ للطلب', subSpecialties: [], requiredSkills: [], status: 'IN_PROGRESS' } });
+		await prisma.project.create({ data: { id: rid, title, description: 'x', specialty: 'x', deliveryDays: 10, clientId: client.id, providerId: provider.id, status: 'IN_PROGRESS' } });
+		const offer = await prisma.projectProposal.create({ data: { id: id(), projectId: rid, providerId: provider.id, title: 'عرض', message: 'm', totalPrice: 20, deliveryDays: 4, status: 'ACCEPTED' } });
+		await prisma.proposal.create({ data: { id: id(), projectId: rid, clientRequestId: rid, providerId: provider.id, price: 20, deliveryDays: 4, status: 'ACCEPTED' } });
+		const contract = await prisma.contract.create({ data: { id: id(), projectId: rid, clientId: client.id, providerId: provider.id, offerId: offer.id, price: 20, durationDays: 14, phasesCount: 2, status: o.contract as any, signedAt: new Date() } });
+		const r = o.released; const comm = Math.round(r * 12.75) / 100;
+		const escrow = await prisma.escrow.create({ data: { id: id(), projectId: rid, amount: 20, status: o.escrow as any, releasedAmount: r, fundedAt: new Date(), ...(o.v2 ? { feePolicyVersion: 2, providerCommissionRateSnapshot: 12.75, providerCommissionLevelSnapshot: 1, platformCommissionAmount: comm, providerNetReleasedAmount: r - comm } : {}) } });
+		await prisma.projectStage.create({ data: { id: id(), contractId: contract.id, stepOrder: 1, title: 'المرحلة الأولى', days: 7, percentage: 50, amount: 10, status: r ? 'APPROVED' : 'IN_PROGRESS', approvedAt: r ? new Date() : null } });
+		await prisma.projectStage.create({ data: { id: id(), contractId: contract.id, stepOrder: 2, title: 'المرحلة الثانية', days: 7, percentage: 50, amount: 10, status: 'PENDING' } });
+		return { requestId: rid, contractId: contract.id, escrowId: escrow.id };
+	};
+	const A = await mk('QA-ADMIN-RELEASE-LEGACY', { contract: 'ACTIVE', escrow: 'HELD', released: 0, v2: false });
+	const B = await mk('QA-CONSENSUAL-PARTIAL', { contract: 'ACTIVE', escrow: 'HELD', released: 10, v2: true });
+	const tok = (u: any) => jwt.sign({ userId: u.id, accountType: u.accountType, activeRole: u.activeRole, roles: u.roles }, secret, { expiresIn: '2h' });
+	const userJson = (u: any) => ({ id: u.id, email: u.email, firstName: u.firstName, lastName: u.lastName, accountType: u.accountType, activeRole: u.activeRole, roles: u.roles, status: u.status });
+	writeFileSync(process.argv[2], JSON.stringify({ client: { token: tok(client), user: userJson(client), id: client.id }, provider: { token: tok(provider), user: userJson(provider), id: provider.id }, admin: { token: tok(sa), user: userJson(sa), id: sa.id }, A, B }, null, 1));
+	await prisma.$disconnect();
+})();

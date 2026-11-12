@@ -1,4 +1,7 @@
 import { assertNoAgreedCancellation, hasAgreedCancellation, CANCELLATION_FROZEN_MESSAGE } from './cancellation-freeze';
+import { accrueCashbackForDeliveryCompletion, notifyCashbackCredited, type CashbackNotice } from './cashback.service';
+import { lockRequestRow } from './lock-order';
+import { assertNoAdminFreeze } from './admin-hold';
 import { isV2Escrow, splitRelease } from '../utils/escrow-commission';
 import { AmendmentStatus, ContractStatus, EscrowStatus, LogCategory, LogStatus, ProjectStageStatus, ProjectStatus, RequestStatus, StageDeliveryStatus } from '@prisma/client';
 import { stageDisputeBlockedReason } from '../utils/dispute-stage';
@@ -234,7 +237,8 @@ export class ProjectProgressService {
     const state = contractDeliveryState(contract.status, persisted, contract.project.escrow, openDispute?.status || null);
     const escrow = escrowFacts(contract.project.escrow);
     // THE lifecycle (single source of truth, see project-lifecycle.service): state, closure, money and per-action eligibility with specific reasons.
-    const lifecycleInput = { viewer: { role: role as 'client' | 'provider', isOwner: true }, contractStatus: contract.status, contractPrice: contract.price, escrow: contract.project.escrow, stages: persisted, activeDisputes: { count: activeDisputeCount, latestId: openDispute?.id ?? null, latestStatus: openDispute?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId, adminAudit) : null };
+    const closureKind = (await (prisma as any).engagementClosure?.findUnique?.({ where: { projectId: contract.projectId }, select: { kind: true } }))?.kind ?? null;
+    const lifecycleInput = { closureKind, viewer: { role: role as 'client' | 'provider', isOwner: true }, contractStatus: contract.status, contractPrice: contract.price, escrow: contract.project.escrow, stages: persisted, activeDisputes: { count: activeDisputeCount, latestId: openDispute?.id ?? null, latestStatus: openDispute?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId, adminAudit) : null };
     const lifecycle = computeLifecycle(lifecycleInput);
     const lifecycleStage = new Map(lifecycle.stages.map(s => [s.stageId, s]));
     // Contract-level approval gate (any role's view): is approving a delivered stage possible right now, and if not, why.
@@ -465,8 +469,10 @@ export class ProjectProgressService {
     const result = await prisma.$transaction(async tx => {
       let isProjectCompleted = false;
       const commissionNotices: MarketerCommissionNotice[] = [];
+      let cashbackNotice: CashbackNotice | null = null;
       // Same lock as an amendment being applied (contract row FIRST, then stages / escrow): a stage approval and an amendment on the same contract never interleave,
       // and the price used by the final release is the committed one, not the value read before the transaction.
+      if (decision === 'approve') await lockRequestRow(tx, contract.projectId); // canonical lock order (lock-order.ts): the request row BEFORE the contract row, because the final approval updates the request
       const contractLock = await tx.contract.updateMany({ where: { id: contract.id, status: ContractStatus.ACTIVE }, data: { updatedAt: new Date() } });
       if (contractLock.count !== 1) throw new AppError('تغيّرت حالة العقد أثناء المراجعة ولم يعد نشطًا. حدّث الصفحة', 409);
       const livePrice = (await tx.contract.findUnique({ where: { id: contract.id }, select: { price: true } }))?.price ?? contract.price;
@@ -478,6 +484,8 @@ export class ProjectProgressService {
         await assertProjectNotFrozen(contract.projectId, tx);
         // Mutual cancellation agreed: approving NEW stages (and releasing their payments) stops until the administration settles. Same lock order as the agreement.
         await assertNoAgreedCancellation({ contractId: contract.id, projectId: contract.projectId }, tx);
+        // Admin freeze: no NEW release while the administration holds the contract (same lock as the freeze itself).
+        await assertNoAdminFreeze({ contractId: contract.id, projectId: contract.projectId }, tx);
       }
       if (decision === 'revision') {
         // Guarded the same way the approve path below is: an unconditional
@@ -635,6 +643,9 @@ export class ProjectProgressService {
             where: { proposals: { some: { projectId: contract.projectId } } },
             data: { status: RequestStatus.COMPLETED }
           });
+          // Client cashback: only a project completed BY DELIVERY reaches here; same transaction, idempotent, blocked behind its policy gate (config/cashback-policy.ts) until approved.
+          const cashback = await accrueCashbackForDeliveryCompletion(tx, { id: contract.id, projectId: contract.projectId, clientId: contract.clientId });
+          if (cashback.status === 'CREDITED') cashbackNotice = cashback.notice;
 
           await tx.pointTransaction.create({
             data: {
@@ -713,6 +724,7 @@ export class ProjectProgressService {
         clientNotificationId: clientNotification?.id ?? null,
         isProjectCompleted,
         commissionNotices,
+        cashbackNotice,
         providerEmail: isProjectCompleted ? contract.provider.email : null,
         providerName: `${contract.provider.firstName || 'مقدم الخدمة'} ${contract.provider.lastName || ''}`.trim(),
         projectTitle: contract.project.title
@@ -721,6 +733,7 @@ export class ProjectProgressService {
 
     await clientNotifications.deliverStored([result.clientNotificationId]);
     await marketerNotifications.commissionsApproved(result.commissionNotices);
+    await notifyCashbackCredited(result.cashbackNotice);
     await notificationService.emitStored(result.notificationId).catch(error => {
       console.error('[ProjectProgress] Failed to emit project review notification:', error);
     });
