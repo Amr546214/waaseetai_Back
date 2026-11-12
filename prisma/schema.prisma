@@ -714,6 +714,8 @@ enum ProjectStatus {
   PENDING_APPROVAL
   COMPLETED
   DISPUTED
+  // admin cancellation (migration 20261112110000_project_status_cancelled): a request / contract cancelled by the administration closes its project as CANCELLED (never DISPUTED / DRAFT)
+  CANCELLED
 }
 
 enum ProposalStatus {

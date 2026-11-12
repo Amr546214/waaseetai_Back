@@ -648,7 +648,7 @@ export const getArchivedProjects = async (req: Request, res: Response, next: Nex
 			if (!p) continue;
 
 			const isDone = c.status === ContractStatus.COMPLETED || p.status === ProjectStatus.COMPLETED;
-			const isCancel = c.status === ContractStatus.CANCELLED;
+			const isCancel = c.status === ContractStatus.CANCELLED || p.status === ProjectStatus.CANCELLED;
 			const isArch = c.status === ContractStatus.DISPUTED || p.status === ProjectStatus.DISPUTED;
 
 			// Only include if it belongs to completed, cancelled, or archived states

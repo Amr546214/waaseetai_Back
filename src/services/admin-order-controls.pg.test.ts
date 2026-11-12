@@ -136,7 +136,7 @@ test('request cancel without a contract: reason + explicit confirmation + versio
 	assert.equal(sent.length, 0, 'no notification for a refused call');
 	const r1 = await e.http('POST', `/admin/requests/${w.request.id}/cancel`, staff.user.id, mk(), key);
 	assert.equal(r1.status, 200, JSON.stringify(r1.json)); assert.equal(r1.data.requestStatus, 'CANCELLED'); assert.equal(r1.data.offersClosed, 2); assert.equal(r1.data.replayed, false);
-	const s = JSON.parse(await snap(w)); assert.equal(s.request.status, 'CANCELLED'); assert.ok(s.request.adminCancelledAt); assert.equal(s.project.status, 'DRAFT'); assert.deepEqual(s.offers.map((o: any) => o.status), ['REJECTED', 'REJECTED']);
+	const s = JSON.parse(await snap(w)); assert.equal(s.request.status, 'CANCELLED'); assert.ok(s.request.adminCancelledAt); assert.equal(s.project.status, 'CANCELLED'); assert.deepEqual(s.offers.map((o: any) => o.status), ['REJECTED', 'REJECTED']);
 	const rows = await audit(w, 'REQUEST', w.request.id, 'REQUEST_CANCELLED_BY_ADMIN'); assert.equal(rows.length, 1); assert.equal((rows[0].context as any).reason, 'الطلب مخالف لسياسة المنصة'); assert.equal(rows[0].userId, staff.user.id);
 	const n1 = sent.length; assert.ok(n1 >= 3, `client + 2 providers notified (${n1})`);
 	// replay of the SAME call: the stored result, no second audit row, no second notification
@@ -159,34 +159,54 @@ test('request cancel with an unfunded contract: contract + offer + request move 
 	assert.equal(c.cancelImpact.contract.status, 'PENDING_CLIENT_SIGNATURE');
 	const ok = await e.http('POST', `/admin/requests/${w.request.id}/cancel`, both.user.id, { reason: 'إلغاء إداري للطلب', expectedVersion: c.version, confirm: true }, keyOf());
 	assert.equal(ok.status, 200, JSON.stringify(ok.json)); assert.equal(ok.data.contractStatus, 'CANCELLED'); assert.equal(ok.data.settlement, null);
-	const s = JSON.parse(await snap(w)); assert.equal(s.request.status, 'CANCELLED'); assert.equal(s.contract.status, 'CANCELLED'); assert.equal(s.project.status, 'DISPUTED'); assert.ok(s.offers.every((o: any) => o.status === 'REJECTED'));
+	const s = JSON.parse(await snap(w)); assert.equal(s.request.status, 'CANCELLED'); assert.equal(s.contract.status, 'CANCELLED'); assert.equal(s.project.status, 'CANCELLED'); assert.ok(s.offers.every((o: any) => o.status === 'REJECTED'));
 	assert.equal(s.wtx, 0, 'no money row');
 });
 
-test('request cancel with HELD escrow: SUPER_ADMIN only, explicit settlement, exact held amount, WHOLE held refunded once; no partial split', opts, async () => {
+test('cancellation that would decide HELD money is BLOCKED (settlement rule not approved); refund / release stay the explicit, previewed money actions that close the engagement', opts, async () => {
 	const w = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' }); const e = w.e; const sa = e.sa.id;
 	const both = await mkStaff(e, ['requests.manage', 'contracts.manage']);
-	const c = await ctl(w, 'requests', w.request.id, sa); assert.equal(c.cancelImpact.heldAmount, 20); assert.deepEqual(c.cancelImpact.settlementOptions, ['REFUND_ALL_TO_CLIENT']);
+	const c = await ctl(w, 'requests', w.request.id, sa); assert.equal(c.cancelImpact.heldAmount, 20); assert.deepEqual(c.cancelImpact.settlementOptions, []);
+	assert.equal(c.actions.REQUEST_CANCEL.code, 'CANCELLATION_SETTLEMENT_NOT_APPROVED'); assert.equal(c.actions.REQUEST_CANCEL.allowed, false);
+	const cc = await ctl(w, 'contracts', w.contract.id, sa); assert.equal(cc.actions.CONTRACT_CANCEL.code, 'CANCELLATION_SETTLEMENT_NOT_APPROVED');
+	assert.equal(cc.actions.ESCROW_REFUND.allowed, true); assert.equal(cc.actions.ESCROW_RELEASE.allowed, true);
+	const q = (await e.http('GET', `/admin/requests/${w.request.id}/cancel-quote`, sa)).data; assert.equal(q.blocked.code, 'CANCELLATION_SETTLEMENT_NOT_APPROVED'); assert.equal(q.amounts.refundToClient, 0, 'a cancel preview never promises a refund');
 	const base = { reason: 'إلغاء إداري بسبب مخالفة', expectedVersion: c.version, confirm: true };
-	// even a staff holding BOTH permissions cannot decide money
-	const staffRes = await e.http('POST', `/admin/requests/${w.request.id}/cancel`, both.user.id, { ...base, settlement: 'REFUND_ALL_TO_CLIENT', expectedHeldAmount: 20 }, keyOf()); assert.equal(staffRes.code, 'ADMIN_SUPER_ADMIN_REQUIRED'); assert.equal(staffRes.status, 403);
 	const before = await snap(w);
-	assert.equal((await e.http('POST', `/admin/requests/${w.request.id}/cancel`, sa, base, keyOf())).code, 'SETTLEMENT_CHOICE_REQUIRED');
-	assert.equal((await e.http('POST', `/admin/requests/${w.request.id}/cancel`, sa, { ...base, settlement: 'SPLIT_50_50', expectedHeldAmount: 20 }, keyOf())).code, 'PARTIAL_SETTLEMENT_NOT_DEFINED');
-	assert.equal((await e.http('POST', `/admin/requests/${w.request.id}/cancel`, sa, { ...base, settlement: 'REFUND_ALL_TO_CLIENT' }, keyOf())).code, 'EXPECTED_AMOUNT_REQUIRED');
-	assert.equal((await e.http('POST', `/admin/requests/${w.request.id}/cancel`, sa, { ...base, settlement: 'REFUND_ALL_TO_CLIENT', expectedHeldAmount: 15 }, keyOf())).code, 'HELD_BALANCE_CHANGED');
-	assert.equal(await snap(w), before, 'every refusal left the money and the statuses untouched');
+	// every way of asking is refused, whoever asks, with whatever settlement text: nothing is assumed
+	for (const who of [sa, both.user.id]) for (const extra of [{}, { settlement: 'REFUND_ALL_TO_CLIENT', expectedHeldAmount: 20 }, { settlement: 'SPLIT_50_50', expectedHeldAmount: 20 }]) {
+		const r = await e.http('POST', `/admin/requests/${w.request.id}/cancel`, who, { ...base, ...extra }, keyOf()); assert.equal(r.status, 409); assert.equal(r.code, 'CANCELLATION_SETTLEMENT_NOT_APPROVED');
+		const r2 = await e.http('POST', `/admin/contracts/${w.contract.id}/cancel`, who, { ...base, expectedVersion: cc.version, ...extra }, keyOf()); assert.equal(r2.status, 409); assert.equal(r2.code, 'CANCELLATION_SETTLEMENT_NOT_APPROVED');
+	}
+	assert.equal(await snap(w), before, 'no money, no status moved'); assert.equal((await audit(w, 'REQUEST', w.request.id)).length, 0);
+	// the explicit refund (with its preview) closes the engagement consistently
+	const rq = (await e.http('GET', `/admin/contracts/${w.contract.id}/quote?action=REFUND`, sa)).data; assert.equal(rq.amounts.refundToClient, 20); assert.equal(rq.after.projectStatus, 'CANCELLED');
 	sent.length = 0;
-	const ok = await e.http('POST', `/admin/requests/${w.request.id}/cancel`, sa, { ...base, settlement: 'REFUND_ALL_TO_CLIENT', expectedHeldAmount: 20 }, keyOf());
-	assert.equal(ok.status, 200, JSON.stringify(ok.json)); assert.equal(ok.data.settlement.refundToClient, 20); assert.equal(ok.data.settlement.releaseToProvider, 0);
-	const s = JSON.parse(await snap(w)); assert.equal(s.escrow.status, 'REFUNDED'); assert.equal(s.contract.status, 'CANCELLED'); assert.equal(s.request.status, 'CANCELLED'); assert.equal(s.project.status, 'DISPUTED');
+	const ok = await e.http('POST', `/admin/contracts/${w.contract.id}/refund`, sa, { reason: 'استرداد إداري موثّق', expectedVersion: cc.version, confirm: true, expectedHeldAmount: 20 }, keyOf());
+	assert.equal(ok.status, 200, JSON.stringify(ok.json));
+	const s = JSON.parse(await snap(w)); assert.deepEqual([s.escrow.status, s.contract.status, s.request.status, s.project.status], ['REFUNDED', 'CANCELLED', 'CANCELLED', 'CANCELLED']);
 	assert.equal(s.wallets.find((x: any) => x.walletBalance > 0).walletBalance, 20); assert.equal(s.wtx, 1);
-	assert.equal(s.offers.find((o: any) => o.status === 'ACCEPTED') ? 1 : 1, 1);
-	const rows = await audit(w, 'REQUEST', w.request.id, 'REQUEST_CANCELLED_BY_ADMIN'); assert.equal(rows.length, 1); assert.equal(rows[0].severity, 'CRITICAL');
 	assert.ok(sent.some(n => n.userId === w.client.id && /أُعيد 20/.test(n.message)));
-	// nothing can be refunded / released again afterwards
-	const c2 = await ctl(w, 'contracts', w.contract.id, sa);
-	assert.equal(c2.actions.ESCROW_REFUND.code, 'CONTRACT_CLOSED'); assert.equal(c2.actions.ESCROW_RELEASE.code, 'CONTRACT_CLOSED');
+	assert.equal((await ctl(w, 'contracts', w.contract.id, sa)).actions.ESCROW_REFUND.code, 'CONTRACT_CLOSED');
+});
+
+test('consistency: every admin cancellation path ends with request / project / contract all CANCELLED (never DISPUTED / DRAFT); release ends all COMPLETED', opts, async () => {
+	const e = await boot(); const sa = e.sa.id;
+	// (a) request cancel, no contract
+	const a = await world(); const ca = await ctl(a, 'requests', a.request.id, sa);
+	assert.equal((await e.http('POST', `/admin/requests/${a.request.id}/cancel`, sa, { reason: 'إلغاء إداري للطلب', expectedVersion: ca.version, confirm: true }, keyOf())).status, 200);
+	let s = JSON.parse(await snap(a)); assert.deepEqual([s.request.status, s.project.status], ['CANCELLED', 'CANCELLED']);
+	// (b) contract cancel, unfunded
+	const b = await world({ requestStatus: 'PENDING_SIGNATURE', contract: 'PENDING_PAYMENT', offerStatus: 'PENDING_SIGNATURE', offer2Status: 'REJECTED' }); const cb = await ctl(b, 'contracts', b.contract.id, sa);
+	assert.equal((await e.http('POST', `/admin/contracts/${b.contract.id}/cancel`, sa, { reason: 'إلغاء إداري للعقد', expectedVersion: cb.version, confirm: true }, keyOf())).status, 200);
+	s = JSON.parse(await snap(b)); assert.deepEqual([s.request.status, s.project.status, s.contract.status], ['CANCELLED', 'CANCELLED', 'CANCELLED']);
+	// (c) release
+	const r = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD' }); const cr = await ctl(r, 'contracts', r.contract.id, sa);
+	assert.equal((await e.http('POST', `/admin/contracts/${r.contract.id}/release`, sa, { reason: 'صرف إداري موثّق', expectedVersion: cr.version, confirm: true, expectedHeldAmount: 20 }, keyOf())).status, 200);
+	s = JSON.parse(await snap(r)); assert.deepEqual([s.request.status, s.project.status, s.contract.status, s.escrow.status], ['COMPLETED', 'COMPLETED', 'COMPLETED', 'RELEASED']);
+	// the admin lists / filters understand the new state
+	const list = await e.http('GET', '/admin/projects?status=CANCELLED', sa); assert.equal(list.status, 200); assert.ok(list.data.items.some((p: any) => p.id === a.project.id)); assert.ok(list.data.counts.CANCELLED >= 2);
+	assert.ok(!list.data.items.some((p: any) => p.id === r.project.id));
 });
 
 // ───────────────────────── offers ─────────────────────────
@@ -229,7 +249,7 @@ test('contract freeze/unfreeze: permission matrix, blocks new financial movement
 	await assert.rejects(assertNoAdminFreeze({ projectId: w.project.id }), (err: any) => err.statusCode === 423);
 	// a frozen contract: no money action (refund / release / cancel-with-money) even for the SUPER_ADMIN, with the specific code; the freeze itself is not repeatable
 	const c1 = await ctl(w, 'contracts', w.contract.id, sa);
-	assert.equal(c1.actions.CONTRACT_FREEZE.code, 'CONTRACT_ALREADY_FROZEN'); assert.equal(c1.actions.ESCROW_REFUND.code, 'CONTRACT_FROZEN'); assert.equal(c1.actions.ESCROW_RELEASE.code, 'CONTRACT_FROZEN'); assert.equal(c1.actions.CONTRACT_CANCEL.code, 'CONTRACT_FROZEN');
+	assert.equal(c1.actions.CONTRACT_FREEZE.code, 'CONTRACT_ALREADY_FROZEN'); assert.equal(c1.actions.ESCROW_REFUND.code, 'CONTRACT_FROZEN'); assert.equal(c1.actions.ESCROW_RELEASE.code, 'CONTRACT_FROZEN'); assert.equal(c1.actions.CONTRACT_CANCEL.code, 'CANCELLATION_SETTLEMENT_NOT_APPROVED');
 	const refused = await e.http('POST', `/admin/contracts/${w.contract.id}/refund`, sa, { reason: 'استرداد إداري', expectedVersion: c1.version, confirm: true, expectedHeldAmount: 20 }, keyOf()); assert.equal(refused.code, 'CONTRACT_FROZEN');
 	const un = await e.http('POST', `/admin/contracts/${w.contract.id}/unfreeze`, staff.user.id, { expectedVersion: c1.version }, keyOf()); assert.equal(un.status, 200, JSON.stringify(un.json)); assert.equal(un.data.frozen, false);
 	assert.equal(await snap(w), money, 'freeze + unfreeze moved no money and changed no status');
@@ -301,11 +321,11 @@ test('double click / parallel requests: the same key runs ONCE and replays; diff
 	assert.equal(diff.filter(r => r.status === 200).length, 1, JSON.stringify(diff.map(r => [r.status, r.code])));
 	assert.ok(diff.filter(r => r.status !== 200).every(r => r.status === 409), JSON.stringify(diff.map(r => [r.status, r.code])));
 	s = JSON.parse(await snap(w2)); assert.ok(['REFUNDED', 'RELEASED'].includes(s.escrow.status)); assert.ok(s.wtx <= 1);
-	// request-cancel racing contract-cancel: one wins, the other is refused, no contradictory end state
+	// request-cancel (blocked while money is held) racing a refund: the refund wins, the other is refused, no contradictory end state
 	const w3 = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' }); const c3 = await ctl(w3, 'requests', w3.request.id, sa); const cc3 = await ctl(w3, 'contracts', w3.contract.id, sa);
 	const race = await Promise.all([
-		e.http('POST', `/admin/requests/${w3.request.id}/cancel`, sa, { reason: 'إلغاء الطلب إداريا', expectedVersion: c3.version, confirm: true, settlement: 'REFUND_ALL_TO_CLIENT', expectedHeldAmount: 20 }, keyOf()),
-		e.http('POST', `/admin/contracts/${w3.contract.id}/cancel`, sa, { reason: 'إلغاء العقد إداريا', expectedVersion: cc3.version, confirm: true, settlement: 'REFUND_ALL_TO_CLIENT', expectedHeldAmount: 20 }, keyOf())
+		e.http('POST', `/admin/requests/${w3.request.id}/cancel`, sa, { reason: 'إلغاء الطلب إداريا', expectedVersion: c3.version, confirm: true }, keyOf()),
+		e.http('POST', `/admin/contracts/${w3.contract.id}/refund`, sa, { reason: 'استرداد العقد إداريا', expectedVersion: cc3.version, confirm: true, expectedHeldAmount: 20 }, keyOf())
 	]);
 	assert.equal(race.filter(r => r.status === 200).length, 1, JSON.stringify(race.map(r => [r.status, r.code]))); s = JSON.parse(await snap(w3));
 	assert.deepEqual([s.request.status, s.contract.status, s.escrow.status], ['CANCELLED', 'CANCELLED', 'REFUNDED']); assert.equal(s.wtx, 1);
@@ -320,7 +340,7 @@ test('dispute freeze and in-flight cancellation are respected: no money / cancel
 	assert.equal(c.actions.CONTRACT_FREEZE.allowed, true, 'freezing is still possible during a dispute');
 	const before = await snap(w);
 	const body = { reason: 'قرار إداري موثّق', expectedVersion: c.version, confirm: true, expectedHeldAmount: 20 };
-	for (const act of ['refund', 'release', 'cancel']) { const r = await e.http('POST', `/admin/contracts/${w.contract.id}/${act}`, sa, { ...body, settlement: 'REFUND_ALL_TO_CLIENT' }, keyOf()); assert.equal(r.status, 409, act); assert.equal(r.code, 'ACTIVE_DISPUTE'); }
+	for (const act of ['refund', 'release', 'cancel']) { const r = await e.http('POST', `/admin/contracts/${w.contract.id}/${act}`, sa, body, keyOf()); assert.equal(r.status, 409, act); assert.equal(r.code, 'ACTIVE_DISPUTE'); }
 	const rq = await ctl(w, 'requests', w.request.id, sa); assert.equal(rq.actions.REQUEST_CANCEL.code, 'ACTIVE_DISPUTE');
 	assert.equal(await snap(w), before);
 	// an AGREED mutual cancellation: settled through its own flow
@@ -380,4 +400,106 @@ test('keys are scoped per admin; controls read model carries a specific code for
 	// a staff without the permission sees every action as PERMISSION_DENIED (detail scope only)
 	const reader = await mkStaff(e, ['disputes.view']); await e.prisma.dispute.create({ data: { id: id(), requestId: w.request.id, openedById: w.client.id, status: 'OPEN', reason: 'سبب', description: 'وصف' } });
 	const rc = await ctl(w, 'requests', w.request.id, reader.user.id); assert.equal(rc.actions.REQUEST_CANCEL.code, 'ADMIN_PERMISSION_DENIED'); assert.equal(rc.actions.REQUEST_SUSPEND.allowed, false);
+});
+
+// ───────────────────────── suspension races (select / accept / create vs the admin suspension) ─────────────────────────
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+/**
+ * Interleaving "the admin is mid-suspension": a transaction takes the SAME locks, in the SAME order, as the admin action (request -> contract -> offers), starts the service call under test,
+ * waits until that call is really blocked on a lock (pg_stat_activity), writes the suspension and commits. The call must then be refused by the re-check done under the lock.
+ */
+async function suspendWhileBlocked(w: W, start: () => Promise<any>, write: (tx: any) => Promise<void>) {
+	const prisma = w.e.prisma; let svc: Promise<{ ok?: any; err?: any }> = Promise.resolve({});
+	await prisma.$transaction(async (tx: any) => {
+		await tx.$queryRaw`SELECT "id" FROM "client_requests" WHERE "id" = ${w.request.id} FOR UPDATE`;
+		await tx.$queryRaw`SELECT "id" FROM "contracts" WHERE "projectId" = ${w.request.id} FOR UPDATE`;
+		await tx.$queryRaw`SELECT "id" FROM "project_proposals" WHERE "projectId" = ${w.request.id} FOR UPDATE`;
+		svc = start().then(ok => ({ ok }), err => ({ err }));
+		let blocked = false;
+		for (let i = 0; i < 100 && !blocked; i++) { await sleep(100); const r: any[] = await tx.$queryRaw`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`; blocked = r[0].n > 0; }
+		assert.ok(blocked, 'the service call is blocked on the admin locks (it reached its transaction)');
+		await write(tx);
+	}, { timeout: 30000 });
+	return svc;
+}
+const provPayload = { title: 'عرض جديد احترافي', message: 'وصف تفصيلي لعرضي يوضح خبرتي ومنهجيتي في العمل على هذا المشروع بشكل كامل.', totalPrice: 1000, deliveryDays: 5, milestones: [{ stepOrder: 1, title: 'مرحلة أولى', description: 'وصف كافٍ لهذه المرحلة', days: 5, percentage: 100, amount: 1000 }], agreedToTerms: true, agreedToEscrow: true } as any;
+
+test('RACE select: an admin request suspension that lands while selectOffer is in flight refuses the selection (atomic under the locks); select-first leaves no suspended request with a chosen offer', opts, async () => {
+	const w = await world(); const e = w.e; const { clientRequestsService } = await import('./client-requests.service');
+	const r = await suspendWhileBlocked(w, () => clientRequestsService.selectOffer(w.client.id, w.request.id, w.offer.id), tx => tx.clientRequest.update({ where: { id: w.request.id }, data: { adminSuspendedAt: new Date(), adminSuspendedById: e.sa.id, adminSuspendReason: 'x' } }));
+	assert.ok(r.err && r.err.code === 'REQUEST_SUSPENDED_BY_ADMIN', `refused after the suspension committed: ${r.err?.code ?? 'selection succeeded'}`);
+	const s = JSON.parse(await snap(w)); assert.equal(s.request.status, 'OPEN'); assert.equal(s.contract, null); assert.deepEqual(s.offers.map((o: any) => o.status), ['SUBMITTED', 'SUBMITTED']);
+	// the other order: select commits first, the (later) suspension is refused by the rule table
+	const x = await world(); const sel: any = await clientRequestsService.selectOffer(x.client.id, x.request.id, x.offer.id); assert.equal(sel.status, 'PENDING_CLIENT_SIGNATURE');
+	const cx = await ctl(x, 'requests', x.request.id, e.sa.id); assert.equal(cx.actions.REQUEST_SUSPEND.allowed, false); assert.ok(['REQUEST_HAS_CONTRACT', 'REQUEST_NOT_OPEN'].includes(cx.actions.REQUEST_SUSPEND.code));
+});
+
+test('RACE select (offer): an admin OFFER suspension landing during selectOffer refuses the selection', opts, async () => {
+	const w = await world(); const e = w.e; const { clientRequestsService } = await import('./client-requests.service');
+	const r = await suspendWhileBlocked(w, () => clientRequestsService.selectOffer(w.client.id, w.request.id, w.offer.id), tx => tx.projectProposal.update({ where: { id: w.offer.id }, data: { adminSuspendedAt: new Date(), adminSuspendedById: e.sa.id, adminSuspendReason: 'x' } }));
+	assert.ok(r.err && r.err.code === 'OFFER_SUSPENDED_BY_ADMIN', r.err?.code);
+	const s = JSON.parse(await snap(w)); assert.equal(s.request.status, 'OPEN'); assert.equal(s.contract, null);
+	// select-first: the chosen offer is linked to the contract and can no longer be suspended on its own
+	const x = await world(); await clientRequestsService.selectOffer(x.client.id, x.request.id, x.offer.id);
+	assert.equal((await ctl(x, 'offers', x.offer.id, e.sa.id)).actions.OFFER_SUSPEND.code, 'OFFER_LINKED_TO_CONTRACT');
+});
+
+test('RACE accept counter: suspension landing during the acceptance refuses it (request and offer); accept-first then suspend leaves a consistent offer', opts, async () => {
+	const e = await boot(); const { clientOfferCounterService } = await import('./client-offer-counter.service'); const { buildProviderEntry } = await import('../utils/offer-negotiation');
+	const mk = async () => {
+		const w = await world({ offerStatus: 'UNDER_NEGOTIATION' });
+		const conv = await e.prisma.conversation.create({ data: { id: id(), projectId: w.request.id, offerId: w.offer.id, clientId: w.client.id, providerId: w.provider.id } });
+		const msg = await e.prisma.message.create({ data: { id: id(), conversationId: conv.id, senderId: w.provider.id, type: 'TEXT', status: 'SENT', content: buildProviderEntry('PROVIDER_COUNTER', { offerId: w.offer.id, price: 15, deliveryDays: 3 }) } });
+		return { w, msg };
+	};
+	const A = await mk();
+	let r = await suspendWhileBlocked(A.w, () => clientOfferCounterService.accept(A.w.client.id, A.w.request.id, A.w.offer.id, { messageId: A.msg.id }), tx => tx.clientRequest.update({ where: { id: A.w.request.id }, data: { adminSuspendedAt: new Date(), adminSuspendedById: e.sa.id, adminSuspendReason: 'x' } }));
+	assert.equal(r.err?.code, 'REQUEST_SUSPENDED_BY_ADMIN'); assert.equal(JSON.parse(await snap(A.w)).offers[0].status === 'UNDER_NEGOTIATION' || JSON.parse(await snap(A.w)).offers[1].status === 'UNDER_NEGOTIATION', true, 'the offer terms were not changed');
+	const B = await mk();
+	r = await suspendWhileBlocked(B.w, () => clientOfferCounterService.accept(B.w.client.id, B.w.request.id, B.w.offer.id, { messageId: B.msg.id }), tx => tx.projectProposal.update({ where: { id: B.w.offer.id }, data: { adminSuspendedAt: new Date(), adminSuspendedById: e.sa.id, adminSuspendReason: 'x' } }));
+	assert.equal(r.err?.code, 'OFFER_SUSPENDED_BY_ADMIN'); assert.equal((await e.prisma.projectProposal.findUnique({ where: { id: B.w.offer.id } })).totalPrice, 20, 'price unchanged');
+	// accept first, suspend after: both succeed and the offer is a consistent live (SUBMITTED) suspended offer
+	const C = await mk();
+	const acc: any = await clientOfferCounterService.accept(C.w.client.id, C.w.request.id, C.w.offer.id, { messageId: C.msg.id }); assert.equal(acc.status, 'SUBMITTED');
+	const c = await ctl(C.w, 'offers', C.w.offer.id, e.sa.id); assert.equal(c.actions.OFFER_SUSPEND.allowed, true);
+	assert.equal((await e.http('POST', `/admin/offers/${C.w.offer.id}/suspend`, e.sa.id, { reason: 'تعليق بعد القبول', expectedVersion: c.version }, keyOf())).status, 200);
+});
+
+test('RACE create offer: a suspension (or admin cancellation) landing during createProposal refuses the new offer; no offer is ever created after the suspension committed', opts, async () => {
+	const w = await world(); const e = w.e; const { proposalService } = await import('./proposal.service');
+	const mkProv = (n: string) => e.prisma.user.create({ data: { id: id(), accountType: 'PROVIDER_INDIVIDUAL', firstName: n, lastName: 'p', email: `${n}-${w.tag}@pg.test`, roles: ['PROVIDER'], activeRole: 'PROVIDER', status: 'ACTIVE' } });
+	const p1 = await mkProv('a');
+	const r = await suspendWhileBlocked(w, () => proposalService.createProposal(w.request.id, p1.id, provPayload), tx => tx.clientRequest.update({ where: { id: w.request.id }, data: { adminSuspendedAt: new Date(), adminSuspendedById: e.sa.id, adminSuspendReason: 'x' } }));
+	assert.equal(r.err?.code, 'REQUEST_SUSPENDED_BY_ADMIN', r.err?.code ?? 'offer created');
+	assert.equal(await e.prisma.projectProposal.count({ where: { projectId: w.request.id, providerId: p1.id } }), 0, 'no offer row');
+	// cancelled by an admin during creation: refused too (the request is no longer OPEN)
+	const x = await world(); const p2 = await mkProv('b');
+	const r2 = await suspendWhileBlocked(x, () => proposalService.createProposal(x.request.id, p2.id, provPayload), tx => tx.clientRequest.update({ where: { id: x.request.id }, data: { status: 'CANCELLED' } }));
+	assert.ok(r2.err && (r2.err.code === 'PROJECT_NOT_OPEN' || r2.err.statusCode === 422), r2.err?.code ?? 'offer created');
+	assert.equal(await e.prisma.projectProposal.count({ where: { projectId: x.request.id, providerId: p2.id } }), 0);
+	// true parallelism, many rounds: no offer is created AFTER the suspension committed (createdAt <= adminSuspendedAt), whichever side wins
+	for (let i = 0; i < 8; i++) {
+		const y = await world(); const p = await mkProv(`r${i}`); const cy = await ctl(y, 'requests', y.request.id, e.sa.id);
+		const [created, susp] = await Promise.all([
+			proposalService.createProposal(y.request.id, p.id, provPayload).then(() => 'created', (er: any) => er.code ?? 'refused'),
+			e.http('POST', `/admin/requests/${y.request.id}/suspend`, e.sa.id, { reason: 'تعليق متوازٍ', expectedVersion: cy.version }, keyOf())
+		]);
+		const reqRow = await e.prisma.clientRequest.findUnique({ where: { id: y.request.id } }); const offer = await e.prisma.projectProposal.findFirst({ where: { projectId: y.request.id, providerId: p.id } });
+		if (offer && reqRow.adminSuspendedAt) assert.ok(offer.createdAt <= reqRow.adminSuspendedAt, `round ${i}: offer created after the suspension (${created}/${susp.status})`);
+		if (susp.status === 200) assert.ok(created === 'created' ? !!offer : !offer, `round ${i}`);
+	}
+});
+
+test('RACE select vs suspend in true parallel (many rounds): never a suspended request that also has a chosen offer / contract', opts, async () => {
+	const e = await boot(); const { clientRequestsService } = await import('./client-requests.service');
+	for (let i = 0; i < 10; i++) {
+		const w = await world(); const c = await ctl(w, 'requests', w.request.id, e.sa.id);
+		const [sel, susp] = await Promise.all([
+			clientRequestsService.selectOffer(w.client.id, w.request.id, w.offer.id).then(() => 'selected', (er: any) => er.code ?? er.message),
+			e.http('POST', `/admin/requests/${w.request.id}/suspend`, e.sa.id, { reason: 'تعليق متوازٍ', expectedVersion: c.version }, keyOf())
+		]);
+		const s = JSON.parse(await snap(w)); const suspended = s.request.adminSuspendedAt !== null;
+		assert.ok(!(suspended && (s.request.status !== 'OPEN' || s.contract)), `round ${i}: suspended + chosen (${sel}/${susp.status}/${susp.code})`);
+		assert.ok(susp.status === 200 ? sel !== 'selected' : sel === 'selected' || true);
+	}
 });

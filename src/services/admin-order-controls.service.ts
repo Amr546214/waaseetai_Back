@@ -5,7 +5,7 @@ import { logger } from '../config/logger';
 import { AppError } from '../utils/app-error';
 import { round2 } from '../utils/money';
 import { isV2Escrow, splitRelease } from '../utils/escrow-commission';
-import { ADMIN_CONTROL_REASONS, AdminControlAction, AdminControlReason, SETTLEMENT_REFUND_ALL, adminControlMessage } from '../constants/admin-controls';
+import { ADMIN_CONTROL_REASONS, AdminControlAction, AdminControlReason, adminControlMessage } from '../constants/admin-controls';
 import { AdminActor, actorHas } from './admin-access.service';
 import { adminAudit } from './admin-audit.service';
 import { heldEscrowAmount } from './dispute.service';
@@ -22,8 +22,7 @@ import { PROVIDER_ROUTES } from './provider-notifications.service';
  *  - every mutation: Idempotency-Key (stored INSIDE the transaction, same key + same request = the stored result, same key + other request = 409), expectedVersion (optimistic check under the lock),
  *    a mandatory reason, the audit row written in the SAME transaction (a failed audit rolls everything back), and notifications only AFTER the commit (best effort, never fail the action);
  *  - money moves only through the same mechanics as the financial dispute decision / agreed-cancellation settlement (escrow row conditional update, wallet row + WalletTransaction with a unique
- *    referenceId, commission via the escrow's own snapshot): nothing here decides a split or a commission that the code / fee policy does not already define. A unilateral cancellation
- *    with held money refunds the WHOLE held balance to the client; any other split is refused with PARTIAL_SETTLEMENT_NOT_DEFINED (product decision pending).
+ *    referenceId, commission via the escrow's own snapshot): nothing here decides a split or a commission that the code / fee policy does not already define. A plain cancellation NEVER decides held money: while the escrow holds a balance it is refused with CANCELLATION_SETTLEMENT_NOT_APPROVED (the settlement rule is not approved by the product); the explicit refund and release actions are the separate, previewed money decisions.
  */
 
 type Tx = Prisma.TransactionClient;
@@ -162,7 +161,7 @@ export function evalOffer(action: 'OFFER_SUSPEND' | 'OFFER_RESUME', w: World, of
 /** `viaRequest`: the request cancellation delegates its contract part here (the contract permission and the money rules apply the same). */
 export function evalContract(action: 'CONTRACT_FREEZE' | 'CONTRACT_UNFREEZE' | 'CONTRACT_CANCEL' | 'ESCROW_REFUND' | 'ESCROW_RELEASE', w: World, actor: ActorView, viaRequest = false): Block | null {
 	const c = w.contract;
-	const financial = action === 'ESCROW_REFUND' || action === 'ESCROW_RELEASE' || (action === 'CONTRACT_CANCEL' && w.held > 0 && !!w.escrow && w.escrow.status === EscrowStatus.HELD);
+	const financial = action === 'ESCROW_REFUND' || action === 'ESCROW_RELEASE';
 	if (financial && !actor.isSuperAdmin) return blockOf('SUPER_ADMIN_REQUIRED', 403);
 	if (!actor.has('contracts.manage')) return blockOf('PERMISSION_DENIED', 403);
 	if (!c) return blockOf('NO_CONTRACT', 409);
@@ -181,7 +180,8 @@ export function evalContract(action: 'CONTRACT_FREEZE' | 'CONTRACT_UNFREEZE' | '
 	if (w.activeDisputes > 0 || c.status === ContractStatus.DISPUTED) return blockOf('ACTIVE_DISPUTE');
 	if (w.agreedCancellation) return blockOf('CANCELLATION_AGREED_PENDING_SETTLEMENT');
 	if (action === 'CONTRACT_CANCEL') {
-		if (w.escrow && w.held > 0 && w.escrow.status === EscrowStatus.HELD && c.adminFrozenAt) return blockOf('CONTRACT_FROZEN');
+		// A cancellation that would have to decide what happens to HELD money needs a settlement rule that the product has NOT approved: it is refused here (the explicit refund / release actions are the separate, previewed money decisions).
+		if (w.escrow && w.held > 0 && w.escrow.status === EscrowStatus.HELD) return blockOf('CANCELLATION_SETTLEMENT_NOT_APPROVED');
 		return null;
 	}
 	if (!w.escrow) return blockOf('NO_ESCROW');
@@ -309,15 +309,14 @@ export class AdminOrderControlsService {
 			offersToClose: liveOffers,
 			contract: w.contract ? { id: w.contract.id, status: w.contract.status } : null,
 			heldAmount: w.held, escrowStatus: w.escrow?.status ?? null,
-			settlementOptions: w.held > 0 ? [SETTLEMENT_REFUND_ALL] : [],
-			partialSettlement: w.held > 0 ? { available: false, code: 'PARTIAL_SETTLEMENT_NOT_DEFINED' } : null,
+			settlementOptions: [],
+			settlementBlocked: w.held > 0 && w.escrow?.status === EscrowStatus.HELD ? { code: 'CANCELLATION_SETTLEMENT_NOT_APPROVED' } : null,
 			effects: this.cancelEffects(w)
 		};
 	}
 	private cancelEffects(w: World): string[] {
 		const e = ['REQUEST_CANCELLED', 'OFFERS_CLOSED', 'PARTIES_NOTIFIED'];
 		if (w.contract) e.push('CONTRACT_CANCELLED', 'PROJECT_CLOSED');
-		if (w.held > 0 && w.escrow?.status === EscrowStatus.HELD) e.push('HELD_REFUNDED_TO_CLIENT');
 		if (w.openCancellations) e.push('OPEN_CANCELLATION_REQUESTS_CLOSED');
 		if (w.openAmendments) e.push('OPEN_AMENDMENTS_CANCELLED');
 		if (w.contract?.adminFrozenAt) e.push('FREEZE_CLEARED');
@@ -344,7 +343,7 @@ export class AdminOrderControlsService {
 		const c = w.contract, e = w.escrow;
 		const moves = !!e && e.status === EscrowStatus.HELD && w.held > 0;
 		const release = act === 'ESCROW_RELEASE' && moves;
-		const refund = moves && !release;
+		const refund = moves && act === 'ESCROW_REFUND';
 		const split = release && isV2Escrow(e) && e.providerCommissionRateSnapshot != null
 			? splitRelease({ grossReleasedBefore: e.releasedAmount, commissionTotalBefore: e.platformCommissionAmount, grossReleasedAfter: e.releasedAmount + w.held, ratePercent: e.providerCommissionRateSnapshot }) : null;
 		const effects: string[] = [];
@@ -363,8 +362,8 @@ export class AdminOrderControlsService {
 			amounts: { heldBefore: moves ? w.held : 0, refundToClient: refund ? w.held : 0, releaseToProvider: release ? w.held : 0, platformCommission: split?.commission ?? 0, providerNet: release ? (split ? split.net : w.held) : 0 },
 			beneficiary: release ? { kind: 'PROVIDER', userId: c?.providerId ?? null, name: fullName(c?.provider) } : refund ? { kind: 'CLIENT', userId: c?.clientId ?? null, name: fullName(c?.client) } : { kind: 'NONE', userId: null, name: null },
 			commission: { feePolicyVersion: e?.feePolicyVersion ?? null, ratePercent: e && isV2Escrow(e) ? e.providerCommissionRateSnapshot ?? null : null, appliesTo: release ? 'RELEASE' : 'NONE' },
-			settlement: w.held > 0 && act === 'CONTRACT_CANCEL' ? { options: [SETTLEMENT_REFUND_ALL], partial: { available: false, code: 'PARTIAL_SETTLEMENT_NOT_DEFINED' } } : null,
-			after: { contractStatus: c ? (act === 'ESCROW_RELEASE' ? 'COMPLETED' : 'CANCELLED') : null, requestStatus: act === 'ESCROW_RELEASE' ? 'COMPLETED' : 'CANCELLED', escrowStatus: !moves ? (e?.status ?? null) : release ? 'RELEASED' : 'REFUNDED' },
+			settlement: w.held > 0 && act === 'CONTRACT_CANCEL' ? { options: [], blocked: { code: 'CANCELLATION_SETTLEMENT_NOT_APPROVED' } } : null,
+			after: { contractStatus: c ? (act === 'ESCROW_RELEASE' ? 'COMPLETED' : 'CANCELLED') : null, projectStatus: act === 'ESCROW_RELEASE' ? 'COMPLETED' : 'CANCELLED', requestStatus: act === 'ESCROW_RELEASE' ? 'COMPLETED' : 'CANCELLED', escrowStatus: !moves || act === 'CONTRACT_CANCEL' ? (e?.status ?? null) : release ? 'RELEASED' : 'REFUNDED' },
 			parties: { client: c ? { id: c.clientId, name: fullName(c.client) } : null, provider: c ? { id: c.providerId, name: fullName(c.provider) } : null },
 			effects
 		};
@@ -569,10 +568,8 @@ export class AdminOrderControlsService {
 		const c = w.contract, e = w.escrow;
 		const moves = !!c && !!e && e.status === EscrowStatus.HELD && w.held > 0;
 		if (moves) {
-			if (o.mode === 'CANCEL') {
-				if (o.settlement === null) throw fail('SETTLEMENT_CHOICE_REQUIRED', 400, [{ field: 'settlement', path: 'settlement', message: adminControlMessage('SETTLEMENT_CHOICE_REQUIRED') }]);
-				if (o.settlement !== SETTLEMENT_REFUND_ALL) throw fail('PARTIAL_SETTLEMENT_NOT_DEFINED', 409);
-			}
+			// defence in depth: the rule table already refuses it; a plain cancellation can never move held money
+			if (o.mode === 'CANCEL') throw fail('CANCELLATION_SETTLEMENT_NOT_APPROVED', 409);
 			if (o.expectedHeld === null) throw fail('EXPECTED_AMOUNT_REQUIRED', 400, [{ field: 'expectedHeldAmount', path: 'expectedHeldAmount', message: adminControlMessage('EXPECTED_AMOUNT_REQUIRED') }]);
 			if (o.expectedHeld !== w.held) throw fail('HELD_BALANCE_CHANGED', 409, [{ heldAmount: w.held }]);
 		}
@@ -608,8 +605,8 @@ export class AdminOrderControlsService {
 			if (w.openCancellations) await tx.contractCancellationRequest.updateMany({ where: { contractId: c.id, status: CancellationRequestStatus.PENDING_OTHER_PARTY }, data: { status: CancellationRequestStatus.REJECTED, respondedAt: now, responseNote: 'أُغلق العقد بقرار إداري' } });
 			if (w.openAmendments) await tx.projectAmendment.updateMany({ where: { contractId: c.id, status: AmendmentStatus.PENDING_OTHER_PARTY }, data: { status: AmendmentStatus.CANCELLED } });
 		}
-		// the project mirror: a closed engagement follows the existing convention (the settlement flows set DISPUTED for a closed-without-delivery contract); a request without a contract is parked as DRAFT so it can never reappear in OPEN lists
-		if (w.project) await tx.project.update({ where: { id: w.projectId }, data: { status: completed ? ProjectStatus.COMPLETED : c ? ProjectStatus.DISPUTED : ProjectStatus.DRAFT } });
+		// the project mirror: an explicit CANCELLED state (never DISPUTED / DRAFT) for a cancelled / refunded engagement, COMPLETED for a release
+		if (w.project) await tx.project.update({ where: { id: w.projectId }, data: { status: completed ? ProjectStatus.COMPLETED : ProjectStatus.CANCELLED } });
 		await tx.clientRequest.updateMany({ where: { id: w.projectId }, data: completed
 			? { status: RequestStatus.COMPLETED }
 			: { status: RequestStatus.CANCELLED, adminCancelledAt: now, adminCancelledById: o.adminId, adminCancelReason: o.reason, adminSuspendedAt: null, adminSuspendedById: null, adminSuspendReason: null } });

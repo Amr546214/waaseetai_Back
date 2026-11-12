@@ -1,5 +1,5 @@
 import { prisma } from '../utils/prisma.client';
-import { assertRequestNotSuspended } from './admin-hold';
+import { assertRequestNotSuspended, lockAndAssertNotSuspended } from './admin-hold';
 import { CreateProposalDto } from '../dtos/create-proposal.dto';
 import { AccountType, Prisma, ProposalStatus } from '@prisma/client';
 import { AppError } from '../utils/app-error';
@@ -271,6 +271,8 @@ export class ProposalService {
 		// 5. Transactional execution saving ProjectProposal & ProposalMilestone entries
 		let offerNotificationId: string | null = null;
 		const newProposal = await prisma.$transaction(async (tx) => {
+			// admin suspension / cancellation, authoritative: same lock order as the admin actions; the request must still be OPEN and not suspended when the offer row is written
+			await lockAndAssertNotSuspended(tx, projectId, { requireOpen: true });
 			const created = await tx.projectProposal.create({
 				data: {
 					projectId,

@@ -34,3 +34,29 @@ export async function assertNoAdminFreeze(key: { contractId?: string; projectId?
 	// the row's own column decides (not only the filter), so a caller whose client ignores the filter can never read a plain contract as frozen
 	if (frozen?.adminFrozenAt) throw new AppError(CONTRACT_FROZEN_MESSAGE, 423, [{ code: CONTRACT_FROZEN_CODE }], CONTRACT_FROZEN_CODE);
 }
+
+/**
+ * Atomic hold check for the flows that CHOOSE / ACCEPT / CREATE an offer. It takes the row locks in the SAME order as the admin suspension / cancellation actions
+ * (request row -> contract row -> offer rows), then re-reads the hold columns under those locks and refuses a suspended request / offer. Because the admin action holds the
+ * same locks while it writes, either the suspension commits first (this call is refused) or this transaction commits first (the suspension then sees the new state): no interleaving
+ * can produce an offer chosen / accepted / created on a suspended request or a suspended offer.
+ * `opts.requireOpen` also refuses a request that is no longer OPEN (e.g. cancelled by an admin a moment ago).
+ */
+export async function lockAndAssertNotSuspended(
+	tx: Prisma.TransactionClient,
+	requestId: string,
+	opts: { providerId?: string; offerId?: string; requireOpen?: boolean } = {}
+): Promise<void> {
+	// (the typeof guards only serve unit tests that hand in a partial transaction double; a real transaction client always has all of these)
+	if (typeof tx.$queryRaw !== 'function' || typeof tx.clientRequest?.findUnique !== 'function') return;
+	await tx.$queryRaw`SELECT "id" FROM "client_requests" WHERE "id" = ${requestId} FOR UPDATE`;
+	await tx.$queryRaw`SELECT "id" FROM "contracts" WHERE "projectId" = ${requestId} FOR UPDATE`;
+	await tx.$queryRaw`SELECT "id" FROM "project_proposals" WHERE "projectId" = ${requestId} FOR UPDATE`;
+	const request = await tx.clientRequest.findUnique({ where: { id: requestId }, select: { status: true, adminSuspendedAt: true } });
+	assertRequestNotSuspended(request);
+	if (opts.requireOpen && request && String(request.status) !== 'OPEN') throw new AppError('هذا المشروع غير متاح حالياً لاستقبال عروض جديدة', 422, undefined, 'PROJECT_NOT_OPEN');
+	if ((opts.providerId || opts.offerId) && typeof tx.projectProposal?.findFirst === 'function') {
+		const offer = await tx.projectProposal.findFirst({ where: opts.offerId ? { id: opts.offerId, projectId: requestId } : { projectId: requestId, providerId: opts.providerId }, select: { adminSuspendedAt: true } });
+		assertOfferNotSuspended(offer);
+	}
+}

@@ -1,5 +1,5 @@
 import { selfHireError } from '../utils/self-dealing';
-import { assertOfferNotSuspended, assertRequestNotSuspended, assertNoAdminFreeze } from './admin-hold';
+import { assertOfferNotSuspended, assertRequestNotSuspended, assertNoAdminFreeze, lockAndAssertNotSuspended } from './admin-hold';
 import { buildEscrowSnapshotFromPolicy, ESCROW_FEE_POLICY_V2 } from '../utils/escrow-commission';
 import { feePolicyService } from './fee-policy.service';
 import { prisma } from '../config/db';
@@ -1508,6 +1508,8 @@ export class ClientRequestsService {
 		};
 
 		const contract = await prisma.$transaction(async tx => {
+			// admin holds, authoritative: re-read under the request -> contract -> offer row locks (the SAME order the admin suspend / cancel takes), so a suspension racing this selection either lands first (refused here) or waits for it
+			await lockAndAssertNotSuspended(tx, requestId, { providerId });
 			// Authoritative gate (row lock on the contract / request rows): only a
 			// contract still awaiting the client's signature may be re-pointed, and
 			// the request itself must still be in a selectable state. A concurrent

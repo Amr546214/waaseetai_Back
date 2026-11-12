@@ -1,5 +1,5 @@
 import { ContractStatus, ProposalStatus, RequestStatus } from '@prisma/client';
-import { assertOfferNotSuspended, assertRequestNotSuspended } from './admin-hold';
+import { assertOfferNotSuspended, assertRequestNotSuspended, lockAndAssertNotSuspended } from './admin-hold';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { round2, splitByWeights } from '../utils/order-discount';
@@ -69,12 +69,12 @@ class ClientOfferCounterService {
 
 	// The request must belong to this client; the offer id may be the canonical ProjectProposal id or its legacy Proposal mirror id (the client UI carries both).
 	private async loadOffer(userId: string, requestId: string, offerId: string) {
-		const request = await prisma.clientRequest.findFirst({ where: { id: requestId, clientProfile: { userId } }, select: { id: true, title: true, status: true } });
+		const request = await prisma.clientRequest.findFirst({ where: { id: requestId, clientProfile: { userId } }, select: { id: true, title: true, status: true, adminSuspendedAt: true } });
 		if (!request) throw new AppError('طلب المشروع غير موجود أو لا تملك صلاحية الوصول إليه', 404);
 		const legacy = await prisma.proposal.findFirst({ where: { id: offerId, OR: [{ clientRequestId: requestId }, { projectId: requestId }] }, select: { id: true, providerId: true } });
 		const offer = await prisma.projectProposal.findFirst({
 			where: legacy ? { projectId: requestId, providerId: legacy.providerId } : { id: offerId, projectId: requestId },
-			select: { id: true, projectId: true, providerId: true, status: true, totalPrice: true, deliveryDays: true, milestones: { select: { id: true, stepOrder: true, days: true, amount: true, percentage: true }, orderBy: { stepOrder: 'asc' } } }
+			select: { id: true, projectId: true, providerId: true, status: true, adminSuspendedAt: true, totalPrice: true, deliveryDays: true, milestones: { select: { id: true, stepOrder: true, days: true, amount: true, percentage: true }, orderBy: { stepOrder: 'asc' } } }
 		});
 		if (!offer) throw new AppError('العرض المحدد غير موجود أو لا يتبع هذا الطلب', 404);
 		return { request, offer, legacyId: legacy?.id ?? null };
@@ -120,11 +120,13 @@ class ClientOfferCounterService {
 
 		if (!OPEN_REQUEST_STATUSES.includes(request.status as RequestStatus)) throw new AppError('لا يمكن قبول عرض مضاد على هذا الطلب في حالته الحالية', 409);
 		if (offer.status === ProposalStatus.CANCELLED) throw new AppError('سحب مقدم الخدمة هذا العرض ولا يمكن قبول عرضه المضاد', 409);
-		assertOfferNotSuspended(offer as { adminSuspendedAt?: Date | null });
-		assertRequestNotSuspended(request as { adminSuspendedAt?: Date | null });
+		assertOfferNotSuspended(offer);
+		assertRequestNotSuspended(request);
 		if (offer.status !== ProposalStatus.UNDER_NEGOTIATION) throw new AppError('لا يوجد عرض مضاد معلّق على هذا العرض (ربما قُبل مسبقًا أو تغيّرت حالة العرض)، حدّث الصفحة', 409, undefined, 'OFFER_STATE_CHANGED');
 
 		const result = await prisma.$transaction(async (tx) => {
+			// admin holds, re-checked under the request -> contract -> offer locks (same order as the admin actions)
+			await lockAndAssertNotSuspended(tx, requestId, { offerId: offer.id });
 			// Locks the offer row for the rest of the transaction and gates on the status: two simultaneous accepts (or an accept racing a withdraw) cannot both win.
 			const lock = await tx.projectProposal.updateMany({ where: { id: offer.id, providerId: offer.providerId, status: ProposalStatus.UNDER_NEGOTIATION }, data: { updatedAt: new Date() } });
 			if (lock.count !== 1) throw new AppError('حالة العرض تغيّرت (سُحب أو قُبل العرض المضاد مسبقًا)، حدّث الصفحة', 409, undefined, 'OFFER_STATE_CHANGED');

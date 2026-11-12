@@ -97,6 +97,7 @@ export class ProjectService {
             pendingCount += count;
             break;
           case ProjectStatus.COMPLETED:
+          case ProjectStatus.CANCELLED:
             closedCount += count;
             break;
           case ProjectStatus.DRAFT:
