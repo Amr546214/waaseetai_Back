@@ -1,4 +1,5 @@
 import { selfHireError } from '../utils/self-dealing';
+import { assertOfferNotSuspended, assertRequestNotSuspended, assertNoAdminFreeze } from './admin-hold';
 import { buildEscrowSnapshotFromPolicy, ESCROW_FEE_POLICY_V2 } from '../utils/escrow-commission';
 import { feePolicyService } from './fee-policy.service';
 import { prisma } from '../config/db';
@@ -1454,6 +1455,9 @@ export class ClientRequestsService {
 			: await prisma.projectProposal.findFirst({ where: { id: offerId, projectId: requestId }, include: { milestones: true } });
 
 		if (!legacy && !canonical) throw new AppError('العرض المحدد غير موجود أو لا يتبع هذا الطلب', 404);
+		// admin holds: a suspended request cannot have an offer chosen, and a suspended offer cannot be chosen
+		assertRequestNotSuspended(request);
+		assertOfferNotSuspended(canonical);
 		if (legacy?.status === ProposalStatus.CANCELLED || canonical?.status === ProposalStatus.CANCELLED) {
 			throw new AppError('هذا العرض مسحوب ولا يمكن اختياره', 409);
 		}
@@ -1730,6 +1734,8 @@ export class ClientRequestsService {
 			where: { projectId: requestId, clientId: userId, status: ContractStatus.PENDING_CLIENT_SIGNATURE }
 		});
 		if (!contractBeforePayment) throw new AppError('العقد غير جاهز لتوقيع العميل أو تم توقيعه مسبقاً', 409);
+		// admin freeze: funding is a new financial movement; refused before the OTP is read (re-checked under the row lock inside the transaction)
+		await assertNoAdminFreeze({ contractId: contractBeforePayment.id });
 		// before the OTP is read and before any wallet debit / escrow hold
 		if (contractBeforePayment.providerId === userId) throw selfHireError();
 		// Phase 4 — selectOffer() stores the CANONICAL ProjectProposal id on
@@ -1805,6 +1811,7 @@ export class ClientRequestsService {
 				}
 			});
 			if (clientSigned.count !== 1) throw new AppError('تغيّر العقد أو تم توقيعه وتمويله مسبقاً — لم يتم خصم أي مبلغ', 409);
+			await assertNoAdminFreeze({ contractId: contractBeforePayment.id }, tx);
 
 			// b. Accept Proposal and Update Project Status
 			const proposal = await tx.proposal.findFirst({

@@ -9,9 +9,8 @@ import { adminSettlementFor, adminSettledView, settlementsByProject, stageDispla
 const settledProjectWhere = { disputes: { some: SETTLED_DISPUTE_WHERE } } as const;
 
 /**
- * Read-only admin view of projects, contracts and their escrow. Every number comes from the database; the escrow status is Escrow.status as stored
- * (HELD / RELEASED / REFUNDED). There is deliberately NO release / hold / refund action here: the fee-policy documents do not define refund or manual
- * release semantics, so those stay a product decision (the UI shows them disabled with that reason). Money only moves through the stage-approval flow.
+ * Admin view of projects, contracts and their escrow. Every number comes from the database; the escrow status is Escrow.status as stored (HELD / RELEASED / REFUNDED). This service only READS.
+ * The admin actions (freeze / unfreeze / cancel / refund / release) live in admin-order-controls.service (2026-11-12): one rule table, SUPER_ADMIN-only for money, audited in the same transaction.
  */
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const fullName = (u?: { firstName?: string | null; lastName?: string | null } | null) => [u?.firstName, u?.lastName].filter(Boolean).join(' ').trim();
@@ -158,7 +157,7 @@ export class AdminOperationsService {
 		return users.map(u => ({ id: u.id, name: fullName(u) || u.email, email: u.email, accountType: u.accountType }));
 	}
 
-	/** Audit trail of everything an admin did on one project / contract / escrow (empty today: this area is read-only). */
+	/** Audit trail of everything an admin did on one project / contract / escrow (freeze, cancel, refund, release). */
 	async auditFor(entity: 'PROJECT' | 'CONTRACT' | 'ESCROW', id: string) {
 		return adminAudit.listForEntity(entity, id);
 	}

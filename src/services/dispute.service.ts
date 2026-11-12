@@ -1,4 +1,5 @@
 import { followUpDisputesWhere } from './dispute-follow-up';
+import { assertNoAdminFreeze } from './admin-hold';
 import { disputeFilterWhere, DisputeQueueFilters } from './dispute-queue-filters';
 import { randomUUID } from 'node:crypto';
 import { AccountType, ContractStatus, DisputeStatus, EscrowStatus, LogCategory, LogStatus, Prisma, ProjectStatus, RequestStatus } from '@prisma/client';
@@ -402,6 +403,8 @@ export class DisputeService {
       if (!(await lockProjectForFreezeCheck(tx, projectId))) throw new AppError('لا يوجد عقد وضمان مرتبطان بهذا النزاع لتنفيذ قرار مالي', 409);
       const current = await tx.contract.findUniqueOrThrow({ where: { id: contractRef.id }, select: { status: true } });
       if (current.status !== ContractStatus.ACTIVE) throw new AppError('العقد غير نشط: لا يوجد مبلغ محتجز لتسويته (المبالغ المصروفة سابقًا لا تُسترد بقرار نزاع)', 409);
+      // an admin freeze holds ALL new money movement (the dispute policy itself is unchanged: only WHEN it may run, until the freeze is lifted)
+      await assertNoAdminFreeze({ contractId: contractRef.id, projectId }, tx);
       const claimed = await tx.dispute.updateMany({ where: { id, status: { in: ACTIVE_DISPUTE_STATUSES } }, data: { status: DisputeStatus.RESOLVED, resolution: input.outcome, resolutionNote: input.resolutionNote, resolvedById: adminId, resolvedAt: new Date() } });
       if (claimed.count !== 1) throw new AppError('تمت معالجة النزاع مسبقاً ولم يُنفَّذ أي مبلغ جديد', 409);
       const [escrow, contract] = await Promise.all([tx.escrow.findUnique({ where: { projectId } }), tx.contract.findUniqueOrThrow({ where: { id: contractRef.id }, select: { price: true, clientId: true, providerId: true } })]);

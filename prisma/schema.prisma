@@ -1492,6 +1492,11 @@ model ProjectProposal {
   agreedToTerms  Boolean        @default(false)
   agreedToEscrow Boolean        @default(false)
 
+  // Admin suspension (migration 20261112100000_admin_order_contract_controls): `status` is untouched; a suspended offer cannot be accepted / chosen.
+  adminSuspendedAt   DateTime?
+  adminSuspendedById String?
+  adminSuspendReason String?   @db.VarChar(500)
+
   milestones ProposalMilestone[]
   createdAt  DateTime            @default(now())
   updatedAt  DateTime            @updatedAt
@@ -1958,6 +1963,11 @@ model Contract {
   providerSignatureHash String?
   termsVersion          Int                    @default(1)
   signedAt              DateTime?
+  // Admin freeze (migration 20261112100000_admin_order_contract_controls): while adminFrozenAt is set no NEW financial movement runs on this contract (stage approval / release, funding,
+  // settlement, dispute financial decision). Unfreezing only clears it: it never executes a payment. `status` is untouched.
+  adminFrozenAt         DateTime?
+  adminFrozenById       String?
+  adminFreezeReason     String?                @db.VarChar(500)
   stages                ProjectStage[]
   amendments            ProjectAmendment[]
   cancellationRequests  ContractCancellationRequest[]
@@ -2692,6 +2702,15 @@ model ClientRequest {
   status             RequestStatus @default(OPEN) // DRAFT, OPEN, IN_PROGRESS, COMPLETED, CANCELLED
   proposalsCount     Int           @default(0)
 
+  // Admin controls (migration 20261112100000_admin_order_contract_controls). A suspension is a TEMPORARY hold that keeps `status` untouched: no NEW offers are accepted
+  // while it lasts, the request data and the existing offers stay as they are. NULL adminSuspendedAt = not suspended.
+  adminSuspendedAt     DateTime?
+  adminSuspendedById   String?
+  adminSuspendReason   String?   @db.VarChar(500)
+  adminCancelledAt     DateTime?
+  adminCancelledById   String?
+  adminCancelReason    String?   @db.VarChar(500)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -3407,4 +3426,23 @@ model AdminSavedReport {
 
   @@index([ownerId, createdAt, id])
   @@map("admin_saved_reports")
+}
+
+
+/// Replay protection for the admin order / contract controls (migration 20261112100000_admin_order_contract_controls). The row is written INSIDE the transaction of the action it guards:
+/// the same (adminId, key) with the same requestHash returns `response`; the same key with a different request is a conflict. Never holds a secret.
+model AdminActionIdempotency {
+  id          String   @id @default(uuid())
+  adminId     String
+  key         String   @db.VarChar(120)
+  action      String   @db.VarChar(60)
+  entityType  String   @db.VarChar(30)
+  entityId    String
+  requestHash String   @db.VarChar(64)
+  response    Json
+  createdAt   DateTime @default(now())
+
+  @@unique([adminId, key])
+  @@index([entityType, entityId])
+  @@map("admin_action_idempotency")
 }

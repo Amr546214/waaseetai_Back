@@ -13,7 +13,10 @@ function sources(dir: string, out: string[] = []): string[] {
 	return out;
 }
 /** UPPER_SNAKE words that appear next to `eventType` / `action` in src but are NOT audit event codes (categories, enum values, request actions) */
-const NOT_EVENT_CODES = new Set(['REFUND_CLIENT', 'SYSTEM_AUDIT', 'SECURITY_CHANGE', 'PROFILE_COMPLETION', 'IN_REVIEW', 'WRONG_ROLE', 'ACTIVE_DISPUTE_FREEZE', 'UNDER_REVIEW', 'IN_PROGRESS', 'REVISION_REQUESTED', 'UNDER_AI_REVIEW', 'PASSWORD_RESET']);
+const NOT_EVENT_CODES = new Set(['REFUND_CLIENT', 'SYSTEM_AUDIT', 'SECURITY_CHANGE', 'PROFILE_COMPLETION', 'IN_REVIEW', 'WRONG_ROLE', 'ACTIVE_DISPUTE_FREEZE', 'UNDER_REVIEW', 'IN_PROGRESS', 'REVISION_REQUESTED', 'UNDER_AI_REVIEW', 'PASSWORD_RESET',
+	// admin order / contract controls (2026-11-12): action ids and stable reason codes of services/admin-order-controls.service.ts, NOT audit event codes (those are REQUEST_SUSPENDED ... ESCROW_RELEASED_BY_ADMIN, classified)
+	'REQUEST_SUSPEND', 'REQUEST_RESUME', 'REQUEST_CANCEL', 'OFFER_SUSPEND', 'OFFER_RESUME', 'CONTRACT_FREEZE', 'CONTRACT_UNFREEZE', 'CONTRACT_CANCEL', 'ESCROW_REFUND', 'ESCROW_RELEASE',
+	'PERMISSION_DENIED', 'REQUEST_ALREADY_CANCELLED', 'OFFER_ALREADY_SUSPENDED', 'CONTRACT_CLOSED', 'CONTRACT_NOT_FROZEN', 'RELEASE_REQUIRES_ACTIVE_CONTRACT']);
 const writtenCodes = () => {
 	const codes = new Map<string, string>();
 	for (const f of sources(path.join(__dirname, '..'))) {

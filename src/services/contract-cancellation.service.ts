@@ -1,4 +1,5 @@
 import { AmendmentRequesterRole, CancellationRequestStatus, CancellationSettlementStatus, ContractStatus, EscrowStatus, LogCategory, LogStatus, NotificationCategory, Prisma, ProjectStatus, RequestStatus } from '@prisma/client';
+import { assertNoAdminFreeze } from './admin-hold';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { logger } from '../config/logger';
@@ -259,6 +260,7 @@ export class ContractCancellationService {
 			const contract = await tx.contract.findUniqueOrThrow({ where: { id: pre.contractId }, select: { status: true, price: true, clientId: true, providerId: true } });
 			if (contract.status !== ContractStatus.ACTIVE) throw new AppError('العقد لم يعد نشطًا: لا يوجد مبلغ محتجز لتسويته', 409);
 			await assertProjectNotFrozen(pre.projectId, tx);
+			await assertNoAdminFreeze({ contractId: pre.contractId, projectId: pre.projectId }, tx);
 			const escrow = await tx.escrow.findUnique({ where: { projectId: pre.projectId } });
 			const held = round2(heldEscrowAmount(escrow, contract.price) ?? 0);
 			if (!escrow || escrow.status !== EscrowStatus.HELD || held <= 0) throw new AppError('لا يوجد مبلغ محتجز لتسويته', 409);

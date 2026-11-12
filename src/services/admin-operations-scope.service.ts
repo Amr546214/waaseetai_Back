@@ -22,6 +22,9 @@ export const OPERATIONS_MATRIX: ReadonlyArray<{ surface: string; superAdmin: str
 
 export async function mayReadOperation(actor: AdminActor, kind: OperationKind, id: string, db: typeof defaultPrisma = defaultPrisma): Promise<boolean> {
 	if (actor.isSuperAdmin) return true;
+	// holding the explicit control permission of a kind opens the detail of that kind (the screen that carries the control); it opens no list and no other kind
+	const manage = kind === 'REQUEST' ? 'requests.manage' : kind === 'OFFER' ? 'offers.manage' : 'contracts.manage';
+	if (actorHas(actor, manage)) return true;
 	const viaDispute = actorHas(actor, 'disputes.view');
 	const viaTicket = actorHas(actor, 'support.review');
 	if (!viaDispute && !viaTicket) return false;

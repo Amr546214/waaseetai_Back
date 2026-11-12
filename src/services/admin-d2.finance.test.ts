@@ -130,12 +130,17 @@ test('projects list / detail: escrow status and held amount from the DB, 404 for
 	await assert.rejects(() => adminOperationsService.getProject('nope'), /غير موجود/);
 });
 
-test('admin routes: every admin router is gated by a permission (never an account type) and there is no escrow release / refund / hold route', () => {
+test('admin routes: every admin router is gated by a permission (never an account type) and escrow release / refund exist only as SUPER_ADMIN-only routes (no hold route)', () => {
 	for (const f of ['admin-finance.routes.ts', 'admin-projects.routes.ts', 'admin-disputes.routes.ts', 'admin-withdrawals.routes.ts']) {
 		const src = fs.readFileSync(path.join(__dirname, '../routes', f), 'utf8');
 		assert.match(src, /authenticate,\s*requireActiveUser,\s*requirePermission\(/, f);
 		assert.doesNotMatch(src, /authorize\(AccountType\.(ADMIN|SUPER_ADMIN)/, f);
-		assert.doesNotMatch(src, /\/(release|refund|hold)\b/, f);
+		if (f === 'admin-projects.routes.ts') {
+			// 2026-11-12: refund / release exist now, but ONLY behind requireSuperAdmin (a financial decision is never a permission a staff member can be given); there is still no manual /hold route
+			assert.doesNotMatch(src, /\/hold\b/, f);
+			for (const m of src.matchAll(/adminContractsRouter\.post\('\/:id\/(release|refund)'([^\n]*)/g)) assert.match(m[2], /requireSuperAdmin/, `${m[1]} must be SUPER_ADMIN-only`);
+			assert.equal([...src.matchAll(/\/:id\/(release|refund)'/g)].length, 2);
+		} else assert.doesNotMatch(src, /\/(release|refund|hold)\b/, f);
 	}
 });
 

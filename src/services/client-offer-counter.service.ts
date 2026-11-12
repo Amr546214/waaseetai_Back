@@ -1,4 +1,5 @@
 import { ContractStatus, ProposalStatus, RequestStatus } from '@prisma/client';
+import { assertOfferNotSuspended, assertRequestNotSuspended } from './admin-hold';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { round2, splitByWeights } from '../utils/order-discount';
@@ -119,6 +120,8 @@ class ClientOfferCounterService {
 
 		if (!OPEN_REQUEST_STATUSES.includes(request.status as RequestStatus)) throw new AppError('لا يمكن قبول عرض مضاد على هذا الطلب في حالته الحالية', 409);
 		if (offer.status === ProposalStatus.CANCELLED) throw new AppError('سحب مقدم الخدمة هذا العرض ولا يمكن قبول عرضه المضاد', 409);
+		assertOfferNotSuspended(offer as { adminSuspendedAt?: Date | null });
+		assertRequestNotSuspended(request as { adminSuspendedAt?: Date | null });
 		if (offer.status !== ProposalStatus.UNDER_NEGOTIATION) throw new AppError('لا يوجد عرض مضاد معلّق على هذا العرض (ربما قُبل مسبقًا أو تغيّرت حالة العرض)، حدّث الصفحة', 409, undefined, 'OFFER_STATE_CHANGED');
 
 		const result = await prisma.$transaction(async (tx) => {

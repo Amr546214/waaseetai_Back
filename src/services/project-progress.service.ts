@@ -1,4 +1,5 @@
 import { assertNoAgreedCancellation, hasAgreedCancellation, CANCELLATION_FROZEN_MESSAGE } from './cancellation-freeze';
+import { assertNoAdminFreeze } from './admin-hold';
 import { isV2Escrow, splitRelease } from '../utils/escrow-commission';
 import { AmendmentStatus, ContractStatus, EscrowStatus, LogCategory, LogStatus, ProjectStageStatus, ProjectStatus, RequestStatus, StageDeliveryStatus } from '@prisma/client';
 import { stageDisputeBlockedReason } from '../utils/dispute-stage';
@@ -478,6 +479,8 @@ export class ProjectProgressService {
         await assertProjectNotFrozen(contract.projectId, tx);
         // Mutual cancellation agreed: approving NEW stages (and releasing their payments) stops until the administration settles. Same lock order as the agreement.
         await assertNoAgreedCancellation({ contractId: contract.id, projectId: contract.projectId }, tx);
+        // Admin freeze: no NEW release while the administration holds the contract (same lock as the freeze itself).
+        await assertNoAdminFreeze({ contractId: contract.id, projectId: contract.projectId }, tx);
       }
       if (decision === 'revision') {
         // Guarded the same way the approve path below is: an unconditional
