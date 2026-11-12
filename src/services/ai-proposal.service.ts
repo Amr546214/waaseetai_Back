@@ -127,8 +127,8 @@ class AiProposalService {
       // Non-fatal: proceed even if project lookup fails
     }
 
-    if (!title && !message && !projectContext?.title && !projectContext?.description) {
-      throw new AppError('تعذر العثور على تفاصيل المشروع لصياغة العرض؛ يرجى كتابة عنوان أو نص العرض أولاً', 400);
+    if (!title && !message) {
+      throw new AppError('يرجى كتابة عنوان أو نص العرض أولاً ليتم تحسين صياغته بالذكاء الاصطناعي', 400);
     }
 
     let raw;
@@ -157,8 +157,6 @@ class AiProposalService {
       suggestedTitle,
       suggestedMessage,
       ...(typeof raw.suggestedOutputs === 'string' && raw.suggestedOutputs.trim() ? { suggestedOutputs: raw.suggestedOutputs.trim() } : {}),
-      ...(typeof raw.suggestedTotalPrice === 'number' && Number.isFinite(raw.suggestedTotalPrice) && raw.suggestedTotalPrice > 0 ? { suggestedTotalPrice: raw.suggestedTotalPrice } : {}),
-      ...(Array.isArray(raw.suggestedMilestones) && raw.suggestedMilestones.length > 0 ? { suggestedMilestones: raw.suggestedMilestones } : {}),
       qualityScore: raw.qualityScore,
       qualityTag,
       suggestedAdvantages: Array.isArray(raw.suggestedAdvantages)

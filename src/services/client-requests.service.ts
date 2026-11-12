@@ -13,7 +13,7 @@ import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { normalizeWaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
 import { analyzeNewRequest, readAiAnalysis } from './client-request-analysis';
 import type { RequestDraftResponse } from './ai/waseet-ai/waseet-ai.types';
-import { CreateClientRequestDto, ClientRequestAiSuggestDto } from '../dtos/create-client-request.dto';
+import { CreateClientRequestDto, ClientRequestAiSuggestDto, ClientRequestBudgetSuggestDto } from '../dtos/create-client-request.dto';
 import { ensureCloudinaryUrl } from '../utils/cloudinary-storage';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { readProposalReview, proposalBudgetSuitability, proposalDeadlineSuitability, proposalRecommendationRanks } from './proposal-suitability';
@@ -252,6 +252,46 @@ export class ClientRequestsService {
 		const suggestion = mapRequestDraftToSuggestion(draft);
 		if (!suggestion) throw unavailable();
 		return suggestion;
+	}
+
+	/**
+	 * POST /api/client/requests/ai-suggest-budget
+	 * Dedicated Step 4 budget & milestones suggestion (never touches title, description, or skills).
+	 */
+	public async generateAiBudgetSuggest(_clientId: string, payload: ClientRequestBudgetSuggestDto) {
+		const unavailable = () => new AppError('تعذر اقتراح الميزانية والمراحل بالذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.', 503);
+		try {
+			const res = await waseetAiClient.suggestBudgetAndMilestones({
+				title: payload.title.trim(),
+				description: payload.description.trim(),
+				...(payload.specialtyName?.trim() ? { specialtyName: payload.specialtyName.trim() } : {}),
+				...(payload.subSpecialties?.length ? { subSpecialties: payload.subSpecialties } : {}),
+				...(payload.skills?.length ? { skills: payload.skills } : {}),
+				...(payload.expectedDurationDays ? { expectedDurationDays: payload.expectedDurationDays } : {}),
+				currency: CLIENT_REQUEST_AI_CURRENCY,
+			});
+			const minBudget = positiveNumber(res.recommendedMinBudget);
+			const maxBudget = positiveNumber(res.recommendedMaxBudget);
+			if (!minBudget || !maxBudget || maxBudget < minBudget) throw unavailable();
+			const milestones = Array.isArray(res.suggestedMilestones)
+				? res.suggestedMilestones
+						.filter(m => m && typeof m.name === 'string' && m.name.trim().length >= 2 && typeof m.pct === 'number' && m.pct > 0)
+						.map(m => ({ name: m.name.trim(), pct: Math.round(m.pct) }))
+				: [];
+			return {
+				minBudget: Math.round(minBudget),
+				maxBudget: Math.round(maxBudget),
+				expectedDurationDays: positiveNumber(res.suggestedDurationDays) ? Math.round(res.suggestedDurationDays) : null,
+				milestones,
+				complexityRating: nonEmptyString(res.complexityRating),
+				rationaleAr: nonEmptyString(res.rationaleAr),
+			};
+		} catch (error) {
+			if (error instanceof AppError) throw error;
+			const e = normalizeWaseetAiError(error);
+			console.error(`[ClientRequests] WaseetAI budget-milestones failed code=${e.code} status=${e.status ?? '-'} requestId=${e.requestId ?? '-'}`);
+			throw unavailable();
+		}
 	}
 
 	/**

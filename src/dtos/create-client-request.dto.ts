@@ -52,3 +52,14 @@ export const clientRequestAiSuggestSchema = z.object({
 });
 
 export type ClientRequestAiSuggestDto = z.infer<typeof clientRequestAiSuggestSchema>;
+
+export const clientRequestBudgetSuggestSchema = z.object({
+  title: z.string().trim().min(3, 'أدخل عنوان المشروع أولاً في الخطوة السابقة').max(160),
+  description: z.string().trim().min(10, 'أدخل وصف المشروع أولاً في الخطوة السابقة').max(4000),
+  specialtyName: z.string().trim().max(120).optional(),
+  subSpecialties: z.array(z.string().trim().min(1).max(100)).max(20).optional().default([]),
+  skills: z.array(z.string().trim().min(1).max(80)).max(30).optional().default([]),
+  expectedDurationDays: z.number().int().positive().max(3650).nullable().optional(),
+});
+
+export type ClientRequestBudgetSuggestDto = z.infer<typeof clientRequestBudgetSuggestSchema>;

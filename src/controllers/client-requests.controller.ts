@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { clientRequestsService } from '../services/client-requests.service';
 import { clientOfferCounterService } from '../services/client-offer-counter.service';
-import { createClientRequestSchema, clientRequestAiSuggestSchema } from '../dtos/create-client-request.dto';
+import { createClientRequestSchema, clientRequestAiSuggestSchema, clientRequestBudgetSuggestSchema } from '../dtos/create-client-request.dto';
 import { AppError } from '../utils/app-error';
 import { canRewrite, REWRITE_INPUT_REQUIRED_MESSAGE } from '../utils/description-rewrite-guard';
 import { checkMultipleContentPolicy } from '../utils/content-policy-guard';
@@ -51,6 +51,32 @@ export class ClientRequestsController {
 
       const userId = req.user!.userId || req.user!.id;
       const result = await clientRequestsService.generateAiSuggest(userId, parsed.data);
+
+      res.status(200).json({
+        success: true,
+        data: result
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // POST /api/client/requests/ai-suggest-budget
+  public async aiSuggestBudget(req: Request, res: Response, next: NextFunction) {
+    try {
+      const parsed = clientRequestBudgetSuggestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        const errorMsg = parsed.error.issues.map(i => i.message).join(', ');
+        throw new AppError(errorMsg, 400);
+      }
+
+      const policy = checkMultipleContentPolicy([parsed.data.title, parsed.data.description, parsed.data.specialtyName || '']);
+      if (policy.blocked) {
+        throw new AppError(policy.reasonAr || 'المحتوى المدخل يخالف سياسات منصة وسيط.', 400);
+      }
+
+      const userId = req.user!.userId || req.user!.id;
+      const result = await clientRequestsService.generateAiBudgetSuggest(userId, parsed.data);
 
       res.status(200).json({
         success: true,

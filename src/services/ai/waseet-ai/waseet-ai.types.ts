@@ -287,15 +287,99 @@ export interface PerformanceSummaryResponse {
   conflictFreeDeliveryRate: number | null;
 }
 
-/** POST /v1/ai/profile/skills — specialtyName drives the output. */
+/** POST /v1/ai/profile/skills — specialtyName + subSpecialties drive the output. */
 export interface ProfileSkillsRequest {
   providerId: string;
   specialtyName: string;
+  subSpecialties?: string[];
+  jobTitle?: string;
+  availableSkills?: string[];
   /** Verified 2026-10-02: accepted (array of strings); these are left out of the suggestions. */
   existingSkills?: string[];
 }
 export interface ProfileSkillsResponse {
   suggestedSkills: string[];
+}
+
+/** POST /v1/ai/profile/bio/enhance — rephrases an existing user-written bio without inventing facts. */
+export interface ProfileBioEnhanceRequest {
+  providerId?: string;
+  bio: string;
+  jobTitle?: string;
+  specialtyName?: string;
+  specialties?: string[];
+  subSpecialties?: string[];
+  existingSkills?: string[];
+  maxLength?: number;
+}
+export interface ProfileBioEnhanceResponse {
+  suggestedBio: string;
+}
+
+/** POST /v1/ai/client/requests/budget-milestones — dedicated Step 4 budget & milestones suggestion. */
+export interface BudgetMilestonesRequest {
+  title: string;
+  description: string;
+  specialtyName?: string;
+  subSpecialties?: string[];
+  skills?: string[];
+  expectedDurationDays?: number | null;
+  currency?: string;
+}
+export interface BudgetMilestonesResponse {
+  recommendedMinBudget: number;
+  recommendedMaxBudget: number;
+  suggestedDurationDays: number;
+  suggestedMilestones: Array<{ name: string; pct: number }>;
+  complexityRating: 'Low' | 'Medium' | 'High';
+  rationaleAr: string;
+  estimationBasis?: string;
+}
+
+/** POST /v1/ai/identity/inspect-document — advisory pre-submission KYC document readability & side check. */
+export interface IdentityInspectRequest {
+  side: 'FRONT' | 'BACK';
+  image: string;
+  imageMimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf';
+  document?: { country?: string; type?: string };
+  declared?: { fullName?: string; birthDate?: string; nationalId?: string };
+}
+export interface IdentityInspectResponse {
+  status: 'CLEAR_VALID' | 'NEEDS_ATTENTION' | 'NOT_ID_DOCUMENT' | 'UNREADABLE';
+  isIdentityDocument: boolean;
+  detectedSide: 'FRONT' | 'BACK' | 'UNKNOWN';
+  sideMatchesExpected: boolean;
+  readability: 'CLEAR' | 'BLURRY' | 'PARTIAL' | 'UNREADABLE';
+  summaryAr: string;
+  warningsAr: string[];
+  fields?: {
+    fullName?: 'MATCH' | 'MISMATCH' | 'COULD_NOT_VERIFY';
+    birthDate?: 'MATCH' | 'MISMATCH' | 'COULD_NOT_VERIFY';
+    nationalId?: 'MATCH' | 'MISMATCH' | 'COULD_NOT_VERIFY';
+  };
+  advisoryOnly: true;
+}
+
+/** POST /v1/ai/identity/compare-fields — privacy-preserving OCR field comparison. */
+export interface IdentityCompareFieldsRequest {
+  requestId: string;
+  image: string;
+  imageMimeType: 'image/jpeg' | 'image/png' | 'image/webp';
+  registered: {
+    fullName: string;
+    birthDate: string;
+    nationalId: string;
+  };
+}
+export interface IdentityCompareFieldsResponse {
+  requestId: string;
+  fields: {
+    fullName: { status: 'MATCH' | 'MISMATCH' | 'COULD_NOT_VERIFY'; reason?: string };
+    birthDate: { status: 'MATCH' | 'MISMATCH' | 'COULD_NOT_VERIFY'; reason?: string };
+    nationalId: { status: 'MATCH' | 'MISMATCH' | 'COULD_NOT_VERIFY'; reason?: string };
+  };
+  model: { name: string; version: string };
+  readAt: string;
 }
 
 /** POST /v1/ai/text/suggest/stream (SSE text.delta / generation.completed). */

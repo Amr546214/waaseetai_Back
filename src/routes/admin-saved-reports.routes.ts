@@ -27,11 +27,11 @@ router.get('/', async (req, res) => {
   const rows = await prisma.adminSavedReport.findMany({
     where: { ownerId: req.user!.id },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    skip: (page.data - 1) * size,
+    skip: (page.data.page - 1) * size,
     take: size + 1,
     select,
   });
-  res.json({ success: true, data: { items: rows.slice(0, size), hasNext: page.data < 10_000 && rows.length > size } });
+  res.json({ success: true, data: { items: rows.slice(0, size), hasNext: page.data.page < 10_000 && rows.length > size } });
 });
 
 router.post('/', async (req, res) => {
