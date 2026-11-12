@@ -6,8 +6,9 @@ import express, { type ErrorRequestHandler, type RequestHandler } from 'express'
 test('analytics presets are private, permission-checked and validated', async t => {
   const id = '11111111-1111-4111-8111-111111111111';
   let row: { id: string; ownerId: string } | null = null;
+  let listSkip: number | undefined;
   const model = {
-    findMany: async ({ where }: { where: { ownerId: string } }) => row?.ownerId === where.ownerId ? [row] : [],
+    findMany: async ({ where, skip }: { where: { ownerId: string }; skip: number }) => { listSkip = skip; return row?.ownerId === where.ownerId ? [row] : []; },
     create: async ({ data }: { data: { ownerId: string } }) => {
       row = { ...data, id };
       const { ownerId: _owner, ...result } = row;
@@ -62,6 +63,9 @@ test('analytics presets are private, permission-checked and validated', async t 
     assert.equal((await (await call('GET')).json()).data.items.length, 1);
     assert.deepEqual((await (await call('GET', '', undefined, 'other')).json()).data.items, []);
     assert.equal((await call('DELETE', '/' + id, undefined, 'other')).status, 404);
+    assert.equal((await call('GET', '?page=2')).status, 200);
+    assert.equal(listSkip, 20);
+    assert.equal((await call('GET', '?page=bad')).status, 400);
     assert.equal((await call('DELETE', '/' + id)).status, 204);
     assert.deepEqual((await (await call('GET')).json()).data.items, []);
   } finally { server.close(); }
