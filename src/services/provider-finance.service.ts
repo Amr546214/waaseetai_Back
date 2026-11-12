@@ -94,10 +94,21 @@ export class ProviderFinanceService {
       });
     });
 
+    // A mutual-cancellation settlement credits the provider through the escrow (providerNetReleasedAmount, already in availableBalance above); this line makes that
+    // credit visible in the history with the same gross / commission / net split a stage release shows. Nothing is added to any balance here.
+    const settledCancellations = (await (client as any).contractCancellationRequest?.findMany({ where: { providerId, status: 'SETTLED', settlementReleaseToProvider: { gt: 0 } }, include: { contract: { select: { project: { select: { id: true, title: true } } } } } })) ?? [];
+    // Money released OUTSIDE stage approvals has its OWN dedicated line (a settlement / an administrative release), so it is subtracted from the legacy remainder: stages + settlements + administrative
+    // releases + the legacy remainder always add up to exactly the released amount, with no line counted twice.
+    const closureGrossByProject = new Map<string, number>();
+    for (const r of settledCancellations as any[]) closureGrossByProject.set(r.projectId, round2((closureGrossByProject.get(r.projectId) ?? 0) + (r.settlementReleaseToProvider ?? 0)));
+    for (const escrow of escrows) {
+      const cl = (escrow.project as any).engagementClosure;
+      if (cl?.kind === 'ADMIN_RELEASE' && cl.releaseToProvider > 0) closureGrossByProject.set(escrow.project.id, round2((closureGrossByProject.get(escrow.project.id) ?? 0) + cl.releaseToProvider));
+    }
     // Keeps old completed contracts visible if they were released before stage-level tracking was introduced (legacy escrows only).
     const legacyTransactions = escrows.filter(escrow => !isV2Escrow(escrow)).flatMap(escrow => {
       const tracked = (escrow.project.contract?.stages || []).reduce((sum, stage) => sum + stage.amount, 0);
-      const residual = Math.max(0, escrow.releasedAmount - tracked);
+      const residual = round2(Math.max(0, escrow.releasedAmount - tracked - (closureGrossByProject.get(escrow.project.id) ?? 0)));
       return residual > 0 ? [{
         id: `escrow-release-${escrow.id}`,
         type: 'credit' as const,
@@ -114,9 +125,6 @@ export class ProviderFinanceService {
         breakdown: legacyEscrowReleaseBreakdown(residual)
       }] : [];
     });
-    // A mutual-cancellation settlement credits the provider through the escrow (providerNetReleasedAmount, already in availableBalance above); this line makes that
-    // credit visible in the history with the same gross / commission / net split a stage release shows. Nothing is added to any balance here.
-    const settledCancellations = (await (client as any).contractCancellationRequest?.findMany({ where: { providerId, status: 'SETTLED', settlementReleaseToProvider: { gt: 0 } }, include: { contract: { select: { project: { select: { id: true, title: true } } } } } })) ?? [];
     const cancellationTransactions = settledCancellations.map((r: any) => ({
       id: `cancellation-settlement-${r.id}`,
       type: 'credit' as const,

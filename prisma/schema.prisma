@@ -3496,6 +3496,9 @@ model ClientCashbackEntry {
   ratePercent    Float
   ladderSource   String   @db.VarChar(80)
   policyCode     String   @db.VarChar(40)
+  /// the inputs of the formula exactly as read (K41 average rating, K38 payment input) so the amount can always be re-derived
+  ratingInput    Float
+  paymentInput   Float
   ratingFactor   Float    @default(1)
   paymentFactor  Float    @default(1)
   amount         Float

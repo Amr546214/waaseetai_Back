@@ -797,40 +797,58 @@ test('PARTNER COMMISSION atomicity: two parallel releases accrue once; an audit 
 	});
 });
 
-test('CASHBACK: policy-gated (blocked with a specific reason by default); on delivery completion credits level % of the value actually released, once; ledger + wallet + notification-after-success; never for admin closure / consensual cancel; rollback leaves nothing', opts, async () => {
+const CB_ON = { CASHBACK_ENGINE_ENABLED: 'true', CASHBACK_WALLET_TIMING: 'IMMEDIATE' } as any; // the master switch + the explicit wallet-timing approval; the K38 input is supplied per call
+const rateClient = async (w: W, ...ratings: number[]) => { for (const r of ratings) await w.e.prisma.review.create({ data: { id: id(), providerId: w.provider.id, clientId: w.client.id, projectId: null, reviewerRole: 'PROVIDER', rating: r, comment: 'x', tags: [] } }); };
+
+test('CASHBACK (workbook K39-K43): blocked with a specific reason for every input the workbook does not define; the final approval never credits while K38 is undefined; credits exactly K43 once with the full basis; never for admin closure / consensual cancel; rollback leaves nothing', opts, async () => {
 	const e = await boot(); const sa = e.sa.id; const { projectProgressService } = await import('./project-progress.service');
 	const { accrueCashbackForDeliveryCompletion, cashbackEventKey } = await import('./cashback.service');
 	const balance = async (w: W) => Number((await e.prisma.user.findUnique({ where: { id: w.client.id } })).walletBalance);
-	// (a) default: engine disabled -> blocked, NOTHING written, with the reason code
+	const run = (w: W, env: any, inputs: any = {}) => e.prisma.$transaction((tx: any) => accrueCashbackForDeliveryCompletion(tx, { id: w.contract.id, projectId: w.project.id, clientId: w.client.id }, env, inputs));
+	// (a) every undefined input is its own reason code, in this order; NOTHING is written
 	let { w, s2 } = await finalStageWorld();
-	const blocked = await e.prisma.$transaction((tx: any) => accrueCashbackForDeliveryCompletion(tx, { id: w.contract.id, projectId: w.project.id, clientId: w.client.id }, {} as any)); assert.deepEqual(blocked, { status: 'BLOCKED', reason: 'CASHBACK_ENGINE_DISABLED' });
-	const unapproved = await e.prisma.$transaction((tx: any) => accrueCashbackForDeliveryCompletion(tx, { id: w.contract.id, projectId: w.project.id, clientId: w.client.id }, { CASHBACK_ENGINE_ENABLED: 'true' } as any)); assert.deepEqual(unapproved, { status: 'BLOCKED', reason: 'CASHBACK_POLICY_UNAPPROVED' });
+	assert.deepEqual(await run(w, {}), { status: 'BLOCKED', reason: 'CASHBACK_ENGINE_DISABLED' });
+	assert.deepEqual(await run(w, { CASHBACK_ENGINE_ENABLED: 'true' }), { status: 'BLOCKED', reason: 'CASHBACK_WALLET_TIMING_UNDEFINED' });
+	assert.deepEqual(await run(w, CB_ON), { status: 'BLOCKED', reason: 'CASHBACK_PAYMENT_SPEED_INPUT_UNDEFINED' }, 'K38 is not defined by the workbook: no source, no accrual');
+	assert.deepEqual(await run(w, CB_ON, { paymentInput: Number.NaN }), { status: 'BLOCKED', reason: 'CASHBACK_PAYMENT_SPEED_INPUT_UNDEFINED' });
+	assert.deepEqual(await run(w, CB_ON, { paymentInput: 10 }), { status: 'BLOCKED', reason: 'CASHBACK_RATING_INPUT_MISSING' }, 'a client with no rating has no K41 input: not invented, not read as 0');
 	assert.equal(await e.prisma.clientCashbackEntry.count({ where: { contractId: w.contract.id } }), 0);
-	await withEnvVars({ CASHBACK_ENGINE_ENABLED: undefined, CASHBACK_APPROVED_POLICY: undefined }, async () => { await projectProgressService.reviewDelivery(w.client.id, w.contract.id, s2.id, 'approve'); });
-	assert.equal(await e.prisma.clientCashbackEntry.count({ where: { contractId: w.contract.id } }), 0, 'final approval with the gate closed credits nothing'); assert.equal(await balance(w), 0);
-	// (b) approved policy: the final approval credits level-1 rate (1%) of the released value (20) = 0.2, once, with the full basis recorded
-	({ w, s2 } = await finalStageWorld()); sent.length = 0;
-	await withEnvVars({ CASHBACK_ENGINE_ENABLED: 'true', CASHBACK_APPROVED_POLICY: 'BASE_RATE_IMMEDIATE' }, async () => { await projectProgressService.reviewDelivery(w.client.id, w.contract.id, s2.id, 'approve'); });
-	const entry = await e.prisma.clientCashbackEntry.findUnique({ where: { contractId: w.contract.id } }); assert.ok(entry, 'ledger row');
-	assert.deepEqual([entry.amount, entry.eligibleValue, entry.level, entry.ratePercent, entry.ladderSource, entry.policyCode, entry.status, entry.eventKey], [0.2, 20, 1, 1, 'levels.config:CLIENT_LEVELS@2026-10', 'BASE_RATE_IMMEDIATE', 'CREDITED', cashbackEventKey(w.contract.id)]);
-	assert.equal(await balance(w), 0.2); const wt = await e.prisma.walletTransaction.findFirst({ where: { userId: w.client.id, type: 'CASHBACK' } }); assert.equal(wt.referenceId, `CASHBACK-${w.contract.id}`); assert.equal(wt.metadata.eligibleValue, 20);
-	// the client's finance history shows it with its basis
+	// the real final approval (production passes no K38) credits nothing even with the switches on
+	await withEnvVars({ CASHBACK_ENGINE_ENABLED: 'true', CASHBACK_WALLET_TIMING: 'IMMEDIATE' }, async () => { await projectProgressService.reviewDelivery(w.client.id, w.contract.id, s2.id, 'approve'); });
+	assert.equal(await e.prisma.clientCashbackEntry.count({ where: { contractId: w.contract.id } }), 0); assert.equal(await balance(w), 0);
+	// (b) approved inputs: level 1 (1%) of the 10 released (the escrow's released amount at the moment of accrual), rating 4.0 -> factor 1, K38 = 10 -> factor 1 -> K43 = 0.1, once, with the basis recorded
+	({ w, s2 } = await finalStageWorld()); await rateClient(w, 4, 4); sent.length = 0;
+	const first: any = await run(w, CB_ON, { paymentInput: 10 }); assert.deepEqual([first.status, first.amount, first.ratingFactor, first.paymentFactor], ['CREDITED', 0.1, 1, 1]);
+	const entry = await e.prisma.clientCashbackEntry.findUnique({ where: { contractId: w.contract.id } });
+	assert.deepEqual([entry.amount, entry.eligibleValue, entry.level, entry.ratePercent, entry.ratingInput, entry.paymentInput, entry.ratingFactor, entry.paymentFactor, entry.policyCode, entry.ladderSource, entry.status, entry.eventKey], [0.1, 10, 1, 1, 4, 10, 1, 1, 'XLSX_EARNINGS_K39_K43', 'xlsx:Levels(client)=levels.config:CLIENT_LEVELS', 'CREDITED', cashbackEventKey(w.contract.id)]);
+	assert.equal(await balance(w), 0.1); const wt = await e.prisma.walletTransaction.findFirst({ where: { userId: w.client.id, type: 'CASHBACK' } }); assert.equal(wt.referenceId, `CASHBACK-${w.contract.id}`); assert.equal(wt.metadata.eligibleValue, 10);
 	const { clientFinanceService } = await import('./client-finance.service'); const cw: any = await clientFinanceService.getWallet(w.client.id);
-	const row = cw.transactions.find((t: any) => t.type === 'CASHBACK'); assert.ok(row, 'client ledger row'); assert.equal(row.direction, 'IN'); assert.match(row.breakdown.note, /1% من 20/);
-	// (c) replay / parallel twin: never a second credit (ledger unique + wallet reference)
-	const twins = await Promise.all([1, 2, 3].map(() => e.prisma.$transaction((tx: any) => accrueCashbackForDeliveryCompletion(tx, { id: w.contract.id, projectId: w.project.id, clientId: w.client.id }, { CASHBACK_ENGINE_ENABLED: 'true', CASHBACK_APPROVED_POLICY: 'BASE_RATE_IMMEDIATE' } as any).catch((er: any) => ({ status: 'ERR', er })))));
-	assert.ok(twins.every((t: any) => t.status === 'DUPLICATE' || (t.status === 'SKIPPED') || t.status === 'ERR'), JSON.stringify(twins.map((t: any) => t.status))); assert.equal(await balance(w), 0.2); assert.equal(await e.prisma.walletTransaction.count({ where: { userId: w.client.id, type: 'CASHBACK' } }), 1);
-	// (d) rollback: an accrual inside a failing transaction leaves no ledger row, no wallet row, no balance
-	const z = await finalStageWorld(); await e.prisma.contract.update({ where: { id: z.w.contract.id }, data: { status: 'COMPLETED' } }); await e.prisma.escrow.update({ where: { id: z.w.escrow.id }, data: { releasedAmount: 20, status: 'RELEASED' } });
-	await assert.rejects(() => e.prisma.$transaction(async (tx: any) => { const r = await accrueCashbackForDeliveryCompletion(tx, { id: z.w.contract.id, projectId: z.w.project.id, clientId: z.w.client.id }, { CASHBACK_ENGINE_ENABLED: 'true', CASHBACK_APPROVED_POLICY: 'BASE_RATE_IMMEDIATE' } as any); assert.equal(r.status, 'CREDITED'); throw new Error('abort'); }), /abort/);
+	const row = cw.transactions.find((t: any) => t.type === 'CASHBACK'); assert.ok(row, 'client ledger row'); assert.equal(row.direction, 'IN'); assert.match(row.breakdown.note, /1% من 10/);
+	// (c) replay / parallel twins: never a second credit (ledger unique + wallet reference)
+	const twins = await Promise.all([1, 2, 3].map(() => run(w, CB_ON, { paymentInput: 10 }).catch((er: any) => ({ status: 'ERR', er }))));
+	assert.ok(twins.every((t: any) => t.status === 'DUPLICATE' || t.status === 'ERR'), JSON.stringify(twins.map((t: any) => t.status))); assert.equal(await balance(w), 0.1); assert.equal(await e.prisma.walletTransaction.count({ where: { userId: w.client.id, type: 'CASHBACK' } }), 1);
+	// (d) rollback: nothing is left by an accrual inside a failing transaction
+	const z = await finalStageWorld(); await rateClient(z.w, 4); await e.prisma.contract.update({ where: { id: z.w.contract.id }, data: { status: 'COMPLETED' } }); await e.prisma.escrow.update({ where: { id: z.w.escrow.id }, data: { releasedAmount: 20, status: 'RELEASED' } });
+	await assert.rejects(() => e.prisma.$transaction(async (tx: any) => { const r = await accrueCashbackForDeliveryCompletion(tx, { id: z.w.contract.id, projectId: z.w.project.id, clientId: z.w.client.id }, CB_ON, { paymentInput: 10 }); assert.equal(r.status, 'CREDITED'); throw new Error('abort'); }), /abort/);
 	assert.equal(await e.prisma.clientCashbackEntry.count({ where: { contractId: z.w.contract.id } }), 0); assert.equal(await balance(z.w), 0); assert.equal(await e.prisma.walletTransaction.count({ where: { userId: z.w.client.id, type: 'CASHBACK' } }), 0);
-	// (e) never for an administrative closure or a consensual cancellation, even with the policy approved
-	await withEnvVars({ CASHBACK_ENGINE_ENABLED: 'true', CASHBACK_APPROVED_POLICY: 'BASE_RATE_IMMEDIATE' }, async () => {
-		const a = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released: 10, v2: true, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' }); const ca = await ctl(a, 'contracts', a.contract.id, sa);
+	// (e) never for an administrative closure or a consensual cancellation, even with everything approved
+	await withEnvVars({ CASHBACK_ENGINE_ENABLED: 'true', CASHBACK_WALLET_TIMING: 'IMMEDIATE' }, async () => {
+		const a = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released: 10, v2: true, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' }); await rateClient(a, 4); const ca = await ctl(a, 'contracts', a.contract.id, sa);
 		assert.equal((await e.http('POST', `/admin/contracts/${a.contract.id}/release`, sa, { reason: 'صرف إداري بلا كاش باك', expectedVersion: ca.version, confirm: true, expectedHeldAmount: 10 }, keyOf())).status, 200);
 		assert.equal(await e.prisma.clientCashbackEntry.count({ where: { contractId: a.contract.id } }), 0); assert.equal(await balance(a), 0);
-		const guard = await e.prisma.$transaction((tx: any) => accrueCashbackForDeliveryCompletion(tx, { id: a.contract.id, projectId: a.project.id, clientId: a.client.id })); assert.deepEqual(guard, { status: 'SKIPPED', reason: 'NOT_DELIVERY_COMPLETION' }, 'a closure on the project makes any later accrual refuse');
+		assert.deepEqual(await run(a, CB_ON, { paymentInput: 10 }), { status: 'SKIPPED', reason: 'NOT_DELIVERY_COMPLETION' }, 'a closure on the project makes any later accrual refuse');
 	});
+});
+
+test('CASHBACK formula boundaries (workbook K41 / K42 / K43): rating 3.99 / 4 / 4.79 / 4.8 and payment input 79.99 / 80, K43 = K40 x K41 x K42 with the workbook example', async () => {
+	const { cashbackRatingFactor, cashbackPaymentFactor, computeCashback } = await import('../config/cashback-policy');
+	for (const [r, f] of [[0, 0.8], [3.99, 0.8], [4, 1], [4.79, 1], [4.8, 1.2], [5, 1.2]] as const) assert.equal(cashbackRatingFactor(r), f, `rating ${r}`);
+	for (const [p, f] of [[0, 1], [10, 1], [79.99, 1], [80, 1.1], [100, 1.1]] as const) assert.equal(cashbackPaymentFactor(p), f, `payment input ${p}`);
+	// the workbook's own example: level 11 (4.2%), volume 3000, rating 4 -> 1, K38 = 10 -> 1: K40 = 126, K43 = 126
+	assert.deepEqual(computeCashback({ qualifiedVolume: 3000, ratePercent: 4.2, avgRating: 4, paymentInput: 10 }), { base: 126, ratingFactor: 1, paymentFactor: 1, amount: 126 });
+	assert.equal(computeCashback({ qualifiedVolume: 3000, ratePercent: 4.2, avgRating: 4.8, paymentInput: 80 }).amount, 166.32, '126 x 1.2 x 1.1');
+	assert.equal(computeCashback({ qualifiedVolume: 3000, ratePercent: 4.2, avgRating: 3.99, paymentInput: 79.99 }).amount, 100.8, '126 x 0.8 x 1');
+	assert.equal(computeCashback({ qualifiedVolume: 3000, ratePercent: 4.2, avgRating: 4.79, paymentInput: 80 }).amount, 138.6, '126 x 1 x 1.1: the >=80 branch only changes the payment factor, it is not a gate');
 });
 
 // ═════════════════════════ provider signing and funding (depositEscrow) vs the admin action: REAL Postgres interleavings ═════════════════════════
@@ -911,4 +929,66 @@ test('INTERLEAVING provider signing vs the admin action in flight: refund commit
 		assert.ok(['CANCELLED/REFUNDED/CANCELLED', 'ACTIVE/HELD/IN_PROGRESS'].includes(ends) || (adm !== 200 && c.status === 'ACTIVE'), `round ${i}: consistent end state, got ${ends} (admin ${adm}, signing ${sg})`);
 		if (ends === 'CANCELLED/REFUNDED/CANCELLED') assert.equal(await walletOf(x), 100, 'refunded once'); else assert.equal(await walletOf(x), 60);
 	}
+});
+
+// ═════════════════════════ round 5: the provider ledger reconciles to the released total (no duplicated lines) ═════════════════════════
+test('PROVIDER LEDGER reconciliation: stages + settlements + administrative releases + the legacy remainder add up to EXACTLY the released total (legacy and v2, full release and release after earlier stages, consensual settlement)', opts, async () => {
+	const e = await boot(); const sa = e.sa.id; const { providerFinanceService } = await import('./provider-finance.service'); const { contractCancellationService } = await import('./contract-cancellation.service');
+	const r2c = (n: number) => Math.round(n * 100) / 100;
+	const check = async (w: W, label: string) => {
+		const wal: any = await providerFinanceService.getWallet(w.provider.id);
+		const lines = wal.transactions.filter((t: any) => t.projectId === w.project.id && t.type === 'credit');
+		const sumLines = r2c(lines.reduce((a: number, t: any) => a + t.amount, 0));
+		assert.equal(sumLines, wal.summary.availableBalance, `${label}: the ledger lines (${lines.map((t: any) => `${t.category}:${t.amount}`).join(', ')}) must equal the balance`);
+		assert.equal(wal.summary.releasedThisMonth, wal.summary.availableBalance, `${label}: month earnings = the real released total`);
+		assert.equal(wal.summary.releasedWithoutLine, 0, `${label}: nothing released without a line`);
+		return { wal, lines };
+	};
+	for (const v2 of [false, true]) for (const released of [0, 10]) {
+		const label = `${v2 ? 'v2' : 'legacy'} / earlier stages released=${released}`;
+		const w = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released, v2, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' });
+		const held = 20 - released; const c = await ctl(w, 'contracts', w.contract.id, sa);
+		assert.equal((await e.http('POST', `/admin/contracts/${w.contract.id}/release`, sa, { reason: 'صرف إداري لمطابقة السجل', expectedVersion: c.version, confirm: true, expectedHeldAmount: held }, keyOf())).status, 200, label);
+		const { lines } = await check(w, `${label} admin release`);
+		assert.equal(lines.filter((t: any) => t.category === 'ADMIN_RELEASE').length, 1, label); assert.equal(lines.filter((t: any) => t.category === 'ESCROW_RELEASE').length, 0, `${label}: no legacy remainder line is duplicated`);
+		// consensual settlement on the same shapes
+		const x = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released, v2, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' });
+		const cr = await e.prisma.contractCancellationRequest.create({ data: { id: id(), contractId: x.contract.id, projectId: x.project.id, clientId: x.client.id, providerId: x.provider.id, requestedById: x.client.id, requestedByRole: 'CLIENT', reason: 'اتفاق', status: 'AGREED_PENDING_SETTLEMENT', settlementStatus: 'PENDING_ADMIN_DECISION', respondedById: x.provider.id, respondedAt: new Date() } });
+		await contractCancellationService.settle(sa, cr.id, { releaseToProvider: r2c(held / 2), expectedHeldAmount: held, reason: 'تسوية جزئية لمطابقة السجل' });
+		const s = await check(x, `${label} consensual settlement`); assert.equal(s.lines.filter((t: any) => t.category === 'CANCELLATION_SETTLEMENT').length, 1, label); assert.equal(s.lines.filter((t: any) => t.category === 'ESCROW_RELEASE').length, 0, `${label}: no duplicated legacy remainder`);
+	}
+	// a legacy escrow released before stage tracking (no stages approved, no closure) keeps its single remainder line
+	const o = await world({ requestStatus: 'COMPLETED', contract: 'COMPLETED', escrow: 'RELEASED', released: 20, v2: false });
+	await e.prisma.projectStage.updateMany({ where: { contractId: o.contract.id }, data: { status: 'PENDING' } });
+	const ow: any = await providerFinanceService.getWallet(o.provider.id); const ol = ow.transactions.filter((t: any) => t.projectId === o.project.id);
+	assert.deepEqual(ol.map((t: any) => [t.category, t.amount]), [['ESCROW_RELEASE', 20]]); assert.equal(ow.summary.releasedThisMonth, 20);
+});
+
+test('CLIENT LEVEL: one computation for the level page, the dashboard level and cashback - from the REAL ratings providers gave the client (none = no rating); promotion needs the rating', opts, async () => {
+	const e = await boot(); const { loadClientLevelFacts, getClientLevelDetails, getClientLevelInfo } = await import('./gamification.service'); const { accrueCashbackForDeliveryCompletion } = await import('./cashback.service');
+	const mkClient = async () => { const f = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'RELEASED', released: 20, v2: true }); return f; };
+	const w = await mkClient();
+	await e.prisma.clientProfile.update({ where: { userId: w.client.id }, data: { currentPoints: 301 } });
+	for (let i = 0; i < 9; i++) await e.prisma.project.create({ data: { id: id(), title: `done ${i}`, description: 'x', specialty: 'x', deliveryDays: 5, clientId: w.client.id, status: 'COMPLETED' } });
+	const policy = { CASHBACK_ENGINE_ENABLED: 'true', CASHBACK_WALLET_TIMING: 'IMMEDIATE' } as any;
+	const accrue = (tx: any) => accrueCashbackForDeliveryCompletion(tx, { id: w.contract.id, projectId: w.project.id, clientId: w.client.id }, policy, { paymentInput: 10 });
+	// no ratings yet: points and projects are enough for level 4, the rating requirement is NOT dropped -> level 1, in every consumer
+	let f = await loadClientLevelFacts(w.client.id); assert.deepEqual([f.avgRating, f.ratingCount, f.progression.currentLevelIndex, f.progression.ratingBasis], [null, 0, 1, 'NO_RATINGS']);
+	let d: any = await getClientLevelDetails(w.client.id); assert.deepEqual([d.currentLevel.index, d.currentStats.avgRating, d.currentStats.ratingBasis], [1, null, 'NO_RATINGS']); assert.ok(d.limitations.includes('CLIENT_NO_RATINGS_YET'));
+	assert.equal((await getClientLevelInfo(w.client.id) as any).level ?? (await getClientLevelInfo(w.client.id) as any).index, 1);
+	// providers rate the client 4.0 (two ratings: 4 and 4): eligible for level 4 everywhere
+	const mkReview = (rating: number) => e.prisma.review.create({ data: { id: id(), providerId: w.provider.id, clientId: w.client.id, projectId: null, reviewerRole: 'PROVIDER', rating, comment: 'x', tags: [] } });
+	await mkReview(4); await mkReview(4);
+	f = await loadClientLevelFacts(w.client.id); assert.deepEqual([f.avgRating, f.ratingCount, f.progression.currentLevelIndex], [4, 2, 4]);
+	d = await getClientLevelDetails(w.client.id); assert.deepEqual([d.currentLevel.index, d.currentStats.avgRating, d.currentStats.cashbackRate], [4, 4, 2.5]); assert.ok(!d.limitations.includes('CLIENT_NO_RATINGS_YET'));
+	// the boundary: an average just below 4.0 holds the client at level 3
+	await e.prisma.review.deleteMany({ where: { clientId: w.client.id } }); await mkReview(4); await mkReview(3.9);
+	assert.equal((await loadClientLevelFacts(w.client.id)).progression.currentLevelIndex, 3);
+	await e.prisma.review.deleteMany({ where: { clientId: w.client.id } }); await mkReview(4); await mkReview(4);
+	// cashback reads the SAME level (excluding the project being completed): 2.5% of the 20 released
+	const out: any = await e.prisma.$transaction((tx: any) => accrue(tx)); assert.deepEqual([out.status, out.level, out.ratePercent, out.amount], ['CREDITED', 4, 2.5, 0.5]);
+	// a client with the same points / projects but NO ratings earns level 1 (1%)
+	const z = await mkClient(); await e.prisma.clientProfile.update({ where: { userId: z.client.id }, data: { currentPoints: 301 } });
+	for (let i = 0; i < 9; i++) await e.prisma.project.create({ data: { id: id(), title: `done ${i}`, description: 'x', specialty: 'x', deliveryDays: 5, clientId: z.client.id, status: 'COMPLETED' } });
+	const zo: any = await e.prisma.$transaction((tx: any) => accrueCashbackForDeliveryCompletion(tx, { id: z.contract.id, projectId: z.project.id, clientId: z.client.id }, policy, { paymentInput: 10 })); assert.deepEqual(zo, { status: 'BLOCKED', reason: 'CASHBACK_RATING_INPUT_MISSING' }, 'no ratings: level 1 for the level page, and no K41 input for cashback');
 });

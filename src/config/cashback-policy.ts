@@ -1,28 +1,54 @@
 /**
- * Client cashback policy gate. The OWNER-STATED parts are implemented (rate ladder by client level, accrual on the value actually paid and released by delivery, wallet credit, ledger).
- * Three parts of the references are NOT unambiguous and are therefore BLOCKED behind one specific reason code until the owner approves ONE option (nothing is guessed):
- *   1. the coefficients: the explanation speaks of quality / speed, the workbook (الأرباح K39:K43) uses a rating factor and a payment factor, with a label «ساعة / عكسية» and a >=80 condition;
- *   2. the >=80 condition itself (what is measured, and what happens below it);
- *   3. when the money reaches the wallet (at accrual vs after a grace period stated in the PDF).
- * `CASHBACK_ENGINE_ENABLED=true` AND `CASHBACK_APPROVED_POLICY=BASE_RATE_IMMEDIATE` is the explicit approval of: factors fixed at 1.0, no >=80 gate, credit in the accrual transaction.
- * Without both, no cashback is accrued and the caller receives the reason code. The default is OFF.
+ * Client cashback = the approved workbook «نظام النقاط و الولاء.xlsx», sheet «الأرباح» (the XLSX is the ONLY reference for values, rates, formulas and conditions):
+ *   K39  level rate                       (the client ladder of the sheet «المستويات»; level 13 = 4.6%, Levels!G47 and Earnings!D47)
+ *   K40  base cashback = qualified volume x K39
+ *   K41  rating factor  = average rating >= 4.8 -> 1.2, else >= 4 -> 1.0, else 0.8
+ *   K42  payment factor = input K38 >= 80 -> 1.1, else 1.0        (a BRANCH of the payment coefficient, never an eligibility gate)
+ *   K43  cashback       = K40 x K41 x K42
+ * Nothing here is adjusted because it looks illogical; the formulas are implemented exactly as stated.
+ *
+ * What the workbook does NOT define, so real activation stays BLOCKED behind one specific reason code each (nothing is guessed):
+ *   CASHBACK_PAYMENT_SPEED_INPUT_UNDEFINED  input K38 «سرعة السداد»: the sheet labels it «ساعة / عكسية» (value 10 in the example) while the sheet «التقييمات» defines a «سرعة السداد» score out of 100
+ *                                           (weight 30% of the receipt-stage evaluation, example 93.5). The workbook does not say which one K38 is, how it is measured from system events, nor what «عكسية» does to the >=80 test.
+ *   CASHBACK_RATING_INPUT_MISSING           K41 needs an average rating of the client; a client with NO ratings has no input (the workbook has no branch for it; a rating is never invented).
+ *   CASHBACK_WALLET_TIMING_UNDEFINED        when the money reaches the wallet is not stated in the workbook.
+ * `CASHBACK_ENGINE_ENABLED=true` is the master switch (default OFF). `CASHBACK_WALLET_TIMING=IMMEDIATE` is the owner's explicit approval of the wallet timing, nothing else.
  */
-export type CashbackBlockReason = 'CASHBACK_ENGINE_DISABLED' | 'CASHBACK_POLICY_UNAPPROVED';
-export interface CashbackPolicy { code: 'BASE_RATE_IMMEDIATE'; ratingFactor: 1; paymentFactor: 1 }
+export type CashbackBlockReason = 'CASHBACK_ENGINE_DISABLED' | 'CASHBACK_WALLET_TIMING_UNDEFINED' | 'CASHBACK_PAYMENT_SPEED_INPUT_UNDEFINED' | 'CASHBACK_RATING_INPUT_MISSING';
 
-/** the ladder source recorded on every ledger row (the single client ladder of config/levels.config.ts; the rates match P-SK-038 and the workbook except level 13, see CASHBACK_LADDER_DISCREPANCY) */
-export const CASHBACK_LADDER_SOURCE = 'levels.config:CLIENT_LEVELS@2026-10';
-/** the workbook's cashback table lists level 13 (مؤسس) as 5% while the owner-confirmed ladder (and this code) uses 4.6%: reported, not resolved here */
-export const CASHBACK_LADDER_DISCREPANCY = { level: 13, ladder: 4.6, workbook: 5 } as const;
+/** recorded on every ledger row: where the formula comes from */
+export const CASHBACK_FORMULA_CODE = 'XLSX_EARNINGS_K39_K43';
+/** the ladder = the single client ladder of config/levels.config.ts, which equals the workbook's «المستويات» table (checked cell by cell, level 13 = 4.6%) */
+export const CASHBACK_LADDER_SOURCE = 'xlsx:Levels(client)=levels.config:CLIENT_LEVELS';
 
-export const CASHBACK_OPEN_DECISIONS: ReadonlyArray<{ code: string; question: string; options: string[] }> = [
-	{ code: 'COEFFICIENTS', question: 'ما معاملات الكاش باك؟ (الجودة/السرعة في الشرح مقابل معامل التقييم ومعامل السداد في XLSX)', options: ['معاملات = 1 (النسبة الأساسية فقط)', 'معامل تقييم 1.2/1.0/0.8 (cashbackRatingFactor الموجودة غير مفعّلة) + معامل سداد غير معرّف', 'اعتماد معادلة جديدة بقيم صريحة'] },
-	{ code: 'QUALITY_GATE_80', question: 'ما شرط >=80 وما المقيس به وما الأثر دونه؟', options: ['لا شرط', 'درجة تقييم المشروع >= 80', 'درجة سرعة السداد >= 80'] },
-	{ code: 'WALLET_TIMING', question: 'متى يدخل الكاش باك المحفظة؟', options: ['فور اكتمال المشروع', 'بعد مهلة (أيام) تُحدَّد من المستند'] }
+export const CASHBACK_RATING_STEP_HIGH = 4.8;
+export const CASHBACK_RATING_STEP_BASE = 4;
+export const CASHBACK_PAYMENT_BRANCH_THRESHOLD = 80;
+
+/** K41 */
+export const cashbackRatingFactor = (avgRating: number): 1.2 | 1 | 0.8 => (avgRating >= CASHBACK_RATING_STEP_HIGH ? 1.2 : avgRating >= CASHBACK_RATING_STEP_BASE ? 1 : 0.8);
+/** K42 (K38 = the payment input) */
+export const cashbackPaymentFactor = (paymentInput: number): 1.1 | 1 => (paymentInput >= CASHBACK_PAYMENT_BRANCH_THRESHOLD ? 1.1 : 1);
+
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+/** K40 / K43, exactly as stated */
+export function computeCashback(input: { qualifiedVolume: number; ratePercent: number; avgRating: number; paymentInput: number }) {
+	const base = round2(input.qualifiedVolume * (input.ratePercent / 100)); // K40
+	const ratingFactor = cashbackRatingFactor(input.avgRating); // K41
+	const paymentFactor = cashbackPaymentFactor(input.paymentInput); // K42
+	return { base, ratingFactor, paymentFactor, amount: round2(input.qualifiedVolume * (input.ratePercent / 100) * ratingFactor * paymentFactor) }; // K43
+}
+
+/** the only questions still open (everything else is settled by the workbook) */
+export const CASHBACK_OPEN_INPUTS: ReadonlyArray<{ code: CashbackBlockReason; question: string }> = [
+	{ code: 'CASHBACK_PAYMENT_SPEED_INPUT_UNDEFINED', question: 'ما هو الإدخال K38 «سرعة السداد» وكيف يُقاس من أحداث النظام: عدد ساعات («ساعة / عكسية») أم درجة من 100 كما في ورقة «التقييمات»، وما أثر «عكسية» على اختبار >=80؟' },
+	{ code: 'CASHBACK_RATING_INPUT_MISSING', question: 'كيف يُحسب معامل التقييم K41 لعميل بلا أي تقييم (لا فرع له في الملف)؟' },
+	{ code: 'CASHBACK_WALLET_TIMING_UNDEFINED', question: 'متى يدخل الكاش باك المحفظة؟ (غير مذكور في الملف)' },
 ];
 
-export function activeCashbackPolicy(env: NodeJS.ProcessEnv = process.env): { policy: CashbackPolicy } | { blocked: CashbackBlockReason } {
-	if (env.CASHBACK_ENGINE_ENABLED !== 'true') return { blocked: 'CASHBACK_ENGINE_DISABLED' };
-	if (env.CASHBACK_APPROVED_POLICY !== 'BASE_RATE_IMMEDIATE') return { blocked: 'CASHBACK_POLICY_UNAPPROVED' };
-	return { policy: { code: 'BASE_RATE_IMMEDIATE', ratingFactor: 1, paymentFactor: 1 } };
+/** engine + wallet-timing gate (the two switches); the payment input and the rating input are checked where they are read */
+export function cashbackGate(env: NodeJS.ProcessEnv = process.env): CashbackBlockReason | null {
+	if (env.CASHBACK_ENGINE_ENABLED !== 'true') return 'CASHBACK_ENGINE_DISABLED';
+	if (env.CASHBACK_WALLET_TIMING !== 'IMMEDIATE') return 'CASHBACK_WALLET_TIMING_UNDEFINED';
+	return null;
 }

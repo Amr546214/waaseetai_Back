@@ -94,7 +94,8 @@ export function deriveProviderProgression(input: ProviderProgressionInput): Prov
 export interface RequesterProgressionInput {
   points: number;
   completedProjects: number;
-  avgRating: number;
+  /** the average of the ratings the client RECEIVED from providers; null = the client has NO ratings yet (never read as a rating of 0, never invented) */
+  avgRating: number | null;
 }
 
 export interface RequesterProgressionResult {
@@ -102,18 +103,21 @@ export interface RequesterProgressionResult {
   currentLevelTitle: string;
   currentCashbackPercent: number;
   pointsToNextLevel: number;
+  /** NO_RATINGS: the rating requirement of a level above the first cannot be met (it is not dropped and not guessed); RATED: judged on the real average */
+  ratingBasis: 'NO_RATINGS' | 'RATED';
 }
 
 /** Same rule as the provider's: the highest level whose points AND projects AND rating thresholds are all met (>=). */
 export function deriveRequesterProgression(input: RequesterProgressionInput): RequesterProgressionResult {
   const points = Math.max(0, input.points || 0);
   const completedProjects = Math.max(0, input.completedProjects || 0);
-  const avgRating = Math.max(0, input.avgRating || 0);
+  const hasRatings = typeof input.avgRating === 'number' && Number.isFinite(input.avgRating);
+  const avgRating = hasRatings ? Math.max(0, input.avgRating as number) : 0;
   let current = REQUESTER_LEVEL_MATRIX[0];
   for (let i = REQUESTER_LEVEL_MATRIX.length - 1; i >= 0; i--) {
     const level = REQUESTER_LEVEL_MATRIX[i];
-    if (points >= level.reqPoints && completedProjects >= level.reqProjects && avgRating >= level.reqRating) { current = level; break; }
+    if (points >= level.reqPoints && completedProjects >= level.reqProjects && (level.reqRating <= 0 || (hasRatings && avgRating >= level.reqRating))) { current = level; break; }
   }
   const next = REQUESTER_LEVEL_MATRIX.find(l => l.index === Math.min(current.index + 1, REQUESTER_LEVEL_MATRIX.length)) || current;
-  return { currentLevelIndex: current.index, currentLevelTitle: current.title, currentCashbackPercent: current.rate, pointsToNextLevel: Math.max(0, next.reqPoints - points) };
+  return { currentLevelIndex: current.index, currentLevelTitle: current.title, currentCashbackPercent: current.rate, pointsToNextLevel: Math.max(0, next.reqPoints - points), ratingBasis: hasRatings ? 'RATED' : 'NO_RATINGS' };
 }

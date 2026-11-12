@@ -157,29 +157,37 @@ class GamificationService {
 
 
 // ── طالب الخدمة: the client's own level view, from the single ladder. ──
-// Client points are not awarded by any event yet and there is no rating OF a client in the data, so the view says so instead of inventing progress.
-/** The client's current level as the shared LevelInfo (points + completed projects through the single ladder). */
-export async function getClientLevelInfo(userId: string) {
-  const [profile, completedProjects] = await Promise.all([
-    prisma.clientProfile.findUnique({ where: { userId }, select: { currentPoints: true } }),
-    prisma.project.count({ where: deliveryCompletedProject({ clientId: userId }) })
+// Client points are not awarded by any event yet; the rating requirement uses the REAL ratings providers gave the client (none yet = no rating, never 0), so the view says so instead of inventing progress.
+/**
+ * The ONE place a client's level inputs are read (the level page, the dashboard / profile level info and cashback all use it): points, completed-by-delivery projects, and the REAL average of the ratings
+ * the client received from providers (reviews with reviewerRole PROVIDER about this client). No ratings = avgRating null (never 0). `excludeProjectId` leaves one project out of the count (the level BEFORE it completed).
+ */
+export async function loadClientLevelFacts(userId: string, opts: { excludeProjectId?: string } = {}, db: any = prisma) {
+  const [profile, completedProjects, ratings] = await Promise.all([
+    db.clientProfile.findUnique({ where: { userId }, select: { currentPoints: true } }),
+    db.project.count({ where: deliveryCompletedProject({ clientId: userId, ...(opts.excludeProjectId ? { id: { not: opts.excludeProjectId } } : {}) }) }),
+    db.review?.aggregate ? db.review.aggregate({ where: { clientId: userId, reviewerRole: 'PROVIDER' }, _avg: { rating: true }, _count: { _all: true } }) : Promise.resolve(null)
   ]);
-  const progression = deriveRequesterProgression({ points: Math.max(0, profile?.currentPoints || 0), completedProjects, avgRating: 0 });
-  return levelInfo('CLIENT', progression.currentLevelIndex);
+  const ratingCount: number = ratings?._count?._all ?? 0;
+  const avg = ratings?._avg?.rating;
+  const avgRating: number | null = ratingCount > 0 && typeof avg === 'number' ? avg : null;
+  const points = Math.max(0, profile?.currentPoints || 0);
+  return { points, completedProjects, avgRating, ratingCount, progression: deriveRequesterProgression({ points, completedProjects, avgRating }) };
+}
+
+/** The client's current level as the shared LevelInfo (points + completed projects + the real rating through the single ladder). */
+export async function getClientLevelInfo(userId: string) {
+  const f = await loadClientLevelFacts(userId);
+  return levelInfo('CLIENT', f.progression.currentLevelIndex);
 }
 
 export async function getClientLevelDetails(userId: string) {
-  const [profile, completedProjects] = await Promise.all([
-    prisma.clientProfile.findUnique({ where: { userId }, select: { currentPoints: true } }),
-    prisma.project.count({ where: deliveryCompletedProject({ clientId: userId }) })
-  ]);
-  const points = Math.max(0, profile?.currentPoints || 0);
-  const progression = deriveRequesterProgression({ points, completedProjects, avgRating: 0 });
+  const { points, completedProjects, avgRating, ratingCount, progression } = await loadClientLevelFacts(userId);
   const current = REQUESTER_LEVEL_MATRIX.find(l => l.index === progression.currentLevelIndex) || REQUESTER_LEVEL_MATRIX[0];
   const maxIndex = REQUESTER_LEVEL_MATRIX[REQUESTER_LEVEL_MATRIX.length - 1].index;
   const next = REQUESTER_LEVEL_MATRIX.find(l => l.index === Math.min(current.index + 1, maxIndex)) || current;
   return {
-    currentStats: { points, completedProjects, avgRating: null, cashbackRate: current.rate },
+    currentStats: { points, completedProjects, avgRating, ratingCount, ratingBasis: progression.ratingBasis, cashbackRate: current.rate },
     currentLevel: { index: current.index, title: current.title },
     nextLevelProgress: {
       title: next.title,
@@ -196,7 +204,7 @@ export async function getClientLevelDetails(userId: string) {
       isCurrent: l.index === current.index
     })),
     // what is not live yet, so the page can say it (no fake progress): points events and a client rating do not exist
-    limitations: ['CLIENT_POINTS_NOT_AWARDED', 'CLIENT_RATING_NOT_AVAILABLE', 'CASHBACK_NOT_CREDITED_YET']
+    limitations: ['CLIENT_POINTS_NOT_AWARDED', ...(ratingCount === 0 ? ['CLIENT_NO_RATINGS_YET'] : []), 'CASHBACK_NOT_CREDITED_YET']
   };
 }
 

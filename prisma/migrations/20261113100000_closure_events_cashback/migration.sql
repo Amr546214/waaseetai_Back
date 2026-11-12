@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS "client_cashback_entries" (
   "ratePercent" DOUBLE PRECISION NOT NULL,
   "ladderSource" VARCHAR(80) NOT NULL,
   "policyCode" VARCHAR(40) NOT NULL,
+  "ratingInput" DOUBLE PRECISION NOT NULL,
+  "paymentInput" DOUBLE PRECISION NOT NULL,
   "ratingFactor" DOUBLE PRECISION NOT NULL DEFAULT 1,
   "paymentFactor" DOUBLE PRECISION NOT NULL DEFAULT 1,
   "amount" DOUBLE PRECISION NOT NULL,
