@@ -11,6 +11,7 @@ import { isAffiliateCommissionEngineEnabled, affiliateCommissionAllowedReferralI
 // @@unique([affiliateId, referralId, type, sourceStageId]) and the
 // migration (applied by hand on DEV 2026-10-11; LIVE applied by the team) prisma/migrations/
 // 20260930100000_add_affiliate_commission_fields/migration.sql.
+const round2c = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const COMMISSION_DEDUP_CONSTRAINT = 'commission_logs_affiliateId_referralId_type_sourceStageId_key';
 const COMMISSION_DEDUP_FIELDS = ['affiliateId', 'referralId', 'type', 'sourceStageId'];
 
@@ -96,7 +97,13 @@ export function calculateAffiliateCommission(level: number, baseAmount: number, 
 
 export interface StageReleaseCommissionContext {
   contract: { id: string; projectId: string; clientId: string; providerId: string };
-  stageId: string;
+  /** a stage approval's release: the stage is the financial-event identity */
+  stageId?: string;
+  /**
+   * funds released OUTSIDE a stage approval (administrative release, consensual-cancellation settlement): the id of the EngagementClosure that released them is the financial-event identity.
+   * Exactly one of stageId / eventId is given; a stage is never invented for an event.
+   */
+  eventId?: string;
   releasedAmount: number;
 }
 
@@ -130,11 +137,13 @@ export interface StageReleaseCommissionContext {
  */
 export async function createCommissionsForStageReleaseEvent(
   tx: Prisma.TransactionClient,
-  { contract, stageId, releasedAmount }: StageReleaseCommissionContext
+  { contract, stageId, eventId, releasedAmount }: StageReleaseCommissionContext
 ): Promise<MarketerCommissionNotice[]> {
   // The commissions written by this call, so the caller can tell each marketer AFTER its transaction has committed (never from inside it).
   const created: MarketerCommissionNotice[] = [];
   if (!isAffiliateCommissionEngineEnabled()) return created;
+  if (!!stageId === !!eventId) throw new Error('commission source: exactly one of stageId / eventId is required');
+  if (!(releasedAmount > 0)) return created; // nothing newly released to the provider = nothing to commission (a refunded part never earns one)
 
   const activeDispute = await tx.dispute.findFirst({
     where: {
@@ -171,6 +180,19 @@ export async function createCommissionsForStageReleaseEvent(
 
     const { percentage, amount, level } = calculateAffiliateCommission(referral.affiliate.level, releasedAmount, ladder);
 
+    // Allocation ledger check (event path): what was already commissioned on this project (its commission rows ARE the allocation ledger) plus this release can never exceed what the escrow really
+    // released, so an amount that earned a commission before is never counted again and a refunded part is never counted at all.
+    if (eventId) {
+      const [already, escrowNow] = await Promise.all([
+        tx.commissionLog.aggregate({ where: { sourceProjectId: contract.projectId, affiliateId: referral.affiliate.id, referralId: referral.id }, _sum: { baseAmount: true } }),
+        tx.escrow.findFirst({ where: { projectId: contract.projectId }, select: { releasedAmount: true } })
+      ]);
+      if (round2c((already._sum.baseAmount ?? 0) + releasedAmount) > round2c((escrowNow?.releasedAmount ?? 0) + 0.005)) {
+        logger.warn(`[affiliate] project ${contract.projectId}: event ${eventId} skipped, the commissioned base would exceed the amount actually released`);
+        continue;
+      }
+    }
+
     // Exactly-once WITHOUT aborting the caller's transaction: a duplicate insert that raises a unique violation inside a PostgreSQL transaction puts the whole
     // transaction into the aborted state (25P02) even when the error is caught, so the rest of the stage approval would fail. INSERT ... ON CONFLICT DO NOTHING
     // (createMany + skipDuplicates) on the same unique index reports "already processed" as count 0 and leaves the transaction healthy.
@@ -195,7 +217,8 @@ export async function createCommissionsForStageReleaseEvent(
           // existing 300-minimum floor), not PENDING.
           status: CommissionStatus.APPROVED,
           sourceProjectId: contract.projectId,
-          sourceStageId: stageId,
+          sourceStageId: stageId ?? null,
+          sourceEventId: eventId ?? null,
           baseAmount: releasedAmount,
           appliedPercentage: percentage,
           level

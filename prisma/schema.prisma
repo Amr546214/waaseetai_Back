@@ -794,6 +794,7 @@ model Project {
   proposals        Proposal[]
   projectProposals ProjectProposal[]
   savedBy          SavedProject[]
+  engagementClosure EngagementClosure?
   escrow           Escrow?
   contract         Contract?
   conversations    Conversation[]
@@ -1863,6 +1864,9 @@ model CommissionLog {
   // also part of the exactly-once dedup key below.
   sourceProjectId String?
   sourceStageId   String?
+  // Financial-event identity for funds released OUTSIDE a stage approval (administrative release, consensual-cancellation settlement): the id of the EngagementClosure that released them.
+  // NULL for a stage release (sourceStageId identifies it). Exactly-once for these is a partial unique index in migration 20261113100000 (affiliateId, referralId, type, sourceEventId).
+  sourceEventId   String?
 
   // Durable snapshots taken AT CREATION TIME — never recomputed later, even
   // if the affiliate's level/percentage subsequently changes.
@@ -1886,6 +1890,7 @@ model CommissionLog {
   // collapse every stage of the same project into a single one-time payout.
   @@unique([affiliateId, referralId, type, sourceStageId])
   @@index([affiliateId, status])
+  @@index([sourceEventId])
   @@map("commission_logs")
 }
 
@@ -3447,4 +3452,58 @@ model AdminActionIdempotency {
   @@unique([adminId, key])
   @@index([entityType, entityId])
   @@map("admin_action_idempotency")
+}
+
+
+/// The final, explicit record of HOW an engagement was closed by a NEW decision (migration 20261113100000_closure_events_cashback). It is stored separately from the dispute and from the
+/// cancellation request: their state and history are untouched. kind: ADMIN_RELEASE | ADMIN_REFUND | ADMIN_CANCEL | CONSENSUAL_CANCEL. `id` is also the financial-event identity of the money it moved.
+model EngagementClosure {
+  id                    String   @id @default(uuid())
+  projectId             String   @unique
+  project               Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contractId            String?
+  requestId             String?
+  kind                  String   @db.VarChar(30)
+  source                String   @db.VarChar(30)
+  reason                String?  @db.VarChar(500)
+  decidedById           String
+  cancellationRequestId String?
+  escrowId              String?
+  heldBefore            Float    @default(0)
+  refundToClient        Float    @default(0)
+  releaseToProvider     Float    @default(0)
+  platformCommission    Float    @default(0)
+  providerNet           Float    @default(0)
+  feePolicyVersion      Int?
+  currency              String   @default("USD")
+  createdAt             DateTime @default(now())
+
+  @@index([contractId])
+  @@index([kind])
+  @@map("engagement_closures")
+}
+
+/// Client cashback ledger (migration 20261113100000_closure_events_cashback): one durable row per contract that earned it, tied to the contract / financial event, the ladder source + level + rate
+/// used and the wallet credit. `eventKey` and `contractId` are unique: a retry, a replay or a parallel twin can never accrue twice. Points are not money and never appear here.
+model ClientCashbackEntry {
+  id             String   @id @default(uuid())
+  userId         String
+  contractId     String   @unique
+  projectId      String
+  eventKey       String   @unique
+  eligibleValue  Float
+  level          Int
+  ratePercent    Float
+  ladderSource   String   @db.VarChar(80)
+  policyCode     String   @db.VarChar(40)
+  ratingFactor   Float    @default(1)
+  paymentFactor  Float    @default(1)
+  amount         Float
+  currency       String   @default("USD")
+  walletReference String  @unique
+  status         String   @default("CREDITED") @db.VarChar(20)
+  createdAt      DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("client_cashback_entries")
 }

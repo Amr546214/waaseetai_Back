@@ -3,7 +3,7 @@ import { prisma } from '../config/db';
 import { IN_FLIGHT_WITHDRAWAL_STATUSES, SPENT_WITHDRAWAL_STATUSES, RESERVING_WITHDRAWAL_STATUSES } from '../utils/withdrawal-reservation';
 import { round2, sumMoney } from '../utils/money';
 import { SETTLED_DISPUTE_WHERE } from './settlement-state.service';
-import { cancellationSettlementBreakdown, escrowFundedBreakdown, grossCard, legacyEscrowReleaseBreakdown, NOT_FOUND_TX, pageOf, stageReleaseBreakdown, stateCard, valueCard } from './wallet-breakdown';
+import { adminReleaseBreakdown, cancellationSettlementBreakdown, escrowFundedBreakdown, grossCard, legacyEscrowReleaseBreakdown, NOT_FOUND_TX, pageOf, stageReleaseBreakdown, stateCard, valueCard } from './wallet-breakdown';
 import { AppError } from '../utils/app-error';
 import { isV2Escrow, providerReleased, providerNetEntitlement, splitRelease } from '../utils/escrow-commission';
 
@@ -25,6 +25,7 @@ export class ProviderFinanceService {
             title: true,
             status: true,
             disputes: { where: SETTLED_DISPUTE_WHERE, select: { id: true }, take: 1 },
+            engagementClosure: { select: { id: true, kind: true, source: true, reason: true, releaseToProvider: true, platformCommission: true, providerNet: true, createdAt: true } },
             contract: {
               select: {
                 id: true,
@@ -132,7 +133,32 @@ export class ProviderFinanceService {
       createdAt: r.settledAt ?? r.updatedAt,
       breakdown: cancellationSettlementBreakdown(r, escrows.find(e => e.project.id === r.projectId))
     }));
-    const transactions = [...stageTransactions, ...legacyTransactions, ...cancellationTransactions]
+    // An administrative release credits the provider through the escrow (already in availableBalance); this line shows it with gross / commission / net / contract / reason / source.
+    // It has NO stage: the line carries no stageId. Withdrawal availability is unchanged (the money is withdrawable like any released earning).
+    const adminReleaseTransactions = escrows.flatMap(escrow => {
+      const cl = (escrow.project as any).engagementClosure;
+      if (!cl || cl.kind !== 'ADMIN_RELEASE' || !(cl.releaseToProvider > 0)) return [];
+      return [{
+        id: `admin-release-${cl.id}`,
+        type: 'credit' as const,
+        category: 'ADMIN_RELEASE' as const,
+        amount: round2(cl.providerNet),
+        grossAmount: round2(cl.releaseToProvider), platformCommission: round2(cl.platformCommission ?? 0),
+        currency: 'USD',
+        title: 'صرف إداري للضمان',
+        description: `${escrow.project.title} · صُرف المبلغ المحتجز بقرار إداري${cl.reason ? ` · السبب: ${cl.reason}` : ''}`,
+        projectId: escrow.project.id,
+        projectTitle: escrow.project.title,
+        contractId: escrow.project.contract?.id ?? null,
+        stageId: null,
+        source: cl.source as string,
+        reason: cl.reason as string | null,
+        status: 'COMPLETED' as const,
+        createdAt: cl.createdAt as Date,
+        breakdown: adminReleaseBreakdown(cl, escrow)
+      }];
+    });
+    const transactions = [...stageTransactions, ...legacyTransactions, ...cancellationTransactions, ...adminReleaseTransactions]
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     const monthStart = new Date();
     monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
@@ -141,11 +167,11 @@ export class ProviderFinanceService {
     // availableBalance that has no line (e.g. a dispute-resolution release) is reported, not hidden.
     const itemisedNet = sumMoney(transactions.map(tx => tx.amount));
     const releasedWithoutLine = round2(Math.max(0, availableBalance - itemisedNet));
-    const gross = grossCard('المبلغ قبل الخصومات', ['STAGE_RELEASE', 'ESCROW_RELEASE', 'CANCELLATION_SETTLEMENT'], transactions,
+    const gross = grossCard('المبلغ قبل الخصومات', ['STAGE_RELEASE', 'ESCROW_RELEASE', 'CANCELLATION_SETTLEMENT', 'ADMIN_RELEASE'], transactions,
       releasedWithoutLine > 0.005 ? `لا يشمل ${releasedWithoutLine} $ أُفرجت بقرار نزاع ولا يوجد لها بند تفصيلي` : 'مجموع الدفعات المُفرَجة قبل عمولة المنصة');
     if (releasedWithoutLine > 0.005) gross.complete = false;
     const cards = {
-      availableToWithdraw: valueCard('المتاح للسحب', withdrawableBalance, { covers: ['STAGE_RELEASE', 'ESCROW_RELEASE', 'CANCELLATION_SETTLEMENT'], note: 'بعد خصم طلبات السحب المعلّقة والمدفوعة' }),
+      availableToWithdraw: valueCard('المتاح للسحب', withdrawableBalance, { covers: ['STAGE_RELEASE', 'ESCROW_RELEASE', 'CANCELLATION_SETTLEMENT', 'ADMIN_RELEASE'], note: 'بعد خصم طلبات السحب المعلّقة والمدفوعة' }),
       pendingWithdrawals: valueCard('طلبات سحب معلّقة', pendingWithdrawals),
       grossBeforeDeductions: gross,
       heldInEscrow: valueCard('محجوز في الضمان', escrowBalance, { covers: ['ESCROW_FUNDED'] }),
@@ -168,7 +194,7 @@ export class ProviderFinanceService {
         releasedThisMonth: sumMoney(transactions.filter(tx => tx.createdAt >= monthStart).map(tx => tx.amount)),
         releasedTransactionsCount: transactions.length,
         fundedProjectsCount: escrows.filter(escrow => escrow.status === 'HELD' && (escrow.project.contract?.price || escrow.amount) > escrow.releasedAmount).length,
-        completedProjectsCount: escrows.filter(escrow => escrow.project.status === 'COMPLETED' && !(escrow.project.disputes?.length)).length,
+        completedProjectsCount: escrows.filter(escrow => escrow.project.status === 'COMPLETED' && !(escrow.project.disputes?.length) && !(escrow.project as any).engagementClosure).length,
         currency: 'USD' // active escrow/contract pricing pipeline is now USD-semantic
       },
       transactions,

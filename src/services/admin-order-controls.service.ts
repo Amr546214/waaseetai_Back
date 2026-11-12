@@ -9,6 +9,8 @@ import { ADMIN_CONTROL_REASONS, AdminControlAction, AdminControlReason, adminCon
 import { AdminActor, actorHas } from './admin-access.service';
 import { adminAudit } from './admin-audit.service';
 import { heldEscrowAmount } from './dispute.service';
+import { recordEngagementClosure } from './engagement-closure.service';
+import { marketerNotifications } from './marketer-notifications.service';
 import { ACTIVE_DISPUTE_STATUSES, lockProjectForFreezeCheck } from './dispute-freeze.service';
 import { notificationService, CreateNotificationInput } from './notification.service';
 import { CLIENT_ROUTES } from './client-notifications.service';
@@ -79,6 +81,8 @@ interface World {
 	request: any | null; project: any | null; contract: any | null; escrow: any | null; offers: any[];
 	activeDisputes: number; agreedCancellation: boolean; openCancellations: number; openAmendments: number;
 	held: number;
+	/** partner commissions already accrued on this project (stage releases and earlier events): shown to the admin because a refund / cancellation has NO approved clawback rule */
+	commissionsAccrued: { amount: number; count: number };
 }
 
 const ROW_LOCK = {
@@ -101,7 +105,9 @@ async function loadWorld(db: Db, projectId: string): Promise<World> {
 		openAmendments = await db.projectAmendment.count({ where: { contractId: contract.id, status: AmendmentStatus.PENDING_OTHER_PARTY } });
 	}
 	const held = escrow ? round2(heldEscrowAmount(escrow, contract?.price) ?? 0) : 0;
-	return { projectId, request, project, contract, escrow, offers, activeDisputes, agreedCancellation, openCancellations, openAmendments, held };
+	const comm = typeof (db as any).commissionLog?.aggregate === 'function' ? await db.commissionLog.aggregate({ where: { sourceProjectId: projectId }, _sum: { amount: true }, _count: { _all: true } }) : null;
+	const commissionsAccrued = { amount: round2(comm?._sum?.amount ?? 0), count: comm?._count?._all ?? 0 };
+	return { projectId, request, project, contract, escrow, offers, activeDisputes, agreedCancellation, openCancellations, openAmendments, held, commissionsAccrued };
 }
 
 // optimistic versions: change whenever something that decides the action changes
@@ -365,7 +371,13 @@ export class AdminOrderControlsService {
 			settlement: w.held > 0 && act === 'CONTRACT_CANCEL' ? { options: [], blocked: { code: 'CANCELLATION_SETTLEMENT_NOT_APPROVED' } } : null,
 			after: { contractStatus: c ? (act === 'ESCROW_RELEASE' ? 'COMPLETED' : 'CANCELLED') : null, projectStatus: act === 'ESCROW_RELEASE' ? 'COMPLETED' : 'CANCELLED', requestStatus: act === 'ESCROW_RELEASE' ? 'COMPLETED' : 'CANCELLED', escrowStatus: !moves || act === 'CONTRACT_CANCEL' ? (e?.status ?? null) : release ? 'RELEASED' : 'REFUNDED' },
 			parties: { client: c ? { id: c.clientId, name: fullName(c.client) } : null, provider: c ? { id: c.providerId, name: fullName(c.provider) } : null },
-			effects
+			effects,
+			commissionImpact: {
+				alreadyAccrued: w.commissionsAccrued,
+				// a refund / cancellation does not claw back what already accrued: no approved rule exists (specific conflict, nothing is deducted)
+				clawback: w.commissionsAccrued.count > 0 && act !== 'ESCROW_RELEASE' ? { code: 'COMMISSION_CLAWBACK_POLICY_UNDEFINED', applied: false } : null,
+				onThisDecision: release ? 'ACCRUES_ON_PROVIDER_SHARE_IF_REFERRED_CLIENT' : 'NONE'
+			}
 		};
 	}
 
@@ -616,6 +628,17 @@ export class AdminOrderControlsService {
 			await tx.projectProposal.updateMany({ where: { id: { in: toClose.map(x => x.id) } }, data: { status: ProposalStatus.REJECTED, adminSuspendedAt: null, adminSuspendedById: null, adminSuspendReason: null } });
 			await tx.proposal.updateMany({ where: { OR: [{ projectId: w.projectId }, { clientRequestId: w.projectId }], status: { in: OPEN_OFFER_STATUSES } }, data: { status: ProposalStatus.REJECTED } });
 		}
+		// The explicit closure record (separate from any dispute / cancellation request) + the partner commission on a newly released provider share, through the shared engine with this closure as the financial event.
+		let commissionNotices: any[] = [];
+		if (w.project) {
+			const kind = o.mode === 'RELEASE' ? 'ADMIN_RELEASE' : o.mode === 'REFUND' ? 'ADMIN_REFUND' : 'ADMIN_CANCEL';
+			const rec = await recordEngagementClosure(tx, {
+				projectId: w.projectId, contractId: c?.id ?? null, requestId: w.request?.id ?? null, kind, source: 'ADMIN_DECISION', reason: o.reason, decidedById: o.adminId,
+				escrowId: e?.id ?? null, feePolicyVersion: e?.feePolicyVersion ?? null, heldBefore: money.heldBefore, refundToClient: money.refundToClient, releaseToProvider: money.releaseToProvider,
+				platformCommission: money.platformCommission, providerNet: money.providerNet
+			}, c ? { id: c.id, projectId: w.projectId, clientId: c.clientId, providerId: c.providerId } : null);
+			commissionNotices = rec.commissionNotices;
+		}
 		const eventType = o.entity === 'REQUEST' ? 'REQUEST_CANCELLED_BY_ADMIN' : o.mode === 'REFUND' ? 'ESCROW_REFUNDED_BY_ADMIN' : o.mode === 'RELEASE' ? 'ESCROW_RELEASED_BY_ADMIN' : 'CONTRACT_CANCELLED_BY_ADMIN';
 		const titles: Record<string, string> = { REQUEST_CANCELLED_BY_ADMIN: 'إلغاء طلب من الإدارة', ESCROW_REFUNDED_BY_ADMIN: 'إعادة الضمان للعميل بقرار إداري', ESCROW_RELEASED_BY_ADMIN: 'صرف الضمان لمقدم الخدمة بقرار إداري', CONTRACT_CANCELLED_BY_ADMIN: 'إلغاء عقد من الإدارة' };
 		await adminAudit.recordTx(tx, {
@@ -634,7 +657,7 @@ export class AdminOrderControlsService {
 		const sets: CreateNotificationInput[] = [];
 		if (clientId) sets.push({ userId: clientId, title: completed ? 'أُغلق مشروعك بقرار إداري' : 'أُلغي طلبك/عقدك بقرار إداري', message: text, category: c ? NotificationCategory.FINANCIAL : NotificationCategory.PROJECTS, type: 'ADMIN_ENGAGEMENT_CLOSED', actionUrl: CLIENT_ROUTES.request(w.projectId), actionText: 'عرض الطلب', metadata: { requestId: w.projectId, contractId: c?.id ?? null, refundToClient: money.refundToClient } });
 		for (const p of providerIds) sets.push({ userId: p, title: completed ? 'أُغلق مشروعك بقرار إداري' : 'أُلغي طلب/عقد مرتبط بعرضك', message: text, category: c ? NotificationCategory.FINANCIAL : NotificationCategory.OFFERS, type: 'ADMIN_ENGAGEMENT_CLOSED', actionUrl: c && p === c.providerId ? PROVIDER_ROUTES.projectProgress(w.projectId) : PROVIDER_ROUTES.offers, actionText: 'عرض التفاصيل', metadata: { requestId: w.projectId, contractId: c?.id ?? null, releaseToProvider: p === c?.providerId ? money.providerNet : 0 } });
-		return { contractStatus, requestStatus: completed ? 'COMPLETED' : 'CANCELLED', settlement: moves ? { ...money, choice: o.settlement ?? o.mode } : null, offersClosed: completed ? 0 : toClose.length, after: async () => notifyEach(sets) };
+		return { contractStatus, requestStatus: completed ? 'COMPLETED' : 'CANCELLED', settlement: moves ? { ...money, choice: o.settlement ?? o.mode } : null, offersClosed: completed ? 0 : toClose.length, after: async () => { await notifyEach(sets); if (commissionNotices.length) { try { await marketerNotifications.commissionsApproved(commissionNotices); } catch (e) { logger.error(`[admin-order-controls] partner commission notice failed: ${(e as Error)?.message}`); } } } };
 	}
 }
 

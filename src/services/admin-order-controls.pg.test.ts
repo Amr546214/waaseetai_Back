@@ -49,6 +49,7 @@ async function world(o: { requestStatus?: string; contract?: string; escrow?: 'H
 		w.contract = await prisma.contract.create({ data: { id: id(), projectId: rid, clientId: client.id, providerId: provider.id, offerId: offer.id, price: 20, durationDays: 14, phasesCount: 2, status: o.contract as any, signedAt: o.contract === 'ACTIVE' ? new Date() : null } });
 		const released = o.released ?? 0;
 		if (o.escrow) w.escrow = await prisma.escrow.create({ data: { id: id(), projectId: rid, amount: 20, status: o.escrow as any, releasedAmount: released, fundedAt: new Date(), ...(o.v2 ? { feePolicyVersion: 2, providerCommissionRateSnapshot: 12.75, providerCommissionLevelSnapshot: 1, platformCommissionAmount: Math.round(released * 12.75) / 100, providerNetReleasedAmount: released - Math.round(released * 12.75) / 100 } : {}) } });
+		await prisma.project.update({ where: { id: rid }, data: { providerId: provider.id } }); // set when the provider signs, in a real engagement
 		// the legacy Proposal mirror every real engagement has: the existing close-out flows reach the request THROUGH it (clientRequest.updateMany where proposals some projectId)
 		await prisma.proposal.create({ data: { id: id(), projectId: rid, clientRequestId: rid, providerId: provider.id, price: 20, deliveryDays: 4, status: 'ACCEPTED' } });
 		await prisma.projectStage.create({ data: { id: id(), contractId: w.contract.id, stepOrder: 1, title: 'S1', days: 7, percentage: 50, amount: 10, status: released ? 'APPROVED' : 'IN_PROGRESS' } });
@@ -582,7 +583,7 @@ test('LOCK ORDER consensual-cancellation settlement: forced interleaving (freeze
 		({ w, cr } = await mk()); r = await adminInFlight(w, () => contractCancellationService.settle(w.e.sa.id, cr.id, input), rollback ? freezeIt(w) : noop, { rollback });
 		assert.ok(!r.err, `settlement completes: ${r.err?.message}`);
 		s = JSON.parse(await snap(w)); assert.equal(s.escrow.releasedAmount, 5); assert.equal(s.wtx, 1, 'the refund row exists once'); assert.equal(s.wallets.find((x: any) => x.walletBalance > 0).walletBalance, 15);
-		assert.deepEqual([s.contract.status, s.request.status], ['CANCELLED', 'COMPLETED']); // existing policy of this flow, unchanged
+		assert.deepEqual([s.contract.status, s.request.status, s.project.status], ['CANCELLED', 'CANCELLED', 'CANCELLED']); // a mutual cancellation ends as a cancellation, even with a paid-out provider share
 		assert.equal(await w.e.prisma.accountAuditLog.count({ where: { eventType: 'CANCELLATION_SETTLED', context: { path: ['entityId'], equals: cr.id } } }), 1);
 	}
 });
@@ -644,4 +645,270 @@ test('LOCK ORDER static: every flow that locks the contract and then writes the 
 	first(d, 'await lockRequestRow(tx, target.requestId ?? target.projectId)', 'if (target.projectId) await lockProjectForFreezeCheck');
 	first(d, 'await lockRequestRow(tx, projectId)', 'if (!(await lockProjectForFreezeCheck(tx, projectId))) throw new AppError(\'لا يوجد عقد وضمان مرتبطان');
 	assert.match(read('services/lock-order.ts'), /CANONICAL ROW-LOCK ORDER/);
+});
+
+// ═════════════════════════ round 4: closure marker, display / counters / rating / ledger, partner commission, cashback ═════════════════════════
+const withEnvVars = async <T>(vars: Record<string, string | undefined>, fn: () => Promise<T>): Promise<T> => {
+	const prev: Record<string, string | undefined> = {};
+	for (const [k, v] of Object.entries(vars)) { prev[k] = process.env[k]; if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+	try { return await fn(); } finally { for (const [k, v] of Object.entries(prev)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+};
+const actorOf = async (e: any, userId: string, type = 'SUPER_ADMIN') => (await import('./admin-access.service')).resolveAdminActor(userId, type, e.prisma);
+const ENGINE_ON = { AFFILIATE_COMMISSION_ENGINE_ENABLED: 'true', AFFILIATE_COMMISSION_ENGINE_ALLOWED_REFERRAL_IDS: undefined };
+async function referredClient(w: W, level = 1) {
+	const u = await w.e.prisma.user.create({ data: { id: id(), accountType: 'MARKETING_BROKER', firstName: 'QA', lastName: 'aff', email: `aff-${w.tag}-${id().slice(0, 5)}@pg.test`, roles: ['AFFILIATE'], activeRole: 'AFFILIATE' } });
+	const profile = await w.e.prisma.affiliateProfile.create({ data: { userId: u.id, level } });
+	const referral = await w.e.prisma.referral.create({ data: { affiliateId: profile.id, referredUserId: w.client.id } });
+	return { user: u, profile, referral };
+}
+const commissions = (w: W) => w.e.prisma.commissionLog.findMany({ where: { sourceProjectId: w.project.id }, orderBy: { createdAt: 'asc' } });
+
+test('ADMIN RELEASE: explicit closure marker; lifecycle says «أُغلق بصرف إداري», not completed by delivery; not a delivery-completed project; no rating; stages untouched', opts, async () => {
+	const e = await boot(); const sa = e.sa.id;
+	const w = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released: 10, v2: true, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' });
+	const stagesBefore = JSON.stringify(await e.prisma.projectStage.findMany({ where: { contractId: w.contract.id }, orderBy: { stepOrder: 'asc' }, select: { status: true, amount: true } }));
+	const c = await ctl(w, 'contracts', w.contract.id, sa);
+	const r = await e.http('POST', `/admin/contracts/${w.contract.id}/release`, sa, { reason: 'صرف إداري موثّق للاختبار', expectedVersion: c.version, confirm: true, expectedHeldAmount: 10 }, keyOf());
+	assert.equal(r.status, 200, JSON.stringify(r.json));
+	const cl = await e.prisma.engagementClosure.findUnique({ where: { projectId: w.project.id } });
+	assert.deepEqual([cl.kind, cl.source, cl.decidedById, cl.cancellationRequestId, Number(cl.releaseToProvider), Number(cl.heldBefore)], ['ADMIN_RELEASE', 'ADMIN_DECISION', sa, null, 10, 10]);
+	assert.equal(await e.prisma.projectStage.count({ where: { contractId: w.contract.id, status: 'APPROVED' } }), 1, 'no stage was approved by the release');
+	assert.equal(JSON.stringify(await e.prisma.projectStage.findMany({ where: { contractId: w.contract.id }, orderBy: { stepOrder: 'asc' }, select: { status: true, amount: true } })), stagesBefore, 'stage rows untouched');
+	// lifecycle (admin read model + the shared lifecycle used by both parties)
+	const detail = (await e.http('GET', `/admin/projects/${w.project.id}`, sa)).data;
+	assert.equal(detail.lifecycle.operationalStatus, 'CLOSED_BY_ADMIN_RELEASE'); assert.equal(detail.lifecycle.closureLabel, 'أُغلق بصرف إداري'); assert.equal(detail.lifecycle.completedByDelivery, false);
+	assert.equal(detail.closure.kind, 'ADMIN_RELEASE'); assert.equal(detail.closure.label, 'أُغلق بصرف إداري'); assert.match(detail.closure.note, /لا يُحتسب تسليمًا مكتملًا/);
+	const { loadLifecycle } = await import('./project-lifecycle.service');
+	for (const role of ['client', 'provider'] as const) { const lc: any = await loadLifecycle(w.project.id, { userId: role === 'client' ? w.client.id : w.provider.id, role }); assert.equal(lc.lifecycle.operationalStatus, 'CLOSED_BY_ADMIN_RELEASE', role); assert.equal(lc.lifecycle.completedByDelivery, false, role); }
+	const lst = (await e.http('GET', '/admin/projects?limit=50', sa)).data.items.find((p: any) => p.id === w.project.id); assert.equal(lst.lifecycle.operationalLabel, 'أُغلق بصرف إداري');
+	// counters: not a delivery-completed project (provider / client / admin counters all use this one filter)
+	const { deliveryCompletedProject } = await import('./settlement-state.service');
+	assert.equal(await e.prisma.project.count({ where: deliveryCompletedProject({ providerId: w.provider.id }) }), 0); assert.equal(await e.prisma.project.count({ where: deliveryCompletedProject({ clientId: w.client.id }) }), 0);
+	assert.equal((await e.prisma.project.findUnique({ where: { id: w.project.id } })).status, 'COMPLETED');
+	// no rating of the delivery
+	const { ratingService } = await import('./rating.service');
+	const st: any = await ratingService.getStatus(w.project.id, w.client.id, 'client'); assert.equal(st.canRate, false); assert.equal(st.reason, 'ADMIN_CLOSED'); assert.match(st.message, /لا يفتح تقييم التسليم/);
+	await assert.rejects(() => ratingService.rateRequest(w.project.id, w.client.id, 'client', { rating: 5, comment: 'ممتاز جدا', tags: [] } as any), (er: any) => er.statusCode === 409);
+	// no completion points were granted
+	assert.equal(await e.prisma.pointTransaction.count({ where: { providerId: w.provider.id, reason: 'PROJECT_COMPLETED' } }), 0);
+});
+
+test('PROVIDER EARNINGS LEDGER: the administrative release shows as one detailed line (gross, commission, net, contract, reason, source, NO stageId) that matches what entered the balance; withdrawal availability is not delayed or held', opts, async () => {
+	const e = await boot(); const sa = e.sa.id; const { providerFinanceService } = await import('./provider-finance.service');
+	const w = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released: 10, v2: true, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' });
+	const before: any = await providerFinanceService.getWallet(w.provider.id);
+	const c = await ctl(w, 'contracts', w.contract.id, sa);
+	assert.equal((await e.http('POST', `/admin/contracts/${w.contract.id}/release`, sa, { reason: 'صرف إداري لسجل الأرباح', expectedVersion: c.version, confirm: true, expectedHeldAmount: 10 }, keyOf())).status, 200);
+	const after: any = await providerFinanceService.getWallet(w.provider.id);
+	const line = after.transactions.find((t: any) => t.category === 'ADMIN_RELEASE'); assert.ok(line, 'the ledger line exists');
+	const esc = await e.prisma.escrow.findUnique({ where: { id: w.escrow.id } });
+	assert.deepEqual([line.grossAmount, line.platformCommission, line.amount], [10, 1.27, 8.73], 'gross 10, commission = cumulative rule on the escrow snapshot (2.55 total - 1.28 already taken), net');
+	assert.equal(line.stageId, null); assert.equal(line.contractId, w.contract.id); assert.equal(line.reason, 'صرف إداري لسجل الأرباح'); assert.equal(line.source, 'ADMIN_DECISION'); assert.equal(line.breakdown.operation, 'ADMIN_RELEASE');
+	// the line is exactly what entered the balance (net released moved by line.amount), and is withdrawable at once (no hold, no maturity)
+	assert.equal(Math.round((after.summary.availableBalance - before.summary.availableBalance) * 100) / 100, line.amount); assert.equal(Math.round((after.summary.withdrawableBalance - before.summary.withdrawableBalance) * 100) / 100, line.amount);
+	assert.equal(after.stats?.completedProjectsCount ?? after.summary.completedProjectsCount, before.stats?.completedProjectsCount ?? before.summary.completedProjectsCount, 'not counted as a completed project');
+	assert.equal(Number(esc.providerNetReleasedAmount), Math.round((before.summary.availableBalance + line.amount) * 100) / 100);
+	// a freeze held on another contract never holds earnings already released (the freeze only stops NEW movements)
+	const f = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released: 10, v2: true });
+	await e.prisma.escrow.update({ where: { id: f.escrow.id }, data: {} }); await e.prisma.contract.update({ where: { id: f.contract.id }, data: { adminFrozenAt: new Date(), adminFrozenById: sa, adminFreezeReason: 'x' } });
+	const fw: any = await providerFinanceService.getWallet(f.provider.id); assert.equal(fw.summary.withdrawableBalance, fw.summary.availableBalance, 'earnings released earlier stay withdrawable while the contract is frozen');
+});
+
+test('CONSENSUAL CANCELLATION closure: full refund, partial share and full release all end CANCELLED (request/project/contract), closure stored apart from the cancellation request and from dispute history', opts, async () => {
+	const e = await boot(); const { contractCancellationService } = await import('./contract-cancellation.service');
+	for (const [share, label] of [[0, 'full refund'], [5, 'partial share'], [20, 'full release']] as const) {
+		const w = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', v2: true, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' });
+		const oldDispute = await e.prisma.dispute.create({ data: { id: id(), projectId: w.project.id, openedById: w.client.id, againstUserId: w.provider.id, status: 'RESOLVED', reason: 'قديم', description: 'نزاع قديم مغلق نصيًا', resolution: 'MUTUAL_CLOSE', resolvedAt: new Date() } });
+		const cr = await e.prisma.contractCancellationRequest.create({ data: { id: id(), contractId: w.contract.id, projectId: w.project.id, clientId: w.client.id, providerId: w.provider.id, requestedById: w.client.id, requestedByRole: 'CLIENT', reason: 'اتفاق', status: 'AGREED_PENDING_SETTLEMENT', settlementStatus: 'PENDING_ADMIN_DECISION', respondedById: w.provider.id, respondedAt: new Date() } });
+		const out: any = await contractCancellationService.settle(e.sa.id, cr.id, { releaseToProvider: share, expectedHeldAmount: 20, reason: `تسوية ${label}` });
+		assert.equal(out.settlement.releaseToProvider, share, label); assert.equal(out.settlement.refundToClient, 20 - share, label);
+		const s = JSON.parse(await snap(w)); assert.deepEqual([s.request.status, s.project.status, s.contract.status], ['CANCELLED', 'CANCELLED', 'CANCELLED'], label);
+		assert.equal(s.escrow.status, share > 0 ? 'RELEASED' : 'REFUNDED', label);
+		const cl = await e.prisma.engagementClosure.findUnique({ where: { projectId: w.project.id } }); assert.deepEqual([cl.kind, cl.source, cl.cancellationRequestId, Number(cl.releaseToProvider), Number(cl.refundToClient)], ['CONSENSUAL_CANCEL', 'MUTUAL_AGREEMENT', cr.id, share, 20 - share], label);
+		assert.equal((await e.prisma.contractCancellationRequest.findUnique({ where: { id: cr.id } })).status, 'SETTLED');
+		const d = await e.prisma.dispute.findUnique({ where: { id: oldDispute.id } }); assert.deepEqual([d.status, d.resolution], ['RESOLVED', 'MUTUAL_CLOSE'], 'dispute history untouched');
+		const { loadLifecycle } = await import('./project-lifecycle.service'); const lc: any = await loadLifecycle(w.project.id, { userId: w.client.id, role: 'client' });
+		assert.equal(lc.lifecycle.operationalStatus, 'CANCELLED'); assert.equal(lc.lifecycle.closureLabel, 'أُلغي بالتراضي');
+		assert.equal(await e.prisma.clientCashbackEntry.count({ where: { contractId: w.contract.id } }), 0, 'a consensual cancellation never earns cashback');
+	}
+});
+
+test('PARTNER COMMISSION on released funds: only the NEW provider share, none on the refunded part or on earlier-commissioned stage money; idempotent; allocation never exceeds what was released', opts, async () => {
+	const e = await boot(); const sa = e.sa.id;
+	await withEnvVars(ENGINE_ON, async () => {
+		// (1) admin RELEASE after a partial earlier release (10 already released by a stage): the commission base is the 10 newly released, never the 20
+		let w = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released: 10, v2: true, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' });
+		let aff = await referredClient(w, 1);
+		await e.prisma.commissionLog.create({ data: { affiliateId: aff.profile.id, referralId: aff.referral.id, referredUserId: w.client.id, sourceProjectId: w.project.id, sourceStageId: 'stage-prior', baseAmount: 10, appliedPercentage: 1, level: 1, type: 'STAGE_RELEASE', amount: 0.1, currency: 'USD', status: 'APPROVED' } });
+		let c = await ctl(w, 'contracts', w.contract.id, sa);
+		sent.length = 0;
+		assert.equal((await e.http('POST', `/admin/contracts/${w.contract.id}/release`, sa, { reason: 'صرف لعمولة المسوق', expectedVersion: c.version, confirm: true, expectedHeldAmount: 10 }, keyOf())).status, 200);
+		let rows = await commissions(w); assert.equal(rows.length, 2, 'the earlier stage commission + one event commission');
+		const ev = rows.find((r: any) => r.sourceEventId); const cl = await e.prisma.engagementClosure.findUnique({ where: { projectId: w.project.id } });
+		assert.ok(ev && ev.sourceStageId === null, 'no stage is invented'); assert.equal(ev.sourceEventId, cl.id, 'the financial event is the closure'); assert.equal(ev.baseAmount, 10); assert.equal(ev.amount, 0.1);
+		// (2) the same financial event can never accrue twice at the database level
+		await assert.rejects(() => e.prisma.commissionLog.create({ data: { affiliateId: aff.profile.id, referralId: aff.referral.id, referredUserId: w.client.id, sourceProjectId: w.project.id, sourceEventId: cl.id, baseAmount: 10, appliedPercentage: 1, level: 1, type: 'STAGE_RELEASE', amount: 0.1, currency: 'USD', status: 'APPROVED' } }), (er: any) => er.code === 'P2002');
+		// (3) admin REFUND: nothing newly released to the provider = no commission; and the preview says no clawback rule exists
+		w = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released: 10, v2: true }); aff = await referredClient(w, 1);
+		await e.prisma.commissionLog.create({ data: { affiliateId: aff.profile.id, referralId: aff.referral.id, referredUserId: w.client.id, sourceProjectId: w.project.id, sourceStageId: 'stage-prior-2', baseAmount: 10, appliedPercentage: 1, level: 1, type: 'STAGE_RELEASE', amount: 0.1, currency: 'USD', status: 'APPROVED' } });
+		c = await ctl(w, 'contracts', w.contract.id, sa);
+		const q = (await e.http('GET', `/admin/contracts/${w.contract.id}/quote?action=REFUND`, sa)).data; assert.equal(q.commissionImpact.alreadyAccrued.count, 1); assert.deepEqual(q.commissionImpact.clawback, { code: 'COMMISSION_CLAWBACK_POLICY_UNDEFINED', applied: false });
+		assert.equal((await e.http('POST', `/admin/contracts/${w.contract.id}/refund`, sa, { reason: 'استرداد بلا عمولة', expectedVersion: c.version, confirm: true, expectedHeldAmount: 10 }, keyOf())).status, 200);
+		rows = await commissions(w); assert.equal(rows.length, 1, 'no commission on the refunded part and the earlier commission is NOT deducted'); assert.equal(rows[0].amount, 0.1);
+		// (4) consensual settlement with a partial share: commission on the share only (4 of 10 held)
+		const { contractCancellationService } = await import('./contract-cancellation.service');
+		w = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released: 10, v2: true, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' }); aff = await referredClient(w, 2);
+		const cr = await e.prisma.contractCancellationRequest.create({ data: { id: id(), contractId: w.contract.id, projectId: w.project.id, clientId: w.client.id, providerId: w.provider.id, requestedById: w.client.id, requestedByRole: 'CLIENT', reason: 'اتفاق', status: 'AGREED_PENDING_SETTLEMENT', settlementStatus: 'PENDING_ADMIN_DECISION', respondedById: w.provider.id, respondedAt: new Date() } });
+		await contractCancellationService.settle(sa, cr.id, { releaseToProvider: 4, expectedHeldAmount: 10, reason: 'تسوية جزئية بعمولة' });
+		rows = await commissions(w); assert.equal(rows.length, 1); assert.equal(rows[0].baseAmount, 4); assert.equal(rows[0].sourceStageId, null); assert.ok(rows[0].sourceEventId);
+		// (5) allocation guard: a base that would exceed what the escrow released is skipped (the closure itself still completes)
+		w = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released: 10, v2: true, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' }); aff = await referredClient(w, 1);
+		await e.prisma.commissionLog.create({ data: { affiliateId: aff.profile.id, referralId: aff.referral.id, referredUserId: w.client.id, sourceProjectId: w.project.id, sourceStageId: 'stage-prior-3', baseAmount: 15, appliedPercentage: 1, level: 1, type: 'STAGE_RELEASE', amount: 0.15, currency: 'USD', status: 'APPROVED' } });
+		c = await ctl(w, 'contracts', w.contract.id, sa);
+		assert.equal((await e.http('POST', `/admin/contracts/${w.contract.id}/release`, sa, { reason: 'صرف بحد التخصيص', expectedVersion: c.version, confirm: true, expectedHeldAmount: 10 }, keyOf())).status, 200);
+		assert.equal((await commissions(w)).length, 1, 'over-allocation skipped');
+		// (6) the engine OFF (default): the release accrues nothing
+	});
+	const w2 = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released: 10, v2: true, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' }); await referredClient(w2, 1);
+	const c2 = await ctl(w2, 'contracts', w2.contract.id, sa);
+	await withEnvVars({ AFFILIATE_COMMISSION_ENGINE_ENABLED: undefined }, async () => { assert.equal((await e.http('POST', `/admin/contracts/${w2.contract.id}/release`, sa, { reason: 'محرك العمولة مغلق', expectedVersion: c2.version, confirm: true, expectedHeldAmount: 10 }, keyOf())).status, 200); });
+	assert.equal((await commissions(w2)).length, 0);
+});
+
+test('PARTNER COMMISSION atomicity: two parallel releases accrue once; an audit failure leaves no closure and no commission; the same key then succeeds once', opts, async () => {
+	const e = await boot(); const sa = e.sa.id;
+	await withEnvVars(ENGINE_ON, async () => {
+		const w = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released: 10, v2: true, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' }); await referredClient(w, 1);
+		const c = await ctl(w, 'contracts', w.contract.id, sa); const body = { reason: 'صرف متوازٍ للعمولة', expectedVersion: c.version, confirm: true, expectedHeldAmount: 10 };
+		const key = keyOf(); const before = await snap(w);
+		await e.prisma.$executeRawUnsafe(`CREATE OR REPLACE FUNCTION qa_oc_block_audit2() RETURNS trigger AS $$ BEGIN IF NEW."eventType" = 'ESCROW_RELEASED_BY_ADMIN' THEN RAISE EXCEPTION 'qa audit blocked'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql`);
+		await e.prisma.$executeRawUnsafe(`CREATE TRIGGER qa_oc_block_audit2_trg BEFORE INSERT ON "account_audit_logs" FOR EACH ROW EXECUTE FUNCTION qa_oc_block_audit2()`);
+		try {
+			const failed = await e.http('POST', `/admin/contracts/${w.contract.id}/release`, sa, body, key); assert.ok(failed.status >= 500);
+			assert.equal(await snap(w), before, 'no money / status change'); assert.equal(await e.prisma.engagementClosure.count({ where: { projectId: w.project.id } }), 0, 'no closure row'); assert.equal((await commissions(w)).length, 0, 'no commission row');
+		} finally { await e.prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS qa_oc_block_audit2_trg ON "account_audit_logs"'); }
+		const res = await Promise.all([1, 2, 3].map(() => e.http('POST', `/admin/contracts/${w.contract.id}/release`, sa, body, key)));
+		assert.deepEqual(res.map(r => r.status), [200, 200, 200]); assert.equal(res.filter(r => r.data.replayed === false).length, 1);
+		assert.equal((await commissions(w)).length, 1, 'accrued exactly once'); assert.equal(await e.prisma.engagementClosure.count({ where: { projectId: w.project.id } }), 1);
+		const w3 = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released: 10, v2: true, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' }); await referredClient(w3, 1);
+		const c3 = await ctl(w3, 'contracts', w3.contract.id, sa);
+		const par = await Promise.all([1, 2, 3].map(() => e.http('POST', `/admin/contracts/${w3.contract.id}/release`, sa, { reason: 'صرف متوازٍ بمفاتيح مختلفة', expectedVersion: c3.version, confirm: true, expectedHeldAmount: 10 }, keyOf())));
+		assert.equal(par.filter(r => r.status === 200).length, 1); assert.equal((await commissions(w3)).length, 1);
+	});
+});
+
+test('CASHBACK: policy-gated (blocked with a specific reason by default); on delivery completion credits level % of the value actually released, once; ledger + wallet + notification-after-success; never for admin closure / consensual cancel; rollback leaves nothing', opts, async () => {
+	const e = await boot(); const sa = e.sa.id; const { projectProgressService } = await import('./project-progress.service');
+	const { accrueCashbackForDeliveryCompletion, cashbackEventKey } = await import('./cashback.service');
+	const balance = async (w: W) => Number((await e.prisma.user.findUnique({ where: { id: w.client.id } })).walletBalance);
+	// (a) default: engine disabled -> blocked, NOTHING written, with the reason code
+	let { w, s2 } = await finalStageWorld();
+	const blocked = await e.prisma.$transaction((tx: any) => accrueCashbackForDeliveryCompletion(tx, { id: w.contract.id, projectId: w.project.id, clientId: w.client.id }, {} as any)); assert.deepEqual(blocked, { status: 'BLOCKED', reason: 'CASHBACK_ENGINE_DISABLED' });
+	const unapproved = await e.prisma.$transaction((tx: any) => accrueCashbackForDeliveryCompletion(tx, { id: w.contract.id, projectId: w.project.id, clientId: w.client.id }, { CASHBACK_ENGINE_ENABLED: 'true' } as any)); assert.deepEqual(unapproved, { status: 'BLOCKED', reason: 'CASHBACK_POLICY_UNAPPROVED' });
+	assert.equal(await e.prisma.clientCashbackEntry.count({ where: { contractId: w.contract.id } }), 0);
+	await withEnvVars({ CASHBACK_ENGINE_ENABLED: undefined, CASHBACK_APPROVED_POLICY: undefined }, async () => { await projectProgressService.reviewDelivery(w.client.id, w.contract.id, s2.id, 'approve'); });
+	assert.equal(await e.prisma.clientCashbackEntry.count({ where: { contractId: w.contract.id } }), 0, 'final approval with the gate closed credits nothing'); assert.equal(await balance(w), 0);
+	// (b) approved policy: the final approval credits level-1 rate (1%) of the released value (20) = 0.2, once, with the full basis recorded
+	({ w, s2 } = await finalStageWorld()); sent.length = 0;
+	await withEnvVars({ CASHBACK_ENGINE_ENABLED: 'true', CASHBACK_APPROVED_POLICY: 'BASE_RATE_IMMEDIATE' }, async () => { await projectProgressService.reviewDelivery(w.client.id, w.contract.id, s2.id, 'approve'); });
+	const entry = await e.prisma.clientCashbackEntry.findUnique({ where: { contractId: w.contract.id } }); assert.ok(entry, 'ledger row');
+	assert.deepEqual([entry.amount, entry.eligibleValue, entry.level, entry.ratePercent, entry.ladderSource, entry.policyCode, entry.status, entry.eventKey], [0.2, 20, 1, 1, 'levels.config:CLIENT_LEVELS@2026-10', 'BASE_RATE_IMMEDIATE', 'CREDITED', cashbackEventKey(w.contract.id)]);
+	assert.equal(await balance(w), 0.2); const wt = await e.prisma.walletTransaction.findFirst({ where: { userId: w.client.id, type: 'CASHBACK' } }); assert.equal(wt.referenceId, `CASHBACK-${w.contract.id}`); assert.equal(wt.metadata.eligibleValue, 20);
+	// the client's finance history shows it with its basis
+	const { clientFinanceService } = await import('./client-finance.service'); const cw: any = await clientFinanceService.getWallet(w.client.id);
+	const row = cw.transactions.find((t: any) => t.type === 'CASHBACK'); assert.ok(row, 'client ledger row'); assert.equal(row.direction, 'IN'); assert.match(row.breakdown.note, /1% من 20/);
+	// (c) replay / parallel twin: never a second credit (ledger unique + wallet reference)
+	const twins = await Promise.all([1, 2, 3].map(() => e.prisma.$transaction((tx: any) => accrueCashbackForDeliveryCompletion(tx, { id: w.contract.id, projectId: w.project.id, clientId: w.client.id }, { CASHBACK_ENGINE_ENABLED: 'true', CASHBACK_APPROVED_POLICY: 'BASE_RATE_IMMEDIATE' } as any).catch((er: any) => ({ status: 'ERR', er })))));
+	assert.ok(twins.every((t: any) => t.status === 'DUPLICATE' || (t.status === 'SKIPPED') || t.status === 'ERR'), JSON.stringify(twins.map((t: any) => t.status))); assert.equal(await balance(w), 0.2); assert.equal(await e.prisma.walletTransaction.count({ where: { userId: w.client.id, type: 'CASHBACK' } }), 1);
+	// (d) rollback: an accrual inside a failing transaction leaves no ledger row, no wallet row, no balance
+	const z = await finalStageWorld(); await e.prisma.contract.update({ where: { id: z.w.contract.id }, data: { status: 'COMPLETED' } }); await e.prisma.escrow.update({ where: { id: z.w.escrow.id }, data: { releasedAmount: 20, status: 'RELEASED' } });
+	await assert.rejects(() => e.prisma.$transaction(async (tx: any) => { const r = await accrueCashbackForDeliveryCompletion(tx, { id: z.w.contract.id, projectId: z.w.project.id, clientId: z.w.client.id }, { CASHBACK_ENGINE_ENABLED: 'true', CASHBACK_APPROVED_POLICY: 'BASE_RATE_IMMEDIATE' } as any); assert.equal(r.status, 'CREDITED'); throw new Error('abort'); }), /abort/);
+	assert.equal(await e.prisma.clientCashbackEntry.count({ where: { contractId: z.w.contract.id } }), 0); assert.equal(await balance(z.w), 0); assert.equal(await e.prisma.walletTransaction.count({ where: { userId: z.w.client.id, type: 'CASHBACK' } }), 0);
+	// (e) never for an administrative closure or a consensual cancellation, even with the policy approved
+	await withEnvVars({ CASHBACK_ENGINE_ENABLED: 'true', CASHBACK_APPROVED_POLICY: 'BASE_RATE_IMMEDIATE' }, async () => {
+		const a = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released: 10, v2: true, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' }); const ca = await ctl(a, 'contracts', a.contract.id, sa);
+		assert.equal((await e.http('POST', `/admin/contracts/${a.contract.id}/release`, sa, { reason: 'صرف إداري بلا كاش باك', expectedVersion: ca.version, confirm: true, expectedHeldAmount: 10 }, keyOf())).status, 200);
+		assert.equal(await e.prisma.clientCashbackEntry.count({ where: { contractId: a.contract.id } }), 0); assert.equal(await balance(a), 0);
+		const guard = await e.prisma.$transaction((tx: any) => accrueCashbackForDeliveryCompletion(tx, { id: a.contract.id, projectId: a.project.id, clientId: a.client.id })); assert.deepEqual(guard, { status: 'SKIPPED', reason: 'NOT_DELIVERY_COMPLETION' }, 'a closure on the project makes any later accrual refuse');
+	});
+});
+
+// ═════════════════════════ provider signing and funding (depositEscrow) vs the admin action: REAL Postgres interleavings ═════════════════════════
+// OTP: a real signing-code row hashed with a test secret (no code is ever sent); notifications: the notification service is stubbed and mail goes to a closed local port; nothing leaves the machine.
+process.env.OTP_SECRET ||= 'pg-test-otp'; process.env.SMTP_HOST = '127.0.0.1'; process.env.SMTP_PORT = '1';
+async function fundingWorld(wallet = 100) {
+	const e = await boot(); const prisma = e.prisma; const { notificationService } = await import('./notification.service');
+	for (const k of ['createAndEmit', 'emitStored', 'send']) (notificationService as any)[k] = async () => ({ id: 'stub' });
+	const { createHmac } = await import('node:crypto'); const tag = id().slice(0, 8);
+	const mk = (type: any, role: any, n: string, wal = 0) => prisma.user.create({ data: { id: id(), accountType: type, status: 'ACTIVE', firstName: n, lastName: 'QA', email: `qa-${n}-${tag}@pg.test`, walletBalance: wal, roles: [role], activeRole: role } });
+	const client = await mk('CLIENT_INDIVIDUAL', 'CLIENT', 'client', wallet); const provider = await mk('PROVIDER_INDIVIDUAL', 'PROVIDER', 'prov');
+	const cat = await prisma.category.create({ data: { id: id(), slug: `c-${tag}`, nameAr: 'QA' } }); const spec = await prisma.specialty.create({ data: { id: id(), slug: `s-${tag}`, categoryId: cat.id, nameAr: 'QA' } });
+	const profile = await prisma.clientProfile.create({ data: { id: id(), userId: client.id } as any });
+	const req = await prisma.clientRequest.create({ data: { id: id(), clientProfileId: profile.id, specialtyId: spec.id, title: `QA ${tag}`, description: 'synthetic description text', status: 'OPEN' } as any });
+	await prisma.project.create({ data: { id: req.id, title: `QA ${tag}`, description: 'synthetic', specialty: 'x', deliveryDays: 10, clientId: client.id, status: 'OPEN' } as any });
+	const pp = await prisma.projectProposal.create({ data: { id: id(), projectId: req.id, providerId: provider.id, title: 'offer', message: 'scope text', outputs: 'deliverables', advantages: ['a'], totalPrice: 40, deliveryDays: 10, status: 'SUBMITTED', agreedToTerms: true, agreedToEscrow: true } as any });
+	const legacy = await prisma.proposal.create({ data: { id: id(), clientRequestId: req.id, providerId: provider.id, price: 40, deliveryDays: 10, status: 'SUBMITTED' } as any });
+	const { clientRequestsService: svc } = await import('./client-requests.service'); await svc.selectOffer(client.id, req.id, legacy.id);
+	const contract = (await prisma.contract.findUnique({ where: { projectId: req.id } }))!;
+	const otp = async (code: string) => prisma.otpVerification.create({ data: { userId: client.id, type: 'EMAIL', code: createHmac('sha256', process.env.OTP_SECRET!).update(`${contract.id}:${code}`).digest('hex'), expiresAt: new Date(Date.now() + 600000), context: { purpose: 'CLIENT_CONTRACT_SIGNATURE', requestId: req.id, contractId: contract.id } as any } });
+	const w = { e, tag, client, provider, request: req, project: { id: req.id }, contract, offer: pp } as any as W;
+	return { w, svc, client, provider, req, pp, legacy, contract, otp, prisma, e };
+}
+const walletOf = async (f: any) => Number((await f.prisma.user.findUnique({ where: { id: f.client.id } })).walletBalance);
+const callSign = async (providerId: string, offerId: string) => {
+	const { signContract } = await import('../controllers/provider.controller'); let out: any = { status: 0 }; let err: any = null;
+	const res: any = { status(c: number) { out.status = c; return res; }, json(b: any) { out.body = b; return res; } };
+	await signContract({ user: { id: providerId }, params: { id: offerId }, body: { agreedTerms: { accepted: true } } } as any, res, ((e: any) => { err = e; }) as any);
+	return err ? { status: err.statusCode ?? 500, err } : out;
+};
+
+test('INTERLEAVING depositEscrow vs an admin action in flight (real transactions): freeze = refused 423 with no debit and the code kept; plain / rollback = funded once; admin cancel committed first = refused, nothing debited', opts, async () => {
+	const { depositEscrowName } = { depositEscrowName: 'depositEscrow' };
+	// (a) the admin FREEZES while the funding waits on the request lock
+	let f = await fundingWorld(); await f.otp('123456'); let r = await adminInFlight(f.w, () => f.svc.depositEscrow(f.client.id, f.req.id, f.legacy.id, '123456', 'wallet'), freezeIt(f.w));
+	assert.ok(r.err && r.err.statusCode === 423 && r.err.code === 'CONTRACT_FROZEN_BY_ADMIN', r.err?.code ?? 'funded despite the freeze');
+	assert.equal(await walletOf(f), 100); assert.equal(await f.prisma.escrow.count({ where: { projectId: f.req.id } }), 0); assert.equal(await f.prisma.otpVerification.count({ where: { userId: f.client.id } }), 1, 'the signing code was NOT consumed by the refused funding');
+	// (b)/(c) the admin held the locks and committed nothing / rolled back: the funding completes once
+	for (const rollback of [false, true]) {
+		f = await fundingWorld(); await f.otp('123456');
+		r = await adminInFlight(f.w, () => f.svc.depositEscrow(f.client.id, f.req.id, f.legacy.id, '123456', 'wallet'), rollback ? freezeIt(f.w) : noop, { rollback });
+		assert.ok(!r.err, `funding completes: ${r.err?.message}`); assert.equal(await walletOf(f), 60, 'debited once'); assert.equal(await f.prisma.walletTransaction.count({ where: { userId: f.client.id, type: 'ESCROW_LOCK' } }), 1);
+		assert.deepEqual([(await f.prisma.escrow.findUnique({ where: { projectId: f.req.id } }))!.status, (await f.prisma.contract.findUnique({ where: { projectId: f.req.id } }))!.status, (await f.prisma.clientRequest.findUnique({ where: { id: f.req.id } }))!.status], ['HELD', 'PENDING_PROVIDER_SIGNATURE', 'PENDING_SIGNATURE']);
+	}
+	// (d) the admin CANCELLED the unfunded engagement first (committed while the funding waited): refused, nothing debited
+	f = await fundingWorld(); await f.otp('123456');
+	r = await adminInFlight(f.w, () => f.svc.depositEscrow(f.client.id, f.req.id, f.legacy.id, '123456', 'wallet'), async tx => { await tx.contract.update({ where: { id: f.contract.id }, data: { status: 'CANCELLED' } }); await tx.clientRequest.update({ where: { id: f.req.id }, data: { status: 'CANCELLED' } }); });
+	assert.ok(r.err && (r.err.statusCode === 409 || r.err.statusCode === 400), `refused: ${r.err?.statusCode} ${r.err?.message}`); assert.equal(await walletOf(f), 100); assert.equal(await f.prisma.escrow.count({ where: { projectId: f.req.id } }), 0);
+	void depositEscrowName;
+});
+
+test('INTERLEAVING provider signing vs the admin action in flight: refund committed first = signing refused and nothing starts; plain / rollback = signed once and consistent; true parallel rounds never deadlock or end mixed', opts, async () => {
+	const fund = async () => { const f = await fundingWorld(); await f.otp('123456'); await f.svc.depositEscrow(f.client.id, f.req.id, f.legacy.id, '123456', 'wallet'); return f; };
+	// (a) admin refund (state changes of the real refund, applied by the held transaction) wins the race: the provider's signing is refused, no project start, escrow stays refunded
+	let f = await fund(); let r: any = await adminInFlight(f.w, () => callSign(f.provider.id, f.pp.id), async tx => {
+		await tx.escrow.updateMany({ where: { projectId: f.req.id }, data: { status: 'REFUNDED' } }); await tx.contract.update({ where: { id: f.contract.id }, data: { status: 'CANCELLED' } });
+		await tx.clientRequest.update({ where: { id: f.req.id }, data: { status: 'CANCELLED' } });
+	});
+	assert.ok(r.ok && r.ok.status === 409, `signing refused: ${JSON.stringify(r.ok?.body ?? r.err?.message)}`);
+	assert.deepEqual([(await f.prisma.contract.findUnique({ where: { projectId: f.req.id } }))!.status, (await f.prisma.project.findUnique({ where: { id: f.req.id } }))!.status], ['CANCELLED', 'PENDING_SIGNATURE'], 'the refused signing started nothing');
+	// (b)/(c) the admin only held the locks (or rolled back): signing completes once, every record agrees
+	for (const rollback of [false, true]) {
+		f = await fund(); r = await adminInFlight(f.w, () => callSign(f.provider.id, f.pp.id), rollback ? freezeIt(f.w) : noop, { rollback });
+		assert.ok(r.ok && r.ok.status === 200, `signing completes: ${JSON.stringify(r.ok?.body ?? r.err?.message)}`);
+		assert.deepEqual([(await f.prisma.contract.findUnique({ where: { projectId: f.req.id } }))!.status, (await f.prisma.clientRequest.findUnique({ where: { id: f.req.id } }))!.status, (await f.prisma.project.findUnique({ where: { id: f.req.id } }))!.status, (await f.prisma.projectProposal.findUnique({ where: { id: f.pp.id } }))!.status], ['ACTIVE', 'IN_PROGRESS', 'IN_PROGRESS', 'ACCEPTED']);
+	}
+	// (d) true parallel rounds: the REAL admin refund racing the REAL signing - one outcome, never mixed, never a deadlock / 500
+	const sa = f.e.sa.id; const actor = await actorOf(f.e, sa); const { adminOrderControlsService } = await import('./admin-order-controls.service');
+	for (let i = 0; i < 6; i++) {
+		const x = await fund(); const cc = await ctl(x.w, 'contracts', x.contract.id, sa);
+		const [adm, sg] = await Promise.all([
+			adminOrderControlsService.refundToClient(actor, x.contract.id, { reason: 'استرداد متوازٍ مع التوقيع', expectedVersion: cc.version, confirm: true, expectedHeldAmount: 40, key: keyOf() }).then(() => 200, (er: any) => er.statusCode ?? 500),
+			callSign(x.provider.id, x.pp.id).then((o: any) => o.status)
+		]);
+		assert.ok(adm !== 500 && sg !== 500, `round ${i}: no 500 / deadlock (${adm}/${sg})`);
+		const c = (await x.prisma.contract.findUnique({ where: { projectId: x.req.id } }))!; const esc = (await x.prisma.escrow.findUnique({ where: { projectId: x.req.id } }))!; const rq = (await x.prisma.clientRequest.findUnique({ where: { id: x.req.id } }))!;
+		const ends = `${c.status}/${esc.status}/${rq.status}`;
+		assert.ok(['CANCELLED/REFUNDED/CANCELLED', 'ACTIVE/HELD/IN_PROGRESS'].includes(ends) || (adm !== 200 && c.status === 'ACTIVE'), `round ${i}: consistent end state, got ${ends} (admin ${adm}, signing ${sg})`);
+		if (ends === 'CANCELLED/REFUNDED/CANCELLED') assert.equal(await walletOf(x), 100, 'refunded once'); else assert.equal(await walletOf(x), 60);
+	}
 });
