@@ -51,8 +51,6 @@ import type {
   TtsSynthesizeRequest,
   WaseetAiCitation,
   WaseetAiStreamEvent,
-  IdentityCompareFieldsRequest,
-  IdentityCompareFieldsResponse,
 } from './waseet-ai.types';
 
 // Centralized WaseetAI microservice client — the ONLY module in the backend
@@ -437,12 +435,6 @@ export class WaseetAiClient {
   inspectIdentityDocument(body: IdentityInspectRequest, opts?: WaseetAiCallOptions): Promise<IdentityInspectResponse> {
     return this.postJson('/v1/ai/identity/inspect-document', body, opts, (d) =>
       isObject(d) && typeof d.status === 'string' && typeof d.isIdentityDocument === 'boolean' && typeof d.summaryAr === 'string' && Array.isArray(d.warningsAr),
-    );
-  }
-
-  compareIdentityFields(body: IdentityCompareFieldsRequest, opts?: WaseetAiCallOptions): Promise<IdentityCompareFieldsResponse> {
-    return this.postJson('/v1/ai/identity/compare-fields', body, opts, (d) =>
-      isObject(d) && isObject(d.fields) && isObject(d.model) && typeof d.readAt === 'string',
     );
   }
 

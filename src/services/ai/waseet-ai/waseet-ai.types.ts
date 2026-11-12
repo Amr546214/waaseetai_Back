@@ -360,28 +360,6 @@ export interface IdentityInspectResponse {
   advisoryOnly: true;
 }
 
-/** POST /v1/ai/identity/compare-fields — privacy-preserving OCR field comparison. */
-export interface IdentityCompareFieldsRequest {
-  requestId: string;
-  image: string;
-  imageMimeType: 'image/jpeg' | 'image/png' | 'image/webp';
-  registered: {
-    fullName: string;
-    birthDate: string;
-    nationalId: string;
-  };
-}
-export interface IdentityCompareFieldsResponse {
-  requestId: string;
-  fields: {
-    fullName: { status: 'MATCH' | 'MISMATCH' | 'COULD_NOT_VERIFY'; reason?: string };
-    birthDate: { status: 'MATCH' | 'MISMATCH' | 'COULD_NOT_VERIFY'; reason?: string };
-    nationalId: { status: 'MATCH' | 'MISMATCH' | 'COULD_NOT_VERIFY'; reason?: string };
-  };
-  model: { name: string; version: string };
-  readAt: string;
-}
-
 /** POST /v1/ai/text/suggest/stream (SSE text.delta / generation.completed). */
 export interface TextSuggestStreamRequest {
   title: string;
