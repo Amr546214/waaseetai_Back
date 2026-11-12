@@ -11,6 +11,8 @@ import { onboardingService } from '../services/onboarding.service';
 import { nonPaypalPayoutKeys, PAYPAL_ONLY_MESSAGE, withoutLegacyPayoutFields } from '../utils/client-payout-fields';
 import { normalizeClientSetupBody, isClientSetupComplete } from '../utils/client-setup-payload';
 import { clientSetupSchema, clientSetupStepSchemas, ClientSetupStep } from '../dtos/client-profile-setup.dto';
+import { identityDocumentInspectSchema } from '../dtos/provider-profile-suggest.dto';
+import { providerProfileService } from '../services/provider-profile.service';
 import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../utils/kyc-identity-guard';
 
 export class ClientProfileController {
@@ -267,6 +269,19 @@ export class ClientProfileController {
   // real Nafath verification.
   public async nafathVerify(_req: Request, _res: Response, next: NextFunction) {
     next(Object.assign(new AppError('التحقق عبر نفاذ غير متاح حاليًا', 503), { code: 'NAFATH_UNAVAILABLE' }));
+  }
+
+  public async verifyIdentityDocument(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.userId || req.user?.id;
+      if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+      const input = identityDocumentInspectSchema.safeParse(req.body ?? {});
+      if (!input.success) return res.status(400).json({ success: false, message: 'بيانات فحص الوثيقة غير صالحة' });
+      const data = await providerProfileService.verifyIdentityDocument(userId, input.data, 'client');
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
   }
 }
 

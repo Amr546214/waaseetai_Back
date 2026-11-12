@@ -1,4 +1,9 @@
-import type { ProviderBioSuggestDto, ProviderSkillsSuggestDto } from '../dtos/provider-profile-suggest.dto';
+import type {
+	ProviderBioSuggestDto,
+	ProviderBioEnhanceDto,
+	ProviderSkillsSuggestDto,
+	IdentityDocumentInspectDto,
+} from '../dtos/provider-profile-suggest.dto';
 import { canonicalStoredPhone } from '../utils/phone-countries';
 
 import { CONTACT_IMMUTABLE, CONTACT_IMMUTABLE_MESSAGE } from '../utils/contact-policy';
@@ -328,7 +333,7 @@ export class ProviderProfileService {
 	private async suggestionContext(userId: string, input: ProviderBioSuggestDto) {
 		const profile = await prisma.providerProfile.findUnique({
 			where: { userId },
-			select: { headline: true, industry: true, mainSpecialty: true, subSpecialties: true, skills: { select: { name: true } } }
+			select: { headline: true, industry: true, bio: true, mainSpecialty: true, subSpecialties: true, skills: { select: { name: true } } }
 		});
 		const jobTitle = profile?.headline?.trim() || profile?.industry?.trim() || input.jobTitle || '';
 		const mainSpecialty = profile?.mainSpecialty?.trim() || input.mainSpecialty || '';
@@ -339,13 +344,21 @@ export class ProviderProfileService {
 			select: { nameAr: true }
 		}) : null;
 		const existingSkills = [...new Set([...(profile?.skills || []).map(s => s.name), ...(input.existingSkills || [])])];
-		const subSpecialties = Array.isArray((profile as any)?.subSpecialties) ? (profile as any).subSpecialties.filter((s: unknown): s is string => typeof s === 'string' && Boolean(s.trim())).map((s: string) => s.trim().slice(0, 80)) : [];
-		if (!jobTitle && !mainSpecialty && !existingSkills.length) {
+		const dbSubSpecialties = Array.isArray((profile as any)?.subSpecialties)
+			? (profile as any).subSpecialties.filter((s: unknown): s is string => typeof s === 'string' && Boolean(s.trim())).map((s: string) => s.trim().slice(0, 80))
+			: [];
+		const draftSubSpecialties = Array.isArray(input.subSpecialties)
+			? input.subSpecialties.filter((s): s is string => typeof s === 'string' && Boolean(s.trim())).map(s => s.trim().slice(0, 80))
+			: [];
+		const subSpecialties = [...new Set([...draftSubSpecialties, ...dbSubSpecialties])];
+		const storedBio = typeof (profile as any)?.bio === 'string' ? (profile as any).bio.trim().slice(0, 500) : '';
+		if (!jobTitle && !mainSpecialty && !subSpecialties.length && !existingSkills.length) {
 			throw new AppError('أدخل المسمى المهني أو التخصص أولاً.', 400);
 		}
 		return {
 			jobTitle: jobTitle.slice(0, 120), specialty: (category?.nameAr || mainSpecialty).slice(0, 120),
 			subSpecialties,
+			storedBio,
 			existingSkills: existingSkills.slice(0, 30).map(s => s.slice(0, 40)),
 			// Preserve the user's range as context, never turn it into exact years.
 			experienceRange: input.experienceRange,
@@ -366,6 +379,7 @@ export class ProviderProfileService {
 				specialties: specialties.length ? specialties : context.existingSkills.slice(0, 3),
 				existingSkills: context.existingSkills,
 				experienceRange: context.experienceRange,
+				...(context.storedBio ? { currentBio: context.storedBio } : {}),
 				maxLength: 500,
 			});
 			const suggestedBio = typeof result?.suggestedBio === 'string' ? result.suggestedBio.trim().slice(0, 500) : '';
@@ -377,9 +391,42 @@ export class ProviderProfileService {
 		}
 	}
 
+	async enhanceBio(userId: string, input: ProviderBioEnhanceDto): Promise<ProviderBioSuggestion> {
+		const context = await this.suggestionContext(userId, {
+			jobTitle: input.jobTitle,
+			mainSpecialty: input.mainSpecialty,
+			subSpecialties: input.subSpecialties,
+			existingSkills: input.existingSkills,
+		}).catch(() => ({
+			jobTitle: input.jobTitle?.trim().slice(0, 120) || '',
+			specialty: input.mainSpecialty?.trim().slice(0, 120) || '',
+			subSpecialties: (input.subSpecialties || []).map(s => s.trim().slice(0, 80)),
+			existingSkills: (input.existingSkills || []).map(s => s.trim().slice(0, 40)),
+		}));
+		const specialties = [...new Set([context.specialty, ...context.subSpecialties].map(s => s.trim()).filter(Boolean))];
+		try {
+			const result = await waseetAiClient.enhanceBio({
+				providerId: userId,
+				bio: input.bio.trim(),
+				...(context.jobTitle ? { jobTitle: context.jobTitle } : {}),
+				...(context.specialty ? { specialtyName: context.specialty } : {}),
+				...(specialties.length ? { specialties } : {}),
+				...(context.subSpecialties.length ? { subSpecialties: context.subSpecialties } : {}),
+				...(context.existingSkills.length ? { existingSkills: context.existingSkills } : {}),
+				maxLength: 500,
+			});
+			const suggestedBio = typeof result?.suggestedBio === 'string' ? result.suggestedBio.trim().slice(0, 500) : '';
+			if (!suggestedBio) throw new Error('EMPTY_ENHANCED_BIO');
+			return { suggestedBio };
+		} catch (error: any) {
+			logger.warn(`[ProviderProfileService] enhanceBio failed: ${error?.code || error?.name || 'ERROR'}`);
+			throw new AppError('تعذر تحسين صياغة النبذة بالذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.', 503);
+		}
+	}
+
 	async suggestSkills(userId: string, input: ProviderSkillsSuggestDto): Promise<ProviderSkillsSuggestion> {
 		const context = await this.suggestionContext(userId, input);
-		const specialtyName = (context.specialty || context.jobTitle).trim();
+		const specialtyName = (context.specialty || context.subSpecialties[0] || context.jobTitle).trim();
 		if (!specialtyName) throw new AppError('أدخل التخصص أولاً.', 400);
 		const existing = new Set(context.existingSkills.map(skillKey));
 		// Saving only connects existing taxonomy names, so suggestions are
@@ -390,22 +437,79 @@ export class ProviderProfileService {
 			if (name.trim() && name.length <= SKILL_SUGGESTION_MAX_LENGTH) taxonomy.set(skillKey(name), name);
 		}
 		if (!taxonomy.size) return { suggestedSkills: [] };
+		const aliasMap: Record<string, string[]> = {
+			'asp.net core': ['asp.net', '.net', 'c#'],
+			'.net core': ['.net', 'c#', 'asp.net'],
+			'entity framework core': ['entity framework', 'ef core', 'sql server'],
+			'restful apis': ['rest api', 'restful api', 'api'],
+			'rest apis': ['rest api', 'api'],
+			'c sharp': ['c#'],
+			'ms sql server': ['sql server', 'mssql'],
+		};
 		try {
-			const result = await waseetAiClient.suggestSkills({ providerId: userId, specialtyName, existingSkills: context.existingSkills });
+			const payload = context.subSpecialties.length > 0
+				? {
+						providerId: userId,
+						specialtyName,
+						subSpecialties: context.subSpecialties,
+						...(context.jobTitle ? { jobTitle: context.jobTitle } : {}),
+						availableSkills: [...taxonomy.values()].slice(0, 180),
+						existingSkills: context.existingSkills,
+					}
+				: { providerId: userId, specialtyName, existingSkills: context.existingSkills };
+			const result = await waseetAiClient.suggestSkills(payload);
 			const out: string[] = [];
 			const seen = new Set<string>();
 			for (const item of result.suggestedSkills) {
-				const key = skillKey(item);
-				const name = taxonomy.get(key);
-				if (!name || existing.has(key) || seen.has(key)) continue;
-				seen.add(key);
-				out.push(name);
+				const rawKey = skillKey(item);
+				const candidates = [rawKey, ...(aliasMap[rawKey] || [])];
+				let resolvedName: string | undefined;
+				let resolvedKey = rawKey;
+				for (const cand of candidates) {
+					const found = taxonomy.get(cand);
+					if (found && !existing.has(cand) && !seen.has(cand)) {
+						resolvedName = found;
+						resolvedKey = cand;
+						break;
+					}
+				}
+				if (!resolvedName) continue;
+				seen.add(resolvedKey);
+				out.push(resolvedName);
 				if (out.length >= MAX_SUGGESTED_SKILLS) break;
 			}
 			return { suggestedSkills: out };
 		} catch (error: any) {
 			logger.warn(`[ProviderProfileService] suggestSkills failed: ${error?.code || error?.name || 'ERROR'}`);
 			throw new AppError('تعذر إنشاء اقتراح بالذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.', 503);
+		}
+	}
+
+	async verifyIdentityDocument(userId: string, input: IdentityDocumentInspectDto, role: 'provider' | 'client' = 'provider') {
+		let mimeType = input.imageMimeType;
+		const trimmed = input.image.trim();
+		if (trimmed.startsWith('data:')) {
+			const match = /^data:([^;,]+);base64,/i.exec(trimmed);
+			const detected = match?.[1]?.toLowerCase();
+			if (detected === 'image/jpg') mimeType = 'image/jpeg';
+			else if (detected === 'image/jpeg' || detected === 'image/png' || detected === 'image/webp' || detected === 'application/pdf') {
+				mimeType = detected;
+			}
+		}
+		const resolvedMime = mimeType ?? 'image/jpeg';
+		try {
+			return await waseetAiClient.inspectIdentityDocument(
+				{
+					side: input.side,
+					image: trimmed,
+					imageMimeType: resolvedMime,
+					...(input.declared ? { declared: input.declared } : {}),
+				},
+				{ actor: { userId, role }, timeoutMs: 35_000 }
+			);
+		} catch (error: any) {
+			logger.warn(`[ProviderProfileService] verifyIdentityDocument failed: ${error?.code || error?.name || 'ERROR'}`);
+			throw new AppError('تعذر فحص وثيقة الهوية بالذكاء الاصطناعي حالياً. يمكنك المتابعة وستتم المراجعة البشرية.', 503);
 		}
 	}
 

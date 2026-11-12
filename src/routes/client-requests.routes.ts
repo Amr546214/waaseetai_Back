@@ -67,6 +67,15 @@ router.post(
   clientRequestsController.aiSuggest
 );
 
+router.post(
+  '/ai-suggest-budget',
+  authenticate,
+  requireActiveUser,
+  authorizeActiveRole(AccountType.CLIENT_COMPANY, AccountType.CLIENT_INDIVIDUAL),
+  aiLimiter,
+  clientRequestsController.aiSuggestBudget
+);
+
 // Multi-part file upload endpoint for attachments
 router.post('/upload', authenticate, upload.array('attachments', 5), clientRequestsController.uploadAttachments);
 

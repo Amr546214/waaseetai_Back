@@ -22,8 +22,16 @@ import type {
   MilestonesResponse,
   PerformanceSummaryRequest,
   PerformanceSummaryResponse,
+  ProfileBioEnhanceRequest,
+  ProfileBioEnhanceResponse,
   ProfileSkillsRequest,
   ProfileSkillsResponse,
+  BudgetMilestonesRequest,
+  BudgetMilestonesResponse,
+  IdentityInspectRequest,
+  IdentityInspectResponse,
+  IdentityCompareFieldsRequest,
+  IdentityCompareFieldsResponse,
   ProposalSuggestRequest,
   ProposalSuggestResponse,
   RequestDraftRequest,
@@ -384,6 +392,33 @@ export class WaseetAiClient {
 
   suggestBio(body: Record<string, unknown>, opts?: WaseetAiCallOptions): Promise<Record<string, unknown>> {
     return this.postJson('/v1/ai/profile/bio', body, opts, (d) => isObject(d) && (typeof d.suggestedBio === 'string' || Array.isArray(d.options)));
+  }
+
+  enhanceBio(body: ProfileBioEnhanceRequest, opts?: WaseetAiCallOptions): Promise<ProfileBioEnhanceResponse> {
+    return this.postJson('/v1/ai/profile/bio/enhance', body, opts, (d) => isObject(d) && typeof d.suggestedBio === 'string' && d.suggestedBio.trim().length > 0);
+  }
+
+  suggestBudgetAndMilestones(body: BudgetMilestonesRequest, opts?: WaseetAiCallOptions): Promise<BudgetMilestonesResponse> {
+    return this.postJson('/v1/ai/client/requests/budget-milestones', body, opts, (d) =>
+      isObject(d) &&
+      typeof d.recommendedMinBudget === 'number' &&
+      typeof d.recommendedMaxBudget === 'number' &&
+      typeof d.suggestedDurationDays === 'number' &&
+      Array.isArray(d.suggestedMilestones) &&
+      typeof d.rationaleAr === 'string',
+    );
+  }
+
+  inspectIdentityDocument(body: IdentityInspectRequest, opts?: WaseetAiCallOptions): Promise<IdentityInspectResponse> {
+    return this.postJson('/v1/ai/identity/inspect-document', body, opts, (d) =>
+      isObject(d) && typeof d.status === 'string' && typeof d.isIdentityDocument === 'boolean' && typeof d.summaryAr === 'string' && Array.isArray(d.warningsAr),
+    );
+  }
+
+  compareIdentityFields(body: IdentityCompareFieldsRequest, opts?: WaseetAiCallOptions): Promise<IdentityCompareFieldsResponse> {
+    return this.postJson('/v1/ai/identity/compare-fields', body, opts, (d) =>
+      isObject(d) && isObject(d.fields) && isObject(d.model) && typeof d.readAt === 'string',
+    );
   }
 
   createRun(body: Record<string, unknown>, opts?: WaseetAiCallOptions): Promise<Record<string, unknown>> {

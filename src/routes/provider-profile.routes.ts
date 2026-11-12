@@ -63,7 +63,9 @@ router.get('/sessions', providerProfileController.getActiveSessions);
 router.delete('/sessions/:id', accountActionLimiter, providerProfileController.revokeSession);
 router.put('/password', passwordChangeLimiter, providerProfileController.changePassword);
 router.post('/suggest-bio', requireProvider, aiLimiter, providerProfileController.suggestBio);
+router.post('/enhance-bio', requireProvider, aiLimiter, providerProfileController.enhanceBio);
 router.post('/suggest-skills', requireProvider, aiLimiter, providerProfileController.suggestSkills);
+router.post('/verify-id-document', requireProvider, aiLimiter, providerProfileController.verifyIdentityDocument);
 router.get('/setup', requireProvider, providerProfileController.getSetupData);
 router.post('/setup', requireProvider, blockCompanySetup, providerProfileController.saveSetupData);
 // Self-preview variant of the same getPublicProfile handler as the public

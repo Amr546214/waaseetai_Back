@@ -22,7 +22,13 @@ import { assertSetupIdentityFront, identityDocumentOnFile } from '../utils/setup
 import { logger } from '../config/logger';
 import { providerSetupEvidenceComplete } from '../utils/provider-setup-payload';
 
-import { providerBioSuggestSchema, providerSkillsSuggestSchema, setupSkillsSchema } from '../dtos/provider-profile-suggest.dto';
+import {
+  providerBioSuggestSchema,
+  providerBioEnhanceSchema,
+  providerSkillsSuggestSchema,
+  identityDocumentInspectSchema,
+  setupSkillsSchema,
+} from '../dtos/provider-profile-suggest.dto';
 
 export const suggestBio = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -33,12 +39,30 @@ export const suggestBio = async (req: Request, res: Response, next: NextFunction
   } catch (error) { next(error); }
 };
 
+export const enhanceBio = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const input = providerBioEnhanceSchema.safeParse(req.body ?? {});
+    if (!input.success) return res.status(400).json({ success: false, message: 'يرجى كتابة نبذة لا تقل عن 10 أحرف لتحسين صياغتها' });
+    res.json({ success: true, data: await providerProfileService.enhanceBio(req.user.id, input.data) });
+  } catch (error) { next(error); }
+};
+
 export const suggestSkills = async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!req.user?.id) return res.status(401).json({ success: false, message: 'Unauthorized' });
     const input = providerSkillsSuggestSchema.safeParse(req.body ?? {});
     if (!input.success) return res.status(400).json({ success: false, message: 'بيانات الاقتراح غير صالحة' });
     res.json({ success: true, data: await providerProfileService.suggestSkills(req.user.id, input.data) });
+  } catch (error) { next(error); }
+};
+
+export const verifyIdentityDocument = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const input = identityDocumentInspectSchema.safeParse(req.body ?? {});
+    if (!input.success) return res.status(400).json({ success: false, message: 'بيانات فحص الوثيقة غير صالحة' });
+    res.json({ success: true, data: await providerProfileService.verifyIdentityDocument(req.user.id, input.data, 'provider') });
   } catch (error) { next(error); }
 };
 

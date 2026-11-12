@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { blockCompanySetup } from '../middlewares/company-unavailable.middleware';
-import { apiLimiter } from '../middlewares/rate-limit.middleware';
+import { apiLimiter, aiLimiter } from '../middlewares/rate-limit.middleware';
 import { clientProfileController } from '../controllers/client-profile.controller';
 
 const router = Router();
@@ -19,5 +19,6 @@ router.get('/setup', clientProfileController.getSetupData);
 router.post('/setup', blockCompanySetup, clientProfileController.saveSetupData);
 router.put('/setup/step/:step', blockCompanySetup, clientProfileController.saveSetupStep);
 router.post('/nafath-verify', clientProfileController.nafathVerify);
+router.post('/verify-id-document', aiLimiter, clientProfileController.verifyIdentityDocument);
 
 export default router;
