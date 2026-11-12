@@ -1,4 +1,5 @@
 import { followUpDisputesWhere } from './dispute-follow-up';
+import { lockRequestRow } from './lock-order';
 import { assertNoAdminFreeze } from './admin-hold';
 import { disputeFilterWhere, DisputeQueueFilters } from './dispute-queue-filters';
 import { randomUUID } from 'node:crypto';
@@ -142,6 +143,7 @@ export class DisputeService {
     let dispute;
     try {
       dispute = await prisma.$transaction(async tx => {
+        await lockRequestRow(tx, target.requestId ?? target.projectId); // canonical lock order (lock-order.ts): the dispute insert key-shares the request row
         if (target.projectId) await lockProjectForFreezeCheck(tx, target.projectId);
         // Stage rules run under that lock, so a stage approved a moment ago is seen as approved here.
         const stages = await tx.projectStage.findMany({ where: { contract: { projectId: stageProjectId } }, select: { id: true, status: true } });
@@ -400,6 +402,7 @@ export class DisputeService {
     const release = round2(input.releaseToProvider);
 
     const summary = await prisma.$transaction(async tx => {
+      await lockRequestRow(tx, projectId); // canonical lock order (lock-order.ts): request row before the contract row (the decision closes the request)
       if (!(await lockProjectForFreezeCheck(tx, projectId))) throw new AppError('لا يوجد عقد وضمان مرتبطان بهذا النزاع لتنفيذ قرار مالي', 409);
       const current = await tx.contract.findUniqueOrThrow({ where: { id: contractRef.id }, select: { status: true } });
       if (current.status !== ContractStatus.ACTIVE) throw new AppError('العقد غير نشط: لا يوجد مبلغ محتجز لتسويته (المبالغ المصروفة سابقًا لا تُسترد بقرار نزاع)', 409);

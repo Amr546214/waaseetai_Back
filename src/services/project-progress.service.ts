@@ -1,4 +1,5 @@
 import { assertNoAgreedCancellation, hasAgreedCancellation, CANCELLATION_FROZEN_MESSAGE } from './cancellation-freeze';
+import { lockRequestRow } from './lock-order';
 import { assertNoAdminFreeze } from './admin-hold';
 import { isV2Escrow, splitRelease } from '../utils/escrow-commission';
 import { AmendmentStatus, ContractStatus, EscrowStatus, LogCategory, LogStatus, ProjectStageStatus, ProjectStatus, RequestStatus, StageDeliveryStatus } from '@prisma/client';
@@ -468,6 +469,7 @@ export class ProjectProgressService {
       const commissionNotices: MarketerCommissionNotice[] = [];
       // Same lock as an amendment being applied (contract row FIRST, then stages / escrow): a stage approval and an amendment on the same contract never interleave,
       // and the price used by the final release is the committed one, not the value read before the transaction.
+      if (decision === 'approve') await lockRequestRow(tx, contract.projectId); // canonical lock order (lock-order.ts): the request row BEFORE the contract row, because the final approval updates the request
       const contractLock = await tx.contract.updateMany({ where: { id: contract.id, status: ContractStatus.ACTIVE }, data: { updatedAt: new Date() } });
       if (contractLock.count !== 1) throw new AppError('تغيّرت حالة العقد أثناء المراجعة ولم يعد نشطًا. حدّث الصفحة', 409);
       const livePrice = (await tx.contract.findUnique({ where: { id: contract.id }, select: { price: true } }))?.price ?? contract.price;

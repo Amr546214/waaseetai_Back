@@ -1,4 +1,5 @@
 import { AmendmentRequesterRole, CancellationRequestStatus, CancellationSettlementStatus, ContractStatus, EscrowStatus, LogCategory, LogStatus, NotificationCategory, Prisma, ProjectStatus, RequestStatus } from '@prisma/client';
+import { lockRequestRow } from './lock-order';
 import { assertNoAdminFreeze } from './admin-hold';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
@@ -256,6 +257,7 @@ export class ContractCancellationService {
 		if (pre.status !== CancellationRequestStatus.AGREED_PENDING_SETTLEMENT) throw new AppError('لا تُنفَّذ التسوية قبل اتفاق الطرفين', 409);
 
 		const summary = await prisma.$transaction(async tx => {
+			await lockRequestRow(tx, pre.projectId); // canonical lock order (lock-order.ts): request row before the contract row (the settlement closes the request)
 			if (!(await lockProjectForFreezeCheck(tx, pre.projectId))) throw new AppError('لا يوجد عقد وضمان لهذا الطلب', 409);
 			const contract = await tx.contract.findUniqueOrThrow({ where: { id: pre.contractId }, select: { status: true, price: true, clientId: true, providerId: true } });
 			if (contract.status !== ContractStatus.ACTIVE) throw new AppError('العقد لم يعد نشطًا: لا يوجد مبلغ محتجز لتسويته', 409);

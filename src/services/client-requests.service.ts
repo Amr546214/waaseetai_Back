@@ -1,4 +1,5 @@
 import { selfHireError } from '../utils/self-dealing';
+import { lockRequestRow } from './lock-order';
 import { assertOfferNotSuspended, assertRequestNotSuspended, assertNoAdminFreeze, lockAndAssertNotSuspended } from './admin-hold';
 import { buildEscrowSnapshotFromPolicy, ESCROW_FEE_POLICY_V2 } from '../utils/escrow-commission';
 import { feePolicyService } from './fee-policy.service';
@@ -1785,6 +1786,8 @@ export class ClientRequestsService {
 
 		// Execute all state-modifying operations inside a strict interactive transaction
 		const { bidAmount, providerUserId, providerEmail, escrowAmount, projectName, clientName, userEmail } = await prisma.$transaction(async (tx) => {
+			// canonical lock order (lock-order.ts): the request row before the contract row (this transaction updates the request after signing)
+			await lockRequestRow(tx, requestId);
 			// a. Mark OTP as used
 			// A second tab / double submit with the same code finds it already consumed: a clean 409 (nothing debited), not a raw "record not found".
 			const consumed = await tx.otpVerification.deleteMany({ where: { id: otpRecord.id } });

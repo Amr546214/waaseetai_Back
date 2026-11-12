@@ -49,6 +49,8 @@ async function world(o: { requestStatus?: string; contract?: string; escrow?: 'H
 		w.contract = await prisma.contract.create({ data: { id: id(), projectId: rid, clientId: client.id, providerId: provider.id, offerId: offer.id, price: 20, durationDays: 14, phasesCount: 2, status: o.contract as any, signedAt: o.contract === 'ACTIVE' ? new Date() : null } });
 		const released = o.released ?? 0;
 		if (o.escrow) w.escrow = await prisma.escrow.create({ data: { id: id(), projectId: rid, amount: 20, status: o.escrow as any, releasedAmount: released, fundedAt: new Date(), ...(o.v2 ? { feePolicyVersion: 2, providerCommissionRateSnapshot: 12.75, providerCommissionLevelSnapshot: 1, platformCommissionAmount: Math.round(released * 12.75) / 100, providerNetReleasedAmount: released - Math.round(released * 12.75) / 100 } : {}) } });
+		// the legacy Proposal mirror every real engagement has: the existing close-out flows reach the request THROUGH it (clientRequest.updateMany where proposals some projectId)
+		await prisma.proposal.create({ data: { id: id(), projectId: rid, clientRequestId: rid, providerId: provider.id, price: 20, deliveryDays: 4, status: 'ACCEPTED' } });
 		await prisma.projectStage.create({ data: { id: id(), contractId: w.contract.id, stepOrder: 1, title: 'S1', days: 7, percentage: 50, amount: 10, status: released ? 'APPROVED' : 'IN_PROGRESS' } });
 		await prisma.projectStage.create({ data: { id: id(), contractId: w.contract.id, stepOrder: 2, title: 'S2', days: 7, percentage: 50, amount: 10, status: 'PENDING' } });
 	}
@@ -502,4 +504,144 @@ test('RACE select vs suspend in true parallel (many rounds): never a suspended r
 		assert.ok(!(suspended && (s.request.status !== 'OPEN' || s.contract)), `round ${i}: suspended + chosen (${sel}/${susp.status}/${susp.code})`);
 		assert.ok(susp.status === 200 ? sel !== 'selected' : sel === 'selected' || true);
 	}
+});
+
+// ───────────────────────── canonical lock order: FORCED interleavings (services/lock-order.ts) ─────────────────────────
+/**
+ * "An admin action is in flight": a transaction holds the request row FIRST (the canonical order), the service call under test starts and is waited on until it is really blocked on a lock, then
+ * the admin transaction continues with the NEXT locks of its order (contract, offers) and either commits `after()` or rolls back. With the old order (contract first) the flow under test would
+ * already hold the contract row, the admin transaction would wait for it while the flow waits for the request row: PostgreSQL aborts one with 40P01. The canonical order makes that impossible.
+ */
+async function adminInFlight(w: W, start: () => Promise<any>, after: (tx: any) => Promise<void>, opts2: { rollback?: boolean } = {}) {
+	const prisma = w.e.prisma; let svc: Promise<{ ok?: any; err?: any }> = Promise.resolve({}); let adminErr: any = null;
+	try {
+		await prisma.$transaction(async (tx: any) => {
+			await tx.$queryRaw`SELECT "id" FROM "client_requests" WHERE "id" = ${w.request.id} FOR UPDATE`;
+			svc = start().then(ok => ({ ok }), err => ({ err }));
+			let blocked = false;
+			for (let i = 0; i < 100 && !blocked; i++) { await sleep(100); const r: any[] = await tx.$queryRaw`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`; blocked = r[0].n > 0; }
+			assert.ok(blocked, 'the flow under test is blocked on the admin request lock (it takes the request row FIRST)');
+			await tx.$queryRaw`SELECT "id" FROM "contracts" WHERE "projectId" = ${w.request.id} FOR UPDATE`; // the admin transaction's NEXT lock: must be obtainable
+			await tx.$queryRaw`SELECT "id" FROM "project_proposals" WHERE "projectId" = ${w.request.id} FOR UPDATE`;
+			await after(tx);
+			if (opts2.rollback) throw new Error('admin-rollback');
+		}, { timeout: 30000 });
+	} catch (e: any) { adminErr = e; }
+	const r = await svc;
+	if (opts2.rollback) assert.equal(adminErr?.message, 'admin-rollback'); else assert.equal(adminErr, null, `the admin transaction must not be aborted (deadlock): ${adminErr?.message}`);
+	const dead = (x: any) => /deadlock|40P01/i.test(String(x?.message ?? '')) || x?.code === '40P01';
+	assert.ok(!dead(r.err), `the flow under test must not deadlock: ${r.err?.message}`);
+	return r;
+}
+const freezeIt = (w: W) => (tx: any) => tx.contract.update({ where: { id: w.contract.id }, data: { adminFrozenAt: new Date(), adminFrozenById: w.e.sa.id, adminFreezeReason: 'x' } });
+const noop = async () => undefined;
+
+async function finalStageWorld() {
+	const w = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', released: 10, v2: true, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' });
+	const s2 = await w.e.prisma.projectStage.findFirst({ where: { contractId: w.contract.id, stepOrder: 2 } });
+	await w.e.prisma.projectStage.update({ where: { id: s2.id }, data: { status: 'SUBMITTED' } });
+	await w.e.prisma.stageDelivery.create({ data: { id: id(), stageId: s2.id, providerId: w.provider.id, note: 'synthetic delivery note', status: 'SUBMITTED' } });
+	return { w, s2 };
+}
+
+test('LOCK ORDER final stage approval (locks contract then updates the request): forced interleaving - frozen by the admin = refused with NO money; plain commit = paid once and consistent; admin rollback = same', opts, async () => {
+	const { projectProgressService } = await import('./project-progress.service');
+	// (a) the admin freezes while the approval waits: the approval is refused (423), nothing moves
+	let { w, s2 } = await finalStageWorld(); let before = await snap(w);
+	let r = await adminInFlight(w, () => projectProgressService.reviewDelivery(w.client.id, w.contract.id, s2.id, 'approve'), freezeIt(w));
+	assert.ok(r.err && r.err.statusCode === 423 && r.err.code === 'CONTRACT_FROZEN_BY_ADMIN', r.err?.code ?? 'approved despite the freeze');
+	const f = JSON.parse(await snap(w)); assert.deepEqual([f.escrow.status, f.escrow.releasedAmount, f.contract.status, f.request.status], ['HELD', 10, 'ACTIVE', 'IN_PROGRESS']); assert.equal((await w.e.prisma.projectStage.findUnique({ where: { id: s2.id } })).status, 'SUBMITTED');
+	assert.notEqual(before, await snap(w)); // (only the freeze itself changed)
+	// (b) the admin only held the locks and committed nothing: the approval completes ONCE and every record agrees
+	({ w, s2 } = await finalStageWorld());
+	r = await adminInFlight(w, () => projectProgressService.reviewDelivery(w.client.id, w.contract.id, s2.id, 'approve'), noop);
+	assert.ok(!r.err, `approval completes: ${r.err?.message}`);
+	let s = JSON.parse(await snap(w)); assert.deepEqual([s.escrow.status, s.escrow.releasedAmount, s.contract.status, s.request.status, s.project.status], ['RELEASED', 20, 'COMPLETED', 'COMPLETED', 'COMPLETED']);
+	assert.equal(s.escrow.platformCommissionAmount + s.escrow.providerNetReleasedAmount, 20);
+	assert.equal(await w.e.prisma.accountAuditLog.count({ where: { eventType: 'STAGE_FUND_RELEASED', context: { path: ['stageId'], equals: s2.id } } }) + await w.e.prisma.accountAuditLog.count({ where: { eventType: 'STAGE_FUND_RELEASED', metaData: { path: ['stageId'], equals: s2.id } } }), 1, 'one release audit row');
+	// (c) the admin transaction ROLLS BACK: the approval still completes once, no trace of the admin's attempt
+	({ w, s2 } = await finalStageWorld());
+	r = await adminInFlight(w, () => projectProgressService.reviewDelivery(w.client.id, w.contract.id, s2.id, 'approve'), freezeIt(w), { rollback: true });
+	assert.ok(!r.err, `approval completes after the admin rolled back: ${r.err?.message}`);
+	s = JSON.parse(await snap(w)); assert.deepEqual([s.escrow.status, s.contract.status, s.request.status, s.contract && s.contract.adminFrozenAt], ['RELEASED', 'COMPLETED', 'COMPLETED', null]);
+});
+
+test('LOCK ORDER consensual-cancellation settlement: forced interleaving (freeze = refused, plain = settled once, rollback = settled once); money, states and audit agree', opts, async () => {
+	const { contractCancellationService } = await import('./contract-cancellation.service');
+	const mk = async () => {
+		const w = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', v2: true, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' });
+		const cr = await w.e.prisma.contractCancellationRequest.create({ data: { id: id(), contractId: w.contract.id, projectId: w.project.id, clientId: w.client.id, providerId: w.provider.id, requestedById: w.client.id, requestedByRole: 'CLIENT', reason: 'اتفاق', status: 'AGREED_PENDING_SETTLEMENT', settlementStatus: 'PENDING_ADMIN_DECISION', respondedById: w.provider.id, respondedAt: new Date() } });
+		return { w, cr };
+	};
+	const input = { releaseToProvider: 5, expectedHeldAmount: 20, reason: 'تسوية بعد اتفاق الطرفين' };
+	let { w, cr } = await mk(); let r = await adminInFlight(w, () => contractCancellationService.settle(w.e.sa.id, cr.id, input), freezeIt(w));
+	assert.ok(r.err && r.err.statusCode === 423 && r.err.code === 'CONTRACT_FROZEN_BY_ADMIN', r.err?.code ?? 'settled despite the freeze');
+	let s = JSON.parse(await snap(w)); assert.deepEqual([s.escrow.status, s.contract.status, s.request.status, s.wtx], ['HELD', 'ACTIVE', 'IN_PROGRESS', 0]);
+	assert.equal((await w.e.prisma.contractCancellationRequest.findUnique({ where: { id: cr.id } })).status, 'AGREED_PENDING_SETTLEMENT');
+	for (const rollback of [false, true]) {
+		({ w, cr } = await mk()); r = await adminInFlight(w, () => contractCancellationService.settle(w.e.sa.id, cr.id, input), rollback ? freezeIt(w) : noop, { rollback });
+		assert.ok(!r.err, `settlement completes: ${r.err?.message}`);
+		s = JSON.parse(await snap(w)); assert.equal(s.escrow.releasedAmount, 5); assert.equal(s.wtx, 1, 'the refund row exists once'); assert.equal(s.wallets.find((x: any) => x.walletBalance > 0).walletBalance, 15);
+		assert.deepEqual([s.contract.status, s.request.status], ['CANCELLED', 'COMPLETED']); // existing policy of this flow, unchanged
+		assert.equal(await w.e.prisma.accountAuditLog.count({ where: { eventType: 'CANCELLATION_SETTLED', context: { path: ['entityId'], equals: cr.id } } }), 1);
+	}
+});
+
+test('LOCK ORDER financial dispute decision and dispute opening: forced interleavings; no deadlock, money / states / audit consistent', opts, async () => {
+	const { disputeService } = await import('./dispute.service');
+	const mk = async () => {
+		const w = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD', v2: true, offerStatus: 'ACCEPTED', offer2Status: 'REJECTED' });
+		const d = await w.e.prisma.dispute.create({ data: { id: id(), projectId: w.project.id, openedById: w.client.id, againstUserId: w.provider.id, reason: 'x', description: 'y'.repeat(30), status: 'OPEN' } });
+		return { w, d };
+	};
+	const fin = { outcome: 'SPLIT', refundToClient: 15, releaseToProvider: 5, expectedHeldAmount: 20, resolutionNote: 'قرار نزاع مالي موثّق' } as any;
+	let { w, d } = await mk(); let r = await adminInFlight(w, () => disputeService.resolveFinancial(d.id, w.e.sa.id, fin), freezeIt(w));
+	assert.ok(r.err && r.err.statusCode === 423, r.err?.code ?? 'decided despite the freeze'); let s = JSON.parse(await snap(w)); assert.deepEqual([s.escrow.status, s.contract.status, s.wtx], ['HELD', 'ACTIVE', 0]);
+	assert.equal((await w.e.prisma.dispute.findUnique({ where: { id: d.id } })).status, 'OPEN');
+	for (const rollback of [false, true]) {
+		({ w, d } = await mk()); r = await adminInFlight(w, () => disputeService.resolveFinancial(d.id, w.e.sa.id, fin), rollback ? freezeIt(w) : noop, { rollback });
+		assert.ok(!r.err, `decision completes: ${r.err?.message}`); s = JSON.parse(await snap(w));
+		assert.equal(s.escrow.releasedAmount, 5); assert.equal(s.wtx, 1); assert.equal(s.wallets.find((x: any) => x.walletBalance > 0).walletBalance, 15); assert.equal(s.request.status, 'COMPLETED');
+		assert.equal(await w.e.prisma.accountAuditLog.count({ where: { eventType: 'DISPUTE_FINANCIAL_RESOLVED', context: { path: ['entityId'], equals: d.id } } }), 1);
+	}
+	// opening a dispute (inserts a row that key-shares the request) while an admin action is in flight: no deadlock, exactly one dispute, the contract is not touched
+	for (const rollback of [false, true]) {
+		const x = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'HELD' });
+		const before = await snap(x);
+		const o = await adminInFlight(x, () => disputeService.createForRequest(x.project.id, x.provider.id, 'provider', { reason: 'نزاع', description: 'نزاع اختباري على المشروع نفسه. '.repeat(4), stageId: undefined, evidence: [] } as any), noop, { rollback });
+		assert.ok(!o.err || o.err.statusCode === 400 || o.err.statusCode === 409 || o.err.statusCode === 422, `no deadlock / no 500: ${o.err?.message}`);
+		assert.equal(await snap(x), before.replace(/"x":0/, '"x":0'));
+		assert.ok((await x.e.prisma.dispute.count({ where: { projectId: x.project.id } })) <= 1);
+	}
+});
+
+test('LOCK ORDER true parallel rounds: admin refund / release racing a final approval, a settlement and a dispute decision - never a deadlock (no 500), never a mixed end state', opts, async () => {
+	const e = await boot(); const sa = e.sa.id; const { projectProgressService } = await import('./project-progress.service');
+	const dead = (r: any) => r.status >= 500;
+	for (let i = 0; i < 6; i++) {
+		const { w, s2 } = await finalStageWorld(); const c = await ctl(w, 'contracts', w.contract.id, sa);
+		const [adm, ap] = await Promise.all([
+			e.http('POST', `/admin/contracts/${w.contract.id}/${i % 2 ? 'release' : 'refund'}`, sa, { reason: 'قرار إداري موثّق', expectedVersion: c.version, confirm: true, expectedHeldAmount: 10 }, keyOf()),
+			projectProgressService.reviewDelivery(w.client.id, w.contract.id, s2.id, 'approve').then(() => 200, (er: any) => er.statusCode ?? 500)
+		]);
+		assert.ok(!dead(adm), `admin ${adm.status} ${adm.code}`); assert.ok(ap !== 500, `approval ${ap}`);
+		const s = JSON.parse(await snap(w)); const ends = `${s.escrow.status}/${s.contract.status}/${s.request.status}`;
+		assert.ok(['RELEASED/COMPLETED/COMPLETED', 'REFUNDED/CANCELLED/CANCELLED'].includes(ends), `consistent end state, got ${ends} (admin ${adm.status}, approval ${ap})`);
+		assert.equal(Number(s.escrow.releasedAmount) <= 20, true);
+		assert.ok(!(adm.status === 200 && ap === 200), 'money moved only once');
+	}
+});
+
+test('LOCK ORDER static: every flow that locks the contract and then writes the request takes the request row first (lockRequestRow before the contract lock)', opts, async () => {
+	const fs = await import('node:fs'); const path = await import('node:path'); const root = path.join(__dirname, '..');
+	const read = (f: string) => fs.readFileSync(path.join(root, f), 'utf8');
+	const first = (src: string, a: string, b: string) => { const i = src.indexOf(a), j = src.indexOf(b); assert.ok(i > 0 && j > 0 && i < j, `${a} must come before ${b}`); };
+	first(read('services/project-progress.service.ts'), 'await lockRequestRow(tx, contract.projectId)', 'const contractLock = await tx.contract.updateMany');
+	first(read('controllers/provider.controller.ts'), 'await lockRequestRow(tx, targetProjectId)', 'const transitioned = await tx.contract.updateMany');
+	first(read('services/client-requests.service.ts'), 'await lockRequestRow(tx, requestId);\n\t\t\t// a. Mark OTP', 'const clientSigned = await tx.contract.updateMany');
+	first(read('services/contract-cancellation.service.ts'), 'await lockRequestRow(tx, pre.projectId)', 'if (!(await lockProjectForFreezeCheck(tx, pre.projectId))) throw new AppError(\'لا يوجد عقد وضمان');
+	const d = read('services/dispute.service.ts');
+	first(d, 'await lockRequestRow(tx, target.requestId ?? target.projectId)', 'if (target.projectId) await lockProjectForFreezeCheck');
+	first(d, 'await lockRequestRow(tx, projectId)', 'if (!(await lockProjectForFreezeCheck(tx, projectId))) throw new AppError(\'لا يوجد عقد وضمان مرتبطان');
+	assert.match(read('services/lock-order.ts'), /CANONICAL ROW-LOCK ORDER/);
 });

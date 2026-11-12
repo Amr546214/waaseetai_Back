@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
+import { lockRequestRow } from './lock-order';
 
 /**
  * The enforcement side of the admin holds (suspended request / suspended offer / frozen contract), used by the EXISTING flows so a hold is real and not only a label:
@@ -49,7 +50,7 @@ export async function lockAndAssertNotSuspended(
 ): Promise<void> {
 	// (the typeof guards only serve unit tests that hand in a partial transaction double; a real transaction client always has all of these)
 	if (typeof tx.$queryRaw !== 'function' || typeof tx.clientRequest?.findUnique !== 'function') return;
-	await tx.$queryRaw`SELECT "id" FROM "client_requests" WHERE "id" = ${requestId} FOR UPDATE`;
+	await lockRequestRow(tx, requestId);
 	await tx.$queryRaw`SELECT "id" FROM "contracts" WHERE "projectId" = ${requestId} FOR UPDATE`;
 	await tx.$queryRaw`SELECT "id" FROM "project_proposals" WHERE "projectId" = ${requestId} FOR UPDATE`;
 	const request = await tx.clientRequest.findUnique({ where: { id: requestId }, select: { status: true, adminSuspendedAt: true } });
