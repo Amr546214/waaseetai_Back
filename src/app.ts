@@ -322,6 +322,7 @@ import adminMarketplaceServicesRoutes from './routes/admin-marketplace-services.
 import adminAnalyticsRoutes from './routes/admin-analytics.routes';
 import adminAiConsoleRoutes from './routes/admin-ai-console.routes';
 import kycDocumentsRoutes from './routes/kyc-documents.routes';
+import identityCheckRoutes from './routes/identity-check.routes';
 
 // Support BOTH prefixed and unprefixed paths.
 // - app.use('/api', apiRouter) handles local development where frontend calls http://localhost:5009/api
@@ -406,6 +407,8 @@ mountAppRoute('/api/admin/ai-console', adminAiConsoleRoutes);
 mountAppRoute('/admin/analytics', adminAnalyticsRoutes);
 mountAppRoute('/api/kyc-documents', kycDocumentsRoutes);
 mountAppRoute('/kyc-documents', kycDocumentsRoutes);
+mountAppRoute('/api/identity-check', identityCheckRoutes);
+mountAppRoute('/identity-check', identityCheckRoutes);
 
 import knowledgeRoutes from './routes/knowledge.routes';
 

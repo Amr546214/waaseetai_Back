@@ -51,6 +51,8 @@ import type {
   TtsSynthesizeRequest,
   WaseetAiCitation,
   WaseetAiStreamEvent,
+  IdentityCompareFieldsRequest,
+  IdentityCompareFieldsResponse,
 } from './waseet-ai.types';
 
 // Centralized WaseetAI microservice client — the ONLY module in the backend
@@ -233,6 +235,29 @@ export class WaseetAiClient {
       isObject(d) && typeof d.attemptId === 'string' && typeof d.status === 'string',
       'GET'
     );
+  }
+
+  /** Advisory identity-field comparison. Never forwards a user actor. */
+  async compareIdentityFields(body: IdentityCompareFieldsRequest, opts?: WaseetAiCallOptions): Promise<IdentityCompareFieldsResponse> {
+    const keys = ['name', 'birthDate', 'nationalId'] as const;
+    const data = await this.postJson<{ fields: Record<typeof keys[number], string> }>('/v1/ai/identity/compare-fields', {
+      image: { mimeType: body.imageMimeType, data: body.image },
+      declared: { name: body.registered.fullName, birthDate: body.registered.birthDate, nationalId: body.registered.nationalId },
+      ...(body.document ? { document: body.document } : {})
+    }, { ...opts, requestId: body.requestId, actor: { userId: 'identity-field-check', role: 'system' } }, (d) => {
+      if (!isObject(d) || !isObject(d.fields)) return false;
+      const fields = d.fields;
+      return keys.every(key => {
+        const field = fields[key];
+        return typeof field === 'string' && ['MATCH', 'MISMATCH', 'UNREADABLE'].includes(field);
+      }) && ['faceMatch', 'liveness', 'documentAuthenticity'].every(key => d[key] === 'NOT_CHECKED');
+    }, 'POST', body.requestId);
+    const status = (value: string) => value === 'MATCH' ? 'MATCH' as const : value === 'MISMATCH' ? 'MISMATCH' as const : 'COULD_NOT_VERIFY' as const;
+    return { requestId: body.requestId, readAt: new Date().toISOString(), fields: {
+      fullName: { status: status(data.fields.name) },
+      birthDate: { status: status(data.fields.birthDate) },
+      nationalId: { status: status(data.fields.nationalId) }
+    } };
   }
 
   /** AI-20 — POST /v1/ai/disputes/summary (routed to the paid/sensitive
@@ -470,7 +495,7 @@ export class WaseetAiClient {
     };
   }
 
-  private async postJson<T>(path: string, body: unknown, opts: WaseetAiCallOptions = {}, validate?: (data: unknown) => boolean, method: 'POST' | 'GET' = 'POST'): Promise<T> {
+  private async postJson<T>(path: string, body: unknown, opts: WaseetAiCallOptions = {}, validate?: (data: unknown) => boolean, method: 'POST' | 'GET' = 'POST', expectedResponseId?: string): Promise<T> {
     const requestId = opts.requestId ?? randomUUID();
     const config = this.configProvider();
     const { signal, clear } = composeSignal(opts.timeoutMs ?? config.restTimeoutMs, opts.signal);
@@ -495,7 +520,7 @@ export class WaseetAiClient {
         throw new WaseetAiError(WaseetAiErrorCode.INVALID_RESPONSE, 'WaseetAI returned malformed JSON', { status: response.status, requestId, cause: e });
       }
 
-      if (!isObject(parsed) || parsed.success !== true || !('data' in parsed)) {
+      if (!isObject(parsed) || parsed.success !== true || !('data' in parsed) || (expectedResponseId !== undefined && parsed.requestId !== expectedResponseId)) {
         throw new WaseetAiError(WaseetAiErrorCode.INVALID_RESPONSE, 'WaseetAI returned an unsuccessful or malformed envelope', { status: response.status, requestId });
       }
       if (validate && !validate(parsed.data)) {

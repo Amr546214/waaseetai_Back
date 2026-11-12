@@ -6,7 +6,7 @@ export interface ClientSetupFieldError { path: string; field: string; message: s
 const err = (path: string, message: string): ClientSetupFieldError => ({ path, field: path, message, code: 'custom' });
 
 const TOP = ['details', 'identity', 'documents', 'agreements', 'bank', 'paypalPayoutEmail', 'bio', 'interests', 'idNumber', 'dob', 'occupation'];
-const DETAILS = ['idNumber', 'dob', 'country', 'city', 'occupation', 'address', 'bio', 'interests'];
+const DETAILS = ['idNumber', 'idIssuingCountry', 'idDocumentType', 'dob', 'country', 'city', 'occupation', 'address', 'bio', 'interests'];
 const IDENTITY = ['frontId', 'backId', 'idNumber', 'dob'];
 const DOCUMENTS = ['supportingDocs', 'notes'];
 const AGREEMENTS = ['accurate', 'terms', 'privacy'];

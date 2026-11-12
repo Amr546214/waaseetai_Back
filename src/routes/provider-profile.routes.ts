@@ -67,6 +67,8 @@ router.post('/enhance-bio', requireProvider, aiLimiter, providerProfileControlle
 router.post('/suggest-skills', requireProvider, aiLimiter, providerProfileController.suggestSkills);
 router.post('/verify-id-document', requireProvider, aiLimiter, providerProfileController.verifyIdentityDocument);
 router.get('/setup', requireProvider, providerProfileController.getSetupData);
+router.get('/setup/identity', requireProvider, providerProfileController.getIdentityState);
+router.put('/setup/identity', requireProvider, blockCompanySetup, providerProfileController.saveIdentityStep);
 router.post('/setup', requireProvider, blockCompanySetup, providerProfileController.saveSetupData);
 // Self-preview variant of the same getPublicProfile handler as the public
 // `/public/:providerId` route above — it hits the identical generateAiMetrics

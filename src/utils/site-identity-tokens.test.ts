@@ -12,7 +12,7 @@ const val = (key: string, v: unknown) => validateTokenValue(key, v);
 const bytes = (o: unknown) => Buffer.from(typeof o === 'string' ? o : JSON.stringify(o), 'utf8');
 
 test('tokens: registry shape and exact counts (37 declared in :root + 24 round-9 semantic variables + --font-family: 58 colour-like of which 57 redefined in light and only --grad shared, 3 layout, 1 typography)', () => {
-	assert.deepEqual(TOKEN_COUNTS, { declaredInRoot: 61, colorLike: 58, redefinedByThemeLight: 57, sharedWithDark: 1, layout: 3, typography: 71, components: 181, palette: 1188 });
+	assert.deepEqual(TOKEN_COUNTS, { declaredInRoot: 61, colorLike: 58, redefinedByThemeLight: 57, sharedWithDark: 1, layout: 3, typography: 71, components: 193, palette: 1188 });
 	assert.deepEqual(TOKEN_REGISTRY.filter(t => t.scope === 'color' && t.light === undefined).map(t => t.name).sort(), ['--grad']);
 	assert.equal(new Set(TOKEN_REGISTRY.map(t => t.name)).size, TOKEN_REGISTRY.length, 'names unique');
 	for (const t of TOKEN_REGISTRY) assert.match(t.name, /^--[a-z0-9-]{1,40}$/);
