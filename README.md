@@ -73,13 +73,13 @@ curl http://localhost:5009/health
 
 ## Database
 
-> **Known limitation — do not run `npm run db:migrate` or `prisma migrate deploy` on an empty database.** The historical migration chain is not safe for a fresh database: later migrations reference objects missing from the initial one ([DEPLOYMENT.md](DEPLOYMENT.md)).
+> **Known limitation — do not run `npm run db:migrate` or `prisma migrate deploy` on an empty database.** The historical migration chain is not safe for a fresh database: later migrations reference objects missing from the initial one.
 
 | Situation | What to do |
 |---|---|
 | New, empty local database | `npx prisma db push` (add `RUN_DB_PUSH=true` for Docker) |
 | Database whose history is already tracked | `npm run prisma:migrate:deploy` (`RUN_DB_MIGRATIONS=true` for Docker) |
-| Production or shared servers | Follow [DEPLOYMENT.md](DEPLOYMENT.md) and [docs/prod-deploy-checklist.md](docs/prod-deploy-checklist.md); take a backup first |
+| Production or shared servers | Take a verified backup first, inspect the existing schema and migration history, and apply only the reviewed migrations required for the release |
 
 **Verified:** on an empty PostgreSQL 16, `prisma migrate deploy` fails (`type "ContractStatus" does not exist`) while `prisma db push` succeeds.
 
@@ -120,9 +120,4 @@ Use the `/api/...` paths; routers are also mounted without the prefix to support
 
 | Document | Contents |
 |---|---|
-| [docs/backend-guide.md](docs/backend-guide.md) | Features, roles, structure, data model, auth, security, known limitations |
-| [DEPLOYMENT.md](DEPLOYMENT.md) | VPS deployment with Docker Compose and Nginx (`deploy/nginx/`) |
-| [docs/prod-deploy-checklist.md](docs/prod-deploy-checklist.md) | Production checklist (Arabic) |
-| [docs/notifications-event-matrix.md](docs/notifications-event-matrix.md) | Notification events |
-| [docs/proposals/](docs/proposals) | Design proposals (rate-limit tiers, amendments, disputes) |
 | [Frontend repository](https://github.com/Amr546214/waaseetai_Front) | Angular client |
