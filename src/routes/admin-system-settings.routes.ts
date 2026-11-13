@@ -2,6 +2,7 @@ import { NextFunction, Request, Response, Router } from 'express';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { loadAdminActor, requireAnyPermission, requirePermission, requireSuperAdmin } from '../middlewares/admin-access.middleware';
 import { systemSettingsService } from '../services/system-settings.service';
+import { loginGuardService } from '../services/login-guard.service';
 import { currencyReadiness } from '../services/currency-readiness.service';
 
 /**
@@ -18,6 +19,7 @@ router.get('/', ok(async req => systemSettingsService.view(await loadAdminActor(
 router.put('/', requirePermission('settings.manage'), ok(async req => systemSettingsService.update(await loadAdminActor(req), req.body, { ip: req.ip, device: String(req.headers['user-agent'] || '') })));
 router.get('/history', ok(async req => systemSettingsService.history(await loadAdminActor(req), Number(req.query.limit) || 20)));
 router.get('/health', ok(() => systemSettingsService.health()));
+router.get('/login-protection/impact', requireSuperAdmin, ok(async req => { const n = (k: string) => (req.query[k] === undefined ? undefined : Number(req.query[k])); return loginGuardService.impact({ maxFails: n('maxFails'), windowMin: n('windowMin'), blockMin: n('blockMin'), ipMaxFails: n('ipMaxFails') } as never); }));
 router.get('/sessions-impact', requireSuperAdmin, ok(req => systemSettingsService.sessionsImpact(req.query.idleMinutes)));
 router.get('/currency-readiness', requireSuperAdmin, ok(() => currencyReadiness()));
 

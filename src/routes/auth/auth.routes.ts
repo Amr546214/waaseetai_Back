@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authController } from '../../controllers/auth.controller';
 import { validateRequest } from '../../middlewares/validation.middleware';
 import { registerStartSchema, registerCompleteSchema, registerSchema, verifyOtpSchema, loginSchema, resendOtpSchema, googleAuthSchema, forgotPasswordSchema, verifyResetCodeSchema, resetPasswordSchema, verifyLoginOtpSchema, resendLoginOtpSchema } from './auth.schema';
+import { loginGuardGate } from '../../middlewares/login-guard.middleware';
 import { loginLimiters, otpSendLimiter, otpSendGate, otpVerifyLimiters, normalizeOtpIdentifier } from '../../middlewares/rate-limit.middleware';
 
 // Who is receiving the code, for the send limiter (sending is limited per recipient and per IP, apart from authLimiter).
@@ -86,6 +87,7 @@ router.post(
 router.post(
   '/login',
   validateRequest(loginSchema),
+  loginGuardGate((req) => req.body?.email),
   ...loginLimiters((req) => req.body?.email),
   authController.login
 );
