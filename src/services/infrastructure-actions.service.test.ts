@@ -166,3 +166,11 @@ test("backup agent uses fixed configured origin, disables redirects, reports con
   assert.equal(seen.u, "http://backup-agent:5098/files");
   assert.equal(seen.o.redirect, "error");
 });
+
+test('dev purge is limited to the configured dev host and cannot purge official URLs',async()=>{
+ let calls=0;
+ const adapter=new CloudflareAdapter((async()=>{calls++;return new Response(JSON.stringify({success:true,result:{id:'dev-purge'}}));}) as any,{...env,FRONTEND_URL:'https://dev.waseetai.com'});
+ assert.equal((await adapter.purge(['https://dev.waseetai.com/app.js'])).accepted,true);
+ await assert.rejects(adapter.purge(['https://waseetai.com/app.js']),e=>(e as any).statusCode===400);
+ assert.equal(calls,1);
+});

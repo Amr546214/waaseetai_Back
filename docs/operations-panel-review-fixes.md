@@ -4,10 +4,12 @@ No deployment, shared migration, shared backup, cache purge or recovery is perfo
 
 ## Settings and maintenance
 
+Operations access is available to active Super Admins on both dev and the official deployment. `officialDeployment` remains diagnostic metadata only. Do not set dev as `PLATFORM_DEPLOY_ENV=official` to gain access; no environment flag is required. Each environment uses its own configured database and service connections.
+
 - Every canonical settings write increments the private `__platform_public_revision` row and queues PostgreSQL NOTIFY **inside the same transaction** as the setting versions and audit entry. CMS terms/privacy publication does the same. A rolled-back audit sends no notification.
 - The public settings snapshot and maintenance state carry that database revision. The browser rejects older HTTP/socket/503 snapshots, then reloads all public settings when the revision advances. Fallback state polling is every five seconds; the server settings cache TTL is five seconds.
 - The maintenance login exception includes OTP, password recovery and Google callback screens. It does not exempt registration or regular application routes.
-- Unversioned legacy settings writes return 410. Both legacy mounts require the official deployment and an active Super Admin, including reads.
+- Unversioned legacy settings writes return 410. Both legacy mounts require an active Super Admin, including reads, on dev and the official deployment.
 
 ## Login guard
 
@@ -21,14 +23,14 @@ The pair/IP policy is configurable. The account-wide layer remains a progressive
 
 ## Cloudflare adapter
 
-Configure on the official environment only:
+Configure independently for each environment (dev and official):
 
 - `CDN_PROVIDER=cloudflare`
 - `CDN_ZONE_ID`: 32 hex characters
 - `CDN_API_TOKEN`: scoped to this zone, with Zone Read, Analytics Read and Cache Purge permissions
-- `FRONTEND_URL`: official HTTPS site
+- `FRONTEND_URL`: the HTTPS site for this environment
 
-The adapter reads zone status and 24 completed hours of `httpRequests1hGroups` counters. An unavailable analytics entitlement/permission is shown as unavailable, not zero. Purge accepts 1–30 explicit HTTPS file URLs on the exact official hostname, with a reason, confirmation and UUID Idempotency-Key. It never purges the whole zone implicitly. Provider acceptance is labelled as acceptance. An uncertain purge is not automatically repeated.
+The adapter reads zone status and 24 completed hours of `httpRequests1hGroups` counters. An unavailable analytics entitlement/permission is shown as unavailable, not zero. Purge accepts 1–30 explicit HTTPS file URLs on the exact configured hostname of this environment, with a reason, confirmation and UUID Idempotency-Key. It never purges the whole zone implicitly. Provider acceptance is labelled as acceptance. An uncertain purge is not automatically repeated.
 
 ## Backup agent
 

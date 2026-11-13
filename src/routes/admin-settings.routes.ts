@@ -1,4 +1,3 @@
-import { requireOfficialDeployment } from '../middlewares/official-deployment.middleware';
 import { AppError } from '../utils/app-error';
 import { Router } from 'express';
 import { AccountType } from '@prisma/client';
@@ -8,7 +7,7 @@ import { recordAdminAudit } from '../utils/admin-audit';
 import { requireSuperAdmin } from '../middlewares/admin-access.middleware';
 
 const router = Router();
-router.use(authenticate, requireActiveUser, requireOfficialDeployment, requireSuperAdmin);
+router.use(authenticate, requireActiveUser, requireSuperAdmin);
 
 router.get('/', async (_req, res, next) => {
 	try { const data = await platformSettingsService.getAll(); res.json({ success: true, data, storageReady: await platformSettingsService.storageReady() }); } catch (e) { next(e); }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { isOfficialDeployment, officialHosts } from './deployment-identity';
 
 const E = (o: Record<string, string>) => o as NodeJS.ProcessEnv;
-test('official only when BOTH the deploy flag and the FRONTEND_URL host agree; every other combination fails closed', () => {
+test('official diagnostic classification requires both the deploy flag and FRONTEND_URL; it is not an access gate', () => {
 	assert.equal(isOfficialDeployment(E({ PLATFORM_DEPLOY_ENV: 'official', FRONTEND_URL: 'https://waseetai.com' })), true);
 	assert.equal(isOfficialDeployment(E({ PLATFORM_DEPLOY_ENV: 'Official', FRONTEND_URL: 'https://www.waseetai.com/' })), true);
 	assert.equal(isOfficialDeployment(E({ PLATFORM_DEPLOY_ENV: 'official', FRONTEND_URL: 'https://dev.waseetai.com' })), false, 'the flag copied to dev is not enough');

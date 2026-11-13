@@ -8,7 +8,7 @@ import { env, opts, mkStaff, closeEnv } from '../testing/admin-team.pgenv';
 
 /** Registry-driven system settings on REAL PostgreSQL over HTTP: permissions per key, versioned saves, audit, enforcement (maintenance, registration, idle sessions, sender name), currency refusal. */
 after(closeEnv);
-// the operations panel exists on the official deployment only (see utils/deployment-identity): these tests run as that deployment unless a test says otherwise
+// Deployment classification is metadata. Active Super Admin access works on dev and the official site.
 process.env.PLATFORM_DEPLOY_ENV = 'official'; process.env.FRONTEND_URL = 'https://waseetai.com';
 const S = '/admin/system-settings';
 const put = (e: any, who: string, changes: any, expected: any) => e.call('PUT', S, who, { changes, expected });
@@ -16,26 +16,36 @@ const view = async (e: any, who: string) => (await e.call('GET', S, who)).json.d
 const one = async (e: any, who: string, key: string) => (await view(e, who)).find(i => i.key === key);
 const reset = async (e: any) => { await e.prisma.platformSetting.deleteMany({}); const { systemSettingsService } = await import('./system-settings.service'); systemSettingsService.invalidate(); };
 
-test('PG settings: the operations panel is SUPER_ADMIN-only and official-deployment-only for reading AND writing; staff with settings permissions and every non-official deployment get 403 with a stable code', opts, async () => {
-	const e = await env(); await reset(e);
-	const saved = { f: process.env.PLATFORM_DEPLOY_ENV, u: process.env.FRONTEND_URL };
-	try {
-		process.env.PLATFORM_DEPLOY_ENV = 'official'; process.env.FRONTEND_URL = 'https://waseetai.com';
-		const none = await mkStaff(e, ['users.view'], 'n'), viewer = await mkStaff(e, ['settings.view'], 'v'), manager = await mkStaff(e, ['settings.view', 'settings.manage'], 'm');
-		assert.equal((await e.call('GET', S, null)).status, 401);
-		for (const s of [none, viewer, manager]) { assert.equal((await e.call('GET', S, s.user.id)).status, 403); assert.equal((await e.call('GET', '/admin/settings', s.user.id)).status,403); assert.equal((await e.call('PUT','/admin/settings',s.user.id,{supportEmail:'bypass@example.test'})).status,403); assert.equal((await put(e, s.user.id, { platformName: 'x' }, { platformName: 0 })).status, 403); assert.equal((await e.call('GET', `${S}/login-protection/impact`, s.user.id)).status, 403); }
-		const acc = await e.call('GET', `${S}/access`, manager.user.id); assert.equal(acc.status, 200); assert.deepEqual(acc.json.data, { officialDeployment: true, isSuperAdmin: false, available: false });
-		const sa = await e.call('GET', `${S}/access`, e.sa.id); assert.deepEqual(sa.json.data, { officialDeployment: true, isSuperAdmin: true, available: true });
-		assert.equal((await e.call('GET', S, e.sa.id)).status, 200);assert.equal((await e.call('PUT','/admin/settings',e.sa.id,{supportEmail:'bypass@example.test'})).status,410);
-		assert.equal((await put(e, e.sa.id, { registrationOpen: false }, { registrationOpen: 0 })).status, 200);
-		assert.equal((await e.prisma.platformSetting.findUniqueOrThrow({ where: { key: 'registrationOpen' } })).value, false);
-		assert.equal((await e.call('GET', `${S}/currency-readiness`, e.sa.id)).status, 200);
-		// dev: even the SUPER_ADMIN is refused, read and write, whatever NODE_ENV says
-		process.env.FRONTEND_URL = 'https://dev.waseetai.com';
-		assert.equal((await e.call('GET','/admin/settings',e.sa.id)).status,403); const r = await e.call('GET', S, e.sa.id); assert.equal(r.status, 403); assert.equal(r.json.code, 'OPERATIONS_PANEL_OFFICIAL_ONLY');
-		assert.equal((await put(e, e.sa.id, { registrationOpen: true }, { registrationOpen: 1 })).status, 403);
-		assert.deepEqual((await e.call('GET', `${S}/access`, e.sa.id)).json.data, { officialDeployment: false, isSuperAdmin: true, available: false });
-	} finally { if (saved.f === undefined) delete process.env.PLATFORM_DEPLOY_ENV; else process.env.PLATFORM_DEPLOY_ENV = saved.f; if (saved.u === undefined) delete process.env.FRONTEND_URL; else process.env.FRONTEND_URL = saved.u; }
+test('PG settings: Super Admin reads and writes operations on official and dev; unauthenticated and ordinary staff remain refused', opts, async () => {
+ const e=await env();await reset(e);
+ const saved={flag:process.env.PLATFORM_DEPLOY_ENV,url:process.env.FRONTEND_URL};
+ const staff=await Promise.all([mkStaff(e,['users.view'],'n'),mkStaff(e,['settings.view'],'v'),mkStaff(e,['settings.view','settings.manage','audit.view'],'m')]);
+ try {
+  for(const official of [true,false]) {
+   if(official)process.env.PLATFORM_DEPLOY_ENV='official';else delete process.env.PLATFORM_DEPLOY_ENV;
+   process.env.FRONTEND_URL=official?'https://waseetai.com':'https://dev.waseetai.com';
+   for(const path of [S,'/admin/settings','/admin/infrastructure/performance','/admin/security/login-blocks']) {
+    assert.equal((await e.call('GET',path,null)).status,401,path);
+    for(const user of staff)assert.equal((await e.call('GET',path,user.user.id)).status,403,path);
+    assert.equal((await e.call('GET',path,e.sa.id)).status,200,path);
+   }
+   for(const user of staff) {
+    assert.equal((await put(e,user.user.id,{platformName:'refused'},{platformName:0})).status,403);
+    assert.equal((await e.call('POST','/admin/security/login-blocks/unblock',user.user.id,{id:'invalid'})).status,403);
+    assert.equal((await e.call('POST','/admin/infrastructure/cdn/purge',user.user.id,{})).status,403);
+   }
+   assert.deepEqual((await e.call('GET',`${S}/access`,staff[2].user.id)).json.data,{officialDeployment:official,isSuperAdmin:false,available:false});
+   assert.deepEqual((await e.call('GET',`${S}/access`,e.sa.id)).json.data,{officialDeployment:official,isSuperAdmin:true,available:true});
+   const before=await one(e,e.sa.id,'registrationOpen');
+   assert.equal((await put(e,e.sa.id,{registrationOpen:!before.value},{registrationOpen:before.version})).status,200);
+   assert.equal((await e.prisma.platformSetting.findUniqueOrThrow({where:{key:'registrationOpen'}})).value,!before.value);
+   assert.equal((await e.call('PUT','/admin/settings',e.sa.id,{supportEmail:'bypass@example.test'})).status,410);
+   // Sensitive actions reach their validation on both deployments, without executing an external action.
+   assert.equal((await e.call('POST','/admin/security/login-blocks/unblock',e.sa.id,{id:'invalid'})).status,400);
+   assert.equal((await e.call('POST','/admin/infrastructure/cdn/purge',e.sa.id,{})).status,400);
+   assert.equal((await e.call('POST','/admin/infrastructure/backups/jobs',e.sa.id,{})).status,400);
+  }
+ } finally {if(saved.flag===undefined)delete process.env.PLATFORM_DEPLOY_ENV;else process.env.PLATFORM_DEPLOY_ENV=saved.flag;if(saved.url===undefined)delete process.env.FRONTEND_URL;else process.env.FRONTEND_URL=saved.url;}
 });
 
 test('PG settings: saves are versioned (a stale save is refused 409 and shows the current value), validated per key, atomic with the audit entry, and a no-op writes nothing', opts, async () => {

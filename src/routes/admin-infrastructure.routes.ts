@@ -3,13 +3,12 @@ import { infrastructureActions } from '../services/infrastructure-actions.servic
 import { AppError } from '../utils/app-error';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { requireSuperAdmin } from '../middlewares/admin-access.middleware';
-import { requireOfficialDeployment } from '../middlewares/official-deployment.middleware';
 import { adminInfrastructureService as svc } from '../services/admin-infrastructure.service';
 
-/** Super Admin + official environment. External mutations require durable intent, reason, typed confirmation and idempotency. */
+/** Super Admin on every environment. External mutations require durable intent, reason, typed confirmation and idempotency. */
 const router = Router();
 const ok = (fn: (req: Request) => unknown | Promise<unknown>) => async (req: Request, res: Response, next: NextFunction) => { try { res.set('Cache-Control', 'no-store'); res.json({ success: true, data: await fn(req) }); } catch (e) { next(e); } };
-router.use(authenticate, requireActiveUser, requireOfficialDeployment, requireSuperAdmin);
+router.use(authenticate, requireActiveUser, requireSuperAdmin);
 router.get('/servers', ok(() => svc.servers()));
 router.get('/database', ok(() => svc.database()));
 router.get('/performance', ok(() => svc.performance()));
