@@ -144,6 +144,7 @@ class SpecialtyService {
     return prisma.specialty.findMany({
       where: {
         isActive: true,
+        category: { isActive: true },
         ...(categoryId && categoryId !== 'all' ? { categoryId } : {})
       },
       orderBy: [

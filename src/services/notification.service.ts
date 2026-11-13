@@ -289,6 +289,28 @@ export class NotificationService {
 		if (result.status === 'failed') logEmailFailure('notification', email, result.error);
 	}
 
+  /** Durable broadcast worker owns retries. SMTP acceptance is not a claim of delivery or reading. */
+  public async sendStoredBroadcastEmail(id: string): Promise<{ status: 'SENT' | 'FAILED' | 'SKIPPED' | 'UNKNOWN'; reason?: string }> {
+    const n = await prisma.notification.findUnique({ where: { id } });
+    if (!n || n.type !== 'ADMIN_BROADCAST') return { status: 'SKIPPED', reason: 'NOTIFICATION_MISSING' };
+    const dto = toDto(n);
+    const user = await prisma.user.findUnique({ where: { id: n.userId }, select: { accountType: true, status: true, isBanned: true } });
+    if (!user || user.status !== 'ACTIVE' || user.isBanned) return { status: 'SKIPPED', reason: 'RECIPIENT_INACTIVE' };
+    const action = user.accountType.startsWith('CLIENT') ? '/client-overview' : user.accountType === 'MARKETING_BROKER' ? '/marketer-overview' : '/provider-overview';
+    const { channels, recipient, lang } = await this.resolveDelivery(n.userId, action, n.type);
+    if (!channels.email || !recipient?.email) return { status: 'SKIPPED', reason: 'EMAIL_PREFERENCE_OFF' };
+    const copy = notificationMailCopy(lang);
+    const result = await dispatchMail({ purpose: 'notification-copy', to: recipient.email, recipientKey: n.userId, eventKey: n.id, anchorNotificationId: n.id,
+      subject: brandSubject(dto.title),
+      html: buildNotificationEmailHtml({ lang, greeting: copy.greeting(recipient.firstName || ''), title: dto.title, message: dto.message, linkUrl: null, ctaLabel: copy.open, footerNote: copy.footer }),
+      text: `${dto.title}\n${dto.message}\n\n${copy.footer}` });
+    if (result.status === 'failed') return { status: 'FAILED', reason: 'SMTP_SEND_FAILED' };
+    if (result.status === 'suppressed') return { status: result.reason === 'duplicate' ? 'UNKNOWN' : 'SKIPPED', reason: result.reason };
+    const response = result.info as { accepted?: unknown[]; rejected?: unknown[] } | undefined;
+    if (response?.rejected?.length || (Array.isArray(response?.accepted) && !response.accepted.length)) return { status: 'FAILED', reason: 'SMTP_RECIPIENT_REJECTED' };
+    return { status: 'SENT' };
+  }
+
 	/** Broadcasts are in-app only: never call the e-mail delivery pipeline. */
  public async emitStoredInApp(id: string): Promise<void> {
   const n = await prisma.notification.findUnique({ where: { id } });

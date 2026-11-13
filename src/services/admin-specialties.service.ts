@@ -1,8 +1,18 @@
+import { markSettingsChanged } from './settings-revision';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { platformZone, startOfMonthInZone } from '../utils/platform-time';
 import { AppError } from '../utils/app-error';
 
 export class AdminSpecialtiesService {
+  private async mutate<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+    const result = await prisma.$transaction(async tx => {
+      const result = await fn(tx);
+      await markSettingsChanged(tx, ['taxonomy']);
+      return result;
+    });
+    return result;
+  }
   async getStats() {
     const totalSpecialties = await prisma.specialty.count();
     const totalCategories = await prisma.category.count();
@@ -77,21 +87,28 @@ export class AdminSpecialtiesService {
   }
 
   async createCategory(data: { slug: string; nameAr: string; nameEn?: string; description?: string }) {
-    return prisma.category.create({ data });
+    return this.mutate(tx => tx.category.create({ data: { ...data, name: data.nameAr } }));
   }
 
   async updateCategory(id: string, data: any) {
-    return prisma.category.update({ where: { id }, data });
+    return this.mutate(async tx => {
+      const old = await tx.category.findUniqueOrThrow({ where: { id } });
+      const updated = await tx.category.update({ where: { id }, data: { ...data, ...(data.nameAr !== undefined ? { name: data.nameAr } : {}) } });
+      // Current profile labels/slugs are legacy references; stable FK relations already read the new title.
+      // Project/contract snapshots retain the text agreed at creation.
+      if (old.slug !== updated.slug || old.nameAr !== updated.nameAr) {
+        await tx.project.updateMany({ where: { specialty: { in: [old.slug, old.nameAr, old.name].filter(Boolean) as string[] } }, data: { specialty: updated.slug } });
+        await tx.providerProfile.updateMany({ where: { mainSpecialty: { in: [old.slug, old.nameAr, old.name].filter(Boolean) as string[] } }, data: { mainSpecialty: updated.slug } });
+      }
+      return updated;
+    });
   }
 
   async toggleCategoryStatus(id: string) {
     const category = await prisma.category.findUnique({ where: { id } });
     if (!category) throw new AppError('Category not found', 404);
 
-    return prisma.category.update({
-      where: { id },
-      data: { isActive: !category.isActive }
-    });
+    return this.mutate(tx => tx.category.update({ where: { id }, data: { isActive: !category.isActive } }));
   }
 
   async deleteCategory(id: string) {
@@ -106,25 +123,30 @@ export class AdminSpecialtiesService {
       throw new AppError('لا يمكن حذف قسم يحتوي على تخصصات. يرجى حذف التخصصات أو نقلها أولاً.', 400);
     }
 
-    return prisma.category.delete({ where: { id } });
+    return this.mutate(tx => tx.category.delete({ where: { id } }));
   }
 
   async createSpecialty(data: { slug: string; categoryId: string; nameAr: string; nameEn?: string; description?: string }) {
-    return prisma.specialty.create({ data });
+    return this.mutate(tx => tx.specialty.create({ data: { ...data, name: data.nameAr } }));
   }
 
   async updateSpecialty(id: string, data: any) {
-    return prisma.specialty.update({ where: { id }, data });
+    return this.mutate(async tx => {
+      const old = await tx.specialty.findUniqueOrThrow({ where: { id } });
+      const updated = await tx.specialty.update({ where: { id }, data: { ...data, ...(data.nameAr !== undefined ? { name: data.nameAr } : {}) } });
+      if (old.nameAr !== updated.nameAr) {
+        await tx.$executeRaw`UPDATE projects SET "subSpecialties" = array_replace("subSpecialties", ${old.nameAr}, ${updated.nameAr}) WHERE "subSpecialties" @> ARRAY[${old.nameAr}]::text[]`;
+        await tx.$executeRaw`UPDATE provider_profiles SET "subSpecialties" = array_replace("subSpecialties", ${old.nameAr}, ${updated.nameAr}) WHERE "subSpecialties" @> ARRAY[${old.nameAr}]::text[]`;
+      }
+      return updated;
+    });
   }
 
   async toggleSpecialtyStatus(id: string) {
     const specialty = await prisma.specialty.findUnique({ where: { id } });
     if (!specialty) throw new AppError('Specialty not found', 404);
 
-    return prisma.specialty.update({
-      where: { id },
-      data: { isActive: !specialty.isActive }
-    });
+    return this.mutate(tx => tx.specialty.update({ where: { id }, data: { isActive: !specialty.isActive } }));
   }
 
   async deleteSpecialty(id: string) {
@@ -139,7 +161,7 @@ export class AdminSpecialtiesService {
       throw new AppError('لا يمكن حذف تخصص مرتبط بمقدمي خدمة نشطين.', 400);
     }
 
-    return prisma.specialty.delete({ where: { id } });
+    return this.mutate(tx => tx.specialty.delete({ where: { id } }));
   }
 
 }

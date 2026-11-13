@@ -496,7 +496,7 @@ if (process.env.NODE_ENV !== 'test') {
 		// warm the settings cache so the maintenance / registration policies have a trusted value as early as possible (a failure is logged; the cold-boot policy covers the gap)
 		void systemSettingsService.prime();
 		// settings changed on ANY instance: drop this process's cache and push the public state to its open browsers
-		onSettingsNotice(async () => { systemSettingsService.invalidate(); await broadcastPlatformState(io); });
+		onSettingsNotice(async n => { systemSettingsService.invalidate(); if (!n.keys.length || n.keys.includes('taxonomy')) io.emit('taxonomy:changed', { revision: n.revision ?? n.at }); await broadcastPlatformState(io); });
 		startSettingsListener();
 		startSiteIdentityCache(); // non-blocking: the replaced e-mail logo (if any) for the synchronous mail shell; a failure leaves the default
 	});

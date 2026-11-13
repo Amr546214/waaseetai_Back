@@ -34,6 +34,19 @@ const id = (req: Request) => String(req.params.id);
 
 router.use(authenticate, requireActiveUser);
 
+router.get('/sidebar-counts', requireAdminMember, ok(async req => {
+  const actor = await loadAdminActor(req);
+  const can = (p: string) => actor.isSuperAdmin || actor.permissions.has(p);
+  const [disputes, reports, support, modifications, profileChanges] = await Promise.all([
+    can('disputes.view') ? prisma.dispute.count({ where: { status: { in: ['OPEN', 'UNDER_REVIEW'] } } }) : 0,
+    can('reports.view') ? prisma.platformReport.count({ where: { status: 'OPEN' } }) : 0,
+    can('support.review') ? prisma.supportTicket.count({ where: { status: { in: ['OPEN', 'IN_PROGRESS', 'AWAITING_CUSTOMER'] } } }) : 0,
+    can('identity.review') ? prisma.profileModificationRequest.count({ where: { status: { in: ['IN_AI_REVIEW', 'PENDING_HUMAN_REVIEW'] } } }) : 0,
+    can('identity.review') ? prisma.profileChangeRequest.count({ where: { status: { in: ['PENDING_AI_REVIEW', 'PENDING_HUMAN_APPROVAL'] } } }) : 0,
+  ]);
+  return { disputes, reports, support, modifications: modifications + profileChanges, total: disputes + reports + support + modifications + profileChanges };
+}));
+
 // --- who am I (any admin-type account, even one with no permission: it must be able to see WHY it sees nothing) ---
 router.get('/access/me', requireAdminAccount, ok(async req => {
 	const a = await loadAdminActor(req);

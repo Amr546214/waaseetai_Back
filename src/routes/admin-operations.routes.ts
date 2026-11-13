@@ -1,3 +1,4 @@
+import { devResetCapability, previewDevReset, executeDevReset } from '../services/dev-data-reset.service';
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
@@ -5,11 +6,14 @@ import { requireAdminMember, requirePermission, requireSuperAdmin } from '../mid
 import { AppError } from '../utils/app-error';
 import { operatingFinance, expenseCategories } from '../services/admin-operating-finance.service';
 import { listCashback, processCashback } from '../services/cashback-review.service';
-import { audiences, contentPages, saveContent, publishedContent, broadcastList, draftBroadcast, previewBroadcast, sendBroadcast } from '../services/admin-communications.service';
+import { audiences, contentPages, saveContent, publishedContent, broadcastCapabilities, broadcastList, draftBroadcast, previewBroadcast, sendBroadcast } from '../services/admin-communications.service';
 const router=Router();router.use(authenticate,requireActiveUser,requireAdminMember);
 const wrap=(fn:(r:Request)=>Promise<unknown>)=>async(r:Request,s:Response,n:NextFunction)=>{try{s.json({success:true,data:await fn(r)});}catch(e){if(e instanceof z.ZodError)n(new AppError(e.issues.map(i=>`${i.path.join('.')}: ${i.message}`).join('؛ '),400));else n(e);}};
 const version=z.number().int().min(0),text=(n:number)=>z.string().trim().min(1).max(n),key=z.string().uuid();
 const page=(r:Request)=>Math.min(100000,Math.max(1,Math.floor(Number(r.query.page))||1));
+router.get('/dev-reset',requireSuperAdmin,wrap(()=>devResetCapability()));
+router.post('/dev-reset/preview',requireSuperAdmin,wrap(r=>previewDevReset(r.user!.id)));
+router.post('/dev-reset/execute',requireSuperAdmin,wrap(r=>executeDevReset(r.user!.id,z.object({token:key,confirmation:text(80),reason:text(500),backupConfirmed:z.literal(true)}).strict().parse(r.body))));
 router.get('/expenses',requirePermission('finance.read'),wrap(r=>operatingFinance.list(page(r))));
 router.get('/result',requirePermission('finance.read'),wrap(()=>operatingFinance.result()));
 router.post('/expenses',requireSuperAdmin,wrap(r=>operatingFinance.record(r.user!.id,z.object({requestKey:key,amount:z.number().finite().positive().max(100000000).refine(n=>Math.abs(n*100-Math.round(n*100))<0.000001,'استخدم منزلتين عشريتين'),category:z.enum(expenseCategories),description:text(1000),reference:z.string().trim().max(160).optional(),incurredAt:z.string().datetime({offset:true}).refine(s=>new Date(s).getTime()<=Date.now()+60000,'تاريخ المصروف لا يكون في المستقبل')}).parse(r.body))));
@@ -19,8 +23,9 @@ router.get('/cashback',requirePermission('finance.read'),wrap(r=>listCashback(pa
 router.post('/cashback/:id/score',requireSuperAdmin,wrap(r=>{const b=z.object({version,score:z.number().finite().min(0).max(100),note:text(500)}).parse(r.body);return processCashback(String(r.params.id),{id:r.user!.id,...b});}));
 router.get('/content',requireSuperAdmin,wrap(()=>contentPages()));
 router.put('/content/:slug',requireSuperAdmin,wrap(r=>saveContent(r.user!.id,String(r.params.slug),z.object({body:z.string().max(60000),version,action:z.enum(['DRAFT','PUBLISH','UNPUBLISH']),reason:text(500)}).refine(b=>b.action==='UNPUBLISH'||!!b.body.trim(),'المحتوى مطلوب').parse(r.body))));
+router.get('/broadcast/capabilities',requireSuperAdmin,wrap(()=>broadcastCapabilities()));
 router.get('/broadcast',requireSuperAdmin,wrap(()=>broadcastList()));
-router.post('/broadcast',requireSuperAdmin,wrap(r=>draftBroadcast(r.user!.id,z.object({requestKey:key,title:text(150),message:text(4000),audience:z.enum(audiences)}).parse(r.body))));
+router.post('/broadcast',requireSuperAdmin,wrap(r=>draftBroadcast(r.user!.id,z.object({requestKey:key,title:text(150),message:text(4000),audience:z.enum(audiences),emailRequested:z.boolean().default(true)}).parse(r.body))));
 router.get('/broadcast/:id/preview',requireSuperAdmin,wrap(r=>previewBroadcast(String(r.params.id))));
 router.post('/broadcast/:id/send',requireSuperAdmin,wrap(r=>{const b=z.object({version,recipients:z.number().int().nonnegative(),confirm:z.literal(true)}).parse(r.body);return sendBroadcast(r.user!.id,String(r.params.id),b.version,b.recipients);}));
 router.post('/broadcast/:id/cancel',requireSuperAdmin,wrap(r=>{const b=z.object({version,confirm:z.literal(true)}).parse(r.body);return sendBroadcast(r.user!.id,String(r.params.id),b.version,0,true);}));
