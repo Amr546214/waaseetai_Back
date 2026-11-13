@@ -84,11 +84,13 @@ router.post(
   authController.resetPassword
 );
 
+const passwordLoginLimits = loginLimiters((req) => req.body?.email);
 router.post(
   '/login',
   validateRequest(loginSchema),
+  passwordLoginLimits[0], // flood safety net precedes database reservation
   loginGuardGate((req) => req.body?.email),
-  ...loginLimiters((req) => req.body?.email),
+  ...passwordLoginLimits.slice(1),
   authController.login
 );
 

@@ -15,3 +15,8 @@ test('snapshot counts requests/errors and reports percentile upper bounds only o
 	assert.equal(g.requests, 7); assert.equal(g.errors5xx, 1); assert.equal(g.errors4xx, 1); assert.ok(g.p50MsUpperBound! <= 50); assert.ok(g.p95MsUpperBound! >= 2500);
 	assert.equal(s.groups.some(x => x.group === 'GET old'), false, 'outside the window'); assert.equal(s.totals.requests, 7);
 });
+
+test('histogram overflow is not a false 5000ms upper bound and expired groups release their capacity',()=>{
+ resetRequestMetrics();recordRequest('GET','/slow',200,10000,1000000);assert.equal(requestMetricsSnapshot(1000000).groups[0].p95MsUpperBound,null);
+ resetRequestMetrics();for(let i=0;i<200;i++)recordRequest('GET',`/route${i}`,200,20,1000000);recordRequest('GET','/new-route',200,10,3000000);assert.equal(requestMetricsSnapshot(3000000).totals.requests,1);
+});

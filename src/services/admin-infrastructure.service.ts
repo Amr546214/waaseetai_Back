@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { infrastructureActions } from './infrastructure-actions.service';
 import os from 'node:os';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { prisma as defaultPrisma } from '../config/db';
@@ -9,7 +10,7 @@ import { requestMetricsSnapshot, startedAt } from './request-metrics';
  * and over WHICH scope (this backend process only / the shared database / the last N minutes). Container numbers (cgroup) are never presented as server numbers: inside a container the
  * host load average and memory are the HOST's, and are labelled so. Anything the platform has no source for is returned as `unavailable` with the NAMED missing requirement - never a sample number.
  */
-export type Source = 'process' | 'container' | 'host' | 'database' | 'config' | 'filesystem' | 'backup-dir';
+export type Source = 'process' | 'container' | 'host' | 'database' | 'config' | 'filesystem' | 'backup-dir' | 'provider' | 'backup-agent';
 export interface Item { label: string; value: string | number | boolean | null; unit?: string; note?: string }
 export interface Section { title: string; source: Source; scope: string; measuredAt: string; items?: Item[]; table?: { columns: string[]; rows: Array<Array<string | number | null>> }; unavailable?: { reason: string; requirement: string } }
 const now = () => new Date().toISOString();
@@ -66,7 +67,7 @@ export class AdminInfrastructureService {
 
 	performance() { const snap = requestMetricsSnapshot(); return { measuredAt: now(), sections: [
 		{ title: 'الطلبات (آخر ' + snap.windowMinutes + ' دقيقة)', source: 'process' as const, scope: 'هذه النسخة من الخلفية فقط؛ تتصفّر عند إعادة تشغيلها', measuredAt: now(), items: [{ label: 'إجمالي الطلبات', value: snap.totals.requests }, { label: 'أخطاء الخادم 5xx', value: snap.totals.errors5xx }, { label: 'أخطاء العميل 4xx', value: snap.totals.errors4xx }, { label: 'بداية النافذة', value: snap.since }] },
-		{ title: 'أبطأ/أكثر المسارات طلبًا', source: 'process' as const, scope: 'مجمّعة حسب الطريقة وأول مقطعين من المسار؛ p50/p95 حدّ أعلى لشريحة زمنية', measuredAt: now(), table: { columns: ['المسار', 'طلبات', '4xx', '5xx', 'متوسط ms', 'p50 ≤ ms', 'p95 ≤ ms'], rows: snap.groups.map(g => [g.group, g.requests, g.errors4xx, g.errors5xx, g.avgMs, g.p50MsUpperBound, g.p95MsUpperBound]) } },
+		{ title: 'أبطأ/أكثر المسارات طلبًا', source: 'process' as const, scope: 'مجمّعة حسب الطريقة وأول مقطعين من المسار؛ p50/p95 حدّ أعلى لشريحة زمنية', measuredAt: now(), table: { columns: ['المسار', 'طلبات', '4xx', '5xx', 'متوسط ms', 'p50 ≤ ms', 'p95 ≤ ms'], rows: snap.groups.map(g => [g.group, g.requests, g.errors4xx, g.errors5xx, g.avgMs, g.p50MsUpperBound ?? '> 5000', g.p95MsUpperBound ?? '> 5000']) } },
 		runtimeSection(this.io())] }; }
 
 	apis() { const env = (k: string) => !!process.env[k]; return { measuredAt: now(), sections: [
@@ -77,18 +78,16 @@ export class AdminInfrastructureService {
 
 	async cdn() {
 		const rows = await this.db.$queryRawUnsafe<Array<{ n: number; bytes: bigint | null }>>(`SELECT count(*)::int AS n, coalesce(sum(length(bytes)), 0)::bigint AS bytes FROM site_identity_assets WHERE status = 'PUBLISHED'`).catch(() => null);
+		let provider: Section;
+        try { const c = await infrastructureActions.cdn.status(); provider = { title: 'شبكة توصيل المحتوى (CDN)', source: 'provider', scope: `Cloudflare zone: ${c.name} · ${c.since} — ${c.until}`, measuredAt: now(), items: [{label:'حالة النطاق',value:c.status},{label:'طلبات آخر 24 ساعة كاملة',value:c.analytics?.requests ?? null},{label:'نسبة إصابة الكاش',value:c.analytics && c.analytics.requests ? Math.round(c.analytics.cachedRequests/c.analytics.requests*10000)/100 : null,unit:'%',note:c.analytics?'من عدادات Cloudflare':'يلزم رمز بصلاحية Analytics Read وخطة تدعم البيانات'},{label:'حجم البيانات',value:c.analytics?.bytes ?? null,unit:'bytes'}] }; } catch { provider = {title:'شبكة توصيل المحتوى (CDN)',source:'provider',scope:'Cloudflare',measuredAt:now(),unavailable:{reason:'التكامل غير مهيأ أو تعذر الاتصال بالمزوّد.',requirement:'CDN_PROVIDER=cloudflare + CDN_API_TOKEN (Zone Read, Analytics Read, Cache Purge) + CDN_ZONE_ID'}}; }
 		return { measuredAt: now(), sections: [
 			rows ? { title: 'أصول الهوية المنشورة (من قاعدة البيانات)', source: 'database' as const, scope: 'الأصول التي تخدمها المنصة نفسها', measuredAt: now(), items: [{ label: 'عدد الأصول المنشورة', value: rows[0].n }, { label: 'حجمها الكلي', value: Math.round(Number(rows[0].bytes ?? 0) / 1024), unit: 'KB' }] } : { title: 'أصول الهوية', source: 'database' as const, scope: 'site_identity_assets', measuredAt: now(), unavailable: { reason: 'الجدول غير مقروء.', requirement: 'ترحيل الهوية مطبّق' } },
-			{ title: 'شبكة توصيل المحتوى (CDN)', source: 'config' as const, scope: 'لا توجد CDN مرتبطة بالمنصة', measuredAt: now(), unavailable: { reason: 'لا يوجد مزوّد CDN مُهيّأ، لذلك لا نسبة إصابة كاش ولا تنقية كاش.', requirement: 'مزوّد CDN (مثل Cloudflare) + CDN_PROVIDER وCDN_API_TOKEN وCDN_ZONE_ID' } }] };
+            provider] };
 	}
 
-	backups() {
-		const dir = process.env.BACKUP_DIR;
-		if (!dir) return { measuredAt: now(), sections: [{ title: 'النسخ الاحتياطي', source: 'backup-dir' as const, scope: 'مجلد النسخ المحدد في البيئة', measuredAt: now(), unavailable: { reason: 'لا يوجد مصدر نسخ احتياطي مربوط بالتطبيق؛ تُنفَّذ النسخ خارجه.', requirement: 'BACKUP_DIR: مجلد (مقروء للخلفية) تُكتب فيه ملفات النسخ' } }] };
-		try {
-			const files = fs.readdirSync(dir).map(n => { const st = fs.statSync(`${dir}/${n}`); return { n, st }; }).filter(f => f.st.isFile()).sort((a, b) => b.st.mtimeMs - a.st.mtimeMs).slice(0, 30);
-			return { measuredAt: now(), sections: [{ title: 'ملفات النسخ الاحتياطي', source: 'backup-dir' as const, scope: 'قراءة فقط من BACKUP_DIR (لا يُنفَّذ أي نسخ أو استعادة من هنا)', measuredAt: now(), table: { columns: ['الملف', 'الحجم (MB)', 'آخر تعديل'], rows: files.map(f => [f.n, mb(f.st.size), f.st.mtime.toISOString()]) } }] };
-		} catch { return { measuredAt: now(), sections: [{ title: 'النسخ الاحتياطي', source: 'backup-dir' as const, scope: dir, measuredAt: now(), unavailable: { reason: 'تعذّرت قراءة المجلد.', requirement: 'صلاحية قراءة BACKUP_DIR للخلفية' } }] }; }
-	}
+ async backups() {
+  try { const b = await infrastructureActions.backup.call('/files'); return { measuredAt:now(), sections:[{title:'النسخ الاحتياطي',source:'backup-agent' as const,scope:'عامل النسخ — الاسترداد إلى قاعدة منفصلة فقط',measuredAt:now(),items:[{label:'قاعدة الاسترداد مهيأة',value:!!b.recoveryConfigured}],table:{columns:['الملف','الحجم (MB)','التاريخ','SHA256'],rows:b.files.map((f:any)=>[f.file,mb(f.bytes),f.at,f.sha256])}}] }; }
+  catch { return {measuredAt:now(),sections:[{title:'النسخ الاحتياطي',source:'backup-agent' as const,scope:'عامل نسخ منفصل عن خادم التطبيق',measuredAt:now(),unavailable:{reason:'عامل النسخ غير مهيأ أو لا يستجيب.',requirement:'BACKUP_AGENT_URL + BACKUP_AGENT_TOKEN؛ العامل: BACKUP_DIR + SOURCE_DATABASE_URL، وللاسترداد RESTORE_DATABASE_URL لقاعدة منفصلة'}}]}; }
+ }
 }
 export const adminInfrastructureService = new AdminInfrastructureService(defaultPrisma, () => { try { return (require('../socket') as { getIO: () => never }).getIO(); } catch { return null; } });

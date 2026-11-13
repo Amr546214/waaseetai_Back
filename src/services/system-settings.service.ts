@@ -7,7 +7,7 @@ import { ENFORCED_KEYS, PUBLIC_KEYS, SETTINGS_CACHE_TTL_MS, SETTING_BY_KEY, SETT
 import { currencyReadiness } from './currency-readiness.service';
 import { logger } from '../config/logger';
 import { sessionService } from './session.service';
-import { publishSettingsChange } from './settings-bus';
+import { markSettingsChanged, PUBLIC_REVISION_KEY } from './settings-revision';
 import { setBrandName } from '../utils/brand'; // used only inside functions: the cycle with session.service is harmless
 
 export const SETTINGS_VERSION_CONFLICT = 'SETTINGS_VERSION_CONFLICT';
@@ -26,19 +26,25 @@ const can = (actor: Pick<AdminActor, 'isSuperAdmin' | 'permissions'>, perm: Sett
  */
 export class SystemSettingsService {
 	private cache: Snapshot | null = null;
+ private generation = 0; private lastRevision = 0;
 	constructor(private db: typeof defaultPrisma = defaultPrisma) {}
 
-	invalidate() { this.cache = null; }
+	invalidate() { this.cache = null; this.generation++; }
 
 	private async snapshot(force = false): Promise<Snapshot> {
 		if (!force && this.cache && Date.now() - this.cache.at < SETTINGS_CACHE_TTL_MS) return this.cache;
+		const generation = this.generation;
 		const values = new Map<string, { value: unknown; version: number }>(); let storage = true;
 		try {
 			const rows = await this.db.platformSetting.findMany();
 			for (const r of rows) values.set(r.key, { value: r.value, version: r.version });
 		} catch (e) { if (isMissingTableError(e)) storage = false; else throw e; }
+		if (generation !== this.generation) return this.snapshot(true);
+        const revision = values.get(PUBLIC_REVISION_KEY)?.version ?? 0;
+        if (revision < this.lastRevision && this.cache) return this.cache;
+        this.lastRevision = Math.max(this.lastRevision, revision);
 		this.cache = { at: Date.now(), values, storage };
-		this.noteGood(this.cache);
+		if (storage) this.noteGood(this.cache);
 		return this.cache;
 	}
 
@@ -64,8 +70,8 @@ export class SystemSettingsService {
 		if (!def || def.status !== 'enforced' || !def.schema) throw new Error(`unknown enforced setting ${key}`);
 		try {
 			const s = await this.snapshot(); const row = s.values.get(key);
-			if (row) { const p = def.schema.safeParse(row.value); if (p.success) return { value: p.data as T, trusted: true, stale: false }; }
-			return { value: def.default as T, trusted: true, stale: false };
+			if (row) { const p = def.schema.safeParse(row.value); if (p.success) return { value: p.data as T, trusted: s.storage, stale: false }; }
+			return { value: def.default as T, trusted: s.storage, stale: false };
 		} catch (e) {
 			this.logReadFailure(e);
 			const g = this.lastGood.get(key); if (g) return { value: g.value as T, trusted: true, stale: true };
@@ -87,11 +93,19 @@ export class SystemSettingsService {
 		return { storageReady: s.storage, items };
 	}
 
-	async publicValues() {
-		const out: Record<string, unknown> = {};
-		for (const k of PUBLIC_KEYS) out[k] = await this.get(k);
-		return out;
-	}
+ async publicSnapshot() {
+  try {
+   const snapshot = await this.snapshot();
+   const data: Record<string, unknown> = {};
+   for (const key of PUBLIC_KEYS) { const def = SETTING_BY_KEY.get(key)!; const parsed = def.schema!.safeParse(snapshot.values.get(key)?.value); data[key] = parsed.success ? parsed.data : def.default; }
+   return { data, revision: snapshot.values.get(PUBLIC_REVISION_KEY)?.version ?? 0, trusted: snapshot.storage };
+  } catch (e) {
+   this.logReadFailure(e); const data: Record<string, unknown> = {};
+   for (const key of PUBLIC_KEYS) data[key] = this.lastGood.get(key)?.value ?? SETTING_BY_KEY.get(key)!.default;
+   return { data, revision: this.lastRevision, trusted: this.hasTrustedValues() };
+  }
+ }
+ async publicValues() { return (await this.publicSnapshot()).data; }
 
 	async update(actor: AdminActor, body: unknown, ctx: SettingsCtx = {}) {
 		const b = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null;
@@ -124,11 +138,20 @@ export class SystemSettingsService {
 		const afterVals = Object.fromEntries(changed.map(k => [k, brief(clean.get(k))]));
 		try {
 			await this.db.$transaction(async tx => {
+                if (changed.some(k => k.startsWith('login'))) {
+                 // Serialize policy changes so two independent partial saves cannot create an invalid pair of limits.
+                 await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('login-guard-policy'))`;
+                 const current = await tx.platformSetting.findMany({ where: { key: { in: ['loginMaxFailedAttempts','loginIpMaxFailedAttempts'] } } });
+                 const policy = (key: string) => clean.has(key) ? Number(clean.get(key)) : Number(current.find(r => r.key === key)?.value ?? SETTING_BY_KEY.get(key)!.default);
+                 if (policy('loginIpMaxFailedAttempts') < policy('loginMaxFailedAttempts')) throw fieldError('loginIpMaxFailedAttempts', 'حد عنوان IP يجب ألا يقل عن حد الحساب');
+                }
+
 				for (const k of changed) {
 					const cur = before.values.get(k);
 					if (cur) { const r = await tx.platformSetting.updateMany({ where: { key: k, version: cur.version }, data: { value: clean.get(k) as Prisma.InputJsonValue, version: { increment: 1 }, updatedBy: actor.userId } }); if (r.count === 0) throw new AppError('عُدّل هذا الإعداد من جهة أخرى قبل حفظك. أعد التحميل وراجع التغيير.', 409, [{ key: k }], SETTINGS_VERSION_CONFLICT); }
 					else await tx.platformSetting.create({ data: { key: k, value: clean.get(k) as Prisma.InputJsonValue, version: 1, updatedBy: actor.userId } });
 				}
+                await markSettingsChanged(tx, changed);
 				await tx.accountAuditLog.create({ data: {
 					userId: actor.userId, category: LogCategory.SYSTEM_AUDIT, title: 'تعديل إعدادات المنصة', actionText: `تعديل إعدادات المنصة: ${changed.join('، ')}`, summary: `تعديل إعدادات المنصة: ${changed.join('، ')}`,
 					eventType: 'PLATFORM_SETTINGS_UPDATED', source: 'ADMIN', severity: changed.some(k => SETTING_BY_KEY.get(k)!.write === 'SUPER') ? 'WARNING' : 'INFO', status: LogStatus.COMPLETED, actorLabel: 'ADMIN',
@@ -140,7 +163,6 @@ export class SystemSettingsService {
 			throw e;
 		}
 		this.invalidate();
-		void publishSettingsChange(changed); // only after the commit above; keys only, no values
 		return { changed, items: (await this.view(actor)).items };
 	}
 

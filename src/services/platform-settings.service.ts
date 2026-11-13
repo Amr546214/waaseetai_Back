@@ -4,7 +4,6 @@ import { AppError, fieldErrors } from '../utils/app-error';
 import { withTableGuard, isMissingTableError } from '../utils/missing-table';
 import { SETTING_BY_KEY } from '../config/system-settings.registry';
 import { systemSettingsService } from './system-settings.service';
-import { publishSettingsChange } from './settings-bus';
 
 const text = (max: number) => z.string().trim().max(max);
 const optionalPhone = text(30).regex(/^[0-9+()\-\s]*$/, 'رقم الهاتف غير صالح');
@@ -78,20 +77,9 @@ export class PlatformSettingsService {
 	}
 
 	/** Saves the cleaned values; returns the before/after of only the keys that really changed (empty = nothing changed). */
-	async update(clean: Record<string, string | boolean>, adminId: string) {
-		const before = await this.getAll();
-		const changed = Object.keys(clean).filter(k => before[k as SettingKey] !== clean[k]);
-		if (!changed.length) return { changed: [] as string[], before: {}, after: {}, settings: before };
-		await withTableGuard(() => prisma.$transaction(changed.map(key => prisma.platformSetting.upsert({
-			where: { key }, create: { key, value: clean[key], updatedBy: adminId }, update: { value: clean[key], updatedBy: adminId, version: { increment: 1 } } // same version counter as the registry service
-		}))), 'مخزن الإعدادات');
-		systemSettingsService.invalidate();
-		void publishSettingsChange(changed);
-		const pick = (src: Record<string, unknown>) => Object.fromEntries(changed.map(k => [k, src[k]]));
-		// long legal text is not copied whole into the audit entry
-		const brief = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === 'string' && v.length > 200 ? `${v.slice(0, 200)}… (${v.length} حرف)` : v]));
-		return { changed, before: brief(pick(before)), after: brief(pick(clean)), settings: { ...before, ...clean } };
-	}
+ async update(_clean: Record<string, string | boolean>, _adminId: string): Promise<never> {
+  throw new AppError('استخدم خدمة إعدادات النظام الموحدة مع النسخ والتدقيق', 410, undefined, 'LEGACY_SETTINGS_WRITE_RETIRED');
+ }
 
 	async history(limit = 20) {
 		const rows = await prisma.accountAuditLog.findMany({

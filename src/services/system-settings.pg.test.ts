@@ -23,16 +23,16 @@ test('PG settings: the operations panel is SUPER_ADMIN-only and official-deploym
 		process.env.PLATFORM_DEPLOY_ENV = 'official'; process.env.FRONTEND_URL = 'https://waseetai.com';
 		const none = await mkStaff(e, ['users.view'], 'n'), viewer = await mkStaff(e, ['settings.view'], 'v'), manager = await mkStaff(e, ['settings.view', 'settings.manage'], 'm');
 		assert.equal((await e.call('GET', S, null)).status, 401);
-		for (const s of [none, viewer, manager]) { assert.equal((await e.call('GET', S, s.user.id)).status, 403); assert.equal((await put(e, s.user.id, { platformName: 'x' }, { platformName: 0 })).status, 403); assert.equal((await e.call('GET', `${S}/login-protection/impact`, s.user.id)).status, 403); }
+		for (const s of [none, viewer, manager]) { assert.equal((await e.call('GET', S, s.user.id)).status, 403); assert.equal((await e.call('GET', '/admin/settings', s.user.id)).status,403); assert.equal((await e.call('PUT','/admin/settings',s.user.id,{supportEmail:'bypass@example.test'})).status,403); assert.equal((await put(e, s.user.id, { platformName: 'x' }, { platformName: 0 })).status, 403); assert.equal((await e.call('GET', `${S}/login-protection/impact`, s.user.id)).status, 403); }
 		const acc = await e.call('GET', `${S}/access`, manager.user.id); assert.equal(acc.status, 200); assert.deepEqual(acc.json.data, { officialDeployment: true, isSuperAdmin: false, available: false });
 		const sa = await e.call('GET', `${S}/access`, e.sa.id); assert.deepEqual(sa.json.data, { officialDeployment: true, isSuperAdmin: true, available: true });
-		assert.equal((await e.call('GET', S, e.sa.id)).status, 200);
+		assert.equal((await e.call('GET', S, e.sa.id)).status, 200);assert.equal((await e.call('PUT','/admin/settings',e.sa.id,{supportEmail:'bypass@example.test'})).status,410);
 		assert.equal((await put(e, e.sa.id, { registrationOpen: false }, { registrationOpen: 0 })).status, 200);
 		assert.equal((await e.prisma.platformSetting.findUniqueOrThrow({ where: { key: 'registrationOpen' } })).value, false);
 		assert.equal((await e.call('GET', `${S}/currency-readiness`, e.sa.id)).status, 200);
 		// dev: even the SUPER_ADMIN is refused, read and write, whatever NODE_ENV says
 		process.env.FRONTEND_URL = 'https://dev.waseetai.com';
-		const r = await e.call('GET', S, e.sa.id); assert.equal(r.status, 403); assert.equal(r.json.code, 'OPERATIONS_PANEL_OFFICIAL_ONLY');
+		assert.equal((await e.call('GET','/admin/settings',e.sa.id)).status,403); const r = await e.call('GET', S, e.sa.id); assert.equal(r.status, 403); assert.equal(r.json.code, 'OPERATIONS_PANEL_OFFICIAL_ONLY');
 		assert.equal((await put(e, e.sa.id, { registrationOpen: true }, { registrationOpen: 1 })).status, 403);
 		assert.deepEqual((await e.call('GET', `${S}/access`, e.sa.id)).json.data, { officialDeployment: false, isSuperAdmin: true, available: false });
 	} finally { if (saved.f === undefined) delete process.env.PLATFORM_DEPLOY_ENV; else process.env.PLATFORM_DEPLOY_ENV = saved.f; if (saved.u === undefined) delete process.env.FRONTEND_URL; else process.env.FRONTEND_URL = saved.u; }
@@ -178,10 +178,11 @@ test('PG settings: the platform name reaches the outgoing e-mail sender (setting
 	assert.equal((await put(e, e.sa.id, { platformName: 'منصة الاختبار' }, { platformName: 0 })).status, 200); assert.equal(await emailSenderName(), 'منصة الاختبار'); const { brandName, setBrandName } = await import('../utils/brand'); await systemSettingsService.prime(); assert.equal(brandName(), 'منصة الاختبار', 'new e-mail shells / subjects carry the configured name'); setBrandName('');
 	assert.equal((await put(e, e.sa.id, { platformName: '' }, { platformName: 1 })).status, 400); // an empty name is refused, so the sender never goes blank
 	delete process.env.EMAIL_SENDER_NAME; systemSettingsService.invalidate();
-	// the legacy route writes the same table and bumps the same version, so a stale registry save is still detected
-	const v0 = (await one(e, e.sa.id, 'supportEmail')).version; const { platformSettingsService } = await import('./platform-settings.service');
-	await platformSettingsService.update({ supportEmail: 'a@pg.test' }, e.sa.id); const v1 = (await one(e, e.sa.id, 'supportEmail')).version; assert.equal(v1, v0 + 1);
-	assert.equal((await put(e, e.sa.id, { supportEmail: 'b@pg.test' }, { supportEmail: v0 })).status, 409);
+	// Retired writes cannot bypass official/Super Admin policy or transactional version checks.
+ const v0=(await one(e,e.sa.id,'supportEmail')).version;const {platformSettingsService}=await import('./platform-settings.service');
+ await assert.rejects(platformSettingsService.update({supportEmail:'a@pg.test'},e.sa.id),x=>(x as any).statusCode===410);
+ assert.equal((await one(e,e.sa.id,'supportEmail')).version,v0);
+
 });
 
 test('PG settings: baseCurrency is shown as USD and BLOCKED (multi-currency is deferred): every change is refused on the server (422 SETTING_NOT_AVAILABLE), nothing is stored', opts, async () => {

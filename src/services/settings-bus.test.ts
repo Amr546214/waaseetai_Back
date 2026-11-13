@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 test('publishing tells THIS process directly, carries keys only, and notifies the database channel', async (t: TestContext) => {
 	const queries: any[] = [];
-	t.mock.module('../config/db', { namedExports: { prisma: { $queryRaw: async (...a: any[]) => { queries.push(a); return []; } } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $executeRaw: async (...a: any[]) => { queries.push(a); return []; } } } });
 	t.mock.module('../config/logger', { namedExports: { logger: { warn: () => undefined, error: () => undefined, info: () => undefined } } });
 	const bus = await import(`./settings-bus?m=${Math.random()}`);
 	const seen: any[] = []; bus.onSettingsNotice((n: any) => { seen.push(n); });
@@ -14,7 +14,7 @@ test('publishing tells THIS process directly, carries keys only, and notifies th
 });
 
 test('a failing notify never throws (other instances converge by cache TTL) and a failing handler does not stop the others', async (t: TestContext) => {
-	t.mock.module('../config/db', { namedExports: { prisma: { $queryRaw: async () => { throw new Error('db down'); } } } });
+	t.mock.module('../config/db', { namedExports: { prisma: { $executeRaw: async () => { throw new Error('db down'); } } } });
 	t.mock.module('../config/logger', { namedExports: { logger: { warn: () => undefined, error: () => undefined, info: () => undefined } } });
 	const bus = await import(`./settings-bus?m=${Math.random()}`);
 	let ok = 0; bus.onSettingsNotice(() => { throw new Error('boom'); }); bus.onSettingsNotice(() => { ok++; });

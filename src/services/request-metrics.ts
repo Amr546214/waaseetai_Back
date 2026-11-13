@@ -11,6 +11,8 @@ const groups = new Map<string, Bucket[]>();
 export const startedAt = Date.now();
 export const groupOf = (method: string, path: string) => `${method} ${path.replace(/^\/api(?=\/)/, '').split('?')[0].split('/').filter(Boolean).slice(0, 2).map(s => (/^[0-9a-f-]{8,}$/i.test(s) || /^\d+$/.test(s) ? ':id' : s)).join('/') || '/'}`;
 export function recordRequest(method: string, path: string, status: number, ms: number, now = Date.now()): void {
+	const oldest = Math.floor(now / BUCKET_MS) - BUCKETS + 1;
+  for (const [k, buckets] of groups) if (!buckets.some(b => b.minute >= oldest)) groups.delete(k);
 	const key = groupOf(method, path); let arr = groups.get(key);
 	if (!arr) { if (groups.size >= MAX_GROUPS) return; arr = []; groups.set(key, arr); }
 	const minute = Math.floor(now / BUCKET_MS); let b = arr[arr.length - 1];
@@ -21,7 +23,7 @@ export const requestMetricsMiddleware = (req: Request, res: Response, next: Next
 	const t = process.hrtime.bigint(); res.once('finish', () => { try { recordRequest(req.method, req.originalUrl || req.path, res.statusCode, Number(process.hrtime.bigint() - t) / 1e6); } catch { /* metrics never break a request */ } });
 	next();
 };
-const pct = (h: number[], total: number, p: number) => { if (!total) return null; let acc = 0; for (let i = 0; i < h.length; i++) { acc += h[i]; if (acc >= total * p) return i < EDGES.length ? EDGES[i] : EDGES[EDGES.length - 1]; } return null; };
+const pct = (h: number[], total: number, p: number) => { if (!total) return null; let acc = 0; for (let i = 0; i < h.length; i++) { acc += h[i]; if (acc >= total * p) return i < EDGES.length ? EDGES[i] : null; } return null; };
 /** p50/p95 are the upper edge of the histogram bucket that holds the percentile (an upper bound, not an exact value) */
 export function requestMetricsSnapshot(now = Date.now()) {
 	const min = Math.floor(now / BUCKET_MS) - BUCKETS + 1; const rows: Array<{ group: string; requests: number; errors4xx: number; errors5xx: number; avgMs: number; p50MsUpperBound: number | null; p95MsUpperBound: number | null }> = [];

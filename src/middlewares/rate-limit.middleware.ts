@@ -315,7 +315,7 @@ export const PREAUTH = {
 /** Recognition / delay state of the password-login account layer (per process; see utils/account-delay-guard.ts and recognised-origins.ts). */
 export const accountDelay = new AccountDelayGuard({ free: PREAUTH.LOGIN_FREE, baseMs: PREAUTH.LOGIN_DELAY_BASE_MS, ceilingMs: PREAUTH.LOGIN_DELAY_MAX_MS, maxKeys: PREAUTH_MAX_KEYS });
 export const recognisedOrigins = new RecognisedOrigins({ ttlMs: PREAUTH.LOGIN_RECOGNISED_MS, maxAccounts: PREAUTH_MAX_KEYS, maxPending: PREAUTH_MAX_KEYS });
-const originOf = (req: Request) => originKey(clientIpKey(req), req.get?.('user-agent') ?? (req.headers?.['user-agent'] as string | undefined));
+export const loginOriginKey = (req: Request) => originKey(clientIpKey(req), req.get?.('user-agent') ?? (req.headers?.['user-agent'] as string | undefined));
 
 /**
  * Per-account layer of password login. Recognised origins (a completed login within RL_LOGIN_RECOGNISED_HOURS, default 14 days) skip it. Any
@@ -325,7 +325,7 @@ const originOf = (req: Request) => originKey(clientIpKey(req), req.get?.('user-a
 const accountDelayGate = (idOf: (req: Request) => string | undefined): RequestHandler => (req, res, next) => {
   if (!RATE_LIMIT_ENABLED) return next();
   const id = idOf(req);
-  if (!id || recognisedOrigins.has(id, originOf(req))) return next();
+  if (!id || recognisedOrigins.has(id, loginOriginKey(req))) return next();
   const r = accountDelay.admit(id);
   if (!r.allowed) {
     const seconds = Math.max(1, Math.ceil(r.retryAfterMs / 1000));
@@ -343,7 +343,7 @@ const loginChallengeLink = (idOf: (req: Request) => string | undefined): Request
     const json = res.json.bind(res);
     res.json = ((body: any) => {
       const userId = body?.data?.userId;
-      if (res.statusCode < 400 && typeof userId === 'string' && userId) recognisedOrigins.noteChallenge(userId.toLowerCase(), id, originOf(req));
+      if (res.statusCode < 400 && typeof userId === 'string' && userId) recognisedOrigins.noteChallenge(userId.toLowerCase(), id, loginOriginKey(req));
       return json(body);
     }) as typeof res.json;
   }
@@ -354,7 +354,7 @@ const loginChallengeLink = (idOf: (req: Request) => string | undefined): Request
 const loginStepRecognition: RequestHandler = (req, res, next) => {
   if (RATE_LIMIT_ENABLED && /\/login\/verify-otp\/?$/.test(req.path || req.originalUrl || '')) {
     const userId = limiterIdentifier(req.body?.userId);
-    if (userId) res.once('finish', () => { if (res.statusCode < 400) recognisedOrigins.confirm(userId, originOf(req)); });
+    if (userId) res.once('finish', () => { if (res.statusCode < 400) recognisedOrigins.confirm(userId, loginOriginKey(req)); });
   }
   next();
 };
@@ -374,12 +374,14 @@ export const loginLimiters = (identifier: (req: Request) => unknown, prefix: 'lo
   const ip = (req: Request) => clientIpKey(req);
   const pw = prefix === 'login';
   const n = { ip: pw ? PREAUTH.LOGIN_IP : PREAUTH.STEP_IP, idIp: pw ? PREAUTH.LOGIN_ID_IP : PREAUTH.STEP_ID_IP, id: PREAUTH.STEP_ID };
+  const ipFailures = preAuthBucket({ name: `${prefix}:ip`, tier: `${prefix}_ip`, limit: n.ip, maxMultiplier: 4, key: ip });
+  const pairFailures = preAuthBucket({ name: `${prefix}:idip`, tier: `${prefix}_account_ip`, limit: n.idIp, maxMultiplier: 4, key: (req) => { const id=idOf(req);return id?`${ip(req)}|${id}`:undefined; } });
   return [
     preAuthBucket({ name: `${prefix}:ipall`, tier: `${prefix}_ip_flood`, limit: PREAUTH.LOGIN_IP_ALL, countAll: true, key: ip }),
-    preAuthBucket({ name: `${prefix}:ip`, tier: `${prefix}_ip`, limit: n.ip, maxMultiplier: 4, key: ip }),
-    preAuthBucket({ name: `${prefix}:idip`, tier: `${prefix}_account_ip`, limit: n.idIp, maxMultiplier: 4, key: (req) => { const id = idOf(req); return id ? `${ip(req)}|${id}` : undefined; } }),
+    (req, res, next) => pw && res.locals.sharedLoginGuard === true ? next() : ipFailures(req, res, next),
+    (req, res, next) => pw && res.locals.sharedLoginGuard === true ? next() : pairFailures(req, res, next),
     ...(pw
-      ? [loginChallengeLink(idOf), accountDelayGate(idOf)]
+      ? [loginChallengeLink(idOf), (req: Request,res: Response,next: NextFunction) => res.locals.sharedLoginGuard === true ? next() : accountDelayGate(idOf)(req,res,next)]
       : [
         preAuthBucket({ name: `${prefix}:id`, tier: `${prefix}_account`, limit: n.id, maxMultiplier: 8, key: idOf }),
         ...(prefix === 'login_step' ? [loginStepRecognition] : [])

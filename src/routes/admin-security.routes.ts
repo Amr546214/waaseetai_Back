@@ -21,9 +21,9 @@ router.get('/flagged-accounts', getFlaggedAccounts);
 router.get('/login-blocks', requireOfficialDeployment, requireSuperAdmin, async (_req, res, next) => { try { res.json({ success: true, data: await loginGuardService.listBlocks() }); } catch (e) { next(e); } });
 router.post('/login-blocks/unblock', requireOfficialDeployment, requireSuperAdmin, async (req, res, next) => {
 	try {
-		const id = typeof req.body?.id === 'string' ? req.body.id : ''; if (!/^(p:.+\|[0-9a-f]{32}|i:.+)$/.test(id)) throw new AppError('معرّف الحظر غير صالح', 400);
-		const done = await loginGuardService.unblock(id, req.user!.id); if (!done) throw new AppError('لا يوجد حظر فعّال بهذا المعرّف', 404);
-		await prisma.accountAuditLog.create({ data: { userId: req.user!.id, category: LogCategory.SYSTEM_AUDIT, title: 'فك حظر دخول', actionText: 'فك حظر مؤقت لمحاولات الدخول', summary: `فك حظر دخول (${id.startsWith('i:') ? 'عنوان IP' : 'عنوان + حساب'})`, eventType: 'LOGIN_BLOCK_LIFTED', source: 'ADMIN', severity: 'WARNING', status: LogStatus.COMPLETED, actorLabel: 'ADMIN', ipAddress: req.ip?.slice(0, 80), metaData: { scope: id.startsWith('i:') ? 'IP' : 'PAIR' } } });
+		const id = typeof req.body?.id === 'string' ? req.body.id : ''; if (!/^(p:.+\|[0-9a-f]{32}|i:.+|a:[0-9a-f]{32})$/.test(id)) throw new AppError('معرّف الحظر غير صالح', 400);
+		const done = await loginGuardService.unblock(id, req.user!.id, req.ip); if (!done) throw new AppError('لا يوجد حظر فعّال بهذا المعرّف', 404);
+
 		res.json({ success: true, data: { unblocked: true } });
 	} catch (e) { next(e); }
 });

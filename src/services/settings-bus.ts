@@ -10,7 +10,7 @@ import { logger } from '../config/logger';
  */
 export const SETTINGS_CHANNEL = 'waseet_settings';
 export const INSTANCE_ID = randomUUID();
-export interface SettingsNotice { keys: string[]; at: number; origin: string }
+export interface SettingsNotice { keys: string[]; revision?: number; at: number; origin: string }
 type Handler = (n: SettingsNotice) => void | Promise<void>;
 const handlers = new Set<Handler>();
 export const onSettingsNotice = (h: Handler) => { handlers.add(h); return () => handlers.delete(h); };
@@ -20,7 +20,7 @@ const dispatch = async (n: SettingsNotice) => { for (const h of handlers) { try 
 export async function publishSettingsChange(keys: string[]): Promise<void> {
 	const n: SettingsNotice = { keys: [...keys].slice(0, 100), at: Date.now(), origin: INSTANCE_ID };
 	void dispatch(n);
-	try { await prisma.$queryRaw`SELECT pg_notify(${SETTINGS_CHANNEL}, ${JSON.stringify(n)})`; }
+	try { await prisma.$executeRaw`SELECT pg_notify(${SETTINGS_CHANNEL}, ${JSON.stringify(n)})`; }
 	catch (e) { logger.error(`[SettingsBus] notify failed (other instances converge via cache TTL): ${(e as Error)?.message}`); }
 }
 

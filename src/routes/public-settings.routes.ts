@@ -8,8 +8,8 @@ const router = Router();
 // Public, read-only, whitelisted keys only (see SETTING_DEFS.public). No auth by design.
 router.get('/settings', async (_req, res, next) => {
 	try {
-		res.set('Cache-Control', 'public, max-age=5'); // same freshness as the server-side settings cache: a registration / banner change must not linger
-		res.json({ success: true, data: await systemSettingsService.publicValues() });
+		res.set('Cache-Control', 'no-store'); // same freshness as the server-side settings cache: a registration / banner change must not linger
+		const s = await systemSettingsService.publicSnapshot(); if(!s.trusted) return res.status(503).json({success:false,code:'PLATFORM_STATE_UNAVAILABLE',message:'تعذر قراءة إعدادات المنصة بعد التشغيل.'}); res.json({ success: true, data: s.data, revision: s.revision });
 	} catch (e) { next(e); }
 });
 

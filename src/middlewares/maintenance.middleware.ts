@@ -1,3 +1,4 @@
+import { publicPlatformState } from '../services/platform-state';
 import { MAINTENANCE_DEFAULT_MESSAGE } from '../utils/platform-defaults';
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
@@ -67,14 +68,12 @@ const coldPolicy = () => (process.env.MAINTENANCE_COLD_BOOT_POLICY === 'open' ? 
 export async function maintenanceMiddleware(req: Request, res: Response, next: NextFunction) {
 	try {
 		if (req.method === 'OPTIONS' || isMaintenanceAllowed(req.method, req.path)) return next();
-		const m = await systemSettingsService.getTrusted<boolean>('maintenanceMode');
-		const on = m.trusted ? m.value === true : coldPolicy() === 'closed';
-		if (!on) return next();
-		if (await isActiveSuperAdminRequest(req)) return next();
-		if (!m.trusted) logger.warn(`[Maintenance] no trusted value yet (cold boot): applying policy "${coldPolicy()}" to ${req.method} ${req.path}`);
-		const text = m.trusted ? String(await systemSettingsService.get<string>('maintenanceBannerText') || '').trim() : '';
-		res.set('Retry-After', '60');
-		return res.status(503).json({ success: false, code: MAINTENANCE_CODE, message: text || (m.trusted ? MAINTENANCE_DEFAULT_MESSAGE : 'المنصة تتحقق من حالتها بعد التشغيل. حاول بعد لحظات.') });
+        const state = await publicPlatformState();
+        if (!state.maintenance.on) return next();
+        if (await isActiveSuperAdminRequest(req)) return next();
+        res.setHeader('Retry-After', '30');
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(503).json({ success: false, code: MAINTENANCE_CODE, message: state.maintenance.message, revision: state.revision });
 	} catch (e) { logger.error(`[Maintenance] gate failed (${(e as Error)?.message}); request let through only because no state could be established at all`); return next(); }
 }
 
