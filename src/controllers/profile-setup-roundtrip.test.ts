@@ -1,5 +1,6 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { identityGateTestDouble } from '../testing/identity-gate.test-double';
 
 // AUD-FND-000062 / 000063: POST the setup payload, then GET it back: every accepted field is really stored, every unknown field is a 400
 // (never a 200 that silently drops it), and the "complete" flag follows what was stored.
@@ -39,6 +40,7 @@ const mocked = new WeakSet<object>();
 function mockDb(t: TestContext) {
   store.provider = null; store.client = null;
   if (mocked.has(t)) return; mocked.add(t);
+  t.mock.module('../services/identity-gate.service', { namedExports: identityGateTestDouble });
   t.mock.module('../config/db', { namedExports: { prisma } });
   t.mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
   t.mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (v: any) => v ?? null, storeKycFileIfNeeded: async (v: any) => v ?? null, privateFileExists: async () => true } });

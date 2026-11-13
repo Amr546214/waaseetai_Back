@@ -11,7 +11,9 @@ const fileValue = z.string().max(15_000_000, 'الملف كبير جدًا').nul
 const agreed = (message: string) => z.literal(true, { message });
 
 const detailsFields = {
-	idNumber: z.string().trim().regex(/^[12]\d{9}$/, 'رقم الهوية يجب أن يكون 10 أرقام ويبدأ بـ 1 أو 2').or(z.literal('')).nullable().optional(),
+	idNumber: z.string().trim().max(40).refine(v => !v || /^(?:[12]\d{9}|[\p{L}\p{Nd}][\p{L}\p{Nd} /.-]{0,39})$/u.test(v), 'رقم الوثيقة غير صالح').nullable().optional(),
+  idIssuingCountry: z.string().max(2).nullable().optional(),
+  idDocumentType: z.string().max(20).nullable().optional(),
 	dob: z.string().trim().refine(v => !Number.isNaN(Date.parse(v)) && new Date(v) <= new Date(), 'تاريخ الميلاد غير صحيح').or(z.literal('')).nullable().optional(),
 	country: text(60),
 	city: text(80),
@@ -22,8 +24,14 @@ const detailsFields = {
 	interests: z.array(sanitizedText(z.string().trim().min(1).max(40, 'الاهتمام طويل جدًا'))).max(20, 'الحد الأقصى 20 اهتمامًا').nullable().optional()
 };
 
+const clientDetailsSchema = z.object(detailsFields, { message: 'بيانات طالب الخدمة مطلوبة' }).superRefine((data, ctx) => {
+	if (!data.idIssuingCountry && !data.idDocumentType && data.idNumber && !/^[12]\d{9}$/.test(data.idNumber)) {
+		ctx.addIssue({ code: 'custom', path: ['idNumber'], message: 'رقم الهوية يجب أن يكون 10 أرقام ويبدأ بـ 1 أو 2' });
+	}
+});
+
 export const clientSetupSchema = z.object({
-	details: z.object(detailsFields, { message: 'بيانات طالب الخدمة مطلوبة' }),
+	details: clientDetailsSchema,
 	identity: z.object({ frontId: fileValue, backId: fileValue }, { message: 'بيانات الهوية مطلوبة' }),
 	documents: z.object({ supportingDocs: fileValue, notes: text(1000) }, { message: 'بيانات المستندات مطلوبة' }),
 	agreements: z.object({
@@ -49,7 +57,7 @@ export type ClientSetupInput = z.infer<typeof clientSetupSchema>;
 // PUT /api/client/profile/setup/step/:step — each wizard step is stored on its own the moment the user moves on (1 details, 2 identity
 // documents, 3 PayPal, 4 optional documents). '' / null = "not provided": a stored value is kept. The final POST /setup still records the agreements.
 export const clientSetupStepSchemas = {
-	1: z.object({ details: z.object(detailsFields, { message: 'بيانات طالب الخدمة مطلوبة' }) }),
+	1: z.object({ details: clientDetailsSchema }),
 	2: z.object({ identity: z.object({ frontId: fileValue, backId: fileValue }, { message: 'بيانات الهوية مطلوبة' }) }),
 	3: z.object({ paypalPayoutEmail: z.string({ message: 'بريد PayPal مطلوب' }).trim().min(1, 'بريد PayPal مطلوب').max(254, 'بريد PayPal طويل جدًا') }),
 	4: z.object({ documents: z.object({ supportingDocs: fileValue, notes: text(1000) }, { message: 'بيانات المستندات مطلوبة' }) }),

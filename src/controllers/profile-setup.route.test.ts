@@ -1,5 +1,6 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { identityGateTestDouble } from '../testing/identity-gate.test-double';
 
 process.env.OPENAI_API_KEY = 'test-key';
 process.env.JWT_SECRET = 'test-secret';
@@ -24,6 +25,7 @@ function setup(t: TestContext, over: Partial<S> = {}) {
 		updateMany: async (a: any) => { cur.pUpdateMany.push(a); return { count: 1 }; }
 	});
 	const tx: any = { user: { update: async ({ data }: any) => ({ id: 'u1', ...data }), findUnique: async () => ({ id: 'u1' }) }, clientProfile: profile('client'), providerProfile: profile('provider') };
+	t.mock.module('../services/identity-gate.service', { namedExports: identityGateTestDouble });
 	t.mock.module('../config/db', { namedExports: { prisma: { ...tx, skill: { upsert: async ({ where }: any) => ({ id: `id-${where.name}` }) }, category: { findFirst: async () => null }, $transaction: async (fn: any) => fn(tx) } } });
 	t.mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
 	t.mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (v: any) => v ?? null, storeKycFileIfNeeded: async (v: any) => (v ? 'private:image:png:x' : null) } });

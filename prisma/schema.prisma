@@ -67,6 +67,7 @@ model User {
   reviewedPlatformReports PlatformReport[] @relation("ReviewedPlatformReports")
   disputeMessages DisputeMessage[]
   id          String      @id @default(uuid())
+  identityFieldChecks IdentityFieldCheck[]
   accountType AccountType
   status      UserStatus  @default(PENDING_VERIFICATION)
 
@@ -353,6 +354,9 @@ model ClientProfile {
 
   // Step 1: Details
   idNumber String? // National ID / Iqama (10 digits)
+  idIssuingCountry String?
+  idDocumentType   String?
+  identityApprovedDigest String?
   dob      DateTime? // Date of Birth
   country  String?   @default("السعودية")
   city     String?
@@ -450,6 +454,9 @@ model ProviderProfile {
 
   // Step 1: Details
   idNumber String? // National ID / Iqama (10 digits)
+  idIssuingCountry String?
+  idDocumentType   String?
+  identityApprovedDigest String?
   dob      DateTime? // Date of Birth
   industry String? // Occupation/Industry
   address  String?   @db.Text
@@ -2655,6 +2662,51 @@ enum OnboardingStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+enum IdentityFieldCheckStatus {
+  QUEUED
+  RUNNING
+  DONE
+  UNAVAILABLE
+  SKIPPED
+}
+
+enum IdentityCheckParty {
+  CLIENT
+  PROVIDER
+}
+
+// Advisory OCR field check of the ID image against the data registered at submission time. NEVER decides anything (manual review stays).
+// Holds only per-field statuses + short reason codes: no image, no read card text. registeredSnapshot is erased when the check ends.
+model IdentityFieldCheck {
+  id                 String                   @id @default(uuid())
+  userId             String
+  user               User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  party              IdentityCheckParty
+  seq                Int
+  imageVersion       Int
+  imageRefDigest     String
+  imageSha256        String?
+  dataDigest         String
+  idempotencyKey     String                   @unique
+  status             IdentityFieldCheckStatus @default(QUEUED)
+  stateReason        String?
+  registeredSnapshot Json?
+  nationalIdMasked   String?
+  fieldResults       Json?
+  modelName          String?
+  modelVersion       String?
+  aiRequestId        String?
+  attempts           Int                      @default(0)
+  startedAt          DateTime?
+  finishedAt         DateTime?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  @@unique([userId, party, seq])
+  @@index([userId, party])
+  @@map("identity_field_checks")
 }
 
 model ClientOnboarding {
