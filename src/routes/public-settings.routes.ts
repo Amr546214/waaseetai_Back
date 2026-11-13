@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { systemSettingsService } from '../services/system-settings.service';
+import { geoSuggestion } from '../services/geo-suggestion.service';
 import { publicPlatformState } from '../services/platform-state';
 
 const router = Router();
@@ -15,6 +16,11 @@ router.get('/settings', async (_req, res, next) => {
 // Light, never cached: what the browser reads when the site opens, after a reconnect, when the tab regains focus and as the fallback poll. Secret-free.
 router.get('/platform-state', async (_req, res, next) => {
 	try { res.set('Cache-Control', 'no-store'); res.json({ success: true, data: await publicPlatformState() }); } catch (e) { next(e); }
+});
+
+// Approximate country/city hint for the first registration (see services/geo-suggestion). Per-visitor, never cached by shared caches.
+router.get('/geo-suggestion', async (req, res, next) => {
+	try { res.set('Cache-Control', 'private, no-store'); res.json({ success: true, data: await geoSuggestion(req.ip || '', req.headers as Record<string, unknown>) }); } catch (e) { next(e); }
 });
 
 export default router;

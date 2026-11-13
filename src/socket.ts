@@ -11,6 +11,8 @@ import { registerHelpAssistantChatGateway } from './sockets/help-assistant-chat.
 import { registerAdminMessagesGateway } from './sockets/admin-messages.gateway';
 import { socketAuthMiddleware, verifySocketToken } from './utils/socket-auth';
 import { setSocketServer } from './utils/socket-registry';
+import { geoSuggestion } from './services/geo-suggestion.service';
+import { trustedClientIp } from './utils/client-ip';
 import { PLATFORM_STATE_EVENT, publicPlatformState } from './services/platform-state';
 
 export let ioInstance: SocketIOServer | null = null;
@@ -49,6 +51,8 @@ export const initSocketServer = (httpServer: HttpServer, allowedOrigins: string[
 
 		// every (re)connection starts from the real public state (maintenance on/off + message); `platform:state:get` lets a tab that regained focus ask again
 		void publicPlatformState().then(st => socket.emit(PLATFORM_STATE_EVENT, st)).catch(() => undefined);
+		// Socket.IO has no GPS: an approximate country/city from the TRUSTED client address (same trust-proxy rule as HTTP), as a suggestion only
+		socket.on('geo:suggest', (ack?: (r: unknown) => void) => { void geoSuggestion(trustedClientIp(socket.request), socket.handshake.headers as Record<string, unknown>).then(g => { if (typeof ack === 'function') ack(g); }).catch(() => { if (typeof ack === 'function') ack(null); }); });
 		socket.on('platform:state:get', (ack?: (st: unknown) => void) => { void publicPlatformState().then(st => { if (typeof ack === 'function') ack(st); else socket.emit(PLATFORM_STATE_EVENT, st); }).catch(() => undefined); });
 
 		// Allow clients to join targeted user/owner rooms ONLY if token matches requested userId

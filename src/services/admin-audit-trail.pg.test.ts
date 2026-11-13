@@ -5,6 +5,9 @@ import type { AddressInfo } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { env, opts, mkRole, mkStaff, closeEnv } from '../testing/admin-team.pgenv';
 
+// the operations panel (settings routes) exists on the official deployment only: these tests run as that deployment
+process.env.PLATFORM_DEPLOY_ENV = 'official'; process.env.FRONTEND_URL = 'https://waseetai.com';
+
 /**
  * The admin audit trail on REAL PostgreSQL. Events of many different kinds are produced through the real routes/services (role, staff, settings, fee policy)
  * and the writers (adminAuditData, adminAudit.record, accountAuditLogService, session). The list must show each event's OWN identity (code, Arabic name,

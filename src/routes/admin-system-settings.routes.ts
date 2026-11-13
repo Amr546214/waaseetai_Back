@@ -2,6 +2,8 @@ import { NextFunction, Request, Response, Router } from 'express';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { loadAdminActor, requireAnyPermission, requirePermission, requireSuperAdmin } from '../middlewares/admin-access.middleware';
 import { systemSettingsService } from '../services/system-settings.service';
+import { requireOfficialDeployment } from '../middlewares/official-deployment.middleware';
+import { isOfficialDeployment } from '../utils/deployment-identity';
 import { loginGuardService } from '../services/login-guard.service';
 import { currencyReadiness } from '../services/currency-readiness.service';
 
@@ -13,7 +15,11 @@ const router = Router();
 const ok = (fn: (req: Request) => Promise<unknown>) => async (req: Request, res: Response, next: NextFunction) => {
 	try { res.json({ success: true, data: await fn(req) }); } catch (e) { next(e); }
 };
-router.use(authenticate, requireActiveUser, requireAnyPermission('settings.view', 'settings.manage'));
+router.use(authenticate, requireActiveUser);
+// What the unified «إعدادات النظام» page needs before it draws anything: may THIS caller see the operations panel here? Decided on the server (deployment identity + the account type read from the database).
+router.get('/access', async (req, res, next) => { try { const actor = await loadAdminActor(req); res.json({ success: true, data: { officialDeployment: isOfficialDeployment(), isSuperAdmin: actor.isSuperAdmin, available: isOfficialDeployment() && actor.isSuperAdmin } }); } catch (e) { next(e); } });
+// The operations panel is SUPER_ADMIN only and official-site only, for reading as well as writing (hiding a button is not access control).
+router.use(requireOfficialDeployment, requireSuperAdmin);
 
 router.get('/', ok(async req => systemSettingsService.view(await loadAdminActor(req))));
 router.put('/', requirePermission('settings.manage'), ok(async req => systemSettingsService.update(await loadAdminActor(req), req.body, { ip: req.ip, device: String(req.headers['user-agent'] || '') })));
