@@ -9,6 +9,7 @@ import adminNotificationTemplates from './routes/admin-notification-templates.ro
 import { startChatDigestScheduler } from './services/chat-digest.service';
 import express, { Request, Response, NextFunction } from 'express';
 import { maintenanceMiddleware } from './middlewares/maintenance.middleware';
+import { requestMetricsMiddleware } from './services/request-metrics';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -298,7 +299,6 @@ import adminTeamRoutes, { adminInvitePublicRouter } from './routes/admin-team.ro
 import adminMessagesRoutes from './routes/admin-messages.routes';
 import adminSystemSettingsRoutes from './routes/admin-system-settings.routes';
 import adminInfrastructureRoutes from './routes/admin-infrastructure.routes';
-import { requestMetricsMiddleware } from './services/request-metrics';
 import adminFeePolicyRoutes from './routes/admin-fee-policy.routes';
 import adminSiteIdentityRoutes from './routes/admin-site-identity.routes';
 import publicSiteIdentityRoutes from './routes/public-site-identity.routes';
