@@ -209,6 +209,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
 });
 
 // Maintenance mode (setting `maintenanceMode`): refuses the platform's traffic except health, sign-in, public settings, the admin console and payment callbacks. After the health probes on purpose.
+app.use(requestMetricsMiddleware);
 app.use(maintenanceMiddleware);
 
 // Create a centralized API router
@@ -296,6 +297,8 @@ import adminUsersRouter from './routes/admin-users.routes';
 import adminTeamRoutes, { adminInvitePublicRouter } from './routes/admin-team.routes';
 import adminMessagesRoutes from './routes/admin-messages.routes';
 import adminSystemSettingsRoutes from './routes/admin-system-settings.routes';
+import adminInfrastructureRoutes from './routes/admin-infrastructure.routes';
+import { requestMetricsMiddleware } from './services/request-metrics';
 import adminFeePolicyRoutes from './routes/admin-fee-policy.routes';
 import adminSiteIdentityRoutes from './routes/admin-site-identity.routes';
 import publicSiteIdentityRoutes from './routes/public-site-identity.routes';
@@ -341,6 +344,7 @@ mountAppRoute('/admin/team', adminTeamRoutes);
 mountAppRoute('/api/admin/messages', adminMessagesRoutes);
 mountAppRoute('/admin/messages', adminMessagesRoutes);
 mountAppRoute('/api/admin/system-settings', adminSystemSettingsRoutes);
+mountAppRoute('/api/admin/infrastructure', adminInfrastructureRoutes);
 mountAppRoute('/admin/system-settings', adminSystemSettingsRoutes);
 mountAppRoute('/api/admin/fee-policy', adminFeePolicyRoutes);
 mountAppRoute('/admin/fee-policy', adminFeePolicyRoutes);
