@@ -8,6 +8,7 @@ import { assertVerifiedIdentityUnchanged, identitySubmissionChanged } from '../u
 import { storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { publicKycRejectionReason } from '../utils/provider-kyc-review';
 import { notifyAdmins } from './admin-notifications.service';
+import { legalNameKey } from '../utils/legal-name';
 
 /**
  * Identity gate (client + provider setup). The identity step is APPROVED only when the admin approved the CURRENT image AND the CURRENT identity data: the approval stores a
@@ -28,11 +29,16 @@ export const IDENTITY_EVIDENCE_CHANGED_MESSAGE = 'لا يمكن تغيير صو�
 export const IDENTITY_CHANGED_MESSAGE = 'تغيّرت صورة الهوية أو بياناتها أثناء المراجعة؛ راجع المستند الحالي ثم أعد القرار';
 
 const day = (v: unknown): string | null => { if (!v) return null; const d = v instanceof Date ? v : new Date(String(v)); return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10); };
-type IdentityRow = { frontIdUrl?: string | null; backIdUrl?: string | null; idNumber?: string | null; idIssuingCountry?: string | null; idDocumentType?: string | null; dob?: Date | string | null };
+type IdentityRow = { frontIdUrl?: string | null; backIdUrl?: string | null; idNumber?: string | null; idIssuingCountry?: string | null; idDocumentType?: string | null; dob?: Date | string | null; /** the account's LEGAL name (users.legalName), when the caller loaded it */ legalName?: string | null };
 
-/** Digest of the evidence the admin reviews: the stored image references (unique per upload) + the identity data. */
+/**
+ * Digest of the evidence the admin reviews: the stored image references (unique per upload) + the identity data + the LEGAL name (the name the document is compared with).
+ * An account WITHOUT a legal name (older accounts) digests exactly as before the legal name existed, so an approval given then stays valid for that account; once a name is
+ * recorded it is part of the evidence: a changed name no longer matches an approval given for another name (the identity goes back to review).
+ */
 export function identityDigest(p: IdentityRow | null | undefined): string {
-  const parts = [p?.frontIdUrl ?? '', p?.backIdUrl ?? '', (p?.idNumber ?? '').trim(), p?.idIssuingCountry ?? '', p?.idDocumentType ?? '', day(p?.dob) ?? ''];
+  const name = legalNameKey(p?.legalName);
+  const parts: string[] = [p?.frontIdUrl ?? '', p?.backIdUrl ?? '', (p?.idNumber ?? '').trim(), p?.idIssuingCountry ?? '', p?.idDocumentType ?? '', day(p?.dob) ?? '', ...(name ? [`legal-name:${name}`] : [])];
   return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 }
 
@@ -51,6 +57,8 @@ const lockRow = async (tx: any, party: GateParty, userId: string) => {
   if (party === 'CLIENT') await tx.$queryRaw`SELECT 1 FROM client_profiles WHERE "userId" = ${userId} FOR UPDATE`;
   else await tx.$queryRaw`SELECT 1 FROM provider_profiles WHERE "userId" = ${userId} FOR UPDATE`;
 };
+/** The account's legal name (private evidence). Read where the identity digest is computed so that an approval is bound to the name it was given for. */
+export const legalNameOf = async (db: any, userId: string): Promise<string | null> => (await db.user.findUnique({ where: { id: userId }, select: { legalName: true } }))?.legalName ?? null;
 const model = (db: any, party: GateParty) => (party === 'CLIENT' ? db.clientProfile : db.providerProfile);
 const SELECT = { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, frontIdUrl: true, backIdUrl: true, kycStatus: true, identityApprovedDigest: true } as const;
 
@@ -80,7 +88,8 @@ const bodySchema = z.object({
 
 export class IdentityGateService {
   async getState(userId: string, party: GateParty, db: any = prisma): Promise<IdentityGateState> {
-    const p = await model(db, party).findUnique({ where: { userId }, select: party === 'PROVIDER' ? { ...SELECT, notes: true } : SELECT });
+    const p0 = await model(db, party).findUnique({ where: { userId }, select: party === 'PROVIDER' ? { ...SELECT, notes: true } : SELECT });
+    const p = p0 ? { ...p0, legalName: await legalNameOf(db, userId) } : p0;
     let clientRejection: string | null = null; let submittedAt: Date | null = null; let documentRequestWaiting = false;
     if (party === 'CLIENT') {
       const o = await db.clientOnboarding.findUnique({ where: { userId }, select: { rejectionReason: true, createdAt: true, updatedAt: true } });
@@ -124,8 +133,9 @@ export class IdentityGateService {
   async cancelIfChanged(party: GateParty, userId: string, digestBefore: string, db: any = prisma): Promise<boolean> {
     const run = async (tx: any): Promise<boolean> => {
       await lockRow(tx, party, userId);
-      const row = await model(tx, party).findUnique({ where: { userId }, select: SELECT });
-      if (!row || row.kycStatus !== 'VERIFIED') return false;
+      const row0 = await model(tx, party).findUnique({ where: { userId }, select: SELECT });
+      if (!row0 || row0.kycStatus !== 'VERIFIED') return false;
+      const row = { ...row0, legalName: await legalNameOf(tx, userId) };
       if (identityDigest(row) === (row.identityApprovedDigest ?? digestBefore)) return false;
       await model(tx, party).update({ where: { userId }, data: { kycStatus: 'PENDING', identityApprovedDigest: null, ...(party === 'PROVIDER' ? { isVerified: false } : {}) } });
       if (party === 'CLIENT' && row.frontIdUrl) await this.refreshClientReview(tx, userId, row.frontIdUrl);
@@ -136,7 +146,8 @@ export class IdentityGateService {
     return cancelled;
   }
 
-  private async refreshClientReview(tx: any, userId: string, front: string) {
+  /** Re-opens the client's review row in the admin queue (PENDING) for the CURRENT front image. */
+  async refreshClientReview(tx: any, userId: string, front: string) {
     const fields = { documentType: 'NATIONAL_ID', documentUrl: front, documentName: 'الهوية الوطنية / الإقامة' };
     await tx.clientOnboarding.upsert({ where: { userId }, create: { userId, ...fields, status: 'PENDING' }, update: { ...fields, status: 'PENDING', rejectionReason: null, reviewedAt: null } });
   }

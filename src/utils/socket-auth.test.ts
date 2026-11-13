@@ -64,7 +64,7 @@ const open = (url: string, path: string, token?: string) => new Promise<{ socket
 
 test('verifySocketToken: only an ACTIVE, not banned account with a live session passes; every other state is refused with its reason', async () => {
 	const { auth } = await boot();
-	assert.deepEqual(await auth.verifySocketToken(tokenFor('active')), { ok: true, userId: 'active', accountType: 'CLIENT_INDIVIDUAL' });
+	assert.deepEqual(await auth.verifySocketToken(tokenFor('active')), { ok: true, userId: 'active', accountType: 'CLIENT_INDIVIDUAL', sessionId: 's1' });
 	for (const id of ['pending', 'suspended', 'review', 'banned']) assert.deepEqual(await auth.verifySocketToken(tokenFor(id)), { ok: false, reason: 'NOT_ACTIVE' }, id);
 	assert.deepEqual(await auth.verifySocketToken(tokenFor('revoked')), { ok: false, reason: 'SESSION_REVOKED' });
 	assert.deepEqual(await auth.verifySocketToken(tokenFor('ghost')), { ok: false, reason: 'NOT_FOUND' });

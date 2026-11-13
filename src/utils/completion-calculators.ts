@@ -59,7 +59,8 @@ interface CompletionRule<I> {
   met: (i: I) => boolean;
 }
 
-const clientName = ({ user: u, clientProfile: p }: ClientCompletionInput) => !!((p.firstName || u.firstName) && (p.lastName || u.lastName));
+// a display name is complete with a first name alone: the username is ONE field (a single word is fine) and is kept in firstName with lastName = ''
+const clientName = ({ user: u, clientProfile: p }: ClientCompletionInput) => !!(p.firstName || u.firstName);
 const clientAvatar = ({ user: u, clientProfile: p }: ClientCompletionInput) => !!(p.avatarUrl || u.avatarUrl);
 const clientIdNumber = ({ user: u, clientProfile: p }: ClientCompletionInput) => !!(p.idNumber || u.idNumber);
 const clientPaypal = ({ clientProfile: p }: ClientCompletionInput) => !!(p.paypalPayoutEmail && p.paypalPayoutEmail.trim());
@@ -166,7 +167,7 @@ const PROVIDER_RULES: ProviderCompletionRule[] = [
   { key: 'avatar', label: 'الصورة الشخصية', points: 10, tab: 'profile', hint: 'أضف صورة شخصية',
     met: ({ providerProfile: p, user: u }) => !!(p.avatarUrl || u.avatarUrl) },
   { key: 'identity', label: 'الاسم والمسمى المهني والتخصص الرئيسي', points: 15, tab: 'profile', hint: 'أكمل الاسم والمسمى المهني والتخصص الرئيسي',
-    met: ({ providerProfile: p, user: u }) => !!((p.firstName || u.firstName) && (p.lastName || u.lastName) && (p.headline || p.industry) && p.mainSpecialty) },
+    met: ({ providerProfile: p, user: u }) => !!((p.firstName || u.firstName) && (p.headline || p.industry) && p.mainSpecialty) },
   { key: 'bio', label: 'الوصف المهني', points: 15, tab: 'profile', hint: 'اكتب وصفًا مهنيًا من 50 حرفًا على الأقل',
     met: ({ providerProfile: p }) => !!(p.bio && p.bio.length >= 50) },
   { key: 'skills', label: 'المهارات', points: 10, tab: 'profile', hint: 'أضف مهارة واحدة على الأقل',

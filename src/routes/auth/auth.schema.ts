@@ -4,6 +4,14 @@ import { AccountType } from '@prisma/client';
 import { COMPANY_ACCOUNTS_UNAVAILABLE_MESSAGE, isCompanyAccountType } from '../../middlewares/company-unavailable.middleware';
 import { sanitizedText } from '../../utils/sanitize-text';
 import { checkLegalName } from '../../utils/legal-name';
+import { checkUsername } from '../../utils/username';
+
+/** The username: the one-field name people use to deal with others and to appear on the platform (a single word is fine). Independent of the legal name; never a login id. */
+export const usernameSchema = z.preprocess(v => (typeof v === 'string' ? v : ''), z.string()).transform((v, ctx) => {
+  const r = checkUsername(v);
+  if (!r.ok) { ctx.addIssue({ code: 'custom', message: r.message }); return z.NEVER; }
+  return r.value;
+});
 
 /** The real name on the identity document: required at sign-up and independent of the display name (firstName/lastName). Stored cleaned; never used as the display name. */
 export const legalNameSchema = z.preprocess(v => (typeof v === 'string' ? v : ''), z.string()).transform((v, ctx) => {
@@ -34,9 +42,8 @@ export const normalizedEmail = z.string().trim().toLowerCase().email('صيغة �
 export const registerSchema = z.object({
   body: z.object({
     accountType: PublicAccountTypeEnum,
-    firstName: sanitizedText(z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل')),
-    lastName: sanitizedText(z.string().min(2, 'اسم العائلة يجب أن يكون حرفين على الأقل')),
     legalName: legalNameSchema,
+    username: usernameSchema,
     email: normalizedEmail,
     phoneCountryCode: z.string().default('+966'),
     phoneNumber: z.string().regex(/^\d+$/, 'رقم الجوال يجب أن يحتوي على أرقام فقط').min(9, 'رقم الجوال غير صحيح'),
@@ -74,9 +81,8 @@ export type RegisterInput = z.infer<typeof registerSchema>['body'];
 //  2. complete: the same data + password + ticket + code -> the account is created (uniqueness re-checked inside the transaction) and the user is signed in.
 const registerIdentityBody = {
   accountType: PublicAccountTypeEnum,
-  firstName: sanitizedText(z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل')),
-  lastName: sanitizedText(z.string().min(2, 'اسم العائلة يجب أن يكون حرفين على الأقل')),
   legalName: legalNameSchema,
+  username: usernameSchema,
   email: normalizedEmail,
   phoneCountryCode: z.string().default('+966'),
   phoneNumber: z.string().regex(/^\d+$/, 'رقم الجوال يجب أن يحتوي على أرقام فقط').min(9, 'رقم الجوال غير صحيح'),

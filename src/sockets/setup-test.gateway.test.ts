@@ -330,3 +330,24 @@ test('rapid answers keep arrival order across delayed authentication; ready has 
   assert.equal(state.submitCalls.length, 1);
   assert.deepEqual(state.submitCalls[0].body.submittedAnswers, {'101':'a','102':'a','103':'a'});
 });
+
+test('restricted exam mode: the setup test starts ONLY with a ticket issued on the verified route to this user + session; no ticket / a reused / a foreign one starts nothing and generates nothing', async () => {
+  const { issueExamTicket } = await import('../utils/exam-ticket');
+  const old = process.env.EXAM_SEB_MODE; process.env.EXAM_SEB_MODE = 'required';
+  try {
+    resetState({ stream: goodStream(15) });
+    const t = await setup();
+    const token = tokenFor('u');
+    await t.handlers['setup_test:init']({ token });
+    await t.handlers['setup_test:init']({ token, examTicket: issueExamTicket('someone-else', 'session-1', 'SETUP_TEST').ticket });
+    await t.handlers['setup_test:init']({ token, examTicket: issueExamTicket('u', 'another-session', 'SETUP_TEST').ticket });
+    assert.deepEqual(t.emitted.map((e: any) => e.event), ['setup_test:error', 'setup_test:error', 'setup_test:error']);
+    assert.ok(t.emitted.every((e: any) => e.payload.code === 'EXAM_ENVIRONMENT_REQUIRED'));
+    assert.equal(state.streamCalls.length, 0, 'nothing was generated for an unverified browser');
+    const good = issueExamTicket('u', 'session-1', 'SETUP_TEST').ticket;
+    await t.handlers['setup_test:init']({ token, examTicket: good });
+    assert.equal(state.streamCalls.length, 1, 'with the ticket the test runs exactly as before');
+    await t.handlers['setup_test:init']({ token, examTicket: good });
+    assert.equal(state.streamCalls.length, 1, 'a ticket is single use');
+  } finally { if (old === undefined) delete process.env.EXAM_SEB_MODE; else process.env.EXAM_SEB_MODE = old; }
+});

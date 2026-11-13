@@ -3,6 +3,8 @@ import { SPECIALTY_TEST_PASS_SCORE, SPECIALTY_TEST_QUESTION_COUNT, SPECIALTY_TES
 import { Socket, Server as SocketIOServer } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { verifySocketToken } from '../utils/socket-auth';
+import { examEnvMode } from '../utils/seb-exam';
+import { consumeExamTicket } from '../utils/exam-ticket';
 import { specialtyService } from '../services/specialty.service';
 import { prisma } from '../config/db';
 import { waseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
@@ -48,9 +50,9 @@ export class SetupTestGateway {
   private io: SocketIOServer | null = null;
   private testSessions = new Map<string, SetupTestSession>();
 
-  private async getUserIdFromToken(token?: string): Promise<string | null> {
+  private async getUserIdFromToken(token?: string): Promise<{ userId: string; sessionId: string } | null> {
     const result = await verifySocketToken(token);
-    return result.ok ? result.userId : null;
+    return result.ok ? { userId: result.userId, sessionId: result.sessionId } : null;
   }
 
   private emitQuestion(socket: Socket, session: SetupTestSession): void {
@@ -122,12 +124,19 @@ export class SetupTestGateway {
   public register(socket: Socket, io?: SocketIOServer): void {
     if (io) this.io = io;
 
-    socket.on('setup_test:init', async (payload: { token: string }) => {
+    socket.on('setup_test:init', async (payload: { token: string; examTicket?: string }) => {
       let onDisconnect: (() => void) | null = null;
       try {
-        const userId = await this.getUserIdFromToken(payload?.token);
-        if (!userId) {
+        const who = await this.getUserIdFromToken(payload?.token);
+        const userId = who?.userId;
+        if (!who || !userId) {
           socket.emit('setup_test:error', { message: 'رمز الحساب غير صالح أو منتهي الصلاحية.' });
+          return;
+        }
+        // Restricted exam mode: the test starts (and no question is generated or sent) only with a ticket issued on the verified HTTP route to THIS user and login session.
+        // The test itself, its scoring and what its result does are unchanged; this only decides from which browser it may start.
+        if (examEnvMode() === 'required' && !consumeExamTicket(payload?.examTicket, { userId, sessionId: who.sessionId, scope: 'SETUP_TEST' })) {
+          socket.emit('setup_test:error', { message: 'هذا الاختبار يُفتح من داخل Safe Exam Browser فقط.', code: 'EXAM_ENVIRONMENT_REQUIRED' });
           return;
         }
 
@@ -243,7 +252,7 @@ export class SetupTestGateway {
 
     socket.on('setup_test:get_question', async (payload: { token: string }) => {
       try {
-        const userId = await this.getUserIdFromToken(payload?.token);
+        const userId = (await this.getUserIdFromToken(payload?.token))?.userId ?? null;
         if (!userId) return;
         const session = this.testSessions.get(userId);
         if (!session) return;
@@ -258,7 +267,7 @@ export class SetupTestGateway {
     socket.on('setup_test:answer', (payload: { token: string; questionId: string; selectedIndex: number }) => {
       answerQueue = answerQueue.then(async () => {
       try {
-        const userId = await this.getUserIdFromToken(payload?.token);
+        const userId = (await this.getUserIdFromToken(payload?.token))?.userId ?? null;
         if (!userId) return;
         const session = this.testSessions.get(userId);
         if (!session || session.grading) return;

@@ -12,9 +12,8 @@ import { registerSchema, googleAuthSchema, PublicAccountTypeEnum } from './auth.
 // caller could previously register (or Google sign-up) directly as ADMIN.
 
 const validRegisterBody = {
-  firstName: 'Amr',
   legalName: 'Amr Mahmoud',
-  lastName: 'Okasha',
+  username: 'Amr',
   email: 'amr@example.com',
   phoneCountryCode: '+966',
   phoneNumber: '500000000',
@@ -76,12 +75,17 @@ test('googleAuthSchema: accountType remains optional (existing-user Google login
   assert.equal(googleAuthSchema.safeParse({ body: { idToken: 'x', accountType: 'CLIENT_INDIVIDUAL' } }).success, true);
 });
 
-test('registerSchema: the legal name is required, validated, cleaned and independent of the display name', () => {
+test('registerSchema: the legal name and the username are two required, separate fields; a one-word username is fine and differs from the legal name', () => {
   const base = { ...validRegisterBody, accountType: 'PROVIDER_INDIVIDUAL' } as Record<string, unknown>;
-  const ok = registerSchema.safeParse({ body: { ...base, firstName: 'عمرو', lastName: 'م.', legalName: '  عمرو   محمود ' } });
+  const ok = registerSchema.safeParse({ body: { ...base, username: 'عمرو', legalName: '  عمرو   محمود ' } });
   assert.equal(ok.success, true);
-  if (ok.success) { assert.equal(ok.data.body.legalName, 'عمرو محمود'); assert.equal(ok.data.body.firstName, 'عمرو'); }
-  const { legalName: _omit, ...without } = base;
-  assert.equal(registerSchema.safeParse({ body: without }).success, false, 'no legal name, no account');
-  for (const bad of ['عمرو', 'عمرو 12', '<b></b>', '']) assert.equal(registerSchema.safeParse({ body: { ...base, legalName: bad } }).success, false, bad);
+  if (ok.success) { assert.equal(ok.data.body.legalName, 'عمرو محمود'); assert.equal(ok.data.body.username, 'عمرو'); assert.notEqual(ok.data.body.legalName, ok.data.body.username); }
+  const { legalName: _l, ...noLegal } = base; const { username: _u, ...noUser } = base;
+  assert.equal(registerSchema.safeParse({ body: noLegal }).success, false, 'no legal name, no account');
+  assert.equal(registerSchema.safeParse({ body: noUser }).success, false, 'no username, no account');
+  for (const bad of ['عمرو', 'عمرو 12', '<b></b>', '']) assert.equal(registerSchema.safeParse({ body: { ...base, legalName: bad } }).success, false, `legal ${bad}`);
+  for (const bad of ['', 'a@b.com', 'ع']) assert.equal(registerSchema.safeParse({ body: { ...base, username: bad } }).success, false, `username ${bad}`);
+  // the legacy first/last name fields are no longer part of sign-up (ignored if an old client still sends them)
+  const legacy = registerSchema.safeParse({ body: { ...base, firstName: 'X', lastName: 'Y' } });
+  assert.equal(legacy.success, true); if (legacy.success) assert.equal((legacy.data.body as any).firstName, undefined);
 });

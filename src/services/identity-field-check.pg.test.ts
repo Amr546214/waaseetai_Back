@@ -265,3 +265,83 @@ test('PG legal name service: first save is direct; a verified/pending identity m
 	const prof = await prisma.providerProfile.findUniqueOrThrow({ where: { userId: uid } });
 	assert.equal(prof.kycStatus, 'PENDING'); assert.equal(prof.isVerified, false);
 });
+
+// ── legal name in the approved evidence (review fixes) ──
+test('PG identity approval: a NEW approval needs the legal name; the approval is bound to it; a legacy verified account with NO name stays verified and cannot gain an unreviewed one', opts, async () => {
+	const { prisma } = await env();
+	const { legalNameService } = await import('./legal-name.service');
+	const { identityGateService, identityDigest } = await import('./identity-gate.service');
+	const { onboardingService } = await import('./onboarding.service');
+	// provider without a legal name: approval refused (explicitly), nothing changes
+	const a = await seed(prisma, 'PROVIDER');
+	await prisma.user.update({ where: { id: a.user.id }, data: { legalName: null } });
+	await prisma.providerProfile.update({ where: { userId: a.user.id }, data: { kycStatus: 'PENDING' } });
+	await assert.rejects(() => onboardingService.approveProviderKyc(a.user.id), (e: any) => e.statusCode === 409 && e.code === 'LEGAL_NAME_REQUIRED');
+	assert.equal((await prisma.providerProfile.findUniqueOrThrow({ where: { userId: a.user.id } })).kycStatus, 'PENDING');
+	// the owner completes it (PENDING + no name: direct), the reviewer now sees it, approval binds the digest to it
+	assert.equal((await legalNameService.set(a.user.id, 'سارة أحمد علي')).outcome, 'SAVED');
+	const listed = (await onboardingService.listProviderKyc('PENDING' as any, 1, 50, a.user.id)).items.find((i: any) => i.userId === a.user.id) as any;
+	assert.equal(listed.legalName, 'سارة أحمد علي'); assert.equal(listed.legalNameMissing, false);
+	await assert.rejects(() => onboardingService.approveProviderKyc(a.user.id, undefined, 'stale-digest-from-another-evidence'), (e: any) => e.code === 'IDENTITY_CHANGED_SINCE_REVIEW');
+	await onboardingService.approveProviderKyc(a.user.id, undefined, listed.identityDigest);
+	const row = await prisma.providerProfile.findUniqueOrThrow({ where: { userId: a.user.id } });
+	assert.equal(row.kycStatus, 'VERIFIED'); assert.equal(row.identityApprovedDigest, identityDigest({ ...row, legalName: 'سارة أحمد علي' }));
+	assert.equal((await identityGateService.getState(a.user.id, 'PROVIDER')).status, 'APPROVED');
+	// a legacy VERIFIED account (approved before the legal name existed: digest WITHOUT a name, name NULL) stays approved, and cannot ADD a name directly
+	const b = await seed(prisma, 'PROVIDER');
+	await prisma.user.update({ where: { id: b.user.id }, data: { legalName: null } });
+	const bRow = await prisma.providerProfile.findUniqueOrThrow({ where: { userId: b.user.id } });
+	await prisma.providerProfile.update({ where: { userId: b.user.id }, data: { kycStatus: 'VERIFIED', isVerified: true, identityApprovedDigest: identityDigest(bRow) } });
+	assert.equal((await identityGateService.getState(b.user.id, 'PROVIDER')).status, 'APPROVED', 'no name, same digest as before the feature: still approved, no review forced');
+	const v0 = await legalNameService.getView(b.user.id); assert.equal(v0.status, 'MISSING'); assert.equal(v0.changeNeedsReview, true);
+	const req = await legalNameService.set(b.user.id, 'منى خالد حسن');
+	assert.equal(req.outcome, 'REQUEST_CREATED'); assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: b.user.id } })).legalName, null, 'no unreviewed name was added');
+	assert.equal((await identityGateService.getState(b.user.id, 'PROVIDER')).status, 'APPROVED');
+	// the admin approves the request: name added AND the identity goes back to review (digest cleared)
+	const reqRow = await prisma.profileModificationRequest.findUniqueOrThrow({ where: { id: req.view.pendingRequest!.id } });
+	await legalNameService.applyApproved(b.user.id, (reqRow.metadata as any).changes);
+	const after = await prisma.providerProfile.findUniqueOrThrow({ where: { userId: b.user.id } });
+	assert.equal(after.kycStatus, 'PENDING'); assert.equal(after.identityApprovedDigest, null); assert.equal(after.isVerified, false);
+	assert.equal((await identityGateService.getState(b.user.id, 'PROVIDER')).status, 'UNDER_REVIEW');
+});
+
+test('PG identity approval vs legal-name change racing: the two serialise; a verified identity is ALWAYS bound to the name on the account', opts, async () => {
+	const { prisma } = await env();
+	const { legalNameService } = await import('./legal-name.service');
+	const { identityDigest } = await import('./identity-gate.service');
+	const { onboardingService } = await import('./onboarding.service');
+	for (let round = 0; round < 4; round++) {
+		const a = await seed(prisma, 'PROVIDER');
+		await prisma.user.update({ where: { id: a.user.id }, data: { legalName: 'اسم قديم كامل' } });
+		await prisma.providerProfile.update({ where: { userId: a.user.id }, data: { kycStatus: 'PENDING' } });
+		const [ap, ch] = await Promise.allSettled([onboardingService.approveProviderKyc(a.user.id), legalNameService.set(a.user.id, 'اسم جديد كامل')]);
+		const user = await prisma.user.findUniqueOrThrow({ where: { id: a.user.id } });
+		const prof = await prisma.providerProfile.findUniqueOrThrow({ where: { userId: a.user.id } });
+		if (prof.kycStatus === 'VERIFIED') assert.equal(prof.identityApprovedDigest, identityDigest({ ...prof, legalName: user.legalName }), `round ${round}: the approval is for the name now on the account (${ap.status}/${ch.status})`);
+		// either order is fine, but never "verified for a name that is not the account's"; a name change that raced a PENDING review may be direct or a request
+		assert.ok(['VERIFIED', 'PENDING'].includes(prof.kycStatus));
+	}
+});
+
+test('PG username: one field (a single word is fine), kept in step with the display columns of the user and every role profile, independent of the legal name; legal name stays private', opts, async () => {
+	const { prisma } = await env();
+	const { usernameService } = await import('./username.service');
+	const { legalNameService } = await import('./legal-name.service');
+	const { displayNameOf } = await import('../utils/username');
+	const a = await seed(prisma, 'PROVIDER');
+	await prisma.clientProfile.create({ data: { id: id(), userId: a.user.id, firstName: 'قديم', lastName: 'اسم' } }).catch(() => undefined);
+	await prisma.user.update({ where: { id: a.user.id }, data: { legalName: 'عمرو محمود عكاشة', firstName: 'قديم', lastName: 'اسم' } });
+	assert.equal((await usernameService.get(a.user.id)).username, null);
+	await assert.rejects(() => usernameService.set(a.user.id, 'a@b.com'), (e: any) => e.statusCode === 400 && e.code === 'USERNAME_INVALID_CHARS');
+	const r = await usernameService.set(a.user.id, ' عمرو ');
+	assert.equal(r.changed, true); assert.equal(r.displayName, 'عمرو');
+	const u = await prisma.user.findUniqueOrThrow({ where: { id: a.user.id } });
+	assert.deepEqual([u.username, u.firstName, u.lastName, u.legalName], ['عمرو', 'عمرو', '', 'عمرو محمود عكاشة'], 'display follows the username; the legal name is untouched');
+	assert.equal(displayNameOf(u), 'عمرو');
+	for (const row of [await prisma.providerProfile.findUnique({ where: { userId: a.user.id } }), await prisma.clientProfile.findUnique({ where: { userId: a.user.id } })]) if (row) { assert.equal(row.firstName, 'عمرو'); assert.equal(row.lastName, ''); }
+	assert.equal(JSON.stringify([u.username, u.firstName, u.lastName]).includes('محمود'), false, 'no display column ever carries the legal name');
+	assert.equal((await usernameService.set(a.user.id, 'عمرو')).changed, false);
+	// a legal-name change request never changes the username, and a username change never changes the legal name
+	await legalNameService.set(a.user.id, 'عمرو أحمد عكاشة').catch(() => undefined);
+	assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: a.user.id } })).username, 'عمرو');
+});

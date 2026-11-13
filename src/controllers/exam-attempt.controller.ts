@@ -9,7 +9,7 @@ export async function getActiveAttempt(req: Request, res: Response, next: NextFu
 }
 /** Silent autosave of the answers so far. */
 export async function saveAttemptAnswers(req: Request, res: Response, next: NextFunction) {
-	try { res.setHeader('Cache-Control', 'no-store'); res.json({ success: true, data: await examAttemptStateService.saveDraft(req.user!.id, String(req.params.attemptId), req.body?.answers, sid(req)) }); } catch (e) { next(e); }
+	try { res.setHeader('Cache-Control', 'no-store'); res.json({ success: true, data: await examAttemptStateService.saveDraft(req.user!.id, String(req.params.attemptId), req.body?.answers, sid(req), req.body?.seq) }); } catch (e) { next(e); }
 }
 /** A page / exam-mode event for reviewers (information only). */
 export async function logAttemptEvent(req: Request, res: Response, next: NextFunction) {

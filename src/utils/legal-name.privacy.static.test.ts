@@ -7,7 +7,9 @@ import { execFileSync } from 'node:child_process';
 const ALLOWED = new Set([
 	'src/routes/auth/auth.schema.ts', 'src/repositories/auth.repository.ts', 'src/utils/legal-name.ts', 'src/services/legal-name.service.ts',
 	'src/controllers/legal-name.controller.ts', 'src/services/identity-field-check.service.ts', 'src/utils/profile-request-categories.ts', 'src/services/provider-profile.service.ts',
-	'src/app.ts', 'src/routes/legal-name.routes.ts' // route mount only
+	'src/app.ts', 'src/routes/legal-name.routes.ts', // route mount only
+	'src/services/identity-gate.service.ts', 'src/services/onboarding.service.ts', // the reviewers' evidence (identity digest / admin review lists, permission-gated) and the approval that requires it
+	'src/testing/identity-gate.test-double.ts' // test double only
 ]);
 test('legalName appears only in the allow-listed (non-public) source files', () => {
 	const out = execFileSync('git', ['grep', '-l', 'legalName', '--', 'src', ':!*.test.ts', ':!src/testing'], { encoding: 'utf8' }).split('\n').filter(Boolean);

@@ -37,3 +37,6 @@ export function legalNameKey(raw: unknown): string {
 }
 
 export const sameLegalName = (a: unknown, b: unknown) => legalNameKey(a) !== '' && legalNameKey(a) === legalNameKey(b);
+
+/** Shown to the reviewer when an identity approval is refused because the account has no legal name yet (older accounts): the owner is asked for it in the verification step. */
+export const LEGAL_NAME_REQUIRED_FOR_APPROVAL = 'لا يمكن اعتماد الهوية قبل أن يسجّل صاحب الحساب اسمه الحقيقي (كما في الوثيقة). طُلب منه استكماله في خطوة التحقق؛ أعد المراجعة بعد استكماله.';

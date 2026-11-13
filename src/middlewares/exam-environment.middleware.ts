@@ -28,10 +28,17 @@ export function examEnvironmentStatus(req: Request, res: Response): void {
 			mode: st.mode, ready: st.ready, verified,
 			// the restricted mode can start only when it is both required and ready; `off` means the normal exam (no device restriction)
 			restricted: st.mode === 'required',
+			// keys / file being present is NOT the same as the integration having been tried in a real SEB: the page says which
+			testedInRealSeb: st.testedInRealSeb, testedNote: st.testedNote,
 			...(origin && st.mode === 'required' && st.ready ? { configUrl: `${origin.replace(/^http/, 'seb')}/api/exam-environment/seb-config`, configDownloadUrl: `${origin}/api/exam-environment/seb-config` } : {}),
 			downloadUrl: 'https://safeexambrowser.org/download_en.html',
-			supportedSystems: [{ system: 'Windows', supported: true }, { system: 'macOS', supported: true }, { system: 'iOS / iPadOS', supported: true, note: 'عبر تطبيق Safe Exam Browser من App Store، بإمكانات أقل من نسخ سطح المكتب' }, { system: 'Android', supported: false }, { system: 'Linux', supported: false }, { system: 'ChromeOS', supported: false }],
-			limits: 'لا يمنع هذا الوضع تصوير الشاشة بكاميرا أو جهاز خارجي ولا يضمن حماية مطلقة؛ هو يقيّد المتصفح والتطبيقات والنسخ على الجهاز المدعوم فقط.'
+			supportedSystems: [
+				{ system: 'Windows', supported: true, note: 'يُرسل SEB مفاتيحه في ترويسات الطلبات (المحرك الكلاسيكي)' },
+				{ system: 'macOS', supported: true, note: 'المحرك الحديث لا يرسل المفاتيح في الترويسات؛ يعتمد التكامل على تفعيل مرشّح المحتوى الذي يفرض المحرك الكلاسيكي حسب وثائق SEB، ولم يُجرَّب هنا' },
+				{ system: 'iOS / iPadOS', supported: true, note: 'مثل macOS، وإمكانات التقييد أقل ووثائق SEB لـiOS لا تصف منع تصوير الشاشة' },
+				{ system: 'Android', supported: false }, { system: 'Linux', supported: false }, { system: 'ChromeOS', supported: false }
+			],
+			limits: 'لا يمنع هذا الوضع تصوير الشاشة بكاميرا أو جهاز خارجي ولا يضمن حماية مطلقة؛ هو يقيّد المتصفح والتطبيقات والنسخ على الجهاز المدعوم فقط، بحسب قدرات SEB لكل نظام. والخروج من SEB أثناء المحاولة ممكن (Ctrl/Cmd-Q أو زر الإغلاق) فيستمر الوقت وتبقى المحاولة محفوظة.'
 		}
 	});
 }

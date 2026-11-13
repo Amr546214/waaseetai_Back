@@ -24,6 +24,9 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 	// platform
 	PLATFORM_SETTINGS_UPDATED: 'تعديل إعدادات المنصة',
 	LOGIN_BLOCK_LIFTED: 'فك حظر دخول',
+	LEGAL_NAME_SAVED: 'تسجيل الاسم الحقيقي',
+	LEGAL_NAME_CHANGE_REQUESTED: 'طلب تعديل الاسم الحقيقي',
+	USERNAME_CHANGED: 'تغيير اسم المستخدم',
 	BACKUP_RESTORE_REQUESTED: 'طلب استعادة نسخة احتياطية',
 	FEE_POLICY_SCHEDULED: 'جدولة تعديل سياسة الرسوم',
 	FEE_POLICY_CANCELLED: 'إلغاء نسخة مجدولة من سياسة الرسوم',

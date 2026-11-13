@@ -1,3 +1,5 @@
+import { geoSourceStatus } from './geo-suggestion.service';
+import { trustProxyDescription } from '../utils/client-ip';
 import fs from 'node:fs';
 import { infrastructureActions } from './infrastructure-actions.service';
 import os from 'node:os';
@@ -45,6 +47,11 @@ export function diskSection(dir = process.cwd()): Section {
 	catch { return { title: 'القرص', source: 'filesystem', scope: dir, measuredAt: now(), unavailable: { reason: 'تعذّرت قراءة حالة القرص.', requirement: 'صلاحية قراءة نظام الملفات للعملية' } }; }
 }
 
+/** Visitor-location source: configured or not, and exactly which settings are missing (names only, never a value). */
+const geoSourceLabel = () => { const g = geoSourceStatus(); return g.configured ? `مُهيّأ — المصدر: ${g.source === 'cdn-header' ? 'ترويسات Cloudflare' : 'خدمة GeoIP (ipinfo)'}` : `غير مُهيّأ — الناقص: ${g.missing.join(' | ')}`; };
+/** An unset TRUST_PROXY is NOT "no proxy trust": the default 'uniquelocal' applies. */
+const trustProxyLabel = () => { const t = trustProxyDescription(); return `${t.effective} (${t.source === 'default' ? 'الافتراضي: لم يُضبط TRUST_PROXY' : 'من متغير البيئة'})`; };
+
 export class AdminInfrastructureService {
 	constructor(private db: typeof defaultPrisma = defaultPrisma, private io: () => { engine?: { clientsCount?: number } } | null = () => null) {}
 
@@ -73,7 +80,7 @@ export class AdminInfrastructureService {
 	apis() { const env = (k: string) => !!process.env[k]; return { measuredAt: now(), sections: [
 		{ title: 'التكاملات (حالة التهيئة فقط)', source: 'config' as const, scope: 'متغيرات بيئة هذه النسخة؛ لا اتصال فعليًا بالمزوّد', measuredAt: now(), items: [
 			{ label: 'PayPal', value: env('PAYPAL_CLIENT_ID') && env('PAYPAL_CLIENT_SECRET') ? 'مُهيّأ' : 'غير مُهيّأ' }, { label: 'البريد (SMTP)', value: env('SMTP_HOST') && env('SMTP_USER') && env('SMTP_PASS') ? 'مُهيّأ' : 'غير مُهيّأ' },
-			{ label: 'بوابة وسيط AI', value: process.env.WASEET_AI_GATEWAY_ENABLED === 'true' && env('WASEET_AI_BASE_URL') ? 'مفعّلة' : 'غير مفعّلة' }, { label: 'GeoIP (اقتراح الدولة/المدينة)', value: (process.env.GEOIP_PROVIDER && env('GEOIP_TOKEN')) || process.env.GEOIP_TRUST_CDN_HEADERS ? 'مُهيّأ' : 'غير مُهيّأ' }] },
+			{ label: 'بوابة وسيط AI', value: process.env.WASEET_AI_GATEWAY_ENABLED === 'true' && env('WASEET_AI_BASE_URL') ? 'مفعّلة' : 'غير مفعّلة' }, { label: 'GeoIP (اقتراح الدولة/المدينة)', value: geoSourceLabel() }, { label: 'الثقة بالبروكسي لعنوان الزائر (TRUST_PROXY)', value: trustProxyLabel() }] },
 		{ title: 'واجهات الـ API حسب المسار', source: 'process' as const, scope: 'آخر 15 دقيقة على هذه النسخة', measuredAt: now(), table: { columns: ['المسار', 'طلبات', '5xx', 'متوسط ms'], rows: requestMetricsSnapshot().groups.map(g => [g.group, g.requests, g.errors5xx, g.avgMs]) } }] }; }
 
 	async cdn() {

@@ -63,7 +63,7 @@ const base = (p: Party) => (p === 'CLIENT' ? '/client/profile' : '/provider/prof
 const DATA = { idIssuingCountry: 'EG', idDocumentType: 'NATIONAL_ID', idNumber: '29001011234567', dob: '1990-01-01' };
 async function seed(party: Party) {
 	const { prisma } = await env(); const tag = randomUUID().slice(0, 8); const id = () => randomUUID();
-	const mk = (accountType: any, role: any, label: string) => prisma.user.create({ data: { id: id(), accountType, status: 'ACTIVE', roles: [role], activeRole: role, firstName: 'QA', lastName: label, email: `gate-${label}-${tag}@pg.test` } as any });
+	const mk = (accountType: any, role: any, label: string) => prisma.user.create({ data: { id: id(), accountType, status: 'ACTIVE', roles: [role], activeRole: role, firstName: 'QA', lastName: label, legalName: 'اسم حقيقي تجريبي كامل', email: `gate-${label}-${tag}@pg.test` } as any });
 	const owner = await mk(party === 'CLIENT' ? 'CLIENT_INDIVIDUAL' : 'PROVIDER_INDIVIDUAL', party, 'owner');
 	const other = await mk(party === 'CLIENT' ? 'CLIENT_INDIVIDUAL' : 'PROVIDER_INDIVIDUAL', party, 'other');
 	const admin = await mk('SUPER_ADMIN', 'SUPER_ADMIN', 'admin');
@@ -173,7 +173,7 @@ for (const party of ['CLIENT', 'PROVIDER'] as Party[]) {
 		await submit(w);
 		const reviewed = (await profile(w));
 		const { identityDigest } = (await env()).gate;
-		const seen = identityDigest(reviewed);
+		const seen = identityDigest({ ...reviewed, legalName: 'اسم حقيقي تجريبي كامل' }); // the digest covers the legal name too
 		await submit(w, { frontId: PNG(33) }); // the owner changes the photo while the admin is looking at the old one
 		const r = await approve(w, w.admin.id, { identityDigest: seen });
 		assert.equal(r.status, 409); assert.equal(r.json.code, 'IDENTITY_CHANGED_SINCE_REVIEW');
@@ -181,7 +181,7 @@ for (const party of ['CLIENT', 'PROVIDER'] as Party[]) {
 		// the admin lists expose the current digest; approving with it works
 		const list = party === 'CLIENT' ? await call('GET', '/admin/onboarding?status=PENDING&limit=100', w.admin.id) : await call('GET', `/admin/onboarding/kyc/providers?search=${w.owner.id}`, w.admin.id);
 		const row = list.json.data.items.find((i: any) => (i.userId ?? i.user?.id) === w.owner.id);
-		assert.equal(row.identityDigest, identityDigest(await profile(w)));
+		assert.equal(row.identityDigest, identityDigest({ ...(await profile(w)), legalName: 'اسم حقيقي تجريبي كامل' }));
 		assert.equal((await approve(w, w.admin.id, { identityDigest: row.identityDigest })).status, 200);
 		assert.equal((await state(w)).status, 'APPROVED');
 		void prisma;

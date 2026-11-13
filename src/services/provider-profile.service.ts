@@ -43,6 +43,7 @@ import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { computeProviderCompletion, computeProviderMissingItems, computeClientCompletion } from '../utils/completion-calculators';
 import { CLIENT_IDENTITY_REQUEST_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY, CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY, LEGAL_NAME_CHANGE_REQUEST_CATEGORY } from '../utils/profile-request-categories';
 import { legalNameService } from './legal-name.service';
+import { LEGAL_NAME_REQUIRED_FOR_APPROVAL } from '../utils/legal-name';
 import { logger } from '../config/logger';
 import { OtpPurpose, OTP_MAX_ATTEMPTS } from '../utils/otp-purpose';
 import { otpSendThrottle, canReuseOtp, otpThrottleMessage, resendAvailableAtIso } from '../utils/otp-send-throttle';
@@ -1407,6 +1408,11 @@ export class ProviderProfileService {
 					data: { status: approved ? 'APPROVED' : 'REJECTED', reviewedByAdmin: true, rejectionReason: reason, appliedAt: approved ? new Date() : null }
 				});
 				if (!claimedTx.count) throw new Error('REQUEST_NOT_PENDING_REVIEW');
+				// approving a NEW identity document needs the legal name (the name the document is compared with); a refusal rolls the whole decision back
+				if (approved) {
+					const legal = await tx.user.findUnique({ where: { id: request.providerId }, select: { legalName: true } });
+					if (!legal?.legalName) throw new AppError(LEGAL_NAME_REQUIRED_FOR_APPROVAL, 409, undefined, 'LEGAL_NAME_REQUIRED');
+				}
 				let scored = false;
 				if (approved) scored = await this.applySensitivePayloadOn(tx, request.providerId, request.category, metadata.changes || {});
 				// the KYC review that the submission put in the queue (PENDING) is decided too; VERIFIED / UNVERIFIED / REJECTED accounts are never touched here

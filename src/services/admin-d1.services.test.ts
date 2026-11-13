@@ -229,7 +229,7 @@ test('provider KYC approve: audited, provider notified with a real provider rout
 	const { onboardingService } = await fresh('./onboarding.service.ts');
 	const audit: any[] = []; notes.length = 0;
 	const profile = { userId: 'p1', kycStatus: 'PENDING', frontIdUrl: 'ref', backIdUrl: null, selfieUrl: null, supportingDocsUrl: null, certUrls: [] };
-	current = { providerProfile: { findUnique: async () => profile, update: async (a: any) => ({ ...profile, ...a.data }) }, profileModificationRequest: { findMany: async () => [] }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
+	current = { providerProfile: { findUnique: async () => profile, update: async (a: any) => ({ ...profile, ...a.data }) }, user: { findUnique: async () => ({ legalName: 'اسم حقيقي كامل' }) }, profileModificationRequest: { findMany: async () => [] }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
 	await onboardingService.approveProviderKyc('p1', admin);
 	assert.equal(audit[0].eventType, 'KYC_APPROVED_BY_ADMIN'); assert.equal(audit[0].userId, 'p1');
 	assert.equal(notes[0].userId, 'p1'); assert.equal(notes[0].type, 'KYC_APPROVED'); assert.equal(notes[0].actionUrl, '/provider-overview/profile/data');
@@ -252,7 +252,7 @@ test('client onboarding approve/reject: audited and the client is notified; a de
 	const { onboardingService } = await fresh('./onboarding.service.ts');
 	const audit: any[] = []; notes.length = 0;
 	const item = { id: 'o1', userId: 'c1', status: 'PENDING', documentUrl: 'ref' };
-	current = { clientOnboarding: { findUnique: async () => item, updateMany: async () => ({ count: 1 }) }, clientProfile: { updateMany: async () => ({}), findUnique: async () => ({ frontIdUrl: 'f', backIdUrl: 'b', idNumber: '1', idIssuingCountry: 'EG', idDocumentType: 'NATIONAL_ID', dob: null }) }, user: { update: async () => ({}) }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
+	current = { user: { findUnique: async () => ({ legalName: 'اسم حقيقي كامل' }), update: async () => ({}) }, clientOnboarding: { findUnique: async () => item, updateMany: async () => ({ count: 1 }) }, clientProfile: { updateMany: async () => ({}), findUnique: async () => ({ frontIdUrl: 'f', backIdUrl: 'b', idNumber: '1', idIssuingCountry: 'EG', idDocumentType: 'NATIONAL_ID', dob: null }) }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
 	await onboardingService.approveOnboarding('o1', admin);
 	await onboardingService.rejectOnboarding('o1', { rejectionReason: 'مستند منتهي' }, admin);
 	assert.deepEqual(audit.map(a => a.eventType), ['KYC_APPROVED_BY_ADMIN', 'KYC_REJECTED_BY_ADMIN']);

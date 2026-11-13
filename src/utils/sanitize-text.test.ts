@@ -23,17 +23,17 @@ test('sanitizeText leaves ordinary Arabic and punctuation untouched', () => {
 	for (const ok of ['محمد أحمد العتيبي', 'مطوّر واجهات — خبرة 5 سنوات', 'السعر < 500 و> 100', "O'Brien-Smith", 'نبذة\nبسطرين']) assert.equal(sanitizeText(ok), ok);
 });
 
-const validRegister = { accountType: 'CLIENT_INDIVIDUAL', firstName: 'Amr', lastName: 'Okasha', email: 'a@example.com', phoneNumber: '500000000', password: 'Password1', agreedToTerms: true };
+const validRegister = { accountType: 'CLIENT_INDIVIDUAL', legalName: 'Amr Mahmoud Okasha', username: 'Amr', email: 'a@example.com', phoneNumber: '500000000', password: 'Password1', agreedToTerms: true };
 
-test('registration names are sanitized before validation', () => {
-	const r: any = registerSchema.safeParse({ body: { ...validRegister, firstName: `${XSS}Amr`, lastName: '<b>Okasha</b>' } });
+test('registration names (legal name and username) are sanitized before validation', () => {
+	const r: any = registerSchema.safeParse({ body: { ...validRegister, username: `${XSS}Amr`, legalName: '<b>Amr Mahmoud</b> Okasha' } });
 	assert.equal(r.success, true);
-	assert.equal(r.data.body.firstName, 'Amr');
-	assert.equal(r.data.body.lastName, 'Okasha');
+	assert.equal(r.data.body.username, 'Amr');
+	assert.equal(r.data.body.legalName, 'Amr Mahmoud Okasha');
 });
 
 test('a name that is only markup is rejected (it is empty text), not stored', () => {
-	assert.equal(registerSchema.safeParse({ body: { ...validRegister, firstName: '<b></b>' } }).success, false);
+	assert.equal(registerSchema.safeParse({ body: { ...validRegister, username: '<b></b>' } }).success, false);
 });
 
 test('PUT /profiles/update: names and bio are sanitized', () => {
