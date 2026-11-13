@@ -5,7 +5,9 @@ import path from 'node:path';
 
 // Deny by default, proven structurally: EVERY route of EVERY router mounted under /admin (and the other admin-only routes) must pass through a permission / owner / member / self guard
 // from admin-access.middleware, either through a router-level guard registered before it or on the route itself. A new admin route without a guard fails here.
-process.env.JWT_SECRET = 'test-secret'; process.env.OPENAI_API_KEY = 'test-key';
+process.env.JWT_SECRET = 'test-secret';
+// the operations routers (system settings, infrastructure) exist on the official deployment only: this matrix runs as that deployment
+process.env.PLATFORM_DEPLOY_ENV = 'official'; process.env.FRONTEND_URL = 'https://waseetai.com'; process.env.OPENAI_API_KEY = 'test-key';
 const emptyModel: any = new Proxy({}, { get: () => async () => null });
 const prisma: any = new Proxy({}, { get: () => emptyModel });
 mock.module('../config/db', { namedExports: { prisma } });

@@ -38,6 +38,8 @@ function boot() {
 			$transaction: async (fn: any) => fn(fakePrisma),
 		};
 		mock.module('../config/db', { namedExports: { prisma: fakePrisma } });
+		// maintenance is OFF in these tests (the socket maintenance gate has its own tests in maintenance.middleware.test)
+		mock.module('../services/system-settings.service', { namedExports: { systemSettingsService: { getTrusted: async () => ({ value: false, trusted: true, stale: false }), get: async () => '', prime: async () => true, invalidate: () => undefined } } });
 		mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
 		mock.module('../services/session.service', { namedExports: { sessionService: { validateOrRegister: async (userId: string) => (userId === 'revoked' ? null : { id: 's1' }) } } });
 		const { Server } = await import('socket.io');

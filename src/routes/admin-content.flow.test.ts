@@ -123,7 +123,8 @@ test('public settings: no auth, only public keys (admin-only key never leaks)', 
 	assert.equal(r.status, 200);
 	assert.equal(r.body.data.supportEmail, 's@x.com');
 	assert.equal('adminNotificationEmail' in r.body.data, false);
-	assert.equal('maintenanceMode' in r.body.data, false); // enforcement switches are not public values
+	assert.equal(r.body.data.maintenanceMode, false); // the maintenance state IS public (the Under Deployment page needs it); no other enforcement switch is
+	assert.equal('registrationOpen' in r.body.data && 'sessionIdleMinutes' in r.body.data, false);
 });
 
 test('missing tables: visible reads answer 200 with defaults / an empty list (storageReady=false); only a save / upload is a clear 503', async () => {
