@@ -7,6 +7,7 @@ import { ENFORCED_KEYS, PUBLIC_KEYS, SETTINGS_CACHE_TTL_MS, SETTING_BY_KEY, SETT
 import { currencyReadiness } from './currency-readiness.service';
 import { logger } from '../config/logger';
 import { sessionService } from './session.service';
+import { publishSettingsChange } from './settings-bus';
 import { setBrandName } from '../utils/brand'; // used only inside functions: the cycle with session.service is harmless
 
 export const SETTINGS_VERSION_CONFLICT = 'SETTINGS_VERSION_CONFLICT';
@@ -139,6 +140,7 @@ export class SystemSettingsService {
 			throw e;
 		}
 		this.invalidate();
+		void publishSettingsChange(changed); // only after the commit above; keys only, no values
 		return { changed, items: (await this.view(actor)).items };
 	}
 

@@ -4,6 +4,7 @@ import { AppError, fieldErrors } from '../utils/app-error';
 import { withTableGuard, isMissingTableError } from '../utils/missing-table';
 import { SETTING_BY_KEY } from '../config/system-settings.registry';
 import { systemSettingsService } from './system-settings.service';
+import { publishSettingsChange } from './settings-bus';
 
 const text = (max: number) => z.string().trim().max(max);
 const optionalPhone = text(30).regex(/^[0-9+()\-\s]*$/, 'رقم الهاتف غير صالح');
@@ -13,7 +14,6 @@ export const SETTING_DEFS = {
 	platformName: { public: true, schema: text(80).min(1, 'اسم المنصة مطلوب'), default: '' },
 	supportEmail: { public: true, schema: z.union([z.literal(''), z.string().trim().email('البريد غير صالح').max(120)]), default: '' },
 	supportPhone: { public: true, schema: optionalPhone, default: '' },
-	maintenanceBannerEnabled: { public: true, schema: z.boolean(), default: false },
 	maintenanceBannerText: { public: true, schema: text(300), default: '' },
 	termsVersion: { public: true, schema: text(40), default: '' },
 	privacyVersion: { public: true, schema: text(40), default: '' },
@@ -86,6 +86,7 @@ export class PlatformSettingsService {
 			where: { key }, create: { key, value: clean[key], updatedBy: adminId }, update: { value: clean[key], updatedBy: adminId, version: { increment: 1 } } // same version counter as the registry service
 		}))), 'مخزن الإعدادات');
 		systemSettingsService.invalidate();
+		void publishSettingsChange(changed);
 		const pick = (src: Record<string, unknown>) => Object.fromEntries(changed.map(k => [k, src[k]]));
 		// long legal text is not copied whole into the audit entry
 		const brief = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === 'string' && v.length > 200 ? `${v.slice(0, 200)}… (${v.length} حرف)` : v]));

@@ -99,7 +99,7 @@ test('settings: only admins; defaults, save, read back, audit entry, unknown key
 	assert.equal((await call(ADMIN, 'GET', '/admin/settings')).body.data.platformName, '');
 	assert.equal((await call(ADMIN, 'PUT', '/admin/settings', { json: { hacked: 1 } })).status, 400);
 	assert.equal((await call(ADMIN, 'PUT', '/admin/settings', { json: { supportEmail: 'nope' } })).status, 400);
-	const r = await call(ADMIN, 'PUT', '/admin/settings', { json: { platformName: 'وسيط', maintenanceBannerEnabled: true, maintenanceBannerText: 'صيانة' } });
+	const r = await call(ADMIN, 'PUT', '/admin/settings', { json: { platformName: 'وسيط', maintenanceBannerText: 'صيانة' } });
 	assert.equal(r.status, 200);
 	assert.equal(r.body.data.platformName, 'وسيط');
 	assert.equal((await call(ADMIN, 'GET', '/admin/settings')).body.data.maintenanceBannerText, 'صيانة');

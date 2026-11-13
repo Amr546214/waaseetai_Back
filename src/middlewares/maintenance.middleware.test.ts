@@ -49,3 +49,19 @@ test('maintenance policy under a failing store: the LAST KNOWN GOOD value still 
 	assert.equal((await run(maintenanceMiddleware, 'GET', '/api/health')).passed, true); assert.equal((await run(maintenanceMiddleware, 'POST', '/api/payments/paypal/webhook')).passed, true);
 	process.env.MAINTENANCE_COLD_BOOT_POLICY = 'open'; assert.equal((await run(maintenanceMiddleware, 'GET', '/api/projects')).passed, true); delete process.env.MAINTENANCE_COLD_BOOT_POLICY;
 });
+
+test('socket gate: while maintenance is ON every client event of a non-SUPER_ADMIN socket (anonymous, client, staff ADMIN) is refused; the state read and an ACTIVE SUPER_ADMIN socket pass', async (t: TestContext) => {
+	const { socketMaintenanceBlocks, state } = await load(t, {});
+	for (const who of [undefined, 'CLIENT_INDIVIDUAL', 'PROVIDER_INDIVIDUAL', 'ADMIN']) for (const ev of ['send_message', 'join_user_room', 'ai_review_start', undefined]) assert.equal(await socketMaintenanceBlocks(ev, who), true, `${who} ${ev}`);
+	assert.equal(await socketMaintenanceBlocks('platform:state:get', undefined), false, 'the public state read stays open');
+	assert.equal(await socketMaintenanceBlocks('send_message', 'SUPER_ADMIN'), false);
+	state.trusted = { value: false, trusted: true, stale: false }; assert.equal(await socketMaintenanceBlocks('send_message', 'CLIENT_INDIVIDUAL'), false, 'maintenance OFF: nothing is blocked');
+	state.trusted = { value: false, trusted: false, stale: false }; delete process.env.MAINTENANCE_COLD_BOOT_POLICY; assert.equal(await socketMaintenanceBlocks('send_message', 'CLIENT_INDIVIDUAL'), true, 'cold boot follows the closed policy');
+});
+
+test('the public state read and the light platform-state route are allowed during maintenance, and payment STARTS stay refused', async (t: TestContext) => {
+	const { maintenanceMiddleware } = await load(t, {});
+	assert.equal((await run(maintenanceMiddleware, 'GET', '/api/public/platform-state')).passed, true);
+	assert.equal((await run(maintenanceMiddleware, 'POST', '/api/client/finance/paypal/order/create')).status, 503);
+	assert.equal((await run(maintenanceMiddleware, 'POST', '/api/payments/paypal/webhook')).passed, true, 'confirmation of an already-made payment is never blocked');
+});

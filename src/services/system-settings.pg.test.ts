@@ -20,7 +20,8 @@ test('PG settings: who can read and change what - no permission = 403; settings.
 	assert.equal((await e.call('GET', S, none.user.id)).status, 403); assert.equal((await e.call('GET', S, null)).status, 401);
 	const vkeys = (await view(e, viewer.user.id)).map(i => i.key);
 	for (const k of ['platformName', 'registrationOpen', 'termsContent']) assert.ok(vkeys.includes(k), k);
-	for (const k of ['maintenanceMode', 'baseCurrency', 'sessionIdleMinutes', 'smtp', 'apiKeys', 'aiEngineEnabled']) assert.ok(!vkeys.includes(k), `${k} must not be readable with settings.view`);
+	assert.equal(values.maintenanceMode, false, 'the maintenance state is public (the Under Deployment page needs it); the removed banner switch is gone'); assert.equal('maintenanceBannerEnabled' in values, false);
+	for (const k of ['baseCurrency', 'sessionIdleMinutes', 'smtp', 'apiKeys', 'aiEngineEnabled']) assert.ok(!vkeys.includes(k), `${k} must not be readable with settings.view`);
 	assert.equal((await one(e, viewer.user.id, 'platformName')).canWrite, false);
 	assert.equal((await put(e, viewer.user.id, { platformName: 'x' }, { platformName: 0 })).status, 403); // reading is not writing
 	const m = (await one(e, manager.user.id, 'platformName')); assert.equal(m.canWrite, true); assert.equal(await one(e, manager.user.id, 'registrationOpen'), undefined); // settings.manage alone does not even show a SUPER_ADMIN-only key
@@ -64,10 +65,11 @@ test('PG settings: saves are versioned (a stale save is refused 409 and shows th
 
 test('PG settings: other session / refresh / restart see the saved value; the cache is dropped on save; a fresh service instance (restart) reads the database', opts, async () => {
 	const e = await env(); await reset(e); const { SystemSettingsService } = await import('./system-settings.service');
-	assert.equal((await put(e, e.sa.id, { maintenanceBannerText: 'نص البنر', maintenanceBannerEnabled: true }, { maintenanceBannerText: 0, maintenanceBannerEnabled: 0 })).status, 200);
+	assert.equal((await put(e, e.sa.id, { maintenanceBannerText: 'نص البنر' }, { maintenanceBannerText: 0 })).status, 200);
 	const pub = await e.call('GET', '/admin/system-settings', e.sa.id); assert.equal(pub.status, 200);
-	const restarted = new SystemSettingsService(e.prisma); assert.equal(await restarted.get('maintenanceBannerText'), 'نص البنر'); assert.equal(await restarted.get('maintenanceBannerEnabled'), true);
-	const values = await restarted.publicValues(); assert.equal(values.maintenanceBannerText, 'نص البنر'); for (const k of ['maintenanceMode', 'baseCurrency', 'sessionIdleMinutes', 'adminNotificationEmail']) assert.equal(k in values, false, `${k} is not public`);
+	const restarted = new SystemSettingsService(e.prisma); assert.equal(await restarted.get('maintenanceBannerText'), 'نص البنر');
+	const values = await restarted.publicValues(); assert.equal(values.maintenanceBannerText, 'نص البنر'); assert.equal(values.maintenanceMode, false, 'the maintenance state is public (the Under Deployment page needs it); the removed banner switch is gone'); assert.equal('maintenanceBannerEnabled' in values, false);
+	for (const k of ['baseCurrency', 'sessionIdleMinutes', 'adminNotificationEmail']) assert.equal(k in values, false, `${k} is not public`);
 	assert.equal(values.registrationOpen, true);
 	// invalid stored data never breaks enforcement: it falls back to the default
 	await e.prisma.platformSetting.upsert({ where: { key: 'sessionIdleMinutes' }, create: { key: 'sessionIdleMinutes', value: 'garbage' as any }, update: { value: 'garbage' as any } }); assert.equal(await new SystemSettingsService(e.prisma).get('sessionIdleMinutes'), 0);
@@ -264,7 +266,7 @@ test('PG settings: every enforced item says what is IN USE while it is unset (ef
 	assert.deepEqual(await eff('platformName'), { value: DEFAULT_BRAND_AR, source: 'built-in default', uses: [{ where: 'واجهة التطبيق ونصوص البريد العربية', value: DEFAULT_BRAND_AR }, { where: 'اسم المرسل وعناوين وتذييل البريد', value: DEFAULT_BRAND }] });
 	assert.deepEqual(await eff('supportEmail'), { value: DEFAULT_SUPPORT_EMAIL, source: 'built-in default', note: (await eff('supportEmail')).note });
 	assert.equal(DEFAULT_SUPPORT_EMAIL, 'support@waseet.ai');
-	assert.equal((await eff('maintenanceBannerEnabled')).value, false);
+	assert.equal((await eff('maintenanceMode')).value, false);
 	assert.ok((await eff('maintenanceBannerText')).note.includes(MAINTENANCE_DEFAULT_MESSAGE));
 	for (const k of ['termsVersion', 'privacyVersion', 'termsContent', 'privacyContent']) { const x = await eff(k); assert.equal(x.value, null); assert.equal(x.source, 'static page text'); }
 	assert.deepEqual(await eff('supportPhone'), { value: DEFAULT_SUPPORT_PHONE, source: 'built-in default', note: (await eff('supportPhone')).note }); assert.equal(DEFAULT_SUPPORT_PHONE, '+966 55 256 0392'); // the number the contact page / footer show today

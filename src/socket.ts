@@ -11,6 +11,7 @@ import { registerHelpAssistantChatGateway } from './sockets/help-assistant-chat.
 import { registerAdminMessagesGateway } from './sockets/admin-messages.gateway';
 import { socketAuthMiddleware, verifySocketToken } from './utils/socket-auth';
 import { setSocketServer } from './utils/socket-registry';
+import { PLATFORM_STATE_EVENT, publicPlatformState } from './services/platform-state';
 
 export let ioInstance: SocketIOServer | null = null;
 export const getIO = (): SocketIOServer | null => ioInstance;
@@ -45,6 +46,10 @@ export const initSocketServer = (httpServer: HttpServer, allowedOrigins: string[
 		console.log('🔗 Client connected to WebSocket:', socket.id);
 
 		// socket.userId (and the user rooms) were set by the handshake middleware above; anonymous sockets have none.
+
+		// every (re)connection starts from the real public state (maintenance on/off + message); `platform:state:get` lets a tab that regained focus ask again
+		void publicPlatformState().then(st => socket.emit(PLATFORM_STATE_EVENT, st)).catch(() => undefined);
+		socket.on('platform:state:get', (ack?: (st: unknown) => void) => { void publicPlatformState().then(st => { if (typeof ack === 'function') ack(st); else socket.emit(PLATFORM_STATE_EVENT, st); }).catch(() => undefined); });
 
 		// Allow clients to join targeted user/owner rooms ONLY if token matches requested userId
 		socket.on('join_user_room', (data: string | { userId: string; token?: string }) => {

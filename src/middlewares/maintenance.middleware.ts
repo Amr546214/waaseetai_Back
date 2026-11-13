@@ -23,7 +23,8 @@ const P = (re: string) => new RegExp(`^/(?:api/)?${re}/?$`);
 export const MAINTENANCE_ALLOW: readonly Allow[] = [
 	{ method: 'GET', path: /^\/(?:api\/?)?$/, purpose: 'service probe' },
 	{ method: 'GET', path: P('health'), purpose: 'liveness probe' },
-	{ method: 'GET', path: P('public/settings'), purpose: 'banner + public settings (the maintenance notice itself)' },
+	{ method: 'GET', path: P('public/settings'), purpose: 'public settings incl. the maintenance state and message' },
+	{ method: 'GET', path: P('public/platform-state'), purpose: 'light maintenance state read (site open, reconnect, tab focus, fallback polling)' },
 	{ method: 'GET', path: /^\/(?:api\/)?docs(?:\/.*)?$/, purpose: 'API docs' },
 	{ method: 'POST', path: P('payments/paypal/webhook'), purpose: 'inbound payment-provider callback: existing payments / payouts must be able to settle' },
 	{ method: 'POST', path: P('client/finance/paypal/order/capture'), purpose: 'return path: completes an order the customer already approved at PayPal before maintenance (creating a NEW order is not allowed)' },
@@ -75,4 +76,18 @@ export async function maintenanceMiddleware(req: Request, res: Response, next: N
 		res.set('Retry-After', '60');
 		return res.status(503).json({ success: false, code: MAINTENANCE_CODE, message: text || (m.trusted ? MAINTENANCE_DEFAULT_MESSAGE : 'المنصة تتحقق من حالتها بعد التشغيل. حاول بعد لحظات.') });
 	} catch (e) { logger.error(`[Maintenance] gate failed (${(e as Error)?.message}); request let through only because no state could be established at all`); return next(); }
+}
+
+/**
+ * Socket.IO twin of the HTTP gate: while maintenance is on, every client EVENT of a socket that is not an ACTIVE SUPER_ADMIN is refused by the server (the handshake stays open so the
+ * browser still receives `platform:state`). The account type comes from the database at handshake time (verifySocketToken), never from anything the browser sends with the event.
+ */
+export const SOCKET_MAINTENANCE_ALLOW = new Set(['platform:state:get']);
+export async function socketMaintenanceBlocks(eventName: unknown, accountType: unknown): Promise<boolean> {
+	if (typeof eventName === 'string' && SOCKET_MAINTENANCE_ALLOW.has(eventName)) return false;
+	if (accountType === AccountType.SUPER_ADMIN) return false;
+	try {
+		const m = await systemSettingsService.getTrusted<boolean>('maintenanceMode');
+		return m.trusted ? m.value === true : coldPolicy() === 'closed';
+	} catch { return false; }
 }

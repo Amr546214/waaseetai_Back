@@ -1,3 +1,4 @@
+import { socketMaintenanceBlocks } from '../middlewares/maintenance.middleware';
 import jwt from 'jsonwebtoken';
 import type { Socket } from 'socket.io';
 import { prisma } from '../config/db';
@@ -57,13 +58,19 @@ const refusal = (reason: string) => Object.assign(new Error(reason === 'NOT_ACTI
 export function socketAuthMiddleware(options: { required: boolean; onAuthenticated?: (socket: Socket, userId: string) => void }) {
 	return async (socket: Socket, next: (err?: Error) => void) => {
 		try {
-			socket.use((_packet, packetNext) => {
+			socket.use((packet, packetNext) => {
+				void socketMaintenanceBlocks(packet?.[0], (socket as any).accountType).then(blocked => {
+					if (blocked) return packetNext(Object.assign(new Error('MAINTENANCE'), { data: { code: 'MAINTENANCE' } }));
+					return runPacket(packetNext);
+				});
+			});
+			const runPacket = (packetNext: (err?: Error) => void) => {
 				const uid = (socket as any).userId as string | undefined;
 				if (uid) {
 					return runWithWaseetActor({ userId: uid, role: waseetActorRole(undefined, (socket as any).accountType) }, () => packetNext());
 				}
 				packetNext();
-			});
+			};
 			const token = handshakeToken(socket);
 			if (!token) return options.required ? next(refusal('NO_TOKEN')) : next();
 			const result = await verifySocketToken(token, { ipAddress: socket.handshake?.address, userAgent: (socket.handshake as any)?.headers?.['user-agent'] });
