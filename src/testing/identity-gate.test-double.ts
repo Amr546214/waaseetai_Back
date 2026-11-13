@@ -5,6 +5,7 @@
 export const identityGateTestDouble = {
   identityGateService: { assertApproved: async () => undefined, assertApprovedForSubmission: async () => undefined, cancelIfChanged: async () => false, approvalDigest: () => 'test-digest', getState: async () => ({ status: 'APPROVED', canAdvance: true }), saveIdentity: async () => ({ status: 'UNDER_REVIEW', canAdvance: false }) },
   identityDigest: () => 'test-digest',
+  legalNameOf: async () => 'اسم حقيقي تجريبي كامل',
   deriveGateState: () => ({ status: 'APPROVED', canAdvance: true }),
   missingIdentityItems: () => [] as string[],
 };

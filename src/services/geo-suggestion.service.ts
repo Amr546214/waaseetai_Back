@@ -24,9 +24,10 @@ const cc = (v: unknown) => (typeof v === 'string' && /^[A-Za-z]{2}$/.test(v.trim
 const txt = (v: unknown, max = 80) => (typeof v === 'string' && v.trim() && v.length <= 200 ? v.trim().slice(0, max) : null);
 const tz = (v: unknown) => { const s = txt(v, 64); if (!s) return null; try { new Intl.DateTimeFormat('en', { timeZone: s }); return s; } catch { return null; } };
 
-export async function geoSuggestion(ip: string, headers: Record<string, unknown> = {}, env: NodeJS.ProcessEnv = process.env, fetchImpl: typeof fetch = fetch): Promise<GeoSuggestion> {
+export async function geoSuggestion(ip: string, headers: Record<string, unknown> = {}, env: NodeJS.ProcessEnv = process.env, fetchImpl: typeof fetch = fetch, viaTrustedProxy = false): Promise<GeoSuggestion> {
 	if (!isPublicIp(ip)) return NONE;
-	if ((env.GEOIP_TRUST_CDN_HEADERS || '').toLowerCase() === 'cloudflare') {
+	// CDN headers are believed only when the flag is set AND the request really came through a trusted proxy hop (a direct hit on the origin could carry forged ones)
+	if (viaTrustedProxy && (env.GEOIP_TRUST_CDN_HEADERS || '').toLowerCase() === 'cloudflare') {
 		const country = cc(headers['cf-ipcountry']); if (country) return { countryCode: country, city: txt(headers['cf-ipcity']), timezone: tz(headers['cf-timezone']), source: 'cdn-header', approximate: true };
 	}
 	if ((env.GEOIP_PROVIDER || '').toLowerCase() !== 'ipinfo' || !env.GEOIP_TOKEN) return NONE;
@@ -40,4 +41,13 @@ export async function geoSuggestion(ip: string, headers: Record<string, unknown>
 		if (cache.size >= CACHE_MAX) cache.clear(); cache.set(ip, { at: Date.now(), v }); return v;
 	} catch (e) { logger.warn(`[Geo] lookup failed (manual entry still works): ${(e as Error).message}`); return NONE; }
 	finally { clearTimeout(timer); }
+}
+
+/** What the visitor-location suggestion can use right now, and what is missing. Names only: no value is ever returned. */
+export function geoSourceStatus(env: NodeJS.ProcessEnv = process.env): { configured: boolean; source: 'cdn-header' | 'geoip-provider' | 'none'; missing: string[] } {
+	const cdn = (env.GEOIP_TRUST_CDN_HEADERS || '').toLowerCase() === 'cloudflare';
+	const provider = (env.GEOIP_PROVIDER || '').toLowerCase() === 'ipinfo' && !!env.GEOIP_TOKEN;
+	if (provider) return { configured: true, source: 'geoip-provider', missing: [] };
+	if (cdn) return { configured: true, source: 'cdn-header', missing: [] };
+	return { configured: false, source: 'none', missing: ['GEOIP_PROVIDER=ipinfo + GEOIP_TOKEN (GeoIP service)', 'or GEOIP_TRUST_CDN_HEADERS=cloudflare (origin reachable only through the CDN)'] };
 }

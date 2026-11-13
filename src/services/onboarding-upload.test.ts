@@ -15,7 +15,7 @@ const prisma: any = {
 		update: async ({ data }: any) => { state.row = { ...state.row!, ...data }; return { ...state.row }; },
 		updateMany: async ({ data }: any) => { state.row = { ...state.row!, ...data }; return { count: 1 }; },
 	},
-	user: { update: async (a: any) => { state.userUpdates.push(a); return {}; }, findUnique: async () => ({ id: 'u1', idDocumentUrl: null }) },
+	user: { update: async (a: any) => { state.userUpdates.push(a); return {}; }, findUnique: async () => ({ id: 'u1', idDocumentUrl: null, legalName: 'اسم حقيقي كامل' }) },
 	clientProfile: { updateMany: async (a: any) => { state.profileUpdates.push(a); return { count: 1 }; }, findUnique: async () => null },
 	$transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops(prisma)),
 };

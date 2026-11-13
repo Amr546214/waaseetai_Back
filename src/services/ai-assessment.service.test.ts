@@ -1,5 +1,8 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
+
+// these tests are about generation, grading and transport behaviour with no login session in play: the session binding (default ON in production) has its own tests in exam-attempt-session.test.ts / exam-attempt-state.pg.test.ts
+process.env.EXAM_BIND_SESSION = 'false';
 import { readFileSync } from 'node:fs';
 import { Prisma } from '@prisma/client';
 
@@ -49,7 +52,12 @@ const prismaMock: any = {
       findFirst: async (args: any) => { state.claimWheres.push(args); return state.claimExisting; },
       findMany: async (args: any) => { state.findManys.push(args); return state.recentAttempts; },
       create: async (args: any) => { state.creates.push(args); const row = { id: 'reserved-1', ...args.data }; state.onCreate?.(row); return row; },
-      update: async (args: any) => { state.txUpdates.push({ model: 'attempt', ...args }); return {}; }
+      findUnique: async () => state.attempt,
+      // persisting the generated questions now happens inside a transaction (merge under the row lock); the tests still see it as the attempt update they always asserted on
+      update: async (args: any) => {
+        if (args?.data && 'questionsPayload' in args.data) { state.updates.push(args); if (state.failFirstUpdate && state.updates.length === 1) throw new Error('db write failed'); return { id: args.where.id, ...args.data }; }
+        state.txUpdates.push({ model: 'attempt', ...args }); return {};
+      }
     },
     providerSpecialty: {
       findUnique: async () => state.specialtyRow,

@@ -38,8 +38,8 @@ test('createUserWithProfile: role initialization uses the full identity and comp
 
   await authRepository.createUserWithProfile({
     accountType: 'CLIENT_INDIVIDUAL',
-    firstName: 'Amr',
-    lastName: 'Okasha',
+    legalName: 'Amr Mahmoud Okasha',
+    username: 'Amr',
     email: 'amr@example.com',
     phoneCountryCode: '+966',
     phoneNumber: '0500000000',
@@ -48,9 +48,12 @@ test('createUserWithProfile: role initialization uses the full identity and comp
 
   assert.equal(clientCreateSpy.mock.callCount(), 1);
   const data = clientCreateSpy.mock.calls[0].arguments[0].data;
+  // the username is the display name and is kept in firstName (lastName stays empty: ONE field); the legal name is never copied into the profile
   assert.equal(data.firstName, 'Amr');
-  assert.equal(data.lastName, 'Okasha');
-  // Individual formula: firstName + lastName = 15 (the phone is no longer scored). avatarUrl is legitimately absent for an
+  assert.equal(data.lastName, '');
+  assert.equal(JSON.stringify(data).includes('Mahmoud'), false);
+  assert.equal(clientCreateSpy.mock.calls[0].arguments[0].data.legalName, undefined);
+  // Individual formula: a first name alone completes the display name (15) (the phone is no longer scored). avatarUrl is legitimately absent for an
   // email/password signup (unlike Google, which provides one) — not scored, not an invented value.
   assert.equal(data.completionPercentage, 15);
 });
@@ -59,7 +62,7 @@ test('createUserWithProfile: new accounts are created with phoneOtpEnabled=false
   const { authRepository, userCreateSpy } = await loadRepo(t);
 
   await authRepository.createUserWithProfile({
-    accountType: 'CLIENT_INDIVIDUAL', firstName: 'Amr', lastName: 'Okasha', email: 'amr@example.com',
+    accountType: 'CLIENT_INDIVIDUAL', legalName: 'Amr Mahmoud Okasha', username: 'Amr', email: 'amr@example.com',
     phoneCountryCode: '+966', phoneNumber: '0500000000', agreedToTerms: true
   } as any, 'hashed-password');
 

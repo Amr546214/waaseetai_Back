@@ -10,7 +10,7 @@ import { runWithWaseetActor, waseetActorRole } from '../services/ai/waseet-ai/wa
 // One handshake check for every socket gateway (AUD-FND-000035): the token must be a valid JWT, its session must be live (not revoked / expired)
 // and the account must be ACTIVE and not banned. PENDING_VERIFICATION, SUSPENDED and SUSPENDED_REVIEW are all refused.
 export type SocketAuthResult =
-	| { ok: true; userId: string; accountType: string }
+	| { ok: true; userId: string; accountType: string; sessionId: string }
 	| { ok: false; reason: 'NO_TOKEN' | 'INVALID_TOKEN' | 'SESSION_REVOKED' | 'NOT_FOUND' | 'NOT_ACTIVE' };
 
 export function cleanToken(raw: unknown): string | null {
@@ -41,7 +41,7 @@ export async function verifySocketToken(rawToken: unknown, context: { ipAddress?
 	if (user.isBanned || user.status !== 'ACTIVE') return { ok: false, reason: 'NOT_ACTIVE' };
 	const session = await sessionService.validateOrRegister(userId, token, context, decoded.exp ? new Date(decoded.exp * 1000) : undefined);
 	if (!session) return { ok: false, reason: 'SESSION_REVOKED' };
-	return { ok: true, userId, accountType: String(user.accountType) };
+	return { ok: true, userId, accountType: String(user.accountType), sessionId: session.id };
 }
 
 const refusal = (reason: string) => Object.assign(new Error(reason === 'NOT_ACTIVE' ? ACCOUNT_NOT_ACTIVE_MESSAGE : 'Authentication failed'), {
@@ -81,7 +81,9 @@ export function socketAuthMiddleware(options: { required: boolean; onAuthenticat
 			if (isSocketConnectLimited(result.userId)) return next(Object.assign(new Error(SOCKET_CONNECT_RATE_LIMIT_MESSAGE), { data: { code: SOCKET_CONNECT_RATE_LIMIT_CODE } }));
 			(socket as any).userId = result.userId;
 			(socket as any).accountType = result.accountType;
-			socket.data = { ...(socket.data ?? {}), userId: result.userId, accountType: result.accountType };
+			// the login session of this socket (the same row an HTTP request with this token resolves to): the exam attempt is bound to it
+			(socket as any).sessionId = result.sessionId;
+			socket.data = { ...(socket.data ?? {}), userId: result.userId, accountType: result.accountType, sessionId: result.sessionId };
 			options.onAuthenticated?.(socket, result.userId);
 			next();
 		} catch {

@@ -16,6 +16,7 @@ import { profileChangeReviewService, withHonestAiReview } from './ai-features/pr
 import { withoutLegacyProviderBankFields } from '../utils/provider-payout';
 import { MARKET_VISIBLE_WHERE } from '../utils/market-visibility';
 import { Prisma, UserRole } from '@prisma/client';
+import { lockDisplayOwner } from '../utils/lock-display-owner';
 import { prisma } from '../config/db';
 import { publicProviderReviewsWhere } from './review-visibility';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
@@ -41,7 +42,9 @@ import { accountAuditLogService, AuditContext } from './account-logs.service';
 import { LEVEL_MATRIX } from './gamification.service';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { computeProviderCompletion, computeProviderMissingItems, computeClientCompletion } from '../utils/completion-calculators';
-import { CLIENT_IDENTITY_REQUEST_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY, CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY } from '../utils/profile-request-categories';
+import { CLIENT_IDENTITY_REQUEST_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY, CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY, LEGAL_NAME_CHANGE_REQUEST_CATEGORY } from '../utils/profile-request-categories';
+import { legalNameService } from './legal-name.service';
+import { LEGAL_NAME_REQUIRED_FOR_APPROVAL } from '../utils/legal-name';
 import { logger } from '../config/logger';
 import { OtpPurpose, OTP_MAX_ATTEMPTS } from '../utils/otp-purpose';
 import { otpSendThrottle, canReuseOtp, otpThrottleMessage, resendAvailableAtIso } from '../utils/otp-send-throttle';
@@ -848,7 +851,10 @@ export class ProviderProfileService {
 			heldSkills
 		});
 		const { mainSpecialty, subSpecialties, skillsAfterFieldChange } = plan;
-		const updatedProfile = await prisma.providerProfile.update({
+		const updatedProfile = await prisma.$transaction(async tx => {
+      await lockDisplayOwner(tx, userId);
+      const chosenName = await tx.user.findUnique({ where: { id: userId }, select: { username: true } });
+      return tx.providerProfile.update({
 			where: { userId },
 			data: {
 				headline,
@@ -871,8 +877,7 @@ export class ProviderProfileService {
 				...(data.preferences && { preferences: data.preferences }),
 				// firstName/lastName are required/validated above, so they're
 				// always present here; avatarUrl stays optional.
-				firstName,
-				lastName,
+				...(!chosenName?.username ? { firstName, lastName } : {}),
 				...(data.avatarUrl !== undefined && { avatarUrl })
 			},
 			include: {
@@ -885,6 +890,7 @@ export class ProviderProfileService {
 					}
 				}
 			}
+      });
 		});
 
 		// a changed main specialty / sub-specialties selection creates the new provider specialties (create-only)
@@ -1395,6 +1401,8 @@ export class ProviderProfileService {
 		const metadata = (request.metadata || {}) as any;
 		const reason = approved ? null : (String(rejectionReason || '').trim().slice(0, 500) || 'لم يستوفِ الطلب متطلبات التحقق');
 
+		if (request.category === LEGAL_NAME_CHANGE_REQUEST_CATEGORY) return legalNameService.reviewRequest(request.id, request.providerId, approved, reason, auditContext);
+
 		// A NEW IDENTITY DOCUMENT is decided in ONE transaction: the claim of the request, its application to the account and the KYC review it started either all happen
 		// or none does (a failure leaves the request waiting, untouched). The provider row is locked first, so a concurrent re-submission or KYC decision waits and then sees the result.
 		// Notifications go out AFTER the commit; a failed notification never undoes the decision.
@@ -1406,6 +1414,11 @@ export class ProviderProfileService {
 					data: { status: approved ? 'APPROVED' : 'REJECTED', reviewedByAdmin: true, rejectionReason: reason, appliedAt: approved ? new Date() : null }
 				});
 				if (!claimedTx.count) throw new Error('REQUEST_NOT_PENDING_REVIEW');
+				// approving a NEW identity document needs the legal name (the name the document is compared with); a refusal rolls the whole decision back
+				if (approved) {
+					const legal = await tx.user.findUnique({ where: { id: request.providerId }, select: { legalName: true } });
+					if (!legal?.legalName) throw new AppError(LEGAL_NAME_REQUIRED_FOR_APPROVAL, 409, undefined, 'LEGAL_NAME_REQUIRED');
+				}
 				let scored = false;
 				if (approved) scored = await this.applySensitivePayloadOn(tx, request.providerId, request.category, metadata.changes || {});
 				// the KYC review that the submission put in the queue (PENDING) is decided too; VERIFIED / UNVERIFIED / REJECTED accounts are never touched here
@@ -1436,6 +1449,7 @@ export class ProviderProfileService {
 					await this.applyLegacyFieldModification(request.providerId, request.fieldName, request.requestedValue);
 				} else if (request.category === CLIENT_IDENTITY_REQUEST_CATEGORY) {
 					await this.applyClientIdentityChange(request.providerId, metadata.changes || {});
+
 				} else if (request.category === CLIENT_BASIC_INFO_REQUEST_CATEGORY) {
 					await this.applyClientBasicInfoChange(request.providerId, metadata.changes || {});
 				} else if (request.category === CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY) {
@@ -1474,7 +1488,12 @@ export class ProviderProfileService {
 		const firstName = String(changes.firstName || '').trim();
 		const lastName = String(changes.lastName || '').trim();
 		if (firstName.length < 2 || lastName.length < 2) throw new Error('INVALID_NAME');
-		await prisma.clientProfile.upsert({ where: { userId }, create: { userId, firstName, lastName }, update: { firstName, lastName } });
+		await prisma.$transaction(async tx => {
+			await lockDisplayOwner(tx, userId);
+			const owner = await tx.user.findUnique({ where: { id: userId }, select: { username: true } });
+			if (owner?.username) throw new AppError('أصبح اسم العرض يُدار من حقل اسم المستخدم؛ ارفض طلب الاسم القديم بدل تطبيقه.', 409, undefined, 'USERNAME_MANAGED_SEPARATELY');
+			await tx.clientProfile.upsert({ where: { userId }, create: { userId, firstName, lastName }, update: { firstName, lastName } });
+		});
 		try {
 			const user = await prisma.user.findUnique({ where: { id: userId }, include: { clientProfile: true } });
 			if (user?.clientProfile) {

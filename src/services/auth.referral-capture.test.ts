@@ -42,7 +42,7 @@ function load() {
 	return loaded;
 }
 
-const BASE: any = { accountType: 'CLIENT_INDIVIDUAL', firstName: 'Test', lastName: 'User', email: 'new@example.com', phoneCountryCode: '+966', phoneNumber: '500000001', password: 'Password1', agreedToTerms: true };
+const BASE: any = { accountType: 'CLIENT_INDIVIDUAL', legalName: 'Test User Name', username: 'Test', email: 'new@example.com', phoneCountryCode: '+966', phoneNumber: '500000001', password: 'Password1', agreedToTerms: true };
 const KHALID: Affiliate = { id: 'aff-1', userId: 'aff-user-1', referralSlug: 'khalid2026' };
 
 async function register(extra: any, cookie?: string, source?: string) {

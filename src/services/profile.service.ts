@@ -1,4 +1,5 @@
 import { Prisma, UserRole } from '@prisma/client';
+import { lockDisplayOwner } from '../utils/lock-display-owner';
 import { prisma } from '../config/db';
 import { storeDataUriIfNeeded } from '../utils/cloudinary-storage';
 import { UpdateProfileDto } from '../dtos/profile.dto';
@@ -228,12 +229,15 @@ export class ProfileService {
     if (avatarUrl !== undefined) displayFields.avatarUrl = storedAvatarUrl;
 
     return await prisma.$transaction(async (tx) => {
+      await lockDisplayOwner(tx, userId);
       // 1. Update Core User fields if provided (identity-level only —
       // firstName/lastName/avatarUrl are handled in step 2 below).
       const userUpdateData: any = {};
 
       // A profile save never changes User.status: activation is owned by OTP verification / admin review.
       const currentUser = await tx.user.findUnique({ where: { id: userId } });
+      // A chosen username is the display authority; stale legacy controls cannot rewrite it.
+      if (currentUser?.username) { delete displayFields.firstName; delete displayFields.lastName; }
 
       // The account phone is immutable from the interface for every role (no code, no request). An unchanged number is ignored; a
       // different one is refused (403), and '' / null never erase it.
@@ -406,13 +410,14 @@ export class ProfileService {
         if (rest[field] !== undefined) safeUserData[field] = rest[field];
       }
 
+      const chosenName = await prisma.user.findUnique({ where: { id: userId }, select: { username: true } });
       const displayFields: { firstName?: string; lastName?: string; avatarUrl?: string | null } = {};
       // A CLIENT's name is a governed field: it is never written here. A change creates a modification request (category
       // CLIENT_BASIC_INFO) that an admin approves or rejects; the stored name changes only on approval.
       let nameRequest: { id: string; status: string } | null = null;
-      if (activeRole === UserRole.CLIENT && (firstName !== undefined || lastName !== undefined)) {
+      if (!chosenName?.username && activeRole === UserRole.CLIENT && (firstName !== undefined || lastName !== undefined)) {
         nameRequest = await this.requestClientNameChange(userId, firstName, lastName);
-      } else {
+      } else if (!chosenName?.username) {
         if (firstName !== undefined) displayFields.firstName = firstName;
         if (lastName !== undefined) displayFields.lastName = lastName;
       }
@@ -424,6 +429,9 @@ export class ProfileService {
       // the identity-level update applied without the display-field one (or
       // vice versa).
       await prisma.$transaction(async (tx) => {
+        await lockDisplayOwner(tx, userId);
+        const owner = await tx.user.findUnique({ where: { id: userId }, select: { username: true } });
+        if (owner?.username) { delete displayFields.firstName; delete displayFields.lastName; }
         if (Object.keys(safeUserData).length > 0) {
           await tx.user.update({ where: { id: userId }, data: safeUserData });
         }

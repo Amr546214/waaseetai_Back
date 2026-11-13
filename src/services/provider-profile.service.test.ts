@@ -32,6 +32,7 @@ process.env.OPENAI_API_KEY = 'test-key';
 // pg Pool — never executes and no database connection is ever made).
 
 const baseUser = {
+  legalName: 'اسم حقيقي كامل',
   id: 'user-1',
   email: 'provider@example.com',
   phoneNumber: '0500000000',
@@ -78,6 +79,7 @@ async function loadProviderProfileServiceWithFixture(t: TestContext) {
           update: async (args: any) => providerProfileUpdateSpy(args)
         },
         user: {
+          findUnique: async () => ({ ...baseUser }),
           update: async (args: any) => userUpdateSpy(args)
         },
         // updateBasicInfo resolves the main specialty against the marketplace taxonomy (a name that is not a category stays as stored)
@@ -96,10 +98,8 @@ async function loadProviderProfileServiceWithFixture(t: TestContext) {
         accountAuditLog: {
           create: async () => ({})
         },
-        // Only the array form is used by updateBasicInfo — the operations
-        // inside the array are already in-flight promises by the time
-        // $transaction receives them (Prisma's real API works the same way).
-        $transaction: async (ops: any) => Promise.all(ops)
+        // Support the interactive transaction used to serialize username and profile writes.
+        $transaction: async function (ops: any) { return typeof ops === 'function' ? ops(this) : Promise.all(ops); }
       }
     }
   });
@@ -514,6 +514,7 @@ function createSkillsPortfolioMockPrisma(t: TestContext) {
     completionPercentage: 0
   };
   const userFixture = {
+    legalName: 'اسم حقيقي كامل',
     id: 'user-1',
     email: 'provider@example.com',
     phoneNumber: '0500000000',
@@ -709,6 +710,7 @@ test('role isolation (skills/portfolio): never touches ClientProfile/AffiliatePr
 
 function createSensitiveFlowMockPrisma(t: TestContext, opts: { throwOnRecompute?: boolean } = {}) {
   let userState: any = {
+    legalName: 'اسم حقيقي كامل', // approving a new identity document needs the legal name on file
     id: 'user-1',
     email: 'provider@example.com',
     phoneNumber: '0500000000',

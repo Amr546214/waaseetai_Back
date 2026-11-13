@@ -7,7 +7,8 @@ import { AdminActor, adminAuditData } from './admin-audit';
 import { providerNotifications } from './provider-notifications.service';
 import { lockProviderProfile } from '../utils/provider-profile-lock';
 import { logger } from '../config/logger';
-import { identityGateService, identityDigest } from './identity-gate.service';
+import { identityGateService, identityDigest, legalNameOf } from './identity-gate.service';
+import { LEGAL_NAME_REQUIRED_FOR_APPROVAL } from '../utils/legal-name';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 
 type ListedUser = { id: string; firstName?: string | null; lastName?: string | null; email?: string | null; phoneNumber?: string | null; accountType?: string | null } | null | undefined;
@@ -100,7 +101,7 @@ export class OnboardingService {
         skip: (safePage - 1) * safeLimit,
         take: safeLimit,
         include: {
-          user: { select: { id: true, firstName: true, lastName: true, email: true, phoneNumber: true, accountType: true, status: true } },
+          user: { select: { id: true, firstName: true, lastName: true, email: true, phoneNumber: true, accountType: true, status: true, legalName: true } },
         },
       }),
       prisma.clientOnboarding.count({ where }),
@@ -110,7 +111,7 @@ export class OnboardingService {
         where: { userId: item.userId },
         select: { kycStatus: true, frontIdUrl: true, backIdUrl: true, idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true },
       });
-      return { ...item, ...flatOwnerFields(item.user), clientProfileKycStatus: clientProfile?.kycStatus || null, identityDigest: clientProfile ? identityDigest(clientProfile) : null };
+      return { ...item, ...flatOwnerFields(item.user), legalName: item.user?.legalName ?? null, legalNameMissing: !item.user?.legalName, clientProfileKycStatus: clientProfile?.kycStatus || null, identityDigest: clientProfile ? identityDigest({ ...clientProfile, legalName: item.user?.legalName }) : null };
     }));
     return {
       items: enrichedItems,
@@ -121,14 +122,14 @@ export class OnboardingService {
   async getOnboarding(id: string) {
     const item = await prisma.clientOnboarding.findUnique({
       where: { id },
-      include: { user: { select: { id: true, firstName: true, lastName: true, email: true, phoneNumber: true, accountType: true, status: true } } },
+      include: { user: { select: { id: true, firstName: true, lastName: true, email: true, phoneNumber: true, accountType: true, status: true, legalName: true } } },
     });
     if (!item) throw new AppError('سجل التحقق غير موجود', 404);
     const clientProfile = await prisma.clientProfile.findUnique({
       where: { userId: item.userId },
       select: { kycStatus: true, idNumber: true, frontIdUrl: true, backIdUrl: true, isNafathVerified: true, idIssuingCountry: true, idDocumentType: true, dob: true },
     });
-    return { ...item, clientProfile, identityDigest: clientProfile ? identityDigest(clientProfile) : null };
+    return { ...item, legalName: item.user?.legalName ?? null, legalNameMissing: !item.user?.legalName, clientProfile, identityDigest: clientProfile ? identityDigest({ ...clientProfile, legalName: item.user?.legalName }) : null };
   }
 
   async approveOnboarding(id: string, actor?: AdminActor, expectedDigest?: string | null) {
@@ -140,8 +141,12 @@ export class OnboardingService {
       // conditional transition: a concurrent decision matches zero rows
       const moved = await tx.clientOnboarding.updateMany({ where: { id, status: OnboardingStatus.PENDING }, data: { status: OnboardingStatus.APPROVED, reviewedAt: new Date() } });
       if (moved.count !== 1) throw new AppError('تمت معالجة هذا الطلب مسبقاً', 409);
-      const evidence = await tx.clientProfile.findUnique({ where: { userId: item.userId }, select: { frontIdUrl: true, backIdUrl: true, idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true } });
-      // approval is bound to the evidence as it is NOW (and, when the admin page sent its digest, to what the admin actually reviewed)
+      const evidence0 = await tx.clientProfile.findUnique({ where: { userId: item.userId }, select: { frontIdUrl: true, backIdUrl: true, idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true } });
+      // a NEW identity approval needs the legal name (the name the document is compared with); read under the lock that also serialises legal-name changes
+      const legalName = await legalNameOf(tx, item.userId);
+      if (!legalName) throw new AppError(LEGAL_NAME_REQUIRED_FOR_APPROVAL, 409, undefined, 'LEGAL_NAME_REQUIRED');
+      const evidence = evidence0 ? { ...evidence0, legalName } : null;
+      // approval is bound to the evidence as it is NOW (document, data AND legal name; and, when the admin page sent its digest, to what the admin actually reviewed)
       const approvedDigest = evidence ? identityGateService.approvalDigest(evidence, expectedDigest) : null;
       await tx.clientProfile.updateMany({ where: { userId: item.userId }, data: { kycStatus: KYCStatus.VERIFIED, identityApprovedDigest: approvedDigest } });
       await tx.user.update({ where: { id: item.userId }, data: { idDocumentUrl: item.documentUrl } });
@@ -189,14 +194,14 @@ export class OnboardingService {
         skip: (safePage - 1) * safeLimit,
         take: safeLimit,
         include: {
-          user: { select: { id: true, firstName: true, lastName: true, email: true, phoneNumber: true, accountType: true, status: true } },
+          user: { select: { id: true, firstName: true, lastName: true, email: true, phoneNumber: true, accountType: true, status: true, legalName: true } },
         },
       }),
       prisma.providerProfile.count({ where }),
     ]);
     const waiting = await pendingIdentityRequests(items.map((item) => item.userId));
     return {
-      items: items.map((item) => ({ ...item, userId: item.userId, ...flatOwnerFields(item.user), documentsCount: providerDocumentsCount(item as any), identityDigest: identityDigest(item as any), pendingIdentityRequestId: waiting.get(item.userId) ?? null })),
+      items: items.map((item) => ({ ...item, userId: item.userId, ...flatOwnerFields(item.user), documentsCount: providerDocumentsCount(item as any), legalName: (item as any).user?.legalName ?? null, legalNameMissing: !(item as any).user?.legalName, identityDigest: identityDigest({ ...(item as any), legalName: (item as any).user?.legalName }), pendingIdentityRequestId: waiting.get(item.userId) ?? null })),
       pagination: { page: safePage, limit: safeLimit, total, totalPages: Math.ceil(total / safeLimit) },
     };
   }
@@ -212,7 +217,10 @@ export class OnboardingService {
       if ((await pendingIdentityRequests([userId], tx)).has(userId)) throw new AppError(IDENTITY_REQUEST_WAITING, 409, undefined, 'IDENTITY_REQUEST_WAITING');
       // nothing to verify: an approval needs at least one identity document on file
       if (providerDocumentsCount(profile as any) === 0) throw new AppError('لا توجد مستندات هوية لدى المزود لاعتمادها', 400);
-      const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.VERIFIED, isVerified: true, notes: null, identityApprovedDigest: identityGateService.approvalDigest(profile as any, expectedDigest) } });
+      // a NEW identity approval needs the legal name; it is part of the evidence the approval is bound to
+      const legalName = await legalNameOf(tx, userId);
+      if (!legalName) throw new AppError(LEGAL_NAME_REQUIRED_FOR_APPROVAL, 409, undefined, 'LEGAL_NAME_REQUIRED');
+      const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.VERIFIED, isVerified: true, notes: null, identityApprovedDigest: identityGateService.approvalDigest({ ...(profile as any), legalName }, expectedDigest) } });
       if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId, category: LogCategory.SYSTEM_AUDIT, eventType: 'KYC_APPROVED_BY_ADMIN', title: 'اعتماد توثيق الهوية', summary: 'اعتمدت الإدارة مستندات هوية مقدم الخدمة', status: LogStatus.APPROVED, before: { kycStatus: profile.kycStatus }, after: { kycStatus: KYCStatus.VERIFIED }, details: { party: 'PROVIDER' } }) });
       return row;
     });

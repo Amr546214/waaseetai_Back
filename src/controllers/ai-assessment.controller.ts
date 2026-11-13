@@ -23,7 +23,7 @@ export async function generateAssessmentController(req: Request, res: Response):
       return;
     }
 
-    const result = await aiAssessmentService.generateAssessment(String(providerSpecialtyId), userId);
+    const result = await aiAssessmentService.generateAssessment(String(providerSpecialtyId), userId, (req as any).user?.sessionId);
 
     const message = 'تم توليد أسئلة التقييم الفني بنجاح عبر خدمة الذكاء الاصطناعي.';
 
@@ -67,7 +67,7 @@ export async function submitAssessmentController(req: Request, res: Response): P
       return;
     }
 
-    const result = await aiAssessmentService.submitAssessment(String(attemptId), submittedAnswers, req.user?.id);
+    const result = await aiAssessmentService.submitAssessment(String(attemptId), submittedAnswers, req.user?.id, (req.user as { sessionId?: string } | undefined)?.sessionId);
 
     res.status(200).json({
       success: true,
@@ -76,7 +76,7 @@ export async function submitAssessmentController(req: Request, res: Response): P
     });
   } catch (error: any) {
     if (error instanceof AppError && error.statusCode < 500) {
-      res.status(error.statusCode).json({ success: false, message: error.message });
+      res.status(error.statusCode).json({ success: false, ...(error.code ? { code: error.code } : {}), message: error.message });
       return;
     }
     console.error('[AiAssessmentController] submit error:', error);

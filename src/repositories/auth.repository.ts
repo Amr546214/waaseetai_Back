@@ -79,8 +79,12 @@ export class AuthRepository {
           // lazy self-healing in account-management.service.ts to fix it later.
           roles,
           activeRole: getRoleFromAccountType(data.accountType),
-          firstName: data.firstName,
-          lastName: data.lastName,
+          // the username is the display name; firstName/lastName are kept in step with it (every existing surface reads them) and never carry the legal name
+          username: data.username,
+          firstName: data.username,
+          lastName: '',
+          // the legal name (name on the identity document) is its own field: never derived from the display name or from Google's profile name
+          legalName: data.legalName,
           email: data.email,
           phoneCountryCode: data.phoneCountryCode,
           phoneNumber: data.phoneNumber,

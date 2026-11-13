@@ -3,6 +3,7 @@ import { SPECIALTY_TEST_QUESTION_COUNT, SPECIALTY_TEST_TIME_LIMIT_MINUTES } from
 import { AssessmentStatus, Prisma, SpecialtyVerificationStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
+import { bindingEnabled, enforceSession, sessionVerdict, sessionError, asSnapshot } from './exam-attempt-session';
 import { AppError } from '../utils/app-error';
 import { evaluateAssessment, AnswerLogEntry } from '../utils/assessment-review-flags';
 
@@ -112,8 +113,11 @@ export interface GenerationClaim {
 export async function claimAssessmentGeneration(
   providerSpecialtyId: string,
   providerProfileId: string,
-  specialtyId: string
+  specialtyId: string,
+  sessionId?: string
 ): Promise<GenerationClaim> {
+  // the attempt is bound to the login session that creates it; a caller whose session is unknown is refused explicitly (never let through)
+  if (bindingEnabled() && !sessionId) throw sessionError('SESSION_UNKNOWN');
   return prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM provider_specialties WHERE id = ${providerSpecialtyId} FOR UPDATE`;
 
@@ -130,6 +134,10 @@ export async function claimAssessmentGeneration(
     });
 
     if (existing) {
+      // reusing the live attempt: only from the session that owns it (a legacy attempt without binding is bound here, inside this transaction)
+      await tx.$queryRaw`SELECT id FROM assessment_attempts WHERE id = ${existing.id} FOR UPDATE`;
+      const bound = enforceSession(existing.analyzedAssetsSnapshot, sessionId);
+      if (bound.changed) await tx.assessmentAttempt.update({ where: { id: existing.id }, data: { analyzedAssetsSnapshot: bound.snapshot as Prisma.InputJsonValue } });
       const snapshot = existing.analyzedAssetsSnapshot as { generationSource?: string } | null;
       return {
         claimed: false,
@@ -173,7 +181,8 @@ export async function claimAssessmentGeneration(
         totalQuestions: ASSESSMENT_QUESTION_COUNT,
         status: AssessmentStatus.STREAMING,
         timeLimitMinutes: ASSESSMENT_TIME_LIMIT_MINUTES,
-        startedAt: new Date()
+        startedAt: new Date(),
+        ...(sessionId && bindingEnabled() ? { analyzedAssetsSnapshot: { boundSessionId: sessionId } as Prisma.InputJsonValue } : {})
       }
     });
 
@@ -199,20 +208,26 @@ interface PersistGeneratedInput {
 // Persists the key-less questions and the WaseetAI attempt id into the
 // reserved attempt (existing JSON columns only) and starts our own clock.
 async function persistGeneratedAssessment(input: PersistGeneratedInput): Promise<void> {
-  await prisma.assessmentAttempt.update({
-    where: { id: input.claimAttemptId },
-    data: {
-      questionsPayload: sanitizeQuestions(input.questions) as any,
-      analyzedAssetsSnapshot: {
-        provider: 'WASEET_AI',
-        vendorAttemptId: input.vendorAttemptId,
-        ...(input.generationSource ? { generationSource: input.generationSource } : {})
-      } as any,
-      totalQuestions: input.questions.length,
-      timeLimitMinutes: ASSESSMENT_TIME_LIMIT_MINUTES,
-      startedAt: new Date(),
-      status: AssessmentStatus.IN_PROGRESS
-    }
+  // MERGED into the reserved snapshot under the row lock: the session binding written at creation (and anything a writer added meanwhile) must survive
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM assessment_attempts WHERE id = ${input.claimAttemptId} FOR UPDATE`;
+    const current = await tx.assessmentAttempt.findUnique({ where: { id: input.claimAttemptId }, select: { analyzedAssetsSnapshot: true } });
+    await tx.assessmentAttempt.update({
+      where: { id: input.claimAttemptId },
+      data: {
+        questionsPayload: sanitizeQuestions(input.questions) as any,
+        analyzedAssetsSnapshot: {
+          ...asSnapshot(current?.analyzedAssetsSnapshot),
+          provider: 'WASEET_AI',
+          vendorAttemptId: input.vendorAttemptId,
+          ...(input.generationSource ? { generationSource: input.generationSource } : {})
+        } as any,
+        totalQuestions: input.questions.length,
+        timeLimitMinutes: ASSESSMENT_TIME_LIMIT_MINUTES,
+        startedAt: new Date(),
+        status: AssessmentStatus.IN_PROGRESS
+      }
+    });
   });
 }
 
@@ -294,6 +309,8 @@ export async function streamAssessmentForClaim(input: {
 
 export type SubmissionOutcome =
   | { kind: 'NOT_FOUND' }
+  | { kind: 'SESSION_MISMATCH' }
+  | { kind: 'SESSION_UNKNOWN' }
   | { kind: 'ALREADY_FINALIZED' }
   | { kind: 'EXPIRED'; completedAt: Date; totalQuestions: number }
   | {
@@ -338,14 +355,17 @@ const MAX_LOGGED_ANSWERS = 100;
  * Records WHEN (server time) the user first answered a question, as the client reports each choice. Best effort and append-only per question:
  * a later change of mind does not move the first-answer time. Returns false when the attempt/question is not valid for this user.
  */
-export async function recordAssessmentAnswer(userId: string, attemptId: string, questionId: string, answer: string, now: Date = new Date()): Promise<boolean> {
+export async function recordAssessmentAnswer(userId: string, attemptId: string, questionId: string, answer: string, now: Date = new Date(), sessionId?: string): Promise<boolean> {
   if (typeof questionId !== 'string' || typeof answer !== 'string' || !questionId || answer.length > 50) return false;
   return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM assessment_attempts WHERE id = ${attemptId} FOR UPDATE`; // same writers as the autosave / events: one at a time
     const attempt = await tx.assessmentAttempt.findFirst({
       where: { id: attemptId, status: { in: SUBMITTABLE_STATUSES }, providerSpecialty: { providerProfile: { userId } } },
       select: { id: true, questionsPayload: true, analyzedAssetsSnapshot: true }
     });
     if (!attempt) return false;
+    const verdict = sessionVerdict(attempt.analyzedAssetsSnapshot, sessionId);
+    if (verdict === 'MISMATCH' || verdict === 'SESSION_UNKNOWN') return false; // silent for the timing log; the other routes refuse loudly
     const questions = (Array.isArray(attempt.questionsPayload) ? attempt.questionsPayload : []) as unknown as StoredQuestion[];
     if (!questions.some(q => String(q.id) === questionId)) return false;
     const base = (attempt.analyzedAssetsSnapshot && typeof attempt.analyzedAssetsSnapshot === 'object' && !Array.isArray(attempt.analyzedAssetsSnapshot)
@@ -355,6 +375,15 @@ export async function recordAssessmentAnswer(userId: string, attemptId: string, 
     await tx.assessmentAttempt.update({ where: { id: attempt.id }, data: { analyzedAssetsSnapshot: { ...base, answerLog: [...log, { q: questionId, a: answer, t: now.getTime() }] } as any } });
     return true;
   });
+}
+
+export function withSavedDrafts(snapshot: unknown, questions: { id: unknown }[], submitted: Record<string, string>): Record<string, string> {
+  const draft = (snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot) ? (snapshot as { draftAnswers?: unknown }).draftAnswers : null);
+  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return submitted;
+  const ids = new Set(questions.map(q => String(q.id)));
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(draft as Record<string, unknown>)) if (ids.has(k) && typeof v === 'string' && v.length > 0 && v.length <= 50) out[k] = v;
+  return { ...out, ...submitted };
 }
 
 function normalizeAnswers(raw: unknown): Record<string, string> {
@@ -442,9 +471,10 @@ async function applySpecialtyOutcome(
 export async function processAssessmentSubmission(
   attemptId: string,
   userId: string,
-  rawAnswers: unknown
+  rawAnswers: unknown,
+  sessionId?: string
 ): Promise<SubmissionOutcome> {
-  const answers = normalizeAnswers(rawAnswers);
+  const answersIn = normalizeAnswers(rawAnswers);
 
   const attempt = await prisma.assessmentAttempt.findFirst({
     where: { id: attemptId, providerSpecialty: { providerProfile: { userId } } },
@@ -452,10 +482,16 @@ export async function processAssessmentSubmission(
   });
   if (!attempt) return { kind: 'NOT_FOUND' };
   if (!SUBMITTABLE_STATUSES.includes(attempt.status)) return { kind: 'ALREADY_FINALIZED' };
+  // only the session that created the attempt may submit it (a second session of the same user cannot); an unknown session is refused, not waved through
+  const verdict = sessionVerdict(attempt.analyzedAssetsSnapshot, sessionId);
+  if (verdict === 'MISMATCH') return { kind: 'SESSION_MISMATCH' };
+  if (verdict === 'SESSION_UNKNOWN') return { kind: 'SESSION_UNKNOWN' };
 
   const questions = (Array.isArray(attempt.questionsPayload) ? attempt.questionsPayload : []) as unknown as StoredQuestion[];
   const vendorAttemptId = extractVendorAttemptId(attempt.analyzedAssetsSnapshot);
   const totalQuestions = questions.length || attempt.totalQuestions || ASSESSMENT_QUESTION_COUNT;
+  // answers saved while the test ran (autosave) fill the gaps of what is submitted now (a lost connection or a reload never loses them); a submitted answer always wins
+  const answers = withSavedDrafts(attempt.analyzedAssetsSnapshot, questions, answersIn);
 
   // A grading claim that is still fresh means another transport is grading
   // right now; a stale one is abandoned and gets released first.
@@ -629,7 +665,7 @@ export class AiAssessmentService {
   /**
    * 1. Question generation via WaseetAI (POST /api/assessments/generate)
    */
-  async generateAssessment(providerSpecialtyId: string, currentUserId: string): Promise<GenerateAssessmentResponse> {
+  async generateAssessment(providerSpecialtyId: string, currentUserId: string, sessionId?: string): Promise<GenerateAssessmentResponse> {
     const providerSpecialty = await prisma.providerSpecialty.findFirst({
       where: { id: providerSpecialtyId, providerProfile: { userId: currentUserId } },
       select: {
@@ -648,7 +684,7 @@ export class AiAssessmentService {
 
     // Claim BEFORE calling WaseetAI. If the socket twin (or a duplicate REST
     // retry) already owns an active attempt, reuse its real result.
-    const claim = await claimAssessmentGeneration(providerSpecialtyId, providerSpecialty.providerProfileId, providerSpecialty.specialtyId);
+    const claim = await claimAssessmentGeneration(providerSpecialtyId, providerSpecialty.providerProfileId, providerSpecialty.specialtyId, sessionId);
 
     if (!claim.claimed) {
       const existing = (Array.isArray(claim.existingQuestionsPayload) ? claim.existingQuestionsPayload : []) as StoredQuestion[];
@@ -692,16 +728,20 @@ export class AiAssessmentService {
   /**
    * 2. Submission & grading (POST /api/assessments/:attemptId/submit)
    */
-  async submitAssessment(attemptId: string, submittedAnswers: Record<string, string>, currentUserId?: string): Promise<SubmitAssessmentResponse> {
+  async submitAssessment(attemptId: string, submittedAnswers: Record<string, string>, currentUserId?: string, sessionId?: string): Promise<SubmitAssessmentResponse> {
     if (!currentUserId) {
       throw new AppError('محاولة التقييم غير موجودة.', 404);
     }
 
-    const outcome = await processAssessmentSubmission(attemptId, currentUserId, submittedAnswers);
+    const outcome = await processAssessmentSubmission(attemptId, currentUserId, submittedAnswers, sessionId);
 
     switch (outcome.kind) {
       case 'NOT_FOUND':
         throw new AppError('محاولة التقييم غير موجودة.', 404);
+      case 'SESSION_MISMATCH':
+        throw sessionError('MISMATCH');
+      case 'SESSION_UNKNOWN':
+        throw sessionError('SESSION_UNKNOWN');
       case 'ALREADY_FINALIZED':
         throw new AppError('تم تسليم وتقييم محاولة التقييم هذه مسبقاً.', 409);
       case 'EXPIRED':

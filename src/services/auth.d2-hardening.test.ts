@@ -9,7 +9,7 @@ import { generateReferralSlug, isReferralSlugConflict } from '../utils/slug.util
 process.env.OPENAI_API_KEY = 'test-key';
 process.env.JWT_SECRET = 'test-secret';
 
-const REG = { accountType: 'CLIENT_INDIVIDUAL', firstName: 'Test', lastName: 'User', phoneNumber: '500000001', password: 'Password1', agreedToTerms: true };
+const REG = { accountType: 'CLIENT_INDIVIDUAL', legalName: 'Test User Name', username: 'Test', phoneNumber: '500000001', password: 'Password1', agreedToTerms: true };
 
 test('#22 every auth schema trims and lower-cases the email', () => {
 	const e = '  Amr.Okasha@Example.COM ';

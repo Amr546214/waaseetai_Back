@@ -1,7 +1,8 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { geoSuggestion, isPublicIp, clearGeoCache } from './geo-suggestion.service';
-import { trustedClientIp } from '../utils/client-ip';
+import { trustedClientIp, cameThroughTrustedProxy } from '../utils/client-ip';
+import { geoSourceStatus } from './geo-suggestion.service';
 
 beforeEach(clearGeoCache);
 const E = (o: Record<string, string>) => o as NodeJS.ProcessEnv;
@@ -13,8 +14,9 @@ test('private, loopback and malformed addresses are never looked up', async () =
 test('nothing configured => none (manual fields keep working); CDN headers count ONLY when explicitly trusted', async () => {
 	const h = { 'cf-ipcountry': 'EG', 'cf-ipcity': 'Cairo' };
 	assert.equal((await geoSuggestion('8.8.8.8', h, E({}), resp({}))).source, 'none');
-	assert.deepEqual(await geoSuggestion('8.8.8.8', h, E({ GEOIP_TRUST_CDN_HEADERS: 'cloudflare' }), resp({})), { countryCode: 'EG', city: 'Cairo', timezone: null, source: 'cdn-header', approximate: true });
-	assert.equal((await geoSuggestion('8.8.8.8', { 'cf-ipcountry': 'XX' }, E({ GEOIP_TRUST_CDN_HEADERS: 'cloudflare' }), resp({}))).source, 'none');
+	assert.equal((await geoSuggestion('8.8.8.8', h, E({ GEOIP_TRUST_CDN_HEADERS: 'cloudflare' }), resp({}))).source, 'none', 'a request that did not come through a trusted proxy hop cannot vouch for CDN headers');
+	assert.deepEqual(await geoSuggestion('8.8.8.8', h, E({ GEOIP_TRUST_CDN_HEADERS: 'cloudflare' }), resp({}), true), { countryCode: 'EG', city: 'Cairo', timezone: null, source: 'cdn-header', approximate: true });
+	assert.equal((await geoSuggestion('8.8.8.8', { 'cf-ipcountry': 'XX' }, E({ GEOIP_TRUST_CDN_HEADERS: 'cloudflare' }), resp({}), true)).source, 'none');
 });
 test('provider: country + city + a valid zone, cached; a failing or slow provider degrades to none without throwing', async () => {
 	let n = 0; const f = (async () => { n++; return { ok: true, status: 200, json: async () => ({ country: 'sa', city: 'Riyadh', timezone: 'Asia/Riyadh' }) }; }) as unknown as typeof fetch;
@@ -31,4 +33,16 @@ test('socket address: X-Forwarded-For is believed only behind a trusted proxy ho
 	assert.equal(trustedClientIp(mk('172.18.0.1', '203.0.113.9'), E({})), '203.0.113.9');
 	assert.equal(trustedClientIp(mk('198.51.100.7', '6.6.6.6'), E({})), '198.51.100.7');
 	assert.equal(trustedClientIp(mk('::ffff:198.51.100.8'), E({})), '198.51.100.8');
+});
+
+test('HTTP and Socket.IO use the same address rule; the peer must be a trusted hop for edge headers; source status names what is missing', () => {
+	const mk = (peer: string, xff?: string) => ({ headers: xff ? { 'x-forwarded-for': xff } : {}, socket: { remoteAddress: peer } }) as any;
+	assert.equal(cameThroughTrustedProxy(mk('172.18.0.1'), E({})), true);
+	assert.equal(cameThroughTrustedProxy(mk('198.51.100.7'), E({})), false);
+	assert.equal(cameThroughTrustedProxy(mk('198.51.100.7'), E({ TRUST_PROXY: '198.51.100.7' })), true);
+	assert.equal(trustedClientIp(mk('198.51.100.7', '6.6.6.6'), E({ TRUST_PROXY: 'loopback' })), '198.51.100.7', 'a forged header from an untrusted peer never becomes the client address');
+	assert.equal(geoSourceStatus(E({})).configured, false);
+	assert.ok(geoSourceStatus(E({})).missing.length >= 1);
+	assert.equal(geoSourceStatus(E({ GEOIP_PROVIDER: 'ipinfo', GEOIP_TOKEN: 'x' })).source, 'geoip-provider');
+	assert.equal(JSON.stringify(geoSourceStatus(E({ GEOIP_PROVIDER: 'ipinfo', GEOIP_TOKEN: 'sekret' }))).includes('sekret'), false);
 });

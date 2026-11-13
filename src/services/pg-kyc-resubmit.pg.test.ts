@@ -21,7 +21,7 @@ const id = () => randomUUID();
 async function seed(kycStatus: string, extra: Record<string, any> = {}) {
 	const { prisma } = await import('../config/db');
 	const tag = id().slice(0, 8);
-	const user = await prisma.user.create({ data: { id: id(), accountType: 'PROVIDER_INDIVIDUAL', firstName: 'p', lastName: tag, email: `p-${tag}@pg.test`, roles: ['PROVIDER'], activeRole: 'PROVIDER' } });
+	const user = await prisma.user.create({ data: { id: id(), accountType: 'PROVIDER_INDIVIDUAL', firstName: 'p', lastName: tag, legalName: 'مقدم خدمة تجريبي', email: `p-${tag}@pg.test`, roles: ['PROVIDER'], activeRole: 'PROVIDER' } });
 	const oldRef = `private:image:png:waseetai/providers/${user.id}/identity/old-${tag}`;
 	await prisma.providerProfile.create({ data: { id: id(), userId: user.id, kycStatus: kycStatus as any, frontIdUrl: oldRef, ...extra } as any });
 	const newRef = `private:image:png:waseetai/providers/${user.id}/documents/new-${tag}`;
