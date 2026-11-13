@@ -1,5 +1,6 @@
 import { test, mock, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { identityGateTestDouble } from '../testing/identity-gate.test-double';
 
 process.env.OPENAI_API_KEY = 'test-key';
 process.env.JWT_SECRET = 'test-secret';
@@ -44,6 +45,7 @@ const prisma: any = {
 let loaded: Promise<{ ClientProfileController: any; OnboardingService: any; clientProfileService: any }> | null = null;
 function load() {
   if (loaded) return loaded;
+  mock.module('../services/identity-gate.service', { namedExports: identityGateTestDouble });
   mock.module('../config/db', { namedExports: { prisma } });
   mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
   mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (v: any) => v ?? null, storeKycFileIfNeeded: async (v: any) => v ?? null } });

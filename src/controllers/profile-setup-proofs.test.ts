@@ -1,5 +1,6 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { identityGateTestDouble } from '../testing/identity-gate.test-double';
 
 // The provider setup request is judged on documents BEFORE any write, and "complete" rests on stored evidence:
 //  - a business model without a completed ownership proof (or with the model file reused as proof) is a 400 and nothing is written;
@@ -33,6 +34,7 @@ async function controller(t: TestContext, seed: any = null) {
 	store.provider = seed; store.writes = 0; store.exists = async () => true;
 	if (!mocked.has(t)) {
 		mocked.add(t);
+		t.mock.module('../services/identity-gate.service', { namedExports: identityGateTestDouble });
 		t.mock.module('../config/db', { namedExports: { prisma } });
 		t.mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
 		t.mock.module('../utils/cloudinary-storage', { namedExports: { storeDataUriIfNeeded: async (v: any) => v ?? null, storeKycFileIfNeeded: async (v: any) => v ?? null, privateFileExists: (ref: string) => store.exists(ref) } });

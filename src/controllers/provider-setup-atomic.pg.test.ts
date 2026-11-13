@@ -31,6 +31,7 @@ async function load(t: any) {
 	}
 	const { prisma } = await import('../config/db');
 	const controller = await import('./provider-profile.controller');
+	(await import('../testing/identity-gate.test-double')).openIdentityGate && await (await import('../testing/identity-gate.test-double')).openIdentityGate();
 	const { specialtyService } = await import('../services/specialty.service');
 	return { prisma, controller, specialtyService };
 }

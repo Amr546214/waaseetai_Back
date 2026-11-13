@@ -22,7 +22,7 @@ function server() {
 		mock.module('../config/logger', { namedExports: { logger: { error() {}, info() {}, warn() {}, debug() {} } } });
 		mock.module('../services/session.service', { namedExports: { sessionService: { validateOrRegister: async () => ({ id: 's1' }) } } });
 		mock.module('../controllers/client-profile.controller', {
-			namedExports: { clientProfileController: { getPublicProfile: ok('public'), getSetupData: ok('getSetup'), saveSetupData: ok('saveSetup'), saveSetupStep: ok('saveSetupStep'), nafathVerify: ok('nafath') } },
+			namedExports: { clientProfileController: { getPublicProfile: ok('public'), getSetupData: ok('getSetup'), saveSetupData: ok('saveSetup'), saveSetupStep: ok('saveSetupStep'), getIdentityState: ok('getIdentity'), saveIdentityStep: ok('saveIdentity'), nafathVerify: ok('nafath') } },
 		});
 		const express = (await import('express')).default;
 		const router = (await import('./client-profile.routes')).default;
