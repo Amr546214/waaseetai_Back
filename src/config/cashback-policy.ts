@@ -7,12 +7,8 @@
  *   K43  cashback       = K40 x K41 x K42
  * Nothing here is adjusted because it looks illogical; the formulas are implemented exactly as stated.
  *
- * What the workbook does NOT define, so real activation stays BLOCKED behind one specific reason code each (nothing is guessed):
- *   CASHBACK_PAYMENT_SPEED_INPUT_UNDEFINED  input K38 «سرعة السداد»: the sheet labels it «ساعة / عكسية» (value 10 in the example) while the sheet «التقييمات» defines a «سرعة السداد» score out of 100
- *                                           (weight 30% of the receipt-stage evaluation, example 93.5). The workbook does not say which one K38 is, how it is measured from system events, nor what «عكسية» does to the >=80 test.
- *   CASHBACK_RATING_INPUT_MISSING           K41 needs an average rating of the client; a client with NO ratings has no input (the workbook has no branch for it; a rating is never invented).
- *   CASHBACK_WALLET_TIMING_UNDEFINED        when the money reaches the wallet is not stated in the workbook.
- * `CASHBACK_ENGINE_ENABLED=true` is the master switch (default OFF). `CASHBACK_WALLET_TIMING=IMMEDIATE` is the owner's explicit approval of the wallet timing, nothing else.
+ * Owner approval (2026-11-13): K38 is an audited score out of 100 per contract. No real client rating means a pending entitlement, never an invented rating.
+ * Wallet credit is immediate once the project is completed by delivery and both inputs exist. Engine activation is explicit through CASHBACK_ENGINE_ENABLED=true and CASHBACK_WALLET_TIMING=IMMEDIATE.
  */
 export type CashbackBlockReason = 'CASHBACK_ENGINE_DISABLED' | 'CASHBACK_WALLET_TIMING_UNDEFINED' | 'CASHBACK_PAYMENT_SPEED_INPUT_UNDEFINED' | 'CASHBACK_RATING_INPUT_MISSING';
 
@@ -39,12 +35,8 @@ export function computeCashback(input: { qualifiedVolume: number; ratePercent: n
 	return { base, ratingFactor, paymentFactor, amount: round2(input.qualifiedVolume * (input.ratePercent / 100) * ratingFactor * paymentFactor) }; // K43
 }
 
-/** the only questions still open (everything else is settled by the workbook) */
-export const CASHBACK_OPEN_INPUTS: ReadonlyArray<{ code: CashbackBlockReason; question: string }> = [
-	{ code: 'CASHBACK_PAYMENT_SPEED_INPUT_UNDEFINED', question: 'ما هو الإدخال K38 «سرعة السداد» وكيف يُقاس من أحداث النظام: عدد ساعات («ساعة / عكسية») أم درجة من 100 كما في ورقة «التقييمات»، وما أثر «عكسية» على اختبار >=80؟' },
-	{ code: 'CASHBACK_RATING_INPUT_MISSING', question: 'كيف يُحسب معامل التقييم K41 لعميل بلا أي تقييم (لا فرع له في الملف)؟' },
-	{ code: 'CASHBACK_WALLET_TIMING_UNDEFINED', question: 'متى يدخل الكاش باك المحفظة؟ (غير مذكور في الملف)' },
-];
+/** Owner-approved operational inputs (2026-11-13): manual, audited score /100 per contract; wait for real rating; immediate wallet credit. */
+export const CASHBACK_OPEN_INPUTS: ReadonlyArray<{ code: CashbackBlockReason; question: string }> = [];
 
 /** engine + wallet-timing gate (the two switches); the payment input and the rating input are checked where they are read */
 export function cashbackGate(env: NodeJS.ProcessEnv = process.env): CashbackBlockReason | null {

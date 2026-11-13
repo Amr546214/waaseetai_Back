@@ -800,7 +800,7 @@ test('PARTNER COMMISSION atomicity: two parallel releases accrue once; an audit 
 const CB_ON = { CASHBACK_ENGINE_ENABLED: 'true', CASHBACK_WALLET_TIMING: 'IMMEDIATE' } as any; // the master switch + the explicit wallet-timing approval; the K38 input is supplied per call
 const rateClient = async (w: W, ...ratings: number[]) => { for (const r of ratings) await w.e.prisma.review.create({ data: { id: id(), providerId: w.provider.id, clientId: w.client.id, projectId: null, reviewerRole: 'PROVIDER', rating: r, comment: 'x', tags: [] } }); };
 
-test('CASHBACK (workbook K39-K43): blocked with a specific reason for every input the workbook does not define; the final approval never credits while K38 is undefined; credits exactly K43 once with the full basis; never for admin closure / consensual cancel; rollback leaves nothing', opts, async () => {
+test('CASHBACK (workbook K39-K43): explicit engine gates; active contracts are ineligible; completion queues missing inputs; credits exactly K43 once with the full basis; never for admin closure / consensual cancel; rollback leaves nothing', opts, async () => {
 	const e = await boot(); const sa = e.sa.id; const { projectProgressService } = await import('./project-progress.service');
 	const { accrueCashbackForDeliveryCompletion, cashbackEventKey } = await import('./cashback.service');
 	const balance = async (w: W) => Number((await e.prisma.user.findUnique({ where: { id: w.client.id } })).walletBalance);
@@ -809,15 +809,13 @@ test('CASHBACK (workbook K39-K43): blocked with a specific reason for every inpu
 	let { w, s2 } = await finalStageWorld();
 	assert.deepEqual(await run(w, {}), { status: 'BLOCKED', reason: 'CASHBACK_ENGINE_DISABLED' });
 	assert.deepEqual(await run(w, { CASHBACK_ENGINE_ENABLED: 'true' }), { status: 'BLOCKED', reason: 'CASHBACK_WALLET_TIMING_UNDEFINED' });
-	assert.deepEqual(await run(w, CB_ON), { status: 'BLOCKED', reason: 'CASHBACK_PAYMENT_SPEED_INPUT_UNDEFINED' }, 'K38 is not defined by the workbook: no source, no accrual');
-	assert.deepEqual(await run(w, CB_ON, { paymentInput: Number.NaN }), { status: 'BLOCKED', reason: 'CASHBACK_PAYMENT_SPEED_INPUT_UNDEFINED' });
-	assert.deepEqual(await run(w, CB_ON, { paymentInput: 10 }), { status: 'BLOCKED', reason: 'CASHBACK_RATING_INPUT_MISSING' }, 'a client with no rating has no K41 input: not invented, not read as 0');
+	assert.deepEqual(await run(w, CB_ON), { status: 'SKIPPED', reason: 'NOT_DELIVERY_COMPLETION' }, 'not yet completed');
 	assert.equal(await e.prisma.clientCashbackEntry.count({ where: { contractId: w.contract.id } }), 0);
 	// the real final approval (production passes no K38) credits nothing even with the switches on
 	await withEnvVars({ CASHBACK_ENGINE_ENABLED: 'true', CASHBACK_WALLET_TIMING: 'IMMEDIATE' }, async () => { await projectProgressService.reviewDelivery(w.client.id, w.contract.id, s2.id, 'approve'); });
 	assert.equal(await e.prisma.clientCashbackEntry.count({ where: { contractId: w.contract.id } }), 0); assert.equal(await balance(w), 0);
 	// (b) approved inputs: level 1 (1%) of the 10 released (the escrow's released amount at the moment of accrual), rating 4.0 -> factor 1, K38 = 10 -> factor 1 -> K43 = 0.1, once, with the basis recorded
-	({ w, s2 } = await finalStageWorld()); await rateClient(w, 4, 4); sent.length = 0;
+	({ w, s2 } = await finalStageWorld()); await e.prisma.contract.update({where:{id:w.contract.id},data:{status:'COMPLETED'}}); await rateClient(w, 4, 4); sent.length = 0;
 	const first: any = await run(w, CB_ON, { paymentInput: 10 }); assert.deepEqual([first.status, first.amount, first.ratingFactor, first.paymentFactor], ['CREDITED', 0.1, 1, 1]);
 	const entry = await e.prisma.clientCashbackEntry.findUnique({ where: { contractId: w.contract.id } });
 	assert.deepEqual([entry.amount, entry.eligibleValue, entry.level, entry.ratePercent, entry.ratingInput, entry.paymentInput, entry.ratingFactor, entry.paymentFactor, entry.policyCode, entry.ladderSource, entry.status, entry.eventKey], [0.1, 10, 1, 1, 4, 10, 1, 1, 'XLSX_EARNINGS_K39_K43', 'xlsx:Levels(client)=levels.config:CLIENT_LEVELS', 'CREDITED', cashbackEventKey(w.contract.id)]);
@@ -966,7 +964,7 @@ test('PROVIDER LEDGER reconciliation: stages + settlements + administrative rele
 
 test('CLIENT LEVEL: one computation for the level page, the dashboard level and cashback - from the REAL ratings providers gave the client (none = no rating); promotion needs the rating', opts, async () => {
 	const e = await boot(); const { loadClientLevelFacts, getClientLevelDetails, getClientLevelInfo } = await import('./gamification.service'); const { accrueCashbackForDeliveryCompletion } = await import('./cashback.service');
-	const mkClient = async () => { const f = await world({ requestStatus: 'IN_PROGRESS', contract: 'ACTIVE', escrow: 'RELEASED', released: 20, v2: true }); return f; };
+	const mkClient = async () => { const f = await world({ requestStatus: 'COMPLETED', contract: 'COMPLETED', escrow: 'RELEASED', released: 20, v2: true }); return f; };
 	const w = await mkClient();
 	await e.prisma.clientProfile.update({ where: { userId: w.client.id }, data: { currentPoints: 301 } });
 	for (let i = 0; i < 9; i++) await e.prisma.project.create({ data: { id: id(), title: `done ${i}`, description: 'x', specialty: 'x', deliveryDays: 5, clientId: w.client.id, status: 'COMPLETED' } });
@@ -990,5 +988,5 @@ test('CLIENT LEVEL: one computation for the level page, the dashboard level and 
 	// a client with the same points / projects but NO ratings earns level 1 (1%)
 	const z = await mkClient(); await e.prisma.clientProfile.update({ where: { userId: z.client.id }, data: { currentPoints: 301 } });
 	for (let i = 0; i < 9; i++) await e.prisma.project.create({ data: { id: id(), title: `done ${i}`, description: 'x', specialty: 'x', deliveryDays: 5, clientId: z.client.id, status: 'COMPLETED' } });
-	const zo: any = await e.prisma.$transaction((tx: any) => accrueCashbackForDeliveryCompletion(tx, { id: z.contract.id, projectId: z.project.id, clientId: z.client.id }, policy, { paymentInput: 10 })); assert.deepEqual(zo, { status: 'BLOCKED', reason: 'CASHBACK_RATING_INPUT_MISSING' }, 'no ratings: level 1 for the level page, and no K41 input for cashback');
+	const zo: any = await e.prisma.$transaction((tx: any) => accrueCashbackForDeliveryCompletion(tx, { id: z.contract.id, projectId: z.project.id, clientId: z.client.id }, policy, { paymentInput: 10 })); assert.deepEqual(zo, { status: 'PENDING', reason: 'WAITING_RATING' }, 'no ratings: level 1 for the level page, and no K41 input for cashback');
 });

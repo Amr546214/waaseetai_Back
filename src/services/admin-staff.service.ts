@@ -63,7 +63,11 @@ export class AdminStaffService {
 		const activeNow = (await this.db.userSession.groupBy({ by: ['userId'], where: { userId: { in: activeIds }, revokedAt: null, expiresAt: { gt: now }, lastActiveAt: { gte: new Date(now.getTime() - ACTIVE_NOW_MS) } } })).length;
 		const active = totals.find(t => t.status === 'ACTIVE')?._count._all ?? 0, suspended = totals.find(t => t.status === 'SUSPENDED')?._count._all ?? 0;
 		const openTotal = [...open.values()].reduce((a, b) => a + b, 0), lateTotal = [...late.values()].reduce((a, b) => a + b, 0);
+        const leaders = await this.db.user.findMany({ where: { accountType: AccountType.SUPER_ADMIN }, select: { id: true, firstName: true, lastName: true, status: true, isBanned: true } });
+        const leaderSessions = await this.db.userSession.groupBy({ by: ['userId'], where: { userId: { in: leaders.map(u=>u.id) }, revokedAt: null, expiresAt: { gt: now } }, _max: { lastActiveAt: true } });
+        const leadership = leaders.map(u=>({ userId:u.id, name:`${u.firstName} ${u.lastName}`.trim(), status:u.status, isBanned:u.isBanned, activeNow:u.status==='ACTIVE'&&!u.isBanned&&!!leaderSessions.find(s=>s.userId===u.id)?._max.lastActiveAt && now.getTime()-leaderSessions.find(s=>s.userId===u.id)!._max.lastActiveAt!.getTime()<=ACTIVE_NOW_MS }));
 		return {
+            leadership,
 			members: q.tab === 'pending' ? [] : members,
 			pendingInvites: invites.map(i => ({ id: i.id, email: i.email, fullName: i.fullName, roleName: i.role.name, expiresAt: i.expiresAt, createdAt: i.createdAt, resendCount: i.resendCount })),
 			counts: { total: active + suspended, activeNow, active, suspended, pendingInvites: invites.length, openTasks: openTotal, overdueTasks: lateTotal },

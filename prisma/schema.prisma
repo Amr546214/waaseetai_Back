@@ -3510,3 +3510,97 @@ model ClientCashbackEntry {
   @@index([userId, createdAt])
   @@map("client_cashback_entries")
 }
+
+model AdminExpense {
+  id          String   @id @default(uuid())
+  requestKey  String   @unique
+  payloadHash String
+  amount      Decimal  @db.Decimal(18, 2)
+  currency    String   @default("USD")
+  category    String   @db.VarChar(40)
+  description String   @db.VarChar(1000)
+  reference   String?  @db.VarChar(160)
+  incurredAt  DateTime
+  status      String   @default("RECORDED") @db.VarChar(20)
+  version     Int      @default(1)
+  createdById String
+  voidedById  String?
+  voidReason  String?  @db.VarChar(500)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, incurredAt, id])
+  @@map("admin_expenses")
+}
+
+model AdminContentPage {
+  slug        String    @id @db.VarChar(60)
+  title       String    @db.VarChar(160)
+  draft       String    @db.Text
+  published   String?   @db.Text
+  version     Int       @default(1)
+  publishedAt DateTime?
+  updatedById String
+  updatedAt   DateTime  @updatedAt
+
+  @@map("admin_content_pages")
+}
+
+model AdminBroadcast {
+  id             String                   @id @default(uuid())
+  requestKey     String                   @unique
+  title          String                   @db.VarChar(150)
+  message        String                   @db.VarChar(4000)
+  audience       String                   @db.VarChar(40)
+  status         String                   @default("DRAFT") @db.VarChar(24)
+  version        Int                      @default(1)
+  createdById    String
+  recipientCount Int                      @default(0)
+  sentCount      Int                      @default(0)
+  failedCount    Int                      @default(0)
+  snapshotAt     DateTime?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+  deliveries     AdminBroadcastDelivery[]
+
+  @@index([status, createdAt])
+  @@map("admin_broadcasts")
+}
+
+model AdminBroadcastDelivery {
+  id             String         @id @default(uuid())
+  broadcastId    String
+  broadcast      AdminBroadcast @relation(fields: [broadcastId], references: [id], onDelete: Restrict)
+  userId         String
+  notificationId String         @unique
+  status         String         @default("PENDING") @db.VarChar(20)
+  attempts       Int            @default(0)
+  lastError      String?        @db.VarChar(500)
+  deliveredAt    DateTime?
+  createdAt      DateTime       @default(now())
+
+  @@unique([broadcastId, userId])
+  @@index([broadcastId, status, id])
+  @@map("admin_broadcast_deliveries")
+}
+
+model CashbackReview {
+  id            String   @id @default(uuid())
+  contractId    String   @unique
+  projectId     String
+  userId        String
+  eligibleValue Decimal  @db.Decimal(18, 2)
+  level         Int
+  ratePercent   Float
+  paymentInput  Float?
+  paymentNote   String?  @db.VarChar(500)
+  reviewedById  String?
+  status        String   @default("WAITING_PAYMENT_SCORE") @db.VarChar(40)
+  version       Int      @default(1)
+  completedAt   DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([status, completedAt, id])
+  @@index([userId, status])
+  @@map("cashback_reviews")
+}

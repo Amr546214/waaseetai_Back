@@ -1,3 +1,4 @@
+import { resumeClientCashback } from './cashback-review.service';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { CreateRatingInput, CLIENT_RATING_TAGS, PROVIDER_RATING_TAGS } from '../dtos/rating.dto';
@@ -130,6 +131,7 @@ export class RatingService {
     if (reviewerRole === 'CLIENT') await providerNotifications.ratingReceived({ providerId, rating: input.rating, reviewId: review.id, projectId });
     // The client is told when the provider rates them (inbox always; channels per their preferences).
     else await clientNotifications.send(clientNotificationFor.ratingReceived({ clientId, rating: input.rating, reviewId: review.id, projectId }));
+    if (reviewerRole === 'PROVIDER') { void resumeClientCashback(clientId).catch(() => { /* durable pending entitlement is retried by the worker */ }); }
     return review;
   }
 
