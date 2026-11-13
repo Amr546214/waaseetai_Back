@@ -360,28 +360,6 @@ export interface IdentityInspectResponse {
   advisoryOnly: true;
 }
 
-/** POST /v1/ai/identity/compare-fields — privacy-preserving OCR field comparison. */
-export interface IdentityCompareFieldsRequest {
-  requestId: string;
-  image: string;
-  imageMimeType: 'image/jpeg' | 'image/png' | 'image/webp';
-  registered: {
-    fullName: string;
-    birthDate: string;
-    nationalId: string;
-  };
-}
-export interface IdentityCompareFieldsResponse {
-  requestId: string;
-  fields: {
-    fullName: { status: 'MATCH' | 'MISMATCH' | 'COULD_NOT_VERIFY'; reason?: string };
-    birthDate: { status: 'MATCH' | 'MISMATCH' | 'COULD_NOT_VERIFY'; reason?: string };
-    nationalId: { status: 'MATCH' | 'MISMATCH' | 'COULD_NOT_VERIFY'; reason?: string };
-  };
-  model: { name: string; version: string };
-  readAt: string;
-}
-
 /** POST /v1/ai/text/suggest/stream (SSE text.delta / generation.completed). */
 export interface TextSuggestStreamRequest {
   title: string;
@@ -539,4 +517,25 @@ export interface KnowledgeSearchDocument {
 export interface KnowledgeSearchResponse {
   documents: KnowledgeSearchDocument[];
   retrievalMode: 'hybrid' | 'lexical';
+}
+
+// ── Identity field comparison (ID-compare brief 2026-11-06) ───────────────
+// Internal request shape; the client maps it to the service wire contract.
+// Registered values go to the service only so ITS CODE can compare; the service passes ONLY the image to the model. The BE never logs the image.
+export type IdentityFieldName = 'fullName' | 'birthDate' | 'nationalId';
+export type IdentityFieldStatus = 'MATCH' | 'MISMATCH' | 'COULD_NOT_VERIFY';
+export interface IdentityCompareFieldsRequest {
+  requestId: string;
+  /** Base64 of the ID image (never logged). */
+  image: string;
+  imageMimeType: string;
+  document?: import('../../../utils/identity-document-context').IdentityDocument;
+  registered: { fullName: string; birthDate: string; nationalId: string };
+}
+export interface IdentityFieldResult { status: IdentityFieldStatus; reason?: string }
+export interface IdentityCompareFieldsResponse {
+  requestId: string;
+  fields: Record<IdentityFieldName, IdentityFieldResult>;
+  model?: { name: string; version: string };
+  readAt: string;
 }

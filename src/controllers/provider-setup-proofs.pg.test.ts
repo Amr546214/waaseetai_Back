@@ -29,7 +29,7 @@ const body = (id: string, over: any = {}) => ({
 	specialties: { mainSpec: 'التصميم', subSpecs: ['واجهات'] }, identity: { frontId: `private:image:png:waseetai/providers/${id}/identity/front`, certs: [] }, agreements: AGREE,
 	portfolio: { 'واجهات': [{ review: own(id, 'work'), proofs: [own(id, 'proof')] }] }, ...over,
 });
-async function save(id: string, b: any) { const { saveSetupData } = await import('./provider-profile.controller'); const res = mkRes(); await saveSetupData({ user: { id }, body: b } as any, res); return res; }
+async function save(id: string, b: any) { await (await import('../testing/identity-gate.test-double')).openIdentityGate(); const { saveSetupData } = await import('./provider-profile.controller'); const res = mkRes(); await saveSetupData({ user: { id }, body: b } as any, res); return res; }
 const snapshot = async (prisma: any, id: string) => { const p = await prisma.providerProfile.findUnique({ where: { userId: id }, include: { portfolioItems: true } }); return JSON.stringify({ ...p, portfolioItems: p.portfolioItems.map((i: any) => [i.title, i.description, i.tags]) }); };
 
 test('PG: no proof / the model file reused as proof / a chosen sub-specialty without a model: 400 and the stored profile is byte-identical afterwards', opts, async () => {
