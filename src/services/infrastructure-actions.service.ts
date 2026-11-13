@@ -109,7 +109,7 @@ export class CloudflareAdapter {
         u.hash
       )
         throw failure(
-          "التنقية متاحة فقط لروابط HTTPS على مضيف الموقع الرسمي نفسه.",
+          "التنقية متاحة فقط لروابط HTTPS على مضيف هذه البيئة نفسه.",
           400,
         );
     }
