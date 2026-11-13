@@ -1,12 +1,14 @@
+import { requireOfficialDeployment } from '../middlewares/official-deployment.middleware';
+import { AppError } from '../utils/app-error';
 import { Router } from 'express';
 import { AccountType } from '@prisma/client';
 import { authenticate, authorize, requireActiveUser } from '../middlewares/auth.middleware';
 import { platformSettingsService } from '../services/platform-settings.service';
 import { recordAdminAudit } from '../utils/admin-audit';
-import { requirePermission } from '../middlewares/admin-access.middleware';
+import { requireSuperAdmin } from '../middlewares/admin-access.middleware';
 
 const router = Router();
-router.use(authenticate, requireActiveUser, requirePermission('settings.manage'));
+router.use(authenticate, requireActiveUser, requireOfficialDeployment, requireSuperAdmin);
 
 router.get('/', async (_req, res, next) => {
 	try { const data = await platformSettingsService.getAll(); res.json({ success: true, data, storageReady: await platformSettingsService.storageReady() }); } catch (e) { next(e); }
@@ -17,18 +19,7 @@ router.get('/history', async (req, res, next) => {
 	try { res.json({ success: true, data: await platformSettingsService.history(Number(req.query.limit) || 20) }); } catch (e) { next(e); }
 });
 
-router.put('/', async (req, res, next) => {
-	try {
-		const clean = platformSettingsService.validate(req.body);
-		const result = await platformSettingsService.update(clean, req.user!.id);
-		if (result.changed.length) {
-			await recordAdminAudit(req, {
-				eventType: 'PLATFORM_SETTINGS_UPDATED', title: 'تعديل إعدادات المنصة',
-				summary: `تعديل إعدادات المنصة: ${result.changed.join('، ')}`, before: result.before, after: result.after, details: { keys: result.changed }
-			});
-		}
-		res.json({ success: true, message: result.changed.length ? 'تم حفظ الإعدادات' : 'لا توجد تغييرات للحفظ', data: result.settings });
-	} catch (e) { next(e); }
-});
+// Retired write format had neither expected versions nor transactionally coupled audit.
+router.put('/', (_req, _res, next) => next(new AppError('استخدم إعدادات النظام الموحدة مع رقم النسخة لكل إعداد', 410, undefined, 'LEGACY_SETTINGS_WRITE_RETIRED')));
 
 export default router;

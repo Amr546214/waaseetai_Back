@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-process.env.FRONTEND_URL = 'https://dev.example.test';
+
+// the operations panel (settings routes) exists on the official deployment only: these tests run as that deployment
+process.env.PLATFORM_DEPLOY_ENV = 'official'; process.env.FRONTEND_URL = 'https://waseetai.com';
+process.env.FRONTEND_URL = 'https://dev.example.test'; process.env.OFFICIAL_HOSTS = 'dev.example.test'; // this test's site host stands for the official deployment
 process.env.SMTP_HOST = 'sink.invalid'; // not the "simulation" branch of email.service; the transporter below is replaced, nothing leaves the process
 process.env.JWT_SECRET ??= 'test-secret'; process.env.OPENAI_API_KEY ??= 'x';
 process.env.CLOUDINARY_CLOUD_NAME ??= 'testcloud'; process.env.CLOUDINARY_API_KEY ??= '123456789012345'; process.env.CLOUDINARY_API_SECRET ??= 'fake-secret-for-signing-only';

@@ -1,3 +1,4 @@
+import {loginGuardService} from './login-guard.service';
 import { prisma } from '../config/db';
 import { logger } from '../config/logger';
 import { processBroadcastBatch } from './admin-communications.service';
@@ -7,6 +8,7 @@ let busy=false;
 export async function runAdminOperationsWorker() {
  if(busy)return;busy=true;
  try {
+  await loginGuardService.cleanup();
   await processBroadcastBatch();
   if(!cashbackGate()) {
    const pending=await prisma.cashbackReview.findMany({where:{status:'WAITING_RATING',paymentInput:{not:null}},orderBy:{updatedAt:'asc'},take:30});

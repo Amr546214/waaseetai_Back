@@ -8,33 +8,34 @@ import { env, opts, mkStaff, closeEnv } from '../testing/admin-team.pgenv';
 
 /** Registry-driven system settings on REAL PostgreSQL over HTTP: permissions per key, versioned saves, audit, enforcement (maintenance, registration, idle sessions, sender name), currency refusal. */
 after(closeEnv);
+// the operations panel exists on the official deployment only (see utils/deployment-identity): these tests run as that deployment unless a test says otherwise
+process.env.PLATFORM_DEPLOY_ENV = 'official'; process.env.FRONTEND_URL = 'https://waseetai.com';
 const S = '/admin/system-settings';
 const put = (e: any, who: string, changes: any, expected: any) => e.call('PUT', S, who, { changes, expected });
 const view = async (e: any, who: string) => (await e.call('GET', S, who)).json.data.items as any[];
 const one = async (e: any, who: string, key: string) => (await view(e, who)).find(i => i.key === key);
 const reset = async (e: any) => { await e.prisma.platformSetting.deleteMany({}); const { systemSettingsService } = await import('./system-settings.service'); systemSettingsService.invalidate(); };
 
-test('PG settings: who can read and change what - no permission = 403; settings.view reads only its keys; settings.manage changes only non-SUPER keys; SUPER keys are SUPER_ADMIN-only; staff cannot widen', opts, async () => {
+test('PG settings: the operations panel is SUPER_ADMIN-only and official-deployment-only for reading AND writing; staff with settings permissions and every non-official deployment get 403 with a stable code', opts, async () => {
 	const e = await env(); await reset(e);
-	const none = await mkStaff(e, ['users.view'], 'n'), viewer = await mkStaff(e, ['settings.view'], 'v'), manager = await mkStaff(e, ['settings.manage'], 'm');
-	assert.equal((await e.call('GET', S, none.user.id)).status, 403); assert.equal((await e.call('GET', S, null)).status, 401);
-	const vkeys = (await view(e, viewer.user.id)).map(i => i.key);
-	for (const k of ['platformName', 'registrationOpen', 'termsContent']) assert.ok(vkeys.includes(k), k);
-	for (const k of ['maintenanceMode', 'baseCurrency', 'sessionIdleMinutes', 'smtp', 'apiKeys', 'aiEngineEnabled']) assert.ok(!vkeys.includes(k), `${k} must not be readable with settings.view`);
-	assert.equal((await one(e, viewer.user.id, 'platformName')).canWrite, false);
-	assert.equal((await put(e, viewer.user.id, { platformName: 'x' }, { platformName: 0 })).status, 403); // reading is not writing
-	const m = (await one(e, manager.user.id, 'platformName')); assert.equal(m.canWrite, true); assert.equal(await one(e, manager.user.id, 'registrationOpen'), undefined); // settings.manage alone does not even show a SUPER_ADMIN-only key
-	const both = await mkStaff(e, ['settings.view', 'settings.manage'], 'both'); assert.equal((await one(e, both.user.id, 'registrationOpen')).canWrite, false); assert.equal((await one(e, both.user.id, 'platformName')).canWrite, true);
-	assert.equal((await put(e, manager.user.id, { platformName: 'وسيط الجديد' }, { platformName: 0 })).status, 200);
-	for (const [k, v] of [['maintenanceMode', true], ['registrationOpen', false], ['sessionIdleMinutes', 30]] as const) {
-		const r = await put(e, manager.user.id, { [k]: v }, { [k]: 0 }); assert.equal(r.status, 403, k); assert.equal(r.json.code, 'SETTING_PERMISSION_DENIED');
-	}
-	assert.equal((await e.call('GET', `${S}/currency-readiness`, manager.user.id)).status, 403);
-	assert.equal((await e.call('GET', `${S}/currency-readiness`, e.sa.id)).status, 200);
-	assert.equal((await put(e, e.sa.id, { registrationOpen: false }, { registrationOpen: 0 })).status, 200);
-	assert.equal((await e.prisma.platformSetting.findUniqueOrThrow({ where: { key: 'registrationOpen' } })).value, false);
-	// a staff role cannot create the SUPER_ADMIN's authority by any grant of the new permission ids
-	const reg = await e.call('GET', '/admin/team/permissions', e.sa.id); assert.ok(reg.json.data.permissions.some((p: any) => p.id === 'settings.view'));
+	const saved = { f: process.env.PLATFORM_DEPLOY_ENV, u: process.env.FRONTEND_URL };
+	try {
+		process.env.PLATFORM_DEPLOY_ENV = 'official'; process.env.FRONTEND_URL = 'https://waseetai.com';
+		const none = await mkStaff(e, ['users.view'], 'n'), viewer = await mkStaff(e, ['settings.view'], 'v'), manager = await mkStaff(e, ['settings.view', 'settings.manage'], 'm');
+		assert.equal((await e.call('GET', S, null)).status, 401);
+		for (const s of [none, viewer, manager]) { assert.equal((await e.call('GET', S, s.user.id)).status, 403); assert.equal((await e.call('GET', '/admin/settings', s.user.id)).status,403); assert.equal((await e.call('PUT','/admin/settings',s.user.id,{supportEmail:'bypass@example.test'})).status,403); assert.equal((await put(e, s.user.id, { platformName: 'x' }, { platformName: 0 })).status, 403); assert.equal((await e.call('GET', `${S}/login-protection/impact`, s.user.id)).status, 403); }
+		const acc = await e.call('GET', `${S}/access`, manager.user.id); assert.equal(acc.status, 200); assert.deepEqual(acc.json.data, { officialDeployment: true, isSuperAdmin: false, available: false });
+		const sa = await e.call('GET', `${S}/access`, e.sa.id); assert.deepEqual(sa.json.data, { officialDeployment: true, isSuperAdmin: true, available: true });
+		assert.equal((await e.call('GET', S, e.sa.id)).status, 200);assert.equal((await e.call('PUT','/admin/settings',e.sa.id,{supportEmail:'bypass@example.test'})).status,410);
+		assert.equal((await put(e, e.sa.id, { registrationOpen: false }, { registrationOpen: 0 })).status, 200);
+		assert.equal((await e.prisma.platformSetting.findUniqueOrThrow({ where: { key: 'registrationOpen' } })).value, false);
+		assert.equal((await e.call('GET', `${S}/currency-readiness`, e.sa.id)).status, 200);
+		// dev: even the SUPER_ADMIN is refused, read and write, whatever NODE_ENV says
+		process.env.FRONTEND_URL = 'https://dev.waseetai.com';
+		assert.equal((await e.call('GET','/admin/settings',e.sa.id)).status,403); const r = await e.call('GET', S, e.sa.id); assert.equal(r.status, 403); assert.equal(r.json.code, 'OPERATIONS_PANEL_OFFICIAL_ONLY');
+		assert.equal((await put(e, e.sa.id, { registrationOpen: true }, { registrationOpen: 1 })).status, 403);
+		assert.deepEqual((await e.call('GET', `${S}/access`, e.sa.id)).json.data, { officialDeployment: false, isSuperAdmin: true, available: false });
+	} finally { if (saved.f === undefined) delete process.env.PLATFORM_DEPLOY_ENV; else process.env.PLATFORM_DEPLOY_ENV = saved.f; if (saved.u === undefined) delete process.env.FRONTEND_URL; else process.env.FRONTEND_URL = saved.u; }
 });
 
 test('PG settings: saves are versioned (a stale save is refused 409 and shows the current value), validated per key, atomic with the audit entry, and a no-op writes nothing', opts, async () => {
@@ -57,17 +58,17 @@ test('PG settings: saves are versioned (a stale save is refused 409 and shows th
 	assert.equal((await put(e, e.sa.id, { sessionIdleMinutes: 60 }, { sessionIdleMinutes: 0 })).status, 200);
 	const a = (await audits())[0]; assert.deepEqual(a.afterData, { sessionIdleMinutes: 60 }); assert.deepEqual(a.beforeData, { sessionIdleMinutes: 0 }); assert.equal(a.severity, 'WARNING'); assert.ok(a.ipAddress); assert.equal(a.actorLabel, 'ADMIN');
 	// the change log: real events with who / when / from where, before → after (the viewer sees only keys it may read)
-	const viewer = await mkStaff(e, ['settings.view'], 'hv'); const h = (await e.call('GET', `${S}/history`, e.sa.id)).json.data; assert.ok(h.some((x: any) => x.changes.some((c: any) => c.key === 'sessionIdleMinutes' && c.from === 0 && c.to === 60)));
-	const hv = (await e.call('GET', `${S}/history`, viewer.user.id)).json.data; assert.ok(!JSON.stringify(hv).includes('sessionIdleMinutes'));
+	const h = (await e.call('GET', `${S}/history`, e.sa.id)).json.data; assert.ok(h.some((x: any) => x.changes.some((c: any) => c.key === 'sessionIdleMinutes' && c.from === 0 && c.to === 60)));
 	assert.ok(h.every((x: any) => typeof x.actor === 'string' && x.at && x.changes.length));
 });
 
 test('PG settings: other session / refresh / restart see the saved value; the cache is dropped on save; a fresh service instance (restart) reads the database', opts, async () => {
 	const e = await env(); await reset(e); const { SystemSettingsService } = await import('./system-settings.service');
-	assert.equal((await put(e, e.sa.id, { maintenanceBannerText: 'نص البنر', maintenanceBannerEnabled: true }, { maintenanceBannerText: 0, maintenanceBannerEnabled: 0 })).status, 200);
+	assert.equal((await put(e, e.sa.id, { maintenanceBannerText: 'نص البنر' }, { maintenanceBannerText: 0 })).status, 200);
 	const pub = await e.call('GET', '/admin/system-settings', e.sa.id); assert.equal(pub.status, 200);
-	const restarted = new SystemSettingsService(e.prisma); assert.equal(await restarted.get('maintenanceBannerText'), 'نص البنر'); assert.equal(await restarted.get('maintenanceBannerEnabled'), true);
-	const values = await restarted.publicValues(); assert.equal(values.maintenanceBannerText, 'نص البنر'); for (const k of ['maintenanceMode', 'baseCurrency', 'sessionIdleMinutes', 'adminNotificationEmail']) assert.equal(k in values, false, `${k} is not public`);
+	const restarted = new SystemSettingsService(e.prisma); assert.equal(await restarted.get('maintenanceBannerText'), 'نص البنر');
+	const values = await restarted.publicValues(); assert.equal(values.maintenanceBannerText, 'نص البنر'); assert.equal(values.maintenanceMode, false, 'the maintenance state is public (the Under Deployment page needs it); the removed banner switch is gone'); assert.equal('maintenanceBannerEnabled' in values, false);
+	for (const k of ['baseCurrency', 'sessionIdleMinutes', 'adminNotificationEmail']) assert.equal(k in values, false, `${k} is not public`);
 	assert.equal(values.registrationOpen, true);
 	// invalid stored data never breaks enforcement: it falls back to the default
 	await e.prisma.platformSetting.upsert({ where: { key: 'sessionIdleMinutes' }, create: { key: 'sessionIdleMinutes', value: 'garbage' as any }, update: { value: 'garbage' as any } }); assert.equal(await new SystemSettingsService(e.prisma).get('sessionIdleMinutes'), 0);
@@ -177,10 +178,11 @@ test('PG settings: the platform name reaches the outgoing e-mail sender (setting
 	assert.equal((await put(e, e.sa.id, { platformName: 'منصة الاختبار' }, { platformName: 0 })).status, 200); assert.equal(await emailSenderName(), 'منصة الاختبار'); const { brandName, setBrandName } = await import('../utils/brand'); await systemSettingsService.prime(); assert.equal(brandName(), 'منصة الاختبار', 'new e-mail shells / subjects carry the configured name'); setBrandName('');
 	assert.equal((await put(e, e.sa.id, { platformName: '' }, { platformName: 1 })).status, 400); // an empty name is refused, so the sender never goes blank
 	delete process.env.EMAIL_SENDER_NAME; systemSettingsService.invalidate();
-	// the legacy route writes the same table and bumps the same version, so a stale registry save is still detected
-	const v0 = (await one(e, e.sa.id, 'supportEmail')).version; const { platformSettingsService } = await import('./platform-settings.service');
-	await platformSettingsService.update({ supportEmail: 'a@pg.test' }, e.sa.id); const v1 = (await one(e, e.sa.id, 'supportEmail')).version; assert.equal(v1, v0 + 1);
-	assert.equal((await put(e, e.sa.id, { supportEmail: 'b@pg.test' }, { supportEmail: v0 })).status, 409);
+	// Retired writes cannot bypass official/Super Admin policy or transactional version checks.
+ const v0=(await one(e,e.sa.id,'supportEmail')).version;const {platformSettingsService}=await import('./platform-settings.service');
+ await assert.rejects(platformSettingsService.update({supportEmail:'a@pg.test'},e.sa.id),x=>(x as any).statusCode===410);
+ assert.equal((await one(e,e.sa.id,'supportEmail')).version,v0);
+
 });
 
 test('PG settings: baseCurrency is shown as USD and BLOCKED (multi-currency is deferred): every change is refused on the server (422 SETTING_NOT_AVAILABLE), nothing is stored', opts, async () => {
@@ -201,7 +203,7 @@ test('PG settings: read-only and blocked entries tell the truth (value + source,
 	const h = (await e.call('GET', `${S}/health`, e.sa.id)).json.data; const db = h.items.find((x: any) => x.key === 'database'); assert.equal(db.status, 'ok'); assert.match(db.detail, /ms/);
 	for (const k of ['ai', 'cdn', 'backup']) assert.equal(h.items.find((x: any) => x.key === k).status, 'unavailable');
 	assert.ok(!JSON.stringify(h).match(/99\.8|95%|uptime|3:00/), 'no sample numbers from the design');
-	const st = await mkStaff(e, ['settings.view'], 'hv2'); assert.equal((await e.call('GET', `${S}/health`, st.user.id)).status, 200);
+	const st = await mkStaff(e, ['settings.view'], 'hv2'); assert.equal((await e.call('GET', `${S}/health`, st.user.id)).status, 403, 'staff no longer reach the operations panel');
 });
 
 test('PG settings: regional settings are real - initial values keep today\'s behaviour, they are public for the UI, SUPER-only to write, and they reach the admin report windows, the CSV and the default e-mail language', opts, async () => {
@@ -264,7 +266,7 @@ test('PG settings: every enforced item says what is IN USE while it is unset (ef
 	assert.deepEqual(await eff('platformName'), { value: DEFAULT_BRAND_AR, source: 'built-in default', uses: [{ where: 'واجهة التطبيق ونصوص البريد العربية', value: DEFAULT_BRAND_AR }, { where: 'اسم المرسل وعناوين وتذييل البريد', value: DEFAULT_BRAND }] });
 	assert.deepEqual(await eff('supportEmail'), { value: DEFAULT_SUPPORT_EMAIL, source: 'built-in default', note: (await eff('supportEmail')).note });
 	assert.equal(DEFAULT_SUPPORT_EMAIL, 'support@waseet.ai');
-	assert.equal((await eff('maintenanceBannerEnabled')).value, false);
+	assert.equal((await eff('maintenanceMode')).value, false);
 	assert.ok((await eff('maintenanceBannerText')).note.includes(MAINTENANCE_DEFAULT_MESSAGE));
 	for (const k of ['termsVersion', 'privacyVersion', 'termsContent', 'privacyContent']) { const x = await eff(k); assert.equal(x.value, null); assert.equal(x.source, 'static page text'); }
 	assert.deepEqual(await eff('supportPhone'), { value: DEFAULT_SUPPORT_PHONE, source: 'built-in default', note: (await eff('supportPhone')).note }); assert.equal(DEFAULT_SUPPORT_PHONE, '+966 55 256 0392'); // the number the contact page / footer show today

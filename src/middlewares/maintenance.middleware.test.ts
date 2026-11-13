@@ -5,14 +5,15 @@ import jwt from 'jsonwebtoken';
 process.env.JWT_SECRET = 'test-secret'; process.env.OPENAI_API_KEY ??= 'x';
 
 const run = (mw: any, method: string, path: string, headers: Record<string, string> = {}) => new Promise<{ status?: number; body?: any; headers: Record<string, string>; passed: boolean }>(resolve => {
-	const res: any = { headers: {} as Record<string, string>, set(k: string, v: string) { this.headers[k] = v; return this; }, status(c: number) { this.code = c; return this; }, json(b: any) { resolve({ status: this.code, body: b, headers: this.headers, passed: false }); } };
+	const res: any = { headers: {} as Record<string, string>, set(k: string, v: string) { this.headers[k] = v; return this; }, setHeader(k:string,v:string){this.headers[k]=v;}, status(c: number) { this.code = c; return this; }, json(b: any) { resolve({ status: this.code, body: b, headers: this.headers, passed: false }); } };
 	mw({ method, path, headers } as any, res, () => resolve({ headers: {}, passed: true }));
 });
 const bearer = (userId: string) => ({ authorization: `Bearer ${jwt.sign({ userId }, 'test-secret')}` });
 
 async function load(t: TestContext, o: { trusted?: { value: boolean; trusted: boolean; stale: boolean }; text?: string; users?: Record<string, { accountType: string; status: string; isBanned?: boolean }>; revoked?: Set<string> }) {
 	const state = { trusted: o.trusted ?? { value: true, trusted: true, stale: false }, text: o.text ?? 'نعود قريبًا' };
-	t.mock.module('../services/system-settings.service', { namedExports: { systemSettingsService: { getTrusted: async () => state.trusted, get: async () => state.text } } });
+	t.mock.module('../services/system-settings.service', { namedExports: { systemSettingsService: { getTrusted: async () => state.trusted, get: async () => state.text, publicSnapshot: async () => ({data:{maintenanceMode:state.trusted.value,maintenanceBannerText:state.text},revision:1,trusted:state.trusted.trusted}) } } });
+	t.mock.module('../services/platform-state', { namedExports: { publicPlatformState: async () => { const on=state.trusted.trusted?state.trusted.value:process.env.MAINTENANCE_COLD_BOOT_POLICY!=='open'; return {maintenance:{on,message:state.trusted.trusted?state.text:'المنصة تتحقق من حالتها'},revision:1,at:Date.now()}; } } });
 	t.mock.module('../config/db', { namedExports: { prisma: { user: { findUnique: async ({ where }: any) => o.users?.[where.id] ?? null } } } });
 	t.mock.module('../services/session.service', { namedExports: { sessionService: { isActiveToken: async (tok: string) => !o.revoked?.has((jwt.decode(tok) as any).userId) } } });
 	t.mock.module('../config/logger', { namedExports: { logger: { warn: () => undefined, error: () => undefined, info: () => undefined } } });
@@ -25,7 +26,7 @@ test('maintenance ON: only the explicit method+path allowances pass; everything 
 	for (const [m, p] of [['GET', '/health'], ['GET', '/api/health'], ['GET', '/api'], ['GET', '/api/public/settings'], ['POST', '/api/payments/paypal/webhook'], ['POST', '/payments/paypal/webhook'], ['POST', '/api/client/finance/paypal/order/capture'], ['POST', '/api/auth/login'], ['POST', '/auth/google'], ['POST', '/api/auth/forgot-password'], ['POST', '/api/auth/verify-otp'], ['GET', '/api/notifications'], ['PATCH', '/api/notifications/read-all'], ['PATCH', '/api/notifications/abc/read'], ['GET', '/api/auth/account-status']] as const) assert.equal((await run(maintenanceMiddleware, m, p)).passed, true, `${m} ${p}`);
 	assert.ok(MAINTENANCE_ALLOW.every((a: any) => a.purpose.length >= 7), 'every allowance states its purpose');
 	for (const [m, p] of [['POST', '/api/client/finance/paypal/order/create'], ['POST', '/api/auth/register'], ['GET', '/api/payments/paypal/webhook'], ['POST', '/api/payments/paypal/other'], ['GET', '/api/admin/users'], ['GET', '/api/projects'], ['POST', '/api/client/wallet'], ['GET', '/api/healthz'], ['GET', '/api/authors'], ['DELETE', '/api/notifications/abc'], ['POST', '/api/auth/onboarding/upload']] as const) {
-		const r = await run(maintenanceMiddleware, m, p); assert.equal(r.status, 503, `${m} ${p}`); assert.equal(r.body.code, 'MAINTENANCE'); assert.equal(r.body.message, 'نعود قريبًا'); assert.equal(r.headers['Retry-After'], '60');
+		const r = await run(maintenanceMiddleware, m, p); assert.equal(r.status, 503, `${m} ${p}`); assert.equal(r.body.code, 'MAINTENANCE'); assert.equal(r.body.message, 'نعود قريبًا'); assert.equal(r.headers['Retry-After'], '30');
 	}
 	assert.equal((await run(maintenanceMiddleware, 'GET', '/api/admin/users', bearer('staff'))).status, 503, 'an ADMIN-type staff member has no blanket exception');
 	assert.equal((await run(maintenanceMiddleware, 'OPTIONS', '/api/projects')).passed, true);
@@ -48,4 +49,20 @@ test('maintenance policy under a failing store: the LAST KNOWN GOOD value still 
 	const c = await run(maintenanceMiddleware, 'GET', '/api/projects'); assert.equal(c.status, 503); assert.match(c.body.message, /تتحقق من حالتها/);
 	assert.equal((await run(maintenanceMiddleware, 'GET', '/api/health')).passed, true); assert.equal((await run(maintenanceMiddleware, 'POST', '/api/payments/paypal/webhook')).passed, true);
 	process.env.MAINTENANCE_COLD_BOOT_POLICY = 'open'; assert.equal((await run(maintenanceMiddleware, 'GET', '/api/projects')).passed, true); delete process.env.MAINTENANCE_COLD_BOOT_POLICY;
+});
+
+test('socket gate: while maintenance is ON every client event of a non-SUPER_ADMIN socket (anonymous, client, staff ADMIN) is refused; the state read and an ACTIVE SUPER_ADMIN socket pass', async (t: TestContext) => {
+	const { socketMaintenanceBlocks, state } = await load(t, {});
+	for (const who of [undefined, 'CLIENT_INDIVIDUAL', 'PROVIDER_INDIVIDUAL', 'ADMIN']) for (const ev of ['send_message', 'join_user_room', 'ai_review_start', undefined]) assert.equal(await socketMaintenanceBlocks(ev, who), true, `${who} ${ev}`);
+	assert.equal(await socketMaintenanceBlocks('platform:state:get', undefined), false, 'the public state read stays open');
+	assert.equal(await socketMaintenanceBlocks('send_message', 'SUPER_ADMIN'), false);
+	state.trusted = { value: false, trusted: true, stale: false }; assert.equal(await socketMaintenanceBlocks('send_message', 'CLIENT_INDIVIDUAL'), false, 'maintenance OFF: nothing is blocked');
+	state.trusted = { value: false, trusted: false, stale: false }; delete process.env.MAINTENANCE_COLD_BOOT_POLICY; assert.equal(await socketMaintenanceBlocks('send_message', 'CLIENT_INDIVIDUAL'), true, 'cold boot follows the closed policy');
+});
+
+test('the public state read and the light platform-state route are allowed during maintenance, and payment STARTS stay refused', async (t: TestContext) => {
+	const { maintenanceMiddleware } = await load(t, {});
+	assert.equal((await run(maintenanceMiddleware, 'GET', '/api/public/platform-state')).passed, true);
+	assert.equal((await run(maintenanceMiddleware, 'POST', '/api/client/finance/paypal/order/create')).status, 503);
+	assert.equal((await run(maintenanceMiddleware, 'POST', '/api/payments/paypal/webhook')).passed, true, 'confirmation of an already-made payment is never blocked');
 });

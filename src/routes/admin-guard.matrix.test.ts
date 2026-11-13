@@ -9,6 +9,8 @@ import jwt from 'jsonwebtoken';
 // Route-level admin guard matrix with the REAL authenticate / requireActiveUser / authorize middleware (only the database and the session store are
 // faked). Every router mounted under /admin in app.ts is loaded from the mount table itself, so a new /admin mount without the admin guard fails here.
 process.env.JWT_SECRET = 'test-secret';
+// the operations routers (system settings, infrastructure) exist on the official deployment only: this matrix runs as that deployment
+process.env.PLATFORM_DEPLOY_ENV = 'official'; process.env.FRONTEND_URL = 'https://waseetai.com';
 process.env.OPENAI_API_KEY = 'test-key';
 
 const USERS: Record<string, any> = {

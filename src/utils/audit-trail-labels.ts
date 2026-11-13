@@ -23,6 +23,8 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 	PAYPAL_EMAIL_CHANGED: 'تغيير بريد PayPal',
 	// platform
 	PLATFORM_SETTINGS_UPDATED: 'تعديل إعدادات المنصة',
+	LOGIN_BLOCK_LIFTED: 'فك حظر دخول',
+	BACKUP_RESTORE_REQUESTED: 'طلب استعادة نسخة احتياطية',
 	FEE_POLICY_SCHEDULED: 'جدولة تعديل سياسة الرسوم',
 	FEE_POLICY_CANCELLED: 'إلغاء نسخة مجدولة من سياسة الرسوم',
 	SITE_IDENTITY_UPLOADED: 'رفع مسودة هوية الموقع',

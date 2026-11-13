@@ -1,3 +1,5 @@
+import { onSettingsNotice, startSettingsListener } from './services/settings-bus';
+import { broadcastPlatformState } from './services/platform-state';
 import adminOperationsRoutes, { publicContentRouter } from './routes/admin-operations.routes';
 import { startAdminOperationsWorker } from './services/admin-operations-worker.service';
 import { startCaseSlaScheduler } from './services/case-sla.service';
@@ -7,6 +9,7 @@ import adminNotificationTemplates from './routes/admin-notification-templates.ro
 import { startChatDigestScheduler } from './services/chat-digest.service';
 import express, { Request, Response, NextFunction } from 'express';
 import { maintenanceMiddleware } from './middlewares/maintenance.middleware';
+import { requestMetricsMiddleware } from './services/request-metrics';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -207,6 +210,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
 });
 
 // Maintenance mode (setting `maintenanceMode`): refuses the platform's traffic except health, sign-in, public settings, the admin console and payment callbacks. After the health probes on purpose.
+app.use(requestMetricsMiddleware);
 app.use(maintenanceMiddleware);
 
 // Create a centralized API router
@@ -294,6 +298,7 @@ import adminUsersRouter from './routes/admin-users.routes';
 import adminTeamRoutes, { adminInvitePublicRouter } from './routes/admin-team.routes';
 import adminMessagesRoutes from './routes/admin-messages.routes';
 import adminSystemSettingsRoutes from './routes/admin-system-settings.routes';
+import adminInfrastructureRoutes from './routes/admin-infrastructure.routes';
 import adminFeePolicyRoutes from './routes/admin-fee-policy.routes';
 import adminSiteIdentityRoutes from './routes/admin-site-identity.routes';
 import publicSiteIdentityRoutes from './routes/public-site-identity.routes';
@@ -339,6 +344,7 @@ mountAppRoute('/admin/team', adminTeamRoutes);
 mountAppRoute('/api/admin/messages', adminMessagesRoutes);
 mountAppRoute('/admin/messages', adminMessagesRoutes);
 mountAppRoute('/api/admin/system-settings', adminSystemSettingsRoutes);
+mountAppRoute('/api/admin/infrastructure', adminInfrastructureRoutes);
 mountAppRoute('/admin/system-settings', adminSystemSettingsRoutes);
 mountAppRoute('/api/admin/fee-policy', adminFeePolicyRoutes);
 mountAppRoute('/admin/fee-policy', adminFeePolicyRoutes);
@@ -477,6 +483,9 @@ if (process.env.NODE_ENV !== 'test') {
         startAdminOperationsWorker();
 		// warm the settings cache so the maintenance / registration policies have a trusted value as early as possible (a failure is logged; the cold-boot policy covers the gap)
 		void systemSettingsService.prime();
+		// settings changed on ANY instance: drop this process's cache and push the public state to its open browsers
+		onSettingsNotice(async () => { systemSettingsService.invalidate(); await broadcastPlatformState(io); });
+		startSettingsListener();
 		startSiteIdentityCache(); // non-blocking: the replaced e-mail logo (if any) for the synchronous mail shell; a failure leaves the default
 	});
 }

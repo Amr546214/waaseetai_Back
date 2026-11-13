@@ -1,3 +1,4 @@
+import { markSettingsChanged } from './settings-revision';
 import { randomUUID } from 'node:crypto';
 import { AccountType, Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
@@ -23,6 +24,7 @@ export async function saveContent(actor:string,slug:string,input:{body:string;ve
   if((slug==='terms'||slug==='privacy')&&input.action!=='DRAFT') {
    const key=`${slug}Content`,value=input.action==='PUBLISH'?input.body:'';
    await tx.platformSetting.upsert({where:{key},create:{key,value,updatedBy:actor},update:{value,updatedBy:actor,version:{increment:1}}});
+   await markSettingsChanged(tx,[key]);
   }
   await adminAudit.recordTx(tx,audit(actor,slug,`CMS_${input.action}`,{version:saved.version,reason:input.reason}));
   return saved;
