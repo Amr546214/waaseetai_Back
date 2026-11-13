@@ -59,7 +59,7 @@ export class SystemSettingsService {
 	/** true once at least one read of the store has succeeded in this process (a "cold boot" without it has no trusted value) */
 	hasTrustedValues(): boolean { return this.lastGood.size > 0; }
 	/** warm the cache at boot; never throws */
-	async prime(): Promise<boolean> { try { await this.snapshot(true); return true; } catch (e) { this.logReadFailure(e); return false; } }
+	async prime(): Promise<boolean> { try { return (await this.snapshot(true)).storage; } catch (e) { this.logReadFailure(e); return false; } }
 
 	/**
 	 * The value of an ENFORCED key with its trust. Order: the stored value (or the registry default when nothing is stored - the table being readable is what makes that default trustworthy);
@@ -69,7 +69,7 @@ export class SystemSettingsService {
 		const def = SETTING_BY_KEY.get(key);
 		if (!def || def.status !== 'enforced' || !def.schema) throw new Error(`unknown enforced setting ${key}`);
 		try {
-			const s = await this.snapshot(); const row = s.values.get(key);
+			const s = await this.snapshot(); if (!s.storage) throw new Error('settings store unavailable'); const row = s.values.get(key);
 			if (row) { const p = def.schema.safeParse(row.value); if (p.success) return { value: p.data as T, trusted: s.storage, stale: false }; }
 			return { value: def.default as T, trusted: s.storage, stale: false };
 		} catch (e) {
@@ -96,6 +96,7 @@ export class SystemSettingsService {
  async publicSnapshot() {
   try {
    const snapshot = await this.snapshot();
+   if (!snapshot.storage) throw new Error('settings store unavailable');
    const data: Record<string, unknown> = {};
    for (const key of PUBLIC_KEYS) { const def = SETTING_BY_KEY.get(key)!; const parsed = def.schema!.safeParse(snapshot.values.get(key)?.value); data[key] = parsed.success ? parsed.data : def.default; }
    return { data, revision: snapshot.values.get(PUBLIC_REVISION_KEY)?.version ?? 0, trusted: snapshot.storage };
