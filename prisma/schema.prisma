@@ -3605,6 +3605,7 @@ model AdminContentPage {
 }
 
 model AdminBroadcast {
+  emailRequested Boolean @default(false)
   id             String                   @id @default(uuid())
   requestKey     String                   @unique
   title          String                   @db.VarChar(150)
@@ -3626,6 +3627,12 @@ model AdminBroadcast {
 }
 
 model AdminBroadcastDelivery {
+  emailStatus String @default("SKIPPED") @db.VarChar(20)
+  emailAttempts Int @default(0)
+  emailLeaseAt DateTime?
+  emailNextAt DateTime?
+  emailSentAt DateTime?
+  emailError String? @db.VarChar(500)
   id             String         @id @default(uuid())
   broadcastId    String
   broadcast      AdminBroadcast @relation(fields: [broadcastId], references: [id], onDelete: Restrict)
@@ -3638,6 +3645,7 @@ model AdminBroadcastDelivery {
   createdAt      DateTime       @default(now())
 
   @@unique([broadcastId, userId])
+  @@index([emailStatus, emailNextAt], map: "admin_broadcast_deliveries_email_queue_idx")
   @@index([broadcastId, status, id])
   @@map("admin_broadcast_deliveries")
 }

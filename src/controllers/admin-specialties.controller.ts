@@ -16,6 +16,14 @@ function pickCategory(body: any, partial: boolean) {
   if (out.isActive !== undefined && typeof out.isActive !== 'boolean') throw fieldError('isActive', 'قيمة غير صالحة');
   return out;
 }
+function pickSpecialty(body: any, partial: boolean) {
+  const out = pickCategory(body, partial);
+  if (body?.categoryId !== undefined) {
+    if (typeof body.categoryId !== 'string' || !body.categoryId.trim()) throw fieldError('categoryId', 'القسم مطلوب');
+    out.categoryId = body.categoryId;
+  } else if (!partial) throw fieldError('categoryId', 'القسم مطلوب');
+  return out;
+}
 const brief = (c: any) => c && ({ id: c.id, slug: c.slug, nameAr: c.nameAr, nameEn: c.nameEn, isActive: c.isActive, sortOrder: c.sortOrder });
 
 export class AdminSpecialtiesController {
@@ -81,7 +89,7 @@ export class AdminSpecialtiesController {
 
   static async createSpecialty(req: Request, res: Response, next: NextFunction) {
     try {
-      const specialty = await specialtiesService.createSpecialty(req.body);
+      const specialty = await specialtiesService.createSpecialty(pickSpecialty(req.body, false) as any);
       await recordAdminAudit(req, { eventType: 'SPECIALTY_CREATED', title: 'إضافة تخصص', summary: `إضافة تخصص: ${specialty.nameAr}`, details: { specialtyId: specialty.id } });
       res.status(201).json({ success: true, data: specialty });
     } catch (error) {
@@ -91,7 +99,7 @@ export class AdminSpecialtiesController {
 
   static async updateSpecialty(req: Request, res: Response, next: NextFunction) {
     try {
-      const specialty = await specialtiesService.updateSpecialty(String(req.params.id), req.body);
+      const specialty = await specialtiesService.updateSpecialty(String(req.params.id), pickSpecialty(req.body, true));
       await recordAdminAudit(req, { eventType: 'SPECIALTY_UPDATED', title: 'تعديل تخصص', summary: `تعديل تخصص: ${specialty.nameAr}`, details: { specialtyId: specialty.id } });
       res.status(200).json({ success: true, data: specialty });
     } catch (error) {
