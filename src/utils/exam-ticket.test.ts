@@ -4,20 +4,22 @@ import jwt from 'jsonwebtoken';
 import { issueExamTicket, consumeExamTicket } from './exam-ticket';
 
 const ENV = { JWT_SECRET: 'unit-secret' } as NodeJS.ProcessEnv;
+const used = new Set<string>();
+const store = { claim: async (jti: string) => { if (used.has(jti)) return false; used.add(jti); return true; } };
 const who = { userId: 'u1', sessionId: 's1', scope: 'SETUP_TEST' as const };
 
-test('a ticket is valid once, for the same user + login session + scope', () => {
+test('a ticket is valid once, for the same user + login session + scope', async () => {
 	const { ticket } = issueExamTicket('u1', 's1', 'SETUP_TEST', ENV);
-	assert.equal(consumeExamTicket(ticket, { ...who, userId: 'u2' }, ENV), false);
-	assert.equal(consumeExamTicket(ticket, { ...who, sessionId: 's2' }, ENV), false);
-	assert.equal(consumeExamTicket(ticket, { ...who, sessionId: undefined }, ENV), false);
-	assert.equal(consumeExamTicket(ticket, who, ENV), true);
-	assert.equal(consumeExamTicket(ticket, who, ENV), false, 'single use');
+	assert.equal(await consumeExamTicket(ticket, { ...who, userId: 'u2' }, ENV, store), false);
+	assert.equal(await consumeExamTicket(ticket, { ...who, sessionId: 's2' }, ENV, store), false);
+	assert.equal(await consumeExamTicket(ticket, { ...who, sessionId: undefined }, ENV, store), false);
+	assert.equal(await consumeExamTicket(ticket, who, ENV, store), true);
+	assert.equal(await consumeExamTicket(ticket, who, ENV, store), false, 'single use');
 });
-test('forged, expired, wrong-purpose and empty tickets are refused', () => {
-	assert.equal(consumeExamTicket('', who, ENV), false);
-	assert.equal(consumeExamTicket(undefined, who, ENV), false);
-	assert.equal(consumeExamTicket(jwt.sign({ purpose: 'EXAM_ENV', scope: 'SETUP_TEST', userId: 'u1', sessionId: 's1' }, 'other-secret', { jwtid: 'x' }), who, ENV), false);
-	assert.equal(consumeExamTicket(jwt.sign({ purpose: 'LOGIN', scope: 'SETUP_TEST', userId: 'u1', sessionId: 's1' }, 'unit-secret', { jwtid: 'y', expiresIn: 60 }), who, ENV), false, 'an access-style token is not a ticket');
-	assert.equal(consumeExamTicket(jwt.sign({ purpose: 'EXAM_ENV', scope: 'SETUP_TEST', userId: 'u1', sessionId: 's1' }, 'unit-secret', { jwtid: 'z', expiresIn: -5 }), who, ENV), false);
+test('forged, expired, wrong-purpose and empty tickets are refused', async () => {
+	assert.equal(await consumeExamTicket('', who, ENV, store), false);
+	assert.equal(await consumeExamTicket(undefined, who, ENV, store), false);
+	assert.equal(await consumeExamTicket(jwt.sign({ purpose: 'EXAM_ENV', scope: 'SETUP_TEST', userId: 'u1', sessionId: 's1' }, 'other-secret', { jwtid: 'x' }), who, ENV, store), false);
+	assert.equal(await consumeExamTicket(jwt.sign({ purpose: 'LOGIN', scope: 'SETUP_TEST', userId: 'u1', sessionId: 's1' }, 'unit-secret', { jwtid: 'y', expiresIn: 60 }), who, ENV, store), false, 'an access-style token is not a ticket');
+	assert.equal(await consumeExamTicket(jwt.sign({ purpose: 'EXAM_ENV', scope: 'SETUP_TEST', userId: 'u1', sessionId: 's1' }, 'unit-secret', { jwtid: 'z', expiresIn: -5 }), who, ENV, store), false);
 });

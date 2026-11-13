@@ -8,7 +8,7 @@ const phoneNumberField = phoneNumberValue.or(z.literal('').transform(() => undef
 export const updateProfileSchema = z.object({
 	// Basic User fields
 	firstName: sanitizedText(z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل')).optional().nullable(),
-	lastName: sanitizedText(z.string().min(2, 'الاسم الأخير يجب أن يكون حرفين على الأقل')).optional().nullable(),
+	lastName: sanitizedText(z.string().min(2, 'الاسم الأخير يجب أن يكون حرفين على الأقل').max(60)).or(z.literal('')).optional().nullable(),
 	// Digits only (spaces/dashes tolerated and stripped), 9-15 long. '' / null mean "not provided": a save never erases the stored number.
 	phoneNumber: phoneNumberField.optional().nullable().transform(v => v ?? undefined),
 	// null = "not provided" (a client that has no avatar value must not erase the stored one); only '' is an explicit delete.

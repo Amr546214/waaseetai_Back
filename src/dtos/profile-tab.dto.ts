@@ -13,7 +13,7 @@ const avatarValue = z.string().max(12_000_000, 'الصورة كبيرة جدًا
 
 export const updateBasicsSchema = z.object({
   firstName: personName(),
-  lastName: personName(),
+  lastName: personName().or(z.literal('')),
   avatarUrl: avatarValue,
   email: z.string().trim().email('البريد الإلكتروني غير صحيح').max(254).optional(),
   phoneNumber: optionalText(20)
@@ -38,7 +38,7 @@ const alternativePhone = z.preprocess(
 
 export const updateContactSchema = z.object({
   firstName: personName(),
-  lastName: personName(),
+  lastName: personName().or(z.literal('')),
   avatarUrl: avatarValue,
   email: z.string().trim().email('البريد الإلكتروني غير صحيح').max(254).optional(),
   phoneNumber: optionalText(20),

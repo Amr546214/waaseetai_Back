@@ -345,3 +345,60 @@ test('PG username: one field (a single word is fine), kept in step with the disp
 	await legalNameService.set(a.user.id, 'عمرو أحمد عكاشة').catch(() => undefined);
 	assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: a.user.id } })).username, 'عمرو');
 });
+
+test('PG legal-name decision: real admin entry point applies the decision and evidence once', opts, async () => {
+  const { prisma } = await env();
+  const { user } = await seed(prisma, 'PROVIDER');
+  const { legalNameService } = await import('./legal-name.service');
+  const { providerProfileService } = await import('./provider-profile.service');
+  await prisma.providerProfile.update({ where: { userId: user.id }, data: { kycStatus: 'VERIFIED', isVerified: true } });
+  const r = await legalNameService.set(user.id, 'اسم قانوني جديد');
+  const requestId = r.view.pendingRequest!.id;
+  const decided = await providerProfileService.reviewSensitiveChange(requestId, true);
+  assert.equal(decided.status, 'APPROVED');
+  assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).legalName, 'اسم قانوني جديد');
+  const profile = await prisma.providerProfile.findUniqueOrThrow({ where: { userId: user.id } });
+  assert.equal(profile.kycStatus, 'PENDING'); assert.equal(profile.isVerified, false); assert.equal(profile.identityApprovedDigest, null);
+  await assert.rejects(() => providerProfileService.reviewSensitiveChange(requestId, true), /REQUEST_NOT_PENDING_REVIEW/);
+});
+
+test('PG legal-name decision: an application failure rolls the request decision back too', opts, async () => {
+  const { prisma } = await env();
+  const { user, name } = await seed(prisma, 'PROVIDER');
+  const { legalNameService } = await import('./legal-name.service');
+  const { providerProfileService } = await import('./provider-profile.service');
+  await prisma.providerProfile.update({ where: { userId: user.id }, data: { kycStatus: 'VERIFIED', isVerified: true } });
+  const r = await legalNameService.set(user.id, 'Fail Name');
+  const requestId = r.view.pendingRequest!.id;
+  const constraint = `review_failure_${user.id.replaceAll('-', '')}`;
+  await prisma.$executeRawUnsafe(`ALTER TABLE users ADD CONSTRAINT "${constraint}" CHECK (id <> '${user.id}' OR "legalName" <> 'Fail Name') NOT VALID`);
+  try {
+    await assert.rejects(() => providerProfileService.reviewSensitiveChange(requestId, true));
+    const req = await prisma.profileModificationRequest.findUniqueOrThrow({ where: { id: requestId } });
+    assert.equal(req.status, 'PENDING_HUMAN_REVIEW'); assert.equal(req.appliedAt, null);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).legalName, name);
+    assert.equal((await prisma.providerProfile.findUniqueOrThrow({ where: { userId: user.id } })).kycStatus, 'VERIFIED');
+  } finally { await prisma.$executeRawUnsafe(`ALTER TABLE users DROP CONSTRAINT "${constraint}"`); }
+});
+
+
+test('PG username: legacy profile saves neither reject an empty surname nor replay old display names', opts, async () => {
+  const { prisma } = await env();
+  const { user } = await seed(prisma, 'CLIENT');
+  const { usernameService } = await import('./username.service');
+  const { profileService } = await import('./profile.service');
+  await usernameService.set(user.id, 'عمرو');
+  await profileService.updateProfile(user.id, 'CLIENT', { firstName: 'Stale', lastName: '', bio: 'نبذة محفوظة بعد تغيير اسم المستخدم' });
+  await profileService.updateTab(user.id, 'basics', { firstName: 'Older', lastName: 'Name' }, 'CLIENT');
+  const u = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+  const c = await prisma.clientProfile.findUniqueOrThrow({ where: { userId: user.id } });
+  assert.equal(u.username, 'عمرو'); assert.equal(u.firstName, 'عمرو'); assert.equal(u.lastName, '');
+  assert.equal(c.firstName, 'عمرو'); assert.equal(c.lastName, '');
+  assert.equal(c.bio, 'نبذة محفوظة بعد تغيير اسم المستخدم');
+  assert.equal(await prisma.profileModificationRequest.count({ where: { providerId: user.id, category: 'CLIENT_BASIC_INFO' } }), 0);
+  const { providerProfileService } = await import('./provider-profile.service');
+  const legacy = await prisma.profileModificationRequest.create({ data: { providerId: user.id, category: 'CLIENT_BASIC_INFO', fieldName: 'NAME', fieldLabel: 'اسم قديم', requestedValue: 'اسم قديم', status: 'PENDING_HUMAN_REVIEW', metadata: { changes: { firstName: 'اسم', lastName: 'قديم' } } } });
+  await assert.rejects(() => providerProfileService.reviewSensitiveChange(legacy.id, true), (e: any) => e.code === 'USERNAME_MANAGED_SEPARATELY');
+  assert.equal((await prisma.clientProfile.findUniqueOrThrow({ where: { userId: user.id } })).firstName, 'عمرو');
+  assert.equal((await prisma.profileModificationRequest.findUniqueOrThrow({ where: { id: legacy.id } })).status, 'PENDING_HUMAN_REVIEW');
+});

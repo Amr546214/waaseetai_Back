@@ -100,25 +100,47 @@ export class LegalNameService {
 		return { outcome: 'UNCHANGED', view: await this.getView(userId) };
 	}
 
-	/**
-	 * An admin approved a LEGAL_NAME_CHANGE request: ONE transaction under the profile row locks replaces the name AND sends every verified identity back to review (approval digest
-	 * cleared, the client's review row reopened), so the name, the identity state and the request decision can never disagree, and an identity approval cannot slip in between.
-	 */
-	async applyApproved(userId: string, changes: Record<string, unknown>): Promise<void> {
+	/** Apply the identity evidence change inside the caller's transaction, after taking the shared profile locks. */
+	private async applyOn(tx: Prisma.TransactionClient, userId: string, changes: Record<string, unknown>) {
 		const check = checkLegalName(changes.legalName);
 		if (!check.ok) throw new Error('INVALID_LEGAL_NAME');
-		const state = await prisma.$transaction(async (tx) => {
+		await tx.user.update({ where: { id: userId }, data: { legalName: check.value } });
+		const client = await tx.clientProfile.findUnique({ where: { userId }, select: { kycStatus: true, frontIdUrl: true } });
+		if (client?.kycStatus === 'VERIFIED') {
+			await tx.clientProfile.update({ where: { userId }, data: { kycStatus: 'PENDING', identityApprovedDigest: null } });
+			if (client.frontIdUrl) await identityGateService.refreshClientReview(tx, userId, client.frontIdUrl);
+		}
+		await tx.providerProfile.updateMany({ where: { userId, kycStatus: 'VERIFIED' }, data: { kycStatus: 'PENDING', identityApprovedDigest: null, isVerified: false } });
+		return identityState(userId, tx);
+	}
+
+	/** Compatibility entry for internal callers; request decisions use reviewRequest so the decision commits with the evidence. */
+	async applyApproved(userId: string, changes: Record<string, unknown>): Promise<void> {
+		const state = await prisma.$transaction(async tx => {
 			await lockProfiles(tx, userId);
-			await tx.user.update({ where: { id: userId }, data: { legalName: check.value } });
-			const client = await tx.clientProfile.findUnique({ where: { userId }, select: { kycStatus: true, frontIdUrl: true } });
-			if (client?.kycStatus === 'VERIFIED') {
-				await tx.clientProfile.update({ where: { userId }, data: { kycStatus: 'PENDING', identityApprovedDigest: null } });
-				if (client.frontIdUrl) await identityGateService.refreshClientReview(tx, userId, client.frontIdUrl);
-			}
-			await tx.providerProfile.updateMany({ where: { userId, kycStatus: 'VERIFIED' }, data: { kycStatus: 'PENDING', identityApprovedDigest: null, isVerified: false } });
-			return identityState(userId, tx);
+			return this.applyOn(tx, userId, changes);
 		}, { timeout: 20_000 });
 		for (const party of parties(state)) identityFieldCheckService.triggerSafe(userId, party);
+	}
+
+	/** Claim, name, KYC status and reopened review either all commit or all roll back. No external work before commit. */
+	async reviewRequest(requestId: string, userId: string, approved: boolean, reason: string | null, context?: AuditContext) {
+		const result = await prisma.$transaction(async tx => {
+			await lockProfiles(tx, userId);
+			const request = await tx.profileModificationRequest.findUnique({ where: { id: requestId } });
+			if (!request || request.providerId !== userId || request.category !== LEGAL_NAME_CHANGE_REQUEST_CATEGORY) throw new Error('REQUEST_NOT_FOUND');
+			const claimed = await tx.profileModificationRequest.updateMany({
+				where: { id: requestId, status: 'PENDING_HUMAN_REVIEW' },
+				data: { status: approved ? 'APPROVED' : 'REJECTED', reviewedByAdmin: true, rejectionReason: reason, appliedAt: approved ? new Date() : null }
+			});
+			if (!claimed.count) throw new Error('REQUEST_NOT_PENDING_REVIEW');
+			const changes = (request.metadata as { changes?: Record<string, unknown> } | null)?.changes ?? {};
+			const state = approved ? await this.applyOn(tx, userId, changes) : null;
+			return { row: await tx.profileModificationRequest.findUniqueOrThrow({ where: { id: requestId } }), state };
+		}, { timeout: 20_000 });
+		if (result.state) for (const party of parties(result.state)) identityFieldCheckService.triggerSafe(userId, party);
+		await accountAuditLogService.record({ userId, eventType: 'HUMAN_REVIEW_COMPLETED', category: 'PROFILE_COMPLETION', title: result.row.fieldLabel, summary: approved ? 'اعتمد المراجع طلب تعديل الاسم الحقيقي وأعاد الهوية للمراجعة' : 'رفض المراجع طلب تعديل الاسم الحقيقي', source: 'ADMIN', severity: approved ? 'INFO' : 'WARNING', status: approved ? 'APPROVED' : 'REJECTED', statusText: reason ?? undefined, requestId, context }).catch(e => logger.warn(`[LegalName] post-commit audit failed: ${(e as Error).message}`));
+		return result.row;
 	}
 }
 

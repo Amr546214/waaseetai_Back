@@ -13,6 +13,7 @@ function resetState(over: Partial<any> = {}) {
   Object.assign(state, {
     userStatus: 'ACTIVE', authDelay: undefined,
     profile: { id: 'profile-1', userId: 'u', mainSpecialty: 'تطوير الويب', industry: null, subSpecialties: ['React', 'Node'], setupTestStatus: 'PENDING', setupTestBannedUntil: null },
+    usedTickets: new Set<string>(),
     updates: [] as any[],
     streamCalls: [] as any[],
     submitCalls: [] as any[],
@@ -23,6 +24,7 @@ function resetState(over: Partial<any> = {}) {
 }
 
 const prismaMock: any = {
+  $queryRaw: async (_sql: unknown, jti: string) => { if (state.usedTickets.has(jti)) return []; state.usedTickets.add(jti); return [{ jti }]; },
   // the token in each event now passes the shared handshake check (valid JWT + live session + ACTIVE account)
   user: { findUnique: async ({ where }: any) => { await state.authDelay?.(); return { id: where.id, status: state.userStatus ?? 'ACTIVE', accountType: 'PROVIDER_INDIVIDUAL', isBanned: false }; } },
   providerProfile: {
@@ -31,7 +33,7 @@ const prismaMock: any = {
   }
 };
 mock.module('../config/db', { namedExports: { prisma: prismaMock } });
-mock.module('../services/session.service', { namedExports: { sessionService: { validateOrRegister: async () => ({ id: 'session-1' }) } } });
+mock.module('../services/session.service', { namedExports: { sessionService: { validateOrRegister: async (_uid: string, token: string) => ({ id: (jwt.decode(token) as any)?.secondSession ? 'session-2' : 'session-1' }) } } });
 mock.module('../services/ai/waseet-ai/waseet-ai.client', {
   namedExports: {
     waseetAiClient: {
@@ -63,8 +65,8 @@ async function setup() {
     off: (e: string, h: any) => { if (onceHandlers[e]) onceHandlers[e] = onceHandlers[e].filter((x) => x !== h); },
     emit: (event: string, payload: any) => { emitted.push({ event, payload }); }
   };
-  new SetupTestGateway().register(socket);
-  return { handlers, emitted, triggerDisconnect: () => (onceHandlers['disconnect'] || []).forEach((h) => h()) };
+  const gateway = new SetupTestGateway(); gateway.register(socket);
+  return { gateway, handlers, emitted, triggerDisconnect: () => (onceHandlers['disconnect'] || []).forEach((h) => h()) };
 }
 
 let uid = 0;
@@ -350,4 +352,34 @@ test('restricted exam mode: the setup test starts ONLY with a ticket issued on t
     await t.handlers['setup_test:init']({ token, examTicket: good });
     assert.equal(state.streamCalls.length, 1, 'a ticket is single use');
   } finally { if (old === undefined) delete process.env.EXAM_SEB_MODE; else process.env.EXAM_SEB_MODE = old; }
+});
+
+
+test('restricted setup: another socket or login session cannot read/answer; a fresh verified ticket resumes the same attempt', async () => {
+  resetState({ stream: goodStream(3), submit: async () => ({ score: 75 }) });
+  process.env.EXAM_SEB_MODE = 'required';
+  try {
+    const { issueExamTicket } = await import('../utils/exam-ticket');
+    const m = await setup(); const { id, token } = newUser();
+    await m.handlers['setup_test:init']({ token, examTicket: issueExamTicket(id, 'session-1', 'SETUP_TEST').ticket });
+    const secondHandlers: Record<string, any> = {}; const messages: any[] = [];
+    const socket = { on: (e: string, h: any) => { secondHandlers[e] = h; }, emit: (e: string, p: any) => messages.push({e,p}) };
+    m.gateway.register(socket);
+    const foreign = jwt.sign({ userId: id, secondSession: true }, process.env.JWT_SECRET!);
+    for (const auth of [token, foreign]) {
+      await secondHandlers['setup_test:get_question']({ token: auth });
+      await secondHandlers['setup_test:answer']({ token: auth, questionId: '101', selectedIndex: 1 });
+    }
+    assert.equal(messages.filter(x => x.e === 'setup_test:question').length, 0);
+    assert.deepEqual((m.gateway as any).testSessions.get(id).answers, {});
+    // A verified reconnection reuses the attempt; it must not call the AI twice or restart the clock.
+    const before = (m.gateway as any).testSessions.get(id).startedAt;
+    await secondHandlers['setup_test:init']({ token, examTicket: issueExamTicket(id, 'session-1', 'SETUP_TEST').ticket });
+    assert.equal(state.streamCalls.length, 1);
+    assert.equal((m.gateway as any).testSessions.get(id).startedAt, before);
+    await secondHandlers['setup_test:get_question']({ token });
+    assert.equal(messages.filter(x => x.e === 'setup_test:question').length, 1);
+    await secondHandlers['setup_test:answer']({ token, questionId: '101', selectedIndex: 1 });
+    assert.equal((m.gateway as any).testSessions.get(id).answers['101'], 'b');
+  } finally { delete process.env.EXAM_SEB_MODE; }
 });

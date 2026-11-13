@@ -1,3 +1,4 @@
+import { lockDisplayOwner } from '../utils/lock-display-owner';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { logger } from '../config/logger';
@@ -25,6 +26,7 @@ export class UsernameService {
 		if (!before) throw new AppError('تعذر العثور على حساب المستخدم', 404);
 		if (before.username === c.value && before.firstName === c.value && before.lastName === '') return { username: c.value, displayName: c.value, changed: false };
 		await prisma.$transaction(async (tx) => {
+			await lockDisplayOwner(tx, userId);
 			await tx.user.update({ where: { id: userId }, data: { username: c.value, firstName: c.value, lastName: '' } });
 			// per-role display columns (independent of the user row since Phase 3A): kept in step where the role profile exists
 			await tx.clientProfile.updateMany({ where: { userId }, data: { firstName: c.value, lastName: '' } });

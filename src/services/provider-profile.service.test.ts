@@ -79,6 +79,7 @@ async function loadProviderProfileServiceWithFixture(t: TestContext) {
           update: async (args: any) => providerProfileUpdateSpy(args)
         },
         user: {
+          findUnique: async () => ({ ...baseUser }),
           update: async (args: any) => userUpdateSpy(args)
         },
         // updateBasicInfo resolves the main specialty against the marketplace taxonomy (a name that is not a category stays as stored)
@@ -97,10 +98,8 @@ async function loadProviderProfileServiceWithFixture(t: TestContext) {
         accountAuditLog: {
           create: async () => ({})
         },
-        // Only the array form is used by updateBasicInfo — the operations
-        // inside the array are already in-flight promises by the time
-        // $transaction receives them (Prisma's real API works the same way).
-        $transaction: async (ops: any) => Promise.all(ops)
+        // Support the interactive transaction used to serialize username and profile writes.
+        $transaction: async function (ops: any) { return typeof ops === 'function' ? ops(this) : Promise.all(ops); }
       }
     }
   });

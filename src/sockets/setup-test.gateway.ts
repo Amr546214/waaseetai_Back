@@ -32,6 +32,8 @@ interface SessionQuestion {
 }
 
 interface SetupTestSession {
+  sessionId: string;
+  socket: Socket;
   profileId: string;
   vendorAttemptId: string;
   questions: SessionQuestion[];
@@ -49,6 +51,24 @@ export const SETUP_TEST_PASS_SCORE = SPECIALTY_TEST_PASS_SCORE;
 export class SetupTestGateway {
   private io: SocketIOServer | null = null;
   private testSessions = new Map<string, SetupTestSession>();
+  private verifiedSockets = new WeakMap<Socket, { userId: string; sessionId: string }>();
+  private generating = new Set<string>();
+
+  private mayUse(socket: Socket, who: { userId: string; sessionId: string }, session: SetupTestSession): boolean {
+    const verified = this.verifiedSockets.get(socket);
+    const allowed = session.socket === socket && session.sessionId === who.sessionId && (examEnvMode() !== 'required' ||
+      (verified?.userId === who.userId && verified.sessionId === who.sessionId));
+    if (!allowed) socket.emit('setup_test:error', { code: 'EXAM_ENVIRONMENT_REQUIRED', message: 'أعد فتح الاختبار من بيئة الاختبار المتحققة وبجلسة الدخول التي بدأته.' });
+    return allowed;
+  }
+
+  private emitReady(socket: Socket, session: SetupTestSession): void {
+    socket.emit('setup_test:ready', { totalQuestions: session.questions.length,
+      questions: session.questions.map((q, index) => ({ id: q.id, text: q.text, options: q.options.map(o => o.text), index, total: session.questions.length })),
+      currentQuestionIndex: session.currentQIndex, startedAt: session.startedAt,
+      answers: Object.fromEntries(Object.entries(session.answers).map(([id, choice]) => [id, session.questions.find(q => q.id === id)?.options.findIndex(o => o.id === choice)]))
+    });
+  }
 
   private async getUserIdFromToken(token?: string): Promise<{ userId: string; sessionId: string } | null> {
     const result = await verifySocketToken(token);
@@ -126,6 +146,7 @@ export class SetupTestGateway {
 
     socket.on('setup_test:init', async (payload: { token: string; examTicket?: string }) => {
       let onDisconnect: (() => void) | null = null;
+      let generatingUser: string | null = null;
       try {
         const who = await this.getUserIdFromToken(payload?.token);
         const userId = who?.userId;
@@ -135,7 +156,7 @@ export class SetupTestGateway {
         }
         // Restricted exam mode: the test starts (and no question is generated or sent) only with a ticket issued on the verified HTTP route to THIS user and login session.
         // The test itself, its scoring and what its result does are unchanged; this only decides from which browser it may start.
-        if (examEnvMode() === 'required' && !consumeExamTicket(payload?.examTicket, { userId, sessionId: who.sessionId, scope: 'SETUP_TEST' })) {
+        if (examEnvMode() === 'required' && !await consumeExamTicket(payload?.examTicket, { userId, sessionId: who.sessionId, scope: 'SETUP_TEST' })) {
           socket.emit('setup_test:error', { message: 'هذا الاختبار يُفتح من داخل Safe Exam Browser فقط.', code: 'EXAM_ENVIRONMENT_REQUIRED' });
           return;
         }
@@ -144,6 +165,25 @@ export class SetupTestGateway {
           socket.emit('setup_test:error', { message: SOCKET_AI_RATE_LIMIT_MESSAGE });
           return;
         }
+
+        // Reconnecting sockets must present a fresh verified ticket; a session match alone is not proof of SEB.
+        this.verifiedSockets.set(socket, who);
+        const existing = this.testSessions.get(userId);
+        if (existing) {
+          if (existing.sessionId !== who.sessionId) {
+            socket.emit('setup_test:error', { code: 'ATTEMPT_SESSION_MISMATCH', message: 'بدأ الاختبار من جلسة دخول أخرى.' });
+            return;
+          }
+          existing.socket = socket;
+          this.emitReady(socket, existing);
+          return;
+        }
+        if (this.generating.has(userId)) {
+          socket.emit('setup_test:error', { code: 'GENERATION_IN_PROGRESS', message: 'يجري إنشاء الاختبار بالفعل. أعد الاتصال بعد قليل.' });
+          return;
+        }
+        this.generating.add(userId); generatingUser = userId;
+
 
         const abortController = new AbortController();
         onDisconnect = () => abortController.abort();
@@ -224,6 +264,8 @@ export class SetupTestGateway {
 
         const finalQuestions = devBankQuestions ?? questions;
         this.testSessions.set(userId, {
+          sessionId: who.sessionId,
+          socket,
           profileId: profile.id,
           vendorAttemptId: devBankQuestions ? 'DEV_FALLBACK' : ready!.attemptId,
           source: devBankQuestions ? 'DEV_FALLBACK' : 'AI',
@@ -234,28 +276,23 @@ export class SetupTestGateway {
           grading: false
         });
 
-        const publicQuestions = finalQuestions.map((q, idx) => ({
-          id: q.id,
-          text: q.text,
-          options: q.options.map((o) => o.text),
-          index: idx,
-          total: finalQuestions.length,
-        }));
-        socket.emit('setup_test:ready', { totalQuestions: finalQuestions.length, questions: publicQuestions });
+        this.emitReady(socket, this.testSessions.get(userId)!);
       } catch (err: any) {
         console.error('[SetupTestGateway Init Error]:', err);
         socket.emit('setup_test:error', { message: 'حدث خطأ أثناء إنشاء أسئلة الاختبار.' });
       } finally {
+        if (generatingUser) this.generating.delete(generatingUser);
         if (onDisconnect) socket.off('disconnect', onDisconnect);
       }
     });
 
     socket.on('setup_test:get_question', async (payload: { token: string }) => {
       try {
-        const userId = (await this.getUserIdFromToken(payload?.token))?.userId ?? null;
-        if (!userId) return;
+        const who = await this.getUserIdFromToken(payload?.token);
+        if (!who) return;
+        const userId = who.userId;
         const session = this.testSessions.get(userId);
-        if (!session) return;
+        if (!session || !this.mayUse(socket, who, session)) return;
         if (session.currentQIndex < session.questions.length) this.emitQuestion(socket, session);
       } catch (e) {
         console.error('[SetupTestGateway get_question Error]:', e);
@@ -267,10 +304,11 @@ export class SetupTestGateway {
     socket.on('setup_test:answer', (payload: { token: string; questionId: string; selectedIndex: number }) => {
       answerQueue = answerQueue.then(async () => {
       try {
-        const userId = (await this.getUserIdFromToken(payload?.token))?.userId ?? null;
-        if (!userId) return;
+        const who = await this.getUserIdFromToken(payload?.token);
+        if (!who) return;
+        const userId = who.userId;
         const session = this.testSessions.get(userId);
-        if (!session || session.grading) return;
+        if (!session || session.grading || !this.mayUse(socket, who, session)) return;
 
         const total = session.questions.length;
         const finished = session.currentQIndex >= total;

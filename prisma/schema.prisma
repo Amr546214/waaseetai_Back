@@ -3662,3 +3662,16 @@ model CashbackReview {
   @@index([userId, status])
   @@map("cashback_reviews")
 }
+
+// Shared replay protection for consumed, short-lived SEB access tickets. No key or access token is stored.
+model ExamTicketUse {
+  jti       String   @id
+  userId    String
+  sessionId String
+  scope     String
+  expiresAt DateTime @db.Timestamptz(6)
+  usedAt    DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([expiresAt], map: "exam_ticket_uses_expiresAt_idx")
+  @@map("exam_ticket_uses")
+}
