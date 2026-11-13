@@ -15,21 +15,19 @@ import { notificationService } from './notification.service';
  *  - eligible value = what the escrow ACTUALLY released for the service at completion (escrow.releasedAmount): net of any marketplace discount (the contract price is already net), and it never includes a refunded
  *    part (refunds / amendment reductions leave the escrow) nor fees (the escrow holds only the service price);
  *  - K39..K43 of the workbook sheet «الأرباح» exactly (config/cashback-policy.ts): level rate, rating factor from the client's REAL average rating, payment factor from input K38; points are never money;
- *  - activation stays BLOCKED behind a specific reason code for what the workbook does not define (K38 meaning/source, a client with no rating, the wallet timing).
+ *  - approved operating policy: reviewed K38 score /100, wait for a real client rating, immediate wallet credit; entitlement retains the completion snapshot.
  */
 export type CashbackOutcome =
 	| { status: 'CREDITED'; amount: number; level: number; ratePercent: number; eligibleValue: number; ratingFactor: number; paymentFactor: number; notice: CashbackNotice }
 	| { status: 'DUPLICATE' }
+	| { status: 'PENDING'; reason: 'WAITING_PAYMENT_SCORE' | 'WAITING_RATING' }
 	| { status: 'SKIPPED'; reason: 'NOT_DELIVERY_COMPLETION' | 'NOTHING_RELEASED' | 'ZERO_RATE' | 'NO_ESCROW' }
 	| { status: 'BLOCKED'; reason: CashbackBlockReason };
 export interface CashbackNotice { userId: string; amount: number; contractId: string; projectId: string }
 
 export const cashbackEventKey = (contractId: string) => `CASHBACK:DELIVERY_COMPLETED:${contractId}`;
 
-/**
- * Input K38 (the payment input). The workbook does not define it (see config/cashback-policy.ts), so production passes none and the accrual is BLOCKED with
- * CASHBACK_PAYMENT_SPEED_INPUT_UNDEFINED; a test (and, later, the approved source) supplies the number.
- */
+/** K38 is an explicitly reviewed payment score out of 100. Production uses the audited CashbackReview input. */
 export interface CashbackInputs { paymentInput?: number | null }
 
 export async function accrueCashbackForDeliveryCompletion(
@@ -40,7 +38,9 @@ export async function accrueCashbackForDeliveryCompletion(
 ): Promise<CashbackOutcome> {
 	const gate = cashbackGate(env);
 	if (gate) return { status: 'BLOCKED', reason: gate };
-	if (typeof inputs.paymentInput !== 'number' || !Number.isFinite(inputs.paymentInput)) return { status: 'BLOCKED', reason: 'CASHBACK_PAYMENT_SPEED_INPUT_UNDEFINED' };
+
+ const live = await tx.contract.findUnique({ where: { id: contract.id }, select: { status: true } });
+ if (live?.status !== 'COMPLETED') return { status: 'SKIPPED', reason: 'NOT_DELIVERY_COMPLETION' };
 	// an engagement closed by an administrative / consensual decision is never a delivery completion
 	if (await tx.engagementClosure.findUnique({ where: { projectId: contract.projectId }, select: { id: true } })) return { status: 'SKIPPED', reason: 'NOT_DELIVERY_COMPLETION' };
 	const escrow = await tx.escrow.findUnique({ where: { projectId: contract.projectId }, select: { releasedAmount: true, status: true } });
@@ -50,11 +50,23 @@ export async function accrueCashbackForDeliveryCompletion(
 
 	// level BEFORE this project counts, from the SAME computation as the level page / dashboard: real ratings the client received from providers (never a hardcoded 0)
 	const facts = await loadClientLevelFacts(contract.clientId, { excludeProjectId: contract.projectId }, tx);
-	// K41 needs the client's average rating; no ratings = no input (never invented, never read as 0)
-	if (facts.avgRating === null) return { status: 'BLOCKED', reason: 'CASHBACK_RATING_INPUT_MISSING' };
-	const level = facts.progression.currentLevelIndex;
-	const ratePercent = CLIENT_LEVELS[Math.min(CLIENT_LEVELS.length, Math.max(1, level)) - 1].percent; // K39
-	const calc = computeCashback({ qualifiedVolume: eligibleValue, ratePercent, avgRating: facts.avgRating, paymentInput: inputs.paymentInput });
+	const initialLevel = facts.progression.currentLevelIndex;
+ const initialRate = CLIENT_LEVELS[Math.min(CLIENT_LEVELS.length, Math.max(1, initialLevel)) - 1].percent;
+ // Only the completion hook creates an entitlement. Retries retain the level and released-value snapshot from that completion.
+ await tx.cashbackReview.createMany({ skipDuplicates: true, data: [{ contractId: contract.id, projectId: contract.projectId, userId: contract.clientId, eligibleValue, level: initialLevel, ratePercent: initialRate }] });
+ const review = await tx.cashbackReview.findUniqueOrThrow({ where: { contractId: contract.id } });
+ const paymentInput = inputs.paymentInput ?? review.paymentInput;
+ if (paymentInput == null || !Number.isFinite(paymentInput) || paymentInput < 0 || paymentInput > 100) {
+  return { status: 'PENDING', reason: 'WAITING_PAYMENT_SCORE' };
+ }
+ // Real provider reviews, including the first project's review. The level remains the pre-completion snapshot above.
+ const ratings = await tx.review.aggregate({ where: { clientId: contract.clientId, reviewerRole: 'PROVIDER', stageId: null }, _avg: { rating: true } });
+ if (ratings._avg.rating == null) {
+  await tx.cashbackReview.update({ where: { id: review.id }, data: { status: 'WAITING_RATING' } });
+  return { status: 'PENDING', reason: 'WAITING_RATING' };
+ }
+ const level = review.level, ratePercent = review.ratePercent, ratingInput = ratings._avg.rating;
+ const calc = computeCashback({ qualifiedVolume: Number(review.eligibleValue), ratePercent, avgRating: ratingInput, paymentInput });
 	const amount = calc.amount;
 	if (!(amount > 0)) return { status: 'SKIPPED', reason: 'ZERO_RATE' };
 
@@ -62,16 +74,17 @@ export async function accrueCashbackForDeliveryCompletion(
 	const walletReference = `CASHBACK-${contract.id}`;
 	// ON CONFLICT DO NOTHING on the unique keys: a duplicate is reported as count 0 and leaves the caller's transaction healthy
 	const { count } = await tx.clientCashbackEntry.createMany({ skipDuplicates: true, data: [{
-		userId: contract.clientId, contractId: contract.id, projectId: contract.projectId, eventKey, eligibleValue, level, ratePercent, ladderSource: CASHBACK_LADDER_SOURCE,
-		policyCode: CASHBACK_FORMULA_CODE, ratingInput: facts.avgRating, paymentInput: inputs.paymentInput, ratingFactor: calc.ratingFactor, paymentFactor: calc.paymentFactor, amount, currency: 'USD', walletReference
+		userId: contract.clientId, contractId: contract.id, projectId: contract.projectId, eventKey, eligibleValue: Number(review.eligibleValue), level, ratePercent, ladderSource: CASHBACK_LADDER_SOURCE,
+		policyCode: CASHBACK_FORMULA_CODE, ratingInput, paymentInput, ratingFactor: calc.ratingFactor, paymentFactor: calc.paymentFactor, amount, currency: 'USD', walletReference
 	}] });
-	if (count === 0) return { status: 'DUPLICATE' };
+	if (count === 0) { await tx.cashbackReview.update({ where: { id: review.id }, data: { status: 'CREDITED' } }); return { status: 'DUPLICATE' }; }
 	await tx.user.update({ where: { id: contract.clientId }, data: { walletBalance: { increment: amount } } });
 	await tx.walletTransaction.create({ data: {
 		userId: contract.clientId, type: 'CASHBACK', amount, currency: 'USD', status: 'COMPLETED', paymentMethod: 'CASHBACK', referenceId: walletReference,
-		description: 'كاش باك مشروع مكتمل', metadata: { contractId: contract.id, projectId: contract.projectId, eligibleValue, level, ratePercent, ratingFactor: calc.ratingFactor, paymentFactor: calc.paymentFactor, ratingInput: facts.avgRating, paymentInput: inputs.paymentInput, ladderSource: CASHBACK_LADDER_SOURCE, formula: CASHBACK_FORMULA_CODE, eventKey }
+		description: 'كاش باك مشروع مكتمل', metadata: { contractId: contract.id, projectId: contract.projectId, eligibleValue: Number(review.eligibleValue), level, ratePercent, ratingFactor: calc.ratingFactor, paymentFactor: calc.paymentFactor, ratingInput, paymentInput, ladderSource: CASHBACK_LADDER_SOURCE, formula: CASHBACK_FORMULA_CODE, eventKey }
 	} });
-	return { status: 'CREDITED', amount, level, ratePercent, eligibleValue, ratingFactor: calc.ratingFactor, paymentFactor: calc.paymentFactor, notice: { userId: contract.clientId, amount, contractId: contract.id, projectId: contract.projectId } };
+	await tx.cashbackReview.update({ where: { id: review.id }, data: { status: 'CREDITED', version: { increment: 1 } } });
+	return { status: 'CREDITED', amount, level, ratePercent, eligibleValue: Number(review.eligibleValue), ratingFactor: calc.ratingFactor, paymentFactor: calc.paymentFactor, notice: { userId: contract.clientId, amount, contractId: contract.id, projectId: contract.projectId } };
 }
 
 /** After the commit only; a failure never undoes the credit. */

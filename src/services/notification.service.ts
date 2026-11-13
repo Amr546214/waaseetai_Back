@@ -289,6 +289,12 @@ export class NotificationService {
 		if (result.status === 'failed') logEmailFailure('notification', email, result.error);
 	}
 
+	/** Broadcasts are in-app only: never call the e-mail delivery pipeline. */
+ public async emitStoredInApp(id: string): Promise<void> {
+  const n = await prisma.notification.findUnique({ where: { id } });
+  if (n) this.emitDto(toDto(n));
+ }
+
 	/** Broadcast a notification persisted as part of another database transaction. */
 	public async emitStored(notificationId: string): Promise<NotificationDto> {
 		const notification = await prisma.notification.findUnique({ where: { id: notificationId } });
