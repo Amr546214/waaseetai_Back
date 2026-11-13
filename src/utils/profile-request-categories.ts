@@ -6,3 +6,6 @@ export const CLIENT_BASIC_INFO_REQUEST_CATEGORY = 'CLIENT_BASIC_INFO';
 
 /** A client's password-change request: the new password is stored only as a bcrypt hash (metadata.pendingPasswordHash, never returned) and applied when an admin approves. */
 export const CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY = 'CLIENT_PASSWORD_CHANGE';
+
+/** A change of the LEGAL name (the name on the identity document) of an account whose identity is verified or under review: never applied directly, an admin decides and the identity is re-verified against the new name. */
+export const LEGAL_NAME_CHANGE_REQUEST_CATEGORY = 'LEGAL_NAME_CHANGE';

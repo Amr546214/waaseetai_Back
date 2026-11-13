@@ -12,3 +12,13 @@ export function trustedClientIp(req: IncomingMessage, env: NodeJS.ProcessEnv = p
 	try { ip = proxyaddr(req, proxyaddr.compile(resolveTrustProxy(env.TRUST_PROXY))); } catch { ip = req.socket?.remoteAddress ?? ''; }
 	return ip.startsWith('::ffff:') && ip.includes('.') ? ip.slice(7) : ip;
 }
+
+/**
+ * True when the TCP peer that handed us this request is itself a trusted proxy hop (TRUST_PROXY). Edge-provided data (CDN geolocation headers) may only be believed in that case:
+ * a request that reaches the origin directly from a public address carries headers its sender chose.
+ */
+export function cameThroughTrustedProxy(req: IncomingMessage, env: NodeJS.ProcessEnv = process.env): boolean {
+	const peer = req.socket?.remoteAddress ?? '';
+	if (!peer) return false;
+	try { return proxyaddr.compile(resolveTrustProxy(env.TRUST_PROXY))(peer, 0); } catch { return false; }
+}

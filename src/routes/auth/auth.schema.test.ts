@@ -13,6 +13,7 @@ import { registerSchema, googleAuthSchema, PublicAccountTypeEnum } from './auth.
 
 const validRegisterBody = {
   firstName: 'Amr',
+  legalName: 'Amr Mahmoud',
   lastName: 'Okasha',
   email: 'amr@example.com',
   phoneCountryCode: '+966',
@@ -73,4 +74,14 @@ test('googleAuthSchema: new-account Google signup cannot request accountType=SUP
 test('googleAuthSchema: accountType remains optional (existing-user Google login unaffected) and legitimate types still validate', () => {
   assert.equal(googleAuthSchema.safeParse({ body: { idToken: 'x' } }).success, true);
   assert.equal(googleAuthSchema.safeParse({ body: { idToken: 'x', accountType: 'CLIENT_INDIVIDUAL' } }).success, true);
+});
+
+test('registerSchema: the legal name is required, validated, cleaned and independent of the display name', () => {
+  const base = { ...validRegisterBody, accountType: 'PROVIDER_INDIVIDUAL' } as Record<string, unknown>;
+  const ok = registerSchema.safeParse({ body: { ...base, firstName: 'عمرو', lastName: 'م.', legalName: '  عمرو   محمود ' } });
+  assert.equal(ok.success, true);
+  if (ok.success) { assert.equal(ok.data.body.legalName, 'عمرو محمود'); assert.equal(ok.data.body.firstName, 'عمرو'); }
+  const { legalName: _omit, ...without } = base;
+  assert.equal(registerSchema.safeParse({ body: without }).success, false, 'no legal name, no account');
+  for (const bad of ['عمرو', 'عمرو 12', '<b></b>', '']) assert.equal(registerSchema.safeParse({ body: { ...base, legalName: bad } }).success, false, bad);
 });

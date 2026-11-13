@@ -77,6 +77,9 @@ model User {
 
   firstName        String
   lastName         String
+  // The name on the official identity document: the ONLY name compared with the document. firstName/lastName above are the display name
+  // (what the platform shows); they are never treated as the legal name. null = not provided yet (older accounts, Google sign-ups).
+  legalName        String? @db.VarChar(120)
   email            String  @unique
   phoneCountryCode String? @default("+966")
   phoneNumber      String? @unique

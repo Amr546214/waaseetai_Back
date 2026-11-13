@@ -341,6 +341,7 @@ const MAX_LOGGED_ANSWERS = 100;
 export async function recordAssessmentAnswer(userId: string, attemptId: string, questionId: string, answer: string, now: Date = new Date()): Promise<boolean> {
   if (typeof questionId !== 'string' || typeof answer !== 'string' || !questionId || answer.length > 50) return false;
   return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM assessment_attempts WHERE id = ${attemptId} FOR UPDATE`; // same writers as the autosave / events: one at a time
     const attempt = await tx.assessmentAttempt.findFirst({
       where: { id: attemptId, status: { in: SUBMITTABLE_STATUSES }, providerSpecialty: { providerProfile: { userId } } },
       select: { id: true, questionsPayload: true, analyzedAssetsSnapshot: true }
@@ -355,6 +356,15 @@ export async function recordAssessmentAnswer(userId: string, attemptId: string, 
     await tx.assessmentAttempt.update({ where: { id: attempt.id }, data: { analyzedAssetsSnapshot: { ...base, answerLog: [...log, { q: questionId, a: answer, t: now.getTime() }] } as any } });
     return true;
   });
+}
+
+export function withSavedDrafts(snapshot: unknown, questions: { id: unknown }[], submitted: Record<string, string>): Record<string, string> {
+  const draft = (snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot) ? (snapshot as { draftAnswers?: unknown }).draftAnswers : null);
+  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return submitted;
+  const ids = new Set(questions.map(q => String(q.id)));
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(draft as Record<string, unknown>)) if (ids.has(k) && typeof v === 'string' && v.length > 0 && v.length <= 50) out[k] = v;
+  return { ...out, ...submitted };
 }
 
 function normalizeAnswers(raw: unknown): Record<string, string> {
@@ -444,7 +454,7 @@ export async function processAssessmentSubmission(
   userId: string,
   rawAnswers: unknown
 ): Promise<SubmissionOutcome> {
-  const answers = normalizeAnswers(rawAnswers);
+  const answersIn = normalizeAnswers(rawAnswers);
 
   const attempt = await prisma.assessmentAttempt.findFirst({
     where: { id: attemptId, providerSpecialty: { providerProfile: { userId } } },
@@ -456,6 +466,8 @@ export async function processAssessmentSubmission(
   const questions = (Array.isArray(attempt.questionsPayload) ? attempt.questionsPayload : []) as unknown as StoredQuestion[];
   const vendorAttemptId = extractVendorAttemptId(attempt.analyzedAssetsSnapshot);
   const totalQuestions = questions.length || attempt.totalQuestions || ASSESSMENT_QUESTION_COUNT;
+  // answers saved while the test ran (autosave) fill the gaps of what is submitted now (a lost connection or a reload never loses them); a submitted answer always wins
+  const answers = withSavedDrafts(attempt.analyzedAssetsSnapshot, questions, answersIn);
 
   // A grading claim that is still fresh means another transport is grading
   // right now; a stale one is abandoned and gets released first.

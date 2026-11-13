@@ -81,6 +81,8 @@ export class AuthRepository {
           activeRole: getRoleFromAccountType(data.accountType),
           firstName: data.firstName,
           lastName: data.lastName,
+          // the legal name (name on the identity document) is its own field: never derived from the display name or from Google's profile name
+          legalName: data.legalName,
           email: data.email,
           phoneCountryCode: data.phoneCountryCode,
           phoneNumber: data.phoneNumber,

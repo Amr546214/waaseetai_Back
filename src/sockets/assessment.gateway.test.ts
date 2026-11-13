@@ -555,3 +555,18 @@ test('submit_answer: pass on an already APPROVED specialty reports specialtyAppr
   assert.equal(p.specialtyApproved, true);
   assert.deepEqual(state.txUpdates.find((u: any) => u.model === 'specialty').data, { hasTakenAssessment: true, latestScore: 10 });
 });
+
+test('restricted exam mode (EXAM_SEB_MODE=required): the socket never starts, times or grades an attempt and no question is streamed', async () => {
+  resetState({ attempt: attemptFixture() });
+  const old = process.env.EXAM_SEB_MODE; process.env.EXAM_SEB_MODE = 'required';
+  try {
+    const m = await setup('user-1');
+    await m.handlers['start_assessment'](START);
+    await m.handlers['submit_answer']({ attemptId: 'db-attempt-uuid-1', answers: { '1': 'a' } });
+    await m.handlers['record_answer']({ attemptId: 'db-attempt-uuid-1', questionId: 1, answer: 'a' });
+    assert.deepEqual(m.emitted.map(e => e.event), ['assessment_error', 'assessment_error']);
+    assert.ok(m.emitted.every(e => e.payload.code === 'EXAM_ENVIRONMENT_REQUIRED'));
+    assert.equal(m.emitted.some(e => e.event === 'question_streamed' || e.event === 'evaluation_complete'), false);
+    assert.equal(state.updates.length + state.updateManys.length + state.creates.length, 0, 'nothing was written');
+  } finally { if (old === undefined) delete process.env.EXAM_SEB_MODE; else process.env.EXAM_SEB_MODE = old; }
+});

@@ -3,6 +3,14 @@ import { authPasswordSchema } from '../../utils/auth-password-policy';
 import { AccountType } from '@prisma/client';
 import { COMPANY_ACCOUNTS_UNAVAILABLE_MESSAGE, isCompanyAccountType } from '../../middlewares/company-unavailable.middleware';
 import { sanitizedText } from '../../utils/sanitize-text';
+import { checkLegalName } from '../../utils/legal-name';
+
+/** The real name on the identity document: required at sign-up and independent of the display name (firstName/lastName). Stored cleaned; never used as the display name. */
+export const legalNameSchema = z.preprocess(v => (typeof v === 'string' ? v : ''), z.string()).transform((v, ctx) => {
+  const r = checkLegalName(v);
+  if (!r.ok) { ctx.addIssue({ code: 'custom', message: r.message }); return z.NEVER; }
+  return r.value;
+});
 
 // The only account types a public, unauthenticated signup request (email/
 // password registration or a brand-new Google sign-up) may ever request.
@@ -28,6 +36,7 @@ export const registerSchema = z.object({
     accountType: PublicAccountTypeEnum,
     firstName: sanitizedText(z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل')),
     lastName: sanitizedText(z.string().min(2, 'اسم العائلة يجب أن يكون حرفين على الأقل')),
+    legalName: legalNameSchema,
     email: normalizedEmail,
     phoneCountryCode: z.string().default('+966'),
     phoneNumber: z.string().regex(/^\d+$/, 'رقم الجوال يجب أن يحتوي على أرقام فقط').min(9, 'رقم الجوال غير صحيح'),
@@ -67,6 +76,7 @@ const registerIdentityBody = {
   accountType: PublicAccountTypeEnum,
   firstName: sanitizedText(z.string().min(2, 'الاسم الأول يجب أن يكون حرفين على الأقل')),
   lastName: sanitizedText(z.string().min(2, 'اسم العائلة يجب أن يكون حرفين على الأقل')),
+  legalName: legalNameSchema,
   email: normalizedEmail,
   phoneCountryCode: z.string().default('+966'),
   phoneNumber: z.string().regex(/^\d+$/, 'رقم الجوال يجب أن يحتوي على أرقام فقط').min(9, 'رقم الجوال غير صحيح'),

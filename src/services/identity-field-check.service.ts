@@ -6,6 +6,7 @@ import { logger } from '../config/logger';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { WaseetAiError, WaseetAiErrorCode } from './ai/waseet-ai/waseet-ai.errors';
 import type { IdentityCompareFieldsRequest, IdentityCompareFieldsResponse, IdentityFieldName, IdentityFieldResult } from './ai/waseet-ai/waseet-ai.types';
+import { legalNameKey, cleanLegalName } from '../utils/legal-name';
 import { createPrivateDownloadUrl } from '../utils/cloudinary-storage';
 import { isPrivateRef, parsePrivateRef } from '../utils/kyc-private-ref';
 
@@ -42,7 +43,7 @@ const isoDate = (d: Date) => d.toISOString().slice(0, 10);
 
 export interface RegisteredSnapshot { fullName: string; birthDate: string; nationalId: string; imageRef: string; document?: IdentityDocument }
 
-const registeredDigest = (reg: RegisteredSnapshot) => sha256(JSON.stringify({ n: reg.fullName.trim().replace(/\s+/g, ' ').toLowerCase(), b: reg.birthDate, i: reg.nationalId, ...(reg.document ? { d: reg.document } : {}) }));
+const registeredDigest = (reg: RegisteredSnapshot) => sha256(JSON.stringify({ n: legalNameKey(reg.fullName), b: reg.birthDate, i: reg.nationalId, ...(reg.document ? { d: reg.document } : {}) }));
 
 export interface IdentityCheckDeps {
 	db: typeof prisma;
@@ -185,12 +186,13 @@ export class IdentityFieldCheckService {
 	}
 
 	private async loadRegistered(userId: string, party: CheckParty): Promise<RegisteredSnapshot | null> {
-		const user = await this.deps.db.user.findUnique({ where: { id: userId }, select: { firstName: true, lastName: true } });
+		// ONLY the legal name (the name on the document) is compared. The display name (firstName/lastName) is never used, not even as a fallback for older accounts: they are asked for the legal name instead.
+		const user = await this.deps.db.user.findUnique({ where: { id: userId }, select: { legalName: true } });
 		if (!user) return null;
 		const p: any = party === 'CLIENT'
 			? await this.deps.db.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, frontIdUrl: true } })
 			: await this.deps.db.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, frontIdUrl: true } });
-		const fullName = `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim();
+		const fullName = cleanLegalName(user.legalName);
 		const document = p?.idIssuingCountry && p?.idDocumentType ? identityDocumentContext(p) : undefined;
 		const raw = String(p?.idNumber ?? '').trim();
 		const nationalId = document && !(document.country === 'EG' && document.type === 'NATIONAL_ID')
@@ -258,7 +260,9 @@ export class IdentityFieldCheckService {
 		const { latest, profile } = await this.latestAndCurrent(userId, party);
 		if (!profile) return null;
 		const enabled = this.deps.enabled();
-		const base = { userId, party, autoCheckEnabled: enabled, manualReviewRequired: true, advisory: true, advisoryNote: ADVISORY_NOTE_AR, notExamined: NOT_EXAMINED };
+		// reviewers see the legal name next to the document (it is what the document is compared with); it is not part of any public response
+		const legal = await this.deps.db.user.findUnique({ where: { id: userId }, select: { legalName: true } });
+		const base = { userId, party, legalName: legal?.legalName ?? null, legalNameMissing: !legal?.legalName, autoCheckEnabled: enabled, manualReviewRequired: true, advisory: true, advisoryNote: ADVISORY_NOTE_AR, notExamined: NOT_EXAMINED };
 		const none = (stateReason: string, extra: object = {}) => ({ ...base, state: 'NOT_CHECKED', stateReason, imageVersion: null, stale: false, startedAt: null, checkedAt: null, model: null, fields: null, ...extra });
 		if (!latest) return none(enabled ? 'NO_CHECK_YET' : 'FLAG_OFF');
 		const stale = !!profile.frontIdUrl && sha256(String(profile.frontIdUrl)) !== latest.imageRefDigest;

@@ -330,6 +330,8 @@ import adminAnalyticsRoutes from './routes/admin-analytics.routes';
 import adminAiConsoleRoutes from './routes/admin-ai-console.routes';
 import kycDocumentsRoutes from './routes/kyc-documents.routes';
 import identityCheckRoutes from './routes/identity-check.routes';
+import legalNameRoutes from './routes/legal-name.routes';
+import examEnvironmentRoutes from './routes/exam-environment.routes';
 
 // Support BOTH prefixed and unprefixed paths.
 // - app.use('/api', apiRouter) handles local development where frontend calls http://localhost:5009/api
@@ -421,6 +423,10 @@ mountAppRoute('/api/kyc-documents', kycDocumentsRoutes);
 mountAppRoute('/kyc-documents', kycDocumentsRoutes);
 mountAppRoute('/api/identity-check', identityCheckRoutes);
 mountAppRoute('/identity-check', identityCheckRoutes);
+mountAppRoute('/api/exam-environment', examEnvironmentRoutes);
+mountAppRoute('/exam-environment', examEnvironmentRoutes);
+mountAppRoute('/api/legal-name', legalNameRoutes);
+mountAppRoute('/legal-name', legalNameRoutes);
 
 import knowledgeRoutes from './routes/knowledge.routes';
 

@@ -29,7 +29,7 @@ async function env(over: { enabled?: boolean } = {}) {
 }
 async function seed(prisma: any, party: 'CLIENT' | 'PROVIDER', over: any = {}) {
 	const tag = id().slice(0, 8);
-	const user = await prisma.user.create({ data: { id: id(), accountType: party === 'CLIENT' ? 'CLIENT_INDIVIDUAL' : 'PROVIDER_INDIVIDUAL', firstName: 'اسم', lastName: 'تجريبي' + tag, email: `idc-${tag}@pg.test`, roles: [party], activeRole: party } });
+	const user = await prisma.user.create({ data: { id: id(), accountType: party === 'CLIENT' ? 'CLIENT_INDIVIDUAL' : 'PROVIDER_INDIVIDUAL', firstName: 'اسم', lastName: 'تجريبي' + tag, legalName: `اسم تجريبي${tag}`, email: `idc-${tag}@pg.test`, roles: [party], activeRole: party } });
 	const front = over.frontIdUrl === undefined ? ref(user.id, 'a') : over.frontIdUrl;
 	const data = { id: id(), userId: user.id, idNumber: over.idNumber === undefined ? NID : over.idNumber, dob: over.dob === undefined ? new Date('1990-01-01T00:00:00Z') : over.dob, frontIdUrl: front, kycStatus: 'PENDING' };
 	if (party === 'CLIENT') await prisma.clientProfile.create({ data }); else await prisma.providerProfile.create({ data });
@@ -219,4 +219,49 @@ test('PG: logs never contain the full national id, the image or the registered v
 		assert.ok(lines.length > 0, 'the service does log (status lines only)');
 		for (const line of lines) { assert.ok(!line.includes(NID), line); assert.ok(!line.includes(imgB64)); assert.ok(!line.includes('1990-01-01')); }
 	} finally { for (const [l, f] of orig) (logger as any)[l] = f; }
+});
+
+test('PG legal name: ONLY the legal name goes to the comparison; the display name is never sent, and a missing legal name means INCOMPLETE (no fallback to the display name)', opts, async () => {
+	const { prisma, svc, ai, images, syntheticImage } = await env();
+	const { user, front } = await seed(prisma, 'PROVIDER');
+	await prisma.user.update({ where: { id: user.id }, data: { firstName: 'عمرو', lastName: 'م', legalName: 'عمرو محمود عكاشة' } });
+	images.set(front, syntheticImage(card('عمرو محمود عكاشة')));
+	assert.equal(((await svc.trigger(user.id, 'PROVIDER')) as any).action, 'CREATED');
+	assert.equal(ai.calls.length, 1); assert.equal(ai.calls[0].registered.fullName, 'عمرو محمود عكاشة', 'the legal name, not "عمرو م"');
+	const [r] = await rows(prisma, user.id); assert.equal((r.fieldResults as any).fullName.status, 'MATCH');
+	const admin: any = await svc.getAdminView(user.id, 'PROVIDER');
+	assert.equal(admin.legalName, 'عمرو محمود عكاشة'); assert.equal(admin.legalNameMissing, false);
+	const legacy = await seed(prisma, 'CLIENT');
+	await prisma.user.update({ where: { id: legacy.user.id }, data: { legalName: null } });
+	assert.deepEqual(await svc.trigger(legacy.user.id, 'CLIENT'), { action: 'INCOMPLETE' });
+	assert.equal(ai.calls.length, 1, 'nothing was sent for the account without a legal name');
+	assert.equal(((await svc.getAdminView(legacy.user.id, 'CLIENT')) as any).legalNameMissing, true);
+});
+
+test('PG legal name service: first save is direct; a verified/pending identity makes a change a REQUEST; approval replaces the name and sends the identity back to PENDING; display name untouched', opts, async () => {
+	const { prisma } = await env();
+	const { legalNameService } = await import('./legal-name.service');
+	const { provider } = { provider: await seed(prisma, 'PROVIDER') };
+	const uid = provider.user.id;
+	await prisma.user.update({ where: { id: uid }, data: { legalName: null, firstName: 'عمرو', lastName: 'م' } });
+	await prisma.providerProfile.update({ where: { userId: uid }, data: { kycStatus: 'UNVERIFIED' } });
+	assert.equal((await legalNameService.getView(uid)).status, 'MISSING');
+	await assert.rejects(() => legalNameService.set(uid, 'عمرو'), (e: any) => e.statusCode === 400 && e.code === 'LEGAL_NAME_NEEDS_TWO_PARTS');
+	const first = await legalNameService.set(uid, '  عمرو   محمود ');
+	assert.equal(first.outcome, 'SAVED'); assert.equal(first.view.legalName, 'عمرو محمود'); assert.equal(first.view.changeNeedsReview, false);
+	assert.equal((await legalNameService.set(uid, 'عمرو محمود')).outcome, 'UNCHANGED');
+	assert.equal((await legalNameService.set(uid, 'عمرو محمود عكاشة')).outcome, 'SAVED', 'before verification the owner may still correct it');
+	// identity now under verification: a change is a request only
+	await prisma.providerProfile.update({ where: { userId: uid }, data: { kycStatus: 'VERIFIED', isVerified: true } });
+	const req = await legalNameService.set(uid, 'عمرو أحمد عكاشة');
+	assert.equal(req.outcome, 'REQUEST_CREATED'); assert.equal(req.view.legalName, 'عمرو محمود عكاشة', 'unchanged until an admin approves'); assert.equal(req.view.changeNeedsReview, true);
+	assert.ok(req.view.pendingRequest);
+	await assert.rejects(() => legalNameService.set(uid, 'عمرو سعيد عكاشة'), (e: any) => e.statusCode === 409);
+	const row = await prisma.profileModificationRequest.findUniqueOrThrow({ where: { id: req.view.pendingRequest!.id } });
+	assert.equal(row.category, 'LEGAL_NAME_CHANGE'); assert.equal(row.status, 'PENDING_HUMAN_REVIEW');
+	await legalNameService.applyApproved(uid, (row.metadata as any).changes);
+	const after = await prisma.user.findUniqueOrThrow({ where: { id: uid } });
+	assert.equal(after.legalName, 'عمرو أحمد عكاشة'); assert.equal(after.firstName, 'عمرو'); assert.equal(after.lastName, 'م', 'the display name never changes with the legal name');
+	const prof = await prisma.providerProfile.findUniqueOrThrow({ where: { userId: uid } });
+	assert.equal(prof.kycStatus, 'PENDING'); assert.equal(prof.isVerified, false);
 });

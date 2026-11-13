@@ -41,7 +41,8 @@ import { accountAuditLogService, AuditContext } from './account-logs.service';
 import { LEVEL_MATRIX } from './gamification.service';
 import { resolveProviderProgression } from '../utils/role-display-resolver';
 import { computeProviderCompletion, computeProviderMissingItems, computeClientCompletion } from '../utils/completion-calculators';
-import { CLIENT_IDENTITY_REQUEST_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY, CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY } from '../utils/profile-request-categories';
+import { CLIENT_IDENTITY_REQUEST_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY, CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY, LEGAL_NAME_CHANGE_REQUEST_CATEGORY } from '../utils/profile-request-categories';
+import { legalNameService } from './legal-name.service';
 import { logger } from '../config/logger';
 import { OtpPurpose, OTP_MAX_ATTEMPTS } from '../utils/otp-purpose';
 import { otpSendThrottle, canReuseOtp, otpThrottleMessage, resendAvailableAtIso } from '../utils/otp-send-throttle';
@@ -1436,6 +1437,8 @@ export class ProviderProfileService {
 					await this.applyLegacyFieldModification(request.providerId, request.fieldName, request.requestedValue);
 				} else if (request.category === CLIENT_IDENTITY_REQUEST_CATEGORY) {
 					await this.applyClientIdentityChange(request.providerId, metadata.changes || {});
+				} else if (request.category === LEGAL_NAME_CHANGE_REQUEST_CATEGORY) {
+					await legalNameService.applyApproved(request.providerId, metadata.changes || {});
 				} else if (request.category === CLIENT_BASIC_INFO_REQUEST_CATEGORY) {
 					await this.applyClientBasicInfoChange(request.providerId, metadata.changes || {});
 				} else if (request.category === CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY) {

@@ -16,6 +16,11 @@ import {
   PublicAssessmentQuestion
 } from '../services/ai-assessment.service';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
+import { examEnvMode } from '../utils/seb-exam';
+
+// Restricted exam mode (EXAM_SEB_MODE=required): a socket handshake cannot be bound to a Safe Exam Browser hash the way each HTTP request is, so the live exam moves over the
+// verified HTTP routes only. The socket flow refuses to start, grade or time an attempt and no question is ever streamed over it.
+const EXAM_SOCKET_REFUSED = { message: 'الاختبار المقيّد يُنفَّذ من داخل Safe Exam Browser فقط.', code: 'EXAM_ENVIRONMENT_REQUIRED' } as const;
 
 // Live assessment socket flow. All question generation and grading runs
 // through the external WaseetAI service (see ai-assessment.service.ts);
@@ -56,6 +61,7 @@ export class AssessmentGateway {
      * relays each question to the client as soon as it arrives.
      */
     socket.on('start_assessment', async (payload: { providerSpecialtyId?: string }) => {
+      if (examEnvMode() === 'required') { socket.emit('assessment_error', EXAM_SOCKET_REFUSED); return; }
       const userId = (socket as any).userId as string | undefined;
       const providerSpecId = payload?.providerSpecialtyId;
       if (!userId || !providerSpecId) {
@@ -170,6 +176,7 @@ export class AssessmentGateway {
      * (review flags only; the final answers still arrive through submit_answer / submit_assessment). Silent: never emits an error.
      */
     socket.on('record_answer', async (payload: { attemptId?: string; questionId?: string | number; answer?: string }) => {
+      if (examEnvMode() === 'required') return;
       const userId = (socket as any).userId as string | undefined;
       if (!userId || !payload?.attemptId || payload.questionId === undefined) return;
       try { await recordAssessmentAnswer(userId, String(payload.attemptId), String(payload.questionId), String(payload.answer ?? '')); } catch { /* best effort */ }
@@ -200,6 +207,7 @@ export class AssessmentGateway {
   }
 
   private async handleSubmission(socket: Socket, payload: { attemptId: string; answers: Record<string, string> }): Promise<void> {
+    if (examEnvMode() === 'required') { socket.emit('assessment_error', EXAM_SOCKET_REFUSED); return; }
     const { attemptId, answers } = payload || ({} as { attemptId: string; answers: Record<string, string> });
 
     const userId = (socket as any).userId as string | undefined;
