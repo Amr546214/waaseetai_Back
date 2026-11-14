@@ -27,7 +27,29 @@ export interface TokenDef {
 const c = (name: string, label: string, dark: string, light?: string): TokenDef => ({ name, type: 'color', scope: 'color', label, dark, light });
 const p = (name: string, label: string, dark: string, light?: string): TokenDef => ({ name, type: 'paint', scope: 'color', label, dark, light });
 
-const PRESENTATION_TOKENS: TokenDef[] = PRESENTATION.flatMap(g=>g.fields.map(f=>({name:f.name,type:f.type as TokenType,scope:(g.key==='tokens.typography'?'typography':'component') as TokenScope,label:g.label+' — '+f.label,dark:'inherit',preservesDefault:true,...(f.type==='length'?{min:{px:f.min!,rem:f.min!/16},max:{px:f.max!,rem:f.max!/16}}:{}),...(f.type==='number'?{numberMin:f.min,numberMax:f.max,integer:'integer' in f?f.integer:false}:{})})));
+/** top-level commas only (a comma inside `( )` or `[ ]` belongs to the selector): the PLACES of a presentation group. Mirror of the frontend's `splitSelectors`. */
+export function presentationPlaces(selector: string): string[] {
+	const out: string[] = []; let depth = 0, cur = '';
+	for (const ch of selector) {
+		if (ch === '(' || ch === '[') depth++; else if (ch === ')' || ch === ']') depth--;
+		if (ch === ',' && depth === 0) { out.push(cur.trim()); cur = ''; } else cur += ch;
+	}
+	if (cur.trim()) out.push(cur.trim());
+	return out.filter(Boolean);
+}
+/** the token of ONE place of a multi-place group (1-based): `--btn-min-h` -> `--btn-min-h--p2`. It overrides the group's own token for that place only. */
+export const placeTokenName = (name: string, index: number): string => `${name}--p${index + 1}`;
+type PresentationField = (typeof PRESENTATION)[number]['fields'][number];
+const presentationDef = (name: string, label: string, scope: TokenScope, f: PresentationField): TokenDef => ({ name, type: f.type as TokenType, scope, label, dark: 'inherit', preservesDefault: true, ...(f.type === 'length' ? { min: { px: f.min!, rem: f.min! / 16 }, max: { px: f.max!, rem: f.max! / 16 } } : {}), ...(f.type === 'number' ? { numberMin: f.min, numberMax: f.max, integer: 'integer' in f ? f.integer : false } : {}) });
+/** every field of every group, and - for a group with several places - the same field once more PER PLACE so each place can be controlled on its own (additive: the group's own token keeps working for all places) */
+const PRESENTATION_TOKENS: TokenDef[] = PRESENTATION.flatMap(g => {
+	const scope: TokenScope = g.key === 'tokens.typography' ? 'typography' : 'component';
+	const places = presentationPlaces(g.selector);
+	return [
+		...g.fields.map(f => presentationDef(f.name, g.label + ' — ' + f.label, scope, f)),
+		...(places.length > 1 ? places.flatMap((sel, i) => g.fields.map(f => presentationDef(placeTokenName(f.name, i), `${g.label} — ${f.label} (الموضع ${i + 1}: ${sel})`, scope, f))) : [])
+	];
+});
 export const TOKEN_REGISTRY: readonly TokenDef[] = [
 	c('--pg', 'خلفية الصفحة', '#070d24', '#eef2fa'),
 	c('--pop-bg', 'خلفية القوائم المنبثقة والأدراج', 'rgba(9,18,48,.98)', '#ffffff'),

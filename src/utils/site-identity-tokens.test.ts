@@ -12,7 +12,7 @@ const val = (key: string, v: unknown) => validateTokenValue(key, v);
 const bytes = (o: unknown) => Buffer.from(typeof o === 'string' ? o : JSON.stringify(o), 'utf8');
 
 test('tokens: registry shape and exact counts (37 declared in :root + 24 round-9 semantic variables + --font-family: 58 colour-like of which 57 redefined in light and only --grad shared, 3 layout, 1 typography)', () => {
-	assert.deepEqual(TOKEN_COUNTS, { declaredInRoot: 61, colorLike: 58, redefinedByThemeLight: 57, sharedWithDark: 1, layout: 3, typography: 71, components: 193, palette: 1188 });
+	assert.deepEqual(TOKEN_COUNTS, { declaredInRoot: 61, colorLike: 58, redefinedByThemeLight: 57, sharedWithDark: 1, layout: 3, typography: 196, components: 350, palette: 1188 });
 	assert.deepEqual(TOKEN_REGISTRY.filter(t => t.scope === 'color' && t.light === undefined).map(t => t.name).sort(), ['--grad']);
 	assert.equal(new Set(TOKEN_REGISTRY.map(t => t.name)).size, TOKEN_REGISTRY.length, 'names unique');
 	for (const t of TOKEN_REGISTRY) assert.match(t.name, /^--[a-z0-9-]{1,40}$/);
@@ -22,7 +22,7 @@ test('tokens: registry shape and exact counts (37 declared in :root + 24 round-9
 	for (const d of keys) { assert.equal(d.kind, 'json'); assert.deepEqual(d.allowedMimes, ['application/json']); assert.equal(d.maxBytes, tokenMaxBytes(d.key)); assert.equal(d.defaultFingerprint.byteSize, 2); assert.equal(d.defaultFingerprint.mime, 'application/json'); assert.ok(describeRules(d).length >= 2); }
 	assert.deepEqual(keys.filter(d => WIRED_KEYS.includes(d.key)).map(d => d.key), [...TOKEN_KEYS]);
 	assert.ok(keys.every(d => d.notWiredReason.length > 20));
-	assert.equal(tokensOfKey('tokens.colors.light').length, 58); assert.equal(tokensOfKey('tokens.colors.dark').length, 58); assert.equal(tokensOfKey('tokens.layout').length, 3); assert.equal(tokensOfKey('tokens.typography').length, 71);
+	assert.equal(tokensOfKey('tokens.colors.light').length, 58); assert.equal(tokensOfKey('tokens.colors.dark').length, 58); assert.equal(tokensOfKey('tokens.layout').length, 3); assert.equal(tokensOfKey('tokens.typography').length, 196);
 });
 
 test('tokens: every default is already in canonical form and satisfies its own grammar (so a default can never be "changed" by canonicalisation)', () => {

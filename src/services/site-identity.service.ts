@@ -1,6 +1,7 @@
 import { LogCategory, Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '../config/db';
 import { logger } from '../config/logger';
+import { publishSettingsChange } from './settings-bus';
 import { AppError, fieldError, fieldErrorItem } from '../utils/app-error';
 import { isMissingTableError } from '../utils/missing-table';
 import { accountAuditLogService } from './account-logs.service';
@@ -523,6 +524,7 @@ export class SiteIdentityService {
 			if (touchesCache) await refreshSiteIdentityCache();
 			throw new AppError('تم الحفظ لكن تعذّر التحقق من النتيجة بعد الحفظ، فأُعيدت الهوية إلى حالتها السابقة. لم يتغيّر شيء على الموقع. أعد المحاولة.', 500, undefined, SITE_IDENTITY_ERRORS.VERIFY_FAILED);
 		}
+		if (done.applied.length) void publishSettingsChange(['site_identity']); // after commit + verification: open sessions re-read the identity through the existing settings bus (keys only, no values)
 		if (touchesCache) await refreshSiteIdentityCache(); // the synchronous e-mail shell sees the new logo from the next mail on (this process); other instances follow within the cache TTL
 		return result(done);
 	}

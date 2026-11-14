@@ -115,7 +115,7 @@ const TOKENS_SOURCE = 'src/styles.css (:root = الداكن، .theme-light = ا�
 /** the unwired reason of tokens.typography (the only token key that is not in WIRED_KEYS by default) */
 const TYPOGRAPHY_REASON = 'يقرأ الخط العام من المتغيّر --font-family (يُوجَّه إليه --font-body و --font-heading و --font-numeric في النظام التصميمي)؛ لا تُعرض هذه الرسالة إلا إن أُلغي ربط المفتاح.';
 const tokenKey = (o: { key: string; label: string; description: string; wired: boolean }): SiteIdentityKeyDef => ({
-	key: o.key, group: 'token', label: o.label, description: o.description, kind: 'json', allowedMimes: ['application/json'], maxBytes: o.key.startsWith('tokens.palette.')?128*1024:o.key==='tokens.components'?64*1024:8*1024, dimensions: {},
+	key: o.key, group: 'token', label: o.label, description: o.description, kind: 'json', allowedMimes: ['application/json'], maxBytes: o.key.startsWith('tokens.palette.')?128*1024:(o.key==='tokens.components'||o.key==='tokens.typography')?64*1024:8*1024, dimensions: {},
 	defaultAsset: { type: 'tokens', source: TOKENS_SOURCE },
 	defaultFingerprint: { mime: 'application/json', width: null, height: null, byteSize: 2, sha256: EMPTY_JSON_SHA, note: 'الافتراضي = لا تجاوزات ({}) ؛ القيم الافتراضية الفعلية لكل رمز في TOKEN_REGISTRY' },
 	usages: [{ where: 'طبقة <style id="ws-identity-tokens"> تُحقن في <head> فقط عند وجود تجاوزات (وإلا لا شيء)', ref: 'src/styles.css :root / .theme-light' }],
