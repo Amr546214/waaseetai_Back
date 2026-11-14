@@ -1,3 +1,5 @@
+import { WithdrawalSource } from '@prisma/client';
+import { isProviderOwner, withdrawalSourceWhere } from '../utils/withdrawal-source';
 import { MIN_WITHDRAWAL_USD } from '../config/withdrawal-limits';
 import { CommissionStatus, WithdrawalStatus } from '@prisma/client';
 import { feePolicyService } from './fee-policy.service';
@@ -6,7 +8,7 @@ import { readAffiliatePaypalEmail } from '../utils/affiliate-payout';
 import { IN_FLIGHT_WITHDRAWAL_STATUSES, RESERVING_WITHDRAWAL_STATUSES } from '../utils/withdrawal-reservation';
 import { commissionBreakdown, grossCard, NOT_FOUND_TX, pageOf, stateCard, valueCard, withdrawalBreakdown } from './wallet-breakdown';
 import { AppError } from '../utils/app-error';
-import { isProviderIdentity, MARKETER_PAYPAL_REQUIRED_MESSAGE } from './withdrawal.service';
+import { MARKETER_PAYPAL_REQUIRED_MESSAGE } from './withdrawal.service';
 
 /** @deprecated the withdrawal minimum is MIN_WITHDRAWAL_USD (config/withdrawal-limits.ts) for every role; kept only so old imports keep compiling */
 export const MARKETER_MIN_WITHDRAWAL_FLOOR = MIN_WITHDRAWAL_USD;
@@ -21,11 +23,13 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 export const marketerWalletService = {
   async getWallet(userId: string) {
     const affiliate = await prisma.affiliateProfile.findUnique({ where: { userId }, select: { id: true, minimumPayoutAmount: true } });
-    const [commissionGroups, withdrawalGroups, paypalEmail, owner] = await Promise.all([
+    const owner = await prisma.user.findUnique({ where: { id: userId }, select: { accountType: true, roles: true, activeRole: true } });
+    // the marketer's money is its own ledger: only the withdrawals made against it reduce it (a user who is also a provider has a separate provider balance)
+    const marketerOnly = withdrawalSourceWhere(WithdrawalSource.MARKETER, !!owner && isProviderOwner(owner));
+    const [commissionGroups, withdrawalGroups, paypalEmail] = await Promise.all([
       affiliate ? prisma.commissionLog.groupBy({ by: ['status'], where: { affiliateId: affiliate.id }, _sum: { amount: true } }) : Promise.resolve([]),
-      prisma.withdrawal.groupBy({ by: ['status'], where: { userId }, _sum: { amount: true } }),
-      readAffiliatePaypalEmail(userId, prisma),
-      prisma.user.findUnique({ where: { id: userId }, select: { accountType: true, roles: true, activeRole: true } })
+      prisma.withdrawal.groupBy({ by: ['status'], where: { userId, ...marketerOnly }, _sum: { amount: true } }),
+      readAffiliatePaypalEmail(userId, prisma)
     ]);
     const commission = (status: CommissionStatus) => commissionGroups.find(g => g.status === status)?._sum.amount ?? 0;
     const withdrawn = (statuses: readonly WithdrawalStatus[]) => withdrawalGroups.filter(g => statuses.includes(g.status)).reduce((sum, g) => sum + (g._sum.amount ?? 0), 0);
@@ -41,7 +45,6 @@ export const marketerWalletService = {
     // Why a withdrawal cannot be requested right now, shown next to the disabled button (null = it can).
     let withdrawBlockedReason: string | null = null;
     if (!affiliate) withdrawBlockedReason = 'ملف الوسيط التسويقي غير مكتمل';
-    else if (owner && isProviderIdentity(owner)) withdrawBlockedReason = 'سحب العمولات غير متاح حاليًا للحسابات التي تجمع بين دور الوسيط ودور مقدم الخدمة، يرجى التواصل مع الدعم';
     else if (!paypalEmail) withdrawBlockedReason = MARKETER_PAYPAL_REQUIRED_MESSAGE;
     else if (withdrawableBalance < minimumWithdrawal) withdrawBlockedReason = `رصيدك القابل للسحب أقل من الحد الأدنى (${minimumWithdrawal} $)`;
 
@@ -85,7 +88,8 @@ export const marketerWalletService = {
         commissions = await prisma.commissionLog.findMany({ where: { affiliateId: affiliate.id }, orderBy: { createdAt: 'desc' }, select: basic });
       }
     }
-    const withdrawals = await prisma.withdrawal.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, select: { id: true, amount: true, currency: true, status: true, createdAt: true } });
+    const historyOwner = await prisma.user.findUnique({ where: { id: userId }, select: { accountType: true, roles: true, activeRole: true } });
+    const withdrawals = await prisma.withdrawal.findMany({ where: { userId, ...withdrawalSourceWhere(WithdrawalSource.MARKETER, !!historyOwner && isProviderOwner(historyOwner)) }, orderBy: { createdAt: 'desc' }, select: { id: true, amount: true, currency: true, status: true, createdAt: true } });
     const rows = [
       ...commissions.map(c => ({ id: `commission-${c.id}`, kind: 'COMMISSION' as const, type: c.type as string, status: c.status as string, amount: round2(c.amount), currency: c.currency as string, title: 'عمولة إحالة', createdAt: c.createdAt as Date, breakdown: commissionBreakdown(c) })),
       ...withdrawals.map(w => ({ id: `withdrawal-${w.id}`, kind: 'WITHDRAWAL' as const, type: 'WITHDRAWAL', status: w.status as string, amount: round2(w.amount), currency: w.currency, title: 'طلب سحب', createdAt: w.createdAt, breakdown: withdrawalBreakdown(w) }))

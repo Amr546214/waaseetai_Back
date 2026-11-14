@@ -1,3 +1,5 @@
+import { WithdrawalSource } from '@prisma/client';
+import { withdrawalSourceWhere } from '../utils/withdrawal-source';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { IN_FLIGHT_WITHDRAWAL_STATUSES, SPENT_WITHDRAWAL_STATUSES, RESERVING_WITHDRAWAL_STATUSES } from '../utils/withdrawal-reservation';
@@ -53,7 +55,8 @@ export class ProviderFinanceService {
     // only a HELD escrow still has money waiting: a RELEASED / REFUNDED one (e.g. closed by a mutual-cancellation settlement) has nothing left for the provider
     const escrowBalance = sumMoney(escrows.map(escrow => (escrow.status === 'HELD' ? Math.max(0, entitlementOf(escrow) - providerReleased(escrow)) : 0)));
     // availableBalance stays the total released earnings; withdrawableBalance is what a NEW request may still ask for (the server enforces the same figure).
-    const reserved = await client.withdrawal.groupBy({ by: ['status'], where: { userId: providerId, status: { in: [...RESERVING_WITHDRAWAL_STATUSES] } }, _sum: { amount: true } });
+    // the provider's earnings are their own ledger: only withdrawals made against it reduce them (a user who is also a marketer has a separate commission balance)
+    const reserved = await client.withdrawal.groupBy({ by: ['status'], where: { userId: providerId, status: { in: [...RESERVING_WITHDRAWAL_STATUSES] }, ...withdrawalSourceWhere(WithdrawalSource.PROVIDER, true) }, _sum: { amount: true } });
     const sumOf = (statuses: readonly string[]) => round2(reserved.filter(r => statuses.includes(r.status)).reduce((sum, r) => sum + (r._sum.amount ?? 0), 0));
     const pendingWithdrawals = sumOf(IN_FLIGHT_WITHDRAWAL_STATUSES);
     const paidWithdrawals = sumOf(SPENT_WITHDRAWAL_STATUSES);

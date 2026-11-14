@@ -1,3 +1,4 @@
+import { sourceOfWithdrawal } from '../utils/withdrawal-source';
 import { NotificationCategory } from '@prisma/client';
 import { prisma } from '../config/db';
 import { logger } from '../config/logger';
@@ -41,10 +42,11 @@ export const marketerNotifications = {
 	/** The marketer's withdrawal changed state. Provider-earnings withdrawals are not marketer notifications and are skipped. */
 	async withdrawal(withdrawalId: string, event: MarketerWithdrawalEvent) {
 		await safely(`withdrawal ${event}`, async () => {
-			const w = await prisma.withdrawal.findUnique({ where: { id: withdrawalId }, select: { id: true, userId: true, amount: true, currency: true, rejectionReason: true } });
+			const w = await prisma.withdrawal.findUnique({ where: { id: withdrawalId }, select: { id: true, userId: true, amount: true, currency: true, rejectionReason: true, source: true } });
 			if (!w) return;
 			const owner = await prisma.user.findUnique({ where: { id: w.userId }, select: { accountType: true, roles: true, activeRole: true, affiliateProfile: { select: { id: true } } } });
-			if (!owner || !owner.affiliateProfile || isProviderUser(owner)) return;
+			// only a withdrawal made against the MARKETER ledger is a marketer notification (a user who is also a provider has two independent ledgers)
+			if (!owner || !owner.affiliateProfile || sourceOfWithdrawal(w, owner as never) !== 'MARKETER') return;
 			const amount = `${w.amount} ${w.currency === 'USD' ? '$' : w.currency}`;
 			const copy: Record<MarketerWithdrawalEvent, { title: string; message: string }> = {
 				REQUESTED: { title: 'تم استلام طلب السحب', message: `طلب سحب ${amount} قيد مراجعة الإدارة.` },
