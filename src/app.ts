@@ -1,3 +1,4 @@
+import { socketEventsFor } from './services/settings-notice-events';
 import { onSettingsNotice, startSettingsListener } from './services/settings-bus';
 import { broadcastPlatformState } from './services/platform-state';
 import adminOperationsRoutes, { publicContentRouter } from './routes/admin-operations.routes';
@@ -496,7 +497,7 @@ if (process.env.NODE_ENV !== 'test') {
 		// warm the settings cache so the maintenance / registration policies have a trusted value as early as possible (a failure is logged; the cold-boot policy covers the gap)
 		void systemSettingsService.prime();
 		// settings changed on ANY instance: drop this process's cache and push the public state to its open browsers
-		onSettingsNotice(async n => { systemSettingsService.invalidate(); if (!n.keys.length || n.keys.includes('taxonomy')) io.emit('taxonomy:changed', { revision: n.revision ?? n.at }); if (n.keys.includes('site_identity')) io.emit('identity:changed', { at: n.at }); await broadcastPlatformState(io); });
+		onSettingsNotice(async n => { systemSettingsService.invalidate(); for (const e of socketEventsFor(n)) io.emit(e.name, e.payload); await broadcastPlatformState(io); });
 		startSettingsListener();
 		startSiteIdentityCache(); // non-blocking: the replaced e-mail logo (if any) for the synchronous mail shell; a failure leaves the default
 	});

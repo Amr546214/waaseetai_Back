@@ -9,7 +9,7 @@ import { TOKEN_REGISTRY, TokenDef, TokenKey, TokenType, isTokenKey, tokenDefault
  * contain `url(`, `expression(`, `var(`, `calc(`, `@`, `;`, braces, comments, `\`, `<`, `>`, `!important` or a newline, and the generated CSS is safe to embed in a <style> element.
  */
 export const TOKEN_MAX_BYTES = 8 * 1024;
-export const tokenMaxBytes=(key:string)=>key.startsWith('tokens.palette.')?128*1024:key==='tokens.components'?64*1024:TOKEN_MAX_BYTES;
+export const tokenMaxBytes=(key:string)=>key.startsWith('tokens.palette.')?128*1024:(key==='tokens.components'||key==='tokens.typography')?64*1024:TOKEN_MAX_BYTES;
 export const TOKEN_MAX_VALUE_LENGTH = 200;
 export const TOKEN_JSON_MIME = 'application/json';
 
