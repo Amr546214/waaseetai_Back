@@ -1,3 +1,4 @@
+import { cmsCopySchema, type CmsCopy } from '../utils/cms-copy';
 import { markSettingsChanged } from './settings-revision';
 import { randomUUID } from 'node:crypto';
 import { AccountType, Prisma } from '@prisma/client';
@@ -11,7 +12,7 @@ export const contentTitles: Record<string,string> = { terms:'شروط الاست
 const audit = (adminId:string, entityId:string,eventType:string, details:Record<string,unknown>={}) => ({adminId,entity:'FINANCE' as const,entityId,eventType,title:'إدارة المحتوى والتواصل',summary:'تحديث موثق في نظام المحتوى والتواصل',details});
 export async function contentPages() {
  const [rows,settings] = await prisma.$transaction([prisma.adminContentPage.findMany(),prisma.platformSetting.findMany({where:{key:{in:['termsContent','privacyContent']}}})]);
- return Object.entries(contentTitles).map(([slug,title])=> rows.find(r=>r.slug===slug) ?? {slug,title,draft: String(settings.find(s=>s.key===`${slug}Content`)?.value || ''),published:null,publishedAt:null,updatedAt:null,version:0});
+ return Object.entries(contentTitles).map(([slug,title])=> rows.find(r=>r.slug===slug) ?? {slug,title,draft: String(settings.find(s=>s.key===`${slug}Content`)?.value || ''),published:null,draftCopy:null,publishedCopy:null,publishedAt:null,updatedAt:null,version:0});
 }
 export async function saveContent(actor:string,slug:string,input:{body:string;version:number;action:'DRAFT'|'PUBLISH'|'UNPUBLISH';reason:string}) {
  if(!contentTitles[slug]) throw new AppError('صفحة غير معروفة',404);
@@ -19,7 +20,7 @@ export async function saveContent(actor:string,slug:string,input:{body:string;ve
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`cms:${slug}`}))`;
   const old=await tx.adminContentPage.findUnique({where:{slug}});
   if((old?.version || 0)!==input.version) throw new AppError('تغيرت الصفحة من مدير آخر؛ أعد تحميلها قبل الحفظ',409);
-  const data={title:contentTitles[slug],draft:input.body,updatedById:actor,...(input.action==='PUBLISH'?{published:input.body,publishedAt:new Date()}:input.action==='UNPUBLISH'?{published:null,publishedAt:null}:{})};
+  const data={title:contentTitles[slug],draft:input.body,draftCopy:Prisma.DbNull,updatedById:actor,...(input.action==='PUBLISH'?{published:input.body,publishedCopy:Prisma.DbNull,publishedAt:new Date()}:input.action==='UNPUBLISH'?{published:null,publishedCopy:Prisma.DbNull,publishedAt:null}:{})};
   const saved=old?await tx.adminContentPage.update({where:{slug},data:{...data,version:{increment:1}}}):await tx.adminContentPage.create({data:{slug,...data}});
   if((slug==='terms'||slug==='privacy')&&input.action!=='DRAFT') {
    const key=`${slug}Content`,value=input.action==='PUBLISH'?input.body:'';
@@ -32,9 +33,26 @@ export async function saveContent(actor:string,slug:string,input:{body:string;ve
  systemSettingsService.invalidate();
  return row;
 }
+export async function publishPageCopy(actor: string, slug: string, input: { copy: CmsCopy; version: number }) {
+ if (!contentTitles[slug]) throw new AppError('صفحة غير معروفة',404);
+ const copy = cmsCopySchema.parse(input.copy);
+ const result = await prisma.$transaction(async tx => {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`cms:${slug}`}))`;
+  const old = await tx.adminContentPage.findUnique({where:{slug}});
+  if ((old?.version ?? 0) !== input.version) throw new AppError('تغيرت الصفحة من مدير آخر؛ أعد تحميلها قبل النشر.',409);
+  const data = {title:contentTitles[slug],draftCopy:copy as Prisma.InputJsonValue,publishedCopy:copy as Prisma.InputJsonValue,updatedById:actor,publishedAt:new Date()};
+  const row = old ? await tx.adminContentPage.update({where:{slug},data:{...data,version:{increment:1}}}) : await tx.adminContentPage.create({data:{slug,draft:'',...data}});
+  await adminAudit.recordTx(tx,audit(actor,slug,'CMS_COPY_PUBLISHED',{version:row.version,changedTexts:copy.edits.length}));
+  await markSettingsChanged(tx,[`content:${slug}`]);
+  return row;
+ });
+ systemSettingsService.invalidate();
+ return result;
+}
+
 export async function publishedContent(slug:string) {
  if(!contentTitles[slug]) throw new AppError('صفحة غير معروفة',404);
- return prisma.adminContentPage.findUnique({where:{slug},select:{slug:true,title:true,published:true,publishedAt:true,version:true}});
+ return prisma.adminContentPage.findUnique({where:{slug},select:{slug:true,title:true,published:true,publishedCopy:true,publishedAt:true,version:true}});
 }
 export const audiences = ['ALL','CLIENT','PROVIDER','MARKETER','ADMIN'] as const;
 export function recipientWhere(audience:string):Prisma.UserWhereInput {
@@ -59,6 +77,32 @@ export async function broadcastList() {
  const counts = await prisma.adminBroadcastDelivery.groupBy({ by: ['broadcastId','emailStatus'], where: { broadcastId: { in: rows.map(r=>r.id) } }, _count: true });
  return rows.map(row=>({ ...row, emailCounts: Object.fromEntries(counts.filter(c=>c.broadcastId===row.id).map(c=>[c.emailStatus,c._count])) }));
 }
+/** One Publish action: snapshot the audience and enqueue delivery atomically. Retries reuse the request key. */
+export async function publishBroadcast(actor: string, input: {requestKey:string;title:string;message:string;audience:string}) {
+ const caps = await broadcastCapabilities();
+ if (!caps.enabled) throw new AppError('إرسال الإعلانات متوقف من إعدادات النظام.',403);
+ return prisma.$transaction(async tx => {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`broadcast-key:${input.requestKey}`}))`;
+  const old = await tx.adminBroadcast.findUnique({where:{requestKey:input.requestKey}});
+  if (old) {
+   if (old.createdById!==actor||old.title!==input.title||old.message!==input.message||old.audience!==input.audience) throw new AppError('مفتاح النشر مستخدم لرسالة مختلفة.',409);
+   if (old.status==='CANCELLED') throw new AppError('هذا الإعلان ملغى؛ ابدأ إعلانًا جديدًا.',409);
+   return old;
+  }
+  const users = await tx.user.findMany({where:recipientWhere(input.audience),select:{id:true}});
+  if (!users.length) throw new AppError('لا يوجد مستخدمون نشطون في الفئة المختارة.',400);
+  const row = await tx.adminBroadcast.create({data:{...input,createdById:actor,status:'SENDING',recipientCount:users.length,emailRequested:caps.emailEnabled,snapshotAt:new Date()}});
+  for(let i=0;i<users.length;i+=500) await tx.adminBroadcastDelivery.createMany({data:users.slice(i,i+500).map(u=>({broadcastId:row.id,userId:u.id,notificationId:randomUUID(),emailStatus:caps.emailEnabled?'PENDING':'SKIPPED'}))});
+  await adminAudit.recordTx(tx,audit(actor,row.id,'BROADCAST_PUBLISHED',{recipients:users.length,emailRequested:caps.emailEnabled}));
+  return row;
+ },{timeout:30000,isolationLevel:'ReadCommitted'});
+}
+
+export async function publishSavedBroadcast(actor:string,id:string,version:number) {
+ const preview = await previewBroadcast(id);
+ return sendBroadcast(actor,id,version,preview.recipients,false,true);
+}
+
 export async function draftBroadcast(actor:string,b:{requestKey:string;title:string;message:string;audience:string;emailRequested?:boolean}) {
  return prisma.$transaction(async tx=>{
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`broadcast-key:${b.requestKey}`}))`;
@@ -73,22 +117,22 @@ export async function previewBroadcast(id:string) {
  const b=await prisma.adminBroadcast.findUniqueOrThrow({where:{id}});
  return {id,version:b.version,recipients:await prisma.user.count({where:recipientWhere(b.audience)}),channel:b.emailRequested?'IN_APP_AND_EMAIL':'IN_APP',audience:b.audience,capabilities:await broadcastCapabilities()};
 }
-export async function sendBroadcast(actor:string,id:string,version:number,expectedCount:number,cancel=false) {
+export async function sendBroadcast(actor:string,id:string,version:number,expectedCount:number,cancel=false,automaticEmail=false) {
  return prisma.$transaction(async tx=>{
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`broadcast:${id}`}))`;
-  const b=await tx.adminBroadcast.findUnique({where:{id}});if(!b)throw new AppError('الرسالة غير موجودة',404);
+  let b=await tx.adminBroadcast.findUnique({where:{id}});if(!b)throw new AppError('الرسالة غير موجودة',404);
   if(cancel&&b.status==='CANCELLED')return b;
   if(!cancel&&b.status!=='DRAFT') {if(b.status==='CANCELLED')throw new AppError('الرسالة ملغاة',409);return b;}
   if(b.version!==version)throw new AppError('تغيرت الرسالة؛ أعد المعاينة',409);
   if(cancel&&b.status==='COMPLETED')throw new AppError('اكتمل الإرسال ولا يمكن سحب الإشعارات',409);
   let count=b.recipientCount;
   if(!cancel) {
-   await assertBroadcastEnabled(b.emailRequested);
+   if(automaticEmail){const caps=await broadcastCapabilities();if(!caps.enabled)throw new AppError('إرسال الإعلانات متوقف من إعدادات النظام.',403);b=await tx.adminBroadcast.update({where:{id},data:{emailRequested:caps.emailEnabled}});}else await assertBroadcastEnabled(b.emailRequested);
    // Freeze the actual audience at confirmation. No notification is sent by preview or drafting.
    const users=await tx.user.findMany({where:recipientWhere(b.audience),select:{id:true}});count=users.length;
    if(count!==expectedCount)throw new AppError('تغير عدد المستلمين؛ أعد المعاينة والتأكيد',409);
    if(!count)throw new AppError('لا يوجد مستلمون مطابقون',400);
-   for(let i=0;i<users.length;i+=500)await tx.adminBroadcastDelivery.createMany({data:users.slice(i,i+500).map(u=>({broadcastId:id,userId:u.id,notificationId:randomUUID(),emailStatus:b.emailRequested?'PENDING':'SKIPPED'}))});
+   for(let i=0;i<users.length;i+=500)await tx.adminBroadcastDelivery.createMany({data:users.slice(i,i+500).map(u=>({broadcastId:id,userId:u.id,notificationId:randomUUID(),emailStatus:b!.emailRequested?'PENDING':'SKIPPED'}))});
   }
   if(cancel) await tx.adminBroadcastDelivery.updateMany({where:{broadcastId:id,emailStatus:{in:['PENDING','RETRY']}},data:{emailStatus:'CANCELLED'}});
   const row=await tx.adminBroadcast.update({where:{id},data:{status:cancel?'CANCELLED':'SENDING',recipientCount:count,snapshotAt:cancel?b.snapshotAt:new Date(),version:{increment:1}}});
@@ -96,9 +140,9 @@ export async function sendBroadcast(actor:string,id:string,version:number,expect
  },{timeout:30000,isolationLevel:'RepeatableRead'});
 }
 /** At-least-once socket delivery, exactly one durable inbox notification per recipient. Safe across restarts and replicas. */
-export async function processBroadcastBatch() {
+export async function processBroadcastBatch(broadcastId?: string) {
  if (!(await broadcastCapabilities()).enabled) return;
- const jobs=await prisma.adminBroadcast.findMany({where:{status:'SENDING',deliveries:{some:{status:'PENDING'}}},orderBy:{createdAt:'asc'},take:5,select:{id:true}});
+ const jobs=await prisma.adminBroadcast.findMany({where:{...(broadcastId?{id:broadcastId}:{}),status:'SENDING',deliveries:{some:{status:'PENDING'}}},orderBy:{createdAt:'asc'},take:5,select:{id:true}});
  for(const job of jobs) {
   const emitted=await prisma.$transaction(async tx=>{
    const locked=await tx.$queryRaw<Array<{locked:boolean}>>`SELECT pg_try_advisory_xact_lock(hashtext(${`broadcast:${job.id}`})) AS locked`;

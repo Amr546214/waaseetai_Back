@@ -1,3 +1,5 @@
+import { cmsCopySchema } from '../utils/cms-copy';
+import { logger } from '../config/logger';
 import { devResetCapability, previewDevReset, executeDevReset } from '../services/dev-data-reset.service';
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
@@ -6,7 +8,7 @@ import { requireAdminMember, requirePermission, requireSuperAdmin } from '../mid
 import { AppError } from '../utils/app-error';
 import { operatingFinance, expenseCategories } from '../services/admin-operating-finance.service';
 import { listCashback, processCashback } from '../services/cashback-review.service';
-import { audiences, contentPages, saveContent, publishedContent, broadcastCapabilities, broadcastList, draftBroadcast, previewBroadcast, sendBroadcast } from '../services/admin-communications.service';
+import { audiences, contentPages, saveContent, publishPageCopy, publishBroadcast, publishSavedBroadcast, processBroadcastBatch, publishedContent, broadcastCapabilities, broadcastList, draftBroadcast, previewBroadcast, sendBroadcast } from '../services/admin-communications.service';
 const router=Router();router.use(authenticate,requireActiveUser,requireAdminMember);
 const wrap=(fn:(r:Request)=>Promise<unknown>)=>async(r:Request,s:Response,n:NextFunction)=>{try{s.json({success:true,data:await fn(r)});}catch(e){if(e instanceof z.ZodError)n(new AppError(e.issues.map(i=>`${i.path.join('.')}: ${i.message}`).join('؛ '),400));else n(e);}};
 const version=z.number().int().min(0),text=(n:number)=>z.string().trim().min(1).max(n),key=z.string().uuid();
@@ -22,10 +24,14 @@ router.get('/upcoming',requirePermission('finance.read'),wrap(r=>operatingFinanc
 router.get('/cashback',requirePermission('finance.read'),wrap(r=>listCashback(page(r))));
 router.post('/cashback/:id/score',requireSuperAdmin,wrap(r=>{const b=z.object({version,score:z.number().finite().min(0).max(100),note:text(500)}).parse(r.body);return processCashback(String(r.params.id),{id:r.user!.id,...b});}));
 router.get('/content',requireSuperAdmin,wrap(()=>contentPages()));
+router.put('/content/:slug/copy',requireSuperAdmin,wrap(r=>publishPageCopy(r.user!.id,String(r.params.slug),z.object({version,copy:cmsCopySchema}).strict().parse(r.body))));
 router.put('/content/:slug',requireSuperAdmin,wrap(r=>saveContent(r.user!.id,String(r.params.slug),z.object({body:z.string().max(60000),version,action:z.enum(['DRAFT','PUBLISH','UNPUBLISH']),reason:text(500)}).refine(b=>b.action==='UNPUBLISH'||!!b.body.trim(),'المحتوى مطلوب').parse(r.body))));
 router.get('/broadcast/capabilities',requireSuperAdmin,wrap(()=>broadcastCapabilities()));
 router.get('/broadcast',requireSuperAdmin,wrap(()=>broadcastList()));
 router.post('/broadcast',requireSuperAdmin,wrap(r=>draftBroadcast(r.user!.id,z.object({requestKey:key,title:text(150),message:text(4000),audience:z.enum(audiences),emailRequested:z.boolean().default(true)}).parse(r.body))));
+const beginDelivery = (id:string) => { void processBroadcastBatch(id).catch(e=>logger.error(`[broadcast] queued delivery ${id} failed: ${e instanceof Error?e.message:'unknown'}`)); };
+router.post('/broadcast/publish',requireSuperAdmin,wrap(async r=>{const row=await publishBroadcast(r.user!.id,z.object({requestKey:key,title:text(150),message:text(4000),audience:z.enum(audiences)}).strict().parse(r.body));beginDelivery(row.id);return row;}));
+router.post('/broadcast/:id/publish',requireSuperAdmin,wrap(async r=>{const b=z.object({version}).strict().parse(r.body);const row=await publishSavedBroadcast(r.user!.id,String(r.params.id),b.version);beginDelivery(row.id);return row;}));
 router.get('/broadcast/:id/preview',requireSuperAdmin,wrap(r=>previewBroadcast(String(r.params.id))));
 router.post('/broadcast/:id/send',requireSuperAdmin,wrap(r=>{const b=z.object({version,recipients:z.number().int().nonnegative(),confirm:z.literal(true)}).parse(r.body);return sendBroadcast(r.user!.id,String(r.params.id),b.version,b.recipients);}));
 router.post('/broadcast/:id/cancel',requireSuperAdmin,wrap(r=>{const b=z.object({version,confirm:z.literal(true)}).parse(r.body);return sendBroadcast(r.user!.id,String(r.params.id),b.version,0,true);}));

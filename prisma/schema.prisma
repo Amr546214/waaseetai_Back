@@ -3592,6 +3592,8 @@ model AdminExpense {
 }
 
 model AdminContentPage {
+  draftCopy Json?
+  publishedCopy Json?
   slug        String    @id @db.VarChar(60)
   title       String    @db.VarChar(160)
   draft       String    @db.Text
