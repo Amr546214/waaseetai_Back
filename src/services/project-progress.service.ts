@@ -21,7 +21,7 @@ import { uploadMulterFile } from '../utils/cloudinary-storage';
 import { ACTIVE_DISPUTE_STATUSES, PROJECT_FROZEN_MESSAGE, assertProjectNotFrozen, freezeStateOf, getActiveDisputeForProject, countActiveDisputes, lockProjectForFreezeCheck } from './dispute-freeze.service';
 import { deliveryCompletedProject, adminSettlementFor, adminSettledView, stageDisplayStatus, SETTLED_LABEL_AR, SETTLED_STAGE_LABEL_AR } from './settlement-state.service';
 import { adminAudit } from './admin-audit.service';
-import { ensureProjectRoom } from './project-conversation.service';
+import { ensureProjectRoom, postRevisionRequestMessage } from './project-conversation.service';
 import { computeLifecycle, evaluateAction, assertStageActionAllowed, settlementDistributionOf } from './project-lifecycle.service';
 
 const PROJECT_COMPLETION_POINTS = 50;
@@ -238,7 +238,7 @@ export class ProjectProgressService {
     const escrow = escrowFacts(contract.project.escrow);
     // THE lifecycle (single source of truth, see project-lifecycle.service): state, closure, money and per-action eligibility with specific reasons.
     const closureKind = (await (prisma as any).engagementClosure?.findUnique?.({ where: { projectId: contract.projectId }, select: { kind: true } }))?.kind ?? null;
-    const lifecycleInput = { closureKind, viewer: { role: role as 'client' | 'provider', isOwner: true }, contractStatus: contract.status, contractPrice: contract.price, escrow: contract.project.escrow, stages: persisted, activeDisputes: { count: activeDisputeCount, latestId: openDispute?.id ?? null, latestStatus: openDispute?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId, adminAudit) : null };
+    const lifecycleInput = { cancellationAgreed: cancellationFrozen, closureKind, viewer: { role: role as 'client' | 'provider', isOwner: true }, contractStatus: contract.status, contractPrice: contract.price, escrow: contract.project.escrow, stages: persisted, activeDisputes: { count: activeDisputeCount, latestId: openDispute?.id ?? null, latestStatus: openDispute?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId, adminAudit) : null };
     const lifecycle = computeLifecycle(lifecycleInput);
     const lifecycleStage = new Map(lifecycle.stages.map(s => [s.stageId, s]));
     // Contract-level approval gate (any role's view): is approving a delivered stage possible right now, and if not, why.
@@ -289,7 +289,7 @@ export class ProjectProgressService {
     const messages = [...(conversation?.messages || [])].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : 1)).map(message => ({
       id: message.id, type: message.type, isEvent: message.type === 'SYSTEM', eventKey: (message as any).eventKey ?? null, senderName: message.senderId === userId ? 'أنت' : `${message.sender.firstName || otherName} ${message.sender.lastName || ''}`.trim(),
       senderInitial: (message.sender.firstName || otherName).charAt(0), senderRole: message.senderId === contract.providerId ? 'provider' : 'client',
-      isMe: message.senderId === userId, time: message.createdAt, content: message.content || message.fileName || 'مرفق', fileUrl: message.fileUrl, fileName: message.fileName
+      isMe: message.senderId === userId, time: message.createdAt, content: message.content || message.fileName || 'مرفق', context: (message as any).context ?? null, fileUrl: message.fileUrl, fileName: message.fileName
     }));
     const progress = Math.min(100, Math.round(persisted.filter(s => s.status === ProjectStageStatus.APPROVED).reduce((sum, s) => sum + s.percentage, 0)));
     const elapsed = Math.max(0, Math.floor((Date.now() - (contract.signedAt || contract.createdAt).getTime()) / 86400000));
@@ -731,6 +731,8 @@ export class ProjectProgressService {
       };
     });
 
+    // the revision request is also a message of the project room: the provider answers it THERE and the answer is quoted under it
+    if (decision === 'revision') await postRevisionRequestMessage({ contractId: contract.id, clientId, stageId: stage.id, stageTitle: stage.title, stageNumber: stage.stepOrder, deliveryId: delivery.id, note: note!.trim() });
     await clientNotifications.deliverStored([result.clientNotificationId]);
     await marketerNotifications.commissionsApproved(result.commissionNotices);
     await notifyCashbackCredited(result.cashbackNotice);

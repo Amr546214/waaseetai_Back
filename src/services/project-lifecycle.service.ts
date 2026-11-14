@@ -3,6 +3,7 @@ import { CLOSURE_LABEL_AR } from './engagement-closure.service';
 import { AppError } from '../utils/app-error';
 import { adminAudit } from './admin-audit.service';
 import { ACTIVE_DISPUTE_STATUSES, PROJECT_FROZEN_CODE, PROJECT_FROZEN_MESSAGE, countActiveDisputes, getActiveDisputeForProject } from './dispute-freeze.service';
+import { hasAgreedCancellation, CANCELLATION_FROZEN_MESSAGE } from './cancellation-freeze';
 import { AdminSettlement, SETTLED_DISPUTE_WHERE, SETTLED_LABEL_AR, SETTLED_STAGE_LABEL_AR, STAGE_CLOSED_BY_SETTLEMENT, STAGE_STATUSES_CLOSED_BY_SETTLEMENT, adminSettlementFor } from './settlement-state.service';
 
 /**
@@ -33,7 +34,7 @@ export interface Eligibility {
 }
 export type BlockCode =
   | 'NOT_OWNER' | 'WRONG_ROLE' | 'CLOSED_BY_SETTLEMENT' | 'CONTRACT_COMPLETED' | 'CONTRACT_CANCELLED' | 'CONTRACT_NOT_STARTED' | 'CONTRACT_ENDED'
-  | 'ACTIVE_DISPUTE_FREEZE' | 'STAGE_NOT_STARTED' | 'STAGE_NOT_DELIVERED' | 'STAGE_ALREADY_DECIDED' | 'STAGE_AWAITING_REVIEW' | 'STAGE_NOT_OPEN' | 'NO_STAGES' | 'NO_STAGE_AVAILABLE';
+  | 'ACTIVE_DISPUTE_FREEZE' | 'CONTRACT_CANCELLATION_AGREED' | 'STAGE_NOT_STARTED' | 'STAGE_NOT_DELIVERED' | 'STAGE_ALREADY_DECIDED' | 'STAGE_AWAITING_REVIEW' | 'STAGE_NOT_OPEN' | 'NO_STAGES' | 'NO_STAGE_AVAILABLE';
 
 export type Eligibilities = Record<ActionName, Eligibility>;
 
@@ -59,6 +60,8 @@ export interface LifecycleInput {
   settlementDistribution?: SettlementDistribution | null;
   /** the stored EngagementClosure.kind of a NEW decision (ADMIN_RELEASE | ADMIN_REFUND | ADMIN_CANCEL | CONSENSUAL_CANCEL), or null */
   closureKind?: string | null;
+  /** both parties agreed to cancel the contract by consent and the settlement is still pending: no new delivery and no new approval (server-enforced) */
+  cancellationAgreed?: boolean;
 }
 
 // ---------------------------------------------------------------------------------------------------------- wording
@@ -81,6 +84,8 @@ export const STAGE_AWAITING_REVIEW_AR = 'التسليم الحالي بانتظ�
 export const STAGE_NOT_OPEN_AR = 'هذه المرحلة غير متاحة حاليًا';
 export const NO_STAGES_AR = 'لم تُجهَّز مراحل المشروع بعد';
 export const NO_STAGE_AVAILABLE_AR = 'لا توجد مرحلة متاحة لهذا الإجراء حاليًا';
+export const STAGE_CANCELLED_LABEL_AR = 'أُغلقت بإلغاء العقد';
+export const CANCELLATION_AGREED_DELIVERY_AR = 'اتفق الطرفان على إلغاء العقد بالتراضي: لا يمكن رفع تسليم جديد بانتظار تسوية الإدارة';
 export const AMEND_FROZEN_AR = 'لا يمكن تعديل العقد أثناء وجود نزاع مفتوح على المشروع';
 const WRONG_ROLE_AR: Record<ActionName, string> = {
   upload: 'رفع التسليم من صلاحية مقدم الخدمة فقط', submit: 'إرسال التسليم من صلاحية مقدم الخدمة فقط',
@@ -188,6 +193,8 @@ function contractBlock(input: LifecycleInput, action: ActionName): Eligibility |
   if (contractStatus === 'CANCELLED') return no('CONTRACT_CANCELLED', CONTRACT_CANCELLED_AR);
   if (CONTRACT_NOT_STARTED_AR[contractStatus]) return no('CONTRACT_NOT_STARTED', notStartedReason(contractStatus, viewer.role));
   if (contractStatus !== 'ACTIVE') return no('CONTRACT_ENDED', contractStatus === 'DISPUTED' && input.activeDisputes.count > 0 ? PROJECT_FROZEN_MESSAGE : CONTRACT_ENDED_AR);
+  // A mutual cancellation both sides agreed to: the contract is as good as stopped. Nothing new is delivered and nothing new is approved / paid (423, like the dispute freeze).
+  if (input.cancellationAgreed && (providerAction || action === 'approve')) return no('CONTRACT_CANCELLATION_AGREED', providerAction ? CANCELLATION_AGREED_DELIVERY_AR : CANCELLATION_FROZEN_MESSAGE, 423);
   return null;
 }
 
@@ -241,13 +248,15 @@ export function computeLifecycle(input: LifecycleInput): ProjectLifecycle {
   const ordered = [...stages].sort((a, b) => a.stepOrder - b.stepOrder);
   const heldStageAmount = !!escrow && escrow.status === 'HELD' && !settled;
   const stageViews: StageLifecycle[] = ordered.map(s => {
-    const closed = settled && STAGE_STATUSES_CLOSED_BY_SETTLEMENT.includes(s.status);
+    // an unreleased stage is closed when a dispute settled the project OR the contract was cancelled (mutual cancellation settled by the administration, admin cancel): nothing is left to review, deliver or pay
+    const cancelledOnly = contractStatus === 'CANCELLED' && !settled;
+    const closed = (settled || contractStatus === 'CANCELLED') && STAGE_STATUSES_CLOSED_BY_SETTLEMENT.includes(s.status);
     const awaiting = stageHasPendingDelivery(s);
     const amountState: StageLifecycle['amountState'] = s.status === 'APPROVED' ? 'RELEASED' : closed ? 'HISTORICAL' : heldStageAmount && contractStatus === 'ACTIVE' ? 'HELD' : 'NONE';
     return {
       stageId: s.id, stepOrder: s.stepOrder, storedStatus: s.status,
       displayStatus: closed ? STAGE_CLOSED_BY_SETTLEMENT : s.status,
-      displayStatusLabel: closed ? SETTLED_STAGE_LABEL_AR : (STAGE_LABEL_AR[s.status] ?? s.status),
+      displayStatusLabel: closed ? (cancelledOnly ? STAGE_CANCELLED_LABEL_AR : SETTLED_STAGE_LABEL_AR) : (STAGE_LABEL_AR[s.status] ?? s.status),
       closedBySettlement: closed, awaitingClientReview: awaiting && !closed, hasDelivery: s.deliveries.length > 0,
       decided: s.status === 'APPROVED', decision: s.status === 'APPROVED' ? { status: 'APPROVED', decidedAt: s.approvedAt ?? null } : null,
       amount: s.amount, amountState,
@@ -303,7 +312,7 @@ export function stageEligibility(lc: ProjectLifecycle, stageId: string): Eligibi
 /** Throws the specific error for a blocked action: 403 only for non-ownership / wrong role, 423 for the dispute freeze, 409 for everything else. */
 export function assertAllowed(e: Eligibility): void {
   if (e.allowed) return;
-  throw new AppError(e.reason ?? NOT_OWNER_AR, e.httpStatus ?? 409, e.code ? [{ code: e.code === 'ACTIVE_DISPUTE_FREEZE' ? PROJECT_FROZEN_CODE : e.code }] : undefined);
+  throw new AppError(e.reason ?? NOT_OWNER_AR, e.httpStatus ?? 409, e.code ? [{ code: e.code === 'ACTIVE_DISPUTE_FREEZE' ? PROJECT_FROZEN_CODE : e.code }] : undefined, e.code === 'CONTRACT_CANCELLATION_AGREED' ? e.code : undefined); // the agreed-cancellation freeze keeps its top-level code (the approve guard has always answered with it)
 }
 
 // --------------------------------------------------------------------------------------------------------- list summary
@@ -341,10 +350,11 @@ export async function settlementDistributionOf(disputeId: string, audit: Pick<ty
 }
 
 /** Gathers the dispute-side inputs of one project: active disputes + settlement (+ its distribution when settled). */
-export async function loadDisputeFacts(projectId: string, db: any = prisma): Promise<Pick<LifecycleInput, 'activeDisputes' | 'settlement' | 'settlementDistribution' | 'closureKind'>> {
+export async function loadDisputeFacts(projectId: string, db: any = prisma): Promise<Pick<LifecycleInput, 'activeDisputes' | 'settlement' | 'settlementDistribution' | 'closureKind' | 'cancellationAgreed'>> {
   const [count, latest, settlement] = await Promise.all([countActiveDisputes(projectId, db), getActiveDisputeForProject(projectId, db), adminSettlementFor({ projectId }, db)]);
   const closure = db.engagementClosure?.findUnique ? await db.engagementClosure.findUnique({ where: { projectId }, select: { kind: true } }) : null;
-  return { closureKind: closure?.kind ?? null, activeDisputes: { count, latestId: latest?.id ?? null, latestStatus: latest?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId) : null };
+  const cancellationAgreed = await hasAgreedCancellation({ projectId }, db);
+  return { cancellationAgreed, closureKind: closure?.kind ?? null, activeDisputes: { count, latestId: latest?.id ?? null, latestStatus: latest?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId) : null };
 }
 
 /**
