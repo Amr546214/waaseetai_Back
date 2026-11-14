@@ -302,6 +302,8 @@ import adminSystemSettingsRoutes from './routes/admin-system-settings.routes';
 import adminInfrastructureRoutes from './routes/admin-infrastructure.routes';
 import adminFeePolicyRoutes from './routes/admin-fee-policy.routes';
 import adminSiteIdentityRoutes from './routes/admin-site-identity.routes';
+import adminLevelIdentityRoutes from './routes/admin-level-identity.routes';
+import { levelIdentityService, LEVEL_IDENTITY_KEY } from './services/level-identity.service';
 import publicSiteIdentityRoutes from './routes/public-site-identity.routes';
 import { systemSettingsService } from './services/system-settings.service';
 import { startSiteIdentityCache } from './services/site-identity-cache';
@@ -355,6 +357,8 @@ mountAppRoute('/api/admin/fee-policy', adminFeePolicyRoutes);
 mountAppRoute('/admin/fee-policy', adminFeePolicyRoutes);
 mountAppRoute('/api/admin/site-identity', adminSiteIdentityRoutes);
 mountAppRoute('/admin/site-identity', adminSiteIdentityRoutes);
+mountAppRoute('/api/admin/level-identity', adminLevelIdentityRoutes);
+mountAppRoute('/admin/level-identity', adminLevelIdentityRoutes);
 mountAppRoute('/api/admin-invite', adminInvitePublicRouter);
 mountAppRoute('/admin-invite', adminInvitePublicRouter);
 mountAppRoute('/api/admin/users', adminUsersRouter);
@@ -496,8 +500,9 @@ if (process.env.NODE_ENV !== 'test') {
         startAdminOperationsWorker();
 		// warm the settings cache so the maintenance / registration policies have a trusted value as early as possible (a failure is logged; the cold-boot policy covers the gap)
 		void systemSettingsService.prime();
+		void levelIdentityService.refresh(); // the published level names / colours (a failure keeps the workbook defaults)
 		// settings changed on ANY instance: drop this process's cache and push the public state to its open browsers
-		onSettingsNotice(async n => { systemSettingsService.invalidate(); for (const e of socketEventsFor(n)) io.emit(e.name, e.payload); await broadcastPlatformState(io); });
+		onSettingsNotice(async n => { systemSettingsService.invalidate(); if (!n.keys.length || n.keys.includes(LEVEL_IDENTITY_KEY)) await levelIdentityService.refresh(); for (const e of socketEventsFor(n)) io.emit(e.name, e.payload); await broadcastPlatformState(io); });
 		startSettingsListener();
 		startSiteIdentityCache(); // non-blocking: the replaced e-mail logo (if any) for the synchronous mail shell; a failure leaves the default
 	});

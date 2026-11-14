@@ -89,9 +89,33 @@ function hslToHex(h: number, s: number, l: number): string {
   return `#${f(0)}${f(8)}${f(4)}`.toUpperCase();
 }
 
-export function levelColor(role: LevelRole, level: number, theme: 'dark' | 'light' = 'dark'): string {
+/** the brand-formula colour, ignoring any published override (what "back to default" restores) */
+export function defaultLevelColor(role: LevelRole, level: number, theme: 'dark' | 'light' = 'dark'): string {
   const station = levelStation(level);
   return hslToHex(LEVEL_STATION_HUES[role][station - 1], LEVEL_SATURATION[role], LEVEL_LIGHTNESS[theme][station - 1]);
+}
+
+// ── owner-editable identity (name + colour per role/level) ──
+// The workbook names and the brand formula stay the DEFAULT; a published override (stored by services/level-identity.service.ts, key `levelIdentity`) replaces only the name and / or the colour
+// of one level. The overrides live in memory here so every reader of this file (the public /levels API, levelInfo, the dashboards, e-mails) sees the same value; `applyLevelOverrides`
+// writes the names into the level objects themselves, so code that holds a level object also follows. Percentages and thresholds are NEVER touched by an override.
+export interface LevelOverride { name?: string; dark?: string; light?: string }
+export type LevelOverrides = Partial<Record<LevelRole, Record<string, LevelOverride>>>;
+const DEFAULT_NAMES: Readonly<Record<LevelRole, readonly string[]>> = {
+  PROVIDER: PROVIDER_LEVELS.map(d => d.name), CLIENT: CLIENT_LEVELS.map(d => d.name), MARKETER: MARKETER_LEVELS.map(d => d.name),
+};
+let overrides: LevelOverrides = {};
+export const defaultLevelName = (role: LevelRole, level: number): string => DEFAULT_NAMES[role][clampLevel(level) - 1];
+export const levelOverrideOf = (role: LevelRole, level: number): LevelOverride => overrides[role]?.[String(clampLevel(level))] ?? {};
+export function applyLevelOverrides(next: LevelOverrides): void {
+  overrides = JSON.parse(JSON.stringify(next ?? {})) as LevelOverrides;
+  for (const role of Object.keys(LEVELS_BY_ROLE) as LevelRole[]) {
+    LEVELS_BY_ROLE[role].forEach((def, i) => { (def as { name: string }).name = overrides[role]?.[String(i + 1)]?.name ?? DEFAULT_NAMES[role][i]; });
+  }
+}
+
+export function levelColor(role: LevelRole, level: number, theme: 'dark' | 'light' = 'dark'): string {
+  return levelOverrideOf(role, level)[theme] ?? defaultLevelColor(role, level, theme);
 }
 
 export function clampLevel(level: number): number {

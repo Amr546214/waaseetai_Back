@@ -10,8 +10,11 @@ test('a taxonomy notice does not announce identity, and an unrelated key announc
 	assert.deepEqual(socketEventsFor({ keys: ['maintenanceMode'], at: 5 }), []);
 });
 test('the resync notice (empty keys, sent after the listener reconnected) announces BOTH, so changes missed during the outage are re-read', () => {
-	assert.deepEqual(socketEventsFor({ keys: [], at: 9 }).map(e => e.name), ['taxonomy:changed', 'identity:changed']);
+	assert.deepEqual(socketEventsFor({ keys: [], at: 9 }).map(e => e.name), ['taxonomy:changed', 'identity:changed', 'levels:changed']);
 });
 test('payloads never carry keys, values or actors', () => {
 	for (const e of socketEventsFor({ keys: ['site_identity', 'taxonomy'], revision: 1, at: 2 })) assert.deepEqual(Object.keys(e.payload).every(k => k === 'at' || k === 'revision'), true);
+});
+test('a level identity notice announces levels:changed only', () => {
+	assert.deepEqual(socketEventsFor({ keys: ['levelIdentity'], at: 7 }), [{ name: 'levels:changed', payload: { at: 7 } }]);
 });
