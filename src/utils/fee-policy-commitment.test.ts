@@ -19,7 +19,6 @@ test('policy readers: only creation points, display, the marketer ladder of the 
 		'services/affiliate-commission.service.ts',         // byId(escrow.feePolicyId): the ladder of the version the escrow was locked under
 		'services/cart-checkout.service.ts',                // escrow creation
 		'services/client-requests.service.ts',              // escrow creation (sign + fund are ONE transaction)
-		'services/marketer-wallet.service.ts',              // display of the current floor
 		'services/paypal-finance.service.ts',               // deposit quote (creation)
 		'services/withdrawal.service.ts',                   // withdrawal request (creation)
 	].sort());

@@ -1,3 +1,4 @@
+import { MIN_WITHDRAWAL_USD } from '../config/withdrawal-limits';
 import { randomUUID } from 'crypto';
 import { feePolicyService } from './fee-policy.service';
 import { Prisma, WithdrawalStatus, CommissionStatus, AccountType, UserRole } from '@prisma/client';
@@ -135,10 +136,10 @@ export class WithdrawalService {
     // PayPal is the only withdrawal method: nothing else is ever created (defence in depth behind the DTO).
     if (input.method !== 'paypal') throw new AppError(PAYPAL_ONLY_MESSAGE, 400);
 
-    // The minimum payout of the fee policy in force now (0 = no minimum, which is how the platform behaved before policies were managed). The policy id and the minimum applied are stored on the request.
+    // ONE minimum for everyone (10 USD, config/withdrawal-limits.ts) and no maximum other than the withdrawable balance (checked below). The fee policy id in force and the minimum applied are stored on the request.
     const policy = await feePolicyService.active();
-    const providerMinimum = policy.payload.minProviderPayout;
-    if (providerMinimum > 0 && input.amount < providerMinimum) throw new AppError(`الحد الأدنى لطلب السحب ${providerMinimum}`, 400);
+    const providerMinimum = MIN_WITHDRAWAL_USD;
+    if (input.amount < providerMinimum) throw new AppError(`الحد الأدنى لطلب السحب ${providerMinimum} $`, 400);
 
     // Generated ONCE per call, outside the retry loop — every retry attempt
     // of THIS creation call reuses the identical id/referenceId pair. Only
@@ -260,15 +261,11 @@ export class WithdrawalService {
     // PayPal is the only payout destination: the saved PayPal email is snapshotted on the withdrawal (never a bank account).
     const paypalEmail = await readAffiliatePaypalEmail(userId, prisma);
     if (!paypalEmail) throw new AppError(MARKETER_PAYPAL_REQUIRED_MESSAGE, 400);
-    // P-LG-012 states a 300 withdrawal-minimum floor. This respects any
-    // existing per-affiliate custom minimumPayoutAmount value (which may be
-    // set higher than 300) while enforcing 300 as an absolute floor for
-    // everyone — touches no historical AffiliateProfile data, only this
-    // validation check.
+    // ONE minimum for every role: 10 USD (config/withdrawal-limits.ts). The stored per-affiliate minimumPayoutAmount (300 by default) and the fee policy's minMarketerPayout no longer apply (data untouched).
     const marketerPolicy = await feePolicyService.active();
-    const effectiveMinimumPayout = Math.max(affiliate.minimumPayoutAmount, marketerPolicy.payload.minMarketerPayout); // the floor comes from the fee policy in force (baseline 300)
+    const effectiveMinimumPayout = MIN_WITHDRAWAL_USD;
     if (input.amount < effectiveMinimumPayout) {
-      throw new AppError(`الحد الأدنى لطلب السحب ${effectiveMinimumPayout}`, 400); // numeric limit shown without a currency symbol: the USD value is pending the owner
+      throw new AppError(`الحد الأدنى لطلب السحب ${effectiveMinimumPayout} $`, 400);
     }
 
     const withdrawalId = randomUUID();

@@ -1,3 +1,4 @@
+import { MIN_WITHDRAWAL_USD } from '../config/withdrawal-limits';
 import { LogCategory, LogStatus, Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '../config/db';
 import { logger } from '../config/logger';
@@ -11,7 +12,7 @@ export const FEE_POLICY_MIN_LEAD_MINUTES = 15;
 export const FEE_POLICY_MAX_LEAD_DAYS = 366;
 export const FEE_POLICY_CACHE_MS = 5000;
 /** Fields that are shown but have NO financial effect today (no cashback credit exists; no code deducts the marketer withdrawal fee): they cannot be changed until their path is built and tested, so a saved number never promises something that is not applied. */
-export const FEE_POLICY_DISPLAY_ONLY = ['clientCashbackByLevel', 'marketerWithdrawalFeePercent'] as const;
+export const FEE_POLICY_DISPLAY_ONLY = ['clientCashbackByLevel', 'marketerWithdrawalFeePercent', 'minMarketerPayout', 'minProviderPayout'] as const; // the last two: the withdrawal minimum is ONE platform rule (10 USD, config/withdrawal-limits.ts), not a per-policy value
 const ADVISORY_LOCK = 7_260_001;
 
 export interface PolicyRow { id: string; version: number; effectiveFrom: Date; payload: FeePolicyPayload; note: string | null; createdById: string | null; createdAt: Date; cancelledAt: Date | null }
@@ -19,7 +20,8 @@ const BASELINE_ROW = (): PolicyRow => ({ id: BASELINE_FEE_POLICY_ID, version: 1,
 const toRow = (r: { id: string; version: number; effectiveFrom: Date; payload: unknown; note: string | null; createdById: string | null; createdAt: Date; cancelledAt: Date | null }): PolicyRow | null => {
 	const p = feePolicyPayloadSchema.safeParse(r.payload);
 	if (!p.success) { logger.error(`[FeePolicy] version ${r.version} has an invalid payload and is ignored: ${p.error.issues[0]?.message}`); return null; }
-	return { id: r.id, version: r.version, effectiveFrom: r.effectiveFrom, payload: p.data, note: r.note, createdById: r.createdById, createdAt: r.createdAt, cancelledAt: r.cancelledAt };
+	// the withdrawal minimum is ONE platform rule (config/withdrawal-limits.ts): whatever a stored version says, every reader gets it
+	return { id: r.id, version: r.version, effectiveFrom: r.effectiveFrom, payload: { ...p.data, minMarketerPayout: MIN_WITHDRAWAL_USD, minProviderPayout: MIN_WITHDRAWAL_USD }, note: r.note, createdById: r.createdById, createdAt: r.createdAt, cancelledAt: r.cancelledAt };
 };
 
 /**

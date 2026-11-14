@@ -1263,49 +1263,19 @@ async function loadServiceForMarketer(t: TestContext, opts?: Parameters<typeof c
 	return { withdrawalService, ...mocks };
 }
 
-test('createForMarketer: an amount below the 300 floor is rejected even though it exceeds the affiliate\'s own lower custom minimumPayoutAmount', async (t) => {
-	const { withdrawalService, createSpy } = await loadServiceForMarketer(t, { minimumPayoutAmount: 100 });
-
-	// 150 clears the affiliate's own custom minimum (100) but not the new
-	// P-LG-012 floor (300) — must now be rejected where it previously would
-	// have succeeded.
-	await assert.rejects(
-		() => withdrawalService.createForMarketer('user-1', { amount: 150 }),
-		(err: any) => { assert.equal(err.statusCode, 400); assert.match(err.message, /300/); return true; }
-	);
-	assert.equal(createSpy.mock.callCount(), 0);
-});
-
-test('createForMarketer: an amount that meets the 300 floor succeeds (custom minimum lower than 300)', async (t) => {
-	const { withdrawalService, createSpy } = await loadServiceForMarketer(t, { minimumPayoutAmount: 100 });
-
-	const result = await withdrawalService.createForMarketer('user-1', { amount: 300 });
-
-	assert.equal(result.amount, 300);
-	assert.equal(createSpy.mock.callCount(), 1);
-});
-
-test('createForMarketer: a higher custom minimumPayoutAmount is still respected — Math.max never LOWERS the effective floor', async (t) => {
+test('createForMarketer: the minimum is 10 USD for everyone — below it is rejected even though the affiliate\'s stored minimumPayoutAmount is 500 (or lower), and nothing is created', async (t) => {
 	const { withdrawalService, createSpy } = await loadServiceForMarketer(t, { minimumPayoutAmount: 500 });
-
 	await assert.rejects(
-		() => withdrawalService.createForMarketer('user-1', { amount: 400 }),
-		(err: any) => { assert.equal(err.statusCode, 400); assert.match(err.message, /500/); return true; }
+		() => withdrawalService.createForMarketer('user-1', { amount: 9.99 }),
+		(err: any) => { assert.equal(err.statusCode, 400); assert.match(err.message, /10/); assert.doesNotMatch(err.message, /500/); return true; }
 	);
 	assert.equal(createSpy.mock.callCount(), 0);
-
-	const result = await withdrawalService.createForMarketer('user-1', { amount: 500 });
-	assert.equal(result.amount, 500);
 });
 
-test('createForMarketer: the default minimumPayoutAmount (300, per the updated schema default) enforces exactly 300 as the floor', async (t) => {
+test('createForMarketer: exactly 10 USD succeeds although the affiliate\'s stored minimumPayoutAmount is 300 — there is no maximum either', async (t) => {
 	const { withdrawalService, createSpy } = await loadServiceForMarketer(t, { minimumPayoutAmount: 300 });
-
-	await assert.rejects(() => withdrawalService.createForMarketer('user-1', { amount: 299.99 }));
-	assert.equal(createSpy.mock.callCount(), 0);
-
-	const result = await withdrawalService.createForMarketer('user-1', { amount: 300 });
-	assert.equal(result.amount, 300);
+	assert.equal((await withdrawalService.createForMarketer('user-1', { amount: 10 })).amount, 10);
+	assert.equal(createSpy.mock.callCount(), 1);
 });
 
 // ── USD only: the withdrawal service source carries no riyal/SAR wording and always passes currency USD ──
@@ -1366,7 +1336,7 @@ test('#33 the freeze never lets a non-PayPal method through: bank_transfer is re
 test('#33 insufficient balance (even with a PayPal email and no freeze) is a clear business error and creates no withdrawal row', async (t) => {
 	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 0, providerProfile: { paypalPayoutEmail: 'me@paypal.example' } });
 	await assert.rejects(
-		() => withdrawalService.createForProvider('provider-1', { amount: 1, method: 'paypal' } as any),
+		() => withdrawalService.createForProvider('provider-1', { amount: 10, method: 'paypal' } as any),
 		(e: any) => e.statusCode === 400 && /يتجاوز رصيدك المتاح \(0 \$\)/.test(e.message)
 	);
 	assert.equal(createSpy.mock.callCount(), 0);
@@ -1378,18 +1348,18 @@ test('#33 the freeze is checked BEFORE the balance: a frozen account with enough
 	assert.equal(createSpy.mock.callCount(), 0);
 });
 
-// ── fee policy: the provider minimum payout (baseline 0 = none) ────────────────────────────────────
-test('createForProvider: no minimum by default (the baseline policy), and the request stores the policy id + the minimum applied (0)', async (t) => {
-	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 500 });
-	await withdrawalService.createForProvider('provider-1', { amount: 1, method: 'paypal' });
-	const data = createSpy.mock.calls[0].arguments[0].data; assert.equal(data.minimumApplied, 0); assert.equal(typeof data.feePolicyId, 'string'); assert.ok(data.feePolicyId.length > 8);
-});
-
-test('createForProvider: a minimum set by the fee policy in force is enforced (below it: 400 and nothing is created) and is stored with the request', async (t) => {
+// ── the withdrawal minimum is ONE platform rule: 10 USD for the provider too, no maximum ────────────────────────────────────
+test('createForProvider: the minimum is 10 USD even when the policy in force says 100; below it: 400 and nothing is created; the request stores the policy id + the minimum applied (10)', async (t) => {
 	t.mock.module('./fee-policy.service', { namedExports: { feePolicyService: { active: async () => ({ id: 'pol-9', version: 9, payload: { minProviderPayout: 100, minMarketerPayout: 300 } }) } } });
 	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 500 });
-	await assert.rejects(() => withdrawalService.createForProvider('provider-1', { amount: 50, method: 'paypal' }), (e: any) => e.statusCode === 400 && e.message.includes('100'));
+	await assert.rejects(() => withdrawalService.createForProvider('provider-1', { amount: 9.99, method: 'paypal' }), (e: any) => e.statusCode === 400 && e.message.includes('10') && !e.message.includes('100'));
 	assert.equal(createSpy.mock.callCount(), 0);
-	await withdrawalService.createForProvider('provider-1', { amount: 100, method: 'paypal' });
-	const data = createSpy.mock.calls[0].arguments[0].data; assert.equal(data.feePolicyId, 'pol-9'); assert.equal(data.minimumApplied, 100);
+	await withdrawalService.createForProvider('provider-1', { amount: 10, method: 'paypal' });
+	const data = createSpy.mock.calls[0].arguments[0].data; assert.equal(data.feePolicyId, 'pol-9'); assert.equal(data.minimumApplied, 10);
+});
+
+test('createForProvider: there is no maximum — a large amount within the balance is accepted', async (t) => {
+	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 50_000 });
+	await withdrawalService.createForProvider('provider-1', { amount: 49_999, method: 'paypal' });
+	assert.equal(createSpy.mock.callCount(), 1);
 });

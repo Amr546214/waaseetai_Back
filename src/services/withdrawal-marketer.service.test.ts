@@ -28,7 +28,7 @@ function createMock(t: TestContext, opts: {
 	// Throws a P2034 at commit for the given attempts; `onConflict` runs just
 	// before throwing, after the doomed attempt's writes were rolled back.
 	conflict?: { attempts: number; onConflict?: (withdrawals: any[]) => void };
-	/** the fee policy in force (minimum payouts); omitted = the real service, which falls back to the baseline (marketer 300, provider none) */
+	/** the fee policy in force (minimum payouts); omitted = the real service, which falls back to the baseline (10 USD for both) */
 	policy?: { id: string; minMarketerPayout: number; minProviderPayout: number };
 }) {
 	const withdrawals: any[] = (opts.withdrawals ?? []).map(w => ({ currency: 'USD', method: 'bank_transfer', ...w }));
@@ -403,17 +403,17 @@ test('PayPal only: the marketer history never returns a legacy bank destination 
 	assert.equal(out.items[1].paypalEmail, 'm@example.com');
 });
 
-// ── fee policy: the minimum payout comes from the policy in force and is stored on the request ──────────────
-test('12. marketer minimum payout = the policy in force (raised floor wins over a lower per-affiliate minimum); the request stores the policy id and the minimum it was checked against', async (t) => {
+// ── the minimum is ONE platform rule (10 USD); the policy id in force is still stored on the request ──────────────
+test('12. marketer minimum payout = 10 USD whatever the policy says (even a raised 500) or the stored per-affiliate minimum (50): below it nothing is created; the request stores the policy id and the minimum applied (10)', async (t) => {
 	const { withdrawalService, createSpy } = await load(t, { owner: MARKETER, providerWalletBalance: 0, policy: { id: 'pol-2', minMarketerPayout: 500, minProviderPayout: 0 }, commissions: [{ affiliateId: 'aff-1', amount: 900, status: 'APPROVED' }] });
-	await assert.rejects(withdrawalService.createForMarketer('marketer-1', { amount: 450 }), (e: any) => e.statusCode === 400 && e.message.includes('500'));
+	await assert.rejects(withdrawalService.createForMarketer('marketer-1', { amount: 9.99 }), (e: any) => e.statusCode === 400 && e.message.includes('10'));
 	assert.equal(createSpy.mock.callCount(), 0);
-	const ok = await withdrawalService.createForMarketer('marketer-1', { amount: 600 });
-	assert.equal(ok.feePolicyId, 'pol-2'); assert.equal(ok.minimumApplied, 500);
+	const ok = await withdrawalService.createForMarketer('marketer-1', { amount: 10 });
+	assert.equal(ok.feePolicyId, 'pol-2'); assert.equal(ok.minimumApplied, 10);
 });
 
-test('13. marketer minimum without a managed policy is today\'s 300 (a per-affiliate minimum above it still wins) and the stored minimum says so', async (t) => {
-	const { withdrawalService } = await load(t, { owner: MARKETER, providerWalletBalance: 0, commissions: [{ affiliateId: 'aff-1', amount: 900, status: 'APPROVED' }] });
-	await assert.rejects(withdrawalService.createForMarketer('marketer-1', { amount: 250 }), (e: any) => e.statusCode === 400 && e.message.includes('300'));
-	const ok = await withdrawalService.createForMarketer('marketer-1', { amount: 300 }); assert.equal(ok.minimumApplied, 300);
+test('13. no maximum: a large amount within the available commission is accepted, and above the balance it is refused with the balance message', async (t) => {
+	const { withdrawalService } = await load(t, { owner: MARKETER, providerWalletBalance: 0, commissions: [{ affiliateId: 'aff-1', amount: 5000, status: 'APPROVED' }] });
+	const ok = await withdrawalService.createForMarketer('marketer-1', { amount: 4800 }); assert.equal(ok.minimumApplied, 10);
+	await assert.rejects(withdrawalService.createForMarketer('marketer-1', { amount: 5000.01 }), (e: any) => e.statusCode === 400 && e.message.includes('$'));
 });
