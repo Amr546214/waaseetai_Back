@@ -154,6 +154,36 @@ export async function appendProjectEvent(input: { contractId: string; eventKey: 
 	}
 }
 
+/**
+ * The client's revision request on a delivered stage, as a REAL message of the project room (so the provider answers it in the same conversation and the answer shows as a reply to it).
+ * Written by the client (the sender), idempotent per delivery (`eventKey` unique: a retry or a socket echo creates nothing), never throws: it must not fail the review that already committed.
+ */
+export async function postRevisionRequestMessage(input: { contractId: string; clientId: string; stageId: string; stageTitle: string; stageNumber?: number; deliveryId: string; note: string }): Promise<{ created: boolean; messageId?: string }> {
+	try {
+		const contract = await prisma.contract.findUnique({ where: { id: input.contractId }, select: { id: true, projectId: true, clientId: true, providerId: true, offerId: true, createdAt: true } });
+		if (!contract || contract.clientId !== input.clientId) return { created: false };
+		const room = await ensureProjectRoom(prisma, contract);
+		const content = `طلب تعديل على «${input.stageTitle}»: ${input.note.trim()}`;
+		const context = { type: 'DELIVERY', kind: 'REVISION_REQUEST', projectId: contract.projectId, stageId: input.stageId, stageTitle: input.stageTitle, ...(input.stageNumber ? { stageNumber: input.stageNumber } : {}), deliveryId: input.deliveryId } as Prisma.InputJsonObject;
+		let message: any;
+		try {
+			message = await prisma.message.create({ data: { conversationId: room.id, senderId: input.clientId, type: MessageType.TEXT, content, status: MessageStatus.SENT, eventKey: `revision:${input.deliveryId}`, context }, include: { sender: { select: { id: true, firstName: true, lastName: true } } } });
+		} catch (err: any) { if (err?.code === 'P2002') return { created: false }; throw err; }
+		await prisma.conversation.update({ where: { id: room.id }, data: { updatedAt: new Date() } });
+		try {
+			const io = getSocketServer();
+			if (io) {
+				const payload = { id: message.id, conversationId: room.id, senderId: message.senderId, senderName: [message.sender?.firstName, message.sender?.lastName].filter(Boolean).join(' ') || 'العميل', type: 'TEXT', text: content, createdAt: message.createdAt, status: message.status, context, conversationContext: room.kind === ConversationKind.PROJECT ? 'PROJECT' : 'GENERAL', contractId: contract.id, projectId: contract.projectId };
+				io.to(roomNameFor(room)).emit('new_message', payload);
+			}
+		} catch (err) { console.error('[RevisionMessage] socket emit failed', (err as Error)?.message); }
+		return { created: true, messageId: message.id };
+	} catch (err) {
+		console.error('[RevisionMessage] could not record the revision request message', (err as Error)?.message);
+		return { created: false };
+	}
+}
+
 async function emitProjectEvent(contract: ProjectRoomContract, room: ProjectRoom, message: any, input: { event: string; meta?: Record<string, unknown> }) {
 	try {
 		const io = getSocketServer();

@@ -206,3 +206,19 @@ test('evaluateAction on a lone stage matches the project computation (the guard 
 	const c = computeLifecycle(input);
 	for (const a of ['upload', 'submit', 'review', 'approve', 'requestRevision', 'amend'] as const) assert.deepEqual(evaluateAction(input, a, input.stages[0]), c.stages[0].eligibility[a]);
 });
+
+test('an AGREED mutual cancellation stops the contract: no upload / submit (provider) and no approve (client) with the 423 reason; a review (read) and everything else stays as it was', () => {
+	const c = computeLifecycle(as('client', { cancellationAgreed: true }));
+	assert.equal(c.stages[0].eligibility.approve.allowed, false); assert.equal(c.stages[0].eligibility.approve.code, 'CONTRACT_CANCELLATION_AGREED'); assert.equal(c.stages[0].eligibility.approve.httpStatus, 423);
+	assert.equal(c.stages[0].eligibility.review.allowed, true);
+	const p = computeLifecycle(as('provider', { cancellationAgreed: true, stages: [stage('s1', 1, 'IN_PROGRESS'), stage('s2', 2, 'PENDING')] }));
+	for (const a of ['upload', 'submit'] as const) { assert.equal(p.stages[0].eligibility[a].allowed, false, a); assert.equal(p.stages[0].eligibility[a].code, 'CONTRACT_CANCELLATION_AGREED'); assert.match(p.stages[0].eligibility[a].reason!, /إلغاء العقد بالتراضي/); }
+	// not agreed: unchanged
+	assert.equal(computeLifecycle(as('provider', { stages: [stage('s1', 1, 'IN_PROGRESS')] })).stages[0].eligibility.submit.allowed, true);
+});
+
+test('a CANCELLED contract closes its unreleased stages (nothing to review, deliver or pay) while a released stage stays released', () => {
+	const c = computeLifecycle(as('client', { contractStatus: 'CANCELLED', escrow: { status: 'REFUNDED', amount: 20, releasedAmount: 10 }, stages: [stage('s1', 1, 'APPROVED'), stage('s2', 2, 'SUBMITTED', [d('SUBMITTED')]), stage('s3', 3, 'PENDING')] }));
+	assert.equal(c.stages[0].amountState, 'RELEASED'); assert.equal(c.stages[0].closedBySettlement, false);
+	for (const i of [1, 2]) { assert.equal(c.stages[i].closedBySettlement, true); assert.equal(c.stages[i].awaitingClientReview, false); assert.equal(c.stages[i].displayStatusLabel, 'أُغلقت بإلغاء العقد'); assert.equal(c.stages[i].eligibility.approve.allowed, false); }
+});

@@ -310,3 +310,39 @@ test('pg: a normal stage approval and a settlement credit the provider through t
 	const ea = await a.prisma.escrow.findUnique({ where: { id: a.escrow.id } }), eb = await b.prisma.escrow.findUnique({ where: { id: b.escrow.id } });
 	for (const k of ['releasedAmount', 'platformCommissionAmount', 'providerNetReleasedAmount', 'feePolicyVersion', 'providerCommissionRateSnapshot', 'providerCommissionLevelSnapshot']) assert.equal(eb[k], ea[k], k);
 });
+
+// ───────────────────────── an agreed / settled mutual cancellation stops the contract: no new delivery, no approval ─────────────────────────
+const refusedWith = (status: number, code?: string) => (e: any) => e.statusCode === status && (!code || e.code === code);
+const stageState = async (w: Awaited<ReturnType<typeof world>>, id: string) => (await w.prisma.projectStage.findUnique({ where: { id } })).status;
+
+test('pg: AFTER the agreement the provider cannot upload or submit a delivery (423), nothing is created, and the read model says so for both sides; BEFORE it delivery works', opts, async () => {
+	const open = await world(); // not agreed: the provider can still deliver
+	await projectProgressService.submitDelivery(open.provider.id, open.contract.id, open.s1.id, 'تسليم المرحلة الأولى كاملة', ['https://example.com/a']);
+	assert.equal(await stageState(open, open.s1.id), 'SUBMITTED');
+	const w = await world(); await agree(w); const before = JSON.stringify(await money(w));
+	await assert.rejects(() => projectProgressService.submitDelivery(w.provider.id, w.contract.id, w.s1.id, 'تسليم بعد الاتفاق على الإلغاء', ['https://example.com/b']), refusedWith(423, 'CONTRACT_CANCELLATION_AGREED'));
+	await assert.rejects(() => projectProgressService.uploadDeliveryFiles(w.provider.id, w.contract.id, w.s1.id, [{ originalname: 'a.txt', buffer: Buffer.from('x'), mimetype: 'text/plain', size: 1 } as any]), refusedWith(423, 'CONTRACT_CANCELLATION_AGREED'));
+	assert.equal(await stageState(w, w.s1.id), 'IN_PROGRESS'); assert.equal(await w.prisma.stageDelivery.count({ where: { stageId: w.s1.id } }), 0);
+	assert.equal(JSON.stringify(await money(w)), before);
+	const asProvider: any = await projectProgressService.getProjectProgress(w.provider.id, w.project.id); const asClient: any = await projectProgressService.getProjectProgress(w.client.id, w.project.id);
+	const st = (r: any) => r.stages.find((x: any) => x.id === w.s1.id);
+	assert.equal(st(asProvider).lifecycle.eligibility.submit.allowed, false); assert.equal(st(asProvider).lifecycle.eligibility.submit.code, 'CONTRACT_CANCELLATION_AGREED'); assert.equal(st(asProvider).lifecycle.eligibility.upload.allowed, false);
+	assert.equal(st(asClient).lifecycle.eligibility.approve.allowed, false);
+});
+
+test('pg: AFTER the agreement a submitted stage cannot be approved or paid (client), and after the administration settles the closed contract refuses delivery and approval (409)', opts, async () => {
+	const w = await world({ submitted: true }); const id = await agree(w); const before = JSON.stringify(await money(w));
+	await assert.rejects(() => projectProgressService.reviewDelivery(w.client.id, w.contract.id, w.s1.id, 'approve'), refusedWith(423, 'CONTRACT_CANCELLATION_AGREED'));
+	assert.equal(JSON.stringify(await money(w)), before); assert.equal(await stageState(w, w.s1.id), 'SUBMITTED');
+	const asClient: any = await projectProgressService.getProjectProgress(w.client.id, w.project.id); const stg = asClient.stages.find((x: any) => x.id === w.s1.id);
+	assert.equal(stg.lifecycle.eligibility.approve.allowed, false); assert.equal(asClient.canApproveStage, false);
+	// the administration settles: the contract is CANCELLED, nothing can be delivered or approved any more
+	const admin = await staff(w, FIN); const s = await svc();
+	const held = (await w.prisma.escrow.findUnique({ where: { id: w.escrow.id } })).amount - (await w.prisma.escrow.findUnique({ where: { id: w.escrow.id } })).releasedAmount;
+	await s.settle(admin.id, id, { releaseToProvider: 0, expectedHeldAmount: held, reason: 'تسوية اختبار الإلغاء بالتراضي' });
+	assert.equal((await w.prisma.contract.findUnique({ where: { id: w.contract.id } })).status, 'CANCELLED');
+	await assert.rejects(() => projectProgressService.reviewDelivery(w.client.id, w.contract.id, w.s1.id, 'approve'), refusedWith(409));
+	await assert.rejects(() => projectProgressService.submitDelivery(w.provider.id, w.contract.id, w.s2?.id ?? w.s1.id, 'تسليم بعد إغلاق العقد بالتسوية', ['https://example.com/c']), refusedWith(409));
+	const after: any = await projectProgressService.getProjectProgress(w.client.id, w.project.id);
+	assert.equal(after.stages.find((x: any) => x.id === w.s1.id).lifecycle.eligibility.approve.allowed, false);
+});

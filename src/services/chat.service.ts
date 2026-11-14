@@ -501,6 +501,20 @@ class ChatService {
     if (context && typeof context === 'object') {
       messageData.context = context;
     }
+    // A REPLY: the client only names the message it answers; the quoted sender and excerpt are rebuilt here from that message (a client can never fake what someone wrote), and the
+    // target must belong to THIS conversation. An unknown / foreign target is dropped (the message is still sent, just not as a reply).
+    const replyTargetId = typeof (context as any)?.replyTo?.messageId === 'string' ? String((context as any).replyTo.messageId) : null;
+    if (messageData.context) delete (messageData.context as any).replyTo;
+    if (replyTargetId) {
+      const target = await prisma.message.findFirst({ where: { id: replyTargetId, conversationId }, select: { id: true, senderId: true, type: true, content: true, fileName: true, context: true, sender: { select: { firstName: true, lastName: true } } } });
+      if (target && target.type !== MessageType.SYSTEM) {
+        const kind = (target.context as any)?.kind;
+        messageData.context = { ...(messageData.context ?? { type: 'PROJECT' }), replyTo: {
+          messageId: target.id, senderId: target.senderId, senderName: [target.sender?.firstName, target.sender?.lastName].filter(Boolean).join(' ') || 'مستخدم',
+          excerpt: String(target.content || target.fileName || 'مرفق').replace(/\s+/g, ' ').trim().slice(0, 140), ...(kind === 'REVISION_REQUEST' ? { kind } : {}),
+        } };
+      }
+    }
 
     let newMsg;
     try {
