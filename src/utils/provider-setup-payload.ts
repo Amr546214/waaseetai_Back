@@ -116,9 +116,9 @@ export interface ProviderSetupCompletenessInput {
 }
 const filled = (v: unknown) => typeof v === 'string' && !isBlankText(v);
 
-/** Setup is complete only when every required field is really STORED (read back from the saved profile, never from the request). */
+/** Setup is complete only when every required field is really STORED (read back from the saved profile, never from the request). The bio is NOT required: it can be added later (it still counts toward the profile completion percentage). */
 export function isProviderSetupComplete(p: ProviderSetupCompletenessInput | null | undefined): boolean {
-  return !!p && filled(p.headline) && filled(p.country) && filled(p.city) && filled(p.bio) && filled(p.mainSpecialty)
+  return !!p && filled(p.headline) && filled(p.country) && filled(p.city) && filled(p.mainSpecialty)
     && typeof p.yearsOfExperience === 'number' && p.accurateAgreed === true && p.termsAgreed === true && p.privacyAgreed === true;
 }
 
