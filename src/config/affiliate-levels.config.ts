@@ -21,7 +21,8 @@ import { MARKETER_LEVELS, MIN_LEVEL, MAX_LEVEL } from './levels.config';
 // Derived from the single ladder (config/levels.config.ts MARKETER_LEVELS): no number or name is repeated here.
 export const AFFILIATE_LEVEL_RATES: Readonly<Record<number, number>> = Object.fromEntries(MARKETER_LEVELS.map(d => [d.level, d.percent]));
 
-export const AFFILIATE_LEVEL_NAMES: Readonly<Record<number, string>> = Object.fromEntries(MARKETER_LEVELS.map(d => [d.level, d.name]));
+/** live view of the marketer level names: reads the level object each time, so a published rename (config/levels.config applyLevelOverrides) is followed */
+export const AFFILIATE_LEVEL_NAMES: Readonly<Record<number, string>> = Object.defineProperties({} as Record<number, string>, Object.fromEntries(MARKETER_LEVELS.map(d => [d.level, { enumerable: true, get: () => d.name }])));
 
 export const MIN_AFFILIATE_LEVEL = MIN_LEVEL;
 export const MAX_AFFILIATE_LEVEL = MAX_LEVEL;
