@@ -193,6 +193,21 @@ test('PG site identity: input errors and limits - unknown key, no file, wrong fo
 	await mixed.close(); await m.close();
 });
 
+test('PG site identity: change notice - one keys-only notice after a successful publish / restore, none after a rejected or failed change', opts, async () => {
+	const e = await env(); await reset(e); const sa = e.sa.id; const m = await mount(e);
+	const { onSettingsNotice } = await import('./settings-bus'); const seen: any[] = []; const off = onSettingsNotice(n => { seen.push(n); });
+	const tick = () => new Promise(r => setTimeout(r, 50));
+	try {
+		const A = await staged(m, sa, 'logo.mark', 'n-a'); await tick(); assert.equal(seen.length, 0, 'a staged upload changes nothing visible: no notice');
+		assert.equal((await publish(m, sa, 'logo.mark', A.versionId, 5)).status, 409); await tick(); assert.equal(seen.length, 0, 'a rejected publish sends nothing');
+		assert.equal((await publish(m, sa, 'logo.mark', A.versionId, 0)).status, 200); await tick();
+		assert.equal(seen.length, 1); assert.deepEqual(seen[0].keys, ['site_identity']); assert.deepEqual(Object.keys(seen[0]).sort(), ['at', 'keys', 'origin'], 'keys only: no values, no actor, no secrets');
+		assert.equal((await m.adm('POST', '/logo.mark/restore', sa, { target: 'default', expectedVersion: 1 })).status, 200); await tick(); assert.equal(seen.length, 2, 'a restore notifies too');
+		const boom = await mount(e, { faults: { insideTx: async (_tx: any, s: string) => { if (s === 'after-manifest') throw new Error('x'); } } });
+		const B = await staged(m, sa, 'logo.mark', 'n-b'); assert.equal((await publish(boom, sa, 'logo.mark', B.versionId, 2)).status, 500); await tick(); assert.equal(seen.length, 2, 'a failed (rolled back) change sends nothing'); await boom.close();
+	} finally { off(); await m.close(); }
+});
+
 test('PG site identity: atomicity - a failure inside the transaction (after the state, the manifest or the audit write) or a corrupt read-back leaves the active identity untouched and writes nothing; a failed post-commit verification is reverted', opts, async () => {
 	const e = await env(); await reset(e); const sa = e.sa.id; const ok = await mount(e);
 	const base = await staged(ok, sa, 'logo.mark', 'base'); assert.equal((await publish(ok, sa, 'logo.mark', base.versionId, 0)).status, 200);
