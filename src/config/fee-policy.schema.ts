@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MIN_WITHDRAWAL_USD } from './withdrawal-limits';
 import { PROVIDER_LEVELS, CLIENT_LEVELS, MARKETER_LEVELS } from './levels.config';
 import { DEPOSIT_FEE_PERCENT, MARKETER_WITHDRAWAL_FEE_PERCENT } from '../utils/fee-policy';
 
@@ -34,8 +35,8 @@ export const baselineFeePolicyPayload = (): FeePolicyPayload => ({
 	marketerCommissionByLevel: MARKETER_LEVELS.map(d => d.percent),
 	depositFeePercent: { ...DEPOSIT_FEE_PERCENT },
 	marketerWithdrawalFeePercent: { ...MARKETER_WITHDRAWAL_FEE_PERCENT },
-	minMarketerPayout: 300,
-	minProviderPayout: 0,
+	minMarketerPayout: MIN_WITHDRAWAL_USD,
+	minProviderPayout: MIN_WITHDRAWAL_USD,
 });
 export const BASELINE_FEE_POLICY_ID = '00000000-0000-4000-8000-000000000001';
 

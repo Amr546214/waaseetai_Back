@@ -57,23 +57,24 @@ test('payout method required: no saved PayPal email blocks the withdrawal with t
   assert.equal(w.withdrawBlockedReason, 'أضف بريد PayPal لاستلام الأرباح');
 });
 
-test('below the minimum is blocked with the real minimum (300 is the floor)', async t => {
-  const svc = await load(t, { approved: 250 });
+test('below the minimum is blocked with the real minimum (10 USD, the same for every role)', async t => {
+  const svc = await load(t, { approved: 9.5 });
   const w = await svc.getWallet('u1');
-  assert.equal(w.minimumWithdrawal, 300);
-  assert.match(w.withdrawBlockedReason, /300/);
+  assert.equal(w.minimumWithdrawal, 10);
+  assert.match(w.withdrawBlockedReason, /10/);
 });
 
-test('a per-affiliate minimum above 300 wins', async t => {
-  const svc = await load(t, { approved: 350, minimum: 400 });
+test('exactly 10 USD can be withdrawn, and a stored per-affiliate minimum (300) no longer changes the platform minimum', async t => {
+  const svc = await load(t, { approved: 10, minimum: 300 });
   const w = await svc.getWallet('u1');
-  assert.equal(w.minimumWithdrawal, 400);
-  assert.match(w.withdrawBlockedReason, /400/);
+  assert.equal(w.minimumWithdrawal, 10);
+  assert.equal(w.withdrawBlockedReason, null);
 });
 
-test('a per-affiliate minimum below 300 is lifted to the 300 floor', async t => {
-  const svc = await load(t, { approved: 100, minimum: 50 });
-  assert.equal((await svc.getWallet('u1')).minimumWithdrawal, 300);
+test('there is no maximum: a large balance is simply withdrawable', async t => {
+  const svc = await load(t, { approved: 25000 });
+  const w = await svc.getWallet('u1');
+  assert.equal(w.withdrawableBalance, 25000); assert.equal(w.withdrawBlockedReason, null);
 });
 
 test('a balance at or above the minimum with PayPal saved can be withdrawn (no blocked reason)', async t => {

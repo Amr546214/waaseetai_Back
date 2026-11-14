@@ -1,4 +1,5 @@
 import { test, after } from 'node:test';
+import { baselineFeePolicyPayload } from '../config/fee-policy.schema';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -42,7 +43,7 @@ async function produce(e: any) {
 	const cur = await e.prisma.platformSetting.findUnique({ where: { key: 'channelEmail' } });
 	const st = await e.call('PUT', '/admin/system-settings', e.sa.id, { changes: { channelEmail: !(cur?.value ?? true) }, expected: { channelEmail: cur?.version ?? 0 } }); assert.equal(st.status, 200, JSON.stringify(st.json));
 	await e.prisma.feePolicyVersion.deleteMany({}); (await import('./fee-policy.service')).feePolicyService.invalidate();
-	const fp = await e.call('POST', '/admin/fee-policy', e.sa.id, { changes: { minProviderPayout: 25 }, effectiveFrom: new Date(Date.now() + 3600_000).toISOString(), note: 'سبب', baseVersion: 1, confirmSensitive: true }); assert.equal(fp.status, 201, JSON.stringify(fp.json));
+	const fp = await e.call('POST', '/admin/fee-policy', e.sa.id, { changes: { depositFeePercent: { ...baselineFeePolicyPayload().depositFeePercent, mada: baselineFeePolicyPayload().depositFeePercent.mada + 1 } }, effectiveFrom: new Date(Date.now() + 3600_000).toISOString(), note: 'سبب', baseVersion: 1, confirmSensitive: true }); assert.equal(fp.status, 201, JSON.stringify(fp.json));
 	// a back-office action written against the affected user (the actor is the admin), an entity action, and an own-account event
 	const client = await e.mkUser('CLIENT_INDIVIDUAL', `cl${tag}`);
 	await e.prisma.accountAuditLog.create({ data: adminAuditData({ actor: { id: staff.id, accountType: 'ADMIN' }, userId: client.id, eventType: 'KYC_APPROVED_BY_ADMIN', title: 'اعتماد توثيق الهوية', summary: 'اعتمدت الإدارة مستندات هوية العميل', details: { party: 'CLIENT' } }) });
