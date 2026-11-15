@@ -28,7 +28,7 @@ import type { AiReviewResponse, CompleteProjectDataDto, MilestoneDto, SuggestedM
 /** The provider "New Project" wizard (step 4) prices every service in US
  *  dollars ("حدد القيمة الإجمالية بالدولار الأمريكي", `$`), so that is the
  *  currency sent for its totalAmount/budget. */
-export const PROVIDER_SERVICE_CURRENCY = 'SAR';
+export const PROVIDER_SERVICE_CURRENCY = 'USD';
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);

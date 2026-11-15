@@ -1,5 +1,6 @@
 import { PROPOSAL_TITLE_MAX, PROPOSAL_MESSAGE_MAX } from '../dtos/create-proposal.dto';
 import { AppError } from '../utils/app-error';
+import { prisma } from '../utils/prisma.client';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import type { EnrichProposalRequest } from './ai/waseet-ai/waseet-ai.types';
 import { normalizeWaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
@@ -100,7 +101,6 @@ class AiProposalService {
 
     if (!process.env.NODE_TEST_CONTEXT && process.env.NODE_ENV !== 'test') {
       try {
-        const { prisma } = await import('../utils/prisma.client');
         const [project, clientRequest] = await Promise.all([
           prisma.project.findUnique({ where: { id } }),
           prisma.clientRequest.findUnique({ where: { id } })
@@ -155,7 +155,7 @@ class AiProposalService {
       throw new AppError(UNAVAILABLE_MESSAGE, 503);
     }
 
-    const rawAny = raw as Record<string, unknown>;
+    const rawAny: Record<string, unknown> = { ...raw };
     const suggestedTotalPrice = typeof rawAny.suggestedTotalPrice === 'number' && Number.isFinite(rawAny.suggestedTotalPrice) && rawAny.suggestedTotalPrice > 0
       ? Math.round(rawAny.suggestedTotalPrice)
       : null;

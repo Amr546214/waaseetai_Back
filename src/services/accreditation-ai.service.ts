@@ -195,9 +195,10 @@ export class AccreditationAiService {
       evaluation: aiEvaluationResult,
       aiEvaluation: aiEvaluationResult
         ? {
+            ...aiEvaluationResult,
             available: true,
             specialtyName,
-            ...aiEvaluationResult,
+            message: 'تم استلام نموذجك وتحويله للمراجعة اليدوية من فريق الاعتماد.',
           }
         : {
             available: false,

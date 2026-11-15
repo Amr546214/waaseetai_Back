@@ -1,4 +1,5 @@
 import { Socket } from 'socket.io';
+import { prisma } from '../config/db';
 import { randomUUID } from 'node:crypto';
 import { logger } from '../config/logger';
 import { waseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
@@ -164,7 +165,6 @@ export class HelpAssistantChatGateway {
 			let hasActiveExam = isExamSolvingIntent(question, pagePath);
 			if (!hasActiveExam && auth.role === 'provider' && !process.env.NODE_TEST_CONTEXT && process.env.NODE_ENV !== 'test') {
 				try {
-					const { prisma } = await import('../config/db');
 					const activeAttempt = await prisma.assessmentAttempt.findFirst({
 						where: {
 							providerSpecialty: { providerProfile: { userId: auth.userId } },
