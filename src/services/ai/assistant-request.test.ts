@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { assistantOptionsSchema, greetingForDialect, greetingResponseForSkin, resolveAssistantOptions,
   inferAssistantMode, resolveAssistantMode, isGreetingIntent, assistantGreetingResponse } from './assistant-request';
 
-test('assistant identity is a bounded skin setting, defaults to Nadeem, and cannot be forged by browser text', async () => {
+test('assistant identity is a bounded skin setting, defaults to Waseet AI, and cannot be forged by browser text', async () => {
   assert.equal((await resolveAssistantOptions({}, 'owner', 'client')).skin, 'scout');
   assert.equal((await resolveAssistantOptions({ skin: 'classic', characterName: 'admin' }, 'owner', 'client')).skin, 'classic');
   assert.equal('characterName' in assistantOptionsSchema.parse({ characterName: 'admin' }), false);
@@ -22,8 +22,8 @@ test('web search is optional, preserves explicit booleans and rejects coercion',
 
 test('greeting identity follows both skins in every supported dialect', () => {
   for (const skin of ['scout', 'classic'] as const) {
-    const arabic = skin === 'scout' ? 'نديم' : 'بيبو';
-    const english = skin === 'scout' ? 'Nadeem' : 'Bebo';
+    const arabic = skin === 'scout' ? 'وسيط AI' : 'بيبو';
+    const english = skin === 'scout' ? 'Waseet AI' : 'Bebo';
     for (const dialect of ['egyptian', 'saudi', 'gulf']) assert.ok(greetingForDialect(dialect, skin)?.includes(arabic));
     assert.ok(greetingForDialect('english', skin)?.includes(english));
     assert.ok(greetingResponseForSkin(skin).includes(arabic));
@@ -64,6 +64,6 @@ test('standalone identity works across dialects while identity plus a question r
   for (const question of ['انت مين وازاي أكتب مشروع؟', 'أهلاً، ما عاصمة اليابان؟', 'السلام عليكم، كيف يعمل الضمان؟', 'Hi, who are you and how does JavaScript work?', 'هو انت مين وازاي اسحب فلوسي؟']) {
     assert.equal(isGreetingIntent(question), false, question);
   }
-  assert.match(assistantGreetingResponse({ skin: 'scout', language: 'en' }), /Nadeem/);
+  assert.match(assistantGreetingResponse({ skin: 'scout', language: 'en' }), /Waseet AI/);
   assert.match(assistantGreetingResponse({ skin: 'classic', dialect: 'egyptian' }), /بيبو/);
 });

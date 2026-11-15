@@ -395,8 +395,8 @@ test('help:ask rejects invalid character values before upstream and greets the s
 test('help:ask answers dialect identity with the selected character and keeps real questions on AI', async t => {
   const { register, calls } = await loadGateway(t);
   for (const [skin, dialect, question, name] of [
-    ['scout', 'egyptian', 'انت مين؟', 'نديم'], ['classic', 'gulf', 'وش اسمك؟', 'بيبو'],
-    ['scout', 'english', 'Who are you?', 'Nadeem'], ['classic', 'english', "What's your name?", 'Bebo'],
+    ['scout', 'egyptian', 'انت مين؟', 'وسيط AI'], ['classic', 'gulf', 'وش اسمك؟', 'بيبو'],
+    ['scout', 'english', 'Who are you?', 'Waseet AI'], ['classic', 'english', "What's your name?", 'Bebo'],
   ] as const) {
     const s = createMockSocket(); register(s.socket);
     await s.handlers['help:ask']({ question, skin, dialect });
