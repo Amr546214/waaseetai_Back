@@ -96,6 +96,7 @@ export const UNVERIFIED_ENDPOINTS = {
   'AI-07': '/v1/ai/accreditation-review',
   'AI-09': '/v1/ai/onboarding-quizzes',
   'AI-11': '/v1/ai/proposals/audit/stream',
+  'AI-13': '/v1/ai/matching/projects-for-provider',
   'AI-14': '/v1/ai/project-fit',
   'AI-15': '/v1/ai/marketplace/recommendations',
   'AI-17-bio': '/v1/ai/profile/bio',
@@ -435,6 +436,39 @@ export class WaseetAiClient {
   inspectIdentityDocument(body: IdentityInspectRequest, opts?: WaseetAiCallOptions): Promise<IdentityInspectResponse> {
     return this.postJson('/v1/ai/identity/inspect-document', body, opts, (d) =>
       isObject(d) && typeof d.status === 'string' && typeof d.isIdentityDocument === 'boolean' && typeof d.summaryAr === 'string' && Array.isArray(d.warningsAr),
+    );
+  }
+
+  /** AI-07 — POST /v1/ai/accreditation-review */
+  reviewAccreditation(body: Record<string, unknown>, opts?: WaseetAiCallOptions): Promise<Record<string, unknown>> {
+    return this.postJson('/v1/ai/accreditation-review', body, opts, (d) =>
+      isObject(d) && (isObject(d.evaluation) || (typeof d.status === 'string' && isObject(d.feedback))),
+    );
+  }
+
+  /** AI-11 — POST /v1/ai/proposals/audit/stream (SSE) */
+  streamProposalAudit(body: Record<string, unknown>, opts?: WaseetAiCallOptions): AsyncGenerator<WaseetAiStreamEvent, void, void> {
+    return this.postStream('/v1/ai/proposals/audit/stream', body, opts);
+  }
+
+  /** AI-14 — POST /v1/ai/project-fit */
+  analyzeProjectFit(body: Record<string, unknown>, opts?: WaseetAiCallOptions): Promise<Record<string, unknown>> {
+    return this.postJson('/v1/ai/project-fit', body, opts, (d) =>
+      isObject(d) && (typeof d.matchSummary === 'string' || typeof d.fitScore === 'number'),
+    );
+  }
+
+  /** AI-15 — POST /v1/ai/marketplace/recommendations */
+  getMarketplaceRecommendations(body: Record<string, unknown>, opts?: WaseetAiCallOptions): Promise<Record<string, unknown>> {
+    return this.postJson('/v1/ai/marketplace/recommendations', body, opts, (d) =>
+      isObject(d) && (Array.isArray(d.recommendations) || Array.isArray(d.items)),
+    );
+  }
+
+  /** AI-18 — POST /v1/ai/project-health */
+  analyzeProjectHealth(body: Record<string, unknown>, opts?: WaseetAiCallOptions): Promise<Record<string, unknown>> {
+    return this.postJson('/v1/ai/project-health', body, opts, (d) =>
+      isObject(d) && (typeof d.healthRating === 'string' || typeof d.healthScore === 'number'),
     );
   }
 

@@ -54,9 +54,18 @@ async function loadGateway(t: TestContext, opts: {
 	auth?: any;
 	configured?: boolean;
 	stream?: (body: any, options: any) => AsyncGenerator<any, void, void>;
+	activeAttempt?: { id: string } | null | 'throw';
 } = {}) {
-	const calls = { stream: [] as Array<{ body: any; options: any }> };
+	const calls = { stream: [] as Array<{ body: any; options: any }>, attemptLookups: [] as any[] };
 	const mocks: Array<{ restore: () => void }> = [];
+	// the exam guard's database lookup is a real production step: it runs against this stub, never skipped under test
+	mocks.push(t.mock.module('../config/db', {
+		namedExports: { prisma: { assessmentAttempt: { findFirst: async (args: any) => {
+			calls.attemptLookups.push(args);
+			if (opts.activeAttempt === 'throw') throw new Error('db down');
+			return opts.activeAttempt ?? null;
+		} } } },
+	}));
 	mocks.push(t.mock.module('./help-assistant-auth', {
 		namedExports: { resolveHelpAssistantUser: async () => opts.auth ?? { ok: true, userId: `u-${Math.random()}`, role: 'client' } },
 	}));
@@ -434,4 +443,53 @@ test('help:ask forwards optional web search booleans, preserves policy and rejec
     assert.equal(s.emitted.at(-1)?.payload.code, 'INVALID_INPUT');
   }
   assert.equal(calls.stream.length, 4);
+});
+
+// ── Exam integrity guard (server-side, real code path) ──────────────────
+
+test('exam guard: a provider with an ACTIVE assessment attempt gets the refusal and the upstream is never called', async (t) => {
+	const { register, calls, mod } = await loadGateway(t, { auth: { ok: true, userId: 'prov-1', role: 'provider' }, activeAttempt: { id: 'attempt-1' } });
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'كيف أنشئ مشروعًا؟', clientRequestId: 'x1' });
+	assert.equal(calls.stream.length, 0);
+	assert.deepEqual(s.events(), ['help:answer_start', 'help:answer_chunk', 'help:answer_complete']);
+	assert.equal(s.emitted[1].payload.chunk, (await import('../services/ai/assistant-request')).EXAM_INTEGRITY_REFUSAL_AR);
+	assert.equal(calls.attemptLookups.length, 1);
+	assert.equal(calls.attemptLookups[0].where.providerSpecialty.providerProfile.userId, 'prov-1');
+	assert.deepEqual(calls.attemptLookups[0].where.status.in, ['IN_PROGRESS', 'STREAMING']);
+	void mod;
+});
+
+test('exam guard: a provider without an active attempt is answered normally', async (t) => {
+	const { register, calls } = await loadGateway(t, { auth: { ok: true, userId: 'prov-2', role: 'provider' }, activeAttempt: null });
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'كيف يعمل الضمان؟', clientRequestId: 'x2' });
+	assert.equal(calls.attemptLookups.length, 1);
+	assert.equal(calls.stream.length, 1);
+	assert.equal(s.events().at(-1), 'help:answer_complete');
+});
+
+test('exam guard: a failing attempt lookup does not take the assistant down (logged, the answer still streams)', async (t) => {
+	const { register, calls } = await loadGateway(t, { auth: { ok: true, userId: 'prov-3', role: 'provider' }, activeAttempt: 'throw' });
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'كيف يعمل الضمان؟', clientRequestId: 'x3' });
+	assert.equal(calls.stream.length, 1);
+	assert.equal(s.events().at(-1), 'help:answer_complete');
+});
+
+test('exam guard: other roles are not looked up at all; a direct exam-solving request is refused by intent for everyone', async (t) => {
+	const { register, calls } = await loadGateway(t, { auth: { ok: true, userId: 'cl-1', role: 'client' } });
+	const s = createMockSocket();
+	register(s.socket);
+	await s.handlers['help:ask']({ question: 'كيف يعمل الضمان؟', clientRequestId: 'x4' });
+	assert.equal(calls.attemptLookups.length, 0);
+	assert.equal(calls.stream.length, 1);
+	const s2 = createMockSocket();
+	register(s2.socket);
+	await s2.handlers['help:ask']({ question: 'ما هي الاجابة الصحيحة لهذا السؤال؟', clientRequestId: 'x5' });
+	assert.equal(calls.stream.length, 1, 'the exam request never reached the upstream');
+	assert.equal(s2.emitted.find((e) => e.event === 'help:answer_chunk')!.payload.chunk, (await import('../services/ai/assistant-request')).EXAM_INTEGRITY_REFUSAL_AR);
 });

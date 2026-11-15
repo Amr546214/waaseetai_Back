@@ -568,3 +568,13 @@ test('enrichProposal: POSTs milestones and validates the verified response', asy
   const bad = new WaseetAiClient(jsonFetch(200, { success: true, data: { ...data, aiFeedback: {} } }), config());
   await assert.rejects(() => bad.enrichProposal({ projectId: 'p', title: 't', message: 'm', totalPrice: 1, deliveryDays: 1 }), (e: any) => e.code === WaseetAiErrorCode.INVALID_RESPONSE);
 });
+
+test('the AI-13 matrix path is the SAME path matchProjectsForProvider really calls (and the one the AI service serves)', async () => {
+	const { UNVERIFIED_ENDPOINTS } = await import('./waseet-ai.client');
+	const calls: Recorded[] = [];
+	const client = new WaseetAiClient(jsonFetch(200, { success: true, data: { aiMatchingProjects: [], summary: {} } }, calls), config());
+	await client.matchProjectsForProvider({ providerId: 'p' } as any).catch(() => undefined);
+	assert.equal(calls.length, 1);
+	assert.equal(new URL(calls[0].url).pathname, UNVERIFIED_ENDPOINTS['AI-13']);
+	assert.equal(UNVERIFIED_ENDPOINTS['AI-13'], '/v1/ai/matching/projects-for-provider');
+});

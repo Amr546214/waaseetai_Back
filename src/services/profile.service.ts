@@ -83,12 +83,17 @@ export class ProfileService {
     }
 
     // Fetch last 3 change requests for the historical trace
-    // const latestHistory = await prisma.profileChangeRequest.findMany({
-    //   where: { userId },
-    //   orderBy: { createdAt: 'desc' },
-    //   take: 3
-    // });
-    const latestHistory: any[] = [];
+    let latestHistory: any[] = [];
+    try {
+      const recentRequests = await prisma.profileModificationRequest.findMany({
+        where: { providerId: userId },
+        orderBy: { createdAt: 'desc' },
+        take: 3
+      });
+      latestHistory = recentRequests.map(withHonestAiReview);
+    } catch (error) {
+      logger.warn(`[ProfileService] Could not fetch latestHistory (userId=${userId}): ${(error as Error)?.message}`);
+    }
 
     // Format output
     const { password, ...safeUser } = user;

@@ -153,10 +153,28 @@ class AiProposalService {
       throw new AppError(UNAVAILABLE_MESSAGE, 503);
     }
 
+    const rawAny: Record<string, unknown> = { ...raw };
+    const suggestedTotalPrice = typeof rawAny.suggestedTotalPrice === 'number' && Number.isFinite(rawAny.suggestedTotalPrice) && rawAny.suggestedTotalPrice > 0
+      ? Math.round(rawAny.suggestedTotalPrice)
+      : null;
+    const suggestedMilestones = Array.isArray(rawAny.suggestedMilestones)
+      ? rawAny.suggestedMilestones
+          .filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
+          .map((m) => ({
+            name: String(m.name ?? m.title ?? '').trim(),
+            desc: String(m.desc ?? m.description ?? '').trim(),
+            days: Math.max(1, Number(m.days ?? m.durationDays ?? 1)),
+            pct: Math.max(1, Math.min(100, Number(m.pct ?? m.percentage ?? 0))),
+          }))
+          .filter((m) => m.name.length > 0 && m.pct > 0)
+      : undefined;
+
     return {
       suggestedTitle,
       suggestedMessage,
       ...(typeof raw.suggestedOutputs === 'string' && raw.suggestedOutputs.trim() ? { suggestedOutputs: raw.suggestedOutputs.trim() } : {}),
+      ...(suggestedTotalPrice !== null ? { suggestedTotalPrice } : {}),
+      ...(suggestedMilestones && suggestedMilestones.length > 0 ? { suggestedMilestones } : {}),
       qualityScore: raw.qualityScore,
       qualityTag,
       suggestedAdvantages: Array.isArray(raw.suggestedAdvantages)

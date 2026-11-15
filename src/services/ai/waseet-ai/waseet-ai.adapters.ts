@@ -138,8 +138,13 @@ const MARKET_FIT_VALUES = ['High', 'Medium', 'Low'] as const;
  *  documented — so it (and anything else) maps to null instead of a guess. */
 export function normalizeMarketFitRating(raw: unknown): AiReviewResponse['marketFitRating'] {
   if (typeof raw !== 'string') return null;
-  const match = MARKET_FIT_VALUES.find((v) => v.toLowerCase() === raw.trim().toLowerCase());
-  return match ?? null;
+  const cleaned = raw.trim().toLowerCase();
+  const match = MARKET_FIT_VALUES.find((v) => v.toLowerCase() === cleaned);
+  if (match) return match;
+  if (cleaned === 'good') return 'High';
+  if (cleaned === 'moderate') return 'Medium';
+  if (cleaned === 'challenging') return 'Low';
+  return null;
 }
 
 function stringList(value: unknown, field: string): string[] {

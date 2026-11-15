@@ -6,15 +6,13 @@ import { aiFeatureUnavailablePayload } from './ai/ai-feature-unavailable';
 import { AdminActor, adminAuditData } from './admin-audit';
 import { providerNotifications } from './provider-notifications.service';
 import { resolveProofsForSubmission, buildAdminProofList, publicLegacyAttachments } from './accreditation-proof.service';
+import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
+import { createPrivateDownloadUrl } from '../utils/cloudinary-storage';
 
-// Accreditation sample submission. The AI evaluation of samples is DISABLED:
-// no documented WaseetAI contract exists for sample evaluation and it is not wired to the
-// internal LlmClient yet. Submitting a sample still works: it
-// is stored with status MANUAL_REVIEW and NO AI fields (no score, rating,
-// feedback or audit timestamp), so it waits for the existing human/admin
-// approval path. A sample can never become AI_VERIFIED through submission,
-// and no ProviderSpecialty credential is granted here. Previously stored AI
-// results on older samples remain readable unchanged.
+// Accreditation sample submission. A sample is ALWAYS stored for human review (status MANUAL_REVIEW) and can never become AI_VERIFIED through submission;
+// no ProviderSpecialty credential is granted here. When WaseetAI is configured an ADVISORY review runs after the commit: the service receives the content of the
+// caller's OWN proof files (bounded, images / PDF) and the specialty, and answers with a score only when it really read evidence. That answer is written
+// only if the sample is still the SAME revision and still waiting for review - a late answer never overwrites a newer review or resubmission.
 
 export const ACCREDITATION_AI_UNAVAILABLE_MESSAGE =
   'الفحص الذكي لنماذج الاعتماد متوقف مؤقتاً حتى يكتمل ربطه بخدمة WaseetAI. تم استلام نموذجك وتحويله للمراجعة اليدوية من فريق الاعتماد.';
@@ -52,6 +50,43 @@ async function claimForDecision(tx: any, id: string) {
     data: { decidedAt: new Date() },
   });
   if (claimed.count !== 1) throw new AppError('تمت معالجة هذا النموذج مسبقاً', 409);
+}
+
+/** What the website passes to the AI service for one sample: the user's own proof files as bounded `data:` URIs, and the ones it could not pass (reported, never guessed). */
+export const ACCREDITATION_AI_MAX_FILES = 3;
+export const ACCREDITATION_AI_MAX_FILE_BYTES = 2 * 1024 * 1024;
+const AI_READABLE_PROOF_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'application/pdf']);
+
+async function fetchOwnProofAsDataUri(ref: string, mimeType: string): Promise<string> {
+  const link = createPrivateDownloadUrl(ref, 60);
+  if (!link) throw new Error('NO_LINK');
+  const res = await globalThis.fetch(link.url, { signal: AbortSignal.timeout(20_000) });
+  if (!res.ok) throw new Error(`HTTP_${res.status}`);
+  const bytes = Buffer.from(await res.arrayBuffer());
+  if (!bytes.length || bytes.length > ACCREDITATION_AI_MAX_FILE_BYTES) throw new Error('BAD_SIZE');
+  return `data:${mimeType};base64,${bytes.toString('base64')}`;
+}
+
+/** Swappable so tests exercise the real review path without the network (the production path is never skipped under test). */
+export const accreditationAiDeps = {
+  client: waseetAiClient as Pick<typeof waseetAiClient, 'isConfigured' | 'reviewAccreditation'>,
+  readProof: fetchOwnProofAsDataUri,
+};
+
+export async function collectProofEvidence(uploads: Array<{ id: string; privateRef: string; fileName: string }>) {
+  const rows = uploads.length ? await prisma.accreditationProofUpload.findMany({ where: { id: { in: uploads.map(u => u.id) } }, select: { id: true, mimeType: true, bytes: true } }) : [];
+  const meta = new Map(rows.map(r => [r.id, r]));
+  const attachments: string[] = [];
+  const unreadAttachments: string[] = [];
+  for (const upload of uploads) {
+    const m = meta.get(upload.id);
+    if (attachments.length >= ACCREDITATION_AI_MAX_FILES || !m || !AI_READABLE_PROOF_MIME.has(m.mimeType) || m.bytes > ACCREDITATION_AI_MAX_FILE_BYTES) { unreadAttachments.push(upload.fileName); continue; }
+    try { attachments.push(await accreditationAiDeps.readProof(upload.privateRef, m.mimeType)); } catch (error) {
+      logger.warn(`[AccreditationAiService] proof ${upload.id} could not be passed to the AI review: ${(error as Error)?.message}`);
+      unreadAttachments.push(upload.fileName);
+    }
+  }
+  return { attachments, unreadAttachments };
 }
 
 export class AccreditationAiService {
@@ -120,7 +155,9 @@ export class AccreditationAiService {
       let sample: any;
       if (reopen) {
         // the SAME request goes back to the admin: its history stays, no duplicate row
-        sample = await tx.accreditationSample.update({ where: { id: reopen.id }, data: { ...content, status: AccreditationStatus.MANUAL_REVIEW, revision: { increment: 1 }, completionFields: [], userNote: null, decidedAt: null } });
+        sample = await tx.accreditationSample.update({ where: { id: reopen.id }, data: { ...content, status: AccreditationStatus.MANUAL_REVIEW, revision: { increment: 1 }, completionFields: [], userNote: null, decidedAt: null,
+          // the AI result belongs to the PREVIOUS revision: it is cleared in this same transaction, so a score of the old submission can never sit on the new one
+          aiScore: null, aiQualityRating: null, aiFeedbackAr: null, aiStrengths: [], aiRecommendations: [], aiAuditedAt: null } });
       } else {
         sample = await tx.accreditationSample.create({ data: { providerProfileId: providerProfile!.id, providerSpecialtyId: providerSpecialty!.id, ...content, status: AccreditationStatus.MANUAL_REVIEW } });
       }
@@ -131,17 +168,82 @@ export class AccreditationAiService {
       return { accreditationSample: sample, resubmitted: !!reopen };
     });
 
-    logger.info(`[AccreditationAiService] AccreditationSample ${accreditationSample.id} stored for manual review (AI evaluation paused)`);
+    let finalSample = accreditationSample;
+    let aiEvaluationResult: Record<string, unknown> | null = null;
+    let aiSuperseded = false;
+
+    if (accreditationAiDeps.client.isConfigured()) {
+      try {
+        const evidence = await collectProofEvidence(proofs.uploads);
+        const aiReview = await accreditationAiDeps.client.reviewAccreditation({
+          sampleId: accreditationSample.id,
+          providerSpecialtyId: providerSpecialty.id,
+          specialtyId: providerSpecialty.specialtyId,
+          specialtyName,
+          title,
+          description,
+          technologiesUsed: technologiesUsed || [],
+          projectUrl: projectUrl || undefined,
+          githubUrl: githubUrl || undefined,
+          attachments: evidence.attachments,
+          unreadAttachments: evidence.unreadAttachments,
+        });
+        const evalObj = aiReview.evaluation && typeof aiReview.evaluation === 'object' ? (aiReview.evaluation as Record<string, unknown>) : aiReview;
+        // a score only when the service says it read evidence; a written description alone is never a quality score
+        const readEvidence = aiReview.inspected === true;
+        const rawScore = evalObj.aiScore ?? aiReview.aiScore;
+        const aiScore = readEvidence && typeof rawScore === 'number' && Number.isFinite(rawScore) ? Math.round(rawScore) : null;
+        const rawRating = evalObj.aiQualityRating ?? aiReview.aiQualityRating;
+        const aiQualityRating = aiScore !== null && typeof rawRating === 'string' ? rawRating : null;
+        const feedbackObj = aiReview.feedback && typeof aiReview.feedback === 'object' ? (aiReview.feedback as Record<string, unknown>) : {};
+        const aiFeedbackAr = typeof evalObj.feedbackAr === 'string' ? evalObj.feedbackAr : typeof feedbackObj.summary === 'string' ? feedbackObj.summary : null;
+
+        if (aiScore !== null || aiFeedbackAr !== null) {
+          // write only if this is still the SAME revision and still waiting for review: an admin decision or a resubmission that happened while the AI was
+          // working wins, and the late answer is dropped
+          const written = await prisma.accreditationSample.updateMany({
+            where: { id: accreditationSample.id, revision: accreditationSample.revision ?? 1, status: AccreditationStatus.MANUAL_REVIEW, decidedAt: null },
+            data: {
+              ...(aiScore !== null ? { aiScore } : {}),
+              ...(aiQualityRating !== null ? { aiQualityRating } : {}),
+              ...(aiFeedbackAr !== null ? { aiFeedbackAr } : {}),
+              aiAuditedAt: new Date(),
+            },
+          });
+          if (written.count === 1) {
+            finalSample = (await prisma.accreditationSample.findUnique({ where: { id: accreditationSample.id } })) ?? accreditationSample;
+            aiEvaluationResult = aiReview;
+          } else {
+            aiSuperseded = true;
+            logger.warn(`[AccreditationAiService] late AI review dropped for sample ${accreditationSample.id}: the sample changed while the review ran`);
+          }
+        } else {
+          aiEvaluationResult = aiReview;
+        }
+      } catch (err) {
+        logger.warn(`[AccreditationAiService] Advisory AI review skipped for sample ${accreditationSample.id}: ${(err as Error)?.message}`);
+      }
+    }
+
+    logger.info(`[AccreditationAiService] AccreditationSample ${finalSample.id} stored for manual review`);
 
     return {
-      sample: accreditationSample,
+      sample: finalSample,
       resubmitted,
-      evaluation: null,
-      aiEvaluation: {
-        available: false,
-        specialtyName,
-        ...aiFeatureUnavailablePayload(ACCREDITATION_AI_UNAVAILABLE_MESSAGE)
-      }
+      evaluation: aiEvaluationResult,
+      aiEvaluation: aiEvaluationResult
+        ? {
+            ...aiEvaluationResult,
+            available: true,
+            specialtyName,
+            message: 'تم استلام نموذجك وتحويله للمراجعة اليدوية من فريق الاعتماد.',
+          }
+        : {
+            available: false,
+            specialtyName,
+            ...(aiSuperseded ? { superseded: true } : {}),
+            ...aiFeatureUnavailablePayload(ACCREDITATION_AI_UNAVAILABLE_MESSAGE)
+          }
     };
   }
 
