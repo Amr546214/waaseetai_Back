@@ -96,7 +96,7 @@ export const UNVERIFIED_ENDPOINTS = {
   'AI-07': '/v1/ai/accreditation-review',
   'AI-09': '/v1/ai/onboarding-quizzes',
   'AI-11': '/v1/ai/proposals/audit/stream',
-  'AI-13': '/v1/ai/matching/provider-projects',
+  'AI-13': '/v1/ai/matching/projects-for-provider',
   'AI-14': '/v1/ai/project-fit',
   'AI-15': '/v1/ai/marketplace/recommendations',
   'AI-17-bio': '/v1/ai/profile/bio',
