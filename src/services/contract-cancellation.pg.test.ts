@@ -347,7 +347,7 @@ test('pg: AFTER the agreement a submitted stage cannot be approved or paid (clie
 	assert.equal(after.stages.find((x: any) => x.id === w.s1.id).lifecycle.eligibility.approve.allowed, false);
 });
 
-test('pg: a PENDING cancellation request already stops new deliveries (423); withdrawing it (or a rejection) lets the provider deliver again; approvals are unchanged until the agreement', opts, async () => {
+test('pg: a PENDING cancellation request already stops new deliveries (423); withdrawing it (or a rejection) lets the provider deliver again; the client cannot approve or ask for a revision while it is open', opts, async () => {
 	const s = await svc(); const w = await world(); const r: any = await s.create(w.V.c, w.contract.id, { reason: 'طلب إلغاء مفتوح' });
 	await assert.rejects(() => projectProgressService.submitDelivery(w.provider.id, w.contract.id, w.s1.id, 'تسليم أثناء طلب الإلغاء', ['https://example.com/p']), refusedWith(423));
 	assert.equal(await stageState(w, w.s1.id), 'IN_PROGRESS'); assert.equal(await w.prisma.stageDelivery.count({ where: { stageId: w.s1.id } }), 0);
@@ -356,6 +356,8 @@ test('pg: a PENDING cancellation request already stops new deliveries (423); wit
 	await projectProgressService.submitDelivery(w.provider.id, w.contract.id, w.s1.id, 'تسليم بعد سحب طلب الإلغاء', ['https://example.com/q']);
 	assert.equal(await stageState(w, w.s1.id), 'SUBMITTED');
 	const w2 = await world({ submitted: true }); await s.create(w2.V.p, w2.contract.id, { reason: 'طلب من مقدم الخدمة' });
-	await projectProgressService.reviewDelivery(w2.client.id, w2.contract.id, w2.s1.id, 'approve'); // a pending request does not freeze the client's approval
-	assert.equal(await stageState(w2, w2.s1.id), 'APPROVED');
+	// a pending request freezes the client too: no approval, no revision request
+	await assert.rejects(() => projectProgressService.reviewDelivery(w2.client.id, w2.contract.id, w2.s1.id, 'approve'), refusedWith(423));
+	await assert.rejects(() => projectProgressService.reviewDelivery(w2.client.id, w2.contract.id, w2.s1.id, 'revision', 'يرجى التعديل'), refusedWith(423));
+	assert.equal(await stageState(w2, w2.s1.id), 'SUBMITTED');
 });
