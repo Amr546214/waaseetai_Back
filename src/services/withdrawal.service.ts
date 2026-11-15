@@ -1,7 +1,8 @@
+import { isProviderOwner, withdrawalSourceWhere } from '../utils/withdrawal-source';
 import { MIN_WITHDRAWAL_USD } from '../config/withdrawal-limits';
 import { randomUUID } from 'crypto';
 import { feePolicyService } from './fee-policy.service';
-import { Prisma, WithdrawalStatus, CommissionStatus, AccountType, UserRole } from '@prisma/client';
+import { Prisma, WithdrawalStatus, WithdrawalSource, CommissionStatus, AccountType, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
 import { readAffiliatePaypalEmail } from '../utils/affiliate-payout';
 import { PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
@@ -25,34 +26,16 @@ export const MARKETER_PAYPAL_REQUIRED_MESSAGE = 'أضف بريد PayPal لاست
 const MAX_SERIALIZATION_RETRIES = 3;
 
 /**
- * Release-blocker fix (marketer withdrawal approval): the Withdrawal table is
- * shared by provider-earnings withdrawals (createForProvider) and
- * affiliate-commission withdrawals (createForMarketer), and the schema has
- * NO per-row source/ledger discriminator. The ledger a withdrawal must be
- * checked against at approval time is therefore resolved from the owning
- * user's identity, mirroring exactly the role-equivalence rules
- * authorize() uses to gate the two creation endpoints:
- *  - a user who is NOT a provider but HAS an AffiliateProfile can only ever
- *    have reached createForMarketer() -> AFFILIATE_COMMISSION ledger
- *    (SUM of APPROVED CommissionLog rows — the authoritative commission
- *    balance the marketer dashboard/createForMarketer() already use);
- *  - every other user (any provider, including a provider who also holds
- *    the AFFILIATE role) -> PROVIDER_EARNINGS ledger, i.e. the pre-existing
- *    provider wallet check, completely unchanged.
- * A user who is both provider and affiliate is ambiguous without a schema
- * discriminator, so createForMarketer() refuses to create commission
- * withdrawals for such users (fail closed) — no commission withdrawal can
- * therefore ever be approved against the provider wallet.
+ * The Withdrawal table is shared by provider-earnings withdrawals (createForProvider) and affiliate-commission withdrawals (createForMarketer). Each row carries `source` (which ledger it
+ * was made against), so an account holding BOTH roles has two independent balances. The ledger a withdrawal is checked against at approval time is that row's own source; a row created before the
+ * column existed (source NULL) follows the historical rule (provider identity -> provider earnings, otherwise the affiliate commissions).
  */
 type ApprovalLedger =
-  | { kind: 'PROVIDER_EARNINGS' }
-  | { kind: 'AFFILIATE_COMMISSION'; affiliateId: string };
+  | { kind: 'PROVIDER_EARNINGS'; ownerIsProvider: boolean }
+  | { kind: 'AFFILIATE_COMMISSION'; affiliateId: string; ownerIsProvider: boolean };
 
 export function isProviderIdentity(user: { accountType: AccountType; roles: UserRole[] | null; activeRole: UserRole | null }): boolean {
-  return user.accountType === AccountType.PROVIDER_INDIVIDUAL
-    || user.accountType === AccountType.PROVIDER_COMPANY
-    || (user.roles ?? []).includes(UserRole.PROVIDER)
-    || user.activeRole === UserRole.PROVIDER;
+  return isProviderOwner(user);
 }
 
 /** PayPal is the only payout destination: a legacy bank destination on an old row (iban / account name / number) is never returned, not even to the admin. */
@@ -165,7 +148,7 @@ export class WithdrawalService {
             throw new AppError(`المبلغ المطلوب يتجاوز رصيدك المتاح (${availableBalance} $)`, 400);
           }
           const outstandingWithdrawals = await tx.withdrawal.aggregate({
-            where: { userId, status: { in: [...RESERVING_WITHDRAWAL_STATUSES] as WithdrawalStatus[] } },
+            where: { userId, status: { in: [...RESERVING_WITHDRAWAL_STATUSES] as WithdrawalStatus[] }, ...withdrawalSourceWhere(WithdrawalSource.PROVIDER, true) },
             _sum: { amount: true },
           });
           const outstandingAmount = outstandingWithdrawals._sum.amount || 0;
@@ -195,6 +178,7 @@ export class WithdrawalService {
               currency: 'USD', // all withdrawals are USD — never rely on the database default.
               feePolicyId: policy.id,
               minimumApplied: providerMinimum,
+              source: WithdrawalSource.PROVIDER,
               method: input.method,
               // The IMMUTABLE destination snapshot — resolved once, above,
               // outside this transaction/retry loop. Always null for a
@@ -247,17 +231,12 @@ export class WithdrawalService {
       select: { id: true, minimumPayoutAmount: true }
     });
     if (!affiliate) throw new AppError('ملف الوسيط التسويقي غير موجود', 404);
-    // Fail closed for a user who is ALSO a provider: approve() cannot tell a
-    // commission withdrawal from a provider-earnings withdrawal for such a
-    // user without a per-row ledger discriminator (not in the schema), so it
-    // would check the provider wallet — see ApprovalLedger above.
+    // An account may hold BOTH roles: the marketer's commissions are their own ledger (every withdrawal carries its `source`), independent of the provider's earnings.
     const owner = await prisma.user.findUnique({
       where: { id: userId },
       select: { accountType: true, roles: true, activeRole: true }
     });
-    if (owner && isProviderIdentity(owner)) {
-      throw new AppError('سحب العمولات غير متاح حاليًا للحسابات التي تجمع بين دور الوسيط ودور مقدم الخدمة، يرجى التواصل مع الدعم', 409);
-    }
+    const ownerIsProvider = !!owner && isProviderOwner(owner);
     // PayPal is the only payout destination: the saved PayPal email is snapshotted on the withdrawal (never a bank account).
     const paypalEmail = await readAffiliatePaypalEmail(userId, prisma);
     if (!paypalEmail) throw new AppError(MARKETER_PAYPAL_REQUIRED_MESSAGE, 400);
@@ -283,7 +262,7 @@ export class WithdrawalService {
             throw new AppError(`المبلغ المطلوب يتجاوز رصيدك المتاح (${availableBalance} $)`, 400);
           }
           const outstandingWithdrawals = await tx.withdrawal.aggregate({
-            where: { userId, status: { in: [WithdrawalStatus.PENDING, WithdrawalStatus.APPROVED, WithdrawalStatus.PROCESSING, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
+            where: { userId, status: { in: [WithdrawalStatus.PENDING, WithdrawalStatus.APPROVED, WithdrawalStatus.PROCESSING, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] }, ...withdrawalSourceWhere(WithdrawalSource.MARKETER, ownerIsProvider) },
             _sum: { amount: true },
           });
           const outstandingAmount = outstandingWithdrawals._sum.amount || 0;
@@ -300,6 +279,7 @@ export class WithdrawalService {
               currency: 'USD',
               feePolicyId: marketerPolicy.id,
               minimumApplied: effectiveMinimumPayout,
+              source: WithdrawalSource.MARKETER,
               method: 'paypal',
               paypalEmail,
               status: WithdrawalStatus.PENDING,
@@ -319,14 +299,16 @@ export class WithdrawalService {
 
   /** A marketer's own withdrawals: PayPal only. Any legacy bank destination on an old row (iban / account name / number) is never returned. */
   async listForMarketer(userId: string, status?: WithdrawalStatus, page = 1, limit = 10) {
-    const data = await this.listForUser(userId, status, page, limit);
+    const data = await this.listForUser(userId, status, page, limit, WithdrawalSource.MARKETER);
     return { ...data, items: data.items.map(withoutLegacyWithdrawalBankFields) };
   }
 
-  async listForUser(userId: string, status?: WithdrawalStatus, page = 1, limit = 10) {
+  /** A user's own withdrawals. `source` limits the list to ONE ledger (the provider's history never shows the marketer's requests and vice versa); omitted = both (admin / legacy callers). */
+  async listForUser(userId: string, status?: WithdrawalStatus, page = 1, limit = 10, source?: WithdrawalSource) {
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(100, Math.max(1, limit));
-    const where = { userId, ...(status ? { status } : {}) };
+    const owner = source ? await prisma.user.findUnique({ where: { id: userId }, select: { accountType: true, roles: true, activeRole: true } }) : null;
+    const where: Prisma.WithdrawalWhereInput = { userId, ...(status ? { status } : {}), ...(source ? withdrawalSourceWhere(source, !!owner && isProviderOwner(owner)) : {}) };
     const [items, total] = await Promise.all([
       prisma.withdrawal.findMany({
         where,
@@ -368,7 +350,7 @@ export class WithdrawalService {
     // balance for this withdrawal's ledger (same resolveApprovalLedger() and
     // same withdrawable-balance arithmetic approve() itself will use), so the
     // admin sees a real, non-invented figure instead of a fabricated one.
-    const availableBalance = await this.getWithdrawableBalanceForDisplay(item.userId);
+    const availableBalance = await this.getWithdrawableBalanceForDisplay(item);
     // Latest payout attempts: the failure / acceptance history of the PayPal transfer (state "paid" / "failed" is read from these + the withdrawal status).
     // Only read when payout automation is on: its tables are not guaranteed to exist in every environment.
     const payoutAutomationEnabled = isPayoutAutomationEnabled();
@@ -384,22 +366,23 @@ export class WithdrawalService {
    * purely to show an accurate number to an admin browsing the detail page;
    * it has no bearing on whether a withdrawal is actually approved.
    */
-  private async getWithdrawableBalanceForDisplay(userId: string): Promise<number> {
-    const ledger = await this.resolveApprovalLedger(userId);
+  private async getWithdrawableBalanceForDisplay(row: { userId: string; source?: WithdrawalSource | null }): Promise<number> {
+    const userId = row.userId;
+    const ledger = await this.resolveApprovalLedger(row);
     if (ledger.kind === 'AFFILIATE_COMMISSION') {
       const approvedCommissions = await prisma.commissionLog.aggregate({
         where: { affiliateId: ledger.affiliateId, status: CommissionStatus.APPROVED },
         _sum: { amount: true },
       });
       const alreadyWithdrawn = await prisma.withdrawal.aggregate({
-        where: { userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.PROCESSING, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
+        where: { userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.PROCESSING, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] }, ...withdrawalSourceWhere(WithdrawalSource.MARKETER, ledger.ownerIsProvider) },
         _sum: { amount: true },
       });
       return (approvedCommissions._sum.amount || 0) - (alreadyWithdrawn._sum.amount || 0);
     }
     const wallet = await providerFinanceService.getWallet(userId);
     const alreadyWithdrawn = await prisma.withdrawal.aggregate({
-      where: { userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
+      where: { userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] }, ...withdrawalSourceWhere(WithdrawalSource.PROVIDER, ledger.ownerIsProvider) },
       _sum: { amount: true },
     });
     return wallet.summary.availableBalance - (alreadyWithdrawn._sum.amount || 0);
@@ -452,7 +435,7 @@ export class WithdrawalService {
     if (!item) throw new AppError('طلب السحب غير موجود', 404);
     if (item.status !== WithdrawalStatus.PENDING) throw new AppError('طلب السحب تمت معالجته مسبقاً', 409);
 
-    const ledger = await this.resolveApprovalLedger(item.userId);
+    const ledger = await this.resolveApprovalLedger(item);
 
     for (let attempt = 1; attempt <= MAX_SERIALIZATION_RETRIES; attempt++) {
       try {
@@ -473,7 +456,7 @@ export class WithdrawalService {
             });
             const commissionBalance = approvedCommissions._sum.amount || 0;
             const alreadyWithdrawn = await tx.withdrawal.aggregate({
-              where: { userId: item.userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.PROCESSING, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
+              where: { userId: item.userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.PROCESSING, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] }, ...withdrawalSourceWhere(WithdrawalSource.MARKETER, ledger.ownerIsProvider) },
               _sum: { amount: true },
             });
             const withdrawableCommission = commissionBalance - (alreadyWithdrawn._sum.amount || 0);
@@ -488,7 +471,7 @@ export class WithdrawalService {
           const wallet = await providerFinanceService.getWallet(item.userId, tx);
           const availableBalance = wallet.summary.availableBalance;
           const alreadyWithdrawn = await tx.withdrawal.aggregate({
-            where: { userId: item.userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] } },
+            where: { userId: item.userId, status: { in: [WithdrawalStatus.APPROVED, WithdrawalStatus.COMPLETED, WithdrawalStatus.REVERSED] }, ...withdrawalSourceWhere(WithdrawalSource.PROVIDER, ledger.ownerIsProvider) },
             _sum: { amount: true },
           });
           const withdrawnAmount = alreadyWithdrawn._sum.amount || 0;
@@ -547,15 +530,18 @@ export class WithdrawalService {
   }
 
   /** See ApprovalLedger at the top of this file. */
-  private async resolveApprovalLedger(userId: string): Promise<ApprovalLedger> {
+  private async resolveApprovalLedger(row: { userId: string; source?: WithdrawalSource | null }): Promise<ApprovalLedger> {
     const owner = await prisma.user.findUnique({
-      where: { id: userId },
+      where: { id: row.userId },
       select: { accountType: true, roles: true, activeRole: true, affiliateProfile: { select: { id: true } } }
     });
-    if (owner?.affiliateProfile && !isProviderIdentity(owner)) {
-      return { kind: 'AFFILIATE_COMMISSION', affiliateId: owner.affiliateProfile.id };
+    const ownerIsProvider = !!owner && isProviderOwner(owner);
+    // the row's own ledger (a legacy NULL row follows the historical rule)
+    const source = row.source ?? (ownerIsProvider ? WithdrawalSource.PROVIDER : WithdrawalSource.MARKETER);
+    if (source === WithdrawalSource.MARKETER && owner?.affiliateProfile) {
+      return { kind: 'AFFILIATE_COMMISSION', affiliateId: owner.affiliateProfile.id, ownerIsProvider };
     }
-    return { kind: 'PROVIDER_EARNINGS' };
+    return { kind: 'PROVIDER_EARNINGS', ownerIsProvider };
   }
 
   async reject(id: string, adminId: string, input: RejectWithdrawalInput) {

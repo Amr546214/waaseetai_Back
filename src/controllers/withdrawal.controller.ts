@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { WithdrawalStatus } from '@prisma/client';
+import { WithdrawalSource, WithdrawalStatus } from '@prisma/client';
 import { createWithdrawalSchema, createMarketerWithdrawalSchema, rejectWithdrawalSchema, resolveWithdrawalSchema } from '../dtos/withdrawal.dto';
 import { AppError, zodAppError } from '../utils/app-error';
 import { withdrawalService, withoutLegacyWithdrawalBankFields } from '../services/withdrawal.service';
@@ -33,7 +33,8 @@ export async function listMyWithdrawals(req: Request, res: Response, next: NextF
     const rawStatus = req.query.status ? String(req.query.status).toUpperCase() : undefined;
     const status = rawStatus && Object.values(WithdrawalStatus).includes(rawStatus as WithdrawalStatus) ? rawStatus as WithdrawalStatus : undefined;
     if (rawStatus && !status) throw new AppError('حالة طلب السحب غير صحيحة', 400);
-    const data = await withdrawalService.listForMarketer(userId(req), status, Number(req.query.page) || 1, Number(req.query.limit) || 10); // PayPal only: no legacy bank fields
+    const data = await withdrawalService.listForUser(userId(req), status, Number(req.query.page) || 1, Number(req.query.limit) || 10, WithdrawalSource.PROVIDER); // the provider's own ledger; PayPal only below
+    data.items = data.items.map(withoutLegacyWithdrawalBankFields) as typeof data.items;
     res.json({ success: true, message: 'تم جلب سجل السحب بنجاح', data });
   } catch (error) { next(error); }
 }

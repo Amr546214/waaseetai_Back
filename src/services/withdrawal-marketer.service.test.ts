@@ -316,14 +316,16 @@ test('6b. concurrency: a SERIALIZABLE conflict is retried and the retry re-reads
 	assert.equal(walletTransactions.length, 0);
 });
 
-test('7. createForMarketer: a user who is both provider and affiliate is refused (409) — no commission withdrawal can be created that approve() would check against the provider wallet', async (t) => {
-	const { withdrawalService, createSpy, transactionSpy } = await load(t, {
+test('7. createForMarketer: a user who is BOTH provider and affiliate can withdraw their commissions — a separate ledger: the request is tagged MARKETER and checked against the commissions only', async (t) => {
+	const { withdrawalService, createSpy } = await load(t, {
 		owner: PROVIDER_AND_AFFILIATE,
 		commissions: [{ affiliateId: 'aff-1', amount: 500, status: 'APPROVED' }]
 	});
-	await assert.rejects(withdrawalService.createForMarketer('marketer-1', { amount: 100 }), (e: any) => e.statusCode === 409);
-	assert.equal(createSpy.mock.callCount(), 0);
-	assert.equal(transactionSpy.mock.callCount(), 0);
+	const created = await withdrawalService.createForMarketer('marketer-1', { amount: 100 });
+	assert.equal(created.amount, 100);
+	assert.equal(createSpy.mock.callCount(), 1);
+	assert.equal(createSpy.mock.calls[0].arguments[0].data.source, 'MARKETER');
+	await assert.rejects(withdrawalService.createForMarketer('marketer-1', { amount: 500 }), (e: any) => e.statusCode === 400, 'the commissions are the limit, never the provider wallet');
 });
 
 test('8. end-to-end: createForMarketer -> approve for a marketer who is not a provider; a second request beyond the remaining commission cannot be created', async (t) => {

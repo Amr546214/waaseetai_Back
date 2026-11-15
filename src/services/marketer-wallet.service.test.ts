@@ -84,9 +84,11 @@ test('a balance at or above the minimum with PayPal saved can be withdrawn (no b
   assert.equal(w.withdrawBlockedReason, null);
 });
 
-test('a user who is both provider and marketer is told commission withdrawal is not available (same 409 rule as the server)', async t => {
+test('a user who is both provider and marketer can withdraw commissions: nothing blocks them, and the provider side does not touch the commission balance', async t => {
   const svc = await load(t, { approved: 1000, owner: { accountType: 'PROVIDER_INDIVIDUAL', roles: ['PROVIDER', 'AFFILIATE'], activeRole: 'AFFILIATE' } });
-  assert.match((await svc.getWallet('u1')).withdrawBlockedReason, /يجمع|تجمع/);
+  const w = await svc.getWallet('u1');
+  assert.equal(w.withdrawBlockedReason, null);
+  assert.equal(w.withdrawableBalance, 1000);
 });
 
 test('no marketer profile: zero money and an honest reason, nothing invented', async t => {

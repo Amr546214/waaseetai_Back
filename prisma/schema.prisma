@@ -2384,6 +2384,11 @@ model Dispute {
 
 }
 
+enum WithdrawalSource {
+  PROVIDER
+  MARKETER
+}
+
 enum WithdrawalStatus {
   PENDING
   APPROVED
@@ -2447,6 +2452,10 @@ model Withdrawal {
   /// the fee policy version in force when the request was created, and the minimum payout it was checked against (NULL = created before policies were stored)
   feePolicyId    String?
   minimumApplied Float?
+  /// which ledger the request was made against: the provider's earnings or the marketer's commissions (a user may hold both roles; each has its own balance).
+  /// NULL = created before this column existed: it belongs to the PROVIDER ledger for a user with a provider identity, else to the MARKETER ledger (what the system always assumed).
+  source         WithdrawalSource?
+  @@index([userId, source, status])
   @@map("withdrawals")
 }
 
