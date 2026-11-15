@@ -419,3 +419,15 @@ test('13. no maximum: a large amount within the available commission is accepted
 	const ok = await withdrawalService.createForMarketer('marketer-1', { amount: 4800 }); assert.equal(ok.minimumApplied, 10);
 	await assert.rejects(withdrawalService.createForMarketer('marketer-1', { amount: 5000.01 }), (e: any) => e.statusCode === 400 && e.message.includes('$'));
 });
+
+test('14. marketer withdrawal fee: the policy PayPal percent is snapshotted (fee + net); the ledger keeps the gross amount', async (t) => {
+	const { withdrawalService } = await load(t, { owner: MARKETER, providerWalletBalance: 0, policy: { id: 'pol-3', marketerWithdrawalFeePercent: { bank_transfer: 8.25, paypal: 7.75, usdt: 4 } } as any, commissions: [{ affiliateId: 'aff-1', amount: 900, status: 'APPROVED' }] });
+	const w = await withdrawalService.createForMarketer('marketer-1', { amount: 100 });
+	assert.equal(w.amount, 100); assert.equal(w.feePercent, 7.75); assert.equal(w.feeAmount, 7.75); assert.equal(w.netAmount, 92.25);
+});
+
+test('15. without a policy payload the reference PayPal fee (7.75%) still applies - a withdrawal is never created fee-free by accident', async (t) => {
+	const { withdrawalService } = await load(t, { owner: MARKETER, providerWalletBalance: 0, commissions: [{ affiliateId: 'aff-1', amount: 900, status: 'APPROVED' }] });
+	const w = await withdrawalService.createForMarketer('marketer-1', { amount: 10 });
+	assert.equal(w.feePercent, 7.75); assert.equal(w.netAmount, 9.23);
+});
