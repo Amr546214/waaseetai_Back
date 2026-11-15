@@ -231,6 +231,9 @@ function classifyInitializationConflict(error: unknown): InitializationConflict 
 	return null;
 }
 
+/** What PayPal is actually paid: the net after the marketer withdrawal fee when one was snapshotted on the row, else the (gross) amount. Stable across retries: both come from the immutable row. */
+export const payoutAmountOf = (w: { amount: number; netAmount?: number | null }): number => (typeof w.netAmount === 'number' && Number.isFinite(w.netAmount) && w.netAmount > 0 ? w.netAmount : w.amount);
+
 export class PayoutService {
 	/**
 	 * Local state-machine primitive only — makes NO external call. Creates a
@@ -349,7 +352,7 @@ export class PayoutService {
 	async sendPayout(withdrawalId: string): Promise<SendPayoutResult> {
 		const withdrawal = await prisma.withdrawal.findUnique({
 			where: { id: withdrawalId },
-			select: { id: true, method: true, amount: true, currency: true, paypalEmail: true }
+			select: { id: true, method: true, amount: true, netAmount: true, currency: true, paypalEmail: true }
 		});
 		if (!withdrawal) {
 			throw new AppError('طلب السحب غير موجود', 404);
@@ -383,7 +386,7 @@ export class PayoutService {
 			senderBatchId: payoutAttempt.senderBatchId,
 			senderItemId: payoutAttempt.id,
 			recipientEmail: withdrawal.paypalEmail,
-			amount: withdrawal.amount
+			amount: payoutAmountOf(withdrawal) // the net after the marketer withdrawal fee when one was snapshotted; the gross amount otherwise
 		};
 
 		let result: PaypalPayoutCreateResult;
@@ -965,7 +968,7 @@ export class PayoutService {
 				senderBatchId: attempt.senderBatchId,
 				senderItemId: attempt.id,
 				recipientEmail: withdrawal.paypalEmail,
-				amount: withdrawal.amount
+				amount: payoutAmountOf(withdrawal)
 			});
 
 			if (recovery.outcome === 'UNKNOWN') {

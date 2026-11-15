@@ -3,6 +3,7 @@ import { isProviderOwner, withdrawalSourceWhere } from '../utils/withdrawal-sour
 import { MIN_WITHDRAWAL_USD } from '../config/withdrawal-limits';
 import { CommissionStatus, WithdrawalStatus } from '@prisma/client';
 import { feePolicyService } from './fee-policy.service';
+import { MARKETER_WITHDRAWAL_FEE_PERCENT } from '../utils/fee-policy';
 import { prisma } from '../config/db';
 import { readAffiliatePaypalEmail } from '../utils/affiliate-payout';
 import { IN_FLIGHT_WITHDRAWAL_STATUSES, RESERVING_WITHDRAWAL_STATUSES } from '../utils/withdrawal-reservation';
@@ -71,7 +72,9 @@ export const marketerWalletService = {
       minimumWithdrawal,
       paypalEmail,
       hasPaypal: !!paypalEmail,
-      withdrawBlockedReason
+      withdrawBlockedReason,
+      // the PayPal withdrawal fee (%) the next request will snapshot: the screen shows fee and net before the marketer confirms
+      withdrawalFeePercent: (await feePolicyService.active()).payload?.marketerWithdrawalFeePercent?.paypal ?? MARKETER_WITHDRAWAL_FEE_PERCENT.paypal
     };
   },
 
