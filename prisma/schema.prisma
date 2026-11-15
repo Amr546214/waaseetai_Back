@@ -2455,6 +2455,10 @@ model Withdrawal {
   /// which ledger the request was made against: the provider's earnings or the marketer's commissions (a user may hold both roles; each has its own balance).
   /// NULL = created before this column existed: it belongs to the PROVIDER ledger for a user with a provider identity, else to the MARKETER ledger (what the system always assumed).
   source         WithdrawalSource?
+  /// marketer withdrawal fee snapshot taken at creation from the fee policy in force (percent, fee, what is actually paid out). The ledger is debited the GROSS `amount`; PayPal is paid `netAmount`. NULL = no fee (providers, and every row created before this column)
+  feePercent     Float?
+  feeAmount      Float?
+  netAmount      Float?
   @@index([userId, source, status])
   @@map("withdrawals")
 }

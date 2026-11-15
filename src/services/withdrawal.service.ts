@@ -1,3 +1,5 @@
+import { MARKETER_WITHDRAWAL_FEE_PERCENT } from '../utils/fee-policy';
+import { round2 } from '../utils/money';
 import { isProviderOwner, withdrawalSourceWhere } from '../utils/withdrawal-source';
 import { MIN_WITHDRAWAL_USD } from '../config/withdrawal-limits';
 import { randomUUID } from 'crypto';
@@ -247,6 +249,11 @@ export class WithdrawalService {
       throw new AppError(`الحد الأدنى لطلب السحب ${effectiveMinimumPayout} $`, 400);
     }
 
+    const feePercent = marketerPolicy.payload?.marketerWithdrawalFeePercent?.paypal ?? MARKETER_WITHDRAWAL_FEE_PERCENT.paypal;
+    const payoutFeeNet = round2(input.amount * (1 - feePercent / 100));
+    const payoutFee = { percent: feePercent, fee: round2(input.amount - payoutFeeNet), net: payoutFeeNet };
+    if (!(payoutFee.net > 0)) throw new AppError('المبلغ بعد الرسوم غير صالح', 400);
+
     const withdrawalId = randomUUID();
     const referenceId = deriveWithdrawalReferenceId(withdrawalId);
 
@@ -276,6 +283,8 @@ export class WithdrawalService {
               referenceId,
               userId,
               amount: input.amount,
+              // the fee policy in force at creation is snapshotted: the ledger is debited the gross amount, PayPal is paid the net
+              feePercent: payoutFee.percent, feeAmount: payoutFee.fee, netAmount: payoutFee.net,
               currency: 'USD',
               feePolicyId: marketerPolicy.id,
               minimumApplied: effectiveMinimumPayout,

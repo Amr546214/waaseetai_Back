@@ -2039,3 +2039,11 @@ test('reconcile: reconcilePayoutAttempt() never calls sendPayout()/initializeSen
 	await payoutService.reconcilePayoutAttempt('attempt-1');
 	assert.equal(createPayoutSpy.mock.callCount(), 0, 'createPayout() (used only by sendPayout()) must never be called by reconciliation — sendPayout()/initializeSendPayout() have no other external side effect that could be exercised without it');
 });
+
+test('payoutAmountOf: PayPal is paid the snapshotted net when a marketer fee exists, otherwise the gross amount', async () => {
+	const { payoutAmountOf } = await import('./payout.service');
+	assert.equal(payoutAmountOf({ amount: 100, netAmount: 92.25 }), 92.25);
+	assert.equal(payoutAmountOf({ amount: 100, netAmount: null }), 100);
+	assert.equal(payoutAmountOf({ amount: 100 }), 100);
+	assert.equal(payoutAmountOf({ amount: 100, netAmount: 0 }), 100);
+});
