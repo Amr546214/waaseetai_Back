@@ -92,17 +92,17 @@ export function greetingForDialect(dialect?: string, skin?: string): string | un
   const isScout = skin === 'scout';
   if (dialect === 'egyptian') {
     return isScout
-      ? 'أهلًا! أنا نديم، دليلك في وسيط. أقدر أساعدك تفهم المنصة، تجهّز مشروعك أو عرضك، وتراجع التفاصيل المتاحة ليك. محتاج إيه؟'
+      ? 'أهلًا! أنا وسيط AI، دليلك في وسيط. أقدر أساعدك تفهم المنصة، تجهّز مشروعك أو عرضك، وتراجع التفاصيل المتاحة ليك. محتاج إيه؟'
       : 'أهلًا! أنا بيبو، مساعدك في وسيط. أقدر أساعدك تفهم المنصة، تجهّز مشروعك أو عرضك، وتراجع التفاصيل المتاحة ليك. محتاج إيه؟';
   }
   if (dialect === 'saudi' || dialect === 'gulf') {
     return isScout
-      ? 'هلا! أنا نديم، دليلك في وسيط. أساعدك تفهم المنصة وتجهّز مشروعك أو عرضك وتراجع التفاصيل المتاحة لك. وش تحتاج؟'
+      ? 'هلا! أنا وسيط AI، دليلك في وسيط. أساعدك تفهم المنصة وتجهّز مشروعك أو عرضك وتراجع التفاصيل المتاحة لك. وش تحتاج؟'
       : 'هلا! أنا بيبو، مساعدك في وسيط. أساعدك تفهم المنصة وتجهّز مشروعك أو عرضك وتراجع التفاصيل المتاحة لك. وش تحتاج؟';
   }
   if (dialect === 'english') {
     return isScout
-      ? 'Hi! I’m Nadeem, your Waseet guide. I can explain the platform and help you prepare projects, proposals, and review available information. How can I help?'
+      ? 'Hi! I’m Waseet AI, your Waseet guide. I can explain the platform and help you prepare projects, proposals, and review available information. How can I help?'
       : 'Hi! I’m Bebo, your Waseet assistant. I can explain the platform and help you prepare projects, proposals, and review available information. How can I help?';
   }
   return undefined;
@@ -111,7 +111,7 @@ export function greetingForDialect(dialect?: string, skin?: string): string | un
 export function greetingResponseForSkin(skin?: string): string {
   if (skin === 'scout') {
     return (
-      'أهلاً وسهلاً بك! أنا نديم، دليلك الذكي في منصة وسيط للخدمات المهنية والضمان المالي (Escrow).\n\n' +
+      'أهلاً وسهلاً بك! أنا وسيط AI، دليلك الذكي في منصة وسيط للخدمات المهنية والضمان المالي (Escrow).\n\n' +
       'أنا بخير ويسعدني تواصلك! يمكنني مساعدتك في:\n' +
       '• شرح كيفية عمل الضمان المالي لحماية المعاملات.\n' +
       '• خطوات نشر المشاريع، وتقديم العروض، وإدارة مراحل التسليم (Milestones).\n' +

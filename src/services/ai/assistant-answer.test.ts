@@ -10,7 +10,7 @@ test('legacy general questions use the real unrestricted avatar endpoint with id
     async avatarChat(body: any, options: any) { calls.push({ body, options }); return { text: 'الـ API واجهة للتواصل بين البرامج.' }; },
   };
   const events = await Array.fromAsync(streamAssistantAnswer({ mode: 'general', question: 'اشرح API', skin: 'scout', history: [{ role: 'user', content: 'اشرح JavaScript' }] }, { actor: { userId: 'verified', role: 'client' } }, client, true));
-  assert.match(calls[0].body.message, /نديم/);
+  assert.match(calls[0].body.message, /Waseet AI/);
   assert.match(calls[0].body.message, /JavaScript/);
   assert.equal(calls[0].body.includeBase64, false);
   assert.deepEqual(calls[0].options.actor, { userId: 'verified', role: 'client' });

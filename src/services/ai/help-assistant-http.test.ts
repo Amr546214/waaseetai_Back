@@ -74,8 +74,8 @@ test('companion answers identity locally for both skins and languages after auth
   let upstreamCalls = 0;
   const handler = createAssistantHttpHandler({ isBlocked: async () => false, client: { async *streamHelpChat() { upstreamCalls++; } } });
   for (const [skin, language, message, name] of [
-    ['scout', 'ar', 'انت مين؟', 'نديم'], ['classic', 'ar', 'إنت مين؟', 'بيبو'],
-    ['scout', 'en', 'Who are you?', 'Nadeem'], ['classic', 'en', "What's your name?", 'Bebo'],
+    ['scout', 'ar', 'انت مين؟', 'وسيط AI'], ['classic', 'ar', 'إنت مين؟', 'بيبو'],
+    ['scout', 'en', 'Who are you?', 'Waseet AI'], ['classic', 'en', "What's your name?", 'Bebo'],
   ] as const) {
     const { req, res } = fixture({ message, skin, language });
     await handler(req, res);

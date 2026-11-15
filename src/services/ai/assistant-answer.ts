@@ -16,7 +16,7 @@ function isLegacyKnowledgeGap(text: string): boolean {
 
 /** The older deployed avatar endpoint has no native history or character fields. */
 export function legacyAssistantMessage(body: HelpChatRequest, knowledgeGap = false): string {
-  const name = body.skin === 'classic' ? 'بيبو (Bebo)' : 'نديم (Nadeem)';
+  const name = body.skin === 'classic' ? 'بيبو (Bebo)' : 'Waseet AI';
   const language = body.language === 'en' || body.dialect === 'english' ? 'English' : body.dialect === 'msa' ? 'العربية الفصحى' : body.dialect === 'saudi' || body.dialect === 'gulf' ? 'العربية الخليجية' : 'المصرية';
   const style = body.profile === 'fast' ? 'رد مختصر ومباشر، وتوسع فقط إذا طلب المستخدم تفاصيل.' : body.profile === 'deep' ? 'قدّم شرحًا مفصلًا ومنظمًا بقدر ما يحتاجه السؤال.' : 'أجب بوضوح وبقدر السؤال، وتجنب المقدمات الطويلة.';
   const instructions = knowledgeGap
