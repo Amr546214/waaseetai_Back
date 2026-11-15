@@ -239,7 +239,7 @@ test('a revision request is still allowed during a dispute (it is not an approva
   assert.equal(w.get().escrow.releasedAmount, 0);
 });
 
-test('getProjectProgress exposes the freeze to both apps (frozen, count, reason, canApproveStage=false); delivery flags stay on', async (t) => {
+test('getProjectProgress exposes the freeze to both apps (frozen, count, reason, canApproveStage=false); new deliveries are stopped for the provider', async (t) => {
   const w = makeWorld(t, { disputes: [dispute(), dispute({ id: 'd2', openedById: 'provider-1', status: 'UNDER_REVIEW' })] });
   const mod = w.get();
   // getProjectProgress needs a wider contract graph than the release path: serve it from a dedicated minimal mock.
@@ -260,8 +260,9 @@ test('getProjectProgress exposes the freeze to both apps (frozen, count, reason,
   assert.match(asClient.approvalBlockedReason, /نزاع/);
   const asProvider = await projectProgressService.getProjectProgress('provider-1', 'project-1');
   assert.equal(asProvider.disputeFreeze.frozen, true);
-  assert.equal(asProvider.canSubmitDelivery, true, 'delivery stays allowed for the provider');
-  assert.ok(asProvider.canUploadDelivery);
+  assert.equal(asProvider.canSubmitDelivery, false, 'new deliveries are stopped while a dispute is open');
+  assert.equal(asProvider.canUploadDelivery, false);
+  assert.match(asProvider.uploadBlockedReason, /نزاع مفتوح/);
 });
 
 // ───────────────────────── freeze: concurrency ─────────────────────────

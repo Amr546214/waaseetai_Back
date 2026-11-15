@@ -1,4 +1,4 @@
-import { assertNoAgreedCancellation, hasAgreedCancellation, CANCELLATION_FROZEN_MESSAGE } from './cancellation-freeze';
+import { assertNoAgreedCancellation, hasAgreedCancellation, hasOpenCancellation, CANCELLATION_FROZEN_MESSAGE } from './cancellation-freeze';
 import { accrueCashbackForDeliveryCompletion, notifyCashbackCredited, type CashbackNotice } from './cashback.service';
 import { lockRequestRow } from './lock-order';
 import { assertNoAdminFreeze } from './admin-hold';
@@ -238,7 +238,7 @@ export class ProjectProgressService {
     const escrow = escrowFacts(contract.project.escrow);
     // THE lifecycle (single source of truth, see project-lifecycle.service): state, closure, money and per-action eligibility with specific reasons.
     const closureKind = (await (prisma as any).engagementClosure?.findUnique?.({ where: { projectId: contract.projectId }, select: { kind: true } }))?.kind ?? null;
-    const lifecycleInput = { cancellationAgreed: cancellationFrozen, closureKind, viewer: { role: role as 'client' | 'provider', isOwner: true }, contractStatus: contract.status, contractPrice: contract.price, escrow: contract.project.escrow, stages: persisted, activeDisputes: { count: activeDisputeCount, latestId: openDispute?.id ?? null, latestStatus: openDispute?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId, adminAudit) : null };
+    const lifecycleInput = { cancellationAgreed: cancellationFrozen, cancellationRequested: await hasOpenCancellation({ contractId: contract.id, projectId: contract.projectId }), closureKind, viewer: { role: role as 'client' | 'provider', isOwner: true }, contractStatus: contract.status, contractPrice: contract.price, escrow: contract.project.escrow, stages: persisted, activeDisputes: { count: activeDisputeCount, latestId: openDispute?.id ?? null, latestStatus: openDispute?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId, adminAudit) : null };
     const lifecycle = computeLifecycle(lifecycleInput);
     const lifecycleStage = new Map(lifecycle.stages.map(s => [s.stageId, s]));
     // Contract-level approval gate (any role's view): is approving a delivered stage possible right now, and if not, why.

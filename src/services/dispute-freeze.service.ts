@@ -15,7 +15,7 @@ import { AppError } from '../utils/app-error';
 export const ACTIVE_DISPUTE_STATUSES: DisputeStatus[] = [DisputeStatus.OPEN, DisputeStatus.UNDER_REVIEW];
 
 export const PROJECT_FROZEN_CODE = 'PROJECT_FROZEN_BY_DISPUTE';
-export const PROJECT_FROZEN_MESSAGE = 'اعتماد المراحل وصرف الأموال موقوفان بسبب نزاع مفتوح على هذا المشروع إلى أن تحسمه الإدارة. التواصل ورفع الأدلة وتسليم الأعمال متاحة.';
+export const PROJECT_FROZEN_MESSAGE = 'اعتماد المراحل وصرف الأموال وتسليم الأعمال موقوفة بسبب نزاع مفتوح على هذا المشروع إلى أن تحسمه الإدارة. التواصل ورفع الأدلة متاحان.';
 
 /** Anything with a `dispute` delegate: the global client or an interactive-transaction client. */
 export type DisputeDb = { dispute: Pick<Prisma.TransactionClient['dispute'], 'count' | 'findMany' | 'findFirst'> };
