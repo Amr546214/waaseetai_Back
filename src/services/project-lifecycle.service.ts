@@ -89,6 +89,7 @@ export const NO_STAGE_AVAILABLE_AR = 'لا توجد مرحلة متاحة لهذ
 export const DELIVERY_FROZEN_DISPUTE_AR = 'التسليم متوقف بسبب نزاع مفتوح على المشروع إلى أن تحسمه الإدارة';
 export const CANCELLATION_REQUESTED_DELIVERY_AR = 'يوجد طلب إلغاء بالتراضي مفتوح: التسليم متوقف حتى يُرفض الطلب أو يُسحب أو تُنجز التسوية';
 export const STAGE_CANCELLED_LABEL_AR = 'أُغلقت بإلغاء العقد';
+export const CANCELLATION_REQUESTED_REVIEW_AR = 'يوجد طلب إلغاء بالتراضي مفتوح: مراجعة التسليم واعتماده وطلب تعديله متوقفة حتى يُرفض الطلب أو يُسحب أو تُنجز التسوية';
 export const CANCELLATION_AGREED_DELIVERY_AR = 'اتفق الطرفان على إلغاء العقد بالتراضي: لا يمكن رفع تسليم جديد بانتظار تسوية الإدارة';
 export const AMEND_FROZEN_AR = 'لا يمكن تعديل العقد أثناء وجود نزاع مفتوح على المشروع';
 const WRONG_ROLE_AR: Record<ActionName, string> = {
@@ -199,9 +200,12 @@ function contractBlock(input: LifecycleInput, action: ActionName): Eligibility |
   if (contractStatus !== 'ACTIVE') return no('CONTRACT_ENDED', contractStatus === 'DISPUTED' && input.activeDisputes.count > 0 ? PROJECT_FROZEN_MESSAGE : CONTRACT_ENDED_AR);
   // A mutual cancellation both sides agreed to: the contract is as good as stopped. Nothing new is delivered and nothing new is approved / paid (423, like the dispute freeze).
   // An open dispute stops new deliveries (approvals were already frozen); communication and evidence stay possible.
-  if (providerAction && input.activeDisputes.count > 0) return no('ACTIVE_DISPUTE_FREEZE', DELIVERY_FROZEN_DISPUTE_AR, 423);
-  if (input.cancellationRequested && !input.cancellationAgreed && providerAction) return no('CONTRACT_CANCELLATION_REQUESTED', CANCELLATION_REQUESTED_DELIVERY_AR, 423);
-  if (input.cancellationAgreed && (providerAction || action === 'approve')) return no('CONTRACT_CANCELLATION_AGREED', providerAction ? CANCELLATION_AGREED_DELIVERY_AR : CANCELLATION_FROZEN_MESSAGE, 423);
+  // Both sides stop: the provider cannot deliver, the client cannot review / approve / ask for a revision, for as long as a dispute or a mutual-cancellation request (waiting or agreed) is open.
+  // Communication and evidence stay possible.
+  const stageAction = providerAction || clientAction;
+  if (stageAction && input.activeDisputes.count > 0) return no('ACTIVE_DISPUTE_FREEZE', providerAction ? DELIVERY_FROZEN_DISPUTE_AR : PROJECT_FROZEN_MESSAGE, 423);
+  if (stageAction && input.cancellationAgreed) return no('CONTRACT_CANCELLATION_AGREED', providerAction ? CANCELLATION_AGREED_DELIVERY_AR : CANCELLATION_FROZEN_MESSAGE, 423);
+  if (stageAction && input.cancellationRequested) return no('CONTRACT_CANCELLATION_REQUESTED', providerAction ? CANCELLATION_REQUESTED_DELIVERY_AR : CANCELLATION_REQUESTED_REVIEW_AR, 423);
   return null;
 }
 

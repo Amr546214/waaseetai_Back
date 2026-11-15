@@ -22,7 +22,7 @@ import { ACTIVE_DISPUTE_STATUSES, PROJECT_FROZEN_MESSAGE, assertProjectNotFrozen
 import { deliveryCompletedProject, adminSettlementFor, adminSettledView, stageDisplayStatus, SETTLED_LABEL_AR, SETTLED_STAGE_LABEL_AR } from './settlement-state.service';
 import { adminAudit } from './admin-audit.service';
 import { ensureProjectRoom, postRevisionRequestMessage } from './project-conversation.service';
-import { computeLifecycle, evaluateAction, assertStageActionAllowed, settlementDistributionOf } from './project-lifecycle.service';
+import { CANCELLATION_REQUESTED_REVIEW_AR, computeLifecycle, evaluateAction, assertStageActionAllowed, settlementDistributionOf } from './project-lifecycle.service';
 
 const PROJECT_COMPLETION_POINTS = 50;
 
@@ -231,7 +231,9 @@ export class ProjectProgressService {
     const disputeFreeze = freezeStateOf(activeDisputeCount, openDispute);
     // Agreed mutual cancellation freezes approvals of NEW stages too (read model; the approval itself is refused server-side with 423).
     const cancellationFrozen = await hasAgreedCancellation({ contractId: contract.id, projectId: contract.projectId });
-    const cancellationFreeze = { frozen: cancellationFrozen, reason: cancellationFrozen ? CANCELLATION_FROZEN_MESSAGE : null };
+    // Any open mutual-cancellation request (waiting for the other side, or agreed) freezes delivery, review, approval and revision requests for both sides.
+    const cancellationOpen = cancellationFrozen || await hasOpenCancellation({ contractId: contract.id, projectId: contract.projectId });
+    const cancellationFreeze = { frozen: cancellationOpen, agreed: cancellationFrozen, reason: cancellationFrozen ? CANCELLATION_FROZEN_MESSAGE : cancellationOpen ? CANCELLATION_REQUESTED_REVIEW_AR : null };
     // Derived end state: closed by an admin financial dispute decision (nothing stored, progress still counts only approved stages).
     const settlement = await adminSettlementFor({ projectId: contract.projectId });
     const state = contractDeliveryState(contract.status, persisted, contract.project.escrow, openDispute?.status || null);

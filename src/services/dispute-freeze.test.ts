@@ -231,11 +231,11 @@ test('the freeze is per project: a dispute on ANOTHER project never blocks this 
   assert.equal(w.get().escrow.releasedAmount, 400);
 });
 
-test('a revision request is still allowed during a dispute (it is not an approval and moves no money)', async (t) => {
+test('a revision request is refused during a dispute too (423): nothing is reviewed, approved or sent back while it is open', async (t) => {
   const w = makeWorld(t, { disputes: [dispute()] });
   const { projectProgressService } = await loadServices(t, w);
-  await projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'revision', 'يرجى تعديل الألوان كما في الملاحظات');
-  assert.equal(w.get().stages[0].status, 'REVISION_REQUESTED');
+  await assert.rejects(() => projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'revision', 'يرجى تعديل الألوان كما في الملاحظات'), (e: any) => e.statusCode === 423 || e.status === 423);
+  assert.equal(w.get().stages[0].status, 'SUBMITTED');
   assert.equal(w.get().escrow.releasedAmount, 0);
 });
 
