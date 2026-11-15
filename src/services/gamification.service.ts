@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { LEVEL_MATRIX, REQUESTER_LEVEL_MATRIX, deriveProviderProgression, deriveRequesterProgression } from '../utils/progression-calculators';
 import { levelColor, levelStation } from '../config/levels.config';
 import { deliveryCompletedProject } from './settlement-state.service';
+import { cashbackGate } from '../config/cashback-policy';
 
 // Phase 3D.3A: LEVEL_MATRIX now lives in progression-calculators.ts (a pure
 // module with no Prisma/DB imports) — re-exported here unchanged so existing
@@ -204,7 +205,9 @@ export async function getClientLevelDetails(userId: string) {
       isCurrent: l.index === current.index
     })),
     // what is not live yet, so the page can say it (no fake progress): points events and a client rating do not exist
-    limitations: ['CLIENT_POINTS_NOT_AWARDED', ...(ratingCount === 0 ? ['CLIENT_NO_RATINGS_YET'] : []), 'CASHBACK_NOT_CREDITED_YET']
+    // `cashbackActive` = the engine really credits the wallet (both switches on); the page words itself from this, never from a fixed sentence
+    cashbackActive: cashbackGate() === null,
+    limitations: ['CLIENT_POINTS_NOT_AWARDED', ...(ratingCount === 0 ? ['CLIENT_NO_RATINGS_YET'] : []), cashbackGate() === null ? 'CASHBACK_CREDITED_ON_COMPLETION' : 'CASHBACK_NOT_CREDITED_YET']
   };
 }
 

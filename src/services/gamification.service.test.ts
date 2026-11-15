@@ -142,4 +142,15 @@ test('client level view: level 1 "زائر" with 1% cashback for a new client, t
   assert.deepEqual([r.nextLevelProgress.title, r.nextLevelProgress.pointsGap, r.nextLevelProgress.projectsGap, r.nextLevelProgress.nextCashbackRate], ['مستكشف', 51, 2, 1.5]);
   assert.equal(r.currentStats.avgRating, null);
   assert.deepEqual(r.limitations, ['CLIENT_POINTS_NOT_AWARDED', 'CLIENT_NO_RATINGS_YET', 'CASHBACK_NOT_CREDITED_YET']);
+  assert.equal(r.cashbackActive, false);
+});
+
+test('client level view: once the cashback engine is really on, the page says it is credited on completion (no "display only" wording)', async (t) => {
+  const prev = { e: process.env.CASHBACK_ENGINE_ENABLED, w: process.env.CASHBACK_WALLET_TIMING };
+  process.env.CASHBACK_ENGINE_ENABLED = 'true'; process.env.CASHBACK_WALLET_TIMING = 'IMMEDIATE';
+  t.after(() => { for (const [k, v] of [['CASHBACK_ENGINE_ENABLED', prev.e], ['CASHBACK_WALLET_TIMING', prev.w]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
+  const { getClientLevelDetails } = await loadGamificationServiceWithFixture(t, { completedProjects: 0, totalPoints: 0, avgRating: 0, clientPoints: 0 });
+  const r = await getClientLevelDetails('client-1');
+  assert.equal(r.cashbackActive, true);
+  assert.deepEqual(r.limitations, ['CLIENT_POINTS_NOT_AWARDED', 'CLIENT_NO_RATINGS_YET', 'CASHBACK_CREDITED_ON_COMPLETION']);
 });
