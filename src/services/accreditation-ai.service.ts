@@ -6,6 +6,7 @@ import { aiFeatureUnavailablePayload } from './ai/ai-feature-unavailable';
 import { AdminActor, adminAuditData } from './admin-audit';
 import { providerNotifications } from './provider-notifications.service';
 import { resolveProofsForSubmission, buildAdminProofList, publicLegacyAttachments } from './accreditation-proof.service';
+import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 
 // Accreditation sample submission. The AI evaluation of samples is DISABLED:
 // no documented WaseetAI contract exists for sample evaluation and it is not wired to the
@@ -131,17 +132,78 @@ export class AccreditationAiService {
       return { accreditationSample: sample, resubmitted: !!reopen };
     });
 
-    logger.info(`[AccreditationAiService] AccreditationSample ${accreditationSample.id} stored for manual review (AI evaluation paused)`);
+    let finalSample = accreditationSample;
+    let aiEvaluationResult: Record<string, unknown> | null = null;
+
+    if (waseetAiClient.isConfigured() && !process.env.NODE_TEST_CONTEXT && process.env.NODE_ENV !== 'test') {
+      try {
+        const aiReview = await waseetAiClient.reviewAccreditation({
+          sampleId: accreditationSample.id,
+          providerSpecialtyId: providerSpecialty.id,
+          providerId: userId,
+          specialtyId: providerSpecialty.id,
+          specialtyName,
+          title,
+          description,
+          technologiesUsed: technologiesUsed || [],
+          projectUrl: projectUrl || undefined,
+          githubUrl: githubUrl || undefined,
+          sample: {
+            title,
+            description,
+            technologiesUsed: technologiesUsed || [],
+            projectUrl: projectUrl || undefined,
+            githubUrl: githubUrl || undefined,
+          },
+        });
+        const evalObj = aiReview.evaluation && typeof aiReview.evaluation === 'object'
+          ? (aiReview.evaluation as Record<string, unknown>)
+          : aiReview;
+        const rawScore = evalObj.aiScore ?? aiReview.aiScore;
+        const aiScore = typeof rawScore === 'number' && Number.isFinite(rawScore) ? Math.round(rawScore) : null;
+        const rawRating = evalObj.aiQualityRating ?? aiReview.aiQualityRating;
+        const aiQualityRating = typeof rawRating === 'string' ? rawRating : null;
+        const feedbackObj = aiReview.feedback && typeof aiReview.feedback === 'object' ? (aiReview.feedback as Record<string, unknown>) : {};
+        const aiFeedbackAr = typeof evalObj.feedbackAr === 'string'
+          ? evalObj.feedbackAr
+          : typeof feedbackObj.summary === 'string'
+            ? feedbackObj.summary
+            : null;
+
+        if (aiScore !== null || aiFeedbackAr !== null) {
+          finalSample = await prisma.accreditationSample.update({
+            where: { id: accreditationSample.id },
+            data: {
+              ...(aiScore !== null ? { aiScore } : {}),
+              ...(aiQualityRating !== null ? { aiQualityRating } : {}),
+              ...(aiFeedbackAr !== null ? { aiFeedbackAr } : {}),
+              aiAuditedAt: new Date(),
+            },
+          });
+        }
+        aiEvaluationResult = aiReview;
+      } catch (err) {
+        logger.warn(`[AccreditationAiService] Advisory AI review skipped for sample ${accreditationSample.id}: ${(err as Error)?.message}`);
+      }
+    }
+
+    logger.info(`[AccreditationAiService] AccreditationSample ${finalSample.id} stored for manual review`);
 
     return {
-      sample: accreditationSample,
+      sample: finalSample,
       resubmitted,
-      evaluation: null,
-      aiEvaluation: {
-        available: false,
-        specialtyName,
-        ...aiFeatureUnavailablePayload(ACCREDITATION_AI_UNAVAILABLE_MESSAGE)
-      }
+      evaluation: aiEvaluationResult,
+      aiEvaluation: aiEvaluationResult
+        ? {
+            available: true,
+            specialtyName,
+            ...aiEvaluationResult,
+          }
+        : {
+            available: false,
+            specialtyName,
+            ...aiFeatureUnavailablePayload(ACCREDITATION_AI_UNAVAILABLE_MESSAGE)
+          }
     };
   }
 

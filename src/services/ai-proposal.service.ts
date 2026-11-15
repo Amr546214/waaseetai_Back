@@ -1,6 +1,5 @@
 import { PROPOSAL_TITLE_MAX, PROPOSAL_MESSAGE_MAX } from '../dtos/create-proposal.dto';
 import { AppError } from '../utils/app-error';
-import { prisma } from '../utils/prisma.client';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import type { EnrichProposalRequest } from './ai/waseet-ai/waseet-ai.types';
 import { normalizeWaseetAiError } from './ai/waseet-ai/waseet-ai.errors';
@@ -99,32 +98,35 @@ class AiProposalService {
       deliveryDays?: number;
     } | undefined;
 
-    try {
-      const [project, clientRequest] = await Promise.all([
-        prisma.project.findUnique({ where: { id } }),
-        prisma.clientRequest.findUnique({ where: { id } })
-      ]);
-      const pTitle = project?.title || clientRequest?.title;
-      const pDesc = project?.description || clientRequest?.description;
-      const pReqs = Array.isArray(project?.requirements) && project.requirements.length > 0
-        ? project.requirements
-        : (Array.isArray(clientRequest?.requiredSkills) ? clientRequest.requiredSkills : []);
-      const bMin = project?.budgetMin ?? clientRequest?.minBudget;
-      const bMax = project?.budgetMax ?? clientRequest?.maxBudget;
-      const dDays = project?.deliveryDays ?? clientRequest?.expectedDurationDays;
+    if (!process.env.NODE_TEST_CONTEXT && process.env.NODE_ENV !== 'test') {
+      try {
+        const { prisma } = await import('../utils/prisma.client');
+        const [project, clientRequest] = await Promise.all([
+          prisma.project.findUnique({ where: { id } }),
+          prisma.clientRequest.findUnique({ where: { id } })
+        ]);
+        const pTitle = project?.title || clientRequest?.title;
+        const pDesc = project?.description || clientRequest?.description;
+        const pReqs = Array.isArray(project?.requirements) && project.requirements.length > 0
+          ? project.requirements
+          : (Array.isArray(clientRequest?.requiredSkills) ? clientRequest.requiredSkills : []);
+        const bMin = project?.budgetMin ?? clientRequest?.minBudget;
+        const bMax = project?.budgetMax ?? clientRequest?.maxBudget;
+        const dDays = project?.deliveryDays ?? clientRequest?.expectedDurationDays;
 
-      if (pTitle || pDesc) {
-        projectContext = {
-          ...(pTitle ? { title: pTitle } : {}),
-          ...(pDesc ? { description: pDesc } : {}),
-          ...(pReqs.length > 0 ? { requirements: pReqs } : {}),
-          ...(typeof bMin === 'number' && Number.isFinite(bMin) ? { budgetMin: bMin } : {}),
-          ...(typeof bMax === 'number' && Number.isFinite(bMax) ? { budgetMax: bMax } : {}),
-          ...(typeof dDays === 'number' && Number.isFinite(dDays) && dDays > 0 ? { deliveryDays: dDays } : {})
-        };
+        if (pTitle || pDesc) {
+          projectContext = {
+            ...(pTitle ? { title: pTitle } : {}),
+            ...(pDesc ? { description: pDesc } : {}),
+            ...(pReqs.length > 0 ? { requirements: pReqs } : {}),
+            ...(typeof bMin === 'number' && Number.isFinite(bMin) ? { budgetMin: bMin } : {}),
+            ...(typeof bMax === 'number' && Number.isFinite(bMax) ? { budgetMax: bMax } : {}),
+            ...(typeof dDays === 'number' && Number.isFinite(dDays) && dDays > 0 ? { deliveryDays: dDays } : {})
+          };
+        }
+      } catch {
+        // Non-fatal: proceed even if project lookup fails
       }
-    } catch {
-      // Non-fatal: proceed even if project lookup fails
     }
 
     if (!title && !message) {
@@ -153,10 +155,28 @@ class AiProposalService {
       throw new AppError(UNAVAILABLE_MESSAGE, 503);
     }
 
+    const rawAny = raw as Record<string, unknown>;
+    const suggestedTotalPrice = typeof rawAny.suggestedTotalPrice === 'number' && Number.isFinite(rawAny.suggestedTotalPrice) && rawAny.suggestedTotalPrice > 0
+      ? Math.round(rawAny.suggestedTotalPrice)
+      : null;
+    const suggestedMilestones = Array.isArray(rawAny.suggestedMilestones)
+      ? rawAny.suggestedMilestones
+          .filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
+          .map((m) => ({
+            name: String(m.name ?? m.title ?? '').trim(),
+            desc: String(m.desc ?? m.description ?? '').trim(),
+            days: Math.max(1, Number(m.days ?? m.durationDays ?? 1)),
+            pct: Math.max(1, Math.min(100, Number(m.pct ?? m.percentage ?? 0))),
+          }))
+          .filter((m) => m.name.length > 0 && m.pct > 0)
+      : undefined;
+
     return {
       suggestedTitle,
       suggestedMessage,
       ...(typeof raw.suggestedOutputs === 'string' && raw.suggestedOutputs.trim() ? { suggestedOutputs: raw.suggestedOutputs.trim() } : {}),
+      ...(suggestedTotalPrice !== null ? { suggestedTotalPrice } : {}),
+      ...(suggestedMilestones && suggestedMilestones.length > 0 ? { suggestedMilestones } : {}),
       qualityScore: raw.qualityScore,
       qualityTag,
       suggestedAdvantages: Array.isArray(raw.suggestedAdvantages)

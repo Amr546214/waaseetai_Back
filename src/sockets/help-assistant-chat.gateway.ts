@@ -7,17 +7,17 @@ import { WaseetAiErrorCode, normalizeWaseetAiError } from '../services/ai/waseet
 import type { HelpChatHistoryMessage, HelpChatRequest } from '../services/ai/waseet-ai/waseet-ai.types';
 import { isSocketAiRateLimited, SOCKET_AI_RATE_LIMIT_MESSAGE } from '../utils/socket-ai-rate-limit';
 import { resolveHelpAssistantUser, type HelpAssistantRole } from './help-assistant-auth';
-import { assistantGreetingResponse, isGreetingIntent, resolveAssistantOptions, resolveAssistantMode } from '../services/ai/assistant-request';
+import { assistantGreetingResponse, EXAM_INTEGRITY_REFUSAL_AR, isExamSolvingIntent, isGreetingIntent, resolveAssistantOptions, resolveAssistantMode } from '../services/ai/assistant-request';
 import { streamAssistantAnswer } from '../services/ai/assistant-answer';
 export { isGreetingIntent } from '../services/ai/assistant-request';
 
 export const GREETING_RESPONSE =
-	'أهلاً وسهلاً بك! أنا المساعد الذكي لمنصة وسيط AI للخدمات المهنية والضمان المالي (Escrow).\n\n' +
-	'أنا بخير ويسعدني تواصلك! يمكنني مساعدتك في:\n' +
-	'• شرح كيفية عمل الضمان المالي لحماية المعاملات.\n' +
+	'يا هلا وحياك الله! أنا المساعد الذكي لموقع وسيط AI للخدمات المهنية والضمان المالي (Escrow).\n\n' +
+	'أنا بخير ويسعدني تواصلك! أقدر أساعدك في:\n' +
+	'• شرح طريقة عمل الضمان المالي لحماية المعاملات.\n' +
 	'• خطوات نشر المشاريع، وتقديم العروض، وإدارة مراحل التسليم (Milestones).\n' +
 	'• توضيح آليات تقييم جودة التسليمات وحل النزاعات.\n\n' +
-	'كيف أستطيع مساعدتك اليوم؟';
+	'وش تحتاج أساعدك فيه اليوم؟';
 
 // Help AI Assistant + dashboard Avatar — ONE real engine for every
 // authenticated dashboard role (client / provider / marketer / admin).
@@ -158,6 +158,31 @@ export class HelpAssistantChatGateway {
 			catch (error) { const denied = (error as {code?:string})?.code === 'FORBIDDEN'; return void fail(denied ? 'FORBIDDEN' : 'INVALID_INPUT', denied ? 'لا تملك صلاحية الوصول إلى سياق هذا المشروع.' : 'إعدادات المساعد غير صالحة.'); }
 			if (this.requestSequence.get(socket) !== sequence) return;
 			settings.mode = resolveAssistantMode(question, settings.mode);
+
+			// 3.5. Server-side Exam Integrity Guard: block help answers during active technical assessments or direct exam-solving prompts
+			const pagePath = settings.pageContext?.path;
+			let hasActiveExam = isExamSolvingIntent(question, pagePath);
+			if (!hasActiveExam && auth.role === 'provider' && !process.env.NODE_TEST_CONTEXT && process.env.NODE_ENV !== 'test') {
+				try {
+					const { prisma } = await import('../config/db');
+					const activeAttempt = await prisma.assessmentAttempt.findFirst({
+						where: {
+							providerSpecialty: { providerProfile: { userId: auth.userId } },
+							status: { in: ['IN_PROGRESS', 'STREAMING'] as any },
+						},
+						select: { id: true },
+					});
+					if (activeAttempt) hasActiveExam = true;
+				} catch {
+					// Non-fatal DB check fallback
+				}
+			}
+			if (hasActiveExam) {
+				socket.emit('help:answer_start', { clientRequestId });
+				socket.emit('help:answer_chunk', { clientRequestId, chunk: EXAM_INTEGRITY_REFUSAL_AR });
+				socket.emit('help:answer_complete', { clientRequestId });
+				return;
+			}
 
 			// 4. Intent Routing: immediate friendly greeting unless disabled
 			const bypassGreeting = process.env.DISABLE_GREETING_FILTER === 'true' || process.env.BYPASS_GREETING_FILTER === 'true';

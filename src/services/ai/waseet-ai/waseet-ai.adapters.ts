@@ -28,7 +28,7 @@ import type { AiReviewResponse, CompleteProjectDataDto, MilestoneDto, SuggestedM
 /** The provider "New Project" wizard (step 4) prices every service in US
  *  dollars ("حدد القيمة الإجمالية بالدولار الأمريكي", `$`), so that is the
  *  currency sent for its totalAmount/budget. */
-export const PROVIDER_SERVICE_CURRENCY = 'USD';
+export const PROVIDER_SERVICE_CURRENCY = 'SAR';
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -138,8 +138,13 @@ const MARKET_FIT_VALUES = ['High', 'Medium', 'Low'] as const;
  *  documented — so it (and anything else) maps to null instead of a guess. */
 export function normalizeMarketFitRating(raw: unknown): AiReviewResponse['marketFitRating'] {
   if (typeof raw !== 'string') return null;
-  const match = MARKET_FIT_VALUES.find((v) => v.toLowerCase() === raw.trim().toLowerCase());
-  return match ?? null;
+  const cleaned = raw.trim().toLowerCase();
+  const match = MARKET_FIT_VALUES.find((v) => v.toLowerCase() === cleaned);
+  if (match) return match;
+  if (cleaned === 'good') return 'High';
+  if (cleaned === 'moderate') return 'Medium';
+  if (cleaned === 'challenging') return 'Low';
+  return null;
 }
 
 function stringList(value: unknown, field: string): string[] {
