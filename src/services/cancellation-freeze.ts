@@ -21,6 +21,15 @@ export async function hasAgreedCancellation(key: { contractId?: string; projectI
 	return !!(await db.contractCancellationRequest.findFirst({ where: { OR: or, status: CancellationRequestStatus.AGREED_PENDING_SETTLEMENT }, select: { id: true } }));
 }
 
+/** A mutual-cancellation request that is still OPEN (waiting for the other side, or agreed and waiting for the administration): delivery of new work stops while it is. */
+export async function hasOpenCancellation(key: { contractId?: string; projectId?: string }, db: Db = prisma as unknown as Db): Promise<boolean> {
+	const or: Prisma.ContractCancellationRequestWhereInput[] = [];
+	if (key.contractId) or.push({ contractId: key.contractId });
+	if (key.projectId) or.push({ projectId: key.projectId });
+	if (!or.length || !db.contractCancellationRequest) return false;
+	return !!(await db.contractCancellationRequest.findFirst({ where: { OR: or, status: { in: [CancellationRequestStatus.PENDING_OTHER_PARTY, CancellationRequestStatus.AGREED_PENDING_SETTLEMENT] } }, select: { id: true } }));
+}
+
 export async function assertNoAgreedCancellation(key: { contractId?: string; projectId?: string }, db: Db = prisma as unknown as Db): Promise<void> {
 	if (await hasAgreedCancellation(key, db)) throw new AppError(CANCELLATION_FROZEN_MESSAGE, 423, [{ code: CANCELLATION_FROZEN_CODE }], CANCELLATION_FROZEN_CODE);
 }

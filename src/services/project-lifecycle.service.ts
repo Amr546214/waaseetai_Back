@@ -3,7 +3,7 @@ import { CLOSURE_LABEL_AR } from './engagement-closure.service';
 import { AppError } from '../utils/app-error';
 import { adminAudit } from './admin-audit.service';
 import { ACTIVE_DISPUTE_STATUSES, PROJECT_FROZEN_CODE, PROJECT_FROZEN_MESSAGE, countActiveDisputes, getActiveDisputeForProject } from './dispute-freeze.service';
-import { hasAgreedCancellation, CANCELLATION_FROZEN_MESSAGE } from './cancellation-freeze';
+import { hasAgreedCancellation, hasOpenCancellation, CANCELLATION_FROZEN_MESSAGE } from './cancellation-freeze';
 import { AdminSettlement, SETTLED_DISPUTE_WHERE, SETTLED_LABEL_AR, SETTLED_STAGE_LABEL_AR, STAGE_CLOSED_BY_SETTLEMENT, STAGE_STATUSES_CLOSED_BY_SETTLEMENT, adminSettlementFor } from './settlement-state.service';
 
 /**
@@ -34,7 +34,7 @@ export interface Eligibility {
 }
 export type BlockCode =
   | 'NOT_OWNER' | 'WRONG_ROLE' | 'CLOSED_BY_SETTLEMENT' | 'CONTRACT_COMPLETED' | 'CONTRACT_CANCELLED' | 'CONTRACT_NOT_STARTED' | 'CONTRACT_ENDED'
-  | 'ACTIVE_DISPUTE_FREEZE' | 'CONTRACT_CANCELLATION_AGREED' | 'STAGE_NOT_STARTED' | 'STAGE_NOT_DELIVERED' | 'STAGE_ALREADY_DECIDED' | 'STAGE_AWAITING_REVIEW' | 'STAGE_NOT_OPEN' | 'NO_STAGES' | 'NO_STAGE_AVAILABLE';
+  | 'ACTIVE_DISPUTE_FREEZE' | 'CONTRACT_CANCELLATION_AGREED' | 'CONTRACT_CANCELLATION_REQUESTED' | 'STAGE_NOT_STARTED' | 'STAGE_NOT_DELIVERED' | 'STAGE_ALREADY_DECIDED' | 'STAGE_AWAITING_REVIEW' | 'STAGE_NOT_OPEN' | 'NO_STAGES' | 'NO_STAGE_AVAILABLE';
 
 export type Eligibilities = Record<ActionName, Eligibility>;
 
@@ -62,6 +62,8 @@ export interface LifecycleInput {
   closureKind?: string | null;
   /** both parties agreed to cancel the contract by consent and the settlement is still pending: no new delivery and no new approval (server-enforced) */
   cancellationAgreed?: boolean;
+  /** a mutual-cancellation request is open (waiting for the other side, or agreed): the provider delivers nothing new meanwhile */
+  cancellationRequested?: boolean;
 }
 
 // ---------------------------------------------------------------------------------------------------------- wording
@@ -84,6 +86,8 @@ export const STAGE_AWAITING_REVIEW_AR = 'التسليم الحالي بانتظ�
 export const STAGE_NOT_OPEN_AR = 'هذه المرحلة غير متاحة حاليًا';
 export const NO_STAGES_AR = 'لم تُجهَّز مراحل المشروع بعد';
 export const NO_STAGE_AVAILABLE_AR = 'لا توجد مرحلة متاحة لهذا الإجراء حاليًا';
+export const DELIVERY_FROZEN_DISPUTE_AR = 'التسليم متوقف بسبب نزاع مفتوح على المشروع إلى أن تحسمه الإدارة';
+export const CANCELLATION_REQUESTED_DELIVERY_AR = 'يوجد طلب إلغاء بالتراضي مفتوح: التسليم متوقف حتى يُرفض الطلب أو يُسحب أو تُنجز التسوية';
 export const STAGE_CANCELLED_LABEL_AR = 'أُغلقت بإلغاء العقد';
 export const CANCELLATION_AGREED_DELIVERY_AR = 'اتفق الطرفان على إلغاء العقد بالتراضي: لا يمكن رفع تسليم جديد بانتظار تسوية الإدارة';
 export const AMEND_FROZEN_AR = 'لا يمكن تعديل العقد أثناء وجود نزاع مفتوح على المشروع';
@@ -194,6 +198,9 @@ function contractBlock(input: LifecycleInput, action: ActionName): Eligibility |
   if (CONTRACT_NOT_STARTED_AR[contractStatus]) return no('CONTRACT_NOT_STARTED', notStartedReason(contractStatus, viewer.role));
   if (contractStatus !== 'ACTIVE') return no('CONTRACT_ENDED', contractStatus === 'DISPUTED' && input.activeDisputes.count > 0 ? PROJECT_FROZEN_MESSAGE : CONTRACT_ENDED_AR);
   // A mutual cancellation both sides agreed to: the contract is as good as stopped. Nothing new is delivered and nothing new is approved / paid (423, like the dispute freeze).
+  // An open dispute stops new deliveries (approvals were already frozen); communication and evidence stay possible.
+  if (providerAction && input.activeDisputes.count > 0) return no('ACTIVE_DISPUTE_FREEZE', DELIVERY_FROZEN_DISPUTE_AR, 423);
+  if (input.cancellationRequested && !input.cancellationAgreed && providerAction) return no('CONTRACT_CANCELLATION_REQUESTED', CANCELLATION_REQUESTED_DELIVERY_AR, 423);
   if (input.cancellationAgreed && (providerAction || action === 'approve')) return no('CONTRACT_CANCELLATION_AGREED', providerAction ? CANCELLATION_AGREED_DELIVERY_AR : CANCELLATION_FROZEN_MESSAGE, 423);
   return null;
 }
@@ -206,7 +213,7 @@ export function evaluateAction(input: LifecycleInput, action: ActionName, stage:
   if (action === 'amend') return frozen ? no('ACTIVE_DISPUTE_FREEZE', AMEND_FROZEN_AR, 423) : OK;
   if (!stage) return no(input.stages.length ? 'NO_STAGE_AVAILABLE' : 'NO_STAGES', input.stages.length ? NO_STAGE_AVAILABLE_AR : NO_STAGES_AR);
   if (action === 'upload' || action === 'submit') {
-    if (stage.status === 'IN_PROGRESS' || stage.status === 'REVISION_REQUESTED') return OK; // delivery stays allowed during a dispute (approved rule)
+    if (stage.status === 'IN_PROGRESS' || stage.status === 'REVISION_REQUESTED') return OK; // (a dispute / an open cancellation request already refused it in contractBlock)
     if (stage.status === 'PENDING') return no('STAGE_NOT_STARTED', STAGE_NOT_STARTED_AR);
     if (stage.status === 'SUBMITTED') return no('STAGE_AWAITING_REVIEW', STAGE_AWAITING_REVIEW_AR);
     if (stage.status === 'APPROVED') return no('STAGE_ALREADY_DECIDED', STAGE_ALREADY_DECIDED_DELIVERY_AR);
@@ -350,11 +357,12 @@ export async function settlementDistributionOf(disputeId: string, audit: Pick<ty
 }
 
 /** Gathers the dispute-side inputs of one project: active disputes + settlement (+ its distribution when settled). */
-export async function loadDisputeFacts(projectId: string, db: any = prisma): Promise<Pick<LifecycleInput, 'activeDisputes' | 'settlement' | 'settlementDistribution' | 'closureKind' | 'cancellationAgreed'>> {
+export async function loadDisputeFacts(projectId: string, db: any = prisma): Promise<Pick<LifecycleInput, 'activeDisputes' | 'settlement' | 'settlementDistribution' | 'closureKind' | 'cancellationAgreed' | 'cancellationRequested'>> {
   const [count, latest, settlement] = await Promise.all([countActiveDisputes(projectId, db), getActiveDisputeForProject(projectId, db), adminSettlementFor({ projectId }, db)]);
   const closure = db.engagementClosure?.findUnique ? await db.engagementClosure.findUnique({ where: { projectId }, select: { kind: true } }) : null;
   const cancellationAgreed = await hasAgreedCancellation({ projectId }, db);
-  return { cancellationAgreed, closureKind: closure?.kind ?? null, activeDisputes: { count, latestId: latest?.id ?? null, latestStatus: latest?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId) : null };
+  const cancellationRequested = await hasOpenCancellation({ projectId }, db);
+  return { cancellationAgreed, cancellationRequested, closureKind: closure?.kind ?? null, activeDisputes: { count, latestId: latest?.id ?? null, latestStatus: latest?.status ?? null }, settlement, settlementDistribution: settlement.settled ? await settlementDistributionOf(settlement.disputeId) : null };
 }
 
 /**

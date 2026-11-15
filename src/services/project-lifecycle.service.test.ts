@@ -149,7 +149,7 @@ test('open dispute: freeze reason shown, approval 423, but revision request and 
 	assert.equal(c.eligibility.amend.code, 'ACTIVE_DISPUTE_FREEZE');
 	assert.equal(c.operationalStatus, 'ACTIVE', 'a dispute is not an ended contract');
 	const p = computeLifecycle(as('provider', { stages: [stage('s1', 1, 'IN_PROGRESS')], activeDisputes: { count: 1, latestId: 'dsp-9' } }));
-	assert.equal(p.stages[0].eligibility.upload.allowed, true, 'delivery is allowed during a dispute');
+	for (const a of ['upload', 'submit'] as const) { assert.equal(p.stages[0].eligibility[a].allowed, false, `${a} is stopped during a dispute`); assert.equal(p.stages[0].eligibility[a].httpStatus, 423); assert.match(p.stages[0].eligibility[a].reason!, /نزاع مفتوح/); }
 	// the freeze reason is never confused with "contract ended" / "not the owner"
 	assert.notEqual(c.eligibility.approve.code, 'NOT_OWNER');
 	assert.notEqual(c.eligibility.approve.code, 'CONTRACT_ENDED');
@@ -221,4 +221,13 @@ test('a CANCELLED contract closes its unreleased stages (nothing to review, deli
 	const c = computeLifecycle(as('client', { contractStatus: 'CANCELLED', escrow: { status: 'REFUNDED', amount: 20, releasedAmount: 10 }, stages: [stage('s1', 1, 'APPROVED'), stage('s2', 2, 'SUBMITTED', [d('SUBMITTED')]), stage('s3', 3, 'PENDING')] }));
 	assert.equal(c.stages[0].amountState, 'RELEASED'); assert.equal(c.stages[0].closedBySettlement, false);
 	for (const i of [1, 2]) { assert.equal(c.stages[i].closedBySettlement, true); assert.equal(c.stages[i].awaitingClientReview, false); assert.equal(c.stages[i].displayStatusLabel, 'أُغلقت بإلغاء العقد'); assert.equal(c.stages[i].eligibility.approve.allowed, false); }
+});
+
+test('an OPEN cancellation request (not yet agreed) also stops new deliveries (423 with its own reason) but not the client approving what was already delivered; once agreed the approval freezes too', () => {
+	const p = computeLifecycle(as('provider', { cancellationRequested: true, stages: [stage('s1', 1, 'IN_PROGRESS')] }));
+	for (const a of ['upload', 'submit'] as const) { assert.equal(p.stages[0].eligibility[a].allowed, false, a); assert.equal(p.stages[0].eligibility[a].code, 'CONTRACT_CANCELLATION_REQUESTED'); assert.equal(p.stages[0].eligibility[a].httpStatus, 423); assert.match(p.stages[0].eligibility[a].reason!, /طلب إلغاء بالتراضي/); }
+	const c = computeLifecycle(as('client', { cancellationRequested: true }));
+	assert.equal(c.stages[0].eligibility.approve.allowed, true, 'before the agreement approvals are unchanged');
+	const agreed = computeLifecycle(as('client', { cancellationRequested: true, cancellationAgreed: true }));
+	assert.equal(agreed.stages[0].eligibility.approve.code, 'CONTRACT_CANCELLATION_AGREED');
 });

@@ -417,7 +417,7 @@ export const getActiveProjects = async (req: Request, res: Response, next: NextF
 				status,
 				statusLabel,
 				...state,
-				// The dispute freeze (approval / release only) is shown by the list too; delivery stays allowed.
+				// The dispute freeze (approval / release / new deliveries) is shown by the list too.
 				hasActiveDispute: disputeByProject.has(project.id),
 				operationalStatus: c.status === 'ACTIVE' ? 'ACTIVE' : 'PENDING_START',
 				closedBySettlement: false,
