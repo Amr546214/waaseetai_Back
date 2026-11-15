@@ -16,13 +16,14 @@
 import { PROVIDER_LEVELS, CLIENT_LEVELS } from '../config/levels.config';
 
 // مقدم الخدمة — commission DECREASES as the level rises (loyalty reward).
+// `title` is a LIVE read of the level's name: the owner can rename a level («هوية المستويات») and every reader (level page, roadmap, cards, progression results) must follow without a restart.
 export const PROVIDER_LEVEL_MATRIX = PROVIDER_LEVELS.map(d => ({
-  index: d.level, title: d.name, reqPoints: d.minPoints, reqProjects: d.minProjects, reqRating: d.minRating, commission: d.percent
+  index: d.level, get title() { return d.name; }, reqPoints: d.minPoints, reqProjects: d.minProjects, reqRating: d.minRating, commission: d.percent
 }));
 
 // طالب الخدمة — `rate` is CASHBACK %, and it INCREASES with the level.
 export const REQUESTER_LEVEL_MATRIX = CLIENT_LEVELS.map(d => ({
-  index: d.level, title: d.name, reqPoints: d.minPoints, reqProjects: d.minProjects, reqRating: d.minRating, rate: d.percent
+  index: d.level, get title() { return d.name; }, reqPoints: d.minPoints, reqProjects: d.minProjects, reqRating: d.minRating, rate: d.percent
 }));
 
 // (The broker ladder is MARKETER_LEVELS in config/levels.config.ts; the commission engine reads it through config/affiliate-levels.config.ts.)

@@ -40,3 +40,15 @@ test('a stored row with junk is parsed to the valid part only (a hand-edited row
 	assert.deepEqual(o, { PROVIDER: { '1': { light: '#ABCDEF' } }, CLIENT: { '2': { name: 'اسم سليم' } } });
 	assert.deepEqual(parseOverrides(null), {}); assert.deepEqual(parseOverrides('x'), {});
 });
+
+test('the level matrices (level page, roadmap, progression results) follow a published rename at once: titles are live, a spread copy taken per request is current, a reset restores the workbook name', async () => {
+	const { PROVIDER_LEVEL_MATRIX, REQUESTER_LEVEL_MATRIX, deriveProviderProgression } = await import('../utils/progression-calculators');
+	const first = applyChanges({}, [{ role: 'PROVIDER', level: 1, name: 'فلاح' }, { role: 'CLIENT', level: 1, name: 'ضيف' }]);
+	applyLevelOverrides(first);
+	assert.equal(PROVIDER_LEVEL_MATRIX[0].title, 'فلاح'); assert.equal(REQUESTER_LEVEL_MATRIX[0].title, 'ضيف');
+	assert.equal(({ ...PROVIDER_LEVEL_MATRIX[0] }).title, 'فلاح', 'the roadmap spreads each level per request');
+	assert.equal(JSON.parse(JSON.stringify(PROVIDER_LEVEL_MATRIX[0])).title, 'فلاح', 'and the title is serialised');
+	assert.equal((deriveProviderProgression({ points: 0, completedProjects: 0, avgRating: 0 } as any) as any).currentLevelTitle, 'فلاح');
+	applyLevelOverrides({});
+	assert.equal(PROVIDER_LEVEL_MATRIX[0].title, defaultLevelName('PROVIDER', 1)); assert.equal(PROVIDER_LEVEL_MATRIX[1].title, defaultLevelName('PROVIDER', 2));
+});
