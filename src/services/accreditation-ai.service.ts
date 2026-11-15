@@ -155,7 +155,9 @@ export class AccreditationAiService {
       let sample: any;
       if (reopen) {
         // the SAME request goes back to the admin: its history stays, no duplicate row
-        sample = await tx.accreditationSample.update({ where: { id: reopen.id }, data: { ...content, status: AccreditationStatus.MANUAL_REVIEW, revision: { increment: 1 }, completionFields: [], userNote: null, decidedAt: null } });
+        sample = await tx.accreditationSample.update({ where: { id: reopen.id }, data: { ...content, status: AccreditationStatus.MANUAL_REVIEW, revision: { increment: 1 }, completionFields: [], userNote: null, decidedAt: null,
+          // the AI result belongs to the PREVIOUS revision: it is cleared in this same transaction, so a score of the old submission can never sit on the new one
+          aiScore: null, aiQualityRating: null, aiFeedbackAr: null, aiStrengths: [], aiRecommendations: [], aiAuditedAt: null } });
       } else {
         sample = await tx.accreditationSample.create({ data: { providerProfileId: providerProfile!.id, providerSpecialtyId: providerSpecialty!.id, ...content, status: AccreditationStatus.MANUAL_REVIEW } });
       }

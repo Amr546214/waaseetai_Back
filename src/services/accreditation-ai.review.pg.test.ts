@@ -110,3 +110,65 @@ test('real DB: an AI failure leaves the stored MANUAL_REVIEW sample untouched (n
 	assert.equal(row.aiAuditedAt, null);
 	assert.equal(res.aiEvaluation.available, false);
 });
+
+// ── resubmission: the previous revision's AI result is cleared in the same transaction ──
+async function rejectedWithScore(w: Awaited<ReturnType<typeof world>>, extra: Record<string, unknown> = {}) {
+	const old = await w.prisma.accreditationSample.create({ data: { id: id(), providerProfileId: (await w.prisma.providerProfile.findUniqueOrThrow({ where: { userId: w.user.id } })).id, providerSpecialtyId: w.ps.id, title: 'قديم', description: 'نموذج سابق', technologiesUsed: [], status: 'REJECTED', decidedAt: new Date(), aiScore: 91, aiQualityRating: 'Excellent', aiFeedbackAr: 'تقييم النسخة الأولى', aiStrengths: ['قوة'], aiRecommendations: ['توصية'], aiAuditedAt: new Date('2026-11-01T10:00:00Z'), revision: 1, ...extra } as any });
+	await w.prisma.accreditationProofUpload.updateMany({ where: { id: { in: [w.png.id, w.zip.id] } }, data: { sampleId: old.id } });
+	return old;
+}
+
+test('real DB: resubmitting a 91-point sample CLEARS every AI field in the transaction; if the new review fails the sample has NO score', opts, async () => {
+	const w = await world(); const old = await rejectedWithScore(w);
+	const { svc } = await service(async () => { throw new Error('upstream down'); }, w);
+	const res: any = await svc.submitAccreditationSample({ ...w.dto, resubmitSampleId: old.id });
+	const row = await w.prisma.accreditationSample.findUniqueOrThrow({ where: { id: old.id } });
+	assert.equal(res.sample.id, old.id, 'the SAME request is re-opened');
+	assert.equal(row.revision, 2);
+	assert.equal(row.status, 'MANUAL_REVIEW');
+	assert.deepEqual([row.aiScore, row.aiQualityRating, row.aiFeedbackAr, row.aiAuditedAt], [null, null, null, null]);
+	assert.deepEqual([row.aiStrengths, row.aiRecommendations], [[], []]);
+});
+
+test('real DB: resubmission whose review read NO evidence: the old 91 is gone and only the new feedback (no score) is stored', opts, async () => {
+	const w = await world(); const old = await rejectedWithScore(w);
+	const { svc } = await service(async () => ({ inspected: false, evaluation: { aiScore: 88, aiQualityRating: 'Good', feedbackAr: 'لم تُقرأ أدلة' } }), w);
+	await svc.submitAccreditationSample({ ...w.dto, resubmitSampleId: old.id });
+	const row = await w.prisma.accreditationSample.findUniqueOrThrow({ where: { id: old.id } });
+	assert.equal(row.aiScore, null);
+	assert.equal(row.aiQualityRating, null);
+	assert.equal(row.aiFeedbackAr, 'لم تُقرأ أدلة');
+});
+
+test('real DB: resubmission with evidence replaces the old 91 with the NEW score', opts, async () => {
+	const w = await world(); const old = await rejectedWithScore(w);
+	const { svc } = await service(async () => ({ inspected: true, evaluation: { aiScore: 64, aiQualityRating: 'Acceptable', feedbackAr: 'تقييم النسخة الثانية' } }), w);
+	await svc.submitAccreditationSample({ ...w.dto, resubmitSampleId: old.id });
+	const row = await w.prisma.accreditationSample.findUniqueOrThrow({ where: { id: old.id } });
+	assert.equal(row.aiScore, 64);
+	assert.equal(row.aiFeedbackAr, 'تقييم النسخة الثانية');
+});
+
+test('real DB: a reviewer decision that lands while the NEW review runs still wins, and the old 91 does not come back', opts, async () => {
+	const w = await world(); const old = await rejectedWithScore(w);
+	const { svc } = await service(async (_body, ctx) => {
+		await ctx.prisma.accreditationSample.update({ where: { id: ctx.sampleId }, data: { status: 'REJECTED', decidedAt: new Date() } });
+		return { inspected: true, evaluation: { aiScore: 70, aiQualityRating: 'Good', feedbackAr: 'متأخر' } };
+	}, w);
+	await svc.submitAccreditationSample({ ...w.dto, resubmitSampleId: old.id });
+	const row = await w.prisma.accreditationSample.findUniqueOrThrow({ where: { id: old.id } });
+	assert.equal(row.status, 'REJECTED', 'the reviewer\'s decision stands');
+	assert.deepEqual([row.aiScore, row.aiFeedbackAr, row.aiAuditedAt], [null, null, null]);
+});
+
+test('real DB: a NEWER revision (a second resubmission) that lands while the review of the previous one runs wins over the late answer', opts, async () => {
+	const w = await world(); const old = await rejectedWithScore(w);
+	const { svc } = await service(async (_body, ctx) => {
+		await ctx.prisma.accreditationSample.update({ where: { id: ctx.sampleId }, data: { revision: { increment: 1 }, aiScore: null } });
+		return { inspected: true, evaluation: { aiScore: 70, aiQualityRating: 'Good', feedbackAr: 'متأخر' } };
+	}, w);
+	await svc.submitAccreditationSample({ ...w.dto, resubmitSampleId: old.id });
+	const row = await w.prisma.accreditationSample.findUniqueOrThrow({ where: { id: old.id } });
+	assert.equal(row.revision, 3);
+	assert.equal(row.aiScore, null);
+});
