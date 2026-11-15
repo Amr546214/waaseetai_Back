@@ -66,11 +66,13 @@ export class MarketplaceAiService {
 			};
 		}
 
-		// 2. Try AI-assisted ranking over the real DB candidates when WaseetAI is configured
-		if (waseetAiClient.isConfigured() && !process.env.NODE_TEST_CONTEXT && process.env.NODE_ENV !== 'test') {
+		// 2. Rank through the WaseetAI service when it is configured. The result is labelled by what the SERVICE says it did (its generationSource):
+		//    its keyword ranking is DETERMINISTIC and is never shown as AI, and a keyword overlap is never turned into a match percentage.
+		if (waseetAiClient.isConfigured()) {
 			try {
 				const aiRes = await waseetAiClient.getMarketplaceRecommendations({
 					query: query.trim() || undefined,
+					// stable ids on both sides: the category / sub-specialty SLUGS (never an Arabic display name)
 					category: category !== 'all' ? category : undefined,
 					subSpecialty: subSpecialty || undefined,
 					limit: safeLimit,
@@ -78,7 +80,9 @@ export class MarketplaceAiService {
 						id: m.id,
 						title: m.title,
 						description: m.description,
-						category: m.specialty?.category?.nameAr || m.specialty?.nameAr || m.specialty?.name || 'خدمات عامة',
+						category: m.specialty?.category?.slug || undefined,
+						categoryLabel: m.specialty?.category?.nameAr || m.specialty?.nameAr || m.specialty?.name || undefined,
+						subSpecialty: m.specialty?.slug || undefined,
 						price: Number(m.totalAmount),
 						deliveryDays: m.totalDays,
 						aiScore: m.aiScore ?? m.aiAuditScore ?? undefined,
@@ -86,31 +90,34 @@ export class MarketplaceAiService {
 				});
 				const recs = Array.isArray(aiRes.recommendations) ? (aiRes.recommendations as Array<Record<string, unknown>>) : [];
 				const byId = new Map(dbModels.map((m) => [m.id, m]));
-				const aiRanked = recs
+				const viaAi = recs.length > 0 && recs.every((r) => r.generationSource === 'WASEET_AI');
+				const ranked = recs
 					.map((r) => {
 						const model = byId.get(String(r.id ?? ''));
 						if (!model) return null;
-						const matchPct = typeof r.matchScore === 'number' && Number.isFinite(r.matchScore) ? Math.round(r.matchScore) : null;
-						const reason = typeof r.reason === 'string' && r.reason.trim() ? r.reason.trim() : 'توصية ذكية مطابقة لمتطلبات بحثك.';
-						return this.formatModelForClient(model, model.aiScore ?? model.aiAuditScore ?? matchPct ?? 0, reason, matchPct);
+						// a percentage only when an AI really produced it; the keyword overlap of the deterministic ranking is not one
+						const matchPct = viaAi && typeof r.matchScore === 'number' && Number.isFinite(r.matchScore) ? Math.round(r.matchScore) : null;
+						const reason = typeof r.reason === 'string' && r.reason.trim() ? r.reason.trim() : 'نتيجة مطابقة لعبارة البحث.';
+						return this.formatModelForClient(model, model.aiScore ?? model.aiAuditScore ?? 0, reason, matchPct);
 					})
 					.filter((item): item is NonNullable<typeof item> => item !== null)
 					.slice(0, safeLimit);
 
-				if (aiRanked.length > 0) {
+				if (ranked.length > 0) {
+					const source: MarketplaceAiGenerationSource = viaAi ? 'WASEET_AI' : 'DETERMINISTIC';
 					return {
-						recommendations: aiRanked,
+						recommendations: ranked,
 						bannerInsight: typeof aiRes.bannerInsight === 'string' && aiRes.bannerInsight.trim()
 							? aiRes.bannerInsight.trim()
-							: `تم ترشيح ${aiRanked.length} نموذج بواسطة الذكاء الاصطناعي بناءً على طلبك.`,
+							: viaAi ? `تم ترشيح ${ranked.length} نموذج بواسطة الذكاء الاصطناعي بناءً على طلبك.` : `تم استرجاع ${ranked.length} نموذج مطابق للبحث الحالي.`,
 						smartSearchTags: Array.isArray(aiRes.smartSearchTags) && aiRes.smartSearchTags.length > 0
 							? (aiRes.smartSearchTags as unknown[]).filter((t): t is string => typeof t === 'string')
 							: ['تصميم هوية', 'تطبيقات جوال', 'حلول ذكاء اصطناعي', 'تسويق رقمي'],
-						generationSource: 'WASEET_AI',
+						generationSource: source,
 					};
 				}
 			} catch {
-				// Fall back to deterministic ranking below
+				// the service is unavailable: the stored-data ranking below answers instead
 			}
 		}
 

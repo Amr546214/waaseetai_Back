@@ -151,3 +151,44 @@ test('marketplace-ai.service has no direct Gemini usage', () => {
   const src = readFileSync(new URL('./marketplace-ai.service.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /gemini\.client|geminiClient|generateStructured|generateStream/);
 });
+
+// ── WaseetAI service path: a configured service is really called (not skipped under test) ──
+async function loadWithAiClient(t: TestContext, dbModels: any[], client: { isConfigured: () => boolean; getMarketplaceRecommendations: (body: any) => Promise<any> }) {
+	t.mock.module('./ai/waseet-ai/waseet-ai.client', { namedExports: { waseetAiClient: client } });
+	return loadService(t, dbModels);
+}
+
+test('a configured service is called with stable category ids and the deterministic answer is NOT relabelled as AI or given a match percentage', async (t) => {
+	const calls: any[] = [];
+	const svc = await loadWithAiClient(t, [makeDbModel({ id: 'a' }), makeDbModel({ id: 'b' })], {
+		isConfigured: () => true,
+		getMarketplaceRecommendations: async (body) => { calls.push(body); return { recommendations: [{ id: 'b', title: 'x', matchScore: 100, scoreBasis: 'QUERY_TERM_OVERLAP', reason: 'تطابق كلمات', generationSource: 'DETERMINISTIC' }], bannerInsight: undefined }; }
+	});
+	const res = await svc.generateAiRecommendations({ query: 'شعار', category: 'cat', subSpecialty: 'design' });
+	assert.equal(calls.length, 1, 'the service is really called');
+	assert.equal(calls[0].category, 'cat');
+	assert.equal(calls[0].candidates[0].category, 'cat', 'the candidate carries the category SLUG, the same id as the filter');
+	assert.equal(calls[0].candidates[0].categoryLabel, 'فئة');
+	assert.equal(calls[0].candidates[0].subSpecialty, 'design');
+	assert.equal(res.generationSource, 'DETERMINISTIC');
+	assert.deepEqual(res.recommendations.map((r: any) => r.id), ['b']);
+	assert.equal(res.recommendations[0].aiMatchPercentage, null, 'a keyword overlap is not an AI match rating');
+	assert.doesNotMatch(res.bannerInsight, /الذكاء الاصطناعي/);
+});
+
+test('only a service answer that says WASEET_AI is labelled WASEET_AI and may carry a match percentage', async (t) => {
+	const svc = await loadWithAiClient(t, [makeDbModel({ id: 'a' })], {
+		isConfigured: () => true,
+		getMarketplaceRecommendations: async () => ({ recommendations: [{ id: 'a', matchScore: 91.4, reason: 'ملاءمة عالية', generationSource: 'WASEET_AI' }] })
+	});
+	const res = await svc.generateAiRecommendations({ query: 'شعار' });
+	assert.equal(res.generationSource, 'WASEET_AI');
+	assert.equal(res.recommendations[0].aiMatchPercentage, 91);
+});
+
+test('a failing service falls back to the stored-data ranking, labelled DETERMINISTIC', async (t) => {
+	const svc = await loadWithAiClient(t, [makeDbModel({ id: 'a' })], { isConfigured: () => true, getMarketplaceRecommendations: async () => { throw new Error('upstream down'); } });
+	const res = await svc.generateAiRecommendations({ query: 'شعار' });
+	assert.equal(res.generationSource, 'DETERMINISTIC');
+	assert.equal(res.recommendations.length, 1);
+});

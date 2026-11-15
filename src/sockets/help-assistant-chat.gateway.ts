@@ -163,18 +163,19 @@ export class HelpAssistantChatGateway {
 			// 3.5. Server-side Exam Integrity Guard: block help answers during active technical assessments or direct exam-solving prompts
 			const pagePath = settings.pageContext?.path;
 			let hasActiveExam = isExamSolvingIntent(question, pagePath);
-			if (!hasActiveExam && auth.role === 'provider' && !process.env.NODE_TEST_CONTEXT && process.env.NODE_ENV !== 'test') {
+			if (!hasActiveExam && auth.role === 'provider') {
 				try {
 					const activeAttempt = await prisma.assessmentAttempt.findFirst({
 						where: {
 							providerSpecialty: { providerProfile: { userId: auth.userId } },
-							status: { in: ['IN_PROGRESS', 'STREAMING'] as any },
+							status: { in: ['IN_PROGRESS', 'STREAMING'] },
 						},
 						select: { id: true },
 					});
 					if (activeAttempt) hasActiveExam = true;
-				} catch {
-					// Non-fatal DB check fallback
+				} catch (error) {
+					// the page/intent guard above still applies; a failed lookup must not take the whole help assistant down
+					logger.warn(`[help-assistant] exam-attempt lookup failed (userId=${auth.userId}): ${(error as Error)?.message}`);
 				}
 			}
 			if (hasActiveExam) {

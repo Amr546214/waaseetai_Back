@@ -99,34 +99,32 @@ class AiProposalService {
       deliveryDays?: number;
     } | undefined;
 
-    if (!process.env.NODE_TEST_CONTEXT && process.env.NODE_ENV !== 'test') {
-      try {
-        const [project, clientRequest] = await Promise.all([
-          prisma.project.findUnique({ where: { id } }),
-          prisma.clientRequest.findUnique({ where: { id } })
-        ]);
-        const pTitle = project?.title || clientRequest?.title;
-        const pDesc = project?.description || clientRequest?.description;
-        const pReqs = Array.isArray(project?.requirements) && project.requirements.length > 0
-          ? project.requirements
-          : (Array.isArray(clientRequest?.requiredSkills) ? clientRequest.requiredSkills : []);
-        const bMin = project?.budgetMin ?? clientRequest?.minBudget;
-        const bMax = project?.budgetMax ?? clientRequest?.maxBudget;
-        const dDays = project?.deliveryDays ?? clientRequest?.expectedDurationDays;
+    try {
+      const [project, clientRequest] = await Promise.all([
+        prisma.project.findUnique({ where: { id } }),
+        prisma.clientRequest.findUnique({ where: { id } })
+      ]);
+      const pTitle = project?.title || clientRequest?.title;
+      const pDesc = project?.description || clientRequest?.description;
+      const pReqs = Array.isArray(project?.requirements) && project.requirements.length > 0
+        ? project.requirements
+        : (Array.isArray(clientRequest?.requiredSkills) ? clientRequest.requiredSkills : []);
+      const bMin = project?.budgetMin ?? clientRequest?.minBudget;
+      const bMax = project?.budgetMax ?? clientRequest?.maxBudget;
+      const dDays = project?.deliveryDays ?? clientRequest?.expectedDurationDays;
 
-        if (pTitle || pDesc) {
-          projectContext = {
-            ...(pTitle ? { title: pTitle } : {}),
-            ...(pDesc ? { description: pDesc } : {}),
-            ...(pReqs.length > 0 ? { requirements: pReqs } : {}),
-            ...(typeof bMin === 'number' && Number.isFinite(bMin) ? { budgetMin: bMin } : {}),
-            ...(typeof bMax === 'number' && Number.isFinite(bMax) ? { budgetMax: bMax } : {}),
-            ...(typeof dDays === 'number' && Number.isFinite(dDays) && dDays > 0 ? { deliveryDays: dDays } : {})
-          };
-        }
-      } catch {
-        // Non-fatal: proceed even if project lookup fails
+      if (pTitle || pDesc) {
+        projectContext = {
+          ...(pTitle ? { title: pTitle } : {}),
+          ...(pDesc ? { description: pDesc } : {}),
+          ...(pReqs.length > 0 ? { requirements: pReqs } : {}),
+          ...(typeof bMin === 'number' && Number.isFinite(bMin) ? { budgetMin: bMin } : {}),
+          ...(typeof bMax === 'number' && Number.isFinite(bMax) ? { budgetMax: bMax } : {}),
+          ...(typeof dDays === 'number' && Number.isFinite(dDays) && dDays > 0 ? { deliveryDays: dDays } : {})
+        };
       }
+    } catch {
+      // Non-fatal: proceed even if project lookup fails
     }
 
     if (!title && !message) {

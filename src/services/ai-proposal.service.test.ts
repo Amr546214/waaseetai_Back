@@ -17,8 +17,14 @@ const upstream = (overrides: Partial<any> = {}) => ({
 
 const enriched = (o: any = {}) => ({ id: 'e1', aiMatchScore: 92, aiQualityTag: 'STRONG', aiPriceTag: 'FAIR', aiFeedback: { summary: ' ملخص ' }, ...o });
 
-async function load(t: TestContext, suggestProposal: (body: any) => Promise<any> = async () => upstream(), enrich: (body: any) => Promise<any> = async () => enriched()) {
+type Lookups = { project?: any; clientRequest?: any; fail?: boolean };
+async function load(t: TestContext, suggestProposal: (body: any) => Promise<any> = async () => upstream(), enrich: (body: any) => Promise<any> = async () => enriched(), lookups: Lookups = {}) {
   const calls: any[] = [];
+  // the project lookup is a real production step (not skipped under test): it runs against this stub
+  t.mock.module('../utils/prisma.client', { namedExports: { prisma: {
+    project: { findUnique: async () => { if (lookups.fail) throw new Error('db down'); return lookups.project ?? null; } },
+    clientRequest: { findUnique: async () => lookups.clientRequest ?? null }
+  } } });
   t.mock.module('./ai/waseet-ai/waseet-ai.client', {
     namedExports: { waseetAiClient: {
       suggestProposal: async (body: any) => { calls.push(body); return suggestProposal(body); },
@@ -174,4 +180,16 @@ test('long AI drafts respect the submission limits without splitting emoji', asy
   const result = await svc.evaluateAndSuggestProposal('p1', 't', 'm');
   assert.equal(result.suggestedTitle, 'ع'.repeat(79));
   assert.equal(result.suggestedMessage, 'م'.repeat(1999));
+});
+
+test('the real project lookup feeds the upstream request (title, requirements, budget range, delivery days)', async (t) => {
+  const svc = await load(t, async () => upstream(), async () => enriched(), { project: { title: 'متجر', description: 'وصف', requirements: ['دفع'], budgetMin: 500, budgetMax: 900, deliveryDays: 20 } });
+  await svc.evaluateAndSuggestProposal('proj-1', 'عنواني', 'رسالتي', []);
+  assert.deepEqual(svc.calls[0].project, { title: 'متجر', description: 'وصف', requirements: ['دفع'], budgetMin: 500, budgetMax: 900, deliveryDays: 20 });
+});
+
+test('a failing project lookup is not fatal: the request still goes out without project context', async (t) => {
+  const svc = await load(t, async () => upstream(), async () => enriched(), { fail: true });
+  await svc.evaluateAndSuggestProposal('proj-1', 'عنواني', 'رسالتي', []);
+  assert.equal(svc.calls[0].project, undefined);
 });
