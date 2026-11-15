@@ -114,6 +114,8 @@ Use the `/api/...` paths; routers are also mounted without the prefix to support
 - **Roles:** through `/switch-active-role` a user can hold and switch `CLIENT`, `PROVIDER` and `AFFILIATE`; the account-management service deliberately excludes `ADMIN` and `SUPER_ADMIN`. Admin accounts come from the seed script, and admin routes (e.g. `/admin/users/:id/roles`) are guarded separately.
 - **Payments:** wallet deposits through PayPal (USD only); payout automation and the affiliate commission engine are flag-gated and default to off.
 - **AI:** an in-house LLM layer (`LLM_*`; answers `503 NOT_CONFIGURED` when unset) and a WaseetAI gateway (`WASEET_AI_*`; the help assistant and AI-review sockets report "not configured"). Other features are ordinary application code.
+- **Project lifecycle freeze:** while a dispute or a mutual-cancellation request (waiting for the other side, or agreed) is open, the server refuses every delivery and review action for both sides with `423` — the provider cannot upload or submit, the client cannot review, approve or request a revision. Chat and evidence stay available. One source decides this (`services/project-lifecycle.service.ts`) and the progress read model (`cancellationFreeze`, `disputeFreeze`) exposes it to the UI.
+- **Assistant:** the help assistant introduces itself as «وسيط AI» (Waseet AI); the legacy «Bebo» skin keeps its own name.
 - **Secrets:** environment variables only. `.env.example` (local) and `.env.production.example` (VPS) hold placeholders.
 
 ## Documentation
