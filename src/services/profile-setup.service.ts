@@ -144,7 +144,7 @@ export class ProfileSetupService {
       const p = identityProfile as { idNumber?: string | null; frontIdUrl?: string | null; backIdUrl?: string | null };
       if (activeRole === UserRole.CLIENT) {
         identitySubmitted = Boolean(await onboardingService.submitSetupDocuments(userId, { idNumber: p.idNumber, frontIdUrl: p.frontIdUrl, backIdUrl: p.backIdUrl }, { identityChanged: true }));
-      } else if (p.idNumber && p.frontIdUrl && p.backIdUrl) {
+      } else if (p.idNumber && p.frontIdUrl) { // the back side is optional
         await prisma.providerProfile.updateMany({ where: { userId, kycStatus: { in: ['UNVERIFIED', 'REJECTED'] } }, data: { kycStatus: 'PENDING' } });
         void notifyAdmins('KYC_SUBMITTED', { ref: 'مزود خدمة' });
         identitySubmitted = true;
