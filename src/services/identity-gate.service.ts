@@ -9,6 +9,7 @@ import { storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { publicKycRejectionReason } from '../utils/provider-kyc-review';
 import { notifyAdmins } from './admin-notifications.service';
 import { legalNameKey } from '../utils/legal-name';
+import { identityFieldCheckService } from './identity-field-check.service';
 
 /**
  * Identity gate (client + provider setup). The identity step is APPROVED only when the admin approved the CURRENT image AND the CURRENT identity data: the approval stores a
@@ -184,6 +185,8 @@ export class IdentityGateService {
       return kyc !== 'PENDING';
     }, { timeout: 20_000 });
     if (started) void notifyAdmins('KYC_SUBMITTED', { ref: party === 'CLIENT' ? 'عميل' : 'مزود خدمة' });
+    // the advisory ID field check for the reviewers (flag IDENTITY_AUTO_CHECK; idempotent per image + data, never blocks or throws)
+    identityFieldCheckService.triggerSafe(userId, party);
     return this.getState(userId, party);
   }
 }
