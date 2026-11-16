@@ -118,13 +118,15 @@ test('project-progress.service delegates to the in-house service and has no left
 
 test('an ended project gets a retrospective summary (no risk / early days): the payload says it is closed, the answer carries closed:true', async (t) => {
   const calls: any[] = [];
-  const svc = await load(t, (i: any) => ({ healthRating: 'أُنجز جزئياً قبل الإغلاق', bullets: [{ text: `اعتُمدت ${i.stagesApproved} من ${i.stagesTotal} مراحل`, basedOn: ['stagesApproved', 'stagesTotal'] }] }),
+  const svc = await load(t, (i: any) => ({ riskLevelKey: 'HIGH', confidence: 70, healthRating: 'أُنجز جزئياً قبل الإغلاق', bullets: [{ text: `اعتُمدت ${i.stagesApproved} من ${i.stagesTotal} مراحل`, basedOn: ['stagesApproved', 'stagesTotal'] }] }),
     { contract: { ...CONTRACT, status: 'CANCELLED', project: { status: 'CANCELLED' } } }, calls);
   const r = await svc.analyze('u1', 'p1');
   const sent = JSON.parse(calls[0].user);
   assert.equal(sent.closureStatus, 'CANCELLED'); assert.equal(sent.stagesApproved, 1); assert.equal(sent.stagesTotal, CONTRACT.stages.length);
   assert.match(calls[0].system, /انتهى/); assert.doesNotMatch(calls[0].system, /خطر التأخر والنزاع لمشروع قائم/);
-  assert.equal(r.closed, true); assert.equal(r.riskLevelKey, 'UNKNOWN'); assert.equal(r.earlyDays, null); assert.equal(r.healthRating, 'أُنجز جزئياً قبل الإغلاق');
+  assert.equal(r.closed, true); assert.equal(r.healthRating, 'أُنجز جزئياً قبل الإغلاق');
+  // the card's values come from the AI grade and the real numbers: risk + confidence from the model, delivery match = approved / total, early days only for a completed project
+  assert.deepEqual([r.riskLevelKey, r.riskLevel, r.confidence], ['HIGH', 'مرتفع', 70]); assert.equal(r.matchPercentage, Math.round(1 / CONTRACT.stages.length * 100)); assert.equal(r.earlyDays, null);
   assert.deepEqual(r.bullets, [`اعتُمدت 1 من ${CONTRACT.stages.length} مراحل`]);
 });
 
@@ -134,4 +136,11 @@ test('a running project is unchanged (no closure fields, the risk prompt)', asyn
   const r = await svc.analyze('u1', 'p1');
   const sent = JSON.parse(calls[0].user);
   assert.ok(sent.closureStatus == null); assert.equal(r.closed, undefined); assert.ok(['LOW', 'HIGH'].includes(r.riskLevelKey));
+});
+
+test('a COMPLETED project reports its real slack as early days (positive = ahead of the plan)', async (t) => {
+  const svc = await load(t, () => ({ riskLevelKey: 'LOW', confidence: 90, healthRating: 'اكتمل بنجاح', bullets: [{ text: 'اكتمل المشروع', basedOn: ['closureStatus'] }] }),
+    { contract: { ...CONTRACT, status: 'COMPLETED', project: { status: 'COMPLETED' }, stages: CONTRACT.stages.map((x: any) => ({ ...x, status: 'APPROVED' })) } });
+  const r = await svc.analyze('u1', 'p1');
+  assert.equal(r.closed, true); assert.equal(r.matchPercentage, 100); assert.equal(typeof r.earlyDays, 'number'); assert.equal(r.riskLevelKey, 'LOW');
 });
