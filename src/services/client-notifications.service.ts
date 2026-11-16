@@ -23,8 +23,9 @@ export const CLIENT_ROUTES = {
 	dispute: (disputeId: string) => `/client-overview/disputes?dispute=${encodeURIComponent(disputeId)}`,
 	wallet: '/client-overview/finance/wallet',
 	invoices: '/client-overview/finance/invoices',
-	// The identity documents (KYC) are uploaded and followed from the profile page.
-	profile: '/client-overview/profile'
+	// The identity documents (KYC) are uploaded and followed from the setup wizard's identity step: the KYC decision notifications open it (not the profile page).
+	profile: '/client-overview/profile',
+	setup: '/client-overview/profile-setup'
 } as const;
 
 export type ClientNotificationInput = {
@@ -133,7 +134,7 @@ export const clientNotificationFor = {
 		userId: p.clientId,
 		title: p.decision === 'APPROVED' ? 'تم اعتماد توثيق هويتك' : 'تم رفض توثيق هويتك',
 		message: p.decision === 'APPROVED' ? 'اعتمدت الإدارة مستندات هويتك وأصبح حسابك موثّقًا.' : `رفضت الإدارة مستندات الهوية.${p.reason ? ` السبب: ${short(p.reason, 200)}` : ''} يمكنك رفع مستند جديد وإعادة الإرسال.`,
-		type: p.decision === 'APPROVED' ? 'KYC_APPROVED' : 'KYC_REJECTED', category: PROJECTS, actionUrl: CLIENT_ROUTES.profile, actionText: p.decision === 'APPROVED' ? 'عرض ملفي' : 'رفع مستند جديد', metadata: { decision: p.decision }
+		type: p.decision === 'APPROVED' ? 'KYC_APPROVED' : 'KYC_REJECTED', category: PROJECTS, actionUrl: CLIENT_ROUTES.setup, actionText: p.decision === 'APPROVED' ? 'متابعة استكمال البيانات' : 'رفع مستند جديد', metadata: { decision: p.decision }
 	}),
 	depositCompleted: (p: { clientId: string; transactionId: string; credited: number; paid: number; fee: number }): ClientNotificationInput => ({
 		userId: p.clientId, title: 'تم إيداع الرصيد بنجاح',
