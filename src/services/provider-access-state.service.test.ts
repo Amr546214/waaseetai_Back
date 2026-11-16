@@ -252,3 +252,15 @@ test('setup test completion: re-running is idempotent, and with no usable onboar
 	const st = await access.get('u1', db);
 	assert.deepEqual([st.state, st.canAccessDashboard], ['SAMPLE_REQUIRED', false]);
 });
+
+test('a REJECTED identity review closes the dashboard with identityRejected:true (setup state, even when everything else is done); companies are not touched', async () => {
+	const { access } = await load();
+	reset({}); S.profile.kycStatus = 'REJECTED';
+	const r = await access.get('u1', db);
+	assert.deepEqual([r.state, r.gate, r.canAccessDashboard, r.identityRejected], ['SETUP_INCOMPLETE', 'SETUP', false, true]);
+	assert.match(r.message, /رُفضت وثيقة الهوية/);
+	reset({}); S.profile.kycStatus = 'PENDING'; const p = await access.get('u1', db);
+	assert.equal(p.identityRejected, undefined);
+	reset({ accountType: 'PROVIDER_COMPANY' }); S.profile.kycStatus = 'REJECTED'; const c = await access.get('u1', db);
+	assert.deepEqual([c.state, c.identityRejected], ['NOT_APPLICABLE', undefined]);
+});
