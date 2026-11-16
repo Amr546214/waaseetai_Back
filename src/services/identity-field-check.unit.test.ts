@@ -32,3 +32,21 @@ test('structural: the check never touches KYC/onboarding state (no kycStatus wri
 		assert.match(s, /identityFieldCheckService\.triggerSafe\(/, f); assert.ok(!/await identityFieldCheckService/.test(s), `${f}: never awaited`);
 	}
 });
+
+test('a reviewer opening a request that has no check yet starts it (enabled only); flag off never starts one', async () => {
+	const { IdentityFieldCheckService } = await import('./identity-field-check.service');
+	const mk = (enabled: boolean) => {
+		let triggers = 0, reads = 0;
+		const db: any = {
+			identityFieldCheck: { findFirst: async () => (++reads > 1 ? { id: 'c1', status: 'QUEUED', imageRefDigest: 'x', imageVersion: 1, createdAt: new Date(), stateReason: null, startedAt: null, finishedAt: null, modelName: null, modelVersion: null, fieldResults: null } : null) },
+			clientProfile: { findUnique: async () => ({ frontIdUrl: 'private:front' }) }, providerProfile: { findUnique: async () => ({ frontIdUrl: 'private:front' }) },
+			user: { findUnique: async () => ({ legalName: 'عمرو محمود يحيى محمد' }) }
+		};
+		class T extends IdentityFieldCheckService { async trigger() { triggers++; return { action: 'CREATED' as const, checkId: 'c1' }; } }
+		return { svc: new T({ db, ai: {} as any, fetchImage: async () => ({ bytes: Buffer.alloc(1), mimeType: 'image/png' }), enabled: () => enabled, now: () => new Date() } as any), triggers: () => triggers };
+	};
+	const on = mk(true); const view = await on.svc.getAdminView('u1', 'CLIENT');
+	assert.equal(on.triggers(), 1); assert.ok(view && view.state !== undefined);
+	const off = mk(false); const v2 = await off.svc.getAdminView('u1', 'CLIENT');
+	assert.equal(off.triggers(), 0); assert.equal(v2?.stateReason, 'FLAG_OFF');
+});
