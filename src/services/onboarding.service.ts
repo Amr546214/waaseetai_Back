@@ -164,7 +164,8 @@ export class OnboardingService {
     const updated = await prisma.$transaction(async (tx) => {
       const moved = await tx.clientOnboarding.updateMany({ where: { id, status: OnboardingStatus.PENDING }, data: { status: OnboardingStatus.REJECTED, rejectionReason: input.rejectionReason, reviewedAt: new Date() } });
       if (moved.count !== 1) throw new AppError('تمت معالجة هذا الطلب مسبقاً', 409);
-      await tx.clientProfile.updateMany({ where: { userId: item.userId }, data: { kycStatus: KYCStatus.REJECTED } });
+      // the rejected pictures are removed from the account (the owner uploads new ones); the review row keeps its own copy of the document for the audit trail. Typed data (number, birth date) stays.
+      await tx.clientProfile.updateMany({ where: { userId: item.userId }, data: { kycStatus: KYCStatus.REJECTED, frontIdUrl: null, backIdUrl: null, identityApprovedDigest: null } });
       if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId: item.userId, eventType: 'KYC_REJECTED_BY_ADMIN', title: 'رفض توثيق الهوية', summary: `رفضت الإدارة مستندات هوية العميل: ${input.rejectionReason}`, status: LogStatus.REJECTED, severity: 'WARNING', before: { status: item.status }, after: { status: OnboardingStatus.REJECTED }, details: { onboardingId: id, party: 'CLIENT', reason: input.rejectionReason } }) });
       return tx.clientOnboarding.findUnique({ where: { id } });
     });
@@ -235,7 +236,7 @@ export class OnboardingService {
       if (!profile) throw new AppError('ملف المزود غير موجود', 404);
       if (profile.kycStatus === KYCStatus.REJECTED) throw new AppError('تم رفض هذا المزود مسبقاً', 409);
       if ((await pendingIdentityRequests([userId], tx)).has(userId)) throw new AppError(IDENTITY_REQUEST_WAITING, 409, undefined, 'IDENTITY_REQUEST_WAITING');
-      const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.REJECTED, isVerified: false, notes: `سبب الرفض: ${input.rejectionReason}` } });
+      const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.REJECTED, isVerified: false, frontIdUrl: null, backIdUrl: null, identityApprovedDigest: null, notes: `سبب الرفض: ${input.rejectionReason}` } });
       if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId, eventType: 'KYC_REJECTED_BY_ADMIN', title: 'رفض توثيق الهوية', summary: `رفضت الإدارة مستندات هوية مقدم الخدمة: ${input.rejectionReason}`, status: LogStatus.REJECTED, severity: 'WARNING', before: { kycStatus: profile.kycStatus }, after: { kycStatus: KYCStatus.REJECTED }, details: { party: 'PROVIDER', reason: input.rejectionReason } }) });
       return row;
     });

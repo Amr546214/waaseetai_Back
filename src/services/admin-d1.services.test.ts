@@ -250,11 +250,13 @@ test('provider KYC reject: reason kept in audit + notification', async () => {
 
 test('client onboarding approve/reject: audited and the client is notified; a decided request is 409', async () => {
 	const { onboardingService } = await fresh('./onboarding.service.ts');
-	const audit: any[] = []; notes.length = 0;
+	const audit: any[] = []; notes.length = 0; const profileWrites: any[] = [];
 	const item = { id: 'o1', userId: 'c1', status: 'PENDING', documentUrl: 'ref' };
-	current = { user: { findUnique: async () => ({ legalName: 'اسم حقيقي كامل' }), update: async () => ({}) }, clientOnboarding: { findUnique: async () => item, updateMany: async () => ({ count: 1 }) }, clientProfile: { updateMany: async () => ({}), findUnique: async () => ({ frontIdUrl: 'f', backIdUrl: 'b', idNumber: '1', idIssuingCountry: 'EG', idDocumentType: 'NATIONAL_ID', dob: null }) }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
+	current = { user: { findUnique: async () => ({ legalName: 'اسم حقيقي كامل' }), update: async () => ({}) }, clientOnboarding: { findUnique: async () => item, updateMany: async () => ({ count: 1 }) }, clientProfile: { updateMany: async (a: any) => { profileWrites.push(a.data); return {}; }, findUnique: async () => ({ frontIdUrl: 'f', backIdUrl: 'b', idNumber: '1', idIssuingCountry: 'EG', idDocumentType: 'NATIONAL_ID', dob: null }) }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
 	await onboardingService.approveOnboarding('o1', admin);
 	await onboardingService.rejectOnboarding('o1', { rejectionReason: 'مستند منتهي' }, admin);
+	// the rejected pictures are removed from the account (typed data stays); the review row keeps its own copy
+	const rejectWrite = profileWrites.find(w => w.kycStatus === 'REJECTED'); assert.deepEqual([rejectWrite?.frontIdUrl, rejectWrite?.backIdUrl, rejectWrite?.identityApprovedDigest], [null, null, null]); assert.ok(!('idNumber' in (rejectWrite ?? {})));
 	assert.deepEqual(audit.map(a => a.eventType), ['KYC_APPROVED_BY_ADMIN', 'KYC_REJECTED_BY_ADMIN']);
 	assert.deepEqual(notes.map(n => n.actionUrl), ['/client-overview/profile-setup', '/client-overview/profile-setup']); // the KYC decision opens the wizard's identity step
 	current.clientOnboarding.updateMany = async () => ({ count: 0 });

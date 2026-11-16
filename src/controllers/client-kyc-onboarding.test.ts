@@ -78,10 +78,16 @@ test('#44 complete identity documents create a PENDING ClientOnboarding row and 
   assert.equal(S.kyc, 'PENDING');
 });
 
-test('#44 incomplete documents (no back side) create nothing and leave kycStatus alone', async (t) => {
-  const a = await submit(t, {}, { frontId: 'https://res.cloudinary.com/testcloud/image/upload/f.jpg' });
+test('#44 incomplete documents (no front side) create nothing and leave kycStatus alone', async (t) => {
+  const a = await submit(t, {}, { backId: 'https://res.cloudinary.com/testcloud/image/upload/b.jpg' });
   assert.equal(a.creates, 0);
   assert.equal(a.kyc, 'UNVERIFIED');
+});
+
+test('the back side is optional: the front side alone starts the review', async (t) => {
+  const a = await submit(t, {}, { frontId: 'https://res.cloudinary.com/testcloud/image/upload/f.jpg' });
+  assert.equal(a.creates, 1);
+  assert.equal(a.kyc, 'PENDING');
 });
 
 test('#44 no id number → nothing created, kycStatus untouched', async (t) => {
