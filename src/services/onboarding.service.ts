@@ -64,7 +64,7 @@ export class OnboardingService {
    * Incomplete documents create nothing and leave kycStatus alone.
    */
   async submitSetupDocuments(userId: string, docs: { idNumber?: string | null; frontIdUrl?: string | null; backIdUrl?: string | null }, options: { identityChanged?: boolean } = {}) {
-    if (!docs.idNumber || !docs.frontIdUrl || !docs.backIdUrl) return null;
+    if (!docs.idNumber || !docs.frontIdUrl) return null; // the back side is optional
     // A save that submits the SAME identity as before never re-opens a review: a REJECTED / UNVERIFIED profile stays as it is until the
     // client really changes the identity or its documents (default true keeps every other caller unchanged).
     if (options.identityChanged === false) return prisma.clientOnboarding.findUnique({ where: { userId } });

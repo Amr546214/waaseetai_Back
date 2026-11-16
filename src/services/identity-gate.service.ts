@@ -48,7 +48,7 @@ export function missingIdentityItems(p: IdentityRow | null | undefined): string[
   if (!p?.idIssuingCountry) out.push('idIssuingCountry');
   if (!(p?.idNumber ?? '').trim()) out.push('idNumber');
   if (!p?.frontIdUrl) out.push('frontId');
-  if (!p?.backIdUrl && p?.idDocumentType !== 'PASSPORT') out.push('backId');
+  // the back side is optional for every kind: the review relies on the front side
   return out;
 }
 
