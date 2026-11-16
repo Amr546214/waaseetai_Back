@@ -40,6 +40,8 @@ export interface ProviderAccessSpecialty {
 }
 export interface ProviderAccessState {
 	state: ProviderAccessStateName; gate: ProviderEntryGate; canAccessDashboard: boolean; message: string; reason: string | null; hasSample: boolean; specialties: ProviderAccessSpecialty[];
+	/** the admin rejected the identity documents: the provider stays on the identity step until new pictures are sent */
+	identityRejected?: boolean;
 	/** the request waiting for the provider to complete it (COMPLETION_REQUIRED only) */
 	completionSampleId?: string | null;
 }
@@ -75,8 +77,10 @@ export const providerAccessStateService = {
 		const user = await db.user.findUnique({ where: { id: userId }, select: { accountType: true } });
 		if (user?.accountType === AccountType.PROVIDER_COMPANY) return result('NOT_APPLICABLE');
 
-		const profile = await db.providerProfile.findUnique({ where: { userId }, select: { id: true, isProfileSetupComplete: true, setupTestStatus: true } });
+		const profile = await db.providerProfile.findUnique({ where: { userId }, select: { id: true, isProfileSetupComplete: true, setupTestStatus: true, kycStatus: true } });
 		if (!profile) return result('SETUP_INCOMPLETE');
+		// a REJECTED identity review closes the dashboard (even for an approved provider) until new documents are sent: the review then runs again and kycStatus is no longer REJECTED
+		if (profile.kycStatus === 'REJECTED') return result('SETUP_INCOMPLETE', { identityRejected: true, message: 'رُفضت وثيقة الهوية: ارفع وثيقة جديدة واضحة لمتابعة استخدام المنصة.', specialties: shape(await load(db, profile.id)) });
 
 		let rows = await load(db, profile.id);
 		const approved = rows.some(r => r.status === SpecialtyVerificationStatus.APPROVED);
