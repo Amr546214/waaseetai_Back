@@ -27,6 +27,8 @@ export const identityDocumentInspectSchema = z.object({
   side: z.enum(['FRONT', 'BACK']),
   image: z.string().trim().min(20).max(10_500_000),
   imageMimeType: z.enum(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']).optional(),
+  // the kind the user CHOSE (NATIONAL_ID / PASSPORT / RESIDENCE_PERMIT / DRIVING_LICENCE) and the document country: the AI check flags an upload of another kind
+  document: z.object({ country: z.string().trim().min(2).max(16).optional(), type: z.string().trim().min(1).max(60).optional() }).optional(),
   declared: z.object({
     fullName: z.string().trim().max(200).optional(),
     birthDate: z.string().trim().max(40).optional(),
