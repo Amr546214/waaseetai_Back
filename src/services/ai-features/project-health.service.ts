@@ -28,12 +28,16 @@ export type ProjectHealthOutput = z.infer<typeof ProjectHealthSchema>;
 
 // A project that already ended (completed / cancelled, also by a settlement) has no delay risk to predict: the same card gets a retrospective summary of what really happened.
 export const ClosureReviewSchema = z.object({
+  /** the risk level the project actually ended with (a retrospective grade, not a prediction) */
+  riskLevelKey: z.enum(['LOW', 'MEDIUM', 'HIGH']),
+  confidence: z.number().min(0).max(100),
   healthRating: z.string().min(1).max(80),
   bullets: z.array(z.object({ text: z.string().min(1).max(300), basedOn: basedOnSchema })).min(1).max(5),
 });
 export type ClosureReviewOutput = z.infer<typeof ClosureReviewSchema>;
 export const CLOSURE_REVIEW_SYSTEM = `أنت محلل مشاريع. المشروع المرسل انتهى (closureStatus: COMPLETED مكتمل أو CANCELLED ملغي/أُغلق بتسوية). لخّص بأمانة وبإيجاز ما حدث فعلاً اعتماداً على بيانات JSON المرسلة فقط: كم مرحلة اعتُمدت من الإجمالي (stagesApproved / stagesTotal)، المدة الكلية والمنقضية، عدد طلبات التعديل ومرات النزاع، وحالة الإغلاق.
 - healthRating: وصف قصير جداً لحصيلة المشروع (مثل «أُنجز جزئياً قبل الإغلاق» أو «اكتمل بنجاح»).
+- riskLevelKey: LOW أو MEDIUM أو HIGH: درجة المخاطرة التي انتهى بها المشروع فعلاً (تقييم لما حدث وليس توقعاً): LOW مكتمل بلا نزاع، HIGH ملغي أو مغلق بتسوية بعد مراحل قليلة أو بنزاع. confidence: ثقتك من 0 إلى 100 بحسب كفاية البيانات.
 - لا تتنبأ بأي خطر تأخر ولا بتواريخ مستقبلية، ولا تُلقِ لوماً على أي طرف، ولا تقترح قرارات مالية، ولا تذكر مبالغ غير موجودة في البيانات.
 ${GROUNDING_RULES_AR}`;
 
@@ -56,7 +60,7 @@ export interface ProjectHealthResult {
   healthRating: string;
   bullets: string[];
   earlyDays: number | null;
-  matchPercentage: null;
+  matchPercentage: number | null;
   /** true: the project already ended; the answer is a retrospective summary (no risk / early days) */
   closed?: boolean;
   // traceability
@@ -114,8 +118,10 @@ export class ProjectHealthService {
         const d = res.data;
         return {
           generationSource: res.source, insufficientData: false, message: null,
-          confidence: null, riskLevel: 'غير منطبق (المشروع مغلق)', riskLevelKey: 'UNKNOWN', healthRating: d.healthRating,
-          bullets: d.bullets.map((b) => b.text), earlyDays: null, matchPercentage: null, closed: true,
+          confidence: d.confidence, riskLevel: RISK_LABELS[d.riskLevelKey], riskLevelKey: d.riskLevelKey, healthRating: d.healthRating,
+          // early days only mean something for a project that was completed (positive = finished ahead of the plan); a cancelled one has none
+          bullets: d.bullets.map((b) => b.text), earlyDays: closureStatus === 'COMPLETED' ? slackDays : null,
+          matchPercentage: contract.stages.length > 0 ? Math.round((stagesApproved / contract.stages.length) * 100) : null, closed: true,
           bulletsDetailed: d.bullets, inputsUsed: used, unavailableFields: unavailable, notes: { lastActivityIsApproximate: true },
         };
       } catch (error) {
