@@ -13,6 +13,7 @@ const REAL_CLIENT_ROUTES = [
 	/^\/client-overview\/projects\/[^/]+\/delivery-review\/[^/]+$/,
 	/^\/client-overview\/disputes$/,
 	/^\/client-overview\/profile$/,
+	/^\/client-overview\/profile-setup$/,
 	/^\/client-overview\/finance\/(wallet|transactions|invoices)$/
 ];
 // a query string only selects what the page focuses on (e.g. ?dispute=<id>); the path itself must be a real route

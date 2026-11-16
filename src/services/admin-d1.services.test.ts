@@ -256,7 +256,7 @@ test('client onboarding approve/reject: audited and the client is notified; a de
 	await onboardingService.approveOnboarding('o1', admin);
 	await onboardingService.rejectOnboarding('o1', { rejectionReason: 'مستند منتهي' }, admin);
 	assert.deepEqual(audit.map(a => a.eventType), ['KYC_APPROVED_BY_ADMIN', 'KYC_REJECTED_BY_ADMIN']);
-	assert.deepEqual(notes.map(n => n.actionUrl), ['/client-overview/profile', '/client-overview/profile']);
+	assert.deepEqual(notes.map(n => n.actionUrl), ['/client-overview/profile-setup', '/client-overview/profile-setup']); // the KYC decision opens the wizard's identity step
 	current.clientOnboarding.updateMany = async () => ({ count: 0 });
 	await rejects(onboardingService.approveOnboarding('o1', admin), 409);
 });
