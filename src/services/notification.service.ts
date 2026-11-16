@@ -1,3 +1,4 @@
+import { isMutedBySettings } from './notification-preference-groups';
 import { deniedAdminNotificationTypes } from './admin-access.service';
 import { brandSubject, brandNameInArabicText } from '../utils/brand';
 import { systemSettingsService } from './system-settings.service';
@@ -164,8 +165,7 @@ export const resolveNotificationChannels = (preferences: unknown): { push: boole
 
 /**
  * A CLIENT's saved channels live in notification_preferences.settings (the client "إعدادات الإشعارات" page): inApp = the real-time push in the app,
- * email = an e-mail copy. The per-type toggles (newOffer, requestStatus, newMessage, walletActivity) are NOT applied: the settings page shows them as not controllable yet,
- * so an old saved `false` there must not silently silence anything.
+ * email = an e-mail copy. The per-type switches (newOffer, requestStatus, newMessage, walletActivity, cashback) are applied in deliver() through notification-preference-groups.
  * Only what the client really saved is honoured: nothing saved keeps today's behaviour (real-time push on, no e-mail). The notification is ALWAYS stored.
  * (The page's sms / mobile-push toggles have no sender yet, so they change nothing here.)
  */
@@ -267,6 +267,11 @@ export class NotificationService {
 
 	/** Delivers a stored notification through the recipient's chosen channels (a lookup failure falls back to the default: real-time push only). */
 	private async deliver(dto: NotificationDto, event: 'new_notification' | 'notification_updated' = 'new_notification'): Promise<void> {
+		// The recipient switched this TYPE of notification off (settings page): it is neither shown in the inbox nor pushed nor mailed. A lookup failure keeps the notification (never silence by accident).
+		try {
+			const row = await prisma.notificationPreference.findUnique({ where: { userId: dto.userId }, select: { settings: true } });
+			if (isMutedBySettings(row?.settings, dto.type)) { await prisma.notification.deleteMany({ where: { id: dto.id } }); return; }
+		} catch { /* deliver normally */ }
 		const { channels, recipient, lang } = await this.resolveDelivery(dto.userId, dto.actionUrl, dto.type);
 		if (channels.push) this.emitDto(dto, event);
 		// A chat message is never mailed one by one (a negotiation would flood the inbox): unread chat messages reach the e-mail channel only as the throttled digest (chat-digest.service).
@@ -653,7 +658,11 @@ export const notificationService = new NotificationService();
 export const notificationPreferenceService = {
 	async getPreferences(userId: string): Promise<Record<string, boolean | string>> {
 		const row = await prisma.notificationPreference.findUnique({ where: { userId } });
-		return (row?.settings as Record<string, boolean | string>) || {};
+		const settings = (row?.settings as Record<string, boolean | string>) || {};
+		// A provider's profile page keeps its channels in provider_profiles.preferences.notifChannels and THAT wins at delivery: the settings page must show the channels really in force.
+		const profile = await prisma.providerProfile.findUnique({ where: { userId }, select: { preferences: true } }).catch(() => null);
+		const chosen = (profile?.preferences as Record<string, unknown> | null)?.notifChannels;
+		return Array.isArray(chosen) ? { ...settings, channel_in_app: chosen.includes('push'), channel_email: chosen.includes('email') } : settings;
 	},
 
 	async updatePreferences(userId: string, patch: Record<string, boolean | string>): Promise<Record<string, boolean | string>> {
@@ -664,6 +673,17 @@ export const notificationPreferenceService = {
 			if (typeof patch[key] === 'boolean') await assertEmailOptionMayChange(patch[key] === true, (stored.email ?? stored.channel_email) === true);
 		}
 		const merged = { ...stored, ...patch };
+		// keep the provider profile's explicit channels in step when a channel switch is saved here (the profile's choice is the one delivery reads)
+		if (typeof patch.channel_in_app === 'boolean' || typeof patch.channel_email === 'boolean') {
+			const profile = await prisma.providerProfile.findUnique({ where: { userId }, select: { preferences: true } }).catch(() => null);
+			const prefs = (profile?.preferences as Record<string, unknown> | null) ?? null;
+			if (prefs && Array.isArray(prefs.notifChannels)) {
+				const next = new Set<string>(prefs.notifChannels as string[]);
+				if (typeof patch.channel_in_app === 'boolean') { if (patch.channel_in_app) next.add('push'); else next.delete('push'); }
+				if (typeof patch.channel_email === 'boolean') { if (patch.channel_email) next.add('email'); else next.delete('email'); }
+				await prisma.providerProfile.update({ where: { userId }, data: { preferences: { ...prefs, notifChannels: [...next] } as never } });
+			}
+		}
 		const row = await prisma.notificationPreference.upsert({
 			where: { userId },
 			create: { userId, settings: merged },
