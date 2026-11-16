@@ -83,7 +83,9 @@ const bodySchema = z.object({
   idNumber: z.string().trim().max(40).nullable().optional(),
   dob: z.string().trim().refine(v => !Number.isNaN(Date.parse(v)) && new Date(v) <= new Date(), 'تاريخ الميلاد غير صحيح').or(z.literal('')).nullable().optional(),
   frontId: z.string().max(15_000_000).nullable().optional(),
-  backId: z.string().max(15_000_000).nullable().optional()
+  backId: z.string().max(15_000_000).nullable().optional(),
+  /** the owner removes the stored back side (it is optional): the file reference is cleared; the data / review rules treat it like any identity change */
+  removeBackId: z.boolean().optional()
 }).strict();
 
 export class IdentityGateService {
@@ -167,7 +169,7 @@ export class IdentityGateService {
       storeKycFileIfNeeded(body.frontId, `waseetai/${folder}/${userId}/identity`, 'front-id'),
       storeKycFileIfNeeded(body.backId, `waseetai/${folder}/${userId}/identity`, 'back-id')
     ]);
-    const data = { ...doc, ...(body.idNumber ? { idNumber: body.idNumber } : {}), ...(body.dob ? { dob: new Date(body.dob) } : {}), ...(front ? { frontIdUrl: front } : {}), ...(back ? { backIdUrl: back } : {}) };
+    const data = { ...doc, ...(body.idNumber ? { idNumber: body.idNumber } : {}), ...(body.dob ? { dob: new Date(body.dob) } : {}), ...(front ? { frontIdUrl: front } : {}), ...(back ? { backIdUrl: back } : body.removeBackId ? { backIdUrl: null } : {}) };
     const started = await prisma.$transaction(async (tx) => {
       await lockRow(tx, party, userId);
       const before = await model(tx, party).findUnique({ where: { userId }, select: SELECT });
