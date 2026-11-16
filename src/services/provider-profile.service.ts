@@ -2,6 +2,7 @@ import type {
 	ProviderBioSuggestDto,
 	ProviderBioEnhanceDto,
 	ProviderSkillsSuggestDto,
+	CatalogSkillsSuggestDto,
 	IdentityDocumentInspectDto,
 } from '../dtos/provider-profile-suggest.dto';
 import { canonicalStoredPhone } from '../utils/phone-countries';
@@ -484,6 +485,26 @@ export class ProviderProfileService {
 			return { suggestedSkills: out };
 		} catch (error: any) {
 			logger.warn(`[ProviderProfileService] suggestSkills failed: ${error?.code || error?.name || 'ERROR'}`);
+			throw new AppError('تعذر إنشاء اقتراح بالذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.', 503);
+		}
+	}
+
+	/** Skills for a specialty from the CALLER'S catalog (the add-account wizard): the AI chooses among `availableSkills`; only those exact names (any letter case) come back. */
+	async suggestSkillsFromCatalog(userId: string, input: CatalogSkillsSuggestDto): Promise<ProviderSkillsSuggestion> {
+		const catalog = new Map<string, string>();
+		for (const name of input.availableSkills) { const key = skillKey(name); if (key && !catalog.has(key)) catalog.set(key, name.trim()); }
+		const existing = new Set((input.existingSkills ?? []).map(skillKey));
+		try {
+			const result = await waseetAiClient.suggestSkills({ providerId: userId, specialtyName: input.mainSpecialty, availableSkills: [...catalog.values()].slice(0, 180), existingSkills: (input.existingSkills ?? []).slice(0, 30) });
+			const out: string[] = [];
+			for (const item of result.suggestedSkills) {
+				const key = skillKey(item); const real = catalog.get(key);
+				if (real && !existing.has(key) && !out.includes(real)) out.push(real);
+				if (out.length >= MAX_SUGGESTED_SKILLS) break;
+			}
+			return { suggestedSkills: out };
+		} catch (error: any) {
+			logger.warn(`[ProviderProfileService] suggestSkillsFromCatalog failed: ${error?.code || error?.name || 'ERROR'}`);
 			throw new AppError('تعذر إنشاء اقتراح بالذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.', 503);
 		}
 	}

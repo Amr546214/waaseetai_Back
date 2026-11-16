@@ -30,6 +30,7 @@ import {
   providerBioSuggestSchema,
   providerBioEnhanceSchema,
   providerSkillsSuggestSchema,
+  catalogSkillsSuggestSchema,
   identityDocumentInspectSchema,
   setupSkillsSchema,
 } from '../dtos/provider-profile-suggest.dto';
@@ -58,6 +59,15 @@ export const suggestSkills = async (req: Request, res: Response, next: NextFunct
     const input = providerSkillsSuggestSchema.safeParse(req.body ?? {});
     if (!input.success) return res.status(400).json({ success: false, message: 'بيانات الاقتراح غير صالحة' });
     res.json({ success: true, data: await providerProfileService.suggestSkills(req.user.id, input.data) });
+  } catch (error) { next(error); }
+};
+
+export const suggestSkillsFromCatalog = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const input = catalogSkillsSuggestSchema.safeParse(req.body ?? {});
+    if (!input.success) return res.status(400).json({ success: false, message: 'بيانات الاقتراح غير صالحة' });
+    res.json({ success: true, data: await providerProfileService.suggestSkillsFromCatalog(req.user.id, input.data) });
   } catch (error) { next(error); }
 };
 

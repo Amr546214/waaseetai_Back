@@ -11,6 +11,13 @@ const draftContext = {
 };
 export const providerBioSuggestSchema = z.object(draftContext).strict();
 export const providerSkillsSuggestSchema = z.object(draftContext).strict();
+// The add-account wizard (a client adding a provider account): the skills catalog of the chosen specialty is what the AI may choose from.
+export const catalogSkillsSuggestSchema = z.object({
+  mainSpecialty: z.string().trim().min(1).max(120),
+  availableSkills: z.array(z.string().trim().min(1).max(120)).min(1).max(250),
+  existingSkills: z.array(z.string().trim().min(1).max(40)).max(30).optional()
+}).strict();
+export type CatalogSkillsSuggestDto = z.infer<typeof catalogSkillsSuggestSchema>;
 export type ProviderBioSuggestDto = z.infer<typeof providerBioSuggestSchema>;
 export type ProviderSkillsSuggestDto = z.infer<typeof providerSkillsSuggestSchema>;
 
