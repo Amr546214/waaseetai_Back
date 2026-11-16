@@ -651,7 +651,7 @@ export class ProviderProfileService {
 				status: ps.status,
 				hasTakenAssessment: ps.hasTakenAssessment || !!latestAttempt,
 				isPassed: ps.isPassed || (latestAttempt?.isPassed ?? false),
-				latestScore: ps.latestScore || latestAttempt?.score || 0,
+				latestScore: ps.latestScore ?? latestAttempt?.score ?? null, // never an invented 0: a specialty whose test was not taken has NO score
 				passedAt: ps.passedAt || latestAttempt?.completedAt || null,
 				aiMetrics: {
 					aiScore: ps.aiScore || 0,

@@ -1283,6 +1283,21 @@ test('getPublicProfile (aiMetrics): averageTestScore/codeMatchingIndex stay DB a
   assert.ok(!sent.includes('provider@example.com') && !sent.includes('0500000000'));
 });
 
+test('getPublicProfile: a specialty whose test was NOT taken has no score (null), never an invented 0; a real 0 and a real score are kept', async (t) => {
+  const base = { subSpecialties: [], quizScore: null, aiScore: null, specialty: { nameAr: 'تخصص', name: 'S', iconName: 'code' }, passedAt: null, assessmentAttempts: [], accreditationSamples: [] };
+  const notTaken = { ...base, id: 'spec-a', latestScore: null, isPassed: false, status: 'PENDING_PROOF', hasTakenAssessment: false };
+  const zero = { ...base, id: 'spec-b', latestScore: 0, isPassed: false, status: 'REJECTED', hasTakenAssessment: true };
+  const scored = { ...base, id: 'spec-c', latestScore: 55, isPassed: true, status: 'APPROVED', hasTakenAssessment: true };
+  const { service } = await loadServiceForAiMetrics(t, { providerSpecialties: [notTaken, zero, scored] });
+  const result: any = await service.getPublicProfile('user-1');
+  const byId = Object.fromEntries(result.specialties.map((x: any) => [x.id, x]));
+  assert.equal(byId['spec-a'].latestScore, null);
+  assert.equal(byId['spec-a'].hasTakenAssessment, false);
+  assert.equal(byId['spec-a'].isPassed, false);
+  assert.equal(byId['spec-b'].latestScore, 0, 'a test that really scored 0 stays 0');
+  assert.equal(byId['spec-c'].latestScore, 55);
+});
+
 test('static: touched provider-profile sources contain no direct Gemini usage', () => {
   const dir = path.resolve(__dirname, '..');
   const files = ['services/provider-profile.service.ts', 'controllers/provider-profile.controller.ts', 'routes/provider-profile.routes.ts'];
