@@ -257,9 +257,15 @@ export class IdentityFieldCheckService {
 
 	/** null = no such profile (404). */
 	async getAdminView(userId: string, party: CheckParty) {
-		const { latest, profile } = await this.latestAndCurrent(userId, party);
+		let { latest, profile } = await this.latestAndCurrent(userId, party);
 		if (!profile) return null;
 		const enabled = this.deps.enabled();
+		// a request submitted before the check existed (or whose image changed without a check): a reviewer opening it starts the advisory check (idempotent; the run is in the background)
+		if (enabled && profile.frontIdUrl && (!latest || sha256(String(profile.frontIdUrl)) !== latest.imageRefDigest)) {
+			await this.trigger(userId, party, { background: true }).catch(e => logger.warn(`[IdentityCheck] view-trigger failed party=${party} code=${(e as any)?.code ?? 'ERR'}`));
+			({ latest, profile } = await this.latestAndCurrent(userId, party));
+			if (!profile) return null;
+		}
 		// reviewers see the legal name next to the document (it is what the document is compared with); it is not part of any public response
 		const legal = await this.deps.db.user.findUnique({ where: { id: userId }, select: { legalName: true } });
 		const base = { userId, party, legalName: legal?.legalName ?? null, legalNameMissing: !legal?.legalName, autoCheckEnabled: enabled, manualReviewRequired: true, advisory: true, advisoryNote: ADVISORY_NOTE_AR, notExamined: NOT_EXAMINED };
