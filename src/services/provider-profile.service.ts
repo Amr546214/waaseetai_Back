@@ -506,6 +506,7 @@ export class ProviderProfileService {
 					side: input.side,
 					image: trimmed,
 					imageMimeType: resolvedMime,
+					...(input.document ? { document: input.document } : {}),
 					...(input.declared ? { declared: input.declared } : {}),
 				},
 				{ actor: { userId, role }, timeoutMs: 35_000 }
