@@ -169,6 +169,39 @@ export class ProjectProgressService {
     } catch (error: any) { if (error?.code !== 'P2002') throw error; }
   }
 
+  /**
+   * A provider's bid that never became a contract (the client cancelled before contracting, or chose another offer) is listed in the provider's archive: opening it shows the project
+   * READ-ONLY (nothing to upload, deliver or sign). Only the provider who made that REJECTED / CANCELLED proposal sees it; anyone else still gets the 404.
+   */
+  private async getEndedProposalView(userId: string, projectId: string) {
+    const proposal = await prisma.projectProposal.findFirst({
+      where: { projectId, providerId: userId, status: { in: ['REJECTED', 'CANCELLED'] as any } },
+      orderBy: { updatedAt: 'desc' },
+      include: { project: { include: { client: { select: { id: true, firstName: true, lastName: true } }, escrow: true } } }
+    });
+    if (!proposal?.project) throw new AppError('المشروع غير موجود أو لا تملك صلاحية الوصول إليه', 404);
+    const project = proposal.project;
+    const clientName = `${project.client?.firstName || 'عميل'} ${project.client?.lastName || ''}`.trim();
+    const cancelled = proposal.status === 'CANCELLED';
+    const label = cancelled ? 'ملغى قبل التعاقد' : 'لم يُقبل عرضك';
+    return {
+      id: null, projectId: project.id, role: 'provider', conversationId: null,
+      title: project.title, clientName, clientInitial: clientName.charAt(0) || 'ع',
+      contractRef: `PRJ-${project.id.slice(0, 4).toUpperCase()}`,
+      price: Number(proposal.totalPrice || 0), durationDays: project.deliveryDays || 0,
+      daysLeft: 0, progress: 0,
+      escrowTotal: 0, escrowHeld: 0, escrowReleased: 0,
+      status: 'CANCELLED', statusLabel: label,
+      contractStatus: null, escrowStatus: null, escrowFunded: false, disputeStatus: null,
+      canUploadDelivery: false, canSubmitDelivery: false, uploadBlockedReason: 'هذا المشروع لم يتحول إلى عقد، فلا يمكن التسليم عليه',
+      awaitingClientReview: false, revisionRequested: false, revisionResubmitted: false,
+      readOnly: true,
+      employee: null,
+      stages: [], deliveries: [], edits: [], messages: [], files: [],
+      aiInsights: { confidence: null, earlyDays: null, matchPercentage: null, riskLevel: 'غير محسوبة', riskLevelKey: 'unknown', healthRating: 'بانتظار بيانات كافية', bullets: [] }
+    };
+  }
+
   async getProjectProgress(userId: string, key: string) {
     const contract = await prisma.contract.findFirst({
       where: { OR: [{ projectId: key }, { id: key }], AND: [{ OR: [{ providerId: userId }, { clientId: userId }] }] },
@@ -190,7 +223,7 @@ export class ProjectProgressService {
           assignedEmployee: { select: { id: true, name: true, jobTitle: true } }
         }
       });
-      if (!project) throw new AppError('المشروع غير موجود أو لا تملك صلاحية الوصول إليه', 404);
+      if (!project) return this.getEndedProposalView(userId, key);
       const acceptedProp = project.proposals?.[0] || null;
       const providerUser = acceptedProp?.provider || null;
       const providerName = providerUser ? `${providerUser.firstName || ''} ${providerUser.lastName || ''}`.trim() : 'مقدم الخدمة';
