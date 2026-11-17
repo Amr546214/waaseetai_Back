@@ -289,15 +289,15 @@ test('pg: refund-only (share 0) credits the provider NOTHING and leaves no phant
 	assert.equal(Number((await w.prisma.user.findUnique({ where: { id: w.provider.id } })).walletBalance), 0);
 });
 
-test('pg: the settled net is withdrawable through the REAL withdrawal service: exactly that amount works, one cent more is refused, and nothing above the available amount ever passes', opts, async () => {
+test('pg: settlement funds obey the existing withdrawal minimum and exact available-balance limit, including retries', opts, async () => {
 	const s = await svc(); const w = await world({ released: 10 }); await withPaypal(w); const id = await agree(w);
 	await assert.rejects(() => asProv(w, 8.73), (e: any) => e.statusCode === 400, 'before settlement: more than the 8.72 available is refused');
-	const first: any = await asProv(w, 8.72); assert.equal(first.amount, 8.72);
-	assert.equal((await wallet(w)).withdrawableBalance, 0);
+	await assert.rejects(() => asProv(w, 8.72), (e: any) => e.statusCode === 400 && /الحد الأدنى/.test(e.message), '8.72 is below the current $10 withdrawal minimum');
+	assert.equal((await wallet(w)).pendingWithdrawals, 0);
 	await s.settle(w.sa.id, id, { releaseToProvider: 4, expectedHeldAmount: 10, reason: 'تسوية بعد المرحلة الأولى' });
-	const mid = await wallet(w); assert.equal(mid.availableBalance, 12.21); assert.equal(mid.pendingWithdrawals, 8.72); assert.equal(mid.withdrawableBalance, 3.49, 'exactly the settled net is what is left to withdraw');
-	await assert.rejects(() => asProv(w, 3.5), (e: any) => e.statusCode === 400); await assert.rejects(() => asProv(w, 3.49 + 0.01), (e: any) => e.statusCode === 400);
-	const second: any = await asProv(w, 3.49); assert.equal(second.amount, 3.49);
+	const mid = await wallet(w); assert.equal(mid.availableBalance, 12.21); assert.equal(mid.pendingWithdrawals, 0); assert.equal(mid.withdrawableBalance, 12.21, 'the released net is available without bypassing the minimum');
+	await assert.rejects(() => asProv(w, 12.22), (e: any) => e.statusCode === 400, 'one cent above the actual balance is refused');
+	const withdrawal: any = await asProv(w, 12.21); assert.equal(withdrawal.amount, 12.21);
 	const end = await wallet(w); assert.equal(end.withdrawableBalance, 0); assert.equal(end.pendingWithdrawals, 12.21);
 	await assert.rejects(() => asProv(w, 0.01), (e: any) => e.statusCode === 400, 'nothing above the available amount');
 	await s.settle(w.sa.id, id, { releaseToProvider: 4, expectedHeldAmount: 10, reason: 'تسوية بعد المرحلة الأولى' }); assert.equal((await wallet(w)).withdrawableBalance, 0, 're-confirm does not re-open withdrawable money');

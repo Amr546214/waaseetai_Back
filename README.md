@@ -97,7 +97,7 @@ Review any SQL under `docs/` marked *NOT EXECUTED* before applying it; those fil
 | `npm run db:seed` · `db:seed:e2e` · `seed:taxonomy` | Admin account · manual-QA data · taxonomy |
 | `npm run db:studio` | Prisma Studio |
 
-**Tests:** most suites mock Prisma and I/O (`--experimental-test-module-mocks`) and need no database. Some open loopback listeners, and the `*.pg.test.ts` suites need an isolated local PostgreSQL (`QA_ISOLATED_PG_URL`, see the header of each file) — they are skipped when it is not set. There is no CI-integrated E2E layer. The full suite was not run for this documentation change.
+**Tests:** use Node 22.22.2 or newer compatible with the installed dependencies. `npm test` includes the test-only `fresh-fixtures.mjs` preload: query-string fixture imports get a fresh CommonJS source instance after mocks change. Application start/build scripts do not load it. Most suites mock Prisma and I/O and need no database. Some open loopback listeners, and `*.pg.test.ts` suites require an isolated local PostgreSQL (`QA_ISOLATED_PG_URL`, see each file's header); they are skipped when it is unset. No production database is needed for the mock-based suite.
 
 ## API and health
 

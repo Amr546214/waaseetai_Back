@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, chmodSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -15,21 +15,17 @@ const PRESTART_SCRIPT = path.join(REPO_ROOT, 'scripts', 'prestart.sh');
 const ENTRYPOINT_SCRIPT = path.join(REPO_ROOT, 'scripts', 'docker-entrypoint.sh');
 const PACKAGE_JSON = path.join(REPO_ROOT, 'package.json');
 
-const hasBash = (() => {
-  try {
-    execFileSync(process.platform === 'win32' ? 'where' : 'which', ['bash'], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-})();
+const bash = (process.platform === 'win32' ? [process.env.GIT_BASH_PATH, 'C:/Program Files/Git/bin/bash.exe', 'bash'] : ['bash'])
+  .filter((candidate): candidate is string => !!candidate)
+  .find(candidate => { try { execFileSync(candidate, ['-c', 'exit 0'], { stdio: 'ignore', timeout: 3000 }); return true; } catch { return false; } });
+const hasBash = !!bash;
+const shellPath = (value: string) => process.platform === 'win32' ? value.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_all, drive: string) => `/${drive.toLowerCase()}`) : value;
 
 function runPrestartWithFakeNpx(env: Record<string, string>): string[] {
   const dir = mkdtempSync(path.join(tmpdir(), 'prestart-test-'));
   const logFile = path.join(dir, 'calls.log');
-  const fakeNpx = path.join(dir, 'npx');
-  writeFileSync(fakeNpx, `#!/usr/bin/env bash\necho "$@" >> "${logFile}"\nexit 0\n`);
-  chmodSync(fakeNpx, 0o755);
+  const script = path.join(dir, 'prestart.sh');
+  writeFileSync(script, readFileSync(PRESTART_SCRIPT, 'utf8').replace(/\r\n/g, '\n'));
 
   const baseEnv: Record<string, string | undefined> = { ...process.env };
   delete baseEnv.RUN_DB_MIGRATIONS;
@@ -37,19 +33,17 @@ function runPrestartWithFakeNpx(env: Record<string, string>): string[] {
   delete baseEnv.RUN_DB_PUSH_ACCEPT_DATA_LOSS;
 
   try {
-    execFileSync('bash', [PRESTART_SCRIPT], {
-      env: { ...baseEnv, ...env, PATH: `${dir}:${process.env.PATH}` } as NodeJS.ProcessEnv,
+    // Source in the SAME shell as the fake function. Empty PATH makes it
+    // impossible for a real npx/Prisma executable to run, even on Windows.
+    execFileSync(bash!, ['-c', 'npx() { printf "%s\\n" "$*" >> "$QA_CALL_LOG"; }; export PATH=""; source "$QA_PRESTART"'], {
+      env: { ...baseEnv, ...env, QA_CALL_LOG: shellPath(logFile), QA_PRESTART: shellPath(script) } as NodeJS.ProcessEnv,
       stdio: 'pipe',
     });
+    return readFileSync(logFile, 'utf8').trim().split(/\r?\n/).filter(Boolean);
   } finally {
-    // Script always exits 0 via the fake npx (real prisma calls never run) —
-    // nothing to special-case here.
+    if (!path.resolve(dir).startsWith(path.resolve(tmpdir()) + path.sep)) throw new Error('unsafe test cleanup path');
+    rmSync(dir, { recursive: true, force: true });
   }
-
-  let calls: string[] = [];
-  try { calls = readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean); } catch { /* no calls logged */ }
-  rmSync(dir, { recursive: true, force: true });
-  return calls;
 }
 
 test('prestart.sh: RUN_DB_MIGRATIONS and RUN_DB_PUSH both explicitly false — never calls migrate deploy or db push', { skip: !hasBash ? 'bash not installed on host' : false }, () => {

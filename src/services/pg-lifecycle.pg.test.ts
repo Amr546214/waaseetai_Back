@@ -260,7 +260,7 @@ test('pg-life: a settlement keeps stages approved BEFORE it approved and counts 
 });
 
 // ── disputes ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-test('pg-life: open dispute — freeze reason (423) on approval AND on a new delivery; the revision request still works; not confused with an ended contract', opts, async () => {
+test('pg-life: an open dispute freezes approval, revision and delivery with 423 without changing the stage', opts, async () => {
 	const { progress } = await services();
 	const w = await seed({ stages: [{ status: 'SUBMITTED', amount: 10, delivery: 'SUBMITTED' }, { status: 'PENDING', amount: 10 }] });
 	await openDispute(w);
@@ -270,13 +270,13 @@ test('pg-life: open dispute — freeze reason (423) on approval AND on a new del
 	assert.equal(c.canApproveStage, false);
 	assert.match(c.approvalBlockedReason, /نزاع مفتوح/);
 	assert.equal(c.stages[0].lifecycle.eligibility.approve.httpStatus, 423);
-	assert.equal(c.stages[0].lifecycle.eligibility.requestRevision.allowed, true);
+	assert.equal(c.stages[0].lifecycle.eligibility.requestRevision.allowed, false);
 	await assert.rejects(() => progress.reviewDelivery(w.client.id, w.project.id, w.stages[0].id, 'approve'), refused(423, /نزاع مفتوح/, 'PROJECT_FROZEN_BY_DISPUTE'));
-	await progress.reviewDelivery(w.client.id, w.project.id, w.stages[0].id, 'revision', 'يرجى التعديل كما في الملاحظات');
+	await assert.rejects(() => progress.reviewDelivery(w.client.id, w.project.id, w.stages[0].id, 'revision', 'يرجى التعديل كما في الملاحظات'), refused(423, /نزاع مفتوح/, 'PROJECT_FROZEN_BY_DISPUTE'));
 	const p = await progress.getProjectProgress(w.provider.id, w.project.id);
 	assert.equal(p.canUploadDelivery, false, 'delivery is stopped during a dispute'); assert.match(p.uploadBlockedReason, /نزاع مفتوح/);
 	await assert.rejects(() => progress.submitDelivery(w.provider.id, w.project.id, w.stages[0].id, 'تسليم معدل بعد الملاحظات', ['https://example.com/rev']), refused(423, /نزاع مفتوح/, 'PROJECT_FROZEN_BY_DISPUTE'));
-	assert.equal((await w.prisma.projectStage.findUnique({ where: { id: w.stages[0].id } })).status, 'REVISION_REQUESTED', 'nothing was delivered')
+	assert.equal((await w.prisma.projectStage.findUnique({ where: { id: w.stages[0].id } })).status, 'SUBMITTED', 'the frozen review and delivery did not change the stage')
 });
 
 test('pg-life: a TEXT closure does not complete the project — eligibility returns per the real contract and stages; the freeze stays while another dispute is active', opts, async () => {

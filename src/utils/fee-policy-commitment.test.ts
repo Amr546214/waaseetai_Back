@@ -8,11 +8,11 @@ import path from 'node:path';
  * everything that happens to the operation later (release, partial release, dispute split, amendment, refund, capture retry, approval) uses what the row stores. Adding a new reader needs a decision here.
  */
 const root = path.join(__dirname, '..');
-const read = (f: string) => fs.readFileSync(path.join(root, f), 'utf8');
+const read = (f: string) => fs.readFileSync(path.join(root, f), 'utf8').replace(/\r\n/g, '\n');
 const walk = (d: string, out: string[] = []): string[] => { for (const f of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, f.name); if (f.isDirectory()) walk(p, out); else if (f.name.endsWith('.ts') && !/\.(test|spec)\.ts$|pgenv/.test(f.name)) out.push(p); } return out; };
 
 test('policy readers: only creation points, display, the marketer ladder of the escrow\'s own version and the admin API read a policy', () => {
-	const users = walk(root).filter(f => /feePolicyService\.(active|byId|upcoming)\(/.test(fs.readFileSync(f, 'utf8'))).map(f => path.relative(root, f)).sort();
+	const users = walk(root).filter(f => /feePolicyService\.(active|byId|upcoming)\(/.test(fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n'))).map(f => path.relative(root, f).replace(/\\/g, '/')).sort();
 	assert.deepEqual(users, [
 		'controllers/gamification.controller.ts',          // display of the table in force
 		'controllers/provider.controller.ts',               // display of the minimum payout next to the available-to-withdraw card (read only)

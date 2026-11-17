@@ -50,7 +50,7 @@ test('other recipients and the verify limiter are not affected by a throttled re
 });
 
 test('route wiring: SEND endpoints use otpSendLimiter (after validation) and not authLimiter; verify/reset use otpVerifyLimiters (after validation); login/google keep authLimiter', () => {
-  const src = fs.readFileSync(path.join(__dirname, '../routes/auth/auth.routes.ts'), 'utf8');
+  const src = fs.readFileSync(path.join(__dirname, '../routes/auth/auth.routes.ts'), 'utf8').replace(/\r\n/g, '\n');
   const block = (route: string) => {
     const i = src.indexOf(`'${route}'`);
     assert.ok(i >= 0, route);
@@ -68,8 +68,18 @@ test('route wiring: SEND endpoints use otpSendLimiter (after validation) and not
     assert.doesNotMatch(block(route), /otpSendLimiter/, route);
     assert.ok(block(route).indexOf('validateRequest(') < block(route).indexOf('otpVerifyLimiters('), `${route}: the limiter runs AFTER the schema validation`);
   }
-  // login family: per-account + per-address pre-auth limiters (loginLimiters), after the schema validation (intentional change: was the shared per-IP authLimiter)
-  for (const route of ['/login', '/google', '/login/verify-otp', '/login/resend-otp']) {
+  // Password login now reserves capacity in PostgreSQL between the flood
+  // limiter and the remaining account/IP limits. Preserve that exact order.
+  assert.match(src, /const passwordLoginLimits = loginLimiters\(/);
+  const login = block('/login');
+  assert.match(login, /passwordLoginLimits\[0\]/);
+  assert.match(login, /loginGuardGate\(/);
+  assert.match(login, /passwordLoginLimits\.slice\(1\)/);
+  assert.ok(login.indexOf('validateRequest(') < login.indexOf('passwordLoginLimits[0]'));
+  assert.ok(login.indexOf('passwordLoginLimits[0]') < login.indexOf('loginGuardGate('));
+  assert.ok(login.indexOf('loginGuardGate(') < login.indexOf('passwordLoginLimits.slice(1)'));
+  assert.doesNotMatch(login, /otpSendLimiter|authLimiter/);
+  for (const route of ['/google', '/login/verify-otp', '/login/resend-otp']) {
     assert.match(block(route), /loginLimiters\(/, route);
     assert.doesNotMatch(block(route), /otpSendLimiter|authLimiter/, route);
     assert.ok(block(route).indexOf('validateRequest(') < block(route).indexOf('loginLimiters('), `${route}: the limiter runs AFTER the schema validation`);
@@ -152,7 +162,7 @@ test('rate-limited wording: per recipient per hour and per IP are "محاولا�
 });
 
 test('the controllers report the mailer result to the gate', () => {
-  const src = fs.readFileSync(path.join(__dirname, '../controllers/auth.controller.ts'), 'utf8');
+  const src = fs.readFileSync(path.join(__dirname, '../controllers/auth.controller.ts'), 'utf8').replace(/\r\n/g, '\n');
   assert.match(src, /registerUser\(input, \{ refCookieSlug, refCookieSource \}\);\s*[^]*?res\.locals\.otpEmailAttempted = true;\s*res\.locals\.otpEmailSent = true;/);
   assert.match(src, /authService\.resendOtp\(userId\);\s*res\.locals\.otpEmailAttempted = true;\s*res\.locals\.otpEmailSent = emailSent === true;/);
 });

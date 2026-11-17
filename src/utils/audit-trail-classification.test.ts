@@ -20,8 +20,8 @@ const NOT_EVENT_CODES = new Set(['REFUND_CLIENT', 'SYSTEM_AUDIT', 'SECURITY_CHAN
 const writtenCodes = () => {
 	const codes = new Map<string, string>();
 	for (const f of sources(path.join(__dirname, '..'))) {
-		const txt = fs.readFileSync(f, 'utf8');
-		for (const m of txt.matchAll(/\b(?:eventType|action)\b\s*[:=][^;]{0,400}/g)) for (const t of m[0].matchAll(/'([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)'/g)) codes.set(t[1], path.relative(path.join(__dirname, '..'), f));
+		const txt = fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n');
+		for (const m of txt.matchAll(/\b(?:eventType|action)\b\s*[:=][^;]{0,400}/g)) for (const t of m[0].matchAll(/'([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)'/g)) codes.set(t[1], path.relative(path.join(__dirname, '..'), f).replace(/\\/g, '/'));
 	}
 	return codes;
 };

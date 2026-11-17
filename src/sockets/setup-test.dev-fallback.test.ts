@@ -169,7 +169,9 @@ test('the local bank: exactly SETUP_TEST_QUESTION_COUNT items, unique ids, >=2 o
 });
 
 test('the flag is not committed anywhere in env / config / docker files', async () => {
-	const { execSync } = await import('node:child_process');
-	const out = execSync("git grep -l SETUP_TEST_DEV_FALLBACK -- . ':!src' || true", { cwd: new URL('../../', import.meta.url).pathname }).toString().trim();
-	assert.equal(out, '');
+	const { spawnSync } = await import('node:child_process');
+	const { fileURLToPath } = await import('node:url');
+	const result = spawnSync('git', ['grep', '-l', 'SETUP_TEST_DEV_FALLBACK', '--', '.', ':!src'], { cwd: fileURLToPath(new URL('../../', import.meta.url)), encoding: 'utf8' });
+	assert.ifError(result.error);
+	assert.equal(result.status, 1, result.stdout || result.stderr || 'git grep must finish with no matches');
 });

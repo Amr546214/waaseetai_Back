@@ -135,7 +135,7 @@ test('admin list shows the pending sample with provider + specialty; approving i
 	const { access, admin } = await load();
 	await access.get('u1', db);
 	// the list query itself is covered by the real service: fake findMany returns [] so assert the where/include contract instead
-	const src = readFileSync(new URL('./accreditation-ai.service.ts', import.meta.url), 'utf8');
+	const src = readFileSync(new URL('./accreditation-ai.service.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 	assert.match(src, /const where = status \? \{ status \} : \{\}/);
 	const approvedAt = await admin.adminApproveSample(S.samples[0].id, undefined);
 	assert.equal(approvedAt.status, 'AI_VERIFIED');
@@ -168,13 +168,13 @@ test('requireApprovedProvider: 403 while pending, passes when approved, passes f
 });
 
 test('route wiring: access-state is providerOnly (activeRole) and un-gated; the gated prefixes are exact and mounted before the sub-routers', () => {
-	const src = readFileSync(new URL('../routes/provider.routes.ts', import.meta.url), 'utf8');
+	const src = readFileSync(new URL('../routes/provider.routes.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 	assert.match(src, /router\.get\('\/access-state', authenticate, requireActiveUser, providerOnly,/);
 	const gate = src.match(/export const DASHBOARD_DATA_PREFIXES = \[([^\]]+)\];\nrouter\.use\(DASHBOARD_DATA_PREFIXES, \.\.\.dashboardGate\)/)![1];
 	assert.deepEqual(gate.split(',').map(x => x.trim().replace(/'/g, '')).sort(), ['/amendments', '/coupons', '/explore-requests', '/finance', '/marketing', '/offers', '/projects', '/reports', '/requests', '/services', '/special-offers', '/statistics']);
 	assert.match(src, /const providerOnly = authorizeActiveRole\(AccountType\.PROVIDER_INDIVIDUAL, AccountType\.PROVIDER_COMPANY\)/);
 	const gateAt = src.indexOf('router.use(DASHBOARD_DATA_PREFIXES');
-	for (const m of ["router.use('/profile'", "router.use('/services'", "router.use('/special-offers'", "router.use('/marketing'", "router.get(\n  '/statistics'"]) assert.ok(gateAt < src.indexOf(m), m);
+	for (const m of ["mountRouter(router, '/profile'", "mountRouter(router, '/services'", "mountRouter(router, '/special-offers'", "mountRouter(router, '/marketing'", "router.get(\n  '/statistics'"]) assert.ok(gateAt < src.indexOf(m), m);
 	// the open (onboarding / help) prefixes are never in the gated list
 	for (const open of ['/profile', '/accreditation', '/access-state', '/tickets', '/disputes', '/specialties']) assert.ok(!gate.includes(`'${open}'`), open);
 });
@@ -184,16 +184,16 @@ test('every router that holds a provider guard is classified: gated (own guard o
 	const GATED_OWN = ['business-models.routes.ts', 'proposal.routes.ts', 'project.routes.ts', 'ai-assistant.routes.ts', 'gamification.routes.ts', 'account-logs.routes.ts']; // contain requireApprovedProvider themselves
 	const GATED_BY_PROVIDER_ROUTES: Record<string, string> = { 'marketplace-service.routes.ts': '/services', 'provider-special-offer.routes.ts': '/special-offers', 'provider-marketing-center.routes.ts': '/marketing' };
 	const OPEN = ['accreditation-ai.routes.ts', 'ai-assessment.routes.ts', 'provider-specialty.routes.ts', 'provider-profile.routes.ts', 'specialty.routes.ts', 'skills.routes.ts', 'company-team.routes.ts', 'provider.routes.ts', 'provider-account-actions.routes.ts'];
-	const providerSrc = readFileSync(new URL('../routes/provider.routes.ts', import.meta.url), 'utf8');
+	const providerSrc = readFileSync(new URL('../routes/provider.routes.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 	const files = readdirSync(dir).filter(f => f.endsWith('.routes.ts') && !f.startsWith('admin-') && !f.startsWith('client-'))
-		.filter(f => /providerOnly|requireProvider|PROVIDER_INDIVIDUAL|PROVIDER_COMPANY|providerActingOnly/.test(readFileSync(new URL(f, dir), 'utf8')));
+		.filter(f => /providerOnly|requireProvider|PROVIDER_INDIVIDUAL|PROVIDER_COMPANY|providerActingOnly/.test(readFileSync(new URL(f, dir), 'utf8').replace(/\r\n/g, '\n')));
 	files.push('account-logs.routes.ts');
-	for (const extra of ['modules/ai-review/ai-review.routes.ts', 'dashboard/dashboard.routes.ts']) assert.match(readFileSync(new URL(extra.startsWith('modules') ? '../' + extra : extra, dir), 'utf8'), /requireApprovedProvider/, extra);
+	for (const extra of ['modules/ai-review/ai-review.routes.ts', 'dashboard/dashboard.routes.ts']) assert.match(readFileSync(new URL(extra.startsWith('modules') ? '../' + extra : extra, dir), 'utf8').replace(/\r\n/g, '\n'), /requireApprovedProvider/, extra);
 	void 0; // // mounted at /api/provider/logs, no provider guard text of its own
 	for (const f of files) {
 		assert.ok(GATED_OWN.includes(f) || f in GATED_BY_PROVIDER_ROUTES || OPEN.includes(f), `${f} holds a provider guard but is not classified as gated or open in the onboarding gate`);
-		if (GATED_OWN.includes(f)) assert.match(readFileSync(new URL(f, dir), 'utf8'), /requireApprovedProvider/, f);
-		if (f in GATED_BY_PROVIDER_ROUTES) assert.ok(providerSrc.includes(`'${GATED_BY_PROVIDER_ROUTES[f]}'`) && providerSrc.includes(`router.use('${GATED_BY_PROVIDER_ROUTES[f]}'`), f);
+		if (GATED_OWN.includes(f)) assert.match(readFileSync(new URL(f, dir), 'utf8').replace(/\r\n/g, '\n'), /requireApprovedProvider/, f);
+		if (f in GATED_BY_PROVIDER_ROUTES) assert.ok(providerSrc.includes(`'${GATED_BY_PROVIDER_ROUTES[f]}'`) && providerSrc.includes(`mountRouter(router, '${GATED_BY_PROVIDER_ROUTES[f]}'`), f);
 	}
 });
 
@@ -211,8 +211,8 @@ test('gate behaviour per route class: pending individual 403 / approved passes /
 });
 
 test('hooks: the form save does NOT register samples; the setup-test completion does (via completeSetupTest)', () => {
-	assert.doesNotMatch(readFileSync(new URL('../controllers/provider-profile.controller.ts', import.meta.url), 'utf8'), /EnsureOnboardingAccreditationSamples|ensureOnboardingAccreditationSamples/);
-	assert.match(readFileSync(new URL('../sockets/setup-test.gateway.ts', import.meta.url), 'utf8'), /await completeSetupTest\(session\.profileId, score, passed\)/);
+	assert.doesNotMatch(readFileSync(new URL('../controllers/provider-profile.controller.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n'), /EnsureOnboardingAccreditationSamples|ensureOnboardingAccreditationSamples/);
+	assert.match(readFileSync(new URL('../sockets/setup-test.gateway.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n'), /await completeSetupTest\(session\.profileId, score, passed\)/);
 });
 
 test('setup test completion: before => no sample; after => MANUAL_REVIEW sample linked to profile + specialty, specialty UNDER_AI_REVIEW, PENDING_REVIEW, still no access; admin list shows it; approve opens access', async () => {
@@ -235,7 +235,7 @@ test('setup test completion: before => no sample; after => MANUAL_REVIEW sample 
 	assert.deepEqual([it.title, it.providerProfile.user.email, it.providerSpecialty.specialty.nameAr, it.status], ['نموذج أعمال - تصميم جرافيك', 'sara@example.com', 'تصميم جرافيك', 'MANUAL_REVIEW']);
 	assert.ok(it.description && it.attachments.length === 2);
 	// the admin specialties pending queue reads status UNDER_AI_REVIEW (STATUS_FILTERS.pending)
-	assert.match(readFileSync(new URL('./specialty-admin-review.service.ts', import.meta.url), 'utf8'), /pending: \[SpecialtyVerificationStatus\.UNDER_AI_REVIEW\]/);
+	assert.match(readFileSync(new URL('./specialty-admin-review.service.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n'), /pending: \[SpecialtyVerificationStatus\.UNDER_AI_REVIEW\]/);
 	await admin.adminApproveSample(s.id, undefined);
 	assert.deepEqual([(await access.get('u1', db)).state, (await access.get('u1', db)).canAccessDashboard], ['APPROVED', true]);
 });

@@ -1,6 +1,7 @@
 import { mountDisputeMessages } from './dispute-messages.routes';
 import { mountCaseAttachments, caseFilesUpload } from './case-attachments.routes';
 import { Router, Request, Response, NextFunction } from 'express';
+import { mountRouter } from '../utils/mount-router';
 import { getProviderStatistics, getProviderOffers, getProviderOfferById, getEligibleAccreditationSpecialties, getPassedSpecialties, signContract, getActiveProjects, getArchivedProjects, getProjectProgress, submitStageDelivery, uploadStageDeliveryFiles, getDeliveryAiReview, getProjectHealthAnalysis, getProviderWallet, getProviderTransactions, getProviderFinanceHistory, getProviderFinanceTransaction, getCompanyDeliveries, getProviderInvoices, getProviderInvoice, getProviderSales } from '../controllers/provider.controller';
 import { submitWithdrawal, listMyWithdrawals } from '../controllers/withdrawal.controller';
 import { AccountType } from '@prisma/client';
@@ -65,14 +66,14 @@ router.get('/access-state', authenticate, requireActiveUser, providerOnly, async
 router.get('/reports', authenticate, requireActiveUser, providerOnly, providerReportsController.getReports);
 
 // Mount profile routes
-router.use('/profile', providerProfileRouter);
+mountRouter(router, '/profile', providerProfileRouter);
 
 // Mount marketplace services routes
-router.use('/services', marketplaceServiceRouter);
+mountRouter(router, '/services', marketplaceServiceRouter);
 
 // Company team roster CRUD (PROVIDER_COMPANY accounts only — gated inside
 // the sub-router) → /api/provider/company/team
-router.use('/company/team', companyTeamRouter);
+mountRouter(router, '/company/team', companyTeamRouter);
 
 router.post('/coupons', authenticate, requireActiveUser, providerOnly, createCoupon);
 router.get('/coupons', authenticate, requireActiveUser, providerOnly, listCoupons);
@@ -83,10 +84,10 @@ router.delete('/coupons/:id', authenticate, requireActiveUser, providerOnly, dea
 router.patch('/coupons/:id/approval', authenticate, requireActiveUser, authorizeActiveRole(AccountType.PROVIDER_COMPANY), requireCompanyAccount, decideCouponApproval);
 
 // Phase 6 — special offers CRUD + company approval → /api/provider/special-offers
-router.use('/special-offers', specialOfferRouter);
+mountRouter(router, '/special-offers', specialOfferRouter);
 
 // Phase 7 — marketing center aggregation + company spend cap → /api/provider/marketing
-router.use('/marketing', marketingCenterRouter);
+mountRouter(router, '/marketing', marketingCenterRouter);
 
 // Endpoint for Provider Dashboard Overview Statistics. It makes NO AI call any more (the matching is a deterministic rule engine and the AI rating is
 // read from stored proposal scores), and the dashboard calls it on every page: it uses dashboardLimiter, not the 30/15min aiLimiter (which gave a
@@ -259,7 +260,7 @@ router.get(
 );
 
 // Mount full accreditation submission & AI evaluation routes
-router.use('/accreditation', accreditationAiRoutes);
+mountRouter(router, '/accreditation', accreditationAiRoutes);
 
 // Batch 8: the standalone `GET /ai-matching-projects` route (ai-matching.
 // routes.ts/ai-matching.controller.ts) was removed here — confirmed zero

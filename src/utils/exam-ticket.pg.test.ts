@@ -8,6 +8,7 @@ import { prisma } from '../config/db';
 const url = process.env.QA_ISOLATED_PG_URL;
 const enabled = !!url && url === process.env.DATABASE_URL && /@(127\.0\.0\.1|localhost):55432\//.test(url);
 const opts = { skip: enabled ? false : 'isolated local PostgreSQL on :55432 only' };
+process.env.JWT_SECRET ??= 'isolated-exam-ticket-test-secret';
 after(async () => { if (enabled) await prisma.$disconnect(); });
 
 test('PG ticket: competing backend processes consume once, and a fresh process cannot replay it', opts, async () => {

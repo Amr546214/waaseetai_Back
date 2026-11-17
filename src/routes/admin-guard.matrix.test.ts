@@ -31,7 +31,7 @@ const prisma: any = new Proxy({ user: { findUnique: async ({ where }: any) => by
 mock.module('../config/db', { namedExports: { prisma } });
 mock.module('../services/session.service', { namedExports: { sessionService: { validateOrRegister: async () => ({ id: 'sess' }) } } });
 
-const appSource = fs.readFileSync(path.join(__dirname, '..', 'app.ts'), 'utf8');
+const appSource = fs.readFileSync(path.join(__dirname, '..', 'app.ts'), 'utf8').replace(/\r\n/g, '\n');
 
 /** `import xRouter from './routes/x'` / `import { a, b } from './routes/x'` -> identifier -> file */
 function importedRouters() {
@@ -47,8 +47,12 @@ const adminMounts = [...appSource.matchAll(/mountAppRoute\('\/api\/admin\/([\w-]
 test('app.ts mounts the expected admin routers (table is read from the source, not hard-coded)', () => {
 	assert.ok(adminMounts.length >= 12, `found ${adminMounts.length} admin mounts`);
 	for (const prefix of ['users', 'dashboard', 'requests', 'offers', 'onboarding', 'accreditation', 'specialties', 'security']) assert.ok(adminMounts.some(m => m.prefix === prefix), `/admin/${prefix} mounted`);
-	// every admin mount is also served without the /api prefix
-	for (const m of adminMounts) assert.match(appSource, new RegExp(`mountAppRoute\\('/admin/${m.prefix}',\\s*${m.ident}\\)`));
+	// These newer APIs intentionally have only the canonical /api mount.
+	const canonicalOnly = new Set(['infrastructure', 'notification-history', 'notification-templates', 'ai-console']);
+	for (const m of adminMounts) {
+		assert.match(appSource, new RegExp(`mountAppRoute\\('/api/admin/${m.prefix}',\\s*${m.ident}\\)`));
+		if (!canonicalOnly.has(m.prefix)) assert.match(appSource, new RegExp(`mountAppRoute\\('/admin/${m.prefix}',\\s*${m.ident}\\)`));
+	}
 });
 
 /**
