@@ -14,7 +14,7 @@
 //    a missing/rotated env value is detected accurately at runtime and in
 //    tests.
 
-export const WASEET_AI_DEFAULT_BASE_URL = 'https://waseet-ai-api-1041761245251.us-central1.run.app';
+export const WASEET_AI_DEFAULT_BASE_URL = 'http://waseetai-ai-main:8080'; // our own AI container on the server's docker network (never the retired Cloud Run address)
 export const WASEET_AI_CLIENT_ID = 'waseet_core_backend';
 
 export interface WaseetAiConfig {
