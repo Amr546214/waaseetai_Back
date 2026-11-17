@@ -2,6 +2,7 @@ import { NextFunction, Request, Response, Router } from 'express';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { loadAdminActor, requireAdminAccount, requireAnyPermission, requirePermission, requireSuperAdmin } from '../middlewares/admin-access.middleware';
 import { systemSettingsService } from '../services/system-settings.service';
+import { assertActorInControlPlane, panelSettings } from '../services/control-plane-settings';
 import { isOfficialDeployment } from '../utils/deployment-identity';
 import { AppError } from '../utils/app-error';
 import { loginGuardService } from '../services/login-guard.service';
@@ -19,12 +20,12 @@ router.get('/access', requireAdminAccount, async (req, res, next) => { try { con
 // The operations panel is SUPER_ADMIN only on every deployment, for reading as well as writing (hiding a button is not access control).
 router.use(requireSuperAdmin);
 
-router.get('/', ok(async req => systemSettingsService.view(await loadAdminActor(req))));
-router.put('/', requirePermission('settings.manage'), ok(async req => systemSettingsService.update(await loadAdminActor(req), req.body, { ip: req.ip, device: String(req.headers['user-agent'] || '') })));
-router.get('/history', ok(async req => systemSettingsService.history(await loadAdminActor(req), Number(req.query.limit) || 20)));
+router.get('/', ok(async req => { const p = panelSettings(); return { ...(await p.service.view(await loadAdminActor(req))), controlTarget: p.target }; }));
+router.put('/', requirePermission('settings.manage'), ok(async req => { const actor = await loadAdminActor(req); await assertActorInControlPlane(actor.userId); return panelSettings().service.update(actor, req.body, { ip: req.ip, device: String(req.headers['user-agent'] || '') }); }));
+router.get('/history', ok(async req => panelSettings().service.history(await loadAdminActor(req), Number(req.query.limit) || 20)));
 router.get('/health', ok(() => systemSettingsService.health()));
 router.get('/login-protection/impact', requireSuperAdmin, ok(async req => { const n = (k: string) => (req.query[k] === undefined ? undefined : Number(req.query[k])); return loginGuardService.impact({ maxFails: n('maxFails'), windowMin: n('windowMin'), blockMin: n('blockMin'), ipMaxFails: n('ipMaxFails') } as never); }));
-router.get('/sessions-impact', requireSuperAdmin, ok(req => systemSettingsService.sessionsImpact(req.query.idleMinutes)));
-router.get('/currency-readiness', requireSuperAdmin, ok(() => currencyReadiness()));
+router.get('/sessions-impact', requireSuperAdmin, ok(req => panelSettings().service.sessionsImpact(req.query.idleMinutes)));
+router.get('/currency-readiness', requireSuperAdmin, ok(() => currencyReadiness((panelSettings().db ?? undefined) as never)));
 
 export default router;
