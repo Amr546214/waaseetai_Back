@@ -92,6 +92,8 @@ before(async () => {
   process.env.DATABASE_URL = TEST_DB!;
   process.env.JWT_SECRET = 'e2e-jwt-secret';
   process.env.WASEET_AI_BEARER_TOKEN = 'e2e-dummy-token';
+  process.env.WASEET_AI_AUTH_MODE = 'bearer';
+  process.env.WASEET_AI_GATEWAY_ENABLED = 'true';
   fakeServer = fakeWaseetAi();
   await new Promise<void>((r) => fakeServer.listen(0, '127.0.0.1', r));
   process.env.WASEET_AI_BASE_URL = `http://127.0.0.1:${(fakeServer.address() as AddressInfo).port}`;
@@ -108,7 +110,7 @@ before(async () => {
 
   const category = await prisma.category.create({ data: { slug: `cat-${Date.now()}`, nameAr: 'تصميم' } });
   const mkUser = async (tag: string) => {
-    const user = await prisma.user.create({ data: { accountType: 'PROVIDER_INDIVIDUAL', firstName: 'اختبار', lastName: tag, email: `e2e-${tag}-${Date.now()}@example.test`, activeRole: 'PROVIDER' } });
+    const user = await prisma.user.create({ data: { accountType: 'PROVIDER_INDIVIDUAL', firstName: 'اختبار', lastName: tag, email: `e2e-${tag}-${Date.now()}@example.test`, status: 'ACTIVE', roles: ['PROVIDER'], activeRole: 'PROVIDER' } });
     const profile = await prisma.providerProfile.create({ data: { userId: user.id } });
     return { user, profile };
   };

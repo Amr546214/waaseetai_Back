@@ -635,7 +635,7 @@ test('LOCK ORDER true parallel rounds: admin refund / release racing a final app
 
 test('LOCK ORDER static: every flow that locks the contract and then writes the request takes the request row first (lockRequestRow before the contract lock)', opts, async () => {
 	const fs = await import('node:fs'); const path = await import('node:path'); const root = path.join(__dirname, '..');
-	const read = (f: string) => fs.readFileSync(path.join(root, f), 'utf8');
+	const read = (f: string) => fs.readFileSync(path.join(root, f), 'utf8').replace(/\r\n/g, '\n');
 	const first = (src: string, a: string, b: string) => { const i = src.indexOf(a), j = src.indexOf(b); assert.ok(i > 0 && j > 0 && i < j, `${a} must come before ${b}`); };
 	first(read('services/project-progress.service.ts'), 'await lockRequestRow(tx, contract.projectId)', 'const contractLock = await tx.contract.updateMany');
 	first(read('controllers/provider.controller.ts'), 'await lockRequestRow(tx, targetProjectId)', 'const transitioned = await tx.contract.updateMany');

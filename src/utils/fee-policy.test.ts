@@ -94,7 +94,7 @@ test('fee-policy.ts (the baseline constants) is imported only by the policy sche
   const root = join(__dirname, '..');
   const walk = (d: string, out: string[] = []): string[] => { for (const f of readdirSync(d)) { const p = join(d, f); statSync(p).isDirectory() ? walk(p, out) : out.push(p); } return out; };
   for (const f of walk(root).filter((x) => x.endsWith('.ts') && !x.endsWith('.test.ts') && !x.endsWith('fee-policy.ts'))) {
-    const t = readFileSync(f, 'utf-8');
+    const t = readFileSync(f, 'utf-8').replace(/\r\n/g, '\n');
     if (!READ_ONLY_DISPLAY_IMPORTERS.some(n => f.endsWith(n))) assert.equal(/from ['"][^'"]*fee-policy['"]/.test(t), false, `${f} imports fee-policy`);
     assert.equal(t.includes('BROKER_LEVEL_MATRIX'), false, `${f} references BROKER_LEVEL_MATRIX`);
   }

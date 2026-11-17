@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { SKILLS_CATALOG, SKILL_NAME_MAX, skillsForCategory, allCatalogSkills } from './skills-catalog.config';
 import { resolveCategorySlug, resolveSkillIdsFromCatalog } from '../services/skills-catalog.service';
 
-const seed = readFileSync(join(__dirname, '..', '..', 'prisma', 'seed-marketplace-taxonomy.ts'), 'utf8');
+const seed = readFileSync(join(__dirname, '..', '..', 'prisma', 'seed-marketplace-taxonomy.ts'), 'utf8').replace(/\r\n/g, '\n');
 const taxonomySlugs = [...seed.matchAll(/^  \{\n    slug: '([a-z0-9-]+)'/gm)].map(m => m[1]);
 
 test('the catalog covers exactly the marketplace main specialties (the 19 category slugs of the taxonomy seed)', () => {

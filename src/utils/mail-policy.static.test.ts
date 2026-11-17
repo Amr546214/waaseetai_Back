@@ -10,10 +10,10 @@ process.env.FRONTEND_URL = 'https://dev.example.test';
 const SRC = path.join(__dirname, '..');
 const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.ts') && !/\.test\.ts$/.test(e.name) ? [path.join(d, e.name)] : []);
 const files = walk(SRC);
-const read = (f: string) => fs.readFileSync(f, 'utf8');
+const read = (f: string) => fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n');
 
 test('every .sendMail( call site is a known, reviewed mail path (a new one must be classified in mail-dispatch first)', () => {
-	const sites = files.filter(f => /\.sendMail\(/.test(read(f))).map(f => path.relative(SRC, f)).sort();
+	const sites = files.filter(f => /\.sendMail\(/.test(read(f))).map(f => path.relative(SRC, f).replace(/\\/g, '/')).sort();
 	assert.deepEqual(sites, [
 		'services/admin-mailbox-alert.service.ts', // SYSTEM
 		'services/chat-digest.service.ts', // OPTIONAL (own claim)

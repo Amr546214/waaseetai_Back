@@ -127,13 +127,14 @@ for (const party of ['CLIENT', 'PROVIDER'] as Party[]) {
 		void call;
 	});
 
-	test(`PG ${party}: rejection shows the reason, keeps the data, re-upload re-opens the review; approval opens the next step`, opts, async () => {
+	test(`PG ${party}: rejection clears rejected photos, keeps typed data, and re-upload re-opens review before approval`, opts, async () => {
 		const w = await seed(party);
 		await submit(w);
 		assert.equal((await reject(w)).status, 200);
 		let s = await state(w);
 		assert.equal(s.status, 'REJECTED'); assert.equal(s.rejectionReason, 'الصورة غير واضحة، ارفع صورة أوضح'); assert.equal(s.canAdvance, false);
-		assert.equal(s.data.idNumber, DATA.idNumber); assert.equal(s.data.hasFront, true); assert.equal(s.data.hasBack, true); // data kept
+		assert.equal(s.data.idNumber, DATA.idNumber);
+		assert.equal(s.data.hasFront, false); assert.equal(s.data.hasBack, false); // current policy: keep typed data, remove rejected pictures
 		await assertBlocked(w, 'REJECTED');
 		const r = await submit(w, { frontId: PNG(5) }); // re-upload only the photo: data not re-sent, not erased
 		assert.equal(r.json.data.status, 'UNDER_REVIEW'); assert.equal(r.json.data.rejectionReason, null); assert.equal(r.json.data.data.idNumber, DATA.idNumber);

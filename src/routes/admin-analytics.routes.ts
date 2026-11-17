@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { mountRouter } from '../utils/mount-router';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { getAnalyticsOverview } from '../controllers/admin-analytics.controller';
 import { requirePermission } from '../middlewares/admin-access.middleware';
@@ -11,6 +12,6 @@ router.use(authenticate, requireActiveUser, requirePermission('finance.read'));
 // Read-only real aggregates (see services/admin-analytics.service.ts).
 router.get('/overview', getAnalyticsOverview);
 
-router.use('/saved-reports', adminSavedReports);
+mountRouter(router, '/saved-reports', adminSavedReports);
 
 export default router;

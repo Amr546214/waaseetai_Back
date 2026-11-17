@@ -903,9 +903,8 @@ test('dispute freeze: with no active dispute the approval releases exactly as be
   assert.equal(fx.escrowUpdateManySpy.mock.callCount(), 1);
 });
 
-test('dispute freeze: a REVISION request is not an approval and is still allowed while a dispute is open (no money moves)', async (t) => {
+test('dispute freeze: revision is blocked with every delivery review while the dispute is open, and no money moves', async (t) => {
   const fx = await loadProjectProgressServiceWithFixture(t, { freezeActive: true });
-  await fx.projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'revision', 'يرجى تعديل الألوان كما في الملاحظات');
+  await assert.rejects(() => fx.projectProgressService.reviewDelivery('client-1', 'contract-1', 'stage-1', 'revision', 'يرجى تعديل الألوان كما في الملاحظات'), (error: any) => error.statusCode === 423);
   assert.equal(fx.escrowUpdateManySpy.mock.callCount(), 0);
-  assert.ok(!fx.order.includes('lock'), 'a revision does not take the release lock');
 });

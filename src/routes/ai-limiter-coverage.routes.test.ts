@@ -10,7 +10,7 @@ import path from 'node:path';
 // Deterministic routes are deliberately NOT touched or asserted here.
 
 function readRoute(relativePath: string): string {
-  return fs.readFileSync(path.join(__dirname, relativePath), 'utf8');
+  return fs.readFileSync(path.join(__dirname, relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
 
 test('proposal.routes.ts: POST /ai-suggest (ai-proposal.service.ts) carries aiLimiter', () => {
@@ -49,7 +49,7 @@ test('provider.routes.ts: GET /statistics makes no AI call (rule-based matching 
   const registration = source.slice(start, source.indexOf(');', start));
   assert.match(registration, /dashboardLimiter/);
   assert.doesNotMatch(registration, /aiLimiter/);
-  const mw = fs.readFileSync(path.join(__dirname, '../middlewares/rate-limit.middleware.ts'), 'utf8');
+  const mw = fs.readFileSync(path.join(__dirname, '../middlewares/rate-limit.middleware.ts'), 'utf8').replace(/\r\n/g, '\n');
   assert.match(mw, /DASHBOARD: tierFromEnv\('DASHBOARD', \{[^}]*user: 300/s);
   assert.match(mw, /export const dashboardLimiter/);
 });

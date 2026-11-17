@@ -2,10 +2,11 @@ import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
+import { tmpdir } from 'node:os';
 import { DurableLlmLimits, getDurableLlmGuard, type DurableLlmReservation } from './llm.durable-limits';
 import { LlmError, LlmErrorCode } from './llm.errors';
 
-const testRoot = resolve('C:/Users/DELL/Documents/Codex/2026-10-12/ht/work/guard-tests');
+const testRoot = resolve(tmpdir(), 'waaseetai-llm-guard-tests');
 let directory: string, filename: string, now: number;
 let guards: DurableLlmLimits[];
 const policy = (overrides: Partial<DurableLlmReservation> = {}): DurableLlmReservation => ({

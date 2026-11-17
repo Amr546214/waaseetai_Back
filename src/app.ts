@@ -50,6 +50,7 @@ import clientProfileRoutes from './routes/client-profile.routes';
 import clientRequestsRoutes from './routes/client-requests.routes';
 import clientProjectAmendmentsRoutes from './routes/client-project-amendments.routes';
 import clientCompanyTeamRoutes from './routes/client-company-team.routes';
+import clientCompanyDashboardRoutes from './routes/client-company-dashboard.routes';
 import businessModelsRouter from './routes/business-models.routes';
 import marketplaceRouter from './routes/marketplace.routes';
 import notificationsRouter from './routes/notifications.routes';
@@ -279,6 +280,8 @@ mountAppRoute('/client/projects', clientProjectAmendmentsRoutes);
 // only — gated inside the sub-router) → /api/client/company/team
 mountAppRoute('/api/client/company/team', clientCompanyTeamRoutes);
 mountAppRoute('/client/company/team', clientCompanyTeamRoutes);
+mountAppRoute('/api/client/company', clientCompanyDashboardRoutes);
+mountAppRoute('/client/company', clientCompanyDashboardRoutes);
 mountAppRoute('/api/client/finance', clientFinanceRoutes);
 mountAppRoute('/client/finance', clientFinanceRoutes);
 mountAppRoute('/api/client/reports', clientReportsRoutes);

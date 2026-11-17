@@ -9,7 +9,7 @@ import path from 'node:path';
 // assigned-employee route carries both the role-level and strict-accountType
 // guards, so a future edit can't silently drop either one.
 
-const source = fs.readFileSync(path.join(__dirname, 'client-project-amendments.routes.ts'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, 'client-project-amendments.routes.ts'), 'utf8').replace(/\r\n/g, '\n');
 
 test('PUT /:id/assigned-employee carries both authorize(CLIENT_COMPANY) and requireClientCompanyAccount', () => {
   const start = source.indexOf("router.put(\n\t'/:id/assigned-employee'");
