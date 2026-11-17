@@ -10,6 +10,7 @@ import { publicKycRejectionReason } from '../utils/provider-kyc-review';
 import { notifyAdmins } from './admin-notifications.service';
 import { legalNameKey } from '../utils/legal-name';
 import { identityFieldCheckService } from './identity-field-check.service';
+import { identityClaimService } from './identity-claim.service';
 
 /**
  * Identity gate (client + provider setup). The identity step is APPROVED only when the admin approved the CURRENT image AND the CURRENT identity data: the approval stores a
@@ -141,6 +142,7 @@ export class IdentityGateService {
       const row = { ...row0, legalName: await legalNameOf(tx, userId) };
       if (identityDigest(row) === (row.identityApprovedDigest ?? digestBefore)) return false;
       await model(tx, party).update({ where: { userId }, data: { kycStatus: 'PENDING', identityApprovedDigest: null, ...(party === 'PROVIDER' ? { isVerified: false } : {}) } });
+      await identityClaimService.release(tx, userId, party);
       if (party === 'CLIENT' && row.frontIdUrl) await this.refreshClientReview(tx, userId, row.frontIdUrl);
       return true;
     };
@@ -164,6 +166,8 @@ export class IdentityGateService {
     const doc = documentUpdate(body, stored);
     // a LEGACY approval (no stored digest) keeps the frozen data rule; a gate approval is cancelled by a change instead
     if (!stored?.identityApprovedDigest) assertVerifiedIdentityUnchanged(stored, body);
+    // one identity, one account: refused BEFORE anything is stored when another account already holds this identity (flag IDENTITY_UNIQUE_ENFORCEMENT)
+    await identityClaimService.assertAvailable(prisma, userId, { idNumber: body.idNumber || stored?.idNumber, idIssuingCountry: (doc as any)?.idIssuingCountry ?? stored?.idIssuingCountry });
     assertKycFileValues([body.frontId, body.backId], userId);
     const folder = party === 'CLIENT' ? 'clients' : 'providers';
     const [front, back] = await Promise.all([
@@ -181,6 +185,7 @@ export class IdentityGateService {
       const reopen = kyc === 'UNVERIFIED' || kyc === 'REJECTED' || (kyc === 'VERIFIED' && changed && (!!before?.identityApprovedDigest || !!front || !!back)) || (kyc === 'PENDING' && changed);
       if (!reopen) return false;
       await model(tx, party).update({ where: { userId }, data: { kycStatus: 'PENDING', identityApprovedDigest: null, ...(party === 'PROVIDER' ? { isVerified: false } : {}) } });
+      if (kyc === 'VERIFIED') await identityClaimService.release(tx, userId, party);
       if (party === 'CLIENT') await this.refreshClientReview(tx, userId, after.frontIdUrl as string);
       return kyc !== 'PENDING';
     }, { timeout: 20_000 });

@@ -8,6 +8,7 @@ import { providerNotifications } from './provider-notifications.service';
 import { lockProviderProfile } from '../utils/provider-profile-lock';
 import { logger } from '../config/logger';
 import { identityGateService, identityDigest, legalNameOf } from './identity-gate.service';
+import { identityClaimService } from './identity-claim.service';
 import { LEGAL_NAME_REQUIRED_FOR_APPROVAL } from '../utils/legal-name';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 
@@ -148,6 +149,8 @@ export class OnboardingService {
       const evidence = evidence0 ? { ...evidence0, legalName } : null;
       // approval is bound to the evidence as it is NOW (document, data AND legal name; and, when the admin page sent its digest, to what the admin actually reviewed)
       const approvedDigest = evidence ? identityGateService.approvalDigest(evidence, expectedDigest) : null;
+      // one identity, one account: this approval takes the claim; another holder refuses the approval (the whole transaction rolls back)
+      if (evidence) await identityClaimService.claim(tx, item.userId, 'CLIENT', evidence);
       await tx.clientProfile.updateMany({ where: { userId: item.userId }, data: { kycStatus: KYCStatus.VERIFIED, identityApprovedDigest: approvedDigest } });
       await tx.user.update({ where: { id: item.userId }, data: { idDocumentUrl: item.documentUrl } });
       if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId: item.userId, eventType: 'KYC_APPROVED_BY_ADMIN', title: 'اعتماد توثيق الهوية', summary: 'اعتمدت الإدارة مستندات هوية العميل', status: LogStatus.APPROVED, before: { status: item.status }, after: { status: OnboardingStatus.APPROVED }, details: { onboardingId: id, party: 'CLIENT' } }) });
@@ -166,6 +169,7 @@ export class OnboardingService {
       if (moved.count !== 1) throw new AppError('تمت معالجة هذا الطلب مسبقاً', 409);
       // the rejected pictures are removed from the account (the owner uploads new ones); the review row keeps its own copy of the document for the audit trail. Typed data (number, birth date) stays.
       await tx.clientProfile.updateMany({ where: { userId: item.userId }, data: { kycStatus: KYCStatus.REJECTED, frontIdUrl: null, backIdUrl: null, identityApprovedDigest: null } });
+      await identityClaimService.release(tx, item.userId, 'CLIENT');
       if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId: item.userId, eventType: 'KYC_REJECTED_BY_ADMIN', title: 'رفض توثيق الهوية', summary: `رفضت الإدارة مستندات هوية العميل: ${input.rejectionReason}`, status: LogStatus.REJECTED, severity: 'WARNING', before: { status: item.status }, after: { status: OnboardingStatus.REJECTED }, details: { onboardingId: id, party: 'CLIENT', reason: input.rejectionReason } }) });
       return tx.clientOnboarding.findUnique({ where: { id } });
     });
@@ -221,6 +225,7 @@ export class OnboardingService {
       // a NEW identity approval needs the legal name; it is part of the evidence the approval is bound to
       const legalName = await legalNameOf(tx, userId);
       if (!legalName) throw new AppError(LEGAL_NAME_REQUIRED_FOR_APPROVAL, 409, undefined, 'LEGAL_NAME_REQUIRED');
+      await identityClaimService.claim(tx, userId, 'PROVIDER', profile as any); // one identity, one account
       const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.VERIFIED, isVerified: true, notes: null, identityApprovedDigest: identityGateService.approvalDigest({ ...(profile as any), legalName }, expectedDigest) } });
       if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId, category: LogCategory.SYSTEM_AUDIT, eventType: 'KYC_APPROVED_BY_ADMIN', title: 'اعتماد توثيق الهوية', summary: 'اعتمدت الإدارة مستندات هوية مقدم الخدمة', status: LogStatus.APPROVED, before: { kycStatus: profile.kycStatus }, after: { kycStatus: KYCStatus.VERIFIED }, details: { party: 'PROVIDER' } }) });
       return row;
@@ -237,6 +242,7 @@ export class OnboardingService {
       if (profile.kycStatus === KYCStatus.REJECTED) throw new AppError('تم رفض هذا المزود مسبقاً', 409);
       if ((await pendingIdentityRequests([userId], tx)).has(userId)) throw new AppError(IDENTITY_REQUEST_WAITING, 409, undefined, 'IDENTITY_REQUEST_WAITING');
       const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.REJECTED, isVerified: false, frontIdUrl: null, backIdUrl: null, identityApprovedDigest: null, notes: `سبب الرفض: ${input.rejectionReason}` } });
+      await identityClaimService.release(tx, userId, 'PROVIDER');
       if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId, eventType: 'KYC_REJECTED_BY_ADMIN', title: 'رفض توثيق الهوية', summary: `رفضت الإدارة مستندات هوية مقدم الخدمة: ${input.rejectionReason}`, status: LogStatus.REJECTED, severity: 'WARNING', before: { kycStatus: profile.kycStatus }, after: { kycStatus: KYCStatus.REJECTED }, details: { party: 'PROVIDER', reason: input.rejectionReason } }) });
       return row;
     });

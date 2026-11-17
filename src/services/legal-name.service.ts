@@ -1,3 +1,4 @@
+import { identityClaimService } from './identity-claim.service';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
@@ -111,6 +112,7 @@ export class LegalNameService {
 			if (client.frontIdUrl) await identityGateService.refreshClientReview(tx, userId, client.frontIdUrl);
 		}
 		await tx.providerProfile.updateMany({ where: { userId, kycStatus: 'VERIFIED' }, data: { kycStatus: 'PENDING', identityApprovedDigest: null, isVerified: false } });
+		await identityClaimService.release(tx, userId, 'CLIENT'); // both approvals were cancelled: the account no longer holds an approved identity
 		return identityState(userId, tx);
 	}
 
