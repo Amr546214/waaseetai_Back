@@ -68,6 +68,7 @@ model User {
   disputeMessages DisputeMessage[]
   id          String      @id @default(uuid())
   identityFieldChecks IdentityFieldCheck[]
+  identityClaims      IdentityClaim[]
   accountType AccountType
   status      UserStatus  @default(PENDING_VERIFICATION)
 
@@ -2726,6 +2727,18 @@ model IdentityFieldCheck {
   @@unique([userId, party, seq])
   @@index([userId, party])
   @@map("identity_field_checks")
+}
+
+/// One identity, one account: the first account whose identity an administrator approved owns the (country + number) digest. Additive; see prisma/migrations/*_identity_claims.
+model IdentityClaim {
+  digest    String             @id
+  userId    String
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  party     IdentityCheckParty
+  createdAt DateTime           @default(now())
+
+  @@index([userId])
+  @@map("identity_claims")
 }
 
 model ClientOnboarding {
