@@ -8,6 +8,7 @@ import { requireAdminMember, requirePermission, requireSuperAdmin } from '../mid
 import { AppError } from '../utils/app-error';
 import { operatingFinance, expenseCategories } from '../services/admin-operating-finance.service';
 import { listCashback, processCashback } from '../services/cashback-review.service';
+import { assertActorInControlPlane, contentDb } from '../services/control-plane-settings';
 import { audiences, contentPages, saveContent, publishPageCopy, publishBroadcast, publishSavedBroadcast, processBroadcastBatch, publishedContent, broadcastCapabilities, broadcastList, draftBroadcast, previewBroadcast, sendBroadcast } from '../services/admin-communications.service';
 const router=Router();router.use(authenticate,requireActiveUser,requireAdminMember);
 const wrap=(fn:(r:Request)=>Promise<unknown>)=>async(r:Request,s:Response,n:NextFunction)=>{try{s.json({success:true,data:await fn(r)});}catch(e){if(e instanceof z.ZodError)n(new AppError(e.issues.map(i=>`${i.path.join('.')}: ${i.message}`).join('؛ '),400));else n(e);}};
@@ -23,9 +24,9 @@ router.post('/expenses/:id/void',requireSuperAdmin,wrap(r=>{const b=z.object({ve
 router.get('/upcoming',requirePermission('finance.read'),wrap(r=>operatingFinance.upcoming(page(r))));
 router.get('/cashback',requirePermission('finance.read'),wrap(r=>listCashback(page(r))));
 router.post('/cashback/:id/score',requireSuperAdmin,wrap(r=>{const b=z.object({version,score:z.number().finite().min(0).max(100),note:text(500)}).parse(r.body);return processCashback(String(r.params.id),{id:r.user!.id,...b});}));
-router.get('/content',requireSuperAdmin,wrap(()=>contentPages()));
-router.put('/content/:slug/copy',requireSuperAdmin,wrap(r=>publishPageCopy(r.user!.id,String(r.params.slug),z.object({version,copy:cmsCopySchema}).strict().parse(r.body))));
-router.put('/content/:slug',requireSuperAdmin,wrap(r=>saveContent(r.user!.id,String(r.params.slug),z.object({body:z.string().max(60000),version,action:z.enum(['DRAFT','PUBLISH','UNPUBLISH']),reason:text(500)}).refine(b=>b.action==='UNPUBLISH'||!!b.body.trim(),'المحتوى مطلوب').parse(r.body))));
+router.get('/content',requireSuperAdmin,wrap(()=>contentPages(contentDb())));
+router.put('/content/:slug/copy',requireSuperAdmin,wrap(async r=>{await assertActorInControlPlane(r.user!.id);return publishPageCopy(r.user!.id,String(r.params.slug),z.object({version,copy:cmsCopySchema}).strict().parse(r.body),contentDb());}));
+router.put('/content/:slug',requireSuperAdmin,wrap(async r=>{await assertActorInControlPlane(r.user!.id);return saveContent(r.user!.id,String(r.params.slug),z.object({body:z.string().max(60000),version,action:z.enum(['DRAFT','PUBLISH','UNPUBLISH']),reason:text(500)}).refine(b=>b.action==='UNPUBLISH'||!!b.body.trim(),'المحتوى مطلوب').parse(r.body),contentDb());}));
 router.get('/broadcast/capabilities',requireSuperAdmin,wrap(()=>broadcastCapabilities()));
 router.get('/broadcast',requireSuperAdmin,wrap(()=>broadcastList()));
 router.post('/broadcast',requireSuperAdmin,wrap(r=>draftBroadcast(r.user!.id,z.object({requestKey:key,title:text(150),message:text(4000),audience:z.enum(audiences),emailRequested:z.boolean().default(true)}).parse(r.body))));
