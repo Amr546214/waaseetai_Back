@@ -11,10 +11,14 @@ test('wiring: both approvals take the claim inside their transaction, both rejec
   const approveClient = onboarding.slice(onboarding.indexOf('async approveOnboarding('), onboarding.indexOf('async rejectOnboarding('));
   assert.match(approveClient, /identityClaimService\.claim\(tx, item\.userId, 'CLIENT', evidence\)/);
   assert.ok(approveClient.indexOf('identityClaimService.claim') > approveClient.indexOf('approvalDigest('), 'the claim is taken together with the approval digest, on the locked row');
+  assert.match(approveClient, /assertNoPossibleDuplicate\(tx, item\.userId, \{ legalName, dob: evidence\.dob \}, confirmNotDuplicate\)/);
   const rejectClient = onboarding.slice(onboarding.indexOf('async rejectOnboarding('), onboarding.indexOf('async listProviderKyc('));
   assert.match(rejectClient, /identityClaimService\.release\(tx, item\.userId, 'CLIENT'\)/);
   const approveProvider = onboarding.slice(onboarding.indexOf('async approveProviderKyc('), onboarding.indexOf('async rejectProviderKyc('));
   assert.match(approveProvider, /identityClaimService\.claim\(tx, userId, 'PROVIDER'/);
+  assert.match(approveProvider, /assertNoPossibleDuplicate\(tx, userId, \{ legalName, dob: \(profile as any\)\.dob \}, confirmNotDuplicate\)/);
+  const controller = src('../controllers/onboarding.controller.ts');
+  assert.equal((controller.match(/req\.body\?\.confirmNotDuplicate === true/g) ?? []).length, 2, 'both approve endpoints read the administrator confirmation');
   const rejectProvider = onboarding.slice(onboarding.indexOf('async rejectProviderKyc('));
   assert.match(rejectProvider, /identityClaimService\.release\(tx, userId, 'PROVIDER'\)/);
   const gate = src('identity-gate.service.ts');

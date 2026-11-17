@@ -91,3 +91,30 @@ test('releasing: a rejected or cancelled approval frees the number; an account t
   await svc.release(notVerified, 'a', 'CLIENT');
   assert.equal(notVerified.claims.length, 0);
 });
+
+function dupDb(rows: { client?: any[]; provider?: any[] }) {
+  const pick = (list: any[] = []) => async ({ where }: any) => list.filter(r => r.kycStatus === where.kycStatus && r.userId !== where.userId.not && r.dob >= where.dob.gte && r.dob < where.dob.lt);
+  return { clientProfile: { findMany: pick(rows.client) }, providerProfile: { findMany: pick(rows.provider) } } as any;
+}
+const row = (userId: string, name: string, dob: string, kycStatus = 'VERIFIED') => ({ userId, kycStatus, dob: new Date(dob), user: { legalName: name } });
+
+test('the same person with another document: an approved account with the same name + birth date makes the approval ask for confirmation (never an automatic rejection)', async () => {
+  const svc = on();
+  const db = dupDb({ client: [row('old', 'محمد أحمد علي حسن', '1990-05-17')], provider: [row('other', 'محمد أحمد علي', '1990-05-17')] });
+  // same name (marks/spacing ignored) + same day, written differently
+  assert.deepEqual(await svc.possibleDuplicates(db, 'new', { legalName: 'مُحمّد  أحمد علي حسن', dob: '1990-05-17T10:00:00Z' }), ['old']);
+  await assert.rejects(() => svc.assertNoPossibleDuplicate(db, 'new', { legalName: 'محمد أحمد علي حسن', dob: new Date('1990-05-17') }, false), (e: any) => e.statusCode === 409 && e.code === 'POSSIBLE_DUPLICATE_IDENTITY' && JSON.stringify(e.errors).includes('"duplicateUserIds":["old"]'));
+  await svc.assertNoPossibleDuplicate(db, 'new', { legalName: 'محمد أحمد علي حسن', dob: new Date('1990-05-17') }, true); // the administrator confirmed: a different person
+});
+
+test('no suspicion: a different birth date, a different name, an account that is not approved, the account itself, a missing name or date, or the flag off', async () => {
+  const svc = on();
+  const db = dupDb({ client: [row('p1', 'محمد أحمد علي حسن', '1990-05-17'), row('p2', 'سارة محمود', '1990-05-17'), row('p3', 'محمد أحمد علي حسن', '1990-05-17', 'PENDING'), row('me', 'محمد أحمد علي حسن', '1990-05-17')] });
+  assert.deepEqual(await svc.possibleDuplicates(db, 'me', { legalName: 'محمد أحمد علي حسن', dob: '1990-05-18' }), []);
+  assert.deepEqual(await svc.possibleDuplicates(db, 'me', { legalName: 'خالد يوسف', dob: '1990-05-17' }), []);
+  assert.deepEqual(await svc.possibleDuplicates(db, 'me', { legalName: 'محمد أحمد علي حسن', dob: '1990-05-17' }), ['p1']); // p3 pending, me excluded
+  assert.deepEqual(await svc.possibleDuplicates(db, 'me', { legalName: '', dob: '1990-05-17' }), []);
+  assert.deepEqual(await svc.possibleDuplicates(db, 'me', { legalName: 'محمد أحمد علي حسن', dob: null }), []);
+  const boom: any = new Proxy({}, { get() { throw new Error('database touched'); } });
+  assert.deepEqual(await new IdentityClaimService(() => false).possibleDuplicates(boom, 'me', { legalName: 'محمد أحمد علي حسن', dob: '1990-05-17' }), []);
+});
