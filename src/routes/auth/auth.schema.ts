@@ -20,6 +20,9 @@ export const legalNameSchema = z.preprocess(v => (typeof v === 'string' ? v : ''
   return r.value;
 });
 
+/** Sign-up no longer asks for the legal name (the owner types it in the identity step, next to the document). A client that still sends one is validated and stored as before; blank or absent = not provided. */
+export const optionalLegalNameSchema = z.preprocess(v => (typeof v === 'string' && v.trim() === '' ? undefined : v), legalNameSchema.optional());
+
 // The only account types a public, unauthenticated signup request (email/
 // password registration or a brand-new Google sign-up) may ever request.
 // ADMIN, SUPER_ADMIN and EMPLOYEE are internal/operator account types
@@ -42,7 +45,7 @@ export const normalizedEmail = z.string().trim().toLowerCase().email('صيغة �
 export const registerSchema = z.object({
   body: z.object({
     accountType: PublicAccountTypeEnum,
-    legalName: legalNameSchema,
+    legalName: optionalLegalNameSchema,
     username: usernameSchema,
     email: normalizedEmail,
     phoneCountryCode: z.string().default('+966'),
@@ -81,7 +84,7 @@ export type RegisterInput = z.infer<typeof registerSchema>['body'];
 //  2. complete: the same data + password + ticket + code -> the account is created (uniqueness re-checked inside the transaction) and the user is signed in.
 const registerIdentityBody = {
   accountType: PublicAccountTypeEnum,
-  legalName: legalNameSchema,
+  legalName: optionalLegalNameSchema,
   username: usernameSchema,
   email: normalizedEmail,
   phoneCountryCode: z.string().default('+966'),
