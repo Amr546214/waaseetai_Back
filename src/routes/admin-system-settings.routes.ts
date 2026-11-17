@@ -2,6 +2,7 @@ import { NextFunction, Request, Response, Router } from 'express';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { loadAdminActor, requireAdminAccount, requireAnyPermission, requirePermission, requireSuperAdmin } from '../middlewares/admin-access.middleware';
 import { systemSettingsService } from '../services/system-settings.service';
+import { controlTarget } from '../config/control-plane-db';
 import { assertActorInControlPlane, panelSettings } from '../services/control-plane-settings';
 import { isOfficialDeployment } from '../utils/deployment-identity';
 import { AppError } from '../utils/app-error';
@@ -16,7 +17,7 @@ const ok = (fn: (req: Request) => Promise<unknown>) => async (req: Request, res:
 };
 router.use(authenticate, requireActiveUser);
 // What the unified «إعدادات النظام» page needs before it draws anything: may THIS caller see the operations panel here? Decided on the server (the account type read from the database; deployment metadata is informational only).
-router.get('/access', requireAdminAccount, async (req, res, next) => { try { const actor = await loadAdminActor(req); if (!actor.isSuperAdmin && actor.permissions.size === 0) throw new AppError('غير مصرح لك بالوصول لهذه الصلاحية', 403); res.json({ success: true, data: { officialDeployment: isOfficialDeployment(), isSuperAdmin: actor.isSuperAdmin, available: actor.isSuperAdmin } }); } catch (e) { next(e); } });
+router.get('/access', requireAdminAccount, async (req, res, next) => { try { const actor = await loadAdminActor(req); if (!actor.isSuperAdmin && actor.permissions.size === 0) throw new AppError('غير مصرح لك بالوصول لهذه الصلاحية', 403); res.json({ success: true, data: { officialDeployment: isOfficialDeployment(), isSuperAdmin: actor.isSuperAdmin, available: actor.isSuperAdmin, controlTarget: controlTarget() } }); } catch (e) { next(e); } });
 // The operations panel is SUPER_ADMIN only on every deployment, for reading as well as writing (hiding a button is not access control).
 router.use(requireSuperAdmin);
 
