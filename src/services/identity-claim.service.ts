@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { AppError } from '../utils/app-error';
+import { legalNameKey } from '../utils/legal-name';
 
 /**
  * ONE IDENTITY, ONE ACCOUNT. An identity (issuing country + document number, normalised) belongs to the first account whose identity an administrator APPROVED
@@ -31,6 +32,15 @@ export function identityClaimDigest(evidence: ClaimEvidence | null | undefined):
   return createHash('sha256').update(`waseet-identity-claim:v1|${country}|${number}`).digest('hex');
 }
 
+export const POSSIBLE_DUPLICATE_MESSAGE = 'يوجد حساب آخر معتمد بنفس الاسم الحقيقي وتاريخ الميلاد؛ قد يكون الشخص نفسه بوثيقة أخرى. راجع الحسابين ثم أكّد أنه شخص مختلف لاعتماد هذا الحساب';
+export const POSSIBLE_DUPLICATE_CODE = 'POSSIBLE_DUPLICATE_IDENTITY';
+const dayRange = (value: unknown): { gte: Date; lt: Date } | null => {
+  const d = value instanceof Date ? value : value ? new Date(String(value)) : null;
+  if (!d || Number.isNaN(d.getTime())) return null;
+  const start = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  return { gte: start, lt: new Date(start.getTime() + 86_400_000) };
+};
+
 const taken = (claimedByUserId?: string) => new AppError(IDENTITY_ALREADY_REGISTERED_MESSAGE, 409, [{ path: 'idNumber', field: 'idNumber', code: IDENTITY_ALREADY_REGISTERED_CODE, message: IDENTITY_ALREADY_REGISTERED_MESSAGE, ...(claimedByUserId ? { claimedByUserId } : {}) }], IDENTITY_ALREADY_REGISTERED_CODE);
 
 export class IdentityClaimService {
@@ -59,6 +69,30 @@ export class IdentityClaimService {
       if (winner && winner.userId === userId) return;
       throw taken(winner?.userId);
     }
+  }
+
+  /**
+   * The SAME person with ANOTHER document (a passport after an ID card, a licence...): the numbers differ, so the name + birth date are what is left to compare. They are not unique to one
+   * person, so this never rejects by itself: an administrator is told, and approves only after confirming it is a different person (confirmNotDuplicate).
+   */
+  async possibleDuplicates(db: any, userId: string, who: { legalName?: string | null; dob?: Date | string | null }): Promise<string[]> {
+    if (!this.enabled()) return [];
+    const key = legalNameKey(who.legalName); const range = dayRange(who.dob);
+    if (!key || !range) return [];
+    const where = { kycStatus: 'VERIFIED', userId: { not: userId }, dob: range };
+    const select = { userId: true, user: { select: { legalName: true } } };
+    const [clients, providers] = await Promise.all([db.clientProfile.findMany({ where, select }), db.providerProfile.findMany({ where, select })]);
+    const ids = new Set<string>();
+    for (const row of [...clients, ...providers]) if (legalNameKey(row.user?.legalName) === key) ids.add(row.userId);
+    return [...ids];
+  }
+
+  /** Inside the approval transaction: refuses (409 POSSIBLE_DUPLICATE_IDENTITY) while a possible duplicate exists and the administrator has not confirmed it is a different person. */
+  async assertNoPossibleDuplicate(tx: any, userId: string, who: { legalName?: string | null; dob?: Date | string | null }, confirmNotDuplicate: boolean): Promise<void> {
+    if (!this.enabled() || confirmNotDuplicate) return;
+    const ids = await this.possibleDuplicates(tx, userId, who);
+    if (!ids.length) return;
+    throw new AppError(POSSIBLE_DUPLICATE_MESSAGE, 409, [{ path: 'identity', field: 'identity', code: POSSIBLE_DUPLICATE_CODE, message: POSSIBLE_DUPLICATE_MESSAGE, duplicateUserIds: ids }], POSSIBLE_DUPLICATE_CODE);
   }
 
   /** The approval of this party is gone: the account's claims go too, unless its OTHER profile still holds an approved identity with the same number. */

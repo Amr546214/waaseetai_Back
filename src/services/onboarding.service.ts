@@ -133,7 +133,7 @@ export class OnboardingService {
     return { ...item, legalName: item.user?.legalName ?? null, legalNameMissing: !item.user?.legalName, clientProfile, identityDigest: clientProfile ? identityDigest({ ...clientProfile, legalName: item.user?.legalName }) : null };
   }
 
-  async approveOnboarding(id: string, actor?: AdminActor, expectedDigest?: string | null) {
+  async approveOnboarding(id: string, actor?: AdminActor, expectedDigest?: string | null, confirmNotDuplicate = false) {
     const item = await prisma.clientOnboarding.findUnique({ where: { id } });
     if (!item) throw new AppError('سجل التحقق غير موجود', 404);
     if (item.status !== OnboardingStatus.PENDING) throw new AppError('تمت معالجة هذا الطلب مسبقاً', 409);
@@ -151,6 +151,8 @@ export class OnboardingService {
       const approvedDigest = evidence ? identityGateService.approvalDigest(evidence, expectedDigest) : null;
       // one identity, one account: this approval takes the claim; another holder refuses the approval (the whole transaction rolls back)
       if (evidence) await identityClaimService.claim(tx, item.userId, 'CLIENT', evidence);
+      // the same person with another document: name + birth date match an approved account -> the administrator must confirm it is a different person
+      if (evidence) await identityClaimService.assertNoPossibleDuplicate(tx, item.userId, { legalName, dob: evidence.dob }, confirmNotDuplicate);
       await tx.clientProfile.updateMany({ where: { userId: item.userId }, data: { kycStatus: KYCStatus.VERIFIED, identityApprovedDigest: approvedDigest } });
       await tx.user.update({ where: { id: item.userId }, data: { idDocumentUrl: item.documentUrl } });
       if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId: item.userId, eventType: 'KYC_APPROVED_BY_ADMIN', title: 'اعتماد توثيق الهوية', summary: 'اعتمدت الإدارة مستندات هوية العميل', status: LogStatus.APPROVED, before: { status: item.status }, after: { status: OnboardingStatus.APPROVED }, details: { onboardingId: id, party: 'CLIENT' } }) });
@@ -211,7 +213,7 @@ export class OnboardingService {
     };
   }
 
-  async approveProviderKyc(userId: string, actor?: AdminActor, expectedDigest?: string | null) {
+  async approveProviderKyc(userId: string, actor?: AdminActor, expectedDigest?: string | null, confirmNotDuplicate = false) {
     // Everything below runs in ONE transaction on the locked provider row: a provider confirming a corrected document at the same moment either commits first
     // (this decision then sees the waiting request and is refused) or after (it then sees the decision). The checks are made on what the lock protects.
     const updated = await prisma.$transaction(async (tx) => {
@@ -226,6 +228,7 @@ export class OnboardingService {
       const legalName = await legalNameOf(tx, userId);
       if (!legalName) throw new AppError(LEGAL_NAME_REQUIRED_FOR_APPROVAL, 409, undefined, 'LEGAL_NAME_REQUIRED');
       await identityClaimService.claim(tx, userId, 'PROVIDER', profile as any); // one identity, one account
+      await identityClaimService.assertNoPossibleDuplicate(tx, userId, { legalName, dob: (profile as any).dob }, confirmNotDuplicate);
       const row = await tx.providerProfile.update({ where: { userId }, data: { kycStatus: KYCStatus.VERIFIED, isVerified: true, notes: null, identityApprovedDigest: identityGateService.approvalDigest({ ...(profile as any), legalName }, expectedDigest) } });
       if (actor) await tx.accountAuditLog.create({ data: adminAuditData({ actor, userId, category: LogCategory.SYSTEM_AUDIT, eventType: 'KYC_APPROVED_BY_ADMIN', title: 'اعتماد توثيق الهوية', summary: 'اعتمدت الإدارة مستندات هوية مقدم الخدمة', status: LogStatus.APPROVED, before: { kycStatus: profile.kycStatus }, after: { kycStatus: KYCStatus.VERIFIED }, details: { party: 'PROVIDER' } }) });
       return row;
