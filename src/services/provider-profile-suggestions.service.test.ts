@@ -5,7 +5,7 @@ import path from 'node:path';
 import { providerBioSuggestSchema, providerSkillsSuggestSchema } from '../dtos/provider-profile-suggest.dto';
 
 // No real client, DB, notification/socket side effects, or provider calls.
-async function load(t: TestContext, opts: { profile?: any; rows?: any[]; output?: any; error?: unknown } = {}) {
+async function load(t: TestContext, opts: { profile?: any; rows?: any[]; output?: any; error?: unknown; catalog?: string[] } = {}) {
   const reads: any[] = [];
   const sent: any[] = [];
   const logs: any[][] = [];
@@ -21,6 +21,7 @@ async function load(t: TestContext, opts: { profile?: any; rows?: any[]; output?
     skill: table({ findMany: async () => opts.rows ?? [{ name: 'HTML' }, { name: 'CSS' }, { name: 'TypeScript' }] })
   }, { get: (obj: any, key) => key in obj ? obj[key] : denyWrite });
   t.mock.module('../config/db', { namedExports: { prisma } });
+  if (opts.catalog) t.mock.module('./skills-catalog.service', { namedExports: { getCatalogForCategoryParam: async () => ({ category: 'web', skills: opts.catalog }) } });
   t.mock.module('./notification.service', { namedExports: { notificationService: {} } });
   t.mock.module('../config/logger', { namedExports: { logger: {
     warn: (...a: any[]) => logs.push(a), debug: () => {}, info: () => {}, error: () => {}
@@ -140,4 +141,12 @@ test('static: touched provider-profile sources contain no direct Gemini usage', 
   for (const f of ['services/provider-profile.service.ts', 'controllers/provider-profile.controller.ts', 'routes/provider-profile.routes.ts']) {
     assert.doesNotMatch(readFileSync(path.join(dir, f), 'utf8'), /gemini\.client|geminiClient|generateStructured|generateStream/, f);
   }
+});
+
+test('skills: the category CATALOG is the source of names (the Skill table only holds names somebody already saved), so an almost empty table still suggests', async t => {
+  const x = await load(t, { rows: [{ name: 'Flutter' }], catalog: ['Express', 'Node.js', 'React'], output: { suggestedSkills: ['node.js', 'Express', 'Flutter'] } });
+  const result = await x.service.suggestSkills('p', { subSpecialties: ['تطوير الواجهات الخلفية'] } as any);
+  assert.deepEqual(result, { suggestedSkills: ['Node.js', 'Express'] });
+  assert.deepEqual(x.sent[0].availableSkills, ['Express', 'Node.js', 'React']);
+  assert.equal(x.writes(), 0);
 });

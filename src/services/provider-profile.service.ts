@@ -1,3 +1,4 @@
+import { getCatalogForCategoryParam } from './skills-catalog.service';
 import type {
 	ProviderBioSuggestDto,
 	ProviderBioEnhanceDto,
@@ -360,7 +361,7 @@ export class ProviderProfileService {
 			throw new AppError('أدخل المسمى المهني أو التخصص أولاً.', 400);
 		}
 		return {
-			jobTitle: jobTitle.slice(0, 120), specialty: (category?.nameAr || mainSpecialty).slice(0, 120),
+			jobTitle: jobTitle.slice(0, 120), specialty: (category?.nameAr || mainSpecialty).slice(0, 120), mainSpecialtyRaw: mainSpecialty,
 			subSpecialties,
 			storedBio,
 			existingSkills: existingSkills.slice(0, 30).map(s => s.slice(0, 40)),
@@ -435,10 +436,18 @@ export class ProviderProfileService {
 		const existing = new Set(context.existingSkills.map(skillKey));
 		// Saving only connects existing taxonomy names, so suggestions are
 		// mapped onto the real Skill taxonomy (no invented names survive).
-		const rows = await prisma.skill.findMany({ select: { name: true }, orderBy: { name: 'asc' }, take: 500 });
+		// The names a provider may pick come from the catalog of the chosen category (the same list the page shows);
+		// Skill rows only exist for names somebody already saved, so they are a fallback, never the source.
 		const taxonomy = new Map<string, string>();
-		for (const { name } of rows) {
+		const catalog = context.mainSpecialtyRaw ? await getCatalogForCategoryParam(prisma, context.mainSpecialtyRaw).catch(() => ({ category: null, skills: [] as string[] })) : { category: null, skills: [] as string[] };
+		for (const name of catalog.skills) {
 			if (name.trim() && name.length <= SKILL_SUGGESTION_MAX_LENGTH) taxonomy.set(skillKey(name), name);
+		}
+		if (!taxonomy.size) {
+			const rows = await prisma.skill.findMany({ select: { name: true }, orderBy: { name: 'asc' }, take: 500 });
+			for (const { name } of rows) {
+				if (name.trim() && name.length <= SKILL_SUGGESTION_MAX_LENGTH) taxonomy.set(skillKey(name), name);
+			}
 		}
 		if (!taxonomy.size) return { suggestedSkills: [] };
 		const aliasMap: Record<string, string[]> = {
