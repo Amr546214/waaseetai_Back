@@ -10,13 +10,13 @@ import { notificationService } from './notification.service';
 
 export const contentTitles: Record<string,string> = { terms:'شروط الاستخدام', privacy:'سياسة الخصوصية', faq:'الأسئلة الشائعة', about:'من نحن', how:'كيف يعمل', contact:'تواصل معنا', welcome:'رسالة الترحيب' };
 const audit = (adminId:string, entityId:string,eventType:string, details:Record<string,unknown>={}) => ({adminId,entity:'FINANCE' as const,entityId,eventType,title:'إدارة المحتوى والتواصل',summary:'تحديث موثق في نظام المحتوى والتواصل',details});
-export async function contentPages() {
- const [rows,settings] = await prisma.$transaction([prisma.adminContentPage.findMany(),prisma.platformSetting.findMany({where:{key:{in:['termsContent','privacyContent']}}})]);
+export async function contentPages(db: typeof prisma = prisma) {
+ const [rows,settings] = await db.$transaction([db.adminContentPage.findMany(),db.platformSetting.findMany({where:{key:{in:['termsContent','privacyContent']}}})]);
  return Object.entries(contentTitles).map(([slug,title])=> rows.find(r=>r.slug===slug) ?? {slug,title,draft: String(settings.find(s=>s.key===`${slug}Content`)?.value || ''),published:null,draftCopy:null,publishedCopy:null,publishedAt:null,updatedAt:null,version:0});
 }
-export async function saveContent(actor:string,slug:string,input:{body:string;version:number;action:'DRAFT'|'PUBLISH'|'UNPUBLISH';reason:string}) {
+export async function saveContent(actor:string,slug:string,input:{body:string;version:number;action:'DRAFT'|'PUBLISH'|'UNPUBLISH';reason:string},db: typeof prisma = prisma) {
  if(!contentTitles[slug]) throw new AppError('صفحة غير معروفة',404);
- const row=await prisma.$transaction(async tx=>{
+ const row=await db.$transaction(async tx=>{
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`cms:${slug}`}))`;
   const old=await tx.adminContentPage.findUnique({where:{slug}});
   if((old?.version || 0)!==input.version) throw new AppError('تغيرت الصفحة من مدير آخر؛ أعد تحميلها قبل الحفظ',409);
@@ -33,10 +33,10 @@ export async function saveContent(actor:string,slug:string,input:{body:string;ve
  systemSettingsService.invalidate();
  return row;
 }
-export async function publishPageCopy(actor: string, slug: string, input: { copy: CmsCopy; version: number }) {
+export async function publishPageCopy(actor: string, slug: string, input: { copy: CmsCopy; version: number }, db: typeof prisma = prisma) {
  if (!contentTitles[slug]) throw new AppError('صفحة غير معروفة',404);
  const copy = cmsCopySchema.parse(input.copy);
- const result = await prisma.$transaction(async tx => {
+ const result = await db.$transaction(async tx => {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`cms:${slug}`}))`;
   const old = await tx.adminContentPage.findUnique({where:{slug}});
   if ((old?.version ?? 0) !== input.version) throw new AppError('تغيرت الصفحة من مدير آخر؛ أعد تحميلها قبل النشر.',409);

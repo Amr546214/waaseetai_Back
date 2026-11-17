@@ -21,3 +21,14 @@ test('panelSettings is the local service when no control database is configured'
 	assert.equal(p.service, systemSettingsService);
 	assert.equal(p.db, null);
 });
+
+test('identity and content panels stay on this deployment when no control database is configured', async () => {
+	delete process.env.CONTROL_PLANE_DATABASE_URL;
+	const { panelSiteIdentity, contentDb, requireActorInControlPlaneForWrites } = await import('./control-plane-settings');
+	const { prisma } = await import('../config/db');
+	assert.equal(panelSiteIdentity(), undefined);
+	assert.equal(contentDb(), prisma);
+	let called = 0;
+	requireActorInControlPlaneForWrites({ method: 'PUT', user: { id: 'u' } } as never, {} as never, () => { called += 1; });
+	assert.equal(called, 1); // nothing to check without a control database
+});

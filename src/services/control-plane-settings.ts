@@ -1,5 +1,8 @@
+import type { NextFunction, Request, Response } from 'express';
+import { prisma } from '../config/db';
 import { getControlPrisma, controlTarget } from '../config/control-plane-db';
 import { AppError } from '../utils/app-error';
+import { SiteIdentityService } from './site-identity.service';
 import { SystemSettingsService, systemSettingsService } from './system-settings.service';
 
 let controlService: SystemSettingsService | null = null;
@@ -17,4 +20,21 @@ export async function assertActorInControlPlane(actorId: string): Promise<void> 
 	if (!db) return;
 	const user = await db.user.findUnique({ where: { id: actorId }, select: { accountType: true, status: true } });
 	if (!user) throw new AppError('حسابك غير موجود على الموقع الرسمي، فلا يمكن تعديل إعداداته من هنا.', 409);
+}
+
+let controlIdentity: SiteIdentityService | null = null;
+/** the site-identity service the admin panel talks to when it controls the official site from another deployment; undefined = this deployment's own */
+export function panelSiteIdentity(): SiteIdentityService | undefined {
+	const db = getControlPrisma();
+	if (!db) return undefined;
+	return (controlIdentity ??= new SiteIdentityService({ db: db as never }));
+}
+
+/** the database the content pages (terms, FAQ, ...) panel reads and writes: the control database when set, else this deployment's own */
+export const contentDb = () => (getControlPrisma() ?? prisma);
+
+/** router middleware: every write must come from an account that also exists in the control database */
+export function requireActorInControlPlaneForWrites(req: Request, _res: Response, next: NextFunction): void {
+	if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS' || !req.user?.id || !getControlPrisma()) { next(); return; }
+	assertActorInControlPlane(req.user.id).then(() => next(), next);
 }

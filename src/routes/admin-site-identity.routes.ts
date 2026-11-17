@@ -5,6 +5,7 @@ import { SITE_IDENTITY_EDIT_PERMISSIONS, SITE_IDENTITY_READ_PERMISSIONS } from '
 import { actorHasAny } from '../services/admin-access.service';
 import { memoryUpload } from '../utils/cloudinary-storage';
 import { AppError } from '../utils/app-error';
+import { panelSiteIdentity, requireActorInControlPlaneForWrites } from '../services/control-plane-settings';
 import { ATLAS_MAX_BYTES, KEY_PATTERN, isKnownIdentityKey } from '../config/site-identity.registry';
 import { isTokenKey } from '../config/site-identity-tokens';
 import { ICON_PREFIX } from '../config/site-identity-icons';
@@ -74,4 +75,8 @@ export function buildAdminSiteIdentityRouter(service: SiteIdentityService = site
 	return router;
 }
 
-export default buildAdminSiteIdentityRouter();
+/** dev with a control database: this panel edits the OFFICIAL site's identity; otherwise this deployment's own */
+const controlled = Router();
+controlled.use(requireActorInControlPlaneForWrites);
+controlled.use(buildAdminSiteIdentityRouter(panelSiteIdentity() ?? siteIdentityService));
+export default controlled;
