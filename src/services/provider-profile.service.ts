@@ -5,6 +5,7 @@ import type {
 	ProviderSkillsSuggestDto,
 	CatalogSkillsSuggestDto,
 	IdentityDocumentInspectDto,
+	PortfolioFileCheckDto,
 } from '../dtos/provider-profile-suggest.dto';
 import { canonicalStoredPhone } from '../utils/phone-countries';
 
@@ -98,6 +99,12 @@ export interface ProviderSkillsSuggestion { suggestedSkills: string[]; }
 
 const SKILL_SUGGESTION_MAX_LENGTH = 40;
 const MAX_SUGGESTED_SKILLS = 8;
+/** the AI score a public work sample / a proof of ownership needs to pass the step-5 check (below it the file is refused with the AI's reason) */
+export const PORTFOLIO_MODEL_PASS_SCORE = 60;
+export const PORTFOLIO_PROOF_PASS_SCORE = 40;
+/** the AI reads a data URI of up to ~3.2 MB (the AI service's own limit per attachment) */
+const PORTFOLIO_AI_MAX_DATA_URI = 3_200_000;
+export interface PortfolioFileVerdict { verdict: 'PASS' | 'FAIL' | 'UNVERIFIED'; score: number | null; summaryAr: string; recommendationsAr: string[] }
 const skillKey = (value: string) => value.trim().normalize('NFKC').toLowerCase();
 
 export class ProviderProfileService {
@@ -515,6 +522,38 @@ export class ProviderProfileService {
 		} catch (error: any) {
 			logger.warn(`[ProviderProfileService] suggestSkillsFromCatalog failed: ${error?.code || error?.name || 'ERROR'}`);
 			throw new AppError('تعذر إنشاء اقتراح بالذكاء الاصطناعي حالياً، يرجى المحاولة لاحقاً.', 503);
+		}
+	}
+
+	/**
+	 * The business-models step: the AI reads ONE file (the public work sample or a proof of ownership) and answers PASS / FAIL / UNVERIFIED.
+	 * PASS: readable and fitting (score at or above the bar). FAIL: read, but not a work sample / proof for this specialty (below the bar): the wizard removes the file and says why.
+	 * UNVERIFIED: the AI could not read it (an image, a very large file, the service is down): never a rejection, the human review decides.
+	 */
+	async checkPortfolioFile(userId: string, input: PortfolioFileCheckDto): Promise<PortfolioFileVerdict> {
+		const bar = input.kind === 'MODEL' ? PORTFOLIO_MODEL_PASS_SCORE : PORTFOLIO_PROOF_PASS_SCORE;
+		const unverified = (reasonAr: string): PortfolioFileVerdict => ({ verdict: 'UNVERIFIED', score: null, summaryAr: reasonAr, recommendationsAr: [] });
+		if (input.file.length > PORTFOLIO_AI_MAX_DATA_URI) return unverified('حجم الملف أكبر من حد الفحص الآلي؛ ستراجعه الإدارة.');
+		if (!input.file.startsWith('data:')) return unverified('تعذّر قراءة الملف آليًا؛ ستراجعه الإدارة.');
+		try {
+			const r: any = await waseetAiClient.reviewAccreditation({
+				sampleId: `${userId}:${input.kind}:${Date.now()}`,
+				title: (input.title || (input.kind === 'MODEL' ? 'نموذج عمل' : 'وثيقة إثبات ملكية')).slice(0, 200),
+				specialtyName: input.specialtyName,
+				description: input.kind === 'PROOF' ? 'وثيقة إثبات ملكية لنموذج عمل (للمراجعة فقط)' : '',
+				technologiesUsed: [],
+				attachments: [input.file],
+			}, { actor: { userId, role: 'provider' }, timeoutMs: 45_000 });
+			const ev = r?.evaluation ?? r;
+			const score = typeof ev?.aiScore === 'number' ? ev.aiScore : (typeof r?.aiScore === 'number' ? r.aiScore : null);
+			const feedback = r?.feedback ?? {};
+			const summary = String(feedback.summary ?? ev?.feedbackAr ?? '').replace(/\s*الاعتماد النهائي للمراجعة البشرية[^.]*\.?/g, '').trim();
+			const recs: string[] = Array.isArray(feedback.recommendations) ? feedback.recommendations.filter((x: unknown): x is string => typeof x === 'string').slice(0, 3) : [];
+			if (r?.inspected !== true || score === null) return unverified(summary || 'تعذّر قراءة الملف آليًا؛ ستراجعه الإدارة.');
+			return { verdict: score >= bar ? 'PASS' : 'FAIL', score, summaryAr: summary, recommendationsAr: recs };
+		} catch (error: any) {
+			logger.warn(`[ProviderProfileService] checkPortfolioFile failed: ${error?.code || error?.name || 'ERROR'}`);
+			return unverified('تعذّر الفحص الآلي حاليًا؛ يمكنك المتابعة وستراجع الإدارة الملف.');
 		}
 	}
 

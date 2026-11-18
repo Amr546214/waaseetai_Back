@@ -5,7 +5,7 @@ import path from 'node:path';
 import { providerBioSuggestSchema, providerSkillsSuggestSchema } from '../dtos/provider-profile-suggest.dto';
 
 // No real client, DB, notification/socket side effects, or provider calls.
-async function load(t: TestContext, opts: { profile?: any; rows?: any[]; output?: any; error?: unknown; catalog?: string[] } = {}) {
+async function load(t: TestContext, opts: { profile?: any; rows?: any[]; output?: any; error?: unknown; catalog?: string[]; review?: any } = {}) {
   const reads: any[] = [];
   const sent: any[] = [];
   const logs: any[][] = [];
@@ -31,6 +31,11 @@ async function load(t: TestContext, opts: { profile?: any; rows?: any[]; output?
       sent.push(body);
       if (opts.error !== undefined) throw opts.error;
       return opts.output ?? { suggestedBio: 'مطور مواقع متخصص في تطوير المواقع باستخدام HTML.' };
+    },
+    reviewAccreditation: async (body: any) => {
+      sent.push(body);
+      if (opts.error !== undefined) throw opts.error;
+      return opts.review;
     },
     suggestSkills: async (body: any) => {
       sent.push(body);
@@ -149,4 +154,48 @@ test('skills: the category CATALOG is the source of names (the Skill table only 
   assert.deepEqual(result, { suggestedSkills: ['Node.js', 'Express'] });
   assert.deepEqual(x.sent[0].availableSkills, ['Express', 'Node.js', 'React']);
   assert.equal(x.writes(), 0);
+});
+
+const PDF = 'data:application/pdf;base64,' + 'A'.repeat(100);
+const review = (score: number | null, inspected = true) => ({ status: 'MANUAL_REVIEW', aiScore: score, inspected, feedback: { summary: 'ملخص الذكاء الاصطناعي. الاعتماد النهائي للمراجعة البشرية؛ هذا تقييم استشاري.', recommendations: ['أضف تفاصيل'] }, evaluation: { aiScore: score } });
+
+const input = (kind: 'MODEL' | 'PROOF', file = PDF, mimeType = 'application/pdf') => ({ kind, specialtyName: 'برمجة', mimeType, file });
+
+test('portfolio file check: a work sample at or above the bar passes (the human-review boilerplate is dropped from the reason)', async t => {
+  const x = await load(t, { review: review(85) });
+  const ok = await x.service.checkPortfolioFile('p', input('MODEL'));
+  assert.equal(ok.verdict, 'PASS'); assert.equal(ok.score, 85); assert.ok(!ok.summaryAr.includes('الاعتماد النهائي'));
+  assert.equal(x.sent[0].specialtyName, 'برمجة'); assert.deepEqual(x.sent[0].attachments, [PDF]);
+});
+
+test('portfolio file check: below the bar the work sample fails with the AI reason and advice', async t => {
+  const x = await load(t, { review: review(49) });
+  const bad = await x.service.checkPortfolioFile('p', input('MODEL'));
+  assert.equal(bad.verdict, 'FAIL'); assert.deepEqual(bad.recommendationsAr, ['أضف تفاصيل']);
+});
+
+test('portfolio file check: a proof of ownership passes at a score where a work sample would fail', async t => {
+  const x = await load(t, { review: review(45) });
+  assert.equal((await x.service.checkPortfolioFile('p', input('PROOF'))).verdict, 'PASS');
+});
+
+test('portfolio file check: the same score fails as a work sample', async t => {
+  const x = await load(t, { review: review(45) });
+  assert.equal((await x.service.checkPortfolioFile('p', input('MODEL'))).verdict, 'FAIL');
+});
+
+test('portfolio file check: a file the AI could not read is UNVERIFIED, never a refusal', async t => {
+  const x = await load(t, { review: review(null, false) });
+  assert.equal((await x.service.checkPortfolioFile('p', input('MODEL', PDF, 'image/png'))).verdict, 'UNVERIFIED');
+});
+
+test('portfolio file check: a file over the AI limit is UNVERIFIED and is not sent', async t => {
+  const x = await load(t, { review: review(90) });
+  const big = await x.service.checkPortfolioFile('p', input('MODEL', 'data:application/pdf;base64,' + 'A'.repeat(3_300_000)));
+  assert.equal(big.verdict, 'UNVERIFIED'); assert.equal(x.sent.length, 0);
+});
+
+test('portfolio file check: an AI service error is UNVERIFIED (the human review decides)', async t => {
+  const x = await load(t, { error: new Error('down') });
+  assert.equal((await x.service.checkPortfolioFile('p', input('MODEL'))).verdict, 'UNVERIFIED');
 });
