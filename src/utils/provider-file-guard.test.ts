@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertProviderFileAcceptable, isProviderFileKind, PROVIDER_FILE_REFUSED } from './provider-file-guard';
+import { assertProviderFileAcceptable, assertDataUriFileAcceptable, isProviderFileKind, PROVIDER_FILE_REFUSED } from './provider-file-guard';
 
 const actor = { userId: 'u1', role: 'provider' } as const;
 const png = { buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimetype: 'image/png' };
@@ -36,4 +36,15 @@ test('fail-open: AI down, not configured, a PDF certificate or a huge file are a
 	await assertProviderFileAcceptable('SELFIE', png, actor, client({ isConfigured: () => false, inspectSelfie: async () => ({ status: 'NOT_A_SELFIE' }) }));
 	await assertProviderFileAcceptable('CERTIFICATE', { buffer: Buffer.from('%PDF-1.4'), mimetype: 'application/pdf' }, actor, client({ inspectCertificate: async () => ({ status: 'NOT_CERTIFICATE' }) }));
 	await assertProviderFileAcceptable('SELFIE', { buffer: Buffer.alloc(7_500_001), mimetype: 'image/png' }, actor, client({ inspectSelfie: async () => ({ status: 'NOT_A_SELFIE' }) }));
+});
+
+const uri = (mime = 'image/png') => `data:${mime};base64,${Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64')}`;
+test('data: URI in a KYC slot runs the same AI check (refused when clearly wrong)', async () => {
+	await assert.rejects(() => assertDataUriFileAcceptable(uri(), 'SELFIE', actor, client({ inspectSelfie: async () => ({ status: 'NOT_A_SELFIE', summaryAr: 'x', warningsAr: [] }) })), refused);
+	await assert.rejects(() => assertDataUriFileAcceptable(uri('image/jpg'), 'ID_DOCUMENT', actor, client({ inspectIdentityDocument: async () => ({ status: 'NOT_ID_DOCUMENT', isIdentityDocument: false, warningsAr: [] }) })), refused);
+	await assertDataUriFileAcceptable(uri(), 'SELFIE', actor, client());
+});
+test('non data: values (references, urls, empty, malformed) are left to the other guards', async () => {
+	const never = client({ inspectSelfie: async () => { throw new Error('should not be called'); }, inspectCertificate: async () => ({ status: 'NOT_CERTIFICATE' }) });
+	for (const v of ['private:image:png:waseetai/x', 'https://res.cloudinary.com/x.png', '', null, undefined, 'data:image/png;base64', 42]) await assertDataUriFileAcceptable(v, 'CERTIFICATE', actor, never);
 });
