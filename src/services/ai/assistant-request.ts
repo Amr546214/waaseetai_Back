@@ -11,6 +11,8 @@ export const assistantOptionsSchema = z.object({
   model: z.string().regex(/^gemini-[a-zA-Z0-9.-]{1,80}$/).optional(),
   mode: z.enum(['policy', 'general']).optional(),
   webSearch: z.boolean().optional(),
+  // text the server already read from an uploaded file (POST /help-assistant/attachments); the file itself never travels with the question
+  attachments: z.array(z.object({ name: z.string().trim().max(120), text: z.string().max(4000) }).strip()).max(2).optional(),
   pageContext: z.object({ path: z.string().regex(/^\/(?!\/)[a-zA-Z0-9_\-/]{0,300}$/), projectId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).optional() }).strip().optional(),
 }).strip();
 

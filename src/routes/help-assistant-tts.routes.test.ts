@@ -301,5 +301,5 @@ test('GET /capabilities does not spend the AI budget; every model-calling route 
   const router: any = createHelpAssistantTtsRouter();
   const handlesAi = (method: string, path: string) => router.stack.find((l: any) => l.route?.path === path && l.route.methods[method])?.route.stack.some((s: any) => s.handle === aiLimiter);
   assert.equal(handlesAi('get', '/capabilities'), false);
-  for (const [m, p] of [['post', '/tts'], ['post', '/chat'], ['post', '/stt'], ['post', '/live-token'], ['post', '/runs'], ['get', '/runs/:runId']]) assert.equal(handlesAi(m, p), true, `${m} ${p}`);
+  for (const [m, p] of [['post', '/tts'], ['post', '/chat'], ['post', '/stt'], ['post', '/attachments'], ['post', '/live-token'], ['post', '/runs'], ['get', '/runs/:runId']]) assert.equal(handlesAi(m, p), true, `${m} ${p}`);
 });

@@ -130,6 +130,7 @@ export interface HelpChatRequest {
   skin?: 'scout' | 'classic';
   mode?: 'policy' | 'general';
   webSearch?: boolean;
+  attachments?: Array<{ name: string; text: string }>;
   history?: HelpChatHistoryMessage[];
   dialect?: 'egyptian' | 'saudi' | 'gulf' | 'msa' | 'english';
   language?: 'ar' | 'ar-EG' | 'en';

@@ -3,6 +3,8 @@ import { prisma } from '../config/db';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { aiLimiter } from '../middlewares/rate-limit.middleware';
 import { waseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
+import { memoryUpload } from '../utils/cloudinary-storage';
+import { createAssistantAttachmentHandler, ASSISTANT_ATTACHMENT_MAX_BYTES, ASSISTANT_ATTACHMENT_MIME } from '../services/ai/assistant-attachment';
 import { createHelpAssistantTtsHandler, createUserRateLimiter, type HelpAssistantTtsDeps } from '../services/ai/help-assistant-tts';
 import { createAssistantToolsHandlers } from '../services/ai/help-assistant-tools';
 import { createAssistantHttpHandler } from '../services/ai/help-assistant-http';
@@ -43,6 +45,7 @@ export function createHelpAssistantTtsRouter(options: HelpAssistantTtsRouterOpti
 	const tools = createAssistantToolsHandlers();
 	router.get('/capabilities', ...readGuards, tools.capabilities);
 	router.post('/stt', ...guards, tools.stt);
+	router.post('/attachments', ...guards, memoryUpload({ fileSize: ASSISTANT_ATTACHMENT_MAX_BYTES, files: 1, allowedMimeTypes: ASSISTANT_ATTACHMENT_MIME }).single('file'), createAssistantAttachmentHandler());
 	router.post('/live-token', ...guards, tools.live);
 	router.post('/runs', ...guards, tools.run);
 	router.get('/runs/:runId', ...guards, tools.status);
