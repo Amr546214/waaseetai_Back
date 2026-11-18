@@ -7,7 +7,7 @@ import { memoryUpload, uploadMulterFile } from '../utils/cloudinary-storage';
 import { blockCompanySetup } from '../middlewares/company-unavailable.middleware';
 import { passwordChangeLimiter, accountActionLimiter, aiLimiter } from '../middlewares/rate-limit.middleware';
 import { requirePermission } from '../middlewares/admin-access.middleware';
-import { assertProviderFileAcceptable, isProviderFileKind } from '../utils/provider-file-guard';
+import { assertProviderFileAcceptable, isProviderFileKind, isUploadKind, uploadKindFolder } from '../utils/provider-file-guard';
 import { waseetAiClient } from '../services/ai/waseet-ai/waseet-ai.client';
 
 const router = Router();
@@ -52,9 +52,9 @@ router.post('/documents/upload', requireProvider, documentUpload.single('file'),
 	const isPublic = req.body?.visibility === 'public';
 	// Server-side AI check for the slots that have one (identity document / selfie / certificate): a clearly wrong file is refused (422) before anything is stored.
 	const kind = req.body?.kind;
-	if (kind !== undefined && !isProviderFileKind(kind)) return res.status(400).json({ success: false, message: 'نوع الملف غير معروف' });
-	if (kind) await assertProviderFileAcceptable(kind, req.file, { userId: req.user!.id, role: 'provider' }, waseetAiClient, { specialtyName: typeof req.body?.specialtyName === 'string' ? req.body.specialtyName.slice(0, 120) : undefined });
-	const stored = await uploadMulterFile(req.file, `waseetai/providers/${req.user!.id}/documents`, undefined, !isPublic);
+	if (!isUploadKind(kind)) return res.status(400).json({ success: false, message: 'حدد نوع الملف المرفوع' });
+	if (isProviderFileKind(kind)) await assertProviderFileAcceptable(kind, req.file, { userId: req.user!.id, role: 'provider' }, waseetAiClient, { specialtyName: typeof req.body?.specialtyName === 'string' ? req.body.specialtyName.slice(0, 120) : undefined });
+	const stored = await uploadMulterFile(req.file, `waseetai/providers/${req.user!.id}/documents/${uploadKindFolder(kind)}`, undefined, !isPublic);
 	if (isPublic) return res.status(201).json({ success: true, data: { url: stored.url, name: stored.fileName } });
 	// The caller needs the private reference to submit it with its own request; it is never returned by any GET.
 	res.locals.allowPrivateRef = true;

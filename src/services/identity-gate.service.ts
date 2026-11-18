@@ -170,7 +170,7 @@ export class IdentityGateService {
     if (!stored?.identityApprovedDigest) assertVerifiedIdentityUnchanged(stored, body);
     // one identity, one account: refused BEFORE anything is stored when another account already holds this identity (flag IDENTITY_UNIQUE_ENFORCEMENT)
     await identityClaimService.assertAvailable(prisma, userId, { idNumber: body.idNumber || stored?.idNumber, idIssuingCountry: (doc as any)?.idIssuingCountry ?? stored?.idIssuingCountry });
-    assertKycFileValues([body.frontId, body.backId], userId);
+    assertKycFileValues([body.frontId, body.backId], userId, undefined, 'ID_DOCUMENT');
     const folder = party === 'CLIENT' ? 'clients' : 'providers';
     const [front, back] = await Promise.all([
       storeKycFileIfNeeded(body.frontId, `waseetai/${folder}/${userId}/identity`, 'front-id'),

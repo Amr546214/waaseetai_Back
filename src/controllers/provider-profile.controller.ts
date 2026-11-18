@@ -260,7 +260,10 @@ export const saveSetupData = async (req: Request, res: Response) => {
 
 		// A value the user already has stored in these fields and re-sends unchanged is "keep", not a new link (legacy file names / public URLs would otherwise be refused on every re-save).
 		const storedFileValues = [storedIdentity?.frontIdUrl, storedIdentity?.backIdUrl, storedIdentity?.supportingDocsUrl, ...(storedIdentity?.certUrls ?? [])];
-		assertKycFileValues([identity?.frontId, identity?.backId, documents?.supportingDocs, ...(identity?.certs || [])], userId, storedFileValues);
+		// each slot also checks WHICH upload kind its private reference came from (a file uploaded as a work sample cannot be offered as the identity document / certificate)
+		assertKycFileValues([identity?.frontId, identity?.backId], userId, storedFileValues, 'ID_DOCUMENT');
+		assertKycFileValues([...(identity?.certs || [])], userId, storedFileValues, 'CERTIFICATE');
+		assertKycFileValues([documents?.supportingDocs], userId, storedFileValues);
 		// The wizard submission needs the FRONT of the ID as a real, trusted document (stored earlier or a valid new file): a KYC status alone is never evidence. Decided before any write.
 		// Identity documents on file besides the stored front: the approved account document and the ID document of a DOCUMENTS change request waiting for the admin.
 		const [accountDoc, waitingDocs] = await Promise.all([
