@@ -46,3 +46,15 @@ export type IdentityDocumentInspectDto = z.infer<typeof identityDocumentInspectS
 
 // The ordinary setup save can connect existing taxonomy names, never create them.
 export const setupSkillsSchema = z.array(z.string().trim().min(1).max(40)).max(30);
+
+/** one file of the business-models step (the public work sample, or a proof of ownership) read by the AI before the wizard moves on */
+export const portfolioFileCheckSchema = z.object({
+  kind: z.enum(['MODEL', 'PROOF']),
+  specialtyName: z.string().trim().min(1).max(120),
+  title: z.string().trim().max(200).optional(),
+  fileName: z.string().trim().max(200).optional(),
+  mimeType: z.enum(['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'text/plain']),
+  /** a data: URI of the file; larger files are not read by the AI (the review stays human) */
+  file: z.string().trim().min(20).max(14_000_000),
+}).strict();
+export type PortfolioFileCheckDto = z.infer<typeof portfolioFileCheckSchema>;

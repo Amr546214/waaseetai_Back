@@ -66,6 +66,7 @@ router.post('/suggest-bio', requireProvider, aiLimiter, providerProfileControlle
 router.post('/enhance-bio', requireProvider, aiLimiter, providerProfileController.enhanceBio);
 router.post('/suggest-skills', requireProvider, aiLimiter, providerProfileController.suggestSkills);
 router.post('/verify-id-document', requireProvider, aiLimiter, providerProfileController.verifyIdentityDocument);
+router.post('/portfolio-file-check', requireProvider, aiLimiter, providerProfileController.checkPortfolioFile);
 router.get('/setup', requireProvider, providerProfileController.getSetupData);
 router.get('/setup/identity', requireProvider, providerProfileController.getIdentityState);
 router.put('/setup/identity', requireProvider, blockCompanySetup, providerProfileController.saveIdentityStep);

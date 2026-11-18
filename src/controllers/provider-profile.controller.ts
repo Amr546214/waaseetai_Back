@@ -30,6 +30,7 @@ import {
   providerBioSuggestSchema,
   providerBioEnhanceSchema,
   providerSkillsSuggestSchema,
+  portfolioFileCheckSchema,
   catalogSkillsSuggestSchema,
   identityDocumentInspectSchema,
   setupSkillsSchema,
@@ -50,6 +51,15 @@ export const enhanceBio = async (req: Request, res: Response, next: NextFunction
     const input = providerBioEnhanceSchema.safeParse(req.body ?? {});
     if (!input.success) return res.status(400).json({ success: false, message: 'يرجى كتابة نبذة لا تقل عن 10 أحرف لتحسين صياغتها' });
     res.json({ success: true, data: await providerProfileService.enhanceBio(req.user.id, input.data) });
+  } catch (error) { next(error); }
+};
+
+export const checkPortfolioFile = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const input = portfolioFileCheckSchema.safeParse(req.body ?? {});
+    if (!input.success) return res.status(400).json({ success: false, message: 'بيانات فحص الملف غير صالحة' });
+    res.json({ success: true, data: await providerProfileService.checkPortfolioFile(req.user.id, input.data) });
   } catch (error) { next(error); }
 };
 
