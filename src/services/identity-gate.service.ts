@@ -10,6 +10,8 @@ import { publicKycRejectionReason } from '../utils/provider-kyc-review';
 import { notifyAdmins } from './admin-notifications.service';
 import { legalNameKey } from '../utils/legal-name';
 import { identityFieldCheckService } from './identity-field-check.service';
+import { assertDataUriFileAcceptable } from '../utils/provider-file-guard';
+import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { identityClaimService } from './identity-claim.service';
 
 /**
@@ -171,6 +173,8 @@ export class IdentityGateService {
     // one identity, one account: refused BEFORE anything is stored when another account already holds this identity (flag IDENTITY_UNIQUE_ENFORCEMENT)
     await identityClaimService.assertAvailable(prisma, userId, { idNumber: body.idNumber || stored?.idNumber, idIssuingCountry: (doc as any)?.idIssuingCountry ?? stored?.idIssuingCountry });
     assertKycFileValues([body.frontId, body.backId], userId, undefined, 'ID_DOCUMENT');
+    // an identity picture sent inline (data: URI) skips the upload endpoint: the same AI check runs before anything is stored
+    await Promise.all([body.frontId, body.backId].map(v => assertDataUriFileAcceptable(v, 'ID_DOCUMENT', { userId, role: party === 'CLIENT' ? 'client' : 'provider' }, waseetAiClient)));
     const folder = party === 'CLIENT' ? 'clients' : 'providers';
     const [front, back] = await Promise.all([
       storeKycFileIfNeeded(body.frontId, `waseetai/${folder}/${userId}/identity`, 'front-id'),

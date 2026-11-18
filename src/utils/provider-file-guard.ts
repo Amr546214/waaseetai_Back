@@ -51,3 +51,15 @@ export async function assertProviderFileAcceptable(kind: ProviderFileKind, file:
 		/* AI unavailable / timed out: accepted, the human review decides */
 	}
 }
+
+/**
+ * A KYC slot filled with a `data:` URI (the server uploads it itself) skips the upload endpoint, so the same AI check runs here before anything is stored.
+ * Anything that is not a base64 data URI (an echoed private reference, an already stored value, empty) is left to assertKycFileValue.
+ */
+export async function assertDataUriFileAcceptable(value: unknown, kind: ProviderFileKind, actor: WaseetActor, client: Client, opts: { specialtyName?: string } = {}): Promise<void> {
+	if (typeof value !== 'string' || !value.startsWith('data:')) return;
+	const match = /^data:([^;,]+);base64,(.*)$/s.exec(value);
+	if (!match) return;
+	const buffer = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
+	await assertProviderFileAcceptable(kind, { buffer, mimetype: match[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1].toLowerCase() }, actor, client, opts);
+}
