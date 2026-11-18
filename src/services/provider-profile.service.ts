@@ -6,6 +6,8 @@ import type {
 	CatalogSkillsSuggestDto,
 	IdentityDocumentInspectDto,
 	PortfolioFileCheckDto,
+	SelfieInspectDto,
+	CertificateInspectDto,
 } from '../dtos/provider-profile-suggest.dto';
 import { canonicalStoredPhone } from '../utils/phone-countries';
 
@@ -554,6 +556,26 @@ export class ProviderProfileService {
 		} catch (error: any) {
 			logger.warn(`[ProviderProfileService] checkPortfolioFile failed: ${error?.code || error?.name || 'ERROR'}`);
 			return unverified('تعذّر الفحص الآلي حاليًا؛ يمكنك المتابعة وستراجع الإدارة الملف.');
+		}
+	}
+
+	/** the «person with the identity document» photo: an advisory AI reading (no face match / liveness), 503 with a human-review message when the AI is down */
+	async verifySelfie(userId: string, input: SelfieInspectDto) {
+		try {
+			return await waseetAiClient.inspectSelfie({ image: input.image.trim(), imageMimeType: input.imageMimeType, requireDocument: true }, { actor: { userId, role: 'provider' }, timeoutMs: 35_000 });
+		} catch (error: any) {
+			logger.warn(`[ProviderProfileService] verifySelfie failed: ${error?.code || error?.name || 'ERROR'}`);
+			throw new AppError('تعذر فحص الصورة الشخصية بالذكاء الاصطناعي حالياً. يمكنك المتابعة وستتم المراجعة البشرية.', 503);
+		}
+	}
+
+	/** a professional certificate: an advisory AI reading (readability, kind, relevance; authenticity is a human decision) */
+	async verifyCertificate(userId: string, input: CertificateInspectDto) {
+		try {
+			return await waseetAiClient.inspectCertificate({ image: input.image.trim(), imageMimeType: input.imageMimeType, ...(input.specialtyName ? { specialtyName: input.specialtyName } : {}) }, { actor: { userId, role: 'provider' }, timeoutMs: 35_000 });
+		} catch (error: any) {
+			logger.warn(`[ProviderProfileService] verifyCertificate failed: ${error?.code || error?.name || 'ERROR'}`);
+			throw new AppError('تعذر فحص الشهادة بالذكاء الاصطناعي حالياً. يمكنك المتابعة وستتم المراجعة البشرية.', 503);
 		}
 	}
 

@@ -360,6 +360,35 @@ export interface IdentityInspectResponse {
   advisoryOnly: true;
 }
 
+/** POST /v1/ai/identity/inspect-selfie — advisory reading of the «person with the identity document» photo (no face match, no liveness). */
+export interface SelfieInspectRequest { image: string; imageMimeType: 'image/jpeg' | 'image/png' | 'image/webp'; requireDocument?: boolean }
+export interface SelfieInspectResponse {
+  status: 'CLEAR_VALID' | 'NEEDS_ATTENTION' | 'NOT_A_SELFIE';
+  containsPerson: boolean;
+  faceClearlyVisible: boolean;
+  identityDocumentVisible: boolean;
+  quality: 'GOOD' | 'POOR' | 'UNUSABLE';
+  summaryAr: string;
+  warningsAr: string[];
+  faceMatch: 'NOT_CHECKED';
+  liveness: 'NOT_CHECKED';
+  advisoryOnly: true;
+}
+/** POST /v1/ai/profile/inspect-certificate — advisory reading of a professional certificate / degree / licence (authenticity is NOT judged). */
+export interface CertificateInspectRequest { image: string; imageMimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf'; specialtyName?: string }
+export interface CertificateInspectResponse {
+  status: 'CLEAR_VALID' | 'NEEDS_ATTENTION' | 'NOT_CERTIFICATE' | 'UNREADABLE';
+  isCertificate: boolean;
+  readability: 'CLEAR' | 'BLURRY' | 'PARTIAL' | 'UNREADABLE';
+  certificateKind: string;
+  detectedTitle: string | null;
+  issuer: string | null;
+  relevanceToSpecialty: 'RELATED' | 'UNRELATED' | 'UNKNOWN';
+  summaryAr: string;
+  warningsAr: string[];
+  advisoryOnly: true;
+}
+
 /** POST /v1/ai/text/suggest/stream (SSE text.delta / generation.completed). */
 export interface TextSuggestStreamRequest {
   title: string;
