@@ -8,6 +8,12 @@ import { inspectIdentityFile, IDENTITY_FILE_AI_MAX_BYTES } from './identity-file
 // and left to the human review. Work samples (MODEL/PROOF) are scored by the browser flow and are not refused here.
 export type ProviderFileKind = 'ID_DOCUMENT' | 'SELFIE' | 'CERTIFICATE';
 export const PROVIDER_FILE_KINDS: readonly ProviderFileKind[] = ['ID_DOCUMENT', 'SELFIE', 'CERTIFICATE'];
+/** Every upload must name what it is for. Only the first three are AI-checked here; the others are labels (stored under their own folder so a file cannot be re-used as an identity document / selfie / certificate). */
+export const UPLOAD_KINDS = ['ID_DOCUMENT', 'SELFIE', 'CERTIFICATE', 'AVATAR', 'PORTFOLIO_MODEL', 'PORTFOLIO_PROOF', 'BUSINESS_DOCUMENT'] as const;
+export type UploadKind = (typeof UPLOAD_KINDS)[number];
+export const isUploadKind = (v: unknown): v is UploadKind => typeof v === 'string' && (UPLOAD_KINDS as readonly string[]).includes(v);
+/** the sub-folder of `…/documents/` the file is stored in */
+export const uploadKindFolder = (kind: UploadKind) => kind.toLowerCase();
 export const PROVIDER_FILE_REFUSED = 'PROVIDER_FILE_REFUSED';
 export const isProviderFileKind = (v: unknown): v is ProviderFileKind => typeof v === 'string' && (PROVIDER_FILE_KINDS as readonly string[]).includes(v);
 
