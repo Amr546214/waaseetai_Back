@@ -2,6 +2,8 @@ import { LogCategory } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError, fieldError } from '../utils/app-error';
 import { uploadMulterFile } from '../utils/cloudinary-storage';
+import { inspectIdentityFile } from '../utils/identity-file-verdict';
+import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { sanitizeText } from '../utils/sanitize-text';
 import { notificationService } from './notification.service';
 import { notifyAdmins } from './admin-notifications.service';
@@ -14,6 +16,7 @@ import { readAffiliateKycReview, isMissingColumnError } from '../utils/affiliate
 //   kycDocumentUrl null + identityVerified=false + kycRejectionReason  → REJECTED (the admin's reason and time are kept: migration 20261011120000)
 //   kycDocumentUrl null + identityVerified=false, no reason            → none (never uploaded)
 // A database that has not run the migration yet keeps the old behaviour (the reason then only goes to the notification and the audit log).
+export const MARKETER_KYC_DOCUMENT_REFUSED = 'MARKETER_KYC_DOCUMENT_REFUSED';
 export const MARKETER_KYC_ALREADY_VERIFIED = 'تم توثيق هويتك مسبقًا ولا يمكن رفع مستند جديد';
 
 export class MarketerKycService {
@@ -22,6 +25,10 @@ export class MarketerKycService {
 		const profile = await prisma.affiliateProfile.findUnique({ where: { userId }, select: { id: true, identityVerified: true } });
 		if (!profile) throw new AppError('ملف الوسيط غير موجود', 404);
 		if (profile.identityVerified) throw new AppError(MARKETER_KYC_ALREADY_VERIFIED, 409);
+
+		// the AI looks at the document before anything is stored: a picture that is not an identity document (or unreadable) is refused, nothing else is judged here
+		const check = await inspectIdentityFile(file, { userId, role: 'marketer' }, waseetAiClient);
+		if (check.verdict === 'REFUSED') throw new AppError(`${check.messageAr} ارفع صورة واضحة لوثيقة هويتك.`, 422, undefined, MARKETER_KYC_DOCUMENT_REFUSED);
 
 		const stored = await uploadMulterFile(file, `waseetai/marketers/${userId}/identity`, undefined, true);
 		// updateMany + identityVerified:false so a concurrent approval can never be overwritten by this write
