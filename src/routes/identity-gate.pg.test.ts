@@ -92,6 +92,8 @@ const blocked = (w: W): Array<[string, string, string, any]> => w.party === 'CLI
 	? [['step 3', 'PUT', '/client/profile/setup/step/3', { paypalPayoutEmail: 'a@b.com' }], ['step 4', 'PUT', '/client/profile/setup/step/4', { documents: { notes: 'x' } }], ['final', 'POST', '/client/profile/setup', clientFinal()]]
 	: [['agreements', 'POST', '/provider/profile/setup', { agreements: { accurate: true, terms: true, privacy: true } }], ['documents', 'POST', '/provider/profile/setup', { documents: { notes: 'x' } }], ['final', 'POST', '/provider/profile/setup', { details: { country: 'EG' }, portfolio: [], agreements: { accurate: true, terms: true, privacy: true } }]];
 const assertBlocked = async (w: W, expected: string) => {
+	// a PROVIDER whose document is already sent (under review) carries on with the later steps; only the client stays closed until the approval
+	if (w.party === 'PROVIDER' && expected === 'UNDER_REVIEW') return assertOpen(w);
 	const { call } = await env();
 	for (const [label, m, url, body] of blocked(w)) {
 		const r = await call(m, url, w.owner.id, body);
