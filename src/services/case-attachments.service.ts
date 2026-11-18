@@ -1,3 +1,4 @@
+import { guardAttachmentsWithAi } from './ai-features/attachment-ai-guard';
 import { randomUUID, createHash } from 'node:crypto';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
@@ -28,8 +29,9 @@ function displayFileName(value: string) {
   }
   return name.replace(/[\u0000-\u001f\u007f/\\]/g, '_').slice(0, 200) || 'مرفق';
 }
-export async function storeCaseFiles(files: Express.Multer.File[], ownerId: string) {
+export async function storeCaseFiles(files: Express.Multer.File[], ownerId: string, context: 'SUPPORT_TICKET' | 'DISPUTE' = 'SUPPORT_TICKET') {
   validateCaseFiles(files);
+  await guardAttachmentsWithAi(files, context, { userId: ownerId, role: 'client' }); // advisory AI look (opt-in, fail-open); refuses explicit/violent/hate content
   // The generic helper's local-dev mode returns placeholder URLs, not stored bytes.
   if (files.length && process.env.CLOUDINARY_CLOUD_NAME === 'local-dev') throw new AppError('تخزين المرفقات غير مهيأ في هذه البيئة', 503);
   const stored: StoredCloudFile[] = [];
@@ -69,7 +71,7 @@ export async function appendDisputeFiles(id: string, ownerId: string, files: Exp
   const digest = caseSubmissionDigest({ ownerId, id }, files);
   if (!files.length) throw new AppError('اختر ملفًا واحدًا على الأقل', 400);
   await assertCaseAccess('dispute', id, ownerId, false, true);
-  const batch = await storeCaseFiles(files, ownerId);
+  const batch = await storeCaseFiles(files, ownerId, 'DISPUTE');
   let reused = false;
   try {
     const result = await prisma.$transaction(async tx => {

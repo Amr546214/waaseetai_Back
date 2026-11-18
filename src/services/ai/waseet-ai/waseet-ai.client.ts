@@ -443,6 +443,10 @@ export class WaseetAiClient {
     );
   }
 
+  inspectAttachment(body: { file: string; mimeType: string; context?: string; actor?: { userId: string; role: string } }, opts?: WaseetAiCallOptions): Promise<{ status: 'CLEAN' | 'BLOCK' | 'REVIEW'; categories: string[]; summaryAr: string }> {
+    return this.postJson('/v1/ai/attachments/inspect', body, opts, (d) => isObject(d) && ['CLEAN', 'BLOCK', 'REVIEW'].includes(String(d.status)) && Array.isArray(d.categories) && typeof d.summaryAr === 'string') as never;
+  }
+
   inspectSelfie(body: SelfieInspectRequest, opts?: WaseetAiCallOptions): Promise<SelfieInspectResponse> {
     return this.postJson('/v1/ai/identity/inspect-selfie', body, opts, (d) =>
       isObject(d) && typeof d.status === 'string' && typeof d.containsPerson === 'boolean' && typeof d.summaryAr === 'string' && Array.isArray(d.warningsAr),

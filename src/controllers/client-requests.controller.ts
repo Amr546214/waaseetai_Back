@@ -6,6 +6,7 @@ import { AppError } from '../utils/app-error';
 import { canRewrite, REWRITE_INPUT_REQUIRED_MESSAGE } from '../utils/description-rewrite-guard';
 import { checkMultipleContentPolicy } from '../utils/content-policy-guard';
 import { uploadMulterFile } from '../utils/cloudinary-storage';
+import { guardAttachmentsWithAi } from '../services/ai-features/attachment-ai-guard';
 import { projectProgressService } from '../services/project-progress.service';
 
 export class ClientRequestsController {
@@ -129,6 +130,7 @@ export class ClientRequestsController {
         throw new AppError('لم يتم رفع أي ملفات', 400);
       }
 
+      await guardAttachmentsWithAi(files, 'CLIENT_REQUEST', { userId: req.user!.id, role: 'client' });
       const storedFiles = await Promise.all(files.map(file => uploadMulterFile(file, `waseetai/client-requests/${req.user!.id}`)));
       const uploadedFiles = storedFiles.map(file => ({
         fileName: file.fileName,

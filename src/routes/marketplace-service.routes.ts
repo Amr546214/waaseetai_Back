@@ -1,3 +1,4 @@
+import { guardAttachmentsWithAi } from '../services/ai-features/attachment-ai-guard';
 import { Router } from 'express';
 import { MarketplaceServiceController } from '../controllers/marketplace-service.controller';
 import { AccountType } from '@prisma/client';
@@ -25,6 +26,7 @@ router.post('/upload-gallery', galleryUpload.array('attachments', 5), async (req
 	try {
 		const files = (req.files as Express.Multer.File[]) || [];
 		if (files.length === 0) return res.status(400).json({ success: false, error: 'لم يتم رفع أي صورة' });
+		await guardAttachmentsWithAi(files, 'SERVICE_GALLERY', { userId: req.user!.id, role: 'provider' });
 		const uploaded = await Promise.all(files.map(file => uploadMulterFile(file, `waseetai/providers/${req.user!.id}/services/gallery`)));
 		return res.status(200).json({ success: true, urls: uploaded.map(file => file.url) });
 	} catch (error) {
