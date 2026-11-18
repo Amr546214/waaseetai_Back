@@ -106,9 +106,11 @@ export class IdentityGateService {
   }
 
   /** 409 IDENTITY_NOT_APPROVED unless the CURRENT image + data are approved. */
-  async assertApproved(userId: string, party: GateParty, db: any = prisma): Promise<void> {
+  async assertApproved(userId: string, party: GateParty, db: any = prisma, opts: { allowUnderReview?: boolean } = {}): Promise<void> {
     const state = await this.getState(userId, party, db);
     if (state.canAdvance) return;
+    // a provider whose document is already SENT (under review) may carry on with the later steps while the admin decides; NOT_SUBMITTED and REJECTED stay closed
+    if (opts.allowUnderReview && state.status === 'UNDER_REVIEW') return;
     throw new AppError(IDENTITY_NOT_APPROVED_MESSAGE, 409, [{ path: 'identity', field: 'identity', code: 'IDENTITY_NOT_APPROVED', message: IDENTITY_NOT_APPROVED_MESSAGE, status: state.status, rejectionReason: state.rejectionReason }], 'IDENTITY_NOT_APPROVED');
   }
 
@@ -118,7 +120,7 @@ export class IdentityGateService {
    * Echoing the stored references / data unchanged is not a change.
    */
   async assertApprovedForSubmission(userId: string, party: GateParty, incoming: { idNumber?: unknown; idIssuingCountry?: unknown; idDocumentType?: unknown; dob?: unknown; frontId?: unknown; backId?: unknown }, db: any = prisma): Promise<void> {
-    await this.assertApproved(userId, party, db);
+    await this.assertApproved(userId, party, db, { allowUnderReview: party === 'PROVIDER' });
     const stored = await model(db, party).findUnique({ where: { userId }, select: SELECT });
     const differs = (value: unknown, current: string | null | undefined) => typeof value === 'string' && value.trim() !== '' && value !== current;
     const changed = identitySubmissionChanged(stored, incoming, { front: differs(incoming.frontId, stored?.frontIdUrl), back: differs(incoming.backId, stored?.backIdUrl) });
