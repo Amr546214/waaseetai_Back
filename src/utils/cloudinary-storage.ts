@@ -5,6 +5,7 @@ import { uploadLimiter } from '../middlewares/rate-limit.middleware';
 import path from 'path';
 import { AppError } from './app-error';
 import { contentMatchesDeclaredType, looksLikeMarkup } from './file-signature';
+import { assertAttachmentSafe } from './attachment-scan';
 import { isOwnCloudinaryUrl, ownCloudinaryUrlProblem } from './cloudinary-url';
 import { buildPrivateRef, parsePrivateRef } from './kyc-private-ref';
 
@@ -75,6 +76,8 @@ export async function uploadCloudFile(buffer: Buffer, options: UploadCloudFileOp
 	if (mimeType.toLowerCase().includes('svg') || looksLikeMarkup(buffer)) throw new AppError('ملفات SVG وملفات HTML غير مسموح برفعها', 400);
 	// The declared type is client-controlled: for the types we can recognise (png/jpeg/gif/webp/pdf) the first bytes must agree with it.
 	if (!contentMatchesDeclaredType(buffer, mimeType)) throw new AppError('محتوى الملف لا يطابق نوعه المعلن. ارفع صورة أو ملف PDF صالحاً.', 400);
+	// Local safety scan (executables, Office macros, archive bombs / executables / unsafe paths, PDF script): applies to every upload route.
+	assertAttachmentSafe(buffer);
 	const resourceType = options.resourceType || cloudinaryResourceType(mimeType);
 	const extension = path.extname(options.fileName).replace('.', '');
 	const baseName = path.basename(options.fileName, path.extname(options.fileName));
