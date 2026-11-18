@@ -137,7 +137,7 @@ export class DisputeService {
       : { requestId: undefined as string | undefined, ...(await this.projectForActor(requestId, userId, actor)) };
     const where = target.projectId ? { projectId: target.projectId } : { requestId };
     const stageProjectId = target.projectId ?? requestId;
-    const batch = await storeCaseFiles(files, userId);
+    const batch = await storeCaseFiles(files, userId, 'DISPUTE');
     // Same contract-row lock the stage approval takes before it releases money: a dispute opened "at the same moment" as an approval either
     // is seen by that approval (refused) or is created after the approval fully committed. Also closes the duplicate-open race.
     let dispute;
