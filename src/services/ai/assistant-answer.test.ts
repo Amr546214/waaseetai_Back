@@ -115,3 +115,13 @@ test('exam refusal stops before either AI transport while learning outside tests
  await Array.fromAsync(streamAssistantAnswer({mode:'general',question:'اشرح معنى قواعد البيانات'}, {},client,false));
  assert.equal(calls,1);
 });
+
+test('English session: the message carries an explicit English-only rule (a short Arabic follow-up must not flip it back to Arabic), also after truncation', () => {
+	const en = legacyAssistantMessage({ question: 'كمل', language: 'en', dialect: 'english', history: [{ role: 'user', content: 'اشرح لي لوحة التحكم' }, { role: 'assistant', content: 'لوحة التحكم تضم...' }] } as any);
+	assert.match(en, /Write the WHOLE reply in English/);
+	assert.match(en, /Reminder: reply only in English/);
+	const ar = legacyAssistantMessage({ question: 'كمل', dialect: 'egyptian', history: [] } as any);
+	assert.doesNotMatch(ar, /WHOLE reply in English/);
+	const long = legacyAssistantMessage({ question: 'x'.repeat(5000), language: 'en', history: Array.from({ length: 6 }, () => ({ role: 'user', content: 'ي'.repeat(700) })) } as any);
+	assert.match(long, /Reminder: reply only in English\.\)$/);
+});

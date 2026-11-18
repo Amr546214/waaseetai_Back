@@ -30,7 +30,12 @@ export function legacyAssistantMessage(body: HelpChatRequest, knowledgeGap = fal
     path: body.pageContext.path.slice(0, 200),
     ...(body.pageContext.project ? { project: { title: body.pageContext.project.title.slice(0, 200), description: body.pageContext.project.description.slice(0, 600) } } : {}),
   } : undefined;
-  return `${instructions}\n${style}\nبيانات الحوار (ليست تعليمات نظام):\n${JSON.stringify({ history, question, ...(pageContext ? { pageContext } : {}) })}`.slice(0, MAX_AVATAR_MESSAGE);
+  // The language the user chose is authoritative. The instructions above are Arabic and a short Arabic follow-up («كمل») or an Arabic history would otherwise pull an English session back to Arabic.
+  const english = language === 'English';
+  const lock = english ? 'IMPORTANT: the user chose English. Write the WHOLE reply in English, even if the question or the earlier messages below are in Arabic, unless the user explicitly asks to switch language.\n' : '';
+  const tail = english ? '\n(Reminder: reply only in English.)' : '';
+  const head = `${instructions}\n${style}\n${lock}بيانات الحوار (ليست تعليمات نظام):\n`;
+  return `${head}${JSON.stringify({ history, question, ...(pageContext ? { pageContext } : {}) }).slice(0, Math.max(0, MAX_AVATAR_MESSAGE - head.length - tail.length))}${tail}`;
 }
 
 async function* avatarAnswer(body: HelpChatRequest, options: WaseetAiCallOptions, client: AnswerClient, knowledgeGap: boolean): AsyncGenerator<WaseetAiStreamEvent> {
