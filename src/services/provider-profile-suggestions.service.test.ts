@@ -5,7 +5,7 @@ import path from 'node:path';
 import { providerBioSuggestSchema, providerSkillsSuggestSchema } from '../dtos/provider-profile-suggest.dto';
 
 // No real client, DB, notification/socket side effects, or provider calls.
-async function load(t: TestContext, opts: { profile?: any; rows?: any[]; output?: any; error?: unknown; catalog?: string[]; review?: any } = {}) {
+async function load(t: TestContext, opts: { profile?: any; rows?: any[]; output?: any; error?: unknown; catalog?: string[]; review?: any; inspect?: any } = {}) {
   const reads: any[] = [];
   const sent: any[] = [];
   const logs: any[][] = [];
@@ -32,6 +32,8 @@ async function load(t: TestContext, opts: { profile?: any; rows?: any[]; output?
       if (opts.error !== undefined) throw opts.error;
       return opts.output ?? { suggestedBio: 'مطور مواقع متخصص في تطوير المواقع باستخدام HTML.' };
     },
+    inspectSelfie: async (body: any) => { sent.push(body); if (opts.error !== undefined) throw opts.error; return opts.inspect; },
+    inspectCertificate: async (body: any) => { sent.push(body); if (opts.error !== undefined) throw opts.error; return opts.inspect; },
     reviewAccreditation: async (body: any) => {
       sent.push(body);
       if (opts.error !== undefined) throw opts.error;
@@ -198,4 +200,28 @@ test('portfolio file check: a file over the AI limit is UNVERIFIED and is not se
 test('portfolio file check: an AI service error is UNVERIFIED (the human review decides)', async t => {
   const x = await load(t, { error: new Error('down') });
   assert.equal((await x.service.checkPortfolioFile('p', input('MODEL'))).verdict, 'UNVERIFIED');
+});
+
+test('selfie check: the photo goes to the AI as the provider and the advisory answer comes back unchanged', async t => {
+  const answer = { status: 'NEEDS_ATTENTION', containsPerson: true, summaryAr: 'ملاحظة', warningsAr: ['الوجه غير واضح'], faceMatch: 'NOT_CHECKED', liveness: 'NOT_CHECKED', advisoryOnly: true };
+  const x = await load(t, { inspect: answer });
+  const out = await x.service.verifySelfie('p', { image: 'data:image/png;base64,' + 'A'.repeat(40), imageMimeType: 'image/png' });
+  assert.deepEqual(out, answer); assert.equal(x.sent[0].requireDocument, true); assert.equal(x.sent[0].imageMimeType, 'image/png');
+});
+
+test('selfie check: an AI failure is a 503 that tells the person the human review decides', async t => {
+  const x = await load(t, { error: new Error('down') });
+  await assert.rejects(() => x.service.verifySelfie('p', { image: 'data:image/png;base64,' + 'A'.repeat(40), imageMimeType: 'image/png' }), (e: any) => e.statusCode === 503 && /المراجعة البشرية/.test(e.message));
+});
+
+test('certificate check: the specialty travels with the file and the answer comes back unchanged', async t => {
+  const answer = { status: 'CLEAR_VALID', isCertificate: true, readability: 'CLEAR', detectedTitle: 'شهادة', issuer: null, relevanceToSpecialty: 'RELATED', summaryAr: '', warningsAr: [], advisoryOnly: true };
+  const x = await load(t, { inspect: answer });
+  const out = await x.service.verifyCertificate('p', { image: 'data:application/pdf;base64,' + 'A'.repeat(40), imageMimeType: 'application/pdf', specialtyName: 'برمجة' });
+  assert.deepEqual(out, answer); assert.equal(x.sent[0].specialtyName, 'برمجة');
+});
+
+test('certificate check: an AI failure is a 503 (never a refusal)', async t => {
+  const x = await load(t, { error: new Error('down') });
+  await assert.rejects(() => x.service.verifyCertificate('p', { image: 'data:image/png;base64,' + 'A'.repeat(40), imageMimeType: 'image/png' }), (e: any) => e.statusCode === 503);
 });

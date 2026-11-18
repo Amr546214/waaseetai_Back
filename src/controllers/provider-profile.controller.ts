@@ -31,6 +31,8 @@ import {
   providerBioEnhanceSchema,
   providerSkillsSuggestSchema,
   portfolioFileCheckSchema,
+  selfieInspectSchema,
+  certificateInspectSchema,
   catalogSkillsSuggestSchema,
   identityDocumentInspectSchema,
   setupSkillsSchema,
@@ -51,6 +53,24 @@ export const enhanceBio = async (req: Request, res: Response, next: NextFunction
     const input = providerBioEnhanceSchema.safeParse(req.body ?? {});
     if (!input.success) return res.status(400).json({ success: false, message: 'يرجى كتابة نبذة لا تقل عن 10 أحرف لتحسين صياغتها' });
     res.json({ success: true, data: await providerProfileService.enhanceBio(req.user.id, input.data) });
+  } catch (error) { next(error); }
+};
+
+export const verifySelfie = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const input = selfieInspectSchema.safeParse(req.body ?? {});
+    if (!input.success) return res.status(400).json({ success: false, message: 'بيانات فحص الصورة الشخصية غير صالحة' });
+    res.json({ success: true, data: await providerProfileService.verifySelfie(req.user.id, input.data) });
+  } catch (error) { next(error); }
+};
+
+export const verifyCertificate = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const input = certificateInspectSchema.safeParse(req.body ?? {});
+    if (!input.success) return res.status(400).json({ success: false, message: 'بيانات فحص الشهادة غير صالحة' });
+    res.json({ success: true, data: await providerProfileService.verifyCertificate(req.user.id, input.data) });
   } catch (error) { next(error); }
 };
 

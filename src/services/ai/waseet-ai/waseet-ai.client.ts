@@ -6,6 +6,10 @@ import { parseSseStream } from './waseet-ai.sse';
 import { readSearchSuggestionsHtml } from './waseet-ai.grounding';
 import { currentWaseetActor, WaseetServiceTokenBroker, type WaseetActor } from './waseet-ai.auth';
 import type {
+  SelfieInspectRequest,
+  SelfieInspectResponse,
+  CertificateInspectRequest,
+  CertificateInspectResponse,
   AvatarChatRequest,
   AvatarChatResponse,
   CreateAssessmentRequest,
@@ -436,6 +440,18 @@ export class WaseetAiClient {
   inspectIdentityDocument(body: IdentityInspectRequest, opts?: WaseetAiCallOptions): Promise<IdentityInspectResponse> {
     return this.postJson('/v1/ai/identity/inspect-document', body, opts, (d) =>
       isObject(d) && typeof d.status === 'string' && typeof d.isIdentityDocument === 'boolean' && typeof d.summaryAr === 'string' && Array.isArray(d.warningsAr),
+    );
+  }
+
+  inspectSelfie(body: SelfieInspectRequest, opts?: WaseetAiCallOptions): Promise<SelfieInspectResponse> {
+    return this.postJson('/v1/ai/identity/inspect-selfie', body, opts, (d) =>
+      isObject(d) && typeof d.status === 'string' && typeof d.containsPerson === 'boolean' && typeof d.summaryAr === 'string' && Array.isArray(d.warningsAr),
+    );
+  }
+
+  inspectCertificate(body: CertificateInspectRequest, opts?: WaseetAiCallOptions): Promise<CertificateInspectResponse> {
+    return this.postJson('/v1/ai/profile/inspect-certificate', body, opts, (d) =>
+      isObject(d) && typeof d.status === 'string' && typeof d.isCertificate === 'boolean' && typeof d.summaryAr === 'string' && Array.isArray(d.warningsAr),
     );
   }
 

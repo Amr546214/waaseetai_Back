@@ -58,3 +58,18 @@ export const portfolioFileCheckSchema = z.object({
   file: z.string().trim().min(20).max(14_000_000),
 }).strict();
 export type PortfolioFileCheckDto = z.infer<typeof portfolioFileCheckSchema>;
+
+/** the «person with the identity document» photo of the setup wizard, read by the AI (advisory) */
+export const selfieInspectSchema = z.object({
+  image: z.string().trim().min(20).max(10_500_000),
+  imageMimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+}).strict();
+export type SelfieInspectDto = z.infer<typeof selfieInspectSchema>;
+
+/** a professional certificate / degree / licence of the setup wizard, read by the AI (advisory) */
+export const certificateInspectSchema = z.object({
+  image: z.string().trim().min(20).max(10_500_000),
+  imageMimeType: z.enum(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']),
+  specialtyName: z.string().trim().max(160).optional(),
+}).strict();
+export type CertificateInspectDto = z.infer<typeof certificateInspectSchema>;
