@@ -8,11 +8,11 @@ const UPLOADS = [{ id: 'up-1', privateRef: 'private:image:png:waseetai/accredita
 const sampleRow = (over: any = {}) => ({
   id: 's1', revision: 2, status: 'AI_VERIFIED', decidedAt: new Date(), aiScore: null, aiQualityRating: null, title: 'نظام', description: 'وصف طويل كفاية للنموذج',
   technologiesUsed: ['React'], projectUrl: null, githubUrl: null, providerSpecialtyId: 'ps1',
-  providerProfile: { userId: 'u1' }, providerSpecialty: { specialtyId: 'sp1', specialty: { nameAr: 'تطوير الويب' } }, proofUploads: UPLOADS, ...over,
+  providerProfile: { userId: 'u1' }, providerSpecialty: { specialtyId: 'sp1', status: 'APPROVED', aiScore: null, specialty: { nameAr: 'تطوير الويب' } }, proofUploads: UPLOADS, ...over,
 });
 
-async function load(t: TestContext, opts: { sample?: any; review?: () => Promise<any>; updateCount?: number; configured?: boolean } = {}) {
-  const updates: any[] = []; const events: any[] = []; const audits: any[] = []; const reviews: any[] = [];
+async function load(t: TestContext, opts: { sample?: any; review?: () => Promise<any>; updateCount?: number; specialtyCount?: number; configured?: boolean } = {}) {
+  const specialtyWrites: any[] = []; const updates: any[] = []; const events: any[] = []; const audits: any[] = []; const reviews: any[] = [];
   const prismaMock: any = {
     accreditationSample: {
       findUnique: async () => (opts.sample === undefined ? sampleRow() : opts.sample),
@@ -20,20 +20,20 @@ async function load(t: TestContext, opts: { sample?: any; review?: () => Promise
     },
     accreditationSampleEvent: { create: async (a: any) => { events.push(a); return {}; } },
     accountAuditLog: { create: async (a: any) => { audits.push(a); return {}; } },
-    providerSpecialty: { updateMany: async () => { throw new Error('the specialty must never be touched by a re-run'); } },
+    providerSpecialty: { updateMany: async (a: any) => { specialtyWrites.push(a); return { count: opts.specialtyCount ?? 1 }; } },
     accreditationProofUpload: { findMany: async () => [{ id: 'up-1', mimeType: 'image/png', bytes: 100 }] },
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
   const mod = await import(`./accreditation-ai.service.ts?fixture=${Date.now()}-${Math.random()}`);
   mod.accreditationAiDeps.client = { isConfigured: () => opts.configured ?? true, reviewAccreditation: async (b: any) => { reviews.push(b); return (opts.review ?? (async () => ({})))(); } };
   mod.accreditationAiDeps.readProof = async (_r: string, mime: string) => `data:${mime};base64,QUJD`;
-  return { svc: mod.accreditationAiService, updates, events, audits, reviews };
+  return { svc: mod.accreditationAiService, specialtyWrites, updates, events, audits, reviews };
 }
 const scored = async () => ({ inspected: true, evaluation: { aiScore: 81.4, aiQualityRating: 'Good', feedbackAr: 'ملخص مبني على الملفات' }, feedback: {} });
 const ACTOR = { id: 'admin-1', role: 'ADMIN' } as any;
 
-test('an approved sample gets its AI score: only advisory fields are written, same revision, decision and specialty untouched', async t => {
-  const { svc, updates, events, audits, reviews } = await load(t, { review: scored });
+test('an approved sample gets its AI score: advisory fields only on the sample, same revision, status/decision untouched; the specialty score follows when it was empty', async t => {
+  const { svc, updates, events, audits, reviews, specialtyWrites } = await load(t, { review: scored });
   const out = await svc.adminRerunAiReview('s1', ACTOR);
   assert.equal(out.updated, true); assert.equal(out.aiScore, 81); assert.equal(out.aiQualityRating, 'Good');
   assert.equal(reviews[0].specialtyName, 'تطوير الويب'); assert.equal(reviews[0].attachments.length, 1);
@@ -41,6 +41,27 @@ test('an approved sample gets its AI score: only advisory fields are written, sa
   assert.deepEqual(Object.keys(updates[0].data).sort(), ['aiAuditedAt', 'aiFeedbackAr', 'aiQualityRating', 'aiScore']);
   assert.equal(events[0].data.kind, 'AI_RERUN'); assert.equal(events[0].data.actorId, 'admin-1');
   assert.equal(audits[0].data.eventType, 'ACCREDITATION_AI_RERUN');
+  assert.equal(out.specialtyScoreUpdated, true);
+  assert.deepEqual(specialtyWrites[0].data, { aiScore: 81 });
+  assert.deepEqual(specialtyWrites[0].where, { id: 'ps1', status: 'APPROVED', OR: [{ aiScore: null }] });
+});
+
+test('the specialty score is only replaced when it still carries THIS sample\'s old score (never another sample\'s)', async t => {
+  const { svc, specialtyWrites } = await load(t, { review: scored, sample: sampleRow({ aiScore: 70 }) });
+  await svc.adminRerunAiReview('s1', ACTOR);
+  assert.deepEqual(specialtyWrites[0].where.OR, [{ aiScore: null }, { aiScore: 70 }]);
+});
+
+test('an undecided sample (not approved) never moves the specialty score', async t => {
+  const { svc, specialtyWrites } = await load(t, { review: scored, sample: sampleRow({ status: 'MANUAL_REVIEW', providerSpecialty: { specialtyId: 'sp1', status: 'UNDER_AI_REVIEW', aiScore: null, specialty: { nameAr: 'x' } } }) });
+  const out = await svc.adminRerunAiReview('s1', ACTOR);
+  assert.equal(specialtyWrites.length, 0); assert.equal(out.specialtyScoreUpdated, false);
+});
+
+test('no score from the AI means the specialty score is left alone', async t => {
+  const { svc, specialtyWrites } = await load(t, { review: async () => ({ inspected: false, evaluation: { aiScore: null, feedbackAr: 'تعذّرت القراءة' }, feedback: {} }) });
+  await svc.adminRerunAiReview('s1', ACTOR);
+  assert.equal(specialtyWrites.length, 0);
 });
 
 test('no readable evidence: no score is invented and an existing score is not erased', async t => {
