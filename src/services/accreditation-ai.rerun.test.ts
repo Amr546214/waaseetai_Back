@@ -11,14 +11,14 @@ const sampleRow = (over: any = {}) => ({
   providerProfile: { userId: 'u1' }, providerSpecialty: { specialtyId: 'sp1', status: 'APPROVED', aiScore: null, specialty: { nameAr: 'تطوير الويب' } }, proofUploads: UPLOADS, ...over,
 });
 
-async function load(t: TestContext, opts: { sample?: any; review?: () => Promise<any>; updateCount?: number; specialtyCount?: number; configured?: boolean } = {}) {
+async function load(t: TestContext, opts: { sample?: any; review?: () => Promise<any>; updateCount?: number; specialtyCount?: number; recentEvent?: boolean; configured?: boolean } = {}) {
   const specialtyWrites: any[] = []; const updates: any[] = []; const events: any[] = []; const audits: any[] = []; const reviews: any[] = [];
   const prismaMock: any = {
     accreditationSample: {
       findUnique: async () => (opts.sample === undefined ? sampleRow() : opts.sample),
       updateMany: async (args: any) => { updates.push(args); return { count: opts.updateCount ?? 1 }; },
     },
-    accreditationSampleEvent: { create: async (a: any) => { events.push(a); return {}; } },
+    accreditationSampleEvent: { create: async (a: any) => { events.push(a); return {}; }, findFirst: async () => (opts.recentEvent ? { id: 'e1' } : null) },
     accountAuditLog: { create: async (a: any) => { audits.push(a); return {}; } },
     providerSpecialty: { updateMany: async (a: any) => { specialtyWrites.push(a); return { count: opts.specialtyCount ?? 1 }; } },
     accreditationProofUpload: { findMany: async () => [{ id: 'up-1', mimeType: 'image/png', bytes: 100 }] },
@@ -107,4 +107,23 @@ test('a second re-run of the same sample while one is running is refused', async
   await new Promise(r => setTimeout(r, 20));
   await assert.rejects(svc.adminRerunAiReview('s1', ACTOR), (e: any) => e.statusCode === 409);
   release(); await first;
+});
+
+test('provider: evaluates their OWN sample (no admin audit row), event actor is the provider', async t => {
+  const { svc, updates, events, audits } = await load(t, { review: scored });
+  const out = await svc.providerEvaluateOwnSample('u1', 's1');
+  assert.equal(out.updated, true); assert.equal(out.aiScore, 81);
+  assert.equal(updates.length, 1); assert.equal(events[0].data.actorId, 'u1'); assert.equal(audits.length, 0);
+});
+
+test('provider: another provider\'s sample is a 404 and nothing is read or written', async t => {
+  const { svc, updates, reviews } = await load(t, { review: scored });
+  await assert.rejects(svc.providerEvaluateOwnSample('someone-else', 's1'), (e: any) => e.statusCode === 404);
+  assert.equal(updates.length, 0); assert.equal(reviews.length, 0);
+});
+
+test('provider: a sample evaluated in the last 15 minutes is refused with 429 before any AI call', async t => {
+  const { svc, reviews } = await load(t, { review: scored, recentEvent: true });
+  await assert.rejects(svc.providerEvaluateOwnSample('u1', 's1'), (e: any) => e.statusCode === 429);
+  assert.equal(reviews.length, 0);
 });
