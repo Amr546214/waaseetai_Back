@@ -428,6 +428,19 @@ export class AccreditationAiService {
    * score is never replaced by an empty one.
    */
   async adminRerunAiReview(id: string, actor?: AdminActor) {
+    return this.rerunAiReview(id, { actor });
+  }
+
+  /**
+   * Provider: evaluate ONE OF MY OWN samples (the ones approved before the AI could read their files have no score). Same advisory-only write as the admin
+   * re-run; a sample of someone else is a 404, and a sample evaluated in the last 15 minutes is refused (cost / abuse guard).
+   */
+  async providerEvaluateOwnSample(userId: string, id: string) {
+    return this.rerunAiReview(id, { providerUserId: userId, cooldownMs: 15 * 60_000 });
+  }
+
+  private async rerunAiReview(id: string, ctx: { actor?: AdminActor; providerUserId?: string; cooldownMs?: number }) {
+    const { actor } = ctx;
     if (!accreditationAiDeps.client.isConfigured()) throw new AppError('خدمة الذكاء الاصطناعي غير متاحة حاليًا؛ حاول لاحقًا', 503);
     const sample = await prisma.accreditationSample.findUnique({
       where: { id },
@@ -437,7 +450,11 @@ export class AccreditationAiService {
         proofUploads: { where: { status: 'COMPLETED' }, orderBy: { createdAt: 'asc' }, select: { id: true, privateRef: true, fileName: true } },
       },
     });
-    if (!sample) throw new AppError('نموذج الاعتماد غير موجود', 404);
+    if (!sample || (ctx.providerUserId && sample.providerProfile?.userId !== ctx.providerUserId)) throw new AppError('نموذج الاعتماد غير موجود', 404);
+    if (ctx.cooldownMs) {
+      const recent = await prisma.accreditationSampleEvent.findFirst({ where: { sampleId: id, kind: 'AI_RERUN', createdAt: { gt: new Date(Date.now() - ctx.cooldownMs) } }, select: { id: true } });
+      if (recent) throw new AppError('تم تقييم هذا النموذج للتو؛ انتظر قليلًا ثم أعد المحاولة', 429);
+    }
     if (!sample.proofUploads.length) throw new AppError('لا توجد ملفات إثبات مرفوعة لهذا النموذج لتقييمها', 422);
     if (rerunInFlight.has(id)) throw new AppError('إعادة التقييم جارية لهذا النموذج بالفعل', 409);
     rerunInFlight.add(id);
@@ -455,6 +472,10 @@ export class AccreditationAiService {
         throw new AppError('تعذّر تشغيل تقييم الذكاء الاصطناعي الآن؛ لم يتغير شيء في النموذج', 502);
       }
       const { aiScore, aiQualityRating, aiFeedbackAr } = result;
+      if (aiScore === null && aiFeedbackAr === null) {
+        // an attempt with no result is still recorded, so the provider-side cooldown stops a page refresh from calling the AI again and again
+        await prisma.accreditationSampleEvent.create({ data: { sampleId: id, kind: 'AI_RERUN', revision: sample.revision ?? 1, actorId: actor?.id ?? ctx.providerUserId ?? null, internalNote: 'تقييم AI بلا نتيجة (الأدلة غير مقروءة)' } });
+      }
       if (aiScore === null && aiFeedbackAr === null) return { updated: false, aiScore: sample.aiScore ?? null, aiQualityRating: sample.aiQualityRating ?? null, message: 'لم يُنتج التقييم نتيجة؛ لم يتغير شيء' };
       const written = await prisma.accreditationSample.updateMany({
         where: { id, revision: sample.revision ?? 1 },
@@ -477,7 +498,7 @@ export class AccreditationAiService {
         });
         specialtyScoreUpdated = moved.count === 1;
       }
-      await prisma.accreditationSampleEvent.create({ data: { sampleId: id, kind: 'AI_RERUN', revision: sample.revision ?? 1, actorId: actor?.id ?? null, internalNote: aiScore !== null ? `تقييم AI: ${aiScore}${specialtyScoreUpdated ? ' (حُدّثت درجة التخصص)' : ''}` : 'تقييم AI بدون درجة (الأدلة غير كافية للقراءة)' } });
+      await prisma.accreditationSampleEvent.create({ data: { sampleId: id, kind: 'AI_RERUN', revision: sample.revision ?? 1, actorId: actor?.id ?? ctx.providerUserId ?? null, internalNote: aiScore !== null ? `تقييم AI: ${aiScore}${specialtyScoreUpdated ? ' (حُدّثت درجة التخصص)' : ''}` : 'تقييم AI بدون درجة (الأدلة غير كافية للقراءة)' } });
       const providerId = sample.providerProfile?.userId;
       if (actor && providerId) {
         await prisma.accountAuditLog.create({ data: adminAuditData({ actor, userId: providerId, eventType: 'ACCREDITATION_AI_RERUN', title: 'إعادة تقييم AI لنموذج الاعتماد', summary: `أعادت الإدارة تشغيل تقييم AI لنموذج «${sample.title ?? ''}»`.trim(), status: LogStatus.COMPLETED, before: { aiScore: sample.aiScore ?? null }, after: { aiScore, specialtyScoreUpdated }, details: { sampleId: id } }) });

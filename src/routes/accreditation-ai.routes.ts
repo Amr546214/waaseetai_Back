@@ -129,6 +129,16 @@ router.get('/samples', async (req: Request, res: Response, next) => {
   }
 });
 
+// The provider evaluates one of their OWN samples with the advisory AI (score / rating / notes only; never a decision).
+router.post('/samples/:id/ai-evaluate', async (req: Request, res: Response, next) => {
+  try {
+    const data = await accreditationAiService.providerEvaluateOwnSample(req.user!.id, req.params['id'] as string);
+    res.status(200).json({ success: true, message: data.message, data });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/samples/:id', async (req: Request, res: Response, next) => {
   try {
     const user = req.user!;
