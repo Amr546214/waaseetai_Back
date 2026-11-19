@@ -127,3 +127,25 @@ test('provider: a sample evaluated in the last 15 minutes is refused with 429 be
   await assert.rejects(svc.providerEvaluateOwnSample('u1', 's1'), (e: any) => e.statusCode === 429);
   assert.equal(reviews.length, 0);
 });
+
+const LEGACY_REF = 'private:image:png:waseetai/accreditation/u1/proofs/old-1';
+
+test('an older sample (no upload rows) is evaluated from the proof listed in its attachments: private refs are read, our links are passed, foreign links are not', async t => {
+  const prev = process.env.CLOUDINARY_CLOUD_NAME; process.env.CLOUDINARY_CLOUD_NAME = 'demo';
+  try {
+    const own = 'https://res.cloudinary.com/demo/image/upload/v1/work.png';
+    const { svc, reviews, updates } = await load(t, { review: scored, sample: sampleRow({ proofUploads: [], attachments: [LEGACY_REF, own, 'https://evil.example.com/x.png', 'data:image/png;base64,AAAA', 'plain-text'] }) });
+    const out = await svc.adminRerunAiReview('s1', ACTOR);
+    assert.equal(out.updated, true);
+    assert.equal(reviews[0].attachments.length, 2);
+    assert.ok(reviews[0].attachments.some((a: string) => a.startsWith('data:image/png;base64,')));
+    assert.ok(reviews[0].attachments.includes(own));
+    assert.ok(!JSON.stringify(reviews[0]).includes('evil.example.com'));
+    assert.equal(updates.length, 1);
+  } finally { if (prev === undefined) delete process.env.CLOUDINARY_CLOUD_NAME; else process.env.CLOUDINARY_CLOUD_NAME = prev; }
+});
+
+test('an older sample whose attachments are all unreadable (foreign link, inline data) is still a 422', async t => {
+  const { svc } = await load(t, { review: scored, sample: sampleRow({ proofUploads: [], attachments: ['https://evil.example.com/x.png', 'data:image/png;base64,AAAA'] }) });
+  await assert.rejects(svc.adminRerunAiReview('s1', ACTOR), (e: any) => e.statusCode === 422);
+});
