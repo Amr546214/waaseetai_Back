@@ -120,7 +120,7 @@ export async function collectProofEvidence(uploads: Array<{ id: string; privateR
  */
 async function runAdvisoryAiReview(input: {
   sampleId: string; providerSpecialtyId: string; specialtyId: string; specialtyName?: string; title: string; description?: string | null;
-  technologiesUsed: string[]; projectUrl?: string; githubUrl?: string; uploads: Array<{ id: string; privateRef: string; fileName: string; mimeType?: string }>; extraAttachments?: string[];
+  technologiesUsed: string[]; projectUrl?: string; githubUrl?: string; uploads: Array<{ id: string; privateRef: string; fileName: string; mimeType?: string }>; extraAttachments?: string[]; timeoutMs?: number;
 }) {
   const evidence = await collectProofEvidence(input.uploads);
   const aiReview = await accreditationAiDeps.client.reviewAccreditation({
@@ -135,7 +135,7 @@ async function runAdvisoryAiReview(input: {
     githubUrl: input.githubUrl,
     attachments: [...evidence.attachments, ...(input.extraAttachments ?? [])].slice(0, ACCREDITATION_AI_MAX_FILES),
     unreadAttachments: evidence.unreadAttachments,
-  });
+  }, input.timeoutMs ? { timeoutMs: input.timeoutMs } : undefined);
   const evalObj = aiReview.evaluation && typeof aiReview.evaluation === 'object' ? (aiReview.evaluation as Record<string, unknown>) : aiReview;
   const readEvidence = aiReview.inspected === true;
   const rawScore = evalObj.aiScore ?? aiReview.aiScore;
@@ -492,7 +492,7 @@ export class AccreditationAiService {
         result = await runAdvisoryAiReview({
           sampleId: sample.id, providerSpecialtyId: sample.providerSpecialtyId, specialtyId: sample.providerSpecialty?.specialtyId ?? sample.providerSpecialtyId,
           specialtyName: specialty?.nameAr || specialty?.nameEn || specialty?.name || undefined, title: sample.title, description: sample.description,
-          technologiesUsed: sample.technologiesUsed ?? [], projectUrl: sample.projectUrl || undefined, githubUrl: sample.githubUrl || undefined, uploads, extraAttachments: legacy.urls,
+          technologiesUsed: sample.technologiesUsed ?? [], projectUrl: sample.projectUrl || undefined, githubUrl: sample.githubUrl || undefined, uploads, extraAttachments: legacy.urls, timeoutMs: 55_000, // longer than the default 30s (reading files + model retries), still under the proxy's 60s
         });
       } catch (error) {
         logger.warn(`[AccreditationAiService] admin AI re-run failed for sample ${id}: ${(error as Error)?.message}`);
