@@ -170,10 +170,16 @@ BEGIN
     ALTER TABLE "messages" ALTER COLUMN "context" TYPE JSONB;
   END IF;
 
+  -- Older schemas linked this column to skills. Rebind it on fresh installs
+  -- and on databases where all existing references already match specialties.
   IF EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conrelid = 'service_catalogs'::regclass AND conname = 'service_catalogs_specialtyId_fkey'
-      AND (confdeltype <> 'n' OR confupdtype <> 'c')
+      AND (confrelid <> 'specialties'::regclass OR confdeltype <> 'n' OR confupdtype <> 'c')
+  ) AND NOT EXISTS (
+    SELECT 1 FROM "service_catalogs" AS catalog
+    WHERE catalog."specialtyId" IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM "specialties" WHERE id = catalog."specialtyId")
   ) THEN
     ALTER TABLE "service_catalogs" DROP CONSTRAINT "service_catalogs_specialtyId_fkey";
     ALTER TABLE "service_catalogs" ADD CONSTRAINT "service_catalogs_specialtyId_fkey"
