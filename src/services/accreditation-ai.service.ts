@@ -433,7 +433,7 @@ export class AccreditationAiService {
       where: { id },
       include: {
         providerProfile: { select: { userId: true } },
-        providerSpecialty: { select: { specialtyId: true, specialty: { select: { nameAr: true, nameEn: true, name: true } } } },
+        providerSpecialty: { select: { specialtyId: true, status: true, aiScore: true, specialty: { select: { nameAr: true, nameEn: true, name: true } } } },
         proofUploads: { where: { status: 'COMPLETED' }, orderBy: { createdAt: 'asc' }, select: { id: true, privateRef: true, fileName: true } },
       },
     });
@@ -466,12 +466,23 @@ export class AccreditationAiService {
         },
       });
       if (written.count !== 1) throw new AppError('تغيّر النموذج أثناء إعادة التقييم (نسخة جديدة)؛ أعد المحاولة', 409);
-      await prisma.accreditationSampleEvent.create({ data: { sampleId: id, kind: 'AI_RERUN', revision: sample.revision ?? 1, actorId: actor?.id ?? null, internalNote: aiScore !== null ? `تقييم AI: ${aiScore}` : 'تقييم AI بدون درجة (الأدلة غير كافية للقراءة)' } });
+      // The specialty's own score is copied from a sample only at approval. When this sample is approved and the specialty either has no score or still
+      // carries THIS sample's old score, it follows the new one. A score that came from another sample is never overwritten.
+      let specialtyScoreUpdated = false;
+      if (aiScore !== null && sample.status === AccreditationStatus.AI_VERIFIED && sample.providerSpecialty?.status === 'APPROVED') {
+        const prev = sample.aiScore ?? null;
+        const moved = await prisma.providerSpecialty.updateMany({
+          where: { id: sample.providerSpecialtyId, status: 'APPROVED', OR: [{ aiScore: null }, ...(prev !== null ? [{ aiScore: prev }] : [])] },
+          data: { aiScore },
+        });
+        specialtyScoreUpdated = moved.count === 1;
+      }
+      await prisma.accreditationSampleEvent.create({ data: { sampleId: id, kind: 'AI_RERUN', revision: sample.revision ?? 1, actorId: actor?.id ?? null, internalNote: aiScore !== null ? `تقييم AI: ${aiScore}${specialtyScoreUpdated ? ' (حُدّثت درجة التخصص)' : ''}` : 'تقييم AI بدون درجة (الأدلة غير كافية للقراءة)' } });
       const providerId = sample.providerProfile?.userId;
       if (actor && providerId) {
-        await prisma.accountAuditLog.create({ data: adminAuditData({ actor, userId: providerId, eventType: 'ACCREDITATION_AI_RERUN', title: 'إعادة تقييم AI لنموذج الاعتماد', summary: `أعادت الإدارة تشغيل تقييم AI لنموذج «${sample.title ?? ''}»`.trim(), status: LogStatus.COMPLETED, before: { aiScore: sample.aiScore ?? null }, after: { aiScore }, details: { sampleId: id } }) });
+        await prisma.accountAuditLog.create({ data: adminAuditData({ actor, userId: providerId, eventType: 'ACCREDITATION_AI_RERUN', title: 'إعادة تقييم AI لنموذج الاعتماد', summary: `أعادت الإدارة تشغيل تقييم AI لنموذج «${sample.title ?? ''}»`.trim(), status: LogStatus.COMPLETED, before: { aiScore: sample.aiScore ?? null }, after: { aiScore, specialtyScoreUpdated }, details: { sampleId: id } }) });
       }
-      return { updated: true, aiScore: aiScore ?? sample.aiScore ?? null, aiQualityRating: aiQualityRating ?? sample.aiQualityRating ?? null, scored: aiScore !== null, message: aiScore !== null ? 'تم تحديث تقييم الذكاء الاصطناعي' : 'تمت القراءة لكن الأدلة لا تكفي لدرجة؛ حُدّثت الملاحظات فقط' };
+      return { updated: true, specialtyScoreUpdated, aiScore: aiScore ?? sample.aiScore ?? null, aiQualityRating: aiQualityRating ?? sample.aiQualityRating ?? null, scored: aiScore !== null, message: aiScore !== null ? 'تم تحديث تقييم الذكاء الاصطناعي' : 'تمت القراءة لكن الأدلة لا تكفي لدرجة؛ حُدّثت الملاحظات فقط' };
     } finally { rerunInFlight.delete(id); }
   }
 
