@@ -8,6 +8,8 @@ import { providerNotifications } from './provider-notifications.service';
 import { resolveProofsForSubmission, buildAdminProofList, publicLegacyAttachments } from './accreditation-proof.service';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { createPrivateDownloadUrl } from '../utils/cloudinary-storage';
+import { isOwnCloudinaryUrl } from '../utils/cloudinary-url';
+import { isPrivateRef, parsePrivateRef } from '../utils/kyc-private-ref';
 
 // Accreditation sample submission. A sample is ALWAYS stored for human review (status MANUAL_REVIEW) and can never become AI_VERIFIED through submission;
 // no ProviderSpecialty credential is granted here. When WaseetAI is configured an ADVISORY review runs after the commit: the service receives the content of the
@@ -73,13 +75,35 @@ export const accreditationAiDeps = {
   readProof: fetchOwnProofAsDataUri,
 };
 
-export async function collectProofEvidence(uploads: Array<{ id: string; privateRef: string; fileName: string }>) {
-  const rows = uploads.length ? await prisma.accreditationProofUpload.findMany({ where: { id: { in: uploads.map(u => u.id) } }, select: { id: true, mimeType: true, bytes: true } }) : [];
+const LEGACY_EXT_MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', pdf: 'application/pdf', zip: 'application/zip' };
+
+/**
+ * Older samples carry their proof in `attachments` (private references and public links) and have no upload rows. This turns those entries into what the
+ * AI review can read: private references (type from the reference itself) and links on OUR storage. Anything else (a foreign link, inline data) is not read.
+ */
+export function legacyProofEvidence(attachments: unknown) {
+  const uploads: Array<{ id: string; privateRef: string; fileName: string; mimeType: string }> = [];
+  const urls: string[] = [];
+  (Array.isArray(attachments) ? attachments : []).forEach((raw, index) => {
+    if (typeof raw !== 'string' || !raw.trim()) return;
+    if (isPrivateRef(raw)) {
+      const parsed = parsePrivateRef(raw);
+      const ext = (parsed?.format || '').toLowerCase();
+      const mimeType = LEGACY_EXT_MIME[ext];
+      if (parsed && mimeType) uploads.push({ id: `legacy:${index}`, privateRef: raw, fileName: `${parsed.publicId.split('/').pop() || 'proof'}.${ext}`, mimeType });
+    } else if (/^https:\/\//i.test(raw) && isOwnCloudinaryUrl(raw)) urls.push(raw);
+  });
+  return { uploads, urls };
+}
+
+export async function collectProofEvidence(uploads: Array<{ id: string; privateRef: string; fileName: string; mimeType?: string }>) {
+  const dbIds = uploads.filter(u => !u.mimeType).map(u => u.id);
+  const rows = dbIds.length ? await prisma.accreditationProofUpload.findMany({ where: { id: { in: dbIds } }, select: { id: true, mimeType: true, bytes: true } }) : [];
   const meta = new Map(rows.map(r => [r.id, r]));
   const attachments: string[] = [];
   const unreadAttachments: string[] = [];
   for (const upload of uploads) {
-    const m = meta.get(upload.id);
+    const m = upload.mimeType ? { mimeType: upload.mimeType, bytes: 0 } : meta.get(upload.id); // a legacy entry has no stored size: the read itself is bounded
     const mimeType = m?.mimeType === 'application/x-zip-compressed' ? 'application/zip' : m?.mimeType;
     if (attachments.length >= ACCREDITATION_AI_MAX_FILES || !m || !mimeType || !AI_READABLE_PROOF_MIME.has(mimeType) || m.bytes > ACCREDITATION_AI_MAX_FILE_BYTES) { unreadAttachments.push(upload.fileName); continue; }
     try { attachments.push(await accreditationAiDeps.readProof(upload.privateRef, mimeType)); } catch (error) {
@@ -96,7 +120,7 @@ export async function collectProofEvidence(uploads: Array<{ id: string; privateR
  */
 async function runAdvisoryAiReview(input: {
   sampleId: string; providerSpecialtyId: string; specialtyId: string; specialtyName?: string; title: string; description?: string | null;
-  technologiesUsed: string[]; projectUrl?: string; githubUrl?: string; uploads: Array<{ id: string; privateRef: string; fileName: string }>;
+  technologiesUsed: string[]; projectUrl?: string; githubUrl?: string; uploads: Array<{ id: string; privateRef: string; fileName: string; mimeType?: string }>; extraAttachments?: string[];
 }) {
   const evidence = await collectProofEvidence(input.uploads);
   const aiReview = await accreditationAiDeps.client.reviewAccreditation({
@@ -109,7 +133,7 @@ async function runAdvisoryAiReview(input: {
     technologiesUsed: input.technologiesUsed,
     projectUrl: input.projectUrl,
     githubUrl: input.githubUrl,
-    attachments: evidence.attachments,
+    attachments: [...evidence.attachments, ...(input.extraAttachments ?? [])].slice(0, ACCREDITATION_AI_MAX_FILES),
     unreadAttachments: evidence.unreadAttachments,
   });
   const evalObj = aiReview.evaluation && typeof aiReview.evaluation === 'object' ? (aiReview.evaluation as Record<string, unknown>) : aiReview;
@@ -455,7 +479,10 @@ export class AccreditationAiService {
       const recent = await prisma.accreditationSampleEvent.findFirst({ where: { sampleId: id, kind: 'AI_RERUN', createdAt: { gt: new Date(Date.now() - ctx.cooldownMs) } }, select: { id: true } });
       if (recent) throw new AppError('تم تقييم هذا النموذج للتو؛ انتظر قليلًا ثم أعد المحاولة', 429);
     }
-    if (!sample.proofUploads.length) throw new AppError('لا توجد ملفات إثبات مرفوعة لهذا النموذج لتقييمها', 422);
+    // new samples: the upload rows; older samples: the proof listed in `attachments` (private references / links on our storage)
+    const legacy = sample.proofUploads.length ? { uploads: [], urls: [] as string[] } : legacyProofEvidence(sample.attachments);
+    const uploads = sample.proofUploads.length ? sample.proofUploads : legacy.uploads;
+    if (!uploads.length && !legacy.urls.length) throw new AppError('لا توجد ملفات إثبات قابلة للقراءة لهذا النموذج لتقييمها', 422);
     if (rerunInFlight.has(id)) throw new AppError('إعادة التقييم جارية لهذا النموذج بالفعل', 409);
     rerunInFlight.add(id);
     try {
@@ -465,7 +492,7 @@ export class AccreditationAiService {
         result = await runAdvisoryAiReview({
           sampleId: sample.id, providerSpecialtyId: sample.providerSpecialtyId, specialtyId: sample.providerSpecialty?.specialtyId ?? sample.providerSpecialtyId,
           specialtyName: specialty?.nameAr || specialty?.nameEn || specialty?.name || undefined, title: sample.title, description: sample.description,
-          technologiesUsed: sample.technologiesUsed ?? [], projectUrl: sample.projectUrl || undefined, githubUrl: sample.githubUrl || undefined, uploads: sample.proofUploads,
+          technologiesUsed: sample.technologiesUsed ?? [], projectUrl: sample.projectUrl || undefined, githubUrl: sample.githubUrl || undefined, uploads, extraAttachments: legacy.urls,
         });
       } catch (error) {
         logger.warn(`[AccreditationAiService] admin AI re-run failed for sample ${id}: ${(error as Error)?.message}`);
