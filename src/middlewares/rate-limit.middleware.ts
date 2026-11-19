@@ -62,6 +62,8 @@ export const TIERS = {
   DASHBOARD: tierFromEnv('DASHBOARD', { windowMs: MIN15, user: 300, ip: 300, ipNet: 1500 }),
   // endpoints that call a language model
   AI: tierFromEnv('AI', { windowMs: MIN15, user: 30, ip: 30, ipNet: 150 }),
+  // the signed-out assistant (a model call for anyone, no account): much stricter than AI, keyed by address
+  PUBLIC_AI: tierFromEnv('PUBLIC_AI', { windowMs: MIN15, user: 20, ip: 10, ipNet: 40 }),
   // file uploads (multipart): memory + cloud storage cost
   UPLOAD: tierFromEnv('UPLOAD', { windowMs: MIN15, user: 40, ip: 20, ipNet: 200 }),
   // money in: PayPal order create / capture, escrow deposit, funding
@@ -165,6 +167,9 @@ export const dashboardLimiter: RequestHandler = chain(buildTier('dashboard', TIE
 
 /** AI-bound routes: strict, per account (30 / 15 min each), independent of browsing. */
 export const aiLimiter: RequestHandler = chain(buildTier('ai', TIERS.AI, 'تم تجاوز الحد المسموح لطلبات الذكاء الاصطناعي، يرجى المحاولة لاحقاً بعد', { shared: true }));
+
+/** The signed-out assistant: 10 questions / 15 min per address (shared store), on top of the daily cap in public-assistant.service. */
+export const publicAiLimiter: RequestHandler = chain(buildTier('public_ai', TIERS.PUBLIC_AI, 'أسئلة كثيرة في وقت قصير، حاول مرة أخرى بعد', { shared: true }));
 
 /** Upload routes: mount BEFORE multer so a rejected request never buffers the file. */
 export const uploadLimiter: RequestHandler = chain(buildTier('upload', TIERS.UPLOAD, 'عدد كبير من عمليات رفع الملفات، حاول مرة أخرى بعد', { shared: true }));

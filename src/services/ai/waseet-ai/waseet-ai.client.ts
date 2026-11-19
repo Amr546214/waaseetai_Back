@@ -447,6 +447,10 @@ export class WaseetAiClient {
     return this.postJson('/v1/ai/attachments/read', body, opts, (d) => isObject(d) && (d.kind === 'TEXT' || d.kind === 'IMAGE') && typeof d.text === 'string') as never;
   }
 
+  publicAsk(body: { question: string; language: 'ar' | 'en'; history: Array<{ role: 'user' | 'assistant'; content: string }>; actor?: { userId: string; role: string } }, opts?: WaseetAiCallOptions): Promise<{ scope: 'PUBLIC' | 'ACCOUNT_REQUIRED' | 'NOT_COVERED' | 'OFF_TOPIC'; answer: string }> {
+    return this.postJson('/v1/ai/public/ask', body, opts, (d) => isObject(d) && ['PUBLIC', 'ACCOUNT_REQUIRED', 'NOT_COVERED', 'OFF_TOPIC'].includes(String(d.scope)) && typeof d.answer === 'string') as never;
+  }
+
   inspectAttachment(body: { file: string; mimeType: string; context?: string; actor?: { userId: string; role: string } }, opts?: WaseetAiCallOptions): Promise<{ status: 'CLEAN' | 'BLOCK' | 'REVIEW'; categories: string[]; summaryAr: string }> {
     return this.postJson('/v1/ai/attachments/inspect', body, opts, (d) => isObject(d) && ['CLEAN', 'BLOCK', 'REVIEW'].includes(String(d.status)) && Array.isArray(d.categories) && typeof d.summaryAr === 'string') as never;
   }
