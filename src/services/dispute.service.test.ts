@@ -92,7 +92,7 @@ test('generateAiSummary: sends minimal data — no names, attachment URLs, stage
         id: 'proj-1',
         contract: {
           clientId: CLIENT_ID,
-          stages: [{ stepOrder: 1, title: 'المرحلة الأولى', description: 'وصف سري', status: 'APPROVED', deliveries: [{ note: 'ملاحظة تسليم سرية', status: 'APPROVED' }] }],
+          stages: [{ id: 'st-other', stepOrder: 1, title: 'المرحلة الأولى', description: 'وصف سري', status: 'APPROVED', deliveries: [{ note: 'ملاحظة تسليم سرية', status: 'APPROVED' }] }],
         },
       },
     }),
@@ -106,7 +106,7 @@ test('generateAiSummary: sends minimal data — no names, attachment URLs, stage
   assert.match(sent, /المرحلة الأولى/);
   assert.doesNotMatch(sent, /cdn\.example\.com/);
   assert.doesNotMatch(sent, /وصف سري|ملاحظة تسليم سرية/);
-  assert.match(body.evidenceList[0], /1 مرفق/);
+  assert.ok(body.evidenceList.some((x: string) => /^\[F1\] دليل مرفق بالنزاع من العميل: «private-evidence1\.png» — لم يُقرأ محتواه/.test(x)));
 });
 
 test('generateAiSummary: throws 404 for a missing dispute without calling WaseetAI', async (t) => {
@@ -132,7 +132,7 @@ test('generateAiSummary: rejects a response missing a required perspective', asy
 });
 
 test('generateAiSummary: rejects an oversized field', async (t) => {
-  const { disputeService } = await loadService(t, { summarizeDispute: async () => upstreamFixture({ summary: 'x'.repeat(5000) }) });
+  const { disputeService } = await loadService(t, { summarizeDispute: async () => upstreamFixture({ summary: 'x'.repeat(7000) }) });
   await assert.rejects(() => disputeService.generateAiSummary('dispute-1'), (e: any) => e.code === 'INVALID_RESPONSE');
 });
 
