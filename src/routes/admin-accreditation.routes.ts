@@ -28,6 +28,14 @@ router.get('/samples/:id', async (req: Request, res: Response, next: NextFunctio
   } catch (error) { next(error); }
 });
 
+// Re-run the advisory AI review on an existing sample (advisory fields only; the decision is never touched).
+router.post('/samples/:id/ai-rerun', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const data = await accreditationAiService.adminRerunAiReview(String(req.params.id), adminActor(req));
+    res.json({ success: true, message: data.message, data });
+  } catch (error) { next(error); }
+});
+
 router.post('/samples/:id/approve', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await accreditationAiService.adminApproveSample(String(req.params.id), adminActor(req));

@@ -21,6 +21,8 @@ const EVENT_LABELS: Record<string, string> = {
 	REJECTED: 'تم رفض الطلب',
 	APPROVED: 'تم اعتماد الطلب'
 };
+/** Events the provider never sees (an admin re-running the advisory AI is not a status change of the request). */
+const ADMIN_ONLY_EVENTS = new Set(['AI_RERUN']);
 const REASON_MARKER = 'سبب الرفض:';
 
 /** The status of a request as the provider sees it. `AI_VERIFIED` counts as approved only once the specialty itself is APPROVED. */
@@ -79,7 +81,7 @@ async function shape(row: Row) {
 		submittedAt: row.createdAt,
 		updatedAt: row.updatedAt,
 		decidedAt: row.decidedAt,
-		history: row.events.map(e => ({ id: e.id, kind: e.kind, label: EVENT_LABELS[e.kind] ?? e.kind, revision: e.revision, note: e.userNote, at: e.createdAt }))
+		history: row.events.filter(e => !ADMIN_ONLY_EVENTS.has(e.kind)).map(e => ({ id: e.id, kind: e.kind, label: EVENT_LABELS[e.kind] ?? e.kind, revision: e.revision, note: e.userNote, at: e.createdAt }))
 	};
 }
 

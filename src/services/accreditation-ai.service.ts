@@ -90,6 +90,41 @@ export async function collectProofEvidence(uploads: Array<{ id: string; privateR
   return { attachments, unreadAttachments };
 }
 
+/**
+ * One advisory AI review of a sample: reads the proof files and returns what the AI service says. A score is kept only when the service says it read
+ * evidence (`inspected`); a written description alone is never a quality score. Shared by the provider submission and the admin re-run.
+ */
+async function runAdvisoryAiReview(input: {
+  sampleId: string; providerSpecialtyId: string; specialtyId: string; specialtyName?: string; title: string; description?: string | null;
+  technologiesUsed: string[]; projectUrl?: string; githubUrl?: string; uploads: Array<{ id: string; privateRef: string; fileName: string }>;
+}) {
+  const evidence = await collectProofEvidence(input.uploads);
+  const aiReview = await accreditationAiDeps.client.reviewAccreditation({
+    sampleId: input.sampleId,
+    providerSpecialtyId: input.providerSpecialtyId,
+    specialtyId: input.specialtyId,
+    specialtyName: input.specialtyName,
+    title: input.title,
+    description: input.description ?? undefined,
+    technologiesUsed: input.technologiesUsed,
+    projectUrl: input.projectUrl,
+    githubUrl: input.githubUrl,
+    attachments: evidence.attachments,
+    unreadAttachments: evidence.unreadAttachments,
+  });
+  const evalObj = aiReview.evaluation && typeof aiReview.evaluation === 'object' ? (aiReview.evaluation as Record<string, unknown>) : aiReview;
+  const readEvidence = aiReview.inspected === true;
+  const rawScore = evalObj.aiScore ?? aiReview.aiScore;
+  const aiScore = readEvidence && typeof rawScore === 'number' && Number.isFinite(rawScore) ? Math.round(rawScore) : null;
+  const rawRating = evalObj.aiQualityRating ?? aiReview.aiQualityRating;
+  const aiQualityRating = aiScore !== null && typeof rawRating === 'string' ? rawRating : null;
+  const feedbackObj = aiReview.feedback && typeof aiReview.feedback === 'object' ? (aiReview.feedback as Record<string, unknown>) : {};
+  const aiFeedbackAr = typeof evalObj.feedbackAr === 'string' ? evalObj.feedbackAr : typeof feedbackObj.summary === 'string' ? feedbackObj.summary : null;
+  return { aiReview, aiScore, aiQualityRating, aiFeedbackAr, unreadCount: evidence.unreadAttachments.length };
+}
+
+const rerunInFlight = new Set<string>();
+
 export class AccreditationAiService {
   /**
    * Stores an accreditation sample for human review. No AI evaluation runs.
@@ -175,29 +210,10 @@ export class AccreditationAiService {
 
     if (accreditationAiDeps.client.isConfigured()) {
       try {
-        const evidence = await collectProofEvidence(proofs.uploads);
-        const aiReview = await accreditationAiDeps.client.reviewAccreditation({
-          sampleId: accreditationSample.id,
-          providerSpecialtyId: providerSpecialty.id,
-          specialtyId: providerSpecialty.specialtyId,
-          specialtyName,
-          title,
-          description,
-          technologiesUsed: technologiesUsed || [],
-          projectUrl: projectUrl || undefined,
-          githubUrl: githubUrl || undefined,
-          attachments: evidence.attachments,
-          unreadAttachments: evidence.unreadAttachments,
+        const { aiReview, aiScore, aiQualityRating, aiFeedbackAr } = await runAdvisoryAiReview({
+          sampleId: accreditationSample.id, providerSpecialtyId: providerSpecialty.id, specialtyId: providerSpecialty.specialtyId, specialtyName,
+          title, description, technologiesUsed: technologiesUsed || [], projectUrl: projectUrl || undefined, githubUrl: githubUrl || undefined, uploads: proofs.uploads,
         });
-        const evalObj = aiReview.evaluation && typeof aiReview.evaluation === 'object' ? (aiReview.evaluation as Record<string, unknown>) : aiReview;
-        // a score only when the service says it read evidence; a written description alone is never a quality score
-        const readEvidence = aiReview.inspected === true;
-        const rawScore = evalObj.aiScore ?? aiReview.aiScore;
-        const aiScore = readEvidence && typeof rawScore === 'number' && Number.isFinite(rawScore) ? Math.round(rawScore) : null;
-        const rawRating = evalObj.aiQualityRating ?? aiReview.aiQualityRating;
-        const aiQualityRating = aiScore !== null && typeof rawRating === 'string' ? rawRating : null;
-        const feedbackObj = aiReview.feedback && typeof aiReview.feedback === 'object' ? (aiReview.feedback as Record<string, unknown>) : {};
-        const aiFeedbackAr = typeof evalObj.feedbackAr === 'string' ? evalObj.feedbackAr : typeof feedbackObj.summary === 'string' ? feedbackObj.summary : null;
 
         if (aiScore !== null || aiFeedbackAr !== null) {
           // write only if this is still the SAME revision and still waiting for review: an admin decision or a resubmission that happened while the AI was
@@ -404,6 +420,59 @@ export class AccreditationAiService {
     const { proofUploads: _uploads, ...rest } = sample as any;
     const publicUploads = ((_uploads ?? []) as any[]).map(({ privateRef: _ref, ...u }) => u);
     return { ...rest, attachments: publicLegacyAttachments(sample.attachments), proofUploads: publicUploads, proofs, assessmentReview: attempt ? { attemptId: attempt.id, status: attempt.status, score: attempt.score, completedAt: attempt.completedAt, review } : null };
+  }
+
+  /**
+   * Admin: re-run the advisory AI review on an EXISTING sample (e.g. approved before the AI could read its files). Writes only the advisory fields
+   * (score, rating, feedback, audit time) of the SAME revision. The decision, the sample status and the specialty are never touched, and an existing
+   * score is never replaced by an empty one.
+   */
+  async adminRerunAiReview(id: string, actor?: AdminActor) {
+    if (!accreditationAiDeps.client.isConfigured()) throw new AppError('خدمة الذكاء الاصطناعي غير متاحة حاليًا؛ حاول لاحقًا', 503);
+    const sample = await prisma.accreditationSample.findUnique({
+      where: { id },
+      include: {
+        providerProfile: { select: { userId: true } },
+        providerSpecialty: { select: { specialtyId: true, specialty: { select: { nameAr: true, nameEn: true, name: true } } } },
+        proofUploads: { where: { status: 'COMPLETED' }, orderBy: { createdAt: 'asc' }, select: { id: true, privateRef: true, fileName: true } },
+      },
+    });
+    if (!sample) throw new AppError('نموذج الاعتماد غير موجود', 404);
+    if (!sample.proofUploads.length) throw new AppError('لا توجد ملفات إثبات مرفوعة لهذا النموذج لتقييمها', 422);
+    if (rerunInFlight.has(id)) throw new AppError('إعادة التقييم جارية لهذا النموذج بالفعل', 409);
+    rerunInFlight.add(id);
+    try {
+      const specialty = sample.providerSpecialty?.specialty;
+      let result;
+      try {
+        result = await runAdvisoryAiReview({
+          sampleId: sample.id, providerSpecialtyId: sample.providerSpecialtyId, specialtyId: sample.providerSpecialty?.specialtyId ?? sample.providerSpecialtyId,
+          specialtyName: specialty?.nameAr || specialty?.nameEn || specialty?.name || undefined, title: sample.title, description: sample.description,
+          technologiesUsed: sample.technologiesUsed ?? [], projectUrl: sample.projectUrl || undefined, githubUrl: sample.githubUrl || undefined, uploads: sample.proofUploads,
+        });
+      } catch (error) {
+        logger.warn(`[AccreditationAiService] admin AI re-run failed for sample ${id}: ${(error as Error)?.message}`);
+        throw new AppError('تعذّر تشغيل تقييم الذكاء الاصطناعي الآن؛ لم يتغير شيء في النموذج', 502);
+      }
+      const { aiScore, aiQualityRating, aiFeedbackAr } = result;
+      if (aiScore === null && aiFeedbackAr === null) return { updated: false, aiScore: sample.aiScore ?? null, aiQualityRating: sample.aiQualityRating ?? null, message: 'لم يُنتج التقييم نتيجة؛ لم يتغير شيء' };
+      const written = await prisma.accreditationSample.updateMany({
+        where: { id, revision: sample.revision ?? 1 },
+        data: {
+          ...(aiScore !== null ? { aiScore } : {}),
+          ...(aiQualityRating !== null ? { aiQualityRating } : {}),
+          ...(aiFeedbackAr !== null ? { aiFeedbackAr } : {}),
+          aiAuditedAt: new Date(),
+        },
+      });
+      if (written.count !== 1) throw new AppError('تغيّر النموذج أثناء إعادة التقييم (نسخة جديدة)؛ أعد المحاولة', 409);
+      await prisma.accreditationSampleEvent.create({ data: { sampleId: id, kind: 'AI_RERUN', revision: sample.revision ?? 1, actorId: actor?.id ?? null, internalNote: aiScore !== null ? `تقييم AI: ${aiScore}` : 'تقييم AI بدون درجة (الأدلة غير كافية للقراءة)' } });
+      const providerId = sample.providerProfile?.userId;
+      if (actor && providerId) {
+        await prisma.accountAuditLog.create({ data: adminAuditData({ actor, userId: providerId, eventType: 'ACCREDITATION_AI_RERUN', title: 'إعادة تقييم AI لنموذج الاعتماد', summary: `أعادت الإدارة تشغيل تقييم AI لنموذج «${sample.title ?? ''}»`.trim(), status: LogStatus.COMPLETED, before: { aiScore: sample.aiScore ?? null }, after: { aiScore }, details: { sampleId: id } }) });
+      }
+      return { updated: true, aiScore: aiScore ?? sample.aiScore ?? null, aiQualityRating: aiQualityRating ?? sample.aiQualityRating ?? null, scored: aiScore !== null, message: aiScore !== null ? 'تم تحديث تقييم الذكاء الاصطناعي' : 'تمت القراءة لكن الأدلة لا تكفي لدرجة؛ حُدّثت الملاحظات فقط' };
+    } finally { rerunInFlight.delete(id); }
   }
 
   async adminApproveSample(id: string, actor?: AdminActor) {

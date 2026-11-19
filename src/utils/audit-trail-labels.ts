@@ -48,6 +48,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 	ACCREDITATION_APPROVED_BY_ADMIN: 'اعتماد نموذج الاعتماد',
 	ACCREDITATION_REJECTED_BY_ADMIN: 'رفض نموذج الاعتماد',
 	ACCREDITATION_COMPLETION_REQUESTED: 'طلب استكمال بيانات الاعتماد',
+	ACCREDITATION_AI_RERUN: 'إعادة تقييم AI لنموذج الاعتماد',
 	SPECIALTY_ADMIN_DECISION: 'قرار إداري على تخصص',
 	SPECIALTY_CREATED: 'إضافة تخصص',
 	SPECIALTY_UPDATED: 'تعديل تخصص',
