@@ -2,7 +2,10 @@ import { prisma } from '../../config/db';
 import { AppError } from '../../utils/app-error';
 import { waseetAiClient } from '../ai/waseet-ai/waseet-ai.client';
 import { WaseetAiError, WaseetAiErrorCode, normalizeWaseetAiError } from '../ai/waseet-ai/waseet-ai.errors';
-import type { DisputeSummaryRequest, DisputeSummaryResponse } from '../ai/waseet-ai/waseet-ai.types';
+import type { DisputeSummaryRequest } from '../ai/waseet-ai/waseet-ai.types';
+import { parseContractMilestones, readOfferTerms } from '../../utils/contract-terms';
+import { scrubFreeText } from '../llm/llm.payload';
+import { redact } from '../../utils/audit-detail-sanitizer';
 
 // Advisory-only dispute AI summary — never a verdict or financial decision.
 // WaseetAI POST /v1/ai/disputes/summary generates neutral perspectives.
@@ -37,23 +40,38 @@ function mapToDisputeSummary(value: unknown): DisputeAiSummaryResult | null {
   };
 }
 
-const cap = (text: string | null | undefined, max = 1500) => (text ? text.slice(0, max) : '');
+const cap = (text: string | null | undefined, max = 1500) => redact(scrubFreeText(text, max), max);
+const timestamp = (date: Date | null | undefined) => date?.toISOString() ?? 'بلا تاريخ مسجل';
+const partyLabel = { client: 'العميل', provider: 'مقدم الخدمة' };
 
 export class DisputeSummaryService {
+  constructor(
+    private readonly db: Pick<typeof prisma, 'dispute'> = prisma,
+    private readonly ai: Pick<typeof waseetAiClient, 'summarizeDispute'> = waseetAiClient
+  ) {}
+
   /**
    * Summarizes a dispute for administrative review by loading dispute data from the DB,
    * minimizing claims/evidence, and calling Waseet AI's dispute summary endpoint.
    */
   async generateSummary(disputeId: string): Promise<DisputeAiSummaryResult> {
-    const dispute = await prisma.dispute.findUnique({
+    const dispute = await this.db.dispute.findUnique({
       where: { id: disputeId },
       select: {
         id: true,
         openedById: true,
+        againstUserId: true,
+        stageId: true,
         reason: true,
         description: true,
         evidence: true,
         attachments: { select: { ownerId: true } },
+        messages: {
+          where: { authorKind: 'PARTICIPANT', authorId: { not: null } },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: 30,
+          select: { authorId: true, authorKind: true, body: true, createdAt: true },
+        },
         request: { select: { id: true, clientProfile: { select: { userId: true } } } },
         project: {
           select: {
@@ -61,13 +79,36 @@ export class DisputeSummaryService {
             contract: {
               select: {
                 clientId: true,
+                providerId: true,
+                terms: true,
+                termsVersion: true,
+                signedAt: true,
+                projectConversation: {
+                  select: { messages: {
+                    where: { type: 'TEXT', content: { not: null } },
+                    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+                    take: 8,
+                    select: { senderId: true, content: true, createdAt: true },
+                  } },
+                },
+                amendments: {
+                  where: { status: 'APPROVED', appliedAt: { not: null } },
+                  orderBy: [{ appliedAt: 'desc' }, { id: 'desc' }],
+                  take: 5,
+                  select: { title: true, description: true, type: true, appliedAt: true, durationAfter: true },
+                },
                 stages: {
                   orderBy: { stepOrder: 'asc' },
                   select: {
+                    id: true,
                     stepOrder: true,
                     title: true,
                     status: true,
-                    deliveries: { orderBy: { submittedAt: 'desc' }, take: 1, select: { status: true } },
+                    deliveries: {
+                      orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }],
+                      take: 1,
+                      select: { status: true, submittedAt: true, reviewedAt: true },
+                    },
                   },
                 },
               },
@@ -79,12 +120,22 @@ export class DisputeSummaryService {
 
     if (!dispute) throw new AppError('النزاع غير موجود', 404);
 
-    const clientUserId = dispute.project?.contract?.clientId ?? dispute.request?.clientProfile?.userId;
+    const contract = dispute.project?.contract;
+    const clientUserId = contract?.clientId ?? dispute.request?.clientProfile?.userId;
     if (!clientUserId) throw new AppError('تعذر تحديد أطراف النزاع لإنشاء الملخص', 422);
 
     const openerIsClient = dispute.openedById === clientUserId;
+    const providerUserId = contract?.providerId ?? (openerIsClient ? dispute.againstUserId : dispute.openedById);
+    const partyOf = (userId: string | null) => userId === clientUserId ? 'client' : userId && userId === providerUserId ? 'provider' : null;
     const openerClaim = [cap(dispute.reason, 500), cap(dispute.description)].filter(Boolean).join(' — ');
-    const noClaim = 'لا يوجد ادعاء مسجل من هذا الطرف في النظام.';
+    const claimFor = (party: 'client' | 'provider') => {
+      const replies = (dispute.messages ?? [])
+        .filter(message => message.authorKind === 'PARTICIPANT' && partyOf(message.authorId) === party)
+        .slice(0, 3).reverse()
+        .map(message => `رد مسجل في ${timestamp(message.createdAt)}: ${cap(message.body, 400)}`);
+      const isOpener = (party === 'client') === openerIsClient;
+      return [isOpener ? openerClaim : '', ...replies].filter(Boolean).join('\n') || 'لا يوجد ادعاء مسجل من هذا الطرف ضمن الأدلة المسترجعة.';
+    };
 
     const evidenceList: string[] = [];
     const attachmentCount = dispute.evidence?.length ?? 0;
@@ -92,19 +143,43 @@ export class DisputeSummaryService {
       evidenceList.push(`${attachmentCount} مرفق(ات) مقدمة من ${openerIsClient ? 'العميل' : 'مقدم الخدمة'} (لم يُفحص محتواها)`);
     }
     for (const party of ['client', 'provider'] as const) {
-      const count = (dispute.attachments ?? []).filter(f => (f.ownerId === clientUserId) === (party === 'client')).length;
-      if (count) evidenceList.push(`${count} مرفق(ات) إضافية مقدمة من ${party === 'client' ? 'العميل' : 'مقدم الخدمة'} (لم يُفحص محتواها)`);
+      const count = (dispute.attachments ?? []).filter(f => partyOf(f.ownerId) === party).length;
+      if (count) evidenceList.push(`${count} مرفق(ات) إضافية مقدمة من ${partyLabel[party]} (لم يُفحص محتواها)`);
     }
-    for (const stage of dispute.project?.contract?.stages ?? []) {
+    for (const amendment of contract?.amendments ?? []) {
+      if (!amendment.appliedAt) continue;
+      evidenceList.push(`تعديل عقد مطبّق في ${timestamp(amendment.appliedAt)} (${amendment.type}): ${cap(amendment.title, 150)} — ${cap(amendment.description, 500)}${amendment.durationAfter != null ? ` — المدة بعد التطبيق: ${amendment.durationAfter} يومًا` : ''}`);
+    }
+    const stages = [...(contract?.stages ?? [])].sort((a, b) => Number(b.id === dispute.stageId) - Number(a.id === dispute.stageId));
+    for (const stage of stages.slice(0, 8)) {
       const delivery = stage.deliveries[0];
-      evidenceList.push(`المرحلة ${stage.stepOrder}: ${cap(stage.title, 150)} — الحالة: ${stage.status}${delivery ? ` — آخر تسليم: ${delivery.status}` : ' — لا تسليم'}`);
+      evidenceList.push(`المرحلة ${stage.stepOrder}${stage.id && stage.id === dispute.stageId ? ' محل النزاع' : ''}: ${cap(stage.title, 150)} — الحالة: ${stage.status}${delivery ? ` — آخر تسليم: ${delivery.status} في ${timestamp(delivery.submittedAt)}${delivery.reviewedAt ? `، المراجعة: ${timestamp(delivery.reviewedAt)}` : ''}` : ' — لا تسليم'}`);
     }
+    const discussion = (contract?.projectConversation?.messages ?? [])
+      .filter(message => partyOf(message.senderId) && message.content?.trim())
+      .slice(0, 4).reverse();
+    for (const message of discussion) {
+      const party = partyOf(message.senderId);
+      if (party) evidenceList.push(`نقاش المشروع (سياق فقط، وليس بندًا تعاقديًا) — ${partyLabel[party]} في ${timestamp(message.createdAt)}: ${cap(message.content, 300)}`);
+    }
+
+    const offer = readOfferTerms(contract?.terms);
+    const milestones = parseContractMilestones(contract?.terms);
+    const writtenTerms = typeof contract?.terms === 'string' && !milestones.length && !offer ? cap(contract.terms, 1200) : '';
+    const contractTerms = contract && [
+      `نسخة الشروط المحفوظة: ${contract.termsVersion} — اكتمال التوقيع: ${timestamp(contract.signedAt)}`,
+      writtenTerms,
+      offer?.summary && `ملخص العرض المثبت: ${cap(offer.summary, 1000)}`,
+      offer?.deliverables && `التسليمات المثبتة: ${cap(offer.deliverables, 1500)}`,
+      ...milestones.slice(0, 12).map(stage => `البند ${stage.order}: ${cap(stage.title, 120)} — ${cap(stage.description, 300)}`),
+    ].filter(Boolean).join('\n');
 
     const payload: DisputeSummaryRequest = {
       disputeId: dispute.id,
       projectId: dispute.project?.id ?? dispute.request?.id ?? dispute.id,
-      clientClaim: openerIsClient ? openerClaim : noClaim,
-      providerClaim: openerIsClient ? noClaim : openerClaim,
+      clientClaim: claimFor('client'),
+      providerClaim: claimFor('provider'),
+      ...(contractTerms ? { contractTerms } : {}),
       evidenceList: evidenceList.slice(0, 20),
     };
 
@@ -116,7 +191,7 @@ export class DisputeSummaryService {
    */
   async generateFromPayload(payload: DisputeSummaryRequest): Promise<DisputeAiSummaryResult> {
     try {
-      const data = await waseetAiClient.summarizeDispute(payload);
+      const data = await this.ai.summarizeDispute(payload);
       const mapped = mapToDisputeSummary(data);
 
       if (!mapped || FORBIDDEN_SUMMARY_KEYS.filter((k) => k !== 'recommendation').some((k) => k in (data as object))) {

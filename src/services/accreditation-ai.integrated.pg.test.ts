@@ -33,6 +33,8 @@ function validPng(): Buffer {
 	return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', h), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 const corruptPng = () => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(Array.from({ length: 120 }, (_, i) => (i * 37 + 11) & 255))]);
+// ZIP containing one stored entry, sample.ts: "export const amount = 500;"
+const sourceZip = Buffer.from('UEsDBBQAAAAAAAAAc13COeQIGgAAABoAAAAJAAAAc2FtcGxlLnRzZXhwb3J0IGNvbnN0IGFtb3VudCA9IDUwMDtQSwECFAAUAAAAAAAAAHNdwjnkCBoAAAAaAAAACQAAAAAAAAAAAAAAgAEAAAAAc2FtcGxlLnRzUEsFBgAAAAABAAEANwAAAEEAAAAAAA==', 'base64');
 
 async function boot(proofBytes: Buffer, readable: boolean) {
 	const fixtures: any = await import(pathToFileURL(`${REPO}/tests/helpers/ai-fixtures.ts`).href);
@@ -40,9 +42,11 @@ async function boot(proofBytes: Buffer, readable: boolean) {
 	const app = fixtures.buildApp();
 	await app.ready();
 	const baseUrl: string = await app.listen({ port: 0, host: '127.0.0.1' });
+	const submittedEvidence: Array<{ source: string; excerpt: string }> = [];
 	fixtures.GeminiGateway.setMockHandler(async (req: any) => {
 		const prompt = JSON.parse(req.prompt);
 		if (req.featureId === 'AI-07-ACCREDITATION-DECLARED-REVIEW') return JSON.stringify({ feedbackAr: 'وصف واضح ومكتمل', strengths: ['وصف مرتب'], recommendations: ['أرفق ملفات'] });
+		submittedEvidence.push(...prompt.evidence);
 		return JSON.stringify({
 			criteria: ['specialtyRelevance', 'technicalSubstance', 'deliverableCompleteness', 'claimConsistency', 'presentationClarity'].map(c => ({ id: c, score: 80, observation: 'ملاحظة من الصورة' })),
 			visualReadings: (prompt.visualAttachments ?? []).map((a: any) => ({ index: a.index, readable, observation: readable ? 'واجهة تطبيق' : 'غير واضحة' })),
@@ -56,10 +60,10 @@ async function boot(proofBytes: Buffer, readable: boolean) {
 	const mod = await import('./accreditation-ai.service');
 	mod.accreditationAiDeps.client = client as any;
 	mod.accreditationAiDeps.readProof = async (_ref: string, mime: string) => `data:${mime};base64,${proofBytes.toString('base64')}`;
-	return { app, mod, fixtures };
+	return { app, mod, fixtures, submittedEvidence };
 }
 
-async function world() {
+async function world(input = { mimeType: 'image/png', fileName: 'shot.png', bytes: 1500, storageKind: 'image:png' }) {
 	const { prisma } = await import('../config/db');
 	const tag = id().slice(0, 8);
 	const user = await prisma.user.create({ data: { id: id(), accountType: 'PROVIDER_INDIVIDUAL', firstName: 'a', lastName: tag, email: `int-${tag}@pg.test`, roles: ['PROVIDER'], activeRole: 'PROVIDER' } });
@@ -67,8 +71,8 @@ async function world() {
 	const category = (await prisma.category.findUnique({ where: { slug: 'programming-development' } })) ?? (await prisma.category.create({ data: { id: id(), slug: 'programming-development', nameAr: 'x' } }));
 	const specialty = await prisma.specialty.create({ data: { id: id(), slug: `sp-${tag}`, categoryId: category.id, nameAr: 'تطوير تطبيقات' } });
 	const ps = await prisma.providerSpecialty.create({ data: { id: id(), providerProfileId: profile.id, specialtyId: specialty.id, subSpecialties: [], status: 'PENDING_PROOF', isPassed: true, isActive: true } as any });
-	const png = await prisma.accreditationProofUpload.create({ data: { id: id(), userId: user.id, providerSpecialtyId: ps.id, privateRef: `private:image:png:waseetai/accreditation/${user.id}/proofs/shot-${tag}`, fileName: 'shot.png', mimeType: 'image/png', bytes: 1500, status: 'COMPLETED' } as any });
-	return { prisma, dto: { userId: user.id, providerSpecialtyId: ps.id, title: 'تطبيق', description: 'وصف تطبيق كامل وواضح', technologiesUsed: ['Flutter'], attachments: [] as string[], proofIds: [png.id] } };
+	const upload = await prisma.accreditationProofUpload.create({ data: { id: id(), userId: user.id, providerSpecialtyId: ps.id, privateRef: `private:${input.storageKind}:waseetai/accreditation/${user.id}/proofs/${input.fileName}-${tag}`, fileName: input.fileName, mimeType: input.mimeType, bytes: input.bytes, status: 'COMPLETED' } as any });
+	return { prisma, dto: { userId: user.id, providerSpecialtyId: ps.id, title: 'تطبيق', description: 'وصف تطبيق كامل وواضح', technologiesUsed: ['Flutter'], attachments: [] as string[], proofIds: [upload.id] } };
 }
 
 test('integrated: a valid PNG the model read -> the AI service answers inspected=true with the score -> the website stores it on the MANUAL_REVIEW row', opts, async () => {
@@ -107,5 +111,23 @@ test('integrated: a valid image the model could NOT read -> no score is stored',
 		const row = await w.prisma.accreditationSample.findUniqueOrThrow({ where: { id: res.sample.id } });
 		assert.equal(row.aiScore, null);
 		assert.equal(row.aiQualityRating, null);
+	} finally { fixtures.GeminiGateway.setMockHandler(null); await app.close(); }
+});
+
+test('integrated: reads stored ZIP source and preserves independent ownership on approval', opts, async () => {
+	const { app, mod, fixtures, submittedEvidence } = await boot(sourceZip, true);
+	try {
+		const w = await world({ mimeType: 'application/x-zip-compressed', fileName: 'source.zip', bytes: sourceZip.length, storageKind: 'raw:zip' });
+		await w.prisma.providerSpecialty.update({ where: { id: w.dto.providerSpecialtyId }, data: { ownershipCredibility: 42 } });
+		const result = await mod.accreditationAiService.submitAccreditationSample(w.dto);
+		assert.ok(submittedEvidence.some(item => item.source.endsWith('#sample.ts') && item.excerpt.includes('export const amount = 500;')));
+		const row = await w.prisma.accreditationSample.findUniqueOrThrow({ where: { id: result.sample.id } });
+		assert.equal(row.status, 'MANUAL_REVIEW');
+		assert.equal(row.aiScore, 80);
+
+		await mod.accreditationAiService.adminApproveSample(row.id);
+		const specialty = await w.prisma.providerSpecialty.findUniqueOrThrow({ where: { id: w.dto.providerSpecialtyId } });
+		assert.equal(specialty.aiScore, 80);
+		assert.equal(specialty.ownershipCredibility, 42);
 	} finally { fixtures.GeminiGateway.setMockHandler(null); await app.close(); }
 });

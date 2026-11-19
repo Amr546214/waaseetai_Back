@@ -14,23 +14,14 @@ import { caseSubmissionDigest, cleanupCaseFiles, storeCaseFiles } from './case-a
 import { resolutionLabelAr, type FinancialOutcomeSummary } from '../utils/dispute-resolution';
 import { ACTIVE_DISPUTE_STATUSES, getFreezeState, lockProjectForFreezeCheck } from './dispute-freeze.service';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
-import { WaseetAiError, WaseetAiErrorCode } from './ai/waseet-ai/waseet-ai.errors';
+import { DisputeSummaryService, type DisputeAiSummaryResult } from './ai-features/dispute-summary.service';
 import { providerNotifications } from './provider-notifications.service';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 import { adminAudit } from './admin-audit.service';
 import { notifyAdmins } from './admin-notifications.service';
 import { assigneeHolds } from './admin-access.service';
 
-// Advisory-only dispute summary — never a verdict. Human admin resolution
-// via resolve() above remains the sole authority on status/fault/money;
-// this call performs zero DB writes and cannot influence that decision.
-export interface DisputeAiSummary {
-  summary: string;
-  clientPerspective: string;
-  providerPerspective: string;
-}
-
-const MAX_TEXT_FIELD_LENGTH = 2000;
+export type DisputeAiSummary = DisputeAiSummaryResult;
 
 /**
  * Escrow amount still held for a project, using the same definition provider-finance.service.ts applies to the provider's
@@ -47,30 +38,8 @@ export function heldEscrowAmount(
   return Math.round(Math.max(0, entitlement - (escrow.releasedAmount || 0)) * 100) / 100;
 }
 
-// WaseetAI also returns a `recommendation` (a proposed settlement). It is
-// deliberately never read, mapped, returned or logged: the human admin's
-// resolve() is the only path that decides anything about the dispute.
-const FORBIDDEN_SUMMARY_KEYS = ['winner', 'loser', 'verdict', 'faultPercentage', 'recommendation', 'recommendedResolution', 'releaseFunds', 'refundAmount', 'confidence', 'confidenceOfGuilt'];
-
-function isNonEmptyBoundedString(value: unknown, maxLength: number): value is string {
-  return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength;
-}
-
-/** Maps a WaseetAI response to the advisory-only shape. Returns null when a
- *  required field is missing/oversized; never invents a replacement value. */
-function toDisputeAiSummary(value: unknown): DisputeAiSummary | null {
-  if (!value || typeof value !== 'object') return null;
-  const v = value as Record<string, unknown>;
-  if (!isNonEmptyBoundedString(v.summary, MAX_TEXT_FIELD_LENGTH)) return null;
-  if (!isNonEmptyBoundedString(v.clientPerspective, MAX_TEXT_FIELD_LENGTH)) return null;
-  if (!isNonEmptyBoundedString(v.providerPerspective, MAX_TEXT_FIELD_LENGTH)) return null;
-  return { summary: v.summary, clientPerspective: v.clientPerspective, providerPerspective: v.providerPerspective };
-}
-
 const stageInclude = { select: { id: true, stepOrder: true, title: true, status: true, amount: true } } as const;
 const disputeCreateInclude = { _count: { select: { attachments: true } }, stage: stageInclude, request: { select: { id: true, title: true } }, project: { select: { id: true, title: true } } } as const;
-
-const cap = (text: string | null | undefined, max = 1500) => (text ? text.slice(0, max) : '');
 
 export class DisputeService {
   private async requestForActor(
@@ -479,76 +448,8 @@ export class DisputeService {
     } catch { return null; }
   }
 
-  /**
-   * Advisory-only WaseetAI summary of a dispute for the human admin reviewer.
-   * Read-only: zero DB writes, never touches status/resolution/escrow. The
-   * admin's resolve() above remains the only path that can change anything.
-   *
-   * Data minimisation: only the opener's recorded claim, an anonymous
-   * evidence/stage list and opaque ids leave the system — no names, emails,
-   * attachment URLs, stage descriptions or delivery notes. The upstream
-   * `recommendation` field is discarded.
-   */
   async generateAiSummary(id: string): Promise<DisputeAiSummary> {
-    const dispute = await prisma.dispute.findUnique({
-      where: { id },
-      include: {
-        attachments: { select: { ownerId: true } },
-        request: { select: { id: true, clientProfile: { select: { userId: true } } } },
-        project: {
-          select: {
-            id: true,
-            contract: {
-              select: {
-                clientId: true,
-                stages: {
-                  orderBy: { stepOrder: 'asc' },
-                  select: { stepOrder: true, title: true, status: true, deliveries: { orderBy: { submittedAt: 'desc' }, take: 1, select: { status: true } } },
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-    if (!dispute) throw new AppError('النزاع غير موجود', 404);
-
-    const clientUserId = dispute.project?.contract?.clientId ?? dispute.request?.clientProfile?.userId;
-    if (!clientUserId) throw new AppError('تعذر تحديد أطراف النزاع لإنشاء الملخص', 422);
-    const openerIsClient = dispute.openedById === clientUserId;
-
-    const openerClaim = [cap(dispute.reason, 500), cap(dispute.description)].filter(Boolean).join(' — ');
-    const noClaim = 'لا يوجد ادعاء مسجل من هذا الطرف في النظام.';
-
-    const evidenceList: string[] = [];
-    const attachmentCount = dispute.evidence?.length ?? 0;
-    if (attachmentCount > 0) evidenceList.push(`${attachmentCount} مرفق(ات) مقدمة من ${openerIsClient ? 'العميل' : 'مقدم الخدمة'} (لم يُفحص محتواها)`);
-    for (const party of ['client', 'provider'] as const) {
-      const count = (dispute.attachments ?? []).filter(f => (f.ownerId === clientUserId) === (party === 'client')).length;
-      if (count) evidenceList.push(`${count} مرفق(ات) إضافية مقدمة من ${party === 'client' ? 'العميل' : 'مقدم الخدمة'} (لم يُفحص محتواها)`);
-    }
-    for (const stage of dispute.project?.contract?.stages ?? []) {
-      const delivery = stage.deliveries[0];
-      evidenceList.push(`المرحلة ${stage.stepOrder}: ${cap(stage.title, 150)} — الحالة: ${stage.status}${delivery ? ` — آخر تسليم: ${delivery.status}` : ' — لا تسليم'}`);
-    }
-
-    try {
-      const data = await waseetAiClient.summarizeDispute({
-        disputeId: dispute.id,
-        projectId: dispute.project?.id ?? dispute.request?.id ?? dispute.id,
-        clientClaim: openerIsClient ? openerClaim : noClaim,
-        providerClaim: openerIsClient ? noClaim : openerClaim,
-        evidenceList: evidenceList.slice(0, 20),
-      });
-      const mapped = toDisputeAiSummary(data);
-      if (!mapped || FORBIDDEN_SUMMARY_KEYS.filter((k) => k !== 'recommendation').some((k) => k in (data as object))) {
-        throw new WaseetAiError(WaseetAiErrorCode.INVALID_RESPONSE, 'WaseetAI dispute summary failed validation');
-      }
-      return mapped;
-    } catch (error: any) {
-      console.error('[DisputeService] AI summary generation failed:', error?.code || error?.message);
-      throw error;
-    }
+    return new DisputeSummaryService(prisma, waseetAiClient).generateSummary(id);
   }
 }
 

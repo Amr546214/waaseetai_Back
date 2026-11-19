@@ -55,7 +55,7 @@ async function claimForDecision(tx: any, id: string) {
 /** What the website passes to the AI service for one sample: the user's own proof files as bounded `data:` URIs, and the ones it could not pass (reported, never guessed). */
 export const ACCREDITATION_AI_MAX_FILES = 3;
 export const ACCREDITATION_AI_MAX_FILE_BYTES = 2 * 1024 * 1024;
-const AI_READABLE_PROOF_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'application/pdf']);
+const AI_READABLE_PROOF_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'application/pdf', 'application/zip']);
 
 async function fetchOwnProofAsDataUri(ref: string, mimeType: string): Promise<string> {
   const link = createPrivateDownloadUrl(ref, 60);
@@ -80,8 +80,9 @@ export async function collectProofEvidence(uploads: Array<{ id: string; privateR
   const unreadAttachments: string[] = [];
   for (const upload of uploads) {
     const m = meta.get(upload.id);
-    if (attachments.length >= ACCREDITATION_AI_MAX_FILES || !m || !AI_READABLE_PROOF_MIME.has(m.mimeType) || m.bytes > ACCREDITATION_AI_MAX_FILE_BYTES) { unreadAttachments.push(upload.fileName); continue; }
-    try { attachments.push(await accreditationAiDeps.readProof(upload.privateRef, m.mimeType)); } catch (error) {
+    const mimeType = m?.mimeType === 'application/x-zip-compressed' ? 'application/zip' : m?.mimeType;
+    if (attachments.length >= ACCREDITATION_AI_MAX_FILES || !m || !mimeType || !AI_READABLE_PROOF_MIME.has(mimeType) || m.bytes > ACCREDITATION_AI_MAX_FILE_BYTES) { unreadAttachments.push(upload.fileName); continue; }
+    try { attachments.push(await accreditationAiDeps.readProof(upload.privateRef, mimeType)); } catch (error) {
       logger.warn(`[AccreditationAiService] proof ${upload.id} could not be passed to the AI review: ${(error as Error)?.message}`);
       unreadAttachments.push(upload.fileName);
     }
@@ -442,7 +443,7 @@ export class AccreditationAiService {
             status: 'APPROVED',
             isPassed: true,
             badgeGrantedAt: new Date(),
-            ...(sample.aiScore != null ? { aiScore: sample.aiScore, ownershipCredibility: Math.max(0, sample.aiScore) } : {}),
+            ...(sample.aiScore != null ? { aiScore: sample.aiScore } : {}),
           },
         });
       }

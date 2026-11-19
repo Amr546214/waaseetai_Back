@@ -27,7 +27,7 @@ async function world() {
 	const category = (await prisma.category.findUnique({ where: { slug: 'programming-development' } })) ?? (await prisma.category.create({ data: { id: id(), slug: 'programming-development', nameAr: 'x' } }));
 	const specialty = await prisma.specialty.create({ data: { id: id(), slug: `sp-${tag}`, categoryId: category.id, nameAr: 'تطوير الويب' } });
 	const ps = await prisma.providerSpecialty.create({ data: { id: id(), providerProfileId: profile.id, specialtyId: specialty.id, subSpecialties: [], status: 'PENDING_PROOF', isPassed: true, isActive: true } as any });
-	const mk = (fileName: string, mimeType: string, bytes: number) => prisma.accreditationProofUpload.create({ data: { id: id(), userId: user.id, providerSpecialtyId: ps.id, privateRef: `private:${mimeType.startsWith('image') ? 'image:png' : 'raw:pdf'}:waseetai/accreditation/${user.id}/proofs/${fileName}-${tag}`, fileName, mimeType, bytes, status: 'COMPLETED' } as any });
+	const mk = (fileName: string, mimeType: string, bytes: number) => prisma.accreditationProofUpload.create({ data: { id: id(), userId: user.id, providerSpecialtyId: ps.id, privateRef: `private:${mimeType.startsWith('image') ? 'image:png' : 'raw:zip'}:waseetai/accreditation/${user.id}/proofs/${fileName}-${tag}`, fileName, mimeType, bytes, status: 'COMPLETED' } as any });
 	const png = await mk('screen.png', 'image/png', 2000);
 	const zip = await mk('source.zip', 'application/zip', 9000);
 	const dto = { userId: user.id, providerSpecialtyId: ps.id, title: 'نظام مخزون', description: 'وصف تقني حقيقي وكامل للمشروع', technologiesUsed: ['React'], attachments: [] as string[], proofIds: [png.id, zip.id] };
@@ -46,12 +46,12 @@ async function service(aiAnswer: (body: any, ctx: { prisma: any; sampleId: strin
 
 const evidenceAnswer = { inspected: true, status: 'MANUAL_REVIEW', evaluation: { aiScore: 77, aiQualityRating: 'Good', feedbackAr: 'ملخص مبني على الملفات' } };
 
-test('real DB: the user\'s own proof content and the specialty reach the AI request; the zip is reported unreadable; the answer is stored on the same revision', opts, async () => {
+test('real DB: image and ZIP proofs reach the AI request and the result is stored on the same revision', opts, async () => {
 	const w = await world();
 	const { svc, requests } = await service(async () => evidenceAnswer, w);
 	const res: any = await svc.submitAccreditationSample(w.dto);
-	assert.deepEqual(requests[0].attachments, ['data:image/png;base64,QUJD']);
-	assert.deepEqual(requests[0].unreadAttachments, ['source.zip']);
+	assert.deepEqual(requests[0].attachments, ['data:image/png;base64,QUJD', 'data:application/zip;base64,QUJD']);
+	assert.deepEqual(requests[0].unreadAttachments, []);
 	assert.equal(requests[0].specialtyName, 'تطوير الويب');
 	const row = await w.prisma.accreditationSample.findUniqueOrThrow({ where: { id: res.sample.id } });
 	assert.equal(row.status, 'MANUAL_REVIEW');

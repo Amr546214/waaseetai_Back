@@ -16,12 +16,13 @@ const PROOFS = [
 const META = [
   { id: 'up-1', mimeType: 'image/png', bytes: 1000 },
   { id: 'up-2', mimeType: 'application/pdf', bytes: 5000 },
-  { id: 'up-3', mimeType: 'application/zip', bytes: 9000 },
+  { id: 'up-3', mimeType: 'application/x-zip-compressed', bytes: 9000 },
 ];
 
 async function load(t: TestContext, opts: { review?: (body: any) => Promise<any>; readProof?: (ref: string, mime: string) => Promise<string>; updateManyCount?: number } = {}) {
   const reviewCalls: any[] = [];
   const updateManyCalls: any[] = [];
+  const specialtyWrites: any[] = [];
   const created: any = { id: 'sample-1', revision: 3, status: 'MANUAL_REVIEW', aiScore: null };
   const prismaMock: any = {
     providerProfile: { findUnique: async () => ({ id: 'profile-1', userId: 'user-1' }) },
@@ -37,10 +38,10 @@ async function load(t: TestContext, opts: { review?: (body: any) => Promise<any>
     accreditationProofUpload: { findMany: async (args: any) => (args?.select?.mimeType ? META : PROOFS.map(p => ({ ...p, status: 'COMPLETED', userId: 'user-1', providerSpecialtyId: 'spec-1', sampleId: null }))) },
     $transaction: async (fn: any) => fn({
       $executeRaw: async () => 0,
-      accreditationSample: { create: async () => created, findFirst: async () => null, update: async () => created },
+      accreditationSample: { create: async () => created, findFirst: async () => null, update: async () => created, updateMany: async () => ({ count: 1 }) },
       accreditationProofUpload: { updateMany: async () => ({ count: 3 }) },
       accreditationSampleEvent: { create: async () => ({}) },
-      providerSpecialty: { updateMany: async () => ({ count: 1 }) },
+      providerSpecialty: { updateMany: async (args: any) => { specialtyWrites.push(args); return { count: 1 }; } },
     }),
   };
   t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
@@ -51,7 +52,7 @@ async function load(t: TestContext, opts: { review?: (body: any) => Promise<any>
   const mod = await import(`./accreditation-ai.service.ts?fixture=${Date.now()}-${Math.random()}`);
   mod.accreditationAiDeps.client = { isConfigured: () => true, reviewAccreditation: async (body: any) => { reviewCalls.push(body); return (opts.review ?? (async () => ({})))(body); } };
   mod.accreditationAiDeps.readProof = opts.readProof ?? (async (_ref: string, mime: string) => `data:${mime};base64,QUJD`);
-  return { svc: mod.accreditationAiService, reviewCalls, updateManyCalls, created };
+  return { svc: mod.accreditationAiService, reviewCalls, updateManyCalls, specialtyWrites, created };
 }
 
 const evidenceReview = async () => ({ inspected: true, status: 'MANUAL_REVIEW', evaluation: { aiScore: 77, aiQualityRating: 'Good', feedbackAr: 'ملخص مبني على الملفات' }, feedback: { summary: 'ملخص' } });
@@ -61,8 +62,8 @@ test('the user\'s OWN proof content and the specialty reach the AI service; file
   await svc.submitAccreditationSample(DTO);
   assert.equal(reviewCalls.length, 1);
   const body = reviewCalls[0];
-  assert.deepEqual(body.attachments, ['data:image/png;base64,QUJD', 'data:application/pdf;base64,QUJD']);
-  assert.deepEqual(body.unreadAttachments, ['source.zip']);
+  assert.deepEqual(body.attachments, ['data:image/png;base64,QUJD', 'data:application/pdf;base64,QUJD', 'data:application/zip;base64,QUJD']);
+  assert.deepEqual(body.unreadAttachments, []);
   assert.equal(body.specialtyName, 'تطوير الويب');
   assert.equal(body.specialtyId, 'catalog-spec-9');
   assert.equal(body.sampleId, 'sample-1');
@@ -71,8 +72,16 @@ test('the user\'s OWN proof content and the specialty reach the AI service; file
 test('a proof that cannot be read from storage goes to unreadAttachments and the review still runs', async (t) => {
   const { svc, reviewCalls } = await load(t, { review: evidenceReview, readProof: async (ref) => { if (ref.includes('/p2')) throw new Error('HTTP_404'); return 'data:image/png;base64,QUJD'; } });
   await svc.submitAccreditationSample(DTO);
-  assert.deepEqual(reviewCalls[0].attachments, ['data:image/png;base64,QUJD']);
-  assert.deepEqual(reviewCalls[0].unreadAttachments, ['report.pdf', 'source.zip']);
+  assert.deepEqual(reviewCalls[0].attachments, ['data:image/png;base64,QUJD', 'data:image/png;base64,QUJD']);
+  assert.deepEqual(reviewCalls[0].unreadAttachments, ['report.pdf']);
+});
+
+test('manual approval saves the quality score without assigning an ownership score', async t => {
+  const { svc, specialtyWrites } = await load(t);
+  await svc.adminApproveSample('sample-1');
+  assert.equal(specialtyWrites.length, 1);
+  assert.equal(specialtyWrites[0].data.aiScore, 77);
+  assert.equal('ownershipCredibility' in specialtyWrites[0].data, false);
 });
 
 test('an evidence-based answer is stored ONLY for the same revision, still waiting for review and undecided; the sample stays MANUAL_REVIEW', async (t) => {
