@@ -102,6 +102,7 @@ export interface DisputeSummaryRequest {
   projectId: string;
   clientClaim: string;
   providerClaim: string;
+  contractTerms?: string;
   evidenceList: string[];
 }
 export interface DisputeSummaryResponse {

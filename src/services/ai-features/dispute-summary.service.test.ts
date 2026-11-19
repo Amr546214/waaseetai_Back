@@ -8,6 +8,7 @@ function disputeFixture(overrides: Partial<any> = {}) {
   return {
     id: 'dispute-101',
     openedById: CLIENT_ID,
+    againstUserId: PROVIDER_ID,
     reason: 'تأخر في التسليم',
     description: 'لم يتم تسليم متطلبات المرحلة الأولى في الوقت المحدد',
     evidence: ['https://cdn.example.com/evidence1.png'],
@@ -99,4 +100,38 @@ test('new private evidence is counted by party without forwarding names, referen
   assert.ok(sent.evidenceList.some((x: string)=>x.includes('إضافية مقدمة من العميل')));
   assert.ok(sent.evidenceList.some((x: string)=>x.includes('إضافية مقدمة من مقدم الخدمة')));
   assert.ok(!JSON.stringify(sent).includes(CLIENT_ID)); assert.ok(!JSON.stringify(sent).includes(PROVIDER_ID));
+});
+
+test('dispute summary sends saved terms, applied changes, delivery dates and the other party’s replies', async t => {
+  const at = new Date('2026-02-02T10:00:00.000Z');
+  const dispute = disputeFixture({
+    stageId: 'stage-1',
+    messages: [
+      { authorKind: 'PARTICIPANT', authorId: PROVIDER_ID, body: 'التسليم النهائي فقط؛ راجع https://files.example.test/private', createdAt: at },
+      { authorKind: 'STAFF', authorId: PROVIDER_ID, body: 'ملاحظة غير مصرح بها', createdAt: at },
+      { authorKind: 'PARTICIPANT', authorId: 'outsider', body: 'رسالة خارج أطراف النزاع', createdAt: at },
+    ],
+    project: { id: 'p-1', contract: {
+      clientId: CLIENT_ID, providerId: PROVIDER_ID, termsVersion: 3, signedAt: at,
+      terms: { offerTerms: { deliverables: 'تقرير نهائي واحد' } },
+      projectConversation: { messages: [
+        { senderId: CLIENT_ID, content: 'هل يمكن الاتفاق على تقرير أسبوعي؟', createdAt: at },
+        { senderId: 'outsider', content: 'محادثة طرف ثالث', createdAt: at },
+      ] },
+      amendments: [
+        { type: 'SCOPE', title: 'تعديل ناجز', description: 'إضافة جدول', appliedAt: at },
+        { type: 'SCOPE', title: 'تعديل غير مطبّق', appliedAt: null },
+      ],
+      stages: [{ id: 'stage-1', stepOrder: 1, title: 'التقرير', status: 'SUBMITTED', deliveries: [{ status: 'SUBMITTED', submittedAt: at }] }],
+    } },
+  });
+  const { disputeSummaryService, summarizeSpy } = await loadService(t, { dispute });
+  await disputeSummaryService.generateSummary('dispute-101');
+  const sent = summarizeSpy.mock.calls[0].arguments[0];
+  assert.match(sent.providerClaim, /التسليم النهائي فقط/);
+  assert.match(sent.contractTerms, /نسخة الشروط المحفوظة: 3.*تقرير نهائي واحد/s);
+  assert.match(sent.evidenceList.join('\n'), /تعديل ناجز.*إضافة جدول.*محل النزاع.*2026-02-02T10:00:00/s);
+  assert.match(sent.evidenceList.join('\n'), /نقاش المشروع.*تقرير أسبوعي/);
+  assert.doesNotMatch(sent.contractTerms, /تقرير أسبوعي/);
+  assert.doesNotMatch(JSON.stringify(sent), /files\.example\.test|ملاحظة غير مصرح بها|رسالة خارج أطراف النزاع|محادثة طرف ثالث|تعديل غير مطبّق/);
 });
