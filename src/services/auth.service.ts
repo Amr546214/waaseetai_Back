@@ -24,6 +24,7 @@ import { sessionService, SessionContext } from './session.service';
 import { accountAuditLogService } from './account-logs.service';
 import { initializeRoleState } from './account-management.service';
 import { resolveActiveRoleDisplayFields } from '../utils/role-display-resolver';
+import { isDevLoginOtpBypassEmail } from '../utils/dev-login-otp-bypass';
 import { otpSendThrottle, otpThrottleMessage, resendAvailableAtIso, canReuseOtp } from '../utils/otp-send-throttle';
 import { withKeyLock } from '../utils/key-lock';
 import { remainingMinutes } from '../utils/otp-validity';
@@ -741,6 +742,15 @@ export class AuthService {
 		}
 		if (user.status === UserStatus.SUSPENDED_REVIEW) {
 			throw new AppError('هذا الحساب قيد مراجعة الإيقاف حالياً، يرجى التواصل مع الدعم', 403);
+		}
+
+		// DEV-only test accounts (see utils/dev-login-otp-bypass): password alone opens the session. Never active without the dev flag; audited every time.
+		if (isDevLoginOtpBypassEmail(user.email)) {
+			const full = await authRepository.findByIdForSession(user.id);
+			if (full) {
+				await accountAuditLogService.record({ userId: user.id, eventType: 'LOGIN_OTP_BYPASSED_DEV', category: 'SECURITY_CHANGE', title: 'دخول بدون رمز تحقق (حساب اختبار على بيئة التطوير)', summary: 'سُجّل الدخول بكلمة المرور فقط لأن الحساب مدرج كحساب اختبار على بيئة التطوير', source: 'SYSTEM', severity: 'WARNING', status: 'COMPLETED', context: { ipAddress: sessionContext.ipAddress, device: sessionContext.userAgent?.slice(0, 120) } });
+				return this.startSession(full, sessionContext);
+			}
 		}
 
 		// Email OTP is mandatory at login (owner decision #4): a correct password only starts the challenge, no token is issued here.

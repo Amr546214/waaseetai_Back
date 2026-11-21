@@ -11,6 +11,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 	SESSIONS_REVOKED_OTHERS: 'إنهاء باقي الجلسات',
 	SESSIONS_REVOKED_ALL: 'إنهاء كل الجلسات',
 	LOGIN_REJECTED: 'محاولة تسجيل دخول مرفوضة',
+	LOGIN_OTP_BYPASSED_DEV: 'دخول بدون رمز تحقق (حساب اختبار على التطوير)',
 	PASSWORD_CHANGED: 'تغيير كلمة المرور',
 	PASSWORD_CHANGE_REQUESTED: 'طلب تغيير كلمة المرور',
 	PASSWORD_CHANGE_REJECTED: 'محاولة تغيير كلمة المرور مرفوضة',
