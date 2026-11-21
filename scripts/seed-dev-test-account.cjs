@@ -18,12 +18,14 @@ const dist = (p) => require(path.join('/app/dist', p));
 	const bcrypt = require('/app/node_modules/bcrypt');
 	const { prisma } = dist('config/db');
 	const { initializeRoleState } = dist('services/account-management.service');
+	const AVATAR = 'https://res.cloudinary.com/demo/image/upload/sample.jpg';
+	const ID_NUMBER = '1000000099'; // test value, not a real identity
 	const hash = await bcrypt.hash(password, 12);
 	const base = {
 		accountType: 'CLIENT_INDIVIDUAL', status: 'ACTIVE', roles: ['CLIENT', 'PROVIDER', 'AFFILIATE'], activeRole: 'CLIENT', isBanned: false,
 		firstName: 'مختبر', lastName: 'التطوير', legalName: 'Dev Tester', username: 'dev.tester',
 		phoneCountryCode: '+966', phoneNumber: '500009901', password: hash, agreedToTerms: true, authProvider: 'local',
-		city: 'الرياض', region: 'الرياض', address: 'حساب اختبار على بيئة التطوير', profileCompletionPercent: 100,
+		city: 'الرياض', region: 'الرياض', address: 'حساب اختبار على بيئة التطوير', avatarUrl: AVATAR, idNumber: ID_NUMBER, idExpiryDate: new Date('2032-01-01'),
 	};
 	const user = await prisma.$transaction(async (tx) => {
 		const existing = await tx.user.findUnique({ where: { email } });
@@ -33,7 +35,8 @@ const dist = (p) => require(path.join('/app/dist', p));
 		await initializeRoleState(tx, u.id, 'CLIENT', u, { isProfileComplete: true });
 		await tx.clientProfile.update({ where: { userId: u.id }, data: {
 			kycStatus: 'VERIFIED', isProfileComplete: true, termsAgreed: true, privacyAgreed: true, accurateAgreed: true,
-			country: 'السعودية', city: 'الرياض', completionPercentage: 100,
+			country: 'السعودية', city: 'الرياض', avatarUrl: AVATAR, bio: 'حساب اختبار على بيئة التطوير: طالب خدمة لتجربة كل مسارات المنصة.',
+			industry: 'تقنية المعلومات', idNumber: ID_NUMBER, paypalPayoutEmail: email, dob: new Date('1990-01-01'), idIssuingCountry: 'السعودية', idDocumentType: 'NATIONAL_ID',
 		} });
 		return u;
 	});
@@ -46,8 +49,13 @@ const dist = (p) => require(path.join('/app/dist', p));
 			headline: 'مطوّر ومصمم حلول رقمية', bio: 'حساب اختبار على بيئة التطوير: مقدم خدمة معتمد لتجربة كل مسارات المنصة.', hourlyRate: 50, yearsOfExperience: 5,
 			location: 'الرياض', city: 'الرياض', country: 'السعودية', languages: ['العربية', 'English'], mainSpecialty: specialties[0] ? specialties[0].nameAr : null,
 			subSpecialties: [], kycStatus: 'VERIFIED', isVerified: true, isProfileSetupComplete: true, setupTestStatus: 'COMPLETED', setupTestScore: 90,
-			termsAgreed: true, privacyAgreed: true, accurateAgreed: true, paymentType: 'paypal', paypalPayoutEmail: email, completionPercentage: 100, availabilityStatus: 'AVAILABLE',
+			termsAgreed: true, privacyAgreed: true, accurateAgreed: true, paymentType: 'paypal', paypalPayoutEmail: email, availabilityStatus: 'AVAILABLE',
+			avatarUrl: AVATAR, websiteUrl: 'https://example.com/dev-tester', idNumber: ID_NUMBER, dob: new Date('1990-01-01'), industry: 'تقنية المعلومات',
 		} });
+		for (const name of ['JavaScript', 'تصميم واجهات']) {
+			const skill = await tx.skill.upsert({ where: { name }, update: {}, create: { name } });
+			await tx.providerProfile.update({ where: { id: pp.id }, data: { skills: { connect: { id: skill.id } } } });
+		}
 		for (const sp of specialties) {
 			let ps = await tx.providerSpecialty.findFirst({ where: { providerProfileId: pp.id, specialtyId: sp.id } });
 			const data = { hasTakenAssessment: true, latestScore: 90, isPassed: true, passedAt: now, status: 'APPROVED', isActive: true, aiScore: 85, quizScore: 90, badgeGrantedAt: now, legalSignedAt: now, subSpecialties: [] };
@@ -70,12 +78,25 @@ const dist = (p) => require(path.join('/app/dist', p));
 		const ap = await tx.affiliateProfile.findUnique({ where: { userId: user.id }, select: { id: true } });
 		await tx.affiliateProfile.update({ where: { userId: user.id }, data: {
 			bio: 'حساب اختبار على بيئة التطوير: وسيط تسويقي لتجربة الإحالات والعمولات والسحب.', avatarUrl: 'https://res.cloudinary.com/demo/image/upload/sample.jpg',
-			identityVerified: true, payoutMethod: 'PAYPAL', paypalPayoutEmail: email, completionPercentage: 100, notifyOnNewReferral: true,
+			identityVerified: true, payoutMethod: 'PAYPAL', paypalPayoutEmail: email, notifyOnNewReferral: true,
 		} });
 		const hasChannel = await tx.affiliateChannelHandle.findFirst({ where: { affiliateProfileId: ap.id } });
 		if (!hasChannel) await tx.affiliateChannelHandle.create({ data: { affiliateProfileId: ap.id, platform: 'LINKEDIN', handle: '@dev.tester', url: 'https://www.linkedin.com/in/dev-tester' } });
 	});
 	await prisma.user.update({ where: { id: user.id }, data: { avatarUrl: 'https://res.cloudinary.com/demo/image/upload/sample.jpg' } });
+	// ---- the REAL completion percentages, by the app's own calculators, written back and reported (a missing item here means a rule the seed did not satisfy) ----
+	const calc = dist('utils/completion-calculators');
+	const full = await prisma.user.findUnique({ where: { id: user.id }, include: { clientProfile: true, providerProfile: { include: { skills: true, portfolioItems: true } }, affiliateProfile: { include: { marketingChannels: true } } } });
+	const clientIn = { user: full, clientProfile: full.clientProfile };
+	const providerIn = { user: full, providerProfile: full.providerProfile };
+	const affIn = { user: full, affiliateProfile: full.affiliateProfile, marketingChannelsCount: full.affiliateProfile.marketingChannels.length };
+	const pct = { client: calc.computeClientCompletion(clientIn), provider: calc.computeProviderCompletion(providerIn), affiliate: calc.computeAffiliateCompletion(affIn) };
+	await prisma.clientProfile.update({ where: { userId: user.id }, data: { completionPercentage: pct.client } });
+	await prisma.providerProfile.update({ where: { userId: user.id }, data: { completionPercentage: pct.provider } });
+	await prisma.affiliateProfile.update({ where: { userId: user.id }, data: { completionPercentage: pct.affiliate } });
+	await prisma.user.update({ where: { id: user.id }, data: { profileCompletionPercent: pct.client } });
+	const missing = { client: calc.computeClientMissingItems(clientIn).map(i => i.key), provider: calc.computeProviderMissingItems(providerIn).map(i => i.key), affiliate: calc.computeAffiliateMissingItems(affIn).map(i => i.key) };
+	console.log(JSON.stringify({ completion: pct, missing }));
 	const roles = await prisma.user.findUnique({ where: { id: user.id }, select: { roles: true, activeRole: true } });
 	const sp = await prisma.providerSpecialty.count({ where: { providerProfile: { userId: user.id }, status: 'APPROVED', isActive: true } });
 	console.log(JSON.stringify({ ok: true, id: user.id, email: user.email, status: user.status, role: user.activeRole, approvedSpecialties: sp, roles: roles.roles }));
