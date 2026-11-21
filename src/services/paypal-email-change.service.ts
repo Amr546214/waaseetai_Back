@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { otpCodeFor } from '../utils/dev-login-otp-bypass';
 import { LogCategory, LogStatus, OtpType } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
@@ -39,7 +40,7 @@ export class PaypalEmailChangeService {
 		if (!throttle.allowed) throw Object.assign(new AppError(otpThrottleMessage(throttle.reason!, throttle.retryAfterSeconds), 429), { code: OTP_THROTTLED_CODE, retryAfterSeconds: throttle.retryAfterSeconds });
 
 		await prisma.otpVerification.deleteMany({ where: { userId, type: OtpType.EMAIL, context: purposeWhere } });
-		const code = crypto.randomInt(100000, 1000000).toString();
+		const code = otpCodeFor(user.email, crypto.randomInt(100000, 1000000).toString());
 		await prisma.otpVerification.create({
 			data: { userId, code, type: OtpType.EMAIL, expiresAt: new Date(Date.now() + PAYPAL_EMAIL_CHANGE_EXPIRY_MS), context: { purpose: OtpPurpose.PAYPAL_EMAIL_CHANGE, newEmail } }
 		});

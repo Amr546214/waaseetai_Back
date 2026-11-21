@@ -1,4 +1,5 @@
 import { selfHireError } from '../utils/self-dealing';
+import { otpCodeFor } from '../utils/dev-login-otp-bypass';
 import { lockRequestRow } from './lock-order';
 import { assertOfferNotSuspended, assertRequestNotSuspended, assertNoAdminFreeze, lockAndAssertNotSuspended } from './admin-hold';
 import { buildEscrowSnapshotFromPolicy, ESCROW_FEE_POLICY_V2 } from '../utils/escrow-commission';
@@ -1677,7 +1678,7 @@ export class ClientRequestsService {
 		}
 
 		// Generate 6 digit OTP
-		const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+		const otpCode = otpCodeFor(user.email, Math.floor(100000 + Math.random() * 900000).toString());
 		const recentWhere = {
 			userId,
 			type: 'EMAIL' as const,

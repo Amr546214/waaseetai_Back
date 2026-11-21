@@ -1,4 +1,5 @@
 import { buildEscrowSnapshotFromPolicy } from '../utils/escrow-commission';
+import { otpCodeFor } from '../utils/dev-login-otp-bypass';
 import { feePolicyService } from './fee-policy.service';
 import { allocateOrderDiscount, splitByWeights, round2 } from '../utils/order-discount';
 import crypto from 'crypto';
@@ -364,7 +365,7 @@ export class CartCheckoutService {
     }
 
     const paymentReference = `PAY-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
-    const code = crypto.randomInt(100000, 999999).toString();
+    const code = otpCodeFor(order.user.email, crypto.randomInt(100000, 999999).toString());
     const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
     await prisma.otpVerification.deleteMany({ where: { userId, type: OtpType.EMAIL } });
     await prisma.otpVerification.create({ data: { userId, code, type: OtpType.EMAIL, expiresAt, context: this.paymentOtpContext(orderId, paymentReference, paymentMethod) } });
@@ -380,7 +381,7 @@ export class CartCheckoutService {
     if (!order || order.status !== OrderStatus.PENDING_PAYMENT) throw new AppError('الطلب لا ينتظر الدفع', 400);
     await this.assertOrderItemsPurchasable(prisma, userId, order.items);
     const context = previous.context as any;
-    const code = crypto.randomInt(100000, 999999).toString();
+    const code = otpCodeFor(order.user.email, crypto.randomInt(100000, 999999).toString());
     const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
     await prisma.otpVerification.update({ where: { id: previous.id }, data: { code, expiresAt, attempts: 0 } });
     if (process.env.NODE_ENV === 'development') console.info(`[DEV CHECKOUT OTP] ${order.user.email}: ${code}`);
