@@ -1,4 +1,5 @@
 import { getCatalogForCategoryParam } from './skills-catalog.service';
+import { otpCodeFor } from '../utils/dev-login-otp-bypass';
 import type {
 	ProviderBioSuggestDto,
 	ProviderBioEnhanceDto,
@@ -1381,7 +1382,7 @@ export class ProviderProfileService {
 				}
 			});
 
-			const code = crypto.randomInt(100000, 1000000).toString();
+			const code = otpCodeFor(user.email, crypto.randomInt(100000, 1000000).toString());
 			await prisma.otpVerification.create({
 				data: { userId: providerId, code, type: 'EMAIL', expiresAt: new Date(Date.now() + 10 * 60 * 1000), context: { purpose: OtpPurpose.SENSITIVE_CHANGE, requestId: request.id } }
 			});

@@ -1,4 +1,5 @@
 import { AmendmentRequesterRole, AmendmentStatus, AmendmentType, ContractStatus, OtpType } from '@prisma/client';
+import { otpCodeFor } from '../utils/dev-login-otp-bypass';
 import { prisma } from '../config/db';
 import crypto from 'crypto';
 import { AppError } from '../utils/app-error';
@@ -404,7 +405,7 @@ export class ProjectAmendmentService {
 
     const contractForTerms = await prisma.contract.findUnique({ where: { id: amendment.contractId }, select: { termsVersion: true, price: true, durationDays: true } });
     if (!contractForTerms) throw new AppError('العقد غير موجود', 404);
-    const code = crypto.randomInt(100000, 999999).toString();
+    const code = otpCodeFor(user.email, crypto.randomInt(100000, 999999).toString());
     const expiresAt = new Date(Date.now() + PAYMENT_OTP_TTL_MS);
     const previous = await this.findPaymentOtp(clientId, amendmentId);
     if (previous) await prisma.otpVerification.deleteMany({ where: { id: previous.id } });
