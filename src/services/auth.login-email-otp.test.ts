@@ -206,3 +206,42 @@ test('google login: a wrong code is refused and no session exists; a forgot-pass
 	await assert.rejects(() => auth.verifyLoginOtp({ userId: 'user-1', code: '123456' }, {}), (e: any) => e.statusCode === 400);
 	assert.equal(sessions.length, 0);
 });
+
+function withEnv(env: Record<string, string | undefined>) {
+	const saved: Record<string, string | undefined> = {};
+	for (const k of Object.keys(env)) { saved[k] = process.env[k]; if (env[k] === undefined) delete process.env[k]; else process.env[k] = env[k]; }
+	return () => { for (const k of Object.keys(saved)) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } };
+}
+
+test('DEV test account: with the dev flag and the address listed, the right password opens the session without any code', async (t) => {
+	const restore = withEnv({ SETUP_TEST_DEV_FALLBACK: 'true', DEV_LOGIN_OTP_BYPASS_EMAILS: 'amr@example.com' });
+	try {
+		const { rows, sent, sessions } = setup(t, await hashed());
+		const auth = await load();
+		const r: any = await auth.loginUser({ email: 'amr@example.com', password: PW }, {});
+		assert.equal(r.verified, true);
+		assert.ok(r.token);
+		assert.equal(sessions.length, 1);
+		assert.deepEqual([rows.length, sent.length], [0, 0]);
+	} finally { restore(); }
+});
+
+test('DEV test account: a wrong password still fails, and a listed address WITHOUT the dev flag still gets the code challenge', async (t) => {
+	let restore = withEnv({ SETUP_TEST_DEV_FALLBACK: 'true', DEV_LOGIN_OTP_BYPASS_EMAILS: 'amr@example.com' });
+	try {
+		setup(t, await hashed());
+		const auth = await load();
+		await assert.rejects(() => auth.loginUser({ email: 'amr@example.com', password: 'Wrong!Pass1' }, {}), (e: any) => e.statusCode === 401);
+	} finally { restore(); }
+});
+
+test('the official environment (no dev flag) never bypasses, even if the list variable is set', async (t) => {
+	const restore = withEnv({ SETUP_TEST_DEV_FALLBACK: undefined, DEV_LOGIN_OTP_BYPASS_EMAILS: 'amr@example.com' });
+	try {
+		const { rows, sessions } = setup(t, await hashed());
+		const auth = await load();
+		const r: any = await auth.loginUser({ email: 'amr@example.com', password: PW }, {});
+		assert.equal(r.loginOtpRequired, true); assert.equal(r.token, undefined);
+		assert.equal(sessions.length, 0); assert.equal(rows.length, 1);
+	} finally { restore(); }
+});

@@ -203,6 +203,12 @@ export class AuthController {
 			const input: LoginInput = req.body;
 			const result = await authService.loginUser(input, { ipAddress: req.ip, userAgent: req.get('user-agent') });
 
+			// Dev-only test account (utils/dev-login-otp-bypass): the service already opened the session.
+			if ('token' in result) {
+				res.status(200).json({ success: true, message: 'تم تسجيل الدخول بنجاح', data: result });
+				return;
+			}
+
 			// A password login never returns a session by itself: it answers with a challenge (activation code for an unverified account,
 			// LOGIN_EMAIL code for an active one). The session comes from POST /auth/login/verify-otp.
 			res.status(200).json({
