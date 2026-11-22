@@ -38,6 +38,8 @@ router.post('/:attemptId/events', requireExamEnvironment, apiLimiter, logAttempt
 router.post('/:attemptId/submit', requireExamEnvironment, aiLimiter, submitAssessmentController);
 
 // Assessment Attempt Status
-router.get('/:attemptId/status', getAttemptStatusController);
+// Status includes question text for an existing attempt, so it needs the same
+// environment proof as resume; ownership alone must not expose it outside SEB.
+router.get('/:attemptId/status', requireExamEnvironment, getAttemptStatusController);
 
 export default router;
