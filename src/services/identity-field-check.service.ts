@@ -185,13 +185,13 @@ export class IdentityFieldCheckService {
 		});
 	}
 
-	private async loadRegistered(userId: string, party: CheckParty): Promise<RegisteredSnapshot | null> {
+	private async loadRegistered(userId: string, party: CheckParty, db: typeof prisma = this.deps.db): Promise<RegisteredSnapshot | null> {
 		// ONLY the legal name (the name on the document) is compared. The display name (firstName/lastName) is never used, not even as a fallback for older accounts: they are asked for the legal name instead.
-		const user = await this.deps.db.user.findUnique({ where: { id: userId }, select: { legalName: true } });
+		const user = await db.user.findUnique({ where: { id: userId }, select: { legalName: true } });
 		if (!user) return null;
 		const p: any = party === 'CLIENT'
-			? await this.deps.db.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, frontIdUrl: true } })
-			: await this.deps.db.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, frontIdUrl: true } });
+			? await db.clientProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, frontIdUrl: true } })
+			: await db.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true, idDocumentType: true, dob: true, frontIdUrl: true } });
 		const fullName = cleanLegalName(user.legalName);
 		const document = p?.idIssuingCountry && p?.idDocumentType ? identityDocumentContext(p) : undefined;
 		const raw = String(p?.idNumber ?? '').trim();
@@ -200,6 +200,20 @@ export class IdentityFieldCheckService {
 			: normalizeDigits(raw.replace(/[۰-۹]/g, digit => String(digit.charCodeAt(0) & 15)));
 		if (!p || !fullName || !nationalId || !(p.dob instanceof Date) || Number.isNaN(p.dob.getTime()) || !p.frontIdUrl) return null;
 		return { fullName, birthDate: isoDate(p.dob), nationalId, imageRef: String(p.frontIdUrl), ...(document ? { document } : {}) };
+	}
+
+	/** Server-only progression evidence. A readable image is not a field match.
+	 * The result must belong to the latest check of exactly the CURRENT image/data.
+	 * No raw identity values are returned and no KYC state is changed here. */
+	async getCurrentMatch(userId: string, party: CheckParty, db: typeof prisma = this.deps.db): Promise<{ state: 'MATCHED' | 'CHECKING' | 'NEEDS_REVIEW' | 'NOT_CHECKED'; checkId?: string }> {
+		if (!this.deps.enabled()) return { state: 'NOT_CHECKED' };
+		const snap = await this.loadRegistered(userId, party, db);
+		if (!snap || !validDocumentNumber(snap.nationalId, snap.document) || !isPrivateRef(snap.imageRef)) return { state: 'NOT_CHECKED' };
+		const latest = await db.identityFieldCheck.findFirst({ where: { userId, party }, orderBy: { seq: 'desc' } });
+		if (!latest || latest.imageRefDigest !== sha256(snap.imageRef) || latest.dataDigest !== registeredDigest(snap)) return { state: 'NOT_CHECKED' };
+		if (latest.status === 'QUEUED' || latest.status === 'RUNNING') return { state: 'CHECKING', checkId: latest.id };
+		const fields = latest.status === 'DONE' ? sanitizeFieldResults(latest.fieldResults) : null;
+		return { state: fields && FIELD_NAMES.every(name => fields[name].status === 'MATCH') ? 'MATCHED' : 'NEEDS_REVIEW', checkId: latest.id };
 	}
 
 	/** Runs one QUEUED check. Claim is a conditional update (one runner wins); the result is written ONLY to this row while it is still RUNNING. */

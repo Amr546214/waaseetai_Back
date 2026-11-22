@@ -9,7 +9,8 @@ import { storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { publicKycRejectionReason } from '../utils/provider-kyc-review';
 import { notifyAdmins } from './admin-notifications.service';
 import { legalNameKey } from '../utils/legal-name';
-import { identityFieldCheckService } from './identity-field-check.service';
+import { logger } from '../config/logger';
+import { identityFieldCheckService, isIdentityAutoCheckEnabled } from './identity-field-check.service';
 import { assertDataUriFileAcceptable } from '../utils/provider-file-guard';
 import { waseetAiClient } from './ai/waseet-ai/waseet-ai.client';
 import { identityClaimService } from './identity-claim.service';
@@ -17,6 +18,7 @@ import { identityClaimService } from './identity-claim.service';
 /**
  * Identity gate (client + provider setup). The identity step is APPROVED only when the admin approved the CURRENT image AND the CURRENT identity data: the approval stores a
  * digest of both (identityApprovedDigest) and any later change cancels it. The status is derived from the existing KYC review state; nothing new is queued anywhere.
+ * Setup progression also opens on a completed current full field match (IDENTITY_AUTO_CHECK), without changing that KYC status or its review queue.
  */
 export type GateParty = 'CLIENT' | 'PROVIDER';
 export type GateStatus = 'NOT_SUBMITTED' | 'UNDER_REVIEW' | 'REJECTED' | 'APPROVED';
@@ -24,12 +26,14 @@ export interface IdentityGateState {
   status: GateStatus;
   rejectionReason: string | null;
   canAdvance: boolean;
+  /** Onboarding progression only. It never grants KYC approval. */
+  automaticCheck?: 'MATCHED' | 'CHECKING' | 'NEEDS_REVIEW' | 'NOT_CHECKED';
   submittedAt: string | null;
   missing: string[];
   data: { idNumber: string | null; idIssuingCountry: string | null; idDocumentType: string | null; dob: string | null; hasFront: boolean; hasBack: boolean };
 }
-export const IDENTITY_NOT_APPROVED_MESSAGE = 'وثيقة الهوية لم تُعتمد بعد؛ لا يمكن المتابعة قبل اعتماد صورة الهوية وبياناتها الحالية';
-export const IDENTITY_EVIDENCE_CHANGED_MESSAGE = 'لا يمكن تغيير صورة الهوية أو بياناتها ضمن الإرسال النهائي؛ احفظ التغيير من خطوة الهوية وانتظر اعتماده ثم أرسل';
+export const IDENTITY_NOT_APPROVED_MESSAGE = 'لم تكتمل مطابقة بيانات الهوية أو اعتمادها بعد؛ لا يمكن المتابعة قبل التحقق من الصورة والبيانات الحالية';
+export const IDENTITY_EVIDENCE_CHANGED_MESSAGE = 'لا يمكن تغيير صورة الهوية أو بياناتها ضمن الإرسال النهائي؛ احفظ التغيير من خطوة الهوية وانتظر اكتمال المطابقة أو المراجعة ثم أرسل';
 export const IDENTITY_CHANGED_MESSAGE = 'تغيّرت صورة الهوية أو بياناتها أثناء المراجعة؛ راجع المستند الحالي ثم أعد القرار';
 
 const day = (v: unknown): string | null => { if (!v) return null; const d = v instanceof Date ? v : new Date(String(v)); return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10); };
@@ -104,10 +108,24 @@ export class IdentityGateService {
       const n = await db.profileModificationRequest.count({ where: { providerId: userId, category: 'DOCUMENTS', fieldName: 'idDocumentUrl', status: 'PENDING_HUMAN_REVIEW' as any } });
       documentRequestWaiting = n > 0;
     }
-    return deriveGateState(p as any, { clientRejection, submittedAt, documentRequestWaiting });
+    const state = deriveGateState(p as any, { clientRejection, submittedAt, documentRequestWaiting });
+    if (state.status === 'UNDER_REVIEW' && isIdentityAutoCheckEnabled()) {
+      // This opens setup steps only. KYC status, approval digest and review queues stay unchanged.
+      try {
+        const match = await identityFieldCheckService.getCurrentMatch(userId, party, db);
+        state.automaticCheck = match.state;
+        state.canAdvance = state.missing.length === 0 && match.state === 'MATCHED';
+        // Old submissions and changed names/data also need a current check, not an admin page visit.
+        if (match.state === 'NOT_CHECKED' && db === prisma) identityFieldCheckService.triggerSafe(userId, party);
+      } catch (e) {
+        state.automaticCheck = 'NEEDS_REVIEW';
+        logger.warn(`[IdentityGate] automatic match unavailable party=${party} code=${(e as any)?.code ?? 'ERR'}`);
+      }
+    }
+    return state;
   }
 
-  /** 409 IDENTITY_NOT_APPROVED unless the CURRENT image + data are approved. */
+  /** Setup-only progression: current full field match OR existing manual approval. Never grants KYC status. */
   async assertApproved(userId: string, party: GateParty, db: any = prisma, opts: { allowUnderReview?: boolean } = {}): Promise<void> {
     const state = await this.getState(userId, party, db);
     if (state.canAdvance) return;
@@ -117,7 +135,7 @@ export class IdentityGateService {
   }
 
   /**
-   * Gate for a SUBMISSION (a request that carries steps after the identity step): the CURRENT evidence must be approved AND the request must not change it
+   * Gate for a SUBMISSION (a request that carries steps after the identity step): the CURRENT evidence must pass progression (field match or approval) AND the request must not change it
    * (a new image, a different reference, or different identity data). Evaluated BEFORE any write: a refused submission persists nothing and leaves the approval as it was.
    * Echoing the stored references / data unchanged is not a change.
    */
