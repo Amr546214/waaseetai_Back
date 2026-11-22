@@ -75,7 +75,8 @@ export class LegalNameService {
 				if (user.legalName && sameLegalName(check.value, user.legalName)) throw new AppError('لا توجد تغييرات للحفظ', 400);
 				await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`legalname:${userId}`}))`;
 				const existing = await tx.profileModificationRequest.findFirst({ where: { providerId: userId, category: LEGAL_NAME_CHANGE_REQUEST_CATEGORY, status: 'PENDING_HUMAN_REVIEW' }, select: { id: true } });
-				if (existing) throw new AppError('لديك طلب تعديل للاسم الحقيقي قيد المراجعة بالفعل', 409);
+				// a mistaken request must be fixable: a new request REPLACES the one still waiting (the old one is withdrawn in the same transaction)
+				if (existing) await tx.profileModificationRequest.updateMany({ where: { id: existing.id, status: 'PENDING_HUMAN_REVIEW' }, data: { status: 'CANCELLED' } });
 				const created = await tx.profileModificationRequest.create({
 					data: {
 						providerId: userId, category: LEGAL_NAME_CHANGE_REQUEST_CATEGORY, fieldName: 'LEGAL_NAME', fieldLabel: 'الاسم الحقيقي (كما في الهوية)',
@@ -99,6 +100,14 @@ export class LegalNameService {
 			return { outcome: 'SAVED', view: await this.getView(userId) };
 		}
 		return { outcome: 'UNCHANGED', view: await this.getView(userId) };
+	}
+
+	/** The owner withdraws the name-change request that still waits for review (e.g. a typo): the current name stays, a new request can be sent. */
+	async cancelPending(userId: string, context?: AuditContext) {
+		const claimed = await prisma.profileModificationRequest.updateMany({ where: { providerId: userId, category: LEGAL_NAME_CHANGE_REQUEST_CATEGORY, status: 'PENDING_HUMAN_REVIEW' }, data: { status: 'CANCELLED' } });
+		if (!claimed.count) throw new AppError('لا يوجد طلب تعديل للاسم قيد المراجعة', 404);
+		await accountAuditLogService.record({ userId, eventType: 'LEGAL_NAME_REQUEST_CANCELLED', category: 'PROFILE_COMPLETION', title: 'سحب طلب تعديل الاسم الحقيقي', summary: 'سحب المستخدم طلب تعديل الاسم الحقيقي قبل المراجعة', source: 'USER', status: 'COMPLETED', ...(context ? { context } : {}) } as any);
+		return { view: await this.getView(userId) };
 	}
 
 	/** Apply the identity evidence change inside the caller's transaction, after taking the shared profile locks. */

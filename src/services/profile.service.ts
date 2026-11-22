@@ -18,7 +18,7 @@ import { withoutLegacyProviderBankFields } from '../utils/provider-payout';
 import { marketerProfileService } from './marketer-profile.service';
 import { AFFILIATE_PROFILE_SAFE_SCALAR_SELECT } from '../utils/affiliate-profile-safe-select.util';
 import { withoutLegacyPayoutFields } from '../utils/client-payout-fields';
-import { CLIENT_IDENTITY_REQUEST_CATEGORY as CLIENT_IDENTITY_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY, CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY } from '../utils/profile-request-categories';
+import { CLIENT_IDENTITY_REQUEST_CATEGORY as CLIENT_IDENTITY_CATEGORY, CLIENT_BASIC_INFO_REQUEST_CATEGORY, CLIENT_PASSWORD_CHANGE_REQUEST_CATEGORY, LEGAL_NAME_CHANGE_REQUEST_CATEGORY } from '../utils/profile-request-categories';
 import bcrypt from 'bcrypt';
 import { profileChangeReviewService, withHonestAiReview } from './ai-features/profile-change-review.service';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
@@ -678,7 +678,7 @@ export class ProfileService {
    */
   public async getMyChangeRequests(userId: string) {
     const rows = await prisma.profileModificationRequest.findMany({
-      where: { providerId: userId, category: { startsWith: 'CLIENT_' } },
+      where: { providerId: userId, OR: [{ category: { startsWith: 'CLIENT_' } }, { category: LEGAL_NAME_CHANGE_REQUEST_CATEGORY }] },
       orderBy: { createdAt: 'desc' }
     });
     return rows.map(withHonestAiReview);
@@ -728,11 +728,11 @@ export class ProfileService {
   /** The client withdraws one of their own requests while it still waits for review. */
   public async cancelMyChangeRequest(userId: string, requestId: string) {
     const claimed = await prisma.profileModificationRequest.updateMany({
-      where: { id: requestId, providerId: userId, category: { startsWith: 'CLIENT_' }, status: 'PENDING_HUMAN_REVIEW' },
+      where: { id: requestId, providerId: userId, OR: [{ category: { startsWith: 'CLIENT_' } }, { category: LEGAL_NAME_CHANGE_REQUEST_CATEGORY }], status: 'PENDING_HUMAN_REVIEW' },
       data: { status: 'CANCELLED' }
     });
     if (!claimed.count) {
-      const exists = await prisma.profileModificationRequest.findFirst({ where: { id: requestId, providerId: userId, category: { startsWith: 'CLIENT_' } }, select: { status: true } });
+      const exists = await prisma.profileModificationRequest.findFirst({ where: { id: requestId, providerId: userId, OR: [{ category: { startsWith: 'CLIENT_' } }, { category: LEGAL_NAME_CHANGE_REQUEST_CATEGORY }] }, select: { status: true } });
       if (!exists) throw new AppError('الطلب غير موجود', 404);
       throw new AppError('لا يمكن سحب هذا الطلب لأنه لم يعد قيد المراجعة', 409);
     }

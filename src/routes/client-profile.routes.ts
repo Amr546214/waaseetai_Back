@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authenticate, requireActiveUser } from '../middlewares/auth.middleware';
 import { blockCompanySetup } from '../middlewares/company-unavailable.middleware';
 import { apiLimiter, aiLimiter } from '../middlewares/rate-limit.middleware';
-import { clientProfileController } from '../controllers/client-profile.controller';
+import { clientProfileController, suggestClientBio } from '../controllers/client-profile.controller';
 
 const router = Router();
 
@@ -15,6 +15,8 @@ router.get('/public/:id', apiLimiter, clientProfileController.getPublicProfile);
 // Protect all routes below
 router.use(authenticate, requireActiveUser);
 
+// the AI drafts the bio from what the user filled in (a real WaseetAI call: aiLimiter)
+router.post('/suggest-bio', aiLimiter, suggestClientBio);
 router.get('/setup', clientProfileController.getSetupData);
 router.get('/setup/identity', clientProfileController.getIdentityState);
 router.put('/setup/identity', blockCompanySetup, clientProfileController.saveIdentityStep);

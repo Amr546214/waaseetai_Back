@@ -422,6 +422,11 @@ export class WaseetAiClient {
     return this.postJson('/v1/ai/profile/bio', body, opts, (d) => isObject(d) && (typeof d.suggestedBio === 'string' || Array.isArray(d.options)));
   }
 
+  /** AI-17c — a service seeker's (individual or company) bio: drafted from what they filled in, or polished from their own draft. */
+  suggestClientBio(body: Record<string, unknown>, opts?: WaseetAiCallOptions): Promise<Record<string, unknown>> {
+    return this.postJson('/v1/ai/profile/client-bio', body, opts, (d) => isObject(d) && typeof d.suggestedBio === 'string' && d.suggestedBio.trim().length > 0);
+  }
+
   enhanceBio(body: ProfileBioEnhanceRequest, opts?: WaseetAiCallOptions): Promise<ProfileBioEnhanceResponse> {
     return this.postJson('/v1/ai/profile/bio/enhance', body, opts, (d) => isObject(d) && typeof d.suggestedBio === 'string' && d.suggestedBio.trim().length > 0);
   }
