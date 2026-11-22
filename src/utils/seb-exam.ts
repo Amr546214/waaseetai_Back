@@ -13,8 +13,11 @@ import type { IncomingMessage } from 'node:http';
  * The server holds the expected keys (EXAM_SEB_CONFIG_KEYS / EXAM_SEB_BROWSER_EXAM_KEYS, copied from the SEB Config Tool) and recomputes the hash for the URL it was asked for.
  * The User-Agent and any value a page sends are NOT trusted: only a matching hash counts.
  *
- * Platform reality (official docs): SEB's modern WebKit engine on macOS/iOS does NOT send the keys in HTTP headers (it exposes them to page JavaScript instead, hashed per PAGE url, not per
- * request: weaker and replayable). The settings template therefore turns the content filter on, which the docs say forces the classic engine that does send headers. That is unproven here.
+ * Modern WebKit does NOT send these headers. Its opt-in native JS handshake is
+ * implemented separately in seb-js-proof.ts: a fresh server-chosen document URL,
+ * single-use exchange, and a short-lived proof bound to the authenticated login.
+ * The legacy settings template below still selects the classic engine. A modern
+ * config instead needs browserWindowWebView=3 and URLFilterEnableContentFilter=false.
  *
  * Limits: a matching hash proves the request came from a SEB running the exam's settings; it does not prove the room is safe. Supported systems are those SEB supports.
  */
@@ -64,6 +67,10 @@ export function examEnvStatus(env: NodeJS.ProcessEnv = process.env): ExamEnvStat
 	if (mode === 'off') return { mode, ready: false, missing: [], ...tested };
 	const k = sebKeys(env); const missing: string[] = [];
 	if (k.browserExam.length + k.config.length === 0) missing.push('EXAM_SEB_BROWSER_EXAM_KEYS or EXAM_SEB_CONFIG_KEYS (64-hex keys from the SEB Config Tool)');
+	if (env.EXAM_SEB_JS_API_ENABLED === 'true') {
+		if (!k.browserExam.length) missing.push('EXAM_SEB_BROWSER_EXAM_KEYS (required for the modern JS API)');
+		if (!env.JWT_SECRET) missing.push('JWT_SECRET (required for the modern JS API challenge)');
+	}
 	if (!examPublicOrigin(env)) missing.push('EXAM_PUBLIC_ORIGIN (or FRONTEND_URL)');
 	const f = approvedSebConfig(env);
 	if (!f.ok) missing.push(f.reason === 'NOT_SET' ? 'EXAM_SEB_CONFIG_FILE (the .seb saved in the SEB Config Tool, the file the keys came from)' : f.reason === 'DIGEST_NOT_SET' ? 'EXAM_SEB_CONFIG_FILE_SHA256 (SHA-256 of that file)' : f.reason === 'UNREADABLE' ? 'EXAM_SEB_CONFIG_FILE is not readable' : 'EXAM_SEB_CONFIG_FILE does not match EXAM_SEB_CONFIG_FILE_SHA256 (not the approved file)');
