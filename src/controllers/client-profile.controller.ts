@@ -6,6 +6,7 @@ import { storeKycFileIfNeeded } from '../utils/cloudinary-storage';
 import { assertKycFileValues } from '../utils/kyc-value-guard';
 import { parsePaypalPayoutEmail } from '../dtos/profile.dto';
 import { logger } from '../config/logger';
+import { clientBioSuggestService, clientBioSuggestSchema } from '../services/client-bio-suggest.service';
 import { computeClientCompletion, computeClientMissingItems } from '../utils/completion-calculators';
 import { clientProfileService } from '../services/client-profile.service';
 import { AppError } from '../utils/app-error';
@@ -313,5 +314,15 @@ export class ClientProfileController {
     }
   }
 }
+
+/** POST /api/client/profile/suggest-bio — the AI drafts (or polishes) the bio from what the user filled in; nothing is saved here. */
+export const suggestClientBio = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ success: false, message: 'غير مصرح لك بالوصول' });
+    const input = clientBioSuggestSchema.safeParse(req.body ?? {});
+    if (!input.success) return res.status(400).json({ success: false, message: 'بيانات الاقتراح غير صالحة' });
+    res.json({ success: true, data: await clientBioSuggestService.suggest(req.user.id, input.data) });
+  } catch (error) { next(error); }
+};
 
 export const clientProfileController = new ClientProfileController();

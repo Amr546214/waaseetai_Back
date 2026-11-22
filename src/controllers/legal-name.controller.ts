@@ -14,3 +14,6 @@ export async function setMyLegalName(req: Request, res: Response, next: NextFunc
 		res.json({ success: true, message: r.outcome === 'REQUEST_CREATED' ? 'أُرسل طلب تعديل الاسم الحقيقي للمراجعة، وستُعاد مطابقة الهوية بعد القرار' : r.outcome === 'SAVED' ? 'تم حفظ الاسم الحقيقي' : 'لا توجد تغييرات للحفظ', data: r });
 	} catch (e) { next(e); }
 }
+export async function cancelMyLegalNameRequest(req: Request, res: Response, next: NextFunction) {
+	try { const r = await legalNameService.cancelPending(req.user!.id, ctx(req)); res.setHeader('Cache-Control', 'no-store'); res.json({ success: true, message: 'تم سحب طلب تعديل الاسم', data: r.view }); } catch (e) { next(e); }
+}
