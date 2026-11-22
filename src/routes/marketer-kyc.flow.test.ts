@@ -15,7 +15,7 @@ process.env.CLOUDINARY_API_SECRET = 'fake-secret-for-signing-only';
 
 const M1 = '11111111-1111-4111-8111-111111111111', M2 = '22222222-2222-4222-8222-222222222222', ADMIN = '99999999-9999-4999-8999-999999999999', CLIENT = '33333333-3333-4333-8333-333333333333', ADMIN_MARKETER = '88888888-8888-4888-8888-888888888888';
 const users: Record<string, any> = {
-	[M1]: { id: M1, email: 'm1@x.com', accountType: 'MARKETING_BROKER', status: 'ACTIVE', activeRole: 'AFFILIATE', roles: ['AFFILIATE'], firstName: 'م', lastName: 'واحد' },
+	[M1]: { id: M1, email: 'm1@x.com', accountType: 'MARKETING_BROKER', status: 'ACTIVE', activeRole: 'AFFILIATE', roles: ['AFFILIATE'], firstName: 'م', lastName: 'واحد', legalName: 'اسم خاص للهوية' },
 	[M2]: { id: M2, email: 'm2@x.com', accountType: 'MARKETING_BROKER', status: 'ACTIVE', activeRole: 'AFFILIATE', roles: ['AFFILIATE'], firstName: 'م', lastName: 'اثنان' },
 	[ADMIN]: { id: ADMIN, email: 'a@x.com', accountType: 'ADMIN', status: 'ACTIVE', activeRole: 'ADMIN', roles: ['ADMIN'] },
 	[CLIENT]: { id: CLIENT, email: 'c@x.com', accountType: 'CLIENT_INDIVIDUAL', status: 'ACTIVE', activeRole: 'CLIENT', roles: ['CLIENT'] },
@@ -115,6 +115,8 @@ test('an admin sees the pending request (reference scrubbed, access flag set) an
 	const list = await call(ADMIN, 'GET', '/admin/brokers/kyc-requests');
 	assert.equal(list.status, 200);
 	assert.deepEqual(list.body.data.items.map((i: any) => i.affiliateId).sort(), ['a1', 'a2']);
+	assert.equal(list.body.data.items.find((i: any) => i.userId === M1).legalName, 'اسم خاص للهوية');
+	assert.equal(list.body.data.items.find((i: any) => i.userId === M1).name, 'م واحد', 'public display name stays separate');
 	assert.equal(list.body.data.items[0].kycDocumentUrl, null);
 	assert.equal(list.body.data.items[0].kycDocumentUrlAccess.private, true);
 	assert.doesNotMatch(JSON.stringify(list.body), /private:/);

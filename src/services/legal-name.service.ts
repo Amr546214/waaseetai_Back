@@ -15,9 +15,9 @@ import { accountAuditLogService, AuditContext } from './account-logs.service';
  * The display name (firstName/lastName) is a different thing; changing it never touches this value and this value never changes it.
  *
  *  - never provided (older accounts, Google sign-ups)  -> status MISSING; verification asks for it
- *  - provided, identity not verified and not under review -> the owner may correct it directly (the identity check runs again)
- *  - identity VERIFIED or PENDING review                  -> a change is only a request (category LEGAL_NAME_CHANGE) that an admin decides; on approval the
- *                                                           name is replaced and the identity goes back to PENDING to be verified against the new name
+ * The owner saves this value directly in every identity state. Saving cancels old
+ * pending name-change requests and reruns identity matching. An approval for changed
+ * evidence is invalidated in the SAME transaction; there is no name-approval request.
  */
 export type LegalNameStatus = 'MISSING' | 'PROVIDED';
 export interface LegalNameView { status: LegalNameStatus; legalName: string | null; changeNeedsReview: boolean; pendingRequest: { id: string; requestedValue: string | null; createdAt: string } | null }
@@ -28,6 +28,7 @@ const lockProfiles = async (tx: Prisma.TransactionClient, userId: string) => {
 	// the SAME row locks an identity approval takes: a name change and an approval never interleave (lock order: client row, provider row, then users)
 	await tx.$queryRaw`SELECT 1 FROM client_profiles WHERE "userId" = ${userId} FOR UPDATE`;
 	await tx.$queryRaw`SELECT 1 FROM provider_profiles WHERE "userId" = ${userId} FOR UPDATE`;
+	await tx.$queryRaw`SELECT 1 FROM users WHERE id = ${userId} FOR UPDATE`;
 };
 async function identityState(userId: string, db: Prisma.TransactionClient | typeof prisma = prisma) {
 	const [client, provider] = await Promise.all([
@@ -37,72 +38,47 @@ async function identityState(userId: string, db: Prisma.TransactionClient | type
 	const statuses = [client?.kycStatus, provider?.kycStatus];
 	return { anyVerified: statuses.includes('VERIFIED'), anyVerifiedOrPending: statuses.some(s => s === 'VERIFIED' || s === 'PENDING'), hasClient: !!client, hasProvider: !!provider };
 }
-/**
- * When does a legal-name write need an admin? The name is evidence for an identity that has been (or is being) verified:
- *  - a name already on file: any VERIFIED or PENDING identity => request;
- *  - NO name on file (older account): a VERIFIED account is verified for the name it was verified under and must not gain a new, unreviewed name => request;
- *    a PENDING / UNVERIFIED / REJECTED one may add it directly (the review that is coming includes it, and approval requires it).
- */
-export const nameWriteNeedsReview = (currentName: string | null, s: { anyVerified: boolean; anyVerifiedOrPending: boolean }) => (currentName ? s.anyVerifiedOrPending : s.anyVerified);
-
 export class LegalNameService {
 	async getView(userId: string): Promise<LegalNameView> {
 		const user = await prisma.user.findUnique({ where: { id: userId }, select: { legalName: true } });
 		if (!user) throw new AppError('تعذر العثور على حساب المستخدم', 404);
-		const [state, pending] = await Promise.all([
-			identityState(userId),
-			prisma.profileModificationRequest.findFirst({ where: { providerId: userId, category: LEGAL_NAME_CHANGE_REQUEST_CATEGORY, status: 'PENDING_HUMAN_REVIEW' }, orderBy: { createdAt: 'desc' }, select: { id: true, requestedValue: true, createdAt: true } })
-		]);
+		const pending = await prisma.profileModificationRequest.findFirst({ where: { providerId: userId, category: LEGAL_NAME_CHANGE_REQUEST_CATEGORY, status: 'PENDING_HUMAN_REVIEW' }, orderBy: { createdAt: 'desc' }, select: { id: true, requestedValue: true, createdAt: true } });
 		return {
 			status: user.legalName ? 'PROVIDED' : 'MISSING',
 			legalName: user.legalName ?? null,
-			changeNeedsReview: nameWriteNeedsReview(user.legalName ?? null, state),
+			changeNeedsReview: false, // compatibility field: saving a legal name never creates an approval request
 			pendingRequest: pending ? { id: pending.id, requestedValue: pending.requestedValue, createdAt: pending.createdAt.toISOString() } : null
 		};
 	}
 
-	/** Sets the legal name of the signed-in user. Everything (state read, decision, write) happens under the profile row locks. */
-	async set(userId: string, raw: unknown, context?: AuditContext): Promise<{ outcome: 'SAVED' | 'UNCHANGED' | 'REQUEST_CREATED'; view: LegalNameView }> {
+	/** Direct owner save, serialised with identity approvals and legacy request decisions. */
+	async set(userId: string, raw: unknown, context?: AuditContext): Promise<{ outcome: 'SAVED' | 'UNCHANGED'; view: LegalNameView }> {
 		const check = checkLegalName(raw);
 		if (!check.ok) throw new AppError(check.message, 400, undefined, check.code);
 		const done = await prisma.$transaction(async (tx) => {
 			await lockProfiles(tx, userId);
 			const user = await tx.user.findUnique({ where: { id: userId }, select: { legalName: true } });
 			if (!user) throw new AppError('تعذر العثور على حساب المستخدم', 404);
-			if (user.legalName && check.value === user.legalName) return { kind: 'UNCHANGED' as const, previous: user.legalName, state: await identityState(userId, tx) };
-			const state = await identityState(userId, tx);
-			if (nameWriteNeedsReview(user.legalName ?? null, state)) {
-				if (user.legalName && sameLegalName(check.value, user.legalName)) throw new AppError('لا توجد تغييرات للحفظ', 400);
-				await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`legalname:${userId}`}))`;
-				const existing = await tx.profileModificationRequest.findFirst({ where: { providerId: userId, category: LEGAL_NAME_CHANGE_REQUEST_CATEGORY, status: 'PENDING_HUMAN_REVIEW' }, select: { id: true } });
-				// a mistaken request must be fixable: a new request REPLACES the one still waiting (the old one is withdrawn in the same transaction)
-				if (existing) await tx.profileModificationRequest.updateMany({ where: { id: existing.id, status: 'PENDING_HUMAN_REVIEW' }, data: { status: 'CANCELLED' } });
-				const created = await tx.profileModificationRequest.create({
-					data: {
-						providerId: userId, category: LEGAL_NAME_CHANGE_REQUEST_CATEGORY, fieldName: 'LEGAL_NAME', fieldLabel: 'الاسم الحقيقي (كما في الهوية)',
-						currentValue: user.legalName ?? null, requestedValue: check.value, status: 'PENDING_HUMAN_REVIEW', requiresOtp: false,
-						metadata: { changes: { legalName: check.value }, requiresHumanReview: true } as Prisma.InputJsonValue
-					},
-					select: { id: true }
-				});
-				return { kind: 'REQUEST' as const, requestId: created.id, previous: user.legalName, state };
-			}
-			await tx.user.update({ where: { id: userId }, data: { legalName: check.value } });
-			return { kind: 'SAVED' as const, previous: user.legalName, state };
-		});
-		if (done.kind === 'REQUEST') {
-			await accountAuditLogService.record({ userId, eventType: 'LEGAL_NAME_CHANGE_REQUESTED', category: 'PROFILE_COMPLETION', title: 'طلب تعديل الاسم الحقيقي', summary: 'أُرسل طلب تعديل الاسم الحقيقي للمراجعة؛ ستُعاد مطابقة الهوية بعد القرار', source: 'USER', severity: 'INFO', status: 'IN_REVIEW', requestId: done.requestId, context }).catch(e => logger.warn(`[LegalName] audit failed: ${(e as Error).message}`));
-			return { outcome: 'REQUEST_CREATED', view: await this.getView(userId) };
-		}
+			// Old requests are history only after this save. A delayed reviewer cannot
+			// overwrite the name the owner has just saved (reviewRequest takes these locks too).
+			await tx.profileModificationRequest.updateMany({ where: { providerId: userId, category: LEGAL_NAME_CHANGE_REQUEST_CATEGORY, status: 'PENDING_HUMAN_REVIEW' }, data: { status: 'CANCELLED' } });
+			if (check.value === user.legalName) return { kind: 'UNCHANGED' as const, state: await identityState(userId, tx) };
+			// Case/diacritic-only corrections have the same identity digest; keep their approval.
+			let state;
+			if (user.legalName && sameLegalName(check.value, user.legalName)) {
+				await tx.user.update({ where: { id: userId }, data: { legalName: check.value } });
+				state = await identityState(userId, tx);
+			} else state = await this.applyOn(tx, userId, { legalName: check.value });
+			return { kind: 'SAVED' as const, state };
+		}, { timeout: 20_000 });
 		if (done.kind === 'SAVED') {
 			for (const party of parties(done.state)) identityFieldCheckService.triggerSafe(userId, party);
-			await accountAuditLogService.record({ userId, eventType: 'LEGAL_NAME_SAVED', category: 'PROFILE_COMPLETION', title: 'الاسم الحقيقي', summary: done.previous ? 'عُدّل الاسم الحقيقي قبل اعتماد الهوية' : 'أُضيف الاسم الحقيقي لمطابقته مع وثيقة الهوية', source: 'USER', severity: 'INFO', context }).catch(e => logger.warn(`[LegalName] audit failed: ${(e as Error).message}`));
-			return { outcome: 'SAVED', view: await this.getView(userId) };
+			await accountAuditLogService.record({ userId, eventType: 'LEGAL_NAME_SAVED', category: 'PROFILE_COMPLETION', title: 'الاسم الحقيقي', summary: 'حُفظ الاسم الحقيقي مباشرة لتحديث مطابقته مع وثيقة الهوية', source: 'USER', severity: 'INFO', context }).catch(e => logger.warn(`[LegalName] audit failed: ${(e as Error).message}`));
 		}
-		return { outcome: 'UNCHANGED', view: await this.getView(userId) };
+		return { outcome: done.kind, view: await this.getView(userId) };
 	}
 
-	/** The owner withdraws the name-change request that still waits for review (e.g. a typo): the current name stays, a new request can be sent. */
+	/** The owner withdraws the name-change request that still waits for review (e.g. a typo): the current name stays. Kept for old clients during deployment. */
 	async cancelPending(userId: string, context?: AuditContext) {
 		const claimed = await prisma.profileModificationRequest.updateMany({ where: { providerId: userId, category: LEGAL_NAME_CHANGE_REQUEST_CATEGORY, status: 'PENDING_HUMAN_REVIEW' }, data: { status: 'CANCELLED' } });
 		if (!claimed.count) throw new AppError('لا يوجد طلب تعديل للاسم قيد المراجعة', 404);
@@ -110,7 +86,7 @@ export class LegalNameService {
 		return { view: await this.getView(userId) };
 	}
 
-	/** Apply the identity evidence change inside the caller's transaction, after taking the shared profile locks. */
+	/** Save changed identity evidence inside the caller's transaction, after taking the shared profile locks. */
 	private async applyOn(tx: Prisma.TransactionClient, userId: string, changes: Record<string, unknown>) {
 		const check = checkLegalName(changes.legalName);
 		if (!check.ok) throw new Error('INVALID_LEGAL_NAME');
@@ -125,7 +101,7 @@ export class LegalNameService {
 		return identityState(userId, tx);
 	}
 
-	/** Compatibility entry for internal callers; request decisions use reviewRequest so the decision commits with the evidence. */
+	/** Compatibility for legacy internal callers. New owner saves use set() directly. */
 	async applyApproved(userId: string, changes: Record<string, unknown>): Promise<void> {
 		const state = await prisma.$transaction(async tx => {
 			await lockProfiles(tx, userId);
