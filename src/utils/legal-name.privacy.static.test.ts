@@ -9,6 +9,7 @@ const ALLOWED = new Set([
 	'src/controllers/legal-name.controller.ts', 'src/services/identity-field-check.service.ts', 'src/utils/profile-request-categories.ts', 'src/services/provider-profile.service.ts',
 	'src/app.ts', 'src/routes/legal-name.routes.ts', // route mount only
 	'src/services/identity-gate.service.ts', 'src/services/onboarding.service.ts', // the reviewers' evidence (identity digest / admin review lists, permission-gated) and the approval that requires it
+	'src/services/marketer-kyc.service.ts', // private legal name in the authorized identity-review queue only
 	'src/services/identity-claim.service.ts', // duplicate-identity check called only by the reviewers approval transaction; never a public surface
 	'src/testing/identity-gate.test-double.ts' // test double only
 ]);

@@ -426,3 +426,18 @@ test('PG canonical name correction preserves approval while a changed name inval
   assert.equal(p.kycStatus, 'PENDING'); assert.equal(p.identityApprovedDigest, null); assert.equal(p.isVerified, false);
   assert.equal(c.kycStatus, 'PENDING'); assert.equal(c.identityApprovedDigest, null);
 });
+
+
+test('PG direct legal-name saves work for every account type, including marketer and staff, without touching public names', opts, async () => {
+  const { prisma } = await env(); const { legalNameService } = await import('./legal-name.service');
+  const cases = [ ['CLIENT_INDIVIDUAL', 'CLIENT'], ['CLIENT_COMPANY', 'CLIENT'], ['PROVIDER_INDIVIDUAL', 'PROVIDER'], ['PROVIDER_COMPANY', 'PROVIDER'], ['MARKETING_BROKER', 'AFFILIATE'], ['EMPLOYEE', 'ADMIN'], ['ADMIN', 'ADMIN'], ['SUPER_ADMIN', 'SUPER_ADMIN'] ] as const;
+  for (const [accountType, role] of cases) {
+    const uid = id(); await prisma.user.create({ data: { id: uid, accountType, roles: [role], activeRole: role, firstName: 'Public', lastName: 'Display', legalName: 'Old Legal Name', email: `roles-${uid}@pg.test` } });
+    if (role === 'AFFILIATE') await prisma.affiliateProfile.create({ data: { userId: uid } });
+    const r = await legalNameService.set(uid, 'New Legal Name');
+    assert.equal(r.outcome, 'SAVED', accountType); assert.equal(r.view.pendingRequest, null); assert.equal(r.view.changeNeedsReview, false);
+    const u = await prisma.user.findUniqueOrThrow({ where: { id: uid } });
+    assert.deepEqual([u.legalName, u.firstName, u.lastName], ['New Legal Name', 'Public', 'Display'], accountType);
+    assert.equal(await prisma.profileModificationRequest.count({ where: { providerId: uid, category: 'LEGAL_NAME_CHANGE' } }), 0);
+  }
+});

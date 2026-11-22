@@ -72,12 +72,12 @@ export class MarketerKycService {
 		const [items, total] = await Promise.all([
 			prisma.affiliateProfile.findMany({
 				where, orderBy: { updatedAt: 'asc' }, skip, take,
-				select: { id: true, userId: true, referralSlug: true, updatedAt: true, kycDocumentUrl: true, user: { select: { firstName: true, lastName: true, email: true } } }
+				select: { id: true, userId: true, referralSlug: true, updatedAt: true, kycDocumentUrl: true, user: { select: { firstName: true, lastName: true, email: true, legalName: true } } }
 			}),
 			prisma.affiliateProfile.count({ where })
 		]);
 		return {
-			items: items.map(i => ({ affiliateId: i.id, userId: i.userId, referralSlug: i.referralSlug, name: `${i.user?.firstName ?? ''} ${i.user?.lastName ?? ''}`.trim(), email: i.user?.email ?? null, submittedAt: i.updatedAt, kycDocumentUrl: i.kycDocumentUrl })),
+			items: items.map(i => ({ affiliateId: i.id, userId: i.userId, referralSlug: i.referralSlug, name: `${i.user?.firstName ?? ''} ${i.user?.lastName ?? ''}`.trim(), legalName: i.user?.legalName ?? null, email: i.user?.email ?? null, submittedAt: i.updatedAt, kycDocumentUrl: i.kycDocumentUrl })),
 			pagination: { page: Math.max(1, page), limit: take, total, totalPages: Math.max(1, Math.ceil(total / take)) }
 		};
 	}
