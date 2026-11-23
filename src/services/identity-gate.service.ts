@@ -28,6 +28,8 @@ export interface IdentityGateState {
   canAdvance: boolean;
   /** Onboarding progression only. It never grants KYC approval. */
   automaticCheck?: 'MATCHED' | 'CHECKING' | 'NEEDS_REVIEW' | 'NOT_CHECKED';
+  /** Inputs needed for automatic comparison; never a request to upload an existing document again. */
+  automaticCheckMissing?: string[];
   submittedAt: string | null;
   missing: string[];
   data: { idNumber: string | null; idIssuingCountry: string | null; idDocumentType: string | null; dob: string | null; hasFront: boolean; hasBack: boolean };
@@ -110,6 +112,8 @@ export class IdentityGateService {
     }
     const state = deriveGateState(p as any, { clientRejection, submittedAt, documentRequestWaiting });
     if (state.status === 'UNDER_REVIEW' && isIdentityAutoCheckEnabled()) {
+      const comparisonMissing = [...state.missing, ...(!p?.legalName?.trim() ? ['legalName'] : []), ...(!p?.dob ? ['dob'] : [])];
+      if (comparisonMissing.length) state.automaticCheckMissing = comparisonMissing;
       // This opens setup steps only. KYC status, approval digest and review queues stay unchanged.
       try {
         const match = await identityFieldCheckService.getCurrentMatch(userId, party, db);
