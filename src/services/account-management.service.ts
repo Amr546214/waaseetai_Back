@@ -463,7 +463,10 @@ export class AccountManagementService {
           yearsOfExperience: profileMetadata?.specExp ? parseInt(profileMetadata.specExp, 10) || 1 : 1
         });
       } else if (targetRole === UserRole.CLIENT) {
+        // an identity the administration already approved on the provider role is carried over (no second upload / review)
+        const inherited = await approvedIdentityFields(tx, user.id, 'CLIENT');
         await initializeRoleState(tx, user.id, UserRole.CLIENT, identity, {
+          ...inherited,
           companyName: profileMetadata?.coName || null,
           crNumber: profileMetadata?.coCrn || null,
           bio: profileMetadata?.portfolioBio || null
