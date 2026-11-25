@@ -543,7 +543,7 @@ export class ProviderProfileService {
 				sampleId: `${userId}:${input.kind}:${Date.now()}`,
 				title: (input.title || (input.kind === 'MODEL' ? 'نموذج عمل' : 'وثيقة إثبات ملكية')).slice(0, 200),
 				specialtyName: input.specialtyName,
-				description: input.kind === 'PROOF' ? 'وثيقة إثبات ملكية لنموذج عمل (للمراجعة فقط)' : '',
+				description: input.kind === 'PROOF' ? 'وثيقة إثبات ملكية لنموذج عمل (للمراجعة فقط): قد تكون لقطة شاشة من GitHub أو من حساب المزود أو أي وثيقة تثبت أنه صاحب العمل' : '',
 				technologiesUsed: [],
 				attachments: [input.file],
 			}, { actor: { userId, role: 'provider' }, timeoutMs: 45_000 });
@@ -553,6 +553,8 @@ export class ProviderProfileService {
 			const summary = String(feedback.summary ?? ev?.feedbackAr ?? '').replace(/\s*الاعتماد النهائي للمراجعة البشرية[^.]*\.?/g, '').trim();
 			const recs: string[] = Array.isArray(feedback.recommendations) ? feedback.recommendations.filter((x: unknown): x is string => typeof x === 'string').slice(0, 3) : [];
 			if (r?.inspected !== true || score === null) return unverified(summary || 'تعذّر قراءة الملف آليًا؛ ستراجعه الإدارة.');
+			// a proof of ownership (a GitHub screenshot, a repository page, a contract...) is never refused for its «quality score»: that score judges work samples. Once it is READ it passes and the administration decides on ownership.
+			if (input.kind === 'PROOF') return { verdict: 'PASS', score, summaryAr: summary || 'قرأ الذكاء الاصطناعي الوثيقة؛ ستراجع الإدارة ملكيتك للعمل.', recommendationsAr: recs };
 			return { verdict: score >= bar ? 'PASS' : 'FAIL', score, summaryAr: summary, recommendationsAr: recs };
 		} catch (error: any) {
 			logger.warn(`[ProviderProfileService] checkPortfolioFile failed: ${error?.code || error?.name || 'ERROR'}`);
