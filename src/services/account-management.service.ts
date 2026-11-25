@@ -472,7 +472,8 @@ export class AccountManagementService {
           bio: profileMetadata?.portfolioBio || null
         });
       } else if (targetRole === UserRole.AFFILIATE) {
-        await initializeRoleState(tx, user.id, UserRole.AFFILIATE, identity);
+        // an identity the administration already approved on the client / provider role is carried over (no second upload / review)
+        await initializeRoleState(tx, user.id, UserRole.AFFILIATE, identity, await approvedIdentityFields(tx, user.id, 'AFFILIATE'));
       }
 
       await tx.user.update({
