@@ -21,9 +21,15 @@ test('a provider identity is the source for a new client role (no verified flag 
   const f = await approvedIdentityFields(tx(null, VERIFIED), 'u', 'CLIENT');
   assert.equal(f.kycStatus, 'VERIFIED'); assert.equal('isVerified' in f, false);
 });
+test('a marketer role gets «verified» and the document reference from an approved client or provider identity, and nothing from an unapproved one', async () => {
+  assert.deepEqual(await approvedIdentityFields(tx(VERIFIED), 'u', 'AFFILIATE'), { identityVerified: true, kycDocumentUrl: 'private:front' });
+  assert.deepEqual(await approvedIdentityFields(tx(null, VERIFIED), 'u', 'AFFILIATE'), { identityVerified: true, kycDocumentUrl: 'private:front' });
+  assert.deepEqual(await approvedIdentityFields(tx({ ...VERIFIED, kycStatus: 'PENDING' }, { ...VERIFIED, kycStatus: 'REJECTED' }), 'u', 'AFFILIATE'), {});
+});
 test('wiring: adding the provider role seeds the profile with the carried identity', () => {
   const src = readFileSync('src/services/account-management.service.ts', 'utf8');
   assert.match(src, /approvedIdentityFields\(tx, user\.id, 'PROVIDER'\)/);
   assert.match(src, /approvedIdentityFields\(tx, user\.id, 'CLIENT'\)/);
+  assert.match(src, /approvedIdentityFields\(tx, user\.id, 'AFFILIATE'\)/);
   assert.match(src, /\.\.\.inherited,/);
 });
