@@ -45,3 +45,15 @@ test('saveIdentity refuses a duplicate identity BEFORE any file is stored (flag 
     assert.deepEqual(stored, [], 'nothing was stored for the refused submission');
   } finally { delete process.env.IDENTITY_UNIQUE_ENFORCEMENT; mock.reset(); }
 });
+
+test('wiring: both approvals sweep other waiting accounts holding the same identity, after the commit', () => {
+  const onboarding = src('onboarding.service.ts');
+  const approveClient = onboarding.slice(onboarding.indexOf('async approveOnboarding('), onboarding.indexOf('async rejectPendingDuplicates(') > 0 ? onboarding.indexOf('async rejectPendingDuplicates(') : onboarding.indexOf('async rejectOnboarding('));
+  assert.match(approveClient, /rejectPendingDuplicates\(item\.userId/);
+  const approveProvider = onboarding.slice(onboarding.indexOf('async approveProviderKyc('), onboarding.indexOf('async rejectProviderKyc('));
+  assert.match(approveProvider, /rejectPendingDuplicates\(userId/);
+  const sweep = onboarding.slice(onboarding.indexOf('async rejectPendingDuplicates('), onboarding.indexOf('async rejectOnboarding('));
+  assert.match(sweep, /identityUniqueEnforced\(\)/);
+  assert.match(sweep, /IDENTITY_ALREADY_REGISTERED_MESSAGE/);
+  assert.match(sweep, /rejectOnboarding\(/); assert.match(sweep, /rejectProviderKyc\(/);
+});

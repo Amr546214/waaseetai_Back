@@ -8,7 +8,7 @@ import { providerNotifications } from './provider-notifications.service';
 import { lockProviderProfile } from '../utils/provider-profile-lock';
 import { logger } from '../config/logger';
 import { identityGateService, identityDigest, legalNameOf } from './identity-gate.service';
-import { identityClaimService } from './identity-claim.service';
+import { identityClaimService, identityClaimDigest, identityUniqueEnforced, IDENTITY_ALREADY_REGISTERED_MESSAGE } from './identity-claim.service';
 import { LEGAL_NAME_REQUIRED_FOR_APPROVAL } from '../utils/legal-name';
 import { clientNotifications, clientNotificationFor } from './client-notifications.service';
 
@@ -159,7 +159,30 @@ export class OnboardingService {
       return tx.clientOnboarding.findUnique({ where: { id } });
     });
     await clientNotifications.send(clientNotificationFor.kycDecided({ clientId: item.userId, decision: 'APPROVED' }));
+    await this.rejectPendingDuplicates(item.userId, await prisma.clientProfile.findUnique({ where: { userId: item.userId }, select: { idNumber: true, idIssuingCountry: true } }));
     return updated;
+  }
+
+  /**
+   * The identity was just claimed by an approval: every OTHER account still waiting with the same identity (issuing country + number) is returned automatically
+   * with the «registered with another account» reason and its owner is notified, so it never reaches an administrator who would only hit the conflict at approval.
+   * After the decision's commit; a failure here is logged and never undoes the approval.
+   */
+  async rejectPendingDuplicates(approvedUserId: string, evidence: { idNumber?: string | null; idIssuingCountry?: string | null } | null): Promise<void> {
+    if (!identityUniqueEnforced()) return;
+    const digest = identityClaimDigest(evidence);
+    if (!digest) return;
+    const input = { rejectionReason: IDENTITY_ALREADY_REGISTERED_MESSAGE } as RejectOnboardingInput;
+    try {
+      const where = { kycStatus: KYCStatus.PENDING, userId: { not: approvedUserId }, idNumber: { not: null } } as const;
+      const select = { userId: true, idNumber: true, idIssuingCountry: true } as const;
+      const [clients, providers] = await Promise.all([prisma.clientProfile.findMany({ where, select }), prisma.providerProfile.findMany({ where, select })]);
+      for (const c of clients.filter(row => identityClaimDigest(row) === digest)) {
+        const onboarding = await prisma.clientOnboarding.findUnique({ where: { userId: c.userId }, select: { id: true, status: true } });
+        if (onboarding?.status === OnboardingStatus.PENDING) await this.rejectOnboarding(onboarding.id, input).catch((e) => logger.error('[Onboarding] duplicate-identity auto reject failed (client)', e));
+      }
+      for (const p of providers.filter(row => identityClaimDigest(row) === digest)) await this.rejectProviderKyc(p.userId, input).catch((e) => logger.error('[Onboarding] duplicate-identity auto reject failed (provider)', e));
+    } catch (error) { logger.error('[Onboarding] duplicate-identity sweep failed (the approval stands)', error); }
   }
 
   async rejectOnboarding(id: string, input: RejectOnboardingInput, actor?: AdminActor) {
@@ -235,6 +258,7 @@ export class OnboardingService {
     });
     // after the commit: a failed notification never undoes the decision
     await providerNotifications.kycDecided({ providerId: userId, decision: 'APPROVED' }).catch((error) => logger.error('[Onboarding] KYC approval notification failed (the decision stands)', error));
+    await this.rejectPendingDuplicates(userId, await prisma.providerProfile.findUnique({ where: { userId }, select: { idNumber: true, idIssuingCountry: true } }));
     return updated;
   }
   async rejectProviderKyc(userId: string, input: RejectOnboardingInput, actor?: AdminActor) {
