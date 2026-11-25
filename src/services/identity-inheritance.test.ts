@@ -24,5 +24,6 @@ test('a provider identity is the source for a new client role (no verified flag 
 test('wiring: adding the provider role seeds the profile with the carried identity', () => {
   const src = readFileSync('src/services/account-management.service.ts', 'utf8');
   assert.match(src, /approvedIdentityFields\(tx, user\.id, 'PROVIDER'\)/);
+  assert.match(src, /approvedIdentityFields\(tx, user\.id, 'CLIENT'\)/);
   assert.match(src, /\.\.\.inherited,/);
 });
