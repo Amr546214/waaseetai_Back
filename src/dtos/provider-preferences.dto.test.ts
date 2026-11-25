@@ -7,5 +7,6 @@ test('provider preferences schema', () => {
   assert.ok(!s.safeParse({}).success);
   assert.ok(!s.safeParse({ preferredCommunicationLanguage: 'fr' }).success);
   assert.ok(!s.safeParse({ timezone: 'Mars/Base' }).success);
+  assert.ok(s.safeParse({ timezone: 'Asia/Qatar' }).success && s.safeParse({ timezone: 'America/Toronto' }).success);
   assert.ok(!s.safeParse({ notifChannels: ['sms'] }).success);
 });
