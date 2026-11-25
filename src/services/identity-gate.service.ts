@@ -144,7 +144,7 @@ export class IdentityGateService {
    * Echoing the stored references / data unchanged is not a change.
    */
   async assertApprovedForSubmission(userId: string, party: GateParty, incoming: { idNumber?: unknown; idIssuingCountry?: unknown; idDocumentType?: unknown; dob?: unknown; frontId?: unknown; backId?: unknown }, db: any = prisma): Promise<void> {
-    await this.assertApproved(userId, party, db, { allowUnderReview: party === 'PROVIDER' });
+    await this.assertApproved(userId, party, db, { allowUnderReview: true });
     const stored = await model(db, party).findUnique({ where: { userId }, select: SELECT });
     const differs = (value: unknown, current: string | null | undefined) => typeof value === 'string' && value.trim() !== '' && value !== current;
     const changed = identitySubmissionChanged(stored, incoming, { front: differs(incoming.frontId, stored?.frontIdUrl), back: differs(incoming.backId, stored?.backIdUrl) });
