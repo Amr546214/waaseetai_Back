@@ -181,6 +181,13 @@ test('portfolio file check: a proof of ownership passes at a score where a work 
   assert.equal((await x.service.checkPortfolioFile('p', input('PROOF'))).verdict, 'PASS');
 });
 
+test('portfolio file check: a proof of ownership read by the AI is never refused for a low score (a GitHub screenshot)', async t => {
+  const x = await load(t, { review: review(10) });
+  const r = await x.service.checkPortfolioFile('p', input('PROOF'));
+  assert.equal(r.verdict, 'PASS'); assert.equal(r.score, 10);
+  assert.match(String(x.sent[0].description), /GitHub/);
+});
+
 test('portfolio file check: the same score fails as a work sample', async t => {
   const x = await load(t, { review: review(45) });
   assert.equal((await x.service.checkPortfolioFile('p', input('MODEL'))).verdict, 'FAIL');
