@@ -97,6 +97,8 @@ const assertBlocked = async (w: W, expected: string) => {
 	const { call } = await env();
 	for (const [label, m, url, body] of blocked(w)) {
 		const r = await call(m, url, w.owner.id, body);
+		// the client's final submit (details + agreements) is accepted while the document is under review; the later single steps stay closed
+		if (w.party === 'CLIENT' && expected === 'UNDER_REVIEW' && label === 'final') { assert.notEqual(r.json?.code, 'IDENTITY_NOT_APPROVED', `final must not be gated while under review: ${JSON.stringify(r.json)}`); continue; }
 		assert.equal(r.status, 409, `${label}: ${JSON.stringify(r.json)}`);
 		assert.equal(r.json.code, 'IDENTITY_NOT_APPROVED', label);
 		assert.equal(r.json.errors[0].status, expected, label);

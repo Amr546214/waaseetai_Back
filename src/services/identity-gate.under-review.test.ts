@@ -17,11 +17,12 @@ test('assertApproved: under review passes only when allowUnderReview is set; not
   await assert.rejects(() => identityGateService.assertApproved('u', 'PROVIDER', db(row({ kycStatus: 'REJECTED' })), { allowUnderReview: true }), (e: any) => e.statusCode === 409);
 });
 
-test('assertApprovedForSubmission: a provider under review passes, a client under review does not; changing the evidence is still refused', async t => {
+test('assertApprovedForSubmission: a provider and a client under review pass (the client registration is sent while the review is pending); changing the evidence is still refused', async t => {
   t.mock.module('../config/db', { namedExports: { prisma: {} } });
   t.mock.module('../config/logger', { namedExports: { logger: { info() {}, warn() {}, error() {}, debug() {} } } });
   const { identityGateService } = await import(`./identity-gate.service.ts?fixture=${Date.now()}b`);
   await identityGateService.assertApprovedForSubmission('u', 'PROVIDER', {}, db(row()));
-  await assert.rejects(() => identityGateService.assertApprovedForSubmission('u', 'CLIENT', {}, db(row())), (e: any) => e.statusCode === 409);
+  await identityGateService.assertApprovedForSubmission('u', 'CLIENT', {}, db(row()));
+  await assert.rejects(() => identityGateService.assertApprovedForSubmission('u', 'CLIENT', {}, db(row({ frontIdUrl: null }))), (e: any) => e.statusCode === 409); // not submitted: still refused
   await assert.rejects(() => identityGateService.assertApprovedForSubmission('u', 'PROVIDER', { idNumber: '30408012203269' }, db(row())), (e: any) => e.statusCode === 409);
 });
