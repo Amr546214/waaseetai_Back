@@ -1,3 +1,4 @@
+import { approvedIdentityFields } from './identity-inheritance';
 import { presentedIdentity, isAdminAccountType } from '../utils/admin-identity';
 import { issueAccessToken } from '../utils/access-token';
 import jwt from 'jsonwebtoken';
@@ -452,7 +453,10 @@ export class AccountManagementService {
       // metadata field names (coName/specMain/portfolioBio/specExp) — mapped
       // to Prisma column names here, exactly as this function already did.
       if (targetRole === UserRole.PROVIDER) {
+        // an identity the administration already approved on the client role is carried over (no second upload / review)
+        const inherited = await approvedIdentityFields(tx, user.id, 'PROVIDER');
         await initializeRoleState(tx, user.id, UserRole.PROVIDER, identity, {
+          ...inherited,
           companyName: profileMetadata?.coName || null,
           headline: profileMetadata?.specMain || 'مقدم خدمة',
           bio: profileMetadata?.portfolioBio || null,
