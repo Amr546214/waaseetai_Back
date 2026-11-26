@@ -4,6 +4,8 @@ import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
 import { decryptPaymentDetails, encryptPaymentDetails, hashPaymentState, maskedEmail, PaymentRole, paymentContext, paymentEncryptionReady, paymentEnvironment, paypalConnectConfig, rajhiMethodSchema } from '../utils/payment-methods';
 import { paypalEmailChangeService } from './paypal-email-change.service';
+import { computeAffiliateCompletion, computeClientCompletion } from '../utils/completion-calculators';
+import { marketerNotifications } from './marketer-notifications.service';
 
 type Actor = { userId: string; role: PaymentRole; sessionId: string };
 type PaypalDetails = { email: string; subject: string | null; userId: string | null; emailVerified: boolean | null; accountVerified: boolean | null; connectedAt: string };
@@ -151,12 +153,20 @@ export class PaymentMethodsService {
       const data = await paypalEmailChangeService.requestChange(a.userId, d.email, ip);
       return { otpRequired: true, ...data };
     }
+    let changed = false;
     await this.db.$transaction(async tx => {
       await this.lock(a, tx);
-      if (a.role === 'CLIENT') await tx.clientProfile.update({ where: { userId: a.userId }, data: { paypalPayoutEmail: d.email } });
-      else await tx.affiliateProfile.update({ where: { userId: a.userId }, data: { paypalPayoutEmail: d.email } });
+      changed = await this.currentEmail(a, tx) !== d.email;
+      if (a.role === 'CLIENT') {
+        const profile = await tx.clientProfile.update({ where: { userId: a.userId }, data: { paypalPayoutEmail: d.email, paymentType: 'paypal' }, include: { user: true } });
+        await tx.clientProfile.update({ where: { userId: a.userId }, data: { completionPercentage: computeClientCompletion({ user: profile.user, clientProfile: profile }) } });
+      } else {
+        const profile = await tx.affiliateProfile.update({ where: { userId: a.userId }, data: { paypalPayoutEmail: d.email }, include: { user: true, marketingChannels: true } });
+        await tx.affiliateProfile.update({ where: { userId: a.userId }, data: { completionPercentage: computeAffiliateCompletion({ user: profile.user, affiliateProfile: profile, marketingChannelsCount: profile.marketingChannels.length }) } });
+      }
       await this.audit(a, tx, 'PAYMENT_METHOD_PAYPAL_ACTIVATED');
     });
+    if (a.role === 'AFFILIATE' && changed) await marketerNotifications.paypalEmailChanged(a.userId, false);
     return { otpRequired: false, ...(await this.list(a)) };
   }
   async confirm(a: Actor, id: string, code: string) {

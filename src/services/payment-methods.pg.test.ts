@@ -16,9 +16,11 @@ test('PG: real migration, encrypted storage, role/owner isolation, OAuth one-use
   const { PaymentMethodsService } = await import('./payment-methods.service');
   const { notificationService } = await import('./notification.service');
   const { providerNotifications } = await import('./provider-notifications.service');
+  const { marketerNotifications } = await import('./marketer-notifications.service');
   const { paypalEmailChangeService } = await import('./paypal-email-change.service');
   t.mock.method(notificationService, 'sendPaypalEmailChangeOtpEmail', async () => undefined);
   t.mock.method(providerNotifications, 'paypalEmailChanged', async () => undefined);
+  const marketerNotice = t.mock.method(marketerNotifications, 'paypalEmailChanged', async () => undefined);
   const uid = randomUUID(), otherId = randomUUID();
   for (const id of [uid, otherId]) await prisma.user.create({ data: { id, accountType: 'PROVIDER_INDIVIDUAL', activeRole: 'PROVIDER', roles: ['CLIENT', 'PROVIDER', 'AFFILIATE'], status: 'ACTIVE', email: `${id}@payment.test`, firstName: 'Synthetic', lastName: 'Owner' } });
   t.after(async () => { await prisma.user.deleteMany({ where: { id: { in: [uid, otherId] } } }); });
@@ -94,6 +96,10 @@ test('PG: real migration, encrypted storage, role/owner isolation, OAuth one-use
       await service.activate(actor, method.id);
       assert.equal((await service.list(actor)).methods[0]!.status, 'CONNECTED');
     }
+    assert.equal((await prisma.clientProfile.findUniqueOrThrow({ where: { userId: uid } })).paymentType, 'paypal');
+    assert.ok((await prisma.clientProfile.findUniqueOrThrow({ where: { userId: uid } })).completionPercentage > 0);
+    assert.ok((await prisma.affiliateProfile.findUniqueOrThrow({ where: { userId: uid } })).completionPercentage > 0);
+    assert.equal(marketerNotice.mock.callCount(), 1);
     emailVerified = null;
     await service.complete(client, 'code', stateOf(await service.start(client)));
     const method = (await service.list(client)).methods[0]!;
