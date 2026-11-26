@@ -159,13 +159,13 @@ export async function verifyStoredProofRef(db: Db, input: { userId: string; prov
  * owned proof documents, VERIFIED through verifyStoredProofRef (existence in storage, ownership, registry state). Documents the user already has as COMPLETED
  * uploads of this request (an edit) count too, each re-verified against storage. Anything else named is refused. This runs BEFORE any write.
  */
-export async function assertLegacySpecialtyProofs(db: Db, input: { userId: string; providerSpecialtyId: string; proofRefs: unknown[] }) {
+export async function assertLegacySpecialtyProofs(db: Db, input: { userId: string; providerSpecialtyId: string; proofRefs: unknown[]; /** proofs given as links (https): they count toward the minimum like a file */ proofLinkCount?: number }) {
 	const refs = [...new Set(input.proofRefs.filter((r): r is string => typeof r === 'string' && r.length > 0))];
 	const base = { userId: input.userId, providerSpecialtyId: input.providerSpecialtyId };
 	for (const ref of refs) {
 		if (!(await verifyStoredProofRef(db, { ...base, ref }))) throw fieldError('files', UNVERIFIED_MESSAGE);
 	}
-	if (refs.length >= PROOF_MIN_FILES) return { fresh: refs.length, existing: 0 };
+	if (refs.length + (input.proofLinkCount ?? 0) >= PROOF_MIN_FILES) return { fresh: refs.length, existing: 0 };
 	const ps = await db.providerSpecialty.findFirst({ where: { OR: [{ id: input.providerSpecialtyId }, { specialtyId: input.providerSpecialtyId }], providerProfile: { userId: input.userId } }, select: { id: true } });
 	const rows = ps ? await db.accreditationProofUpload.findMany({ where: { userId: input.userId, providerSpecialtyId: ps.id, status: ProofUploadStatus.COMPLETED }, select: { privateRef: true } }) : [];
 	let existing = 0;

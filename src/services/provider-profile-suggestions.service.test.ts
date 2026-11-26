@@ -232,3 +232,14 @@ test('certificate check: an AI failure is a 503 (never a refusal)', async t => {
   const x = await load(t, { error: new Error('down') });
   await assert.rejects(() => x.service.verifyCertificate('p', { image: 'data:image/png;base64,' + 'A'.repeat(40), imageMimeType: 'image/png' }), (e: any) => e.statusCode === 503);
 });
+
+test('portfolio file check: an https link is read by the AI service itself (sent as the attachment); an unsafe link is UNVERIFIED and never sent', async t => {
+  const x = await load(t, { review: review(70) });
+  const ok = await x.service.checkPortfolioFile('p', { kind: 'PROOF', specialtyName: 'برمجة', mimeType: 'text/uri-list', file: 'https://github.com/user/repo' });
+  assert.equal(ok.verdict, 'PASS'); assert.deepEqual(x.sent[0].attachments, ['https://github.com/user/repo']);
+  const before = x.sent.length;
+  for (const bad of ['http://github.com/user/repo', 'https://user:pw@github.com/x', 'https://localhost/x']) {
+    assert.equal((await x.service.checkPortfolioFile('p', { kind: 'MODEL', specialtyName: 'برمجة', mimeType: 'text/uri-list', file: bad })).verdict, 'UNVERIFIED', bad);
+  }
+  assert.equal(x.sent.length, before);
+});
