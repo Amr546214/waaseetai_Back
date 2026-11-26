@@ -7,6 +7,9 @@ import { AppError, fieldError } from '../utils/app-error';
 import { AdminActor, adminAuditData } from './admin-audit';
 import { PROVIDER_LEVELS, levelColor } from '../config/levels.config';
 import { notificationService } from './notification.service';
+import { deleteFolderTree } from '../utils/cloudinary-storage';
+import { hashEmail } from '../repositories/registration-proof.repository';
+import { logger } from '../config/logger';
 import { PROVIDER_ROUTES } from './provider-notifications.service';
 import { CLIENT_ROUTES } from './client-notifications.service';
 import { NotificationCategory } from '@prisma/client';
@@ -685,42 +688,45 @@ export class AdminUsersService {
     const target = await prisma.user.findUnique({ where: { id }, select: { id: true, accountType: true, status: true } });
     if (!target) throw new AppError('المستخدم غير موجود', 404);
     if (ADMIN_TYPES.includes(target.accountType)) throw new AppError('لا يمكن حذف حساب إداري من هنا', 403);
-    return await prisma.$transaction(async (tx) => {
+    // Everything that belongs to this id is collected BEFORE the rows disappear (the stored-file folders and the e-mail the registration leftovers are keyed by).
+    const [identity, specialties, ownedProjects] = await Promise.all([
+      prisma.user.findUnique({ where: { id }, select: { email: true } }),
+      prisma.providerSpecialty.findMany({ where: { providerProfile: { userId: id } }, select: { id: true } }).catch(() => []),
+      prisma.project.findMany({ where: { clientId: id }, select: { id: true } }).catch(() => []),
+    ]);
+    const deletedUser = await prisma.$transaction(async (tx) => {
       // 1. Unassign provider from any projects to prevent constraint errors
-      await tx.project.updateMany({
-        where: { providerId: id },
-        data: { providerId: null }
-      });
-
-      // 2. Delete messages sent by the user
-      await tx.message.deleteMany({
-        where: { senderId: id }
-      });
-
-      // 3. Delete conversations where user is client or provider
-      await tx.conversation.deleteMany({
-        where: { OR: [{ clientId: id }, { providerId: id }] }
-      });
-
-      // 4. Delete contracts where user is client or provider
-      await tx.contract.deleteMany({
-        where: { OR: [{ clientId: id }, { providerId: id }] }
-      });
-
-      // 5. Finally, delete the user (other relations like profile, projects, etc. have cascade enabled)
-      const deletedUser = await tx.user.delete({
-        where: { id }
-      });
-
+      await tx.project.updateMany({ where: { providerId: id }, data: { providerId: null } });
+      // 2. Rows that would block the deletion (restricted references) go first
+      await tx.message.deleteMany({ where: { senderId: id } });
+      await tx.conversation.deleteMany({ where: { OR: [{ clientId: id }, { providerId: id }] } });
+      await tx.contract.deleteMany({ where: { OR: [{ clientId: id }, { providerId: id }] } });
+      await tx.projectAmendment.deleteMany({ where: { OR: [{ clientId: id }, { providerId: id }, { requestedById: id }] } });
+      await tx.couponRedemption.deleteMany({ where: { userId: id } });
+      await tx.specialOfferRedemption.deleteMany({ where: { userId: id } });
+      // 3. The user: profiles, identity claims, payment methods, wallet and withdrawal history, orders, notifications, sessions, tickets... go with it (cascade)
+      const deleted = await tx.user.delete({ where: { id } });
+      // 4. E-mail keyed leftovers, so a new registration with the same address starts from nothing
+      if (identity?.email) {
+        const email = identity.email.trim().toLowerCase();
+        await tx.newsletterSubscriber.deleteMany({ where: { email } }).catch(() => undefined);
+        await tx.registrationEmailProof.deleteMany({ where: { emailHash: { in: [hashEmail(identity.email), hashEmail(email)] } } }).catch(() => undefined);
+      }
       if (actor) {
         await tx.accountAuditLog.create({ data: adminAuditData({
           actor, userId: actor.id, category: LogCategory.SECURITY_CHANGE, eventType: 'USER_DELETED_BY_ADMIN', title: 'حذف حساب مستخدم نهائياً',
           summary: `حذف المدير العام الحساب ${id} نهائياً`, severity: 'CRITICAL', before: { accountType: target.accountType, status: target.status }, details: { deletedUserId: id }
         }) });
       }
-
-      return deletedUser;
+      return deleted;
     });
+    // After the commit: every stored file of this account (identity pictures, avatar, portfolio, proofs, chat files, deliveries of its own projects). A storage failure never undoes the deletion.
+    const prefixes = [`waseetai/clients/${id}`, `waseetai/providers/${id}`, `waseetai/users/${id}`, `waseetai/marketers/${id}`, `waseetai/accreditation/${id}`, `waseetai/chat/${id}`,
+      ...specialties.map(row => `waseetai/specialties/${row.id}`), ...ownedProjects.map(row => `waseetai/deliveries/${row.id}`)];
+    let filesRemoved = 0;
+    for (const prefix of prefixes) { try { filesRemoved += await deleteFolderTree(prefix); } catch (error) { logger.warn(`[AdminUsers] file cleanup failed for a folder of a deleted account: ${(error as Error)?.message ?? error}`); } }
+    logger.info(`[AdminUsers] account ${id} deleted; stored files removed: ${filesRemoved}`);
+    return deletedUser;
   }
 
   async exportCsv(params: GetUsersQueryParams): Promise<string> {

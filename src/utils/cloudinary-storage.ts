@@ -202,6 +202,26 @@ export async function deleteCloudFile(publicId: string, resourceType: Cloudinary
 	await cloudinary.uploader.destroy(publicId, { resource_type: resourceType, type: isPrivate ? 'authenticated' : 'upload', invalidate: true });
 }
 
+/**
+ * Removes EVERY stored file under a folder prefix (all resource types and delivery types), then the empty folder. Used when an account is deleted for good, with prefixes that
+ * contain the account's own id only. Best effort per combination (a missing folder is not an error); returns how many files were removed.
+ */
+export async function deleteFolderTree(prefix: string): Promise<number> {
+	if (isLocalDevFallback() || !/^waseetai\/[a-z-]+\/[A-Za-z0-9-]{8,}$/.test(prefix)) return 0;
+	ensureConfigured();
+	let removed = 0;
+	for (const resource_type of ['image', 'raw', 'video'] as const) {
+		for (const type of ['upload', 'authenticated', 'private'] as const) {
+			try {
+				const res: any = await cloudinary.api.delete_resources_by_prefix(prefix, { resource_type, type, invalidate: true });
+				removed += Object.values(res?.deleted ?? {}).filter(v => v === 'deleted').length;
+			} catch { /* nothing stored under this combination, or the storage refused: the others still run */ }
+		}
+	}
+	try { await cloudinary.api.delete_folder(prefix); } catch { /* not empty / not found */ }
+	return removed;
+}
+
 /** Puts the upload tier (per account, then per address) in front of a multer handler, so a refused request never buffers a file. */
 function limitedFirst(handler: RequestHandler): RequestHandler {
 	return (req, res, next) => uploadLimiter(req, res, (err?: unknown) => (err ? next(err as any) : handler(req, res, next)));
