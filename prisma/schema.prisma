@@ -62,6 +62,8 @@ enum UserRole {
 
 // user proffile
 model User {
+  paymentMethods PaymentMethod[]
+  paymentMethodAuthorizations PaymentMethodAuthorization[]
   adminSavedReports AdminSavedReport[]
   filedPlatformReports PlatformReport[] @relation("FiledPlatformReports")
   reviewedPlatformReports PlatformReport[] @relation("ReviewedPlatformReports")
@@ -211,6 +213,37 @@ model User {
   @@index([lastActiveAt])
   @@index([createdAt])
   @@map("users")
+}
+
+// Additive destination metadata. Existing role-profile paypalPayoutEmail remains the
+// canonical payout destination; a connection only activates when it matches it.
+model PaymentMethod {
+  id String @id @default(uuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role UserRole
+  kind String
+  environment String
+  encryptedDetails String @db.Text
+  isDefault Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([userId, role, kind, environment])
+  @@map("payment_methods")
+}
+
+model PaymentMethodAuthorization {
+  stateHash String @id
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId String
+  role UserRole
+  environment String
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([expiresAt])
+  @@map("payment_method_authorizations")
 }
 
 model UserSession {
