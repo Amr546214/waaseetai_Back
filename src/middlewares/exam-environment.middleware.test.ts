@@ -5,6 +5,7 @@ import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { requireExamEnvironment, examEnvironmentStatus } from './exam-environment.middleware';
+import { exchangeSebJsChallenge, issueSebJsChallenge, SEB_CHALLENGE_PARAM } from '../utils/seb-js-proof';
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 const BEK = sha('bek');
@@ -19,6 +20,20 @@ test('default mode: nothing is restricted', () => withEnv({ EXAM_SEB_MODE: undef
 test('required but not configured: the exam cannot start (503, fail closed)', () => withEnv({ EXAM_SEB_MODE: 'required', EXAM_SEB_BROWSER_EXAM_KEYS: undefined, EXAM_SEB_CONFIG_KEYS: undefined, EXAM_SEB_CONFIG_FILE: undefined, EXAM_SEB_CONFIG_FILE_SHA256: undefined, FRONTEND_URL: 'https://h.test' }, () => {
 	const { r, nexted } = run({ headers: {}, originalUrl: '/api/assessments/generate' }); assert.equal(nexted, false); assert.equal(r.code, 503); assert.equal(r.body.code, 'EXAM_ENVIRONMENT_NOT_CONFIGURED');
 }));
+
+test('modern access is enforced on the same guard/status routes and is bound to the authenticated login', () => withEnv({ EXAM_SEB_MODE: 'required', EXAM_SEB_JS_API_ENABLED: 'true', EXAM_SEB_BROWSER_EXAM_KEYS: BEK, EXAM_SEB_CONFIG_KEYS: undefined, JWT_SECRET: 'isolated-test-secret', FRONTEND_URL: 'https://h.test', ...FILEENV }, async () => {
+	const user = { id: 'P1', sessionId: 'S1' };
+	const c = issueSebJsChallenge(user, '/provider-overview/profile/specialties')!;
+	const proof = await exchangeSebJsChallenge(user, { challenge: new URL(c.url).searchParams.get(SEB_CHALLENGE_PARAM), browserExamKeyHash: sha(c.url + BEK) }, process.env, { claim: async () => true });
+	assert.ok(proof);
+	for (const path of ['/api/assessments/generate', '/api/assessments/active', '/api/assessments/A/answers', '/api/assessments/A/submit', '/api/exam-environment/ticket']) {
+		assert.equal(run({ headers: { 'x-waseet-seb-proof': proof.proof }, originalUrl: path, user }).nexted, true);
+		assert.equal(run({ headers: { 'x-waseet-seb-proof': proof.proof }, originalUrl: path, user: { ...user, sessionId: 'another-session' } }).r.code, 403);
+		assert.equal(run({ headers: { 'user-agent': 'SafeExamBrowser', 'x-waseet-seb-proof': 'I am SEB' }, originalUrl: path, user }).r.code, 403);
+	}
+	const status = res(); examEnvironmentStatus({ headers: { 'x-waseet-seb-proof': proof.proof }, originalUrl: '/api/assessments/exam-environment', user } as any, status);
+	assert.equal(status.body.data.verified, true); assert.equal(status.body.data.jsApiEnabled, true);
+}));
 test('required: no / wrong hash => 403 and nothing proceeds; a valid hash proceeds', () => withEnv({ EXAM_SEB_MODE: 'required', EXAM_SEB_BROWSER_EXAM_KEYS: BEK, FRONTEND_URL: 'https://h.test', ...FILEENV }, () => {
 	const denied = run({ headers: { 'user-agent': 'SEB' }, originalUrl: '/api/assessments/generate' }); assert.equal(denied.nexted, false); assert.equal(denied.r.code, 403); assert.equal(denied.r.body.code, 'EXAM_ENVIRONMENT_REQUIRED');
 	const ok = run({ headers: { 'x-safeexambrowser-requesthash': sha('https://h.test/api/assessments/generate' + BEK) }, originalUrl: '/api/assessments/generate' }); assert.equal(ok.nexted, true);
@@ -30,5 +45,6 @@ test('status: reports the mode and whether this request is verified, never a key
 	assert.ok(!JSON.stringify(r.body).includes(BEK));
 	assert.equal(r.body.data.supportedSystems.find((s: any) => s.system === 'Android').supported, false);
 	assert.equal(r.body.data.testedInRealSeb, false, 'keys + file present is not "tried in a real SEB"');
-	assert.match(r.body.data.supportedSystems.find((s: any) => s.system === 'macOS').note, /لم يُجرَّب/);
+	assert.match(r.body.data.supportedSystems.find((s: any) => s.system === 'macOS').note, /JavaScript API/);
+	assert.equal(r.body.data.jsApiEnabled, false);
 }));
