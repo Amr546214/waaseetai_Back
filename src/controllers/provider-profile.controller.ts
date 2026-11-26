@@ -314,7 +314,7 @@ export const saveSetupData = async (req: Request, res: Response) => {
 				? await Promise.all(resolvedPortfolio.map(async item => {
 					const proofUrls = await Promise.all(item.proofs.map((url, index) => prepared(url, () => storeDataUriIfNeeded(url, `waseetai/providers/${userId}/portfolio`, `${item.spec}-${index + 1}`))));
 					const reviewUrl = await prepared(item.review, () => storeDataUriIfNeeded(item.review, `waseetai/providers/${userId}/portfolio`, `${item.spec}-model`));
-					return { title: `${MODEL_TITLE_PREFIX}${clean(item.spec, 100) ?? ''}`, description: clean(reviewUrl, 2000) ?? null, coverImage: proofUrls[0] || null, tags: proofUrls.filter(Boolean) as string[] };
+					return { title: `${MODEL_TITLE_PREFIX}${clean(item.spec, 100) ?? ''}`, description: clean(reviewUrl, 2000) ?? null, coverImage: proofUrls.find(u => !!u && !/^https?:\/\//i.test(u)) || null, tags: proofUrls.filter(Boolean) as string[] };
 				}))
 				: undefined;
 
