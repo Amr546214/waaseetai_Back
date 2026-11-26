@@ -5,11 +5,11 @@ import { CommissionStatus, WithdrawalStatus } from '@prisma/client';
 import { feePolicyService } from './fee-policy.service';
 import { MARKETER_WITHDRAWAL_FEE_PERCENT } from '../utils/fee-policy';
 import { prisma } from '../config/db';
-import { readAffiliatePaypalEmail } from '../utils/affiliate-payout';
 import { IN_FLIGHT_WITHDRAWAL_STATUSES, RESERVING_WITHDRAWAL_STATUSES } from '../utils/withdrawal-reservation';
 import { commissionBreakdown, grossCard, NOT_FOUND_TX, pageOf, stateCard, valueCard, withdrawalBreakdown } from './wallet-breakdown';
 import { AppError } from '../utils/app-error';
-import { MARKETER_PAYPAL_REQUIRED_MESSAGE } from './withdrawal.service';
+import { verifiedPaypalDestination, PAYMENT_METHOD_NOT_VERIFIED_MESSAGE } from './payment-methods.service';
+import { maskedEmail } from '../utils/payment-methods';
 
 /** @deprecated the withdrawal minimum is MIN_WITHDRAWAL_USD (config/withdrawal-limits.ts) for every role; kept only so old imports keep compiling */
 export const MARKETER_MIN_WITHDRAWAL_FLOOR = MIN_WITHDRAWAL_USD;
@@ -30,7 +30,8 @@ export const marketerWalletService = {
     const [commissionGroups, withdrawalGroups, paypalEmail] = await Promise.all([
       affiliate ? prisma.commissionLog.groupBy({ by: ['status'], where: { affiliateId: affiliate.id }, _sum: { amount: true } }) : Promise.resolve([]),
       prisma.withdrawal.groupBy({ by: ['status'], where: { userId, ...marketerOnly }, _sum: { amount: true } }),
-      readAffiliatePaypalEmail(userId, prisma)
+      // only a PayPal account LINKED and confirmed through PayPal is a destination (shown masked)
+      verifiedPaypalDestination(userId, 'AFFILIATE')
     ]);
     const commission = (status: CommissionStatus) => commissionGroups.find(g => g.status === status)?._sum.amount ?? 0;
     const withdrawn = (statuses: readonly WithdrawalStatus[]) => withdrawalGroups.filter(g => statuses.includes(g.status)).reduce((sum, g) => sum + (g._sum.amount ?? 0), 0);
@@ -46,7 +47,7 @@ export const marketerWalletService = {
     // Why a withdrawal cannot be requested right now, shown next to the disabled button (null = it can).
     let withdrawBlockedReason: string | null = null;
     if (!affiliate) withdrawBlockedReason = 'ملف الوسيط التسويقي غير مكتمل';
-    else if (!paypalEmail) withdrawBlockedReason = MARKETER_PAYPAL_REQUIRED_MESSAGE;
+    else if (!paypalEmail) withdrawBlockedReason = PAYMENT_METHOD_NOT_VERIFIED_MESSAGE;
     else if (withdrawableBalance < minimumWithdrawal) withdrawBlockedReason = `رصيدك القابل للسحب أقل من الحد الأدنى (${minimumWithdrawal} $)`;
 
     // Cards. availableToWithdraw is the figure createForMarketer enforces. The platform bears the marketer commission, so the gross equals the net: no deduction applies.
@@ -70,7 +71,7 @@ export const marketerWalletService = {
       paidWithdrawals: round2(paidWithdrawals),
       withdrawableBalance,
       minimumWithdrawal,
-      paypalEmail,
+      paypalEmail: paypalEmail ? maskedEmail(paypalEmail) : null,
       hasPaypal: !!paypalEmail,
       withdrawBlockedReason,
       // the PayPal withdrawal fee (%) the next request will snapshot: the screen shows fee and net before the marketer confirms

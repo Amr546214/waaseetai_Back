@@ -7,6 +7,7 @@ import { feePolicyService } from './fee-policy.service';
 import { Prisma, WithdrawalStatus, WithdrawalSource, CommissionStatus, AccountType, UserRole } from '@prisma/client';
 import { prisma } from '../config/db';
 import { readAffiliatePaypalEmail } from '../utils/affiliate-payout';
+import { verifiedPaypalDestination, PAYMENT_METHOD_NOT_VERIFIED_MESSAGE, PAYMENT_METHOD_NOT_VERIFIED_CODE } from './payment-methods.service';
 import { PAYPAL_ONLY_MESSAGE } from '../utils/client-payout-fields';
 import { PROVIDER_PAYPAL_REQUIRED_MESSAGE } from '../utils/provider-payout';
 import { AppError } from '../utils/app-error';
@@ -115,7 +116,9 @@ export class WithdrawalService {
       if (!providerProfile?.paypalPayoutEmail) {
         throw new AppError(PROVIDER_PAYPAL_REQUIRED_MESSAGE, 400);
       }
-      paypalEmail = providerProfile.paypalPayoutEmail;
+      // only a PayPal account LINKED and confirmed through PayPal is a destination (a typed / legacy e-mail is not)
+      paypalEmail = await verifiedPaypalDestination(userId, 'PROVIDER');
+      if (!paypalEmail) throw new AppError(PAYMENT_METHOD_NOT_VERIFIED_MESSAGE, 400, undefined, PAYMENT_METHOD_NOT_VERIFIED_CODE);
     }
 
     // PayPal is the only withdrawal method: nothing else is ever created (defence in depth behind the DTO).
@@ -240,8 +243,11 @@ export class WithdrawalService {
     });
     const ownerIsProvider = !!owner && isProviderOwner(owner);
     // PayPal is the only payout destination: the saved PayPal email is snapshotted on the withdrawal (never a bank account).
-    const paypalEmail = await readAffiliatePaypalEmail(userId, prisma);
-    if (!paypalEmail) throw new AppError(MARKETER_PAYPAL_REQUIRED_MESSAGE, 400);
+    const savedEmail = await readAffiliatePaypalEmail(userId, prisma);
+    if (!savedEmail) throw new AppError(MARKETER_PAYPAL_REQUIRED_MESSAGE, 400);
+    // only a PayPal account LINKED and confirmed through PayPal is a destination (a typed / legacy e-mail is not)
+    const paypalEmail = await verifiedPaypalDestination(userId, 'AFFILIATE');
+    if (!paypalEmail) throw new AppError(PAYMENT_METHOD_NOT_VERIFIED_MESSAGE, 400, undefined, PAYMENT_METHOD_NOT_VERIFIED_CODE);
     // ONE minimum for every role: 10 USD (config/withdrawal-limits.ts). The stored per-affiliate minimumPayoutAmount (300 by default) and the fee policy's minMarketerPayout no longer apply (data untouched).
     const marketerPolicy = await feePolicyService.active();
     const effectiveMinimumPayout = MIN_WITHDRAWAL_USD;

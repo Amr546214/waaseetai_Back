@@ -1,6 +1,11 @@
 import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 
+// A withdrawal goes only to a PayPal account linked and confirmed through PayPal (payment-methods): tests stand in for that lookup and answer with the account under test.
+let VERIFIED_EMAIL: string | null = 'marketer@example.com';
+const verifiedLookup = (t: any) => t.mock.module('./payment-methods.service', { namedExports: { verifiedPaypalDestination: async () => VERIFIED_EMAIL, PAYMENT_METHOD_NOT_VERIFIED_MESSAGE: 'not verified', PAYMENT_METHOD_NOT_VERIFIED_CODE: 'PAYMENT_METHOD_NOT_VERIFIED' } });
+
+
 // Release-blocker fix: admin approval of a marketer/affiliate commission
 // withdrawal must be validated against the affiliate's APPROVED
 // CommissionLog balance — never against the provider wallet
@@ -117,6 +122,7 @@ function createMock(t: TestContext, opts: {
 		}
 	};
 	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+	verifiedLookup(t);
 	if (opts.policy) t.mock.module('./fee-policy.service', { namedExports: { feePolicyService: { active: async () => ({ id: opts.policy!.id, version: 2, payload: { minMarketerPayout: opts.policy!.minMarketerPayout, minProviderPayout: opts.policy!.minProviderPayout } }) } } });
 
 	const getWalletSpy = t.mock.fn(async () => ({ summary: { availableBalance: opts.providerWalletBalance ?? 0, currency: 'USD' } }));
