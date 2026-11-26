@@ -53,9 +53,9 @@ export const portfolioFileCheckSchema = z.object({
   specialtyName: z.string().trim().min(1).max(120),
   title: z.string().trim().max(200).optional(),
   fileName: z.string().trim().max(200).optional(),
-  mimeType: z.enum(['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'text/plain']),
-  /** a data: URI of the file; larger files are not read by the AI (the review stays human) */
-  file: z.string().trim().min(20).max(14_000_000),
+  mimeType: z.enum(['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'text/plain', 'text/uri-list']),
+  /** a data: URI of the file (larger files are not read by the AI: the review stays human), or, with mimeType text/uri-list, an https link the AI service reads itself */
+  file: z.string().trim().min(12).max(14_000_000),
 }).strict();
 export type PortfolioFileCheckDto = z.infer<typeof portfolioFileCheckSchema>;
 

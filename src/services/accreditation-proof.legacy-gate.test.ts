@@ -74,3 +74,9 @@ test('both legacy submit paths call the gate BEFORE they touch the samples or th
 	const start = svc.indexOf('async uploadWorkSamples');
 	assert.ok(svc.indexOf('assertLegacySpecialtyProofs(', start) > start && svc.indexOf('assertLegacySpecialtyProofs(', start) < svc.indexOf('tx.workSample.deleteMany', start));
 });
+
+test('proofs given as links count toward the minimum like a file (no storage check is needed for them)', async () => {
+  const { assertLegacySpecialtyProofs } = await import('./accreditation-proof.service');
+  const db: any = new Proxy({}, { get: () => { throw new Error('the database must not be touched when a link already satisfies the minimum'); } });
+  assert.deepEqual(await assertLegacySpecialtyProofs(db, { userId: 'u', providerSpecialtyId: 'ps', proofRefs: [], proofLinkCount: 1 }), { fresh: 0, existing: 0 });
+});

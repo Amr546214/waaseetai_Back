@@ -1,3 +1,4 @@
+import { isAcceptableProofLink } from '../utils/setup-portfolio-proofs';
 import { getCatalogForCategoryParam } from './skills-catalog.service';
 import { otpCodeFor } from '../utils/dev-login-otp-bypass';
 import type {
@@ -537,7 +538,9 @@ export class ProviderProfileService {
 		const bar = input.kind === 'MODEL' ? PORTFOLIO_MODEL_PASS_SCORE : PORTFOLIO_PROOF_PASS_SCORE;
 		const unverified = (reasonAr: string): PortfolioFileVerdict => ({ verdict: 'UNVERIFIED', score: null, summaryAr: reasonAr, recommendationsAr: [] });
 		if (input.file.length > PORTFOLIO_AI_MAX_DATA_URI) return unverified('حجم الملف أكبر من حد الفحص الآلي؛ ستراجعه الإدارة.');
-		if (!input.file.startsWith('data:')) return unverified('تعذّر قراءة الملف آليًا؛ ستراجعه الإدارة.');
+		// a link is read by the AI service itself (it fetches it with its own guarded reader); only an https link of the accepted shape is ever sent
+		const isLink = input.mimeType === 'text/uri-list';
+		if (isLink ? !isAcceptableProofLink(input.file) : !input.file.startsWith('data:')) return unverified('تعذّر قراءة الملف آليًا؛ ستراجعه الإدارة.');
 		try {
 			const r: any = await waseetAiClient.reviewAccreditation({
 				sampleId: `${userId}:${input.kind}:${Date.now()}`,

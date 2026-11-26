@@ -1,3 +1,4 @@
+import { isAcceptableProofLink } from '../utils/setup-portfolio-proofs';
 import { Router, Request, Response, NextFunction } from 'express';
 import { SpecialtyVerificationStatus } from '@prisma/client';
 import { prisma } from '../config/db';
@@ -83,8 +84,15 @@ router.post(
         cloudFiles.set(file, stored);
       }));
 
+      // links (https only; never fetched here): a model link (sampleLink_i) and proof links (proofLinks_i, a JSON array) work like files
+      const proofLinksOf = (i: number): string[] => {
+        try { const parsed = JSON.parse(String(req.body[`proofLinks_${i}`] || '[]')); return Array.isArray(parsed) ? [...new Set(parsed.map(String))].filter(isAcceptableProofLink).slice(0, 5) : []; } catch { return []; }
+      };
+      const modelLinkOf = (i: number): string => { const v = String(req.body[`sampleLink_${i}`] || '').trim(); return isAcceptableProofLink(v) ? v : ''; };
+      let proofLinkCount = 0;
+      for (let i = 0; i < sampleCount; i++) proofLinkCount += proofLinksOf(i).length;
       await assertLegacySpecialtyProofs(prisma as any, {
-        userId: req.user!.id, providerSpecialtyId,
+        userId: req.user!.id, providerSpecialtyId, proofLinkCount,
         proofRefs: files.filter(f => f.fieldname.startsWith('proofFiles_')).map(f => cloudFiles.get(f)?.privateRef)
       });
 
@@ -110,6 +118,9 @@ router.post(
             publicUrl = cloudFiles.get(publicFile)!.url;
             mimeType = publicFile.mimetype;
             fileBytes = publicFile.size;
+          } else if (modelLinkOf(i)) {
+            publicUrl = modelLinkOf(i);
+            mimeType = 'text/uri-list';
           } else {
             publicUrl = '';
           }
@@ -127,6 +138,10 @@ router.post(
             },
           });
 
+          for (const link of proofLinksOf(i)) {
+            let label = link; try { const u = new URL(link); label = (u.hostname + u.pathname).replace(/\/$/, ''); } catch { /* keep the link */ }
+            await tx.proofAttachment.create({ data: { workSampleId: createdSample.id, fileName: label.substring(0, 255), fileUrl: link, mimeType: 'text/uri-list', fileBytes: 0, isConfidential: true, watermarkLabel: 'وسيط AI' } });
+          }
           const proofFiles = fileMap[`proofFiles_${i}`] || [];
           for (const proof of proofFiles) {
             const storedProof = cloudFiles.get(proof)!;
