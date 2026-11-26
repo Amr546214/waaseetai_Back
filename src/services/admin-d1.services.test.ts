@@ -200,8 +200,12 @@ test('delete user: refuses self and admin accounts; audits on the actor', async 
 	userFixture(userRow({ accountType: 'ADMIN' }));
 	await rejects(svc.deleteUser('u1', superAdmin), 403);
 	const audit: any[] = [];
-	current = { user: { findUnique: async () => userRow(), delete: async () => ({ id: 'u1' }) }, project: { updateMany: async () => ({}) }, message: { deleteMany: async () => ({}) }, conversation: { deleteMany: async () => ({}) }, contract: { deleteMany: async () => ({}) }, accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
+	const wiped: string[] = []; const tick = (name: string) => ({ deleteMany: async (a: any) => { wiped.push(name + JSON.stringify(a?.where ?? {}).slice(0, 80)); return {}; } });
+	current = { user: { findUnique: async () => userRow({ email: 'Gone@Example.com' }), delete: async () => ({ id: 'u1' }) }, providerSpecialty: { findMany: async () => [] }, project: { updateMany: async () => ({}), findMany: async () => [] }, message: tick('message'), conversation: tick('conversation'), contract: tick('contract'), projectAmendment: tick('amendment'), couponRedemption: tick('coupon'), specialOfferRedemption: tick('offer'), newsletterSubscriber: tick('newsletter'), registrationEmailProof: tick('proof'), accountAuditLog: { create: async (a: any) => audit.push(a.data) } };
 	await svc.deleteUser('u1', superAdmin);
+	// everything that blocked or outlived the deletion goes too: restricted references, and the e-mail keyed leftovers (newsletter, registration proofs) so a new registration starts clean
+	for (const name of ['amendment', 'coupon', 'offer', 'newsletter', 'proof']) assert.ok(wiped.some(w => w.startsWith(name)), name);
+	assert.ok(wiped.find(w => w.startsWith('newsletter'))!.includes('gone@example.com'));
 	assert.equal(audit[0].userId, 'sup'); assert.equal(audit[0].eventType, 'USER_DELETED_BY_ADMIN'); assert.equal(audit[0].severity, 'CRITICAL');
 });
 
