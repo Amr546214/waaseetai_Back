@@ -99,6 +99,11 @@ export const globalErrorHandler = (
   // A plain AppError may carry its own fixed marker (never user input); the specific markers above keep their dedicated fields.
   const ownCode = (err as { code?: unknown }).code;
   if (!code && typeof ownCode === 'string' && APP_CODE.test(ownCode)) code = ownCode;
+  // a refused wizard save names its reason in the log (field paths and the Arabic message only, never values), so a support report can be traced
+  if (statusCode >= 400 && statusCode < 500 && /\/(provider|client)\/profile\/setup/.test(String(req.originalUrl || ''))) {
+    const paths = Array.isArray(errors) ? errors.map(e => String((e as { path?: unknown; field?: unknown })?.path ?? (e as { field?: unknown })?.field ?? '')).filter(Boolean).slice(0, 8).join(',') : '';
+    logger.warn(`[SetupRefused] ${req.method} ${String(req.originalUrl).split('?')[0]} ${statusCode} code=${code ?? ownCode ?? '-'} paths=[${paths}] message=${String(message).slice(0, 200)}`);
+  }
   // An operational 5xx without its own Arabic explanation (a bare "Internal Server Error", a library text) is replaced the same way as an unexpected one.
   if (statusCode >= 500 && !traceId && !(typeof message === 'string' && ARABIC_TEXT.test(message) && !LEAKY.test(message))) {
     traceId = newTraceId();
