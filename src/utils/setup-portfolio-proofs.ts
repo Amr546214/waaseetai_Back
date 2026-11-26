@@ -12,8 +12,18 @@ import { privateFileExists } from './cloudinary-storage';
 
 const ALLOWED_DATA_URI = /^data:(image\/(png|jpe?g|webp)|application\/(pdf|zip|x-zip-compressed));base64,/i;
 
+/**
+ * A LINK (a GitHub repository, a portfolio page...) is accepted as a work model or as a proof of ownership: https only, no credentials, a real host, at most 500 characters.
+ * The server never fetches it (no SSRF): the administration opens it during the review.
+ */
+export function isAcceptableProofLink(value: unknown): boolean {
+	if (typeof value !== 'string' || value.length > 500 || !/^https:\/\//i.test(value)) return false;
+	try { const u = new URL(value); return !u.username && !u.password && u.hostname.includes('.') && !/\s/.test(value); } catch { return false; }
+}
+
 export function isValidSetupProofValue(value: unknown, userId: string): boolean {
 	if (typeof value !== 'string' || !value) return false;
+	if (isAcceptableProofLink(value)) return true;
 	if (value.startsWith('data:')) return ALLOWED_DATA_URI.test(value);
 	if (isPrivateRef(value)) return privateRefBelongsTo(value, userId);
 	try { return isOwnCloudinaryUrl(value) && new URL(value).pathname.split('/').includes(userId); } catch { return false; }
@@ -101,7 +111,8 @@ export async function resolveSetupPortfolio(opts: { userId: string; portfolio: u
 			}
 			for (const raw of Array.isArray(item.proofs) ? item.proofs : []) {
 				if (blank(raw)) continue; // an upload placeholder that never completed is "no proof", not a value
-				const ok = (typeof raw === 'string' && raw.startsWith('data:') && ALLOWED_DATA_URI.test(raw))
+				const ok = isAcceptableProofLink(raw)
+					|| (typeof raw === 'string' && raw.startsWith('data:') && ALLOWED_DATA_URI.test(raw))
 					|| (isPrivateRef(raw) && privateRefBelongsTo(raw, userId) && await confirmExists(exists, raw))
 					|| (typeof raw === 'string' && storedValues.has(raw) && !isPrivateRef(raw));
 				if (!ok) throw failField(spec, 'PROOF_INVALID', `أحد ملفات الإثبات لتخصص «${spec}» غير صالح أو غير موجود أو لا يخص حسابك`);
