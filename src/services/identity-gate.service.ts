@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { prisma } from '../config/db';
+import { approvedIdentityFields } from './identity-inheritance';
+import { normalizeIdentityNumber } from './identity-claim.service';
 import { AppError } from '../utils/app-error';
 import { documentUpdate } from '../utils/identity-document-context';
 import { assertKycFileValues } from '../utils/kyc-value-guard';
@@ -99,7 +101,30 @@ const bodySchema = z.object({
 }).strict();
 
 export class IdentityGateService {
+  /**
+   * ONE ACCOUNT, ONE IDENTITY: when the OTHER role of the same account already holds an administrator-approved identity, this role takes it as it stands (document, number,
+   * birth date, approval digest) instead of asking for a second upload and a second review. Only when this role has no number of its own or the SAME number (a different
+   * number is a different document and stays an administrator's decision). A review of this role that is still waiting is closed by the adoption. Never invents an approval.
+   */
+  async adoptApprovedIdentity(userId: string, party: GateParty): Promise<boolean> {
+    try {
+      return await prisma.$transaction(async (tx: any) => {
+        await lockRow(tx, party, userId);
+        const own = await model(tx, party).findUnique({ where: { userId }, select: SELECT });
+        if (!own || own.kycStatus === 'VERIFIED') return false;
+        const fields: any = await approvedIdentityFields(tx, userId, party);
+        if (!fields.identityApprovedDigest) return false;
+        const same = normalizeIdentityNumber(own.idNumber) === normalizeIdentityNumber(fields.idNumber);
+        if (normalizeIdentityNumber(own.idNumber) && !same) return false;
+        await model(tx, party).update({ where: { userId }, data: { ...fields, ...(party === 'PROVIDER' ? { isVerified: true, notes: null } : {}) } });
+        if (party === 'CLIENT') await tx.clientOnboarding.updateMany({ where: { userId, status: 'PENDING' }, data: { status: 'APPROVED', reviewedAt: new Date() } });
+        return true;
+      });
+    } catch (error) { logger.warn(`[IdentityGate] adopting the approved identity failed (ignored) party=${party} code=${(error as any)?.code ?? 'ERR'}`); return false; }
+  }
+
   async getState(userId: string, party: GateParty, db: any = prisma): Promise<IdentityGateState> {
+    if (db === prisma) await this.adoptApprovedIdentity(userId, party);
     const p0 = await model(db, party).findUnique({ where: { userId }, select: party === 'PROVIDER' ? { ...SELECT, notes: true } : SELECT });
     const p = p0 ? { ...p0, legalName: await legalNameOf(db, userId) } : p0;
     let clientRejection: string | null = null; let submittedAt: Date | null = null; let documentRequestWaiting = false;
@@ -185,6 +210,8 @@ export class IdentityGateService {
 
   /** The identity step: saves data + files (kept on rejection) and starts / refreshes / re-opens the review. */
   async saveIdentity(userId: string, party: GateParty, rawBody: unknown): Promise<IdentityGateState> {
+    // the other role already holds an approved identity: nothing to upload or review again
+    if (await this.adoptApprovedIdentity(userId, party)) return this.getState(userId, party);
     const parsed = bodySchema.safeParse(rawBody ?? {});
     if (!parsed.success) throw new AppError('بيانات الهوية غير صحيحة', 400, parsed.error.issues.map(i => ({ path: i.path.join('.'), field: i.path.join('.'), message: i.message, code: i.code })));
     const body = parsed.data;
@@ -215,7 +242,7 @@ export class IdentityGateService {
       await model(tx, party).update({ where: { userId }, data: { kycStatus: 'PENDING', identityApprovedDigest: null, ...(party === 'PROVIDER' ? { isVerified: false } : {}) } });
       if (kyc === 'VERIFIED') await identityClaimService.release(tx, userId, party);
       if (party === 'CLIENT') await this.refreshClientReview(tx, userId, after.frontIdUrl as string);
-      return kyc !== 'PENDING';
+      return true; // a new submission (also over a review that was waiting): the administrators are told again
     }, { timeout: 20_000 });
     if (started) void notifyAdmins('KYC_SUBMITTED', { ref: party === 'CLIENT' ? 'عميل' : 'مزود خدمة' });
     // the advisory ID field check for the reviewers (flag IDENTITY_AUTO_CHECK; idempotent per image + data, never blocks or throws)
