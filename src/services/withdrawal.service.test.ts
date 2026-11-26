@@ -2,6 +2,11 @@ import { test, TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+// A withdrawal goes only to a PayPal account linked and confirmed through PayPal (payment-methods): tests stand in for that lookup and answer with the account under test.
+let VERIFIED_EMAIL: string | null = 'p@example.com';
+const verifiedLookup = (t: any) => t.mock.module('./payment-methods.service', { namedExports: { verifiedPaypalDestination: async (userId: string) => { const { prisma } = await import('../config/db'); const row: any = await (prisma as any).providerProfile?.findUnique?.({ where: { userId } }); return row?.paypalPayoutEmail ?? VERIFIED_EMAIL; }, PAYMENT_METHOD_NOT_VERIFIED_MESSAGE: 'not verified', PAYMENT_METHOD_NOT_VERIFIED_CODE: 'PAYMENT_METHOD_NOT_VERIFIED' } });
+
+
 // Regression guard for the USD-canonical transition: new withdrawal requests
 // must explicitly carry currency USD (never rely on the Withdrawal schema's
 // database default). Existing/historical Withdrawal rows are untouched
@@ -118,6 +123,7 @@ function createWithdrawalMockPrisma(t: TestContext, opts: {
 		user: { findUnique: t.mock.fn(async () => ({ accountType: 'PROVIDER_INDIVIDUAL', roles: ['PROVIDER'], activeRole: 'PROVIDER', affiliateProfile: null })) }
 	};
 	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+	verifiedLookup(t);
 
 	const getWalletSpy = t.mock.fn(async (_userId: string, _client?: unknown) => ({
 		summary: { availableBalance: opts.availableBalance ?? 1000, currency: 'USD' }
@@ -247,6 +253,7 @@ test('createForProvider: a serialization-conflict error (P2034) is retried, not 
 		return fn(tx);
 	});
 	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ paypalPayoutEmail: 'p@example.com' }) }, accountAuditLog: { findFirst: async () => null } } } });
+	verifiedLookup(t);
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
@@ -289,6 +296,7 @@ test('createForProvider: a DriverAdapterError (cause.kind = TransactionWriteConf
 		return fn(tx);
 	});
 	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ paypalPayoutEmail: 'p@example.com' }) }, accountAuditLog: { findFirst: async () => null } } } });
+	verifiedLookup(t);
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
@@ -310,6 +318,7 @@ test('createForProvider: an UNRELATED DriverAdapterError is never retried — it
 		throw new DriverAdapterError({ kind: 'DatabaseNotReachable' });
 	});
 	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ paypalPayoutEmail: 'p@example.com' }) }, accountAuditLog: { findFirst: async () => null } } } });
+	verifiedLookup(t);
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
@@ -353,6 +362,7 @@ test('createForProvider: on retry, released earnings AND pending withdrawals are
 		return result;
 	});
 	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ paypalPayoutEmail: 'p@example.com' }) }, accountAuditLog: { findFirst: async () => null } } } });
+	verifiedLookup(t);
 	t.mock.module('./provider-finance.service', {
 		namedExports: {
 			providerFinanceService: {
@@ -387,6 +397,7 @@ test('createForProvider: if the retry observes insufficient balance, the caller 
 		return fn(tx);
 	});
 	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ paypalPayoutEmail: 'p@example.com' }) }, accountAuditLog: { findFirst: async () => null } } } });
+	verifiedLookup(t);
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
@@ -413,6 +424,7 @@ test('createForProvider: retry is bounded — if every attempt conflicts, the fi
 		throw new DriverAdapterError({ kind: 'TransactionWriteConflict' });
 	});
 	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ paypalPayoutEmail: 'p@example.com' }) }, accountAuditLog: { findFirst: async () => null } } } });
+	verifiedLookup(t);
 	t.mock.module('./provider-finance.service', {
 		namedExports: { providerFinanceService: { getWallet: async () => ({ summary: { availableBalance: 500, currency: 'USD' } }) } }
 	});
@@ -775,6 +787,8 @@ function createApproveMockPrisma(t: TestContext, opts: {
 		}
 		return result;
 	});
+
+	verifiedLookup(t);
 
 	t.mock.module('../config/db', {
 		namedExports: { prisma: {
@@ -1252,6 +1266,7 @@ function createMarketerWithdrawalMockPrisma(t: TestContext, opts: {
 		$transaction: t.mock.fn(async (fn: any) => fn(tx))
 	};
 	t.mock.module('../config/db', { namedExports: { prisma: prismaMock } });
+	verifiedLookup(t);
 
 	return { createSpy, commissionAggregateSpy };
 }
@@ -1362,4 +1377,13 @@ test('createForProvider: there is no maximum — a large amount within the balan
 	const { withdrawalService, createSpy } = await loadService(t, { availableBalance: 50_000 });
 	await withdrawalService.createForProvider('provider-1', { amount: 49_999, method: 'paypal' });
 	assert.equal(createSpy.mock.callCount(), 1);
+});
+
+test('a withdrawal is refused when the PayPal e-mail is NOT a linked and confirmed account (typed / legacy e-mail): code PAYMENT_METHOD_NOT_VERIFIED, nothing is created', async (t) => {
+	t.mock.module('./payment-methods.service', { namedExports: { verifiedPaypalDestination: async () => null, PAYMENT_METHOD_NOT_VERIFIED_MESSAGE: 'السحب متاح فقط إلى حساب PayPal موثّق', PAYMENT_METHOD_NOT_VERIFIED_CODE: 'PAYMENT_METHOD_NOT_VERIFIED' } });
+	const transactionSpy = t.mock.fn(async () => { throw new Error('must not start'); });
+	t.mock.module('../config/db', { namedExports: { prisma: { $transaction: transactionSpy, providerProfile: { findUnique: async () => ({ paypalPayoutEmail: 'typed@example.com' }) }, accountAuditLog: { findFirst: async () => null } } } });
+	const { withdrawalService } = await import(`./withdrawal.service.ts?fixture=${Date.now()}v`);
+	await assert.rejects(() => withdrawalService.createForProvider('p1', { amount: 20, method: 'paypal' }), (e: any) => e.statusCode === 400 && e.code === 'PAYMENT_METHOD_NOT_VERIFIED');
+	assert.equal(transactionSpy.mock.callCount(), 0);
 });

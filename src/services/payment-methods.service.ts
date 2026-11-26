@@ -12,6 +12,30 @@ type PaypalDetails = { email: string; subject: string | null; userId: string | n
 type BankDetails = { accountHolder: string; iban: string; label?: string };
 type Db = Prisma.TransactionClient;
 
+export const PAYMENT_METHOD_NOT_VERIFIED_MESSAGE = 'السحب متاح فقط إلى حساب PayPal موثّق. اربط حسابك من «المالية ← طرق الدفع» أولًا.';
+export const PAYMENT_METHOD_NOT_VERIFIED_CODE = 'PAYMENT_METHOD_NOT_VERIFIED';
+
+/**
+ * The ONLY destination a withdrawal may go to: the PayPal account this user LINKED through PayPal (its e-mail confirmed by PayPal) and activated as the payout destination
+ * for this role in the current environment. A typed / legacy e-mail, an unconfirmed or not-yet-activated link and a saved bank account (not verified) are never destinations.
+ * Returns that e-mail (lower-case) or null.
+ */
+export async function verifiedPaypalDestination(userId: string, role: PaymentRole, db: any = prisma): Promise<string | null> {
+  const rows = await db.paymentMethod.findMany({ where: { userId, role: role as UserRole, environment: paymentEnvironment(), kind: 'PAYPAL' } });
+  if (!rows.length) return null;
+  const where = { userId }, select = { paypalPayoutEmail: true };
+  const profile = role === 'PROVIDER' ? await db.providerProfile.findUnique({ where, select }) : role === 'CLIENT' ? await db.clientProfile.findUnique({ where, select }) : await db.affiliateProfile.findUnique({ where, select });
+  const current = profile?.paypalPayoutEmail?.trim().toLowerCase();
+  if (!current) return null;
+  for (const row of rows) {
+    try {
+      const d = decryptPaymentDetails<PaypalDetails>(row.encryptedDetails, paymentContext(row.userId, row.role, row.kind, row.environment));
+      if (d.emailVerified === true && d.email.toLowerCase() === current) return current;
+    } catch { /* an unreadable row is never a destination */ }
+  }
+  return null;
+}
+
 export class PaymentMethodsService {
   constructor(private readonly db = prisma, private readonly request: typeof fetch = fetch) {}
   private scope(a: Actor) { return { userId: a.userId, role: a.role as UserRole, environment: paymentEnvironment() }; }

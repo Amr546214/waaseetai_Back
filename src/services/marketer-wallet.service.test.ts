@@ -22,6 +22,8 @@ async function load(t: TestContext, f: Fixture) {
   };
   t.mock.module('../config/logger', { namedExports: { logger: { info() {}, warn() {}, error() {}, debug() {} } } });
   t.mock.module('../config/db', { namedExports: { prisma: delegatingPrisma } });
+  // the destination is a PayPal account linked and confirmed through PayPal: the fixture's `paypal` stands for that linked account
+  t.mock.module('./payment-methods.service', { namedExports: { verifiedPaypalDestination: async () => (f.paypal === undefined ? 'm@example.com' : f.paypal), PAYMENT_METHOD_NOT_VERIFIED_MESSAGE: 'السحب متاح فقط إلى حساب PayPal موثّق. اربط حسابك من «المالية ← طرق الدفع» أولًا.' } });
   const { marketerWalletService } = await import(`./marketer-wallet.service.ts?f=${Date.now()}-${Math.random()}`);
   return marketerWalletService;
 }
@@ -50,11 +52,11 @@ test('the balance never goes negative', async t => {
   assert.equal((await svc.getWallet('u1')).withdrawableBalance, 0);
 });
 
-test('payout method required: no saved PayPal email blocks the withdrawal with the clear reason', async t => {
+test('payout method required: no linked and confirmed PayPal account blocks the withdrawal with the clear reason', async t => {
   const svc = await load(t, { approved: 1000, paypal: null });
   const w = await svc.getWallet('u1');
   assert.equal(w.hasPaypal, false);
-  assert.equal(w.withdrawBlockedReason, 'أضف بريد PayPal لاستلام الأرباح');
+  assert.match(w.withdrawBlockedReason, /PayPal موثّق/); assert.equal(w.canWithdraw, false);
 });
 
 test('below the minimum is blocked with the real minimum (10 USD, the same for every role)', async t => {
