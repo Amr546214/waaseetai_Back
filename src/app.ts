@@ -255,6 +255,7 @@ mountApiRoute('/marketer/profile', marketerProfileRouter);
 mountApiRoute('/', cartCheckoutRouter);
 
 import clientFinanceRoutes from './routes/client-finance.routes';
+import paymentMethodsRoutes from './routes/payment-methods.routes';
 import clientReportsRoutes from './routes/client-reports.routes';
 import clientDisputesRoutes from './routes/client-disputes.routes';
 import clientTicketsRoutes from './routes/client-tickets.routes';
@@ -285,6 +286,7 @@ mountAppRoute('/client/company/team', clientCompanyTeamRoutes);
 mountAppRoute('/api/client/company', clientCompanyDashboardRoutes);
 mountAppRoute('/client/company', clientCompanyDashboardRoutes);
 mountAppRoute('/api/client/finance', clientFinanceRoutes);
+mountAppRoute('/api/payment-methods', paymentMethodsRoutes);
 mountAppRoute('/client/finance', clientFinanceRoutes);
 mountAppRoute('/api/client/reports', clientReportsRoutes);
 mountAppRoute('/client/reports', clientReportsRoutes);
