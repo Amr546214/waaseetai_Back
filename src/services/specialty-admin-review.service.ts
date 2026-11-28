@@ -1,3 +1,4 @@
+import { isAcceptableProofLink } from '../utils/setup-portfolio-proofs';
 import { LogCategory, LogStatus, SpecialtyVerificationStatus } from '@prisma/client';
 import { prisma } from '../config/db';
 import { AppError } from '../utils/app-error';
@@ -96,6 +97,14 @@ const providerSummary = (ps: any) => {
 const reviewUserSelect = { id: true, firstName: true, lastName: true, email: true, accountType: true, createdAt: true, ratingAverage: true, completedProjectsCount: true } as const;
 
 /** Read side of the specialty review: the admin queue (UNDER_AI_REVIEW) and its decided history, straight from provider_specialties. */
+/** The proofs of a work sample for the admin: a LINK proof carries its https address (the administration opens it; the server never fetches it); a FILE proof carries only its id (it is opened through the audited private-access route, never by a stored reference). */
+export function publicWorkProofs(proofs: unknown) {
+	return (Array.isArray(proofs) ? proofs : []).map((p: any) => {
+		const isLink = p?.mimeType === 'text/uri-list' && isAcceptableProofLink(p?.fileUrl);
+		return { id: p.id, fileName: p.fileName, mimeType: p.mimeType, bytes: p.fileBytes ?? 0, kind: isLink ? 'LINK' : 'FILE', url: isLink ? p.fileUrl : null };
+	});
+}
+
 export class SpecialtyReviewQueryService {
 	async list(params: { status?: string; search?: string; page?: number; limit?: number }) {
 		const key = String(params.status ?? 'pending').toLowerCase();
@@ -148,7 +157,7 @@ export class SpecialtyReviewQueryService {
 				specialty: { select: { id: true, nameAr: true, category: { select: { nameAr: true } } } },
 				providerProfile: { select: { userId: true, kycStatus: true, yearsOfExperience: true, headline: true, user: { select: reviewUserSelect } } },
 				accreditationSamples: { orderBy: { createdAt: 'desc' }, select: { id: true, title: true, description: true, status: true, projectUrl: true, githubUrl: true, technologiesUsed: true, attachments: true, createdAt: true } },
-				workSamples: { orderBy: { createdAt: 'desc' }, select: { id: true, title: true, description: true, technologies: true, publicSampleUrl: true, mimeType: true, createdAt: true } }
+				workSamples: { orderBy: { createdAt: 'desc' }, select: { id: true, title: true, description: true, technologies: true, publicSampleUrl: true, mimeType: true, createdAt: true, proofs: { orderBy: { createdAt: 'asc' }, select: { id: true, fileName: true, fileUrl: true, mimeType: true, fileBytes: true } } } }
 			}
 		});
 		if (!ps) throw new AppError('التخصص غير موجود', 404);
@@ -162,7 +171,7 @@ export class SpecialtyReviewQueryService {
 			subSpecialties: ps.subSpecialties, provider: { ...providerSummary(ps), yearsOfExperience: ps.providerProfile?.yearsOfExperience ?? null, headline: ps.providerProfile?.headline ?? null },
 			scores: { aiScore: ps.aiScore, quizScore: ps.quizScore, latestScore: ps.latestScore, ownershipCredibility: ps.ownershipCredibility, feasibilityScore: ps.feasibilityScore, clarityScore: ps.clarityScore },
 			assessmentTaken: ps.hasTakenAssessment, assessmentPassed: ps.isPassed, aiFeedback: ps.aiFeedback ?? null,
-			accreditationSamples: ps.accreditationSamples, workSamples: ps.workSamples, otherPending: otherPending.map((o: any) => ({ id: o.id, specialty: o.specialty?.nameAr ?? null, status: o.status })),
+			accreditationSamples: ps.accreditationSamples, workSamples: (ps.workSamples ?? []).map((w: any) => ({ ...w, proofs: publicWorkProofs(w.proofs) })), otherPending: otherPending.map((o: any) => ({ id: o.id, specialty: o.specialty?.nameAr ?? null, status: o.status })),
 			decisions, badgeGrantedAt: ps.badgeGrantedAt, submittedAt: ps.createdAt, updatedAt: ps.updatedAt
 		};
 	}
